@@ -46,3 +46,5 @@
 - Current API tokens are placeholder payloads and must be replaced with signed integrations before production use.
 - Current progress covers typed scaffolds, contracts, tests, and local smoke flows through the planned `M1` seams.
 - Real voice transport, spatial audio graph, XR session handling, persistent storage, auth, and browser UI rendering are still pending implementation.
+- GitHub repository published: `https://github.com/psilon2000/noah`
+- Current staging API health endpoint: `http://178.154.192.108:4000/health`
