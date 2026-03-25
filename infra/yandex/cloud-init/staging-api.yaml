@@ -1,0 +1,44 @@
+#cloud-config
+package_update: true
+package_upgrade: false
+
+packages:
+  - git
+  - curl
+
+write_files:
+  - path: /etc/systemd/system/noah-api.service
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=Noah API staging service
+      After=network.target
+
+      [Service]
+      Type=simple
+      User=root
+      WorkingDirectory=/opt/noah
+      Environment=NODE_ENV=production
+      Environment=API_PORT=4000
+      Environment=API_CORS_ORIGIN=*
+      Environment=LIVEKIT_URL=ws://localhost:7880
+      Environment=STATE_TOKEN_TTL_SECONDS=900
+      Environment=MEDIA_TOKEN_TTL_SECONDS=900
+      ExecStart=/usr/bin/node /opt/noah/apps/api/dist/index.js
+      Restart=always
+      RestartSec=5
+
+      [Install]
+      WantedBy=multi-user.target
+
+runcmd:
+  - curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+  - apt-get install -y nodejs
+  - corepack enable
+  - rm -rf /opt/noah
+  - git clone https://github.com/psilon2000/noah.git /opt/noah
+  - bash -lc 'cd /opt/noah && pnpm install --frozen-lockfile'
+  - bash -lc 'cd /opt/noah && pnpm build'
+  - systemctl daemon-reload
+  - systemctl enable noah-api.service
+  - systemctl restart noah-api.service
