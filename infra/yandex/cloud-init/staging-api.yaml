@@ -37,7 +37,7 @@ runcmd:
   - corepack enable
   - rm -rf /opt/noah
   - git clone https://github.com/psilon2000/noah.git /opt/noah
-  - bash -lc 'cd /opt/noah && pnpm install --frozen-lockfile'
+  - bash -lc 'cd /opt/noah && pnpm install --no-frozen-lockfile'
   - bash -lc 'cd /opt/noah && pnpm build'
   - systemctl daemon-reload
   - systemctl enable noah-api.service

@@ -9,4 +9,3 @@ build/
 .env.local
 .env.*.local
 coverage/
-pnpm-lock.yaml
