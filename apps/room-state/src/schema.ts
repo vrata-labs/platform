@@ -10,6 +10,7 @@ export interface PresenceState {
   role: "guest" | "member" | "host" | "admin";
   mode: "desktop" | "mobile" | "vr";
   rootTransform: TransformState;
+  bodyTransform?: TransformState;
   headTransform?: TransformState;
   muted: boolean;
   activeMedia: {

@@ -83,6 +83,11 @@ interface PresenceRecord {
     y: number;
     z: number;
   };
+  bodyTransform?: {
+    x: number;
+    y: number;
+    z: number;
+  };
   muted: boolean;
   activeMedia: {
     audio: boolean;

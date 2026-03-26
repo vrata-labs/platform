@@ -90,9 +90,22 @@ const roomBox = new THREE.Mesh(new THREE.BoxGeometry(14, 5, 14), wallMaterial);
 roomBox.position.set(0, 2.5, 0);
 scene.add(roomBox);
 
-const avatarGeometry = new THREE.SphereGeometry(0.35, 24, 24);
-const remoteAvatars = new Map<string, THREE.Mesh>();
-const remoteMotionTracks = new Map<string, MotionTrack>();
+const bodyGeometry = new THREE.CapsuleGeometry(0.24, 0.8, 6, 12);
+const headGeometry = new THREE.SphereGeometry(0.18, 20, 20);
+
+interface RemoteAvatarEntity {
+  body: THREE.Mesh;
+  head: THREE.Mesh;
+}
+
+interface RemoteAvatarMotion {
+  root: MotionTrack;
+  body: MotionTrack;
+  head: MotionTrack;
+}
+
+const remoteAvatars = new Map<string, RemoteAvatarEntity>();
+const remoteMotionTracks = new Map<string, RemoteAvatarMotion>();
 
 const keyState: Record<string, boolean> = {};
 let pointerActive = false;
@@ -160,35 +173,58 @@ async function reportDiagnostics(note?: string): Promise<void> {
   });
 }
 
-function makeAvatar(color: number): THREE.Mesh {
+function makeBody(color: number): THREE.Mesh {
   return new THREE.Mesh(
-    avatarGeometry,
-    new THREE.MeshStandardMaterial({ color, roughness: 0.4, metalness: 0.1 })
+    bodyGeometry,
+    new THREE.MeshStandardMaterial({ color, roughness: 0.45, metalness: 0.08 })
   );
 }
 
-function ensureRemoteAvatar(participant: PresenceState): THREE.Mesh {
-  let mesh = remoteAvatars.get(participant.participantId);
-  if (!mesh) {
-    mesh = makeAvatar(participant.activeMedia.audio ? 0x5fc8ff : 0xbfd8ee);
-    scene.add(mesh);
-    remoteAvatars.set(participant.participantId, mesh);
+function makeHead(color: number): THREE.Mesh {
+  return new THREE.Mesh(
+    headGeometry,
+    new THREE.MeshStandardMaterial({ color, roughness: 0.3, metalness: 0.05 })
+  );
+}
+
+function ensureRemoteAvatar(participant: PresenceState): RemoteAvatarEntity {
+  let entity = remoteAvatars.get(participant.participantId);
+  if (!entity) {
+    const body = makeBody(participant.activeMedia.audio ? 0x5fc8ff : 0xbfd8ee);
+    const head = makeHead(0xf6fbff);
+    scene.add(body);
+    scene.add(head);
+    entity = { body, head };
+    remoteAvatars.set(participant.participantId, entity);
     remoteMotionTracks.set(
       participant.participantId,
-      pushMotionSample(createMotionTrack(), {
-        x: participant.rootTransform.x,
-        z: participant.rootTransform.z,
-        capturedAtMs: Date.now()
-      })
+      {
+        root: pushMotionSample(createMotionTrack(), {
+          x: participant.rootTransform.x,
+          z: participant.rootTransform.z,
+          capturedAtMs: Date.now()
+        }),
+        body: pushMotionSample(createMotionTrack(), {
+          x: participant.bodyTransform?.x ?? participant.rootTransform.x,
+          z: participant.bodyTransform?.z ?? participant.rootTransform.z,
+          capturedAtMs: Date.now()
+        }),
+        head: pushMotionSample(createMotionTrack(), {
+          x: participant.headTransform?.x ?? participant.rootTransform.x,
+          z: participant.headTransform?.z ?? participant.rootTransform.z,
+          capturedAtMs: Date.now()
+        })
+      }
     );
   }
-  return mesh;
+  return entity;
 }
 
 function pruneRemoteAvatars(currentIds: Set<string>): void {
   for (const [id, mesh] of remoteAvatars.entries()) {
     if (!currentIds.has(id)) {
-      scene.remove(mesh);
+      scene.remove(mesh.body);
+      scene.remove(mesh.head);
       remoteAvatars.delete(id);
       remoteMotionTracks.delete(id);
     }
@@ -198,19 +234,23 @@ function pruneRemoteAvatars(currentIds: Set<string>): void {
 
 function updateRemoteAvatarInterpolation(delta: number): void {
   const renderAtMs = Date.now() - 120;
-  for (const [participantId, mesh] of remoteAvatars.entries()) {
-    const track = remoteMotionTracks.get(participantId);
-    if (!track) {
+  for (const [participantId, entity] of remoteAvatars.entries()) {
+    const tracks = remoteMotionTracks.get(participantId);
+    if (!tracks) {
       continue;
     }
-    const sample = sampleMotion(track, renderAtMs);
-    if (!sample) {
+    const rootSample = sampleMotion(tracks.root, renderAtMs);
+    const bodySample = sampleMotion(tracks.body, renderAtMs);
+    const headSample = sampleMotion(tracks.head, renderAtMs);
+    if (!rootSample || !bodySample || !headSample) {
       continue;
     }
-    mesh.position.set(sample.x, 0.45, sample.z);
+    entity.body.position.set(bodySample.x, 0.92, bodySample.z);
+    entity.head.position.set(headSample.x, 1.58, headSample.z);
+    entity.body.lookAt(headSample.x, 0.92, headSample.z);
   }
   debugState.remoteTargets = Array.from(remoteMotionTracks.entries()).map(([id, track]) => {
-    const latest = track.samples[track.samples.length - 1];
+    const latest = track.root.samples[track.root.samples.length - 1];
     return {
       id,
       x: Number((latest?.x ?? 0).toFixed(2)),
@@ -317,6 +357,11 @@ function updateMovement(delta: number): void {
 async function syncPresence(mode: PresenceState["mode"], audioActive: boolean): Promise<void> {
   const worldPosition = new THREE.Vector3();
   camera.getWorldPosition(worldPosition);
+  const bodyPosition = {
+    x: (player.position.x + worldPosition.x) / 2,
+    y: 0.92,
+    z: (player.position.z + worldPosition.z) / 2
+  };
 
   await upsertPresence(apiBaseUrl, roomId, {
     participantId,
@@ -327,6 +372,7 @@ async function syncPresence(mode: PresenceState["mode"], audioActive: boolean): 
       y: player.position.y,
       z: player.position.z
     },
+    bodyTransform: bodyPosition,
     headTransform: {
       x: worldPosition.x,
       y: worldPosition.y,
@@ -352,19 +398,36 @@ async function refreshPresence(): Promise<void> {
     }
 
     activeIds.add(person.participantId);
-    const mesh = ensureRemoteAvatar(person);
-    const material = mesh.material;
-    if (material instanceof THREE.MeshStandardMaterial) {
-      material.color.setHex(person.activeMedia.audio ? 0x5fc8ff : 0xbfd8ee);
+    const entity = ensureRemoteAvatar(person);
+    const bodyMaterial = entity.body.material;
+    if (bodyMaterial instanceof THREE.MeshStandardMaterial) {
+      bodyMaterial.color.setHex(person.activeMedia.audio ? 0x5fc8ff : 0xbfd8ee);
     }
-    const nextTrack = pushMotionSample(remoteMotionTracks.get(person.participantId) ?? createMotionTrack(), {
-      x: person.rootTransform.x,
-      z: person.rootTransform.z,
-      capturedAtMs: Date.now()
+    const current = remoteMotionTracks.get(person.participantId) ?? {
+      root: createMotionTrack(),
+      body: createMotionTrack(),
+      head: createMotionTrack()
+    };
+    remoteMotionTracks.set(person.participantId, {
+      root: pushMotionSample(current.root, {
+        x: person.rootTransform.x,
+        z: person.rootTransform.z,
+        capturedAtMs: Date.now()
+      }),
+      body: pushMotionSample(current.body, {
+        x: person.bodyTransform?.x ?? person.rootTransform.x,
+        z: person.bodyTransform?.z ?? person.rootTransform.z,
+        capturedAtMs: Date.now()
+      }),
+      head: pushMotionSample(current.head, {
+        x: person.headTransform?.x ?? person.rootTransform.x,
+        z: person.headTransform?.z ?? person.rootTransform.z,
+        capturedAtMs: Date.now()
+      })
     });
-    remoteMotionTracks.set(person.participantId, nextTrack);
-    if (mesh.position.lengthSq() === 0) {
-      mesh.position.set(person.rootTransform.x, 0.45, person.rootTransform.z);
+    if (entity.body.position.lengthSq() === 0) {
+      entity.body.position.set(person.bodyTransform?.x ?? person.rootTransform.x, 0.92, person.bodyTransform?.z ?? person.rootTransform.z);
+      entity.head.position.set(person.headTransform?.x ?? person.rootTransform.x, 1.58, person.headTransform?.z ?? person.rootTransform.z);
     }
   }
 
@@ -551,9 +614,14 @@ async function main(): Promise<void> {
   }
   document.querySelector(".controls")?.appendChild(vrButton);
 
-  const localAvatar = makeAvatar(0xffd166);
-  localAvatar.position.set(0, 0.45, 0);
-  player.add(localAvatar);
+  const localBody = makeBody(0xffd166);
+  localBody.position.set(0, 0.92, 0);
+  player.add(localBody);
+
+  const localHead = makeHead(0xfff4d6);
+  localHead.position.set(0, 1.58, 0.08);
+  localHead.visible = debugEnabled;
+  player.add(localHead);
 
   await syncPresence(boot.joinMode, false);
   await refreshPresence();
