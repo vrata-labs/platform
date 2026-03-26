@@ -34,7 +34,11 @@ importers:
         specifier: ^8.15.5
         version: 8.20.0
 
-  apps/control-plane: {}
+  apps/control-plane:
+    devDependencies:
+      vite:
+        specifier: ^6.4.1
+        version: 6.4.1(@types/node@22.19.15)
 
   apps/room-state: {}
 

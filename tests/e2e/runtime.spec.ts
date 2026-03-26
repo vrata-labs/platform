@@ -102,3 +102,14 @@ test("diagnostics capture multi-client remote visibility", async ({ browser, req
   await pageA.close();
   await pageB.close();
 });
+
+test("control plane creates a room through the browser UI", async ({ page }) => {
+  await page.goto("/control-plane");
+  await page.fill("#room-name-input", "Control Plane Room");
+  await page.selectOption("#template-select", "showroom-basic");
+  await page.click("#create-room");
+  await expect(page.locator("#publish-status")).toContainText("published");
+  await expect(page.locator("#room-link")).not.toHaveText("");
+  const href = await page.locator("#room-link").getAttribute("href");
+  expect(href).toContain("/rooms/");
+});

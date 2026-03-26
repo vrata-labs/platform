@@ -44,6 +44,8 @@ const statusLineEl = mustElement<HTMLDivElement>("#status-line");
 const sceneHost = mustElement<HTMLDivElement>("#scene");
 const joinAudioButton = mustElement<HTMLButtonElement>("#join-audio");
 const muteButton = mustElement<HTMLButtonElement>("#toggle-mute");
+const startShareButton = mustElement<HTMLButtonElement>("#start-share");
+const stopShareButton = mustElement<HTMLButtonElement>("#stop-share");
 const debugPanel = mustElement<HTMLPreElement>("#debug-panel");
 
 if (debugEnabled) {
@@ -90,6 +92,13 @@ const roomBox = new THREE.Mesh(new THREE.BoxGeometry(14, 5, 14), wallMaterial);
 roomBox.position.set(0, 2.5, 0);
 scene.add(roomBox);
 
+const displaySurface = new THREE.Mesh(
+  new THREE.PlaneGeometry(5.8, 3.3),
+  new THREE.MeshBasicMaterial({ color: 0x0f1724 })
+);
+displaySurface.position.set(0, 2.2, -6.6);
+scene.add(displaySurface);
+
 const bodyGeometry = new THREE.CapsuleGeometry(0.24, 0.8, 6, 12);
 const headGeometry = new THREE.SphereGeometry(0.18, 20, 20);
 
@@ -118,6 +127,8 @@ let mobileTouchActive = false;
 const mobileTouchVector = { x: 0, z: 0 };
 let diagnosticsAccumulator = 0;
 let latestMode: PresenceState["mode"] = /android|iphone|ipad/i.test(navigator.userAgent) ? "mobile" : "desktop";
+let activeScreenShareTrack: Track | null = null;
+let activeScreenShareElement: HTMLVideoElement | null = null;
 
 const debugState = {
   participantId,
@@ -125,6 +136,7 @@ const debugState = {
   statusLine: "Connecting...",
   locomotionMode: "desktop",
   audioState: "idle",
+  screenShareState: "idle",
   localPosition: { x: 0, z: 6 },
   xrAxes: { moveX: 0, moveY: 0, turnX: 0 },
   botMode,
@@ -181,6 +193,7 @@ async function reportDiagnostics(note?: string): Promise<void> {
       userAgent: navigator.userAgent,
       locomotionMode: debugState.locomotionMode,
       audioState: debugState.audioState,
+      screenShareState: debugState.screenShareState,
       localPosition: debugState.localPosition,
       xrAxes: debugState.xrAxes,
       remoteAvatarCount: debugState.remoteAvatarCount,
@@ -191,6 +204,44 @@ async function reportDiagnostics(note?: string): Promise<void> {
       createdAt: new Date().toISOString()
     })
   });
+}
+
+function attachVideoTrack(track: Track): void {
+  const element = track.attach() as HTMLVideoElement;
+  element.autoplay = true;
+  element.muted = true;
+  element.playsInline = true;
+  element.style.display = "none";
+  document.body.appendChild(element);
+
+  const texture = new THREE.VideoTexture(element);
+  const material = displaySurface.material;
+  if (material instanceof THREE.MeshBasicMaterial) {
+    material.map = texture;
+    material.needsUpdate = true;
+  }
+
+  activeScreenShareTrack = track;
+  activeScreenShareElement = element;
+  debugState.screenShareState = "receiving";
+}
+
+function detachVideoTrack(): void {
+  if (activeScreenShareTrack) {
+    activeScreenShareTrack.detach().forEach((element) => element.remove());
+    activeScreenShareTrack = null;
+  }
+  if (activeScreenShareElement) {
+    activeScreenShareElement.remove();
+    activeScreenShareElement = null;
+  }
+  const material = displaySurface.material;
+  if (material instanceof THREE.MeshBasicMaterial && material.map) {
+    material.map.dispose();
+    material.map = null;
+    material.needsUpdate = true;
+  }
+  debugState.screenShareState = "idle";
 }
 
 function makeBody(color: number): THREE.Mesh {
@@ -461,9 +512,11 @@ async function refreshPresence(): Promise<void> {
 
 function setupAudio(room: Room): void {
   room.on(RoomEvent.TrackSubscribed, (track) => {
-    if (track.kind !== Track.Kind.Audio) {
+    if (track.kind === Track.Kind.Video) {
+      attachVideoTrack(track);
       return;
     }
+    if (track.kind !== Track.Kind.Audio) return;
     const element = track.attach();
     element.autoplay = true;
     element.style.display = "none";
@@ -472,11 +525,39 @@ function setupAudio(room: Room): void {
   });
 
   room.on(RoomEvent.TrackUnsubscribed, (track) => {
-    if (track.kind !== Track.Kind.Audio) {
+    if (track.kind === Track.Kind.Video) {
+      detachVideoTrack();
       return;
     }
+    if (track.kind !== Track.Kind.Audio) return;
     track.detach().forEach((element) => element.remove());
   });
+}
+
+async function startScreenShare(): Promise<void> {
+  if (!livekitRoom) {
+    setStatus("Join audio before share");
+    return;
+  }
+  debugState.screenShareState = "starting";
+  await livekitRoom.localParticipant.setScreenShareEnabled(true, {
+    audio: false
+  });
+  debugState.screenShareState = "sharing";
+  startShareButton.disabled = true;
+  stopShareButton.disabled = false;
+  setStatus("Sharing screen");
+  void reportDiagnostics("screenshare_started");
+}
+
+async function stopScreenShare(): Promise<void> {
+  if (!livekitRoom) return;
+  await livekitRoom.localParticipant.setScreenShareEnabled(false);
+  debugState.screenShareState = "stopped";
+  startShareButton.disabled = false;
+  stopShareButton.disabled = true;
+  setStatus("Screen share stopped");
+  void reportDiagnostics("screenshare_stopped");
 }
 
 async function joinAudio(): Promise<void> {
@@ -495,6 +576,7 @@ async function joinAudio(): Promise<void> {
   microphoneEnabled = true;
   muteButton.disabled = false;
   joinAudioButton.disabled = true;
+  startShareButton.disabled = false;
   setStatus("Audio connected");
   debugState.audioState = "connected";
   void reportDiagnostics("audio_connected");
@@ -517,6 +599,24 @@ joinAudioButton.addEventListener("click", () => {
     setStatus("Audio failed");
     debugState.audioState = error instanceof Error ? error.name : "failed";
     void reportDiagnostics("audio_failed");
+  });
+});
+
+startShareButton.addEventListener("click", () => {
+  void startScreenShare().catch((error: unknown) => {
+    console.error(error);
+    setStatus("Screen share failed");
+    debugState.screenShareState = error instanceof Error ? error.name : "failed";
+    void reportDiagnostics("screenshare_failed");
+  });
+});
+
+stopShareButton.addEventListener("click", () => {
+  void stopScreenShare().catch((error: unknown) => {
+    console.error(error);
+    setStatus("Stop share failed");
+    debugState.screenShareState = error instanceof Error ? error.name : "stop_failed";
+    void reportDiagnostics("screenshare_stop_failed");
   });
 });
 
@@ -577,6 +677,7 @@ window.addEventListener("resize", () => {
 
 window.addEventListener("beforeunload", () => {
   void removePresence(apiBaseUrl, roomId, participantId);
+  detachVideoTrack();
   void livekitRoom?.disconnect();
 });
 

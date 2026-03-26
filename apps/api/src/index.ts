@@ -63,7 +63,8 @@ interface PresenceRecord {
 }
 
 const apiPort = Number.parseInt(process.env.API_PORT ?? "4000", 10);
-const staticRoot = normalize(join(fileURLToPath(new URL("../../runtime-web/dist", import.meta.url))));
+const runtimeStaticRoot = normalize(join(fileURLToPath(new URL("../../runtime-web/dist", import.meta.url))));
+const controlPlaneStaticRoot = normalize(join(fileURLToPath(new URL("../../control-plane/dist", import.meta.url))));
 const livekitApiKey = process.env.LIVEKIT_API_KEY ?? "devkey";
 const livekitApiSecret = process.env.LIVEKIT_API_SECRET ?? "secret";
 const presenceTtlMs = Number.parseInt(process.env.PRESENCE_TTL_MS ?? "15000", 10);
@@ -126,7 +127,7 @@ function contentType(filePath: string): string {
 
 async function serveStatic(response: ServerResponse, filePath: string): Promise<boolean> {
   const normalized = normalize(filePath);
-  if (!normalized.startsWith(staticRoot) || !existsSync(normalized)) return false;
+  if (!existsSync(normalized)) return false;
   const data = await readFile(normalized);
   response.writeHead(200, { "content-type": contentType(normalized) });
   response.end(data);
@@ -209,14 +210,26 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   }
 
   if (method === "GET" && (url.pathname === "/" || /^\/rooms\/[^/]+$/.test(url.pathname))) {
-    const served = await serveStatic(response, join(staticRoot, "index.html"));
+    const served = await serveStatic(response, join(runtimeStaticRoot, "index.html"));
     if (!served) json(response, 503, { error: "runtime_build_missing" });
     return;
   }
 
+  if (method === "GET" && (url.pathname === "/control-plane" || url.pathname === "/control-plane/")) {
+    const served = await serveStatic(response, join(controlPlaneStaticRoot, "index.html"));
+    if (!served) json(response, 503, { error: "control_plane_build_missing" });
+    return;
+  }
+
   if (method === "GET" && url.pathname.startsWith("/assets/")) {
-    const served = await serveStatic(response, join(staticRoot, url.pathname.slice(1)));
+    const served = await serveStatic(response, join(runtimeStaticRoot, url.pathname.slice(1)));
     if (!served) json(response, 404, { error: "asset_not_found" });
+    return;
+  }
+
+  if (method === "GET" && url.pathname.startsWith("/control-plane/assets/")) {
+    const served = await serveStatic(response, join(controlPlaneStaticRoot, url.pathname.replace(/^\/control-plane\//, "")));
+    if (!served) json(response, 404, { error: "control_plane_asset_not_found" });
     return;
   }
 
