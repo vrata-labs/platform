@@ -12,6 +12,7 @@ const apiBaseUrl = window.location.origin;
 const state = createControlPlanePageState();
 
 const form = mustElement<HTMLFormElement>("#room-form");
+const adminTokenInput = mustElement<HTMLInputElement>("#admin-token-input");
 const roomNameInput = mustElement<HTMLInputElement>("#room-name-input");
 const templateSelect = mustElement<HTMLSelectElement>("#template-select");
 const publishStatus = mustElement<HTMLDivElement>("#publish-status");
@@ -34,6 +35,11 @@ function render(): void {
       return item;
     })
   );
+}
+
+function currentAuth(): { adminToken?: string } {
+  const token = adminTokenInput.value.trim();
+  return token ? { adminToken: token } : {};
 }
 
 async function bootstrap(): Promise<void> {
@@ -59,7 +65,7 @@ form.addEventListener("submit", (event) => {
     templateId: templateSelect.value,
     name: roomNameInput.value,
     features: { voice: true, spatialAudio: true, screenShare: true }
-  })
+  }, currentAuth())
     .then((room) => {
       state.publishStatus = "published";
       state.roomLink = room.roomLink;

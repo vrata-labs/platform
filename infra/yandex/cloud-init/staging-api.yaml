@@ -75,6 +75,7 @@ write_files:
       Environment=LIVEKIT_API_KEY=devkey
       Environment=LIVEKIT_API_SECRET=secret
       Environment=LIVEKIT_ROOM_PREFIX=noah-
+      Environment=CONTROL_PLANE_ADMIN_TOKEN=noah-stage-admin
       Environment=STATE_TOKEN_TTL_SECONDS=900
       Environment=MEDIA_TOKEN_TTL_SECONDS=900
       Environment=POSTGRES_URL=postgres://postgres:postgres@127.0.0.1:5432/noah

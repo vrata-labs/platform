@@ -63,6 +63,9 @@ test("bot mode emits movement diagnostics automatically", async ({ page, request
 
 test("room creation API returns a usable room link", async ({ page, request }) => {
   const createRoomResponse = await request.post("/api/rooms", {
+    headers: {
+      "x-noah-admin-token": "test-admin-token"
+    },
     data: {
       tenantId: "demo-tenant",
       templateId: "showroom-basic",
@@ -82,6 +85,17 @@ test("room creation API returns a usable room link", async ({ page, request }) =
   await page.goto(room.roomLink.replace("http://127.0.0.1:4000", "http://127.0.0.1:4000"));
   await page.waitForTimeout(3000);
   await expect(page.locator("#room-name")).toContainText(`showroom-basic - ${room.roomId}`);
+});
+
+test("room creation API is forbidden without admin token", async ({ request }) => {
+  const response = await request.post("/api/rooms", {
+    data: {
+      tenantId: "demo-tenant",
+      templateId: "showroom-basic",
+      name: "Forbidden Room"
+    }
+  });
+  expect(response.status()).toBe(403);
 });
 
 test("diagnostics capture multi-client remote visibility", async ({ browser, request }) => {
@@ -107,6 +121,7 @@ test("diagnostics capture multi-client remote visibility", async ({ browser, req
 
 test("control plane creates a room through the browser UI", async ({ page }) => {
   await page.goto("/control-plane");
+  await page.fill("#admin-token-input", "test-admin-token");
   await page.fill("#room-name-input", "Control Plane Room");
   await page.selectOption("#template-select", "showroom-basic");
   await page.click("#create-room");

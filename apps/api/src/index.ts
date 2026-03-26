@@ -67,6 +67,7 @@ const runtimeStaticRoot = normalize(join(fileURLToPath(new URL("../../runtime-we
 const controlPlaneStaticRoot = normalize(join(fileURLToPath(new URL("../../control-plane/dist", import.meta.url))));
 const livekitApiKey = process.env.LIVEKIT_API_KEY ?? "devkey";
 const livekitApiSecret = process.env.LIVEKIT_API_SECRET ?? "secret";
+const controlPlaneAdminToken = process.env.CONTROL_PLANE_ADMIN_TOKEN ?? "";
 const presenceTtlMs = Number.parseInt(process.env.PRESENCE_TTL_MS ?? "15000", 10);
 const storagePromise = createStorage();
 
@@ -159,6 +160,13 @@ function json(response: ServerResponse, statusCode: number, body: unknown): void
   response.end(JSON.stringify(body));
 }
 
+function isAuthorizedControlPlaneRequest(request: IncomingMessage): boolean {
+  if (!controlPlaneAdminToken) {
+    return true;
+  }
+  return request.headers["x-noah-admin-token"] === controlPlaneAdminToken;
+}
+
 function parseBody<T>(request: IncomingMessage): Promise<T | null> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
@@ -203,7 +211,8 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
         xrEnabled: process.env.FEATURE_XR !== "false",
         screenShareEnabled: process.env.FEATURE_SCREEN_SHARE !== "false",
         spatialAudioEnabled: process.env.FEATURE_SPATIAL_AUDIO !== "false",
-        postgresEnabled: Boolean(process.env.POSTGRES_URL)
+        postgresEnabled: Boolean(process.env.POSTGRES_URL),
+        controlPlaneAuthEnabled: Boolean(controlPlaneAdminToken)
       }
     });
     return;
@@ -250,18 +259,21 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   }
 
   if (method === "POST" && url.pathname === "/api/tenants") {
+    if (!isAuthorizedControlPlaneRequest(request)) return json(response, 403, { error: "forbidden" });
     const tenant = await storage.createTenant((await parseBody<Partial<TenantRecord>>(request)) ?? {});
     json(response, 201, tenant);
     return;
   }
 
   if (method === "POST" && url.pathname === "/api/assets") {
+    if (!isAuthorizedControlPlaneRequest(request)) return json(response, 403, { error: "forbidden" });
     const asset = await storage.createAsset((await parseBody<Partial<AssetRecord>>(request)) ?? {});
     json(response, 201, asset);
     return;
   }
 
   if (method === "POST" && url.pathname === "/api/rooms") {
+    if (!isAuthorizedControlPlaneRequest(request)) return json(response, 403, { error: "forbidden" });
     const room = await storage.createRoom((await parseBody<Partial<RoomRecord>>(request)) ?? {});
     json(response, 201, { ...room, roomLink: createRoomLink(room.roomId, request.headers.host), manifest: await buildManifest(room.roomId) });
     return;

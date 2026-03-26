@@ -12,7 +12,8 @@ export default defineConfig({
     url: "http://127.0.0.1:4000/health",
     reuseExistingServer: true,
     env: {
-      NOAH_DISABLE_AUTOSTART: "0"
+      NOAH_DISABLE_AUTOSTART: "0",
+      CONTROL_PLANE_ADMIN_TOKEN: "test-admin-token"
     }
   }
 });
