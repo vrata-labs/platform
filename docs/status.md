@@ -47,6 +47,14 @@
 - Current progress now includes a public staging room shell with Three.js runtime, presence sync, LiveKit-backed audio join flow, and HTTPS via `sslip.io`.
 - Voice transport is wired for staging; browser E2E now covers room load and two-participant presence. Persistent storage, auth, richer XR locomotion, and production hardening are still pending.
 - GitHub repository published: `https://github.com/psilon2000/noah`
-- Current staging room URL: `https://51.250.19.248.sslip.io/rooms/demo-room`
-- Current staging API health endpoint: `https://51.250.19.248.sslip.io/health`
-- Current staging LiveKit endpoint: `wss://livekit.51.250.19.248.sslip.io`
+- Current staging room URL: `https://noah-stage-20260326.51.250.19.248.sslip.io/rooms/demo-room`
+- Current staging API health endpoint: `https://noah-stage-20260326.51.250.19.248.sslip.io/health`
+- Current staging LiveKit endpoint: `wss://livekit-noah-stage-20260326.51.250.19.248.sslip.io`
+
+## Latest manual QA
+
+- Scenario: `Quest 2 VR + web desktop`
+- Result: two-way room presence works; VR movement works; web and VR clients now see each other's motion more smoothly than before.
+- Improvement confirmed: previous severe self-avatar jitter and remote teleporting were reduced after buffered motion and XR input fixes.
+- Remaining issue: motion is better but still not perfectly smooth; voice behavior still needs deeper validation/tuning.
+- Next focus: stabilize motion further with explicit root/head/body replication model and then revisit spatial audio / voice diagnostics.
