@@ -54,7 +54,7 @@ const scene = new THREE.Scene();
 scene.fog = new THREE.Fog(0x08111f, 12, 50);
 
 const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 200);
-camera.position.set(0, 1.6, 5);
+camera.position.set(0, 1.6, 0);
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -146,6 +146,26 @@ function renderDebugPanel(): void {
   }
 
   debugPanel.textContent = JSON.stringify(debugState, null, 2);
+}
+
+function deriveBodyTransform(root: { x: number; z: number }, head: { x: number; z: number }): { x: number; z: number } {
+  const deltaX = head.x - root.x;
+  const deltaZ = head.z - root.z;
+  const distance = Math.hypot(deltaX, deltaZ);
+  const maxOffset = 0.35;
+
+  if (distance <= maxOffset || distance === 0) {
+    return {
+      x: root.x + deltaX * 0.35,
+      z: root.z + deltaZ * 0.35
+    };
+  }
+
+  const scale = maxOffset / distance;
+  return {
+    x: root.x + deltaX * scale,
+    z: root.z + deltaZ * scale
+  };
 }
 
 async function reportDiagnostics(note?: string): Promise<void> {
@@ -357,11 +377,10 @@ function updateMovement(delta: number): void {
 async function syncPresence(mode: PresenceState["mode"], audioActive: boolean): Promise<void> {
   const worldPosition = new THREE.Vector3();
   camera.getWorldPosition(worldPosition);
-  const bodyPosition = {
-    x: (player.position.x + worldPosition.x) / 2,
-    y: 0.92,
-    z: (player.position.z + worldPosition.z) / 2
-  };
+  const bodyXZ = deriveBodyTransform(
+    { x: player.position.x, z: player.position.z },
+    { x: worldPosition.x, z: worldPosition.z }
+  );
 
   await upsertPresence(apiBaseUrl, roomId, {
     participantId,
@@ -372,7 +391,11 @@ async function syncPresence(mode: PresenceState["mode"], audioActive: boolean): 
       y: player.position.y,
       z: player.position.z
     },
-    bodyTransform: bodyPosition,
+    bodyTransform: {
+      x: bodyXZ.x,
+      y: 0.92,
+      z: bodyXZ.z
+    },
     headTransform: {
       x: worldPosition.x,
       y: worldPosition.y,
@@ -619,7 +642,7 @@ async function main(): Promise<void> {
   player.add(localBody);
 
   const localHead = makeHead(0xfff4d6);
-  localHead.position.set(0, 1.58, 0.08);
+  localHead.position.set(0, 1.58, 0);
   localHead.visible = debugEnabled;
   player.add(localHead);
 
