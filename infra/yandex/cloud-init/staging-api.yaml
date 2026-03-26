@@ -98,8 +98,9 @@ write_files:
 
 runcmd:
   - curl -sSL https://get.livekit.io | bash
-  - curl -L "https://caddyserver.com/api/download?os=linux&arch=amd64" -o /tmp/caddy.tar.gz
-  - tar -xzf /tmp/caddy.tar.gz -C /usr/local/bin caddy
+  - curl -L "https://github.com/caddyserver/caddy/releases/download/v2.11.2/caddy_2.11.2_linux_amd64.tar.gz" -o /tmp/caddy.tar.gz
+  - tar -xzf /tmp/caddy.tar.gz -C /tmp caddy
+  - mv /tmp/caddy /usr/local/bin/caddy
   - chmod +x /usr/local/bin/caddy
   - curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
   - apt-get install -y nodejs
