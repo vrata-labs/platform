@@ -3,6 +3,7 @@ import { VRButton } from "three/examples/jsm/webxr/VRButton.js";
 import { Room, RoomEvent, Track } from "livekit-client";
 
 import { bootRuntime, listPresence, planVoiceSession, removePresence, upsertPresence, type PresenceState } from "./index.js";
+import { applySnapTurn, computeKeyboardDirection, rotateFlatVector, sanitizeXrAxes, stepFlatMovement } from "./movement.js";
 import { detectXrSupport, getEnterVrVisibility } from "./xr.js";
 
 function fallbackUuid(): string {
@@ -89,11 +90,15 @@ let yaw = 0;
 let pitchAngle = 0;
 let livekitRoom: Room | null = null;
 let microphoneEnabled = false;
+let xrTurnCooldown = 0;
+let mobileTouchActive = false;
+const mobileTouchVector = { x: 0, z: 0 };
 
 const debugState = {
   participantId,
   remoteAvatarCount: 0,
-  statusLine: "Connecting..."
+  statusLine: "Connecting...",
+  locomotionMode: "desktop"
 };
 
 (window as Window & { __NOAH_DEBUG__?: typeof debugState }).__NOAH_DEBUG__ = debugState;
@@ -131,22 +136,52 @@ function pruneRemoteAvatars(currentIds: Set<string>): void {
 }
 
 function updateMovement(delta: number): void {
-  if (renderer.xr.isPresenting) {
-    return;
+  const speed = renderer.xr.isPresenting ? 2.4 : keyState.ShiftLeft ? 5 : 3.2;
+  let direction = computeKeyboardDirection(keyState);
+
+  if (!renderer.xr.isPresenting && mobileTouchActive) {
+    direction = {
+      x: direction.x + mobileTouchVector.x,
+      z: direction.z + mobileTouchVector.z
+    };
+    debugState.locomotionMode = "mobile-touch";
+  } else if (!renderer.xr.isPresenting) {
+    debugState.locomotionMode = "desktop";
   }
 
-  const speed = 3.2;
-  const direction = new THREE.Vector3();
-  if (keyState.KeyW) direction.z -= 1;
-  if (keyState.KeyS) direction.z += 1;
-  if (keyState.KeyA) direction.x -= 1;
-  if (keyState.KeyD) direction.x += 1;
+  if (renderer.xr.isPresenting) {
+    const xrFrame = renderer.xr.getFrame();
+    const session = xrFrame?.session;
+    let xrAxes = { moveX: 0, moveY: 0, turnX: 0 };
 
-  if (direction.lengthSq() > 0) {
-    direction.normalize().applyAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
-    player.position.addScaledVector(direction, speed * delta);
-    player.position.x = THREE.MathUtils.clamp(player.position.x, -6, 6);
-    player.position.z = THREE.MathUtils.clamp(player.position.z, -6, 6);
+    for (const input of session?.inputSources ?? []) {
+      const axes = input.gamepad?.axes ?? [];
+      if (input.handedness === "left") {
+        xrAxes.moveX = axes[0] ?? xrAxes.moveX;
+        xrAxes.moveY = axes[1] ?? xrAxes.moveY;
+      }
+      if (input.handedness === "right") {
+        xrAxes.turnX = axes[0] ?? xrAxes.turnX;
+      }
+    }
+
+    const sanitized = sanitizeXrAxes(xrAxes);
+    direction = {
+      x: sanitized.moveX,
+      z: sanitized.moveY
+    };
+
+    const turn = applySnapTurn({ angle: yaw, cooldownSeconds: xrTurnCooldown }, sanitized.turnX, delta);
+    yaw = turn.angle;
+    xrTurnCooldown = turn.cooldownSeconds;
+    debugState.locomotionMode = "vr";
+  }
+
+  if (direction.x !== 0 || direction.z !== 0) {
+    const rotatedDirection = rotateFlatVector(direction, yaw);
+    const next = stepFlatMovement({ x: player.position.x, z: player.position.z }, rotatedDirection, speed, delta);
+    player.position.x = next.x;
+    player.position.z = next.z;
   }
 
   player.rotation.y = yaw;
@@ -275,6 +310,30 @@ window.addEventListener("pointermove", (event) => {
 
   yaw -= event.movementX * 0.003;
   pitchAngle = THREE.MathUtils.clamp(pitchAngle - event.movementY * 0.003, -1.1, 1.1);
+});
+
+renderer.domElement.addEventListener("touchstart", (event) => {
+  if (event.touches.length === 0 || renderer.xr.isPresenting) {
+    return;
+  }
+  mobileTouchActive = true;
+});
+
+renderer.domElement.addEventListener("touchmove", (event) => {
+  if (!mobileTouchActive || event.touches.length === 0 || renderer.xr.isPresenting) {
+    return;
+  }
+  const touch = event.touches[0];
+  const x = (touch.clientX / window.innerWidth) * 2 - 1;
+  const y = (touch.clientY / window.innerHeight) * 2 - 1;
+  mobileTouchVector.x = THREE.MathUtils.clamp(x, -1, 1);
+  mobileTouchVector.z = THREE.MathUtils.clamp(y, -1, 1);
+});
+
+renderer.domElement.addEventListener("touchend", () => {
+  mobileTouchActive = false;
+  mobileTouchVector.x = 0;
+  mobileTouchVector.z = 0;
 });
 
 window.addEventListener("resize", () => {
