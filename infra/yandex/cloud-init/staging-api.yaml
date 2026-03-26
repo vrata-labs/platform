@@ -12,7 +12,7 @@ write_files:
     content: |
       #!/usr/bin/env bash
       set -euo pipefail
-      NOAH_IP="$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)"
+      NOAH_IP="$(curl -s -H 'Metadata-Flavor: Google' http://169.254.169.254/computeMetadata/v1/instance/network-interfaces/0/access-configs/0/external-ip)"
       NOAH_APP_DOMAIN="${NOAH_IP}.sslip.io"
       NOAH_LIVEKIT_DOMAIN="livekit.${NOAH_IP}.sslip.io"
 
