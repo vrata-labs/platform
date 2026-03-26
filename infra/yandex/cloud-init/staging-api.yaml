@@ -51,23 +51,6 @@ write_files:
       [Install]
       WantedBy=multi-user.target
 
-  - path: /etc/systemd/system/caddy.service
-    permissions: "0644"
-    content: |
-      [Unit]
-      Description=Caddy HTTPS reverse proxy
-      After=network.target
-
-      [Service]
-      Type=simple
-      Restart=always
-      RestartSec=5
-      ExecStart=/usr/local/bin/caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
-      ExecReload=/usr/local/bin/caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
-
-      [Install]
-      WantedBy=multi-user.target
-
   - path: /etc/systemd/system/noah-api.service
     permissions: "0644"
     content: |
@@ -98,10 +81,8 @@ write_files:
 
 runcmd:
   - curl -sSL https://get.livekit.io | bash
-  - curl -L "https://github.com/caddyserver/caddy/releases/download/v2.11.2/caddy_2.11.2_linux_amd64.tar.gz" -o /tmp/caddy.tar.gz
-  - tar -xzf /tmp/caddy.tar.gz -C /tmp caddy
-  - mv /tmp/caddy /usr/local/bin/caddy
-  - chmod +x /usr/local/bin/caddy
+  - curl -L "https://github.com/caddyserver/caddy/releases/download/v2.11.2/caddy_2.11.2_linux_amd64.deb" -o /tmp/caddy.deb
+  - dpkg -i /tmp/caddy.deb || apt-get install -f -y
   - curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
   - apt-get install -y nodejs
   - /usr/local/bin/noah-write-domains.sh
