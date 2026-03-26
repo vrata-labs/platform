@@ -9,12 +9,14 @@
 - `apps/room-state`: local room-state service
 - `LiveKit`: local or dockerized single-node instance
 - `Postgres`: local or dockerized instance for future control-plane persistence
+- `POSTGRES_URL` can now activate persistent API storage immediately
 
 ### Staging
 
 - Shared managed environment in Yandex Cloud
 - Public HTTPS/WSS endpoints
 - Same room flow as local, but with public routing and observability
+- Persistent API storage can be enabled by supplying `POSTGRES_URL` in the environment
 
 ## Secret management rules
 

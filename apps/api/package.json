@@ -4,7 +4,11 @@
   "version": "0.1.0",
   "type": "module",
   "dependencies": {
-    "livekit-server-sdk": "^2.13.1"
+    "livekit-server-sdk": "^2.13.1",
+    "pg": "^8.16.3"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.15.5"
   },
   "scripts": {
     "dev": "node --watch src/index.ts",
