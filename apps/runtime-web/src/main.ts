@@ -4,6 +4,7 @@ import { Room, RoomEvent, Track } from "livekit-client";
 
 import { bootRuntime, listPresence, planVoiceSession, removePresence, upsertPresence, type PresenceState } from "./index.js";
 import { applySnapTurn, computeKeyboardDirection, rotateFlatVector, sanitizeXrAxes, stepFlatMovement } from "./movement.js";
+import { createMotionTrack, pushMotionSample, sampleMotion, type MotionTrack } from "./motion-state.js";
 import { detectXrSupport, getEnterVrVisibility } from "./xr.js";
 
 function fallbackUuid(): string {
@@ -91,7 +92,7 @@ scene.add(roomBox);
 
 const avatarGeometry = new THREE.SphereGeometry(0.35, 24, 24);
 const remoteAvatars = new Map<string, THREE.Mesh>();
-const remoteTargets = new Map<string, THREE.Vector3>();
+const remoteMotionTracks = new Map<string, MotionTrack>();
 
 const keyState: Record<string, boolean> = {};
 let pointerActive = false;
@@ -172,7 +173,14 @@ function ensureRemoteAvatar(participant: PresenceState): THREE.Mesh {
     mesh = makeAvatar(participant.activeMedia.audio ? 0x5fc8ff : 0xbfd8ee);
     scene.add(mesh);
     remoteAvatars.set(participant.participantId, mesh);
-    remoteTargets.set(participant.participantId, new THREE.Vector3(participant.rootTransform.x, 0.45, participant.rootTransform.z));
+    remoteMotionTracks.set(
+      participant.participantId,
+      pushMotionSample(createMotionTrack(), {
+        x: participant.rootTransform.x,
+        z: participant.rootTransform.z,
+        capturedAtMs: Date.now()
+      })
+    );
   }
   return mesh;
 }
@@ -182,22 +190,33 @@ function pruneRemoteAvatars(currentIds: Set<string>): void {
     if (!currentIds.has(id)) {
       scene.remove(mesh);
       remoteAvatars.delete(id);
-      remoteTargets.delete(id);
+      remoteMotionTracks.delete(id);
     }
   }
   debugState.remoteAvatarCount = remoteAvatars.size;
 }
 
 function updateRemoteAvatarInterpolation(delta: number): void {
-  const smoothing = Math.min(1, delta * 10);
+  const renderAtMs = Date.now() - 120;
   for (const [participantId, mesh] of remoteAvatars.entries()) {
-    const target = remoteTargets.get(participantId);
-    if (!target) {
+    const track = remoteMotionTracks.get(participantId);
+    if (!track) {
       continue;
     }
-    mesh.position.lerp(target, smoothing);
+    const sample = sampleMotion(track, renderAtMs);
+    if (!sample) {
+      continue;
+    }
+    mesh.position.set(sample.x, 0.45, sample.z);
   }
-  debugState.remoteTargets = Array.from(remoteTargets.entries()).map(([id, target]) => ({ id, x: Number(target.x.toFixed(2)), z: Number(target.z.toFixed(2)) }));
+  debugState.remoteTargets = Array.from(remoteMotionTracks.entries()).map(([id, track]) => {
+    const latest = track.samples[track.samples.length - 1];
+    return {
+      id,
+      x: Number((latest?.x ?? 0).toFixed(2)),
+      z: Number((latest?.z ?? 0).toFixed(2))
+    };
+  });
 }
 
 function botDirection(timeSeconds: number): { x: number; z: number } {
@@ -338,11 +357,14 @@ async function refreshPresence(): Promise<void> {
     if (material instanceof THREE.MeshStandardMaterial) {
       material.color.setHex(person.activeMedia.audio ? 0x5fc8ff : 0xbfd8ee);
     }
-    const target = remoteTargets.get(person.participantId) ?? new THREE.Vector3();
-    target.set(person.rootTransform.x, 0.45, person.rootTransform.z);
-    remoteTargets.set(person.participantId, target);
+    const nextTrack = pushMotionSample(remoteMotionTracks.get(person.participantId) ?? createMotionTrack(), {
+      x: person.rootTransform.x,
+      z: person.rootTransform.z,
+      capturedAtMs: Date.now()
+    });
+    remoteMotionTracks.set(person.participantId, nextTrack);
     if (mesh.position.lengthSq() === 0) {
-      mesh.position.copy(target);
+      mesh.position.set(person.rootTransform.x, 0.45, person.rootTransform.z);
     }
   }
 
@@ -530,12 +552,8 @@ async function main(): Promise<void> {
   document.querySelector(".controls")?.appendChild(vrButton);
 
   const localAvatar = makeAvatar(0xffd166);
-  localAvatar.position.set(0, 0.45, 6);
-  scene.add(localAvatar);
-
-  setInterval(() => {
-    localAvatar.position.copy(player.position).setY(0.45);
-  }, 50);
+  localAvatar.position.set(0, 0.45, 0);
+  player.add(localAvatar);
 
   await syncPresence(boot.joinMode, false);
   await refreshPresence();
