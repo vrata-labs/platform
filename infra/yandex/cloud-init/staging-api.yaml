@@ -13,24 +13,24 @@ write_files:
       #!/usr/bin/env bash
       set -euo pipefail
       NOAH_IP="51.250.19.248"
-      NOAH_APP_DOMAIN="${NOAH_IP}.sslip.io"
-      NOAH_LIVEKIT_DOMAIN="livekit.${NOAH_IP}.sslip.io"
+      NOAH_APP_DOMAIN="$${NOAH_IP}.sslip.io"
+      NOAH_LIVEKIT_DOMAIN="livekit.$${NOAH_IP}.sslip.io"
 
       printf '%s\n' \
-        "NOAH_APP_DOMAIN=${NOAH_APP_DOMAIN}" \
-        "NOAH_LIVEKIT_DOMAIN=${NOAH_LIVEKIT_DOMAIN}" \
-        "RUNTIME_BASE_URL=https://${NOAH_APP_DOMAIN}" \
-        "LIVEKIT_URL=wss://${NOAH_LIVEKIT_DOMAIN}" \
+        "NOAH_APP_DOMAIN=$${NOAH_APP_DOMAIN}" \
+        "NOAH_LIVEKIT_DOMAIN=$${NOAH_LIVEKIT_DOMAIN}" \
+        "RUNTIME_BASE_URL=https://$${NOAH_APP_DOMAIN}" \
+        "LIVEKIT_URL=wss://$${NOAH_LIVEKIT_DOMAIN}" \
         > /etc/default/noah-staging
 
       mkdir -p /etc/caddy /var/lib/caddy-data /var/lib/caddy-config
 
       printf '%s\n' \
-        "${NOAH_APP_DOMAIN} {" \
+        "$${NOAH_APP_DOMAIN} {" \
         "reverse_proxy 127.0.0.1:4000" \
         "}" \
         "" \
-        "${NOAH_LIVEKIT_DOMAIN} {" \
+        "$${NOAH_LIVEKIT_DOMAIN} {" \
         "reverse_proxy 127.0.0.1:7880" \
         "}" \
         > /etc/caddy/Caddyfile
