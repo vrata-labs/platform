@@ -19,6 +19,10 @@ export interface RoomCreateInput {
   };
 }
 
+export interface ControlPlaneAuth {
+  adminToken?: string;
+}
+
 export interface RoomRecord {
   roomId: string;
   tenantId: string;
@@ -43,10 +47,14 @@ export async function fetchTemplates(apiBaseUrl: string): Promise<TemplateRecord
   return payload.items;
 }
 
-export async function createRoom(apiBaseUrl: string, input: RoomCreateInput): Promise<RoomRecord> {
+function authHeaders(auth?: ControlPlaneAuth): Record<string, string> {
+  return auth?.adminToken ? { "x-noah-admin-token": auth.adminToken } : {};
+}
+
+export async function createRoom(apiBaseUrl: string, input: RoomCreateInput, auth?: ControlPlaneAuth): Promise<RoomRecord> {
   const response = await fetch(new URL("/api/rooms", apiBaseUrl), {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", ...authHeaders(auth) },
     body: JSON.stringify(input)
   });
 
@@ -68,10 +76,10 @@ export async function listRooms(apiBaseUrl: string): Promise<RoomRecord[]> {
   return payload.items;
 }
 
-export async function uploadAsset(apiBaseUrl: string, input: AssetUploadInput): Promise<{ assetId: string }> {
+export async function uploadAsset(apiBaseUrl: string, input: AssetUploadInput, auth?: ControlPlaneAuth): Promise<{ assetId: string }> {
   const response = await fetch(new URL("/api/assets", apiBaseUrl), {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", ...authHeaders(auth) },
     body: JSON.stringify(input)
   });
 
