@@ -5,14 +5,35 @@ package_upgrade: false
 packages:
   - git
   - curl
+  - docker.io
 
 write_files:
+  - path: /etc/systemd/system/livekit.service
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=LiveKit staging service
+      After=network.target docker.service
+      Requires=docker.service
+
+      [Service]
+      Type=simple
+      Restart=always
+      RestartSec=5
+      ExecStartPre=-/usr/bin/docker rm -f livekit
+      ExecStart=/usr/bin/docker run --rm --name livekit -p 7880:7880 -p 7881:7881/tcp -p 7882:7882/udp livekit/livekit-server:latest --dev --bind 0.0.0.0 --rtc.tcp_port 7881 --rtc.udp_port 7882
+      ExecStop=/usr/bin/docker stop livekit
+
+      [Install]
+      WantedBy=multi-user.target
+
   - path: /etc/systemd/system/noah-api.service
     permissions: "0644"
     content: |
       [Unit]
       Description=Noah API staging service
-      After=network.target
+      After=network.target livekit.service
+      Requires=livekit.service
 
       [Service]
       Type=simple
@@ -21,7 +42,10 @@ write_files:
       Environment=NODE_ENV=production
       Environment=API_PORT=4000
       Environment=API_CORS_ORIGIN=*
-      Environment=LIVEKIT_URL=ws://localhost:7880
+      Environment=LIVEKIT_URL=ws://127.0.0.1:7880
+      Environment=LIVEKIT_API_KEY=devkey
+      Environment=LIVEKIT_API_SECRET=secret
+      Environment=LIVEKIT_ROOM_PREFIX=noah-
       Environment=STATE_TOKEN_TTL_SECONDS=900
       Environment=MEDIA_TOKEN_TTL_SECONDS=900
       ExecStart=/usr/bin/node /opt/noah/apps/api/dist/index.js
@@ -40,5 +64,9 @@ runcmd:
   - bash -lc 'cd /opt/noah && pnpm install --no-frozen-lockfile'
   - bash -lc 'cd /opt/noah && pnpm build'
   - systemctl daemon-reload
+  - systemctl enable docker
+  - systemctl restart docker
+  - systemctl enable livekit.service
+  - systemctl restart livekit.service
   - systemctl enable noah-api.service
   - systemctl restart noah-api.service

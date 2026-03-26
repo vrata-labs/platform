@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Noah Room</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <div id="app">
+      <aside class="hud">
+        <div class="brand">Noah Staging</div>
+        <div class="room-meta">
+          <div id="room-name">Loading room...</div>
+          <div id="status-line">Connecting...</div>
+        </div>
+        <div class="controls">
+          <button id="join-audio">Join Audio</button>
+          <button id="toggle-mute" disabled>Mute</button>
+        </div>
+        <div class="help">
+          <div>WASD - move</div>
+          <div>Drag - look around</div>
+          <div>Quest/VR - use Enter VR</div>
+        </div>
+      </aside>
+      <div id="scene"></div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+  </html>

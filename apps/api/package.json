@@ -3,6 +3,9 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "dependencies": {
+    "livekit-server-sdk": "^2.13.1"
+  },
   "scripts": {
     "dev": "node --watch src/index.ts",
     "build": "tsc -p tsconfig.json",

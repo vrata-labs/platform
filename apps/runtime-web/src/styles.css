@@ -1,0 +1,109 @@
+:root {
+  color-scheme: dark;
+  --bg: #08111f;
+  --panel: rgba(8, 17, 31, 0.78);
+  --line: rgba(150, 205, 255, 0.22);
+  --text: #ecf6ff;
+  --muted: #9db3c7;
+  --accent: #5fc8ff;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app,
+#scene {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at top, rgba(95, 200, 255, 0.2), transparent 30%),
+    linear-gradient(180deg, #10243f 0%, var(--bg) 45%, #04070d 100%);
+  color: var(--text);
+  font-family: "Trebuchet MS", "Segoe UI", sans-serif;
+}
+
+canvas {
+  display: block;
+}
+
+.hud {
+  position: fixed;
+  top: 16px;
+  left: 16px;
+  z-index: 10;
+  width: min(320px, calc(100vw - 32px));
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--panel);
+  backdrop-filter: blur(18px);
+  box-shadow: 0 16px 44px rgba(0, 0, 0, 0.3);
+}
+
+.brand {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.24em;
+  color: var(--accent);
+}
+
+.room-meta {
+  margin-top: 10px;
+  display: grid;
+  gap: 6px;
+}
+
+#room-name {
+  font-size: 1.1rem;
+  font-weight: 700;
+}
+
+#status-line,
+.help {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.controls {
+  margin-top: 14px;
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+button,
+.vr-button {
+  appearance: none;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 999px;
+  padding: 10px 14px;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.08);
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.help {
+  margin-top: 12px;
+  display: grid;
+  gap: 4px;
+}
+
+@media (max-width: 640px) {
+  .hud {
+    top: auto;
+    bottom: 12px;
+    left: 12px;
+    right: 12px;
+    width: auto;
+  }
+}

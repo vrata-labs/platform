@@ -14,6 +14,28 @@ interface MediaTokenResponse {
   livekitUrl: string;
 }
 
+export interface PresenceState {
+  participantId: string;
+  displayName: string;
+  mode: "desktop" | "mobile" | "vr";
+  rootTransform: {
+    x: number;
+    y: number;
+    z: number;
+  };
+  headTransform?: {
+    x: number;
+    y: number;
+    z: number;
+  };
+  muted: boolean;
+  activeMedia: {
+    audio: boolean;
+    screenShare: boolean;
+  };
+  updatedAt: string;
+}
+
 export function resolveJoinMode(userAgent: string): "desktop" | "mobile" {
   return /android|iphone|ipad/i.test(userAgent) ? "mobile" : "desktop";
 }
@@ -104,4 +126,39 @@ export async function planVoiceSession(
     token: media.token,
     spatialAudioEnabled: manifest.features.spatialAudio
   };
+}
+
+export async function listPresence(apiBaseUrl: string, roomId: string): Promise<PresenceState[]> {
+  const response = await fetch(new URL(`/api/rooms/${roomId}/presence`, apiBaseUrl));
+
+  if (!response.ok) {
+    throw new Error(`failed_to_list_presence:${response.status}`);
+  }
+
+  const payload = (await response.json()) as { items: PresenceState[] };
+  return payload.items;
+}
+
+export async function upsertPresence(
+  apiBaseUrl: string,
+  roomId: string,
+  presence: PresenceState
+): Promise<void> {
+  const response = await fetch(new URL(`/api/rooms/${roomId}/presence/${presence.participantId}`, apiBaseUrl), {
+    method: "PUT",
+    headers: {
+      "content-type": "application/json"
+    },
+    body: JSON.stringify(presence)
+  });
+
+  if (!response.ok) {
+    throw new Error(`failed_to_upsert_presence:${response.status}`);
+  }
+}
+
+export async function removePresence(apiBaseUrl: string, roomId: string, participantId: string): Promise<void> {
+  await fetch(new URL(`/api/rooms/${roomId}/presence/${participantId}`, apiBaseUrl), {
+    method: "DELETE"
+  });
 }
