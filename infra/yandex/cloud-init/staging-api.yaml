@@ -97,4 +97,4 @@ runcmd:
   - systemctl enable noah-api.service
   - systemctl restart noah-api.service
   - systemctl enable caddy.service
-  - systemctl restart caddy.service
+  - bash -lc 'if ! systemctl restart caddy.service; then systemctl status caddy.service --no-pager || true; journalctl -u caddy.service -n 50 --no-pager || true; exit 1; fi'
