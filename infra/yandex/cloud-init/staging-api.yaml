@@ -5,7 +5,6 @@ package_upgrade: false
 packages:
   - git
   - curl
-  - docker.io
 
 write_files:
   - path: /etc/systemd/system/livekit.service
@@ -13,16 +12,13 @@ write_files:
     content: |
       [Unit]
       Description=LiveKit staging service
-      After=network.target docker.service
-      Requires=docker.service
+      After=network.target
 
       [Service]
       Type=simple
       Restart=always
       RestartSec=5
-      ExecStartPre=-/usr/bin/docker rm -f livekit
-      ExecStart=/usr/bin/docker run --rm --name livekit -p 7880:7880 -p 7881:7881/tcp -p 7882:7882/udp livekit/livekit-server:latest --dev --bind 0.0.0.0 --rtc.tcp_port 7881 --rtc.udp_port 7882
-      ExecStop=/usr/bin/docker stop livekit
+      ExecStart=/usr/local/bin/livekit-server --dev --bind 0.0.0.0 --rtc.tcp_port 7881 --rtc.udp_port 7882
 
       [Install]
       WantedBy=multi-user.target
@@ -42,7 +38,6 @@ write_files:
       Environment=NODE_ENV=production
       Environment=API_PORT=4000
       Environment=API_CORS_ORIGIN=*
-      Environment=LIVEKIT_URL=ws://127.0.0.1:7880
       Environment=LIVEKIT_API_KEY=devkey
       Environment=LIVEKIT_API_SECRET=secret
       Environment=LIVEKIT_ROOM_PREFIX=noah-
@@ -56,6 +51,7 @@ write_files:
       WantedBy=multi-user.target
 
 runcmd:
+  - curl -sSL https://get.livekit.io | bash
   - curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
   - apt-get install -y nodejs
   - corepack enable
@@ -64,8 +60,6 @@ runcmd:
   - bash -lc 'cd /opt/noah && pnpm install --no-frozen-lockfile'
   - bash -lc 'cd /opt/noah && pnpm build'
   - systemctl daemon-reload
-  - systemctl enable docker
-  - systemctl restart docker
   - systemctl enable livekit.service
   - systemctl restart livekit.service
   - systemctl enable noah-api.service
