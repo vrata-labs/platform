@@ -5,7 +5,6 @@ package_upgrade: false
 packages:
   - git
   - curl
-  - docker.io
 
 write_files:
   - path: /usr/local/bin/noah-write-domains.sh
@@ -52,21 +51,19 @@ write_files:
       [Install]
       WantedBy=multi-user.target
 
-  - path: /etc/systemd/system/caddy-proxy.service
+  - path: /etc/systemd/system/caddy.service
     permissions: "0644"
     content: |
       [Unit]
       Description=Caddy HTTPS reverse proxy
-      After=network.target docker.service
-      Requires=docker.service
+      After=network.target
 
       [Service]
       Type=simple
       Restart=always
       RestartSec=5
-      ExecStartPre=-/usr/bin/docker rm -f caddy-proxy
-      ExecStart=/usr/bin/docker run --rm --name caddy-proxy -p 80:80 -p 443:443 -v /etc/caddy/Caddyfile:/etc/caddy/Caddyfile:ro -v /var/lib/caddy-data:/data -v /var/lib/caddy-config:/config caddy:2 caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
-      ExecStop=/usr/bin/docker stop caddy-proxy
+      ExecStart=/usr/local/bin/caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
+      ExecReload=/usr/local/bin/caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
 
       [Install]
       WantedBy=multi-user.target
@@ -101,6 +98,9 @@ write_files:
 
 runcmd:
   - curl -sSL https://get.livekit.io | bash
+  - curl -L "https://caddyserver.com/api/download?os=linux&arch=amd64" -o /tmp/caddy.tar.gz
+  - tar -xzf /tmp/caddy.tar.gz -C /usr/local/bin caddy
+  - chmod +x /usr/local/bin/caddy
   - curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
   - apt-get install -y nodejs
   - /usr/local/bin/noah-write-domains.sh
@@ -110,11 +110,9 @@ runcmd:
   - bash -lc 'cd /opt/noah && pnpm install --no-frozen-lockfile'
   - bash -lc 'cd /opt/noah && pnpm build'
   - systemctl daemon-reload
-  - systemctl enable docker
-  - systemctl restart docker
   - systemctl enable livekit.service
   - systemctl restart livekit.service
   - systemctl enable noah-api.service
   - systemctl restart noah-api.service
-  - systemctl enable caddy-proxy.service
-  - systemctl restart caddy-proxy.service
+  - systemctl enable caddy.service
+  - systemctl restart caddy.service
