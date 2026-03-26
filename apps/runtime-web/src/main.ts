@@ -5,6 +5,21 @@ import { Room, RoomEvent, Track } from "livekit-client";
 import { bootRuntime, listPresence, planVoiceSession, removePresence, upsertPresence, type PresenceState } from "./index.js";
 import { detectXrSupport, getEnterVrVisibility } from "./xr.js";
 
+function fallbackUuid(): string {
+  return `guest-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function getParticipantId(): string {
+  const stored = localStorage.getItem("noah.participantId");
+  if (stored) {
+    return stored;
+  }
+
+  const generated = typeof globalThis.crypto?.randomUUID === "function" ? globalThis.crypto.randomUUID() : fallbackUuid();
+  localStorage.setItem("noah.participantId", generated);
+  return generated;
+}
+
 function mustElement<T extends Element>(selector: string): T {
   const element = document.querySelector<T>(selector);
   if (!element) {
@@ -15,8 +30,7 @@ function mustElement<T extends Element>(selector: string): T {
 
 const apiBaseUrl = window.location.origin;
 const roomId = window.location.pathname.split("/").filter(Boolean)[1] ?? "demo-room";
-const participantId = localStorage.getItem("noah.participantId") ?? crypto.randomUUID();
-localStorage.setItem("noah.participantId", participantId);
+const participantId = getParticipantId();
 const displayName = localStorage.getItem("noah.displayName") ?? `Guest-${participantId.slice(0, 4)}`;
 localStorage.setItem("noah.displayName", displayName);
 
@@ -76,8 +90,17 @@ let pitchAngle = 0;
 let livekitRoom: Room | null = null;
 let microphoneEnabled = false;
 
+const debugState = {
+  participantId,
+  remoteAvatarCount: 0,
+  statusLine: "Connecting..."
+};
+
+(window as Window & { __NOAH_DEBUG__?: typeof debugState }).__NOAH_DEBUG__ = debugState;
+
 function setStatus(message: string): void {
   statusLineEl.textContent = message;
+  debugState.statusLine = message;
 }
 
 function makeAvatar(color: number): THREE.Mesh {
@@ -104,6 +127,7 @@ function pruneRemoteAvatars(currentIds: Set<string>): void {
       remoteAvatars.delete(id);
     }
   }
+  debugState.remoteAvatarCount = remoteAvatars.size;
 }
 
 function updateMovement(delta: number): void {
@@ -171,6 +195,7 @@ async function refreshPresence(): Promise<void> {
   }
 
   pruneRemoteAvatars(activeIds);
+  debugState.remoteAvatarCount = remoteAvatars.size;
 }
 
 function setupAudio(room: Room): void {
