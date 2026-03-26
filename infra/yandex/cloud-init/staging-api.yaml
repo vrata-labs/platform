@@ -5,7 +5,7 @@ package_upgrade: false
 packages:
   - git
   - curl
-  - caddy
+  - docker.io
 
 write_files:
   - path: /usr/local/bin/noah-write-domains.sh
@@ -23,6 +23,8 @@ write_files:
       RUNTIME_BASE_URL=https://${NOAH_APP_DOMAIN}
       LIVEKIT_URL=wss://${NOAH_LIVEKIT_DOMAIN}
       EOF
+
+      mkdir -p /etc/caddy /var/lib/caddy-data /var/lib/caddy-config
 
       cat > /etc/caddy/Caddyfile <<EOF
       ${NOAH_APP_DOMAIN} {
@@ -46,6 +48,25 @@ write_files:
       Restart=always
       RestartSec=5
       ExecStart=/usr/local/bin/livekit-server --dev --bind 0.0.0.0
+
+      [Install]
+      WantedBy=multi-user.target
+
+  - path: /etc/systemd/system/caddy-proxy.service
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=Caddy HTTPS reverse proxy
+      After=network.target docker.service
+      Requires=docker.service
+
+      [Service]
+      Type=simple
+      Restart=always
+      RestartSec=5
+      ExecStartPre=-/usr/bin/docker rm -f caddy-proxy
+      ExecStart=/usr/bin/docker run --rm --name caddy-proxy -p 80:80 -p 443:443 -v /etc/caddy/Caddyfile:/etc/caddy/Caddyfile:ro -v /var/lib/caddy-data:/data -v /var/lib/caddy-config:/config caddy:2 caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
+      ExecStop=/usr/bin/docker stop caddy-proxy
 
       [Install]
       WantedBy=multi-user.target
@@ -89,9 +110,11 @@ runcmd:
   - bash -lc 'cd /opt/noah && pnpm install --no-frozen-lockfile'
   - bash -lc 'cd /opt/noah && pnpm build'
   - systemctl daemon-reload
+  - systemctl enable docker
+  - systemctl restart docker
   - systemctl enable livekit.service
   - systemctl restart livekit.service
   - systemctl enable noah-api.service
   - systemctl restart noah-api.service
-  - systemctl enable caddy
-  - systemctl restart caddy
+  - systemctl enable caddy-proxy.service
+  - systemctl restart caddy-proxy.service
