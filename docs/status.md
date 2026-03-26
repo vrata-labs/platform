@@ -44,7 +44,9 @@
 - `Phase 1` should stay time-boxed and must not redefine the product stack.
 - `Phase 0` is complete enough to move into `M0` foundation work.
 - Current API tokens are placeholder payloads and must be replaced with signed integrations before production use.
-- Current progress covers typed scaffolds, contracts, tests, and local smoke flows through the planned `M1` seams.
-- Real voice transport, spatial audio graph, XR session handling, persistent storage, auth, and browser UI rendering are still pending implementation.
+- Current progress now includes a public staging room shell with Three.js runtime, presence sync, and LiveKit-backed audio join flow.
+- Voice transport is now wired for staging, but persistent storage, auth, richer XR locomotion, and production hardening are still pending.
 - GitHub repository published: `https://github.com/psilon2000/noah`
-- Current staging API health endpoint: `http://178.154.192.108:4000/health`
+- Current staging room URL: `http://213.165.212.14:4000/rooms/demo-room`
+- Current staging API health endpoint: `http://213.165.212.14:4000/health`
+- Current staging LiveKit endpoint: `ws://213.165.212.14:7880`
