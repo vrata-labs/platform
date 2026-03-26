@@ -116,3 +116,25 @@ test("control plane creates a room through the browser UI", async ({ page }) => 
   expect(href).toContain("/rooms/");
   await expect(page.locator("#rooms-list li").first()).toContainText("Control Plane Room");
 });
+
+test("mock screen share updates UI and diagnostics", async ({ page, request }) => {
+  await page.goto("/rooms/demo-room?sharemock=1&debug=1");
+  await page.waitForFunction(() => {
+    const button = document.querySelector<HTMLButtonElement>("#start-share");
+    return Boolean(button && !button.disabled);
+  });
+  await page.click("#start-share");
+  await page.waitForTimeout(2500);
+
+  const debug = await page.evaluate(() => (window as Window & { __NOAH_DEBUG__?: { screenShareState: string } }).__NOAH_DEBUG__);
+  expect(debug?.screenShareState).toBeTruthy();
+
+  const diagnosticsResponse = await request.get("/api/rooms/demo-room/diagnostics");
+  const diagnostics = (await diagnosticsResponse.json()) as { items: Array<{ note?: string; screenShareState?: string }> };
+  expect(diagnostics.items.some((item) => item.note === "screenshare_mock_started")).toBeTruthy();
+
+  await page.click("#stop-share");
+  await page.waitForTimeout(1000);
+  const debugAfter = await page.evaluate(() => (window as Window & { __NOAH_DEBUG__?: { screenShareState: string } }).__NOAH_DEBUG__);
+  expect(debugAfter?.screenShareState).toBe("stopped");
+});

@@ -35,6 +35,7 @@ const roomId = window.location.pathname.split("/").filter(Boolean)[1] ?? "demo-r
 const query = new URLSearchParams(window.location.search);
 const debugEnabled = query.get("debug") === "1";
 const botMode = query.get("bot") ?? "off";
+const shareMockEnabled = query.get("sharemock") === "1";
 const participantId = getParticipantId();
 const displayName = localStorage.getItem("noah.displayName") ?? `Guest-${participantId.slice(0, 4)}`;
 localStorage.setItem("noah.displayName", displayName);
@@ -50,6 +51,10 @@ const debugPanel = mustElement<HTMLPreElement>("#debug-panel");
 
 if (debugEnabled) {
   debugPanel.hidden = false;
+}
+
+if (shareMockEnabled) {
+  startShareButton.disabled = false;
 }
 
 const scene = new THREE.Scene();
@@ -129,6 +134,8 @@ let diagnosticsAccumulator = 0;
 let latestMode: PresenceState["mode"] = /android|iphone|ipad/i.test(navigator.userAgent) ? "mobile" : "desktop";
 let activeScreenShareTrack: Track | null = null;
 let activeScreenShareElement: HTMLVideoElement | null = null;
+let isScreenSharing = false;
+let activeMockScreenShareStream: MediaStream | null = null;
 
 const debugState = {
   participantId,
@@ -224,6 +231,52 @@ function attachVideoTrack(track: Track): void {
   activeScreenShareTrack = track;
   activeScreenShareElement = element;
   debugState.screenShareState = "receiving";
+}
+
+function attachMockVideoStream(stream: MediaStream): void {
+  const element = document.createElement("video");
+  element.autoplay = true;
+  element.muted = true;
+  element.playsInline = true;
+  element.style.display = "none";
+  element.srcObject = stream;
+  document.body.appendChild(element);
+
+  const texture = new THREE.VideoTexture(element);
+  const material = displaySurface.material;
+  if (material instanceof THREE.MeshBasicMaterial) {
+    material.map = texture;
+    material.needsUpdate = true;
+  }
+
+  activeScreenShareElement = element;
+  debugState.screenShareState = "receiving";
+}
+
+function createMockShareStream(): MediaStream {
+  const canvas = document.createElement("canvas");
+  canvas.width = 640;
+  canvas.height = 360;
+  const context = canvas.getContext("2d");
+  if (!context) {
+    throw new Error("mock_canvas_context_failed");
+  }
+
+  let tick = 0;
+  const render = () => {
+    tick += 1;
+    context.fillStyle = "#13233b";
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.fillStyle = "#5fc8ff";
+    context.fillRect(40 + (tick % 200), 110, 180, 90);
+    context.fillStyle = "#ffffff";
+    context.font = "28px sans-serif";
+    context.fillText("Mock Share", 220, 180);
+    context.fillText(new Date().toLocaleTimeString(), 220, 220);
+    requestAnimationFrame(render);
+  };
+  render();
+  return canvas.captureStream(24);
 }
 
 function detachVideoTrack(): void {
@@ -455,7 +508,7 @@ async function syncPresence(mode: PresenceState["mode"], audioActive: boolean): 
     muted: !microphoneEnabled,
     activeMedia: {
       audio: audioActive,
-      screenShare: false
+      screenShare: isScreenSharing
     },
     updatedAt: new Date().toISOString()
   });
@@ -535,14 +588,33 @@ function setupAudio(room: Room): void {
 }
 
 async function startScreenShare(): Promise<void> {
-  if (!livekitRoom) {
+  if (!livekitRoom && !shareMockEnabled) {
     setStatus("Join audio before share");
     return;
   }
+  if (isScreenSharing) {
+    return;
+  }
+  if (shareMockEnabled) {
+    activeMockScreenShareStream = createMockShareStream();
+    attachMockVideoStream(activeMockScreenShareStream);
+    isScreenSharing = true;
+    debugState.screenShareState = "sharing";
+    startShareButton.disabled = true;
+    stopShareButton.disabled = false;
+    setStatus("Sharing screen");
+    void reportDiagnostics("screenshare_mock_started");
+    return;
+  }
+  const room = livekitRoom;
+  if (!room) {
+    return;
+  }
   debugState.screenShareState = "starting";
-  await livekitRoom.localParticipant.setScreenShareEnabled(true, {
+  await room.localParticipant.setScreenShareEnabled(true, {
     audio: false
   });
+  isScreenSharing = true;
   debugState.screenShareState = "sharing";
   startShareButton.disabled = true;
   stopShareButton.disabled = false;
@@ -551,8 +623,21 @@ async function startScreenShare(): Promise<void> {
 }
 
 async function stopScreenShare(): Promise<void> {
+  if (shareMockEnabled) {
+    activeMockScreenShareStream?.getTracks().forEach((track) => track.stop());
+    activeMockScreenShareStream = null;
+    isScreenSharing = false;
+    detachVideoTrack();
+    debugState.screenShareState = "stopped";
+    startShareButton.disabled = false;
+    stopShareButton.disabled = true;
+    setStatus("Screen share stopped");
+    void reportDiagnostics("screenshare_mock_stopped");
+    return;
+  }
   if (!livekitRoom) return;
   await livekitRoom.localParticipant.setScreenShareEnabled(false);
+  isScreenSharing = false;
   debugState.screenShareState = "stopped";
   startShareButton.disabled = false;
   stopShareButton.disabled = true;
