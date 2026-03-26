@@ -83,6 +83,7 @@ scene.add(roomBox);
 
 const avatarGeometry = new THREE.SphereGeometry(0.35, 24, 24);
 const remoteAvatars = new Map<string, THREE.Mesh>();
+const remoteTargets = new Map<string, THREE.Vector3>();
 
 const keyState: Record<string, boolean> = {};
 let pointerActive = false;
@@ -98,7 +99,8 @@ const debugState = {
   participantId,
   remoteAvatarCount: 0,
   statusLine: "Connecting...",
-  locomotionMode: "desktop"
+  locomotionMode: "desktop",
+  audioState: "idle"
 };
 
 (window as Window & { __NOAH_DEBUG__?: typeof debugState }).__NOAH_DEBUG__ = debugState;
@@ -121,6 +123,7 @@ function ensureRemoteAvatar(participant: PresenceState): THREE.Mesh {
     mesh = makeAvatar(participant.activeMedia.audio ? 0x5fc8ff : 0xbfd8ee);
     scene.add(mesh);
     remoteAvatars.set(participant.participantId, mesh);
+    remoteTargets.set(participant.participantId, new THREE.Vector3(participant.rootTransform.x, 0.45, participant.rootTransform.z));
   }
   return mesh;
 }
@@ -130,9 +133,21 @@ function pruneRemoteAvatars(currentIds: Set<string>): void {
     if (!currentIds.has(id)) {
       scene.remove(mesh);
       remoteAvatars.delete(id);
+      remoteTargets.delete(id);
     }
   }
   debugState.remoteAvatarCount = remoteAvatars.size;
+}
+
+function updateRemoteAvatarInterpolation(delta: number): void {
+  const smoothing = Math.min(1, delta * 10);
+  for (const [participantId, mesh] of remoteAvatars.entries()) {
+    const target = remoteTargets.get(participantId);
+    if (!target) {
+      continue;
+    }
+    mesh.position.lerp(target, smoothing);
+  }
 }
 
 function updateMovement(delta: number): void {
@@ -153,15 +168,29 @@ function updateMovement(delta: number): void {
     const xrFrame = renderer.xr.getFrame();
     const session = xrFrame?.session;
     let xrAxes = { moveX: 0, moveY: 0, turnX: 0 };
+    let fallbackMoveAssigned = false;
+    let fallbackTurnAssigned = false;
 
     for (const input of session?.inputSources ?? []) {
       const axes = input.gamepad?.axes ?? [];
       if (input.handedness === "left") {
         xrAxes.moveX = axes[0] ?? xrAxes.moveX;
         xrAxes.moveY = axes[1] ?? xrAxes.moveY;
+        fallbackMoveAssigned = true;
       }
       if (input.handedness === "right") {
         xrAxes.turnX = axes[0] ?? xrAxes.turnX;
+        fallbackTurnAssigned = true;
+      }
+      if (!fallbackMoveAssigned && axes.length >= 2) {
+        xrAxes.moveX = axes[0] ?? xrAxes.moveX;
+        xrAxes.moveY = axes[1] ?? xrAxes.moveY;
+        fallbackMoveAssigned = true;
+        continue;
+      }
+      if (!fallbackTurnAssigned && axes.length >= 2) {
+        xrAxes.turnX = axes[0] ?? xrAxes.turnX;
+        fallbackTurnAssigned = true;
       }
     }
 
@@ -226,7 +255,16 @@ async function refreshPresence(): Promise<void> {
 
     activeIds.add(person.participantId);
     const mesh = ensureRemoteAvatar(person);
-    mesh.position.set(person.rootTransform.x, 0.45, person.rootTransform.z);
+    const material = mesh.material;
+    if (material instanceof THREE.MeshStandardMaterial) {
+      material.color.setHex(person.activeMedia.audio ? 0x5fc8ff : 0xbfd8ee);
+    }
+    const target = remoteTargets.get(person.participantId) ?? new THREE.Vector3();
+    target.set(person.rootTransform.x, 0.45, person.rootTransform.z);
+    remoteTargets.set(person.participantId, target);
+    if (mesh.position.lengthSq() === 0) {
+      mesh.position.copy(target);
+    }
   }
 
   pruneRemoteAvatars(activeIds);
@@ -242,6 +280,7 @@ function setupAudio(room: Room): void {
     element.autoplay = true;
     element.style.display = "none";
     document.body.appendChild(element);
+    debugState.audioState = "remote-track";
   });
 
   room.on(RoomEvent.TrackUnsubscribed, (track) => {
@@ -258,6 +297,7 @@ async function joinAudio(): Promise<void> {
   }
 
   setStatus("Joining audio...");
+  debugState.audioState = "joining";
   const voicePlan = await planVoiceSession(apiBaseUrl, roomId, participantId);
   const room = new Room();
   setupAudio(room);
@@ -268,6 +308,7 @@ async function joinAudio(): Promise<void> {
   muteButton.disabled = false;
   joinAudioButton.disabled = true;
   setStatus("Audio connected");
+  debugState.audioState = "connected";
 }
 
 muteButton.addEventListener("click", async () => {
@@ -278,12 +319,14 @@ muteButton.addEventListener("click", async () => {
   await livekitRoom.localParticipant.setMicrophoneEnabled(microphoneEnabled);
   muteButton.textContent = microphoneEnabled ? "Mute" : "Unmute";
   setStatus(microphoneEnabled ? "Audio live" : "Muted");
+  debugState.audioState = microphoneEnabled ? "live" : "muted";
 });
 
 joinAudioButton.addEventListener("click", () => {
   void joinAudio().catch((error: unknown) => {
     console.error(error);
     setStatus("Audio failed");
+    debugState.audioState = error instanceof Error ? error.name : "failed";
   });
 });
 
@@ -354,17 +397,18 @@ let presenceAccumulator = 0;
 renderer.setAnimationLoop(() => {
   const delta = clock.getDelta();
   updateMovement(delta);
+  updateRemoteAvatarInterpolation(delta);
 
   syncAccumulator += delta;
   presenceAccumulator += delta;
 
-  if (syncAccumulator >= 0.2) {
+  if (syncAccumulator >= 0.08) {
     syncAccumulator = 0;
     const mode = renderer.xr.isPresenting ? "vr" : /android|iphone|ipad/i.test(navigator.userAgent) ? "mobile" : "desktop";
     void syncPresence(mode, Boolean(livekitRoom));
   }
 
-  if (presenceAccumulator >= 1) {
+  if (presenceAccumulator >= 0.12) {
     presenceAccumulator = 0;
     void refreshPresence().catch((error: unknown) => {
       console.error(error);
