@@ -7,6 +7,8 @@ services:
       POSTGRES_PASSWORD: postgres
     ports:
       - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
 
   livekit:
     image: livekit/livekit-server:latest
@@ -14,3 +16,6 @@ services:
     ports:
       - "7880:7880"
       - "7881:7881/udp"
+
+volumes:
+  postgres-data:

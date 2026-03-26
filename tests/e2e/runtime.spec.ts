@@ -1,5 +1,7 @@
 import { expect, test } from "@playwright/test";
 
+test.describe.configure({ mode: "serial" });
+
 test("room shell loads and presence is registered", async ({ page, request }) => {
   await page.goto("/rooms/demo-room");
   await page.waitForTimeout(3000);
@@ -112,4 +114,5 @@ test("control plane creates a room through the browser UI", async ({ page }) => 
   await expect(page.locator("#room-link")).not.toHaveText("");
   const href = await page.locator("#room-link").getAttribute("href");
   expect(href).toContain("/rooms/");
+  await expect(page.locator("#rooms-list li").first()).toContainText("Control Plane Room");
 });

@@ -5,6 +5,7 @@ package_upgrade: false
 packages:
   - git
   - curl
+  - postgresql
 
 write_files:
   - path: /usr/local/bin/noah-write-domains.sh
@@ -75,6 +76,7 @@ write_files:
       Environment=LIVEKIT_ROOM_PREFIX=noah-
       Environment=STATE_TOKEN_TTL_SECONDS=900
       Environment=MEDIA_TOKEN_TTL_SECONDS=900
+      Environment=POSTGRES_URL=postgres://postgres:postgres@127.0.0.1:5432/noah
       ExecStart=/usr/bin/node /opt/noah/apps/api/dist/index.js
       Restart=always
       RestartSec=5
@@ -88,6 +90,10 @@ runcmd:
   - dpkg -i /tmp/caddy.deb || apt-get install -f -y
   - curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
   - apt-get install -y nodejs
+  - systemctl enable postgresql
+  - systemctl restart postgresql
+  - sudo -u postgres psql -c "ALTER USER postgres WITH PASSWORD 'postgres';" || true
+  - sudo -u postgres createdb noah || true
   - /usr/local/bin/noah-write-domains.sh
   - corepack enable
   - rm -rf /opt/noah

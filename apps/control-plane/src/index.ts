@@ -57,6 +57,17 @@ export async function createRoom(apiBaseUrl: string, input: RoomCreateInput): Pr
   return (await response.json()) as RoomRecord;
 }
 
+export async function listRooms(apiBaseUrl: string): Promise<RoomRecord[]> {
+  const response = await fetch(new URL("/api/rooms", apiBaseUrl));
+
+  if (!response.ok) {
+    throw new Error(`failed_to_list_rooms:${response.status}`);
+  }
+
+  const payload = (await response.json()) as { items: RoomRecord[] };
+  return payload.items;
+}
+
 export async function uploadAsset(apiBaseUrl: string, input: AssetUploadInput): Promise<{ assetId: string }> {
   const response = await fetch(new URL("/api/assets", apiBaseUrl), {
     method: "POST",
@@ -73,6 +84,7 @@ export async function uploadAsset(apiBaseUrl: string, input: AssetUploadInput): 
 
 export interface ControlPlanePageState {
   templates: TemplateRecord[];
+  rooms: RoomRecord[];
   roomLink?: string;
   publishStatus: "idle" | "publishing" | "published" | "failed";
 }
@@ -80,6 +92,7 @@ export interface ControlPlanePageState {
 export function createControlPlanePageState(): ControlPlanePageState {
   return {
     templates: [],
+    rooms: [],
     publishStatus: "idle"
   };
 }

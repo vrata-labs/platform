@@ -49,3 +49,12 @@ button {
   margin-top: 12px;
   display: block;
 }
+
+#rooms-list {
+  margin-top: 18px;
+  padding-left: 18px;
+}
+
+#rooms-list li {
+  margin-top: 8px;
+}

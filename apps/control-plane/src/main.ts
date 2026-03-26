@@ -1,4 +1,4 @@
-import { createControlPlanePageState, createRoom, fetchTemplates } from "./index.js";
+import { createControlPlanePageState, createRoom, fetchTemplates, listRooms } from "./index.js";
 
 function mustElement<T extends Element>(selector: string): T {
   const element = document.querySelector<T>(selector);
@@ -16,15 +16,29 @@ const roomNameInput = mustElement<HTMLInputElement>("#room-name-input");
 const templateSelect = mustElement<HTMLSelectElement>("#template-select");
 const publishStatus = mustElement<HTMLDivElement>("#publish-status");
 const roomLink = mustElement<HTMLAnchorElement>("#room-link");
+const roomsList = mustElement<HTMLUListElement>("#rooms-list");
 
 function render(): void {
   publishStatus.textContent = state.publishStatus;
   roomLink.href = state.roomLink ?? "#";
   roomLink.textContent = state.roomLink ?? "";
+  roomsList.replaceChildren(
+    ...state.rooms.map((room) => {
+      const item = document.createElement("li");
+      const link = document.createElement("a");
+      link.href = room.roomLink;
+      link.textContent = `${room.name} (${room.templateId})`;
+      link.target = "_blank";
+      link.rel = "noreferrer";
+      item.appendChild(link);
+      return item;
+    })
+  );
 }
 
 async function bootstrap(): Promise<void> {
   state.templates = await fetchTemplates(apiBaseUrl);
+  state.rooms = await listRooms(apiBaseUrl);
   templateSelect.replaceChildren(
     ...state.templates.map((template) => {
       const option = document.createElement("option");
@@ -49,6 +63,7 @@ form.addEventListener("submit", (event) => {
     .then((room) => {
       state.publishStatus = "published";
       state.roomLink = room.roomLink;
+      state.rooms = [room, ...state.rooms];
       render();
     })
     .catch(() => {
