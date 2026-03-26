@@ -98,6 +98,20 @@ button:disabled {
   gap: 4px;
 }
 
+#debug-panel {
+  margin-top: 12px;
+  max-height: 220px;
+  overflow: auto;
+  padding: 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(0, 0, 0, 0.24);
+  color: #bfe8ff;
+  font-size: 0.75rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
 @media (max-width: 640px) {
   .hud {
     top: auto;

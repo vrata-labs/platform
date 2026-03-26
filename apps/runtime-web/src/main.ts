@@ -31,6 +31,9 @@ function mustElement<T extends Element>(selector: string): T {
 
 const apiBaseUrl = window.location.origin;
 const roomId = window.location.pathname.split("/").filter(Boolean)[1] ?? "demo-room";
+const query = new URLSearchParams(window.location.search);
+const debugEnabled = query.get("debug") === "1";
+const botMode = query.get("bot") ?? "off";
 const participantId = getParticipantId();
 const displayName = localStorage.getItem("noah.displayName") ?? `Guest-${participantId.slice(0, 4)}`;
 localStorage.setItem("noah.displayName", displayName);
@@ -40,6 +43,11 @@ const statusLineEl = mustElement<HTMLDivElement>("#status-line");
 const sceneHost = mustElement<HTMLDivElement>("#scene");
 const joinAudioButton = mustElement<HTMLButtonElement>("#join-audio");
 const muteButton = mustElement<HTMLButtonElement>("#toggle-mute");
+const debugPanel = mustElement<HTMLPreElement>("#debug-panel");
+
+if (debugEnabled) {
+  debugPanel.hidden = false;
+}
 
 const scene = new THREE.Scene();
 scene.fog = new THREE.Fog(0x08111f, 12, 50);
@@ -100,7 +108,13 @@ const debugState = {
   remoteAvatarCount: 0,
   statusLine: "Connecting...",
   locomotionMode: "desktop",
-  audioState: "idle"
+  audioState: "idle",
+  localPosition: { x: 0, z: 6 },
+  xrAxes: { moveX: 0, moveY: 0, turnX: 0 },
+  botMode,
+  lastPresenceSyncAt: 0,
+  lastPresenceRefreshAt: 0,
+  remoteTargets: [] as Array<{ id: string; x: number; z: number }>
 };
 
 (window as Window & { __NOAH_DEBUG__?: typeof debugState }).__NOAH_DEBUG__ = debugState;
@@ -108,6 +122,14 @@ const debugState = {
 function setStatus(message: string): void {
   statusLineEl.textContent = message;
   debugState.statusLine = message;
+}
+
+function renderDebugPanel(): void {
+  if (!debugEnabled) {
+    return;
+  }
+
+  debugPanel.textContent = JSON.stringify(debugState, null, 2);
 }
 
 function makeAvatar(color: number): THREE.Mesh {
@@ -148,13 +170,37 @@ function updateRemoteAvatarInterpolation(delta: number): void {
     }
     mesh.position.lerp(target, smoothing);
   }
+  debugState.remoteTargets = Array.from(remoteTargets.entries()).map(([id, target]) => ({ id, x: Number(target.x.toFixed(2)), z: Number(target.z.toFixed(2)) }));
+}
+
+function botDirection(timeSeconds: number): { x: number; z: number } {
+  if (botMode === "orbit") {
+    return {
+      x: Math.sin(timeSeconds * 0.8),
+      z: Math.cos(timeSeconds * 0.8)
+    };
+  }
+
+  if (botMode === "line") {
+    return {
+      x: 0,
+      z: Math.sin(timeSeconds * 0.7)
+    };
+  }
+
+  return { x: 0, z: 0 };
 }
 
 function updateMovement(delta: number): void {
   const speed = renderer.xr.isPresenting ? 2.4 : keyState.ShiftLeft ? 5 : 3.2;
   let direction = computeKeyboardDirection(keyState);
 
-  if (!renderer.xr.isPresenting && mobileTouchActive) {
+  if (botMode !== "off" && !renderer.xr.isPresenting) {
+    direction = botDirection(performance.now() / 1000);
+    debugState.locomotionMode = `bot:${botMode}`;
+  }
+
+  if (!renderer.xr.isPresenting && mobileTouchActive && botMode === "off") {
     direction = {
       x: direction.x + mobileTouchVector.x,
       z: direction.z + mobileTouchVector.z
@@ -174,27 +220,28 @@ function updateMovement(delta: number): void {
     for (const input of session?.inputSources ?? []) {
       const axes = input.gamepad?.axes ?? [];
       if (input.handedness === "left") {
-        xrAxes.moveX = axes[0] ?? xrAxes.moveX;
-        xrAxes.moveY = axes[1] ?? xrAxes.moveY;
+        xrAxes.moveX = axes[2] ?? axes[0] ?? xrAxes.moveX;
+        xrAxes.moveY = axes[3] ?? axes[1] ?? xrAxes.moveY;
         fallbackMoveAssigned = true;
       }
       if (input.handedness === "right") {
-        xrAxes.turnX = axes[0] ?? xrAxes.turnX;
+        xrAxes.turnX = axes[2] ?? axes[0] ?? xrAxes.turnX;
         fallbackTurnAssigned = true;
       }
       if (!fallbackMoveAssigned && axes.length >= 2) {
-        xrAxes.moveX = axes[0] ?? xrAxes.moveX;
-        xrAxes.moveY = axes[1] ?? xrAxes.moveY;
+        xrAxes.moveX = axes[2] ?? axes[0] ?? xrAxes.moveX;
+        xrAxes.moveY = axes[3] ?? axes[1] ?? xrAxes.moveY;
         fallbackMoveAssigned = true;
         continue;
       }
       if (!fallbackTurnAssigned && axes.length >= 2) {
-        xrAxes.turnX = axes[0] ?? xrAxes.turnX;
+        xrAxes.turnX = axes[2] ?? axes[0] ?? xrAxes.turnX;
         fallbackTurnAssigned = true;
       }
     }
 
     const sanitized = sanitizeXrAxes(xrAxes);
+    debugState.xrAxes = sanitized;
     direction = {
       x: sanitized.moveX,
       z: sanitized.moveY
@@ -215,6 +262,10 @@ function updateMovement(delta: number): void {
 
   player.rotation.y = yaw;
   pitch.rotation.x = pitchAngle;
+  debugState.localPosition = {
+    x: Number(player.position.x.toFixed(2)),
+    z: Number(player.position.z.toFixed(2))
+  };
 }
 
 async function syncPresence(mode: PresenceState["mode"], audioActive: boolean): Promise<void> {
@@ -242,6 +293,7 @@ async function syncPresence(mode: PresenceState["mode"], audioActive: boolean): 
     },
     updatedAt: new Date().toISOString()
   });
+  debugState.lastPresenceSyncAt = Date.now();
 }
 
 async function refreshPresence(): Promise<void> {
@@ -269,6 +321,7 @@ async function refreshPresence(): Promise<void> {
 
   pruneRemoteAvatars(activeIds);
   debugState.remoteAvatarCount = remoteAvatars.size;
+  debugState.lastPresenceRefreshAt = Date.now();
 }
 
 function setupAudio(room: Room): void {
@@ -398,6 +451,7 @@ renderer.setAnimationLoop(() => {
   const delta = clock.getDelta();
   updateMovement(delta);
   updateRemoteAvatarInterpolation(delta);
+  renderDebugPanel();
 
   syncAccumulator += delta;
   presenceAccumulator += delta;
