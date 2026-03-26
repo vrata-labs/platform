@@ -14,7 +14,7 @@ write_files:
       #!/usr/bin/env bash
       set -euo pipefail
       NOAH_IP="51.250.19.248"
-      NOAH_DOMAIN_PREFIX="noah-stage-20260326"
+      NOAH_DOMAIN_PREFIX="$(hostname -s)"
       NOAH_APP_DOMAIN="$${NOAH_DOMAIN_PREFIX}.$${NOAH_IP}.sslip.io"
       NOAH_LIVEKIT_DOMAIN="livekit-$${NOAH_DOMAIN_PREFIX}.$${NOAH_IP}.sslip.io"
 
