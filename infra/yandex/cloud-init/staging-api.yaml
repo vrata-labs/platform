@@ -22,6 +22,7 @@ write_files:
         "NOAH_APP_DOMAIN=$${NOAH_APP_DOMAIN}" \
         "NOAH_LIVEKIT_DOMAIN=$${NOAH_LIVEKIT_DOMAIN}" \
         "RUNTIME_BASE_URL=https://$${NOAH_APP_DOMAIN}" \
+        "API_PUBLIC_URL=https://$${NOAH_APP_DOMAIN}" \
         "LIVEKIT_URL=wss://$${NOAH_LIVEKIT_DOMAIN}" \
         > /etc/default/noah-staging
 
