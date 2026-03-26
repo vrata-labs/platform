@@ -91,6 +91,30 @@ interface PresenceRecord {
   updatedAt: string;
 }
 
+interface RuntimeDiagnosticRecord {
+  participantId: string;
+  displayName: string;
+  mode: "desktop" | "mobile" | "vr";
+  userAgent: string;
+  locomotionMode: string;
+  audioState: string;
+  localPosition: {
+    x: number;
+    z: number;
+  };
+  xrAxes: {
+    moveX: number;
+    moveY: number;
+    turnX: number;
+  };
+  remoteAvatarCount: number;
+  remoteTargets: Array<{ id: string; x: number; z: number }>;
+  lastPresenceSyncAt: number;
+  lastPresenceRefreshAt: number;
+  note?: string;
+  createdAt: string;
+}
+
 const apiPort = Number.parseInt(process.env.API_PORT ?? "4000", 10);
 const staticRoot = normalize(join(fileURLToPath(new URL("../../runtime-web/dist", import.meta.url))));
 const livekitApiKey = process.env.LIVEKIT_API_KEY ?? "devkey";
@@ -130,6 +154,7 @@ const templates = new Map<string, TemplateRecord>([
 
 const assets = new Map<string, AssetRecord>();
 const presenceByRoom = new Map<string, Map<string, PresenceRecord>>();
+const diagnosticsByRoom = new Map<string, RuntimeDiagnosticRecord[]>();
 
 const rooms = new Map<string, RoomRecord>([
   [
@@ -208,6 +233,19 @@ function upsertPresence(roomId: string, participantId: string, payload: Presence
 function deletePresence(roomId: string, participantId: string): void {
   const roomPresence = presenceByRoom.get(roomId);
   roomPresence?.delete(participantId);
+}
+
+function addDiagnostic(roomId: string, payload: RuntimeDiagnosticRecord): void {
+  const entries = diagnosticsByRoom.get(roomId) ?? [];
+  entries.push(payload);
+  while (entries.length > 200) {
+    entries.shift();
+  }
+  diagnosticsByRoom.set(roomId, entries);
+}
+
+function getDiagnostics(roomId: string): RuntimeDiagnosticRecord[] {
+  return diagnosticsByRoom.get(roomId) ?? [];
 }
 
 function contentType(filePath: string): string {
@@ -424,6 +462,23 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     }
     upsertPresence(decodeURIComponent(presenceItemMatch[1]), decodeURIComponent(presenceItemMatch[2]), payload);
     json(response, 200, { ok: true });
+    return;
+  }
+
+  const diagnosticsMatch = url.pathname.match(/^\/api\/rooms\/([^/]+)\/diagnostics$/);
+  if (method === "GET" && diagnosticsMatch) {
+    json(response, 200, { items: getDiagnostics(decodeURIComponent(diagnosticsMatch[1])) });
+    return;
+  }
+
+  if (method === "POST" && diagnosticsMatch) {
+    const payload = await parseBody<RuntimeDiagnosticRecord>(request);
+    if (!payload) {
+      json(response, 400, { error: "diagnostics_payload_required" });
+      return;
+    }
+    addDiagnostic(decodeURIComponent(diagnosticsMatch[1]), payload);
+    json(response, 201, { ok: true });
     return;
   }
 

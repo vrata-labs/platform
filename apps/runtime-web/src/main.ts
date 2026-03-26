@@ -102,6 +102,8 @@ let microphoneEnabled = false;
 let xrTurnCooldown = 0;
 let mobileTouchActive = false;
 const mobileTouchVector = { x: 0, z: 0 };
+let diagnosticsAccumulator = 0;
+let latestMode: PresenceState["mode"] = /android|iphone|ipad/i.test(navigator.userAgent) ? "mobile" : "desktop";
 
 const debugState = {
   participantId,
@@ -130,6 +132,31 @@ function renderDebugPanel(): void {
   }
 
   debugPanel.textContent = JSON.stringify(debugState, null, 2);
+}
+
+async function reportDiagnostics(note?: string): Promise<void> {
+  await fetch(new URL(`/api/rooms/${roomId}/diagnostics`, apiBaseUrl), {
+    method: "POST",
+    headers: {
+      "content-type": "application/json"
+    },
+    body: JSON.stringify({
+      participantId,
+      displayName,
+      mode: latestMode,
+      userAgent: navigator.userAgent,
+      locomotionMode: debugState.locomotionMode,
+      audioState: debugState.audioState,
+      localPosition: debugState.localPosition,
+      xrAxes: debugState.xrAxes,
+      remoteAvatarCount: debugState.remoteAvatarCount,
+      remoteTargets: debugState.remoteTargets,
+      lastPresenceSyncAt: debugState.lastPresenceSyncAt,
+      lastPresenceRefreshAt: debugState.lastPresenceRefreshAt,
+      note,
+      createdAt: new Date().toISOString()
+    })
+  });
 }
 
 function makeAvatar(color: number): THREE.Mesh {
@@ -362,6 +389,7 @@ async function joinAudio(): Promise<void> {
   joinAudioButton.disabled = true;
   setStatus("Audio connected");
   debugState.audioState = "connected";
+  void reportDiagnostics("audio_connected");
 }
 
 muteButton.addEventListener("click", async () => {
@@ -380,6 +408,7 @@ joinAudioButton.addEventListener("click", () => {
     console.error(error);
     setStatus("Audio failed");
     debugState.audioState = error instanceof Error ? error.name : "failed";
+    void reportDiagnostics("audio_failed");
   });
 });
 
@@ -458,8 +487,8 @@ renderer.setAnimationLoop(() => {
 
   if (syncAccumulator >= 0.08) {
     syncAccumulator = 0;
-    const mode = renderer.xr.isPresenting ? "vr" : /android|iphone|ipad/i.test(navigator.userAgent) ? "mobile" : "desktop";
-    void syncPresence(mode, Boolean(livekitRoom));
+    latestMode = renderer.xr.isPresenting ? "vr" : /android|iphone|ipad/i.test(navigator.userAgent) ? "mobile" : "desktop";
+    void syncPresence(latestMode, Boolean(livekitRoom));
   }
 
   if (presenceAccumulator >= 0.12) {
@@ -467,7 +496,14 @@ renderer.setAnimationLoop(() => {
     void refreshPresence().catch((error: unknown) => {
       console.error(error);
       setStatus("Presence sync issue");
+      void reportDiagnostics("presence_sync_issue");
     });
+  }
+
+  diagnosticsAccumulator += delta;
+  if (diagnosticsAccumulator >= 2) {
+    diagnosticsAccumulator = 0;
+    void reportDiagnostics();
   }
 
   renderer.render(scene, camera);
@@ -503,9 +539,12 @@ async function main(): Promise<void> {
 
   await syncPresence(boot.joinMode, false);
   await refreshPresence();
+  latestMode = boot.joinMode;
+  void reportDiagnostics("runtime_booted");
 }
 
 void main().catch((error: unknown) => {
   console.error(error);
   setStatus("Runtime failed to boot");
+  void reportDiagnostics("runtime_boot_failed");
 });
