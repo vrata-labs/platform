@@ -8,6 +8,32 @@ packages:
   - caddy
 
 write_files:
+  - path: /usr/local/bin/noah-write-domains.sh
+    permissions: "0755"
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      NOAH_IP="$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)"
+      NOAH_APP_DOMAIN="${NOAH_IP}.sslip.io"
+      NOAH_LIVEKIT_DOMAIN="livekit.${NOAH_IP}.sslip.io"
+
+      cat > /etc/default/noah-staging <<EOF
+      NOAH_APP_DOMAIN=${NOAH_APP_DOMAIN}
+      NOAH_LIVEKIT_DOMAIN=${NOAH_LIVEKIT_DOMAIN}
+      RUNTIME_BASE_URL=https://${NOAH_APP_DOMAIN}
+      LIVEKIT_URL=wss://${NOAH_LIVEKIT_DOMAIN}
+      EOF
+
+      cat > /etc/caddy/Caddyfile <<EOF
+      ${NOAH_APP_DOMAIN} {
+        reverse_proxy 127.0.0.1:4000
+      }
+
+      ${NOAH_LIVEKIT_DOMAIN} {
+        reverse_proxy 127.0.0.1:7880
+      }
+      EOF
+
   - path: /etc/systemd/system/livekit.service
     permissions: "0644"
     content: |
@@ -56,23 +82,7 @@ runcmd:
   - curl -sSL https://get.livekit.io | bash
   - curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
   - apt-get install -y nodejs
-  - export NOAH_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)
-  - export NOAH_APP_DOMAIN=${NOAH_IP}.sslip.io
-  - export NOAH_LIVEKIT_DOMAIN=livekit.${NOAH_IP}.sslip.io
-  - printf 'NOAH_APP_DOMAIN=%s
-NOAH_LIVEKIT_DOMAIN=%s
-RUNTIME_BASE_URL=https://%s
-LIVEKIT_URL=wss://%s
-' "$NOAH_APP_DOMAIN" "$NOAH_LIVEKIT_DOMAIN" "$NOAH_APP_DOMAIN" "$NOAH_LIVEKIT_DOMAIN" >/etc/default/noah-staging
-  - bash -lc 'source /etc/default/noah-staging && cat > /etc/caddy/Caddyfile <<EOF
-${NOAH_APP_DOMAIN} {
-  reverse_proxy 127.0.0.1:4000
-}
-
-${NOAH_LIVEKIT_DOMAIN} {
-  reverse_proxy 127.0.0.1:7880
-}
-EOF'
+  - /usr/local/bin/noah-write-domains.sh
   - corepack enable
   - rm -rf /opt/noah
   - git clone https://github.com/psilon2000/noah.git /opt/noah
