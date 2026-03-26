@@ -35,6 +35,8 @@ write_files:
         "}" \
         > /etc/caddy/Caddyfile
 
+      cat /etc/caddy/Caddyfile
+
   - path: /etc/systemd/system/livekit.service
     permissions: "0644"
     content: |
