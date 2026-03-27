@@ -8,6 +8,11 @@ export interface TemplateRecord {
   assetSlots: string[];
 }
 
+export interface TenantRecord {
+  tenantId: string;
+  name: string;
+}
+
 export interface RoomCreateInput {
   tenantId: string;
   templateId: string;
@@ -98,6 +103,29 @@ export async function fetchTemplates(apiBaseUrl: string): Promise<TemplateRecord
 
   const payload = (await response.json()) as { items: TemplateRecord[] };
   return payload.items;
+}
+
+export async function listTenants(apiBaseUrl: string): Promise<TenantRecord[]> {
+  const response = await fetch(new URL("/api/tenants", apiBaseUrl));
+  if (!response.ok) {
+    throw new Error(`failed_to_list_tenants:${response.status}`);
+  }
+  const payload = (await response.json()) as { items: TenantRecord[] };
+  return payload.items;
+}
+
+export async function createTenant(apiBaseUrl: string, input: Partial<TenantRecord>, auth?: ControlPlaneAuth): Promise<TenantRecord> {
+  const response = await fetch(new URL("/api/tenants", apiBaseUrl), {
+    method: "POST",
+    headers: { "content-type": "application/json", ...authHeaders(auth) },
+    body: JSON.stringify(input)
+  });
+
+  if (!response.ok) {
+    throw new Error(`failed_to_create_tenant:${response.status}`);
+  }
+
+  return (await response.json()) as TenantRecord;
 }
 
 function authHeaders(auth?: ControlPlaneAuth): Record<string, string> {
@@ -202,6 +230,7 @@ export async function listAssets(apiBaseUrl: string): Promise<AssetRecord[]> {
 }
 
 export interface ControlPlanePageState {
+  tenants: TenantRecord[];
   templates: TemplateRecord[];
   rooms: RoomRecord[];
   assets: AssetRecord[];
@@ -216,6 +245,7 @@ export interface ControlPlanePageState {
 export function createControlPlanePageState(): ControlPlanePageState {
   return {
     templates: [],
+    tenants: [],
     rooms: [],
     assets: [],
     selectedRoomDiagnostics: [],

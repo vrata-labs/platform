@@ -173,6 +173,20 @@ test("control plane remembers admin token locally", async ({ page }) => {
   await expect(page.locator("#admin-token-input")).toHaveValue("test-admin-token");
 });
 
+test("control plane can create tenant and use it for new room", async ({ page }) => {
+  await page.goto("/control-plane");
+  await page.fill("#admin-token-input", "test-admin-token");
+  await page.fill("#tenant-name-input", "E2E Tenant");
+  await page.click("#create-tenant");
+  await expect(page.locator("#publish-status")).toContainText("published");
+  await expect(page.locator("#tenants-list")).toContainText("E2E Tenant");
+  await expect(page.locator("#tenant-select")).toContainText("E2E Tenant");
+  await page.fill("#room-name-input", "Tenant Room");
+  await page.click("#create-room");
+  await expect(page.locator("#publish-status")).toContainText("published");
+  await expect(page.locator("#room-detail")).toContainText("Tenant Room");
+});
+
 test("control plane uploads asset metadata through the browser UI", async ({ page }) => {
   await page.goto("/control-plane");
   await page.fill("#admin-token-input", "test-admin-token");

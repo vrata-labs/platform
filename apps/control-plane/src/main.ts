@@ -1,4 +1,5 @@
 import {
+  createTenant,
   createControlPlanePageState,
   createRoom,
   deleteRoom,
@@ -7,6 +8,7 @@ import {
   fetchTemplates,
   listAssets,
   listRooms,
+  listTenants,
   updateRoom,
   uploadAsset
 } from "./index.js";
@@ -25,7 +27,10 @@ const storedAdminToken = localStorage.getItem("noah.controlPlaneAdminToken") ?? 
 
 const form = mustElement<HTMLFormElement>("#room-form");
 const assetForm = mustElement<HTMLFormElement>("#asset-form");
+const tenantForm = mustElement<HTMLFormElement>("#tenant-form");
 const adminTokenInput = mustElement<HTMLInputElement>("#admin-token-input");
+const tenantSelect = mustElement<HTMLSelectElement>("#tenant-select");
+const tenantNameInput = mustElement<HTMLInputElement>("#tenant-name-input");
 const roomNameInput = mustElement<HTMLInputElement>("#room-name-input");
 const assetKindInput = mustElement<HTMLInputElement>("#asset-kind-input");
 const assetUrlInput = mustElement<HTMLInputElement>("#asset-url-input");
@@ -43,6 +48,7 @@ const roomLink = mustElement<HTMLAnchorElement>("#room-link");
 const refreshRoomDetailButton = mustElement<HTMLButtonElement>("#refresh-room-detail");
 const roomsList = mustElement<HTMLUListElement>("#rooms-list");
 const roomDetail = mustElement<HTMLPreElement>("#room-detail");
+const tenantsList = mustElement<HTMLUListElement>("#tenants-list");
 const assetsList = mustElement<HTMLUListElement>("#assets-list");
 let selectedRoomPoll: number | undefined;
 
@@ -79,6 +85,13 @@ function render(): void {
         diagnostics: state.selectedRoomDiagnostics.slice(-5)
       }, null, 2)
     : "Select a room to inspect details";
+  tenantsList.replaceChildren(
+    ...state.tenants.map((tenant) => {
+      const item = document.createElement("li");
+      item.textContent = `${tenant.name} (${tenant.tenantId})`;
+      return item;
+    })
+  );
   assetsList.replaceChildren(
     ...state.assets.map((asset) => {
       const item = document.createElement("li");
@@ -129,8 +142,17 @@ function currentAuth(): { adminToken?: string } {
 
 async function bootstrap(): Promise<void> {
   state.templates = await fetchTemplates(apiBaseUrl);
+  state.tenants = await listTenants(apiBaseUrl);
   state.rooms = await listRooms(apiBaseUrl);
   state.assets = await listAssets(apiBaseUrl);
+  tenantSelect.replaceChildren(
+    ...state.tenants.map((tenant) => {
+      const option = document.createElement("option");
+      option.value = tenant.tenantId;
+      option.textContent = tenant.name;
+      return option;
+    })
+  );
   templateSelect.replaceChildren(
     ...state.templates.map((template) => {
       const option = document.createElement("option");
@@ -157,7 +179,7 @@ form.addEventListener("submit", (event) => {
   state.statusMessage = "publishing";
   render();
   void createRoom(apiBaseUrl, {
-    tenantId: "demo-tenant",
+    tenantId: tenantSelect.value,
     templateId: templateSelect.value,
     name: roomNameInput.value,
     assetIds: Array.from(assetSelect.selectedOptions).map((option) => option.value),
@@ -191,7 +213,7 @@ assetForm.addEventListener("submit", (event) => {
   state.statusMessage = "publishing";
   render();
   void uploadAsset(apiBaseUrl, {
-    tenantId: "demo-tenant",
+    tenantId: tenantSelect.value,
     kind: assetKindInput.value,
     url: assetUrlInput.value
   }, currentAuth())
@@ -212,6 +234,34 @@ assetForm.addEventListener("submit", (event) => {
     .catch((error: unknown) => {
       state.publishStatus = "failed";
       state.statusMessage = error instanceof Error ? `failed:${error.message}` : "failed";
+      render();
+    });
+});
+
+tenantForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  state.publishStatus = "publishing";
+  state.statusMessage = "publishing";
+  render();
+  void createTenant(apiBaseUrl, { name: tenantNameInput.value }, currentAuth())
+    .then(async (tenant) => {
+      state.publishStatus = "published";
+      state.statusMessage = "published";
+      state.tenants = await listTenants(apiBaseUrl);
+      tenantSelect.replaceChildren(
+        ...state.tenants.map((item) => {
+          const option = document.createElement("option");
+          option.value = item.tenantId;
+          option.textContent = item.name;
+          return option;
+        })
+      );
+      tenantSelect.value = tenant.tenantId;
+      render();
+    })
+    .catch(() => {
+      state.publishStatus = "failed";
+      state.statusMessage = "failed";
       render();
     });
 });

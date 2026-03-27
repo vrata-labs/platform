@@ -68,6 +68,12 @@ button {
   padding-left: 18px;
 }
 
+#tenants-list {
+  margin-top: 18px;
+  padding-left: 18px;
+}
+
+#tenants-list li,
 #assets-list li {
   margin-top: 8px;
   word-break: break-all;
