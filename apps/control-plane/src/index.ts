@@ -146,7 +146,8 @@ export async function deleteTenant(apiBaseUrl: string, tenantId: string, auth?: 
     headers: { ...authHeaders(auth) }
   });
   if (!response.ok) {
-    throw new Error(`failed_to_delete_tenant:${response.status}`);
+    const payload = await response.json().catch(() => ({ error: `failed_to_delete_tenant:${response.status}` }));
+    throw new Error(payload.error ?? `failed_to_delete_tenant:${response.status}`);
   }
 }
 

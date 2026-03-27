@@ -334,9 +334,9 @@ deleteTenantButton.addEventListener("click", () => {
       tenantNameInput.value = "";
       render();
     })
-    .catch(() => {
+    .catch((error: unknown) => {
       state.publishStatus = "failed";
-      state.statusMessage = "failed";
+      state.statusMessage = error instanceof Error ? `failed:${error.message}` : "failed";
       render();
     });
 });
