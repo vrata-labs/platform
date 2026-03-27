@@ -6,6 +6,7 @@ import { bootRuntime, listPresence, planVoiceSession, removePresence, upsertPres
 import { applySnapTurn, computeKeyboardDirection, rotateFlatVector, sanitizeXrAxes, stepFlatMovement } from "./movement.js";
 import { createMotionTrack, pushMotionSample, sampleMotion, type MotionTrack } from "./motion-state.js";
 import { connectRoomState, sendParticipantUpdate, type RoomStateClient, type RoomStateSnapshot } from "./room-state-client.js";
+import { applySpatialSettings, createSpatialAudioSettings } from "./spatial-audio.js";
 import { detectXrSupport, getEnterVrVisibility } from "./xr.js";
 
 function fallbackUuid(): string {
@@ -143,6 +144,17 @@ let mediaRoomReady = false;
 let roomStateClient: RoomStateClient | null = null;
 let roomStateConnected = false;
 let roomStateReconnectTimer: number | null = null;
+let audioContext: AudioContext | null = null;
+
+interface RemoteAudioNode {
+  participantId: string;
+  element: HTMLMediaElement;
+  source: MediaElementAudioSourceNode;
+  gain: GainNode;
+  panner: PannerNode;
+}
+
+const remoteAudioNodes = new Map<string, RemoteAudioNode>();
 
 function applySnapshotParticipants(people: PresenceState[]): void {
   const activeIds = new Set<string>();
@@ -204,6 +216,66 @@ function applyDisplayTexture(texture: THREE.Texture | null): void {
   material.needsUpdate = true;
 }
 
+function ensureAudioContext(): AudioContext {
+  if (!audioContext) {
+    audioContext = new AudioContext();
+  }
+  return audioContext;
+}
+
+function connectRemoteAudioElement(element: HTMLMediaElement, participantId: string): void {
+  if (remoteAudioNodes.has(participantId)) {
+    return;
+  }
+  const context = ensureAudioContext();
+  const source = context.createMediaElementSource(element);
+  const gain = context.createGain();
+  const panner = context.createPanner();
+  applySpatialSettings(panner, createSpatialAudioSettings());
+  source.connect(gain);
+  gain.connect(panner);
+  panner.connect(context.destination);
+  remoteAudioNodes.set(participantId, { participantId, element, source, gain, panner });
+  debugState.spatialAudioState = "active";
+}
+
+function disconnectRemoteAudioElement(participantId: string): void {
+  const node = remoteAudioNodes.get(participantId);
+  if (!node) {
+    return;
+  }
+  node.source.disconnect();
+  node.gain.disconnect();
+  node.panner.disconnect();
+  remoteAudioNodes.delete(participantId);
+  if (remoteAudioNodes.size === 0) {
+    debugState.spatialAudioState = "idle";
+  }
+}
+
+function updateSpatialAudio(): void {
+  if (!audioContext) {
+    return;
+  }
+  const listener = audioContext.listener;
+  const listenerPosition = new THREE.Vector3();
+  camera.getWorldPosition(listenerPosition);
+  listener.positionX.value = listenerPosition.x;
+  listener.positionY.value = listenerPosition.y;
+  listener.positionZ.value = listenerPosition.z;
+
+  for (const [participantId, node] of remoteAudioNodes.entries()) {
+    const entity = remoteAvatars.get(participantId);
+    const target = entity?.head.position ?? entity?.body.position;
+    if (!target) {
+      continue;
+    }
+    node.panner.positionX.value = target.x;
+    node.panner.positionY.value = target.y;
+    node.panner.positionZ.value = target.z;
+  }
+}
+
 const debugState = {
   participantId,
   remoteAvatarCount: 0,
@@ -214,6 +286,7 @@ const debugState = {
   roomStateMode: "connecting",
   audioState: "idle",
   screenShareState: "idle",
+  spatialAudioState: "idle",
   localPosition: { x: 0, z: 6 },
   xrAxes: { moveX: 0, moveY: 0, turnX: 0 },
   botMode,
@@ -658,7 +731,7 @@ async function refreshPresence(): Promise<void> {
 }
 
 function setupAudio(room: Room): void {
-  room.on(RoomEvent.TrackSubscribed, (track) => {
+  room.on(RoomEvent.TrackSubscribed, (track, _publication, participant) => {
     if (track.kind === Track.Kind.Video) {
       attachVideoTrack(track);
       return;
@@ -668,15 +741,21 @@ function setupAudio(room: Room): void {
     element.autoplay = true;
     element.style.display = "none";
     document.body.appendChild(element);
+    if (participant?.identity) {
+      connectRemoteAudioElement(element as HTMLMediaElement, participant.identity);
+    }
     debugState.audioState = "remote-track";
   });
 
-  room.on(RoomEvent.TrackUnsubscribed, (track) => {
+  room.on(RoomEvent.TrackUnsubscribed, (track, _publication, participant) => {
     if (track.kind === Track.Kind.Video) {
       detachVideoTrack();
       return;
     }
     if (track.kind !== Track.Kind.Audio) return;
+    if (participant?.identity) {
+      disconnectRemoteAudioElement(participant.identity);
+    }
     track.detach().forEach((element) => element.remove());
   });
 }
@@ -865,6 +944,9 @@ window.addEventListener("beforeunload", () => {
   detachVideoTrack();
   clearRoomStateReconnect();
   roomStateClient?.close();
+  for (const participantId of remoteAudioNodes.keys()) {
+    disconnectRemoteAudioElement(participantId);
+  }
   void livekitRoom?.disconnect();
 });
 
@@ -876,6 +958,7 @@ renderer.setAnimationLoop(() => {
   const delta = clock.getDelta();
   updateMovement(delta);
   updateRemoteAvatarInterpolation(delta);
+  updateSpatialAudio();
   renderDebugPanel();
 
   syncAccumulator += delta;
