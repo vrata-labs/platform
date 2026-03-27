@@ -132,6 +132,17 @@ export async function updateRoom(apiBaseUrl: string, roomId: string, input: Part
   return (await response.json()) as RoomRecord;
 }
 
+export async function deleteRoom(apiBaseUrl: string, roomId: string, auth?: ControlPlaneAuth): Promise<void> {
+  const response = await fetch(new URL(`/api/rooms/${roomId}`, apiBaseUrl), {
+    method: "DELETE",
+    headers: { ...authHeaders(auth) }
+  });
+
+  if (!response.ok) {
+    throw new Error(`failed_to_delete_room:${response.status}`);
+  }
+}
+
 export async function listRooms(apiBaseUrl: string): Promise<RoomRecord[]> {
   const response = await fetch(new URL("/api/rooms", apiBaseUrl));
 

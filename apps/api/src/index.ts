@@ -375,6 +375,15 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     return;
   }
 
+  if (method === "DELETE" && roomItemMatch) {
+    if (!isAuthorizedControlPlaneRequest(request)) return json(response, 403, { error: "forbidden" });
+    const roomId = decodeURIComponent(roomItemMatch[1]);
+    const deleted = await storage.deleteRoom(roomId);
+    if (!deleted) return json(response, 404, { error: "room_not_found" });
+    json(response, 200, { ok: true, roomId });
+    return;
+  }
+
   const manifestMatch = url.pathname.match(/^\/api\/rooms\/([^/]+)\/manifest$/);
   if (method === "GET" && manifestMatch) {
     json(response, 200, await buildManifest(decodeURIComponent(manifestMatch[1])));

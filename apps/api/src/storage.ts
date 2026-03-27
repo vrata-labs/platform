@@ -63,6 +63,7 @@ export interface Storage {
   getRoom(roomId: string): Promise<RoomRecord | null>;
   createRoom(input: Partial<RoomRecord>): Promise<RoomRecord>;
   updateRoom(roomId: string, input: Partial<RoomRecord>): Promise<RoomRecord | null>;
+  deleteRoom(roomId: string): Promise<boolean>;
   createAsset(input: Partial<AssetRecord>): Promise<AssetRecord>;
   addDiagnostic(roomId: string, payload: RuntimeDiagnosticRecord): Promise<void>;
   getDiagnostics(roomId: string): Promise<RuntimeDiagnosticRecord[]>;
@@ -147,6 +148,9 @@ export class MemoryStorage implements Storage {
     };
     this.rooms.set(roomId, updated);
     return updated;
+  }
+  async deleteRoom(roomId: string): Promise<boolean> {
+    return this.rooms.delete(roomId);
   }
   async createAsset(input: Partial<AssetRecord>): Promise<AssetRecord> {
     const asset = {
@@ -292,6 +296,10 @@ export class PostgresStorage implements Storage {
       [roomId, updated.templateId, updated.name, JSON.stringify(updated.features), JSON.stringify(updated.assetIds), JSON.stringify(updated.theme)]
     );
     return updated;
+  }
+  async deleteRoom(roomId: string): Promise<boolean> {
+    const result = await this.pool.query(`delete from rooms where room_id = $1`, [roomId]);
+    return (result.rowCount ?? 0) > 0;
   }
   async createAsset(input: Partial<AssetRecord>): Promise<AssetRecord> {
     const asset = { assetId: input.assetId ?? crypto.randomUUID(), tenantId: input.tenantId ?? "demo-tenant", kind: input.kind ?? "logo", url: input.url ?? "/assets/demo/placeholder.png" };

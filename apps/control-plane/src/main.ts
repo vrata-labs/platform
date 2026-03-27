@@ -1,6 +1,7 @@
 import {
   createControlPlanePageState,
   createRoom,
+  deleteRoom,
   fetchRoomDiagnostics,
   fetchRoomManifest,
   fetchTemplates,
@@ -36,6 +37,7 @@ const featureVoiceInput = mustElement<HTMLInputElement>("#feature-voice-input");
 const featureSpatialInput = mustElement<HTMLInputElement>("#feature-spatial-input");
 const featureShareInput = mustElement<HTMLInputElement>("#feature-share-input");
 const updateRoomButton = mustElement<HTMLButtonElement>("#update-room");
+const deleteRoomButton = mustElement<HTMLButtonElement>("#delete-room");
 const publishStatus = mustElement<HTMLDivElement>("#publish-status");
 const roomLink = mustElement<HTMLAnchorElement>("#room-link");
 const refreshRoomDetailButton = mustElement<HTMLButtonElement>("#refresh-room-detail");
@@ -219,6 +221,32 @@ refreshRoomDetailButton.addEventListener("click", () => {
     return;
   }
   void selectRoom(state.selectedRoom);
+});
+
+deleteRoomButton.addEventListener("click", () => {
+  if (!state.selectedRoom) {
+    return;
+  }
+  const roomId = state.selectedRoom.roomId;
+  state.publishStatus = "publishing";
+  state.statusMessage = "deleting";
+  render();
+  void deleteRoom(apiBaseUrl, roomId, currentAuth())
+    .then(() => {
+      state.publishStatus = "published";
+      state.statusMessage = "deleted";
+      state.roomLink = undefined;
+      state.rooms = state.rooms.filter((room) => room.roomId !== roomId);
+      state.selectedRoom = undefined;
+      state.selectedRoomManifest = undefined;
+      state.selectedRoomDiagnostics = [];
+      render();
+    })
+    .catch(() => {
+      state.publishStatus = "failed";
+      state.statusMessage = "failed";
+      render();
+    });
 });
 
 updateRoomButton.addEventListener("click", () => {

@@ -259,6 +259,18 @@ test("control plane can update selected room settings", async ({ page }) => {
   await expect(page.locator("#room-detail")).toContainText("#22aa88");
 });
 
+test("control plane can delete selected room", async ({ page }) => {
+  await page.goto("/control-plane");
+  await page.fill("#admin-token-input", "test-admin-token");
+  await page.fill("#room-name-input", "Delete Me Room");
+  await page.click("#create-room");
+  await expect(page.locator("#publish-status")).toContainText("published");
+  await expect(page.locator("#room-detail")).toContainText("Delete Me Room");
+  await page.click("#delete-room");
+  await expect(page.locator("#publish-status")).toContainText("deleted");
+  await expect(page.locator("#room-detail")).toContainText("Select a room to inspect details");
+});
+
 test("mock screen share updates UI and diagnostics", async ({ page, request }) => {
   await page.goto("/rooms/demo-room?sharemock=1&debug=1");
   await page.waitForFunction(() => {
