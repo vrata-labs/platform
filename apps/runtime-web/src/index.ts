@@ -18,6 +18,10 @@ interface RoomManifest {
     spatialAudio: boolean;
     screenShare: boolean;
   };
+  access: {
+    joinMode: "link";
+    guestAllowed: boolean;
+  };
 }
 
 interface MediaTokenResponse {
@@ -88,6 +92,7 @@ export interface RuntimeBootResult {
   voiceEnabled: boolean;
   spatialAudioEnabled: boolean;
   screenShareEnabled: boolean;
+  guestAllowed: boolean;
 }
 
 export interface VoiceSessionPlan {
@@ -114,7 +119,8 @@ export async function bootRuntime(
     joinMode: resolveJoinMode(userAgent),
     voiceEnabled: manifest.features.voice,
     spatialAudioEnabled: manifest.features.spatialAudio,
-    screenShareEnabled: manifest.features.screenShare
+    screenShareEnabled: manifest.features.screenShare,
+    guestAllowed: manifest.access.guestAllowed
   };
 }
 

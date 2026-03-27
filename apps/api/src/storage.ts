@@ -35,6 +35,7 @@ export interface RoomRecord {
     primaryColor: string;
     accentColor: string;
   };
+  guestAllowed?: boolean;
 }
 
 export interface RuntimeDiagnosticRecord {
@@ -96,7 +97,8 @@ export class MemoryStorage implements Storage {
         theme: {
           primaryColor: "#5fc8ff",
           accentColor: "#163354"
-        }
+        },
+        guestAllowed: true
       }
     ]
   ]);
@@ -143,7 +145,8 @@ export class MemoryStorage implements Storage {
       theme: input.theme ?? {
         primaryColor: "#5fc8ff",
         accentColor: "#163354"
-      }
+      },
+      guestAllowed: input.guestAllowed ?? true
     };
     this.rooms.set(room.roomId, room);
     return room;
@@ -164,7 +167,8 @@ export class MemoryStorage implements Storage {
         primaryColor: input.theme?.primaryColor ?? existing.theme?.primaryColor ?? "#5fc8ff",
         accentColor: input.theme?.accentColor ?? existing.theme?.accentColor ?? "#163354"
       },
-      assetIds: input.assetIds ?? existing.assetIds
+      assetIds: input.assetIds ?? existing.assetIds,
+      guestAllowed: input.guestAllowed ?? existing.guestAllowed ?? true
     };
     this.rooms.set(roomId, updated);
     return updated;
@@ -219,6 +223,7 @@ export class PostgresStorage implements Storage {
       features jsonb not null,
       asset_ids jsonb not null default '[]'::jsonb,
       theme jsonb not null default '{"primaryColor":"#5fc8ff","accentColor":"#163354"}'::jsonb
+      , guest_allowed boolean not null default true
       );
       create table if not exists assets (
         asset_id text primary key,
@@ -245,8 +250,8 @@ export class PostgresStorage implements Storage {
       );
     }
     await this.pool.query(
-      `insert into rooms (room_id, tenant_id, template_id, name, features, asset_ids, theme)
-       values ('demo-room','demo-tenant','meeting-room-basic','Demo Room',$1::jsonb,'[]'::jsonb,'{"primaryColor":"#5fc8ff","accentColor":"#163354"}'::jsonb)
+       `insert into rooms (room_id, tenant_id, template_id, name, features, asset_ids, theme, guest_allowed)
+       values ('demo-room','demo-tenant','meeting-room-basic','Demo Room',$1::jsonb,'[]'::jsonb,'{"primaryColor":"#5fc8ff","accentColor":"#163354"}'::jsonb,true)
        on conflict do nothing`,
        [JSON.stringify({ voice: true, spatialAudio: true, screenShare: true })]
     );
@@ -289,13 +294,13 @@ export class PostgresStorage implements Storage {
     }));
   }
   async listRooms(): Promise<RoomRecord[]> {
-    const result = await this.pool.query(`select room_id, tenant_id, template_id, name, features, asset_ids, theme from rooms order by room_id`);
-    return result.rows.map((row: { room_id: string; tenant_id: string; template_id: string; name: string; features: RoomFeatures; asset_ids: string[]; theme: { primaryColor: string; accentColor: string } }) => ({ roomId: row.room_id, tenantId: row.tenant_id, templateId: row.template_id, name: row.name, features: row.features, assetIds: row.asset_ids, theme: row.theme }));
+    const result = await this.pool.query(`select room_id, tenant_id, template_id, name, features, asset_ids, theme, guest_allowed from rooms order by room_id`);
+    return result.rows.map((row: { room_id: string; tenant_id: string; template_id: string; name: string; features: RoomFeatures; asset_ids: string[]; theme: { primaryColor: string; accentColor: string }; guest_allowed: boolean }) => ({ roomId: row.room_id, tenantId: row.tenant_id, templateId: row.template_id, name: row.name, features: row.features, assetIds: row.asset_ids, theme: row.theme, guestAllowed: row.guest_allowed }));
   }
   async getRoom(roomId: string): Promise<RoomRecord | null> {
-    const result = await this.pool.query(`select room_id, tenant_id, template_id, name, features, asset_ids, theme from rooms where room_id = $1`, [roomId]);
+    const result = await this.pool.query(`select room_id, tenant_id, template_id, name, features, asset_ids, theme, guest_allowed from rooms where room_id = $1`, [roomId]);
     const row = result.rows[0];
-    return row ? { roomId: row.room_id, tenantId: row.tenant_id, templateId: row.template_id, name: row.name, features: row.features, assetIds: row.asset_ids, theme: row.theme } : null;
+    return row ? { roomId: row.room_id, tenantId: row.tenant_id, templateId: row.template_id, name: row.name, features: row.features, assetIds: row.asset_ids, theme: row.theme, guestAllowed: row.guest_allowed } : null;
   }
   async createRoom(input: Partial<RoomRecord>): Promise<RoomRecord> {
     const room: RoomRecord = {
@@ -312,11 +317,12 @@ export class PostgresStorage implements Storage {
       theme: input.theme ?? {
         primaryColor: "#5fc8ff",
         accentColor: "#163354"
-      }
+      },
+      guestAllowed: input.guestAllowed ?? true
     };
     await this.pool.query(
-      `insert into rooms (room_id, tenant_id, template_id, name, features, asset_ids, theme) values ($1,$2,$3,$4,$5::jsonb,$6::jsonb,$7::jsonb)`,
-      [room.roomId, room.tenantId, room.templateId, room.name, JSON.stringify(room.features), JSON.stringify(room.assetIds), JSON.stringify(room.theme)]
+      `insert into rooms (room_id, tenant_id, template_id, name, features, asset_ids, theme, guest_allowed) values ($1,$2,$3,$4,$5::jsonb,$6::jsonb,$7::jsonb,$8)`,
+      [room.roomId, room.tenantId, room.templateId, room.name, JSON.stringify(room.features), JSON.stringify(room.assetIds), JSON.stringify(room.theme), room.guestAllowed]
     );
     return room;
   }
@@ -336,11 +342,12 @@ export class PostgresStorage implements Storage {
         primaryColor: input.theme?.primaryColor ?? existing.theme?.primaryColor ?? "#5fc8ff",
         accentColor: input.theme?.accentColor ?? existing.theme?.accentColor ?? "#163354"
       },
-      assetIds: input.assetIds ?? existing.assetIds
+      assetIds: input.assetIds ?? existing.assetIds,
+      guestAllowed: input.guestAllowed ?? existing.guestAllowed ?? true
     };
     await this.pool.query(
-      `update rooms set template_id = $2, name = $3, features = $4::jsonb, asset_ids = $5::jsonb, theme = $6::jsonb where room_id = $1`,
-      [roomId, updated.templateId, updated.name, JSON.stringify(updated.features), JSON.stringify(updated.assetIds), JSON.stringify(updated.theme)]
+      `update rooms set template_id = $2, name = $3, features = $4::jsonb, asset_ids = $5::jsonb, theme = $6::jsonb, guest_allowed = $7 where room_id = $1`,
+      [roomId, updated.templateId, updated.name, JSON.stringify(updated.features), JSON.stringify(updated.assetIds), JSON.stringify(updated.theme), updated.guestAllowed]
     );
     return updated;
   }

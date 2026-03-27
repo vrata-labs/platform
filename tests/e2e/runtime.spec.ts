@@ -326,6 +326,20 @@ test("control plane can disable voice and screen share for a room", async ({ pag
   await expect(page.locator("#start-share")).toBeDisabled();
 });
 
+test("control plane can disable guest access for a room", async ({ page }) => {
+  await page.goto("/control-plane");
+  await page.fill("#admin-token-input", "test-admin-token");
+  await page.fill("#room-name-input", "Members Only Room");
+  await page.uncheck("#guest-access-input");
+  await page.click("#create-room");
+  await expect(page.locator("#publish-status")).toContainText("published");
+  const href = await page.locator("#room-link").getAttribute("href");
+  expect(href).toBeTruthy();
+  await page.goto(String(href));
+  await page.waitForTimeout(2000);
+  await expect(page.locator("#guest-access-line")).toContainText("Guest access: members only");
+});
+
 test("control plane can update selected room settings", async ({ page }) => {
   await page.goto("/control-plane");
   await page.fill("#admin-token-input", "test-admin-token");

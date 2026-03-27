@@ -175,7 +175,7 @@ async function buildManifest(roomId: string): Promise<RoomManifest> {
     assets: roomAssets.map((asset) => ({ assetId: asset.assetId, kind: asset.kind, url: asset.url })),
     features: room.features,
     quality: { default: "desktop-standard", mobile: "mobile-lite", xr: "xr" },
-    access: { joinMode: "link", guestAllowed: true }
+    access: { joinMode: "link", guestAllowed: room.guestAllowed ?? true }
   };
 }
 

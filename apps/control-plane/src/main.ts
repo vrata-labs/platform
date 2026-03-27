@@ -49,6 +49,7 @@ const accentColorInput = mustElement<HTMLInputElement>("#accent-color-input");
 const featureVoiceInput = mustElement<HTMLInputElement>("#feature-voice-input");
 const featureSpatialInput = mustElement<HTMLInputElement>("#feature-spatial-input");
 const featureShareInput = mustElement<HTMLInputElement>("#feature-share-input");
+const guestAccessInput = mustElement<HTMLInputElement>("#guest-access-input");
 const updateRoomButton = mustElement<HTMLButtonElement>("#update-room");
 const deleteRoomButton = mustElement<HTMLButtonElement>("#delete-room");
 const publishStatus = mustElement<HTMLDivElement>("#publish-status");
@@ -149,6 +150,7 @@ async function selectRoom(room: typeof state.selectedRoom): Promise<void> {
   featureVoiceInput.checked = room.features?.voice ?? true;
   featureSpatialInput.checked = room.features?.spatialAudio ?? true;
   featureShareInput.checked = room.features?.screenShare ?? true;
+  guestAccessInput.checked = room.guestAllowed ?? state.selectedRoomManifest?.access.guestAllowed ?? true;
   const assetIds = new Set(room.assetIds ?? []);
   Array.from(assetSelect.options).forEach((option) => {
     option.selected = assetIds.has(option.value);
@@ -249,6 +251,7 @@ form.addEventListener("submit", (event) => {
     templateId: templateSelect.value,
     name: roomNameInput.value,
     assetIds: Array.from(assetSelect.selectedOptions).map((option) => option.value),
+    guestAllowed: guestAccessInput.checked,
     theme: {
       primaryColor: primaryColorInput.value,
       accentColor: accentColorInput.value
@@ -484,6 +487,7 @@ updateRoomButton.addEventListener("click", () => {
     name: roomNameInput.value,
     templateId: templateSelect.value,
     assetIds: Array.from(assetSelect.selectedOptions).map((option) => option.value),
+    guestAllowed: guestAccessInput.checked,
     theme: {
       primaryColor: primaryColorInput.value,
       accentColor: accentColorInput.value

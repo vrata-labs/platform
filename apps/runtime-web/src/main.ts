@@ -46,6 +46,7 @@ const roomNameEl = mustElement<HTMLDivElement>("#room-name");
 const statusLineEl = mustElement<HTMLDivElement>("#status-line");
 const brandingLineEl = mustElement<HTMLDivElement>("#branding-line");
 const roomStateLineEl = mustElement<HTMLDivElement>("#room-state-line");
+const guestAccessLineEl = mustElement<HTMLDivElement>("#guest-access-line");
 const sceneHost = mustElement<HTMLDivElement>("#scene");
 const joinAudioButton = mustElement<HTMLButtonElement>("#join-audio");
 const muteButton = mustElement<HTMLButtonElement>("#toggle-mute");
@@ -996,6 +997,7 @@ async function main(): Promise<void> {
   brandingLineEl.textContent = boot.assets.length > 0
     ? `Attached assets: ${boot.assets.map((asset) => asset.kind).join(", ")}`
     : "No branded assets attached";
+  guestAccessLineEl.textContent = boot.guestAllowed ? "Guest access: enabled" : "Guest access: members only";
   floorMaterial.color.set(boot.theme.accentColor);
   wallMaterial.color.set(boot.theme.primaryColor);
   scene.fog = new THREE.Fog(new THREE.Color(boot.theme.accentColor).getHex(), 12, 50);

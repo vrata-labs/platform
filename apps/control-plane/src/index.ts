@@ -18,6 +18,7 @@ export interface RoomCreateInput {
   templateId: string;
   name: string;
   assetIds?: string[];
+  guestAllowed?: boolean;
   theme?: {
     primaryColor: string;
     accentColor: string;
@@ -39,6 +40,7 @@ export interface RoomRecord {
   templateId: string;
   name: string;
   assetIds?: string[];
+  guestAllowed?: boolean;
   features?: {
     voice: boolean;
     spatialAudio: boolean;
@@ -69,6 +71,10 @@ export interface RoomManifestRecord {
     voice: boolean;
     spatialAudio: boolean;
     screenShare: boolean;
+  };
+  access: {
+    joinMode: "link";
+    guestAllowed: boolean;
   };
 }
 

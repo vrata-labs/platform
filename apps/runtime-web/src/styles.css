@@ -66,6 +66,7 @@ canvas {
 #status-line,
 #branding-line,
 #room-state-line,
+#guest-access-line,
 .help {
   color: var(--muted);
   font-size: 0.9rem;

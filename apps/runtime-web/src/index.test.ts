@@ -19,6 +19,10 @@ test("describeManifest returns room and template", () => {
       realtime: {
         roomStateUrl: "ws://127.0.0.1:2567"
       },
+      access: {
+        joinMode: "link",
+        guestAllowed: true
+      },
       assets: [],
       features: { voice: true, spatialAudio: true, screenShare: false }
     }),
