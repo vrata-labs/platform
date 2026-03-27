@@ -176,11 +176,18 @@ test("control plane can attach selected assets to a room", async ({ page }) => {
   await page.fill("#asset-url-input", "https://example.com/wall.png");
   await page.click("#create-asset");
   await expect(page.locator("#publish-status")).toContainText("published");
-  await page.selectOption("#asset-select", { index: 0 });
+  const wallAssetValue = await page.locator('#asset-select option').filter({ hasText: 'wall-graphic: https://example.com/wall.png' }).first().getAttribute('value');
+  expect(wallAssetValue).toBeTruthy();
+  await page.selectOption("#asset-select", String(wallAssetValue));
   await page.fill("#room-name-input", "Asset Attached Room");
   await page.click("#create-room");
   await expect(page.locator("#publish-status")).toContainText("published");
   await expect(page.locator("#rooms-list li").first()).toContainText("assets:1");
+  const href = await page.locator("#room-link").getAttribute("href");
+  expect(href).toBeTruthy();
+  await page.goto(String(href));
+  await page.waitForTimeout(2000);
+  await expect(page.locator("#branding-line")).toContainText("Attached assets: wall-graphic");
 });
 
 test("mock screen share updates UI and diagnostics", async ({ page, request }) => {

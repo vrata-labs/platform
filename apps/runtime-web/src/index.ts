@@ -1,6 +1,11 @@
 interface RoomManifest {
   roomId: string;
   template: string;
+  assets: Array<{
+    assetId: string;
+    kind: string;
+    url: string;
+  }>;
   features: {
     voice: boolean;
     spatialAudio: boolean;
@@ -62,6 +67,11 @@ export async function fetchRoomManifest(apiBaseUrl: string, roomId: string): Pro
 export interface RuntimeBootResult {
   roomId: string;
   template: string;
+  assets: Array<{
+    assetId: string;
+    kind: string;
+    url: string;
+  }>;
   joinMode: "desktop" | "mobile";
   voiceEnabled: boolean;
   spatialAudioEnabled: boolean;
@@ -85,6 +95,7 @@ export async function bootRuntime(
   return {
     roomId: manifest.roomId,
     template: manifest.template,
+    assets: manifest.assets,
     joinMode: resolveJoinMode(userAgent),
     voiceEnabled: manifest.features.voice,
     spatialAudioEnabled: manifest.features.spatialAudio

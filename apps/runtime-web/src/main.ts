@@ -42,6 +42,7 @@ localStorage.setItem("noah.displayName", displayName);
 
 const roomNameEl = mustElement<HTMLDivElement>("#room-name");
 const statusLineEl = mustElement<HTMLDivElement>("#status-line");
+const brandingLineEl = mustElement<HTMLDivElement>("#branding-line");
 const sceneHost = mustElement<HTMLDivElement>("#scene");
 const joinAudioButton = mustElement<HTMLButtonElement>("#join-audio");
 const muteButton = mustElement<HTMLButtonElement>("#toggle-mute");
@@ -827,6 +828,9 @@ renderer.setAnimationLoop(() => {
 async function main(): Promise<void> {
   const boot = await bootRuntime(apiBaseUrl, roomId, navigator.userAgent);
   roomNameEl.textContent = `${boot.template} - ${boot.roomId}`;
+  brandingLineEl.textContent = boot.assets.length > 0
+    ? `Attached assets: ${boot.assets.map((asset) => asset.kind).join(", ")}`
+    : "No branded assets attached";
   setStatus(`Joined as ${displayName}`);
   startShareButton.disabled = !boot.voiceEnabled && !shareMockEnabled ? false : false;
 

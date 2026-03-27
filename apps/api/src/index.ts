@@ -21,6 +21,11 @@ interface RoomManifest {
   tenantId: string;
   roomId: string;
   template: string;
+  assets: Array<{
+    assetId: string;
+    kind: string;
+    url: string;
+  }>;
   features: {
     voice: boolean;
     spatialAudio: boolean;
@@ -79,6 +84,7 @@ function defaultManifest(roomId: string): RoomManifest {
     tenantId: "demo-tenant",
     roomId,
     template: "meeting-room-basic",
+    assets: [],
     features: { voice: true, spatialAudio: true, screenShare: false },
     quality: { default: "desktop-standard", mobile: "mobile-lite", xr: "xr" },
     access: { joinMode: "link", guestAllowed: true }
@@ -139,11 +145,13 @@ async function buildManifest(roomId: string): Promise<RoomManifest> {
   const storage = await storagePromise;
   const room = await storage.getRoom(roomId);
   if (!room) return defaultManifest(roomId);
+  const roomAssets = (await storage.listAssets()).filter((asset) => room.assetIds.includes(asset.assetId));
   return {
     schemaVersion: 1,
     tenantId: room.tenantId,
     roomId: room.roomId,
     template: room.templateId,
+    assets: roomAssets.map((asset) => ({ assetId: asset.assetId, kind: asset.kind, url: asset.url })),
     features: room.features,
     quality: { default: "desktop-standard", mobile: "mobile-lite", xr: "xr" },
     access: { joinMode: "link", guestAllowed: true }
