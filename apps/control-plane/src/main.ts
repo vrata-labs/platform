@@ -28,6 +28,7 @@ const featureShareInput = mustElement<HTMLInputElement>("#feature-share-input");
 const publishStatus = mustElement<HTMLDivElement>("#publish-status");
 const roomLink = mustElement<HTMLAnchorElement>("#room-link");
 const roomsList = mustElement<HTMLUListElement>("#rooms-list");
+const roomDetail = mustElement<HTMLPreElement>("#room-detail");
 const assetsList = mustElement<HTMLUListElement>("#assets-list");
 
 adminTokenInput.value = storedAdminToken;
@@ -39,15 +40,27 @@ function render(): void {
   roomsList.replaceChildren(
     ...state.rooms.map((room) => {
       const item = document.createElement("li");
-      const link = document.createElement("a");
-      link.href = room.roomLink;
-      link.textContent = `${room.name} (${room.templateId})${room.assetIds?.length ? ` assets:${room.assetIds.length}` : ""}${room.theme ? ` theme:${room.theme.primaryColor}` : ""}`;
-      link.target = "_blank";
-      link.rel = "noreferrer";
-      item.appendChild(link);
+      const inspect = document.createElement("button");
+      inspect.type = "button";
+      inspect.textContent = `${room.name} (${room.templateId})${room.assetIds?.length ? ` assets:${room.assetIds.length}` : ""}${room.theme ? ` theme:${room.theme.primaryColor}` : ""}`;
+      inspect.addEventListener("click", () => {
+        state.selectedRoom = room;
+        render();
+      });
+      const openLink = document.createElement("a");
+      openLink.href = room.roomLink;
+      openLink.textContent = "open";
+      openLink.target = "_blank";
+      openLink.rel = "noreferrer";
+      item.appendChild(inspect);
+      item.appendChild(document.createTextNode(" "));
+      item.appendChild(openLink);
       return item;
     })
   );
+  roomDetail.textContent = state.selectedRoom
+    ? JSON.stringify(state.selectedRoom, null, 2)
+    : "Select a room to inspect details";
   assetsList.replaceChildren(
     ...state.assets.map((asset) => {
       const item = document.createElement("li");
@@ -111,6 +124,7 @@ form.addEventListener("submit", (event) => {
       state.statusMessage = "published";
       state.roomLink = room.roomLink;
       state.rooms = [room, ...state.rooms];
+      state.selectedRoom = room;
       render();
     })
     .catch(() => {

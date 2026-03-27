@@ -123,6 +123,7 @@ export interface ControlPlanePageState {
   templates: TemplateRecord[];
   rooms: RoomRecord[];
   assets: AssetRecord[];
+  selectedRoom?: RoomRecord;
   roomLink?: string;
   publishStatus: "idle" | "publishing" | "published" | "failed";
   statusMessage?: string;
