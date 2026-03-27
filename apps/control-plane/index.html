@@ -29,6 +29,11 @@
         <form id="asset-form">
           <label>Asset kind <input id="asset-kind-input" value="logo" /></label>
           <label>Asset URL <input id="asset-url-input" value="https://example.com/logo.png" /></label>
+          <label>Asset status <select id="asset-status-select">
+            <option value="validated">validated</option>
+            <option value="pending">pending</option>
+            <option value="rejected">rejected</option>
+          </select></label>
           <button id="create-asset" type="submit">Add asset metadata</button>
           <button id="update-asset" type="button">Update selected asset</button>
           <button id="delete-asset" type="button">Delete selected asset</button>

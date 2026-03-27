@@ -40,6 +40,7 @@ const deleteTenantButton = mustElement<HTMLButtonElement>("#delete-tenant");
 const roomNameInput = mustElement<HTMLInputElement>("#room-name-input");
 const assetKindInput = mustElement<HTMLInputElement>("#asset-kind-input");
 const assetUrlInput = mustElement<HTMLInputElement>("#asset-url-input");
+const assetStatusSelect = mustElement<HTMLSelectElement>("#asset-status-select");
 const updateAssetButton = mustElement<HTMLButtonElement>("#update-asset");
 const deleteAssetButton = mustElement<HTMLButtonElement>("#delete-asset");
 const templateSelect = mustElement<HTMLSelectElement>("#template-select");
@@ -128,6 +129,7 @@ function render(): void {
         state.selectedAsset = asset;
         assetKindInput.value = asset.kind;
         assetUrlInput.value = asset.url;
+        assetStatusSelect.value = asset.validationStatus ?? "validated";
         render();
       });
       item.appendChild(selectButton);
@@ -284,7 +286,8 @@ assetForm.addEventListener("submit", (event) => {
   void uploadAsset(apiBaseUrl, {
     tenantId: tenantSelect.value,
     kind: assetKindInput.value,
-    url: assetUrlInput.value
+    url: assetUrlInput.value,
+    validationStatus: assetStatusSelect.value as "pending" | "validated" | "rejected"
   }, currentAuth())
     .then(async () => {
       state.publishStatus = "published";
@@ -316,7 +319,8 @@ updateAssetButton.addEventListener("click", () => {
   void updateAsset(apiBaseUrl, assetId, {
     tenantId: tenantSelect.value,
     kind: assetKindInput.value,
-    url: assetUrlInput.value
+    url: assetUrlInput.value,
+    validationStatus: assetStatusSelect.value as "pending" | "validated" | "rejected"
   }, currentAuth())
     .then(async (asset) => {
       state.publishStatus = "published";
@@ -354,6 +358,7 @@ deleteAssetButton.addEventListener("click", () => {
       state.selectedAsset = undefined;
       assetKindInput.value = "logo";
       assetUrlInput.value = "https://example.com/logo.png";
+      assetStatusSelect.value = "validated";
       assetSelect.replaceChildren(
         ...state.assets.map((item) => {
           const option = document.createElement("option");

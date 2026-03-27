@@ -240,9 +240,11 @@ test("control plane can update and delete asset without room dependencies", asyn
   await expect(page.locator("#publish-status")).toContainText("published");
   await page.locator("#assets-list button").first().click();
   await page.fill("#asset-url-input", "https://example.com/updated.glb");
+  await page.selectOption("#asset-status-select", "pending");
   await page.click("#update-asset");
   await expect(page.locator("#publish-status")).toContainText("updated");
   await expect(page.locator("#assets-list")).toContainText("https://example.com/updated.glb");
+  await expect(page.locator("#assets-list")).toContainText("pending");
   await page.click("#delete-asset");
   await expect(page.locator("#publish-status")).toContainText("deleted");
 });
