@@ -12,6 +12,7 @@ export interface RoomCreateInput {
   tenantId: string;
   templateId: string;
   name: string;
+  assetIds?: string[];
   features?: {
     voice?: boolean;
     spatialAudio?: boolean;
@@ -28,6 +29,7 @@ export interface RoomRecord {
   tenantId: string;
   templateId: string;
   name: string;
+  assetIds?: string[];
   roomLink: string;
 }
 

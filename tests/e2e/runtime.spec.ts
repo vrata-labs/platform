@@ -169,6 +169,20 @@ test("control plane uploads asset metadata through the browser UI", async ({ pag
   await expect(page.locator("#assets-list li").first()).toContainText("https://example.com/test-logo.png");
 });
 
+test("control plane can attach selected assets to a room", async ({ page }) => {
+  await page.goto("/control-plane");
+  await page.fill("#admin-token-input", "test-admin-token");
+  await page.fill("#asset-kind-input", "wall-graphic");
+  await page.fill("#asset-url-input", "https://example.com/wall.png");
+  await page.click("#create-asset");
+  await expect(page.locator("#publish-status")).toContainText("published");
+  await page.selectOption("#asset-select", { index: 0 });
+  await page.fill("#room-name-input", "Asset Attached Room");
+  await page.click("#create-room");
+  await expect(page.locator("#publish-status")).toContainText("published");
+  await expect(page.locator("#rooms-list li").first()).toContainText("assets:1");
+});
+
 test("mock screen share updates UI and diagnostics", async ({ page, request }) => {
   await page.goto("/rooms/demo-room?sharemock=1&debug=1");
   await page.waitForFunction(() => {

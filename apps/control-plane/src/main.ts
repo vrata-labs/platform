@@ -19,6 +19,7 @@ const roomNameInput = mustElement<HTMLInputElement>("#room-name-input");
 const assetKindInput = mustElement<HTMLInputElement>("#asset-kind-input");
 const assetUrlInput = mustElement<HTMLInputElement>("#asset-url-input");
 const templateSelect = mustElement<HTMLSelectElement>("#template-select");
+const assetSelect = mustElement<HTMLSelectElement>("#asset-select");
 const publishStatus = mustElement<HTMLDivElement>("#publish-status");
 const roomLink = mustElement<HTMLAnchorElement>("#room-link");
 const roomsList = mustElement<HTMLUListElement>("#rooms-list");
@@ -35,7 +36,7 @@ function render(): void {
       const item = document.createElement("li");
       const link = document.createElement("a");
       link.href = room.roomLink;
-      link.textContent = `${room.name} (${room.templateId})`;
+      link.textContent = `${room.name} (${room.templateId})${room.assetIds?.length ? ` assets:${room.assetIds.length}` : ""}`;
       link.target = "_blank";
       link.rel = "noreferrer";
       item.appendChild(link);
@@ -69,6 +70,14 @@ async function bootstrap(): Promise<void> {
       return option;
     })
   );
+  assetSelect.replaceChildren(
+    ...state.assets.map((asset) => {
+      const option = document.createElement("option");
+      option.value = asset.assetId;
+      option.textContent = `${asset.kind}: ${asset.url}`;
+      return option;
+    })
+  );
   render();
 }
 
@@ -80,6 +89,7 @@ form.addEventListener("submit", (event) => {
     tenantId: "demo-tenant",
     templateId: templateSelect.value,
     name: roomNameInput.value,
+    assetIds: Array.from(assetSelect.selectedOptions).map((option) => option.value),
     features: { voice: true, spatialAudio: true, screenShare: true }
   }, currentAuth())
     .then((room) => {
@@ -106,6 +116,14 @@ assetForm.addEventListener("submit", (event) => {
     .then(async () => {
       state.publishStatus = "published";
       state.assets = await listAssets(apiBaseUrl);
+      assetSelect.replaceChildren(
+        ...state.assets.map((asset) => {
+          const option = document.createElement("option");
+          option.value = asset.assetId;
+          option.textContent = `${asset.kind}: ${asset.url}`;
+          return option;
+        })
+      );
       render();
     })
     .catch(() => {

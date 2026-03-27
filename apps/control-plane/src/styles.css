@@ -39,6 +39,10 @@ input, select, button {
   border: 1px solid rgba(10, 36, 64, 0.15);
 }
 
+select[multiple] {
+  min-height: 120px;
+}
+
 button {
   cursor: pointer;
   background: #0e5bd7;
