@@ -228,6 +228,7 @@ test("control plane uploads asset metadata through the browser UI", async ({ pag
   await page.click("#create-asset");
   await expect(page.locator("#publish-status")).toContainText("published");
   await expect(page.locator("#assets-list li").first()).toContainText("https://example.com/test-logo.glb");
+  await expect(page.locator("#assets-list li").first()).toContainText("validated");
 });
 
 test("control plane can update and delete asset without room dependencies", async ({ page }) => {

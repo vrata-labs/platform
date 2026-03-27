@@ -99,6 +99,8 @@ export interface AssetRecord {
   tenantId: string;
   kind: string;
   url: string;
+  validationStatus?: "pending" | "validated" | "rejected";
+  processedUrl?: string;
 }
 
 export async function fetchTemplates(apiBaseUrl: string): Promise<TemplateRecord[]> {

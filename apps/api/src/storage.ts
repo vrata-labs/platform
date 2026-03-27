@@ -16,6 +16,8 @@ export interface AssetRecord {
   tenantId: string;
   kind: string;
   url: string;
+  validationStatus?: "pending" | "validated" | "rejected";
+  processedUrl?: string;
 }
 
 export interface RoomFeatures {
@@ -181,7 +183,9 @@ export class MemoryStorage implements Storage {
       assetId: input.assetId ?? crypto.randomUUID(),
       tenantId: input.tenantId ?? "demo-tenant",
       kind: input.kind ?? "logo",
-      url: input.url ?? "/assets/demo/placeholder.png"
+      url: input.url ?? "/assets/demo/placeholder.glb",
+      validationStatus: input.validationStatus ?? "validated",
+      processedUrl: input.processedUrl ?? input.url ?? "/assets/demo/placeholder.glb"
     };
     this.assets.set(asset.assetId, asset);
     return asset;
@@ -189,7 +193,13 @@ export class MemoryStorage implements Storage {
   async updateAsset(assetId: string, input: Partial<AssetRecord>): Promise<AssetRecord | null> {
     const existing = this.assets.get(assetId);
     if (!existing) return null;
-    const updated = { ...existing, ...input, assetId };
+    const updated = {
+      ...existing,
+      ...input,
+      assetId,
+      validationStatus: input.validationStatus ?? existing.validationStatus ?? "validated",
+      processedUrl: input.processedUrl ?? existing.processedUrl ?? input.url ?? existing.url
+    };
     this.assets.set(assetId, updated);
     return updated;
   }
@@ -229,7 +239,9 @@ export class PostgresStorage implements Storage {
         asset_id text primary key,
         tenant_id text not null references tenants(tenant_id),
         kind text not null,
-        url text not null
+        url text not null,
+        validation_status text not null default 'validated',
+        processed_url text
       );
       create table if not exists runtime_diagnostics (
         id bigserial primary key,
@@ -285,12 +297,14 @@ export class PostgresStorage implements Storage {
     return result.rows.map((row: { template_id: string; label: string; asset_slots: string[] }) => ({ templateId: row.template_id, label: row.label, assetSlots: row.asset_slots }));
   }
   async listAssets(): Promise<AssetRecord[]> {
-    const result = await this.pool.query(`select asset_id, tenant_id, kind, url from assets order by asset_id desc`);
-    return result.rows.map((row: { asset_id: string; tenant_id: string; kind: string; url: string }) => ({
+    const result = await this.pool.query(`select asset_id, tenant_id, kind, url, validation_status, processed_url from assets order by asset_id desc`);
+    return result.rows.map((row: { asset_id: string; tenant_id: string; kind: string; url: string; validation_status: "pending" | "validated" | "rejected"; processed_url: string | null }) => ({
       assetId: row.asset_id,
       tenantId: row.tenant_id,
       kind: row.kind,
-      url: row.url
+      url: row.url,
+      validationStatus: row.validation_status,
+      processedUrl: row.processed_url ?? row.url
     }));
   }
   async listRooms(): Promise<RoomRecord[]> {
@@ -356,21 +370,30 @@ export class PostgresStorage implements Storage {
     return (result.rowCount ?? 0) > 0;
   }
   async createAsset(input: Partial<AssetRecord>): Promise<AssetRecord> {
-    const asset = { assetId: input.assetId ?? crypto.randomUUID(), tenantId: input.tenantId ?? "demo-tenant", kind: input.kind ?? "logo", url: input.url ?? "/assets/demo/placeholder.png" };
-    await this.pool.query(`insert into assets (asset_id, tenant_id, kind, url) values ($1,$2,$3,$4)`, [asset.assetId, asset.tenantId, asset.kind, asset.url]);
+    const asset = {
+      assetId: input.assetId ?? crypto.randomUUID(),
+      tenantId: input.tenantId ?? "demo-tenant",
+      kind: input.kind ?? "logo",
+      url: input.url ?? "/assets/demo/placeholder.glb",
+      validationStatus: input.validationStatus ?? "validated",
+      processedUrl: input.processedUrl ?? input.url ?? "/assets/demo/placeholder.glb"
+    };
+    await this.pool.query(`insert into assets (asset_id, tenant_id, kind, url, validation_status, processed_url) values ($1,$2,$3,$4,$5,$6)`, [asset.assetId, asset.tenantId, asset.kind, asset.url, asset.validationStatus, asset.processedUrl]);
     return asset;
   }
   async updateAsset(assetId: string, input: Partial<AssetRecord>): Promise<AssetRecord | null> {
-    const existing = await this.pool.query(`select asset_id, tenant_id, kind, url from assets where asset_id = $1`, [assetId]);
+    const existing = await this.pool.query(`select asset_id, tenant_id, kind, url, validation_status, processed_url from assets where asset_id = $1`, [assetId]);
     const row = existing.rows[0];
     if (!row) return null;
     const updated = {
       assetId,
       tenantId: input.tenantId ?? row.tenant_id,
       kind: input.kind ?? row.kind,
-      url: input.url ?? row.url
+      url: input.url ?? row.url,
+      validationStatus: input.validationStatus ?? row.validation_status,
+      processedUrl: input.processedUrl ?? row.processed_url ?? row.url
     };
-    await this.pool.query(`update assets set tenant_id = $2, kind = $3, url = $4 where asset_id = $1`, [assetId, updated.tenantId, updated.kind, updated.url]);
+    await this.pool.query(`update assets set tenant_id = $2, kind = $3, url = $4, validation_status = $5, processed_url = $6 where asset_id = $1`, [assetId, updated.tenantId, updated.kind, updated.url, updated.validationStatus, updated.processedUrl]);
     return updated;
   }
   async deleteAsset(assetId: string): Promise<boolean> {

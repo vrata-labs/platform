@@ -123,7 +123,7 @@ function render(): void {
       const item = document.createElement("li");
       const selectButton = document.createElement("button");
       selectButton.type = "button";
-      selectButton.textContent = `${asset.kind}: ${asset.url}`;
+      selectButton.textContent = `${asset.kind}: ${asset.url} [${asset.validationStatus ?? "validated"}]`;
       selectButton.addEventListener("click", () => {
         state.selectedAsset = asset;
         assetKindInput.value = asset.kind;
