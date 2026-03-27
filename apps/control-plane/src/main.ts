@@ -10,6 +10,7 @@ function mustElement<T extends Element>(selector: string): T {
 
 const apiBaseUrl = window.location.origin;
 const state = createControlPlanePageState();
+const storedAdminToken = localStorage.getItem("noah.controlPlaneAdminToken") ?? "";
 
 const form = mustElement<HTMLFormElement>("#room-form");
 const adminTokenInput = mustElement<HTMLInputElement>("#admin-token-input");
@@ -18,6 +19,8 @@ const templateSelect = mustElement<HTMLSelectElement>("#template-select");
 const publishStatus = mustElement<HTMLDivElement>("#publish-status");
 const roomLink = mustElement<HTMLAnchorElement>("#room-link");
 const roomsList = mustElement<HTMLUListElement>("#rooms-list");
+
+adminTokenInput.value = storedAdminToken;
 
 function render(): void {
   publishStatus.textContent = state.publishStatus;
@@ -39,6 +42,7 @@ function render(): void {
 
 function currentAuth(): { adminToken?: string } {
   const token = adminTokenInput.value.trim();
+  localStorage.setItem("noah.controlPlaneAdminToken", token);
   return token ? { adminToken: token } : {};
 }
 

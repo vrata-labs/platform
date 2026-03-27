@@ -98,6 +98,22 @@ test("room creation API is forbidden without admin token", async ({ request }) =
   expect(response.status()).toBe(403);
 });
 
+test("room creation API rejects invalid template even with admin token", async ({ request }) => {
+  const response = await request.post("/api/rooms", {
+    headers: {
+      "x-noah-admin-token": "test-admin-token"
+    },
+    data: {
+      tenantId: "demo-tenant",
+      templateId: "bad-template",
+      name: "Invalid Room"
+    }
+  });
+  expect(response.status()).toBe(400);
+  const payload = await response.json();
+  expect(payload.error).toBe("invalid_template");
+});
+
 test("diagnostics capture multi-client remote visibility", async ({ browser, request }) => {
   const pageA = await browser.newPage();
   const pageB = await browser.newPage();
@@ -130,6 +146,16 @@ test("control plane creates a room through the browser UI", async ({ page }) => 
   const href = await page.locator("#room-link").getAttribute("href");
   expect(href).toContain("/rooms/");
   await expect(page.locator("#rooms-list li").first()).toContainText("Control Plane Room");
+});
+
+test("control plane remembers admin token locally", async ({ page }) => {
+  await page.goto("/control-plane");
+  await page.fill("#admin-token-input", "test-admin-token");
+  await page.fill("#room-name-input", "Remembered Token Room");
+  await page.click("#create-room");
+  await expect(page.locator("#publish-status")).toContainText("published");
+  await page.reload();
+  await expect(page.locator("#admin-token-input")).toHaveValue("test-admin-token");
 });
 
 test("mock screen share updates UI and diagnostics", async ({ page, request }) => {

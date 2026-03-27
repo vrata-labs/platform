@@ -155,7 +155,11 @@ function json(response: ServerResponse, statusCode: number, body: unknown): void
     "content-type": "application/json; charset=utf-8",
     "access-control-allow-origin": process.env.API_CORS_ORIGIN ?? "*",
     "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
-    "access-control-allow-headers": "content-type,authorization"
+    "access-control-allow-headers": "content-type,authorization,x-noah-admin-token",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "referrer-policy": "no-referrer",
+    "cache-control": "no-store"
   });
   response.end(JSON.stringify(body));
 }
@@ -170,7 +174,15 @@ function isAuthorizedControlPlaneRequest(request: IncomingMessage): boolean {
 function parseBody<T>(request: IncomingMessage): Promise<T | null> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
+    let bytes = 0;
     request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+    request.on("data", (chunk) => {
+      bytes += Buffer.byteLength(chunk);
+      if (bytes > 64 * 1024) {
+        reject(new Error("payload_too_large"));
+        request.destroy();
+      }
+    });
     request.on("end", () => {
       if (chunks.length === 0) return resolve(null);
       try {
@@ -181,6 +193,19 @@ function parseBody<T>(request: IncomingMessage): Promise<T | null> {
     });
     request.on("error", reject);
   });
+}
+
+function validateRoomInput(input: Partial<RoomRecord>, templateIds: Set<string>, tenantIds: Set<string>): string | null {
+  if (!input.name || input.name.trim().length < 3 || input.name.trim().length > 80) {
+    return "invalid_room_name";
+  }
+  if (!input.templateId || !templateIds.has(input.templateId)) {
+    return "invalid_template";
+  }
+  if (!input.tenantId || !tenantIds.has(input.tenantId)) {
+    return "invalid_tenant";
+  }
+  return null;
 }
 
 function encodeToken(payload: StateTokenPayload | MediaTokenPayload): string {
@@ -274,7 +299,12 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
 
   if (method === "POST" && url.pathname === "/api/rooms") {
     if (!isAuthorizedControlPlaneRequest(request)) return json(response, 403, { error: "forbidden" });
-    const room = await storage.createRoom((await parseBody<Partial<RoomRecord>>(request)) ?? {});
+    const payload = (await parseBody<Partial<RoomRecord>>(request)) ?? {};
+    const tenantIds = new Set((await storage.listTenants()).map((tenant) => tenant.tenantId));
+    const templateIds = new Set((await storage.listTemplates()).map((template) => template.templateId));
+    const validationError = validateRoomInput(payload, templateIds, tenantIds);
+    if (validationError) return json(response, 400, { error: validationError });
+    const room = await storage.createRoom(payload);
     json(response, 201, { ...room, roomLink: createRoomLink(room.roomId, request.headers.host), manifest: await buildManifest(room.roomId) });
     return;
   }
