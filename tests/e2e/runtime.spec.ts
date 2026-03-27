@@ -12,6 +12,8 @@ test("room shell loads and presence is registered", async ({ page, request }) =>
 
   const debug = await page.evaluate(() => (window as Window & { __NOAH_DEBUG__?: unknown }).__NOAH_DEBUG__);
   expect(debug).toBeTruthy();
+  const debugState = debug as { roomStateConnected?: boolean };
+  expect(debugState.roomStateConnected).toBe(true);
 
   const presenceResponse = await request.get("/api/rooms/demo-room/presence");
   const presence = (await presenceResponse.json()) as { items: Array<{ participantId: string }> };
@@ -20,6 +22,7 @@ test("room shell loads and presence is registered", async ({ page, request }) =>
   const diagnosticsResponse = await request.get("/api/rooms/demo-room/diagnostics");
   const diagnostics = (await diagnosticsResponse.json()) as { items: Array<{ note?: string }> };
   expect(diagnostics.items.some((item) => item.note === "runtime_booted")).toBeTruthy();
+  expect(diagnostics.items.some((item) => item.note === "room_state_connected")).toBeTruthy();
 });
 
 test("room-state service health endpoint responds", async () => {

@@ -32,7 +32,9 @@ function mustElement<T extends Element>(selector: string): T {
 }
 
 const apiBaseUrl = window.location.origin;
-const roomStateBaseUrl = `${window.location.protocol === "https:" ? "wss" : "ws"}://state-${window.location.host}`;
+const roomStateBaseUrl = /^(localhost|127\.0\.0\.1)(:\d+)?$/.test(window.location.host)
+  ? "ws://127.0.0.1:2567"
+  : `${window.location.protocol === "https:" ? "wss" : "ws"}://state-${window.location.host}`;
 const roomId = window.location.pathname.split("/").filter(Boolean)[1] ?? "demo-room";
 const query = new URLSearchParams(window.location.search);
 const debugEnabled = query.get("debug") === "1";
@@ -208,6 +210,7 @@ const debugState = {
   remoteAvatarCount: 0,
   statusLine: "Connecting...",
   locomotionMode: "desktop",
+  roomStateConnected: false,
   audioState: "idle",
   screenShareState: "idle",
   localPosition: { x: 0, z: 6 },
@@ -884,11 +887,13 @@ async function main(): Promise<void> {
       participantId,
       (snapshot: RoomStateSnapshot) => {
         roomStateConnected = true;
+        debugState.roomStateConnected = true;
         applySnapshotParticipants(snapshot.participants);
       },
       (error: unknown) => {
         console.error(error);
         roomStateConnected = false;
+        debugState.roomStateConnected = false;
       }
     );
     void reportDiagnostics("room_state_connected");
