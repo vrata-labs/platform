@@ -22,6 +22,9 @@ const templateSelect = mustElement<HTMLSelectElement>("#template-select");
 const assetSelect = mustElement<HTMLSelectElement>("#asset-select");
 const primaryColorInput = mustElement<HTMLInputElement>("#primary-color-input");
 const accentColorInput = mustElement<HTMLInputElement>("#accent-color-input");
+const featureVoiceInput = mustElement<HTMLInputElement>("#feature-voice-input");
+const featureSpatialInput = mustElement<HTMLInputElement>("#feature-spatial-input");
+const featureShareInput = mustElement<HTMLInputElement>("#feature-share-input");
 const publishStatus = mustElement<HTMLDivElement>("#publish-status");
 const roomLink = mustElement<HTMLAnchorElement>("#room-link");
 const roomsList = mustElement<HTMLUListElement>("#rooms-list");
@@ -97,7 +100,11 @@ form.addEventListener("submit", (event) => {
       primaryColor: primaryColorInput.value,
       accentColor: accentColorInput.value
     },
-    features: { voice: true, spatialAudio: true, screenShare: true }
+    features: {
+      voice: featureVoiceInput.checked,
+      spatialAudio: featureSpatialInput.checked,
+      screenShare: featureShareInput.checked
+    }
   }, currentAuth())
     .then((room) => {
       state.publishStatus = "published";

@@ -215,6 +215,22 @@ test("control plane can create themed room", async ({ page }) => {
   await expect(page.locator("#branding-line")).toContainText(/Attached assets|No branded assets attached/);
 });
 
+test("control plane can disable voice and screen share for a room", async ({ page }) => {
+  await page.goto("/control-plane");
+  await page.fill("#admin-token-input", "test-admin-token");
+  await page.fill("#room-name-input", "Feature Locked Room");
+  await page.uncheck("#feature-voice-input");
+  await page.uncheck("#feature-share-input");
+  await page.click("#create-room");
+  await expect(page.locator("#publish-status")).toContainText("published");
+  const href = await page.locator("#room-link").getAttribute("href");
+  expect(href).toBeTruthy();
+  await page.goto(String(href));
+  await page.waitForTimeout(2000);
+  await expect(page.locator("#join-audio")).toBeDisabled();
+  await expect(page.locator("#start-share")).toBeDisabled();
+});
+
 test("mock screen share updates UI and diagnostics", async ({ page, request }) => {
   await page.goto("/rooms/demo-room?sharemock=1&debug=1");
   await page.waitForFunction(() => {

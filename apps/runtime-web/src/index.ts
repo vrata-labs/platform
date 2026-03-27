@@ -83,6 +83,7 @@ export interface RuntimeBootResult {
   joinMode: "desktop" | "mobile";
   voiceEnabled: boolean;
   spatialAudioEnabled: boolean;
+  screenShareEnabled: boolean;
 }
 
 export interface VoiceSessionPlan {
@@ -107,7 +108,8 @@ export async function bootRuntime(
     assets: manifest.assets,
     joinMode: resolveJoinMode(userAgent),
     voiceEnabled: manifest.features.voice,
-    spatialAudioEnabled: manifest.features.spatialAudio
+    spatialAudioEnabled: manifest.features.spatialAudio,
+    screenShareEnabled: manifest.features.screenShare
   };
 }
 

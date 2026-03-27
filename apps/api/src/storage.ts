@@ -85,7 +85,7 @@ export class MemoryStorage implements Storage {
         tenantId: "demo-tenant",
         templateId: "meeting-room-basic",
         name: "Demo Room",
-        features: { voice: true, spatialAudio: true, screenShare: false },
+        features: { voice: true, spatialAudio: true, screenShare: true },
         assetIds: [],
         theme: {
           primaryColor: "#5fc8ff",
@@ -189,7 +189,7 @@ export class PostgresStorage implements Storage {
       `insert into rooms (room_id, tenant_id, template_id, name, features, asset_ids, theme)
        values ('demo-room','demo-tenant','meeting-room-basic','Demo Room',$1::jsonb,'[]'::jsonb,'{"primaryColor":"#5fc8ff","accentColor":"#163354"}'::jsonb)
        on conflict do nothing`,
-      [JSON.stringify({ voice: true, spatialAudio: true, screenShare: false })]
+       [JSON.stringify({ voice: true, spatialAudio: true, screenShare: true })]
     );
   }
 

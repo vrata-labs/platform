@@ -609,6 +609,9 @@ function setupAudio(room: Room): void {
 }
 
 async function startScreenShare(): Promise<void> {
+  if (startShareButton.disabled) {
+    return;
+  }
   if (isScreenSharing) {
     return;
   }
@@ -837,7 +840,12 @@ async function main(): Promise<void> {
   wallMaterial.color.set(boot.theme.primaryColor);
   scene.fog = new THREE.Fog(new THREE.Color(boot.theme.accentColor).getHex(), 12, 50);
   setStatus(`Joined as ${displayName}`);
-  startShareButton.disabled = !boot.voiceEnabled && !shareMockEnabled ? false : false;
+  startShareButton.disabled = !boot.screenShareEnabled && !shareMockEnabled;
+  joinAudioButton.disabled = !boot.voiceEnabled;
+  if (!boot.voiceEnabled) {
+    muteButton.disabled = true;
+    debugState.audioState = "disabled";
+  }
 
   try {
     await ensureMediaRoom();

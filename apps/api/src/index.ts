@@ -93,7 +93,7 @@ function defaultManifest(roomId: string): RoomManifest {
       accentColor: "#163354"
     },
     assets: [],
-    features: { voice: true, spatialAudio: true, screenShare: false },
+    features: { voice: true, spatialAudio: true, screenShare: true },
     quality: { default: "desktop-standard", mobile: "mobile-lite", xr: "xr" },
     access: { joinMode: "link", guestAllowed: true }
   };
