@@ -47,9 +47,11 @@
 - Current progress now includes a public staging room shell with Three.js runtime, presence sync, LiveKit-backed audio join flow, and HTTPS via `sslip.io`.
 - Voice transport is wired for staging; browser E2E now covers room load and two-participant presence. Persistent storage, auth, richer XR locomotion, and production hardening are still pending.
 - GitHub repository published: `https://github.com/psilon2000/noah`
-- Current staging room URL: `https://noah-stage-20260326.51.250.19.248.sslip.io/rooms/demo-room`
-- Current staging API health endpoint: `https://noah-stage-20260326.51.250.19.248.sslip.io/health`
-- Current staging LiveKit endpoint: `wss://livekit-noah-stage-20260326.51.250.19.248.sslip.io`
+- Current staging room URL: `https://epdl1gel4vp4l6hju9rk.51.250.19.248.sslip.io/rooms/demo-room`
+- Current staging control-plane URL: `https://epdl1gel4vp4l6hju9rk.51.250.19.248.sslip.io/control-plane`
+- Current staging API health endpoint: `https://epdl1gel4vp4l6hju9rk.51.250.19.248.sslip.io/health`
+- Current staging LiveKit endpoint: `wss://livekit-epdl1gel4vp4l6hju9rk.51.250.19.248.sslip.io`
+- Current staging control-plane admin token: `noah-stage-admin`
 
 ## Latest manual QA
 
@@ -58,3 +60,9 @@
 - Improvement confirmed: previous severe self-avatar jitter and remote teleporting were reduced after buffered motion and XR input fixes.
 - Remaining issue: motion is better but still not perfectly smooth; voice behavior still needs deeper validation/tuning.
 - Next focus: stabilize motion further with explicit root/head/body replication model and then revisit spatial audio / voice diagnostics.
+
+## Current hardening snapshot
+
+- Control-plane mutating endpoints now require admin token when `CONTROL_PLANE_ADMIN_TOKEN` is set.
+- Staging runs with `Postgres` enabled for control-plane persistence.
+- Browser E2E currently covers room boot, presence, diagnostics, control-plane creation, secured creation, token persistence, and mock screen share flow.
