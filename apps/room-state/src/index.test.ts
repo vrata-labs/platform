@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { createRoomState, joinRoom } from "./index.js";
+import { createRoomState, joinRoom } from "./state.js";
 
 test("joinRoom appends participant", () => {
   const state = joinRoom(createRoomState("demo-room"), "p1");
