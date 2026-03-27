@@ -128,6 +128,28 @@ export async function createTenant(apiBaseUrl: string, input: Partial<TenantReco
   return (await response.json()) as TenantRecord;
 }
 
+export async function updateTenant(apiBaseUrl: string, tenantId: string, input: Partial<TenantRecord>, auth?: ControlPlaneAuth): Promise<TenantRecord> {
+  const response = await fetch(new URL(`/api/tenants/${tenantId}`, apiBaseUrl), {
+    method: "PATCH",
+    headers: { "content-type": "application/json", ...authHeaders(auth) },
+    body: JSON.stringify(input)
+  });
+  if (!response.ok) {
+    throw new Error(`failed_to_update_tenant:${response.status}`);
+  }
+  return (await response.json()) as TenantRecord;
+}
+
+export async function deleteTenant(apiBaseUrl: string, tenantId: string, auth?: ControlPlaneAuth): Promise<void> {
+  const response = await fetch(new URL(`/api/tenants/${tenantId}`, apiBaseUrl), {
+    method: "DELETE",
+    headers: { ...authHeaders(auth) }
+  });
+  if (!response.ok) {
+    throw new Error(`failed_to_delete_tenant:${response.status}`);
+  }
+}
+
 function authHeaders(auth?: ControlPlaneAuth): Record<string, string> {
   return auth?.adminToken ? { "x-noah-admin-token": auth.adminToken } : {};
 }
@@ -231,6 +253,7 @@ export async function listAssets(apiBaseUrl: string): Promise<AssetRecord[]> {
 
 export interface ControlPlanePageState {
   tenants: TenantRecord[];
+  selectedTenant?: TenantRecord;
   templates: TemplateRecord[];
   rooms: RoomRecord[];
   assets: AssetRecord[];

@@ -2,6 +2,7 @@ import {
   createTenant,
   createControlPlanePageState,
   createRoom,
+  deleteTenant,
   deleteRoom,
   fetchRoomDiagnostics,
   fetchRoomManifest,
@@ -9,6 +10,7 @@ import {
   listAssets,
   listRooms,
   listTenants,
+  updateTenant,
   updateRoom,
   uploadAsset
 } from "./index.js";
@@ -31,6 +33,8 @@ const tenantForm = mustElement<HTMLFormElement>("#tenant-form");
 const adminTokenInput = mustElement<HTMLInputElement>("#admin-token-input");
 const tenantSelect = mustElement<HTMLSelectElement>("#tenant-select");
 const tenantNameInput = mustElement<HTMLInputElement>("#tenant-name-input");
+const updateTenantButton = mustElement<HTMLButtonElement>("#update-tenant");
+const deleteTenantButton = mustElement<HTMLButtonElement>("#delete-tenant");
 const roomNameInput = mustElement<HTMLInputElement>("#room-name-input");
 const assetKindInput = mustElement<HTMLInputElement>("#asset-kind-input");
 const assetUrlInput = mustElement<HTMLInputElement>("#asset-url-input");
@@ -88,7 +92,16 @@ function render(): void {
   tenantsList.replaceChildren(
     ...state.tenants.map((tenant) => {
       const item = document.createElement("li");
-      item.textContent = `${tenant.name} (${tenant.tenantId})`;
+      const selectButton = document.createElement("button");
+      selectButton.type = "button";
+      selectButton.textContent = `${tenant.name} (${tenant.tenantId})`;
+      selectButton.addEventListener("click", () => {
+        state.selectedTenant = tenant;
+        tenantSelect.value = tenant.tenantId;
+        tenantNameInput.value = tenant.name;
+        render();
+      });
+      item.appendChild(selectButton);
       return item;
     })
   );
@@ -257,6 +270,68 @@ tenantForm.addEventListener("submit", (event) => {
         })
       );
       tenantSelect.value = tenant.tenantId;
+      state.selectedTenant = tenant;
+      tenantNameInput.value = tenant.name;
+      render();
+    })
+    .catch(() => {
+      state.publishStatus = "failed";
+      state.statusMessage = "failed";
+      render();
+    });
+});
+
+updateTenantButton.addEventListener("click", () => {
+  const tenantId = tenantSelect.value;
+  if (!tenantId) return;
+  state.publishStatus = "publishing";
+  state.statusMessage = "publishing";
+  render();
+  void updateTenant(apiBaseUrl, tenantId, { name: tenantNameInput.value }, currentAuth())
+    .then(async (tenant) => {
+      state.publishStatus = "published";
+      state.statusMessage = "updated";
+      state.tenants = await listTenants(apiBaseUrl);
+      state.selectedTenant = tenant;
+      tenantSelect.replaceChildren(
+        ...state.tenants.map((item) => {
+          const option = document.createElement("option");
+          option.value = item.tenantId;
+          option.textContent = item.name;
+          return option;
+        })
+      );
+      tenantSelect.value = tenant.tenantId;
+      render();
+    })
+    .catch(() => {
+      state.publishStatus = "failed";
+      state.statusMessage = "failed";
+      render();
+    });
+});
+
+deleteTenantButton.addEventListener("click", () => {
+  const tenantId = tenantSelect.value;
+  if (!tenantId) return;
+  state.publishStatus = "publishing";
+  state.statusMessage = "deleting";
+  render();
+  void deleteTenant(apiBaseUrl, tenantId, currentAuth())
+    .then(async () => {
+      state.publishStatus = "published";
+      state.statusMessage = "deleted";
+      state.tenants = await listTenants(apiBaseUrl);
+      tenantSelect.replaceChildren(
+        ...state.tenants.map((item) => {
+          const option = document.createElement("option");
+          option.value = item.tenantId;
+          option.textContent = item.name;
+          return option;
+        })
+      );
+      state.selectedTenant = undefined;
+      tenantNameInput.value = "";
       render();
     })
     .catch(() => {

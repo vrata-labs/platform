@@ -187,6 +187,21 @@ test("control plane can create tenant and use it for new room", async ({ page })
   await expect(page.locator("#room-detail")).toContainText("Tenant Room");
 });
 
+test("control plane can update and delete tenant without dependencies", async ({ page }) => {
+  await page.goto("/control-plane");
+  await page.fill("#admin-token-input", "test-admin-token");
+  await page.fill("#tenant-name-input", "Mutable Tenant");
+  await page.click("#create-tenant");
+  await expect(page.locator("#publish-status")).toContainText("published");
+  await expect(page.locator("#tenants-list")).toContainText("Mutable Tenant");
+  await page.fill("#tenant-name-input", "Updated Tenant");
+  await page.click("#update-tenant");
+  await expect(page.locator("#publish-status")).toContainText("updated");
+  await expect(page.locator("#tenants-list")).toContainText("Updated Tenant");
+  await page.click("#delete-tenant");
+  await expect(page.locator("#publish-status")).toContainText("deleted");
+});
+
 test("control plane uploads asset metadata through the browser UI", async ({ page }) => {
   await page.goto("/control-plane");
   await page.fill("#admin-token-input", "test-admin-token");

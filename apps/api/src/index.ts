@@ -342,6 +342,23 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     return;
   }
 
+  const tenantItemMatch = url.pathname.match(/^\/api\/tenants\/([^/]+)$/);
+  if (method === "PATCH" && tenantItemMatch) {
+    if (!isAuthorizedControlPlaneRequest(request)) return json(response, 403, { error: "forbidden" });
+    const tenant = await storage.updateTenant(decodeURIComponent(tenantItemMatch[1]), (await parseBody<Partial<TenantRecord>>(request)) ?? {});
+    if (!tenant) return json(response, 404, { error: "tenant_not_found" });
+    json(response, 200, tenant);
+    return;
+  }
+
+  if (method === "DELETE" && tenantItemMatch) {
+    if (!isAuthorizedControlPlaneRequest(request)) return json(response, 403, { error: "forbidden" });
+    const deleted = await storage.deleteTenant(decodeURIComponent(tenantItemMatch[1]));
+    if (!deleted) return json(response, 409, { error: "tenant_has_dependencies_or_missing" });
+    json(response, 200, { ok: true });
+    return;
+  }
+
   if (method === "POST" && url.pathname === "/api/assets") {
     if (!isAuthorizedControlPlaneRequest(request)) return json(response, 403, { error: "forbidden" });
     const payload = (await parseBody<Partial<AssetRecord>>(request)) ?? {};

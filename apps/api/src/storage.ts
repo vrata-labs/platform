@@ -57,6 +57,8 @@ export interface RuntimeDiagnosticRecord {
 export interface Storage {
   listTenants(): Promise<TenantRecord[]>;
   createTenant(input: Partial<TenantRecord>): Promise<TenantRecord>;
+  updateTenant(tenantId: string, input: Partial<TenantRecord>): Promise<TenantRecord | null>;
+  deleteTenant(tenantId: string): Promise<boolean>;
   listTemplates(): Promise<TemplateRecord[]>;
   listAssets(): Promise<AssetRecord[]>;
   listRooms(): Promise<RoomRecord[]>;
@@ -103,6 +105,22 @@ export class MemoryStorage implements Storage {
     const tenant = { tenantId: input.tenantId ?? crypto.randomUUID(), name: input.name ?? "New Tenant" };
     this.tenants.set(tenant.tenantId, tenant);
     return tenant;
+  }
+  async updateTenant(tenantId: string, input: Partial<TenantRecord>): Promise<TenantRecord | null> {
+    const existing = this.tenants.get(tenantId);
+    if (!existing) return null;
+    const updated = { ...existing, ...input, tenantId };
+    this.tenants.set(tenantId, updated);
+    return updated;
+  }
+  async deleteTenant(tenantId: string): Promise<boolean> {
+    for (const room of this.rooms.values()) {
+      if (room.tenantId === tenantId) return false;
+    }
+    for (const asset of this.assets.values()) {
+      if (asset.tenantId === tenantId) return false;
+    }
+    return this.tenants.delete(tenantId);
   }
   async listTemplates(): Promise<TemplateRecord[]> { return Array.from(this.templates.values()); }
   async listAssets(): Promise<AssetRecord[]> { return Array.from(this.assets.values()); }
@@ -227,6 +245,20 @@ export class PostgresStorage implements Storage {
     const tenant = { tenantId: input.tenantId ?? crypto.randomUUID(), name: input.name ?? "New Tenant" };
     await this.pool.query(`insert into tenants (tenant_id, name) values ($1,$2)`, [tenant.tenantId, tenant.name]);
     return tenant;
+  }
+  async updateTenant(tenantId: string, input: Partial<TenantRecord>): Promise<TenantRecord | null> {
+    const existing = await this.pool.query(`select tenant_id, name from tenants where tenant_id = $1`, [tenantId]);
+    if (!existing.rows[0]) return null;
+    const name = input.name ?? existing.rows[0].name;
+    await this.pool.query(`update tenants set name = $2 where tenant_id = $1`, [tenantId, name]);
+    return { tenantId, name };
+  }
+  async deleteTenant(tenantId: string): Promise<boolean> {
+    const rooms = await this.pool.query(`select 1 from rooms where tenant_id = $1 limit 1`, [tenantId]);
+    const assets = await this.pool.query(`select 1 from assets where tenant_id = $1 limit 1`, [tenantId]);
+    if (rooms.rows[0] || assets.rows[0]) return false;
+    const result = await this.pool.query(`delete from tenants where tenant_id = $1`, [tenantId]);
+    return (result.rowCount ?? 0) > 0;
   }
   async listTemplates(): Promise<TemplateRecord[]> {
     const result = await this.pool.query(`select template_id, label, asset_slots from templates order by template_id`);
