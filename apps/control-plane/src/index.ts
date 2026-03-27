@@ -41,6 +41,37 @@ export interface RoomRecord {
   roomLink: string;
 }
 
+export interface RoomManifestRecord {
+  schemaVersion: number;
+  tenantId: string;
+  roomId: string;
+  template: string;
+  theme: {
+    primaryColor: string;
+    accentColor: string;
+  };
+  assets: Array<{
+    assetId: string;
+    kind: string;
+    url: string;
+  }>;
+  features: {
+    voice: boolean;
+    spatialAudio: boolean;
+    screenShare: boolean;
+  };
+}
+
+export interface RuntimeDiagnosticRecord {
+  participantId: string;
+  displayName: string;
+  mode: "desktop" | "mobile" | "vr";
+  audioState: string;
+  screenShareState: string;
+  note?: string;
+  createdAt: string;
+}
+
 export interface AssetUploadInput {
   tenantId: string;
   kind: string;
@@ -93,6 +124,27 @@ export async function listRooms(apiBaseUrl: string): Promise<RoomRecord[]> {
   return payload.items;
 }
 
+export async function fetchRoomManifest(apiBaseUrl: string, roomId: string): Promise<RoomManifestRecord> {
+  const response = await fetch(new URL(`/api/rooms/${roomId}/manifest`, apiBaseUrl));
+
+  if (!response.ok) {
+    throw new Error(`failed_to_fetch_room_manifest:${response.status}`);
+  }
+
+  return (await response.json()) as RoomManifestRecord;
+}
+
+export async function fetchRoomDiagnostics(apiBaseUrl: string, roomId: string): Promise<RuntimeDiagnosticRecord[]> {
+  const response = await fetch(new URL(`/api/rooms/${roomId}/diagnostics`, apiBaseUrl));
+
+  if (!response.ok) {
+    throw new Error(`failed_to_fetch_room_diagnostics:${response.status}`);
+  }
+
+  const payload = (await response.json()) as { items: RuntimeDiagnosticRecord[] };
+  return payload.items;
+}
+
 export async function uploadAsset(apiBaseUrl: string, input: AssetUploadInput, auth?: ControlPlaneAuth): Promise<{ assetId: string }> {
   const response = await fetch(new URL("/api/assets", apiBaseUrl), {
     method: "POST",
@@ -124,6 +176,8 @@ export interface ControlPlanePageState {
   rooms: RoomRecord[];
   assets: AssetRecord[];
   selectedRoom?: RoomRecord;
+  selectedRoomManifest?: RoomManifestRecord;
+  selectedRoomDiagnostics: RuntimeDiagnosticRecord[];
   roomLink?: string;
   publishStatus: "idle" | "publishing" | "published" | "failed";
   statusMessage?: string;
@@ -134,6 +188,7 @@ export function createControlPlanePageState(): ControlPlanePageState {
     templates: [],
     rooms: [],
     assets: [],
+    selectedRoomDiagnostics: [],
     publishStatus: "idle",
     statusMessage: "idle"
   };
