@@ -283,6 +283,7 @@ export interface ControlPlanePageState {
   tenants: TenantRecord[];
   selectedTenant?: TenantRecord;
   templates: TemplateRecord[];
+  selectedTemplate?: TemplateRecord;
   rooms: RoomRecord[];
   assets: AssetRecord[];
   selectedAsset?: AssetRecord;

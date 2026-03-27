@@ -54,6 +54,7 @@ const deleteRoomButton = mustElement<HTMLButtonElement>("#delete-room");
 const publishStatus = mustElement<HTMLDivElement>("#publish-status");
 const roomLink = mustElement<HTMLAnchorElement>("#room-link");
 const refreshRoomDetailButton = mustElement<HTMLButtonElement>("#refresh-room-detail");
+const templateDetail = mustElement<HTMLPreElement>("#template-detail");
 const roomsList = mustElement<HTMLUListElement>("#rooms-list");
 const roomDetail = mustElement<HTMLPreElement>("#room-detail");
 const tenantsList = mustElement<HTMLUListElement>("#tenants-list");
@@ -66,6 +67,9 @@ function render(): void {
   publishStatus.textContent = state.statusMessage ?? state.publishStatus;
   roomLink.href = state.roomLink ?? "#";
   roomLink.textContent = state.roomLink ?? "";
+  templateDetail.textContent = state.selectedTemplate
+    ? JSON.stringify(state.selectedTemplate, null, 2)
+    : "Select a template to inspect details";
   roomsList.replaceChildren(
     ...state.rooms.map((room) => {
       const item = document.createElement("li");
@@ -187,6 +191,10 @@ async function bootstrap(): Promise<void> {
       return option;
     })
   );
+  state.selectedTemplate = state.templates[0];
+  if (state.selectedTemplate) {
+    templateSelect.value = state.selectedTemplate.templateId;
+  }
   assetSelect.replaceChildren(
     ...state.assets.map((asset) => {
       const option = document.createElement("option");
@@ -198,6 +206,11 @@ async function bootstrap(): Promise<void> {
   render();
   startSelectedRoomPolling();
 }
+
+templateSelect.addEventListener("change", () => {
+  state.selectedTemplate = state.templates.find((template) => template.templateId === templateSelect.value);
+  render();
+});
 
 form.addEventListener("submit", (event) => {
   event.preventDefault();

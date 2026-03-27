@@ -87,3 +87,12 @@ button {
   border: 1px solid rgba(10, 36, 64, 0.08);
   white-space: pre-wrap;
 }
+
+#template-detail {
+  margin-top: 16px;
+  padding: 12px;
+  border-radius: 12px;
+  background: rgba(10, 36, 64, 0.04);
+  border: 1px solid rgba(10, 36, 64, 0.08);
+  white-space: pre-wrap;
+}

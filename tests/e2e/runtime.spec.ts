@@ -148,6 +148,7 @@ test("diagnostics capture multi-client remote visibility", async ({ browser, req
 
 test("control plane creates a room through the browser UI", async ({ page }) => {
   await page.goto("/control-plane");
+  await expect(page.locator("#template-detail")).toContainText("meeting-room-basic");
   await page.fill("#admin-token-input", "test-admin-token");
   await page.fill("#room-name-input", "Control Plane Room");
   await page.selectOption("#template-select", "showroom-basic");
