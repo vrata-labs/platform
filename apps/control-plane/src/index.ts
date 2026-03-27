@@ -34,6 +34,11 @@ export interface RoomRecord {
   templateId: string;
   name: string;
   assetIds?: string[];
+  features?: {
+    voice: boolean;
+    spatialAudio: boolean;
+    screenShare: boolean;
+  };
   theme?: {
     primaryColor: string;
     accentColor: string;
@@ -108,6 +113,20 @@ export async function createRoom(apiBaseUrl: string, input: RoomCreateInput, aut
 
   if (!response.ok) {
     throw new Error(`failed_to_create_room:${response.status}`);
+  }
+
+  return (await response.json()) as RoomRecord;
+}
+
+export async function updateRoom(apiBaseUrl: string, roomId: string, input: Partial<RoomCreateInput>, auth?: ControlPlaneAuth): Promise<RoomRecord> {
+  const response = await fetch(new URL(`/api/rooms/${roomId}`, apiBaseUrl), {
+    method: "PATCH",
+    headers: { "content-type": "application/json", ...authHeaders(auth) },
+    body: JSON.stringify(input)
+  });
+
+  if (!response.ok) {
+    throw new Error(`failed_to_update_room:${response.status}`);
   }
 
   return (await response.json()) as RoomRecord;

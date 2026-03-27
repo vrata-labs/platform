@@ -6,6 +6,7 @@ import {
   fetchTemplates,
   listAssets,
   listRooms,
+  updateRoom,
   uploadAsset
 } from "./index.js";
 
@@ -34,6 +35,7 @@ const accentColorInput = mustElement<HTMLInputElement>("#accent-color-input");
 const featureVoiceInput = mustElement<HTMLInputElement>("#feature-voice-input");
 const featureSpatialInput = mustElement<HTMLInputElement>("#feature-spatial-input");
 const featureShareInput = mustElement<HTMLInputElement>("#feature-share-input");
+const updateRoomButton = mustElement<HTMLButtonElement>("#update-room");
 const publishStatus = mustElement<HTMLDivElement>("#publish-status");
 const roomLink = mustElement<HTMLAnchorElement>("#room-link");
 const refreshRoomDetailButton = mustElement<HTMLButtonElement>("#refresh-room-detail");
@@ -91,6 +93,17 @@ async function selectRoom(room: typeof state.selectedRoom): Promise<void> {
   state.selectedRoom = room;
   state.selectedRoomManifest = await fetchRoomManifest(apiBaseUrl, room.roomId);
   state.selectedRoomDiagnostics = await fetchRoomDiagnostics(apiBaseUrl, room.roomId);
+  roomNameInput.value = room.name;
+  templateSelect.value = room.templateId;
+  primaryColorInput.value = room.theme?.primaryColor ?? "#5fc8ff";
+  accentColorInput.value = room.theme?.accentColor ?? "#163354";
+  featureVoiceInput.checked = room.features?.voice ?? true;
+  featureSpatialInput.checked = room.features?.spatialAudio ?? true;
+  featureShareInput.checked = room.features?.screenShare ?? true;
+  const assetIds = new Set(room.assetIds ?? []);
+  Array.from(assetSelect.options).forEach((option) => {
+    option.selected = assetIds.has(option.value);
+  });
   render();
 }
 
@@ -206,6 +219,41 @@ refreshRoomDetailButton.addEventListener("click", () => {
     return;
   }
   void selectRoom(state.selectedRoom);
+});
+
+updateRoomButton.addEventListener("click", () => {
+  if (!state.selectedRoom) {
+    return;
+  }
+  state.publishStatus = "publishing";
+  state.statusMessage = "publishing";
+  render();
+  void updateRoom(apiBaseUrl, state.selectedRoom.roomId, {
+    name: roomNameInput.value,
+    templateId: templateSelect.value,
+    assetIds: Array.from(assetSelect.selectedOptions).map((option) => option.value),
+    theme: {
+      primaryColor: primaryColorInput.value,
+      accentColor: accentColorInput.value
+    },
+    features: {
+      voice: featureVoiceInput.checked,
+      spatialAudio: featureSpatialInput.checked,
+      screenShare: featureShareInput.checked
+    }
+  }, currentAuth())
+    .then(async (room) => {
+      state.publishStatus = "published";
+      state.statusMessage = "updated";
+      state.roomLink = room.roomLink;
+      state.rooms = state.rooms.map((item) => item.roomId === room.roomId ? room : item);
+      await selectRoom(room);
+    })
+    .catch(() => {
+      state.publishStatus = "failed";
+      state.statusMessage = "failed";
+      render();
+    });
 });
 
 void bootstrap();

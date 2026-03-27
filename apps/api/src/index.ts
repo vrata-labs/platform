@@ -364,6 +364,17 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     return;
   }
 
+  const roomItemMatch = url.pathname.match(/^\/api\/rooms\/([^/]+)$/);
+  if (method === "PATCH" && roomItemMatch) {
+    if (!isAuthorizedControlPlaneRequest(request)) return json(response, 403, { error: "forbidden" });
+    const roomId = decodeURIComponent(roomItemMatch[1]);
+    const payload = (await parseBody<Partial<RoomRecord>>(request)) ?? {};
+    const updated = await storage.updateRoom(roomId, payload);
+    if (!updated) return json(response, 404, { error: "room_not_found" });
+    json(response, 200, { ...updated, roomLink: createRoomLink(updated.roomId, request.headers.host), manifest: await buildManifest(updated.roomId) });
+    return;
+  }
+
   const manifestMatch = url.pathname.match(/^\/api\/rooms\/([^/]+)\/manifest$/);
   if (method === "GET" && manifestMatch) {
     json(response, 200, await buildManifest(decodeURIComponent(manifestMatch[1])));
@@ -405,9 +416,8 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     return;
   }
 
-  const roomMatch = url.pathname.match(/^\/api\/rooms\/([^/]+)$/);
-  if (method === "GET" && roomMatch) {
-    const room = await storage.getRoom(decodeURIComponent(roomMatch[1]));
+  if (method === "GET" && roomItemMatch) {
+    const room = await storage.getRoom(decodeURIComponent(roomItemMatch[1]));
     if (!room) return json(response, 404, { error: "room_not_found" });
     json(response, 200, { ...room, roomLink: createRoomLink(room.roomId, request.headers.host), manifest: await buildManifest(room.roomId) });
     return;

@@ -245,6 +245,20 @@ test("control plane can disable voice and screen share for a room", async ({ pag
   await expect(page.locator("#start-share")).toBeDisabled();
 });
 
+test("control plane can update selected room settings", async ({ page }) => {
+  await page.goto("/control-plane");
+  await page.fill("#admin-token-input", "test-admin-token");
+  await page.fill("#room-name-input", "Updatable Room");
+  await page.click("#create-room");
+  await expect(page.locator("#publish-status")).toContainText("published");
+  await page.fill("#room-name-input", "Updated Room");
+  await page.fill("#primary-color-input", "#22aa88");
+  await page.click("#update-room");
+  await expect(page.locator("#publish-status")).toContainText("updated");
+  await expect(page.locator("#room-detail")).toContainText("Updated Room");
+  await expect(page.locator("#room-detail")).toContainText("#22aa88");
+});
+
 test("mock screen share updates UI and diagnostics", async ({ page, request }) => {
   await page.goto("/rooms/demo-room?sharemock=1&debug=1");
   await page.waitForFunction(() => {

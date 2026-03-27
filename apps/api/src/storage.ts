@@ -62,6 +62,7 @@ export interface Storage {
   listRooms(): Promise<RoomRecord[]>;
   getRoom(roomId: string): Promise<RoomRecord | null>;
   createRoom(input: Partial<RoomRecord>): Promise<RoomRecord>;
+  updateRoom(roomId: string, input: Partial<RoomRecord>): Promise<RoomRecord | null>;
   createAsset(input: Partial<AssetRecord>): Promise<AssetRecord>;
   addDiagnostic(roomId: string, payload: RuntimeDiagnosticRecord): Promise<void>;
   getDiagnostics(roomId: string): Promise<RuntimeDiagnosticRecord[]>;
@@ -125,6 +126,27 @@ export class MemoryStorage implements Storage {
     };
     this.rooms.set(room.roomId, room);
     return room;
+  }
+  async updateRoom(roomId: string, input: Partial<RoomRecord>): Promise<RoomRecord | null> {
+    const existing = this.rooms.get(roomId);
+    if (!existing) {
+      return null;
+    }
+    const updated: RoomRecord = {
+      ...existing,
+      ...input,
+      features: {
+        ...existing.features,
+        ...input.features
+      },
+      theme: {
+        primaryColor: input.theme?.primaryColor ?? existing.theme?.primaryColor ?? "#5fc8ff",
+        accentColor: input.theme?.accentColor ?? existing.theme?.accentColor ?? "#163354"
+      },
+      assetIds: input.assetIds ?? existing.assetIds
+    };
+    this.rooms.set(roomId, updated);
+    return updated;
   }
   async createAsset(input: Partial<AssetRecord>): Promise<AssetRecord> {
     const asset = {
@@ -246,6 +268,30 @@ export class PostgresStorage implements Storage {
       [room.roomId, room.tenantId, room.templateId, room.name, JSON.stringify(room.features), JSON.stringify(room.assetIds), JSON.stringify(room.theme)]
     );
     return room;
+  }
+  async updateRoom(roomId: string, input: Partial<RoomRecord>): Promise<RoomRecord | null> {
+    const existing = await this.getRoom(roomId);
+    if (!existing) {
+      return null;
+    }
+    const updated: RoomRecord = {
+      ...existing,
+      ...input,
+      features: {
+        ...existing.features,
+        ...input.features
+      },
+      theme: {
+        primaryColor: input.theme?.primaryColor ?? existing.theme?.primaryColor ?? "#5fc8ff",
+        accentColor: input.theme?.accentColor ?? existing.theme?.accentColor ?? "#163354"
+      },
+      assetIds: input.assetIds ?? existing.assetIds
+    };
+    await this.pool.query(
+      `update rooms set template_id = $2, name = $3, features = $4::jsonb, asset_ids = $5::jsonb, theme = $6::jsonb where room_id = $1`,
+      [roomId, updated.templateId, updated.name, JSON.stringify(updated.features), JSON.stringify(updated.assetIds), JSON.stringify(updated.theme)]
+    );
+    return updated;
   }
   async createAsset(input: Partial<AssetRecord>): Promise<AssetRecord> {
     const asset = { assetId: input.assetId ?? crypto.randomUUID(), tenantId: input.tenantId ?? "demo-tenant", kind: input.kind ?? "logo", url: input.url ?? "/assets/demo/placeholder.png" };
