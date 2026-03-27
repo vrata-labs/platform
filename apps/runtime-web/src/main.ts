@@ -99,7 +99,7 @@ scene.add(roomBox);
 
 const displaySurface = new THREE.Mesh(
   new THREE.PlaneGeometry(5.8, 3.3),
-  new THREE.MeshBasicMaterial({ color: 0x0f1724 })
+  new THREE.MeshBasicMaterial({ color: 0xffffff, toneMapped: false })
 );
 displaySurface.position.set(0, 2.2, -6.6);
 scene.add(displaySurface);
@@ -136,6 +136,19 @@ let activeScreenShareTrack: Track | null = null;
 let activeScreenShareElement: HTMLVideoElement | null = null;
 let isScreenSharing = false;
 let activeMockScreenShareStream: MediaStream | null = null;
+
+function applyDisplayTexture(texture: THREE.Texture | null): void {
+  const material = displaySurface.material;
+  if (!(material instanceof THREE.MeshBasicMaterial)) {
+    return;
+  }
+  if (material.map) {
+    material.map.dispose();
+  }
+  material.color.setHex(0xffffff);
+  material.map = texture;
+  material.needsUpdate = true;
+}
 
 const debugState = {
   participantId,
@@ -222,11 +235,8 @@ function attachVideoTrack(track: Track): void {
   document.body.appendChild(element);
 
   const texture = new THREE.VideoTexture(element);
-  const material = displaySurface.material;
-  if (material instanceof THREE.MeshBasicMaterial) {
-    material.map = texture;
-    material.needsUpdate = true;
-  }
+  texture.colorSpace = THREE.SRGBColorSpace;
+  applyDisplayTexture(texture);
 
   activeScreenShareTrack = track;
   activeScreenShareElement = element;
@@ -243,11 +253,8 @@ function attachMockVideoStream(stream: MediaStream): void {
   document.body.appendChild(element);
 
   const texture = new THREE.VideoTexture(element);
-  const material = displaySurface.material;
-  if (material instanceof THREE.MeshBasicMaterial) {
-    material.map = texture;
-    material.needsUpdate = true;
-  }
+  texture.colorSpace = THREE.SRGBColorSpace;
+  applyDisplayTexture(texture);
 
   activeScreenShareElement = element;
   debugState.screenShareState = "receiving";
@@ -288,13 +295,22 @@ function detachVideoTrack(): void {
     activeScreenShareElement.remove();
     activeScreenShareElement = null;
   }
-  const material = displaySurface.material;
-  if (material instanceof THREE.MeshBasicMaterial && material.map) {
-    material.map.dispose();
-    material.map = null;
-    material.needsUpdate = true;
-  }
+  applyDisplayTexture(null);
   debugState.screenShareState = "idle";
+}
+
+async function ensureMediaRoom(): Promise<Room> {
+  if (livekitRoom) {
+    return livekitRoom;
+  }
+
+  const voicePlan = await planVoiceSession(apiBaseUrl, roomId, participantId);
+  const room = new Room();
+  setupAudio(room);
+  await room.connect(voicePlan.livekitUrl, voicePlan.token);
+  livekitRoom = room;
+  startShareButton.disabled = false;
+  return room;
 }
 
 function makeBody(color: number): THREE.Mesh {
@@ -588,10 +604,6 @@ function setupAudio(room: Room): void {
 }
 
 async function startScreenShare(): Promise<void> {
-  if (!livekitRoom && !shareMockEnabled) {
-    setStatus("Join audio before share");
-    return;
-  }
   if (isScreenSharing) {
     return;
   }
@@ -606,14 +618,16 @@ async function startScreenShare(): Promise<void> {
     void reportDiagnostics("screenshare_mock_started");
     return;
   }
-  const room = livekitRoom;
-  if (!room) {
-    return;
-  }
+  const room = await ensureMediaRoom();
   debugState.screenShareState = "starting";
   await room.localParticipant.setScreenShareEnabled(true, {
     audio: false
   });
+  const publication = Array.from(room.localParticipant.trackPublications.values()).find((item) => item.source === Track.Source.ScreenShare);
+  const localTrack = publication?.videoTrack;
+  if (localTrack) {
+    attachVideoTrack(localTrack);
+  }
   isScreenSharing = true;
   debugState.screenShareState = "sharing";
   startShareButton.disabled = true;
@@ -647,17 +661,22 @@ async function stopScreenShare(): Promise<void> {
 
 async function joinAudio(): Promise<void> {
   if (livekitRoom) {
+    if (!microphoneEnabled) {
+      await livekitRoom.localParticipant.setMicrophoneEnabled(true);
+      microphoneEnabled = true;
+      muteButton.disabled = false;
+      joinAudioButton.disabled = true;
+      setStatus("Audio connected");
+      debugState.audioState = "connected";
+      void reportDiagnostics("audio_connected");
+    }
     return;
   }
 
   setStatus("Joining audio...");
   debugState.audioState = "joining";
-  const voicePlan = await planVoiceSession(apiBaseUrl, roomId, participantId);
-  const room = new Room();
-  setupAudio(room);
-  await room.connect(voicePlan.livekitUrl, voicePlan.token);
+  const room = await ensureMediaRoom();
   await room.localParticipant.setMicrophoneEnabled(true);
-  livekitRoom = room;
   microphoneEnabled = true;
   muteButton.disabled = false;
   joinAudioButton.disabled = true;

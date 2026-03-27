@@ -167,8 +167,10 @@ test("mock screen share updates UI and diagnostics", async ({ page, request }) =
   await page.click("#start-share");
   await page.waitForTimeout(2500);
 
+  await expect(page.locator("#join-audio")).toBeEnabled();
+
   const debug = await page.evaluate(() => (window as Window & { __NOAH_DEBUG__?: { screenShareState: string } }).__NOAH_DEBUG__);
-  expect(debug?.screenShareState).toBeTruthy();
+  expect(debug?.screenShareState).toBe("sharing");
 
   const diagnosticsResponse = await request.get("/api/rooms/demo-room/diagnostics");
   const diagnostics = (await diagnosticsResponse.json()) as { items: Array<{ note?: string; screenShareState?: string }> };
