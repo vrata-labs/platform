@@ -142,6 +142,7 @@ let activeMockScreenShareStream: MediaStream | null = null;
 let mediaRoomReady = false;
 let roomStateClient: RoomStateClient | null = null;
 let roomStateConnected = false;
+let roomStateReconnectTimer: number | null = null;
 
 function applySnapshotParticipants(people: PresenceState[]): void {
   const activeIds = new Set<string>();
@@ -210,6 +211,7 @@ const debugState = {
   locomotionMode: "desktop",
   roomStateConnected: false,
   roomStateUrl: "",
+  roomStateMode: "connecting",
   audioState: "idle",
   screenShareState: "idle",
   localPosition: { x: 0, z: 6 },
@@ -231,6 +233,53 @@ function setStatus(message: string): void {
 
 function setRoomStateStatus(message: string): void {
   roomStateLineEl.textContent = message;
+}
+
+function clearRoomStateReconnect(): void {
+  if (roomStateReconnectTimer !== null) {
+    window.clearTimeout(roomStateReconnectTimer);
+    roomStateReconnectTimer = null;
+  }
+}
+
+function connectRoomStateWithRetry(roomStateUrl: string): void {
+  clearRoomStateReconnect();
+  debugState.roomStateMode = "connecting";
+  setRoomStateStatus("Room-state: connecting");
+
+  roomStateClient = connectRoomState(roomStateUrl, roomId, participantId, {
+    onOpen: () => {
+      roomStateConnected = true;
+      debugState.roomStateConnected = true;
+      debugState.roomStateMode = "connected";
+      setRoomStateStatus("Room-state: connected");
+      void reportDiagnostics("room_state_connected");
+    },
+    onRoomState: (snapshot: RoomStateSnapshot) => {
+      roomStateConnected = true;
+      debugState.roomStateConnected = true;
+      debugState.roomStateMode = "connected";
+      applySnapshotParticipants(snapshot.participants);
+    },
+    onError: (error: unknown) => {
+      console.error(error);
+      roomStateConnected = false;
+      debugState.roomStateConnected = false;
+      debugState.roomStateMode = "fallback";
+      setRoomStateStatus("Room-state: fallback API");
+    },
+    onClose: () => {
+      roomStateConnected = false;
+      debugState.roomStateConnected = false;
+      debugState.roomStateMode = "reconnecting";
+      setRoomStateStatus("Room-state: reconnecting");
+      void reportDiagnostics("room_state_disconnected");
+      clearRoomStateReconnect();
+      roomStateReconnectTimer = window.setTimeout(() => {
+        connectRoomStateWithRetry(roomStateUrl);
+      }, 2000);
+    }
+  });
 }
 
 function renderDebugPanel(): void {
@@ -814,6 +863,7 @@ window.addEventListener("resize", () => {
 window.addEventListener("beforeunload", () => {
   void removePresence(apiBaseUrl, roomId, participantId);
   detachVideoTrack();
+  clearRoomStateReconnect();
   roomStateClient?.close();
   void livekitRoom?.disconnect();
 });
@@ -886,27 +936,11 @@ async function main(): Promise<void> {
   }
 
   try {
-    roomStateClient = connectRoomState(
-      boot.roomStateUrl,
-      roomId,
-      participantId,
-      (snapshot: RoomStateSnapshot) => {
-        roomStateConnected = true;
-        debugState.roomStateConnected = true;
-        setRoomStateStatus("Room-state: connected");
-        applySnapshotParticipants(snapshot.participants);
-      },
-      (error: unknown) => {
-        console.error(error);
-        roomStateConnected = false;
-        debugState.roomStateConnected = false;
-        setRoomStateStatus("Room-state: fallback API");
-      }
-    );
-    void reportDiagnostics("room_state_connected");
+    connectRoomStateWithRetry(boot.roomStateUrl);
   } catch (error) {
     console.error(error);
     roomStateConnected = false;
+    debugState.roomStateMode = "fallback";
     setRoomStateStatus("Room-state: fallback API");
     void reportDiagnostics("room_state_connect_failed");
   }
