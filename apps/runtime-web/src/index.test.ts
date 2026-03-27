@@ -12,6 +12,10 @@ test("describeManifest returns room and template", () => {
     describeManifest({
       roomId: "demo-room",
       template: "meeting-room-basic",
+      theme: {
+        primaryColor: "#5fc8ff",
+        accentColor: "#163354"
+      },
       assets: [],
       features: { voice: true, spatialAudio: true, screenShare: false }
     }),

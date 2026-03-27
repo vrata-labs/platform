@@ -190,6 +190,22 @@ test("control plane can attach selected assets to a room", async ({ page }) => {
   await expect(page.locator("#branding-line")).toContainText("Attached assets: wall-graphic");
 });
 
+test("control plane can create themed room", async ({ page }) => {
+  await page.goto("/control-plane");
+  await page.fill("#admin-token-input", "test-admin-token");
+  await page.fill("#room-name-input", "Themed Room");
+  await page.fill("#primary-color-input", "#ff6b3d");
+  await page.fill("#accent-color-input", "#132a46");
+  await page.click("#create-room");
+  await expect(page.locator("#publish-status")).toContainText("published");
+  const href = await page.locator("#room-link").getAttribute("href");
+  expect(href).toBeTruthy();
+  await page.goto(String(href));
+  await page.waitForTimeout(2000);
+  await expect(page.locator("#room-name")).not.toHaveText("");
+  await expect(page.locator("#branding-line")).toContainText(/Attached assets|No branded assets attached/);
+});
+
 test("mock screen share updates UI and diagnostics", async ({ page, request }) => {
   await page.goto("/rooms/demo-room?sharemock=1&debug=1");
   await page.waitForFunction(() => {

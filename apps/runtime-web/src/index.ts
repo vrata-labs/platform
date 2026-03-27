@@ -1,6 +1,10 @@
 interface RoomManifest {
   roomId: string;
   template: string;
+  theme: {
+    primaryColor: string;
+    accentColor: string;
+  };
   assets: Array<{
     assetId: string;
     kind: string;
@@ -67,6 +71,10 @@ export async function fetchRoomManifest(apiBaseUrl: string, roomId: string): Pro
 export interface RuntimeBootResult {
   roomId: string;
   template: string;
+  theme: {
+    primaryColor: string;
+    accentColor: string;
+  };
   assets: Array<{
     assetId: string;
     kind: string;
@@ -95,6 +103,7 @@ export async function bootRuntime(
   return {
     roomId: manifest.roomId,
     template: manifest.template,
+    theme: manifest.theme,
     assets: manifest.assets,
     joinMode: resolveJoinMode(userAgent),
     voiceEnabled: manifest.features.voice,

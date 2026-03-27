@@ -21,6 +21,10 @@ interface RoomManifest {
   tenantId: string;
   roomId: string;
   template: string;
+  theme: {
+    primaryColor: string;
+    accentColor: string;
+  };
   assets: Array<{
     assetId: string;
     kind: string;
@@ -84,6 +88,10 @@ function defaultManifest(roomId: string): RoomManifest {
     tenantId: "demo-tenant",
     roomId,
     template: "meeting-room-basic",
+    theme: {
+      primaryColor: "#5fc8ff",
+      accentColor: "#163354"
+    },
     assets: [],
     features: { voice: true, spatialAudio: true, screenShare: false },
     quality: { default: "desktop-standard", mobile: "mobile-lite", xr: "xr" },
@@ -151,6 +159,10 @@ async function buildManifest(roomId: string): Promise<RoomManifest> {
     tenantId: room.tenantId,
     roomId: room.roomId,
     template: room.templateId,
+    theme: room.theme ?? {
+      primaryColor: "#5fc8ff",
+      accentColor: "#163354"
+    },
     assets: roomAssets.map((asset) => ({ assetId: asset.assetId, kind: asset.kind, url: asset.url })),
     features: room.features,
     quality: { default: "desktop-standard", mobile: "mobile-lite", xr: "xr" },

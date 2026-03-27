@@ -13,6 +13,10 @@ export interface RoomCreateInput {
   templateId: string;
   name: string;
   assetIds?: string[];
+  theme?: {
+    primaryColor: string;
+    accentColor: string;
+  };
   features?: {
     voice?: boolean;
     spatialAudio?: boolean;
@@ -30,6 +34,10 @@ export interface RoomRecord {
   templateId: string;
   name: string;
   assetIds?: string[];
+  theme?: {
+    primaryColor: string;
+    accentColor: string;
+  };
   roomLink: string;
 }
 

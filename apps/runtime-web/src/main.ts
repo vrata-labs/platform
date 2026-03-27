@@ -167,6 +167,8 @@ const debugState = {
   remoteTargets: [] as Array<{ id: string; x: number; z: number }>
 };
 
+const floorMaterial = floor.material as THREE.MeshStandardMaterial;
+
 (window as Window & { __NOAH_DEBUG__?: typeof debugState }).__NOAH_DEBUG__ = debugState;
 
 function setStatus(message: string): void {
@@ -831,6 +833,9 @@ async function main(): Promise<void> {
   brandingLineEl.textContent = boot.assets.length > 0
     ? `Attached assets: ${boot.assets.map((asset) => asset.kind).join(", ")}`
     : "No branded assets attached";
+  floorMaterial.color.set(boot.theme.accentColor);
+  wallMaterial.color.set(boot.theme.primaryColor);
+  scene.fog = new THREE.Fog(new THREE.Color(boot.theme.accentColor).getHex(), 12, 50);
   setStatus(`Joined as ${displayName}`);
   startShareButton.disabled = !boot.voiceEnabled && !shareMockEnabled ? false : false;
 

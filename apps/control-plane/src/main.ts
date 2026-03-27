@@ -20,6 +20,8 @@ const assetKindInput = mustElement<HTMLInputElement>("#asset-kind-input");
 const assetUrlInput = mustElement<HTMLInputElement>("#asset-url-input");
 const templateSelect = mustElement<HTMLSelectElement>("#template-select");
 const assetSelect = mustElement<HTMLSelectElement>("#asset-select");
+const primaryColorInput = mustElement<HTMLInputElement>("#primary-color-input");
+const accentColorInput = mustElement<HTMLInputElement>("#accent-color-input");
 const publishStatus = mustElement<HTMLDivElement>("#publish-status");
 const roomLink = mustElement<HTMLAnchorElement>("#room-link");
 const roomsList = mustElement<HTMLUListElement>("#rooms-list");
@@ -36,7 +38,7 @@ function render(): void {
       const item = document.createElement("li");
       const link = document.createElement("a");
       link.href = room.roomLink;
-      link.textContent = `${room.name} (${room.templateId})${room.assetIds?.length ? ` assets:${room.assetIds.length}` : ""}`;
+      link.textContent = `${room.name} (${room.templateId})${room.assetIds?.length ? ` assets:${room.assetIds.length}` : ""}${room.theme ? ` theme:${room.theme.primaryColor}` : ""}`;
       link.target = "_blank";
       link.rel = "noreferrer";
       item.appendChild(link);
@@ -90,6 +92,10 @@ form.addEventListener("submit", (event) => {
     templateId: templateSelect.value,
     name: roomNameInput.value,
     assetIds: Array.from(assetSelect.selectedOptions).map((option) => option.value),
+    theme: {
+      primaryColor: primaryColorInput.value,
+      accentColor: accentColorInput.value
+    },
     features: { voice: true, spatialAudio: true, screenShare: true }
   }, currentAuth())
     .then((room) => {
