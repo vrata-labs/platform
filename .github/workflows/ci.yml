@@ -61,3 +61,6 @@ jobs:
 
       - name: Asset pipeline tests
         run: pnpm --filter @noah/asset-pipeline test
+
+      - name: Asset validator sample run
+        run: pnpm --filter @noah/asset-pipeline validate:sample

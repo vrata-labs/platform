@@ -30,7 +30,7 @@ const assetsList = mustElement<HTMLUListElement>("#assets-list");
 adminTokenInput.value = storedAdminToken;
 
 function render(): void {
-  publishStatus.textContent = state.publishStatus;
+  publishStatus.textContent = state.statusMessage ?? state.publishStatus;
   roomLink.href = state.roomLink ?? "#";
   roomLink.textContent = state.roomLink ?? "";
   roomsList.replaceChildren(
@@ -86,6 +86,7 @@ async function bootstrap(): Promise<void> {
 form.addEventListener("submit", (event) => {
   event.preventDefault();
   state.publishStatus = "publishing";
+  state.statusMessage = "publishing";
   render();
   void createRoom(apiBaseUrl, {
     tenantId: "demo-tenant",
@@ -100,12 +101,14 @@ form.addEventListener("submit", (event) => {
   }, currentAuth())
     .then((room) => {
       state.publishStatus = "published";
+      state.statusMessage = "published";
       state.roomLink = room.roomLink;
       state.rooms = [room, ...state.rooms];
       render();
     })
     .catch(() => {
       state.publishStatus = "failed";
+      state.statusMessage = "failed";
       render();
     });
 });
@@ -113,6 +116,7 @@ form.addEventListener("submit", (event) => {
 assetForm.addEventListener("submit", (event) => {
   event.preventDefault();
   state.publishStatus = "publishing";
+  state.statusMessage = "publishing";
   render();
   void uploadAsset(apiBaseUrl, {
     tenantId: "demo-tenant",
@@ -121,6 +125,7 @@ assetForm.addEventListener("submit", (event) => {
   }, currentAuth())
     .then(async () => {
       state.publishStatus = "published";
+      state.statusMessage = "published";
       state.assets = await listAssets(apiBaseUrl);
       assetSelect.replaceChildren(
         ...state.assets.map((asset) => {
@@ -132,8 +137,9 @@ assetForm.addEventListener("submit", (event) => {
       );
       render();
     })
-    .catch(() => {
+    .catch((error: unknown) => {
       state.publishStatus = "failed";
+      state.statusMessage = error instanceof Error ? `failed:${error.message}` : "failed";
       render();
     });
 });

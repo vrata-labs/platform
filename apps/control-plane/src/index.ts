@@ -101,7 +101,8 @@ export async function uploadAsset(apiBaseUrl: string, input: AssetUploadInput, a
   });
 
   if (!response.ok) {
-    throw new Error(`failed_to_upload_asset:${response.status}`);
+    const payload = await response.json().catch(() => ({ error: `failed_to_upload_asset:${response.status}` }));
+    throw new Error(payload.error ?? `failed_to_upload_asset:${response.status}`);
   }
 
   return (await response.json()) as { assetId: string };
@@ -124,6 +125,7 @@ export interface ControlPlanePageState {
   assets: AssetRecord[];
   roomLink?: string;
   publishStatus: "idle" | "publishing" | "published" | "failed";
+  statusMessage?: string;
 }
 
 export function createControlPlanePageState(): ControlPlanePageState {
@@ -131,6 +133,7 @@ export function createControlPlanePageState(): ControlPlanePageState {
     templates: [],
     rooms: [],
     assets: [],
-    publishStatus: "idle"
+    publishStatus: "idle",
+    statusMessage: "idle"
   };
 }

@@ -6,9 +6,13 @@
   "exports": {
     ".": "./dist/index.js"
   },
+  "bin": {
+    "noah-asset-validate": "./dist/cli.js"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "lint": "tsc -p tsconfig.json --noEmit",
+    "validate:sample": "node dist/cli.js --file sample.glb --ext .glb --size-mb 12",
     "test": "node --test dist/**/*.test.js",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   }

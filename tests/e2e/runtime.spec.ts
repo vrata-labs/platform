@@ -163,20 +163,29 @@ test("control plane uploads asset metadata through the browser UI", async ({ pag
   await page.goto("/control-plane");
   await page.fill("#admin-token-input", "test-admin-token");
   await page.fill("#asset-kind-input", "logo");
-  await page.fill("#asset-url-input", "https://example.com/test-logo.png");
+  await page.fill("#asset-url-input", "https://example.com/test-logo.glb");
   await page.click("#create-asset");
   await expect(page.locator("#publish-status")).toContainText("published");
-  await expect(page.locator("#assets-list li").first()).toContainText("https://example.com/test-logo.png");
+  await expect(page.locator("#assets-list li").first()).toContainText("https://example.com/test-logo.glb");
+});
+
+test("control plane rejects invalid asset extension", async ({ page }) => {
+  await page.goto("/control-plane");
+  await page.fill("#admin-token-input", "test-admin-token");
+  await page.fill("#asset-kind-input", "logo");
+  await page.fill("#asset-url-input", "https://example.com/invalid.png");
+  await page.click("#create-asset");
+  await expect(page.locator("#publish-status")).toContainText("failed:unsupported_extension");
 });
 
 test("control plane can attach selected assets to a room", async ({ page }) => {
   await page.goto("/control-plane");
   await page.fill("#admin-token-input", "test-admin-token");
   await page.fill("#asset-kind-input", "wall-graphic");
-  await page.fill("#asset-url-input", "https://example.com/wall.png");
+  await page.fill("#asset-url-input", "https://example.com/wall.glb");
   await page.click("#create-asset");
   await expect(page.locator("#publish-status")).toContainText("published");
-  const wallAssetValue = await page.locator('#asset-select option').filter({ hasText: 'wall-graphic: https://example.com/wall.png' }).first().getAttribute('value');
+  const wallAssetValue = await page.locator('#asset-select option').filter({ hasText: 'wall-graphic: https://example.com/wall.glb' }).first().getAttribute('value');
   expect(wallAssetValue).toBeTruthy();
   await page.selectOption("#asset-select", String(wallAssetValue));
   await page.fill("#room-name-input", "Asset Attached Room");

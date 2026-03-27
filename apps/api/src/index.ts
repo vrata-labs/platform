@@ -228,6 +228,24 @@ function validateRoomInput(input: Partial<RoomRecord>, templateIds: Set<string>,
   return null;
 }
 
+function validateAssetInput(input: Partial<AssetRecord>): string | null {
+  if (!input.url) {
+    return "invalid_asset_url";
+  }
+
+  const fileName = input.url.split("/").pop() ?? "";
+  const extensionMatch = fileName.match(/(\.[a-z0-9]+)$/i);
+  const extension = extensionMatch?.[1] ?? "";
+  if (!fileName) {
+    return "missing_filename";
+  }
+  if (!/[.]glb$|[.]gltf$|[.]ktx2$/i.test(extension)) {
+    return "unsupported_extension";
+  }
+
+  return null;
+}
+
 function encodeToken(payload: StateTokenPayload | MediaTokenPayload): string {
   return Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
 }
@@ -317,7 +335,10 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
 
   if (method === "POST" && url.pathname === "/api/assets") {
     if (!isAuthorizedControlPlaneRequest(request)) return json(response, 403, { error: "forbidden" });
-    const asset = await storage.createAsset((await parseBody<Partial<AssetRecord>>(request)) ?? {});
+    const payload = (await parseBody<Partial<AssetRecord>>(request)) ?? {};
+    const validationError = validateAssetInput(payload);
+    if (validationError) return json(response, 400, { error: validationError });
+    const asset = await storage.createAsset(payload);
     json(response, 201, asset);
     return;
   }
