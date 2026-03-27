@@ -32,9 +32,6 @@ function mustElement<T extends Element>(selector: string): T {
 }
 
 const apiBaseUrl = window.location.origin;
-const roomStateBaseUrl = /^(localhost|127\.0\.0\.1)(:\d+)?$/.test(window.location.host)
-  ? "ws://127.0.0.1:2567"
-  : `${window.location.protocol === "https:" ? "wss" : "ws"}://state-${window.location.host}`;
 const roomId = window.location.pathname.split("/").filter(Boolean)[1] ?? "demo-room";
 const query = new URLSearchParams(window.location.search);
 const debugEnabled = query.get("debug") === "1";
@@ -211,6 +208,7 @@ const debugState = {
   statusLine: "Connecting...",
   locomotionMode: "desktop",
   roomStateConnected: false,
+  roomStateUrl: "",
   audioState: "idle",
   screenShareState: "idle",
   localPosition: { x: 0, z: 6 },
@@ -854,6 +852,7 @@ renderer.setAnimationLoop(() => {
 
 async function main(): Promise<void> {
   const boot = await bootRuntime(apiBaseUrl, roomId, navigator.userAgent);
+  debugState.roomStateUrl = boot.roomStateUrl;
   roomNameEl.textContent = `${boot.template} - ${boot.roomId}`;
   brandingLineEl.textContent = boot.assets.length > 0
     ? `Attached assets: ${boot.assets.map((asset) => asset.kind).join(", ")}`
@@ -882,7 +881,7 @@ async function main(): Promise<void> {
 
   try {
     roomStateClient = connectRoomState(
-      roomStateBaseUrl,
+      boot.roomStateUrl,
       roomId,
       participantId,
       (snapshot: RoomStateSnapshot) => {

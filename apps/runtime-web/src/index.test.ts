@@ -16,6 +16,9 @@ test("describeManifest returns room and template", () => {
         primaryColor: "#5fc8ff",
         accentColor: "#163354"
       },
+      realtime: {
+        roomStateUrl: "ws://127.0.0.1:2567"
+      },
       assets: [],
       features: { voice: true, spatialAudio: true, screenShare: false }
     }),

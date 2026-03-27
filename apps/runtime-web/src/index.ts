@@ -1,6 +1,9 @@
 interface RoomManifest {
   roomId: string;
   template: string;
+  realtime: {
+    roomStateUrl: string;
+  };
   theme: {
     primaryColor: string;
     accentColor: string;
@@ -71,6 +74,7 @@ export async function fetchRoomManifest(apiBaseUrl: string, roomId: string): Pro
 export interface RuntimeBootResult {
   roomId: string;
   template: string;
+  roomStateUrl: string;
   theme: {
     primaryColor: string;
     accentColor: string;
@@ -104,6 +108,7 @@ export async function bootRuntime(
   return {
     roomId: manifest.roomId,
     template: manifest.template,
+    roomStateUrl: manifest.realtime.roomStateUrl,
     theme: manifest.theme,
     assets: manifest.assets,
     joinMode: resolveJoinMode(userAgent),

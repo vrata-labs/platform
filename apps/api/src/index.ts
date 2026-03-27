@@ -21,6 +21,9 @@ interface RoomManifest {
   tenantId: string;
   roomId: string;
   template: string;
+  realtime: {
+    roomStateUrl: string;
+  };
   theme: {
     primaryColor: string;
     accentColor: string;
@@ -88,6 +91,9 @@ function defaultManifest(roomId: string): RoomManifest {
     tenantId: "demo-tenant",
     roomId,
     template: "meeting-room-basic",
+    realtime: {
+      roomStateUrl: process.env.ROOM_STATE_PUBLIC_URL ?? "ws://127.0.0.1:2567"
+    },
     theme: {
       primaryColor: "#5fc8ff",
       accentColor: "#163354"
@@ -159,6 +165,9 @@ async function buildManifest(roomId: string): Promise<RoomManifest> {
     tenantId: room.tenantId,
     roomId: room.roomId,
     template: room.templateId,
+    realtime: {
+      roomStateUrl: process.env.ROOM_STATE_PUBLIC_URL ?? `ws://state-${process.env.API_PUBLIC_URL?.replace(/^https?:\/\//, "") ?? "127.0.0.1:2567"}`
+    },
     theme: room.theme ?? {
       primaryColor: "#5fc8ff",
       accentColor: "#163354"
