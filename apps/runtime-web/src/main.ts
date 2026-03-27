@@ -136,6 +136,7 @@ let activeScreenShareTrack: Track | null = null;
 let activeScreenShareElement: HTMLVideoElement | null = null;
 let isScreenSharing = false;
 let activeMockScreenShareStream: MediaStream | null = null;
+let mediaRoomReady = false;
 
 function applyDisplayTexture(texture: THREE.Texture | null): void {
   const material = displaySurface.material;
@@ -309,6 +310,7 @@ async function ensureMediaRoom(): Promise<Room> {
   setupAudio(room);
   await room.connect(voicePlan.livekitUrl, voicePlan.token);
   livekitRoom = room;
+  mediaRoomReady = true;
   startShareButton.disabled = false;
   return room;
 }
@@ -826,6 +828,18 @@ async function main(): Promise<void> {
   const boot = await bootRuntime(apiBaseUrl, roomId, navigator.userAgent);
   roomNameEl.textContent = `${boot.template} - ${boot.roomId}`;
   setStatus(`Joined as ${displayName}`);
+  startShareButton.disabled = !boot.voiceEnabled && !shareMockEnabled ? false : false;
+
+  try {
+    await ensureMediaRoom();
+    setStatus(`Joined as ${displayName}`);
+    debugState.audioState = "connected-passive";
+    void reportDiagnostics("media_connected_passive");
+  } catch (error) {
+    console.error(error);
+    debugState.audioState = "media_connect_failed";
+    void reportDiagnostics("media_connect_failed");
+  }
 
   const xrSupport = detectXrSupport({
     navigatorXr: (navigator as Navigator & { xr?: unknown }).xr,

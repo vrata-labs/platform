@@ -8,6 +8,7 @@ test("room shell loads and presence is registered", async ({ page, request }) =>
 
   await expect(page.locator("#room-name")).toContainText("meeting-room-basic - demo-room");
   await expect(page.locator("#status-line")).toContainText("Joined as");
+  await expect(page.locator("#start-share")).toBeEnabled();
 
   const debug = await page.evaluate(() => (window as Window & { __NOAH_DEBUG__?: unknown }).__NOAH_DEBUG__);
   expect(debug).toBeTruthy();
