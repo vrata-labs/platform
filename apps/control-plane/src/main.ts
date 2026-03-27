@@ -36,9 +36,11 @@ const featureSpatialInput = mustElement<HTMLInputElement>("#feature-spatial-inpu
 const featureShareInput = mustElement<HTMLInputElement>("#feature-share-input");
 const publishStatus = mustElement<HTMLDivElement>("#publish-status");
 const roomLink = mustElement<HTMLAnchorElement>("#room-link");
+const refreshRoomDetailButton = mustElement<HTMLButtonElement>("#refresh-room-detail");
 const roomsList = mustElement<HTMLUListElement>("#rooms-list");
 const roomDetail = mustElement<HTMLPreElement>("#room-detail");
 const assetsList = mustElement<HTMLUListElement>("#assets-list");
+let selectedRoomPoll: number | undefined;
 
 adminTokenInput.value = storedAdminToken;
 
@@ -92,6 +94,18 @@ async function selectRoom(room: typeof state.selectedRoom): Promise<void> {
   render();
 }
 
+function startSelectedRoomPolling(): void {
+  if (selectedRoomPoll) {
+    window.clearInterval(selectedRoomPoll);
+  }
+  selectedRoomPoll = window.setInterval(() => {
+    if (!state.selectedRoom) {
+      return;
+    }
+    void selectRoom(state.selectedRoom);
+  }, 5000);
+}
+
 function currentAuth(): { adminToken?: string } {
   const token = adminTokenInput.value.trim();
   localStorage.setItem("noah.controlPlaneAdminToken", token);
@@ -119,6 +133,7 @@ async function bootstrap(): Promise<void> {
     })
   );
   render();
+  startSelectedRoomPolling();
 }
 
 form.addEventListener("submit", (event) => {
@@ -184,6 +199,13 @@ assetForm.addEventListener("submit", (event) => {
       state.statusMessage = error instanceof Error ? `failed:${error.message}` : "failed";
       render();
     });
+});
+
+refreshRoomDetailButton.addEventListener("click", () => {
+  if (!state.selectedRoom) {
+    return;
+  }
+  void selectRoom(state.selectedRoom);
 });
 
 void bootstrap();
