@@ -55,6 +55,7 @@ const publishStatus = mustElement<HTMLDivElement>("#publish-status");
 const roomLink = mustElement<HTMLAnchorElement>("#room-link");
 const refreshRoomDetailButton = mustElement<HTMLButtonElement>("#refresh-room-detail");
 const templateDetail = mustElement<HTMLPreElement>("#template-detail");
+const roomFilterTenant = mustElement<HTMLSelectElement>("#room-filter-tenant");
 const roomsList = mustElement<HTMLUListElement>("#rooms-list");
 const roomDetail = mustElement<HTMLPreElement>("#room-detail");
 const tenantsList = mustElement<HTMLUListElement>("#tenants-list");
@@ -70,8 +71,11 @@ function render(): void {
   templateDetail.textContent = state.selectedTemplate
     ? JSON.stringify(state.selectedTemplate, null, 2)
     : "Select a template to inspect details";
+  const visibleRooms = state.roomFilterTenantId
+    ? state.rooms.filter((room) => room.tenantId === state.roomFilterTenantId)
+    : state.rooms;
   roomsList.replaceChildren(
-    ...state.rooms.map((room) => {
+    ...visibleRooms.map((room) => {
       const item = document.createElement("li");
       const inspect = document.createElement("button");
       inspect.type = "button";
@@ -170,11 +174,7 @@ function currentAuth(): { adminToken?: string } {
   return token ? { adminToken: token } : {};
 }
 
-async function bootstrap(): Promise<void> {
-  state.templates = await fetchTemplates(apiBaseUrl);
-  state.tenants = await listTenants(apiBaseUrl);
-  state.rooms = await listRooms(apiBaseUrl);
-  state.assets = await listAssets(apiBaseUrl);
+function renderTenantOptions(): void {
   tenantSelect.replaceChildren(
     ...state.tenants.map((tenant) => {
       const option = document.createElement("option");
@@ -183,6 +183,28 @@ async function bootstrap(): Promise<void> {
       return option;
     })
   );
+  roomFilterTenant.replaceChildren(
+    (() => {
+      const allOption = document.createElement("option");
+      allOption.value = "";
+      allOption.textContent = "All tenants";
+      return allOption;
+    })(),
+    ...state.tenants.map((tenant) => {
+      const option = document.createElement("option");
+      option.value = tenant.tenantId;
+      option.textContent = tenant.name;
+      return option;
+    })
+  );
+}
+
+async function bootstrap(): Promise<void> {
+  state.templates = await fetchTemplates(apiBaseUrl);
+  state.tenants = await listTenants(apiBaseUrl);
+  state.rooms = await listRooms(apiBaseUrl);
+  state.assets = await listAssets(apiBaseUrl);
+  renderTenantOptions();
   templateSelect.replaceChildren(
     ...state.templates.map((template) => {
       const option = document.createElement("option");
@@ -209,6 +231,11 @@ async function bootstrap(): Promise<void> {
 
 templateSelect.addEventListener("change", () => {
   state.selectedTemplate = state.templates.find((template) => template.templateId === templateSelect.value);
+  render();
+});
+
+roomFilterTenant.addEventListener("change", () => {
+  state.roomFilterTenantId = roomFilterTenant.value || undefined;
   render();
 });
 
@@ -351,15 +378,9 @@ tenantForm.addEventListener("submit", (event) => {
       state.publishStatus = "published";
       state.statusMessage = "published";
       state.tenants = await listTenants(apiBaseUrl);
-      tenantSelect.replaceChildren(
-        ...state.tenants.map((item) => {
-          const option = document.createElement("option");
-          option.value = item.tenantId;
-          option.textContent = item.name;
-          return option;
-        })
-      );
+      renderTenantOptions();
       tenantSelect.value = tenant.tenantId;
+      roomFilterTenant.value = tenant.tenantId;
       state.selectedTenant = tenant;
       tenantNameInput.value = tenant.name;
       render();
@@ -383,15 +404,9 @@ updateTenantButton.addEventListener("click", () => {
       state.statusMessage = "updated";
       state.tenants = await listTenants(apiBaseUrl);
       state.selectedTenant = tenant;
-      tenantSelect.replaceChildren(
-        ...state.tenants.map((item) => {
-          const option = document.createElement("option");
-          option.value = item.tenantId;
-          option.textContent = item.name;
-          return option;
-        })
-      );
+      renderTenantOptions();
       tenantSelect.value = tenant.tenantId;
+      roomFilterTenant.value = tenant.tenantId;
       render();
     })
     .catch(() => {
@@ -412,15 +427,9 @@ deleteTenantButton.addEventListener("click", () => {
       state.publishStatus = "published";
       state.statusMessage = "deleted";
       state.tenants = await listTenants(apiBaseUrl);
-      tenantSelect.replaceChildren(
-        ...state.tenants.map((item) => {
-          const option = document.createElement("option");
-          option.value = item.tenantId;
-          option.textContent = item.name;
-          return option;
-        })
-      );
+      renderTenantOptions();
       state.selectedTenant = undefined;
+      roomFilterTenant.value = "";
       tenantNameInput.value = "";
       render();
     })

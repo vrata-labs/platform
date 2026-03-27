@@ -182,10 +182,14 @@ test("control plane can create tenant and use it for new room", async ({ page })
   await expect(page.locator("#publish-status")).toContainText("published");
   await expect(page.locator("#tenants-list")).toContainText("E2E Tenant");
   await expect(page.locator("#tenant-select")).toContainText("E2E Tenant");
+  await page.reload();
+  await expect(page.locator("#room-filter-tenant")).toContainText("E2E Tenant");
+  await page.fill("#admin-token-input", "test-admin-token");
   await page.fill("#room-name-input", "Tenant Room");
   await page.click("#create-room");
   await expect(page.locator("#publish-status")).toContainText("published");
   await expect(page.locator("#room-detail")).toContainText("Tenant Room");
+  await expect(page.locator("#rooms-list")).toContainText("Tenant Room");
 });
 
 test("control plane can update and delete tenant without dependencies", async ({ page }) => {

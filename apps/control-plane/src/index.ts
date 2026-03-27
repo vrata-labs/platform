@@ -282,6 +282,7 @@ export async function listAssets(apiBaseUrl: string): Promise<AssetRecord[]> {
 export interface ControlPlanePageState {
   tenants: TenantRecord[];
   selectedTenant?: TenantRecord;
+  roomFilterTenantId?: string;
   templates: TemplateRecord[];
   selectedTemplate?: TemplateRecord;
   rooms: RoomRecord[];
@@ -299,6 +300,7 @@ export function createControlPlanePageState(): ControlPlanePageState {
   return {
     templates: [],
     tenants: [],
+    roomFilterTenantId: undefined,
     rooms: [],
     assets: [],
     selectedRoomDiagnostics: [],
