@@ -159,6 +159,16 @@ test("control plane remembers admin token locally", async ({ page }) => {
   await expect(page.locator("#admin-token-input")).toHaveValue("test-admin-token");
 });
 
+test("control plane uploads asset metadata through the browser UI", async ({ page }) => {
+  await page.goto("/control-plane");
+  await page.fill("#admin-token-input", "test-admin-token");
+  await page.fill("#asset-kind-input", "logo");
+  await page.fill("#asset-url-input", "https://example.com/test-logo.png");
+  await page.click("#create-asset");
+  await expect(page.locator("#publish-status")).toContainText("published");
+  await expect(page.locator("#assets-list li").first()).toContainText("https://example.com/test-logo.png");
+});
+
 test("mock screen share updates UI and diagnostics", async ({ page, request }) => {
   await page.goto("/rooms/demo-room?sharemock=1&debug=1");
   await page.waitForFunction(() => {

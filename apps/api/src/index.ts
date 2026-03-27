@@ -272,6 +272,11 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     return;
   }
 
+  if (method === "GET" && url.pathname === "/api/assets") {
+    json(response, 200, { items: await storage.listAssets() });
+    return;
+  }
+
   if (method === "GET" && url.pathname === "/api/tenants") {
     json(response, 200, { items: await storage.listTenants() });
     return;

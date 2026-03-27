@@ -58,3 +58,13 @@ button {
 #rooms-list li {
   margin-top: 8px;
 }
+
+#assets-list {
+  margin-top: 18px;
+  padding-left: 18px;
+}
+
+#assets-list li {
+  margin-top: 8px;
+  word-break: break-all;
+}

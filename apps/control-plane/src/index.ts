@@ -37,6 +37,13 @@ export interface AssetUploadInput {
   url: string;
 }
 
+export interface AssetRecord {
+  assetId: string;
+  tenantId: string;
+  kind: string;
+  url: string;
+}
+
 export async function fetchTemplates(apiBaseUrl: string): Promise<TemplateRecord[]> {
   const response = await fetch(new URL("/api/templates", apiBaseUrl));
   if (!response.ok) {
@@ -90,9 +97,21 @@ export async function uploadAsset(apiBaseUrl: string, input: AssetUploadInput, a
   return (await response.json()) as { assetId: string };
 }
 
+export async function listAssets(apiBaseUrl: string): Promise<AssetRecord[]> {
+  const response = await fetch(new URL("/api/assets", apiBaseUrl));
+
+  if (!response.ok) {
+    throw new Error(`failed_to_list_assets:${response.status}`);
+  }
+
+  const payload = (await response.json()) as { items: AssetRecord[] };
+  return payload.items;
+}
+
 export interface ControlPlanePageState {
   templates: TemplateRecord[];
   rooms: RoomRecord[];
+  assets: AssetRecord[];
   roomLink?: string;
   publishStatus: "idle" | "publishing" | "published" | "failed";
 }
@@ -101,6 +120,7 @@ export function createControlPlanePageState(): ControlPlanePageState {
   return {
     templates: [],
     rooms: [],
+    assets: [],
     publishStatus: "idle"
   };
 }

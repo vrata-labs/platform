@@ -16,9 +16,15 @@
           <label>Template <select id="template-select"></select></label>
           <button id="create-room" type="submit">Create room</button>
         </form>
+        <form id="asset-form">
+          <label>Asset kind <input id="asset-kind-input" value="logo" /></label>
+          <label>Asset URL <input id="asset-url-input" value="https://example.com/logo.png" /></label>
+          <button id="create-asset" type="submit">Add asset metadata</button>
+        </form>
         <div id="publish-status">idle</div>
         <a id="room-link" target="_blank" rel="noreferrer"></a>
         <ul id="rooms-list"></ul>
+        <ul id="assets-list"></ul>
       </section>
     </main>
     <script type="module" src="/src/main.ts"></script>

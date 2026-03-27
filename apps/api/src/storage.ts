@@ -54,6 +54,7 @@ export interface Storage {
   listTenants(): Promise<TenantRecord[]>;
   createTenant(input: Partial<TenantRecord>): Promise<TenantRecord>;
   listTemplates(): Promise<TemplateRecord[]>;
+  listAssets(): Promise<AssetRecord[]>;
   listRooms(): Promise<RoomRecord[]>;
   getRoom(roomId: string): Promise<RoomRecord | null>;
   createRoom(input: Partial<RoomRecord>): Promise<RoomRecord>;
@@ -94,6 +95,7 @@ export class MemoryStorage implements Storage {
     return tenant;
   }
   async listTemplates(): Promise<TemplateRecord[]> { return Array.from(this.templates.values()); }
+  async listAssets(): Promise<AssetRecord[]> { return Array.from(this.assets.values()); }
   async listRooms(): Promise<RoomRecord[]> { return Array.from(this.rooms.values()); }
   async getRoom(roomId: string): Promise<RoomRecord | null> { return this.rooms.get(roomId) ?? null; }
   async createRoom(input: Partial<RoomRecord>): Promise<RoomRecord> {
@@ -190,6 +192,15 @@ export class PostgresStorage implements Storage {
   async listTemplates(): Promise<TemplateRecord[]> {
     const result = await this.pool.query(`select template_id, label, asset_slots from templates order by template_id`);
     return result.rows.map((row: { template_id: string; label: string; asset_slots: string[] }) => ({ templateId: row.template_id, label: row.label, assetSlots: row.asset_slots }));
+  }
+  async listAssets(): Promise<AssetRecord[]> {
+    const result = await this.pool.query(`select asset_id, tenant_id, kind, url from assets order by asset_id desc`);
+    return result.rows.map((row: { asset_id: string; tenant_id: string; kind: string; url: string }) => ({
+      assetId: row.asset_id,
+      tenantId: row.tenant_id,
+      kind: row.kind,
+      url: row.url
+    }));
   }
   async listRooms(): Promise<RoomRecord[]> {
     const result = await this.pool.query(`select room_id, tenant_id, template_id, name, features, asset_ids from rooms order by room_id`);
