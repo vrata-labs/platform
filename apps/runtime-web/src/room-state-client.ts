@@ -10,6 +10,13 @@ export interface RoomStateClient {
   close(): void;
 }
 
+export interface RoomStateClientHandlers {
+  onRoomState: (snapshot: RoomStateSnapshot) => void;
+  onError: (error: unknown) => void;
+  onOpen?: () => void;
+  onClose?: () => void;
+}
+
 export function createRoomStateUrl(baseHost: string, roomId: string, participantId: string): string {
   const url = new URL(baseHost);
   url.searchParams.set("roomId", roomId);
@@ -21,23 +28,29 @@ export function connectRoomState(
   baseHost: string,
   roomId: string,
   participantId: string,
-  onRoomState: (snapshot: RoomStateSnapshot) => void,
-  onError: (error: unknown) => void
+  handlers: RoomStateClientHandlers
 ): RoomStateClient {
   const socket = new WebSocket(createRoomStateUrl(baseHost, roomId, participantId));
+
+  socket.addEventListener("open", () => {
+    handlers.onOpen?.();
+  });
 
   socket.addEventListener("message", (event) => {
     try {
       const payload = JSON.parse(String(event.data)) as { type?: string; room?: RoomStateSnapshot };
       if (payload.type === "room_state" && payload.room) {
-        onRoomState(payload.room);
+        handlers.onRoomState(payload.room);
       }
     } catch (error) {
-      onError(error);
+      handlers.onError(error);
     }
   });
 
-  socket.addEventListener("error", onError);
+  socket.addEventListener("error", handlers.onError);
+  socket.addEventListener("close", () => {
+    handlers.onClose?.();
+  });
 
   return {
     socket,
