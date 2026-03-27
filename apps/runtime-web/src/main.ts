@@ -44,6 +44,7 @@ localStorage.setItem("noah.displayName", displayName);
 const roomNameEl = mustElement<HTMLDivElement>("#room-name");
 const statusLineEl = mustElement<HTMLDivElement>("#status-line");
 const brandingLineEl = mustElement<HTMLDivElement>("#branding-line");
+const roomStateLineEl = mustElement<HTMLDivElement>("#room-state-line");
 const sceneHost = mustElement<HTMLDivElement>("#scene");
 const joinAudioButton = mustElement<HTMLButtonElement>("#join-audio");
 const muteButton = mustElement<HTMLButtonElement>("#toggle-mute");
@@ -226,6 +227,10 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
 function setStatus(message: string): void {
   statusLineEl.textContent = message;
   debugState.statusLine = message;
+}
+
+function setRoomStateStatus(message: string): void {
+  roomStateLineEl.textContent = message;
 }
 
 function renderDebugPanel(): void {
@@ -853,6 +858,7 @@ renderer.setAnimationLoop(() => {
 async function main(): Promise<void> {
   const boot = await bootRuntime(apiBaseUrl, roomId, navigator.userAgent);
   debugState.roomStateUrl = boot.roomStateUrl;
+  setRoomStateStatus(`Room-state: connecting`);
   roomNameEl.textContent = `${boot.template} - ${boot.roomId}`;
   brandingLineEl.textContent = boot.assets.length > 0
     ? `Attached assets: ${boot.assets.map((asset) => asset.kind).join(", ")}`
@@ -887,18 +893,21 @@ async function main(): Promise<void> {
       (snapshot: RoomStateSnapshot) => {
         roomStateConnected = true;
         debugState.roomStateConnected = true;
+        setRoomStateStatus("Room-state: connected");
         applySnapshotParticipants(snapshot.participants);
       },
       (error: unknown) => {
         console.error(error);
         roomStateConnected = false;
         debugState.roomStateConnected = false;
+        setRoomStateStatus("Room-state: fallback API");
       }
     );
     void reportDiagnostics("room_state_connected");
   } catch (error) {
     console.error(error);
     roomStateConnected = false;
+    setRoomStateStatus("Room-state: fallback API");
     void reportDiagnostics("room_state_connect_failed");
   }
 
