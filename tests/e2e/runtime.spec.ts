@@ -22,6 +22,13 @@ test("room shell loads and presence is registered", async ({ page, request }) =>
   expect(diagnostics.items.some((item) => item.note === "runtime_booted")).toBeTruthy();
 });
 
+test("room-state service health endpoint responds", async () => {
+  const response = await fetch("http://127.0.0.1:2567/health");
+  expect(response.ok).toBeTruthy();
+  const payload = await response.json();
+  expect(payload.service).toBe("room-state");
+});
+
 test("two participants can coexist in same room", async ({ browser, request }) => {
   const pageA = await browser.newPage();
   const pageB = await browser.newPage();

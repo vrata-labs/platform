@@ -17,13 +17,16 @@ write_files:
       NOAH_DOMAIN_PREFIX="$(hostname -s)"
       NOAH_APP_DOMAIN="$${NOAH_DOMAIN_PREFIX}.$${NOAH_IP}.sslip.io"
       NOAH_LIVEKIT_DOMAIN="livekit-$${NOAH_DOMAIN_PREFIX}.$${NOAH_IP}.sslip.io"
+      NOAH_STATE_DOMAIN="state-$${NOAH_DOMAIN_PREFIX}.$${NOAH_IP}.sslip.io"
 
       printf '%s\n' \
         "NOAH_APP_DOMAIN=$${NOAH_APP_DOMAIN}" \
         "NOAH_LIVEKIT_DOMAIN=$${NOAH_LIVEKIT_DOMAIN}" \
+        "NOAH_STATE_DOMAIN=$${NOAH_STATE_DOMAIN}" \
         "RUNTIME_BASE_URL=https://$${NOAH_APP_DOMAIN}" \
         "API_PUBLIC_URL=https://$${NOAH_APP_DOMAIN}" \
         "LIVEKIT_URL=wss://$${NOAH_LIVEKIT_DOMAIN}" \
+        "ROOM_STATE_PUBLIC_URL=wss://$${NOAH_STATE_DOMAIN}" \
         > /etc/default/noah-staging
 
       mkdir -p /etc/caddy /var/lib/caddy-data /var/lib/caddy-config
@@ -35,6 +38,10 @@ write_files:
         "" \
         "$${NOAH_LIVEKIT_DOMAIN} {" \
         "reverse_proxy 127.0.0.1:7880" \
+        "}" \
+        "" \
+        "$${NOAH_STATE_DOMAIN} {" \
+        "reverse_proxy 127.0.0.1:2567" \
         "}" \
         > /etc/caddy/Caddyfile
 
@@ -86,6 +93,27 @@ write_files:
       [Install]
       WantedBy=multi-user.target
 
+  - path: /etc/systemd/system/noah-room-state.service
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=Noah room-state service
+      After=network.target
+
+      [Service]
+      Type=simple
+      User=root
+      WorkingDirectory=/opt/noah
+      EnvironmentFile=/etc/default/noah-staging
+      Environment=NODE_ENV=production
+      Environment=ROOM_STATE_PORT=2567
+      ExecStart=/usr/bin/node /opt/noah/apps/room-state/dist/index.js
+      Restart=always
+      RestartSec=5
+
+      [Install]
+      WantedBy=multi-user.target
+
 runcmd:
   - curl -sSL https://get.livekit.io | bash
   - curl -L "https://github.com/caddyserver/caddy/releases/download/v2.11.2/caddy_2.11.2_linux_amd64.deb" -o /tmp/caddy.deb
@@ -105,6 +133,8 @@ runcmd:
   - systemctl daemon-reload
   - systemctl enable livekit.service
   - systemctl restart livekit.service
+  - systemctl enable noah-room-state.service
+  - systemctl restart noah-room-state.service
   - systemctl enable noah-api.service
   - systemctl restart noah-api.service
   - systemctl enable caddy.service

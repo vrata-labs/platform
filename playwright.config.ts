@@ -8,7 +8,7 @@ export default defineConfig({
     headless: true
   },
   webServer: {
-    command: "node apps/api/dist/index.js",
+    command: "bash -lc 'node apps/room-state/dist/index.js >/tmp/noah-room-state.log 2>&1 & node apps/api/dist/index.js'",
     url: "http://127.0.0.1:4000/health",
     reuseExistingServer: true,
     env: {

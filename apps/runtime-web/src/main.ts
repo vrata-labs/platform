@@ -5,6 +5,7 @@ import { Room, RoomEvent, Track } from "livekit-client";
 import { bootRuntime, listPresence, planVoiceSession, removePresence, upsertPresence, type PresenceState } from "./index.js";
 import { applySnapTurn, computeKeyboardDirection, rotateFlatVector, sanitizeXrAxes, stepFlatMovement } from "./movement.js";
 import { createMotionTrack, pushMotionSample, sampleMotion, type MotionTrack } from "./motion-state.js";
+import { connectRoomState, sendParticipantUpdate, type RoomStateClient, type RoomStateSnapshot } from "./room-state-client.js";
 import { detectXrSupport, getEnterVrVisibility } from "./xr.js";
 
 function fallbackUuid(): string {
@@ -31,6 +32,7 @@ function mustElement<T extends Element>(selector: string): T {
 }
 
 const apiBaseUrl = window.location.origin;
+const roomStateBaseUrl = `${window.location.protocol === "https:" ? "wss" : "ws"}://state-${window.location.host}`;
 const roomId = window.location.pathname.split("/").filter(Boolean)[1] ?? "demo-room";
 const query = new URLSearchParams(window.location.search);
 const debugEnabled = query.get("debug") === "1";
@@ -138,6 +140,55 @@ let activeScreenShareElement: HTMLVideoElement | null = null;
 let isScreenSharing = false;
 let activeMockScreenShareStream: MediaStream | null = null;
 let mediaRoomReady = false;
+let roomStateClient: RoomStateClient | null = null;
+let roomStateConnected = false;
+
+function applySnapshotParticipants(people: PresenceState[]): void {
+  const activeIds = new Set<string>();
+
+  for (const person of people) {
+    if (person.participantId === participantId) {
+      continue;
+    }
+
+    activeIds.add(person.participantId);
+    const entity = ensureRemoteAvatar(person);
+    const bodyMaterial = entity.body.material;
+    if (bodyMaterial instanceof THREE.MeshStandardMaterial) {
+      bodyMaterial.color.setHex(person.activeMedia.audio ? 0x5fc8ff : 0xbfd8ee);
+    }
+    const current = remoteMotionTracks.get(person.participantId) ?? {
+      root: createMotionTrack(),
+      body: createMotionTrack(),
+      head: createMotionTrack()
+    };
+    remoteMotionTracks.set(person.participantId, {
+      root: pushMotionSample(current.root, {
+        x: person.rootTransform.x,
+        z: person.rootTransform.z,
+        capturedAtMs: Date.now()
+      }),
+      body: pushMotionSample(current.body, {
+        x: person.bodyTransform?.x ?? person.rootTransform.x,
+        z: person.bodyTransform?.z ?? person.rootTransform.z,
+        capturedAtMs: Date.now()
+      }),
+      head: pushMotionSample(current.head, {
+        x: person.headTransform?.x ?? person.rootTransform.x,
+        z: person.headTransform?.z ?? person.rootTransform.z,
+        capturedAtMs: Date.now()
+      })
+    });
+    if (entity.body.position.lengthSq() === 0) {
+      entity.body.position.set(person.bodyTransform?.x ?? person.rootTransform.x, 0.92, person.bodyTransform?.z ?? person.rootTransform.z);
+      entity.head.position.set(person.headTransform?.x ?? person.rootTransform.x, 1.58, person.headTransform?.z ?? person.rootTransform.z);
+    }
+  }
+
+  pruneRemoteAvatars(activeIds);
+  debugState.remoteAvatarCount = remoteAvatars.size;
+  debugState.lastPresenceRefreshAt = Date.now();
+}
 
 function applyDisplayTexture(texture: THREE.Texture | null): void {
   const material = displaySurface.material;
@@ -507,7 +558,7 @@ async function syncPresence(mode: PresenceState["mode"], audioActive: boolean): 
     { x: worldPosition.x, z: worldPosition.z }
   );
 
-  await upsertPresence(apiBaseUrl, roomId, {
+  const presencePayload: PresenceState = {
     participantId,
     displayName,
     mode,
@@ -532,56 +583,23 @@ async function syncPresence(mode: PresenceState["mode"], audioActive: boolean): 
       screenShare: isScreenSharing
     },
     updatedAt: new Date().toISOString()
-  });
+  };
+
+  if (roomStateClient && roomStateConnected) {
+    sendParticipantUpdate(roomStateClient, presencePayload);
+  } else {
+    await upsertPresence(apiBaseUrl, roomId, presencePayload);
+  }
   debugState.lastPresenceSyncAt = Date.now();
 }
 
 async function refreshPresence(): Promise<void> {
-  const people = await listPresence(apiBaseUrl, roomId);
-  const activeIds = new Set<string>();
-
-  for (const person of people) {
-    if (person.participantId === participantId) {
-      continue;
-    }
-
-    activeIds.add(person.participantId);
-    const entity = ensureRemoteAvatar(person);
-    const bodyMaterial = entity.body.material;
-    if (bodyMaterial instanceof THREE.MeshStandardMaterial) {
-      bodyMaterial.color.setHex(person.activeMedia.audio ? 0x5fc8ff : 0xbfd8ee);
-    }
-    const current = remoteMotionTracks.get(person.participantId) ?? {
-      root: createMotionTrack(),
-      body: createMotionTrack(),
-      head: createMotionTrack()
-    };
-    remoteMotionTracks.set(person.participantId, {
-      root: pushMotionSample(current.root, {
-        x: person.rootTransform.x,
-        z: person.rootTransform.z,
-        capturedAtMs: Date.now()
-      }),
-      body: pushMotionSample(current.body, {
-        x: person.bodyTransform?.x ?? person.rootTransform.x,
-        z: person.bodyTransform?.z ?? person.rootTransform.z,
-        capturedAtMs: Date.now()
-      }),
-      head: pushMotionSample(current.head, {
-        x: person.headTransform?.x ?? person.rootTransform.x,
-        z: person.headTransform?.z ?? person.rootTransform.z,
-        capturedAtMs: Date.now()
-      })
-    });
-    if (entity.body.position.lengthSq() === 0) {
-      entity.body.position.set(person.bodyTransform?.x ?? person.rootTransform.x, 0.92, person.bodyTransform?.z ?? person.rootTransform.z);
-      entity.head.position.set(person.headTransform?.x ?? person.rootTransform.x, 1.58, person.headTransform?.z ?? person.rootTransform.z);
-    }
+  if (roomStateConnected) {
+    debugState.lastPresenceRefreshAt = Date.now();
+    return;
   }
-
-  pruneRemoteAvatars(activeIds);
-  debugState.remoteAvatarCount = remoteAvatars.size;
-  debugState.lastPresenceRefreshAt = Date.now();
+  const people = await listPresence(apiBaseUrl, roomId);
+  applySnapshotParticipants(people);
 }
 
 function setupAudio(room: Room): void {
@@ -790,6 +808,7 @@ window.addEventListener("resize", () => {
 window.addEventListener("beforeunload", () => {
   void removePresence(apiBaseUrl, roomId, participantId);
   detachVideoTrack();
+  roomStateClient?.close();
   void livekitRoom?.disconnect();
 });
 
@@ -856,6 +875,27 @@ async function main(): Promise<void> {
     console.error(error);
     debugState.audioState = "media_connect_failed";
     void reportDiagnostics("media_connect_failed");
+  }
+
+  try {
+    roomStateClient = connectRoomState(
+      roomStateBaseUrl,
+      roomId,
+      participantId,
+      (snapshot: RoomStateSnapshot) => {
+        roomStateConnected = true;
+        applySnapshotParticipants(snapshot.participants);
+      },
+      (error: unknown) => {
+        console.error(error);
+        roomStateConnected = false;
+      }
+    );
+    void reportDiagnostics("room_state_connected");
+  } catch (error) {
+    console.error(error);
+    roomStateConnected = false;
+    void reportDiagnostics("room_state_connect_failed");
   }
 
   const xrSupport = detectXrSupport({
