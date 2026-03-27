@@ -2,6 +2,7 @@ import {
   createTenant,
   createControlPlanePageState,
   createRoom,
+  deleteAsset,
   deleteTenant,
   deleteRoom,
   fetchRoomDiagnostics,
@@ -10,6 +11,7 @@ import {
   listAssets,
   listRooms,
   listTenants,
+  updateAsset,
   updateTenant,
   updateRoom,
   uploadAsset
@@ -38,6 +40,8 @@ const deleteTenantButton = mustElement<HTMLButtonElement>("#delete-tenant");
 const roomNameInput = mustElement<HTMLInputElement>("#room-name-input");
 const assetKindInput = mustElement<HTMLInputElement>("#asset-kind-input");
 const assetUrlInput = mustElement<HTMLInputElement>("#asset-url-input");
+const updateAssetButton = mustElement<HTMLButtonElement>("#update-asset");
+const deleteAssetButton = mustElement<HTMLButtonElement>("#delete-asset");
 const templateSelect = mustElement<HTMLSelectElement>("#template-select");
 const assetSelect = mustElement<HTMLSelectElement>("#asset-select");
 const primaryColorInput = mustElement<HTMLInputElement>("#primary-color-input");
@@ -108,7 +112,16 @@ function render(): void {
   assetsList.replaceChildren(
     ...state.assets.map((asset) => {
       const item = document.createElement("li");
-      item.textContent = `${asset.kind}: ${asset.url}`;
+      const selectButton = document.createElement("button");
+      selectButton.type = "button";
+      selectButton.textContent = `${asset.kind}: ${asset.url}`;
+      selectButton.addEventListener("click", () => {
+        state.selectedAsset = asset;
+        assetKindInput.value = asset.kind;
+        assetUrlInput.value = asset.url;
+        render();
+      });
+      item.appendChild(selectButton);
       return item;
     })
   );
@@ -239,6 +252,70 @@ assetForm.addEventListener("submit", (event) => {
           const option = document.createElement("option");
           option.value = asset.assetId;
           option.textContent = `${asset.kind}: ${asset.url}`;
+          return option;
+        })
+      );
+      render();
+    })
+    .catch((error: unknown) => {
+      state.publishStatus = "failed";
+      state.statusMessage = error instanceof Error ? `failed:${error.message}` : "failed";
+      render();
+    });
+});
+
+updateAssetButton.addEventListener("click", () => {
+  const assetId = state.selectedAsset?.assetId;
+  if (!assetId) return;
+  state.publishStatus = "publishing";
+  state.statusMessage = "publishing";
+  render();
+  void updateAsset(apiBaseUrl, assetId, {
+    tenantId: tenantSelect.value,
+    kind: assetKindInput.value,
+    url: assetUrlInput.value
+  }, currentAuth())
+    .then(async (asset) => {
+      state.publishStatus = "published";
+      state.statusMessage = "updated";
+      state.assets = await listAssets(apiBaseUrl);
+      state.selectedAsset = asset;
+      assetSelect.replaceChildren(
+        ...state.assets.map((item) => {
+          const option = document.createElement("option");
+          option.value = item.assetId;
+          option.textContent = `${item.kind}: ${item.url}`;
+          return option;
+        })
+      );
+      render();
+    })
+    .catch((error: unknown) => {
+      state.publishStatus = "failed";
+      state.statusMessage = error instanceof Error ? `failed:${error.message}` : "failed";
+      render();
+    });
+});
+
+deleteAssetButton.addEventListener("click", () => {
+  const assetId = state.selectedAsset?.assetId;
+  if (!assetId) return;
+  state.publishStatus = "publishing";
+  state.statusMessage = "deleting";
+  render();
+  void deleteAsset(apiBaseUrl, assetId, currentAuth())
+    .then(async () => {
+      state.publishStatus = "published";
+      state.statusMessage = "deleted";
+      state.assets = await listAssets(apiBaseUrl);
+      state.selectedAsset = undefined;
+      assetKindInput.value = "logo";
+      assetUrlInput.value = "https://example.com/logo.png";
+      assetSelect.replaceChildren(
+        ...state.assets.map((item) => {
+          const option = document.createElement("option");
+          option.value = item.assetId;
+          option.textContent = `${item.kind}: ${item.url}`;
           return option;
         })
       );

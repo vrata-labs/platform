@@ -369,6 +369,27 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     return;
   }
 
+  const assetItemMatch = url.pathname.match(/^\/api\/assets\/([^/]+)$/);
+  if (method === "PATCH" && assetItemMatch) {
+    if (!isAuthorizedControlPlaneRequest(request)) return json(response, 403, { error: "forbidden" });
+    const assetId = decodeURIComponent(assetItemMatch[1]);
+    const payload = (await parseBody<Partial<AssetRecord>>(request)) ?? {};
+    const validationError = validateAssetInput(payload.url ? payload : { ...payload, url: "placeholder.glb" });
+    if (payload.url && validationError) return json(response, 400, { error: validationError });
+    const asset = await storage.updateAsset(assetId, payload);
+    if (!asset) return json(response, 404, { error: "asset_not_found" });
+    json(response, 200, asset);
+    return;
+  }
+
+  if (method === "DELETE" && assetItemMatch) {
+    if (!isAuthorizedControlPlaneRequest(request)) return json(response, 403, { error: "forbidden" });
+    const deleted = await storage.deleteAsset(decodeURIComponent(assetItemMatch[1]));
+    if (!deleted) return json(response, 409, { error: "asset_has_dependencies_or_missing" });
+    json(response, 200, { ok: true });
+    return;
+  }
+
   if (method === "POST" && url.pathname === "/api/rooms") {
     if (!isAuthorizedControlPlaneRequest(request)) return json(response, 403, { error: "forbidden" });
     const payload = (await parseBody<Partial<RoomRecord>>(request)) ?? {};

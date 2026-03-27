@@ -225,6 +225,40 @@ test("control plane uploads asset metadata through the browser UI", async ({ pag
   await expect(page.locator("#assets-list li").first()).toContainText("https://example.com/test-logo.glb");
 });
 
+test("control plane can update and delete asset without room dependencies", async ({ page }) => {
+  await page.goto("/control-plane");
+  await page.fill("#admin-token-input", "test-admin-token");
+  await page.fill("#asset-kind-input", "logo");
+  await page.fill("#asset-url-input", "https://example.com/mutable.glb");
+  await page.click("#create-asset");
+  await expect(page.locator("#publish-status")).toContainText("published");
+  await page.locator("#assets-list button").first().click();
+  await page.fill("#asset-url-input", "https://example.com/updated.glb");
+  await page.click("#update-asset");
+  await expect(page.locator("#publish-status")).toContainText("updated");
+  await expect(page.locator("#assets-list")).toContainText("https://example.com/updated.glb");
+  await page.click("#delete-asset");
+  await expect(page.locator("#publish-status")).toContainText("deleted");
+});
+
+test("control plane blocks asset delete when attached to a room", async ({ page }) => {
+  await page.goto("/control-plane");
+  await page.fill("#admin-token-input", "test-admin-token");
+  await page.fill("#asset-kind-input", "wall-graphic");
+  await page.fill("#asset-url-input", "https://example.com/bound.glb");
+  await page.click("#create-asset");
+  await expect(page.locator("#publish-status")).toContainText("published");
+  const assetValue = await page.locator('#asset-select option').filter({ hasText: 'wall-graphic: https://example.com/bound.glb' }).first().getAttribute('value');
+  expect(assetValue).toBeTruthy();
+  await page.selectOption('#asset-select', String(assetValue));
+  await page.fill('#room-name-input', 'Room Using Asset');
+  await page.click('#create-room');
+  await expect(page.locator('#publish-status')).toContainText('published');
+  await page.locator('#assets-list button').filter({ hasText: 'https://example.com/bound.glb' }).first().click();
+  await page.click('#delete-asset');
+  await expect(page.locator('#publish-status')).toContainText('failed');
+});
+
 test("control plane rejects invalid asset extension", async ({ page }) => {
   await page.goto("/control-plane");
   await page.fill("#admin-token-input", "test-admin-token");

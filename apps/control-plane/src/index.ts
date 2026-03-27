@@ -241,6 +241,33 @@ export async function uploadAsset(apiBaseUrl: string, input: AssetUploadInput, a
   return (await response.json()) as { assetId: string };
 }
 
+export async function updateAsset(apiBaseUrl: string, assetId: string, input: Partial<AssetUploadInput>, auth?: ControlPlaneAuth): Promise<AssetRecord> {
+  const response = await fetch(new URL(`/api/assets/${assetId}`, apiBaseUrl), {
+    method: "PATCH",
+    headers: { "content-type": "application/json", ...authHeaders(auth) },
+    body: JSON.stringify(input)
+  });
+
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({ error: `failed_to_update_asset:${response.status}` }));
+    throw new Error(payload.error ?? `failed_to_update_asset:${response.status}`);
+  }
+
+  return (await response.json()) as AssetRecord;
+}
+
+export async function deleteAsset(apiBaseUrl: string, assetId: string, auth?: ControlPlaneAuth): Promise<void> {
+  const response = await fetch(new URL(`/api/assets/${assetId}`, apiBaseUrl), {
+    method: "DELETE",
+    headers: { ...authHeaders(auth) }
+  });
+
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({ error: `failed_to_delete_asset:${response.status}` }));
+    throw new Error(payload.error ?? `failed_to_delete_asset:${response.status}`);
+  }
+}
+
 export async function listAssets(apiBaseUrl: string): Promise<AssetRecord[]> {
   const response = await fetch(new URL("/api/assets", apiBaseUrl));
 
@@ -258,6 +285,7 @@ export interface ControlPlanePageState {
   templates: TemplateRecord[];
   rooms: RoomRecord[];
   assets: AssetRecord[];
+  selectedAsset?: AssetRecord;
   selectedRoom?: RoomRecord;
   selectedRoomManifest?: RoomManifestRecord;
   selectedRoomDiagnostics: RuntimeDiagnosticRecord[];

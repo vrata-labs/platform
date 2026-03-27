@@ -67,6 +67,8 @@ export interface Storage {
   updateRoom(roomId: string, input: Partial<RoomRecord>): Promise<RoomRecord | null>;
   deleteRoom(roomId: string): Promise<boolean>;
   createAsset(input: Partial<AssetRecord>): Promise<AssetRecord>;
+  updateAsset(assetId: string, input: Partial<AssetRecord>): Promise<AssetRecord | null>;
+  deleteAsset(assetId: string): Promise<boolean>;
   addDiagnostic(roomId: string, payload: RuntimeDiagnosticRecord): Promise<void>;
   getDiagnostics(roomId: string): Promise<RuntimeDiagnosticRecord[]>;
 }
@@ -179,6 +181,19 @@ export class MemoryStorage implements Storage {
     };
     this.assets.set(asset.assetId, asset);
     return asset;
+  }
+  async updateAsset(assetId: string, input: Partial<AssetRecord>): Promise<AssetRecord | null> {
+    const existing = this.assets.get(assetId);
+    if (!existing) return null;
+    const updated = { ...existing, ...input, assetId };
+    this.assets.set(assetId, updated);
+    return updated;
+  }
+  async deleteAsset(assetId: string): Promise<boolean> {
+    for (const room of this.rooms.values()) {
+      if (room.assetIds.includes(assetId)) return false;
+    }
+    return this.assets.delete(assetId);
   }
   async addDiagnostic(roomId: string, payload: RuntimeDiagnosticRecord): Promise<void> {
     const entries = this.diagnostics.get(roomId) ?? [];
@@ -337,6 +352,25 @@ export class PostgresStorage implements Storage {
     const asset = { assetId: input.assetId ?? crypto.randomUUID(), tenantId: input.tenantId ?? "demo-tenant", kind: input.kind ?? "logo", url: input.url ?? "/assets/demo/placeholder.png" };
     await this.pool.query(`insert into assets (asset_id, tenant_id, kind, url) values ($1,$2,$3,$4)`, [asset.assetId, asset.tenantId, asset.kind, asset.url]);
     return asset;
+  }
+  async updateAsset(assetId: string, input: Partial<AssetRecord>): Promise<AssetRecord | null> {
+    const existing = await this.pool.query(`select asset_id, tenant_id, kind, url from assets where asset_id = $1`, [assetId]);
+    const row = existing.rows[0];
+    if (!row) return null;
+    const updated = {
+      assetId,
+      tenantId: input.tenantId ?? row.tenant_id,
+      kind: input.kind ?? row.kind,
+      url: input.url ?? row.url
+    };
+    await this.pool.query(`update assets set tenant_id = $2, kind = $3, url = $4 where asset_id = $1`, [assetId, updated.tenantId, updated.kind, updated.url]);
+    return updated;
+  }
+  async deleteAsset(assetId: string): Promise<boolean> {
+    const rooms = await this.pool.query(`select 1 from rooms where asset_ids @> $1::jsonb limit 1`, [JSON.stringify([assetId])]);
+    if (rooms.rows[0]) return false;
+    const result = await this.pool.query(`delete from assets where asset_id = $1`, [assetId]);
+    return (result.rowCount ?? 0) > 0;
   }
   async addDiagnostic(roomId: string, payload: RuntimeDiagnosticRecord): Promise<void> {
     await this.pool.query(`insert into runtime_diagnostics (room_id, payload) values ($1,$2::jsonb)`, [roomId, JSON.stringify(payload)]);
