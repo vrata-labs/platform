@@ -149,6 +149,7 @@ test("control plane creates a room through the browser UI", async ({ page }) => 
   await expect(page.locator("#rooms-list li").first()).toContainText("Control Plane Room");
   await page.locator("#rooms-list button").first().click();
   await expect(page.locator("#room-detail")).toContainText("Control Plane Room");
+  await expect(page.locator("#room-detail")).toContainText('"manifest"');
 });
 
 test("control plane remembers admin token locally", async ({ page }) => {

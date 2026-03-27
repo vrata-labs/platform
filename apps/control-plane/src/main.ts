@@ -1,4 +1,13 @@
-import { createControlPlanePageState, createRoom, fetchTemplates, listAssets, listRooms, uploadAsset } from "./index.js";
+import {
+  createControlPlanePageState,
+  createRoom,
+  fetchRoomDiagnostics,
+  fetchRoomManifest,
+  fetchTemplates,
+  listAssets,
+  listRooms,
+  uploadAsset
+} from "./index.js";
 
 function mustElement<T extends Element>(selector: string): T {
   const element = document.querySelector<T>(selector);
@@ -44,8 +53,7 @@ function render(): void {
       inspect.type = "button";
       inspect.textContent = `${room.name} (${room.templateId})${room.assetIds?.length ? ` assets:${room.assetIds.length}` : ""}${room.theme ? ` theme:${room.theme.primaryColor}` : ""}`;
       inspect.addEventListener("click", () => {
-        state.selectedRoom = room;
-        render();
+        void selectRoom(room);
       });
       const openLink = document.createElement("a");
       openLink.href = room.roomLink;
@@ -59,7 +67,11 @@ function render(): void {
     })
   );
   roomDetail.textContent = state.selectedRoom
-    ? JSON.stringify(state.selectedRoom, null, 2)
+    ? JSON.stringify({
+        room: state.selectedRoom,
+        manifest: state.selectedRoomManifest,
+        diagnostics: state.selectedRoomDiagnostics.slice(-5)
+      }, null, 2)
     : "Select a room to inspect details";
   assetsList.replaceChildren(
     ...state.assets.map((asset) => {
@@ -68,6 +80,16 @@ function render(): void {
       return item;
     })
   );
+}
+
+async function selectRoom(room: typeof state.selectedRoom): Promise<void> {
+  if (!room) {
+    return;
+  }
+  state.selectedRoom = room;
+  state.selectedRoomManifest = await fetchRoomManifest(apiBaseUrl, room.roomId);
+  state.selectedRoomDiagnostics = await fetchRoomDiagnostics(apiBaseUrl, room.roomId);
+  render();
 }
 
 function currentAuth(): { adminToken?: string } {
@@ -124,8 +146,7 @@ form.addEventListener("submit", (event) => {
       state.statusMessage = "published";
       state.roomLink = room.roomLink;
       state.rooms = [room, ...state.rooms];
-      state.selectedRoom = room;
-      render();
+      void selectRoom(room);
     })
     .catch(() => {
       state.publishStatus = "failed";
