@@ -40,6 +40,7 @@ const deleteTenantButton = mustElement<HTMLButtonElement>("#delete-tenant");
 const roomNameInput = mustElement<HTMLInputElement>("#room-name-input");
 const assetKindInput = mustElement<HTMLInputElement>("#asset-kind-input");
 const assetUrlInput = mustElement<HTMLInputElement>("#asset-url-input");
+const assetProcessedUrlInput = mustElement<HTMLInputElement>("#asset-processed-url-input");
 const assetStatusSelect = mustElement<HTMLSelectElement>("#asset-status-select");
 const updateAssetButton = mustElement<HTMLButtonElement>("#update-asset");
 const deleteAssetButton = mustElement<HTMLButtonElement>("#delete-asset");
@@ -124,11 +125,12 @@ function render(): void {
       const item = document.createElement("li");
       const selectButton = document.createElement("button");
       selectButton.type = "button";
-      selectButton.textContent = `${asset.kind}: ${asset.url} [${asset.validationStatus ?? "validated"}]`;
+      selectButton.textContent = `${asset.kind}: ${asset.url} -> ${asset.processedUrl ?? asset.url} [${asset.validationStatus ?? "validated"}]`;
       selectButton.addEventListener("click", () => {
         state.selectedAsset = asset;
         assetKindInput.value = asset.kind;
         assetUrlInput.value = asset.url;
+        assetProcessedUrlInput.value = asset.processedUrl ?? asset.url;
         assetStatusSelect.value = asset.validationStatus ?? "validated";
         render();
       });
@@ -287,6 +289,7 @@ assetForm.addEventListener("submit", (event) => {
     tenantId: tenantSelect.value,
     kind: assetKindInput.value,
     url: assetUrlInput.value,
+    processedUrl: assetProcessedUrlInput.value,
     validationStatus: assetStatusSelect.value as "pending" | "validated" | "rejected"
   }, currentAuth())
     .then(async () => {
@@ -320,6 +323,7 @@ updateAssetButton.addEventListener("click", () => {
     tenantId: tenantSelect.value,
     kind: assetKindInput.value,
     url: assetUrlInput.value,
+    processedUrl: assetProcessedUrlInput.value,
     validationStatus: assetStatusSelect.value as "pending" | "validated" | "rejected"
   }, currentAuth())
     .then(async (asset) => {
@@ -358,6 +362,7 @@ deleteAssetButton.addEventListener("click", () => {
       state.selectedAsset = undefined;
       assetKindInput.value = "logo";
       assetUrlInput.value = "https://example.com/logo.png";
+      assetProcessedUrlInput.value = "https://cdn.example.com/logo.glb";
       assetStatusSelect.value = "validated";
       assetSelect.replaceChildren(
         ...state.assets.map((item) => {

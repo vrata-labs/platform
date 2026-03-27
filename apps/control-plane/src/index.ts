@@ -92,6 +92,7 @@ export interface AssetUploadInput {
   tenantId: string;
   kind: string;
   url: string;
+  processedUrl?: string;
   validationStatus?: "pending" | "validated" | "rejected";
 }
 

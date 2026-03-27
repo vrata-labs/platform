@@ -225,9 +225,11 @@ test("control plane uploads asset metadata through the browser UI", async ({ pag
   await page.fill("#admin-token-input", "test-admin-token");
   await page.fill("#asset-kind-input", "logo");
   await page.fill("#asset-url-input", "https://example.com/test-logo.glb");
+  await page.fill("#asset-processed-url-input", "https://cdn.example.com/test-logo.glb");
   await page.click("#create-asset");
   await expect(page.locator("#publish-status")).toContainText("published");
   await expect(page.locator("#assets-list li").first()).toContainText("https://example.com/test-logo.glb");
+  await expect(page.locator("#assets-list li").first()).toContainText("https://cdn.example.com/test-logo.glb");
   await expect(page.locator("#assets-list li").first()).toContainText("validated");
 });
 
@@ -240,10 +242,12 @@ test("control plane can update and delete asset without room dependencies", asyn
   await expect(page.locator("#publish-status")).toContainText("published");
   await page.locator("#assets-list button").first().click();
   await page.fill("#asset-url-input", "https://example.com/updated.glb");
+  await page.fill("#asset-processed-url-input", "https://cdn.example.com/updated.glb");
   await page.selectOption("#asset-status-select", "pending");
   await page.click("#update-asset");
   await expect(page.locator("#publish-status")).toContainText("updated");
   await expect(page.locator("#assets-list")).toContainText("https://example.com/updated.glb");
+  await expect(page.locator("#assets-list")).toContainText("https://cdn.example.com/updated.glb");
   await expect(page.locator("#assets-list")).toContainText("pending");
   await page.click("#delete-asset");
   await expect(page.locator("#publish-status")).toContainText("deleted");
