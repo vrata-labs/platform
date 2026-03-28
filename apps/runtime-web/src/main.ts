@@ -41,6 +41,7 @@ const apiBaseUrl = window.location.origin;
 const roomId = window.location.pathname.split("/").filter(Boolean)[1] ?? "demo-room";
 const query = new URLSearchParams(window.location.search);
 const debugEnabled = query.get("debug") === "1";
+const sceneFitEnabled = debugEnabled && query.get("scenefit") !== "0";
 const botMode = query.get("bot") ?? "off";
 const shareMockEnabled = query.get("sharemock") === "1";
 const faultConfig = {
@@ -188,6 +189,27 @@ function setFallbackEnvironmentVisible(visible: boolean): void {
   for (const object of fallbackEnvironment) {
     object.visible = visible;
   }
+}
+
+function applySceneDebugFit(bounds: NonNullable<typeof debugState.sceneDebug.boundingBox>): void {
+  const horizontalSize = Math.max(bounds.size.x, bounds.size.z, 1);
+  const distance = Math.max(horizontalSize * 0.65, 12);
+  const targetY = bounds.center.y;
+  player.position.set(bounds.center.x, targetY, bounds.center.z + distance);
+
+  const cameraWorld = new THREE.Vector3();
+  camera.getWorldPosition(cameraWorld);
+  const target = new THREE.Vector3(bounds.center.x, bounds.center.y, bounds.center.z);
+  const delta = target.sub(cameraWorld);
+  yaw = Math.atan2(delta.x, delta.z);
+  const horizontalDistance = Math.max(0.001, Math.hypot(delta.x, delta.z));
+  pitchAngle = THREE.MathUtils.clamp(-Math.atan2(delta.y, horizontalDistance), -1.1, 1.1);
+  player.rotation.y = yaw;
+  pitch.rotation.x = pitchAngle;
+  debugState.localPosition = {
+    x: Number(player.position.x.toFixed(2)),
+    z: Number(player.position.z.toFixed(2))
+  };
 }
 
 function getPresenceCaptureTime(updatedAt: string | undefined, fallbackNow: number): number {
@@ -1242,6 +1264,14 @@ async function main(): Promise<void> {
           missingAssets: loadedScene.missingAssets
         }
       });
+      if (sceneFitEnabled && debugState.sceneDebug.boundingBox) {
+        applySceneDebugFit(debugState.sceneDebug.boundingBox);
+        debugState.sceneDebug = inspectSceneObject({
+          root: loadedScene.group,
+          camera,
+          previous: debugState.sceneDebug
+        });
+      }
       brandingLineEl.textContent = `${brandingLineEl.textContent} | Scene: ${loadedScene.manifest.label}`;
       void reportDiagnostics("scene_bundle_loaded");
     } catch (error) {
