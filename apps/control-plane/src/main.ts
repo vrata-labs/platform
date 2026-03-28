@@ -273,9 +273,9 @@ form.addEventListener("submit", (event) => {
       state.rooms = [room, ...state.rooms];
       void selectRoom(room);
     })
-    .catch(() => {
+    .catch((error: unknown) => {
       state.publishStatus = "failed";
-      state.statusMessage = "failed";
+      state.statusMessage = error instanceof Error ? `failed:${error.message}` : "failed";
       render();
     });
 });
@@ -515,9 +515,9 @@ updateRoomButton.addEventListener("click", () => {
       state.rooms = state.rooms.map((item) => item.roomId === room.roomId ? room : item);
       await selectRoom(room);
     })
-    .catch(() => {
+    .catch((error: unknown) => {
       state.publishStatus = "failed";
-      state.statusMessage = "failed";
+      state.statusMessage = error instanceof Error ? `failed:${error.message}` : "failed";
       render();
     });
 });

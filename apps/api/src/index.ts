@@ -245,6 +245,24 @@ function validateRoomInput(input: Partial<RoomRecord>, templateIds: Set<string>,
   return null;
 }
 
+async function validateRoomAssetIds(storage: Awaited<typeof storagePromise>, assetIds: string[] | undefined): Promise<string | null> {
+  if (!assetIds || assetIds.length === 0) {
+    return null;
+  }
+  const assets = await storage.listAssets();
+  const byId = new Map(assets.map((asset) => [asset.assetId, asset]));
+  for (const assetId of assetIds) {
+    const asset = byId.get(assetId);
+    if (!asset) {
+      return "invalid_asset_reference";
+    }
+    if (asset.validationStatus === "rejected") {
+      return "rejected_asset_not_attachable";
+    }
+  }
+  return null;
+}
+
 function validateAssetInput(input: Partial<AssetRecord>): string | null {
   if (!input.url) {
     return "invalid_asset_url";
@@ -405,6 +423,8 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     const templateIds = new Set((await storage.listTemplates()).map((template) => template.templateId));
     const validationError = validateRoomInput(payload, templateIds, tenantIds);
     if (validationError) return json(response, 400, { error: validationError });
+    const assetValidationError = await validateRoomAssetIds(storage, payload.assetIds);
+    if (assetValidationError) return json(response, 400, { error: assetValidationError });
     const room = await storage.createRoom(payload);
     json(response, 201, { ...room, roomLink: createRoomLink(room.roomId, request.headers.host), manifest: await buildManifest(room.roomId) });
     return;
@@ -415,6 +435,10 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     if (!isAuthorizedControlPlaneRequest(request)) return json(response, 403, { error: "forbidden" });
     const roomId = decodeURIComponent(roomItemMatch[1]);
     const payload = (await parseBody<Partial<RoomRecord>>(request)) ?? {};
+    if (payload.assetIds) {
+      const assetValidationError = await validateRoomAssetIds(storage, payload.assetIds);
+      if (assetValidationError) return json(response, 400, { error: assetValidationError });
+    }
     const updated = await storage.updateRoom(roomId, payload);
     if (!updated) return json(response, 404, { error: "room_not_found" });
     json(response, 200, { ...updated, roomLink: createRoomLink(updated.roomId, request.headers.host), manifest: await buildManifest(updated.roomId) });

@@ -301,6 +301,22 @@ test("control plane can attach selected assets to a room", async ({ page }) => {
   await expect(page.locator("#branding-line")).toContainText("Attached assets: wall-graphic [validated]");
 });
 
+test("control plane blocks rejected asset attachment to room", async ({ page }) => {
+  await page.goto("/control-plane");
+  await page.fill("#admin-token-input", "test-admin-token");
+  await page.fill("#asset-kind-input", "logo");
+  await page.fill("#asset-url-input", "https://example.com/rejected.glb");
+  await page.selectOption("#asset-status-select", "rejected");
+  await page.click("#create-asset");
+  await expect(page.locator("#publish-status")).toContainText("published");
+  const rejectedAssetValue = await page.locator('#asset-select option').filter({ hasText: 'logo: https://example.com/rejected.glb' }).first().getAttribute('value');
+  expect(rejectedAssetValue).toBeTruthy();
+  await page.selectOption('#asset-select', String(rejectedAssetValue));
+  await page.fill('#room-name-input', 'Rejected Asset Room');
+  await page.click('#create-room');
+  await expect(page.locator('#publish-status')).toContainText('failed:rejected_asset_not_attachable');
+});
+
 test("control plane can create themed room", async ({ page }) => {
   await page.goto("/control-plane");
   await page.fill("#admin-token-input", "test-admin-token");

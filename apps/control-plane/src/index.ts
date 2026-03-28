@@ -173,7 +173,8 @@ export async function createRoom(apiBaseUrl: string, input: RoomCreateInput, aut
   });
 
   if (!response.ok) {
-    throw new Error(`failed_to_create_room:${response.status}`);
+    const payload = await response.json().catch(() => ({ error: `failed_to_create_room:${response.status}` }));
+    throw new Error(payload.error ?? `failed_to_create_room:${response.status}`);
   }
 
   return (await response.json()) as RoomRecord;
@@ -187,7 +188,8 @@ export async function updateRoom(apiBaseUrl: string, roomId: string, input: Part
   });
 
   if (!response.ok) {
-    throw new Error(`failed_to_update_room:${response.status}`);
+    const payload = await response.json().catch(() => ({ error: `failed_to_update_room:${response.status}` }));
+    throw new Error(payload.error ?? `failed_to_update_room:${response.status}`);
   }
 
   return (await response.json()) as RoomRecord;
