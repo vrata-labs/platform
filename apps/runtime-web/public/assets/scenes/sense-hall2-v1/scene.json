@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "sceneId": "sense-hall2-v1",
   "label": "SenseTower Hall",
-  "source": "/mnt/d/repository/_SenseCapital/SenseTowerVR/Assets/Models/Hall/optimized stuff/walls_3_1.fbx",
-  "glbPath": "scene.fbx",
+  "source": "/mnt/d/Repository/project-noah/examples/assets/TheHallScene.glb",
+  "glbPath": "scene.glb",
   "spawnPoints": [
     {
       "id": "main",
@@ -11,5 +11,5 @@
     }
   ],
   "bounds": { "width": 40, "height": 10, "depth": 40 },
-  "notes": "Real SenseTower hall asset copied from optimized hall export"
+  "notes": "Hall bundle backed by exported TheHallScene.glb"
 }
