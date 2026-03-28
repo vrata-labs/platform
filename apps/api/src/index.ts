@@ -245,12 +245,17 @@ function validateRoomInput(input: Partial<RoomRecord>, templateIds: Set<string>,
   return null;
 }
 
-async function validateRoomAssetIds(storage: Awaited<typeof storagePromise>, assetIds: string[] | undefined): Promise<string | null> {
+async function validateRoomAssetIds(
+  storage: Awaited<typeof storagePromise>,
+  assetIds: string[] | undefined,
+  templateId?: string
+): Promise<string | null> {
   if (!assetIds || assetIds.length === 0) {
     return null;
   }
   const assets = await storage.listAssets();
   const byId = new Map(assets.map((asset) => [asset.assetId, asset]));
+  const template = (await storage.listTemplates()).find((item) => item.templateId === templateId);
   for (const assetId of assetIds) {
     const asset = byId.get(assetId);
     if (!asset) {
@@ -258,6 +263,9 @@ async function validateRoomAssetIds(storage: Awaited<typeof storagePromise>, ass
     }
     if (asset.validationStatus === "rejected") {
       return "rejected_asset_not_attachable";
+    }
+    if (template && !template.assetSlots.includes(asset.kind)) {
+      return "asset_kind_not_supported_by_template";
     }
   }
   return null;
@@ -423,7 +431,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     const templateIds = new Set((await storage.listTemplates()).map((template) => template.templateId));
     const validationError = validateRoomInput(payload, templateIds, tenantIds);
     if (validationError) return json(response, 400, { error: validationError });
-    const assetValidationError = await validateRoomAssetIds(storage, payload.assetIds);
+    const assetValidationError = await validateRoomAssetIds(storage, payload.assetIds, payload.templateId);
     if (assetValidationError) return json(response, 400, { error: assetValidationError });
     const room = await storage.createRoom(payload);
     json(response, 201, { ...room, roomLink: createRoomLink(room.roomId, request.headers.host), manifest: await buildManifest(room.roomId) });
@@ -435,8 +443,10 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     if (!isAuthorizedControlPlaneRequest(request)) return json(response, 403, { error: "forbidden" });
     const roomId = decodeURIComponent(roomItemMatch[1]);
     const payload = (await parseBody<Partial<RoomRecord>>(request)) ?? {};
+    const existingRoom = await storage.getRoom(roomId);
+    if (!existingRoom) return json(response, 404, { error: "room_not_found" });
     if (payload.assetIds) {
-      const assetValidationError = await validateRoomAssetIds(storage, payload.assetIds);
+      const assetValidationError = await validateRoomAssetIds(storage, payload.assetIds, payload.templateId ?? existingRoom.templateId);
       if (assetValidationError) return json(response, 400, { error: assetValidationError });
     }
     const updated = await storage.updateRoom(roomId, payload);

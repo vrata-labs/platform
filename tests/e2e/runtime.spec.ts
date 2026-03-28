@@ -263,6 +263,7 @@ test("control plane blocks asset delete when attached to a room", async ({ page 
   const assetValue = await page.locator('#asset-select option').filter({ hasText: 'wall-graphic: https://example.com/bound.glb' }).first().getAttribute('value');
   expect(assetValue).toBeTruthy();
   await page.selectOption('#asset-select', String(assetValue));
+  await page.selectOption('#template-select', 'showroom-basic');
   await page.fill('#room-name-input', 'Room Using Asset');
   await page.click('#create-room');
   await expect(page.locator('#publish-status')).toContainText('published');
@@ -290,6 +291,7 @@ test("control plane can attach selected assets to a room", async ({ page }) => {
   const wallAssetValue = await page.locator('#asset-select option').filter({ hasText: 'wall-graphic: https://example.com/wall.glb' }).first().getAttribute('value');
   expect(wallAssetValue).toBeTruthy();
   await page.selectOption("#asset-select", String(wallAssetValue));
+  await page.selectOption('#template-select', 'showroom-basic');
   await page.fill("#room-name-input", "Asset Attached Room");
   await page.click("#create-room");
   await expect(page.locator("#publish-status")).toContainText("published");
@@ -315,6 +317,22 @@ test("control plane blocks rejected asset attachment to room", async ({ page }) 
   await page.fill('#room-name-input', 'Rejected Asset Room');
   await page.click('#create-room');
   await expect(page.locator('#publish-status')).toContainText('failed:rejected_asset_not_attachable');
+});
+
+test("control plane blocks asset kinds that do not fit template slots", async ({ page }) => {
+  await page.goto('/control-plane');
+  await page.fill('#admin-token-input', 'test-admin-token');
+  await page.fill('#asset-kind-input', 'hero-screen');
+  await page.fill('#asset-url-input', 'https://example.com/hero.glb');
+  await page.selectOption('#template-select', 'showroom-basic');
+  await page.click('#create-asset');
+  await expect(page.locator('#publish-status')).toContainText('published');
+  const assetValue = await page.locator('#asset-select option').filter({ hasText: 'hero-screen: https://example.com/hero.glb' }).first().getAttribute('value');
+  expect(assetValue).toBeTruthy();
+  await page.selectOption('#asset-select', String(assetValue));
+  await page.fill('#room-name-input', 'Wrong Slot Room');
+  await page.click('#create-room');
+  await expect(page.locator('#publish-status')).toContainText('failed:asset_kind_not_supported_by_template');
 });
 
 test("control plane can create themed room", async ({ page }) => {
