@@ -43,6 +43,7 @@ const query = new URLSearchParams(window.location.search);
 const debugEnabled = query.get("debug") === "1";
 const sceneFitEnabled = debugEnabled && query.get("scenefit") !== "0";
 const sceneMaterialDebugMode = debugEnabled ? (query.get("mat") ?? "off") : "off";
+const cleanSceneMode = query.get("clean") === "1";
 const botMode = query.get("bot") ?? "off";
 const shareMockEnabled = query.get("sharemock") === "1";
 const faultConfig = {
@@ -76,6 +77,7 @@ if (shareMockEnabled) {
 
 const scene = new THREE.Scene();
 scene.fog = new THREE.Fog(0x08111f, 12, 50);
+const defaultSceneFog = scene.fog;
 
 const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 200);
 camera.position.set(0, 1.6, 0);
@@ -97,6 +99,9 @@ scene.add(new THREE.HemisphereLight(0xcbe9ff, 0x152033, 1.4));
 const directional = new THREE.DirectionalLight(0xffffff, 1.4);
 directional.position.set(5, 9, 3);
 scene.add(directional);
+const ambientLight = new THREE.AmbientLight(0xffffff, 1.0);
+ambientLight.visible = false;
+scene.add(ambientLight);
 
 const floor = new THREE.Mesh(
   new THREE.PlaneGeometry(40, 40, 10, 10),
@@ -190,6 +195,12 @@ function setFallbackEnvironmentVisible(visible: boolean): void {
   for (const object of fallbackEnvironment) {
     object.visible = visible;
   }
+}
+
+function applyCleanSceneMode(enabled: boolean): void {
+  ambientLight.visible = enabled;
+  directional.visible = !enabled;
+  scene.fog = enabled ? null : defaultSceneFog;
 }
 
 function applySceneDebugFit(bounds: NonNullable<typeof debugState.sceneDebug.boundingBox>): void {
@@ -1254,7 +1265,11 @@ async function main(): Promise<void> {
   guestAccessLineEl.textContent = boot.guestAllowed ? "Guest access: enabled" : "Guest access: members only";
   floorMaterial.color.set(boot.theme.accentColor);
   wallMaterial.color.set(boot.theme.primaryColor);
-  scene.fog = new THREE.Fog(new THREE.Color(boot.theme.accentColor).getHex(), 12, 50);
+  if (!cleanSceneMode) {
+    scene.fog = new THREE.Fog(new THREE.Color(boot.theme.accentColor).getHex(), 12, 50);
+  } else {
+    applyCleanSceneMode(true);
+  }
 
   if (boot.sceneBundleUrl && runtimeFlags.sceneBundles) {
     try {
@@ -1266,6 +1281,9 @@ async function main(): Promise<void> {
       activeSceneBundleRoot = loadedScene.group;
       applySceneMaterialDebugMode(loadedScene.group, sceneMaterialDebugMode);
       setFallbackEnvironmentVisible(false);
+      if (cleanSceneMode) {
+        applyCleanSceneMode(true);
+      }
       debugState.sceneBundleState = "loaded";
       debugState.sceneDebug = inspectSceneObject({
         root: loadedScene.group,
