@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "sceneId": "sense-blueoffice-glb-v3",
+  "label": "Sense BlueOffice Refined",
+  "source": "/mnt/d/projects/noah/research/exports-converted-v2/BlueOffice.glb",
+  "glbPath": "scene.glb",
+  "spawnPoints": [
+    {
+      "id": "main",
+      "position": { "x": 0, "y": 0, "z": 0 }
+    }
+  ],
+  "bounds": { "width": 30, "height": 10, "depth": 30 },
+  "notes": "BlueOffice exported via UnityGLTF with refined export-time conversion; _Lightmap no longer forced into occlusion"
+}
