@@ -201,6 +201,10 @@ function applyCleanSceneMode(enabled: boolean): void {
   ambientLight.visible = enabled;
   directional.visible = !enabled;
   scene.fog = enabled ? null : defaultSceneFog;
+  floor.visible = !enabled;
+  grid.visible = !enabled;
+  roomBox.visible = !enabled;
+  displaySurface.visible = true;
 }
 
 function applySceneDebugFit(bounds: NonNullable<typeof debugState.sceneDebug.boundingBox>): void {
