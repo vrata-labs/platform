@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "sceneId": "sense-blueoffice-glb-v2",
+  "label": "Sense BlueOffice Converted",
+  "source": "/mnt/d/projects/noah/research/exports-converted/BlueOffice.glb",
+  "glbPath": "scene.glb",
+  "spawnPoints": [
+    {
+      "id": "main",
+      "position": { "x": 0, "y": 0, "z": 0 }
+    }
+  ],
+  "bounds": { "width": 30, "height": 10, "depth": 30 },
+  "notes": "BlueOffice exported via UnityGLTF with export-time conversion of Shader Graph materials to URP/Lit"
+}
