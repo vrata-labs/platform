@@ -42,6 +42,7 @@ const roomId = window.location.pathname.split("/").filter(Boolean)[1] ?? "demo-r
 const query = new URLSearchParams(window.location.search);
 const debugEnabled = query.get("debug") === "1";
 const sceneFitEnabled = debugEnabled && query.get("scenefit") !== "0";
+const sceneMaterialDebugMode = debugEnabled ? (query.get("mat") ?? "off") : "off";
 const botMode = query.get("bot") ?? "off";
 const shareMockEnabled = query.get("sharemock") === "1";
 const faultConfig = {
@@ -210,6 +211,24 @@ function applySceneDebugFit(bounds: NonNullable<typeof debugState.sceneDebug.bou
     x: Number(player.position.x.toFixed(2)),
     z: Number(player.position.z.toFixed(2))
   };
+}
+
+function applySceneMaterialDebugMode(root: THREE.Object3D, mode: string): void {
+  if (mode === "off") {
+    return;
+  }
+  root.traverse((child) => {
+    if (!(child instanceof THREE.Mesh)) {
+      return;
+    }
+    if (mode === "basic") {
+      child.material = new THREE.MeshBasicMaterial({ color: 0xf2efe8, wireframe: false });
+      return;
+    }
+    if (mode === "wire") {
+      child.material = new THREE.MeshBasicMaterial({ color: 0xf2efe8, wireframe: true });
+    }
+  });
 }
 
 function getPresenceCaptureTime(updatedAt: string | undefined, fallbackNow: number): number {
@@ -1245,6 +1264,7 @@ async function main(): Promise<void> {
         bundleUrl: boot.sceneBundleUrl
       });
       activeSceneBundleRoot = loadedScene.group;
+      applySceneMaterialDebugMode(loadedScene.group, sceneMaterialDebugMode);
       setFallbackEnvironmentVisible(false);
       debugState.sceneBundleState = "loaded";
       debugState.sceneDebug = inspectSceneObject({
