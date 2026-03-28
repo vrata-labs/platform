@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "sceneId": "sense-blueoffice-glb-v1",
+  "label": "Sense BlueOffice",
+  "source": "/mnt/d/projects/noah/research/exports/BlueOffice.glb",
+  "glbPath": "scene.glb",
+  "spawnPoints": [
+    {
+      "id": "main",
+      "position": { "x": 0, "y": 0, "z": 0 }
+    }
+  ],
+  "bounds": { "width": 30, "height": 10, "depth": 30 },
+  "notes": "BlueOffice exported via UnityGLTF batch export from ST.RemoteScene.BlueOffice"
+}
