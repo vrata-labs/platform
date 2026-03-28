@@ -17,6 +17,7 @@ export interface RoomCreateInput {
   tenantId: string;
   templateId: string;
   name: string;
+  sceneBundleUrl?: string;
   assetIds?: string[];
   guestAllowed?: boolean;
   theme?: {
@@ -39,6 +40,7 @@ export interface RoomRecord {
   tenantId: string;
   templateId: string;
   name: string;
+  sceneBundleUrl?: string;
   assetIds?: string[];
   guestAllowed?: boolean;
   features?: {
@@ -58,6 +60,9 @@ export interface RoomManifestRecord {
   tenantId: string;
   roomId: string;
   template: string;
+  sceneBundle?: {
+    url: string;
+  };
   theme: {
     primaryColor: string;
     accentColor: string;

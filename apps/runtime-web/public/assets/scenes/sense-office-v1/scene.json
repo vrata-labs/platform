@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "sceneId": "sense-office-v1",
+  "label": "SenseTower Office",
+  "source": "/mnt/d/repository/_SenseCapital/SenseTowerVR/Assets/Models/Office/office_1.fbx",
+  "glbPath": "scene.fbx",
+  "spawnPoints": [
+    {
+      "id": "main",
+      "position": { "x": 0, "y": 0, "z": 10 }
+    }
+  ],
+  "bounds": { "width": 40, "height": 10, "depth": 40 },
+  "notes": "Real SenseTower office asset copied from Office model export"
+}

@@ -31,6 +31,7 @@ export interface RoomRecord {
   tenantId: string;
   templateId: string;
   name: string;
+  sceneBundleUrl?: string;
   features: RoomFeatures;
   assetIds: string[];
   theme?: {
@@ -94,6 +95,7 @@ export class MemoryStorage implements Storage {
         tenantId: "demo-tenant",
         templateId: "meeting-room-basic",
         name: "Demo Room",
+        sceneBundleUrl: undefined,
         features: { voice: true, spatialAudio: true, screenShare: true },
         assetIds: [],
         theme: {
@@ -133,14 +135,15 @@ export class MemoryStorage implements Storage {
   async listRooms(): Promise<RoomRecord[]> { return Array.from(this.rooms.values()); }
   async getRoom(roomId: string): Promise<RoomRecord | null> { return this.rooms.get(roomId) ?? null; }
   async createRoom(input: Partial<RoomRecord>): Promise<RoomRecord> {
-    const room: RoomRecord = {
-      roomId: input.roomId ?? crypto.randomUUID(),
-      tenantId: input.tenantId ?? "demo-tenant",
-      templateId: input.templateId ?? "meeting-room-basic",
-      name: input.name ?? "New Room",
-      features: {
-        voice: input.features?.voice ?? true,
-        spatialAudio: input.features?.spatialAudio ?? true,
+      const room: RoomRecord = {
+        roomId: input.roomId ?? crypto.randomUUID(),
+        tenantId: input.tenantId ?? "demo-tenant",
+        templateId: input.templateId ?? "meeting-room-basic",
+        name: input.name ?? "New Room",
+        sceneBundleUrl: input.sceneBundleUrl,
+        features: {
+          voice: input.features?.voice ?? true,
+          spatialAudio: input.features?.spatialAudio ?? true,
         screenShare: input.features?.screenShare ?? false
       },
       assetIds: input.assetIds ?? [],
@@ -158,9 +161,9 @@ export class MemoryStorage implements Storage {
     if (!existing) {
       return null;
     }
-    const updated: RoomRecord = {
-      ...existing,
-      ...input,
+      const updated: RoomRecord = {
+        ...existing,
+        ...input,
       features: {
         ...existing.features,
         ...input.features
@@ -230,6 +233,7 @@ export class PostgresStorage implements Storage {
         tenant_id text not null references tenants(tenant_id),
         template_id text not null references templates(template_id),
       name text not null,
+      scene_bundle_url text,
       features jsonb not null,
       asset_ids jsonb not null default '[]'::jsonb,
       theme jsonb not null default '{"primaryColor":"#5fc8ff","accentColor":"#163354"}'::jsonb
@@ -250,6 +254,7 @@ export class PostgresStorage implements Storage {
         created_at timestamptz not null default now()
       );
     `);
+    await this.pool.query(`alter table rooms add column if not exists scene_bundle_url text`);
     await this.seed();
   }
 
@@ -262,8 +267,8 @@ export class PostgresStorage implements Storage {
       );
     }
     await this.pool.query(
-       `insert into rooms (room_id, tenant_id, template_id, name, features, asset_ids, theme, guest_allowed)
-       values ('demo-room','demo-tenant','meeting-room-basic','Demo Room',$1::jsonb,'[]'::jsonb,'{"primaryColor":"#5fc8ff","accentColor":"#163354"}'::jsonb,true)
+       `insert into rooms (room_id, tenant_id, template_id, name, scene_bundle_url, features, asset_ids, theme, guest_allowed)
+       values ('demo-room','demo-tenant','meeting-room-basic','Demo Room',null,$1::jsonb,'[]'::jsonb,'{"primaryColor":"#5fc8ff","accentColor":"#163354"}'::jsonb,true)
        on conflict do nothing`,
        [JSON.stringify({ voice: true, spatialAudio: true, screenShare: true })]
     );
@@ -308,13 +313,13 @@ export class PostgresStorage implements Storage {
     }));
   }
   async listRooms(): Promise<RoomRecord[]> {
-    const result = await this.pool.query(`select room_id, tenant_id, template_id, name, features, asset_ids, theme, guest_allowed from rooms order by room_id`);
-    return result.rows.map((row: { room_id: string; tenant_id: string; template_id: string; name: string; features: RoomFeatures; asset_ids: string[]; theme: { primaryColor: string; accentColor: string }; guest_allowed: boolean }) => ({ roomId: row.room_id, tenantId: row.tenant_id, templateId: row.template_id, name: row.name, features: row.features, assetIds: row.asset_ids, theme: row.theme, guestAllowed: row.guest_allowed }));
+    const result = await this.pool.query(`select room_id, tenant_id, template_id, name, scene_bundle_url, features, asset_ids, theme, guest_allowed from rooms order by room_id`);
+    return result.rows.map((row: { room_id: string; tenant_id: string; template_id: string; name: string; scene_bundle_url: string | null; features: RoomFeatures; asset_ids: string[]; theme: { primaryColor: string; accentColor: string }; guest_allowed: boolean }) => ({ roomId: row.room_id, tenantId: row.tenant_id, templateId: row.template_id, name: row.name, sceneBundleUrl: row.scene_bundle_url ?? undefined, features: row.features, assetIds: row.asset_ids, theme: row.theme, guestAllowed: row.guest_allowed }));
   }
   async getRoom(roomId: string): Promise<RoomRecord | null> {
-    const result = await this.pool.query(`select room_id, tenant_id, template_id, name, features, asset_ids, theme, guest_allowed from rooms where room_id = $1`, [roomId]);
+    const result = await this.pool.query(`select room_id, tenant_id, template_id, name, scene_bundle_url, features, asset_ids, theme, guest_allowed from rooms where room_id = $1`, [roomId]);
     const row = result.rows[0];
-    return row ? { roomId: row.room_id, tenantId: row.tenant_id, templateId: row.template_id, name: row.name, features: row.features, assetIds: row.asset_ids, theme: row.theme, guestAllowed: row.guest_allowed } : null;
+    return row ? { roomId: row.room_id, tenantId: row.tenant_id, templateId: row.template_id, name: row.name, sceneBundleUrl: row.scene_bundle_url ?? undefined, features: row.features, assetIds: row.asset_ids, theme: row.theme, guestAllowed: row.guest_allowed } : null;
   }
   async createRoom(input: Partial<RoomRecord>): Promise<RoomRecord> {
     const room: RoomRecord = {
@@ -335,8 +340,8 @@ export class PostgresStorage implements Storage {
       guestAllowed: input.guestAllowed ?? true
     };
     await this.pool.query(
-      `insert into rooms (room_id, tenant_id, template_id, name, features, asset_ids, theme, guest_allowed) values ($1,$2,$3,$4,$5::jsonb,$6::jsonb,$7::jsonb,$8)`,
-      [room.roomId, room.tenantId, room.templateId, room.name, JSON.stringify(room.features), JSON.stringify(room.assetIds), JSON.stringify(room.theme), room.guestAllowed]
+      `insert into rooms (room_id, tenant_id, template_id, name, scene_bundle_url, features, asset_ids, theme, guest_allowed) values ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8::jsonb,$9)`,
+      [room.roomId, room.tenantId, room.templateId, room.name, room.sceneBundleUrl ?? null, JSON.stringify(room.features), JSON.stringify(room.assetIds), JSON.stringify(room.theme), room.guestAllowed]
     );
     return room;
   }
@@ -360,8 +365,8 @@ export class PostgresStorage implements Storage {
       guestAllowed: input.guestAllowed ?? existing.guestAllowed ?? true
     };
     await this.pool.query(
-      `update rooms set template_id = $2, name = $3, features = $4::jsonb, asset_ids = $5::jsonb, theme = $6::jsonb, guest_allowed = $7 where room_id = $1`,
-      [roomId, updated.templateId, updated.name, JSON.stringify(updated.features), JSON.stringify(updated.assetIds), JSON.stringify(updated.theme), updated.guestAllowed]
+      `update rooms set template_id = $2, name = $3, scene_bundle_url = $4, features = $5::jsonb, asset_ids = $6::jsonb, theme = $7::jsonb, guest_allowed = $8 where room_id = $1`,
+      [roomId, updated.templateId, updated.name, updated.sceneBundleUrl ?? null, JSON.stringify(updated.features), JSON.stringify(updated.assetIds), JSON.stringify(updated.theme), updated.guestAllowed]
     );
     return updated;
   }

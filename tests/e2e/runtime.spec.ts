@@ -98,6 +98,110 @@ test("room creation API returns a usable room link", async ({ page, request }) =
   await expect(page.locator("#room-name")).toContainText(`showroom-basic - ${room.roomId}`);
 });
 
+test("two rooms load two different scene bundles", async ({ browser, request }) => {
+  const hallRoomResponse = await request.post("/api/rooms", {
+    headers: {
+      "x-noah-admin-token": "test-admin-token"
+    },
+    data: {
+      tenantId: "demo-tenant",
+      templateId: "meeting-room-basic",
+      name: "Hall Scene Room",
+      sceneBundleUrl: "/assets/scenes/the-hall-v1/scene.json"
+    }
+  });
+  expect(hallRoomResponse.ok()).toBeTruthy();
+  const hallRoom = (await hallRoomResponse.json()) as { roomLink: string; roomId: string };
+
+  const officeRoomResponse = await request.post("/api/rooms", {
+    headers: {
+      "x-noah-admin-token": "test-admin-token"
+    },
+    data: {
+      tenantId: "demo-tenant",
+      templateId: "meeting-room-basic",
+      name: "Office Scene Room",
+      sceneBundleUrl: "/assets/scenes/the-office-v1/scene.json"
+    }
+  });
+  expect(officeRoomResponse.ok()).toBeTruthy();
+  const officeRoom = (await officeRoomResponse.json()) as { roomLink: string; roomId: string };
+
+  const hallPage = await browser.newPage();
+  const officePage = await browser.newPage();
+
+  await hallPage.goto(hallRoom.roomLink);
+  await officePage.goto(officeRoom.roomLink);
+  await hallPage.waitForTimeout(3000);
+  await officePage.waitForTimeout(3000);
+
+  await expect(hallPage.locator("#branding-line")).toContainText("Scene: The Hall V1");
+  await expect(officePage.locator("#branding-line")).toContainText("Scene: The Office V1");
+
+  const hallDebug = await hallPage.evaluate(() => (window as Window & { __NOAH_DEBUG__?: { sceneBundleState?: string; sceneBundleUrl?: string; localPosition?: { x: number; z: number } } }).__NOAH_DEBUG__);
+  const officeDebug = await officePage.evaluate(() => (window as Window & { __NOAH_DEBUG__?: { sceneBundleState?: string; sceneBundleUrl?: string; localPosition?: { x: number; z: number } } }).__NOAH_DEBUG__);
+
+  expect(hallDebug?.sceneBundleState).toBe("loaded");
+  expect(officeDebug?.sceneBundleState).toBe("loaded");
+  expect(hallDebug?.sceneBundleUrl).toContain("/assets/scenes/the-hall-v1/scene.json");
+  expect(officeDebug?.sceneBundleUrl).toContain("/assets/scenes/the-office-v1/scene.json");
+
+  await hallPage.close();
+  await officePage.close();
+});
+
+test("two rooms load two different real SenseTower scene assets", async ({ browser, request }) => {
+  const hallRoomResponse = await request.post("/api/rooms", {
+    headers: {
+      "x-noah-admin-token": "test-admin-token"
+    },
+    data: {
+      tenantId: "demo-tenant",
+      templateId: "meeting-room-basic",
+      name: "Sense Hall Room",
+      sceneBundleUrl: "/assets/scenes/sense-hall2-v1/scene.json"
+    }
+  });
+  expect(hallRoomResponse.ok()).toBeTruthy();
+  const hallRoom = (await hallRoomResponse.json()) as { roomLink: string };
+
+  const officeRoomResponse = await request.post("/api/rooms", {
+    headers: {
+      "x-noah-admin-token": "test-admin-token"
+    },
+    data: {
+      tenantId: "demo-tenant",
+      templateId: "meeting-room-basic",
+      name: "Sense Office Room",
+      sceneBundleUrl: "/assets/scenes/sense-office-v1/scene.json"
+    }
+  });
+  expect(officeRoomResponse.ok()).toBeTruthy();
+  const officeRoom = (await officeRoomResponse.json()) as { roomLink: string };
+
+  const hallPage = await browser.newPage();
+  const officePage = await browser.newPage();
+
+  await hallPage.goto(hallRoom.roomLink);
+  await officePage.goto(officeRoom.roomLink);
+  await hallPage.waitForTimeout(5000);
+  await officePage.waitForTimeout(5000);
+
+  await expect(hallPage.locator("#branding-line")).toContainText("Scene: SenseTower Hall 2");
+  await expect(officePage.locator("#branding-line")).toContainText("Scene: SenseTower Office");
+
+  const hallDebug = await hallPage.evaluate(() => (window as Window & { __NOAH_DEBUG__?: { sceneBundleState?: string; sceneBundleUrl?: string } }).__NOAH_DEBUG__);
+  const officeDebug = await officePage.evaluate(() => (window as Window & { __NOAH_DEBUG__?: { sceneBundleState?: string; sceneBundleUrl?: string } }).__NOAH_DEBUG__);
+
+  expect(hallDebug?.sceneBundleState).toBe("loaded");
+  expect(officeDebug?.sceneBundleState).toBe("loaded");
+  expect(hallDebug?.sceneBundleUrl).toContain("/assets/scenes/sense-hall2-v1/scene.json");
+  expect(officeDebug?.sceneBundleUrl).toContain("/assets/scenes/sense-office-v1/scene.json");
+
+  await hallPage.close();
+  await officePage.close();
+});
+
 test("room creation API is forbidden without admin token", async ({ request }) => {
   const response = await request.post("/api/rooms", {
     data: {

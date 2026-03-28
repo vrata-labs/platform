@@ -10,6 +10,7 @@ import { classifyMediaError, classifyRoomStateError, createFaultError, getRuntim
 import { canRetry, createReconnectPolicy, getReconnectDelayMs } from "./reconnect.js";
 import { applyRuntimeIssueState, clearRuntimeIssueState, createRuntimeUiState } from "./runtime-state.js";
 import { applySpatialSettings, createSpatialAudioSettings } from "./spatial-audio.js";
+import { loadSceneBundle } from "./scene-loader.js";
 import { detectXrSupport, getEnterVrVisibility } from "./xr.js";
 
 function fallbackUuid(): string {
@@ -117,6 +118,8 @@ const displaySurface = new THREE.Mesh(
 displaySurface.position.set(0, 2.2, -6.6);
 scene.add(displaySurface);
 
+const fallbackEnvironment: THREE.Object3D[] = [floor, grid, roomBox, displaySurface];
+
 const bodyGeometry = new THREE.CapsuleGeometry(0.24, 0.8, 6, 12);
 const headGeometry = new THREE.SphereGeometry(0.18, 20, 20);
 
@@ -175,8 +178,15 @@ let runtimeFlags = {
   audioJoin: true,
   screenShare: true,
   roomStateRealtime: true,
-  remoteDiagnostics: true
+  remoteDiagnostics: true,
+  sceneBundles: true
 };
+
+function setFallbackEnvironmentVisible(visible: boolean): void {
+  for (const object of fallbackEnvironment) {
+    object.visible = visible;
+  }
+}
 
 function getPresenceCaptureTime(updatedAt: string | undefined, fallbackNow: number): number {
   const parsed = updatedAt ? Date.parse(updatedAt) : Number.NaN;
@@ -327,7 +337,9 @@ const debugState = {
   faultInjection: faultConfig,
   lastPresenceSyncAt: 0,
   lastPresenceRefreshAt: 0,
-  remoteTargets: [] as Array<{ id: string; x: number; z: number }>
+  remoteTargets: [] as Array<{ id: string; x: number; z: number }>,
+  sceneBundleUrl: null as string | null,
+  sceneBundleState: "fallback" as "fallback" | "loaded" | "failed"
 };
 
 const floorMaterial = floor.material as THREE.MeshStandardMaterial;
@@ -1165,10 +1177,12 @@ async function main(): Promise<void> {
     audioJoin: boot.envFlags.audioJoin && boot.voiceEnabled,
     screenShare: boot.envFlags.screenShare && boot.screenShareEnabled,
     roomStateRealtime: boot.envFlags.roomStateRealtime,
-    remoteDiagnostics: boot.envFlags.remoteDiagnostics
+    remoteDiagnostics: boot.envFlags.remoteDiagnostics,
+    sceneBundles: boot.envFlags.sceneBundles
   };
   debugState.featureFlags = runtimeFlags;
   debugState.roomStateUrl = boot.roomStateUrl;
+  debugState.sceneBundleUrl = boot.sceneBundleUrl ?? null;
   setRoomStateStatus(`Room-state: connecting`);
   roomNameEl.textContent = `${boot.template} - ${boot.roomId}`;
   brandingLineEl.textContent = boot.assets.length > 0
@@ -1178,6 +1192,27 @@ async function main(): Promise<void> {
   floorMaterial.color.set(boot.theme.accentColor);
   wallMaterial.color.set(boot.theme.primaryColor);
   scene.fog = new THREE.Fog(new THREE.Color(boot.theme.accentColor).getHex(), 12, 50);
+
+  if (boot.sceneBundleUrl && runtimeFlags.sceneBundles) {
+    try {
+      const loadedScene = await loadSceneBundle({
+        scene,
+        player,
+        bundleUrl: boot.sceneBundleUrl
+      });
+      setFallbackEnvironmentVisible(false);
+      debugState.sceneBundleState = "loaded";
+      brandingLineEl.textContent = `${brandingLineEl.textContent} | Scene: ${loadedScene.manifest.label}`;
+      void reportDiagnostics("scene_bundle_loaded");
+    } catch (error) {
+      console.error(error);
+      setFallbackEnvironmentVisible(true);
+      debugState.sceneBundleState = "failed";
+      brandingLineEl.textContent = `${brandingLineEl.textContent} | Scene bundle fallback active`;
+      void reportDiagnostics("scene_bundle_failed");
+    }
+  }
+
   setStatus(`Joined as ${displayName}`);
   startShareButton.disabled = !runtimeFlags.screenShare && !shareMockEnabled;
   joinAudioButton.disabled = !runtimeFlags.audioJoin;

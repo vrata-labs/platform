@@ -1,0 +1,61 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+
+import { parseSceneBundleManifest, pickSceneSpawnPoint, resolveSceneAssetUrl } from "./scene-bundle.js";
+
+test("parseSceneBundleManifest accepts valid v1 manifest", () => {
+  const manifest = parseSceneBundleManifest({
+    schemaVersion: 1,
+    sceneId: "sense-hall",
+    label: "Sense Hall",
+    source: "sensetower",
+    glbPath: "scene.glb",
+    spawnPoints: [
+      {
+        id: "main",
+        position: { x: 1, y: 0, z: -2 }
+      }
+    ],
+    bounds: { width: 20, height: 8, depth: 20 },
+    preview: "preview.jpg"
+  });
+
+  assert.equal(manifest.sceneId, "sense-hall");
+  assert.equal(pickSceneSpawnPoint(manifest)?.id, "main");
+  assert.equal(resolveSceneAssetUrl("https://example.com/scenes/hall/scene.json", manifest.glbPath), "https://example.com/scenes/hall/scene.glb");
+});
+
+test("resolveSceneAssetUrl supports non-gltf scene assets too", () => {
+  assert.equal(
+    resolveSceneAssetUrl("https://example.com/scenes/sense-hall2-v1/scene.json", "scene.fbx"),
+    "https://example.com/scenes/sense-hall2-v1/scene.fbx"
+  );
+});
+
+test("parseSceneBundleManifest rejects unknown schema version", () => {
+  assert.throws(
+    () => parseSceneBundleManifest({
+      schemaVersion: 2,
+      sceneId: "sense-hall",
+      label: "Sense Hall",
+      source: "sensetower",
+      glbPath: "scene.glb",
+      spawnPoints: []
+    }),
+    /unsupported_scene_bundle_schema/
+  );
+});
+
+test("parseSceneBundleManifest rejects invalid spawn point payload", () => {
+  assert.throws(
+    () => parseSceneBundleManifest({
+      schemaVersion: 1,
+      sceneId: "sense-hall",
+      label: "Sense Hall",
+      source: "sensetower",
+      glbPath: "scene.glb",
+      spawnPoints: [{ id: "main", position: { x: 1, y: "bad", z: 0 } }]
+    }),
+    /invalid_scene_bundle_spawn_position/
+  );
+});

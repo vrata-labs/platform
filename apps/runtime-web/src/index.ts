@@ -1,6 +1,9 @@
 interface RoomManifest {
   roomId: string;
   template: string;
+  sceneBundle?: {
+    url: string;
+  };
   realtime: {
     roomStateUrl: string;
   };
@@ -39,6 +42,7 @@ interface RuntimeHealthResponse {
     screenShareEnabled?: boolean;
     roomStateRealtimeEnabled?: boolean;
     remoteDiagnosticsEnabled?: boolean;
+    sceneBundlesEnabled?: boolean;
   };
 }
 
@@ -90,6 +94,7 @@ export async function fetchRoomManifest(apiBaseUrl: string, roomId: string): Pro
 export interface RuntimeBootResult {
   roomId: string;
   template: string;
+  sceneBundleUrl?: string;
   roomStateUrl: string;
   theme: {
     primaryColor: string;
@@ -113,6 +118,7 @@ export interface RuntimeBootResult {
     screenShare: boolean;
     roomStateRealtime: boolean;
     remoteDiagnostics: boolean;
+    sceneBundles: boolean;
   };
 }
 
@@ -146,6 +152,7 @@ export async function bootRuntime(
   return {
     roomId: manifest.roomId,
     template: manifest.template,
+    sceneBundleUrl: manifest.sceneBundle?.url,
     roomStateUrl: manifest.realtime.roomStateUrl,
     theme: manifest.theme,
     assets: manifest.assets,
@@ -159,7 +166,8 @@ export async function bootRuntime(
       audioJoin: healthFeatures.voiceEnabled ?? true,
       screenShare: healthFeatures.screenShareEnabled ?? true,
       roomStateRealtime: healthFeatures.roomStateRealtimeEnabled ?? true,
-      remoteDiagnostics: healthFeatures.remoteDiagnosticsEnabled ?? true
+      remoteDiagnostics: healthFeatures.remoteDiagnosticsEnabled ?? true,
+      sceneBundles: healthFeatures.sceneBundlesEnabled ?? true
     }
   };
 }

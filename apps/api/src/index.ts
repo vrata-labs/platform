@@ -21,6 +21,9 @@ interface RoomManifest {
   tenantId: string;
   roomId: string;
   template: string;
+  sceneBundle?: {
+    url: string;
+  };
   realtime: {
     roomStateUrl: string;
   };
@@ -97,6 +100,7 @@ function defaultManifest(roomId: string): RoomManifest {
     tenantId: "demo-tenant",
     roomId,
     template: "meeting-room-basic",
+    sceneBundle: undefined,
     realtime: {
       roomStateUrl: process.env.ROOM_STATE_PUBLIC_URL ?? "ws://127.0.0.1:2567"
     },
@@ -171,6 +175,7 @@ async function buildManifest(roomId: string): Promise<RoomManifest> {
     tenantId: room.tenantId,
     roomId: room.roomId,
     template: room.templateId,
+    sceneBundle: room.sceneBundleUrl ? { url: room.sceneBundleUrl } : undefined,
     realtime: {
       roomStateUrl: process.env.ROOM_STATE_PUBLIC_URL ?? `ws://state-${process.env.API_PUBLIC_URL?.replace(/^https?:\/\//, "") ?? "127.0.0.1:2567"}`
     },
@@ -326,6 +331,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
         spatialAudioEnabled: process.env.FEATURE_SPATIAL_AUDIO !== "false",
         roomStateRealtimeEnabled: process.env.FEATURE_ROOM_STATE_REALTIME !== "false",
         remoteDiagnosticsEnabled: process.env.FEATURE_REMOTE_DIAGNOSTICS !== "false",
+        sceneBundlesEnabled: process.env.FEATURE_SCENE_BUNDLES !== "false",
         postgresEnabled: Boolean(process.env.POSTGRES_URL),
         controlPlaneAuthEnabled: Boolean(controlPlaneAdminToken)
       },
