@@ -1,23 +1,54 @@
-export interface ParticipantState {
-  participantId: string;
-  x: number;
-  y: number;
-  z: number;
-  mode: "desktop" | "mobile" | "vr";
-}
+import type { PresenceState, TransformState } from "./schema.js";
+
+export type ParticipantState = PresenceState;
 
 export interface RoomState {
   roomId: string;
   participants: ParticipantState[];
 }
 
+function mergeTransformState(current: TransformState | undefined, next: TransformState | undefined): TransformState | undefined {
+  if (!current && !next) {
+    return undefined;
+  }
+  return {
+    x: next?.x ?? current?.x ?? 0,
+    y: next?.y ?? current?.y ?? 0,
+    z: next?.z ?? current?.z ?? 0
+  };
+}
+
 export function createParticipantState(participantId: string): ParticipantState {
   return {
     participantId,
-    x: 0,
-    y: 0,
-    z: 0,
-    mode: "desktop"
+    displayName: participantId,
+    mode: "desktop",
+    rootTransform: { x: 0, y: 0, z: 0 },
+    bodyTransform: { x: 0, y: 0.92, z: 0 },
+    headTransform: { x: 0, y: 1.58, z: 0 },
+    muted: true,
+    activeMedia: {
+      audio: false,
+      screenShare: false
+    },
+    updatedAt: new Date(0).toISOString()
+  };
+}
+
+export function mergeParticipantState(current: ParticipantState, nextState: Partial<ParticipantState>): ParticipantState {
+  return {
+    participantId: current.participantId,
+    displayName: nextState.displayName ?? current.displayName,
+    mode: nextState.mode ?? current.mode,
+    rootTransform: mergeTransformState(current.rootTransform, nextState.rootTransform) ?? current.rootTransform,
+    bodyTransform: mergeTransformState(current.bodyTransform, nextState.bodyTransform),
+    headTransform: mergeTransformState(current.headTransform, nextState.headTransform),
+    muted: nextState.muted ?? current.muted,
+    activeMedia: {
+      audio: nextState.activeMedia?.audio ?? current.activeMedia.audio,
+      screenShare: nextState.activeMedia?.screenShare ?? current.activeMedia.screenShare
+    },
+    updatedAt: nextState.updatedAt ?? current.updatedAt
   };
 }
 
@@ -45,10 +76,20 @@ export function leaveRoom(state: RoomState, participantId: string): RoomState {
   };
 }
 
-export function updateParticipantState(state: RoomState, nextState: ParticipantState): RoomState {
+export function updateParticipantState(state: RoomState, nextState: Partial<ParticipantState> & { participantId: string }): RoomState {
+  const current = state.participants.find((item) => item.participantId === nextState.participantId);
+  const merged = mergeParticipantState(current ?? createParticipantState(nextState.participantId), nextState);
+
+  if (!current) {
+    return {
+      ...state,
+      participants: [...state.participants, merged]
+    };
+  }
+
   return {
     ...state,
-    participants: state.participants.map((item) => item.participantId === nextState.participantId ? nextState : item)
+    participants: state.participants.map((item) => item.participantId === nextState.participantId ? merged : item)
   };
 }
 

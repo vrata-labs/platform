@@ -87,6 +87,10 @@ const storagePromise = createStorage();
 
 const presenceByRoom = new Map<string, Map<string, PresenceRecord>>();
 
+function logEvent(event: Record<string, unknown>): void {
+  process.stdout.write(`${JSON.stringify(event)}\n`);
+}
+
 function defaultManifest(roomId: string): RoomManifest {
   return {
     schemaVersion: 1,
@@ -312,13 +316,23 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     json(response, 200, {
       status: "ok",
       service: "api",
+      env: process.env.NODE_ENV ?? "development",
       port: apiPort,
+      timestamp: new Date().toISOString(),
       features: {
         xrEnabled: process.env.FEATURE_XR !== "false",
+        voiceEnabled: process.env.FEATURE_VOICE !== "false",
         screenShareEnabled: process.env.FEATURE_SCREEN_SHARE !== "false",
         spatialAudioEnabled: process.env.FEATURE_SPATIAL_AUDIO !== "false",
+        roomStateRealtimeEnabled: process.env.FEATURE_ROOM_STATE_REALTIME !== "false",
+        remoteDiagnosticsEnabled: process.env.FEATURE_REMOTE_DIAGNOSTICS !== "false",
         postgresEnabled: Boolean(process.env.POSTGRES_URL),
         controlPlaneAuthEnabled: Boolean(controlPlaneAdminToken)
+      },
+      dependencies: {
+        postgres: Boolean(process.env.POSTGRES_URL),
+        livekit: Boolean(process.env.LIVEKIT_URL),
+        roomStatePublicUrl: process.env.ROOM_STATE_PUBLIC_URL ?? "ws://127.0.0.1:2567"
       }
     });
     return;
@@ -545,6 +559,15 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
 export function startApiServer(port = apiPort) {
   const server = createServer((request, response) => {
     handleRequest(request, response).catch((error: unknown) => {
+      logEvent({
+        service: "api",
+        env: process.env.NODE_ENV ?? "development",
+        errorCode: "internal_error",
+        path: request.url ?? "",
+        method: request.method ?? "GET",
+        message: error instanceof Error ? error.message : "unknown",
+        timestamp: new Date().toISOString()
+      });
       json(response, 500, { error: "internal_error", message: error instanceof Error ? error.message : "unknown" });
     });
   });

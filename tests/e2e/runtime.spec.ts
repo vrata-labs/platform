@@ -228,9 +228,9 @@ test("control plane uploads asset metadata through the browser UI", async ({ pag
   await page.fill("#asset-processed-url-input", "https://cdn.example.com/test-logo.glb");
   await page.click("#create-asset");
   await expect(page.locator("#publish-status")).toContainText("published");
-  await expect(page.locator("#assets-list li").first()).toContainText("https://example.com/test-logo.glb");
-  await expect(page.locator("#assets-list li").first()).toContainText("https://cdn.example.com/test-logo.glb");
-  await expect(page.locator("#assets-list li").first()).toContainText("validated");
+  await expect(page.locator("#assets-list")).toContainText("https://example.com/test-logo.glb");
+  await expect(page.locator("#assets-list")).toContainText("https://cdn.example.com/test-logo.glb");
+  await expect(page.locator("#assets-list")).toContainText("validated");
 });
 
 test("control plane can update and delete asset without room dependencies", async ({ page }) => {
@@ -240,7 +240,7 @@ test("control plane can update and delete asset without room dependencies", asyn
   await page.fill("#asset-url-input", "https://example.com/mutable.glb");
   await page.click("#create-asset");
   await expect(page.locator("#publish-status")).toContainText("published");
-  await page.locator("#assets-list button").first().click();
+  await page.locator('#assets-list button').filter({ hasText: 'https://example.com/mutable.glb' }).first().click();
   await page.fill("#asset-url-input", "https://example.com/updated.glb");
   await page.fill("#asset-processed-url-input", "https://cdn.example.com/updated.glb");
   await page.selectOption("#asset-status-select", "pending");
@@ -295,7 +295,7 @@ test("control plane can attach selected assets to a room", async ({ page }) => {
   await page.fill("#room-name-input", "Asset Attached Room");
   await page.click("#create-room");
   await expect(page.locator("#publish-status")).toContainText("published");
-  await expect(page.locator("#rooms-list li").first()).toContainText("assets:1");
+  await expect(page.locator("#rooms-list")).toContainText("assets:1");
   const href = await page.locator("#room-link").getAttribute("href");
   expect(href).toBeTruthy();
   await page.goto(String(href));
@@ -429,4 +429,42 @@ test("mock screen share updates UI and diagnostics", async ({ page, request }) =
   await page.waitForTimeout(1000);
   const debugAfter = await page.evaluate(() => (window as Window & { __NOAH_DEBUG__?: { screenShareState: string } }).__NOAH_DEBUG__);
   expect(debugAfter?.screenShareState).toBe("stopped");
+});
+
+test("fault-injected mic denied keeps room usable without audio", async ({ page, request }) => {
+  await page.goto("/rooms/demo-room?failaudio=mic_denied&debug=1");
+  await page.waitForTimeout(2500);
+  await page.click("#join-audio");
+  await page.waitForTimeout(1000);
+
+  await expect(page.locator("#status-line")).toContainText("Microphone blocked");
+
+  const debug = await page.evaluate(() => (window as Window & {
+    __NOAH_DEBUG__?: { issueCode?: string | null; degradedMode?: string; audioState?: string };
+  }).__NOAH_DEBUG__);
+  expect(debug?.issueCode).toBe("mic_denied");
+  expect(debug?.degradedMode).toBe("audio_unavailable");
+  expect(debug?.audioState).toBe("degraded");
+
+  const diagnosticsResponse = await request.get("/api/rooms/demo-room/diagnostics");
+  const diagnostics = (await diagnosticsResponse.json()) as { items: Array<{ note?: string; issueCode?: string }> };
+  expect(diagnostics.items.some((item) => item.note === "mic_denied" && item.issueCode === "mic_denied")).toBeTruthy();
+});
+
+test("fault-injected room-state failure falls back to API mode", async ({ page, request }) => {
+  await page.goto("/rooms/demo-room?failroomstate=1&debug=1");
+  await page.waitForTimeout(3000);
+
+  await expect(page.locator("#room-state-line")).toContainText("fallback API");
+
+  const debug = await page.evaluate(() => (window as Window & {
+    __NOAH_DEBUG__?: { issueCode?: string | null; roomStateMode?: string; degradedMode?: string };
+  }).__NOAH_DEBUG__);
+  expect(debug?.issueCode).toBe("room_state_failed");
+  expect(debug?.roomStateMode).toBe("fallback");
+  expect(debug?.degradedMode).toBe("api_fallback");
+
+  const presenceResponse = await request.get("/api/rooms/demo-room/presence");
+  const presence = (await presenceResponse.json()) as { items: Array<{ participantId: string }> };
+  expect(presence.items.length).toBeGreaterThan(0);
 });

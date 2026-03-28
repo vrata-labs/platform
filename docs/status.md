@@ -59,7 +59,7 @@
 - Result: two-way room presence works; VR movement works; web and VR clients now see each other's motion more smoothly than before.
 - Improvement confirmed: previous severe self-avatar jitter and remote teleporting were reduced after buffered motion and XR input fixes.
 - Remaining issue: motion is better but still not perfectly smooth; voice behavior still needs deeper validation/tuning.
-- Next focus: stabilize motion further with explicit root/head/body replication model and then revisit spatial audio / voice diagnostics.
+- Next focus: validate the explicit root/head/body replication model in staging and then revisit spatial audio / voice diagnostics.
 
 ## Current hardening snapshot
 

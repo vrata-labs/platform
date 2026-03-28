@@ -26,3 +26,12 @@ test("sampleMotion clamps to newest sample after buffer end", () => {
     capturedAtMs: 1400
   });
 });
+
+test("pushMotionSample replaces matching timestamps instead of duplicating them", () => {
+  let track = createMotionTrack();
+  track = pushMotionSample(track, { x: 1, z: 2, capturedAtMs: 1000 });
+  track = pushMotionSample(track, { x: 5, z: 6, capturedAtMs: 1000 });
+
+  assert.equal(track.samples.length, 1);
+  assert.deepEqual(track.samples[0], { x: 5, z: 6, capturedAtMs: 1000 });
+});

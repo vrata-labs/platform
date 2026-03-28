@@ -2,11 +2,16 @@ import { createServer } from "node:http";
 
 import { WebSocketServer, type WebSocket } from "ws";
 
-import { createParticipantState, createRoomState, joinRoom, leaveRoom, serializeRoomState, updateParticipantState, type ParticipantState, type RoomState } from "./state.js";
+import type { PresenceState } from "./schema.js";
+import { createRoomState, joinRoom, leaveRoom, serializeRoomState, updateParticipantState, type RoomState } from "./state.js";
 
 export interface RoomStateServer {
   rooms: Map<string, RoomState>;
   clients: Map<string, Set<WebSocket>>;
+}
+
+function logEvent(event: Record<string, unknown>): void {
+  process.stdout.write(`${JSON.stringify(event)}\n`);
 }
 
 export function createRoomStateServer(): RoomStateServer {
@@ -55,7 +60,7 @@ export function disconnectParticipant(server: RoomStateServer, roomId: string, p
   broadcastRoom(server, roomId);
 }
 
-export function applyParticipantUpdate(server: RoomStateServer, roomId: string, nextState: ParticipantState): void {
+export function applyParticipantUpdate(server: RoomStateServer, roomId: string, nextState: Partial<PresenceState> & { participantId: string }): void {
   const room = ensureRoom(server, roomId);
   server.rooms.set(roomId, updateParticipantState(room, nextState));
   broadcastRoom(server, roomId);
@@ -66,7 +71,19 @@ export function startRoomStateService(port = Number.parseInt(process.env.ROOM_ST
   const httpServer = createServer((request, response) => {
     if (request.url === "/health") {
       response.writeHead(200, { "content-type": "application/json; charset=utf-8" });
-      response.end(JSON.stringify({ status: "ok", service: "room-state", port }));
+      response.end(JSON.stringify({
+        status: "ok",
+        service: "room-state",
+        env: process.env.NODE_ENV ?? "development",
+        port,
+        timestamp: new Date().toISOString(),
+        dependencies: {
+          websocketServer: true
+        },
+        featureFlags: {
+          realtimeEnabled: process.env.FEATURE_ROOM_STATE_REALTIME !== "false"
+        }
+      }));
       return;
     }
     response.writeHead(404).end();
@@ -81,12 +98,14 @@ export function startRoomStateService(port = Number.parseInt(process.env.ROOM_ST
     connectParticipant(authority, roomId, participantId, socket);
 
     socket.on("message", (raw) => {
-      const payload = JSON.parse(String(raw)) as { type?: string; participant?: Partial<ParticipantState> };
+      const payload = JSON.parse(String(raw)) as { type?: string; participant?: Partial<PresenceState> };
       if (payload.type !== "participant_update") {
         return;
       }
+      if (!payload.participant) {
+        return;
+      }
       applyParticipantUpdate(authority, roomId, {
-        ...createParticipantState(participantId),
         ...payload.participant,
         participantId
       });
@@ -94,6 +113,18 @@ export function startRoomStateService(port = Number.parseInt(process.env.ROOM_ST
 
     socket.on("close", () => {
       disconnectParticipant(authority, roomId, participantId, socket);
+    });
+
+    socket.on("error", (error) => {
+      logEvent({
+        service: "room-state",
+        env: process.env.NODE_ENV ?? "development",
+        errorCode: "socket_error",
+        roomId,
+        participantId,
+        message: error.message,
+        timestamp: new Date().toISOString()
+      });
     });
   });
 

@@ -32,6 +32,16 @@ interface MediaTokenResponse {
   livekitUrl: string;
 }
 
+interface RuntimeHealthResponse {
+  features?: {
+    xrEnabled?: boolean;
+    voiceEnabled?: boolean;
+    screenShareEnabled?: boolean;
+    roomStateRealtimeEnabled?: boolean;
+    remoteDiagnosticsEnabled?: boolean;
+  };
+}
+
 export interface PresenceState {
   participantId: string;
   displayName: string;
@@ -97,6 +107,13 @@ export interface RuntimeBootResult {
   spatialAudioEnabled: boolean;
   screenShareEnabled: boolean;
   guestAllowed: boolean;
+  envFlags: {
+    enterVr: boolean;
+    audioJoin: boolean;
+    screenShare: boolean;
+    roomStateRealtime: boolean;
+    remoteDiagnostics: boolean;
+  };
 }
 
 export interface VoiceSessionPlan {
@@ -107,12 +124,24 @@ export interface VoiceSessionPlan {
   spatialAudioEnabled: boolean;
 }
 
+export async function fetchRuntimeHealth(apiBaseUrl: string): Promise<RuntimeHealthResponse> {
+  const response = await fetch(new URL("/health", apiBaseUrl));
+
+  if (!response.ok) {
+    return {};
+  }
+
+  return (await response.json()) as RuntimeHealthResponse;
+}
+
 export async function bootRuntime(
   apiBaseUrl: string,
   roomId: string,
   userAgent: string
 ): Promise<RuntimeBootResult> {
   const manifest = await fetchRoomManifest(apiBaseUrl, roomId);
+  const health = await fetchRuntimeHealth(apiBaseUrl);
+  const healthFeatures = health.features ?? {};
 
   return {
     roomId: manifest.roomId,
@@ -124,7 +153,14 @@ export async function bootRuntime(
     voiceEnabled: manifest.features.voice,
     spatialAudioEnabled: manifest.features.spatialAudio,
     screenShareEnabled: manifest.features.screenShare,
-    guestAllowed: manifest.access.guestAllowed
+    guestAllowed: manifest.access.guestAllowed,
+    envFlags: {
+      enterVr: healthFeatures.xrEnabled ?? true,
+      audioJoin: healthFeatures.voiceEnabled ?? true,
+      screenShare: healthFeatures.screenShareEnabled ?? true,
+      roomStateRealtime: healthFeatures.roomStateRealtimeEnabled ?? true,
+      remoteDiagnostics: healthFeatures.remoteDiagnosticsEnabled ?? true
+    }
   };
 }
 

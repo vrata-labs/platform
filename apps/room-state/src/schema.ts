@@ -4,11 +4,12 @@ export interface TransformState {
   z: number;
 }
 
+export type PresenceMode = "desktop" | "mobile" | "vr";
+
 export interface PresenceState {
   participantId: string;
   displayName: string;
-  role: "guest" | "member" | "host" | "admin";
-  mode: "desktop" | "mobile" | "vr";
+  mode: PresenceMode;
   rootTransform: TransformState;
   bodyTransform?: TransformState;
   headTransform?: TransformState;
@@ -17,4 +18,5 @@ export interface PresenceState {
     audio: boolean;
     screenShare: boolean;
   };
+  updatedAt: string;
 }

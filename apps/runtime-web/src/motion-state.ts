@@ -13,7 +13,16 @@ export function createMotionTrack(): MotionTrack {
 }
 
 export function pushMotionSample(track: MotionTrack, sample: MotionSample, maxSamples = 20): MotionTrack {
-  const samples = [...track.samples, sample].sort((left, right) => left.capturedAtMs - right.capturedAtMs);
+  const samples = [...track.samples];
+  const existingIndex = samples.findIndex((item) => item.capturedAtMs === sample.capturedAtMs);
+
+  if (existingIndex >= 0) {
+    samples[existingIndex] = sample;
+  } else {
+    samples.push(sample);
+    samples.sort((left, right) => left.capturedAtMs - right.capturedAtMs);
+  }
+
   while (samples.length > maxSamples) {
     samples.shift();
   }

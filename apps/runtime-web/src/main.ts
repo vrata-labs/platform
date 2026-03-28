@@ -6,6 +6,9 @@ import { bootRuntime, listPresence, planVoiceSession, removePresence, upsertPres
 import { applySnapTurn, computeKeyboardDirection, rotateFlatVector, sanitizeXrAxes, stepFlatMovement } from "./movement.js";
 import { createMotionTrack, pushMotionSample, sampleMotion, type MotionTrack } from "./motion-state.js";
 import { connectRoomState, sendParticipantUpdate, type RoomStateClient, type RoomStateSnapshot } from "./room-state-client.js";
+import { classifyMediaError, classifyRoomStateError, createFaultError, getRuntimeIssue, shouldRetryConnection, type RuntimeIssue } from "./runtime-errors.js";
+import { canRetry, createReconnectPolicy, getReconnectDelayMs } from "./reconnect.js";
+import { applyRuntimeIssueState, clearRuntimeIssueState, createRuntimeUiState } from "./runtime-state.js";
 import { applySpatialSettings, createSpatialAudioSettings } from "./spatial-audio.js";
 import { detectXrSupport, getEnterVrVisibility } from "./xr.js";
 
@@ -38,6 +41,11 @@ const query = new URLSearchParams(window.location.search);
 const debugEnabled = query.get("debug") === "1";
 const botMode = query.get("bot") ?? "off";
 const shareMockEnabled = query.get("sharemock") === "1";
+const faultConfig = {
+  audio: query.get("failaudio") as RuntimeIssue["code"] | null,
+  roomState: query.get("failroomstate") === "1",
+  xrUnavailable: query.get("failxr") === "1"
+};
 const participantId = getParticipantId();
 const displayName = localStorage.getItem("noah.displayName") ?? `Guest-${participantId.slice(0, 4)}`;
 localStorage.setItem("noah.displayName", displayName);
@@ -146,6 +154,11 @@ let roomStateClient: RoomStateClient | null = null;
 let roomStateConnected = false;
 let roomStateReconnectTimer: number | null = null;
 let audioContext: AudioContext | null = null;
+const roomStateReconnectPolicy = createReconnectPolicy({
+  maxRetries: Number.parseInt(query.get("roomstateretries") ?? "3", 10),
+  baseDelayMs: Number.parseInt(query.get("roomstatedelay") ?? "1000", 10),
+  maxDelayMs: Number.parseInt(query.get("roomstatemaxdelay") ?? "8000", 10)
+});
 
 interface RemoteAudioNode {
   participantId: string;
@@ -156,6 +169,19 @@ interface RemoteAudioNode {
 }
 
 const remoteAudioNodes = new Map<string, RemoteAudioNode>();
+let runtimeUiState = createRuntimeUiState();
+let runtimeFlags = {
+  enterVr: true,
+  audioJoin: true,
+  screenShare: true,
+  roomStateRealtime: true,
+  remoteDiagnostics: true
+};
+
+function getPresenceCaptureTime(updatedAt: string | undefined, fallbackNow: number): number {
+  const parsed = updatedAt ? Date.parse(updatedAt) : Number.NaN;
+  return Number.isFinite(parsed) ? parsed : fallbackNow;
+}
 
 function applySnapshotParticipants(people: PresenceState[]): void {
   const activeIds = new Set<string>();
@@ -176,21 +202,22 @@ function applySnapshotParticipants(people: PresenceState[]): void {
       body: createMotionTrack(),
       head: createMotionTrack()
     };
+    const capturedAtMs = getPresenceCaptureTime(person.updatedAt, Date.now());
     remoteMotionTracks.set(person.participantId, {
       root: pushMotionSample(current.root, {
         x: person.rootTransform.x,
         z: person.rootTransform.z,
-        capturedAtMs: Date.now()
+        capturedAtMs
       }),
       body: pushMotionSample(current.body, {
         x: person.bodyTransform?.x ?? person.rootTransform.x,
         z: person.bodyTransform?.z ?? person.rootTransform.z,
-        capturedAtMs: Date.now()
+        capturedAtMs
       }),
       head: pushMotionSample(current.head, {
         x: person.headTransform?.x ?? person.rootTransform.x,
         z: person.headTransform?.z ?? person.rootTransform.z,
-        capturedAtMs: Date.now()
+        capturedAtMs
       })
     });
     if (entity.body.position.lengthSq() === 0) {
@@ -291,6 +318,13 @@ const debugState = {
   localPosition: { x: 0, z: 6 },
   xrAxes: { moveX: 0, moveY: 0, turnX: 0 },
   botMode,
+  issueCode: null as RuntimeIssue["code"] | null,
+  issueSeverity: null as RuntimeIssue["severity"] | null,
+  degradedMode: "none",
+  retryCount: 0,
+  lastRecoveryAction: "none",
+  featureFlags: runtimeFlags,
+  faultInjection: faultConfig,
   lastPresenceSyncAt: 0,
   lastPresenceRefreshAt: 0,
   remoteTargets: [] as Array<{ id: string; x: number; z: number }>
@@ -309,6 +343,58 @@ function setRoomStateStatus(message: string): void {
   roomStateLineEl.textContent = message;
 }
 
+function commitRuntimeUiState(nextState: ReturnType<typeof createRuntimeUiState>, updateStatus = true): void {
+  runtimeUiState = nextState;
+  if (updateStatus) {
+    setStatus(nextState.statusLine);
+  } else {
+    debugState.statusLine = nextState.statusLine;
+  }
+  debugState.audioState = nextState.audioState;
+  debugState.roomStateMode = nextState.roomStateMode;
+  debugState.issueCode = nextState.issueCode;
+  debugState.issueSeverity = nextState.issueSeverity;
+  debugState.degradedMode = nextState.degradedMode;
+  debugState.retryCount = nextState.retryCount;
+  debugState.lastRecoveryAction = nextState.lastRecoveryAction;
+}
+
+function applyIssue(issue: RuntimeIssue, input: {
+  degradedMode: string;
+  lastRecoveryAction: string;
+  audioState?: string;
+  roomStateMode?: string;
+  incrementRetry?: boolean;
+  roomStateLabel?: string;
+  updateStatus?: boolean;
+}): void {
+  if (input.roomStateLabel) {
+    setRoomStateStatus(input.roomStateLabel);
+  }
+  commitRuntimeUiState(applyRuntimeIssueState(runtimeUiState, {
+    statusLine: issue.userMessage,
+    issueCode: issue.code,
+    issueSeverity: issue.severity,
+    degradedMode: input.degradedMode,
+    audioState: input.audioState,
+    roomStateMode: input.roomStateMode,
+    lastRecoveryAction: input.lastRecoveryAction,
+    incrementRetry: input.incrementRetry
+  }), input.updateStatus ?? true);
+}
+
+function clearIssue(statusLine: string): void {
+  commitRuntimeUiState(clearRuntimeIssueState(runtimeUiState, statusLine));
+}
+
+function clearAudioIssue(statusLine: string): void {
+  if (runtimeUiState.issueCode === "mic_denied" || runtimeUiState.issueCode === "no_audio_device" || runtimeUiState.issueCode === "livekit_failed") {
+    clearIssue(statusLine);
+  } else {
+    setStatus(statusLine);
+  }
+}
+
 function clearRoomStateReconnect(): void {
   if (roomStateReconnectTimer !== null) {
     window.clearTimeout(roomStateReconnectTimer);
@@ -321,12 +407,29 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
   debugState.roomStateMode = "connecting";
   setRoomStateStatus("Room-state: connecting");
 
+  if (!runtimeFlags.roomStateRealtime || faultConfig.roomState) {
+    const issue = getRuntimeIssue("room_state_failed");
+    roomStateConnected = false;
+    debugState.roomStateConnected = false;
+    applyIssue(issue, {
+      degradedMode: "api_fallback",
+      roomStateMode: "fallback",
+      lastRecoveryAction: "fallback_api",
+      roomStateLabel: "Room-state: fallback API"
+    });
+    void reportDiagnostics(issue.diagnosticsNote);
+    return;
+  }
+
   roomStateClient = connectRoomState(roomStateUrl, roomId, participantId, {
     onOpen: () => {
       roomStateConnected = true;
       debugState.roomStateConnected = true;
       debugState.roomStateMode = "connected";
       setRoomStateStatus("Room-state: connected");
+      if (runtimeUiState.issueCode === "room_state_failed") {
+        clearIssue(debugState.audioState === "connected-passive" ? `Joined as ${displayName}` : debugState.statusLine);
+      }
       void reportDiagnostics("room_state_connected");
     },
     onRoomState: (snapshot: RoomStateSnapshot) => {
@@ -337,21 +440,43 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
     },
     onError: (error: unknown) => {
       console.error(error);
+      const issue = classifyRoomStateError(error);
       roomStateConnected = false;
       debugState.roomStateConnected = false;
-      debugState.roomStateMode = "fallback";
-      setRoomStateStatus("Room-state: fallback API");
+      applyIssue(issue, {
+        degradedMode: "api_fallback",
+        roomStateMode: "fallback",
+        lastRecoveryAction: "fallback_api",
+        roomStateLabel: "Room-state: fallback API"
+      });
+      void reportDiagnostics(issue.diagnosticsNote);
     },
     onClose: () => {
+      const issue = getRuntimeIssue("room_state_failed");
       roomStateConnected = false;
       debugState.roomStateConnected = false;
-      debugState.roomStateMode = "reconnecting";
-      setRoomStateStatus("Room-state: reconnecting");
+      applyIssue(issue, {
+        degradedMode: "api_fallback",
+        roomStateMode: "reconnecting",
+        lastRecoveryAction: "retry_room_state",
+        incrementRetry: true,
+        roomStateLabel: "Room-state: reconnecting"
+      });
       void reportDiagnostics("room_state_disconnected");
       clearRoomStateReconnect();
-      roomStateReconnectTimer = window.setTimeout(() => {
-        connectRoomStateWithRetry(roomStateUrl);
-      }, 2000);
+      if (shouldRetryConnection(issue.code) && canRetry(debugState.retryCount, roomStateReconnectPolicy)) {
+        const delayMs = getReconnectDelayMs(debugState.retryCount, roomStateReconnectPolicy);
+        roomStateReconnectTimer = window.setTimeout(() => {
+          connectRoomStateWithRetry(roomStateUrl);
+        }, delayMs);
+        return;
+      }
+      applyIssue(issue, {
+        degradedMode: "api_fallback",
+        roomStateMode: "fallback",
+        lastRecoveryAction: "room_state_retry_exhausted",
+        roomStateLabel: "Room-state: fallback API"
+      });
     }
   });
 }
@@ -385,6 +510,9 @@ function deriveBodyTransform(root: { x: number; z: number }, head: { x: number; 
 }
 
 async function reportDiagnostics(note?: string): Promise<void> {
+  if (!runtimeFlags.remoteDiagnostics) {
+    return;
+  }
   await fetch(new URL(`/api/rooms/${roomId}/diagnostics`, apiBaseUrl), {
     method: "POST",
     headers: {
@@ -402,8 +530,15 @@ async function reportDiagnostics(note?: string): Promise<void> {
       xrAxes: debugState.xrAxes,
       remoteAvatarCount: debugState.remoteAvatarCount,
       remoteTargets: debugState.remoteTargets,
+      issueCode: debugState.issueCode,
+      issueSeverity: debugState.issueSeverity,
+      degradedMode: debugState.degradedMode,
+      retryCount: debugState.retryCount,
+      lastRecoveryAction: debugState.lastRecoveryAction,
       lastPresenceSyncAt: debugState.lastPresenceSyncAt,
       lastPresenceRefreshAt: debugState.lastPresenceRefreshAt,
+      featureFlags: debugState.featureFlags,
+      faultInjection: debugState.faultInjection,
       note,
       createdAt: new Date().toISOString()
     })
@@ -488,6 +623,10 @@ async function ensureMediaRoom(): Promise<Room> {
     return livekitRoom;
   }
 
+  if (faultConfig.audio === "livekit_failed") {
+    throw createFaultError("FaultInjectedError", "livekit_failed");
+  }
+
   const voicePlan = await planVoiceSession(apiBaseUrl, roomId, participantId);
   const room = new Room();
   setupAudio(room);
@@ -527,17 +666,17 @@ function ensureRemoteAvatar(participant: PresenceState): RemoteAvatarEntity {
         root: pushMotionSample(createMotionTrack(), {
           x: participant.rootTransform.x,
           z: participant.rootTransform.z,
-          capturedAtMs: Date.now()
+          capturedAtMs: getPresenceCaptureTime(participant.updatedAt, Date.now())
         }),
         body: pushMotionSample(createMotionTrack(), {
           x: participant.bodyTransform?.x ?? participant.rootTransform.x,
           z: participant.bodyTransform?.z ?? participant.rootTransform.z,
-          capturedAtMs: Date.now()
+          capturedAtMs: getPresenceCaptureTime(participant.updatedAt, Date.now())
         }),
         head: pushMotionSample(createMotionTrack(), {
           x: participant.headTransform?.x ?? participant.rootTransform.x,
           z: participant.headTransform?.z ?? participant.rootTransform.z,
-          capturedAtMs: Date.now()
+          capturedAtMs: getPresenceCaptureTime(participant.updatedAt, Date.now())
         })
       }
     );
@@ -821,13 +960,31 @@ async function stopScreenShare(): Promise<void> {
 }
 
 async function joinAudio(): Promise<void> {
+  if (!runtimeFlags.audioJoin) {
+    const issue = getRuntimeIssue("livekit_failed");
+    applyIssue(issue, {
+      degradedMode: "presence_only",
+      audioState: "disabled",
+      lastRecoveryAction: "audio_join_disabled"
+    });
+    void reportDiagnostics("audio_join_disabled");
+    return;
+  }
+
+  if (faultConfig.audio === "mic_denied") {
+    throw createFaultError("NotAllowedError", "mic_denied");
+  }
+  if (faultConfig.audio === "no_audio_device") {
+    throw createFaultError("NotFoundError", "no_audio_device");
+  }
+
   if (livekitRoom) {
     if (!microphoneEnabled) {
       await livekitRoom.localParticipant.setMicrophoneEnabled(true);
       microphoneEnabled = true;
       muteButton.disabled = false;
       joinAudioButton.disabled = true;
-      setStatus("Audio connected");
+      clearAudioIssue("Audio connected");
       debugState.audioState = "connected";
       void reportDiagnostics("audio_connected");
     }
@@ -842,7 +999,7 @@ async function joinAudio(): Promise<void> {
   muteButton.disabled = false;
   joinAudioButton.disabled = true;
   startShareButton.disabled = false;
-  setStatus("Audio connected");
+  clearAudioIssue("Audio connected");
   debugState.audioState = "connected";
   void reportDiagnostics("audio_connected");
 }
@@ -861,9 +1018,15 @@ muteButton.addEventListener("click", async () => {
 joinAudioButton.addEventListener("click", () => {
   void joinAudio().catch((error: unknown) => {
     console.error(error);
-    setStatus("Audio failed");
-    debugState.audioState = error instanceof Error ? error.name : "failed";
-    void reportDiagnostics("audio_failed");
+    const issue = classifyMediaError(error);
+    muteButton.disabled = true;
+    joinAudioButton.disabled = false;
+    applyIssue(issue, {
+      degradedMode: "audio_unavailable",
+      audioState: "degraded",
+      lastRecoveryAction: "audio_join_failed"
+    });
+    void reportDiagnostics(issue.diagnosticsNote);
   });
 });
 
@@ -975,7 +1138,13 @@ renderer.setAnimationLoop(() => {
     presenceAccumulator = 0;
     void refreshPresence().catch((error: unknown) => {
       console.error(error);
-      setStatus("Presence sync issue");
+      const issue = classifyRoomStateError(error);
+      applyIssue(issue, {
+        degradedMode: "api_fallback",
+        roomStateMode: "fallback",
+        lastRecoveryAction: "presence_refresh_failed",
+        roomStateLabel: "Room-state: fallback API"
+      });
       void reportDiagnostics("presence_sync_issue");
     });
   }
@@ -991,6 +1160,14 @@ renderer.setAnimationLoop(() => {
 
 async function main(): Promise<void> {
   const boot = await bootRuntime(apiBaseUrl, roomId, navigator.userAgent);
+  runtimeFlags = {
+    enterVr: boot.envFlags.enterVr,
+    audioJoin: boot.envFlags.audioJoin && boot.voiceEnabled,
+    screenShare: boot.envFlags.screenShare && boot.screenShareEnabled,
+    roomStateRealtime: boot.envFlags.roomStateRealtime,
+    remoteDiagnostics: boot.envFlags.remoteDiagnostics
+  };
+  debugState.featureFlags = runtimeFlags;
   debugState.roomStateUrl = boot.roomStateUrl;
   setRoomStateStatus(`Room-state: connecting`);
   roomNameEl.textContent = `${boot.template} - ${boot.roomId}`;
@@ -1002,22 +1179,30 @@ async function main(): Promise<void> {
   wallMaterial.color.set(boot.theme.primaryColor);
   scene.fog = new THREE.Fog(new THREE.Color(boot.theme.accentColor).getHex(), 12, 50);
   setStatus(`Joined as ${displayName}`);
-  startShareButton.disabled = !boot.screenShareEnabled && !shareMockEnabled;
-  joinAudioButton.disabled = !boot.voiceEnabled;
-  if (!boot.voiceEnabled) {
+  startShareButton.disabled = !runtimeFlags.screenShare && !shareMockEnabled;
+  joinAudioButton.disabled = !runtimeFlags.audioJoin;
+  if (!runtimeFlags.audioJoin) {
     muteButton.disabled = true;
     debugState.audioState = "disabled";
   }
 
-  try {
-    await ensureMediaRoom();
-    setStatus(`Joined as ${displayName}`);
-    debugState.audioState = "connected-passive";
-    void reportDiagnostics("media_connected_passive");
-  } catch (error) {
-    console.error(error);
-    debugState.audioState = "media_connect_failed";
-    void reportDiagnostics("media_connect_failed");
+  if ((runtimeFlags.audioJoin || runtimeFlags.screenShare) && faultConfig.audio !== "mic_denied" && faultConfig.audio !== "no_audio_device") {
+    try {
+      await ensureMediaRoom();
+      clearIssue(`Joined as ${displayName}`);
+      debugState.audioState = "connected-passive";
+      void reportDiagnostics("media_connected_passive");
+    } catch (error) {
+      console.error(error);
+      const issue = classifyMediaError(error);
+      applyIssue(issue, {
+        degradedMode: "presence_only",
+        audioState: "degraded",
+        lastRecoveryAction: "media_passive_connect_failed",
+        updateStatus: false
+      });
+      void reportDiagnostics(issue.diagnosticsNote);
+    }
   }
 
   try {
@@ -1031,17 +1216,23 @@ async function main(): Promise<void> {
   }
 
   const xrSupport = detectXrSupport({
-    navigatorXr: (navigator as Navigator & { xr?: unknown }).xr,
-    immersiveVrSupported: true
+    navigatorXr: faultConfig.xrUnavailable ? undefined : (navigator as Navigator & { xr?: unknown }).xr,
+    immersiveVrSupported: !faultConfig.xrUnavailable
   });
 
   const vrButton = VRButton.createButton(renderer);
   vrButton.classList.add("vr-button");
   vrButton.style.position = "static";
   vrButton.style.marginTop = "10px";
-  if (!getEnterVrVisibility(xrSupport, true)) {
+  if (!getEnterVrVisibility(xrSupport, runtimeFlags.enterVr)) {
     vrButton.setAttribute("disabled", "true");
     vrButton.textContent = "VR unavailable";
+    const issue = getRuntimeIssue("xr_unavailable");
+    applyIssue(issue, {
+      degradedMode: debugState.degradedMode === "none" ? "xr_disabled" : debugState.degradedMode,
+      lastRecoveryAction: "xr_path_disabled",
+      updateStatus: false
+    });
   }
   document.querySelector(".controls")?.appendChild(vrButton);
 
