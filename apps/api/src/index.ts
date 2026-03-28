@@ -81,6 +81,7 @@ interface PresenceRecord {
 
 const apiPort = Number.parseInt(process.env.API_PORT ?? "4000", 10);
 const runtimeStaticRoot = normalize(join(fileURLToPath(new URL("../../runtime-web/dist", import.meta.url))));
+const runtimePublicRoot = normalize(join(fileURLToPath(new URL("../../runtime-web/public", import.meta.url))));
 const controlPlaneStaticRoot = normalize(join(fileURLToPath(new URL("../../control-plane/dist", import.meta.url))));
 const livekitApiKey = process.env.LIVEKIT_API_KEY ?? "devkey";
 const livekitApiSecret = process.env.LIVEKIT_API_SECRET ?? "secret";
@@ -357,7 +358,8 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   }
 
   if (method === "GET" && url.pathname.startsWith("/assets/")) {
-    const served = await serveStatic(response, join(runtimeStaticRoot, url.pathname.slice(1)));
+    const served = await serveStatic(response, join(runtimeStaticRoot, url.pathname.slice(1)))
+      || await serveStatic(response, join(runtimePublicRoot, url.pathname.slice(1)));
     if (!served) json(response, 404, { error: "asset_not_found" });
     return;
   }
