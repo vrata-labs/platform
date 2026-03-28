@@ -1,15 +1,15 @@
 {
   "schemaVersion": 1,
   "sceneId": "sense-hall2-v1",
-  "label": "SenseTower Hall 2",
-  "source": "/mnt/d/repository/_SenseCapital/SenseTowerVR/Assets/Models/Hall2_modeler/static/hall2_walls.fbx",
+  "label": "SenseTower Hall",
+  "source": "/mnt/d/repository/_SenseCapital/SenseTowerVR/Assets/Models/Hall/optimized stuff/walls_3_1.fbx",
   "glbPath": "scene.fbx",
   "spawnPoints": [
     {
       "id": "main",
-      "position": { "x": 0, "y": 0, "z": 8 }
+      "position": { "x": 0, "y": 1.6, "z": 8 }
     }
   ],
   "bounds": { "width": 40, "height": 10, "depth": 40 },
-  "notes": "Real SenseTower hall walls asset copied from Hall2_modeler static export"
+  "notes": "Real SenseTower hall asset copied from optimized hall export"
 }
