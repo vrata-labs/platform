@@ -54,6 +54,52 @@ export interface RuntimeDiagnosticRecord {
   remoteTargets: Array<{ id: string; x: number; z: number }>;
   lastPresenceSyncAt: number;
   lastPresenceRefreshAt: number;
+  issueCode?: string | null;
+  issueSeverity?: string | null;
+  degradedMode?: string;
+  retryCount?: number;
+  lastRecoveryAction?: string;
+  featureFlags?: Record<string, unknown>;
+  faultInjection?: Record<string, unknown>;
+  sceneDebug?: {
+    bundleUrl?: string | null;
+    state?: string;
+    label?: string;
+    source?: string;
+    assetUrl?: string | null;
+    assetType?: string | null;
+    spawnPointId?: string | null;
+    spawnApplied?: boolean;
+    loadMs?: number;
+    objectCount?: number;
+    meshCount?: number;
+    materialCount?: number;
+    texturedMaterialCount?: number;
+    geometryCount?: number;
+    triangleEstimate?: number;
+    textureCount?: number;
+    missingAssetCount?: number;
+    missingAssets?: string[];
+    boundingBox?: {
+      min: { x: number; y: number; z: number };
+      max: { x: number; y: number; z: number };
+      size: { x: number; y: number; z: number };
+      center: { x: number; y: number; z: number };
+    };
+    camera?: {
+      world: { x: number; y: number; z: number };
+      forward: { x: number; y: number; z: number };
+    };
+    screenshot?: {
+      width: number;
+      height: number;
+      centerPixel: { r: number; g: number; b: number; a: number };
+      averageColor: { r: number; g: number; b: number; a: number };
+      darkPixelRatio: number;
+      pixelSamples: Array<{ x: number; y: number; r: number; g: number; b: number; a: number }>;
+      dataUrl?: string;
+    };
+  };
   note?: string;
   createdAt: string;
 }

@@ -8,6 +8,11 @@ export interface LoadedSceneBundle {
   manifest: SceneBundleManifest;
   group: THREE.Group;
   spawnPointApplied: boolean;
+  spawnPointId: string | null;
+  assetUrl: string;
+  assetType: string;
+  loadMs: number;
+  missingAssets: string[];
 }
 
 export async function loadSceneBundle(input: {
@@ -15,6 +20,7 @@ export async function loadSceneBundle(input: {
   player: THREE.Object3D;
   bundleUrl: string;
 }): Promise<LoadedSceneBundle> {
+  const startedAt = performance.now();
   const response = await fetch(input.bundleUrl);
   if (!response.ok) {
     throw new Error(`failed_to_load_scene_bundle_manifest:${response.status}`);
@@ -24,12 +30,21 @@ export async function loadSceneBundle(input: {
   const group = new THREE.Group();
   group.name = `scene-bundle:${manifest.sceneId}`;
   const sceneAssetUrl = resolveSceneAssetUrl(response.url, manifest.glbPath);
+  const missingAssets = new Set<string>();
   if (/[.]fbx$/i.test(sceneAssetUrl)) {
-    const loader = new FBXLoader();
+    const manager = new THREE.LoadingManager();
+    manager.onError = (url) => {
+      missingAssets.add(url);
+    };
+    const loader = new FBXLoader(manager);
     const fbx = await loader.loadAsync(sceneAssetUrl);
     group.add(fbx);
   } else {
-    const loader = new GLTFLoader();
+    const manager = new THREE.LoadingManager();
+    manager.onError = (url) => {
+      missingAssets.add(url);
+    };
+    const loader = new GLTFLoader(manager);
     const gltf = await loader.loadAsync(sceneAssetUrl);
     group.add(gltf.scene);
   }
@@ -43,6 +58,11 @@ export async function loadSceneBundle(input: {
   return {
     manifest,
     group,
-    spawnPointApplied: Boolean(spawnPoint)
+    spawnPointApplied: Boolean(spawnPoint),
+    spawnPointId: spawnPoint?.id ?? null,
+    assetUrl: sceneAssetUrl,
+    assetType: sceneAssetUrl.split(".").pop()?.toLowerCase() ?? "unknown",
+    loadMs: Math.round(performance.now() - startedAt),
+    missingAssets: Array.from(missingAssets)
   };
 }

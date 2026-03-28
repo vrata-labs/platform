@@ -10,6 +10,7 @@ import { classifyMediaError, classifyRoomStateError, createFaultError, getRuntim
 import { canRetry, createReconnectPolicy, getReconnectDelayMs } from "./reconnect.js";
 import { applyRuntimeIssueState, clearRuntimeIssueState, createRuntimeUiState } from "./runtime-state.js";
 import { applySpatialSettings, createSpatialAudioSettings } from "./spatial-audio.js";
+import { captureCanvasDiagnostics, createEmptySceneDiagnostics, inspectSceneObject } from "./scene-debug.js";
 import { loadSceneBundle } from "./scene-loader.js";
 import { detectXrSupport, getEnterVrVisibility } from "./xr.js";
 
@@ -157,6 +158,7 @@ let roomStateClient: RoomStateClient | null = null;
 let roomStateConnected = false;
 let roomStateReconnectTimer: number | null = null;
 let audioContext: AudioContext | null = null;
+let activeSceneBundleRoot: THREE.Object3D | null = null;
 const roomStateReconnectPolicy = createReconnectPolicy({
   maxRetries: Number.parseInt(query.get("roomstateretries") ?? "3", 10),
   baseDelayMs: Number.parseInt(query.get("roomstatedelay") ?? "1000", 10),
@@ -339,7 +341,8 @@ const debugState = {
   lastPresenceRefreshAt: 0,
   remoteTargets: [] as Array<{ id: string; x: number; z: number }>,
   sceneBundleUrl: null as string | null,
-  sceneBundleState: "fallback" as "fallback" | "loaded" | "failed"
+  sceneBundleState: "fallback" as "fallback" | "loaded" | "failed",
+  sceneDebug: createEmptySceneDiagnostics()
 };
 
 const floorMaterial = floor.material as THREE.MeshStandardMaterial;
@@ -525,6 +528,19 @@ async function reportDiagnostics(note?: string): Promise<void> {
   if (!runtimeFlags.remoteDiagnostics) {
     return;
   }
+  if (activeSceneBundleRoot) {
+    debugState.sceneDebug = inspectSceneObject({
+      root: activeSceneBundleRoot,
+      camera,
+      previous: debugState.sceneDebug
+    });
+  }
+  const includeImage = debugEnabled;
+  const screenshot = captureCanvasDiagnostics({
+    canvas: renderer.domElement,
+    includeImage
+  });
+  debugState.sceneDebug.screenshot = screenshot;
   await fetch(new URL(`/api/rooms/${roomId}/diagnostics`, apiBaseUrl), {
     method: "POST",
     headers: {
@@ -551,6 +567,11 @@ async function reportDiagnostics(note?: string): Promise<void> {
       lastPresenceRefreshAt: debugState.lastPresenceRefreshAt,
       featureFlags: debugState.featureFlags,
       faultInjection: debugState.faultInjection,
+      sceneDebug: {
+        ...debugState.sceneDebug,
+        missingAssetCount: debugState.sceneDebug.missingAssets.length,
+        screenshot
+      },
       note,
       createdAt: new Date().toISOString()
     })
@@ -1161,13 +1182,13 @@ renderer.setAnimationLoop(() => {
     });
   }
 
+  renderer.render(scene, camera);
+
   diagnosticsAccumulator += delta;
   if (diagnosticsAccumulator >= 2) {
     diagnosticsAccumulator = 0;
     void reportDiagnostics();
   }
-
-  renderer.render(scene, camera);
 });
 
 async function main(): Promise<void> {
@@ -1183,6 +1204,7 @@ async function main(): Promise<void> {
   debugState.featureFlags = runtimeFlags;
   debugState.roomStateUrl = boot.roomStateUrl;
   debugState.sceneBundleUrl = boot.sceneBundleUrl ?? null;
+  debugState.sceneDebug.bundleUrl = boot.sceneBundleUrl ?? null;
   setRoomStateStatus(`Room-state: connecting`);
   roomNameEl.textContent = `${boot.template} - ${boot.roomId}`;
   brandingLineEl.textContent = boot.assets.length > 0
@@ -1200,14 +1222,40 @@ async function main(): Promise<void> {
         player,
         bundleUrl: boot.sceneBundleUrl
       });
+      activeSceneBundleRoot = loadedScene.group;
       setFallbackEnvironmentVisible(false);
       debugState.sceneBundleState = "loaded";
+      debugState.sceneDebug = inspectSceneObject({
+        root: loadedScene.group,
+        camera,
+        previous: {
+          ...debugState.sceneDebug,
+          bundleUrl: boot.sceneBundleUrl,
+          state: "loaded",
+          label: loadedScene.manifest.label,
+          source: loadedScene.manifest.source,
+          assetUrl: loadedScene.assetUrl,
+          assetType: loadedScene.assetType,
+          spawnPointId: loadedScene.spawnPointId,
+          spawnApplied: loadedScene.spawnPointApplied,
+          loadMs: loadedScene.loadMs,
+          missingAssets: loadedScene.missingAssets
+        }
+      });
       brandingLineEl.textContent = `${brandingLineEl.textContent} | Scene: ${loadedScene.manifest.label}`;
       void reportDiagnostics("scene_bundle_loaded");
     } catch (error) {
       console.error(error);
+      activeSceneBundleRoot = null;
       setFallbackEnvironmentVisible(true);
       debugState.sceneBundleState = "failed";
+      debugState.sceneDebug = {
+        ...debugState.sceneDebug,
+        bundleUrl: boot.sceneBundleUrl,
+        state: "failed",
+        missingAssets: [],
+        loadMs: null
+      };
       brandingLineEl.textContent = `${brandingLineEl.textContent} | Scene bundle fallback active`;
       void reportDiagnostics("scene_bundle_failed");
     }

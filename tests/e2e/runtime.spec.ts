@@ -202,6 +202,49 @@ test("two rooms load two different real SenseTower scene assets", async ({ brows
   await officePage.close();
 });
 
+test("scene bundle diagnostics include render and geometry debug info", async ({ page, request }) => {
+  const roomResponse = await request.post("/api/rooms", {
+    headers: {
+      "x-noah-admin-token": "test-admin-token"
+    },
+    data: {
+      tenantId: "demo-tenant",
+      templateId: "meeting-room-basic",
+      name: "Debug Scene Room",
+      sceneBundleUrl: "/assets/scenes/the-office-v1/scene.json"
+    }
+  });
+  expect(roomResponse.ok()).toBeTruthy();
+  const room = (await roomResponse.json()) as { roomId: string; roomLink: string };
+
+  await page.goto(`${room.roomLink}?debug=1`);
+  await page.waitForTimeout(5000);
+
+  const diagnosticsResponse = await request.get(`/api/rooms/${room.roomId}/diagnostics`);
+  const diagnostics = (await diagnosticsResponse.json()) as {
+    items: Array<{
+      note?: string;
+      sceneDebug?: {
+        state?: string;
+        meshCount?: number;
+        geometryCount?: number;
+        screenshot?: {
+          width?: number;
+          pixelSamples?: Array<unknown>;
+          dataUrl?: string;
+        };
+      };
+    }>;
+  };
+  const loaded = [...diagnostics.items].reverse().find((item) => item.note === "scene_bundle_loaded");
+  expect(loaded?.sceneDebug?.state).toBe("loaded");
+  expect(loaded?.sceneDebug?.meshCount ?? 0).toBeGreaterThan(0);
+  expect(loaded?.sceneDebug?.geometryCount ?? 0).toBeGreaterThan(0);
+  expect(loaded?.sceneDebug?.screenshot?.width ?? 0).toBeGreaterThan(0);
+  expect(loaded?.sceneDebug?.screenshot?.pixelSamples?.length ?? 0).toBeGreaterThan(0);
+  expect((loaded?.sceneDebug?.screenshot?.dataUrl ?? "")).toContain("data:image/jpeg;base64,");
+});
+
 test("room creation API is forbidden without admin token", async ({ request }) => {
   const response = await request.post("/api/rooms", {
     data: {
