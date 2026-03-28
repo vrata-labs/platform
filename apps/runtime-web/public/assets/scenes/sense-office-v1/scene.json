@@ -4,6 +4,12 @@
   "label": "SenseTower Office",
   "source": "/mnt/d/repository/_SenseCapital/SenseTowerVR/Assets/Models/Office/office_1.fbx",
   "glbPath": "scene.fbx",
+  "materialOverrides": [
+    { "match": "sofa", "mapPath": "textures/fabrick.png" },
+    { "match": "sofa_pillows", "mapPath": "textures/fabrick.png" },
+    { "match": "kresla", "mapPath": "textures/fabrick.png" },
+    { "match": "kreslawhite", "mapPath": "textures/fabrick.png" }
+  ],
   "spawnPoints": [
     {
       "id": "main",
