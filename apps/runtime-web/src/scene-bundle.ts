@@ -14,6 +14,15 @@ export interface SceneBundleManifest {
   source: string;
   glbPath: string;
   spawnPoints: SceneBundleSpawnPoint[];
+  materialOverrides?: Array<{
+    match: string;
+    mapPath?: string;
+    color?: {
+      r: number;
+      g: number;
+      b: number;
+    };
+  }>;
   bounds?: {
     width: number;
     height: number;
@@ -88,6 +97,33 @@ export function parseSceneBundleManifest(input: unknown): SceneBundleManifest {
       height: bounds.height,
       depth: bounds.depth
     };
+  }
+
+  if (payload.materialOverrides !== undefined) {
+    if (!Array.isArray(payload.materialOverrides)) {
+      throw new Error("invalid_scene_bundle_material_overrides");
+    }
+    manifest.materialOverrides = payload.materialOverrides.map((entry, index) => {
+      const override = assertObject(entry, `invalid_scene_bundle_material_override:${index}`);
+      const parsed: NonNullable<SceneBundleManifest["materialOverrides"]>[number] = {
+        match: assertString(override.match, `invalid_scene_bundle_material_override_match:${index}`)
+      };
+      if (override.mapPath !== undefined) {
+        parsed.mapPath = assertString(override.mapPath, `invalid_scene_bundle_material_override_map:${index}`);
+      }
+      if (override.color !== undefined) {
+        const color = assertObject(override.color, `invalid_scene_bundle_material_override_color:${index}`);
+        if (!isFiniteNumber(color.r) || !isFiniteNumber(color.g) || !isFiniteNumber(color.b)) {
+          throw new Error(`invalid_scene_bundle_material_override_color:${index}`);
+        }
+        parsed.color = {
+          r: color.r,
+          g: color.g,
+          b: color.b
+        };
+      }
+      return parsed;
+    });
   }
 
   if (payload.preview !== undefined) {

@@ -10,6 +10,13 @@ test("parseSceneBundleManifest accepts valid v1 manifest", () => {
     label: "Sense Hall",
     source: "sensetower",
     glbPath: "scene.glb",
+    materialOverrides: [
+      {
+        match: "chairs*",
+        mapPath: "textures/chairs.png",
+        color: { r: 1, g: 1, b: 1 }
+      }
+    ],
     spawnPoints: [
       {
         id: "main",
@@ -21,6 +28,7 @@ test("parseSceneBundleManifest accepts valid v1 manifest", () => {
   });
 
   assert.equal(manifest.sceneId, "sense-hall");
+  assert.equal(manifest.materialOverrides?.[0]?.match, "chairs*");
   assert.equal(pickSceneSpawnPoint(manifest)?.id, "main");
   assert.equal(resolveSceneAssetUrl("https://example.com/scenes/hall/scene.json", manifest.glbPath), "https://example.com/scenes/hall/scene.glb");
 });

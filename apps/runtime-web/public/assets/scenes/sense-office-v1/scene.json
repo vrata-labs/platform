@@ -4,6 +4,15 @@
   "label": "SenseTower Office",
   "source": "/mnt/d/repository/_SenseCapital/SenseTowerVR/Assets/Models/Office/office_1.fbx",
   "glbPath": "scene.fbx",
+  "materialOverrides": [
+    { "match": "chairs*", "mapPath": "textures/chairs.png", "color": { "r": 1, "g": 1, "b": 1 } },
+    { "match": "kresla", "mapPath": "textures/fabrick.png", "color": { "r": 1, "g": 1, "b": 1 } },
+    { "match": "kreslawhite", "mapPath": "textures/fabrick.png", "color": { "r": 0.94, "g": 0.94, "b": 0.94 } },
+    { "match": "sofa", "mapPath": "textures/fabrick.png", "color": { "r": 1, "g": 1, "b": 1 } },
+    { "match": "sofa_pillows", "mapPath": "textures/fabrick.png", "color": { "r": 1, "g": 1, "b": 1 } },
+    { "match": "sofa_pillows_green", "mapPath": "textures/fabrick.png", "color": { "r": 0.88, "g": 0.95, "b": 0.88 } },
+    { "match": "sofa_side", "mapPath": "textures/sofa.png", "color": { "r": 1, "g": 1, "b": 1 } }
+  ],
   "spawnPoints": [
     {
       "id": "main",

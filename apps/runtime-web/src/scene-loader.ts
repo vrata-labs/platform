@@ -15,6 +15,61 @@ export interface LoadedSceneBundle {
   missingAssets: string[];
 }
 
+function materialOverrideMatches(pattern: string, materialName: string): boolean {
+  if (pattern.endsWith("*")) {
+    return materialName.startsWith(pattern.slice(0, -1));
+  }
+  return materialName === pattern;
+}
+
+async function applyMaterialOverrides(input: {
+  root: THREE.Object3D;
+  manifest: SceneBundleManifest;
+  bundleUrl: string;
+}): Promise<void> {
+  if (!input.manifest.materialOverrides || input.manifest.materialOverrides.length === 0) {
+    return;
+  }
+  const textureLoader = new THREE.TextureLoader();
+  const textureCache = new Map<string, Promise<THREE.Texture>>();
+
+  input.root.traverse((child) => {
+    if (!(child instanceof THREE.Mesh)) {
+      return;
+    }
+    const materials = Array.isArray(child.material) ? child.material : [child.material];
+    materials.forEach((material) => {
+      if (!(material instanceof THREE.Material)) {
+        return;
+      }
+      const override = input.manifest.materialOverrides?.find((entry) => materialOverrideMatches(entry.match, material.name));
+      if (!override) {
+        return;
+      }
+      if (override.color && "color" in material) {
+        const colorMaterial = material as THREE.MeshBasicMaterial | THREE.MeshStandardMaterial | THREE.MeshPhongMaterial;
+        colorMaterial.color.setRGB(override.color.r, override.color.g, override.color.b);
+      }
+      if (override.mapPath && "map" in material) {
+        const mapMaterial = material as THREE.MeshBasicMaterial | THREE.MeshStandardMaterial | THREE.MeshPhongMaterial;
+        const textureUrl = resolveSceneAssetUrl(input.bundleUrl, override.mapPath);
+        if (!textureCache.has(textureUrl)) {
+          textureCache.set(textureUrl, textureLoader.loadAsync(textureUrl).then((texture) => {
+            texture.colorSpace = THREE.SRGBColorSpace;
+            return texture;
+          }));
+        }
+        textureCache.get(textureUrl)?.then((texture) => {
+          mapMaterial.map = texture;
+          mapMaterial.needsUpdate = true;
+        }).catch(() => undefined);
+      }
+    });
+  });
+
+  await Promise.allSettled(Array.from(textureCache.values()));
+}
+
 export async function loadSceneBundle(input: {
   scene: THREE.Scene;
   player: THREE.Object3D;
@@ -48,6 +103,11 @@ export async function loadSceneBundle(input: {
     const gltf = await loader.loadAsync(sceneAssetUrl);
     group.add(gltf.scene);
   }
+  await applyMaterialOverrides({
+    root: group,
+    manifest,
+    bundleUrl: response.url
+  });
   input.scene.add(group);
 
   const spawnPoint = pickSceneSpawnPoint(manifest);
