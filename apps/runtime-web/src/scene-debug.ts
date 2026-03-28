@@ -18,6 +18,15 @@ export interface SceneDiagnosticsSnapshot {
   triangleEstimate: number;
   textureCount: number;
   missingAssets: string[];
+  materialSamples: Array<{
+    name: string;
+    meshCount: number;
+    hasMap: boolean;
+    hasNormalMap: boolean;
+    hasAoMap: boolean;
+    color?: { r: number; g: number; b: number } | null;
+    mapSource?: string | null;
+  }>;
   boundingBox: {
     min: { x: number; y: number; z: number };
     max: { x: number; y: number; z: number };
@@ -71,6 +80,7 @@ export function createEmptySceneDiagnostics(): SceneDiagnosticsSnapshot {
     triangleEstimate: 0,
     textureCount: 0,
     missingAssets: [],
+    materialSamples: [],
     boundingBox: null,
     camera: null,
     screenshot: null
@@ -85,6 +95,15 @@ export function inspectSceneObject(input: {
   const materialKeys = new Set<string>();
   const geometryKeys = new Set<string>();
   const textureKeys = new Set<string>();
+  const materialSamples = new Map<string, {
+    name: string;
+    meshCount: number;
+    hasMap: boolean;
+    hasNormalMap: boolean;
+    hasAoMap: boolean;
+    color?: { r: number; g: number; b: number } | null;
+    mapSource?: string | null;
+  }>();
   let objectCount = 0;
   let meshCount = 0;
   let texturedMaterialCount = 0;
@@ -118,6 +137,31 @@ export function inspectSceneObject(input: {
       for (const texture of textures) {
         textureKeys.add(texture.uuid);
       }
+      const sampleKey = material.name || material.uuid;
+      const existing = materialSamples.get(sampleKey) ?? {
+        name: material.name || "(unnamed)",
+        meshCount: 0,
+        hasMap: false,
+        hasNormalMap: false,
+        hasAoMap: false,
+        color: null,
+        mapSource: null
+      };
+      existing.meshCount += 1;
+      existing.hasMap = existing.hasMap || Boolean(maybeTextured.map);
+      existing.hasNormalMap = existing.hasNormalMap || Boolean(maybeTextured.normalMap);
+      existing.hasAoMap = existing.hasAoMap || Boolean(maybeTextured.aoMap);
+      if ("color" in maybeTextured && maybeTextured.color instanceof THREE.Color) {
+        existing.color = {
+          r: round(maybeTextured.color.r),
+          g: round(maybeTextured.color.g),
+          b: round(maybeTextured.color.b)
+        };
+      }
+      if (maybeTextured.map?.source && typeof maybeTextured.map.source.data === "object" && maybeTextured.map.source.data && "currentSrc" in maybeTextured.map.source.data) {
+        existing.mapSource = String((maybeTextured.map.source.data as { currentSrc?: string }).currentSrc ?? "");
+      }
+      materialSamples.set(sampleKey, existing);
     }
   });
 
@@ -144,6 +188,7 @@ export function inspectSceneObject(input: {
     geometryCount: geometryKeys.size,
     triangleEstimate,
     textureCount: textureKeys.size,
+    materialSamples: Array.from(materialSamples.values()).sort((a, b) => b.meshCount - a.meshCount).slice(0, 40),
     boundingBox: hasBounds ? {
       min: { x: round(boundingBox.min.x), y: round(boundingBox.min.y), z: round(boundingBox.min.z) },
       max: { x: round(boundingBox.max.x), y: round(boundingBox.max.y), z: round(boundingBox.max.z) },

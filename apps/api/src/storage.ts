@@ -78,6 +78,15 @@ export interface RuntimeDiagnosticRecord {
     geometryCount?: number;
     triangleEstimate?: number;
     textureCount?: number;
+    materialSamples?: Array<{
+      name: string;
+      meshCount: number;
+      hasMap: boolean;
+      hasNormalMap: boolean;
+      hasAoMap: boolean;
+      color?: { r: number; g: number; b: number } | null;
+      mapSource?: string | null;
+    }>;
     missingAssetCount?: number;
     missingAssets?: string[];
     boundingBox?: {
