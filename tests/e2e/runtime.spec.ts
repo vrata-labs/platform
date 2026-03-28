@@ -298,7 +298,7 @@ test("control plane can attach selected assets to a room", async ({ page }) => {
   expect(href).toBeTruthy();
   await page.goto(String(href));
   await page.waitForTimeout(2000);
-  await expect(page.locator("#branding-line")).toContainText("Attached assets: wall-graphic");
+  await expect(page.locator("#branding-line")).toContainText("Attached assets: wall-graphic [validated]");
 });
 
 test("control plane can create themed room", async ({ page }) => {

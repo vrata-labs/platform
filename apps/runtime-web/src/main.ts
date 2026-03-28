@@ -995,7 +995,7 @@ async function main(): Promise<void> {
   setRoomStateStatus(`Room-state: connecting`);
   roomNameEl.textContent = `${boot.template} - ${boot.roomId}`;
   brandingLineEl.textContent = boot.assets.length > 0
-    ? `Attached assets: ${boot.assets.map((asset) => asset.kind).join(", ")}`
+    ? `Attached assets: ${boot.assets.map((asset) => `${asset.kind}${asset.validationStatus ? ` [${asset.validationStatus}]` : ""}`).join(", ")}`
     : "No branded assets attached";
   guestAccessLineEl.textContent = boot.guestAllowed ? "Guest access: enabled" : "Guest access: members only";
   floorMaterial.color.set(boot.theme.accentColor);

@@ -12,6 +12,8 @@ interface RoomManifest {
     assetId: string;
     kind: string;
     url: string;
+    processedUrl?: string;
+    validationStatus?: "pending" | "validated" | "rejected";
   }>;
   features: {
     voice: boolean;
@@ -87,6 +89,8 @@ export interface RuntimeBootResult {
     assetId: string;
     kind: string;
     url: string;
+    processedUrl?: string;
+    validationStatus?: "pending" | "validated" | "rejected";
   }>;
   joinMode: "desktop" | "mobile";
   voiceEnabled: boolean;

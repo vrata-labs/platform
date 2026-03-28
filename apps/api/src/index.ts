@@ -32,6 +32,8 @@ interface RoomManifest {
     assetId: string;
     kind: string;
     url: string;
+    processedUrl?: string;
+    validationStatus?: "pending" | "validated" | "rejected";
   }>;
   features: {
     voice: boolean;
@@ -172,7 +174,13 @@ async function buildManifest(roomId: string): Promise<RoomManifest> {
       primaryColor: "#5fc8ff",
       accentColor: "#163354"
     },
-    assets: roomAssets.map((asset) => ({ assetId: asset.assetId, kind: asset.kind, url: asset.url })),
+    assets: roomAssets.map((asset) => ({
+      assetId: asset.assetId,
+      kind: asset.kind,
+      url: asset.url,
+      processedUrl: asset.processedUrl,
+      validationStatus: asset.validationStatus
+    })),
     features: room.features,
     quality: { default: "desktop-standard", mobile: "mobile-lite", xr: "xr" },
     access: { joinMode: "link", guestAllowed: room.guestAllowed ?? true }
