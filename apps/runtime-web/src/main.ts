@@ -201,7 +201,7 @@ function applySceneDebugFit(bounds: NonNullable<typeof debugState.sceneDebug.bou
   camera.getWorldPosition(cameraWorld);
   const target = new THREE.Vector3(bounds.center.x, bounds.center.y, bounds.center.z);
   const delta = target.sub(cameraWorld);
-  yaw = Math.atan2(delta.x, delta.z);
+  yaw = Math.atan2(delta.x, delta.z) + Math.PI;
   const horizontalDistance = Math.max(0.001, Math.hypot(delta.x, delta.z));
   pitchAngle = THREE.MathUtils.clamp(-Math.atan2(delta.y, horizontalDistance), -1.1, 1.1);
   player.rotation.y = yaw;
