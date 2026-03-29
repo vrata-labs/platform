@@ -43,7 +43,7 @@ const query = new URLSearchParams(window.location.search);
 const debugEnabled = query.get("debug") === "1";
 const sceneFitEnabled = debugEnabled && query.get("scenefit") !== "0";
 const sceneMaterialDebugMode = debugEnabled ? (query.get("mat") ?? "off") : "off";
-const cleanSceneMode = query.get("clean") === "1";
+const requestedCleanSceneMode = query.get("clean") === "1";
 const botMode = query.get("bot") ?? "off";
 const shareMockEnabled = query.get("sharemock") === "1";
 const faultConfig = {
@@ -190,6 +190,7 @@ let runtimeFlags = {
   remoteDiagnostics: true,
   sceneBundles: true
 };
+let effectiveCleanSceneMode = requestedCleanSceneMode;
 
 function setFallbackEnvironmentVisible(visible: boolean): void {
   for (const object of fallbackEnvironment) {
@@ -1269,7 +1270,7 @@ async function main(): Promise<void> {
   guestAccessLineEl.textContent = boot.guestAllowed ? "Guest access: enabled" : "Guest access: members only";
   floorMaterial.color.set(boot.theme.accentColor);
   wallMaterial.color.set(boot.theme.primaryColor);
-  if (!cleanSceneMode) {
+  if (!effectiveCleanSceneMode) {
     scene.fog = new THREE.Fog(new THREE.Color(boot.theme.accentColor).getHex(), 12, 50);
   } else {
     applyCleanSceneMode(true);
@@ -1283,9 +1284,10 @@ async function main(): Promise<void> {
         bundleUrl: boot.sceneBundleUrl
       });
       activeSceneBundleRoot = loadedScene.group;
+      effectiveCleanSceneMode = requestedCleanSceneMode || loadedScene.manifest.renderMode === "clean";
       applySceneMaterialDebugMode(loadedScene.group, sceneMaterialDebugMode);
       setFallbackEnvironmentVisible(false);
-      if (cleanSceneMode) {
+      if (effectiveCleanSceneMode) {
         applyCleanSceneMode(true);
       }
       debugState.sceneBundleState = "loaded";

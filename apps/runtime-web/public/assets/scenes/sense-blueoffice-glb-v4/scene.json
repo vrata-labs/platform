@@ -4,6 +4,7 @@
   "label": "Sense BlueOffice Targeted",
   "source": "/mnt/d/projects/noah/research/exports-converted-v3/BlueOffice.glb",
   "glbPath": "scene.glb",
+  "renderMode": "clean",
   "spawnPoints": [
     {
       "id": "main",

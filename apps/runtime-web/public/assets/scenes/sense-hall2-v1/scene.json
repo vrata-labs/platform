@@ -4,6 +4,7 @@
   "label": "SenseTower Hall",
   "source": "/mnt/d/Repository/project-noah/examples/assets/TheHallScene.glb",
   "glbPath": "scene.glb",
+  "renderMode": "clean",
   "spawnPoints": [
     {
       "id": "main",

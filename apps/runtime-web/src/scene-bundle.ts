@@ -13,6 +13,7 @@ export interface SceneBundleManifest {
   label: string;
   source: string;
   glbPath: string;
+  renderMode?: "default" | "clean";
   spawnPoints: SceneBundleSpawnPoint[];
   materialOverrides?: Array<{
     match: string;
@@ -86,6 +87,13 @@ export function parseSceneBundleManifest(input: unknown): SceneBundleManifest {
     glbPath: assertString(payload.glbPath, "invalid_scene_bundle_glb_path"),
     spawnPoints: spawnPointsRaw.map((entry, index) => parseSpawnPoint(entry, index))
   };
+
+  if (payload.renderMode !== undefined) {
+    if (payload.renderMode !== "default" && payload.renderMode !== "clean") {
+      throw new Error("invalid_scene_bundle_render_mode");
+    }
+    manifest.renderMode = payload.renderMode;
+  }
 
   if (payload.bounds !== undefined) {
     const bounds = assertObject(payload.bounds, "invalid_scene_bundle_bounds");
