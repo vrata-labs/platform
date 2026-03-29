@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "sceneId": "sense-cinema-modeler-glb-v1",
+  "label": "Sense Cinema Modeler",
+  "source": "/mnt/d/projects/noah/research/exports-main-cinema-modeler/Cinema_modeler.glb",
+  "glbPath": "scene.glb",
+  "renderMode": "clean",
+  "spawnPoints": [
+    {
+      "id": "main",
+      "position": { "x": 0, "y": 0, "z": 0 }
+    }
+  ],
+  "bounds": { "width": 30, "height": 10, "depth": 30 },
+  "notes": "Cinema_modeler exported from SenseTowerVR via UnityGLTF batch export"
+}
