@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "sceneId": "sense-newgallery-glb-v2",
+  "label": "Sense NewGallery Converted",
+  "source": "/mnt/d/projects/noah/research/exports-main-newgallery-v2/NewGallery.glb",
+  "glbPath": "scene.glb",
+  "renderMode": "clean",
+  "spawnPoints": [
+    {
+      "id": "main",
+      "position": { "x": 0, "y": 0, "z": 0 }
+    }
+  ],
+  "bounds": { "width": 50, "height": 14, "depth": 50 },
+  "notes": "NewGallery exported from SenseTowerVR with helper filtering and targeted material brightening"
+}
