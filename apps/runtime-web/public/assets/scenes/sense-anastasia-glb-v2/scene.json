@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "sceneId": "sense-anastasia-glb-v2",
+  "label": "Sense Anastasia Converted",
+  "source": "/mnt/d/projects/noah/research/exports-main-anastasia-v2/Anastasia_modeler.glb",
+  "glbPath": "scene.glb",
+  "renderMode": "clean",
+  "spawnPoints": [
+    {
+      "id": "main",
+      "position": { "x": -3.63, "y": 0, "z": 6.17 }
+    }
+  ],
+  "bounds": { "width": 40, "height": 12, "depth": 40 },
+  "notes": "Anastasia_modeler exported from SenseTowerVR with targeted material brightening and tuned spawn"
+}
