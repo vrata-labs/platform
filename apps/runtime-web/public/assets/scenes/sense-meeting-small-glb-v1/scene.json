@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "sceneId": "sense-meeting-small-glb-v1",
+  "label": "Sense Meeting Small",
+  "source": "/mnt/d/projects/noah/research/exports-main-meeting-small/Meeting_small.glb",
+  "glbPath": "scene.glb",
+  "spawnPoints": [
+    {
+      "id": "main",
+      "position": { "x": 0, "y": 0, "z": 0 }
+    }
+  ],
+  "bounds": { "width": 30, "height": 10, "depth": 30 },
+  "notes": "Meeting_small exported from SenseTowerVR via UnityGLTF batch export"
+}
