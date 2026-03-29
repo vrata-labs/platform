@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "sceneId": "sense-showroom-glb-v1",
+  "label": "Sense Showroom",
+  "source": "/mnt/d/projects/noah/research/exports-main-showroom/showroom.glb",
+  "glbPath": "scene.glb",
+  "spawnPoints": [
+    {
+      "id": "main",
+      "position": { "x": 0, "y": 0, "z": 0 }
+    }
+  ],
+  "bounds": { "width": 40, "height": 12, "depth": 40 },
+  "notes": "showroom exported from SenseTowerVR via UnityGLTF batch export"
+}
