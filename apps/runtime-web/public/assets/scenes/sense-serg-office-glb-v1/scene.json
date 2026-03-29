@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "sceneId": "sense-serg-office-glb-v1",
+  "label": "Sense Serg Office",
+  "source": "/mnt/d/projects/noah/research/exports-main-serg-office/Serg_Office_modeler.glb",
+  "glbPath": "scene.glb",
+  "renderMode": "clean",
+  "spawnPoints": [
+    {
+      "id": "main",
+      "position": { "x": 0, "y": 0, "z": 0 }
+    }
+  ],
+  "bounds": { "width": 30, "height": 10, "depth": 30 },
+  "notes": "Serg_Office_modeler exported from SenseTowerVR via UnityGLTF batch export"
+}
