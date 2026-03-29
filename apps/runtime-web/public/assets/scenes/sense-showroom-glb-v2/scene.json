@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "sceneId": "sense-showroom-glb-v2",
+  "label": "Sense Showroom Refined",
+  "source": "/mnt/d/projects/noah/research/exports-main-showroom-v2/showroom.glb",
+  "glbPath": "scene.glb",
+  "spawnPoints": [
+    {
+      "id": "main",
+      "position": { "x": 0, "y": 0, "z": 0 }
+    }
+  ],
+  "bounds": { "width": 40, "height": 12, "depth": 40 },
+  "notes": "showroom exported from SenseTowerVR with targeted bench/wood conversion pass"
+}
