@@ -1425,12 +1425,11 @@ async function main(): Promise<void> {
   }
 
   if ((runtimeFlags.audioJoin || runtimeFlags.screenShare) && faultConfig.audio !== "mic_denied" && faultConfig.audio !== "no_audio_device") {
-    try {
-      await ensureMediaRoom();
+    void ensureMediaRoom().then(() => {
       clearIssue(`Joined as ${displayName}`);
       debugState.audioState = "connected-passive";
       void reportDiagnostics("media_connected_passive");
-    } catch (error) {
+    }).catch((error: unknown) => {
       console.error(error);
       const issue = classifyMediaError(error);
       applyIssue(issue, {
@@ -1440,7 +1439,7 @@ async function main(): Promise<void> {
         updateStatus: false
       });
       void reportDiagnostics(issue.diagnosticsNote);
-    }
+    });
   }
 
   try {
@@ -1486,7 +1485,7 @@ async function main(): Promise<void> {
   await syncPresence(boot.joinMode, false);
   await refreshPresence();
   latestMode = boot.joinMode;
-  void reportDiagnostics("runtime_booted");
+  await reportDiagnostics("runtime_booted");
 }
 
 void main().catch((error: unknown) => {

@@ -20,9 +20,14 @@ test("room shell loads and presence is registered", async ({ page, request }) =>
   const presence = (await presenceResponse.json()) as { items: Array<{ participantId: string }> };
   expect(presence.items.length).toBeGreaterThan(0);
 
-  const diagnosticsResponse = await request.get("/api/rooms/demo-room/diagnostics");
-  const diagnostics = (await diagnosticsResponse.json()) as { items: Array<{ note?: string }> };
-  expect(diagnostics.items.some((item) => item.note === "runtime_booted")).toBeTruthy();
+  await expect.poll(async () => {
+    const diagnosticsResponse = await request.get("/api/rooms/demo-room/diagnostics");
+    const diagnostics = (await diagnosticsResponse.json()) as { items: Array<{ note?: string }> };
+    return diagnostics.items.some((item) => item.note === "runtime_booted");
+  }, {
+    timeout: 15000,
+    intervals: [1000, 2000, 3000]
+  }).toBeTruthy();
 });
 
 test("room-state service health endpoint responds", async () => {
@@ -367,10 +372,11 @@ test("diagnostics capture multi-client remote visibility", async ({ browser, req
 
 test("control plane creates a room through the browser UI", async ({ page }) => {
   await page.goto("/control-plane");
-  await expect(page.locator("#template-detail")).toContainText("meeting-room-basic");
+  await expect(page.locator("#template-detail")).not.toContainText("Select a template to inspect details");
   await page.fill("#admin-token-input", "test-admin-token");
   await page.fill("#room-name-input", "Control Plane Room");
   await page.selectOption("#template-select", "showroom-basic");
+  await expect(page.locator("#template-detail")).toContainText("showroom-basic");
   await page.click("#create-room");
   await expect(page.locator("#publish-status")).toContainText("published");
   await expect(page.locator("#room-link")).not.toHaveText("");

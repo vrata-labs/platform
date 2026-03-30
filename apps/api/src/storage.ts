@@ -382,6 +382,7 @@ export class PostgresStorage implements Storage {
       tenantId: input.tenantId ?? "demo-tenant",
       templateId: input.templateId ?? "meeting-room-basic",
       name: input.name ?? "New Room",
+      sceneBundleUrl: input.sceneBundleUrl,
       features: {
         voice: input.features?.voice ?? true,
         spatialAudio: input.features?.spatialAudio ?? true,

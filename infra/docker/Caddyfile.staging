@@ -1,0 +1,11 @@
+{$NOAH_APP_DOMAIN} {
+  reverse_proxy api:4000
+}
+
+{$NOAH_STATE_DOMAIN} {
+  reverse_proxy room-state:2567
+}
+
+{$NOAH_LIVEKIT_DOMAIN} {
+  reverse_proxy livekit:7880
+}

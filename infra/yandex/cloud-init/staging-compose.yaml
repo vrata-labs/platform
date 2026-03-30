@@ -1,0 +1,72 @@
+#cloud-config
+package_update: true
+package_upgrade: false
+
+packages:
+  - git
+  - curl
+  - ca-certificates
+
+write_files:
+  - path: /usr/local/bin/noah-write-domains.sh
+    permissions: "0755"
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      NOAH_IP="$(curl -fsH 'Metadata-Flavor: Google' http://169.254.169.254/computeMetadata/v1/instance/network-interfaces/0/access-configs/0/external-ip)"
+      NOAH_DOMAIN_PREFIX="$(hostname -s)"
+      NOAH_APP_DOMAIN="${NOAH_DOMAIN_PREFIX}.${NOAH_IP}.sslip.io"
+      NOAH_LIVEKIT_DOMAIN="livekit-${NOAH_DOMAIN_PREFIX}.${NOAH_IP}.sslip.io"
+      NOAH_STATE_DOMAIN="state-${NOAH_DOMAIN_PREFIX}.${NOAH_IP}.sslip.io"
+
+      mkdir -p /opt/noah/infra/docker
+
+      cat > /opt/noah/infra/docker/.env.staging <<EOF
+      COMPOSE_PROJECT_NAME=noah
+      NOAH_APP_BASE_URL=https://${NOAH_APP_DOMAIN}
+      NOAH_APP_DOMAIN=${NOAH_APP_DOMAIN}
+      NOAH_STATE_DOMAIN=${NOAH_STATE_DOMAIN}
+      NOAH_LIVEKIT_DOMAIN=${NOAH_LIVEKIT_DOMAIN}
+      ROOM_STATE_PUBLIC_URL=wss://${NOAH_STATE_DOMAIN}
+      LIVEKIT_URL=wss://${NOAH_LIVEKIT_DOMAIN}
+      NOAH_HTTP_PORT=80
+      NOAH_ROOM_STATE_PORT=2567
+      NOAH_LIVEKIT_PORT=7880
+      NOAH_LIVEKIT_UDP_PORT=7881
+      MINIO_API_PORT=9000
+      MINIO_CONSOLE_PORT=9001
+      API_PORT=4000
+      API_CORS_ORIGIN=*
+      CONTROL_PLANE_ADMIN_TOKEN=noah-stage-admin
+      LIVEKIT_API_KEY=devkey
+      LIVEKIT_API_SECRET=secret
+      LIVEKIT_ROOM_PREFIX=noah-
+      STATE_TOKEN_TTL_SECONDS=900
+      MEDIA_TOKEN_TTL_SECONDS=900
+      POSTGRES_DB=noah
+      POSTGRES_USER=postgres
+      POSTGRES_PASSWORD=postgres
+      POSTGRES_PORT=5432
+      POSTGRES_URL=postgres://postgres:postgres@postgres:5432/noah
+      MINIO_ROOT_USER=noahminio
+      MINIO_ROOT_PASSWORD=noahminio123
+      MINIO_BUCKET=noah-scene-bundles
+      MINIO_PUBLIC_BASE_URL=https://${NOAH_APP_DOMAIN}
+      MINIO_SCENE_PREFIX=scenes/
+      CADDY_CONFIG_FILE=./Caddyfile.staging
+      EOF
+
+runcmd:
+  - install -m 0755 -d /etc/apt/keyrings
+  - curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+  - chmod a+r /etc/apt/keyrings/docker.asc
+  - bash -lc 'echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo $VERSION_CODENAME) stable" > /etc/apt/sources.list.d/docker.list'
+  - apt-get update
+  - apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+  - systemctl enable docker
+  - systemctl restart docker
+  - rm -rf /opt/noah
+  - git clone --branch deploy/scene-bundles-stage-20260328 --single-branch https://github.com/psilon2000/noah.git /opt/noah
+  - /usr/local/bin/noah-write-domains.sh
+  - bash -lc 'cd /opt/noah && docker compose --env-file infra/docker/.env.staging -f infra/docker/compose.staging.yml build'
+  - bash -lc 'cd /opt/noah && docker compose --env-file infra/docker/.env.staging -f infra/docker/compose.staging.yml up -d'

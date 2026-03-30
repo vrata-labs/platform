@@ -1,0 +1,110 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  livekit:
+    image: livekit/livekit-server:latest
+    command: --dev --bind 0.0.0.0
+    ports:
+      - "${NOAH_LIVEKIT_PORT}:7880"
+      - "${NOAH_LIVEKIT_UDP_PORT}:7881/udp"
+
+  room-state:
+    build:
+      context: ../..
+      dockerfile: apps/room-state/Dockerfile
+    environment:
+      NODE_ENV: production
+      ROOM_STATE_PORT: 2567
+    ports:
+      - "${NOAH_ROOM_STATE_PORT}:2567"
+
+  minio:
+    image: quay.io/minio/minio:RELEASE.2025-02-28T09-55-16Z
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    ports:
+      - "${MINIO_API_PORT}:9000"
+      - "${MINIO_CONSOLE_PORT}:9001"
+    volumes:
+      - minio-data:/data
+
+  minio-bootstrap:
+    image: minio/mc:RELEASE.2025-03-12T17-29-24Z
+    depends_on:
+      minio:
+        condition: service_started
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      MINIO_BUCKET: ${MINIO_BUCKET}
+      MINIO_SCENE_PREFIX: ${MINIO_SCENE_PREFIX}
+    volumes:
+      - ./minio-bootstrap.sh:/bootstrap.sh:ro
+      - ./minio-scene-smoke.json:/seed/scene.json:ro
+    entrypoint: ["/bin/sh", "/bootstrap.sh"]
+    restart: "no"
+
+  api:
+    build:
+      context: ../..
+      dockerfile: apps/api/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      room-state:
+        condition: service_started
+      livekit:
+        condition: service_started
+      minio-bootstrap:
+        condition: service_completed_successfully
+    environment:
+      NODE_ENV: production
+      API_PORT: ${API_PORT}
+      API_CORS_ORIGIN: ${API_CORS_ORIGIN}
+      API_PUBLIC_URL: ${NOAH_APP_BASE_URL}
+      RUNTIME_BASE_URL: ${NOAH_APP_BASE_URL}
+      ROOM_STATE_PUBLIC_URL: ${ROOM_STATE_PUBLIC_URL}
+      LIVEKIT_URL: ${LIVEKIT_URL}
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET}
+      LIVEKIT_ROOM_PREFIX: ${LIVEKIT_ROOM_PREFIX}
+      CONTROL_PLANE_ADMIN_TOKEN: ${CONTROL_PLANE_ADMIN_TOKEN}
+      STATE_TOKEN_TTL_SECONDS: ${STATE_TOKEN_TTL_SECONDS}
+      MEDIA_TOKEN_TTL_SECONDS: ${MEDIA_TOKEN_TTL_SECONDS}
+      POSTGRES_URL: ${POSTGRES_URL}
+
+  caddy:
+    image: caddy:2-alpine
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "${NOAH_HTTP_PORT}:80"
+    environment:
+      NOAH_APP_DOMAIN: ${NOAH_APP_DOMAIN}
+      NOAH_STATE_DOMAIN: ${NOAH_STATE_DOMAIN}
+      NOAH_LIVEKIT_DOMAIN: ${NOAH_LIVEKIT_DOMAIN}
+    volumes:
+      - ${CADDY_CONFIG_FILE}:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  postgres-data:
+  minio-data:
+  caddy-data:
+  caddy-config:

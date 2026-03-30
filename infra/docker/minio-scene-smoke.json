@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "sceneId": "compose-smoke",
+  "label": "Compose Smoke",
+  "source": "phase-2-bootstrap",
+  "glbPath": "/assets/scenes/the-hall-v1/scene.gltf",
+  "spawn": {
+    "position": {
+      "x": 0,
+      "y": 1.6,
+      "z": 4
+    },
+    "lookAt": {
+      "x": 0,
+      "y": 1.6,
+      "z": 0
+    }
+  }
+}
