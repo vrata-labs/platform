@@ -61,6 +61,14 @@ runcmd:
   - curl -fsSL https://get.docker.com | sh
   - systemctl enable docker
   - systemctl restart docker
+  - ufw allow 80/tcp
+  - ufw allow 443/tcp
+  - ufw allow 443/udp
+  - ufw allow 7880/tcp
+  - ufw allow 7881/udp
+  - ufw allow 2567/tcp
+  - ufw allow 9000/tcp
+  - ufw allow 9001/tcp
   - rm -rf /opt/noah
   - git clone --branch deploy/scene-bundles-stage-20260328 --single-branch https://github.com/psilon2000/noah.git /opt/noah
   - /usr/local/bin/noah-write-domains.sh
