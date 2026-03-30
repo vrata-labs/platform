@@ -15,6 +15,7 @@
     "lint": "pnpm -r --if-present lint",
     "test": "pnpm -r --if-present test",
     "typecheck": "pnpm -r --if-present typecheck",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test --grep-invert @staging",
+    "test:e2e:staging": "playwright test --grep @staging"
   }
 }

@@ -79,6 +79,14 @@ interface PresenceRecord {
   updatedAt: string;
 }
 
+interface RuntimeSpaceRecord {
+  roomId: string;
+  tenantId: string;
+  name: string;
+  templateId: string;
+  roomLink: string;
+}
+
 const apiPort = Number.parseInt(process.env.API_PORT ?? "4000", 10);
 const runtimeStaticRoot = normalize(join(fileURLToPath(new URL("../../runtime-web/dist", import.meta.url))));
 const runtimePublicRoot = normalize(join(fileURLToPath(new URL("../../runtime-web/public", import.meta.url))));
@@ -303,6 +311,40 @@ function encodeToken(payload: StateTokenPayload | MediaTokenPayload): string {
   return Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
 }
 
+async function listRuntimeSpaces(storage: Awaited<typeof storagePromise>, roomId: string, host?: string): Promise<RuntimeSpaceRecord[]> {
+  const currentRoom = await storage.getRoom(roomId);
+  if (!currentRoom) {
+    return [{
+      roomId,
+      tenantId: defaultManifest(roomId).tenantId,
+      name: roomId,
+      templateId: defaultManifest(roomId).template,
+      roomLink: createRoomLink(roomId, host)
+    }];
+  }
+
+  const rooms = (await storage.listRooms())
+    .filter((room) => room.tenantId === currentRoom.tenantId)
+    .filter((room) => room.roomId === currentRoom.roomId || room.guestAllowed !== false)
+    .map((room) => ({
+      roomId: room.roomId,
+      tenantId: room.tenantId,
+      name: room.name,
+      templateId: room.templateId,
+      roomLink: createRoomLink(room.roomId, host)
+    }));
+
+  return rooms.sort((left, right) => {
+    if (left.roomId === currentRoom.roomId) {
+      return -1;
+    }
+    if (right.roomId === currentRoom.roomId) {
+      return 1;
+    }
+    return left.name.localeCompare(right.name) || left.roomId.localeCompare(right.roomId);
+  });
+}
+
 async function handleRequest(request: IncomingMessage, response: ServerResponse): Promise<void> {
   const method = request.method ?? "GET";
   const url = new URL(request.url ?? "/", `http://${request.headers.host ?? `localhost:${apiPort}`}`);
@@ -388,6 +430,16 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   if (method === "GET" && url.pathname === "/api/rooms") {
     const rooms = await storage.listRooms();
     json(response, 200, { items: rooms.map((room) => ({ ...room, roomLink: createRoomLink(room.roomId, request.headers.host) })) });
+    return;
+  }
+
+  const roomSpacesMatch = url.pathname.match(/^\/api\/rooms\/([^/]+)\/spaces$/);
+  if (method === "GET" && roomSpacesMatch) {
+    if (url.searchParams.get("fail") === "1") {
+      json(response, 503, { error: "spaces_unavailable" });
+      return;
+    }
+    json(response, 200, { items: await listRuntimeSpaces(storage, decodeURIComponent(roomSpacesMatch[1]), request.headers.host) });
     return;
   }
 

@@ -98,6 +98,78 @@ test("room creation API returns a usable room link", async ({ page, request }) =
   await expect(page.locator("#room-name")).toContainText(`showroom-basic - ${room.roomId}`);
 });
 
+test("runtime HUD space selector lists guest-safe spaces and marks current room", async ({ page, request }) => {
+  const sharedRoomResponse = await request.post("/api/rooms", {
+    headers: {
+      "x-noah-admin-token": "test-admin-token"
+    },
+    data: {
+      tenantId: "demo-tenant",
+      templateId: "meeting-room-basic",
+      name: "Shared Space Room",
+      guestAllowed: true
+    }
+  });
+  expect(sharedRoomResponse.ok()).toBeTruthy();
+
+  const privateRoomResponse = await request.post("/api/rooms", {
+    headers: {
+      "x-noah-admin-token": "test-admin-token"
+    },
+    data: {
+      tenantId: "demo-tenant",
+      templateId: "meeting-room-basic",
+      name: "Private Space Room",
+      guestAllowed: false
+    }
+  });
+  expect(privateRoomResponse.ok()).toBeTruthy();
+
+  await page.goto("/rooms/demo-room");
+  await page.waitForTimeout(3000);
+
+  const spaceSelect = page.locator("#space-select");
+  await expect(spaceSelect).toBeVisible();
+  await expect(spaceSelect).toHaveValue(/\/rooms\/demo-room$/);
+
+  const optionTexts = await spaceSelect.locator("option").allTextContents();
+  expect(optionTexts).toContain("Demo Room");
+  expect(optionTexts).toContain("Shared Space Room");
+  expect(optionTexts).not.toContain("Private Space Room");
+});
+
+test("runtime HUD space selector navigates to another space", async ({ page, request }) => {
+  const targetRoomResponse = await request.post("/api/rooms", {
+    headers: {
+      "x-noah-admin-token": "test-admin-token"
+    },
+    data: {
+      tenantId: "demo-tenant",
+      templateId: "showroom-basic",
+      name: "Switch Target Room",
+      guestAllowed: true
+    }
+  });
+  expect(targetRoomResponse.ok()).toBeTruthy();
+  const targetRoom = (await targetRoomResponse.json()) as { roomId: string; roomLink: string };
+
+  await page.goto("/rooms/demo-room");
+  await page.waitForTimeout(3000);
+  await page.selectOption("#space-select", { value: targetRoom.roomLink });
+  await page.waitForURL(`**/rooms/${targetRoom.roomId}`);
+  await expect(page.locator("#room-name")).toContainText(`showroom-basic - ${targetRoom.roomId}`);
+});
+
+test("runtime keeps current room usable when space selector is unavailable", async ({ page }) => {
+  await page.goto("/rooms/demo-room?failspaces=1");
+  await page.waitForTimeout(3000);
+
+  await expect(page.locator("#room-name")).toContainText("meeting-room-basic - demo-room");
+  await expect(page.locator("#space-select")).toBeDisabled();
+  await expect(page.locator("#space-select-status")).toContainText("Spaces unavailable");
+  await expect(page.locator("#status-line")).toContainText("Joined as");
+});
+
 test("two rooms load two different scene bundles", async ({ browser, request }) => {
   const hallRoomResponse = await request.post("/api/rooms", {
     headers: {
@@ -187,7 +259,7 @@ test("two rooms load two different real SenseTower scene assets", async ({ brows
   await hallPage.waitForTimeout(5000);
   await officePage.waitForTimeout(5000);
 
-  await expect(hallPage.locator("#branding-line")).toContainText("Scene: SenseTower Hall 2");
+  await expect(hallPage.locator("#branding-line")).toContainText("Scene: SenseTower Hall");
   await expect(officePage.locator("#branding-line")).toContainText("Scene: SenseTower Office");
 
   const hallDebug = await hallPage.evaluate(() => (window as Window & { __NOAH_DEBUG__?: { sceneBundleState?: string; sceneBundleUrl?: string } }).__NOAH_DEBUG__);

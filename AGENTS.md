@@ -37,9 +37,16 @@
 ## Staging and asset publishing
 
 - Temporary Yandex Cloud stage VMs were repeatedly created from `infra/yandex/cloud-init/staging-scenes.yaml` because direct SSH/update flow on older staging hosts was unreliable.
+- The practical publish/update path was: commit scene bundle changes to branch `deploy/scene-bundles-stage-20260328`, push to GitHub, and point stage rooms at raw GitHub or jsDelivr scene bundle URLs instead of depending on local VM assets.
+- Fresh stage VMs were usually easier than patching old ones in place; they were created with `yc compute instance create ... --metadata-from-file user-data=infra/yandex/cloud-init/staging-scenes.yaml,ssh-keys=<file>`.
+- Stage rooms were created/updated through the API with `x-noah-admin-token`, then patched to set `sceneBundleUrl` to the published bundle URL.
+- For quick validation, browser automation against public room URLs plus `sceneDebug` diagnostics was more reliable than trying to introspect the VM directly.
 - One real failure mode: stage `/assets/...` requests returned `404`, which made scene bundle tests misleading.
 - `apps/api/src/index.ts` now has a fallback to serve static assets from both `apps/runtime-web/dist` and `apps/runtime-web/public`.
 - For reliable external testing, a CDN-hosted scene bundle URL worked well: `https://cdn.jsdelivr.net/gh/psilon2000/noah@deploy/scene-bundles-stage-20260328/apps/runtime-web/public/assets/scenes/sense-hall2-v1/scene.json`.
+- Raw GitHub bundle URLs were often safer than waiting for CDN cache refresh when a scene bundle had just changed.
+- A common false negative was judging a scene too early: some heavy scenes like `ArtGallery` stayed in fallback for several seconds before transitioning to `loaded`.
+- Another common false negative was blaming export quality when the real issue was spawn/framing; `Cinema` is the main example where bad initial positioning looked like a broken export.
 
 ## Telegram / historical context
 
@@ -53,6 +60,37 @@
 - For SenseTower scene migration, prefer existing exported GLB/GLTF assets over raw FBX whenever possible.
 - When something looks black or wrong, first inspect `sceneDebug` diagnostics before tweaking spawn/materials by hand.
 - If a scene already worked in another web project, copy its rendering assumptions first and only then adapt to `noah`.
+- After finishing code changes, default flow is not just local verification: publish the current changes to staging and verify them there as well.
+- Default verification after changes should include the full local e2e suite (`pnpm test:e2e`), then staging verification on the current staging host.
+- Staging verification should include at least the staging smoke suite (`pnpm test:e2e:staging`), and for meaningful runtime changes it should also cover the key public flows on staging: room load, selector/navigation if relevant, and important scene rooms such as Hall/BlueOffice when scene behavior could be affected.
+- Do not treat local green tests as sufficient when the change affects runtime behavior, deployment behavior, room manifests, scene bundles, or staging infrastructure; publish and verify on staging by default.
+
+## Current scene status
+
+- **Working baselines**
+- `Hall` — good baseline via `TheHallScene.glb`; clean mode + tuned spawn works.
+- `BlueOffice` — usable baseline after Unity export + material conversion passes; still has some black patches.
+- `TheLectureHall` — usable after lecture-hall material conversion pass.
+- `showroom` — usable after foliage/two-sided fixes and bench tuning.
+- `Meeting_small` — usable baseline; helper filtering was too aggressive once, so keep the original cleaned-by-spawn version as reference.
+- `Cinema` — usable baseline; the main problem was spawn/positioning, not export quality.
+- `Anastasia` — keep `sense-anastasia-glb-v1` as the stable baseline; `v2` conversion attempt fell back and should be debugged separately.
+
+- **Exported but still needs a dedicated pass**
+- `NewGallery` — exported, but still a heavy/dark case; requires targeted pass.
+- `ArtGallery` — exported; can load slowly (~12s) and needs a targeted pass.
+- `Standup` — exported; still dark and needs a material/framing pass.
+- `OporaRussia_Mike` — exported; needs a dedicated pass.
+- `Serg_Office_modeler` — exported; needs a dedicated pass.
+- `Cinema_modeler` — exported; needs a dedicated pass.
+
+- **Not worth prioritizing right now**
+- `InfrastructureScene` — exported, but looks more like a technical scene than a user-facing room.
+- `SceneForTest` — exported, but too small/test-like to matter.
+
+- **Known export problem cases**
+- `TheEnterScene` — current batch export crashes inside `BatchGlbExport.ConvertExportMaterials`.
+- `TheOfficeSceneOld` — current batch export crashes inside `BatchGlbExport.ConvertExportMaterials`.
 
 ## Confirmed Unity export path
 

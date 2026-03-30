@@ -65,3 +65,58 @@ test("room manifest exposes optional scene bundle url", async () => {
     delete process.env.CONTROL_PLANE_ADMIN_TOKEN;
   }
 });
+
+test("runtime spaces endpoint keeps same-tenant guest-safe rooms only", async () => {
+  process.env.NOAH_DISABLE_AUTOSTART = "1";
+  process.env.API_PORT = "4013";
+  process.env.CONTROL_PLANE_ADMIN_TOKEN = "test-admin-token";
+  const module = await import("./index.js");
+  const server = module.startApiServer(4013);
+
+  try {
+    const createGuestRoomResponse = await fetch("http://127.0.0.1:4013/api/rooms", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-noah-admin-token": "test-admin-token"
+      },
+      body: JSON.stringify({
+        tenantId: "demo-tenant",
+        templateId: "meeting-room-basic",
+        name: "Guest Room",
+        guestAllowed: true
+      })
+    });
+    assert.equal(createGuestRoomResponse.ok, true);
+    const guestRoom = (await createGuestRoomResponse.json()) as { roomId: string };
+
+    const createPrivateRoomResponse = await fetch("http://127.0.0.1:4013/api/rooms", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-noah-admin-token": "test-admin-token"
+      },
+      body: JSON.stringify({
+        tenantId: "demo-tenant",
+        templateId: "meeting-room-basic",
+        name: "Private Room",
+        guestAllowed: false
+      })
+    });
+    assert.equal(createPrivateRoomResponse.ok, true);
+
+    const spacesResponse = await fetch("http://127.0.0.1:4013/api/rooms/demo-room/spaces");
+    assert.equal(spacesResponse.ok, true);
+    const payload = (await spacesResponse.json()) as {
+      items: Array<{ roomId: string; name: string }>;
+    };
+
+    assert.equal(payload.items[0]?.roomId, "demo-room");
+    assert.equal(payload.items.some((item) => item.roomId === guestRoom.roomId), true);
+    assert.equal(payload.items.some((item) => item.name === "Private Room"), false);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    delete process.env.NOAH_DISABLE_AUTOSTART;
+    delete process.env.CONTROL_PLANE_ADMIN_TOKEN;
+  }
+});

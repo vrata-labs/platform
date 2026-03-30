@@ -1,0 +1,60 @@
+name: Staging Smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: "Published staging base URL"
+        required: true
+        type: string
+      room_id:
+        description: "Existing staging room id"
+        required: true
+        type: string
+      target_room_id:
+        description: "Second staging room id to switch to"
+        required: true
+        type: string
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    env:
+      BASE_URL: ${{ inputs.base_url }}
+      PLAYWRIGHT_NO_WEB_SERVER: "1"
+      STAGING_ROOM_ID: ${{ inputs.room_id }}
+      STAGING_TARGET_ROOM_ID: ${{ inputs.target_room_id }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Wait for staging health
+        run: |
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent "$BASE_URL/health" >/tmp/noah-staging-health.json; then
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "Staging health endpoint did not become ready" >&2
+          exit 1
+
+      - name: Install Playwright browser
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Run staging smoke
+        run: pnpm test:e2e:staging

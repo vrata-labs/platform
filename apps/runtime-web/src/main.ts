@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { VRButton } from "three/examples/jsm/webxr/VRButton.js";
 import { Room, RoomEvent, Track } from "livekit-client";
 
-import { bootRuntime, listPresence, planVoiceSession, removePresence, upsertPresence, type PresenceState } from "./index.js";
+import { bootRuntime, fetchRuntimeSpaces, listPresence, planVoiceSession, removePresence, resolveCurrentSpace, upsertPresence, type PresenceState, type RuntimeSpaceOption } from "./index.js";
 import { applySnapTurn, computeKeyboardDirection, rotateFlatVector, sanitizeXrAxes, stepFlatMovement } from "./movement.js";
 import { createMotionTrack, pushMotionSample, sampleMotion, type MotionTrack } from "./motion-state.js";
 import { connectRoomState, sendParticipantUpdate, type RoomStateClient, type RoomStateSnapshot } from "./room-state-client.js";
@@ -46,6 +46,7 @@ const sceneMaterialDebugMode = debugEnabled ? (query.get("mat") ?? "off") : "off
 const requestedCleanSceneMode = query.get("clean") === "1";
 const botMode = query.get("bot") ?? "off";
 const shareMockEnabled = query.get("sharemock") === "1";
+const failSpaces = query.get("failspaces") === "1";
 const faultConfig = {
   audio: query.get("failaudio") as RuntimeIssue["code"] | null,
   roomState: query.get("failroomstate") === "1",
@@ -60,6 +61,8 @@ const statusLineEl = mustElement<HTMLDivElement>("#status-line");
 const brandingLineEl = mustElement<HTMLDivElement>("#branding-line");
 const roomStateLineEl = mustElement<HTMLDivElement>("#room-state-line");
 const guestAccessLineEl = mustElement<HTMLDivElement>("#guest-access-line");
+const spaceSelect = mustElement<HTMLSelectElement>("#space-select");
+const spaceSelectStatusEl = mustElement<HTMLDivElement>("#space-select-status");
 const sceneHost = mustElement<HTMLDivElement>("#scene");
 const joinAudioButton = mustElement<HTMLButtonElement>("#join-audio");
 const muteButton = mustElement<HTMLButtonElement>("#toggle-mute");
@@ -191,6 +194,7 @@ let runtimeFlags = {
   sceneBundles: true
 };
 let effectiveCleanSceneMode = requestedCleanSceneMode;
+let availableSpaces: RuntimeSpaceOption[] = [];
 
 function setFallbackEnvironmentVisible(visible: boolean): void {
   for (const object of fallbackEnvironment) {
@@ -399,7 +403,9 @@ const debugState = {
   remoteTargets: [] as Array<{ id: string; x: number; z: number }>,
   sceneBundleUrl: null as string | null,
   sceneBundleState: "fallback" as "fallback" | "loaded" | "failed",
-  sceneDebug: createEmptySceneDiagnostics()
+  sceneDebug: createEmptySceneDiagnostics(),
+  spaceSelectorState: "loading" as "loading" | "ready" | "empty" | "unavailable",
+  availableSpaceCount: 0
 };
 
 const floorMaterial = floor.material as THREE.MeshStandardMaterial;
@@ -413,6 +419,71 @@ function setStatus(message: string): void {
 
 function setRoomStateStatus(message: string): void {
   roomStateLineEl.textContent = message;
+}
+
+function renderSpaceSelector(state: "loading" | "ready" | "empty" | "unavailable", spaces: RuntimeSpaceOption[], selectedRoomId: string): void {
+  spaceSelect.replaceChildren();
+  debugState.spaceSelectorState = state;
+  debugState.availableSpaceCount = spaces.length;
+
+  if (state === "loading") {
+    const option = document.createElement("option");
+    option.value = selectedRoomId;
+    option.textContent = "Loading spaces...";
+    spaceSelect.appendChild(option);
+    spaceSelect.disabled = true;
+    spaceSelectStatusEl.textContent = "Loading spaces...";
+    return;
+  }
+
+  if (state === "unavailable") {
+    const option = document.createElement("option");
+    option.value = selectedRoomId;
+    option.textContent = "Spaces unavailable";
+    spaceSelect.appendChild(option);
+    spaceSelect.disabled = true;
+    spaceSelectStatusEl.textContent = "Spaces unavailable";
+    return;
+  }
+
+  if (state === "empty") {
+    const option = document.createElement("option");
+    option.value = selectedRoomId;
+    option.textContent = "No spaces available";
+    spaceSelect.appendChild(option);
+    spaceSelect.disabled = true;
+    spaceSelectStatusEl.textContent = "No spaces available";
+    return;
+  }
+
+  for (const space of spaces) {
+    const option = document.createElement("option");
+    option.value = space.roomLink;
+    option.textContent = space.label;
+    option.selected = space.roomId === selectedRoomId;
+    spaceSelect.appendChild(option);
+  }
+  spaceSelect.disabled = spaces.length <= 1;
+  spaceSelectStatusEl.textContent = spaces.length <= 1 ? "Only one space available" : "";
+}
+
+async function loadAvailableSpaces(currentRoomId: string): Promise<void> {
+  renderSpaceSelector("loading", [], currentRoomId);
+  try {
+    const search = failSpaces ? "?fail=1" : "";
+    const spaces = await fetchRuntimeSpaces(apiBaseUrl, currentRoomId, search);
+    availableSpaces = spaces;
+    const currentSpace = resolveCurrentSpace(spaces, currentRoomId);
+    if (!currentSpace && spaces.length > 0) {
+      renderSpaceSelector("ready", spaces, spaces[0].roomId);
+      spaceSelectStatusEl.textContent = "Current space not listed";
+      return;
+    }
+    renderSpaceSelector(spaces.length === 0 ? "empty" : "ready", spaces, currentRoomId);
+  } catch (_error: unknown) {
+    availableSpaces = [];
+    renderSpaceSelector("unavailable", [], currentRoomId);
+  }
 }
 
 function commitRuntimeUiState(nextState: ReturnType<typeof createRuntimeUiState>, updateStatus = true): void {
@@ -1105,6 +1176,15 @@ muteButton.addEventListener("click", async () => {
   debugState.audioState = microphoneEnabled ? "live" : "muted";
 });
 
+spaceSelect.addEventListener("change", () => {
+  const targetRoomLink = spaceSelect.value;
+  const targetSpace = availableSpaces.find((space) => space.roomLink === targetRoomLink);
+  if (!targetRoomLink || !targetSpace || targetSpace.roomId === roomId) {
+    return;
+  }
+  window.location.assign(targetRoomLink);
+});
+
 joinAudioButton.addEventListener("click", () => {
   void joinAudio().catch((error: unknown) => {
     console.error(error);
@@ -1268,6 +1348,7 @@ async function main(): Promise<void> {
     ? `Attached assets: ${boot.assets.map((asset) => `${asset.kind}${asset.validationStatus ? ` [${asset.validationStatus}]` : ""}`).join(", ")}`
     : "No branded assets attached";
   guestAccessLineEl.textContent = boot.guestAllowed ? "Guest access: enabled" : "Guest access: members only";
+  await loadAvailableSpaces(boot.roomId);
   floorMaterial.color.set(boot.theme.accentColor);
   wallMaterial.color.set(boot.theme.primaryColor);
   if (!effectiveCleanSceneMode) {
