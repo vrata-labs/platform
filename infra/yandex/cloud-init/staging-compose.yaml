@@ -24,49 +24,47 @@ write_files:
       python3 - <<'PY'
       import os
       from pathlib import Path
-      from textwrap import dedent
-
-      content = dedent("""\
-COMPOSE_PROJECT_NAME=noah
-NOAH_APP_BASE_URL=http://{ip}:4000
-NOAH_APP_DOMAIN={app_domain}
-NOAH_STATE_DOMAIN={state_domain}
-NOAH_LIVEKIT_DOMAIN={livekit_domain}
-ROOM_STATE_PUBLIC_URL=ws://{ip}:2567
-LIVEKIT_URL=ws://{ip}:7880
-NOAH_HTTP_PORT=80
-NOAH_HTTPS_PORT=443
-NOAH_API_DIRECT_PORT=4000
-NOAH_ROOM_STATE_PORT=2567
-NOAH_LIVEKIT_PORT=7880
-NOAH_LIVEKIT_UDP_PORT=7881
-MINIO_API_PORT=9000
-MINIO_CONSOLE_PORT=9001
-API_PORT=4000
-API_CORS_ORIGIN=*
-CONTROL_PLANE_ADMIN_TOKEN=noah-stage-admin
-LIVEKIT_API_KEY=devkey
-LIVEKIT_API_SECRET=secret
-LIVEKIT_ROOM_PREFIX=noah-
-STATE_TOKEN_TTL_SECONDS=900
-MEDIA_TOKEN_TTL_SECONDS=900
-POSTGRES_DB=noah
-POSTGRES_USER=postgres
-POSTGRES_PASSWORD=postgres
-POSTGRES_PORT=5432
-POSTGRES_URL=postgres://postgres:postgres@postgres:5432/noah
-MINIO_ROOT_USER=noahminio
-MINIO_ROOT_PASSWORD=noahminio123
-MINIO_BUCKET=noah-scene-bundles
-MINIO_PUBLIC_BASE_URL=http://{ip}:9000
-MINIO_SCENE_PREFIX=scenes/
-CADDY_CONFIG_FILE=./Caddyfile.staging
-""").format(
-          ip=os.environ["NOAH_IP"],
-          app_domain=os.environ["NOAH_APP_DOMAIN"],
-          state_domain=os.environ["NOAH_STATE_DOMAIN"],
-          livekit_domain=os.environ["NOAH_LIVEKIT_DOMAIN"]
-      )
+      ip = os.environ["NOAH_IP"]
+      app_domain = os.environ["NOAH_APP_DOMAIN"]
+      state_domain = os.environ["NOAH_STATE_DOMAIN"]
+      livekit_domain = os.environ["NOAH_LIVEKIT_DOMAIN"]
+      lines = [
+          "COMPOSE_PROJECT_NAME=noah",
+          f"NOAH_APP_BASE_URL=http://{ip}:4000",
+          f"NOAH_APP_DOMAIN={app_domain}",
+          f"NOAH_STATE_DOMAIN={state_domain}",
+          f"NOAH_LIVEKIT_DOMAIN={livekit_domain}",
+          f"ROOM_STATE_PUBLIC_URL=ws://{ip}:2567",
+          f"LIVEKIT_URL=ws://{ip}:7880",
+          "NOAH_HTTP_PORT=80",
+          "NOAH_HTTPS_PORT=443",
+          "NOAH_API_DIRECT_PORT=4000",
+          "NOAH_ROOM_STATE_PORT=2567",
+          "NOAH_LIVEKIT_PORT=7880",
+          "NOAH_LIVEKIT_UDP_PORT=7881",
+          "MINIO_API_PORT=9000",
+          "MINIO_CONSOLE_PORT=9001",
+          "API_PORT=4000",
+          "API_CORS_ORIGIN=*",
+          "CONTROL_PLANE_ADMIN_TOKEN=noah-stage-admin",
+          "LIVEKIT_API_KEY=devkey",
+          "LIVEKIT_API_SECRET=secret",
+          "LIVEKIT_ROOM_PREFIX=noah-",
+          "STATE_TOKEN_TTL_SECONDS=900",
+          "MEDIA_TOKEN_TTL_SECONDS=900",
+          "POSTGRES_DB=noah",
+          "POSTGRES_USER=postgres",
+          "POSTGRES_PASSWORD=postgres",
+          "POSTGRES_PORT=5432",
+          "POSTGRES_URL=postgres://postgres:postgres@postgres:5432/noah",
+          "MINIO_ROOT_USER=noahminio",
+          "MINIO_ROOT_PASSWORD=noahminio123",
+          "MINIO_BUCKET=noah-scene-bundles",
+          f"MINIO_PUBLIC_BASE_URL=http://{ip}:9000",
+          "MINIO_SCENE_PREFIX=scenes/",
+          "CADDY_CONFIG_FILE=./Caddyfile.staging"
+      ]
+      content = "\n".join(lines) + "\n"
       Path("/opt/noah/infra/docker/.env.staging").write_text(content)
       PY
 
