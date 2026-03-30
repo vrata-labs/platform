@@ -30,6 +30,7 @@ write_files:
       ROOM_STATE_PUBLIC_URL=wss://${NOAH_STATE_DOMAIN}
       LIVEKIT_URL=wss://${NOAH_LIVEKIT_DOMAIN}
       NOAH_HTTP_PORT=80
+      NOAH_HTTPS_PORT=443
       NOAH_ROOM_STATE_PORT=2567
       NOAH_LIVEKIT_PORT=7880
       NOAH_LIVEKIT_UDP_PORT=7881
@@ -60,7 +61,7 @@ runcmd:
   - install -m 0755 -d /etc/apt/keyrings
   - curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
   - chmod a+r /etc/apt/keyrings/docker.asc
-  - bash -lc 'echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo $VERSION_CODENAME) stable" > /etc/apt/sources.list.d/docker.list'
+  - bash -lc '. /etc/os-release && printf "deb [arch=%s signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu %s stable\n" "$(dpkg --print-architecture)" "$VERSION_CODENAME" > /etc/apt/sources.list.d/docker.list'
   - apt-get update
   - apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
   - systemctl enable docker

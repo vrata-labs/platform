@@ -94,6 +94,8 @@ services:
         condition: service_healthy
     ports:
       - "${NOAH_HTTP_PORT}:80"
+      - "${NOAH_HTTPS_PORT}:443"
+      - "${NOAH_HTTPS_PORT}:443/udp"
     environment:
       NOAH_APP_DOMAIN: ${NOAH_APP_DOMAIN}
       NOAH_STATE_DOMAIN: ${NOAH_STATE_DOMAIN}
