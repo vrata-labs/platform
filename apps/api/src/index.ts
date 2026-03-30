@@ -96,8 +96,24 @@ const livekitApiSecret = process.env.LIVEKIT_API_SECRET ?? "secret";
 const controlPlaneAdminToken = process.env.CONTROL_PLANE_ADMIN_TOKEN ?? "";
 const presenceTtlMs = Number.parseInt(process.env.PRESENCE_TTL_MS ?? "15000", 10);
 const storagePromise = createStorage();
+const requiredProductionApiEnvVars = ["CONTROL_PLANE_ADMIN_TOKEN", "ROOM_STATE_PUBLIC_URL", "RUNTIME_BASE_URL"] as const;
 
 const presenceByRoom = new Map<string, Map<string, PresenceRecord>>();
+
+export function getMissingRequiredApiEnvVars(env: NodeJS.ProcessEnv = process.env): string[] {
+  return requiredProductionApiEnvVars.filter((name) => !env[name] || env[name]?.trim().length === 0);
+}
+
+function validateProductionApiEnv(env: NodeJS.ProcessEnv = process.env): void {
+  if (env.NODE_ENV !== "production") {
+    return;
+  }
+  const missing = getMissingRequiredApiEnvVars(env);
+  if (missing.length === 0) {
+    return;
+  }
+  throw new Error(`missing_required_api_env:${missing.join(",")}`);
+}
 
 function logEvent(event: Record<string, unknown>): void {
   process.stdout.write(`${JSON.stringify(event)}\n`);
@@ -637,5 +653,6 @@ export function startApiServer(port = apiPort) {
 }
 
 if (process.env.NODE_ENV !== "test" && process.env.NOAH_DISABLE_AUTOSTART !== "1") {
+  validateProductionApiEnv();
   startApiServer();
 }

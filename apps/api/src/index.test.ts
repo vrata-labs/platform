@@ -5,6 +5,25 @@ test("api module exports server starter", async () => {
   process.env.NOAH_DISABLE_AUTOSTART = "1";
   const module = await import("./index.js");
   assert.equal(typeof module.startApiServer, "function");
+  assert.equal(typeof module.getMissingRequiredApiEnvVars, "function");
+  delete process.env.NOAH_DISABLE_AUTOSTART;
+});
+
+test("api production env validator reports missing required vars", async () => {
+  process.env.NOAH_DISABLE_AUTOSTART = "1";
+  const module = await import("./index.js");
+
+  assert.deepEqual(
+    module.getMissingRequiredApiEnvVars({
+      NODE_ENV: "production",
+      API_PORT: "4000",
+      CONTROL_PLANE_ADMIN_TOKEN: "",
+      ROOM_STATE_PUBLIC_URL: "ws://127.0.0.1:2567",
+      RUNTIME_BASE_URL: ""
+    }),
+    ["CONTROL_PLANE_ADMIN_TOKEN", "RUNTIME_BASE_URL"]
+  );
+
   delete process.env.NOAH_DISABLE_AUTOSTART;
 });
 

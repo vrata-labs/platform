@@ -42,6 +42,13 @@ Known staging pitfalls:
 
 Phase 1 container smoke commands:
 
+Docker build context inputs used by the current Dockerfiles:
+
+- Root: `package.json`, `pnpm-lock.yaml`, `pnpm-workspace.yaml`, `tsconfig.base.json`
+- App manifests/config: `apps/api/package.json`, `apps/room-state/package.json`, `apps/runtime-web/package.json`, `apps/control-plane/package.json`, all `apps/*/tsconfig.json`
+- Source/build inputs: `apps/api/src/**`, `apps/room-state/src/**`, `apps/runtime-web/src/**`, `apps/runtime-web/public/**`, `apps/control-plane/src/**`
+- Shared workspace packages if referenced by app builds: `packages/**`
+
 - Required env for `api` smoke: `API_PORT`, `CONTROL_PLANE_ADMIN_TOKEN`, `ROOM_STATE_PUBLIC_URL`, `RUNTIME_BASE_URL`
 - Required env for `room-state` smoke: `ROOM_STATE_PORT` if you want a non-default port; otherwise defaults are enough
 - Optional for both: `POSTGRES_URL`, `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`
