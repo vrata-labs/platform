@@ -33,10 +33,10 @@ users:
   - default
   - name: ${SSH_LOGIN}
     shell: /bin/bash
-    sudo: ALL=(ALL) NOPASSWD:ALL
-    groups: sudo,docker
+    sudo: 'ALL=(ALL) NOPASSWD:ALL'
+    groups: [sudo, docker]
     ssh_authorized_keys:
-      - ${SSH_KEY_CONTENT}
+      - '${SSH_KEY_CONTENT}'
 EOF
   USER_DATA_TO_USE="$TEMP_USER_DATA_FILE"
 fi
