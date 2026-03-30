@@ -20,10 +20,13 @@
 - New staging VM bootstrap: `infra/yandex/scripts/provision-staging-compose.sh <instance-name>`
 - Existing compose staging rollout on VM: `git pull && docker compose --env-file infra/docker/.env.staging -f infra/docker/compose.staging.yml build && docker compose --env-file infra/docker/.env.staging -f infra/docker/compose.staging.yml up -d`
 - Rollback path on VM: `git checkout <previous-commit> && docker compose --env-file infra/docker/.env.staging -f infra/docker/compose.staging.yml build && docker compose --env-file infra/docker/.env.staging -f infra/docker/compose.staging.yml up -d`
+- Current verified compose staging VM: `noah-stage-compose-v11` at `89.169.161.91`
+- Verified direct smoke endpoints on compose staging: `http://<ip>:4000/health`, `http://<ip>:4000/rooms/demo-room`, `http://<ip>:4000/control-plane`
+- `pnpm test:e2e:staging` is currently intended to run against direct `BASE_URL=http://<ip>:4000` with `PLAYWRIGHT_NO_WEB_SERVER=1`
+- Compose VM SSH is provisioned through rendered cloud-init users in `infra/yandex/scripts/provision-staging-compose.sh`; this was required for reliable rollback verification
 
 ## Pending work
 
-- Real staging manifests and bootstrap scripts
 - DNS/certificate flow
 - Backup policy for control-plane data
 - Service-level health checks and dashboards beyond local smoke tests

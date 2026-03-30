@@ -37,12 +37,18 @@
 ## Staging and asset publishing
 
 - Temporary Yandex Cloud stage VMs were repeatedly created from `infra/yandex/cloud-init/staging-scenes.yaml` because direct SSH/update flow on older staging hosts was unreliable.
+- Compose-based staging bootstrap now lives in `infra/yandex/cloud-init/staging-compose.yaml`, and fresh compose hosts should be created through `infra/yandex/scripts/provision-staging-compose.sh`.
+- The current compose staging host after Phase 2 is `noah-stage-compose-v11` at `89.169.161.91`; primary smoke path is direct `http://<ip>:4000`.
 - The practical publish/update path was: commit scene bundle changes to branch `deploy/scene-bundles-stage-20260328`, push to GitHub, and point stage rooms at raw GitHub or jsDelivr scene bundle URLs instead of depending on local VM assets.
+- Compose staging rollout path is now: `git checkout <commit>` (or `git pull` on branch) -> `docker compose --env-file infra/docker/.env.staging -f infra/docker/compose.staging.yml build` -> `docker compose ... up -d`.
+- Rollback was verified on compose staging by switching between commits and rebuilding in place without deleting `postgres` or `minio` volumes; smoke after rollback should cover at least `/health` and `/rooms/demo-room`.
 - Fresh stage VMs were usually easier than patching old ones in place; they were created with `yc compute instance create ... --metadata-from-file user-data=infra/yandex/cloud-init/staging-scenes.yaml,ssh-keys=<file>`.
+- For compose VMs, SSH access was made reliable by rendering a real user with `ssh_authorized_keys` directly into cloud-init instead of relying only on OS Login metadata.
 - Stage rooms were created/updated through the API with `x-noah-admin-token`, then patched to set `sceneBundleUrl` to the published bundle URL.
 - For quick validation, browser automation against public room URLs plus `sceneDebug` diagnostics was more reliable than trying to introspect the VM directly.
 - One real failure mode: stage `/assets/...` requests returned `404`, which made scene bundle tests misleading.
 - `apps/api/src/index.ts` now has a fallback to serve static assets from both `apps/runtime-web/dist` and `apps/runtime-web/public`.
+- One Phase 2 infra failure mode was transient registry instability from `quay.io` for MinIO; compose now uses `minio/minio` from Docker Hub instead.
 - For reliable external testing, a CDN-hosted scene bundle URL worked well: `https://cdn.jsdelivr.net/gh/psilon2000/noah@deploy/scene-bundles-stage-20260328/apps/runtime-web/public/assets/scenes/sense-hall2-v1/scene.json`.
 - Raw GitHub bundle URLs were often safer than waiting for CDN cache refresh when a scene bundle had just changed.
 - A common false negative was judging a scene too early: some heavy scenes like `ArtGallery` stayed in fallback for several seconds before transitioning to `loaded`.
