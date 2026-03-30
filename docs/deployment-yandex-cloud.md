@@ -21,9 +21,13 @@
 - Existing compose staging rollout on VM: `git pull && docker compose --env-file infra/docker/.env.staging -f infra/docker/compose.staging.yml build && docker compose --env-file infra/docker/.env.staging -f infra/docker/compose.staging.yml up -d`
 - Rollback path on VM: `git checkout <previous-commit> && docker compose --env-file infra/docker/.env.staging -f infra/docker/compose.staging.yml build && docker compose --env-file infra/docker/.env.staging -f infra/docker/compose.staging.yml up -d`
 - Current verified compose staging VM: `noah-stage-compose-v11` at `89.169.161.91`
+- Primary public app URL: `https://89.169.161.91.sslip.io`
+- Public room-state URL: `https://state.89.169.161.91.sslip.io`
+- Public LiveKit URL: `https://livekit.89.169.161.91.sslip.io`
 - Verified direct smoke endpoints on compose staging: `http://<ip>:4000/health`, `http://<ip>:4000/rooms/demo-room`, `http://<ip>:4000/control-plane`
 - `pnpm test:e2e:staging` is currently intended to run against direct `BASE_URL=http://<ip>:4000` with `PLAYWRIGHT_NO_WEB_SERVER=1`
 - Compose VM SSH is provisioned through rendered cloud-init users in `infra/yandex/scripts/provision-staging-compose.sh`; this was required for reliable rollback verification
+- For sslip domain generation, use `${ip}.sslip.io` and subdomains like `state.${ip}.sslip.io`; avoiding hostname-prefix interpolation prevents invalid `..sslip.io` Caddy configs.
 
 ## Pending work
 

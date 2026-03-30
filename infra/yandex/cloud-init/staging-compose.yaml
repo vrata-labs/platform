@@ -14,10 +14,9 @@ write_files:
       #!/usr/bin/env bash
       set -euo pipefail
       NOAH_IP="$(curl -fsH 'Metadata-Flavor: Google' http://169.254.169.254/computeMetadata/v1/instance/network-interfaces/0/access-configs/0/external-ip)"
-      NOAH_DOMAIN_PREFIX="$(hostname -s)"
-      NOAH_APP_DOMAIN="${NOAH_DOMAIN_PREFIX}.${NOAH_IP}.sslip.io"
-      NOAH_LIVEKIT_DOMAIN="livekit-${NOAH_DOMAIN_PREFIX}.${NOAH_IP}.sslip.io"
-      NOAH_STATE_DOMAIN="state-${NOAH_DOMAIN_PREFIX}.${NOAH_IP}.sslip.io"
+      NOAH_APP_DOMAIN="${NOAH_IP}.sslip.io"
+      NOAH_LIVEKIT_DOMAIN="livekit.${NOAH_IP}.sslip.io"
+      NOAH_STATE_DOMAIN="state.${NOAH_IP}.sslip.io"
 
       mkdir -p /opt/noah/infra/docker
       export NOAH_IP NOAH_APP_DOMAIN NOAH_STATE_DOMAIN NOAH_LIVEKIT_DOMAIN

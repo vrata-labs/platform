@@ -43,11 +43,16 @@ Known staging pitfalls:
 Phase 2 compose-based staging is now real and validated.
 
 - Bootstrap a fresh compose staging VM with `infra/yandex/scripts/provision-staging-compose.sh <instance-name>`
-- Current verified compose host is `noah-stage-compose-v11` at `http://89.169.161.91:4000`
+- Current verified compose host is `noah-stage-compose-v11`
+- Primary public app URL: `https://89.169.161.91.sslip.io`
+- Direct app fallback: `http://89.169.161.91:4000`
+- Public room-state URL: `https://state.89.169.161.91.sslip.io`
+- Public LiveKit URL: `https://livekit.89.169.161.91.sslip.io`
 - Local validation path remains `docker compose --env-file infra/docker/.env.staging.example -f infra/docker/compose.staging.yml up -d --build`
 - Staging rollout on the VM is `git checkout <commit>` or `git pull`, then `docker compose --env-file infra/docker/.env.staging -f infra/docker/compose.staging.yml build && docker compose --env-file infra/docker/.env.staging -f infra/docker/compose.staging.yml up -d`
 - Verified staging checks for Phase 2: `/health`, `/rooms/demo-room`, `/control-plane`, `pnpm test:e2e:staging`, and manual Hall/BlueOffice diagnostics
 - Verified rollback path for Phase 2: switch to previous commit, rebuild with the same compose file, bring the stack back up, and confirm `/health` plus `/rooms/demo-room`
+- For sslip/Caddy, use the `*.sslip.io` hostnames above; bare `http://<ip>` or `https://<ip>` is not the stable public path.
 
 ## Container smoke
 
