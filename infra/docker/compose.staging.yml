@@ -86,6 +86,8 @@ services:
       STATE_TOKEN_TTL_SECONDS: ${STATE_TOKEN_TTL_SECONDS}
       MEDIA_TOKEN_TTL_SECONDS: ${MEDIA_TOKEN_TTL_SECONDS}
       POSTGRES_URL: ${POSTGRES_URL}
+    ports:
+      - "${NOAH_API_DIRECT_PORT}:4000"
 
   caddy:
     image: caddy:2-alpine
