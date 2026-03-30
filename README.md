@@ -37,3 +37,25 @@ Known staging pitfalls:
 - Old stage VMs were often not worth patching in place; spinning up a fresh VM from `infra/yandex/cloud-init/staging-scenes.yaml` was usually faster.
 - Some scenes load slowly; do not treat early fallback as a final failure without waiting for diagnostics.
 - `Cinema` showed that a bad spawn point can look like a broken export even when the scene itself is fine.
+
+## Container smoke
+
+Phase 1 container smoke commands:
+
+- Required env for `api` smoke: `API_PORT`, `CONTROL_PLANE_ADMIN_TOKEN`, `ROOM_STATE_PUBLIC_URL`, `RUNTIME_BASE_URL`
+- Required env for `room-state` smoke: `ROOM_STATE_PORT` if you want a non-default port; otherwise defaults are enough
+- Optional for both: `POSTGRES_URL`, `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`
+
+```bash
+docker build -f apps/api/Dockerfile -t noah-api .
+docker build -f apps/room-state/Dockerfile -t noah-room-state .
+
+docker run --rm -p 2567:2567 -e ROOM_STATE_PORT=2567 --name noah-room-state noah-room-state
+
+docker run --rm -p 4000:4000 \
+  -e API_PORT=4000 \
+  -e CONTROL_PLANE_ADMIN_TOKEN=noah-stage-admin \
+  -e ROOM_STATE_PUBLIC_URL=ws://127.0.0.1:2567 \
+  -e RUNTIME_BASE_URL=http://127.0.0.1:4000 \
+  --name noah-api noah-api
+```
