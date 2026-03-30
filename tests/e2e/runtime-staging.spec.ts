@@ -12,8 +12,13 @@ test.describe("@staging runtime HUD space selector", () => {
     await expect(page.locator("#room-name")).not.toContainText("Loading room");
     await expect(page.locator("#space-select")).toBeVisible();
 
-    const options = await page.locator("#space-select option").allTextContents();
-    expect(options.length).toBeGreaterThanOrEqual(2);
+    await expect.poll(async () => {
+      const options = await page.locator("#space-select option").allTextContents();
+      return options.length;
+    }, {
+      timeout: 15000,
+      intervals: [1000, 2000, 3000]
+    }).toBeGreaterThanOrEqual(2);
   });
 
   test("selector switches to the configured staging target room", async ({ page, baseURL }) => {
