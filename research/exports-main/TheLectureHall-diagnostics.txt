@@ -1,0 +1,2418 @@
+scene: Assets\Scenes\TheLectureHall.unity
+renderers: 276
+lightmaps: 0
+
+## Shader usage
+- Universal Render Pipeline/Lit: 160 material slots
+- Shader Graphs/Lightmapped: 68 material slots
+- Universal Render Pipeline/Unlit: 32 material slots
+- Shader Graphs/ColorRamp: 29 material slots
+- Universal Render Pipeline/Nature/SpeedTree8: 10 material slots
+- Shader Graphs/DirectionalDissolve: 3 material slots
+- Universal Render Pipeline/Particles/Unlit: 2 material slots
+
+## Renderer materials
+- renderer: -- Models Environment --/lektory_01/AM104_044_obj_030.007 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.053
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: Assets/Models/LectureHall/lectory_01/textures/microphone.png
+    baseMap: Assets/Models/LectureHall/lectory_01/textures/microphone.png
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/ExitDoor/LikeButtons/LikesSwitcher/PhysicsButtonLike/Base [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: 01 - Default
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.588, 0.588, 0.588, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/ExitDoor/LikeButtons/LikesSwitcher/PhysicsButtonDislike/Base [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: 01 - Default
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.588, 0.588, 0.588, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/ExitDoor/ActiveDoorCollider/Blocked [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Door_ColorRamp_Red
+    shader: Shader Graphs/ColorRamp
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: CENTER (spawn point) [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: OnPlayerUI/BlackScreen/BlackMask/Cube [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: Zones/Places ZoneController/LectureHall Chair 2 Place (1)/View/Signals/Reticle/Cube [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: Zones/Places ZoneController/LectureHall Chair 2 Place (5)/View/Signals/Reticle/Cube [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: Zones/Places ZoneController/LectureHall Chair 1 Place (5)/View/Signals/Reticle/Cube [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: Zones/Places ZoneController/LectureHall Chair 2 Place (3)/View/Signals/Reticle/Cube [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: Zones/Places ZoneController/LectureHall Chair 2 Place (2)/View/Signals/Reticle/Cube [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: Zones/Places ZoneController/LectureHall Chair 2 Place (4)/View/Signals/Reticle/Cube [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: Zones/Places ZoneController/LectureHall Chair 1 Place (1)/View/Signals/Reticle/Cube [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: Zones/Places ZoneController/LectureHall Chair 1 Place (2)/View/Signals/Reticle/Cube [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/ExitDoor/DoorFrame/Cube [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: DoorFrame
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.170, 0.170, 0.170, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: Zones/Places ZoneController/LectureHall Chair 2 Place/View/Signals/Reticle/Cube [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: Zones/Places ZoneController/LectureHall Chair 2 Place (6)/View/Signals/Reticle/Cube [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: Zones/Places ZoneController/LectureHall Chair 1 Place (4)/View/Signals/Reticle/Cube [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: PlayerUiBinder/GameObjectPanels/NewInventoryPanel/RecyclingArea/InventoryRecyclingArea/Cube [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: PlayerUiBinder/GameObjectPanels/NewInventoryPanel/RecyclingArea/InventoryRecyclingArea/Cube [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: PlayerUiBinder/GameObjectPanels/NewInventoryPanel/RecyclingArea/InventoryRecyclingArea/Cube [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: PlayerUiBinder/GameObjectPanels/NewInventoryPanel/RecyclingArea/InventoryRecyclingArea/Cube [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: PlayerUiBinder/GameObjectPanels/NewInventoryPanel/RecyclingArea/InventoryRecyclingArea/Cube [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: PlayerUiBinder/GameObjectPanels/NewInventoryPanel/RecyclingArea/InventoryRecyclingArea/Cube [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: PlayerUiBinder/GameObjectPanels/NewInventoryPanel/RecyclingArea/InventoryRecyclingArea/Cube [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: PlayerUiBinder/GameObjectPanels/NewInventoryPanel/RecyclingArea/InventoryRecyclingArea/Cube [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: Zones/Places ZoneController/LectureHall Chair 1 Place/View/Signals/Reticle/Cube [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: Zones/Places ZoneController/LectureHall Chair 1 Place (3)/View/Signals/Reticle/Cube [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Models Environment --/lektory_01/Cube.001 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: kovrolin
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: -- Models Environment --/lektory_01/Cube.002 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: black_back
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.050, 0.050, 0.050, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+  - material: glass
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.585, 0.585, 0.585, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _ALPHATEST_ON, _SURFACE_TYPE_TRANSPARENT
+- renderer: -- Models Environment --/lektory_01/Cube.003 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: wood_walls
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+  - material: black_back
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.050, 0.050, 0.050, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Models Environment --/lektory_01/Cube.004 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: pics
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: -- Models Environment --/lektory_01/Cube.005 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: travertine
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: -- Models Environment --/lektory_01/Cube.006 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: light1
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: -- Models Environment --/lektory_01/Cube.007 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: black_back
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.050, 0.050, 0.050, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Models Environment --/lektory_01/Cube.008 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: panels
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: -- Models Environment --/lektory_01/Cube.009 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: podsvetka
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: -- Models Environment --/lektory_01/Cube.010 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: light1
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: -- Models Environment --/lektory_01/Cube.011 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: VEDBO blue.005
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: -- Models Environment --/lektory_01/Cube.012 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: VEDBO blue.005
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: -- Models Environment --/lektory_01/Cube.013 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: VEDBO blue.005
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: -- Models Environment --/lektory_01/Cube.014 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.047
+    shader: Universal Render Pipeline/Nature/SpeedTree8
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: Assets/Models/LectureHall/lectory_01/textures/flowers.png
+    baseMap: 
+    emissionMap: 
+    keywords: _WINDQUALITY_NONE
+- renderer: -- Models Environment --/lektory_01/Cube.015 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.047
+    shader: Universal Render Pipeline/Nature/SpeedTree8
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: Assets/Models/LectureHall/lectory_01/textures/flowers.png
+    baseMap: 
+    emissionMap: 
+    keywords: _WINDQUALITY_NONE
+- renderer: -- Models Environment --/lektory_01/Cube.016 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: wood_floor
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: -- Models Environment --/lektory_01/Cube.018 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.047
+    shader: Universal Render Pipeline/Nature/SpeedTree8
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: Assets/Models/LectureHall/lectory_01/textures/flowers.png
+    baseMap: 
+    emissionMap: 
+    keywords: _WINDQUALITY_NONE
+- renderer: -- Models Environment --/lektory_01/Cube.019 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.047
+    shader: Universal Render Pipeline/Nature/SpeedTree8
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: Assets/Models/LectureHall/lectory_01/textures/flowers.png
+    baseMap: 
+    emissionMap: 
+    keywords: _WINDQUALITY_NONE
+- renderer: -- Models Environment --/lektory_01/Cube.020 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.012
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.717, 0.717, 0.717, 1.000)
+    mainTex: Assets/Models/LectureHall/lectory_01/textures/pot.png
+    baseMap: Assets/Models/LectureHall/lectory_01/textures/pot.png
+    emissionMap: 
+    keywords: 
+- renderer: -- Models Environment --/lektory_01/Cube.021 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.047
+    shader: Universal Render Pipeline/Nature/SpeedTree8
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: Assets/Models/LectureHall/lectory_01/textures/flowers.png
+    baseMap: 
+    emissionMap: 
+    keywords: _WINDQUALITY_NONE
+- renderer: -- Models Environment --/lektory_01/Cube.022 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.047
+    shader: Universal Render Pipeline/Nature/SpeedTree8
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: Assets/Models/LectureHall/lectory_01/textures/flowers.png
+    baseMap: 
+    emissionMap: 
+    keywords: _WINDQUALITY_NONE
+- renderer: -- Models Environment --/lektory_01/Cube.023 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: wood_scene
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: -- Models Environment --/lektory_01/Cube.029 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: wood_stand
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+  - material: podsvetka
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: -- Models Environment --/lektory_01/Cube.050 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: wood_potolok
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: -- Models Environment --/lektory_01/Cube.052 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: pics
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: -- Models Environment --/lektory_01/Cube.053 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: pics
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: -- Models Environment --/lektory_01/Cube.054 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: pics
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: -- Models Environment --/lektory_01/Cube.055 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: black_desk
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: -- Models Environment --/lektory_01/Cube.056 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: black_back
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.050, 0.050, 0.050, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Models Environment --/lektory_01/Cube.057 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: black_back
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.050, 0.050, 0.050, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Models Environment --/lektory_01/Cube.058 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: black_back
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.050, 0.050, 0.050, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Models Environment --/lektory_01/Cube.062 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.047
+    shader: Universal Render Pipeline/Nature/SpeedTree8
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: Assets/Models/LectureHall/lectory_01/textures/flowers.png
+    baseMap: 
+    emissionMap: 
+    keywords: _WINDQUALITY_NONE
+  - material: tables_pots_puff.001
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: Assets/Models/LectureHall/lectory_01/textures/tables_pots_puff.png
+    baseMap: Assets/Models/LectureHall/lectory_01/textures/tables_pots_puff.png
+    emissionMap: 
+    keywords: 
+- renderer: -- Models Environment --/lektory_01/Cube.064 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: black_back
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.050, 0.050, 0.050, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Models Environment --/lektory_01/Cube.065 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: black_back
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.050, 0.050, 0.050, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Models Environment --/lektory_01/Cube.066 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.047
+    shader: Universal Render Pipeline/Nature/SpeedTree8
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: Assets/Models/LectureHall/lectory_01/textures/flowers.png
+    baseMap: 
+    emissionMap: 
+    keywords: _WINDQUALITY_NONE
+- renderer: Zones/Places ZoneController/LectureHall Chair 1 Place (5)/View/Mesh/Cube.067 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: VEDBO blue.005
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: Zones/Places ZoneController/LectureHall Chair 1 Place (1)/View/Mesh/Cube.067 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: VEDBO blue.005
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: Zones/Places ZoneController/LectureHall Chair 1 Place (2)/View/Mesh/Cube.067 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: VEDBO blue.005
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: Zones/Places ZoneController/LectureHall Chair 1 Place (4)/View/Mesh/Cube.067 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: VEDBO blue.005
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: Zones/Places ZoneController/LectureHall Chair 1 Place/View/Mesh/Cube.067 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: VEDBO blue.005
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: Zones/Places ZoneController/LectureHall Chair 1 Place (3)/View/Mesh/Cube.067 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: VEDBO blue.005
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: -- Models Environment --/lektory_01/Cube.067 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: VEDBO blue.005
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: -- Models Environment --/lektory_01/Cube.068 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: black_back
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.050, 0.050, 0.050, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Models Environment --/lektory_01/Cube.069 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: black_back
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.050, 0.050, 0.050, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Models Environment --/lektory_01/Cube.070 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: black_back
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.050, 0.050, 0.050, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Models Environment --/lektory_01/Cube.071 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: black_back
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.050, 0.050, 0.050, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Models Environment --/lektory_01/Cube.072 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: black_back
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.050, 0.050, 0.050, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Models Environment --/lektory_01/Cube.073 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: black_back
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.050, 0.050, 0.050, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/ExitDoor/DoorFrame/Cube.073 (2) [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: DoorFrame
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.170, 0.170, 0.170, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Models Environment --/lektory_01/Cube.074 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: black_back
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.050, 0.050, 0.050, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Models Environment --/lektory_01/Cube.075 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: black_back
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.050, 0.050, 0.050, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Models Environment --/lektory_01/Cube.076 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: black_back
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.050, 0.050, 0.050, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Models Environment --/lektory_01/Cube.077 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: black_back
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.050, 0.050, 0.050, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Models Environment --/lektory_01/Cube.078 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: black_back
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.050, 0.050, 0.050, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Models Environment --/lektory_01/Cube.079 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: VEDBO blue.005
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: -- Models Environment --/lektory_01/Cube.081 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: panels_right
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: -- Models Environment --/lektory_01/Cube.082 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: podsvetka
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: -- Models Environment --/lektory_01/Cube.083 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: podsvetka
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: -- Models Environment --/lektory_01/Cube.084 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: podsvetka
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: -- Models Environment --/lektory_01/Cube.086 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: panels_right
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: -- Models Environment --/lektory_01/Cube.087 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: panels
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: -- Models Environment --/lektory_01/Cube.200 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: VEDBO blue.001
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: -- Models Environment --/lektory_01/Cube.201 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: VEDBO blue.001
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: -- Models Environment --/lektory_01/Cube.206 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.047
+    shader: Universal Render Pipeline/Nature/SpeedTree8
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: Assets/Models/LectureHall/lectory_01/textures/flowers.png
+    baseMap: 
+    emissionMap: 
+    keywords: _WINDQUALITY_NONE
+- renderer: -- Models Environment --/lektory_01/Cube.207 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.047
+    shader: Universal Render Pipeline/Nature/SpeedTree8
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: Assets/Models/LectureHall/lectory_01/textures/flowers.png
+    baseMap: 
+    emissionMap: 
+    keywords: _WINDQUALITY_NONE
+- renderer: -- Models Environment --/lektory_01/Cube.208 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: panels_right
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: -- Models Environment --/lektory_01/Cube.210 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: small_stuff.001
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: Assets/Models/LectureHall/lectory_01/textures/travertine_DIFFUSE.png
+    baseMap: Assets/Models/LectureHall/lectory_01/textures/travertine_DIFFUSE.png
+    emissionMap: 
+    keywords: 
+- renderer: -- Models Environment --/lektory_01/Cube.214 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: VEDBO blue.005
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: Zones/Places ZoneController/LectureHall Chair 2 Place (1)/View/Signals/Circle/Mesh/Circle/Cylinder [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Reticle Base
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.000, 0.588, 1.000, 0.463)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: Zones/Places ZoneController/LectureHall Chair 2 Place (5)/View/Signals/Circle/Mesh/Circle/Cylinder [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Reticle Base
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.000, 0.588, 1.000, 0.463)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: Zones/Places ZoneController/LectureHall Chair 1 Place (5)/View/Signals/Circle/Mesh/Circle/Cylinder [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Reticle Base
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.000, 0.588, 1.000, 0.463)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: Zones/Places ZoneController/LectureHall Chair 2 Place (3)/View/Signals/Circle/Mesh/Circle/Cylinder [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Reticle Base
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.000, 0.588, 1.000, 0.463)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: Zones/Places ZoneController/LectureHall Chair 2 Place (2)/View/Signals/Circle/Mesh/Circle/Cylinder [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Reticle Base
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.000, 0.588, 1.000, 0.463)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: Zones/Places ZoneController/LectureHall Chair 2 Place (4)/View/Signals/Circle/Mesh/Circle/Cylinder [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Reticle Base
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.000, 0.588, 1.000, 0.463)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: Zones/Places ZoneController/LectureHall Chair 1 Place (1)/View/Signals/Circle/Mesh/Circle/Cylinder [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Reticle Base
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.000, 0.588, 1.000, 0.463)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: Zones/Places ZoneController/LectureHall Chair 1 Place (2)/View/Signals/Circle/Mesh/Circle/Cylinder [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Reticle Base
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.000, 0.588, 1.000, 0.463)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: Zones/Places ZoneController/LectureHall Chair 2 Place/View/Signals/Circle/Mesh/Circle/Cylinder [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Reticle Base
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.000, 0.588, 1.000, 0.463)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: Zones/Places ZoneController/LectureHall Chair 2 Place (6)/View/Signals/Circle/Mesh/Circle/Cylinder [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Reticle Base
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.000, 0.588, 1.000, 0.463)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: Zones/Places ZoneController/LectureHall Chair 1 Place (4)/View/Signals/Circle/Mesh/Circle/Cylinder [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Reticle Base
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.000, 0.588, 1.000, 0.463)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: Zones/Places ZoneController/LectureHall Chair 1 Place/View/Signals/Circle/Mesh/Circle/Cylinder [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Reticle Base
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.000, 0.588, 1.000, 0.463)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: Zones/Places ZoneController/LectureHall Chair 1 Place (3)/View/Signals/Circle/Mesh/Circle/Cylinder [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Reticle Base
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.000, 0.588, 1.000, 0.463)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: Zones/Places ZoneController/LectureHall Chair 2 Place (1)/Cylinder to use as obstacle for NavMesh [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: Zones/Places ZoneController/LectureHall Chair 2 Place (5)/Cylinder to use as obstacle for NavMesh [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: Zones/Places ZoneController/LectureHall Chair 1 Place (5)/Cylinder to use as obstacle for NavMesh [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: Zones/Places ZoneController/LectureHall Chair 2 Place (3)/Cylinder to use as obstacle for NavMesh [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: Zones/Places ZoneController/LectureHall Chair 2 Place (2)/Cylinder to use as obstacle for NavMesh [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: Zones/Places ZoneController/LectureHall Chair 2 Place (4)/Cylinder to use as obstacle for NavMesh [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: Zones/Places ZoneController/LectureHall Chair 1 Place (1)/Cylinder to use as obstacle for NavMesh [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: Zones/Places ZoneController/LectureHall Chair 1 Place (2)/Cylinder to use as obstacle for NavMesh [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: Zones/Places ZoneController/LectureHall Chair 2 Place/Cylinder to use as obstacle for NavMesh [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: Zones/Places ZoneController/LectureHall Chair 2 Place (6)/Cylinder to use as obstacle for NavMesh [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: Zones/Places ZoneController/LectureHall Chair 1 Place (4)/Cylinder to use as obstacle for NavMesh [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: Zones/Places ZoneController/LectureHall Chair 1 Place/Cylinder to use as obstacle for NavMesh [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: Zones/Places ZoneController/LectureHall Chair 1 Place (3)/Cylinder to use as obstacle for NavMesh [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Models Environment --/lektory_01/Cylinder.012 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.019
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+  - material: Material.017
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.179, 0.179, 0.179, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: Zones/Places ZoneController/LectureHall Chair 2 Place (1)/View/Signals/Reticle/CylinderBottom [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Teleport_ColorRamp
+    shader: Shader Graphs/ColorRamp
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: Zones/Places ZoneController/LectureHall Chair 2 Place (5)/View/Signals/Reticle/CylinderBottom [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Teleport_ColorRamp
+    shader: Shader Graphs/ColorRamp
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: Zones/Places ZoneController/LectureHall Chair 1 Place (5)/View/Signals/Reticle/CylinderBottom [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Teleport_ColorRamp
+    shader: Shader Graphs/ColorRamp
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: Zones/Places ZoneController/LectureHall Chair 2 Place (3)/View/Signals/Reticle/CylinderBottom [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Teleport_ColorRamp
+    shader: Shader Graphs/ColorRamp
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: Zones/Places ZoneController/LectureHall Chair 2 Place (2)/View/Signals/Reticle/CylinderBottom [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Teleport_ColorRamp
+    shader: Shader Graphs/ColorRamp
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: Zones/Places ZoneController/LectureHall Chair 2 Place (4)/View/Signals/Reticle/CylinderBottom [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Teleport_ColorRamp
+    shader: Shader Graphs/ColorRamp
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: Zones/Places ZoneController/LectureHall Chair 1 Place (1)/View/Signals/Reticle/CylinderBottom [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Teleport_ColorRamp
+    shader: Shader Graphs/ColorRamp
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: Zones/Places ZoneController/LectureHall Chair 1 Place (2)/View/Signals/Reticle/CylinderBottom [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Teleport_ColorRamp
+    shader: Shader Graphs/ColorRamp
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: Zones/Places ZoneController/LectureHall Chair 2 Place/View/Signals/Reticle/CylinderBottom [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Teleport_ColorRamp
+    shader: Shader Graphs/ColorRamp
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: Zones/Places ZoneController/LectureHall Chair 2 Place (6)/View/Signals/Reticle/CylinderBottom [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Teleport_ColorRamp
+    shader: Shader Graphs/ColorRamp
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: Zones/Places ZoneController/LectureHall Chair 1 Place (4)/View/Signals/Reticle/CylinderBottom [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Teleport_ColorRamp
+    shader: Shader Graphs/ColorRamp
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: Zones/Places ZoneController/LectureHall Chair 1 Place/View/Signals/Reticle/CylinderBottom [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Teleport_ColorRamp
+    shader: Shader Graphs/ColorRamp
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: Zones/Places ZoneController/LectureHall Chair 1 Place (3)/View/Signals/Reticle/CylinderBottom [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Teleport_ColorRamp
+    shader: Shader Graphs/ColorRamp
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: Zones/Places ZoneController/LectureHall Chair 2 Place (1)/View/Signals/Reticle/CylinderSide [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Teleport_ColorRamp
+    shader: Shader Graphs/ColorRamp
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: Zones/Places ZoneController/LectureHall Chair 2 Place (5)/View/Signals/Reticle/CylinderSide [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Teleport_ColorRamp
+    shader: Shader Graphs/ColorRamp
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: Zones/Places ZoneController/LectureHall Chair 1 Place (5)/View/Signals/Reticle/CylinderSide [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Teleport_ColorRamp
+    shader: Shader Graphs/ColorRamp
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: Zones/Places ZoneController/LectureHall Chair 2 Place (3)/View/Signals/Reticle/CylinderSide [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Teleport_ColorRamp
+    shader: Shader Graphs/ColorRamp
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: Zones/Places ZoneController/LectureHall Chair 2 Place (2)/View/Signals/Reticle/CylinderSide [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Teleport_ColorRamp
+    shader: Shader Graphs/ColorRamp
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: Zones/Places ZoneController/LectureHall Chair 2 Place (4)/View/Signals/Reticle/CylinderSide [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Teleport_ColorRamp
+    shader: Shader Graphs/ColorRamp
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: Zones/Places ZoneController/LectureHall Chair 1 Place (1)/View/Signals/Reticle/CylinderSide [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Teleport_ColorRamp
+    shader: Shader Graphs/ColorRamp
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: Zones/Places ZoneController/LectureHall Chair 1 Place (2)/View/Signals/Reticle/CylinderSide [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Teleport_ColorRamp
+    shader: Shader Graphs/ColorRamp
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: Zones/Places ZoneController/LectureHall Chair 2 Place/View/Signals/Reticle/CylinderSide [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Teleport_ColorRamp
+    shader: Shader Graphs/ColorRamp
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: Zones/Places ZoneController/LectureHall Chair 2 Place (6)/View/Signals/Reticle/CylinderSide [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Teleport_ColorRamp
+    shader: Shader Graphs/ColorRamp
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: Zones/Places ZoneController/LectureHall Chair 1 Place (4)/View/Signals/Reticle/CylinderSide [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Teleport_ColorRamp
+    shader: Shader Graphs/ColorRamp
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: Zones/Places ZoneController/LectureHall Chair 1 Place/View/Signals/Reticle/CylinderSide [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Teleport_ColorRamp
+    shader: Shader Graphs/ColorRamp
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: Zones/Places ZoneController/LectureHall Chair 1 Place (3)/View/Signals/Reticle/CylinderSide [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Teleport_ColorRamp
+    shader: Shader Graphs/ColorRamp
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Models Environment --/lektory_01/decorSet54_wood_stand [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: small_stuff.003
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: Assets/Models/LectureHall/lectory_01/textures/small_stuff.png
+    baseMap: Assets/Models/LectureHall/lectory_01/textures/small_stuff.png
+    emissionMap: 
+    keywords: 
+  - material: small_stuff.001
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: Assets/Models/LectureHall/lectory_01/textures/travertine_DIFFUSE.png
+    baseMap: Assets/Models/LectureHall/lectory_01/textures/travertine_DIFFUSE.png
+    emissionMap: 
+    keywords: 
+- renderer: PlayerUiBinder/GameObjectPanels/NewInventoryPanel/polka/ButtonUp/button/default [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: white
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+  - material: grey
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.250, 0.250, 0.250, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+  - material: black
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.100, 0.100, 0.100, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: PlayerUiBinder/GameObjectPanels/NewInventoryPanel/polka/ButtonDown/button/default [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: white
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+  - material: grey
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.250, 0.250, 0.250, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+  - material: black
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.100, 0.100, 0.100, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Models Environment --/lektory_01/desk [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: black_desk.001
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: Assets/Models/LectureHall/lectory_01/textures/5798.jpg_wh1200.jpg
+    baseMap: Assets/Models/LectureHall/lectory_01/textures/5798.jpg_wh1200.jpg
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/ExitDoor/ProgressBar/Content/Donat [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: donut
+    shader: Shader Graphs/DirectionalDissolve
+    color: RGBA(0.717, 0.558, 0.558, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: X_AXIS
+  - material: icing
+    shader: Shader Graphs/DirectionalDissolve
+    color: RGBA(0.717, 0.558, 0.558, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+  - material: sprinkles bake
+    shader: Shader Graphs/DirectionalDissolve
+    color: RGBA(0.717, 0.558, 0.558, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/ExitDoor/DoorEvent/DoorTowerEventView [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: Zones/Places ZoneController/LectureHall Chair 2 Place (1)/View/Signals/TopTargetPosition/Free [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Green
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.010, 1.000, 0.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Zones/Places ZoneController/LectureHall Chair 2 Place (5)/View/Signals/TopTargetPosition/Free [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Green
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.010, 1.000, 0.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Zones/Places ZoneController/LectureHall Chair 1 Place (5)/View/Signals/TopTargetPosition/Free [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Green
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.010, 1.000, 0.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Zones/Places ZoneController/LectureHall Chair 2 Place (3)/View/Signals/TopTargetPosition/Free [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Green
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.010, 1.000, 0.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Zones/Places ZoneController/LectureHall Chair 2 Place (2)/View/Signals/TopTargetPosition/Free [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Green
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.010, 1.000, 0.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Zones/Places ZoneController/LectureHall Chair 2 Place (4)/View/Signals/TopTargetPosition/Free [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Green
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.010, 1.000, 0.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Zones/Places ZoneController/LectureHall Chair 1 Place (1)/View/Signals/TopTargetPosition/Free [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Green
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.010, 1.000, 0.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Zones/Places ZoneController/LectureHall Chair 1 Place (2)/View/Signals/TopTargetPosition/Free [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Green
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.010, 1.000, 0.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Zones/Places ZoneController/LectureHall Chair 2 Place/View/Signals/TopTargetPosition/Free [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Green
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.010, 1.000, 0.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Zones/Places ZoneController/LectureHall Chair 2 Place (6)/View/Signals/TopTargetPosition/Free [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Green
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.010, 1.000, 0.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Zones/Places ZoneController/LectureHall Chair 1 Place (4)/View/Signals/TopTargetPosition/Free [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Green
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.010, 1.000, 0.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Zones/Places ZoneController/LectureHall Chair 1 Place/View/Signals/TopTargetPosition/Free [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Green
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.010, 1.000, 0.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Zones/Places ZoneController/LectureHall Chair 1 Place (3)/View/Signals/TopTargetPosition/Free [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Green
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.010, 1.000, 0.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Zones/Places ZoneController/LectureHall Chair 2 Place (1)/View/Signals/TopTargetPosition/FreeSelected [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Cian
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.000, 0.935, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Zones/Places ZoneController/LectureHall Chair 2 Place (5)/View/Signals/TopTargetPosition/FreeSelected [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Cian
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.000, 0.935, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Zones/Places ZoneController/LectureHall Chair 1 Place (5)/View/Signals/TopTargetPosition/FreeSelected [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Cian
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.000, 0.935, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Zones/Places ZoneController/LectureHall Chair 2 Place (3)/View/Signals/TopTargetPosition/FreeSelected [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Cian
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.000, 0.935, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Zones/Places ZoneController/LectureHall Chair 2 Place (2)/View/Signals/TopTargetPosition/FreeSelected [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Cian
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.000, 0.935, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Zones/Places ZoneController/LectureHall Chair 2 Place (4)/View/Signals/TopTargetPosition/FreeSelected [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Cian
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.000, 0.935, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Zones/Places ZoneController/LectureHall Chair 1 Place (1)/View/Signals/TopTargetPosition/FreeSelected [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Cian
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.000, 0.935, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Zones/Places ZoneController/LectureHall Chair 1 Place (2)/View/Signals/TopTargetPosition/FreeSelected [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Cian
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.000, 0.935, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Zones/Places ZoneController/LectureHall Chair 2 Place/View/Signals/TopTargetPosition/FreeSelected [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Cian
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.000, 0.935, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Zones/Places ZoneController/LectureHall Chair 2 Place (6)/View/Signals/TopTargetPosition/FreeSelected [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Cian
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.000, 0.935, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Zones/Places ZoneController/LectureHall Chair 1 Place (4)/View/Signals/TopTargetPosition/FreeSelected [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Cian
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.000, 0.935, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Zones/Places ZoneController/LectureHall Chair 1 Place/View/Signals/TopTargetPosition/FreeSelected [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Cian
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.000, 0.935, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Zones/Places ZoneController/LectureHall Chair 1 Place (3)/View/Signals/TopTargetPosition/FreeSelected [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Cian
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.000, 0.935, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: PlayerUiBinder/SpaceObjectPanels/SpaceEditingPanel/Place (13)/ItemGrabCollider [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: PlayerUiBinder/SpaceObjectPanels/SpaceEditingPanel/Place (12)/ItemGrabCollider [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: PlayerUiBinder/SpaceObjectPanels/SpaceEditingPanel/Place (11)/ItemGrabCollider [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: PlayerUiBinder/SpaceObjectPanels/SpaceEditingPanel/Place (10)/ItemGrabCollider [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: PlayerUiBinder/SpaceObjectPanels/SpaceEditingPanel/Place (9)/ItemGrabCollider [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: PlayerUiBinder/SpaceObjectPanels/SpaceEditingPanel/Place (8)/ItemGrabCollider [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: PlayerUiBinder/SpaceObjectPanels/SpaceEditingPanel/Place (7)/ItemGrabCollider [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: PlayerUiBinder/SpaceObjectPanels/SpaceEditingPanel/Place (6)/ItemGrabCollider [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: PlayerUiBinder/SpaceObjectPanels/SpaceEditingPanel/Place (5)/ItemGrabCollider [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: PlayerUiBinder/SpaceObjectPanels/SpaceEditingPanel/Place (4)/ItemGrabCollider [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: PlayerUiBinder/SpaceObjectPanels/SpaceEditingPanel/Place (3)/ItemGrabCollider [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: PlayerUiBinder/SpaceObjectPanels/SpaceEditingPanel/Place (2)/ItemGrabCollider [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: PlayerUiBinder/SpaceObjectPanels/SpaceEditingPanel/Place (1)/ItemGrabCollider [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: PlayerUiBinder/SpaceObjectPanels/SpaceEditingPanel/Place/ItemGrabCollider [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: PlayerUiBinder/GameObjectPanels/NewInventoryPanel/Place14/ItemGrabCollider [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: PlayerUiBinder/GameObjectPanels/NewInventoryPanel/Place13/ItemGrabCollider [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: PlayerUiBinder/GameObjectPanels/NewInventoryPanel/Place12/ItemGrabCollider [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: PlayerUiBinder/GameObjectPanels/NewInventoryPanel/Place11/ItemGrabCollider [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: PlayerUiBinder/GameObjectPanels/NewInventoryPanel/Place10/ItemGrabCollider [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: PlayerUiBinder/GameObjectPanels/NewInventoryPanel/Place9/ItemGrabCollider [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: PlayerUiBinder/GameObjectPanels/NewInventoryPanel/Place8/ItemGrabCollider [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: PlayerUiBinder/GameObjectPanels/NewInventoryPanel/Place7/ItemGrabCollider [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: PlayerUiBinder/GameObjectPanels/NewInventoryPanel/Place6/ItemGrabCollider [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: PlayerUiBinder/GameObjectPanels/NewInventoryPanel/Place5/ItemGrabCollider [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: PlayerUiBinder/GameObjectPanels/NewInventoryPanel/Place4/ItemGrabCollider [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: PlayerUiBinder/GameObjectPanels/NewInventoryPanel/Place3/ItemGrabCollider [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: PlayerUiBinder/GameObjectPanels/NewInventoryPanel/Place2/ItemGrabCollider [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: PlayerUiBinder/GameObjectPanels/NewInventoryPanel/Place1/ItemGrabCollider [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/ExitDoor/LikeButtons/LikesSwitcher/PhysicsButtonLike/Push/Like_Base [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: LikeGreen
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.153, 0.682, 0.376, 0.314)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: -- Environment --/ExitDoor/LikeButtons/LikesSwitcher/PhysicsButtonDislike/Push/Like_Base [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: LikeRed
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.682, 0.153, 0.212, 0.314)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: -- Environment --/ExitDoor/LikeButtons/LikesSwitcher/PhysicsButtonLike/Push/Like_Hand [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: LikeWhite
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/ExitDoor/LikeButtons/LikesSwitcher/PhysicsButtonDislike/Push/Like_Hand [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: LikeWhite
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/ExitDoor/LikeButtons/LikesSwitcher/PhysicsButtonLike/Push/Like_Wrist [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: LikeWhite
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/ExitDoor/LikeButtons/LikesSwitcher/PhysicsButtonDislike/Push/Like_Wrist [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: LikeWhite
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: BrowserConstructor/SenseCapitalLogo/ZoneSenseLogo/SenseLogo/Shapes/logo/logo_decall [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.001
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: Assets/Models/Environment/SenseLogo/Inputs/logo/textures/logo_decall.png
+    baseMap: Assets/Models/Environment/SenseLogo/Inputs/logo/textures/logo_decall.png
+    emissionMap: 
+    keywords: 
+- renderer: BrowserConstructor/SenseCapitalLogo/ZoneSenseLogo/SenseLogo/Shapes/logo/logo_geo.011 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: SVGMat.003
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.000, 0.796, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+  - material: SVGMat.004
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.678, 0.369, 0.996, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+  - material: SVGMat.002
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.365, 0.365, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: BrowserConstructor/SenseCapitalLogo/ZoneSenseLogo/SenseLogo/Shapes/logo/logo_geo.012 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: SVGMat.001
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.086, 0.086, 0.333, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: BrowserConstructor/SenseCapitalLogo/ZoneSenseLogo/SenseLogo/Shapes/logo/logo_geo.014 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: SVGMat
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.000, 0.000, 0.400, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: PlayerUiBinder/GameObjectPanels/NewInventoryPanel/Model [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: shelf
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: Assets/Models/ArtGallery/textures/wood.png
+    baseMap: Assets/Models/ArtGallery/textures/wood.png
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/ExitDoor/ActiveDoorCollider/Opened [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Door_ColorRamp_Blue
+    shader: Shader Graphs/ColorRamp
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/ExitDoor/ActiveDoorCollider/Paid [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Door_ColorRamp_Yellow
+    shader: Shader Graphs/ColorRamp
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/ExitDoor/LikeButtons/LikesSwitcher/PhysicsButtonLike/Push/Like_Base/Particle System [ParticleSystemRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Particle
+    shader: Universal Render Pipeline/Particles/Unlit
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: Assets/Mechanics/Likes/particle.png
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT, _FLIPBOOKBLENDING_OFF
+- renderer: -- Environment --/ExitDoor/LikeButtons/LikesSwitcher/PhysicsButtonDislike/Push/Like_Base/Particle System [ParticleSystemRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Particle
+    shader: Universal Render Pipeline/Particles/Unlit
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: Assets/Mechanics/Likes/particle.png
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT, _FLIPBOOKBLENDING_OFF
+- renderer: -- Environment --/ExitDoor/PlayerSensorTrigger [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: PlayerUiBinder/SpaceObjectPanels/SpaceEditingPanel/polka/polka1 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(1.000, 1.000, 1.000, 0.667)
+    mainTex: Assets/Models/InventoryShelf/textures/marble_black.png
+    baseMap: Assets/Models/InventoryShelf/textures/marble_black.png
+    emissionMap: 
+    keywords: _OCCLUSIONMAP, _RECEIVE_SHADOWS_OFF, _SPECULAR_SETUP, _SURFACE_TYPE_TRANSPARENT
+- renderer: PlayerUiBinder/GameObjectPanels/NewInventoryPanel/polka/polka1 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(1.000, 1.000, 1.000, 0.667)
+    mainTex: Assets/Models/InventoryShelf/textures/marble_black.png
+    baseMap: Assets/Models/InventoryShelf/textures/marble_black.png
+    emissionMap: 
+    keywords: _OCCLUSIONMAP, _RECEIVE_SHADOWS_OFF, _SPECULAR_SETUP, _SURFACE_TYPE_TRANSPARENT
+- renderer: -- Environment --/ExitDoor/SendBuyRequestController/Button/Push [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: MainButtonMaterial
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.426, 0.887, 0.422, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+  - material: ForBorderMaterial
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.163, 0.679, 0.203, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/ExitDoor/LikeButtons/LikesSwitcher/PhysicsButtonLike/Push [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Red_button
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.821, 0.073, 0.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: -- Environment --/ExitDoor/LikeButtons/LikesSwitcher/PhysicsButtonDislike/Push [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Red_button
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.821, 0.073, 0.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: PlayerUiBinder/SpaceObjectPanels/SpaceEditingPanel/RecyclingArea [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: InventoryRecyclingAreaMaterial
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.548, 1.000, 0.438, 0.098)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _ENVIRONMENTREFLECTIONS_OFF, _RECEIVE_SHADOWS_OFF, _SURFACE_TYPE_TRANSPARENT
+- renderer: PlayerUiBinder/GameObjectPanels/NewInventoryPanel/RecyclingArea/RecyclingVisualizer/RecyclingAreaModel [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: InventoryRecyclingAreaMaterial
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.548, 1.000, 0.438, 0.098)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _ENVIRONMENTREFLECTIONS_OFF, _RECEIVE_SHADOWS_OFF, _SURFACE_TYPE_TRANSPARENT
+- renderer: -- Models Environment --/lektory_01/Roundcube.001 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: VEDBO blue.004
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: -- Models Environment --/lektory_01/Roundcube.002 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: VEDBO blue.001
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: -- Models Environment --/lektory_01/Roundcube.003 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: VEDBO blue.001
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: -- Models Environment --/lektory_01/Roundcube.004 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: VEDBO blue.004
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: -- Models Environment --/lektory_01/Roundcube.005 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: VEDBO blue.004
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: -- Models Environment --/lektory_01/Roundcube.006 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: VEDBO blue.004
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: -- Models Environment --/lektory_01/Roundcube.007 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: VEDBO blue.001
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: -- Models Environment --/lektory_01/Roundcube.008 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: VEDBO blue.001
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: -- Models Environment --/lektory_01/Roundcube.009 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: VEDBO blue.001
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: -- Models Environment --/lektory_01/Roundcube.019 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: VEDBO blue.004
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: -- Models Environment --/lektory_01/Roundcube.020 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: VEDBO blue.001
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: -- Models Environment --/lektory_01/screen [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.003
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: Assets/Models/LectureHall/lectory_01/textures/w1500_40394978.jpg
+    baseMap: Assets/Models/LectureHall/lectory_01/textures/w1500_40394978.jpg
+    emissionMap: Assets/Models/LectureHall/lectory_01/textures/w1500_40394978.jpg
+    keywords: _EMISSION
+- renderer: SceneChangerView/ScreenSaver/sphere/sphere [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Sphere material
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: Assets/Scene Changer/eso_dark-topaz-enhance.jpg
+    baseMap: Assets/Scene Changer/eso_dark-topaz-enhance.jpg
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/TeleportZone [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/TeleportZone (1) [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/ExitDoor/TextHolder [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: Zones/Places ZoneController/LectureHall Chair 2 Place (1)/View/Signals/Reticle/Torus [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Reticle Base
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.000, 0.588, 1.000, 0.463)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: Zones/Places ZoneController/LectureHall Chair 2 Place (5)/View/Signals/Reticle/Torus [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Reticle Base
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.000, 0.588, 1.000, 0.463)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: Zones/Places ZoneController/LectureHall Chair 1 Place (5)/View/Signals/Reticle/Torus [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Reticle Base
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.000, 0.588, 1.000, 0.463)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: Zones/Places ZoneController/LectureHall Chair 2 Place (3)/View/Signals/Reticle/Torus [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Reticle Base
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.000, 0.588, 1.000, 0.463)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: Zones/Places ZoneController/LectureHall Chair 2 Place (2)/View/Signals/Reticle/Torus [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Reticle Base
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.000, 0.588, 1.000, 0.463)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: Zones/Places ZoneController/LectureHall Chair 2 Place (4)/View/Signals/Reticle/Torus [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Reticle Base
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.000, 0.588, 1.000, 0.463)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: Zones/Places ZoneController/LectureHall Chair 1 Place (1)/View/Signals/Reticle/Torus [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Reticle Base
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.000, 0.588, 1.000, 0.463)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: Zones/Places ZoneController/LectureHall Chair 1 Place (2)/View/Signals/Reticle/Torus [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Reticle Base
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.000, 0.588, 1.000, 0.463)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: Zones/Places ZoneController/LectureHall Chair 2 Place/View/Signals/Reticle/Torus [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Reticle Base
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.000, 0.588, 1.000, 0.463)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: Zones/Places ZoneController/LectureHall Chair 2 Place (6)/View/Signals/Reticle/Torus [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Reticle Base
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.000, 0.588, 1.000, 0.463)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: Zones/Places ZoneController/LectureHall Chair 1 Place (4)/View/Signals/Reticle/Torus [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Reticle Base
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.000, 0.588, 1.000, 0.463)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: Zones/Places ZoneController/LectureHall Chair 1 Place/View/Signals/Reticle/Torus [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Reticle Base
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.000, 0.588, 1.000, 0.463)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: Zones/Places ZoneController/LectureHall Chair 1 Place (3)/View/Signals/Reticle/Torus [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Reticle Base
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.000, 0.588, 1.000, 0.463)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: Zones/Places ZoneController/LectureHall Chair 2 Place (1)/View/Mesh/Vert.001 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.043
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+  - material: Material.031
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: Zones/Places ZoneController/LectureHall Chair 2 Place (5)/View/Mesh/Vert.001 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.043
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+  - material: Material.031
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: Zones/Places ZoneController/LectureHall Chair 2 Place (3)/View/Mesh/Vert.001 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.043
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+  - material: Material.031
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: Zones/Places ZoneController/LectureHall Chair 2 Place (2)/View/Mesh/Vert.001 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.043
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+  - material: Material.031
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: Zones/Places ZoneController/LectureHall Chair 2 Place (4)/View/Mesh/Vert.001 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.043
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+  - material: Material.031
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: Zones/Places ZoneController/LectureHall Chair 2 Place/View/Mesh/Vert.001 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.043
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+  - material: Material.031
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: Zones/Places ZoneController/LectureHall Chair 2 Place (6)/View/Mesh/Vert.001 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.043
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+  - material: Material.031
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: -- Models Environment --/lektory_01/Vert.001 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.043
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+  - material: Material.031
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: -- Models Environment --/lektory_01/Vert.002 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.043
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+  - material: Material.031
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: -- Models Environment --/lektory_01/Vert.004 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.043
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+  - material: Material.031
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: -- Models Environment --/lektory_01/Vert.005 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.019
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Models Environment --/lektory_01/Vert.006 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.043
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+  - material: Material.031
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: -- Models Environment --/lektory_01/Vert.007 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.043
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+  - material: Material.031
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: -- Models Environment --/lektory_01/Vert.037 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.043
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+  - material: Material.031
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: SpaceEditingService/AirLocomotionZone/Zone [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: TransparentBoardZone
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(1.000, 1.000, 1.000, 0.392)
+    mainTex: Assets/Mechanics/Blackboard/air locomotion highlight.png
+    baseMap: Assets/Mechanics/Blackboard/air locomotion highlight.png
+    emissionMap: 
+    keywords: _ENVIRONMENTREFLECTIONS_OFF, _RECEIVE_SHADOWS_OFF, _SURFACE_TYPE_TRANSPARENT

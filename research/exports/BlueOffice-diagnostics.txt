@@ -1,0 +1,2811 @@
+scene: Assets\Scenes\BlueOffice.unity
+renderers: 271
+lightmaps: 0
+
+## Shader usage
+- Universal Render Pipeline/Lit: 168 material slots
+- Shader Graphs/Lightmapped: 139 material slots
+- Universal Render Pipeline/Unlit: 35 material slots
+- Universal Render Pipeline/Complex Lit: 10 material slots
+- Universal Render Pipeline/Nature/SpeedTree8: 8 material slots
+- Shader Graphs/SenseShader: 1 material slots
+
+## Renderer materials
+- renderer: Models/bar_chair [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: stool_green.001
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: Models/bar_chair (1) [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: stool_green.001
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: Models/bar_chair (10) [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: stool_green.001
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: Models/bar_chair (11) [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: stool_green.001
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: Models/bar_chair (12) [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: stool_green.001
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: Models/bar_chair (13) [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: stool_green.001
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: Models/bar_chair (14) [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: stool_green.001
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: Models/bar_chair (15) [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: stool_green.001
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: Models/bar_chair (2) [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: stool_green.001
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: Models/bar_chair (3) [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: stool_green.001
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: Models/bar_chair (4) [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: stool_green.001
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: Models/bar_chair (5) [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: stool_green.001
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: Models/bar_chair (6) [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: stool_green.001
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: Models/bar_chair (7) [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: stool_green.001
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: Models/bar_chair (8) [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: stool_green.001
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: Models/bar_chair (9) [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: stool_green.001
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: Models/bar_table [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.097
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.753, 0.753, 0.753, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: Assets/Models/OporaRussia/lightmaps/bar_table_lightmap.png
+    keywords: _EMISSION
+  - material: Material.098
+    shader: Shader Graphs/SenseShader
+    color: RGBA(0.116, 0.116, 0.116, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION_UV_UV0, _LIGHTMAP_UV_UV2, _NORMAL_AO_UV_UV0
+  - material: beton_table.001
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+  - material: Material.041 1
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.031, 0.031, 0.031, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static (1)/beton [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: beton
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: Models/static/beton [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: beton
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: Models/static (1)/blue_stand [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: blue_stand
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: Models/static/blue_stand [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: blue_stand
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: Models/static (1)/Cube.155 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: beton_tumbi
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+  - material: Material.040
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: Models/static/Cube.155 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: beton_tumbi
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+  - material: Material.040
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: Models/static (1)/Cube.157 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.048
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+  - material: Material.001
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.058, 0.058, 0.058, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+  - material: Material.018
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+  - material: Material.046
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: Models/static/Cube.157 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.048
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+  - material: Material.001
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.058, 0.058, 0.058, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+  - material: Material.018
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+  - material: Material.046
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: Models/static (1)/Cube.161 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: подсветка.001
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static/Cube.161 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: подсветка.001
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static (1)/Cube.164 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: подсветка.001
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static/Cube.164 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: подсветка.001
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static (1)/Cube.168 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: подсветка.001
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static/Cube.168 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: подсветка.001
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static (1)/Cube.169 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: подсветка.001
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static/Cube.169 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: подсветка.001
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static (1)/Cube.173 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.019
+    shader: Universal Render Pipeline/Nature/SpeedTree8
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: Assets/Models/Cinema/textures/flowers.png
+    baseMap: 
+    emissionMap: 
+    keywords: _WINDQUALITY_NONE
+  - material: beton
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+  - material: tables_pots_puff.001
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: Assets/Models/Cinema/textures/tables_pots_puff.png
+    baseMap: Assets/Models/Cinema/textures/tables_pots_puff.png
+    emissionMap: 
+    keywords: 
+- renderer: Models/static/Cube.173 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.019
+    shader: Universal Render Pipeline/Nature/SpeedTree8
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: Assets/Models/Cinema/textures/flowers.png
+    baseMap: 
+    emissionMap: 
+    keywords: _WINDQUALITY_NONE
+  - material: beton
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+  - material: tables_pots_puff.001
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: Assets/Models/Cinema/textures/tables_pots_puff.png
+    baseMap: Assets/Models/Cinema/textures/tables_pots_puff.png
+    emissionMap: 
+    keywords: 
+- renderer: Models/static (1)/Cube.176 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.020
+    shader: Universal Render Pipeline/Nature/SpeedTree8
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: Assets/Models/Cinema/textures/flowers.png
+    baseMap: 
+    emissionMap: 
+    keywords: _WINDQUALITY_NONE
+  - material: tables_pots_puff.002
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: Assets/Models/Cinema/textures/tables_pots_puff.png
+    baseMap: Assets/Models/Cinema/textures/tables_pots_puff.png
+    emissionMap: 
+    keywords: 
+  - material: beton_pot
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: Assets/Models/OporaRussia/beton.png
+    baseMap: Assets/Models/OporaRussia/beton.png
+    emissionMap: 
+    keywords: 
+- renderer: Models/static/Cube.176 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.020
+    shader: Universal Render Pipeline/Nature/SpeedTree8
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: Assets/Models/Cinema/textures/flowers.png
+    baseMap: 
+    emissionMap: 
+    keywords: _WINDQUALITY_NONE
+  - material: tables_pots_puff.002
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: Assets/Models/Cinema/textures/tables_pots_puff.png
+    baseMap: Assets/Models/Cinema/textures/tables_pots_puff.png
+    emissionMap: 
+    keywords: 
+  - material: beton_pot
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: Assets/Models/OporaRussia/beton.png
+    baseMap: Assets/Models/OporaRussia/beton.png
+    emissionMap: 
+    keywords: 
+- renderer: Models/static (1)/Cube.187 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.036
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static/Cube.187 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.036
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static (1)/Cube.188 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.036
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static/Cube.188 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.036
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static (1)/Cube.189 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.036
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static/Cube.189 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.036
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static (1)/Cube.190 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.036
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static/Cube.190 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.036
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static (1)/Cube.191 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.036
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static/Cube.191 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.036
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static (1)/Cube.192 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.036
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static/Cube.192 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.036
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static (1)/Cube.193 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.059
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: Assets/Models/OporaRussia/metal_panels_diffuse.png
+    baseMap: Assets/Models/OporaRussia/metal_panels_diffuse.png
+    emissionMap: Assets/Models/OporaRussia/metal_panels_emit.png
+    keywords: _EMISSION, _NORMALMAP
+- renderer: Models/static/Cube.193 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.059
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: Assets/Models/OporaRussia/metal_panels_diffuse.png
+    baseMap: Assets/Models/OporaRussia/metal_panels_diffuse.png
+    emissionMap: Assets/Models/OporaRussia/metal_panels_emit.png
+    keywords: _EMISSION, _NORMALMAP
+- renderer: Models/static (1)/Cube.194 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.036
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static/Cube.194 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.036
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static (1)/Cube.199 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.036
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static/Cube.199 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.036
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static (1)/Cube.200 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.036
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static/Cube.200 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.036
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static (1)/Cube.201 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.036
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static/Cube.201 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.036
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static (1)/Cube.202 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.036
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static/Cube.202 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.036
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static (1)/Cube.203 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.036
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static/Cube.203 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.036
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static (1)/Cube.205 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.036
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static/Cube.205 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.036
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static (1)/Cube.206 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.036
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static/Cube.206 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.036
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static (1)/Cube.207 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.036
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static/Cube.207 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.036
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static (1)/Cube.208 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.036
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static/Cube.208 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.036
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static (1)/Cube.209 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.036
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static/Cube.209 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.036
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static (1)/Cube.210 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.036
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static/Cube.210 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.036
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static (1)/Cube.211 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.036
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static/Cube.211 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.036
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static (1)/Cube.215 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.036
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static/Cube.215 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.036
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static (1)/Cube.216 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.036
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static/Cube.216 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.036
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static (1)/Cube.217 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.036
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static/Cube.217 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.036
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static (1)/Cube.218 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.036
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static/Cube.218 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.036
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static (1)/Cube.219 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.036
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static/Cube.219 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.036
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static (1)/Cube.222 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: tables_pots_puff.002
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: Assets/Models/Cinema/textures/tables_pots_puff.png
+    baseMap: Assets/Models/Cinema/textures/tables_pots_puff.png
+    emissionMap: 
+    keywords: 
+  - material: beton_pot
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: Assets/Models/OporaRussia/beton.png
+    baseMap: Assets/Models/OporaRussia/beton.png
+    emissionMap: 
+    keywords: 
+  - material: Material.020
+    shader: Universal Render Pipeline/Nature/SpeedTree8
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: Assets/Models/Cinema/textures/flowers.png
+    baseMap: 
+    emissionMap: 
+    keywords: _WINDQUALITY_NONE
+- renderer: Models/static/Cube.222 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: tables_pots_puff.002
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: Assets/Models/Cinema/textures/tables_pots_puff.png
+    baseMap: Assets/Models/Cinema/textures/tables_pots_puff.png
+    emissionMap: 
+    keywords: 
+  - material: beton_pot
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: Assets/Models/OporaRussia/beton.png
+    baseMap: Assets/Models/OporaRussia/beton.png
+    emissionMap: 
+    keywords: 
+  - material: Material.020
+    shader: Universal Render Pipeline/Nature/SpeedTree8
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: Assets/Models/Cinema/textures/flowers.png
+    baseMap: 
+    emissionMap: 
+    keywords: _WINDQUALITY_NONE
+- renderer: Models/static (1)/Cube.223 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: подсветка.001
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static/Cube.223 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: подсветка.001
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static (1)/Cube.226 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: подсветка.001
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static/Cube.226 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: подсветка.001
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static (1)/Cube.227 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: подсветка.001
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static/Cube.227 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: подсветка.001
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static (1)/Cube.230 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: подсветка.001
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static/Cube.230 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: подсветка.001
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static (1)/Cube.233 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.019
+    shader: Universal Render Pipeline/Nature/SpeedTree8
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: Assets/Models/Cinema/textures/flowers.png
+    baseMap: 
+    emissionMap: 
+    keywords: _WINDQUALITY_NONE
+  - material: tables_pots_puff.001
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: Assets/Models/Cinema/textures/tables_pots_puff.png
+    baseMap: Assets/Models/Cinema/textures/tables_pots_puff.png
+    emissionMap: 
+    keywords: 
+  - material: beton_pot
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: Assets/Models/OporaRussia/beton.png
+    baseMap: Assets/Models/OporaRussia/beton.png
+    emissionMap: 
+    keywords: 
+- renderer: Models/static/Cube.233 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.019
+    shader: Universal Render Pipeline/Nature/SpeedTree8
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: Assets/Models/Cinema/textures/flowers.png
+    baseMap: 
+    emissionMap: 
+    keywords: _WINDQUALITY_NONE
+  - material: tables_pots_puff.001
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: Assets/Models/Cinema/textures/tables_pots_puff.png
+    baseMap: Assets/Models/Cinema/textures/tables_pots_puff.png
+    emissionMap: 
+    keywords: 
+  - material: beton_pot
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: Assets/Models/OporaRussia/beton.png
+    baseMap: Assets/Models/OporaRussia/beton.png
+    emissionMap: 
+    keywords: 
+- renderer: Models/static (1)/Cube.239 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.036
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static/Cube.239 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.036
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static (1)/Cube.240 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.036
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static/Cube.240 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.036
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static (1)/Cube.241 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.036
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static/Cube.241 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.036
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static (1)/Cube.242 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.036
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static/Cube.242 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.036
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static (1)/Cube.243 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.036
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static/Cube.243 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.036
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static (1)/Cube.244 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.036
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static/Cube.244 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.036
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static (1)/Cube.245 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.036
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static/Cube.245 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.036
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static (1)/Cube.246 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.036
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static/Cube.246 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.036
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static (1)/Cube.247 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.036
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static/Cube.247 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.036
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static (1)/Cube.248 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.036
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static/Cube.248 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.036
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static (1)/Cube.249 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.036
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static/Cube.249 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.036
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static (1)/Cube.276 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.048
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+  - material: Material.001
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.058, 0.058, 0.058, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+  - material: Material.018
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+  - material: Material.050
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.012, 0.012, 0.012, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+  - material: Material.046
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+  - material: Material.038
+    shader: Universal Render Pipeline/Complex Lit
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: Models/static/Cube.276 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.048
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+  - material: Material.001
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.058, 0.058, 0.058, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+  - material: Material.018
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+  - material: Material.050
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.012, 0.012, 0.012, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+  - material: Material.046
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+  - material: Material.038
+    shader: Universal Render Pipeline/Complex Lit
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: Models/static (1)/divan [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.073
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: Models/static/divan [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.073
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: Models/static (1)/divan.001 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.073
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: Models/static/divan.001 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.073
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: Models/static (1)/divan.002 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.073
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: Models/static/divan.002 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.073
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: Models/static (1)/divan.003 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.073
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: Models/static/divan.003 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.073
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: Models/static (1)/divan.004 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.073
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: Models/static/divan.004 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.073
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: Models/static (1)/divan.005 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.073
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: Models/static/divan.005 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.073
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: Models/static (1)/divan.006 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.073
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: Models/static/divan.006 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.073
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: Models/static (1)/divan.007 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.073
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: Models/static/divan.007 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.073
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: Models/static (1)/divan.008 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.073
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: Models/static/divan.008 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.073
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: Models/static (1)/divan.009 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.073
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: Models/static/divan.009 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.073
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: Models/static (1)/divan.010 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.073
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: Models/static/divan.010 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.073
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: Models/static (1)/divan.011 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.073
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: Models/static/divan.011 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.073
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: Models/static (1)/divan.012 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.073
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: Models/static/divan.012 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.073
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: Models/static (1)/divan.013 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.073
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: Models/static/divan.013 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.073
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: Models/static (1)/divan.014 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.073
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: Models/static/divan.014 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.073
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: Models/static (1)/divan.015 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.073
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: Models/static/divan.015 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.073
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: Models/static (1)/divan.016 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.073
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: Models/static/divan.016 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.073
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: Models/static (1)/divan.017 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.073
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: Models/static/divan.017 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.073
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: Models/static (1)/divan.018 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.073
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: Models/static/divan.018 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.073
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: Models/static (1)/divan.019 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.073
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: Models/static/divan.019 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.073
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: Models/static (1)/divan.020 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.073
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: Models/static/divan.020 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.073
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: Models/static (1)/door [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: black
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.039, 0.039, 0.039, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: Models/static/door [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: black
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.039, 0.039, 0.039, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: ExitDoor [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: Models/kacheli/kacheli [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: wood 1
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+  - material: Material.004
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+  - material: Material.017
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.141, 0.141, 0.141, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: Models/kacheliServ/kacheli (1) [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: wood 1
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+  - material: Material.004
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+  - material: Material.017
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.141, 0.141, 0.141, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: Models/komitet [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: комитет
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: Models/komitet (1) [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: комитет
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: Models/kreslo [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.049
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: Models/kreslo (1) [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.049
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: Models/kreslo (2) [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.049
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: Models/kreslo (3) [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.049
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: Models/kreslo (4) [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.049
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: Models/kreslo (5) [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.049
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: Models/kreslo (6) [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.049
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: Models/kreslo (7) [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.049
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: Models/lamp [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.081
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+  - material: Material.082
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/lamp (1) [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.081
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+  - material: Material.082
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/lezhak [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: lezhak_green
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: Models/lezhak (1) [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.039
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: Models/lezhak (2) [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.039
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: Models/lezhak (3) [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.039
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: Models/lezhak (4) [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.039
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: Models/lezhak (5) [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: lezhak_green
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: Models/lights [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.015
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: Assets/Models/OporaRussia/lights.png
+    baseMap: Assets/Models/OporaRussia/lights.png
+    emissionMap: 
+    keywords: _EMISSION
+  - material: Material.061
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/lights (1) [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.015
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: Assets/Models/OporaRussia/lights.png
+    baseMap: Assets/Models/OporaRussia/lights.png
+    emissionMap: 
+    keywords: _EMISSION
+  - material: Material.061
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/meeting_shair [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: stool_red.001
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: Models/meeting_shair (1) [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: stool_red.001
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: Models/meeting_shair (2) [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: stool_red.001
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: Models/meeting_shair (3) [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: stool_red.001
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: Models/meeting_shair (4) [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: stool_red.001
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: Models/meeting_shair (5) [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: stool_red.001
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: Models/meeting_shair (6) [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: stool_red.001
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: Models/meeting_shair (7) [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: stool_red.001
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: Models/meeting_shair (8) [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: stool_red.001
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: Models/meeting_shair (9) [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: stool_red.001
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: Models/meeting_table [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: wood 1
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: Models/static (1)/perila [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.010
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.357, 0.357, 0.357, 0.439)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: Models/static/perila [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.010
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.357, 0.357, 0.357, 0.439)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: Models/static (1)/perila.001 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.009
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: Models/static/perila.001 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.009
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: Models/static (1)/perila.002 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.038
+    shader: Universal Render Pipeline/Complex Lit
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: Models/static/perila.002 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.038
+    shader: Universal Render Pipeline/Complex Lit
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: Models/static (1)/perila.003 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.010
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.357, 0.357, 0.357, 0.439)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: Models/static/perila.003 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.010
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.357, 0.357, 0.357, 0.439)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: Models/pillow [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.077 1
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: Models/pillow (1) [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.077
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: Models/pillow (2) [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.077
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: Models/pillow (3) [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.077 1
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: Models/pillow (4) [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.077 1
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: Models/pillow (5) [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.077
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: Models/pillow (6) [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.077 1
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: Models/pillow (7) [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.077 1
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: Models/pillow (8) [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.077
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: Models/static (1)/Plane.086 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.005
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.076, 0.076, 0.076, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+  - material: Material.038
+    shader: Universal Render Pipeline/Complex Lit
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: Models/static/Plane.086 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.005
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.076, 0.076, 0.076, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+  - material: Material.038
+    shader: Universal Render Pipeline/Complex Lit
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: Models/static (1)/Plane.087 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.005
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.076, 0.076, 0.076, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+  - material: Material.038
+    shader: Universal Render Pipeline/Complex Lit
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: Models/static/Plane.087 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.005
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.076, 0.076, 0.076, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+  - material: Material.038
+    shader: Universal Render Pipeline/Complex Lit
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: Models/static (1)/Plane.088 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.005
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.076, 0.076, 0.076, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+  - material: Material.038
+    shader: Universal Render Pipeline/Complex Lit
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: Models/static/Plane.088 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.005
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.076, 0.076, 0.076, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+  - material: Material.038
+    shader: Universal Render Pipeline/Complex Lit
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: Models/static (1)/Plane.107 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: glass_cupol
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(1.000, 1.000, 1.000, 0.725)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: Models/static/Plane.107 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: glass_cupol
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(1.000, 1.000, 1.000, 0.725)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: Models/static (1)/Plane.108 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.037
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.031, 0.031, 0.031, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: Models/static/Plane.108 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.037
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.031, 0.031, 0.031, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: Models/static (1)/Plane.109 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.041
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.031, 0.031, 0.031, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static/Plane.109 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.041
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.031, 0.031, 0.031, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static (1)/Plane.119 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: nadpisi.001
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: Assets/Models/OporaRussia/logo_nadpisi.png
+    baseMap: Assets/Models/OporaRussia/logo_nadpisi.png
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT, _EMISSION
+- renderer: Models/static/Plane.119 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: nadpisi.001
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: Assets/Models/OporaRussia/logo_nadpisi.png
+    baseMap: Assets/Models/OporaRussia/logo_nadpisi.png
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT, _EMISSION
+- renderer: Models/static (1)/Plane.120 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: nadpisi.001
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: Assets/Models/OporaRussia/logo_nadpisi.png
+    baseMap: Assets/Models/OporaRussia/logo_nadpisi.png
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT, _EMISSION
+- renderer: Models/static/Plane.120 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: nadpisi.001
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: Assets/Models/OporaRussia/logo_nadpisi.png
+    baseMap: Assets/Models/OporaRussia/logo_nadpisi.png
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT, _EMISSION
+- renderer: Models/static (1)/Plane.121 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.041
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.031, 0.031, 0.031, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static/Plane.121 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.041
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.031, 0.031, 0.031, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static (1)/Plane.122 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.041
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.031, 0.031, 0.031, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static/Plane.122 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.041
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.031, 0.031, 0.031, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static (1)/Plane.127 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.022
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.000, 0.398, 0.969, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+  - material: Material.056
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+  - material: Material.053
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+  - material: Material.054
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(1.000, 0.000, 0.145, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: Models/static/Plane.127 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.022
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.000, 0.398, 0.969, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+  - material: Material.056
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+  - material: Material.053
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+  - material: Material.054
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(1.000, 0.000, 0.145, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: Models/static (1)/Plane.128 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.056
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+  - material: Material.055
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+  - material: Material.022
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.000, 0.398, 0.969, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+  - material: Material.054
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(1.000, 0.000, 0.145, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: Models/static/Plane.128 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.056
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+  - material: Material.055
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+  - material: Material.022
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.000, 0.398, 0.969, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+  - material: Material.054
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(1.000, 0.000, 0.145, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: Models/static (1)/Plane.131 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.026
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: Models/static/Plane.131 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.026
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: Models/static (1)/Plane.162 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.026
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: Models/static/Plane.162 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.026
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: Models/static (1)/pol [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: pol
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: Models/static/pol [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: pol
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: TeleportationArea/PolyShape [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: TeleportationArea/PolyShape [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: TeleportationArea/PolyShape (1) [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: Models/static (1)/potolok_Light [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: potolok_Light_blue
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+  - material: potolok_Light_black
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+  - material: potolok_Light_emit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+  - material: potolok_Light_beije
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+  - material: potolok_Light_grey
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: Models/static/potolok_Light [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: potolok_Light_blue
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+  - material: potolok_Light_black
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+  - material: potolok_Light_emit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+  - material: potolok_Light_beije
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+  - material: potolok_Light_grey
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: -- Environment --/Radio/RadioPref [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Zendersc
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: Assets/Models/Other/Radio/Zendersc.png
+    baseMap: Assets/Models/Other/Radio/Zendersc.png
+    emissionMap: 
+    keywords: 
+  - material: Profielk
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: Assets/Models/Other/Radio/Profielk.png
+    baseMap: Assets/Models/Other/Radio/Profielk.png
+    emissionMap: 
+    keywords: 
+  - material: Luidspre
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: Assets/Models/Other/Radio/Luidspre.png
+    baseMap: Assets/Models/Other/Radio/Luidspre.png
+    emissionMap: 
+    keywords: 
+  - material: Radiohou
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: Assets/Models/Other/Radio/Radiohou.png
+    baseMap: Assets/Models/Other/Radio/Radiohou.png
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Radio/Slider/RadioSync [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Slider
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: Models/screen [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.003
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+  - material: Material.051
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.058, 0.058, 0.058, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: Models/static (1)/Sphere.025 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.008
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static/Sphere.025 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.008
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static (1)/Sphere.026 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.008
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/static/Sphere.026 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.008
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: Models/table [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Black Nickel Polished.001
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.107, 0.107, 0.107, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+  - material: wood
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.845, 0.845, 0.845, 1.000)
+    mainTex: Assets/Models/Office/textures/wood.png
+    baseMap: Assets/Models/Office/textures/wood.png
+    emissionMap: 
+    keywords: _SPECULAR_SETUP
+- renderer: Models/table (1) [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Black Nickel Polished.001
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.107, 0.107, 0.107, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+  - material: table_white
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0, _SPECULAR_SETUP
+- renderer: Models/table (2) [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Black Nickel Polished.001
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.107, 0.107, 0.107, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+  - material: table_white
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0, _SPECULAR_SETUP
+- renderer: Models/table_red [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: nozhki 1
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.075, 0.075, 0.075, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+  - material: hrt_whitepaint1.001
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.083, 0.083, 0.083, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SPECULAR_SETUP
+  - material: wood_sofa
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(1.000, 0.164, 0.164, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SPECULAR_SETUP
+- renderer: Models/table_red_glass [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.052
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(1.000, 0.221, 0.221, 0.827)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: Models/table_small [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: nozhki
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.170, 0.170, 0.170, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+  - material: marble_small_table
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: Models/table_small (1) [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: nozhki
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.170, 0.170, 0.170, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+  - material: marble_small_table
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: -- Environment --/Wingsuit (1)/Pref/wingsuit_lowpoly_white [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.007
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+  - material: Material.001
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.292, 0.250, 0.250, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+  - material: Material.006
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(1.000, 0.347, 0.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+  - material: Material.002
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.233, 0.391, 0.896, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+  - material: Material.008
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.231, 0.436, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Wingsuit/Pref/wingsuit_lowpoly_white [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.007
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+  - material: Material.001
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.292, 0.250, 0.250, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+  - material: Material.006
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(1.000, 0.347, 0.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+  - material: Material.002
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.233, 0.391, 0.896, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+  - material: Material.008
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.231, 0.436, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: Models/static (1)/wood_panels [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: planks
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: Models/static/wood_panels [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: planks
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0

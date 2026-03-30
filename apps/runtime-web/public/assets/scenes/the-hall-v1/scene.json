@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "sceneId": "the-hall-v1",
+  "label": "The Hall V1",
+  "source": "noah-test-fixture",
+  "glbPath": "scene.gltf",
+  "spawnPoints": [
+    {
+      "id": "main",
+      "position": {
+        "x": 0,
+        "y": 0,
+        "z": 4
+      }
+    }
+  ],
+  "bounds": {
+    "width": 20,
+    "height": 8,
+    "depth": 20
+  },
+  "notes": "Fixture scene for e2e"
+}

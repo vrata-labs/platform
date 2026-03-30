@@ -1,0 +1,2983 @@
+scene: Assets\Scenes\Meeting_small.unity
+renderers: 343
+lightmaps: 0
+
+## Shader usage
+- Universal Render Pipeline/Lit: 199 material slots
+- Shader Graphs/Lightmapped: 61 material slots
+- Universal Render Pipeline/Unlit: 58 material slots
+- Shader Graphs/ColorRamp: 43 material slots
+- Unlit/Color: 5 material slots
+- Universal Render Pipeline/Nature/SpeedTree8: 4 material slots
+- Shader Graphs/DirectionalDissolve: 3 material slots
+- Universal Render Pipeline/Particles/Unlit: 2 material slots
+
+## Renderer materials
+- renderer: -- Models Environment --/meeting_room_small/2cd37a8cfa72ecb1e351628c121a89e4.002 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: pic_meeting
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: Assets/Models/meeting_room/textures/pic_meeting.png
+    baseMap: Assets/Models/meeting_room/textures/pic_meeting.png
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/ExitDoor/LikeButtons/LikesSwitcher/PhysicsButtonLike/Base [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: 01 - Default
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.588, 0.588, 0.588, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/ExitDoor/LikeButtons/LikesSwitcher/PhysicsButtonDislike/Base [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: 01 - Default
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.588, 0.588, 0.588, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/ExitDoor/ActiveDoorCollider/Blocked [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Door_ColorRamp_Red
+    shader: Shader Graphs/ColorRamp
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: CENTER (spawn point) [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Models Environment --/meeting_room_small/Circle [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: wood
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: Assets/Models/meeting_room/textures/meeting_wood.png
+    baseMap: Assets/Models/meeting_room/textures/meeting_wood.png
+    emissionMap: 
+    keywords: 
+- renderer: -- Models Environment --/meeting_room_small/Circle Big [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: wood
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: Assets/Models/meeting_room/textures/meeting_wood.png
+    baseMap: Assets/Models/meeting_room/textures/meeting_wood.png
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/Meeting_small StandartSize Place 0/View/Signals/Reticle/Cube [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 8/View/Signals/Reticle/Cube [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 6/View/Signals/Reticle/Cube [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 0/View/Signals/Reticle/Cube [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 4/View/Signals/Reticle/Cube [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: OnPlayerUI/BlackScreen/BlackMask/Cube [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/Meeting_small StandartSize Place 2/View/Signals/Reticle/Cube [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 2/View/Signals/Reticle/Cube [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/Meeting_small StandartSize Place 5/View/Signals/Reticle/Cube [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 11/View/Signals/Reticle/Cube [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 9/View/Signals/Reticle/Cube [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/Meeting_small StandartSize Place 1/View/Signals/Reticle/Cube [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/ExitDoor/DoorFrame/Cube [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: DoorFrame
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.170, 0.170, 0.170, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: PlayerUiBinder/GameObjectPanels/NewInventoryPanel/RecyclingArea/InventoryRecyclingArea/Cube [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: PlayerUiBinder/GameObjectPanels/NewInventoryPanel/RecyclingArea/InventoryRecyclingArea/Cube [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: PlayerUiBinder/GameObjectPanels/NewInventoryPanel/RecyclingArea/InventoryRecyclingArea/Cube [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: PlayerUiBinder/GameObjectPanels/NewInventoryPanel/RecyclingArea/InventoryRecyclingArea/Cube [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: PlayerUiBinder/GameObjectPanels/NewInventoryPanel/RecyclingArea/InventoryRecyclingArea/Cube [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: PlayerUiBinder/GameObjectPanels/NewInventoryPanel/RecyclingArea/InventoryRecyclingArea/Cube [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: PlayerUiBinder/GameObjectPanels/NewInventoryPanel/RecyclingArea/InventoryRecyclingArea/Cube [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: PlayerUiBinder/GameObjectPanels/NewInventoryPanel/RecyclingArea/InventoryRecyclingArea/Cube [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 3/View/Signals/Reticle/Cube [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 5/View/Signals/Reticle/Cube [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/Meeting_small StandartSize Place 4/View/Signals/Reticle/Cube [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 1/View/Signals/Reticle/Cube [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/Meeting_small StandartSize Place 3/View/Signals/Reticle/Cube [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/Meeting_small Classic place -/View/Signals/Reticle/Cube [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 10/View/Signals/Reticle/Cube [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 7/View/Signals/Reticle/Cube [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/Meeting_small Classic place -/View/Signals/Reticle/Cube [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Models Environment --/Colliders/Cube [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Models Environment --/Colliders/Cube (1) [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Models Environment --/Colliders/Cube (10) [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Models Environment --/Colliders/Cube (11) [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Models Environment --/Colliders/Cube (12) [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Models Environment --/Colliders/Cube (2) [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Models Environment --/Colliders/Cube (3) [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Models Environment --/Colliders/Cube (4) [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Models Environment --/Colliders/Cube (5) [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Models Environment --/Colliders/Cube (6) [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Models Environment --/Colliders/Cube (7) [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Models Environment --/Colliders/Cube (8) [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Models Environment --/Colliders/Cube (9) [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Models Environment --/meeting_room_small/Cube.014 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: travertine_potolok
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: -- Models Environment --/meeting_room_small/Cube.041 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: planks_potolok
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: -- Models Environment --/meeting_room_small/Cube.042 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: PANELS_wall2
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: -- Models Environment --/meeting_room_small/Cube.043 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: wood_potolok
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: Assets/Models/meeting_room/textures/meeting_wood.png
+    baseMap: Assets/Models/meeting_room/textures/meeting_wood.png
+    emissionMap: 
+    keywords: 
+- renderer: -- Models Environment --/meeting_room_small/Cube.044 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: planks_wall1
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: -- Models Environment --/meeting_room_small/Cube.045 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.026
+    shader: Universal Render Pipeline/Nature/SpeedTree8
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: Assets/Models/Cinema/textures/flowers.png
+    baseMap: 
+    emissionMap: 
+    keywords: _WINDQUALITY_NONE
+  - material: tables_pots_puff.001
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: Assets/Models/Cinema/textures/tables_pots_puff.png
+    baseMap: Assets/Models/Cinema/textures/tables_pots_puff.png
+    emissionMap: 
+    keywords: 
+- renderer: -- Models Environment --/meeting_room_small/Cube.046 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.026
+    shader: Universal Render Pipeline/Nature/SpeedTree8
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: Assets/Models/Cinema/textures/flowers.png
+    baseMap: 
+    emissionMap: 
+    keywords: _WINDQUALITY_NONE
+  - material: tables_pots_puff.001
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: Assets/Models/Cinema/textures/tables_pots_puff.png
+    baseMap: Assets/Models/Cinema/textures/tables_pots_puff.png
+    emissionMap: 
+    keywords: 
+- renderer: -- Models Environment --/meeting_room_small/Cube.047 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: glass
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.276, 0.548, 0.802, 0.235)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: -- Models Environment --/meeting_room_small/Cube.048 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: black_wall3
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: -- Models Environment --/meeting_room_small/Cube.050 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: travertine_wall1
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: -- Models Environment --/meeting_room_small/Cube.051 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: black_wall3
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: -- Models Environment --/meeting_room_small/Cube.052 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: black_wall3
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: -- Models Environment --/meeting_room_small/Cube.053 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: black_wall1
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.098, 0.098, 0.098, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Models Environment --/meeting_room_small/Cube.054 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: black_wall1
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.098, 0.098, 0.098, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Models Environment --/meeting_room_small/Cube.055 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: black_potolok
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: -- Models Environment --/meeting_room_small/Cube.056 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: black_potolok
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: -- Models Environment --/meeting_room_small/Cube.057 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: black_potolok
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: -- Models Environment --/meeting_room_small/Cube.058 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: black_potolok
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: -- Models Environment --/meeting_room_small/Cube.059 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: black_potolok
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: -- Models Environment --/meeting_room_small/Cube.060 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: glass
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.276, 0.548, 0.802, 0.235)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: -- Models Environment --/meeting_room_small/Cube.061 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: glass
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.276, 0.548, 0.802, 0.235)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: -- Models Environment --/meeting_room_small/Cube.062 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: glass
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.276, 0.548, 0.802, 0.235)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: -- Models Environment --/meeting_room_small/Cube.063 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: glass
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.276, 0.548, 0.802, 0.235)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: -- Models Environment --/meeting_room_small/Cube.064 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: glass
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.276, 0.548, 0.802, 0.235)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: -- Models Environment --/meeting_room_small/Cube.065 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: glass
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.276, 0.548, 0.802, 0.235)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: -- Models Environment --/meeting_room_small/Cube.066 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: glass
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.276, 0.548, 0.802, 0.235)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: -- Models Environment --/meeting_room_small/Cube.067 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: travertine_wall2
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: -- Models Environment --/meeting_room_small/Cube.068 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: pol
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: -- Models Environment --/meeting_room_small/Cube.069 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: pics_wall2
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: -- Models Environment --/meeting_room_small/Cube.070 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: pics_wall2
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: -- Models Environment --/meeting_room_small/Cube.071 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: stand_marble
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+  - material: stand_black
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: -- Models Environment --/meeting_room_small/Cube.073 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: wall2_black
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0, _RECEIVE_SHADOWS_OFF
+- renderer: -- Environment --/ExitDoor/DoorFrame/Cube.073 (2) [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: DoorFrame
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.170, 0.170, 0.170, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Models Environment --/meeting_room_small/Cube.086 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: kreslo_black
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.071, 0.071, 0.071, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+  - material: kreslo_kozha
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: -- Environment --/Teleports/Meeting_small Classic place -/View/Mesh/Cube.086 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: kreslo_black
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.071, 0.071, 0.071, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+  - material: kreslo_kozha
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: -- Environment --/Teleports/Meeting_small Classic place -/View/Mesh/Cube.086 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: kreslo_black
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.071, 0.071, 0.071, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+  - material: kreslo_kozha
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: -- Models Environment --/meeting_room_small/Cube.087 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: kreslo_black
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.071, 0.071, 0.071, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+  - material: kreslo_kozha
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: -- Models Environment --/meeting_room_small/Cube.088 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: lamps_table.003
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+  - material: Material.028
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: -- Models Environment --/meeting_room_small/Cube.089 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: lamps_table.003
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+  - material: Material.028
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: -- Models Environment --/meeting_room_small/Cube.091 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: travertine_wall3
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: -- Models Environment --/meeting_room_small/Cube.092 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: PANELS_wall4
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: -- Models Environment --/meeting_room_small/Cube.093 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: travertine_wall4
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: -- Environment --/Teleports/Meeting_small StandartSize Place 0/View/Signals/Circle/Mesh/Circle/Cylinder [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Reticle Base
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.000, 0.588, 1.000, 0.463)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 8/View/Signals/Circle/Mesh/Circle/Cylinder [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Reticle Base
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.000, 0.588, 1.000, 0.463)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 6/View/Signals/Circle/Mesh/Circle/Cylinder [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Reticle Base
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.000, 0.588, 1.000, 0.463)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 0/View/Signals/Circle/Mesh/Circle/Cylinder [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Reticle Base
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.000, 0.588, 1.000, 0.463)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 4/View/Signals/Circle/Mesh/Circle/Cylinder [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Reticle Base
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.000, 0.588, 1.000, 0.463)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: -- Environment --/Teleports/Meeting_small StandartSize Place 2/View/Signals/Circle/Mesh/Circle/Cylinder [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Reticle Base
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.000, 0.588, 1.000, 0.463)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 2/View/Signals/Circle/Mesh/Circle/Cylinder [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Reticle Base
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.000, 0.588, 1.000, 0.463)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: -- Environment --/Teleports/Meeting_small StandartSize Place 5/View/Signals/Circle/Mesh/Circle/Cylinder [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Reticle Base
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.000, 0.588, 1.000, 0.463)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 11/View/Signals/Circle/Mesh/Circle/Cylinder [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Reticle Base
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.000, 0.588, 1.000, 0.463)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 9/View/Signals/Circle/Mesh/Circle/Cylinder [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Reticle Base
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.000, 0.588, 1.000, 0.463)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: -- Environment --/Teleports/Meeting_small StandartSize Place 1/View/Signals/Circle/Mesh/Circle/Cylinder [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Reticle Base
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.000, 0.588, 1.000, 0.463)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 3/View/Signals/Circle/Mesh/Circle/Cylinder [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Reticle Base
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.000, 0.588, 1.000, 0.463)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 5/View/Signals/Circle/Mesh/Circle/Cylinder [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Reticle Base
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.000, 0.588, 1.000, 0.463)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: -- Environment --/Teleports/Meeting_small StandartSize Place 4/View/Signals/Circle/Mesh/Circle/Cylinder [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Reticle Base
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.000, 0.588, 1.000, 0.463)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 1/View/Signals/Circle/Mesh/Circle/Cylinder [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Reticle Base
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.000, 0.588, 1.000, 0.463)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: -- Environment --/Teleports/Meeting_small StandartSize Place 3/View/Signals/Circle/Mesh/Circle/Cylinder [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Reticle Base
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.000, 0.588, 1.000, 0.463)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: -- Environment --/Teleports/Meeting_small Classic place -/View/Signals/Circle/Mesh/Circle/Cylinder [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Reticle Base
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.000, 0.588, 1.000, 0.463)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 10/View/Signals/Circle/Mesh/Circle/Cylinder [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Reticle Base
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.000, 0.588, 1.000, 0.463)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 7/View/Signals/Circle/Mesh/Circle/Cylinder [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Reticle Base
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.000, 0.588, 1.000, 0.463)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: -- Environment --/Teleports/Meeting_small Classic place -/View/Signals/Circle/Mesh/Circle/Cylinder [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Reticle Base
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.000, 0.588, 1.000, 0.463)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: -- Environment --/Teleports/Meeting_small StandartSize Place 0/Cylinder to use as obstacle for NavMesh [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 8/Cylinder to use as obstacle for NavMesh [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 6/Cylinder to use as obstacle for NavMesh [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 0/Cylinder to use as obstacle for NavMesh [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 4/Cylinder to use as obstacle for NavMesh [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/Meeting_small StandartSize Place 2/Cylinder to use as obstacle for NavMesh [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 2/Cylinder to use as obstacle for NavMesh [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/Meeting_small StandartSize Place 5/Cylinder to use as obstacle for NavMesh [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 11/Cylinder to use as obstacle for NavMesh [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 9/Cylinder to use as obstacle for NavMesh [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/Meeting_small StandartSize Place 1/Cylinder to use as obstacle for NavMesh [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 3/Cylinder to use as obstacle for NavMesh [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 5/Cylinder to use as obstacle for NavMesh [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/Meeting_small StandartSize Place 4/Cylinder to use as obstacle for NavMesh [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 1/Cylinder to use as obstacle for NavMesh [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/Meeting_small StandartSize Place 3/Cylinder to use as obstacle for NavMesh [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/Meeting_small Classic place -/Cylinder to use as obstacle for NavMesh [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 10/Cylinder to use as obstacle for NavMesh [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 7/Cylinder to use as obstacle for NavMesh [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/Meeting_small Classic place -/Cylinder to use as obstacle for NavMesh [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Models Environment --/meeting_room_small/Cylinder.002 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: hren_black
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+  - material: hren_blue
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: -- Models Environment --/meeting_room_small/Cylinder002.002 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: lamps_table.004
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: Assets/Models/Office/textures/lamps_table.png
+    baseMap: Assets/Models/Office/textures/lamps_table.png
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: -- Environment --/Teleports/Meeting_small StandartSize Place 0/View/Signals/Reticle/CylinderBottom [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Teleport_ColorRamp
+    shader: Shader Graphs/ColorRamp
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 8/View/Signals/Reticle/CylinderBottom [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Teleport_ColorRamp
+    shader: Shader Graphs/ColorRamp
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 6/View/Signals/Reticle/CylinderBottom [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Teleport_ColorRamp
+    shader: Shader Graphs/ColorRamp
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 0/View/Signals/Reticle/CylinderBottom [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Teleport_ColorRamp
+    shader: Shader Graphs/ColorRamp
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 4/View/Signals/Reticle/CylinderBottom [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Teleport_ColorRamp
+    shader: Shader Graphs/ColorRamp
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/Meeting_small StandartSize Place 2/View/Signals/Reticle/CylinderBottom [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Teleport_ColorRamp
+    shader: Shader Graphs/ColorRamp
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 2/View/Signals/Reticle/CylinderBottom [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Teleport_ColorRamp
+    shader: Shader Graphs/ColorRamp
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/Meeting_small StandartSize Place 5/View/Signals/Reticle/CylinderBottom [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Teleport_ColorRamp
+    shader: Shader Graphs/ColorRamp
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 11/View/Signals/Reticle/CylinderBottom [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Teleport_ColorRamp
+    shader: Shader Graphs/ColorRamp
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 9/View/Signals/Reticle/CylinderBottom [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Teleport_ColorRamp
+    shader: Shader Graphs/ColorRamp
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/Meeting_small StandartSize Place 1/View/Signals/Reticle/CylinderBottom [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Teleport_ColorRamp
+    shader: Shader Graphs/ColorRamp
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 3/View/Signals/Reticle/CylinderBottom [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Teleport_ColorRamp
+    shader: Shader Graphs/ColorRamp
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 5/View/Signals/Reticle/CylinderBottom [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Teleport_ColorRamp
+    shader: Shader Graphs/ColorRamp
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/Meeting_small StandartSize Place 4/View/Signals/Reticle/CylinderBottom [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Teleport_ColorRamp
+    shader: Shader Graphs/ColorRamp
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 1/View/Signals/Reticle/CylinderBottom [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Teleport_ColorRamp
+    shader: Shader Graphs/ColorRamp
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/Meeting_small StandartSize Place 3/View/Signals/Reticle/CylinderBottom [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Teleport_ColorRamp
+    shader: Shader Graphs/ColorRamp
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/Meeting_small Classic place -/View/Signals/Reticle/CylinderBottom [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Teleport_ColorRamp
+    shader: Shader Graphs/ColorRamp
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 10/View/Signals/Reticle/CylinderBottom [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Teleport_ColorRamp
+    shader: Shader Graphs/ColorRamp
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 7/View/Signals/Reticle/CylinderBottom [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Teleport_ColorRamp
+    shader: Shader Graphs/ColorRamp
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/Meeting_small Classic place -/View/Signals/Reticle/CylinderBottom [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Teleport_ColorRamp
+    shader: Shader Graphs/ColorRamp
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/Meeting_small StandartSize Place 0/View/Signals/Reticle/CylinderSide [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Teleport_ColorRamp
+    shader: Shader Graphs/ColorRamp
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 8/View/Signals/Reticle/CylinderSide [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Teleport_ColorRamp
+    shader: Shader Graphs/ColorRamp
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 6/View/Signals/Reticle/CylinderSide [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Teleport_ColorRamp
+    shader: Shader Graphs/ColorRamp
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 0/View/Signals/Reticle/CylinderSide [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Teleport_ColorRamp
+    shader: Shader Graphs/ColorRamp
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 4/View/Signals/Reticle/CylinderSide [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Teleport_ColorRamp
+    shader: Shader Graphs/ColorRamp
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/Meeting_small StandartSize Place 2/View/Signals/Reticle/CylinderSide [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Teleport_ColorRamp
+    shader: Shader Graphs/ColorRamp
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 2/View/Signals/Reticle/CylinderSide [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Teleport_ColorRamp
+    shader: Shader Graphs/ColorRamp
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/Meeting_small StandartSize Place 5/View/Signals/Reticle/CylinderSide [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Teleport_ColorRamp
+    shader: Shader Graphs/ColorRamp
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 11/View/Signals/Reticle/CylinderSide [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Teleport_ColorRamp
+    shader: Shader Graphs/ColorRamp
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 9/View/Signals/Reticle/CylinderSide [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Teleport_ColorRamp
+    shader: Shader Graphs/ColorRamp
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/Meeting_small StandartSize Place 1/View/Signals/Reticle/CylinderSide [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Teleport_ColorRamp
+    shader: Shader Graphs/ColorRamp
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 3/View/Signals/Reticle/CylinderSide [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Teleport_ColorRamp
+    shader: Shader Graphs/ColorRamp
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 5/View/Signals/Reticle/CylinderSide [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Teleport_ColorRamp
+    shader: Shader Graphs/ColorRamp
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/Meeting_small StandartSize Place 4/View/Signals/Reticle/CylinderSide [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Teleport_ColorRamp
+    shader: Shader Graphs/ColorRamp
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 1/View/Signals/Reticle/CylinderSide [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Teleport_ColorRamp
+    shader: Shader Graphs/ColorRamp
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/Meeting_small StandartSize Place 3/View/Signals/Reticle/CylinderSide [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Teleport_ColorRamp
+    shader: Shader Graphs/ColorRamp
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/Meeting_small Classic place -/View/Signals/Reticle/CylinderSide [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Teleport_ColorRamp
+    shader: Shader Graphs/ColorRamp
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 10/View/Signals/Reticle/CylinderSide [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Teleport_ColorRamp
+    shader: Shader Graphs/ColorRamp
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 7/View/Signals/Reticle/CylinderSide [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Teleport_ColorRamp
+    shader: Shader Graphs/ColorRamp
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/Meeting_small Classic place -/View/Signals/Reticle/CylinderSide [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Teleport_ColorRamp
+    shader: Shader Graphs/ColorRamp
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: PlayerUiBinder/GameObjectPanels/NewInventoryPanel/polka/ButtonUp/button/default [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: white
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+  - material: grey
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.250, 0.250, 0.250, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+  - material: black
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.100, 0.100, 0.100, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: PlayerUiBinder/GameObjectPanels/NewInventoryPanel/polka/ButtonDown/button/default [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: white
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+  - material: grey
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.250, 0.250, 0.250, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+  - material: black
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.100, 0.100, 0.100, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/ExitDoor/ProgressBar/Content/Donat [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: donut
+    shader: Shader Graphs/DirectionalDissolve
+    color: RGBA(0.717, 0.558, 0.558, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: X_AXIS
+  - material: icing
+    shader: Shader Graphs/DirectionalDissolve
+    color: RGBA(0.717, 0.558, 0.558, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+  - material: sprinkles bake
+    shader: Shader Graphs/DirectionalDissolve
+    color: RGBA(0.717, 0.558, 0.558, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/ExitDoor/DoorEvent/DoorTowerEventView [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/Meeting_small StandartSize Place 0/View/Signals/TopTargetPosition/Free [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Green
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.010, 1.000, 0.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 8/View/Signals/TopTargetPosition/Free [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Green
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.010, 1.000, 0.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 6/View/Signals/TopTargetPosition/Free [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Green
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.010, 1.000, 0.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 0/View/Signals/TopTargetPosition/Free [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Green
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.010, 1.000, 0.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 4/View/Signals/TopTargetPosition/Free [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Green
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.010, 1.000, 0.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: -- Environment --/Teleports/Meeting_small StandartSize Place 2/View/Signals/TopTargetPosition/Free [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Green
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.010, 1.000, 0.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 2/View/Signals/TopTargetPosition/Free [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Green
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.010, 1.000, 0.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: -- Environment --/Teleports/Meeting_small StandartSize Place 5/View/Signals/TopTargetPosition/Free [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Green
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.010, 1.000, 0.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 11/View/Signals/TopTargetPosition/Free [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Green
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.010, 1.000, 0.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 9/View/Signals/TopTargetPosition/Free [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Green
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.010, 1.000, 0.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: -- Environment --/Teleports/Meeting_small StandartSize Place 1/View/Signals/TopTargetPosition/Free [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Green
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.010, 1.000, 0.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 3/View/Signals/TopTargetPosition/Free [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Green
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.010, 1.000, 0.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 5/View/Signals/TopTargetPosition/Free [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Green
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.010, 1.000, 0.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: -- Environment --/Teleports/Meeting_small StandartSize Place 4/View/Signals/TopTargetPosition/Free [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Green
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.010, 1.000, 0.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 1/View/Signals/TopTargetPosition/Free [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Green
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.010, 1.000, 0.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: -- Environment --/Teleports/Meeting_small StandartSize Place 3/View/Signals/TopTargetPosition/Free [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Green
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.010, 1.000, 0.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: -- Environment --/Teleports/Meeting_small Classic place -/View/Signals/TopTargetPosition/Free [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Green
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.010, 1.000, 0.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 10/View/Signals/TopTargetPosition/Free [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Green
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.010, 1.000, 0.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 7/View/Signals/TopTargetPosition/Free [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Green
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.010, 1.000, 0.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: -- Environment --/Teleports/Meeting_small Classic place -/View/Signals/TopTargetPosition/Free [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Green
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.010, 1.000, 0.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: -- Environment --/Teleports/Meeting_small StandartSize Place 0/View/Signals/TopTargetPosition/FreeSelected [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Cian
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.000, 0.935, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 8/View/Signals/TopTargetPosition/FreeSelected [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Cian
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.000, 0.935, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 6/View/Signals/TopTargetPosition/FreeSelected [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Cian
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.000, 0.935, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 0/View/Signals/TopTargetPosition/FreeSelected [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Cian
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.000, 0.935, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 4/View/Signals/TopTargetPosition/FreeSelected [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Cian
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.000, 0.935, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: -- Environment --/Teleports/Meeting_small StandartSize Place 2/View/Signals/TopTargetPosition/FreeSelected [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Cian
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.000, 0.935, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 2/View/Signals/TopTargetPosition/FreeSelected [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Cian
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.000, 0.935, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: -- Environment --/Teleports/Meeting_small StandartSize Place 5/View/Signals/TopTargetPosition/FreeSelected [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Cian
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.000, 0.935, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 11/View/Signals/TopTargetPosition/FreeSelected [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Cian
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.000, 0.935, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 9/View/Signals/TopTargetPosition/FreeSelected [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Cian
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.000, 0.935, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: -- Environment --/Teleports/Meeting_small StandartSize Place 1/View/Signals/TopTargetPosition/FreeSelected [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Cian
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.000, 0.935, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 3/View/Signals/TopTargetPosition/FreeSelected [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Cian
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.000, 0.935, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 5/View/Signals/TopTargetPosition/FreeSelected [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Cian
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.000, 0.935, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: -- Environment --/Teleports/Meeting_small StandartSize Place 4/View/Signals/TopTargetPosition/FreeSelected [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Cian
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.000, 0.935, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 1/View/Signals/TopTargetPosition/FreeSelected [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Cian
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.000, 0.935, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: -- Environment --/Teleports/Meeting_small StandartSize Place 3/View/Signals/TopTargetPosition/FreeSelected [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Cian
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.000, 0.935, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: -- Environment --/Teleports/Meeting_small Classic place -/View/Signals/TopTargetPosition/FreeSelected [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Cian
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.000, 0.935, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 10/View/Signals/TopTargetPosition/FreeSelected [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Cian
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.000, 0.935, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 7/View/Signals/TopTargetPosition/FreeSelected [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Cian
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.000, 0.935, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: -- Environment --/Teleports/Meeting_small Classic place -/View/Signals/TopTargetPosition/FreeSelected [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Cian
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.000, 0.935, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: PlayerUiBinder/SpaceObjectPanels/SpaceEditingPanel/Place (13)/ItemGrabCollider [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: PlayerUiBinder/SpaceObjectPanels/SpaceEditingPanel/Place (12)/ItemGrabCollider [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: PlayerUiBinder/SpaceObjectPanels/SpaceEditingPanel/Place (11)/ItemGrabCollider [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: PlayerUiBinder/SpaceObjectPanels/SpaceEditingPanel/Place (10)/ItemGrabCollider [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: PlayerUiBinder/SpaceObjectPanels/SpaceEditingPanel/Place (9)/ItemGrabCollider [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: PlayerUiBinder/SpaceObjectPanels/SpaceEditingPanel/Place (8)/ItemGrabCollider [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: PlayerUiBinder/SpaceObjectPanels/SpaceEditingPanel/Place (7)/ItemGrabCollider [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: PlayerUiBinder/SpaceObjectPanels/SpaceEditingPanel/Place (6)/ItemGrabCollider [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: PlayerUiBinder/SpaceObjectPanels/SpaceEditingPanel/Place (5)/ItemGrabCollider [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: PlayerUiBinder/SpaceObjectPanels/SpaceEditingPanel/Place (4)/ItemGrabCollider [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: PlayerUiBinder/SpaceObjectPanels/SpaceEditingPanel/Place (3)/ItemGrabCollider [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: PlayerUiBinder/SpaceObjectPanels/SpaceEditingPanel/Place (2)/ItemGrabCollider [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: PlayerUiBinder/SpaceObjectPanels/SpaceEditingPanel/Place (1)/ItemGrabCollider [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: PlayerUiBinder/SpaceObjectPanels/SpaceEditingPanel/Place/ItemGrabCollider [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: PlayerUiBinder/GameObjectPanels/NewInventoryPanel/Place14/ItemGrabCollider [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: PlayerUiBinder/GameObjectPanels/NewInventoryPanel/Place13/ItemGrabCollider [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: PlayerUiBinder/GameObjectPanels/NewInventoryPanel/Place12/ItemGrabCollider [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: PlayerUiBinder/GameObjectPanels/NewInventoryPanel/Place11/ItemGrabCollider [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: PlayerUiBinder/GameObjectPanels/NewInventoryPanel/Place10/ItemGrabCollider [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: PlayerUiBinder/GameObjectPanels/NewInventoryPanel/Place9/ItemGrabCollider [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: PlayerUiBinder/GameObjectPanels/NewInventoryPanel/Place8/ItemGrabCollider [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: PlayerUiBinder/GameObjectPanels/NewInventoryPanel/Place7/ItemGrabCollider [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: PlayerUiBinder/GameObjectPanels/NewInventoryPanel/Place6/ItemGrabCollider [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: PlayerUiBinder/GameObjectPanels/NewInventoryPanel/Place5/ItemGrabCollider [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: PlayerUiBinder/GameObjectPanels/NewInventoryPanel/Place4/ItemGrabCollider [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: PlayerUiBinder/GameObjectPanels/NewInventoryPanel/Place3/ItemGrabCollider [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: PlayerUiBinder/GameObjectPanels/NewInventoryPanel/Place2/ItemGrabCollider [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: PlayerUiBinder/GameObjectPanels/NewInventoryPanel/Place1/ItemGrabCollider [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/ExitDoor/LikeButtons/LikesSwitcher/PhysicsButtonLike/Push/Like_Base [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: LikeGreen
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.153, 0.682, 0.376, 0.314)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: -- Environment --/ExitDoor/LikeButtons/LikesSwitcher/PhysicsButtonDislike/Push/Like_Base [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: LikeRed
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.682, 0.153, 0.212, 0.314)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: -- Environment --/ExitDoor/LikeButtons/LikesSwitcher/PhysicsButtonLike/Push/Like_Hand [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: LikeWhite
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/ExitDoor/LikeButtons/LikesSwitcher/PhysicsButtonDislike/Push/Like_Hand [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: LikeWhite
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/ExitDoor/LikeButtons/LikesSwitcher/PhysicsButtonLike/Push/Like_Wrist [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: LikeWhite
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/ExitDoor/LikeButtons/LikesSwitcher/PhysicsButtonDislike/Push/Like_Wrist [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: LikeWhite
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: Zones/Zone Talking Classic/ZoneActivator/ZoneSenseLogo/SenseLogo/Shapes/logo/logo_decall [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.001
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: Assets/Models/Environment/SenseLogo/Inputs/logo/textures/logo_decall.png
+    baseMap: Assets/Models/Environment/SenseLogo/Inputs/logo/textures/logo_decall.png
+    emissionMap: 
+    keywords: 
+- renderer: Zones/Zone Talking Expandable/ZoneActivator/ZoneSenseLogo/SenseLogo/Shapes/logo/logo_decall [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.001
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: Assets/Models/Environment/SenseLogo/Inputs/logo/textures/logo_decall.png
+    baseMap: Assets/Models/Environment/SenseLogo/Inputs/logo/textures/logo_decall.png
+    emissionMap: 
+    keywords: 
+- renderer: BrowserConstructor/SenseCapitalLogo/ZoneSenseLogo/SenseLogo/Shapes/logo/logo_decall [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.001
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: Assets/Models/Environment/SenseLogo/Inputs/logo/textures/logo_decall.png
+    baseMap: Assets/Models/Environment/SenseLogo/Inputs/logo/textures/logo_decall.png
+    emissionMap: 
+    keywords: 
+- renderer: Zones/Zone Talking Classic/ZoneActivator/ZoneSenseLogo/SenseLogo/Shapes/logo/logo_geo.011 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: SVGMat.003
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.000, 0.796, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+  - material: SVGMat.004
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.678, 0.369, 0.996, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+  - material: SVGMat.002
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.365, 0.365, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: Zones/Zone Talking Expandable/ZoneActivator/ZoneSenseLogo/SenseLogo/Shapes/logo/logo_geo.011 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: SVGMat.003
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.000, 0.796, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+  - material: SVGMat.004
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.678, 0.369, 0.996, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+  - material: SVGMat.002
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.365, 0.365, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: BrowserConstructor/SenseCapitalLogo/ZoneSenseLogo/SenseLogo/Shapes/logo/logo_geo.011 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: SVGMat.003
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.000, 0.796, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+  - material: SVGMat.004
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.678, 0.369, 0.996, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+  - material: SVGMat.002
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.365, 0.365, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: Zones/Zone Talking Classic/ZoneActivator/ZoneSenseLogo/SenseLogo/Shapes/logo/logo_geo.012 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: SVGMat.001
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.086, 0.086, 0.333, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: Zones/Zone Talking Expandable/ZoneActivator/ZoneSenseLogo/SenseLogo/Shapes/logo/logo_geo.012 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: SVGMat.001
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.086, 0.086, 0.333, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: BrowserConstructor/SenseCapitalLogo/ZoneSenseLogo/SenseLogo/Shapes/logo/logo_geo.012 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: SVGMat.001
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.086, 0.086, 0.333, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: Zones/Zone Talking Classic/ZoneActivator/ZoneSenseLogo/SenseLogo/Shapes/logo/logo_geo.014 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: SVGMat
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.000, 0.000, 0.400, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: Zones/Zone Talking Expandable/ZoneActivator/ZoneSenseLogo/SenseLogo/Shapes/logo/logo_geo.014 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: SVGMat
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.000, 0.000, 0.400, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: BrowserConstructor/SenseCapitalLogo/ZoneSenseLogo/SenseLogo/Shapes/logo/logo_geo.014 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: SVGMat
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.000, 0.000, 0.400, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: PlayerUiBinder/GameObjectPanels/NewInventoryPanel/Model [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: shelf
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: Assets/Models/ArtGallery/textures/wood.png
+    baseMap: Assets/Models/ArtGallery/textures/wood.png
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/ExitDoor/ActiveDoorCollider/Opened [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Door_ColorRamp_Blue
+    shader: Shader Graphs/ColorRamp
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/ExitDoor/ActiveDoorCollider/Paid [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Door_ColorRamp_Yellow
+    shader: Shader Graphs/ColorRamp
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/ExitDoor/LikeButtons/LikesSwitcher/PhysicsButtonLike/Push/Like_Base/Particle System [ParticleSystemRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Particle
+    shader: Universal Render Pipeline/Particles/Unlit
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: Assets/Mechanics/Likes/particle.png
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT, _FLIPBOOKBLENDING_OFF
+- renderer: -- Environment --/ExitDoor/LikeButtons/LikesSwitcher/PhysicsButtonDislike/Push/Like_Base/Particle System [ParticleSystemRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Particle
+    shader: Universal Render Pipeline/Particles/Unlit
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: Assets/Mechanics/Likes/particle.png
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT, _FLIPBOOKBLENDING_OFF
+- renderer: -- Environment --/Teleports/Meeting_small StandartSize Place 0/View/Mesh/Pillow.001 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: kresla
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 8/View/Mesh/Pillow.001 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: kresla
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 6/View/Mesh/Pillow.001 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: kresla
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 0/View/Mesh/Pillow.001 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: kresla
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 4/View/Mesh/Pillow.001 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: kresla
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: -- Environment --/Teleports/Meeting_small StandartSize Place 2/View/Mesh/Pillow.001 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: kresla
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 2/View/Mesh/Pillow.001 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: kresla
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: -- Environment --/Teleports/Meeting_small StandartSize Place 5/View/Mesh/Pillow.001 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: kresla
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 11/View/Mesh/Pillow.001 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: kresla
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 9/View/Mesh/Pillow.001 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: kresla
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: -- Environment --/Teleports/Meeting_small StandartSize Place 1/View/Mesh/Pillow.001 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: kresla
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 3/View/Mesh/Pillow.001 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: kresla
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 5/View/Mesh/Pillow.001 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: kresla
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: -- Environment --/Teleports/Meeting_small StandartSize Place 4/View/Mesh/Pillow.001 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: kresla
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: -- Models Environment --/meeting_room_small/Pillow.001 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: kresla
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 1/View/Mesh/Pillow.001 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: kresla
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: -- Environment --/Teleports/Meeting_small StandartSize Place 3/View/Mesh/Pillow.001 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: kresla
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 10/View/Mesh/Pillow.001 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: kresla
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 7/View/Mesh/Pillow.001 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: kresla
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: -- Models Environment --/meeting_room_small/Pillow.002 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: kresla
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: -- Models Environment --/meeting_room_small/Pillow.003 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: kresla
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: -- Models Environment --/meeting_room_small/Pillow.004 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: kresla
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: -- Models Environment --/meeting_room_small/Pillow.005 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: kresla
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: -- Models Environment --/meeting_room_small/Pillow.007 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: kresla
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: Zones/Zone Talking Classic/Top/TopRenderer/Plane [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: Zones/Zone Talking Expandable/Top/TopRenderer/Plane [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Models Environment --/meeting_room_small/Plane.008 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: wood_tumba
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+  - material: ruchki_tumba
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: -- Models Environment --/meeting_room_small/Plane.010 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: pot
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.653, 0.653, 0.653, 1.000)
+    mainTex: Assets/Models/Hall/optimized stuff/textures/pot.png
+    baseMap: Assets/Models/Hall/optimized stuff/textures/pot.png
+    emissionMap: 
+    keywords: 
+  - material: twig1
+    shader: Universal Render Pipeline/Nature/SpeedTree8
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: Assets/Models/Hall/optimized stuff/textures/twigs.png
+    baseMap: 
+    emissionMap: 
+    keywords: _WINDQUALITY_NONE
+- renderer: -- Models Environment --/meeting_room_small/Plane.012 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: desk_frame
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+  - material: wall2_desk
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: -- Models Environment --/meeting_room_small/Plane.013 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: pot.001
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.554, 0.554, 0.554, 1.000)
+    mainTex: Assets/Models/Hall/optimized stuff/textures/pot.png
+    baseMap: Assets/Models/Hall/optimized stuff/textures/pot.png
+    emissionMap: 
+    keywords: 
+  - material: twig1.001
+    shader: Universal Render Pipeline/Nature/SpeedTree8
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: Assets/Models/Hall/optimized stuff/textures/twigs.png
+    baseMap: 
+    emissionMap: 
+    keywords: EFFECT_BUMP, _WINDQUALITY_FASTEST
+- renderer: -- Models Environment --/meeting_room_small/Plane.014 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: nozhki
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.078, 0.078, 0.078, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+  - material: marble_small_table
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV1
+- renderer: -- Models Environment --/meeting_room_small/Plane.015 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: marble_tumba
+    shader: Shader Graphs/Lightmapped
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _LIGHTMAP_UV_UV1, _NORMAL_AO_UV_UV0
+- renderer: -- Models Environment --/meeting_room_small/Plane.016 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.022
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.906, 0.906, 0.906, 0.782)
+    mainTex: Assets/Models/meeting_room/textures/binance.png
+    baseMap: Assets/Models/meeting_room/textures/binance.png
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: -- Environment --/ExitDoor/PlayerSensorTrigger [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: PlayerUiBinder/SpaceObjectPanels/SpaceEditingPanel/polka/polka1 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(1.000, 1.000, 1.000, 0.667)
+    mainTex: Assets/Models/InventoryShelf/textures/marble_black.png
+    baseMap: Assets/Models/InventoryShelf/textures/marble_black.png
+    emissionMap: 
+    keywords: _OCCLUSIONMAP, _RECEIVE_SHADOWS_OFF, _SPECULAR_SETUP, _SURFACE_TYPE_TRANSPARENT
+- renderer: PlayerUiBinder/GameObjectPanels/NewInventoryPanel/polka/polka1 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(1.000, 1.000, 1.000, 0.667)
+    mainTex: Assets/Models/InventoryShelf/textures/marble_black.png
+    baseMap: Assets/Models/InventoryShelf/textures/marble_black.png
+    emissionMap: 
+    keywords: _OCCLUSIONMAP, _RECEIVE_SHADOWS_OFF, _SPECULAR_SETUP, _SURFACE_TYPE_TRANSPARENT
+- renderer: -- Environment --/ExitDoor/SendBuyRequestController/Button/Push [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: MainButtonMaterial
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.426, 0.887, 0.422, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+  - material: ForBorderMaterial
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.163, 0.679, 0.203, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/ExitDoor/LikeButtons/LikesSwitcher/PhysicsButtonLike/Push [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Red_button
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.821, 0.073, 0.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: -- Environment --/ExitDoor/LikeButtons/LikesSwitcher/PhysicsButtonDislike/Push [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Red_button
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.821, 0.073, 0.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _EMISSION
+- renderer: PlayerUiBinder/SpaceObjectPanels/SpaceEditingPanel/RecyclingArea [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: InventoryRecyclingAreaMaterial
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.548, 1.000, 0.438, 0.098)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _ENVIRONMENTREFLECTIONS_OFF, _RECEIVE_SHADOWS_OFF, _SURFACE_TYPE_TRANSPARENT
+- renderer: PlayerUiBinder/GameObjectPanels/NewInventoryPanel/RecyclingArea/RecyclingVisualizer/RecyclingAreaModel [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: InventoryRecyclingAreaMaterial
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.548, 1.000, 0.438, 0.098)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _ENVIRONMENTREFLECTIONS_OFF, _RECEIVE_SHADOWS_OFF, _SURFACE_TYPE_TRANSPARENT
+- renderer: SceneChangerView/ScreenSaver/sphere/sphere [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Sphere material
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: Assets/Scene Changer/eso_dark-topaz-enhance.jpg
+    baseMap: Assets/Scene Changer/eso_dark-topaz-enhance.jpg
+    emissionMap: 
+    keywords: 
+- renderer: -- Models Environment --/meeting_room_small/Sphere001.002 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: lamps_table.002
+    shader: Unlit/Color
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: Zones/TableBigForAdminPadKeyboard_collider [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: Zones/TableSmallForAdminPadKeyboard_collider [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/Teleports/TeleportZone Meeting 1 Floor [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Environment --/ExitDoor/TextHolder [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Lit
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.500, 0.500, 0.500, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: Zones/Zone Talking Expandable/Top/TopRenderer [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: glass
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.118, 0.421, 1.000, 0.447)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _ENVIRONMENTREFLECTIONS_OFF, _RECEIVE_SHADOWS_OFF, _SPECULARHIGHLIGHTS_OFF, _SURFACE_TYPE_TRANSPARENT
+- renderer: Zones/Zone Talking Classic/Top/TopRenderer [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: glass
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.118, 0.421, 1.000, 0.447)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _ENVIRONMENTREFLECTIONS_OFF, _RECEIVE_SHADOWS_OFF, _SPECULARHIGHLIGHTS_OFF, _SURFACE_TYPE_TRANSPARENT
+- renderer: -- Environment --/Teleports/Meeting_small StandartSize Place 0/View/Signals/Reticle/Torus [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Reticle Base
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.000, 0.588, 1.000, 0.463)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 8/View/Signals/Reticle/Torus [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Reticle Base
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.000, 0.588, 1.000, 0.463)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 6/View/Signals/Reticle/Torus [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Reticle Base
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.000, 0.588, 1.000, 0.463)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 0/View/Signals/Reticle/Torus [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Reticle Base
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.000, 0.588, 1.000, 0.463)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 4/View/Signals/Reticle/Torus [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Reticle Base
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.000, 0.588, 1.000, 0.463)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: -- Environment --/Teleports/Meeting_small StandartSize Place 2/View/Signals/Reticle/Torus [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Reticle Base
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.000, 0.588, 1.000, 0.463)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 2/View/Signals/Reticle/Torus [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Reticle Base
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.000, 0.588, 1.000, 0.463)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: -- Environment --/Teleports/Meeting_small StandartSize Place 5/View/Signals/Reticle/Torus [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Reticle Base
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.000, 0.588, 1.000, 0.463)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 11/View/Signals/Reticle/Torus [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Reticle Base
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.000, 0.588, 1.000, 0.463)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 9/View/Signals/Reticle/Torus [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Reticle Base
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.000, 0.588, 1.000, 0.463)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: -- Environment --/Teleports/Meeting_small StandartSize Place 1/View/Signals/Reticle/Torus [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Reticle Base
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.000, 0.588, 1.000, 0.463)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 3/View/Signals/Reticle/Torus [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Reticle Base
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.000, 0.588, 1.000, 0.463)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 5/View/Signals/Reticle/Torus [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Reticle Base
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.000, 0.588, 1.000, 0.463)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: -- Environment --/Teleports/Meeting_small StandartSize Place 4/View/Signals/Reticle/Torus [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Reticle Base
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.000, 0.588, 1.000, 0.463)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 1/View/Signals/Reticle/Torus [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Reticle Base
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.000, 0.588, 1.000, 0.463)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: -- Environment --/Teleports/Meeting_small StandartSize Place 3/View/Signals/Reticle/Torus [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Reticle Base
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.000, 0.588, 1.000, 0.463)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: -- Environment --/Teleports/Meeting_small Classic place -/View/Signals/Reticle/Torus [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Reticle Base
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.000, 0.588, 1.000, 0.463)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 10/View/Signals/Reticle/Torus [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Reticle Base
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.000, 0.588, 1.000, 0.463)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: -- Environment --/Teleports/Meeting_small BigSize Place 7/View/Signals/Reticle/Torus [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Reticle Base
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.000, 0.588, 1.000, 0.463)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: -- Environment --/Teleports/Meeting_small Classic place -/View/Signals/Reticle/Torus [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Reticle Base
+    shader: Universal Render Pipeline/Unlit
+    color: RGBA(0.000, 0.588, 1.000, 0.463)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: _SURFACE_TYPE_TRANSPARENT
+- renderer: -- Models Environment --/meeting_room_small/Vert.011 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.015
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+  - material: Material.016
+    shader: Unlit/Color
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Models Environment --/meeting_room_small/Vert.012 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.015
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+  - material: Material.016
+    shader: Unlit/Color
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Models Environment --/meeting_room_small/Vert.013 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.015
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+  - material: Material.016
+    shader: Unlit/Color
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: -- Models Environment --/meeting_room_small/Vert.014 [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: Material.015
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(0.906, 0.906, 0.906, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+  - material: Material.016
+    shader: Unlit/Color
+    color: RGBA(1.000, 1.000, 1.000, 1.000)
+    mainTex: 
+    baseMap: 
+    emissionMap: 
+    keywords: 
+- renderer: SpaceEditingService/AirLocomotionZone/Zone [MeshRenderer] lightmapIndex=-1; scaleOffset=(1.00, 1.00, 0.00, 0.00)
+  - material: TransparentBoardZone
+    shader: Universal Render Pipeline/Lit
+    color: RGBA(1.000, 1.000, 1.000, 0.392)
+    mainTex: Assets/Mechanics/Blackboard/air locomotion highlight.png
+    baseMap: Assets/Mechanics/Blackboard/air locomotion highlight.png
+    emissionMap: 
+    keywords: _ENVIRONMENTREFLECTIONS_OFF, _RECEIVE_SHADOWS_OFF, _SURFACE_TYPE_TRANSPARENT
