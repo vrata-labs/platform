@@ -67,8 +67,29 @@ write_files:
       content = "\n".join(lines) + "\n"
       Path("/opt/noah/infra/docker/.env.staging").write_text(content)
       PY
+  - path: /usr/local/bin/noah-install-metadata-ssh.sh
+    permissions: "0755"
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      SSH_KEYS="$(curl -fsH 'Metadata-Flavor: Google' http://169.254.169.254/computeMetadata/v1/instance/attributes/ssh-keys || true)"
+      [ -n "$SSH_KEYS" ] || exit 0
+
+      while IFS= read -r entry; do
+        [ -n "$entry" ] || continue
+        user_name="${entry%%:*}"
+        public_key="${entry#*:}"
+        if ! id "$user_name" >/dev/null 2>&1; then
+          useradd -m -s /bin/bash "$user_name"
+        fi
+        install -d -m 700 -o "$user_name" -g "$user_name" "/home/$user_name/.ssh"
+        printf '%s\n' "$public_key" > "/home/$user_name/.ssh/authorized_keys"
+        chown "$user_name:$user_name" "/home/$user_name/.ssh/authorized_keys"
+        chmod 600 "/home/$user_name/.ssh/authorized_keys"
+      done <<< "$SSH_KEYS"
 
 runcmd:
+  - /usr/local/bin/noah-install-metadata-ssh.sh
   - curl -fsSL https://get.docker.com | sh
   - systemctl enable docker
   - systemctl restart docker
