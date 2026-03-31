@@ -42,7 +42,9 @@
 - Working public auxiliary domains are `https://state.89.169.161.91.sslip.io` for room-state and `https://livekit.89.169.161.91.sslip.io` for LiveKit.
 - The practical publish/update path was: commit scene bundle changes to branch `deploy/scene-bundles-stage-20260328`, push to GitHub, and point stage rooms at raw GitHub or jsDelivr scene bundle URLs instead of depending on local VM assets.
 - Compose staging rollout path is now: `git checkout <commit>` (or `git pull` on branch) -> `docker compose --env-file infra/docker/.env.staging -f infra/docker/compose.staging.yml build` -> `docker compose ... up -d`.
+- Phase 5 switched the active staging rollout contract to registry images by SHA: `docker login cr.yandex` -> `infra/docker/rollout-staging-images.sh <full-sha>` -> `docker compose pull && up -d`.
 - Rollback was verified on compose staging by switching between commits and rebuilding in place without deleting `postgres` or `minio` volumes; smoke after rollback should cover at least `/health` and `/rooms/demo-room`.
+- Rollback for Phase 5 was also verified with registry images only: switching `IMAGE_TAG` to a previous published SHA and re-running rollout restored `/health`, `demo-room`, and `control-plane` without rebuild.
 - Fresh stage VMs were usually easier than patching old ones in place; they were created with `yc compute instance create ... --metadata-from-file user-data=infra/yandex/cloud-init/staging-scenes.yaml,ssh-keys=<file>`.
 - For compose VMs, SSH access was made reliable by rendering a real user with `ssh_authorized_keys` directly into cloud-init instead of relying only on OS Login metadata.
 - One compose-specific failure mode was generating invalid sslip domains (`..sslip.io`); the safe pattern is `${ip}.sslip.io` plus subdomains like `state.${ip}.sslip.io` and `livekit.${ip}.sslip.io`.
@@ -54,6 +56,7 @@
 - One Phase 2 infra failure mode was transient registry instability from `quay.io` for MinIO; compose now uses `minio/minio` from Docker Hub instead.
 - Phase 4 registry path is now live in `Yandex Container Registry` `crp9cm29k6p76hqo8lti` (`noah`); published image names are `cr.yandex/crp9cm29k6p76hqo8lti/noah-api` and `cr.yandex/crp9cm29k6p76hqo8lti/noah-room-state`.
 - GitHub Actions publish workflow is `.github/workflows/docker-publish.yml`; it publishes immutable SHA tags plus only `staging` and branch-slug aliases, and PRs do not publish images.
+- Staging deploy workflow is `.github/workflows/staging-deploy.yml`; it is designed to deploy only immutable SHA tags over SSH and run basic post-deploy smoke (`/health`, `demo-room`, `control-plane`).
 - Required GitHub secrets for YCR publish are `YCR_REGISTRY_ID`, `YCR_USERNAME=json_key`, and `YCR_PASSWORD` containing the full service account key JSON.
 - Current Yandex service account for GitHub image pushes is `noah-gh-ycr-pusher` (`ajegfvegcehvb09mj977`) with `container-registry.images.pusher` on folder `b1g2ndo07lr7l5q8bb08`.
 - For reliable external testing, a CDN-hosted scene bundle URL worked well: `https://cdn.jsdelivr.net/gh/psilon2000/noah@deploy/scene-bundles-stage-20260328/apps/runtime-web/public/assets/scenes/sense-hall2-v1/scene.json`.

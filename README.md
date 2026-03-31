@@ -84,6 +84,14 @@ Phase 4 CI/publish contract:
   - `cr.yandex/crp9cm29k6p76hqo8lti/noah-room-state`
 - Verified publish run: GitHub Actions workflow `Docker Publish` successfully pushed SHA and alias tags for branch `deploy/scene-bundles-stage-20260328`
 
+## Staging deploy by SHA
+
+- Active staging VM now runs `api` and `room-state` from registry images, not from `docker compose build`
+- Manual/SSH rollout contract on the VM: `docker login cr.yandex` -> `infra/docker/rollout-staging-images.sh <full-git-sha>`
+- The rollout script updates `IMAGE_TAG` in `infra/docker/.env.staging`, pulls `api` and `room-state`, and runs `docker compose up -d --no-build`
+- Verified rollback contract: rerun the same script with the previous published SHA, then smoke `health`, `demo-room`, `control-plane`
+- GitHub Actions deploy workflow source: `.github/workflows/staging-deploy.yml`
+
 ## Container smoke
 
 Phase 1 container smoke commands:

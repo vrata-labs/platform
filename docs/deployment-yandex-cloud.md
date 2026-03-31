@@ -19,7 +19,8 @@
 - Local stack teardown: `docker compose --env-file infra/docker/.env.staging.example -f infra/docker/compose.staging.yml down -v`
 - New staging VM bootstrap: `infra/yandex/scripts/provision-staging-compose.sh <instance-name>`
 - Existing compose staging rollout on VM: `git pull && docker compose --env-file infra/docker/.env.staging -f infra/docker/compose.staging.yml build && docker compose --env-file infra/docker/.env.staging -f infra/docker/compose.staging.yml up -d`
-- Rollback path on VM: `git checkout <previous-commit> && docker compose --env-file infra/docker/.env.staging -f infra/docker/compose.staging.yml build && docker compose --env-file infra/docker/.env.staging -f infra/docker/compose.staging.yml up -d`
+- Registry-based rollout on VM: `docker login cr.yandex` -> `infra/docker/rollout-staging-images.sh <full-sha>`
+- Rollback path on VM: rerun `infra/docker/rollout-staging-images.sh <previous-successful-sha>` without rebuild
 - Current verified compose staging VM: `noah-stage-compose-v11` at `89.169.161.91`
 - Primary public app URL: `https://89.169.161.91.sslip.io`
 - Public room-state URL: `https://state.89.169.161.91.sslip.io`
@@ -61,3 +62,14 @@
   - `YCR_USERNAME` (`json_key`)
   - `YCR_PASSWORD`
 - Current GitHub publish service account: `noah-gh-ycr-pusher` (`ajegfvegcehvb09mj977`)
+
+## Staging deploy workflow
+
+- Workflow file: `.github/workflows/staging-deploy.yml`
+- Deploy input contract: immutable full `git sha`
+- Remote rollout updates `IMAGE_TAG` in `infra/docker/.env.staging`, then runs `docker compose pull` and `docker compose up -d --no-build`
+- Post-deploy smoke for this phase is limited to:
+  - `/health`
+  - `/rooms/demo-room`
+  - `/control-plane`
+- Current operational note: the workflow is committed on the staging branch and the same SSH rollout path was verified manually end-to-end on `noah-stage-compose-v11`
