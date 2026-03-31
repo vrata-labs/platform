@@ -8,19 +8,92 @@ const stagingSceneRooms = [
     name: "Hall",
     roomId: process.env.STAGING_HALL_ROOM_ID ?? "42db8225-f671-4e46-9c28-9381d66a948c",
     expectedBundleUrl: "/assets/scenes/sense-hall2-v1/scene.json",
-    timeoutMs: 20000
+    timeoutMs: 20000,
+    requireLoadedState: true
   },
   {
     name: "BlueOffice",
     roomId: process.env.STAGING_BLUEOFFICE_ROOM_ID ?? "0b537d34-7b92-4b51-854a-8c64cfb4c114",
     expectedBundleUrl: "/assets/scenes/sense-blueoffice-glb-v4/scene.json",
-    timeoutMs: 25000
+    timeoutMs: 25000,
+    requireLoadedState: true
+  },
+  {
+    name: "LectureHall",
+    roomId: process.env.STAGING_LECTUREHALL_ROOM_ID ?? "c79f7f2c-2680-493b-9f8e-b6cd69802fdb",
+    expectedBundleUrl: "/assets/scenes/sense-lecturehall-glb-v2/scene.json",
+    timeoutMs: 30000,
+    requireLoadedState: false
+  },
+  {
+    name: "Showroom",
+    roomId: process.env.STAGING_SHOWROOM_ROOM_ID ?? "003f5e72-90fe-4901-9dca-8be83f74e01a",
+    expectedBundleUrl: "/assets/scenes/sense-showroom-glb-v3/scene.json",
+    timeoutMs: 30000,
+    requireLoadedState: false
+  },
+  {
+    name: "MeetingSmall",
+    roomId: process.env.STAGING_MEETINGSMALL_ROOM_ID ?? "1a90118c-635c-478b-9448-33eb76a45f50",
+    expectedBundleUrl: "/assets/scenes/sense-meeting-small-glb-v2/scene.json",
+    timeoutMs: 30000,
+    requireLoadedState: false
+  },
+  {
+    name: "Cinema",
+    roomId: process.env.STAGING_CINEMA_ROOM_ID ?? "b51f3193-1af8-4b0b-935f-b89f16e0016a",
+    expectedBundleUrl: "/assets/scenes/sense-cinema-glb-v1/scene.json",
+    timeoutMs: 30000,
+    requireLoadedState: false
+  },
+  {
+    name: "Anastasia",
+    roomId: process.env.STAGING_ANASTASIA_ROOM_ID ?? "85be9531-03d3-495b-9a4a-69c4b833acc7",
+    expectedBundleUrl: "/assets/scenes/sense-anastasia-glb-v1/scene.json",
+    timeoutMs: 30000,
+    requireLoadedState: false
+  },
+  {
+    name: "NewGallery",
+    roomId: process.env.STAGING_NEWGALLERY_ROOM_ID ?? "d53bde42-7952-4cd6-9c3f-2b06a7254c04",
+    expectedBundleUrl: "/assets/scenes/sense-newgallery-glb-v2/scene.json",
+    timeoutMs: 45000,
+    requireLoadedState: false
   },
   {
     name: "ArtGallery",
     roomId: process.env.STAGING_ARTGALLERY_ROOM_ID ?? "c17bcb81-fcd2-4432-94be-688f16a61037",
     expectedBundleUrl: "/assets/scenes/sense-artgallery-glb-v2/scene.json",
-    timeoutMs: 35000
+    timeoutMs: 35000,
+    requireLoadedState: true
+  },
+  {
+    name: "Standup",
+    roomId: process.env.STAGING_STANDUP_ROOM_ID ?? "af85fed9-8b17-4f06-ae15-5355057d7200",
+    expectedBundleUrl: "/assets/scenes/sense-standup-glb-v1/scene.json",
+    timeoutMs: 30000,
+    requireLoadedState: false
+  },
+  {
+    name: "OporaRussia",
+    roomId: process.env.STAGING_OPORARUSSIA_ROOM_ID ?? "d686c23e-78b5-4f55-a47f-b380114d5d1a",
+    expectedBundleUrl: "/assets/scenes/sense-opora-russia-glb-v1/scene.json",
+    timeoutMs: 30000,
+    requireLoadedState: false
+  },
+  {
+    name: "SergOffice",
+    roomId: process.env.STAGING_SERGOFFICE_ROOM_ID ?? "ba67301b-14f4-4c88-ba7f-2b63e0c1c332",
+    expectedBundleUrl: "/assets/scenes/sense-serg-office-glb-v1/scene.json",
+    timeoutMs: 30000,
+    requireLoadedState: false
+  },
+  {
+    name: "CinemaModeler",
+    roomId: process.env.STAGING_CINEMAMODELER_ROOM_ID ?? "c28e17b5-7b26-408b-926e-aa93fef9915e",
+    expectedBundleUrl: "/assets/scenes/sense-cinema-modeler-glb-v1/scene.json",
+    timeoutMs: 30000,
+    requireLoadedState: false
   }
 ] as const;
 
@@ -39,10 +112,24 @@ async function expectSceneRoomLoaded(
   request: APIRequestContext,
   roomId: string,
   timeoutMs: number,
-  expectedBundleUrl: string
+  expectedBundleUrl: string,
+  requireLoadedState: boolean
 ): Promise<void> {
   await page.goto(`/rooms/${roomId}`);
   await expect(page.locator("#room-name")).not.toContainText("Loading room", { timeout: timeoutMs });
+
+  const manifestResponse = await request.get(`/api/rooms/${roomId}/manifest`);
+  expect(manifestResponse.ok()).toBeTruthy();
+  const manifest = await manifestResponse.json() as { sceneBundle?: { url?: string } };
+  expect(manifest.sceneBundle?.url).toBe(expectedBundleUrl);
+
+  if (!requireLoadedState) {
+    const diagnosticsResponse = await request.get(`/api/rooms/${roomId}/diagnostics`);
+    expect(diagnosticsResponse.ok()).toBeTruthy();
+    const diagnostics = (await diagnosticsResponse.json()) as DiagnosticsPayload;
+    expect(Array.isArray(diagnostics.items)).toBeTruthy();
+    return;
+  }
 
   await expect.poll(async () => {
     const diagnosticsResponse = await request.get(`/api/rooms/${roomId}/diagnostics`);
@@ -140,7 +227,8 @@ test.describe("@staging runtime HUD space selector", () => {
         request,
         sceneRoom.roomId,
         sceneRoom.timeoutMs,
-        sceneRoom.expectedBundleUrl
+        sceneRoom.expectedBundleUrl,
+        sceneRoom.requireLoadedState
       );
     });
   }

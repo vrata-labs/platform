@@ -53,7 +53,7 @@ Phase 2 compose-based staging is now real and validated.
 - Verified staging checks for Phase 2: `/health`, `/rooms/demo-room`, `/control-plane`, `pnpm test:e2e:staging`, and manual Hall/BlueOffice diagnostics
 - Verified rollback path for Phase 2: switch to previous commit, rebuild with the same compose file, bring the stack back up, and confirm `/health` plus `/rooms/demo-room`
 - For sslip/Caddy, use the `*.sslip.io` hostnames above; bare `http://<ip>` or `https://<ip>` is not the stable public path.
-- Staging e2e should now run against the public HTTPS app URL and validate selector flow plus scene-room smoke for Hall, BlueOffice, and ArtGallery. Heavier non-baseline scenes like `NewGallery` still need separate manual review until they become stable enough for the gate.
+- Staging e2e should now run against the public HTTPS app URL and validate selector flow plus the full restored scene catalog. Stable baseline scenes such as Hall, BlueOffice, and ArtGallery are checked for `sceneDebug.state=loaded`; the rest are covered by HTTPS room-shell + manifest + diagnostics smoke so catalog regressions are still caught.
 
 ## Container smoke
 
