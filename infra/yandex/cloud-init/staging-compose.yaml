@@ -29,6 +29,9 @@ write_files:
       livekit_domain = os.environ["NOAH_LIVEKIT_DOMAIN"]
       lines = [
           "COMPOSE_PROJECT_NAME=noah",
+          "API_IMAGE_REPO=cr.yandex/crp9cm29k6p76hqo8lti/noah-api",
+          "ROOM_STATE_IMAGE_REPO=cr.yandex/crp9cm29k6p76hqo8lti/noah-room-state",
+          "IMAGE_TAG=staging",
           f"NOAH_APP_BASE_URL=http://{ip}:4000",
           f"NOAH_APP_DOMAIN={app_domain}",
           f"NOAH_STATE_DOMAIN={state_domain}",

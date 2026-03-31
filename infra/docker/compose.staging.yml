@@ -21,6 +21,7 @@ services:
       - "${NOAH_LIVEKIT_UDP_PORT}:7881/udp"
 
   room-state:
+    image: ${ROOM_STATE_IMAGE_REPO}:${IMAGE_TAG}
     build:
       context: ../..
       dockerfile: apps/room-state/Dockerfile
@@ -59,6 +60,7 @@ services:
     restart: "no"
 
   api:
+    image: ${API_IMAGE_REPO}:${IMAGE_TAG}
     build:
       context: ../..
       dockerfile: apps/api/Dockerfile
