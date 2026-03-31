@@ -68,8 +68,17 @@
 - Workflow file: `.github/workflows/staging-deploy.yml`
 - Deploy input contract: immutable full `git sha`
 - Remote rollout updates `IMAGE_TAG` in `infra/docker/.env.staging`, then runs `docker compose pull` and `docker compose up -d --no-build`
-- Post-deploy smoke for this phase is limited to:
+- Gate checks now include:
   - `/health`
   - `/rooms/demo-room`
   - `/control-plane`
-- Verified GitHub Actions workflow_dispatch run: `23801431402`
+- `pnpm test:e2e:staging` against the public HTTPS base URL
+- Current successful SHA state is stored on the VM at `infra/docker/.staging-successful-image-tag`
+- Failed verification triggers rollback to the saved previous SHA and keeps the workflow failed
+- Verified successful gated run: `23804311484`
+- Verified failed gated run with rollback: `23804157870`
+
+## Manual staging smoke workflow
+
+- `.github/workflows/staging-smoke.yml` remains a manual utility workflow
+- Source of truth for mandatory deploy verification is now `.github/workflows/staging-deploy.yml`

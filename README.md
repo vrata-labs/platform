@@ -93,6 +93,17 @@ Phase 4 CI/publish contract:
 - GitHub Actions deploy workflow source: `.github/workflows/staging-deploy.yml`
 - Verified GitHub Actions deploy run: `Staging Deploy` workflow run `23801431402`
 
+## Staging verification gate
+
+- `Staging Deploy` is now the source of truth for staging rollout verification
+- After rollout it runs:
+  - public smoke: `/health`, `/rooms/demo-room`, `/control-plane`
+  - `pnpm test:e2e:staging` against the public HTTPS URL
+- Successful deploys persist the current successful SHA on the VM for future rollback
+- Failed verification triggers automatic rollback to the previous successful SHA and still leaves the workflow failed
+- Verified failed rollout with rollback: workflow run `23804157870`
+- Verified successful gated deploy: workflow run `23804311484`
+
 ## Container smoke
 
 Phase 1 container smoke commands:
