@@ -139,3 +139,102 @@ test("runtime spaces endpoint keeps same-tenant guest-safe rooms only", async ()
     delete process.env.CONTROL_PLANE_ADMIN_TOKEN;
   }
 });
+
+test("scene bundle metadata can be created and bound to a room", async () => {
+  process.env.NOAH_DISABLE_AUTOSTART = "1";
+  process.env.API_PORT = "4014";
+  process.env.CONTROL_PLANE_ADMIN_TOKEN = "test-admin-token";
+  process.env.MINIO_PUBLIC_BASE_URL = "http://127.0.0.1:9000";
+  process.env.MINIO_BUCKET = "noah-scene-bundles";
+  const module = await import("./index.js");
+  const server = module.startApiServer(4014);
+
+  try {
+    const bundleResponse = await fetch("http://127.0.0.1:4014/api/scene-bundles", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-noah-admin-token": "test-admin-token"
+      },
+      body: JSON.stringify({
+        bundleId: "hall-bundle",
+        storageKey: "scenes/hall/v1/scene.json",
+        version: "v1"
+      })
+    });
+    assert.equal(bundleResponse.ok, true);
+    const bundle = (await bundleResponse.json()) as { bundleId: string; publicUrl: string };
+    assert.equal(bundle.bundleId, "hall-bundle");
+    assert.equal(bundle.publicUrl, "http://127.0.0.1:9000/noah-scene-bundles/scenes/hall/v1/scene.json");
+
+    const roomResponse = await fetch("http://127.0.0.1:4014/api/rooms", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-noah-admin-token": "test-admin-token"
+      },
+      body: JSON.stringify({
+        tenantId: "demo-tenant",
+        templateId: "meeting-room-basic",
+        name: "Bound Scene Room"
+      })
+    });
+    assert.equal(roomResponse.ok, true);
+    const room = (await roomResponse.json()) as { roomId: string };
+
+    const bindResponse = await fetch(`http://127.0.0.1:4014/api/rooms/${room.roomId}/bind-scene-bundle`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-noah-admin-token": "test-admin-token"
+      },
+      body: JSON.stringify({ bundleId: "hall-bundle" })
+    });
+    assert.equal(bindResponse.ok, true);
+
+    const manifestResponse = await fetch(`http://127.0.0.1:4014/api/rooms/${room.roomId}/manifest`);
+    assert.equal(manifestResponse.ok, true);
+    const manifest = (await manifestResponse.json()) as { sceneBundle?: { url?: string } };
+    assert.equal(manifest.sceneBundle?.url, "http://127.0.0.1:9000/noah-scene-bundles/scenes/hall/v1/scene.json");
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    delete process.env.NOAH_DISABLE_AUTOSTART;
+    delete process.env.CONTROL_PLANE_ADMIN_TOKEN;
+    delete process.env.MINIO_PUBLIC_BASE_URL;
+    delete process.env.MINIO_BUCKET;
+  }
+});
+
+test("legacy room scene bundle url remains backward compatible", async () => {
+  process.env.NOAH_DISABLE_AUTOSTART = "1";
+  process.env.API_PORT = "4015";
+  process.env.CONTROL_PLANE_ADMIN_TOKEN = "test-admin-token";
+  const module = await import("./index.js");
+  const server = module.startApiServer(4015);
+
+  try {
+    const roomResponse = await fetch("http://127.0.0.1:4015/api/rooms", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-noah-admin-token": "test-admin-token"
+      },
+      body: JSON.stringify({
+        tenantId: "demo-tenant",
+        templateId: "meeting-room-basic",
+        name: "Legacy Scene Room",
+        sceneBundleUrl: "https://example.com/scenes/legacy/scene.json"
+      })
+    });
+    assert.equal(roomResponse.ok, true);
+    const room = (await roomResponse.json()) as { roomId: string };
+
+    const manifestResponse = await fetch(`http://127.0.0.1:4015/api/rooms/${room.roomId}/manifest`);
+    const manifest = (await manifestResponse.json()) as { sceneBundle?: { url?: string } };
+    assert.equal(manifest.sceneBundle?.url, "https://example.com/scenes/legacy/scene.json");
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    delete process.env.NOAH_DISABLE_AUTOSTART;
+    delete process.env.CONTROL_PLANE_ADMIN_TOKEN;
+  }
+});

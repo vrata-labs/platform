@@ -110,6 +110,18 @@ export interface AssetRecord {
   processedUrl?: string;
 }
 
+export interface SceneBundleRecord {
+  bundleId: string;
+  storageKey: string;
+  publicUrl: string;
+  checksum?: string;
+  sizeBytes?: number;
+  contentType: string;
+  provider: "minio-default" | "s3-compatible";
+  version: string;
+  createdAt: string;
+}
+
 export async function fetchTemplates(apiBaseUrl: string): Promise<TemplateRecord[]> {
   const response = await fetch(new URL("/api/templates", apiBaseUrl));
   if (!response.ok) {
@@ -258,6 +270,30 @@ export async function uploadAsset(apiBaseUrl: string, input: AssetUploadInput, a
   return (await response.json()) as { assetId: string };
 }
 
+export async function listSceneBundles(apiBaseUrl: string): Promise<SceneBundleRecord[]> {
+  const response = await fetch(new URL("/api/scene-bundles", apiBaseUrl));
+  if (!response.ok) {
+    throw new Error(`failed_to_list_scene_bundles:${response.status}`);
+  }
+  const payload = (await response.json()) as { items: SceneBundleRecord[] };
+  return payload.items;
+}
+
+export async function bindRoomSceneBundle(apiBaseUrl: string, roomId: string, bundleId: string, auth?: ControlPlaneAuth): Promise<RoomRecord> {
+  const response = await fetch(new URL(`/api/rooms/${roomId}/bind-scene-bundle`, apiBaseUrl), {
+    method: "POST",
+    headers: { "content-type": "application/json", ...authHeaders(auth) },
+    body: JSON.stringify({ bundleId })
+  });
+
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({ error: `failed_to_bind_scene_bundle:${response.status}` }));
+    throw new Error(payload.error ?? `failed_to_bind_scene_bundle:${response.status}`);
+  }
+
+  return (await response.json()) as RoomRecord;
+}
+
 export async function updateAsset(apiBaseUrl: string, assetId: string, input: Partial<AssetUploadInput>, auth?: ControlPlaneAuth): Promise<AssetRecord> {
   const response = await fetch(new URL(`/api/assets/${assetId}`, apiBaseUrl), {
     method: "PATCH",
@@ -303,9 +339,11 @@ export interface ControlPlanePageState {
   templates: TemplateRecord[];
   selectedTemplate?: TemplateRecord;
   rooms: RoomRecord[];
+  sceneBundles: SceneBundleRecord[];
   assets: AssetRecord[];
   selectedAsset?: AssetRecord;
   selectedRoom?: RoomRecord;
+  selectedSceneBundle?: SceneBundleRecord;
   selectedRoomManifest?: RoomManifestRecord;
   selectedRoomDiagnostics: RuntimeDiagnosticRecord[];
   roomLink?: string;
@@ -319,6 +357,7 @@ export function createControlPlanePageState(): ControlPlanePageState {
     tenants: [],
     roomFilterTenantId: undefined,
     rooms: [],
+    sceneBundles: [],
     assets: [],
     selectedRoomDiagnostics: [],
     publishStatus: "idle",

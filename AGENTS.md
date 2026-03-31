@@ -69,6 +69,7 @@
 - For SenseTower scene migration, prefer existing exported GLB/GLTF assets over raw FBX whenever possible.
 - When something looks black or wrong, first inspect `sceneDebug` diagnostics before tweaking spawn/materials by hand.
 - If a scene already worked in another web project, copy its rendering assumptions first and only then adapt to `noah`.
+- User preference: after substantial implementation work, prepare changes so they are ready to commit/push, and if the user asks to finish the task end-to-end they usually want commit + push included unless they explicitly say otherwise. Do not override higher-priority git safety rules when commit was not requested.
 - After finishing code changes, default flow is not just local verification: publish the current changes to staging and verify them there as well.
 - Default verification after changes should include the full local e2e suite (`pnpm test:e2e`), then staging verification on the current staging host.
 - Staging verification should include at least the staging smoke suite (`pnpm test:e2e:staging`), and for meaningful runtime changes it should also cover the key public flows on staging: room load, selector/navigation if relevant, and important scene rooms such as Hall/BlueOffice when scene behavior could be affected.

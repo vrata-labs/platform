@@ -7,6 +7,12 @@ import { fileURLToPath } from "node:url";
 import { AccessToken } from "livekit-server-sdk";
 
 import {
+  resolveSceneBundlePublicUrl,
+  type SceneBundleCreateInput,
+  type SceneBundleProvider
+} from "./scene-bundle-storage.js";
+
+import {
   createStorage,
   type AssetRecord,
   type RoomRecord,
@@ -323,6 +329,23 @@ function validateAssetInput(input: Partial<AssetRecord>): string | null {
   return null;
 }
 
+function validateSceneBundleInput(input: Partial<SceneBundleCreateInput>): string | null {
+  if (!input.storageKey || input.storageKey.trim().length === 0) {
+    return "invalid_scene_bundle_storage_key";
+  }
+  if (input.provider && input.provider !== "minio-default" && input.provider !== "s3-compatible") {
+    return "invalid_scene_bundle_provider";
+  }
+  if (input.publicUrl) {
+    try {
+      new URL(input.publicUrl);
+    } catch {
+      return "invalid_scene_bundle_public_url";
+    }
+  }
+  return null;
+}
+
 function encodeToken(payload: StateTokenPayload | MediaTokenPayload): string {
   return Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
 }
@@ -449,6 +472,19 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     return;
   }
 
+  if (method === "GET" && url.pathname === "/api/scene-bundles") {
+    json(response, 200, { items: await storage.listSceneBundles() });
+    return;
+  }
+
+  const sceneBundleItemMatch = url.pathname.match(/^\/api\/scene-bundles\/([^/]+)$/);
+  if (method === "GET" && sceneBundleItemMatch) {
+    const bundle = await storage.getSceneBundle(decodeURIComponent(sceneBundleItemMatch[1]));
+    if (!bundle) return json(response, 404, { error: "scene_bundle_not_found" });
+    json(response, 200, bundle);
+    return;
+  }
+
   const roomSpacesMatch = url.pathname.match(/^\/api\/rooms\/([^/]+)\/spaces$/);
   if (method === "GET" && roomSpacesMatch) {
     if (url.searchParams.get("fail") === "1") {
@@ -491,6 +527,30 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     const asset = await storage.createAsset(payload);
     json(response, 201, asset);
     return;
+  }
+
+  if (method === "POST" && url.pathname === "/api/scene-bundles") {
+    if (!isAuthorizedControlPlaneRequest(request)) return json(response, 403, { error: "forbidden" });
+    const payload = (await parseBody<Partial<SceneBundleCreateInput>>(request)) ?? {};
+    const validationError = validateSceneBundleInput(payload);
+    if (validationError) return json(response, 400, { error: validationError });
+
+    try {
+      const provider = (payload.provider ?? ((process.env.SCENE_BUNDLE_PROVIDER as SceneBundleProvider | undefined) ?? "minio-default"));
+      const publicUrl = payload.publicUrl ?? resolveSceneBundlePublicUrl(payload.storageKey!, process.env, provider);
+      const bundle = await storage.createSceneBundle({
+        ...payload,
+        storageKey: payload.storageKey!,
+        publicUrl,
+        provider
+      });
+      json(response, 201, bundle);
+      return;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "scene_bundle_publish_failed";
+      json(response, 400, { error: message });
+      return;
+    }
   }
 
   const assetItemMatch = url.pathname.match(/^\/api\/assets\/([^/]+)$/);
@@ -542,6 +602,20 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     const updated = await storage.updateRoom(roomId, payload);
     if (!updated) return json(response, 404, { error: "room_not_found" });
     json(response, 200, { ...updated, roomLink: createRoomLink(updated.roomId, request.headers.host), manifest: await buildManifest(updated.roomId) });
+    return;
+  }
+
+  const roomBindSceneBundleMatch = url.pathname.match(/^\/api\/rooms\/([^/]+)\/bind-scene-bundle$/);
+  if (method === "POST" && roomBindSceneBundleMatch) {
+    if (!isAuthorizedControlPlaneRequest(request)) return json(response, 403, { error: "forbidden" });
+    const roomId = decodeURIComponent(roomBindSceneBundleMatch[1]);
+    const payload = (await parseBody<{ bundleId?: string }>(request)) ?? {};
+    if (!payload.bundleId) return json(response, 400, { error: "missing_scene_bundle_id" });
+    const bundle = await storage.getSceneBundle(payload.bundleId);
+    if (!bundle) return json(response, 404, { error: "scene_bundle_not_found" });
+    const room = await storage.updateRoom(roomId, { sceneBundleUrl: bundle.publicUrl });
+    if (!room) return json(response, 404, { error: "room_not_found" });
+    json(response, 200, { ...room, roomLink: createRoomLink(room.roomId, request.headers.host), sceneBundle: bundle });
     return;
   }
 

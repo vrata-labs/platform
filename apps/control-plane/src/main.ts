@@ -1,4 +1,5 @@
 import {
+  bindRoomSceneBundle,
   createTenant,
   createControlPlanePageState,
   createRoom,
@@ -9,6 +10,7 @@ import {
   fetchRoomManifest,
   fetchTemplates,
   listAssets,
+  listSceneBundles,
   listRooms,
   listTenants,
   updateAsset,
@@ -46,6 +48,7 @@ const updateAssetButton = mustElement<HTMLButtonElement>("#update-asset");
 const deleteAssetButton = mustElement<HTMLButtonElement>("#delete-asset");
 const templateSelect = mustElement<HTMLSelectElement>("#template-select");
 const assetSelect = mustElement<HTMLSelectElement>("#asset-select");
+const sceneBundleSelect = mustElement<HTMLSelectElement>("#scene-bundle-select");
 const primaryColorInput = mustElement<HTMLInputElement>("#primary-color-input");
 const accentColorInput = mustElement<HTMLInputElement>("#accent-color-input");
 const featureVoiceInput = mustElement<HTMLInputElement>("#feature-voice-input");
@@ -57,6 +60,7 @@ const deleteRoomButton = mustElement<HTMLButtonElement>("#delete-room");
 const publishStatus = mustElement<HTMLDivElement>("#publish-status");
 const roomLink = mustElement<HTMLAnchorElement>("#room-link");
 const refreshRoomDetailButton = mustElement<HTMLButtonElement>("#refresh-room-detail");
+const bindSceneBundleButton = mustElement<HTMLButtonElement>("#bind-scene-bundle");
 const templateDetail = mustElement<HTMLPreElement>("#template-detail");
 const roomFilterTenant = mustElement<HTMLSelectElement>("#room-filter-tenant");
 const roomsList = mustElement<HTMLUListElement>("#rooms-list");
@@ -100,6 +104,7 @@ function render(): void {
   roomDetail.textContent = state.selectedRoom
     ? JSON.stringify({
         room: state.selectedRoom,
+        selectedSceneBundle: state.selectedSceneBundle,
         manifest: state.selectedRoomManifest,
         diagnostics: state.selectedRoomDiagnostics.slice(-5)
       }, null, 2)
@@ -147,6 +152,7 @@ async function selectRoom(room: typeof state.selectedRoom): Promise<void> {
   state.selectedRoom = room;
   state.selectedRoomManifest = await fetchRoomManifest(apiBaseUrl, room.roomId);
   state.selectedRoomDiagnostics = await fetchRoomDiagnostics(apiBaseUrl, room.roomId);
+  state.selectedSceneBundle = state.sceneBundles.find((bundle) => bundle.publicUrl === state.selectedRoomManifest?.sceneBundle?.url);
   roomNameInput.value = room.name;
   templateSelect.value = room.templateId;
   primaryColorInput.value = room.theme?.primaryColor ?? "#5fc8ff";
@@ -159,6 +165,7 @@ async function selectRoom(room: typeof state.selectedRoom): Promise<void> {
   Array.from(assetSelect.options).forEach((option) => {
     option.selected = assetIds.has(option.value);
   });
+  sceneBundleSelect.value = state.selectedSceneBundle?.bundleId ?? "";
   render();
 }
 
@@ -209,6 +216,7 @@ async function bootstrap(): Promise<void> {
   state.templates = await fetchTemplates(apiBaseUrl);
   state.tenants = await listTenants(apiBaseUrl);
   state.rooms = await listRooms(apiBaseUrl);
+  state.sceneBundles = await listSceneBundles(apiBaseUrl).catch(() => []);
   state.assets = await listAssets(apiBaseUrl);
   renderTenantOptions();
   templateSelect.replaceChildren(
@@ -228,6 +236,20 @@ async function bootstrap(): Promise<void> {
       const option = document.createElement("option");
       option.value = asset.assetId;
       option.textContent = `${asset.kind}: ${asset.url}`;
+      return option;
+    })
+  );
+  sceneBundleSelect.replaceChildren(
+    (() => {
+      const option = document.createElement("option");
+      option.value = "";
+      option.textContent = "No registered bundle";
+      return option;
+    })(),
+    ...state.sceneBundles.map((bundle) => {
+      const option = document.createElement("option");
+      option.value = bundle.bundleId;
+      option.textContent = `${bundle.bundleId} (${bundle.version})`;
       return option;
     })
   );
@@ -458,6 +480,27 @@ refreshRoomDetailButton.addEventListener("click", () => {
     return;
   }
   void selectRoom(state.selectedRoom);
+});
+
+bindSceneBundleButton.addEventListener("click", () => {
+  if (!state.selectedRoom || !sceneBundleSelect.value) {
+    return;
+  }
+  state.publishStatus = "publishing";
+  state.statusMessage = "binding-scene-bundle";
+  render();
+  void bindRoomSceneBundle(apiBaseUrl, state.selectedRoom.roomId, sceneBundleSelect.value, currentAuth())
+    .then(async (room) => {
+      state.publishStatus = "published";
+      state.statusMessage = "scene-bundle-bound";
+      state.rooms = state.rooms.map((item) => item.roomId === room.roomId ? room : item);
+      await selectRoom(room);
+    })
+    .catch((error: unknown) => {
+      state.publishStatus = "failed";
+      state.statusMessage = error instanceof Error ? `failed:${error.message}` : "failed";
+      render();
+    });
 });
 
 deleteRoomButton.addEventListener("click", () => {

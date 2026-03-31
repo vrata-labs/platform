@@ -1,5 +1,7 @@
 import { Pool } from "pg";
 
+import type { SceneBundleCreateInput, SceneBundleRecord } from "./scene-bundle-storage.js";
+
 export interface TenantRecord {
   tenantId: string;
   name: string;
@@ -130,6 +132,10 @@ export interface Storage {
   deleteAsset(assetId: string): Promise<boolean>;
   addDiagnostic(roomId: string, payload: RuntimeDiagnosticRecord): Promise<void>;
   getDiagnostics(roomId: string): Promise<RuntimeDiagnosticRecord[]>;
+  listSceneBundles(): Promise<SceneBundleRecord[]>;
+  getSceneBundle(bundleId: string): Promise<SceneBundleRecord | null>;
+  createSceneBundle(input: SceneBundleCreateInput & { publicUrl: string; provider: SceneBundleRecord["provider"] }): Promise<SceneBundleRecord>;
+  updateSceneBundle(bundleId: string, input: Partial<SceneBundleCreateInput> & { publicUrl?: string; provider?: SceneBundleRecord["provider"] }): Promise<SceneBundleRecord | null>;
 }
 
 const defaultTemplates: TemplateRecord[] = [
@@ -162,6 +168,7 @@ export class MemoryStorage implements Storage {
     ]
   ]);
   private diagnostics = new Map<string, RuntimeDiagnosticRecord[]>();
+  private sceneBundles = new Map<string, SceneBundleRecord>();
 
   async listTenants(): Promise<TenantRecord[]> { return Array.from(this.tenants.values()); }
   async createTenant(input: Partial<TenantRecord>): Promise<TenantRecord> {
@@ -274,6 +281,39 @@ export class MemoryStorage implements Storage {
     this.diagnostics.set(roomId, entries);
   }
   async getDiagnostics(roomId: string): Promise<RuntimeDiagnosticRecord[]> { return this.diagnostics.get(roomId) ?? []; }
+  async listSceneBundles(): Promise<SceneBundleRecord[]> { return Array.from(this.sceneBundles.values()); }
+  async getSceneBundle(bundleId: string): Promise<SceneBundleRecord | null> { return this.sceneBundles.get(bundleId) ?? null; }
+  async createSceneBundle(input: SceneBundleCreateInput & { publicUrl: string; provider: SceneBundleRecord["provider"] }): Promise<SceneBundleRecord> {
+    const record: SceneBundleRecord = {
+      bundleId: input.bundleId ?? crypto.randomUUID(),
+      storageKey: input.storageKey,
+      publicUrl: input.publicUrl,
+      checksum: input.checksum,
+      sizeBytes: input.sizeBytes,
+      contentType: input.contentType ?? "application/json",
+      provider: input.provider,
+      version: input.version ?? "v1",
+      createdAt: new Date().toISOString()
+    };
+    this.sceneBundles.set(record.bundleId, record);
+    return record;
+  }
+  async updateSceneBundle(bundleId: string, input: Partial<SceneBundleCreateInput> & { publicUrl?: string; provider?: SceneBundleRecord["provider"] }): Promise<SceneBundleRecord | null> {
+    const existing = this.sceneBundles.get(bundleId);
+    if (!existing) return null;
+    const updated: SceneBundleRecord = {
+      ...existing,
+      storageKey: input.storageKey ?? existing.storageKey,
+      publicUrl: input.publicUrl ?? existing.publicUrl,
+      checksum: input.checksum ?? existing.checksum,
+      sizeBytes: input.sizeBytes ?? existing.sizeBytes,
+      contentType: input.contentType ?? existing.contentType,
+      provider: input.provider ?? existing.provider,
+      version: input.version ?? existing.version
+    };
+    this.sceneBundles.set(bundleId, updated);
+    return updated;
+  }
 }
 
 export class PostgresStorage implements Storage {
@@ -306,6 +346,17 @@ export class PostgresStorage implements Storage {
         id bigserial primary key,
         room_id text not null,
         payload jsonb not null,
+        created_at timestamptz not null default now()
+      );
+      create table if not exists scene_bundles (
+        bundle_id text primary key,
+        storage_key text not null,
+        public_url text not null,
+        checksum text,
+        size_bytes bigint,
+        content_type text not null,
+        provider text not null,
+        version text not null,
         created_at timestamptz not null default now()
       );
     `);
@@ -470,6 +521,72 @@ export class PostgresStorage implements Storage {
   async getDiagnostics(roomId: string): Promise<RuntimeDiagnosticRecord[]> {
     const result = await this.pool.query(`select payload from runtime_diagnostics where room_id = $1 order by id asc`, [roomId]);
     return result.rows.map((row: { payload: RuntimeDiagnosticRecord }) => row.payload);
+  }
+  async listSceneBundles(): Promise<SceneBundleRecord[]> {
+    const result = await this.pool.query(`select bundle_id, storage_key, public_url, checksum, size_bytes, content_type, provider, version, created_at from scene_bundles order by created_at desc, bundle_id asc`);
+    return result.rows.map((row: { bundle_id: string; storage_key: string; public_url: string; checksum: string | null; size_bytes: string | number | null; content_type: string; provider: SceneBundleRecord["provider"]; version: string; created_at: string }) => ({
+      bundleId: row.bundle_id,
+      storageKey: row.storage_key,
+      publicUrl: row.public_url,
+      checksum: row.checksum ?? undefined,
+      sizeBytes: row.size_bytes == null ? undefined : Number(row.size_bytes),
+      contentType: row.content_type,
+      provider: row.provider,
+      version: row.version,
+      createdAt: new Date(row.created_at).toISOString()
+    }));
+  }
+  async getSceneBundle(bundleId: string): Promise<SceneBundleRecord | null> {
+    const result = await this.pool.query(`select bundle_id, storage_key, public_url, checksum, size_bytes, content_type, provider, version, created_at from scene_bundles where bundle_id = $1`, [bundleId]);
+    const row = result.rows[0];
+    return row ? {
+      bundleId: row.bundle_id,
+      storageKey: row.storage_key,
+      publicUrl: row.public_url,
+      checksum: row.checksum ?? undefined,
+      sizeBytes: row.size_bytes == null ? undefined : Number(row.size_bytes),
+      contentType: row.content_type,
+      provider: row.provider,
+      version: row.version,
+      createdAt: new Date(row.created_at).toISOString()
+    } : null;
+  }
+  async createSceneBundle(input: SceneBundleCreateInput & { publicUrl: string; provider: SceneBundleRecord["provider"] }): Promise<SceneBundleRecord> {
+    const record: SceneBundleRecord = {
+      bundleId: input.bundleId ?? crypto.randomUUID(),
+      storageKey: input.storageKey,
+      publicUrl: input.publicUrl,
+      checksum: input.checksum,
+      sizeBytes: input.sizeBytes,
+      contentType: input.contentType ?? "application/json",
+      provider: input.provider,
+      version: input.version ?? "v1",
+      createdAt: new Date().toISOString()
+    };
+    await this.pool.query(
+      `insert into scene_bundles (bundle_id, storage_key, public_url, checksum, size_bytes, content_type, provider, version, created_at) values ($1,$2,$3,$4,$5,$6,$7,$8,$9)` ,
+      [record.bundleId, record.storageKey, record.publicUrl, record.checksum ?? null, record.sizeBytes ?? null, record.contentType, record.provider, record.version, record.createdAt]
+    );
+    return record;
+  }
+  async updateSceneBundle(bundleId: string, input: Partial<SceneBundleCreateInput> & { publicUrl?: string; provider?: SceneBundleRecord["provider"] }): Promise<SceneBundleRecord | null> {
+    const existing = await this.getSceneBundle(bundleId);
+    if (!existing) return null;
+    const updated: SceneBundleRecord = {
+      ...existing,
+      storageKey: input.storageKey ?? existing.storageKey,
+      publicUrl: input.publicUrl ?? existing.publicUrl,
+      checksum: input.checksum ?? existing.checksum,
+      sizeBytes: input.sizeBytes ?? existing.sizeBytes,
+      contentType: input.contentType ?? existing.contentType,
+      provider: input.provider ?? existing.provider,
+      version: input.version ?? existing.version
+    };
+    await this.pool.query(
+      `update scene_bundles set storage_key = $2, public_url = $3, checksum = $4, size_bytes = $5, content_type = $6, provider = $7, version = $8 where bundle_id = $1`,
+      [bundleId, updated.storageKey, updated.publicUrl, updated.checksum ?? null, updated.sizeBytes ?? null, updated.contentType, updated.provider, updated.version]
+    );
+    return updated;
   }
 }
 
