@@ -47,6 +47,7 @@
 - For compose VMs, SSH access was made reliable by rendering a real user with `ssh_authorized_keys` directly into cloud-init instead of relying only on OS Login metadata.
 - One compose-specific failure mode was generating invalid sslip domains (`..sslip.io`); the safe pattern is `${ip}.sslip.io` plus subdomains like `state.${ip}.sslip.io` and `livekit.${ip}.sslip.io`.
 - Stage rooms were created/updated through the API with `x-noah-admin-token`, then patched to set `sceneBundleUrl` to the published bundle URL.
+- Compose staging now keeps a restored room catalog for the main scene bundles: Hall, BlueOffice, LectureHall, Showroom, MeetingSmall, Cinema, Anastasia, NewGallery, ArtGallery, Standup, OporaRussia, SergOffice, and CinemaModeler.
 - For quick validation, browser automation against public room URLs plus `sceneDebug` diagnostics was more reliable than trying to introspect the VM directly.
 - One real failure mode: stage `/assets/...` requests returned `404`, which made scene bundle tests misleading.
 - `apps/api/src/index.ts` now has a fallback to serve static assets from both `apps/runtime-web/dist` and `apps/runtime-web/public`.
@@ -71,6 +72,7 @@
 - After finishing code changes, default flow is not just local verification: publish the current changes to staging and verify them there as well.
 - Default verification after changes should include the full local e2e suite (`pnpm test:e2e`), then staging verification on the current staging host.
 - Staging verification should include at least the staging smoke suite (`pnpm test:e2e:staging`), and for meaningful runtime changes it should also cover the key public flows on staging: room load, selector/navigation if relevant, and important scene rooms such as Hall/BlueOffice when scene behavior could be affected.
+- Staging e2e now runs against the public HTTPS app URL and covers the full restored scene catalog; Hall, BlueOffice, and ArtGallery are the current baseline scenes that must also reach `sceneDebug.state=loaded`.
 - Do not treat local green tests as sufficient when the change affects runtime behavior, deployment behavior, room manifests, scene bundles, or staging infrastructure; publish and verify on staging by default.
 
 ## Current scene status
