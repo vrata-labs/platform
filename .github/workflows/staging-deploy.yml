@@ -10,13 +10,18 @@ on:
         description: "Immutable image SHA tag to deploy or rollback to"
         required: true
         type: string
+      force_fail_gate:
+        description: "Force the verification gate to fail after rollout"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
 
 jobs:
   deploy:
-    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'deploy/scene-bundles-stage-20260328')
     runs-on: ubuntu-latest
     env:
       STAGING_SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
@@ -24,9 +29,24 @@ jobs:
       STAGING_BASE_URL: ${{ secrets.STAGING_BASE_URL }}
       YCR_USERNAME: ${{ secrets.YCR_USERNAME }}
       YCR_PASSWORD: ${{ secrets.YCR_PASSWORD }}
+      STAGING_SUCCESSFUL_SHA_FILE: /opt/noah/infra/docker/.staging-successful-image-tag
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
 
       - name: Setup SSH agent
         uses: webfactory/ssh-agent@v0.9.0
@@ -42,6 +62,21 @@ jobs:
             echo "deploy_sha=${{ github.event.workflow_run.head_sha }}" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Determine previous successful SHA
+        id: previous
+        run: |
+          PREVIOUS_SHA="$(ssh -o StrictHostKeyChecking=no "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo bash -lc 'if [ -f \"$STAGING_SUCCESSFUL_SHA_FILE\" ]; then cat \"$STAGING_SUCCESSFUL_SHA_FILE\"; else grep -E \"^IMAGE_TAG=\" /opt/noah/infra/docker/.env.staging | cut -d= -f2; fi'")"
+          if [ -z "$PREVIOUS_SHA" ]; then
+            echo "rollback_precondition_failed: missing previous successful sha" >&2
+            exit 1
+          fi
+          echo "previous_sha=$PREVIOUS_SHA" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Staging deploy"
+            echo "- deploy sha: \`${{ steps.deploy.outputs.deploy_sha }}\`"
+            echo "- previous successful sha: \`$PREVIOUS_SHA\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Roll out staging images
         env:
           DEPLOY_SHA: ${{ steps.deploy.outputs.deploy_sha }}
@@ -56,19 +91,79 @@ jobs:
           bash ./infra/docker/rollout-staging-images.sh ${DEPLOY_SHA}
           EOF
 
-      - name: Wait for health
+      - name: Install Playwright browser
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Verification gate
+        id: gate
+        continue-on-error: true
+        env:
+          BASE_URL: ${{ env.STAGING_BASE_URL }}
+          PLAYWRIGHT_NO_WEB_SERVER: "1"
+          STAGING_ROOM_ID: demo-room
+          STAGING_HALL_ROOM_ID: 42db8225-f671-4e46-9c28-9381d66a948c
+          STAGING_BLUEOFFICE_ROOM_ID: 0b537d34-7b92-4b51-854a-8c64cfb4c114
+          STAGING_LECTUREHALL_ROOM_ID: c79f7f2c-2680-493b-9f8e-b6cd69802fdb
+          STAGING_SHOWROOM_ROOM_ID: 003f5e72-90fe-4901-9dca-8be83f74e01a
+          STAGING_MEETINGSMALL_ROOM_ID: 1a90118c-635c-478b-9448-33eb76a45f50
+          STAGING_CINEMA_ROOM_ID: b51f3193-1af8-4b0b-935f-b89f16e0016a
+          STAGING_ANASTASIA_ROOM_ID: 85be9531-03d3-495b-9a4a-69c4b833acc7
+          STAGING_NEWGALLERY_ROOM_ID: d53bde42-7952-4cd6-9c3f-2b06a7254c04
+          STAGING_ARTGALLERY_ROOM_ID: c17bcb81-fcd2-4432-94be-688f16a61037
+          STAGING_STANDUP_ROOM_ID: af85fed9-8b17-4f06-ae15-5355057d7200
+          STAGING_OPORARUSSIA_ROOM_ID: d686c23e-78b5-4f55-a47f-b380114d5d1a
+          STAGING_SERGOFFICE_ROOM_ID: ba67301b-14f4-4c88-ba7f-2b63e0c1c332
+          STAGING_CINEMAMODELER_ROOM_ID: c28e17b5-7b26-408b-926e-aa93fef9915e
+          STAGING_ADMIN_TOKEN: noah-stage-admin
         run: |
           for attempt in $(seq 1 30); do
             if curl --fail --silent "$STAGING_BASE_URL/health" >/tmp/noah-staging-health.json; then
-              exit 0
+              break
             fi
             sleep 10
           done
-          echo "staging health endpoint did not become ready" >&2
-          exit 1
-
-      - name: Post-deploy smoke
-        run: |
           curl --fail --silent "$STAGING_BASE_URL/health" >/dev/null
           curl --fail --silent "$STAGING_BASE_URL/rooms/demo-room" >/dev/null
           curl --fail --silent "$STAGING_BASE_URL/control-plane" >/dev/null
+          if [ "${{ inputs.force_fail_gate || 'false' }}" = "true" ]; then
+            echo "forced_gate_failure" >&2
+            exit 1
+          fi
+          pnpm test:e2e:staging
+
+      - name: Persist successful deploy SHA
+        if: steps.gate.outcome == 'success'
+        env:
+          DEPLOY_SHA: ${{ steps.deploy.outputs.deploy_sha }}
+        run: |
+          ssh -o StrictHostKeyChecking=no "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo bash -lc 'printf %s \"$DEPLOY_SHA\" > \"$STAGING_SUCCESSFUL_SHA_FILE\"'"
+          {
+            echo "- verification gate: success"
+            echo "- persisted successful sha: \`$DEPLOY_SHA\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Roll back failed deploy
+        if: steps.gate.outcome == 'failure'
+        env:
+          ROLLBACK_SHA: ${{ steps.previous.outputs.previous_sha }}
+        run: |
+          YCR_PASSWORD_B64="$(printf '%s' "$YCR_PASSWORD" | base64 -w0)"
+          ssh -o StrictHostKeyChecking=no "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo bash -s" <<EOF
+          set -euo pipefail
+          cd /opt/noah
+          git -c safe.directory=/opt/noah checkout ${ROLLBACK_SHA}
+          printf '%s' '${YCR_PASSWORD_B64}' | base64 -d | docker login cr.yandex --username '${YCR_USERNAME}' --password-stdin
+          bash ./infra/docker/rollout-staging-images.sh ${ROLLBACK_SHA}
+          printf '%s' '${ROLLBACK_SHA}' > '${STAGING_SUCCESSFUL_SHA_FILE}'
+          EOF
+          curl --fail --silent "$STAGING_BASE_URL/health" >/dev/null
+          curl --fail --silent "$STAGING_BASE_URL/rooms/demo-room" >/dev/null
+          curl --fail --silent "$STAGING_BASE_URL/control-plane" >/dev/null
+          {
+            echo "- verification gate: failed"
+            echo "- rollback target: \`$ROLLBACK_SHA\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Fail after rollback
+        if: steps.gate.outcome == 'failure'
+        run: exit 1
