@@ -82,6 +82,8 @@
 - Default verification after changes should include the full local e2e suite (`pnpm test:e2e`), then staging verification on the current staging host.
 - Staging verification should include at least the staging smoke suite (`pnpm test:e2e:staging`), and for meaningful runtime changes it should also cover the key public flows on staging: room load, selector/navigation if relevant, and important scene rooms such as Hall/BlueOffice when scene behavior could be affected.
 - Staging e2e now runs against the public HTTPS app URL and covers the full restored scene catalog; Hall, BlueOffice, and ArtGallery are the current baseline scenes that must also reach `sceneDebug.state=loaded`.
+- Phase 7 productized the bundle metadata flow: bundle versions now have `status` and `isCurrent`, rooms can bind through current version semantics, but runtime still only trusts `room.sceneBundleUrl`.
+- Phase 7 cleanup policy is metadata-only (`active` / `obsolete` / `cleanup-ready`); blob deletion is still intentionally out of scope.
 - Do not treat local green tests as sufficient when the change affects runtime behavior, deployment behavior, room manifests, scene bundles, or staging infrastructure; publish and verify on staging by default.
 
 ## Current scene status

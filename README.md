@@ -66,6 +66,13 @@ Phase 3 adds minimal scene bundle metadata and bind flow in `apps/api`.
 - MinIO env contract: `MINIO_PUBLIC_BASE_URL`, `MINIO_BUCKET`
 - External S3-compatible env contract: `SCENE_BUNDLE_S3_ENDPOINT`, `SCENE_BUNDLE_S3_REGION`, `SCENE_BUNDLE_S3_BUCKET`, `SCENE_BUNDLE_S3_PUBLIC_BASE_URL`
 - Example external config check: set those env vars locally and run `pnpm --filter @noah/api test` to validate provider config resolution before using a real bucket
+- Productized Phase 7 API adds version lifecycle paths:
+  - `GET /api/scene-bundles/:bundleId/versions`
+  - `POST /api/scene-bundles/:bundleId/versions`
+  - `POST /api/scene-bundles/:bundleId/current`
+  - `POST /api/scene-bundles/:bundleId/versions/:version/status`
+- Runtime still stays simple: current/version switching only changes which URL gets written into `room.sceneBundleUrl`
+- Cleanup in Phase 7 is metadata-only (`active` / `obsolete` / `cleanup-ready`) and does not physically delete blob objects
 
 ## CI and image publish
 

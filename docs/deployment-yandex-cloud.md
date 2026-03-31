@@ -47,6 +47,9 @@
   - `SCENE_BUNDLE_S3_BUCKET`
 - `SCENE_BUNDLE_S3_PUBLIC_BASE_URL`
 - Current Phase 3 publish flow only registers metadata by `storageKey`/public URL; it does not upload bundle files through the API.
+- Phase 7 extends this into productized metadata/versioning flow while keeping the same runtime contract: room manifests still read `room.sceneBundleUrl`.
+- Current status lifecycle is metadata-only: `active`, `obsolete`, `cleanup-ready`.
+- A practical switch `MinIO -> Yandex Object Storage` still means updating provider env/config and preserving the same key layout, not changing runtime URLs contract.
 
 ## CI image publish contract
 
