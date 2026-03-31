@@ -107,6 +107,26 @@ type DiagnosticsPayload = {
   }>;
 };
 
+async function getJsonWithRetry<T>(request: APIRequestContext, path: string, timeoutMs: number): Promise<T> {
+  const startedAt = Date.now();
+  let lastError: unknown;
+
+  while (Date.now() - startedAt < timeoutMs) {
+    try {
+      const response = await request.get(path);
+      if (!response.ok()) {
+        throw new Error(`http_${response.status()}`);
+      }
+      return await response.json() as T;
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error("staging_request_failed");
+}
+
 async function expectSceneRoomLoaded(
   page: Page,
   request: APIRequestContext,
@@ -118,15 +138,11 @@ async function expectSceneRoomLoaded(
   await page.goto(`/rooms/${roomId}`);
   await expect(page.locator("#room-name")).not.toContainText("Loading room", { timeout: timeoutMs });
 
-  const manifestResponse = await request.get(`/api/rooms/${roomId}/manifest`);
-  expect(manifestResponse.ok()).toBeTruthy();
-  const manifest = await manifestResponse.json() as { sceneBundle?: { url?: string } };
+  const manifest = await getJsonWithRetry<{ sceneBundle?: { url?: string } }>(request, `/api/rooms/${roomId}/manifest`, timeoutMs);
   expect(manifest.sceneBundle?.url).toBe(expectedBundleUrl);
 
   if (!requireLoadedState) {
-    const diagnosticsResponse = await request.get(`/api/rooms/${roomId}/diagnostics`);
-    expect(diagnosticsResponse.ok()).toBeTruthy();
-    const diagnostics = (await diagnosticsResponse.json()) as DiagnosticsPayload;
+    const diagnostics = await getJsonWithRetry<DiagnosticsPayload>(request, `/api/rooms/${roomId}/diagnostics`, timeoutMs);
     expect(Array.isArray(diagnostics.items)).toBeTruthy();
     return;
   }

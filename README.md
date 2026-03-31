@@ -55,6 +55,18 @@ Phase 2 compose-based staging is now real and validated.
 - For sslip/Caddy, use the `*.sslip.io` hostnames above; bare `http://<ip>` or `https://<ip>` is not the stable public path.
 - Staging e2e should now run against the public HTTPS app URL and validate selector flow plus the full restored scene catalog. Stable baseline scenes such as Hall, BlueOffice, and ArtGallery are checked for `sceneDebug.state=loaded`; the rest are covered by HTTPS room-shell + manifest + diagnostics smoke so catalog regressions are still caught.
 
+## Scene bundle storage
+
+Phase 3 adds minimal scene bundle metadata and bind flow in `apps/api`.
+
+- Scene bundle metadata API: `GET /api/scene-bundles`, `GET /api/scene-bundles/:bundleId`, `POST /api/scene-bundles`
+- Room bind API: `POST /api/rooms/:roomId/bind-scene-bundle`
+- Runtime compatibility rule: manifest still reads `room.sceneBundleUrl`; bundle metadata only helps compute and persist that URL
+- Default self-hosted provider: `SCENE_BUNDLE_PROVIDER=minio-default`
+- MinIO env contract: `MINIO_PUBLIC_BASE_URL`, `MINIO_BUCKET`
+- External S3-compatible env contract: `SCENE_BUNDLE_S3_ENDPOINT`, `SCENE_BUNDLE_S3_REGION`, `SCENE_BUNDLE_S3_BUCKET`, `SCENE_BUNDLE_S3_PUBLIC_BASE_URL`
+- Example external config check: set those env vars locally and run `pnpm --filter @noah/api test` to validate provider config resolution before using a real bucket
+
 ## Container smoke
 
 Phase 1 container smoke commands:

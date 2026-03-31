@@ -34,3 +34,15 @@
 - DNS/certificate flow
 - Backup policy for control-plane data
 - Service-level health checks and dashboards beyond local smoke tests
+
+## Scene bundle storage env
+
+- Default compose/self-hosted path uses `SCENE_BUNDLE_PROVIDER=minio-default`
+- Required MinIO vars for bundle URL resolution: `MINIO_PUBLIC_BASE_URL`, `MINIO_BUCKET`
+- Alternate S3-compatible path uses:
+  - `SCENE_BUNDLE_PROVIDER=s3-compatible`
+  - `SCENE_BUNDLE_S3_ENDPOINT`
+  - `SCENE_BUNDLE_S3_REGION`
+  - `SCENE_BUNDLE_S3_BUCKET`
+  - `SCENE_BUNDLE_S3_PUBLIC_BASE_URL`
+- Current Phase 3 publish flow only registers metadata by `storageKey`/public URL; it does not upload bundle files through the API.
