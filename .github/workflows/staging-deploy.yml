@@ -53,7 +53,7 @@ jobs:
           git -c safe.directory=/opt/noah fetch origin
           git -c safe.directory=/opt/noah checkout ${DEPLOY_SHA}
           printf '%s' '${YCR_PASSWORD_B64}' | base64 -d | docker login cr.yandex --username '${YCR_USERNAME}' --password-stdin
-          ./infra/docker/rollout-staging-images.sh ${DEPLOY_SHA}
+          bash ./infra/docker/rollout-staging-images.sh ${DEPLOY_SHA}
           EOF
 
       - name: Wait for health
