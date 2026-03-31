@@ -119,7 +119,19 @@ export interface SceneBundleRecord {
   contentType: string;
   provider: "minio-default" | "s3-compatible";
   version: string;
+  status?: "active" | "obsolete" | "cleanup-ready";
+  isCurrent?: boolean;
   createdAt: string;
+}
+
+export interface SceneBundleVersionInput {
+  storageKey: string;
+  publicUrl?: string;
+  checksum?: string;
+  sizeBytes?: number;
+  contentType?: string;
+  provider?: "minio-default" | "s3-compatible";
+  version: string;
 }
 
 export async function fetchTemplates(apiBaseUrl: string): Promise<TemplateRecord[]> {
@@ -279,11 +291,59 @@ export async function listSceneBundles(apiBaseUrl: string): Promise<SceneBundleR
   return payload.items;
 }
 
-export async function bindRoomSceneBundle(apiBaseUrl: string, roomId: string, bundleId: string, auth?: ControlPlaneAuth): Promise<RoomRecord> {
+export async function listSceneBundleVersions(apiBaseUrl: string, bundleId: string): Promise<SceneBundleRecord[]> {
+  const response = await fetch(new URL(`/api/scene-bundles/${bundleId}/versions`, apiBaseUrl));
+  if (!response.ok) {
+    throw new Error(`failed_to_list_scene_bundle_versions:${response.status}`);
+  }
+  const payload = (await response.json()) as { items: SceneBundleRecord[] };
+  return payload.items;
+}
+
+export async function createSceneBundleVersion(apiBaseUrl: string, bundleId: string, input: SceneBundleVersionInput, auth?: ControlPlaneAuth): Promise<SceneBundleRecord> {
+  const response = await fetch(new URL(`/api/scene-bundles/${bundleId}/versions`, apiBaseUrl), {
+    method: "POST",
+    headers: { "content-type": "application/json", ...authHeaders(auth) },
+    body: JSON.stringify(input)
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({ error: `failed_to_create_scene_bundle_version:${response.status}` }));
+    throw new Error(payload.error ?? `failed_to_create_scene_bundle_version:${response.status}`);
+  }
+  return (await response.json()) as SceneBundleRecord;
+}
+
+export async function setCurrentSceneBundleVersion(apiBaseUrl: string, bundleId: string, version: string, auth?: ControlPlaneAuth): Promise<SceneBundleRecord> {
+  const response = await fetch(new URL(`/api/scene-bundles/${bundleId}/current`, apiBaseUrl), {
+    method: "POST",
+    headers: { "content-type": "application/json", ...authHeaders(auth) },
+    body: JSON.stringify({ version })
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({ error: `failed_to_set_current_scene_bundle_version:${response.status}` }));
+    throw new Error(payload.error ?? `failed_to_set_current_scene_bundle_version:${response.status}`);
+  }
+  return (await response.json()) as SceneBundleRecord;
+}
+
+export async function updateSceneBundleVersionStatus(apiBaseUrl: string, bundleId: string, version: string, status: NonNullable<SceneBundleRecord["status"]>, auth?: ControlPlaneAuth): Promise<SceneBundleRecord> {
+  const response = await fetch(new URL(`/api/scene-bundles/${bundleId}/versions/${version}/status`, apiBaseUrl), {
+    method: "POST",
+    headers: { "content-type": "application/json", ...authHeaders(auth) },
+    body: JSON.stringify({ status })
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({ error: `failed_to_update_scene_bundle_status:${response.status}` }));
+    throw new Error(payload.error ?? `failed_to_update_scene_bundle_status:${response.status}`);
+  }
+  return (await response.json()) as SceneBundleRecord;
+}
+
+export async function bindRoomSceneBundle(apiBaseUrl: string, roomId: string, bundleId: string, auth?: ControlPlaneAuth, version?: string): Promise<RoomRecord> {
   const response = await fetch(new URL(`/api/rooms/${roomId}/bind-scene-bundle`, apiBaseUrl), {
     method: "POST",
     headers: { "content-type": "application/json", ...authHeaders(auth) },
-    body: JSON.stringify({ bundleId })
+    body: JSON.stringify({ bundleId, version })
   });
 
   if (!response.ok) {
@@ -340,6 +400,7 @@ export interface ControlPlanePageState {
   selectedTemplate?: TemplateRecord;
   rooms: RoomRecord[];
   sceneBundles: SceneBundleRecord[];
+  sceneBundleVersions: SceneBundleRecord[];
   assets: AssetRecord[];
   selectedAsset?: AssetRecord;
   selectedRoom?: RoomRecord;
@@ -358,6 +419,7 @@ export function createControlPlanePageState(): ControlPlanePageState {
     roomFilterTenantId: undefined,
     rooms: [],
     sceneBundles: [],
+    sceneBundleVersions: [],
     assets: [],
     selectedRoomDiagnostics: [],
     publishStatus: "idle",

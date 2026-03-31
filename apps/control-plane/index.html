@@ -17,6 +17,7 @@
           <label>Template <select id="template-select"></select></label>
           <label>Attach assets <select id="asset-select" multiple></select></label>
           <label>Registered scene bundle <select id="scene-bundle-select"></select></label>
+          <label>Bundle version <select id="scene-bundle-version-select"></select></label>
           <label>Primary color <input id="primary-color-input" type="color" value="#5fc8ff" /></label>
           <label>Accent color <input id="accent-color-input" type="color" value="#163354" /></label>
           <label><input id="feature-voice-input" type="checkbox" checked /> Voice</label>
@@ -26,7 +27,15 @@
           <button id="create-room" type="submit">Create room</button>
           <button id="update-room" type="button">Update selected room</button>
           <button id="bind-scene-bundle" type="button">Bind selected scene bundle</button>
+          <button id="set-current-scene-bundle" type="button">Set version current</button>
+          <button id="mark-scene-bundle-obsolete" type="button">Mark version obsolete</button>
           <button id="delete-room" type="button">Delete selected room</button>
+        </form>
+        <form id="scene-bundle-form">
+          <label>Bundle id <input id="scene-bundle-id-input" value="sense-demo" /></label>
+          <label>Version <input id="scene-bundle-version-input" value="v1" /></label>
+          <label>Storage key <input id="scene-bundle-storage-key-input" value="scenes/sense-demo/v1/scene.json" /></label>
+          <button id="create-scene-bundle-version" type="submit">Add bundle version</button>
         </form>
         <form id="asset-form">
           <label>Asset kind <input id="asset-kind-input" value="logo" /></label>

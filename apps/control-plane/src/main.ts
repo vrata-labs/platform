@@ -1,4 +1,5 @@
 import {
+  createSceneBundleVersion,
   bindRoomSceneBundle,
   createTenant,
   createControlPlanePageState,
@@ -10,9 +11,12 @@ import {
   fetchRoomManifest,
   fetchTemplates,
   listAssets,
+  listSceneBundleVersions,
   listSceneBundles,
+  setCurrentSceneBundleVersion,
   listRooms,
   listTenants,
+  updateSceneBundleVersionStatus,
   updateAsset,
   updateTenant,
   updateRoom,
@@ -49,6 +53,11 @@ const deleteAssetButton = mustElement<HTMLButtonElement>("#delete-asset");
 const templateSelect = mustElement<HTMLSelectElement>("#template-select");
 const assetSelect = mustElement<HTMLSelectElement>("#asset-select");
 const sceneBundleSelect = mustElement<HTMLSelectElement>("#scene-bundle-select");
+const sceneBundleVersionSelect = mustElement<HTMLSelectElement>("#scene-bundle-version-select");
+const sceneBundleForm = mustElement<HTMLFormElement>("#scene-bundle-form");
+const sceneBundleIdInput = mustElement<HTMLInputElement>("#scene-bundle-id-input");
+const sceneBundleVersionInput = mustElement<HTMLInputElement>("#scene-bundle-version-input");
+const sceneBundleStorageKeyInput = mustElement<HTMLInputElement>("#scene-bundle-storage-key-input");
 const primaryColorInput = mustElement<HTMLInputElement>("#primary-color-input");
 const accentColorInput = mustElement<HTMLInputElement>("#accent-color-input");
 const featureVoiceInput = mustElement<HTMLInputElement>("#feature-voice-input");
@@ -61,6 +70,8 @@ const publishStatus = mustElement<HTMLDivElement>("#publish-status");
 const roomLink = mustElement<HTMLAnchorElement>("#room-link");
 const refreshRoomDetailButton = mustElement<HTMLButtonElement>("#refresh-room-detail");
 const bindSceneBundleButton = mustElement<HTMLButtonElement>("#bind-scene-bundle");
+const setCurrentSceneBundleButton = mustElement<HTMLButtonElement>("#set-current-scene-bundle");
+const markSceneBundleObsoleteButton = mustElement<HTMLButtonElement>("#mark-scene-bundle-obsolete");
 const templateDetail = mustElement<HTMLPreElement>("#template-detail");
 const roomFilterTenant = mustElement<HTMLSelectElement>("#room-filter-tenant");
 const roomsList = mustElement<HTMLUListElement>("#rooms-list");
@@ -153,6 +164,7 @@ async function selectRoom(room: typeof state.selectedRoom): Promise<void> {
   state.selectedRoomManifest = await fetchRoomManifest(apiBaseUrl, room.roomId);
   state.selectedRoomDiagnostics = await fetchRoomDiagnostics(apiBaseUrl, room.roomId);
   state.selectedSceneBundle = state.sceneBundles.find((bundle) => bundle.publicUrl === state.selectedRoomManifest?.sceneBundle?.url);
+  state.sceneBundleVersions = state.selectedSceneBundle ? await listSceneBundleVersions(apiBaseUrl, state.selectedSceneBundle.bundleId).catch(() => []) : [];
   roomNameInput.value = room.name;
   templateSelect.value = room.templateId;
   primaryColorInput.value = room.theme?.primaryColor ?? "#5fc8ff";
@@ -166,6 +178,21 @@ async function selectRoom(room: typeof state.selectedRoom): Promise<void> {
     option.selected = assetIds.has(option.value);
   });
   sceneBundleSelect.value = state.selectedSceneBundle?.bundleId ?? "";
+  sceneBundleVersionSelect.replaceChildren(
+    (() => {
+      const option = document.createElement("option");
+      option.value = "";
+      option.textContent = "Current version";
+      return option;
+    })(),
+    ...state.sceneBundleVersions.map((bundle) => {
+      const option = document.createElement("option");
+      option.value = bundle.version;
+      option.textContent = `${bundle.version}${bundle.isCurrent ? " [current]" : ""}${bundle.status ? ` [${bundle.status}]` : ""}`;
+      return option;
+    })
+  );
+  sceneBundleVersionSelect.value = state.selectedSceneBundle?.version ?? "";
   render();
 }
 
@@ -253,9 +280,43 @@ async function bootstrap(): Promise<void> {
       return option;
     })
   );
+  if (state.sceneBundles[0]) {
+    sceneBundleIdInput.value = state.sceneBundles[0].bundleId;
+  }
   render();
   startSelectedRoomPolling();
 }
+
+sceneBundleSelect.addEventListener("change", () => {
+  const selected = state.sceneBundles.find((bundle) => bundle.bundleId === sceneBundleSelect.value);
+  state.selectedSceneBundle = selected;
+  sceneBundleIdInput.value = selected?.bundleId ?? sceneBundleIdInput.value;
+  if (!selected) {
+    state.sceneBundleVersions = [];
+    sceneBundleVersionSelect.replaceChildren();
+    render();
+    return;
+  }
+  void listSceneBundleVersions(apiBaseUrl, selected.bundleId)
+    .then((versions) => {
+      state.sceneBundleVersions = versions;
+      sceneBundleVersionSelect.replaceChildren(
+        ...versions.map((bundle) => {
+          const option = document.createElement("option");
+          option.value = bundle.version;
+          option.textContent = `${bundle.version}${bundle.isCurrent ? " [current]" : ""}${bundle.status ? ` [${bundle.status}]` : ""}`;
+          return option;
+        })
+      );
+      sceneBundleVersionSelect.value = selected.version;
+      render();
+    })
+    .catch((error: unknown) => {
+      state.publishStatus = "failed";
+      state.statusMessage = error instanceof Error ? `failed:${error.message}` : "failed";
+      render();
+    });
+});
 
 templateSelect.addEventListener("change", () => {
   state.selectedTemplate = state.templates.find((template) => template.templateId === templateSelect.value);
@@ -489,12 +550,73 @@ bindSceneBundleButton.addEventListener("click", () => {
   state.publishStatus = "publishing";
   state.statusMessage = "binding-scene-bundle";
   render();
-  void bindRoomSceneBundle(apiBaseUrl, state.selectedRoom.roomId, sceneBundleSelect.value, currentAuth())
+  void bindRoomSceneBundle(apiBaseUrl, state.selectedRoom.roomId, sceneBundleSelect.value, currentAuth(), sceneBundleVersionSelect.value || undefined)
     .then(async (room) => {
       state.publishStatus = "published";
       state.statusMessage = "scene-bundle-bound";
       state.rooms = state.rooms.map((item) => item.roomId === room.roomId ? room : item);
       await selectRoom(room);
+    })
+    .catch((error: unknown) => {
+      state.publishStatus = "failed";
+      state.statusMessage = error instanceof Error ? `failed:${error.message}` : "failed";
+      render();
+    });
+});
+
+sceneBundleForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  state.publishStatus = "publishing";
+  state.statusMessage = "publishing-scene-bundle-version";
+  render();
+  void createSceneBundleVersion(apiBaseUrl, sceneBundleIdInput.value.trim(), {
+    version: sceneBundleVersionInput.value.trim(),
+    storageKey: sceneBundleStorageKeyInput.value.trim()
+  }, currentAuth())
+    .then(async () => {
+      state.publishStatus = "published";
+      state.statusMessage = "scene-bundle-version-created";
+      state.sceneBundles = await listSceneBundles(apiBaseUrl);
+      render();
+    })
+    .catch((error: unknown) => {
+      state.publishStatus = "failed";
+      state.statusMessage = error instanceof Error ? `failed:${error.message}` : "failed";
+      render();
+    });
+});
+
+setCurrentSceneBundleButton.addEventListener("click", () => {
+  if (!sceneBundleSelect.value || !sceneBundleVersionSelect.value) return;
+  state.publishStatus = "publishing";
+  state.statusMessage = "setting-current-scene-bundle-version";
+  render();
+  void setCurrentSceneBundleVersion(apiBaseUrl, sceneBundleSelect.value, sceneBundleVersionSelect.value, currentAuth())
+    .then(async () => {
+      state.publishStatus = "published";
+      state.statusMessage = "scene-bundle-current-updated";
+      state.sceneBundles = await listSceneBundles(apiBaseUrl);
+      state.sceneBundleVersions = await listSceneBundleVersions(apiBaseUrl, sceneBundleSelect.value);
+      render();
+    })
+    .catch((error: unknown) => {
+      state.publishStatus = "failed";
+      state.statusMessage = error instanceof Error ? `failed:${error.message}` : "failed";
+      render();
+    });
+});
+
+markSceneBundleObsoleteButton.addEventListener("click", () => {
+  if (!sceneBundleSelect.value || !sceneBundleVersionSelect.value) return;
+  state.publishStatus = "publishing";
+  state.statusMessage = "marking-scene-bundle-obsolete";
+  render();
+  void updateSceneBundleVersionStatus(apiBaseUrl, sceneBundleSelect.value, sceneBundleVersionSelect.value, "obsolete", currentAuth())
+    .then(async () => {
+      state.publishStatus = "published";
+      state.statusMessage = "scene-bundle-version-obsolete";
+      state.sceneBundleVersions = await listSceneBundleVersions(apiBaseUrl, sceneBundleSelect.value);
+      render();
     })
     .catch((error: unknown) => {
       state.publishStatus = "failed";

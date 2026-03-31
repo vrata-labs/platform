@@ -9,6 +9,7 @@ import { AccessToken } from "livekit-server-sdk";
 import {
   resolveSceneBundlePublicUrl,
   type SceneBundleCreateInput,
+  type SceneBundleRecord,
   type SceneBundleProvider
 } from "./scene-bundle-storage.js";
 
@@ -346,6 +347,10 @@ function validateSceneBundleInput(input: Partial<SceneBundleCreateInput>): strin
   return null;
 }
 
+function getCurrentSceneBundleVersion(bundle: SceneBundleRecord): string {
+  return bundle.version;
+}
+
 function encodeToken(payload: StateTokenPayload | MediaTokenPayload): string {
   return Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
 }
@@ -485,6 +490,12 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     return;
   }
 
+  const sceneBundleVersionsMatch = url.pathname.match(/^\/api\/scene-bundles\/([^/]+)\/versions$/);
+  if (method === "GET" && sceneBundleVersionsMatch) {
+    json(response, 200, { items: await storage.listSceneBundleVersions(decodeURIComponent(sceneBundleVersionsMatch[1])) });
+    return;
+  }
+
   const roomSpacesMatch = url.pathname.match(/^\/api\/rooms\/([^/]+)\/spaces$/);
   if (method === "GET" && roomSpacesMatch) {
     if (url.searchParams.get("fail") === "1") {
@@ -553,6 +564,76 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     }
   }
 
+  if (method === "POST" && sceneBundleVersionsMatch) {
+    if (!isAuthorizedControlPlaneRequest(request)) return json(response, 403, { error: "forbidden" });
+    const bundleId = decodeURIComponent(sceneBundleVersionsMatch[1]);
+    const payload = (await parseBody<Partial<SceneBundleCreateInput>>(request)) ?? {};
+    const validationError = validateSceneBundleInput(payload);
+    if (validationError) return json(response, 400, { error: validationError });
+    try {
+      const provider = (payload.provider ?? ((process.env.SCENE_BUNDLE_PROVIDER as SceneBundleProvider | undefined) ?? "minio-default"));
+      const publicUrl = payload.publicUrl ?? resolveSceneBundlePublicUrl(payload.storageKey!, process.env, provider);
+      const bundle = await storage.createSceneBundle({
+        ...payload,
+        bundleId,
+        storageKey: payload.storageKey!,
+        publicUrl,
+        provider
+      });
+      json(response, 201, bundle);
+      return;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "scene_bundle_publish_failed";
+      json(response, 400, { error: message });
+      return;
+    }
+  }
+
+  const sceneBundleCurrentMatch = url.pathname.match(/^\/api\/scene-bundles\/([^/]+)\/current$/);
+  if (method === "POST" && sceneBundleCurrentMatch) {
+    if (!isAuthorizedControlPlaneRequest(request)) return json(response, 403, { error: "forbidden" });
+    const bundleId = decodeURIComponent(sceneBundleCurrentMatch[1]);
+    const payload = (await parseBody<{ version?: string }>(request)) ?? {};
+    if (!payload.version) return json(response, 400, { error: "missing_scene_bundle_version" });
+    const current = await storage.setCurrentSceneBundleVersion(bundleId, payload.version);
+    if (!current) return json(response, 404, { error: "scene_bundle_version_not_found" });
+    json(response, 200, current);
+    return;
+  }
+
+  const sceneBundleStatusMatch = url.pathname.match(/^\/api\/scene-bundles\/([^/]+)\/versions\/([^/]+)\/status$/);
+  if (method === "POST" && sceneBundleStatusMatch) {
+    if (!isAuthorizedControlPlaneRequest(request)) return json(response, 403, { error: "forbidden" });
+    const bundleId = decodeURIComponent(sceneBundleStatusMatch[1]);
+    const version = decodeURIComponent(sceneBundleStatusMatch[2]);
+    const payload = (await parseBody<{ status?: SceneBundleRecord["status"] }>(request)) ?? {};
+    if (!payload.status || !["active", "obsolete", "cleanup-ready"].includes(payload.status)) {
+      return json(response, 400, { error: "invalid_scene_bundle_status" });
+    }
+    const versions = await storage.listSceneBundleVersions(bundleId);
+    const target = versions.find((item) => item.version === version);
+    if (!target) return json(response, 404, { error: "scene_bundle_version_not_found" });
+    if (payload.status === "cleanup-ready") {
+      const rooms = await storage.listRooms();
+      if (rooms.some((room) => room.sceneBundleUrl === target.publicUrl)) {
+        return json(response, 409, { error: "scene_bundle_version_still_bound" });
+      }
+    }
+    const updated = await storage.updateSceneBundle(bundleId, {
+      version,
+      storageKey: target.storageKey,
+      publicUrl: target.publicUrl,
+      contentType: target.contentType,
+      checksum: target.checksum,
+      sizeBytes: target.sizeBytes,
+      provider: target.provider,
+      status: payload.status,
+      isCurrent: target.isCurrent
+    } as Partial<SceneBundleCreateInput> & { publicUrl: string; provider: SceneBundleProvider; status: SceneBundleRecord["status"]; isCurrent: boolean });
+    json(response, 200, updated);
+    return;
+  }
+
   const assetItemMatch = url.pathname.match(/^\/api\/assets\/([^/]+)$/);
   if (method === "PATCH" && assetItemMatch) {
     if (!isAuthorizedControlPlaneRequest(request)) return json(response, 403, { error: "forbidden" });
@@ -609,13 +690,15 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   if (method === "POST" && roomBindSceneBundleMatch) {
     if (!isAuthorizedControlPlaneRequest(request)) return json(response, 403, { error: "forbidden" });
     const roomId = decodeURIComponent(roomBindSceneBundleMatch[1]);
-    const payload = (await parseBody<{ bundleId?: string }>(request)) ?? {};
+    const payload = (await parseBody<{ bundleId?: string; version?: string }>(request)) ?? {};
     if (!payload.bundleId) return json(response, 400, { error: "missing_scene_bundle_id" });
-    const bundle = await storage.getSceneBundle(payload.bundleId);
+    const bundle = payload.version
+      ? (await storage.listSceneBundleVersions(payload.bundleId)).find((item) => item.version === payload.version) ?? null
+      : await storage.getSceneBundle(payload.bundleId);
     if (!bundle) return json(response, 404, { error: "scene_bundle_not_found" });
     const room = await storage.updateRoom(roomId, { sceneBundleUrl: bundle.publicUrl });
     if (!room) return json(response, 404, { error: "room_not_found" });
-    json(response, 200, { ...room, roomLink: createRoomLink(room.roomId, request.headers.host), sceneBundle: bundle });
+    json(response, 200, { ...room, roomLink: createRoomLink(room.roomId, request.headers.host), sceneBundle: bundle, currentVersion: getCurrentSceneBundleVersion(bundle) });
     return;
   }
 

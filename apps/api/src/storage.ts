@@ -136,6 +136,8 @@ export interface Storage {
   getSceneBundle(bundleId: string): Promise<SceneBundleRecord | null>;
   createSceneBundle(input: SceneBundleCreateInput & { publicUrl: string; provider: SceneBundleRecord["provider"] }): Promise<SceneBundleRecord>;
   updateSceneBundle(bundleId: string, input: Partial<SceneBundleCreateInput> & { publicUrl?: string; provider?: SceneBundleRecord["provider"] }): Promise<SceneBundleRecord | null>;
+  listSceneBundleVersions(bundleId: string): Promise<SceneBundleRecord[]>;
+  setCurrentSceneBundleVersion(bundleId: string, version: string): Promise<SceneBundleRecord | null>;
 }
 
 const defaultTemplates: TemplateRecord[] = [
@@ -169,6 +171,10 @@ export class MemoryStorage implements Storage {
   ]);
   private diagnostics = new Map<string, RuntimeDiagnosticRecord[]>();
   private sceneBundles = new Map<string, SceneBundleRecord>();
+
+  private sceneBundleKey(bundleId: string, version: string): string {
+    return `${bundleId}::${version}`;
+  }
 
   async listTenants(): Promise<TenantRecord[]> { return Array.from(this.tenants.values()); }
   async createTenant(input: Partial<TenantRecord>): Promise<TenantRecord> {
@@ -281,8 +287,19 @@ export class MemoryStorage implements Storage {
     this.diagnostics.set(roomId, entries);
   }
   async getDiagnostics(roomId: string): Promise<RuntimeDiagnosticRecord[]> { return this.diagnostics.get(roomId) ?? []; }
-  async listSceneBundles(): Promise<SceneBundleRecord[]> { return Array.from(this.sceneBundles.values()); }
-  async getSceneBundle(bundleId: string): Promise<SceneBundleRecord | null> { return this.sceneBundles.get(bundleId) ?? null; }
+  async listSceneBundles(): Promise<SceneBundleRecord[]> {
+    const latest = new Map<string, SceneBundleRecord>();
+    for (const item of this.sceneBundles.values()) {
+      const existing = latest.get(item.bundleId);
+      if (!existing || item.isCurrent || item.createdAt > existing.createdAt) {
+        latest.set(item.bundleId, item);
+      }
+    }
+    return Array.from(latest.values());
+  }
+  async getSceneBundle(bundleId: string): Promise<SceneBundleRecord | null> {
+    return (await this.listSceneBundleVersions(bundleId)).find((item) => item.isCurrent) ?? null;
+  }
   async createSceneBundle(input: SceneBundleCreateInput & { publicUrl: string; provider: SceneBundleRecord["provider"] }): Promise<SceneBundleRecord> {
     const record: SceneBundleRecord = {
       bundleId: input.bundleId ?? crypto.randomUUID(),
@@ -293,13 +310,18 @@ export class MemoryStorage implements Storage {
       contentType: input.contentType ?? "application/json",
       provider: input.provider,
       version: input.version ?? "v1",
+      status: "active",
+      isCurrent: true,
       createdAt: new Date().toISOString()
     };
-    this.sceneBundles.set(record.bundleId, record);
+    for (const item of this.sceneBundles.values()) {
+      if (item.bundleId === record.bundleId) item.isCurrent = false;
+    }
+    this.sceneBundles.set(this.sceneBundleKey(record.bundleId, record.version), record);
     return record;
   }
   async updateSceneBundle(bundleId: string, input: Partial<SceneBundleCreateInput> & { publicUrl?: string; provider?: SceneBundleRecord["provider"] }): Promise<SceneBundleRecord | null> {
-    const existing = this.sceneBundles.get(bundleId);
+    const existing = (await this.listSceneBundleVersions(bundleId)).find((item) => item.version === input.version) ?? await this.getSceneBundle(bundleId);
     if (!existing) return null;
     const updated: SceneBundleRecord = {
       ...existing,
@@ -309,10 +331,27 @@ export class MemoryStorage implements Storage {
       sizeBytes: input.sizeBytes ?? existing.sizeBytes,
       contentType: input.contentType ?? existing.contentType,
       provider: input.provider ?? existing.provider,
-      version: input.version ?? existing.version
+      version: input.version ?? existing.version,
+      status: existing.status ?? "active",
+      isCurrent: existing.isCurrent ?? true
     };
-    this.sceneBundles.set(bundleId, updated);
+    this.sceneBundles.set(this.sceneBundleKey(bundleId, updated.version), updated);
     return updated;
+  }
+  async listSceneBundleVersions(bundleId: string): Promise<SceneBundleRecord[]> {
+    return Array.from(this.sceneBundles.values())
+      .filter((item) => item.bundleId === bundleId)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }
+  async setCurrentSceneBundleVersion(bundleId: string, version: string): Promise<SceneBundleRecord | null> {
+    let target: SceneBundleRecord | undefined;
+    for (const item of this.sceneBundles.values()) {
+      if (item.bundleId === bundleId) {
+        item.isCurrent = item.version === version;
+        if (item.version === version) target = item;
+      }
+    }
+    return target ?? null;
   }
 }
 
@@ -349,7 +388,7 @@ export class PostgresStorage implements Storage {
         created_at timestamptz not null default now()
       );
       create table if not exists scene_bundles (
-        bundle_id text primary key,
+        bundle_id text not null,
         storage_key text not null,
         public_url text not null,
         checksum text,
@@ -357,10 +396,16 @@ export class PostgresStorage implements Storage {
         content_type text not null,
         provider text not null,
         version text not null,
-        created_at timestamptz not null default now()
+        status text not null default 'active',
+        is_current boolean not null default true,
+        created_at timestamptz not null default now(),
+        primary key (bundle_id, version)
       );
     `);
     await this.pool.query(`alter table rooms add column if not exists scene_bundle_url text`);
+    await this.pool.query(`alter table scene_bundles add column if not exists status text not null default 'active'`);
+    await this.pool.query(`alter table scene_bundles add column if not exists is_current boolean not null default true`);
+    await this.pool.query(`do $$ begin alter table scene_bundles drop constraint if exists scene_bundles_pkey; alter table scene_bundles add primary key (bundle_id, version); exception when duplicate_object then null; end $$;`);
     await this.seed();
   }
 
@@ -523,8 +568,8 @@ export class PostgresStorage implements Storage {
     return result.rows.map((row: { payload: RuntimeDiagnosticRecord }) => row.payload);
   }
   async listSceneBundles(): Promise<SceneBundleRecord[]> {
-    const result = await this.pool.query(`select bundle_id, storage_key, public_url, checksum, size_bytes, content_type, provider, version, created_at from scene_bundles order by created_at desc, bundle_id asc`);
-    return result.rows.map((row: { bundle_id: string; storage_key: string; public_url: string; checksum: string | null; size_bytes: string | number | null; content_type: string; provider: SceneBundleRecord["provider"]; version: string; created_at: string }) => ({
+    const result = await this.pool.query(`select distinct on (bundle_id) bundle_id, storage_key, public_url, checksum, size_bytes, content_type, provider, version, status, is_current, created_at from scene_bundles order by bundle_id, is_current desc, created_at desc`);
+    return result.rows.map((row: { bundle_id: string; storage_key: string; public_url: string; checksum: string | null; size_bytes: string | number | null; content_type: string; provider: SceneBundleRecord["provider"]; version: string; status: SceneBundleRecord["status"]; is_current: boolean; created_at: string }) => ({
       bundleId: row.bundle_id,
       storageKey: row.storage_key,
       publicUrl: row.public_url,
@@ -533,11 +578,13 @@ export class PostgresStorage implements Storage {
       contentType: row.content_type,
       provider: row.provider,
       version: row.version,
+      status: row.status,
+      isCurrent: row.is_current,
       createdAt: new Date(row.created_at).toISOString()
     }));
   }
   async getSceneBundle(bundleId: string): Promise<SceneBundleRecord | null> {
-    const result = await this.pool.query(`select bundle_id, storage_key, public_url, checksum, size_bytes, content_type, provider, version, created_at from scene_bundles where bundle_id = $1`, [bundleId]);
+    const result = await this.pool.query(`select bundle_id, storage_key, public_url, checksum, size_bytes, content_type, provider, version, status, is_current, created_at from scene_bundles where bundle_id = $1 order by is_current desc, created_at desc limit 1`, [bundleId]);
     const row = result.rows[0];
     return row ? {
       bundleId: row.bundle_id,
@@ -548,10 +595,16 @@ export class PostgresStorage implements Storage {
       contentType: row.content_type,
       provider: row.provider,
       version: row.version,
+      status: row.status,
+      isCurrent: row.is_current,
       createdAt: new Date(row.created_at).toISOString()
     } : null;
   }
   async createSceneBundle(input: SceneBundleCreateInput & { publicUrl: string; provider: SceneBundleRecord["provider"] }): Promise<SceneBundleRecord> {
+    const existingVersion = await this.pool.query(`select 1 from scene_bundles where bundle_id = $1 and version = $2 limit 1`, [input.bundleId ?? null, input.version ?? "v1"]);
+    if (existingVersion.rows[0] && input.bundleId) {
+      throw new Error("scene_bundle_version_conflict");
+    }
     const record: SceneBundleRecord = {
       bundleId: input.bundleId ?? crypto.randomUUID(),
       storageKey: input.storageKey,
@@ -561,11 +614,14 @@ export class PostgresStorage implements Storage {
       contentType: input.contentType ?? "application/json",
       provider: input.provider,
       version: input.version ?? "v1",
+      status: "active",
+      isCurrent: true,
       createdAt: new Date().toISOString()
     };
+    await this.pool.query(`update scene_bundles set is_current = false where bundle_id = $1`, [record.bundleId]);
     await this.pool.query(
-      `insert into scene_bundles (bundle_id, storage_key, public_url, checksum, size_bytes, content_type, provider, version, created_at) values ($1,$2,$3,$4,$5,$6,$7,$8,$9)` ,
-      [record.bundleId, record.storageKey, record.publicUrl, record.checksum ?? null, record.sizeBytes ?? null, record.contentType, record.provider, record.version, record.createdAt]
+      `insert into scene_bundles (bundle_id, storage_key, public_url, checksum, size_bytes, content_type, provider, version, status, is_current, created_at) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)` ,
+      [record.bundleId, record.storageKey, record.publicUrl, record.checksum ?? null, record.sizeBytes ?? null, record.contentType, record.provider, record.version, record.status, record.isCurrent, record.createdAt]
     );
     return record;
   }
@@ -580,13 +636,37 @@ export class PostgresStorage implements Storage {
       sizeBytes: input.sizeBytes ?? existing.sizeBytes,
       contentType: input.contentType ?? existing.contentType,
       provider: input.provider ?? existing.provider,
-      version: input.version ?? existing.version
+      version: input.version ?? existing.version,
+      status: existing.status ?? "active",
+      isCurrent: existing.isCurrent ?? true
     };
     await this.pool.query(
-      `update scene_bundles set storage_key = $2, public_url = $3, checksum = $4, size_bytes = $5, content_type = $6, provider = $7, version = $8 where bundle_id = $1`,
-      [bundleId, updated.storageKey, updated.publicUrl, updated.checksum ?? null, updated.sizeBytes ?? null, updated.contentType, updated.provider, updated.version]
+      `update scene_bundles set storage_key = $3, public_url = $4, checksum = $5, size_bytes = $6, content_type = $7, provider = $8, status = $9, is_current = $10 where bundle_id = $1 and version = $2`,
+      [bundleId, existing.version, updated.storageKey, updated.publicUrl, updated.checksum ?? null, updated.sizeBytes ?? null, updated.contentType, updated.provider, updated.status ?? "active", updated.isCurrent ?? true]
     );
     return updated;
+  }
+  async listSceneBundleVersions(bundleId: string): Promise<SceneBundleRecord[]> {
+    const result = await this.pool.query(`select bundle_id, storage_key, public_url, checksum, size_bytes, content_type, provider, version, status, is_current, created_at from scene_bundles where bundle_id = $1 order by created_at desc`, [bundleId]);
+    return result.rows.map((row: { bundle_id: string; storage_key: string; public_url: string; checksum: string | null; size_bytes: string | number | null; content_type: string; provider: SceneBundleRecord["provider"]; version: string; status: SceneBundleRecord["status"]; is_current: boolean; created_at: string }) => ({
+      bundleId: row.bundle_id,
+      storageKey: row.storage_key,
+      publicUrl: row.public_url,
+      checksum: row.checksum ?? undefined,
+      sizeBytes: row.size_bytes == null ? undefined : Number(row.size_bytes),
+      contentType: row.content_type,
+      provider: row.provider,
+      version: row.version,
+      status: row.status,
+      isCurrent: row.is_current,
+      createdAt: new Date(row.created_at).toISOString()
+    }));
+  }
+  async setCurrentSceneBundleVersion(bundleId: string, version: string): Promise<SceneBundleRecord | null> {
+    const target = await this.pool.query(`select public_url from scene_bundles where bundle_id = $1 and version = $2`, [bundleId, version]);
+    if (!target.rows[0]) return null;
+    await this.pool.query(`update scene_bundles set is_current = (version = $2) where bundle_id = $1`, [bundleId, version]);
+    return this.getSceneBundle(bundleId);
   }
 }
 

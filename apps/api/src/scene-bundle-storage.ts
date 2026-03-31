@@ -9,6 +9,8 @@ export interface SceneBundleRecord {
   contentType: string;
   provider: SceneBundleProvider;
   version: string;
+  status?: "active" | "obsolete" | "cleanup-ready";
+  isCurrent?: boolean;
   createdAt: string;
 }
 
