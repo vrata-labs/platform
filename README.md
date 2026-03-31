@@ -78,6 +78,11 @@ Phase 4 CI/publish contract:
 - Immutable deploy tag is always the full `git sha`
 - Alias tags are limited to `staging` and branch slug; `latest` is intentionally not used
 - Required GitHub secrets for publish: `YCR_REGISTRY_ID`, `YCR_USERNAME`, `YCR_PASSWORD`
+- Live registry id: `crp9cm29k6p76hqo8lti`
+- Published image names:
+  - `cr.yandex/crp9cm29k6p76hqo8lti/noah-api`
+  - `cr.yandex/crp9cm29k6p76hqo8lti/noah-room-state`
+- Verified publish run: GitHub Actions workflow `Docker Publish` successfully pushed SHA and alias tags for branch `deploy/scene-bundles-stage-20260328`
 
 ## Container smoke
 

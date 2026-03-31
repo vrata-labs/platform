@@ -50,12 +50,14 @@
 ## CI image publish contract
 
 - Phase 4 target registry: `Yandex Container Registry`
+- Live registry id: `crp9cm29k6p76hqo8lti`
 - Expected image names:
-  - `cr.yandex/<registry-id>/noah-api`
-  - `cr.yandex/<registry-id>/noah-room-state`
+  - `cr.yandex/crp9cm29k6p76hqo8lti/noah-api`
+  - `cr.yandex/crp9cm29k6p76hqo8lti/noah-room-state`
 - Immutable tag for future deploy handoff: full `git sha`
 - Alias tags are limited to `staging` and branch slug
 - Current publish workflow expects GitHub secrets:
   - `YCR_REGISTRY_ID`
-  - `YCR_USERNAME`
+  - `YCR_USERNAME` (`json_key`)
   - `YCR_PASSWORD`
+- Current GitHub publish service account: `noah-gh-ycr-pusher` (`ajegfvegcehvb09mj977`)
