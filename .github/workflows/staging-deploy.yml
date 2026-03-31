@@ -1,0 +1,74 @@
+name: Staging Deploy
+
+on:
+  workflow_run:
+    workflows: ["Docker Publish"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      deploy_sha:
+        description: "Immutable image SHA tag to deploy or rollback to"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    env:
+      STAGING_SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
+      STAGING_SSH_USER: ${{ secrets.STAGING_SSH_USER }}
+      STAGING_BASE_URL: ${{ secrets.STAGING_BASE_URL }}
+      YCR_USERNAME: ${{ secrets.YCR_USERNAME }}
+      YCR_PASSWORD: ${{ secrets.YCR_PASSWORD }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup SSH agent
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.STAGING_SSH_KEY }}
+
+      - name: Determine deploy SHA
+        id: deploy
+        run: |
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            echo "deploy_sha=${{ inputs.deploy_sha }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "deploy_sha=${{ github.event.workflow_run.head_sha }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Roll out staging images
+        env:
+          DEPLOY_SHA: ${{ steps.deploy.outputs.deploy_sha }}
+        run: |
+          YCR_PASSWORD_B64="$(printf '%s' "$YCR_PASSWORD" | base64 -w0)"
+          ssh -o StrictHostKeyChecking=no "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo bash -s" <<EOF
+          set -euo pipefail
+          cd /opt/noah
+          git -c safe.directory=/opt/noah fetch origin
+          git -c safe.directory=/opt/noah checkout ${DEPLOY_SHA}
+          printf '%s' '${YCR_PASSWORD_B64}' | base64 -d | docker login cr.yandex --username '${YCR_USERNAME}' --password-stdin
+          ./infra/docker/rollout-staging-images.sh ${DEPLOY_SHA}
+          EOF
+
+      - name: Wait for health
+        run: |
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent "$STAGING_BASE_URL/health" >/tmp/noah-staging-health.json; then
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "staging health endpoint did not become ready" >&2
+          exit 1
+
+      - name: Post-deploy smoke
+        run: |
+          curl --fail --silent "$STAGING_BASE_URL/health" >/dev/null
+          curl --fail --silent "$STAGING_BASE_URL/rooms/demo-room" >/dev/null
+          curl --fail --silent "$STAGING_BASE_URL/control-plane" >/dev/null
