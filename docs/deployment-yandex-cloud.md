@@ -44,5 +44,18 @@
   - `SCENE_BUNDLE_S3_ENDPOINT`
   - `SCENE_BUNDLE_S3_REGION`
   - `SCENE_BUNDLE_S3_BUCKET`
-  - `SCENE_BUNDLE_S3_PUBLIC_BASE_URL`
+- `SCENE_BUNDLE_S3_PUBLIC_BASE_URL`
 - Current Phase 3 publish flow only registers metadata by `storageKey`/public URL; it does not upload bundle files through the API.
+
+## CI image publish contract
+
+- Phase 4 target registry: `Yandex Container Registry`
+- Expected image names:
+  - `cr.yandex/<registry-id>/noah-api`
+  - `cr.yandex/<registry-id>/noah-room-state`
+- Immutable tag for future deploy handoff: full `git sha`
+- Alias tags are limited to `staging` and branch slug
+- Current publish workflow expects GitHub secrets:
+  - `YCR_REGISTRY_ID`
+  - `YCR_USERNAME`
+  - `YCR_PASSWORD`

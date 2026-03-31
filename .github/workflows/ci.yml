@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - deploy/scene-bundles-stage-20260328
   pull_request:
 
 jobs:
@@ -25,7 +26,7 @@ jobs:
           cache: pnpm
 
       - name: Install dependencies
-        run: pnpm install
+        run: pnpm install --frozen-lockfile
 
       - name: Lint
         run: pnpm lint
@@ -63,7 +64,7 @@ jobs:
           cache: pnpm
 
       - name: Install dependencies
-        run: pnpm install
+        run: pnpm install --frozen-lockfile
 
       - name: Asset pipeline tests
         run: pnpm --filter @noah/asset-pipeline test

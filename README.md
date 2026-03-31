@@ -67,6 +67,18 @@ Phase 3 adds minimal scene bundle metadata and bind flow in `apps/api`.
 - External S3-compatible env contract: `SCENE_BUNDLE_S3_ENDPOINT`, `SCENE_BUNDLE_S3_REGION`, `SCENE_BUNDLE_S3_BUCKET`, `SCENE_BUNDLE_S3_PUBLIC_BASE_URL`
 - Example external config check: set those env vars locally and run `pnpm --filter @noah/api test` to validate provider config resolution before using a real bucket
 
+## CI and image publish
+
+Phase 4 CI/publish contract:
+
+- Main CI workflow: `.github/workflows/ci.yml`
+- Docker publish workflow: `.github/workflows/docker-publish.yml`
+- PRs run CI checks only; image publish is for push to `main`, push to `deploy/scene-bundles-stage-20260328`, or manual `workflow_dispatch`
+- Target registry: `Yandex Container Registry` via `cr.yandex/<registry-id>/noah-api` and `cr.yandex/<registry-id>/noah-room-state`
+- Immutable deploy tag is always the full `git sha`
+- Alias tags are limited to `staging` and branch slug; `latest` is intentionally not used
+- Required GitHub secrets for publish: `YCR_REGISTRY_ID`, `YCR_USERNAME`, `YCR_PASSWORD`
+
 ## Container smoke
 
 Phase 1 container smoke commands:
