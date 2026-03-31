@@ -91,6 +91,7 @@ Phase 4 CI/publish contract:
 - The rollout script updates `IMAGE_TAG` in `infra/docker/.env.staging`, pulls `api` and `room-state`, and runs `docker compose up -d --no-build`
 - Verified rollback contract: rerun the same script with the previous published SHA, then smoke `health`, `demo-room`, `control-plane`
 - GitHub Actions deploy workflow source: `.github/workflows/staging-deploy.yml`
+- Verified GitHub Actions deploy run: `Staging Deploy` workflow run `23801431402`
 
 ## Container smoke
 

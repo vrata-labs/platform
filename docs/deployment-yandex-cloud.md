@@ -72,4 +72,4 @@
   - `/health`
   - `/rooms/demo-room`
   - `/control-plane`
-- Current operational note: the workflow is committed on the staging branch and the same SSH rollout path was verified manually end-to-end on `noah-stage-compose-v11`
+- Verified GitHub Actions workflow_dispatch run: `23801431402`

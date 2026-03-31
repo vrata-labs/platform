@@ -56,7 +56,7 @@
 - One Phase 2 infra failure mode was transient registry instability from `quay.io` for MinIO; compose now uses `minio/minio` from Docker Hub instead.
 - Phase 4 registry path is now live in `Yandex Container Registry` `crp9cm29k6p76hqo8lti` (`noah`); published image names are `cr.yandex/crp9cm29k6p76hqo8lti/noah-api` and `cr.yandex/crp9cm29k6p76hqo8lti/noah-room-state`.
 - GitHub Actions publish workflow is `.github/workflows/docker-publish.yml`; it publishes immutable SHA tags plus only `staging` and branch-slug aliases, and PRs do not publish images.
-- Staging deploy workflow is `.github/workflows/staging-deploy.yml`; it is designed to deploy only immutable SHA tags over SSH and run basic post-deploy smoke (`/health`, `demo-room`, `control-plane`).
+- Staging deploy workflow is `.github/workflows/staging-deploy.yml`; it deploys immutable SHA tags over SSH and its GitHub Actions `workflow_dispatch` path was verified with run `23801431402`, including post-deploy smoke (`/health`, `demo-room`, `control-plane`).
 - Required GitHub secrets for YCR publish are `YCR_REGISTRY_ID`, `YCR_USERNAME=json_key`, and `YCR_PASSWORD` containing the full service account key JSON.
 - Current Yandex service account for GitHub image pushes is `noah-gh-ycr-pusher` (`ajegfvegcehvb09mj977`) with `container-registry.images.pusher` on folder `b1g2ndo07lr7l5q8bb08`.
 - For reliable external testing, a CDN-hosted scene bundle URL worked well: `https://cdn.jsdelivr.net/gh/psilon2000/noah@deploy/scene-bundles-stage-20260328/apps/runtime-web/public/assets/scenes/sense-hall2-v1/scene.json`.
