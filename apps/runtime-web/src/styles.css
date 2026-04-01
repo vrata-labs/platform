@@ -85,13 +85,22 @@ canvas {
   gap: 6px;
 }
 
+.avatar-sandbox {
+  margin-top: 14px;
+  display: grid;
+  gap: 6px;
+}
+
 .space-picker label,
-.space-select-status {
+.space-select-status,
+.avatar-sandbox label,
+.avatar-sandbox-status {
   color: var(--muted);
   font-size: 0.84rem;
 }
 
-#space-select {
+#space-select,
+#avatar-preset-select {
   width: 100%;
   appearance: none;
   color-scheme: dark;
@@ -102,12 +111,14 @@ canvas {
   background: rgba(255, 255, 255, 0.08);
 }
 
-#space-select option {
+#space-select option,
+#avatar-preset-select option {
   color: #f6fbff;
   background: #163354;
 }
 
-#space-select:disabled {
+#space-select:disabled,
+#avatar-preset-select:disabled {
   opacity: 0.7;
 }
 

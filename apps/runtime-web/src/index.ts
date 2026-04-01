@@ -23,6 +23,13 @@ interface RoomManifest {
     spatialAudio: boolean;
     screenShare: boolean;
   };
+  avatars: {
+    avatarsEnabled: boolean;
+    avatarCatalogUrl?: string;
+    avatarQualityProfile: "mobile-lite" | "desktop-standard" | "xr";
+    avatarFallbackCapsulesEnabled: boolean;
+    avatarSeatsEnabled: boolean;
+  };
   access: {
     joinMode: "link";
     guestAllowed: boolean;
@@ -43,6 +50,8 @@ interface RuntimeHealthResponse {
     roomStateRealtimeEnabled?: boolean;
     remoteDiagnosticsEnabled?: boolean;
     sceneBundlesEnabled?: boolean;
+    avatarsEnabled?: boolean;
+    avatarFallbackCapsulesEnabled?: boolean;
   };
 }
 
@@ -153,6 +162,7 @@ export interface RuntimeBootResult {
   spatialAudioEnabled: boolean;
   screenShareEnabled: boolean;
   guestAllowed: boolean;
+  avatarConfig: RoomManifest["avatars"];
   envFlags: {
     enterVr: boolean;
     audioJoin: boolean;
@@ -160,6 +170,8 @@ export interface RuntimeBootResult {
     roomStateRealtime: boolean;
     remoteDiagnostics: boolean;
     sceneBundles: boolean;
+    avatarsEnabled: boolean;
+    avatarFallbackCapsulesEnabled: boolean;
   };
 }
 
@@ -202,13 +214,16 @@ export async function bootRuntime(
     spatialAudioEnabled: manifest.features.spatialAudio,
     screenShareEnabled: manifest.features.screenShare,
     guestAllowed: manifest.access.guestAllowed,
+    avatarConfig: manifest.avatars,
     envFlags: {
       enterVr: healthFeatures.xrEnabled ?? true,
       audioJoin: healthFeatures.voiceEnabled ?? true,
       screenShare: healthFeatures.screenShareEnabled ?? true,
       roomStateRealtime: healthFeatures.roomStateRealtimeEnabled ?? true,
       remoteDiagnostics: healthFeatures.remoteDiagnosticsEnabled ?? true,
-      sceneBundles: healthFeatures.sceneBundlesEnabled ?? true
+      sceneBundles: healthFeatures.sceneBundlesEnabled ?? true,
+      avatarsEnabled: healthFeatures.avatarsEnabled ?? false,
+      avatarFallbackCapsulesEnabled: healthFeatures.avatarFallbackCapsulesEnabled ?? true
     }
   };
 }

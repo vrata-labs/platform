@@ -28,6 +28,14 @@ export interface RoomFeatures {
   screenShare: boolean;
 }
 
+export interface RoomAvatarConfig {
+  avatarsEnabled: boolean;
+  avatarCatalogUrl?: string;
+  avatarQualityProfile: "mobile-lite" | "desktop-standard" | "xr";
+  avatarFallbackCapsulesEnabled: boolean;
+  avatarSeatsEnabled?: boolean;
+}
+
 export interface RoomRecord {
   roomId: string;
   tenantId: string;
@@ -41,6 +49,17 @@ export interface RoomRecord {
     accentColor: string;
   };
   guestAllowed?: boolean;
+  avatarConfig?: RoomAvatarConfig;
+}
+
+function defaultAvatarConfig(input?: Partial<RoomAvatarConfig>): RoomAvatarConfig {
+  return {
+    avatarsEnabled: input?.avatarsEnabled ?? false,
+    avatarCatalogUrl: input?.avatarCatalogUrl ?? "/assets/avatars/catalog.v1.json",
+    avatarQualityProfile: input?.avatarQualityProfile ?? "desktop-standard",
+    avatarFallbackCapsulesEnabled: input?.avatarFallbackCapsulesEnabled ?? true,
+    avatarSeatsEnabled: input?.avatarSeatsEnabled ?? false
+  };
 }
 
 export interface RuntimeDiagnosticRecord {
@@ -165,7 +184,8 @@ export class MemoryStorage implements Storage {
           primaryColor: "#5fc8ff",
           accentColor: "#163354"
         },
-        guestAllowed: true
+        guestAllowed: true,
+        avatarConfig: defaultAvatarConfig()
       }
     ]
   ]);
@@ -219,7 +239,8 @@ export class MemoryStorage implements Storage {
         primaryColor: "#5fc8ff",
         accentColor: "#163354"
       },
-      guestAllowed: input.guestAllowed ?? true
+      guestAllowed: input.guestAllowed ?? true,
+      avatarConfig: defaultAvatarConfig(input.avatarConfig)
     };
     this.rooms.set(room.roomId, room);
     return room;
@@ -241,7 +262,11 @@ export class MemoryStorage implements Storage {
         accentColor: input.theme?.accentColor ?? existing.theme?.accentColor ?? "#163354"
       },
       assetIds: input.assetIds ?? existing.assetIds,
-      guestAllowed: input.guestAllowed ?? existing.guestAllowed ?? true
+      guestAllowed: input.guestAllowed ?? existing.guestAllowed ?? true,
+      avatarConfig: defaultAvatarConfig({
+        ...existing.avatarConfig,
+        ...input.avatarConfig
+      })
     };
     this.rooms.set(roomId, updated);
     return updated;
@@ -370,8 +395,9 @@ export class PostgresStorage implements Storage {
       scene_bundle_url text,
       features jsonb not null,
       asset_ids jsonb not null default '[]'::jsonb,
-      theme jsonb not null default '{"primaryColor":"#5fc8ff","accentColor":"#163354"}'::jsonb
-      , guest_allowed boolean not null default true
+      theme jsonb not null default '{"primaryColor":"#5fc8ff","accentColor":"#163354"}'::jsonb,
+      guest_allowed boolean not null default true,
+      avatar_config jsonb not null default '{"avatarsEnabled":false,"avatarCatalogUrl":"/assets/avatars/catalog.v1.json","avatarQualityProfile":"desktop-standard","avatarFallbackCapsulesEnabled":true,"avatarSeatsEnabled":false}'::jsonb
       );
       create table if not exists assets (
         asset_id text primary key,
@@ -403,6 +429,7 @@ export class PostgresStorage implements Storage {
       );
     `);
     await this.pool.query(`alter table rooms add column if not exists scene_bundle_url text`);
+    await this.pool.query(`alter table rooms add column if not exists avatar_config jsonb not null default '{"avatarsEnabled":false,"avatarCatalogUrl":"/assets/avatars/catalog.v1.json","avatarQualityProfile":"desktop-standard","avatarFallbackCapsulesEnabled":true,"avatarSeatsEnabled":false}'::jsonb`);
     await this.pool.query(`alter table scene_bundles add column if not exists status text not null default 'active'`);
     await this.pool.query(`alter table scene_bundles add column if not exists is_current boolean not null default true`);
     await this.pool.query(`do $$ begin alter table scene_bundles drop constraint if exists scene_bundles_pkey; alter table scene_bundles add primary key (bundle_id, version); exception when duplicate_object then null; end $$;`);
@@ -418,10 +445,10 @@ export class PostgresStorage implements Storage {
       );
     }
     await this.pool.query(
-       `insert into rooms (room_id, tenant_id, template_id, name, scene_bundle_url, features, asset_ids, theme, guest_allowed)
-       values ('demo-room','demo-tenant','meeting-room-basic','Demo Room',null,$1::jsonb,'[]'::jsonb,'{"primaryColor":"#5fc8ff","accentColor":"#163354"}'::jsonb,true)
+       `insert into rooms (room_id, tenant_id, template_id, name, scene_bundle_url, features, asset_ids, theme, guest_allowed, avatar_config)
+       values ('demo-room','demo-tenant','meeting-room-basic','Demo Room',null,$1::jsonb,'[]'::jsonb,'{"primaryColor":"#5fc8ff","accentColor":"#163354"}'::jsonb,true,$2::jsonb)
        on conflict do nothing`,
-       [JSON.stringify({ voice: true, spatialAudio: true, screenShare: true })]
+       [JSON.stringify({ voice: true, spatialAudio: true, screenShare: true }), JSON.stringify(defaultAvatarConfig())]
     );
   }
 
@@ -464,13 +491,13 @@ export class PostgresStorage implements Storage {
     }));
   }
   async listRooms(): Promise<RoomRecord[]> {
-    const result = await this.pool.query(`select room_id, tenant_id, template_id, name, scene_bundle_url, features, asset_ids, theme, guest_allowed from rooms order by room_id`);
-    return result.rows.map((row: { room_id: string; tenant_id: string; template_id: string; name: string; scene_bundle_url: string | null; features: RoomFeatures; asset_ids: string[]; theme: { primaryColor: string; accentColor: string }; guest_allowed: boolean }) => ({ roomId: row.room_id, tenantId: row.tenant_id, templateId: row.template_id, name: row.name, sceneBundleUrl: row.scene_bundle_url ?? undefined, features: row.features, assetIds: row.asset_ids, theme: row.theme, guestAllowed: row.guest_allowed }));
+    const result = await this.pool.query(`select room_id, tenant_id, template_id, name, scene_bundle_url, features, asset_ids, theme, guest_allowed, avatar_config from rooms order by room_id`);
+    return result.rows.map((row: { room_id: string; tenant_id: string; template_id: string; name: string; scene_bundle_url: string | null; features: RoomFeatures; asset_ids: string[]; theme: { primaryColor: string; accentColor: string }; guest_allowed: boolean; avatar_config: Partial<RoomAvatarConfig> }) => ({ roomId: row.room_id, tenantId: row.tenant_id, templateId: row.template_id, name: row.name, sceneBundleUrl: row.scene_bundle_url ?? undefined, features: row.features, assetIds: row.asset_ids, theme: row.theme, guestAllowed: row.guest_allowed, avatarConfig: defaultAvatarConfig(row.avatar_config) }));
   }
   async getRoom(roomId: string): Promise<RoomRecord | null> {
-    const result = await this.pool.query(`select room_id, tenant_id, template_id, name, scene_bundle_url, features, asset_ids, theme, guest_allowed from rooms where room_id = $1`, [roomId]);
+    const result = await this.pool.query(`select room_id, tenant_id, template_id, name, scene_bundle_url, features, asset_ids, theme, guest_allowed, avatar_config from rooms where room_id = $1`, [roomId]);
     const row = result.rows[0];
-    return row ? { roomId: row.room_id, tenantId: row.tenant_id, templateId: row.template_id, name: row.name, sceneBundleUrl: row.scene_bundle_url ?? undefined, features: row.features, assetIds: row.asset_ids, theme: row.theme, guestAllowed: row.guest_allowed } : null;
+    return row ? { roomId: row.room_id, tenantId: row.tenant_id, templateId: row.template_id, name: row.name, sceneBundleUrl: row.scene_bundle_url ?? undefined, features: row.features, assetIds: row.asset_ids, theme: row.theme, guestAllowed: row.guest_allowed, avatarConfig: defaultAvatarConfig(row.avatar_config) } : null;
   }
   async createRoom(input: Partial<RoomRecord>): Promise<RoomRecord> {
     const room: RoomRecord = {
@@ -489,11 +516,12 @@ export class PostgresStorage implements Storage {
         primaryColor: "#5fc8ff",
         accentColor: "#163354"
       },
-      guestAllowed: input.guestAllowed ?? true
+      guestAllowed: input.guestAllowed ?? true,
+      avatarConfig: defaultAvatarConfig(input.avatarConfig)
     };
     await this.pool.query(
-      `insert into rooms (room_id, tenant_id, template_id, name, scene_bundle_url, features, asset_ids, theme, guest_allowed) values ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8::jsonb,$9)`,
-      [room.roomId, room.tenantId, room.templateId, room.name, room.sceneBundleUrl ?? null, JSON.stringify(room.features), JSON.stringify(room.assetIds), JSON.stringify(room.theme), room.guestAllowed]
+      `insert into rooms (room_id, tenant_id, template_id, name, scene_bundle_url, features, asset_ids, theme, guest_allowed, avatar_config) values ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8::jsonb,$9,$10::jsonb)`,
+      [room.roomId, room.tenantId, room.templateId, room.name, room.sceneBundleUrl ?? null, JSON.stringify(room.features), JSON.stringify(room.assetIds), JSON.stringify(room.theme), room.guestAllowed, JSON.stringify(room.avatarConfig)]
     );
     return room;
   }
@@ -514,11 +542,15 @@ export class PostgresStorage implements Storage {
         accentColor: input.theme?.accentColor ?? existing.theme?.accentColor ?? "#163354"
       },
       assetIds: input.assetIds ?? existing.assetIds,
-      guestAllowed: input.guestAllowed ?? existing.guestAllowed ?? true
+      guestAllowed: input.guestAllowed ?? existing.guestAllowed ?? true,
+      avatarConfig: defaultAvatarConfig({
+        ...existing.avatarConfig,
+        ...input.avatarConfig
+      })
     };
     await this.pool.query(
-      `update rooms set template_id = $2, name = $3, scene_bundle_url = $4, features = $5::jsonb, asset_ids = $6::jsonb, theme = $7::jsonb, guest_allowed = $8 where room_id = $1`,
-      [roomId, updated.templateId, updated.name, updated.sceneBundleUrl ?? null, JSON.stringify(updated.features), JSON.stringify(updated.assetIds), JSON.stringify(updated.theme), updated.guestAllowed]
+      `update rooms set template_id = $2, name = $3, scene_bundle_url = $4, features = $5::jsonb, asset_ids = $6::jsonb, theme = $7::jsonb, guest_allowed = $8, avatar_config = $9::jsonb where room_id = $1`,
+      [roomId, updated.templateId, updated.name, updated.sceneBundleUrl ?? null, JSON.stringify(updated.features), JSON.stringify(updated.assetIds), JSON.stringify(updated.theme), updated.guestAllowed, JSON.stringify(updated.avatarConfig)]
     );
     return updated;
   }

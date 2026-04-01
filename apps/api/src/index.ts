@@ -50,6 +50,13 @@ interface RoomManifest {
     spatialAudio: boolean;
     screenShare: boolean;
   };
+  avatars: {
+    avatarsEnabled: boolean;
+    avatarCatalogUrl?: string;
+    avatarQualityProfile: "desktop-standard" | "mobile-lite" | "xr";
+    avatarFallbackCapsulesEnabled: boolean;
+    avatarSeatsEnabled: boolean;
+  };
   quality: {
     default: "desktop-standard" | "mobile-lite" | "xr";
     mobile: "mobile-lite";
@@ -142,6 +149,13 @@ function defaultManifest(roomId: string): RoomManifest {
     },
     assets: [],
     features: { voice: true, spatialAudio: true, screenShare: true },
+    avatars: {
+      avatarsEnabled: false,
+      avatarCatalogUrl: "/assets/avatars/catalog.v1.json",
+      avatarQualityProfile: "desktop-standard",
+      avatarFallbackCapsulesEnabled: true,
+      avatarSeatsEnabled: false
+    },
     quality: { default: "desktop-standard", mobile: "mobile-lite", xr: "xr" },
     access: { joinMode: "link", guestAllowed: true }
   };
@@ -223,6 +237,13 @@ async function buildManifest(roomId: string): Promise<RoomManifest> {
       validationStatus: asset.validationStatus
     })),
     features: room.features,
+    avatars: {
+      avatarsEnabled: room.avatarConfig?.avatarsEnabled ?? false,
+      avatarCatalogUrl: room.avatarConfig?.avatarCatalogUrl,
+      avatarQualityProfile: room.avatarConfig?.avatarQualityProfile ?? "desktop-standard",
+      avatarFallbackCapsulesEnabled: room.avatarConfig?.avatarFallbackCapsulesEnabled ?? true,
+      avatarSeatsEnabled: room.avatarConfig?.avatarSeatsEnabled ?? false
+    },
     quality: { default: "desktop-standard", mobile: "mobile-lite", xr: "xr" },
     access: { joinMode: "link", guestAllowed: room.guestAllowed ?? true }
   };
@@ -419,6 +440,8 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
         roomStateRealtimeEnabled: process.env.FEATURE_ROOM_STATE_REALTIME !== "false",
         remoteDiagnosticsEnabled: process.env.FEATURE_REMOTE_DIAGNOSTICS !== "false",
         sceneBundlesEnabled: process.env.FEATURE_SCENE_BUNDLES !== "false",
+        avatarsEnabled: process.env.FEATURE_AVATARS !== "false",
+        avatarFallbackCapsulesEnabled: process.env.FEATURE_AVATAR_FALLBACK_CAPSULES !== "false",
         postgresEnabled: Boolean(process.env.POSTGRES_URL),
         controlPlaneAuthEnabled: Boolean(controlPlaneAdminToken)
       },

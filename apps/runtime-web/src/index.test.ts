@@ -24,7 +24,14 @@ test("describeManifest returns room and template", () => {
         guestAllowed: true
       },
       assets: [],
-      features: { voice: true, spatialAudio: true, screenShare: false }
+      features: { voice: true, spatialAudio: true, screenShare: false },
+      avatars: {
+        avatarsEnabled: false,
+        avatarCatalogUrl: "/assets/avatars/catalog.v1.json",
+        avatarQualityProfile: "desktop-standard",
+        avatarFallbackCapsulesEnabled: true,
+        avatarSeatsEnabled: false
+      }
     }),
     "demo-room:meeting-room-basic"
   );

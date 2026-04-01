@@ -40,10 +40,13 @@ test("api health exposes env timestamp and dependencies", async () => {
       env?: string;
       timestamp?: string;
       dependencies?: { livekit?: boolean };
+      features?: { avatarsEnabled?: boolean; avatarFallbackCapsulesEnabled?: boolean };
     };
     assert.equal(typeof payload.env, "string");
     assert.equal(typeof payload.timestamp, "string");
     assert.equal(typeof payload.dependencies?.livekit, "boolean");
+    assert.equal(typeof payload.features?.avatarsEnabled, "boolean");
+    assert.equal(typeof payload.features?.avatarFallbackCapsulesEnabled, "boolean");
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     delete process.env.NOAH_DISABLE_AUTOSTART;
@@ -76,8 +79,64 @@ test("room manifest exposes optional scene bundle url", async () => {
     const room = (await createResponse.json()) as { roomId: string };
     const manifestResponse = await fetch(`http://127.0.0.1:4012/api/rooms/${room.roomId}/manifest`);
     assert.equal(manifestResponse.ok, true);
-    const manifest = (await manifestResponse.json()) as { sceneBundle?: { url?: string } };
-    assert.equal(manifest.sceneBundle?.url, "/assets/scenes/the-hall-v1/scene.json");
+      const manifest = (await manifestResponse.json()) as {
+        sceneBundle?: { url?: string };
+        avatars?: { avatarsEnabled?: boolean; avatarCatalogUrl?: string };
+      };
+      assert.equal(manifest.sceneBundle?.url, "/assets/scenes/the-hall-v1/scene.json");
+      assert.equal(manifest.avatars?.avatarsEnabled, false);
+      assert.equal(manifest.avatars?.avatarCatalogUrl, "/assets/avatars/catalog.v1.json");
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    delete process.env.NOAH_DISABLE_AUTOSTART;
+    delete process.env.CONTROL_PLANE_ADMIN_TOKEN;
+  }
+});
+
+test("room manifest exposes avatar config when enabled", async () => {
+  process.env.NOAH_DISABLE_AUTOSTART = "1";
+  process.env.API_PORT = "4017";
+  process.env.CONTROL_PLANE_ADMIN_TOKEN = "test-admin-token";
+  const module = await import("./index.js");
+  const server = module.startApiServer(4017);
+
+  try {
+    const createResponse = await fetch("http://127.0.0.1:4017/api/rooms", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-noah-admin-token": "test-admin-token"
+      },
+      body: JSON.stringify({
+        tenantId: "demo-tenant",
+        templateId: "meeting-room-basic",
+        name: "Avatar Room",
+        avatarConfig: {
+          avatarsEnabled: true,
+          avatarCatalogUrl: "/assets/avatars/catalog.v1.json",
+          avatarQualityProfile: "xr",
+          avatarFallbackCapsulesEnabled: true,
+          avatarSeatsEnabled: false
+        }
+      })
+    });
+    assert.equal(createResponse.ok, true);
+    const room = (await createResponse.json()) as { roomId: string };
+
+    const manifestResponse = await fetch(`http://127.0.0.1:4017/api/rooms/${room.roomId}/manifest`);
+    assert.equal(manifestResponse.ok, true);
+    const manifest = (await manifestResponse.json()) as {
+      avatars?: {
+        avatarsEnabled?: boolean;
+        avatarCatalogUrl?: string;
+        avatarQualityProfile?: string;
+        avatarFallbackCapsulesEnabled?: boolean;
+      };
+    };
+    assert.equal(manifest.avatars?.avatarsEnabled, true);
+    assert.equal(manifest.avatars?.avatarCatalogUrl, "/assets/avatars/catalog.v1.json");
+    assert.equal(manifest.avatars?.avatarQualityProfile, "xr");
+    assert.equal(manifest.avatars?.avatarFallbackCapsulesEnabled, true);
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     delete process.env.NOAH_DISABLE_AUTOSTART;

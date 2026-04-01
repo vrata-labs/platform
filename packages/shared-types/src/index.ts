@@ -35,3 +35,7 @@ export interface MediaTokenPayload {
   canPublishAudio: boolean;
   canPublishVideo: boolean;
 }
+
+export * from "./avatar.js";
+export * from "./avatar-recipe.js";
+export * from "./avatar-transport.js";

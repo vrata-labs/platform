@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "recipes": [
+    { "schemaVersion": 1, "avatarId": "preset-01", "rig": "humanoid-v1", "bodyVariant": "base", "headVariant": "round", "hairVariant": "short", "outfitVariant": "hoodie", "palette": { "skin": "#f2d1b3", "primary": "#355c7d", "accent": "#f67280" }, "accessories": ["badge"] },
+    { "schemaVersion": 1, "avatarId": "preset-02", "rig": "humanoid-v1", "bodyVariant": "base", "headVariant": "round", "hairVariant": "curl", "outfitVariant": "jacket", "palette": { "skin": "#e0b38a", "primary": "#1f6f78", "accent": "#f4c95d" }, "accessories": [] },
+    { "schemaVersion": 1, "avatarId": "preset-03", "rig": "humanoid-v1", "bodyVariant": "base", "headVariant": "oval", "hairVariant": "fade", "outfitVariant": "overshirt", "palette": { "skin": "#a86842", "primary": "#5c3d99", "accent": "#ffd166" }, "accessories": ["earpiece"] },
+    { "schemaVersion": 1, "avatarId": "preset-04", "rig": "humanoid-v1", "bodyVariant": "base", "headVariant": "round", "hairVariant": "bob", "outfitVariant": "sweater", "palette": { "skin": "#f0c7a8", "primary": "#2d4059", "accent": "#ea5455" }, "accessories": [] },
+    { "schemaVersion": 1, "avatarId": "preset-05", "rig": "humanoid-v1", "bodyVariant": "base", "headVariant": "oval", "hairVariant": "cap", "outfitVariant": "sport", "palette": { "skin": "#7a4e2d", "primary": "#264653", "accent": "#2a9d8f" }, "accessories": ["wristband"] },
+    { "schemaVersion": 1, "avatarId": "preset-06", "rig": "humanoid-v1", "bodyVariant": "base", "headVariant": "round", "hairVariant": "parted", "outfitVariant": "coat", "palette": { "skin": "#c28662", "primary": "#3d5a80", "accent": "#98c1d9" }, "accessories": [] },
+    { "schemaVersion": 1, "avatarId": "preset-07", "rig": "humanoid-v1", "bodyVariant": "base", "headVariant": "round", "hairVariant": "bun", "outfitVariant": "tee", "palette": { "skin": "#f5d2c0", "primary": "#7b2cbf", "accent": "#ffb703" }, "accessories": ["chain"] },
+    { "schemaVersion": 1, "avatarId": "preset-08", "rig": "humanoid-v1", "bodyVariant": "base", "headVariant": "oval", "hairVariant": "wave", "outfitVariant": "utility", "palette": { "skin": "#c9966b", "primary": "#005f73", "accent": "#ee9b00" }, "accessories": [] },
+    { "schemaVersion": 1, "avatarId": "preset-09", "rig": "humanoid-v1", "bodyVariant": "base", "headVariant": "round", "hairVariant": "crop", "outfitVariant": "knit", "palette": { "skin": "#6c4125", "primary": "#4a4e69", "accent": "#f28482" }, "accessories": ["pin"] },
+    { "schemaVersion": 1, "avatarId": "preset-10", "rig": "humanoid-v1", "bodyVariant": "base", "headVariant": "oval", "hairVariant": "spike", "outfitVariant": "shell", "palette": { "skin": "#ddb08c", "primary": "#0f4c5c", "accent": "#e36414" }, "accessories": [] }
+  ]
+}

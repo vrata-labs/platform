@@ -13,6 +13,7 @@
     "build": "tsc -p tsconfig.json",
     "lint": "tsc -p tsconfig.json --noEmit",
     "validate:sample": "node dist/cli.js --file sample.glb --ext .glb --size-mb 12",
+    "validate:avatars": "node dist/cli.js --avatar-catalog ../../apps/runtime-web/public/assets/avatars/catalog.v1.json --avatar-recipes ../../apps/runtime-web/public/assets/avatars/avatar-recipes.v1.json",
     "test": "node --test dist/**/*.test.js",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   }

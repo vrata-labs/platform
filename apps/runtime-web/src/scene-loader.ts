@@ -1,6 +1,9 @@
 import * as THREE from "three";
 import { FBXLoader } from "three/examples/jsm/loaders/FBXLoader.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+import { KTX2Loader } from "three/examples/jsm/loaders/KTX2Loader.js";
+import { DRACOLoader } from "three/examples/jsm/loaders/DRACOLoader.js";
+import { MeshoptDecoder } from "three/examples/jsm/libs/meshopt_decoder.module.js";
 
 import { parseSceneBundleManifest, pickSceneSpawnPoint, resolveSceneAssetUrl, type SceneBundleManifest } from "./scene-bundle.js";
 
@@ -13,6 +16,29 @@ export interface LoadedSceneBundle {
   assetType: string;
   loadMs: number;
   missingAssets: string[];
+}
+
+export interface GltfLoaderOptions {
+  renderer?: THREE.WebGLRenderer;
+  dracoDecoderPath?: string;
+  ktx2TranscoderPath?: string;
+}
+
+export function configureGltfLoader(loader: GLTFLoader, options: GltfLoaderOptions = {}): GLTFLoader {
+  loader.setMeshoptDecoder(MeshoptDecoder);
+
+  const dracoLoader = new DRACOLoader();
+  dracoLoader.setDecoderPath(options.dracoDecoderPath ?? "https://www.gstatic.com/draco/versioned/decoders/1.5.7/");
+  loader.setDRACOLoader(dracoLoader);
+
+  if (options.renderer) {
+    const ktx2Loader = new KTX2Loader();
+    ktx2Loader.setTranscoderPath(options.ktx2TranscoderPath ?? "https://unpkg.com/three@0.176.0/examples/jsm/libs/basis/");
+    ktx2Loader.detectSupport(options.renderer);
+    loader.setKTX2Loader(ktx2Loader);
+  }
+
+  return loader;
 }
 
 function materialOverrideMatches(pattern: string, materialName: string): boolean {
@@ -99,7 +125,7 @@ export async function loadSceneBundle(input: {
     manager.onError = (url) => {
       missingAssets.add(url);
     };
-    const loader = new GLTFLoader(manager);
+    const loader = configureGltfLoader(new GLTFLoader(manager));
     const gltf = await loader.loadAsync(sceneAssetUrl);
     group.add(gltf.scene);
   }

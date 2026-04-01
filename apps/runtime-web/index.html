@@ -30,6 +30,13 @@
           <button id="start-share" disabled>Start Share</button>
           <button id="stop-share" disabled>Stop Share</button>
         </div>
+        <div id="avatar-sandbox-panel" class="avatar-sandbox" hidden>
+          <label for="avatar-preset-select">Avatar Sandbox</label>
+          <select id="avatar-preset-select" disabled>
+            <option>Loading presets...</option>
+          </select>
+          <div id="avatar-sandbox-status" class="avatar-sandbox-status">Sandbox idle</div>
+        </div>
         <pre id="debug-panel" hidden></pre>
         <div class="help">
           <div>WASD or arrows - move</div>
@@ -38,6 +45,7 @@
           <div>Mobile drag - move</div>
           <div>VR: left stick move, right stick snap turn</div>
           <div>`?debug=1` shows diagnostics, `?bot=orbit` emulates second client</div>
+          <div>`?avatarsandbox=1` opens the technical avatar sandbox</div>
         </div>
       </aside>
       <div id="scene"></div>

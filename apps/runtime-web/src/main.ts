@@ -13,6 +13,10 @@ import { applySpatialSettings, createSpatialAudioSettings } from "./spatial-audi
 import { captureCanvasDiagnostics, createEmptySceneDiagnostics, inspectSceneObject } from "./scene-debug.js";
 import { loadSceneBundle } from "./scene-loader.js";
 import { detectXrSupport, getEnterVrVisibility } from "./xr.js";
+import { createEmptyAvatarDiagnostics } from "./avatar/avatar-debug.js";
+import { loadAvatarCatalog } from "./avatar/avatar-loader.js";
+import { createProceduralAvatarInstance, positionAvatarRing } from "./avatar/avatar-instance.js";
+import { createAvatarRegistry } from "./avatar/avatar-registry.js";
 
 function fallbackUuid(): string {
   return `guest-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
@@ -44,6 +48,7 @@ const debugEnabled = query.get("debug") === "1";
 const sceneFitEnabled = debugEnabled && query.get("scenefit") !== "0";
 const sceneMaterialDebugMode = debugEnabled ? (query.get("mat") ?? "off") : "off";
 const requestedCleanSceneMode = query.get("clean") === "1";
+const avatarSandboxEnabled = query.get("avatarsandbox") === "1" || query.get("avatarSandbox") === "1";
 const botMode = query.get("bot") ?? "off";
 const shareMockEnabled = query.get("sharemock") === "1";
 const failSpaces = query.get("failspaces") === "1";
@@ -69,10 +74,15 @@ const muteButton = mustElement<HTMLButtonElement>("#toggle-mute");
 const startShareButton = mustElement<HTMLButtonElement>("#start-share");
 const stopShareButton = mustElement<HTMLButtonElement>("#stop-share");
 const debugPanel = mustElement<HTMLPreElement>("#debug-panel");
+const avatarSandboxPanel = mustElement<HTMLDivElement>("#avatar-sandbox-panel");
+const avatarPresetSelect = mustElement<HTMLSelectElement>("#avatar-preset-select");
+const avatarSandboxStatusEl = mustElement<HTMLDivElement>("#avatar-sandbox-status");
 
 if (debugEnabled) {
   debugPanel.hidden = false;
 }
+
+avatarSandboxPanel.hidden = !avatarSandboxEnabled;
 
 if (shareMockEnabled) {
   startShareButton.disabled = false;
@@ -169,6 +179,7 @@ let roomStateConnected = false;
 let roomStateReconnectTimer: number | null = null;
 let audioContext: AudioContext | null = null;
 let activeSceneBundleRoot: THREE.Object3D | null = null;
+let avatarSandboxRegistry: ReturnType<typeof createAvatarRegistry> | null = null;
 const roomStateReconnectPolicy = createReconnectPolicy({
   maxRetries: Number.parseInt(query.get("roomstateretries") ?? "3", 10),
   baseDelayMs: Number.parseInt(query.get("roomstatedelay") ?? "1000", 10),
@@ -191,7 +202,9 @@ let runtimeFlags = {
   screenShare: true,
   roomStateRealtime: true,
   remoteDiagnostics: true,
-  sceneBundles: true
+   sceneBundles: true,
+   avatarsEnabled: false,
+   avatarFallbackCapsulesEnabled: true
 };
 let effectiveCleanSceneMode = requestedCleanSceneMode;
 let availableSpaces: RuntimeSpaceOption[] = [];
@@ -405,7 +418,8 @@ const debugState = {
   sceneBundleState: "fallback" as "fallback" | "loaded" | "failed",
   sceneDebug: createEmptySceneDiagnostics(),
   spaceSelectorState: "loading" as "loading" | "ready" | "empty" | "unavailable",
-  availableSpaceCount: 0
+  availableSpaceCount: 0,
+  avatarDebug: createEmptyAvatarDiagnostics()
 };
 
 const floorMaterial = floor.material as THREE.MeshStandardMaterial;
@@ -483,6 +497,79 @@ async function loadAvailableSpaces(currentRoomId: string): Promise<void> {
   } catch (_error: unknown) {
     availableSpaces = [];
     renderSpaceSelector("unavailable", [], currentRoomId);
+  }
+}
+
+function setAvatarSandboxStatus(message: string): void {
+  avatarSandboxStatusEl.textContent = message;
+}
+
+async function bootAvatarSandbox(catalogUrl: string): Promise<void> {
+  avatarSandboxPanel.hidden = false;
+  avatarPresetSelect.replaceChildren();
+  avatarPresetSelect.disabled = true;
+  setAvatarSandboxStatus("Loading avatar presets...");
+  debugState.avatarDebug = {
+    ...createEmptyAvatarDiagnostics(),
+    state: "loading",
+    sandboxEntryPoint: catalogUrl
+  };
+
+  try {
+    const loaded = await loadAvatarCatalog({
+      catalogUrl,
+      renderer
+    });
+    const instances = loaded.presets.map((preset) => createProceduralAvatarInstance(preset));
+    positionAvatarRing(instances);
+    avatarSandboxRegistry?.root.removeFromParent();
+    avatarSandboxRegistry = createAvatarRegistry(instances);
+    scene.add(avatarSandboxRegistry.root);
+
+    const selectedAvatarId = instances[0]?.avatarId ?? null;
+    if (selectedAvatarId) {
+      avatarSandboxRegistry.selectAvatar(selectedAvatarId);
+    }
+
+    for (const instance of instances) {
+      const option = document.createElement("option");
+      option.value = instance.avatarId;
+      option.textContent = instance.label;
+      option.selected = instance.avatarId === selectedAvatarId;
+      avatarPresetSelect.appendChild(option);
+    }
+    avatarPresetSelect.disabled = instances.length === 0;
+    avatarPresetSelect.onchange = () => {
+      const avatarId = avatarPresetSelect.value;
+      avatarSandboxRegistry?.selectAvatar(avatarId);
+      debugState.avatarDebug.selectedAvatarId = avatarId;
+      setAvatarSandboxStatus(`Selected ${avatarId}`);
+    };
+
+    player.position.set(0, 0, 8.5);
+    yaw = Math.PI;
+    pitchAngle = -0.08;
+    player.rotation.y = yaw;
+    pitch.rotation.x = pitchAngle;
+    setFallbackEnvironmentVisible(true);
+    debugState.avatarDebug = {
+      ...loaded.diagnostics,
+      selectedAvatarId,
+      fallbackActive: false,
+      fallbackReason: null,
+      sandboxEntryPoint: catalogUrl
+    };
+    setAvatarSandboxStatus(`Loaded ${instances.length} presets`);
+  } catch (error) {
+    console.error(error);
+    debugState.avatarDebug = {
+      ...createEmptyAvatarDiagnostics(),
+      state: "failed",
+      fallbackActive: true,
+      fallbackReason: error instanceof Error ? error.message : "avatar_sandbox_failed",
+      sandboxEntryPoint: catalogUrl
+    };
+    setAvatarSandboxStatus("Avatar sandbox failed, capsule fallback active");
   }
 }
 
@@ -1336,7 +1423,9 @@ async function main(): Promise<void> {
     screenShare: boot.envFlags.screenShare && boot.screenShareEnabled,
     roomStateRealtime: boot.envFlags.roomStateRealtime,
     remoteDiagnostics: boot.envFlags.remoteDiagnostics,
-    sceneBundles: boot.envFlags.sceneBundles
+    sceneBundles: boot.envFlags.sceneBundles,
+    avatarsEnabled: boot.envFlags.avatarsEnabled && boot.avatarConfig.avatarsEnabled,
+    avatarFallbackCapsulesEnabled: boot.envFlags.avatarFallbackCapsulesEnabled && boot.avatarConfig.avatarFallbackCapsulesEnabled
   };
   debugState.featureFlags = runtimeFlags;
   debugState.roomStateUrl = boot.roomStateUrl;
@@ -1351,10 +1440,23 @@ async function main(): Promise<void> {
   await loadAvailableSpaces(boot.roomId);
   floorMaterial.color.set(boot.theme.accentColor);
   wallMaterial.color.set(boot.theme.primaryColor);
+  debugState.avatarDebug.sandboxEntryPoint = boot.avatarConfig.avatarCatalogUrl ?? "/assets/avatars/catalog.v1.json";
   if (!effectiveCleanSceneMode) {
     scene.fog = new THREE.Fog(new THREE.Color(boot.theme.accentColor).getHex(), 12, 50);
   } else {
     applyCleanSceneMode(true);
+  }
+
+  if (avatarSandboxEnabled) {
+    joinAudioButton.disabled = true;
+    muteButton.disabled = true;
+    startShareButton.disabled = true;
+    stopShareButton.disabled = true;
+    setStatus("Avatar sandbox ready");
+    setRoomStateStatus("Room-state: sandbox disabled");
+    await bootAvatarSandbox(boot.avatarConfig.avatarCatalogUrl ?? "/assets/avatars/catalog.v1.json");
+    await reportDiagnostics("avatar_sandbox_booted");
+    return;
   }
 
   if (boot.sceneBundleUrl && runtimeFlags.sceneBundles) {

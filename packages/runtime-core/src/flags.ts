@@ -2,6 +2,8 @@ export interface RuntimeFeatureFlags {
   spatialAudio: boolean;
   enterVr: boolean;
   screenShare: boolean;
+  avatarsEnabled: boolean;
+  avatarFallbackCapsulesEnabled: boolean;
 }
 
 export function createFeatureFlags(overrides?: Partial<RuntimeFeatureFlags>): RuntimeFeatureFlags {
@@ -9,6 +11,8 @@ export function createFeatureFlags(overrides?: Partial<RuntimeFeatureFlags>): Ru
     spatialAudio: true,
     enterVr: true,
     screenShare: false,
+    avatarsEnabled: false,
+    avatarFallbackCapsulesEnabled: true,
     ...overrides
   };
 }
