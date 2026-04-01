@@ -3,6 +3,11 @@ export interface RuntimeFeatureFlags {
   enterVr: boolean;
   screenShare: boolean;
   avatarsEnabled: boolean;
+  avatarPoseBinaryEnabled: boolean;
+  avatarLipsyncEnabled: boolean;
+  avatarLegIkEnabled: boolean;
+  avatarSeatingEnabled: boolean;
+  avatarCustomizationEnabled: boolean;
   avatarFallbackCapsulesEnabled: boolean;
 }
 
@@ -12,6 +17,11 @@ export function createFeatureFlags(overrides?: Partial<RuntimeFeatureFlags>): Ru
     enterVr: true,
     screenShare: false,
     avatarsEnabled: false,
+    avatarPoseBinaryEnabled: false,
+    avatarLipsyncEnabled: false,
+    avatarLegIkEnabled: false,
+    avatarSeatingEnabled: false,
+    avatarCustomizationEnabled: false,
     avatarFallbackCapsulesEnabled: true,
     ...overrides
   };

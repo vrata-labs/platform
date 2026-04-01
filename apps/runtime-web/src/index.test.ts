@@ -29,12 +29,74 @@ test("describeManifest returns room and template", () => {
         avatarsEnabled: false,
         avatarCatalogUrl: "/assets/avatars/catalog.v1.json",
         avatarQualityProfile: "desktop-standard",
+        avatarPoseBinaryEnabled: false,
+        avatarLipsyncEnabled: false,
+        avatarLegIkEnabled: false,
         avatarFallbackCapsulesEnabled: true,
-        avatarSeatsEnabled: false
+        avatarSeatsEnabled: false,
+        avatarCustomizationEnabled: false
       }
     }),
     "demo-room:meeting-room-basic"
   );
+});
+
+test("bootRuntime maps reserved avatar feature flags from health payload", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    if (url.endsWith("/health")) {
+      return new Response(JSON.stringify({
+        features: {
+          xrEnabled: true,
+          voiceEnabled: true,
+          screenShareEnabled: true,
+          roomStateRealtimeEnabled: true,
+          remoteDiagnosticsEnabled: true,
+          sceneBundlesEnabled: true,
+          avatarsEnabled: true,
+          avatarPoseBinaryEnabled: true,
+          avatarLipsyncEnabled: false,
+          avatarLegIkEnabled: true,
+          avatarSeatingEnabled: false,
+          avatarCustomizationEnabled: true,
+          avatarFallbackCapsulesEnabled: true
+        }
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+
+    return new Response(JSON.stringify({
+      roomId: "demo-room",
+      template: "meeting-room-basic",
+      realtime: { roomStateUrl: "ws://127.0.0.1:2567" },
+      theme: { primaryColor: "#5fc8ff", accentColor: "#163354" },
+      assets: [],
+      features: { voice: true, spatialAudio: true, screenShare: false },
+      avatars: {
+        avatarsEnabled: true,
+        avatarCatalogUrl: "/assets/avatars/catalog.v1.json",
+        avatarQualityProfile: "xr",
+        avatarPoseBinaryEnabled: false,
+        avatarLipsyncEnabled: false,
+        avatarLegIkEnabled: false,
+        avatarFallbackCapsulesEnabled: true,
+        avatarSeatsEnabled: false,
+        avatarCustomizationEnabled: false
+      },
+      access: { joinMode: "link", guestAllowed: true }
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+
+  try {
+    const { bootRuntime } = await import("./index.js");
+    const boot = await bootRuntime("http://127.0.0.1:4000", "demo-room", "Mozilla/5.0");
+    assert.equal(boot.envFlags.avatarPoseBinaryEnabled, true);
+    assert.equal(boot.envFlags.avatarLegIkEnabled, true);
+    assert.equal(boot.envFlags.avatarCustomizationEnabled, true);
+    assert.equal(boot.avatarConfig.avatarQualityProfile, "xr");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("formatSpaceOptions appends short room id for duplicate names", () => {

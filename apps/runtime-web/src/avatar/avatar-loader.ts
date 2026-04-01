@@ -26,7 +26,7 @@ export async function loadAvatarCatalog(input: {
     throw new Error(`failed_to_load_avatar_catalog:${catalogResponse.status}`);
   }
   const catalog = parseAvatarCatalog(await catalogResponse.json());
-  const recipesResponse = await fetch(new URL("avatar-recipes.v1.json", catalogResponse.url));
+  const recipesResponse = await fetch(new URL("avatar-recipes.v1.json", catalogResponse.url || input.catalogUrl));
   if (!recipesResponse.ok) {
     throw new Error(`failed_to_load_avatar_recipes:${recipesResponse.status}`);
   }

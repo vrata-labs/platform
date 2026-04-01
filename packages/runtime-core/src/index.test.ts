@@ -10,4 +10,5 @@ test("resolveQualityProfile maps vr to xr", () => {
 test("feature flags allow overrides", () => {
   assert.equal(createFeatureFlags({ screenShare: true }).screenShare, true);
   assert.equal(createFeatureFlags({ avatarsEnabled: true }).avatarsEnabled, true);
+  assert.equal(createFeatureFlags({ avatarLipsyncEnabled: true }).avatarLipsyncEnabled, true);
 });

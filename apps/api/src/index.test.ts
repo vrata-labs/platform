@@ -40,12 +40,25 @@ test("api health exposes env timestamp and dependencies", async () => {
       env?: string;
       timestamp?: string;
       dependencies?: { livekit?: boolean };
-      features?: { avatarsEnabled?: boolean; avatarFallbackCapsulesEnabled?: boolean };
+      features?: {
+        avatarsEnabled?: boolean;
+        avatarPoseBinaryEnabled?: boolean;
+        avatarLipsyncEnabled?: boolean;
+        avatarLegIkEnabled?: boolean;
+        avatarSeatingEnabled?: boolean;
+        avatarCustomizationEnabled?: boolean;
+        avatarFallbackCapsulesEnabled?: boolean;
+      };
     };
     assert.equal(typeof payload.env, "string");
     assert.equal(typeof payload.timestamp, "string");
     assert.equal(typeof payload.dependencies?.livekit, "boolean");
     assert.equal(typeof payload.features?.avatarsEnabled, "boolean");
+    assert.equal(typeof payload.features?.avatarPoseBinaryEnabled, "boolean");
+    assert.equal(typeof payload.features?.avatarLipsyncEnabled, "boolean");
+    assert.equal(typeof payload.features?.avatarLegIkEnabled, "boolean");
+    assert.equal(typeof payload.features?.avatarSeatingEnabled, "boolean");
+    assert.equal(typeof payload.features?.avatarCustomizationEnabled, "boolean");
     assert.equal(typeof payload.features?.avatarFallbackCapsulesEnabled, "boolean");
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
@@ -81,11 +94,18 @@ test("room manifest exposes optional scene bundle url", async () => {
     assert.equal(manifestResponse.ok, true);
       const manifest = (await manifestResponse.json()) as {
         sceneBundle?: { url?: string };
-        avatars?: { avatarsEnabled?: boolean; avatarCatalogUrl?: string };
+        avatars?: {
+          avatarsEnabled?: boolean;
+          avatarCatalogUrl?: string;
+          avatarPoseBinaryEnabled?: boolean;
+          avatarCustomizationEnabled?: boolean;
+        };
       };
       assert.equal(manifest.sceneBundle?.url, "/assets/scenes/the-hall-v1/scene.json");
       assert.equal(manifest.avatars?.avatarsEnabled, false);
       assert.equal(manifest.avatars?.avatarCatalogUrl, "/assets/avatars/catalog.v1.json");
+      assert.equal(manifest.avatars?.avatarPoseBinaryEnabled, false);
+      assert.equal(manifest.avatars?.avatarCustomizationEnabled, false);
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     delete process.env.NOAH_DISABLE_AUTOSTART;
@@ -130,13 +150,21 @@ test("room manifest exposes avatar config when enabled", async () => {
         avatarsEnabled?: boolean;
         avatarCatalogUrl?: string;
         avatarQualityProfile?: string;
+        avatarPoseBinaryEnabled?: boolean;
+        avatarLipsyncEnabled?: boolean;
+        avatarLegIkEnabled?: boolean;
         avatarFallbackCapsulesEnabled?: boolean;
+        avatarCustomizationEnabled?: boolean;
       };
     };
     assert.equal(manifest.avatars?.avatarsEnabled, true);
     assert.equal(manifest.avatars?.avatarCatalogUrl, "/assets/avatars/catalog.v1.json");
     assert.equal(manifest.avatars?.avatarQualityProfile, "xr");
+    assert.equal(manifest.avatars?.avatarPoseBinaryEnabled, false);
+    assert.equal(manifest.avatars?.avatarLipsyncEnabled, false);
+    assert.equal(manifest.avatars?.avatarLegIkEnabled, false);
     assert.equal(manifest.avatars?.avatarFallbackCapsulesEnabled, true);
+    assert.equal(manifest.avatars?.avatarCustomizationEnabled, false);
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     delete process.env.NOAH_DISABLE_AUTOSTART;

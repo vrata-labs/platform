@@ -27,8 +27,12 @@ interface RoomManifest {
     avatarsEnabled: boolean;
     avatarCatalogUrl?: string;
     avatarQualityProfile: "mobile-lite" | "desktop-standard" | "xr";
+    avatarPoseBinaryEnabled: boolean;
+    avatarLipsyncEnabled: boolean;
+    avatarLegIkEnabled: boolean;
     avatarFallbackCapsulesEnabled: boolean;
     avatarSeatsEnabled: boolean;
+    avatarCustomizationEnabled: boolean;
   };
   access: {
     joinMode: "link";
@@ -51,6 +55,11 @@ interface RuntimeHealthResponse {
     remoteDiagnosticsEnabled?: boolean;
     sceneBundlesEnabled?: boolean;
     avatarsEnabled?: boolean;
+    avatarPoseBinaryEnabled?: boolean;
+    avatarLipsyncEnabled?: boolean;
+    avatarLegIkEnabled?: boolean;
+    avatarSeatingEnabled?: boolean;
+    avatarCustomizationEnabled?: boolean;
     avatarFallbackCapsulesEnabled?: boolean;
   };
 }
@@ -171,6 +180,11 @@ export interface RuntimeBootResult {
     remoteDiagnostics: boolean;
     sceneBundles: boolean;
     avatarsEnabled: boolean;
+    avatarPoseBinaryEnabled: boolean;
+    avatarLipsyncEnabled: boolean;
+    avatarLegIkEnabled: boolean;
+    avatarSeatingEnabled: boolean;
+    avatarCustomizationEnabled: boolean;
     avatarFallbackCapsulesEnabled: boolean;
   };
 }
@@ -223,6 +237,11 @@ export async function bootRuntime(
       remoteDiagnostics: healthFeatures.remoteDiagnosticsEnabled ?? true,
       sceneBundles: healthFeatures.sceneBundlesEnabled ?? true,
       avatarsEnabled: healthFeatures.avatarsEnabled ?? false,
+      avatarPoseBinaryEnabled: healthFeatures.avatarPoseBinaryEnabled ?? false,
+      avatarLipsyncEnabled: healthFeatures.avatarLipsyncEnabled ?? false,
+      avatarLegIkEnabled: healthFeatures.avatarLegIkEnabled ?? false,
+      avatarSeatingEnabled: healthFeatures.avatarSeatingEnabled ?? false,
+      avatarCustomizationEnabled: healthFeatures.avatarCustomizationEnabled ?? false,
       avatarFallbackCapsulesEnabled: healthFeatures.avatarFallbackCapsulesEnabled ?? true
     }
   };

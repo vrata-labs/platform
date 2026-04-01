@@ -54,8 +54,12 @@ interface RoomManifest {
     avatarsEnabled: boolean;
     avatarCatalogUrl?: string;
     avatarQualityProfile: "desktop-standard" | "mobile-lite" | "xr";
+    avatarPoseBinaryEnabled: boolean;
+    avatarLipsyncEnabled: boolean;
+    avatarLegIkEnabled: boolean;
     avatarFallbackCapsulesEnabled: boolean;
     avatarSeatsEnabled: boolean;
+    avatarCustomizationEnabled: boolean;
   };
   quality: {
     default: "desktop-standard" | "mobile-lite" | "xr";
@@ -153,8 +157,12 @@ function defaultManifest(roomId: string): RoomManifest {
       avatarsEnabled: false,
       avatarCatalogUrl: "/assets/avatars/catalog.v1.json",
       avatarQualityProfile: "desktop-standard",
+      avatarPoseBinaryEnabled: false,
+      avatarLipsyncEnabled: false,
+      avatarLegIkEnabled: false,
       avatarFallbackCapsulesEnabled: true,
-      avatarSeatsEnabled: false
+      avatarSeatsEnabled: false,
+      avatarCustomizationEnabled: false
     },
     quality: { default: "desktop-standard", mobile: "mobile-lite", xr: "xr" },
     access: { joinMode: "link", guestAllowed: true }
@@ -241,8 +249,12 @@ async function buildManifest(roomId: string): Promise<RoomManifest> {
       avatarsEnabled: room.avatarConfig?.avatarsEnabled ?? false,
       avatarCatalogUrl: room.avatarConfig?.avatarCatalogUrl,
       avatarQualityProfile: room.avatarConfig?.avatarQualityProfile ?? "desktop-standard",
+      avatarPoseBinaryEnabled: process.env.FEATURE_AVATAR_POSE_BINARY === "true",
+      avatarLipsyncEnabled: process.env.FEATURE_AVATAR_LIPSYNC === "true",
+      avatarLegIkEnabled: process.env.FEATURE_AVATAR_LEG_IK === "true",
       avatarFallbackCapsulesEnabled: room.avatarConfig?.avatarFallbackCapsulesEnabled ?? true,
-      avatarSeatsEnabled: room.avatarConfig?.avatarSeatsEnabled ?? false
+      avatarSeatsEnabled: room.avatarConfig?.avatarSeatsEnabled ?? false,
+      avatarCustomizationEnabled: process.env.FEATURE_AVATAR_CUSTOMIZATION === "true"
     },
     quality: { default: "desktop-standard", mobile: "mobile-lite", xr: "xr" },
     access: { joinMode: "link", guestAllowed: room.guestAllowed ?? true }
@@ -441,6 +453,11 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
         remoteDiagnosticsEnabled: process.env.FEATURE_REMOTE_DIAGNOSTICS !== "false",
         sceneBundlesEnabled: process.env.FEATURE_SCENE_BUNDLES !== "false",
         avatarsEnabled: process.env.FEATURE_AVATARS !== "false",
+        avatarPoseBinaryEnabled: process.env.FEATURE_AVATAR_POSE_BINARY === "true",
+        avatarLipsyncEnabled: process.env.FEATURE_AVATAR_LIPSYNC === "true",
+        avatarLegIkEnabled: process.env.FEATURE_AVATAR_LEG_IK === "true",
+        avatarSeatingEnabled: process.env.FEATURE_AVATAR_SEATING === "true",
+        avatarCustomizationEnabled: process.env.FEATURE_AVATAR_CUSTOMIZATION === "true",
         avatarFallbackCapsulesEnabled: process.env.FEATURE_AVATAR_FALLBACK_CAPSULES !== "false",
         postgresEnabled: Boolean(process.env.POSTGRES_URL),
         controlPlaneAuthEnabled: Boolean(controlPlaneAdminToken)

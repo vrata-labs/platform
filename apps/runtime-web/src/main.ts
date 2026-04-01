@@ -202,9 +202,14 @@ let runtimeFlags = {
   screenShare: true,
   roomStateRealtime: true,
   remoteDiagnostics: true,
-   sceneBundles: true,
-   avatarsEnabled: false,
-   avatarFallbackCapsulesEnabled: true
+  sceneBundles: true,
+  avatarsEnabled: false,
+  avatarPoseBinaryEnabled: false,
+  avatarLipsyncEnabled: false,
+  avatarLegIkEnabled: false,
+  avatarSeatingEnabled: false,
+  avatarCustomizationEnabled: false,
+  avatarFallbackCapsulesEnabled: true
 };
 let effectiveCleanSceneMode = requestedCleanSceneMode;
 let availableSpaces: RuntimeSpaceOption[] = [];
@@ -1425,6 +1430,11 @@ async function main(): Promise<void> {
     remoteDiagnostics: boot.envFlags.remoteDiagnostics,
     sceneBundles: boot.envFlags.sceneBundles,
     avatarsEnabled: boot.envFlags.avatarsEnabled && boot.avatarConfig.avatarsEnabled,
+    avatarPoseBinaryEnabled: boot.envFlags.avatarPoseBinaryEnabled,
+    avatarLipsyncEnabled: boot.envFlags.avatarLipsyncEnabled,
+    avatarLegIkEnabled: boot.envFlags.avatarLegIkEnabled,
+    avatarSeatingEnabled: boot.envFlags.avatarSeatingEnabled,
+    avatarCustomizationEnabled: boot.envFlags.avatarCustomizationEnabled,
     avatarFallbackCapsulesEnabled: boot.envFlags.avatarFallbackCapsulesEnabled && boot.avatarConfig.avatarFallbackCapsulesEnabled
   };
   debugState.featureFlags = runtimeFlags;
