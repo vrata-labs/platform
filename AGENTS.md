@@ -78,7 +78,7 @@
 - When something looks black or wrong, first inspect `sceneDebug` diagnostics before tweaking spawn/materials by hand.
 - If a scene already worked in another web project, copy its rendering assumptions first and only then adapt to `noah`.
 - User preference: after substantial implementation work, prepare changes so they are ready to commit/push, and if the user asks to finish the task end-to-end they usually want commit + push included unless they explicitly say otherwise. Do not override higher-priority git safety rules when commit was not requested.
-- User preference: all code changes made by the agent should be checked on stage, not only locally; if stage was not updated yet, finish by deploying and verifying there.
+- User preference: all code changes made by the agent should be checked on stage, not only locally; if stage was not updated yet, finish by deploying and verifying there. Pure docs/notes-only changes such as `AGENTS.md` do not require a stage deploy.
 - After finishing code changes, default flow is not just local verification: publish the current changes to staging and verify them there as well.
 - Default verification after changes should include the full local e2e suite (`pnpm test:e2e`), then staging verification on the current staging host.
 - Staging verification should include at least the staging smoke suite (`pnpm test:e2e:staging`), and for meaningful runtime changes it should also cover the key public flows on staging: room load, selector/navigation if relevant, and important scene rooms such as Hall/BlueOffice when scene behavior could be affected.
