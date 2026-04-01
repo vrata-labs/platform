@@ -14,8 +14,7 @@ import { captureCanvasDiagnostics, createEmptySceneDiagnostics, inspectSceneObje
 import { loadSceneBundle } from "./scene-loader.js";
 import { detectXrSupport, getEnterVrVisibility } from "./xr.js";
 import { createEmptyAvatarDiagnostics } from "./avatar/avatar-debug.js";
-import { loadAvatarCatalog } from "./avatar/avatar-loader.js";
-import { createProceduralAvatarInstance, positionAvatarRing } from "./avatar/avatar-instance.js";
+import { bootAvatarSandbox, setAvatarSandboxStatus } from "./avatar/avatar-sandbox.js";
 import { createAvatarRegistry } from "./avatar/avatar-registry.js";
 
 function fallbackUuid(): string {
@@ -502,79 +501,6 @@ async function loadAvailableSpaces(currentRoomId: string): Promise<void> {
   } catch (_error: unknown) {
     availableSpaces = [];
     renderSpaceSelector("unavailable", [], currentRoomId);
-  }
-}
-
-function setAvatarSandboxStatus(message: string): void {
-  avatarSandboxStatusEl.textContent = message;
-}
-
-async function bootAvatarSandbox(catalogUrl: string): Promise<void> {
-  avatarSandboxPanel.hidden = false;
-  avatarPresetSelect.replaceChildren();
-  avatarPresetSelect.disabled = true;
-  setAvatarSandboxStatus("Loading avatar presets...");
-  debugState.avatarDebug = {
-    ...createEmptyAvatarDiagnostics(),
-    state: "loading",
-    sandboxEntryPoint: catalogUrl
-  };
-
-  try {
-    const loaded = await loadAvatarCatalog({
-      catalogUrl,
-      renderer
-    });
-    const instances = loaded.presets.map((preset) => createProceduralAvatarInstance(preset));
-    positionAvatarRing(instances);
-    avatarSandboxRegistry?.root.removeFromParent();
-    avatarSandboxRegistry = createAvatarRegistry(instances);
-    scene.add(avatarSandboxRegistry.root);
-
-    const selectedAvatarId = instances[0]?.avatarId ?? null;
-    if (selectedAvatarId) {
-      avatarSandboxRegistry.selectAvatar(selectedAvatarId);
-    }
-
-    for (const instance of instances) {
-      const option = document.createElement("option");
-      option.value = instance.avatarId;
-      option.textContent = instance.label;
-      option.selected = instance.avatarId === selectedAvatarId;
-      avatarPresetSelect.appendChild(option);
-    }
-    avatarPresetSelect.disabled = instances.length === 0;
-    avatarPresetSelect.onchange = () => {
-      const avatarId = avatarPresetSelect.value;
-      avatarSandboxRegistry?.selectAvatar(avatarId);
-      debugState.avatarDebug.selectedAvatarId = avatarId;
-      setAvatarSandboxStatus(`Selected ${avatarId}`);
-    };
-
-    player.position.set(0, 0, 8.5);
-    yaw = Math.PI;
-    pitchAngle = -0.08;
-    player.rotation.y = yaw;
-    pitch.rotation.x = pitchAngle;
-    setFallbackEnvironmentVisible(true);
-    debugState.avatarDebug = {
-      ...loaded.diagnostics,
-      selectedAvatarId,
-      fallbackActive: false,
-      fallbackReason: null,
-      sandboxEntryPoint: catalogUrl
-    };
-    setAvatarSandboxStatus(`Loaded ${instances.length} presets`);
-  } catch (error) {
-    console.error(error);
-    debugState.avatarDebug = {
-      ...createEmptyAvatarDiagnostics(),
-      state: "failed",
-      fallbackActive: true,
-      fallbackReason: error instanceof Error ? error.message : "avatar_sandbox_failed",
-      sandboxEntryPoint: catalogUrl
-    };
-    setAvatarSandboxStatus("Avatar sandbox failed, capsule fallback active");
   }
 }
 
@@ -1464,7 +1390,31 @@ async function main(): Promise<void> {
     stopShareButton.disabled = true;
     setStatus("Avatar sandbox ready");
     setRoomStateStatus("Room-state: sandbox disabled");
-    await bootAvatarSandbox(boot.avatarConfig.avatarCatalogUrl ?? "/assets/avatars/catalog.v1.json");
+    debugState.avatarDebug = {
+      ...createEmptyAvatarDiagnostics(),
+      state: "loading",
+      sandboxEntryPoint: boot.avatarConfig.avatarCatalogUrl ?? "/assets/avatars/catalog.v1.json"
+    };
+    const sandboxResult = await bootAvatarSandbox({
+      catalogUrl: boot.avatarConfig.avatarCatalogUrl ?? "/assets/avatars/catalog.v1.json",
+      renderer,
+      scene,
+      player,
+      previousRegistry: avatarSandboxRegistry,
+      elements: {
+        panelEl: avatarSandboxPanel,
+        presetSelectEl: avatarPresetSelect,
+        statusEl: avatarSandboxStatusEl
+      }
+    });
+    avatarSandboxRegistry = sandboxResult.registry;
+    yaw = sandboxResult.yaw;
+    pitchAngle = sandboxResult.pitch;
+    player.rotation.y = yaw;
+    pitch.rotation.x = pitchAngle;
+    setFallbackEnvironmentVisible(true);
+    debugState.avatarDebug = sandboxResult.diagnostics;
+    setAvatarSandboxStatus(avatarSandboxStatusEl, sandboxResult.statusMessage);
     await reportDiagnostics("avatar_sandbox_booted");
     return;
   }

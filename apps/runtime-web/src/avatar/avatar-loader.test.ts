@@ -60,3 +60,49 @@ test("loadAvatarCatalog loads procedural technical assets without pack fetch", a
     globalThis.fetch = originalFetch;
   }
 });
+
+test("loadAvatarCatalog fails on missing recipe payload", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    if (url.endsWith("catalog.v1.json")) {
+      return new Response(JSON.stringify({
+        schemaVersion: 1,
+        catalogId: "technical-v1",
+        assetVersion: "v1",
+        rig: "humanoid-v1",
+        packUrl: "/assets/avatars/avatar-pack.v1.glb",
+        packFormat: "procedural-debug-v1",
+        presets: [{
+          avatarId: "preset-01",
+          label: "Preset 1",
+          recipeId: "preset-01",
+          validation: {
+            triangleCount: 12000,
+            materialCount: 1,
+            textureCount: 1,
+            morphTargets: ["blink", "viseme-aa"],
+            animationClips: ["idle"],
+            skeletonSignature: "humanoid-v1/base"
+          }
+        }]
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    if (url.endsWith("avatar-recipes.v1.json")) {
+      return new Response(JSON.stringify({ schemaVersion: 1, recipes: [] }), {
+        status: 200,
+        headers: { "content-type": "application/json" }
+      });
+    }
+    return new Response("not found", { status: 404 });
+  };
+
+  try {
+    await assert.rejects(
+      () => loadAvatarCatalog({ catalogUrl: "https://example.com/assets/avatars/catalog.v1.json" }),
+      /missing_avatar_recipe:preset-01/
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
