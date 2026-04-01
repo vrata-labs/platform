@@ -17,6 +17,7 @@ import { createAvatarLoadingDiagnostics, createEmptyAvatarDiagnostics } from "./
 import { resetAvatarSandbox } from "./avatar/avatar-fallback.js";
 import { createInitialAvatarRuntimeFlags, resolveAvatarCatalogUrl, resolveAvatarRuntimeFlags } from "./avatar/avatar-runtime.js";
 import { bootAvatarSandbox, setAvatarSandboxStatus } from "./avatar/avatar-sandbox.js";
+import { resetAvatarSession, startAvatarSandboxSession } from "./avatar/avatar-session.js";
 import { createAvatarRegistry } from "./avatar/avatar-registry.js";
 
 function fallbackUuid(): string {
@@ -1369,13 +1370,14 @@ async function main(): Promise<void> {
   floorMaterial.color.set(boot.theme.accentColor);
   wallMaterial.color.set(boot.theme.primaryColor);
   const avatarCatalogUrl = resolveAvatarCatalogUrl(boot);
-  const avatarReset = resetAvatarSandbox({
+  const avatarElements = {
+    panelEl: avatarSandboxPanel,
+    presetSelectEl: avatarPresetSelect,
+    statusEl: avatarSandboxStatusEl
+  };
+  const avatarReset = resetAvatarSession({
     previousRegistry: avatarSandboxRegistry,
-    elements: {
-      panelEl: avatarSandboxPanel,
-      presetSelectEl: avatarPresetSelect,
-      statusEl: avatarSandboxStatusEl
-    },
+    elements: avatarElements,
     sandboxEntryPoint: avatarCatalogUrl
   });
   avatarSandboxRegistry = avatarReset.registry;
@@ -1393,19 +1395,14 @@ async function main(): Promise<void> {
     stopShareButton.disabled = true;
     setStatus("Avatar sandbox ready");
     setRoomStateStatus("Room-state: sandbox disabled");
-    avatarSandboxPanel.hidden = false;
     debugState.avatarDebug = createAvatarLoadingDiagnostics(avatarCatalogUrl);
-    const sandboxResult = await bootAvatarSandbox({
+    const sandboxResult = await startAvatarSandboxSession({
       catalogUrl: avatarCatalogUrl,
       renderer,
       scene,
       player,
       previousRegistry: avatarSandboxRegistry,
-      elements: {
-        panelEl: avatarSandboxPanel,
-        presetSelectEl: avatarPresetSelect,
-        statusEl: avatarSandboxStatusEl
-      }
+      elements: avatarElements
     });
     avatarSandboxRegistry = sandboxResult.registry;
     yaw = sandboxResult.yaw;
@@ -1415,7 +1412,7 @@ async function main(): Promise<void> {
     setFallbackEnvironmentVisible(true);
     debugState.avatarDebug = sandboxResult.diagnostics;
     setAvatarSandboxStatus(avatarSandboxStatusEl, sandboxResult.statusMessage);
-    await reportDiagnostics(sandboxResult.diagnostics.state === "loaded" ? "avatar_sandbox_booted" : "avatar_sandbox_failed");
+    await reportDiagnostics(sandboxResult.note);
     return;
   }
 
