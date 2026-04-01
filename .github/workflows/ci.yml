@@ -62,6 +62,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Build asset pipeline
+        run: pnpm --filter @noah/asset-pipeline build
+
       - name: Asset pipeline tests
         run: pnpm --filter @noah/asset-pipeline test
 
