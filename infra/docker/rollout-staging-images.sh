@@ -19,6 +19,21 @@ ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 ENV_FILE="$ROOT_DIR/infra/docker/.env.staging"
 COMPOSE_FILE="$ROOT_DIR/infra/docker/compose.staging.yml"
 
+log_disk_state() {
+  echo "== disk usage =="
+  df -h / /var/lib/docker /var/lib/containerd 2>/dev/null || df -h /
+  echo "== docker usage =="
+  docker system df || true
+}
+
+cleanup_docker_state() {
+  echo "== docker cleanup =="
+  docker container prune -f || true
+  docker image prune -af || true
+  docker builder prune -af || true
+  docker network prune -f || true
+}
+
 if [ ! -f "$ENV_FILE" ]; then
   echo "missing_env_file:$ENV_FILE" >&2
   exit 1
@@ -62,6 +77,12 @@ for key in ('API_IMAGE_REPO', 'ROOM_STATE_IMAGE_REPO', 'IMAGE_TAG'):
 env_path.write_text('\n'.join(rendered) + '\n')
 PY
 
+log_disk_state
+cleanup_docker_state
+log_disk_state
+
 docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" pull api room-state
-docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" up -d --no-build api room-state caddy
+docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" up -d --no-build --pull never --remove-orphans api room-state caddy
+cleanup_docker_state
+log_disk_state
 docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" ps
