@@ -1,6 +1,10 @@
 import * as THREE from "three";
 
-import { createEmptyAvatarDiagnostics, type AvatarDiagnostics } from "./avatar-debug.js";
+import {
+  createAvatarFailedDiagnostics,
+  createAvatarLoadedDiagnostics,
+  type AvatarDiagnostics
+} from "./avatar-debug.js";
 import { createProceduralAvatarInstance, positionAvatarRing } from "./avatar-instance.js";
 import { loadAvatarCatalog } from "./avatar-loader.js";
 import { createAvatarRegistry, type AvatarRegistry } from "./avatar-registry.js";
@@ -72,13 +76,15 @@ export async function bootAvatarSandbox(input: {
     setAvatarSandboxStatus(statusEl, `Loaded ${instances.length} presets`);
     return {
       registry,
-      diagnostics: {
-        ...loaded.diagnostics,
+      diagnostics: createAvatarLoadedDiagnostics({
+        sandboxEntryPoint: input.catalogUrl,
         selectedAvatarId,
-        fallbackActive: false,
-        fallbackReason: null,
-        sandboxEntryPoint: input.catalogUrl
-      },
+        catalogId: loaded.diagnostics.catalogId,
+        packUrl: loaded.diagnostics.packUrl,
+        packFormat: loaded.diagnostics.packFormat,
+        presetCount: loaded.diagnostics.presetCount,
+        validatorSummary: loaded.diagnostics.validatorSummary
+      }),
       statusMessage: `Loaded ${instances.length} presets`,
       selectedAvatarId,
       yaw: Math.PI,
@@ -87,13 +93,10 @@ export async function bootAvatarSandbox(input: {
   } catch (error) {
     return {
       registry: null,
-      diagnostics: {
-        ...createEmptyAvatarDiagnostics(),
-        state: "failed",
-        fallbackActive: true,
-        fallbackReason: error instanceof Error ? error.message : "avatar_sandbox_failed",
-        sandboxEntryPoint: input.catalogUrl
-      },
+      diagnostics: createAvatarFailedDiagnostics(
+        input.catalogUrl,
+        error instanceof Error ? error.message : "avatar_sandbox_failed"
+      ),
       statusMessage: "Avatar sandbox failed, capsule fallback active",
       selectedAvatarId: null,
       yaw: Math.PI,

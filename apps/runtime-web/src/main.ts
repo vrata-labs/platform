@@ -709,6 +709,7 @@ async function reportDiagnostics(note?: string): Promise<void> {
       lastPresenceRefreshAt: debugState.lastPresenceRefreshAt,
       featureFlags: debugState.featureFlags,
       faultInjection: debugState.faultInjection,
+      avatarDebug: debugState.avatarDebug,
       sceneDebug: {
         ...debugState.sceneDebug,
         missingAssetCount: debugState.sceneDebug.missingAssets.length,

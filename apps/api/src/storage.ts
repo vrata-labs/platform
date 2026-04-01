@@ -82,6 +82,18 @@ export interface RuntimeDiagnosticRecord {
   lastRecoveryAction?: string;
   featureFlags?: Record<string, unknown>;
   faultInjection?: Record<string, unknown>;
+  avatarDebug?: {
+    state?: string;
+    catalogId?: string | null;
+    packUrl?: string | null;
+    packFormat?: string | null;
+    presetCount?: number;
+    selectedAvatarId?: string | null;
+    fallbackActive?: boolean;
+    fallbackReason?: string | null;
+    sandboxEntryPoint?: string | null;
+    validatorSummary?: string[];
+  };
   sceneDebug?: {
     bundleUrl?: string | null;
     state?: string;

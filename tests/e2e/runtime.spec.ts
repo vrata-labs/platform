@@ -85,6 +85,56 @@ test("bot mode emits movement diagnostics automatically", async ({ page, request
   expect(diagnostics.items.some((item) => Math.abs(item.localPosition.x) + Math.abs(item.localPosition.z) > 0.5)).toBeTruthy();
 });
 
+test("avatar sandbox exposes avatar diagnostics and persists them via diagnostics API", async ({ page, request }) => {
+  await page.goto("/rooms/demo-room?avatarsandbox=1&debug=1");
+
+  await expect.poll(async () => {
+    const debug = await page.evaluate(() => (window as Window & {
+      __NOAH_DEBUG__?: {
+        avatarDebug?: {
+          state?: string;
+          presetCount?: number;
+          selectedAvatarId?: string | null;
+          fallbackActive?: boolean;
+        };
+      };
+    }).__NOAH_DEBUG__);
+
+    return {
+      state: debug?.avatarDebug?.state,
+      presetCount: debug?.avatarDebug?.presetCount ?? 0,
+      selectedAvatarId: debug?.avatarDebug?.selectedAvatarId ?? null,
+      fallbackActive: debug?.avatarDebug?.fallbackActive ?? true
+    };
+  }, {
+    timeout: 15000,
+    intervals: [1000, 2000, 3000]
+  }).toEqual({
+    state: "loaded",
+    presetCount: 10,
+    selectedAvatarId: "preset-01",
+    fallbackActive: false
+  });
+
+  await expect.poll(async () => {
+    const diagnosticsResponse = await request.get("/api/rooms/demo-room/diagnostics");
+    const diagnostics = (await diagnosticsResponse.json()) as {
+      items: Array<{
+        note?: string;
+        avatarDebug?: { state?: string; presetCount?: number; fallbackReason?: string | null };
+      }>;
+    };
+
+    return diagnostics.items.some((item) => item.note === "avatar_sandbox_booted"
+      && item.avatarDebug?.state === "loaded"
+      && item.avatarDebug?.presetCount === 10
+      && !item.avatarDebug?.fallbackReason);
+  }, {
+    timeout: 15000,
+    intervals: [1000, 2000, 3000]
+  }).toBeTruthy();
+});
+
 test("room creation API returns a usable room link", async ({ page, request }) => {
   const createRoomResponse = await request.post("/api/rooms", {
     headers: {

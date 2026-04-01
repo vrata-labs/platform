@@ -25,3 +25,45 @@ export function createEmptyAvatarDiagnostics(): AvatarDiagnostics {
     validatorSummary: []
   };
 }
+
+export function createAvatarLoadingDiagnostics(sandboxEntryPoint: string): AvatarDiagnostics {
+  return {
+    ...createEmptyAvatarDiagnostics(),
+    state: "loading",
+    sandboxEntryPoint
+  };
+}
+
+export function createAvatarFailedDiagnostics(sandboxEntryPoint: string, reason: string): AvatarDiagnostics {
+  return {
+    ...createEmptyAvatarDiagnostics(),
+    state: "failed",
+    fallbackActive: true,
+    fallbackReason: reason,
+    sandboxEntryPoint
+  };
+}
+
+export function createAvatarLoadedDiagnostics(input: {
+  sandboxEntryPoint: string;
+  selectedAvatarId: string | null;
+  catalogId: string | null;
+  packUrl: string | null;
+  packFormat: string | null;
+  presetCount: number;
+  validatorSummary: string[];
+}): AvatarDiagnostics {
+  return {
+    ...createEmptyAvatarDiagnostics(),
+    state: "loaded",
+    catalogId: input.catalogId,
+    packUrl: input.packUrl,
+    packFormat: input.packFormat,
+    presetCount: input.presetCount,
+    selectedAvatarId: input.selectedAvatarId,
+    fallbackActive: false,
+    fallbackReason: null,
+    sandboxEntryPoint: input.sandboxEntryPoint,
+    validatorSummary: input.validatorSummary
+  };
+}
