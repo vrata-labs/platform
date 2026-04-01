@@ -81,7 +81,7 @@ log_disk_state
 cleanup_docker_state
 log_disk_state
 
-docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" pull api room-state
+docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" pull api room-state minio-bootstrap
 docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" up -d --no-build --pull never --remove-orphans api room-state caddy
 cleanup_docker_state
 log_disk_state
