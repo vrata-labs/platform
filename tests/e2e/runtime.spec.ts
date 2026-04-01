@@ -135,6 +135,61 @@ test("avatar sandbox exposes avatar diagnostics and persists them via diagnostic
   }).toBeTruthy();
 });
 
+test("avatar sandbox falls back cleanly on invalid catalog url", async ({ page, request }) => {
+  const createRoomResponse = await request.post("/api/rooms", {
+    headers: {
+      "x-noah-admin-token": "test-admin-token"
+    },
+    data: {
+      tenantId: "demo-tenant",
+      templateId: "meeting-room-basic",
+      name: "Avatar Broken Room",
+      avatarConfig: {
+        avatarsEnabled: true,
+        avatarCatalogUrl: "/assets/avatars/missing-catalog.v1.json",
+        avatarQualityProfile: "desktop-standard",
+        avatarFallbackCapsulesEnabled: true,
+        avatarSeatsEnabled: false
+      }
+    }
+  });
+  expect(createRoomResponse.ok()).toBeTruthy();
+  const room = (await createRoomResponse.json()) as { roomLink: string; roomId: string };
+
+  await page.goto(`${room.roomLink}?avatarsandbox=1&debug=1`);
+
+  await expect.poll(async () => {
+    const debug = await page.evaluate(() => (window as Window & {
+      __NOAH_DEBUG__?: {
+        avatarDebug?: { state?: string; fallbackActive?: boolean; fallbackReason?: string | null };
+      };
+    }).__NOAH_DEBUG__);
+    return {
+      state: debug?.avatarDebug?.state,
+      fallbackActive: debug?.avatarDebug?.fallbackActive ?? false,
+      fallbackReason: debug?.avatarDebug?.fallbackReason ?? null
+    };
+  }, {
+    timeout: 15000,
+    intervals: [1000, 2000, 3000]
+  }).toEqual({
+    state: "failed",
+    fallbackActive: true,
+    fallbackReason: "failed_to_load_avatar_catalog:404"
+  });
+
+  await expect.poll(async () => {
+    const diagnosticsResponse = await request.get(`/api/rooms/${room.roomId}/diagnostics`);
+    const diagnostics = (await diagnosticsResponse.json()) as {
+      items: Array<{ note?: string; avatarDebug?: { fallbackReason?: string | null } }>;
+    };
+    return diagnostics.items.some((item) => item.note === "avatar_sandbox_failed" && item.avatarDebug?.fallbackReason === "failed_to_load_avatar_catalog:404");
+  }, {
+    timeout: 15000,
+    intervals: [1000, 2000, 3000]
+  }).toBeTruthy();
+});
+
 test("room creation API returns a usable room link", async ({ page, request }) => {
   const createRoomResponse = await request.post("/api/rooms", {
     headers: {

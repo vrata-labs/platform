@@ -13,7 +13,8 @@ import { applySpatialSettings, createSpatialAudioSettings } from "./spatial-audi
 import { captureCanvasDiagnostics, createEmptySceneDiagnostics, inspectSceneObject } from "./scene-debug.js";
 import { loadSceneBundle } from "./scene-loader.js";
 import { detectXrSupport, getEnterVrVisibility } from "./xr.js";
-import { createEmptyAvatarDiagnostics } from "./avatar/avatar-debug.js";
+import { createAvatarLoadingDiagnostics, createEmptyAvatarDiagnostics } from "./avatar/avatar-debug.js";
+import { resetAvatarSandbox } from "./avatar/avatar-fallback.js";
 import { createInitialAvatarRuntimeFlags, resolveAvatarCatalogUrl, resolveAvatarRuntimeFlags } from "./avatar/avatar-runtime.js";
 import { bootAvatarSandbox, setAvatarSandboxStatus } from "./avatar/avatar-sandbox.js";
 import { createAvatarRegistry } from "./avatar/avatar-registry.js";
@@ -1368,7 +1369,17 @@ async function main(): Promise<void> {
   floorMaterial.color.set(boot.theme.accentColor);
   wallMaterial.color.set(boot.theme.primaryColor);
   const avatarCatalogUrl = resolveAvatarCatalogUrl(boot);
-  debugState.avatarDebug.sandboxEntryPoint = avatarCatalogUrl;
+  const avatarReset = resetAvatarSandbox({
+    previousRegistry: avatarSandboxRegistry,
+    elements: {
+      panelEl: avatarSandboxPanel,
+      presetSelectEl: avatarPresetSelect,
+      statusEl: avatarSandboxStatusEl
+    },
+    sandboxEntryPoint: avatarCatalogUrl
+  });
+  avatarSandboxRegistry = avatarReset.registry;
+  debugState.avatarDebug = avatarReset.diagnostics;
   if (!effectiveCleanSceneMode) {
     scene.fog = new THREE.Fog(new THREE.Color(boot.theme.accentColor).getHex(), 12, 50);
   } else {
@@ -1382,11 +1393,8 @@ async function main(): Promise<void> {
     stopShareButton.disabled = true;
     setStatus("Avatar sandbox ready");
     setRoomStateStatus("Room-state: sandbox disabled");
-    debugState.avatarDebug = {
-      ...createEmptyAvatarDiagnostics(),
-      state: "loading",
-      sandboxEntryPoint: avatarCatalogUrl
-    };
+    avatarSandboxPanel.hidden = false;
+    debugState.avatarDebug = createAvatarLoadingDiagnostics(avatarCatalogUrl);
     const sandboxResult = await bootAvatarSandbox({
       catalogUrl: avatarCatalogUrl,
       renderer,
@@ -1407,7 +1415,7 @@ async function main(): Promise<void> {
     setFallbackEnvironmentVisible(true);
     debugState.avatarDebug = sandboxResult.diagnostics;
     setAvatarSandboxStatus(avatarSandboxStatusEl, sandboxResult.statusMessage);
-    await reportDiagnostics("avatar_sandbox_booted");
+    await reportDiagnostics(sandboxResult.diagnostics.state === "loaded" ? "avatar_sandbox_booted" : "avatar_sandbox_failed");
     return;
   }
 
