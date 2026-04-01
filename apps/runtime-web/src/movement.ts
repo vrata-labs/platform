@@ -14,11 +14,13 @@ export interface XrTurnState {
   cooldownSeconds: number;
 }
 
+const DEFAULT_ROOM_POSITION_LIMIT = 24;
+
 export function applyDeadzone(value: number, deadzone = 0.18): number {
   return Math.abs(value) < deadzone ? 0 : value;
 }
 
-export function clampRoomPosition(position: FlatVector, limit = 6): FlatVector {
+export function clampRoomPosition(position: FlatVector, limit = DEFAULT_ROOM_POSITION_LIMIT): FlatVector {
   return {
     x: Math.max(-limit, Math.min(limit, position.x)),
     z: Math.max(-limit, Math.min(limit, position.z))

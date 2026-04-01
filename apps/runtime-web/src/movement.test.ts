@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { applySnapTurn, computeKeyboardDirection, sanitizeXrAxes, stepFlatMovement } from "./movement.js";
+import { applySnapTurn, clampRoomPosition, computeKeyboardDirection, sanitizeXrAxes, stepFlatMovement } from "./movement.js";
 
 test("computeKeyboardDirection supports arrows and WASD", () => {
   assert.deepEqual(computeKeyboardDirection({ KeyW: true, KeyD: true }), { x: 1, z: -1 });
@@ -12,6 +12,14 @@ test("stepFlatMovement normalizes diagonal movement", () => {
   const next = stepFlatMovement({ x: 0, z: 0 }, { x: 1, z: 1 }, 2, 1);
   assert.equal(Math.round(next.x * 1000) / 1000, 1.414);
   assert.equal(Math.round(next.z * 1000) / 1000, 1.414);
+});
+
+test("clampRoomPosition allows movement beyond old room limit", () => {
+  assert.deepEqual(clampRoomPosition({ x: 12, z: -18 }), { x: 12, z: -18 });
+});
+
+test("clampRoomPosition clamps symmetrically at new room limit", () => {
+  assert.deepEqual(clampRoomPosition({ x: 30, z: -30 }), { x: 24, z: -24 });
 });
 
 test("applySnapTurn rotates in fixed increments with cooldown", () => {

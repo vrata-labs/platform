@@ -1432,6 +1432,17 @@ async function main(): Promise<void> {
     }).catch((error: unknown) => {
       console.error(error);
       const issue = classifyMediaError(error);
+      if (runtimeUiState.issueCode === "room_state_failed") {
+        runtimeUiState = {
+          ...runtimeUiState,
+          audioState: "degraded",
+          lastRecoveryAction: "media_passive_connect_failed"
+        };
+        debugState.audioState = runtimeUiState.audioState;
+        debugState.lastRecoveryAction = runtimeUiState.lastRecoveryAction;
+        void reportDiagnostics(issue.diagnosticsNote);
+        return;
+      }
       applyIssue(issue, {
         degradedMode: "presence_only",
         audioState: "degraded",

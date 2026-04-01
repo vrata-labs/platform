@@ -61,20 +61,28 @@ test("two participants can coexist in same room", async ({ browser, request }) =
 });
 
 test("bot mode emits movement diagnostics automatically", async ({ page, request }) => {
-  await page.goto("/rooms/demo-room?bot=orbit&debug=1");
-  await page.waitForTimeout(5000);
+  await page.goto("/rooms/demo-room?bot=line&debug=1");
+
+  await expect.poll(async () => {
+    const debug = await page.evaluate(() => (window as Window & { __NOAH_DEBUG__?: { botMode: string; localPosition: { x: number; z: number } } }).__NOAH_DEBUG__);
+    expect(debug?.botMode).toBe("line");
+    return Math.max(Math.abs(debug?.localPosition.x ?? 0), Math.abs(debug?.localPosition.z ?? 0));
+  }, {
+    timeout: 10000,
+    intervals: [1000, 2000, 3000]
+  }).toBeGreaterThan(6);
 
   const debug = await page.evaluate(() => (window as Window & { __NOAH_DEBUG__?: { botMode: string; localPosition: { x: number; z: number } } }).__NOAH_DEBUG__);
-  expect(debug?.botMode).toBe("orbit");
-  expect(Math.abs(debug?.localPosition.x ?? 0) + Math.abs(debug?.localPosition.z ?? 0)).toBeGreaterThan(0.5);
+  expect(debug?.botMode).toBe("line");
+  expect(Math.max(Math.abs(debug?.localPosition.x ?? 0), Math.abs(debug?.localPosition.z ?? 0))).toBeGreaterThan(6);
 
   const diagnosticsResponse = await request.get("/api/rooms/demo-room/diagnostics");
   const diagnostics = (await diagnosticsResponse.json()) as {
-    items: Array<{ botMode?: string; localPosition: { x: number; z: number } }>;
+    items: Array<{ localPosition: { x: number; z: number } }>;
   };
-  const recent = diagnostics.items.slice(-3);
-  expect(recent.length).toBeGreaterThan(0);
-  expect(recent.some((item) => Math.abs(item.localPosition.x) + Math.abs(item.localPosition.z) > 0.5)).toBeTruthy();
+
+  expect(diagnostics.items.length).toBeGreaterThan(0);
+  expect(diagnostics.items.some((item) => Math.abs(item.localPosition.x) + Math.abs(item.localPosition.z) > 0.5)).toBeTruthy();
 });
 
 test("room creation API returns a usable room link", async ({ page, request }) => {
