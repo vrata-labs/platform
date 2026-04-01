@@ -64,6 +64,11 @@ const featureVoiceInput = mustElement<HTMLInputElement>("#feature-voice-input");
 const featureSpatialInput = mustElement<HTMLInputElement>("#feature-spatial-input");
 const featureShareInput = mustElement<HTMLInputElement>("#feature-share-input");
 const guestAccessInput = mustElement<HTMLInputElement>("#guest-access-input");
+const avatarEnabledInput = mustElement<HTMLInputElement>("#avatar-enabled-input");
+const avatarCatalogUrlInput = mustElement<HTMLInputElement>("#avatar-catalog-url-input");
+const avatarQualitySelect = mustElement<HTMLSelectElement>("#avatar-quality-select");
+const avatarFallbackInput = mustElement<HTMLInputElement>("#avatar-fallback-input");
+const avatarSeatsInput = mustElement<HTMLInputElement>("#avatar-seats-input");
 const updateRoomButton = mustElement<HTMLButtonElement>("#update-room");
 const deleteRoomButton = mustElement<HTMLButtonElement>("#delete-room");
 const publishStatus = mustElement<HTMLDivElement>("#publish-status");
@@ -173,6 +178,11 @@ async function selectRoom(room: typeof state.selectedRoom): Promise<void> {
   featureSpatialInput.checked = room.features?.spatialAudio ?? true;
   featureShareInput.checked = room.features?.screenShare ?? true;
   guestAccessInput.checked = room.guestAllowed ?? state.selectedRoomManifest?.access.guestAllowed ?? true;
+  avatarEnabledInput.checked = room.avatarConfig?.avatarsEnabled ?? state.selectedRoomManifest?.avatars?.avatarsEnabled ?? false;
+  avatarCatalogUrlInput.value = room.avatarConfig?.avatarCatalogUrl ?? state.selectedRoomManifest?.avatars?.avatarCatalogUrl ?? "/assets/avatars/catalog.v1.json";
+  avatarQualitySelect.value = room.avatarConfig?.avatarQualityProfile ?? state.selectedRoomManifest?.avatars?.avatarQualityProfile ?? "desktop-standard";
+  avatarFallbackInput.checked = room.avatarConfig?.avatarFallbackCapsulesEnabled ?? state.selectedRoomManifest?.avatars?.avatarFallbackCapsulesEnabled ?? true;
+  avatarSeatsInput.checked = room.avatarConfig?.avatarSeatsEnabled ?? state.selectedRoomManifest?.avatars?.avatarSeatsEnabled ?? false;
   const assetIds = new Set(room.assetIds ?? []);
   Array.from(assetSelect.options).forEach((option) => {
     option.selected = assetIds.has(option.value);
@@ -212,6 +222,22 @@ function currentAuth(): { adminToken?: string } {
   const token = adminTokenInput.value.trim();
   localStorage.setItem("noah.controlPlaneAdminToken", token);
   return token ? { adminToken: token } : {};
+}
+
+function collectAvatarConfig(): {
+  avatarsEnabled: boolean;
+  avatarCatalogUrl?: string;
+  avatarQualityProfile: "mobile-lite" | "desktop-standard" | "xr";
+  avatarFallbackCapsulesEnabled: boolean;
+  avatarSeatsEnabled: boolean;
+} {
+  return {
+    avatarsEnabled: avatarEnabledInput.checked,
+    avatarCatalogUrl: avatarCatalogUrlInput.value.trim() || undefined,
+    avatarQualityProfile: avatarQualitySelect.value as "mobile-lite" | "desktop-standard" | "xr",
+    avatarFallbackCapsulesEnabled: avatarFallbackInput.checked,
+    avatarSeatsEnabled: avatarSeatsInput.checked
+  };
 }
 
 function renderTenantOptions(): void {
@@ -339,6 +365,7 @@ form.addEventListener("submit", (event) => {
     name: roomNameInput.value,
     assetIds: Array.from(assetSelect.selectedOptions).map((option) => option.value),
     guestAllowed: guestAccessInput.checked,
+    avatarConfig: collectAvatarConfig(),
     theme: {
       primaryColor: primaryColorInput.value,
       accentColor: accentColorInput.value
@@ -663,6 +690,7 @@ updateRoomButton.addEventListener("click", () => {
     templateId: templateSelect.value,
     assetIds: Array.from(assetSelect.selectedOptions).map((option) => option.value),
     guestAllowed: guestAccessInput.checked,
+    avatarConfig: collectAvatarConfig(),
     theme: {
       primaryColor: primaryColorInput.value,
       accentColor: accentColorInput.value

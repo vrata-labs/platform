@@ -24,6 +24,15 @@
           <label><input id="feature-spatial-input" type="checkbox" checked /> Spatial audio</label>
           <label><input id="feature-share-input" type="checkbox" checked /> Screen share</label>
           <label><input id="guest-access-input" type="checkbox" checked /> Guest access</label>
+          <label><input id="avatar-enabled-input" type="checkbox" /> Avatars enabled</label>
+          <label>Avatar catalog URL <input id="avatar-catalog-url-input" value="/assets/avatars/catalog.v1.json" /></label>
+          <label>Avatar quality <select id="avatar-quality-select">
+            <option value="desktop-standard">desktop-standard</option>
+            <option value="mobile-lite">mobile-lite</option>
+            <option value="xr">xr</option>
+          </select></label>
+          <label><input id="avatar-fallback-input" type="checkbox" checked /> Capsule fallback enabled</label>
+          <label><input id="avatar-seats-input" type="checkbox" /> Avatar seats enabled</label>
           <button id="create-room" type="submit">Create room</button>
           <button id="update-room" type="button">Update selected room</button>
           <button id="bind-scene-bundle" type="button">Bind selected scene bundle</button>

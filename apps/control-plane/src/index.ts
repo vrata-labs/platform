@@ -20,6 +20,13 @@ export interface RoomCreateInput {
   sceneBundleUrl?: string;
   assetIds?: string[];
   guestAllowed?: boolean;
+  avatarConfig?: {
+    avatarsEnabled: boolean;
+    avatarCatalogUrl?: string;
+    avatarQualityProfile: "mobile-lite" | "desktop-standard" | "xr";
+    avatarFallbackCapsulesEnabled: boolean;
+    avatarSeatsEnabled?: boolean;
+  };
   theme?: {
     primaryColor: string;
     accentColor: string;
@@ -43,6 +50,13 @@ export interface RoomRecord {
   sceneBundleUrl?: string;
   assetIds?: string[];
   guestAllowed?: boolean;
+  avatarConfig?: {
+    avatarsEnabled: boolean;
+    avatarCatalogUrl?: string;
+    avatarQualityProfile: "mobile-lite" | "desktop-standard" | "xr";
+    avatarFallbackCapsulesEnabled: boolean;
+    avatarSeatsEnabled?: boolean;
+  };
   features?: {
     voice: boolean;
     spatialAudio: boolean;
@@ -76,6 +90,17 @@ export interface RoomManifestRecord {
     voice: boolean;
     spatialAudio: boolean;
     screenShare: boolean;
+  };
+  avatars?: {
+    avatarsEnabled: boolean;
+    avatarCatalogUrl?: string;
+    avatarQualityProfile: "mobile-lite" | "desktop-standard" | "xr";
+    avatarPoseBinaryEnabled: boolean;
+    avatarLipsyncEnabled: boolean;
+    avatarLegIkEnabled: boolean;
+    avatarFallbackCapsulesEnabled: boolean;
+    avatarSeatsEnabled: boolean;
+    avatarCustomizationEnabled: boolean;
   };
   access: {
     joinMode: "link";

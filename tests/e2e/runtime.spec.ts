@@ -733,6 +733,47 @@ test("control plane can update selected room settings", async ({ page }) => {
   await expect(page.locator("#room-detail")).toContainText("#22aa88");
 });
 
+test("control plane can create room with avatar config", async ({ page }) => {
+  await page.goto("/control-plane");
+  await page.fill("#admin-token-input", "test-admin-token");
+  await page.fill("#room-name-input", "Avatar Config Room");
+  await page.check("#avatar-enabled-input");
+  await page.fill("#avatar-catalog-url-input", "/assets/avatars/catalog.v1.json");
+  await page.selectOption("#avatar-quality-select", "xr");
+  await page.check("#avatar-fallback-input");
+  await page.check("#avatar-seats-input");
+  await page.click("#create-room");
+  await expect(page.locator("#publish-status")).toContainText("published");
+  await expect(page.locator("#room-detail")).toContainText("avatarsEnabled");
+  await expect(page.locator("#room-detail")).toContainText("catalog.v1.json");
+  await expect(page.locator("#room-detail")).toContainText("\"avatarQualityProfile\": \"xr\"");
+  const href = await page.locator("#room-link").getAttribute("href");
+  expect(href).toBeTruthy();
+  await page.goto(`${String(href)}?avatarsandbox=1&debug=1`);
+  await page.waitForFunction(() => {
+    const debug = (window as Window & {
+      __NOAH_DEBUG__?: { avatarDebug?: { state?: string; presetCount?: number } };
+    }).__NOAH_DEBUG__;
+    return debug?.avatarDebug?.state === "loaded" && debug.avatarDebug?.presetCount === 10;
+  });
+});
+
+test("control plane can update avatar config for selected room", async ({ page }) => {
+  await page.goto("/control-plane");
+  await page.fill("#admin-token-input", "test-admin-token");
+  await page.fill("#room-name-input", "Avatar Update Room");
+  await page.click("#create-room");
+  await expect(page.locator("#publish-status")).toContainText("published");
+  await page.check("#avatar-enabled-input");
+  await page.fill("#avatar-catalog-url-input", "/assets/avatars/catalog.v1.json");
+  await page.selectOption("#avatar-quality-select", "mobile-lite");
+  await page.uncheck("#avatar-seats-input");
+  await page.click("#update-room");
+  await expect(page.locator("#publish-status")).toContainText("updated");
+  await expect(page.locator("#room-detail")).toContainText("\"avatarsEnabled\": true");
+  await expect(page.locator("#room-detail")).toContainText("\"avatarQualityProfile\": \"mobile-lite\"");
+});
+
 test("control plane can delete selected room", async ({ page }) => {
   await page.goto("/control-plane");
   await page.fill("#admin-token-input", "test-admin-token");
