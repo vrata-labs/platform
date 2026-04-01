@@ -33,8 +33,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.deploy_sha || github.event.workflow_run.head_sha }}
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -44,9 +42,6 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
 
       - name: Setup SSH agent
         uses: webfactory/ssh-agent@v0.9.0
@@ -61,6 +56,16 @@ jobs:
           else
             echo "deploy_sha=${{ github.event.workflow_run.head_sha }}" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Sync workspace to deploy SHA
+        env:
+          DEPLOY_SHA: ${{ steps.deploy.outputs.deploy_sha }}
+        run: |
+          git fetch --no-tags --depth=1 origin "$DEPLOY_SHA"
+          git checkout --detach FETCH_HEAD
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
 
       - name: Determine previous successful SHA
         id: previous
