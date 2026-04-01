@@ -14,6 +14,7 @@ import { captureCanvasDiagnostics, createEmptySceneDiagnostics, inspectSceneObje
 import { loadSceneBundle } from "./scene-loader.js";
 import { detectXrSupport, getEnterVrVisibility } from "./xr.js";
 import { createEmptyAvatarDiagnostics } from "./avatar/avatar-debug.js";
+import { createInitialAvatarRuntimeFlags, resolveAvatarCatalogUrl, resolveAvatarRuntimeFlags } from "./avatar/avatar-runtime.js";
 import { bootAvatarSandbox, setAvatarSandboxStatus } from "./avatar/avatar-sandbox.js";
 import { createAvatarRegistry } from "./avatar/avatar-registry.js";
 
@@ -202,12 +203,7 @@ let runtimeFlags = {
   roomStateRealtime: true,
   remoteDiagnostics: true,
   sceneBundles: true,
-  avatarsEnabled: false,
-  avatarPoseBinaryEnabled: false,
-  avatarLipsyncEnabled: false,
-  avatarLegIkEnabled: false,
-  avatarSeatingEnabled: false,
-  avatarCustomizationEnabled: false,
+  ...createInitialAvatarRuntimeFlags(),
   avatarFallbackCapsulesEnabled: true
 };
 let effectiveCleanSceneMode = requestedCleanSceneMode;
@@ -1355,13 +1351,7 @@ async function main(): Promise<void> {
     roomStateRealtime: boot.envFlags.roomStateRealtime,
     remoteDiagnostics: boot.envFlags.remoteDiagnostics,
     sceneBundles: boot.envFlags.sceneBundles,
-    avatarsEnabled: boot.envFlags.avatarsEnabled && boot.avatarConfig.avatarsEnabled,
-    avatarPoseBinaryEnabled: boot.envFlags.avatarPoseBinaryEnabled,
-    avatarLipsyncEnabled: boot.envFlags.avatarLipsyncEnabled,
-    avatarLegIkEnabled: boot.envFlags.avatarLegIkEnabled,
-    avatarSeatingEnabled: boot.envFlags.avatarSeatingEnabled,
-    avatarCustomizationEnabled: boot.envFlags.avatarCustomizationEnabled,
-    avatarFallbackCapsulesEnabled: boot.envFlags.avatarFallbackCapsulesEnabled && boot.avatarConfig.avatarFallbackCapsulesEnabled
+    ...resolveAvatarRuntimeFlags(boot)
   };
   debugState.featureFlags = runtimeFlags;
   debugState.roomStateUrl = boot.roomStateUrl;
@@ -1376,7 +1366,8 @@ async function main(): Promise<void> {
   await loadAvailableSpaces(boot.roomId);
   floorMaterial.color.set(boot.theme.accentColor);
   wallMaterial.color.set(boot.theme.primaryColor);
-  debugState.avatarDebug.sandboxEntryPoint = boot.avatarConfig.avatarCatalogUrl ?? "/assets/avatars/catalog.v1.json";
+  const avatarCatalogUrl = resolveAvatarCatalogUrl(boot);
+  debugState.avatarDebug.sandboxEntryPoint = avatarCatalogUrl;
   if (!effectiveCleanSceneMode) {
     scene.fog = new THREE.Fog(new THREE.Color(boot.theme.accentColor).getHex(), 12, 50);
   } else {
@@ -1393,10 +1384,10 @@ async function main(): Promise<void> {
     debugState.avatarDebug = {
       ...createEmptyAvatarDiagnostics(),
       state: "loading",
-      sandboxEntryPoint: boot.avatarConfig.avatarCatalogUrl ?? "/assets/avatars/catalog.v1.json"
+      sandboxEntryPoint: avatarCatalogUrl
     };
     const sandboxResult = await bootAvatarSandbox({
-      catalogUrl: boot.avatarConfig.avatarCatalogUrl ?? "/assets/avatars/catalog.v1.json",
+      catalogUrl: avatarCatalogUrl,
       renderer,
       scene,
       player,
