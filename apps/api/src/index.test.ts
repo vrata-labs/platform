@@ -227,6 +227,38 @@ test("room manifest upgrades insecure configured room-state url behind https pro
   }
 });
 
+test("media token derives secure livekit url behind https proxy", async () => {
+  process.env.NOAH_DISABLE_AUTOSTART = "1";
+  process.env.API_PORT = "4022";
+  process.env.LIVEKIT_URL = "ws://89.169.161.91:7880";
+  const module = await import("./index.js");
+  const server = module.startApiServer(4022);
+
+  try {
+    const response = await fetch("http://127.0.0.1:4022/api/tokens/media", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-forwarded-proto": "https",
+        "x-forwarded-host": "89.169.161.91.sslip.io"
+      },
+      body: JSON.stringify({
+        roomId: "demo-room",
+        participantId: "guest-test",
+        canPublishAudio: true,
+        canPublishVideo: false
+      })
+    });
+    assert.equal(response.ok, true);
+    const payload = (await response.json()) as { livekitUrl?: string };
+    assert.equal(payload.livekitUrl, "wss://livekit.89.169.161.91.sslip.io");
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    delete process.env.NOAH_DISABLE_AUTOSTART;
+    delete process.env.LIVEKIT_URL;
+  }
+});
+
 test("room api accepts legacy top-level avatar fields and normalizes them into avatarConfig", async () => {
   process.env.NOAH_DISABLE_AUTOSTART = "1";
   process.env.API_PORT = "4018";

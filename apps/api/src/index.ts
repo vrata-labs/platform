@@ -215,6 +215,33 @@ function getDefaultRoomStateUrl(request?: IncomingMessage): string {
   return `${protocol}://state-${hostname}`;
 }
 
+function getDefaultLivekitUrl(request?: IncomingMessage): string {
+  const host = getRequestHost(request);
+  const proto = getRequestProto(request);
+  const configuredLivekitUrl = process.env.LIVEKIT_URL;
+
+  if (configuredLivekitUrl) {
+    if (proto !== "https" || !configuredLivekitUrl.startsWith("ws://") || !host) {
+      return configuredLivekitUrl;
+    }
+  }
+
+  if (!host) {
+    return configuredLivekitUrl ?? "ws://localhost:7880";
+  }
+
+  const protocol = proto === "https" ? "wss" : "ws";
+  const hostname = host.split(":")[0] ?? host;
+
+  if (hostname === "localhost" || hostname === "127.0.0.1") {
+    return `${protocol}://${hostname}:7880`;
+  }
+  if (hostname.endsWith(".sslip.io")) {
+    return `${protocol}://livekit.${hostname}`;
+  }
+  return `${protocol}://livekit-${hostname}`;
+}
+
 function createRoomLink(roomId: string, host?: string): string {
   const publicUrl = process.env.RUNTIME_BASE_URL ?? `http://${host ?? `localhost:${apiPort}`}`;
   return new URL(`/rooms/${roomId}`, publicUrl).toString();
@@ -907,7 +934,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     json(response, 200, {
       token: await accessToken.toJwt(),
       expiresInSeconds: Number.parseInt(process.env.MEDIA_TOKEN_TTL_SECONDS ?? "900", 10),
-      livekitUrl: process.env.LIVEKIT_URL ?? `ws://${request.headers.host?.split(":")[0] ?? "localhost"}:7880`
+      livekitUrl: getDefaultLivekitUrl(request)
     });
     return;
   }
