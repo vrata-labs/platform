@@ -172,6 +172,109 @@ test("room manifest exposes avatar config when enabled", async () => {
   }
 });
 
+test("room api accepts legacy top-level avatar fields and normalizes them into avatarConfig", async () => {
+  process.env.NOAH_DISABLE_AUTOSTART = "1";
+  process.env.API_PORT = "4018";
+  process.env.CONTROL_PLANE_ADMIN_TOKEN = "test-admin-token";
+  const module = await import("./index.js");
+  const server = module.startApiServer(4018);
+
+  try {
+    const createResponse = await fetch("http://127.0.0.1:4018/api/rooms", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-noah-admin-token": "test-admin-token"
+      },
+      body: JSON.stringify({
+        tenantId: "demo-tenant",
+        templateId: "meeting-room-basic",
+        name: "Legacy Avatar Room",
+        avatarsEnabled: true,
+        avatarCatalogUrl: "/assets/avatars/catalog.v1.json",
+        avatarQualityProfile: "mobile-lite",
+        avatarFallbackCapsulesEnabled: true,
+        avatarSeatsEnabled: true
+      })
+    });
+    assert.equal(createResponse.ok, true);
+    const room = (await createResponse.json()) as { roomId: string; avatarConfig?: { avatarsEnabled?: boolean; avatarSeatsEnabled?: boolean } };
+    assert.equal(room.avatarConfig?.avatarsEnabled, true);
+    assert.equal(room.avatarConfig?.avatarSeatsEnabled, true);
+
+    const manifestResponse = await fetch(`http://127.0.0.1:4018/api/rooms/${room.roomId}/manifest`);
+    assert.equal(manifestResponse.ok, true);
+    const manifest = (await manifestResponse.json()) as {
+      avatars?: { avatarsEnabled?: boolean; avatarQualityProfile?: string; avatarSeatsEnabled?: boolean };
+    };
+    assert.equal(manifest.avatars?.avatarsEnabled, true);
+    assert.equal(manifest.avatars?.avatarQualityProfile, "mobile-lite");
+    assert.equal(manifest.avatars?.avatarSeatsEnabled, true);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    delete process.env.NOAH_DISABLE_AUTOSTART;
+    delete process.env.CONTROL_PLANE_ADMIN_TOKEN;
+  }
+});
+
+test("room api merges partial avatarConfig updates onto defaults", async () => {
+  process.env.NOAH_DISABLE_AUTOSTART = "1";
+  process.env.API_PORT = "4019";
+  process.env.CONTROL_PLANE_ADMIN_TOKEN = "test-admin-token";
+  const module = await import("./index.js");
+  const server = module.startApiServer(4019);
+
+  try {
+    const createResponse = await fetch("http://127.0.0.1:4019/api/rooms", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-noah-admin-token": "test-admin-token"
+      },
+      body: JSON.stringify({
+        tenantId: "demo-tenant",
+        templateId: "meeting-room-basic",
+        name: "Partial Avatar Config Room"
+      })
+    });
+    assert.equal(createResponse.ok, true);
+    const room = (await createResponse.json()) as { roomId: string };
+
+    const patchResponse = await fetch(`http://127.0.0.1:4019/api/rooms/${room.roomId}`, {
+      method: "PATCH",
+      headers: {
+        "content-type": "application/json",
+        "x-noah-admin-token": "test-admin-token"
+      },
+      body: JSON.stringify({
+        avatarConfig: {
+          avatarsEnabled: true,
+          avatarQualityProfile: "xr"
+        }
+      })
+    });
+    assert.equal(patchResponse.ok, true);
+    const updated = (await patchResponse.json()) as {
+      avatarConfig?: {
+        avatarsEnabled?: boolean;
+        avatarCatalogUrl?: string;
+        avatarQualityProfile?: string;
+        avatarFallbackCapsulesEnabled?: boolean;
+        avatarSeatsEnabled?: boolean;
+      };
+    };
+    assert.equal(updated.avatarConfig?.avatarsEnabled, true);
+    assert.equal(updated.avatarConfig?.avatarQualityProfile, "xr");
+    assert.equal(updated.avatarConfig?.avatarCatalogUrl, "/assets/avatars/catalog.v1.json");
+    assert.equal(updated.avatarConfig?.avatarFallbackCapsulesEnabled, true);
+    assert.equal(updated.avatarConfig?.avatarSeatsEnabled, false);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    delete process.env.NOAH_DISABLE_AUTOSTART;
+    delete process.env.CONTROL_PLANE_ADMIN_TOKEN;
+  }
+});
+
 test("runtime spaces endpoint keeps same-tenant guest-safe rooms only", async () => {
   process.env.NOAH_DISABLE_AUTOSTART = "1";
   process.env.API_PORT = "4013";

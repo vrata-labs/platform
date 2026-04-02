@@ -36,6 +36,8 @@ export interface RoomAvatarConfig {
   avatarSeatsEnabled?: boolean;
 }
 
+const DEFAULT_AVATAR_CONFIG_JSON = '{"avatarsEnabled":false,"avatarCatalogUrl":"/assets/avatars/catalog.v1.json","avatarQualityProfile":"desktop-standard","avatarFallbackCapsulesEnabled":true,"avatarSeatsEnabled":false}' as const;
+
 export interface RoomRecord {
   roomId: string;
   tenantId: string;
@@ -441,7 +443,9 @@ export class PostgresStorage implements Storage {
       );
     `);
     await this.pool.query(`alter table rooms add column if not exists scene_bundle_url text`);
-    await this.pool.query(`alter table rooms add column if not exists avatar_config jsonb not null default '{"avatarsEnabled":false,"avatarCatalogUrl":"/assets/avatars/catalog.v1.json","avatarQualityProfile":"desktop-standard","avatarFallbackCapsulesEnabled":true,"avatarSeatsEnabled":false}'::jsonb`);
+    await this.pool.query(`alter table rooms add column if not exists avatar_config jsonb not null default '${DEFAULT_AVATAR_CONFIG_JSON}'::jsonb`);
+    await this.pool.query(`update rooms set avatar_config = '${DEFAULT_AVATAR_CONFIG_JSON}'::jsonb where avatar_config is null`);
+    await this.pool.query(`update rooms set avatar_config = '${DEFAULT_AVATAR_CONFIG_JSON}'::jsonb || avatar_config`);
     await this.pool.query(`alter table scene_bundles add column if not exists status text not null default 'active'`);
     await this.pool.query(`alter table scene_bundles add column if not exists is_current boolean not null default true`);
     await this.pool.query(`do $$ begin alter table scene_bundles drop constraint if exists scene_bundles_pkey; alter table scene_bundles add primary key (bundle_id, version); exception when duplicate_object then null; end $$;`);

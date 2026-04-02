@@ -319,6 +319,34 @@ function validateRoomInput(input: Partial<RoomRecord>, templateIds: Set<string>,
   return null;
 }
 
+function normalizeRoomPayload(input: Partial<RoomRecord> & {
+  avatarsEnabled?: boolean;
+  avatarCatalogUrl?: string;
+  avatarQualityProfile?: "mobile-lite" | "desktop-standard" | "xr";
+  avatarFallbackCapsulesEnabled?: boolean;
+  avatarSeatsEnabled?: boolean;
+}): Partial<RoomRecord> {
+  const legacyAvatarConfig: Partial<NonNullable<RoomRecord["avatarConfig"]>> = {
+    avatarsEnabled: input.avatarsEnabled,
+    avatarCatalogUrl: input.avatarCatalogUrl,
+    avatarQualityProfile: input.avatarQualityProfile,
+    avatarFallbackCapsulesEnabled: input.avatarFallbackCapsulesEnabled,
+    avatarSeatsEnabled: input.avatarSeatsEnabled
+  };
+
+  const hasLegacyAvatarField = Object.values(legacyAvatarConfig).some((value) => value !== undefined);
+
+  const normalized = { ...input } as Partial<RoomRecord>;
+  if (hasLegacyAvatarField) {
+    normalized.avatarConfig = {
+      ...legacyAvatarConfig,
+      ...input.avatarConfig
+    } as RoomRecord["avatarConfig"];
+  }
+
+  return normalized;
+}
+
 async function validateRoomAssetIds(
   storage: Awaited<typeof storagePromise>,
   assetIds: string[] | undefined,
@@ -697,7 +725,13 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
 
   if (method === "POST" && url.pathname === "/api/rooms") {
     if (!isAuthorizedControlPlaneRequest(request)) return json(response, 403, { error: "forbidden" });
-    const payload = (await parseBody<Partial<RoomRecord>>(request)) ?? {};
+    const payload = normalizeRoomPayload((await parseBody<Partial<RoomRecord> & {
+      avatarsEnabled?: boolean;
+      avatarCatalogUrl?: string;
+      avatarQualityProfile?: "mobile-lite" | "desktop-standard" | "xr";
+      avatarFallbackCapsulesEnabled?: boolean;
+      avatarSeatsEnabled?: boolean;
+    }>(request)) ?? {});
     const tenantIds = new Set((await storage.listTenants()).map((tenant) => tenant.tenantId));
     const templateIds = new Set((await storage.listTemplates()).map((template) => template.templateId));
     const validationError = validateRoomInput(payload, templateIds, tenantIds);
@@ -713,7 +747,13 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   if (method === "PATCH" && roomItemMatch) {
     if (!isAuthorizedControlPlaneRequest(request)) return json(response, 403, { error: "forbidden" });
     const roomId = decodeURIComponent(roomItemMatch[1]);
-    const payload = (await parseBody<Partial<RoomRecord>>(request)) ?? {};
+    const payload = normalizeRoomPayload((await parseBody<Partial<RoomRecord> & {
+      avatarsEnabled?: boolean;
+      avatarCatalogUrl?: string;
+      avatarQualityProfile?: "mobile-lite" | "desktop-standard" | "xr";
+      avatarFallbackCapsulesEnabled?: boolean;
+      avatarSeatsEnabled?: boolean;
+    }>(request)) ?? {});
     const existingRoom = await storage.getRoom(roomId);
     if (!existingRoom) return json(response, 404, { error: "room_not_found" });
     if (payload.assetIds) {
