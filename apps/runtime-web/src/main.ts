@@ -17,8 +17,8 @@ import { loadSceneBundle } from "./scene-loader.js";
 import { startSceneBundleSession } from "./scene-session.js";
 import { detectXrSupport, getEnterVrVisibility } from "./xr.js";
 import { createAvatarLoadingDiagnostics, createEmptyAvatarDiagnostics } from "./avatar/avatar-debug.js";
+import { createAvatarOutboundPublisher } from "./avatar/avatar-publish.js";
 import { createInitialAvatarRuntimeFlags, resolveAvatarCatalogUrl, resolveAvatarRuntimeFlags } from "./avatar/avatar-runtime.js";
-import { serializeCompactPoseFrame, serializeReliableAvatarState } from "./avatar/avatar-snapshot-codec.js";
 import { setAvatarSandboxStatus } from "./avatar/avatar-sandbox.js";
 import { resetAvatarSession, startAvatarSandboxSession, startLocalAvatarSession } from "./avatar/avatar-session.js";
 import type { LocalAvatarController } from "./avatar/avatar-controller.js";
@@ -193,6 +193,7 @@ let audioContext: AudioContext | null = null;
 let activeSceneBundleRoot: THREE.Object3D | null = null;
 let avatarSandboxRegistry: ReturnType<typeof createAvatarRegistry> | null = null;
 let localAvatarController: LocalAvatarController | null = null;
+const avatarOutboundPublisher = createAvatarOutboundPublisher();
 let lastAvatarMove = { x: 0, z: 0 };
 let lastAvatarTurnRate = 0;
 const roomStateReconnectPolicy = createReconnectPolicy({
@@ -1008,19 +1009,12 @@ function updateLocalAvatar(delta: number): void {
   });
   debugState.avatarDebug = localAvatarController.diagnostics;
   debugState.avatarSnapshot = localAvatarController.snapshot;
-  debugState.avatarTransportPreview = {
-    reliableState: serializeReliableAvatarState({
-      participantId,
-      snapshot: localAvatarController.snapshot,
-      muted: !microphoneEnabled,
-      audioActive: microphoneEnabled
-    }),
-    poseFrame: serializeCompactPoseFrame({
-      seq: Math.max(1, Math.round(performance.now())),
-      sentAtMs: Date.now(),
-      snapshot: localAvatarController.snapshot
-    })
-  };
+  debugState.avatarTransportPreview = avatarOutboundPublisher.build({
+    participantId,
+    snapshot: localAvatarController.snapshot,
+    muted: !microphoneEnabled,
+    audioActive: microphoneEnabled
+  });
 }
 
 function populateAvatarPresetSelect(input: {

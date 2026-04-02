@@ -280,6 +280,11 @@ test("avatar-enabled room exposes local self-avatar diagnostics in normal room f
       items: Array<{
         note?: string;
         avatarDebug?: { state?: string; visibilityState?: string | null; locomotionState?: string | null; animationState?: string | null };
+        avatarSnapshot?: { avatarId?: string | null; controllerProfile?: string | null };
+        avatarTransportPreview?: {
+          reliableState?: { avatarId?: string | null; inputMode?: string | null };
+          poseFrame?: { seq?: number | null; locomotion?: { mode?: number | null } };
+        };
       }>;
     };
 
@@ -287,7 +292,13 @@ test("avatar-enabled room exposes local self-avatar diagnostics in normal room f
       && item.avatarDebug?.state === "loaded"
       && item.avatarDebug?.visibilityState === "full-body"
       && item.avatarDebug?.locomotionState === "walk"
-      && item.avatarDebug?.animationState === "idle");
+      && item.avatarDebug?.animationState === "idle"
+      && item.avatarSnapshot?.avatarId === "preset-01"
+      && item.avatarSnapshot?.controllerProfile === "desktop_no_controllers"
+      && item.avatarTransportPreview?.reliableState?.avatarId === "preset-01"
+      && item.avatarTransportPreview?.reliableState?.inputMode === "desktop"
+      && item.avatarTransportPreview?.poseFrame?.seq !== undefined
+      && item.avatarTransportPreview?.poseFrame?.locomotion?.mode === 1);
   }, {
     timeout: 15000,
     intervals: [1000, 2000, 3000]
