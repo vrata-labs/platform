@@ -317,3 +317,70 @@ test("createLocalAvatarController preserves lateral hand tracking after yaw and 
   assert.equal(controller.snapshot.rightHand.x > 0, true);
   assert.equal(Math.abs(controller.snapshot.leftHand.x), Math.abs(controller.snapshot.rightHand.x));
 });
+
+test("createLocalAvatarController preserves hand spread after VR strafe update", () => {
+  const controller = createLocalAvatarController({
+    presets: [createPreset("preset-01")],
+    diagnosticsInput: {
+      catalogId: "technical-v1",
+      packUrl: "/assets/avatars/avatar-pack.v1.glb",
+      packFormat: "procedural-debug-v1",
+      presetCount: 1,
+      validatorSummary: ["preset-01:1000"],
+      sandboxEntryPoint: "/assets/avatars/catalog.v1.json"
+    }
+  });
+
+  controller.update({
+    deltaSeconds: 0.016,
+    inputMode: "vr-controller",
+    xrPresenting: true,
+    xrInputProfile: "dual",
+    rootPosition: { x: 0, y: 0, z: 0 },
+    yaw: 0,
+    headPosition: { x: 0, y: 1.6, z: 0 },
+    leftHand: { x: -0.25, y: 1.2, z: 0.2 },
+    rightHand: { x: 0.25, y: 1.2, z: 0.2 },
+    moveX: 1,
+    moveZ: 0,
+    turnRate: 0
+  });
+
+  const handDistance = controller.snapshot.rightHand.x - controller.snapshot.leftHand.x;
+  assert.equal(handDistance > 0.2, true);
+  assert.equal(controller.snapshot.leftHand.z !== controller.snapshot.rightHand.z, false);
+});
+
+test("createLocalAvatarController does not add procedural forward offsets to VR hands", () => {
+  const preset = createPreset("preset-01");
+  preset.preset.validation.animationClips = ["idle", "strafe"];
+  const controller = createLocalAvatarController({
+    presets: [preset],
+    diagnosticsInput: {
+      catalogId: "technical-v1",
+      packUrl: "/assets/avatars/avatar-pack.v1.glb",
+      packFormat: "procedural-debug-v1",
+      presetCount: 1,
+      validatorSummary: ["preset-01:1000"],
+      sandboxEntryPoint: "/assets/avatars/catalog.v1.json"
+    }
+  });
+
+  controller.update({
+    deltaSeconds: 0.25,
+    inputMode: "vr-controller",
+    xrPresenting: true,
+    xrInputProfile: "dual",
+    rootPosition: { x: 0, y: 0, z: 0 },
+    yaw: 0,
+    headPosition: { x: 0, y: 1.6, z: 0 },
+    leftHand: { x: -0.25, y: 1.2, z: 0.2 },
+    rightHand: { x: 0.25, y: 1.2, z: 0.2 },
+    moveX: 1,
+    moveZ: 0,
+    turnRate: 0
+  });
+
+  assert.equal(Math.round(controller.snapshot.leftHand.z * 100) / 100, 0.2);
+  assert.equal(Math.round(controller.snapshot.rightHand.z * 100) / 100, 0.2);
+});

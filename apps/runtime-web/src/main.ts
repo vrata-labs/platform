@@ -20,6 +20,7 @@ import { createAvatarLoadingDiagnostics, createEmptyAvatarDiagnostics } from "./
 import { createAvatarOutboundPublisher, type AvatarOutboundPayload } from "./avatar/avatar-publish.js";
 import { createRemoteAvatarRuntime } from "./avatar/remote-avatar-runtime.js";
 import { createInitialAvatarRuntimeFlags, resolveAvatarCatalogUrl, resolveAvatarRuntimeFlags } from "./avatar/avatar-runtime.js";
+import { resolveLocalAvatarHandTargets } from "./avatar/avatar-xr-hands.js";
 import { resolveAvatarXrInput } from "./avatar/avatar-xr-input.js";
 import { setAvatarSandboxStatus } from "./avatar/avatar-sandbox.js";
 import { resetAvatarSession, startAvatarSandboxSession, startLocalAvatarSession } from "./avatar/avatar-session.js";
@@ -835,34 +836,14 @@ function getSignedAngleDelta(next: number, previous: number): number {
 }
 
 function getLocalAvatarHandTargets(): { leftHand: { x: number; y: number; z: number } | null; rightHand: { x: number; y: number; z: number } | null } {
-  if (!renderer.xr.isPresenting) {
-    return { leftHand: null, rightHand: null };
-  }
-
   const xrFrame = renderer.xr.getFrame();
   const session = xrFrame?.session;
-  if (!session) {
-    return { leftHand: null, rightHand: null };
-  }
-
-  const result = { leftHand: null as { x: number; y: number; z: number } | null, rightHand: null as { x: number; y: number; z: number } | null };
-  for (const [index, input] of Array.from(session.inputSources).entries()) {
-    if (input.handedness !== "left" && input.handedness !== "right") {
-      continue;
-    }
-    const handAnchor = xrControllerGrips[index] ?? xrControllers[index];
-    if (!handAnchor) {
-      continue;
-    }
-    const worldPosition = new THREE.Vector3();
-    handAnchor.getWorldPosition(worldPosition);
-    result[input.handedness === "left" ? "leftHand" : "rightHand"] = {
-      x: worldPosition.x,
-      y: worldPosition.y,
-      z: worldPosition.z
-    };
-  }
-  return result;
+  return resolveLocalAvatarHandTargets({
+    presenting: renderer.xr.isPresenting,
+    inputSources: Array.from(session?.inputSources ?? []),
+    grips: xrControllerGrips,
+    controllers: xrControllers
+  });
 }
 
 function updateLocalAvatar(delta: number): void {

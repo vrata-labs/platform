@@ -234,6 +234,7 @@ export function createLocalAvatarController(input: {
         speed: locomotion.speed,
         turnRate: frame.turnRate
       });
+      const vrDirectTracking = frame.xrPresenting && (frame.inputMode === "vr-controller" || frame.inputMode === "vr-hand");
 
       visual.root.position.set(frame.rootPosition.x, frame.rootPosition.y, frame.rootPosition.z);
       visual.root.rotation.y = frame.yaw;
@@ -242,17 +243,21 @@ export function createLocalAvatarController(input: {
       visual.torso.rotation.z = pose.bodyRoll;
       visual.lowerBody.position.set(0, 0.52 + pose.bodyBob * 0.35, 0);
       visual.lowerBody.rotation.z = pose.bodyRoll * 0.5;
-      visual.head.position.set(solve.headLocal.x, Math.max(solve.headLocal.y, viewProfile.poseProfile.headHeight), solve.headLocal.z);
+      visual.head.position.set(
+        solve.headLocal.x,
+        vrDirectTracking ? solve.headLocal.y : Math.max(solve.headLocal.y, viewProfile.poseProfile.headHeight),
+        solve.headLocal.z
+      );
       visual.head.rotation.z = pose.headTilt;
       visual.leftHand.position.set(
         solve.leftHandLocal.x,
-        solve.leftHandLocal.y + pose.leftHandYOffset,
-        solve.leftHandLocal.z + pose.leftHandForward
+        solve.leftHandLocal.y + (vrDirectTracking ? 0 : pose.leftHandYOffset),
+        solve.leftHandLocal.z + (vrDirectTracking ? 0 : pose.leftHandForward)
       );
       visual.rightHand.position.set(
         solve.rightHandLocal.x,
-        solve.rightHandLocal.y + pose.rightHandYOffset,
-        solve.rightHandLocal.z + pose.rightHandForward
+        solve.rightHandLocal.y + (vrDirectTracking ? 0 : pose.rightHandYOffset),
+        solve.rightHandLocal.z + (vrDirectTracking ? 0 : pose.rightHandForward)
       );
       const auraScale = animation.fallback ? Math.max(1.02, pose.auraScale - 0.03) : pose.auraScale;
       visual.aura.scale.setScalar(auraScale);
