@@ -17,10 +17,10 @@ import { loadSceneBundle } from "./scene-loader.js";
 import { startSceneBundleSession } from "./scene-session.js";
 import { detectXrSupport, getEnterVrVisibility } from "./xr.js";
 import { createAvatarLoadingDiagnostics, createEmptyAvatarDiagnostics } from "./avatar/avatar-debug.js";
-import { resetAvatarSandbox } from "./avatar/avatar-fallback.js";
 import { createInitialAvatarRuntimeFlags, resolveAvatarCatalogUrl, resolveAvatarRuntimeFlags } from "./avatar/avatar-runtime.js";
-import { bootAvatarSandbox, setAvatarSandboxStatus } from "./avatar/avatar-sandbox.js";
-import { resetAvatarSession, startAvatarSandboxSession } from "./avatar/avatar-session.js";
+import { setAvatarSandboxStatus } from "./avatar/avatar-sandbox.js";
+import { resetAvatarSession, startAvatarSandboxSession, startLocalAvatarSession } from "./avatar/avatar-session.js";
+import type { LocalAvatarController } from "./avatar/avatar-controller.js";
 import { createAvatarRegistry } from "./avatar/avatar-registry.js";
 
 function fallbackUuid(): string {
@@ -112,6 +112,10 @@ const pitch = new THREE.Group();
 pitch.add(camera);
 player.add(pitch);
 scene.add(player);
+const xrControllers = [renderer.xr.getController(0), renderer.xr.getController(1)];
+for (const controller of xrControllers) {
+  scene.add(controller);
+}
 
 scene.add(new THREE.HemisphereLight(0xcbe9ff, 0x152033, 1.4));
 const directional = new THREE.DirectionalLight(0xffffff, 1.4);
@@ -185,6 +189,9 @@ let roomStateReconnectTimer: number | null = null;
 let audioContext: AudioContext | null = null;
 let activeSceneBundleRoot: THREE.Object3D | null = null;
 let avatarSandboxRegistry: ReturnType<typeof createAvatarRegistry> | null = null;
+let localAvatarController: LocalAvatarController | null = null;
+let lastAvatarMove = { x: 0, z: 0 };
+let lastAvatarTurnRate = 0;
 const roomStateReconnectPolicy = createReconnectPolicy({
   maxRetries: Number.parseInt(query.get("roomstateretries") ?? "3", 10),
   baseDelayMs: Number.parseInt(query.get("roomstatedelay") ?? "1000", 10),
@@ -922,7 +929,80 @@ function botDirection(timeSeconds: number): { x: number; z: number } {
   return { x: 0, z: 0 };
 }
 
+function getSignedAngleDelta(next: number, previous: number): number {
+  return Math.atan2(Math.sin(next - previous), Math.cos(next - previous));
+}
+
+function getLocalAvatarHandTargets(): { leftHand: { x: number; y: number; z: number } | null; rightHand: { x: number; y: number; z: number } | null } {
+  if (!renderer.xr.isPresenting) {
+    return { leftHand: null, rightHand: null };
+  }
+
+  const xrFrame = renderer.xr.getFrame();
+  const session = xrFrame?.session;
+  if (!session) {
+    return { leftHand: null, rightHand: null };
+  }
+
+  const result = { leftHand: null as { x: number; y: number; z: number } | null, rightHand: null as { x: number; y: number; z: number } | null };
+  for (const [index, input] of Array.from(session.inputSources).entries()) {
+    if (input.handedness !== "left" && input.handedness !== "right") {
+      continue;
+    }
+    const controller = xrControllers[index];
+    if (!controller) {
+      continue;
+    }
+    const worldPosition = new THREE.Vector3();
+    controller.getWorldPosition(worldPosition);
+    result[input.handedness === "left" ? "leftHand" : "rightHand"] = {
+      x: worldPosition.x,
+      y: worldPosition.y,
+      z: worldPosition.z
+    };
+  }
+  return result;
+}
+
+function updateLocalAvatar(): void {
+  if (!localAvatarController) {
+    return;
+  }
+
+  const headWorldPosition = new THREE.Vector3();
+  camera.getWorldPosition(headWorldPosition);
+  const handTargets = getLocalAvatarHandTargets();
+  const inputMode = renderer.xr.isPresenting
+    ? "vr-controller"
+    : /android|iphone|ipad/i.test(navigator.userAgent)
+      ? "mobile"
+      : "desktop";
+
+  localAvatarController.update({
+    inputMode,
+    xrPresenting: renderer.xr.isPresenting,
+    rootPosition: {
+      x: player.position.x,
+      y: player.position.y,
+      z: player.position.z
+    },
+    yaw,
+    headPosition: {
+      x: headWorldPosition.x,
+      y: headWorldPosition.y,
+      z: headWorldPosition.z
+    },
+    leftHand: handTargets.leftHand,
+    rightHand: handTargets.rightHand,
+    moveX: lastAvatarMove.x,
+    moveZ: lastAvatarMove.z,
+    turnRate: lastAvatarTurnRate
+  });
+  debugState.avatarDebug = localAvatarController.diagnostics;
+}
+
 function updateMovement(delta: number): void {
+  const yawBeforeUpdate = yaw;
   const speed = renderer.xr.isPresenting ? 2.4 : keyState.ShiftLeft ? 5 : 3.2;
   let direction = computeKeyboardDirection(keyState);
 
@@ -993,6 +1073,8 @@ function updateMovement(delta: number): void {
 
   player.rotation.y = yaw;
   pitch.rotation.x = pitchAngle;
+  lastAvatarMove = direction;
+  lastAvatarTurnRate = delta > 0 ? getSignedAngleDelta(yaw, yawBeforeUpdate) / delta : 0;
   debugState.localPosition = {
     x: Number(player.position.x.toFixed(2)),
     z: Number(player.position.z.toFixed(2))
@@ -1296,6 +1378,7 @@ window.addEventListener("resize", () => {
 window.addEventListener("beforeunload", () => {
   void removePresence(apiBaseUrl, roomId, participantId);
   detachVideoTrack();
+  localAvatarController?.dispose();
   clearRoomStateReconnect();
   roomStateClient?.close();
   for (const participantId of remoteAudioNodes.keys()) {
@@ -1311,6 +1394,7 @@ let presenceAccumulator = 0;
 renderer.setAnimationLoop(() => {
   const delta = clock.getDelta();
   updateMovement(delta);
+  updateLocalAvatar();
   updateRemoteAvatarInterpolation(delta);
   updateSpatialAudio();
   renderDebugPanel();
@@ -1386,6 +1470,8 @@ async function main(): Promise<void> {
     elements: avatarElements,
     sandboxEntryPoint: avatarCatalogUrl
   });
+  localAvatarController?.dispose();
+  localAvatarController = null;
   avatarSandboxRegistry = avatarReset.registry;
   debugState.avatarDebug = avatarReset.diagnostics;
   if (!effectiveCleanSceneMode) {
@@ -1446,6 +1532,19 @@ async function main(): Promise<void> {
     if (sceneResult.note) {
       void reportDiagnostics(sceneResult.note);
     }
+  }
+
+  if (runtimeFlags.avatarsEnabled) {
+    const localAvatarSession = await startLocalAvatarSession({
+      catalogUrl: avatarCatalogUrl,
+      renderer,
+      scene,
+      storage: window.localStorage,
+      preferredAvatarId: query.get("avatar") ?? undefined
+    });
+    localAvatarController = localAvatarSession.controller;
+    debugState.avatarDebug = localAvatarSession.diagnostics;
+    await reportDiagnostics(localAvatarSession.note);
   }
 
   applyPostBootControls({

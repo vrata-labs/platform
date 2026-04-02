@@ -5,6 +5,12 @@ export interface AvatarDiagnostics {
   packFormat: string | null;
   presetCount: number;
   selectedAvatarId: string | null;
+  inputMode: string | null;
+  locomotionState: string | null;
+  visibilityState: string | null;
+  solveState: string | null;
+  animationState: string | null;
+  activeControllerCount: number;
   fallbackActive: boolean;
   fallbackReason: string | null;
   sandboxEntryPoint: string | null;
@@ -19,6 +25,12 @@ export function createEmptyAvatarDiagnostics(): AvatarDiagnostics {
     packFormat: null,
     presetCount: 0,
     selectedAvatarId: null,
+    inputMode: null,
+    locomotionState: null,
+    visibilityState: null,
+    solveState: null,
+    animationState: null,
+    activeControllerCount: 0,
     fallbackActive: false,
     fallbackReason: null,
     sandboxEntryPoint: null,
@@ -52,6 +64,12 @@ export function createAvatarLoadedDiagnostics(input: {
   packFormat: string | null;
   presetCount: number;
   validatorSummary: string[];
+  inputMode?: string | null;
+  locomotionState?: string | null;
+  visibilityState?: string | null;
+  solveState?: string | null;
+  animationState?: string | null;
+  activeControllerCount?: number;
 }): AvatarDiagnostics {
   return {
     ...createEmptyAvatarDiagnostics(),
@@ -61,6 +79,12 @@ export function createAvatarLoadedDiagnostics(input: {
     packFormat: input.packFormat,
     presetCount: input.presetCount,
     selectedAvatarId: input.selectedAvatarId,
+    inputMode: input.inputMode ?? null,
+    locomotionState: input.locomotionState ?? null,
+    visibilityState: input.visibilityState ?? null,
+    solveState: input.solveState ?? null,
+    animationState: input.animationState ?? null,
+    activeControllerCount: input.activeControllerCount ?? 0,
     fallbackActive: false,
     fallbackReason: null,
     sandboxEntryPoint: input.sandboxEntryPoint,

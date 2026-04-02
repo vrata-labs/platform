@@ -190,6 +190,83 @@ test("avatar sandbox falls back cleanly on invalid catalog url", async ({ page, 
   }).toBeTruthy();
 });
 
+test("avatar-enabled room exposes local self-avatar diagnostics in normal room flow", async ({ page, request }) => {
+  const createRoomResponse = await request.post("/api/rooms", {
+    headers: {
+      "x-noah-admin-token": "test-admin-token"
+    },
+    data: {
+      tenantId: "demo-tenant",
+      templateId: "meeting-room-basic",
+      name: "Avatar Runtime Room",
+      avatarConfig: {
+        avatarsEnabled: true,
+        avatarCatalogUrl: "/assets/avatars/catalog.v1.json",
+        avatarQualityProfile: "desktop-standard",
+        avatarFallbackCapsulesEnabled: true,
+        avatarSeatsEnabled: false
+      }
+    }
+  });
+  expect(createRoomResponse.ok()).toBeTruthy();
+  const room = (await createRoomResponse.json()) as { roomId: string; roomLink: string };
+
+  await page.goto(`${room.roomLink}?debug=1&bot=line`);
+
+  await expect.poll(async () => {
+    const debug = await page.evaluate(() => (window as Window & {
+      __NOAH_DEBUG__?: {
+        avatarDebug?: {
+          state?: string;
+          selectedAvatarId?: string | null;
+          visibilityState?: string | null;
+          locomotionState?: string | null;
+          animationState?: string | null;
+          inputMode?: string | null;
+        };
+      };
+    }).__NOAH_DEBUG__);
+
+    return {
+      state: debug?.avatarDebug?.state ?? null,
+      selectedAvatarId: debug?.avatarDebug?.selectedAvatarId ?? null,
+      visibilityState: debug?.avatarDebug?.visibilityState ?? null,
+      locomotionState: debug?.avatarDebug?.locomotionState ?? null,
+      animationState: debug?.avatarDebug?.animationState ?? null,
+      inputMode: debug?.avatarDebug?.inputMode ?? null
+    };
+  }, {
+    timeout: 15000,
+    intervals: [1000, 2000, 3000]
+  }).toEqual({
+    state: "loaded",
+    selectedAvatarId: "preset-01",
+    visibilityState: "full-body",
+    locomotionState: "walk",
+    animationState: "idle",
+    inputMode: "desktop"
+  });
+
+  await expect.poll(async () => {
+    const diagnosticsResponse = await request.get(`/api/rooms/${room.roomId}/diagnostics`);
+    const diagnostics = (await diagnosticsResponse.json()) as {
+      items: Array<{
+        note?: string;
+        avatarDebug?: { state?: string; visibilityState?: string | null; locomotionState?: string | null; animationState?: string | null };
+      }>;
+    };
+
+    return diagnostics.items.some((item) => (item.note === "local_avatar_ready" || item.note === undefined)
+      && item.avatarDebug?.state === "loaded"
+      && item.avatarDebug?.visibilityState === "full-body"
+      && item.avatarDebug?.locomotionState === "walk"
+      && item.avatarDebug?.animationState === "idle");
+  }, {
+    timeout: 15000,
+    intervals: [1000, 2000, 3000]
+  }).toBeTruthy();
+});
+
 test("room creation API returns a usable room link", async ({ page, request }) => {
   const createRoomResponse = await request.post("/api/rooms", {
     headers: {

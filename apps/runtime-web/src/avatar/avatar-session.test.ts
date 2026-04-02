@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import * as THREE from "three";
 
-import { resetAvatarSession, startAvatarSandboxSession } from "./avatar-session.js";
+import { resetAvatarSession, startAvatarSandboxSession, startLocalAvatarSession } from "./avatar-session.js";
 
 test("resetAvatarSession returns idle diagnostics with sandbox entry point", () => {
   const panelEl = { hidden: false } as HTMLDivElement;
@@ -61,5 +61,85 @@ test("startAvatarSandboxSession reports failure note on broken catalog", async (
   } finally {
     globalThis.fetch = originalFetch;
     globalThis.document = originalDocument;
+  }
+});
+
+test("startLocalAvatarSession creates local avatar controller from procedural catalog", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    if (url.endsWith("catalog.v1.json")) {
+      return new Response(JSON.stringify({
+        schemaVersion: 1,
+        catalogId: "technical-v1",
+        assetVersion: "v1",
+        rig: "humanoid-v1",
+        packUrl: "/assets/avatars/avatar-pack.v1.glb",
+        packFormat: "procedural-debug-v1",
+        presets: [{
+          avatarId: "preset-01",
+          label: "Preset 1",
+          recipeId: "preset-01",
+          validation: {
+            triangleCount: 12000,
+            materialCount: 1,
+            textureCount: 1,
+            morphTargets: ["blink"],
+            animationClips: ["idle"],
+            skeletonSignature: "humanoid-v1/base"
+          }
+        }]
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    if (url.endsWith("avatar-recipes.v1.json")) {
+      return new Response(JSON.stringify({
+        schemaVersion: 1,
+        recipes: [{
+          schemaVersion: 1,
+          avatarId: "preset-01",
+          rig: "humanoid-v1",
+          bodyVariant: "base",
+          headVariant: "round",
+          hairVariant: "short",
+          outfitVariant: "hoodie",
+          palette: { skin: "#f2d1b3", primary: "#355c7d", accent: "#f67280" },
+          accessories: []
+        }]
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    return new Response("not found", { status: 404 });
+  };
+
+  try {
+    const scene = new THREE.Scene();
+    const result = await startLocalAvatarSession({
+      catalogUrl: "https://example.com/assets/avatars/catalog.v1.json",
+      renderer: {} as THREE.WebGLRenderer,
+      scene
+    });
+    assert.equal(result.controller?.selectedAvatarId, "preset-01");
+    assert.equal(result.diagnostics.state, "loaded");
+    assert.equal(result.note, "local_avatar_ready");
+    assert.equal(scene.children.includes(result.controller!.root), true);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("startLocalAvatarSession returns failed note on broken catalog", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response("missing", { status: 404 });
+
+  try {
+    const result = await startLocalAvatarSession({
+      catalogUrl: "https://example.com/assets/avatars/catalog.v1.json",
+      renderer: {} as THREE.WebGLRenderer,
+      scene: new THREE.Scene()
+    });
+    assert.equal(result.controller, null);
+    assert.equal(result.note, "local_avatar_failed");
+    assert.equal(result.diagnostics.state, "failed");
+  } finally {
+    globalThis.fetch = originalFetch;
   }
 });

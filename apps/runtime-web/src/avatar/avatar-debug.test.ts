@@ -16,6 +16,12 @@ test("createEmptyAvatarDiagnostics returns idle baseline", () => {
     packFormat: null,
     presetCount: 0,
     selectedAvatarId: null,
+    inputMode: null,
+    locomotionState: null,
+    visibilityState: null,
+    solveState: null,
+    animationState: null,
+    activeControllerCount: 0,
     fallbackActive: false,
     fallbackReason: null,
     sandboxEntryPoint: null,
@@ -41,12 +47,20 @@ test("createAvatarLoadedDiagnostics stores selected preset and validation summar
     sandboxEntryPoint: "/assets/avatars/catalog.v1.json",
     selectedAvatarId: "preset-01",
     catalogId: "technical-v1",
-    packUrl: "/assets/avatars/avatar-pack.v1.glb",
-    packFormat: "procedural-debug-v1",
-    presetCount: 10,
-    validatorSummary: ["preset-01:11800"]
-  });
+      packUrl: "/assets/avatars/avatar-pack.v1.glb",
+      packFormat: "procedural-debug-v1",
+      presetCount: 10,
+      validatorSummary: ["preset-01:11800"],
+      inputMode: "desktop",
+      locomotionState: "idle",
+      visibilityState: "full-body",
+      solveState: "active",
+      animationState: "idle",
+      activeControllerCount: 0
+    });
   assert.equal(diagnostics.state, "loaded");
   assert.equal(diagnostics.selectedAvatarId, "preset-01");
   assert.deepEqual(diagnostics.validatorSummary, ["preset-01:11800"]);
+  assert.equal(diagnostics.visibilityState, "full-body");
+  assert.equal(diagnostics.animationState, "idle");
 });
