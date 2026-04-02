@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { VRButton } from "three/examples/jsm/webxr/VRButton.js";
 import { Room, RoomEvent, Track } from "livekit-client";
 
+import { appendBrandingSuffix, applyRoomShellBootState } from "./boot-session.js";
 import { bootRuntime, fetchRuntimeSpaces, listPresence, planVoiceSession, removePresence, resolveCurrentSpace, upsertPresence, type PresenceState, type RuntimeSpaceOption } from "./index.js";
 import { applySnapTurn, computeKeyboardDirection, rotateFlatVector, sanitizeXrAxes, stepFlatMovement } from "./movement.js";
 import { createMotionTrack, pushMotionSample, sampleMotion, type MotionTrack } from "./motion-state.js";
@@ -1361,15 +1362,18 @@ async function main(): Promise<void> {
   debugState.roomStateUrl = boot.roomStateUrl;
   debugState.sceneBundleUrl = boot.sceneBundleUrl ?? null;
   debugState.sceneDebug.bundleUrl = boot.sceneBundleUrl ?? null;
-  setRoomStateStatus(`Room-state: connecting`);
-  roomNameEl.textContent = `${boot.template} - ${boot.roomId}`;
-  brandingLineEl.textContent = boot.assets.length > 0
-    ? `Attached assets: ${boot.assets.map((asset) => `${asset.kind}${asset.validationStatus ? ` [${asset.validationStatus}]` : ""}`).join(", ")}`
-    : "No branded assets attached";
-  guestAccessLineEl.textContent = boot.guestAllowed ? "Guest access: enabled" : "Guest access: members only";
+  applyRoomShellBootState({
+    boot,
+    elements: {
+      roomNameEl,
+      brandingLineEl,
+      guestAccessLineEl
+    },
+    floorMaterial,
+    wallMaterial,
+    setRoomStateStatus
+  });
   await loadAvailableSpaces(boot.roomId);
-  floorMaterial.color.set(boot.theme.accentColor);
-  wallMaterial.color.set(boot.theme.primaryColor);
   const avatarCatalogUrl = resolveAvatarCatalogUrl(boot);
   const avatarElements = {
     panelEl: avatarSandboxPanel,
@@ -1437,9 +1441,7 @@ async function main(): Promise<void> {
     effectiveCleanSceneMode = sceneResult.effectiveCleanSceneMode;
     debugState.sceneBundleState = sceneResult.sceneBundleState;
     debugState.sceneDebug = sceneResult.sceneDebug;
-    if (sceneResult.brandingSuffix) {
-      brandingLineEl.textContent = `${brandingLineEl.textContent} | ${sceneResult.brandingSuffix}`;
-    }
+    appendBrandingSuffix(brandingLineEl, sceneResult.brandingSuffix);
     if (sceneResult.note) {
       void reportDiagnostics(sceneResult.note);
     }
