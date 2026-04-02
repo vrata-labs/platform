@@ -6,7 +6,7 @@ import { appendBrandingSuffix, applyRoomShellBootState } from "./boot-session.js
 import { bootRuntime, fetchRuntimeSpaces, listPresence, planVoiceSession, removePresence, resolveCurrentSpace, upsertPresence, type PresenceState, type RuntimeSpaceOption } from "./index.js";
 import { applySnapTurn, computeKeyboardDirection, rotateFlatVector, sanitizeXrAxes, stepFlatMovement } from "./movement.js";
 import { createMotionTrack, pushMotionSample, sampleMotion, type MotionTrack } from "./motion-state.js";
-import { connectRoomState, sendParticipantUpdate, type RoomStateClient, type RoomStateSnapshot } from "./room-state-client.js";
+import { connectRoomState, sendAvatarPoseFrame, sendAvatarReliableState, sendParticipantUpdate, type RoomStateClient, type RoomStateSnapshot } from "./room-state-client.js";
 import { classifyMediaError, classifyRoomStateError, createFaultError, getRuntimeIssue, shouldRetryConnection, type RuntimeIssue } from "./runtime-errors.js";
 import { canRetry, createReconnectPolicy, getReconnectDelayMs } from "./reconnect.js";
 import { applyRuntimeIssueState, clearRuntimeIssueState, createRuntimeUiState } from "./runtime-state.js";
@@ -17,7 +17,7 @@ import { loadSceneBundle } from "./scene-loader.js";
 import { startSceneBundleSession } from "./scene-session.js";
 import { detectXrSupport, getEnterVrVisibility } from "./xr.js";
 import { createAvatarLoadingDiagnostics, createEmptyAvatarDiagnostics } from "./avatar/avatar-debug.js";
-import { createAvatarOutboundPublisher } from "./avatar/avatar-publish.js";
+import { createAvatarOutboundPublisher, type AvatarOutboundPayload } from "./avatar/avatar-publish.js";
 import { createInitialAvatarRuntimeFlags, resolveAvatarCatalogUrl, resolveAvatarRuntimeFlags } from "./avatar/avatar-runtime.js";
 import { setAvatarSandboxStatus } from "./avatar/avatar-sandbox.js";
 import { resetAvatarSession, startAvatarSandboxSession, startLocalAvatarSession } from "./avatar/avatar-session.js";
@@ -437,7 +437,7 @@ const debugState = {
   availableSpaceCount: 0,
   avatarDebug: createEmptyAvatarDiagnostics(),
   avatarSnapshot: null as LocalAvatarSnapshotV1 | null,
-  avatarTransportPreview: null as { reliableState: unknown; poseFrame: unknown } | null
+  avatarTransportPreview: null as AvatarOutboundPayload | null
 };
 
 const floorMaterial = floor.material as THREE.MeshStandardMaterial;
@@ -1199,6 +1199,12 @@ async function syncPresence(mode: PresenceState["mode"], audioActive: boolean): 
 
   if (roomStateClient && roomStateConnected) {
     sendParticipantUpdate(roomStateClient, presencePayload);
+    if (runtimeFlags.avatarsEnabled && debugState.avatarTransportPreview) {
+      sendAvatarReliableState(roomStateClient, debugState.avatarTransportPreview.reliableState);
+      if (runtimeFlags.avatarPoseBinaryEnabled) {
+        sendAvatarPoseFrame(roomStateClient, debugState.avatarTransportPreview.poseFrame);
+      }
+    }
   } else {
     await upsertPresence(apiBaseUrl, roomId, presencePayload);
   }

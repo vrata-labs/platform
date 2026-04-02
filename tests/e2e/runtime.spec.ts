@@ -305,6 +305,50 @@ test("avatar-enabled room exposes local self-avatar diagnostics in normal room f
   }).toBeTruthy();
 });
 
+test("avatar-enabled room diagnostics api exposes transport preview payload", async ({ page, request }) => {
+  const createRoomResponse = await request.post("/api/rooms", {
+    headers: {
+      "x-noah-admin-token": "test-admin-token"
+    },
+    data: {
+      tenantId: "demo-tenant",
+      templateId: "meeting-room-basic",
+      name: "Avatar Transport Diagnostics Room",
+      avatarConfig: {
+        avatarsEnabled: true,
+        avatarCatalogUrl: "/assets/avatars/catalog.v1.json",
+        avatarQualityProfile: "desktop-standard",
+        avatarFallbackCapsulesEnabled: true,
+        avatarSeatsEnabled: false
+      }
+    }
+  });
+  expect(createRoomResponse.ok()).toBeTruthy();
+  const room = (await createRoomResponse.json()) as { roomId: string; roomLink: string };
+
+  await page.goto(`${room.roomLink}?debug=1&bot=line`);
+
+  await expect.poll(async () => {
+    const diagnosticsResponse = await request.get(`/api/rooms/${room.roomId}/diagnostics`);
+    const diagnostics = (await diagnosticsResponse.json()) as {
+      items: Array<{
+        avatarTransportPreview?: {
+          reliableState?: { avatarId?: string | null; inputMode?: string | null };
+          poseFrame?: { seq?: number | null; locomotion?: { mode?: number | null } };
+        };
+      }>;
+    };
+
+    return diagnostics.items.some((item) => item.avatarTransportPreview?.reliableState?.avatarId === "preset-01"
+      && item.avatarTransportPreview?.reliableState?.inputMode === "desktop"
+      && (item.avatarTransportPreview?.poseFrame?.seq ?? 0) > 0
+      && item.avatarTransportPreview?.poseFrame?.locomotion?.mode === 1);
+  }, {
+    timeout: 15000,
+    intervals: [1000, 2000, 3000]
+  }).toBeTruthy();
+});
+
 test("avatar-enabled room uses mobile upper-body profile on mobile user agent", async ({ browser, request }) => {
   const createRoomResponse = await request.post("/api/rooms", {
     headers: {

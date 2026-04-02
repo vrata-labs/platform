@@ -1,4 +1,5 @@
 import type { PresenceState } from "./index.js";
+import type { AvatarReliableState, CompactPoseFrame } from "./avatar/avatar-types.js";
 
 export interface RoomStateSnapshot {
   roomId: string;
@@ -8,6 +9,12 @@ export interface RoomStateSnapshot {
 export interface RoomStateClient {
   socket: WebSocket;
   close(): void;
+}
+
+type SendableSocket = Pick<WebSocket, "OPEN" | "readyState" | "send">;
+
+function canSend(socket: SendableSocket): boolean {
+  return socket.readyState === socket.OPEN;
 }
 
 export interface RoomStateClientHandlers {
@@ -61,8 +68,22 @@ export function connectRoomState(
 }
 
 export function sendParticipantUpdate(client: RoomStateClient, participant: PresenceState): void {
-  if (client.socket.readyState !== client.socket.OPEN) {
+  if (!canSend(client.socket)) {
     return;
   }
   client.socket.send(JSON.stringify({ type: "participant_update", participant }));
+}
+
+export function sendAvatarReliableState(client: RoomStateClient, reliableState: AvatarReliableState): void {
+  if (!canSend(client.socket)) {
+    return;
+  }
+  client.socket.send(JSON.stringify({ type: "avatar_reliable_state", reliableState }));
+}
+
+export function sendAvatarPoseFrame(client: RoomStateClient, poseFrame: CompactPoseFrame): void {
+  if (!canSend(client.socket)) {
+    return;
+  }
+  client.socket.send(JSON.stringify({ type: "avatar_pose_preview", poseFrame }));
 }
