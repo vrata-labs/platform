@@ -9,7 +9,7 @@ import { computeAvatarAnimationPose, selectAvatarAnimationClip } from "./avatar-
 import { resolveAvatarLocomotion } from "./avatar-locomotion.js";
 import { solveUpperBodyPose, type AvatarPosePoint } from "./avatar-ik.js";
 import type { AvatarInputMode, LoadedAvatarPreset } from "./avatar-types.js";
-import { resolveSelfAvatarVisibility } from "./avatar-visibility.js";
+import { resolveAvatarViewProfile } from "./avatar-visibility.js";
 
 export interface AvatarSelectionStorage {
   getItem(key: string): string | null;
@@ -40,7 +40,8 @@ const AVATAR_SELECTION_KEY = "noah.avatarPresetId";
 
 interface LocalAvatarVisual {
   root: THREE.Group;
-  body: THREE.Mesh;
+  torso: THREE.Mesh;
+  lowerBody: THREE.Mesh;
   head: THREE.Mesh;
   leftHand: THREE.Mesh;
   rightHand: THREE.Mesh;
@@ -55,9 +56,13 @@ function createLocalAvatarVisual(preset: LoadedAvatarPreset): LocalAvatarVisual 
   const root = new THREE.Group();
   root.name = `self-avatar:${preset.preset.avatarId}`;
 
-  const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.22, 0.8, 6, 12), createMaterial(preset.recipe.palette.primary));
-  body.position.y = 0.92;
-  root.add(body);
+  const torso = new THREE.Mesh(new THREE.CapsuleGeometry(0.2, 0.42, 6, 12), createMaterial(preset.recipe.palette.primary));
+  torso.position.y = 1.12;
+  root.add(torso);
+
+  const lowerBody = new THREE.Mesh(new THREE.CapsuleGeometry(0.18, 0.46, 6, 12), createMaterial(preset.recipe.palette.primary));
+  lowerBody.position.y = 0.52;
+  root.add(lowerBody);
 
   const head = new THREE.Mesh(new THREE.SphereGeometry(0.16, 18, 18), createMaterial(preset.recipe.palette.skin));
   head.position.y = 1.58;
@@ -79,7 +84,7 @@ function createLocalAvatarVisual(preset: LoadedAvatarPreset): LocalAvatarVisual 
   aura.position.y = 0.02;
   root.add(aura);
 
-  return { root, body, head, leftHand, rightHand, aura };
+  return { root, torso, lowerBody, head, leftHand, rightHand, aura };
 }
 
 function resolveSelectedAvatarPreset(input: {
@@ -136,10 +141,11 @@ export function createLocalAvatarController(input: {
     diagnostics,
     update(frame): void {
       animationElapsedSeconds += Math.max(0, frame.deltaSeconds);
-      const visibility = resolveSelfAvatarVisibility({
+      const viewProfile = resolveAvatarViewProfile({
         inputMode: frame.inputMode,
         xrPresenting: frame.xrPresenting
       });
+      const visibility = viewProfile.visibility;
       const locomotion = resolveAvatarLocomotion({
         moveX: frame.moveX,
         moveZ: frame.moveZ,
@@ -150,7 +156,8 @@ export function createLocalAvatarController(input: {
         head: frame.headPosition,
         leftHand: frame.leftHand,
         rightHand: frame.rightHand,
-        inputMode: frame.inputMode
+        inputMode: frame.inputMode,
+        poseProfile: viewProfile.poseProfile
       });
       const controllerCount = Number(Boolean(frame.leftHand)) + Number(Boolean(frame.rightHand));
       const animation = selectAvatarAnimationClip({
@@ -167,9 +174,11 @@ export function createLocalAvatarController(input: {
       visual.root.position.set(frame.rootPosition.x, frame.rootPosition.y, frame.rootPosition.z);
       visual.root.rotation.y = frame.yaw;
 
-      visual.body.position.set(0, 0.92 + pose.bodyBob, 0);
-      visual.body.rotation.z = pose.bodyRoll;
-      visual.head.position.set(solve.headLocal.x, solve.headLocal.y, solve.headLocal.z);
+      visual.torso.position.set(0, 1.12 + pose.bodyBob, 0);
+      visual.torso.rotation.z = pose.bodyRoll;
+      visual.lowerBody.position.set(0, 0.52 + pose.bodyBob * 0.35, 0);
+      visual.lowerBody.rotation.z = pose.bodyRoll * 0.5;
+      visual.head.position.set(solve.headLocal.x, Math.max(solve.headLocal.y, viewProfile.poseProfile.headHeight), solve.headLocal.z);
       visual.head.rotation.z = pose.headTilt;
       visual.leftHand.position.set(
         solve.leftHandLocal.x,
@@ -185,11 +194,12 @@ export function createLocalAvatarController(input: {
       visual.aura.scale.setScalar(auraScale);
       (visual.aura.material as THREE.MeshBasicMaterial).opacity = animation.fallback ? 0.14 : 0.18 + Math.min(0.18, locomotion.speed * 0.08);
 
-      visual.body.visible = visibility === "full-body";
-      visual.head.visible = visibility === "full-body";
+      visual.torso.visible = visibility === "full-body" || visibility === "upper-body";
+      visual.lowerBody.visible = visibility === "full-body";
+      visual.head.visible = visibility === "full-body" || visibility === "upper-body";
       visual.leftHand.visible = visibility !== "hidden";
       visual.rightHand.visible = visibility !== "hidden";
-      visual.aura.visible = visibility !== "hidden";
+      visual.aura.visible = visibility === "full-body" || visibility === "upper-body";
 
       diagnostics.inputMode = frame.inputMode;
       diagnostics.locomotionState = locomotion.state;

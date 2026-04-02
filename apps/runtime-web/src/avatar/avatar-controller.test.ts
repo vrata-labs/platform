@@ -157,10 +157,42 @@ test("createLocalAvatarController applies visible walk pose to body and hands", 
     turnRate: 0
   });
 
-  const body = controller.root.children[0]!;
-  const leftHand = controller.root.children[2];
-  const rightHand = controller.root.children[3];
-  assert.equal(body.position.y > 0.92, true);
+  const torso = controller.root.children[0]!;
+  const leftHand = controller.root.children[3];
+  const rightHand = controller.root.children[4];
+  assert.equal(torso.position.y > 1.12, true);
   assert.notEqual(leftHand.position.z, 0.12);
   assert.notEqual(rightHand.position.z, 0.12);
+});
+
+test("createLocalAvatarController hides lower body for mobile upper-body profile", () => {
+  const controller = createLocalAvatarController({
+    presets: [createPreset("preset-01")],
+    diagnosticsInput: {
+      catalogId: "technical-v1",
+      packUrl: "/assets/avatars/avatar-pack.v1.glb",
+      packFormat: "procedural-debug-v1",
+      presetCount: 1,
+      validatorSummary: ["preset-01:1000"],
+      sandboxEntryPoint: "/assets/avatars/catalog.v1.json"
+    }
+  });
+
+  controller.update({
+    deltaSeconds: 0.016,
+    inputMode: "mobile",
+    xrPresenting: false,
+    rootPosition: { x: 0, y: 0, z: 0 },
+    yaw: 0,
+    headPosition: { x: 0, y: 1.5, z: 0 },
+    moveX: 0,
+    moveZ: 0,
+    turnRate: 0
+  });
+
+  const torso = controller.root.children[0]!;
+  const lowerBody = controller.root.children[1]!;
+  assert.equal(torso.visible, true);
+  assert.equal(lowerBody.visible, false);
+  assert.equal(controller.diagnostics.visibilityState, "upper-body");
 });

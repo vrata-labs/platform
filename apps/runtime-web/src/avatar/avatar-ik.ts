@@ -1,3 +1,5 @@
+import type { AvatarPoseProfile } from "./avatar-visibility.js";
+
 export interface AvatarPosePoint {
   x: number;
   y: number;
@@ -47,17 +49,19 @@ export function solveUpperBodyPose(input: {
   leftHand?: AvatarPosePoint | null;
   rightHand?: AvatarPosePoint | null;
   inputMode: "desktop" | "mobile" | "vr-controller" | "vr-hand";
+  poseProfile?: AvatarPoseProfile;
 }): AvatarUpperBodySolveResult {
   const headLocal = clampHead(toLocal(input.root, input.head));
+  const poseProfile = input.poseProfile;
   const leftFallback = {
-    x: input.inputMode === "mobile" ? -0.22 : -0.28,
-    y: input.inputMode === "mobile" ? 1.02 : 1.16,
-    z: input.inputMode === "desktop" ? -0.08 : 0.12
+    x: -(poseProfile?.handSpread ?? (input.inputMode === "mobile" ? 0.22 : 0.28)),
+    y: poseProfile?.handHeight ?? (input.inputMode === "mobile" ? 1.02 : 1.16),
+    z: poseProfile?.handForward ?? (input.inputMode === "desktop" ? -0.08 : 0.12)
   };
   const rightFallback = {
-    x: input.inputMode === "mobile" ? 0.22 : 0.28,
-    y: input.inputMode === "mobile" ? 1.02 : 1.16,
-    z: input.inputMode === "desktop" ? -0.08 : 0.12
+    x: poseProfile?.handSpread ?? (input.inputMode === "mobile" ? 0.22 : 0.28),
+    y: poseProfile?.handHeight ?? (input.inputMode === "mobile" ? 1.02 : 1.16),
+    z: poseProfile?.handForward ?? (input.inputMode === "desktop" ? -0.08 : 0.12)
   };
 
   const leftHandLocal = clampHand(

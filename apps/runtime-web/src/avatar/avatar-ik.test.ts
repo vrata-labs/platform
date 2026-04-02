@@ -29,3 +29,21 @@ test("solveUpperBodyPose uses fallback hands when controllers missing", () => {
   assert.equal(result.leftHandLocal.x < 0, true);
   assert.equal(result.rightHandLocal.x > 0, true);
 });
+
+test("solveUpperBodyPose respects mobile pose profile fallback", () => {
+  const result = solveUpperBodyPose({
+    root: { x: 0, y: 0, z: 0 },
+    head: { x: 0, y: 1.5, z: 0 },
+    inputMode: "mobile",
+    poseProfile: {
+      headHeight: 1.5,
+      handHeight: 1.02,
+      handForward: 0.04,
+      handSpread: 0.22
+    }
+  });
+
+  assert.equal(result.leftHandLocal.x, -0.22);
+  assert.equal(result.rightHandLocal.x, 0.22);
+  assert.equal(result.leftHandLocal.z, 0.04);
+});

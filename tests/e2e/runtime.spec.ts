@@ -267,6 +267,64 @@ test("avatar-enabled room exposes local self-avatar diagnostics in normal room f
   }).toBeTruthy();
 });
 
+test("avatar-enabled room uses mobile upper-body profile on mobile user agent", async ({ browser, request }) => {
+  const createRoomResponse = await request.post("/api/rooms", {
+    headers: {
+      "x-noah-admin-token": "test-admin-token"
+    },
+    data: {
+      tenantId: "demo-tenant",
+      templateId: "meeting-room-basic",
+      name: "Avatar Mobile Room",
+      avatarConfig: {
+        avatarsEnabled: true,
+        avatarCatalogUrl: "/assets/avatars/catalog.v1.json",
+        avatarQualityProfile: "mobile-lite",
+        avatarFallbackCapsulesEnabled: true,
+        avatarSeatsEnabled: false
+      }
+    }
+  });
+  expect(createRoomResponse.ok()).toBeTruthy();
+  const room = (await createRoomResponse.json()) as { roomLink: string };
+
+  const mobileContext = await browser.newContext({
+    viewport: { width: 390, height: 844 },
+    userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+  });
+  const mobilePage = await mobileContext.newPage();
+
+  try {
+    await mobilePage.goto(`${room.roomLink}?debug=1`);
+    await expect.poll(async () => {
+      const debug = await mobilePage.evaluate(() => (window as Window & {
+        __NOAH_DEBUG__?: {
+          avatarDebug?: {
+            state?: string;
+            visibilityState?: string | null;
+            inputMode?: string | null;
+          };
+        };
+      }).__NOAH_DEBUG__);
+
+      return {
+        state: debug?.avatarDebug?.state ?? null,
+        visibilityState: debug?.avatarDebug?.visibilityState ?? null,
+        inputMode: debug?.avatarDebug?.inputMode ?? null
+      };
+    }, {
+      timeout: 15000,
+      intervals: [1000, 2000, 3000]
+    }).toEqual({
+      state: "loaded",
+      visibilityState: "upper-body",
+      inputMode: "mobile"
+    });
+  } finally {
+    await mobileContext.close();
+  }
+});
+
 test("room creation API returns a usable room link", async ({ page, request }) => {
   const createRoomResponse = await request.post("/api/rooms", {
     headers: {
