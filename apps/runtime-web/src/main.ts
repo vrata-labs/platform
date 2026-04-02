@@ -964,7 +964,7 @@ function getLocalAvatarHandTargets(): { leftHand: { x: number; y: number; z: num
   return result;
 }
 
-function updateLocalAvatar(): void {
+function updateLocalAvatar(delta: number): void {
   if (!localAvatarController) {
     return;
   }
@@ -979,6 +979,7 @@ function updateLocalAvatar(): void {
       : "desktop";
 
   localAvatarController.update({
+    deltaSeconds: delta,
     inputMode,
     xrPresenting: renderer.xr.isPresenting,
     rootPosition: {
@@ -1394,7 +1395,7 @@ let presenceAccumulator = 0;
 renderer.setAnimationLoop(() => {
   const delta = clock.getDelta();
   updateMovement(delta);
-  updateLocalAvatar();
+  updateLocalAvatar(delta);
   updateRemoteAvatarInterpolation(delta);
   updateSpatialAudio();
   renderDebugPanel();

@@ -121,6 +121,18 @@ test("startLocalAvatarSession creates local avatar controller from procedural ca
     assert.equal(result.diagnostics.state, "loaded");
     assert.equal(result.note, "local_avatar_ready");
     assert.equal(scene.children.includes(result.controller!.root), true);
+    result.controller?.update({
+      deltaSeconds: 0.25,
+      inputMode: "desktop",
+      xrPresenting: false,
+      rootPosition: { x: 0, y: 0, z: 0 },
+      yaw: 0,
+      headPosition: { x: 0, y: 1.6, z: 0 },
+      moveX: 0,
+      moveZ: 1,
+      turnRate: 0
+    });
+    assert.equal(result.controller?.diagnostics.animationState, "idle");
   } finally {
     globalThis.fetch = originalFetch;
   }

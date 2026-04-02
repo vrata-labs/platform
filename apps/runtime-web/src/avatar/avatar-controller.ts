@@ -5,7 +5,7 @@ import {
   createAvatarLoadedDiagnostics,
   type AvatarDiagnostics
 } from "./avatar-debug.js";
-import { selectAvatarAnimationClip } from "./avatar-animation.js";
+import { computeAvatarAnimationPose, selectAvatarAnimationClip } from "./avatar-animation.js";
 import { resolveAvatarLocomotion } from "./avatar-locomotion.js";
 import { solveUpperBodyPose, type AvatarPosePoint } from "./avatar-ik.js";
 import type { AvatarInputMode, LoadedAvatarPreset } from "./avatar-types.js";
@@ -21,6 +21,7 @@ export interface LocalAvatarController {
   selectedAvatarId: string;
   diagnostics: AvatarDiagnostics;
   update(input: {
+    deltaSeconds: number;
     inputMode: AvatarInputMode;
     xrPresenting: boolean;
     rootPosition: AvatarPosePoint;
@@ -117,6 +118,7 @@ export function createLocalAvatarController(input: {
   input.storage?.setItem(AVATAR_SELECTION_KEY, selectedPreset.preset.avatarId);
 
   const visual = createLocalAvatarVisual(selectedPreset);
+  let animationElapsedSeconds = 0;
   const diagnostics = createAvatarLoadedDiagnostics({
     ...input.diagnosticsInput,
     selectedAvatarId: selectedPreset.preset.avatarId,
@@ -133,6 +135,7 @@ export function createLocalAvatarController(input: {
     selectedAvatarId: selectedPreset.preset.avatarId,
     diagnostics,
     update(frame): void {
+      animationElapsedSeconds += Math.max(0, frame.deltaSeconds);
       const visibility = resolveSelfAvatarVisibility({
         inputMode: frame.inputMode,
         xrPresenting: frame.xrPresenting
@@ -154,16 +157,31 @@ export function createLocalAvatarController(input: {
         locomotionState: locomotion.state,
         availableClips: selectedPreset.preset.validation.animationClips
       });
+      const pose = computeAvatarAnimationPose({
+        clip: animation.clip,
+        elapsedSeconds: animationElapsedSeconds,
+        speed: locomotion.speed,
+        turnRate: frame.turnRate
+      });
 
       visual.root.position.set(frame.rootPosition.x, frame.rootPosition.y, frame.rootPosition.z);
       visual.root.rotation.y = frame.yaw;
 
-      const bob = locomotion.state === "idle" ? 0 : Math.min(0.05, locomotion.speed * 0.03);
-      visual.body.position.set(0, 0.92 + bob, 0);
+      visual.body.position.set(0, 0.92 + pose.bodyBob, 0);
+      visual.body.rotation.z = pose.bodyRoll;
       visual.head.position.set(solve.headLocal.x, solve.headLocal.y, solve.headLocal.z);
-      visual.leftHand.position.set(solve.leftHandLocal.x, solve.leftHandLocal.y, solve.leftHandLocal.z);
-      visual.rightHand.position.set(solve.rightHandLocal.x, solve.rightHandLocal.y, solve.rightHandLocal.z);
-      const auraScale = animation.fallback ? 1.02 : 1 + Math.min(0.08, locomotion.speed * 0.03);
+      visual.head.rotation.z = pose.headTilt;
+      visual.leftHand.position.set(
+        solve.leftHandLocal.x,
+        solve.leftHandLocal.y + pose.leftHandYOffset,
+        solve.leftHandLocal.z + pose.leftHandForward
+      );
+      visual.rightHand.position.set(
+        solve.rightHandLocal.x,
+        solve.rightHandLocal.y + pose.rightHandYOffset,
+        solve.rightHandLocal.z + pose.rightHandForward
+      );
+      const auraScale = animation.fallback ? Math.max(1.02, pose.auraScale - 0.03) : pose.auraScale;
       visual.aura.scale.setScalar(auraScale);
       (visual.aura.material as THREE.MeshBasicMaterial).opacity = animation.fallback ? 0.14 : 0.18 + Math.min(0.18, locomotion.speed * 0.08);
 
