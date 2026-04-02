@@ -190,16 +190,19 @@ function getRequestProto(request?: IncomingMessage): "http" | "https" {
 }
 
 function getDefaultRoomStateUrl(request?: IncomingMessage): string {
-  if (process.env.ROOM_STATE_PUBLIC_URL) {
-    return process.env.ROOM_STATE_PUBLIC_URL;
-  }
-
   const host = getRequestHost(request);
-  if (!host) {
-    return "ws://127.0.0.1:2567";
+  const proto = getRequestProto(request);
+  const configuredRoomStateUrl = process.env.ROOM_STATE_PUBLIC_URL;
+  if (configuredRoomStateUrl) {
+    if (proto !== "https" || !configuredRoomStateUrl.startsWith("ws://") || !host) {
+      return configuredRoomStateUrl;
+    }
   }
 
-  const proto = getRequestProto(request);
+  if (!host) {
+    return configuredRoomStateUrl ?? "ws://127.0.0.1:2567";
+  }
+
   const protocol = proto === "https" ? "wss" : "ws";
   const hostname = host.split(":")[0] ?? host;
 

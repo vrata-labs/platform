@@ -199,6 +199,34 @@ test("room manifest derives secure room-state url behind https proxy", async () 
   }
 });
 
+test("room manifest upgrades insecure configured room-state url behind https proxy", async () => {
+  process.env.NOAH_DISABLE_AUTOSTART = "1";
+  process.env.API_PORT = "4021";
+  process.env.CONTROL_PLANE_ADMIN_TOKEN = "test-admin-token";
+  process.env.ROOM_STATE_PUBLIC_URL = "ws://89.169.161.91:2567";
+  const module = await import("./index.js");
+  const server = module.startApiServer(4021);
+
+  try {
+    const manifestResponse = await fetch("http://127.0.0.1:4021/api/rooms/demo-room/manifest", {
+      headers: {
+        "x-forwarded-proto": "https",
+        "x-forwarded-host": "89.169.161.91.sslip.io"
+      }
+    });
+    assert.equal(manifestResponse.ok, true);
+    const manifest = (await manifestResponse.json()) as {
+      realtime?: { roomStateUrl?: string };
+    };
+    assert.equal(manifest.realtime?.roomStateUrl, "wss://state.89.169.161.91.sslip.io");
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    delete process.env.NOAH_DISABLE_AUTOSTART;
+    delete process.env.CONTROL_PLANE_ADMIN_TOKEN;
+    delete process.env.ROOM_STATE_PUBLIC_URL;
+  }
+});
+
 test("room api accepts legacy top-level avatar fields and normalizes them into avatarConfig", async () => {
   process.env.NOAH_DISABLE_AUTOSTART = "1";
   process.env.API_PORT = "4018";
