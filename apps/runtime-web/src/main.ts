@@ -10,6 +10,7 @@ import { connectRoomState, sendParticipantUpdate, type RoomStateClient, type Roo
 import { classifyMediaError, classifyRoomStateError, createFaultError, getRuntimeIssue, shouldRetryConnection, type RuntimeIssue } from "./runtime-errors.js";
 import { canRetry, createReconnectPolicy, getReconnectDelayMs } from "./reconnect.js";
 import { applyRuntimeIssueState, clearRuntimeIssueState, createRuntimeUiState } from "./runtime-state.js";
+import { applyPassiveMediaRecovery, applyPostBootControls, shouldStartPassiveMedia } from "./runtime-startup.js";
 import { applySpatialSettings, createSpatialAudioSettings } from "./spatial-audio.js";
 import { captureCanvasDiagnostics, createEmptySceneDiagnostics, inspectSceneObject } from "./scene-debug.js";
 import { loadSceneBundle } from "./scene-loader.js";
@@ -1447,15 +1448,29 @@ async function main(): Promise<void> {
     }
   }
 
-  setStatus(`Joined as ${displayName}`);
-  startShareButton.disabled = !runtimeFlags.screenShare && !shareMockEnabled;
-  joinAudioButton.disabled = !runtimeFlags.audioJoin;
-  if (!runtimeFlags.audioJoin) {
-    muteButton.disabled = true;
-    debugState.audioState = "disabled";
-  }
+  applyPostBootControls({
+    displayName,
+    runtimeFlags: {
+      audioJoin: runtimeFlags.audioJoin,
+      screenShare: runtimeFlags.screenShare
+    },
+    shareMockEnabled,
+    elements: {
+      joinAudioButton,
+      muteButton,
+      startShareButton
+    },
+    setStatus,
+    setAudioStateDisabled() {
+      debugState.audioState = "disabled";
+    }
+  });
 
-  if ((runtimeFlags.audioJoin || runtimeFlags.screenShare) && faultConfig.audio !== "mic_denied" && faultConfig.audio !== "no_audio_device") {
+  if (shouldStartPassiveMedia({
+    audioJoin: runtimeFlags.audioJoin,
+    screenShare: runtimeFlags.screenShare,
+    audioFault: faultConfig.audio ?? undefined
+  })) {
     void ensureMediaRoom().then(() => {
       clearIssue(`Joined as ${displayName}`);
       debugState.audioState = "connected-passive";
@@ -1464,11 +1479,7 @@ async function main(): Promise<void> {
       console.error(error);
       const issue = classifyMediaError(error);
       if (runtimeUiState.issueCode === "room_state_failed") {
-        runtimeUiState = {
-          ...runtimeUiState,
-          audioState: "degraded",
-          lastRecoveryAction: "media_passive_connect_failed"
-        };
+        runtimeUiState = applyPassiveMediaRecovery({ runtimeUiState, issue });
         debugState.audioState = runtimeUiState.audioState;
         debugState.lastRecoveryAction = runtimeUiState.lastRecoveryAction;
         void reportDiagnostics(issue.diagnosticsNote);
