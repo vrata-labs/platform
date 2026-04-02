@@ -17,11 +17,24 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
-function toLocal(root: AvatarPosePoint, point: AvatarPosePoint): AvatarPosePoint {
+function rotateAroundYaw(point: AvatarPosePoint, yaw: number): AvatarPosePoint {
+  const cos = Math.cos(yaw);
+  const sin = Math.sin(yaw);
   return {
+    x: point.x * cos - point.z * sin,
+    y: point.y,
+    z: point.x * sin + point.z * cos
+  };
+}
+
+function toLocal(root: AvatarPosePoint, point: AvatarPosePoint, rootYaw = 0): AvatarPosePoint {
+  const translated = {
     x: point.x - root.x,
     y: point.y - root.y,
     z: point.z - root.z
+  };
+  return {
+    ...rotateAroundYaw(translated, -rootYaw)
   };
 }
 
@@ -50,8 +63,9 @@ export function solveUpperBodyPose(input: {
   rightHand?: AvatarPosePoint | null;
   inputMode: "desktop" | "mobile" | "vr-controller" | "vr-hand";
   poseProfile?: AvatarPoseProfile;
+  rootYaw?: number;
 }): AvatarUpperBodySolveResult {
-  const headLocal = clampHead(toLocal(input.root, input.head));
+  const headLocal = clampHead(toLocal(input.root, input.head, input.rootYaw));
   const poseProfile = input.poseProfile;
   const leftFallback = {
     x: -(poseProfile?.handSpread ?? (input.inputMode === "mobile" ? 0.22 : 0.28)),
@@ -65,11 +79,11 @@ export function solveUpperBodyPose(input: {
   };
 
   const leftHandLocal = clampHand(
-    input.leftHand ? toLocal(input.root, input.leftHand) : leftFallback,
+    input.leftHand ? toLocal(input.root, input.leftHand, input.rootYaw) : leftFallback,
     "left"
   );
   const rightHandLocal = clampHand(
-    input.rightHand ? toLocal(input.root, input.rightHand) : rightFallback,
+    input.rightHand ? toLocal(input.root, input.rightHand, input.rootYaw) : rightFallback,
     "right"
   );
 

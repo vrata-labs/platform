@@ -47,3 +47,17 @@ test("solveUpperBodyPose respects mobile pose profile fallback", () => {
   assert.equal(result.rightHandLocal.x, 0.22);
   assert.equal(result.leftHandLocal.z, 0.04);
 });
+
+test("solveUpperBodyPose rotates world hand positions into local avatar yaw space", () => {
+  const result = solveUpperBodyPose({
+    root: { x: 0, y: 0, z: 0 },
+    head: { x: 0, y: 1.6, z: 0 },
+    leftHand: { x: 0.2, y: 1.2, z: 0 },
+    rightHand: { x: -0.2, y: 1.2, z: 0 },
+    inputMode: "vr-controller",
+    rootYaw: Math.PI / 2
+  });
+
+  assert.equal(Math.round(result.leftHandLocal.z * 100) / 100, -0.2);
+  assert.equal(Math.round(result.rightHandLocal.z * 100) / 100, 0.2);
+});

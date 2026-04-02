@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { applySnapTurn, clampRoomPosition, computeKeyboardDirection, sanitizeXrAxes, stepFlatMovement } from "./movement.js";
+import { applySnapTurn, clampRoomPosition, computeKeyboardDirection, rotateFlatVector, sanitizeXrAxes, stepFlatMovement } from "./movement.js";
 
 test("computeKeyboardDirection supports arrows and WASD", () => {
   assert.deepEqual(computeKeyboardDirection({ KeyW: true, KeyD: true }), { x: 1, z: -1 });
@@ -37,4 +37,10 @@ test("sanitizeXrAxes applies deadzone", () => {
     moveY: 0.4,
     turnX: 0
   });
+});
+
+test("rotateFlatVector keeps forward aligned with yaw", () => {
+  const rotated = rotateFlatVector({ x: 0, z: -1 }, Math.PI / 2);
+  assert.equal(Math.round(rotated.x * 100) / 100, 1);
+  assert.equal(Math.round(rotated.z * 100) / 100, 0);
 });

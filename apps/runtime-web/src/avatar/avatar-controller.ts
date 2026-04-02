@@ -214,7 +214,8 @@ export function createLocalAvatarController(input: {
         leftHand: frame.leftHand,
         rightHand: frame.rightHand,
         inputMode: frame.inputMode,
-        poseProfile: viewProfile.poseProfile
+        poseProfile: viewProfile.poseProfile,
+        rootYaw: frame.yaw
       });
       const controllerCount = Number(Boolean(frame.leftHand)) + Number(Boolean(frame.rightHand));
       const controllerProfile = resolveControllerProfile({
