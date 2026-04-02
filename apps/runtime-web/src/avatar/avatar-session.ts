@@ -21,6 +21,7 @@ export interface LocalAvatarSessionResult {
   diagnostics: AvatarDiagnostics;
   statusMessage: string;
   note: "local_avatar_ready" | "local_avatar_failed";
+  presetOptions: Array<{ avatarId: string; label: string }>;
 }
 
 export function resetAvatarSession(input: {
@@ -98,7 +99,11 @@ export async function startLocalAvatarSession(input: {
       controller,
       diagnostics: controller.diagnostics,
       statusMessage: `Local avatar ready: ${controller.selectedAvatarId}`,
-      note: "local_avatar_ready"
+      note: "local_avatar_ready",
+      presetOptions: loaded.presets.map((preset) => ({
+        avatarId: preset.preset.avatarId,
+        label: preset.preset.label
+      }))
     };
   } catch (error) {
     const reason = error instanceof Error ? error.message : "avatar_room_session_failed";
@@ -106,7 +111,8 @@ export async function startLocalAvatarSession(input: {
       controller: null,
       diagnostics: createFailedLocalAvatarDiagnostics(input.catalogUrl, reason),
       statusMessage: "Local avatar disabled, room flow fallback active",
-      note: "local_avatar_failed"
+      note: "local_avatar_failed",
+      presetOptions: []
     };
   }
 }

@@ -331,6 +331,55 @@ test("avatar-enabled room uses mobile upper-body profile on mobile user agent", 
   }
 });
 
+test("avatar-enabled room lets user switch self-avatar preset in normal room flow", async ({ page, request }) => {
+  const createRoomResponse = await request.post("/api/rooms", {
+    headers: {
+      "x-noah-admin-token": "test-admin-token"
+    },
+    data: {
+      tenantId: "demo-tenant",
+      templateId: "meeting-room-basic",
+      name: "Avatar Switch Room",
+      avatarConfig: {
+        avatarsEnabled: true,
+        avatarCatalogUrl: "/assets/avatars/catalog.v1.json",
+        avatarQualityProfile: "desktop-standard",
+        avatarFallbackCapsulesEnabled: true,
+        avatarSeatsEnabled: false
+      }
+    }
+  });
+  expect(createRoomResponse.ok()).toBeTruthy();
+  const room = (await createRoomResponse.json()) as { roomLink: string };
+
+  await page.goto(`${room.roomLink}?debug=1`);
+  await expect(page.locator("#avatar-sandbox-panel")).toBeVisible();
+  await page.selectOption("#avatar-preset-select", "preset-02");
+
+  await expect.poll(async () => {
+    const debug = await page.evaluate(() => (window as Window & {
+      __NOAH_DEBUG__?: {
+        avatarDebug?: {
+          state?: string;
+          selectedAvatarId?: string | null;
+        };
+      };
+    }).__NOAH_DEBUG__);
+    return {
+      state: debug?.avatarDebug?.state ?? null,
+      selectedAvatarId: debug?.avatarDebug?.selectedAvatarId ?? null
+    };
+  }, {
+    timeout: 15000,
+    intervals: [1000, 2000, 3000]
+  }).toEqual({
+    state: "loaded",
+    selectedAvatarId: "preset-02"
+  });
+
+  await expect(page.locator("#avatar-sandbox-status")).toContainText("preset-02");
+});
+
 test("room creation API returns a usable room link", async ({ page, request }) => {
   const createRoomResponse = await request.post("/api/rooms", {
     headers: {

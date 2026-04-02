@@ -82,6 +82,7 @@ const debugPanel = mustElement<HTMLPreElement>("#debug-panel");
 const avatarSandboxPanel = mustElement<HTMLDivElement>("#avatar-sandbox-panel");
 const avatarPresetSelect = mustElement<HTMLSelectElement>("#avatar-preset-select");
 const avatarSandboxStatusEl = mustElement<HTMLDivElement>("#avatar-sandbox-status");
+const avatarPresetLabel = mustElement<HTMLLabelElement>('label[for="avatar-preset-select"]');
 
 if (debugEnabled) {
   debugPanel.hidden = false;
@@ -1002,6 +1003,69 @@ function updateLocalAvatar(delta: number): void {
   debugState.avatarDebug = localAvatarController.diagnostics;
 }
 
+function populateAvatarPresetSelect(input: {
+  options: Array<{ avatarId: string; label: string }>;
+  selectedAvatarId: string | null;
+  label: string;
+  status: string;
+  enabled: boolean;
+  onChange?: (() => void) | null;
+}): void {
+  avatarPresetLabel.textContent = input.label;
+  avatarSandboxPanel.hidden = !input.enabled;
+  avatarPresetSelect.replaceChildren();
+  for (const optionConfig of input.options) {
+    const option = document.createElement("option");
+    option.value = optionConfig.avatarId;
+    option.textContent = optionConfig.label;
+    option.selected = optionConfig.avatarId === input.selectedAvatarId;
+    avatarPresetSelect.appendChild(option);
+  }
+  avatarPresetSelect.disabled = !input.enabled || input.options.length === 0;
+  avatarPresetSelect.onchange = input.onChange ?? null;
+  setAvatarSandboxStatus(avatarSandboxStatusEl, input.status);
+}
+
+async function bootLocalAvatarPresetSession(input: {
+  catalogUrl: string;
+  preferredAvatarId?: string;
+  note?: string;
+}): Promise<void> {
+  localAvatarController?.dispose();
+  localAvatarController = null;
+  populateAvatarPresetSelect({
+    options: [],
+    selectedAvatarId: null,
+    label: "Self Avatar",
+    status: "Loading self avatar presets...",
+    enabled: true
+  });
+  const localAvatarSession = await startLocalAvatarSession({
+    catalogUrl: input.catalogUrl,
+    renderer,
+    scene,
+    storage: window.localStorage,
+    preferredAvatarId: input.preferredAvatarId
+  });
+  localAvatarController = localAvatarSession.controller;
+  debugState.avatarDebug = localAvatarSession.diagnostics;
+  populateAvatarPresetSelect({
+    options: localAvatarSession.presetOptions,
+    selectedAvatarId: localAvatarSession.controller?.selectedAvatarId ?? localAvatarSession.diagnostics.selectedAvatarId,
+    label: "Self Avatar",
+    status: localAvatarSession.statusMessage,
+    enabled: true,
+    onChange: () => {
+      void bootLocalAvatarPresetSession({
+        catalogUrl: input.catalogUrl,
+        preferredAvatarId: avatarPresetSelect.value,
+        note: "local_avatar_preset_changed"
+      });
+    }
+  });
+  await reportDiagnostics(input.note ?? localAvatarSession.note);
+}
+
 function updateMovement(delta: number): void {
   const yawBeforeUpdate = yaw;
   const speed = renderer.xr.isPresenting ? 2.4 : keyState.ShiftLeft ? 5 : 3.2;
@@ -1473,6 +1537,10 @@ async function main(): Promise<void> {
   });
   localAvatarController?.dispose();
   localAvatarController = null;
+  avatarPresetSelect.onchange = null;
+  if (!avatarSandboxEnabled) {
+    avatarSandboxPanel.hidden = true;
+  }
   avatarSandboxRegistry = avatarReset.registry;
   debugState.avatarDebug = avatarReset.diagnostics;
   if (!effectiveCleanSceneMode) {
@@ -1482,6 +1550,7 @@ async function main(): Promise<void> {
   }
 
   if (avatarSandboxEnabled) {
+    avatarPresetLabel.textContent = "Avatar Sandbox";
     joinAudioButton.disabled = true;
     muteButton.disabled = true;
     startShareButton.disabled = true;
@@ -1536,16 +1605,10 @@ async function main(): Promise<void> {
   }
 
   if (runtimeFlags.avatarsEnabled) {
-    const localAvatarSession = await startLocalAvatarSession({
+    await bootLocalAvatarPresetSession({
       catalogUrl: avatarCatalogUrl,
-      renderer,
-      scene,
-      storage: window.localStorage,
       preferredAvatarId: query.get("avatar") ?? undefined
     });
-    localAvatarController = localAvatarSession.controller;
-    debugState.avatarDebug = localAvatarSession.diagnostics;
-    await reportDiagnostics(localAvatarSession.note);
   }
 
   applyPostBootControls({

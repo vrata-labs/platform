@@ -120,6 +120,8 @@ test("startLocalAvatarSession creates local avatar controller from procedural ca
     assert.equal(result.controller?.selectedAvatarId, "preset-01");
     assert.equal(result.diagnostics.state, "loaded");
     assert.equal(result.note, "local_avatar_ready");
+    assert.equal(result.presetOptions.length, 1);
+    assert.equal(result.presetOptions[0]?.avatarId, "preset-01");
     assert.equal(scene.children.includes(result.controller!.root), true);
     result.controller?.update({
       deltaSeconds: 0.25,
@@ -151,6 +153,7 @@ test("startLocalAvatarSession returns failed note on broken catalog", async () =
     assert.equal(result.controller, null);
     assert.equal(result.note, "local_avatar_failed");
     assert.equal(result.diagnostics.state, "failed");
+    assert.deepEqual(result.presetOptions, []);
   } finally {
     globalThis.fetch = originalFetch;
   }
