@@ -390,6 +390,7 @@ const debugState = {
     participantId: string;
     avatarId: string | null;
     inputMode: string | null;
+    presenceSeen: boolean;
     hasReliableState: boolean;
     hasPoseFrame: boolean;
     leftHandVisible: boolean;

@@ -31,6 +31,7 @@ export interface RemoteAvatarDebugState {
     participantId: string;
     avatarId: string | null;
     inputMode: string | null;
+    presenceSeen: boolean;
     hasReliableState: boolean;
     hasPoseFrame: boolean;
     leftHandVisible: boolean;
@@ -40,8 +41,11 @@ export interface RemoteAvatarDebugState {
 
 interface RemoteAvatarParticipantModel {
   participantId: string;
+  presenceSeen: boolean;
   reliableState: RemoteAvatarReliableStateView | null;
   poseFrame: RemoteAvatarPoseFrameView | null;
+  leftHandVisible: boolean;
+  rightHandVisible: boolean;
 }
 
 interface RemoteAvatarEntity {
@@ -92,8 +96,11 @@ export function createRemoteAvatarRuntime(input: {
     if (!model) {
       model = {
         participantId,
+        presenceSeen: false,
         reliableState: null,
-        poseFrame: null
+        poseFrame: null,
+        leftHandVisible: false,
+        rightHandVisible: false
       };
       remoteAvatarParticipants.set(participantId, model);
     }
@@ -143,10 +150,11 @@ export function createRemoteAvatarRuntime(input: {
           participantId: participant.participantId,
           avatarId: participant.reliableState?.avatarId ?? null,
           inputMode: participant.reliableState?.inputMode ?? null,
+          presenceSeen: participant.presenceSeen,
           hasReliableState: participant.reliableState !== null,
           hasPoseFrame: participant.poseFrame !== null,
-          leftHandVisible: entity?.leftHand.visible ?? false,
-          rightHandVisible: entity?.rightHand.visible ?? false
+          leftHandVisible: participant.leftHandVisible || entity?.leftHand.visible || false,
+          rightHandVisible: participant.rightHandVisible || entity?.rightHand.visible || false
         };
       });
     debugState.remoteAvatarReliableCount = debugState.remoteAvatarReliableStates.length;
@@ -163,6 +171,7 @@ export function createRemoteAvatarRuntime(input: {
       for (const person of people) {
         if (person.participantId === input.localParticipantId) continue;
         activeIds.add(person.participantId);
+        ensureParticipantModel(person.participantId).presenceSeen = true;
         const entity = ensureRemoteAvatar(person);
         const bodyMaterial = entity.body.material;
         if (bodyMaterial instanceof THREE.MeshStandardMaterial) {
@@ -232,9 +241,17 @@ export function createRemoteAvatarRuntime(input: {
           entity.rightHand.position.set(poseFrame.rightHand.x, poseFrame.rightHand.y, poseFrame.rightHand.z);
           entity.leftHand.visible = poseFrame.leftHand.gesture > 0;
           entity.rightHand.visible = poseFrame.rightHand.gesture > 0;
+          if (participant) {
+            participant.leftHandVisible = entity.leftHand.visible;
+            participant.rightHandVisible = entity.rightHand.visible;
+          }
         } else {
           entity.leftHand.visible = false;
           entity.rightHand.visible = false;
+          if (participant) {
+            participant.leftHandVisible = false;
+            participant.rightHandVisible = false;
+          }
         }
       }
       syncDebugState(debugState);

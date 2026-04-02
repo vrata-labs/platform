@@ -16,6 +16,7 @@ function createDebugState() {
       participantId: string;
       avatarId: string | null;
       inputMode: string | null;
+      presenceSeen: boolean;
       hasReliableState: boolean;
       hasPoseFrame: boolean;
       leftHandVisible: boolean;
@@ -60,6 +61,7 @@ test("remote avatar runtime ingests reliable state and pose frame into debug sta
   assert.equal(model?.reliableState?.avatarId, "preset-01");
   assert.equal(model?.poseFrame?.seq, 1);
   assert.equal(debugState.remoteAvatarParticipants[0]?.participantId, "remote-1");
+  assert.equal(debugState.remoteAvatarParticipants[0]?.presenceSeen, false);
   assert.equal(debugState.remoteAvatarParticipants[0]?.hasReliableState, true);
   assert.equal(debugState.remoteAvatarParticipants[0]?.hasPoseFrame, true);
 });
@@ -98,6 +100,7 @@ test("remote avatar runtime reflects hand visibility from pose gestures", () => 
 
   runtime.update(0.016, debugState);
 
+  assert.equal(debugState.remoteAvatarParticipants[0]?.presenceSeen, true);
   assert.equal(debugState.remoteAvatarParticipants[0]?.leftHandVisible, true);
   assert.equal(debugState.remoteAvatarParticipants[0]?.rightHandVisible, false);
 });
