@@ -47,4 +47,7 @@ test("remote avatar runtime ingests reliable state and pose frame into debug sta
   assert.equal(debugState.remoteAvatarPoseCount, 1);
   assert.equal(debugState.remoteAvatarReliableStates[0]?.participantId, "remote-1");
   assert.equal(debugState.remoteAvatarPoseFrames[0]?.participantId, "remote-1");
+  const model = runtime.getParticipantModel("remote-1");
+  assert.equal(model?.reliableState?.avatarId, "preset-01");
+  assert.equal(model?.poseFrame?.seq, 1);
 });

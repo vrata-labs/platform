@@ -29,6 +29,12 @@ export interface RemoteAvatarDebugState {
   remoteAvatarPoseFrames: Array<{ participantId: string; seq: number; locomotionMode: number; sentAtMs: number }>;
 }
 
+interface RemoteAvatarParticipantModel {
+  participantId: string;
+  reliableState: RemoteAvatarReliableStateView | null;
+  poseFrame: RemoteAvatarPoseFrameView | null;
+}
+
 interface RemoteAvatarEntity {
   body: THREE.Mesh;
   head: THREE.Mesh;
@@ -70,8 +76,20 @@ export function createRemoteAvatarRuntime(input: {
 }) {
   const remoteAvatars = new Map<string, RemoteAvatarEntity>();
   const remoteMotionTracks = new Map<string, RemoteAvatarMotion>();
-  const remoteAvatarReliableStates = new Map<string, RemoteAvatarReliableStateView>();
-  const remoteAvatarPoseFrames = new Map<string, RemoteAvatarPoseFrameView>();
+  const remoteAvatarParticipants = new Map<string, RemoteAvatarParticipantModel>();
+
+  function ensureParticipantModel(participantId: string): RemoteAvatarParticipantModel {
+    let model = remoteAvatarParticipants.get(participantId);
+    if (!model) {
+      model = {
+        participantId,
+        reliableState: null,
+        poseFrame: null
+      };
+      remoteAvatarParticipants.set(participantId, model);
+    }
+    return model;
+  }
 
   function ensureRemoteAvatar(participant: PresenceState): RemoteAvatarEntity {
     let entity = remoteAvatars.get(participant.participantId);
@@ -98,10 +116,14 @@ export function createRemoteAvatarRuntime(input: {
       const latest = track.root.samples[track.root.samples.length - 1];
       return { id, x: Number((latest?.x ?? 0).toFixed(2)), z: Number((latest?.z ?? 0).toFixed(2)) };
     });
-    debugState.remoteAvatarReliableStates = Array.from(remoteAvatarReliableStates.values())
+    debugState.remoteAvatarReliableStates = Array.from(remoteAvatarParticipants.values())
+      .map((participant) => participant.reliableState)
+      .filter((state): state is RemoteAvatarReliableStateView => Boolean(state))
       .sort((a, b) => a.participantId.localeCompare(b.participantId))
       .map(({ participantId, avatarId, inputMode, updatedAt }) => ({ participantId, avatarId, inputMode, updatedAt }));
-    debugState.remoteAvatarPoseFrames = Array.from(remoteAvatarPoseFrames.values())
+    debugState.remoteAvatarPoseFrames = Array.from(remoteAvatarParticipants.values())
+      .map((participant) => participant.poseFrame)
+      .filter((frame): frame is RemoteAvatarPoseFrameView => Boolean(frame))
       .sort((a, b) => a.participantId.localeCompare(b.participantId))
       .map(({ participantId, seq, locomotionMode, sentAtMs }) => ({ participantId, seq, locomotionMode, sentAtMs }));
     debugState.remoteAvatarReliableCount = debugState.remoteAvatarReliableStates.length;
@@ -140,26 +162,25 @@ export function createRemoteAvatarRuntime(input: {
           input.scene.remove(mesh.body, mesh.head, mesh.leftHand, mesh.rightHand);
           remoteAvatars.delete(id);
           remoteMotionTracks.delete(id);
-          remoteAvatarReliableStates.delete(id);
-          remoteAvatarPoseFrames.delete(id);
+          remoteAvatarParticipants.delete(id);
         }
       }
       syncDebugState(debugState);
     },
     ingestReliableState(state: RemoteAvatarReliableStateView, debugState: RemoteAvatarDebugState): void {
       if (state.participantId === input.localParticipantId) return;
-      remoteAvatarReliableStates.set(state.participantId, state);
+      ensureParticipantModel(state.participantId).reliableState = state;
       syncDebugState(debugState);
     },
     ingestPoseFrame(participantId: string, frame: CompactPoseFrame, debugState: RemoteAvatarDebugState): void {
       if (participantId === input.localParticipantId) return;
-      remoteAvatarPoseFrames.set(participantId, {
+      ensureParticipantModel(participantId).poseFrame = {
         participantId,
         seq: frame.seq,
         locomotionMode: frame.locomotion.mode,
         sentAtMs: frame.sentAtMs,
         frame
-      });
+      };
       syncDebugState(debugState);
     },
     update(delta: number, debugState: RemoteAvatarDebugState): void {
@@ -174,8 +195,9 @@ export function createRemoteAvatarRuntime(input: {
         entity.body.position.set(bodySample.x, 0.92, bodySample.z);
         entity.head.position.set(headSample.x, 1.58, headSample.z);
         entity.body.lookAt(headSample.x, 0.92, headSample.z);
-        const reliableState = remoteAvatarReliableStates.get(participantId);
-        const poseFrame = remoteAvatarPoseFrames.get(participantId)?.frame;
+        const participant = remoteAvatarParticipants.get(participantId);
+        const reliableState = participant?.reliableState ?? null;
+        const poseFrame = participant?.poseFrame?.frame ?? null;
         const bodyMaterial = entity.body.material;
         if (bodyMaterial instanceof THREE.MeshStandardMaterial) {
           const color = reliableState?.inputMode === "mobile" ? 0xffc857 : reliableState?.inputMode === "vr-controller" || reliableState?.inputMode === "vr-hand" ? 0x8be9fd : reliableState?.audioActive ? 0x5fc8ff : 0xbfd8ee;
@@ -200,9 +222,11 @@ export function createRemoteAvatarRuntime(input: {
       }
       remoteAvatars.clear();
       remoteMotionTracks.clear();
-      remoteAvatarReliableStates.clear();
-      remoteAvatarPoseFrames.clear();
+      remoteAvatarParticipants.clear();
       syncDebugState(debugState);
+    },
+    getParticipantModel(participantId: string): RemoteAvatarParticipantModel | null {
+      return remoteAvatarParticipants.get(participantId) ?? null;
     }
   };
 }
