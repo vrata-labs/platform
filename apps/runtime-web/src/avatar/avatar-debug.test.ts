@@ -22,6 +22,7 @@ test("createEmptyAvatarDiagnostics returns idle baseline", () => {
     solveState: null,
     animationState: null,
     activeControllerCount: 0,
+    controllerProfile: null,
     fallbackActive: false,
     fallbackReason: null,
     sandboxEntryPoint: null,
@@ -56,11 +57,13 @@ test("createAvatarLoadedDiagnostics stores selected preset and validation summar
       visibilityState: "full-body",
       solveState: "active",
       animationState: "idle",
-      activeControllerCount: 0
+      activeControllerCount: 0,
+      controllerProfile: "desktop_no_controllers"
     });
   assert.equal(diagnostics.state, "loaded");
   assert.equal(diagnostics.selectedAvatarId, "preset-01");
   assert.deepEqual(diagnostics.validatorSummary, ["preset-01:11800"]);
   assert.equal(diagnostics.visibilityState, "full-body");
   assert.equal(diagnostics.animationState, "idle");
+  assert.equal(diagnostics.controllerProfile, "desktop_no_controllers");
 });

@@ -222,6 +222,7 @@ test("avatar-enabled room exposes local self-avatar diagnostics in normal room f
           visibilityState?: string | null;
           locomotionState?: string | null;
           animationState?: string | null;
+          controllerProfile?: string | null;
           inputMode?: string | null;
         };
       };
@@ -233,6 +234,7 @@ test("avatar-enabled room exposes local self-avatar diagnostics in normal room f
       visibilityState: debug?.avatarDebug?.visibilityState ?? null,
       locomotionState: debug?.avatarDebug?.locomotionState ?? null,
       animationState: debug?.avatarDebug?.animationState ?? null,
+      controllerProfile: debug?.avatarDebug?.controllerProfile ?? null,
       inputMode: debug?.avatarDebug?.inputMode ?? null
     };
   }, {
@@ -244,6 +246,7 @@ test("avatar-enabled room exposes local self-avatar diagnostics in normal room f
     visibilityState: "full-body",
     locomotionState: "walk",
     animationState: "idle",
+    controllerProfile: "desktop_no_controllers",
     inputMode: "desktop"
   });
 
@@ -302,6 +305,7 @@ test("avatar-enabled room uses mobile upper-body profile on mobile user agent", 
           avatarDebug?: {
             state?: string;
             visibilityState?: string | null;
+            controllerProfile?: string | null;
             inputMode?: string | null;
           };
         };
@@ -310,6 +314,7 @@ test("avatar-enabled room uses mobile upper-body profile on mobile user agent", 
       return {
         state: debug?.avatarDebug?.state ?? null,
         visibilityState: debug?.avatarDebug?.visibilityState ?? null,
+        controllerProfile: debug?.avatarDebug?.controllerProfile ?? null,
         inputMode: debug?.avatarDebug?.inputMode ?? null
       };
     }, {
@@ -318,6 +323,7 @@ test("avatar-enabled room uses mobile upper-body profile on mobile user agent", 
     }).toEqual({
       state: "loaded",
       visibilityState: "upper-body",
+      controllerProfile: "mobile_touch_fallback",
       inputMode: "mobile"
     });
   } finally {

@@ -11,6 +11,7 @@ export interface AvatarDiagnostics {
   solveState: string | null;
   animationState: string | null;
   activeControllerCount: number;
+  controllerProfile: string | null;
   fallbackActive: boolean;
   fallbackReason: string | null;
   sandboxEntryPoint: string | null;
@@ -31,6 +32,7 @@ export function createEmptyAvatarDiagnostics(): AvatarDiagnostics {
     solveState: null,
     animationState: null,
     activeControllerCount: 0,
+    controllerProfile: null,
     fallbackActive: false,
     fallbackReason: null,
     sandboxEntryPoint: null,
@@ -70,6 +72,7 @@ export function createAvatarLoadedDiagnostics(input: {
   solveState?: string | null;
   animationState?: string | null;
   activeControllerCount?: number;
+  controllerProfile?: string | null;
 }): AvatarDiagnostics {
   return {
     ...createEmptyAvatarDiagnostics(),
@@ -85,6 +88,7 @@ export function createAvatarLoadedDiagnostics(input: {
     solveState: input.solveState ?? null,
     animationState: input.animationState ?? null,
     activeControllerCount: input.activeControllerCount ?? 0,
+    controllerProfile: input.controllerProfile ?? null,
     fallbackActive: false,
     fallbackReason: null,
     sandboxEntryPoint: input.sandboxEntryPoint,

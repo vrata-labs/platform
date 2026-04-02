@@ -94,6 +94,8 @@ test("createLocalAvatarController updates diagnostics for vr fallback hands-only
   assert.equal(controller.diagnostics.visibilityState, "hands-only");
   assert.equal(controller.diagnostics.solveState, "fallback");
   assert.equal(controller.diagnostics.fallbackActive, true);
+  assert.equal(controller.diagnostics.controllerProfile, "vr_no_controllers");
+  assert.equal(controller.diagnostics.fallbackReason, "xr_input_missing_controllers");
 });
 
 test("createLocalAvatarController marks animation fallback when locomotion clip is unavailable", () => {
@@ -195,4 +197,74 @@ test("createLocalAvatarController hides lower body for mobile upper-body profile
   assert.equal(torso.visible, true);
   assert.equal(lowerBody.visible, false);
   assert.equal(controller.diagnostics.visibilityState, "upper-body");
+  assert.equal(controller.diagnostics.controllerProfile, "mobile_touch_fallback");
+});
+
+test("createLocalAvatarController shows only left hand for single left vr controller", () => {
+  const controller = createLocalAvatarController({
+    presets: [createPreset("preset-01")],
+    diagnosticsInput: {
+      catalogId: "technical-v1",
+      packUrl: "/assets/avatars/avatar-pack.v1.glb",
+      packFormat: "procedural-debug-v1",
+      presetCount: 1,
+      validatorSummary: ["preset-01:1000"],
+      sandboxEntryPoint: "/assets/avatars/catalog.v1.json"
+    }
+  });
+
+  controller.update({
+    deltaSeconds: 0.016,
+    inputMode: "vr-controller",
+    xrPresenting: true,
+    rootPosition: { x: 0, y: 0, z: 0 },
+    yaw: 0,
+    headPosition: { x: 0, y: 1.6, z: 0 },
+    leftHand: { x: -0.2, y: 1.2, z: 0.2 },
+    moveX: 0,
+    moveZ: 0,
+    turnRate: 0
+  });
+
+  const leftHand = controller.root.children[3]!;
+  const rightHand = controller.root.children[4]!;
+  assert.equal(leftHand.visible, true);
+  assert.equal(rightHand.visible, false);
+  assert.equal(controller.diagnostics.controllerProfile, "vr_single_left_controller");
+  assert.equal(controller.diagnostics.fallbackReason, "xr_input_partial_fallback:left_only");
+});
+
+test("createLocalAvatarController shows both hands for dual vr controllers", () => {
+  const controller = createLocalAvatarController({
+    presets: [createPreset("preset-01")],
+    diagnosticsInput: {
+      catalogId: "technical-v1",
+      packUrl: "/assets/avatars/avatar-pack.v1.glb",
+      packFormat: "procedural-debug-v1",
+      presetCount: 1,
+      validatorSummary: ["preset-01:1000"],
+      sandboxEntryPoint: "/assets/avatars/catalog.v1.json"
+    }
+  });
+
+  controller.update({
+    deltaSeconds: 0.016,
+    inputMode: "vr-controller",
+    xrPresenting: true,
+    rootPosition: { x: 0, y: 0, z: 0 },
+    yaw: 0,
+    headPosition: { x: 0, y: 1.6, z: 0 },
+    leftHand: { x: -0.2, y: 1.2, z: 0.2 },
+    rightHand: { x: 0.2, y: 1.2, z: 0.2 },
+    moveX: 0,
+    moveZ: 0,
+    turnRate: 0
+  });
+
+  const leftHand = controller.root.children[3]!;
+  const rightHand = controller.root.children[4]!;
+  assert.equal(leftHand.visible, true);
+  assert.equal(rightHand.visible, true);
+  assert.equal(controller.diagnostics.controllerProfile, "vr_dual_controllers");
+  assert.equal(controller.diagnostics.fallbackReason, null);
 });

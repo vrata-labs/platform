@@ -48,6 +48,14 @@ interface LocalAvatarVisual {
   aura: THREE.Mesh;
 }
 
+type AvatarControllerProfile =
+  | "desktop_no_controllers"
+  | "mobile_touch_fallback"
+  | "vr_no_controllers"
+  | "vr_single_left_controller"
+  | "vr_single_right_controller"
+  | "vr_dual_controllers";
+
 function createMaterial(color: string): THREE.MeshStandardMaterial {
   return new THREE.MeshStandardMaterial({ color, roughness: 0.88, metalness: 0.02 });
 }
@@ -102,6 +110,35 @@ function resolveSelectedAvatarPreset(input: {
   return input.presets[0] ?? null;
 }
 
+function resolveControllerProfile(input: {
+  inputMode: AvatarInputMode;
+  xrPresenting: boolean;
+  leftHand?: AvatarPosePoint | null;
+  rightHand?: AvatarPosePoint | null;
+}): AvatarControllerProfile {
+  const hasLeft = Boolean(input.leftHand);
+  const hasRight = Boolean(input.rightHand);
+
+  if (input.xrPresenting || input.inputMode === "vr-controller" || input.inputMode === "vr-hand") {
+    if (hasLeft && hasRight) {
+      return "vr_dual_controllers";
+    }
+    if (hasLeft) {
+      return "vr_single_left_controller";
+    }
+    if (hasRight) {
+      return "vr_single_right_controller";
+    }
+    return "vr_no_controllers";
+  }
+
+  if (input.inputMode === "mobile") {
+    return "mobile_touch_fallback";
+  }
+
+  return "desktop_no_controllers";
+}
+
 export function createLocalAvatarController(input: {
   presets: LoadedAvatarPreset[];
   diagnosticsInput: {
@@ -128,12 +165,13 @@ export function createLocalAvatarController(input: {
     ...input.diagnosticsInput,
     selectedAvatarId: selectedPreset.preset.avatarId,
     inputMode: null,
-     locomotionState: "idle",
-     visibilityState: "full-body",
-     solveState: "fallback",
-     animationState: "idle",
-     activeControllerCount: 0
-   });
+    locomotionState: "idle",
+    visibilityState: "full-body",
+    solveState: "fallback",
+    animationState: "idle",
+    activeControllerCount: 0,
+    controllerProfile: "desktop_no_controllers"
+  });
 
   return {
     root: visual.root,
@@ -160,6 +198,12 @@ export function createLocalAvatarController(input: {
         poseProfile: viewProfile.poseProfile
       });
       const controllerCount = Number(Boolean(frame.leftHand)) + Number(Boolean(frame.rightHand));
+      const controllerProfile = resolveControllerProfile({
+        inputMode: frame.inputMode,
+        xrPresenting: frame.xrPresenting,
+        leftHand: frame.leftHand,
+        rightHand: frame.rightHand
+      });
       const animation = selectAvatarAnimationClip({
         locomotionState: locomotion.state,
         availableClips: selectedPreset.preset.validation.animationClips
@@ -197,9 +241,14 @@ export function createLocalAvatarController(input: {
       visual.torso.visible = visibility === "full-body" || visibility === "upper-body";
       visual.lowerBody.visible = visibility === "full-body";
       visual.head.visible = visibility === "full-body" || visibility === "upper-body";
-      visual.leftHand.visible = visibility !== "hidden";
-      visual.rightHand.visible = visibility !== "hidden";
+      visual.leftHand.visible = visibility !== "hidden" && controllerProfile !== "vr_single_right_controller";
+      visual.rightHand.visible = visibility !== "hidden" && controllerProfile !== "vr_single_left_controller";
       visual.aura.visible = visibility === "full-body" || visibility === "upper-body";
+
+      if (controllerProfile === "vr_no_controllers") {
+        visual.leftHand.visible = false;
+        visual.rightHand.visible = false;
+      }
 
       diagnostics.inputMode = frame.inputMode;
       diagnostics.locomotionState = locomotion.state;
@@ -207,12 +256,25 @@ export function createLocalAvatarController(input: {
       diagnostics.solveState = solve.solveState;
       diagnostics.animationState = animation.clip;
       diagnostics.activeControllerCount = controllerCount;
-      diagnostics.fallbackActive = (solve.solveState === "fallback" && frame.xrPresenting) || animation.fallback;
-      diagnostics.fallbackReason = solve.solveState === "fallback" && frame.xrPresenting
-        ? "xr_input_partial_fallback"
-        : animation.fallback
-          ? `animation_clip_fallback:${locomotion.state}`
-          : null;
+      diagnostics.controllerProfile = controllerProfile;
+      diagnostics.fallbackActive = (
+        (solve.solveState === "fallback" && frame.xrPresenting)
+        || animation.fallback
+        || controllerProfile === "vr_no_controllers"
+        || controllerProfile === "vr_single_left_controller"
+        || controllerProfile === "vr_single_right_controller"
+      );
+      diagnostics.fallbackReason = controllerProfile === "vr_no_controllers"
+        ? "xr_input_missing_controllers"
+        : controllerProfile === "vr_single_left_controller"
+          ? "xr_input_partial_fallback:left_only"
+          : controllerProfile === "vr_single_right_controller"
+            ? "xr_input_partial_fallback:right_only"
+            : solve.solveState === "fallback" && frame.xrPresenting
+              ? "xr_input_partial_fallback"
+              : animation.fallback
+                ? `animation_clip_fallback:${locomotion.state}`
+                : null;
     },
     dispose(): void {
       visual.root.removeFromParent();
