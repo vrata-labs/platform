@@ -1,5 +1,7 @@
 import type { PresenceState } from "./index.js";
 import type { AvatarReliableState, CompactPoseFrame } from "./avatar/avatar-types.js";
+import { parseCompactPoseFrame } from "./avatar/avatar-pose-frame.js";
+import { parseAvatarReliableState } from "./avatar/avatar-reliable-state.js";
 
 export interface RoomStateSnapshot {
   roomId: string;
@@ -19,6 +21,8 @@ function canSend(socket: SendableSocket): boolean {
 
 export interface RoomStateClientHandlers {
   onRoomState: (snapshot: RoomStateSnapshot) => void;
+  onAvatarReliableState?: (state: AvatarReliableState) => void;
+  onAvatarPoseFrame?: (frame: CompactPoseFrame) => void;
   onError: (error: unknown) => void;
   onOpen?: () => void;
   onClose?: () => void;
@@ -45,9 +49,22 @@ export function connectRoomState(
 
   socket.addEventListener("message", (event) => {
     try {
-      const payload = JSON.parse(String(event.data)) as { type?: string; room?: RoomStateSnapshot };
+      const payload = JSON.parse(String(event.data)) as {
+        type?: string;
+        room?: RoomStateSnapshot;
+        reliableState?: unknown;
+        poseFrame?: unknown;
+      };
       if (payload.type === "room_state" && payload.room) {
         handlers.onRoomState(payload.room);
+        return;
+      }
+      if (payload.type === "avatar_reliable_state" && payload.reliableState) {
+        handlers.onAvatarReliableState?.(parseAvatarReliableState(payload.reliableState));
+        return;
+      }
+      if (payload.type === "avatar_pose_preview" && payload.poseFrame) {
+        handlers.onAvatarPoseFrame?.(parseCompactPoseFrame(payload.poseFrame));
       }
     } catch (error) {
       handlers.onError(error);

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { sendAvatarPoseFrame, sendAvatarReliableState, sendParticipantUpdate, type RoomStateClient } from "./room-state-client.js";
+import { connectRoomState, sendAvatarPoseFrame, sendAvatarReliableState, sendParticipantUpdate, type RoomStateClient } from "./room-state-client.js";
 
 function createClient(sent: string[] = [], readyState = 1): RoomStateClient {
   return {
@@ -81,4 +81,87 @@ test("avatar sends are skipped when socket is not open", () => {
   });
 
   assert.deepEqual(sent, []);
+});
+
+test("connectRoomState routes inbound avatar reliable state and pose frame", async () => {
+  const listeners = new Map<string, Array<(event: { data?: string }) => void>>();
+  class FakeWebSocket {
+    static instances: FakeWebSocket[] = [];
+    OPEN = 1;
+    readyState = 1;
+    url: string;
+    constructor(url: string) {
+      this.url = url;
+      FakeWebSocket.instances.push(this);
+    }
+    addEventListener(type: string, listener: (event: { data?: string }) => void) {
+      const current = listeners.get(type) ?? [];
+      current.push(listener);
+      listeners.set(type, current);
+    }
+    send() {}
+    close() {}
+    emit(type: string, event: { data?: string }) {
+      for (const listener of listeners.get(type) ?? []) {
+        listener(event);
+      }
+    }
+  }
+
+  const originalWebSocket = globalThis.WebSocket;
+  globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket;
+
+  try {
+    let reliableAvatarId: string | null = null;
+    let poseSeq: number | null = null;
+    connectRoomState("ws://example.test/room-state", "room-1", "p-1", {
+      onRoomState() {},
+      onAvatarReliableState(state) {
+        reliableAvatarId = state.avatarId;
+      },
+      onAvatarPoseFrame(frame) {
+        poseSeq = frame.seq;
+      },
+      onError(error) {
+        throw error;
+      }
+    });
+
+    const socket = FakeWebSocket.instances[0]!;
+    socket.emit("message", {
+      data: JSON.stringify({
+        type: "avatar_reliable_state",
+        reliableState: {
+          participantId: "p-2",
+          avatarId: "preset-02",
+          recipeVersion: 1,
+          inputMode: "desktop",
+          seated: false,
+          muted: false,
+          audioActive: true,
+          updatedAt: new Date(0).toISOString()
+        }
+      })
+    });
+    socket.emit("message", {
+      data: JSON.stringify({
+        type: "avatar_pose_preview",
+        poseFrame: {
+          seq: 9,
+          sentAtMs: 100,
+          flags: 0,
+          root: { x: 0, y: 0, z: 0, yaw: 0, vx: 0, vz: 0 },
+          head: { x: 0, y: 1.6, z: 0, qx: 0, qy: 0, qz: 0, qw: 1 },
+          leftHand: { x: 0, y: 0, z: 0, qx: 0, qy: 0, qz: 0, qw: 1, gesture: 0 },
+          rightHand: { x: 0, y: 0, z: 0, qx: 0, qy: 0, qz: 0, qw: 1, gesture: 0 },
+          locomotion: { mode: 1, speed: 1, angularVelocity: 0 }
+        }
+      })
+    });
+
+    assert.equal(reliableAvatarId, "preset-02");
+    assert.equal(poseSeq, 9);
+  } finally {
+    globalThis.WebSocket = originalWebSocket;
+  }
 });

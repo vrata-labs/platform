@@ -169,6 +169,8 @@ interface RemoteAvatarMotion {
 
 const remoteAvatars = new Map<string, RemoteAvatarEntity>();
 const remoteMotionTracks = new Map<string, RemoteAvatarMotion>();
+const remoteAvatarReliableStates = new Map<string, { participantId: string; avatarId: string; inputMode: string; updatedAt: string }>();
+const remoteAvatarPoseFrames = new Map<string, { participantId: string; seq: number; locomotionMode: number; sentAtMs: number }>();
 
 const keyState: Record<string, boolean> = {};
 let pointerActive = false;
@@ -333,6 +335,15 @@ function applySnapshotParticipants(people: PresenceState[]): void {
   debugState.lastPresenceRefreshAt = Date.now();
 }
 
+function syncRemoteAvatarDebugState(): void {
+  debugState.remoteAvatarReliableStates = Array.from(remoteAvatarReliableStates.values())
+    .sort((a, b) => a.participantId.localeCompare(b.participantId));
+  debugState.remoteAvatarPoseFrames = Array.from(remoteAvatarPoseFrames.values())
+    .sort((a, b) => a.participantId.localeCompare(b.participantId));
+  debugState.remoteAvatarReliableCount = debugState.remoteAvatarReliableStates.length;
+  debugState.remoteAvatarPoseCount = debugState.remoteAvatarPoseFrames.length;
+}
+
 function applyDisplayTexture(texture: THREE.Texture | null): void {
   const material = displaySurface.material;
   if (!(material instanceof THREE.MeshBasicMaterial)) {
@@ -409,6 +420,8 @@ function updateSpatialAudio(): void {
 const debugState = {
   participantId,
   remoteAvatarCount: 0,
+  remoteAvatarReliableCount: 0,
+  remoteAvatarPoseCount: 0,
   statusLine: "Connecting...",
   locomotionMode: "desktop",
   roomStateConnected: false,
@@ -437,7 +450,9 @@ const debugState = {
   availableSpaceCount: 0,
   avatarDebug: createEmptyAvatarDiagnostics(),
   avatarSnapshot: null as LocalAvatarSnapshotV1 | null,
-  avatarTransportPreview: null as AvatarOutboundPayload | null
+  avatarTransportPreview: null as AvatarOutboundPayload | null,
+  remoteAvatarReliableStates: [] as Array<{ participantId: string; avatarId: string; inputMode: string; updatedAt: string }>,
+  remoteAvatarPoseFrames: [] as Array<{ participantId: string; seq: number; locomotionMode: number; sentAtMs: number }>
 };
 
 const floorMaterial = floor.material as THREE.MeshStandardMaterial;
@@ -613,6 +628,28 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
       debugState.roomStateMode = "connected";
       applySnapshotParticipants(snapshot.participants);
     },
+    onAvatarReliableState: (state) => {
+      if (state.participantId === participantId) {
+        return;
+      }
+      remoteAvatarReliableStates.set(state.participantId, {
+        participantId: state.participantId,
+        avatarId: state.avatarId,
+        inputMode: state.inputMode,
+        updatedAt: state.updatedAt
+      });
+      syncRemoteAvatarDebugState();
+    },
+    onAvatarPoseFrame: (frame) => {
+      const knownParticipantId = Array.from(remoteAvatarReliableStates.keys())[0] ?? `remote-${frame.seq}`;
+      remoteAvatarPoseFrames.set(knownParticipantId, {
+        participantId: knownParticipantId,
+        seq: frame.seq,
+        locomotionMode: frame.locomotion.mode,
+        sentAtMs: frame.sentAtMs
+      });
+      syncRemoteAvatarDebugState();
+    },
     onError: (error: unknown) => {
       console.error(error);
       const issue = classifyRoomStateError(error);
@@ -718,6 +755,8 @@ async function reportDiagnostics(note?: string): Promise<void> {
       xrAxes: debugState.xrAxes,
       remoteAvatarCount: debugState.remoteAvatarCount,
       remoteTargets: debugState.remoteTargets,
+      remoteAvatarReliableStates: debugState.remoteAvatarReliableStates,
+      remoteAvatarPoseFrames: debugState.remoteAvatarPoseFrames,
       issueCode: debugState.issueCode,
       issueSeverity: debugState.issueSeverity,
       degradedMode: debugState.degradedMode,
@@ -1563,6 +1602,9 @@ async function main(): Promise<void> {
   if (!avatarSandboxEnabled) {
     avatarSandboxPanel.hidden = true;
   }
+  remoteAvatarReliableStates.clear();
+  remoteAvatarPoseFrames.clear();
+  syncRemoteAvatarDebugState();
   avatarSandboxRegistry = avatarReset.registry;
   debugState.avatarDebug = avatarReset.diagnostics;
   debugState.avatarSnapshot = null;
