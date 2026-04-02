@@ -118,8 +118,12 @@ pitch.add(camera);
 player.add(pitch);
 scene.add(player);
 const xrControllers = [renderer.xr.getController(0), renderer.xr.getController(1)];
+const xrControllerGrips = [renderer.xr.getControllerGrip(0), renderer.xr.getControllerGrip(1)];
 for (const controller of xrControllers) {
   scene.add(controller);
+}
+for (const grip of xrControllerGrips) {
+  scene.add(grip);
 }
 
 scene.add(new THREE.HemisphereLight(0xcbe9ff, 0x152033, 1.4));
@@ -846,12 +850,12 @@ function getLocalAvatarHandTargets(): { leftHand: { x: number; y: number; z: num
     if (input.handedness !== "left" && input.handedness !== "right") {
       continue;
     }
-    const controller = xrControllers[index];
-    if (!controller) {
+    const handAnchor = xrControllerGrips[index] ?? xrControllers[index];
+    if (!handAnchor) {
       continue;
     }
     const worldPosition = new THREE.Vector3();
-    controller.getWorldPosition(worldPosition);
+    handAnchor.getWorldPosition(worldPosition);
     result[input.handedness === "left" ? "leftHand" : "rightHand"] = {
       x: worldPosition.x,
       y: worldPosition.y,

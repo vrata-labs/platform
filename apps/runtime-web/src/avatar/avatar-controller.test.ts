@@ -282,3 +282,38 @@ test("createLocalAvatarController shows both hands for dual vr controllers", () 
   assert.equal(controller.snapshot.visibilityState, "hands-only");
   assert.equal(controller.diagnostics.xrInputProfile, "dual");
 });
+
+test("createLocalAvatarController preserves lateral hand tracking after yaw and movement", () => {
+  const controller = createLocalAvatarController({
+    presets: [createPreset("preset-01")],
+    diagnosticsInput: {
+      catalogId: "technical-v1",
+      packUrl: "/assets/avatars/avatar-pack.v1.glb",
+      packFormat: "procedural-debug-v1",
+      presetCount: 1,
+      validatorSummary: ["preset-01:1000"],
+      sandboxEntryPoint: "/assets/avatars/catalog.v1.json"
+    }
+  });
+
+  controller.update({
+    deltaSeconds: 0.016,
+    inputMode: "vr-controller",
+    xrPresenting: true,
+    xrInputProfile: "dual",
+    rootPosition: { x: 3, y: 0, z: 4 },
+    yaw: Math.PI / 2,
+    headPosition: { x: 3, y: 1.6, z: 4 },
+    leftHand: { x: 3, y: 1.2, z: 4.25 },
+    rightHand: { x: 3, y: 1.2, z: 3.75 },
+    moveX: 0,
+    moveZ: -1,
+    turnRate: 0
+  });
+
+  assert.equal(controller.snapshot.leftHand.visible, true);
+  assert.equal(controller.snapshot.rightHand.visible, true);
+  assert.equal(controller.snapshot.leftHand.x < 0, true);
+  assert.equal(controller.snapshot.rightHand.x > 0, true);
+  assert.equal(Math.abs(controller.snapshot.leftHand.x), Math.abs(controller.snapshot.rightHand.x));
+});
