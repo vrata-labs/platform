@@ -27,6 +27,15 @@ export interface RemoteAvatarDebugState {
   remoteAvatarPoseCount: number;
   remoteAvatarReliableStates: Array<{ participantId: string; avatarId: string; inputMode: string; updatedAt: string }>;
   remoteAvatarPoseFrames: Array<{ participantId: string; seq: number; locomotionMode: number; sentAtMs: number }>;
+  remoteAvatarParticipants: Array<{
+    participantId: string;
+    avatarId: string | null;
+    inputMode: string | null;
+    hasReliableState: boolean;
+    hasPoseFrame: boolean;
+    leftHandVisible: boolean;
+    rightHandVisible: boolean;
+  }>;
 }
 
 interface RemoteAvatarParticipantModel {
@@ -126,6 +135,20 @@ export function createRemoteAvatarRuntime(input: {
       .filter((frame): frame is RemoteAvatarPoseFrameView => Boolean(frame))
       .sort((a, b) => a.participantId.localeCompare(b.participantId))
       .map(({ participantId, seq, locomotionMode, sentAtMs }) => ({ participantId, seq, locomotionMode, sentAtMs }));
+    debugState.remoteAvatarParticipants = Array.from(remoteAvatarParticipants.values())
+      .sort((a, b) => a.participantId.localeCompare(b.participantId))
+      .map((participant) => {
+        const entity = remoteAvatars.get(participant.participantId);
+        return {
+          participantId: participant.participantId,
+          avatarId: participant.reliableState?.avatarId ?? null,
+          inputMode: participant.reliableState?.inputMode ?? null,
+          hasReliableState: participant.reliableState !== null,
+          hasPoseFrame: participant.poseFrame !== null,
+          leftHandVisible: entity?.leftHand.visible ?? false,
+          rightHandVisible: entity?.rightHand.visible ?? false
+        };
+      });
     debugState.remoteAvatarReliableCount = debugState.remoteAvatarReliableStates.length;
     debugState.remoteAvatarPoseCount = debugState.remoteAvatarPoseFrames.length;
   }

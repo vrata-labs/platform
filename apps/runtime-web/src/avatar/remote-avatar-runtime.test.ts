@@ -11,7 +11,16 @@ function createDebugState() {
     remoteAvatarReliableCount: 0,
     remoteAvatarPoseCount: 0,
     remoteAvatarReliableStates: [] as Array<{ participantId: string; avatarId: string; inputMode: string; updatedAt: string }>,
-    remoteAvatarPoseFrames: [] as Array<{ participantId: string; seq: number; locomotionMode: number; sentAtMs: number }>
+    remoteAvatarPoseFrames: [] as Array<{ participantId: string; seq: number; locomotionMode: number; sentAtMs: number }>,
+    remoteAvatarParticipants: [] as Array<{
+      participantId: string;
+      avatarId: string | null;
+      inputMode: string | null;
+      hasReliableState: boolean;
+      hasPoseFrame: boolean;
+      leftHandVisible: boolean;
+      rightHandVisible: boolean;
+    }>
   };
 }
 
@@ -50,4 +59,7 @@ test("remote avatar runtime ingests reliable state and pose frame into debug sta
   const model = runtime.getParticipantModel("remote-1");
   assert.equal(model?.reliableState?.avatarId, "preset-01");
   assert.equal(model?.poseFrame?.seq, 1);
+  assert.equal(debugState.remoteAvatarParticipants[0]?.participantId, "remote-1");
+  assert.equal(debugState.remoteAvatarParticipants[0]?.hasReliableState, true);
+  assert.equal(debugState.remoteAvatarParticipants[0]?.hasPoseFrame, true);
 });

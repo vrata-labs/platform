@@ -385,7 +385,16 @@ const debugState = {
   avatarSnapshot: null as LocalAvatarSnapshotV1 | null,
   avatarTransportPreview: null as AvatarOutboundPayload | null,
   remoteAvatarReliableStates: [] as Array<{ participantId: string; avatarId: string; inputMode: string; updatedAt: string }>,
-  remoteAvatarPoseFrames: [] as Array<{ participantId: string; seq: number; locomotionMode: number; sentAtMs: number }>
+  remoteAvatarPoseFrames: [] as Array<{ participantId: string; seq: number; locomotionMode: number; sentAtMs: number }>,
+  remoteAvatarParticipants: [] as Array<{
+    participantId: string;
+    avatarId: string | null;
+    inputMode: string | null;
+    hasReliableState: boolean;
+    hasPoseFrame: boolean;
+    leftHandVisible: boolean;
+    rightHandVisible: boolean;
+  }>
 };
 
 const floorMaterial = floor.material as THREE.MeshStandardMaterial;
@@ -680,6 +689,7 @@ async function reportDiagnostics(note?: string): Promise<void> {
       remoteTargets: debugState.remoteTargets,
       remoteAvatarReliableStates: debugState.remoteAvatarReliableStates,
       remoteAvatarPoseFrames: debugState.remoteAvatarPoseFrames,
+      remoteAvatarParticipants: debugState.remoteAvatarParticipants,
       issueCode: debugState.issueCode,
       issueSeverity: debugState.issueSeverity,
       degradedMode: debugState.degradedMode,
