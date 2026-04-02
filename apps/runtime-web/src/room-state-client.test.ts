@@ -51,7 +51,7 @@ test("sendAvatarReliableState sends reliable state envelope", () => {
 
 test("sendAvatarPoseFrame sends pose frame envelope", () => {
   const sent: string[] = [];
-  sendAvatarPoseFrame(createClient(sent), {
+  sendAvatarPoseFrame(createClient(sent), "p-1", {
     seq: 1,
     sentAtMs: 1,
     flags: 0,
@@ -64,6 +64,7 @@ test("sendAvatarPoseFrame sends pose frame envelope", () => {
 
   const payload = JSON.parse(sent[0]!);
   assert.equal(payload.type, "avatar_pose_preview");
+  assert.equal(payload.participantId, "p-1");
   assert.equal(payload.poseFrame.locomotion.mode, 1);
 });
 
@@ -119,7 +120,7 @@ test("connectRoomState routes inbound avatar reliable state and pose frame", asy
       onAvatarReliableState(state) {
         reliableAvatarId = state.avatarId;
       },
-      onAvatarPoseFrame(frame) {
+      onAvatarPoseFrame(_participantId, frame) {
         poseSeq = frame.seq;
       },
       onError(error) {
@@ -146,6 +147,7 @@ test("connectRoomState routes inbound avatar reliable state and pose frame", asy
     socket.emit("message", {
       data: JSON.stringify({
         type: "avatar_pose_preview",
+        participantId: "p-2",
         poseFrame: {
           seq: 9,
           sentAtMs: 100,

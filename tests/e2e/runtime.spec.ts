@@ -740,18 +740,48 @@ test("diagnostics capture multi-client remote visibility", async ({ browser, req
   const pageA = await browser.newPage();
   const pageB = await browser.newPage();
 
-  await pageA.goto("http://127.0.0.1:4000/rooms/demo-room?debug=1");
-  await pageB.goto("http://127.0.0.1:4000/rooms/demo-room?bot=line&debug=1");
+  const roomResponse = await request.post("/api/rooms", {
+    headers: {
+      "x-noah-admin-token": "test-admin-token"
+    },
+    data: {
+      tenantId: "demo-tenant",
+      templateId: "meeting-room-basic",
+      name: "Avatar Remote Diagnostics Room",
+      avatarConfig: {
+        avatarsEnabled: true,
+        avatarCatalogUrl: "/assets/avatars/catalog.v1.json",
+        avatarQualityProfile: "desktop-standard",
+        avatarFallbackCapsulesEnabled: true,
+        avatarSeatsEnabled: false
+      }
+    }
+  });
+  expect(roomResponse.ok()).toBeTruthy();
+  const room = (await roomResponse.json()) as { roomId: string; roomLink: string };
+
+  await pageA.goto(`${room.roomLink}?debug=1`);
+  await pageB.goto(`${room.roomLink}?bot=line&debug=1`);
   await pageA.waitForTimeout(5000);
   await pageB.waitForTimeout(5000);
 
-  const diagnosticsResponse = await request.get("http://127.0.0.1:4000/api/rooms/demo-room/diagnostics");
+  const diagnosticsResponse = await request.get(`/api/rooms/${room.roomId}/diagnostics`);
   const diagnostics = (await diagnosticsResponse.json()) as {
-    items: Array<{ participantId: string; remoteAvatarCount: number; remoteTargets: Array<{ id: string }> }>;
+    items: Array<{
+      participantId: string;
+      remoteAvatarCount: number;
+      remoteAvatarReliableCount?: number;
+      remoteAvatarPoseCount?: number;
+      remoteTargets: Array<{ id: string }>;
+      remoteAvatarReliableStates?: Array<{ participantId: string; avatarId: string }>;
+      remoteAvatarPoseFrames?: Array<{ participantId: string; seq: number }>;
+    }>;
   };
 
   expect(diagnostics.items.some((item) => item.remoteAvatarCount >= 1)).toBeTruthy();
   expect(diagnostics.items.some((item) => item.remoteTargets.length >= 1)).toBeTruthy();
+  expect(diagnostics.items.some((item) => Array.isArray(item.remoteAvatarReliableStates))).toBeTruthy();
+  expect(diagnostics.items.some((item) => Array.isArray(item.remoteAvatarPoseFrames))).toBeTruthy();
 
   await pageA.close();
   await pageB.close();

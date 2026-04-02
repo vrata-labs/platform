@@ -159,6 +159,8 @@ const headGeometry = new THREE.SphereGeometry(0.18, 20, 20);
 interface RemoteAvatarEntity {
   body: THREE.Mesh;
   head: THREE.Mesh;
+  leftHand: THREE.Mesh;
+  rightHand: THREE.Mesh;
 }
 
 interface RemoteAvatarMotion {
@@ -169,8 +171,8 @@ interface RemoteAvatarMotion {
 
 const remoteAvatars = new Map<string, RemoteAvatarEntity>();
 const remoteMotionTracks = new Map<string, RemoteAvatarMotion>();
-const remoteAvatarReliableStates = new Map<string, { participantId: string; avatarId: string; inputMode: string; updatedAt: string }>();
-const remoteAvatarPoseFrames = new Map<string, { participantId: string; seq: number; locomotionMode: number; sentAtMs: number }>();
+const remoteAvatarReliableStates = new Map<string, { participantId: string; avatarId: string; inputMode: string; updatedAt: string; audioActive: boolean }>();
+const remoteAvatarPoseFrames = new Map<string, { participantId: string; seq: number; locomotionMode: number; sentAtMs: number; frame: import("./avatar/avatar-types.js").CompactPoseFrame }>();
 
 const keyState: Record<string, boolean> = {};
 let pointerActive = false;
@@ -636,17 +638,21 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
         participantId: state.participantId,
         avatarId: state.avatarId,
         inputMode: state.inputMode,
-        updatedAt: state.updatedAt
+        updatedAt: state.updatedAt,
+        audioActive: state.audioActive
       });
       syncRemoteAvatarDebugState();
     },
-    onAvatarPoseFrame: (frame) => {
-      const knownParticipantId = Array.from(remoteAvatarReliableStates.keys())[0] ?? `remote-${frame.seq}`;
-      remoteAvatarPoseFrames.set(knownParticipantId, {
-        participantId: knownParticipantId,
+    onAvatarPoseFrame: (remoteParticipantId, frame) => {
+      if (remoteParticipantId === participantId) {
+        return;
+      }
+      remoteAvatarPoseFrames.set(remoteParticipantId, {
+        participantId: remoteParticipantId,
         seq: frame.seq,
         locomotionMode: frame.locomotion.mode,
-        sentAtMs: frame.sentAtMs
+        sentAtMs: frame.sentAtMs,
+        frame
       });
       syncRemoteAvatarDebugState();
     },
@@ -886,14 +892,25 @@ function makeHead(color: number): THREE.Mesh {
   );
 }
 
+function makeHand(color: number): THREE.Mesh {
+  return new THREE.Mesh(
+    new THREE.SphereGeometry(0.09, 16, 16),
+    new THREE.MeshStandardMaterial({ color, roughness: 0.35, metalness: 0.04 })
+  );
+}
+
 function ensureRemoteAvatar(participant: PresenceState): RemoteAvatarEntity {
   let entity = remoteAvatars.get(participant.participantId);
   if (!entity) {
     const body = makeBody(participant.activeMedia.audio ? 0x5fc8ff : 0xbfd8ee);
     const head = makeHead(0xf6fbff);
+    const leftHand = makeHand(0xf2b3a0);
+    const rightHand = makeHand(0xf2b3a0);
     scene.add(body);
     scene.add(head);
-    entity = { body, head };
+    scene.add(leftHand);
+    scene.add(rightHand);
+    entity = { body, head, leftHand, rightHand };
     remoteAvatars.set(participant.participantId, entity);
     remoteMotionTracks.set(
       participant.participantId,
@@ -924,6 +941,8 @@ function pruneRemoteAvatars(currentIds: Set<string>): void {
     if (!currentIds.has(id)) {
       scene.remove(mesh.body);
       scene.remove(mesh.head);
+      scene.remove(mesh.leftHand);
+      scene.remove(mesh.rightHand);
       remoteAvatars.delete(id);
       remoteMotionTracks.delete(id);
     }
@@ -947,6 +966,31 @@ function updateRemoteAvatarInterpolation(delta: number): void {
     entity.body.position.set(bodySample.x, 0.92, bodySample.z);
     entity.head.position.set(headSample.x, 1.58, headSample.z);
     entity.body.lookAt(headSample.x, 0.92, headSample.z);
+
+    const reliableState = remoteAvatarReliableStates.get(participantId);
+    const poseFrame = remoteAvatarPoseFrames.get(participantId)?.frame;
+    const bodyMaterial = entity.body.material;
+    if (bodyMaterial instanceof THREE.MeshStandardMaterial) {
+      const color = reliableState?.inputMode === "mobile"
+        ? 0xffc857
+        : reliableState?.inputMode === "vr-controller" || reliableState?.inputMode === "vr-hand"
+          ? 0x8be9fd
+          : reliableState?.audioActive
+            ? 0x5fc8ff
+            : 0xbfd8ee;
+      bodyMaterial.color.setHex(color);
+    }
+
+    if (poseFrame) {
+      entity.head.position.set(poseFrame.head.x, poseFrame.head.y, poseFrame.head.z);
+      entity.leftHand.position.set(poseFrame.leftHand.x, poseFrame.leftHand.y, poseFrame.leftHand.z);
+      entity.rightHand.position.set(poseFrame.rightHand.x, poseFrame.rightHand.y, poseFrame.rightHand.z);
+      entity.leftHand.visible = poseFrame.leftHand.gesture > 0;
+      entity.rightHand.visible = poseFrame.rightHand.gesture > 0;
+    } else {
+      entity.leftHand.visible = false;
+      entity.rightHand.visible = false;
+    }
   }
   debugState.remoteTargets = Array.from(remoteMotionTracks.entries()).map(([id, track]) => {
     const latest = track.root.samples[track.root.samples.length - 1];
@@ -1241,7 +1285,7 @@ async function syncPresence(mode: PresenceState["mode"], audioActive: boolean): 
     if (runtimeFlags.avatarsEnabled && debugState.avatarTransportPreview) {
       sendAvatarReliableState(roomStateClient, debugState.avatarTransportPreview.reliableState);
       if (runtimeFlags.avatarPoseBinaryEnabled) {
-        sendAvatarPoseFrame(roomStateClient, debugState.avatarTransportPreview.poseFrame);
+        sendAvatarPoseFrame(roomStateClient, participantId, debugState.avatarTransportPreview.poseFrame);
       }
     }
   } else {

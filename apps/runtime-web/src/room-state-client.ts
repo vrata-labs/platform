@@ -22,7 +22,7 @@ function canSend(socket: SendableSocket): boolean {
 export interface RoomStateClientHandlers {
   onRoomState: (snapshot: RoomStateSnapshot) => void;
   onAvatarReliableState?: (state: AvatarReliableState) => void;
-  onAvatarPoseFrame?: (frame: CompactPoseFrame) => void;
+  onAvatarPoseFrame?: (participantId: string, frame: CompactPoseFrame) => void;
   onError: (error: unknown) => void;
   onOpen?: () => void;
   onClose?: () => void;
@@ -54,6 +54,7 @@ export function connectRoomState(
         room?: RoomStateSnapshot;
         reliableState?: unknown;
         poseFrame?: unknown;
+        participantId?: unknown;
       };
       if (payload.type === "room_state" && payload.room) {
         handlers.onRoomState(payload.room);
@@ -64,7 +65,11 @@ export function connectRoomState(
         return;
       }
       if (payload.type === "avatar_pose_preview" && payload.poseFrame) {
-        handlers.onAvatarPoseFrame?.(parseCompactPoseFrame(payload.poseFrame));
+        const participantId = typeof payload.participantId === "string" ? payload.participantId : null;
+        if (!participantId) {
+          throw new Error("invalid_avatar_pose_preview_participant");
+        }
+        handlers.onAvatarPoseFrame?.(participantId, parseCompactPoseFrame(payload.poseFrame));
       }
     } catch (error) {
       handlers.onError(error);
@@ -98,9 +103,9 @@ export function sendAvatarReliableState(client: RoomStateClient, reliableState: 
   client.socket.send(JSON.stringify({ type: "avatar_reliable_state", reliableState }));
 }
 
-export function sendAvatarPoseFrame(client: RoomStateClient, poseFrame: CompactPoseFrame): void {
+export function sendAvatarPoseFrame(client: RoomStateClient, participantId: string, poseFrame: CompactPoseFrame): void {
   if (!canSend(client.socket)) {
     return;
   }
-  client.socket.send(JSON.stringify({ type: "avatar_pose_preview", poseFrame }));
+  client.socket.send(JSON.stringify({ type: "avatar_pose_preview", participantId, poseFrame }));
 }
