@@ -83,3 +83,19 @@ export interface LoadedAvatarPreset {
   preset: AvatarCatalogPreset;
   recipe: AvatarRecipeV1;
 }
+
+export interface LocalAvatarSnapshotV1 {
+  schemaVersion: 1;
+  avatarId: string;
+  inputMode: AvatarInputMode;
+  visibilityState: "full-body" | "upper-body" | "hands-only" | "hidden";
+  controllerProfile: string;
+  locomotionState: string;
+  animationState: string;
+  fallbackReason: string | null;
+  root: { x: number; y: number; z: number; yaw: number };
+  head: { x: number; y: number; z: number };
+  leftHand: { x: number; y: number; z: number; visible: boolean };
+  rightHand: { x: number; y: number; z: number; visible: boolean };
+  updatedAt: string;
+}

@@ -225,6 +225,12 @@ test("avatar-enabled room exposes local self-avatar diagnostics in normal room f
           controllerProfile?: string | null;
           inputMode?: string | null;
         };
+        avatarSnapshot?: {
+          avatarId?: string | null;
+          visibilityState?: string | null;
+          controllerProfile?: string | null;
+          locomotionState?: string | null;
+        };
       };
     }).__NOAH_DEBUG__);
 
@@ -235,7 +241,11 @@ test("avatar-enabled room exposes local self-avatar diagnostics in normal room f
       locomotionState: debug?.avatarDebug?.locomotionState ?? null,
       animationState: debug?.avatarDebug?.animationState ?? null,
       controllerProfile: debug?.avatarDebug?.controllerProfile ?? null,
-      inputMode: debug?.avatarDebug?.inputMode ?? null
+      inputMode: debug?.avatarDebug?.inputMode ?? null,
+      snapshotAvatarId: debug?.avatarSnapshot?.avatarId ?? null,
+      snapshotVisibilityState: debug?.avatarSnapshot?.visibilityState ?? null,
+      snapshotControllerProfile: debug?.avatarSnapshot?.controllerProfile ?? null,
+      snapshotLocomotionState: debug?.avatarSnapshot?.locomotionState ?? null
     };
   }, {
     timeout: 15000,
@@ -247,7 +257,11 @@ test("avatar-enabled room exposes local self-avatar diagnostics in normal room f
     locomotionState: "walk",
     animationState: "idle",
     controllerProfile: "desktop_no_controllers",
-    inputMode: "desktop"
+    inputMode: "desktop",
+    snapshotAvatarId: "preset-01",
+    snapshotVisibilityState: "full-body",
+    snapshotControllerProfile: "desktop_no_controllers",
+    snapshotLocomotionState: "walk"
   });
 
   await expect.poll(async () => {
@@ -363,18 +377,23 @@ test("avatar-enabled room lets user switch self-avatar preset in normal room flo
           state?: string;
           selectedAvatarId?: string | null;
         };
+        avatarSnapshot?: {
+          avatarId?: string | null;
+        };
       };
     }).__NOAH_DEBUG__);
     return {
       state: debug?.avatarDebug?.state ?? null,
-      selectedAvatarId: debug?.avatarDebug?.selectedAvatarId ?? null
+      selectedAvatarId: debug?.avatarDebug?.selectedAvatarId ?? null,
+      snapshotAvatarId: debug?.avatarSnapshot?.avatarId ?? null
     };
   }, {
     timeout: 15000,
     intervals: [1000, 2000, 3000]
   }).toEqual({
     state: "loaded",
-    selectedAvatarId: "preset-02"
+    selectedAvatarId: "preset-02",
+    snapshotAvatarId: "preset-02"
   });
 
   await expect(page.locator("#avatar-sandbox-status")).toContainText("preset-02");

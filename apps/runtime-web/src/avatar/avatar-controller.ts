@@ -8,7 +8,7 @@ import {
 import { computeAvatarAnimationPose, selectAvatarAnimationClip } from "./avatar-animation.js";
 import { resolveAvatarLocomotion } from "./avatar-locomotion.js";
 import { solveUpperBodyPose, type AvatarPosePoint } from "./avatar-ik.js";
-import type { AvatarInputMode, LoadedAvatarPreset } from "./avatar-types.js";
+import type { AvatarInputMode, LoadedAvatarPreset, LocalAvatarSnapshotV1 } from "./avatar-types.js";
 import { resolveAvatarViewProfile } from "./avatar-visibility.js";
 
 export interface AvatarSelectionStorage {
@@ -20,6 +20,7 @@ export interface LocalAvatarController {
   root: THREE.Group;
   selectedAvatarId: string;
   diagnostics: AvatarDiagnostics;
+  snapshot: LocalAvatarSnapshotV1;
   update(input: {
     deltaSeconds: number;
     inputMode: AvatarInputMode;
@@ -172,11 +173,27 @@ export function createLocalAvatarController(input: {
     activeControllerCount: 0,
     controllerProfile: "desktop_no_controllers"
   });
+  const snapshot: LocalAvatarSnapshotV1 = {
+    schemaVersion: 1,
+    avatarId: selectedPreset.preset.avatarId,
+    inputMode: "desktop",
+    visibilityState: "full-body",
+    controllerProfile: "desktop_no_controllers",
+    locomotionState: "idle",
+    animationState: "idle",
+    fallbackReason: null,
+    root: { x: 0, y: 0, z: 0, yaw: 0 },
+    head: { x: 0, y: 1.58, z: 0 },
+    leftHand: { x: -0.28, y: 1.16, z: 0.12, visible: true },
+    rightHand: { x: 0.28, y: 1.16, z: 0.12, visible: true },
+    updatedAt: new Date(0).toISOString()
+  };
 
   return {
     root: visual.root,
     selectedAvatarId: selectedPreset.preset.avatarId,
     diagnostics,
+    snapshot,
     update(frame): void {
       animationElapsedSeconds += Math.max(0, frame.deltaSeconds);
       const viewProfile = resolveAvatarViewProfile({
@@ -275,6 +292,38 @@ export function createLocalAvatarController(input: {
               : animation.fallback
                 ? `animation_clip_fallback:${locomotion.state}`
                 : null;
+
+      snapshot.avatarId = selectedPreset.preset.avatarId;
+      snapshot.inputMode = frame.inputMode;
+      snapshot.visibilityState = visibility;
+      snapshot.controllerProfile = controllerProfile;
+      snapshot.locomotionState = locomotion.state;
+      snapshot.animationState = animation.clip;
+      snapshot.fallbackReason = diagnostics.fallbackReason;
+      snapshot.root = {
+        x: frame.rootPosition.x,
+        y: frame.rootPosition.y,
+        z: frame.rootPosition.z,
+        yaw: frame.yaw
+      };
+      snapshot.head = {
+        x: visual.head.position.x,
+        y: visual.head.position.y,
+        z: visual.head.position.z
+      };
+      snapshot.leftHand = {
+        x: visual.leftHand.position.x,
+        y: visual.leftHand.position.y,
+        z: visual.leftHand.position.z,
+        visible: visual.leftHand.visible
+      };
+      snapshot.rightHand = {
+        x: visual.rightHand.position.x,
+        y: visual.rightHand.position.y,
+        z: visual.rightHand.position.z,
+        visible: visual.rightHand.visible
+      };
+      snapshot.updatedAt = new Date().toISOString();
     },
     dispose(): void {
       visual.root.removeFromParent();

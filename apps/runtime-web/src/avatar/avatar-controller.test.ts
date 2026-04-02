@@ -64,6 +64,7 @@ test("createLocalAvatarController restores preferred preset from storage", () =>
   });
 
   assert.equal(controller.selectedAvatarId, "preset-02");
+  assert.equal(controller.snapshot.avatarId, "preset-02");
 });
 
 test("createLocalAvatarController updates diagnostics for vr fallback hands-only mode", () => {
@@ -232,6 +233,8 @@ test("createLocalAvatarController shows only left hand for single left vr contro
   assert.equal(rightHand.visible, false);
   assert.equal(controller.diagnostics.controllerProfile, "vr_single_left_controller");
   assert.equal(controller.diagnostics.fallbackReason, "xr_input_partial_fallback:left_only");
+  assert.equal(controller.snapshot.leftHand.visible, true);
+  assert.equal(controller.snapshot.rightHand.visible, false);
 });
 
 test("createLocalAvatarController shows both hands for dual vr controllers", () => {
@@ -267,4 +270,6 @@ test("createLocalAvatarController shows both hands for dual vr controllers", () 
   assert.equal(rightHand.visible, true);
   assert.equal(controller.diagnostics.controllerProfile, "vr_dual_controllers");
   assert.equal(controller.diagnostics.fallbackReason, null);
+  assert.equal(controller.snapshot.controllerProfile, "vr_dual_controllers");
+  assert.equal(controller.snapshot.visibilityState, "hands-only");
 });
