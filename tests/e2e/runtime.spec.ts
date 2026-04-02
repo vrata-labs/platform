@@ -775,7 +775,13 @@ test("diagnostics capture multi-client remote visibility", async ({ browser, req
       remoteTargets: Array<{ id: string }>;
       remoteAvatarReliableStates?: Array<{ participantId: string; avatarId: string }>;
       remoteAvatarPoseFrames?: Array<{ participantId: string; seq: number }>;
-      remoteAvatarParticipants?: Array<{ participantId: string; hasReliableState: boolean; hasPoseFrame: boolean }>;
+      remoteAvatarParticipants?: Array<{
+        participantId: string;
+        hasReliableState: boolean;
+        hasPoseFrame: boolean;
+        leftHandVisible: boolean;
+        rightHandVisible: boolean;
+      }>;
     }>;
   };
 
