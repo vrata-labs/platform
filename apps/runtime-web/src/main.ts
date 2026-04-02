@@ -18,6 +18,7 @@ import { startSceneBundleSession } from "./scene-session.js";
 import { detectXrSupport, getEnterVrVisibility } from "./xr.js";
 import { createAvatarLoadingDiagnostics, createEmptyAvatarDiagnostics } from "./avatar/avatar-debug.js";
 import { createInitialAvatarRuntimeFlags, resolveAvatarCatalogUrl, resolveAvatarRuntimeFlags } from "./avatar/avatar-runtime.js";
+import { serializeCompactPoseFrame, serializeReliableAvatarState } from "./avatar/avatar-snapshot-codec.js";
 import { setAvatarSandboxStatus } from "./avatar/avatar-sandbox.js";
 import { resetAvatarSession, startAvatarSandboxSession, startLocalAvatarSession } from "./avatar/avatar-session.js";
 import type { LocalAvatarController } from "./avatar/avatar-controller.js";
@@ -434,7 +435,8 @@ const debugState = {
   spaceSelectorState: "loading" as "loading" | "ready" | "empty" | "unavailable",
   availableSpaceCount: 0,
   avatarDebug: createEmptyAvatarDiagnostics(),
-  avatarSnapshot: null as LocalAvatarSnapshotV1 | null
+  avatarSnapshot: null as LocalAvatarSnapshotV1 | null,
+  avatarTransportPreview: null as { reliableState: unknown; poseFrame: unknown } | null
 };
 
 const floorMaterial = floor.material as THREE.MeshStandardMaterial;
@@ -726,6 +728,7 @@ async function reportDiagnostics(note?: string): Promise<void> {
       faultInjection: debugState.faultInjection,
       avatarDebug: debugState.avatarDebug,
       avatarSnapshot: debugState.avatarSnapshot,
+      avatarTransportPreview: debugState.avatarTransportPreview,
       sceneDebug: {
         ...debugState.sceneDebug,
         missingAssetCount: debugState.sceneDebug.missingAssets.length,
@@ -1005,6 +1008,19 @@ function updateLocalAvatar(delta: number): void {
   });
   debugState.avatarDebug = localAvatarController.diagnostics;
   debugState.avatarSnapshot = localAvatarController.snapshot;
+  debugState.avatarTransportPreview = {
+    reliableState: serializeReliableAvatarState({
+      participantId,
+      snapshot: localAvatarController.snapshot,
+      muted: !microphoneEnabled,
+      audioActive: microphoneEnabled
+    }),
+    poseFrame: serializeCompactPoseFrame({
+      seq: Math.max(1, Math.round(performance.now())),
+      sentAtMs: Date.now(),
+      snapshot: localAvatarController.snapshot
+    })
+  };
 }
 
 function populateAvatarPresetSelect(input: {
@@ -1054,6 +1070,7 @@ async function bootLocalAvatarPresetSession(input: {
   localAvatarController = localAvatarSession.controller;
   debugState.avatarDebug = localAvatarSession.diagnostics;
   debugState.avatarSnapshot = localAvatarSession.controller?.snapshot ?? null;
+  debugState.avatarTransportPreview = null;
   populateAvatarPresetSelect({
     options: localAvatarSession.presetOptions,
     selectedAvatarId: localAvatarSession.controller?.selectedAvatarId ?? localAvatarSession.diagnostics.selectedAvatarId,
@@ -1549,6 +1566,7 @@ async function main(): Promise<void> {
   avatarSandboxRegistry = avatarReset.registry;
   debugState.avatarDebug = avatarReset.diagnostics;
   debugState.avatarSnapshot = null;
+  debugState.avatarTransportPreview = null;
   if (!effectiveCleanSceneMode) {
     scene.fog = new THREE.Fog(new THREE.Color(boot.theme.accentColor).getHex(), 12, 50);
   } else {
@@ -1580,6 +1598,7 @@ async function main(): Promise<void> {
     setFallbackEnvironmentVisible(true);
     debugState.avatarDebug = sandboxResult.diagnostics;
     debugState.avatarSnapshot = null;
+    debugState.avatarTransportPreview = null;
     setAvatarSandboxStatus(avatarSandboxStatusEl, sandboxResult.statusMessage);
     await reportDiagnostics(sandboxResult.note);
     return;

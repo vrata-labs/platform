@@ -231,6 +231,10 @@ test("avatar-enabled room exposes local self-avatar diagnostics in normal room f
           controllerProfile?: string | null;
           locomotionState?: string | null;
         };
+        avatarTransportPreview?: {
+          reliableState?: { avatarId?: string | null; inputMode?: string | null };
+          poseFrame?: { root?: { x?: number | null }; locomotion?: { mode?: number | null } };
+        };
       };
     }).__NOAH_DEBUG__);
 
@@ -245,7 +249,10 @@ test("avatar-enabled room exposes local self-avatar diagnostics in normal room f
       snapshotAvatarId: debug?.avatarSnapshot?.avatarId ?? null,
       snapshotVisibilityState: debug?.avatarSnapshot?.visibilityState ?? null,
       snapshotControllerProfile: debug?.avatarSnapshot?.controllerProfile ?? null,
-      snapshotLocomotionState: debug?.avatarSnapshot?.locomotionState ?? null
+      snapshotLocomotionState: debug?.avatarSnapshot?.locomotionState ?? null,
+      transportAvatarId: debug?.avatarTransportPreview?.reliableState?.avatarId ?? null,
+      transportInputMode: debug?.avatarTransportPreview?.reliableState?.inputMode ?? null,
+      transportLocomotionMode: debug?.avatarTransportPreview?.poseFrame?.locomotion?.mode ?? null
     };
   }, {
     timeout: 15000,
@@ -261,7 +268,10 @@ test("avatar-enabled room exposes local self-avatar diagnostics in normal room f
     snapshotAvatarId: "preset-01",
     snapshotVisibilityState: "full-body",
     snapshotControllerProfile: "desktop_no_controllers",
-    snapshotLocomotionState: "walk"
+    snapshotLocomotionState: "walk",
+    transportAvatarId: "preset-01",
+    transportInputMode: "desktop",
+    transportLocomotionMode: 1
   });
 
   await expect.poll(async () => {
