@@ -127,6 +127,7 @@ test("startLocalAvatarSession creates local avatar controller from procedural ca
       deltaSeconds: 0.25,
       inputMode: "desktop",
       xrPresenting: false,
+      xrInputProfile: null,
       rootPosition: { x: 0, y: 0, z: 0 },
       yaw: 0,
       headPosition: { x: 0, y: 1.6, z: 0 },

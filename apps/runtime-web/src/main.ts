@@ -20,6 +20,7 @@ import { createAvatarLoadingDiagnostics, createEmptyAvatarDiagnostics } from "./
 import { createAvatarOutboundPublisher, type AvatarOutboundPayload } from "./avatar/avatar-publish.js";
 import { createRemoteAvatarRuntime } from "./avatar/remote-avatar-runtime.js";
 import { createInitialAvatarRuntimeFlags, resolveAvatarCatalogUrl, resolveAvatarRuntimeFlags } from "./avatar/avatar-runtime.js";
+import { resolveAvatarXrInput } from "./avatar/avatar-xr-input.js";
 import { setAvatarSandboxStatus } from "./avatar/avatar-sandbox.js";
 import { resetAvatarSession, startAvatarSandboxSession, startLocalAvatarSession } from "./avatar/avatar-session.js";
 import type { LocalAvatarController } from "./avatar/avatar-controller.js";
@@ -183,6 +184,7 @@ let localAvatarController: LocalAvatarController | null = null;
 const avatarOutboundPublisher = createAvatarOutboundPublisher();
 let lastAvatarMove = { x: 0, z: 0 };
 let lastAvatarTurnRate = 0;
+let lastAvatarXrInputProfile: string | null = null;
 const roomStateReconnectPolicy = createReconnectPolicy({
   maxRetries: Number.parseInt(query.get("roomstateretries") ?? "3", 10),
   baseDelayMs: Number.parseInt(query.get("roomstatedelay") ?? "1000", 10),
@@ -877,6 +879,7 @@ function updateLocalAvatar(delta: number): void {
     deltaSeconds: delta,
     inputMode,
     xrPresenting: renderer.xr.isPresenting,
+    xrInputProfile: lastAvatarXrInputProfile,
     rootPosition: {
       x: player.position.x,
       y: player.position.y,
@@ -992,32 +995,9 @@ function updateMovement(delta: number): void {
   if (renderer.xr.isPresenting) {
     const xrFrame = renderer.xr.getFrame();
     const session = xrFrame?.session;
-    let xrAxes = { moveX: 0, moveY: 0, turnX: 0 };
-    let fallbackMoveAssigned = false;
-    let fallbackTurnAssigned = false;
-
-    for (const input of session?.inputSources ?? []) {
-      const axes = input.gamepad?.axes ?? [];
-      if (input.handedness === "left") {
-        xrAxes.moveX = axes[2] ?? axes[0] ?? xrAxes.moveX;
-        xrAxes.moveY = axes[3] ?? axes[1] ?? xrAxes.moveY;
-        fallbackMoveAssigned = true;
-      }
-      if (input.handedness === "right") {
-        xrAxes.turnX = axes[2] ?? axes[0] ?? xrAxes.turnX;
-        fallbackTurnAssigned = true;
-      }
-      if (!fallbackMoveAssigned && axes.length >= 2) {
-        xrAxes.moveX = axes[2] ?? axes[0] ?? xrAxes.moveX;
-        xrAxes.moveY = axes[3] ?? axes[1] ?? xrAxes.moveY;
-        fallbackMoveAssigned = true;
-        continue;
-      }
-      if (!fallbackTurnAssigned && axes.length >= 2) {
-        xrAxes.turnX = axes[2] ?? axes[0] ?? xrAxes.turnX;
-        fallbackTurnAssigned = true;
-      }
-    }
+    const xrInput = resolveAvatarXrInput(Array.from(session?.inputSources ?? []));
+    const xrAxes = xrInput.axes;
+    lastAvatarXrInputProfile = xrInput.profile;
 
     const sanitized = sanitizeXrAxes(xrAxes);
     debugState.xrAxes = sanitized;
@@ -1030,6 +1010,8 @@ function updateMovement(delta: number): void {
     yaw = turn.angle;
     xrTurnCooldown = turn.cooldownSeconds;
     debugState.locomotionMode = "vr";
+  } else {
+    lastAvatarXrInputProfile = null;
   }
 
   if (direction.x !== 0 || direction.z !== 0) {

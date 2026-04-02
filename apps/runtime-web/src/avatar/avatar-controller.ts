@@ -33,6 +33,7 @@ export interface LocalAvatarController {
     moveX: number;
     moveZ: number;
     turnRate: number;
+    xrInputProfile?: string | null;
   }): void;
   dispose(): void;
 }
@@ -171,7 +172,8 @@ export function createLocalAvatarController(input: {
     solveState: "fallback",
     animationState: "idle",
     activeControllerCount: 0,
-    controllerProfile: "desktop_no_controllers"
+    controllerProfile: "desktop_no_controllers",
+    xrInputProfile: "none"
   });
   const snapshot: LocalAvatarSnapshotV1 = {
     schemaVersion: 1,
@@ -274,6 +276,7 @@ export function createLocalAvatarController(input: {
       diagnostics.animationState = animation.clip;
       diagnostics.activeControllerCount = controllerCount;
       diagnostics.controllerProfile = controllerProfile;
+      diagnostics.xrInputProfile = frame.xrInputProfile ?? null;
       diagnostics.fallbackActive = (
         (solve.solveState === "fallback" && frame.xrPresenting)
         || animation.fallback

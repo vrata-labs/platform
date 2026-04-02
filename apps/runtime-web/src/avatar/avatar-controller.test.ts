@@ -84,6 +84,7 @@ test("createLocalAvatarController updates diagnostics for vr fallback hands-only
     deltaSeconds: 0.016,
     inputMode: "vr-controller",
     xrPresenting: true,
+    xrInputProfile: "none",
     rootPosition: { x: 0, y: 0, z: 0 },
     yaw: 0,
     headPosition: { x: 0, y: 1.6, z: 0 },
@@ -97,6 +98,7 @@ test("createLocalAvatarController updates diagnostics for vr fallback hands-only
   assert.equal(controller.diagnostics.fallbackActive, true);
   assert.equal(controller.diagnostics.controllerProfile, "vr_no_controllers");
   assert.equal(controller.diagnostics.fallbackReason, "xr_input_missing_controllers");
+  assert.equal(controller.diagnostics.xrInputProfile, "none");
 });
 
 test("createLocalAvatarController marks animation fallback when locomotion clip is unavailable", () => {
@@ -119,6 +121,7 @@ test("createLocalAvatarController marks animation fallback when locomotion clip 
     deltaSeconds: 0.016,
     inputMode: "desktop",
     xrPresenting: false,
+    xrInputProfile: null,
     rootPosition: { x: 0, y: 0, z: 0 },
     yaw: 0,
     headPosition: { x: 0, y: 1.6, z: 0 },
@@ -152,6 +155,7 @@ test("createLocalAvatarController applies visible walk pose to body and hands", 
     deltaSeconds: 0.25,
     inputMode: "desktop",
     xrPresenting: false,
+    xrInputProfile: null,
     rootPosition: { x: 0, y: 0, z: 0 },
     yaw: 0,
     headPosition: { x: 0, y: 1.6, z: 0 },
@@ -185,6 +189,7 @@ test("createLocalAvatarController hides lower body for mobile upper-body profile
     deltaSeconds: 0.016,
     inputMode: "mobile",
     xrPresenting: false,
+    xrInputProfile: null,
     rootPosition: { x: 0, y: 0, z: 0 },
     yaw: 0,
     headPosition: { x: 0, y: 1.5, z: 0 },
@@ -218,6 +223,7 @@ test("createLocalAvatarController shows only left hand for single left vr contro
     deltaSeconds: 0.016,
     inputMode: "vr-controller",
     xrPresenting: true,
+    xrInputProfile: "left-only",
     rootPosition: { x: 0, y: 0, z: 0 },
     yaw: 0,
     headPosition: { x: 0, y: 1.6, z: 0 },
@@ -233,6 +239,7 @@ test("createLocalAvatarController shows only left hand for single left vr contro
   assert.equal(rightHand.visible, false);
   assert.equal(controller.diagnostics.controllerProfile, "vr_single_left_controller");
   assert.equal(controller.diagnostics.fallbackReason, "xr_input_partial_fallback:left_only");
+  assert.equal(controller.diagnostics.xrInputProfile, "left-only");
   assert.equal(controller.snapshot.leftHand.visible, true);
   assert.equal(controller.snapshot.rightHand.visible, false);
 });
@@ -254,6 +261,7 @@ test("createLocalAvatarController shows both hands for dual vr controllers", () 
     deltaSeconds: 0.016,
     inputMode: "vr-controller",
     xrPresenting: true,
+    xrInputProfile: "dual",
     rootPosition: { x: 0, y: 0, z: 0 },
     yaw: 0,
     headPosition: { x: 0, y: 1.6, z: 0 },
@@ -272,4 +280,5 @@ test("createLocalAvatarController shows both hands for dual vr controllers", () 
   assert.equal(controller.diagnostics.fallbackReason, null);
   assert.equal(controller.snapshot.controllerProfile, "vr_dual_controllers");
   assert.equal(controller.snapshot.visibilityState, "hands-only");
+  assert.equal(controller.diagnostics.xrInputProfile, "dual");
 });
