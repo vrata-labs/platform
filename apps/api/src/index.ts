@@ -137,7 +137,7 @@ function logEvent(event: Record<string, unknown>): void {
   process.stdout.write(`${JSON.stringify(event)}\n`);
 }
 
-function defaultManifest(roomId: string): RoomManifest {
+function defaultManifest(roomId: string, request?: IncomingMessage): RoomManifest {
   return {
     schemaVersion: 1,
     tenantId: "demo-tenant",
@@ -145,7 +145,7 @@ function defaultManifest(roomId: string): RoomManifest {
     template: "meeting-room-basic",
     sceneBundle: undefined,
     realtime: {
-      roomStateUrl: process.env.ROOM_STATE_PUBLIC_URL ?? "ws://127.0.0.1:2567"
+      roomStateUrl: getDefaultRoomStateUrl(request)
     },
     theme: {
       primaryColor: "#5fc8ff",
@@ -167,6 +167,49 @@ function defaultManifest(roomId: string): RoomManifest {
     quality: { default: "desktop-standard", mobile: "mobile-lite", xr: "xr" },
     access: { joinMode: "link", guestAllowed: true }
   };
+}
+
+function getRequestHost(request?: IncomingMessage): string | undefined {
+  const forwarded = request?.headers["x-forwarded-host"];
+  if (typeof forwarded === "string" && forwarded.trim().length > 0) {
+    return forwarded.split(",")[0]?.trim();
+  }
+  const host = request?.headers.host;
+  return typeof host === "string" && host.trim().length > 0 ? host.trim() : undefined;
+}
+
+function getRequestProto(request?: IncomingMessage): "http" | "https" {
+  const forwarded = request?.headers["x-forwarded-proto"];
+  if (typeof forwarded === "string") {
+    const proto = forwarded.split(",")[0]?.trim().toLowerCase();
+    if (proto === "https") {
+      return "https";
+    }
+  }
+  return "http";
+}
+
+function getDefaultRoomStateUrl(request?: IncomingMessage): string {
+  if (process.env.ROOM_STATE_PUBLIC_URL) {
+    return process.env.ROOM_STATE_PUBLIC_URL;
+  }
+
+  const host = getRequestHost(request);
+  if (!host) {
+    return "ws://127.0.0.1:2567";
+  }
+
+  const proto = getRequestProto(request);
+  const protocol = proto === "https" ? "wss" : "ws";
+  const hostname = host.split(":")[0] ?? host;
+
+  if (hostname === "localhost" || hostname === "127.0.0.1") {
+    return `${protocol}://${hostname}:2567`;
+  }
+  if (hostname.endsWith(".sslip.io")) {
+    return `${protocol}://state.${hostname}`;
+  }
+  return `${protocol}://state-${hostname}`;
 }
 
 function createRoomLink(roomId: string, host?: string): string {
@@ -219,10 +262,10 @@ async function serveStatic(response: ServerResponse, filePath: string): Promise<
   return true;
 }
 
-async function buildManifest(roomId: string): Promise<RoomManifest> {
+async function buildManifest(roomId: string, request?: IncomingMessage): Promise<RoomManifest> {
   const storage = await storagePromise;
   const room = await storage.getRoom(roomId);
-  if (!room) return defaultManifest(roomId);
+  if (!room) return defaultManifest(roomId, request);
   const roomAssets = (await storage.listAssets()).filter((asset) => room.assetIds.includes(asset.assetId));
   return {
     schemaVersion: 1,
@@ -231,7 +274,7 @@ async function buildManifest(roomId: string): Promise<RoomManifest> {
     template: room.templateId,
     sceneBundle: room.sceneBundleUrl ? { url: room.sceneBundleUrl } : undefined,
     realtime: {
-      roomStateUrl: process.env.ROOM_STATE_PUBLIC_URL ?? `ws://state-${process.env.API_PUBLIC_URL?.replace(/^https?:\/\//, "") ?? "127.0.0.1:2567"}`
+      roomStateUrl: getDefaultRoomStateUrl(request)
     },
     theme: room.theme ?? {
       primaryColor: "#5fc8ff",
@@ -739,7 +782,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     const assetValidationError = await validateRoomAssetIds(storage, payload.assetIds, payload.templateId);
     if (assetValidationError) return json(response, 400, { error: assetValidationError });
     const room = await storage.createRoom(payload);
-    json(response, 201, { ...room, roomLink: createRoomLink(room.roomId, request.headers.host), manifest: await buildManifest(room.roomId) });
+    json(response, 201, { ...room, roomLink: createRoomLink(room.roomId, request.headers.host), manifest: await buildManifest(room.roomId, request) });
     return;
   }
 
@@ -762,7 +805,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     }
     const updated = await storage.updateRoom(roomId, payload);
     if (!updated) return json(response, 404, { error: "room_not_found" });
-    json(response, 200, { ...updated, roomLink: createRoomLink(updated.roomId, request.headers.host), manifest: await buildManifest(updated.roomId) });
+    json(response, 200, { ...updated, roomLink: createRoomLink(updated.roomId, request.headers.host), manifest: await buildManifest(updated.roomId, request) });
     return;
   }
 
@@ -793,7 +836,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
 
   const manifestMatch = url.pathname.match(/^\/api\/rooms\/([^/]+)\/manifest$/);
   if (method === "GET" && manifestMatch) {
-    json(response, 200, await buildManifest(decodeURIComponent(manifestMatch[1])));
+    json(response, 200, await buildManifest(decodeURIComponent(manifestMatch[1]), request));
     return;
   }
 
@@ -835,7 +878,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   if (method === "GET" && roomItemMatch) {
     const room = await storage.getRoom(decodeURIComponent(roomItemMatch[1]));
     if (!room) return json(response, 404, { error: "room_not_found" });
-    json(response, 200, { ...room, roomLink: createRoomLink(room.roomId, request.headers.host), manifest: await buildManifest(room.roomId) });
+      json(response, 200, { ...room, roomLink: createRoomLink(room.roomId, request.headers.host), manifest: await buildManifest(room.roomId, request) });
     return;
   }
 
