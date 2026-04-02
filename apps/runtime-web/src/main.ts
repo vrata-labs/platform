@@ -12,6 +12,7 @@ import { applyRuntimeIssueState, clearRuntimeIssueState, createRuntimeUiState } 
 import { applySpatialSettings, createSpatialAudioSettings } from "./spatial-audio.js";
 import { captureCanvasDiagnostics, createEmptySceneDiagnostics, inspectSceneObject } from "./scene-debug.js";
 import { loadSceneBundle } from "./scene-loader.js";
+import { startSceneBundleSession } from "./scene-session.js";
 import { detectXrSupport, getEnterVrVisibility } from "./xr.js";
 import { createAvatarLoadingDiagnostics, createEmptyAvatarDiagnostics } from "./avatar/avatar-debug.js";
 import { resetAvatarSandbox } from "./avatar/avatar-fallback.js";
@@ -1417,61 +1418,30 @@ async function main(): Promise<void> {
   }
 
   if (boot.sceneBundleUrl && runtimeFlags.sceneBundles) {
-    try {
-      const loadedScene = await loadSceneBundle({
-        scene,
-        player,
-        bundleUrl: boot.sceneBundleUrl
-      });
-      activeSceneBundleRoot = loadedScene.group;
-      effectiveCleanSceneMode = requestedCleanSceneMode || loadedScene.manifest.renderMode === "clean";
-      applySceneMaterialDebugMode(loadedScene.group, sceneMaterialDebugMode);
-      setFallbackEnvironmentVisible(false);
-      if (effectiveCleanSceneMode) {
-        applyCleanSceneMode(true);
-      }
-      debugState.sceneBundleState = "loaded";
-      debugState.sceneDebug = inspectSceneObject({
-        root: loadedScene.group,
-        camera,
-        previous: {
-          ...debugState.sceneDebug,
-          bundleUrl: boot.sceneBundleUrl,
-          state: "loaded",
-          label: loadedScene.manifest.label,
-          source: loadedScene.manifest.source,
-          assetUrl: loadedScene.assetUrl,
-          assetType: loadedScene.assetType,
-          spawnPointId: loadedScene.spawnPointId,
-          spawnApplied: loadedScene.spawnPointApplied,
-          loadMs: loadedScene.loadMs,
-          missingAssets: loadedScene.missingAssets
-        }
-      });
-      if (sceneFitEnabled && debugState.sceneDebug.boundingBox) {
-        applySceneDebugFit(debugState.sceneDebug.boundingBox);
-        debugState.sceneDebug = inspectSceneObject({
-          root: loadedScene.group,
-          camera,
-          previous: debugState.sceneDebug
-        });
-      }
-      brandingLineEl.textContent = `${brandingLineEl.textContent} | Scene: ${loadedScene.manifest.label}`;
-      void reportDiagnostics("scene_bundle_loaded");
-    } catch (error) {
-      console.error(error);
-      activeSceneBundleRoot = null;
-      setFallbackEnvironmentVisible(true);
-      debugState.sceneBundleState = "failed";
-      debugState.sceneDebug = {
-        ...debugState.sceneDebug,
-        bundleUrl: boot.sceneBundleUrl,
-        state: "failed",
-        missingAssets: [],
-        loadMs: null
-      };
-      brandingLineEl.textContent = `${brandingLineEl.textContent} | Scene bundle fallback active`;
-      void reportDiagnostics("scene_bundle_failed");
+    const sceneResult = await startSceneBundleSession({
+      scene,
+      player,
+      camera,
+      bundleUrl: boot.sceneBundleUrl,
+      requestedCleanSceneMode,
+      sceneFitEnabled,
+      previousSceneDebug: debugState.sceneDebug,
+      applySceneMaterialDebugMode(root) {
+        applySceneMaterialDebugMode(root, sceneMaterialDebugMode);
+      },
+      applyCleanSceneMode,
+      applySceneDebugFit,
+      setFallbackEnvironmentVisible
+    });
+    activeSceneBundleRoot = sceneResult.activeSceneBundleRoot;
+    effectiveCleanSceneMode = sceneResult.effectiveCleanSceneMode;
+    debugState.sceneBundleState = sceneResult.sceneBundleState;
+    debugState.sceneDebug = sceneResult.sceneDebug;
+    if (sceneResult.brandingSuffix) {
+      brandingLineEl.textContent = `${brandingLineEl.textContent} | ${sceneResult.brandingSuffix}`;
+    }
+    if (sceneResult.note) {
+      void reportDiagnostics(sceneResult.note);
     }
   }
 
