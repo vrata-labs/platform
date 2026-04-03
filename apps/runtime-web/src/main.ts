@@ -855,11 +855,14 @@ function getLocalAvatarHandTargets(): { leftHand: { x: number; y: number; z: num
   const xrFrame = renderer.xr.getFrame();
   const session = xrFrame?.session;
   const inputSources = Array.from(session?.inputSources ?? []);
+  const referenceSpace = renderer.xr.getReferenceSpace();
   const headWorldPosition = camera.getWorldPosition(new THREE.Vector3());
   const handDebug = collectLocalAvatarHandDebug({
     inputSources,
     grips: xrControllerGrips,
-    controllers: xrControllers
+    controllers: xrControllers,
+    xrFrame,
+    referenceSpace
   });
   debugState.xrAvatarDebug = {
     profile: lastAvatarXrInputProfile,
@@ -885,7 +888,9 @@ function getLocalAvatarHandTargets(): { leftHand: { x: number; y: number; z: num
     presenting: renderer.xr.isPresenting,
     inputSources,
     grips: xrControllerGrips,
-    controllers: xrControllers
+    controllers: xrControllers,
+    xrFrame,
+    referenceSpace
   });
 }
 

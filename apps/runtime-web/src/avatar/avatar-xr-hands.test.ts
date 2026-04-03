@@ -11,6 +11,22 @@ function spatial(x: number, y: number, z: number) {
   return object;
 }
 
+function frameWithPoses(entries: Array<{ space: unknown; x: number; y: number; z: number }>) {
+  return {
+    getPose(space: unknown) {
+      const found = entries.find((entry) => entry.space === space);
+      if (!found) {
+        return null;
+      }
+      return {
+        transform: {
+          position: { x: found.x, y: found.y, z: found.z }
+        }
+      };
+    }
+  };
+}
+
 test("resolveLocalAvatarHandTargets prefers grip positions over controller rays", () => {
   const result = resolveLocalAvatarHandTargets({
     presenting: true,
@@ -64,4 +80,48 @@ test("collectLocalAvatarHandDebug exposes raw grip and controller positions", ()
   assert.deepEqual(debug.leftGrip, { x: -0.2, y: 1.2, z: 0.3 });
   assert.deepEqual(debug.leftController, { x: -0.4, y: 1.4, z: 0.6 });
   assert.deepEqual(debug.leftResolved, { x: -0.2, y: 1.2, z: 0.3 });
+});
+
+test("resolveLocalAvatarHandTargets prefers XRFrame pose spaces over index-mapped grips", () => {
+  const leftGripSpace = { id: "left-grip" };
+  const rightGripSpace = { id: "right-grip" };
+  const result = resolveLocalAvatarHandTargets({
+    presenting: true,
+    inputSources: [
+      { handedness: "left", gripSpace: leftGripSpace },
+      { handedness: "right", gripSpace: rightGripSpace }
+    ],
+    grips: [spatial(10, 10, 10), spatial(-10, 10, 10)],
+    controllers: [null, null],
+    xrFrame: frameWithPoses([
+      { space: leftGripSpace, x: -0.2, y: 1.2, z: 0.3 },
+      { space: rightGripSpace, x: 0.2, y: 1.2, z: 0.3 }
+    ]),
+    referenceSpace: { id: "ref" }
+  });
+
+  assert.deepEqual(result.leftHand, { x: -0.2, y: 1.2, z: 0.3 });
+  assert.deepEqual(result.rightHand, { x: 0.2, y: 1.2, z: 0.3 });
+});
+
+test("resolveLocalAvatarHandTargets survives reordered inputSources when pose spaces are correct", () => {
+  const leftGripSpace = { id: "left-grip" };
+  const rightGripSpace = { id: "right-grip" };
+  const result = resolveLocalAvatarHandTargets({
+    presenting: true,
+    inputSources: [
+      { handedness: "right", gripSpace: rightGripSpace },
+      { handedness: "left", gripSpace: leftGripSpace }
+    ],
+    grips: [spatial(-0.4, 1.2, 0.3), spatial(0.4, 1.2, 0.3)],
+    controllers: [null, null],
+    xrFrame: frameWithPoses([
+      { space: leftGripSpace, x: -0.25, y: 1.2, z: 0.3 },
+      { space: rightGripSpace, x: 0.25, y: 1.2, z: 0.3 }
+    ]),
+    referenceSpace: { id: "ref" }
+  });
+
+  assert.deepEqual(result.leftHand, { x: -0.25, y: 1.2, z: 0.3 });
+  assert.deepEqual(result.rightHand, { x: 0.25, y: 1.2, z: 0.3 });
 });

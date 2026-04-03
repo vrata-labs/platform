@@ -12,6 +12,12 @@ export interface XrSpatialLike {
 
 export interface XrInputSourceLike {
   handedness?: string;
+  gripSpace?: unknown;
+  targetRaySpace?: unknown;
+}
+
+export interface XrFrameLike {
+  getPose(space: unknown, referenceSpace: unknown): { transform?: { position?: { x?: number; y?: number; z?: number } } } | null | undefined;
 }
 
 export interface XrHandResolutionDebug {
@@ -36,10 +42,28 @@ function readWorldTarget(anchor: XrSpatialLike | null | undefined): AvatarHandTa
   };
 }
 
+function readPoseTarget(frame: XrFrameLike | null | undefined, referenceSpace: unknown, space: unknown): AvatarHandTarget | null {
+  if (!frame || !referenceSpace || !space) {
+    return null;
+  }
+  const pose = frame.getPose(space, referenceSpace);
+  const position = pose?.transform?.position;
+  if (!position || typeof position.x !== "number" || typeof position.y !== "number" || typeof position.z !== "number") {
+    return null;
+  }
+  return {
+    x: position.x,
+    y: position.y,
+    z: position.z
+  };
+}
+
 export function collectLocalAvatarHandDebug(input: {
   inputSources: XrInputSourceLike[];
   grips: Array<XrSpatialLike | null | undefined>;
   controllers: Array<XrSpatialLike | null | undefined>;
+  xrFrame?: XrFrameLike | null;
+  referenceSpace?: unknown;
 }): XrHandResolutionDebug {
   const result: XrHandResolutionDebug = {
     leftGrip: null,
@@ -54,8 +78,8 @@ export function collectLocalAvatarHandDebug(input: {
     if (source.handedness !== "left" && source.handedness !== "right") {
       continue;
     }
-    const grip = readWorldTarget(input.grips[index]);
-    const controller = readWorldTarget(input.controllers[index]);
+    const grip = readPoseTarget(input.xrFrame, input.referenceSpace, source.gripSpace) ?? readWorldTarget(input.grips[index]);
+    const controller = readPoseTarget(input.xrFrame, input.referenceSpace, source.targetRaySpace) ?? readWorldTarget(input.controllers[index]);
     const resolved = grip ?? controller;
     if (source.handedness === "left") {
       result.leftGrip = grip;
@@ -76,6 +100,8 @@ export function resolveLocalAvatarHandTargets(input: {
   inputSources: XrInputSourceLike[];
   grips: Array<XrSpatialLike | null | undefined>;
   controllers: Array<XrSpatialLike | null | undefined>;
+  xrFrame?: XrFrameLike | null;
+  referenceSpace?: unknown;
 }): { leftHand: AvatarHandTarget | null; rightHand: AvatarHandTarget | null } {
   if (!input.presenting) {
     return { leftHand: null, rightHand: null };
