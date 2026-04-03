@@ -1,5 +1,24 @@
 import type { AvatarReliableState, CompactPoseFrame, LocalAvatarSnapshotV1 } from "./avatar-types.js";
 
+function rotateAroundYaw(point: { x: number; y: number; z: number }, yaw: number): { x: number; y: number; z: number } {
+  const cos = Math.cos(yaw);
+  const sin = Math.sin(yaw);
+  return {
+    x: point.x * cos - point.z * sin,
+    y: point.y,
+    z: point.x * sin + point.z * cos
+  };
+}
+
+function toWorldPoint(snapshot: LocalAvatarSnapshotV1, point: { x: number; y: number; z: number }): { x: number; y: number; z: number } {
+  const rotated = rotateAroundYaw(point, snapshot.root.yaw);
+  return {
+    x: snapshot.root.x + rotated.x,
+    y: snapshot.root.y + rotated.y,
+    z: snapshot.root.z + rotated.z
+  };
+}
+
 function mapLocomotionMode(mode: string): number {
   switch (mode) {
     case "walk":
@@ -78,6 +97,9 @@ export function serializeCompactPoseFrame(input: {
   sentAtMs: number;
   snapshot: LocalAvatarSnapshotV1;
 }): CompactPoseFrame {
+  const headWorld = toWorldPoint(input.snapshot, input.snapshot.head);
+  const leftHandWorld = toWorldPoint(input.snapshot, input.snapshot.leftHand);
+  const rightHandWorld = toWorldPoint(input.snapshot, input.snapshot.rightHand);
   return {
     seq: input.seq,
     sentAtMs: input.sentAtMs,
@@ -91,18 +113,18 @@ export function serializeCompactPoseFrame(input: {
       vz: estimateSpeed(input.snapshot)
     },
     head: {
-      x: input.snapshot.head.x,
-      y: input.snapshot.head.y,
-      z: input.snapshot.head.z,
+      x: headWorld.x,
+      y: headWorld.y,
+      z: headWorld.z,
       qx: 0,
       qy: 0,
       qz: 0,
       qw: 1
     },
     leftHand: {
-      x: input.snapshot.leftHand.x,
-      y: input.snapshot.leftHand.y,
-      z: input.snapshot.leftHand.z,
+      x: leftHandWorld.x,
+      y: leftHandWorld.y,
+      z: leftHandWorld.z,
       qx: 0,
       qy: 0,
       qz: 0,
@@ -110,9 +132,9 @@ export function serializeCompactPoseFrame(input: {
       gesture: input.snapshot.leftHand.visible ? 1 : 0
     },
     rightHand: {
-      x: input.snapshot.rightHand.x,
-      y: input.snapshot.rightHand.y,
-      z: input.snapshot.rightHand.z,
+      x: rightHandWorld.x,
+      y: rightHandWorld.y,
+      z: rightHandWorld.z,
       qx: 0,
       qy: 0,
       qz: 0,

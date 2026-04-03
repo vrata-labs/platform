@@ -6,6 +6,20 @@ export interface XrAxesSnapshot {
 
 export type XrControllerInputProfile = "dual" | "left-only" | "right-only" | "none";
 
+function pickPrimaryAxes(axes: readonly number[] | null | undefined): { x: number; y: number } {
+  const primary = {
+    x: axes?.[0] ?? 0,
+    y: axes?.[1] ?? 0
+  };
+  const secondary = {
+    x: axes?.[2] ?? 0,
+    y: axes?.[3] ?? 0
+  };
+  const primaryMagnitude = Math.abs(primary.x) + Math.abs(primary.y);
+  const secondaryMagnitude = Math.abs(secondary.x) + Math.abs(secondary.y);
+  return secondaryMagnitude > primaryMagnitude ? secondary : primary;
+}
+
 export function resolveAvatarXrInput(inputSources: Array<{ handedness?: string; gamepad?: { axes?: readonly number[] | null } | null }>): {
   axes: XrAxesSnapshot;
   profile: XrControllerInputProfile;
@@ -17,26 +31,26 @@ export function resolveAvatarXrInput(inputSources: Array<{ handedness?: string; 
   let hasRight = false;
 
   for (const input of inputSources) {
-    const axes = input.gamepad?.axes ?? [];
+    const axes = pickPrimaryAxes(input.gamepad?.axes);
     if (input.handedness === "left") {
-      moveX = axes[2] ?? axes[0] ?? moveX;
-      moveY = axes[3] ?? axes[1] ?? moveY;
+      moveX = axes.x;
+      moveY = axes.y;
       hasLeft = true;
       continue;
     }
     if (input.handedness === "right") {
-      turnX = axes[2] ?? axes[0] ?? turnX;
+      turnX = axes.x;
       hasRight = true;
       continue;
     }
-    if (!hasLeft && axes.length >= 2) {
-      moveX = axes[2] ?? axes[0] ?? moveX;
-      moveY = axes[3] ?? axes[1] ?? moveY;
+    if (!hasLeft) {
+      moveX = axes.x;
+      moveY = axes.y;
       hasLeft = true;
       continue;
     }
-    if (!hasRight && axes.length >= 2) {
-      turnX = axes[2] ?? axes[0] ?? turnX;
+    if (!hasRight) {
+      turnX = axes.x;
       hasRight = true;
     }
   }

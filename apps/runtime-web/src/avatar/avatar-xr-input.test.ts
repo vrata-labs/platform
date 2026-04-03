@@ -23,6 +23,15 @@ test("resolveAvatarXrInput reports left-only profile", () => {
   assert.equal(result.axes.turnX, 0);
 });
 
+test("resolveAvatarXrInput prefers the active stick pair when axes 0/1 carry movement", () => {
+  const result = resolveAvatarXrInput([
+    { handedness: "left", gamepad: { axes: [0.6, -0.8, 0, 0] } },
+    { handedness: "right", gamepad: { axes: [0.4, 0, 0, 0] } }
+  ]);
+
+  assert.deepEqual(result.axes, { moveX: 0.6, moveY: -0.8, turnX: 0.4 });
+});
+
 test("resolveAvatarXrInput reports none when controllers missing", () => {
   const result = resolveAvatarXrInput([]);
   assert.equal(result.profile, "none");

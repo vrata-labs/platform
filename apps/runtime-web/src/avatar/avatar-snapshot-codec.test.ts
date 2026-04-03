@@ -49,6 +49,26 @@ test("serializeCompactPoseFrame maps snapshot into transport-ready pose frame", 
   assert.equal(frame.locomotion.mode, 1);
   assert.equal(frame.leftHand.gesture, 1);
   assert.equal(frame.rightHand.gesture, 1);
+  assert.equal(Number(frame.head.x.toFixed(3)), Number((1 + Math.sin(0.5) * 0).toFixed(3)));
+  assert.equal(Number(frame.head.z.toFixed(3)), Number((2 + Math.cos(0.5) * 0).toFixed(3)));
+});
+
+test("serializeCompactPoseFrame converts local avatar points into world space", () => {
+  const snapshot = createSnapshot();
+  snapshot.root = { x: 3, y: 0, z: 4, yaw: Math.PI / 2 };
+  snapshot.head = { x: 0.2, y: 1.58, z: 0 };
+  snapshot.leftHand = { x: -0.3, y: 1.1, z: 0.15, visible: true };
+
+  const frame = serializeCompactPoseFrame({
+    seq: 9,
+    sentAtMs: 100,
+    snapshot
+  });
+
+  assert.equal(Number(frame.head.x.toFixed(2)), 3);
+  assert.equal(Number(frame.head.z.toFixed(2)), 4.2);
+  assert.equal(Number(frame.leftHand.x.toFixed(2)), 2.85);
+  assert.equal(Number(frame.leftHand.z.toFixed(2)), 3.7);
 });
 
 test("serializeCompactPoseFrame encodes fallback and hidden hands into flags", () => {
