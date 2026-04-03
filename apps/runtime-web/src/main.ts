@@ -190,6 +190,7 @@ const avatarOutboundPublisher = createAvatarOutboundPublisher();
 let lastAvatarMove = { x: 0, z: 0 };
 let lastAvatarTurnRate = 0;
 let lastAvatarXrInputProfile: string | null = null;
+let lastAvatarPoseSentAtMs = 0;
 const roomStateReconnectPolicy = createReconnectPolicy({
   maxRetries: Number.parseInt(query.get("roomstateretries") ?? "3", 10),
   baseDelayMs: Number.parseInt(query.get("roomstatedelay") ?? "1000", 10),
@@ -946,6 +947,25 @@ function updateLocalAvatar(delta: number): void {
   });
 }
 
+function getAvatarPoseSendIntervalSeconds(snapshot: LocalAvatarSnapshotV1 | null): number {
+  if (!snapshot) {
+    return 0.1;
+  }
+  return snapshot.inputMode === "vr-controller" || snapshot.inputMode === "vr-hand" ? 1 / 30 : 1 / 10;
+}
+
+function syncAvatarPoseRealtime(nowMs: number): void {
+  if (!roomStateClient || !roomStateConnected || !runtimeFlags.avatarsEnabled || !runtimeFlags.avatarPoseBinaryEnabled || !debugState.avatarTransportPreview) {
+    return;
+  }
+  const intervalSeconds = getAvatarPoseSendIntervalSeconds(debugState.avatarSnapshot);
+  if (nowMs - lastAvatarPoseSentAtMs < intervalSeconds * 1000) {
+    return;
+  }
+  sendAvatarPoseFrame(roomStateClient, participantId, debugState.avatarTransportPreview.poseFrame);
+  lastAvatarPoseSentAtMs = nowMs;
+}
+
 function populateAvatarPresetSelect(input: {
   options: Array<{ avatarId: string; label: string }>;
   selectedAvatarId: string | null;
@@ -1110,9 +1130,6 @@ async function syncPresence(mode: PresenceState["mode"], audioActive: boolean): 
     sendParticipantUpdate(roomStateClient, presencePayload);
     if (runtimeFlags.avatarsEnabled && debugState.avatarTransportPreview) {
       sendAvatarReliableState(roomStateClient, debugState.avatarTransportPreview.reliableState);
-      if (runtimeFlags.avatarPoseBinaryEnabled) {
-        sendAvatarPoseFrame(roomStateClient, participantId, debugState.avatarTransportPreview.poseFrame);
-      }
     }
   } else {
     await upsertPresence(apiBaseUrl, roomId, presencePayload);
@@ -1389,6 +1406,7 @@ let presenceAccumulator = 0;
 
 renderer.setAnimationLoop(() => {
   const delta = clock.getDelta();
+  const nowMs = Date.now();
   updateMovement(delta);
   updateLocalAvatar(delta);
   remoteAvatarRuntime.update(delta, debugState);
@@ -1403,6 +1421,8 @@ renderer.setAnimationLoop(() => {
     latestMode = renderer.xr.isPresenting ? "vr" : /android|iphone|ipad/i.test(navigator.userAgent) ? "mobile" : "desktop";
     void syncPresence(latestMode, Boolean(livekitRoom));
   }
+
+  syncAvatarPoseRealtime(nowMs);
 
   if (presenceAccumulator >= 0.12) {
     presenceAccumulator = 0;

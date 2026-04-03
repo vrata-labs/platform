@@ -235,7 +235,7 @@
 | ID | Требование | Целевое значение |
 |---|---|---|
 | NFR-06 | High-frequency pose stream должен быть компактным | Целевой размер бинарного pose frame: `<= 64 bytes`, верхний лимит `<= 128 bytes` |
-| NFR-07 | Частота pose updates должна быть адаптивной | VR: `20 Hz` baseline, desktop/mobile: `10 Hz` baseline, с понижением при перегрузе |
+| NFR-07 | Частота pose updates должна быть адаптивной | VR: `30 Hz` baseline, degrade floor: `20 Hz`; desktop/mobile: `10 Hz` baseline, с понижением при перегрузе |
 | NFR-08 | Рендер должен идти через interpolation buffer | Базовая playback delay: `100-140ms`, адаптивная по фактическому jitter |
 | NFR-09 | Out-of-order и stale packets не должны ломать pose | Пакеты с устаревшим `seq` дропаются; stale extrapolation ограничена по времени |
 | NFR-10 | Authoritative state не должен теряться | `avatarId`, `seated`, `seatId`, `mute`, `inputMode` идут по reliable path |
@@ -562,9 +562,9 @@ export interface AvatarRecipeV1 {
 
 ### Частота
 
-- VR: `20 Hz` baseline
+- VR: `30 Hz` baseline
 - Desktop/mobile: `10 Hz` baseline
-- При перегрузе: `15 Hz` / `8 Hz`
+- При перегрузе: VR не ниже `20 Hz`; desktop/mobile: `8 Hz`
 - Ни при каких условиях не слать полный pose каждый render frame
 
 ### Threshold-based send

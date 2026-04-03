@@ -16,7 +16,8 @@ export default defineConfig({
     reuseExistingServer: true,
     env: {
       NOAH_DISABLE_AUTOSTART: "0",
-      CONTROL_PLANE_ADMIN_TOKEN: "test-admin-token"
+      CONTROL_PLANE_ADMIN_TOKEN: "test-admin-token",
+      FEATURE_AVATAR_POSE_BINARY: "true"
     }
   } : undefined
 });

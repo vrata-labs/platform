@@ -87,9 +87,10 @@ test("remote avatar runtime reflects hand visibility from pose gestures", () => 
     activeMedia: { audio: true, screenShare: false },
     updatedAt: new Date(0).toISOString()
   }], debugState);
+  const sentAtMs = Date.now();
   runtime.ingestPoseFrame("remote-2", {
     seq: 2,
-    sentAtMs: 2,
+    sentAtMs,
     flags: 0,
     root: { x: 1, y: 0, z: 2, yaw: 0, vx: 0, vz: 0 },
     head: { x: 1, y: 1.6, z: 2, qx: 0, qy: 0, qz: 0, qw: 1 },
@@ -103,4 +104,39 @@ test("remote avatar runtime reflects hand visibility from pose gestures", () => 
   assert.equal(debugState.remoteAvatarParticipants[0]?.presenceSeen, true);
   assert.equal(debugState.remoteAvatarParticipants[0]?.leftHandVisible, true);
   assert.equal(debugState.remoteAvatarParticipants[0]?.rightHandVisible, false);
+});
+
+test("remote avatar runtime ignores reordered pose frames", () => {
+  const scene = new THREE.Scene();
+  const runtime = createRemoteAvatarRuntime({
+    scene,
+    bodyGeometry: new THREE.CapsuleGeometry(0.24, 0.8, 6, 12),
+    headGeometry: new THREE.SphereGeometry(0.18, 20, 20),
+    localParticipantId: "local"
+  });
+  const debugState = createDebugState();
+
+  runtime.ingestPoseFrame("remote-3", {
+    seq: 5,
+    sentAtMs: 500,
+    flags: 0,
+    root: { x: 5, y: 0, z: 5, yaw: 0, vx: 0, vz: 0 },
+    head: { x: 5, y: 1.6, z: 5, qx: 0, qy: 0, qz: 0, qw: 1 },
+    leftHand: { x: 5, y: 1.2, z: 5, qx: 0, qy: 0, qz: 0, qw: 1, gesture: 1 },
+    rightHand: { x: 5, y: 1.2, z: 5, qx: 0, qy: 0, qz: 0, qw: 1, gesture: 1 },
+    locomotion: { mode: 1, speed: 1, angularVelocity: 0 }
+  }, debugState);
+  runtime.ingestPoseFrame("remote-3", {
+    seq: 4,
+    sentAtMs: 400,
+    flags: 0,
+    root: { x: 4, y: 0, z: 4, yaw: 0, vx: 0, vz: 0 },
+    head: { x: 4, y: 1.6, z: 4, qx: 0, qy: 0, qz: 0, qw: 1 },
+    leftHand: { x: 4, y: 1.2, z: 4, qx: 0, qy: 0, qz: 0, qw: 1, gesture: 1 },
+    rightHand: { x: 4, y: 1.2, z: 4, qx: 0, qy: 0, qz: 0, qw: 1, gesture: 1 },
+    locomotion: { mode: 1, speed: 1, angularVelocity: 0 }
+  }, debugState);
+
+  const model = runtime.getParticipantModel("remote-3");
+  assert.equal(model?.poseFrame?.seq, 5);
 });

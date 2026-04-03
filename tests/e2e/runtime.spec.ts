@@ -349,6 +349,95 @@ test("avatar-enabled room diagnostics api exposes transport preview payload", as
   }).toBeTruthy();
 });
 
+test("avatar-enabled room syncs remote reliable state and pose frames between two clients", async ({ browser, request }) => {
+  const createRoomResponse = await request.post("/api/rooms", {
+    headers: {
+      "x-noah-admin-token": "test-admin-token"
+    },
+    data: {
+      tenantId: "demo-tenant",
+      templateId: "meeting-room-basic",
+      name: "Avatar Remote Sync Room",
+      avatarConfig: {
+        avatarsEnabled: true,
+        avatarCatalogUrl: "/assets/avatars/catalog.v1.json",
+        avatarQualityProfile: "desktop-standard",
+        avatarFallbackCapsulesEnabled: true,
+        avatarSeatsEnabled: false
+      }
+    }
+  });
+  expect(createRoomResponse.ok()).toBeTruthy();
+  const room = (await createRoomResponse.json()) as { roomLink: string };
+
+  const pageA = await browser.newPage();
+  const pageB = await browser.newPage();
+
+  try {
+    await pageA.goto(`${room.roomLink}?debug=1&bot=line`);
+    await pageB.goto(`${room.roomLink}?debug=1&bot=line`);
+
+    await expect.poll(async () => {
+      const debugA = await pageA.evaluate(() => (window as Window & {
+        __NOAH_DEBUG__?: {
+          remoteAvatarReliableCount?: number;
+          remoteAvatarPoseCount?: number;
+          remoteAvatarPoseFrames?: Array<{ seq?: number | null }>;
+          remoteAvatarParticipants?: Array<{ hasReliableState?: boolean; hasPoseFrame?: boolean; presenceSeen?: boolean }>;
+        };
+      }).__NOAH_DEBUG__);
+      const debugB = await pageB.evaluate(() => (window as Window & {
+        __NOAH_DEBUG__?: {
+          remoteAvatarReliableCount?: number;
+          remoteAvatarPoseCount?: number;
+          remoteAvatarPoseFrames?: Array<{ seq?: number | null }>;
+          remoteAvatarParticipants?: Array<{ hasReliableState?: boolean; hasPoseFrame?: boolean; presenceSeen?: boolean }>;
+        };
+      }).__NOAH_DEBUG__);
+
+      return {
+        aReliable: debugA?.remoteAvatarReliableCount ?? 0,
+        aPose: debugA?.remoteAvatarPoseCount ?? 0,
+        aSeqReady: (debugA?.remoteAvatarPoseFrames?.[0]?.seq ?? 0) > 0,
+        aReady: Boolean(debugA?.remoteAvatarParticipants?.some((item) => item.presenceSeen && item.hasReliableState && item.hasPoseFrame)),
+        bReliable: debugB?.remoteAvatarReliableCount ?? 0,
+        bPose: debugB?.remoteAvatarPoseCount ?? 0,
+        bSeqReady: (debugB?.remoteAvatarPoseFrames?.[0]?.seq ?? 0) > 0,
+        bReady: Boolean(debugB?.remoteAvatarParticipants?.some((item) => item.presenceSeen && item.hasReliableState && item.hasPoseFrame))
+      };
+    }, {
+      timeout: 20000,
+      intervals: [1000, 2000, 3000]
+    }).toEqual({
+      aReliable: 1,
+      aPose: 1,
+      aSeqReady: true,
+      aReady: true,
+      bReliable: 1,
+      bPose: 1,
+      bSeqReady: true,
+      bReady: true
+    });
+
+    const finalA = await pageA.evaluate(() => (window as Window & {
+      __NOAH_DEBUG__?: {
+        remoteAvatarPoseFrames?: Array<{ seq?: number | null }>;
+      };
+    }).__NOAH_DEBUG__);
+    const finalB = await pageB.evaluate(() => (window as Window & {
+      __NOAH_DEBUG__?: {
+        remoteAvatarPoseFrames?: Array<{ seq?: number | null }>;
+      };
+    }).__NOAH_DEBUG__);
+
+    expect((finalA?.remoteAvatarPoseFrames?.[0]?.seq ?? 0)).toBeGreaterThan(0);
+    expect((finalB?.remoteAvatarPoseFrames?.[0]?.seq ?? 0)).toBeGreaterThan(0);
+  } finally {
+    await pageA.close();
+    await pageB.close();
+  }
+});
+
 test("avatar-enabled room uses mobile upper-body profile on mobile user agent", async ({ browser, request }) => {
   const createRoomResponse = await request.post("/api/rooms", {
     headers: {

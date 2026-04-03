@@ -1,5 +1,6 @@
 import * as THREE from "three";
 
+import { createAvatarPoseBuffer, pushAvatarPoseFrame, pruneAvatarPoseBuffer, sampleAvatarPoseBuffer, type AvatarPoseBuffer } from "./avatar-pose-buffer.js";
 import { createMotionTrack, pushMotionSample, sampleMotion, type MotionTrack } from "../motion-state.js";
 import type { PresenceState } from "../index.js";
 import type { CompactPoseFrame } from "./avatar-types.js";
@@ -44,6 +45,7 @@ interface RemoteAvatarParticipantModel {
   presenceSeen: boolean;
   reliableState: RemoteAvatarReliableStateView | null;
   poseFrame: RemoteAvatarPoseFrameView | null;
+  poseBuffer: AvatarPoseBuffer;
   leftHandVisible: boolean;
   rightHandVisible: boolean;
 }
@@ -81,6 +83,63 @@ function makeHand(color: number): THREE.Mesh {
   );
 }
 
+function lerpPosePoint(a: { x: number; y: number; z: number }, b: { x: number; y: number; z: number }, alpha: number): { x: number; y: number; z: number } {
+  return {
+    x: THREE.MathUtils.lerp(a.x, b.x, alpha),
+    y: THREE.MathUtils.lerp(a.y, b.y, alpha),
+    z: THREE.MathUtils.lerp(a.z, b.z, alpha)
+  };
+}
+
+function resolveInterpolatedPose(sample: ReturnType<typeof sampleAvatarPoseBuffer>, renderAtMs: number): CompactPoseFrame | null {
+  if (sample.previous && sample.next && sample.next.sentAtMs > sample.previous.sentAtMs) {
+    const alpha = THREE.MathUtils.clamp(
+      (renderAtMs - sample.previous.sentAtMs) / (sample.next.sentAtMs - sample.previous.sentAtMs),
+      0,
+      1
+    );
+    return {
+      ...sample.next,
+      sentAtMs: renderAtMs,
+      root: {
+        ...sample.next.root,
+        ...lerpPosePoint(sample.previous.root, sample.next.root, alpha),
+        yaw: THREE.MathUtils.lerp(sample.previous.root.yaw, sample.next.root.yaw, alpha),
+        vx: THREE.MathUtils.lerp(sample.previous.root.vx, sample.next.root.vx, alpha),
+        vz: THREE.MathUtils.lerp(sample.previous.root.vz, sample.next.root.vz, alpha)
+      },
+      head: {
+        ...sample.next.head,
+        ...lerpPosePoint(sample.previous.head, sample.next.head, alpha)
+      },
+      leftHand: {
+        ...sample.next.leftHand,
+        ...lerpPosePoint(sample.previous.leftHand, sample.next.leftHand, alpha),
+        gesture: alpha < 0.5 ? sample.previous.leftHand.gesture : sample.next.leftHand.gesture
+      },
+      rightHand: {
+        ...sample.next.rightHand,
+        ...lerpPosePoint(sample.previous.rightHand, sample.next.rightHand, alpha),
+        gesture: alpha < 0.5 ? sample.previous.rightHand.gesture : sample.next.rightHand.gesture
+      },
+      locomotion: {
+        mode: alpha < 0.5 ? sample.previous.locomotion.mode : sample.next.locomotion.mode,
+        speed: THREE.MathUtils.lerp(sample.previous.locomotion.speed, sample.next.locomotion.speed, alpha),
+        angularVelocity: THREE.MathUtils.lerp(sample.previous.locomotion.angularVelocity, sample.next.locomotion.angularVelocity, alpha)
+      }
+    };
+  }
+
+  const latest = sample.latest;
+  if (!latest) {
+    return null;
+  }
+  if (renderAtMs - latest.sentAtMs > 180) {
+    return null;
+  }
+  return latest;
+}
+
 export function createRemoteAvatarRuntime(input: {
   scene: THREE.Scene;
   bodyGeometry: THREE.BufferGeometry;
@@ -99,6 +158,7 @@ export function createRemoteAvatarRuntime(input: {
         presenceSeen: false,
         reliableState: null,
         poseFrame: null,
+        poseBuffer: createAvatarPoseBuffer(),
         leftHandVisible: false,
         rightHandVisible: false
       };
@@ -206,7 +266,13 @@ export function createRemoteAvatarRuntime(input: {
     },
     ingestPoseFrame(participantId: string, frame: CompactPoseFrame, debugState: RemoteAvatarDebugState): void {
       if (participantId === input.localParticipantId) return;
-      ensureParticipantModel(participantId).poseFrame = {
+      const participant = ensureParticipantModel(participantId);
+      const result = pushAvatarPoseFrame(participant.poseBuffer, frame, Date.now());
+      if (!result.accepted) {
+        syncDebugState(debugState);
+        return;
+      }
+      participant.poseFrame = {
         participantId,
         seq: frame.seq,
         locomotionMode: frame.locomotion.mode,
@@ -217,7 +283,8 @@ export function createRemoteAvatarRuntime(input: {
     },
     update(delta: number, debugState: RemoteAvatarDebugState): void {
       void delta;
-      const renderAtMs = Date.now() - 120;
+      const nowMs = Date.now();
+      const renderAtMs = nowMs - 100;
       for (const [participantId, entity] of remoteAvatars.entries()) {
         const tracks = remoteMotionTracks.get(participantId);
         if (!tracks) continue;
@@ -229,13 +296,23 @@ export function createRemoteAvatarRuntime(input: {
         entity.body.lookAt(headSample.x, 0.92, headSample.z);
         const participant = remoteAvatarParticipants.get(participantId);
         const reliableState = participant?.reliableState ?? null;
-        const poseFrame = participant?.poseFrame?.frame ?? null;
+        if (participant) {
+          pruneAvatarPoseBuffer(participant.poseBuffer, nowMs);
+        }
+        const poseFrame = participant ? resolveInterpolatedPose(sampleAvatarPoseBuffer(participant.poseBuffer, renderAtMs), renderAtMs) : null;
         const bodyMaterial = entity.body.material;
         if (bodyMaterial instanceof THREE.MeshStandardMaterial) {
-          const color = reliableState?.inputMode === "mobile" ? 0xffc857 : reliableState?.inputMode === "vr-controller" || reliableState?.inputMode === "vr-hand" ? 0x8be9fd : reliableState?.audioActive ? 0x5fc8ff : 0xbfd8ee;
+          const color = reliableState?.inputMode === "mobile"
+            ? 0xffc857
+            : reliableState?.inputMode === "vr-controller" || reliableState?.inputMode === "vr-hand"
+              ? 0x8be9fd
+              : reliableState?.audioActive
+                ? 0x5fc8ff
+                : 0xbfd8ee;
           bodyMaterial.color.setHex(color);
         }
         if (poseFrame) {
+          entity.body.position.set(poseFrame.root.x, 0.92, poseFrame.root.z);
           entity.head.position.set(poseFrame.head.x, poseFrame.head.y, poseFrame.head.z);
           entity.leftHand.position.set(poseFrame.leftHand.x, poseFrame.leftHand.y, poseFrame.leftHand.z);
           entity.rightHand.position.set(poseFrame.rightHand.x, poseFrame.rightHand.y, poseFrame.rightHand.z);
