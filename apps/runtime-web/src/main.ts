@@ -1712,6 +1712,17 @@ async function main(): Promise<void> {
   vrButton.classList.add("vr-button");
   vrButton.style.position = "static";
   vrButton.style.marginTop = "10px";
+  renderer.xr.addEventListener("sessionstart", () => {
+    pointerActive = false;
+    mobileTouchActive = false;
+    mobileTouchVector.x = 0;
+    mobileTouchVector.z = 0;
+    pitchAngle = 0;
+    pitch.rotation.x = 0;
+  });
+  renderer.xr.addEventListener("sessionend", () => {
+    pointerActive = false;
+  });
   if (!getEnterVrVisibility(xrSupport, runtimeFlags.enterVr)) {
     vrButton.setAttribute("disabled", "true");
     vrButton.textContent = "VR unavailable";

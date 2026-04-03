@@ -306,10 +306,6 @@ export function createRemoteAvatarRuntime(input: {
         const renderAtMs = nowMs - playbackDelayMs;
         const bodySample = sampleMotion(tracks.body, renderAtMs);
         const headSample = sampleMotion(tracks.head, renderAtMs);
-        if (!bodySample || !headSample) continue;
-        entity.body.position.set(bodySample.x, 0.92, bodySample.z);
-        entity.head.position.set(headSample.x, 1.58, headSample.z);
-        entity.body.lookAt(headSample.x, 0.92, headSample.z);
         const reliableState = participant?.reliableState ?? null;
         if (participant) {
           pruneAvatarPoseBuffer(participant.poseBuffer, nowMs);
@@ -331,6 +327,7 @@ export function createRemoteAvatarRuntime(input: {
           entity.head.position.lerp(new THREE.Vector3(poseFrame.head.x, poseFrame.head.y, poseFrame.head.z), 0.45);
           entity.leftHand.position.lerp(new THREE.Vector3(poseFrame.leftHand.x, poseFrame.leftHand.y, poseFrame.leftHand.z), 0.45);
           entity.rightHand.position.lerp(new THREE.Vector3(poseFrame.rightHand.x, poseFrame.rightHand.y, poseFrame.rightHand.z), 0.45);
+          entity.body.lookAt(poseFrame.head.x, 0.92, poseFrame.head.z);
           entity.leftHand.visible = poseFrame.leftHand.gesture > 0;
           entity.rightHand.visible = poseFrame.rightHand.gesture > 0;
           if (participant) {
@@ -339,6 +336,11 @@ export function createRemoteAvatarRuntime(input: {
             participant.lastPoseAppliedAtMs = nowMs;
           }
         } else {
+          if (bodySample && headSample) {
+            entity.body.position.lerp(new THREE.Vector3(bodySample.x, 0.92, bodySample.z), 0.2);
+            entity.head.position.lerp(new THREE.Vector3(headSample.x, 1.58, headSample.z), 0.25);
+            entity.body.lookAt(headSample.x, 0.92, headSample.z);
+          }
           const lastPoseAppliedAtMs = participant?.lastPoseAppliedAtMs ?? null;
           const keepHandsVisible = lastPoseAppliedAtMs !== null && nowMs - lastPoseAppliedAtMs < 350;
           entity.leftHand.visible = keepHandsVisible && (participant?.leftHandVisible ?? false);

@@ -152,3 +152,43 @@ test("remote avatar runtime ignores reordered pose frames", () => {
   assert.equal(debugState.remoteAvatarParticipants[0]?.droppedReorderCount, 1);
   assert.equal(debugState.remoteAvatarParticipants[0]?.lastPoseSeq, 5);
 });
+
+test("remote avatar runtime prefers pose root over coarse presence sample", () => {
+  const scene = new THREE.Scene();
+  const runtime = createRemoteAvatarRuntime({
+    scene,
+    bodyGeometry: new THREE.CapsuleGeometry(0.24, 0.8, 6, 12),
+    headGeometry: new THREE.SphereGeometry(0.18, 20, 20),
+    localParticipantId: "local"
+  });
+  const debugState = createDebugState();
+
+  runtime.applySnapshotParticipants([{
+    participantId: "remote-4",
+    displayName: "Remote 4",
+    mode: "desktop",
+    muted: false,
+    activeMedia: { audio: false, screenShare: false },
+    rootTransform: { x: 10, y: 0, z: 10 },
+    bodyTransform: { x: 10, y: 0, z: 10 },
+    headTransform: { x: 10, y: 1.6, z: 10 },
+    updatedAt: new Date().toISOString()
+  }], debugState as never);
+
+  runtime.ingestPoseFrame("remote-4", {
+    seq: 1,
+    sentAtMs: Date.now(),
+    flags: 0,
+    root: { x: 1, y: 0, z: 1, yaw: 0, vx: 0, vz: 0 },
+    head: { x: 1, y: 1.6, z: 1, qx: 0, qy: 0, qz: 0, qw: 1 },
+    leftHand: { x: 0.8, y: 1.2, z: 1, qx: 0, qy: 0, qz: 0, qw: 1, gesture: 1 },
+    rightHand: { x: 1.2, y: 1.2, z: 1, qx: 0, qy: 0, qz: 0, qw: 1, gesture: 1 },
+    locomotion: { mode: 1, speed: 1, angularVelocity: 0 }
+  }, debugState);
+
+  runtime.update(0.016, debugState);
+  const body = scene.children.find((item) => item instanceof THREE.Mesh) as THREE.Mesh | undefined;
+  assert.ok(body);
+  assert.equal(body.position.x < 10, true);
+  assert.equal(body.position.z < 10, true);
+});
