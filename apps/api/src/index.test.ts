@@ -102,9 +102,9 @@ test("room manifest exposes optional scene bundle url", async () => {
         };
       };
       assert.equal(manifest.sceneBundle?.url, "/assets/scenes/the-hall-v1/scene.json");
-      assert.equal(manifest.avatars?.avatarsEnabled, false);
+      assert.equal(manifest.avatars?.avatarsEnabled, true);
       assert.equal(manifest.avatars?.avatarCatalogUrl, "/assets/avatars/catalog.v1.json");
-      assert.equal(manifest.avatars?.avatarPoseBinaryEnabled, false);
+      assert.equal(manifest.avatars?.avatarPoseBinaryEnabled, true);
       assert.equal(manifest.avatars?.avatarCustomizationEnabled, false);
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
@@ -160,7 +160,7 @@ test("room manifest exposes avatar config when enabled", async () => {
     assert.equal(manifest.avatars?.avatarsEnabled, true);
     assert.equal(manifest.avatars?.avatarCatalogUrl, "/assets/avatars/catalog.v1.json");
     assert.equal(manifest.avatars?.avatarQualityProfile, "xr");
-    assert.equal(manifest.avatars?.avatarPoseBinaryEnabled, false);
+    assert.equal(manifest.avatars?.avatarPoseBinaryEnabled, true);
     assert.equal(manifest.avatars?.avatarLipsyncEnabled, false);
     assert.equal(manifest.avatars?.avatarLegIkEnabled, false);
     assert.equal(manifest.avatars?.avatarFallbackCapsulesEnabled, true);

@@ -36,7 +36,7 @@ export interface RoomAvatarConfig {
   avatarSeatsEnabled?: boolean;
 }
 
-const DEFAULT_AVATAR_CONFIG_JSON = '{"avatarsEnabled":false,"avatarCatalogUrl":"/assets/avatars/catalog.v1.json","avatarQualityProfile":"desktop-standard","avatarFallbackCapsulesEnabled":true,"avatarSeatsEnabled":false}' as const;
+const DEFAULT_AVATAR_CONFIG_JSON = '{"avatarsEnabled":true,"avatarCatalogUrl":"/assets/avatars/catalog.v1.json","avatarQualityProfile":"desktop-standard","avatarFallbackCapsulesEnabled":true,"avatarSeatsEnabled":false}' as const;
 
 export interface RoomRecord {
   roomId: string;
@@ -56,7 +56,7 @@ export interface RoomRecord {
 
 function defaultAvatarConfig(input?: Partial<RoomAvatarConfig>): RoomAvatarConfig {
   return {
-    avatarsEnabled: input?.avatarsEnabled ?? false,
+    avatarsEnabled: input?.avatarsEnabled ?? true,
     avatarCatalogUrl: input?.avatarCatalogUrl ?? "/assets/avatars/catalog.v1.json",
     avatarQualityProfile: input?.avatarQualityProfile ?? "desktop-standard",
     avatarFallbackCapsulesEnabled: input?.avatarFallbackCapsulesEnabled ?? true,
@@ -411,7 +411,7 @@ export class PostgresStorage implements Storage {
       asset_ids jsonb not null default '[]'::jsonb,
       theme jsonb not null default '{"primaryColor":"#5fc8ff","accentColor":"#163354"}'::jsonb,
       guest_allowed boolean not null default true,
-      avatar_config jsonb not null default '{"avatarsEnabled":false,"avatarCatalogUrl":"/assets/avatars/catalog.v1.json","avatarQualityProfile":"desktop-standard","avatarFallbackCapsulesEnabled":true,"avatarSeatsEnabled":false}'::jsonb
+      avatar_config jsonb not null default '{"avatarsEnabled":true,"avatarCatalogUrl":"/assets/avatars/catalog.v1.json","avatarQualityProfile":"desktop-standard","avatarFallbackCapsulesEnabled":true,"avatarSeatsEnabled":false}'::jsonb
       );
       create table if not exists assets (
         asset_id text primary key,

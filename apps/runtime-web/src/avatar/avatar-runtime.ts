@@ -12,8 +12,8 @@ export interface AvatarRuntimeFlags {
 
 export function createInitialAvatarRuntimeFlags(): AvatarRuntimeFlags {
   return {
-    avatarsEnabled: false,
-    avatarPoseBinaryEnabled: false,
+    avatarsEnabled: true,
+    avatarPoseBinaryEnabled: true,
     avatarLipsyncEnabled: false,
     avatarLegIkEnabled: false,
     avatarSeatingEnabled: false,

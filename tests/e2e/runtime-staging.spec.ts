@@ -195,6 +195,31 @@ test.describe("@staging runtime HUD space selector", () => {
     }).toBeGreaterThanOrEqual(2);
   });
 
+  test("staging selector exposes canonical rooms with avatars enabled", async ({ request, baseURL }) => {
+    const spacesResponse = await request.get(`/api/rooms/${stagingRoomId}/spaces`);
+    expect(spacesResponse.ok()).toBeTruthy();
+    const payload = await spacesResponse.json() as {
+      items: Array<{ roomId: string; name: string; roomLink: string }>;
+    };
+
+    expect(payload.items.every((item) => item.roomLink.startsWith(baseURL ?? ""))).toBeTruthy();
+    expect(payload.items.some((item) => item.name.startsWith("Stage "))).toBeFalsy();
+    expect(payload.items.some((item) => item.name === "Staging Selector Target")).toBeFalsy();
+
+    const names = payload.items.map((item) => item.name);
+    for (const expected of ["Demo Room", "Hall", "BlueOffice", "LectureHall", "Showroom", "MeetingSmall", "Cinema", "Anastasia", "NewGallery", "ArtGallery", "Standup", "OporaRussia", "SergOffice", "CinemaModeler"]) {
+      expect(names).toContain(expected);
+    }
+
+    const manifestResponse = await request.get(`/api/rooms/${stagingRoomId}/manifest`);
+    expect(manifestResponse.ok()).toBeTruthy();
+    const manifest = await manifestResponse.json() as {
+      avatars?: { avatarsEnabled?: boolean; avatarPoseBinaryEnabled?: boolean };
+    };
+    expect(manifest.avatars?.avatarsEnabled).toBe(true);
+    expect(manifest.avatars?.avatarPoseBinaryEnabled).toBe(true);
+  });
+
   test("selector switches to a freshly created staging target room", async ({ page, baseURL, request }) => {
     const targetName = `Staging Selector Target ${Date.now()}`;
     let targetRoomId: string | null = null;

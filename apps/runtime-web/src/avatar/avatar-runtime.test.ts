@@ -3,10 +3,10 @@ import assert from "node:assert/strict";
 
 import { createInitialAvatarRuntimeFlags, resolveAvatarCatalogUrl, resolveAvatarRuntimeFlags } from "./avatar-runtime.js";
 
-test("createInitialAvatarRuntimeFlags returns capsule-safe defaults", () => {
+test("createInitialAvatarRuntimeFlags returns avatar-enabled defaults", () => {
   assert.deepEqual(createInitialAvatarRuntimeFlags(), {
-    avatarsEnabled: false,
-    avatarPoseBinaryEnabled: false,
+    avatarsEnabled: true,
+    avatarPoseBinaryEnabled: true,
     avatarLipsyncEnabled: false,
     avatarLegIkEnabled: false,
     avatarSeatingEnabled: false,
