@@ -14,6 +14,63 @@ export interface XrInputSourceLike {
   handedness?: string;
 }
 
+export interface XrHandResolutionDebug {
+  leftGrip: AvatarHandTarget | null;
+  rightGrip: AvatarHandTarget | null;
+  leftController: AvatarHandTarget | null;
+  rightController: AvatarHandTarget | null;
+  leftResolved: AvatarHandTarget | null;
+  rightResolved: AvatarHandTarget | null;
+}
+
+function readWorldTarget(anchor: XrSpatialLike | null | undefined): AvatarHandTarget | null {
+  if (!anchor) {
+    return null;
+  }
+  const worldPosition = new THREE.Vector3();
+  anchor.getWorldPosition(worldPosition);
+  return {
+    x: worldPosition.x,
+    y: worldPosition.y,
+    z: worldPosition.z
+  };
+}
+
+export function collectLocalAvatarHandDebug(input: {
+  inputSources: XrInputSourceLike[];
+  grips: Array<XrSpatialLike | null | undefined>;
+  controllers: Array<XrSpatialLike | null | undefined>;
+}): XrHandResolutionDebug {
+  const result: XrHandResolutionDebug = {
+    leftGrip: null,
+    rightGrip: null,
+    leftController: null,
+    rightController: null,
+    leftResolved: null,
+    rightResolved: null
+  };
+
+  for (const [index, source] of input.inputSources.entries()) {
+    if (source.handedness !== "left" && source.handedness !== "right") {
+      continue;
+    }
+    const grip = readWorldTarget(input.grips[index]);
+    const controller = readWorldTarget(input.controllers[index]);
+    const resolved = grip ?? controller;
+    if (source.handedness === "left") {
+      result.leftGrip = grip;
+      result.leftController = controller;
+      result.leftResolved = resolved;
+    } else {
+      result.rightGrip = grip;
+      result.rightController = controller;
+      result.rightResolved = resolved;
+    }
+  }
+
+  return result;
+}
+
 export function resolveLocalAvatarHandTargets(input: {
   presenting: boolean;
   inputSources: XrInputSourceLike[];
@@ -24,27 +81,9 @@ export function resolveLocalAvatarHandTargets(input: {
     return { leftHand: null, rightHand: null };
   }
 
-  const result = {
-    leftHand: null as AvatarHandTarget | null,
-    rightHand: null as AvatarHandTarget | null
+  const debug = collectLocalAvatarHandDebug(input);
+  return {
+    leftHand: debug.leftResolved,
+    rightHand: debug.rightResolved
   };
-
-  for (const [index, source] of input.inputSources.entries()) {
-    if (source.handedness !== "left" && source.handedness !== "right") {
-      continue;
-    }
-    const anchor = input.grips[index] ?? input.controllers[index];
-    if (!anchor) {
-      continue;
-    }
-    const worldPosition = new THREE.Vector3();
-    anchor.getWorldPosition(worldPosition);
-    result[source.handedness === "left" ? "leftHand" : "rightHand"] = {
-      x: worldPosition.x,
-      y: worldPosition.y,
-      z: worldPosition.z
-    };
-  }
-
-  return result;
 }

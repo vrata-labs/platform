@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import * as THREE from "three";
 
-import { resolveLocalAvatarHandTargets } from "./avatar-xr-hands.js";
+import { collectLocalAvatarHandDebug, resolveLocalAvatarHandTargets } from "./avatar-xr-hands.js";
 
 function spatial(x: number, y: number, z: number) {
   const object = new THREE.Object3D();
@@ -52,4 +52,16 @@ test("resolveLocalAvatarHandTargets keeps lateral spread after strafe-like world
 
   assert.equal(result.leftHand !== null && result.rightHand !== null, true);
   assert.equal((result.rightHand!.x - result.leftHand!.x) > 0.6, true);
+});
+
+test("collectLocalAvatarHandDebug exposes raw grip and controller positions", () => {
+  const debug = collectLocalAvatarHandDebug({
+    inputSources: [{ handedness: "left" }, { handedness: "right" }],
+    grips: [spatial(-0.2, 1.2, 0.3), spatial(0.2, 1.2, 0.3)],
+    controllers: [spatial(-0.4, 1.4, 0.6), spatial(0.4, 1.4, 0.6)]
+  });
+
+  assert.deepEqual(debug.leftGrip, { x: -0.2, y: 1.2, z: 0.3 });
+  assert.deepEqual(debug.leftController, { x: -0.4, y: 1.4, z: 0.6 });
+  assert.deepEqual(debug.leftResolved, { x: -0.2, y: 1.2, z: 0.3 });
 });

@@ -20,7 +20,7 @@ import { createAvatarLoadingDiagnostics, createEmptyAvatarDiagnostics } from "./
 import { createAvatarOutboundPublisher, type AvatarOutboundPayload } from "./avatar/avatar-publish.js";
 import { createRemoteAvatarRuntime } from "./avatar/remote-avatar-runtime.js";
 import { createInitialAvatarRuntimeFlags, resolveAvatarCatalogUrl, resolveAvatarRuntimeFlags } from "./avatar/avatar-runtime.js";
-import { resolveLocalAvatarHandTargets } from "./avatar/avatar-xr-hands.js";
+import { collectLocalAvatarHandDebug, resolveLocalAvatarHandTargets } from "./avatar/avatar-xr-hands.js";
 import { resolveAvatarXrInput } from "./avatar/avatar-xr-input.js";
 import { setAvatarSandboxStatus } from "./avatar/avatar-sandbox.js";
 import { resetAvatarSession, startAvatarSandboxSession, startLocalAvatarSession } from "./avatar/avatar-session.js";
@@ -391,6 +391,17 @@ const debugState = {
   avatarDebug: createEmptyAvatarDiagnostics(),
   avatarSnapshot: null as LocalAvatarSnapshotV1 | null,
   avatarTransportPreview: null as AvatarOutboundPayload | null,
+  xrAvatarDebug: null as null | {
+    profile: string | null;
+    playerRoot: { x: number; y: number; z: number; yaw: number };
+    headWorld: { x: number; y: number; z: number };
+    leftGrip: { x: number; y: number; z: number } | null;
+    rightGrip: { x: number; y: number; z: number } | null;
+    leftController: { x: number; y: number; z: number } | null;
+    rightController: { x: number; y: number; z: number } | null;
+    leftResolved: { x: number; y: number; z: number } | null;
+    rightResolved: { x: number; y: number; z: number } | null;
+  },
   remoteAvatarReliableStates: [] as Array<{ participantId: string; avatarId: string; inputMode: string; updatedAt: string }>,
   remoteAvatarPoseFrames: [] as Array<{ participantId: string; seq: number; locomotionMode: number; sentAtMs: number }>,
   remoteAvatarParticipants: [] as Array<{
@@ -710,6 +721,7 @@ async function reportDiagnostics(note?: string): Promise<void> {
       avatarDebug: debugState.avatarDebug,
       avatarSnapshot: debugState.avatarSnapshot,
       avatarTransportPreview: debugState.avatarTransportPreview,
+      xrAvatarDebug: debugState.xrAvatarDebug,
       sceneDebug: {
         ...debugState.sceneDebug,
         missingAssetCount: debugState.sceneDebug.missingAssets.length,
@@ -836,11 +848,42 @@ function getSignedAngleDelta(next: number, previous: number): number {
 }
 
 function getLocalAvatarHandTargets(): { leftHand: { x: number; y: number; z: number } | null; rightHand: { x: number; y: number; z: number } | null } {
+  if (!renderer.xr.isPresenting) {
+    debugState.xrAvatarDebug = null;
+    return { leftHand: null, rightHand: null };
+  }
   const xrFrame = renderer.xr.getFrame();
   const session = xrFrame?.session;
+  const inputSources = Array.from(session?.inputSources ?? []);
+  const headWorldPosition = camera.getWorldPosition(new THREE.Vector3());
+  const handDebug = collectLocalAvatarHandDebug({
+    inputSources,
+    grips: xrControllerGrips,
+    controllers: xrControllers
+  });
+  debugState.xrAvatarDebug = {
+    profile: lastAvatarXrInputProfile,
+    playerRoot: {
+      x: player.position.x,
+      y: player.position.y,
+      z: player.position.z,
+      yaw
+    },
+    headWorld: {
+      x: headWorldPosition.x,
+      y: headWorldPosition.y,
+      z: headWorldPosition.z
+    },
+    leftGrip: handDebug.leftGrip,
+    rightGrip: handDebug.rightGrip,
+    leftController: handDebug.leftController,
+    rightController: handDebug.rightController,
+    leftResolved: handDebug.leftResolved,
+    rightResolved: handDebug.rightResolved
+  };
   return resolveLocalAvatarHandTargets({
     presenting: renderer.xr.isPresenting,
-    inputSources: Array.from(session?.inputSources ?? []),
+    inputSources,
     grips: xrControllerGrips,
     controllers: xrControllers
   });
@@ -997,6 +1040,7 @@ function updateMovement(delta: number): void {
     debugState.locomotionMode = "vr";
   } else {
     lastAvatarXrInputProfile = null;
+    debugState.xrAvatarDebug = null;
   }
 
   if (direction.x !== 0 || direction.z !== 0) {
