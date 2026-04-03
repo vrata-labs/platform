@@ -245,7 +245,12 @@ function getDefaultLivekitUrl(request?: IncomingMessage): string {
 function createRoomLink(roomId: string, request?: IncomingMessage): string {
   const host = getRequestHost(request) ?? `localhost:${apiPort}`;
   const proto = getRequestProto(request);
-  const publicUrl = process.env.RUNTIME_BASE_URL ?? `${proto}://${host}`;
+  const configuredRuntimeBaseUrl = process.env.RUNTIME_BASE_URL;
+  const publicUrl = configuredRuntimeBaseUrl
+    ? (proto !== "https" || !configuredRuntimeBaseUrl.startsWith("http://") || !host
+      ? configuredRuntimeBaseUrl
+      : `https://${host}`)
+    : `${proto}://${host}`;
   return new URL(`/rooms/${roomId}`, publicUrl).toString();
 }
 

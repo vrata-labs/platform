@@ -420,6 +420,7 @@ test("runtime spaces endpoint keeps same-tenant guest-safe rooms only", async ()
 test("runtime spaces endpoint keeps https room links behind https proxy", async () => {
   process.env.NOAH_DISABLE_AUTOSTART = "1";
   process.env.API_PORT = "4023";
+  process.env.RUNTIME_BASE_URL = "http://89.169.161.91:4000";
   const module = await import("./index.js");
   const server = module.startApiServer(4023);
 
@@ -441,6 +442,7 @@ test("runtime spaces endpoint keeps https room links behind https proxy", async 
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     delete process.env.NOAH_DISABLE_AUTOSTART;
+    delete process.env.RUNTIME_BASE_URL;
   }
 });
 
