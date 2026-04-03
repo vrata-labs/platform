@@ -124,3 +124,10 @@
 - The first practical material-fix path is export-time conversion of `Shader Graphs/Lightmapped` and `Shader Graphs/SenseShader` materials into `URP/Lit` with selective mapping from `_Diffuse`, `_MainColor`, `_AO`, `_Normal_Map`, and related properties.
 - Forced use of `_Lightmap` as occlusion for converted materials made Office worse; this should be avoided unless a material is verified individually.
 - The main `SenseTowerVR` projects at `/mnt/d/repository/_SenseCapital/SenseTowerVR` and `/mnt/d/sensetowervr` use Unity `2021.3.25f1` but do not yet include `org.khronos.unitygltf`; add that package before attempting batch scene export there.
+
+## Testing policy
+
+- New runtime/product features should be covered by automatic e2e whenever reasonably possible, not only by local unit/integration checks.
+- Default expectation for user-facing feature work is two-level e2e verification: local `pnpm test:e2e` first, then verification against the published staging environment.
+- Prefer adding or extending staging-facing automated scenarios instead of relying only on manual checks or indirect diagnostics.
+- Manual staging checks are still valuable for XR/visual behavior, but they should complement automated e2e on published staging, not replace it.
