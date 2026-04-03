@@ -192,6 +192,7 @@ let lastAvatarTurnRate = 0;
 let lastAvatarXrInputProfile: string | null = null;
 let lastAvatarPoseSentAtMs = 0;
 const avatarPoseSendTimestamps: number[] = [];
+const recentFrameBudgetMs: number[] = [];
 const roomStateReconnectPolicy = createReconnectPolicy({
   maxRetries: Number.parseInt(query.get("roomstateretries") ?? "3", 10),
   baseDelayMs: Number.parseInt(query.get("roomstatedelay") ?? "1000", 10),
@@ -399,7 +400,9 @@ const debugState = {
     sendsInLastSecond: 0,
     lastPoseSentAtMs: 0,
     lastPoseSeq: 0,
-    reconnectRepublishCount: 0
+    reconnectRepublishCount: 0,
+    frameBudgetMs: 0,
+    adaptivePlaybackDelayMs: 100
   },
   xrAvatarDebug: null as null | {
     profile: string | null;
@@ -428,6 +431,7 @@ const debugState = {
     droppedReorderCount: number;
     lastPoseSeq: number | null;
     poseAgeMs: number | null;
+    playbackDelayMs: number;
   }>
 };
 
@@ -980,7 +984,23 @@ function getAvatarPoseSendIntervalSeconds(snapshot: LocalAvatarSnapshotV1 | null
   if (!snapshot) {
     return 0.1;
   }
-  return snapshot.inputMode === "vr-controller" || snapshot.inputMode === "vr-hand" ? 1 / 30 : 1 / 10;
+  const averageFrameBudgetMs = recentFrameBudgetMs.length === 0
+    ? 16
+    : recentFrameBudgetMs.reduce((sum, value) => sum + value, 0) / recentFrameBudgetMs.length;
+  debugState.avatarPoseTransport.frameBudgetMs = Math.round(averageFrameBudgetMs * 10) / 10;
+  if (snapshot.inputMode === "vr-controller" || snapshot.inputMode === "vr-hand") {
+    if (averageFrameBudgetMs > 28) {
+      return 1 / 20;
+    }
+    if (averageFrameBudgetMs > 20) {
+      return 1 / 24;
+    }
+    return 1 / 30;
+  }
+  if (averageFrameBudgetMs > 35) {
+    return 1 / 8;
+  }
+  return 1 / 10;
 }
 
 function syncAvatarPoseRealtime(nowMs: number): void {
@@ -1011,6 +1031,8 @@ function resetAvatarPoseTransportStats(): void {
   debugState.avatarPoseTransport.sendsInLastSecond = 0;
   debugState.avatarPoseTransport.lastPoseSentAtMs = 0;
   debugState.avatarPoseTransport.lastPoseSeq = 0;
+  debugState.avatarPoseTransport.frameBudgetMs = 0;
+  debugState.avatarPoseTransport.adaptivePlaybackDelayMs = 100;
 }
 
 function populateAvatarPresetSelect(input: {
@@ -1455,9 +1477,16 @@ let presenceAccumulator = 0;
 renderer.setAnimationLoop(() => {
   const delta = clock.getDelta();
   const nowMs = Date.now();
+  recentFrameBudgetMs.push(delta * 1000);
+  if (recentFrameBudgetMs.length > 60) {
+    recentFrameBudgetMs.splice(0, recentFrameBudgetMs.length - 60);
+  }
   updateMovement(delta);
   updateLocalAvatar(delta);
   remoteAvatarRuntime.update(delta, debugState);
+  debugState.avatarPoseTransport.adaptivePlaybackDelayMs = debugState.remoteAvatarParticipants.length > 0
+    ? Math.max(...debugState.remoteAvatarParticipants.map((participant) => participant.playbackDelayMs))
+    : 100;
   updateSpatialAudio();
   renderDebugPanel();
 

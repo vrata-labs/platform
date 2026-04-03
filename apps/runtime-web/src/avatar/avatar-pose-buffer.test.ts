@@ -36,3 +36,14 @@ test("sampleAvatarPoseBuffer returns surrounding frames for interpolation", () =
   assert.equal(sample.next?.seq, 3);
   assert.equal(sample.latest?.seq, 3);
 });
+
+test("pushAvatarPoseFrame derives adaptive playback delay from observed jitter", () => {
+  const buffer = createAvatarPoseBuffer();
+  pushAvatarPoseFrame(buffer, createFrame(1, 100), 100);
+  pushAvatarPoseFrame(buffer, createFrame(2, 140), 150);
+  pushAvatarPoseFrame(buffer, createFrame(3, 180), 230);
+
+  assert.equal(buffer.recommendedPlaybackDelayMs >= 100, true);
+  assert.equal(buffer.recommendedPlaybackDelayMs <= 140, true);
+  assert.equal(buffer.recommendedPlaybackDelayMs > 100, true);
+});

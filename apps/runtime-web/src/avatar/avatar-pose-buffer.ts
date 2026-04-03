@@ -7,6 +7,10 @@ export interface AvatarPoseBuffer {
   lastSeq: number | null;
   droppedStaleCount: number;
   droppedReorderCount: number;
+  recentArrivalIntervalsMs: number[];
+  recentSentIntervalsMs: number[];
+  lastReceivedAtMs: number | null;
+  recommendedPlaybackDelayMs: number;
 }
 
 export interface AvatarPoseBufferPushResult {
@@ -21,8 +25,26 @@ export function createAvatarPoseBuffer(input: { maxSize?: number; ttlMs?: number
     ttlMs: input.ttlMs ?? 2_000,
     lastSeq: null,
     droppedStaleCount: 0,
-    droppedReorderCount: 0
+    droppedReorderCount: 0,
+    recentArrivalIntervalsMs: [],
+    recentSentIntervalsMs: [],
+    lastReceivedAtMs: null,
+    recommendedPlaybackDelayMs: 100
   };
+}
+
+function pushWindowedValue(target: number[], value: number, maxSize = 8): void {
+  target.push(value);
+  if (target.length > maxSize) {
+    target.splice(0, target.length - maxSize);
+  }
+}
+
+function average(values: number[]): number {
+  if (values.length === 0) {
+    return 0;
+  }
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
 }
 
 export function pushAvatarPoseFrame(buffer: AvatarPoseBuffer, frame: CompactPoseFrame, nowMs = Date.now()): AvatarPoseBufferPushResult {
@@ -35,7 +57,19 @@ export function pushAvatarPoseFrame(buffer: AvatarPoseBuffer, frame: CompactPose
     buffer.droppedStaleCount += 1;
     return { accepted: false, reason: "stale" };
   }
+  if (buffer.lastReceivedAtMs !== null) {
+    pushWindowedValue(buffer.recentArrivalIntervalsMs, Math.max(0, nowMs - buffer.lastReceivedAtMs));
+  }
+  const lastFrame = buffer.frames[buffer.frames.length - 1] ?? null;
+  if (lastFrame) {
+    pushWindowedValue(buffer.recentSentIntervalsMs, Math.max(0, frame.sentAtMs - lastFrame.sentAtMs));
+  }
+  const arrivalIntervalMs = average(buffer.recentArrivalIntervalsMs);
+  const sentIntervalMs = average(buffer.recentSentIntervalsMs);
+  const jitterMs = Math.abs(arrivalIntervalMs - sentIntervalMs);
+  buffer.recommendedPlaybackDelayMs = Math.round(Math.min(140, Math.max(100, 100 + jitterMs * 2)));
   buffer.lastSeq = frame.seq;
+  buffer.lastReceivedAtMs = nowMs;
   buffer.frames.push(frame);
   if (buffer.frames.length > buffer.maxSize) {
     buffer.frames.splice(0, buffer.frames.length - buffer.maxSize);

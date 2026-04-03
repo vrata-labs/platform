@@ -26,6 +26,7 @@ function createDebugState() {
       droppedReorderCount: number;
       lastPoseSeq: number | null;
       poseAgeMs: number | null;
+      playbackDelayMs: number;
     }>
   };
 }
@@ -72,6 +73,7 @@ test("remote avatar runtime ingests reliable state and pose frame into debug sta
   assert.equal(debugState.remoteAvatarParticipants[0]?.hasPoseFrame, true);
   assert.equal(debugState.remoteAvatarParticipants[0]?.poseBufferDepth, 1);
   assert.equal(debugState.remoteAvatarParticipants[0]?.lastPoseSeq, 1);
+  assert.equal((debugState.remoteAvatarParticipants[0]?.playbackDelayMs ?? 0) >= 100, true);
 });
 
 test("remote avatar runtime reflects hand visibility from pose gestures", () => {

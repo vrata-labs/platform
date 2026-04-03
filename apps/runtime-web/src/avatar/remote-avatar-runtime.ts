@@ -42,6 +42,7 @@ export interface RemoteAvatarDebugState {
     droppedReorderCount: number;
     lastPoseSeq: number | null;
     poseAgeMs: number | null;
+    playbackDelayMs: number;
   }>;
 }
 
@@ -224,7 +225,8 @@ export function createRemoteAvatarRuntime(input: {
           droppedStaleCount: participant.poseBuffer.droppedStaleCount,
           droppedReorderCount: participant.poseBuffer.droppedReorderCount,
           lastPoseSeq: participant.poseBuffer.lastSeq,
-          poseAgeMs: participant.poseFrame ? Math.max(0, Date.now() - participant.poseFrame.sentAtMs) : null
+          poseAgeMs: participant.poseFrame ? Math.max(0, Date.now() - participant.poseFrame.sentAtMs) : null,
+          playbackDelayMs: participant.poseBuffer.recommendedPlaybackDelayMs
         };
       });
     debugState.remoteAvatarReliableCount = debugState.remoteAvatarReliableStates.length;
@@ -294,17 +296,18 @@ export function createRemoteAvatarRuntime(input: {
     update(delta: number, debugState: RemoteAvatarDebugState): void {
       void delta;
       const nowMs = Date.now();
-      const renderAtMs = nowMs - 100;
       for (const [participantId, entity] of remoteAvatars.entries()) {
         const tracks = remoteMotionTracks.get(participantId);
         if (!tracks) continue;
+        const participant = remoteAvatarParticipants.get(participantId);
+        const playbackDelayMs = participant?.poseBuffer.recommendedPlaybackDelayMs ?? 100;
+        const renderAtMs = nowMs - playbackDelayMs;
         const bodySample = sampleMotion(tracks.body, renderAtMs);
         const headSample = sampleMotion(tracks.head, renderAtMs);
         if (!bodySample || !headSample) continue;
         entity.body.position.set(bodySample.x, 0.92, bodySample.z);
         entity.head.position.set(headSample.x, 1.58, headSample.z);
         entity.body.lookAt(headSample.x, 0.92, headSample.z);
-        const participant = remoteAvatarParticipants.get(participantId);
         const reliableState = participant?.reliableState ?? null;
         if (participant) {
           pruneAvatarPoseBuffer(participant.poseBuffer, nowMs);

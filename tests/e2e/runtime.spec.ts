@@ -383,7 +383,8 @@ test("avatar-enabled room syncs remote reliable state and pose frames between tw
           remoteAvatarReliableCount?: number;
           remoteAvatarPoseCount?: number;
           remoteAvatarPoseFrames?: Array<{ seq?: number | null }>;
-          remoteAvatarParticipants?: Array<{ hasReliableState?: boolean; hasPoseFrame?: boolean; presenceSeen?: boolean }>;
+          remoteAvatarParticipants?: Array<{ hasReliableState?: boolean; hasPoseFrame?: boolean; presenceSeen?: boolean; playbackDelayMs?: number }>;
+          avatarPoseTransport?: { targetHz?: number; effectiveHz?: number; adaptivePlaybackDelayMs?: number };
         };
       }).__NOAH_DEBUG__);
       const debugB = await pageB.evaluate(() => (window as Window & {
@@ -391,7 +392,8 @@ test("avatar-enabled room syncs remote reliable state and pose frames between tw
           remoteAvatarReliableCount?: number;
           remoteAvatarPoseCount?: number;
           remoteAvatarPoseFrames?: Array<{ seq?: number | null }>;
-          remoteAvatarParticipants?: Array<{ hasReliableState?: boolean; hasPoseFrame?: boolean; presenceSeen?: boolean }>;
+          remoteAvatarParticipants?: Array<{ hasReliableState?: boolean; hasPoseFrame?: boolean; presenceSeen?: boolean; playbackDelayMs?: number }>;
+          avatarPoseTransport?: { targetHz?: number; effectiveHz?: number; adaptivePlaybackDelayMs?: number };
         };
       }).__NOAH_DEBUG__);
 
@@ -400,10 +402,14 @@ test("avatar-enabled room syncs remote reliable state and pose frames between tw
         aPose: debugA?.remoteAvatarPoseCount ?? 0,
         aSeqReady: (debugA?.remoteAvatarPoseFrames?.[0]?.seq ?? 0) > 0,
         aReady: Boolean(debugA?.remoteAvatarParticipants?.some((item) => item.presenceSeen && item.hasReliableState && item.hasPoseFrame)),
+        aAdaptiveRateReady: (debugA?.avatarPoseTransport?.targetHz ?? 0) >= 8 && (debugA?.avatarPoseTransport?.effectiveHz ?? 0) > 0,
+        aPlaybackDelayReady: Boolean(debugA?.remoteAvatarParticipants?.every((item) => (item.playbackDelayMs ?? 0) >= 100 && (item.playbackDelayMs ?? 0) <= 140)),
         bReliable: debugB?.remoteAvatarReliableCount ?? 0,
         bPose: debugB?.remoteAvatarPoseCount ?? 0,
         bSeqReady: (debugB?.remoteAvatarPoseFrames?.[0]?.seq ?? 0) > 0,
-        bReady: Boolean(debugB?.remoteAvatarParticipants?.some((item) => item.presenceSeen && item.hasReliableState && item.hasPoseFrame))
+        bReady: Boolean(debugB?.remoteAvatarParticipants?.some((item) => item.presenceSeen && item.hasReliableState && item.hasPoseFrame)),
+        bAdaptiveRateReady: (debugB?.avatarPoseTransport?.targetHz ?? 0) >= 8 && (debugB?.avatarPoseTransport?.effectiveHz ?? 0) > 0,
+        bPlaybackDelayReady: Boolean(debugB?.remoteAvatarParticipants?.every((item) => (item.playbackDelayMs ?? 0) >= 100 && (item.playbackDelayMs ?? 0) <= 140))
       };
     }, {
       timeout: 20000,
@@ -413,10 +419,14 @@ test("avatar-enabled room syncs remote reliable state and pose frames between tw
       aPose: 1,
       aSeqReady: true,
       aReady: true,
+      aAdaptiveRateReady: true,
+      aPlaybackDelayReady: true,
       bReliable: 1,
       bPose: 1,
       bSeqReady: true,
-      bReady: true
+      bReady: true,
+      bAdaptiveRateReady: true,
+      bPlaybackDelayReady: true
     });
 
     const finalA = await pageA.evaluate(() => (window as Window & {
