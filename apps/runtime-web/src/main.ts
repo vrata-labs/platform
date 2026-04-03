@@ -890,7 +890,12 @@ function getLocalAvatarHandTargets(): { leftHand: { x: number; y: number; z: num
     grips: xrControllerGrips,
     controllers: xrControllers,
     xrFrame,
-    referenceSpace
+    referenceSpace,
+    playerOffset: {
+      x: player.position.x,
+      y: player.position.y,
+      z: player.position.z
+    }
   });
 }
 

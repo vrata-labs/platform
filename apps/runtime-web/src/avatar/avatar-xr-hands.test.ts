@@ -125,3 +125,26 @@ test("resolveLocalAvatarHandTargets survives reordered inputSources when pose sp
   assert.deepEqual(result.leftHand, { x: -0.25, y: 1.2, z: 0.3 });
   assert.deepEqual(result.rightHand, { x: 0.25, y: 1.2, z: 0.3 });
 });
+
+test("resolveLocalAvatarHandTargets applies player locomotion offset to XR pose-space hands", () => {
+  const leftGripSpace = { id: "left-grip" };
+  const rightGripSpace = { id: "right-grip" };
+  const result = resolveLocalAvatarHandTargets({
+    presenting: true,
+    inputSources: [
+      { handedness: "left", gripSpace: leftGripSpace },
+      { handedness: "right", gripSpace: rightGripSpace }
+    ],
+    grips: [null, null],
+    controllers: [null, null],
+    xrFrame: frameWithPoses([
+      { space: leftGripSpace, x: -0.2, y: 1.2, z: 0.3 },
+      { space: rightGripSpace, x: 0.2, y: 1.2, z: 0.3 }
+    ]),
+    referenceSpace: { id: "ref" },
+    playerOffset: { x: 2, y: 0, z: 6 }
+  });
+
+  assert.deepEqual(result.leftHand, { x: 1.8, y: 1.2, z: 6.3 });
+  assert.deepEqual(result.rightHand, { x: 2.2, y: 1.2, z: 6.3 });
+});

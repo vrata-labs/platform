@@ -102,14 +102,21 @@ export function resolveLocalAvatarHandTargets(input: {
   controllers: Array<XrSpatialLike | null | undefined>;
   xrFrame?: XrFrameLike | null;
   referenceSpace?: unknown;
+  playerOffset?: { x: number; y: number; z: number };
 }): { leftHand: AvatarHandTarget | null; rightHand: AvatarHandTarget | null } {
   if (!input.presenting) {
     return { leftHand: null, rightHand: null };
   }
 
   const debug = collectLocalAvatarHandDebug(input);
+  const offset = input.playerOffset ?? { x: 0, y: 0, z: 0 };
+  const applyOffset = (target: AvatarHandTarget | null): AvatarHandTarget | null => target ? {
+    x: target.x + offset.x,
+    y: target.y + offset.y,
+    z: target.z + offset.z
+  } : null;
   return {
-    leftHand: debug.leftResolved,
-    rightHand: debug.rightResolved
+    leftHand: applyOffset(debug.leftResolved),
+    rightHand: applyOffset(debug.rightResolved)
   };
 }
