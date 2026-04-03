@@ -242,8 +242,10 @@ function getDefaultLivekitUrl(request?: IncomingMessage): string {
   return `${protocol}://livekit-${hostname}`;
 }
 
-function createRoomLink(roomId: string, host?: string): string {
-  const publicUrl = process.env.RUNTIME_BASE_URL ?? `http://${host ?? `localhost:${apiPort}`}`;
+function createRoomLink(roomId: string, request?: IncomingMessage): string {
+  const host = getRequestHost(request) ?? `localhost:${apiPort}`;
+  const proto = getRequestProto(request);
+  const publicUrl = process.env.RUNTIME_BASE_URL ?? `${proto}://${host}`;
   return new URL(`/rooms/${roomId}`, publicUrl).toString();
 }
 
@@ -489,7 +491,7 @@ function encodeToken(payload: StateTokenPayload | MediaTokenPayload): string {
   return Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
 }
 
-async function listRuntimeSpaces(storage: Awaited<typeof storagePromise>, roomId: string, host?: string): Promise<RuntimeSpaceRecord[]> {
+async function listRuntimeSpaces(storage: Awaited<typeof storagePromise>, roomId: string, request?: IncomingMessage): Promise<RuntimeSpaceRecord[]> {
   const currentRoom = await storage.getRoom(roomId);
   if (!currentRoom) {
     return [{
@@ -497,7 +499,7 @@ async function listRuntimeSpaces(storage: Awaited<typeof storagePromise>, roomId
       tenantId: defaultManifest(roomId).tenantId,
       name: roomId,
       templateId: defaultManifest(roomId).template,
-      roomLink: createRoomLink(roomId, host)
+      roomLink: createRoomLink(roomId, request)
     }];
   }
 
@@ -509,7 +511,7 @@ async function listRuntimeSpaces(storage: Awaited<typeof storagePromise>, roomId
       tenantId: room.tenantId,
       name: room.name,
       templateId: room.templateId,
-      roomLink: createRoomLink(room.roomId, host)
+      roomLink: createRoomLink(room.roomId, request)
     }));
 
   return rooms.sort((left, right) => {
@@ -614,7 +616,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
 
   if (method === "GET" && url.pathname === "/api/rooms") {
     const rooms = await storage.listRooms();
-    json(response, 200, { items: rooms.map((room) => ({ ...room, roomLink: createRoomLink(room.roomId, request.headers.host) })) });
+    json(response, 200, { items: rooms.map((room) => ({ ...room, roomLink: createRoomLink(room.roomId, request) })) });
     return;
   }
 
@@ -643,7 +645,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       json(response, 503, { error: "spaces_unavailable" });
       return;
     }
-    json(response, 200, { items: await listRuntimeSpaces(storage, decodeURIComponent(roomSpacesMatch[1]), request.headers.host) });
+    json(response, 200, { items: await listRuntimeSpaces(storage, decodeURIComponent(roomSpacesMatch[1]), request) });
     return;
   }
 
@@ -812,7 +814,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     const assetValidationError = await validateRoomAssetIds(storage, payload.assetIds, payload.templateId);
     if (assetValidationError) return json(response, 400, { error: assetValidationError });
     const room = await storage.createRoom(payload);
-    json(response, 201, { ...room, roomLink: createRoomLink(room.roomId, request.headers.host), manifest: await buildManifest(room.roomId, request) });
+    json(response, 201, { ...room, roomLink: createRoomLink(room.roomId, request), manifest: await buildManifest(room.roomId, request) });
     return;
   }
 
@@ -835,7 +837,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     }
     const updated = await storage.updateRoom(roomId, payload);
     if (!updated) return json(response, 404, { error: "room_not_found" });
-    json(response, 200, { ...updated, roomLink: createRoomLink(updated.roomId, request.headers.host), manifest: await buildManifest(updated.roomId, request) });
+    json(response, 200, { ...updated, roomLink: createRoomLink(updated.roomId, request), manifest: await buildManifest(updated.roomId, request) });
     return;
   }
 
@@ -851,7 +853,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     if (!bundle) return json(response, 404, { error: "scene_bundle_not_found" });
     const room = await storage.updateRoom(roomId, { sceneBundleUrl: bundle.publicUrl });
     if (!room) return json(response, 404, { error: "room_not_found" });
-    json(response, 200, { ...room, roomLink: createRoomLink(room.roomId, request.headers.host), sceneBundle: bundle, currentVersion: getCurrentSceneBundleVersion(bundle) });
+    json(response, 200, { ...room, roomLink: createRoomLink(room.roomId, request), sceneBundle: bundle, currentVersion: getCurrentSceneBundleVersion(bundle) });
     return;
   }
 
@@ -908,7 +910,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   if (method === "GET" && roomItemMatch) {
     const room = await storage.getRoom(decodeURIComponent(roomItemMatch[1]));
     if (!room) return json(response, 404, { error: "room_not_found" });
-      json(response, 200, { ...room, roomLink: createRoomLink(room.roomId, request.headers.host), manifest: await buildManifest(room.roomId, request) });
+    json(response, 200, { ...room, roomLink: createRoomLink(room.roomId, request), manifest: await buildManifest(room.roomId, request) });
     return;
   }
 

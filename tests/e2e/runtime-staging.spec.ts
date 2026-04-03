@@ -196,43 +196,59 @@ test.describe("@staging runtime HUD space selector", () => {
   });
 
   test("selector switches to a freshly created staging target room", async ({ page, baseURL, request }) => {
-    const createRoomResponse = await request.post("/api/rooms", {
-      headers: {
-        "x-noah-admin-token": stagingAdminToken
-      },
-      data: {
-        tenantId: "demo-tenant",
-        templateId: "showroom-basic",
-        name: "Staging Selector Target",
-        guestAllowed: true
+    const targetName = `Staging Selector Target ${Date.now()}`;
+    let targetRoomId: string | null = null;
+    try {
+      const createRoomResponse = await request.post("/api/rooms", {
+        headers: {
+          "x-noah-admin-token": stagingAdminToken
+        },
+        data: {
+          tenantId: "demo-tenant",
+          templateId: "showroom-basic",
+          name: targetName,
+          guestAllowed: true
+        }
+      });
+      expect(createRoomResponse.ok()).toBeTruthy();
+      const targetRoom = await createRoomResponse.json() as { roomId: string; roomLink: string };
+      targetRoomId = targetRoom.roomId;
+
+      await page.goto(`/rooms/${stagingRoomId}`);
+      const targetRoomLink = new URL(targetRoom.roomLink, baseURL).toString();
+
+      await expect.poll(async () => {
+        const isDisabled = await page.locator("#space-select").isDisabled();
+        const values = await page.locator("#space-select option").evaluateAll((options) =>
+          options.map((option) => (option as HTMLOptionElement).value)
+        );
+        return {
+          isDisabled,
+          hasTarget: values.includes(targetRoomLink),
+          secureTarget: targetRoomLink.startsWith(baseURL ?? "")
+        };
+      }, {
+        timeout: 15000,
+        intervals: [1000, 2000, 3000]
+      }).toEqual({
+        isDisabled: false,
+        hasTarget: true,
+        secureTarget: true
+      });
+
+      await page.selectOption("#space-select", { value: targetRoomLink });
+      await page.waitForURL(`**/rooms/${targetRoom.roomId}`);
+      await expect(page.locator("#room-name")).toContainText(targetRoom.roomId);
+    } finally {
+      if (targetRoomId) {
+        const deleteResponse = await request.delete(`/api/rooms/${targetRoomId}`, {
+          headers: {
+            "x-noah-admin-token": stagingAdminToken
+          }
+        });
+        expect(deleteResponse.ok()).toBeTruthy();
       }
-    });
-    expect(createRoomResponse.ok()).toBeTruthy();
-    const targetRoom = await createRoomResponse.json() as { roomId: string; roomLink: string };
-
-    await page.goto(`/rooms/${stagingRoomId}`);
-    const targetRoomLink = new URL(targetRoom.roomLink, baseURL).toString();
-
-    await expect.poll(async () => {
-      const isDisabled = await page.locator("#space-select").isDisabled();
-      const values = await page.locator("#space-select option").evaluateAll((options) =>
-        options.map((option) => (option as HTMLOptionElement).value)
-      );
-      return {
-        isDisabled,
-        hasTarget: values.includes(targetRoomLink)
-      };
-    }, {
-      timeout: 15000,
-      intervals: [1000, 2000, 3000]
-    }).toEqual({
-      isDisabled: false,
-      hasTarget: true
-    });
-
-    await page.selectOption("#space-select", { value: targetRoomLink });
-    await page.waitForURL(`**/rooms/${targetRoom.roomId}`);
-    await expect(page.locator("#room-name")).toContainText(targetRoom.roomId);
+    }
   });
 
   for (const sceneRoom of stagingSceneRooms) {
@@ -248,4 +264,84 @@ test.describe("@staging runtime HUD space selector", () => {
       );
     });
   }
+
+  test("avatar-enabled staging room syncs remote reliable state and pose frames", async ({ browser, request }) => {
+    const targetName = `Staging Avatar Sync ${Date.now()}`;
+    let roomId: string | null = null;
+
+    try {
+      const createRoomResponse = await request.post("/api/rooms", {
+        headers: {
+          "x-noah-admin-token": stagingAdminToken
+        },
+        data: {
+          tenantId: "demo-tenant",
+          templateId: "meeting-room-basic",
+          name: targetName,
+          guestAllowed: true,
+          avatarConfig: {
+            avatarsEnabled: true,
+            avatarCatalogUrl: "/assets/avatars/catalog.v1.json",
+            avatarQualityProfile: "desktop-standard",
+            avatarFallbackCapsulesEnabled: true,
+            avatarSeatsEnabled: false
+          }
+        }
+      });
+      expect(createRoomResponse.ok()).toBeTruthy();
+      const room = await createRoomResponse.json() as { roomId: string; roomLink: string };
+      roomId = room.roomId;
+
+      const pageA = await browser.newPage();
+      const pageB = await browser.newPage();
+      try {
+        await pageA.goto(`/rooms/${room.roomId}?debug=1&bot=line`);
+        await pageB.goto(`/rooms/${room.roomId}?debug=1&bot=line`);
+
+        await expect.poll(async () => {
+          const debugA = await pageA.evaluate(() => (window as Window & {
+            __NOAH_DEBUG__?: {
+              remoteAvatarReliableCount?: number;
+              remoteAvatarPoseCount?: number;
+              remoteAvatarParticipants?: Array<{ hasReliableState?: boolean; hasPoseFrame?: boolean; presenceSeen?: boolean }>;
+            };
+          }).__NOAH_DEBUG__);
+          const debugB = await pageB.evaluate(() => (window as Window & {
+            __NOAH_DEBUG__?: {
+              remoteAvatarReliableCount?: number;
+              remoteAvatarPoseCount?: number;
+              remoteAvatarParticipants?: Array<{ hasReliableState?: boolean; hasPoseFrame?: boolean; presenceSeen?: boolean }>;
+            };
+          }).__NOAH_DEBUG__);
+
+          return {
+            aReady: (debugA?.remoteAvatarReliableCount ?? 0) === 1
+              && (debugA?.remoteAvatarPoseCount ?? 0) === 1
+              && Boolean(debugA?.remoteAvatarParticipants?.some((item) => item.presenceSeen && item.hasReliableState && item.hasPoseFrame)),
+            bReady: (debugB?.remoteAvatarReliableCount ?? 0) === 1
+              && (debugB?.remoteAvatarPoseCount ?? 0) === 1
+              && Boolean(debugB?.remoteAvatarParticipants?.some((item) => item.presenceSeen && item.hasReliableState && item.hasPoseFrame))
+          };
+        }, {
+          timeout: 25000,
+          intervals: [1000, 2000, 3000]
+        }).toEqual({
+          aReady: true,
+          bReady: true
+        });
+      } finally {
+        await pageA.close();
+        await pageB.close();
+      }
+    } finally {
+      if (roomId) {
+        const deleteResponse = await request.delete(`/api/rooms/${roomId}`, {
+          headers: {
+            "x-noah-admin-token": stagingAdminToken
+          }
+        });
+        expect(deleteResponse.ok()).toBeTruthy();
+      }
+    }
+  });
 });

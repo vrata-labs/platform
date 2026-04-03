@@ -417,6 +417,33 @@ test("runtime spaces endpoint keeps same-tenant guest-safe rooms only", async ()
   }
 });
 
+test("runtime spaces endpoint keeps https room links behind https proxy", async () => {
+  process.env.NOAH_DISABLE_AUTOSTART = "1";
+  process.env.API_PORT = "4023";
+  const module = await import("./index.js");
+  const server = module.startApiServer(4023);
+
+  try {
+    const response = await fetch("http://127.0.0.1:4023/api/rooms/demo-room/spaces", {
+      headers: {
+        host: "89.169.161.91.sslip.io",
+        "x-forwarded-host": "89.169.161.91.sslip.io",
+        "x-forwarded-proto": "https"
+      }
+    });
+    assert.equal(response.ok, true);
+    const payload = (await response.json()) as {
+      items: Array<{ roomId: string; roomLink: string }>;
+    };
+
+    assert.equal(payload.items[0]?.roomId, "demo-room");
+    assert.equal(payload.items[0]?.roomLink, "https://89.169.161.91.sslip.io/rooms/demo-room");
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    delete process.env.NOAH_DISABLE_AUTOSTART;
+  }
+});
+
 test("scene bundle metadata can be created and bound to a room", async () => {
   process.env.NOAH_DISABLE_AUTOSTART = "1";
   process.env.API_PORT = "4014";
