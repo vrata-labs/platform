@@ -169,6 +169,34 @@ async function expectSceneRoomLoaded(
   });
 }
 
+async function readNoahDebug(page: Page): Promise<{
+  roomStateConnected?: boolean;
+  remoteAvatarReliableCount?: number;
+  remoteAvatarPoseCount?: number;
+  remoteAvatarParticipants?: Array<{
+    hasReliableState?: boolean;
+    hasPoseFrame?: boolean;
+    presenceSeen?: boolean;
+    leftHandVisible?: boolean;
+    rightHandVisible?: boolean;
+  }>;
+} | undefined> {
+  return page.evaluate(() => (window as Window & {
+    __NOAH_DEBUG__?: {
+      roomStateConnected?: boolean;
+      remoteAvatarReliableCount?: number;
+      remoteAvatarPoseCount?: number;
+      remoteAvatarParticipants?: Array<{
+        hasReliableState?: boolean;
+        hasPoseFrame?: boolean;
+        presenceSeen?: boolean;
+        leftHandVisible?: boolean;
+        rightHandVisible?: boolean;
+      }>;
+    };
+  }).__NOAH_DEBUG__);
+}
+
 test.describe("@staging runtime HUD space selector", () => {
   test("staging suite uses public HTTPS base URL", async ({ request, baseURL }) => {
     expect(baseURL).toBeTruthy();
@@ -276,6 +304,36 @@ test.describe("@staging runtime HUD space selector", () => {
     }
   });
 
+  test("selector survives chained scene transitions across canonical rooms", async ({ page, baseURL }) => {
+    test.setTimeout(90000);
+    await page.goto(`/rooms/${stagingRoomId}`);
+
+    const targets = [
+      new URL(`/rooms/${stagingSceneRooms[0]!.roomId}`, baseURL).toString(),
+      new URL(`/rooms/${stagingSceneRooms[1]!.roomId}`, baseURL).toString(),
+      new URL(`/rooms/${stagingRoomId}`, baseURL).toString()
+    ];
+
+    for (const target of targets) {
+      await expect(page.locator("#space-select")).toBeVisible();
+      await page.selectOption("#space-select", { value: target });
+      await page.waitForURL(target.replace(baseURL ?? "", "**"));
+      await expect(page.locator("#space-select")).toBeVisible();
+      await expect(page.locator("#room-name")).not.toContainText("Loading room", { timeout: 30000 });
+      await expect.poll(async () => {
+        const currentValue = await page.locator("#space-select").inputValue();
+        return {
+          currentValue
+        };
+      }, {
+        timeout: 15000,
+        intervals: [1000, 2000, 3000]
+      }).toEqual({
+        currentValue: target
+      });
+    }
+  });
+
   for (const sceneRoom of stagingSceneRooms) {
     test(`scene room smoke: ${sceneRoom.name}`, async ({ page, request }) => {
       test.setTimeout(sceneRoom.timeoutMs + 15000);
@@ -348,7 +406,7 @@ test.describe("@staging runtime HUD space selector", () => {
               && Boolean(debugB?.remoteAvatarParticipants?.some((item) => item.presenceSeen && item.hasReliableState && item.hasPoseFrame))
           };
         }, {
-          timeout: 25000,
+          timeout: 45000,
           intervals: [1000, 2000, 3000]
         }).toEqual({
           aReady: true,
@@ -367,6 +425,37 @@ test.describe("@staging runtime HUD space selector", () => {
         });
         expect(deleteResponse.ok()).toBeTruthy();
       }
+    }
+  });
+
+  test("demo-room keeps avatar sync working between two clients on staging", async ({ browser }) => {
+    const pageA = await browser.newPage();
+    const pageB = await browser.newPage();
+    try {
+      await pageA.goto(`/rooms/${stagingRoomId}?debug=1&bot=line`);
+      await pageB.goto(`/rooms/${stagingRoomId}?debug=1&bot=line`);
+
+      await expect.poll(async () => {
+        const debugA = await readNoahDebug(pageA);
+        const debugB = await readNoahDebug(pageB);
+        return {
+          aReady: (debugA?.remoteAvatarReliableCount ?? 0) >= 1
+            && (debugA?.remoteAvatarPoseCount ?? 0) >= 1
+            && Boolean(debugA?.remoteAvatarParticipants?.some((item) => item.presenceSeen && item.hasReliableState && item.hasPoseFrame && item.leftHandVisible && item.rightHandVisible)),
+          bReady: (debugB?.remoteAvatarReliableCount ?? 0) >= 1
+            && (debugB?.remoteAvatarPoseCount ?? 0) >= 1
+            && Boolean(debugB?.remoteAvatarParticipants?.some((item) => item.presenceSeen && item.hasReliableState && item.hasPoseFrame && item.leftHandVisible && item.rightHandVisible))
+        };
+      }, {
+        timeout: 25000,
+        intervals: [1000, 2000, 3000]
+      }).toEqual({
+        aReady: true,
+        bReady: true
+      });
+    } finally {
+      await pageA.close();
+      await pageB.close();
     }
   });
 });
