@@ -37,6 +37,11 @@ export interface RemoteAvatarDebugState {
     hasPoseFrame: boolean;
     leftHandVisible: boolean;
     rightHandVisible: boolean;
+    poseBufferDepth: number;
+    droppedStaleCount: number;
+    droppedReorderCount: number;
+    lastPoseSeq: number | null;
+    poseAgeMs: number | null;
   }>;
 }
 
@@ -214,7 +219,12 @@ export function createRemoteAvatarRuntime(input: {
           hasReliableState: participant.reliableState !== null,
           hasPoseFrame: participant.poseFrame !== null,
           leftHandVisible: participant.leftHandVisible || entity?.leftHand.visible || false,
-          rightHandVisible: participant.rightHandVisible || entity?.rightHand.visible || false
+          rightHandVisible: participant.rightHandVisible || entity?.rightHand.visible || false,
+          poseBufferDepth: participant.poseBuffer.frames.length,
+          droppedStaleCount: participant.poseBuffer.droppedStaleCount,
+          droppedReorderCount: participant.poseBuffer.droppedReorderCount,
+          lastPoseSeq: participant.poseBuffer.lastSeq,
+          poseAgeMs: participant.poseFrame ? Math.max(0, Date.now() - participant.poseFrame.sentAtMs) : null
         };
       });
     debugState.remoteAvatarReliableCount = debugState.remoteAvatarReliableStates.length;

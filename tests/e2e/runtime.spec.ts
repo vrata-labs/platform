@@ -438,6 +438,98 @@ test("avatar-enabled room syncs remote reliable state and pose frames between tw
   }
 });
 
+test("avatar-enabled room recovers remote avatar state after late join and forced reconnect", async ({ browser, request }) => {
+  const createRoomResponse = await request.post("/api/rooms", {
+    headers: {
+      "x-noah-admin-token": "test-admin-token"
+    },
+    data: {
+      tenantId: "demo-tenant",
+      templateId: "meeting-room-basic",
+      name: "Avatar Reconnect Room",
+      avatarConfig: {
+        avatarsEnabled: true,
+        avatarCatalogUrl: "/assets/avatars/catalog.v1.json",
+        avatarQualityProfile: "desktop-standard",
+        avatarFallbackCapsulesEnabled: true,
+        avatarSeatsEnabled: false
+      }
+    }
+  });
+  expect(createRoomResponse.ok()).toBeTruthy();
+  const room = (await createRoomResponse.json()) as { roomLink: string };
+
+  const pageA = await browser.newPage();
+  const pageB = await browser.newPage();
+
+  try {
+    await pageA.goto(`${room.roomLink}?debug=1&bot=line`);
+
+    await pageB.goto(`${room.roomLink}?debug=1&bot=line`);
+    await expect.poll(async () => {
+      const debugB = await pageB.evaluate(() => (window as Window & {
+        __NOAH_DEBUG__?: {
+          remoteAvatarParticipants?: Array<{ presenceSeen?: boolean; hasReliableState?: boolean; hasPoseFrame?: boolean }>;
+        };
+      }).__NOAH_DEBUG__);
+      return Boolean(debugB?.remoteAvatarParticipants?.some((item) => item.presenceSeen && item.hasReliableState && item.hasPoseFrame));
+    }, {
+      timeout: 20000,
+      intervals: [1000, 2000, 3000]
+    }).toBeTruthy();
+
+    await pageA.evaluate(() => {
+      (window as Window & { __NOAH_TEST__?: { forceRoomStateReconnect?: () => void } }).__NOAH_TEST__?.forceRoomStateReconnect?.();
+    });
+
+    await expect.poll(async () => {
+      const debugA = await pageA.evaluate(() => (window as Window & {
+        __NOAH_DEBUG__?: {
+          avatarPoseTransport?: { reconnectRepublishCount?: number; effectiveHz?: number };
+          roomStateConnected?: boolean;
+        };
+      }).__NOAH_DEBUG__);
+      const debugB = await pageB.evaluate(() => (window as Window & {
+        __NOAH_DEBUG__?: {
+          remoteAvatarCount?: number;
+          remoteAvatarReliableCount?: number;
+          remoteAvatarPoseCount?: number;
+          remoteAvatarParticipants?: Array<{
+            participantId?: string;
+            presenceSeen?: boolean;
+            hasReliableState?: boolean;
+            hasPoseFrame?: boolean;
+            poseBufferDepth?: number;
+          }>;
+        };
+      }).__NOAH_DEBUG__);
+      return {
+        reconnectRepublished: (debugA?.avatarPoseTransport?.reconnectRepublishCount ?? 0) > 0,
+        reconnected: debugA?.roomStateConnected ?? false,
+        remoteCount: debugB?.remoteAvatarCount ?? 0,
+        reliableCount: debugB?.remoteAvatarReliableCount ?? 0,
+        poseCount: debugB?.remoteAvatarPoseCount ?? 0,
+        participantSlots: debugB?.remoteAvatarParticipants?.length ?? 0,
+        remoteReady: Boolean(debugB?.remoteAvatarParticipants?.some((item) => item.presenceSeen && item.hasReliableState && item.hasPoseFrame && (item.poseBufferDepth ?? 0) > 0))
+      };
+    }, {
+      timeout: 20000,
+      intervals: [1000, 2000, 3000]
+    }).toEqual({
+      reconnectRepublished: true,
+      reconnected: true,
+      remoteCount: 1,
+      reliableCount: 1,
+      poseCount: 1,
+      participantSlots: 1,
+      remoteReady: true
+    });
+  } finally {
+    await pageA.close();
+    await pageB.close();
+  }
+});
+
 test("avatar-enabled room uses mobile upper-body profile on mobile user agent", async ({ browser, request }) => {
   const createRoomResponse = await request.post("/api/rooms", {
     headers: {

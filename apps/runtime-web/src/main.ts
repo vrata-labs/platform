@@ -191,6 +191,7 @@ let lastAvatarMove = { x: 0, z: 0 };
 let lastAvatarTurnRate = 0;
 let lastAvatarXrInputProfile: string | null = null;
 let lastAvatarPoseSentAtMs = 0;
+const avatarPoseSendTimestamps: number[] = [];
 const roomStateReconnectPolicy = createReconnectPolicy({
   maxRetries: Number.parseInt(query.get("roomstateretries") ?? "3", 10),
   baseDelayMs: Number.parseInt(query.get("roomstatedelay") ?? "1000", 10),
@@ -392,6 +393,14 @@ const debugState = {
   avatarDebug: createEmptyAvatarDiagnostics(),
   avatarSnapshot: null as LocalAvatarSnapshotV1 | null,
   avatarTransportPreview: null as AvatarOutboundPayload | null,
+  avatarPoseTransport: {
+    targetHz: 0,
+    effectiveHz: 0,
+    sendsInLastSecond: 0,
+    lastPoseSentAtMs: 0,
+    lastPoseSeq: 0,
+    reconnectRepublishCount: 0
+  },
   xrAvatarDebug: null as null | {
     profile: string | null;
     playerRoot: { x: number; y: number; z: number; yaw: number };
@@ -414,12 +423,26 @@ const debugState = {
     hasPoseFrame: boolean;
     leftHandVisible: boolean;
     rightHandVisible: boolean;
+    poseBufferDepth: number;
+    droppedStaleCount: number;
+    droppedReorderCount: number;
+    lastPoseSeq: number | null;
+    poseAgeMs: number | null;
   }>
 };
 
 const floorMaterial = floor.material as THREE.MeshStandardMaterial;
 
 (window as Window & { __NOAH_DEBUG__?: typeof debugState }).__NOAH_DEBUG__ = debugState;
+(window as Window & {
+  __NOAH_TEST__?: {
+    forceRoomStateReconnect: () => void;
+  };
+}).__NOAH_TEST__ = {
+  forceRoomStateReconnect: () => {
+    roomStateClient?.close();
+  }
+};
 
 function setStatus(message: string): void {
   statusLineEl.textContent = message;
@@ -575,6 +598,7 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
 
   roomStateClient = connectRoomState(roomStateUrl, roomId, participantId, {
     onOpen: () => {
+      const reopened = debugState.avatarPoseTransport.lastPoseSentAtMs > 0;
       roomStateConnected = true;
       debugState.roomStateConnected = true;
       debugState.roomStateMode = "connected";
@@ -583,6 +607,10 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
         clearIssue(debugState.audioState === "connected-passive" ? `Joined as ${displayName}` : debugState.statusLine);
       }
       void reportDiagnostics("room_state_connected");
+      if (reopened) {
+        debugState.avatarPoseTransport.reconnectRepublishCount += 1;
+      }
+      void syncPresence(latestMode, Boolean(livekitRoom));
     },
     onRoomState: (snapshot: RoomStateSnapshot) => {
       roomStateConnected = true;
@@ -945,6 +973,7 @@ function updateLocalAvatar(delta: number): void {
     muted: !microphoneEnabled,
     audioActive: microphoneEnabled
   });
+  debugState.avatarPoseTransport.targetHz = Math.round(1 / getAvatarPoseSendIntervalSeconds(localAvatarController.snapshot));
 }
 
 function getAvatarPoseSendIntervalSeconds(snapshot: LocalAvatarSnapshotV1 | null): number {
@@ -964,6 +993,24 @@ function syncAvatarPoseRealtime(nowMs: number): void {
   }
   sendAvatarPoseFrame(roomStateClient, participantId, debugState.avatarTransportPreview.poseFrame);
   lastAvatarPoseSentAtMs = nowMs;
+  avatarPoseSendTimestamps.push(nowMs);
+  while (avatarPoseSendTimestamps.length > 0 && nowMs - avatarPoseSendTimestamps[0]! > 1000) {
+    avatarPoseSendTimestamps.shift();
+  }
+  debugState.avatarPoseTransport.sendsInLastSecond = avatarPoseSendTimestamps.length;
+  debugState.avatarPoseTransport.effectiveHz = avatarPoseSendTimestamps.length;
+  debugState.avatarPoseTransport.lastPoseSentAtMs = nowMs;
+  debugState.avatarPoseTransport.lastPoseSeq = debugState.avatarTransportPreview.poseFrame.seq;
+}
+
+function resetAvatarPoseTransportStats(): void {
+  lastAvatarPoseSentAtMs = 0;
+  avatarPoseSendTimestamps.length = 0;
+  debugState.avatarPoseTransport.targetHz = 0;
+  debugState.avatarPoseTransport.effectiveHz = 0;
+  debugState.avatarPoseTransport.sendsInLastSecond = 0;
+  debugState.avatarPoseTransport.lastPoseSentAtMs = 0;
+  debugState.avatarPoseTransport.lastPoseSeq = 0;
 }
 
 function populateAvatarPresetSelect(input: {
@@ -1014,6 +1061,7 @@ async function bootLocalAvatarPresetSession(input: {
   debugState.avatarDebug = localAvatarSession.diagnostics;
   debugState.avatarSnapshot = localAvatarSession.controller?.snapshot ?? null;
   debugState.avatarTransportPreview = null;
+  resetAvatarPoseTransportStats();
   populateAvatarPresetSelect({
     options: localAvatarSession.presetOptions,
     selectedAvatarId: localAvatarSession.controller?.selectedAvatarId ?? localAvatarSession.diagnostics.selectedAvatarId,
@@ -1497,6 +1545,7 @@ async function main(): Promise<void> {
   debugState.avatarDebug = avatarReset.diagnostics;
   debugState.avatarSnapshot = null;
   debugState.avatarTransportPreview = null;
+  resetAvatarPoseTransportStats();
   if (!effectiveCleanSceneMode) {
     scene.fog = new THREE.Fog(new THREE.Color(boot.theme.accentColor).getHex(), 12, 50);
   } else {
@@ -1529,6 +1578,7 @@ async function main(): Promise<void> {
     debugState.avatarDebug = sandboxResult.diagnostics;
     debugState.avatarSnapshot = null;
     debugState.avatarTransportPreview = null;
+    resetAvatarPoseTransportStats();
     setAvatarSandboxStatus(avatarSandboxStatusEl, sandboxResult.statusMessage);
     await reportDiagnostics(sandboxResult.note);
     return;

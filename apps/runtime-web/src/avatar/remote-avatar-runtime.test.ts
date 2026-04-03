@@ -21,6 +21,11 @@ function createDebugState() {
       hasPoseFrame: boolean;
       leftHandVisible: boolean;
       rightHandVisible: boolean;
+      poseBufferDepth: number;
+      droppedStaleCount: number;
+      droppedReorderCount: number;
+      lastPoseSeq: number | null;
+      poseAgeMs: number | null;
     }>
   };
 }
@@ -34,6 +39,7 @@ test("remote avatar runtime ingests reliable state and pose frame into debug sta
     localParticipantId: "local"
   });
   const debugState = createDebugState();
+  const sentAtMs = Date.now();
 
   runtime.ingestReliableState({
     participantId: "remote-1",
@@ -44,7 +50,7 @@ test("remote avatar runtime ingests reliable state and pose frame into debug sta
   }, debugState);
   runtime.ingestPoseFrame("remote-1", {
     seq: 1,
-    sentAtMs: 1,
+    sentAtMs,
     flags: 0,
     root: { x: 0, y: 0, z: 0, yaw: 0, vx: 0, vz: 0 },
     head: { x: 0, y: 1.6, z: 0, qx: 0, qy: 0, qz: 0, qw: 1 },
@@ -64,6 +70,8 @@ test("remote avatar runtime ingests reliable state and pose frame into debug sta
   assert.equal(debugState.remoteAvatarParticipants[0]?.presenceSeen, false);
   assert.equal(debugState.remoteAvatarParticipants[0]?.hasReliableState, true);
   assert.equal(debugState.remoteAvatarParticipants[0]?.hasPoseFrame, true);
+  assert.equal(debugState.remoteAvatarParticipants[0]?.poseBufferDepth, 1);
+  assert.equal(debugState.remoteAvatarParticipants[0]?.lastPoseSeq, 1);
 });
 
 test("remote avatar runtime reflects hand visibility from pose gestures", () => {
@@ -139,4 +147,6 @@ test("remote avatar runtime ignores reordered pose frames", () => {
 
   const model = runtime.getParticipantModel("remote-3");
   assert.equal(model?.poseFrame?.seq, 5);
+  assert.equal(debugState.remoteAvatarParticipants[0]?.droppedReorderCount, 1);
+  assert.equal(debugState.remoteAvatarParticipants[0]?.lastPoseSeq, 5);
 });
