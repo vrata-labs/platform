@@ -895,7 +895,8 @@ function getLocalAvatarHandTargets(): { leftHand: { x: number; y: number; z: num
       x: player.position.x,
       y: player.position.y,
       z: player.position.z
-    }
+    },
+    playerYaw: yaw
   });
 }
 

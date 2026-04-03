@@ -148,3 +148,27 @@ test("resolveLocalAvatarHandTargets applies player locomotion offset to XR pose-
   assert.deepEqual(result.leftHand, { x: 1.8, y: 1.2, z: 6.3 });
   assert.deepEqual(result.rightHand, { x: 2.2, y: 1.2, z: 6.3 });
 });
+
+test("resolveLocalAvatarHandTargets rotates XR hand poses with player yaw", () => {
+  const leftGripSpace = { id: "left-grip" };
+  const rightGripSpace = { id: "right-grip" };
+  const result = resolveLocalAvatarHandTargets({
+    presenting: true,
+    inputSources: [
+      { handedness: "left", gripSpace: leftGripSpace },
+      { handedness: "right", gripSpace: rightGripSpace }
+    ],
+    grips: [null, null],
+    controllers: [null, null],
+    xrFrame: frameWithPoses([
+      { space: leftGripSpace, x: -0.25, y: 1.2, z: 0.2 },
+      { space: rightGripSpace, x: 0.25, y: 1.2, z: 0.2 }
+    ]),
+    referenceSpace: { id: "ref" },
+    playerOffset: { x: 1, y: 0, z: 6 },
+    playerYaw: Math.PI / 2
+  });
+
+  assert.deepEqual(result.leftHand, { x: 0.8, y: 1.2, z: 5.75 });
+  assert.deepEqual(result.rightHand, { x: 0.8, y: 1.2, z: 6.25 });
+});
