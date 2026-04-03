@@ -266,14 +266,9 @@ export function createLocalAvatarController(input: {
       visual.torso.visible = visibility === "full-body" || visibility === "upper-body";
       visual.lowerBody.visible = visibility === "full-body";
       visual.head.visible = visibility === "full-body" || visibility === "upper-body";
-      visual.leftHand.visible = visibility !== "hidden" && controllerProfile !== "vr_single_right_controller";
-      visual.rightHand.visible = visibility !== "hidden" && controllerProfile !== "vr_single_left_controller";
+      visual.leftHand.visible = visibility !== "hidden";
+      visual.rightHand.visible = visibility !== "hidden";
       visual.aura.visible = visibility === "full-body" || visibility === "upper-body";
-
-      if (controllerProfile === "vr_no_controllers") {
-        visual.leftHand.visible = false;
-        visual.rightHand.visible = false;
-      }
 
       diagnostics.inputMode = frame.inputMode;
       diagnostics.locomotionState = locomotion.state;

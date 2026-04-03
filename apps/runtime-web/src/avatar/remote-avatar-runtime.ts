@@ -54,6 +54,7 @@ interface RemoteAvatarParticipantModel {
   poseBuffer: AvatarPoseBuffer;
   leftHandVisible: boolean;
   rightHandVisible: boolean;
+  lastPoseAppliedAtMs: number | null;
 }
 
 interface RemoteAvatarEntity {
@@ -140,7 +141,7 @@ function resolveInterpolatedPose(sample: ReturnType<typeof sampleAvatarPoseBuffe
   if (!latest) {
     return null;
   }
-  if (renderAtMs - latest.sentAtMs > 180) {
+  if (renderAtMs - latest.sentAtMs > 320) {
     return null;
   }
   return latest;
@@ -166,7 +167,8 @@ export function createRemoteAvatarRuntime(input: {
         poseFrame: null,
         poseBuffer: createAvatarPoseBuffer(),
         leftHandVisible: false,
-        rightHandVisible: false
+        rightHandVisible: false,
+        lastPoseAppliedAtMs: null
       };
       remoteAvatarParticipants.set(participantId, model);
     }
@@ -325,20 +327,23 @@ export function createRemoteAvatarRuntime(input: {
           bodyMaterial.color.setHex(color);
         }
         if (poseFrame) {
-          entity.body.position.set(poseFrame.root.x, 0.92, poseFrame.root.z);
-          entity.head.position.set(poseFrame.head.x, poseFrame.head.y, poseFrame.head.z);
-          entity.leftHand.position.set(poseFrame.leftHand.x, poseFrame.leftHand.y, poseFrame.leftHand.z);
-          entity.rightHand.position.set(poseFrame.rightHand.x, poseFrame.rightHand.y, poseFrame.rightHand.z);
+          entity.body.position.lerp(new THREE.Vector3(poseFrame.root.x, 0.92, poseFrame.root.z), 0.35);
+          entity.head.position.lerp(new THREE.Vector3(poseFrame.head.x, poseFrame.head.y, poseFrame.head.z), 0.45);
+          entity.leftHand.position.lerp(new THREE.Vector3(poseFrame.leftHand.x, poseFrame.leftHand.y, poseFrame.leftHand.z), 0.45);
+          entity.rightHand.position.lerp(new THREE.Vector3(poseFrame.rightHand.x, poseFrame.rightHand.y, poseFrame.rightHand.z), 0.45);
           entity.leftHand.visible = poseFrame.leftHand.gesture > 0;
           entity.rightHand.visible = poseFrame.rightHand.gesture > 0;
           if (participant) {
             participant.leftHandVisible = entity.leftHand.visible;
             participant.rightHandVisible = entity.rightHand.visible;
+            participant.lastPoseAppliedAtMs = nowMs;
           }
         } else {
-          entity.leftHand.visible = false;
-          entity.rightHand.visible = false;
-          if (participant) {
+          const lastPoseAppliedAtMs = participant?.lastPoseAppliedAtMs ?? null;
+          const keepHandsVisible = lastPoseAppliedAtMs !== null && nowMs - lastPoseAppliedAtMs < 350;
+          entity.leftHand.visible = keepHandsVisible && (participant?.leftHandVisible ?? false);
+          entity.rightHand.visible = keepHandsVisible && (participant?.rightHandVisible ?? false);
+          if (participant && !keepHandsVisible) {
             participant.leftHandVisible = false;
             participant.rightHandVisible = false;
           }

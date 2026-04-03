@@ -99,6 +99,8 @@ test("createLocalAvatarController updates diagnostics for vr fallback hands-only
   assert.equal(controller.diagnostics.controllerProfile, "vr_no_controllers");
   assert.equal(controller.diagnostics.fallbackReason, "xr_input_missing_controllers");
   assert.equal(controller.diagnostics.xrInputProfile, "none");
+  assert.equal(controller.snapshot.leftHand.visible, true);
+  assert.equal(controller.snapshot.rightHand.visible, true);
 });
 
 test("createLocalAvatarController marks animation fallback when locomotion clip is unavailable", () => {
@@ -206,7 +208,7 @@ test("createLocalAvatarController hides lower body for mobile upper-body profile
   assert.equal(controller.diagnostics.controllerProfile, "mobile_touch_fallback");
 });
 
-test("createLocalAvatarController shows only left hand for single left vr controller", () => {
+test("createLocalAvatarController keeps fallback right hand for single left vr controller", () => {
   const controller = createLocalAvatarController({
     presets: [createPreset("preset-01")],
     diagnosticsInput: {
@@ -236,12 +238,12 @@ test("createLocalAvatarController shows only left hand for single left vr contro
   const leftHand = controller.root.children[3]!;
   const rightHand = controller.root.children[4]!;
   assert.equal(leftHand.visible, true);
-  assert.equal(rightHand.visible, false);
+  assert.equal(rightHand.visible, true);
   assert.equal(controller.diagnostics.controllerProfile, "vr_single_left_controller");
   assert.equal(controller.diagnostics.fallbackReason, "xr_input_partial_fallback:left_only");
   assert.equal(controller.diagnostics.xrInputProfile, "left-only");
   assert.equal(controller.snapshot.leftHand.visible, true);
-  assert.equal(controller.snapshot.rightHand.visible, false);
+  assert.equal(controller.snapshot.rightHand.visible, true);
 });
 
 test("createLocalAvatarController shows both hands for dual vr controllers", () => {
