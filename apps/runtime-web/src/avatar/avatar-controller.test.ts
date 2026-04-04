@@ -238,6 +238,42 @@ test("createLocalAvatarController reduces torso pitch for tracked vr movement", 
   assert.equal(Math.abs(vr.root.children[0]!.rotation.x) < Math.abs(desktop.root.children[0]!.rotation.x), true);
 });
 
+test("createLocalAvatarController falls back to phase two body path when natural locomotion is disabled", () => {
+  const controller = createLocalAvatarController({
+    presets: [createPreset("preset-01")],
+    diagnosticsInput: {
+      catalogId: "technical-v1",
+      packUrl: "/assets/avatars/avatar-pack.v1.glb",
+      packFormat: "procedural-debug-v1",
+      presetCount: 1,
+      validatorSummary: ["preset-01:11800"],
+      sandboxEntryPoint: "/assets/avatars/catalog.v1.json"
+    }
+  });
+
+  controller.update({
+    deltaSeconds: 0.25,
+    inputMode: "desktop",
+    xrPresenting: false,
+    naturalLocomotionEnabled: false,
+    xrInputProfile: null,
+    rootPosition: { x: 0, y: 0, z: 0 },
+    yaw: 0,
+    headPosition: { x: 0, y: 1.6, z: 0 },
+    moveX: 0,
+    moveZ: 1,
+    turnRate: 0
+  });
+
+  const torso = controller.root.children[0]!;
+  const lowerBody = controller.root.children[1]!;
+  assert.equal(torso.rotation.x, 0);
+  assert.equal(lowerBody.position.z, 0);
+  assert.equal(controller.diagnostics.qualityMode, null);
+  assert.equal(controller.diagnostics.skatingMetric, 0);
+  assert.equal(controller.diagnostics.bodyLean, 0);
+});
+
 test("createLocalAvatarController hides lower body for mobile upper-body profile", () => {
   const controller = createLocalAvatarController({
     presets: [createPreset("preset-01")],

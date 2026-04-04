@@ -288,3 +288,44 @@ test("remote avatar runtime degrades quality mode for distant avatars", () => {
 
   assert.equal(debugState.remoteAvatarParticipants[0]?.qualityMode, "far");
 });
+
+test("remote avatar runtime falls back to phase two body path when natural locomotion is disabled", () => {
+  const scene = new THREE.Scene();
+  const runtime = createRemoteAvatarRuntime({
+    scene,
+    bodyGeometry: new THREE.CapsuleGeometry(0.24, 0.8, 6, 12),
+    headGeometry: new THREE.SphereGeometry(0.18, 20, 20),
+    localParticipantId: "local"
+  });
+  const debugState = createDebugState();
+
+  runtime.applySnapshotParticipants([{
+    participantId: "remote-1",
+    displayName: "Remote One",
+    mode: "desktop",
+    muted: false,
+    activeMedia: { audio: true, screenShare: false },
+    rootTransform: { x: 1, y: 0, z: -1 },
+    bodyTransform: { x: 1, y: 0, z: -1 },
+    headTransform: { x: 1, y: 1.6, z: -1 },
+    updatedAt: new Date().toISOString()
+  }] as never, debugState);
+  runtime.ingestPoseFrame("remote-1", {
+    seq: 1,
+    sentAtMs: Date.now(),
+    flags: 0,
+    root: { x: 1, y: 0, z: -1, yaw: 0, vx: 0, vz: 0 },
+    head: { x: 1, y: 1.6, z: -1, qx: 0, qy: 0, qz: 0, qw: 1 },
+    leftHand: { x: 0.8, y: 1.2, z: -0.9, qx: 0, qy: 0, qz: 0, qw: 1, gesture: 1 },
+    rightHand: { x: 1.2, y: 1.2, z: -0.9, qx: 0, qy: 0, qz: 0, qw: 1, gesture: 1 },
+    locomotion: { mode: 1, speed: 1, angularVelocity: 0 }
+  }, debugState);
+
+  runtime.update(0.016, debugState, { naturalLocomotionEnabled: false });
+
+  assert.equal(debugState.remoteAvatarParticipants[0]?.qualityMode, "far");
+  assert.equal(debugState.remoteAvatarParticipants[0]?.skatingMetric, 0);
+  const body = scene.children.find((item) => item instanceof THREE.Mesh) as THREE.Mesh | undefined;
+  assert.ok(body);
+  assert.equal(body.rotation.x, 0);
+});

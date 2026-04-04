@@ -173,10 +173,20 @@ async function readNoahDebug(page: Page): Promise<{
   roomStateConnected?: boolean;
   remoteAvatarReliableCount?: number;
   remoteAvatarPoseCount?: number;
+  avatarDebug?: {
+    locomotionState?: string | null;
+    qualityMode?: string | null;
+    skatingMetric?: number;
+    footingCorrectionActive?: boolean;
+    bodyLean?: number;
+  };
   remoteAvatarParticipants?: Array<{
     hasReliableState?: boolean;
     hasPoseFrame?: boolean;
     presenceSeen?: boolean;
+    locomotionState?: string;
+    qualityMode?: string;
+    skatingMetric?: number;
     leftHandVisible?: boolean;
     rightHandVisible?: boolean;
   }>;
@@ -186,10 +196,20 @@ async function readNoahDebug(page: Page): Promise<{
       roomStateConnected?: boolean;
       remoteAvatarReliableCount?: number;
       remoteAvatarPoseCount?: number;
+      avatarDebug?: {
+        locomotionState?: string | null;
+        qualityMode?: string | null;
+        skatingMetric?: number;
+        footingCorrectionActive?: boolean;
+        bodyLean?: number;
+      };
       remoteAvatarParticipants?: Array<{
         hasReliableState?: boolean;
         hasPoseFrame?: boolean;
         presenceSeen?: boolean;
+        locomotionState?: string;
+        qualityMode?: string;
+        skatingMetric?: number;
         leftHandVisible?: boolean;
         rightHandVisible?: boolean;
       }>;
@@ -459,6 +479,59 @@ test.describe("@staging runtime HUD space selector", () => {
     }
   });
 
+  test("demo-room preserves legacy sync and exposes phase three locomotion diagnostics on staging", async ({ browser, request }) => {
+    const pageA = await browser.newPage();
+    const pageB = await browser.newPage();
+    try {
+      const manifestResponse = await request.get(`/api/rooms/${stagingRoomId}/manifest`);
+      expect(manifestResponse.ok()).toBeTruthy();
+      const manifest = await manifestResponse.json() as {
+        avatars?: { avatarLegIkEnabled?: boolean; avatarsEnabled?: boolean; avatarPoseBinaryEnabled?: boolean };
+      };
+      expect(manifest.avatars?.avatarsEnabled).toBe(true);
+      expect(manifest.avatars?.avatarPoseBinaryEnabled).toBe(true);
+      expect(manifest.avatars?.avatarLegIkEnabled).toBe(true);
+
+      await pageA.goto(`/rooms/${stagingRoomId}?debug=1&bot=circle`);
+      await pageB.goto(`/rooms/${stagingRoomId}?debug=1&bot=line`);
+
+      await expect.poll(async () => {
+        const debugA = await readNoahDebug(pageA);
+        const debugB = await readNoahDebug(pageB);
+        return {
+          legacySyncOk: (debugA?.remoteAvatarReliableCount ?? 0) >= 1
+            && (debugA?.remoteAvatarPoseCount ?? 0) >= 1
+            && Boolean(debugA?.remoteAvatarParticipants?.some((item) => item.presenceSeen && item.hasReliableState && item.hasPoseFrame)),
+          localPhaseThreeOk: Boolean(
+            debugA?.avatarDebug?.qualityMode === "near"
+            && typeof debugA?.avatarDebug?.skatingMetric === "number"
+            && typeof debugA?.avatarDebug?.bodyLean === "number"
+          ),
+          remotePhaseThreeOk: Boolean(
+            debugB?.remoteAvatarParticipants?.some((item) =>
+              item.presenceSeen
+              && item.hasReliableState
+              && item.hasPoseFrame
+              && (item.qualityMode === "near" || item.qualityMode === "far")
+              && typeof item.skatingMetric === "number"
+              && ["walk", "strafe", "backpedal", "turn", "idle"].includes(item.locomotionState ?? "")
+            )
+          )
+        };
+      }, {
+        timeout: 30000,
+        intervals: [1000, 2000, 3000]
+      }).toEqual({
+        legacySyncOk: true,
+        localPhaseThreeOk: true,
+        remotePhaseThreeOk: true
+      });
+    } finally {
+      await pageA.close();
+      await pageB.close();
+    }
+  });
+
   test("hall keeps avatar sync working between two web clients on staging", async ({ browser }) => {
     const hallRoomId = stagingSceneRooms[0]!.roomId;
     const pageA = await browser.newPage();
@@ -512,6 +585,46 @@ test.describe("@staging runtime HUD space selector", () => {
       }).toEqual({
         aHandsReady: true,
         bHandsReady: true
+      });
+    } finally {
+      await pageA.close();
+      await pageB.close();
+    }
+  });
+
+  test("hall keeps phase three locomotion diagnostics stable on staging", async ({ browser }) => {
+    const hallRoomId = stagingSceneRooms[0]!.roomId;
+    const pageA = await browser.newPage();
+    const pageB = await browser.newPage();
+    try {
+      await pageA.goto(`/rooms/${hallRoomId}?debug=1&bot=circle`);
+      await pageB.goto(`/rooms/${hallRoomId}?debug=1&bot=line`);
+
+      await expect.poll(async () => {
+        const debugA = await readNoahDebug(pageA);
+        const debugB = await readNoahDebug(pageB);
+        return {
+          localNaturalness: Boolean(
+            debugA?.avatarDebug?.qualityMode === "near"
+            && typeof debugA?.avatarDebug?.skatingMetric === "number"
+            && typeof debugA?.avatarDebug?.bodyLean === "number"
+          ),
+          remoteNaturalness: Boolean(
+            debugB?.remoteAvatarParticipants?.some((item) =>
+              item.presenceSeen
+              && item.hasReliableState
+              && item.hasPoseFrame
+              && (item.qualityMode === "near" || item.qualityMode === "far")
+              && typeof item.skatingMetric === "number"
+            )
+          )
+        };
+      }, {
+        timeout: 45000,
+        intervals: [1000, 2000, 3000]
+      }).toEqual({
+        localNaturalness: true,
+        remoteNaturalness: true
       });
     } finally {
       await pageA.close();

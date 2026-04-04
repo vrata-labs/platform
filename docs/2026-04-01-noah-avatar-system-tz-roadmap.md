@@ -1335,6 +1335,8 @@ apps/runtime-web/src/avatar/
 
 # Phase 3 — Ноги, gait solver и body naturalness
 
+Статус на 2026-04-04: `core delivered on staging`, follow-up хвост остаётся по `avatarLegIkEnabled` runtime gate, `record/replay` trace harness и обзорному manual acceptance.
+
 ## Цель
 
 Сделать походку и корпус естественными, чтобы аватары были похожи на social VR avatars, а не на “руки и голова на палке”.
@@ -1359,7 +1361,12 @@ apps/runtime-web/src/avatar/
 
 - `apps/runtime-web/src/avatar/avatar-ik.ts`
 - `apps/runtime-web/src/avatar/avatar-locomotion.ts`
-- `apps/runtime-web/src/avatar/avatar-lod.ts`
+- `apps/runtime-web/src/avatar/avatar-controller.ts`
+- `apps/runtime-web/src/avatar/remote-avatar-runtime.ts`
+- `apps/runtime-web/src/avatar/avatar-debug.ts`
+- `apps/runtime-web/src/main.ts`
+- `tests/e2e/runtime.spec.ts`
+- `tests/e2e/runtime-staging.spec.ts`
 - avatar animation assets
 
 ## Definition of Done
@@ -1394,6 +1401,24 @@ apps/runtime-web/src/avatar/
 
 - natural locomotion `v1`
 - gait regression scenes / traces
+
+## Что уже реализовано
+
+- shared locomotion classifier/hysteresis для `self` и `remote`
+- общий `state <-> mode` contract для transport/runtime
+- `pelvis/spine refinement`, `body lean`, `turn bias`
+- `anti-foot-skating metric/correction`
+- `near/far` quality mode
+- `near-avatar foot planting v1`
+- локальные и staging e2e проверки для legacy sync и нового locomotion diagnostics path
+- staging verification пройдена для commit `571fd2b` и deploy run `23986540547`
+
+## Что осталось до полного закрытия Phase 3
+
+- повязать natural locomotion path на жёсткий runtime gate через `avatarLegIkEnabled`
+- добавить обещанный `record/replay` / deterministic trace harness
+- завершить расширенный staging suite для старого и нового avatar flow как постоянный regression gate
+- в конце провести обзорный manual acceptance: desktop/desktop, desktop + Quest/WebXR, near/far social interactions, turn-in-place / strafe / backpedal / sharp stop
 
 ---
 

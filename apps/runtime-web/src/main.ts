@@ -956,6 +956,7 @@ function updateLocalAvatar(delta: number): void {
     deltaSeconds: delta,
     inputMode,
     xrPresenting: renderer.xr.isPresenting,
+    naturalLocomotionEnabled: runtimeFlags.avatarLegIkEnabled,
     xrInputProfile: lastAvatarXrInputProfile,
     rootPosition: {
       x: player.position.x,
@@ -1493,7 +1494,9 @@ renderer.setAnimationLoop(() => {
   }
   updateMovement(delta);
   updateLocalAvatar(delta);
-  remoteAvatarRuntime.update(delta, debugState);
+  remoteAvatarRuntime.update(delta, debugState, {
+    naturalLocomotionEnabled: runtimeFlags.avatarLegIkEnabled
+  });
   debugState.avatarPoseTransport.adaptivePlaybackDelayMs = debugState.remoteAvatarParticipants.length > 0
     ? Math.max(...debugState.remoteAvatarParticipants.map((participant) => participant.playbackDelayMs))
     : 100;
