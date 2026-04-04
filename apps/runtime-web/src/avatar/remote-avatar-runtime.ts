@@ -328,8 +328,9 @@ export function createRemoteAvatarRuntime(input: {
           entity.leftHand.position.lerp(new THREE.Vector3(poseFrame.leftHand.x, poseFrame.leftHand.y, poseFrame.leftHand.z), 0.45);
           entity.rightHand.position.lerp(new THREE.Vector3(poseFrame.rightHand.x, poseFrame.rightHand.y, poseFrame.rightHand.z), 0.45);
           entity.body.lookAt(poseFrame.head.x, 0.92, poseFrame.head.z);
-          entity.leftHand.visible = poseFrame.leftHand.gesture > 0;
-          entity.rightHand.visible = poseFrame.rightHand.gesture > 0;
+          const forceVrHandsVisible = reliableState?.inputMode === "vr-controller" || reliableState?.inputMode === "vr-hand";
+          entity.leftHand.visible = forceVrHandsVisible || poseFrame.leftHand.gesture > 0;
+          entity.rightHand.visible = forceVrHandsVisible || poseFrame.rightHand.gesture > 0;
           if (participant) {
             participant.leftHandVisible = entity.leftHand.visible;
             participant.rightHandVisible = entity.rightHand.visible;

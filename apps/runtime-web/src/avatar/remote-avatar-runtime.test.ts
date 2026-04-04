@@ -116,6 +116,52 @@ test("remote avatar runtime reflects hand visibility from pose gestures", () => 
   assert.equal(debugState.remoteAvatarParticipants[0]?.rightHandVisible, false);
 });
 
+test("remote avatar runtime forces VR hands visible when pose frames arrive", () => {
+  const scene = new THREE.Scene();
+  const runtime = createRemoteAvatarRuntime({
+    scene,
+    bodyGeometry: new THREE.CapsuleGeometry(0.24, 0.8, 6, 12),
+    headGeometry: new THREE.SphereGeometry(0.18, 20, 20),
+    localParticipantId: "local"
+  });
+  const debugState = createDebugState();
+  runtime.ingestReliableState({
+    participantId: "remote-vr",
+    avatarId: "preset-01",
+    inputMode: "vr-controller",
+    updatedAt: new Date().toISOString(),
+    audioActive: false
+  }, debugState);
+  runtime.applySnapshotParticipants([
+    {
+      participantId: "remote-vr",
+      displayName: "Remote VR",
+      mode: "vr",
+      muted: false,
+      activeMedia: { audio: false, screenShare: false },
+      rootTransform: { x: 0, y: 0, z: 0 },
+      bodyTransform: { x: 0, y: 0, z: 0 },
+      headTransform: { x: 0, y: 1.6, z: 0 },
+      updatedAt: new Date().toISOString()
+    }
+  ] as never, debugState);
+  runtime.ingestPoseFrame("remote-vr", {
+    seq: 1,
+    sentAtMs: Date.now(),
+    flags: 0,
+    root: { x: 0, y: 0, z: 0, yaw: 0, vx: 0, vz: 0 },
+    head: { x: 0, y: 1.6, z: 0, qx: 0, qy: 0, qz: 0, qw: 1 },
+    leftHand: { x: -0.2, y: 1.2, z: 0, qx: 0, qy: 0, qz: 0, qw: 1, gesture: 0 },
+    rightHand: { x: 0.2, y: 1.2, z: 0, qx: 0, qy: 0, qz: 0, qw: 1, gesture: 0 },
+    locomotion: { mode: 1, speed: 1, angularVelocity: 0 }
+  }, debugState);
+
+  runtime.update(0.016, debugState);
+
+  assert.equal(debugState.remoteAvatarParticipants[0]?.leftHandVisible, true);
+  assert.equal(debugState.remoteAvatarParticipants[0]?.rightHandVisible, true);
+});
+
 test("remote avatar runtime ignores reordered pose frames", () => {
   const scene = new THREE.Scene();
   const runtime = createRemoteAvatarRuntime({
