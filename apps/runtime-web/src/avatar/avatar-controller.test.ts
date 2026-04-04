@@ -235,6 +235,8 @@ test("createLocalAvatarController reduces torso pitch for tracked vr movement", 
     turnRate: 0
   });
 
+  assert.equal(vr.root.children[0]!.rotation.x, 0);
+  assert.equal(vr.diagnostics.bodyLean, 0);
   assert.equal(Math.abs(vr.root.children[0]!.rotation.x) < Math.abs(desktop.root.children[0]!.rotation.x), true);
 });
 

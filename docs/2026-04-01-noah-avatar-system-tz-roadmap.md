@@ -1337,6 +1337,8 @@ apps/runtime-web/src/avatar/
 
 Статус на 2026-04-04: `delivered on staging`, follow-up хвост остаётся по `record/replay` trace harness и обзорному manual acceptance.
 
+Апдейт после ручной проверки: первый staging rollout с включённым `avatarLegIkEnabled` не прошёл приёмку из-за заметного VR jitter корпуса/головы и слабой видимой пользы на web. Staging возвращён на безопасный legacy path через `FEATURE_AVATAR_LEG_IK=false`, а natural locomotion остаётся за feature flag до доработки VR-safe поведения.
+
 ## Цель
 
 Сделать походку и корпус естественными, чтобы аватары были похожи на social VR avatars, а не на “руки и голова на палке”.

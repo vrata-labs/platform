@@ -479,7 +479,7 @@ test.describe("@staging runtime HUD space selector", () => {
     }
   });
 
-  test("demo-room preserves legacy sync and exposes phase three locomotion diagnostics on staging", async ({ browser, request }) => {
+  test("demo-room preserves legacy sync with phase three path disabled on staging", async ({ browser, request }) => {
     const pageA = await browser.newPage();
     const pageB = await browser.newPage();
     try {
@@ -490,7 +490,7 @@ test.describe("@staging runtime HUD space selector", () => {
       };
       expect(manifest.avatars?.avatarsEnabled).toBe(true);
       expect(manifest.avatars?.avatarPoseBinaryEnabled).toBe(true);
-      expect(manifest.avatars?.avatarLegIkEnabled).toBe(true);
+      expect(manifest.avatars?.avatarLegIkEnabled).toBe(false);
 
       await pageA.goto(`/rooms/${stagingRoomId}?debug=1&bot=circle`);
       await pageB.goto(`/rooms/${stagingRoomId}?debug=1&bot=line`);
@@ -502,18 +502,18 @@ test.describe("@staging runtime HUD space selector", () => {
           legacySyncOk: (debugA?.remoteAvatarReliableCount ?? 0) >= 1
             && (debugA?.remoteAvatarPoseCount ?? 0) >= 1
             && Boolean(debugA?.remoteAvatarParticipants?.some((item) => item.presenceSeen && item.hasReliableState && item.hasPoseFrame)),
-          localPhaseThreeOk: Boolean(
-            debugA?.avatarDebug?.qualityMode === "near"
-            && typeof debugA?.avatarDebug?.skatingMetric === "number"
-            && typeof debugA?.avatarDebug?.bodyLean === "number"
+          localFallbackOk: Boolean(
+            debugA?.avatarDebug?.qualityMode == null
+            && (debugA?.avatarDebug?.skatingMetric ?? 0) === 0
+            && (debugA?.avatarDebug?.bodyLean ?? 0) === 0
           ),
-          remotePhaseThreeOk: Boolean(
+          remoteFallbackOk: Boolean(
             debugB?.remoteAvatarParticipants?.some((item) =>
               item.presenceSeen
               && item.hasReliableState
               && item.hasPoseFrame
-              && (item.qualityMode === "near" || item.qualityMode === "far")
-              && typeof item.skatingMetric === "number"
+              && item.qualityMode === "far"
+              && (item.skatingMetric ?? 0) === 0
               && ["walk", "strafe", "backpedal", "turn", "idle"].includes(item.locomotionState ?? "")
             )
           )
@@ -523,8 +523,8 @@ test.describe("@staging runtime HUD space selector", () => {
         intervals: [1000, 2000, 3000]
       }).toEqual({
         legacySyncOk: true,
-        localPhaseThreeOk: true,
-        remotePhaseThreeOk: true
+        localFallbackOk: true,
+        remoteFallbackOk: true
       });
     } finally {
       await pageA.close();
@@ -592,7 +592,7 @@ test.describe("@staging runtime HUD space selector", () => {
     }
   });
 
-  test("hall keeps phase three locomotion diagnostics stable on staging", async ({ browser }) => {
+  test("hall keeps legacy avatar body path stable while phase three path is disabled on staging", async ({ browser }) => {
     const hallRoomId = stagingSceneRooms[0]!.roomId;
     const pageA = await browser.newPage();
     const pageB = await browser.newPage();
@@ -604,18 +604,18 @@ test.describe("@staging runtime HUD space selector", () => {
         const debugA = await readNoahDebug(pageA);
         const debugB = await readNoahDebug(pageB);
         return {
-          localNaturalness: Boolean(
-            debugA?.avatarDebug?.qualityMode === "near"
-            && typeof debugA?.avatarDebug?.skatingMetric === "number"
-            && typeof debugA?.avatarDebug?.bodyLean === "number"
+          localFallback: Boolean(
+            debugA?.avatarDebug?.qualityMode == null
+            && (debugA?.avatarDebug?.skatingMetric ?? 0) === 0
+            && (debugA?.avatarDebug?.bodyLean ?? 0) === 0
           ),
-          remoteNaturalness: Boolean(
+          remoteFallback: Boolean(
             debugB?.remoteAvatarParticipants?.some((item) =>
               item.presenceSeen
               && item.hasReliableState
               && item.hasPoseFrame
-              && (item.qualityMode === "near" || item.qualityMode === "far")
-              && typeof item.skatingMetric === "number"
+              && item.qualityMode === "far"
+              && (item.skatingMetric ?? 0) === 0
             )
           )
         };
@@ -623,8 +623,8 @@ test.describe("@staging runtime HUD space selector", () => {
         timeout: 45000,
         intervals: [1000, 2000, 3000]
       }).toEqual({
-        localNaturalness: true,
-        remoteNaturalness: true
+        localFallback: true,
+        remoteFallback: true
       });
     } finally {
       await pageA.close();
