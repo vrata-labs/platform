@@ -1623,6 +1623,13 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (runtimeFlags.avatarsEnabled) {
+    await bootLocalAvatarPresetSession({
+      catalogUrl: avatarCatalogUrl,
+      preferredAvatarId: query.get("avatar") ?? undefined
+    });
+  }
+
   if (boot.sceneBundleUrl && runtimeFlags.sceneBundles) {
     const sceneResult = await startSceneBundleSession({
       scene,
@@ -1647,13 +1654,6 @@ async function main(): Promise<void> {
     if (sceneResult.note) {
       void reportDiagnostics(sceneResult.note);
     }
-  }
-
-  if (runtimeFlags.avatarsEnabled) {
-    await bootLocalAvatarPresetSession({
-      catalogUrl: avatarCatalogUrl,
-      preferredAvatarId: query.get("avatar") ?? undefined
-    });
   }
 
   applyPostBootControls({
