@@ -7,9 +7,15 @@ export interface AvatarDiagnostics {
   selectedAvatarId: string | null;
   inputMode: string | null;
   locomotionState: string | null;
+  locomotionTransitioned: boolean;
+  qualityMode: string | null;
+  skatingMetric: number;
+  footLockStrength: number;
+  footingCorrectionActive: boolean;
   visibilityState: string | null;
   solveState: string | null;
   animationState: string | null;
+  bodyLean: number;
   activeControllerCount: number;
   controllerProfile: string | null;
   xrInputProfile: string | null;
@@ -29,9 +35,15 @@ export function createEmptyAvatarDiagnostics(): AvatarDiagnostics {
     selectedAvatarId: null,
     inputMode: null,
     locomotionState: null,
+    locomotionTransitioned: false,
+    qualityMode: null,
+    skatingMetric: 0,
+    footLockStrength: 0,
+    footingCorrectionActive: false,
     visibilityState: null,
     solveState: null,
     animationState: null,
+    bodyLean: 0,
     activeControllerCount: 0,
     controllerProfile: null,
     xrInputProfile: null,
@@ -70,9 +82,15 @@ export function createAvatarLoadedDiagnostics(input: {
   validatorSummary: string[];
   inputMode?: string | null;
   locomotionState?: string | null;
+  locomotionTransitioned?: boolean;
+  qualityMode?: string | null;
+  skatingMetric?: number;
+  footLockStrength?: number;
+  footingCorrectionActive?: boolean;
   visibilityState?: string | null;
   solveState?: string | null;
   animationState?: string | null;
+  bodyLean?: number;
   activeControllerCount?: number;
   controllerProfile?: string | null;
   xrInputProfile?: string | null;
@@ -87,9 +105,15 @@ export function createAvatarLoadedDiagnostics(input: {
     selectedAvatarId: input.selectedAvatarId,
     inputMode: input.inputMode ?? null,
     locomotionState: input.locomotionState ?? null,
+    locomotionTransitioned: input.locomotionTransitioned ?? false,
+    qualityMode: input.qualityMode ?? null,
+    skatingMetric: input.skatingMetric ?? 0,
+    footLockStrength: input.footLockStrength ?? 0,
+    footingCorrectionActive: input.footingCorrectionActive ?? false,
     visibilityState: input.visibilityState ?? null,
     solveState: input.solveState ?? null,
     animationState: input.animationState ?? null,
+    bodyLean: input.bodyLean ?? 0,
     activeControllerCount: input.activeControllerCount ?? 0,
     controllerProfile: input.controllerProfile ?? null,
     xrInputProfile: input.xrInputProfile ?? null,

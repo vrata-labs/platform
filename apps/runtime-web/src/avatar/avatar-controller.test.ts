@@ -167,11 +167,75 @@ test("createLocalAvatarController applies visible walk pose to body and hands", 
   });
 
   const torso = controller.root.children[0]!;
+  const lowerBody = controller.root.children[1]!;
   const leftHand = controller.root.children[3];
   const rightHand = controller.root.children[4];
   assert.equal(torso.position.y > 1.12, true);
+  assert.equal(torso.rotation.x > 0, true);
+  assert.notEqual(lowerBody.rotation.z, 0);
   assert.notEqual(leftHand.position.z, 0.12);
   assert.notEqual(rightHand.position.z, 0.12);
+  assert.equal(controller.diagnostics.locomotionTransitioned, true);
+  assert.equal(controller.diagnostics.footingCorrectionActive, true);
+  assert.equal(controller.diagnostics.skatingMetric > 0, true);
+  assert.notEqual(controller.diagnostics.bodyLean, 0);
+});
+
+test("createLocalAvatarController reduces torso pitch for tracked vr movement", () => {
+  const preset = createPreset("preset-01");
+  preset.preset.validation.animationClips = ["idle", "walk"];
+
+  const desktop = createLocalAvatarController({
+    presets: [preset],
+    diagnosticsInput: {
+      catalogId: "technical-v1",
+      packUrl: "/assets/avatars/avatar-pack.v1.glb",
+      packFormat: "procedural-debug-v1",
+      presetCount: 1,
+      validatorSummary: ["preset-01:1000"],
+      sandboxEntryPoint: "/assets/avatars/catalog.v1.json"
+    }
+  });
+  desktop.update({
+    deltaSeconds: 0.25,
+    inputMode: "desktop",
+    xrPresenting: false,
+    xrInputProfile: null,
+    rootPosition: { x: 0, y: 0, z: 0 },
+    yaw: 0,
+    headPosition: { x: 0, y: 1.6, z: 0 },
+    moveX: 0,
+    moveZ: 1,
+    turnRate: 0
+  });
+
+  const vr = createLocalAvatarController({
+    presets: [preset],
+    diagnosticsInput: {
+      catalogId: "technical-v1",
+      packUrl: "/assets/avatars/avatar-pack.v1.glb",
+      packFormat: "procedural-debug-v1",
+      presetCount: 1,
+      validatorSummary: ["preset-01:1000"],
+      sandboxEntryPoint: "/assets/avatars/catalog.v1.json"
+    }
+  });
+  vr.update({
+    deltaSeconds: 0.25,
+    inputMode: "vr-controller",
+    xrPresenting: true,
+    xrInputProfile: "dual",
+    rootPosition: { x: 0, y: 0, z: 0 },
+    yaw: 0,
+    headPosition: { x: 0, y: 1.6, z: 0 },
+    leftHand: { x: -0.2, y: 1.2, z: 0.2 },
+    rightHand: { x: 0.2, y: 1.2, z: 0.2 },
+    moveX: 0,
+    moveZ: 1,
+    turnRate: 0
+  });
+
+  assert.equal(Math.abs(vr.root.children[0]!.rotation.x) < Math.abs(desktop.root.children[0]!.rotation.x), true);
 });
 
 test("createLocalAvatarController hides lower body for mobile upper-body profile", () => {

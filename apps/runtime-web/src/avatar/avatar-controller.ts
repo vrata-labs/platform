@@ -6,8 +6,13 @@ import {
   type AvatarDiagnostics
 } from "./avatar-debug.js";
 import { computeAvatarAnimationPose, selectAvatarAnimationClip } from "./avatar-animation.js";
-import { resolveAvatarLocomotion } from "./avatar-locomotion.js";
-import { solveUpperBodyPose, type AvatarPosePoint } from "./avatar-ik.js";
+import {
+  resolveAvatarFootPlanting,
+  resolveAvatarFootingCorrection,
+  resolveAvatarLocomotion,
+  type AvatarLocomotionState
+} from "./avatar-locomotion.js";
+import { resolveAvatarBodyRefinement, solveUpperBodyPose, type AvatarPosePoint } from "./avatar-ik.js";
 import type { AvatarInputMode, LoadedAvatarPreset, LocalAvatarSnapshotV1 } from "./avatar-types.js";
 import { resolveAvatarViewProfile } from "./avatar-visibility.js";
 
@@ -168,9 +173,15 @@ export function createLocalAvatarController(input: {
     selectedAvatarId: selectedPreset.preset.avatarId,
     inputMode: null,
     locomotionState: "idle",
+    locomotionTransitioned: false,
+    qualityMode: "near",
+    skatingMetric: 0,
+    footLockStrength: 0,
+    footingCorrectionActive: false,
     visibilityState: "full-body",
     solveState: "fallback",
     animationState: "idle",
+    bodyLean: 0,
     activeControllerCount: 0,
     controllerProfile: "desktop_no_controllers",
     xrInputProfile: "none"
@@ -206,7 +217,8 @@ export function createLocalAvatarController(input: {
       const locomotion = resolveAvatarLocomotion({
         moveX: frame.moveX,
         moveZ: frame.moveZ,
-        turnRate: frame.turnRate
+        turnRate: frame.turnRate,
+        previousState: snapshot.locomotionState as AvatarLocomotionState
       });
       const solve = solveUpperBodyPose({
         root: frame.rootPosition,
@@ -235,20 +247,46 @@ export function createLocalAvatarController(input: {
         turnRate: frame.turnRate
       });
       const vrDirectTracking = frame.xrPresenting && (frame.inputMode === "vr-controller" || frame.inputMode === "vr-hand");
+      const bodyRefinement = resolveAvatarBodyRefinement({
+        locomotionState: locomotion.state,
+        speed: locomotion.speed,
+        turnRate: frame.turnRate,
+        inputMode: frame.inputMode,
+        xrPresenting: frame.xrPresenting
+      });
+      const footing = resolveAvatarFootingCorrection({
+        locomotionState: locomotion.state,
+        speed: locomotion.speed,
+        turnRate: frame.turnRate,
+        transitioned: locomotion.transitioned
+      });
+      const planting = resolveAvatarFootPlanting({
+        locomotionState: locomotion.state,
+        elapsedSeconds: animationElapsedSeconds,
+        speed: locomotion.speed,
+        footLockStrength: footing.footLockStrength,
+        qualityMode: "near"
+      });
 
       visual.root.position.set(frame.rootPosition.x, frame.rootPosition.y, frame.rootPosition.z);
       visual.root.rotation.y = frame.yaw;
 
-      visual.torso.position.set(0, 1.12 + pose.bodyBob, 0);
-      visual.torso.rotation.z = pose.bodyRoll;
-      visual.lowerBody.position.set(0, 0.52 + pose.bodyBob * 0.35, 0);
-      visual.lowerBody.rotation.z = pose.bodyRoll * 0.5;
+      visual.torso.position.set(bodyRefinement.pelvisOffsetX, 1.12 + pose.bodyBob + bodyRefinement.pelvisOffsetY, 0);
+      visual.torso.rotation.x = bodyRefinement.torsoPitch;
+      visual.torso.rotation.z = pose.bodyRoll + bodyRefinement.torsoRoll;
+      visual.lowerBody.position.set(
+        bodyRefinement.pelvisOffsetX * (0.45 - footing.footLockStrength * 0.12) + planting.stanceOffsetX,
+        0.52 + pose.bodyBob * 0.35 * footing.lowerBodyBobScale + bodyRefinement.pelvisOffsetY * 0.5,
+        planting.stanceOffsetZ
+      );
+      visual.lowerBody.rotation.y = planting.lowerBodyYaw;
+      visual.lowerBody.rotation.z = pose.bodyRoll * (0.5 - footing.footLockStrength * 0.16) + bodyRefinement.lowerBodyRoll;
       visual.head.position.set(
         solve.headLocal.x,
         vrDirectTracking ? solve.headLocal.y : Math.max(solve.headLocal.y, viewProfile.poseProfile.headHeight),
         solve.headLocal.z
       );
-      visual.head.rotation.z = pose.headTilt;
+      visual.head.rotation.z = pose.headTilt + bodyRefinement.headTiltBias;
       visual.leftHand.position.set(
         solve.leftHandLocal.x,
         solve.leftHandLocal.y + (vrDirectTracking ? 0 : pose.leftHandYOffset),
@@ -272,9 +310,15 @@ export function createLocalAvatarController(input: {
 
       diagnostics.inputMode = frame.inputMode;
       diagnostics.locomotionState = locomotion.state;
+      diagnostics.locomotionTransitioned = locomotion.transitioned;
+      diagnostics.qualityMode = planting.qualityMode;
+      diagnostics.skatingMetric = footing.skatingMetric;
+      diagnostics.footLockStrength = footing.footLockStrength;
+      diagnostics.footingCorrectionActive = footing.correctionActive;
       diagnostics.visibilityState = visibility;
       diagnostics.solveState = solve.solveState;
       diagnostics.animationState = animation.clip;
+      diagnostics.bodyLean = visual.torso.rotation.z;
       diagnostics.activeControllerCount = controllerCount;
       diagnostics.controllerProfile = controllerProfile;
       diagnostics.xrInputProfile = frame.xrInputProfile ?? null;

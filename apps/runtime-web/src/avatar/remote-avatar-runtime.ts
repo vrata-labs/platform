@@ -1,14 +1,24 @@
 import * as THREE from "three";
 
+import { computeAvatarAnimationPose } from "./avatar-animation.js";
 import { createAvatarPoseBuffer, pushAvatarPoseFrame, pruneAvatarPoseBuffer, sampleAvatarPoseBuffer, type AvatarPoseBuffer } from "./avatar-pose-buffer.js";
 import { createMotionTrack, pushMotionSample, sampleMotion, type MotionTrack } from "../motion-state.js";
 import type { PresenceState } from "../index.js";
-import type { CompactPoseFrame } from "./avatar-types.js";
+import type { AvatarInputMode, AvatarQualityProfile, CompactPoseFrame } from "./avatar-types.js";
+import { resolveAvatarBodyRefinement } from "./avatar-ik.js";
+import {
+  mapAvatarLocomotionModeToState,
+  resolveAvatarFootPlanting,
+  resolveAvatarFootingCorrection,
+  resolveAvatarQualityMode,
+  type AvatarLocomotionState,
+  type AvatarQualityMode
+} from "./avatar-locomotion.js";
 
 export interface RemoteAvatarReliableStateView {
   participantId: string;
   avatarId: string;
-  inputMode: string;
+  inputMode: AvatarInputMode;
   updatedAt: string;
   audioActive: boolean;
 }
@@ -35,6 +45,9 @@ export interface RemoteAvatarDebugState {
     presenceSeen: boolean;
     hasReliableState: boolean;
     hasPoseFrame: boolean;
+    locomotionState: AvatarLocomotionState;
+    qualityMode: AvatarQualityMode;
+    skatingMetric: number;
     leftHandVisible: boolean;
     rightHandVisible: boolean;
     poseBufferDepth: number;
@@ -52,9 +65,14 @@ interface RemoteAvatarParticipantModel {
   reliableState: RemoteAvatarReliableStateView | null;
   poseFrame: RemoteAvatarPoseFrameView | null;
   poseBuffer: AvatarPoseBuffer;
+  locomotionState: AvatarLocomotionState;
+  qualityMode: AvatarQualityMode;
+  skatingMetric: number;
+  lastTransitioned: boolean;
   leftHandVisible: boolean;
   rightHandVisible: boolean;
   lastPoseAppliedAtMs: number | null;
+  animationElapsedSeconds: number;
 }
 
 interface RemoteAvatarEntity {
@@ -152,6 +170,8 @@ export function createRemoteAvatarRuntime(input: {
   bodyGeometry: THREE.BufferGeometry;
   headGeometry: THREE.BufferGeometry;
   localParticipantId: string;
+  getObserverPosition?: () => { x: number; y: number; z: number };
+  qualityProfile?: AvatarQualityProfile;
 }) {
   const remoteAvatars = new Map<string, RemoteAvatarEntity>();
   const remoteMotionTracks = new Map<string, RemoteAvatarMotion>();
@@ -166,9 +186,14 @@ export function createRemoteAvatarRuntime(input: {
         reliableState: null,
         poseFrame: null,
         poseBuffer: createAvatarPoseBuffer(),
+        locomotionState: "idle",
+        qualityMode: "near",
+        skatingMetric: 0,
+        lastTransitioned: false,
         leftHandVisible: false,
         rightHandVisible: false,
-        lastPoseAppliedAtMs: null
+        lastPoseAppliedAtMs: null,
+        animationElapsedSeconds: 0
       };
       remoteAvatarParticipants.set(participantId, model);
     }
@@ -221,6 +246,9 @@ export function createRemoteAvatarRuntime(input: {
           presenceSeen: participant.presenceSeen,
           hasReliableState: participant.reliableState !== null,
           hasPoseFrame: participant.poseFrame !== null,
+          locomotionState: participant.locomotionState,
+          qualityMode: participant.qualityMode,
+          skatingMetric: participant.skatingMetric,
           leftHandVisible: participant.leftHandVisible || entity?.leftHand.visible || false,
           rightHandVisible: participant.rightHandVisible || entity?.rightHand.visible || false,
           poseBufferDepth: participant.poseBuffer.frames.length,
@@ -311,6 +339,9 @@ export function createRemoteAvatarRuntime(input: {
           pruneAvatarPoseBuffer(participant.poseBuffer, nowMs);
         }
         const poseFrame = participant ? resolveInterpolatedPose(sampleAvatarPoseBuffer(participant.poseBuffer, renderAtMs), renderAtMs) : null;
+        if (participant) {
+          participant.animationElapsedSeconds += delta;
+        }
         const bodyMaterial = entity.body.material;
         if (bodyMaterial instanceof THREE.MeshStandardMaterial) {
           const color = reliableState?.inputMode === "mobile"
@@ -323,11 +354,79 @@ export function createRemoteAvatarRuntime(input: {
           bodyMaterial.color.setHex(color);
         }
         if (poseFrame) {
-          entity.body.position.lerp(new THREE.Vector3(poseFrame.root.x, 0.92, poseFrame.root.z), 0.35);
+          const locomotionState = mapAvatarLocomotionModeToState(poseFrame.locomotion.mode);
+          const observer = input.getObserverPosition?.() ?? { x: poseFrame.root.x, y: 0, z: poseFrame.root.z };
+          const qualityMode = resolveAvatarQualityMode({
+            distanceToObserver: Math.hypot(poseFrame.root.x - observer.x, poseFrame.root.z - observer.z),
+            qualityProfile: input.qualityProfile
+          });
+          const animationPose = computeAvatarAnimationPose({
+            clip: locomotionState,
+            elapsedSeconds: participant?.animationElapsedSeconds ?? 0,
+            speed: poseFrame.locomotion.speed,
+            turnRate: poseFrame.locomotion.angularVelocity
+          });
+          const bodyRefinement = resolveAvatarBodyRefinement({
+            locomotionState,
+            speed: poseFrame.locomotion.speed,
+            turnRate: poseFrame.locomotion.angularVelocity,
+            inputMode: reliableState?.inputMode ?? "desktop",
+            xrPresenting: false
+          });
+          const transitioned = participant ? participant.locomotionState !== locomotionState : false;
+          const footing = resolveAvatarFootingCorrection({
+            locomotionState,
+            speed: poseFrame.locomotion.speed,
+            turnRate: poseFrame.locomotion.angularVelocity,
+            transitioned
+          });
+          const planting = resolveAvatarFootPlanting({
+            locomotionState,
+            elapsedSeconds: participant?.animationElapsedSeconds ?? 0,
+            speed: poseFrame.locomotion.speed,
+            footLockStrength: footing.footLockStrength,
+            qualityMode
+          });
+          if (participant) {
+            participant.locomotionState = locomotionState;
+            participant.qualityMode = qualityMode;
+            participant.skatingMetric = footing.skatingMetric;
+            participant.lastTransitioned = transitioned;
+          }
+          entity.body.position.lerp(
+            new THREE.Vector3(
+              poseFrame.root.x + bodyRefinement.pelvisOffsetX + planting.stanceOffsetX,
+              0.92 + animationPose.bodyBob * 0.6 + bodyRefinement.pelvisOffsetY,
+              poseFrame.root.z + planting.stanceOffsetZ
+            ),
+            0.35
+          );
           entity.head.position.lerp(new THREE.Vector3(poseFrame.head.x, poseFrame.head.y, poseFrame.head.z), 0.45);
-          entity.leftHand.position.lerp(new THREE.Vector3(poseFrame.leftHand.x, poseFrame.leftHand.y, poseFrame.leftHand.z), 0.45);
-          entity.rightHand.position.lerp(new THREE.Vector3(poseFrame.rightHand.x, poseFrame.rightHand.y, poseFrame.rightHand.z), 0.45);
+          entity.leftHand.position.lerp(
+            new THREE.Vector3(
+              poseFrame.leftHand.x,
+              poseFrame.leftHand.y + animationPose.leftHandYOffset * 0.45,
+              poseFrame.leftHand.z + animationPose.leftHandForward * 0.35
+            ),
+            0.45
+          );
+          entity.rightHand.position.lerp(
+            new THREE.Vector3(
+              poseFrame.rightHand.x,
+              poseFrame.rightHand.y + animationPose.rightHandYOffset * 0.45,
+              poseFrame.rightHand.z + animationPose.rightHandForward * 0.35
+            ),
+            0.45
+          );
           entity.body.lookAt(poseFrame.head.x, 0.92, poseFrame.head.z);
+          entity.body.rotation.x = THREE.MathUtils.lerp(entity.body.rotation.x, bodyRefinement.torsoPitch, 0.2);
+          entity.body.rotation.y = THREE.MathUtils.lerp(entity.body.rotation.y, planting.lowerBodyYaw, 0.2);
+          entity.body.rotation.z = THREE.MathUtils.lerp(
+            entity.body.rotation.z,
+            animationPose.bodyRoll * (0.8 - footing.footLockStrength * 0.18) + bodyRefinement.torsoRoll,
+            0.3
+          );
+          entity.head.rotation.z = THREE.MathUtils.lerp(entity.head.rotation.z, animationPose.headTilt + bodyRefinement.headTiltBias, 0.3);
           const forceVrHandsVisible = reliableState?.inputMode === "vr-controller" || reliableState?.inputMode === "vr-hand";
           entity.leftHand.visible = forceVrHandsVisible || poseFrame.leftHand.gesture > 0;
           entity.rightHand.visible = forceVrHandsVisible || poseFrame.rightHand.gesture > 0;
@@ -337,11 +436,20 @@ export function createRemoteAvatarRuntime(input: {
             participant.lastPoseAppliedAtMs = nowMs;
           }
         } else {
+          if (participant) {
+            participant.locomotionState = "idle";
+            participant.qualityMode = "far";
+            participant.skatingMetric = 0;
+          }
           if (bodySample && headSample) {
             entity.body.position.lerp(new THREE.Vector3(bodySample.x, 0.92, bodySample.z), 0.2);
             entity.head.position.lerp(new THREE.Vector3(headSample.x, 1.58, headSample.z), 0.25);
             entity.body.lookAt(headSample.x, 0.92, headSample.z);
           }
+          entity.body.rotation.x = THREE.MathUtils.lerp(entity.body.rotation.x, 0, 0.2);
+          entity.body.rotation.y = THREE.MathUtils.lerp(entity.body.rotation.y, 0, 0.2);
+          entity.body.rotation.z = THREE.MathUtils.lerp(entity.body.rotation.z, 0, 0.2);
+          entity.head.rotation.z = THREE.MathUtils.lerp(entity.head.rotation.z, 0, 0.2);
           const lastPoseAppliedAtMs = participant?.lastPoseAppliedAtMs ?? null;
           const keepHandsVisible = lastPoseAppliedAtMs !== null && nowMs - lastPoseAppliedAtMs < 350;
           entity.leftHand.visible = keepHandsVisible && (participant?.leftHandVisible ?? false);

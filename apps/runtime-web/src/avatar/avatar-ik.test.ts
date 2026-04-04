@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { solveUpperBodyPose } from "./avatar-ik.js";
+import { resolveAvatarBodyRefinement, solveUpperBodyPose } from "./avatar-ik.js";
 
 test("solveUpperBodyPose clamps head and hand positions", () => {
   const result = solveUpperBodyPose({
@@ -60,4 +60,44 @@ test("solveUpperBodyPose rotates world hand positions into local avatar yaw spac
 
   assert.equal(Math.round(result.leftHandLocal.z * 100) / 100, -0.2);
   assert.equal(Math.round(result.rightHandLocal.z * 100) / 100, 0.2);
+});
+
+test("resolveAvatarBodyRefinement adds forward lean for walk and turn bias for turn", () => {
+  const walk = resolveAvatarBodyRefinement({
+    locomotionState: "walk",
+    speed: 1,
+    turnRate: 0,
+    inputMode: "desktop"
+  });
+  const turn = resolveAvatarBodyRefinement({
+    locomotionState: "turn",
+    speed: 0,
+    turnRate: 1,
+    inputMode: "desktop"
+  });
+
+  assert.equal(walk.torsoPitch > 0, true);
+  assert.equal(walk.pelvisOffsetY > 0, true);
+  assert.equal(turn.torsoRoll > 0, true);
+  assert.equal(turn.headTiltBias > 0, true);
+});
+
+test("resolveAvatarBodyRefinement reduces upper-body influence for tracked vr", () => {
+  const desktop = resolveAvatarBodyRefinement({
+    locomotionState: "walk",
+    speed: 1,
+    turnRate: 0,
+    inputMode: "desktop",
+    xrPresenting: false
+  });
+  const vrTracked = resolveAvatarBodyRefinement({
+    locomotionState: "walk",
+    speed: 1,
+    turnRate: 0,
+    inputMode: "vr-controller",
+    xrPresenting: true
+  });
+
+  assert.equal(Math.abs(vrTracked.torsoPitch) < Math.abs(desktop.torsoPitch), true);
+  assert.equal(Math.abs(vrTracked.headTiltBias) < Math.abs(desktop.headTiltBias), true);
 });

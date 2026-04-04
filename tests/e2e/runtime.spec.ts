@@ -1042,6 +1042,8 @@ test("diagnostics capture multi-client remote visibility", async ({ browser, req
         presenceSeen: boolean;
         hasReliableState: boolean;
         hasPoseFrame: boolean;
+        qualityMode?: "near" | "far";
+        skatingMetric?: number;
         leftHandVisible: boolean;
         rightHandVisible: boolean;
       }>;
@@ -1052,6 +1054,8 @@ test("diagnostics capture multi-client remote visibility", async ({ browser, req
   expect(diagnostics.items.some((item) => item.remoteTargets.length >= 1)).toBeTruthy();
   expect(diagnostics.items.some((item) => Array.isArray(item.remoteAvatarReliableStates))).toBeTruthy();
   expect(diagnostics.items.some((item) => Array.isArray(item.remoteAvatarPoseFrames))).toBeTruthy();
+  expect(diagnostics.items.some((item) => item.remoteAvatarParticipants?.some((participant) => participant.qualityMode === "near" || participant.qualityMode === "far"))).toBeTruthy();
+  expect(diagnostics.items.some((item) => item.remoteAvatarParticipants?.some((participant) => typeof participant.skatingMetric === "number"))).toBeTruthy();
 
   await pageA.close();
   await pageB.close();
