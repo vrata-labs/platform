@@ -331,7 +331,7 @@ async function buildManifest(roomId: string, request?: IncomingMessage): Promise
       avatarQualityProfile: room.avatarConfig?.avatarQualityProfile ?? "desktop-standard",
       avatarPoseBinaryEnabled: process.env.FEATURE_AVATAR_POSE_BINARY !== "false",
       avatarLipsyncEnabled: process.env.FEATURE_AVATAR_LIPSYNC === "true",
-      avatarLegIkEnabled: process.env.FEATURE_AVATAR_LEG_IK === "true",
+      avatarLegIkEnabled: process.env.FEATURE_AVATAR_LEG_IK !== "false",
       avatarFallbackCapsulesEnabled: room.avatarConfig?.avatarFallbackCapsulesEnabled ?? true,
       avatarSeatsEnabled: room.avatarConfig?.avatarSeatsEnabled ?? false,
       avatarCustomizationEnabled: process.env.FEATURE_AVATAR_CUSTOMIZATION === "true"
@@ -563,7 +563,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
         avatarsEnabled: process.env.FEATURE_AVATARS !== "false",
         avatarPoseBinaryEnabled: process.env.FEATURE_AVATAR_POSE_BINARY !== "false",
         avatarLipsyncEnabled: process.env.FEATURE_AVATAR_LIPSYNC === "true",
-        avatarLegIkEnabled: process.env.FEATURE_AVATAR_LEG_IK === "true",
+        avatarLegIkEnabled: process.env.FEATURE_AVATAR_LEG_IK !== "false",
         avatarSeatingEnabled: process.env.FEATURE_AVATAR_SEATING === "true",
         avatarCustomizationEnabled: process.env.FEATURE_AVATAR_CUSTOMIZATION === "true",
         avatarFallbackCapsulesEnabled: process.env.FEATURE_AVATAR_FALLBACK_CAPSULES !== "false",

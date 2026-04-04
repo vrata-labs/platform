@@ -162,13 +162,36 @@ test("room manifest exposes avatar config when enabled", async () => {
     assert.equal(manifest.avatars?.avatarQualityProfile, "xr");
     assert.equal(manifest.avatars?.avatarPoseBinaryEnabled, true);
     assert.equal(manifest.avatars?.avatarLipsyncEnabled, false);
-    assert.equal(manifest.avatars?.avatarLegIkEnabled, false);
+    assert.equal(manifest.avatars?.avatarLegIkEnabled, true);
     assert.equal(manifest.avatars?.avatarFallbackCapsulesEnabled, true);
     assert.equal(manifest.avatars?.avatarCustomizationEnabled, false);
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     delete process.env.NOAH_DISABLE_AUTOSTART;
     delete process.env.CONTROL_PLANE_ADMIN_TOKEN;
+  }
+});
+
+test("room manifest can disable avatar leg ik explicitly via env", async () => {
+  process.env.NOAH_DISABLE_AUTOSTART = "1";
+  process.env.API_PORT = "4024";
+  process.env.CONTROL_PLANE_ADMIN_TOKEN = "test-admin-token";
+  process.env.FEATURE_AVATAR_LEG_IK = "false";
+  const module = await import("./index.js");
+  const server = module.startApiServer(4024);
+
+  try {
+    const manifestResponse = await fetch("http://127.0.0.1:4024/api/rooms/demo-room/manifest");
+    assert.equal(manifestResponse.ok, true);
+    const manifest = (await manifestResponse.json()) as {
+      avatars?: { avatarLegIkEnabled?: boolean };
+    };
+    assert.equal(manifest.avatars?.avatarLegIkEnabled, false);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    delete process.env.NOAH_DISABLE_AUTOSTART;
+    delete process.env.CONTROL_PLANE_ADMIN_TOKEN;
+    delete process.env.FEATURE_AVATAR_LEG_IK;
   }
 });
 

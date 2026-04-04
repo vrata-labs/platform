@@ -1335,7 +1335,7 @@ apps/runtime-web/src/avatar/
 
 # Phase 3 — Ноги, gait solver и body naturalness
 
-Статус на 2026-04-04: `core delivered on staging`, follow-up хвост остаётся по `avatarLegIkEnabled` runtime gate, `record/replay` trace harness и обзорному manual acceptance.
+Статус на 2026-04-04: `delivered on staging`, follow-up хвост остаётся по `record/replay` trace harness и обзорному manual acceptance.
 
 ## Цель
 
@@ -1415,7 +1415,6 @@ apps/runtime-web/src/avatar/
 
 ## Что осталось до полного закрытия Phase 3
 
-- повязать natural locomotion path на жёсткий runtime gate через `avatarLegIkEnabled`
 - добавить обещанный `record/replay` / deterministic trace harness
 - завершить расширенный staging suite для старого и нового avatar flow как постоянный regression gate
 - в конце провести обзорный manual acceptance: desktop/desktop, desktop + Quest/WebXR, near/far social interactions, turn-in-place / strafe / backpedal / sharp stop
