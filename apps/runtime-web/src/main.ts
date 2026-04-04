@@ -4,7 +4,7 @@ import { Room, RoomEvent, Track } from "livekit-client";
 
 import { appendBrandingSuffix, applyRoomShellBootState } from "./boot-session.js";
 import { bootRuntime, fetchRuntimeSpaces, listPresence, planVoiceSession, removePresence, resolveCurrentSpace, upsertPresence, type PresenceState, type RuntimeSpaceOption } from "./index.js";
-import { applySnapTurn, computeKeyboardDirection, rotateFlatVector, sanitizeXrAxes, stepFlatMovement } from "./movement.js";
+import { applySnapTurn, computeKeyboardDirection, projectMovementToWorld, sanitizeXrAxes, stepFlatMovement } from "./movement.js";
 import { createMotionTrack, pushMotionSample, sampleMotion, type MotionTrack } from "./motion-state.js";
 import { connectRoomState, sendAvatarPoseFrame, sendAvatarReliableState, sendParticipantUpdate, type RoomStateClient, type RoomStateSnapshot } from "./room-state-client.js";
 import { classifyMediaError, classifyRoomStateError, createFaultError, getRuntimeIssue, shouldRetryConnection, type RuntimeIssue } from "./runtime-errors.js";
@@ -1145,8 +1145,13 @@ function updateMovement(delta: number): void {
   }
 
   if (direction.x !== 0 || direction.z !== 0) {
-    const rotatedDirection = rotateFlatVector(direction, yaw);
-    const next = stepFlatMovement({ x: player.position.x, z: player.position.z }, rotatedDirection, speed, delta);
+    const viewForward = camera.getWorldDirection(new THREE.Vector3());
+    const next = stepFlatMovement(
+      { x: player.position.x, z: player.position.z },
+      projectMovementToWorld(direction, { x: viewForward.x, z: viewForward.z }),
+      speed,
+      delta
+    );
     player.position.x = next.x;
     player.position.z = next.z;
   }

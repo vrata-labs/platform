@@ -69,6 +69,23 @@ export function rotateFlatVector(vector: FlatVector, yaw: number): FlatVector {
   };
 }
 
+export function projectMovementToWorld(direction: FlatVector, flatForward: FlatVector): FlatVector {
+  const normalizedForward = normalizeFlatVector(flatForward);
+  if (normalizedForward.x === 0 && normalizedForward.z === 0) {
+    return direction;
+  }
+
+  const right = {
+    x: -normalizedForward.z,
+    z: normalizedForward.x
+  };
+
+  return {
+    x: right.x * direction.x + normalizedForward.x * -direction.z,
+    z: right.z * direction.x + normalizedForward.z * -direction.z
+  };
+}
+
 export function stepFlatMovement(position: FlatVector, direction: FlatVector, speed: number, delta: number): FlatVector {
   const normalized = normalizeFlatVector(direction);
   return clampRoomPosition({

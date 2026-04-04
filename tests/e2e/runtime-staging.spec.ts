@@ -490,4 +490,32 @@ test.describe("@staging runtime HUD space selector", () => {
       await pageB.close();
     }
   });
+
+  test("hall keeps avatar hands visible between two web clients on staging", async ({ browser }) => {
+    const hallRoomId = stagingSceneRooms[0]!.roomId;
+    const pageA = await browser.newPage();
+    const pageB = await browser.newPage();
+    try {
+      await pageA.goto(`/rooms/${hallRoomId}?debug=1&bot=line`);
+      await pageB.goto(`/rooms/${hallRoomId}?debug=1&bot=line`);
+
+      await expect.poll(async () => {
+        const debugA = await readNoahDebug(pageA);
+        const debugB = await readNoahDebug(pageB);
+        return {
+          aHandsReady: Boolean(debugA?.remoteAvatarParticipants?.some((item) => item.presenceSeen && item.hasReliableState && item.hasPoseFrame && item.leftHandVisible && item.rightHandVisible)),
+          bHandsReady: Boolean(debugB?.remoteAvatarParticipants?.some((item) => item.presenceSeen && item.hasReliableState && item.hasPoseFrame && item.leftHandVisible && item.rightHandVisible))
+        };
+      }, {
+        timeout: 45000,
+        intervals: [1000, 2000, 3000]
+      }).toEqual({
+        aHandsReady: true,
+        bHandsReady: true
+      });
+    } finally {
+      await pageA.close();
+      await pageB.close();
+    }
+  });
 });
