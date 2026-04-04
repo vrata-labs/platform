@@ -458,4 +458,36 @@ test.describe("@staging runtime HUD space selector", () => {
       await pageB.close();
     }
   });
+
+  test("hall keeps avatar sync working between two web clients on staging", async ({ browser }) => {
+    const hallRoomId = stagingSceneRooms[0]!.roomId;
+    const pageA = await browser.newPage();
+    const pageB = await browser.newPage();
+    try {
+      await pageA.goto(`/rooms/${hallRoomId}?debug=1&bot=line`);
+      await pageB.goto(`/rooms/${hallRoomId}?debug=1&bot=line`);
+
+      await expect.poll(async () => {
+        const debugA = await readNoahDebug(pageA);
+        const debugB = await readNoahDebug(pageB);
+        return {
+          aReady: (debugA?.remoteAvatarReliableCount ?? 0) >= 1
+            && (debugA?.remoteAvatarPoseCount ?? 0) >= 1
+            && Boolean(debugA?.remoteAvatarParticipants?.some((item) => item.presenceSeen && item.hasReliableState && item.hasPoseFrame)),
+          bReady: (debugB?.remoteAvatarReliableCount ?? 0) >= 1
+            && (debugB?.remoteAvatarPoseCount ?? 0) >= 1
+            && Boolean(debugB?.remoteAvatarParticipants?.some((item) => item.presenceSeen && item.hasReliableState && item.hasPoseFrame))
+        };
+      }, {
+        timeout: 45000,
+        intervals: [1000, 2000, 3000]
+      }).toEqual({
+        aReady: true,
+        bReady: true
+      });
+    } finally {
+      await pageA.close();
+      await pageB.close();
+    }
+  });
 });

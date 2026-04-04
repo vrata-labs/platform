@@ -1581,6 +1581,16 @@ async function main(): Promise<void> {
     applyCleanSceneMode(true);
   }
 
+  try {
+    connectRoomStateWithRetry(boot.roomStateUrl);
+  } catch (error) {
+    console.error(error);
+    roomStateConnected = false;
+    debugState.roomStateMode = "fallback";
+    setRoomStateStatus("Room-state: fallback API");
+    void reportDiagnostics("room_state_connect_failed");
+  }
+
   if (avatarSandboxEnabled) {
     avatarPresetLabel.textContent = "Avatar Sandbox";
     joinAudioButton.disabled = true;
@@ -1691,16 +1701,6 @@ async function main(): Promise<void> {
       });
       void reportDiagnostics(issue.diagnosticsNote);
     });
-  }
-
-  try {
-    connectRoomStateWithRetry(boot.roomStateUrl);
-  } catch (error) {
-    console.error(error);
-    roomStateConnected = false;
-    debugState.roomStateMode = "fallback";
-    setRoomStateStatus("Room-state: fallback API");
-    void reportDiagnostics("room_state_connect_failed");
   }
 
   const xrSupport = detectXrSupport({
