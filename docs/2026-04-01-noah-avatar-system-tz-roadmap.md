@@ -1258,6 +1258,8 @@ apps/runtime-web/src/avatar/
 
 # Phase 2 — Remote avatars и pose sync `v1`
 
+Статус: DONE (2026-04-04)
+
 ## Цель
 
 Сделать remote avatars с плавной синхронизацией head/hands/root поверх текущего realtime layer.
@@ -1325,6 +1327,9 @@ apps/runtime-web/src/avatar/
 
 - remote avatar sync `v1`
 - measured packet size / send rate / jitter stats
+- staging smoke и public staging gate покрывают `demo-room`, `Hall`, scene switching, two-client avatar sync, reconnect и same-browser tab identity
+- avatars включены по умолчанию для комнат staging/runtime, secure space links исправлены
+- закрыты финальные регрессии Phase 2: same-browser identity collision, тяжёлый scene boot vs avatar boot, XR entry pitch carry-over, movement direction drift, VR remote hand visibility на web, scene-room avatar visibility
 
 ---
 
