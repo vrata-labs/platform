@@ -33,13 +33,13 @@ function fallbackUuid(): string {
 }
 
 function getParticipantId(): string {
-  const stored = localStorage.getItem("noah.participantId");
+  const stored = sessionStorage.getItem("noah.participantId");
   if (stored) {
     return stored;
   }
 
   const generated = typeof globalThis.crypto?.randomUUID === "function" ? globalThis.crypto.randomUUID() : fallbackUuid();
-  localStorage.setItem("noah.participantId", generated);
+  sessionStorage.setItem("noah.participantId", generated);
   return generated;
 }
 

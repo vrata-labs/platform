@@ -448,6 +448,77 @@ test("avatar-enabled room syncs remote reliable state and pose frames between tw
   }
 });
 
+test("avatar-enabled room keeps separate identities for same-browser tabs", async ({ browser, request }) => {
+  const createRoomResponse = await request.post("/api/rooms", {
+    headers: {
+      "x-noah-admin-token": "test-admin-token"
+    },
+    data: {
+      tenantId: "demo-tenant",
+      templateId: "meeting-room-basic",
+      name: "Avatar Same Browser Tabs Room",
+      avatarConfig: {
+        avatarsEnabled: true,
+        avatarCatalogUrl: "/assets/avatars/catalog.v1.json",
+        avatarQualityProfile: "desktop-standard",
+        avatarFallbackCapsulesEnabled: true,
+        avatarSeatsEnabled: false
+      }
+    }
+  });
+  expect(createRoomResponse.ok()).toBeTruthy();
+  const room = (await createRoomResponse.json()) as { roomLink: string };
+
+  const context = await browser.newContext();
+  const pageA = await context.newPage();
+  const pageB = await context.newPage();
+
+  try {
+    await pageA.goto(`${room.roomLink}?debug=1&bot=line`);
+    await pageB.goto(`${room.roomLink}?debug=1&bot=line`);
+
+    await expect.poll(async () => {
+      const [idA, debugA, idB, debugB] = await Promise.all([
+        pageA.evaluate(() => sessionStorage.getItem("noah.participantId")),
+        pageA.evaluate(() => (window as Window & {
+          __NOAH_DEBUG__?: {
+            remoteAvatarReliableCount?: number;
+            remoteAvatarPoseCount?: number;
+            remoteAvatarParticipants?: Array<{ presenceSeen?: boolean; hasReliableState?: boolean; hasPoseFrame?: boolean }>;
+          };
+        }).__NOAH_DEBUG__),
+        pageB.evaluate(() => sessionStorage.getItem("noah.participantId")),
+        pageB.evaluate(() => (window as Window & {
+          __NOAH_DEBUG__?: {
+            remoteAvatarReliableCount?: number;
+            remoteAvatarPoseCount?: number;
+            remoteAvatarParticipants?: Array<{ presenceSeen?: boolean; hasReliableState?: boolean; hasPoseFrame?: boolean }>;
+          };
+        }).__NOAH_DEBUG__)
+      ]);
+
+      return {
+        distinctIds: Boolean(idA && idB && idA !== idB),
+        aReady: (debugA?.remoteAvatarReliableCount ?? 0) === 1
+          && (debugA?.remoteAvatarPoseCount ?? 0) === 1
+          && Boolean(debugA?.remoteAvatarParticipants?.some((item) => item.presenceSeen && item.hasReliableState && item.hasPoseFrame)),
+        bReady: (debugB?.remoteAvatarReliableCount ?? 0) === 1
+          && (debugB?.remoteAvatarPoseCount ?? 0) === 1
+          && Boolean(debugB?.remoteAvatarParticipants?.some((item) => item.presenceSeen && item.hasReliableState && item.hasPoseFrame))
+      };
+    }, {
+      timeout: 20000,
+      intervals: [1000, 2000, 3000]
+    }).toEqual({
+      distinctIds: true,
+      aReady: true,
+      bReady: true
+    });
+  } finally {
+    await context.close();
+  }
+});
+
 test("avatar-enabled room recovers remote avatar state after late join and forced reconnect", async ({ browser, request }) => {
   const createRoomResponse = await request.post("/api/rooms", {
     headers: {
