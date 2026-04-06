@@ -490,3 +490,40 @@ test("createLocalAvatarController does not add procedural forward offsets to VR 
   assert.equal(Math.round(controller.snapshot.leftHand.z * 100) / 100, 0.2);
   assert.equal(Math.round(controller.snapshot.rightHand.z * 100) / 100, 0.2);
 });
+
+test("createLocalAvatarController keeps torso and lower body rotation neutral during desktop strafe", () => {
+  const preset = createPreset("preset-01");
+  preset.preset.validation.animationClips = ["idle", "strafe"];
+  const controller = createLocalAvatarController({
+    presets: [preset],
+    diagnosticsInput: {
+      catalogId: "technical-v1",
+      packUrl: "/assets/avatars/avatar-pack.v1.glb",
+      packFormat: "procedural-debug-v1",
+      presetCount: 1,
+      validatorSummary: ["preset-01:1000"],
+      sandboxEntryPoint: "/assets/avatars/catalog.v1.json"
+    }
+  });
+
+  controller.update({
+    deltaSeconds: 0.25,
+    inputMode: "desktop",
+    xrPresenting: false,
+    xrInputProfile: null,
+    rootPosition: { x: 0, y: 0, z: 0 },
+    yaw: 0,
+    headPosition: { x: 0, y: 1.6, z: 0 },
+    moveX: 1,
+    moveZ: 0,
+    turnRate: 0
+  });
+
+  const torso = controller.root.children[0]!;
+  const lowerBody = controller.root.children[1]!;
+  assert.equal(controller.diagnostics.locomotionState, "strafe");
+  assert.equal(Math.abs(controller.diagnostics.bodyLean) < 0.001, true);
+  assert.equal(Math.abs(torso.rotation.z) < 0.001, true);
+  assert.equal(Math.abs(lowerBody.rotation.z) < 0.001, true);
+  assert.equal(Math.abs(lowerBody.rotation.y) < 0.001, true);
+});

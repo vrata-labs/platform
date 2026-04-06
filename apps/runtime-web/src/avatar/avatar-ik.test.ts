@@ -101,3 +101,16 @@ test("resolveAvatarBodyRefinement reduces upper-body influence for tracked vr", 
   assert.equal(Math.abs(vrTracked.torsoPitch) < Math.abs(desktop.torsoPitch), true);
   assert.equal(Math.abs(vrTracked.headTiltBias) < Math.abs(desktop.headTiltBias), true);
 });
+
+test("resolveAvatarBodyRefinement keeps strafe torso roll neutral", () => {
+  const strafe = resolveAvatarBodyRefinement({
+    locomotionState: "strafe",
+    speed: 1,
+    turnRate: 0,
+    inputMode: "desktop"
+  });
+
+  assert.equal(strafe.torsoRoll, 0);
+  assert.equal(strafe.lowerBodyRoll, 0);
+  assert.equal(strafe.headTiltBias, 0);
+});

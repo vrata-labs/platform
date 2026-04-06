@@ -75,8 +75,8 @@ export function computeAvatarAnimationPose(input: {
     case "strafe":
       return {
         bodyBob: 0.025 * Math.abs(sin),
-        bodyRoll: 0.025 * sin,
-        headTilt: 0.015 * sin,
+        bodyRoll: 0,
+        headTilt: 0,
         leftHandYOffset: -0.03 * sin,
         rightHandYOffset: 0.03 * sin,
         leftHandForward: 0.06,

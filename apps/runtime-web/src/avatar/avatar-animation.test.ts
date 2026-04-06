@@ -41,9 +41,10 @@ test("computeAvatarAnimationPose returns stronger bob for walk than idle", () =>
   assert.equal(Math.abs(walkPose.leftHandForward) > Math.abs(idlePose.leftHandForward), true);
 });
 
-test("computeAvatarAnimationPose gives lateral lean for strafe", () => {
+test("computeAvatarAnimationPose keeps torso stable for strafe", () => {
   const pose = computeAvatarAnimationPose({ clip: "strafe", elapsedSeconds: 0.4, speed: 1, turnRate: 0 });
-  assert.equal(Math.abs(pose.bodyRoll) > 0.01, true);
+  assert.equal(pose.bodyRoll, 0);
+  assert.equal(pose.headTilt, 0);
   assert.equal(pose.leftHandForward, 0.06);
   assert.equal(pose.rightHandForward, 0.06);
 });
