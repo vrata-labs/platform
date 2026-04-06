@@ -13,6 +13,9 @@ export interface AvatarDiagnostics {
   footLockStrength: number;
   footingCorrectionActive: boolean;
   visibilityState: string | null;
+  headVisible: boolean;
+  leftHandVisible: boolean;
+  rightHandVisible: boolean;
   solveState: string | null;
   animationState: string | null;
   bodyLean: number;
@@ -41,6 +44,9 @@ export function createEmptyAvatarDiagnostics(): AvatarDiagnostics {
     footLockStrength: 0,
     footingCorrectionActive: false,
     visibilityState: null,
+    headVisible: false,
+    leftHandVisible: false,
+    rightHandVisible: false,
     solveState: null,
     animationState: null,
     bodyLean: 0,
@@ -88,6 +94,9 @@ export function createAvatarLoadedDiagnostics(input: {
   footLockStrength?: number;
   footingCorrectionActive?: boolean;
   visibilityState?: string | null;
+  headVisible?: boolean;
+  leftHandVisible?: boolean;
+  rightHandVisible?: boolean;
   solveState?: string | null;
   animationState?: string | null;
   bodyLean?: number;
@@ -111,6 +120,9 @@ export function createAvatarLoadedDiagnostics(input: {
     footLockStrength: input.footLockStrength ?? 0,
     footingCorrectionActive: input.footingCorrectionActive ?? false,
     visibilityState: input.visibilityState ?? null,
+    headVisible: input.headVisible ?? false,
+    leftHandVisible: input.leftHandVisible ?? false,
+    rightHandVisible: input.rightHandVisible ?? false,
     solveState: input.solveState ?? null,
     animationState: input.animationState ?? null,
     bodyLean: input.bodyLean ?? 0,

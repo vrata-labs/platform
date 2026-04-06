@@ -75,6 +75,8 @@ const faultConfig = {
   xrUnavailable: query.get("failxr") === "1"
 };
 const avatarRuntimeFlagOverrides = resolveAvatarRuntimeFlagOverrides(query);
+const avatarModeOverride = query.get("avatarmode");
+const avatarXrOverride = query.get("avatarxr");
 const participantId = getParticipantId();
 const displayName = localStorage.getItem("noah.displayName") ?? `Guest-${participantId.slice(0, 4)}`;
 localStorage.setItem("noah.displayName", displayName);
@@ -885,7 +887,40 @@ function botDirection(timeSeconds: number): { x: number; z: number } {
     };
   }
 
+  if (botMode === "strafe") {
+    return {
+      x: Math.sin(timeSeconds * 0.7),
+      z: 0
+    };
+  }
+
   return { x: 0, z: 0 };
+}
+
+function getEffectiveAvatarXrPresenting(): boolean {
+  if (avatarXrOverride === "1" || avatarXrOverride === "true") {
+    return true;
+  }
+  if (avatarXrOverride === "0" || avatarXrOverride === "false") {
+    return false;
+  }
+  return renderer.xr.isPresenting;
+}
+
+function getEffectiveAvatarInputMode(): "desktop" | "mobile" | "vr-controller" | "vr-hand" {
+  if (avatarModeOverride === "desktop" || avatarModeOverride === "mobile" || avatarModeOverride === "vr-controller" || avatarModeOverride === "vr-hand") {
+    return avatarModeOverride;
+  }
+  return getEffectiveAvatarXrPresenting()
+    ? "vr-controller"
+    : /android|iphone|ipad/i.test(navigator.userAgent)
+      ? "mobile"
+      : "desktop";
+}
+
+function getEffectivePresenceMode(): PresenceState["mode"] {
+  const inputMode = getEffectiveAvatarInputMode();
+  return inputMode === "mobile" ? "mobile" : inputMode === "desktop" ? "desktop" : "vr";
 }
 
 function getSignedAngleDelta(next: number, previous: number): number {
@@ -893,7 +928,7 @@ function getSignedAngleDelta(next: number, previous: number): number {
 }
 
 function getLocalAvatarHandTargets(): { leftHand: { x: number; y: number; z: number } | null; rightHand: { x: number; y: number; z: number } | null } {
-  if (!renderer.xr.isPresenting) {
+  if (!getEffectiveAvatarXrPresenting()) {
     debugState.xrAvatarDebug = null;
     return { leftHand: null, rightHand: null };
   }
@@ -953,16 +988,13 @@ function updateLocalAvatar(delta: number): void {
   const headWorldPosition = new THREE.Vector3();
   camera.getWorldPosition(headWorldPosition);
   const handTargets = getLocalAvatarHandTargets();
-  const inputMode = renderer.xr.isPresenting
-    ? "vr-controller"
-    : /android|iphone|ipad/i.test(navigator.userAgent)
-      ? "mobile"
-      : "desktop";
+  const effectiveXrPresenting = getEffectiveAvatarXrPresenting();
+  const inputMode = getEffectiveAvatarInputMode();
 
   localAvatarController.update({
     deltaSeconds: delta,
     inputMode,
-    xrPresenting: renderer.xr.isPresenting,
+    xrPresenting: effectiveXrPresenting,
     naturalLocomotionEnabled: runtimeFlags.avatarLegIkEnabled,
     xrInputProfile: lastAvatarXrInputProfile,
     rootPosition: {
@@ -1515,7 +1547,7 @@ renderer.setAnimationLoop(() => {
 
   if (syncAccumulator >= 0.08) {
     syncAccumulator = 0;
-    latestMode = renderer.xr.isPresenting ? "vr" : /android|iphone|ipad/i.test(navigator.userAgent) ? "mobile" : "desktop";
+    latestMode = getEffectivePresenceMode();
     void syncPresence(latestMode, Boolean(livekitRoom));
   }
 
@@ -1770,9 +1802,9 @@ async function main(): Promise<void> {
   localHead.visible = debugEnabled;
   player.add(localHead);
 
-  await syncPresence(boot.joinMode, false);
+  await syncPresence(getEffectivePresenceMode(), false);
   await refreshPresence();
-  latestMode = boot.joinMode;
+  latestMode = getEffectivePresenceMode();
   await reportDiagnostics("runtime_booted");
 }
 

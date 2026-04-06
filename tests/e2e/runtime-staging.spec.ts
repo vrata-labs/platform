@@ -175,10 +175,14 @@ async function readNoahDebug(page: Page): Promise<{
   remoteAvatarPoseCount?: number;
   avatarDebug?: {
     locomotionState?: string | null;
+    visibilityState?: string | null;
     qualityMode?: string | null;
     skatingMetric?: number;
     footingCorrectionActive?: boolean;
     bodyLean?: number;
+    headVisible?: boolean;
+    leftHandVisible?: boolean;
+    rightHandVisible?: boolean;
   };
   remoteAvatarParticipants?: Array<{
     hasReliableState?: boolean;
@@ -198,10 +202,14 @@ async function readNoahDebug(page: Page): Promise<{
       remoteAvatarPoseCount?: number;
       avatarDebug?: {
         locomotionState?: string | null;
+        visibilityState?: string | null;
         qualityMode?: string | null;
         skatingMetric?: number;
         footingCorrectionActive?: boolean;
         bodyLean?: number;
+        headVisible?: boolean;
+        leftHandVisible?: boolean;
+        rightHandVisible?: boolean;
       };
       remoteAvatarParticipants?: Array<{
         hasReliableState?: boolean;
@@ -569,6 +577,67 @@ test.describe("@staging runtime HUD space selector", () => {
     } finally {
       await pageA.close();
       await pageB.close();
+    }
+  });
+
+  test("demo-room keeps phase three strafe lean bounded on staging", async ({ browser }) => {
+    const page = await browser.newPage();
+    try {
+      await page.goto(`/rooms/${stagingRoomId}?debug=1&bot=strafe&avatarik=1`);
+
+      await expect.poll(async () => {
+        const debug = await readNoahDebug(page);
+        return Boolean(
+          debug?.avatarDebug?.locomotionState === "strafe"
+          && debug?.avatarDebug?.qualityMode === "near"
+          && Math.abs(debug?.avatarDebug?.bodyLean ?? 0) <= 0.05
+        );
+      }, {
+        timeout: 20000,
+        intervals: [1000, 2000, 3000]
+      }).toBe(true);
+    } finally {
+      await page.close();
+    }
+  });
+
+  test("demo-room keeps local vr head hidden and remote vr hands visible on staging", async ({ browser }) => {
+    const pageVr = await browser.newPage();
+    const pageWeb = await browser.newPage();
+    try {
+      await pageVr.goto(`/rooms/${stagingRoomId}?debug=1&avatarmode=vr-controller&avatarxr=1`);
+      await pageWeb.goto(`/rooms/${stagingRoomId}?debug=1&bot=line`);
+
+      await expect.poll(async () => {
+        const vrDebug = await readNoahDebug(pageVr);
+        const webDebug = await readNoahDebug(pageWeb);
+        return {
+          localHeadHidden: Boolean(
+            vrDebug?.avatarDebug?.visibilityState === "hands-only"
+            && vrDebug?.avatarDebug?.headVisible === false
+            && vrDebug?.avatarDebug?.leftHandVisible === true
+            && vrDebug?.avatarDebug?.rightHandVisible === true
+          ),
+          remoteHandsVisible: Boolean(
+            webDebug?.remoteAvatarParticipants?.some((participant) =>
+              participant.presenceSeen
+              && participant.hasReliableState
+              && participant.hasPoseFrame
+              && participant.leftHandVisible === true
+              && participant.rightHandVisible === true
+            )
+          )
+        };
+      }, {
+        timeout: 30000,
+        intervals: [1000, 2000, 3000]
+      }).toEqual({
+        localHeadHidden: true,
+        remoteHandsVisible: true
+      });
+    } finally {
+      await pageVr.close();
+      await pageWeb.close();
     }
   });
 
