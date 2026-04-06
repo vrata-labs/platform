@@ -249,7 +249,6 @@ export function createLocalAvatarController(input: {
       });
       const vrDirectTracking = frame.xrPresenting && (frame.inputMode === "vr-controller" || frame.inputMode === "vr-hand");
       const naturalLocomotionEnabled = frame.naturalLocomotionEnabled ?? true;
-      const naturalBodyEnhancementEnabled = naturalLocomotionEnabled && !vrDirectTracking;
       const bodyRefinement = resolveAvatarBodyRefinement({
         locomotionState: locomotion.state,
         speed: locomotion.speed,
@@ -274,7 +273,7 @@ export function createLocalAvatarController(input: {
       visual.root.position.set(frame.rootPosition.x, frame.rootPosition.y, frame.rootPosition.z);
       visual.root.rotation.y = frame.yaw;
 
-      if (naturalBodyEnhancementEnabled) {
+      if (naturalLocomotionEnabled) {
         visual.torso.position.set(bodyRefinement.pelvisOffsetX, 1.12 + pose.bodyBob + bodyRefinement.pelvisOffsetY, 0);
         visual.torso.rotation.x = bodyRefinement.torsoPitch;
         visual.torso.rotation.z = pose.bodyRoll + bodyRefinement.torsoRoll;
@@ -298,7 +297,7 @@ export function createLocalAvatarController(input: {
         vrDirectTracking ? solve.headLocal.y : Math.max(solve.headLocal.y, viewProfile.poseProfile.headHeight),
         solve.headLocal.z
       );
-      visual.head.rotation.z = pose.headTilt + (naturalBodyEnhancementEnabled ? bodyRefinement.headTiltBias : 0);
+      visual.head.rotation.z = pose.headTilt + (naturalLocomotionEnabled ? bodyRefinement.headTiltBias : 0);
       visual.leftHand.position.set(
         solve.leftHandLocal.x,
         solve.leftHandLocal.y + (vrDirectTracking ? 0 : pose.leftHandYOffset),
@@ -323,14 +322,14 @@ export function createLocalAvatarController(input: {
       diagnostics.inputMode = frame.inputMode;
       diagnostics.locomotionState = locomotion.state;
       diagnostics.locomotionTransitioned = locomotion.transitioned;
-      diagnostics.qualityMode = naturalBodyEnhancementEnabled ? planting.qualityMode : null;
-      diagnostics.skatingMetric = naturalBodyEnhancementEnabled ? footing.skatingMetric : 0;
-      diagnostics.footLockStrength = naturalBodyEnhancementEnabled ? footing.footLockStrength : 0;
-      diagnostics.footingCorrectionActive = naturalBodyEnhancementEnabled ? footing.correctionActive : false;
+      diagnostics.qualityMode = naturalLocomotionEnabled ? planting.qualityMode : null;
+      diagnostics.skatingMetric = naturalLocomotionEnabled ? footing.skatingMetric : 0;
+      diagnostics.footLockStrength = naturalLocomotionEnabled ? footing.footLockStrength : 0;
+      diagnostics.footingCorrectionActive = naturalLocomotionEnabled ? footing.correctionActive : false;
       diagnostics.visibilityState = visibility;
       diagnostics.solveState = solve.solveState;
       diagnostics.animationState = animation.clip;
-      diagnostics.bodyLean = naturalBodyEnhancementEnabled ? visual.torso.rotation.z : 0;
+      diagnostics.bodyLean = naturalLocomotionEnabled ? visual.torso.rotation.z : 0;
       diagnostics.activeControllerCount = controllerCount;
       diagnostics.controllerProfile = controllerProfile;
       diagnostics.xrInputProfile = frame.xrInputProfile ?? null;
