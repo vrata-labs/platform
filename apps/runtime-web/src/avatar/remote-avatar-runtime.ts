@@ -323,8 +323,8 @@ export function createRemoteAvatarRuntime(input: {
       };
       syncDebugState(debugState);
     },
-    update(delta: number, debugState: RemoteAvatarDebugState, options?: { naturalLocomotionEnabled?: boolean }): void {
-      const naturalLocomotionEnabled = options?.naturalLocomotionEnabled ?? true;
+    update(delta: number, debugState: RemoteAvatarDebugState): void {
+      void delta;
       const nowMs = Date.now();
       for (const [participantId, entity] of remoteAvatars.entries()) {
         const tracks = remoteMotionTracks.get(participantId);
@@ -389,18 +389,16 @@ export function createRemoteAvatarRuntime(input: {
           });
           if (participant) {
             participant.locomotionState = locomotionState;
-            participant.qualityMode = naturalLocomotionEnabled ? qualityMode : "far";
-            participant.skatingMetric = naturalLocomotionEnabled ? footing.skatingMetric : 0;
+            participant.qualityMode = qualityMode;
+            participant.skatingMetric = footing.skatingMetric;
             participant.lastTransitioned = transitioned;
           }
           entity.body.position.lerp(
-            naturalLocomotionEnabled
-              ? new THREE.Vector3(
-                poseFrame.root.x + bodyRefinement.pelvisOffsetX + planting.stanceOffsetX,
-                0.92 + animationPose.bodyBob * 0.6 + bodyRefinement.pelvisOffsetY,
-                poseFrame.root.z + planting.stanceOffsetZ
-              )
-              : new THREE.Vector3(poseFrame.root.x, 0.92, poseFrame.root.z),
+            new THREE.Vector3(
+              poseFrame.root.x + bodyRefinement.pelvisOffsetX + planting.stanceOffsetX,
+              0.92 + animationPose.bodyBob * 0.6 + bodyRefinement.pelvisOffsetY,
+              poseFrame.root.z + planting.stanceOffsetZ
+            ),
             0.35
           );
           entity.head.position.lerp(new THREE.Vector3(poseFrame.head.x, poseFrame.head.y, poseFrame.head.z), 0.45);
@@ -421,20 +419,14 @@ export function createRemoteAvatarRuntime(input: {
             0.45
           );
           entity.body.lookAt(poseFrame.head.x, 0.92, poseFrame.head.z);
-          entity.body.rotation.x = THREE.MathUtils.lerp(entity.body.rotation.x, naturalLocomotionEnabled ? bodyRefinement.torsoPitch : 0, 0.2);
-          entity.body.rotation.y = THREE.MathUtils.lerp(entity.body.rotation.y, naturalLocomotionEnabled ? planting.lowerBodyYaw : 0, 0.2);
+          entity.body.rotation.x = THREE.MathUtils.lerp(entity.body.rotation.x, bodyRefinement.torsoPitch, 0.2);
+          entity.body.rotation.y = THREE.MathUtils.lerp(entity.body.rotation.y, planting.lowerBodyYaw, 0.2);
           entity.body.rotation.z = THREE.MathUtils.lerp(
             entity.body.rotation.z,
-            naturalLocomotionEnabled
-              ? animationPose.bodyRoll * (0.8 - footing.footLockStrength * 0.18) + bodyRefinement.torsoRoll
-              : animationPose.bodyRoll * 0.8,
+            animationPose.bodyRoll * (0.8 - footing.footLockStrength * 0.18) + bodyRefinement.torsoRoll,
             0.3
           );
-          entity.head.rotation.z = THREE.MathUtils.lerp(
-            entity.head.rotation.z,
-            naturalLocomotionEnabled ? animationPose.headTilt + bodyRefinement.headTiltBias : animationPose.headTilt,
-            0.3
-          );
+          entity.head.rotation.z = THREE.MathUtils.lerp(entity.head.rotation.z, animationPose.headTilt + bodyRefinement.headTiltBias, 0.3);
           const forceVrHandsVisible = reliableState?.inputMode === "vr-controller" || reliableState?.inputMode === "vr-hand";
           entity.leftHand.visible = forceVrHandsVisible || poseFrame.leftHand.gesture > 0;
           entity.rightHand.visible = forceVrHandsVisible || poseFrame.rightHand.gesture > 0;
