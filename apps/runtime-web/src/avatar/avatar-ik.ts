@@ -133,9 +133,9 @@ export function resolveAvatarBodyRefinement(input: {
         pelvisOffsetX: -0.04 * Math.sign(turnFactor || 1) * speedFactor * 0.35,
         pelvisOffsetY: 0.01 * speedFactor,
         torsoPitch: 0.03 * speedFactor * upperBodyScale,
-        torsoRoll: 0.015 * speedFactor * upperBodyScale,
-        lowerBodyRoll: 0.01 * speedFactor,
-        headTiltBias: 0.005 * speedFactor * upperBodyScale
+        torsoRoll: 0.12 * speedFactor * upperBodyScale,
+        lowerBodyRoll: 0.05 * speedFactor,
+        headTiltBias: 0.015 * speedFactor * upperBodyScale
       };
     case "backpedal":
       return {

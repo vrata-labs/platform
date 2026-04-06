@@ -435,11 +435,7 @@ export function createRemoteAvatarRuntime(input: {
             naturalLocomotionEnabled ? animationPose.headTilt + bodyRefinement.headTiltBias : animationPose.headTilt,
             0.3
           );
-          const forceVrHandsVisible = (
-            reliableState?.inputMode === "vr-controller"
-            || reliableState?.inputMode === "vr-hand"
-            || Boolean(poseFrame.flags & (1 << 2))
-          );
+          const forceVrHandsVisible = reliableState?.inputMode === "vr-controller" || reliableState?.inputMode === "vr-hand";
           entity.leftHand.visible = forceVrHandsVisible || poseFrame.leftHand.gesture > 0;
           entity.rightHand.visible = forceVrHandsVisible || poseFrame.rightHand.gesture > 0;
           if (participant) {

@@ -319,11 +319,6 @@ export function createLocalAvatarController(input: {
       visual.leftHand.visible = visibility !== "hidden";
       visual.rightHand.visible = visibility !== "hidden";
       visual.aura.visible = visibility === "full-body" || visibility === "upper-body";
-      if (!visual.head.visible) {
-        visual.head.scale.setScalar(0.0001);
-      } else {
-        visual.head.scale.setScalar(1);
-      }
 
       diagnostics.inputMode = frame.inputMode;
       diagnostics.locomotionState = locomotion.state;
