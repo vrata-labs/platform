@@ -180,9 +180,6 @@ export function createLocalAvatarController(input: {
     footLockStrength: 0,
     footingCorrectionActive: false,
     visibilityState: "full-body",
-    headVisible: true,
-    leftHandVisible: true,
-    rightHandVisible: true,
     solveState: "fallback",
     animationState: "idle",
     bodyLean: 0,
@@ -336,9 +333,6 @@ export function createLocalAvatarController(input: {
       diagnostics.footLockStrength = naturalBodyEnhancementEnabled ? footing.footLockStrength : 0;
       diagnostics.footingCorrectionActive = naturalBodyEnhancementEnabled ? footing.correctionActive : false;
       diagnostics.visibilityState = visibility;
-      diagnostics.headVisible = visual.head.visible;
-      diagnostics.leftHandVisible = visual.leftHand.visible;
-      diagnostics.rightHandVisible = visual.rightHand.visible;
       diagnostics.solveState = solve.solveState;
       diagnostics.animationState = animation.clip;
       diagnostics.bodyLean = naturalBodyEnhancementEnabled ? visual.torso.rotation.z : 0;

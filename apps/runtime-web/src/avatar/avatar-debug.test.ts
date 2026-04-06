@@ -24,9 +24,6 @@ test("createEmptyAvatarDiagnostics returns idle baseline", () => {
     footLockStrength: 0,
     footingCorrectionActive: false,
     visibilityState: null,
-    headVisible: false,
-    leftHandVisible: false,
-    rightHandVisible: false,
     solveState: null,
     animationState: null,
     bodyLean: 0,
@@ -70,9 +67,6 @@ test("createAvatarLoadedDiagnostics stores selected preset and validation summar
       footLockStrength: 0.3,
       footingCorrectionActive: true,
       visibilityState: "full-body",
-      headVisible: true,
-      leftHandVisible: true,
-      rightHandVisible: true,
       solveState: "active",
       animationState: "idle",
       bodyLean: 0.1,
@@ -88,9 +82,6 @@ test("createAvatarLoadedDiagnostics stores selected preset and validation summar
   assert.equal(diagnostics.footingCorrectionActive, true);
   assert.equal(diagnostics.qualityMode, "near");
   assert.equal(diagnostics.visibilityState, "full-body");
-  assert.equal(diagnostics.headVisible, true);
-  assert.equal(diagnostics.leftHandVisible, true);
-  assert.equal(diagnostics.rightHandVisible, true);
   assert.equal(diagnostics.animationState, "idle");
   assert.equal(diagnostics.bodyLean, 0.1);
   assert.equal(diagnostics.controllerProfile, "desktop_no_controllers");
