@@ -1335,9 +1335,9 @@ apps/runtime-web/src/avatar/
 
 # Phase 3 — Ноги, gait solver и body naturalness
 
-Статус на 2026-04-04: `delivered on staging`, follow-up хвост остаётся по обзорному manual acceptance.
+Статус на 2026-04-04: `delivered on staging`, follow-up хвост остаётся по `record/replay` trace harness и обзорному manual acceptance.
 
-Апдейт после ручной проверки: первый staging rollout с включённым `avatarLegIkEnabled` не прошёл приёмку из-за заметного VR jitter корпуса/головы и слабой видимой пользы на web. Staging возвращён на безопасный legacy path через `FEATURE_AVATAR_LEG_IK=false`, а natural locomotion остаётся за feature flag. Для завершения фазы добавлены `record/replay` deterministic traces, staging e2e в двух режимах (legacy default + forced `?avatarik=1`) и VR-safe clamp для local tracked VR path.
+Апдейт после ручной проверки: первый staging rollout с включённым `avatarLegIkEnabled` не прошёл приёмку из-за заметного VR jitter корпуса/головы и слабой видимой пользы на web. Staging возвращён на безопасный legacy path через `FEATURE_AVATAR_LEG_IK=false`, а natural locomotion остаётся за feature flag до доработки VR-safe поведения.
 
 ## Цель
 
@@ -1417,7 +1417,9 @@ apps/runtime-web/src/avatar/
 
 ## Что осталось до полного закрытия Phase 3
 
-- завершить обзорный manual acceptance: desktop/desktop, desktop + Quest/WebXR, near/far social interactions, turn-in-place / strafe / backpedal / sharp stop
+- добавить обещанный `record/replay` / deterministic trace harness
+- завершить расширенный staging suite для старого и нового avatar flow как постоянный regression gate
+- в конце провести обзорный manual acceptance: desktop/desktop, desktop + Quest/WebXR, near/far social interactions, turn-in-place / strafe / backpedal / sharp stop
 
 ---
 

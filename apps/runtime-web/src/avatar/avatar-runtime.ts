@@ -10,10 +10,6 @@ export interface AvatarRuntimeFlags {
   avatarFallbackCapsulesEnabled: boolean;
 }
 
-export interface AvatarRuntimeFlagOverrides {
-  avatarLegIkEnabled?: boolean;
-}
-
 export function createInitialAvatarRuntimeFlags(): AvatarRuntimeFlags {
   return {
     avatarsEnabled: true,
@@ -35,27 +31,6 @@ export function resolveAvatarRuntimeFlags(boot: RuntimeBootResult): AvatarRuntim
     avatarSeatingEnabled: boot.envFlags.avatarSeatingEnabled,
     avatarCustomizationEnabled: boot.envFlags.avatarCustomizationEnabled,
     avatarFallbackCapsulesEnabled: boot.envFlags.avatarFallbackCapsulesEnabled && boot.avatarConfig.avatarFallbackCapsulesEnabled
-  };
-}
-
-export function resolveAvatarRuntimeFlagOverrides(query: URLSearchParams): AvatarRuntimeFlagOverrides {
-  const avatarLegIk = query.get("avatarik") ?? query.get("avatarLegIk");
-  if (avatarLegIk === "1" || avatarLegIk === "true") {
-    return { avatarLegIkEnabled: true };
-  }
-  if (avatarLegIk === "0" || avatarLegIk === "false") {
-    return { avatarLegIkEnabled: false };
-  }
-  return {};
-}
-
-export function applyAvatarRuntimeFlagOverrides(
-  flags: AvatarRuntimeFlags,
-  overrides: AvatarRuntimeFlagOverrides
-): AvatarRuntimeFlags {
-  return {
-    ...flags,
-    ...overrides
   };
 }
 
