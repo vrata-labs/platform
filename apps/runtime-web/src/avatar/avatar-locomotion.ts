@@ -174,7 +174,6 @@ export function resolveAvatarFootPlanting(input: {
   const lateralSign = plantedFoot === "left" ? -1 : 1;
   const stanceBase = input.locomotionState === "strafe" ? 0.045 : 0.032;
   const depthBase = input.locomotionState === "backpedal" ? -0.016 : 0.02;
-  const lowerBodyYaw = input.locomotionState === "strafe" ? 0 : lateralSign * 0.035 * plantStrength;
 
   return {
     qualityMode: input.qualityMode,
@@ -182,6 +181,6 @@ export function resolveAvatarFootPlanting(input: {
     plantedFoot,
     stanceOffsetX: lateralSign * stanceBase * plantStrength,
     stanceOffsetZ: depthBase * plantStrength,
-    lowerBodyYaw
+    lowerBodyYaw: lateralSign * 0.035 * plantStrength
   };
 }
