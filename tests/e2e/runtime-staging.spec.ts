@@ -532,6 +532,46 @@ test.describe("@staging runtime HUD space selector", () => {
     }
   });
 
+  test("demo-room exposes phase three locomotion diagnostics when feature flag is forced on by query override", async ({ browser }) => {
+    const pageA = await browser.newPage();
+    const pageB = await browser.newPage();
+    try {
+      await pageA.goto(`/rooms/${stagingRoomId}?debug=1&bot=circle&avatarik=1`);
+      await pageB.goto(`/rooms/${stagingRoomId}?debug=1&bot=line&avatarik=1`);
+
+      await expect.poll(async () => {
+        const debugA = await readNoahDebug(pageA);
+        const debugB = await readNoahDebug(pageB);
+        return {
+          localPhaseThreeOk: Boolean(
+            debugA?.avatarDebug?.qualityMode === "near"
+            && typeof debugA?.avatarDebug?.skatingMetric === "number"
+            && typeof debugA?.avatarDebug?.bodyLean === "number"
+          ),
+          remotePhaseThreeOk: Boolean(
+            debugB?.remoteAvatarParticipants?.some((item) =>
+              item.presenceSeen
+              && item.hasReliableState
+              && item.hasPoseFrame
+              && (item.qualityMode === "near" || item.qualityMode === "far")
+              && typeof item.skatingMetric === "number"
+              && ["walk", "strafe", "backpedal", "turn", "idle"].includes(item.locomotionState ?? "")
+            )
+          )
+        };
+      }, {
+        timeout: 30000,
+        intervals: [1000, 2000, 3000]
+      }).toEqual({
+        localPhaseThreeOk: true,
+        remotePhaseThreeOk: true
+      });
+    } finally {
+      await pageA.close();
+      await pageB.close();
+    }
+  });
+
   test("hall keeps avatar sync working between two web clients on staging", async ({ browser }) => {
     const hallRoomId = stagingSceneRooms[0]!.roomId;
     const pageA = await browser.newPage();
@@ -625,6 +665,46 @@ test.describe("@staging runtime HUD space selector", () => {
       }).toEqual({
         localFallback: true,
         remoteFallback: true
+      });
+    } finally {
+      await pageA.close();
+      await pageB.close();
+    }
+  });
+
+  test("hall exposes phase three locomotion diagnostics when feature flag is forced on by query override", async ({ browser }) => {
+    const hallRoomId = stagingSceneRooms[0]!.roomId;
+    const pageA = await browser.newPage();
+    const pageB = await browser.newPage();
+    try {
+      await pageA.goto(`/rooms/${hallRoomId}?debug=1&bot=circle&avatarik=1`);
+      await pageB.goto(`/rooms/${hallRoomId}?debug=1&bot=line&avatarik=1`);
+
+      await expect.poll(async () => {
+        const debugA = await readNoahDebug(pageA);
+        const debugB = await readNoahDebug(pageB);
+        return {
+          localNaturalness: Boolean(
+            debugA?.avatarDebug?.qualityMode === "near"
+            && typeof debugA?.avatarDebug?.skatingMetric === "number"
+            && typeof debugA?.avatarDebug?.bodyLean === "number"
+          ),
+          remoteNaturalness: Boolean(
+            debugB?.remoteAvatarParticipants?.some((item) =>
+              item.presenceSeen
+              && item.hasReliableState
+              && item.hasPoseFrame
+              && (item.qualityMode === "near" || item.qualityMode === "far")
+              && typeof item.skatingMetric === "number"
+            )
+          )
+        };
+      }, {
+        timeout: 45000,
+        intervals: [1000, 2000, 3000]
+      }).toEqual({
+        localNaturalness: true,
+        remoteNaturalness: true
       });
     } finally {
       await pageA.close();

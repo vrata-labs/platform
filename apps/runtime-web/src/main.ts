@@ -20,7 +20,13 @@ import { createAvatarLoadingDiagnostics, createEmptyAvatarDiagnostics } from "./
 import { createAvatarOutboundPublisher, type AvatarOutboundPayload } from "./avatar/avatar-publish.js";
 import type { AvatarLocomotionState, AvatarQualityMode } from "./avatar/avatar-locomotion.js";
 import { createRemoteAvatarRuntime } from "./avatar/remote-avatar-runtime.js";
-import { createInitialAvatarRuntimeFlags, resolveAvatarCatalogUrl, resolveAvatarRuntimeFlags } from "./avatar/avatar-runtime.js";
+import {
+  applyAvatarRuntimeFlagOverrides,
+  createInitialAvatarRuntimeFlags,
+  resolveAvatarCatalogUrl,
+  resolveAvatarRuntimeFlagOverrides,
+  resolveAvatarRuntimeFlags
+} from "./avatar/avatar-runtime.js";
 import { collectLocalAvatarHandDebug, resolveLocalAvatarHandTargets } from "./avatar/avatar-xr-hands.js";
 import { resolveAvatarXrInput } from "./avatar/avatar-xr-input.js";
 import { setAvatarSandboxStatus } from "./avatar/avatar-sandbox.js";
@@ -68,6 +74,7 @@ const faultConfig = {
   roomState: query.get("failroomstate") === "1",
   xrUnavailable: query.get("failxr") === "1"
 };
+const avatarRuntimeFlagOverrides = resolveAvatarRuntimeFlagOverrides(query);
 const participantId = getParticipantId();
 const displayName = localStorage.getItem("noah.displayName") ?? `Guest-${participantId.slice(0, 4)}`;
 localStorage.setItem("noah.displayName", displayName);
@@ -1547,7 +1554,7 @@ async function main(): Promise<void> {
     roomStateRealtime: boot.envFlags.roomStateRealtime,
     remoteDiagnostics: boot.envFlags.remoteDiagnostics,
     sceneBundles: boot.envFlags.sceneBundles,
-    ...resolveAvatarRuntimeFlags(boot)
+    ...applyAvatarRuntimeFlagOverrides(resolveAvatarRuntimeFlags(boot), avatarRuntimeFlagOverrides)
   };
   debugState.featureFlags = runtimeFlags;
   debugState.roomStateUrl = boot.roomStateUrl;

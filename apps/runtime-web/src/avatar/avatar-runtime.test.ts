@@ -1,7 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { createInitialAvatarRuntimeFlags, resolveAvatarCatalogUrl, resolveAvatarRuntimeFlags } from "./avatar-runtime.js";
+import {
+  applyAvatarRuntimeFlagOverrides,
+  createInitialAvatarRuntimeFlags,
+  resolveAvatarCatalogUrl,
+  resolveAvatarRuntimeFlagOverrides,
+  resolveAvatarRuntimeFlags
+} from "./avatar-runtime.js";
 
 test("createInitialAvatarRuntimeFlags returns avatar-enabled defaults", () => {
   assert.deepEqual(createInitialAvatarRuntimeFlags(), {
@@ -64,4 +70,19 @@ test("resolveAvatarCatalogUrl falls back to default asset path", () => {
   } as const;
 
   assert.equal(resolveAvatarCatalogUrl(boot as never), "/assets/avatars/catalog.v1.json");
+});
+
+test("resolveAvatarRuntimeFlagOverrides supports query override for avatar leg ik", () => {
+  assert.deepEqual(resolveAvatarRuntimeFlagOverrides(new URLSearchParams("avatarik=1")), { avatarLegIkEnabled: true });
+  assert.deepEqual(resolveAvatarRuntimeFlagOverrides(new URLSearchParams("avatarLegIk=false")), { avatarLegIkEnabled: false });
+  assert.deepEqual(resolveAvatarRuntimeFlagOverrides(new URLSearchParams("debug=1")), {});
+});
+
+test("applyAvatarRuntimeFlagOverrides replaces avatar leg ik without touching others", () => {
+  const flags = createInitialAvatarRuntimeFlags();
+  const next = applyAvatarRuntimeFlagOverrides(flags, { avatarLegIkEnabled: true });
+
+  assert.equal(next.avatarLegIkEnabled, true);
+  assert.equal(next.avatarsEnabled, true);
+  assert.equal(next.avatarPoseBinaryEnabled, true);
 });
