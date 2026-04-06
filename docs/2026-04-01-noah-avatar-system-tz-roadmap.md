@@ -1333,67 +1333,64 @@ apps/runtime-web/src/avatar/
 
 ---
 
-# Phase 3 — Ноги, gait solver и body naturalness
+# Phase 3 - Believable Avatar Presence Without Legs
+
+Статус на 2026-04-06: `reframed`.
+
+Первоначальная идея фазы как `legs / gait solver / body naturalness` показала плохой продуктовый результат: заметной пользы в web не появилось, а в VR появились регрессии. Вывод: для текущего no-leg avatar style сама по себе "походка" не является обязательной ценностью. Фаза переосмыслена как работа над believable avatar presence без обязательных ног.
 
 ## Цель
 
-Сделать походку и корпус естественными, чтобы аватары были похожи на social VR avatars, а не на “руки и голова на палке”.
+Сделать аватары воспринимаемо живыми и стабильными без обязательных ног: хороший upper-body presence, предсказуемые повороты, стабильная голова и руки, корректное remote/self поведение, отсутствие раздражающих procedural артефактов.
 
 ## Что входит
 
-- pelvis/spine refinement
-- gait blending
-- walk/strafe/backpedal clips
-- turn-in-place
-- near-avatar foot planting
-- smoothing на transitions
-- anti-foot-skating logic
+- стабильный self/remote avatar presence
+- корректное скрытие локальной головы в VR
+- стабильная видимость VR рук у remote observers
+- отсутствие body jitter, torso twist и лишнего synthetic motion
+- automated regression gates на local, e2e и staging уровнях
 
 ## Что не входит
 
+- обязательные ноги
+- gait solver как product requirement
+- foot planting / anti-foot-skating как обязательный baseline
 - seating
 - lipsync
 - rich hand tracking transport
 
-## Изменяемые модули
+## Product baseline
 
-- `apps/runtime-web/src/avatar/avatar-ik.ts`
-- `apps/runtime-web/src/avatar/avatar-locomotion.ts`
-- `apps/runtime-web/src/avatar/avatar-lod.ts`
-- avatar animation assets
+- За baseline принимается smooth no-leg avatar style.
+- Плавное "скольжение" без шагов считается допустимым, если это выглядит лучше, чем fake gait.
+- Любые более сложные body-motion path должны доказывать ценность отдельно, а не считаться обязательной частью продукта.
+
+## Experimental branch
+
+- Исследования вокруг `avatarLegIkEnabled`, `avatarik=1`, locomotion traces и synthetic body motion остаются как experimental path.
+- Experimental path полезен для будущих richer avatars, но не является обязательным продуктовым критерием успеха.
 
 ## Definition of Done
 
 Фаза завершена, если:
 
-1. При движении аватар не “скользит” телом без шагов.
-2. При strafe/backpedal используется правильный набор анимаций.
-3. При повороте на месте есть turn-in-place, а не “телепорт ног”.
-4. Near avatars визуально правдоподобны в обычных social interactions.
-5. Far avatars корректно деградируют в упрощённый locomotion mode без резких артефактов.
+1. Desktop и VR avatar experience не хуже предыдущего стабильного baseline.
+2. В VR пользователь не видит свою голову.
+3. Remote VR руки корректно видны в web.
+4. В desktop/web нет body jitter и strafe torso twist.
+5. `pnpm build`, `pnpm test`, `pnpm test:e2e` и `pnpm test:e2e:staging` зелёные.
+6. Ручная проверка подтверждает, что avatar presence комфортный и не раздражает.
 
-## Тесты
+## Что уже стало ясно
 
-### Unit
+- Первая формулировка Phase 3 как `legs/gait solver/body naturalness` была неверной продуктовой гипотезой.
+- Метрика успеха здесь не "стало больше движения тела", а "аватар не бесит и не ломает immersion".
+- Current natural-locomotion branch полезна как исследование и как набор regression tests, но не как обязательный продуктовый baseline.
 
-- locomotion state machine thresholds
-- clip blend weights
-- anti-foot-skating correction
+## Что осталось до полного закрытия Phase 3
 
-### Integration
-
-- record/replay path traces
-- deterministic bot paths
-
-### Manual
-
-- использовать существующий `bot` режим для прогонки предсказуемых траекторий
-- проверить straight walk / circle / strafe / stop / turn
-
-### Артефакты выхода из фазы
-
-- natural locomotion `v1`
-- gait regression scenes / traces
+- обзорный manual acceptance: desktop/desktop, desktop + Quest/WebXR, remote observation, повороты, движение вбок/назад
 
 ---
 
