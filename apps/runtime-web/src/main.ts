@@ -18,7 +18,6 @@ import { startSceneBundleSession } from "./scene-session.js";
 import { detectXrSupport, getEnterVrVisibility } from "./xr.js";
 import { createAvatarLoadingDiagnostics, createEmptyAvatarDiagnostics } from "./avatar/avatar-debug.js";
 import { createAvatarOutboundPublisher, type AvatarOutboundPayload } from "./avatar/avatar-publish.js";
-import type { AvatarLocomotionState, AvatarQualityMode } from "./avatar/avatar-locomotion.js";
 import { createRemoteAvatarRuntime } from "./avatar/remote-avatar-runtime.js";
 import { createInitialAvatarRuntimeFlags, resolveAvatarCatalogUrl, resolveAvatarRuntimeFlags } from "./avatar/avatar-runtime.js";
 import { collectLocalAvatarHandDebug, resolveLocalAvatarHandTargets } from "./avatar/avatar-xr-hands.js";
@@ -226,8 +225,7 @@ const remoteAvatarRuntime = createRemoteAvatarRuntime({
   scene,
   bodyGeometry,
   headGeometry,
-  localParticipantId: participantId,
-  getObserverPosition: () => player.position
+  localParticipantId: participantId
 });
 
 function setFallbackEnvironmentVisible(visible: boolean): void {
@@ -426,9 +424,6 @@ const debugState = {
     presenceSeen: boolean;
     hasReliableState: boolean;
     hasPoseFrame: boolean;
-    locomotionState: AvatarLocomotionState;
-    qualityMode: AvatarQualityMode;
-    skatingMetric: number;
     leftHandVisible: boolean;
     rightHandVisible: boolean;
     poseBufferDepth: number;

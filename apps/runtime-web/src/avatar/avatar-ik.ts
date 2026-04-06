@@ -1,5 +1,3 @@
-import type { AvatarInputMode } from "./avatar-types.js";
-import type { AvatarLocomotionState } from "./avatar-locomotion.js";
 import type { AvatarPoseProfile } from "./avatar-visibility.js";
 
 export interface AvatarPosePoint {
@@ -13,15 +11,6 @@ export interface AvatarUpperBodySolveResult {
   headLocal: AvatarPosePoint;
   leftHandLocal: AvatarPosePoint;
   rightHandLocal: AvatarPosePoint;
-}
-
-export interface AvatarBodyRefinementResult {
-  pelvisOffsetX: number;
-  pelvisOffsetY: number;
-  torsoPitch: number;
-  torsoRoll: number;
-  lowerBodyRoll: number;
-  headTiltBias: number;
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -104,66 +93,4 @@ export function solveUpperBodyPose(input: {
     leftHandLocal,
     rightHandLocal
   };
-}
-
-export function resolveAvatarBodyRefinement(input: {
-  locomotionState: AvatarLocomotionState;
-  speed: number;
-  turnRate: number;
-  inputMode: AvatarInputMode;
-  xrPresenting?: boolean;
-}): AvatarBodyRefinementResult {
-  const speedFactor = clamp(input.speed, 0, 1.5) / 1.5;
-  const turnFactor = clamp(input.turnRate, -1.5, 1.5) / 1.5;
-  const trackedUpperBody = input.xrPresenting && (input.inputMode === "vr-controller" || input.inputMode === "vr-hand");
-  const upperBodyScale = trackedUpperBody ? 0.35 : input.inputMode === "mobile" ? 0.7 : 1;
-
-  switch (input.locomotionState) {
-    case "walk":
-      return {
-        pelvisOffsetX: 0,
-        pelvisOffsetY: 0.015 * speedFactor,
-        torsoPitch: 0.08 * speedFactor * upperBodyScale,
-        torsoRoll: 0,
-        lowerBodyRoll: 0.02 * speedFactor,
-        headTiltBias: 0.01 * speedFactor * upperBodyScale
-      };
-    case "strafe":
-      return {
-        pelvisOffsetX: -0.04 * Math.sign(turnFactor || 1) * speedFactor * 0.35,
-        pelvisOffsetY: 0.01 * speedFactor,
-        torsoPitch: 0.03 * speedFactor * upperBodyScale,
-        torsoRoll: 0.12 * speedFactor * upperBodyScale,
-        lowerBodyRoll: 0.05 * speedFactor,
-        headTiltBias: 0.015 * speedFactor * upperBodyScale
-      };
-    case "backpedal":
-      return {
-        pelvisOffsetX: 0,
-        pelvisOffsetY: 0.008 * speedFactor,
-        torsoPitch: -0.05 * speedFactor * upperBodyScale,
-        torsoRoll: -0.03 * speedFactor * upperBodyScale,
-        lowerBodyRoll: -0.02 * speedFactor,
-        headTiltBias: -0.01 * speedFactor * upperBodyScale
-      };
-    case "turn":
-      return {
-        pelvisOffsetX: 0.01 * turnFactor,
-        pelvisOffsetY: 0,
-        torsoPitch: 0,
-        torsoRoll: 0.1 * turnFactor * upperBodyScale,
-        lowerBodyRoll: 0.04 * turnFactor,
-        headTiltBias: 0.05 * turnFactor * upperBodyScale
-      };
-    case "idle":
-    default:
-      return {
-        pelvisOffsetX: 0,
-        pelvisOffsetY: 0,
-        torsoPitch: 0,
-        torsoRoll: 0,
-        lowerBodyRoll: 0,
-        headTiltBias: 0
-      };
-  }
 }

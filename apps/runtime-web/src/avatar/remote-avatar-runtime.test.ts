@@ -2,7 +2,6 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import * as THREE from "three";
 
-import type { AvatarLocomotionState, AvatarQualityMode } from "./avatar-locomotion.js";
 import { createRemoteAvatarRuntime } from "./remote-avatar-runtime.js";
 
 function createDebugState() {
@@ -20,9 +19,6 @@ function createDebugState() {
       presenceSeen: boolean;
       hasReliableState: boolean;
       hasPoseFrame: boolean;
-      locomotionState: AvatarLocomotionState;
-      qualityMode: AvatarQualityMode;
-      skatingMetric: number;
       leftHandVisible: boolean;
       rightHandVisible: boolean;
       poseBufferDepth: number;
@@ -75,8 +71,6 @@ test("remote avatar runtime ingests reliable state and pose frame into debug sta
   assert.equal(debugState.remoteAvatarParticipants[0]?.presenceSeen, false);
   assert.equal(debugState.remoteAvatarParticipants[0]?.hasReliableState, true);
   assert.equal(debugState.remoteAvatarParticipants[0]?.hasPoseFrame, true);
-  assert.equal(debugState.remoteAvatarParticipants[0]?.locomotionState, "idle");
-  assert.equal(debugState.remoteAvatarParticipants[0]?.qualityMode, "near");
   assert.equal(debugState.remoteAvatarParticipants[0]?.poseBufferDepth, 1);
   assert.equal(debugState.remoteAvatarParticipants[0]?.lastPoseSeq, 1);
   assert.equal((debugState.remoteAvatarParticipants[0]?.playbackDelayMs ?? 0) >= 100, true);
@@ -118,14 +112,8 @@ test("remote avatar runtime reflects hand visibility from pose gestures", () => 
   runtime.update(0.016, debugState);
 
   assert.equal(debugState.remoteAvatarParticipants[0]?.presenceSeen, true);
-  assert.equal(debugState.remoteAvatarParticipants[0]?.locomotionState, "walk");
-  assert.equal(debugState.remoteAvatarParticipants[0]?.qualityMode, "near");
-  assert.equal((debugState.remoteAvatarParticipants[0]?.skatingMetric ?? 0) >= 0, true);
   assert.equal(debugState.remoteAvatarParticipants[0]?.leftHandVisible, true);
   assert.equal(debugState.remoteAvatarParticipants[0]?.rightHandVisible, false);
-  const body = scene.children.find((item) => item instanceof THREE.Mesh) as THREE.Mesh | undefined;
-  assert.ok(body);
-  assert.equal(body.rotation.x > 0, true);
 });
 
 test("remote avatar runtime forces VR hands visible when pose frames arrive", () => {
@@ -249,42 +237,4 @@ test("remote avatar runtime prefers pose root over coarse presence sample", () =
   assert.ok(body);
   assert.equal(body.position.x < 10, true);
   assert.equal(body.position.z < 10, true);
-});
-
-test("remote avatar runtime degrades quality mode for distant avatars", () => {
-  const scene = new THREE.Scene();
-  const runtime = createRemoteAvatarRuntime({
-    scene,
-    bodyGeometry: new THREE.CapsuleGeometry(0.24, 0.8, 6, 12),
-    headGeometry: new THREE.SphereGeometry(0.18, 20, 20),
-    localParticipantId: "local",
-    getObserverPosition: () => ({ x: 0, y: 0, z: 0 })
-  });
-  const debugState = createDebugState();
-
-  runtime.applySnapshotParticipants([{
-    participantId: "remote-far",
-    displayName: "Remote Far",
-    mode: "desktop",
-    muted: false,
-    activeMedia: { audio: false, screenShare: false },
-    rootTransform: { x: 9, y: 0, z: 0 },
-    bodyTransform: { x: 9, y: 0, z: 0 },
-    headTransform: { x: 9, y: 1.6, z: 0 },
-    updatedAt: new Date().toISOString()
-  }] as never, debugState);
-  runtime.ingestPoseFrame("remote-far", {
-    seq: 1,
-    sentAtMs: Date.now(),
-    flags: 0,
-    root: { x: 9, y: 0, z: 0, yaw: 0, vx: 0, vz: 0 },
-    head: { x: 9, y: 1.6, z: 0, qx: 0, qy: 0, qz: 0, qw: 1 },
-    leftHand: { x: 8.8, y: 1.2, z: 0.1, qx: 0, qy: 0, qz: 0, qw: 1, gesture: 1 },
-    rightHand: { x: 9.2, y: 1.2, z: 0.1, qx: 0, qy: 0, qz: 0, qw: 1, gesture: 1 },
-    locomotion: { mode: 1, speed: 1, angularVelocity: 0 }
-  }, debugState);
-
-  runtime.update(0.016, debugState);
-
-  assert.equal(debugState.remoteAvatarParticipants[0]?.qualityMode, "far");
 });

@@ -18,15 +18,9 @@ test("createEmptyAvatarDiagnostics returns idle baseline", () => {
     selectedAvatarId: null,
     inputMode: null,
     locomotionState: null,
-    locomotionTransitioned: false,
-    qualityMode: null,
-    skatingMetric: 0,
-    footLockStrength: 0,
-    footingCorrectionActive: false,
     visibilityState: null,
     solveState: null,
     animationState: null,
-    bodyLean: 0,
     activeControllerCount: 0,
     controllerProfile: null,
     xrInputProfile: null,
@@ -61,15 +55,9 @@ test("createAvatarLoadedDiagnostics stores selected preset and validation summar
       validatorSummary: ["preset-01:11800"],
       inputMode: "desktop",
       locomotionState: "idle",
-      locomotionTransitioned: false,
-      qualityMode: "near",
-      skatingMetric: 0.2,
-      footLockStrength: 0.3,
-      footingCorrectionActive: true,
       visibilityState: "full-body",
       solveState: "active",
       animationState: "idle",
-      bodyLean: 0.1,
       activeControllerCount: 0,
       controllerProfile: "desktop_no_controllers",
       xrInputProfile: "none"
@@ -77,13 +65,8 @@ test("createAvatarLoadedDiagnostics stores selected preset and validation summar
   assert.equal(diagnostics.state, "loaded");
   assert.equal(diagnostics.selectedAvatarId, "preset-01");
   assert.deepEqual(diagnostics.validatorSummary, ["preset-01:11800"]);
-  assert.equal(diagnostics.skatingMetric, 0.2);
-  assert.equal(diagnostics.footLockStrength, 0.3);
-  assert.equal(diagnostics.footingCorrectionActive, true);
-  assert.equal(diagnostics.qualityMode, "near");
   assert.equal(diagnostics.visibilityState, "full-body");
   assert.equal(diagnostics.animationState, "idle");
-  assert.equal(diagnostics.bodyLean, 0.1);
   assert.equal(diagnostics.controllerProfile, "desktop_no_controllers");
   assert.equal(diagnostics.xrInputProfile, "none");
 });

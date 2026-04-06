@@ -1,4 +1,3 @@
-import { mapAvatarLocomotionStateToMode, type AvatarLocomotionState } from "./avatar-locomotion.js";
 import type { AvatarReliableState, CompactPoseFrame, LocalAvatarSnapshotV1 } from "./avatar-types.js";
 
 function rotateAroundYaw(point: { x: number; y: number; z: number }, yaw: number): { x: number; y: number; z: number } {
@@ -18,6 +17,22 @@ function toWorldPoint(snapshot: LocalAvatarSnapshotV1, point: { x: number; y: nu
     y: snapshot.root.y + rotated.y,
     z: snapshot.root.z + rotated.z
   };
+}
+
+function mapLocomotionMode(mode: string): number {
+  switch (mode) {
+    case "walk":
+      return 1;
+    case "strafe":
+      return 2;
+    case "backpedal":
+      return 3;
+    case "turn":
+      return 4;
+    case "idle":
+    default:
+      return 0;
+  }
 }
 
 function estimateSpeed(snapshot: LocalAvatarSnapshotV1): number {
@@ -127,7 +142,7 @@ export function serializeCompactPoseFrame(input: {
       gesture: input.snapshot.rightHand.visible ? 1 : 0
     },
     locomotion: {
-      mode: mapAvatarLocomotionStateToMode(input.snapshot.locomotionState as AvatarLocomotionState),
+      mode: mapLocomotionMode(input.snapshot.locomotionState),
       speed: estimateSpeed(input.snapshot),
       angularVelocity: estimateAngularVelocity(input.snapshot)
     }
