@@ -1031,9 +1031,12 @@ function getAvatarPoseSendIntervalSeconds(snapshot: LocalAvatarSnapshotV1 | null
     return 1 / 30;
   }
   if (averageFrameBudgetMs > 35) {
-    return 1 / 8;
+    return 1 / 12;
   }
-  return 1 / 10;
+  if (averageFrameBudgetMs > 24) {
+    return 1 / 15;
+  }
+  return 1 / 20;
 }
 
 function syncAvatarPoseRealtime(nowMs: number): void {
