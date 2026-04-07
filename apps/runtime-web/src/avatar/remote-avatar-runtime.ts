@@ -342,14 +342,8 @@ export function createRemoteAvatarRuntime(input: {
             entity.head.position.lerp(new THREE.Vector3(headSample.x, 1.58, headSample.z), 0.25);
             entity.body.lookAt(headSample.x, 0.92, headSample.z);
           }
-          const lastPoseAppliedAtMs = participant?.lastPoseAppliedAtMs ?? null;
-          const keepHandsVisible = lastPoseAppliedAtMs !== null && nowMs - lastPoseAppliedAtMs < 350;
-          entity.leftHand.visible = keepHandsVisible && (participant?.leftHandVisible ?? false);
-          entity.rightHand.visible = keepHandsVisible && (participant?.rightHandVisible ?? false);
-          if (participant && !keepHandsVisible) {
-            participant.leftHandVisible = false;
-            participant.rightHandVisible = false;
-          }
+          entity.leftHand.visible = participant?.leftHandVisible ?? false;
+          entity.rightHand.visible = participant?.rightHandVisible ?? false;
         }
       }
       syncDebugState(debugState);

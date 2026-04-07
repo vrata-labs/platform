@@ -734,6 +734,22 @@ test.describe("@staging runtime HUD space selector", () => {
         aHandsReady: true,
         bHandsReady: true
       });
+
+      await pageA.waitForTimeout(2500);
+      await expect.poll(async () => {
+        const debugA = await readNoahDebug(pageA);
+        const debugB = await readNoahDebug(pageB);
+        return {
+          aHandsStable: Boolean(debugA?.remoteAvatarParticipants?.some((item) => item.presenceSeen && item.hasReliableState && item.hasPoseFrame && item.leftHandVisible && item.rightHandVisible)),
+          bHandsStable: Boolean(debugB?.remoteAvatarParticipants?.some((item) => item.presenceSeen && item.hasReliableState && item.hasPoseFrame && item.leftHandVisible && item.rightHandVisible))
+        };
+      }, {
+        timeout: 15000,
+        intervals: [1000, 2000, 3000]
+      }).toEqual({
+        aHandsStable: true,
+        bHandsStable: true
+      });
     } finally {
       await pageA.close();
       await pageB.close();
