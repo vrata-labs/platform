@@ -60,6 +60,7 @@ const sceneMaterialDebugMode = debugEnabled ? (query.get("mat") ?? "off") : "off
 const requestedCleanSceneMode = query.get("clean") === "1";
 const avatarSandboxEnabled = query.get("avatarsandbox") === "1" || query.get("avatarSandbox") === "1";
 const avatarLegIkQueryOverrideEnabled = query.get("avatarik") === "1";
+const avatarVrMockEnabled = debugEnabled && query.get("avatarvrmock") === "1";
 const botMode = query.get("bot") ?? "off";
 const shareMockEnabled = query.get("sharemock") === "1";
 const failSpaces = query.get("failspaces") === "1";
@@ -883,6 +884,30 @@ function getSignedAngleDelta(next: number, previous: number): number {
 }
 
 function getLocalAvatarHandTargets(): { leftHand: { x: number; y: number; z: number } | null; rightHand: { x: number; y: number; z: number } | null } {
+  if (avatarVrMockEnabled && !renderer.xr.isPresenting) {
+    const headWorldPosition = camera.getWorldPosition(new THREE.Vector3());
+    debugState.xrAvatarDebug = {
+      profile: "none",
+      playerRoot: {
+        x: player.position.x,
+        y: player.position.y,
+        z: player.position.z,
+        yaw
+      },
+      headWorld: {
+        x: headWorldPosition.x,
+        y: headWorldPosition.y,
+        z: headWorldPosition.z
+      },
+      leftGrip: null,
+      rightGrip: null,
+      leftController: null,
+      rightController: null,
+      leftResolved: null,
+      rightResolved: null
+    };
+    return { leftHand: null, rightHand: null };
+  }
   if (!renderer.xr.isPresenting) {
     debugState.xrAvatarDebug = null;
     return { leftHand: null, rightHand: null };
@@ -943,7 +968,13 @@ function updateLocalAvatar(delta: number): void {
   const headWorldPosition = new THREE.Vector3();
   camera.getWorldPosition(headWorldPosition);
   const handTargets = getLocalAvatarHandTargets();
-  const inputMode = renderer.xr.isPresenting
+  const xrPresenting = renderer.xr.isPresenting || avatarVrMockEnabled;
+  const xrInputProfile = renderer.xr.isPresenting
+    ? lastAvatarXrInputProfile
+    : avatarVrMockEnabled
+      ? "none"
+      : null;
+  const inputMode = xrPresenting
     ? "vr-controller"
     : /android|iphone|ipad/i.test(navigator.userAgent)
       ? "mobile"
@@ -952,8 +983,8 @@ function updateLocalAvatar(delta: number): void {
   localAvatarController.update({
     deltaSeconds: delta,
     inputMode,
-    xrPresenting: renderer.xr.isPresenting,
-    xrInputProfile: lastAvatarXrInputProfile,
+    xrPresenting,
+    xrInputProfile,
     rootPosition: {
       x: player.position.x,
       y: player.position.y,

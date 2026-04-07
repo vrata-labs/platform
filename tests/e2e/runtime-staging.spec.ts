@@ -179,7 +179,7 @@ async function readNoahDebug(page: Page): Promise<{
     leftHandVisible?: boolean;
     rightHandVisible?: boolean;
   }>;
-} | undefined> {
+  } | undefined> {
   return page.evaluate(() => (window as Window & {
     __NOAH_DEBUG__?: {
       roomStateConnected?: boolean;
@@ -192,6 +192,50 @@ async function readNoahDebug(page: Page): Promise<{
         leftHandVisible?: boolean;
         rightHandVisible?: boolean;
       }>;
+    };
+  }).__NOAH_DEBUG__);
+}
+
+async function readSelfAvatarDebug(page: Page): Promise<{
+  avatarDebug?: {
+    inputMode?: string | null;
+    visibilityState?: string | null;
+    controllerProfile?: string | null;
+    xrInputProfile?: string | null;
+  };
+  avatarSnapshot?: {
+    inputMode?: string | null;
+    visibilityState?: string | null;
+    leftHand?: { x: number; y: number; z: number; visible: boolean };
+    rightHand?: { x: number; y: number; z: number; visible: boolean };
+  };
+  avatarPoseTransport?: {
+    targetHz?: number;
+  };
+  xrAvatarDebug?: {
+    profile?: string | null;
+  } | null;
+} | undefined> {
+  return page.evaluate(() => (window as Window & {
+    __NOAH_DEBUG__?: {
+      avatarDebug?: {
+        inputMode?: string | null;
+        visibilityState?: string | null;
+        controllerProfile?: string | null;
+        xrInputProfile?: string | null;
+      };
+      avatarSnapshot?: {
+        inputMode?: string | null;
+        visibilityState?: string | null;
+        leftHand?: { x: number; y: number; z: number; visible: boolean };
+        rightHand?: { x: number; y: number; z: number; visible: boolean };
+      };
+      avatarPoseTransport?: {
+        targetHz?: number;
+      };
+      xrAvatarDebug?: {
+        profile?: string | null;
+      } | null;
     };
   }).__NOAH_DEBUG__);
 }
@@ -500,6 +544,140 @@ test.describe("@staging runtime HUD space selector", () => {
       mode: "experimental-leg-ik",
       avatarLegIkEnabled: true
     });
+  });
+
+  test("staging mock VR keeps self avatar in hands-only mode without jittery fallback changes", async ({ page }) => {
+    await page.goto(`/rooms/${stagingRoomId}?debug=1&avatarvrmock=1`);
+
+    await expect.poll(async () => {
+      const debug = await readSelfAvatarDebug(page);
+      return {
+        inputMode: debug?.avatarDebug?.inputMode ?? null,
+        visibilityState: debug?.avatarDebug?.visibilityState ?? null,
+        controllerProfile: debug?.avatarDebug?.controllerProfile ?? null,
+        xrInputProfile: debug?.avatarDebug?.xrInputProfile ?? null,
+        snapshotInputMode: debug?.avatarSnapshot?.inputMode ?? null,
+        snapshotVisibility: debug?.avatarSnapshot?.visibilityState ?? null,
+        leftVisible: debug?.avatarSnapshot?.leftHand?.visible ?? null,
+        rightVisible: debug?.avatarSnapshot?.rightHand?.visible ?? null,
+        targetHzReady: (debug?.avatarPoseTransport?.targetHz ?? 0) >= 20,
+        xrProfile: debug?.xrAvatarDebug?.profile ?? null
+      };
+    }, {
+      timeout: 25000,
+      intervals: [1000, 2000, 3000]
+    }).toEqual({
+      inputMode: "vr-controller",
+      visibilityState: "hands-only",
+      controllerProfile: "vr_no_controllers",
+      xrInputProfile: "none",
+      snapshotInputMode: "vr-controller",
+      snapshotVisibility: "hands-only",
+      leftVisible: true,
+      rightVisible: true,
+      targetHzReady: true,
+      xrProfile: "none"
+    });
+
+    const first = await readSelfAvatarDebug(page);
+    await page.waitForTimeout(1500);
+    const second = await readSelfAvatarDebug(page);
+
+    const leftDx = Math.abs((second?.avatarSnapshot?.leftHand?.x ?? 0) - (first?.avatarSnapshot?.leftHand?.x ?? 0));
+    const leftDy = Math.abs((second?.avatarSnapshot?.leftHand?.y ?? 0) - (first?.avatarSnapshot?.leftHand?.y ?? 0));
+    const leftDz = Math.abs((second?.avatarSnapshot?.leftHand?.z ?? 0) - (first?.avatarSnapshot?.leftHand?.z ?? 0));
+    const rightDx = Math.abs((second?.avatarSnapshot?.rightHand?.x ?? 0) - (first?.avatarSnapshot?.rightHand?.x ?? 0));
+    const rightDy = Math.abs((second?.avatarSnapshot?.rightHand?.y ?? 0) - (first?.avatarSnapshot?.rightHand?.y ?? 0));
+    const rightDz = Math.abs((second?.avatarSnapshot?.rightHand?.z ?? 0) - (first?.avatarSnapshot?.rightHand?.z ?? 0));
+
+    expect(Math.max(leftDx, leftDy, leftDz, rightDx, rightDy, rightDz)).toBeLessThan(0.001);
+  });
+
+  test("staging desktop observer keeps remote mock VR hands visible", async ({ browser, request }) => {
+    const targetName = `Staging Avatar Mock VR ${Date.now()}`;
+    let roomId: string | null = null;
+
+    try {
+      const createRoomResponse = await request.post("/api/rooms", {
+        headers: {
+          "x-noah-admin-token": stagingAdminToken
+        },
+        data: {
+          tenantId: "demo-tenant",
+          templateId: "meeting-room-basic",
+          name: targetName,
+          guestAllowed: true,
+          avatarConfig: {
+            avatarsEnabled: true,
+            avatarCatalogUrl: "/assets/avatars/catalog.v1.json",
+            avatarQualityProfile: "desktop-standard",
+            avatarFallbackCapsulesEnabled: true,
+            avatarSeatsEnabled: false
+          }
+        }
+      });
+      expect(createRoomResponse.ok()).toBeTruthy();
+      const room = await createRoomResponse.json() as { roomId: string };
+      roomId = room.roomId;
+
+      const vrPage = await browser.newPage();
+      const webPage = await browser.newPage();
+      try {
+        await vrPage.goto(`/rooms/${room.roomId}?debug=1&avatarvrmock=1`);
+        await webPage.goto(`/rooms/${room.roomId}?debug=1`);
+
+        await expect.poll(async () => {
+          const vrDebug = await readSelfAvatarDebug(vrPage);
+          const webDebug = await webPage.evaluate(() => (window as Window & {
+            __NOAH_DEBUG__?: {
+              remoteAvatarReliableStates?: Array<{ inputMode?: string | null }>;
+              remoteAvatarParticipants?: Array<{
+                inputMode?: string | null;
+                presenceSeen?: boolean;
+                hasReliableState?: boolean;
+                hasPoseFrame?: boolean;
+                leftHandVisible?: boolean;
+                rightHandVisible?: boolean;
+              }>;
+            };
+          }).__NOAH_DEBUG__);
+
+          return {
+            vrHandsOnly: vrDebug?.avatarSnapshot?.visibilityState ?? null,
+            vrControllerProfile: vrDebug?.avatarDebug?.controllerProfile ?? null,
+            remoteReliableVr: Boolean(webDebug?.remoteAvatarReliableStates?.some((item) => item.inputMode === "vr-controller")),
+            remoteVrHands: Boolean(webDebug?.remoteAvatarParticipants?.some((item) =>
+              item.inputMode === "vr-controller"
+              && item.presenceSeen
+              && item.hasReliableState
+              && item.hasPoseFrame
+              && item.leftHandVisible
+              && item.rightHandVisible
+            ))
+          };
+        }, {
+          timeout: 45000,
+          intervals: [1000, 2000, 3000]
+        }).toEqual({
+          vrHandsOnly: "hands-only",
+          vrControllerProfile: "vr_no_controllers",
+          remoteReliableVr: true,
+          remoteVrHands: true
+        });
+      } finally {
+        await vrPage.close();
+        await webPage.close();
+      }
+    } finally {
+      if (roomId) {
+        const deleteResponse = await request.delete(`/api/rooms/${roomId}`, {
+          headers: {
+            "x-noah-admin-token": stagingAdminToken
+          }
+        });
+        expect(deleteResponse.ok()).toBeTruthy();
+      }
+    }
   });
 
   test("hall keeps avatar sync working between two web clients on staging", async ({ browser }) => {
