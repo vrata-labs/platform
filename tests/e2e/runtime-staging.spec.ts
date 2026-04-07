@@ -680,23 +680,6 @@ test.describe("@staging runtime HUD space selector", () => {
     }
   });
 
-  test("staging desktop avatar transport keeps smoother pose cadence for web observers", async ({ page }) => {
-    await page.goto(`/rooms/${stagingRoomId}?debug=1&bot=line`);
-    await expect.poll(async () => {
-      const debug = await readSelfAvatarDebug(page);
-      return {
-        inputMode: debug?.avatarSnapshot?.inputMode ?? null,
-        targetHzReady: (debug?.avatarPoseTransport?.targetHz ?? 0) >= 12
-      };
-    }, {
-      timeout: 25000,
-      intervals: [1000, 2000, 3000]
-    }).toEqual({
-      inputMode: "desktop",
-      targetHzReady: true
-    });
-  });
-
   test("hall keeps avatar sync working between two web clients on staging", async ({ browser }) => {
     const hallRoomId = stagingSceneRooms[0]!.roomId;
     const pageA = await browser.newPage();

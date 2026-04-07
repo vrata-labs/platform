@@ -98,10 +98,6 @@ function lerpPosePoint(a: { x: number; y: number; z: number }, b: { x: number; y
   };
 }
 
-function resolveRemoteBodyAnchorY(headY: number): number {
-  return THREE.MathUtils.clamp(headY - 0.84, 0.72, 0.92);
-}
-
 function resolveInterpolatedPose(sample: ReturnType<typeof sampleAvatarPoseBuffer>, renderAtMs: number): CompactPoseFrame | null {
   if (sample.previous && sample.next && sample.next.sentAtMs > sample.previous.sentAtMs) {
     const alpha = THREE.MathUtils.clamp(
@@ -327,11 +323,10 @@ export function createRemoteAvatarRuntime(input: {
           bodyMaterial.color.setHex(color);
         }
         if (poseFrame) {
-          const bodyAnchorY = resolveRemoteBodyAnchorY(poseFrame.head.y);
-          entity.body.position.lerp(new THREE.Vector3(poseFrame.root.x, bodyAnchorY, poseFrame.root.z), 0.5);
-          entity.head.position.lerp(new THREE.Vector3(poseFrame.head.x, poseFrame.head.y, poseFrame.head.z), 0.6);
-          entity.leftHand.position.lerp(new THREE.Vector3(poseFrame.leftHand.x, poseFrame.leftHand.y, poseFrame.leftHand.z), 0.6);
-          entity.rightHand.position.lerp(new THREE.Vector3(poseFrame.rightHand.x, poseFrame.rightHand.y, poseFrame.rightHand.z), 0.6);
+          entity.body.position.lerp(new THREE.Vector3(poseFrame.root.x, 0.92, poseFrame.root.z), 0.35);
+          entity.head.position.lerp(new THREE.Vector3(poseFrame.head.x, poseFrame.head.y, poseFrame.head.z), 0.45);
+          entity.leftHand.position.lerp(new THREE.Vector3(poseFrame.leftHand.x, poseFrame.leftHand.y, poseFrame.leftHand.z), 0.45);
+          entity.rightHand.position.lerp(new THREE.Vector3(poseFrame.rightHand.x, poseFrame.rightHand.y, poseFrame.rightHand.z), 0.45);
           entity.body.lookAt(poseFrame.head.x, 0.92, poseFrame.head.z);
           const forceVrHandsVisible = reliableState?.inputMode === "vr-controller" || reliableState?.inputMode === "vr-hand";
           entity.leftHand.visible = forceVrHandsVisible || poseFrame.leftHand.gesture > 0;
@@ -343,9 +338,8 @@ export function createRemoteAvatarRuntime(input: {
           }
         } else {
           if (bodySample && headSample) {
-            const bodyAnchorY = resolveRemoteBodyAnchorY(1.58);
-            entity.body.position.lerp(new THREE.Vector3(bodySample.x, bodyAnchorY, bodySample.z), 0.25);
-            entity.head.position.lerp(new THREE.Vector3(headSample.x, 1.58, headSample.z), 0.35);
+            entity.body.position.lerp(new THREE.Vector3(bodySample.x, 0.92, bodySample.z), 0.2);
+            entity.head.position.lerp(new THREE.Vector3(headSample.x, 1.58, headSample.z), 0.25);
             entity.body.lookAt(headSample.x, 0.92, headSample.z);
           }
           entity.leftHand.visible = participant?.leftHandVisible ?? false;

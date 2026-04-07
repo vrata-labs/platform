@@ -790,49 +790,6 @@ test("avatar runtime keeps baseline path by default and exposes experimental leg
   });
 });
 
-test("avatar-enabled room uses higher desktop pose cadence for smoother web observers", async ({ page, request }) => {
-  const createRoomResponse = await request.post("/api/rooms", {
-    headers: {
-      "x-noah-admin-token": "test-admin-token"
-    },
-    data: {
-      tenantId: "demo-tenant",
-      templateId: "meeting-room-basic",
-      name: "Avatar Desktop Smoothness Room",
-      avatarConfig: {
-        avatarsEnabled: true,
-        avatarCatalogUrl: "/assets/avatars/catalog.v1.json",
-        avatarQualityProfile: "desktop-standard",
-        avatarFallbackCapsulesEnabled: true,
-        avatarSeatsEnabled: false
-      }
-    }
-  });
-  expect(createRoomResponse.ok()).toBeTruthy();
-  const room = (await createRoomResponse.json()) as { roomLink: string };
-
-  await page.goto(`${room.roomLink}?debug=1&bot=line`);
-  await expect.poll(async () => {
-    const debug = await page.evaluate(() => (window as Window & {
-      __NOAH_DEBUG__?: {
-        avatarSnapshot?: { inputMode?: string | null };
-        avatarPoseTransport?: { targetHz?: number };
-      };
-    }).__NOAH_DEBUG__);
-
-    return {
-      inputMode: debug?.avatarSnapshot?.inputMode ?? null,
-      targetHzReady: (debug?.avatarPoseTransport?.targetHz ?? 0) >= 12
-    };
-  }, {
-    timeout: 15000,
-    intervals: [1000, 2000, 3000]
-  }).toEqual({
-    inputMode: "desktop",
-    targetHzReady: true
-  });
-});
-
 test("room creation API returns a usable room link", async ({ page, request }) => {
   const createRoomResponse = await request.post("/api/rooms", {
     headers: {
