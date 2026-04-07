@@ -21,12 +21,12 @@ test("resolveAvatarRuntimeFlags combines env and manifest gates", () => {
       avatarsEnabled: true,
       avatarCatalogUrl: "/assets/avatars/catalog.v1.json",
       avatarQualityProfile: "xr",
-      avatarPoseBinaryEnabled: false,
-      avatarLipsyncEnabled: false,
-      avatarLegIkEnabled: false,
+      avatarPoseBinaryEnabled: true,
+      avatarLipsyncEnabled: true,
+      avatarLegIkEnabled: true,
       avatarFallbackCapsulesEnabled: true,
-      avatarSeatsEnabled: false,
-      avatarCustomizationEnabled: false
+      avatarSeatsEnabled: true,
+      avatarCustomizationEnabled: true
     },
     envFlags: {
       enterVr: true,
@@ -64,4 +64,45 @@ test("resolveAvatarCatalogUrl falls back to default asset path", () => {
   } as const;
 
   assert.equal(resolveAvatarCatalogUrl(boot as never), "/assets/avatars/catalog.v1.json");
+});
+
+test("resolveAvatarRuntimeFlags keeps experimental features disabled when manifest disables them", () => {
+  const boot = {
+    avatarConfig: {
+      avatarsEnabled: true,
+      avatarCatalogUrl: "/assets/avatars/catalog.v1.json",
+      avatarQualityProfile: "xr",
+      avatarPoseBinaryEnabled: false,
+      avatarLipsyncEnabled: false,
+      avatarLegIkEnabled: false,
+      avatarFallbackCapsulesEnabled: true,
+      avatarSeatsEnabled: false,
+      avatarCustomizationEnabled: false
+    },
+    envFlags: {
+      enterVr: true,
+      audioJoin: true,
+      screenShare: true,
+      roomStateRealtime: true,
+      remoteDiagnostics: true,
+      sceneBundles: true,
+      avatarsEnabled: true,
+      avatarPoseBinaryEnabled: true,
+      avatarLipsyncEnabled: true,
+      avatarLegIkEnabled: true,
+      avatarSeatingEnabled: true,
+      avatarCustomizationEnabled: true,
+      avatarFallbackCapsulesEnabled: true
+    }
+  } as const;
+
+  assert.deepEqual(resolveAvatarRuntimeFlags(boot as never), {
+    avatarsEnabled: true,
+    avatarPoseBinaryEnabled: false,
+    avatarLipsyncEnabled: false,
+    avatarLegIkEnabled: false,
+    avatarSeatingEnabled: false,
+    avatarCustomizationEnabled: false,
+    avatarFallbackCapsulesEnabled: true
+  });
 });

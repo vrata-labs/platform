@@ -25,11 +25,11 @@ export function createInitialAvatarRuntimeFlags(): AvatarRuntimeFlags {
 export function resolveAvatarRuntimeFlags(boot: RuntimeBootResult): AvatarRuntimeFlags {
   return {
     avatarsEnabled: boot.envFlags.avatarsEnabled && boot.avatarConfig.avatarsEnabled,
-    avatarPoseBinaryEnabled: boot.envFlags.avatarPoseBinaryEnabled,
-    avatarLipsyncEnabled: boot.envFlags.avatarLipsyncEnabled,
-    avatarLegIkEnabled: boot.envFlags.avatarLegIkEnabled,
-    avatarSeatingEnabled: boot.envFlags.avatarSeatingEnabled,
-    avatarCustomizationEnabled: boot.envFlags.avatarCustomizationEnabled,
+    avatarPoseBinaryEnabled: boot.envFlags.avatarPoseBinaryEnabled && boot.avatarConfig.avatarPoseBinaryEnabled,
+    avatarLipsyncEnabled: boot.envFlags.avatarLipsyncEnabled && boot.avatarConfig.avatarLipsyncEnabled,
+    avatarLegIkEnabled: boot.envFlags.avatarLegIkEnabled && boot.avatarConfig.avatarLegIkEnabled,
+    avatarSeatingEnabled: boot.envFlags.avatarSeatingEnabled && boot.avatarConfig.avatarSeatsEnabled,
+    avatarCustomizationEnabled: boot.envFlags.avatarCustomizationEnabled && boot.avatarConfig.avatarCustomizationEnabled,
     avatarFallbackCapsulesEnabled: boot.envFlags.avatarFallbackCapsulesEnabled && boot.avatarConfig.avatarFallbackCapsulesEnabled
   };
 }

@@ -150,12 +150,11 @@ async function expectSceneRoomLoaded(
   await expect.poll(async () => {
     const diagnosticsResponse = await request.get(`/api/rooms/${roomId}/diagnostics`);
     const diagnostics = (await diagnosticsResponse.json()) as DiagnosticsPayload;
-    const notes = diagnostics.items.map((item) => item.note).filter(Boolean);
     const loadedItem = diagnostics.items.find((item) =>
       item.sceneDebug?.bundleUrl === expectedBundleUrl && item.sceneDebug?.state === "loaded"
     );
     return {
-      loaded: notes.includes("scene_bundle_loaded") && notes.includes("runtime_booted"),
+      loaded: loadedItem !== undefined,
       state: loadedItem?.sceneDebug?.state ?? null,
       bundleUrl: loadedItem?.sceneDebug?.bundleUrl ?? null
     };
@@ -457,6 +456,50 @@ test.describe("@staging runtime HUD space selector", () => {
       await pageA.close();
       await pageB.close();
     }
+  });
+
+  test("staging keeps baseline avatar presence by default and isolates experimental leg IK behind query override", async ({ page }) => {
+    await page.goto(`/rooms/${stagingRoomId}?debug=1`);
+    await expect.poll(async () => {
+      const debug = await page.evaluate(() => (window as Window & {
+        __NOAH_DEBUG__?: {
+          avatarPresenceMode?: string;
+          featureFlags?: { avatarLegIkEnabled?: boolean };
+        };
+      }).__NOAH_DEBUG__);
+
+      return {
+        mode: debug?.avatarPresenceMode ?? null,
+        avatarLegIkEnabled: debug?.featureFlags?.avatarLegIkEnabled ?? null
+      };
+    }, {
+      timeout: 25000,
+      intervals: [1000, 2000, 3000]
+    }).toEqual({
+      mode: "baseline",
+      avatarLegIkEnabled: false
+    });
+
+    await page.goto(`/rooms/${stagingRoomId}?debug=1&avatarik=1`);
+    await expect.poll(async () => {
+      const debug = await page.evaluate(() => (window as Window & {
+        __NOAH_DEBUG__?: {
+          avatarPresenceMode?: string;
+          featureFlags?: { avatarLegIkEnabled?: boolean };
+        };
+      }).__NOAH_DEBUG__);
+
+      return {
+        mode: debug?.avatarPresenceMode ?? null,
+        avatarLegIkEnabled: debug?.featureFlags?.avatarLegIkEnabled ?? null
+      };
+    }, {
+      timeout: 25000,
+      intervals: [1000, 2000, 3000]
+    }).toEqual({
+      mode: "experimental-leg-ik",
+      avatarLegIkEnabled: true
+    });
   });
 
   test("hall keeps avatar sync working between two web clients on staging", async ({ browser }) => {

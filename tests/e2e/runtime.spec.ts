@@ -726,6 +726,70 @@ test("avatar-enabled room lets user switch self-avatar preset in normal room flo
   await expect(page.locator("#avatar-sandbox-status")).toContainText("preset-02");
 });
 
+test("avatar runtime keeps baseline path by default and exposes experimental leg IK only via query override", async ({ page, request }) => {
+  const createRoomResponse = await request.post("/api/rooms", {
+    headers: {
+      "x-noah-admin-token": "test-admin-token"
+    },
+    data: {
+      tenantId: "demo-tenant",
+      templateId: "meeting-room-basic",
+      name: "Avatar Presence Mode Room",
+      avatarConfig: {
+        avatarsEnabled: true,
+        avatarCatalogUrl: "/assets/avatars/catalog.v1.json",
+        avatarQualityProfile: "desktop-standard",
+        avatarFallbackCapsulesEnabled: true,
+        avatarSeatsEnabled: false
+      }
+    }
+  });
+  expect(createRoomResponse.ok()).toBeTruthy();
+  const room = (await createRoomResponse.json()) as { roomLink: string };
+
+  await page.goto(`${room.roomLink}?debug=1`);
+  await expect.poll(async () => {
+    const debug = await page.evaluate(() => (window as Window & {
+      __NOAH_DEBUG__?: {
+        avatarPresenceMode?: string;
+        featureFlags?: { avatarLegIkEnabled?: boolean };
+      };
+    }).__NOAH_DEBUG__);
+
+    return {
+      mode: debug?.avatarPresenceMode ?? null,
+      avatarLegIkEnabled: debug?.featureFlags?.avatarLegIkEnabled ?? null
+    };
+  }, {
+    timeout: 15000,
+    intervals: [1000, 2000, 3000]
+  }).toEqual({
+    mode: "baseline",
+    avatarLegIkEnabled: false
+  });
+
+  await page.goto(`${room.roomLink}?debug=1&avatarik=1`);
+  await expect.poll(async () => {
+    const debug = await page.evaluate(() => (window as Window & {
+      __NOAH_DEBUG__?: {
+        avatarPresenceMode?: string;
+        featureFlags?: { avatarLegIkEnabled?: boolean };
+      };
+    }).__NOAH_DEBUG__);
+
+    return {
+      mode: debug?.avatarPresenceMode ?? null,
+      avatarLegIkEnabled: debug?.featureFlags?.avatarLegIkEnabled ?? null
+    };
+  }, {
+    timeout: 15000,
+    intervals: [1000, 2000, 3000]
+  }).toEqual({
+    mode: "experimental-leg-ik",
+    avatarLegIkEnabled: true
+  });
+});
+
 test("room creation API returns a usable room link", async ({ page, request }) => {
   const createRoomResponse = await request.post("/api/rooms", {
     headers: {

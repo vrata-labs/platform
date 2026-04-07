@@ -99,6 +99,8 @@ test("createLocalAvatarController updates diagnostics for vr fallback hands-only
   assert.equal(controller.diagnostics.controllerProfile, "vr_no_controllers");
   assert.equal(controller.diagnostics.fallbackReason, "xr_input_missing_controllers");
   assert.equal(controller.diagnostics.xrInputProfile, "none");
+  assert.equal(controller.root.children[0]?.visible, false);
+  assert.equal(controller.root.children[2]?.visible, false);
   assert.equal(controller.snapshot.leftHand.visible, true);
   assert.equal(controller.snapshot.rightHand.visible, true);
 });

@@ -17,6 +17,6 @@
     "typecheck": "pnpm -r --if-present typecheck",
     "validate:avatars": "pnpm --filter @noah/asset-pipeline build && pnpm --filter @noah/asset-pipeline validate:avatars",
     "test:e2e": "playwright test --grep-invert @staging",
-    "test:e2e:staging": "playwright test --grep @staging"
+    "test:e2e:staging": "BASE_URL=\"${BASE_URL:-https://89.169.161.91.sslip.io}\" PLAYWRIGHT_NO_WEB_SERVER=1 playwright test --grep @staging"
   }
 }

@@ -79,7 +79,9 @@
 - If a scene already worked in another web project, copy its rendering assumptions first and only then adapt to `noah`.
 - User preference: after substantial implementation work, prepare changes so they are ready to commit/push, and if the user asks to finish the task end-to-end they usually want commit + push included unless they explicitly say otherwise. Do not override higher-priority git safety rules when commit was not requested.
 - User preference: all code changes made by the agent should be checked on stage, not only locally; if stage was not updated yet, finish by deploying and verifying there. Pure docs/notes-only changes such as `AGENTS.md` do not require a stage deploy.
-- After finishing code changes, default flow is not just local verification: publish the current changes to staging and verify them there as well.
+- User preference: for publishing to staging, the normal path is `git commit` + `git push` through the existing CI/CD pipeline; this is expected and normal.
+- User preference: do not prefer ad-hoc hot deploys over the normal publish pipeline. Use direct SSH/hot deploy only as an explicit exception when the user asks for it or when the pipeline path is unavailable and this exception is clearly called out.
+- After finishing code changes, default flow is not just local verification: publish the current changes to staging through the normal git-based pipeline and verify them there as well.
 - Default verification after changes should include the full local e2e suite (`pnpm test:e2e`), then staging verification on the current staging host.
 - Staging verification should include at least the staging smoke suite (`pnpm test:e2e:staging`), and for meaningful runtime changes it should also cover the key public flows on staging: room load, selector/navigation if relevant, and important scene rooms such as Hall/BlueOffice when scene behavior could be affected.
 - Staging e2e now runs against the public HTTPS app URL and covers the full restored scene catalog; Hall, BlueOffice, and ArtGallery are the current baseline scenes that must also reach `sceneDebug.state=loaded`.

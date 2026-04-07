@@ -74,14 +74,14 @@ export function computeAvatarAnimationPose(input: {
       };
     case "strafe":
       return {
-        bodyBob: 0.025 * Math.abs(sin),
-        bodyRoll: 0.12 * sin,
-        headTilt: 0.04 * sin,
-        leftHandYOffset: -0.03 * sin,
-        rightHandYOffset: 0.03 * sin,
-        leftHandForward: 0.06,
-        rightHandForward: 0.06,
-        auraScale: 1.04 + Math.abs(sin) * 0.06
+        bodyBob: 0.012 * Math.abs(sin),
+        bodyRoll: 0,
+        headTilt: 0,
+        leftHandYOffset: -0.012 * sin,
+        rightHandYOffset: 0.012 * sin,
+        leftHandForward: 0,
+        rightHandForward: 0,
+        auraScale: 1.03 + Math.abs(sin) * 0.04
       };
     case "backpedal":
       return {
@@ -96,14 +96,14 @@ export function computeAvatarAnimationPose(input: {
       };
     case "turn":
       return {
-        bodyBob: 0.01,
-        bodyRoll: 0.14 * turnInfluence,
-        headTilt: 0.08 * turnInfluence,
-        leftHandYOffset: 0.02 * sin,
-        rightHandYOffset: -0.02 * sin,
-        leftHandForward: 0.02 * turnInfluence,
-        rightHandForward: -0.02 * turnInfluence,
-        auraScale: 1.05 + Math.abs(turnInfluence) * 0.05
+        bodyBob: 0.008,
+        bodyRoll: 0,
+        headTilt: 0,
+        leftHandYOffset: 0.012 * sin,
+        rightHandYOffset: -0.012 * sin,
+        leftHandForward: 0,
+        rightHandForward: 0,
+        auraScale: 1.03 + Math.abs(turnInfluence) * 0.03
       };
     case "idle":
     default:

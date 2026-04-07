@@ -59,6 +59,7 @@ const sceneFitEnabled = debugEnabled && query.get("scenefit") !== "0";
 const sceneMaterialDebugMode = debugEnabled ? (query.get("mat") ?? "off") : "off";
 const requestedCleanSceneMode = query.get("clean") === "1";
 const avatarSandboxEnabled = query.get("avatarsandbox") === "1" || query.get("avatarSandbox") === "1";
+const avatarLegIkQueryOverrideEnabled = query.get("avatarik") === "1";
 const botMode = query.get("bot") ?? "off";
 const shareMockEnabled = query.get("sharemock") === "1";
 const failSpaces = query.get("failspaces") === "1";
@@ -392,6 +393,7 @@ const debugState = {
   spaceSelectorState: "loading" as "loading" | "ready" | "empty" | "unavailable",
   availableSpaceCount: 0,
   avatarDebug: createEmptyAvatarDiagnostics(),
+  avatarPresenceMode: "baseline" as "baseline" | "experimental-leg-ik",
   avatarSnapshot: null as LocalAvatarSnapshotV1 | null,
   avatarTransportPreview: null as AvatarOutboundPayload | null,
   avatarPoseTransport: {
@@ -1541,7 +1543,11 @@ async function main(): Promise<void> {
     sceneBundles: boot.envFlags.sceneBundles,
     ...resolveAvatarRuntimeFlags(boot)
   };
+  if (avatarLegIkQueryOverrideEnabled) {
+    runtimeFlags.avatarLegIkEnabled = true;
+  }
   debugState.featureFlags = runtimeFlags;
+  debugState.avatarPresenceMode = runtimeFlags.avatarLegIkEnabled ? "experimental-leg-ik" : "baseline";
   debugState.roomStateUrl = boot.roomStateUrl;
   debugState.sceneBundleUrl = boot.sceneBundleUrl ?? null;
   debugState.sceneDebug.bundleUrl = boot.sceneBundleUrl ?? null;
