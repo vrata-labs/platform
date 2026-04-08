@@ -47,3 +47,15 @@ test("pushAvatarPoseFrame derives adaptive playback delay from observed jitter",
   assert.equal(buffer.recommendedPlaybackDelayMs <= 140, true);
   assert.equal(buffer.recommendedPlaybackDelayMs > 100, true);
 });
+
+test("sampleAvatarPoseBuffer follows local receive timeline even when sender clock is offset", () => {
+  const buffer = createAvatarPoseBuffer();
+  pushAvatarPoseFrame(buffer, createFrame(1, 10_000), 100);
+  pushAvatarPoseFrame(buffer, createFrame(2, 10_100), 200);
+  pushAvatarPoseFrame(buffer, createFrame(3, 10_200), 300);
+
+  const sample = sampleAvatarPoseBuffer(buffer, 250);
+  assert.equal(sample.previous?.seq, 2);
+  assert.equal(sample.next?.seq, 3);
+  assert.equal(sample.latest?.sentAtMs, 300);
+});

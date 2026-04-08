@@ -1,7 +1,11 @@
 import type { CompactPoseFrame } from "./avatar-types.js";
 
+interface BufferedPoseFrame extends CompactPoseFrame {
+  sourceSentAtMs: number;
+}
+
 export interface AvatarPoseBuffer {
-  frames: CompactPoseFrame[];
+  frames: BufferedPoseFrame[];
   maxSize: number;
   ttlMs: number;
   lastSeq: number | null;
@@ -62,7 +66,7 @@ export function pushAvatarPoseFrame(buffer: AvatarPoseBuffer, frame: CompactPose
   }
   const lastFrame = buffer.frames[buffer.frames.length - 1] ?? null;
   if (lastFrame) {
-    pushWindowedValue(buffer.recentSentIntervalsMs, Math.max(0, frame.sentAtMs - lastFrame.sentAtMs));
+    pushWindowedValue(buffer.recentSentIntervalsMs, Math.max(0, frame.sentAtMs - lastFrame.sourceSentAtMs));
   }
   const arrivalIntervalMs = average(buffer.recentArrivalIntervalsMs);
   const sentIntervalMs = average(buffer.recentSentIntervalsMs);
@@ -70,7 +74,14 @@ export function pushAvatarPoseFrame(buffer: AvatarPoseBuffer, frame: CompactPose
   buffer.recommendedPlaybackDelayMs = Math.round(Math.min(140, Math.max(100, 100 + jitterMs * 2)));
   buffer.lastSeq = frame.seq;
   buffer.lastReceivedAtMs = nowMs;
-  buffer.frames.push(frame);
+  const normalizedTimelineMs = lastFrame
+    ? lastFrame.sentAtMs + Math.max(1, frame.sentAtMs - lastFrame.sourceSentAtMs)
+    : nowMs;
+  buffer.frames.push({
+    ...frame,
+    sentAtMs: normalizedTimelineMs,
+    sourceSentAtMs: frame.sentAtMs
+  });
   if (buffer.frames.length > buffer.maxSize) {
     buffer.frames.splice(0, buffer.frames.length - buffer.maxSize);
   }
@@ -93,8 +104,8 @@ export function sampleAvatarPoseBuffer(buffer: AvatarPoseBuffer, renderAtMs: num
   next: CompactPoseFrame | null;
   latest: CompactPoseFrame | null;
 } {
-  let previous: CompactPoseFrame | null = null;
-  let next: CompactPoseFrame | null = null;
+  let previous: BufferedPoseFrame | null = null;
+  let next: BufferedPoseFrame | null = null;
   for (const frame of buffer.frames) {
     if (frame.sentAtMs <= renderAtMs) {
       previous = frame;
