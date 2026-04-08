@@ -62,6 +62,7 @@
 - Current Yandex service account for GitHub image pushes is `noah-gh-ycr-pusher` (`ajegfvegcehvb09mj977`) with `container-registry.images.pusher` on folder `b1g2ndo07lr7l5q8bb08`.
 - For reliable external testing, a CDN-hosted scene bundle URL worked well: `https://cdn.jsdelivr.net/gh/psilon2000/noah@deploy/scene-bundles-stage-20260328/apps/runtime-web/public/assets/scenes/sense-hall2-v1/scene.json`.
 - Raw GitHub bundle URLs were often safer than waiting for CDN cache refresh when a scene bundle had just changed.
+- For smooth remote avatar movement, `apps/runtime-web/src/avatar/avatar-pose-buffer.ts` must normalize incoming pose frames onto a receiver-local timeline. Using sender `frame.sentAtMs` directly for playback on the receiver causes moving remote avatars to advance in chunks even when stationary remotes look fine. Keep sender timestamps only as an input for relative frame spacing/jitter calculations, not as the absolute playback clock.
 - A common false negative was judging a scene too early: some heavy scenes like `ArtGallery` stayed in fallback for several seconds before transitioning to `loaded`.
 - Another common false negative was blaming export quality when the real issue was spawn/framing; `Cinema` is the main example where bad initial positioning looked like a broken export.
 
