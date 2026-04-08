@@ -141,6 +141,48 @@ function resolveInterpolatedPose(sample: ReturnType<typeof sampleAvatarPoseBuffe
   if (!latest) {
     return null;
   }
+  if (sample.previous && latest.sentAtMs > sample.previous.sentAtMs && renderAtMs > latest.sentAtMs) {
+    const intervalMs = latest.sentAtMs - sample.previous.sentAtMs;
+    const extrapolationAlpha = THREE.MathUtils.clamp((renderAtMs - latest.sentAtMs) / intervalMs, 0, 1) * 0.7;
+    const extrapolatePoint = (
+      previous: { x: number; y: number; z: number },
+      next: { x: number; y: number; z: number }
+    ): { x: number; y: number; z: number } => ({
+      x: next.x + (next.x - previous.x) * extrapolationAlpha,
+      y: next.y + (next.y - previous.y) * extrapolationAlpha,
+      z: next.z + (next.z - previous.z) * extrapolationAlpha
+    });
+    return {
+      ...latest,
+      sentAtMs: renderAtMs,
+      root: {
+        ...latest.root,
+        ...extrapolatePoint(sample.previous.root, latest.root),
+        yaw: latest.root.yaw + (latest.root.yaw - sample.previous.root.yaw) * extrapolationAlpha,
+        vx: latest.root.vx + (latest.root.vx - sample.previous.root.vx) * extrapolationAlpha,
+        vz: latest.root.vz + (latest.root.vz - sample.previous.root.vz) * extrapolationAlpha
+      },
+      head: {
+        ...latest.head,
+        ...extrapolatePoint(sample.previous.head, latest.head)
+      },
+      leftHand: {
+        ...latest.leftHand,
+        ...extrapolatePoint(sample.previous.leftHand, latest.leftHand),
+        gesture: latest.leftHand.gesture
+      },
+      rightHand: {
+        ...latest.rightHand,
+        ...extrapolatePoint(sample.previous.rightHand, latest.rightHand),
+        gesture: latest.rightHand.gesture
+      },
+      locomotion: {
+        mode: latest.locomotion.mode,
+        speed: latest.locomotion.speed + (latest.locomotion.speed - sample.previous.locomotion.speed) * extrapolationAlpha,
+        angularVelocity: latest.locomotion.angularVelocity + (latest.locomotion.angularVelocity - sample.previous.locomotion.angularVelocity) * extrapolationAlpha
+      }
+    };
+  }
   if (renderAtMs - latest.sentAtMs > 320) {
     return null;
   }
