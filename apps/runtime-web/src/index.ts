@@ -140,7 +140,9 @@ export async function fetchRoomManifest(apiBaseUrl: string, roomId: string): Pro
 }
 
 export async function fetchRuntimeSpaces(apiBaseUrl: string, roomId: string, search = ""): Promise<RuntimeSpaceOption[]> {
-  const response = await fetch(new URL(`/api/rooms/${roomId}/spaces${search}`, apiBaseUrl));
+  const response = await fetch(new URL(`/api/rooms/${roomId}/spaces${search}`, apiBaseUrl), {
+    cache: "no-store"
+  });
 
   if (!response.ok) {
     throw new Error(`failed_to_list_runtime_spaces:${response.status}`);

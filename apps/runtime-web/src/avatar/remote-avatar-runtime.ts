@@ -1,5 +1,6 @@
 import * as THREE from "three";
 
+import type { AvatarLipsyncSourceState, AvatarLipsyncState } from "./avatar-lipsync.js";
 import { createAvatarPoseBuffer, pushAvatarPoseFrame, pruneAvatarPoseBuffer, sampleAvatarPoseBuffer, type AvatarPoseBuffer } from "./avatar-pose-buffer.js";
 import { createMotionTrack, pushMotionSample, sampleMotion, type MotionTrack } from "../motion-state.js";
 import type { PresenceState } from "../index.js";
@@ -43,6 +44,9 @@ export interface RemoteAvatarDebugState {
     lastPoseSeq: number | null;
     poseAgeMs: number | null;
     playbackDelayMs: number;
+    mouthAmount: number;
+    speakingActive: boolean;
+    lipsyncSourceState: AvatarLipsyncSourceState | null;
   }>;
 }
 
@@ -55,11 +59,13 @@ interface RemoteAvatarParticipantModel {
   leftHandVisible: boolean;
   rightHandVisible: boolean;
   lastPoseAppliedAtMs: number | null;
+  lipsync: AvatarLipsyncState;
 }
 
 interface RemoteAvatarEntity {
   body: THREE.Mesh;
   head: THREE.Mesh;
+  mouth: THREE.Mesh;
   leftHand: THREE.Mesh;
   rightHand: THREE.Mesh;
 }
@@ -81,6 +87,13 @@ function makeBody(bodyGeometry: THREE.BufferGeometry, color: number): THREE.Mesh
 
 function makeHead(headGeometry: THREE.BufferGeometry, color: number): THREE.Mesh {
   return new THREE.Mesh(headGeometry, new THREE.MeshStandardMaterial({ color, roughness: 0.3, metalness: 0.05 }));
+}
+
+function makeMouth(): THREE.Mesh {
+  return new THREE.Mesh(
+    new THREE.BoxGeometry(0.09, 0.018, 0.02),
+    new THREE.MeshStandardMaterial({ color: 0x2f1e1b, roughness: 0.9, metalness: 0.01 })
+  );
 }
 
 function makeHand(color: number): THREE.Mesh {
@@ -222,7 +235,12 @@ export function createRemoteAvatarRuntime(input: {
         poseBuffer: createAvatarPoseBuffer(),
         leftHandVisible: false,
         rightHandVisible: false,
-        lastPoseAppliedAtMs: null
+        lastPoseAppliedAtMs: null,
+        lipsync: {
+          mouthAmount: 0,
+          speakingActive: false,
+          sourceState: "idle"
+        }
       };
       remoteAvatarParticipants.set(participantId, model);
     }
@@ -234,10 +252,13 @@ export function createRemoteAvatarRuntime(input: {
     if (!entity) {
       const body = makeBody(input.bodyGeometry, participant.activeMedia.audio ? 0x5fc8ff : 0xbfd8ee);
       const head = makeHead(input.headGeometry, 0xf6fbff);
+      const mouth = makeMouth();
+      mouth.position.set(0, -0.04, 0.17);
+      head.add(mouth);
       const leftHand = makeHand(0xf2b3a0);
       const rightHand = makeHand(0xf2b3a0);
       input.scene.add(body, head, leftHand, rightHand);
-      entity = { body, head, leftHand, rightHand };
+      entity = { body, head, mouth, leftHand, rightHand };
       remoteAvatars.set(participant.participantId, entity);
       remoteMotionTracks.set(participant.participantId, {
         root: pushMotionSample(createMotionTrack(), { x: participant.rootTransform.x, z: participant.rootTransform.z, capturedAtMs: getPresenceCaptureTime(participant.updatedAt, Date.now()) }),
@@ -282,7 +303,10 @@ export function createRemoteAvatarRuntime(input: {
           droppedReorderCount: participant.poseBuffer.droppedReorderCount,
           lastPoseSeq: participant.poseBuffer.lastSeq,
           poseAgeMs: participant.poseFrame ? Math.max(0, Date.now() - participant.poseFrame.sentAtMs) : null,
-          playbackDelayMs: resolvePlaybackDelayMs(participant.poseBuffer.recommendedPlaybackDelayMs, participant.reliableState?.inputMode ?? null)
+          playbackDelayMs: resolvePlaybackDelayMs(participant.poseBuffer.recommendedPlaybackDelayMs, participant.reliableState?.inputMode ?? null),
+          mouthAmount: Number(participant.lipsync.mouthAmount.toFixed(3)),
+          speakingActive: participant.lipsync.speakingActive,
+          lipsyncSourceState: participant.lipsync.sourceState
         };
       });
     debugState.remoteAvatarReliableCount = debugState.remoteAvatarReliableStates.length;
@@ -349,6 +373,12 @@ export function createRemoteAvatarRuntime(input: {
       };
       syncDebugState(debugState);
     },
+    setParticipantLipsync(participantId: string, lipsync: AvatarLipsyncState, debugState: RemoteAvatarDebugState): void {
+      if (participantId === input.localParticipantId) return;
+      const participant = ensureParticipantModel(participantId);
+      participant.lipsync = lipsync;
+      syncDebugState(debugState);
+    },
     update(delta: number, debugState: RemoteAvatarDebugState): void {
       void delta;
       const nowMs = Date.now();
@@ -364,6 +394,7 @@ export function createRemoteAvatarRuntime(input: {
         const bodySample = sampleMotion(tracks.body, renderAtMs);
         const headSample = sampleMotion(tracks.head, renderAtMs);
         const reliableState = participant?.reliableState ?? null;
+        const lipsync = participant?.lipsync ?? { mouthAmount: 0, speakingActive: false, sourceState: "idle" as const };
         if (participant) {
           pruneAvatarPoseBuffer(participant.poseBuffer, nowMs);
         }
@@ -378,7 +409,12 @@ export function createRemoteAvatarRuntime(input: {
                 ? 0x5fc8ff
                 : 0xbfd8ee;
           bodyMaterial.color.setHex(color);
+          bodyMaterial.emissive.setHex(lipsync.speakingActive ? 0x193247 : 0x000000);
+          bodyMaterial.emissiveIntensity = lipsync.speakingActive ? 0.35 : 0;
         }
+        entity.mouth.scale.y = 1 + THREE.MathUtils.clamp(lipsync.mouthAmount, 0, 1) * 4.2;
+        entity.mouth.position.y = -0.04 - THREE.MathUtils.clamp(lipsync.mouthAmount, 0, 1) * 0.015;
+        entity.mouth.visible = lipsync.speakingActive || lipsync.mouthAmount > 0.02;
         if (poseFrame) {
           entity.body.position.lerp(new THREE.Vector3(poseFrame.root.x, 0.92, poseFrame.root.z), 0.35);
           entity.head.position.lerp(new THREE.Vector3(poseFrame.head.x, poseFrame.head.y, poseFrame.head.z), 0.45);

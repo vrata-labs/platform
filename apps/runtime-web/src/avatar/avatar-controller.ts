@@ -6,6 +6,7 @@ import {
   type AvatarDiagnostics
 } from "./avatar-debug.js";
 import { computeAvatarAnimationPose, selectAvatarAnimationClip } from "./avatar-animation.js";
+import type { AvatarLipsyncSourceState } from "./avatar-lipsync.js";
 import { resolveAvatarLocomotion } from "./avatar-locomotion.js";
 import { solveUpperBodyPose, type AvatarPosePoint } from "./avatar-ik.js";
 import type { AvatarInputMode, LoadedAvatarPreset, LocalAvatarSnapshotV1 } from "./avatar-types.js";
@@ -34,6 +35,9 @@ export interface LocalAvatarController {
     moveZ: number;
     turnRate: number;
     xrInputProfile?: string | null;
+    mouthAmount?: number;
+    speakingActive?: boolean;
+    lipsyncSourceState?: AvatarLipsyncSourceState;
   }): void;
   dispose(): void;
 }
@@ -45,6 +49,7 @@ interface LocalAvatarVisual {
   torso: THREE.Mesh;
   lowerBody: THREE.Mesh;
   head: THREE.Mesh;
+  mouth: THREE.Mesh;
   leftHand: THREE.Mesh;
   rightHand: THREE.Mesh;
   aura: THREE.Mesh;
@@ -78,6 +83,10 @@ function createLocalAvatarVisual(preset: LoadedAvatarPreset): LocalAvatarVisual 
   head.position.y = 1.58;
   root.add(head);
 
+  const mouth = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.018, 0.02), createMaterial("#2f1e1b"));
+  mouth.position.set(0, -0.04, 0.15);
+  head.add(mouth);
+
   const leftHand = new THREE.Mesh(new THREE.SphereGeometry(0.08, 14, 14), createMaterial(preset.recipe.palette.accent));
   leftHand.position.set(-0.28, 1.16, 0.12);
   root.add(leftHand);
@@ -94,7 +103,7 @@ function createLocalAvatarVisual(preset: LoadedAvatarPreset): LocalAvatarVisual 
   aura.position.y = 0.02;
   root.add(aura);
 
-  return { root, torso, lowerBody, head, leftHand, rightHand, aura };
+  return { root, torso, lowerBody, head, mouth, leftHand, rightHand, aura };
 }
 
 function resolveSelectedAvatarPreset(input: {
@@ -235,6 +244,8 @@ export function createLocalAvatarController(input: {
         turnRate: frame.turnRate
       });
       const vrDirectTracking = frame.xrPresenting && (frame.inputMode === "vr-controller" || frame.inputMode === "vr-hand");
+      const mouthAmount = THREE.MathUtils.clamp(frame.mouthAmount ?? 0, 0, 1);
+      const speakingActive = Boolean(frame.speakingActive);
 
       visual.root.position.set(frame.rootPosition.x, frame.rootPosition.y, frame.rootPosition.z);
       visual.root.rotation.y = frame.yaw;
@@ -249,6 +260,9 @@ export function createLocalAvatarController(input: {
         solve.headLocal.z
       );
       visual.head.rotation.z = pose.headTilt;
+      visual.mouth.scale.y = 1 + mouthAmount * 4.2;
+      visual.mouth.position.y = -0.04 - mouthAmount * 0.015;
+      visual.mouth.visible = visibility !== "hidden" && (speakingActive || mouthAmount > 0.02);
       visual.leftHand.position.set(
         solve.leftHandLocal.x,
         solve.leftHandLocal.y + (vrDirectTracking ? 0 : pose.leftHandYOffset),
@@ -261,7 +275,9 @@ export function createLocalAvatarController(input: {
       );
       const auraScale = animation.fallback ? Math.max(1.02, pose.auraScale - 0.03) : pose.auraScale;
       visual.aura.scale.setScalar(auraScale);
-      (visual.aura.material as THREE.MeshBasicMaterial).opacity = animation.fallback ? 0.14 : 0.18 + Math.min(0.18, locomotion.speed * 0.08);
+      (visual.aura.material as THREE.MeshBasicMaterial).opacity = animation.fallback
+        ? 0.14
+        : 0.18 + Math.min(0.18, locomotion.speed * 0.08) + (speakingActive ? 0.12 : 0);
 
       visual.torso.visible = visibility === "full-body" || visibility === "upper-body";
       visual.lowerBody.visible = visibility === "full-body";
@@ -296,6 +312,9 @@ export function createLocalAvatarController(input: {
               : animation.fallback
                 ? `animation_clip_fallback:${locomotion.state}`
                 : null;
+      diagnostics.mouthAmount = Number(mouthAmount.toFixed(3));
+      diagnostics.speakingActive = speakingActive;
+      diagnostics.lipsyncSourceState = frame.lipsyncSourceState ?? null;
 
       snapshot.avatarId = selectedPreset.preset.avatarId;
       snapshot.inputMode = frame.inputMode;

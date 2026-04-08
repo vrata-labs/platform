@@ -176,6 +176,40 @@ test("createLocalAvatarController applies visible walk pose to body and hands", 
   assert.notEqual(rightHand.position.z, 0.12);
 });
 
+test("createLocalAvatarController reflects lipsync state in diagnostics", () => {
+  const controller = createLocalAvatarController({
+    presets: [createPreset("preset-01")],
+    diagnosticsInput: {
+      catalogId: "technical-v1",
+      packUrl: "/assets/avatars/avatar-pack.v1.glb",
+      packFormat: "procedural-debug-v1",
+      presetCount: 1,
+      validatorSummary: ["preset-01:1000"],
+      sandboxEntryPoint: "/assets/avatars/catalog.v1.json"
+    }
+  });
+
+  controller.update({
+    deltaSeconds: 0.016,
+    inputMode: "desktop",
+    xrPresenting: false,
+    xrInputProfile: null,
+    rootPosition: { x: 0, y: 0, z: 0 },
+    yaw: 0,
+    headPosition: { x: 0, y: 1.6, z: 0 },
+    moveX: 0,
+    moveZ: 0,
+    turnRate: 0,
+    mouthAmount: 0.5,
+    speakingActive: true,
+    lipsyncSourceState: "active"
+  });
+
+  assert.equal(controller.diagnostics.mouthAmount > 0.4, true);
+  assert.equal(controller.diagnostics.speakingActive, true);
+  assert.equal(controller.diagnostics.lipsyncSourceState, "active");
+});
+
 test("createLocalAvatarController hides lower body for mobile upper-body profile", () => {
   const controller = createLocalAvatarController({
     presets: [createPreset("preset-01")],

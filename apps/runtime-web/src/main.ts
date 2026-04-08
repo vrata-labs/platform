@@ -17,6 +17,7 @@ import { loadSceneBundle } from "./scene-loader.js";
 import { startSceneBundleSession } from "./scene-session.js";
 import { detectXrSupport, getEnterVrVisibility } from "./xr.js";
 import { createAvatarLoadingDiagnostics, createEmptyAvatarDiagnostics } from "./avatar/avatar-debug.js";
+import { createAvatarLipsyncDriver, sampleAvatarLipsyncLevel, updateAvatarLipsyncDriver, type AvatarLipsyncDriver, type AvatarLipsyncSourceState } from "./avatar/avatar-lipsync.js";
 import { createAvatarOutboundPublisher, type AvatarOutboundPayload } from "./avatar/avatar-publish.js";
 import { createRemoteAvatarRuntime } from "./avatar/remote-avatar-runtime.js";
 import { createInitialAvatarRuntimeFlags, resolveAvatarCatalogUrl, resolveAvatarRuntimeFlags } from "./avatar/avatar-runtime.js";
@@ -206,10 +207,23 @@ interface RemoteAudioNode {
   element: HTMLMediaElement;
   source: MediaElementAudioSourceNode;
   gain: GainNode;
+  analyser: AnalyserNode;
   panner: PannerNode;
+  sampleBuffer: Uint8Array;
+  lipsync: AvatarLipsyncDriver;
+}
+
+interface LocalAudioNode {
+  source: MediaStreamAudioSourceNode;
+  analyser: AnalyserNode;
+  sampleBuffer: Uint8Array;
+  lipsync: AvatarLipsyncDriver;
+  trackId: string;
 }
 
 const remoteAudioNodes = new Map<string, RemoteAudioNode>();
+let localAudioNode: LocalAudioNode | null = null;
+const localAvatarLipsync = createAvatarLipsyncDriver();
 let runtimeUiState = createRuntimeUiState();
 let runtimeFlags = {
   enterVr: true,
@@ -310,19 +324,88 @@ function ensureAudioContext(): AudioContext {
   return audioContext;
 }
 
+function createAudioAnalyser(context: AudioContext): {
+  analyser: AnalyserNode;
+  sampleBuffer: Uint8Array;
+  lipsync: AvatarLipsyncDriver;
+} {
+  const analyser = context.createAnalyser();
+  analyser.fftSize = 512;
+  analyser.smoothingTimeConstant = 0.35;
+  return {
+    analyser,
+    sampleBuffer: new Uint8Array(analyser.fftSize),
+    lipsync: createAvatarLipsyncDriver()
+  };
+}
+
+function disconnectLocalAudioTrack(): void {
+  if (!localAudioNode) {
+    return;
+  }
+  localAudioNode.source.disconnect();
+  localAudioNode = null;
+}
+
+function getLocalMicrophoneMediaTrack(room: Room): MediaStreamTrack | null {
+  const publication = Array.from(room.localParticipant.trackPublications.values()).find((item) => item.source === Track.Source.Microphone);
+  if (!publication) {
+    return null;
+  }
+  const track = (publication as {
+    track?: { mediaStreamTrack?: MediaStreamTrack };
+    audioTrack?: { mediaStreamTrack?: MediaStreamTrack };
+  }).audioTrack?.mediaStreamTrack ?? (publication as { track?: { mediaStreamTrack?: MediaStreamTrack } }).track?.mediaStreamTrack;
+  return track ?? null;
+}
+
+function connectLocalAudioTrack(room: Room): void {
+  const track = getLocalMicrophoneMediaTrack(room);
+  if (!track) {
+    disconnectLocalAudioTrack();
+    return;
+  }
+  if (localAudioNode?.trackId === track.id) {
+    return;
+  }
+  disconnectLocalAudioTrack();
+  const context = ensureAudioContext();
+  const analyserSetup = createAudioAnalyser(context);
+  const source = context.createMediaStreamSource(new MediaStream([track]));
+  source.connect(analyserSetup.analyser);
+  localAudioNode = {
+    source,
+    analyser: analyserSetup.analyser,
+    sampleBuffer: analyserSetup.sampleBuffer,
+    lipsync: analyserSetup.lipsync,
+    trackId: track.id
+  };
+}
+
 function connectRemoteAudioElement(element: HTMLMediaElement, participantId: string): void {
   if (remoteAudioNodes.has(participantId)) {
     return;
   }
   const context = ensureAudioContext();
+  const analyserSetup = createAudioAnalyser(context);
   const source = context.createMediaElementSource(element);
   const gain = context.createGain();
   const panner = context.createPanner();
   applySpatialSettings(panner, createSpatialAudioSettings());
   source.connect(gain);
-  gain.connect(panner);
+  gain.connect(analyserSetup.analyser);
+  analyserSetup.analyser.connect(panner);
   panner.connect(context.destination);
-  remoteAudioNodes.set(participantId, { participantId, element, source, gain, panner });
+  remoteAudioNodes.set(participantId, {
+    participantId,
+    element,
+    source,
+    gain,
+    analyser: analyserSetup.analyser,
+    panner,
+    sampleBuffer: analyserSetup.sampleBuffer,
+    lipsync: analyserSetup.lipsync
+  });
   debugState.spatialAudioState = "active";
 }
 
@@ -333,7 +416,13 @@ function disconnectRemoteAudioElement(participantId: string): void {
   }
   node.source.disconnect();
   node.gain.disconnect();
+  node.analyser.disconnect();
   node.panner.disconnect();
+  remoteAvatarRuntime.setParticipantLipsync(participantId, {
+    mouthAmount: 0,
+    speakingActive: false,
+    sourceState: "missing"
+  }, debugState);
   remoteAudioNodes.delete(participantId);
   if (remoteAudioNodes.size === 0) {
     debugState.spatialAudioState = "idle";
@@ -359,6 +448,39 @@ function updateSpatialAudio(): void {
     node.panner.positionX.value = target.x;
     node.panner.positionY.value = target.y;
     node.panner.positionZ.value = target.z;
+  }
+}
+
+function updateAvatarLipsync(deltaSeconds: number): void {
+  const localSourceState: AvatarLipsyncSourceState = !livekitRoom
+    ? "idle"
+    : !microphoneEnabled
+      ? "muted"
+      : localAudioNode
+        ? "active"
+        : "missing";
+  const localLevel = localAudioNode
+    ? sampleAvatarLipsyncLevel(localAudioNode.analyser, localAudioNode.sampleBuffer)
+    : 0;
+  const localLipsync = updateAvatarLipsyncDriver(localAudioNode?.lipsync ?? localAvatarLipsync, {
+    deltaSeconds,
+    level: localLevel,
+    sourceState: localSourceState
+  });
+  if (localAvatarController) {
+    localAvatarController.diagnostics.mouthAmount = Number(localLipsync.mouthAmount.toFixed(3));
+    localAvatarController.diagnostics.speakingActive = localLipsync.speakingActive;
+    localAvatarController.diagnostics.lipsyncSourceState = localLipsync.sourceState;
+  }
+
+  for (const [remoteParticipantId, node] of remoteAudioNodes.entries()) {
+    const level = sampleAvatarLipsyncLevel(node.analyser, node.sampleBuffer);
+    const lipsync = updateAvatarLipsyncDriver(node.lipsync, {
+      deltaSeconds,
+      level,
+      sourceState: "active"
+    });
+    remoteAvatarRuntime.setParticipantLipsync(remoteParticipantId, lipsync, debugState);
   }
 }
 
@@ -435,6 +557,9 @@ const debugState = {
     lastPoseSeq: number | null;
     poseAgeMs: number | null;
     playbackDelayMs: number;
+    mouthAmount: number;
+    speakingActive: boolean;
+    lipsyncSourceState: AvatarLipsyncSourceState | null;
   }>
 };
 
@@ -968,6 +1093,11 @@ function updateLocalAvatar(delta: number): void {
   const headWorldPosition = new THREE.Vector3();
   camera.getWorldPosition(headWorldPosition);
   const handTargets = getLocalAvatarHandTargets();
+  const lipsyncState = {
+    mouthAmount: localAvatarController.diagnostics.mouthAmount,
+    speakingActive: localAvatarController.diagnostics.speakingActive,
+    lipsyncSourceState: (localAvatarController.diagnostics.lipsyncSourceState ?? "idle") as AvatarLipsyncSourceState
+  };
   const xrPresenting = renderer.xr.isPresenting || avatarVrMockEnabled;
   const xrInputProfile = renderer.xr.isPresenting
     ? lastAvatarXrInputProfile
@@ -1000,7 +1130,10 @@ function updateLocalAvatar(delta: number): void {
     rightHand: handTargets.rightHand,
     moveX: lastAvatarMove.x,
     moveZ: lastAvatarMove.z,
-    turnRate: lastAvatarTurnRate
+    turnRate: lastAvatarTurnRate,
+    mouthAmount: lipsyncState.mouthAmount,
+    speakingActive: lipsyncState.speakingActive,
+    lipsyncSourceState: lipsyncState.lipsyncSourceState
   });
   debugState.avatarDebug = localAvatarController.diagnostics;
   debugState.avatarSnapshot = localAvatarController.snapshot;
@@ -1372,6 +1505,7 @@ async function joinAudio(): Promise<void> {
     if (!microphoneEnabled) {
       await livekitRoom.localParticipant.setMicrophoneEnabled(true);
       microphoneEnabled = true;
+      connectLocalAudioTrack(livekitRoom);
       muteButton.disabled = false;
       joinAudioButton.disabled = true;
       clearAudioIssue("Audio connected");
@@ -1386,6 +1520,7 @@ async function joinAudio(): Promise<void> {
   const room = await ensureMediaRoom();
   await room.localParticipant.setMicrophoneEnabled(true);
   microphoneEnabled = true;
+  connectLocalAudioTrack(room);
   muteButton.disabled = false;
   joinAudioButton.disabled = true;
   startShareButton.disabled = false;
@@ -1400,6 +1535,9 @@ muteButton.addEventListener("click", async () => {
   }
   microphoneEnabled = !microphoneEnabled;
   await livekitRoom.localParticipant.setMicrophoneEnabled(microphoneEnabled);
+  if (microphoneEnabled) {
+    connectLocalAudioTrack(livekitRoom);
+  }
   muteButton.textContent = microphoneEnabled ? "Mute" : "Unmute";
   setStatus(microphoneEnabled ? "Audio live" : "Muted");
   debugState.audioState = microphoneEnabled ? "live" : "muted";
@@ -1505,6 +1643,7 @@ window.addEventListener("resize", () => {
 window.addEventListener("beforeunload", () => {
   void removePresence(apiBaseUrl, roomId, participantId);
   detachVideoTrack();
+  disconnectLocalAudioTrack();
   localAvatarController?.dispose();
   clearRoomStateReconnect();
   roomStateClient?.close();
@@ -1526,6 +1665,7 @@ renderer.setAnimationLoop(() => {
     recentFrameBudgetMs.splice(0, recentFrameBudgetMs.length - 60);
   }
   updateMovement(delta);
+  updateAvatarLipsync(delta);
   updateLocalAvatar(delta);
   remoteAvatarRuntime.update(delta, debugState);
   debugState.avatarPoseTransport.adaptivePlaybackDelayMs = debugState.remoteAvatarParticipants.length > 0

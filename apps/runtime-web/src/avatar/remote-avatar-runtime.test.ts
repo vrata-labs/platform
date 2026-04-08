@@ -27,6 +27,9 @@ function createDebugState() {
       lastPoseSeq: number | null;
       poseAgeMs: number | null;
       playbackDelayMs: number;
+      mouthAmount: number;
+      speakingActive: boolean;
+      lipsyncSourceState: "idle" | "active" | "muted" | "missing" | null;
     }>
   };
 }
@@ -74,6 +77,30 @@ test("remote avatar runtime ingests reliable state and pose frame into debug sta
   assert.equal(debugState.remoteAvatarParticipants[0]?.poseBufferDepth, 1);
   assert.equal(debugState.remoteAvatarParticipants[0]?.lastPoseSeq, 1);
   assert.equal((debugState.remoteAvatarParticipants[0]?.playbackDelayMs ?? 0) >= 100, true);
+  assert.equal(debugState.remoteAvatarParticipants[0]?.mouthAmount, 0);
+  assert.equal(debugState.remoteAvatarParticipants[0]?.lipsyncSourceState, "idle");
+});
+
+test("remote avatar runtime stores participant lipsync debug state", () => {
+  const scene = new THREE.Scene();
+  const runtime = createRemoteAvatarRuntime({
+    scene,
+    bodyGeometry: new THREE.CapsuleGeometry(0.24, 0.8, 6, 12),
+    headGeometry: new THREE.SphereGeometry(0.18, 20, 20),
+    localParticipantId: "local"
+  });
+  const debugState = createDebugState();
+
+  runtime.setParticipantLipsync("remote-lipsync", {
+    mouthAmount: 0.4,
+    speakingActive: true,
+    sourceState: "active"
+  }, debugState);
+
+  assert.equal(debugState.remoteAvatarParticipants[0]?.participantId, "remote-lipsync");
+  assert.equal(debugState.remoteAvatarParticipants[0]?.mouthAmount, 0.4);
+  assert.equal(debugState.remoteAvatarParticipants[0]?.speakingActive, true);
+  assert.equal(debugState.remoteAvatarParticipants[0]?.lipsyncSourceState, "active");
 });
 
 test("remote avatar runtime reflects hand visibility from pose gestures", () => {

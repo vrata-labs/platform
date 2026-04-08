@@ -26,6 +26,9 @@ test("createEmptyAvatarDiagnostics returns idle baseline", () => {
     xrInputProfile: null,
     fallbackActive: false,
     fallbackReason: null,
+    mouthAmount: 0,
+    speakingActive: false,
+    lipsyncSourceState: null,
     sandboxEntryPoint: null,
     validatorSummary: []
   });

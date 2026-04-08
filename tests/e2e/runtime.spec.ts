@@ -817,6 +817,9 @@ test("room creation API returns a usable room link", async ({ page, request }) =
 });
 
 test("runtime HUD space selector lists guest-safe spaces and marks current room", async ({ page, request }) => {
+  const uniqueSuffix = Date.now().toString(36);
+  const sharedRoomName = `Shared Space Room ${uniqueSuffix}`;
+  const privateRoomName = `Private Space Room ${uniqueSuffix}`;
   const sharedRoomResponse = await request.post("/api/rooms", {
     headers: {
       "x-noah-admin-token": "test-admin-token"
@@ -824,7 +827,7 @@ test("runtime HUD space selector lists guest-safe spaces and marks current room"
     data: {
       tenantId: "demo-tenant",
       templateId: "meeting-room-basic",
-      name: "Shared Space Room",
+      name: sharedRoomName,
       guestAllowed: true
     }
   });
@@ -837,7 +840,7 @@ test("runtime HUD space selector lists guest-safe spaces and marks current room"
     data: {
       tenantId: "demo-tenant",
       templateId: "meeting-room-basic",
-      name: "Private Space Room",
+      name: privateRoomName,
       guestAllowed: false
     }
   });
@@ -852,8 +855,8 @@ test("runtime HUD space selector lists guest-safe spaces and marks current room"
 
   const optionTexts = await spaceSelect.locator("option").allTextContents();
   expect(optionTexts).toContain("Demo Room");
-  expect(optionTexts).toContain("Shared Space Room");
-  expect(optionTexts).not.toContain("Private Space Room");
+  expect(optionTexts).toContain(sharedRoomName);
+  expect(optionTexts).not.toContain(privateRoomName);
 });
 
 test("runtime HUD space selector navigates to another space", async ({ page, request }) => {

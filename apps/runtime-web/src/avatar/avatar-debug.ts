@@ -15,6 +15,9 @@ export interface AvatarDiagnostics {
   xrInputProfile: string | null;
   fallbackActive: boolean;
   fallbackReason: string | null;
+  mouthAmount: number;
+  speakingActive: boolean;
+  lipsyncSourceState: string | null;
   sandboxEntryPoint: string | null;
   validatorSummary: string[];
 }
@@ -37,6 +40,9 @@ export function createEmptyAvatarDiagnostics(): AvatarDiagnostics {
     xrInputProfile: null,
     fallbackActive: false,
     fallbackReason: null,
+    mouthAmount: 0,
+    speakingActive: false,
+    lipsyncSourceState: null,
     sandboxEntryPoint: null,
     validatorSummary: []
   };
@@ -76,6 +82,9 @@ export function createAvatarLoadedDiagnostics(input: {
   activeControllerCount?: number;
   controllerProfile?: string | null;
   xrInputProfile?: string | null;
+  mouthAmount?: number;
+  speakingActive?: boolean;
+  lipsyncSourceState?: string | null;
 }): AvatarDiagnostics {
   return {
     ...createEmptyAvatarDiagnostics(),
@@ -95,6 +104,9 @@ export function createAvatarLoadedDiagnostics(input: {
     xrInputProfile: input.xrInputProfile ?? null,
     fallbackActive: false,
     fallbackReason: null,
+    mouthAmount: input.mouthAmount ?? 0,
+    speakingActive: input.speakingActive ?? false,
+    lipsyncSourceState: input.lipsyncSourceState ?? null,
     sandboxEntryPoint: input.sandboxEntryPoint,
     validatorSummary: input.validatorSummary
   };
