@@ -1335,6 +1335,8 @@ apps/runtime-web/src/avatar/
 
 # Phase 3 - Believable Avatar Presence Without Legs
 
+Статус: COMPLETED
+
 Статус на 2026-04-06: `reframed`.
 
 Первоначальная идея фазы как `legs / gait solver / body naturalness` показала плохой продуктовый результат: заметной пользы в web не появилось, а в VR появились регрессии. Вывод: для текущего no-leg avatar style сама по себе "походка" не является обязательной ценностью. Фаза переосмыслена как работа над believable avatar presence без обязательных ног.
@@ -1388,9 +1390,13 @@ apps/runtime-web/src/avatar/
 - Метрика успеха здесь не "стало больше движения тела", а "аватар не бесит и не ломает immersion".
 - Current natural-locomotion branch полезна как исследование и как набор regression tests, но не как обязательный продуктовый baseline.
 
-## Что осталось до полного закрытия Phase 3
+## Что сделано в Phase 3
 
-- обзорный manual acceptance: desktop/desktop, desktop + Quest/WebXR, remote observation, повороты, движение вбок/назад
+- Зафиксирован product baseline как smooth no-leg avatar presence без fake gait как обязательного результата.
+- Закрыты критичные quality cases: hidden self head в VR, стабильная видимость remote VR рук в web, отсутствие обязательного synthetic torso motion в baseline.
+- Добавлены local/staging regression checks для avatar presence, включая baseline vs experimental path и mock VR acceptance automation.
+- Исправлена плавность remote avatar movement: `apps/runtime-web/src/avatar/avatar-pose-buffer.ts` переведён на receiver-local timeline вместо прямого использования sender `sentAtMs` как playback clock.
+- Пройдены `pnpm build`, `pnpm test`, `pnpm test:e2e`, `pnpm test:e2e:staging` и ручной acceptance; Phase 3 закрыта как product phase.
 
 ---
 
