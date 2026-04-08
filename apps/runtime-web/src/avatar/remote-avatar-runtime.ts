@@ -103,6 +103,13 @@ function lerpAngleRadians(current: number, target: number, alpha: number): numbe
   return current + delta * alpha;
 }
 
+function resolvePlaybackDelayMs(recommendedPlaybackDelayMs: number, inputMode: string | null | undefined): number {
+  if (inputMode === "desktop") {
+    return Math.max(130, recommendedPlaybackDelayMs);
+  }
+  return recommendedPlaybackDelayMs;
+}
+
 function resolveInterpolatedPose(sample: ReturnType<typeof sampleAvatarPoseBuffer>, renderAtMs: number): CompactPoseFrame | null {
   if (sample.previous && sample.next && sample.next.sentAtMs > sample.previous.sentAtMs) {
     const alpha = THREE.MathUtils.clamp(
@@ -275,7 +282,7 @@ export function createRemoteAvatarRuntime(input: {
           droppedReorderCount: participant.poseBuffer.droppedReorderCount,
           lastPoseSeq: participant.poseBuffer.lastSeq,
           poseAgeMs: participant.poseFrame ? Math.max(0, Date.now() - participant.poseFrame.sentAtMs) : null,
-          playbackDelayMs: participant.poseBuffer.recommendedPlaybackDelayMs
+          playbackDelayMs: resolvePlaybackDelayMs(participant.poseBuffer.recommendedPlaybackDelayMs, participant.reliableState?.inputMode ?? null)
         };
       });
     debugState.remoteAvatarReliableCount = debugState.remoteAvatarReliableStates.length;
@@ -349,7 +356,10 @@ export function createRemoteAvatarRuntime(input: {
         const tracks = remoteMotionTracks.get(participantId);
         if (!tracks) continue;
         const participant = remoteAvatarParticipants.get(participantId);
-        const playbackDelayMs = participant?.poseBuffer.recommendedPlaybackDelayMs ?? 100;
+        const playbackDelayMs = resolvePlaybackDelayMs(
+          participant?.poseBuffer.recommendedPlaybackDelayMs ?? 100,
+          participant?.reliableState?.inputMode ?? null
+        );
         const renderAtMs = nowMs - playbackDelayMs;
         const bodySample = sampleMotion(tracks.body, renderAtMs);
         const headSample = sampleMotion(tracks.head, renderAtMs);
