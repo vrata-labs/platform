@@ -98,6 +98,11 @@ function lerpPosePoint(a: { x: number; y: number; z: number }, b: { x: number; y
   };
 }
 
+function lerpAngleRadians(current: number, target: number, alpha: number): number {
+  const delta = Math.atan2(Math.sin(target - current), Math.cos(target - current));
+  return current + delta * alpha;
+}
+
 function resolveInterpolatedPose(sample: ReturnType<typeof sampleAvatarPoseBuffer>, renderAtMs: number): CompactPoseFrame | null {
   if (sample.previous && sample.next && sample.next.sentAtMs > sample.previous.sentAtMs) {
     const alpha = THREE.MathUtils.clamp(
@@ -369,7 +374,7 @@ export function createRemoteAvatarRuntime(input: {
           entity.head.position.lerp(new THREE.Vector3(poseFrame.head.x, poseFrame.head.y, poseFrame.head.z), 0.45);
           entity.leftHand.position.lerp(new THREE.Vector3(poseFrame.leftHand.x, poseFrame.leftHand.y, poseFrame.leftHand.z), 0.45);
           entity.rightHand.position.lerp(new THREE.Vector3(poseFrame.rightHand.x, poseFrame.rightHand.y, poseFrame.rightHand.z), 0.45);
-          entity.body.lookAt(poseFrame.head.x, 0.92, poseFrame.head.z);
+          entity.body.rotation.y = lerpAngleRadians(entity.body.rotation.y, poseFrame.root.yaw, 0.35);
           const forceVrHandsVisible = reliableState?.inputMode === "vr-controller" || reliableState?.inputMode === "vr-hand";
           entity.leftHand.visible = forceVrHandsVisible || poseFrame.leftHand.gesture > 0;
           entity.rightHand.visible = forceVrHandsVisible || poseFrame.rightHand.gesture > 0;
