@@ -1032,9 +1032,9 @@ function getAvatarPoseSendIntervalSeconds(snapshot: LocalAvatarSnapshotV1 | null
   }
   if (snapshot.inputMode === "desktop" && snapshot.locomotionState !== "idle") {
     if (averageFrameBudgetMs > 35) {
-      return 1 / 12;
+      return 1 / 20;
     }
-    return 1 / 15;
+    return 1 / 24;
   }
   if (averageFrameBudgetMs > 35) {
     return 1 / 8;
