@@ -30,7 +30,7 @@ export function createProceduralAvatarHead(input: {
     new THREE.BoxGeometry(0.12, 0.028, 0.024),
     createMaterial(input.mouthColor ?? 0x5a1f24)
   );
-  mouth.position.set(0, -0.055, 0.165);
+  mouth.position.set(0, -0.055, -0.165);
   head.add(mouth);
 
   const hair = new THREE.Mesh(new THREE.SphereGeometry(0.12, 16, 16), createMaterial(input.accentColor));
