@@ -231,7 +231,8 @@ const roomStateReconnectPolicy = createReconnectPolicy({
 
 interface RemoteAudioNode {
   participantId: string;
-  source: MediaStreamAudioSourceNode;
+  element: HTMLMediaElement;
+  source: MediaElementAudioSourceNode;
   gain: GainNode;
   analyser: AnalyserNode;
   panner: PannerNode;
@@ -488,11 +489,8 @@ function connectLocalAudioTrack(room: Room): void {
 
 function connectRemoteAudioTrack(track: Track, participantId: string): void {
   const mediaStreamTrack = (track as { mediaStreamTrack?: MediaStreamTrack }).mediaStreamTrack;
-  if (!mediaStreamTrack) {
-    return;
-  }
   const existing = remoteAudioNodes.get(participantId);
-  if (existing?.trackId === mediaStreamTrack.id) {
+  if (existing?.trackId === mediaStreamTrack?.id) {
     return;
   }
   if (existing) {
@@ -501,7 +499,13 @@ function connectRemoteAudioTrack(track: Track, participantId: string): void {
   const context = ensureAudioContext();
   void resumeAudioContext();
   const analyserSetup = createAudioAnalyser(context);
-  const source = context.createMediaStreamSource(new MediaStream([mediaStreamTrack]));
+  const element = track.attach() as HTMLMediaElement & { playsInline?: boolean };
+  element.autoplay = true;
+  element.playsInline = true;
+  element.style.display = "none";
+  document.body.appendChild(element);
+  void element.play().catch(() => undefined);
+  const source = context.createMediaElementSource(element);
   const gain = context.createGain();
   const panner = context.createPanner();
   applySpatialSettings(panner, createSpatialAudioSettings());
@@ -511,13 +515,14 @@ function connectRemoteAudioTrack(track: Track, participantId: string): void {
   panner.connect(context.destination);
   remoteAudioNodes.set(participantId, {
     participantId,
+    element,
     source,
     gain,
     analyser: analyserSetup.analyser,
     panner,
     sampleBuffer: analyserSetup.sampleBuffer,
     lipsync: analyserSetup.lipsync,
-    trackId: mediaStreamTrack.id
+    trackId: mediaStreamTrack?.id ?? participantId
   });
   debugState.spatialAudioState = "active";
 }
@@ -527,6 +532,7 @@ function disconnectRemoteAudioElement(participantId: string): void {
   if (!node) {
     return;
   }
+  node.element.remove();
   node.source.disconnect();
   node.gain.disconnect();
   node.analyser.disconnect();
