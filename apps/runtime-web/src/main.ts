@@ -21,6 +21,7 @@ import { createAvatarLipsyncDriver, sampleAvatarLipsyncLevel, updateAvatarLipsyn
 import { createAvatarOutboundPublisher, type AvatarOutboundPayload } from "./avatar/avatar-publish.js";
 import { createRemoteAvatarRuntime } from "./avatar/remote-avatar-runtime.js";
 import { createInitialAvatarRuntimeFlags, resolveAvatarCatalogUrl, resolveAvatarRuntimeFlags } from "./avatar/avatar-runtime.js";
+import { resolveAvatarViewProfile } from "./avatar/avatar-visibility.js";
 import { collectLocalAvatarHandDebug, resolveLocalAvatarHandTargets } from "./avatar/avatar-xr-hands.js";
 import { resolveAvatarXrInput } from "./avatar/avatar-xr-input.js";
 import { setAvatarSandboxStatus } from "./avatar/avatar-sandbox.js";
@@ -1139,6 +1140,13 @@ function updateLocalAvatar(delta: number): void {
     : /android|iphone|ipad/i.test(navigator.userAgent)
       ? "mobile"
       : "desktop";
+  const viewProfile = resolveAvatarViewProfile({
+    inputMode,
+    xrPresenting
+  });
+  const avatarRootY = xrPresenting
+    ? headWorldPosition.y - viewProfile.poseProfile.headHeight
+    : player.position.y;
 
   localAvatarController.update({
     deltaSeconds: delta,
@@ -1147,7 +1155,7 @@ function updateLocalAvatar(delta: number): void {
     xrInputProfile,
     rootPosition: {
       x: player.position.x,
-      y: player.position.y,
+      y: avatarRootY,
       z: player.position.z
     },
     yaw,
