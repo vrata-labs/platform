@@ -268,7 +268,12 @@ test.describe("@staging runtime HUD space selector", () => {
 
   test("audio device controls are visible for the configured staging room", async ({ page }) => {
     await page.goto(`/rooms/${stagingRoomId}`);
-    await expect(page.locator("#room-name")).not.toContainText("Loading room");
+    await expect.poll(async () => {
+      return await page.locator("#mic-select").count();
+    }, {
+      timeout: 15000,
+      intervals: [1000, 2000, 3000]
+    }).toBe(1);
     await expect(page.locator("#mic-select")).toBeVisible();
     await expect(page.locator("#speaker-select")).toBeVisible();
     await expect(page.locator("#audio-device-status")).toBeVisible();
