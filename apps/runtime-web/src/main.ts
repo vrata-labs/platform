@@ -493,12 +493,22 @@ function updateAvatarLipsync(deltaSeconds: number): void {
     localAvatarController.diagnostics.lipsyncSourceState = localLipsync.sourceState;
   }
 
-  for (const [remoteParticipantId, node] of remoteAudioNodes.entries()) {
-    const level = sampleAvatarLipsyncLevel(node.analyser, node.sampleBuffer);
-    const lipsync = updateAvatarLipsyncDriver(node.lipsync, {
+  if (!livekitRoom) {
+    return;
+  }
+
+  for (const [remoteParticipantId, participant] of livekitRoom.remoteParticipants.entries()) {
+    const node = remoteAudioNodes.get(remoteParticipantId);
+    const sourceState: AvatarLipsyncSourceState = node
+      ? participant.isMicrophoneEnabled
+        ? "active"
+        : "muted"
+      : "missing";
+    const level = participant.audioLevel ?? 0;
+    const lipsync = updateAvatarLipsyncDriver(node?.lipsync ?? createAvatarLipsyncDriver(), {
       deltaSeconds,
       level,
-      sourceState: "active"
+      sourceState
     });
     remoteAvatarRuntime.setParticipantLipsync(remoteParticipantId, lipsync, debugState);
   }
