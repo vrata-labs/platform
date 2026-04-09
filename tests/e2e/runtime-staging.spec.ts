@@ -266,6 +266,16 @@ test.describe("@staging runtime HUD space selector", () => {
     }).toBeGreaterThanOrEqual(2);
   });
 
+  test("audio device controls are visible for the configured staging room", async ({ page }) => {
+    await page.goto(`/rooms/${stagingRoomId}`);
+    await expect(page.locator("#room-name")).not.toContainText("Loading room");
+    await expect(page.locator("#mic-select")).toBeVisible();
+    await expect(page.locator("#speaker-select")).toBeVisible();
+    await expect(page.locator("#audio-device-status")).toBeVisible();
+    await expect(page.locator("#mic-level-fill").locator("..")).toBeVisible();
+    await expect(page.locator("#speaker-level-fill").locator("..")).toBeVisible();
+  });
+
   test("staging selector exposes canonical rooms with avatars enabled", async ({ request, baseURL }) => {
     const spacesResponse = await request.get(`/api/rooms/${stagingRoomId}/spaces`);
     expect(spacesResponse.ok()).toBeTruthy();

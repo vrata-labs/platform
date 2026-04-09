@@ -30,6 +30,21 @@ test("room shell loads and presence is registered", async ({ page, request }) =>
   }).toBeTruthy();
 });
 
+test("room shell exposes audio device selectors and level meters", async ({ page }) => {
+  await page.goto("/rooms/demo-room");
+
+  await expect(page.locator("#mic-select")).toBeVisible();
+  await expect(page.locator("#speaker-select")).toBeVisible();
+  await expect(page.locator("#audio-device-status")).toBeVisible();
+  await expect(page.locator("#mic-level-fill").locator(".."))
+    .toBeVisible();
+  await expect(page.locator("#speaker-level-fill").locator(".."))
+    .toBeVisible();
+  await expect(page.locator("#mic-select option").first()).toContainText("System default microphone");
+  await expect(page.locator("#speaker-select option").first()).toContainText("System default speaker");
+  await expect(page.locator("#audio-device-status")).not.toHaveText("");
+});
+
 test("room-state service health endpoint responds", async () => {
   const response = await fetch("http://127.0.0.1:2567/health");
   expect(response.ok).toBeTruthy();

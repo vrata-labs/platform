@@ -87,6 +87,11 @@ const joinAudioButton = mustElement<HTMLButtonElement>("#join-audio");
 const muteButton = mustElement<HTMLButtonElement>("#toggle-mute");
 const startShareButton = mustElement<HTMLButtonElement>("#start-share");
 const stopShareButton = mustElement<HTMLButtonElement>("#stop-share");
+const micSelect = mustElement<HTMLSelectElement>("#mic-select");
+const speakerSelect = mustElement<HTMLSelectElement>("#speaker-select");
+const micLevelFill = mustElement<HTMLDivElement>("#mic-level-fill");
+const speakerLevelFill = mustElement<HTMLDivElement>("#speaker-level-fill");
+const audioDeviceStatusEl = mustElement<HTMLDivElement>("#audio-device-status");
 const debugPanel = mustElement<HTMLPreElement>("#debug-panel");
 const avatarSandboxPanel = mustElement<HTMLDivElement>("#avatar-sandbox-panel");
 const avatarPresetSelect = mustElement<HTMLSelectElement>("#avatar-preset-select");
@@ -101,6 +106,19 @@ avatarSandboxPanel.hidden = !avatarSandboxEnabled;
 
 if (shareMockEnabled) {
   startShareButton.disabled = false;
+}
+
+void refreshAudioDevices(false).catch((error: unknown) => {
+  console.error(error);
+  updateAudioDeviceStatus("Audio devices unavailable");
+});
+if (navigator.mediaDevices?.addEventListener) {
+  navigator.mediaDevices.addEventListener("devicechange", () => {
+    void refreshAudioDevices(false).catch((error: unknown) => {
+      console.error(error);
+      updateAudioDeviceStatus("Audio devices unavailable");
+    });
+  });
 }
 
 const scene = new THREE.Scene();
@@ -197,6 +215,12 @@ let lastAvatarMove = { x: 0, z: 0 };
 let lastAvatarTurnRate = 0;
 let lastAvatarXrInputProfile: string | null = null;
 let lastAvatarPoseSentAtMs = 0;
+let preferredMicDeviceId = localStorage.getItem("noah.audioinput") ?? "default";
+let preferredSpeakerDeviceId = localStorage.getItem("noah.audiooutput") ?? "default";
+let audioInputDevices: MediaDeviceInfo[] = [];
+let audioOutputDevices: MediaDeviceInfo[] = [];
+let localMicLevel = 0;
+let speakerOutputLevel = 0;
 const avatarPoseSendTimestamps: number[] = [];
 const recentFrameBudgetMs: number[] = [];
 const roomStateReconnectPolicy = createReconnectPolicy({
@@ -307,6 +331,39 @@ function applySnapshotParticipants(people: PresenceState[]): void {
   debugState.lastPresenceRefreshAt = Date.now();
 }
 
+function supportsAudioOutputSelection(): boolean {
+  const context = audioContext as AudioContext & { setSinkId?: (deviceId: string) => Promise<void> } | null;
+  return Boolean(context?.setSinkId) || "setSinkId" in HTMLMediaElement.prototype;
+}
+
+function formatDeviceLabel(device: MediaDeviceInfo, fallbackLabel: string, index: number): string {
+  return device.label || `${fallbackLabel} ${index + 1}`;
+}
+
+function renderAudioDeviceOptions(select: HTMLSelectElement, devices: MediaDeviceInfo[], selectedId: string, fallbackLabel: string): void {
+  select.replaceChildren();
+  const defaultOption = document.createElement("option");
+  defaultOption.value = "default";
+  defaultOption.textContent = `System default ${fallbackLabel.toLowerCase()}`;
+  defaultOption.selected = selectedId === "default" || !devices.some((device) => device.deviceId === selectedId);
+  select.appendChild(defaultOption);
+  devices.forEach((device, index) => {
+    const option = document.createElement("option");
+    option.value = device.deviceId;
+    option.textContent = formatDeviceLabel(device, fallbackLabel, index);
+    option.selected = device.deviceId === selectedId;
+    select.appendChild(option);
+  });
+}
+
+function updateAudioMeter(fill: HTMLDivElement, level: number): void {
+  fill.style.width = `${Math.round(Math.max(0, Math.min(1, level)) * 100)}%`;
+}
+
+function updateAudioDeviceStatus(message: string): void {
+  audioDeviceStatusEl.textContent = message;
+}
+
 function applyDisplayTexture(texture: THREE.Texture | null): void {
   const material = displaySurface.material;
   if (!(material instanceof THREE.MeshBasicMaterial)) {
@@ -325,6 +382,42 @@ function ensureAudioContext(): AudioContext {
     audioContext = new AudioContext();
   }
   return audioContext;
+}
+
+async function refreshAudioDevices(requestPermissions = false): Promise<void> {
+  try {
+    const [inputs, outputs] = await Promise.all([
+      Room.getLocalDevices("audioinput", requestPermissions),
+      Room.getLocalDevices("audiooutput", false)
+    ]);
+    audioInputDevices = inputs;
+    audioOutputDevices = outputs;
+  } catch {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    audioInputDevices = devices.filter((device) => device.kind === "audioinput");
+    audioOutputDevices = devices.filter((device) => device.kind === "audiooutput");
+  }
+
+  renderAudioDeviceOptions(micSelect, audioInputDevices, preferredMicDeviceId, "Microphone");
+  renderAudioDeviceOptions(speakerSelect, audioOutputDevices, preferredSpeakerDeviceId, "Speaker");
+  speakerSelect.disabled = !supportsAudioOutputSelection();
+  updateAudioDeviceStatus(
+    `Inputs: ${audioInputDevices.length || 1}, outputs: ${audioOutputDevices.length || 1}${supportsAudioOutputSelection() ? "" : " (speaker switching unsupported here)"}`
+  );
+}
+
+async function applyPreferredAudioDevices(room: Room): Promise<void> {
+  if (preferredMicDeviceId !== "default") {
+    await room.switchActiveDevice("audioinput", preferredMicDeviceId).catch(() => undefined);
+  }
+  if (supportsAudioOutputSelection()) {
+    const audioOutputId = preferredSpeakerDeviceId === "default" ? "default" : preferredSpeakerDeviceId;
+    await room.switchActiveDevice("audiooutput", audioOutputId).catch(() => undefined);
+    const context = audioContext as AudioContext & { setSinkId?: (deviceId: string) => Promise<void> } | null;
+    if (context?.setSinkId) {
+      await context.setSinkId(audioOutputId).catch(() => undefined);
+    }
+  }
 }
 
 async function resumeAudioContext(): Promise<void> {
@@ -471,6 +564,11 @@ function updateSpatialAudio(): void {
   }
 }
 
+function updateAudioUi(): void {
+  updateAudioMeter(micLevelFill, localMicLevel);
+  updateAudioMeter(speakerLevelFill, speakerOutputLevel);
+}
+
 function updateAvatarLipsync(deltaSeconds: number): void {
   if (livekitRoom && microphoneEnabled && !localAudioNode) {
     connectLocalAudioTrack(livekitRoom);
@@ -485,6 +583,7 @@ function updateAvatarLipsync(deltaSeconds: number): void {
   const localLevel = localAudioNode
     ? sampleAvatarLipsyncLevel(localAudioNode.analyser, localAudioNode.sampleBuffer)
     : 0;
+  localMicLevel = localLevel;
   const localLipsync = updateAvatarLipsyncDriver(localAudioNode?.lipsync ?? localAvatarLipsync, {
     deltaSeconds,
     level: localLevel,
@@ -497,8 +596,15 @@ function updateAvatarLipsync(deltaSeconds: number): void {
   }
 
   if (!livekitRoom) {
+    speakerOutputLevel = 0;
     return;
   }
+
+  let maxSpeakerLevel = 0;
+  for (const node of remoteAudioNodes.values()) {
+    maxSpeakerLevel = Math.max(maxSpeakerLevel, sampleAvatarLipsyncLevel(node.analyser, node.sampleBuffer));
+  }
+  speakerOutputLevel = maxSpeakerLevel;
 
   for (const [remoteParticipantId, participant] of livekitRoom.remoteParticipants.entries()) {
     const node = remoteAudioNodes.get(remoteParticipantId);
@@ -1013,6 +1119,7 @@ async function ensureMediaRoom(): Promise<Room> {
   const room = new Room();
   setupAudio(room);
   await room.connect(voicePlan.livekitUrl, voicePlan.token);
+  await applyPreferredAudioDevices(room);
   livekitRoom = room;
   mediaRoomReady = true;
   startShareButton.disabled = false;
@@ -1551,6 +1658,7 @@ async function joinAudio(): Promise<void> {
       microphoneEnabled = true;
       await resumeAudioContext();
       connectLocalAudioTrack(livekitRoom);
+      await refreshAudioDevices(true);
       muteButton.disabled = false;
       joinAudioButton.disabled = true;
       clearAudioIssue("Audio connected");
@@ -1567,6 +1675,7 @@ async function joinAudio(): Promise<void> {
   microphoneEnabled = true;
   await resumeAudioContext();
   connectLocalAudioTrack(room);
+  await refreshAudioDevices(true);
   muteButton.disabled = false;
   joinAudioButton.disabled = true;
   startShareButton.disabled = false;
@@ -1588,6 +1697,38 @@ muteButton.addEventListener("click", async () => {
   muteButton.textContent = microphoneEnabled ? "Mute" : "Unmute";
   setStatus(microphoneEnabled ? "Audio live" : "Muted");
   debugState.audioState = microphoneEnabled ? "live" : "muted";
+});
+
+micSelect.addEventListener("change", () => {
+  preferredMicDeviceId = micSelect.value || "default";
+  localStorage.setItem("noah.audioinput", preferredMicDeviceId);
+  updateAudioDeviceStatus(`Selected microphone: ${micSelect.selectedOptions[0]?.textContent ?? "default"}`);
+  if (!livekitRoom) {
+    return;
+  }
+  const room = livekitRoom;
+  void room.switchActiveDevice("audioinput", preferredMicDeviceId).then(() => {
+    disconnectLocalAudioTrack();
+    if (microphoneEnabled) {
+      connectLocalAudioTrack(room);
+    }
+  }).catch((error: unknown) => {
+    console.error(error);
+    updateAudioDeviceStatus("Microphone switch failed");
+  });
+});
+
+speakerSelect.addEventListener("change", () => {
+  preferredSpeakerDeviceId = speakerSelect.value || "default";
+  localStorage.setItem("noah.audiooutput", preferredSpeakerDeviceId);
+  updateAudioDeviceStatus(`Selected speaker: ${speakerSelect.selectedOptions[0]?.textContent ?? "default"}`);
+  if (!livekitRoom || !supportsAudioOutputSelection()) {
+    return;
+  }
+  void applyPreferredAudioDevices(livekitRoom).catch((error: unknown) => {
+    console.error(error);
+    updateAudioDeviceStatus("Speaker switch failed");
+  });
 });
 
 spaceSelect.addEventListener("change", () => {
@@ -1713,6 +1854,7 @@ renderer.setAnimationLoop(() => {
   }
   updateMovement(delta);
   updateAvatarLipsync(delta);
+  updateAudioUi();
   updateLocalAvatar(delta);
   remoteAvatarRuntime.update(delta, debugState);
   debugState.avatarPoseTransport.adaptivePlaybackDelayMs = debugState.remoteAvatarParticipants.length > 0
