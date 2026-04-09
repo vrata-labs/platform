@@ -1402,19 +1402,29 @@ apps/runtime-web/src/avatar/
 
 # Phase 4 — Lipsync, speaking feedback и expressive polish
 
+Статус: COMPLETED (`v1`)
+
 ## Цель
 
 Добавить живость лицу и связать рот с реальным звуком.
 
-## Что входит
+## Что вошло в `v1`
 
 - `AnalyserNode` для local mic path
-- `AnalyserNode` для remote audio path
+- remote lipsync через `LiveKit participant.audioLevel`
 - morph driver
 - smoothing envelope
 - silence gate
 - speaking indicator
+- room HUD audio controls: microphone selector, speaker selector, `Mic level`, `Speaker level`
+- desktop self-view `hands-only`
+- VR root/body alignment fixes for outside-view correctness
+
+## Что не вошло в `v1`
+
 - blink / subtle idle facial motion
+- viseme/phoneme mapping
+- advanced expressive facial polish
 
 ## Что не входит
 
@@ -1438,6 +1448,14 @@ apps/runtime-web/src/avatar/
 3. Нет дополнительного сетевого payload для visemes.
 4. При mute / отсутствии track рот возвращается в neutral.
 5. Lipsync CPU cost контролируемый и ограничен caps/LOD.
+
+## Фактический итог фазы
+
+- Self-avatar реагирует ртом на локальный микрофонный сигнал.
+- Remote avatar двигает ртом по реально наблюдаемому remote speaking signal без нового facial payload.
+- Remote audible playback сохранён через normal `track.attach()` path.
+- В room HUD добавлены device selectors и audio level indicators для ручной проверки voice path.
+- Local `pnpm build`, `pnpm test`, `pnpm test:e2e` и staging gate с `pnpm test:e2e:staging` были доведены до зелёного состояния на финальном рабочем head.
 
 ## Тесты
 

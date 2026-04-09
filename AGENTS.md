@@ -136,3 +136,16 @@
 - Default expectation for user-facing feature work is two-level e2e verification: local `pnpm test:e2e` first, then verification against the published staging environment.
 - Prefer adding or extending staging-facing automated scenarios instead of relying only on manual checks or indirect diagnostics.
 - Manual staging checks are still valuable for XR/visual behavior, but they should complement automated e2e on published staging, not replace it.
+
+## Avatar and audio platform notes
+
+- Remote lipsync should use `LiveKit participant.audioLevel` as the primary signal; browser WebAudio analyser paths were unreliable for remote mouth motion on staging.
+- Remote audible playback should keep the normal `track.attach()` / hidden audio element path; trying to route remote output only through `AudioContext` broke audible sound even when lipsync/debug signals still moved.
+- Desktop self-view should default to `hands-only`; showing full self body/face in first-person web made the user see their own lips and face in the camera.
+- VR avatar root must follow the tracked headset on all axes `x/y/z`, not just by moving the head node; otherwise outside observers see head/body drift and the local VR user can end up “inside” their own avatar.
+- Remote avatar body height must use `poseFrame.root.y`; fixed body height breaks outside-view VR alignment even when the head pose is correct.
+- Legacy `localBody` / `localHead` fallback meshes in `apps/runtime-web/src/main.ts` must stay hidden in avatar-enabled VR flow; otherwise the local user sees a ghost self avatar at a fixed height.
+- Do not orient avatar bodies with `lookAt(...)`; it adds pitch/roll and can make capsules lie horizontally. Keep body orientation yaw-only and reset `rotation.x/z`.
+- The room HUD in `apps/runtime-web/index.html` now includes main-path audio controls: microphone selector, speaker selector, `Mic level`, and `Speaker level`.
+- `Speaker level` is more reliable when derived from remote `participant.audioLevel` than from output analyser nodes.
+- Staging-facing tests should avoid brittle assumptions about room names or transient loading text; prefer stable selectors and polling for the concrete control that the feature adds.
