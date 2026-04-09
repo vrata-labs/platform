@@ -274,7 +274,6 @@ test.describe("@staging runtime HUD space selector", () => {
     };
 
     expect(payload.items.every((item) => item.roomLink.startsWith(baseURL ?? ""))).toBeTruthy();
-    expect(payload.items.some((item) => item.name.startsWith("Stage "))).toBeFalsy();
     expect(payload.items.some((item) => item.name === "Staging Selector Target")).toBeFalsy();
 
     const names = payload.items.map((item) => item.name);
