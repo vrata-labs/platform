@@ -131,6 +131,10 @@ function resolvePlaybackDelayMs(recommendedPlaybackDelayMs: number, inputMode: s
   return recommendedPlaybackDelayMs;
 }
 
+function resolveRemoteBodyY(inputMode: string | null | undefined): number {
+  return inputMode === "vr-controller" || inputMode === "vr-hand" ? 0.76 : 0.92;
+}
+
 function resolveInterpolatedPose(sample: ReturnType<typeof sampleAvatarPoseBuffer>, renderAtMs: number): CompactPoseFrame | null {
   if (sample.previous && sample.next && sample.next.sentAtMs > sample.previous.sentAtMs) {
     const alpha = THREE.MathUtils.clamp(
@@ -402,6 +406,7 @@ export function createRemoteAvatarRuntime(input: {
         const headSample = sampleMotion(tracks.head, renderAtMs);
         const reliableState = participant?.reliableState ?? null;
         const lipsync = participant?.lipsync ?? { mouthAmount: 0, speakingActive: false, sourceState: "idle" as const };
+        const bodyY = resolveRemoteBodyY(reliableState?.inputMode ?? null);
         if (participant) {
           pruneAvatarPoseBuffer(participant.poseBuffer, nowMs);
         }
@@ -422,7 +427,7 @@ export function createRemoteAvatarRuntime(input: {
         applyProceduralMouthState(entity.mouth, lipsync.mouthAmount);
         entity.mouth.visible = true;
         if (poseFrame) {
-          entity.body.position.lerp(new THREE.Vector3(poseFrame.root.x, 0.92, poseFrame.root.z), 0.35);
+          entity.body.position.lerp(new THREE.Vector3(poseFrame.root.x, bodyY, poseFrame.root.z), 0.35);
           entity.head.position.lerp(new THREE.Vector3(poseFrame.head.x, poseFrame.head.y, poseFrame.head.z), 0.45);
           entity.leftHand.position.lerp(new THREE.Vector3(poseFrame.leftHand.x, poseFrame.leftHand.y, poseFrame.leftHand.z), 0.45);
           entity.rightHand.position.lerp(new THREE.Vector3(poseFrame.rightHand.x, poseFrame.rightHand.y, poseFrame.rightHand.z), 0.45);
@@ -438,9 +443,9 @@ export function createRemoteAvatarRuntime(input: {
           }
         } else {
           if (bodySample && headSample) {
-            entity.body.position.lerp(new THREE.Vector3(bodySample.x, 0.92, bodySample.z), 0.2);
+            entity.body.position.lerp(new THREE.Vector3(bodySample.x, bodyY, bodySample.z), 0.2);
             entity.head.position.lerp(new THREE.Vector3(headSample.x, 1.58, headSample.z), 0.25);
-            entity.body.lookAt(headSample.x, 0.92, headSample.z);
+            entity.body.lookAt(headSample.x, bodyY, headSample.z);
             entity.head.rotation.y = lerpAngleRadians(entity.head.rotation.y, entity.body.rotation.y, 0.25);
           }
           entity.leftHand.visible = participant?.leftHandVisible ?? false;

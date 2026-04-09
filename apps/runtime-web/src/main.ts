@@ -1416,6 +1416,9 @@ function setupAudio(room: Room): void {
     element.autoplay = true;
     element.style.display = "none";
     document.body.appendChild(element);
+    void element.play().catch(() => {
+      // Autoplay can race with attachment; keep the element around and retry on next media event.
+    });
     if (participant?.identity) {
       connectRemoteAudioElement(element as HTMLMediaElement, participant.identity);
     }
