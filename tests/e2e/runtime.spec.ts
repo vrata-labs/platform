@@ -349,6 +349,111 @@ test("avatar-enabled room diagnostics api exposes transport preview payload", as
   }).toBeTruthy();
 });
 
+test("avatar-enabled room exposes lipsync debug signals for local and remote avatars", async ({ browser, request }) => {
+  const createRoomResponse = await request.post("/api/rooms", {
+    headers: {
+      "x-noah-admin-token": "test-admin-token"
+    },
+    data: {
+      tenantId: "demo-tenant",
+      templateId: "meeting-room-basic",
+      name: "Avatar Lipsync Diagnostics Room",
+      avatarConfig: {
+        avatarsEnabled: true,
+        avatarCatalogUrl: "/assets/avatars/catalog.v1.json",
+        avatarQualityProfile: "desktop-standard",
+        avatarFallbackCapsulesEnabled: true,
+        avatarSeatsEnabled: false
+      }
+    }
+  });
+  expect(createRoomResponse.ok()).toBeTruthy();
+  const room = (await createRoomResponse.json()) as { roomId: string; roomLink: string };
+
+  const pageA = await browser.newPage();
+  const pageB = await browser.newPage();
+
+  try {
+    await pageA.goto(`${room.roomLink}?debug=1&bot=line`);
+    await pageB.goto(`${room.roomLink}?debug=1&bot=line`);
+
+    await expect.poll(async () => {
+      const debugA = await pageA.evaluate(() => (window as Window & {
+        __NOAH_DEBUG__?: {
+          avatarDebug?: {
+            mouthAmount?: number;
+            speakingActive?: boolean;
+            lipsyncSourceState?: string | null;
+          };
+          remoteAvatarParticipants?: Array<{
+            mouthAmount?: number;
+            speakingActive?: boolean;
+            lipsyncSourceState?: string | null;
+            hasReliableState?: boolean;
+            hasPoseFrame?: boolean;
+          }>;
+        };
+      }).__NOAH_DEBUG__);
+
+      return {
+        localMouthAmount: debugA?.avatarDebug?.mouthAmount ?? null,
+        localSpeakingActive: debugA?.avatarDebug?.speakingActive ?? null,
+        localSourceState: debugA?.avatarDebug?.lipsyncSourceState ?? null,
+        remoteCount: debugA?.remoteAvatarParticipants?.length ?? 0,
+        remoteMouthAmount: debugA?.remoteAvatarParticipants?.[0]?.mouthAmount ?? null,
+        remoteSpeakingActive: debugA?.remoteAvatarParticipants?.[0]?.speakingActive ?? null,
+        remoteSourceState: debugA?.remoteAvatarParticipants?.[0]?.lipsyncSourceState ?? null,
+        remoteHasReliableState: debugA?.remoteAvatarParticipants?.[0]?.hasReliableState ?? false,
+        remoteHasPoseFrame: debugA?.remoteAvatarParticipants?.[0]?.hasPoseFrame ?? false
+      };
+    }, {
+      timeout: 15000,
+      intervals: [1000, 2000, 3000]
+    }).toEqual({
+      localMouthAmount: 0,
+      localSpeakingActive: false,
+      localSourceState: "idle",
+      remoteCount: 1,
+      remoteMouthAmount: 0,
+      remoteSpeakingActive: false,
+      remoteSourceState: "idle",
+      remoteHasReliableState: true,
+      remoteHasPoseFrame: true
+    });
+
+    await expect.poll(async () => {
+      const diagnosticsResponse = await request.get(`/api/rooms/${room.roomId}/diagnostics`);
+      const diagnostics = (await diagnosticsResponse.json()) as {
+        items: Array<{
+          avatarDebug?: {
+            mouthAmount?: number;
+            speakingActive?: boolean;
+            lipsyncSourceState?: string | null;
+          };
+          remoteAvatarParticipants?: Array<{
+            mouthAmount?: number;
+            speakingActive?: boolean;
+            lipsyncSourceState?: string | null;
+          }>;
+        }>;
+      };
+
+      return diagnostics.items.some((item) => item.avatarDebug?.mouthAmount === 0
+        && item.avatarDebug?.speakingActive === false
+        && item.avatarDebug?.lipsyncSourceState === "idle"
+        && item.remoteAvatarParticipants?.some((participant) => participant.mouthAmount === 0
+          && participant.speakingActive === false
+          && participant.lipsyncSourceState === "idle"));
+    }, {
+      timeout: 15000,
+      intervals: [1000, 2000, 3000]
+    }).toBeTruthy();
+  } finally {
+    await pageA.close();
+    await pageB.close();
+  }
+});
+
 test("avatar-enabled room syncs remote reliable state and pose frames between two clients", async ({ browser, request }) => {
   const createRoomResponse = await request.post("/api/rooms", {
     headers: {

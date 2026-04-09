@@ -2,6 +2,12 @@ import * as THREE from "three";
 
 import type { LoadedAvatarPreset } from "./avatar-types.js";
 
+export interface ProceduralAvatarHeadVisual {
+  head: THREE.Mesh;
+  mouth: THREE.Mesh;
+  hair: THREE.Mesh;
+}
+
 export interface AvatarVisualInstance {
   avatarId: string;
   label: string;
@@ -9,8 +15,36 @@ export interface AvatarVisualInstance {
   setHighlighted(highlighted: boolean): void;
 }
 
-function createMaterial(color: string): THREE.MeshStandardMaterial {
+function createMaterial(color: THREE.ColorRepresentation): THREE.MeshStandardMaterial {
   return new THREE.MeshStandardMaterial({ color, roughness: 0.86, metalness: 0.04 });
+}
+
+export function createProceduralAvatarHead(input: {
+  skinColor: THREE.ColorRepresentation;
+  accentColor: THREE.ColorRepresentation;
+  mouthColor?: THREE.ColorRepresentation;
+}): ProceduralAvatarHeadVisual {
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.18, 20, 20), createMaterial(input.skinColor));
+
+  const mouth = new THREE.Mesh(
+    new THREE.BoxGeometry(0.12, 0.028, 0.024),
+    createMaterial(input.mouthColor ?? 0x5a1f24)
+  );
+  mouth.position.set(0, -0.055, 0.165);
+  head.add(mouth);
+
+  const hair = new THREE.Mesh(new THREE.SphereGeometry(0.12, 16, 16), createMaterial(input.accentColor));
+  hair.scale.set(1.1, 0.72, 1.1);
+  hair.position.set(0, 0.14, -0.01);
+  head.add(hair);
+
+  return { head, mouth, hair };
+}
+
+export function applyProceduralMouthState(mouth: THREE.Mesh, mouthAmount: number): void {
+  const clampedAmount = THREE.MathUtils.clamp(mouthAmount, 0, 1);
+  mouth.scale.y = 1 + clampedAmount * 4.6;
+  mouth.position.y = -0.055 - clampedAmount * 0.02;
 }
 
 export function createProceduralAvatarInstance(preset: LoadedAvatarPreset): AvatarVisualInstance {
@@ -21,14 +55,12 @@ export function createProceduralAvatarInstance(preset: LoadedAvatarPreset): Avat
   body.position.y = 0.9;
   group.add(body);
 
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.18, 20, 20), createMaterial(preset.recipe.palette.skin));
+  const { head } = createProceduralAvatarHead({
+    skinColor: preset.recipe.palette.skin,
+    accentColor: preset.recipe.palette.accent
+  });
   head.position.y = 1.56;
   group.add(head);
-
-  const hair = new THREE.Mesh(new THREE.SphereGeometry(0.12, 16, 16), createMaterial(preset.recipe.palette.accent));
-  hair.scale.set(1.1, 0.72, 1.1);
-  hair.position.set(0, 1.7, -0.01);
-  group.add(hair);
 
   const shoulderLeft = new THREE.Mesh(new THREE.SphereGeometry(0.07, 14, 14), createMaterial(preset.recipe.palette.accent));
   shoulderLeft.position.set(-0.24, 1.22, 0);

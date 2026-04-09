@@ -5,6 +5,7 @@ import {
   createAvatarLoadedDiagnostics,
   type AvatarDiagnostics
 } from "./avatar-debug.js";
+import { applyProceduralMouthState, createProceduralAvatarHead } from "./avatar-instance.js";
 import { computeAvatarAnimationPose, selectAvatarAnimationClip } from "./avatar-animation.js";
 import type { AvatarLipsyncSourceState } from "./avatar-lipsync.js";
 import { resolveAvatarLocomotion } from "./avatar-locomotion.js";
@@ -79,13 +80,14 @@ function createLocalAvatarVisual(preset: LoadedAvatarPreset): LocalAvatarVisual 
   lowerBody.position.y = 0.52;
   root.add(lowerBody);
 
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.16, 18, 18), createMaterial(preset.recipe.palette.skin));
+  const headVisual = createProceduralAvatarHead({
+    skinColor: preset.recipe.palette.skin,
+    accentColor: preset.recipe.palette.accent
+  });
+  const head = headVisual.head;
   head.position.y = 1.58;
   root.add(head);
-
-  const mouth = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.018, 0.02), createMaterial("#2f1e1b"));
-  mouth.position.set(0, -0.04, 0.15);
-  head.add(mouth);
+  const mouth = headVisual.mouth;
 
   const leftHand = new THREE.Mesh(new THREE.SphereGeometry(0.08, 14, 14), createMaterial(preset.recipe.palette.accent));
   leftHand.position.set(-0.28, 1.16, 0.12);
@@ -260,9 +262,8 @@ export function createLocalAvatarController(input: {
         solve.headLocal.z
       );
       visual.head.rotation.z = pose.headTilt;
-      visual.mouth.scale.y = 1 + mouthAmount * 4.2;
-      visual.mouth.position.y = -0.04 - mouthAmount * 0.015;
-      visual.mouth.visible = visibility !== "hidden" && (speakingActive || mouthAmount > 0.02);
+      applyProceduralMouthState(visual.mouth, mouthAmount);
+      visual.mouth.visible = visibility !== "hidden";
       visual.leftHand.position.set(
         solve.leftHandLocal.x,
         solve.leftHandLocal.y + (vrDirectTracking ? 0 : pose.leftHandYOffset),

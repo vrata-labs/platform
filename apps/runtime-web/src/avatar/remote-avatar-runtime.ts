@@ -1,5 +1,6 @@
 import * as THREE from "three";
 
+import { applyProceduralMouthState, createProceduralAvatarHead } from "./avatar-instance.js";
 import type { AvatarLipsyncSourceState, AvatarLipsyncState } from "./avatar-lipsync.js";
 import { createAvatarPoseBuffer, pushAvatarPoseFrame, pruneAvatarPoseBuffer, sampleAvatarPoseBuffer, type AvatarPoseBuffer } from "./avatar-pose-buffer.js";
 import { createMotionTrack, pushMotionSample, sampleMotion, type MotionTrack } from "../motion-state.js";
@@ -85,15 +86,22 @@ function makeBody(bodyGeometry: THREE.BufferGeometry, color: number): THREE.Mesh
   return new THREE.Mesh(bodyGeometry, new THREE.MeshStandardMaterial({ color, roughness: 0.45, metalness: 0.08 }));
 }
 
-function makeHead(headGeometry: THREE.BufferGeometry, color: number): THREE.Mesh {
-  return new THREE.Mesh(headGeometry, new THREE.MeshStandardMaterial({ color, roughness: 0.3, metalness: 0.05 }));
-}
-
-function makeMouth(): THREE.Mesh {
-  return new THREE.Mesh(
-    new THREE.BoxGeometry(0.09, 0.018, 0.02),
-    new THREE.MeshStandardMaterial({ color: 0x2f1e1b, roughness: 0.9, metalness: 0.01 })
-  );
+function makeHeadVisual(headGeometry: THREE.BufferGeometry, color: number): { head: THREE.Mesh; mouth: THREE.Mesh } {
+  const headVisual = createProceduralAvatarHead({
+    skinColor: color,
+    accentColor: 0x4f6a8a
+  });
+  headVisual.head.geometry.dispose();
+  headVisual.head.geometry = headGeometry;
+  const headMaterial = headVisual.head.material;
+  if (headMaterial instanceof THREE.MeshStandardMaterial) {
+    headMaterial.roughness = 0.3;
+    headMaterial.metalness = 0.05;
+  }
+  return {
+    head: headVisual.head,
+    mouth: headVisual.mouth
+  };
 }
 
 function makeHand(color: number): THREE.Mesh {
@@ -251,10 +259,9 @@ export function createRemoteAvatarRuntime(input: {
     let entity = remoteAvatars.get(participant.participantId);
     if (!entity) {
       const body = makeBody(input.bodyGeometry, participant.activeMedia.audio ? 0x5fc8ff : 0xbfd8ee);
-      const head = makeHead(input.headGeometry, 0xf6fbff);
-      const mouth = makeMouth();
-      mouth.position.set(0, -0.04, 0.17);
-      head.add(mouth);
+      const headVisual = makeHeadVisual(input.headGeometry, 0xf6fbff);
+      const head = headVisual.head;
+      const mouth = headVisual.mouth;
       const leftHand = makeHand(0xf2b3a0);
       const rightHand = makeHand(0xf2b3a0);
       input.scene.add(body, head, leftHand, rightHand);
@@ -412,9 +419,8 @@ export function createRemoteAvatarRuntime(input: {
           bodyMaterial.emissive.setHex(lipsync.speakingActive ? 0x193247 : 0x000000);
           bodyMaterial.emissiveIntensity = lipsync.speakingActive ? 0.35 : 0;
         }
-        entity.mouth.scale.y = 1 + THREE.MathUtils.clamp(lipsync.mouthAmount, 0, 1) * 4.2;
-        entity.mouth.position.y = -0.04 - THREE.MathUtils.clamp(lipsync.mouthAmount, 0, 1) * 0.015;
-        entity.mouth.visible = lipsync.speakingActive || lipsync.mouthAmount > 0.02;
+        applyProceduralMouthState(entity.mouth, lipsync.mouthAmount);
+        entity.mouth.visible = true;
         if (poseFrame) {
           entity.body.position.lerp(new THREE.Vector3(poseFrame.root.x, 0.92, poseFrame.root.z), 0.35);
           entity.head.position.lerp(new THREE.Vector3(poseFrame.head.x, poseFrame.head.y, poseFrame.head.z), 0.45);
