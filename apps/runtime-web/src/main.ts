@@ -204,13 +204,13 @@ const roomStateReconnectPolicy = createReconnectPolicy({
 
 interface RemoteAudioNode {
   participantId: string;
-  element: HTMLMediaElement;
-  source: MediaElementAudioSourceNode;
+  source: MediaStreamAudioSourceNode;
   gain: GainNode;
   analyser: AnalyserNode;
   panner: PannerNode;
   sampleBuffer: Uint8Array;
   lipsync: AvatarLipsyncDriver;
+  trackId: string;
 }
 
 interface LocalAudioNode {
@@ -390,14 +390,22 @@ function connectLocalAudioTrack(room: Room): void {
   };
 }
 
-function connectRemoteAudioElement(element: HTMLMediaElement, participantId: string): void {
-  if (remoteAudioNodes.has(participantId)) {
+function connectRemoteAudioTrack(track: Track, participantId: string): void {
+  const mediaStreamTrack = (track as { mediaStreamTrack?: MediaStreamTrack }).mediaStreamTrack;
+  if (!mediaStreamTrack) {
     return;
+  }
+  const existing = remoteAudioNodes.get(participantId);
+  if (existing?.trackId === mediaStreamTrack.id) {
+    return;
+  }
+  if (existing) {
+    disconnectRemoteAudioElement(participantId);
   }
   const context = ensureAudioContext();
   void resumeAudioContext();
   const analyserSetup = createAudioAnalyser(context);
-  const source = context.createMediaElementSource(element);
+  const source = context.createMediaStreamSource(new MediaStream([mediaStreamTrack]));
   const gain = context.createGain();
   const panner = context.createPanner();
   applySpatialSettings(panner, createSpatialAudioSettings());
@@ -407,13 +415,13 @@ function connectRemoteAudioElement(element: HTMLMediaElement, participantId: str
   panner.connect(context.destination);
   remoteAudioNodes.set(participantId, {
     participantId,
-    element,
     source,
     gain,
     analyser: analyserSetup.analyser,
     panner,
     sampleBuffer: analyserSetup.sampleBuffer,
-    lipsync: analyserSetup.lipsync
+    lipsync: analyserSetup.lipsync,
+    trackId: mediaStreamTrack.id
   });
   debugState.spatialAudioState = "active";
 }
@@ -1412,15 +1420,8 @@ function setupAudio(room: Room): void {
       return;
     }
     if (track.kind !== Track.Kind.Audio) return;
-    const element = track.attach();
-    element.autoplay = true;
-    element.style.display = "none";
-    document.body.appendChild(element);
-    void element.play().catch(() => {
-      // Autoplay can race with attachment; keep the element around and retry on next media event.
-    });
     if (participant?.identity) {
-      connectRemoteAudioElement(element as HTMLMediaElement, participant.identity);
+      connectRemoteAudioTrack(track, participant.identity);
     }
     debugState.audioState = "remote-track";
   });
