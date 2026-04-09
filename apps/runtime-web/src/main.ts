@@ -190,6 +190,8 @@ let audioContext: AudioContext | null = null;
 let activeSceneBundleRoot: THREE.Object3D | null = null;
 let avatarSandboxRegistry: ReturnType<typeof createAvatarRegistry> | null = null;
 let localAvatarController: LocalAvatarController | null = null;
+let localBodyMesh: THREE.Mesh | null = null;
+let localHeadMesh: THREE.Mesh | null = null;
 const avatarOutboundPublisher = createAvatarOutboundPublisher();
 let lastAvatarMove = { x: 0, z: 0 };
 let lastAvatarTurnRate = 0;
@@ -1117,6 +1119,13 @@ function getLocalAvatarHandTargets(): { leftHand: { x: number; y: number; z: num
 }
 
 function updateLocalAvatar(delta: number): void {
+  const xrPresenting = renderer.xr.isPresenting || avatarVrMockEnabled;
+  if (localBodyMesh) {
+    localBodyMesh.visible = !runtimeFlags.avatarsEnabled && !xrPresenting;
+  }
+  if (localHeadMesh) {
+    localHeadMesh.visible = !runtimeFlags.avatarsEnabled && debugEnabled && !xrPresenting;
+  }
   if (!localAvatarController) {
     return;
   }
@@ -1129,7 +1138,6 @@ function updateLocalAvatar(delta: number): void {
     speakingActive: localAvatarController.diagnostics.speakingActive,
     lipsyncSourceState: (localAvatarController.diagnostics.lipsyncSourceState ?? "idle") as AvatarLipsyncSourceState
   };
-  const xrPresenting = renderer.xr.isPresenting || avatarVrMockEnabled;
   const xrInputProfile = renderer.xr.isPresenting
     ? lastAvatarXrInputProfile
     : avatarVrMockEnabled
@@ -1962,20 +1970,20 @@ async function main(): Promise<void> {
   }
   document.querySelector(".controls")?.appendChild(vrButton);
 
-  const localBody = new THREE.Mesh(
+  localBodyMesh = new THREE.Mesh(
     bodyGeometry,
     new THREE.MeshStandardMaterial({ color: 0xffd166, roughness: 0.45, metalness: 0.08 })
   );
-  localBody.position.set(0, 0.92, 0);
-  player.add(localBody);
+  localBodyMesh.position.set(0, 0.92, 0);
+  player.add(localBodyMesh);
 
-  const localHead = new THREE.Mesh(
+  localHeadMesh = new THREE.Mesh(
     headGeometry,
     new THREE.MeshStandardMaterial({ color: 0xfff4d6, roughness: 0.3, metalness: 0.05 })
   );
-  localHead.position.set(0, 1.58, 0);
-  localHead.visible = debugEnabled;
-  player.add(localHead);
+  localHeadMesh.position.set(0, 1.58, 0);
+  localHeadMesh.visible = debugEnabled;
+  player.add(localHeadMesh);
 
   await syncPresence(boot.joinMode, false);
   await refreshPresence();
