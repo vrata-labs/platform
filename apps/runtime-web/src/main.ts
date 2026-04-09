@@ -1144,9 +1144,11 @@ function updateLocalAvatar(delta: number): void {
     inputMode,
     xrPresenting
   });
+  const avatarRootX = xrPresenting ? headWorldPosition.x : player.position.x;
   const avatarRootY = xrPresenting
     ? headWorldPosition.y - viewProfile.poseProfile.headHeight
     : player.position.y;
+  const avatarRootZ = xrPresenting ? headWorldPosition.z : player.position.z;
 
   localAvatarController.update({
     deltaSeconds: delta,
@@ -1154,9 +1156,9 @@ function updateLocalAvatar(delta: number): void {
     xrPresenting,
     xrInputProfile,
     rootPosition: {
-      x: player.position.x,
+      x: avatarRootX,
       y: avatarRootY,
-      z: player.position.z
+      z: avatarRootZ
     },
     yaw,
     headPosition: {
