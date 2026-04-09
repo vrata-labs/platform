@@ -456,7 +456,13 @@ export function createRemoteAvatarRuntime(input: {
               0.2
             );
             entity.head.position.lerp(new THREE.Vector3(headSample.x, 1.58, headSample.z), 0.25);
-            entity.body.lookAt(headSample.x, resolveRemoteBodyWorldY(fallbackBodyY, reliableState?.inputMode ?? null), headSample.z);
+            entity.body.rotation.x = 0;
+            entity.body.rotation.z = 0;
+            entity.body.rotation.y = lerpAngleRadians(
+              entity.body.rotation.y,
+              Math.atan2(headSample.x - bodySample.x, headSample.z - bodySample.z),
+              0.25
+            );
             entity.head.rotation.y = lerpAngleRadians(entity.head.rotation.y, entity.body.rotation.y, 0.25);
           }
           entity.leftHand.visible = participant?.leftHandVisible ?? false;
