@@ -275,13 +275,13 @@ test("avatar-enabled room exposes local self-avatar diagnostics in normal room f
   }).toEqual({
     state: "loaded",
     selectedAvatarId: "preset-01",
-    visibilityState: "full-body",
+      visibilityState: "hands-only",
     locomotionState: "walk",
     animationState: "idle",
     controllerProfile: "desktop_no_controllers",
     inputMode: "desktop",
     snapshotAvatarId: "preset-01",
-    snapshotVisibilityState: "full-body",
+      snapshotVisibilityState: "hands-only",
     snapshotControllerProfile: "desktop_no_controllers",
     snapshotLocomotionState: "walk",
     transportAvatarId: "preset-01",
@@ -305,7 +305,7 @@ test("avatar-enabled room exposes local self-avatar diagnostics in normal room f
 
     return diagnostics.items.some((item) => (item.note === "local_avatar_ready" || item.note === undefined)
       && item.avatarDebug?.state === "loaded"
-      && item.avatarDebug?.visibilityState === "full-body"
+      && item.avatarDebug?.visibilityState === "hands-only"
       && item.avatarDebug?.locomotionState === "walk"
       && item.avatarDebug?.animationState === "idle"
       && item.avatarSnapshot?.avatarId === "preset-01"

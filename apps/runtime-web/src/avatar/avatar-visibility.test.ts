@@ -7,8 +7,8 @@ test("resolveSelfAvatarVisibility hides body in vr", () => {
   assert.equal(resolveSelfAvatarVisibility({ inputMode: "vr-controller", xrPresenting: true }), "hands-only");
 });
 
-test("resolveSelfAvatarVisibility keeps full body on desktop", () => {
-  assert.equal(resolveSelfAvatarVisibility({ inputMode: "desktop", xrPresenting: false }), "full-body");
+test("resolveSelfAvatarVisibility keeps hands only on desktop", () => {
+  assert.equal(resolveSelfAvatarVisibility({ inputMode: "desktop", xrPresenting: false }), "hands-only");
 });
 
 test("resolveSelfAvatarVisibility keeps upper body on mobile", () => {

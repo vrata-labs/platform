@@ -51,7 +51,7 @@ export function resolveSelfAvatarVisibility(input: {
     return "upper-body";
   }
 
-  return "full-body";
+  return "hands-only";
 }
 
 export function resolveAvatarViewProfile(input: {
