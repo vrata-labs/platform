@@ -427,6 +427,7 @@ export function createRemoteAvatarRuntime(input: {
           entity.leftHand.position.lerp(new THREE.Vector3(poseFrame.leftHand.x, poseFrame.leftHand.y, poseFrame.leftHand.z), 0.45);
           entity.rightHand.position.lerp(new THREE.Vector3(poseFrame.rightHand.x, poseFrame.rightHand.y, poseFrame.rightHand.z), 0.45);
           entity.body.rotation.y = lerpAngleRadians(entity.body.rotation.y, poseFrame.root.yaw, 0.35);
+          entity.head.rotation.y = lerpAngleRadians(entity.head.rotation.y, entity.body.rotation.y, 0.35);
           const forceVrHandsVisible = reliableState?.inputMode === "vr-controller" || reliableState?.inputMode === "vr-hand";
           entity.leftHand.visible = forceVrHandsVisible || poseFrame.leftHand.gesture > 0;
           entity.rightHand.visible = forceVrHandsVisible || poseFrame.rightHand.gesture > 0;
@@ -440,6 +441,7 @@ export function createRemoteAvatarRuntime(input: {
             entity.body.position.lerp(new THREE.Vector3(bodySample.x, 0.92, bodySample.z), 0.2);
             entity.head.position.lerp(new THREE.Vector3(headSample.x, 1.58, headSample.z), 0.25);
             entity.body.lookAt(headSample.x, 0.92, headSample.z);
+            entity.head.rotation.y = lerpAngleRadians(entity.head.rotation.y, entity.body.rotation.y, 0.25);
           }
           entity.leftHand.visible = participant?.leftHandVisible ?? false;
           entity.rightHand.visible = participant?.rightHandVisible ?? false;

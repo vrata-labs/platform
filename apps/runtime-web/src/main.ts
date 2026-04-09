@@ -324,6 +324,13 @@ function ensureAudioContext(): AudioContext {
   return audioContext;
 }
 
+async function resumeAudioContext(): Promise<void> {
+  const context = ensureAudioContext();
+  if (context.state === "suspended") {
+    await context.resume();
+  }
+}
+
 function createAudioAnalyser(context: AudioContext): {
   analyser: AnalyserNode;
   sampleBuffer: Uint8Array;
@@ -370,6 +377,7 @@ function connectLocalAudioTrack(room: Room): void {
   }
   disconnectLocalAudioTrack();
   const context = ensureAudioContext();
+  void resumeAudioContext();
   const analyserSetup = createAudioAnalyser(context);
   const source = context.createMediaStreamSource(new MediaStream([track]));
   source.connect(analyserSetup.analyser);
@@ -387,6 +395,7 @@ function connectRemoteAudioElement(element: HTMLMediaElement, participantId: str
     return;
   }
   const context = ensureAudioContext();
+  void resumeAudioContext();
   const analyserSetup = createAudioAnalyser(context);
   const source = context.createMediaElementSource(element);
   const gain = context.createGain();
@@ -452,6 +461,9 @@ function updateSpatialAudio(): void {
 }
 
 function updateAvatarLipsync(deltaSeconds: number): void {
+  if (livekitRoom && microphoneEnabled && !localAudioNode) {
+    connectLocalAudioTrack(livekitRoom);
+  }
   const localSourceState: AvatarLipsyncSourceState = !livekitRoom
     ? "idle"
     : !microphoneEnabled
@@ -1505,6 +1517,7 @@ async function joinAudio(): Promise<void> {
     if (!microphoneEnabled) {
       await livekitRoom.localParticipant.setMicrophoneEnabled(true);
       microphoneEnabled = true;
+      await resumeAudioContext();
       connectLocalAudioTrack(livekitRoom);
       muteButton.disabled = false;
       joinAudioButton.disabled = true;
@@ -1520,6 +1533,7 @@ async function joinAudio(): Promise<void> {
   const room = await ensureMediaRoom();
   await room.localParticipant.setMicrophoneEnabled(true);
   microphoneEnabled = true;
+  await resumeAudioContext();
   connectLocalAudioTrack(room);
   muteButton.disabled = false;
   joinAudioButton.disabled = true;
@@ -1536,6 +1550,7 @@ muteButton.addEventListener("click", async () => {
   microphoneEnabled = !microphoneEnabled;
   await livekitRoom.localParticipant.setMicrophoneEnabled(microphoneEnabled);
   if (microphoneEnabled) {
+    await resumeAudioContext();
     connectLocalAudioTrack(livekitRoom);
   }
   muteButton.textContent = microphoneEnabled ? "Mute" : "Unmute";
