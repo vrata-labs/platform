@@ -607,8 +607,8 @@ function updateAvatarLipsync(deltaSeconds: number): void {
   }
 
   let maxSpeakerLevel = 0;
-  for (const node of remoteAudioNodes.values()) {
-    maxSpeakerLevel = Math.max(maxSpeakerLevel, sampleAvatarLipsyncLevel(node.analyser, node.sampleBuffer));
+  for (const participant of livekitRoom.remoteParticipants.values()) {
+    maxSpeakerLevel = Math.max(maxSpeakerLevel, participant.audioLevel ?? 0);
   }
   speakerOutputLevel = maxSpeakerLevel;
 
