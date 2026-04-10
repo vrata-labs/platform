@@ -7,6 +7,7 @@ import {
   applyAvatarReliableState,
   connectParticipant,
   createRoomStateServer,
+  disconnectParticipant,
   relayAvatarPoseFrame
 } from "./index.js";
 
@@ -136,4 +137,69 @@ test("applySeatRelease clears occupied seat for participant", () => {
 
   assert.equal(releasedSeatId, "seat-a");
   assert.equal(server.rooms.get("demo-room")?.seatOccupancy["seat-a"], undefined);
+});
+
+test("late join room snapshot includes occupied seats", () => {
+  const server = createRoomStateServer();
+  connectParticipant(server, "demo-room", "p1", createSocket() as never);
+  applySeatClaim(server, "demo-room", "p1", "seat-a");
+
+  const lateJoinSocket = createSocket();
+  connectParticipant(server, "demo-room", "p2", lateJoinSocket as never);
+
+  const payloads = lateJoinSocket.sent.map((item) => JSON.parse(item));
+  const roomPayload = [...payloads].reverse().find((item: { type?: string }) => item.type === "room_state");
+  assert.equal(roomPayload?.room?.seatOccupancy?.["seat-a"], "p1");
+  assert.equal(roomPayload?.room?.participants?.length, 2);
+});
+
+test("reconnecting same participant does not duplicate occupied seat state", () => {
+  const server = createRoomStateServer();
+  connectParticipant(server, "demo-room", "p1", createSocket() as never);
+  applySeatClaim(server, "demo-room", "p1", "seat-a");
+
+  const reconnectSocket = createSocket();
+  connectParticipant(server, "demo-room", "p1", reconnectSocket as never);
+
+  const room = server.rooms.get("demo-room");
+  assert.equal(room?.participants.length, 1);
+  assert.equal(room?.participants[0]?.participantId, "p1");
+  assert.equal(room?.seatOccupancy["seat-a"], "p1");
+
+  const payloads = reconnectSocket.sent.map((item) => JSON.parse(item));
+  const roomPayload = [...payloads].reverse().find((item: { type?: string }) => item.type === "room_state");
+  assert.equal(roomPayload?.room?.participants?.length, 1);
+  assert.equal(roomPayload?.room?.seatOccupancy?.["seat-a"], "p1");
+});
+
+test("disconnecting stale socket after same participant reconnect does not clear occupied seat", () => {
+  const server = createRoomStateServer();
+  const firstSocket = createSocket();
+  connectParticipant(server, "demo-room", "p1", firstSocket as never);
+  applySeatClaim(server, "demo-room", "p1", "seat-a");
+
+  const secondSocket = createSocket();
+  connectParticipant(server, "demo-room", "p1", secondSocket as never);
+  disconnectParticipant(server, "demo-room", "p1", firstSocket as never);
+
+  const room = server.rooms.get("demo-room");
+  assert.equal(room?.participants.length, 1);
+  assert.equal(room?.seatOccupancy["seat-a"], "p1");
+});
+
+test("reconnect during disconnect grace keeps occupied seat", async () => {
+  const server = createRoomStateServer();
+  const firstSocket = createSocket();
+  connectParticipant(server, "demo-room", "p1", firstSocket as never);
+  applySeatClaim(server, "demo-room", "p1", "seat-a");
+
+  disconnectParticipant(server, "demo-room", "p1", firstSocket as never);
+  const reconnectSocket = createSocket();
+  connectParticipant(server, "demo-room", "p1", reconnectSocket as never);
+
+  await new Promise((resolve) => setTimeout(resolve, 1700));
+
+  const room = server.rooms.get("demo-room");
+  assert.equal(room?.participants.length, 1);
+  assert.equal(room?.seatOccupancy["seat-a"], "p1");
 });

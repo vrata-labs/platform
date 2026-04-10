@@ -32,7 +32,11 @@ export interface RoomStateServer {
   rooms: Map<string, RoomState>;
   clients: Map<string, Set<WebSocket>>;
   avatarReliableStates: Map<string, Map<string, AvatarReliableStatePayload>>;
+  socketParticipants: Map<WebSocket, { roomId: string; participantId: string }>;
+  pendingDisconnects: Map<string, Map<string, ReturnType<typeof setTimeout>>>;
 }
+
+const DISCONNECT_GRACE_MS = 1500;
 
 export interface SeatClaimResultPayload {
   seatId: string;
@@ -49,8 +53,55 @@ export function createRoomStateServer(): RoomStateServer {
   return {
     rooms: new Map<string, RoomState>(),
     clients: new Map<string, Set<WebSocket>>(),
-    avatarReliableStates: new Map<string, Map<string, AvatarReliableStatePayload>>()
+    avatarReliableStates: new Map<string, Map<string, AvatarReliableStatePayload>>(),
+    socketParticipants: new Map<WebSocket, { roomId: string; participantId: string }>(),
+    pendingDisconnects: new Map<string, Map<string, ReturnType<typeof setTimeout>>>()
   };
+}
+
+function cancelPendingDisconnect(server: RoomStateServer, roomId: string, participantId: string): void {
+  const roomTimers = server.pendingDisconnects.get(roomId);
+  const timer = roomTimers?.get(participantId);
+  if (timer) {
+    clearTimeout(timer);
+    roomTimers?.delete(participantId);
+  }
+  if (roomTimers && roomTimers.size === 0) {
+    server.pendingDisconnects.delete(roomId);
+  }
+}
+
+function scheduleDisconnectCleanup(server: RoomStateServer, roomId: string, participantId: string): void {
+  cancelPendingDisconnect(server, roomId, participantId);
+  const roomTimers = server.pendingDisconnects.get(roomId) ?? new Map<string, ReturnType<typeof setTimeout>>();
+  const timer = setTimeout(() => {
+    const room = server.rooms.get(roomId);
+    if (room) {
+      server.rooms.set(roomId, leaveRoom(room, participantId));
+    }
+    getRoomReliableStates(server, roomId).delete(participantId);
+    const nextRoomTimers = server.pendingDisconnects.get(roomId);
+    nextRoomTimers?.delete(participantId);
+    if (nextRoomTimers && nextRoomTimers.size === 0) {
+      server.pendingDisconnects.delete(roomId);
+    }
+    broadcastRoom(server, roomId);
+  }, DISCONNECT_GRACE_MS);
+  roomTimers.set(participantId, timer);
+  server.pendingDisconnects.set(roomId, roomTimers);
+}
+
+function hasOtherParticipantSocket(server: RoomStateServer, roomId: string, participantId: string, excludedSocket: WebSocket): boolean {
+  for (const client of server.clients.get(roomId) ?? []) {
+    if (client === excludedSocket) {
+      continue;
+    }
+    const metadata = server.socketParticipants.get(client);
+    if (metadata?.roomId === roomId && metadata.participantId === participantId) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function isObjectRecord(input: unknown): input is Record<string, unknown> {
@@ -153,11 +204,13 @@ function broadcastToRoom(server: RoomStateServer, roomId: string, payload: unkno
 }
 
 export function connectParticipant(server: RoomStateServer, roomId: string, participantId: string, socket: WebSocket): void {
+  cancelPendingDisconnect(server, roomId, participantId);
   const room = ensureRoom(server, roomId);
   server.rooms.set(roomId, joinRoom(room, participantId));
   const set = server.clients.get(roomId) ?? new Set<WebSocket>();
   set.add(socket);
   server.clients.set(roomId, set);
+  server.socketParticipants.set(socket, { roomId, participantId });
   broadcastRoom(server, roomId);
   for (const reliableState of getRoomReliableStates(server, roomId).values()) {
     sendToSocket(socket, {
@@ -168,13 +221,13 @@ export function connectParticipant(server: RoomStateServer, roomId: string, part
 }
 
 export function disconnectParticipant(server: RoomStateServer, roomId: string, participantId: string, socket: WebSocket): void {
-  const room = server.rooms.get(roomId);
-  if (room) {
-    server.rooms.set(roomId, leaveRoom(room, participantId));
-  }
   const set = server.clients.get(roomId);
   set?.delete(socket);
-  getRoomReliableStates(server, roomId).delete(participantId);
+  server.socketParticipants.delete(socket);
+  if (!hasOtherParticipantSocket(server, roomId, participantId, socket)) {
+    scheduleDisconnectCleanup(server, roomId, participantId);
+    return;
+  }
   broadcastRoom(server, roomId);
 }
 

@@ -233,6 +233,7 @@ let mediaRoomReady = false;
 let roomStateClient: RoomStateClient | null = null;
 let roomStateConnected = false;
 let roomStateReconnectTimer: number | null = null;
+let seatReclaimRetryTimer: number | null = null;
 let audioContext: AudioContext | null = null;
 let activeSceneBundleRoot: THREE.Object3D | null = null;
 let avatarSandboxRegistry: ReturnType<typeof createAvatarRegistry> | null = null;
@@ -243,6 +244,7 @@ let currentSeatId: string | null = null;
 let pendingSeatId: string | null = null;
 let lastInteractionConfirmAt = 0;
 let forcedTestInteractionRay: THREE.Ray | null = null;
+let forcedTestSeatId: string | null = null;
 let sceneTeleportFloorY = 0;
 let sceneSeatAnchors: SceneBundleSeatAnchor[] = [];
 let sceneSeatAnchorMap = createAvatarSeatAnchorMap([]);
@@ -395,6 +397,7 @@ function setSceneSeatAnchors(anchors: SceneBundleSeatAnchor[], teleportFloorY = 
 }
 
 function releaseCurrentSeatLocally(): void {
+  forcedTestSeatId = null;
   for (const [seatId, occupantId] of Object.entries(roomSeatOccupancy)) {
     if (occupantId === participantId) {
       delete roomSeatOccupancy[seatId];
@@ -409,8 +412,11 @@ function releaseCurrentSeatLocally(): void {
 
 function syncSeatStateFromOccupancy(): void {
   roomSeatOccupancy = { ...roomSeatOccupancy };
+  if (forcedTestSeatId) {
+    roomSeatOccupancy[forcedTestSeatId] = participantId;
+  }
   debugState.seatOccupancy = { ...roomSeatOccupancy };
-  const occupiedSeatId = resolveLocalSeatId(roomSeatOccupancy, participantId);
+  const occupiedSeatId = forcedTestSeatId ?? resolveLocalSeatId(roomSeatOccupancy, participantId);
   currentSeatId = occupiedSeatId;
   if (pendingSeatId && pendingSeatId === occupiedSeatId) {
     pendingSeatId = null;
@@ -964,6 +970,7 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
     aimInteractionAtFloor: (x: number, z: number) => boolean;
     confirmInteraction: () => void;
     claimSeatById: (seatId: string) => boolean;
+    requestSeatClaimById: (seatId: string) => boolean;
     teleportToFloor: (x: number, z: number) => boolean;
   };
 }).__NOAH_TEST__ = {
@@ -997,14 +1004,26 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
         delete roomSeatOccupancy[occupiedSeatId];
       }
     }
-    roomSeatOccupancy[seatAnchor.id] = participantId;
+    forcedTestSeatId = seatAnchor.id;
     pendingSeatId = null;
     debugState.pendingSeatId = null;
     syncSeatStateFromOccupancy();
     setStatus(`Seated at ${seatAnchor.label ?? seatAnchor.id}`);
     return true;
   },
+  requestSeatClaimById: (seatId: string) => {
+    const seatAnchor = sceneSeatAnchorMap.get(seatId);
+    if (!seatAnchor || !roomStateClient || !roomStateConnected) {
+      return false;
+    }
+    pendingSeatId = seatAnchor.id;
+    debugState.pendingSeatId = pendingSeatId;
+    sendSeatClaim(roomStateClient, seatAnchor.id);
+    setStatus(`Claiming seat ${seatAnchor.label ?? seatAnchor.id}`);
+    return true;
+  },
   teleportToFloor: (x: number, z: number) => {
+    forcedTestSeatId = null;
     if (currentSeatId && roomStateClient && roomStateConnected) {
       sendSeatRelease(roomStateClient, currentSeatId);
       releaseCurrentSeatLocally();
@@ -1152,8 +1171,16 @@ function clearRoomStateReconnect(): void {
   }
 }
 
+function clearSeatReclaimRetry(): void {
+  if (seatReclaimRetryTimer !== null) {
+    window.clearTimeout(seatReclaimRetryTimer);
+    seatReclaimRetryTimer = null;
+  }
+}
+
 function connectRoomStateWithRetry(roomStateUrl: string): void {
   clearRoomStateReconnect();
+  clearSeatReclaimRetry();
   debugState.roomStateMode = "connecting";
   setRoomStateStatus("Room-state: connecting");
 
@@ -1174,6 +1201,7 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
   roomStateClient = connectRoomState(roomStateUrl, roomId, participantId, {
     onOpen: () => {
       const reopened = debugState.avatarPoseTransport.lastPoseSentAtMs > 0;
+      const claimedSeatId = currentSeatId;
       roomStateConnected = true;
       debugState.roomStateConnected = true;
       debugState.roomStateMode = "connected";
@@ -1184,6 +1212,19 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
       void reportDiagnostics("room_state_connected");
       if (reopened) {
         debugState.avatarPoseTransport.reconnectRepublishCount += 1;
+      }
+      const activeClient = roomStateClient;
+      if (claimedSeatId && runtimeFlags.avatarSeatingEnabled && activeClient) {
+        pendingSeatId = claimedSeatId;
+        debugState.pendingSeatId = claimedSeatId;
+        sendSeatClaim(activeClient, claimedSeatId);
+        clearSeatReclaimRetry();
+        seatReclaimRetryTimer = window.setTimeout(() => {
+          if (!roomStateConnected || currentSeatId === claimedSeatId || pendingSeatId !== claimedSeatId || roomStateClient !== activeClient) {
+            return;
+          }
+          sendSeatClaim(activeClient, claimedSeatId);
+        }, 250);
       }
       void syncPresence(latestMode, Boolean(livekitRoom));
     },
@@ -1214,11 +1255,13 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
         }
         roomSeatOccupancy[result.seatId] = participantId;
         pendingSeatId = null;
+        clearSeatReclaimRetry();
         syncSeatStateFromOccupancy();
         setStatus(`Seated at ${result.seatId}`);
         return;
       }
       pendingSeatId = null;
+      clearSeatReclaimRetry();
       debugState.pendingSeatId = null;
       setStatus(result.occupantId ? `Seat occupied by ${result.occupantId}` : "Seat unavailable");
     },
@@ -1227,6 +1270,7 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
       const issue = classifyRoomStateError(error);
       roomStateConnected = false;
       debugState.roomStateConnected = false;
+      clearSeatReclaimRetry();
       applyIssue(issue, {
         degradedMode: "api_fallback",
         roomStateMode: "fallback",

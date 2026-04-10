@@ -1281,6 +1281,64 @@ test("avatar-enabled hall room supports interaction ray teleport, sit, switch an
   });
 });
 
+test.fixme("avatar-enabled hall room restores seated state after forced room-state reconnect", async ({ browser, request }) => {
+  const room = await createAvatarHallRoom(request, "Avatar Hall Reconnect Seating Room");
+  const pageA = await browser.newPage();
+  const pageB = await browser.newPage();
+
+  try {
+    await pageA.goto(`${room.roomLink}?debug=1&roomstatedelay=100&roomstatemaxdelay=100`);
+    await pageB.goto(`${room.roomLink}?debug=1&bot=line&roomstatedelay=100&roomstatemaxdelay=100`);
+    await waitForHallInteractionReady(pageA);
+    await waitForHallInteractionReady(pageB);
+
+    expect(await pageA.evaluate(() => (window as Window & {
+      __NOAH_TEST__?: { claimSeatById: (seatId: string) => boolean };
+    }).__NOAH_TEST__?.claimSeatById("hall-seat-a") ?? false)).toBeTruthy();
+
+    await expect.poll(async () => {
+      const debugA = await readInteractionDebug(pageA);
+      return {
+        localSeat: debugA?.currentSeatId ?? null,
+        localOccupiedBySelf: (debugA?.seatOccupancy?.["hall-seat-a"] ?? null) === debugA?.participantId
+      };
+    }, {
+      timeout: 15000,
+      intervals: [1000, 2000, 3000]
+    }).toEqual({
+      localSeat: "hall-seat-a",
+      localOccupiedBySelf: true
+    });
+
+    await pageA.evaluate(() => {
+      (window as Window & { __NOAH_TEST__?: { forceRoomStateReconnect?: () => void } }).__NOAH_TEST__?.forceRoomStateReconnect?.();
+    });
+
+    await expect.poll(async () => {
+      const [debugA, debugB] = await Promise.all([readInteractionDebug(pageA), readInteractionDebug(pageB)]);
+      return {
+        reconnected: debugA?.roomStateConnected ?? false,
+        localSeat: debugA?.currentSeatId ?? null,
+        localOccupiedBySelf: (debugA?.seatOccupancy?.["hall-seat-a"] ?? null) === debugA?.participantId,
+        remoteSeesSeat: Boolean(debugB?.seatOccupancy?.["hall-seat-a"]),
+        remoteMatchesLocalOccupant: (debugA?.seatOccupancy?.["hall-seat-a"] ?? null) === (debugB?.seatOccupancy?.["hall-seat-a"] ?? null)
+      };
+    }, {
+      timeout: 20000,
+      intervals: [1000, 2000, 3000]
+    }).toEqual({
+      reconnected: true,
+      localSeat: "hall-seat-a",
+      localOccupiedBySelf: true,
+      remoteSeesSeat: true,
+      remoteMatchesLocalOccupant: true
+    });
+  } finally {
+    await pageA.close();
+    await pageB.close();
+  }
+});
+
 test("room creation API is forbidden without admin token", async ({ request }) => {
   const response = await request.post("/api/rooms", {
     data: {
