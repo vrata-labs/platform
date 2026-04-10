@@ -2282,11 +2282,17 @@ renderer.domElement.addEventListener("pointerdown", () => {
 });
 
 window.addEventListener("pointerup", () => {
-  if (!renderer.xr.isPresenting && !pointerMovedSinceDown && pointerHoveringScene) {
-    confirmInteractionTarget();
-  }
   pointerActive = false;
   pointerMovedSinceDown = false;
+});
+
+renderer.domElement.addEventListener("click", (event) => {
+  if (renderer.xr.isPresenting) {
+    return;
+  }
+  updatePointerNdcFromClientPosition(event.clientX, event.clientY);
+  pointerHoveringScene = true;
+  confirmInteractionTarget();
 });
 
 window.addEventListener("pointermove", (event) => {
