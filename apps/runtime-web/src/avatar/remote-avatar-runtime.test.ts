@@ -50,7 +50,8 @@ test("remote avatar runtime ingests reliable state and pose frame into debug sta
     avatarId: "preset-01",
     inputMode: "desktop",
     updatedAt: new Date(0).toISOString(),
-    audioActive: true
+    audioActive: true,
+    seated: false
   }, debugState);
   runtime.ingestPoseFrame("remote-1", {
     seq: 1,
@@ -157,7 +158,8 @@ test("remote avatar runtime forces VR hands visible when pose frames arrive", ()
     avatarId: "preset-01",
     inputMode: "vr-controller",
     updatedAt: new Date().toISOString(),
-    audioActive: false
+    audioActive: false,
+    seated: false
   }, debugState);
   runtime.applySnapshotParticipants([
     {
@@ -204,7 +206,8 @@ test("remote avatar runtime keeps last known hands visible through pose gaps", a
     avatarId: "preset-01",
     inputMode: "desktop",
     updatedAt: new Date().toISOString(),
-    audioActive: false
+    audioActive: false,
+    seated: false
   }, debugState);
   runtime.applySnapshotParticipants([
     {

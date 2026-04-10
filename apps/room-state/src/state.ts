@@ -2,9 +2,25 @@ import type { PresenceState, TransformState } from "./schema.js";
 
 export type ParticipantState = PresenceState;
 
+export type SeatOccupancyState = Record<string, string>;
+
 export interface RoomState {
   roomId: string;
   participants: ParticipantState[];
+  seatOccupancy: SeatOccupancyState;
+}
+
+export interface SeatClaimResult {
+  room: RoomState;
+  accepted: boolean;
+  seatId: string;
+  occupantId: string | null;
+  previousSeatId: string | null;
+}
+
+export interface SeatReleaseResult {
+  room: RoomState;
+  releasedSeatId: string | null;
 }
 
 function mergeTransformState(current: TransformState | undefined, next: TransformState | undefined): TransformState | undefined {
@@ -55,7 +71,8 @@ export function mergeParticipantState(current: ParticipantState, nextState: Part
 export function createRoomState(roomId: string): RoomState {
   return {
     roomId,
-    participants: []
+    participants: [],
+    seatOccupancy: {}
   };
 }
 
@@ -70,9 +87,74 @@ export function joinRoom(state: RoomState, participantId: string): RoomState {
 }
 
 export function leaveRoom(state: RoomState, participantId: string): RoomState {
+  const nextSeatOccupancy = { ...state.seatOccupancy };
+  for (const [seatId, occupantId] of Object.entries(nextSeatOccupancy)) {
+    if (occupantId === participantId) {
+      delete nextSeatOccupancy[seatId];
+    }
+  }
   return {
     ...state,
-    participants: state.participants.filter((item) => item.participantId !== participantId)
+    participants: state.participants.filter((item) => item.participantId !== participantId),
+    seatOccupancy: nextSeatOccupancy
+  };
+}
+
+export function findParticipantSeatId(state: RoomState, participantId: string): string | null {
+  for (const [seatId, occupantId] of Object.entries(state.seatOccupancy)) {
+    if (occupantId === participantId) {
+      return seatId;
+    }
+  }
+  return null;
+}
+
+export function claimSeat(state: RoomState, participantId: string, seatId: string): SeatClaimResult {
+  const occupantId = state.seatOccupancy[seatId] ?? null;
+  const previousSeatId = findParticipantSeatId(state, participantId);
+  if (occupantId && occupantId !== participantId) {
+    return {
+      room: state,
+      accepted: false,
+      seatId,
+      occupantId,
+      previousSeatId
+    };
+  }
+
+  const nextSeatOccupancy = { ...state.seatOccupancy };
+  if (previousSeatId && previousSeatId !== seatId) {
+    delete nextSeatOccupancy[previousSeatId];
+  }
+  nextSeatOccupancy[seatId] = participantId;
+  return {
+    room: {
+      ...state,
+      seatOccupancy: nextSeatOccupancy
+    },
+    accepted: true,
+    seatId,
+    occupantId: participantId,
+    previousSeatId
+  };
+}
+
+export function releaseSeat(state: RoomState, participantId: string, seatId?: string): SeatReleaseResult {
+  const targetSeatId = seatId ?? findParticipantSeatId(state, participantId);
+  if (!targetSeatId || state.seatOccupancy[targetSeatId] !== participantId) {
+    return {
+      room: state,
+      releasedSeatId: null
+    };
+  }
+  const nextSeatOccupancy = { ...state.seatOccupancy };
+  delete nextSeatOccupancy[targetSeatId];
+  return {
+    room: {
+      ...state,
+      seatOccupancy: nextSeatOccupancy
+    },
+    releasedSeatId: targetSeatId
   };
 }
 
@@ -96,6 +178,7 @@ export function updateParticipantState(state: RoomState, nextState: Partial<Part
 export function serializeRoomState(state: RoomState): RoomState {
   return {
     roomId: state.roomId,
-    participants: state.participants.map((item) => ({ ...item }))
+    participants: state.participants.map((item) => ({ ...item })),
+    seatOccupancy: { ...state.seatOccupancy }
   };
 }

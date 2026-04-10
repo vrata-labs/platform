@@ -1,10 +1,12 @@
 import * as THREE from "three";
 
 import { inspectSceneObject, type SceneDiagnosticsSnapshot } from "./scene-debug.js";
+import type { SceneBundleManifest } from "./scene-bundle.js";
 import { loadSceneBundle } from "./scene-loader.js";
 
 export interface SceneSessionResult {
   activeSceneBundleRoot: THREE.Object3D | null;
+  sceneManifest: SceneBundleManifest | null;
   effectiveCleanSceneMode: boolean;
   sceneBundleState: "fallback" | "loaded" | "failed";
   sceneDebug: SceneDiagnosticsSnapshot;
@@ -64,6 +66,7 @@ export async function startSceneBundleSession(input: {
     }
     return {
       activeSceneBundleRoot: loadedScene.group,
+      sceneManifest: loadedScene.manifest,
       effectiveCleanSceneMode,
       sceneBundleState: "loaded",
       sceneDebug,
@@ -74,6 +77,7 @@ export async function startSceneBundleSession(input: {
     input.setFallbackEnvironmentVisible(true);
     return {
       activeSceneBundleRoot: null,
+      sceneManifest: null,
       effectiveCleanSceneMode: input.requestedCleanSceneMode,
       sceneBundleState: "failed",
       sceneDebug: {

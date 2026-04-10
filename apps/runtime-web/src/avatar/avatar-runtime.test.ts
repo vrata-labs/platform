@@ -9,7 +9,7 @@ test("createInitialAvatarRuntimeFlags returns avatar-enabled defaults", () => {
     avatarPoseBinaryEnabled: true,
     avatarLipsyncEnabled: false,
     avatarLegIkEnabled: false,
-    avatarSeatingEnabled: false,
+    avatarSeatingEnabled: true,
     avatarCustomizationEnabled: false,
     avatarFallbackCapsulesEnabled: true
   });

@@ -36,7 +36,7 @@ export interface RoomAvatarConfig {
   avatarSeatsEnabled?: boolean;
 }
 
-const DEFAULT_AVATAR_CONFIG_JSON = '{"avatarsEnabled":true,"avatarCatalogUrl":"/assets/avatars/catalog.v1.json","avatarQualityProfile":"desktop-standard","avatarFallbackCapsulesEnabled":true,"avatarSeatsEnabled":false}' as const;
+const DEFAULT_AVATAR_CONFIG_JSON = '{"avatarsEnabled":true,"avatarCatalogUrl":"/assets/avatars/catalog.v1.json","avatarQualityProfile":"desktop-standard","avatarFallbackCapsulesEnabled":true,"avatarSeatsEnabled":true}' as const;
 
 export interface RoomRecord {
   roomId: string;
@@ -60,7 +60,7 @@ function defaultAvatarConfig(input?: Partial<RoomAvatarConfig>): RoomAvatarConfi
     avatarCatalogUrl: input?.avatarCatalogUrl ?? "/assets/avatars/catalog.v1.json",
     avatarQualityProfile: input?.avatarQualityProfile ?? "desktop-standard",
     avatarFallbackCapsulesEnabled: input?.avatarFallbackCapsulesEnabled ?? true,
-    avatarSeatsEnabled: input?.avatarSeatsEnabled ?? false
+    avatarSeatsEnabled: input?.avatarSeatsEnabled ?? true
   };
 }
 
@@ -72,7 +72,7 @@ export interface RuntimeDiagnosticRecord {
   locomotionMode: string;
   audioState: string;
   localPosition: { x: number; z: number };
-  xrAxes: { moveX: number; moveY: number; turnX: number };
+  xrAxes: { moveX: number; moveY: number; turnX: number; turnY?: number };
   remoteAvatarCount: number;
   remoteTargets: Array<{ id: string; x: number; z: number }>;
   lastPresenceSyncAt: number;

@@ -6,7 +6,7 @@ import { appendBrandingSuffix, applyRoomShellBootState } from "./boot-session.js
 import { bootRuntime, fetchRuntimeSpaces, listPresence, planVoiceSession, removePresence, resolveCurrentSpace, upsertPresence, type PresenceState, type RuntimeSpaceOption } from "./index.js";
 import { applySnapTurn, computeKeyboardDirection, projectMovementToWorld, sanitizeXrAxes, stepFlatMovement } from "./movement.js";
 import { createMotionTrack, pushMotionSample, sampleMotion, type MotionTrack } from "./motion-state.js";
-import { connectRoomState, sendAvatarPoseFrame, sendAvatarReliableState, sendParticipantUpdate, type RoomStateClient, type RoomStateSnapshot } from "./room-state-client.js";
+import { connectRoomState, sendAvatarPoseFrame, sendAvatarReliableState, sendParticipantUpdate, sendSeatClaim, sendSeatRelease, type RoomStateClient, type RoomStateSnapshot } from "./room-state-client.js";
 import { classifyMediaError, classifyRoomStateError, createFaultError, getRuntimeIssue, shouldRetryConnection, type RuntimeIssue } from "./runtime-errors.js";
 import { canRetry, createReconnectPolicy, getReconnectDelayMs } from "./reconnect.js";
 import { applyRuntimeIssueState, clearRuntimeIssueState, createRuntimeUiState } from "./runtime-state.js";
@@ -21,6 +21,8 @@ import { createAvatarLipsyncDriver, sampleAvatarLipsyncLevel, updateAvatarLipsyn
 import { createAvatarOutboundPublisher, type AvatarOutboundPayload } from "./avatar/avatar-publish.js";
 import { createRemoteAvatarRuntime } from "./avatar/remote-avatar-runtime.js";
 import { createInitialAvatarRuntimeFlags, resolveAvatarCatalogUrl, resolveAvatarRuntimeFlags } from "./avatar/avatar-runtime.js";
+import { resolveAvatarInteractionTarget } from "./avatar/avatar-interaction.js";
+import { applySeatAnchorToPlayer, createAvatarSeatAnchorMap, resolveLocalSeatId } from "./avatar/avatar-seating.js";
 import { resolveAvatarViewProfile } from "./avatar/avatar-visibility.js";
 import { collectLocalAvatarHandDebug, resolveLocalAvatarHandTargets } from "./avatar/avatar-xr-hands.js";
 import { resolveAvatarXrInput } from "./avatar/avatar-xr-input.js";
@@ -29,6 +31,7 @@ import { resetAvatarSession, startAvatarSandboxSession, startLocalAvatarSession 
 import type { LocalAvatarController } from "./avatar/avatar-controller.js";
 import type { LocalAvatarSnapshotV1 } from "./avatar/avatar-types.js";
 import { createAvatarRegistry } from "./avatar/avatar-registry.js";
+import type { SceneBundleSeatAnchor } from "./scene-bundle.js";
 
 function fallbackUuid(): string {
   return `guest-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
@@ -148,6 +151,12 @@ for (const controller of xrControllers) {
 for (const grip of xrControllerGrips) {
   scene.add(grip);
 }
+xrControllers[1]?.addEventListener("selectstart", () => {
+  if (!renderer.xr.isPresenting) {
+    return;
+  }
+  confirmInteractionTarget();
+});
 
 scene.add(new THREE.HemisphereLight(0xcbe9ff, 0x152033, 1.4));
 const directional = new THREE.DirectionalLight(0xffffff, 1.4);
@@ -163,6 +172,24 @@ const floor = new THREE.Mesh(
 );
 floor.rotation.x = -Math.PI / 2;
 scene.add(floor);
+
+const interactionRayGeometry = new THREE.BufferGeometry().setFromPoints([
+  new THREE.Vector3(0, 0, 0),
+  new THREE.Vector3(0, 0, -1)
+]);
+const interactionRayLine = new THREE.Line(
+  interactionRayGeometry,
+  new THREE.LineBasicMaterial({ color: 0x9be7ff, transparent: true, opacity: 0.9 })
+);
+interactionRayLine.visible = false;
+scene.add(interactionRayLine);
+
+const interactionReticle = new THREE.Mesh(
+  new THREE.SphereGeometry(0.08, 16, 16),
+  new THREE.MeshBasicMaterial({ color: 0x9be7ff, transparent: true, opacity: 0.85 })
+);
+interactionReticle.visible = false;
+scene.add(interactionReticle);
 
 const grid = new THREE.GridHelper(40, 40, 0x5fc8ff, 0x31587f);
 grid.position.y = 0.01;
@@ -187,6 +214,8 @@ const headGeometry = new THREE.SphereGeometry(0.18, 20, 20);
 
 const keyState: Record<string, boolean> = {};
 let pointerActive = false;
+let pointerMovedSinceDown = false;
+let pointerHoveringScene = false;
 let yaw = 0;
 let pitchAngle = 0;
 let livekitRoom: Room | null = null;
@@ -210,6 +239,19 @@ let avatarSandboxRegistry: ReturnType<typeof createAvatarRegistry> | null = null
 let localAvatarController: LocalAvatarController | null = null;
 let localBodyMesh: THREE.Mesh | null = null;
 let localHeadMesh: THREE.Mesh | null = null;
+let currentSeatId: string | null = null;
+let pendingSeatId: string | null = null;
+let sceneTeleportFloorY = 0;
+let sceneSeatAnchors: SceneBundleSeatAnchor[] = [];
+let sceneSeatAnchorMap = createAvatarSeatAnchorMap([]);
+let sceneAnchorsReady = true;
+let roomSeatOccupancy: Record<string, string> = {};
+const pointerNdc = new THREE.Vector2(0, 0);
+const interactionRayOrigin = new THREE.Vector3();
+const interactionRayDirection = new THREE.Vector3();
+const interactionRayEnd = new THREE.Vector3();
+const interactionRayPoints = [new THREE.Vector3(), new THREE.Vector3()];
+const interactionRaycaster = new THREE.Raycaster();
 const avatarOutboundPublisher = createAvatarOutboundPublisher();
 let lastAvatarMove = { x: 0, z: 0 };
 let lastAvatarTurnRate = 0;
@@ -330,6 +372,173 @@ function applySceneMaterialDebugMode(root: THREE.Object3D, mode: string): void {
 function applySnapshotParticipants(people: PresenceState[]): void {
   remoteAvatarRuntime.applySnapshotParticipants(people, debugState);
   debugState.lastPresenceRefreshAt = Date.now();
+}
+
+function clearInteractionVisuals(): void {
+  interactionRayLine.visible = false;
+  interactionReticle.visible = false;
+  debugState.interactionRay.active = false;
+  debugState.interactionRay.targetKind = "none";
+  debugState.interactionRay.seatId = null;
+  debugState.interactionRay.point = null;
+}
+
+function setSceneSeatAnchors(anchors: SceneBundleSeatAnchor[], teleportFloorY = 0): void {
+  sceneSeatAnchors = anchors;
+  sceneSeatAnchorMap = createAvatarSeatAnchorMap(anchors);
+  sceneTeleportFloorY = teleportFloorY;
+  sceneAnchorsReady = true;
+}
+
+function releaseCurrentSeatLocally(): void {
+  for (const [seatId, occupantId] of Object.entries(roomSeatOccupancy)) {
+    if (occupantId === participantId) {
+      delete roomSeatOccupancy[seatId];
+    }
+  }
+  currentSeatId = null;
+  pendingSeatId = null;
+  debugState.currentSeatId = null;
+  debugState.pendingSeatId = null;
+  debugState.seatOccupancy = { ...roomSeatOccupancy };
+}
+
+function syncSeatStateFromOccupancy(): void {
+  roomSeatOccupancy = { ...roomSeatOccupancy };
+  debugState.seatOccupancy = { ...roomSeatOccupancy };
+  const occupiedSeatId = resolveLocalSeatId(roomSeatOccupancy, participantId);
+  currentSeatId = occupiedSeatId;
+  if (pendingSeatId && pendingSeatId === occupiedSeatId) {
+    pendingSeatId = null;
+  }
+  debugState.currentSeatId = currentSeatId;
+  debugState.pendingSeatId = pendingSeatId;
+  if (!currentSeatId) {
+    return;
+  }
+  const seatAnchor = sceneSeatAnchorMap.get(currentSeatId);
+  if (!seatAnchor) {
+    if (!sceneAnchorsReady) {
+      return;
+    }
+    if (roomStateClient && roomStateConnected) {
+      sendSeatRelease(roomStateClient, currentSeatId);
+    }
+    releaseCurrentSeatLocally();
+    setStatus("Seat anchor unavailable, returned to standing");
+    return;
+  }
+  applySeatAnchorToPlayer(player, seatAnchor);
+  yaw = seatAnchor.yaw;
+  pitch.rotation.x = pitchAngle;
+}
+
+function handleRoomSnapshot(snapshot: RoomStateSnapshot): void {
+  roomSeatOccupancy = { ...(snapshot.seatOccupancy ?? {}) };
+  syncSeatStateFromOccupancy();
+  applySnapshotParticipants(snapshot.participants);
+}
+
+function updatePointerNdcFromClientPosition(clientX: number, clientY: number): void {
+  const rect = renderer.domElement.getBoundingClientRect();
+  if (rect.width <= 0 || rect.height <= 0) {
+    return;
+  }
+  pointerNdc.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+  pointerNdc.y = -(((clientY - rect.top) / rect.height) * 2 - 1);
+}
+
+function getInteractionRay(): THREE.Ray | null {
+  if (renderer.xr.isPresenting) {
+    const xrInput = resolveAvatarXrInput(Array.from(renderer.xr.getFrame()?.session?.inputSources ?? []));
+    if (xrInput.axes.turnY > -0.75) {
+      return null;
+    }
+    xrControllers[1]?.getWorldPosition(interactionRayOrigin);
+    xrControllers[1]?.getWorldDirection(interactionRayDirection).normalize();
+    return new THREE.Ray(interactionRayOrigin.clone(), interactionRayDirection.clone());
+  }
+  if (!pointerHoveringScene) {
+    return null;
+  }
+  interactionRaycaster.setFromCamera(pointerNdc, camera);
+  return interactionRaycaster.ray.clone();
+}
+
+function updateInteractionRayState():
+  | { kind: "none" }
+  | { kind: "floor"; point: THREE.Vector3 }
+  | { kind: "seat"; point: THREE.Vector3; seatAnchor: SceneBundleSeatAnchor } {
+  const ray = getInteractionRay();
+  if (!ray) {
+    clearInteractionVisuals();
+    debugState.interactionRay.mode = renderer.xr.isPresenting ? "xr-right-stick" : "none";
+    return { kind: "none" };
+  }
+  const target = resolveAvatarInteractionTarget({
+    ray,
+    seatAnchors: sceneSeatAnchors,
+    teleportFloorY: sceneTeleportFloorY,
+    maxDistance: 18
+  });
+  debugState.interactionRay.active = true;
+  debugState.interactionRay.mode = renderer.xr.isPresenting ? "xr-right-stick" : "cursor";
+  if (target.kind === "none") {
+    clearInteractionVisuals();
+    debugState.interactionRay.mode = renderer.xr.isPresenting ? "xr-right-stick" : "cursor";
+    return { kind: "none" };
+  }
+  interactionRayPoints[0].copy(ray.origin);
+  interactionRayEnd.copy(target.point);
+  interactionRayPoints[1].copy(interactionRayEnd);
+  interactionRayGeometry.setFromPoints(interactionRayPoints);
+  interactionRayLine.visible = true;
+  interactionReticle.visible = true;
+  interactionReticle.position.copy(target.point);
+  const reticleMaterial = interactionReticle.material;
+  if (reticleMaterial instanceof THREE.MeshBasicMaterial) {
+    reticleMaterial.color.setHex(target.kind === "seat" ? 0xb8ff8d : 0x9be7ff);
+  }
+  debugState.interactionRay.targetKind = target.kind;
+  debugState.interactionRay.seatId = target.kind === "seat" ? target.seatAnchor.id : null;
+  debugState.interactionRay.point = {
+    x: Number(target.point.x.toFixed(2)),
+    y: Number(target.point.y.toFixed(2)),
+    z: Number(target.point.z.toFixed(2))
+  };
+  return target.kind === "seat"
+    ? { kind: "seat", point: target.point, seatAnchor: target.seatAnchor }
+    : { kind: "floor", point: target.point };
+}
+
+function confirmInteractionTarget(): void {
+  const target = updateInteractionRayState();
+  if (target.kind === "none") {
+    return;
+  }
+  if (target.kind === "seat") {
+    const seatAnchor = target.seatAnchor;
+    if (!runtimeFlags.avatarSeatingEnabled || !roomStateClient || !roomStateConnected) {
+      setStatus("Seating unavailable");
+      return;
+    }
+    pendingSeatId = seatAnchor.id;
+    debugState.pendingSeatId = pendingSeatId;
+    sendSeatClaim(roomStateClient, seatAnchor.id);
+    setStatus(`Claiming seat ${seatAnchor.label ?? seatAnchor.id}`);
+    return;
+  }
+  const floorPoint = target.point;
+  if (currentSeatId && roomStateClient && roomStateConnected) {
+    sendSeatRelease(roomStateClient, currentSeatId);
+    releaseCurrentSeatLocally();
+  }
+  player.position.set(floorPoint.x, sceneTeleportFloorY, floorPoint.z);
+  debugState.localPosition = {
+    x: Number(player.position.x.toFixed(2)),
+    z: Number(player.position.z.toFixed(2))
+  };
+  setStatus("Teleported");
 }
 
 function supportsAudioOutputSelection(): boolean {
@@ -643,7 +852,7 @@ const debugState = {
   screenShareState: "idle",
   spatialAudioState: "idle",
   localPosition: { x: 0, z: 6 },
-  xrAxes: { moveX: 0, moveY: 0, turnX: 0 },
+  xrAxes: { moveX: 0, moveY: 0, turnX: 0, turnY: 0 },
   botMode,
   issueCode: null as RuntimeIssue["code"] | null,
   issueSeverity: null as RuntimeIssue["severity"] | null,
@@ -687,6 +896,16 @@ const debugState = {
   },
   remoteAvatarReliableStates: [] as Array<{ participantId: string; avatarId: string; inputMode: string; updatedAt: string }>,
   remoteAvatarPoseFrames: [] as Array<{ participantId: string; seq: number; locomotionMode: number; sentAtMs: number }>,
+  currentSeatId: null as string | null,
+  pendingSeatId: null as string | null,
+  seatOccupancy: {} as Record<string, string>,
+  interactionRay: {
+    active: false,
+    mode: "none" as "none" | "cursor" | "xr-right-stick",
+    targetKind: "none" as "none" | "floor" | "seat",
+    seatId: null as string | null,
+    point: null as null | { x: number; y: number; z: number }
+  },
   remoteAvatarParticipants: [] as Array<{
     participantId: string;
     avatarId: string | null;
@@ -893,7 +1112,7 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
       roomStateConnected = true;
       debugState.roomStateConnected = true;
       debugState.roomStateMode = "connected";
-      applySnapshotParticipants(snapshot.participants);
+      handleRoomSnapshot(snapshot);
     },
     onAvatarReliableState: (state) => {
       remoteAvatarRuntime.ingestReliableState({
@@ -901,11 +1120,28 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
         avatarId: state.avatarId,
         inputMode: state.inputMode,
         updatedAt: state.updatedAt,
-        audioActive: state.audioActive
+        audioActive: state.audioActive,
+        seated: state.seated,
+        seatId: state.seatId
       }, debugState);
     },
     onAvatarPoseFrame: (remoteParticipantId, frame) => {
       remoteAvatarRuntime.ingestPoseFrame(remoteParticipantId, frame, debugState);
+    },
+    onSeatClaimResult: (result) => {
+      if (result.accepted) {
+        if (result.previousSeatId) {
+          delete roomSeatOccupancy[result.previousSeatId];
+        }
+        roomSeatOccupancy[result.seatId] = participantId;
+        pendingSeatId = null;
+        syncSeatStateFromOccupancy();
+        setStatus(`Seated at ${result.seatId}`);
+        return;
+      }
+      pendingSeatId = null;
+      debugState.pendingSeatId = null;
+      setStatus(result.occupantId ? `Seat occupied by ${result.occupantId}` : "Seat unavailable");
     },
     onError: (error: unknown) => {
       console.error(error);
@@ -1302,7 +1538,9 @@ function updateLocalAvatar(delta: number): void {
     participantId,
     snapshot: localAvatarController.snapshot,
     muted: !microphoneEnabled,
-    audioActive: microphoneEnabled
+    audioActive: microphoneEnabled,
+    seated: currentSeatId !== null,
+    seatId: currentSeatId ?? undefined
   });
   debugState.avatarPoseTransport.targetHz = Math.round(1 / getAvatarPoseSendIntervalSeconds(localAvatarController.snapshot));
 }
@@ -1435,6 +1673,23 @@ async function bootLocalAvatarPresetSession(input: {
 }
 
 function updateMovement(delta: number): void {
+  if (currentSeatId) {
+    const seatAnchor = sceneSeatAnchorMap.get(currentSeatId);
+    if (seatAnchor) {
+      applySeatAnchorToPlayer(player, seatAnchor);
+      yaw = seatAnchor.yaw;
+      player.rotation.y = yaw;
+      pitch.rotation.x = pitchAngle;
+      lastAvatarMove = { x: 0, z: 0 };
+      lastAvatarTurnRate = 0;
+      debugState.localPosition = {
+        x: Number(player.position.x.toFixed(2)),
+        z: Number(player.position.z.toFixed(2))
+      };
+      return;
+    }
+    releaseCurrentSeatLocally();
+  }
   const yawBeforeUpdate = yaw;
   const speed = renderer.xr.isPresenting ? 2.4 : keyState.ShiftLeft ? 5 : 3.2;
   let direction = computeKeyboardDirection(keyState);
@@ -1475,6 +1730,7 @@ function updateMovement(delta: number): void {
   } else {
     lastAvatarXrInputProfile = null;
     debugState.xrAvatarDebug = null;
+    debugState.xrAxes = { moveX: 0, moveY: 0, turnX: 0, turnY: 0 };
   }
 
   if (direction.x !== 0 || direction.z !== 0) {
@@ -1789,19 +2045,36 @@ window.addEventListener("keyup", (event) => {
 
 renderer.domElement.addEventListener("pointerdown", () => {
   pointerActive = true;
+  pointerMovedSinceDown = false;
 });
 
 window.addEventListener("pointerup", () => {
+  if (!renderer.xr.isPresenting && !pointerMovedSinceDown && pointerHoveringScene) {
+    confirmInteractionTarget();
+  }
   pointerActive = false;
+  pointerMovedSinceDown = false;
 });
 
 window.addEventListener("pointermove", (event) => {
+  updatePointerNdcFromClientPosition(event.clientX, event.clientY);
   if (!pointerActive || renderer.xr.isPresenting) {
     return;
   }
 
+  pointerMovedSinceDown = true;
   yaw -= event.movementX * 0.003;
   pitchAngle = THREE.MathUtils.clamp(pitchAngle - event.movementY * 0.003, -1.1, 1.1);
+});
+
+renderer.domElement.addEventListener("pointerenter", (event) => {
+  pointerHoveringScene = true;
+  updatePointerNdcFromClientPosition(event.clientX, event.clientY);
+});
+
+renderer.domElement.addEventListener("pointerleave", () => {
+  pointerHoveringScene = false;
+  clearInteractionVisuals();
 });
 
 renderer.domElement.addEventListener("touchstart", (event) => {
@@ -1863,6 +2136,7 @@ renderer.setAnimationLoop(() => {
   updateAudioUi();
   updateLocalAvatar(delta);
   remoteAvatarRuntime.update(delta, debugState);
+  updateInteractionRayState();
   debugState.avatarPoseTransport.adaptivePlaybackDelayMs = debugState.remoteAvatarParticipants.length > 0
     ? Math.max(...debugState.remoteAvatarParticipants.map((participant) => participant.playbackDelayMs))
     : 100;
@@ -1957,6 +2231,10 @@ async function main(): Promise<void> {
   debugState.avatarDebug = avatarReset.diagnostics;
   debugState.avatarSnapshot = null;
   debugState.avatarTransportPreview = null;
+  setSceneSeatAnchors([], 0);
+  sceneAnchorsReady = !boot.sceneBundleUrl;
+  roomSeatOccupancy = {};
+  releaseCurrentSeatLocally();
   resetAvatarPoseTransportStats();
   if (!effectiveCleanSceneMode) {
     scene.fog = new THREE.Fog(new THREE.Color(boot.theme.accentColor).getHex(), 12, 50);
@@ -2030,6 +2308,8 @@ async function main(): Promise<void> {
       setFallbackEnvironmentVisible
     });
     activeSceneBundleRoot = sceneResult.activeSceneBundleRoot;
+    setSceneSeatAnchors(sceneResult.sceneManifest?.anchors?.seatAnchors ?? [], sceneResult.sceneManifest?.anchors?.teleportFloorY ?? 0);
+    syncSeatStateFromOccupancy();
     effectiveCleanSceneMode = sceneResult.effectiveCleanSceneMode;
     debugState.sceneBundleState = sceneResult.sceneBundleState;
     debugState.sceneDebug = sceneResult.sceneDebug;
@@ -2037,6 +2317,9 @@ async function main(): Promise<void> {
     if (sceneResult.note) {
       void reportDiagnostics(sceneResult.note);
     }
+  } else {
+    setSceneSeatAnchors([], 0);
+    syncSeatStateFromOccupancy();
   }
 
   applyPostBootControls({
@@ -2100,11 +2383,14 @@ async function main(): Promise<void> {
     mobileTouchActive = false;
     mobileTouchVector.x = 0;
     mobileTouchVector.z = 0;
+    pointerHoveringScene = false;
     pitchAngle = 0;
     pitch.rotation.x = 0;
+    clearInteractionVisuals();
   });
   renderer.xr.addEventListener("sessionend", () => {
     pointerActive = false;
+    clearInteractionVisuals();
   });
   if (!getEnterVrVisibility(xrSupport, runtimeFlags.enterVr)) {
     vrButton.setAttribute("disabled", "true");

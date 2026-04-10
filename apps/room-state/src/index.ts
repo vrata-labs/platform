@@ -3,7 +3,7 @@ import { createServer } from "node:http";
 import { WebSocketServer, type WebSocket } from "ws";
 
 import type { PresenceState } from "./schema.js";
-import { createRoomState, joinRoom, leaveRoom, serializeRoomState, updateParticipantState, type RoomState } from "./state.js";
+import { claimSeat, createRoomState, joinRoom, leaveRoom, releaseSeat, serializeRoomState, updateParticipantState, type RoomState } from "./state.js";
 
 interface AvatarReliableStatePayload {
   participantId: string;
@@ -32,6 +32,13 @@ export interface RoomStateServer {
   rooms: Map<string, RoomState>;
   clients: Map<string, Set<WebSocket>>;
   avatarReliableStates: Map<string, Map<string, AvatarReliableStatePayload>>;
+}
+
+export interface SeatClaimResultPayload {
+  seatId: string;
+  accepted: boolean;
+  occupantId: string | null;
+  previousSeatId: string | null;
 }
 
 function logEvent(event: Record<string, unknown>): void {
@@ -192,6 +199,37 @@ export function applyAvatarReliableState(server: RoomStateServer, roomId: string
   });
 }
 
+export function applySeatClaim(server: RoomStateServer, roomId: string, participantId: string, seatId: string): SeatClaimResultPayload {
+  if (typeof seatId !== "string" || seatId.trim().length === 0) {
+    throw new Error("invalid_seat_claim");
+  }
+  const room = ensureRoom(server, roomId);
+  const result = claimSeat(room, participantId, seatId.trim());
+  server.rooms.set(roomId, result.room);
+  if (result.accepted) {
+    broadcastRoom(server, roomId);
+  }
+  return {
+    seatId: result.seatId,
+    accepted: result.accepted,
+    occupantId: result.occupantId,
+    previousSeatId: result.previousSeatId
+  };
+}
+
+export function applySeatRelease(server: RoomStateServer, roomId: string, participantId: string, seatId?: string): string | null {
+  if (seatId !== undefined && (typeof seatId !== "string" || seatId.trim().length === 0)) {
+    throw new Error("invalid_seat_release");
+  }
+  const room = ensureRoom(server, roomId);
+  const result = releaseSeat(server.rooms.get(roomId) ?? room, participantId, seatId?.trim());
+  server.rooms.set(roomId, result.room);
+  if (result.releasedSeatId) {
+    broadcastRoom(server, roomId);
+  }
+  return result.releasedSeatId;
+}
+
 export function relayAvatarPoseFrame(server: RoomStateServer, roomId: string, participantId: string, poseFrame: unknown): void {
   if (!isCompactPoseFramePayload(poseFrame)) {
     throw new Error("invalid_avatar_pose_preview");
@@ -241,6 +279,7 @@ export function startRoomStateService(port = Number.parseInt(process.env.ROOM_ST
           participant?: Partial<PresenceState>;
           reliableState?: unknown;
           poseFrame?: unknown;
+          seatId?: unknown;
         };
         if (payload.type === "participant_update") {
           if (!payload.participant) {
@@ -258,6 +297,18 @@ export function startRoomStateService(port = Number.parseInt(process.env.ROOM_ST
         }
         if (payload.type === "avatar_pose_preview") {
           relayAvatarPoseFrame(authority, roomId, participantId, payload.poseFrame);
+          return;
+        }
+        if (payload.type === "seat_claim") {
+          const result = applySeatClaim(authority, roomId, participantId, typeof payload.seatId === "string" ? payload.seatId : "");
+          sendToSocket(socket, {
+            type: "seat_claim_result",
+            seatClaimResult: result
+          });
+          return;
+        }
+        if (payload.type === "seat_release") {
+          applySeatRelease(authority, roomId, participantId, typeof payload.seatId === "string" ? payload.seatId : undefined);
         }
       } catch (error) {
         logEvent({

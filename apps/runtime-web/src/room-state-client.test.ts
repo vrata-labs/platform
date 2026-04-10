@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { connectRoomState, sendAvatarPoseFrame, sendAvatarReliableState, sendParticipantUpdate, type RoomStateClient } from "./room-state-client.js";
+import { connectRoomState, sendAvatarPoseFrame, sendAvatarReliableState, sendParticipantUpdate, sendSeatClaim, sendSeatRelease, type RoomStateClient } from "./room-state-client.js";
 
 function createClient(sent: string[] = [], readyState = 1): RoomStateClient {
   return {
@@ -84,7 +84,19 @@ test("avatar sends are skipped when socket is not open", () => {
   assert.deepEqual(sent, []);
 });
 
-test("connectRoomState routes inbound avatar reliable state and pose frame", async () => {
+test("seat claim and release send envelopes", () => {
+  const sent: string[] = [];
+  const client = createClient(sent);
+
+  sendSeatClaim(client, "seat-a");
+  sendSeatRelease(client, "seat-a");
+
+  assert.equal(JSON.parse(sent[0]!).type, "seat_claim");
+  assert.equal(JSON.parse(sent[0]!).seatId, "seat-a");
+  assert.equal(JSON.parse(sent[1]!).type, "seat_release");
+});
+
+test("connectRoomState routes inbound avatar reliable state, pose frame and seat claim result", async () => {
   const listeners = new Map<string, Array<(event: { data?: string }) => void>>();
   class FakeWebSocket {
     static instances: FakeWebSocket[] = [];
@@ -112,20 +124,26 @@ test("connectRoomState routes inbound avatar reliable state and pose frame", asy
   const originalWebSocket = globalThis.WebSocket;
   globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket;
 
-  try {
-    let reliableAvatarId: string | null = null;
-    let poseSeq: number | null = null;
-    connectRoomState("ws://example.test/room-state", "room-1", "p-1", {
-      onRoomState() {},
-      onAvatarReliableState(state) {
-        reliableAvatarId = state.avatarId;
-      },
-      onAvatarPoseFrame(_participantId, frame) {
-        poseSeq = frame.seq;
-      },
-      onError(error) {
-        throw error;
-      }
+    try {
+      let reliableAvatarId: string | null = null;
+      let poseSeq: number | null = null;
+      let acceptedSeatId: string | null = null;
+      connectRoomState("ws://example.test/room-state", "room-1", "p-1", {
+        onRoomState() {},
+        onAvatarReliableState(state) {
+          reliableAvatarId = state.avatarId;
+        },
+        onAvatarPoseFrame(_participantId, frame) {
+          poseSeq = frame.seq;
+        },
+        onSeatClaimResult(result) {
+          if (result.accepted) {
+            acceptedSeatId = result.seatId;
+          }
+        },
+        onError(error) {
+          throw error;
+        }
     });
 
     const socket = FakeWebSocket.instances[0]!;
@@ -160,9 +178,21 @@ test("connectRoomState routes inbound avatar reliable state and pose frame", asy
         }
       })
     });
+    socket.emit("message", {
+      data: JSON.stringify({
+        type: "seat_claim_result",
+        seatClaimResult: {
+          seatId: "seat-a",
+          accepted: true,
+          occupantId: "p-1",
+          previousSeatId: null
+        }
+      })
+    });
 
     assert.equal(reliableAvatarId, "preset-02");
     assert.equal(poseSeq, 9);
+    assert.equal(acceptedSeatId, "seat-a");
   } finally {
     globalThis.WebSocket = originalWebSocket;
   }

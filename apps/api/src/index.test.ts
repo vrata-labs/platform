@@ -354,7 +354,7 @@ test("room api merges partial avatarConfig updates onto defaults", async () => {
     assert.equal(updated.avatarConfig?.avatarQualityProfile, "xr");
     assert.equal(updated.avatarConfig?.avatarCatalogUrl, "/assets/avatars/catalog.v1.json");
     assert.equal(updated.avatarConfig?.avatarFallbackCapsulesEnabled, true);
-    assert.equal(updated.avatarConfig?.avatarSeatsEnabled, false);
+    assert.equal(updated.avatarConfig?.avatarSeatsEnabled, true);
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     delete process.env.NOAH_DISABLE_AUTOSTART;

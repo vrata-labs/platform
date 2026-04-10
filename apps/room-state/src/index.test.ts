@@ -2,6 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  applySeatClaim,
+  applySeatRelease,
   applyAvatarReliableState,
   connectParticipant,
   createRoomStateServer,
@@ -96,4 +98,42 @@ test("avatar relay helpers reject invalid payloads", () => {
   const server = createRoomStateServer();
   assert.throws(() => applyAvatarReliableState(server, "demo-room", "p1", { avatarId: "preset-01" }), /invalid_avatar_reliable_state/);
   assert.throws(() => relayAvatarPoseFrame(server, "demo-room", "p1", { seq: 1 }), /invalid_avatar_pose_preview/);
+});
+
+test("applySeatClaim uses first claim wins and keeps previous occupant", () => {
+  const server = createRoomStateServer();
+  connectParticipant(server, "demo-room", "p1", createSocket() as never);
+  connectParticipant(server, "demo-room", "p2", createSocket() as never);
+
+  const first = applySeatClaim(server, "demo-room", "p1", "seat-a");
+  const second = applySeatClaim(server, "demo-room", "p2", "seat-a");
+
+  assert.equal(first.accepted, true);
+  assert.equal(second.accepted, false);
+  assert.equal(second.occupantId, "p1");
+  assert.equal(server.rooms.get("demo-room")?.seatOccupancy["seat-a"], "p1");
+});
+
+test("applySeatClaim switches seats for same participant atomically", () => {
+  const server = createRoomStateServer();
+  connectParticipant(server, "demo-room", "p1", createSocket() as never);
+
+  applySeatClaim(server, "demo-room", "p1", "seat-a");
+  const switched = applySeatClaim(server, "demo-room", "p1", "seat-b");
+
+  assert.equal(switched.accepted, true);
+  assert.equal(switched.previousSeatId, "seat-a");
+  assert.equal(server.rooms.get("demo-room")?.seatOccupancy["seat-a"], undefined);
+  assert.equal(server.rooms.get("demo-room")?.seatOccupancy["seat-b"], "p1");
+});
+
+test("applySeatRelease clears occupied seat for participant", () => {
+  const server = createRoomStateServer();
+  connectParticipant(server, "demo-room", "p1", createSocket() as never);
+
+  applySeatClaim(server, "demo-room", "p1", "seat-a");
+  const releasedSeatId = applySeatRelease(server, "demo-room", "p1");
+
+  assert.equal(releasedSeatId, "seat-a");
+  assert.equal(server.rooms.get("demo-room")?.seatOccupancy["seat-a"], undefined);
 });

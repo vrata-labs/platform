@@ -11,6 +11,27 @@
       "position": { "x": 0, "y": 0, "z": 0 }
     }
   ],
+  "anchors": {
+    "teleportFloorY": 0,
+    "seatAnchors": [
+      {
+        "id": "hall-seat-a",
+        "position": { "x": -1.4, "y": 0, "z": -2.4 },
+        "yaw": 0,
+        "seatHeight": 0.45,
+        "radius": 0.55,
+        "label": "Hall Seat A"
+      },
+      {
+        "id": "hall-seat-b",
+        "position": { "x": 1.4, "y": 0, "z": -2.4 },
+        "yaw": 0,
+        "seatHeight": 0.45,
+        "radius": 0.55,
+        "label": "Hall Seat B"
+      }
+    ]
+  },
   "bounds": { "width": 40, "height": 10, "depth": 40 },
   "notes": "Hall bundle backed by exported TheHallScene.glb"
 }

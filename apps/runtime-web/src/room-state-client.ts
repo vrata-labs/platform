@@ -6,6 +6,7 @@ import { parseAvatarReliableState } from "./avatar/avatar-reliable-state.js";
 export interface RoomStateSnapshot {
   roomId: string;
   participants: PresenceState[];
+  seatOccupancy: Record<string, string>;
 }
 
 export interface RoomStateClient {
@@ -23,6 +24,7 @@ export interface RoomStateClientHandlers {
   onRoomState: (snapshot: RoomStateSnapshot) => void;
   onAvatarReliableState?: (state: AvatarReliableState) => void;
   onAvatarPoseFrame?: (participantId: string, frame: CompactPoseFrame) => void;
+  onSeatClaimResult?: (result: { seatId: string; accepted: boolean; occupantId: string | null; previousSeatId: string | null }) => void;
   onError: (error: unknown) => void;
   onOpen?: () => void;
   onClose?: () => void;
@@ -55,9 +57,19 @@ export function connectRoomState(
         reliableState?: unknown;
         poseFrame?: unknown;
         participantId?: unknown;
+        seatClaimResult?: {
+          seatId?: unknown;
+          accepted?: unknown;
+          occupantId?: unknown;
+          previousSeatId?: unknown;
+        };
       };
       if (payload.type === "room_state" && payload.room) {
-        handlers.onRoomState(payload.room);
+        handlers.onRoomState({
+          roomId: payload.room.roomId,
+          participants: payload.room.participants,
+          seatOccupancy: payload.room.seatOccupancy ?? {}
+        });
         return;
       }
       if (payload.type === "avatar_reliable_state" && payload.reliableState) {
@@ -70,6 +82,20 @@ export function connectRoomState(
           throw new Error("invalid_avatar_pose_preview_participant");
         }
         handlers.onAvatarPoseFrame?.(participantId, parseCompactPoseFrame(payload.poseFrame));
+        return;
+      }
+      if (payload.type === "seat_claim_result" && payload.seatClaimResult) {
+        const seatId = typeof payload.seatClaimResult.seatId === "string" ? payload.seatClaimResult.seatId : null;
+        const accepted = payload.seatClaimResult.accepted;
+        if (!seatId || typeof accepted !== "boolean") {
+          throw new Error("invalid_seat_claim_result");
+        }
+        handlers.onSeatClaimResult?.({
+          seatId,
+          accepted,
+          occupantId: typeof payload.seatClaimResult.occupantId === "string" ? payload.seatClaimResult.occupantId : null,
+          previousSeatId: typeof payload.seatClaimResult.previousSeatId === "string" ? payload.seatClaimResult.previousSeatId : null
+        });
       }
     } catch (error) {
       handlers.onError(error);
@@ -108,4 +134,18 @@ export function sendAvatarPoseFrame(client: RoomStateClient, participantId: stri
     return;
   }
   client.socket.send(JSON.stringify({ type: "avatar_pose_preview", participantId, poseFrame }));
+}
+
+export function sendSeatClaim(client: RoomStateClient, seatId: string): void {
+  if (!canSend(client.socket)) {
+    return;
+  }
+  client.socket.send(JSON.stringify({ type: "seat_claim", seatId }));
+}
+
+export function sendSeatRelease(client: RoomStateClient, seatId?: string): void {
+  if (!canSend(client.socket)) {
+    return;
+  }
+  client.socket.send(JSON.stringify({ type: "seat_release", seatId }));
 }

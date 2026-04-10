@@ -2,6 +2,7 @@ export interface XrAxesSnapshot {
   moveX: number;
   moveY: number;
   turnX: number;
+  turnY: number;
 }
 
 export type XrControllerInputProfile = "dual" | "left-only" | "right-only" | "none";
@@ -27,6 +28,7 @@ export function resolveAvatarXrInput(inputSources: Array<{ handedness?: string; 
   let moveX = 0;
   let moveY = 0;
   let turnX = 0;
+  let turnY = 0;
   let hasLeft = false;
   let hasRight = false;
 
@@ -40,6 +42,7 @@ export function resolveAvatarXrInput(inputSources: Array<{ handedness?: string; 
     }
     if (input.handedness === "right") {
       turnX = axes.x;
+      turnY = axes.y;
       hasRight = true;
       continue;
     }
@@ -51,12 +54,13 @@ export function resolveAvatarXrInput(inputSources: Array<{ handedness?: string; 
     }
     if (!hasRight) {
       turnX = axes.x;
+      turnY = axes.y;
       hasRight = true;
     }
   }
 
   return {
-    axes: { moveX, moveY, turnX },
+    axes: { moveX, moveY, turnX, turnY },
     profile: hasLeft && hasRight ? "dual" : hasLeft ? "left-only" : hasRight ? "right-only" : "none"
   };
 }

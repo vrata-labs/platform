@@ -13,6 +13,8 @@ export interface RemoteAvatarReliableStateView {
   inputMode: string;
   updatedAt: string;
   audioActive: boolean;
+  seated: boolean;
+  seatId?: string;
 }
 
 export interface RemoteAvatarPoseFrameView {

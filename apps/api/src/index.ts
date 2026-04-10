@@ -564,7 +564,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
         avatarPoseBinaryEnabled: process.env.FEATURE_AVATAR_POSE_BINARY !== "false",
         avatarLipsyncEnabled: process.env.FEATURE_AVATAR_LIPSYNC === "true",
         avatarLegIkEnabled: process.env.FEATURE_AVATAR_LEG_IK === "true",
-        avatarSeatingEnabled: process.env.FEATURE_AVATAR_SEATING === "true",
+        avatarSeatingEnabled: process.env.FEATURE_AVATAR_SEATING !== "false",
         avatarCustomizationEnabled: process.env.FEATURE_AVATAR_CUSTOMIZATION === "true",
         avatarFallbackCapsulesEnabled: process.env.FEATURE_AVATAR_FALLBACK_CAPSULES !== "false",
         postgresEnabled: Boolean(process.env.POSTGRES_URL),

@@ -7,6 +7,7 @@ export interface XrAxesSample {
   moveX: number;
   moveY: number;
   turnX: number;
+  turnY: number;
 }
 
 export interface XrTurnState {
@@ -115,6 +116,7 @@ export function sanitizeXrAxes(sample: XrAxesSample): XrAxesSample {
   return {
     moveX: applyDeadzone(sample.moveX),
     moveY: applyDeadzone(sample.moveY),
-    turnX: applyDeadzone(sample.turnX)
+    turnX: applyDeadzone(sample.turnX),
+    turnY: applyDeadzone(sample.turnY)
   };
 }

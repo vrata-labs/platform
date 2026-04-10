@@ -7,6 +7,19 @@ export interface SceneBundleSpawnPoint {
   };
 }
 
+export interface SceneBundleSeatAnchor {
+  id: string;
+  position: {
+    x: number;
+    y: number;
+    z: number;
+  };
+  yaw: number;
+  seatHeight: number;
+  radius: number;
+  label?: string;
+}
+
 export interface SceneBundleManifest {
   schemaVersion: 1;
   sceneId: string;
@@ -15,6 +28,10 @@ export interface SceneBundleManifest {
   glbPath: string;
   renderMode?: "default" | "clean";
   spawnPoints: SceneBundleSpawnPoint[];
+  anchors?: {
+    teleportFloorY?: number;
+    seatAnchors: SceneBundleSeatAnchor[];
+  };
   materialOverrides?: Array<{
     match: string;
     mapPath?: string;
@@ -68,6 +85,41 @@ function parseSpawnPoint(input: unknown, index: number): SceneBundleSpawnPoint {
   };
 }
 
+function parseSeatAnchor(input: unknown, index: number): SceneBundleSeatAnchor {
+  const payload = assertObject(input, `invalid_scene_bundle_seat_anchor:${index}`);
+  const position = assertObject(payload.position, `invalid_scene_bundle_seat_anchor_position:${index}`);
+  if (!isFiniteNumber(position.x) || !isFiniteNumber(position.y) || !isFiniteNumber(position.z)) {
+    throw new Error(`invalid_scene_bundle_seat_anchor_position:${index}`);
+  }
+  if (!isFiniteNumber(payload.yaw)) {
+    throw new Error(`invalid_scene_bundle_seat_anchor_yaw:${index}`);
+  }
+  if (!isFiniteNumber(payload.seatHeight)) {
+    throw new Error(`invalid_scene_bundle_seat_anchor_height:${index}`);
+  }
+  const radius = payload.radius === undefined
+    ? 0.4
+    : isFiniteNumber(payload.radius)
+      ? payload.radius
+      : Number.NaN;
+  if (!Number.isFinite(radius) || radius <= 0) {
+    throw new Error(`invalid_scene_bundle_seat_anchor_radius:${index}`);
+  }
+
+  return {
+    id: assertString(payload.id, `invalid_scene_bundle_seat_anchor_id:${index}`),
+    position: {
+      x: position.x,
+      y: position.y,
+      z: position.z
+    },
+    yaw: payload.yaw,
+    seatHeight: payload.seatHeight,
+    radius,
+    label: payload.label === undefined ? undefined : assertString(payload.label, `invalid_scene_bundle_seat_anchor_label:${index}`)
+  };
+}
+
 export function parseSceneBundleManifest(input: unknown): SceneBundleManifest {
   const payload = assertObject(input, "invalid_scene_bundle_manifest");
   if (payload.schemaVersion !== 1) {
@@ -93,6 +145,24 @@ export function parseSceneBundleManifest(input: unknown): SceneBundleManifest {
       throw new Error("invalid_scene_bundle_render_mode");
     }
     manifest.renderMode = payload.renderMode;
+  }
+
+  if (payload.anchors !== undefined) {
+    const anchors = assertObject(payload.anchors, "invalid_scene_bundle_anchors");
+    const seatAnchorsRaw = anchors.seatAnchors;
+    if (seatAnchorsRaw !== undefined && !Array.isArray(seatAnchorsRaw)) {
+      throw new Error("invalid_scene_bundle_seat_anchors");
+    }
+    const parsedAnchors: NonNullable<SceneBundleManifest["anchors"]> = {
+      seatAnchors: Array.isArray(seatAnchorsRaw) ? seatAnchorsRaw.map((entry, index) => parseSeatAnchor(entry, index)) : []
+    };
+    if (anchors.teleportFloorY !== undefined) {
+      if (!isFiniteNumber(anchors.teleportFloorY)) {
+        throw new Error("invalid_scene_bundle_teleport_floor_y");
+      }
+      parsedAnchors.teleportFloorY = anchors.teleportFloorY;
+    }
+    manifest.anchors = parsedAnchors;
   }
 
   if (payload.bounds !== undefined) {

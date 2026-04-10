@@ -16,7 +16,7 @@ export function createInitialAvatarRuntimeFlags(): AvatarRuntimeFlags {
     avatarPoseBinaryEnabled: true,
     avatarLipsyncEnabled: false,
     avatarLegIkEnabled: false,
-    avatarSeatingEnabled: false,
+    avatarSeatingEnabled: true,
     avatarCustomizationEnabled: false,
     avatarFallbackCapsulesEnabled: true
   };
