@@ -1,6 +1,64 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 
 test.describe.configure({ mode: "serial" });
+
+async function createAvatarHallRoom(request: APIRequestContext, name: string): Promise<{ roomId: string; roomLink: string }> {
+  const createRoomResponse = await request.post("/api/rooms", {
+    headers: {
+      "x-noah-admin-token": "test-admin-token"
+    },
+    data: {
+      tenantId: "demo-tenant",
+      templateId: "meeting-room-basic",
+      name,
+      sceneBundleUrl: "/assets/scenes/sense-hall2-v1/scene.json",
+      avatarConfig: {
+        avatarsEnabled: true,
+        avatarCatalogUrl: "/assets/avatars/catalog.v1.json",
+        avatarQualityProfile: "desktop-standard",
+        avatarFallbackCapsulesEnabled: true,
+        avatarSeatsEnabled: true
+      }
+    }
+  });
+  expect(createRoomResponse.ok()).toBeTruthy();
+  return (await createRoomResponse.json()) as { roomId: string; roomLink: string };
+}
+
+async function readInteractionDebug(page: Page) {
+  return page.evaluate(() => (window as Window & {
+    __NOAH_DEBUG__?: {
+      participantId?: string;
+      roomStateConnected?: boolean;
+      sceneBundleState?: string;
+      localPosition?: { x: number; z: number };
+      currentSeatId?: string | null;
+      pendingSeatId?: string | null;
+      seatOccupancy?: Record<string, string>;
+      interactionRay?: {
+        targetKind?: "none" | "floor" | "seat";
+        seatId?: string | null;
+      };
+      statusLine?: string;
+    };
+  }).__NOAH_DEBUG__);
+}
+
+async function waitForHallInteractionReady(page: Page) {
+  await expect.poll(async () => {
+    const debug = await readInteractionDebug(page);
+    return {
+      roomStateConnected: debug?.roomStateConnected ?? false,
+      sceneBundleState: debug?.sceneBundleState ?? null
+    };
+  }, {
+    timeout: 20000,
+    intervals: [1000, 2000, 3000]
+  }).toEqual({
+    roomStateConnected: true,
+    sceneBundleState: "loaded"
+  });
+}
 
 test("room shell loads and presence is registered", async ({ page, request }) => {
   await page.goto("/rooms/demo-room");
@@ -1156,6 +1214,71 @@ test("scene bundle diagnostics include render and geometry debug info", async ({
   expect(loaded?.sceneDebug?.screenshot?.width ?? 0).toBeGreaterThan(0);
   expect(loaded?.sceneDebug?.screenshot?.pixelSamples?.length ?? 0).toBeGreaterThan(0);
   expect((loaded?.sceneDebug?.screenshot?.dataUrl ?? "")).toContain("data:image/jpeg;base64,");
+});
+
+test("avatar-enabled hall room supports interaction ray teleport, sit, switch and teleport exit", async ({ page, request }) => {
+  const room = await createAvatarHallRoom(request, "Avatar Hall Interaction Room");
+
+  await page.goto(`${room.roomLink}?debug=1`);
+  await waitForHallInteractionReady(page);
+
+  expect(await page.evaluate(() => (window as Window & {
+    __NOAH_TEST__?: { claimSeatById: (seatId: string) => boolean };
+  }).__NOAH_TEST__?.claimSeatById("hall-seat-a") ?? false)).toBeTruthy();
+
+  await expect.poll(async () => {
+    const debug = await readInteractionDebug(page);
+    return {
+      currentSeatId: debug?.currentSeatId ?? null,
+      occupiedByLocal: (debug?.seatOccupancy?.["hall-seat-a"] ?? null) === debug?.participantId
+    };
+  }, {
+    timeout: 15000,
+    intervals: [1000, 2000, 3000]
+  }).toEqual({
+    currentSeatId: "hall-seat-a",
+    occupiedByLocal: true
+  });
+
+  expect(await page.evaluate(() => (window as Window & {
+    __NOAH_TEST__?: { claimSeatById: (seatId: string) => boolean };
+  }).__NOAH_TEST__?.claimSeatById("hall-seat-b") ?? false)).toBeTruthy();
+
+  await expect.poll(async () => {
+    const debug = await readInteractionDebug(page);
+    return {
+      currentSeatId: debug?.currentSeatId ?? null,
+      seatAOccupied: Boolean(debug?.seatOccupancy?.["hall-seat-a"]),
+      seatBOccupiedByLocal: (debug?.seatOccupancy?.["hall-seat-b"] ?? null) === debug?.participantId
+    };
+  }, {
+    timeout: 15000,
+    intervals: [1000, 2000, 3000]
+  }).toEqual({
+    currentSeatId: "hall-seat-b",
+    seatAOccupied: false,
+    seatBOccupiedByLocal: true
+  });
+
+  expect(await page.evaluate(() => (window as Window & {
+    __NOAH_TEST__?: { teleportToFloor: (x: number, z: number) => boolean };
+  }).__NOAH_TEST__?.teleportToFloor(0, -4) ?? false)).toBeTruthy();
+
+  await expect.poll(async () => {
+    const debug = await readInteractionDebug(page);
+    return {
+      currentSeatId: debug?.currentSeatId ?? null,
+      seatBOccupied: Boolean(debug?.seatOccupancy?.["hall-seat-b"]),
+      localPositionZ: Number((debug?.localPosition?.z ?? 0).toFixed(1))
+    };
+  }, {
+    timeout: 15000,
+    intervals: [1000, 2000, 3000]
+  }).toEqual({
+    currentSeatId: null,
+    seatBOccupied: false,
+    localPositionZ: -4
+  });
 });
 
 test("room creation API is forbidden without admin token", async ({ request }) => {

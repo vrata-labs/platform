@@ -241,6 +241,8 @@ let localBodyMesh: THREE.Mesh | null = null;
 let localHeadMesh: THREE.Mesh | null = null;
 let currentSeatId: string | null = null;
 let pendingSeatId: string | null = null;
+let lastInteractionConfirmAt = 0;
+let forcedTestInteractionRay: THREE.Ray | null = null;
 let sceneTeleportFloorY = 0;
 let sceneSeatAnchors: SceneBundleSeatAnchor[] = [];
 let sceneSeatAnchorMap = createAvatarSeatAnchorMap([]);
@@ -252,6 +254,8 @@ const interactionRayDirection = new THREE.Vector3();
 const interactionRayEnd = new THREE.Vector3();
 const interactionRayPoints = [new THREE.Vector3(), new THREE.Vector3()];
 const interactionRaycaster = new THREE.Raycaster();
+const cameraWorldPosition = new THREE.Vector3();
+const forcedInteractionDirection = new THREE.Vector3();
 const avatarOutboundPublisher = createAvatarOutboundPublisher();
 let lastAvatarMove = { x: 0, z: 0 };
 let lastAvatarTurnRate = 0;
@@ -448,7 +452,22 @@ function updatePointerNdcFromClientPosition(clientX: number, clientY: number): v
   pointerNdc.y = -(((clientY - rect.top) / rect.height) * 2 - 1);
 }
 
+function forceInteractionRayAtWorldPoint(worldPoint: THREE.Vector3): boolean {
+  camera.getWorldPosition(cameraWorldPosition);
+  forcedInteractionDirection.copy(worldPoint).sub(cameraWorldPosition);
+  if (forcedInteractionDirection.lengthSq() <= 1e-6) {
+    return false;
+  }
+  forcedInteractionDirection.normalize();
+  forcedTestInteractionRay = new THREE.Ray(cameraWorldPosition.clone(), forcedInteractionDirection.clone());
+  pointerHoveringScene = true;
+  return true;
+}
+
 function getInteractionRay(): THREE.Ray | null {
+  if (forcedTestInteractionRay) {
+    return forcedTestInteractionRay.clone();
+  }
   if (renderer.xr.isPresenting) {
     const xrInput = resolveAvatarXrInput(Array.from(renderer.xr.getFrame()?.session?.inputSources ?? []));
     if (xrInput.axes.turnY > -0.75) {
@@ -512,14 +531,22 @@ function updateInteractionRayState():
 }
 
 function confirmInteractionTarget(): void {
+  const now = performance.now();
+  if (now - lastInteractionConfirmAt < 250) {
+    return;
+  }
   const target = updateInteractionRayState();
   if (target.kind === "none") {
     return;
   }
+  lastInteractionConfirmAt = now;
   if (target.kind === "seat") {
     const seatAnchor = target.seatAnchor;
     if (!runtimeFlags.avatarSeatingEnabled || !roomStateClient || !roomStateConnected) {
       setStatus("Seating unavailable");
+      return;
+    }
+    if (pendingSeatId === seatAnchor.id) {
       return;
     }
     pendingSeatId = seatAnchor.id;
@@ -933,10 +960,62 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
 (window as Window & {
   __NOAH_TEST__?: {
     forceRoomStateReconnect: () => void;
+    aimInteractionAtSeat: (seatId: string) => boolean;
+    aimInteractionAtFloor: (x: number, z: number) => boolean;
+    confirmInteraction: () => void;
+    claimSeatById: (seatId: string) => boolean;
+    teleportToFloor: (x: number, z: number) => boolean;
   };
 }).__NOAH_TEST__ = {
   forceRoomStateReconnect: () => {
     roomStateClient?.close();
+  },
+  aimInteractionAtSeat: (seatId: string) => {
+    const seatAnchor = sceneSeatAnchorMap.get(seatId);
+    if (!seatAnchor) {
+      return false;
+    }
+    return forceInteractionRayAtWorldPoint(new THREE.Vector3(
+      seatAnchor.position.x,
+      seatAnchor.position.y + seatAnchor.seatHeight,
+      seatAnchor.position.z
+    ));
+  },
+  aimInteractionAtFloor: (x: number, z: number) => {
+    return forceInteractionRayAtWorldPoint(new THREE.Vector3(x, sceneTeleportFloorY, z));
+  },
+  confirmInteraction: () => {
+    confirmInteractionTarget();
+  },
+  claimSeatById: (seatId: string) => {
+    const seatAnchor = sceneSeatAnchorMap.get(seatId);
+    if (!seatAnchor) {
+      return false;
+    }
+    for (const occupiedSeatId of Object.keys(roomSeatOccupancy)) {
+      if (roomSeatOccupancy[occupiedSeatId] === participantId) {
+        delete roomSeatOccupancy[occupiedSeatId];
+      }
+    }
+    roomSeatOccupancy[seatAnchor.id] = participantId;
+    pendingSeatId = null;
+    debugState.pendingSeatId = null;
+    syncSeatStateFromOccupancy();
+    setStatus(`Seated at ${seatAnchor.label ?? seatAnchor.id}`);
+    return true;
+  },
+  teleportToFloor: (x: number, z: number) => {
+    if (currentSeatId && roomStateClient && roomStateConnected) {
+      sendSeatRelease(roomStateClient, currentSeatId);
+      releaseCurrentSeatLocally();
+    }
+    player.position.set(x, sceneTeleportFloorY, z);
+    debugState.localPosition = {
+      x: Number(player.position.x.toFixed(2)),
+      z: Number(player.position.z.toFixed(2))
+    };
+    setStatus("Teleported");
+    return true;
   }
 };
 
