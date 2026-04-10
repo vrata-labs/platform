@@ -191,6 +191,9 @@ const interactionReticle = new THREE.Mesh(
 interactionReticle.visible = false;
 scene.add(interactionReticle);
 
+const seatMarkerRoot = new THREE.Group();
+scene.add(seatMarkerRoot);
+
 const grid = new THREE.GridHelper(40, 40, 0x5fc8ff, 0x31587f);
 grid.position.y = 0.01;
 scene.add(grid);
@@ -248,6 +251,14 @@ let forcedTestSeatId: string | null = null;
 let sceneTeleportFloorY = 0;
 let sceneSeatAnchors: SceneBundleSeatAnchor[] = [];
 let sceneSeatAnchorMap = createAvatarSeatAnchorMap([]);
+type SeatMarkerView = {
+  anchor: SceneBundleSeatAnchor;
+  group: THREE.Group;
+  ring: THREE.Mesh;
+  beacon: THREE.Mesh;
+  orb: THREE.Mesh;
+};
+let seatMarkerViews = new Map<string, SeatMarkerView>();
 let sceneAnchorsReady = true;
 let roomSeatOccupancy: Record<string, string> = {};
 const pointerNdc = new THREE.Vector2(0, 0);
@@ -387,13 +398,110 @@ function clearInteractionVisuals(): void {
   debugState.interactionRay.targetKind = "none";
   debugState.interactionRay.seatId = null;
   debugState.interactionRay.point = null;
+  updateSeatMarkerVisuals(performance.now() / 1000);
+}
+
+function clearSeatMarkers(): void {
+  seatMarkerRoot.clear();
+  seatMarkerViews = new Map<string, SeatMarkerView>();
+}
+
+function createSeatMarker(anchor: SceneBundleSeatAnchor): SeatMarkerView {
+  const group = new THREE.Group();
+  group.position.set(anchor.position.x, anchor.position.y, anchor.position.z);
+
+  const markerMaterial = new THREE.MeshBasicMaterial({
+    color: 0x64d7ff,
+    transparent: true,
+    opacity: 0.9,
+    depthTest: false,
+    depthWrite: false
+  });
+  const ring = new THREE.Mesh(
+    new THREE.TorusGeometry(Math.max(anchor.radius * 0.7, 0.24), 0.035, 12, 32),
+    markerMaterial.clone()
+  );
+  ring.rotation.x = Math.PI / 2;
+  ring.position.y = 0.06;
+  group.add(ring);
+
+  const beacon = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.026, 0.026, 0.48, 12),
+    markerMaterial.clone()
+  );
+  beacon.position.y = 0.36;
+  group.add(beacon);
+
+  const orb = new THREE.Mesh(
+    new THREE.SphereGeometry(0.075, 14, 14),
+    markerMaterial.clone()
+  );
+  orb.position.y = 0.64;
+  group.add(orb);
+
+  seatMarkerRoot.add(group);
+  return { anchor, group, ring, beacon, orb };
+}
+
+function rebuildSeatMarkers(anchors: SceneBundleSeatAnchor[]): void {
+  clearSeatMarkers();
+  for (const anchor of anchors) {
+    seatMarkerViews.set(anchor.id, createSeatMarker(anchor));
+  }
+}
+
+function updateSeatMarkerVisuals(timeSeconds: number): void {
+  const hoveredSeatId = debugState.interactionRay.seatId;
+  for (const [seatId, marker] of seatMarkerViews.entries()) {
+    const occupantId = roomSeatOccupancy[seatId] ?? null;
+    const isCurrent = currentSeatId === seatId;
+    const isHovered = hoveredSeatId === seatId;
+    const isPending = pendingSeatId === seatId;
+    const isOccupied = occupantId !== null;
+    const color = isCurrent
+      ? 0x66ff99
+      : isHovered
+        ? 0xb8ff8d
+        : isPending
+          ? 0xffd166
+          : isOccupied
+            ? 0xff7b7b
+            : 0x64d7ff;
+    const opacity = isCurrent || isHovered ? 1 : isOccupied ? 0.55 : 0.82;
+    const scale = isCurrent ? 1.18 : isHovered ? 1.12 : 1;
+    const bob = isCurrent || isHovered ? Math.sin(timeSeconds * 4 + marker.anchor.position.x) * 0.03 : 0;
+
+    const ringMaterial = marker.ring.material;
+    if (ringMaterial instanceof THREE.MeshBasicMaterial) {
+      ringMaterial.color.setHex(color);
+      ringMaterial.opacity = opacity;
+    }
+    const beaconMaterial = marker.beacon.material;
+    if (beaconMaterial instanceof THREE.MeshBasicMaterial) {
+      beaconMaterial.color.setHex(color);
+      beaconMaterial.opacity = Math.min(1, opacity + 0.08);
+    }
+    const orbMaterial = marker.orb.material;
+    if (orbMaterial instanceof THREE.MeshBasicMaterial) {
+      orbMaterial.color.setHex(color);
+      orbMaterial.opacity = Math.min(1, opacity + 0.12);
+    }
+
+    marker.group.visible = true;
+    marker.group.scale.setScalar(scale);
+    marker.ring.position.y = 0.06 + bob * 0.3;
+    marker.beacon.position.y = 0.36 + bob * 0.6;
+    marker.orb.position.y = 0.64 + bob;
+  }
 }
 
 function setSceneSeatAnchors(anchors: SceneBundleSeatAnchor[], teleportFloorY = 0): void {
   sceneSeatAnchors = anchors;
   sceneSeatAnchorMap = createAvatarSeatAnchorMap(anchors);
+  rebuildSeatMarkers(anchors);
   sceneTeleportFloorY = teleportFloorY;
   sceneAnchorsReady = true;
+  updateSeatMarkerVisuals(performance.now() / 1000);
 }
 
 function releaseCurrentSeatLocally(): void {
@@ -408,6 +516,7 @@ function releaseCurrentSeatLocally(): void {
   debugState.currentSeatId = null;
   debugState.pendingSeatId = null;
   debugState.seatOccupancy = { ...roomSeatOccupancy };
+  updateSeatMarkerVisuals(performance.now() / 1000);
 }
 
 function syncSeatStateFromOccupancy(): void {
@@ -423,6 +532,7 @@ function syncSeatStateFromOccupancy(): void {
   }
   debugState.currentSeatId = currentSeatId;
   debugState.pendingSeatId = pendingSeatId;
+  updateSeatMarkerVisuals(performance.now() / 1000);
   if (!currentSeatId) {
     return;
   }
@@ -2260,6 +2370,7 @@ renderer.setAnimationLoop(() => {
   updateLocalAvatar(delta);
   remoteAvatarRuntime.update(delta, debugState);
   updateInteractionRayState();
+  updateSeatMarkerVisuals(nowMs / 1000);
   debugState.avatarPoseTransport.adaptivePlaybackDelayMs = debugState.remoteAvatarParticipants.length > 0
     ? Math.max(...debugState.remoteAvatarParticipants.map((participant) => participant.playbackDelayMs))
     : 100;
