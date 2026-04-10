@@ -283,6 +283,8 @@ const interactionRayPoints = [new THREE.Vector3(), new THREE.Vector3()];
 const interactionRaycaster = new THREE.Raycaster();
 const cameraWorldPosition = new THREE.Vector3();
 const forcedInteractionDirection = new THREE.Vector3();
+const xrRayQuaternion = new THREE.Quaternion();
+const xrForward = new THREE.Vector3(0, 0, -1);
 const avatarOutboundPublisher = createAvatarOutboundPublisher();
 let lastAvatarMove = { x: 0, z: 0 };
 let lastAvatarTurnRate = 0;
@@ -606,20 +608,42 @@ function getInteractionRay(): THREE.Ray | null {
     return forcedTestInteractionRay.clone();
   }
   if (renderer.xr.isPresenting) {
-    const xrInput = resolveAvatarXrInput(Array.from(renderer.xr.getFrame()?.session?.inputSources ?? []));
+    const xrFrame = renderer.xr.getFrame();
+    const xrSession = xrFrame?.session;
+    const xrInput = resolveAvatarXrInput(Array.from(xrSession?.inputSources ?? []));
     if (xrInput.axes.turnY > -0.75) {
       return null;
     }
-    const rightController = xrControllers.find((controller) => controller.userData.handedness === "right")
-      ?? xrControllers[1]
-      ?? xrControllers[0]
+    const referenceSpace = renderer.xr.getReferenceSpace();
+    const rightInputSource = Array.from(xrSession?.inputSources ?? []).find((source) => source.handedness === "right")
+      ?? Array.from(xrSession?.inputSources ?? [])[0]
       ?? null;
-    if (!rightController) {
-      return null;
+    if (xrFrame && referenceSpace && rightInputSource?.targetRaySpace) {
+      const pose = xrFrame.getPose(rightInputSource.targetRaySpace, referenceSpace);
+      if (pose) {
+        interactionRayOrigin.set(
+          pose.transform.position.x,
+          pose.transform.position.y,
+          pose.transform.position.z
+        );
+        xrRayQuaternion.set(
+          pose.transform.orientation.x,
+          pose.transform.orientation.y,
+          pose.transform.orientation.z,
+          pose.transform.orientation.w
+        );
+        interactionRayDirection.copy(xrForward).applyQuaternion(xrRayQuaternion).normalize();
+        return new THREE.Ray(interactionRayOrigin.clone(), interactionRayDirection.clone());
+      }
     }
-    rightController.getWorldPosition(interactionRayOrigin);
-    rightController.getWorldDirection(interactionRayDirection).normalize();
-    return new THREE.Ray(interactionRayOrigin.clone(), interactionRayDirection.clone());
+
+    const rightController = xrControllers.find((controller) => controller.userData.handedness === "right") ?? null;
+    if (rightController) {
+      rightController.getWorldPosition(interactionRayOrigin);
+      rightController.getWorldDirection(interactionRayDirection).normalize();
+      return new THREE.Ray(interactionRayOrigin.clone(), interactionRayDirection.clone());
+    }
+    return null;
   }
   if (!pointerHoveringScene) {
     return null;
@@ -712,13 +736,15 @@ function updateInteractionRayState():
     : { kind: "floor", point: target.point };
 }
 
-function confirmInteractionTarget(): void {
-  const now = performance.now();
-  if (now - lastInteractionConfirmAt < 250) {
+function performInteractionTarget(target:
+  | { kind: "none" }
+  | { kind: "floor"; point: THREE.Vector3 }
+  | { kind: "seat"; point: THREE.Vector3; seatAnchor: SceneBundleSeatAnchor }): void {
+  if (target.kind === "none") {
     return;
   }
-  const target = updateInteractionRayState();
-  if (target.kind === "none") {
+  const now = performance.now();
+  if (now - lastInteractionConfirmAt < 250) {
     return;
   }
   lastInteractionConfirmAt = now;
@@ -748,6 +774,11 @@ function confirmInteractionTarget(): void {
     z: Number(player.position.z.toFixed(2))
   };
   setStatus("Teleported");
+}
+
+function confirmInteractionTarget(): void {
+  const target = updateInteractionRayState();
+  performInteractionTarget(target);
 }
 
 function supportsAudioOutputSelection(): boolean {
@@ -2365,8 +2396,16 @@ renderer.domElement.addEventListener("click", (event) => {
     clearInteractionVisuals();
     return;
   }
-  interactionRayEnd.copy(directTarget.point);
-  confirmInteractionTarget();
+  debugState.interactionRay.active = true;
+  debugState.interactionRay.mode = "cursor";
+  debugState.interactionRay.targetKind = directTarget.kind;
+  debugState.interactionRay.seatId = directTarget.kind === "seat" ? directTarget.seatAnchor.id : null;
+  debugState.interactionRay.point = {
+    x: Number(directTarget.point.x.toFixed(2)),
+    y: Number(directTarget.point.y.toFixed(2)),
+    z: Number(directTarget.point.z.toFixed(2))
+  };
+  performInteractionTarget(directTarget);
 });
 
 window.addEventListener("pointermove", (event) => {
