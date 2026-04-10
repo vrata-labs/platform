@@ -146,17 +146,30 @@ scene.add(player);
 const xrControllers = [renderer.xr.getController(0), renderer.xr.getController(1)];
 const xrControllerGrips = [renderer.xr.getControllerGrip(0), renderer.xr.getControllerGrip(1)];
 for (const controller of xrControllers) {
+  controller.addEventListener("connected", (event) => {
+    const payload = (event as { data?: { handedness?: string } }).data;
+    controller.userData.handedness = payload?.handedness ?? "";
+  });
+  controller.addEventListener("disconnected", () => {
+    controller.userData.handedness = "";
+  });
   scene.add(controller);
 }
 for (const grip of xrControllerGrips) {
   scene.add(grip);
 }
-xrControllers[1]?.addEventListener("selectstart", () => {
-  if (!renderer.xr.isPresenting) {
-    return;
-  }
-  confirmInteractionTarget();
-});
+for (const controller of xrControllers) {
+  controller.addEventListener("selectstart", () => {
+    if (!renderer.xr.isPresenting) {
+      return;
+    }
+    const handedness = typeof controller.userData.handedness === "string" ? controller.userData.handedness : "";
+    if (handedness && handedness !== "right") {
+      return;
+    }
+    confirmInteractionTarget();
+  });
+}
 
 scene.add(new THREE.HemisphereLight(0xcbe9ff, 0x152033, 1.4));
 const directional = new THREE.DirectionalLight(0xffffff, 1.4);
@@ -597,8 +610,15 @@ function getInteractionRay(): THREE.Ray | null {
     if (xrInput.axes.turnY > -0.75) {
       return null;
     }
-    xrControllers[1]?.getWorldPosition(interactionRayOrigin);
-    xrControllers[1]?.getWorldDirection(interactionRayDirection).normalize();
+    const rightController = xrControllers.find((controller) => controller.userData.handedness === "right")
+      ?? xrControllers[1]
+      ?? xrControllers[0]
+      ?? null;
+    if (!rightController) {
+      return null;
+    }
+    rightController.getWorldPosition(interactionRayOrigin);
+    rightController.getWorldDirection(interactionRayDirection).normalize();
     return new THREE.Ray(interactionRayOrigin.clone(), interactionRayDirection.clone());
   }
   if (!pointerHoveringScene) {
@@ -631,6 +651,26 @@ function resolveSeatMarkerTarget(ray: THREE.Ray): { point: THREE.Vector3; seatAn
   return null;
 }
 
+function resolveInteractionTargetFromRay(ray: THREE.Ray):
+  | { kind: "none" }
+  | { kind: "floor"; point: THREE.Vector3 }
+  | { kind: "seat"; point: THREE.Vector3; seatAnchor: SceneBundleSeatAnchor } {
+  const seatMarkerTarget = resolveSeatMarkerTarget(ray);
+  if (seatMarkerTarget) {
+    return {
+      kind: "seat",
+      point: seatMarkerTarget.point,
+      seatAnchor: seatMarkerTarget.seatAnchor
+    };
+  }
+  return resolveAvatarInteractionTarget({
+    ray,
+    seatAnchors: sceneSeatAnchors,
+    teleportFloorY: sceneTeleportFloorY,
+    maxDistance: 18
+  });
+}
+
 function updateInteractionRayState():
   | { kind: "none" }
   | { kind: "floor"; point: THREE.Vector3 }
@@ -641,19 +681,7 @@ function updateInteractionRayState():
     debugState.interactionRay.mode = renderer.xr.isPresenting ? "xr-right-stick" : "none";
     return { kind: "none" };
   }
-  const seatMarkerTarget = resolveSeatMarkerTarget(ray);
-  const target = seatMarkerTarget
-    ? {
-        kind: "seat" as const,
-        point: seatMarkerTarget.point,
-        seatAnchor: seatMarkerTarget.seatAnchor
-      }
-    : resolveAvatarInteractionTarget({
-        ray,
-        seatAnchors: sceneSeatAnchors,
-        teleportFloorY: sceneTeleportFloorY,
-        maxDistance: 18
-      });
+  const target = resolveInteractionTargetFromRay(ray);
   debugState.interactionRay.active = true;
   debugState.interactionRay.mode = renderer.xr.isPresenting ? "xr-right-stick" : "cursor";
   if (target.kind === "none") {
@@ -1994,7 +2022,8 @@ function updateMovement(delta: number): void {
       z: sanitized.moveY
     };
 
-    const turn = applySnapTurn({ angle: yaw, cooldownSeconds: xrTurnCooldown }, sanitized.turnX, delta);
+    const turnInput = Math.abs(sanitized.turnX) >= Math.abs(sanitized.turnY) ? sanitized.turnX : 0;
+    const turn = applySnapTurn({ angle: yaw, cooldownSeconds: xrTurnCooldown }, turnInput, delta);
     yaw = turn.angle;
     xrTurnCooldown = turn.cooldownSeconds;
     debugState.locomotionMode = "vr";
@@ -2330,6 +2359,13 @@ renderer.domElement.addEventListener("click", (event) => {
   }
   updatePointerNdcFromClientPosition(event.clientX, event.clientY);
   pointerHoveringScene = true;
+  interactionRaycaster.setFromCamera(pointerNdc, camera);
+  const directTarget = resolveInteractionTargetFromRay(interactionRaycaster.ray.clone());
+  if (directTarget.kind === "none") {
+    clearInteractionVisuals();
+    return;
+  }
+  interactionRayEnd.copy(directTarget.point);
   confirmInteractionTarget();
 });
 
