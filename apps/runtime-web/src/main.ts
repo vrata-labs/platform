@@ -259,6 +259,7 @@ type SeatMarkerView = {
   orb: THREE.Mesh;
 };
 let seatMarkerViews = new Map<string, SeatMarkerView>();
+const seatMarkerHitMeshes: THREE.Object3D[] = [];
 let sceneAnchorsReady = true;
 let roomSeatOccupancy: Record<string, string> = {};
 const pointerNdc = new THREE.Vector2(0, 0);
@@ -404,6 +405,7 @@ function clearInteractionVisuals(): void {
 function clearSeatMarkers(): void {
   seatMarkerRoot.clear();
   seatMarkerViews = new Map<string, SeatMarkerView>();
+  seatMarkerHitMeshes.length = 0;
 }
 
 function createSeatMarker(anchor: SceneBundleSeatAnchor): SeatMarkerView {
@@ -421,23 +423,29 @@ function createSeatMarker(anchor: SceneBundleSeatAnchor): SeatMarkerView {
     new THREE.TorusGeometry(Math.max(anchor.radius * 0.7, 0.24), 0.035, 12, 32),
     markerMaterial.clone()
   );
+  ring.userData.seatAnchorId = anchor.id;
   ring.rotation.x = Math.PI / 2;
   ring.position.y = 0.06;
   group.add(ring);
+  seatMarkerHitMeshes.push(ring);
 
   const beacon = new THREE.Mesh(
     new THREE.CylinderGeometry(0.026, 0.026, 0.48, 12),
     markerMaterial.clone()
   );
+  beacon.userData.seatAnchorId = anchor.id;
   beacon.position.y = 0.36;
   group.add(beacon);
+  seatMarkerHitMeshes.push(beacon);
 
   const orb = new THREE.Mesh(
     new THREE.SphereGeometry(0.075, 14, 14),
     markerMaterial.clone()
   );
+  orb.userData.seatAnchorId = anchor.id;
   orb.position.y = 0.64;
   group.add(orb);
+  seatMarkerHitMeshes.push(orb);
 
   seatMarkerRoot.add(group);
   return { anchor, group, ring, beacon, orb };
@@ -600,6 +608,29 @@ function getInteractionRay(): THREE.Ray | null {
   return interactionRaycaster.ray.clone();
 }
 
+function resolveSeatMarkerTarget(ray: THREE.Ray): { point: THREE.Vector3; seatAnchor: SceneBundleSeatAnchor } | null {
+  if (seatMarkerHitMeshes.length === 0) {
+    return null;
+  }
+  interactionRaycaster.ray.copy(ray);
+  const intersections = interactionRaycaster.intersectObjects(seatMarkerHitMeshes, false);
+  for (const hit of intersections) {
+    const seatAnchorId = typeof hit.object.userData.seatAnchorId === "string" ? hit.object.userData.seatAnchorId : null;
+    if (!seatAnchorId) {
+      continue;
+    }
+    const seatAnchor = sceneSeatAnchorMap.get(seatAnchorId);
+    if (!seatAnchor) {
+      continue;
+    }
+    return {
+      point: hit.point.clone(),
+      seatAnchor
+    };
+  }
+  return null;
+}
+
 function updateInteractionRayState():
   | { kind: "none" }
   | { kind: "floor"; point: THREE.Vector3 }
@@ -610,12 +641,19 @@ function updateInteractionRayState():
     debugState.interactionRay.mode = renderer.xr.isPresenting ? "xr-right-stick" : "none";
     return { kind: "none" };
   }
-  const target = resolveAvatarInteractionTarget({
-    ray,
-    seatAnchors: sceneSeatAnchors,
-    teleportFloorY: sceneTeleportFloorY,
-    maxDistance: 18
-  });
+  const seatMarkerTarget = resolveSeatMarkerTarget(ray);
+  const target = seatMarkerTarget
+    ? {
+        kind: "seat" as const,
+        point: seatMarkerTarget.point,
+        seatAnchor: seatMarkerTarget.seatAnchor
+      }
+    : resolveAvatarInteractionTarget({
+        ray,
+        seatAnchors: sceneSeatAnchors,
+        teleportFloorY: sceneTeleportFloorY,
+        maxDistance: 18
+      });
   debugState.interactionRay.active = true;
   debugState.interactionRay.mode = renderer.xr.isPresenting ? "xr-right-stick" : "cursor";
   if (target.kind === "none") {
