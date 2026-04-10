@@ -11,6 +11,75 @@
       "position": { "x": 0, "y": 0, "z": 0 }
     }
   ],
+  "anchors": {
+    "teleportFloorY": 0,
+    "seatAnchors": [
+      {
+        "id": "lecturehall-seat-a",
+        "position": { "x": -0.47, "y": 0.00, "z": 1.78 },
+        "yaw": -2.84,
+        "seatHeight": 0,
+        "radius": 0.45,
+        "label": "LectureHall Seat A"
+      },
+      {
+        "id": "lecturehall-seat-b",
+        "position": { "x": -0.45, "y": 0.00, "z": 0.65 },
+        "yaw": 2.26,
+        "seatHeight": 0,
+        "radius": 0.45,
+        "label": "LectureHall Seat B"
+      },
+      {
+        "id": "lecturehall-seat-c",
+        "position": { "x": -4.21, "y": 0.60, "z": 0.13 },
+        "yaw": 2.26,
+        "seatHeight": 0,
+        "radius": 0.45,
+        "label": "LectureHall Seat C"
+      },
+      {
+        "id": "lecturehall-seat-d",
+        "position": { "x": -4.23, "y": 0.60, "z": 1.26 },
+        "yaw": -2.84,
+        "seatHeight": 0,
+        "radius": 0.45,
+        "label": "LectureHall Seat D"
+      },
+      {
+        "id": "lecturehall-seat-e",
+        "position": { "x": -5.43, "y": 0.60, "z": 4.92 },
+        "yaw": 1.55,
+        "seatHeight": 0,
+        "radius": 0.45,
+        "label": "LectureHall Seat E"
+      },
+      {
+        "id": "lecturehall-seat-f",
+        "position": { "x": -5.26, "y": 0.60, "z": 6.03 },
+        "yaw": 1.76,
+        "seatHeight": 0,
+        "radius": 0.45,
+        "label": "LectureHall Seat F"
+      },
+      {
+        "id": "lecturehall-seat-g",
+        "position": { "x": -4.49, "y": 0.60, "z": 5.42 },
+        "yaw": 1.55,
+        "seatHeight": 0,
+        "radius": 0.45,
+        "label": "LectureHall Seat G"
+      },
+      {
+        "id": "lecturehall-seat-h",
+        "position": { "x": 0.05, "y": -0.01, "z": 4.44 },
+        "yaw": 1.76,
+        "seatHeight": 0,
+        "radius": 0.45,
+        "label": "LectureHall Seat H"
+      }
+    ]
+  },
   "bounds": { "width": 40, "height": 12, "depth": 40 },
-  "notes": "TheLectureHall exported from SenseTowerVR via UnityGLTF with lecture-hall material conversion pass"
+  "notes": "TheLectureHall exported from SenseTowerVR via UnityGLTF with lecture-hall material conversion pass; seat anchors derived from LectureHall Chair Place nodes"
 }

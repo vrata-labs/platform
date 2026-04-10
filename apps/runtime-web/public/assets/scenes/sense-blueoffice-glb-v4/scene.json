@@ -11,6 +11,43 @@
       "position": { "x": 0, "y": 0, "z": 0 }
     }
   ],
+  "anchors": {
+    "teleportFloorY": 0,
+    "seatAnchors": [
+      {
+        "id": "blueoffice-seat-a",
+        "position": { "x": 4.65, "y": 0.32, "z": -2.35 },
+        "yaw": 3.14,
+        "seatHeight": 0,
+        "radius": 0.45,
+        "label": "BlueOffice Seat A"
+      },
+      {
+        "id": "blueoffice-seat-b",
+        "position": { "x": 3.30, "y": 0.32, "z": -2.35 },
+        "yaw": 3.14,
+        "seatHeight": 0,
+        "radius": 0.45,
+        "label": "BlueOffice Seat B"
+      },
+      {
+        "id": "blueoffice-seat-c",
+        "position": { "x": 1.91, "y": 0.32, "z": -2.35 },
+        "yaw": 3.14,
+        "seatHeight": 0,
+        "radius": 0.45,
+        "label": "BlueOffice Seat C"
+      },
+      {
+        "id": "blueoffice-seat-d",
+        "position": { "x": -1.65, "y": 0.32, "z": -2.35 },
+        "yaw": 3.14,
+        "seatHeight": 0,
+        "radius": 0.45,
+        "label": "BlueOffice Seat D"
+      }
+    ]
+  },
   "bounds": { "width": 30, "height": 10, "depth": 30 },
-  "notes": "BlueOffice exported via UnityGLTF with targeted third-pass conversion for remaining dark materials"
+  "notes": "BlueOffice exported via UnityGLTF with targeted third-pass conversion for remaining dark materials; seat anchors derived from GLB Seat nodes"
 }

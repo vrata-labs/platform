@@ -11,6 +11,75 @@
       "position": { "x": 0, "y": 0, "z": 0 }
     }
   ],
+  "anchors": {
+    "teleportFloorY": 0,
+    "seatAnchors": [
+      {
+        "id": "showroom-bench-a",
+        "position": { "x": 3.88, "y": 0.53, "z": 2.29 },
+        "yaw": 0,
+        "seatHeight": 0,
+        "radius": 0.5,
+        "label": "Showroom Bench A"
+      },
+      {
+        "id": "showroom-bench-b",
+        "position": { "x": 2.13, "y": 0.53, "z": 2.29 },
+        "yaw": 0,
+        "seatHeight": 0,
+        "radius": 0.5,
+        "label": "Showroom Bench B"
+      },
+      {
+        "id": "showroom-bench-c",
+        "position": { "x": -2.48, "y": 0.53, "z": 2.29 },
+        "yaw": 0,
+        "seatHeight": 0,
+        "radius": 0.5,
+        "label": "Showroom Bench C"
+      },
+      {
+        "id": "showroom-bench-d",
+        "position": { "x": -4.23, "y": 0.53, "z": 2.29 },
+        "yaw": 0,
+        "seatHeight": 0,
+        "radius": 0.5,
+        "label": "Showroom Bench D"
+      },
+      {
+        "id": "showroom-bench-e",
+        "position": { "x": 3.88, "y": 0.53, "z": -4.91 },
+        "yaw": 3.14,
+        "seatHeight": 0,
+        "radius": 0.5,
+        "label": "Showroom Bench E"
+      },
+      {
+        "id": "showroom-bench-f",
+        "position": { "x": 1.65, "y": 0.53, "z": -4.91 },
+        "yaw": 3.14,
+        "seatHeight": 0,
+        "radius": 0.5,
+        "label": "Showroom Bench F"
+      },
+      {
+        "id": "showroom-bench-g",
+        "position": { "x": -1.47, "y": 0.53, "z": -4.91 },
+        "yaw": 3.14,
+        "seatHeight": 0,
+        "radius": 0.5,
+        "label": "Showroom Bench G"
+      },
+      {
+        "id": "showroom-bench-h",
+        "position": { "x": -3.53, "y": 0.53, "z": -4.91 },
+        "yaw": 3.14,
+        "seatHeight": 0,
+        "radius": 0.5,
+        "label": "Showroom Bench H"
+      }
+    ]
+  },
   "bounds": { "width": 40, "height": 12, "depth": 40 },
-  "notes": "showroom exported from SenseTowerVR with targeted foliage alpha and double-sided conversion"
+  "notes": "showroom exported from SenseTowerVR with targeted foliage alpha and double-sided conversion; seat anchors derived from Bench Place nodes"
 }

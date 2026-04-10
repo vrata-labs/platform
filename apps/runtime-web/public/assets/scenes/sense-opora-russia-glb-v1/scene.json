@@ -11,6 +11,75 @@
       "position": { "x": 0, "y": 0, "z": 0 }
     }
   ],
+  "anchors": {
+    "teleportFloorY": 0,
+    "seatAnchors": [
+      {
+        "id": "opora-bar-seat-a",
+        "position": { "x": -14.80, "y": 1.14, "z": -8.38 },
+        "yaw": 0,
+        "seatHeight": 0,
+        "radius": 0.4,
+        "label": "Opora Bar Seat A"
+      },
+      {
+        "id": "opora-bar-seat-b",
+        "position": { "x": -14.80, "y": 1.14, "z": -9.80 },
+        "yaw": 0,
+        "seatHeight": 0,
+        "radius": 0.4,
+        "label": "Opora Bar Seat B"
+      },
+      {
+        "id": "opora-bar-seat-c",
+        "position": { "x": -14.80, "y": 1.14, "z": -11.19 },
+        "yaw": 0,
+        "seatHeight": 0,
+        "radius": 0.4,
+        "label": "Opora Bar Seat C"
+      },
+      {
+        "id": "opora-bar-seat-d",
+        "position": { "x": -14.80, "y": 1.14, "z": -12.61 },
+        "yaw": 0,
+        "seatHeight": 0,
+        "radius": 0.4,
+        "label": "Opora Bar Seat D"
+      },
+      {
+        "id": "opora-bar-seat-e",
+        "position": { "x": -16.84, "y": 1.14, "z": -8.38 },
+        "yaw": 3.14,
+        "seatHeight": 0,
+        "radius": 0.4,
+        "label": "Opora Bar Seat E"
+      },
+      {
+        "id": "opora-bar-seat-f",
+        "position": { "x": -16.84, "y": 1.14, "z": -9.80 },
+        "yaw": 3.14,
+        "seatHeight": 0,
+        "radius": 0.4,
+        "label": "Opora Bar Seat F"
+      },
+      {
+        "id": "opora-bar-seat-g",
+        "position": { "x": -16.84, "y": 1.14, "z": -11.19 },
+        "yaw": 3.14,
+        "seatHeight": 0,
+        "radius": 0.4,
+        "label": "Opora Bar Seat G"
+      },
+      {
+        "id": "opora-bar-seat-h",
+        "position": { "x": -16.84, "y": 1.14, "z": -12.61 },
+        "yaw": 3.14,
+        "seatHeight": 0,
+        "radius": 0.4,
+        "label": "Opora Bar Seat H"
+      }
+    ]
+  },
   "bounds": { "width": 40, "height": 12, "depth": 40 },
-  "notes": "OporaRussia_Mike exported from SenseTowerVR via UnityGLTF batch export"
+  "notes": "OporaRussia_Mike exported from SenseTowerVR via UnityGLTF batch export; seat anchors derived from bar_chair nodes"
 }
