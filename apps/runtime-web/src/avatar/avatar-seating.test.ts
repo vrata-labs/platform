@@ -24,11 +24,12 @@ test("resolveSeatRootPosition applies seat height to anchor base", () => {
 
 test("applySeatAnchorToPlayer fixes player transform to seat anchor", () => {
   const player = new THREE.Group();
+  player.rotation.y = 0.25;
   applySeatAnchorToPlayer(player, anchor);
   assert.equal(player.position.x, 1);
   assert.equal(player.position.y, 0.45);
   assert.equal(player.position.z, -2);
-  assert.equal(player.rotation.y, Math.PI / 2);
+  assert.equal(player.rotation.y, 0.25);
 });
 
 test("resolveLocalSeatId finds participant seat in occupancy map", () => {
