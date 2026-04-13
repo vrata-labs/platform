@@ -231,7 +231,11 @@ const headGeometry = new THREE.SphereGeometry(0.18, 20, 20);
 const keyState: Record<string, boolean> = {};
 let pointerActive = false;
 let pointerMovedSinceDown = false;
+let suppressPointerClick = false;
 let pointerHoveringScene = false;
+let pointerDownAtMs = 0;
+let pointerDownClientX = 0;
+let pointerDownClientY = 0;
 let yaw = 0;
 let pitchAngle = 0;
 let livekitRoom: Room | null = null;
@@ -2377,18 +2381,29 @@ window.addEventListener("keyup", (event) => {
   keyState[event.code] = false;
 });
 
-renderer.domElement.addEventListener("pointerdown", () => {
+renderer.domElement.addEventListener("pointerdown", (event) => {
   pointerActive = true;
   pointerMovedSinceDown = false;
+  suppressPointerClick = false;
+  pointerDownAtMs = performance.now();
+  pointerDownClientX = event.clientX;
+  pointerDownClientY = event.clientY;
 });
 
-window.addEventListener("pointerup", () => {
+window.addEventListener("pointerup", (event) => {
   pointerActive = false;
+  const pointerDistance = Math.hypot(event.clientX - pointerDownClientX, event.clientY - pointerDownClientY);
+  const pointerHeldMs = performance.now() - pointerDownAtMs;
+  suppressPointerClick = pointerMovedSinceDown || pointerDistance > 4 || pointerHeldMs > 250;
   pointerMovedSinceDown = false;
 });
 
 renderer.domElement.addEventListener("click", (event) => {
   if (renderer.xr.isPresenting) {
+    return;
+  }
+  if (suppressPointerClick) {
+    suppressPointerClick = false;
     return;
   }
   updatePointerNdcFromClientPosition(event.clientX, event.clientY);
@@ -2417,7 +2432,9 @@ window.addEventListener("pointermove", (event) => {
     return;
   }
 
-  pointerMovedSinceDown = true;
+  if (event.movementX !== 0 || event.movementY !== 0) {
+    pointerMovedSinceDown = true;
+  }
   yaw -= event.movementX * 0.003;
   pitchAngle = THREE.MathUtils.clamp(pitchAngle - event.movementY * 0.003, -1.1, 1.1);
 });
