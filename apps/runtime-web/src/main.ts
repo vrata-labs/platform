@@ -543,6 +543,7 @@ function releaseCurrentSeatLocally(): void {
 }
 
 function syncSeatStateFromOccupancy(): void {
+  const previousSeatId = currentSeatId;
   roomSeatOccupancy = { ...roomSeatOccupancy };
   if (forcedTestSeatId) {
     roomSeatOccupancy[forcedTestSeatId] = participantId;
@@ -572,7 +573,10 @@ function syncSeatStateFromOccupancy(): void {
     return;
   }
   applySeatAnchorToPlayer(player, seatAnchor);
-  yaw = seatAnchor.yaw;
+  if (previousSeatId !== currentSeatId) {
+    yaw = seatAnchor.yaw;
+  }
+  player.rotation.y = yaw;
   pitch.rotation.x = pitchAngle;
 }
 
@@ -2007,7 +2011,6 @@ function updateMovement(delta: number): void {
     const seatAnchor = sceneSeatAnchorMap.get(currentSeatId);
     if (seatAnchor) {
       applySeatAnchorToPlayer(player, seatAnchor);
-      yaw = seatAnchor.yaw;
       player.rotation.y = yaw;
       pitch.rotation.x = pitchAngle;
       lastAvatarMove = { x: 0, z: 0 };

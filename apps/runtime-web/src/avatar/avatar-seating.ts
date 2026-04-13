@@ -22,7 +22,6 @@ export function resolveSeatRootPosition(anchor: SceneBundleSeatAnchor): { x: num
 export function applySeatAnchorToPlayer(player: THREE.Object3D, anchor: SceneBundleSeatAnchor): void {
   const position = resolveSeatRootPosition(anchor);
   player.position.set(position.x, position.y, position.z);
-  player.rotation.y = anchor.yaw;
 }
 
 export function resolveLocalSeatId(seatOccupancy: Record<string, string>, participantId: string): string | null {

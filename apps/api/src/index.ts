@@ -161,7 +161,7 @@ function defaultManifest(roomId: string, request?: IncomingMessage): RoomManifes
       avatarLipsyncEnabled: false,
       avatarLegIkEnabled: false,
       avatarFallbackCapsulesEnabled: true,
-      avatarSeatsEnabled: false,
+      avatarSeatsEnabled: true,
       avatarCustomizationEnabled: false
     },
     quality: { default: "desktop-standard", mobile: "mobile-lite", xr: "xr" },
@@ -333,7 +333,7 @@ async function buildManifest(roomId: string, request?: IncomingMessage): Promise
       avatarLipsyncEnabled: process.env.FEATURE_AVATAR_LIPSYNC === "true",
       avatarLegIkEnabled: process.env.FEATURE_AVATAR_LEG_IK === "true",
       avatarFallbackCapsulesEnabled: room.avatarConfig?.avatarFallbackCapsulesEnabled ?? true,
-      avatarSeatsEnabled: room.avatarConfig?.avatarSeatsEnabled ?? false,
+      avatarSeatsEnabled: room.avatarConfig?.avatarSeatsEnabled ?? true,
       avatarCustomizationEnabled: process.env.FEATURE_AVATAR_CUSTOMIZATION === "true"
     },
     quality: { default: "desktop-standard", mobile: "mobile-lite", xr: "xr" },
