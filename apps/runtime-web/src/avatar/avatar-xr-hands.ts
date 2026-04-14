@@ -14,10 +14,16 @@ export interface XrInputSourceLike {
   handedness?: string;
   gripSpace?: unknown;
   targetRaySpace?: unknown;
+  targetRayMode?: string;
 }
 
 export interface XrFrameLike {
-  getPose(space: unknown, referenceSpace: unknown): { transform?: { position?: { x?: number; y?: number; z?: number } } } | null | undefined;
+  getPose(space: unknown, referenceSpace: unknown): {
+    transform?: {
+      position?: { x?: number; y?: number; z?: number };
+      orientation?: { x?: number; y?: number; z?: number; w?: number };
+    }
+  } | null | undefined;
 }
 
 export interface XrHandResolutionDebug {
