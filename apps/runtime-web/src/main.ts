@@ -286,7 +286,6 @@ type SeatMarkerView = {
 };
 let seatMarkerViews = new Map<string, SeatMarkerView>();
 const seatMarkerHitMeshes: THREE.Object3D[] = [];
-let forcedXrInteractionActive = false;
 let sceneAnchorsReady = true;
 let roomSeatOccupancy: Record<string, string> = {};
 const pointerNdc = new THREE.Vector2(0, 0);
@@ -420,7 +419,6 @@ function applySnapshotParticipants(people: PresenceState[]): void {
 }
 
 function clearInteractionVisuals(): void {
-  forcedXrInteractionActive = false;
   interactionRayLine.visible = false;
   interactionReticle.visible = false;
   debugState.interactionRay.active = false;
@@ -621,13 +619,11 @@ function forceInteractionRayAtWorldPoint(worldPoint: THREE.Vector3): boolean {
 }
 
 function getInteractionRay(): THREE.Ray | null {
-  if (forcedTestInteractionRay) {
-    return forcedTestInteractionRay.clone();
+  const forcedRay = forcedTestInteractionRay;
+  if (forcedRay) {
+    return forcedRay.clone();
   }
   if (renderer.xr.isPresenting) {
-    if (forcedXrInteractionActive && forcedTestInteractionRay) {
-      return forcedTestInteractionRay.clone();
-    }
     const xrSession = renderer.xr.getFrame()?.session;
     const xrInput = resolveAvatarXrInput(Array.from(xrSession?.inputSources ?? []));
     if (!isXrInteractionRayActive(xrInput.axes.turnY)) {
@@ -1231,7 +1227,6 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
     if (!seatAnchor) {
       return false;
     }
-    forcedXrInteractionActive = true;
     return forceInteractionRayAtWorldPoint(new THREE.Vector3(
       seatAnchor.position.x,
       seatAnchor.position.y + seatAnchor.seatHeight,
