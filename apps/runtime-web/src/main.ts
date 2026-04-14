@@ -186,9 +186,6 @@ for (const controller of xrControllers) {
     if (!renderer.xr.isPresenting) {
       return;
     }
-    if (controller !== getPrimaryRightXrControllerForSession(renderer.xr.getFrame()?.session)) {
-      return;
-    }
     confirmInteractionTarget();
   });
 }
@@ -438,6 +435,9 @@ function clearInteractionVisuals(): void {
   debugState.interactionRay.targetKind = "none";
   debugState.interactionRay.seatId = null;
   debugState.interactionRay.point = null;
+  debugState.interactionRay.origin = null;
+  debugState.interactionRay.direction = null;
+  debugState.interactionRay.source = null;
   updateSeatMarkerVisuals(performance.now() / 1000);
 }
 
@@ -639,10 +639,11 @@ function getInteractionRay(): THREE.Ray | null {
   if (renderer.xr.isPresenting) {
     const xrFrame = renderer.xr.getFrame();
     const xrSession = xrFrame?.session;
+    const referenceSpace = renderer.xr.getReferenceSpace();
     const xrRay = resolveXrInteractionRay({
       inputSources: Array.from(xrSession?.inputSources ?? []),
       xrFrame,
-      referenceSpace: renderer.xr.getReferenceSpace(),
+      referenceSpace,
       playerOffset: {
         x: player.position.x,
         y: player.position.y,
@@ -653,8 +654,34 @@ function getInteractionRay(): THREE.Ray | null {
     if (!xrRay) {
       return null;
     }
-    interactionRayOrigin.set(xrRay.origin.x, xrRay.origin.y, xrRay.origin.z);
+    const xrHands = resolveLocalAvatarHandTargets({
+      presenting: true,
+      inputSources: Array.from(xrSession?.inputSources ?? []),
+      grips: xrControllerGrips,
+      controllers: xrControllers,
+      xrFrame,
+      referenceSpace,
+      playerOffset: {
+        x: player.position.x,
+        y: player.position.y,
+        z: player.position.z
+      },
+      playerYaw: yaw
+    });
+    const rayOrigin = xrHands.rightHand ?? xrRay.origin;
+    interactionRayOrigin.set(rayOrigin.x, rayOrigin.y, rayOrigin.z);
     interactionRayDirection.set(xrRay.direction.x, xrRay.direction.y, xrRay.direction.z).normalize();
+    debugState.interactionRay.origin = {
+      x: Number(interactionRayOrigin.x.toFixed(2)),
+      y: Number(interactionRayOrigin.y.toFixed(2)),
+      z: Number(interactionRayOrigin.z.toFixed(2))
+    };
+    debugState.interactionRay.direction = {
+      x: Number(interactionRayDirection.x.toFixed(2)),
+      y: Number(interactionRayDirection.y.toFixed(2)),
+      z: Number(interactionRayDirection.z.toFixed(2))
+    };
+    debugState.interactionRay.source = xrRay.source;
     return new THREE.Ray(interactionRayOrigin.clone(), interactionRayDirection.clone());
   }
   if (!pointerHoveringScene) {
@@ -1156,7 +1183,10 @@ const debugState = {
     mode: "none" as "none" | "cursor" | "xr-right-stick",
     targetKind: "none" as "none" | "floor" | "seat",
     seatId: null as string | null,
-    point: null as null | { x: number; y: number; z: number }
+    point: null as null | { x: number; y: number; z: number },
+    origin: null as null | { x: number; y: number; z: number },
+    direction: null as null | { x: number; y: number; z: number },
+    source: null as null | { index: number; handedness: string | null }
   },
   remoteAvatarParticipants: [] as Array<{
     participantId: string;
