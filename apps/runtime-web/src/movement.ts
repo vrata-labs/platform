@@ -107,7 +107,7 @@ export function applySnapTurn(state: XrTurnState, turnX: number, delta: number):
 
   const snapAngle = Math.PI / 6;
   return {
-    angle: state.angle + Math.sign(turnX) * snapAngle,
+    angle: state.angle - Math.sign(turnX) * snapAngle,
     cooldownSeconds: 0.28
   };
 }

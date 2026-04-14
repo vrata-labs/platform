@@ -5,6 +5,7 @@ import type { XrFrameLike, XrInputSourceLike } from "./avatar-xr-hands.js";
 export interface XrRayLike {
   origin: { x: number; y: number; z: number };
   direction: { x: number; y: number; z: number };
+  source: { index: number; handedness: string | null };
 }
 
 interface XrPoseWithOrientation {
@@ -72,6 +73,10 @@ export function resolveXrInteractionRay(input: {
 
   return {
     origin: { x: origin.x, y: origin.y, z: origin.z },
-    direction: { x: direction.x, y: direction.y, z: direction.z }
+    direction: { x: direction.x, y: direction.y, z: direction.z },
+    source: {
+      index,
+      handedness: source.handedness ?? null
+    }
   };
 }
