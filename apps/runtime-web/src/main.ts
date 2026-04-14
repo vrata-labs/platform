@@ -168,12 +168,25 @@ function getPrimaryRightXrController(): THREE.Group | null {
     ?? null;
 }
 
+function getPrimaryRightXrControllerForSession(session: XRSession | undefined): THREE.Group | null {
+  const inputSources = Array.from(session?.inputSources ?? []);
+  const rightIndex = inputSources.findIndex((source) => source.handedness === "right");
+  if (rightIndex >= 0 && xrControllers[rightIndex]) {
+    return xrControllers[rightIndex]!;
+  }
+  const trackedIndex = inputSources.findIndex((source) => source.targetRayMode === "tracked-pointer");
+  if (trackedIndex >= 0 && xrControllers[trackedIndex]) {
+    return xrControllers[trackedIndex]!;
+  }
+  return getPrimaryRightXrController();
+}
+
 for (const controller of xrControllers) {
   controller.addEventListener("selectstart", () => {
     if (!renderer.xr.isPresenting) {
       return;
     }
-    if (controller !== getPrimaryRightXrController()) {
+    if (controller !== getPrimaryRightXrControllerForSession(renderer.xr.getFrame()?.session)) {
       return;
     }
     confirmInteractionTarget();
@@ -296,6 +309,9 @@ const interactionRayPoints = [new THREE.Vector3(), new THREE.Vector3()];
 const interactionRaycaster = new THREE.Raycaster();
 const cameraWorldPosition = new THREE.Vector3();
 const forcedInteractionDirection = new THREE.Vector3();
+const xrRayQuaternion = new THREE.Quaternion();
+const xrRayScale = new THREE.Vector3();
+const xrForwardAxis = new THREE.Vector3(0, 0, -1);
 const avatarOutboundPublisher = createAvatarOutboundPublisher();
 let lastAvatarMove = { x: 0, z: 0 };
 let lastAvatarTurnRate = 0;
@@ -629,12 +645,12 @@ function getInteractionRay(): THREE.Ray | null {
     if (!isXrInteractionRayActive(xrInput.axes.turnY)) {
       return null;
     }
-    const rightController = getPrimaryRightXrController();
+    const rightController = getPrimaryRightXrControllerForSession(xrSession);
     if (!rightController) {
       return null;
     }
-    rightController.getWorldPosition(interactionRayOrigin);
-    rightController.getWorldDirection(interactionRayDirection).normalize();
+    rightController.matrixWorld.decompose(interactionRayOrigin, xrRayQuaternion, xrRayScale);
+    interactionRayDirection.copy(xrForwardAxis).applyQuaternion(xrRayQuaternion).normalize();
     return new THREE.Ray(interactionRayOrigin.clone(), interactionRayDirection.clone());
   }
   if (!pointerHoveringScene) {
