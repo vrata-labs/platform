@@ -22,7 +22,7 @@ import { createAvatarOutboundPublisher, type AvatarOutboundPayload } from "./ava
 import { createRemoteAvatarRuntime } from "./avatar/remote-avatar-runtime.js";
 import { createInitialAvatarRuntimeFlags, resolveAvatarCatalogUrl, resolveAvatarRuntimeFlags } from "./avatar/avatar-runtime.js";
 import { resolveAvatarInteractionTarget } from "./avatar/avatar-interaction.js";
-import { isXrInteractionRayActive, resolveXrTurnInput } from "./avatar/avatar-xr-interaction.js";
+import { resolveXrTurnInput } from "./avatar/avatar-xr-interaction.js";
 import { applySeatAnchorToPlayer, createAvatarSeatAnchorMap, resolveLocalSeatId } from "./avatar/avatar-seating.js";
 import { resolveAvatarViewProfile } from "./avatar/avatar-visibility.js";
 import { collectLocalAvatarHandDebug, resolveLocalAvatarHandTargets } from "./avatar/avatar-xr-hands.js";
@@ -641,10 +641,6 @@ function getInteractionRay(): THREE.Ray | null {
   }
   if (renderer.xr.isPresenting) {
     const xrSession = renderer.xr.getFrame()?.session;
-    const xrInput = resolveAvatarXrInput(Array.from(xrSession?.inputSources ?? []));
-    if (!isXrInteractionRayActive(xrInput.axes.turnY)) {
-      return null;
-    }
     const rightController = getPrimaryRightXrControllerForSession(xrSession);
     if (!rightController) {
       return null;

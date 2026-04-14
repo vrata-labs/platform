@@ -215,6 +215,20 @@ async function readSelfAvatarDebug(page: Page): Promise<{
   xrAvatarDebug?: {
     profile?: string | null;
   } | null;
+  interactionRay?: {
+    active?: boolean;
+    mode?: string | null;
+    targetKind?: string | null;
+    seatId?: string | null;
+  };
+  currentSeatId?: string | null;
+  statusLine?: string | null;
+  xrAxes?: {
+    moveX?: number;
+    moveY?: number;
+    turnX?: number;
+    turnY?: number;
+  };
 } | undefined> {
   return page.evaluate(() => (window as Window & {
     __NOAH_DEBUG__?: {
@@ -236,6 +250,20 @@ async function readSelfAvatarDebug(page: Page): Promise<{
       xrAvatarDebug?: {
         profile?: string | null;
       } | null;
+      interactionRay?: {
+        active?: boolean;
+        mode?: string | null;
+        targetKind?: string | null;
+        seatId?: string | null;
+      };
+      currentSeatId?: string | null;
+      statusLine?: string | null;
+      xrAxes?: {
+        moveX?: number;
+        moveY?: number;
+        turnX?: number;
+        turnY?: number;
+      };
     };
   }).__NOAH_DEBUG__);
 }
@@ -605,6 +633,136 @@ test.describe("@staging runtime HUD space selector", () => {
     const rightDz = Math.abs((second?.avatarSnapshot?.rightHand?.z ?? 0) - (first?.avatarSnapshot?.rightHand?.z ?? 0));
 
     expect(Math.max(leftDx, leftDy, leftDz, rightDx, rightDy, rightDz)).toBeLessThan(0.001);
+  });
+
+  test("staging hall web drag-release does not trigger teleport click", async ({ page }) => {
+    const hallRoomId = stagingSceneRooms[0]!.roomId;
+    await page.goto(`/rooms/${hallRoomId}?debug=1`);
+
+    await expect.poll(async () => {
+      const debug = await readSelfAvatarDebug(page);
+      return {
+        connected: Boolean(debug?.statusLine),
+        currentSeatId: debug?.currentSeatId ?? null
+      };
+    }, {
+      timeout: 25000,
+      intervals: [1000, 2000, 3000]
+    }).toEqual({
+      connected: true,
+      currentSeatId: null
+    });
+
+    await page.mouse.move(300, 300);
+    await page.mouse.down();
+    await page.mouse.move(520, 360, { steps: 8 });
+    await page.mouse.up();
+    await page.waitForTimeout(500);
+
+    const debug = await readSelfAvatarDebug(page);
+    expect(debug?.statusLine ?? "").not.toContain("Teleported");
+    expect(debug?.currentSeatId ?? null).toBeNull();
+  });
+
+  test.fixme("staging fresh hall mock VR can target and claim a seat through XR interaction path", async ({ page, request }) => {
+    const targetName = `Staging Hall Mock VR Seat ${Date.now()}`;
+    let roomId: string | null = null;
+    try {
+      const createRoomResponse = await request.post("/api/rooms", {
+        headers: {
+          "x-noah-admin-token": stagingAdminToken
+        },
+        data: {
+          tenantId: "demo-tenant",
+          templateId: "meeting-room-basic",
+          name: targetName,
+          guestAllowed: true,
+          sceneBundleUrl: "/assets/scenes/sense-hall2-v1/scene.json",
+          avatarConfig: {
+            avatarsEnabled: true,
+            avatarCatalogUrl: "/assets/avatars/catalog.v1.json",
+            avatarQualityProfile: "desktop-standard",
+            avatarFallbackCapsulesEnabled: true,
+            avatarSeatsEnabled: true
+          }
+        }
+      });
+      expect(createRoomResponse.ok()).toBeTruthy();
+      const room = await createRoomResponse.json() as { roomId: string };
+      roomId = room.roomId;
+
+      await page.goto(`/rooms/${room.roomId}?debug=1&avatarvrmock=1`);
+
+      await expect.poll(async () => {
+        const debug = await readSelfAvatarDebug(page);
+        return {
+          inputMode: debug?.avatarSnapshot?.inputMode ?? null,
+          visibility: debug?.avatarSnapshot?.visibilityState ?? null
+        };
+      }, {
+        timeout: 25000,
+        intervals: [1000, 2000, 3000]
+      }).toEqual({
+        inputMode: "vr-controller",
+        visibility: "hands-only"
+      });
+
+      await expect.poll(async () => {
+        return page.evaluate(() => (window as Window & {
+          __NOAH_TEST__?: { forceXrInteractionAtSeat?: (seatId: string) => boolean };
+        }).__NOAH_TEST__?.forceXrInteractionAtSeat?.("hall-seat-a") ?? false);
+      }, {
+        timeout: 20000,
+        intervals: [1000, 2000, 3000]
+      }).toBeTruthy();
+
+      await expect.poll(async () => {
+        const debug = await readSelfAvatarDebug(page);
+        return {
+          rayActive: debug?.interactionRay?.active ?? false,
+          rayMode: debug?.interactionRay?.mode ?? null,
+          targetKind: debug?.interactionRay?.targetKind ?? null,
+          seatId: debug?.interactionRay?.seatId ?? null
+        };
+      }, {
+        timeout: 10000,
+        intervals: [500, 1000, 1500]
+      }).toEqual({
+        rayActive: true,
+        rayMode: "xr-right-stick",
+        targetKind: "seat",
+        seatId: "hall-seat-a"
+      });
+
+      await page.evaluate(() => {
+        (window as Window & {
+          __NOAH_TEST__?: { confirmInteraction?: () => void };
+        }).__NOAH_TEST__?.confirmInteraction?.();
+      });
+
+      await expect.poll(async () => {
+        const debug = await readSelfAvatarDebug(page);
+        return {
+          currentSeatId: debug?.currentSeatId ?? null,
+          statusLine: debug?.statusLine ?? null
+        };
+      }, {
+        timeout: 15000,
+        intervals: [1000, 2000, 3000]
+      }).toEqual({
+        currentSeatId: "hall-seat-a",
+        statusLine: "Seated at hall-seat-a"
+      });
+    } finally {
+      if (roomId) {
+        const deleteResponse = await request.delete(`/api/rooms/${roomId}`, {
+          headers: {
+            "x-noah-admin-token": stagingAdminToken
+          }
+        });
+        expect(deleteResponse.ok()).toBeTruthy();
+      }
+    }
   });
 
   test("staging desktop observer keeps remote mock VR hands visible", async ({ browser, request }) => {
