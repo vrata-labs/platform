@@ -273,6 +273,7 @@ let roomStateClient: RoomStateClient | null = null;
 let roomStateConnected = false;
 let roomStateReconnectTimer: number | null = null;
 let seatReclaimRetryTimer: number | null = null;
+let xrSelectPressedLastFrame = false;
 let audioContext: AudioContext | null = null;
 let activeSceneBundleRoot: THREE.Object3D | null = null;
 let avatarSandboxRegistry: ReturnType<typeof createAvatarRegistry> | null = null;
@@ -631,6 +632,17 @@ function forceInteractionRayAtWorldPoint(worldPoint: THREE.Vector3): boolean {
   return true;
 }
 
+function applyRoomTransformToTarget(target: { x: number; y: number; z: number } | null): { x: number; y: number; z: number } | null {
+  if (!target) {
+    return null;
+  }
+  return {
+    x: target.x * Math.cos(yaw) - target.z * Math.sin(yaw) + player.position.x,
+    y: target.y + player.position.y,
+    z: target.x * Math.sin(yaw) + target.z * Math.cos(yaw) + player.position.z
+  };
+}
+
 function getInteractionRay(): THREE.Ray | null {
   const forcedRay = forcedTestInteractionRay;
   if (forcedRay) {
@@ -654,21 +666,14 @@ function getInteractionRay(): THREE.Ray | null {
     if (!xrRay) {
       return null;
     }
-    const xrHands = resolveLocalAvatarHandTargets({
-      presenting: true,
+    const xrHandDebug = collectLocalAvatarHandDebug({
       inputSources: Array.from(xrSession?.inputSources ?? []),
       grips: xrControllerGrips,
       controllers: xrControllers,
       xrFrame,
-      referenceSpace,
-      playerOffset: {
-        x: player.position.x,
-        y: player.position.y,
-        z: player.position.z
-      },
-      playerYaw: yaw
+      referenceSpace
     });
-    const rayOrigin = xrHands.rightHand ?? xrRay.origin;
+    const rayOrigin = applyRoomTransformToTarget(xrHandDebug.rightController) ?? xrRay.origin;
     interactionRayOrigin.set(rayOrigin.x, rayOrigin.y, rayOrigin.z);
     interactionRayDirection.set(xrRay.direction.x, xrRay.direction.y, xrRay.direction.z).normalize();
     debugState.interactionRay.origin = {
@@ -2070,6 +2075,17 @@ function updateMovement(delta: number): void {
     yaw = turn.angle;
     xrTurnCooldown = turn.cooldownSeconds;
     debugState.locomotionMode = currentSeatId ? "vr-seated" : "vr";
+
+    const rightIndex = Array.from(session?.inputSources ?? []).findIndex((source) => source.handedness === "right");
+    const triggerPressed = rightIndex >= 0
+      ? Boolean(session?.inputSources[rightIndex]?.gamepad?.buttons?.[0]?.pressed)
+      : false;
+    if (triggerPressed && !xrSelectPressedLastFrame) {
+      confirmInteractionTarget();
+    }
+    xrSelectPressedLastFrame = triggerPressed;
+  } else {
+    xrSelectPressedLastFrame = false;
   }
 
   if (currentSeatId) {
