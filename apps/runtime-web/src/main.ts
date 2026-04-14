@@ -22,7 +22,7 @@ import { createAvatarOutboundPublisher, type AvatarOutboundPayload } from "./ava
 import { createRemoteAvatarRuntime } from "./avatar/remote-avatar-runtime.js";
 import { createInitialAvatarRuntimeFlags, resolveAvatarCatalogUrl, resolveAvatarRuntimeFlags } from "./avatar/avatar-runtime.js";
 import { resolveAvatarInteractionTarget } from "./avatar/avatar-interaction.js";
-import { resolveXrTurnInput } from "./avatar/avatar-xr-interaction.js";
+import { resolveXrInteractionRay } from "./avatar/avatar-xr-ray.js";
 import { applySeatAnchorToPlayer, createAvatarSeatAnchorMap, resolveLocalSeatId } from "./avatar/avatar-seating.js";
 import { resolveAvatarViewProfile } from "./avatar/avatar-visibility.js";
 import { collectLocalAvatarHandDebug, resolveLocalAvatarHandTargets } from "./avatar/avatar-xr-hands.js";
@@ -309,9 +309,6 @@ const interactionRayPoints = [new THREE.Vector3(), new THREE.Vector3()];
 const interactionRaycaster = new THREE.Raycaster();
 const cameraWorldPosition = new THREE.Vector3();
 const forcedInteractionDirection = new THREE.Vector3();
-const xrControllerLocalOrigin = new THREE.Vector3();
-const xrWorldForward = new THREE.Vector3();
-const worldYawAxis = new THREE.Vector3(0, 1, 0);
 const avatarOutboundPublisher = createAvatarOutboundPublisher();
 let lastAvatarMove = { x: 0, z: 0 };
 let lastAvatarTurnRate = 0;
@@ -634,34 +631,30 @@ function forceInteractionRayAtWorldPoint(worldPoint: THREE.Vector3): boolean {
   return true;
 }
 
-function transformXrLocalPointToWorld(target: THREE.Vector3): THREE.Vector3 {
-  const x = target.x;
-  const z = target.z;
-  target.x = x * Math.cos(yaw) - z * Math.sin(yaw) + player.position.x;
-  target.y = target.y + player.position.y;
-  target.z = x * Math.sin(yaw) + z * Math.cos(yaw) + player.position.z;
-  return target;
-}
-
-function transformXrLocalDirectionToWorld(target: THREE.Vector3): THREE.Vector3 {
-  return target.applyAxisAngle(worldYawAxis, yaw).normalize();
-}
-
 function getInteractionRay(): THREE.Ray | null {
   const forcedRay = forcedTestInteractionRay;
   if (forcedRay) {
     return forcedRay.clone();
   }
   if (renderer.xr.isPresenting) {
-    const xrSession = renderer.xr.getFrame()?.session;
-    const rightController = getPrimaryRightXrControllerForSession(xrSession);
-    if (!rightController) {
+    const xrFrame = renderer.xr.getFrame();
+    const xrSession = xrFrame?.session;
+    const xrRay = resolveXrInteractionRay({
+      inputSources: Array.from(xrSession?.inputSources ?? []),
+      xrFrame,
+      referenceSpace: renderer.xr.getReferenceSpace(),
+      playerOffset: {
+        x: player.position.x,
+        y: player.position.y,
+        z: player.position.z
+      },
+      playerYaw: yaw
+    });
+    if (!xrRay) {
       return null;
     }
-    rightController.getWorldPosition(xrControllerLocalOrigin);
-    interactionRayOrigin.copy(transformXrLocalPointToWorld(xrControllerLocalOrigin.clone()));
-    rightController.getWorldDirection(xrWorldForward);
-    interactionRayDirection.copy(transformXrLocalDirectionToWorld(xrWorldForward.clone()));
+    interactionRayOrigin.set(xrRay.origin.x, xrRay.origin.y, xrRay.origin.z);
+    interactionRayDirection.set(xrRay.direction.x, xrRay.direction.y, xrRay.direction.z).normalize();
     return new THREE.Ray(interactionRayOrigin.clone(), interactionRayDirection.clone());
   }
   if (!pointerHoveringScene) {
@@ -2043,8 +2036,7 @@ function updateMovement(delta: number): void {
 
     const sanitized = sanitizeXrAxes(xrAxes);
     debugState.xrAxes = sanitized;
-    const turnInput = resolveXrTurnInput(sanitized.turnX, sanitized.turnY);
-    const turn = applySnapTurn({ angle: yaw, cooldownSeconds: xrTurnCooldown }, turnInput, delta);
+    const turn = applySnapTurn({ angle: yaw, cooldownSeconds: xrTurnCooldown }, sanitized.turnX, delta);
     yaw = turn.angle;
     xrTurnCooldown = turn.cooldownSeconds;
     debugState.locomotionMode = currentSeatId ? "vr-seated" : "vr";
