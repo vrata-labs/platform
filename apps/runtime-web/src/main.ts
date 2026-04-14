@@ -158,13 +158,21 @@ for (const controller of xrControllers) {
 for (const grip of xrControllerGrips) {
   scene.add(grip);
 }
+
+function getPrimaryRightXrController(): THREE.Group | null {
+  return xrControllers.find((controller) => controller.userData.handedness === "right")
+    ?? xrControllers.find((controller) => controller.userData.handedness === "")
+    ?? xrControllers[1]
+    ?? xrControllers[0]
+    ?? null;
+}
+
 for (const controller of xrControllers) {
   controller.addEventListener("selectstart", () => {
     if (!renderer.xr.isPresenting) {
       return;
     }
-    const handedness = typeof controller.userData.handedness === "string" ? controller.userData.handedness : "";
-    if (handedness && handedness !== "right") {
+    if (controller !== getPrimaryRightXrController()) {
       return;
     }
     confirmInteractionTarget();
@@ -287,8 +295,6 @@ const interactionRayPoints = [new THREE.Vector3(), new THREE.Vector3()];
 const interactionRaycaster = new THREE.Raycaster();
 const cameraWorldPosition = new THREE.Vector3();
 const forcedInteractionDirection = new THREE.Vector3();
-const xrRayQuaternion = new THREE.Quaternion();
-const xrForward = new THREE.Vector3(0, 0, -1);
 const avatarOutboundPublisher = createAvatarOutboundPublisher();
 let lastAvatarMove = { x: 0, z: 0 };
 let lastAvatarTurnRate = 0;
@@ -616,42 +622,18 @@ function getInteractionRay(): THREE.Ray | null {
     return forcedTestInteractionRay.clone();
   }
   if (renderer.xr.isPresenting) {
-    const xrFrame = renderer.xr.getFrame();
-    const xrSession = xrFrame?.session;
+    const xrSession = renderer.xr.getFrame()?.session;
     const xrInput = resolveAvatarXrInput(Array.from(xrSession?.inputSources ?? []));
     if (xrInput.axes.turnY > -0.75) {
       return null;
     }
-    const referenceSpace = renderer.xr.getReferenceSpace();
-    const rightInputSource = Array.from(xrSession?.inputSources ?? []).find((source) => source.handedness === "right")
-      ?? Array.from(xrSession?.inputSources ?? [])[0]
-      ?? null;
-    if (xrFrame && referenceSpace && rightInputSource?.targetRaySpace) {
-      const pose = xrFrame.getPose(rightInputSource.targetRaySpace, referenceSpace);
-      if (pose) {
-        interactionRayOrigin.set(
-          pose.transform.position.x,
-          pose.transform.position.y,
-          pose.transform.position.z
-        );
-        xrRayQuaternion.set(
-          pose.transform.orientation.x,
-          pose.transform.orientation.y,
-          pose.transform.orientation.z,
-          pose.transform.orientation.w
-        );
-        interactionRayDirection.copy(xrForward).applyQuaternion(xrRayQuaternion).normalize();
-        return new THREE.Ray(interactionRayOrigin.clone(), interactionRayDirection.clone());
-      }
+    const rightController = getPrimaryRightXrController();
+    if (!rightController) {
+      return null;
     }
-
-    const rightController = xrControllers.find((controller) => controller.userData.handedness === "right") ?? null;
-    if (rightController) {
-      rightController.getWorldPosition(interactionRayOrigin);
-      rightController.getWorldDirection(interactionRayDirection).normalize();
-      return new THREE.Ray(interactionRayOrigin.clone(), interactionRayDirection.clone());
-    }
-    return null;
+    rightController.getWorldPosition(interactionRayOrigin);
+    rightController.getWorldDirection(interactionRayDirection).normalize();
+    return new THREE.Ray(interactionRayOrigin.clone(), interactionRayDirection.clone());
   }
   if (!pointerHoveringScene) {
     return null;
