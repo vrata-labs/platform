@@ -22,6 +22,7 @@ import { createAvatarOutboundPublisher, type AvatarOutboundPayload } from "./ava
 import { createRemoteAvatarRuntime } from "./avatar/remote-avatar-runtime.js";
 import { createInitialAvatarRuntimeFlags, resolveAvatarCatalogUrl, resolveAvatarRuntimeFlags } from "./avatar/avatar-runtime.js";
 import { resolveAvatarInteractionTarget } from "./avatar/avatar-interaction.js";
+import { isXrInteractionRayActive, resolveXrTurnInput } from "./avatar/avatar-xr-interaction.js";
 import { applySeatAnchorToPlayer, createAvatarSeatAnchorMap, resolveLocalSeatId } from "./avatar/avatar-seating.js";
 import { resolveAvatarViewProfile } from "./avatar/avatar-visibility.js";
 import { collectLocalAvatarHandDebug, resolveLocalAvatarHandTargets } from "./avatar/avatar-xr-hands.js";
@@ -285,6 +286,7 @@ type SeatMarkerView = {
 };
 let seatMarkerViews = new Map<string, SeatMarkerView>();
 const seatMarkerHitMeshes: THREE.Object3D[] = [];
+let forcedXrInteractionActive = false;
 let sceneAnchorsReady = true;
 let roomSeatOccupancy: Record<string, string> = {};
 const pointerNdc = new THREE.Vector2(0, 0);
@@ -418,6 +420,7 @@ function applySnapshotParticipants(people: PresenceState[]): void {
 }
 
 function clearInteractionVisuals(): void {
+  forcedXrInteractionActive = false;
   interactionRayLine.visible = false;
   interactionReticle.visible = false;
   debugState.interactionRay.active = false;
@@ -622,9 +625,12 @@ function getInteractionRay(): THREE.Ray | null {
     return forcedTestInteractionRay.clone();
   }
   if (renderer.xr.isPresenting) {
+    if (forcedXrInteractionActive && forcedTestInteractionRay) {
+      return forcedTestInteractionRay.clone();
+    }
     const xrSession = renderer.xr.getFrame()?.session;
     const xrInput = resolveAvatarXrInput(Array.from(xrSession?.inputSources ?? []));
-    if (xrInput.axes.turnY > -0.75) {
+    if (!isXrInteractionRayActive(xrInput.axes.turnY)) {
       return null;
     }
     const rightController = getPrimaryRightXrController();
@@ -1169,6 +1175,7 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
     claimSeatById: (seatId: string) => boolean;
     requestSeatClaimById: (seatId: string) => boolean;
     teleportToFloor: (x: number, z: number) => boolean;
+    forceXrInteractionAtSeat: (seatId: string) => boolean;
   };
 }).__NOAH_TEST__ = {
   forceRoomStateReconnect: () => {
@@ -1218,6 +1225,18 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
     sendSeatClaim(roomStateClient, seatAnchor.id);
     setStatus(`Claiming seat ${seatAnchor.label ?? seatAnchor.id}`);
     return true;
+  },
+  forceXrInteractionAtSeat: (seatId: string) => {
+    const seatAnchor = sceneSeatAnchorMap.get(seatId);
+    if (!seatAnchor) {
+      return false;
+    }
+    forcedXrInteractionActive = true;
+    return forceInteractionRayAtWorldPoint(new THREE.Vector3(
+      seatAnchor.position.x,
+      seatAnchor.position.y + seatAnchor.seatHeight,
+      seatAnchor.position.z
+    ));
   },
   teleportToFloor: (x: number, z: number) => {
     forcedTestSeatId = null;
@@ -2042,7 +2061,7 @@ function updateMovement(delta: number): void {
       z: sanitized.moveY
     };
 
-    const turnInput = Math.abs(sanitized.turnX) >= Math.abs(sanitized.turnY) ? sanitized.turnX : 0;
+    const turnInput = resolveXrTurnInput(sanitized.turnX, sanitized.turnY);
     const turn = applySnapTurn({ angle: yaw, cooldownSeconds: xrTurnCooldown }, turnInput, delta);
     yaw = turn.angle;
     xrTurnCooldown = turn.cooldownSeconds;
