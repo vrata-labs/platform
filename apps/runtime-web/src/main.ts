@@ -309,9 +309,9 @@ const interactionRayPoints = [new THREE.Vector3(), new THREE.Vector3()];
 const interactionRaycaster = new THREE.Raycaster();
 const cameraWorldPosition = new THREE.Vector3();
 const forcedInteractionDirection = new THREE.Vector3();
-const xrRayQuaternion = new THREE.Quaternion();
-const xrRayScale = new THREE.Vector3();
-const xrForwardAxis = new THREE.Vector3(0, 0, -1);
+const xrControllerLocalOrigin = new THREE.Vector3();
+const xrWorldForward = new THREE.Vector3();
+const worldYawAxis = new THREE.Vector3(0, 1, 0);
 const avatarOutboundPublisher = createAvatarOutboundPublisher();
 let lastAvatarMove = { x: 0, z: 0 };
 let lastAvatarTurnRate = 0;
@@ -634,6 +634,19 @@ function forceInteractionRayAtWorldPoint(worldPoint: THREE.Vector3): boolean {
   return true;
 }
 
+function transformXrLocalPointToWorld(target: THREE.Vector3): THREE.Vector3 {
+  const x = target.x;
+  const z = target.z;
+  target.x = x * Math.cos(yaw) - z * Math.sin(yaw) + player.position.x;
+  target.y = target.y + player.position.y;
+  target.z = x * Math.sin(yaw) + z * Math.cos(yaw) + player.position.z;
+  return target;
+}
+
+function transformXrLocalDirectionToWorld(target: THREE.Vector3): THREE.Vector3 {
+  return target.applyAxisAngle(worldYawAxis, yaw).normalize();
+}
+
 function getInteractionRay(): THREE.Ray | null {
   const forcedRay = forcedTestInteractionRay;
   if (forcedRay) {
@@ -645,8 +658,10 @@ function getInteractionRay(): THREE.Ray | null {
     if (!rightController) {
       return null;
     }
-    rightController.matrixWorld.decompose(interactionRayOrigin, xrRayQuaternion, xrRayScale);
-    interactionRayDirection.copy(xrForwardAxis).applyQuaternion(xrRayQuaternion).normalize();
+    rightController.getWorldPosition(xrControllerLocalOrigin);
+    interactionRayOrigin.copy(transformXrLocalPointToWorld(xrControllerLocalOrigin.clone()));
+    rightController.getWorldDirection(xrWorldForward);
+    interactionRayDirection.copy(transformXrLocalDirectionToWorld(xrWorldForward.clone()));
     return new THREE.Ray(interactionRayOrigin.clone(), interactionRayDirection.clone());
   }
   if (!pointerHoveringScene) {
@@ -2019,6 +2034,22 @@ async function bootLocalAvatarPresetSession(input: {
 }
 
 function updateMovement(delta: number): void {
+  if (renderer.xr.isPresenting) {
+    const xrFrame = renderer.xr.getFrame();
+    const session = xrFrame?.session;
+    const xrInput = resolveAvatarXrInput(Array.from(session?.inputSources ?? []));
+    const xrAxes = xrInput.axes;
+    lastAvatarXrInputProfile = xrInput.profile;
+
+    const sanitized = sanitizeXrAxes(xrAxes);
+    debugState.xrAxes = sanitized;
+    const turnInput = resolveXrTurnInput(sanitized.turnX, sanitized.turnY);
+    const turn = applySnapTurn({ angle: yaw, cooldownSeconds: xrTurnCooldown }, turnInput, delta);
+    yaw = turn.angle;
+    xrTurnCooldown = turn.cooldownSeconds;
+    debugState.locomotionMode = currentSeatId ? "vr-seated" : "vr";
+  }
+
   if (currentSeatId) {
     const seatAnchor = sceneSeatAnchorMap.get(currentSeatId);
     if (seatAnchor) {
@@ -2059,20 +2090,11 @@ function updateMovement(delta: number): void {
     const session = xrFrame?.session;
     const xrInput = resolveAvatarXrInput(Array.from(session?.inputSources ?? []));
     const xrAxes = xrInput.axes;
-    lastAvatarXrInputProfile = xrInput.profile;
-
     const sanitized = sanitizeXrAxes(xrAxes);
-    debugState.xrAxes = sanitized;
     direction = {
       x: sanitized.moveX,
       z: sanitized.moveY
     };
-
-    const turnInput = resolveXrTurnInput(sanitized.turnX, sanitized.turnY);
-    const turn = applySnapTurn({ angle: yaw, cooldownSeconds: xrTurnCooldown }, turnInput, delta);
-    yaw = turn.angle;
-    xrTurnCooldown = turn.cooldownSeconds;
-    debugState.locomotionMode = "vr";
   } else {
     lastAvatarXrInputProfile = null;
     debugState.xrAvatarDebug = null;
