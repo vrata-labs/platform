@@ -309,6 +309,7 @@ const interactionRayPoints = [new THREE.Vector3(), new THREE.Vector3()];
 const interactionRaycaster = new THREE.Raycaster();
 const cameraWorldPosition = new THREE.Vector3();
 const forcedInteractionDirection = new THREE.Vector3();
+const xrControllerAnchorPosition = new THREE.Vector3();
 const avatarOutboundPublisher = createAvatarOutboundPublisher();
 let lastAvatarMove = { x: 0, z: 0 };
 let lastAvatarTurnRate = 0;
@@ -683,7 +684,35 @@ function getInteractionRay(): THREE.Ray | null {
       xrFrame,
       referenceSpace
     });
-    const rayOrigin = applyRoomTransformToTarget(xrHandDebug.rightResolved ?? xrHandDebug.rightGrip ?? xrHandDebug.rightController) ?? xrRay.origin;
+    const xrHands = resolveLocalAvatarHandTargets({
+      presenting: true,
+      inputSources: Array.from(xrSession?.inputSources ?? []),
+      grips: xrControllerGrips,
+      controllers: xrControllers,
+      xrFrame,
+      referenceSpace,
+      playerOffset: {
+        x: player.position.x,
+        y: player.position.y,
+        z: player.position.z
+      },
+      playerYaw: yaw
+    });
+    const rawController = xrControllers[xrRay.source.index] ?? null;
+    const rawControllerOrigin = rawController
+      ? applyRoomTransformToTarget((() => {
+          rawController.getWorldPosition(xrControllerAnchorPosition);
+          return {
+            x: xrControllerAnchorPosition.x,
+            y: xrControllerAnchorPosition.y,
+            z: xrControllerAnchorPosition.z
+          };
+        })())
+      : null;
+    const rayOrigin = rawControllerOrigin
+      ?? xrHands.rightHand
+      ?? applyRoomTransformToTarget(xrHandDebug.rightResolved ?? xrHandDebug.rightGrip ?? xrHandDebug.rightController)
+      ?? xrRay.origin;
     interactionRayOrigin.set(rayOrigin.x, rayOrigin.y, rayOrigin.z);
     interactionRayDirection.set(xrRay.direction.x, xrRay.direction.y, xrRay.direction.z).normalize();
     debugState.interactionRay.origin = {
