@@ -96,6 +96,7 @@ const speakerSelect = mustElement<HTMLSelectElement>("#speaker-select");
 const micLevelFill = mustElement<HTMLDivElement>("#mic-level-fill");
 const speakerLevelFill = mustElement<HTMLDivElement>("#speaker-level-fill");
 const audioDeviceStatusEl = mustElement<HTMLDivElement>("#audio-device-status");
+const xrDebugPanelEl = mustElement<HTMLDivElement>("#xr-debug-panel");
 const debugPanel = mustElement<HTMLPreElement>("#debug-panel");
 const avatarSandboxPanel = mustElement<HTMLDivElement>("#avatar-sandbox-panel");
 const avatarPresetSelect = mustElement<HTMLSelectElement>("#avatar-preset-select");
@@ -104,6 +105,7 @@ const avatarPresetLabel = mustElement<HTMLLabelElement>('label[for="avatar-prese
 
 if (debugEnabled) {
   debugPanel.hidden = false;
+  xrDebugPanelEl.hidden = false;
 }
 
 avatarSandboxPanel.hidden = !avatarSandboxEnabled;
@@ -643,6 +645,10 @@ function applyRoomTransformToTarget(target: { x: number; y: number; z: number } 
   };
 }
 
+function isXrRayVisibleFromStick(turnY: number): boolean {
+  return turnY <= -0.75;
+}
+
 function getInteractionRay(): THREE.Ray | null {
   const forcedRay = forcedTestInteractionRay;
   if (forcedRay) {
@@ -652,6 +658,10 @@ function getInteractionRay(): THREE.Ray | null {
     const xrFrame = renderer.xr.getFrame();
     const xrSession = xrFrame?.session;
     const referenceSpace = renderer.xr.getReferenceSpace();
+    const xrInput = resolveAvatarXrInput(Array.from(xrSession?.inputSources ?? []));
+    if (!isXrRayVisibleFromStick(xrInput.axes.turnY)) {
+      return null;
+    }
     const xrRay = resolveXrInteractionRay({
       inputSources: Array.from(xrSession?.inputSources ?? []),
       xrFrame,
@@ -673,7 +683,7 @@ function getInteractionRay(): THREE.Ray | null {
       xrFrame,
       referenceSpace
     });
-    const rayOrigin = applyRoomTransformToTarget(xrHandDebug.rightController) ?? xrRay.origin;
+    const rayOrigin = applyRoomTransformToTarget(xrHandDebug.rightResolved ?? xrHandDebug.rightGrip ?? xrHandDebug.rightController) ?? xrRay.origin;
     interactionRayOrigin.set(rayOrigin.x, rayOrigin.y, rayOrigin.z);
     interactionRayDirection.set(xrRay.direction.x, xrRay.direction.y, xrRay.direction.z).normalize();
     debugState.interactionRay.origin = {
@@ -1581,6 +1591,20 @@ function renderDebugPanel(): void {
   }
 
   debugPanel.textContent = JSON.stringify(debugState, null, 2);
+  const xrAvatarDebug = debugState.xrAvatarDebug;
+  const ray = debugState.interactionRay;
+  const axes = debugState.xrAxes;
+  xrDebugPanelEl.textContent = [
+    `XR profile: ${xrAvatarDebug?.profile ?? "none"}`,
+    `XR axes: turn=(${axes.turnX?.toFixed?.(2) ?? axes.turnX ?? 0}, ${axes.turnY?.toFixed?.(2) ?? axes.turnY ?? 0}) move=(${axes.moveX?.toFixed?.(2) ?? axes.moveX ?? 0}, ${axes.moveY?.toFixed?.(2) ?? axes.moveY ?? 0})`,
+    `Ray active: ${ray.active} mode=${ray.mode} target=${ray.targetKind} seat=${ray.seatId ?? "-"}`,
+    `Ray source: ${ray.source ? `${ray.source.handedness ?? "?"}#${ray.source.index}` : "-"}`,
+    `Ray origin: ${ray.origin ? `${ray.origin.x}, ${ray.origin.y}, ${ray.origin.z}` : "-"}`,
+    `Ray direction: ${ray.direction ? `${ray.direction.x}, ${ray.direction.y}, ${ray.direction.z}` : "-"}`,
+    `Right controller: ${xrAvatarDebug?.rightController ? `${xrAvatarDebug.rightController.x}, ${xrAvatarDebug.rightController.y}, ${xrAvatarDebug.rightController.z}` : "-"}`,
+    `Right resolved: ${xrAvatarDebug?.rightResolved ? `${xrAvatarDebug.rightResolved.x}, ${xrAvatarDebug.rightResolved.y}, ${xrAvatarDebug.rightResolved.z}` : "-"}`,
+    `Status: ${debugState.statusLine ?? "-"}`
+  ].join("\n");
 }
 
 function deriveBodyTransform(root: { x: number; z: number }, head: { x: number; z: number }): { x: number; z: number } {
