@@ -15,6 +15,13 @@ interface XrPoseWithOrientation {
   };
 }
 
+function applyPlayerOffset(position: THREE.Vector3, offset: { x: number; y: number; z: number }): THREE.Vector3 {
+  position.x += offset.x;
+  position.y += offset.y;
+  position.z += offset.z;
+  return position;
+}
+
 function applyPlayerTransform(position: THREE.Vector3, yaw: number, offset: { x: number; y: number; z: number }): THREE.Vector3 {
   const x = position.x;
   const z = position.z;
@@ -65,7 +72,7 @@ export function resolveXrInteractionRay(input: {
     return null;
   }
 
-  const origin = applyPlayerTransform(new THREE.Vector3(position.x, position.y, position.z), input.playerYaw, input.playerOffset);
+  const origin = applyPlayerOffset(new THREE.Vector3(position.x, position.y, position.z), input.playerOffset);
   const direction = applyYawToDirection(
     new THREE.Vector3(0, 0, -1).applyQuaternion(new THREE.Quaternion(orientation.x, orientation.y, orientation.z, orientation.w)),
     input.playerYaw
