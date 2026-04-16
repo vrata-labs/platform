@@ -276,6 +276,8 @@ let roomStateConnected = false;
 let roomStateReconnectTimer: number | null = null;
 let seatReclaimRetryTimer: number | null = null;
 let xrSelectPressedLastFrame = false;
+let xrRayVisibleLatched = false;
+let lastXrTelemetryReportAt = 0;
 let audioContext: AudioContext | null = null;
 let activeSceneBundleRoot: THREE.Object3D | null = null;
 let avatarSandboxRegistry: ReturnType<typeof createAvatarRegistry> | null = null;
@@ -647,6 +649,9 @@ function applyRoomTransformToTarget(target: { x: number; y: number; z: number } 
 }
 
 function isXrRayVisibleFromStick(turnY: number): boolean {
+  if (xrRayVisibleLatched) {
+    return turnY <= -0.45;
+  }
   return turnY <= -0.75;
 }
 
@@ -709,9 +714,10 @@ function getInteractionRay(): THREE.Ray | null {
           };
         })())
       : null;
-    const rayOrigin = rawControllerOrigin
+    const rayOrigin = applyRoomTransformToTarget(xrHandDebug.rightGrip)
+      ?? rawControllerOrigin
       ?? xrHands.rightHand
-      ?? applyRoomTransformToTarget(xrHandDebug.rightResolved ?? xrHandDebug.rightGrip ?? xrHandDebug.rightController)
+      ?? applyRoomTransformToTarget(xrHandDebug.rightResolved ?? xrHandDebug.rightController)
       ?? xrRay.origin;
     interactionRayOrigin.set(rayOrigin.x, rayOrigin.y, rayOrigin.z);
     interactionRayDirection.set(xrRay.direction.x, xrRay.direction.y, xrRay.direction.z).normalize();
@@ -1717,6 +1723,38 @@ async function reportDiagnostics(note?: string): Promise<void> {
   });
 }
 
+function reportXrTelemetry(): void {
+  if (!debugEnabled || !renderer.xr.isPresenting) {
+    return;
+  }
+  const now = performance.now();
+  if (now - lastXrTelemetryReportAt < 750) {
+    return;
+  }
+  lastXrTelemetryReportAt = now;
+  const payload = {
+    participantId,
+    roomId,
+    updatedAt: new Date().toISOString(),
+    statusLine: debugState.statusLine ?? null,
+    currentSeatId: debugState.currentSeatId ?? null,
+    xrAxes: debugState.xrAxes,
+    interactionRay: debugState.interactionRay,
+    xrAvatarDebug: debugState.xrAvatarDebug ? {
+      profile: debugState.xrAvatarDebug.profile ?? null,
+      rightController: debugState.xrAvatarDebug.rightController ?? null,
+      rightResolved: debugState.xrAvatarDebug.rightResolved ?? null
+    } : null
+  };
+  void fetch(new URL(`/api/rooms/${roomId}/xr-telemetry/${participantId}`, apiBaseUrl), {
+    method: "PUT",
+    headers: {
+      "content-type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  }).catch(() => undefined);
+}
+
 function attachVideoTrack(track: Track): void {
   const element = track.attach() as HTMLVideoElement;
   element.autoplay = true;
@@ -2124,6 +2162,7 @@ function updateMovement(delta: number): void {
 
     const sanitized = sanitizeXrAxes(xrAxes);
     debugState.xrAxes = sanitized;
+    xrRayVisibleLatched = isXrRayVisibleFromStick(sanitized.turnY);
     const turn = applySnapTurn({ angle: yaw, cooldownSeconds: xrTurnCooldown }, sanitized.turnX, delta);
     yaw = turn.angle;
     xrTurnCooldown = turn.cooldownSeconds;
@@ -2139,6 +2178,7 @@ function updateMovement(delta: number): void {
     xrSelectPressedLastFrame = triggerPressed;
   } else {
     xrSelectPressedLastFrame = false;
+    xrRayVisibleLatched = false;
   }
 
   if (currentSeatId) {
@@ -2631,6 +2671,7 @@ renderer.setAnimationLoop(() => {
   remoteAvatarRuntime.update(delta, debugState);
   updateInteractionRayState();
   updateSeatMarkerVisuals(nowMs / 1000);
+  reportXrTelemetry();
   debugState.avatarPoseTransport.adaptivePlaybackDelayMs = debugState.remoteAvatarParticipants.length > 0
     ? Math.max(...debugState.remoteAvatarParticipants.map((participant) => participant.playbackDelayMs))
     : 100;

@@ -105,6 +105,34 @@ interface RuntimeSpaceRecord {
   roomLink: string;
 }
 
+interface XrTelemetryRecord {
+  participantId: string;
+  roomId: string;
+  updatedAt: string;
+  statusLine?: string | null;
+  currentSeatId?: string | null;
+  xrAxes?: {
+    moveX?: number;
+    moveY?: number;
+    turnX?: number;
+    turnY?: number;
+  };
+  interactionRay?: {
+    active?: boolean;
+    mode?: string | null;
+    targetKind?: string | null;
+    seatId?: string | null;
+    origin?: { x?: number; y?: number; z?: number } | null;
+    direction?: { x?: number; y?: number; z?: number } | null;
+    source?: { index?: number; handedness?: string | null } | null;
+  };
+  xrAvatarDebug?: {
+    profile?: string | null;
+    rightController?: { x?: number; y?: number; z?: number } | null;
+    rightResolved?: { x?: number; y?: number; z?: number } | null;
+  };
+}
+
 const apiPort = Number.parseInt(process.env.API_PORT ?? "4000", 10);
 const runtimeStaticRoot = normalize(join(fileURLToPath(new URL("../../runtime-web/dist", import.meta.url))));
 const runtimePublicRoot = normalize(join(fileURLToPath(new URL("../../runtime-web/public", import.meta.url))));
@@ -117,6 +145,7 @@ const storagePromise = createStorage();
 const requiredProductionApiEnvVars = ["CONTROL_PLANE_ADMIN_TOKEN", "ROOM_STATE_PUBLIC_URL", "RUNTIME_BASE_URL"] as const;
 
 const presenceByRoom = new Map<string, Map<string, PresenceRecord>>();
+const xrTelemetryByRoom = new Map<string, Map<string, XrTelemetryRecord>>();
 
 export function getMissingRequiredApiEnvVars(env: NodeJS.ProcessEnv = process.env): string[] {
   return requiredProductionApiEnvVars.filter((name) => !env[name] || env[name]?.trim().length === 0);
@@ -262,6 +291,21 @@ function cleanupPresence(roomId: string): void {
     if (now - Date.parse(state.updatedAt) > presenceTtlMs) roomPresence.delete(participantId);
   }
   if (roomPresence.size === 0) presenceByRoom.delete(roomId);
+}
+
+function upsertXrTelemetry(roomId: string, participantId: string, payload: XrTelemetryRecord): void {
+  const roomTelemetry = xrTelemetryByRoom.get(roomId) ?? new Map<string, XrTelemetryRecord>();
+  roomTelemetry.set(participantId, {
+    ...payload,
+    roomId,
+    participantId,
+    updatedAt: payload.updatedAt || new Date().toISOString()
+  });
+  xrTelemetryByRoom.set(roomId, roomTelemetry);
+}
+
+function listXrTelemetry(roomId: string): XrTelemetryRecord[] {
+  return Array.from(xrTelemetryByRoom.get(roomId)?.values() ?? []).sort((left, right) => left.participantId.localeCompare(right.participantId));
 }
 
 function getPresence(roomId: string): PresenceRecord[] {
@@ -909,6 +953,22 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     if (!payload) return json(response, 400, { error: "diagnostics_payload_required" });
     await storage.addDiagnostic(decodeURIComponent(diagnosticsMatch[1]), payload);
     json(response, 201, { ok: true });
+    return;
+  }
+
+  const xrTelemetryListMatch = url.pathname.match(/^\/api\/rooms\/([^/]+)\/xr-telemetry$/);
+  if (method === "GET" && xrTelemetryListMatch) {
+    if (!isAuthorizedControlPlaneRequest(request)) return json(response, 403, { error: "forbidden" });
+    json(response, 200, { items: listXrTelemetry(decodeURIComponent(xrTelemetryListMatch[1])) });
+    return;
+  }
+
+  const xrTelemetryItemMatch = url.pathname.match(/^\/api\/rooms\/([^/]+)\/xr-telemetry\/([^/]+)$/);
+  if (method === "PUT" && xrTelemetryItemMatch) {
+    const payload = await parseBody<XrTelemetryRecord>(request);
+    if (!payload) return json(response, 400, { error: "xr_telemetry_payload_required" });
+    upsertXrTelemetry(decodeURIComponent(xrTelemetryItemMatch[1]), decodeURIComponent(xrTelemetryItemMatch[2]), payload);
+    json(response, 200, { ok: true });
     return;
   }
 

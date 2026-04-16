@@ -227,6 +227,61 @@ test("room manifest upgrades insecure configured room-state url behind https pro
   }
 });
 
+test("xr telemetry endpoint stores latest runtime snapshot for admin inspection", async () => {
+  process.env.NOAH_DISABLE_AUTOSTART = "1";
+  process.env.API_PORT = "4024";
+  process.env.CONTROL_PLANE_ADMIN_TOKEN = "test-admin-token";
+  const module = await import("./index.js");
+  const server = module.startApiServer(4024);
+
+  try {
+    const putResponse = await fetch("http://127.0.0.1:4024/api/rooms/demo-room/xr-telemetry/p-1", {
+      method: "PUT",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        participantId: "ignored",
+        roomId: "ignored",
+        updatedAt: "2026-04-16T10:00:00.000Z",
+        statusLine: "Seated at hall-seat-a",
+        currentSeatId: "hall-seat-a",
+        xrAxes: { turnX: 0.4, turnY: -1 },
+        interactionRay: {
+          active: true,
+          mode: "xr-right-stick",
+          source: { index: 1, handedness: "right" }
+        }
+      })
+    });
+    assert.equal(putResponse.ok, true);
+
+    const getResponse = await fetch("http://127.0.0.1:4024/api/rooms/demo-room/xr-telemetry", {
+      headers: {
+        "x-noah-admin-token": "test-admin-token"
+      }
+    });
+    assert.equal(getResponse.ok, true);
+    const payload = await getResponse.json() as {
+      items?: Array<{
+        participantId?: string;
+        roomId?: string;
+        currentSeatId?: string | null;
+        interactionRay?: { source?: { index?: number; handedness?: string | null } };
+      }>;
+    };
+    assert.equal(payload.items?.[0]?.participantId, "p-1");
+    assert.equal(payload.items?.[0]?.roomId, "demo-room");
+    assert.equal(payload.items?.[0]?.currentSeatId, "hall-seat-a");
+    assert.equal(payload.items?.[0]?.interactionRay?.source?.index, 1);
+    assert.equal(payload.items?.[0]?.interactionRay?.source?.handedness, "right");
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    delete process.env.NOAH_DISABLE_AUTOSTART;
+    delete process.env.CONTROL_PLANE_ADMIN_TOKEN;
+  }
+});
+
 test("media token derives secure livekit url behind https proxy", async () => {
   process.env.NOAH_DISABLE_AUTOSTART = "1";
   process.env.API_PORT = "4022";
