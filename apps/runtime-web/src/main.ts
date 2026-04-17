@@ -1724,7 +1724,7 @@ async function reportDiagnostics(note?: string): Promise<void> {
 }
 
 function reportXrTelemetry(): void {
-  if (!debugEnabled || !renderer.xr.isPresenting) {
+  if (!renderer.xr.isPresenting) {
     return;
   }
   const now = performance.now();
