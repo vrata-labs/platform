@@ -2921,6 +2921,9 @@ async function main(): Promise<void> {
     pointerHoveringScene = false;
     pitchAngle = 0;
     pitch.rotation.x = 0;
+    if (!currentSeatId) {
+      player.position.y = sceneTeleportFloorY;
+    }
     clearInteractionVisuals();
   });
   renderer.xr.addEventListener("sessionend", () => {
