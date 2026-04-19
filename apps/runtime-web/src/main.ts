@@ -278,6 +278,7 @@ let seatReclaimRetryTimer: number | null = null;
 let xrSelectPressedLastFrame = false;
 let xrRayVisibleLatched = false;
 let lastXrTelemetryReportAt = 0;
+let lastXrTelemetryKind: string | null = null;
 let audioContext: AudioContext | null = null;
 let activeSceneBundleRoot: THREE.Object3D | null = null;
 let avatarSandboxRegistry: ReturnType<typeof createAvatarRegistry> | null = null;
@@ -435,6 +436,9 @@ function applySnapshotParticipants(people: PresenceState[]): void {
 }
 
 function clearInteractionVisuals(): void {
+  if (debugState.interactionRay.active) {
+    markXrTelemetry("ray_off");
+  }
   interactionRayLine.visible = false;
   interactionReticle.visible = false;
   debugState.interactionRay.active = false;
@@ -820,6 +824,7 @@ function updateInteractionRayState():
     y: Number(target.point.y.toFixed(2)),
     z: Number(target.point.z.toFixed(2))
   };
+  markXrTelemetry("ray_on");
   return target.kind === "seat"
     ? { kind: "seat", point: target.point, seatAnchor: target.seatAnchor }
     : { kind: "floor", point: target.point };
@@ -848,12 +853,14 @@ function performInteractionTarget(target:
     }
     pendingSeatId = seatAnchor.id;
     debugState.pendingSeatId = pendingSeatId;
+    markXrTelemetry("seat_claim");
     sendSeatClaim(roomStateClient, seatAnchor.id);
     setStatus(`Claiming seat ${seatAnchor.label ?? seatAnchor.id}`);
     return;
   }
   const floorPoint = target.point;
   if (currentSeatId && roomStateClient && roomStateConnected) {
+    markXrTelemetry("seat_release");
     sendSeatRelease(roomStateClient, currentSeatId);
     releaseCurrentSeatLocally();
   }
@@ -1642,6 +1649,11 @@ function renderDebugPanel(): void {
   ].join("\n");
 }
 
+function markXrTelemetry(kind: string): void {
+  lastXrTelemetryKind = kind;
+  lastXrTelemetryReportAt = 0;
+}
+
 function deriveBodyTransform(root: { x: number; z: number }, head: { x: number; z: number }): { x: number; z: number } {
   const deltaX = head.x - root.x;
   const deltaZ = head.z - root.z;
@@ -1728,7 +1740,7 @@ function reportXrTelemetry(): void {
     return;
   }
   const now = performance.now();
-  if (now - lastXrTelemetryReportAt < 750) {
+  if (now - lastXrTelemetryReportAt < 300) {
     return;
   }
   lastXrTelemetryReportAt = now;
@@ -1736,6 +1748,7 @@ function reportXrTelemetry(): void {
     participantId,
     roomId,
     updatedAt: new Date().toISOString(),
+    kind: lastXrTelemetryKind,
     statusLine: debugState.statusLine ?? null,
     currentSeatId: debugState.currentSeatId ?? null,
     xrAxes: debugState.xrAxes,
@@ -1753,6 +1766,7 @@ function reportXrTelemetry(): void {
     },
     body: JSON.stringify(payload)
   }).catch(() => undefined);
+  lastXrTelemetryKind = null;
 }
 
 function attachVideoTrack(track: Track): void {
@@ -2163,9 +2177,13 @@ function updateMovement(delta: number): void {
     const sanitized = sanitizeXrAxes(xrAxes);
     debugState.xrAxes = sanitized;
     xrRayVisibleLatched = isXrRayVisibleFromStick(sanitized.turnY);
+    const turnBefore = yaw;
     const turn = applySnapTurn({ angle: yaw, cooldownSeconds: xrTurnCooldown }, sanitized.turnX, delta);
     yaw = turn.angle;
     xrTurnCooldown = turn.cooldownSeconds;
+    if (yaw !== turnBefore) {
+      markXrTelemetry("snap_turn");
+    }
     debugState.locomotionMode = currentSeatId ? "vr-seated" : "vr";
 
     const rightIndex = Array.from(session?.inputSources ?? []).findIndex((source) => source.handedness === "right");
@@ -2173,6 +2191,7 @@ function updateMovement(delta: number): void {
       ? Boolean(session?.inputSources[rightIndex]?.gamepad?.buttons?.[0]?.pressed)
       : false;
     if (triggerPressed && !xrSelectPressedLastFrame) {
+      markXrTelemetry("trigger_press");
       confirmInteractionTarget();
     }
     xrSelectPressedLastFrame = triggerPressed;

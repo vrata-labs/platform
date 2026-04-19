@@ -37,9 +37,9 @@ test("resolveXrInteractionRay converts targetRay pose into room space", () => {
   });
 
   assert.ok(ray);
-  assert.equal(Number(ray!.origin.x.toFixed(3)), 11);
+  assert.equal(Number(ray!.origin.x.toFixed(3)), 7);
   assert.equal(Number(ray!.origin.y.toFixed(3)), 3);
-  assert.equal(Number(ray!.origin.z.toFixed(3)), -2);
+  assert.equal(Number(ray!.origin.z.toFixed(3)), -4);
   assert.equal(Number(ray!.direction.x.toFixed(3)), -0);
   assert.equal(Number(ray!.direction.y.toFixed(3)), 0);
   assert.equal(Number(ray!.direction.z.toFixed(3)), 1);

@@ -268,6 +268,7 @@ test("xr telemetry endpoint stores latest runtime snapshot for admin inspection"
         roomId?: string;
         currentSeatId?: string | null;
         interactionRay?: { source?: { index?: number; handedness?: string | null } };
+        history?: Array<{ kind?: string | null; currentSeatId?: string | null }>;
       }>;
     };
     assert.equal(payload.items?.[0]?.participantId, "p-1");
@@ -275,6 +276,36 @@ test("xr telemetry endpoint stores latest runtime snapshot for admin inspection"
     assert.equal(payload.items?.[0]?.currentSeatId, "hall-seat-a");
     assert.equal(payload.items?.[0]?.interactionRay?.source?.index, 1);
     assert.equal(payload.items?.[0]?.interactionRay?.source?.handedness, "right");
+    assert.equal(Array.isArray(payload.items?.[0]?.history), true);
+
+    const secondPut = await fetch("http://127.0.0.1:4024/api/rooms/demo-room/xr-telemetry/p-1", {
+      method: "PUT",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        updatedAt: "2026-04-16T10:00:01.000Z",
+        kind: "trigger_press",
+        currentSeatId: null
+      })
+    });
+    assert.equal(secondPut.ok, true);
+
+    const secondGet = await fetch("http://127.0.0.1:4024/api/rooms/demo-room/xr-telemetry", {
+      headers: {
+        "x-noah-admin-token": "test-admin-token"
+      }
+    });
+    const secondPayload = await secondGet.json() as {
+      items?: Array<{
+        kind?: string | null;
+        history?: Array<{ kind?: string | null; currentSeatId?: string | null }>;
+      }>;
+    };
+    assert.equal(secondPayload.items?.[0]?.kind, "trigger_press");
+    assert.equal(secondPayload.items?.[0]?.history?.length, 2);
+    assert.equal(secondPayload.items?.[0]?.history?.[0]?.currentSeatId, "hall-seat-a");
+    assert.equal(secondPayload.items?.[0]?.history?.[1]?.kind, "trigger_press");
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     delete process.env.NOAH_DISABLE_AUTOSTART;

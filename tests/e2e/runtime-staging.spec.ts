@@ -375,16 +375,32 @@ test.describe("@staging runtime HUD space selector", () => {
       });
 
       await page.selectOption("#space-select", { value: targetRoomLink });
-      await page.waitForURL(`**/rooms/${targetRoom.roomId}`);
-      await expect(page.locator("#room-name")).toContainText(targetRoom.roomId);
+      await expect.poll(async () => {
+        const currentUrl = page.url();
+        const roomName = await page.locator("#room-name").textContent();
+        return {
+          currentUrl,
+          roomName: roomName ?? ""
+        };
+      }, {
+        timeout: 30000,
+        intervals: [1000, 2000, 3000]
+      }).toEqual({
+        currentUrl: `${baseURL}/rooms/${targetRoom.roomId}`,
+        roomName: `showroom-basic - ${targetRoom.roomId}`
+      });
     } finally {
       if (targetRoomId) {
-        const deleteResponse = await request.delete(`/api/rooms/${targetRoomId}`, {
-          headers: {
-            "x-noah-admin-token": stagingAdminToken
-          }
-        });
-        expect(deleteResponse.ok()).toBeTruthy();
+        try {
+          const deleteResponse = await request.delete(`/api/rooms/${targetRoomId}`, {
+            headers: {
+              "x-noah-admin-token": stagingAdminToken
+            }
+          });
+          expect(deleteResponse.ok()).toBeTruthy();
+        } catch {
+          // Test timeout should not mask the real selector failure cause.
+        }
       }
     }
   });
@@ -402,19 +418,28 @@ test.describe("@staging runtime HUD space selector", () => {
     for (const target of targets) {
       await expect(page.locator("#space-select")).toBeVisible();
       await page.selectOption("#space-select", { value: target });
-      await page.waitForURL(target.replace(baseURL ?? "", "**"));
-      await expect(page.locator("#space-select")).toBeVisible();
-      await expect(page.locator("#room-name")).not.toContainText("Loading room", { timeout: 30000 });
       await expect.poll(async () => {
         const currentValue = await page.locator("#space-select").inputValue();
+        const currentUrl = page.url();
+        const roomName = await page.locator("#room-name").textContent();
         return {
-          currentValue
+          currentValue,
+          currentUrl,
+          roomIdPresent: (roomName ?? "").includes(
+            target.endsWith(`/rooms/${stagingRoomId}`)
+              ? stagingRoomId
+              : target.endsWith(`/rooms/${stagingSceneRooms[0]!.roomId}`)
+                ? stagingSceneRooms[0]!.roomId
+                : stagingSceneRooms[1]!.roomId
+          )
         };
       }, {
-        timeout: 15000,
+        timeout: 30000,
         intervals: [1000, 2000, 3000]
       }).toEqual({
-        currentValue: target
+        currentValue: target,
+        currentUrl: target,
+        roomIdPresent: true
       });
     }
   });
@@ -545,7 +570,7 @@ test.describe("@staging runtime HUD space selector", () => {
   });
 
   test("staging keeps baseline avatar presence by default and isolates experimental leg IK behind query override", async ({ page }) => {
-    await page.goto(`/rooms/${stagingRoomId}?debug=1`);
+    await page.goto(`/rooms/${stagingRoomId}?debug=1`, { waitUntil: "domcontentloaded" });
     await expect.poll(async () => {
       const debug = await page.evaluate(() => (window as Window & {
         __NOAH_DEBUG__?: {
@@ -566,7 +591,7 @@ test.describe("@staging runtime HUD space selector", () => {
       avatarLegIkEnabled: false
     });
 
-    await page.goto(`/rooms/${stagingRoomId}?debug=1&avatarik=1`);
+    await page.goto(`/rooms/${stagingRoomId}?debug=1&avatarik=1`, { waitUntil: "domcontentloaded" });
     await expect.poll(async () => {
       const debug = await page.evaluate(() => (window as Window & {
         __NOAH_DEBUG__?: {

@@ -109,6 +109,7 @@ interface XrTelemetryRecord {
   participantId: string;
   roomId: string;
   updatedAt: string;
+  kind?: string | null;
   statusLine?: string | null;
   currentSeatId?: string | null;
   xrAxes?: {
@@ -133,6 +134,11 @@ interface XrTelemetryRecord {
   };
 }
 
+interface XrTelemetryParticipantBuffer {
+  latest: XrTelemetryRecord;
+  history: XrTelemetryRecord[];
+}
+
 const apiPort = Number.parseInt(process.env.API_PORT ?? "4000", 10);
 const runtimeStaticRoot = normalize(join(fileURLToPath(new URL("../../runtime-web/dist", import.meta.url))));
 const runtimePublicRoot = normalize(join(fileURLToPath(new URL("../../runtime-web/public", import.meta.url))));
@@ -145,7 +151,8 @@ const storagePromise = createStorage();
 const requiredProductionApiEnvVars = ["CONTROL_PLANE_ADMIN_TOKEN", "ROOM_STATE_PUBLIC_URL", "RUNTIME_BASE_URL"] as const;
 
 const presenceByRoom = new Map<string, Map<string, PresenceRecord>>();
-const xrTelemetryByRoom = new Map<string, Map<string, XrTelemetryRecord>>();
+const xrTelemetryByRoom = new Map<string, Map<string, XrTelemetryParticipantBuffer>>();
+const xrTelemetryHistoryLimit = 80;
 
 export function getMissingRequiredApiEnvVars(env: NodeJS.ProcessEnv = process.env): string[] {
   return requiredProductionApiEnvVars.filter((name) => !env[name] || env[name]?.trim().length === 0);
@@ -294,18 +301,29 @@ function cleanupPresence(roomId: string): void {
 }
 
 function upsertXrTelemetry(roomId: string, participantId: string, payload: XrTelemetryRecord): void {
-  const roomTelemetry = xrTelemetryByRoom.get(roomId) ?? new Map<string, XrTelemetryRecord>();
-  roomTelemetry.set(participantId, {
+  const roomTelemetry = xrTelemetryByRoom.get(roomId) ?? new Map<string, XrTelemetryParticipantBuffer>();
+  const nextRecord: XrTelemetryRecord = {
     ...payload,
     roomId,
     participantId,
     updatedAt: payload.updatedAt || new Date().toISOString()
+  };
+  const existing = roomTelemetry.get(participantId);
+  const history = [...(existing?.history ?? []), nextRecord].slice(-xrTelemetryHistoryLimit);
+  roomTelemetry.set(participantId, {
+    latest: nextRecord,
+    history
   });
   xrTelemetryByRoom.set(roomId, roomTelemetry);
 }
 
-function listXrTelemetry(roomId: string): XrTelemetryRecord[] {
-  return Array.from(xrTelemetryByRoom.get(roomId)?.values() ?? []).sort((left, right) => left.participantId.localeCompare(right.participantId));
+function listXrTelemetry(roomId: string): Array<XrTelemetryRecord & { history: XrTelemetryRecord[] }> {
+  return Array.from(xrTelemetryByRoom.get(roomId)?.values() ?? [])
+    .map((entry) => ({
+      ...entry.latest,
+      history: entry.history.map((item) => ({ ...item }))
+    }))
+    .sort((left, right) => left.participantId.localeCompare(right.participantId));
 }
 
 function getPresence(roomId: string): PresenceRecord[] {
