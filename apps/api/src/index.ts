@@ -132,6 +132,14 @@ interface XrTelemetryRecord {
     rightController?: { x?: number; y?: number; z?: number } | null;
     rightResolved?: { x?: number; y?: number; z?: number } | null;
   };
+  xrRawInputs?: Array<{
+    index: number;
+    handedness?: string | null;
+    targetRayMode?: string | null;
+    button0Pressed?: boolean;
+    button1Pressed?: boolean;
+    axes?: number[];
+  }>;
 }
 
 interface XrTelemetryParticipantBuffer {

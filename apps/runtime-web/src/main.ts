@@ -1744,6 +1744,7 @@ function reportXrTelemetry(): void {
     return;
   }
   lastXrTelemetryReportAt = now;
+  const xrSession = renderer.xr.getFrame()?.session;
   const payload = {
     participantId,
     roomId,
@@ -1757,7 +1758,15 @@ function reportXrTelemetry(): void {
       profile: debugState.xrAvatarDebug.profile ?? null,
       rightController: debugState.xrAvatarDebug.rightController ?? null,
       rightResolved: debugState.xrAvatarDebug.rightResolved ?? null
-    } : null
+    } : null,
+    xrRawInputs: Array.from(xrSession?.inputSources ?? []).map((source, index) => ({
+      index,
+      handedness: source.handedness ?? null,
+      targetRayMode: source.targetRayMode ?? null,
+      button0Pressed: Boolean(source.gamepad?.buttons?.[0]?.pressed),
+      button1Pressed: Boolean(source.gamepad?.buttons?.[1]?.pressed),
+      axes: Array.isArray(source.gamepad?.axes) ? source.gamepad.axes.map((value) => Number(value.toFixed(3))) : []
+    }))
   };
   void fetch(new URL(`/api/rooms/${roomId}/xr-telemetry/${participantId}`, apiBaseUrl), {
     method: "PUT",
