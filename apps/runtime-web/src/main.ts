@@ -709,19 +709,20 @@ function getInteractionRay(): THREE.Ray | null {
     });
     const rawController = xrControllers[xrRay.source.index] ?? null;
     const rawControllerOrigin = rawController
-      ? applyRoomTransformToTarget((() => {
+      ? (() => {
           rawController.getWorldPosition(xrControllerAnchorPosition);
           return {
             x: xrControllerAnchorPosition.x,
             y: xrControllerAnchorPosition.y,
             z: xrControllerAnchorPosition.z
           };
-        })())
+        })()
       : null;
-    const rayOrigin = applyRoomTransformToTarget(xrHandDebug.rightGrip)
+    const rayOrigin = xrHandDebug.rightController
+      ?? xrHandDebug.rightGrip
       ?? rawControllerOrigin
       ?? xrHands.rightHand
-      ?? applyRoomTransformToTarget(xrHandDebug.rightResolved ?? xrHandDebug.rightController)
+      ?? xrHandDebug.rightResolved
       ?? xrRay.origin;
     interactionRayOrigin.set(rayOrigin.x, rayOrigin.y, rayOrigin.z);
     interactionRayDirection.set(xrRay.direction.x, xrRay.direction.y, xrRay.direction.z).normalize();
@@ -1643,6 +1644,7 @@ function renderDebugPanel(): void {
     `Ray source: ${ray.source ? `${ray.source.handedness ?? "?"}#${ray.source.index}` : "-"}`,
     `Ray origin: ${ray.origin ? `${ray.origin.x}, ${ray.origin.y}, ${ray.origin.z}` : "-"}`,
     `Ray direction: ${ray.direction ? `${ray.direction.x}, ${ray.direction.y}, ${ray.direction.z}` : "-"}`,
+    `Right grip: ${xrAvatarDebug?.rightGrip ? `${xrAvatarDebug.rightGrip.x}, ${xrAvatarDebug.rightGrip.y}, ${xrAvatarDebug.rightGrip.z}` : "-"}`,
     `Right controller: ${xrAvatarDebug?.rightController ? `${xrAvatarDebug.rightController.x}, ${xrAvatarDebug.rightController.y}, ${xrAvatarDebug.rightController.z}` : "-"}`,
     `Right resolved: ${xrAvatarDebug?.rightResolved ? `${xrAvatarDebug.rightResolved.x}, ${xrAvatarDebug.rightResolved.y}, ${xrAvatarDebug.rightResolved.z}` : "-"}`,
     `Status: ${debugState.statusLine ?? "-"}`
@@ -1756,6 +1758,7 @@ function reportXrTelemetry(): void {
     interactionRay: debugState.interactionRay,
     xrAvatarDebug: debugState.xrAvatarDebug ? {
       profile: debugState.xrAvatarDebug.profile ?? null,
+      rightGrip: debugState.xrAvatarDebug.rightGrip ?? null,
       rightController: debugState.xrAvatarDebug.rightController ?? null,
       rightResolved: debugState.xrAvatarDebug.rightResolved ?? null
     } : null,

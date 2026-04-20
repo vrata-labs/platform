@@ -129,6 +129,7 @@ interface XrTelemetryRecord {
   };
   xrAvatarDebug?: {
     profile?: string | null;
+    rightGrip?: { x?: number; y?: number; z?: number } | null;
     rightController?: { x?: number; y?: number; z?: number } | null;
     rightResolved?: { x?: number; y?: number; z?: number } | null;
   };
