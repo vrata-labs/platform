@@ -30,7 +30,16 @@ test("resolveAvatarXrInput prefers the active stick pair when axes 0/1 carry mov
     { handedness: "right", gamepad: { axes: [0.4, 0, 0, 0] } }
   ]);
 
-  assert.deepEqual(result.axes, { moveX: 0.6, moveY: -0.8, turnX: 0.4, turnY: 0 });
+  assert.deepEqual(result.axes, { moveX: 0.6, moveY: -0.8, turnX: 0, turnY: 0 });
+});
+
+test("resolveAvatarXrInput uses raw right stick horizontal axis for turn", () => {
+  const result = resolveAvatarXrInput([
+    { handedness: "left", gamepad: { axes: [0, 0, 0.1, 0.2] } },
+    { handedness: "right", gamepad: { axes: [0, 0, -0.8, -0.5] } }
+  ]);
+
+  assert.deepEqual(result.axes, { moveX: 0.1, moveY: 0.2, turnX: -0.8, turnY: -0.5 });
 });
 
 test("resolveAvatarXrInput reports none when controllers missing", () => {

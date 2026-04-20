@@ -41,8 +41,8 @@ export function resolveAvatarXrInput(inputSources: Array<{ handedness?: string; 
       continue;
     }
     if (input.handedness === "right") {
-      turnX = axes.x;
-      turnY = axes.y;
+      turnX = input.gamepad?.axes?.[2] ?? axes.x;
+      turnY = input.gamepad?.axes?.[3] ?? axes.y;
       hasRight = true;
       continue;
     }
@@ -53,8 +53,8 @@ export function resolveAvatarXrInput(inputSources: Array<{ handedness?: string; 
       continue;
     }
     if (!hasRight) {
-      turnX = axes.x;
-      turnY = axes.y;
+      turnX = input.gamepad?.axes?.[2] ?? axes.x;
+      turnY = input.gamepad?.axes?.[3] ?? axes.y;
       hasRight = true;
     }
   }
