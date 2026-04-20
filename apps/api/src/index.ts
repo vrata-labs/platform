@@ -309,6 +309,21 @@ function cleanupPresence(roomId: string): void {
   if (roomPresence.size === 0) presenceByRoom.delete(roomId);
 }
 
+function shouldStoreXrTelemetryHistory(record: XrTelemetryRecord, previous?: XrTelemetryRecord | null): boolean {
+  const xrAxes = record.xrAxes;
+  const rawInputs = record.xrRawInputs ?? [];
+  return Boolean(
+    record.kind
+    || record.currentSeatId !== (previous?.currentSeatId ?? null)
+    || record.interactionRay?.active
+    || (xrAxes && (Math.abs(xrAxes.moveX ?? 0) > 0.01 || Math.abs(xrAxes.moveY ?? 0) > 0.01 || Math.abs(xrAxes.turnX ?? 0) > 0.01 || Math.abs(xrAxes.turnY ?? 0) > 0.01))
+    || rawInputs.some((input) => input.button0Pressed || input.button1Pressed || (input.axes ?? []).some((value) => Math.abs(value) > 0.01))
+    || record.xrAvatarDebug?.profile === "dual"
+    || record.xrAvatarDebug?.profile === "right-only"
+    || record.xrAvatarDebug?.profile === "left-only"
+  );
+}
+
 function upsertXrTelemetry(roomId: string, participantId: string, payload: XrTelemetryRecord): void {
   const roomTelemetry = xrTelemetryByRoom.get(roomId) ?? new Map<string, XrTelemetryParticipantBuffer>();
   const nextRecord: XrTelemetryRecord = {
@@ -318,7 +333,9 @@ function upsertXrTelemetry(roomId: string, participantId: string, payload: XrTel
     updatedAt: payload.updatedAt || new Date().toISOString()
   };
   const existing = roomTelemetry.get(participantId);
-  const history = [...(existing?.history ?? []), nextRecord].slice(-xrTelemetryHistoryLimit);
+  const history = shouldStoreXrTelemetryHistory(nextRecord, existing?.latest ?? null)
+    ? [...(existing?.history ?? []), nextRecord].slice(-xrTelemetryHistoryLimit)
+    : (existing?.history ?? []);
   roomTelemetry.set(participantId, {
     latest: nextRecord,
     history

@@ -718,10 +718,10 @@ function getInteractionRay(): THREE.Ray | null {
           };
         })()
       : null;
-    const rayOrigin = xrHandDebug.rightController
+    const rayOrigin = xrHands.rightHand
+      ?? xrHandDebug.rightController
       ?? xrHandDebug.rightGrip
       ?? rawControllerOrigin
-      ?? xrHands.rightHand
       ?? xrHandDebug.rightResolved
       ?? xrRay.origin;
     interactionRayOrigin.set(rayOrigin.x, rayOrigin.y, rayOrigin.z);

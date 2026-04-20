@@ -306,6 +306,79 @@ test("xr telemetry endpoint stores latest runtime snapshot for admin inspection"
     assert.equal(secondPayload.items?.[0]?.history?.length, 2);
     assert.equal(secondPayload.items?.[0]?.history?.[0]?.currentSeatId, "hall-seat-a");
     assert.equal(secondPayload.items?.[0]?.history?.[1]?.kind, "trigger_press");
+
+    const idlePut = await fetch("http://127.0.0.1:4024/api/rooms/demo-room/xr-telemetry/p-1", {
+      method: "PUT",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        updatedAt: "2026-04-16T10:00:02.000Z",
+        kind: null,
+        currentSeatId: null,
+        xrAxes: { moveX: 0, moveY: 0, turnX: 0, turnY: 0 },
+        xrRawInputs: []
+      })
+    });
+    assert.equal(idlePut.ok, true);
+
+    const idleGet = await fetch("http://127.0.0.1:4024/api/rooms/demo-room/xr-telemetry", {
+      headers: {
+        "x-noah-admin-token": "test-admin-token"
+      }
+    });
+    const idlePayload = await idleGet.json() as {
+      items?: Array<{ history?: Array<unknown> }>;
+    };
+    assert.equal(idlePayload.items?.[0]?.history?.length, 2);
+
+    const repeatedSeatPut = await fetch("http://127.0.0.1:4024/api/rooms/demo-room/xr-telemetry/p-1", {
+      method: "PUT",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        updatedAt: "2026-04-16T10:00:03.000Z",
+        currentSeatId: "hall-seat-a",
+        xrAxes: { moveX: 0, moveY: 0, turnX: 0, turnY: 0 },
+        xrRawInputs: []
+      })
+    });
+    assert.equal(repeatedSeatPut.ok, true);
+
+    const repeatedSeatGet = await fetch("http://127.0.0.1:4024/api/rooms/demo-room/xr-telemetry", {
+      headers: {
+        "x-noah-admin-token": "test-admin-token"
+      }
+    });
+    const repeatedSeatPayload = await repeatedSeatGet.json() as {
+      items?: Array<{ history?: Array<unknown> }>;
+    };
+    assert.equal(repeatedSeatPayload.items?.[0]?.history?.length, 3);
+
+    const repeatedSeatPutAgain = await fetch("http://127.0.0.1:4024/api/rooms/demo-room/xr-telemetry/p-1", {
+      method: "PUT",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        updatedAt: "2026-04-16T10:00:04.000Z",
+        currentSeatId: "hall-seat-a",
+        xrAxes: { moveX: 0, moveY: 0, turnX: 0, turnY: 0 },
+        xrRawInputs: []
+      })
+    });
+    assert.equal(repeatedSeatPutAgain.ok, true);
+
+    const repeatedSeatGetAgain = await fetch("http://127.0.0.1:4024/api/rooms/demo-room/xr-telemetry", {
+      headers: {
+        "x-noah-admin-token": "test-admin-token"
+      }
+    });
+    const repeatedSeatPayloadAgain = await repeatedSeatGetAgain.json() as {
+      items?: Array<{ history?: Array<unknown> }>;
+    };
+    assert.equal(repeatedSeatPayloadAgain.items?.[0]?.history?.length, 3);
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     delete process.env.NOAH_DISABLE_AUTOSTART;

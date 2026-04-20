@@ -790,6 +790,100 @@ test.describe("@staging runtime HUD space selector", () => {
     }
   });
 
+  test("staging fresh BlueOffice mock VR writes XR telemetry history for ray and trigger actions", async ({ page, request }) => {
+    const targetName = `Staging BlueOffice Mock VR Telemetry ${Date.now()}`;
+    let roomId: string | null = null;
+    try {
+      const createRoomResponse = await request.post("/api/rooms", {
+        headers: {
+          "x-noah-admin-token": stagingAdminToken
+        },
+        data: {
+          tenantId: "demo-tenant",
+          templateId: "meeting-room-basic",
+          name: targetName,
+          guestAllowed: true,
+          sceneBundleUrl: "/assets/scenes/sense-blueoffice-glb-v4/scene.json",
+          avatarConfig: {
+            avatarsEnabled: true,
+            avatarCatalogUrl: "/assets/avatars/catalog.v1.json",
+            avatarQualityProfile: "desktop-standard",
+            avatarFallbackCapsulesEnabled: true,
+            avatarSeatsEnabled: true
+          }
+        }
+      });
+      expect(createRoomResponse.ok()).toBeTruthy();
+      const room = await createRoomResponse.json() as { roomId: string };
+      roomId = room.roomId;
+
+      await page.goto(`/rooms/${room.roomId}?debug=1&avatarvrmock=1`);
+      await expect.poll(async () => {
+        const debug = await readSelfAvatarDebug(page);
+        return {
+          inputMode: debug?.avatarSnapshot?.inputMode ?? null,
+          visibility: debug?.avatarSnapshot?.visibilityState ?? null
+        };
+      }, {
+        timeout: 25000,
+        intervals: [1000, 2000, 3000]
+      }).toEqual({
+        inputMode: "vr-controller",
+        visibility: "hands-only"
+      });
+
+      await expect.poll(async () => {
+        return page.evaluate(() => (window as Window & {
+          __NOAH_TEST__?: { forceXrInteractionAtSeat?: (seatId: string) => boolean };
+        }).__NOAH_TEST__?.forceXrInteractionAtSeat?.("blueoffice-seat-a") ?? false);
+      }, {
+        timeout: 20000,
+        intervals: [1000, 2000, 3000]
+      }).toBeTruthy();
+
+      await page.evaluate(() => {
+        (window as Window & {
+          __NOAH_TEST__?: { confirmInteraction?: () => void };
+        }).__NOAH_TEST__?.confirmInteraction?.();
+      });
+
+      await expect.poll(async () => {
+        const telemetryResponse = await request.get(`/api/rooms/${room.roomId}/xr-telemetry`, {
+          headers: {
+            "x-noah-admin-token": stagingAdminToken
+          }
+        });
+        const payload = await telemetryResponse.json() as {
+          items?: Array<{
+            history?: Array<{ kind?: string | null; currentSeatId?: string | null }>;
+          }>;
+        };
+        const history = payload.items?.[0]?.history ?? [];
+        return {
+          hasRayOn: history.some((item) => item.kind === "ray_on"),
+          hasSeatClaim: history.some((item) => item.kind === "seat_claim"),
+          hasSeatState: history.some((item) => item.currentSeatId === "blueoffice-seat-a")
+        };
+      }, {
+        timeout: 15000,
+        intervals: [1000, 2000, 3000]
+      }).toEqual({
+        hasRayOn: true,
+        hasSeatClaim: true,
+        hasSeatState: true
+      });
+    } finally {
+      if (roomId) {
+        const deleteResponse = await request.delete(`/api/rooms/${roomId}`, {
+          headers: {
+            "x-noah-admin-token": stagingAdminToken
+          }
+        });
+        expect(deleteResponse.ok()).toBeTruthy();
+      }
+    }
+  });
+
   test("staging desktop observer keeps remote mock VR hands visible", async ({ browser, request }) => {
     const targetName = `Staging Avatar Mock VR ${Date.now()}`;
     let roomId: string | null = null;
