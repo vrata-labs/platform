@@ -110,6 +110,7 @@ export function resolveLocalAvatarHandTargets(input: {
   referenceSpace?: unknown;
   playerOffset?: { x: number; y: number; z: number };
   playerYaw?: number;
+  preferController?: boolean;
 }): { leftHand: AvatarHandTarget | null; rightHand: AvatarHandTarget | null } {
   if (!input.presenting) {
     return { leftHand: null, rightHand: null };
@@ -118,13 +119,15 @@ export function resolveLocalAvatarHandTargets(input: {
   const debug = collectLocalAvatarHandDebug(input);
   const offset = input.playerOffset ?? { x: 0, y: 0, z: 0 };
   const yaw = input.playerYaw ?? 0;
+  const leftTarget = input.preferController ? (debug.leftController ?? debug.leftResolved) : debug.leftResolved;
+  const rightTarget = input.preferController ? (debug.rightController ?? debug.rightResolved) : debug.rightResolved;
   const applyOffset = (target: AvatarHandTarget | null): AvatarHandTarget | null => target ? {
     x: target.x * Math.cos(yaw) - target.z * Math.sin(yaw) + offset.x,
     y: target.y + offset.y,
     z: target.x * Math.sin(yaw) + target.z * Math.cos(yaw) + offset.z
   } : null;
   return {
-    leftHand: applyOffset(debug.leftResolved),
-    rightHand: applyOffset(debug.rightResolved)
+    leftHand: applyOffset(leftTarget),
+    rightHand: applyOffset(rightTarget)
   };
 }
