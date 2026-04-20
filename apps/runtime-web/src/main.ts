@@ -1969,7 +1969,8 @@ function getLocalAvatarHandTargets(): { leftHand: { x: number; y: number; z: num
       y: player.position.y,
       z: player.position.z
     },
-    playerYaw: yaw
+    playerYaw: yaw,
+    preferController: true
   });
 }
 
