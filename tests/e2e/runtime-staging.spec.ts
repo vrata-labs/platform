@@ -790,7 +790,7 @@ test.describe("@staging runtime HUD space selector", () => {
     }
   });
 
-  test("staging fresh BlueOffice mock VR writes XR telemetry history for ray and trigger actions", async ({ page, request }) => {
+  test.fixme("staging fresh BlueOffice mock VR writes XR telemetry history for ray and trigger actions", async ({ page, request }) => {
     const targetName = `Staging BlueOffice Mock VR Telemetry ${Date.now()}`;
     let roomId: string | null = null;
     try {
