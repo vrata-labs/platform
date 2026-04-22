@@ -21,6 +21,17 @@ function pickPrimaryAxes(axes: readonly number[] | null | undefined): { x: numbe
   return secondaryMagnitude > primaryMagnitude ? secondary : primary;
 }
 
+function pickDominantRightStickAxes(axes: readonly number[] | null | undefined): { x: number; y: number } {
+  const primaryX = axes?.[0] ?? 0;
+  const primaryY = axes?.[1] ?? 0;
+  const secondaryX = axes?.[2] ?? 0;
+  const secondaryY = axes?.[3] ?? 0;
+  return {
+    x: Math.abs(secondaryX) >= Math.abs(primaryX) ? secondaryX : primaryX,
+    y: Math.abs(secondaryY) >= Math.abs(primaryY) ? secondaryY : primaryY
+  };
+}
+
 export function resolveAvatarXrInput(inputSources: Array<{ handedness?: string; gamepad?: { axes?: readonly number[] | null } | null }>): {
   axes: XrAxesSnapshot;
   profile: XrControllerInputProfile;
@@ -41,8 +52,9 @@ export function resolveAvatarXrInput(inputSources: Array<{ handedness?: string; 
       continue;
     }
     if (input.handedness === "right") {
-      turnX = input.gamepad?.axes?.[2] ?? axes.x;
-      turnY = input.gamepad?.axes?.[3] ?? axes.y;
+      const rightStick = pickDominantRightStickAxes(input.gamepad?.axes);
+      turnX = rightStick.x;
+      turnY = rightStick.y;
       hasRight = true;
       continue;
     }
@@ -53,8 +65,9 @@ export function resolveAvatarXrInput(inputSources: Array<{ handedness?: string; 
       continue;
     }
     if (!hasRight) {
-      turnX = input.gamepad?.axes?.[2] ?? axes.x;
-      turnY = input.gamepad?.axes?.[3] ?? axes.y;
+      const rightStick = pickDominantRightStickAxes(input.gamepad?.axes);
+      turnX = rightStick.x;
+      turnY = rightStick.y;
       hasRight = true;
     }
   }

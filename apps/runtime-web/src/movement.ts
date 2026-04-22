@@ -116,7 +116,7 @@ export function sanitizeXrAxes(sample: XrAxesSample): XrAxesSample {
   return {
     moveX: applyDeadzone(sample.moveX),
     moveY: applyDeadzone(sample.moveY),
-    turnX: applyDeadzone(sample.turnX),
-    turnY: applyDeadzone(sample.turnY)
+    turnX: applyDeadzone(sample.turnX, 0.08),
+    turnY: applyDeadzone(sample.turnY, 0.08)
   };
 }
