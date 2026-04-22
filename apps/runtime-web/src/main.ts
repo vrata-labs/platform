@@ -707,6 +707,21 @@ function getInteractionRay(): THREE.Ray | null {
       },
       playerYaw: yaw
     });
+    const xrControllerHands = resolveLocalAvatarHandTargets({
+      presenting: true,
+      inputSources: Array.from(xrSession?.inputSources ?? []),
+      grips: xrControllerGrips,
+      controllers: xrControllers,
+      xrFrame,
+      referenceSpace,
+      playerOffset: {
+        x: player.position.x,
+        y: player.position.y,
+        z: player.position.z
+      },
+      playerYaw: yaw,
+      preferController: true
+    });
     const rawController = xrControllers[xrRay.source.index] ?? null;
     const rawControllerOrigin = rawController
       ? (() => {
@@ -718,7 +733,7 @@ function getInteractionRay(): THREE.Ray | null {
           };
         })()
       : null;
-    const rayOrigin = xrHands.rightHand
+    const rayOrigin = xrControllerHands.rightHand
       ?? xrHandDebug.rightController
       ?? xrHandDebug.rightGrip
       ?? rawControllerOrigin
@@ -1230,6 +1245,8 @@ const debugState = {
     rightController: { x: number; y: number; z: number } | null;
     leftResolved: { x: number; y: number; z: number } | null;
     rightResolved: { x: number; y: number; z: number } | null;
+    rightHandWorld: { x: number; y: number; z: number } | null;
+    rightControllerWorld: { x: number; y: number; z: number } | null;
   },
   remoteAvatarReliableStates: [] as Array<{ participantId: string; avatarId: string; inputMode: string; updatedAt: string }>,
   remoteAvatarPoseFrames: [] as Array<{ participantId: string; seq: number; locomotionMode: number; sentAtMs: number }>,
@@ -1647,6 +1664,7 @@ function renderDebugPanel(): void {
     `Right grip: ${xrAvatarDebug?.rightGrip ? `${xrAvatarDebug.rightGrip.x}, ${xrAvatarDebug.rightGrip.y}, ${xrAvatarDebug.rightGrip.z}` : "-"}`,
     `Right controller: ${xrAvatarDebug?.rightController ? `${xrAvatarDebug.rightController.x}, ${xrAvatarDebug.rightController.y}, ${xrAvatarDebug.rightController.z}` : "-"}`,
     `Right resolved: ${xrAvatarDebug?.rightResolved ? `${xrAvatarDebug.rightResolved.x}, ${xrAvatarDebug.rightResolved.y}, ${xrAvatarDebug.rightResolved.z}` : "-"}`,
+    `Right hand world: ${xrAvatarDebug?.rightHandWorld ? `${xrAvatarDebug.rightHandWorld.x}, ${xrAvatarDebug.rightHandWorld.y}, ${xrAvatarDebug.rightHandWorld.z}` : "-"}`,
     `Status: ${debugState.statusLine ?? "-"}`
   ].join("\n");
 }
@@ -1760,7 +1778,9 @@ function reportXrTelemetry(): void {
       profile: debugState.xrAvatarDebug.profile ?? null,
       rightGrip: debugState.xrAvatarDebug.rightGrip ?? null,
       rightController: debugState.xrAvatarDebug.rightController ?? null,
-      rightResolved: debugState.xrAvatarDebug.rightResolved ?? null
+      rightResolved: debugState.xrAvatarDebug.rightResolved ?? null,
+      rightHandWorld: debugState.xrAvatarDebug.rightHandWorld ?? null,
+      rightControllerWorld: debugState.xrAvatarDebug.rightControllerWorld ?? null
     } : null,
     xrRawInputs: Array.from(xrSession?.inputSources ?? []).map((source, index) => ({
       index,
@@ -1917,7 +1937,9 @@ function getLocalAvatarHandTargets(): { leftHand: { x: number; y: number; z: num
       leftController: null,
       rightController: null,
       leftResolved: null,
-      rightResolved: null
+      rightResolved: null,
+      rightHandWorld: null,
+      rightControllerWorld: null
     };
     return { leftHand: null, rightHand: null };
   }
@@ -1937,6 +1959,35 @@ function getLocalAvatarHandTargets(): { leftHand: { x: number; y: number; z: num
     xrFrame,
     referenceSpace
   });
+  const worldHands = resolveLocalAvatarHandTargets({
+    presenting: renderer.xr.isPresenting,
+    inputSources,
+    grips: xrControllerGrips,
+    controllers: xrControllers,
+    xrFrame,
+    referenceSpace,
+    playerOffset: {
+      x: player.position.x,
+      y: player.position.y,
+      z: player.position.z
+    },
+    playerYaw: yaw
+  });
+  const controllerWorldHands = resolveLocalAvatarHandTargets({
+    presenting: renderer.xr.isPresenting,
+    inputSources,
+    grips: xrControllerGrips,
+    controllers: xrControllers,
+    xrFrame,
+    referenceSpace,
+    playerOffset: {
+      x: player.position.x,
+      y: player.position.y,
+      z: player.position.z
+    },
+    playerYaw: yaw,
+    preferController: true
+  });
   debugState.xrAvatarDebug = {
     profile: lastAvatarXrInputProfile,
     playerRoot: {
@@ -1955,23 +2006,11 @@ function getLocalAvatarHandTargets(): { leftHand: { x: number; y: number; z: num
     leftController: handDebug.leftController,
     rightController: handDebug.rightController,
     leftResolved: handDebug.leftResolved,
-    rightResolved: handDebug.rightResolved
+    rightResolved: handDebug.rightResolved,
+    rightHandWorld: worldHands.rightHand,
+    rightControllerWorld: controllerWorldHands.rightHand
   };
-  return resolveLocalAvatarHandTargets({
-    presenting: renderer.xr.isPresenting,
-    inputSources,
-    grips: xrControllerGrips,
-    controllers: xrControllers,
-    xrFrame,
-    referenceSpace,
-    playerOffset: {
-      x: player.position.x,
-      y: player.position.y,
-      z: player.position.z
-    },
-    playerYaw: yaw,
-    preferController: true
-  });
+  return controllerWorldHands;
 }
 
 function updateLocalAvatar(delta: number): void {

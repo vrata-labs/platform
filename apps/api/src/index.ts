@@ -132,6 +132,8 @@ interface XrTelemetryRecord {
     rightGrip?: { x?: number; y?: number; z?: number } | null;
     rightController?: { x?: number; y?: number; z?: number } | null;
     rightResolved?: { x?: number; y?: number; z?: number } | null;
+    rightHandWorld?: { x?: number; y?: number; z?: number } | null;
+    rightControllerWorld?: { x?: number; y?: number; z?: number } | null;
   };
   xrRawInputs?: Array<{
     index: number;
