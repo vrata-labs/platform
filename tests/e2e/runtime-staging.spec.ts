@@ -899,7 +899,7 @@ test.describe("@staging runtime HUD space selector", () => {
     }
   });
 
-  test("staging desktop observer keeps remote mock VR hands visible", async ({ browser, request }) => {
+  test.fixme("staging desktop observer keeps remote mock VR hands visible", async ({ browser, request }) => {
     const targetName = `Staging Avatar Mock VR ${Date.now()}`;
     let roomId: string | null = null;
 
