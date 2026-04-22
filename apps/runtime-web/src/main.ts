@@ -1765,6 +1765,10 @@ function reportXrTelemetry(): void {
   }
   lastXrTelemetryReportAt = now;
   const xrSession = renderer.xr.getFrame()?.session;
+  const rightInputSource = Array.from(xrSession?.inputSources ?? []).find((source) => source.handedness === "right")
+    ?? Array.from(xrSession?.inputSources ?? [])[0]
+    ?? null;
+  const rightAxes = rightInputSource?.gamepad?.axes ?? [];
   const payload = {
     participantId,
     roomId,
@@ -1789,7 +1793,16 @@ function reportXrTelemetry(): void {
       button0Pressed: Boolean(source.gamepad?.buttons?.[0]?.pressed),
       button1Pressed: Boolean(source.gamepad?.buttons?.[1]?.pressed),
       axes: Array.isArray(source.gamepad?.axes) ? source.gamepad.axes.map((value) => Number(value.toFixed(3))) : []
-    }))
+    })),
+    xrTurnCandidates: {
+      rightPrimaryX: typeof rightAxes[0] === "number" ? Number(rightAxes[0].toFixed(3)) : 0,
+      rightPrimaryY: typeof rightAxes[1] === "number" ? Number(rightAxes[1].toFixed(3)) : 0,
+      rightSecondaryX: typeof rightAxes[2] === "number" ? Number(rightAxes[2].toFixed(3)) : 0,
+      rightSecondaryY: typeof rightAxes[3] === "number" ? Number(rightAxes[3].toFixed(3)) : 0,
+      mappedTurnX: typeof debugState.xrAxes.turnX === "number" ? Number(debugState.xrAxes.turnX.toFixed(3)) : 0,
+      mappedTurnY: typeof debugState.xrAxes.turnY === "number" ? Number(debugState.xrAxes.turnY.toFixed(3)) : 0,
+      snapTurnFired: lastXrTelemetryKind === "snap_turn"
+    }
   };
   void fetch(new URL(`/api/rooms/${roomId}/xr-telemetry/${participantId}`, apiBaseUrl), {
     method: "PUT",

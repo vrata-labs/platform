@@ -143,6 +143,15 @@ interface XrTelemetryRecord {
     button1Pressed?: boolean;
     axes?: number[];
   }>;
+  xrTurnCandidates?: {
+    rightPrimaryX?: number;
+    rightPrimaryY?: number;
+    rightSecondaryX?: number;
+    rightSecondaryY?: number;
+    mappedTurnX?: number;
+    mappedTurnY?: number;
+    snapTurnFired?: boolean;
+  };
 }
 
 interface XrTelemetryParticipantBuffer {
