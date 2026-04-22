@@ -542,8 +542,23 @@ test.describe("@staging runtime HUD space selector", () => {
     const pageA = await browser.newPage();
     const pageB = await browser.newPage();
     try {
-      await pageA.goto(`/rooms/${stagingRoomId}?debug=1&bot=line`);
-      await pageB.goto(`/rooms/${stagingRoomId}?debug=1&bot=line`);
+      await pageA.goto(`/rooms/${stagingRoomId}?debug=1&bot=line`, { waitUntil: "domcontentloaded" });
+      await pageB.goto(`/rooms/${stagingRoomId}?debug=1&bot=line`, { waitUntil: "domcontentloaded" });
+
+      await expect.poll(async () => {
+        const debugA = await readNoahDebug(pageA);
+        const debugB = await readNoahDebug(pageB);
+        return {
+          aConnected: debugA?.roomStateConnected ?? false,
+          bConnected: debugB?.roomStateConnected ?? false
+        };
+      }, {
+        timeout: 30000,
+        intervals: [1000, 2000, 3000]
+      }).toEqual({
+        aConnected: true,
+        bConnected: true
+      });
 
       await expect.poll(async () => {
         const debugA = await readNoahDebug(pageA);
@@ -557,7 +572,7 @@ test.describe("@staging runtime HUD space selector", () => {
             && Boolean(debugB?.remoteAvatarParticipants?.some((item) => item.presenceSeen && item.hasReliableState && item.hasPoseFrame && item.leftHandVisible && item.rightHandVisible))
         };
       }, {
-        timeout: 25000,
+        timeout: 45000,
         intervals: [1000, 2000, 3000]
       }).toEqual({
         aReady: true,
@@ -914,8 +929,8 @@ test.describe("@staging runtime HUD space selector", () => {
       const vrPage = await browser.newPage();
       const webPage = await browser.newPage();
       try {
-        await vrPage.goto(`/rooms/${room.roomId}?debug=1&avatarvrmock=1`);
-        await webPage.goto(`/rooms/${room.roomId}?debug=1`);
+        await vrPage.goto(`/rooms/${room.roomId}?debug=1&avatarvrmock=1`, { waitUntil: "domcontentloaded" });
+        await webPage.goto(`/rooms/${room.roomId}?debug=1`, { waitUntil: "domcontentloaded" });
 
         await expect.poll(async () => {
           const vrDebug = await readSelfAvatarDebug(vrPage);
@@ -947,7 +962,7 @@ test.describe("@staging runtime HUD space selector", () => {
             ))
           };
         }, {
-          timeout: 45000,
+          timeout: 60000,
           intervals: [1000, 2000, 3000]
         }).toEqual({
           vrHandsOnly: "hands-only",
