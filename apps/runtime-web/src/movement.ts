@@ -97,7 +97,7 @@ export function stepFlatMovement(position: FlatVector, direction: FlatVector, sp
 
 export function applySnapTurn(state: XrTurnState, turnX: number, delta: number): XrTurnState {
   const nextCooldown = Math.max(0, state.cooldownSeconds - delta);
-  const threshold = 0.7;
+  const threshold = 0.2;
   if (Math.abs(turnX) < threshold || nextCooldown > 0) {
     return {
       angle: state.angle,
