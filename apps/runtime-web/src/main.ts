@@ -1849,7 +1849,8 @@ function reportXrTelemetry(): void {
         axes: Array.isArray(source.gamepad?.axes) ? source.gamepad.axes.map((value) => Number(value.toFixed(3))) : []
       }));
   const rawInputActive = xrRawInputs.some((input) => input.button0Pressed || input.button1Pressed || input.axes.some((value) => Math.abs(value) > 0.01));
-  const reportIntervalMs = rawInputActive ? 75 : 300;
+  const rayActive = Boolean(debugState.interactionRay.active);
+  const reportIntervalMs = rawInputActive || rayActive ? 16 : 300;
   if (now - lastXrTelemetryReportAt < reportIntervalMs) {
     return;
   }
