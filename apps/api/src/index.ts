@@ -110,6 +110,7 @@ interface XrTelemetryRecord {
   roomId: string;
   updatedAt: string;
   kind?: string | null;
+  kinds?: string[];
   statusLine?: string | null;
   currentSeatId?: string | null;
   xrAxes?: {
@@ -151,6 +152,7 @@ interface XrTelemetryRecord {
     mappedTurnX?: number;
     mappedTurnY?: number;
     snapTurnFired?: boolean;
+    playerYaw?: number;
   };
 }
 

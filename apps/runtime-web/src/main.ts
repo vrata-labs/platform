@@ -278,8 +278,16 @@ let seatReclaimRetryTimer: number | null = null;
 let xrSelectPressedLastFrame = false;
 let xrRayVisibleLatched = false;
 let lastXrTelemetryReportAt = 0;
-let lastXrTelemetryKind: string | null = null;
+let lastXrTelemetryKinds: string[] = [];
 let audioContext: AudioContext | null = null;
+let syntheticXrState: {
+  rightController: { x: number; y: number; z: number };
+  rightGrip: { x: number; y: number; z: number } | null;
+  rayDirection: { x: number; y: number; z: number };
+  axes: { moveX: number; moveY: number; turnX: number; turnY: number };
+  triggerPressed: boolean;
+  rayVisible: boolean;
+} | null = null;
 let activeSceneBundleRoot: THREE.Object3D | null = null;
 let avatarSandboxRegistry: ReturnType<typeof createAvatarRegistry> | null = null;
 let localAvatarController: LocalAvatarController | null = null;
@@ -663,6 +671,33 @@ function getInteractionRay(): THREE.Ray | null {
   const forcedRay = forcedTestInteractionRay;
   if (forcedRay) {
     return forcedRay.clone();
+  }
+  if (avatarVrMockEnabled && syntheticXrState) {
+    if (!syntheticXrState.rayVisible) {
+      return null;
+    }
+    interactionRayOrigin.set(
+      syntheticXrState.rightController.x,
+      syntheticXrState.rightController.y,
+      syntheticXrState.rightController.z
+    );
+    interactionRayDirection.set(
+      syntheticXrState.rayDirection.x,
+      syntheticXrState.rayDirection.y,
+      syntheticXrState.rayDirection.z
+    ).normalize();
+    debugState.interactionRay.origin = {
+      x: Number(interactionRayOrigin.x.toFixed(2)),
+      y: Number(interactionRayOrigin.y.toFixed(2)),
+      z: Number(interactionRayOrigin.z.toFixed(2))
+    };
+    debugState.interactionRay.direction = {
+      x: Number(interactionRayDirection.x.toFixed(2)),
+      y: Number(interactionRayDirection.y.toFixed(2)),
+      z: Number(interactionRayDirection.z.toFixed(2))
+    };
+    debugState.interactionRay.source = { index: 0, handedness: "right" };
+    return new THREE.Ray(interactionRayOrigin.clone(), interactionRayDirection.clone());
   }
   if (renderer.xr.isPresenting) {
     const xrFrame = renderer.xr.getFrame();
@@ -1297,6 +1332,14 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
     requestSeatClaimById: (seatId: string) => boolean;
     teleportToFloor: (x: number, z: number) => boolean;
     forceXrInteractionAtSeat: (seatId: string) => boolean;
+    setSyntheticXrState: (state: {
+      rightController: { x: number; y: number; z: number };
+      rightGrip?: { x: number; y: number; z: number } | null;
+      rayDirection: { x: number; y: number; z: number };
+      axes?: { moveX?: number; moveY?: number; turnX?: number; turnY?: number };
+      triggerPressed?: boolean;
+      rayVisible?: boolean;
+    } | null) => boolean;
   };
 }).__NOAH_TEST__ = {
   forceRoomStateReconnect: () => {
@@ -1357,6 +1400,22 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
       seatAnchor.position.y + seatAnchor.seatHeight,
       seatAnchor.position.z
     ));
+  },
+  setSyntheticXrState: (state) => {
+    syntheticXrState = state ? {
+      rightController: state.rightController,
+      rightGrip: state.rightGrip ?? state.rightController,
+      rayDirection: state.rayDirection,
+      axes: {
+        moveX: state.axes?.moveX ?? 0,
+        moveY: state.axes?.moveY ?? 0,
+        turnX: state.axes?.turnX ?? 0,
+        turnY: state.axes?.turnY ?? 0
+      },
+      triggerPressed: state.triggerPressed ?? false,
+      rayVisible: state.rayVisible ?? false
+    } : null;
+    return true;
   },
   teleportToFloor: (x: number, z: number) => {
     forcedTestSeatId = null;
@@ -1670,7 +1729,9 @@ function renderDebugPanel(): void {
 }
 
 function markXrTelemetry(kind: string): void {
-  lastXrTelemetryKind = kind;
+  if (!lastXrTelemetryKinds.includes(kind)) {
+    lastXrTelemetryKinds.push(kind);
+  }
   lastXrTelemetryReportAt = 0;
 }
 
@@ -1756,24 +1817,51 @@ async function reportDiagnostics(note?: string): Promise<void> {
 }
 
 function reportXrTelemetry(): void {
-  if (!renderer.xr.isPresenting) {
+  if (!renderer.xr.isPresenting && !(avatarVrMockEnabled && syntheticXrState)) {
     return;
   }
   const now = performance.now();
-  if (now - lastXrTelemetryReportAt < 300) {
+  const xrSession = renderer.xr.getFrame()?.session;
+  const xrRawInputs = syntheticXrState
+    ? [{
+        index: 0,
+        handedness: "right",
+        targetRayMode: "tracked-pointer",
+        button0Pressed: syntheticXrState.triggerPressed,
+        button1Pressed: false,
+        axes: [
+          syntheticXrState.axes.turnX,
+          syntheticXrState.axes.turnY,
+          syntheticXrState.axes.turnX,
+          syntheticXrState.axes.turnY
+        ]
+      }]
+    : Array.from(xrSession?.inputSources ?? []).map((source, index) => ({
+        index,
+        handedness: source.handedness ?? null,
+        targetRayMode: source.targetRayMode ?? null,
+        button0Pressed: Boolean(source.gamepad?.buttons?.[0]?.pressed),
+        button1Pressed: Boolean(source.gamepad?.buttons?.[1]?.pressed),
+        axes: Array.isArray(source.gamepad?.axes) ? source.gamepad.axes.map((value) => Number(value.toFixed(3))) : []
+      }));
+  const rawInputActive = xrRawInputs.some((input) => input.button0Pressed || input.button1Pressed || input.axes.some((value) => Math.abs(value) > 0.01));
+  const reportIntervalMs = rawInputActive ? 75 : 300;
+  if (now - lastXrTelemetryReportAt < reportIntervalMs) {
     return;
   }
   lastXrTelemetryReportAt = now;
-  const xrSession = renderer.xr.getFrame()?.session;
   const rightInputSource = Array.from(xrSession?.inputSources ?? []).find((source) => source.handedness === "right")
     ?? Array.from(xrSession?.inputSources ?? [])[0]
     ?? null;
-  const rightAxes = rightInputSource?.gamepad?.axes ?? [];
+  const rightAxes = syntheticXrState
+    ? [syntheticXrState.axes.turnX, syntheticXrState.axes.turnY, syntheticXrState.axes.turnX, syntheticXrState.axes.turnY]
+    : rightInputSource?.gamepad?.axes ?? [];
   const payload = {
     participantId,
     roomId,
     updatedAt: new Date().toISOString(),
-    kind: lastXrTelemetryKind,
+    kind: lastXrTelemetryKinds.at(-1) ?? null,
+    kinds: [...lastXrTelemetryKinds],
     statusLine: debugState.statusLine ?? null,
     currentSeatId: debugState.currentSeatId ?? null,
     xrAxes: debugState.xrAxes,
@@ -1786,14 +1874,7 @@ function reportXrTelemetry(): void {
       rightHandWorld: debugState.xrAvatarDebug.rightHandWorld ?? null,
       rightControllerWorld: debugState.xrAvatarDebug.rightControllerWorld ?? null
     } : null,
-    xrRawInputs: Array.from(xrSession?.inputSources ?? []).map((source, index) => ({
-      index,
-      handedness: source.handedness ?? null,
-      targetRayMode: source.targetRayMode ?? null,
-      button0Pressed: Boolean(source.gamepad?.buttons?.[0]?.pressed),
-      button1Pressed: Boolean(source.gamepad?.buttons?.[1]?.pressed),
-      axes: Array.isArray(source.gamepad?.axes) ? source.gamepad.axes.map((value) => Number(value.toFixed(3))) : []
-    })),
+    xrRawInputs,
     xrTurnCandidates: {
       rightPrimaryX: typeof rightAxes[0] === "number" ? Number(rightAxes[0].toFixed(3)) : 0,
       rightPrimaryY: typeof rightAxes[1] === "number" ? Number(rightAxes[1].toFixed(3)) : 0,
@@ -1801,7 +1882,8 @@ function reportXrTelemetry(): void {
       rightSecondaryY: typeof rightAxes[3] === "number" ? Number(rightAxes[3].toFixed(3)) : 0,
       mappedTurnX: typeof debugState.xrAxes.turnX === "number" ? Number(debugState.xrAxes.turnX.toFixed(3)) : 0,
       mappedTurnY: typeof debugState.xrAxes.turnY === "number" ? Number(debugState.xrAxes.turnY.toFixed(3)) : 0,
-      snapTurnFired: lastXrTelemetryKind === "snap_turn"
+      snapTurnFired: lastXrTelemetryKinds.includes("snap_turn"),
+      playerYaw: Number(yaw.toFixed(3))
     }
   };
   void fetch(new URL(`/api/rooms/${roomId}/xr-telemetry/${participantId}`, apiBaseUrl), {
@@ -1811,7 +1893,7 @@ function reportXrTelemetry(): void {
     },
     body: JSON.stringify(payload)
   }).catch(() => undefined);
-  lastXrTelemetryKind = null;
+  lastXrTelemetryKinds = [];
 }
 
 function attachVideoTrack(track: Track): void {
@@ -1931,6 +2013,35 @@ function getSignedAngleDelta(next: number, previous: number): number {
 
 function getLocalAvatarHandTargets(): { leftHand: { x: number; y: number; z: number } | null; rightHand: { x: number; y: number; z: number } | null } {
   if (avatarVrMockEnabled && !renderer.xr.isPresenting) {
+    if (syntheticXrState) {
+      const headWorldPosition = camera.getWorldPosition(new THREE.Vector3());
+      debugState.xrAvatarDebug = {
+        profile: "synthetic",
+        playerRoot: {
+          x: player.position.x,
+          y: player.position.y,
+          z: player.position.z,
+          yaw
+        },
+        headWorld: {
+          x: headWorldPosition.x,
+          y: headWorldPosition.y,
+          z: headWorldPosition.z
+        },
+        leftGrip: null,
+        rightGrip: syntheticXrState.rightGrip,
+        leftController: null,
+        rightController: syntheticXrState.rightController,
+        leftResolved: null,
+        rightResolved: syntheticXrState.rightGrip ?? syntheticXrState.rightController,
+        rightHandWorld: syntheticXrState.rightGrip ?? syntheticXrState.rightController,
+        rightControllerWorld: syntheticXrState.rightController
+      };
+      return {
+        leftHand: null,
+        rightHand: syntheticXrState.rightGrip ?? syntheticXrState.rightController
+      };
+    }
     const headWorldPosition = camera.getWorldPosition(new THREE.Vector3());
     debugState.xrAvatarDebug = {
       profile: "none",
@@ -2232,10 +2343,15 @@ async function bootLocalAvatarPresetSession(input: {
 }
 
 function updateMovement(delta: number): void {
-  if (renderer.xr.isPresenting) {
+  if (renderer.xr.isPresenting || (avatarVrMockEnabled && syntheticXrState)) {
     const xrFrame = renderer.xr.getFrame();
     const session = xrFrame?.session;
-    const xrInput = resolveAvatarXrInput(Array.from(session?.inputSources ?? []));
+    const xrInput = syntheticXrState
+      ? {
+          axes: syntheticXrState.axes,
+          profile: "synthetic-right"
+        }
+      : resolveAvatarXrInput(Array.from(session?.inputSources ?? []));
     const xrAxes = xrInput.axes;
     lastAvatarXrInputProfile = xrInput.profile;
 
@@ -2252,9 +2368,11 @@ function updateMovement(delta: number): void {
     debugState.locomotionMode = currentSeatId ? "vr-seated" : "vr";
 
     const rightIndex = Array.from(session?.inputSources ?? []).findIndex((source) => source.handedness === "right");
-    const triggerPressed = rightIndex >= 0
-      ? Boolean(session?.inputSources[rightIndex]?.gamepad?.buttons?.[0]?.pressed)
-      : false;
+    const triggerPressed = syntheticXrState
+      ? syntheticXrState.triggerPressed
+      : rightIndex >= 0
+        ? Boolean(session?.inputSources[rightIndex]?.gamepad?.buttons?.[0]?.pressed)
+        : false;
     if (triggerPressed && !xrSelectPressedLastFrame) {
       markXrTelemetry("trigger_press");
       confirmInteractionTarget();
