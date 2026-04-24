@@ -805,7 +805,7 @@ test.describe("@staging runtime HUD space selector", () => {
     }
   });
 
-  test.fixme("staging fresh BlueOffice mock VR writes XR telemetry history for ray and trigger actions", async ({ page, request }) => {
+  test("staging fresh BlueOffice mock VR writes XR telemetry history for ray and trigger actions", async ({ page, request }) => {
     const targetName = `Staging BlueOffice Mock VR Telemetry ${Date.now()}`;
     let roomId: string | null = null;
     try {
@@ -858,8 +858,46 @@ test.describe("@staging runtime HUD space selector", () => {
 
       await page.evaluate(() => {
         (window as Window & {
-          __NOAH_TEST__?: { confirmInteraction?: () => void };
-        }).__NOAH_TEST__?.confirmInteraction?.();
+          __NOAH_TEST__?: {
+            setSyntheticXrState?: (state: {
+              rightController: { x: number; y: number; z: number };
+              rightGrip?: { x: number; y: number; z: number } | null;
+              rayDirection: { x: number; y: number; z: number };
+              axes?: { moveX?: number; moveY?: number; turnX?: number; turnY?: number };
+              triggerPressed?: boolean;
+              rayVisible?: boolean;
+            } | null) => boolean;
+          };
+        }).__NOAH_TEST__?.setSyntheticXrState?.({
+          rightController: { x: 1.54, y: 0.88, z: -0.81 },
+          rightGrip: { x: 1.57, y: 0.88, z: -0.81 },
+          rayDirection: { x: 0.74, y: -0.45, z: -0.51 },
+          axes: { turnX: 0, turnY: -1, moveX: 0, moveY: 0 },
+          triggerPressed: true,
+          rayVisible: true
+        });
+      });
+
+      await expect.poll(async () => {
+        const debug = await readSelfAvatarDebug(page);
+        return {
+          currentSeatId: debug?.currentSeatId ?? null,
+          statusLine: debug?.statusLine ?? null
+        };
+      }, {
+        timeout: 15000,
+        intervals: [1000, 2000, 3000]
+      }).toEqual({
+        currentSeatId: "blueoffice-seat-a",
+        statusLine: "Seated at blueoffice-seat-a"
+      });
+
+      await page.evaluate(() => {
+        (window as Window & {
+          __NOAH_TEST__?: {
+            setSyntheticXrState?: (state: null) => boolean;
+          };
+        }).__NOAH_TEST__?.setSyntheticXrState?.(null);
       });
 
       await expect.poll(async () => {
@@ -870,13 +908,14 @@ test.describe("@staging runtime HUD space selector", () => {
         });
         const payload = await telemetryResponse.json() as {
           items?: Array<{
-            history?: Array<{ kind?: string | null; currentSeatId?: string | null }>;
+            history?: Array<{ kind?: string | null; kinds?: string[]; currentSeatId?: string | null }>;
           }>;
         };
-        const history = payload.items?.[0]?.history ?? [];
+        const history = (payload.items ?? []).flatMap((item) => item.history ?? []);
         return {
-          hasRayOn: history.some((item) => item.kind === "ray_on"),
-          hasSeatClaim: history.some((item) => item.kind === "seat_claim"),
+          hasRayOn: history.some((item) => item.kind === "ray_on" || item.kinds?.includes("ray_on")),
+          hasTriggerPress: history.some((item) => item.kind === "trigger_press" || item.kinds?.includes("trigger_press")),
+          hasSeatClaim: history.some((item) => item.kind === "seat_claim" || item.kinds?.includes("seat_claim")),
           hasSeatState: history.some((item) => item.currentSeatId === "blueoffice-seat-a")
         };
       }, {
@@ -884,6 +923,7 @@ test.describe("@staging runtime HUD space selector", () => {
         intervals: [1000, 2000, 3000]
       }).toEqual({
         hasRayOn: true,
+        hasTriggerPress: true,
         hasSeatClaim: true,
         hasSeatState: true
       });
