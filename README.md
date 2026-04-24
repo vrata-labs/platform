@@ -38,6 +38,13 @@ Known staging pitfalls:
 - Some scenes load slowly; do not treat early fallback as a final failure without waiting for diagnostics.
 - `Cinema` showed that a bad spawn point can look like a broken export even when the scene itself is fine.
 
+## XR telemetry
+
+- For live XR debugging on staging, use `pnpm xr:telemetry:blueoffice` to fetch and summarize `BlueOffice` XR telemetry.
+- The helper filters out synthetic participants by default and shows only meaningful XR history rows.
+- To inspect all participants including synthetic harness runs: `pnpm xr:telemetry -- --room blueoffice --include-synthetic`.
+- To wait for a real device repro and print it as soon as it appears: `pnpm xr:telemetry -- --room blueoffice --watch --wait-real --timeout-ms 120000`.
+
 ## Compose staging
 
 Phase 2 compose-based staging is now real and validated.
