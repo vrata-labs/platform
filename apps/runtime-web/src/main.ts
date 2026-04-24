@@ -188,6 +188,7 @@ for (const controller of xrControllers) {
     if (!renderer.xr.isPresenting) {
       return;
     }
+    xrSelectEventCount += 1;
     confirmInteractionTarget();
   });
 }
@@ -276,6 +277,7 @@ let roomStateConnected = false;
 let roomStateReconnectTimer: number | null = null;
 let seatReclaimRetryTimer: number | null = null;
 let xrSelectPressedLastFrame = false;
+let xrSelectEventCount = 0;
 let xrRayVisibleLatched = false;
 let lastXrTelemetryReportAt = 0;
 let lastXrTelemetryKinds: string[] = [];
@@ -1827,6 +1829,7 @@ function reportXrTelemetry(): void {
         index: 0,
         handedness: "right",
         targetRayMode: "tracked-pointer",
+        profiles: ["synthetic-right"],
         button0Pressed: syntheticXrState.triggerPressed,
         button1Pressed: false,
         axes: [
@@ -1840,6 +1843,7 @@ function reportXrTelemetry(): void {
         index,
         handedness: source.handedness ?? null,
         targetRayMode: source.targetRayMode ?? null,
+        profiles: Array.isArray(source.profiles) ? [...source.profiles] : [],
         button0Pressed: Boolean(source.gamepad?.buttons?.[0]?.pressed),
         button1Pressed: Boolean(source.gamepad?.buttons?.[1]?.pressed),
         axes: Array.isArray(source.gamepad?.axes) ? source.gamepad.axes.map((value) => Number(value.toFixed(3))) : []
@@ -1883,7 +1887,8 @@ function reportXrTelemetry(): void {
       mappedTurnX: typeof debugState.xrAxes.turnX === "number" ? Number(debugState.xrAxes.turnX.toFixed(3)) : 0,
       mappedTurnY: typeof debugState.xrAxes.turnY === "number" ? Number(debugState.xrAxes.turnY.toFixed(3)) : 0,
       snapTurnFired: lastXrTelemetryKinds.includes("snap_turn"),
-      playerYaw: Number(yaw.toFixed(3))
+      playerYaw: Number(yaw.toFixed(3)),
+      selectEventCount: xrSelectEventCount
     }
   };
   void fetch(new URL(`/api/rooms/${roomId}/xr-telemetry/${participantId}`, apiBaseUrl), {

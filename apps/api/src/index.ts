@@ -140,6 +140,7 @@ interface XrTelemetryRecord {
     index: number;
     handedness?: string | null;
     targetRayMode?: string | null;
+    profiles?: string[];
     button0Pressed?: boolean;
     button1Pressed?: boolean;
     axes?: number[];
@@ -153,6 +154,7 @@ interface XrTelemetryRecord {
     mappedTurnY?: number;
     snapTurnFired?: boolean;
     playerYaw?: number;
+    selectEventCount?: number;
   };
 }
 
