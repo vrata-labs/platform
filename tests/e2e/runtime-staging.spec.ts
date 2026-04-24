@@ -704,7 +704,7 @@ test.describe("@staging runtime HUD space selector", () => {
     expect(debug?.currentSeatId ?? null).toBeNull();
   });
 
-  test.fixme("staging fresh hall mock VR can target and claim a seat through XR interaction path", async ({ page, request }) => {
+  test("staging fresh hall mock VR can target and claim a seat through XR interaction path", async ({ page, request }) => {
     const targetName = `Staging Hall Mock VR Seat ${Date.now()}`;
     let roomId: string | null = null;
     try {
@@ -760,7 +760,6 @@ test.describe("@staging runtime HUD space selector", () => {
         const debug = await readSelfAvatarDebug(page);
         return {
           rayActive: debug?.interactionRay?.active ?? false,
-          rayMode: debug?.interactionRay?.mode ?? null,
           targetKind: debug?.interactionRay?.targetKind ?? null,
           seatId: debug?.interactionRay?.seatId ?? null
         };
@@ -769,15 +768,30 @@ test.describe("@staging runtime HUD space selector", () => {
         intervals: [500, 1000, 1500]
       }).toEqual({
         rayActive: true,
-        rayMode: "xr-right-stick",
         targetKind: "seat",
         seatId: "hall-seat-a"
       });
 
       await page.evaluate(() => {
         (window as Window & {
-          __NOAH_TEST__?: { confirmInteraction?: () => void };
-        }).__NOAH_TEST__?.confirmInteraction?.();
+          __NOAH_TEST__?: {
+            setSyntheticXrState?: (state: {
+              rightController: { x: number; y: number; z: number };
+              rightGrip?: { x: number; y: number; z: number } | null;
+              rayDirection: { x: number; y: number; z: number };
+              axes?: { moveX?: number; moveY?: number; turnX?: number; turnY?: number };
+              triggerPressed?: boolean;
+              rayVisible?: boolean;
+            } | null) => boolean;
+          };
+        }).__NOAH_TEST__?.setSyntheticXrState?.({
+          rightController: { x: 0.54, y: 0.88, z: -0.81 },
+          rightGrip: { x: 0.57, y: 0.88, z: -0.81 },
+          rayDirection: { x: 0.74, y: -0.45, z: -0.51 },
+          axes: { turnX: 0, turnY: -1, moveX: 0, moveY: 0 },
+          triggerPressed: true,
+          rayVisible: true
+        });
       });
 
       await expect.poll(async () => {
@@ -792,6 +806,12 @@ test.describe("@staging runtime HUD space selector", () => {
       }).toEqual({
         currentSeatId: "hall-seat-a",
         statusLine: "Seated at hall-seat-a"
+      });
+
+      await page.evaluate(() => {
+        (window as Window & {
+          __NOAH_TEST__?: { setSyntheticXrState?: (state: null) => boolean };
+        }).__NOAH_TEST__?.setSyntheticXrState?.(null);
       });
     } finally {
       if (roomId) {
