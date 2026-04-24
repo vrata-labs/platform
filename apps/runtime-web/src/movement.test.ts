@@ -19,9 +19,15 @@ test("projectMovementToWorld maps strafe right using current camera basis", () =
 });
 
 test("applySnapTurn fires when xr turn axis exceeds runtime threshold", () => {
-  const next = applySnapTurn({ angle: 0, cooldownSeconds: 0 }, -0.23, 0.016);
+  const next = applySnapTurn({ angle: 0, cooldownSeconds: 0 }, -0.16, 0.016);
   assert.notEqual(next.angle, 0);
   assert.equal(next.cooldownSeconds > 0, true);
+});
+
+test("applySnapTurn ignores horizontal jitter under runtime threshold", () => {
+  const next = applySnapTurn({ angle: 0, cooldownSeconds: 0 }, -0.14, 0.016);
+  assert.equal(next.angle, 0);
+  assert.equal(next.cooldownSeconds, 0);
 });
 
 test("applySnapTurn respects cooldown even when xr turn axis stays high", () => {

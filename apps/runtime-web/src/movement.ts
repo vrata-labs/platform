@@ -16,6 +16,7 @@ export interface XrTurnState {
 }
 
 const DEFAULT_ROOM_POSITION_LIMIT = 24;
+const XR_SNAP_TURN_THRESHOLD = 0.15;
 
 export function applyDeadzone(value: number, deadzone = 0.18): number {
   return Math.abs(value) < deadzone ? 0 : value;
@@ -97,8 +98,7 @@ export function stepFlatMovement(position: FlatVector, direction: FlatVector, sp
 
 export function applySnapTurn(state: XrTurnState, turnX: number, delta: number): XrTurnState {
   const nextCooldown = Math.max(0, state.cooldownSeconds - delta);
-  const threshold = 0.2;
-  if (Math.abs(turnX) < threshold || nextCooldown > 0) {
+  if (Math.abs(turnX) < XR_SNAP_TURN_THRESHOLD || nextCooldown > 0) {
     return {
       angle: state.angle,
       cooldownSeconds: nextCooldown
