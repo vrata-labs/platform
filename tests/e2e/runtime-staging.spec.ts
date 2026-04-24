@@ -986,6 +986,104 @@ test.describe("@staging runtime HUD space selector", () => {
     }
   });
 
+  test("staging synthetic XR harness can ray, turn and trigger-seat in BlueOffice", async ({ page }) => {
+    const blueOfficeRoomId = stagingSceneRooms[1]!.roomId;
+    await page.goto(`/rooms/${blueOfficeRoomId}?debug=1&avatarvrmock=1`, { waitUntil: "domcontentloaded" });
+
+    await expect.poll(async () => {
+      const debug = await readSelfAvatarDebug(page);
+      return {
+        sceneBundleState: debug?.sceneBundleState ?? null,
+        inputMode: debug?.avatarSnapshot?.inputMode ?? null,
+        visibility: debug?.avatarSnapshot?.visibilityState ?? null
+      };
+    }, {
+      timeout: 30000,
+      intervals: [1000, 2000, 3000]
+    }).toEqual({
+      sceneBundleState: "loaded",
+      inputMode: "vr-controller",
+      visibility: "hands-only"
+    });
+
+    const initialYaw = await page.evaluate(() => window.__NOAH_DEBUG__?.xrAvatarDebug?.playerRoot?.yaw ?? null);
+
+    await page.evaluate(() => {
+      window.__NOAH_TEST__?.setSyntheticXrState?.({
+        rightController: { x: 1.54, y: 0.88, z: -0.81 },
+        rightGrip: { x: 1.57, y: 0.88, z: -0.81 },
+        rayDirection: { x: 0.74, y: -0.45, z: -0.51 },
+        axes: { turnX: 0, turnY: -1, moveX: 0, moveY: 0 },
+        triggerPressed: false,
+        rayVisible: true
+      });
+    });
+
+    await expect.poll(async () => {
+      const debug = await readSelfAvatarDebug(page);
+      return {
+        active: debug?.interactionRay?.active ?? false,
+        target: debug?.interactionRay?.targetKind ?? null,
+        seatId: debug?.interactionRay?.seatId ?? null
+      };
+    }, {
+      timeout: 10000,
+      intervals: [500, 1000, 1500]
+    }).toEqual({
+      active: true,
+      target: "floor",
+      seatId: null
+    });
+
+    await page.evaluate(() => {
+      window.__NOAH_TEST__?.setSyntheticXrState?.({
+        rightController: { x: 1.54, y: 0.88, z: -0.81 },
+        rightGrip: { x: 1.57, y: 0.88, z: -0.81 },
+        rayDirection: { x: 0.74, y: -0.45, z: -0.51 },
+        axes: { turnX: -0.6, turnY: 0, moveX: 0, moveY: 0 },
+        triggerPressed: false,
+        rayVisible: false
+      });
+    });
+
+    await expect.poll(async () => {
+      return page.evaluate(() => window.__NOAH_DEBUG__?.xrAvatarDebug?.playerRoot?.yaw ?? null);
+    }, {
+      timeout: 5000,
+      intervals: [250, 500, 1000]
+    }).not.toBe(initialYaw);
+
+    await page.evaluate(() => {
+      window.__NOAH_TEST__?.forceXrInteractionAtSeat?.("blueoffice-seat-a");
+      window.__NOAH_TEST__?.setSyntheticXrState?.({
+        rightController: { x: 1.54, y: 0.88, z: -0.81 },
+        rightGrip: { x: 1.57, y: 0.88, z: -0.81 },
+        rayDirection: { x: 0.74, y: -0.45, z: -0.51 },
+        axes: { turnX: 0, turnY: -1, moveX: 0, moveY: 0 },
+        triggerPressed: true,
+        rayVisible: true
+      });
+    });
+
+    await expect.poll(async () => {
+      const debug = await readSelfAvatarDebug(page);
+      return {
+        currentSeatId: debug?.currentSeatId ?? null,
+        statusLine: debug?.statusLine ?? null
+      };
+    }, {
+      timeout: 10000,
+      intervals: [500, 1000, 1500]
+    }).toEqual({
+      currentSeatId: "blueoffice-seat-a",
+      statusLine: "Seated at blueoffice-seat-a"
+    });
+
+    await page.evaluate(() => {
+      window.__NOAH_TEST__?.setSyntheticXrState?.(null);
+    });
+  });
+
   test("hall keeps avatar sync working between two web clients on staging", async ({ browser }) => {
     const hallRoomId = stagingSceneRooms[0]!.roomId;
     const pageA = await browser.newPage();
