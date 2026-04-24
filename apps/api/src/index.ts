@@ -339,31 +339,101 @@ function shouldStoreXrTelemetryHistory(record: XrTelemetryRecord, previous?: XrT
   );
 }
 
-function upsertXrTelemetry(roomId: string, participantId: string, payload: XrTelemetryRecord): void {
-  const roomTelemetry = xrTelemetryByRoom.get(roomId) ?? new Map<string, XrTelemetryParticipantBuffer>();
-  const nextRecord: XrTelemetryRecord = {
+function createXrTelemetryRecord(roomId: string, participantId: string, payload: XrTelemetryRecord): XrTelemetryRecord {
+  return {
     ...payload,
     roomId,
     participantId,
     updatedAt: payload.updatedAt || new Date().toISOString()
   };
-  const existing = roomTelemetry.get(participantId);
-  const history = shouldStoreXrTelemetryHistory(nextRecord, existing?.latest ?? null)
+}
+
+function appendXrTelemetryRecord(roomTelemetry: Map<string, XrTelemetryParticipantBuffer>, nextRecord: XrTelemetryRecord): boolean {
+  const existing = roomTelemetry.get(nextRecord.participantId);
+  const shouldStoreHistory = shouldStoreXrTelemetryHistory(nextRecord, existing?.latest ?? null);
+  const history = shouldStoreHistory
     ? [...(existing?.history ?? []), nextRecord].slice(-xrTelemetryHistoryLimit)
     : (existing?.history ?? []);
-  roomTelemetry.set(participantId, {
+  roomTelemetry.set(nextRecord.participantId, {
     latest: nextRecord,
     history
   });
-  xrTelemetryByRoom.set(roomId, roomTelemetry);
+  return shouldStoreHistory;
 }
 
-function listXrTelemetry(roomId: string): Array<XrTelemetryRecord & { history: XrTelemetryRecord[] }> {
-  return Array.from(xrTelemetryByRoom.get(roomId)?.values() ?? [])
-    .map((entry) => ({
-      ...entry.latest,
-      history: entry.history.map((item) => ({ ...item }))
-    }))
+function cloneXrTelemetryBuffer(buffer: XrTelemetryParticipantBuffer): XrTelemetryParticipantBuffer {
+  return {
+    latest: structuredClone(buffer.latest),
+    history: structuredClone(buffer.history)
+  };
+}
+
+function compareXrTelemetryUpdatedAt(left: XrTelemetryRecord, right: XrTelemetryRecord): number {
+  return left.updatedAt.localeCompare(right.updatedAt);
+}
+
+function mergeXrTelemetryHistories(...histories: XrTelemetryRecord[][]): XrTelemetryRecord[] {
+  const merged = [...histories.flat()].sort(compareXrTelemetryUpdatedAt);
+  const deduped = new Map<string, XrTelemetryRecord>();
+  for (const record of merged) {
+    const key = JSON.stringify(record);
+    if (!deduped.has(key)) {
+      deduped.set(key, structuredClone(record));
+    }
+  }
+  return Array.from(deduped.values()).slice(-xrTelemetryHistoryLimit);
+}
+
+function mergeXrTelemetryBuffers(left: XrTelemetryParticipantBuffer, right: XrTelemetryParticipantBuffer): XrTelemetryParticipantBuffer {
+  return {
+    latest: compareXrTelemetryUpdatedAt(left.latest, right.latest) >= 0 ? structuredClone(left.latest) : structuredClone(right.latest),
+    history: mergeXrTelemetryHistories(left.history, right.history)
+  };
+}
+
+async function upsertXrTelemetry(roomId: string, participantId: string, payload: XrTelemetryRecord): Promise<void> {
+  const roomTelemetry = xrTelemetryByRoom.get(roomId) ?? new Map<string, XrTelemetryParticipantBuffer>();
+  const nextRecord = createXrTelemetryRecord(roomId, participantId, payload);
+  const shouldPersist = appendXrTelemetryRecord(roomTelemetry, nextRecord);
+  xrTelemetryByRoom.set(roomId, roomTelemetry);
+  if (shouldPersist) {
+    const storage = await storagePromise;
+    await storage.addXrTelemetry(roomId, participantId, structuredClone(nextRecord) as unknown as Record<string, unknown>);
+  }
+}
+
+async function listXrTelemetry(roomId: string): Promise<Array<XrTelemetryRecord & { history: XrTelemetryRecord[] }>> {
+  const storage = await storagePromise;
+  const persistedTelemetry = new Map<string, XrTelemetryParticipantBuffer>();
+  for (const entry of await storage.getXrTelemetry(roomId)) {
+    appendXrTelemetryRecord(
+      persistedTelemetry,
+      createXrTelemetryRecord(roomId, entry.participantId, entry.payload as unknown as XrTelemetryRecord)
+    );
+  }
+
+  const liveTelemetry = xrTelemetryByRoom.get(roomId) ?? new Map<string, XrTelemetryParticipantBuffer>();
+  const participantIds = new Set<string>([...persistedTelemetry.keys(), ...liveTelemetry.keys()]);
+  return Array.from(participantIds)
+    .map((participantId) => {
+      const persisted = persistedTelemetry.get(participantId);
+      const live = liveTelemetry.get(participantId);
+      const merged = persisted && live
+        ? mergeXrTelemetryBuffers(persisted, live)
+        : persisted
+          ? cloneXrTelemetryBuffer(persisted)
+          : live
+            ? cloneXrTelemetryBuffer(live)
+            : null;
+      if (!merged) {
+        return null;
+      }
+      return {
+        ...merged.latest,
+        history: merged.history
+      };
+    })
+    .filter((entry): entry is XrTelemetryRecord & { history: XrTelemetryRecord[] } => entry !== null)
     .sort((left, right) => left.participantId.localeCompare(right.participantId));
 }
 
@@ -1018,7 +1088,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   const xrTelemetryListMatch = url.pathname.match(/^\/api\/rooms\/([^/]+)\/xr-telemetry$/);
   if (method === "GET" && xrTelemetryListMatch) {
     if (!isAuthorizedControlPlaneRequest(request)) return json(response, 403, { error: "forbidden" });
-    json(response, 200, { items: listXrTelemetry(decodeURIComponent(xrTelemetryListMatch[1])) });
+    json(response, 200, { items: await listXrTelemetry(decodeURIComponent(xrTelemetryListMatch[1])) });
     return;
   }
 
@@ -1026,7 +1096,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   if (method === "PUT" && xrTelemetryItemMatch) {
     const payload = await parseBody<XrTelemetryRecord>(request);
     if (!payload) return json(response, 400, { error: "xr_telemetry_payload_required" });
-    upsertXrTelemetry(decodeURIComponent(xrTelemetryItemMatch[1]), decodeURIComponent(xrTelemetryItemMatch[2]), payload);
+    await upsertXrTelemetry(decodeURIComponent(xrTelemetryItemMatch[1]), decodeURIComponent(xrTelemetryItemMatch[2]), payload);
     json(response, 200, { ok: true });
     return;
   }

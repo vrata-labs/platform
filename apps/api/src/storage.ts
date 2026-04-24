@@ -148,6 +148,14 @@ export interface RuntimeDiagnosticRecord {
   createdAt: string;
 }
 
+export interface XrTelemetryEventRecord {
+  participantId: string;
+  payload: Record<string, unknown>;
+  createdAt: string;
+}
+
+const XR_TELEMETRY_EVENT_LIMIT = 1000;
+
 export interface Storage {
   listTenants(): Promise<TenantRecord[]>;
   createTenant(input: Partial<TenantRecord>): Promise<TenantRecord>;
@@ -165,6 +173,8 @@ export interface Storage {
   deleteAsset(assetId: string): Promise<boolean>;
   addDiagnostic(roomId: string, payload: RuntimeDiagnosticRecord): Promise<void>;
   getDiagnostics(roomId: string): Promise<RuntimeDiagnosticRecord[]>;
+  addXrTelemetry(roomId: string, participantId: string, payload: Record<string, unknown>): Promise<void>;
+  getXrTelemetry(roomId: string): Promise<XrTelemetryEventRecord[]>;
   listSceneBundles(): Promise<SceneBundleRecord[]>;
   getSceneBundle(bundleId: string): Promise<SceneBundleRecord | null>;
   createSceneBundle(input: SceneBundleCreateInput & { publicUrl: string; provider: SceneBundleRecord["provider"] }): Promise<SceneBundleRecord>;
@@ -204,6 +214,7 @@ export class MemoryStorage implements Storage {
     ]
   ]);
   private diagnostics = new Map<string, RuntimeDiagnosticRecord[]>();
+  private xrTelemetry = new Map<string, XrTelemetryEventRecord[]>();
   private sceneBundles = new Map<string, SceneBundleRecord>();
 
   private sceneBundleKey(bundleId: string, version: string): string {
@@ -326,6 +337,19 @@ export class MemoryStorage implements Storage {
     this.diagnostics.set(roomId, entries);
   }
   async getDiagnostics(roomId: string): Promise<RuntimeDiagnosticRecord[]> { return this.diagnostics.get(roomId) ?? []; }
+  async addXrTelemetry(roomId: string, participantId: string, payload: Record<string, unknown>): Promise<void> {
+    const entries = this.xrTelemetry.get(roomId) ?? [];
+    entries.push({
+      participantId,
+      payload: structuredClone(payload),
+      createdAt: new Date().toISOString()
+    });
+    while (entries.length > XR_TELEMETRY_EVENT_LIMIT) entries.shift();
+    this.xrTelemetry.set(roomId, entries);
+  }
+  async getXrTelemetry(roomId: string): Promise<XrTelemetryEventRecord[]> {
+    return (this.xrTelemetry.get(roomId) ?? []).map((entry) => structuredClone(entry));
+  }
   async listSceneBundles(): Promise<SceneBundleRecord[]> {
     const latest = new Map<string, SceneBundleRecord>();
     for (const item of this.sceneBundles.values()) {
@@ -428,6 +452,13 @@ export class PostgresStorage implements Storage {
         payload jsonb not null,
         created_at timestamptz not null default now()
       );
+      create table if not exists xr_telemetry (
+        id bigserial primary key,
+        room_id text not null,
+        participant_id text not null,
+        payload jsonb not null,
+        created_at timestamptz not null default now()
+      );
       create table if not exists scene_bundles (
         bundle_id text not null,
         storage_key text not null,
@@ -443,6 +474,7 @@ export class PostgresStorage implements Storage {
         primary key (bundle_id, version)
       );
     `);
+    await this.pool.query(`create index if not exists xr_telemetry_room_id_id_idx on xr_telemetry (room_id, id)`);
     await this.pool.query(`alter table rooms add column if not exists scene_bundle_url text`);
     await this.pool.query(`alter table rooms add column if not exists avatar_config jsonb not null default '${DEFAULT_AVATAR_CONFIG_JSON}'::jsonb`);
     await this.pool.query(`update rooms set avatar_config = '${DEFAULT_AVATAR_CONFIG_JSON}'::jsonb where avatar_config is null`);
@@ -615,6 +647,18 @@ export class PostgresStorage implements Storage {
   async getDiagnostics(roomId: string): Promise<RuntimeDiagnosticRecord[]> {
     const result = await this.pool.query(`select payload from runtime_diagnostics where room_id = $1 order by id asc`, [roomId]);
     return result.rows.map((row: { payload: RuntimeDiagnosticRecord }) => row.payload);
+  }
+  async addXrTelemetry(roomId: string, participantId: string, payload: Record<string, unknown>): Promise<void> {
+    await this.pool.query(`insert into xr_telemetry (room_id, participant_id, payload) values ($1,$2,$3::jsonb)`, [roomId, participantId, JSON.stringify(payload)]);
+    await this.pool.query(`delete from xr_telemetry where id in (select id from xr_telemetry where room_id = $1 order by id desc offset ${XR_TELEMETRY_EVENT_LIMIT})`, [roomId]);
+  }
+  async getXrTelemetry(roomId: string): Promise<XrTelemetryEventRecord[]> {
+    const result = await this.pool.query(`select participant_id, payload, created_at from xr_telemetry where room_id = $1 order by id asc`, [roomId]);
+    return result.rows.map((row: { participant_id: string; payload: Record<string, unknown>; created_at: string }) => ({
+      participantId: row.participant_id,
+      payload: row.payload,
+      createdAt: new Date(row.created_at).toISOString()
+    }));
   }
   async listSceneBundles(): Promise<SceneBundleRecord[]> {
     const result = await this.pool.query(`select distinct on (bundle_id) bundle_id, storage_key, public_url, checksum, size_bytes, content_type, provider, version, status, is_current, created_at from scene_bundles order by bundle_id, is_current desc, created_at desc`);

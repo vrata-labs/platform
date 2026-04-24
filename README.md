@@ -41,6 +41,7 @@ Known staging pitfalls:
 ## XR telemetry
 
 - For live XR debugging on staging, use `pnpm xr:telemetry:blueoffice` to fetch and summarize `BlueOffice` XR telemetry.
+- Meaningful XR telemetry rows are persisted on staging, so after a repro you can inspect them later without keeping a live watcher open.
 - The helper filters out synthetic participants by default and shows only meaningful XR history rows.
 - To inspect all participants including synthetic harness runs: `pnpm xr:telemetry -- --room blueoffice --include-synthetic`.
 - To wait for a real device repro and print it as soon as it appears: `pnpm xr:telemetry -- --room blueoffice --watch --wait-real --timeout-ms 120000`.
