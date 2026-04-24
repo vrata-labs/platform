@@ -24,10 +24,6 @@ function applyPlayerTransform(position: THREE.Vector3, yaw: number, offset: { x:
   return position;
 }
 
-function applyYawToDirection(direction: THREE.Vector3, yaw: number): THREE.Vector3 {
-  return direction.applyAxisAngle(new THREE.Vector3(0, 1, 0), yaw).normalize();
-}
-
 export function resolvePrimaryRightInputSourceIndex(inputSources: XrInputSourceLike[]): number {
   const rightIndex = inputSources.findIndex((source) => source.handedness === "right");
   if (rightIndex >= 0) {
@@ -66,10 +62,9 @@ export function resolveXrInteractionRay(input: {
   }
 
   const origin = applyPlayerTransform(new THREE.Vector3(position.x, position.y, position.z), input.playerYaw, input.playerOffset);
-  const direction = applyYawToDirection(
-    new THREE.Vector3(0, 0, -1).applyQuaternion(new THREE.Quaternion(orientation.x, orientation.y, orientation.z, orientation.w)),
-    input.playerYaw
-  );
+  const direction = new THREE.Vector3(0, 0, -1)
+    .applyQuaternion(new THREE.Quaternion(orientation.x, orientation.y, orientation.z, orientation.w))
+    .normalize();
 
   return {
     origin: { x: origin.x, y: origin.y, z: origin.z },
