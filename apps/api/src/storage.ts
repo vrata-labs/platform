@@ -100,6 +100,7 @@ export interface RuntimeDiagnosticRecord {
     bundleUrl?: string | null;
     state?: string;
     failureReason?: string | null;
+    loadStage?: string | null;
     label?: string;
     source?: string;
     assetUrl?: string | null;

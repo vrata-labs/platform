@@ -100,18 +100,22 @@ export async function loadSceneBundle(input: {
   scene: THREE.Scene;
   player: THREE.Object3D;
   bundleUrl: string;
+  onLoadStage?: (stage: string) => void;
 }): Promise<LoadedSceneBundle> {
   const startedAt = performance.now();
+  input.onLoadStage?.("manifest_requested");
   const response = await fetch(input.bundleUrl);
   if (!response.ok) {
     throw new Error(`failed_to_load_scene_bundle_manifest:${response.status}`);
   }
 
   const manifest = parseSceneBundleManifest(await response.json());
+  input.onLoadStage?.("manifest_loaded");
   const group = new THREE.Group();
   group.name = `scene-bundle:${manifest.sceneId}`;
   const sceneAssetUrl = resolveSceneAssetUrl(response.url, manifest.glbPath);
   const missingAssets = new Set<string>();
+  input.onLoadStage?.("asset_load_started");
   if (/[.]fbx$/i.test(sceneAssetUrl)) {
     const manager = new THREE.LoadingManager();
     manager.onError = (url) => {
@@ -129,17 +133,21 @@ export async function loadSceneBundle(input: {
     const gltf = await loader.loadAsync(sceneAssetUrl);
     group.add(gltf.scene);
   }
+  input.onLoadStage?.("asset_loaded");
   await applyMaterialOverrides({
     root: group,
     manifest,
     bundleUrl: response.url
   });
+  input.onLoadStage?.("material_overrides_applied");
   input.scene.add(group);
+  input.onLoadStage?.("scene_added");
 
   const spawnPoint = pickSceneSpawnPoint(manifest);
   if (spawnPoint) {
     input.player.position.set(spawnPoint.position.x, spawnPoint.position.y, spawnPoint.position.z);
   }
+  input.onLoadStage?.("spawn_applied");
 
   return {
     manifest,

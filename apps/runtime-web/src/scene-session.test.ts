@@ -30,6 +30,7 @@ test("startSceneBundleSession reports failure result for missing bundle", async 
     assert.equal(result.sceneBundleState, "failed");
     assert.equal(result.note, "scene_bundle_failed");
     assert.equal(result.sceneDebug.failureReason, "failed_to_load_scene_bundle_manifest:404");
+    assert.equal(result.sceneDebug.loadStage, "manifest_requested");
     assert.equal(fallbackVisible, true);
   } finally {
     globalThis.fetch = originalFetch;

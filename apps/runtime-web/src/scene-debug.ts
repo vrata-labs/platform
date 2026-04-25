@@ -4,6 +4,7 @@ export interface SceneDiagnosticsSnapshot {
   bundleUrl: string | null;
   state: "fallback" | "loaded" | "failed";
   failureReason: string | null;
+  loadStage: string | null;
   label: string | null;
   source: string | null;
   assetUrl: string | null;
@@ -67,6 +68,7 @@ export function createEmptySceneDiagnostics(): SceneDiagnosticsSnapshot {
     bundleUrl: null,
     state: "fallback",
     failureReason: null,
+    loadStage: null,
     label: null,
     source: null,
     assetUrl: null,

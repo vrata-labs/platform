@@ -38,7 +38,10 @@ export async function startSceneBundleSession(input: {
     const loadedScene = await loadSceneBundle({
       scene: input.scene,
       player: input.player,
-      bundleUrl: input.bundleUrl
+      bundleUrl: input.bundleUrl,
+      onLoadStage(stage) {
+        input.previousSceneDebug.loadStage = stage;
+      }
     });
     const effectiveCleanSceneMode = input.requestedCleanSceneMode || loadedScene.manifest.renderMode === "clean";
     input.applySceneMaterialDebugMode(loadedScene.group);
@@ -54,6 +57,7 @@ export async function startSceneBundleSession(input: {
         bundleUrl: input.bundleUrl,
         state: "loaded",
         failureReason: null,
+        loadStage: "loaded",
         label: loadedScene.manifest.label,
         source: loadedScene.manifest.source,
         assetUrl: loadedScene.assetUrl,
@@ -93,6 +97,7 @@ export async function startSceneBundleSession(input: {
         bundleUrl: input.bundleUrl,
         state: "failed",
         failureReason: getFailureReason(error),
+        loadStage: input.previousSceneDebug.loadStage,
         missingAssets: [],
         loadMs: null
       },
