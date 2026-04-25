@@ -170,6 +170,7 @@ async function expectSceneRoomLoaded(
 
 async function readNoahDebug(page: Page): Promise<{
   roomStateConnected?: boolean;
+  sceneBundleState?: string | null;
   remoteAvatarReliableCount?: number;
   remoteAvatarPoseCount?: number;
   remoteAvatarParticipants?: Array<{
@@ -183,6 +184,7 @@ async function readNoahDebug(page: Page): Promise<{
   return page.evaluate(() => (window as Window & {
     __NOAH_DEBUG__?: {
       roomStateConnected?: boolean;
+      sceneBundleState?: string | null;
       remoteAvatarReliableCount?: number;
       remoteAvatarPoseCount?: number;
       remoteAvatarParticipants?: Array<{
@@ -224,6 +226,7 @@ async function readSelfAvatarDebug(page: Page): Promise<{
   currentSeatId?: string | null;
   statusLine?: string | null;
   sceneBundleState?: string | null;
+  roomStateConnected?: boolean;
   xrAxes?: {
     moveX?: number;
     moveY?: number;
@@ -260,6 +263,7 @@ async function readSelfAvatarDebug(page: Page): Promise<{
       currentSeatId?: string | null;
       statusLine?: string | null;
       sceneBundleState?: string | null;
+      roomStateConnected?: boolean;
       xrAxes?: {
         moveX?: number;
         moveY?: number;
@@ -770,6 +774,7 @@ test.describe("@staging runtime HUD space selector", () => {
         const debug = await readSelfAvatarDebug(page);
         return {
           sceneBundleState: debug?.sceneBundleState ?? null,
+          roomStateConnected: debug?.roomStateConnected ?? false,
           inputMode: debug?.avatarSnapshot?.inputMode ?? null,
           visibility: debug?.avatarSnapshot?.visibilityState ?? null
         };
@@ -778,6 +783,7 @@ test.describe("@staging runtime HUD space selector", () => {
         intervals: [1000, 2000, 3000]
       }).toEqual({
         sceneBundleState: "loaded",
+        roomStateConnected: true,
         inputMode: "vr-controller",
         visibility: "hands-only"
       });
@@ -892,6 +898,7 @@ test.describe("@staging runtime HUD space selector", () => {
         const debug = await readSelfAvatarDebug(page);
         return {
           sceneBundleState: debug?.sceneBundleState ?? null,
+          roomStateConnected: debug?.roomStateConnected ?? false,
           inputMode: debug?.avatarSnapshot?.inputMode ?? null,
           visibility: debug?.avatarSnapshot?.visibilityState ?? null
         };
@@ -900,6 +907,7 @@ test.describe("@staging runtime HUD space selector", () => {
         intervals: [1000, 2000, 3000]
       }).toEqual({
         sceneBundleState: "loaded",
+        roomStateConnected: true,
         inputMode: "vr-controller",
         visibility: "hands-only"
       });
@@ -1180,6 +1188,7 @@ test.describe("@staging runtime HUD space selector", () => {
   });
 
   test("hall keeps avatar sync working between two web clients on staging", async ({ browser }) => {
+    test.setTimeout(60000);
     const hallRoomId = stagingSceneRooms[0]!.roomId;
     const pageA = await browser.newPage();
     const pageB = await browser.newPage();
@@ -1191,6 +1200,8 @@ test.describe("@staging runtime HUD space selector", () => {
         const debugA = await readNoahDebug(pageA);
         const debugB = await readNoahDebug(pageB);
         return {
+          aLoaded: debugA?.sceneBundleState ?? null,
+          bLoaded: debugB?.sceneBundleState ?? null,
           aReady: (debugA?.remoteAvatarReliableCount ?? 0) >= 1
             && (debugA?.remoteAvatarPoseCount ?? 0) >= 1
             && Boolean(debugA?.remoteAvatarParticipants?.some((item) => item.presenceSeen && item.hasReliableState && item.hasPoseFrame)),
@@ -1202,6 +1213,8 @@ test.describe("@staging runtime HUD space selector", () => {
         timeout: 45000,
         intervals: [1000, 2000, 3000]
       }).toEqual({
+        aLoaded: "loaded",
+        bLoaded: "loaded",
         aReady: true,
         bReady: true
       });
@@ -1212,6 +1225,7 @@ test.describe("@staging runtime HUD space selector", () => {
   });
 
   test("hall keeps avatar hands visible between two web clients on staging", async ({ browser }) => {
+    test.setTimeout(60000);
     const hallRoomId = stagingSceneRooms[0]!.roomId;
     const pageA = await browser.newPage();
     const pageB = await browser.newPage();
@@ -1223,6 +1237,8 @@ test.describe("@staging runtime HUD space selector", () => {
         const debugA = await readNoahDebug(pageA);
         const debugB = await readNoahDebug(pageB);
         return {
+          aLoaded: debugA?.sceneBundleState ?? null,
+          bLoaded: debugB?.sceneBundleState ?? null,
           aHandsReady: Boolean(debugA?.remoteAvatarParticipants?.some((item) => item.presenceSeen && item.hasReliableState && item.hasPoseFrame && item.leftHandVisible && item.rightHandVisible)),
           bHandsReady: Boolean(debugB?.remoteAvatarParticipants?.some((item) => item.presenceSeen && item.hasReliableState && item.hasPoseFrame && item.leftHandVisible && item.rightHandVisible))
         };
@@ -1230,6 +1246,8 @@ test.describe("@staging runtime HUD space selector", () => {
         timeout: 45000,
         intervals: [1000, 2000, 3000]
       }).toEqual({
+        aLoaded: "loaded",
+        bLoaded: "loaded",
         aHandsReady: true,
         bHandsReady: true
       });
