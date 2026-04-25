@@ -2882,6 +2882,7 @@ window.addEventListener("beforeunload", () => {
 const clock = new THREE.Clock();
 let syncAccumulator = 0;
 let presenceAccumulator = 0;
+let runtimeBootReady = false;
 
 renderer.setAnimationLoop(() => {
   const delta = clock.getDelta();
@@ -2907,35 +2908,39 @@ renderer.setAnimationLoop(() => {
   syncAccumulator += delta;
   presenceAccumulator += delta;
 
-  if (syncAccumulator >= 0.08) {
-    syncAccumulator = 0;
-    latestMode = renderer.xr.isPresenting ? "vr" : /android|iphone|ipad/i.test(navigator.userAgent) ? "mobile" : "desktop";
-    void syncPresence(latestMode, Boolean(livekitRoom));
-  }
+  if (runtimeBootReady) {
+    if (syncAccumulator >= 0.08) {
+      syncAccumulator = 0;
+      latestMode = renderer.xr.isPresenting ? "vr" : /android|iphone|ipad/i.test(navigator.userAgent) ? "mobile" : "desktop";
+      void syncPresence(latestMode, Boolean(livekitRoom));
+    }
 
-  syncAvatarPoseRealtime(nowMs);
+    syncAvatarPoseRealtime(nowMs);
 
-  if (presenceAccumulator >= 0.12) {
-    presenceAccumulator = 0;
-    void refreshPresence().catch((error: unknown) => {
-      console.error(error);
-      const issue = classifyRoomStateError(error);
-      applyIssue(issue, {
-        degradedMode: "api_fallback",
-        roomStateMode: "fallback",
-        lastRecoveryAction: "presence_refresh_failed",
-        roomStateLabel: "Room-state: fallback API"
+    if (presenceAccumulator >= 0.12) {
+      presenceAccumulator = 0;
+      void refreshPresence().catch((error: unknown) => {
+        console.error(error);
+        const issue = classifyRoomStateError(error);
+        applyIssue(issue, {
+          degradedMode: "api_fallback",
+          roomStateMode: "fallback",
+          lastRecoveryAction: "presence_refresh_failed",
+          roomStateLabel: "Room-state: fallback API"
+        });
+        void reportDiagnostics("presence_sync_issue");
       });
-      void reportDiagnostics("presence_sync_issue");
-    });
+    }
   }
 
   renderer.render(scene, camera);
 
-  diagnosticsAccumulator += delta;
-  if (diagnosticsAccumulator >= 2) {
-    diagnosticsAccumulator = 0;
-    void reportDiagnostics();
+  if (runtimeBootReady) {
+    diagnosticsAccumulator += delta;
+    if (diagnosticsAccumulator >= 2) {
+      diagnosticsAccumulator = 0;
+      void reportDiagnostics();
+    }
   }
 });
 
@@ -2969,6 +2974,8 @@ async function main(): Promise<void> {
     wallMaterial,
     setRoomStateStatus
   });
+  latestMode = boot.joinMode;
+  await syncPresence(boot.joinMode, false);
   await loadAvailableSpaces(boot.roomId);
   const avatarCatalogUrl = resolveAvatarCatalogUrl(boot);
   const avatarElements = {
@@ -3183,10 +3190,12 @@ async function main(): Promise<void> {
   localHeadMesh.visible = debugEnabled;
   player.add(localHeadMesh);
 
-  await syncPresence(boot.joinMode, false);
   await refreshPresence();
-  latestMode = boot.joinMode;
   await reportDiagnostics("runtime_booted");
+  syncAccumulator = 0;
+  presenceAccumulator = 0;
+  diagnosticsAccumulator = 0;
+  runtimeBootReady = true;
 }
 
 void main().catch((error: unknown) => {
