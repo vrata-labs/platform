@@ -1,8 +1,7 @@
-import { stat } from "node:fs/promises";
-import { createReadStream, existsSync } from "node:fs";
+import { readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { extname, join, normalize } from "node:path";
-import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 
 import { AccessToken } from "livekit-server-sdk";
@@ -467,12 +466,9 @@ function contentType(filePath: string): string {
 async function serveStatic(response: ServerResponse, filePath: string): Promise<boolean> {
   const normalized = normalize(filePath);
   if (!existsSync(normalized)) return false;
-  const metadata = await stat(normalized);
-  response.writeHead(200, {
-    "content-type": contentType(normalized),
-    "content-length": String(metadata.size)
-  });
-  await pipeline(createReadStream(normalized), response);
+  const data = await readFile(normalized);
+  response.writeHead(200, { "content-type": contentType(normalized) });
+  response.end(data);
   return true;
 }
 

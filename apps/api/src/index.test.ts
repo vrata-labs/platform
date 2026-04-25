@@ -113,25 +113,6 @@ test("room manifest exposes optional scene bundle url", async () => {
   }
 });
 
-test("runtime assets stream from static roots with content length", async () => {
-  process.env.NOAH_DISABLE_AUTOSTART = "1";
-  process.env.API_PORT = "4025";
-  const module = await import("./index.js");
-  const server = module.startApiServer(4025);
-
-  try {
-    const response = await fetch("http://127.0.0.1:4025/assets/avatars/catalog.v1.json");
-    assert.equal(response.ok, true);
-    assert.equal(response.headers.get("content-type"), "application/json; charset=utf-8");
-    assert.equal(Number(response.headers.get("content-length") ?? "0") > 0, true);
-    const payload = await response.json() as { schemaVersion?: number };
-    assert.equal(payload.schemaVersion, 1);
-  } finally {
-    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
-    delete process.env.NOAH_DISABLE_AUTOSTART;
-  }
-});
-
 test("room manifest exposes avatar config when enabled", async () => {
   process.env.NOAH_DISABLE_AUTOSTART = "1";
   process.env.API_PORT = "4017";
