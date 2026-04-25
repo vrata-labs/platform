@@ -2,6 +2,7 @@ import { stat } from "node:fs/promises";
 import { createReadStream, existsSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { extname, join, normalize } from "node:path";
+import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 
 import { AccessToken } from "livekit-server-sdk";
@@ -471,22 +472,7 @@ async function serveStatic(response: ServerResponse, filePath: string): Promise<
     "content-type": contentType(normalized),
     "content-length": String(metadata.size)
   });
-  const stream = createReadStream(normalized);
-  stream.on("error", (error) => {
-    logEvent({
-      service: "api",
-      env: process.env.NODE_ENV ?? "development",
-      errorCode: "static_stream_failed",
-      path: normalized,
-      method: "GET",
-      message: error instanceof Error ? error.message : String(error),
-      timestamp: new Date().toISOString()
-    });
-    if (!response.destroyed) {
-      response.destroy(error);
-    }
-  });
-  stream.pipe(response);
+  await pipeline(createReadStream(normalized), response);
   return true;
 }
 
