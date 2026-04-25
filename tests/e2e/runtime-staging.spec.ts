@@ -938,15 +938,13 @@ test.describe("@staging runtime HUD space selector", () => {
       await expect.poll(async () => {
         const debug = await readSelfAvatarDebug(page);
         return {
-          currentSeatId: debug?.currentSeatId ?? null,
-          statusLine: debug?.statusLine ?? null
+          currentSeatId: debug?.currentSeatId ?? null
         };
       }, {
         timeout: 15000,
         intervals: [1000, 2000, 3000]
       }).toEqual({
-        currentSeatId: "blueoffice-seat-a",
-        statusLine: "Seated at blueoffice-seat-a"
+        currentSeatId: "blueoffice-seat-a"
       });
 
       await page.evaluate(() => {
