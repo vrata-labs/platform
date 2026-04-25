@@ -101,6 +101,8 @@ export interface RuntimeDiagnosticRecord {
     state?: string;
     failureReason?: string | null;
     loadStage?: string | null;
+    assetBytesLoaded?: number | null;
+    assetBytesExpected?: number | null;
     label?: string;
     source?: string;
     assetUrl?: string | null;

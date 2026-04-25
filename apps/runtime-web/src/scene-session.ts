@@ -41,6 +41,10 @@ export async function startSceneBundleSession(input: {
       bundleUrl: input.bundleUrl,
       onLoadStage(stage) {
         input.previousSceneDebug.loadStage = stage;
+      },
+      onAssetProgress(loaded, expected) {
+        input.previousSceneDebug.assetBytesLoaded = loaded;
+        input.previousSceneDebug.assetBytesExpected = expected;
       }
     });
     const effectiveCleanSceneMode = input.requestedCleanSceneMode || loadedScene.manifest.renderMode === "clean";
@@ -58,6 +62,8 @@ export async function startSceneBundleSession(input: {
         state: "loaded",
         failureReason: null,
         loadStage: "loaded",
+        assetBytesLoaded: input.previousSceneDebug.assetBytesLoaded,
+        assetBytesExpected: input.previousSceneDebug.assetBytesExpected,
         label: loadedScene.manifest.label,
         source: loadedScene.manifest.source,
         assetUrl: loadedScene.assetUrl,
@@ -98,6 +104,8 @@ export async function startSceneBundleSession(input: {
         state: "failed",
         failureReason: getFailureReason(error),
         loadStage: input.previousSceneDebug.loadStage,
+        assetBytesLoaded: input.previousSceneDebug.assetBytesLoaded,
+        assetBytesExpected: input.previousSceneDebug.assetBytesExpected,
         missingAssets: [],
         loadMs: null
       },

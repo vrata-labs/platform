@@ -101,6 +101,7 @@ export async function loadSceneBundle(input: {
   player: THREE.Object3D;
   bundleUrl: string;
   onLoadStage?: (stage: string) => void;
+  onAssetProgress?: (loaded: number, expected: number | null) => void;
 }): Promise<LoadedSceneBundle> {
   const startedAt = performance.now();
   input.onLoadStage?.("manifest_requested");
@@ -138,7 +139,37 @@ export async function loadSceneBundle(input: {
         throw new Error(`failed_to_load_scene_asset:${assetResponse.status}`);
       }
       input.onLoadStage?.("asset_response_received");
-      const assetBuffer = await assetResponse.arrayBuffer();
+      const expectedBytes = Number.parseInt(assetResponse.headers.get("content-length") ?? "", 10);
+      const expected = Number.isFinite(expectedBytes) ? expectedBytes : null;
+      if (assetResponse.body) {
+        const reader = assetResponse.body.getReader();
+        const chunks: Uint8Array[] = [];
+        let loaded = 0;
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) {
+            break;
+          }
+          if (!value) {
+            continue;
+          }
+          loaded += value.byteLength;
+          chunks.push(value);
+          input.onAssetProgress?.(loaded, expected);
+        }
+        const assetBytes = new Uint8Array(loaded);
+        let offset = 0;
+        for (const chunk of chunks) {
+          assetBytes.set(chunk, offset);
+          offset += chunk.byteLength;
+        }
+        input.onAssetProgress?.(loaded, expected);
+        var assetBuffer = assetBytes.buffer;
+      } else {
+        const fallbackBuffer = await assetResponse.arrayBuffer();
+        input.onAssetProgress?.(fallbackBuffer.byteLength, expected);
+        var assetBuffer = fallbackBuffer;
+      }
       input.onLoadStage?.("asset_buffer_loaded");
       gltf = await loader.parseAsync(assetBuffer, new URL("./", sceneAssetUrl).toString());
       input.onLoadStage?.("asset_parsed");
