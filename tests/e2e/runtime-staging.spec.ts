@@ -223,6 +223,7 @@ async function readSelfAvatarDebug(page: Page): Promise<{
   };
   currentSeatId?: string | null;
   statusLine?: string | null;
+  sceneBundleState?: string | null;
   xrAxes?: {
     moveX?: number;
     moveY?: number;
@@ -258,6 +259,7 @@ async function readSelfAvatarDebug(page: Page): Promise<{
       };
       currentSeatId?: string | null;
       statusLine?: string | null;
+      sceneBundleState?: string | null;
       xrAxes?: {
         moveX?: number;
         moveY?: number;
@@ -767,6 +769,7 @@ test.describe("@staging runtime HUD space selector", () => {
       await expect.poll(async () => {
         const debug = await readSelfAvatarDebug(page);
         return {
+          sceneBundleState: debug?.sceneBundleState ?? null,
           inputMode: debug?.avatarSnapshot?.inputMode ?? null,
           visibility: debug?.avatarSnapshot?.visibilityState ?? null
         };
@@ -774,6 +777,7 @@ test.describe("@staging runtime HUD space selector", () => {
         timeout: 25000,
         intervals: [1000, 2000, 3000]
       }).toEqual({
+        sceneBundleState: "loaded",
         inputMode: "vr-controller",
         visibility: "hands-only"
       });
@@ -887,6 +891,7 @@ test.describe("@staging runtime HUD space selector", () => {
       await expect.poll(async () => {
         const debug = await readSelfAvatarDebug(page);
         return {
+          sceneBundleState: debug?.sceneBundleState ?? null,
           inputMode: debug?.avatarSnapshot?.inputMode ?? null,
           visibility: debug?.avatarSnapshot?.visibilityState ?? null
         };
@@ -894,6 +899,7 @@ test.describe("@staging runtime HUD space selector", () => {
         timeout: 25000,
         intervals: [1000, 2000, 3000]
       }).toEqual({
+        sceneBundleState: "loaded",
         inputMode: "vr-controller",
         visibility: "hands-only"
       });
