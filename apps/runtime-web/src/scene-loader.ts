@@ -130,7 +130,21 @@ export async function loadSceneBundle(input: {
       missingAssets.add(url);
     };
     const loader = configureGltfLoader(new GLTFLoader(manager));
-    const gltf = await loader.loadAsync(sceneAssetUrl);
+    let gltf;
+    if (/[.]glb$/i.test(sceneAssetUrl)) {
+      input.onLoadStage?.("asset_response_requested");
+      const assetResponse = await fetch(sceneAssetUrl);
+      if (!assetResponse.ok) {
+        throw new Error(`failed_to_load_scene_asset:${assetResponse.status}`);
+      }
+      input.onLoadStage?.("asset_response_received");
+      const assetBuffer = await assetResponse.arrayBuffer();
+      input.onLoadStage?.("asset_buffer_loaded");
+      gltf = await loader.parseAsync(assetBuffer, new URL("./", sceneAssetUrl).toString());
+      input.onLoadStage?.("asset_parsed");
+    } else {
+      gltf = await loader.loadAsync(sceneAssetUrl);
+    }
     group.add(gltf.scene);
   }
   input.onLoadStage?.("asset_loaded");
