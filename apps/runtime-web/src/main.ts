@@ -299,6 +299,7 @@ let currentSeatId: string | null = null;
 let pendingSeatId: string | null = null;
 let lastInteractionConfirmAt = 0;
 let forcedTestInteractionRay: THREE.Ray | null = null;
+let forcedTestInteractionSeatId: string | null = null;
 let forcedTestSeatId: string | null = null;
 let sceneTeleportFloorY = 0;
 let sceneSeatAnchors: SceneBundleSeatAnchor[] = [];
@@ -853,7 +854,18 @@ function updateInteractionRayState():
     debugState.interactionRay.mode = renderer.xr.isPresenting ? "xr-right-stick" : "none";
     return { kind: "none" };
   }
-  const target = resolveInteractionTargetFromRay(ray);
+  const forcedSeatAnchor = forcedTestInteractionSeatId ? sceneSeatAnchorMap.get(forcedTestInteractionSeatId) ?? null : null;
+  const target = forcedSeatAnchor
+    ? {
+        kind: "seat" as const,
+        point: new THREE.Vector3(
+          forcedSeatAnchor.position.x,
+          forcedSeatAnchor.position.y + forcedSeatAnchor.seatHeight,
+          forcedSeatAnchor.position.z
+        ),
+        seatAnchor: forcedSeatAnchor
+      }
+    : resolveInteractionTargetFromRay(ray);
   debugState.interactionRay.active = true;
   debugState.interactionRay.mode = renderer.xr.isPresenting ? "xr-right-stick" : "cursor";
   if (target.kind === "none") {
@@ -930,6 +942,7 @@ function performInteractionTarget(target:
 function confirmInteractionTarget(): void {
   const target = updateInteractionRayState();
   performInteractionTarget(target);
+  forcedTestInteractionSeatId = null;
 }
 
 function supportsAudioOutputSelection(): boolean {
@@ -1354,6 +1367,7 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
     if (!seatAnchor) {
       return false;
     }
+    forcedTestInteractionSeatId = null;
     return forceInteractionRayAtWorldPoint(new THREE.Vector3(
       seatAnchor.position.x,
       seatAnchor.position.y + seatAnchor.seatHeight,
@@ -1361,6 +1375,7 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
     ));
   },
   aimInteractionAtFloor: (x: number, z: number) => {
+    forcedTestInteractionSeatId = null;
     return forceInteractionRayAtWorldPoint(new THREE.Vector3(x, sceneTeleportFloorY, z));
   },
   confirmInteraction: () => {
@@ -1399,6 +1414,7 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
     if (!seatAnchor) {
       return false;
     }
+    forcedTestInteractionSeatId = seatAnchor.id;
     return forceInteractionRayAtWorldPoint(new THREE.Vector3(
       seatAnchor.position.x,
       seatAnchor.position.y + seatAnchor.seatHeight,
