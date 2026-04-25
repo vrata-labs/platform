@@ -99,6 +99,7 @@ export interface RuntimeDiagnosticRecord {
   sceneDebug?: {
     bundleUrl?: string | null;
     state?: string;
+    failureReason?: string | null;
     label?: string;
     source?: string;
     assetUrl?: string | null;

@@ -14,6 +14,13 @@ export interface SceneSessionResult {
   note: "scene_bundle_loaded" | "scene_bundle_failed" | null;
 }
 
+function getFailureReason(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  return String(error);
+}
+
 export async function startSceneBundleSession(input: {
   scene: THREE.Scene;
   player: THREE.Object3D;
@@ -46,6 +53,7 @@ export async function startSceneBundleSession(input: {
         ...input.previousSceneDebug,
         bundleUrl: input.bundleUrl,
         state: "loaded",
+        failureReason: null,
         label: loadedScene.manifest.label,
         source: loadedScene.manifest.source,
         assetUrl: loadedScene.assetUrl,
@@ -73,7 +81,7 @@ export async function startSceneBundleSession(input: {
       brandingSuffix: `Scene: ${loadedScene.manifest.label}`,
       note: "scene_bundle_loaded"
     };
-  } catch {
+  } catch (error) {
     input.setFallbackEnvironmentVisible(true);
     return {
       activeSceneBundleRoot: null,
@@ -84,6 +92,7 @@ export async function startSceneBundleSession(input: {
         ...input.previousSceneDebug,
         bundleUrl: input.bundleUrl,
         state: "failed",
+        failureReason: getFailureReason(error),
         missingAssets: [],
         loadMs: null
       },

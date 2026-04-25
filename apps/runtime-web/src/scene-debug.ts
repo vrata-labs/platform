@@ -3,6 +3,7 @@ import * as THREE from "three";
 export interface SceneDiagnosticsSnapshot {
   bundleUrl: string | null;
   state: "fallback" | "loaded" | "failed";
+  failureReason: string | null;
   label: string | null;
   source: string | null;
   assetUrl: string | null;
@@ -65,6 +66,7 @@ export function createEmptySceneDiagnostics(): SceneDiagnosticsSnapshot {
   return {
     bundleUrl: null,
     state: "fallback",
+    failureReason: null,
     label: null,
     source: null,
     assetUrl: null,
