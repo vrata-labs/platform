@@ -404,7 +404,9 @@ function applyCleanSceneMode(enabled: boolean): void {
 function applySceneDebugFit(bounds: NonNullable<typeof debugState.sceneDebug.boundingBox>): void {
   const horizontalSize = Math.max(bounds.size.x, bounds.size.z, 1);
   const distance = Math.max(horizontalSize * 0.65, 12);
-  const targetY = bounds.center.y;
+  // Keep the current spawn height; debug fit should reframe x/z and look-at,
+  // not launch the player up to the scene's vertical center.
+  const targetY = player.position.y;
   player.position.set(bounds.center.x, targetY, bounds.center.z + distance);
 
   const cameraWorld = new THREE.Vector3();

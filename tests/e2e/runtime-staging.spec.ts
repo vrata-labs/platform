@@ -704,6 +704,37 @@ test.describe("@staging runtime HUD space selector", () => {
     expect(debug?.currentSeatId ?? null).toBeNull();
   });
 
+  test("staging hall debug fit preserves spawn floor height", async ({ page }) => {
+    const hallRoomId = stagingSceneRooms[0]!.roomId;
+    await page.goto(`/rooms/${hallRoomId}?debug=1`);
+
+    await expect.poll(async () => {
+      return page.evaluate(() => {
+        const debug = (window as Window & {
+          __NOAH_DEBUG__?: {
+            statusLine?: string | null;
+            sceneBundleState?: string | null;
+            avatarSnapshot?: {
+              root?: { y?: number | null } | null;
+            } | null;
+          };
+        }).__NOAH_DEBUG__;
+        return {
+          statusReady: Boolean(debug?.statusLine),
+          sceneBundleState: debug?.sceneBundleState ?? null,
+          rootY: debug?.avatarSnapshot?.root?.y ?? null
+        };
+      });
+    }, {
+      timeout: 25000,
+      intervals: [1000, 2000, 3000]
+    }).toEqual({
+      statusReady: true,
+      sceneBundleState: "loaded",
+      rootY: 0
+    });
+  });
+
   test("staging fresh hall mock VR can target and claim a seat through XR interaction path", async ({ page, request }) => {
     const targetName = `Staging Hall Mock VR Seat ${Date.now()}`;
     let roomId: string | null = null;
