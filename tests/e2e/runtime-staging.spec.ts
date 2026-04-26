@@ -2,19 +2,21 @@ import { expect, test, type APIRequestContext, type Page } from "@playwright/tes
 
 const stagingRoomId = process.env.STAGING_ROOM_ID ?? "demo-room";
 const stagingAdminToken = process.env.STAGING_ADMIN_TOKEN ?? "noah-stage-admin";
+const rawHallSceneBundleUrl = "https://raw.githubusercontent.com/psilon2000/noah/deploy/scene-bundles-stage-20260328/apps/runtime-web/public/assets/scenes/sense-hall2-v1/scene.json";
+const rawBlueOfficeSceneBundleUrl = "https://raw.githubusercontent.com/psilon2000/noah/deploy/scene-bundles-stage-20260328/apps/runtime-web/public/assets/scenes/sense-blueoffice-glb-v4/scene.json";
 
 const stagingSceneRooms = [
   {
     name: "Hall",
     roomId: process.env.STAGING_HALL_ROOM_ID ?? "42db8225-f671-4e46-9c28-9381d66a948c",
-    expectedBundleUrl: "/assets/scenes/sense-hall2-v1/scene.json",
+    expectedBundleUrl: rawHallSceneBundleUrl,
     timeoutMs: 20000,
     requireLoadedState: true
   },
   {
     name: "BlueOffice",
     roomId: process.env.STAGING_BLUEOFFICE_ROOM_ID ?? "0b537d34-7b92-4b51-854a-8c64cfb4c114",
-    expectedBundleUrl: "/assets/scenes/sense-blueoffice-glb-v4/scene.json",
+    expectedBundleUrl: rawBlueOfficeSceneBundleUrl,
     timeoutMs: 25000,
     requireLoadedState: true
   },
@@ -754,7 +756,7 @@ test.describe("@staging runtime HUD space selector", () => {
           templateId: "meeting-room-basic",
           name: targetName,
           guestAllowed: true,
-          sceneBundleUrl: "/assets/scenes/sense-hall2-v1/scene.json",
+          sceneBundleUrl: rawHallSceneBundleUrl,
           avatarConfig: {
             avatarsEnabled: true,
             avatarCatalogUrl: "/assets/avatars/catalog.v1.json",
@@ -879,7 +881,7 @@ test.describe("@staging runtime HUD space selector", () => {
           templateId: "meeting-room-basic",
           name: targetName,
           guestAllowed: true,
-          sceneBundleUrl: "/assets/scenes/sense-blueoffice-glb-v4/scene.json",
+          sceneBundleUrl: rawBlueOfficeSceneBundleUrl,
           avatarConfig: {
             avatarsEnabled: true,
             avatarCatalogUrl: "/assets/avatars/catalog.v1.json",
