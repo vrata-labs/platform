@@ -1,5 +1,5 @@
 import { readFile, stat } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { createReadStream, existsSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -469,9 +469,82 @@ async function serveStatic(response: ServerResponse, filePath: string): Promise<
   const [data, metadata] = await Promise.all([readFile(normalized), stat(normalized)]);
   response.writeHead(200, {
     "content-type": contentType(normalized),
-    "content-length": String(metadata.size)
+    "content-length": String(metadata.size),
+    "accept-ranges": "bytes"
   });
   response.end(data);
+  return true;
+}
+
+function parseSingleByteRange(headerValue: string | undefined, totalSize: number): { start: number; end: number } | null {
+  if (!headerValue || !headerValue.startsWith("bytes=")) {
+    return null;
+  }
+  const [rangeSpec] = headerValue.slice("bytes=".length).split(",");
+  if (!rangeSpec) {
+    return null;
+  }
+  const [startText, endText] = rangeSpec.split("-");
+  if (startText === undefined || endText === undefined) {
+    return null;
+  }
+
+  let start: number;
+  let end: number;
+
+  if (startText === "") {
+    const suffixLength = Number.parseInt(endText, 10);
+    if (!Number.isFinite(suffixLength) || suffixLength <= 0) {
+      return null;
+    }
+    start = Math.max(0, totalSize - suffixLength);
+    end = totalSize - 1;
+  } else {
+    start = Number.parseInt(startText, 10);
+    end = endText === "" ? totalSize - 1 : Number.parseInt(endText, 10);
+    if (!Number.isFinite(start) || !Number.isFinite(end)) {
+      return null;
+    }
+  }
+
+  if (start < 0 || end < start || start >= totalSize) {
+    return null;
+  }
+
+  return {
+    start,
+    end: Math.min(end, totalSize - 1)
+  };
+}
+
+async function serveStaticRange(request: IncomingMessage, response: ServerResponse, filePath: string): Promise<boolean> {
+  const normalized = normalize(filePath);
+  if (!existsSync(normalized)) return false;
+  const metadata = await stat(normalized);
+  const range = parseSingleByteRange(request.headers.range, metadata.size);
+  if (!range) {
+    response.writeHead(416, {
+      "accept-ranges": "bytes",
+      "content-range": `bytes */${metadata.size}`
+    });
+    response.end();
+    return true;
+  }
+
+  response.writeHead(206, {
+    "content-type": contentType(normalized),
+    "content-length": String(range.end - range.start + 1),
+    "content-range": `bytes ${range.start}-${range.end}/${metadata.size}`,
+    "accept-ranges": "bytes"
+  });
+
+  const stream = createReadStream(normalized, { start: range.start, end: range.end });
+  stream.on("error", (error) => {
+    if (!response.destroyed) {
+      response.destroy(error);
+    }
+  });
+  stream.pipe(response);
   return true;
 }
 
@@ -768,8 +841,11 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   }
 
   if (method === "GET" && url.pathname.startsWith("/assets/")) {
-    const served = await serveStatic(response, join(runtimeStaticRoot, url.pathname.slice(1)))
-      || await serveStatic(response, join(runtimePublicRoot, url.pathname.slice(1)));
+    const served = request.headers.range
+      ? await serveStaticRange(request, response, join(runtimeStaticRoot, url.pathname.slice(1)))
+        || await serveStaticRange(request, response, join(runtimePublicRoot, url.pathname.slice(1)))
+      : await serveStatic(response, join(runtimeStaticRoot, url.pathname.slice(1)))
+        || await serveStatic(response, join(runtimePublicRoot, url.pathname.slice(1)));
     if (!served) json(response, 404, { error: "asset_not_found" });
     return;
   }

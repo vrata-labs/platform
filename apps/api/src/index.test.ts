@@ -386,6 +386,30 @@ test("xr telemetry endpoint stores latest runtime snapshot for admin inspection"
   }
 });
 
+test("runtime assets support byte range requests", async () => {
+  process.env.NOAH_DISABLE_AUTOSTART = "1";
+  process.env.API_PORT = "4026";
+  const module = await import("./index.js");
+  const server = module.startApiServer(4026);
+
+  try {
+    const response = await fetch("http://127.0.0.1:4026/assets/avatars/catalog.v1.json", {
+      headers: {
+        Range: "bytes=0-31"
+      }
+    });
+    assert.equal(response.status, 206);
+    assert.equal(response.headers.get("accept-ranges"), "bytes");
+    assert.equal(response.headers.get("content-length"), "32");
+    assert.equal(response.headers.get("content-range")?.startsWith("bytes 0-31/"), true);
+    const payload = new Uint8Array(await response.arrayBuffer());
+    assert.equal(payload.byteLength, 32);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    delete process.env.NOAH_DISABLE_AUTOSTART;
+  }
+});
+
 test("media token derives secure livekit url behind https proxy", async () => {
   process.env.NOAH_DISABLE_AUTOSTART = "1";
   process.env.API_PORT = "4022";
