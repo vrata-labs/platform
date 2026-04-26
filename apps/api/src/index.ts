@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { extname, join, normalize } from "node:path";
@@ -466,8 +466,11 @@ function contentType(filePath: string): string {
 async function serveStatic(response: ServerResponse, filePath: string): Promise<boolean> {
   const normalized = normalize(filePath);
   if (!existsSync(normalized)) return false;
-  const data = await readFile(normalized);
-  response.writeHead(200, { "content-type": contentType(normalized) });
+  const [data, metadata] = await Promise.all([readFile(normalized), stat(normalized)]);
+  response.writeHead(200, {
+    "content-type": contentType(normalized),
+    "content-length": String(metadata.size)
+  });
   response.end(data);
   return true;
 }
