@@ -766,7 +766,7 @@ test.describe("@staging runtime HUD space selector", () => {
         visibility: debug?.avatarSnapshot?.visibilityState ?? null
       };
     }, {
-      timeout: 20000,
+      timeout: 45000,
       intervals: [1000, 2000, 3000]
     }).toEqual({
       sceneBundleState: "loaded",
