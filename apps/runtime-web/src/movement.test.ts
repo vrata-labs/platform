@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { applySnapTurn, projectMovementToWorld } from "./movement.js";
+import { applySnapTurn, projectMovementToWorld, resolveXrSnapTurnAxis } from "./movement.js";
 
 test("projectMovementToWorld keeps forward aligned with default camera forward", () => {
   const projected = projectMovementToWorld({ x: 0, z: -1 }, { x: 0, z: -1 });
@@ -34,4 +34,12 @@ test("applySnapTurn respects cooldown even when xr turn axis stays high", () => 
   const next = applySnapTurn({ angle: 0, cooldownSeconds: 0.2 }, -1, 0.016);
   assert.equal(next.angle, 0);
   assert.equal(next.cooldownSeconds < 0.2, true);
+});
+
+test("resolveXrSnapTurnAxis suppresses horizontal turn when forward ray intent dominates", () => {
+  assert.equal(resolveXrSnapTurnAxis(-0.19, -0.98), 0);
+});
+
+test("resolveXrSnapTurnAxis keeps horizontal turn when horizontal input dominates", () => {
+  assert.equal(resolveXrSnapTurnAxis(-0.45, -0.1), -0.45);
 });

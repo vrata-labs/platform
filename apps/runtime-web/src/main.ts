@@ -4,7 +4,7 @@ import { Room, RoomEvent, Track } from "livekit-client";
 
 import { appendBrandingSuffix, applyRoomShellBootState } from "./boot-session.js";
 import { bootRuntime, fetchRuntimeSpaces, listPresence, planVoiceSession, removePresence, resolveCurrentSpace, upsertPresence, type PresenceState, type RuntimeSpaceOption } from "./index.js";
-import { applySnapTurn, computeKeyboardDirection, projectMovementToWorld, sanitizeXrAxes, stepFlatMovement } from "./movement.js";
+import { applySnapTurn, computeKeyboardDirection, projectMovementToWorld, resolveXrSnapTurnAxis, sanitizeXrAxes, stepFlatMovement } from "./movement.js";
 import { createMotionTrack, pushMotionSample, sampleMotion, type MotionTrack } from "./motion-state.js";
 import { connectRoomState, sendAvatarPoseFrame, sendAvatarReliableState, sendParticipantUpdate, sendSeatClaim, sendSeatRelease, type RoomStateClient, type RoomStateSnapshot } from "./room-state-client.js";
 import { classifyMediaError, classifyRoomStateError, createFaultError, getRuntimeIssue, shouldRetryConnection, type RuntimeIssue } from "./runtime-errors.js";
@@ -747,21 +747,6 @@ function getInteractionRay(): THREE.Ray | null {
       },
       playerYaw: yaw
     });
-    const xrControllerHands = resolveLocalAvatarHandTargets({
-      presenting: true,
-      inputSources: Array.from(xrSession?.inputSources ?? []),
-      grips: xrControllerGrips,
-      controllers: xrControllers,
-      xrFrame,
-      referenceSpace,
-      playerOffset: {
-        x: player.position.x,
-        y: player.position.y,
-        z: player.position.z
-      },
-      playerYaw: yaw,
-      preferController: true
-    });
     const rawController = xrControllers[xrRay.source.index] ?? null;
     const rawControllerOrigin = rawController
       ? (() => {
@@ -773,11 +758,8 @@ function getInteractionRay(): THREE.Ray | null {
           };
         })()
       : null;
-    const rayOrigin = xrControllerHands.rightHand
-      ?? xrHandDebug.rightController
-      ?? xrHandDebug.rightGrip
+    const rayOrigin = xrHands.rightHand
       ?? rawControllerOrigin
-      ?? xrHandDebug.rightResolved
       ?? xrRay.origin;
     interactionRayOrigin.set(rayOrigin.x, rayOrigin.y, rayOrigin.z);
     interactionRayDirection.set(xrRay.direction.x, xrRay.direction.y, xrRay.direction.z).normalize();
@@ -2383,7 +2365,11 @@ function updateMovement(delta: number): void {
     debugState.xrAxes = sanitized;
     xrRayVisibleLatched = isXrRayVisibleFromStick(sanitized.turnY);
     const turnBefore = yaw;
-    const turn = applySnapTurn({ angle: yaw, cooldownSeconds: xrTurnCooldown }, sanitized.turnX, delta);
+    const turn = applySnapTurn(
+      { angle: yaw, cooldownSeconds: xrTurnCooldown },
+      resolveXrSnapTurnAxis(sanitized.turnX, sanitized.turnY),
+      delta
+    );
     yaw = turn.angle;
     xrTurnCooldown = turn.cooldownSeconds;
     if (yaw !== turnBefore) {

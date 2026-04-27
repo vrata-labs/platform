@@ -112,6 +112,16 @@ export function applySnapTurn(state: XrTurnState, turnX: number, delta: number):
   };
 }
 
+export function resolveXrSnapTurnAxis(turnX: number, turnY: number): number {
+  // When the right stick is pushed forward strongly enough to drive the
+  // interaction ray, ignore small horizontal bleed so teleport/ray intent
+  // does not accidentally become snap-turn.
+  if (turnY <= -0.45 && Math.abs(turnY) >= Math.abs(turnX)) {
+    return 0;
+  }
+  return turnX;
+}
+
 export function sanitizeXrAxes(sample: XrAxesSample): XrAxesSample {
   return {
     moveX: applyDeadzone(sample.moveX),

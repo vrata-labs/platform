@@ -756,7 +756,7 @@ test.describe("@staging runtime HUD space selector", () => {
   test("staging canonical hall avatarvr seat and teleport exit flow works", async ({ page }) => {
     test.setTimeout(60000);
     const hallRoomId = stagingSceneRooms[0]!.roomId;
-    await page.goto(`/rooms/${hallRoomId}?debug=1&avatarvrmock=1`);
+    await page.goto(`/rooms/${hallRoomId}?debug=1&scenefit=0&avatarvrmock=1`);
 
     await expect.poll(async () => {
       const debug = await readSelfAvatarDebug(page);
