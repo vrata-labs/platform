@@ -3,7 +3,7 @@ import { expect, test, type APIRequestContext, type Page } from "@playwright/tes
 const stagingRoomId = process.env.STAGING_ROOM_ID ?? "demo-room";
 const stagingAdminToken = process.env.STAGING_ADMIN_TOKEN ?? "noah-stage-admin";
 const stagingBaseUrl = process.env.BASE_URL ?? "https://89.169.161.91.sslip.io";
-const stagingAssetBaseUrl = process.env.STAGING_ASSET_BASE_URL ?? `${new URL(stagingBaseUrl).protocol}//assets.${new URL(stagingBaseUrl).host}`;
+const stagingAssetBaseUrl = process.env.STAGING_ASSET_BASE_URL ?? `${new URL(stagingBaseUrl).protocol}//state.${new URL(stagingBaseUrl).host}`;
 const hallSceneBundleUrl = `${stagingAssetBaseUrl}/assets/scenes/sense-hall2-v1/scene.json`;
 const blueOfficeSceneBundleUrl = `${stagingAssetBaseUrl}/assets/scenes/sense-blueoffice-glb-v4/scene.json`;
 

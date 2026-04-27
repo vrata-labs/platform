@@ -15,18 +15,16 @@ write_files:
       set -euo pipefail
       NOAH_IP="$(curl -fsH 'Metadata-Flavor: Google' http://169.254.169.254/computeMetadata/v1/instance/network-interfaces/0/access-configs/0/external-ip)"
       NOAH_APP_DOMAIN="${NOAH_IP}.sslip.io"
-      NOAH_ASSET_DOMAIN="assets.${NOAH_IP}.sslip.io"
       NOAH_LIVEKIT_DOMAIN="livekit.${NOAH_IP}.sslip.io"
       NOAH_STATE_DOMAIN="state.${NOAH_IP}.sslip.io"
 
       mkdir -p /opt/noah/infra/docker
-      export NOAH_IP NOAH_APP_DOMAIN NOAH_ASSET_DOMAIN NOAH_STATE_DOMAIN NOAH_LIVEKIT_DOMAIN
+      export NOAH_IP NOAH_APP_DOMAIN NOAH_STATE_DOMAIN NOAH_LIVEKIT_DOMAIN
       python3 - <<'PY'
       import os
       from pathlib import Path
       ip = os.environ["NOAH_IP"]
       app_domain = os.environ["NOAH_APP_DOMAIN"]
-      asset_domain = os.environ["NOAH_ASSET_DOMAIN"]
       state_domain = os.environ["NOAH_STATE_DOMAIN"]
       livekit_domain = os.environ["NOAH_LIVEKIT_DOMAIN"]
       lines = [
@@ -36,7 +34,6 @@ write_files:
           "IMAGE_TAG=staging",
           f"NOAH_APP_BASE_URL=http://{ip}:4000",
           f"NOAH_APP_DOMAIN={app_domain}",
-          f"NOAH_ASSET_DOMAIN={asset_domain}",
           f"NOAH_STATE_DOMAIN={state_domain}",
           f"NOAH_LIVEKIT_DOMAIN={livekit_domain}",
           f"ROOM_STATE_PUBLIC_URL=ws://{ip}:2567",

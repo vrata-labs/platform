@@ -9,7 +9,7 @@ function deriveAssetBaseUrl(input) {
   if (process.env.STAGING_ASSET_BASE_URL) {
     return process.env.STAGING_ASSET_BASE_URL;
   }
-  return `${url.protocol}//assets.${url.host}`;
+  return `${url.protocol}//state.${url.host}`;
 }
 
 const assetBaseUrl = deriveAssetBaseUrl(baseUrl);
