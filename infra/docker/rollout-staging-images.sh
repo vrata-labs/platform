@@ -55,6 +55,8 @@ for line in lines:
 
 values.setdefault('API_IMAGE_REPO', 'cr.yandex/crp9cm29k6p76hqo8lti/noah-api')
 values.setdefault('ROOM_STATE_IMAGE_REPO', 'cr.yandex/crp9cm29k6p76hqo8lti/noah-room-state')
+if not values.get('NOAH_ASSET_DOMAIN') and values.get('NOAH_APP_DOMAIN'):
+    values['NOAH_ASSET_DOMAIN'] = f"assets.{values['NOAH_APP_DOMAIN']}"
 values['IMAGE_TAG'] = image_tag
 
 rendered = []
@@ -70,7 +72,7 @@ for line in lines:
     else:
       rendered.append(line)
 
-for key in ('API_IMAGE_REPO', 'ROOM_STATE_IMAGE_REPO', 'IMAGE_TAG'):
+for key in ('API_IMAGE_REPO', 'ROOM_STATE_IMAGE_REPO', 'NOAH_ASSET_DOMAIN', 'IMAGE_TAG'):
     if key not in seen:
         rendered.append(f'{key}={values[key]}')
 

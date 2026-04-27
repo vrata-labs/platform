@@ -4,6 +4,16 @@ const baseUrl = process.env.BASE_URL ?? "https://89.169.161.91.sslip.io";
 const adminToken = process.env.STAGING_ADMIN_TOKEN ?? process.env.NOAH_ADMIN_TOKEN ?? "noah-stage-admin";
 const branch = process.env.STAGING_SCENE_BUNDLE_BRANCH ?? "deploy/scene-bundles-stage-20260328";
 
+function deriveAssetBaseUrl(input) {
+  const url = new URL(input);
+  if (process.env.STAGING_ASSET_BASE_URL) {
+    return process.env.STAGING_ASSET_BASE_URL;
+  }
+  return `${url.protocol}//assets.${url.host}`;
+}
+
+const assetBaseUrl = deriveAssetBaseUrl(baseUrl);
+
 const rooms = [
   {
     name: "Hall",
@@ -18,6 +28,9 @@ const rooms = [
 ];
 
 function desiredSceneBundleUrl(sceneId) {
+  if (assetBaseUrl) {
+    return `${assetBaseUrl}/assets/scenes/${sceneId}/scene.json`;
+  }
   return `https://raw.githubusercontent.com/psilon2000/noah/${branch}/apps/runtime-web/public/assets/scenes/${sceneId}/scene.json`;
 }
 

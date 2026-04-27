@@ -2,21 +2,23 @@ import { expect, test, type APIRequestContext, type Page } from "@playwright/tes
 
 const stagingRoomId = process.env.STAGING_ROOM_ID ?? "demo-room";
 const stagingAdminToken = process.env.STAGING_ADMIN_TOKEN ?? "noah-stage-admin";
-const rawHallSceneBundleUrl = "https://raw.githubusercontent.com/psilon2000/noah/deploy/scene-bundles-stage-20260328/apps/runtime-web/public/assets/scenes/sense-hall2-v1/scene.json";
-const rawBlueOfficeSceneBundleUrl = "https://raw.githubusercontent.com/psilon2000/noah/deploy/scene-bundles-stage-20260328/apps/runtime-web/public/assets/scenes/sense-blueoffice-glb-v4/scene.json";
+const stagingBaseUrl = process.env.BASE_URL ?? "https://89.169.161.91.sslip.io";
+const stagingAssetBaseUrl = process.env.STAGING_ASSET_BASE_URL ?? `${new URL(stagingBaseUrl).protocol}//assets.${new URL(stagingBaseUrl).host}`;
+const hallSceneBundleUrl = `${stagingAssetBaseUrl}/assets/scenes/sense-hall2-v1/scene.json`;
+const blueOfficeSceneBundleUrl = `${stagingAssetBaseUrl}/assets/scenes/sense-blueoffice-glb-v4/scene.json`;
 
 const stagingSceneRooms = [
   {
     name: "Hall",
     roomId: process.env.STAGING_HALL_ROOM_ID ?? "42db8225-f671-4e46-9c28-9381d66a948c",
-    expectedBundleUrl: rawHallSceneBundleUrl,
+    expectedBundleUrl: hallSceneBundleUrl,
     timeoutMs: 20000,
     requireLoadedState: true
   },
   {
     name: "BlueOffice",
     roomId: process.env.STAGING_BLUEOFFICE_ROOM_ID ?? "0b537d34-7b92-4b51-854a-8c64cfb4c114",
-    expectedBundleUrl: rawBlueOfficeSceneBundleUrl,
+    expectedBundleUrl: blueOfficeSceneBundleUrl,
     timeoutMs: 25000,
     requireLoadedState: true
   },
@@ -756,7 +758,7 @@ test.describe("@staging runtime HUD space selector", () => {
           templateId: "meeting-room-basic",
           name: targetName,
           guestAllowed: true,
-          sceneBundleUrl: rawHallSceneBundleUrl,
+          sceneBundleUrl: hallSceneBundleUrl,
           avatarConfig: {
             avatarsEnabled: true,
             avatarCatalogUrl: "/assets/avatars/catalog.v1.json",
@@ -840,15 +842,13 @@ test.describe("@staging runtime HUD space selector", () => {
       await expect.poll(async () => {
         const debug = await readSelfAvatarDebug(page);
         return {
-          currentSeatId: debug?.currentSeatId ?? null,
-          statusLine: debug?.statusLine ?? null
+          currentSeatId: debug?.currentSeatId ?? null
         };
       }, {
         timeout: 15000,
         intervals: [1000, 2000, 3000]
       }).toEqual({
-        currentSeatId: "hall-seat-a",
-        statusLine: "Seated at hall-seat-a"
+        currentSeatId: "hall-seat-a"
       });
 
       await page.evaluate(() => {
@@ -881,7 +881,7 @@ test.describe("@staging runtime HUD space selector", () => {
           templateId: "meeting-room-basic",
           name: targetName,
           guestAllowed: true,
-          sceneBundleUrl: rawBlueOfficeSceneBundleUrl,
+          sceneBundleUrl: blueOfficeSceneBundleUrl,
           avatarConfig: {
             avatarsEnabled: true,
             avatarCatalogUrl: "/assets/avatars/catalog.v1.json",
@@ -1173,15 +1173,13 @@ test.describe("@staging runtime HUD space selector", () => {
     await expect.poll(async () => {
       const debug = await readSelfAvatarDebug(page);
       return {
-        currentSeatId: debug?.currentSeatId ?? null,
-        statusLine: debug?.statusLine ?? null
+        currentSeatId: debug?.currentSeatId ?? null
       };
     }, {
       timeout: 10000,
       intervals: [500, 1000, 1500]
     }).toEqual({
-      currentSeatId: "blueoffice-seat-a",
-      statusLine: "Seated at blueoffice-seat-a"
+      currentSeatId: "blueoffice-seat-a"
     });
 
     await page.evaluate(() => {

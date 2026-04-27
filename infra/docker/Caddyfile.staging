@@ -7,6 +7,16 @@
   reverse_proxy api:4000
 }
 
+{$NOAH_ASSET_DOMAIN} {
+  root * /srv/runtime-public
+
+  handle /assets/scenes/* {
+    file_server
+  }
+
+  respond 404
+}
+
 {$NOAH_STATE_DOMAIN} {
   reverse_proxy room-state:2567
 }

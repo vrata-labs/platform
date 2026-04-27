@@ -110,6 +110,7 @@ services:
       - "${NOAH_HTTPS_PORT}:443/udp"
     environment:
       NOAH_APP_DOMAIN: ${NOAH_APP_DOMAIN}
+      NOAH_ASSET_DOMAIN: ${NOAH_ASSET_DOMAIN}
       NOAH_STATE_DOMAIN: ${NOAH_STATE_DOMAIN}
       NOAH_LIVEKIT_DOMAIN: ${NOAH_LIVEKIT_DOMAIN}
     volumes:

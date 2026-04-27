@@ -20,7 +20,7 @@ Practical scene-bundle staging workflow used during SenseTower migration:
 - Commit the bundle changes to the deployment branch `deploy/scene-bundles-stage-20260328` and push to GitHub.
 - Create or update a stage room through the API, then patch its `sceneBundleUrl` to a published bundle URL.
 - Prefer `raw.githubusercontent.com` for freshly changed bundles; use jsDelivr for more stable public links once CDN cache catches up.
-- Canonical staging `Hall` and `BlueOffice` currently rely on raw GitHub bundle URLs because the staging host is too slow for those larger scene assets over local `/assets/...` delivery.
+- Canonical staging `Hall` and `BlueOffice` should use the dedicated asset origin `https://assets.<staging-host>/assets/scenes/...` so large scene files do not compete with same-origin app traffic.
 
 Typical room patch flow:
 
