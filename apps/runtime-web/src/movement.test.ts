@@ -19,13 +19,13 @@ test("projectMovementToWorld maps strafe right using current camera basis", () =
 });
 
 test("applySnapTurn fires when xr turn axis exceeds runtime threshold", () => {
-  const next = applySnapTurn({ angle: 0, cooldownSeconds: 0 }, -0.16, 0.016);
+  const next = applySnapTurn({ angle: 0, cooldownSeconds: 0 }, -0.6, 0.016);
   assert.notEqual(next.angle, 0);
   assert.equal(next.cooldownSeconds > 0, true);
 });
 
 test("applySnapTurn ignores horizontal jitter under runtime threshold", () => {
-  const next = applySnapTurn({ angle: 0, cooldownSeconds: 0 }, -0.14, 0.016);
+  const next = applySnapTurn({ angle: 0, cooldownSeconds: 0 }, -0.5, 0.016);
   assert.equal(next.angle, 0);
   assert.equal(next.cooldownSeconds, 0);
 });
@@ -40,6 +40,10 @@ test("resolveXrSnapTurnAxis suppresses horizontal turn when forward ray intent d
   assert.equal(resolveXrSnapTurnAxis(-0.19, -0.98), 0);
 });
 
+test("resolveXrSnapTurnAxis suppresses horizontal turn whenever ray intent is active", () => {
+  assert.equal(resolveXrSnapTurnAxis(-0.8, -0.6), 0);
+});
+
 test("resolveXrSnapTurnAxis keeps horizontal turn when horizontal input dominates", () => {
-  assert.equal(resolveXrSnapTurnAxis(-0.45, -0.1), -0.45);
+  assert.equal(resolveXrSnapTurnAxis(-0.8, -0.1), -0.8);
 });

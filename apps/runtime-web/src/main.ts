@@ -212,18 +212,52 @@ const interactionRayGeometry = new THREE.BufferGeometry().setFromPoints([
   new THREE.Vector3(0, 0, 0),
   new THREE.Vector3(0, 0, -1)
 ]);
+const interactionRayLineMaterial = new THREE.LineBasicMaterial({
+  color: 0x00f6ff,
+  transparent: true,
+  opacity: 0.95,
+  depthTest: false,
+  depthWrite: false
+});
 const interactionRayLine = new THREE.Line(
   interactionRayGeometry,
-  new THREE.LineBasicMaterial({ color: 0x9be7ff, transparent: true, opacity: 0.9 })
+  interactionRayLineMaterial
 );
 interactionRayLine.visible = false;
+interactionRayLine.renderOrder = 1000;
 scene.add(interactionRayLine);
 
+const interactionRayBeamMaterial = new THREE.MeshBasicMaterial({
+  color: 0x00f6ff,
+  transparent: true,
+  opacity: 0.82,
+  depthTest: false,
+  depthWrite: false,
+  toneMapped: false
+});
+const interactionRayBeam = new THREE.Mesh(
+  new THREE.CylinderGeometry(0.025, 0.025, 1, 12, 1, true),
+  interactionRayBeamMaterial
+);
+interactionRayBeam.visible = false;
+interactionRayBeam.renderOrder = 1001;
+scene.add(interactionRayBeam);
+
+const interactionReticleMaterial = new THREE.MeshBasicMaterial({
+  color: 0x00f6ff,
+  transparent: true,
+  opacity: 0.95,
+  depthTest: false,
+  depthWrite: false,
+  toneMapped: false
+});
+
 const interactionReticle = new THREE.Mesh(
-  new THREE.SphereGeometry(0.08, 16, 16),
-  new THREE.MeshBasicMaterial({ color: 0x9be7ff, transparent: true, opacity: 0.85 })
+  new THREE.SphereGeometry(0.12, 16, 16),
+  interactionReticleMaterial
 );
 interactionReticle.visible = false;
+interactionReticle.renderOrder = 1002;
 scene.add(interactionReticle);
 
 const seatMarkerRoot = new THREE.Group();
@@ -319,6 +353,9 @@ const pointerNdc = new THREE.Vector2(0, 0);
 const interactionRayOrigin = new THREE.Vector3();
 const interactionRayDirection = new THREE.Vector3();
 const interactionRayEnd = new THREE.Vector3();
+const interactionRayBeamMidpoint = new THREE.Vector3();
+const interactionRayBeamDirection = new THREE.Vector3();
+const interactionRayBeamUp = new THREE.Vector3(0, 1, 0);
 const interactionRayPoints = [new THREE.Vector3(), new THREE.Vector3()];
 const interactionRaycaster = new THREE.Raycaster();
 const cameraWorldPosition = new THREE.Vector3();
@@ -453,6 +490,7 @@ function clearInteractionVisuals(): void {
     markXrTelemetry("ray_off");
   }
   interactionRayLine.visible = false;
+  interactionRayBeam.visible = false;
   interactionReticle.visible = false;
   debugState.interactionRay.active = false;
   debugState.interactionRay.targetKind = "none";
@@ -859,13 +897,24 @@ function updateInteractionRayState():
   interactionRayEnd.copy(target.point);
   interactionRayPoints[1].copy(interactionRayEnd);
   interactionRayGeometry.setFromPoints(interactionRayPoints);
+  const interactionRayColor = target.kind === "seat" ? 0xb8ff8d : 0x00f6ff;
+  const interactionRayLength = interactionRayEnd.distanceTo(ray.origin);
   interactionRayLine.visible = true;
+  interactionRayLineMaterial.color.setHex(interactionRayColor);
+  if (interactionRayLength > 0.001) {
+    interactionRayBeamDirection.copy(interactionRayEnd).sub(ray.origin).normalize();
+    interactionRayBeamMidpoint.copy(ray.origin).add(interactionRayEnd).multiplyScalar(0.5);
+    interactionRayBeam.position.copy(interactionRayBeamMidpoint);
+    interactionRayBeam.quaternion.setFromUnitVectors(interactionRayBeamUp, interactionRayBeamDirection);
+    interactionRayBeam.scale.set(1, interactionRayLength, 1);
+    interactionRayBeam.visible = true;
+    interactionRayBeamMaterial.color.setHex(interactionRayColor);
+  } else {
+    interactionRayBeam.visible = false;
+  }
   interactionReticle.visible = true;
   interactionReticle.position.copy(target.point);
-  const reticleMaterial = interactionReticle.material;
-  if (reticleMaterial instanceof THREE.MeshBasicMaterial) {
-    reticleMaterial.color.setHex(target.kind === "seat" ? 0xb8ff8d : 0x9be7ff);
-  }
+  interactionReticleMaterial.color.setHex(interactionRayColor);
   debugState.interactionRay.targetKind = target.kind;
   debugState.interactionRay.seatId = target.kind === "seat" ? target.seatAnchor.id : null;
   debugState.interactionRay.point = {

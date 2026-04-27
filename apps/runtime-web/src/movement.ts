@@ -16,7 +16,7 @@ export interface XrTurnState {
 }
 
 const DEFAULT_ROOM_POSITION_LIMIT = 24;
-const XR_SNAP_TURN_THRESHOLD = 0.15;
+const XR_SNAP_TURN_THRESHOLD = 0.55;
 
 export function applyDeadzone(value: number, deadzone = 0.18): number {
   return Math.abs(value) < deadzone ? 0 : value;
@@ -114,9 +114,9 @@ export function applySnapTurn(state: XrTurnState, turnX: number, delta: number):
 
 export function resolveXrSnapTurnAxis(turnX: number, turnY: number): number {
   // When the right stick is pushed forward strongly enough to drive the
-  // interaction ray, ignore small horizontal bleed so teleport/ray intent
-  // does not accidentally become snap-turn.
-  if (turnY <= -0.45 && Math.abs(turnY) >= Math.abs(turnX)) {
+  // interaction ray, ignore horizontal input so teleport/ray intent does not
+  // accidentally become snap-turn on real controller stick bleed.
+  if (turnY <= -0.45) {
     return 0;
   }
   return turnX;
