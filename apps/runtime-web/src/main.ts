@@ -359,8 +359,9 @@ const interactionRayBeamUp = new THREE.Vector3(0, 1, 0);
 const interactionRayPoints = [new THREE.Vector3(), new THREE.Vector3()];
 const interactionRaycaster = new THREE.Raycaster();
 const cameraWorldPosition = new THREE.Vector3();
+const xrCameraWorldBeforeTurn = new THREE.Vector3();
+const xrCameraWorldAfterTurn = new THREE.Vector3();
 const forcedInteractionDirection = new THREE.Vector3();
-const xrControllerAnchorPosition = new THREE.Vector3();
 const avatarOutboundPublisher = createAvatarOutboundPublisher();
 let lastAvatarMove = { x: 0, z: 0 };
 let lastAvatarTurnRate = 0;
@@ -697,10 +698,41 @@ function applyRoomTransformToTarget(target: { x: number; y: number; z: number } 
     return null;
   }
   return {
-    x: target.x * Math.cos(yaw) - target.z * Math.sin(yaw) + player.position.x,
+    x: target.x * Math.cos(yaw) + target.z * Math.sin(yaw) + player.position.x,
     y: target.y + player.position.y,
-    z: target.x * Math.sin(yaw) + target.z * Math.cos(yaw) + player.position.z
+    z: -target.x * Math.sin(yaw) + target.z * Math.cos(yaw) + player.position.z
   };
+}
+
+function applyYawAroundXrCamera(nextYaw: number): void {
+  if (!renderer.xr.isPresenting || currentSeatId) {
+    yaw = nextYaw;
+    return;
+  }
+  player.updateMatrixWorld(true);
+  camera.getWorldPosition(xrCameraWorldBeforeTurn);
+  yaw = nextYaw;
+  player.rotation.y = yaw;
+  player.updateMatrixWorld(true);
+  camera.getWorldPosition(xrCameraWorldAfterTurn);
+  player.position.x += xrCameraWorldBeforeTurn.x - xrCameraWorldAfterTurn.x;
+  player.position.z += xrCameraWorldBeforeTurn.z - xrCameraWorldAfterTurn.z;
+  player.updateMatrixWorld(true);
+}
+
+function setPlayerPositionForFloorTeleport(floorPoint: THREE.Vector3): void {
+  if (!renderer.xr.isPresenting) {
+    player.position.set(floorPoint.x, sceneTeleportFloorY, floorPoint.z);
+    return;
+  }
+  player.updateMatrixWorld(true);
+  camera.getWorldPosition(cameraWorldPosition);
+  player.position.set(
+    floorPoint.x - (cameraWorldPosition.x - player.position.x),
+    sceneTeleportFloorY,
+    floorPoint.z - (cameraWorldPosition.z - player.position.z)
+  );
+  player.updateMatrixWorld(true);
 }
 
 function isXrRayVisibleFromStick(turnY: number): boolean {
@@ -785,20 +817,7 @@ function getInteractionRay(): THREE.Ray | null {
       },
       playerYaw: yaw
     });
-    const rawController = xrControllers[xrRay.source.index] ?? null;
-    const rawControllerOrigin = rawController
-      ? (() => {
-          rawController.getWorldPosition(xrControllerAnchorPosition);
-          return {
-            x: xrControllerAnchorPosition.x,
-            y: xrControllerAnchorPosition.y,
-            z: xrControllerAnchorPosition.z
-          };
-        })()
-      : null;
-    const rayOrigin = xrHands.rightHand
-      ?? rawControllerOrigin
-      ?? xrRay.origin;
+    const rayOrigin = xrHands.rightHand ?? xrRay.origin;
     interactionRayOrigin.set(rayOrigin.x, rayOrigin.y, rayOrigin.z);
     interactionRayDirection.set(xrRay.direction.x, xrRay.direction.y, xrRay.direction.z).normalize();
     debugState.interactionRay.origin = {
@@ -962,7 +981,7 @@ function performInteractionTarget(target:
     sendSeatRelease(roomStateClient, currentSeatId);
     releaseCurrentSeatLocally();
   }
-  player.position.set(floorPoint.x, sceneTeleportFloorY, floorPoint.z);
+  setPlayerPositionForFloorTeleport(floorPoint);
   debugState.localPosition = {
     x: Number(player.position.x.toFixed(2)),
     z: Number(player.position.z.toFixed(2))
@@ -1474,7 +1493,7 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
       sendSeatRelease(roomStateClient, currentSeatId);
       releaseCurrentSeatLocally();
     }
-    player.position.set(x, sceneTeleportFloorY, z);
+    setPlayerPositionForFloorTeleport(new THREE.Vector3(x, sceneTeleportFloorY, z));
     debugState.localPosition = {
       x: Number(player.position.x.toFixed(2)),
       z: Number(player.position.z.toFixed(2))
@@ -2419,10 +2438,12 @@ function updateMovement(delta: number): void {
       resolveXrSnapTurnAxis(sanitized.turnX, sanitized.turnY),
       delta
     );
-    yaw = turn.angle;
     xrTurnCooldown = turn.cooldownSeconds;
-    if (yaw !== turnBefore) {
+    if (turn.angle !== turnBefore) {
+      applyYawAroundXrCamera(turn.angle);
       markXrTelemetry("snap_turn");
+    } else {
+      yaw = turn.angle;
     }
     debugState.locomotionMode = currentSeatId ? "vr-seated" : "vr";
 

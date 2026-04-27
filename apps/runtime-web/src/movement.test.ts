@@ -24,6 +24,16 @@ test("applySnapTurn fires when xr turn axis exceeds runtime threshold", () => {
   assert.equal(next.cooldownSeconds > 0, true);
 });
 
+test("applySnapTurn maps right-stick positive X to a right turn", () => {
+  const next = applySnapTurn({ angle: 0, cooldownSeconds: 0 }, 0.6, 0.016);
+  assert.equal(Number(next.angle.toFixed(3)), Number((-Math.PI / 6).toFixed(3)));
+});
+
+test("applySnapTurn maps right-stick negative X to a left turn", () => {
+  const next = applySnapTurn({ angle: 0, cooldownSeconds: 0 }, -0.6, 0.016);
+  assert.equal(Number(next.angle.toFixed(3)), Number((Math.PI / 6).toFixed(3)));
+});
+
 test("applySnapTurn ignores horizontal jitter under runtime threshold", () => {
   const next = applySnapTurn({ angle: 0, cooldownSeconds: 0 }, -0.5, 0.016);
   assert.equal(next.angle, 0);

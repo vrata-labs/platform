@@ -171,10 +171,10 @@ test("resolveLocalAvatarHandTargets rotates XR hand poses with player yaw", () =
 
   assert.ok(result.leftHand);
   assert.ok(result.rightHand);
-  assert.ok(Math.abs(result.leftHand.x - 0.8) < 1e-9);
+  assert.ok(Math.abs(result.leftHand.x - 1.2) < 1e-9);
   assert.ok(Math.abs(result.leftHand.y - 1.2) < 1e-9);
-  assert.ok(Math.abs(result.leftHand.z - 5.75) < 1e-9);
-  assert.ok(Math.abs(result.rightHand.x - 0.8) < 1e-9);
+  assert.ok(Math.abs(result.leftHand.z - 6.25) < 1e-9);
+  assert.ok(Math.abs(result.rightHand.x - 1.2) < 1e-9);
   assert.ok(Math.abs(result.rightHand.y - 1.2) < 1e-9);
-  assert.ok(Math.abs(result.rightHand.z - 6.25) < 1e-9);
+  assert.ok(Math.abs(result.rightHand.z - 5.75) < 1e-9);
 });

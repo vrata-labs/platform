@@ -2,6 +2,8 @@ import * as THREE from "three";
 
 import type { XrFrameLike, XrInputSourceLike } from "./avatar-xr-hands.js";
 
+const Y_AXIS = new THREE.Vector3(0, 1, 0);
+
 export interface XrRayLike {
   origin: { x: number; y: number; z: number };
   direction: { x: number; y: number; z: number };
@@ -18,9 +20,9 @@ interface XrPoseWithOrientation {
 function applyPlayerTransform(position: THREE.Vector3, yaw: number, offset: { x: number; y: number; z: number }): THREE.Vector3 {
   const x = position.x;
   const z = position.z;
-  position.x = x * Math.cos(yaw) - z * Math.sin(yaw) + offset.x;
+  position.x = x * Math.cos(yaw) + z * Math.sin(yaw) + offset.x;
   position.y = position.y + offset.y;
-  position.z = x * Math.sin(yaw) + z * Math.cos(yaw) + offset.z;
+  position.z = -x * Math.sin(yaw) + z * Math.cos(yaw) + offset.z;
   return position;
 }
 
@@ -64,6 +66,7 @@ export function resolveXrInteractionRay(input: {
   const origin = applyPlayerTransform(new THREE.Vector3(position.x, position.y, position.z), input.playerYaw, input.playerOffset);
   const direction = new THREE.Vector3(0, 0, -1)
     .applyQuaternion(new THREE.Quaternion(orientation.x, orientation.y, orientation.z, orientation.w))
+    .applyAxisAngle(Y_AXIS, input.playerYaw)
     .normalize();
 
   return {

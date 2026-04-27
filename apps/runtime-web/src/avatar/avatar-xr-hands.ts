@@ -122,9 +122,9 @@ export function resolveLocalAvatarHandTargets(input: {
   const leftTarget = input.preferController ? (debug.leftController ?? debug.leftResolved) : debug.leftResolved;
   const rightTarget = input.preferController ? (debug.rightController ?? debug.rightResolved) : debug.rightResolved;
   const applyOffset = (target: AvatarHandTarget | null): AvatarHandTarget | null => target ? {
-    x: target.x * Math.cos(yaw) - target.z * Math.sin(yaw) + offset.x,
+    x: target.x * Math.cos(yaw) + target.z * Math.sin(yaw) + offset.x,
     y: target.y + offset.y,
-    z: target.x * Math.sin(yaw) + target.z * Math.cos(yaw) + offset.z
+    z: -target.x * Math.sin(yaw) + target.z * Math.cos(yaw) + offset.z
   } : null;
   return {
     leftHand: applyOffset(leftTarget),

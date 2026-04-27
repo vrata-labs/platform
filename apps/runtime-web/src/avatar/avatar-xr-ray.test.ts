@@ -37,9 +37,33 @@ test("resolveXrInteractionRay converts targetRay pose into room space", () => {
   });
 
   assert.ok(ray);
-  assert.equal(Number(ray!.origin.x.toFixed(3)), 7);
+  assert.equal(Number(ray!.origin.x.toFixed(3)), 13);
   assert.equal(Number(ray!.origin.y.toFixed(3)), 3);
-  assert.equal(Number(ray!.origin.z.toFixed(3)), -4);
+  assert.equal(Number(ray!.origin.z.toFixed(3)), -6);
+  assert.equal(Math.abs(Number(ray!.direction.x.toFixed(3))), 0);
+  assert.equal(Number(ray!.direction.y.toFixed(3)), 0);
+  assert.equal(Number(ray!.direction.z.toFixed(3)), 1);
+});
+
+test("resolveXrInteractionRay rotates targetRay direction with player yaw", () => {
+  const ray = resolveXrInteractionRay({
+    inputSources: [{ handedness: "right", targetRayMode: "tracked-pointer", targetRaySpace: "right-ray" }],
+    xrFrame: {
+      getPose() {
+        return {
+          transform: {
+            position: { x: 0, y: 1, z: 0 },
+            orientation: { x: 0, y: 0, z: 0, w: 1 }
+          }
+        };
+      }
+    },
+    referenceSpace: {},
+    playerOffset: { x: 0, y: 0, z: 0 },
+    playerYaw: Math.PI / 2
+  });
+
+  assert.ok(ray);
   assert.equal(Number(ray!.direction.x.toFixed(3)), -1);
   assert.equal(Number(ray!.direction.y.toFixed(3)), 0);
   assert.equal(Math.abs(Number(ray!.direction.z.toFixed(3))), 0);
