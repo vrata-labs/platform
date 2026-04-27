@@ -297,6 +297,7 @@ let pitchAngle = 0;
 let livekitRoom: Room | null = null;
 let microphoneEnabled = false;
 let xrTurnCooldown = 0;
+let xrTurnArmed = true;
 let mobileTouchActive = false;
 const mobileTouchVector = { x: 0, z: 0 };
 let diagnosticsAccumulator = 0;
@@ -2434,11 +2435,13 @@ function updateMovement(delta: number): void {
     xrRayVisibleLatched = isXrRayVisibleFromStick(sanitized.turnY);
     const turnBefore = yaw;
     const turn = applySnapTurn(
-      { angle: yaw, cooldownSeconds: xrTurnCooldown },
+      { angle: yaw, cooldownSeconds: xrTurnCooldown, armed: xrTurnArmed },
       resolveXrSnapTurnAxis(sanitized.turnX, sanitized.turnY),
-      delta
+      delta,
+      sanitized.turnX
     );
     xrTurnCooldown = turn.cooldownSeconds;
+    xrTurnArmed = turn.armed ?? true;
     if (turn.angle !== turnBefore) {
       applyYawAroundXrCamera(turn.angle);
       markXrTelemetry("snap_turn");
@@ -2461,6 +2464,7 @@ function updateMovement(delta: number): void {
   } else {
     xrSelectPressedLastFrame = false;
     xrRayVisibleLatched = false;
+    xrTurnArmed = true;
   }
 
   if (currentSeatId) {

@@ -22,6 +22,7 @@ test("applySnapTurn fires when xr turn axis exceeds runtime threshold", () => {
   const next = applySnapTurn({ angle: 0, cooldownSeconds: 0 }, -0.6, 0.016);
   assert.notEqual(next.angle, 0);
   assert.equal(next.cooldownSeconds > 0, true);
+  assert.equal(next.armed, false);
 });
 
 test("applySnapTurn maps right-stick positive X to a right turn", () => {
@@ -44,6 +45,38 @@ test("applySnapTurn respects cooldown even when xr turn axis stays high", () => 
   const next = applySnapTurn({ angle: 0, cooldownSeconds: 0.2 }, -1, 0.016);
   assert.equal(next.angle, 0);
   assert.equal(next.cooldownSeconds < 0.2, true);
+});
+
+test("applySnapTurn requires stick release before another snap", () => {
+  const snapped = applySnapTurn({ angle: 0, cooldownSeconds: 0 }, -1, 0.016);
+  const held = applySnapTurn({ angle: snapped.angle, cooldownSeconds: 0, armed: snapped.armed }, -1, 0.3);
+  const released = applySnapTurn({ angle: held.angle, cooldownSeconds: held.cooldownSeconds, armed: held.armed }, -0.1, 0.016);
+  const snappedAgain = applySnapTurn({ angle: released.angle, cooldownSeconds: 0, armed: released.armed }, -1, 0.016);
+
+  assert.equal(held.angle, snapped.angle);
+  assert.equal(held.armed, false);
+  assert.equal(released.armed, true);
+  assert.notEqual(snappedAgain.angle, released.angle);
+});
+
+test("applySnapTurn does not re-arm on stick rebound before center release", () => {
+  const snapped = applySnapTurn({ angle: 0, cooldownSeconds: 0 }, -1, 0.016);
+  const rebound = applySnapTurn({ angle: snapped.angle, cooldownSeconds: 0, armed: snapped.armed }, 0.5, 0.3);
+
+  assert.equal(rebound.angle, snapped.angle);
+  assert.equal(rebound.armed, false);
+});
+
+test("applySnapTurn consumes suppressed diagonal ray input until horizontal release", () => {
+  const suppressed = applySnapTurn({ angle: 0, cooldownSeconds: 0, armed: true }, 0, 0.016, -0.8);
+  const rayReleased = applySnapTurn({ angle: suppressed.angle, cooldownSeconds: 0, armed: suppressed.armed }, -0.8, 0.016, -0.8);
+  const centered = applySnapTurn({ angle: rayReleased.angle, cooldownSeconds: 0, armed: rayReleased.armed }, 0, 0.016, 0);
+  const deliberate = applySnapTurn({ angle: centered.angle, cooldownSeconds: 0, armed: centered.armed }, -0.8, 0.016, -0.8);
+
+  assert.equal(suppressed.armed, false);
+  assert.equal(rayReleased.angle, 0);
+  assert.equal(centered.armed, true);
+  assert.notEqual(deliberate.angle, 0);
 });
 
 test("resolveXrSnapTurnAxis suppresses horizontal turn when forward ray intent dominates", () => {

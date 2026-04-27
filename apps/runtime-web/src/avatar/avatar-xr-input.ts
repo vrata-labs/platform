@@ -22,14 +22,7 @@ function pickPrimaryAxes(axes: readonly number[] | null | undefined): { x: numbe
 }
 
 function pickDominantRightStickAxes(axes: readonly number[] | null | undefined): { x: number; y: number } {
-  const primaryX = axes?.[0] ?? 0;
-  const primaryY = axes?.[1] ?? 0;
-  const secondaryX = axes?.[2] ?? 0;
-  const secondaryY = axes?.[3] ?? 0;
-  return {
-    x: Math.abs(secondaryX) >= Math.abs(primaryX) ? secondaryX : primaryX,
-    y: Math.abs(secondaryY) >= Math.abs(primaryY) ? secondaryY : primaryY
-  };
+  return pickPrimaryAxes(axes);
 }
 
 export function resolveAvatarXrInput(inputSources: Array<{ handedness?: string; gamepad?: { axes?: readonly number[] | null } | null }>): {

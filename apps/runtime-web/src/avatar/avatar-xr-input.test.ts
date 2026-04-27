@@ -42,6 +42,14 @@ test("resolveAvatarXrInput uses raw right stick horizontal axis for turn", () =>
   assert.deepEqual(result.axes, { moveX: 0.1, moveY: 0.2, turnX: -0.8, turnY: -0.5 });
 });
 
+test("resolveAvatarXrInput keeps right stick axes from the same active pair", () => {
+  const result = resolveAvatarXrInput([
+    { handedness: "right", gamepad: { axes: [0.7, 0, -0.6, -0.7] } }
+  ]);
+
+  assert.deepEqual(result.axes, { moveX: 0, moveY: 0, turnX: -0.6, turnY: -0.7 });
+});
+
 test("resolveAvatarXrInput falls back to primary right stick axes when secondary pair is zero", () => {
   const result = resolveAvatarXrInput([
     { handedness: "left", gamepad: { axes: [0, 0, 0, 0] } },

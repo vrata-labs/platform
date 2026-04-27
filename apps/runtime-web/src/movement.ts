@@ -13,10 +13,12 @@ export interface XrAxesSample {
 export interface XrTurnState {
   angle: number;
   cooldownSeconds: number;
+  armed?: boolean;
 }
 
 const DEFAULT_ROOM_POSITION_LIMIT = 24;
 const XR_SNAP_TURN_THRESHOLD = 0.55;
+const XR_SNAP_TURN_REARM_THRESHOLD = 0.25;
 
 export function applyDeadzone(value: number, deadzone = 0.18): number {
   return Math.abs(value) < deadzone ? 0 : value;
@@ -96,19 +98,32 @@ export function stepFlatMovement(position: FlatVector, direction: FlatVector, sp
   });
 }
 
-export function applySnapTurn(state: XrTurnState, turnX: number, delta: number): XrTurnState {
+export function applySnapTurn(state: XrTurnState, turnX: number, delta: number, rearmX = turnX): XrTurnState {
   const nextCooldown = Math.max(0, state.cooldownSeconds - delta);
-  if (Math.abs(turnX) < XR_SNAP_TURN_THRESHOLD || nextCooldown > 0) {
+  const armed = state.armed ?? true;
+  const turnMagnitude = Math.abs(turnX);
+  const rearmMagnitude = Math.abs(rearmX);
+  if (rearmMagnitude <= XR_SNAP_TURN_REARM_THRESHOLD) {
     return {
       angle: state.angle,
-      cooldownSeconds: nextCooldown
+      cooldownSeconds: nextCooldown,
+      armed: true
+    };
+  }
+  const nextArmed = turnMagnitude <= XR_SNAP_TURN_REARM_THRESHOLD && rearmMagnitude > XR_SNAP_TURN_REARM_THRESHOLD ? false : armed;
+  if (!nextArmed || turnMagnitude < XR_SNAP_TURN_THRESHOLD || nextCooldown > 0) {
+    return {
+      angle: state.angle,
+      cooldownSeconds: nextCooldown,
+      armed: nextArmed
     };
   }
 
   const snapAngle = Math.PI / 6;
   return {
     angle: state.angle - Math.sign(turnX) * snapAngle,
-    cooldownSeconds: 0.28
+    cooldownSeconds: 0.28,
+    armed: false
   };
 }
 
