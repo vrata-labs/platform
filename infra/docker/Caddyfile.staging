@@ -1,3 +1,9 @@
+{
+  servers {
+    protocols h1 h2
+  }
+}
+
 {$NOAH_APP_DOMAIN} {
   handle /assets/scenes/* {
     root * /srv/runtime-public

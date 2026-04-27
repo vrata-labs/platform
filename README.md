@@ -21,6 +21,7 @@ Practical scene-bundle staging workflow used during SenseTower migration:
 - Create or update a stage room through the API, then patch its `sceneBundleUrl` to a published bundle URL.
 - Prefer `raw.githubusercontent.com` for freshly changed bundles; use jsDelivr for more stable public links once CDN cache catches up.
 - Canonical staging `Hall` and `BlueOffice` should use the dedicated asset origin `https://state.<staging-host>/assets/scenes/...` so large scene files do not compete with same-origin app traffic.
+- Staging Caddy should stay on `h1/h2` only. Allowing `HTTP/3` on this host made browser scene-asset fetches intermittently explode from seconds to minutes, even when `curl` over `HTTP/2` stayed fast.
 
 Typical room patch flow:
 
