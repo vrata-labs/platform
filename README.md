@@ -20,6 +20,7 @@ Practical scene-bundle staging workflow used during SenseTower migration:
 - Commit the bundle changes to the deployment branch `deploy/scene-bundles-stage-20260328` and push to GitHub.
 - Create or update a stage room through the API, then patch its `sceneBundleUrl` to a published bundle URL.
 - Prefer `raw.githubusercontent.com` for freshly changed bundles; use jsDelivr for more stable public links once CDN cache catches up.
+- Canonical staging `Hall` and `BlueOffice` currently rely on raw GitHub bundle URLs because the staging host is too slow for those larger scene assets over local `/assets/...` delivery.
 
 Typical room patch flow:
 
@@ -28,6 +29,12 @@ curl -X PATCH "$BASE/api/rooms/$ROOM_ID" \
   -H 'content-type: application/json' \
   -H 'x-noah-admin-token: noah-stage-admin' \
   -d '{"sceneBundleUrl":"https://raw.githubusercontent.com/psilon2000/noah/deploy/scene-bundles-stage-20260328/apps/runtime-web/public/assets/scenes/<scene-id>/scene.json"}'
+```
+
+Canonical staging patch helper:
+
+```bash
+node tools/patch-staging-scene-bundles.mjs
 ```
 
 Known staging pitfalls:

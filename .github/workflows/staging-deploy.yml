@@ -99,6 +99,15 @@ jobs:
       - name: Install Playwright browser
         run: pnpm exec playwright install --with-deps chromium
 
+      - name: Patch canonical staging scene bundles
+        env:
+          BASE_URL: ${{ env.STAGING_BASE_URL }}
+          STAGING_ADMIN_TOKEN: noah-stage-admin
+          STAGING_HALL_ROOM_ID: 42db8225-f671-4e46-9c28-9381d66a948c
+          STAGING_BLUEOFFICE_ROOM_ID: 0b537d34-7b92-4b51-854a-8c64cfb4c114
+          STAGING_SCENE_BUNDLE_BRANCH: deploy/scene-bundles-stage-20260328
+        run: node tools/patch-staging-scene-bundles.mjs
+
       - name: Verification gate
         id: gate
         continue-on-error: true
