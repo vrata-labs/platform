@@ -227,6 +227,10 @@ async function readSelfAvatarDebug(page: Page): Promise<{
     targetKind?: string | null;
     seatId?: string | null;
   };
+  localPosition?: {
+    x?: number;
+    z?: number;
+  };
   currentSeatId?: string | null;
   statusLine?: string | null;
   sceneBundleState?: string | null;
@@ -263,6 +267,10 @@ async function readSelfAvatarDebug(page: Page): Promise<{
         mode?: string | null;
         targetKind?: string | null;
         seatId?: string | null;
+      };
+      localPosition?: {
+        x?: number;
+        z?: number;
       };
       currentSeatId?: string | null;
       statusLine?: string | null;
@@ -742,6 +750,73 @@ test.describe("@staging runtime HUD space selector", () => {
       statusReady: true,
       sceneBundleState: "loaded",
       rootY: 0
+    });
+  });
+
+  test("staging canonical hall avatarvr seat and teleport exit flow works", async ({ page }) => {
+    const hallRoomId = stagingSceneRooms[0]!.roomId;
+    await page.goto(`/rooms/${hallRoomId}?debug=1&avatarvrmock=1`);
+
+    await expect.poll(async () => {
+      const debug = await readSelfAvatarDebug(page);
+      return {
+        sceneBundleState: debug?.sceneBundleState ?? null,
+        roomStateConnected: debug?.roomStateConnected ?? false,
+        inputMode: debug?.avatarSnapshot?.inputMode ?? null,
+        visibility: debug?.avatarSnapshot?.visibilityState ?? null
+      };
+    }, {
+      timeout: 20000,
+      intervals: [1000, 2000, 3000]
+    }).toEqual({
+      sceneBundleState: "loaded",
+      roomStateConnected: true,
+      inputMode: "vr-controller",
+      visibility: "hands-only"
+    });
+
+    await expect.poll(async () => {
+      return page.evaluate(() => (window as Window & {
+        __NOAH_TEST__?: { claimSeatById?: (seatId: string) => boolean };
+      }).__NOAH_TEST__?.claimSeatById?.("hall-seat-a") ?? false);
+    }, {
+      timeout: 10000,
+      intervals: [500, 1000, 1500]
+    }).toBeTruthy();
+
+    await expect.poll(async () => {
+      const debug = await readSelfAvatarDebug(page);
+      return {
+        currentSeatId: debug?.currentSeatId ?? null
+      };
+    }, {
+      timeout: 15000,
+      intervals: [1000, 2000, 3000]
+    }).toEqual({
+      currentSeatId: "hall-seat-a"
+    });
+
+    await expect.poll(async () => {
+      return page.evaluate(() => (window as Window & {
+        __NOAH_TEST__?: { teleportToFloor?: (x: number, z: number) => boolean };
+      }).__NOAH_TEST__?.teleportToFloor?.(0, -4) ?? false);
+    }, {
+      timeout: 10000,
+      intervals: [500, 1000, 1500]
+    }).toBeTruthy();
+
+    await expect.poll(async () => {
+      const debug = await readSelfAvatarDebug(page);
+      return {
+        currentSeatId: debug?.currentSeatId ?? null,
+        localPositionZ: Number((debug?.localPosition?.z ?? 0).toFixed(1))
+      };
+    }, {
+      timeout: 15000,
+      intervals: [1000, 2000, 3000]
+    }).toEqual({
+      currentSeatId: null,
+      localPositionZ: -4
     });
   });
 
