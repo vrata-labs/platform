@@ -114,6 +114,7 @@ services:
       NOAH_LIVEKIT_DOMAIN: ${NOAH_LIVEKIT_DOMAIN}
     volumes:
       - ${CADDY_CONFIG_FILE}:/etc/caddy/Caddyfile:ro
+      - ../../apps/runtime-web/public:/srv/runtime-public:ro
       - caddy-data:/data
       - caddy-config:/config
 

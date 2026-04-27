@@ -1,4 +1,9 @@
 {$NOAH_APP_DOMAIN} {
+  handle /assets/scenes/* {
+    root * /srv/runtime-public
+    file_server
+  }
+
   reverse_proxy api:4000
 }
 
