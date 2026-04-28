@@ -66,9 +66,9 @@ test("serializeCompactPoseFrame converts local avatar points into world space", 
   });
 
   assert.equal(Number(frame.head.x.toFixed(2)), 3);
-  assert.equal(Number(frame.head.z.toFixed(2)), 4.2);
-  assert.equal(Number(frame.leftHand.x.toFixed(2)), 2.85);
-  assert.equal(Number(frame.leftHand.z.toFixed(2)), 3.7);
+  assert.equal(Number(frame.head.z.toFixed(2)), 3.8);
+  assert.equal(Number(frame.leftHand.x.toFixed(2)), 3.15);
+  assert.equal(Number(frame.leftHand.z.toFixed(2)), 4.3);
 });
 
 test("serializeCompactPoseFrame encodes fallback and hidden hands into flags", () => {

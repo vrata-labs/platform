@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import * as THREE from "three";
 
 import { AVATAR_SELECTION_KEY, createLocalAvatarController } from "./avatar-controller.js";
 import type { LoadedAvatarPreset } from "./avatar-types.js";
@@ -174,6 +175,41 @@ test("createLocalAvatarController applies visible walk pose to body and hands", 
   assert.equal(torso.position.y > 1.12, true);
   assert.notEqual(leftHand.position.z, 0.12);
   assert.notEqual(rightHand.position.z, 0.12);
+});
+
+test("createLocalAvatarController keeps VR hand marker on tracked hand after yaw", () => {
+  const controller = createLocalAvatarController({
+    presets: [createPreset("preset-01")],
+    diagnosticsInput: {
+      catalogId: "technical-v1",
+      packUrl: "/assets/avatars/avatar-pack.v1.glb",
+      packFormat: "procedural-debug-v1",
+      presetCount: 1,
+      validatorSummary: ["preset-01:1000"],
+      sandboxEntryPoint: "/assets/avatars/catalog.v1.json"
+    }
+  });
+
+  controller.update({
+    deltaSeconds: 0.016,
+    inputMode: "vr-controller",
+    xrPresenting: true,
+    xrInputProfile: "oculus-touch-v3",
+    rootPosition: { x: 1, y: 0, z: 6 },
+    yaw: Math.PI / 2,
+    headPosition: { x: 1, y: 1.6, z: 6 },
+    leftHand: { x: 1, y: 1.2, z: 6.25 },
+    rightHand: { x: 1, y: 1.2, z: 5.75 },
+    moveX: 0,
+    moveZ: 0,
+    turnRate: 0
+  });
+
+  controller.root.updateMatrixWorld(true);
+  const rightHandWorld = controller.root.children[4]!.getWorldPosition(new THREE.Vector3());
+  assert.equal(Number(rightHandWorld.x.toFixed(2)), 1);
+  assert.equal(Number(rightHandWorld.y.toFixed(2)), 1.2);
+  assert.equal(Number(rightHandWorld.z.toFixed(2)), 5.75);
 });
 
 test("createLocalAvatarController reflects lipsync state in diagnostics", () => {

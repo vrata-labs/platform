@@ -147,6 +147,8 @@
 - Remote avatar body height must use `poseFrame.root.y`; fixed body height breaks outside-view VR alignment even when the head pose is correct.
 - Legacy `localBody` / `localHead` fallback meshes in `apps/runtime-web/src/main.ts` must stay hidden in avatar-enabled VR flow; otherwise the local user sees a ghost self avatar at a fixed height.
 - Do not orient avatar bodies with `lookAt(...)`; it adds pitch/roll and can make capsules lie horizontally. Keep body orientation yaw-only and reset `rotation.x/z`.
+- Real headset Hall check on `f3c3471` confirmed ray, snap-turn, teleport, and seat interaction as a working baseline. Future hand-marker fixes should stay in avatar hand/IK/pose paths and avoid changing the already-working ray/turn/teleport path unless new telemetry proves it is involved.
+- In VR, the small self-avatar hand spheres are controller markers: they should track resolved XR hand world positions exactly after yaw/teleport, not be clamped like desktop/mobile procedural hands.
 - The room HUD in `apps/runtime-web/index.html` now includes main-path audio controls: microphone selector, speaker selector, `Mic level`, and `Speaker level`.
 - `Speaker level` is more reliable when derived from remote `participant.audioLevel` than from output analyser nodes.
 - Staging-facing tests should avoid brittle assumptions about room names or transient loading text; prefer stable selectors and polling for the concrete control that the feature adds.

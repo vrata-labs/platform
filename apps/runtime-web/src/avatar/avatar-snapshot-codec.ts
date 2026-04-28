@@ -4,9 +4,9 @@ function rotateAroundYaw(point: { x: number; y: number; z: number }, yaw: number
   const cos = Math.cos(yaw);
   const sin = Math.sin(yaw);
   return {
-    x: point.x * cos - point.z * sin,
+    x: point.x * cos + point.z * sin,
     y: point.y,
-    z: point.x * sin + point.z * cos
+    z: -point.x * sin + point.z * cos
   };
 }
 
