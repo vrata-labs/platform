@@ -23,7 +23,7 @@ import { createRemoteAvatarRuntime } from "./avatar/remote-avatar-runtime.js";
 import { createInitialAvatarRuntimeFlags, resolveAvatarCatalogUrl, resolveAvatarRuntimeFlags } from "./avatar/avatar-runtime.js";
 import { resolveAvatarInteractionTarget } from "./avatar/avatar-interaction.js";
 import { resolveXrInteractionRay } from "./avatar/avatar-xr-ray.js";
-import { applySeatAnchorToPlayer, createAvatarSeatAnchorMap, resolveLocalSeatId } from "./avatar/avatar-seating.js";
+import { applySeatAnchorToPlayer, createAvatarSeatAnchorMap, resolveLocalSeatId, resolveSeatRootPosition } from "./avatar/avatar-seating.js";
 import { resolveAvatarViewProfile } from "./avatar/avatar-visibility.js";
 import { collectLocalAvatarHandDebug, resolveLocalAvatarHandTargets } from "./avatar/avatar-xr-hands.js";
 import { resolveAvatarXrInput } from "./avatar/avatar-xr-input.js";
@@ -512,13 +512,14 @@ function clearSeatMarkers(): void {
 
 function createSeatMarker(anchor: SceneBundleSeatAnchor): SeatMarkerView {
   const group = new THREE.Group();
-  group.position.set(anchor.position.x, anchor.position.y, anchor.position.z);
+  const markerPosition = resolveSeatRootPosition(anchor);
+  group.position.set(markerPosition.x, markerPosition.y, markerPosition.z);
 
   const markerMaterial = new THREE.MeshBasicMaterial({
     color: 0x64d7ff,
     transparent: true,
     opacity: 0.9,
-    depthTest: false,
+    depthTest: true,
     depthWrite: false
   });
   const ring = new THREE.Mesh(
