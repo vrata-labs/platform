@@ -34,6 +34,139 @@ cleanup_docker_state() {
   docker network prune -f || true
 }
 
+env_value() {
+  local key="$1"
+  python3 - "$ENV_FILE" "$key" <<'PY'
+from pathlib import Path
+import sys
+
+env_path = Path(sys.argv[1])
+target = sys.argv[2]
+for line in env_path.read_text().splitlines():
+    if not line or line.lstrip().startswith('#') or '=' not in line:
+        continue
+    key, value = line.split('=', 1)
+    if key == target:
+        print(value)
+        break
+PY
+}
+
+url_join() {
+  python3 - "$1" "$2" <<'PY'
+from urllib.parse import urljoin
+import sys
+
+print(urljoin(sys.argv[1], sys.argv[2]))
+PY
+}
+
+wait_for_api() {
+  local api_base="$1"
+  for _ in $(seq 1 30); do
+    if curl -fsS "$api_base/health" >/dev/null; then
+      return 0
+    fi
+    sleep 2
+  done
+  curl -fsS "$api_base/health" >/dev/null
+}
+
+preflight_scene_url() {
+  local scene_url="$1"
+  local manifest
+  local manifest_file
+  local glb_path
+  local glb_url
+  for _ in $(seq 1 30); do
+    if manifest="$(curl -fsS "$scene_url")"; then
+      break
+    fi
+    sleep 2
+  done
+  [ -n "$manifest" ] || manifest="$(curl -fsS "$scene_url")"
+  manifest_file="$(mktemp)"
+  printf '%s' "$manifest" > "$manifest_file"
+  glb_path="$(python3 - "$manifest_file" <<'PY'
+import json
+import sys
+
+payload = json.load(open(sys.argv[1]))
+glb_path = payload.get('glbPath')
+if not isinstance(glb_path, str) or not glb_path:
+    raise SystemExit('missing_glb_path')
+print(glb_path)
+PY
+)"
+  rm -f "$manifest_file"
+  glb_url="$(url_join "$scene_url" "$glb_path")"
+  for _ in $(seq 1 30); do
+    if curl -fsSI "$glb_url" >/dev/null; then
+      return 0
+    fi
+    sleep 2
+  done
+  curl -fsSI "$glb_url" >/dev/null
+}
+
+patch_room_scene_bundle() {
+  local api_base="$1"
+  local admin_token="$2"
+  local room_id="$3"
+  local scene_url="$4"
+  local response_file
+  local actual_url
+
+  preflight_scene_url "$scene_url"
+  response_file="$(mktemp)"
+  curl -fsS -X PATCH "$api_base/api/rooms/$room_id" \
+    -H 'content-type: application/json' \
+    -H "x-noah-admin-token: $admin_token" \
+    -d "{\"sceneBundleUrl\":\"$scene_url\"}" \
+    > "$response_file"
+  actual_url="$(python3 - "$response_file" <<'PY'
+import json
+import sys
+
+payload = json.load(open(sys.argv[1]))
+print(payload.get('sceneBundleUrl') or payload.get('manifest', {}).get('sceneBundle', {}).get('url') or '')
+PY
+)"
+  rm -f "$response_file"
+  if [ "$actual_url" != "$scene_url" ]; then
+    echo "scene_bundle_url_mismatch:$room_id" >&2
+    exit 1
+  fi
+  echo "scene_bundle_patched:$room_id:$scene_url"
+}
+
+patch_canonical_scene_bundles() {
+  local api_port
+  local api_base
+  local admin_token
+  local state_domain
+  local asset_base
+  local hall_room_id
+  local blueoffice_room_id
+
+  api_port="$(env_value NOAH_API_DIRECT_PORT)"
+  admin_token="$(env_value CONTROL_PLANE_ADMIN_TOKEN)"
+  state_domain="$(env_value NOAH_STATE_DOMAIN)"
+  api_base="http://127.0.0.1:${api_port:-4000}"
+  asset_base="https://$state_domain"
+  hall_room_id="${STAGING_HALL_ROOM_ID:-42db8225-f671-4e46-9c28-9381d66a948c}"
+  blueoffice_room_id="${STAGING_BLUEOFFICE_ROOM_ID:-0b537d34-7b92-4b51-854a-8c64cfb4c114}"
+
+  if [ -z "$admin_token" ] || [ -z "$state_domain" ]; then
+    echo "skip_scene_bundle_patch:missing_admin_token_or_state_domain"
+    return 0
+  fi
+
+  wait_for_api "$api_base"
+  patch_room_scene_bundle "$api_base" "$admin_token" "$hall_room_id" "$asset_base/assets/scenes/sense-hall2-v1/$IMAGE_TAG/scene.json"
+  patch_room_scene_bundle "$api_base" "$admin_token" "$blueoffice_room_id" "$asset_base/assets/scenes/sense-blueoffice-glb-v4/$IMAGE_TAG/scene.json"
+}
+
 if [ ! -f "$ENV_FILE" ]; then
   echo "missing_env_file:$ENV_FILE" >&2
   exit 1
@@ -91,6 +224,7 @@ docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" pull api room-state min
 docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" up -d --no-build --pull never --remove-orphans api room-state caddy
 docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" exec -T caddy caddy validate --config /etc/caddy/Caddyfile
 docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" restart caddy
+patch_canonical_scene_bundles
 cleanup_docker_state
 log_disk_state
 docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" ps
