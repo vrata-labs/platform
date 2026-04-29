@@ -16,7 +16,7 @@
     "seatAnchors": [
       {
         "id": "opora-bar-seat-a",
-        "position": { "x": -14.80, "y": 1.14, "z": -8.38 },
+        "position": { "x": -14.804, "y": 1.138, "z": -8.385 },
         "yaw": 0,
         "seatHeight": 0,
         "radius": 0.4,
@@ -24,7 +24,7 @@
       },
       {
         "id": "opora-bar-seat-b",
-        "position": { "x": -14.80, "y": 1.14, "z": -9.80 },
+        "position": { "x": -14.804, "y": 1.138, "z": -9.096 },
         "yaw": 0,
         "seatHeight": 0,
         "radius": 0.4,
@@ -32,7 +32,7 @@
       },
       {
         "id": "opora-bar-seat-c",
-        "position": { "x": -14.80, "y": 1.14, "z": -11.19 },
+        "position": { "x": -14.804, "y": 1.138, "z": -9.805 },
         "yaw": 0,
         "seatHeight": 0,
         "radius": 0.4,
@@ -40,7 +40,7 @@
       },
       {
         "id": "opora-bar-seat-d",
-        "position": { "x": -14.80, "y": 1.14, "z": -12.61 },
+        "position": { "x": -14.804, "y": 1.138, "z": -10.505 },
         "yaw": 0,
         "seatHeight": 0,
         "radius": 0.4,
@@ -48,35 +48,99 @@
       },
       {
         "id": "opora-bar-seat-e",
-        "position": { "x": -16.84, "y": 1.14, "z": -8.38 },
-        "yaw": 3.14,
+        "position": { "x": -14.804, "y": 1.138, "z": -11.19 },
+        "yaw": 0,
         "seatHeight": 0,
         "radius": 0.4,
         "label": "Opora Bar Seat E"
       },
       {
         "id": "opora-bar-seat-f",
-        "position": { "x": -16.84, "y": 1.14, "z": -9.80 },
-        "yaw": 3.14,
+        "position": { "x": -14.804, "y": 1.138, "z": -11.898 },
+        "yaw": 0,
         "seatHeight": 0,
         "radius": 0.4,
         "label": "Opora Bar Seat F"
       },
       {
         "id": "opora-bar-seat-g",
-        "position": { "x": -16.84, "y": 1.14, "z": -11.19 },
-        "yaw": 3.14,
+        "position": { "x": -14.804, "y": 1.138, "z": -12.61 },
+        "yaw": 0,
         "seatHeight": 0,
         "radius": 0.4,
         "label": "Opora Bar Seat G"
       },
       {
         "id": "opora-bar-seat-h",
-        "position": { "x": -16.84, "y": 1.14, "z": -12.61 },
-        "yaw": 3.14,
+        "position": { "x": -14.804, "y": 1.138, "z": -13.314 },
+        "yaw": 0,
         "seatHeight": 0,
         "radius": 0.4,
         "label": "Opora Bar Seat H"
+      },
+      {
+        "id": "opora-bar-seat-i",
+        "position": { "x": -16.841, "y": 1.138, "z": -8.385 },
+        "yaw": 3.142,
+        "seatHeight": 0,
+        "radius": 0.4,
+        "label": "Opora Bar Seat I"
+      },
+      {
+        "id": "opora-bar-seat-j",
+        "position": { "x": -16.841, "y": 1.138, "z": -9.096 },
+        "yaw": 3.142,
+        "seatHeight": 0,
+        "radius": 0.4,
+        "label": "Opora Bar Seat J"
+      },
+      {
+        "id": "opora-bar-seat-k",
+        "position": { "x": -16.841, "y": 1.138, "z": -9.805 },
+        "yaw": 3.142,
+        "seatHeight": 0,
+        "radius": 0.4,
+        "label": "Opora Bar Seat K"
+      },
+      {
+        "id": "opora-bar-seat-l",
+        "position": { "x": -16.841, "y": 1.138, "z": -10.505 },
+        "yaw": 3.142,
+        "seatHeight": 0,
+        "radius": 0.4,
+        "label": "Opora Bar Seat L"
+      },
+      {
+        "id": "opora-bar-seat-m",
+        "position": { "x": -16.841, "y": 1.138, "z": -11.19 },
+        "yaw": 3.142,
+        "seatHeight": 0,
+        "radius": 0.4,
+        "label": "Opora Bar Seat M"
+      },
+      {
+        "id": "opora-bar-seat-n",
+        "position": { "x": -16.841, "y": 1.138, "z": -11.898 },
+        "yaw": 3.142,
+        "seatHeight": 0,
+        "radius": 0.4,
+        "label": "Opora Bar Seat N"
+      },
+      {
+        "id": "opora-bar-seat-o",
+        "position": { "x": -16.841, "y": 1.138, "z": -12.61 },
+        "yaw": 3.142,
+        "seatHeight": 0,
+        "radius": 0.4,
+        "label": "Opora Bar Seat O"
+      },
+      {
+        "id": "opora-bar-seat-p",
+        "position": { "x": -16.841, "y": 1.138, "z": -13.314 },
+        "yaw": 3.142,
+        "seatHeight": 0,
+        "radius": 0.4,
+        "label": "Opora Bar Seat P"
       }
     ]
   },

@@ -11,6 +11,155 @@
       "position": { "x": 0, "y": 0, "z": 0 }
     }
   ],
+  "anchors": {
+    "teleportFloorY": 0,
+    "seatAnchors": [
+      {
+        "id": "newgallery-seat-a",
+        "position": { "x": -19.779, "y": 0.443, "z": 33.046 },
+        "yaw": -2.537,
+        "seatHeight": 0,
+        "radius": 0.55,
+        "label": "NewGallery Seat A"
+      },
+      {
+        "id": "newgallery-seat-b",
+        "position": { "x": -13.217, "y": 12.231, "z": 21.144 },
+        "yaw": 3.142,
+        "seatHeight": 0,
+        "radius": 0.55,
+        "label": "NewGallery Seat B"
+      },
+      {
+        "id": "newgallery-seat-c",
+        "position": { "x": -9.7, "y": 12.231, "z": 30.515 },
+        "yaw": -2.361,
+        "seatHeight": 0,
+        "radius": 0.55,
+        "label": "NewGallery Seat C"
+      },
+      {
+        "id": "newgallery-seat-d",
+        "position": { "x": 8.755, "y": 12.231, "z": 30.498 },
+        "yaw": 2.351,
+        "seatHeight": 0,
+        "radius": 0.55,
+        "label": "NewGallery Seat D"
+      },
+      {
+        "id": "newgallery-seat-e",
+        "position": { "x": 12.019, "y": 12.231, "z": 21.066 },
+        "yaw": -1.176,
+        "seatHeight": 0,
+        "radius": 0.55,
+        "label": "NewGallery Seat E"
+      },
+      {
+        "id": "newgallery-seat-f",
+        "position": { "x": -12.027, "y": 0.45, "z": 45.886 },
+        "yaw": -2.896,
+        "seatHeight": 0,
+        "radius": 0.55,
+        "label": "NewGallery Seat F"
+      },
+      {
+        "id": "newgallery-seat-g",
+        "position": { "x": 10.948, "y": 0.45, "z": 45.867 },
+        "yaw": 2.43,
+        "seatHeight": 0,
+        "radius": 0.55,
+        "label": "NewGallery Seat G"
+      },
+      {
+        "id": "newgallery-seat-h",
+        "position": { "x": -24.705, "y": 0.443, "z": 29.987 },
+        "yaw": -3.067,
+        "seatHeight": 0,
+        "radius": 0.55,
+        "label": "NewGallery Seat H"
+      },
+      {
+        "id": "newgallery-seat-i",
+        "position": { "x": -25.495, "y": 0.443, "z": 22.697 },
+        "yaw": 2.668,
+        "seatHeight": 0,
+        "radius": 0.55,
+        "label": "NewGallery Seat I"
+      },
+      {
+        "id": "newgallery-seat-j",
+        "position": { "x": -19.768, "y": 0.443, "z": 19.098 },
+        "yaw": 2.293,
+        "seatHeight": 0,
+        "radius": 0.55,
+        "label": "NewGallery Seat J"
+      },
+      {
+        "id": "newgallery-seat-k",
+        "position": { "x": -14.385, "y": 0.443, "z": 22.142 },
+        "yaw": 1.811,
+        "seatHeight": 0,
+        "radius": 0.55,
+        "label": "NewGallery Seat K"
+      },
+      {
+        "id": "newgallery-seat-l",
+        "position": { "x": -13.585, "y": 0.443, "z": 29.449 },
+        "yaw": -2.235,
+        "seatHeight": 0,
+        "radius": 0.55,
+        "label": "NewGallery Seat L"
+      },
+      {
+        "id": "newgallery-seat-m",
+        "position": { "x": 19.24, "y": 0.443, "z": 32.979 },
+        "yaw": -2.5,
+        "seatHeight": 0,
+        "radius": 0.55,
+        "label": "NewGallery Seat M"
+      },
+      {
+        "id": "newgallery-seat-n",
+        "position": { "x": 13.815, "y": 0.443, "z": 29.987 },
+        "yaw": -3.067,
+        "seatHeight": 0,
+        "radius": 0.55,
+        "label": "NewGallery Seat N"
+      },
+      {
+        "id": "newgallery-seat-o",
+        "position": { "x": 13.025, "y": 0.443, "z": 22.697 },
+        "yaw": 2.57,
+        "seatHeight": 0,
+        "radius": 0.55,
+        "label": "NewGallery Seat O"
+      },
+      {
+        "id": "newgallery-seat-p",
+        "position": { "x": 18.752, "y": 0.443, "z": 19.098 },
+        "yaw": 2.327,
+        "seatHeight": 0,
+        "radius": 0.55,
+        "label": "NewGallery Seat P"
+      },
+      {
+        "id": "newgallery-seat-q",
+        "position": { "x": 24.135, "y": 0.443, "z": 22.142 },
+        "yaw": 1.811,
+        "seatHeight": 0,
+        "radius": 0.55,
+        "label": "NewGallery Seat Q"
+      },
+      {
+        "id": "newgallery-seat-r",
+        "position": { "x": 24.935, "y": 0.443, "z": 29.449 },
+        "yaw": -2.235,
+        "seatHeight": 0,
+        "radius": 0.55,
+        "label": "NewGallery Seat R"
+      }
+    ]
+  },
   "bounds": { "width": 50, "height": 14, "depth": 50 },
   "notes": "NewGallery exported from SenseTowerVR with helper filtering and targeted material brightening"
 }

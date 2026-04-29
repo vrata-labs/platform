@@ -16,35 +16,483 @@
     "seatAnchors": [
       {
         "id": "blueoffice-seat-a",
-        "position": { "x": 4.65, "y": 0.32, "z": -2.35 },
-        "yaw": 3.14,
+        "position": { "x": 4.651, "y": 0.315, "z": -2.35 },
+        "yaw": 3.142,
         "seatHeight": 0,
         "radius": 0.45,
         "label": "BlueOffice Seat A"
       },
       {
         "id": "blueoffice-seat-b",
-        "position": { "x": 3.30, "y": 0.32, "z": -2.35 },
-        "yaw": 3.14,
+        "position": { "x": 3.299, "y": 0.315, "z": -2.35 },
+        "yaw": 3.142,
         "seatHeight": 0,
         "radius": 0.45,
         "label": "BlueOffice Seat B"
       },
       {
         "id": "blueoffice-seat-c",
-        "position": { "x": 1.91, "y": 0.32, "z": -2.35 },
-        "yaw": 3.14,
+        "position": { "x": 1.908, "y": 0.315, "z": -2.35 },
+        "yaw": 3.142,
         "seatHeight": 0,
         "radius": 0.45,
         "label": "BlueOffice Seat C"
       },
       {
         "id": "blueoffice-seat-d",
-        "position": { "x": -1.65, "y": 0.32, "z": -2.35 },
-        "yaw": 3.14,
+        "position": { "x": -1.652, "y": 0.315, "z": -2.35 },
+        "yaw": 3.142,
         "seatHeight": 0,
         "radius": 0.45,
         "label": "BlueOffice Seat D"
+      },
+      {
+        "id": "blueoffice-seat-05",
+        "position": { "x": -2.97, "y": 0.315, "z": -2.35 },
+        "yaw": 3.142,
+        "seatHeight": 0,
+        "radius": 0.45,
+        "label": "BlueOffice Seat E"
+      },
+      {
+        "id": "blueoffice-seat-06",
+        "position": { "x": -4.401, "y": 0.315, "z": -2.35 },
+        "yaw": 3.142,
+        "seatHeight": 0,
+        "radius": 0.45,
+        "label": "BlueOffice Seat F"
+      },
+      {
+        "id": "blueoffice-seat-07",
+        "position": { "x": -3.912, "y": 0.572, "z": 0.23 },
+        "yaw": 1.571,
+        "seatHeight": 0,
+        "radius": 0.45,
+        "label": "BlueOffice Seat G"
+      },
+      {
+        "id": "blueoffice-seat-08",
+        "position": { "x": 4, "y": 0.572, "z": 0.447 },
+        "yaw": -1.571,
+        "seatHeight": 0,
+        "radius": 0.45,
+        "label": "BlueOffice Seat H"
+      },
+      {
+        "id": "blueoffice-seat-09",
+        "position": { "x": 4.375, "y": 0.221, "z": 3.199 },
+        "yaw": -0.888,
+        "seatHeight": 0,
+        "radius": 0.45,
+        "label": "BlueOffice Seat I"
+      },
+      {
+        "id": "blueoffice-seat-10",
+        "position": { "x": 2.407, "y": 0.221, "z": 4.674 },
+        "yaw": 2.269,
+        "seatHeight": 0,
+        "radius": 0.45,
+        "label": "BlueOffice Seat J"
+      },
+      {
+        "id": "blueoffice-seat-11",
+        "position": { "x": 2.507, "y": 0.221, "z": 2.908 },
+        "yaw": 0.694,
+        "seatHeight": 0,
+        "radius": 0.45,
+        "label": "BlueOffice Seat K"
+      },
+      {
+        "id": "blueoffice-seat-12",
+        "position": { "x": 4.098, "y": 0.221, "z": 4.679 },
+        "yaw": -2.323,
+        "seatHeight": 0,
+        "radius": 0.45,
+        "label": "BlueOffice Seat L"
+      },
+      {
+        "id": "blueoffice-seat-13",
+        "position": { "x": -2.75, "y": 0.221, "z": 3.249 },
+        "yaw": -0.888,
+        "seatHeight": 0,
+        "radius": 0.45,
+        "label": "BlueOffice Seat M"
+      },
+      {
+        "id": "blueoffice-seat-14",
+        "position": { "x": -4.808, "y": 0.221, "z": 4.669 },
+        "yaw": 2.269,
+        "seatHeight": 0,
+        "radius": 0.45,
+        "label": "BlueOffice Seat N"
+      },
+      {
+        "id": "blueoffice-seat-15",
+        "position": { "x": -4.772, "y": 0.221, "z": 2.895 },
+        "yaw": 0.694,
+        "seatHeight": 0,
+        "radius": 0.45,
+        "label": "BlueOffice Seat O"
+      },
+      {
+        "id": "blueoffice-seat-16",
+        "position": { "x": -3.001, "y": 0.221, "z": 4.747 },
+        "yaw": -2.517,
+        "seatHeight": 0,
+        "radius": 0.45,
+        "label": "BlueOffice Seat P"
+      },
+      {
+        "id": "blueoffice-seat-17",
+        "position": { "x": 2.109, "y": 0.401, "z": 8.841 },
+        "yaw": 0,
+        "seatHeight": 0,
+        "radius": 0.45,
+        "label": "BlueOffice Seat Q"
+      },
+      {
+        "id": "blueoffice-seat-18",
+        "position": { "x": 0.184, "y": 0.42, "z": 10.029 },
+        "yaw": 0.623,
+        "seatHeight": 0,
+        "radius": 0.45,
+        "label": "BlueOffice Seat R"
+      },
+      {
+        "id": "blueoffice-seat-19",
+        "position": { "x": -0.65, "y": 0.42, "z": 10.983 },
+        "yaw": 1.571,
+        "seatHeight": 0,
+        "radius": 0.45,
+        "label": "BlueOffice Seat S"
+      },
+      {
+        "id": "blueoffice-seat-20",
+        "position": { "x": -0.65, "y": 0.42, "z": 11.754 },
+        "yaw": 1.571,
+        "seatHeight": 0,
+        "radius": 0.45,
+        "label": "BlueOffice Seat T"
+      },
+      {
+        "id": "blueoffice-seat-21",
+        "position": { "x": -0.65, "y": 0.42, "z": 12.542 },
+        "yaw": 1.571,
+        "seatHeight": 0,
+        "radius": 0.45,
+        "label": "BlueOffice Seat U"
+      },
+      {
+        "id": "blueoffice-seat-22",
+        "position": { "x": -0.65, "y": 0.42, "z": 13.347 },
+        "yaw": 1.571,
+        "seatHeight": 0,
+        "radius": 0.45,
+        "label": "BlueOffice Seat V"
+      },
+      {
+        "id": "blueoffice-seat-23",
+        "position": { "x": -0.65, "y": 0.42, "z": 14.968 },
+        "yaw": 1.571,
+        "seatHeight": 0,
+        "radius": 0.45,
+        "label": "BlueOffice Seat W"
+      },
+      {
+        "id": "blueoffice-seat-24",
+        "position": { "x": -0.65, "y": 0.42, "z": 16.008 },
+        "yaw": 2.436,
+        "seatHeight": 0,
+        "radius": 0.45,
+        "label": "BlueOffice Seat X"
+      },
+      {
+        "id": "blueoffice-seat-25",
+        "position": { "x": 1.097, "y": 0.42, "z": 16.034 },
+        "yaw": 3.142,
+        "seatHeight": 0,
+        "radius": 0.45,
+        "label": "BlueOffice Seat Y"
+      },
+      {
+        "id": "blueoffice-seat-26",
+        "position": { "x": 2.54, "y": 0.401, "z": 16.79 },
+        "yaw": 3.142,
+        "seatHeight": 0,
+        "radius": 0.45,
+        "label": "BlueOffice Seat Z"
+      },
+      {
+        "id": "blueoffice-seat-27",
+        "position": { "x": 2.359, "y": 0.629, "z": 21.145 },
+        "yaw": 0,
+        "seatHeight": 0,
+        "radius": 0.45,
+        "label": "BlueOffice Seat 27"
+      },
+      {
+        "id": "blueoffice-seat-28",
+        "position": { "x": 1.643, "y": 0.629, "z": 21.145 },
+        "yaw": 0,
+        "seatHeight": 0,
+        "radius": 0.45,
+        "label": "BlueOffice Seat 28"
+      },
+      {
+        "id": "blueoffice-seat-29",
+        "position": { "x": 0.938, "y": 0.629, "z": 21.145 },
+        "yaw": 0,
+        "seatHeight": 0,
+        "radius": 0.45,
+        "label": "BlueOffice Seat 29"
+      },
+      {
+        "id": "blueoffice-seat-30",
+        "position": { "x": 0.235, "y": 0.629, "z": 21.145 },
+        "yaw": 0,
+        "seatHeight": 0,
+        "radius": 0.45,
+        "label": "BlueOffice Seat 30"
+      },
+      {
+        "id": "blueoffice-seat-31",
+        "position": { "x": -0.451, "y": 0.629, "z": 21.145 },
+        "yaw": 0,
+        "seatHeight": 0,
+        "radius": 0.45,
+        "label": "BlueOffice Seat 31"
+      },
+      {
+        "id": "blueoffice-seat-32",
+        "position": { "x": -1.165, "y": 0.629, "z": 21.145 },
+        "yaw": 0,
+        "seatHeight": 0,
+        "radius": 0.45,
+        "label": "BlueOffice Seat 32"
+      },
+      {
+        "id": "blueoffice-seat-33",
+        "position": { "x": -1.868, "y": 0.629, "z": 21.145 },
+        "yaw": 0,
+        "seatHeight": 0,
+        "radius": 0.45,
+        "label": "BlueOffice Seat 33"
+      },
+      {
+        "id": "blueoffice-seat-34",
+        "position": { "x": -2.586, "y": 0.629, "z": 21.145 },
+        "yaw": 0,
+        "seatHeight": 0,
+        "radius": 0.45,
+        "label": "BlueOffice Seat 34"
+      },
+      {
+        "id": "blueoffice-seat-35",
+        "position": { "x": -2.586, "y": 0.629, "z": 23.17 },
+        "yaw": 3.142,
+        "seatHeight": 0,
+        "radius": 0.45,
+        "label": "BlueOffice Seat 35"
+      },
+      {
+        "id": "blueoffice-seat-36",
+        "position": { "x": -1.877, "y": 0.629, "z": 23.17 },
+        "yaw": 3.142,
+        "seatHeight": 0,
+        "radius": 0.45,
+        "label": "BlueOffice Seat 36"
+      },
+      {
+        "id": "blueoffice-seat-37",
+        "position": { "x": -1.163, "y": 0.629, "z": 23.17 },
+        "yaw": 3.142,
+        "seatHeight": 0,
+        "radius": 0.45,
+        "label": "BlueOffice Seat 37"
+      },
+      {
+        "id": "blueoffice-seat-38",
+        "position": { "x": -0.451, "y": 0.629, "z": 23.17 },
+        "yaw": 3.142,
+        "seatHeight": 0,
+        "radius": 0.45,
+        "label": "BlueOffice Seat 38"
+      },
+      {
+        "id": "blueoffice-seat-39",
+        "position": { "x": 0.23, "y": 0.629, "z": 23.17 },
+        "yaw": 3.142,
+        "seatHeight": 0,
+        "radius": 0.45,
+        "label": "BlueOffice Seat 39"
+      },
+      {
+        "id": "blueoffice-seat-40",
+        "position": { "x": 0.93, "y": 0.629, "z": 23.17 },
+        "yaw": 3.142,
+        "seatHeight": 0,
+        "radius": 0.45,
+        "label": "BlueOffice Seat 40"
+      },
+      {
+        "id": "blueoffice-seat-41",
+        "position": { "x": 1.635, "y": 0.629, "z": 23.17 },
+        "yaw": 3.142,
+        "seatHeight": 0,
+        "radius": 0.45,
+        "label": "BlueOffice Seat 41"
+      },
+      {
+        "id": "blueoffice-seat-42",
+        "position": { "x": 2.344, "y": 0.629, "z": 23.17 },
+        "yaw": 3.142,
+        "seatHeight": 0,
+        "radius": 0.45,
+        "label": "BlueOffice Seat 42"
+      },
+      {
+        "id": "blueoffice-seat-43",
+        "position": { "x": -6.935, "y": 0.752, "z": 15.391 },
+        "yaw": 3.142,
+        "seatHeight": 0,
+        "radius": 0.45,
+        "label": "BlueOffice Seat 43"
+      },
+      {
+        "id": "blueoffice-seat-44",
+        "position": { "x": -8.2, "y": 0.752, "z": 13.956 },
+        "yaw": 1.571,
+        "seatHeight": 0,
+        "radius": 0.45,
+        "label": "BlueOffice Seat 44"
+      },
+      {
+        "id": "blueoffice-seat-45",
+        "position": { "x": -8.2, "y": 0.752, "z": 13.094 },
+        "yaw": 1.571,
+        "seatHeight": 0,
+        "radius": 0.45,
+        "label": "BlueOffice Seat 45"
+      },
+      {
+        "id": "blueoffice-seat-46",
+        "position": { "x": -8.2, "y": 0.752, "z": 12.273 },
+        "yaw": 1.571,
+        "seatHeight": 0,
+        "radius": 0.45,
+        "label": "BlueOffice Seat 46"
+      },
+      {
+        "id": "blueoffice-seat-47",
+        "position": { "x": -8.2, "y": 0.752, "z": 11.392 },
+        "yaw": 1.571,
+        "seatHeight": 0,
+        "radius": 0.45,
+        "label": "BlueOffice Seat 47"
+      },
+      {
+        "id": "blueoffice-seat-48",
+        "position": { "x": -6.889, "y": 0.752, "z": 10.244 },
+        "yaw": 0,
+        "seatHeight": 0,
+        "radius": 0.45,
+        "label": "BlueOffice Seat 48"
+      },
+      {
+        "id": "blueoffice-seat-49",
+        "position": { "x": -5.748, "y": 0.752, "z": 11.381 },
+        "yaw": -1.571,
+        "seatHeight": 0,
+        "radius": 0.45,
+        "label": "BlueOffice Seat 49"
+      },
+      {
+        "id": "blueoffice-seat-50",
+        "position": { "x": -5.748, "y": 0.752, "z": 12.281 },
+        "yaw": -1.571,
+        "seatHeight": 0,
+        "radius": 0.45,
+        "label": "BlueOffice Seat 50"
+      },
+      {
+        "id": "blueoffice-seat-51",
+        "position": { "x": -5.748, "y": 0.752, "z": 13.124 },
+        "yaw": -1.571,
+        "seatHeight": 0,
+        "radius": 0.45,
+        "label": "BlueOffice Seat 51"
+      },
+      {
+        "id": "blueoffice-seat-52",
+        "position": { "x": -5.748, "y": 0.752, "z": 13.979 },
+        "yaw": -1.571,
+        "seatHeight": 0,
+        "radius": 0.45,
+        "label": "BlueOffice Seat 52"
+      },
+      {
+        "id": "blueoffice-seat-53",
+        "position": { "x": -2.202, "y": 0.42, "z": 11.486 },
+        "yaw": -1.571,
+        "seatHeight": 0,
+        "radius": 0.45,
+        "label": "BlueOffice Seat 53"
+      },
+      {
+        "id": "blueoffice-seat-54",
+        "position": { "x": -2.202, "y": 0.42, "z": 13.141 },
+        "yaw": -1.571,
+        "seatHeight": 0,
+        "radius": 0.45,
+        "label": "BlueOffice Seat 54"
+      },
+      {
+        "id": "blueoffice-seat-55",
+        "position": { "x": -2.202, "y": 0.42, "z": 13.977 },
+        "yaw": -1.571,
+        "seatHeight": 0,
+        "radius": 0.45,
+        "label": "BlueOffice Seat 55"
+      },
+      {
+        "id": "blueoffice-seat-56",
+        "position": { "x": -2.202, "y": 0.42, "z": 14.731 },
+        "yaw": -1.571,
+        "seatHeight": 0,
+        "radius": 0.45,
+        "label": "BlueOffice Seat 56"
+      },
+      {
+        "id": "blueoffice-seat-57",
+        "position": { "x": -2.202, "y": 0.42, "z": 12.266 },
+        "yaw": -1.571,
+        "seatHeight": 0,
+        "radius": 0.45,
+        "label": "BlueOffice Seat 57"
+      },
+      {
+        "id": "blueoffice-seat-58",
+        "position": { "x": -2.202, "y": 0.42, "z": 15.527 },
+        "yaw": -1.571,
+        "seatHeight": 0,
+        "radius": 0.45,
+        "label": "BlueOffice Seat 58"
+      },
+      {
+        "id": "blueoffice-seat-59",
+        "position": { "x": -0.65, "y": 0.42, "z": 14.25 },
+        "yaw": 1.571,
+        "seatHeight": 0,
+        "radius": 0.45,
+        "label": "BlueOffice Seat 59"
+      },
+      {
+        "id": "blueoffice-seat-60",
+        "position": { "x": 0.328, "y": 0.42, "z": 16.034 },
+        "yaw": 3.142,
+        "seatHeight": 0,
+        "radius": 0.45,
+        "label": "BlueOffice Seat 60"
       }
     ]
   },

@@ -16,19 +16,99 @@
     "seatAnchors": [
       {
         "id": "hall-seat-a",
-        "position": { "x": -1.4, "y": 0, "z": -2.4 },
-        "yaw": 0,
+        "position": { "x": -9.533, "y": 0, "z": -0.439 },
+        "yaw": -2.628,
         "seatHeight": 0.45,
-        "radius": 0.55,
-        "label": "Hall Seat A"
+        "radius": 0.65,
+        "label": "Hall Sofa A"
       },
       {
         "id": "hall-seat-b",
-        "position": { "x": 1.4, "y": 0, "z": -2.4 },
-        "yaw": 0,
+        "position": { "x": 5.496, "y": 0, "z": -0.949 },
+        "yaw": 3.063,
         "seatHeight": 0.45,
-        "radius": 0.55,
-        "label": "Hall Seat B"
+        "radius": 0.65,
+        "label": "Hall Sofa B"
+      },
+      {
+        "id": "hall-seat-c",
+        "position": { "x": 10.978, "y": 0, "z": 4.253 },
+        "yaw": 2.395,
+        "seatHeight": 0.45,
+        "radius": 0.65,
+        "label": "Hall Sofa C"
+      },
+      {
+        "id": "hall-seat-d",
+        "position": { "x": 7.993, "y": 0, "z": 11.299 },
+        "yaw": 2.231,
+        "seatHeight": 0.45,
+        "radius": 0.65,
+        "label": "Hall Sofa D"
+      },
+      {
+        "id": "hall-seat-e",
+        "position": { "x": -8.353, "y": 0, "z": 11.412 },
+        "yaw": -2.284,
+        "seatHeight": 0.45,
+        "radius": 0.65,
+        "label": "Hall Sofa E"
+      },
+      {
+        "id": "hall-seat-f",
+        "position": { "x": -2.235, "y": 7.017, "z": 4.776 },
+        "yaw": -2.983,
+        "seatHeight": 0.45,
+        "radius": 0.65,
+        "label": "Hall Sofa F"
+      },
+      {
+        "id": "hall-seat-g",
+        "position": { "x": -6.526, "y": 7.018, "z": 6.94 },
+        "yaw": -2.739,
+        "seatHeight": 0.45,
+        "radius": 0.65,
+        "label": "Hall Sofa G"
+      },
+      {
+        "id": "hall-seat-h",
+        "position": { "x": -6.776, "y": 7.018, "z": 13.018 },
+        "yaw": -2.129,
+        "seatHeight": 0.45,
+        "radius": 0.65,
+        "label": "Hall Sofa H"
+      },
+      {
+        "id": "hall-seat-i",
+        "position": { "x": 7.099, "y": 7.018, "z": 7.834 },
+        "yaw": 2.603,
+        "seatHeight": 0.45,
+        "radius": 0.65,
+        "label": "Hall Sofa I"
+      },
+      {
+        "id": "hall-seat-j",
+        "position": { "x": 5.753, "y": 7.018, "z": 13.652 },
+        "yaw": 1.986,
+        "seatHeight": 0.45,
+        "radius": 0.65,
+        "label": "Hall Sofa J"
+      },
+      {
+        "id": "hall-seat-k",
+        "position": { "x": -6.22, "y": 0, "z": -3.075 },
+        "yaw": -2.906,
+        "seatHeight": 0.45,
+        "radius": 0.65,
+        "label": "Hall Sofa K"
+      },
+      {
+        "id": "hall-seat-l",
+        "position": { "x": 2.895, "y": 7.017, "z": 4.944 },
+        "yaw": 2.929,
+        "seatHeight": 0.45,
+        "radius": 0.65,
+        "label": "Hall Sofa L"
       }
     ]
   },

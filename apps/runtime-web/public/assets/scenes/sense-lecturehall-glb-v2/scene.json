@@ -16,67 +16,107 @@
     "seatAnchors": [
       {
         "id": "lecturehall-seat-a",
-        "position": { "x": -0.47, "y": 0.00, "z": 1.78 },
-        "yaw": -2.84,
+        "position": { "x": -0.468, "y": -0.003, "z": 1.782 },
+        "yaw": -2.842,
         "seatHeight": 0,
         "radius": 0.45,
         "label": "LectureHall Seat A"
       },
       {
         "id": "lecturehall-seat-b",
-        "position": { "x": -0.45, "y": 0.00, "z": 0.65 },
-        "yaw": 2.26,
+        "position": { "x": -0.447, "y": -0.003, "z": 0.651 },
+        "yaw": 2.259,
         "seatHeight": 0,
         "radius": 0.45,
         "label": "LectureHall Seat B"
       },
       {
         "id": "lecturehall-seat-c",
-        "position": { "x": -4.21, "y": 0.60, "z": 0.13 },
-        "yaw": 2.26,
+        "position": { "x": -4.211, "y": 0.597, "z": 0.128 },
+        "yaw": 2.259,
         "seatHeight": 0,
         "radius": 0.45,
         "label": "LectureHall Seat C"
       },
       {
         "id": "lecturehall-seat-d",
-        "position": { "x": -4.23, "y": 0.60, "z": 1.26 },
-        "yaw": -2.84,
+        "position": { "x": -4.232, "y": 0.597, "z": 1.259 },
+        "yaw": -2.842,
         "seatHeight": 0,
         "radius": 0.45,
         "label": "LectureHall Seat D"
       },
       {
         "id": "lecturehall-seat-e",
-        "position": { "x": -5.43, "y": 0.60, "z": 4.92 },
-        "yaw": 1.55,
+        "position": { "x": -4.241, "y": 0.597, "z": 3.583 },
+        "yaw": -2.842,
         "seatHeight": 0,
         "radius": 0.45,
         "label": "LectureHall Seat E"
       },
       {
         "id": "lecturehall-seat-f",
-        "position": { "x": -5.26, "y": 0.60, "z": 6.03 },
-        "yaw": 1.76,
+        "position": { "x": -4.22, "y": 0.597, "z": 2.452 },
+        "yaw": 2.259,
         "seatHeight": 0,
         "radius": 0.45,
         "label": "LectureHall Seat F"
       },
       {
         "id": "lecturehall-seat-g",
-        "position": { "x": -4.49, "y": 0.60, "z": 5.42 },
-        "yaw": 1.55,
+        "position": { "x": -5.429, "y": 0.596, "z": 4.925 },
+        "yaw": 1.553,
         "seatHeight": 0,
         "radius": 0.45,
         "label": "LectureHall Seat G"
       },
       {
         "id": "lecturehall-seat-h",
-        "position": { "x": 0.05, "y": -0.01, "z": 4.44 },
+        "position": { "x": -5.257, "y": 0.596, "z": 6.03 },
         "yaw": 1.76,
         "seatHeight": 0,
         "radius": 0.45,
         "label": "LectureHall Seat H"
+      },
+      {
+        "id": "lecturehall-seat-i",
+        "position": { "x": -4.493, "y": 0.596, "z": 5.418 },
+        "yaw": 1.553,
+        "seatHeight": 0,
+        "radius": 0.45,
+        "label": "LectureHall Seat I"
+      },
+      {
+        "id": "lecturehall-seat-j",
+        "position": { "x": 0.05, "y": -0.007, "z": 4.438 },
+        "yaw": 1.76,
+        "seatHeight": 0,
+        "radius": 0.45,
+        "label": "LectureHall Seat J"
+      },
+      {
+        "id": "lecturehall-seat-k",
+        "position": { "x": 0.851, "y": -0.007, "z": 3.748 },
+        "yaw": 1.553,
+        "seatHeight": 0,
+        "radius": 0.45,
+        "label": "LectureHall Seat K"
+      },
+      {
+        "id": "lecturehall-seat-l",
+        "position": { "x": -0.015, "y": -0.007, "z": 2.987 },
+        "yaw": 1.553,
+        "seatHeight": 0,
+        "radius": 0.45,
+        "label": "LectureHall Seat L"
+      },
+      {
+        "id": "lecturehall-seat-m",
+        "position": { "x": 1.77, "y": -0.007, "z": 7.408 },
+        "yaw": -3.094,
+        "seatHeight": 0,
+        "radius": 0.45,
+        "label": "LectureHall Seat M"
       }
     ]
   },
