@@ -81,8 +81,16 @@ log_disk_state
 cleanup_docker_state
 log_disk_state
 
+if [ -f "$ROOT_DIR/tools/snapshot-scene-assets.sh" ]; then
+  STAGING_SCENE_BUNDLE_VERSION="$IMAGE_TAG" \
+    STAGING_SCENE_IDS="${STAGING_SCENE_IDS:-sense-hall2-v1,sense-blueoffice-glb-v4}" \
+    bash "$ROOT_DIR/tools/snapshot-scene-assets.sh"
+fi
+
 docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" pull api room-state minio-bootstrap
 docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" up -d --no-build --pull never --remove-orphans api room-state caddy
+docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" exec -T caddy caddy validate --config /etc/caddy/Caddyfile
+docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" restart caddy
 cleanup_docker_state
 log_disk_state
 docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" ps

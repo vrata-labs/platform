@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { readFile, writeFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 
 export const defaultRooms = [
@@ -36,8 +37,8 @@ export function deriveAssetBaseUrl(input, env = process.env) {
   return `${url.protocol}//state.${url.host}`;
 }
 
-export function resolveSceneBundleVersion(env = process.env) {
-  const version = env.STAGING_SCENE_BUNDLE_VERSION ?? env.DEPLOY_SHA ?? env.GITHUB_SHA ?? "";
+export function resolveSceneBundleVersion(env = process.env, fallbackVersion = "") {
+  const version = env.STAGING_SCENE_BUNDLE_VERSION ?? env.DEPLOY_SHA ?? env.GITHUB_SHA ?? fallbackVersion;
   if (!version) {
     if (env.STAGING_ALLOW_MUTABLE_SCENE_BUNDLE_URL === "1") {
       return null;
@@ -51,6 +52,14 @@ export function resolveSceneBundleVersion(env = process.env) {
     throw new Error("invalid_scene_bundle_version:expected_full_git_sha");
   }
   return version;
+}
+
+function resolveGitHeadVersion() {
+  try {
+    return execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+  } catch {
+    return "";
+  }
 }
 
 export function desiredSceneBundleUrl(sceneId, input) {
@@ -258,7 +267,7 @@ async function main() {
 
   const branch = process.env.STAGING_SCENE_BUNDLE_BRANCH ?? defaultBranch;
   const assetBaseUrl = deriveAssetBaseUrl(baseUrl);
-  const version = resolveSceneBundleVersion();
+  const version = resolveSceneBundleVersion(process.env, resolveGitHeadVersion());
   const preflightAttempts = Number.parseInt(process.env.STAGING_SCENE_BUNDLE_PREFLIGHT_ATTEMPTS ?? "12", 10);
   const preflightDelayMs = Number.parseInt(process.env.STAGING_SCENE_BUNDLE_PREFLIGHT_DELAY_MS ?? "5000", 10);
   const rooms = await patchRooms({

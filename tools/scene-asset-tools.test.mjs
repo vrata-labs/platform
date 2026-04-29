@@ -44,6 +44,7 @@ async function withServer(handler, callback) {
 test("resolveSceneBundleVersion requires an explicit full sha by default", () => {
   assert.equal(resolveSceneBundleVersion({ STAGING_SCENE_BUNDLE_VERSION: fullSha }), fullSha);
   assert.equal(resolveSceneBundleVersion({ DEPLOY_SHA: fullSha }), fullSha);
+  assert.equal(resolveSceneBundleVersion({}, fullSha), fullSha);
   assert.throws(() => resolveSceneBundleVersion({}), /missing_scene_bundle_version/);
   assert.throws(() => resolveSceneBundleVersion({ STAGING_SCENE_BUNDLE_VERSION: "v1" }), /expected_full_git_sha/);
   assert.equal(resolveSceneBundleVersion({ STAGING_ALLOW_MUTABLE_SCENE_BUNDLE_URL: "1" }), null);
