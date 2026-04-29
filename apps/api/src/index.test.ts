@@ -730,8 +730,25 @@ test("scene bundle versions can switch current binding without runtime contract 
       return response.json();
     };
 
-    await createVersion("v1");
-    await createVersion("v2");
+    const versionOne = await createVersion("v1") as { publicUrl: string };
+    const versionTwo = await createVersion("v2") as { publicUrl: string };
+    assert.equal(versionOne.publicUrl, "http://127.0.0.1:9000/noah-scene-bundles/scenes/hall-productized/v1/scene.json");
+    assert.equal(versionTwo.publicUrl, "http://127.0.0.1:9000/noah-scene-bundles/scenes/hall-productized/v2/scene.json");
+    assert.notEqual(versionOne.publicUrl, versionTwo.publicUrl);
+
+    const duplicateVersionResponse = await fetch(`http://127.0.0.1:4016/api/scene-bundles/hall-productized/versions`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-noah-admin-token": "test-admin-token"
+      },
+      body: JSON.stringify({
+        storageKey: "scenes/hall-productized/v2/scene.json",
+        version: "v2"
+      })
+    });
+    assert.equal(duplicateVersionResponse.status, 400);
+    assert.equal((await duplicateVersionResponse.json() as { error?: string }).error, "scene_bundle_version_conflict");
 
     const roomResponse = await fetch("http://127.0.0.1:4016/api/rooms", {
       method: "POST",

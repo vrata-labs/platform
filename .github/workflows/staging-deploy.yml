@@ -92,6 +92,9 @@ jobs:
           cd /opt/noah
           git -c safe.directory=/opt/noah fetch origin
           git -c safe.directory=/opt/noah checkout ${DEPLOY_SHA}
+          if [ -f ./tools/snapshot-scene-assets.sh ]; then
+            STAGING_SCENE_BUNDLE_VERSION='${DEPLOY_SHA}' STAGING_SCENE_IDS='sense-hall2-v1,sense-blueoffice-glb-v4' bash ./tools/snapshot-scene-assets.sh
+          fi
           printf '%s' '${YCR_PASSWORD_B64}' | base64 -d | docker login cr.yandex --username '${YCR_USERNAME}' --password-stdin
           bash ./infra/docker/rollout-staging-images.sh ${DEPLOY_SHA}
           EOF
@@ -106,6 +109,8 @@ jobs:
           STAGING_HALL_ROOM_ID: 42db8225-f671-4e46-9c28-9381d66a948c
           STAGING_BLUEOFFICE_ROOM_ID: 0b537d34-7b92-4b51-854a-8c64cfb4c114
           STAGING_SCENE_BUNDLE_BRANCH: deploy/scene-bundles-stage-20260328
+          STAGING_SCENE_BUNDLE_VERSION: ${{ steps.deploy.outputs.deploy_sha }}
+          STAGING_SCENE_BUNDLE_PATCH_REPORT: /tmp/noah-scene-bundle-patch-report.json
         run: node tools/patch-staging-scene-bundles.mjs
 
       - name: Verification gate
@@ -129,6 +134,7 @@ jobs:
           STAGING_SERGOFFICE_ROOM_ID: ba67301b-14f4-4c88-ba7f-2b63e0c1c332
           STAGING_CINEMAMODELER_ROOM_ID: c28e17b5-7b26-408b-926e-aa93fef9915e
           STAGING_ADMIN_TOKEN: noah-stage-admin
+          STAGING_SCENE_BUNDLE_VERSION: ${{ steps.deploy.outputs.deploy_sha }}
         run: |
           for attempt in $(seq 1 30); do
             if curl --fail --silent "$STAGING_BASE_URL/health" >/tmp/noah-staging-health.json; then
@@ -177,6 +183,16 @@ jobs:
             echo "- verification gate: failed"
             echo "- rollback target: \`$ROLLBACK_SHA\`"
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Restore scene bundle URLs after failed gate
+        if: steps.gate.outcome == 'failure'
+        env:
+          BASE_URL: ${{ env.STAGING_BASE_URL }}
+          STAGING_ADMIN_TOKEN: noah-stage-admin
+        run: |
+          if [ -f /tmp/noah-scene-bundle-patch-report.json ]; then
+            node tools/patch-staging-scene-bundles.mjs --restore-report /tmp/noah-scene-bundle-patch-report.json
+          fi
 
       - name: Fail after rollback
         if: steps.gate.outcome == 'failure'

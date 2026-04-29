@@ -368,15 +368,20 @@ export class MemoryStorage implements Storage {
     return (await this.listSceneBundleVersions(bundleId)).find((item) => item.isCurrent) ?? null;
   }
   async createSceneBundle(input: SceneBundleCreateInput & { publicUrl: string; provider: SceneBundleRecord["provider"] }): Promise<SceneBundleRecord> {
+    const bundleId = input.bundleId ?? crypto.randomUUID();
+    const version = input.version ?? "v1";
+    if (this.sceneBundles.has(this.sceneBundleKey(bundleId, version))) {
+      throw new Error("scene_bundle_version_conflict");
+    }
     const record: SceneBundleRecord = {
-      bundleId: input.bundleId ?? crypto.randomUUID(),
+      bundleId,
       storageKey: input.storageKey,
       publicUrl: input.publicUrl,
       checksum: input.checksum,
       sizeBytes: input.sizeBytes,
       contentType: input.contentType ?? "application/json",
       provider: input.provider,
-      version: input.version ?? "v1",
+      version,
       status: "active",
       isCurrent: true,
       createdAt: new Date().toISOString()

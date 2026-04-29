@@ -18,9 +18,10 @@ Practical scene-bundle staging workflow used during SenseTower migration:
 
 - Put scene bundle files under `apps/runtime-web/public/assets/scenes/<scene-id>/`.
 - Commit the bundle changes to the deployment branch `deploy/scene-bundles-stage-20260328` and push to GitHub.
+- Staging deploy snapshots canonical scene bundles into immutable versioned paths: `apps/runtime-web/public/assets/scenes/<scene-id>/<full-git-sha>/scene.json`.
 - Create or update a stage room through the API, then patch its `sceneBundleUrl` to a published bundle URL.
-- Prefer `raw.githubusercontent.com` for freshly changed bundles; use jsDelivr for more stable public links once CDN cache catches up.
-- Canonical staging `Hall` and `BlueOffice` should use the dedicated asset origin `https://state.<staging-host>/assets/scenes/...` so large scene files do not compete with same-origin app traffic.
+- Do not use mutable overwrite paths like `/assets/scenes/<scene-id>/scene.json` as the normal publishing path for changed scene resources; bind rooms to a versioned URL instead.
+- Canonical staging `Hall` and `BlueOffice` should use the dedicated asset origin `https://state.<staging-host>/assets/scenes/<scene-id>/<full-git-sha>/scene.json` so large scene files do not compete with same-origin app traffic and browser cache cannot hide updates.
 - Staging Caddy should stay on `h1/h2` only. Allowing `HTTP/3` on this host made browser scene-asset fetches intermittently explode from seconds to minutes, even when `curl` over `HTTP/2` stayed fast.
 
 Typical room patch flow:
@@ -29,13 +30,14 @@ Typical room patch flow:
 curl -X PATCH "$BASE/api/rooms/$ROOM_ID" \
   -H 'content-type: application/json' \
   -H 'x-noah-admin-token: noah-stage-admin' \
-  -d '{"sceneBundleUrl":"https://raw.githubusercontent.com/psilon2000/noah/deploy/scene-bundles-stage-20260328/apps/runtime-web/public/assets/scenes/<scene-id>/scene.json"}'
+  -d '{"sceneBundleUrl":"https://state.<staging-host>/assets/scenes/<scene-id>/<full-git-sha>/scene.json"}'
 ```
 
-Canonical staging patch helper:
+Canonical staging patch helper. The snapshot command must run on the staging checkout that backs `/srv/runtime-public`:
 
 ```bash
-node tools/patch-staging-scene-bundles.mjs
+STAGING_SCENE_BUNDLE_VERSION=<full-git-sha> STAGING_SCENE_IDS=sense-hall2-v1,sense-blueoffice-glb-v4 bash tools/snapshot-scene-assets.sh
+STAGING_SCENE_BUNDLE_VERSION=<full-git-sha> node tools/patch-staging-scene-bundles.mjs
 ```
 
 Known staging pitfalls:
@@ -88,6 +90,7 @@ Phase 3 adds minimal scene bundle metadata and bind flow in `apps/api`.
   - `POST /api/scene-bundles/:bundleId/current`
   - `POST /api/scene-bundles/:bundleId/versions/:version/status`
 - Runtime still stays simple: current/version switching only changes which URL gets written into `room.sceneBundleUrl`
+- For cache-safe scene updates, `publicUrl` should include a version directory, typically `.../assets/scenes/<scene-id>/<full-git-sha>/scene.json`; do not replace GLB/texture files inside an existing version directory.
 - Cleanup in Phase 7 is metadata-only (`active` / `obsolete` / `cleanup-ready`) and does not physically delete blob objects
 
 ## CI and image publish

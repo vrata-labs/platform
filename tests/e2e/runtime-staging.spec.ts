@@ -4,21 +4,47 @@ const stagingRoomId = process.env.STAGING_ROOM_ID ?? "demo-room";
 const stagingAdminToken = process.env.STAGING_ADMIN_TOKEN ?? "noah-stage-admin";
 const stagingBaseUrl = process.env.BASE_URL ?? "https://89.169.161.91.sslip.io";
 const stagingAssetBaseUrl = process.env.STAGING_ASSET_BASE_URL ?? `${new URL(stagingBaseUrl).protocol}//state.${new URL(stagingBaseUrl).host}`;
-const hallSceneBundleUrl = `${stagingAssetBaseUrl}/assets/scenes/sense-hall2-v1/scene.json`;
-const blueOfficeSceneBundleUrl = `${stagingAssetBaseUrl}/assets/scenes/sense-blueoffice-glb-v4/scene.json`;
+const stagingSceneBundleVersion = process.env.STAGING_SCENE_BUNDLE_VERSION;
+
+type ExpectedBundleUrl = string | RegExp;
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function versionedSceneBundleUrl(sceneId: string): string {
+  return stagingSceneBundleVersion
+    ? `${stagingAssetBaseUrl}/assets/scenes/${sceneId}/${stagingSceneBundleVersion}/scene.json`
+    : `${stagingAssetBaseUrl}/assets/scenes/${sceneId}/scene.json`;
+}
+
+function expectedVersionedOrLegacySceneBundleUrl(sceneId: string): ExpectedBundleUrl {
+  if (stagingSceneBundleVersion) {
+    return versionedSceneBundleUrl(sceneId);
+  }
+  return new RegExp(`^${escapeRegExp(`${stagingAssetBaseUrl}/assets/scenes/${sceneId}/`)}(?:[0-9a-fA-F]{40}/)?scene\\.json$`);
+}
+
+function bundleUrlMatches(actual: string | undefined, expected: ExpectedBundleUrl): boolean {
+  if (!actual) return false;
+  return typeof expected === "string" ? actual === expected : expected.test(actual);
+}
+
+const hallSceneBundleUrl = versionedSceneBundleUrl("sense-hall2-v1");
+const blueOfficeSceneBundleUrl = versionedSceneBundleUrl("sense-blueoffice-glb-v4");
 
 const stagingSceneRooms = [
   {
     name: "Hall",
     roomId: process.env.STAGING_HALL_ROOM_ID ?? "42db8225-f671-4e46-9c28-9381d66a948c",
-    expectedBundleUrl: hallSceneBundleUrl,
+    expectedBundleUrl: expectedVersionedOrLegacySceneBundleUrl("sense-hall2-v1"),
     timeoutMs: 20000,
     requireLoadedState: true
   },
   {
     name: "BlueOffice",
     roomId: process.env.STAGING_BLUEOFFICE_ROOM_ID ?? "0b537d34-7b92-4b51-854a-8c64cfb4c114",
-    expectedBundleUrl: blueOfficeSceneBundleUrl,
+    expectedBundleUrl: expectedVersionedOrLegacySceneBundleUrl("sense-blueoffice-glb-v4"),
     timeoutMs: 25000,
     requireLoadedState: true
   },
@@ -136,14 +162,16 @@ async function expectSceneRoomLoaded(
   request: APIRequestContext,
   roomId: string,
   timeoutMs: number,
-  expectedBundleUrl: string,
+  expectedBundleUrl: ExpectedBundleUrl,
   requireLoadedState: boolean
 ): Promise<void> {
   await page.goto(`/rooms/${roomId}`);
   await expect(page.locator("#room-name")).not.toContainText("Loading room", { timeout: timeoutMs });
 
   const manifest = await getJsonWithRetry<{ sceneBundle?: { url?: string } }>(request, `/api/rooms/${roomId}/manifest`, timeoutMs);
-  expect(manifest.sceneBundle?.url).toBe(expectedBundleUrl);
+  expect(bundleUrlMatches(manifest.sceneBundle?.url, expectedBundleUrl)).toBeTruthy();
+  const loadedBundleUrl = manifest.sceneBundle?.url;
+  expect(loadedBundleUrl).toBeTruthy();
 
   if (!requireLoadedState) {
     const diagnostics = await getJsonWithRetry<DiagnosticsPayload>(request, `/api/rooms/${roomId}/diagnostics`, timeoutMs);
@@ -155,7 +183,7 @@ async function expectSceneRoomLoaded(
     const diagnosticsResponse = await request.get(`/api/rooms/${roomId}/diagnostics`);
     const diagnostics = (await diagnosticsResponse.json()) as DiagnosticsPayload;
     const loadedItem = diagnostics.items.find((item) =>
-      item.sceneDebug?.bundleUrl === expectedBundleUrl && item.sceneDebug?.state === "loaded"
+      item.sceneDebug?.bundleUrl === loadedBundleUrl && item.sceneDebug?.state === "loaded"
     );
     return {
       loaded: loadedItem !== undefined,
@@ -168,7 +196,7 @@ async function expectSceneRoomLoaded(
   }).toEqual({
     loaded: true,
     state: "loaded",
-    bundleUrl: expectedBundleUrl
+    bundleUrl: loadedBundleUrl
   });
 }
 
