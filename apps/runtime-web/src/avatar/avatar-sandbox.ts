@@ -20,6 +20,7 @@ export interface AvatarSandboxBootResult {
   diagnostics: AvatarDiagnostics;
   statusMessage: string;
   selectedAvatarId: string | null;
+  position: { x: number; y: number; z: number };
   yaw: number;
   pitch: number;
 }
@@ -32,7 +33,6 @@ export async function bootAvatarSandbox(input: {
   catalogUrl: string;
   renderer: THREE.WebGLRenderer;
   scene: THREE.Scene;
-  player: THREE.Group;
   elements: AvatarSandboxElements;
   previousRegistry: AvatarRegistry | null;
 }): Promise<AvatarSandboxBootResult> {
@@ -72,7 +72,6 @@ export async function bootAvatarSandbox(input: {
       setAvatarSandboxStatus(statusEl, `Selected ${presetSelectEl.value}`);
     };
 
-    input.player.position.set(0, 0, 8.5);
     setAvatarSandboxStatus(statusEl, `Loaded ${instances.length} presets`);
     return {
       registry,
@@ -87,6 +86,7 @@ export async function bootAvatarSandbox(input: {
       }),
       statusMessage: `Loaded ${instances.length} presets`,
       selectedAvatarId,
+      position: { x: 0, y: 0, z: 8.5 },
       yaw: Math.PI,
       pitch: -0.08
     };
@@ -99,6 +99,7 @@ export async function bootAvatarSandbox(input: {
       ),
       statusMessage: "Avatar sandbox failed, capsule fallback active",
       selectedAvatarId: null,
+      position: { x: 0, y: 0, z: 8.5 },
       yaw: Math.PI,
       pitch: -0.08
     };

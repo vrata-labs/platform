@@ -4,6 +4,28 @@ Monorepo skeleton for a web-native immersive room platform MVP.
 
 See `docs/product-scope.md` for scope and `docs/architecture.md` for the layer map.
 
+## Runtime local pose architecture
+
+The immersive client in `apps/runtime-web` separates local-user behavior into explicit domains:
+
+```text
+Raw input adapters
+        ↓
+InputIntentResolver
+        ↓
+InteractionResolver
+        ↓
+LocomotionController
+        ↓
+LocalPoseController / PlayerRigAdapter
+        ↓
+Avatar publishing, audio, debug, rendering readers
+```
+
+The local `player` rig is not a general-purpose object that feature code may move directly. Seating, teleport, spawn, debug fit, XR session start, and future movement-like features should flow through the locomotion/local-pose pipeline. This keeps VR snap-turn, interaction ray, teleport, seating, avatar pose publishing, and spatial audio aligned around one source of truth.
+
+See `apps/runtime-web/README.md` and `AGENTS.md` for ownership rules and required tests before changing runtime locomotion, input, ray, teleport, or seating behavior.
+
 ## Staging notes
 
 Default post-change verification flow:

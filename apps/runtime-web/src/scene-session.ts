@@ -1,7 +1,7 @@
 import * as THREE from "three";
 
 import { inspectSceneObject, type SceneDiagnosticsSnapshot } from "./scene-debug.js";
-import type { SceneBundleManifest } from "./scene-bundle.js";
+import type { SceneBundleManifest, SceneBundleSpawnPoint } from "./scene-bundle.js";
 import { loadSceneBundle } from "./scene-loader.js";
 
 export interface SceneSessionResult {
@@ -23,7 +23,6 @@ function getFailureReason(error: unknown): string {
 
 export async function startSceneBundleSession(input: {
   scene: THREE.Scene;
-  player: THREE.Object3D;
   camera: THREE.Camera;
   bundleUrl: string;
   requestedCleanSceneMode: boolean;
@@ -32,13 +31,14 @@ export async function startSceneBundleSession(input: {
   applySceneMaterialDebugMode(root: THREE.Object3D): void;
   applyCleanSceneMode(enabled: boolean): void;
   applySceneDebugFit(boundingBox: NonNullable<SceneDiagnosticsSnapshot["boundingBox"]>): void;
+  applySpawnPoint?(spawnPoint: SceneBundleSpawnPoint): void;
   setFallbackEnvironmentVisible(visible: boolean): void;
 }): Promise<SceneSessionResult> {
   try {
     const loadedScene = await loadSceneBundle({
       scene: input.scene,
-      player: input.player,
       bundleUrl: input.bundleUrl,
+      applySpawnPoint: input.applySpawnPoint,
       onLoadStage(stage) {
         input.previousSceneDebug.loadStage = stage;
       },

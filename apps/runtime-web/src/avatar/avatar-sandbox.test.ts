@@ -33,7 +33,6 @@ test("bootAvatarSandbox returns fallback diagnostics when catalog load fails", a
       catalogUrl: "https://example.com/assets/avatars/catalog.v1.json",
       renderer: {} as THREE.WebGLRenderer,
       scene: new THREE.Scene(),
-      player: new THREE.Group(),
       previousRegistry: null,
       elements: {
         panelEl,

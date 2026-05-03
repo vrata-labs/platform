@@ -5,7 +5,7 @@ import { KTX2Loader } from "three/examples/jsm/loaders/KTX2Loader.js";
 import { DRACOLoader } from "three/examples/jsm/loaders/DRACOLoader.js";
 import { MeshoptDecoder } from "three/examples/jsm/libs/meshopt_decoder.module.js";
 
-import { parseSceneBundleManifest, pickSceneSpawnPoint, resolveSceneAssetUrl, type SceneBundleManifest } from "./scene-bundle.js";
+import { parseSceneBundleManifest, pickSceneSpawnPoint, resolveSceneAssetUrl, type SceneBundleManifest, type SceneBundleSpawnPoint } from "./scene-bundle.js";
 
 export interface LoadedSceneBundle {
   manifest: SceneBundleManifest;
@@ -98,8 +98,8 @@ async function applyMaterialOverrides(input: {
 
 export async function loadSceneBundle(input: {
   scene: THREE.Scene;
-  player: THREE.Object3D;
   bundleUrl: string;
+  applySpawnPoint?: (spawnPoint: SceneBundleSpawnPoint) => void;
   onLoadStage?: (stage: string) => void;
   onAssetProgress?: (loaded: number, expected: number | null) => void;
 }): Promise<LoadedSceneBundle> {
@@ -163,7 +163,7 @@ export async function loadSceneBundle(input: {
 
   const spawnPoint = pickSceneSpawnPoint(manifest);
   if (spawnPoint) {
-    input.player.position.set(spawnPoint.position.x, spawnPoint.position.y, spawnPoint.position.z);
+    input.applySpawnPoint?.(spawnPoint);
   }
   input.onLoadStage?.("spawn_applied");
 

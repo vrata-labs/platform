@@ -4,7 +4,7 @@ import { Room, RoomEvent, Track } from "livekit-client";
 
 import { appendBrandingSuffix, applyRoomShellBootState } from "./boot-session.js";
 import { bootRuntime, fetchRuntimeSpaces, listPresence, planVoiceSession, removePresence, resolveCurrentSpace, upsertPresence, type PresenceState, type RuntimeSpaceOption } from "./index.js";
-import { applySnapTurn, computeKeyboardDirection, projectMovementToWorld, resolveXrSnapTurnAxis, sanitizeXrAxes, stepFlatMovement } from "./movement.js";
+import { applySnapTurn, computeKeyboardDirection, projectMovementToWorld } from "./movement.js";
 import { createMotionTrack, pushMotionSample, sampleMotion, type MotionTrack } from "./motion-state.js";
 import { connectRoomState, sendAvatarPoseFrame, sendAvatarReliableState, sendParticipantUpdate, sendSeatClaim, sendSeatRelease, type RoomStateClient, type RoomStateSnapshot } from "./room-state-client.js";
 import { classifyMediaError, classifyRoomStateError, createFaultError, getRuntimeIssue, shouldRetryConnection, type RuntimeIssue } from "./runtime-errors.js";
@@ -23,7 +23,7 @@ import { createRemoteAvatarRuntime } from "./avatar/remote-avatar-runtime.js";
 import { createInitialAvatarRuntimeFlags, resolveAvatarCatalogUrl, resolveAvatarRuntimeFlags } from "./avatar/avatar-runtime.js";
 import { resolveAvatarInteractionTarget } from "./avatar/avatar-interaction.js";
 import { resolveXrInteractionRay } from "./avatar/avatar-xr-ray.js";
-import { applySeatAnchorToPlayer, createAvatarSeatAnchorMap, resolveLocalSeatId, resolveSeatRootPosition } from "./avatar/avatar-seating.js";
+import { createAvatarSeatAnchorMap, resolveSeatRootPosition } from "./avatar/avatar-seating.js";
 import { resolveAvatarViewProfile } from "./avatar/avatar-visibility.js";
 import { collectLocalAvatarHandDebug, resolveLocalAvatarHandTargets } from "./avatar/avatar-xr-hands.js";
 import { resolveAvatarXrInput } from "./avatar/avatar-xr-input.js";
@@ -33,6 +33,12 @@ import type { LocalAvatarController } from "./avatar/avatar-controller.js";
 import type { LocalAvatarSnapshotV1 } from "./avatar/avatar-types.js";
 import { createAvatarRegistry } from "./avatar/avatar-registry.js";
 import type { SceneBundleSeatAnchor } from "./scene-bundle.js";
+import { createLocalPoseController } from "./local/local-pose.js";
+import { createIdleInputIntents, resolveXrInputIntents } from "./input/input-intents.js";
+import type { RuntimeFrameContext } from "./input/runtime-frame-context.js";
+import { resolveLocomotionMode, stepLocalLocomotion } from "./locomotion/local-locomotion.js";
+import { createSeatingController } from "./seating/seating-controller.js";
+import type { InteractionTarget } from "./interaction/interaction-targets.js";
 
 function fallbackUuid(): string {
   return `guest-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
@@ -141,11 +147,19 @@ renderer.xr.enabled = true;
 sceneHost.append(renderer.domElement);
 
 const player = new THREE.Group();
-player.position.set(0, 0, 6);
 const pitch = new THREE.Group();
 pitch.add(camera);
 player.add(pitch);
 scene.add(player);
+const localPoseController = createLocalPoseController({
+  player,
+  pitch,
+  initialPose: {
+    position: { x: 0, y: 0, z: 6 },
+    yaw: 0,
+    pitch: 0
+  }
+});
 const xrControllers = [renderer.xr.getController(0), renderer.xr.getController(1)];
 const xrControllerGrips = [renderer.xr.getControllerGrip(0), renderer.xr.getControllerGrip(1)];
 for (const controller of xrControllers) {
@@ -292,8 +306,6 @@ let pointerHoveringScene = false;
 let pointerDownAtMs = 0;
 let pointerDownClientX = 0;
 let pointerDownClientY = 0;
-let yaw = 0;
-let pitchAngle = 0;
 let livekitRoom: Room | null = null;
 let microphoneEnabled = false;
 let xrTurnCooldown = 0;
@@ -330,8 +342,8 @@ let avatarSandboxRegistry: ReturnType<typeof createAvatarRegistry> | null = null
 let localAvatarController: LocalAvatarController | null = null;
 let localBodyMesh: THREE.Mesh | null = null;
 let localHeadMesh: THREE.Mesh | null = null;
-let currentSeatId: string | null = null;
-let pendingSeatId: string | null = null;
+const seatingController = createSeatingController({ participantId });
+let lastAppliedSeatLockId: string | null = null;
 let lastInteractionConfirmAt = 0;
 let forcedTestInteractionRay: THREE.Ray | null = null;
 let forcedTestInteractionSeatId: string | null = null;
@@ -360,8 +372,6 @@ const interactionRayBeamUp = new THREE.Vector3(0, 1, 0);
 const interactionRayPoints = [new THREE.Vector3(), new THREE.Vector3()];
 const interactionRaycaster = new THREE.Raycaster();
 const cameraWorldPosition = new THREE.Vector3();
-const xrCameraWorldBeforeTurn = new THREE.Vector3();
-const xrCameraWorldAfterTurn = new THREE.Vector3();
 const forcedInteractionDirection = new THREE.Vector3();
 const avatarOutboundPublisher = createAvatarOutboundPublisher();
 let lastAvatarMove = { x: 0, z: 0 };
@@ -441,27 +451,49 @@ function applyCleanSceneMode(enabled: boolean): void {
   displaySurface.visible = true;
 }
 
+function updateLocalPositionDebug(): void {
+  const pose = localPoseController.getPose();
+  debugState.localPosition = {
+    x: Number(pose.position.x.toFixed(2)),
+    z: Number(pose.position.z.toFixed(2))
+  };
+}
+
+function getCurrentSeatId(): string | null {
+  return seatingController.getCurrentSeatId();
+}
+
+function getPendingSeatId(): string | null {
+  return seatingController.getPendingSeatId();
+}
+
+function syncSeatDebugState(): void {
+  const snapshot = seatingController.getSnapshot();
+  debugState.currentSeatId = snapshot.currentSeatId;
+  debugState.pendingSeatId = snapshot.pendingSeatId;
+}
+
 function applySceneDebugFit(bounds: NonNullable<typeof debugState.sceneDebug.boundingBox>): void {
   const horizontalSize = Math.max(bounds.size.x, bounds.size.z, 1);
   const distance = Math.max(horizontalSize * 0.65, 12);
   // Keep the current spawn height; debug fit should reframe x/z and look-at,
   // not launch the player up to the scene's vertical center.
-  const targetY = player.position.y;
-  player.position.set(bounds.center.x, targetY, bounds.center.z + distance);
+  const currentPose = localPoseController.getPose();
+  const targetY = currentPose.position.y;
 
   const cameraWorld = new THREE.Vector3();
   camera.getWorldPosition(cameraWorld);
   const target = new THREE.Vector3(bounds.center.x, bounds.center.y, bounds.center.z);
   const delta = target.sub(cameraWorld);
-  yaw = Math.atan2(delta.x, delta.z) + Math.PI;
+  const yaw = Math.atan2(delta.x, delta.z) + Math.PI;
   const horizontalDistance = Math.max(0.001, Math.hypot(delta.x, delta.z));
-  pitchAngle = THREE.MathUtils.clamp(-Math.atan2(delta.y, horizontalDistance), -1.1, 1.1);
-  player.rotation.y = yaw;
-  pitch.rotation.x = pitchAngle;
-  debugState.localPosition = {
-    x: Number(player.position.x.toFixed(2)),
-    z: Number(player.position.z.toFixed(2))
-  };
+  const pitchAngle = THREE.MathUtils.clamp(-Math.atan2(delta.y, horizontalDistance), -1.1, 1.1);
+  localPoseController.setPose({
+    position: { x: bounds.center.x, y: targetY, z: bounds.center.z + distance },
+    yaw,
+    pitch: pitchAngle
+  }, "debug_fit");
+  updateLocalPositionDebug();
 }
 
 function applySceneMaterialDebugMode(root: THREE.Object3D, mode: string): void {
@@ -563,6 +595,8 @@ function rebuildSeatMarkers(anchors: SceneBundleSeatAnchor[]): void {
 
 function updateSeatMarkerVisuals(timeSeconds: number): void {
   const hoveredSeatId = debugState.interactionRay.seatId;
+  const currentSeatId = getCurrentSeatId();
+  const pendingSeatId = getPendingSeatId();
   for (const [seatId, marker] of seatMarkerViews.entries()) {
     const occupantId = roomSeatOccupancy[seatId] ?? null;
     const isCurrent = currentSeatId === seatId;
@@ -612,6 +646,19 @@ function setSceneSeatAnchors(anchors: SceneBundleSeatAnchor[], teleportFloorY = 
   rebuildSeatMarkers(anchors);
   sceneTeleportFloorY = teleportFloorY;
   sceneAnchorsReady = true;
+  const reconciliation = seatingController.reconcileAnchors(new Set(anchors.map((anchor) => anchor.id)));
+  syncSeatDebugState();
+  for (const command of reconciliation.commands) {
+    if (roomSeatOccupancy[command.seatId] === participantId) {
+      delete roomSeatOccupancy[command.seatId];
+      debugState.seatOccupancy = { ...roomSeatOccupancy };
+    }
+    lastAppliedSeatLockId = null;
+    if (command.type === "send_seat_release" && roomStateClient && roomStateConnected) {
+      sendSeatRelease(roomStateClient, command.seatId);
+    }
+    setStatus("Seat anchor unavailable, returned to standing");
+  }
   updateSeatMarkerVisuals(performance.now() / 1000);
 }
 
@@ -622,30 +669,25 @@ function releaseCurrentSeatLocally(): void {
       delete roomSeatOccupancy[seatId];
     }
   }
-  currentSeatId = null;
-  pendingSeatId = null;
-  debugState.currentSeatId = null;
-  debugState.pendingSeatId = null;
+  seatingController.releaseLocal();
+  lastAppliedSeatLockId = null;
+  syncSeatDebugState();
   debugState.seatOccupancy = { ...roomSeatOccupancy };
   updateSeatMarkerVisuals(performance.now() / 1000);
 }
 
 function syncSeatStateFromOccupancy(): void {
-  const previousSeatId = currentSeatId;
   roomSeatOccupancy = { ...roomSeatOccupancy };
   if (forcedTestSeatId) {
     roomSeatOccupancy[forcedTestSeatId] = participantId;
   }
   debugState.seatOccupancy = { ...roomSeatOccupancy };
-  const occupiedSeatId = forcedTestSeatId ?? resolveLocalSeatId(roomSeatOccupancy, participantId);
-  currentSeatId = occupiedSeatId;
-  if (pendingSeatId && pendingSeatId === occupiedSeatId) {
-    pendingSeatId = null;
-  }
-  debugState.currentSeatId = currentSeatId;
-  debugState.pendingSeatId = pendingSeatId;
+  seatingController.applyOccupancy({ seatOccupancy: roomSeatOccupancy, forcedSeatId: forcedTestSeatId });
+  syncSeatDebugState();
   updateSeatMarkerVisuals(performance.now() / 1000);
+  const currentSeatId = getCurrentSeatId();
   if (!currentSeatId) {
+    lastAppliedSeatLockId = null;
     return;
   }
   const seatAnchor = sceneSeatAnchorMap.get(currentSeatId);
@@ -660,12 +702,6 @@ function syncSeatStateFromOccupancy(): void {
     setStatus("Seat anchor unavailable, returned to standing");
     return;
   }
-  applySeatAnchorToPlayer(player, seatAnchor);
-  if (previousSeatId !== currentSeatId) {
-    yaw = seatAnchor.yaw;
-  }
-  player.rotation.y = yaw;
-  pitch.rotation.x = pitchAngle;
 }
 
 function handleRoomSnapshot(snapshot: RoomStateSnapshot): void {
@@ -699,58 +735,35 @@ function applyRoomTransformToTarget(target: { x: number; y: number; z: number } 
   if (!target) {
     return null;
   }
+  const pose = localPoseController.getPose();
   return {
-    x: target.x * Math.cos(yaw) + target.z * Math.sin(yaw) + player.position.x,
-    y: target.y + player.position.y,
-    z: -target.x * Math.sin(yaw) + target.z * Math.cos(yaw) + player.position.z
+    x: target.x * Math.cos(pose.yaw) + target.z * Math.sin(pose.yaw) + pose.position.x,
+    y: target.y + pose.position.y,
+    z: -target.x * Math.sin(pose.yaw) + target.z * Math.cos(pose.yaw) + pose.position.z
   };
 }
 
 function applyYawAroundXrCamera(nextYaw: number): void {
-  if (!renderer.xr.isPresenting || currentSeatId) {
-    yaw = nextYaw;
-    return;
-  }
-  player.updateMatrixWorld(true);
-  camera.getWorldPosition(xrCameraWorldBeforeTurn);
-  yaw = nextYaw;
-  player.rotation.y = yaw;
-  player.updateMatrixWorld(true);
-  camera.getWorldPosition(xrCameraWorldAfterTurn);
-  player.position.x += xrCameraWorldBeforeTurn.x - xrCameraWorldAfterTurn.x;
-  player.position.z += xrCameraWorldBeforeTurn.z - xrCameraWorldAfterTurn.z;
-  player.updateMatrixWorld(true);
+  localPoseController.setYaw(nextYaw, "snap_turn", {
+    preserveCameraXz: renderer.xr.isPresenting && !getCurrentSeatId(),
+    camera
+  });
 }
 
 function setPlayerPositionForFloorTeleport(floorPoint: THREE.Vector3): void {
-  if (!renderer.xr.isPresenting) {
-    player.position.set(floorPoint.x, sceneTeleportFloorY, floorPoint.z);
-    return;
-  }
-  player.updateMatrixWorld(true);
-  camera.getWorldPosition(cameraWorldPosition);
-  player.position.set(
-    floorPoint.x - (cameraWorldPosition.x - player.position.x),
-    sceneTeleportFloorY,
-    floorPoint.z - (cameraWorldPosition.z - player.position.z)
-  );
-  player.updateMatrixWorld(true);
+  localPoseController.teleportToFloor(floorPoint, sceneTeleportFloorY, "teleport", {
+    preserveCameraOffset: renderer.xr.isPresenting,
+    camera
+  });
 }
 
-function isXrRayVisibleFromStick(turnY: number): boolean {
-  if (xrRayVisibleLatched) {
-    return turnY <= -0.45;
-  }
-  return turnY <= -0.75;
-}
-
-function getInteractionRay(): THREE.Ray | null {
+function getInteractionRay(frameContext: RuntimeFrameContext | null = null): THREE.Ray | null {
   const forcedRay = forcedTestInteractionRay;
   if (forcedRay) {
     return forcedRay.clone();
   }
   if (avatarVrMockEnabled && syntheticXrState) {
-    if (!syntheticXrState.rayVisible) {
+    if (!syntheticXrState.rayVisible && !frameContext?.intents.aimRay) {
       return null;
     }
     interactionRayOrigin.set(
@@ -777,47 +790,40 @@ function getInteractionRay(): THREE.Ray | null {
     return new THREE.Ray(interactionRayOrigin.clone(), interactionRayDirection.clone());
   }
   if (renderer.xr.isPresenting) {
-    const xrFrame = renderer.xr.getFrame();
-    const xrSession = xrFrame?.session;
-    const referenceSpace = renderer.xr.getReferenceSpace();
-    const xrInput = resolveAvatarXrInput(Array.from(xrSession?.inputSources ?? []));
-    if (!isXrRayVisibleFromStick(xrInput.axes.turnY)) {
+    const xrFrame = frameContext?.xr?.frame ?? renderer.xr.getFrame();
+    const xrSession = frameContext?.xr?.session ?? xrFrame?.session;
+    const referenceSpace = frameContext?.xr?.referenceSpace ?? renderer.xr.getReferenceSpace();
+    const inputSources = frameContext?.xr?.inputSources ?? Array.from(xrSession?.inputSources ?? []);
+    if (!frameContext?.intents.aimRay) {
       return null;
     }
     const xrRay = resolveXrInteractionRay({
-      inputSources: Array.from(xrSession?.inputSources ?? []),
+      inputSources,
       xrFrame,
       referenceSpace,
       playerOffset: {
-        x: player.position.x,
-        y: player.position.y,
-        z: player.position.z
+        x: localPoseController.getPosition().x,
+        y: localPoseController.getPosition().y,
+        z: localPoseController.getPosition().z
       },
-      playerYaw: yaw
+      playerYaw: localPoseController.getYaw()
     });
     if (!xrRay) {
       return null;
     }
-    const xrHandDebug = collectLocalAvatarHandDebug({
-      inputSources: Array.from(xrSession?.inputSources ?? []),
-      grips: xrControllerGrips,
-      controllers: xrControllers,
-      xrFrame,
-      referenceSpace
-    });
     const xrHands = resolveLocalAvatarHandTargets({
       presenting: true,
-      inputSources: Array.from(xrSession?.inputSources ?? []),
+      inputSources,
       grips: xrControllerGrips,
       controllers: xrControllers,
       xrFrame,
       referenceSpace,
       playerOffset: {
-        x: player.position.x,
-        y: player.position.y,
-        z: player.position.z
+        x: localPoseController.getPosition().x,
+        y: localPoseController.getPosition().y,
+        z: localPoseController.getPosition().z
       },
-      playerYaw: yaw
+      playerYaw: localPoseController.getYaw()
     });
     const rayOrigin = xrHands.rightHand ?? xrRay.origin;
     interactionRayOrigin.set(rayOrigin.x, rayOrigin.y, rayOrigin.z);
@@ -865,15 +871,13 @@ function resolveSeatMarkerTarget(ray: THREE.Ray): { point: THREE.Vector3; seatAn
   return null;
 }
 
-function resolveInteractionTargetFromRay(ray: THREE.Ray):
-  | { kind: "none" }
-  | { kind: "floor"; point: THREE.Vector3 }
-  | { kind: "seat"; point: THREE.Vector3; seatAnchor: SceneBundleSeatAnchor } {
+function resolveInteractionTargetFromRay(ray: THREE.Ray): InteractionTarget {
   const seatMarkerTarget = resolveSeatMarkerTarget(ray);
   if (seatMarkerTarget) {
     return {
       kind: "seat",
       point: seatMarkerTarget.point,
+      seatId: seatMarkerTarget.seatAnchor.id,
       seatAnchor: seatMarkerTarget.seatAnchor
     };
   }
@@ -885,27 +889,25 @@ function resolveInteractionTargetFromRay(ray: THREE.Ray):
   });
 }
 
-function updateInteractionRayState():
-  | { kind: "none" }
-  | { kind: "floor"; point: THREE.Vector3 }
-  | { kind: "seat"; point: THREE.Vector3; seatAnchor: SceneBundleSeatAnchor } {
-  const ray = getInteractionRay();
+function updateInteractionRayState(frameContext: RuntimeFrameContext | null = null): InteractionTarget {
+  const ray = getInteractionRay(frameContext);
   if (!ray) {
     clearInteractionVisuals();
-    debugState.interactionRay.mode = renderer.xr.isPresenting ? "xr-right-stick" : "none";
+    debugState.interactionRay.mode = renderer.xr.isPresenting || frameContext?.source === "xr" ? "xr-right-stick" : "none";
     return { kind: "none" };
   }
   const forcedSeatAnchor = forcedTestInteractionSeatId ? sceneSeatAnchorMap.get(forcedTestInteractionSeatId) ?? null : null;
   const target = forcedSeatAnchor
     ? {
-        kind: "seat" as const,
-        point: new THREE.Vector3(
-          forcedSeatAnchor.position.x,
-          forcedSeatAnchor.position.y + forcedSeatAnchor.seatHeight,
-          forcedSeatAnchor.position.z
-        ),
-        seatAnchor: forcedSeatAnchor
-      }
+         kind: "seat" as const,
+         point: new THREE.Vector3(
+           forcedSeatAnchor.position.x,
+           forcedSeatAnchor.position.y + forcedSeatAnchor.seatHeight,
+           forcedSeatAnchor.position.z
+         ),
+         seatId: forcedSeatAnchor.id,
+         seatAnchor: forcedSeatAnchor
+       }
     : resolveInteractionTargetFromRay(ray);
   debugState.interactionRay.active = true;
   debugState.interactionRay.mode = renderer.xr.isPresenting ? "xr-right-stick" : "cursor";
@@ -945,14 +947,11 @@ function updateInteractionRayState():
   };
   markXrTelemetry("ray_on");
   return target.kind === "seat"
-    ? { kind: "seat", point: target.point, seatAnchor: target.seatAnchor }
+    ? { kind: "seat", point: target.point, seatId: target.seatAnchor.id, seatAnchor: target.seatAnchor }
     : { kind: "floor", point: target.point };
 }
 
-function performInteractionTarget(target:
-  | { kind: "none" }
-  | { kind: "floor"; point: THREE.Vector3 }
-  | { kind: "seat"; point: THREE.Vector3; seatAnchor: SceneBundleSeatAnchor }): void {
+function performInteractionTarget(target: InteractionTarget): void {
   if (target.kind === "none") {
     return;
   }
@@ -967,32 +966,30 @@ function performInteractionTarget(target:
       setStatus("Seating unavailable");
       return;
     }
-    if (pendingSeatId === seatAnchor.id) {
+    if (getPendingSeatId() === seatAnchor.id) {
       return;
     }
-    pendingSeatId = seatAnchor.id;
-    debugState.pendingSeatId = pendingSeatId;
+    seatingController.requestSeatClaim(seatAnchor.id);
+    syncSeatDebugState();
     markXrTelemetry("seat_claim");
     sendSeatClaim(roomStateClient, seatAnchor.id);
     setStatus(`Claiming seat ${seatAnchor.label ?? seatAnchor.id}`);
     return;
   }
   const floorPoint = target.point;
+  const currentSeatId = getCurrentSeatId();
   if (currentSeatId && roomStateClient && roomStateConnected) {
     markXrTelemetry("seat_release");
     sendSeatRelease(roomStateClient, currentSeatId);
     releaseCurrentSeatLocally();
   }
   setPlayerPositionForFloorTeleport(floorPoint);
-  debugState.localPosition = {
-    x: Number(player.position.x.toFixed(2)),
-    z: Number(player.position.z.toFixed(2))
-  };
+  updateLocalPositionDebug();
   setStatus("Teleported");
 }
 
-function confirmInteractionTarget(): void {
-  const target = updateInteractionRayState();
+function confirmInteractionTarget(frameContext: RuntimeFrameContext | null = null): void {
+  const target = updateInteractionRayState(frameContext);
   performInteractionTarget(target);
   forcedTestInteractionSeatId = null;
 }
@@ -1444,8 +1441,8 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
       }
     }
     forcedTestSeatId = seatAnchor.id;
-    pendingSeatId = null;
-    debugState.pendingSeatId = null;
+    seatingController.forceSeated(seatAnchor.id);
+    syncSeatDebugState();
     syncSeatStateFromOccupancy();
     setStatus(`Seated at ${seatAnchor.label ?? seatAnchor.id}`);
     return true;
@@ -1455,8 +1452,8 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
     if (!seatAnchor || !roomStateClient || !roomStateConnected) {
       return false;
     }
-    pendingSeatId = seatAnchor.id;
-    debugState.pendingSeatId = pendingSeatId;
+    seatingController.requestSeatClaim(seatAnchor.id);
+    syncSeatDebugState();
     sendSeatClaim(roomStateClient, seatAnchor.id);
     setStatus(`Claiming seat ${seatAnchor.label ?? seatAnchor.id}`);
     return true;
@@ -1491,15 +1488,13 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
   },
   teleportToFloor: (x: number, z: number) => {
     forcedTestSeatId = null;
+    const currentSeatId = getCurrentSeatId();
     if (currentSeatId && roomStateClient && roomStateConnected) {
       sendSeatRelease(roomStateClient, currentSeatId);
       releaseCurrentSeatLocally();
     }
     setPlayerPositionForFloorTeleport(new THREE.Vector3(x, sceneTeleportFloorY, z));
-    debugState.localPosition = {
-      x: Number(player.position.x.toFixed(2)),
-      z: Number(player.position.z.toFixed(2))
-    };
+    updateLocalPositionDebug();
     setStatus("Teleported");
     return true;
   }
@@ -1668,7 +1663,7 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
   roomStateClient = connectRoomState(roomStateUrl, roomId, participantId, {
     onOpen: () => {
       const reopened = debugState.avatarPoseTransport.lastPoseSentAtMs > 0;
-      const claimedSeatId = currentSeatId;
+      const claimedSeatId = getCurrentSeatId();
       roomStateConnected = true;
       debugState.roomStateConnected = true;
       debugState.roomStateMode = "connected";
@@ -1682,12 +1677,12 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
       }
       const activeClient = roomStateClient;
       if (claimedSeatId && runtimeFlags.avatarSeatingEnabled && activeClient) {
-        pendingSeatId = claimedSeatId;
-        debugState.pendingSeatId = claimedSeatId;
+        seatingController.requestSeatClaim(claimedSeatId);
+        syncSeatDebugState();
         sendSeatClaim(activeClient, claimedSeatId);
         clearSeatReclaimRetry();
         seatReclaimRetryTimer = window.setTimeout(() => {
-          if (!roomStateConnected || currentSeatId === claimedSeatId || pendingSeatId !== claimedSeatId || roomStateClient !== activeClient) {
+          if (!roomStateConnected || getCurrentSeatId() === claimedSeatId || getPendingSeatId() !== claimedSeatId || roomStateClient !== activeClient) {
             return;
           }
           sendSeatClaim(activeClient, claimedSeatId);
@@ -1721,15 +1716,14 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
           delete roomSeatOccupancy[result.previousSeatId];
         }
         roomSeatOccupancy[result.seatId] = participantId;
-        pendingSeatId = null;
         clearSeatReclaimRetry();
         syncSeatStateFromOccupancy();
         setStatus(`Seated at ${result.seatId}`);
         return;
       }
-      pendingSeatId = null;
+      seatingController.clearPending();
       clearSeatReclaimRetry();
-      debugState.pendingSeatId = null;
+      syncSeatDebugState();
       setStatus(result.occupantId ? `Seat occupied by ${result.occupantId}` : "Seat unavailable");
     },
     onError: (error: unknown) => {
@@ -1958,7 +1952,7 @@ function reportXrTelemetry(): void {
       mappedTurnX: typeof debugState.xrAxes.turnX === "number" ? Number(debugState.xrAxes.turnX.toFixed(3)) : 0,
       mappedTurnY: typeof debugState.xrAxes.turnY === "number" ? Number(debugState.xrAxes.turnY.toFixed(3)) : 0,
       snapTurnFired: lastXrTelemetryKinds.includes("snap_turn"),
-      playerYaw: Number(yaw.toFixed(3)),
+      playerYaw: Number(localPoseController.getYaw().toFixed(3)),
       selectEventCount: xrSelectEventCount
     }
   };
@@ -2088,16 +2082,17 @@ function getSignedAngleDelta(next: number, previous: number): number {
 }
 
 function getLocalAvatarHandTargets(): { leftHand: { x: number; y: number; z: number } | null; rightHand: { x: number; y: number; z: number } | null } {
+  const pose = localPoseController.getPose();
   if (avatarVrMockEnabled && !renderer.xr.isPresenting) {
     if (syntheticXrState) {
       const headWorldPosition = camera.getWorldPosition(new THREE.Vector3());
       debugState.xrAvatarDebug = {
         profile: "synthetic",
         playerRoot: {
-          x: player.position.x,
-          y: player.position.y,
-          z: player.position.z,
-          yaw
+          x: pose.position.x,
+          y: pose.position.y,
+          z: pose.position.z,
+          yaw: pose.yaw
         },
         headWorld: {
           x: headWorldPosition.x,
@@ -2122,10 +2117,10 @@ function getLocalAvatarHandTargets(): { leftHand: { x: number; y: number; z: num
     debugState.xrAvatarDebug = {
       profile: "none",
       playerRoot: {
-        x: player.position.x,
-        y: player.position.y,
-        z: player.position.z,
-        yaw
+        x: pose.position.x,
+        y: pose.position.y,
+        z: pose.position.z,
+        yaw: pose.yaw
       },
       headWorld: {
         x: headWorldPosition.x,
@@ -2167,11 +2162,11 @@ function getLocalAvatarHandTargets(): { leftHand: { x: number; y: number; z: num
     xrFrame,
     referenceSpace,
     playerOffset: {
-      x: player.position.x,
-      y: player.position.y,
-      z: player.position.z
+      x: pose.position.x,
+      y: pose.position.y,
+      z: pose.position.z
     },
-    playerYaw: yaw
+    playerYaw: pose.yaw
   });
   const controllerWorldHands = resolveLocalAvatarHandTargets({
     presenting: renderer.xr.isPresenting,
@@ -2181,20 +2176,20 @@ function getLocalAvatarHandTargets(): { leftHand: { x: number; y: number; z: num
     xrFrame,
     referenceSpace,
     playerOffset: {
-      x: player.position.x,
-      y: player.position.y,
-      z: player.position.z
+      x: pose.position.x,
+      y: pose.position.y,
+      z: pose.position.z
     },
-    playerYaw: yaw,
+    playerYaw: pose.yaw,
     preferController: true
   });
   debugState.xrAvatarDebug = {
     profile: lastAvatarXrInputProfile,
     playerRoot: {
-      x: player.position.x,
-      y: player.position.y,
-      z: player.position.z,
-      yaw
+      x: pose.position.x,
+      y: pose.position.y,
+      z: pose.position.z,
+      yaw: pose.yaw
     },
     headWorld: {
       x: headWorldPosition.x,
@@ -2247,11 +2242,12 @@ function updateLocalAvatar(delta: number): void {
     inputMode,
     xrPresenting
   });
-  const avatarRootX = xrPresenting ? headWorldPosition.x : player.position.x;
+  const pose = localPoseController.getPose();
+  const avatarRootX = xrPresenting ? headWorldPosition.x : pose.position.x;
   const avatarRootY = xrPresenting
     ? headWorldPosition.y - viewProfile.poseProfile.headHeight
-    : player.position.y;
-  const avatarRootZ = xrPresenting ? headWorldPosition.z : player.position.z;
+    : pose.position.y;
+  const avatarRootZ = xrPresenting ? headWorldPosition.z : pose.position.z;
 
   localAvatarController.update({
     deltaSeconds: delta,
@@ -2263,7 +2259,7 @@ function updateLocalAvatar(delta: number): void {
       y: avatarRootY,
       z: avatarRootZ
     },
-    yaw,
+    yaw: pose.yaw,
     headPosition: {
       x: headWorldPosition.x,
       y: headWorldPosition.y,
@@ -2285,8 +2281,8 @@ function updateLocalAvatar(delta: number): void {
     snapshot: localAvatarController.snapshot,
     muted: !microphoneEnabled,
     audioActive: microphoneEnabled,
-    seated: currentSeatId !== null,
-    seatId: currentSeatId ?? undefined
+    seated: getCurrentSeatId() !== null,
+    seatId: getCurrentSeatId() ?? undefined
   });
   debugState.avatarPoseTransport.targetHz = Math.round(1 / getAvatarPoseSendIntervalSeconds(localAvatarController.snapshot));
 }
@@ -2418,26 +2414,88 @@ async function bootLocalAvatarPresetSession(input: {
   await reportDiagnostics(input.note ?? localAvatarSession.note);
 }
 
-function updateMovement(delta: number): void {
+function sampleRuntimeFrameContext(deltaSeconds: number, nowMs: number): RuntimeFrameContext {
   if (renderer.xr.isPresenting || (avatarVrMockEnabled && syntheticXrState)) {
+    if (syntheticXrState) {
+      const triggerPressed = syntheticXrState.triggerPressed;
+      const resolved = resolveXrInputIntents({
+        axes: syntheticXrState.axes,
+        triggerPressed: triggerPressed && !xrSelectPressedLastFrame,
+        rayVisibleLatched: xrRayVisibleLatched
+      });
+      return {
+        deltaSeconds,
+        nowMs,
+        source: "xr",
+        intents: {
+          ...resolved.intents,
+          aimRay: resolved.intents.aimRay || syntheticXrState.rayVisible
+        },
+        xr: {
+          frame: undefined,
+          session: undefined,
+          referenceSpace: null,
+          inputSources: [],
+          profile: "synthetic-right",
+          sanitizedAxes: resolved.sanitizedAxes,
+          rawAxes: syntheticXrState.axes,
+          triggerPressed,
+          rayVisibleLatched: resolved.rayVisibleLatched || syntheticXrState.rayVisible
+        }
+      };
+    }
+
     const xrFrame = renderer.xr.getFrame();
     const session = xrFrame?.session;
-    const xrInput = syntheticXrState
-      ? {
-          axes: syntheticXrState.axes,
-          profile: "synthetic-right"
-        }
-      : resolveAvatarXrInput(Array.from(session?.inputSources ?? []));
-    const xrAxes = xrInput.axes;
-    lastAvatarXrInputProfile = xrInput.profile;
+    const inputSources = Array.from(session?.inputSources ?? []);
+    const xrInput = resolveAvatarXrInput(inputSources);
+    const rightIndex = inputSources.findIndex((source) => source.handedness === "right");
+    const triggerPressed = rightIndex >= 0
+      ? Boolean(inputSources[rightIndex]?.gamepad?.buttons?.[0]?.pressed)
+      : false;
+    const resolved = resolveXrInputIntents({
+      axes: xrInput.axes,
+      triggerPressed: triggerPressed && !xrSelectPressedLastFrame,
+      rayVisibleLatched: xrRayVisibleLatched
+    });
+    return {
+      deltaSeconds,
+      nowMs,
+      source: "xr",
+      intents: resolved.intents,
+      xr: {
+        frame: xrFrame,
+        session,
+        referenceSpace: renderer.xr.getReferenceSpace(),
+        inputSources,
+        profile: xrInput.profile,
+        sanitizedAxes: resolved.sanitizedAxes,
+        rawAxes: xrInput.axes,
+        triggerPressed,
+        rayVisibleLatched: resolved.rayVisibleLatched
+      }
+    };
+  }
 
-    const sanitized = sanitizeXrAxes(xrAxes);
+  return {
+    deltaSeconds,
+    nowMs,
+    source: mobileTouchActive ? "touch" : "desktop",
+    intents: createIdleInputIntents(mobileTouchActive ? "touch" : "desktop")
+  };
+}
+
+function updateMovement(delta: number, frameContext: RuntimeFrameContext): void {
+  if (frameContext.source === "xr" && frameContext.xr) {
+    lastAvatarXrInputProfile = frameContext.xr.profile;
+
+    const sanitized = frameContext.xr.sanitizedAxes;
     debugState.xrAxes = sanitized;
-    xrRayVisibleLatched = isXrRayVisibleFromStick(sanitized.turnY);
-    const turnBefore = yaw;
+    xrRayVisibleLatched = frameContext.xr.rayVisibleLatched;
+    const turnBefore = localPoseController.getYaw();
     const turn = applySnapTurn(
-      { angle: yaw, cooldownSeconds: xrTurnCooldown, armed: xrTurnArmed },
-      resolveXrSnapTurnAxis(sanitized.turnX, sanitized.turnY),
+      { angle: localPoseController.getYaw(), cooldownSeconds: xrTurnCooldown, armed: xrTurnArmed },
+      frameContext.intents.snapTurn.axis,
       delta,
       sanitized.turnX
     );
@@ -2446,72 +2504,61 @@ function updateMovement(delta: number): void {
     if (turn.angle !== turnBefore) {
       applyYawAroundXrCamera(turn.angle);
       markXrTelemetry("snap_turn");
-    } else {
-      yaw = turn.angle;
     }
-    debugState.locomotionMode = currentSeatId ? "vr-seated" : "vr";
+    debugState.locomotionMode = getCurrentSeatId() ? "vr-seated" : "vr";
 
-    const rightIndex = Array.from(session?.inputSources ?? []).findIndex((source) => source.handedness === "right");
-    const triggerPressed = syntheticXrState
-      ? syntheticXrState.triggerPressed
-      : rightIndex >= 0
-        ? Boolean(session?.inputSources[rightIndex]?.gamepad?.buttons?.[0]?.pressed)
-        : false;
-    if (triggerPressed && !xrSelectPressedLastFrame) {
+    if (frameContext.intents.confirmInteraction) {
       markXrTelemetry("trigger_press");
-      confirmInteractionTarget();
+      confirmInteractionTarget(frameContext);
     }
-    xrSelectPressedLastFrame = triggerPressed;
+    xrSelectPressedLastFrame = frameContext.xr.triggerPressed;
   } else {
     xrSelectPressedLastFrame = false;
     xrRayVisibleLatched = false;
     xrTurnArmed = true;
   }
 
-  if (currentSeatId) {
-    const seatAnchor = sceneSeatAnchorMap.get(currentSeatId);
+  const locomotionMode = resolveLocomotionMode({ seatId: getCurrentSeatId(), floorY: sceneTeleportFloorY });
+  if (locomotionMode.kind === "seated") {
+    const seatAnchor = sceneSeatAnchorMap.get(locomotionMode.seatId);
     if (seatAnchor) {
-      applySeatAnchorToPlayer(player, seatAnchor);
-      player.rotation.y = yaw;
-      pitch.rotation.x = pitchAngle;
+      localPoseController.lockToSeat(
+        resolveSeatRootPosition(seatAnchor),
+        lastAppliedSeatLockId === locomotionMode.seatId ? "seat_lock" : "seat_enter",
+        lastAppliedSeatLockId === locomotionMode.seatId ? undefined : { yaw: seatAnchor.yaw }
+      );
+      lastAppliedSeatLockId = locomotionMode.seatId;
       lastAvatarMove = { x: 0, z: 0 };
       lastAvatarTurnRate = 0;
-      debugState.localPosition = {
-        x: Number(player.position.x.toFixed(2)),
-        z: Number(player.position.z.toFixed(2))
-      };
+      updateLocalPositionDebug();
       return;
     }
     releaseCurrentSeatLocally();
   }
-  const yawBeforeUpdate = yaw;
-  const speed = renderer.xr.isPresenting ? 2.4 : keyState.ShiftLeft ? 5 : 3.2;
+  const yawBeforeUpdate = localPoseController.getYaw();
+  const xrLocomotionActive = frameContext.source === "xr";
+  const speed = xrLocomotionActive ? 2.4 : keyState.ShiftLeft ? 5 : 3.2;
   let direction = computeKeyboardDirection(keyState);
 
-  if (botMode !== "off" && !renderer.xr.isPresenting) {
+  if (botMode !== "off" && !xrLocomotionActive) {
     direction = botDirection(performance.now() / 1000);
     debugState.locomotionMode = `bot:${botMode}`;
   }
 
-  if (!renderer.xr.isPresenting && mobileTouchActive && botMode === "off") {
+  if (!xrLocomotionActive && mobileTouchActive && botMode === "off") {
     direction = {
       x: direction.x + mobileTouchVector.x,
       z: direction.z + mobileTouchVector.z
     };
     debugState.locomotionMode = "mobile-touch";
-  } else if (!renderer.xr.isPresenting) {
+  } else if (!xrLocomotionActive) {
     debugState.locomotionMode = "desktop";
   }
 
-  if (renderer.xr.isPresenting) {
-    const xrFrame = renderer.xr.getFrame();
-    const session = xrFrame?.session;
-    const xrInput = resolveAvatarXrInput(Array.from(session?.inputSources ?? []));
-    const xrAxes = xrInput.axes;
-    const sanitized = sanitizeXrAxes(xrAxes);
+  if (xrLocomotionActive) {
     direction = {
-      x: sanitized.moveX,
-      z: sanitized.moveY
+      x: frameContext.intents.move.x,
+      z: frameContext.intents.move.z
     };
   } else {
     lastAvatarXrInputProfile = null;
@@ -2521,31 +2568,28 @@ function updateMovement(delta: number): void {
 
   if (direction.x !== 0 || direction.z !== 0) {
     const viewForward = camera.getWorldDirection(new THREE.Vector3());
-    const next = stepFlatMovement(
-      { x: player.position.x, z: player.position.z },
-      projectMovementToWorld(direction, { x: viewForward.x, z: viewForward.z }),
+    const locomotion = stepLocalLocomotion({
+      pose: localPoseController.getPose(),
+      mode: resolveLocomotionMode({ seatId: null, floorY: sceneTeleportFloorY }),
+      intents: frameContext.intents,
+      deltaSeconds: delta,
       speed,
-      delta
-    );
-    player.position.x = next.x;
-    player.position.z = next.z;
+      worldMove: projectMovementToWorld(direction, { x: viewForward.x, z: viewForward.z })
+    });
+    localPoseController.moveFlatTo(locomotion.pose.position, xrLocomotionActive ? "xr_move" : "desktop_move");
   }
 
-  player.rotation.y = yaw;
-  pitch.rotation.x = pitchAngle;
   lastAvatarMove = direction;
-  lastAvatarTurnRate = delta > 0 ? getSignedAngleDelta(yaw, yawBeforeUpdate) / delta : 0;
-  debugState.localPosition = {
-    x: Number(player.position.x.toFixed(2)),
-    z: Number(player.position.z.toFixed(2))
-  };
+  lastAvatarTurnRate = delta > 0 ? getSignedAngleDelta(localPoseController.getYaw(), yawBeforeUpdate) / delta : 0;
+  updateLocalPositionDebug();
 }
 
 async function syncPresence(mode: PresenceState["mode"], audioActive: boolean): Promise<void> {
   const worldPosition = new THREE.Vector3();
   camera.getWorldPosition(worldPosition);
+  const pose = localPoseController.getPose();
   const bodyXZ = deriveBodyTransform(
-    { x: player.position.x, z: player.position.z },
+    { x: pose.position.x, z: pose.position.z },
     { x: worldPosition.x, z: worldPosition.z }
   );
 
@@ -2554,9 +2598,9 @@ async function syncPresence(mode: PresenceState["mode"], audioActive: boolean): 
     displayName,
     mode,
     rootTransform: {
-      x: player.position.x,
-      y: player.position.y,
-      z: player.position.z
+      x: pose.position.x,
+      y: pose.position.y,
+      z: pose.position.z
     },
     bodyTransform: {
       x: bodyXZ.x,
@@ -2883,8 +2927,7 @@ window.addEventListener("pointermove", (event) => {
   if (event.movementX !== 0 || event.movementY !== 0) {
     pointerMovedSinceDown = true;
   }
-  yaw -= event.movementX * 0.003;
-  pitchAngle = THREE.MathUtils.clamp(pitchAngle - event.movementY * 0.003, -1.1, 1.1);
+  localPoseController.applyPointerLookDelta({ movementX: event.movementX, movementY: event.movementY }, "desktop_move");
 });
 
 renderer.domElement.addEventListener("pointerenter", (event) => {
@@ -2948,16 +2991,17 @@ let runtimeBootReady = false;
 renderer.setAnimationLoop(() => {
   const delta = clock.getDelta();
   const nowMs = Date.now();
+  const frameContext = sampleRuntimeFrameContext(delta, nowMs);
   recentFrameBudgetMs.push(delta * 1000);
   if (recentFrameBudgetMs.length > 60) {
     recentFrameBudgetMs.splice(0, recentFrameBudgetMs.length - 60);
   }
-  updateMovement(delta);
+  updateMovement(delta, frameContext);
   updateAvatarLipsync(delta);
   updateAudioUi();
   updateLocalAvatar(delta);
   remoteAvatarRuntime.update(delta, debugState);
-  updateInteractionRayState();
+  updateInteractionRayState(frameContext);
   updateSeatMarkerVisuals(nowMs / 1000);
   reportXrTelemetry();
   debugState.avatarPoseTransport.adaptivePlaybackDelayMs = debugState.remoteAvatarParticipants.length > 0
@@ -3094,15 +3138,15 @@ async function main(): Promise<void> {
       catalogUrl: avatarCatalogUrl,
       renderer,
       scene,
-      player,
       previousRegistry: avatarSandboxRegistry,
       elements: avatarElements
     });
     avatarSandboxRegistry = sandboxResult.registry;
-    yaw = sandboxResult.yaw;
-    pitchAngle = sandboxResult.pitch;
-    player.rotation.y = yaw;
-    pitch.rotation.x = pitchAngle;
+    localPoseController.setPose({
+      position: sandboxResult.position,
+      yaw: sandboxResult.yaw,
+      pitch: sandboxResult.pitch
+    }, "spawn");
     setFallbackEnvironmentVisible(true);
     debugState.avatarDebug = sandboxResult.diagnostics;
     debugState.avatarSnapshot = null;
@@ -3123,7 +3167,6 @@ async function main(): Promise<void> {
   if (boot.sceneBundleUrl && runtimeFlags.sceneBundles) {
     const sceneResult = await startSceneBundleSession({
       scene,
-      player,
       camera,
       bundleUrl: boot.sceneBundleUrl,
       requestedCleanSceneMode,
@@ -3134,6 +3177,13 @@ async function main(): Promise<void> {
       },
       applyCleanSceneMode,
       applySceneDebugFit,
+      applySpawnPoint(spawnPoint) {
+        localPoseController.setPose({
+          ...localPoseController.getPose(),
+          position: spawnPoint.position
+        }, "spawn");
+        updateLocalPositionDebug();
+      },
       setFallbackEnvironmentVisible
     });
     activeSceneBundleRoot = sceneResult.activeSceneBundleRoot;
@@ -3213,10 +3263,9 @@ async function main(): Promise<void> {
     mobileTouchVector.x = 0;
     mobileTouchVector.z = 0;
     pointerHoveringScene = false;
-    pitchAngle = 0;
-    pitch.rotation.x = 0;
-    if (!currentSeatId) {
-      player.position.y = sceneTeleportFloorY;
+    localPoseController.setPitch(0, "xr_session_start");
+    if (!getCurrentSeatId()) {
+      localPoseController.alignFloorY(sceneTeleportFloorY, "xr_session_start");
     }
     clearInteractionVisuals();
   });

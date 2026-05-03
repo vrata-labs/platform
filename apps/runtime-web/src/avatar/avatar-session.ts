@@ -12,6 +12,7 @@ export interface AvatarSessionResult {
   diagnostics: AvatarDiagnostics;
   note: "avatar_sandbox_booted" | "avatar_sandbox_failed";
   statusMessage: string;
+  position: { x: number; y: number; z: number };
   yaw: number;
   pitch: number;
 }
@@ -44,7 +45,6 @@ export async function startAvatarSandboxSession(input: {
   catalogUrl: string;
   renderer: THREE.WebGLRenderer;
   scene: THREE.Scene;
-  player: THREE.Group;
   previousRegistry: AvatarRegistry | null;
   elements: AvatarFallbackElements;
 }): Promise<AvatarSessionResult> {
@@ -54,7 +54,6 @@ export async function startAvatarSandboxSession(input: {
     catalogUrl: input.catalogUrl,
     renderer: input.renderer,
     scene: input.scene,
-    player: input.player,
     previousRegistry: input.previousRegistry,
     elements: input.elements
   });
@@ -64,6 +63,7 @@ export async function startAvatarSandboxSession(input: {
     diagnostics: sandboxResult.diagnostics.state === "loading" ? loadingDiagnostics : sandboxResult.diagnostics,
     note: sandboxResult.diagnostics.state === "loaded" ? "avatar_sandbox_booted" : "avatar_sandbox_failed",
     statusMessage: sandboxResult.statusMessage,
+    position: sandboxResult.position,
     yaw: sandboxResult.yaw,
     pitch: sandboxResult.pitch
   };

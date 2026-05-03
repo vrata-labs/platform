@@ -7,6 +7,29 @@
 - Runtime diagnostics for scene bundles are emitted from `apps/runtime-web/src/main.ts` and include `sceneDebug` payloads with screenshot stats, bounds, camera, mesh/material counts, missing assets, and material samples.
 - `?debug=1` enables debug screenshot capture; `?mat=basic` and `?mat=wire` are material override debug modes; `?clean=1` enables clean scene mode; `?scenefit=0` disables debug auto-fit.
 
+## Runtime local pose and locomotion ownership
+
+`apps/runtime-web` treats the local user transform as a domain object, not as a free mutable `THREE.Group`.
+
+Ownership rules:
+
+- The local `player` rig, `yaw`, and `pitchAngle` together form local pose.
+- Only `apps/runtime-web/src/local/` may write `player.position`, `player.rotation`, `yaw`, or `pitchAngle`.
+- Feature modules must not call `player.position.set(...)`, assign `player.position.x/y/z`, or assign `player.rotation.y` directly.
+- Seating, teleport, spawn, scene debug fit, XR session start, vehicle/elevator-like behavior, and future local-user movement features must be expressed as locomotion modes, pose commands, or local pose transitions.
+- Input modules convert raw keyboard/mouse/touch/XR samples into `InputIntents`; they do not move the player and do not send network commands.
+- Interaction modules resolve rays and targets; target resolution must be pure and must not mutate pose, seating state, room state, or visuals.
+- Seating modules own pending/authoritative seat state and may emit commands such as `send_seat_claim` / `send_seat_release`; they must not import `three` or mutate `THREE.Object3D`.
+- Room-state callbacks must update domain state only. They must not directly reposition the local player outside the frame pipeline.
+- XR input should be sampled once per frame and passed through a frame context so snap-turn, ray visibility, teleport, and seating all consume the same input sample.
+- `main.ts` should remain a composition/orchestration root. Do not add new runtime behavior there when it belongs in local pose, input, interaction, seating, or locomotion modules.
+
+Regression policy:
+
+- Any change touching local pose, XR input, interaction ray, teleport, seating, or avatar publishing must include unit tests for the affected state transition.
+- At minimum cover standing movement, seated movement lock, snap-turn, ray-intent suppression of snap-turn, teleport from seated, and seat claim/release behavior when relevant.
+- Before considering the change complete, run `pnpm --filter @noah/runtime-web build` and `pnpm --filter @noah/runtime-web test`. For user-facing runtime behavior, also run the repository e2e/staging checks required by the testing policy.
+
 ## Confirmed working Hall path
 
 - The first reliable Hall asset is not raw FBX. It is the exported GLB at `/mnt/d/Repository/project-noah/examples/assets/TheHallScene.glb`.

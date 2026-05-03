@@ -1,8 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import * as THREE from "three";
 
-import { applySeatAnchorToPlayer, createAvatarSeatAnchorMap, resolveLocalSeatId, resolveSeatRootPosition } from "./avatar-seating.js";
+import { createAvatarSeatAnchorMap, resolveLocalSeatId, resolveSeatRootPosition } from "./avatar-seating.js";
 
 const anchor = {
   id: "seat-a",
@@ -20,16 +19,6 @@ test("createAvatarSeatAnchorMap indexes anchors by id", () => {
 
 test("resolveSeatRootPosition applies seat height to anchor base", () => {
   assert.deepEqual(resolveSeatRootPosition(anchor), { x: 1, y: 0.45, z: -2 });
-});
-
-test("applySeatAnchorToPlayer fixes player transform to seat anchor", () => {
-  const player = new THREE.Group();
-  player.rotation.y = 0.25;
-  applySeatAnchorToPlayer(player, anchor);
-  assert.equal(player.position.x, 1);
-  assert.equal(player.position.y, 0.45);
-  assert.equal(player.position.z, -2);
-  assert.equal(player.rotation.y, 0.25);
 });
 
 test("resolveLocalSeatId finds participant seat in occupancy map", () => {

@@ -1,6 +1,5 @@
-import * as THREE from "three";
-
 import type { SceneBundleSeatAnchor } from "../scene-bundle.js";
+import { resolveLocalSeatId } from "../seating/seating-controller.js";
 
 export interface AvatarSeatState {
   currentSeatId: string | null;
@@ -19,16 +18,4 @@ export function resolveSeatRootPosition(anchor: SceneBundleSeatAnchor): { x: num
   };
 }
 
-export function applySeatAnchorToPlayer(player: THREE.Object3D, anchor: SceneBundleSeatAnchor): void {
-  const position = resolveSeatRootPosition(anchor);
-  player.position.set(position.x, position.y, position.z);
-}
-
-export function resolveLocalSeatId(seatOccupancy: Record<string, string>, participantId: string): string | null {
-  for (const [seatId, occupantId] of Object.entries(seatOccupancy)) {
-    if (occupantId === participantId) {
-      return seatId;
-    }
-  }
-  return null;
-}
+export { resolveLocalSeatId };

@@ -52,7 +52,6 @@ test("startAvatarSandboxSession reports failure note on broken catalog", async (
       catalogUrl: "https://example.com/assets/avatars/catalog.v1.json",
       renderer: {} as THREE.WebGLRenderer,
       scene: new THREE.Scene(),
-      player: new THREE.Group(),
       previousRegistry: null,
       elements: { panelEl, presetSelectEl, statusEl }
     });

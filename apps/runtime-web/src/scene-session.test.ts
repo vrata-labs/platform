@@ -13,7 +13,6 @@ test("startSceneBundleSession reports failure result for missing bundle", async 
   try {
     const result = await startSceneBundleSession({
       scene: new THREE.Scene(),
-      player: new THREE.Group(),
       camera: new THREE.PerspectiveCamera(),
       bundleUrl: "https://example.com/scene.json",
       requestedCleanSceneMode: false,
