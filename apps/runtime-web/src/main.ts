@@ -37,7 +37,8 @@ import { createLocalPoseController, type Vector3Like } from "./local/local-pose.
 import { createIdleInputIntents, resolveXrInputIntents } from "./input/input-intents.js";
 import type { RuntimeFrameContext } from "./input/runtime-frame-context.js";
 import { resolveLocomotionMode, stepLocalLocomotion } from "./locomotion/local-locomotion.js";
-import { executeRuntimeCommands, planInteractionCommands, type RuntimeCommand, type RuntimeCommandInteractionTarget } from "./locomotion/runtime-commands.js";
+import { planInteractionCommands, type RuntimeCommandInteractionTarget } from "./locomotion/runtime-commands.js";
+import { createRuntimeCommandExecutor } from "./locomotion/runtime-command-bridge.js";
 import { createSeatingController } from "./seating/seating-controller.js";
 import type { InteractionTarget } from "./interaction/interaction-targets.js";
 
@@ -776,37 +777,19 @@ function toRuntimeCommandInteractionTarget(target: InteractionTarget): RuntimeCo
   return { kind: "none" };
 }
 
-function executeRuntimeCommandList(commands: RuntimeCommand[]): void {
-  executeRuntimeCommands(commands, {
-    requestSeatClaim(seatId) {
-      seatingController.requestSeatClaim(seatId);
-      syncSeatDebugState();
-    },
-    sendSeatClaim(seatId) {
-      if (roomStateClient && roomStateConnected) {
-        sendSeatClaim(roomStateClient, seatId);
-      }
-    },
-    sendSeatRelease(seatId) {
-      if (roomStateClient && roomStateConnected) {
-        sendSeatRelease(roomStateClient, seatId);
-      }
-    },
-    releaseLocalSeat() {
-      releaseCurrentSeatLocally();
-    },
-    teleportToFloor(point) {
-      setPlayerPositionForFloorTeleport(point);
-      updateLocalPositionDebug();
-    },
-    setStatus(message) {
-      setStatus(message);
-    },
-    markTelemetry(kind) {
-      markXrTelemetry(kind);
-    }
-  });
-}
+const executeRuntimeCommandList = createRuntimeCommandExecutor({
+  seatingController,
+  getRoomStateClient: () => roomStateClient,
+  isRoomStateConnected: () => roomStateConnected,
+  syncSeatDebugState,
+  releaseLocalSeat: releaseCurrentSeatLocally,
+  teleportToFloor(point) {
+    setPlayerPositionForFloorTeleport(point);
+    updateLocalPositionDebug();
+  },
+  setStatus,
+  markTelemetry: markXrTelemetry
+});
 
 function getInteractionRay(frameContext: RuntimeFrameContext | null = null): THREE.Ray | null {
   const forcedRay = forcedTestInteractionRay;
