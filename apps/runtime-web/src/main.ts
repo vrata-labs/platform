@@ -39,6 +39,12 @@ import type { RuntimeFrameContext } from "./input/runtime-frame-context.js";
 import { resolveLocomotionMode, stepLocalLocomotion } from "./locomotion/local-locomotion.js";
 import { planInteractionCommands, type RuntimeCommandInteractionTarget } from "./locomotion/runtime-commands.js";
 import { createRuntimeCommandExecutor } from "./locomotion/runtime-command-bridge.js";
+import {
+  applyAcceptedSeatClaimToOccupancy,
+  applyForcedSeatOccupancy,
+  removeLocalSeatFromOccupancy,
+  removeParticipantFromSeatOccupancy
+} from "./seating/seat-occupancy.js";
 import { createSeatingController } from "./seating/seating-controller.js";
 import type { InteractionTarget } from "./interaction/interaction-targets.js";
 
@@ -651,10 +657,8 @@ function setSceneSeatAnchors(anchors: SceneBundleSeatAnchor[], teleportFloorY = 
   const reconciliation = seatingController.reconcileAnchors(new Set(anchors.map((anchor) => anchor.id)));
   syncSeatDebugState();
   for (const command of reconciliation.commands) {
-    if (roomSeatOccupancy[command.seatId] === participantId) {
-      delete roomSeatOccupancy[command.seatId];
-      debugState.seatOccupancy = { ...roomSeatOccupancy };
-    }
+    roomSeatOccupancy = removeLocalSeatFromOccupancy(roomSeatOccupancy, { seatId: command.seatId, participantId });
+    debugState.seatOccupancy = { ...roomSeatOccupancy };
     lastAppliedSeatLockId = null;
     executeRuntimeCommandList([
       { type: "send_seat_release", seatId: command.seatId },
@@ -666,11 +670,7 @@ function setSceneSeatAnchors(anchors: SceneBundleSeatAnchor[], teleportFloorY = 
 
 function releaseCurrentSeatLocally(): void {
   forcedTestSeatId = null;
-  for (const [seatId, occupantId] of Object.entries(roomSeatOccupancy)) {
-    if (occupantId === participantId) {
-      delete roomSeatOccupancy[seatId];
-    }
-  }
+  roomSeatOccupancy = removeParticipantFromSeatOccupancy(roomSeatOccupancy, participantId);
   seatingController.releaseLocal();
   lastAppliedSeatLockId = null;
   syncSeatDebugState();
@@ -679,10 +679,7 @@ function releaseCurrentSeatLocally(): void {
 }
 
 function syncSeatStateFromOccupancy(): void {
-  roomSeatOccupancy = { ...roomSeatOccupancy };
-  if (forcedTestSeatId) {
-    roomSeatOccupancy[forcedTestSeatId] = participantId;
-  }
+  roomSeatOccupancy = applyForcedSeatOccupancy(roomSeatOccupancy, { forcedSeatId: forcedTestSeatId, participantId });
   debugState.seatOccupancy = { ...roomSeatOccupancy };
   seatingController.applyOccupancy({ seatOccupancy: roomSeatOccupancy, forcedSeatId: forcedTestSeatId });
   syncSeatDebugState();
@@ -1445,11 +1442,7 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
     if (!seatAnchor) {
       return false;
     }
-    for (const occupiedSeatId of Object.keys(roomSeatOccupancy)) {
-      if (roomSeatOccupancy[occupiedSeatId] === participantId) {
-        delete roomSeatOccupancy[occupiedSeatId];
-      }
-    }
+    roomSeatOccupancy = removeParticipantFromSeatOccupancy(roomSeatOccupancy, participantId);
     forcedTestSeatId = seatAnchor.id;
     seatingController.forceSeated(seatAnchor.id);
     syncSeatDebugState();
@@ -1724,10 +1717,7 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
     },
     onSeatClaimResult: (result) => {
       if (result.accepted) {
-        if (result.previousSeatId) {
-          delete roomSeatOccupancy[result.previousSeatId];
-        }
-        roomSeatOccupancy[result.seatId] = participantId;
+        roomSeatOccupancy = applyAcceptedSeatClaimToOccupancy(roomSeatOccupancy, { result, participantId });
         clearSeatReclaimRetry();
         syncSeatStateFromOccupancy();
         setStatus(`Seated at ${result.seatId}`);
