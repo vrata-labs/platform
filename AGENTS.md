@@ -1,5 +1,12 @@
 # Project Notes
 
+## Agent instruction priority
+
+- Treat this `AGENTS.md` as the project-specific operating contract for Noah. Read it before deciding that a task is done.
+- For code changes in this repository, the default definition of done is: local verification -> `git commit` -> `git push` -> normal CI/CD staging deploy -> staging verification on the deployed commit.
+- Do not stop after local tests when a change affects runtime behavior, deployment behavior, room manifests, scene bundles, or staging infrastructure. If commit/push/deploy is blocked by a higher-priority instruction or missing credentials, state that blocker explicitly and ask one short question.
+- In final reports after code changes, include the commit SHA, CI/Docker/Staging run IDs or URLs, local verification results, staging verification results, and any rollback/retry notes.
+
 ## Scene bundles and runtime
 
 - `apps/api/src/index.ts` room manifest supports optional `sceneBundle.url`; runtime boot reads it through `apps/runtime-web/src/index.ts`.
