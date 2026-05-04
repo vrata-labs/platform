@@ -1,7 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { resolveDesktopTouchInputIntents, resolveTouchMoveVector, resolveXrInputIntents } from "./input-intents.js";
+import {
+  resolveDesktopTouchInputIntents,
+  resolveTouchMoveVector,
+  resolveXrConfirmInteractionIntent,
+  resolveXrInputIntents
+} from "./input-intents.js";
 
 test("xr ray intent suppresses diagonal snap-turn", () => {
   const resolved = resolveXrInputIntents({
@@ -34,6 +39,30 @@ test("xr trigger becomes confirm interaction intent without side effects", () =>
 
   assert.equal(resolved.intents.confirmInteraction, true);
   assert.deepEqual(resolved.intents.move, { x: 0, z: 0 });
+});
+
+test("xr select event becomes confirm intent without a gamepad button edge", () => {
+  assert.equal(resolveXrConfirmInteractionIntent({
+    triggerPressed: false,
+    triggerPressedLastFrame: false,
+    selectEventPending: true
+  }), true);
+});
+
+test("xr held trigger does not repeat confirm intent without a new edge", () => {
+  assert.equal(resolveXrConfirmInteractionIntent({
+    triggerPressed: true,
+    triggerPressedLastFrame: true,
+    selectEventPending: false
+  }), false);
+});
+
+test("xr trigger rising edge becomes confirm intent", () => {
+  assert.equal(resolveXrConfirmInteractionIntent({
+    triggerPressed: true,
+    triggerPressedLastFrame: false,
+    selectEventPending: false
+  }), true);
 });
 
 test("desktop input intents convert keyboard state into move intent", () => {

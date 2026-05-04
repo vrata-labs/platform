@@ -20,6 +20,14 @@ export interface DesktopTouchInputSample {
   touchVector: FlatVector;
 }
 
+export function resolveXrConfirmInteractionIntent(input: {
+  triggerPressed: boolean;
+  triggerPressedLastFrame: boolean;
+  selectEventPending: boolean;
+}): boolean {
+  return input.selectEventPending || (input.triggerPressed && !input.triggerPressedLastFrame);
+}
+
 export function isXrRayVisibleFromStick(turnY: number, latched: boolean): boolean {
   if (latched) {
     return turnY <= -0.45;

@@ -34,7 +34,7 @@ import type { LocalAvatarSnapshotV1 } from "./avatar/avatar-types.js";
 import { createAvatarRegistry } from "./avatar/avatar-registry.js";
 import type { SceneBundleSeatAnchor } from "./scene-bundle.js";
 import { createLocalPoseController, type Vector3Like } from "./local/local-pose.js";
-import { resolveDesktopTouchInputIntents, resolveTouchMoveVector, resolveXrInputIntents } from "./input/input-intents.js";
+import { resolveDesktopTouchInputIntents, resolveTouchMoveVector, resolveXrConfirmInteractionIntent, resolveXrInputIntents } from "./input/input-intents.js";
 import type { RuntimeFrameContext } from "./input/runtime-frame-context.js";
 import { resolveLocomotionMode, stepLocalLocomotion } from "./locomotion/local-locomotion.js";
 import { planInteractionCommands, type RuntimeCommandInteractionTarget } from "./locomotion/runtime-commands.js";
@@ -211,7 +211,7 @@ for (const controller of xrControllers) {
       return;
     }
     xrSelectEventCount += 1;
-    confirmInteractionTarget();
+    xrSelectEventPending = true;
   });
 }
 
@@ -332,6 +332,7 @@ let roomStateConnected = false;
 let roomStateReconnectTimer: number | null = null;
 let seatReclaimRetryTimer: number | null = null;
 let xrSelectPressedLastFrame = false;
+let xrSelectEventPending = false;
 let xrSelectEventCount = 0;
 let xrRayVisibleLatched = false;
 let lastXrTelemetryReportAt = 0;
@@ -353,6 +354,7 @@ let localHeadMesh: THREE.Mesh | null = null;
 const seatingController = createSeatingController({ participantId });
 let lastAppliedSeatLockId: string | null = null;
 let lastInteractionConfirmAt = 0;
+let lastRuntimeFrameContext: RuntimeFrameContext | null = null;
 let forcedTestInteractionRay: THREE.Ray | null = null;
 let forcedTestInteractionSeatId: string | null = null;
 let forcedTestSeatId: string | null = null;
@@ -788,13 +790,13 @@ const executeRuntimeCommandList = createRuntimeCommandExecutor({
   markTelemetry: markXrTelemetry
 });
 
-function getInteractionRay(frameContext: RuntimeFrameContext | null = null): THREE.Ray | null {
+function getInteractionRay(frameContext: RuntimeFrameContext): THREE.Ray | null {
   const forcedRay = forcedTestInteractionRay;
   if (forcedRay) {
     return forcedRay.clone();
   }
   if (avatarVrMockEnabled && syntheticXrState) {
-    if (!syntheticXrState.rayVisible && !frameContext?.intents.aimRay) {
+    if (!syntheticXrState.rayVisible && !frameContext.intents.aimRay) {
       return null;
     }
     interactionRayOrigin.set(
@@ -821,11 +823,13 @@ function getInteractionRay(frameContext: RuntimeFrameContext | null = null): THR
     return new THREE.Ray(interactionRayOrigin.clone(), interactionRayDirection.clone());
   }
   if (renderer.xr.isPresenting) {
-    const xrFrame = frameContext?.xr?.frame ?? renderer.xr.getFrame();
-    const xrSession = frameContext?.xr?.session ?? xrFrame?.session;
-    const referenceSpace = frameContext?.xr?.referenceSpace ?? renderer.xr.getReferenceSpace();
-    const inputSources = frameContext?.xr?.inputSources ?? Array.from(xrSession?.inputSources ?? []);
-    if (!frameContext?.intents.aimRay) {
+    if (frameContext.source !== "xr" || !frameContext.xr) {
+      return null;
+    }
+    const xrFrame = frameContext.xr.frame;
+    const referenceSpace = frameContext.xr.referenceSpace;
+    const inputSources = frameContext.xr.inputSources;
+    if (!frameContext.intents.aimRay) {
       return null;
     }
     const xrRay = resolveXrInteractionRay({
@@ -920,11 +924,11 @@ function resolveInteractionTargetFromRay(ray: THREE.Ray): InteractionTarget {
   });
 }
 
-function updateInteractionRayState(frameContext: RuntimeFrameContext | null = null): InteractionTarget {
+function updateInteractionRayState(frameContext: RuntimeFrameContext): InteractionTarget {
   const ray = getInteractionRay(frameContext);
   if (!ray) {
     clearInteractionVisuals();
-    debugState.interactionRay.mode = renderer.xr.isPresenting || frameContext?.source === "xr" ? "xr-right-stick" : "none";
+    debugState.interactionRay.mode = renderer.xr.isPresenting || frameContext.source === "xr" ? "xr-right-stick" : "none";
     return { kind: "none" };
   }
   const forcedSeatAnchor = forcedTestInteractionSeatId ? sceneSeatAnchorMap.get(forcedTestInteractionSeatId) ?? null : null;
@@ -941,10 +945,10 @@ function updateInteractionRayState(frameContext: RuntimeFrameContext | null = nu
        }
     : resolveInteractionTargetFromRay(ray);
   debugState.interactionRay.active = true;
-  debugState.interactionRay.mode = renderer.xr.isPresenting ? "xr-right-stick" : "cursor";
+  debugState.interactionRay.mode = frameContext.source === "xr" ? "xr-right-stick" : "cursor";
   if (target.kind === "none") {
     clearInteractionVisuals();
-    debugState.interactionRay.mode = renderer.xr.isPresenting ? "xr-right-stick" : "cursor";
+    debugState.interactionRay.mode = frameContext.source === "xr" ? "xr-right-stick" : "cursor";
     return { kind: "none" };
   }
   interactionRayPoints[0].copy(ray.origin);
@@ -995,10 +999,25 @@ function performInteractionTarget(target: InteractionTarget): void {
   executeRuntimeCommandList(planned.commands);
 }
 
-function confirmInteractionTarget(frameContext: RuntimeFrameContext | null = null): void {
+function confirmInteractionTarget(frameContext: RuntimeFrameContext): void {
   const target = updateInteractionRayState(frameContext);
   performInteractionTarget(target);
   forcedTestInteractionSeatId = null;
+}
+
+function resolveNonFrameInteractionContext(): RuntimeFrameContext | null {
+  if (renderer.xr.isPresenting || (avatarVrMockEnabled && syntheticXrState)) {
+    return lastRuntimeFrameContext?.source === "xr" ? lastRuntimeFrameContext : null;
+  }
+  return sampleRuntimeFrameContext(0, Date.now());
+}
+
+function confirmLatestInteractionTarget(): void {
+  const frameContext = resolveNonFrameInteractionContext();
+  if (!frameContext) {
+    return;
+  }
+  confirmInteractionTarget(frameContext);
 }
 
 function supportsAudioOutputSelection(): boolean {
@@ -1435,7 +1454,7 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
     return forceInteractionRayAtWorldPoint(new THREE.Vector3(x, sceneTeleportFloorY, z));
   },
   confirmInteraction: () => {
-    confirmInteractionTarget();
+    confirmLatestInteractionTarget();
   },
   claimSeatById: (seatId: string) => {
     const seatAnchor = sceneSeatAnchorMap.get(seatId);
@@ -2395,11 +2414,18 @@ async function bootLocalAvatarPresetSession(input: {
 
 function sampleRuntimeFrameContext(deltaSeconds: number, nowMs: number): RuntimeFrameContext {
   if (renderer.xr.isPresenting || (avatarVrMockEnabled && syntheticXrState)) {
+    const selectEventPending = xrSelectEventPending;
+    xrSelectEventPending = false;
     if (syntheticXrState) {
       const triggerPressed = syntheticXrState.triggerPressed;
+      const confirmInteraction = resolveXrConfirmInteractionIntent({
+        triggerPressed,
+        triggerPressedLastFrame: xrSelectPressedLastFrame,
+        selectEventPending
+      });
       const resolved = resolveXrInputIntents({
         axes: syntheticXrState.axes,
-        triggerPressed: triggerPressed && !xrSelectPressedLastFrame,
+        triggerPressed: confirmInteraction,
         rayVisibleLatched: xrRayVisibleLatched
       });
       return {
@@ -2432,9 +2458,14 @@ function sampleRuntimeFrameContext(deltaSeconds: number, nowMs: number): Runtime
     const triggerPressed = rightIndex >= 0
       ? Boolean(inputSources[rightIndex]?.gamepad?.buttons?.[0]?.pressed)
       : false;
+    const confirmInteraction = resolveXrConfirmInteractionIntent({
+      triggerPressed,
+      triggerPressedLastFrame: xrSelectPressedLastFrame,
+      selectEventPending
+    });
     const resolved = resolveXrInputIntents({
       axes: xrInput.axes,
-      triggerPressed: triggerPressed && !xrSelectPressedLastFrame,
+      triggerPressed: confirmInteraction,
       rayVisibleLatched: xrRayVisibleLatched
     });
     return {
@@ -2456,6 +2487,7 @@ function sampleRuntimeFrameContext(deltaSeconds: number, nowMs: number): Runtime
     };
   }
 
+  xrSelectEventPending = false;
   const intents = resolveDesktopTouchInputIntents({
     keys: keyState,
     touchActive: mobileTouchActive,
@@ -2974,6 +3006,7 @@ renderer.setAnimationLoop(() => {
   const delta = clock.getDelta();
   const nowMs = Date.now();
   const frameContext = sampleRuntimeFrameContext(delta, nowMs);
+  lastRuntimeFrameContext = frameContext;
   recentFrameBudgetMs.push(delta * 1000);
   if (recentFrameBudgetMs.length > 60) {
     recentFrameBudgetMs.splice(0, recentFrameBudgetMs.length - 60);
