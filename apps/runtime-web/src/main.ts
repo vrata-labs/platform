@@ -4,7 +4,7 @@ import { Room, RoomEvent, Track } from "livekit-client";
 
 import { appendBrandingSuffix, applyRoomShellBootState } from "./boot-session.js";
 import { bootRuntime, fetchRuntimeSpaces, listPresence, planVoiceSession, removePresence, resolveCurrentSpace, upsertPresence, type PresenceState, type RuntimeSpaceOption } from "./index.js";
-import { applySnapTurn, computeKeyboardDirection, projectMovementToWorld } from "./movement.js";
+import { applySnapTurn, projectMovementToWorld } from "./movement.js";
 import { createMotionTrack, pushMotionSample, sampleMotion, type MotionTrack } from "./motion-state.js";
 import { connectRoomState, sendAvatarPoseFrame, sendAvatarReliableState, sendParticipantUpdate, sendSeatClaim, sendSeatRelease, type RoomStateClient, type RoomStateSnapshot } from "./room-state-client.js";
 import { classifyMediaError, classifyRoomStateError, createFaultError, getRuntimeIssue, shouldRetryConnection, type RuntimeIssue } from "./runtime-errors.js";
@@ -34,7 +34,7 @@ import type { LocalAvatarSnapshotV1 } from "./avatar/avatar-types.js";
 import { createAvatarRegistry } from "./avatar/avatar-registry.js";
 import type { SceneBundleSeatAnchor } from "./scene-bundle.js";
 import { createLocalPoseController, type Vector3Like } from "./local/local-pose.js";
-import { createIdleInputIntents, resolveXrInputIntents } from "./input/input-intents.js";
+import { resolveDesktopTouchInputIntents, resolveTouchMoveVector, resolveXrInputIntents } from "./input/input-intents.js";
 import type { RuntimeFrameContext } from "./input/runtime-frame-context.js";
 import { resolveLocomotionMode, stepLocalLocomotion } from "./locomotion/local-locomotion.js";
 import { planInteractionCommands, type RuntimeCommandInteractionTarget } from "./locomotion/runtime-commands.js";
@@ -2489,11 +2489,16 @@ function sampleRuntimeFrameContext(deltaSeconds: number, nowMs: number): Runtime
     };
   }
 
+  const intents = resolveDesktopTouchInputIntents({
+    keys: keyState,
+    touchActive: mobileTouchActive,
+    touchVector: mobileTouchVector
+  });
   return {
     deltaSeconds,
     nowMs,
-    source: mobileTouchActive ? "touch" : "desktop",
-    intents: createIdleInputIntents(mobileTouchActive ? "touch" : "desktop")
+    source: intents.source,
+    intents
   };
 }
 
@@ -2550,29 +2555,23 @@ function updateMovement(delta: number, frameContext: RuntimeFrameContext): void 
   const yawBeforeUpdate = localPoseController.getYaw();
   const xrLocomotionActive = frameContext.source === "xr";
   const speed = xrLocomotionActive ? 2.4 : keyState.ShiftLeft ? 5 : 3.2;
-  let direction = computeKeyboardDirection(keyState);
+  let direction = {
+    x: frameContext.intents.move.x,
+    z: frameContext.intents.move.z
+  };
 
   if (botMode !== "off" && !xrLocomotionActive) {
     direction = botDirection(performance.now() / 1000);
     debugState.locomotionMode = `bot:${botMode}`;
   }
 
-  if (!xrLocomotionActive && mobileTouchActive && botMode === "off") {
-    direction = {
-      x: direction.x + mobileTouchVector.x,
-      z: direction.z + mobileTouchVector.z
-    };
+  if (!xrLocomotionActive && frameContext.source === "touch" && botMode === "off") {
     debugState.locomotionMode = "mobile-touch";
   } else if (!xrLocomotionActive) {
     debugState.locomotionMode = "desktop";
   }
 
-  if (xrLocomotionActive) {
-    direction = {
-      x: frameContext.intents.move.x,
-      z: frameContext.intents.move.z
-    };
-  } else {
+  if (!xrLocomotionActive) {
     lastAvatarXrInputProfile = null;
     debugState.xrAvatarDebug = null;
     debugState.xrAxes = { moveX: 0, moveY: 0, turnX: 0, turnY: 0 };
@@ -2964,10 +2963,14 @@ renderer.domElement.addEventListener("touchmove", (event) => {
     return;
   }
   const touch = event.touches[0];
-  const x = (touch.clientX / window.innerWidth) * 2 - 1;
-  const y = (touch.clientY / window.innerHeight) * 2 - 1;
-  mobileTouchVector.x = THREE.MathUtils.clamp(x, -1, 1);
-  mobileTouchVector.z = THREE.MathUtils.clamp(y, -1, 1);
+  const vector = resolveTouchMoveVector({
+    clientX: touch.clientX,
+    clientY: touch.clientY,
+    viewportWidth: window.innerWidth,
+    viewportHeight: window.innerHeight
+  });
+  mobileTouchVector.x = vector.x;
+  mobileTouchVector.z = vector.z;
 });
 
 renderer.domElement.addEventListener("touchend", () => {

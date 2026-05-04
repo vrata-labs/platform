@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { resolveXrInputIntents } from "./input-intents.js";
+import { resolveDesktopTouchInputIntents, resolveTouchMoveVector, resolveXrInputIntents } from "./input-intents.js";
 
 test("xr ray intent suppresses diagonal snap-turn", () => {
   const resolved = resolveXrInputIntents({
@@ -34,4 +34,44 @@ test("xr trigger becomes confirm interaction intent without side effects", () =>
 
   assert.equal(resolved.intents.confirmInteraction, true);
   assert.deepEqual(resolved.intents.move, { x: 0, z: 0 });
+});
+
+test("desktop input intents convert keyboard state into move intent", () => {
+  const intents = resolveDesktopTouchInputIntents({
+    keys: { KeyW: true, KeyD: true },
+    touchActive: false,
+    touchVector: { x: 0, z: 0 }
+  });
+
+  assert.equal(intents.source, "desktop");
+  assert.deepEqual(intents.move, { x: 1, z: -1 });
+  assert.equal(intents.aimRay, false);
+  assert.equal(intents.confirmInteraction, false);
+});
+
+test("touch input intents combine touch vector with keyboard state", () => {
+  const intents = resolveDesktopTouchInputIntents({
+    keys: { ArrowLeft: true },
+    touchActive: true,
+    touchVector: { x: 0.25, z: 0.5 }
+  });
+
+  assert.equal(intents.source, "touch");
+  assert.deepEqual(intents.move, { x: -0.75, z: 0.5 });
+});
+
+test("touch move vector normalizes viewport position and clamps edges", () => {
+  assert.deepEqual(resolveTouchMoveVector({
+    clientX: 75,
+    clientY: 25,
+    viewportWidth: 100,
+    viewportHeight: 100
+  }), { x: 0.5, z: -0.5 });
+
+  assert.deepEqual(resolveTouchMoveVector({
+    clientX: 500,
+    clientY: -200,
+    viewportWidth: 100,
+    viewportHeight: 100
+  }), { x: 1, z: -1 });
 });
