@@ -35,6 +35,17 @@ export interface XrHandResolutionDebug {
   rightResolved: AvatarHandTarget | null;
 }
 
+export interface AvatarHandTargets {
+  leftHand: AvatarHandTarget | null;
+  rightHand: AvatarHandTarget | null;
+}
+
+export interface LocalAvatarHandFrameResult {
+  debug: XrHandResolutionDebug;
+  worldHands: AvatarHandTargets;
+  controllerWorldHands: AvatarHandTargets;
+}
+
 function readWorldTarget(anchor: XrSpatialLike | null | undefined): AvatarHandTarget | null {
   if (!anchor) {
     return null;
@@ -101,6 +112,32 @@ export function collectLocalAvatarHandDebug(input: {
   return result;
 }
 
+function resolveHandTargetsFromDebug(input: {
+  presenting: boolean;
+  debug: XrHandResolutionDebug;
+  playerOffset?: { x: number; y: number; z: number };
+  playerYaw?: number;
+  preferController?: boolean;
+}): AvatarHandTargets {
+  if (!input.presenting) {
+    return { leftHand: null, rightHand: null };
+  }
+
+  const offset = input.playerOffset ?? { x: 0, y: 0, z: 0 };
+  const yaw = input.playerYaw ?? 0;
+  const leftTarget = input.preferController ? (input.debug.leftController ?? input.debug.leftResolved) : input.debug.leftResolved;
+  const rightTarget = input.preferController ? (input.debug.rightController ?? input.debug.rightResolved) : input.debug.rightResolved;
+  const applyOffset = (target: AvatarHandTarget | null): AvatarHandTarget | null => target ? {
+    x: target.x * Math.cos(yaw) + target.z * Math.sin(yaw) + offset.x,
+    y: target.y + offset.y,
+    z: -target.x * Math.sin(yaw) + target.z * Math.cos(yaw) + offset.z
+  } : null;
+  return {
+    leftHand: applyOffset(leftTarget),
+    rightHand: applyOffset(rightTarget)
+  };
+}
+
 export function resolveLocalAvatarHandTargets(input: {
   presenting: boolean;
   inputSources: XrInputSourceLike[];
@@ -111,23 +148,46 @@ export function resolveLocalAvatarHandTargets(input: {
   playerOffset?: { x: number; y: number; z: number };
   playerYaw?: number;
   preferController?: boolean;
-}): { leftHand: AvatarHandTarget | null; rightHand: AvatarHandTarget | null } {
+}): AvatarHandTargets {
   if (!input.presenting) {
     return { leftHand: null, rightHand: null };
   }
 
   const debug = collectLocalAvatarHandDebug(input);
-  const offset = input.playerOffset ?? { x: 0, y: 0, z: 0 };
-  const yaw = input.playerYaw ?? 0;
-  const leftTarget = input.preferController ? (debug.leftController ?? debug.leftResolved) : debug.leftResolved;
-  const rightTarget = input.preferController ? (debug.rightController ?? debug.rightResolved) : debug.rightResolved;
-  const applyOffset = (target: AvatarHandTarget | null): AvatarHandTarget | null => target ? {
-    x: target.x * Math.cos(yaw) + target.z * Math.sin(yaw) + offset.x,
-    y: target.y + offset.y,
-    z: -target.x * Math.sin(yaw) + target.z * Math.cos(yaw) + offset.z
-  } : null;
+  return resolveHandTargetsFromDebug({
+    presenting: input.presenting,
+    debug,
+    playerOffset: input.playerOffset,
+    playerYaw: input.playerYaw,
+    preferController: input.preferController
+  });
+}
+
+export function resolveLocalAvatarHandFrame(input: {
+  presenting: boolean;
+  inputSources: XrInputSourceLike[];
+  grips: Array<XrSpatialLike | null | undefined>;
+  controllers: Array<XrSpatialLike | null | undefined>;
+  xrFrame?: XrFrameLike | null;
+  referenceSpace?: unknown;
+  playerOffset?: { x: number; y: number; z: number };
+  playerYaw?: number;
+}): LocalAvatarHandFrameResult {
+  const debug = collectLocalAvatarHandDebug(input);
   return {
-    leftHand: applyOffset(leftTarget),
-    rightHand: applyOffset(rightTarget)
+    debug,
+    worldHands: resolveHandTargetsFromDebug({
+      presenting: input.presenting,
+      debug,
+      playerOffset: input.playerOffset,
+      playerYaw: input.playerYaw
+    }),
+    controllerWorldHands: resolveHandTargetsFromDebug({
+      presenting: input.presenting,
+      debug,
+      playerOffset: input.playerOffset,
+      playerYaw: input.playerYaw,
+      preferController: true
+    })
   };
 }

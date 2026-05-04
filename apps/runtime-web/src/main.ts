@@ -25,7 +25,7 @@ import { resolveAvatarInteractionTarget } from "./avatar/avatar-interaction.js";
 import { resolveXrInteractionRay } from "./avatar/avatar-xr-ray.js";
 import { createAvatarSeatAnchorMap, resolveSeatRootPosition } from "./avatar/avatar-seating.js";
 import { resolveAvatarViewProfile } from "./avatar/avatar-visibility.js";
-import { collectLocalAvatarHandDebug, resolveLocalAvatarHandTargets } from "./avatar/avatar-xr-hands.js";
+import { resolveLocalAvatarHandFrame, resolveLocalAvatarHandTargets } from "./avatar/avatar-xr-hands.js";
 import { resolveAvatarXrInput } from "./avatar/avatar-xr-input.js";
 import { setAvatarSandboxStatus } from "./avatar/avatar-sandbox.js";
 import { resetAvatarSession, startAvatarSandboxSession, startLocalAvatarSession } from "./avatar/avatar-session.js";
@@ -1894,12 +1894,12 @@ async function reportDiagnostics(note?: string): Promise<void> {
   });
 }
 
-function reportXrTelemetry(): void {
+function reportXrTelemetry(frameContext: RuntimeFrameContext): void {
   if (!renderer.xr.isPresenting && !(avatarVrMockEnabled && syntheticXrState)) {
     return;
   }
   const now = performance.now();
-  const xrSession = renderer.xr.getFrame()?.session;
+  const inputSources = frameContext.xr?.inputSources ?? [];
   const xrRawInputs = syntheticXrState
     ? [{
         index: 0,
@@ -1915,7 +1915,7 @@ function reportXrTelemetry(): void {
           syntheticXrState.axes.turnY
         ]
       }]
-    : Array.from(xrSession?.inputSources ?? []).map((source, index) => ({
+    : inputSources.map((source, index) => ({
         index,
         handedness: source.handedness ?? null,
         targetRayMode: source.targetRayMode ?? null,
@@ -1931,8 +1931,8 @@ function reportXrTelemetry(): void {
     return;
   }
   lastXrTelemetryReportAt = now;
-  const rightInputSource = Array.from(xrSession?.inputSources ?? []).find((source) => source.handedness === "right")
-    ?? Array.from(xrSession?.inputSources ?? [])[0]
+  const rightInputSource = inputSources.find((source) => source.handedness === "right")
+    ?? inputSources[0]
     ?? null;
   const rightAxes = syntheticXrState
     ? [syntheticXrState.axes.turnX, syntheticXrState.axes.turnY, syntheticXrState.axes.turnX, syntheticXrState.axes.turnY]
@@ -2093,7 +2093,7 @@ function getSignedAngleDelta(next: number, previous: number): number {
   return Math.atan2(Math.sin(next - previous), Math.cos(next - previous));
 }
 
-function getLocalAvatarHandTargets(): { leftHand: { x: number; y: number; z: number } | null; rightHand: { x: number; y: number; z: number } | null } {
+function getLocalAvatarHandTargets(frameContext: RuntimeFrameContext): { leftHand: { x: number; y: number; z: number } | null; rightHand: { x: number; y: number; z: number } | null } {
   const pose = localPoseController.getPose();
   if (avatarVrMockEnabled && !renderer.xr.isPresenting) {
     if (syntheticXrState) {
@@ -2154,19 +2154,11 @@ function getLocalAvatarHandTargets(): { leftHand: { x: number; y: number; z: num
     debugState.xrAvatarDebug = null;
     return { leftHand: null, rightHand: null };
   }
-  const xrFrame = renderer.xr.getFrame();
-  const session = xrFrame?.session;
-  const inputSources = Array.from(session?.inputSources ?? []);
-  const referenceSpace = renderer.xr.getReferenceSpace();
+  const xrFrame = frameContext.xr?.frame;
+  const inputSources = frameContext.xr?.inputSources ?? [];
+  const referenceSpace = frameContext.xr?.referenceSpace ?? null;
   const headWorldPosition = camera.getWorldPosition(new THREE.Vector3());
-  const handDebug = collectLocalAvatarHandDebug({
-    inputSources,
-    grips: xrControllerGrips,
-    controllers: xrControllers,
-    xrFrame,
-    referenceSpace
-  });
-  const worldHands = resolveLocalAvatarHandTargets({
+  const handFrame = resolveLocalAvatarHandFrame({
     presenting: renderer.xr.isPresenting,
     inputSources,
     grips: xrControllerGrips,
@@ -2179,21 +2171,6 @@ function getLocalAvatarHandTargets(): { leftHand: { x: number; y: number; z: num
       z: pose.position.z
     },
     playerYaw: pose.yaw
-  });
-  const controllerWorldHands = resolveLocalAvatarHandTargets({
-    presenting: renderer.xr.isPresenting,
-    inputSources,
-    grips: xrControllerGrips,
-    controllers: xrControllers,
-    xrFrame,
-    referenceSpace,
-    playerOffset: {
-      x: pose.position.x,
-      y: pose.position.y,
-      z: pose.position.z
-    },
-    playerYaw: pose.yaw,
-    preferController: true
   });
   debugState.xrAvatarDebug = {
     profile: lastAvatarXrInputProfile,
@@ -2208,19 +2185,19 @@ function getLocalAvatarHandTargets(): { leftHand: { x: number; y: number; z: num
       y: headWorldPosition.y,
       z: headWorldPosition.z
     },
-    leftGrip: handDebug.leftGrip,
-    rightGrip: handDebug.rightGrip,
-    leftController: handDebug.leftController,
-    rightController: handDebug.rightController,
-    leftResolved: handDebug.leftResolved,
-    rightResolved: handDebug.rightResolved,
-    rightHandWorld: worldHands.rightHand,
-    rightControllerWorld: controllerWorldHands.rightHand
+    leftGrip: handFrame.debug.leftGrip,
+    rightGrip: handFrame.debug.rightGrip,
+    leftController: handFrame.debug.leftController,
+    rightController: handFrame.debug.rightController,
+    leftResolved: handFrame.debug.leftResolved,
+    rightResolved: handFrame.debug.rightResolved,
+    rightHandWorld: handFrame.worldHands.rightHand,
+    rightControllerWorld: handFrame.controllerWorldHands.rightHand
   };
-  return controllerWorldHands;
+  return handFrame.controllerWorldHands;
 }
 
-function updateLocalAvatar(delta: number): void {
+function updateLocalAvatar(delta: number, frameContext: RuntimeFrameContext): void {
   const xrPresenting = renderer.xr.isPresenting || avatarVrMockEnabled;
   if (localBodyMesh) {
     localBodyMesh.visible = !runtimeFlags.avatarsEnabled && !xrPresenting;
@@ -2234,7 +2211,7 @@ function updateLocalAvatar(delta: number): void {
 
   const headWorldPosition = new THREE.Vector3();
   camera.getWorldPosition(headWorldPosition);
-  const handTargets = getLocalAvatarHandTargets();
+  const handTargets = getLocalAvatarHandTargets(frameContext);
   const lipsyncState = {
     mouthAmount: localAvatarController.diagnostics.mouthAmount,
     speakingActive: localAvatarController.diagnostics.speakingActive,
@@ -3014,11 +2991,11 @@ renderer.setAnimationLoop(() => {
   updateMovement(delta, frameContext);
   updateAvatarLipsync(delta);
   updateAudioUi();
-  updateLocalAvatar(delta);
+  updateLocalAvatar(delta, frameContext);
   remoteAvatarRuntime.update(delta, debugState);
   updateInteractionRayState(frameContext);
   updateSeatMarkerVisuals(nowMs / 1000);
-  reportXrTelemetry();
+  reportXrTelemetry(frameContext);
   debugState.avatarPoseTransport.adaptivePlaybackDelayMs = debugState.remoteAvatarParticipants.length > 0
     ? Math.max(...debugState.remoteAvatarParticipants.map((participant) => participant.playbackDelayMs))
     : 100;

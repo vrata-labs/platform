@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import * as THREE from "three";
 
-import { collectLocalAvatarHandDebug, resolveLocalAvatarHandTargets } from "./avatar-xr-hands.js";
+import { collectLocalAvatarHandDebug, resolveLocalAvatarHandFrame, resolveLocalAvatarHandTargets } from "./avatar-xr-hands.js";
 
 function spatial(x: number, y: number, z: number) {
   const object = new THREE.Object3D();
@@ -177,4 +177,38 @@ test("resolveLocalAvatarHandTargets rotates XR hand poses with player yaw", () =
   assert.ok(Math.abs(result.rightHand.x - 1.2) < 1e-9);
   assert.ok(Math.abs(result.rightHand.y - 1.2) < 1e-9);
   assert.ok(Math.abs(result.rightHand.z - 5.75) < 1e-9);
+});
+
+test("resolveLocalAvatarHandFrame uses one XR pose sample for debug and hand targets", () => {
+  const rightGripSpace = { id: "right-grip" };
+  const rightTargetRaySpace = { id: "right-target-ray" };
+  let poseReadCount = 0;
+  const xrFrame = {
+    getPose(space: unknown) {
+      poseReadCount += 1;
+      if (space === rightGripSpace) {
+        return { transform: { position: { x: 0.2, y: 1.1, z: 0.3 } } };
+      }
+      if (space === rightTargetRaySpace) {
+        return { transform: { position: { x: 0.4, y: 1.3, z: 0.5 } } };
+      }
+      return null;
+    }
+  };
+
+  const result = resolveLocalAvatarHandFrame({
+    presenting: true,
+    inputSources: [{ handedness: "right", gripSpace: rightGripSpace, targetRaySpace: rightTargetRaySpace }],
+    grips: [spatial(10, 10, 10)],
+    controllers: [spatial(20, 20, 20)],
+    xrFrame,
+    referenceSpace: { id: "ref" },
+    playerOffset: { x: 1, y: 0, z: 6 }
+  });
+
+  assert.equal(poseReadCount, 2);
+  assert.deepEqual(result.debug.rightGrip, { x: 0.2, y: 1.1, z: 0.3 });
+  assert.deepEqual(result.debug.rightController, { x: 0.4, y: 1.3, z: 0.5 });
+  assert.deepEqual(result.worldHands.rightHand, { x: 1.2, y: 1.1, z: 6.3 });
+  assert.deepEqual(result.controllerWorldHands.rightHand, { x: 1.4, y: 1.3, z: 6.5 });
 });
