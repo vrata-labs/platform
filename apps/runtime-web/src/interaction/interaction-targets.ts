@@ -7,6 +7,39 @@ export type InteractionTarget =
   | { kind: "floor"; point: THREE.Vector3 }
   | { kind: "seat"; point: THREE.Vector3; seatId: string; seatAnchor: SceneBundleSeatAnchor };
 
+export interface SeatMarkerTarget {
+  point: THREE.Vector3;
+  seatAnchor: SceneBundleSeatAnchor;
+}
+
+export function resolveSeatMarkerTarget(input: {
+  ray: THREE.Ray;
+  seatMarkerHitMeshes: THREE.Object3D[];
+  seatAnchorMap: ReadonlyMap<string, SceneBundleSeatAnchor>;
+  raycaster: THREE.Raycaster;
+}): SeatMarkerTarget | null {
+  if (input.seatMarkerHitMeshes.length === 0) {
+    return null;
+  }
+  input.raycaster.ray.copy(input.ray);
+  const intersections = input.raycaster.intersectObjects(input.seatMarkerHitMeshes, false);
+  for (const hit of intersections) {
+    const seatAnchorId = typeof hit.object.userData.seatAnchorId === "string" ? hit.object.userData.seatAnchorId : null;
+    if (!seatAnchorId) {
+      continue;
+    }
+    const seatAnchor = input.seatAnchorMap.get(seatAnchorId);
+    if (!seatAnchor) {
+      continue;
+    }
+    return {
+      point: hit.point.clone(),
+      seatAnchor
+    };
+  }
+  return null;
+}
+
 export function resolveInteractionTarget(input: {
   ray: THREE.Ray;
   seatAnchors: SceneBundleSeatAnchor[];
@@ -48,4 +81,30 @@ export function resolveInteractionTarget(input: {
     kind: "floor",
     point: floorPoint
   };
+}
+
+export function resolveInteractionTargetFromRay(input: {
+  ray: THREE.Ray;
+  seatMarkerHitMeshes: THREE.Object3D[];
+  seatAnchorMap: ReadonlyMap<string, SceneBundleSeatAnchor>;
+  raycaster: THREE.Raycaster;
+  seatAnchors: SceneBundleSeatAnchor[];
+  teleportFloorY: number;
+  maxDistance?: number;
+}): InteractionTarget {
+  const seatMarkerTarget = resolveSeatMarkerTarget(input);
+  if (seatMarkerTarget) {
+    return {
+      kind: "seat",
+      point: seatMarkerTarget.point,
+      seatId: seatMarkerTarget.seatAnchor.id,
+      seatAnchor: seatMarkerTarget.seatAnchor
+    };
+  }
+  return resolveInteractionTarget({
+    ray: input.ray,
+    seatAnchors: input.seatAnchors,
+    teleportFloorY: input.teleportFloorY,
+    maxDistance: input.maxDistance
+  });
 }

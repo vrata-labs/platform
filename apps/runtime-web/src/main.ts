@@ -21,7 +21,6 @@ import { createAvatarLipsyncDriver, sampleAvatarLipsyncLevel, updateAvatarLipsyn
 import { createAvatarOutboundPublisher, type AvatarOutboundPayload } from "./avatar/avatar-publish.js";
 import { createRemoteAvatarRuntime } from "./avatar/remote-avatar-runtime.js";
 import { createInitialAvatarRuntimeFlags, resolveAvatarCatalogUrl, resolveAvatarRuntimeFlags } from "./avatar/avatar-runtime.js";
-import { resolveAvatarInteractionTarget } from "./avatar/avatar-interaction.js";
 import { createAvatarSeatAnchorMap, resolveSeatRootPosition } from "./avatar/avatar-seating.js";
 import { resolveAvatarViewProfile } from "./avatar/avatar-visibility.js";
 import { resolveLocalAvatarHandFrame } from "./avatar/avatar-xr-hands.js";
@@ -46,7 +45,7 @@ import {
 } from "./seating/seat-occupancy.js";
 import { createSeatingController } from "./seating/seating-controller.js";
 import { resolveInteractionRay } from "./interaction/interaction-ray.js";
-import type { InteractionTarget } from "./interaction/interaction-targets.js";
+import { resolveInteractionTargetFromRay, type InteractionTarget } from "./interaction/interaction-targets.js";
 
 function fallbackUuid(): string {
   return `guest-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
@@ -816,41 +815,12 @@ function getInteractionRay(frameContext: RuntimeFrameContext): THREE.Ray | null 
   return resolved.ray;
 }
 
-function resolveSeatMarkerTarget(ray: THREE.Ray): { point: THREE.Vector3; seatAnchor: SceneBundleSeatAnchor } | null {
-  if (seatMarkerHitMeshes.length === 0) {
-    return null;
-  }
-  interactionRaycaster.ray.copy(ray);
-  const intersections = interactionRaycaster.intersectObjects(seatMarkerHitMeshes, false);
-  for (const hit of intersections) {
-    const seatAnchorId = typeof hit.object.userData.seatAnchorId === "string" ? hit.object.userData.seatAnchorId : null;
-    if (!seatAnchorId) {
-      continue;
-    }
-    const seatAnchor = sceneSeatAnchorMap.get(seatAnchorId);
-    if (!seatAnchor) {
-      continue;
-    }
-    return {
-      point: hit.point.clone(),
-      seatAnchor
-    };
-  }
-  return null;
-}
-
-function resolveInteractionTargetFromRay(ray: THREE.Ray): InteractionTarget {
-  const seatMarkerTarget = resolveSeatMarkerTarget(ray);
-  if (seatMarkerTarget) {
-    return {
-      kind: "seat",
-      point: seatMarkerTarget.point,
-      seatId: seatMarkerTarget.seatAnchor.id,
-      seatAnchor: seatMarkerTarget.seatAnchor
-    };
-  }
-  return resolveAvatarInteractionTarget({
+function resolveCurrentInteractionTargetFromRay(ray: THREE.Ray): InteractionTarget {
+  return resolveInteractionTargetFromRay({
     ray,
+    seatMarkerHitMeshes,
+    seatAnchorMap: sceneSeatAnchorMap,
+    raycaster: interactionRaycaster,
     seatAnchors: sceneSeatAnchors,
     teleportFloorY: sceneTeleportFloorY,
     maxDistance: 18
@@ -876,7 +846,7 @@ function updateInteractionRayState(frameContext: RuntimeFrameContext): Interacti
          seatId: forcedSeatAnchor.id,
          seatAnchor: forcedSeatAnchor
        }
-    : resolveInteractionTargetFromRay(ray);
+    : resolveCurrentInteractionTargetFromRay(ray);
   debugState.interactionRay.active = true;
   debugState.interactionRay.mode = frameContext.source === "xr" ? "xr-right-stick" : "cursor";
   if (target.kind === "none") {
@@ -2844,7 +2814,7 @@ renderer.domElement.addEventListener("click", (event) => {
   updatePointerNdcFromClientPosition(event.clientX, event.clientY);
   pointerHoveringScene = true;
   interactionRaycaster.setFromCamera(pointerNdc, camera);
-  const directTarget = resolveInteractionTargetFromRay(interactionRaycaster.ray.clone());
+  const directTarget = resolveCurrentInteractionTargetFromRay(interactionRaycaster.ray.clone());
   if (directTarget.kind === "none") {
     clearInteractionVisuals();
     return;
