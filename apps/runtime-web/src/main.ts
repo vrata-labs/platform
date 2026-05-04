@@ -22,10 +22,9 @@ import { createAvatarOutboundPublisher, type AvatarOutboundPayload } from "./ava
 import { createRemoteAvatarRuntime } from "./avatar/remote-avatar-runtime.js";
 import { createInitialAvatarRuntimeFlags, resolveAvatarCatalogUrl, resolveAvatarRuntimeFlags } from "./avatar/avatar-runtime.js";
 import { resolveAvatarInteractionTarget } from "./avatar/avatar-interaction.js";
-import { resolveXrInteractionRay } from "./avatar/avatar-xr-ray.js";
 import { createAvatarSeatAnchorMap, resolveSeatRootPosition } from "./avatar/avatar-seating.js";
 import { resolveAvatarViewProfile } from "./avatar/avatar-visibility.js";
-import { resolveLocalAvatarHandFrame, resolveLocalAvatarHandTargets } from "./avatar/avatar-xr-hands.js";
+import { resolveLocalAvatarHandFrame } from "./avatar/avatar-xr-hands.js";
 import { resolveAvatarXrInput } from "./avatar/avatar-xr-input.js";
 import { setAvatarSandboxStatus } from "./avatar/avatar-sandbox.js";
 import { resetAvatarSession, startAvatarSandboxSession, startLocalAvatarSession } from "./avatar/avatar-session.js";
@@ -46,6 +45,7 @@ import {
   removeParticipantFromSeatOccupancy
 } from "./seating/seat-occupancy.js";
 import { createSeatingController } from "./seating/seating-controller.js";
+import { resolveInteractionRay } from "./interaction/interaction-ray.js";
 import type { InteractionTarget } from "./interaction/interaction-targets.js";
 
 function fallbackUuid(): string {
@@ -373,8 +373,6 @@ const seatMarkerHitMeshes: THREE.Object3D[] = [];
 let sceneAnchorsReady = true;
 let roomSeatOccupancy: Record<string, string> = {};
 const pointerNdc = new THREE.Vector2(0, 0);
-const interactionRayOrigin = new THREE.Vector3();
-const interactionRayDirection = new THREE.Vector3();
 const interactionRayEnd = new THREE.Vector3();
 const interactionRayBeamMidpoint = new THREE.Vector3();
 const interactionRayBeamDirection = new THREE.Vector3();
@@ -791,96 +789,31 @@ const executeRuntimeCommandList = createRuntimeCommandExecutor({
 });
 
 function getInteractionRay(frameContext: RuntimeFrameContext): THREE.Ray | null {
-  const forcedRay = forcedTestInteractionRay;
-  if (forcedRay) {
-    return forcedRay.clone();
-  }
-  if (avatarVrMockEnabled && syntheticXrState) {
-    if (!syntheticXrState.rayVisible && !frameContext.intents.aimRay) {
-      return null;
-    }
-    interactionRayOrigin.set(
-      syntheticXrState.rightController.x,
-      syntheticXrState.rightController.y,
-      syntheticXrState.rightController.z
-    );
-    interactionRayDirection.set(
-      syntheticXrState.rayDirection.x,
-      syntheticXrState.rayDirection.y,
-      syntheticXrState.rayDirection.z
-    ).normalize();
-    debugState.interactionRay.origin = {
-      x: Number(interactionRayOrigin.x.toFixed(2)),
-      y: Number(interactionRayOrigin.y.toFixed(2)),
-      z: Number(interactionRayOrigin.z.toFixed(2))
-    };
-    debugState.interactionRay.direction = {
-      x: Number(interactionRayDirection.x.toFixed(2)),
-      y: Number(interactionRayDirection.y.toFixed(2)),
-      z: Number(interactionRayDirection.z.toFixed(2))
-    };
-    debugState.interactionRay.source = { index: 0, handedness: "right" };
-    return new THREE.Ray(interactionRayOrigin.clone(), interactionRayDirection.clone());
-  }
-  if (renderer.xr.isPresenting) {
-    if (frameContext.source !== "xr" || !frameContext.xr) {
-      return null;
-    }
-    const xrFrame = frameContext.xr.frame;
-    const referenceSpace = frameContext.xr.referenceSpace;
-    const inputSources = frameContext.xr.inputSources;
-    if (!frameContext.intents.aimRay) {
-      return null;
-    }
-    const xrRay = resolveXrInteractionRay({
-      inputSources,
-      xrFrame,
-      referenceSpace,
-      playerOffset: {
-        x: localPoseController.getPosition().x,
-        y: localPoseController.getPosition().y,
-        z: localPoseController.getPosition().z
-      },
-      playerYaw: localPoseController.getYaw()
-    });
-    if (!xrRay) {
-      return null;
-    }
-    const xrHands = resolveLocalAvatarHandTargets({
-      presenting: true,
-      inputSources,
-      grips: xrControllerGrips,
-      controllers: xrControllers,
-      xrFrame,
-      referenceSpace,
-      playerOffset: {
-        x: localPoseController.getPosition().x,
-        y: localPoseController.getPosition().y,
-        z: localPoseController.getPosition().z
-      },
-      playerYaw: localPoseController.getYaw()
-    });
-    const rayOrigin = xrHands.rightHand ?? xrRay.origin;
-    interactionRayOrigin.set(rayOrigin.x, rayOrigin.y, rayOrigin.z);
-    interactionRayDirection.set(xrRay.direction.x, xrRay.direction.y, xrRay.direction.z).normalize();
-    debugState.interactionRay.origin = {
-      x: Number(interactionRayOrigin.x.toFixed(2)),
-      y: Number(interactionRayOrigin.y.toFixed(2)),
-      z: Number(interactionRayOrigin.z.toFixed(2))
-    };
-    debugState.interactionRay.direction = {
-      x: Number(interactionRayDirection.x.toFixed(2)),
-      y: Number(interactionRayDirection.y.toFixed(2)),
-      z: Number(interactionRayDirection.z.toFixed(2))
-    };
-    debugState.interactionRay.source = xrRay.source;
-    return new THREE.Ray(interactionRayOrigin.clone(), interactionRayDirection.clone());
-  }
-  if (!pointerHoveringScene) {
+  const playerPosition = localPoseController.getPosition();
+  const resolved = resolveInteractionRay({
+    frameContext,
+    forcedRay: forcedTestInteractionRay,
+    avatarVrMockEnabled,
+    syntheticXrState,
+    xrPresenting: renderer.xr.isPresenting,
+    xrControllerGrips,
+    xrControllers,
+    playerPosition,
+    playerYaw: localPoseController.getYaw(),
+    pointerHoveringScene,
+    pointerNdc,
+    camera,
+    pointerRaycaster: interactionRaycaster
+  });
+  if (!resolved) {
     return null;
   }
-  interactionRaycaster.setFromCamera(pointerNdc, camera);
-  return interactionRaycaster.ray.clone();
+  if (resolved.debug) {
+    debugState.interactionRay.origin = resolved.debug.origin;
+    debugState.interactionRay.direction = resolved.debug.direction;
+    debugState.interactionRay.source = resolved.debug.source;
+  }
+  return resolved.ray;
 }
 
 function resolveSeatMarkerTarget(ray: THREE.Ray): { point: THREE.Vector3; seatAnchor: SceneBundleSeatAnchor } | null {
