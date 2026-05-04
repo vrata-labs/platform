@@ -1,16 +1,13 @@
 import { stepFlatMovement, type FlatVector } from "../movement.js";
 import type { InputIntents } from "../input/input-intents.js";
 import type { LocalPose, Vector3Like } from "../local/local-pose.js";
+import type { RuntimeCommand } from "./runtime-commands.js";
+
+export type { RuntimeCommand } from "./runtime-commands.js";
 
 export type LocomotionMode =
   | { kind: "standing"; floorY: number }
   | { kind: "seated"; seatId: string; allowYaw: boolean };
-
-export type RuntimeCommand =
-  | { type: "send_seat_claim"; seatId: string }
-  | { type: "send_seat_release"; seatId: string }
-  | { type: "status"; message: string }
-  | { type: "telemetry"; kind: string };
 
 export type LocomotionInteractionTarget =
   | { kind: "none" }

@@ -33,10 +33,11 @@ import type { LocalAvatarController } from "./avatar/avatar-controller.js";
 import type { LocalAvatarSnapshotV1 } from "./avatar/avatar-types.js";
 import { createAvatarRegistry } from "./avatar/avatar-registry.js";
 import type { SceneBundleSeatAnchor } from "./scene-bundle.js";
-import { createLocalPoseController } from "./local/local-pose.js";
+import { createLocalPoseController, type Vector3Like } from "./local/local-pose.js";
 import { createIdleInputIntents, resolveXrInputIntents } from "./input/input-intents.js";
 import type { RuntimeFrameContext } from "./input/runtime-frame-context.js";
 import { resolveLocomotionMode, stepLocalLocomotion } from "./locomotion/local-locomotion.js";
+import { executeRuntimeCommands, planInteractionCommands, type RuntimeCommand, type RuntimeCommandInteractionTarget } from "./locomotion/runtime-commands.js";
 import { createSeatingController } from "./seating/seating-controller.js";
 import type { InteractionTarget } from "./interaction/interaction-targets.js";
 
@@ -654,10 +655,10 @@ function setSceneSeatAnchors(anchors: SceneBundleSeatAnchor[], teleportFloorY = 
       debugState.seatOccupancy = { ...roomSeatOccupancy };
     }
     lastAppliedSeatLockId = null;
-    if (command.type === "send_seat_release" && roomStateClient && roomStateConnected) {
-      sendSeatRelease(roomStateClient, command.seatId);
-    }
-    setStatus("Seat anchor unavailable, returned to standing");
+    executeRuntimeCommandList([
+      { type: "send_seat_release", seatId: command.seatId },
+      { type: "status", message: "Seat anchor unavailable, returned to standing" }
+    ]);
   }
   updateSeatMarkerVisuals(performance.now() / 1000);
 }
@@ -695,11 +696,11 @@ function syncSeatStateFromOccupancy(): void {
     if (!sceneAnchorsReady) {
       return;
     }
-    if (roomStateClient && roomStateConnected) {
-      sendSeatRelease(roomStateClient, currentSeatId);
-    }
-    releaseCurrentSeatLocally();
-    setStatus("Seat anchor unavailable, returned to standing");
+    executeRuntimeCommandList([
+      { type: "send_seat_release", seatId: currentSeatId },
+      { type: "release_local_seat" },
+      { type: "status", message: "Seat anchor unavailable, returned to standing" }
+    ]);
     return;
   }
 }
@@ -750,10 +751,60 @@ function applyYawAroundXrCamera(nextYaw: number): void {
   });
 }
 
-function setPlayerPositionForFloorTeleport(floorPoint: THREE.Vector3): void {
+function setPlayerPositionForFloorTeleport(floorPoint: Vector3Like): void {
   localPoseController.teleportToFloor(floorPoint, sceneTeleportFloorY, "teleport", {
     preserveCameraOffset: renderer.xr.isPresenting,
     camera
+  });
+}
+
+function toRuntimeCommandInteractionTarget(target: InteractionTarget): RuntimeCommandInteractionTarget {
+  if (target.kind === "seat") {
+    return {
+      kind: "seat",
+      point: target.point,
+      seatId: target.seatAnchor.id,
+      label: target.seatAnchor.label
+    };
+  }
+  if (target.kind === "floor") {
+    return {
+      kind: "floor",
+      point: target.point
+    };
+  }
+  return { kind: "none" };
+}
+
+function executeRuntimeCommandList(commands: RuntimeCommand[]): void {
+  executeRuntimeCommands(commands, {
+    requestSeatClaim(seatId) {
+      seatingController.requestSeatClaim(seatId);
+      syncSeatDebugState();
+    },
+    sendSeatClaim(seatId) {
+      if (roomStateClient && roomStateConnected) {
+        sendSeatClaim(roomStateClient, seatId);
+      }
+    },
+    sendSeatRelease(seatId) {
+      if (roomStateClient && roomStateConnected) {
+        sendSeatRelease(roomStateClient, seatId);
+      }
+    },
+    releaseLocalSeat() {
+      releaseCurrentSeatLocally();
+    },
+    teleportToFloor(point) {
+      setPlayerPositionForFloorTeleport(point);
+      updateLocalPositionDebug();
+    },
+    setStatus(message) {
+      setStatus(message);
+    },
+    markTelemetry(kind) {
+      markXrTelemetry(kind);
+    }
   });
 }
 
@@ -952,40 +1003,16 @@ function updateInteractionRayState(frameContext: RuntimeFrameContext | null = nu
 }
 
 function performInteractionTarget(target: InteractionTarget): void {
-  if (target.kind === "none") {
-    return;
-  }
-  const now = performance.now();
-  if (now - lastInteractionConfirmAt < 250) {
-    return;
-  }
-  lastInteractionConfirmAt = now;
-  if (target.kind === "seat") {
-    const seatAnchor = target.seatAnchor;
-    if (!runtimeFlags.avatarSeatingEnabled || !roomStateClient || !roomStateConnected) {
-      setStatus("Seating unavailable");
-      return;
-    }
-    if (getPendingSeatId() === seatAnchor.id) {
-      return;
-    }
-    seatingController.requestSeatClaim(seatAnchor.id);
-    syncSeatDebugState();
-    markXrTelemetry("seat_claim");
-    sendSeatClaim(roomStateClient, seatAnchor.id);
-    setStatus(`Claiming seat ${seatAnchor.label ?? seatAnchor.id}`);
-    return;
-  }
-  const floorPoint = target.point;
-  const currentSeatId = getCurrentSeatId();
-  if (currentSeatId && roomStateClient && roomStateConnected) {
-    markXrTelemetry("seat_release");
-    sendSeatRelease(roomStateClient, currentSeatId);
-    releaseCurrentSeatLocally();
-  }
-  setPlayerPositionForFloorTeleport(floorPoint);
-  updateLocalPositionDebug();
-  setStatus("Teleported");
+  const planned = planInteractionCommands({
+    target: toRuntimeCommandInteractionTarget(target),
+    mode: resolveLocomotionMode({ seatId: getCurrentSeatId(), floorY: sceneTeleportFloorY }),
+    pendingSeatId: getPendingSeatId(),
+    seatingAvailable: runtimeFlags.avatarSeatingEnabled && Boolean(roomStateClient && roomStateConnected),
+    nowMs: performance.now(),
+    lastInteractionConfirmAtMs: lastInteractionConfirmAt
+  });
+  lastInteractionConfirmAt = planned.lastInteractionConfirmAtMs;
+  executeRuntimeCommandList(planned.commands);
 }
 
 function confirmInteractionTarget(frameContext: RuntimeFrameContext | null = null): void {
@@ -1452,10 +1479,11 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
     if (!seatAnchor || !roomStateClient || !roomStateConnected) {
       return false;
     }
-    seatingController.requestSeatClaim(seatAnchor.id);
-    syncSeatDebugState();
-    sendSeatClaim(roomStateClient, seatAnchor.id);
-    setStatus(`Claiming seat ${seatAnchor.label ?? seatAnchor.id}`);
+    executeRuntimeCommandList([
+      { type: "request_seat_claim", seatId: seatAnchor.id },
+      { type: "send_seat_claim", seatId: seatAnchor.id },
+      { type: "status", message: `Claiming seat ${seatAnchor.label ?? seatAnchor.id}` }
+    ]);
     return true;
   },
   forceXrInteractionAtSeat: (seatId: string) => {
@@ -1488,14 +1516,15 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
   },
   teleportToFloor: (x: number, z: number) => {
     forcedTestSeatId = null;
-    const currentSeatId = getCurrentSeatId();
-    if (currentSeatId && roomStateClient && roomStateConnected) {
-      sendSeatRelease(roomStateClient, currentSeatId);
-      releaseCurrentSeatLocally();
-    }
-    setPlayerPositionForFloorTeleport(new THREE.Vector3(x, sceneTeleportFloorY, z));
-    updateLocalPositionDebug();
-    setStatus("Teleported");
+    const planned = planInteractionCommands({
+      target: { kind: "floor", point: { x, y: sceneTeleportFloorY, z } },
+      mode: resolveLocomotionMode({ seatId: getCurrentSeatId(), floorY: sceneTeleportFloorY }),
+      pendingSeatId: getPendingSeatId(),
+      seatingAvailable: runtimeFlags.avatarSeatingEnabled && Boolean(roomStateClient && roomStateConnected),
+      nowMs: performance.now(),
+      lastInteractionConfirmAtMs: Number.NEGATIVE_INFINITY
+    });
+    executeRuntimeCommandList(planned.commands);
     return true;
   }
 };
@@ -2533,7 +2562,7 @@ function updateMovement(delta: number, frameContext: RuntimeFrameContext): void 
       updateLocalPositionDebug();
       return;
     }
-    releaseCurrentSeatLocally();
+    executeRuntimeCommandList([{ type: "release_local_seat" }]);
   }
   const yawBeforeUpdate = localPoseController.getYaw();
   const xrLocomotionActive = frameContext.source === "xr";
