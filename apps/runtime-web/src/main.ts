@@ -35,7 +35,7 @@ import { createLocalPoseController, type Vector3Like } from "./local/local-pose.
 import { resolveDesktopTouchInputIntents, resolveTouchMoveVector, resolveXrConfirmInteractionIntent, resolveXrInputIntents } from "./input/input-intents.js";
 import type { RuntimeFrameContext } from "./input/runtime-frame-context.js";
 import { resolveLocomotionMode, stepLocalLocomotion } from "./locomotion/local-locomotion.js";
-import { planInteractionCommands, type RuntimeCommandInteractionTarget } from "./locomotion/runtime-commands.js";
+import { createInteractionCommandPlanner, planInteractionTargetCommands } from "./locomotion/interaction-command-planner.js";
 import { createRuntimeCommandExecutor } from "./locomotion/runtime-command-bridge.js";
 import {
   applyAcceptedSeatClaimToOccupancy,
@@ -352,8 +352,8 @@ let localBodyMesh: THREE.Mesh | null = null;
 let localHeadMesh: THREE.Mesh | null = null;
 const seatingController = createSeatingController({ participantId });
 let lastAppliedSeatLockId: string | null = null;
-let lastInteractionConfirmAt = 0;
 let lastRuntimeFrameContext: RuntimeFrameContext | null = null;
+const interactionCommandPlanner = createInteractionCommandPlanner();
 let forcedTestInteractionRay: THREE.Ray | null = null;
 let forcedTestInteractionSeatId: string | null = null;
 let forcedTestSeatId: string | null = null;
@@ -755,24 +755,6 @@ function setPlayerPositionForFloorTeleport(floorPoint: Vector3Like): void {
   });
 }
 
-function toRuntimeCommandInteractionTarget(target: InteractionTarget): RuntimeCommandInteractionTarget {
-  if (target.kind === "seat") {
-    return {
-      kind: "seat",
-      point: target.point,
-      seatId: target.seatAnchor.id,
-      label: target.seatAnchor.label
-    };
-  }
-  if (target.kind === "floor") {
-    return {
-      kind: "floor",
-      point: target.point
-    };
-  }
-  return { kind: "none" };
-}
-
 const executeRuntimeCommandList = createRuntimeCommandExecutor({
   seatingController,
   getRoomStateClient: () => roomStateClient,
@@ -890,16 +872,15 @@ function updateInteractionRayState(frameContext: RuntimeFrameContext): Interacti
 }
 
 function performInteractionTarget(target: InteractionTarget): void {
-  const planned = planInteractionCommands({
-    target: toRuntimeCommandInteractionTarget(target),
-    mode: resolveLocomotionMode({ seatId: getCurrentSeatId(), floorY: sceneTeleportFloorY }),
+  const commands = interactionCommandPlanner.plan({
+    target,
+    currentSeatId: getCurrentSeatId(),
+    floorY: sceneTeleportFloorY,
     pendingSeatId: getPendingSeatId(),
     seatingAvailable: runtimeFlags.avatarSeatingEnabled && Boolean(roomStateClient && roomStateConnected),
-    nowMs: performance.now(),
-    lastInteractionConfirmAtMs: lastInteractionConfirmAt
+    nowMs: performance.now()
   });
-  lastInteractionConfirmAt = planned.lastInteractionConfirmAtMs;
-  executeRuntimeCommandList(planned.commands);
+  executeRuntimeCommandList(commands);
 }
 
 function confirmInteractionTarget(frameContext: RuntimeFrameContext): void {
@@ -1414,9 +1395,10 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
   },
   teleportToFloor: (x: number, z: number) => {
     forcedTestSeatId = null;
-    const planned = planInteractionCommands({
-      target: { kind: "floor", point: { x, y: sceneTeleportFloorY, z } },
-      mode: resolveLocomotionMode({ seatId: getCurrentSeatId(), floorY: sceneTeleportFloorY }),
+    const planned = planInteractionTargetCommands({
+      target: { kind: "floor", point: new THREE.Vector3(x, sceneTeleportFloorY, z) },
+      currentSeatId: getCurrentSeatId(),
+      floorY: sceneTeleportFloorY,
       pendingSeatId: getPendingSeatId(),
       seatingAvailable: runtimeFlags.avatarSeatingEnabled && Boolean(roomStateClient && roomStateConnected),
       nowMs: performance.now(),
