@@ -44,9 +44,9 @@ import {
   removeParticipantFromSeatOccupancy
 } from "./seating/seat-occupancy.js";
 import { createSeatingController } from "./seating/seating-controller.js";
-import { resolveInteractionRay, type ResolvedInteractionRay } from "./interaction/interaction-ray.js";
-import { clearInteractionRayView, createInteractionRayView, setInteractionRayDebugTarget, showInteractionRayView } from "./interaction/interaction-ray-view.js";
-import { resolveInteractionTargetFromRay, type InteractionTarget } from "./interaction/interaction-targets.js";
+import { resolveInteractionTargetForRay, updateInteractionRayState } from "./interaction/interaction-frame.js";
+import { clearInteractionRayView, createInteractionRayView, setInteractionRayDebugTarget } from "./interaction/interaction-ray-view.js";
+import type { InteractionTarget } from "./interaction/interaction-targets.js";
 
 function fallbackUuid(): string {
   return `guest-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
@@ -707,87 +707,33 @@ const executeRuntimeCommandList = createRuntimeCommandExecutor({
   markTelemetry: markXrTelemetry
 });
 
-function getInteractionRay(frameContext: RuntimeFrameContext): ResolvedInteractionRay | null {
-  const playerPosition = localPoseController.getPosition();
-  return resolveInteractionRay({
+function getInteractionFrameInput(frameContext: RuntimeFrameContext) {
+  return {
     frameContext,
     forcedRay: forcedTestInteractionRay,
+    forcedSeatId: forcedTestInteractionSeatId,
     avatarVrMockEnabled,
     syntheticXrState,
     xrPresenting: renderer.xr.isPresenting,
     xrControllerGrips,
     xrControllers,
-    playerPosition,
+    playerPosition: localPoseController.getPosition(),
     playerYaw: localPoseController.getYaw(),
     pointerHoveringScene,
     pointerNdc,
     camera,
-    pointerRaycaster: interactionRaycaster
-  });
-}
-
-function resolveCurrentInteractionTargetFromRay(ray: THREE.Ray): InteractionTarget {
-  return resolveInteractionTargetFromRay({
-    ray,
+    raycaster: interactionRaycaster,
     seatMarkerHitMeshes,
     seatAnchorMap: sceneSeatAnchorMap,
-    raycaster: interactionRaycaster,
     seatAnchors: sceneSeatAnchors,
     teleportFloorY: sceneTeleportFloorY,
-    maxDistance: 18
-  });
-}
-
-function updateInteractionRayState(frameContext: RuntimeFrameContext): InteractionTarget {
-  const resolvedRay = getInteractionRay(frameContext);
-  if (!resolvedRay) {
-    clearInteractionRayView({
-      view: interactionRayView,
-      state: debugState.interactionRay,
-      mode: renderer.xr.isPresenting || frameContext.source === "xr" ? "xr-right-stick" : "none",
-      markTelemetry: markXrTelemetry
-    });
-    updateSeatMarkerVisuals(performance.now() / 1000);
-    return { kind: "none" };
-  }
-  const ray = resolvedRay.ray;
-  const forcedSeatAnchor = forcedTestInteractionSeatId ? sceneSeatAnchorMap.get(forcedTestInteractionSeatId) ?? null : null;
-  const target = forcedSeatAnchor
-    ? {
-         kind: "seat" as const,
-         point: new THREE.Vector3(
-           forcedSeatAnchor.position.x,
-           forcedSeatAnchor.position.y + forcedSeatAnchor.seatHeight,
-           forcedSeatAnchor.position.z
-         ),
-         seatId: forcedSeatAnchor.id,
-         seatAnchor: forcedSeatAnchor
-       }
-    : resolveCurrentInteractionTargetFromRay(ray);
-  const mode = frameContext.source === "xr" ? "xr-right-stick" : "cursor";
-  if (target.kind === "none") {
-    clearInteractionRayView({
-      view: interactionRayView,
-      state: debugState.interactionRay,
-      mode,
-      markTelemetry: markXrTelemetry,
-      forceRayOffTelemetry: true
-    });
-    updateSeatMarkerVisuals(performance.now() / 1000);
-    return { kind: "none" };
-  }
-  showInteractionRayView({
+    maxDistance: 18,
     view: interactionRayView,
     state: debugState.interactionRay,
-    ray,
-    target,
-    mode,
-    debug: resolvedRay.debug,
-    markTelemetry: markXrTelemetry
-  });
-  return target.kind === "seat"
-    ? { kind: "seat", point: target.point, seatId: target.seatAnchor.id, seatAnchor: target.seatAnchor }
-    : { kind: "floor", point: target.point };
+    markTelemetry: markXrTelemetry,
+    updateSeatMarkerVisuals,
+    nowSeconds: () => performance.now() / 1000
+  };
 }
 
 function performInteractionTarget(target: InteractionTarget): void {
@@ -803,7 +749,7 @@ function performInteractionTarget(target: InteractionTarget): void {
 }
 
 function confirmInteractionTarget(frameContext: RuntimeFrameContext): void {
-  const target = updateInteractionRayState(frameContext);
+  const target = updateInteractionRayState(getInteractionFrameInput(frameContext));
   performInteractionTarget(target);
   forcedTestInteractionSeatId = null;
 }
@@ -2715,7 +2661,15 @@ renderer.domElement.addEventListener("click", (event) => {
   updatePointerNdcFromClientPosition(event.clientX, event.clientY);
   pointerHoveringScene = true;
   interactionRaycaster.setFromCamera(pointerNdc, camera);
-  const directTarget = resolveCurrentInteractionTargetFromRay(interactionRaycaster.ray.clone());
+  const directTarget = resolveInteractionTargetForRay({
+    ray: interactionRaycaster.ray.clone(),
+    seatMarkerHitMeshes,
+    seatAnchorMap: sceneSeatAnchorMap,
+    raycaster: interactionRaycaster,
+    seatAnchors: sceneSeatAnchors,
+    teleportFloorY: sceneTeleportFloorY,
+    maxDistance: 18
+  });
   if (directTarget.kind === "none") {
     clearInteractionVisuals();
     return;
@@ -2812,7 +2766,7 @@ renderer.setAnimationLoop(() => {
   updateAudioUi();
   updateLocalAvatar(delta, frameContext);
   remoteAvatarRuntime.update(delta, debugState);
-  updateInteractionRayState(frameContext);
+  updateInteractionRayState(getInteractionFrameInput(frameContext));
   updateSeatMarkerVisuals(nowMs / 1000);
   reportXrTelemetry(frameContext);
   debugState.avatarPoseTransport.adaptivePlaybackDelayMs = debugState.remoteAvatarParticipants.length > 0
