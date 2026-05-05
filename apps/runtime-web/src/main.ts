@@ -35,7 +35,7 @@ import { createLocalPoseController, type Vector3Like } from "./local/local-pose.
 import { resolveDesktopTouchInputIntents, resolveTouchMoveVector, resolveXrConfirmInteractionIntent, resolveXrInputIntents } from "./input/input-intents.js";
 import type { RuntimeFrameContext } from "./input/runtime-frame-context.js";
 import { resolveLocomotionMode, stepLocalLocomotion } from "./locomotion/local-locomotion.js";
-import { createInteractionCommandPlanner, planInteractionTargetCommands } from "./locomotion/interaction-command-planner.js";
+import { createInteractionCommandPlanner } from "./locomotion/interaction-command-planner.js";
 import { createRuntimeCommandExecutor } from "./locomotion/runtime-command-bridge.js";
 import {
   applyAcceptedSeatClaimToOccupancy,
@@ -48,9 +48,9 @@ import {
   planMissingCurrentSeatAnchorCommands,
   planSeatAnchorReconciliation
 } from "./seating/seat-anchor-reconcile.js";
-import { resolveInteractionTargetForRay, updateInteractionRayState } from "./interaction/interaction-frame.js";
-import { clearInteractionRayView, createInteractionRayView, setInteractionRayDebugTarget } from "./interaction/interaction-ray-view.js";
-import type { InteractionTarget } from "./interaction/interaction-targets.js";
+import { updateInteractionRayState } from "./interaction/interaction-frame.js";
+import { clearInteractionRayView, createInteractionRayView } from "./interaction/interaction-ray-view.js";
+import { createInteractionTargetPerformer } from "./interaction/interaction-perform.js";
 import { createSeatMarkerViewController } from "./interaction/seat-marker-view.js";
 
 function fallbackUuid(): string {
@@ -610,6 +610,18 @@ const executeRuntimeCommandList = createRuntimeCommandExecutor({
   markTelemetry: markXrTelemetry
 });
 
+const interactionTargetPerformer = createInteractionTargetPerformer({
+  planner: interactionCommandPlanner,
+  executeCommands: executeRuntimeCommandList,
+  getContext: () => ({
+    currentSeatId: getCurrentSeatId(),
+    pendingSeatId: getPendingSeatId(),
+    floorY: sceneTeleportFloorY,
+    seatingAvailable: runtimeFlags.avatarSeatingEnabled && Boolean(roomStateClient && roomStateConnected),
+    nowMs: performance.now()
+  })
+});
+
 function getInteractionFrameInput(frameContext: RuntimeFrameContext) {
   return {
     frameContext,
@@ -639,21 +651,9 @@ function getInteractionFrameInput(frameContext: RuntimeFrameContext) {
   };
 }
 
-function performInteractionTarget(target: InteractionTarget): void {
-  const commands = interactionCommandPlanner.plan({
-    target,
-    currentSeatId: getCurrentSeatId(),
-    floorY: sceneTeleportFloorY,
-    pendingSeatId: getPendingSeatId(),
-    seatingAvailable: runtimeFlags.avatarSeatingEnabled && Boolean(roomStateClient && roomStateConnected),
-    nowMs: performance.now()
-  });
-  executeRuntimeCommandList(commands);
-}
-
 function confirmInteractionTarget(frameContext: RuntimeFrameContext): void {
   const target = updateInteractionRayState(getInteractionFrameInput(frameContext));
-  performInteractionTarget(target);
+  interactionTargetPerformer.performTarget(target);
   forcedTestInteractionSeatId = null;
 }
 
@@ -1163,16 +1163,10 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
   },
   teleportToFloor: (x: number, z: number) => {
     forcedTestSeatId = null;
-    const planned = planInteractionTargetCommands({
-      target: { kind: "floor", point: new THREE.Vector3(x, sceneTeleportFloorY, z) },
-      currentSeatId: getCurrentSeatId(),
-      floorY: sceneTeleportFloorY,
-      pendingSeatId: getPendingSeatId(),
-      seatingAvailable: runtimeFlags.avatarSeatingEnabled && Boolean(roomStateClient && roomStateConnected),
-      nowMs: performance.now(),
-      lastInteractionConfirmAtMs: Number.NEGATIVE_INFINITY
-    });
-    executeRuntimeCommandList(planned.commands);
+    interactionTargetPerformer.performTarget(
+      { kind: "floor", point: new THREE.Vector3(x, sceneTeleportFloorY, z) },
+      { debounceMs: 0 }
+    );
     return true;
   }
 };
@@ -2564,21 +2558,18 @@ renderer.domElement.addEventListener("click", (event) => {
   updatePointerNdcFromClientPosition(event.clientX, event.clientY);
   pointerHoveringScene = true;
   interactionRaycaster.setFromCamera(pointerNdc, camera);
-  const directTarget = resolveInteractionTargetForRay({
+  interactionTargetPerformer.performDirectRayTarget({
     ray: interactionRaycaster.ray.clone(),
     seatMarkerHitMeshes: seatMarkerView.hitMeshes,
     seatAnchorMap: sceneSeatAnchorMap,
     raycaster: interactionRaycaster,
     seatAnchors: sceneSeatAnchors,
     teleportFloorY: sceneTeleportFloorY,
-    maxDistance: 18
+    maxDistance: 18,
+    state: debugState.interactionRay,
+    mode: "cursor",
+    clearVisuals: clearInteractionVisuals
   });
-  if (directTarget.kind === "none") {
-    clearInteractionVisuals();
-    return;
-  }
-  setInteractionRayDebugTarget({ state: debugState.interactionRay, target: directTarget, mode: "cursor" });
-  performInteractionTarget(directTarget);
 });
 
 window.addEventListener("pointermove", (event) => {
