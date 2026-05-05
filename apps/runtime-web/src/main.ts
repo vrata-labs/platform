@@ -6,7 +6,7 @@ import { appendBrandingSuffix, applyRoomShellBootState } from "./boot-session.js
 import { bootRuntime, fetchRuntimeSpaces, listPresence, planVoiceSession, removePresence, resolveCurrentSpace, upsertPresence, type PresenceState, type RuntimeSpaceOption } from "./index.js";
 import { applySnapTurn, projectMovementToWorld } from "./movement.js";
 import { createMotionTrack, pushMotionSample, sampleMotion, type MotionTrack } from "./motion-state.js";
-import { connectRoomState, sendAvatarPoseFrame, sendAvatarReliableState, sendParticipantUpdate, sendSeatClaim, sendSeatRelease, type RoomStateClient, type RoomStateSnapshot } from "./room-state-client.js";
+import { connectRoomState, sendAvatarPoseFrame, sendAvatarReliableState, sendParticipantUpdate, type RoomStateClient, type RoomStateSnapshot } from "./room-state-client.js";
 import { classifyMediaError, classifyRoomStateError, createFaultError, getRuntimeIssue, shouldRetryConnection, type RuntimeIssue } from "./runtime-errors.js";
 import { canRetry, createReconnectPolicy, getReconnectDelayMs } from "./reconnect.js";
 import { applyRuntimeIssueState, clearRuntimeIssueState, createRuntimeUiState } from "./runtime-state.js";
@@ -48,6 +48,7 @@ import {
   planMissingCurrentSeatAnchorCommands,
   planSeatAnchorReconciliation
 } from "./seating/seat-anchor-reconcile.js";
+import { planSeatReclaimOnReconnect, shouldRetrySeatReclaim } from "./seating/seat-reclaim.js";
 import { updateInteractionRayState } from "./interaction/interaction-frame.js";
 import { clearInteractionRayView, createInteractionRayView } from "./interaction/interaction-ray-view.js";
 import { createInteractionTargetPerformer } from "./interaction/interaction-perform.js";
@@ -1334,7 +1335,6 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
   roomStateClient = connectRoomState(roomStateUrl, roomId, participantId, {
     onOpen: () => {
       const reopened = debugState.avatarPoseTransport.lastPoseSentAtMs > 0;
-      const claimedSeatId = getCurrentSeatId();
       roomStateConnected = true;
       debugState.roomStateConnected = true;
       debugState.roomStateMode = "connected";
@@ -1347,17 +1347,27 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
         debugState.avatarPoseTransport.reconnectRepublishCount += 1;
       }
       const activeClient = roomStateClient;
-      if (claimedSeatId && runtimeFlags.avatarSeatingEnabled && activeClient) {
-        seatingController.requestSeatClaim(claimedSeatId);
-        syncSeatDebugState();
-        sendSeatClaim(activeClient, claimedSeatId);
+      const seatReclaim = planSeatReclaimOnReconnect({
+        currentSeatId: getCurrentSeatId(),
+        seatingEnabled: runtimeFlags.avatarSeatingEnabled,
+        roomStateClientAvailable: Boolean(activeClient)
+      });
+      const reclaimSeatId = seatReclaim.seatId;
+      if (seatReclaim.commands.length > 0 && reclaimSeatId && seatReclaim.retryDelayMs !== null) {
+        executeRuntimeCommandList(seatReclaim.commands);
         clearSeatReclaimRetry();
         seatReclaimRetryTimer = window.setTimeout(() => {
-          if (!roomStateConnected || getCurrentSeatId() === claimedSeatId || getPendingSeatId() !== claimedSeatId || roomStateClient !== activeClient) {
+          if (!shouldRetrySeatReclaim({
+            seatId: reclaimSeatId,
+            roomStateConnected,
+            sameRoomStateClient: roomStateClient === activeClient,
+            currentSeatId: getCurrentSeatId(),
+            pendingSeatId: getPendingSeatId()
+          })) {
             return;
           }
-          sendSeatClaim(activeClient, claimedSeatId);
-        }, 250);
+          executeRuntimeCommandList([{ type: "send_seat_claim", seatId: reclaimSeatId }]);
+        }, seatReclaim.retryDelayMs);
       }
       void syncPresence(latestMode, Boolean(livekitRoom));
     },
