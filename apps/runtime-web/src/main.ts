@@ -21,7 +21,7 @@ import { createAvatarLipsyncDriver, sampleAvatarLipsyncLevel, updateAvatarLipsyn
 import { createAvatarOutboundPublisher, type AvatarOutboundPayload } from "./avatar/avatar-publish.js";
 import { createRemoteAvatarRuntime } from "./avatar/remote-avatar-runtime.js";
 import { createInitialAvatarRuntimeFlags, resolveAvatarCatalogUrl, resolveAvatarRuntimeFlags } from "./avatar/avatar-runtime.js";
-import { createAvatarSeatAnchorMap, resolveSeatRootPosition } from "./avatar/avatar-seating.js";
+import { resolveSeatRootPosition } from "./avatar/avatar-seating.js";
 import { resolveAvatarViewProfile } from "./avatar/avatar-visibility.js";
 import { resolveLocalAvatarHandFrame } from "./avatar/avatar-xr-hands.js";
 import { resolveAvatarXrInput } from "./avatar/avatar-xr-input.js";
@@ -40,10 +40,14 @@ import { createRuntimeCommandExecutor } from "./locomotion/runtime-command-bridg
 import {
   applyAcceptedSeatClaimToOccupancy,
   applyForcedSeatOccupancy,
-  removeLocalSeatFromOccupancy,
   removeParticipantFromSeatOccupancy
 } from "./seating/seat-occupancy.js";
 import { createSeatingController } from "./seating/seating-controller.js";
+import {
+  createSeatAnchorReadModel,
+  planMissingCurrentSeatAnchorCommands,
+  planSeatAnchorReconciliation
+} from "./seating/seat-anchor-reconcile.js";
 import { resolveInteractionTargetForRay, updateInteractionRayState } from "./interaction/interaction-frame.js";
 import { clearInteractionRayView, createInteractionRayView, setInteractionRayDebugTarget } from "./interaction/interaction-ray-view.js";
 import type { InteractionTarget } from "./interaction/interaction-targets.js";
@@ -311,7 +315,7 @@ let forcedTestInteractionSeatId: string | null = null;
 let forcedTestSeatId: string | null = null;
 let sceneTeleportFloorY = 0;
 let sceneSeatAnchors: SceneBundleSeatAnchor[] = [];
-let sceneSeatAnchorMap = createAvatarSeatAnchorMap([]);
+let sceneSeatAnchorMap = createSeatAnchorReadModel([]).anchorMap;
 let sceneAnchorsReady = true;
 let roomSeatOccupancy: Record<string, string> = {};
 const pointerNdc = new THREE.Vector2(0, 0);
@@ -484,21 +488,26 @@ function updateSeatMarkerVisuals(timeSeconds: number): void {
 }
 
 function setSceneSeatAnchors(anchors: SceneBundleSeatAnchor[], teleportFloorY = 0): void {
-  sceneSeatAnchors = anchors;
-  sceneSeatAnchorMap = createAvatarSeatAnchorMap(anchors);
-  seatMarkerView.rebuild(anchors);
-  sceneTeleportFloorY = teleportFloorY;
+  const readModel = createSeatAnchorReadModel(anchors, teleportFloorY);
+  sceneSeatAnchors = readModel.anchors;
+  sceneSeatAnchorMap = readModel.anchorMap;
+  seatMarkerView.rebuild(readModel.anchors);
+  sceneTeleportFloorY = readModel.teleportFloorY;
   sceneAnchorsReady = true;
-  const reconciliation = seatingController.reconcileAnchors(new Set(anchors.map((anchor) => anchor.id)));
+  const reconciliation = seatingController.reconcileAnchors(readModel.availableSeatIds);
   syncSeatDebugState();
-  for (const command of reconciliation.commands) {
-    roomSeatOccupancy = removeLocalSeatFromOccupancy(roomSeatOccupancy, { seatId: command.seatId, participantId });
-    debugState.seatOccupancy = { ...roomSeatOccupancy };
+  const plan = planSeatAnchorReconciliation({
+    releases: reconciliation.commands,
+    seatOccupancy: roomSeatOccupancy,
+    participantId
+  });
+  roomSeatOccupancy = plan.seatOccupancy;
+  if (plan.resetSeatLock) {
     lastAppliedSeatLockId = null;
-    executeRuntimeCommandList([
-      { type: "send_seat_release", seatId: command.seatId },
-      { type: "status", message: "Seat anchor unavailable, returned to standing" }
-    ]);
+  }
+  if (plan.commands.length > 0) {
+    debugState.seatOccupancy = { ...roomSeatOccupancy };
+    executeRuntimeCommandList(plan.commands);
   }
   updateSeatMarkerVisuals(performance.now() / 1000);
 }
@@ -524,17 +533,13 @@ function syncSeatStateFromOccupancy(): void {
     lastAppliedSeatLockId = null;
     return;
   }
-  const seatAnchor = sceneSeatAnchorMap.get(currentSeatId);
-  if (!seatAnchor) {
-    if (!sceneAnchorsReady) {
-      return;
-    }
-    executeRuntimeCommandList([
-      { type: "send_seat_release", seatId: currentSeatId },
-      { type: "release_local_seat" },
-      { type: "status", message: "Seat anchor unavailable, returned to standing" }
-    ]);
-    return;
+  const commands = planMissingCurrentSeatAnchorCommands({
+    currentSeatId,
+    anchorsReady: sceneAnchorsReady,
+    seatAnchorMap: sceneSeatAnchorMap
+  });
+  if (commands.length > 0) {
+    executeRuntimeCommandList(commands);
   }
 }
 
