@@ -9,6 +9,7 @@ export type FrameXrControlPlan =
     kind: "xr";
     inputProfile: string;
     sanitizedAxes: XrAxesSample;
+    clearAvatarDebug: false;
     rayVisibleLatched: boolean;
     turnCooldownSeconds: number;
     turnArmed: boolean;
@@ -18,6 +19,9 @@ export type FrameXrControlPlan =
   }
   | {
     kind: "non_xr";
+    inputProfile: null;
+    sanitizedAxes: XrAxesSample;
+    clearAvatarDebug: true;
     rayVisibleLatched: false;
     turnArmed: true;
     confirmInteraction: false;
@@ -67,6 +71,10 @@ export interface FrameLocomotionMovementInput {
 
 const ZERO_MOVE: FlatVector = { x: 0, z: 0 };
 
+function createZeroXrAxes(): XrAxesSample {
+  return { moveX: 0, moveY: 0, turnX: 0, turnY: 0 };
+}
+
 function hasMove(move: FlatVector): boolean {
   return move.x !== 0 || move.z !== 0;
 }
@@ -75,6 +83,9 @@ export function planFrameXrControls(input: FrameXrControlInput): FrameXrControlP
   if (input.frameContext.source !== "xr" || !input.frameContext.xr) {
     return {
       kind: "non_xr",
+      inputProfile: null,
+      sanitizedAxes: createZeroXrAxes(),
+      clearAvatarDebug: true,
       rayVisibleLatched: false,
       turnArmed: true,
       confirmInteraction: false,
@@ -94,6 +105,7 @@ export function planFrameXrControls(input: FrameXrControlInput): FrameXrControlP
     kind: "xr",
     inputProfile: input.frameContext.xr.profile,
     sanitizedAxes,
+    clearAvatarDebug: false,
     rayVisibleLatched: input.frameContext.xr.rayVisibleLatched,
     turnCooldownSeconds: turn.cooldownSeconds,
     turnArmed: turn.armed ?? true,

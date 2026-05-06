@@ -74,6 +74,7 @@ test("frame XR controls plan snap turn from sampled frame context", () => {
   assert.equal(Number(plan.nextYaw?.toFixed(3)), Number((Math.PI / 6).toFixed(3)));
   assert.equal(plan.turnCooldownSeconds, 0.28);
   assert.equal(plan.turnArmed, false);
+  assert.equal(plan.clearAvatarDebug, false);
   assert.equal(plan.confirmInteraction, false);
   assert.equal(plan.triggerPressedLastFrame, false);
 });
@@ -136,6 +137,9 @@ test("frame XR controls reset transient XR flags outside XR frames", () => {
   });
 
   assert.equal(plan.kind, "non_xr");
+  assert.equal(plan.inputProfile, null);
+  assert.deepEqual(plan.sanitizedAxes, { moveX: 0, moveY: 0, turnX: 0, turnY: 0 });
+  assert.equal(plan.clearAvatarDebug, true);
   assert.equal(plan.rayVisibleLatched, false);
   assert.equal(plan.turnArmed, true);
   assert.equal(plan.confirmInteraction, false);

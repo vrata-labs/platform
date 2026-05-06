@@ -2187,6 +2187,9 @@ function updateMovement(delta: number, frameContext: RuntimeFrameContext): void 
     xrSelectPressedLastFrame = xrControlPlan.triggerPressedLastFrame;
     xrRayVisibleLatched = xrControlPlan.rayVisibleLatched;
     xrTurnArmed = xrControlPlan.turnArmed;
+    lastAvatarXrInputProfile = xrControlPlan.inputProfile;
+    debugState.xrAvatarDebug = null;
+    debugState.xrAxes = xrControlPlan.sanitizedAxes;
   }
 
   const yawBeforeUpdate = localPoseController.getYaw();
@@ -2235,12 +2238,6 @@ function updateMovement(delta: number, frameContext: RuntimeFrameContext): void 
     debugState.locomotionMode = "mobile-touch";
   } else if (!xrLocomotionActive) {
     debugState.locomotionMode = "desktop";
-  }
-
-  if (!xrLocomotionActive) {
-    lastAvatarXrInputProfile = null;
-    debugState.xrAvatarDebug = null;
-    debugState.xrAxes = { moveX: 0, moveY: 0, turnX: 0, turnY: 0 };
   }
 
   if (movementPlan.movementReason) {
