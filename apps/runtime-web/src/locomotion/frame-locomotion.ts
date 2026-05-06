@@ -53,6 +53,7 @@ export type FrameLocomotionMovementPlan =
     movementReason: Extract<LocalPoseMutationReason, "desktop_move" | "xr_move"> | null;
     commands: RuntimeCommand[];
     avatarMove: FlatVector;
+    avatarTurnRate: number;
   };
 
 export interface FrameLocomotionMovementInput {
@@ -147,7 +148,8 @@ export function planFrameLocomotionMovement(input: FrameLocomotionMovementInput)
       pose: input.pose,
       movementReason: null,
       commands,
-      avatarMove
+      avatarMove,
+      avatarTurnRate: 0
     };
   }
 
@@ -165,6 +167,7 @@ export function planFrameLocomotionMovement(input: FrameLocomotionMovementInput)
     pose: locomotion.pose,
     movementReason: xrLocomotionActive ? "xr_move" : "desktop_move",
     commands,
-    avatarMove
+    avatarMove,
+    avatarTurnRate: 0
   };
 }

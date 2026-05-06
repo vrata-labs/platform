@@ -167,6 +167,7 @@ test("frame locomotion plans standing desktop movement from frame intents", () =
   }
   assert.deepEqual(plan.commands, []);
   assert.deepEqual(plan.avatarMove, { x: 0, z: -1 });
+  assert.equal(plan.avatarTurnRate, 0);
   assert.equal(plan.movementReason, "desktop_move");
   assert.equal(plan.pose.position.x, 3.2);
   assert.equal(plan.pose.position.z, 0);
@@ -245,6 +246,7 @@ test("frame locomotion releases missing seat anchor and falls through to standin
   }
   assert.deepEqual(plan.commands, [{ type: "release_local_seat" }]);
   assert.equal(plan.movementReason, "xr_move");
+  assert.equal(plan.avatarTurnRate, 0);
   assert.equal(plan.pose.position.x, 0);
   assert.equal(plan.pose.position.z, -2.4);
 });
@@ -270,6 +272,7 @@ test("frame locomotion uses bot move for non-XR movement planning", () => {
     throw new Error("expected standing plan");
   }
   assert.deepEqual(plan.avatarMove, { x: 1, z: 0 });
+  assert.equal(plan.avatarTurnRate, 0);
   assert.equal(plan.movementReason, "desktop_move");
   assert.equal(plan.pose.position.x, 5);
   assert.equal(plan.pose.position.z, 0);

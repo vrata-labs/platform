@@ -1754,10 +1754,6 @@ function botDirection(timeSeconds: number): { x: number; z: number } {
   return { x: 0, z: 0 };
 }
 
-function getSignedAngleDelta(next: number, previous: number): number {
-  return Math.atan2(Math.sin(next - previous), Math.cos(next - previous));
-}
-
 function getLocalAvatarHandTargets(frameContext: RuntimeFrameContext): { leftHand: { x: number; y: number; z: number } | null; rightHand: { x: number; y: number; z: number } | null } {
   const pose = localPoseController.getPose();
   if (avatarVrMockEnabled && !renderer.xr.isPresenting) {
@@ -2192,7 +2188,6 @@ function updateMovement(delta: number, frameContext: RuntimeFrameContext): void 
     debugState.xrAxes = xrControlPlan.sanitizedAxes;
   }
 
-  const yawBeforeUpdate = localPoseController.getYaw();
   const xrLocomotionActive = frameContext.source === "xr";
   const currentSeatId = getCurrentSeatId();
   const currentSeatAnchor = currentSeatId ? sceneSeatAnchorMap.get(currentSeatId) : undefined;
@@ -2245,7 +2240,7 @@ function updateMovement(delta: number, frameContext: RuntimeFrameContext): void 
   }
 
   lastAvatarMove = direction;
-  lastAvatarTurnRate = delta > 0 ? getSignedAngleDelta(localPoseController.getYaw(), yawBeforeUpdate) / delta : 0;
+  lastAvatarTurnRate = movementPlan.avatarTurnRate;
   updateLocalPositionDebug();
 }
 
