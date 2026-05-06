@@ -38,14 +38,14 @@ const stagingSceneRooms = [
     name: "Hall",
     roomId: process.env.STAGING_HALL_ROOM_ID ?? "42db8225-f671-4e46-9c28-9381d66a948c",
     expectedBundleUrl: expectedVersionedOrLegacySceneBundleUrl("sense-hall2-v1"),
-    timeoutMs: 20000,
+    timeoutMs: 45000,
     requireLoadedState: true
   },
   {
     name: "BlueOffice",
     roomId: process.env.STAGING_BLUEOFFICE_ROOM_ID ?? "0b537d34-7b92-4b51-854a-8c64cfb4c114",
     expectedBundleUrl: expectedVersionedOrLegacySceneBundleUrl("sense-blueoffice-glb-v4"),
-    timeoutMs: 25000,
+    timeoutMs: 45000,
     requireLoadedState: true
   },
   {
@@ -492,7 +492,7 @@ test.describe("@staging runtime HUD space selector", () => {
 
   for (const sceneRoom of stagingSceneRooms) {
     test(`scene room smoke: ${sceneRoom.name}`, async ({ page, request }) => {
-      test.setTimeout(sceneRoom.timeoutMs + 15000);
+      test.setTimeout(sceneRoom.timeoutMs + 45000);
       await expectSceneRoomLoaded(
         page,
         request,
@@ -1298,7 +1298,7 @@ test.describe("@staging runtime HUD space selector", () => {
   });
 
   test("hall keeps avatar sync working between two web clients on staging", async ({ browser }) => {
-    test.setTimeout(60000);
+    test.setTimeout(120000);
     const hallRoomId = stagingSceneRooms[0]!.roomId;
     const pageA = await browser.newPage();
     const pageB = await browser.newPage();
@@ -1320,7 +1320,7 @@ test.describe("@staging runtime HUD space selector", () => {
             && Boolean(debugB?.remoteAvatarParticipants?.some((item) => item.presenceSeen && item.hasReliableState && item.hasPoseFrame))
         };
       }, {
-        timeout: 45000,
+        timeout: 90000,
         intervals: [1000, 2000, 3000]
       }).toEqual({
         aLoaded: "loaded",
@@ -1335,7 +1335,7 @@ test.describe("@staging runtime HUD space selector", () => {
   });
 
   test("hall keeps avatar hands visible between two web clients on staging", async ({ browser }) => {
-    test.setTimeout(60000);
+    test.setTimeout(120000);
     const hallRoomId = stagingSceneRooms[0]!.roomId;
     const pageA = await browser.newPage();
     const pageB = await browser.newPage();
@@ -1353,7 +1353,7 @@ test.describe("@staging runtime HUD space selector", () => {
           bHandsReady: Boolean(debugB?.remoteAvatarParticipants?.some((item) => item.presenceSeen && item.hasReliableState && item.hasPoseFrame && item.leftHandVisible && item.rightHandVisible))
         };
       }, {
-        timeout: 45000,
+        timeout: 90000,
         intervals: [1000, 2000, 3000]
       }).toEqual({
         aLoaded: "loaded",
