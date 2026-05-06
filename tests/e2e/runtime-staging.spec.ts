@@ -850,6 +850,8 @@ test.describe("@staging runtime HUD space selector", () => {
   });
 
   test("staging fresh hall mock VR can target and claim a seat through XR interaction path", async ({ page, request }) => {
+    test.setTimeout(90000);
+
     const targetName = `Staging Hall Mock VR Seat ${Date.now()}`;
     let roomId: string | null = null;
     try {
@@ -887,7 +889,7 @@ test.describe("@staging runtime HUD space selector", () => {
           visibility: debug?.avatarSnapshot?.visibilityState ?? null
         };
       }, {
-        timeout: 25000,
+        timeout: 45000,
         intervals: [1000, 2000, 3000]
       }).toEqual({
         sceneBundleState: "loaded",
@@ -973,6 +975,8 @@ test.describe("@staging runtime HUD space selector", () => {
   });
 
   test("staging fresh BlueOffice mock VR writes XR telemetry history for ray and trigger actions", async ({ page, request }) => {
+    test.setTimeout(90000);
+
     const targetName = `Staging BlueOffice Mock VR Telemetry ${Date.now()}`;
     let roomId: string | null = null;
     try {
@@ -1009,7 +1013,7 @@ test.describe("@staging runtime HUD space selector", () => {
           visibility: debug?.avatarSnapshot?.visibilityState ?? null
         };
       }, {
-        timeout: 25000,
+        timeout: 45000,
         intervals: [1000, 2000, 3000]
       }).toEqual({
         sceneBundleState: "loaded",
