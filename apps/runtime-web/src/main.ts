@@ -2225,14 +2225,8 @@ function updateMovement(delta: number, frameContext: RuntimeFrameContext): void 
 
   const direction = movementPlan.avatarMove;
 
-  if (botMode !== "off" && !xrLocomotionActive) {
-    debugState.locomotionMode = `bot:${botMode}`;
-  }
-
-  if (!xrLocomotionActive && frameContext.source === "touch" && botMode === "off") {
-    debugState.locomotionMode = "mobile-touch";
-  } else if (!xrLocomotionActive) {
-    debugState.locomotionMode = "desktop";
+  if (movementPlan.debugLocomotionMode) {
+    debugState.locomotionMode = movementPlan.debugLocomotionMode;
   }
 
   if (movementPlan.movementReason) {

@@ -169,8 +169,32 @@ test("frame locomotion plans standing desktop movement from frame intents", () =
   assert.deepEqual(plan.avatarMove, { x: 0, z: -1 });
   assert.equal(plan.avatarTurnRate, 0);
   assert.equal(plan.movementReason, "desktop_move");
+  assert.equal(plan.debugLocomotionMode, "desktop");
   assert.equal(plan.pose.position.x, 3.2);
   assert.equal(plan.pose.position.z, 0);
+});
+
+test("frame locomotion plans mobile touch debug mode without desktop movement", () => {
+  const plan = planFrameLocomotionMovement({
+    pose,
+    frameContext: {
+      source: "touch",
+      intents: { ...idleIntents, source: "touch" }
+    },
+    deltaSeconds: 1,
+    floorY: 0,
+    currentSeatId: null,
+    lastAppliedSeatLockId: null,
+    cameraForward: { x: 0, z: -1 },
+    desktopFastMove: false
+  });
+
+  assert.equal(plan.kind, "standing");
+  if (plan.kind !== "standing") {
+    throw new Error("expected standing plan");
+  }
+  assert.equal(plan.movementReason, null);
+  assert.equal(plan.debugLocomotionMode, "mobile-touch");
 });
 
 test("frame locomotion keeps seated user locked to the seat anchor", () => {
@@ -246,6 +270,7 @@ test("frame locomotion releases missing seat anchor and falls through to standin
   }
   assert.deepEqual(plan.commands, [{ type: "release_local_seat" }]);
   assert.equal(plan.movementReason, "xr_move");
+  assert.equal(plan.debugLocomotionMode, null);
   assert.equal(plan.avatarTurnRate, 0);
   assert.equal(plan.pose.position.x, 0);
   assert.equal(plan.pose.position.z, -2.4);
@@ -274,6 +299,7 @@ test("frame locomotion uses bot move for non-XR movement planning", () => {
   assert.deepEqual(plan.avatarMove, { x: 1, z: 0 });
   assert.equal(plan.avatarTurnRate, 0);
   assert.equal(plan.movementReason, "desktop_move");
+  assert.equal(plan.debugLocomotionMode, "desktop");
   assert.equal(plan.pose.position.x, 5);
   assert.equal(plan.pose.position.z, 0);
 });

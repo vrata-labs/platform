@@ -51,6 +51,7 @@ export type FrameLocomotionMovementPlan =
     kind: "standing";
     pose: LocalPose;
     movementReason: Extract<LocalPoseMutationReason, "desktop_move" | "xr_move"> | null;
+    debugLocomotionMode: "desktop" | "mobile-touch" | null;
     commands: RuntimeCommand[];
     avatarMove: FlatVector;
     avatarTurnRate: number;
@@ -78,6 +79,18 @@ function createZeroXrAxes(): XrAxesSample {
 
 function hasMove(move: FlatVector): boolean {
   return move.x !== 0 || move.z !== 0;
+}
+
+function planStandingDebugLocomotionMode(input: FrameLocomotionMovementInput): "desktop" | "mobile-touch" | null {
+  if (input.frameContext.source === "xr") {
+    return null;
+  }
+
+  if (input.frameContext.source === "touch" && !input.botMove) {
+    return "mobile-touch";
+  }
+
+  return "desktop";
 }
 
 export function planFrameXrControls(input: FrameXrControlInput): FrameXrControlPlan {
@@ -142,11 +155,13 @@ export function planFrameLocomotionMovement(input: FrameLocomotionMovementInput)
     x: input.frameContext.intents.move.x,
     z: input.frameContext.intents.move.z
   };
+  const debugLocomotionMode = planStandingDebugLocomotionMode(input);
   if (!hasMove(avatarMove)) {
     return {
       kind: "standing",
       pose: input.pose,
       movementReason: null,
+      debugLocomotionMode,
       commands,
       avatarMove,
       avatarTurnRate: 0
@@ -166,6 +181,7 @@ export function planFrameLocomotionMovement(input: FrameLocomotionMovementInput)
     kind: "standing",
     pose: locomotion.pose,
     movementReason: xrLocomotionActive ? "xr_move" : "desktop_move",
+    debugLocomotionMode,
     commands,
     avatarMove,
     avatarTurnRate: 0
