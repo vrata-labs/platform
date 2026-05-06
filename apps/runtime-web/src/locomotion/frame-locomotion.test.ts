@@ -2,8 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import type { InputIntents } from "../input/input-intents.js";
+import type { RuntimeFrameContext } from "../input/runtime-frame-context.js";
 import type { LocalPose } from "../local/local-pose.js";
-import { planFrameLocomotionMovement } from "./frame-locomotion.js";
+import { planFrameLocomotionMovement, planFrameXrControls } from "./frame-locomotion.js";
 
 const idleIntents: InputIntents = {
   move: { x: 0, z: 0 },
@@ -18,6 +19,128 @@ const pose: LocalPose = {
   yaw: 0,
   pitch: 0
 };
+
+function xrFrameContext(input: {
+  intents?: Partial<InputIntents>;
+  turnX?: number;
+  turnY?: number;
+  triggerPressed?: boolean;
+  rayVisibleLatched?: boolean;
+}): RuntimeFrameContext {
+  const sanitizedAxes = {
+    moveX: 0,
+    moveY: 0,
+    turnX: input.turnX ?? 0,
+    turnY: input.turnY ?? 0
+  };
+  return {
+    deltaSeconds: 0.016,
+    nowMs: 1000,
+    source: "xr",
+    intents: {
+      ...idleIntents,
+      source: "xr",
+      ...input.intents,
+      move: input.intents?.move ?? idleIntents.move,
+      snapTurn: input.intents?.snapTurn ?? idleIntents.snapTurn
+    },
+    xr: {
+      frame: undefined,
+      session: undefined,
+      referenceSpace: null,
+      inputSources: [],
+      profile: "synthetic-right",
+      sanitizedAxes,
+      rawAxes: sanitizedAxes,
+      triggerPressed: input.triggerPressed ?? false,
+      rayVisibleLatched: input.rayVisibleLatched ?? false
+    }
+  };
+}
+
+test("frame XR controls plan snap turn from sampled frame context", () => {
+  const plan = planFrameXrControls({
+    frameContext: xrFrameContext({ intents: { snapTurn: { axis: -0.8 } }, turnX: -0.8 }),
+    yaw: 0,
+    turnCooldownSeconds: 0,
+    turnArmed: true,
+    deltaSeconds: 0.016
+  });
+
+  assert.equal(plan.kind, "xr");
+  if (plan.kind !== "xr") {
+    throw new Error("expected xr control plan");
+  }
+  assert.equal(Number(plan.nextYaw?.toFixed(3)), Number((Math.PI / 6).toFixed(3)));
+  assert.equal(plan.turnCooldownSeconds, 0.28);
+  assert.equal(plan.turnArmed, false);
+  assert.equal(plan.confirmInteraction, false);
+  assert.equal(plan.triggerPressedLastFrame, false);
+});
+
+test("frame XR controls suppress snap turn while ray intent consumes diagonal input", () => {
+  const plan = planFrameXrControls({
+    frameContext: xrFrameContext({
+      intents: { snapTurn: { axis: 0 }, aimRay: true },
+      turnX: -0.8,
+      turnY: -0.6,
+      rayVisibleLatched: true
+    }),
+    yaw: 0,
+    turnCooldownSeconds: 0,
+    turnArmed: true,
+    deltaSeconds: 0.016
+  });
+
+  assert.equal(plan.kind, "xr");
+  if (plan.kind !== "xr") {
+    throw new Error("expected xr control plan");
+  }
+  assert.equal(plan.nextYaw, null);
+  assert.equal(plan.turnArmed, false);
+  assert.equal(plan.rayVisibleLatched, true);
+});
+
+test("frame XR controls expose confirm interaction trigger edge", () => {
+  const plan = planFrameXrControls({
+    frameContext: xrFrameContext({
+      intents: { confirmInteraction: true },
+      triggerPressed: true
+    }),
+    yaw: 0,
+    turnCooldownSeconds: 0,
+    turnArmed: true,
+    deltaSeconds: 0.016
+  });
+
+  assert.equal(plan.kind, "xr");
+  if (plan.kind !== "xr") {
+    throw new Error("expected xr control plan");
+  }
+  assert.equal(plan.confirmInteraction, true);
+  assert.equal(plan.triggerPressedLastFrame, true);
+});
+
+test("frame XR controls reset transient XR flags outside XR frames", () => {
+  const plan = planFrameXrControls({
+    frameContext: {
+      deltaSeconds: 0.016,
+      nowMs: 1000,
+      source: "desktop",
+      intents: idleIntents
+    },
+    yaw: 0,
+    turnCooldownSeconds: 0.2,
+    turnArmed: false,
+    deltaSeconds: 0.016
+  });
+
+  assert.equal(plan.kind, "non_xr");
+  assert.equal(plan.rayVisibleLatched, false);
+  assert.equal(plan.turnArmed, true);
+  assert.equal(plan.confirmInteraction, false);
+  assert.equal(plan.triggerPressedLastFrame, false);
+});
 
 test("frame locomotion plans standing desktop movement from frame intents", () => {
   const plan = planFrameLocomotionMovement({

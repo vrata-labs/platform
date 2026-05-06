@@ -4,7 +4,6 @@ import { Room, RoomEvent, Track } from "livekit-client";
 
 import { appendBrandingSuffix, applyRoomShellBootState } from "./boot-session.js";
 import { bootRuntime, fetchRuntimeSpaces, listPresence, planVoiceSession, removePresence, resolveCurrentSpace, upsertPresence, type PresenceState, type RuntimeSpaceOption } from "./index.js";
-import { applySnapTurn } from "./movement.js";
 import { createMotionTrack, pushMotionSample, sampleMotion, type MotionTrack } from "./motion-state.js";
 import { connectRoomState, sendAvatarPoseFrame, sendAvatarReliableState, sendParticipantUpdate, type RoomStateClient, type RoomStateSnapshot } from "./room-state-client.js";
 import { classifyMediaError, classifyRoomStateError, createFaultError, getRuntimeIssue, shouldRetryConnection, type RuntimeIssue } from "./runtime-errors.js";
@@ -34,7 +33,7 @@ import type { SceneBundleSeatAnchor } from "./scene-bundle.js";
 import { createLocalPoseController, type Vector3Like } from "./local/local-pose.js";
 import { resolveDesktopTouchInputIntents, resolveTouchMoveVector, resolveXrConfirmInteractionIntent, resolveXrInputIntents } from "./input/input-intents.js";
 import type { RuntimeFrameContext } from "./input/runtime-frame-context.js";
-import { planFrameLocomotionMovement } from "./locomotion/frame-locomotion.js";
+import { planFrameLocomotionMovement, planFrameXrControls } from "./locomotion/frame-locomotion.js";
 import { createInteractionCommandPlanner } from "./locomotion/interaction-command-planner.js";
 import { createRuntimeCommandExecutor } from "./locomotion/runtime-command-bridge.js";
 import {
@@ -2159,36 +2158,35 @@ function sampleRuntimeFrameContext(deltaSeconds: number, nowMs: number): Runtime
 }
 
 function updateMovement(delta: number, frameContext: RuntimeFrameContext): void {
-  if (frameContext.source === "xr" && frameContext.xr) {
-    lastAvatarXrInputProfile = frameContext.xr.profile;
+  const xrControlPlan = planFrameXrControls({
+    frameContext,
+    yaw: localPoseController.getYaw(),
+    turnCooldownSeconds: xrTurnCooldown,
+    turnArmed: xrTurnArmed,
+    deltaSeconds: delta
+  });
 
-    const sanitized = frameContext.xr.sanitizedAxes;
-    debugState.xrAxes = sanitized;
-    xrRayVisibleLatched = frameContext.xr.rayVisibleLatched;
-    const turnBefore = localPoseController.getYaw();
-    const turn = applySnapTurn(
-      { angle: localPoseController.getYaw(), cooldownSeconds: xrTurnCooldown, armed: xrTurnArmed },
-      frameContext.intents.snapTurn.axis,
-      delta,
-      sanitized.turnX
-    );
-    xrTurnCooldown = turn.cooldownSeconds;
-    xrTurnArmed = turn.armed ?? true;
-    if (turn.angle !== turnBefore) {
-      applyYawAroundXrCamera(turn.angle);
+  if (xrControlPlan.kind === "xr") {
+    lastAvatarXrInputProfile = xrControlPlan.inputProfile;
+    debugState.xrAxes = xrControlPlan.sanitizedAxes;
+    xrRayVisibleLatched = xrControlPlan.rayVisibleLatched;
+    xrTurnCooldown = xrControlPlan.turnCooldownSeconds;
+    xrTurnArmed = xrControlPlan.turnArmed;
+    if (xrControlPlan.nextYaw !== null) {
+      applyYawAroundXrCamera(xrControlPlan.nextYaw);
       markXrTelemetry("snap_turn");
     }
     debugState.locomotionMode = getCurrentSeatId() ? "vr-seated" : "vr";
 
-    if (frameContext.intents.confirmInteraction) {
+    if (xrControlPlan.confirmInteraction) {
       markXrTelemetry("trigger_press");
       confirmInteractionTarget(frameContext);
     }
-    xrSelectPressedLastFrame = frameContext.xr.triggerPressed;
+    xrSelectPressedLastFrame = xrControlPlan.triggerPressedLastFrame;
   } else {
-    xrSelectPressedLastFrame = false;
-    xrRayVisibleLatched = false;
-    xrTurnArmed = true;
+    xrSelectPressedLastFrame = xrControlPlan.triggerPressedLastFrame;
+    xrRayVisibleLatched = xrControlPlan.rayVisibleLatched;
+    xrTurnArmed = xrControlPlan.turnArmed;
   }
 
   const yawBeforeUpdate = localPoseController.getYaw();

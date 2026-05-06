@@ -1,8 +1,36 @@
 import type { RuntimeFrameContext } from "../input/runtime-frame-context.js";
 import type { LocalPose, LocalPoseMutationReason, Vector3Like } from "../local/local-pose.js";
-import { projectMovementToWorld, type FlatVector } from "../movement.js";
+import { applySnapTurn, projectMovementToWorld, type FlatVector, type XrAxesSample } from "../movement.js";
 import { resolveLocomotionMode, stepLocalLocomotion } from "./local-locomotion.js";
 import type { RuntimeCommand } from "./runtime-commands.js";
+
+export type FrameXrControlPlan =
+  | {
+    kind: "xr";
+    inputProfile: string;
+    sanitizedAxes: XrAxesSample;
+    rayVisibleLatched: boolean;
+    turnCooldownSeconds: number;
+    turnArmed: boolean;
+    nextYaw: number | null;
+    confirmInteraction: boolean;
+    triggerPressedLastFrame: boolean;
+  }
+  | {
+    kind: "non_xr";
+    rayVisibleLatched: false;
+    turnArmed: true;
+    confirmInteraction: false;
+    triggerPressedLastFrame: false;
+  };
+
+export interface FrameXrControlInput {
+  frameContext: RuntimeFrameContext;
+  yaw: number;
+  turnCooldownSeconds: number;
+  turnArmed: boolean;
+  deltaSeconds: number;
+}
 
 export type FrameLocomotionMovementPlan =
   | {
@@ -41,6 +69,38 @@ const ZERO_MOVE: FlatVector = { x: 0, z: 0 };
 
 function hasMove(move: FlatVector): boolean {
   return move.x !== 0 || move.z !== 0;
+}
+
+export function planFrameXrControls(input: FrameXrControlInput): FrameXrControlPlan {
+  if (input.frameContext.source !== "xr" || !input.frameContext.xr) {
+    return {
+      kind: "non_xr",
+      rayVisibleLatched: false,
+      turnArmed: true,
+      confirmInteraction: false,
+      triggerPressedLastFrame: false
+    };
+  }
+
+  const sanitizedAxes = input.frameContext.xr.sanitizedAxes;
+  const turn = applySnapTurn(
+    { angle: input.yaw, cooldownSeconds: input.turnCooldownSeconds, armed: input.turnArmed },
+    input.frameContext.intents.snapTurn.axis,
+    input.deltaSeconds,
+    sanitizedAxes.turnX
+  );
+  const nextYaw = turn.angle !== input.yaw ? turn.angle : null;
+  return {
+    kind: "xr",
+    inputProfile: input.frameContext.xr.profile,
+    sanitizedAxes,
+    rayVisibleLatched: input.frameContext.xr.rayVisibleLatched,
+    turnCooldownSeconds: turn.cooldownSeconds,
+    turnArmed: turn.armed ?? true,
+    nextYaw,
+    confirmInteraction: input.frameContext.intents.confirmInteraction,
+    triggerPressedLastFrame: input.frameContext.xr.triggerPressed
+  };
 }
 
 export function planFrameLocomotionMovement(input: FrameLocomotionMovementInput): FrameLocomotionMovementPlan {
