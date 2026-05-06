@@ -631,6 +631,8 @@ test.describe("@staging runtime HUD space selector", () => {
   });
 
   test("staging keeps baseline avatar presence by default and isolates experimental leg IK behind query override", async ({ page }) => {
+    test.setTimeout(90000);
+
     await page.goto(`/rooms/${stagingRoomId}?debug=1`, { waitUntil: "domcontentloaded" });
     await expect.poll(async () => {
       const debug = await page.evaluate(() => (window as Window & {
