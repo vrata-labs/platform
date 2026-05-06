@@ -74,6 +74,20 @@ export interface FrameLocomotionMovementInput {
   botMove?: FlatVector | null;
 }
 
+export interface FrameLocomotionMovementPlanHandlers {
+  executeCommands(commands: RuntimeCommand[]): void;
+  lockToSeat(
+    position: Vector3Like,
+    reason: Extract<LocalPoseMutationReason, "seat_enter" | "seat_lock">,
+    options?: { yaw?: number }
+  ): void;
+  moveFlatTo(position: { x: number; z: number }, reason: Extract<LocalPoseMutationReason, "desktop_move" | "xr_move">): void;
+  setLastAppliedSeatLockId(seatId: string): void;
+  setAvatarMovement(move: FlatVector, turnRate: number): void;
+  setDebugLocomotionMode(mode: "desktop" | "mobile-touch"): void;
+  updateLocalPositionDebug(): void;
+}
+
 const ZERO_MOVE: FlatVector = { x: 0, z: 0 };
 
 function createZeroXrAxes(): XrAxesSample {
@@ -191,4 +205,36 @@ export function planFrameLocomotionMovement(input: FrameLocomotionMovementInput)
     avatarMove,
     avatarTurnRate: 0
   };
+}
+
+export function executeFrameLocomotionMovementPlan(
+  plan: FrameLocomotionMovementPlan,
+  handlers: FrameLocomotionMovementPlanHandlers
+): void {
+  if (plan.commands.length > 0) {
+    handlers.executeCommands(plan.commands);
+  }
+
+  if (plan.kind === "seat_lock") {
+    handlers.lockToSeat(
+      plan.position,
+      plan.reason,
+      plan.yaw === undefined ? undefined : { yaw: plan.yaw }
+    );
+    handlers.setLastAppliedSeatLockId(plan.seatId);
+    handlers.setAvatarMovement(plan.avatarMove, plan.avatarTurnRate);
+    handlers.updateLocalPositionDebug();
+    return;
+  }
+
+  if (plan.debugLocomotionMode) {
+    handlers.setDebugLocomotionMode(plan.debugLocomotionMode);
+  }
+
+  if (plan.movementReason) {
+    handlers.moveFlatTo(plan.pose.position, plan.movementReason);
+  }
+
+  handlers.setAvatarMovement(plan.avatarMove, plan.avatarTurnRate);
+  handlers.updateLocalPositionDebug();
 }

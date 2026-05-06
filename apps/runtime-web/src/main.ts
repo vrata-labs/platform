@@ -33,7 +33,7 @@ import type { SceneBundleSeatAnchor } from "./scene-bundle.js";
 import { createLocalPoseController, type Vector3Like } from "./local/local-pose.js";
 import { resolveDesktopTouchInputIntents, resolveTouchMoveVector, resolveXrConfirmInteractionIntent, resolveXrInputIntents } from "./input/input-intents.js";
 import type { RuntimeFrameContext } from "./input/runtime-frame-context.js";
-import { planFrameLocomotionMovement, planFrameXrControls } from "./locomotion/frame-locomotion.js";
+import { executeFrameLocomotionMovementPlan, planFrameLocomotionMovement, planFrameXrControls } from "./locomotion/frame-locomotion.js";
 import { createInteractionCommandPlanner } from "./locomotion/interaction-command-planner.js";
 import { createRuntimeCommandExecutor } from "./locomotion/runtime-command-bridge.js";
 import {
@@ -2207,36 +2207,26 @@ function updateMovement(delta: number, frameContext: RuntimeFrameContext): void 
     botMove: botMode !== "off" && !xrLocomotionActive ? botDirection(performance.now() / 1000) : null
   });
 
-  if (movementPlan.commands.length > 0) {
-    executeRuntimeCommandList(movementPlan.commands);
-  }
-
-  if (movementPlan.kind === "seat_lock") {
-    localPoseController.lockToSeat(
-      movementPlan.position,
-      movementPlan.reason,
-      movementPlan.yaw === undefined ? undefined : { yaw: movementPlan.yaw }
-    );
-    lastAppliedSeatLockId = movementPlan.seatId;
-    lastAvatarMove = movementPlan.avatarMove;
-    lastAvatarTurnRate = movementPlan.avatarTurnRate;
-    updateLocalPositionDebug();
-    return;
-  }
-
-  const direction = movementPlan.avatarMove;
-
-  if (movementPlan.debugLocomotionMode) {
-    debugState.locomotionMode = movementPlan.debugLocomotionMode;
-  }
-
-  if (movementPlan.movementReason) {
-    localPoseController.moveFlatTo(movementPlan.pose.position, movementPlan.movementReason);
-  }
-
-  lastAvatarMove = direction;
-  lastAvatarTurnRate = movementPlan.avatarTurnRate;
-  updateLocalPositionDebug();
+  executeFrameLocomotionMovementPlan(movementPlan, {
+    executeCommands: executeRuntimeCommandList,
+    lockToSeat: (position, reason, options) => {
+      localPoseController.lockToSeat(position, reason, options);
+    },
+    moveFlatTo: (position, reason) => {
+      localPoseController.moveFlatTo(position, reason);
+    },
+    setLastAppliedSeatLockId: (seatId) => {
+      lastAppliedSeatLockId = seatId;
+    },
+    setAvatarMovement: (move, turnRate) => {
+      lastAvatarMove = move;
+      lastAvatarTurnRate = turnRate;
+    },
+    setDebugLocomotionMode: (mode) => {
+      debugState.locomotionMode = mode;
+    },
+    updateLocalPositionDebug
+  });
 }
 
 async function syncPresence(mode: PresenceState["mode"], audioActive: boolean): Promise<void> {
