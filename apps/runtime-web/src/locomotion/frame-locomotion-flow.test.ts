@@ -6,7 +6,12 @@ import type { RuntimeFrameContext } from "../input/runtime-frame-context.js";
 import type { LocalPose, Vector3Like } from "../local/local-pose.js";
 import type { FlatVector, XrAxesSample } from "../movement.js";
 import { resolveLocomotionMode } from "./local-locomotion.js";
-import { executeFrameLocomotionMovementPlan, planFrameLocomotionMovement, planFrameXrControls } from "./frame-locomotion.js";
+import {
+  executeFrameLocomotionMovementPlan,
+  executeFrameXrControlPlan,
+  planFrameLocomotionMovement,
+  planFrameXrControls
+} from "./frame-locomotion.js";
 import {
   executeRuntimeCommands,
   planInteractionCommands,
@@ -163,15 +168,31 @@ function runFrame(state: FlowState, input: {
     deltaSeconds
   });
 
-  if (xrControlPlan.kind === "xr") {
-    state.debugLocomotionMode = xrControlPlan.debugLocomotionMode;
-    state.xrTurnCooldown = xrControlPlan.turnCooldownSeconds;
-    state.xrTurnArmed = xrControlPlan.turnArmed;
-    if (xrControlPlan.nextYaw !== null) {
-      state.pose = { ...state.pose, yaw: xrControlPlan.nextYaw };
-      state.telemetry.push("snap_turn");
-    }
-    if (xrControlPlan.confirmInteraction && input.target) {
+  executeFrameXrControlPlan(xrControlPlan, {
+    setXrInputProfile: () => {},
+    setDebugXrAxes: () => {},
+    setXrRayVisibleLatched: () => {},
+    setXrTurnCooldown: (seconds) => {
+      state.xrTurnCooldown = seconds;
+    },
+    setXrTurnArmed: (armed) => {
+      state.xrTurnArmed = armed;
+    },
+    setXrSelectPressedLastFrame: () => {},
+    clearXrAvatarDebug: () => {},
+    setDebugLocomotionMode: (mode) => {
+      state.debugLocomotionMode = mode;
+    },
+    applyYawAroundXrCamera: (yaw) => {
+      state.pose = { ...state.pose, yaw };
+    },
+    markXrTelemetry: (kind) => {
+      state.telemetry.push(kind);
+    },
+    confirmInteractionTarget: () => {
+      if (!input.target) {
+        return;
+      }
       const interactionPlan = planInteractionCommands({
         target: input.target,
         mode: resolveLocomotionMode({ seatId: state.currentSeatId, floorY }),
@@ -184,9 +205,7 @@ function runFrame(state: FlowState, input: {
       state.lastInteractionConfirmAtMs = interactionPlan.lastInteractionConfirmAtMs;
       executeCommands(state, interactionPlan.commands);
     }
-  } else {
-    state.xrTurnArmed = xrControlPlan.turnArmed;
-  }
+  });
 
   const movementPlan = planFrameLocomotionMovement({
     pose: state.pose,

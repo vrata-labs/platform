@@ -33,7 +33,12 @@ import type { SceneBundleSeatAnchor } from "./scene-bundle.js";
 import { createLocalPoseController, type Vector3Like } from "./local/local-pose.js";
 import { resolveDesktopTouchInputIntents, resolveTouchMoveVector, resolveXrConfirmInteractionIntent, resolveXrInputIntents } from "./input/input-intents.js";
 import type { RuntimeFrameContext } from "./input/runtime-frame-context.js";
-import { executeFrameLocomotionMovementPlan, planFrameLocomotionMovement, planFrameXrControls } from "./locomotion/frame-locomotion.js";
+import {
+  executeFrameLocomotionMovementPlan,
+  executeFrameXrControlPlan,
+  planFrameLocomotionMovement,
+  planFrameXrControls
+} from "./locomotion/frame-locomotion.js";
 import { createInteractionCommandPlanner } from "./locomotion/interaction-command-planner.js";
 import { createRuntimeCommandExecutor } from "./locomotion/runtime-command-bridge.js";
 import {
@@ -2163,31 +2168,37 @@ function updateMovement(delta: number, frameContext: RuntimeFrameContext): void 
     deltaSeconds: delta
   });
 
-  if (xrControlPlan.kind === "xr") {
-    lastAvatarXrInputProfile = xrControlPlan.inputProfile;
-    debugState.xrAxes = xrControlPlan.sanitizedAxes;
-    xrRayVisibleLatched = xrControlPlan.rayVisibleLatched;
-    xrTurnCooldown = xrControlPlan.turnCooldownSeconds;
-    xrTurnArmed = xrControlPlan.turnArmed;
-    if (xrControlPlan.nextYaw !== null) {
-      applyYawAroundXrCamera(xrControlPlan.nextYaw);
-      markXrTelemetry("snap_turn");
-    }
-    debugState.locomotionMode = xrControlPlan.debugLocomotionMode;
-
-    if (xrControlPlan.confirmInteraction) {
-      markXrTelemetry("trigger_press");
+  executeFrameXrControlPlan(xrControlPlan, {
+    setXrInputProfile: (profile) => {
+      lastAvatarXrInputProfile = profile;
+    },
+    setDebugXrAxes: (axes) => {
+      debugState.xrAxes = axes;
+    },
+    setXrRayVisibleLatched: (visible) => {
+      xrRayVisibleLatched = visible;
+    },
+    setXrTurnCooldown: (seconds) => {
+      xrTurnCooldown = seconds;
+    },
+    setXrTurnArmed: (armed) => {
+      xrTurnArmed = armed;
+    },
+    setXrSelectPressedLastFrame: (pressed) => {
+      xrSelectPressedLastFrame = pressed;
+    },
+    clearXrAvatarDebug: () => {
+      debugState.xrAvatarDebug = null;
+    },
+    setDebugLocomotionMode: (mode) => {
+      debugState.locomotionMode = mode;
+    },
+    applyYawAroundXrCamera,
+    markXrTelemetry,
+    confirmInteractionTarget: () => {
       confirmInteractionTarget(frameContext);
     }
-    xrSelectPressedLastFrame = xrControlPlan.triggerPressedLastFrame;
-  } else {
-    xrSelectPressedLastFrame = xrControlPlan.triggerPressedLastFrame;
-    xrRayVisibleLatched = xrControlPlan.rayVisibleLatched;
-    xrTurnArmed = xrControlPlan.turnArmed;
-    lastAvatarXrInputProfile = xrControlPlan.inputProfile;
-    debugState.xrAvatarDebug = null;
-    debugState.xrAxes = xrControlPlan.sanitizedAxes;
-  }
+  });
 
   const xrLocomotionActive = frameContext.source === "xr";
   const currentSeatId = getCurrentSeatId();

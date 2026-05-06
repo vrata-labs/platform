@@ -39,6 +39,20 @@ export interface FrameXrControlInput {
   deltaSeconds: number;
 }
 
+export interface FrameXrControlPlanHandlers {
+  setXrInputProfile(profile: string | null): void;
+  setDebugXrAxes(axes: XrAxesSample): void;
+  setXrRayVisibleLatched(visible: boolean): void;
+  setXrTurnCooldown(seconds: number): void;
+  setXrTurnArmed(armed: boolean): void;
+  setXrSelectPressedLastFrame(pressed: boolean): void;
+  clearXrAvatarDebug(): void;
+  setDebugLocomotionMode(mode: "vr" | "vr-seated"): void;
+  applyYawAroundXrCamera(yaw: number): void;
+  markXrTelemetry(kind: "snap_turn" | "trigger_press"): void;
+  confirmInteractionTarget(): void;
+}
+
 export type FrameLocomotionMovementPlan =
   | {
     kind: "seat_lock";
@@ -146,6 +160,40 @@ export function planFrameXrControls(input: FrameXrControlInput): FrameXrControlP
     confirmInteraction: input.frameContext.intents.confirmInteraction,
     triggerPressedLastFrame: input.frameContext.xr.triggerPressed
   };
+}
+
+export function executeFrameXrControlPlan(
+  plan: FrameXrControlPlan,
+  handlers: FrameXrControlPlanHandlers
+): void {
+  if (plan.kind === "xr") {
+    handlers.setXrInputProfile(plan.inputProfile);
+    handlers.setDebugXrAxes(plan.sanitizedAxes);
+    handlers.setXrRayVisibleLatched(plan.rayVisibleLatched);
+    handlers.setXrTurnCooldown(plan.turnCooldownSeconds);
+    handlers.setXrTurnArmed(plan.turnArmed);
+    if (plan.nextYaw !== null) {
+      handlers.applyYawAroundXrCamera(plan.nextYaw);
+      handlers.markXrTelemetry("snap_turn");
+    }
+    handlers.setDebugLocomotionMode(plan.debugLocomotionMode);
+
+    if (plan.confirmInteraction) {
+      handlers.markXrTelemetry("trigger_press");
+      handlers.confirmInteractionTarget();
+    }
+    handlers.setXrSelectPressedLastFrame(plan.triggerPressedLastFrame);
+    return;
+  }
+
+  handlers.setXrSelectPressedLastFrame(plan.triggerPressedLastFrame);
+  handlers.setXrRayVisibleLatched(plan.rayVisibleLatched);
+  handlers.setXrTurnArmed(plan.turnArmed);
+  handlers.setXrInputProfile(plan.inputProfile);
+  if (plan.clearAvatarDebug) {
+    handlers.clearXrAvatarDebug();
+  }
+  handlers.setDebugXrAxes(plan.sanitizedAxes);
 }
 
 export function planFrameLocomotionMovement(input: FrameLocomotionMovementInput): FrameLocomotionMovementPlan {

@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import type { InputIntents } from "../input/input-intents.js";
 import type { RuntimeFrameContext } from "../input/runtime-frame-context.js";
 import type { LocalPose } from "../local/local-pose.js";
-import { planFrameLocomotionMovement, planFrameXrControls } from "./frame-locomotion.js";
+import { executeFrameXrControlPlan, planFrameLocomotionMovement, planFrameXrControls } from "./frame-locomotion.js";
 
 const idleIntents: InputIntents = {
   move: { x: 0, z: 0 },
@@ -167,6 +167,46 @@ test("frame XR controls reset transient XR flags outside XR frames", () => {
   assert.equal(plan.turnArmed, true);
   assert.equal(plan.confirmInteraction, false);
   assert.equal(plan.triggerPressedLastFrame, false);
+});
+
+test("frame XR controls executor resets non-XR frame debug state", () => {
+  const plan = planFrameXrControls({
+    frameContext: {
+      deltaSeconds: 0.016,
+      nowMs: 1000,
+      source: "desktop",
+      intents: idleIntents
+    },
+    yaw: 0,
+    currentSeatId: null,
+    turnCooldownSeconds: 0.2,
+    turnArmed: false,
+    deltaSeconds: 0.016
+  });
+  const calls: string[] = [];
+
+  executeFrameXrControlPlan(plan, {
+    setXrInputProfile: (profile) => calls.push(`profile:${profile ?? "none"}`),
+    setDebugXrAxes: (axes) => calls.push(`axes:${axes.turnX}`),
+    setXrRayVisibleLatched: (visible) => calls.push(`ray:${visible}`),
+    setXrTurnCooldown: (seconds) => calls.push(`cooldown:${seconds}`),
+    setXrTurnArmed: (armed) => calls.push(`armed:${armed}`),
+    setXrSelectPressedLastFrame: (pressed) => calls.push(`pressed:${pressed}`),
+    clearXrAvatarDebug: () => calls.push("clear-avatar-debug"),
+    setDebugLocomotionMode: (mode) => calls.push(`mode:${mode}`),
+    applyYawAroundXrCamera: (yaw) => calls.push(`yaw:${yaw}`),
+    markXrTelemetry: (kind) => calls.push(`telemetry:${kind}`),
+    confirmInteractionTarget: () => calls.push("confirm")
+  });
+
+  assert.deepEqual(calls, [
+    "pressed:false",
+    "ray:false",
+    "armed:true",
+    "profile:none",
+    "clear-avatar-debug",
+    "axes:0"
+  ]);
 });
 
 test("frame locomotion plans standing desktop movement from frame intents", () => {
