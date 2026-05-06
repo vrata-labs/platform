@@ -6,12 +6,7 @@ import type { RuntimeFrameContext } from "../input/runtime-frame-context.js";
 import type { LocalPose, Vector3Like } from "../local/local-pose.js";
 import type { FlatVector, XrAxesSample } from "../movement.js";
 import { resolveLocomotionMode } from "./local-locomotion.js";
-import {
-  executeFrameLocomotionMovementPlan,
-  executeFrameXrControlPlan,
-  planFrameLocomotionMovement,
-  planFrameXrControls
-} from "./frame-locomotion.js";
+import { executeFrameLocomotionPipeline } from "./frame-locomotion.js";
 import {
   executeRuntimeCommands,
   planInteractionCommands,
@@ -159,16 +154,22 @@ function runFrame(state: FlowState, input: {
 }): void {
   const deltaSeconds = input.deltaSeconds ?? input.frameContext.deltaSeconds;
   const floorY = input.floorY ?? 0;
-  const xrControlPlan = planFrameXrControls({
+  executeFrameLocomotionPipeline({
     frameContext: input.frameContext,
-    yaw: state.pose.yaw,
-    currentSeatId: state.currentSeatId,
+    deltaSeconds,
+    floorY,
     turnCooldownSeconds: state.xrTurnCooldown,
-    turnArmed: state.xrTurnArmed,
-    deltaSeconds
-  });
-
-  executeFrameXrControlPlan(xrControlPlan, {
+    turnArmed: state.xrTurnArmed
+  }, {
+    getYaw: () => state.pose.yaw,
+    getPose: () => state.pose,
+    getCurrentSeatId: () => state.currentSeatId,
+    getSeatRootPosition: () => input.seatRootPosition ?? null,
+    getSeatYaw: () => input.seatYaw,
+    getLastAppliedSeatLockId: () => state.lastAppliedSeatLockId,
+    getCameraForward: () => input.cameraForward ?? { x: 0, z: -1 },
+    getDesktopFastMove: () => false,
+    getBotMove: () => null,
     setXrInputProfile: () => {},
     setDebugXrAxes: () => {},
     setXrRayVisibleLatched: () => {},
@@ -204,23 +205,7 @@ function runFrame(state: FlowState, input: {
       });
       state.lastInteractionConfirmAtMs = interactionPlan.lastInteractionConfirmAtMs;
       executeCommands(state, interactionPlan.commands);
-    }
-  });
-
-  const movementPlan = planFrameLocomotionMovement({
-    pose: state.pose,
-    frameContext: input.frameContext,
-    deltaSeconds,
-    floorY,
-    currentSeatId: state.currentSeatId,
-    seatRootPosition: input.seatRootPosition ?? null,
-    seatYaw: input.seatYaw,
-    lastAppliedSeatLockId: state.lastAppliedSeatLockId,
-    cameraForward: input.cameraForward ?? { x: 0, z: -1 },
-    desktopFastMove: false,
-    botMove: null
-  });
-  executeFrameLocomotionMovementPlan(movementPlan, {
+    },
     executeCommands: (commands) => executeCommands(state, commands),
     lockToSeat: (position, _reason, options) => {
       state.pose = {
@@ -245,9 +230,6 @@ function runFrame(state: FlowState, input: {
     setAvatarMovement: (move, turnRate) => {
       state.lastAvatarMove = move;
       state.lastAvatarTurnRate = turnRate;
-    },
-    setDebugLocomotionMode: (mode) => {
-      state.debugLocomotionMode = mode;
     },
     updateLocalPositionDebug: () => {
       state.localPositionDebugUpdates += 1;

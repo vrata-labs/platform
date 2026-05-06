@@ -102,6 +102,34 @@ export interface FrameLocomotionMovementPlanHandlers {
   updateLocalPositionDebug(): void;
 }
 
+export interface FrameLocomotionPipelineInput {
+  frameContext: RuntimeFrameContext;
+  deltaSeconds: number;
+  floorY: number;
+  turnCooldownSeconds: number;
+  turnArmed: boolean;
+}
+
+export type FrameLocomotionPipelineHandlers = Omit<FrameXrControlPlanHandlers, "setDebugLocomotionMode">
+  & Omit<FrameLocomotionMovementPlanHandlers, "setDebugLocomotionMode">
+  & {
+    getYaw(): number;
+    getPose(): LocalPose;
+    getCurrentSeatId(): string | null;
+    getSeatRootPosition(seatId: string): Vector3Like | null;
+    getSeatYaw(seatId: string): number | undefined;
+    getLastAppliedSeatLockId(): string | null;
+    getCameraForward(): FlatVector;
+    getDesktopFastMove(): boolean;
+    getBotMove(): FlatVector | null;
+    setDebugLocomotionMode(mode: "vr" | "vr-seated" | "desktop" | "mobile-touch"): void;
+  };
+
+export interface FrameLocomotionPipelineResult {
+  xrControlPlan: FrameXrControlPlan;
+  movementPlan: FrameLocomotionMovementPlan;
+}
+
 const ZERO_MOVE: FlatVector = { x: 0, z: 0 };
 
 function createZeroXrAxes(): XrAxesSample {
@@ -285,4 +313,39 @@ export function executeFrameLocomotionMovementPlan(
 
   handlers.setAvatarMovement(plan.avatarMove, plan.avatarTurnRate);
   handlers.updateLocalPositionDebug();
+}
+
+export function executeFrameLocomotionPipeline(
+  input: FrameLocomotionPipelineInput,
+  handlers: FrameLocomotionPipelineHandlers
+): FrameLocomotionPipelineResult {
+  const xrControlPlan = planFrameXrControls({
+    frameContext: input.frameContext,
+    yaw: handlers.getYaw(),
+    currentSeatId: handlers.getCurrentSeatId(),
+    turnCooldownSeconds: input.turnCooldownSeconds,
+    turnArmed: input.turnArmed,
+    deltaSeconds: input.deltaSeconds
+  });
+
+  executeFrameXrControlPlan(xrControlPlan, handlers);
+
+  const currentSeatId = handlers.getCurrentSeatId();
+  const movementPlan = planFrameLocomotionMovement({
+    pose: handlers.getPose(),
+    frameContext: input.frameContext,
+    deltaSeconds: input.deltaSeconds,
+    floorY: input.floorY,
+    currentSeatId,
+    seatRootPosition: currentSeatId ? handlers.getSeatRootPosition(currentSeatId) : null,
+    seatYaw: currentSeatId ? handlers.getSeatYaw(currentSeatId) : undefined,
+    lastAppliedSeatLockId: handlers.getLastAppliedSeatLockId(),
+    cameraForward: handlers.getCameraForward(),
+    desktopFastMove: handlers.getDesktopFastMove(),
+    botMove: handlers.getBotMove()
+  });
+
+  executeFrameLocomotionMovementPlan(movementPlan, handlers);
+
+  return { xrControlPlan, movementPlan };
 }

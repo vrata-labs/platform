@@ -33,12 +33,7 @@ import type { SceneBundleSeatAnchor } from "./scene-bundle.js";
 import { createLocalPoseController, type Vector3Like } from "./local/local-pose.js";
 import { resolveDesktopTouchInputIntents, resolveTouchMoveVector, resolveXrConfirmInteractionIntent, resolveXrInputIntents } from "./input/input-intents.js";
 import type { RuntimeFrameContext } from "./input/runtime-frame-context.js";
-import {
-  executeFrameLocomotionMovementPlan,
-  executeFrameXrControlPlan,
-  planFrameLocomotionMovement,
-  planFrameXrControls
-} from "./locomotion/frame-locomotion.js";
+import { executeFrameLocomotionPipeline } from "./locomotion/frame-locomotion.js";
 import { createInteractionCommandPlanner } from "./locomotion/interaction-command-planner.js";
 import { createRuntimeCommandExecutor } from "./locomotion/runtime-command-bridge.js";
 import {
@@ -2159,16 +2154,30 @@ function sampleRuntimeFrameContext(deltaSeconds: number, nowMs: number): Runtime
 }
 
 function updateMovement(delta: number, frameContext: RuntimeFrameContext): void {
-  const xrControlPlan = planFrameXrControls({
+  executeFrameLocomotionPipeline({
     frameContext,
-    yaw: localPoseController.getYaw(),
-    currentSeatId: getCurrentSeatId(),
+    deltaSeconds: delta,
+    floorY: sceneTeleportFloorY,
     turnCooldownSeconds: xrTurnCooldown,
-    turnArmed: xrTurnArmed,
-    deltaSeconds: delta
-  });
-
-  executeFrameXrControlPlan(xrControlPlan, {
+    turnArmed: xrTurnArmed
+  }, {
+    getYaw: () => localPoseController.getYaw(),
+    getPose: () => localPoseController.getPose(),
+    getCurrentSeatId,
+    getSeatRootPosition: (seatId) => {
+      const seatAnchor = sceneSeatAnchorMap.get(seatId);
+      return seatAnchor ? resolveSeatRootPosition(seatAnchor) : null;
+    },
+    getSeatYaw: (seatId) => sceneSeatAnchorMap.get(seatId)?.yaw,
+    getLastAppliedSeatLockId: () => lastAppliedSeatLockId,
+    getCameraForward: () => {
+      const viewForward = camera.getWorldDirection(new THREE.Vector3());
+      return { x: viewForward.x, z: viewForward.z };
+    },
+    getDesktopFastMove: () => Boolean(keyState.ShiftLeft),
+    getBotMove: () => frameContext.source !== "xr" && botMode !== "off"
+      ? botDirection(performance.now() / 1000)
+      : null,
     setXrInputProfile: (profile) => {
       lastAvatarXrInputProfile = profile;
     },
@@ -2197,28 +2206,7 @@ function updateMovement(delta: number, frameContext: RuntimeFrameContext): void 
     markXrTelemetry,
     confirmInteractionTarget: () => {
       confirmInteractionTarget(frameContext);
-    }
-  });
-
-  const xrLocomotionActive = frameContext.source === "xr";
-  const currentSeatId = getCurrentSeatId();
-  const currentSeatAnchor = currentSeatId ? sceneSeatAnchorMap.get(currentSeatId) : undefined;
-  const viewForward = camera.getWorldDirection(new THREE.Vector3());
-  const movementPlan = planFrameLocomotionMovement({
-    pose: localPoseController.getPose(),
-    frameContext,
-    deltaSeconds: delta,
-    floorY: sceneTeleportFloorY,
-    currentSeatId,
-    seatRootPosition: currentSeatAnchor ? resolveSeatRootPosition(currentSeatAnchor) : null,
-    seatYaw: currentSeatAnchor?.yaw,
-    lastAppliedSeatLockId,
-    cameraForward: { x: viewForward.x, z: viewForward.z },
-    desktopFastMove: Boolean(keyState.ShiftLeft),
-    botMove: botMode !== "off" && !xrLocomotionActive ? botDirection(performance.now() / 1000) : null
-  });
-
-  executeFrameLocomotionMovementPlan(movementPlan, {
+    },
     executeCommands: executeRuntimeCommandList,
     lockToSeat: (position, reason, options) => {
       localPoseController.lockToSeat(position, reason, options);
@@ -2232,9 +2220,6 @@ function updateMovement(delta: number, frameContext: RuntimeFrameContext): void 
     setAvatarMovement: (move, turnRate) => {
       lastAvatarMove = move;
       lastAvatarTurnRate = turnRate;
-    },
-    setDebugLocomotionMode: (mode) => {
-      debugState.locomotionMode = mode;
     },
     updateLocalPositionDebug
   });
