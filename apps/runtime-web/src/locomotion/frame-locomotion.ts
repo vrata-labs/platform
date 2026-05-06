@@ -10,6 +10,7 @@ export type FrameXrControlPlan =
     inputProfile: string;
     sanitizedAxes: XrAxesSample;
     clearAvatarDebug: false;
+    debugLocomotionMode: "vr" | "vr-seated";
     rayVisibleLatched: boolean;
     turnCooldownSeconds: number;
     turnArmed: boolean;
@@ -22,6 +23,7 @@ export type FrameXrControlPlan =
     inputProfile: null;
     sanitizedAxes: XrAxesSample;
     clearAvatarDebug: true;
+    debugLocomotionMode: null;
     rayVisibleLatched: false;
     turnArmed: true;
     confirmInteraction: false;
@@ -31,6 +33,7 @@ export type FrameXrControlPlan =
 export interface FrameXrControlInput {
   frameContext: RuntimeFrameContext;
   yaw: number;
+  currentSeatId: string | null;
   turnCooldownSeconds: number;
   turnArmed: boolean;
   deltaSeconds: number;
@@ -100,6 +103,7 @@ export function planFrameXrControls(input: FrameXrControlInput): FrameXrControlP
       inputProfile: null,
       sanitizedAxes: createZeroXrAxes(),
       clearAvatarDebug: true,
+      debugLocomotionMode: null,
       rayVisibleLatched: false,
       turnArmed: true,
       confirmInteraction: false,
@@ -120,6 +124,7 @@ export function planFrameXrControls(input: FrameXrControlInput): FrameXrControlP
     inputProfile: input.frameContext.xr.profile,
     sanitizedAxes,
     clearAvatarDebug: false,
+    debugLocomotionMode: input.currentSeatId ? "vr-seated" : "vr",
     rayVisibleLatched: input.frameContext.xr.rayVisibleLatched,
     turnCooldownSeconds: turn.cooldownSeconds,
     turnArmed: turn.armed ?? true,

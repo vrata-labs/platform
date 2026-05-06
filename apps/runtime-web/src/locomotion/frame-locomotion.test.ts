@@ -62,6 +62,7 @@ test("frame XR controls plan snap turn from sampled frame context", () => {
   const plan = planFrameXrControls({
     frameContext: xrFrameContext({ intents: { snapTurn: { axis: -0.8 } }, turnX: -0.8 }),
     yaw: 0,
+    currentSeatId: null,
     turnCooldownSeconds: 0,
     turnArmed: true,
     deltaSeconds: 0.016
@@ -75,8 +76,26 @@ test("frame XR controls plan snap turn from sampled frame context", () => {
   assert.equal(plan.turnCooldownSeconds, 0.28);
   assert.equal(plan.turnArmed, false);
   assert.equal(plan.clearAvatarDebug, false);
+  assert.equal(plan.debugLocomotionMode, "vr");
   assert.equal(plan.confirmInteraction, false);
   assert.equal(plan.triggerPressedLastFrame, false);
+});
+
+test("frame XR controls plan seated debug mode from the pre-frame seat state", () => {
+  const plan = planFrameXrControls({
+    frameContext: xrFrameContext({}),
+    yaw: 0,
+    currentSeatId: "seat-a",
+    turnCooldownSeconds: 0,
+    turnArmed: true,
+    deltaSeconds: 0.016
+  });
+
+  assert.equal(plan.kind, "xr");
+  if (plan.kind !== "xr") {
+    throw new Error("expected xr control plan");
+  }
+  assert.equal(plan.debugLocomotionMode, "vr-seated");
 });
 
 test("frame XR controls suppress snap turn while ray intent consumes diagonal input", () => {
@@ -88,6 +107,7 @@ test("frame XR controls suppress snap turn while ray intent consumes diagonal in
       rayVisibleLatched: true
     }),
     yaw: 0,
+    currentSeatId: null,
     turnCooldownSeconds: 0,
     turnArmed: true,
     deltaSeconds: 0.016
@@ -109,6 +129,7 @@ test("frame XR controls expose confirm interaction trigger edge", () => {
       triggerPressed: true
     }),
     yaw: 0,
+    currentSeatId: null,
     turnCooldownSeconds: 0,
     turnArmed: true,
     deltaSeconds: 0.016
@@ -131,6 +152,7 @@ test("frame XR controls reset transient XR flags outside XR frames", () => {
       intents: idleIntents
     },
     yaw: 0,
+    currentSeatId: null,
     turnCooldownSeconds: 0.2,
     turnArmed: false,
     deltaSeconds: 0.016
@@ -140,6 +162,7 @@ test("frame XR controls reset transient XR flags outside XR frames", () => {
   assert.equal(plan.inputProfile, null);
   assert.deepEqual(plan.sanitizedAxes, { moveX: 0, moveY: 0, turnX: 0, turnY: 0 });
   assert.equal(plan.clearAvatarDebug, true);
+  assert.equal(plan.debugLocomotionMode, null);
   assert.equal(plan.rayVisibleLatched, false);
   assert.equal(plan.turnArmed, true);
   assert.equal(plan.confirmInteraction, false);

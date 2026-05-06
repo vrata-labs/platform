@@ -2157,6 +2157,7 @@ function updateMovement(delta: number, frameContext: RuntimeFrameContext): void 
   const xrControlPlan = planFrameXrControls({
     frameContext,
     yaw: localPoseController.getYaw(),
+    currentSeatId: getCurrentSeatId(),
     turnCooldownSeconds: xrTurnCooldown,
     turnArmed: xrTurnArmed,
     deltaSeconds: delta
@@ -2172,7 +2173,7 @@ function updateMovement(delta: number, frameContext: RuntimeFrameContext): void 
       applyYawAroundXrCamera(xrControlPlan.nextYaw);
       markXrTelemetry("snap_turn");
     }
-    debugState.locomotionMode = getCurrentSeatId() ? "vr-seated" : "vr";
+    debugState.locomotionMode = xrControlPlan.debugLocomotionMode;
 
     if (xrControlPlan.confirmInteraction) {
       markXrTelemetry("trigger_press");
