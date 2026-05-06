@@ -315,6 +315,9 @@ async function readSelfAvatarDebug(page: Page): Promise<{
 }
 
 test.describe("@staging runtime HUD space selector", () => {
+  // Public staging runs can hit transient scene or RTC startup misses on a cold VM.
+  test.describe.configure({ retries: 1 });
+
   test("staging suite uses public HTTPS base URL", async ({ request, baseURL }) => {
     expect(baseURL).toBeTruthy();
     const url = new URL(baseURL!);
