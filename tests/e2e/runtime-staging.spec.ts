@@ -756,7 +756,9 @@ test.describe("@staging runtime HUD space selector", () => {
   });
 
   test("staging hall debug fit preserves spawn floor height", async ({ page }) => {
-    const hallRoomId = stagingSceneRooms[0]!.roomId;
+    const hallSceneRoom = stagingSceneRooms[0]!;
+    test.setTimeout(hallSceneRoom.timeoutMs + 15000);
+    const hallRoomId = hallSceneRoom.roomId;
     await page.goto(`/rooms/${hallRoomId}?debug=1`);
 
     await expect.poll(async () => {
@@ -777,7 +779,7 @@ test.describe("@staging runtime HUD space selector", () => {
         };
       });
     }, {
-      timeout: 25000,
+      timeout: hallSceneRoom.timeoutMs,
       intervals: [1000, 2000, 3000]
     }).toEqual({
       statusReady: true,
@@ -1205,7 +1207,9 @@ test.describe("@staging runtime HUD space selector", () => {
   });
 
   test("staging synthetic XR harness can ray, turn and trigger-seat in BlueOffice", async ({ page }) => {
-    const blueOfficeRoomId = stagingSceneRooms[1]!.roomId;
+    const blueOfficeSceneRoom = stagingSceneRooms[1]!;
+    test.setTimeout(blueOfficeSceneRoom.timeoutMs + 30000);
+    const blueOfficeRoomId = blueOfficeSceneRoom.roomId;
     await page.goto(`/rooms/${blueOfficeRoomId}?debug=1&avatarvrmock=1`, { waitUntil: "domcontentloaded" });
 
     await expect.poll(async () => {
@@ -1216,7 +1220,7 @@ test.describe("@staging runtime HUD space selector", () => {
         visibility: debug?.avatarSnapshot?.visibilityState ?? null
       };
     }, {
-      timeout: 30000,
+      timeout: blueOfficeSceneRoom.timeoutMs,
       intervals: [1000, 2000, 3000]
     }).toEqual({
       sceneBundleState: "loaded",
