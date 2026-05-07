@@ -6,6 +6,13 @@ export interface FlatPositionLike {
   z: number;
 }
 
+export interface FlatVectorLike {
+  x: number;
+  z: number;
+}
+
+export type RuntimeDebugLocomotionMode = "vr" | "vr-seated" | "desktop" | "mobile-touch";
+
 export type RuntimeCommand =
   | { type: "request_seat_claim"; seatId: string }
   | { type: "send_seat_claim"; seatId: string }
@@ -24,6 +31,10 @@ export type RuntimeCommand =
     reason: Extract<LocalPoseMutationReason, "desktop_move" | "xr_move">;
   }
   | { type: "apply_snap_turn_yaw"; yaw: number }
+  | { type: "set_debug_locomotion_mode"; mode: RuntimeDebugLocomotionMode }
+  | { type: "set_last_applied_seat_lock_id"; seatId: string }
+  | { type: "set_avatar_movement"; move: FlatVectorLike; turnRate: number }
+  | { type: "update_local_position_debug" }
   | { type: "teleport_to_floor"; point: Vector3Like }
   | { type: "status"; message: string }
   | { type: "telemetry"; kind: string };
@@ -60,6 +71,10 @@ export interface RuntimeCommandHandlers {
   ): void;
   moveFlatTo(position: FlatPositionLike, reason: Extract<LocalPoseMutationReason, "desktop_move" | "xr_move">): void;
   applySnapTurnYaw(yaw: number): void;
+  setDebugLocomotionMode(mode: RuntimeDebugLocomotionMode): void;
+  setLastAppliedSeatLockId(seatId: string): void;
+  setAvatarMovement(move: FlatVectorLike, turnRate: number): void;
+  updateLocalPositionDebug(): void;
   teleportToFloor(point: Vector3Like): void;
   setStatus(message: string): void;
   markTelemetry(kind: string): void;
@@ -140,6 +155,18 @@ export function executeRuntimeCommands(commands: RuntimeCommand[], handlers: Run
         break;
       case "apply_snap_turn_yaw":
         handlers.applySnapTurnYaw(command.yaw);
+        break;
+      case "set_debug_locomotion_mode":
+        handlers.setDebugLocomotionMode(command.mode);
+        break;
+      case "set_last_applied_seat_lock_id":
+        handlers.setLastAppliedSeatLockId(command.seatId);
+        break;
+      case "set_avatar_movement":
+        handlers.setAvatarMovement(command.move, command.turnRate);
+        break;
+      case "update_local_position_debug":
+        handlers.updateLocalPositionDebug();
         break;
       case "teleport_to_floor":
         handlers.teleportToFloor(command.point);

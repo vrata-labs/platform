@@ -130,6 +130,10 @@ test("runtime command executor preserves command order", () => {
     },
     moveFlatTo: (position, reason) => calls.push(`move:${position.x},${position.z}:${reason}`),
     applySnapTurnYaw: (yaw) => calls.push(`snap-yaw:${yaw}`),
+    setDebugLocomotionMode: (mode) => calls.push(`mode:${mode}`),
+    setLastAppliedSeatLockId: (seatId) => calls.push(`last-seat:${seatId}`),
+    setAvatarMovement: (move, turnRate) => calls.push(`avatar-move:${move.x},${move.z}:${turnRate}`),
+    updateLocalPositionDebug: () => calls.push("position-debug"),
     teleportToFloor: (point) => calls.push(`teleport:${point.x},${point.y},${point.z}`),
     setStatus: (message) => calls.push(`status:${message}`),
     markTelemetry: (kind) => calls.push(`telemetry:${kind}`)
@@ -144,6 +148,10 @@ test("runtime command executor preserves command order", () => {
     { type: "lock_to_seat", seatId: "seat-a", position: { x: 2, y: 0.4, z: 3 }, reason: "seat_enter", yaw: 1.2 },
     { type: "move_flat_to", position: { x: 4, z: 5 }, reason: "desktop_move" },
     { type: "apply_snap_turn_yaw", yaw: 0.5 },
+    { type: "set_debug_locomotion_mode", mode: "vr" },
+    { type: "set_last_applied_seat_lock_id", seatId: "seat-a" },
+    { type: "set_avatar_movement", move: { x: 0, z: -1 }, turnRate: 0.25 },
+    { type: "update_local_position_debug" },
     { type: "teleport_to_floor", point: { x: 1, y: 0, z: 2 } },
     { type: "status", message: "Teleported" }
   ], handlers);
@@ -157,6 +165,10 @@ test("runtime command executor preserves command order", () => {
     "lock:2,0.4,3:seat_enter:1.2",
     "move:4,5:desktop_move",
     "snap-yaw:0.5",
+    "mode:vr",
+    "last-seat:seat-a",
+    "avatar-move:0,-1:0.25",
+    "position-debug",
     "teleport:1,0,2",
     "status:Teleported"
   ]);

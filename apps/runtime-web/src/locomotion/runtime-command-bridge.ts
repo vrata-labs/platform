@@ -1,7 +1,13 @@
 import type { LocalPoseMutationReason, Vector3Like } from "../local/local-pose.js";
 import { sendSeatClaim, sendSeatRelease, type RoomStateClient } from "../room-state-client.js";
 import type { SeatingController } from "../seating/seating-controller.js";
-import { executeRuntimeCommands, type FlatPositionLike, type RuntimeCommand } from "./runtime-commands.js";
+import {
+  executeRuntimeCommands,
+  type FlatPositionLike,
+  type FlatVectorLike,
+  type RuntimeCommand,
+  type RuntimeDebugLocomotionMode
+} from "./runtime-commands.js";
 
 export interface RuntimeCommandBridgeInput {
   seatingController: Pick<SeatingController, "requestSeatClaim">;
@@ -16,6 +22,10 @@ export interface RuntimeCommandBridgeInput {
   ): void;
   moveFlatTo(position: FlatPositionLike, reason: Extract<LocalPoseMutationReason, "desktop_move" | "xr_move">): void;
   applySnapTurnYaw(yaw: number): void;
+  setDebugLocomotionMode(mode: RuntimeDebugLocomotionMode): void;
+  setLastAppliedSeatLockId(seatId: string): void;
+  setAvatarMovement(move: FlatVectorLike, turnRate: number): void;
+  updateLocalPositionDebug(): void;
   teleportToFloor(point: Vector3Like): void;
   setStatus(message: string): void;
   markTelemetry(kind: string): void;
@@ -63,6 +73,18 @@ export function createRuntimeCommandExecutor(input: RuntimeCommandBridgeInput): 
       },
       applySnapTurnYaw(yaw) {
         input.applySnapTurnYaw(yaw);
+      },
+      setDebugLocomotionMode(mode) {
+        input.setDebugLocomotionMode(mode);
+      },
+      setLastAppliedSeatLockId(seatId) {
+        input.setLastAppliedSeatLockId(seatId);
+      },
+      setAvatarMovement(move, turnRate) {
+        input.setAvatarMovement(move, turnRate);
+      },
+      updateLocalPositionDebug() {
+        input.updateLocalPositionDebug();
       },
       teleportToFloor(point) {
         input.teleportToFloor(point);

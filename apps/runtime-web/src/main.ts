@@ -609,6 +609,17 @@ const executeRuntimeCommandList = createRuntimeCommandExecutor({
     localPoseController.moveFlatTo(position, reason);
   },
   applySnapTurnYaw: applyYawAroundXrCamera,
+  setDebugLocomotionMode(mode) {
+    debugState.locomotionMode = mode;
+  },
+  setLastAppliedSeatLockId(seatId) {
+    lastAppliedSeatLockId = seatId;
+  },
+  setAvatarMovement(move, turnRate) {
+    lastAvatarMove = move;
+    lastAvatarTurnRate = turnRate;
+  },
+  updateLocalPositionDebug,
   teleportToFloor(point) {
     setPlayerPositionForFloorTeleport(point);
     updateLocalPositionDebug();
@@ -2206,21 +2217,10 @@ function updateMovement(delta: number, frameContext: RuntimeFrameContext): void 
     clearXrAvatarDebug: () => {
       debugState.xrAvatarDebug = null;
     },
-    setDebugLocomotionMode: (mode) => {
-      debugState.locomotionMode = mode;
-    },
     confirmInteractionTarget: () => {
       confirmInteractionTarget(frameContext);
     },
-    executeCommands: executeRuntimeCommandList,
-    setLastAppliedSeatLockId: (seatId) => {
-      lastAppliedSeatLockId = seatId;
-    },
-    setAvatarMovement: (move, turnRate) => {
-      lastAvatarMove = move;
-      lastAvatarTurnRate = turnRate;
-    },
-    updateLocalPositionDebug
+    executeCommands: executeRuntimeCommandList
   });
 }
 

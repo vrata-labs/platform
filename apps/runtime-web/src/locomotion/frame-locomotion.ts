@@ -2,7 +2,7 @@ import type { RuntimeFrameContext } from "../input/runtime-frame-context.js";
 import type { LocalPose, LocalPoseMutationReason, Vector3Like } from "../local/local-pose.js";
 import { applySnapTurn, projectMovementToWorld, type FlatVector, type XrAxesSample } from "../movement.js";
 import { resolveLocomotionMode, stepLocalLocomotion } from "./local-locomotion.js";
-import type { RuntimeCommand } from "./runtime-commands.js";
+import type { RuntimeCommand, RuntimeDebugLocomotionMode } from "./runtime-commands.js";
 
 export type FrameXrControlPlan =
   | {
@@ -10,7 +10,7 @@ export type FrameXrControlPlan =
     inputProfile: string;
     sanitizedAxes: XrAxesSample;
     clearAvatarDebug: false;
-    debugLocomotionMode: "vr" | "vr-seated";
+    debugLocomotionMode: Extract<RuntimeDebugLocomotionMode, "vr" | "vr-seated">;
     rayVisibleLatched: boolean;
     turnCooldownSeconds: number;
     turnArmed: boolean;
@@ -51,7 +51,6 @@ export interface FrameXrControlPlanHandlers {
   setXrTurnArmed(armed: boolean): void;
   setXrSelectPressedLastFrame(pressed: boolean): void;
   clearXrAvatarDebug(): void;
-  setDebugLocomotionMode(mode: "vr" | "vr-seated"): void;
   executeCommands(commands: RuntimeCommand[]): void;
   confirmInteractionTarget(): void;
 }
@@ -71,7 +70,7 @@ export type FrameLocomotionMovementPlan =
     kind: "standing";
     pose: LocalPose;
     movementReason: Extract<LocalPoseMutationReason, "desktop_move" | "xr_move"> | null;
-    debugLocomotionMode: "desktop" | "mobile-touch" | null;
+    debugLocomotionMode: Extract<RuntimeDebugLocomotionMode, "desktop" | "mobile-touch"> | null;
     commands: RuntimeCommand[];
     avatarMove: FlatVector;
     avatarTurnRate: number;
@@ -93,10 +92,6 @@ export interface FrameLocomotionMovementInput {
 
 export interface FrameLocomotionMovementPlanHandlers {
   executeCommands(commands: RuntimeCommand[]): void;
-  setLastAppliedSeatLockId(seatId: string): void;
-  setAvatarMovement(move: FlatVector, turnRate: number): void;
-  setDebugLocomotionMode(mode: "desktop" | "mobile-touch"): void;
-  updateLocalPositionDebug(): void;
 }
 
 export interface FrameLocomotionPipelineInput {
@@ -107,8 +102,8 @@ export interface FrameLocomotionPipelineInput {
   turnArmed: boolean;
 }
 
-export type FrameLocomotionPipelineHandlers = Omit<FrameXrControlPlanHandlers, "setDebugLocomotionMode">
-  & Omit<FrameLocomotionMovementPlanHandlers, "setDebugLocomotionMode">
+export type FrameLocomotionPipelineHandlers = FrameXrControlPlanHandlers
+  & FrameLocomotionMovementPlanHandlers
   & {
     getYaw(): number;
     getPose(): LocalPose;
@@ -119,7 +114,6 @@ export type FrameLocomotionPipelineHandlers = Omit<FrameXrControlPlanHandlers, "
     getCameraForward(): FlatVector;
     getDesktopFastMove(): boolean;
     getBotMove(): FlatVector | null;
-    setDebugLocomotionMode(mode: "vr" | "vr-seated" | "desktop" | "mobile-touch"): void;
   };
 
 export interface FrameLocomotionPipelineResult {
@@ -137,7 +131,9 @@ function hasMove(move: FlatVector): boolean {
   return move.x !== 0 || move.z !== 0;
 }
 
-function planStandingDebugLocomotionMode(input: FrameLocomotionMovementInput): "desktop" | "mobile-touch" | null {
+function planStandingDebugLocomotionMode(
+  input: FrameLocomotionMovementInput
+): Extract<RuntimeDebugLocomotionMode, "desktop" | "mobile-touch"> | null {
   if (input.frameContext.source === "xr") {
     return null;
   }
@@ -209,7 +205,7 @@ export function executeFrameXrControlPlan(
     if (plan.snapTurnCommands.length > 0) {
       handlers.executeCommands(plan.snapTurnCommands);
     }
-    handlers.setDebugLocomotionMode(plan.debugLocomotionMode);
+    handlers.executeCommands([{ type: "set_debug_locomotion_mode", mode: plan.debugLocomotionMode }]);
 
     if (plan.confirmInteraction) {
       if (plan.confirmInteractionCommands.length > 0) {
@@ -313,9 +309,11 @@ export function executeFrameLocomotionMovementPlan(
     if (plan.commands.length > 0) {
       handlers.executeCommands(plan.commands);
     }
-    handlers.setLastAppliedSeatLockId(plan.seatId);
-    handlers.setAvatarMovement(plan.avatarMove, plan.avatarTurnRate);
-    handlers.updateLocalPositionDebug();
+    handlers.executeCommands([
+      { type: "set_last_applied_seat_lock_id", seatId: plan.seatId },
+      { type: "set_avatar_movement", move: plan.avatarMove, turnRate: plan.avatarTurnRate },
+      { type: "update_local_position_debug" }
+    ]);
     return;
   }
 
@@ -326,15 +324,17 @@ export function executeFrameLocomotionMovementPlan(
   }
 
   if (plan.debugLocomotionMode) {
-    handlers.setDebugLocomotionMode(plan.debugLocomotionMode);
+    handlers.executeCommands([{ type: "set_debug_locomotion_mode", mode: plan.debugLocomotionMode }]);
   }
 
   if (movementCommands.length > 0) {
     handlers.executeCommands(movementCommands);
   }
 
-  handlers.setAvatarMovement(plan.avatarMove, plan.avatarTurnRate);
-  handlers.updateLocalPositionDebug();
+  handlers.executeCommands([
+    { type: "set_avatar_movement", move: plan.avatarMove, turnRate: plan.avatarTurnRate },
+    { type: "update_local_position_debug" }
+  ]);
 }
 
 export function executeFrameLocomotionPipeline(

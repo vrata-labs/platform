@@ -199,7 +199,6 @@ test("frame XR controls executor resets non-XR frame debug state", () => {
     setXrTurnArmed: (armed) => calls.push(`armed:${armed}`),
     setXrSelectPressedLastFrame: (pressed) => calls.push(`pressed:${pressed}`),
     clearXrAvatarDebug: () => calls.push("clear-avatar-debug"),
-    setDebugLocomotionMode: (mode) => calls.push(`mode:${mode}`),
     executeCommands: (commands) => calls.push(`commands:${commands.map((command) => command.type).join(",")}`),
     confirmInteractionTarget: () => calls.push("confirm")
   });

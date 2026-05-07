@@ -150,6 +150,19 @@ function executeCommands(state: FlowState, commands: RuntimeCommand[]): void {
     applySnapTurnYaw: (yaw) => {
       state.pose = { ...state.pose, yaw };
     },
+    setDebugLocomotionMode: (mode) => {
+      state.debugLocomotionMode = mode;
+    },
+    setLastAppliedSeatLockId: (seatId) => {
+      state.lastAppliedSeatLockId = seatId;
+    },
+    setAvatarMovement: (move, turnRate) => {
+      state.lastAvatarMove = move;
+      state.lastAvatarTurnRate = turnRate;
+    },
+    updateLocalPositionDebug: () => {
+      state.localPositionDebugUpdates += 1;
+    },
     teleportToFloor: (point) => {
       state.pose = { ...state.pose, position: { x: point.x, y: point.y, z: point.z } };
     },
@@ -201,9 +214,6 @@ function runFrame(state: FlowState, input: {
     },
     setXrSelectPressedLastFrame: () => {},
     clearXrAvatarDebug: () => {},
-    setDebugLocomotionMode: (mode) => {
-      state.debugLocomotionMode = mode;
-    },
     confirmInteractionTarget: () => {
       if (!input.target) {
         return;
@@ -220,17 +230,7 @@ function runFrame(state: FlowState, input: {
       state.lastInteractionConfirmAtMs = interactionPlan.lastInteractionConfirmAtMs;
       executeCommands(state, interactionPlan.commands);
     },
-    executeCommands: (commands) => executeCommands(state, commands),
-    setLastAppliedSeatLockId: (seatId) => {
-      state.lastAppliedSeatLockId = seatId;
-    },
-    setAvatarMovement: (move, turnRate) => {
-      state.lastAvatarMove = move;
-      state.lastAvatarTurnRate = turnRate;
-    },
-    updateLocalPositionDebug: () => {
-      state.localPositionDebugUpdates += 1;
-    }
+    executeCommands: (commands) => executeCommands(state, commands)
   });
 }
 
@@ -249,7 +249,10 @@ test("frame locomotion flow moves a standing desktop user from sampled frame int
   assert.deepEqual(state.lastAvatarMove, { x: 0, z: -1 });
   assert.equal(state.localPositionDebugUpdates, 1);
   assert.deepEqual(state.commands, [
-    { type: "move_flat_to", position: { x: 3.2, z: 0 }, reason: "desktop_move" }
+    { type: "set_debug_locomotion_mode", mode: "desktop" },
+    { type: "move_flat_to", position: { x: 3.2, z: 0 }, reason: "desktop_move" },
+    { type: "set_avatar_movement", move: { x: 0, z: -1 }, turnRate: 0 },
+    { type: "update_local_position_debug" }
   ]);
 });
 
@@ -269,13 +272,19 @@ test("frame locomotion flow keeps a seated user locked to the seat anchor", () =
   assert.equal(state.debugLocomotionMode, "vr-seated");
   assert.deepEqual(state.lastAvatarMove, { x: 0, z: 0 });
   assert.equal(state.localPositionDebugUpdates, 1);
-  assert.deepEqual(state.commands, [{
-    type: "lock_to_seat",
-    seatId: "seat-a",
-    position: { x: 5, y: 0.45, z: -2 },
-    reason: "seat_enter",
-    yaw: Math.PI / 2
-  }]);
+  assert.deepEqual(state.commands, [
+    { type: "set_debug_locomotion_mode", mode: "vr-seated" },
+    {
+      type: "lock_to_seat",
+      seatId: "seat-a",
+      position: { x: 5, y: 0.45, z: -2 },
+      reason: "seat_enter",
+      yaw: Math.PI / 2
+    },
+    { type: "set_last_applied_seat_lock_id", seatId: "seat-a" },
+    { type: "set_avatar_movement", move: { x: 0, z: 0 }, turnRate: 0 },
+    { type: "update_local_position_debug" }
+  ]);
 });
 
 test("frame locomotion flow applies XR snap-turn before movement planning", () => {
@@ -295,7 +304,10 @@ test("frame locomotion flow applies XR snap-turn before movement planning", () =
   assert.deepEqual(state.telemetry, ["snap_turn"]);
   assert.deepEqual(state.commands, [
     { type: "apply_snap_turn_yaw", yaw: Math.PI / 6 },
-    { type: "telemetry", kind: "snap_turn" }
+    { type: "telemetry", kind: "snap_turn" },
+    { type: "set_debug_locomotion_mode", mode: "vr" },
+    { type: "set_avatar_movement", move: { x: 0, z: 0 }, turnRate: 0 },
+    { type: "update_local_position_debug" }
   ]);
 });
 
@@ -315,7 +327,11 @@ test("frame locomotion flow suppresses snap-turn while the XR ray intent owns di
   assert.equal(state.pose.yaw, 0);
   assert.equal(state.xrTurnArmed, false);
   assert.deepEqual(state.telemetry, []);
-  assert.deepEqual(state.commands, []);
+  assert.deepEqual(state.commands, [
+    { type: "set_debug_locomotion_mode", mode: "vr" },
+    { type: "set_avatar_movement", move: { x: 0, z: 0 }, turnRate: 0 },
+    { type: "update_local_position_debug" }
+  ]);
 });
 
 test("frame locomotion flow releases a seated user before floor teleport", () => {
@@ -327,12 +343,15 @@ test("frame locomotion flow releases a seated user before floor teleport", () =>
   });
 
   assert.deepEqual(state.commands.map((command) => command.type), [
+    "set_debug_locomotion_mode",
     "telemetry",
     "telemetry",
     "send_seat_release",
     "release_local_seat",
     "teleport_to_floor",
-    "status"
+    "status",
+    "set_avatar_movement",
+    "update_local_position_debug"
   ]);
   assert.deepEqual(state.sentSeatReleases, ["seat-a"]);
   assert.deepEqual(state.telemetry, ["trigger_press", "seat_release"]);
@@ -349,11 +368,14 @@ test("frame locomotion flow claims a targeted seat without local teleport", () =
   });
 
   assert.deepEqual(state.commands.map((command) => command.type), [
+    "set_debug_locomotion_mode",
     "telemetry",
     "request_seat_claim",
     "telemetry",
     "send_seat_claim",
-    "status"
+    "status",
+    "set_avatar_movement",
+    "update_local_position_debug"
   ]);
   assert.equal(state.pendingSeatId, "seat-a");
   assert.deepEqual(state.sentSeatClaims, ["seat-a"]);
