@@ -362,10 +362,10 @@ export function executeFrameLocomotionMovementPlan(
   ]);
 }
 
-export function executeFrameLocomotionPipeline(
+function executeFrameXrControlStage(
   input: FrameLocomotionPipelineInput,
   handlers: FrameLocomotionPipelineHandlers
-): FrameLocomotionPipelineResult {
+): FrameXrControlPlan {
   const xrControlPlan = planFrameXrControls({
     frameContext: input.frameContext,
     yaw: handlers.getYaw(),
@@ -376,7 +376,13 @@ export function executeFrameLocomotionPipeline(
   });
 
   executeFrameXrControlPlan(xrControlPlan, handlers);
+  return xrControlPlan;
+}
 
+function executeFrameMovementStage(
+  input: FrameLocomotionPipelineInput,
+  handlers: FrameLocomotionPipelineHandlers
+): FrameLocomotionMovementPlan {
   const currentSeatId = handlers.getCurrentSeatId();
   const movementPlan = planFrameLocomotionMovement({
     pose: handlers.getPose(),
@@ -393,6 +399,15 @@ export function executeFrameLocomotionPipeline(
   });
 
   executeFrameLocomotionMovementPlan(movementPlan, handlers);
+  return movementPlan;
+}
+
+export function executeFrameLocomotionPipeline(
+  input: FrameLocomotionPipelineInput,
+  handlers: FrameLocomotionPipelineHandlers
+): FrameLocomotionPipelineResult {
+  const xrControlPlan = executeFrameXrControlStage(input, handlers);
+  const movementPlan = executeFrameMovementStage(input, handlers);
 
   return { xrControlPlan, movementPlan };
 }
