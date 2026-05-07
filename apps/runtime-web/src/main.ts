@@ -33,10 +33,9 @@ import type { SceneBundleSeatAnchor } from "./scene-bundle.js";
 import { createLocalPoseController, type Vector3Like } from "./local/local-pose.js";
 import { resolveDesktopTouchInputIntents, resolveTouchMoveVector, resolveXrConfirmInteractionIntent, resolveXrInputIntents } from "./input/input-intents.js";
 import type { RuntimeFrameContext } from "./input/runtime-frame-context.js";
-import { executeFrameLocomotionPipeline, type FrameLocomotionCommand } from "./locomotion/frame-locomotion.js";
+import { executeFrameLocomotionCommands, executeFrameLocomotionPipeline, type FrameLocomotionCommand } from "./locomotion/frame-locomotion.js";
 import { createInteractionCommandPlanner } from "./locomotion/interaction-command-planner.js";
 import { createRuntimeCommandExecutor } from "./locomotion/runtime-command-bridge.js";
-import type { RuntimeCommand } from "./locomotion/runtime-commands.js";
 import {
   applyAcceptedSeatClaimToOccupancy,
   applyForcedSeatOccupancy,
@@ -698,23 +697,12 @@ function confirmInteractionTarget(frameContext: RuntimeFrameContext): void {
 }
 
 function executeFrameRuntimeCommandList(frameContext: RuntimeFrameContext, commands: FrameLocomotionCommand[]): void {
-  const runtimeCommands: RuntimeCommand[] = [];
-  const flushRuntimeCommands = () => {
-    if (runtimeCommands.length > 0) {
-      executeRuntimeCommandList(runtimeCommands.splice(0));
-    }
-  };
-
-  for (const command of commands) {
-    if (command.type === "confirm_interaction_target") {
-      flushRuntimeCommands();
+  executeFrameLocomotionCommands(commands, {
+    executeRuntimeCommands: executeRuntimeCommandList,
+    confirmInteractionTarget() {
       confirmInteractionTarget(frameContext);
-      continue;
     }
-    runtimeCommands.push(command);
-  }
-
-  flushRuntimeCommands();
+  });
 }
 
 function resolveNonFrameInteractionContext(): RuntimeFrameContext | null {

@@ -4,7 +4,12 @@ import assert from "node:assert/strict";
 import type { InputIntents } from "../input/input-intents.js";
 import type { RuntimeFrameContext } from "../input/runtime-frame-context.js";
 import type { LocalPose } from "../local/local-pose.js";
-import { executeFrameXrControlPlan, planFrameLocomotionMovement, planFrameXrControls } from "./frame-locomotion.js";
+import {
+  executeFrameLocomotionCommands,
+  executeFrameXrControlPlan,
+  planFrameLocomotionMovement,
+  planFrameXrControls
+} from "./frame-locomotion.js";
 
 const idleIntents: InputIntents = {
   move: { x: 0, z: 0 },
@@ -84,6 +89,27 @@ test("frame XR controls plan snap turn from sampled frame context", () => {
   assert.equal(plan.confirmInteraction, false);
   assert.deepEqual(plan.confirmInteractionCommands, []);
   assert.equal(plan.triggerPressedLastFrame, false);
+});
+
+test("frame locomotion command executor flushes runtime commands around frame confirm", () => {
+  const calls: string[] = [];
+
+  executeFrameLocomotionCommands([
+    { type: "telemetry", kind: "trigger_press" },
+    { type: "confirm_interaction_target" },
+    { type: "set_xr_select_pressed_last_frame", pressed: true }
+  ], {
+    executeRuntimeCommands: (commands) => {
+      calls.push(`runtime:${commands.map((command) => command.type).join(",")}`);
+    },
+    confirmInteractionTarget: () => calls.push("confirm")
+  });
+
+  assert.deepEqual(calls, [
+    "runtime:telemetry",
+    "confirm",
+    "runtime:set_xr_select_pressed_last_frame"
+  ]);
 });
 
 test("frame XR controls plan seated debug mode from the pre-frame seat state", () => {

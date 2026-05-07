@@ -6,7 +6,7 @@ import type { RuntimeFrameContext } from "../input/runtime-frame-context.js";
 import type { LocalPose, Vector3Like } from "../local/local-pose.js";
 import type { FlatVector, XrAxesSample } from "../movement.js";
 import { resolveLocomotionMode } from "./local-locomotion.js";
-import { executeFrameLocomotionPipeline, type FrameLocomotionCommand } from "./frame-locomotion.js";
+import { executeFrameLocomotionCommands, executeFrameLocomotionPipeline, type FrameLocomotionCommand } from "./frame-locomotion.js";
 import {
   executeRuntimeCommands,
   planInteractionCommands,
@@ -219,18 +219,11 @@ function runFrame(state: FlowState, input: {
   const deltaSeconds = input.deltaSeconds ?? input.frameContext.deltaSeconds;
   const floorY = input.floorY ?? 0;
   const executeFrameCommands = (commands: FrameLocomotionCommand[]) => {
-    const runtimeCommands: RuntimeCommand[] = [];
-    const flushRuntimeCommands = () => {
-      if (runtimeCommands.length > 0) {
-        executeCommands(state, runtimeCommands.splice(0));
-      }
-    };
-
-    for (const command of commands) {
-      if (command.type === "confirm_interaction_target") {
-        flushRuntimeCommands();
+    executeFrameLocomotionCommands(commands, {
+      executeRuntimeCommands: (runtimeCommands) => executeCommands(state, runtimeCommands),
+      confirmInteractionTarget() {
         if (!input.target) {
-          continue;
+          return;
         }
         const interactionPlan = planInteractionCommands({
           target: input.target,
@@ -243,12 +236,8 @@ function runFrame(state: FlowState, input: {
         });
         state.lastInteractionConfirmAtMs = interactionPlan.lastInteractionConfirmAtMs;
         executeCommands(state, interactionPlan.commands);
-        continue;
       }
-      runtimeCommands.push(command);
-    }
-
-    flushRuntimeCommands();
+    });
   };
 
   executeFrameLocomotionPipeline({
