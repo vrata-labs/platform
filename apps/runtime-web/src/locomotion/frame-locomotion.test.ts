@@ -8,6 +8,7 @@ import {
   executeFrameLocomotionCommands,
   executeFrameXrControlPlan,
   planFrameLocomotionMovement,
+  planFrameXrControlCommands,
   planFrameXrControls
 } from "./frame-locomotion.js";
 
@@ -176,6 +177,36 @@ test("frame XR controls expose confirm interaction trigger edge", () => {
     { type: "confirm_interaction_target" }
   ]);
   assert.equal(plan.triggerPressedLastFrame, true);
+});
+
+test("frame XR controls command planner preserves snap-turn and confirm order", () => {
+  const plan = planFrameXrControls({
+    frameContext: xrFrameContext({
+      intents: { confirmInteraction: true, snapTurn: { axis: -0.8 } },
+      turnX: -0.8,
+      triggerPressed: true,
+      rayVisibleLatched: true
+    }),
+    yaw: 0,
+    currentSeatId: null,
+    turnCooldownSeconds: 0,
+    turnArmed: true,
+    deltaSeconds: 0.016
+  });
+
+  assert.deepEqual(planFrameXrControlCommands(plan).map((command) => command.type), [
+    "set_xr_input_profile",
+    "set_debug_xr_axes",
+    "set_xr_ray_visible_latched",
+    "set_xr_turn_cooldown",
+    "set_xr_turn_armed",
+    "apply_snap_turn_yaw",
+    "telemetry",
+    "set_debug_locomotion_mode",
+    "telemetry",
+    "confirm_interaction_target",
+    "set_xr_select_pressed_last_frame"
+  ]);
 });
 
 test("frame XR controls reset transient XR flags outside XR frames", () => {

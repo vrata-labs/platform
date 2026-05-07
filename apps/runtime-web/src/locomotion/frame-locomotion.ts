@@ -220,36 +220,35 @@ export function executeFrameXrControlPlan(
   plan: FrameXrControlPlan,
   handlers: FrameXrControlPlanHandlers
 ): void {
+  const commands = planFrameXrControlCommands(plan);
+  if (commands.length > 0) {
+    handlers.executeCommands(commands);
+  }
+}
+
+export function planFrameXrControlCommands(plan: FrameXrControlPlan): FrameLocomotionCommand[] {
   if (plan.kind === "xr") {
-    handlers.executeCommands([
+    return [
       { type: "set_xr_input_profile", profile: plan.inputProfile },
       { type: "set_debug_xr_axes", axes: plan.sanitizedAxes },
       { type: "set_xr_ray_visible_latched", visible: plan.rayVisibleLatched },
       { type: "set_xr_turn_cooldown", seconds: plan.turnCooldownSeconds },
-      { type: "set_xr_turn_armed", armed: plan.turnArmed }
-    ]);
-    if (plan.snapTurnCommands.length > 0) {
-      handlers.executeCommands(plan.snapTurnCommands);
-    }
-    handlers.executeCommands([{ type: "set_debug_locomotion_mode", mode: plan.debugLocomotionMode }]);
-
-    if (plan.confirmInteraction) {
-      if (plan.confirmInteractionCommands.length > 0) {
-        handlers.executeCommands(plan.confirmInteractionCommands);
-      }
-    }
-    handlers.executeCommands([{ type: "set_xr_select_pressed_last_frame", pressed: plan.triggerPressedLastFrame }]);
-    return;
+      { type: "set_xr_turn_armed", armed: plan.turnArmed },
+      ...plan.snapTurnCommands,
+      { type: "set_debug_locomotion_mode", mode: plan.debugLocomotionMode },
+      ...plan.confirmInteractionCommands,
+      { type: "set_xr_select_pressed_last_frame", pressed: plan.triggerPressedLastFrame }
+    ];
   }
 
-  handlers.executeCommands([
+  return [
     { type: "set_xr_select_pressed_last_frame", pressed: plan.triggerPressedLastFrame },
     { type: "set_xr_ray_visible_latched", visible: plan.rayVisibleLatched },
     { type: "set_xr_turn_armed", armed: plan.turnArmed },
     { type: "set_xr_input_profile", profile: plan.inputProfile },
     ...(plan.clearAvatarDebug ? [{ type: "clear_xr_avatar_debug" } as const] : []),
     { type: "set_debug_xr_axes", axes: plan.sanitizedAxes }
-  ]);
+  ];
 }
 
 export function planFrameLocomotionMovement(input: FrameLocomotionMovementInput): FrameLocomotionMovementPlan {
