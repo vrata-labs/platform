@@ -22,6 +22,10 @@ test("runtime command bridge wires seating, room-state, pose, status, and teleme
     isRoomStateConnected: () => true,
     syncSeatDebugState: () => calls.push("sync-seat-debug"),
     releaseLocalSeat: () => calls.push("release-local"),
+    lockToSeat: (position, reason, options) => {
+      calls.push(`lock:${position.x},${position.y},${position.z}:${reason}:${options?.yaw ?? "none"}`);
+    },
+    moveFlatTo: (position, reason) => calls.push(`move:${position.x},${position.z}:${reason}`),
     teleportToFloor: (point) => calls.push(`teleport:${point.x},${point.y},${point.z}`),
     setStatus: (message) => calls.push(`status:${message}`),
     markTelemetry: (kind) => calls.push(`telemetry:${kind}`),
@@ -35,6 +39,8 @@ test("runtime command bridge wires seating, room-state, pose, status, and teleme
     { type: "telemetry", kind: "seat_release" },
     { type: "send_seat_release", seatId: "seat-a" },
     { type: "release_local_seat" },
+    { type: "lock_to_seat", seatId: "seat-a", position: { x: 2, y: 0.4, z: 3 }, reason: "seat_enter", yaw: 1.2 },
+    { type: "move_flat_to", position: { x: 4, z: 5 }, reason: "desktop_move" },
     { type: "teleport_to_floor", point: { x: 1, y: 0, z: 2 } },
     { type: "status", message: "Teleported" }
   ]);
@@ -46,6 +52,8 @@ test("runtime command bridge wires seating, room-state, pose, status, and teleme
     "telemetry:seat_release",
     "send-release:seat-a",
     "release-local",
+    "lock:2,0.4,3:seat_enter:1.2",
+    "move:4,5:desktop_move",
     "teleport:1,0,2",
     "status:Teleported"
   ]);
@@ -67,6 +75,8 @@ test("runtime command bridge does not send seat commands without a connected roo
     isRoomStateConnected: () => connected,
     syncSeatDebugState: () => undefined,
     releaseLocalSeat: () => undefined,
+    lockToSeat: () => undefined,
+    moveFlatTo: () => undefined,
     teleportToFloor: () => undefined,
     setStatus: () => undefined,
     markTelemetry: () => undefined,

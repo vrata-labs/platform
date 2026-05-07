@@ -602,6 +602,12 @@ const executeRuntimeCommandList = createRuntimeCommandExecutor({
   isRoomStateConnected: () => roomStateConnected,
   syncSeatDebugState,
   releaseLocalSeat: releaseCurrentSeatLocally,
+  lockToSeat(position, reason, options) {
+    localPoseController.lockToSeat(position, reason, options);
+  },
+  moveFlatTo(position, reason) {
+    localPoseController.moveFlatTo(position, reason);
+  },
   teleportToFloor(point) {
     setPlayerPositionForFloorTeleport(point);
     updateLocalPositionDebug();
@@ -2208,12 +2214,6 @@ function updateMovement(delta: number, frameContext: RuntimeFrameContext): void 
       confirmInteractionTarget(frameContext);
     },
     executeCommands: executeRuntimeCommandList,
-    lockToSeat: (position, reason, options) => {
-      localPoseController.lockToSeat(position, reason, options);
-    },
-    moveFlatTo: (position, reason) => {
-      localPoseController.moveFlatTo(position, reason);
-    },
     setLastAppliedSeatLockId: (seatId) => {
       lastAppliedSeatLockId = seatId;
     },

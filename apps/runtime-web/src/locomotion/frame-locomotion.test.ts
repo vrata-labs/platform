@@ -228,7 +228,9 @@ test("frame locomotion plans standing desktop movement from frame intents", () =
   if (plan.kind !== "standing") {
     throw new Error("expected standing plan");
   }
-  assert.deepEqual(plan.commands, []);
+  assert.deepEqual(plan.commands, [
+    { type: "move_flat_to", position: { x: 3.2, z: 0 }, reason: "desktop_move" }
+  ]);
   assert.deepEqual(plan.avatarMove, { x: 0, z: -1 });
   assert.equal(plan.avatarTurnRate, 0);
   assert.equal(plan.movementReason, "desktop_move");
@@ -331,7 +333,10 @@ test("frame locomotion releases missing seat anchor and falls through to standin
   if (plan.kind !== "standing") {
     throw new Error("expected standing plan");
   }
-  assert.deepEqual(plan.commands, [{ type: "release_local_seat" }]);
+  assert.deepEqual(plan.commands, [
+    { type: "release_local_seat" },
+    { type: "move_flat_to", position: { x: 0, z: -2.4 }, reason: "xr_move" }
+  ]);
   assert.equal(plan.movementReason, "xr_move");
   assert.equal(plan.debugLocomotionMode, null);
   assert.equal(plan.avatarTurnRate, 0);

@@ -1,11 +1,28 @@
-import type { Vector3Like } from "../local/local-pose.js";
+import type { LocalPoseMutationReason, Vector3Like } from "../local/local-pose.js";
 import type { LocomotionMode } from "./local-locomotion.js";
+
+export interface FlatPositionLike {
+  x: number;
+  z: number;
+}
 
 export type RuntimeCommand =
   | { type: "request_seat_claim"; seatId: string }
   | { type: "send_seat_claim"; seatId: string }
   | { type: "send_seat_release"; seatId: string }
   | { type: "release_local_seat" }
+  | {
+    type: "lock_to_seat";
+    seatId: string;
+    position: Vector3Like;
+    reason: Extract<LocalPoseMutationReason, "seat_enter" | "seat_lock">;
+    yaw?: number;
+  }
+  | {
+    type: "move_flat_to";
+    position: FlatPositionLike;
+    reason: Extract<LocalPoseMutationReason, "desktop_move" | "xr_move">;
+  }
   | { type: "teleport_to_floor"; point: Vector3Like }
   | { type: "status"; message: string }
   | { type: "telemetry"; kind: string };
@@ -35,6 +52,12 @@ export interface RuntimeCommandHandlers {
   sendSeatClaim(seatId: string): void;
   sendSeatRelease(seatId: string): void;
   releaseLocalSeat(): void;
+  lockToSeat(
+    position: Vector3Like,
+    reason: Extract<LocalPoseMutationReason, "seat_enter" | "seat_lock">,
+    options?: { yaw?: number }
+  ): void;
+  moveFlatTo(position: FlatPositionLike, reason: Extract<LocalPoseMutationReason, "desktop_move" | "xr_move">): void;
   teleportToFloor(point: Vector3Like): void;
   setStatus(message: string): void;
   markTelemetry(kind: string): void;
@@ -102,6 +125,16 @@ export function executeRuntimeCommands(commands: RuntimeCommand[], handlers: Run
         break;
       case "release_local_seat":
         handlers.releaseLocalSeat();
+        break;
+      case "lock_to_seat":
+        handlers.lockToSeat(
+          command.position,
+          command.reason,
+          command.yaw === undefined ? undefined : { yaw: command.yaw }
+        );
+        break;
+      case "move_flat_to":
+        handlers.moveFlatTo(command.position, command.reason);
         break;
       case "teleport_to_floor":
         handlers.teleportToFloor(command.point);

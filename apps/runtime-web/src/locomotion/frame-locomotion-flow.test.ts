@@ -130,6 +130,23 @@ function executeCommands(state: FlowState, commands: RuntimeCommand[]): void {
       state.currentSeatId = null;
       state.lastAppliedSeatLockId = null;
     },
+    lockToSeat: (position, _reason, options) => {
+      state.pose = {
+        ...state.pose,
+        position,
+        yaw: options?.yaw ?? state.pose.yaw
+      };
+    },
+    moveFlatTo: (position) => {
+      state.pose = {
+        ...state.pose,
+        position: {
+          ...state.pose.position,
+          x: position.x,
+          z: position.z
+        }
+      };
+    },
     teleportToFloor: (point) => {
       state.pose = { ...state.pose, position: { x: point.x, y: point.y, z: point.z } };
     },
@@ -207,23 +224,6 @@ function runFrame(state: FlowState, input: {
       executeCommands(state, interactionPlan.commands);
     },
     executeCommands: (commands) => executeCommands(state, commands),
-    lockToSeat: (position, _reason, options) => {
-      state.pose = {
-        ...state.pose,
-        position,
-        yaw: options?.yaw ?? state.pose.yaw
-      };
-    },
-    moveFlatTo: (position) => {
-      state.pose = {
-        ...state.pose,
-        position: {
-          ...state.pose.position,
-          x: position.x,
-          z: position.z
-        }
-      };
-    },
     setLastAppliedSeatLockId: (seatId) => {
       state.lastAppliedSeatLockId = seatId;
     },
@@ -251,7 +251,9 @@ test("frame locomotion flow moves a standing desktop user from sampled frame int
   assert.equal(state.debugLocomotionMode, "desktop");
   assert.deepEqual(state.lastAvatarMove, { x: 0, z: -1 });
   assert.equal(state.localPositionDebugUpdates, 1);
-  assert.deepEqual(state.commands, []);
+  assert.deepEqual(state.commands, [
+    { type: "move_flat_to", position: { x: 3.2, z: 0 }, reason: "desktop_move" }
+  ]);
 });
 
 test("frame locomotion flow keeps a seated user locked to the seat anchor", () => {
@@ -270,6 +272,13 @@ test("frame locomotion flow keeps a seated user locked to the seat anchor", () =
   assert.equal(state.debugLocomotionMode, "vr-seated");
   assert.deepEqual(state.lastAvatarMove, { x: 0, z: 0 });
   assert.equal(state.localPositionDebugUpdates, 1);
+  assert.deepEqual(state.commands, [{
+    type: "lock_to_seat",
+    seatId: "seat-a",
+    position: { x: 5, y: 0.45, z: -2 },
+    reason: "seat_enter",
+    yaw: Math.PI / 2
+  }]);
 });
 
 test("frame locomotion flow applies XR snap-turn before movement planning", () => {

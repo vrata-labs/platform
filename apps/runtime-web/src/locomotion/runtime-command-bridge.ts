@@ -1,7 +1,7 @@
-import type { Vector3Like } from "../local/local-pose.js";
+import type { LocalPoseMutationReason, Vector3Like } from "../local/local-pose.js";
 import { sendSeatClaim, sendSeatRelease, type RoomStateClient } from "../room-state-client.js";
 import type { SeatingController } from "../seating/seating-controller.js";
-import { executeRuntimeCommands, type RuntimeCommand } from "./runtime-commands.js";
+import { executeRuntimeCommands, type FlatPositionLike, type RuntimeCommand } from "./runtime-commands.js";
 
 export interface RuntimeCommandBridgeInput {
   seatingController: Pick<SeatingController, "requestSeatClaim">;
@@ -9,6 +9,12 @@ export interface RuntimeCommandBridgeInput {
   isRoomStateConnected(): boolean;
   syncSeatDebugState(): void;
   releaseLocalSeat(): void;
+  lockToSeat(
+    position: Vector3Like,
+    reason: Extract<LocalPoseMutationReason, "seat_enter" | "seat_lock">,
+    options?: { yaw?: number }
+  ): void;
+  moveFlatTo(position: FlatPositionLike, reason: Extract<LocalPoseMutationReason, "desktop_move" | "xr_move">): void;
   teleportToFloor(point: Vector3Like): void;
   setStatus(message: string): void;
   markTelemetry(kind: string): void;
@@ -47,6 +53,12 @@ export function createRuntimeCommandExecutor(input: RuntimeCommandBridgeInput): 
       },
       releaseLocalSeat() {
         input.releaseLocalSeat();
+      },
+      lockToSeat(position, reason, options) {
+        input.lockToSeat(position, reason, options);
+      },
+      moveFlatTo(position, reason) {
+        input.moveFlatTo(position, reason);
       },
       teleportToFloor(point) {
         input.teleportToFloor(point);
