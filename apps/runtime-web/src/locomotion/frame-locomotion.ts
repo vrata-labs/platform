@@ -4,6 +4,8 @@ import { applySnapTurn, projectMovementToWorld, type FlatVector, type XrAxesSamp
 import { resolveLocomotionMode, stepLocalLocomotion } from "./local-locomotion.js";
 import type { RuntimeCommand, RuntimeDebugLocomotionMode } from "./runtime-commands.js";
 
+export type FrameLocomotionCommand = RuntimeCommand | { type: "confirm_interaction_target" };
+
 export type FrameXrControlPlan =
   | {
     kind: "xr";
@@ -17,7 +19,7 @@ export type FrameXrControlPlan =
     nextYaw: number | null;
     snapTurnCommands: RuntimeCommand[];
     confirmInteraction: boolean;
-    confirmInteractionCommands: RuntimeCommand[];
+    confirmInteractionCommands: FrameLocomotionCommand[];
     triggerPressedLastFrame: boolean;
   }
   | {
@@ -30,7 +32,7 @@ export type FrameXrControlPlan =
     turnArmed: true;
     confirmInteraction: false;
     snapTurnCommands: RuntimeCommand[];
-    confirmInteractionCommands: RuntimeCommand[];
+    confirmInteractionCommands: FrameLocomotionCommand[];
     triggerPressedLastFrame: false;
   };
 
@@ -44,8 +46,7 @@ export interface FrameXrControlInput {
 }
 
 export interface FrameXrControlPlanHandlers {
-  executeCommands(commands: RuntimeCommand[]): void;
-  confirmInteractionTarget(): void;
+  executeCommands(commands: FrameLocomotionCommand[]): void;
 }
 
 export type FrameLocomotionMovementPlan =
@@ -84,7 +85,7 @@ export interface FrameLocomotionMovementInput {
 }
 
 export interface FrameLocomotionMovementPlanHandlers {
-  executeCommands(commands: RuntimeCommand[]): void;
+  executeCommands(commands: FrameLocomotionCommand[]): void;
 }
 
 export interface FrameLocomotionPipelineInput {
@@ -180,7 +181,9 @@ export function planFrameXrControls(input: FrameXrControlInput): FrameXrControlP
     nextYaw,
     snapTurnCommands,
     confirmInteraction,
-    confirmInteractionCommands: confirmInteraction ? [{ type: "telemetry", kind: "trigger_press" }] : [],
+    confirmInteractionCommands: confirmInteraction
+      ? [{ type: "telemetry", kind: "trigger_press" }, { type: "confirm_interaction_target" }]
+      : [],
     triggerPressedLastFrame: input.frameContext.xr.triggerPressed
   };
 }
@@ -206,7 +209,6 @@ export function executeFrameXrControlPlan(
       if (plan.confirmInteractionCommands.length > 0) {
         handlers.executeCommands(plan.confirmInteractionCommands);
       }
-      handlers.confirmInteractionTarget();
     }
     handlers.executeCommands([{ type: "set_xr_select_pressed_last_frame", pressed: plan.triggerPressedLastFrame }]);
     return;

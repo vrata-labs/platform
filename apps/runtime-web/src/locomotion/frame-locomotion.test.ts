@@ -145,7 +145,10 @@ test("frame XR controls expose confirm interaction trigger edge", () => {
     throw new Error("expected xr control plan");
   }
   assert.equal(plan.confirmInteraction, true);
-  assert.deepEqual(plan.confirmInteractionCommands, [{ type: "telemetry", kind: "trigger_press" }]);
+  assert.deepEqual(plan.confirmInteractionCommands, [
+    { type: "telemetry", kind: "trigger_press" },
+    { type: "confirm_interaction_target" }
+  ]);
   assert.equal(plan.triggerPressedLastFrame, true);
 });
 
@@ -192,8 +195,7 @@ test("frame XR controls executor resets non-XR frame debug state", () => {
   const calls: string[] = [];
 
   executeFrameXrControlPlan(plan, {
-    executeCommands: (commands) => calls.push(`commands:${commands.map((command) => command.type).join(",")}`),
-    confirmInteractionTarget: () => calls.push("confirm")
+    executeCommands: (commands) => calls.push(`commands:${commands.map((command) => command.type).join(",")}`)
   });
 
   assert.deepEqual(calls, [

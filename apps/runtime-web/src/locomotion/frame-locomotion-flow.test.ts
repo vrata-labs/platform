@@ -6,7 +6,7 @@ import type { RuntimeFrameContext } from "../input/runtime-frame-context.js";
 import type { LocalPose, Vector3Like } from "../local/local-pose.js";
 import type { FlatVector, XrAxesSample } from "../movement.js";
 import { resolveLocomotionMode } from "./local-locomotion.js";
-import { executeFrameLocomotionPipeline } from "./frame-locomotion.js";
+import { executeFrameLocomotionPipeline, type FrameLocomotionCommand } from "./frame-locomotion.js";
 import {
   executeRuntimeCommands,
   planInteractionCommands,
@@ -218,6 +218,39 @@ function runFrame(state: FlowState, input: {
 }): void {
   const deltaSeconds = input.deltaSeconds ?? input.frameContext.deltaSeconds;
   const floorY = input.floorY ?? 0;
+  const executeFrameCommands = (commands: FrameLocomotionCommand[]) => {
+    const runtimeCommands: RuntimeCommand[] = [];
+    const flushRuntimeCommands = () => {
+      if (runtimeCommands.length > 0) {
+        executeCommands(state, runtimeCommands.splice(0));
+      }
+    };
+
+    for (const command of commands) {
+      if (command.type === "confirm_interaction_target") {
+        flushRuntimeCommands();
+        if (!input.target) {
+          continue;
+        }
+        const interactionPlan = planInteractionCommands({
+          target: input.target,
+          mode: resolveLocomotionMode({ seatId: state.currentSeatId, floorY }),
+          pendingSeatId: state.pendingSeatId,
+          seatingAvailable: true,
+          nowMs: input.nowMs ?? input.frameContext.nowMs,
+          lastInteractionConfirmAtMs: state.lastInteractionConfirmAtMs,
+          debounceMs: 0
+        });
+        state.lastInteractionConfirmAtMs = interactionPlan.lastInteractionConfirmAtMs;
+        executeCommands(state, interactionPlan.commands);
+        continue;
+      }
+      runtimeCommands.push(command);
+    }
+
+    flushRuntimeCommands();
+  };
+
   executeFrameLocomotionPipeline({
     frameContext: input.frameContext,
     deltaSeconds,
@@ -234,23 +267,7 @@ function runFrame(state: FlowState, input: {
     getCameraForward: () => input.cameraForward ?? { x: 0, z: -1 },
     getDesktopFastMove: () => false,
     getBotMove: () => null,
-    confirmInteractionTarget: () => {
-      if (!input.target) {
-        return;
-      }
-      const interactionPlan = planInteractionCommands({
-        target: input.target,
-        mode: resolveLocomotionMode({ seatId: state.currentSeatId, floorY }),
-        pendingSeatId: state.pendingSeatId,
-        seatingAvailable: true,
-        nowMs: input.nowMs ?? input.frameContext.nowMs,
-        lastInteractionConfirmAtMs: state.lastInteractionConfirmAtMs,
-        debounceMs: 0
-      });
-      state.lastInteractionConfirmAtMs = interactionPlan.lastInteractionConfirmAtMs;
-      executeCommands(state, interactionPlan.commands);
-    },
-    executeCommands: (commands) => executeCommands(state, commands)
+    executeCommands: executeFrameCommands
   });
 }
 
