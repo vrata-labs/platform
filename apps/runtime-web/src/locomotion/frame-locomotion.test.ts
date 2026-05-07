@@ -77,7 +77,12 @@ test("frame XR controls plan snap turn from sampled frame context", () => {
   assert.equal(plan.turnArmed, false);
   assert.equal(plan.clearAvatarDebug, false);
   assert.equal(plan.debugLocomotionMode, "vr");
+  assert.deepEqual(plan.snapTurnCommands, [
+    { type: "apply_snap_turn_yaw", yaw: Math.PI / 6 },
+    { type: "telemetry", kind: "snap_turn" }
+  ]);
   assert.equal(plan.confirmInteraction, false);
+  assert.deepEqual(plan.confirmInteractionCommands, []);
   assert.equal(plan.triggerPressedLastFrame, false);
 });
 
@@ -140,6 +145,7 @@ test("frame XR controls expose confirm interaction trigger edge", () => {
     throw new Error("expected xr control plan");
   }
   assert.equal(plan.confirmInteraction, true);
+  assert.deepEqual(plan.confirmInteractionCommands, [{ type: "telemetry", kind: "trigger_press" }]);
   assert.equal(plan.triggerPressedLastFrame, true);
 });
 
@@ -194,8 +200,7 @@ test("frame XR controls executor resets non-XR frame debug state", () => {
     setXrSelectPressedLastFrame: (pressed) => calls.push(`pressed:${pressed}`),
     clearXrAvatarDebug: () => calls.push("clear-avatar-debug"),
     setDebugLocomotionMode: (mode) => calls.push(`mode:${mode}`),
-    applyYawAroundXrCamera: (yaw) => calls.push(`yaw:${yaw}`),
-    markXrTelemetry: (kind) => calls.push(`telemetry:${kind}`),
+    executeCommands: (commands) => calls.push(`commands:${commands.map((command) => command.type).join(",")}`),
     confirmInteractionTarget: () => calls.push("confirm")
   });
 

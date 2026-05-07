@@ -608,6 +608,7 @@ const executeRuntimeCommandList = createRuntimeCommandExecutor({
   moveFlatTo(position, reason) {
     localPoseController.moveFlatTo(position, reason);
   },
+  applySnapTurnYaw: applyYawAroundXrCamera,
   teleportToFloor(point) {
     setPlayerPositionForFloorTeleport(point);
     updateLocalPositionDebug();
@@ -2208,8 +2209,6 @@ function updateMovement(delta: number, frameContext: RuntimeFrameContext): void 
     setDebugLocomotionMode: (mode) => {
       debugState.locomotionMode = mode;
     },
-    applyYawAroundXrCamera,
-    markXrTelemetry,
     confirmInteractionTarget: () => {
       confirmInteractionTarget(frameContext);
     },

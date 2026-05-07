@@ -26,6 +26,7 @@ test("runtime command bridge wires seating, room-state, pose, status, and teleme
       calls.push(`lock:${position.x},${position.y},${position.z}:${reason}:${options?.yaw ?? "none"}`);
     },
     moveFlatTo: (position, reason) => calls.push(`move:${position.x},${position.z}:${reason}`),
+    applySnapTurnYaw: (yaw) => calls.push(`snap-yaw:${yaw}`),
     teleportToFloor: (point) => calls.push(`teleport:${point.x},${point.y},${point.z}`),
     setStatus: (message) => calls.push(`status:${message}`),
     markTelemetry: (kind) => calls.push(`telemetry:${kind}`),
@@ -41,6 +42,7 @@ test("runtime command bridge wires seating, room-state, pose, status, and teleme
     { type: "release_local_seat" },
     { type: "lock_to_seat", seatId: "seat-a", position: { x: 2, y: 0.4, z: 3 }, reason: "seat_enter", yaw: 1.2 },
     { type: "move_flat_to", position: { x: 4, z: 5 }, reason: "desktop_move" },
+    { type: "apply_snap_turn_yaw", yaw: 0.5 },
     { type: "teleport_to_floor", point: { x: 1, y: 0, z: 2 } },
     { type: "status", message: "Teleported" }
   ]);
@@ -54,6 +56,7 @@ test("runtime command bridge wires seating, room-state, pose, status, and teleme
     "release-local",
     "lock:2,0.4,3:seat_enter:1.2",
     "move:4,5:desktop_move",
+    "snap-yaw:0.5",
     "teleport:1,0,2",
     "status:Teleported"
   ]);
@@ -77,6 +80,7 @@ test("runtime command bridge does not send seat commands without a connected roo
     releaseLocalSeat: () => undefined,
     lockToSeat: () => undefined,
     moveFlatTo: () => undefined,
+    applySnapTurnYaw: () => undefined,
     teleportToFloor: () => undefined,
     setStatus: () => undefined,
     markTelemetry: () => undefined,

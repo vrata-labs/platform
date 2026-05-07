@@ -23,6 +23,7 @@ export type RuntimeCommand =
     position: FlatPositionLike;
     reason: Extract<LocalPoseMutationReason, "desktop_move" | "xr_move">;
   }
+  | { type: "apply_snap_turn_yaw"; yaw: number }
   | { type: "teleport_to_floor"; point: Vector3Like }
   | { type: "status"; message: string }
   | { type: "telemetry"; kind: string };
@@ -58,6 +59,7 @@ export interface RuntimeCommandHandlers {
     options?: { yaw?: number }
   ): void;
   moveFlatTo(position: FlatPositionLike, reason: Extract<LocalPoseMutationReason, "desktop_move" | "xr_move">): void;
+  applySnapTurnYaw(yaw: number): void;
   teleportToFloor(point: Vector3Like): void;
   setStatus(message: string): void;
   markTelemetry(kind: string): void;
@@ -135,6 +137,9 @@ export function executeRuntimeCommands(commands: RuntimeCommand[], handlers: Run
         break;
       case "move_flat_to":
         handlers.moveFlatTo(command.position, command.reason);
+        break;
+      case "apply_snap_turn_yaw":
+        handlers.applySnapTurnYaw(command.yaw);
         break;
       case "teleport_to_floor":
         handlers.teleportToFloor(command.point);

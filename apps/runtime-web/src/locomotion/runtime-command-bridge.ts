@@ -15,6 +15,7 @@ export interface RuntimeCommandBridgeInput {
     options?: { yaw?: number }
   ): void;
   moveFlatTo(position: FlatPositionLike, reason: Extract<LocalPoseMutationReason, "desktop_move" | "xr_move">): void;
+  applySnapTurnYaw(yaw: number): void;
   teleportToFloor(point: Vector3Like): void;
   setStatus(message: string): void;
   markTelemetry(kind: string): void;
@@ -59,6 +60,9 @@ export function createRuntimeCommandExecutor(input: RuntimeCommandBridgeInput): 
       },
       moveFlatTo(position, reason) {
         input.moveFlatTo(position, reason);
+      },
+      applySnapTurnYaw(yaw) {
+        input.applySnapTurnYaw(yaw);
       },
       teleportToFloor(point) {
         input.teleportToFloor(point);

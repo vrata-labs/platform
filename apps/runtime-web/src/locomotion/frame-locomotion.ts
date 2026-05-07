@@ -15,7 +15,9 @@ export type FrameXrControlPlan =
     turnCooldownSeconds: number;
     turnArmed: boolean;
     nextYaw: number | null;
+    snapTurnCommands: RuntimeCommand[];
     confirmInteraction: boolean;
+    confirmInteractionCommands: RuntimeCommand[];
     triggerPressedLastFrame: boolean;
   }
   | {
@@ -27,6 +29,8 @@ export type FrameXrControlPlan =
     rayVisibleLatched: false;
     turnArmed: true;
     confirmInteraction: false;
+    snapTurnCommands: RuntimeCommand[];
+    confirmInteractionCommands: RuntimeCommand[];
     triggerPressedLastFrame: false;
   };
 
@@ -48,8 +52,7 @@ export interface FrameXrControlPlanHandlers {
   setXrSelectPressedLastFrame(pressed: boolean): void;
   clearXrAvatarDebug(): void;
   setDebugLocomotionMode(mode: "vr" | "vr-seated"): void;
-  applyYawAroundXrCamera(yaw: number): void;
-  markXrTelemetry(kind: "snap_turn" | "trigger_press"): void;
+  executeCommands(commands: RuntimeCommand[]): void;
   confirmInteractionTarget(): void;
 }
 
@@ -157,6 +160,8 @@ export function planFrameXrControls(input: FrameXrControlInput): FrameXrControlP
       rayVisibleLatched: false,
       turnArmed: true,
       confirmInteraction: false,
+      snapTurnCommands: [],
+      confirmInteractionCommands: [],
       triggerPressedLastFrame: false
     };
   }
@@ -169,6 +174,11 @@ export function planFrameXrControls(input: FrameXrControlInput): FrameXrControlP
     sanitizedAxes.turnX
   );
   const nextYaw = turn.angle !== input.yaw ? turn.angle : null;
+  const snapTurnCommands: RuntimeCommand[] = nextYaw === null ? [] : [
+    { type: "apply_snap_turn_yaw", yaw: nextYaw },
+    { type: "telemetry", kind: "snap_turn" }
+  ];
+  const confirmInteraction = input.frameContext.intents.confirmInteraction;
   return {
     kind: "xr",
     inputProfile: input.frameContext.xr.profile,
@@ -179,7 +189,9 @@ export function planFrameXrControls(input: FrameXrControlInput): FrameXrControlP
     turnCooldownSeconds: turn.cooldownSeconds,
     turnArmed: turn.armed ?? true,
     nextYaw,
-    confirmInteraction: input.frameContext.intents.confirmInteraction,
+    snapTurnCommands,
+    confirmInteraction,
+    confirmInteractionCommands: confirmInteraction ? [{ type: "telemetry", kind: "trigger_press" }] : [],
     triggerPressedLastFrame: input.frameContext.xr.triggerPressed
   };
 }
@@ -194,14 +206,15 @@ export function executeFrameXrControlPlan(
     handlers.setXrRayVisibleLatched(plan.rayVisibleLatched);
     handlers.setXrTurnCooldown(plan.turnCooldownSeconds);
     handlers.setXrTurnArmed(plan.turnArmed);
-    if (plan.nextYaw !== null) {
-      handlers.applyYawAroundXrCamera(plan.nextYaw);
-      handlers.markXrTelemetry("snap_turn");
+    if (plan.snapTurnCommands.length > 0) {
+      handlers.executeCommands(plan.snapTurnCommands);
     }
     handlers.setDebugLocomotionMode(plan.debugLocomotionMode);
 
     if (plan.confirmInteraction) {
-      handlers.markXrTelemetry("trigger_press");
+      if (plan.confirmInteractionCommands.length > 0) {
+        handlers.executeCommands(plan.confirmInteractionCommands);
+      }
       handlers.confirmInteractionTarget();
     }
     handlers.setXrSelectPressedLastFrame(plan.triggerPressedLastFrame);

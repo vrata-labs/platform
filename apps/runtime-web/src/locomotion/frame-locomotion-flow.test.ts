@@ -147,6 +147,9 @@ function executeCommands(state: FlowState, commands: RuntimeCommand[]): void {
         }
       };
     },
+    applySnapTurnYaw: (yaw) => {
+      state.pose = { ...state.pose, yaw };
+    },
     teleportToFloor: (point) => {
       state.pose = { ...state.pose, position: { x: point.x, y: point.y, z: point.z } };
     },
@@ -200,12 +203,6 @@ function runFrame(state: FlowState, input: {
     clearXrAvatarDebug: () => {},
     setDebugLocomotionMode: (mode) => {
       state.debugLocomotionMode = mode;
-    },
-    applyYawAroundXrCamera: (yaw) => {
-      state.pose = { ...state.pose, yaw };
-    },
-    markXrTelemetry: (kind) => {
-      state.telemetry.push(kind);
     },
     confirmInteractionTarget: () => {
       if (!input.target) {
@@ -296,6 +293,10 @@ test("frame locomotion flow applies XR snap-turn before movement planning", () =
   assert.equal(state.xrTurnCooldown, 0.28);
   assert.equal(state.xrTurnArmed, false);
   assert.deepEqual(state.telemetry, ["snap_turn"]);
+  assert.deepEqual(state.commands, [
+    { type: "apply_snap_turn_yaw", yaw: Math.PI / 6 },
+    { type: "telemetry", kind: "snap_turn" }
+  ]);
 });
 
 test("frame locomotion flow suppresses snap-turn while the XR ray intent owns diagonal stick input", () => {
@@ -314,6 +315,7 @@ test("frame locomotion flow suppresses snap-turn while the XR ray intent owns di
   assert.equal(state.pose.yaw, 0);
   assert.equal(state.xrTurnArmed, false);
   assert.deepEqual(state.telemetry, []);
+  assert.deepEqual(state.commands, []);
 });
 
 test("frame locomotion flow releases a seated user before floor teleport", () => {
@@ -326,12 +328,14 @@ test("frame locomotion flow releases a seated user before floor teleport", () =>
 
   assert.deepEqual(state.commands.map((command) => command.type), [
     "telemetry",
+    "telemetry",
     "send_seat_release",
     "release_local_seat",
     "teleport_to_floor",
     "status"
   ]);
   assert.deepEqual(state.sentSeatReleases, ["seat-a"]);
+  assert.deepEqual(state.telemetry, ["trigger_press", "seat_release"]);
   assert.equal(state.currentSeatId, null);
   assert.deepEqual(state.pose.position, { x: 2, y: 0, z: -3 });
 });
@@ -345,6 +349,7 @@ test("frame locomotion flow claims a targeted seat without local teleport", () =
   });
 
   assert.deepEqual(state.commands.map((command) => command.type), [
+    "telemetry",
     "request_seat_claim",
     "telemetry",
     "send_seat_claim",
@@ -352,5 +357,6 @@ test("frame locomotion flow claims a targeted seat without local teleport", () =
   ]);
   assert.equal(state.pendingSeatId, "seat-a");
   assert.deepEqual(state.sentSeatClaims, ["seat-a"]);
+  assert.deepEqual(state.telemetry, ["trigger_press", "seat_claim"]);
   assert.deepEqual(state.pose.position, { x: 0, y: 0, z: 0 });
 });
