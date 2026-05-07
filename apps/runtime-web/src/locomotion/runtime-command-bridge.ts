@@ -1,4 +1,5 @@
 import type { LocalPoseMutationReason, Vector3Like } from "../local/local-pose.js";
+import type { XrAxesSample } from "../movement.js";
 import { sendSeatClaim, sendSeatRelease, type RoomStateClient } from "../room-state-client.js";
 import type { SeatingController } from "../seating/seating-controller.js";
 import {
@@ -22,6 +23,13 @@ export interface RuntimeCommandBridgeInput {
   ): void;
   moveFlatTo(position: FlatPositionLike, reason: Extract<LocalPoseMutationReason, "desktop_move" | "xr_move">): void;
   applySnapTurnYaw(yaw: number): void;
+  setXrInputProfile(profile: string | null): void;
+  setDebugXrAxes(axes: XrAxesSample): void;
+  setXrRayVisibleLatched(visible: boolean): void;
+  setXrTurnCooldown(seconds: number): void;
+  setXrTurnArmed(armed: boolean): void;
+  setXrSelectPressedLastFrame(pressed: boolean): void;
+  clearXrAvatarDebug(): void;
   setDebugLocomotionMode(mode: RuntimeDebugLocomotionMode): void;
   setLastAppliedSeatLockId(seatId: string): void;
   setAvatarMovement(move: FlatVectorLike, turnRate: number): void;
@@ -73,6 +81,27 @@ export function createRuntimeCommandExecutor(input: RuntimeCommandBridgeInput): 
       },
       applySnapTurnYaw(yaw) {
         input.applySnapTurnYaw(yaw);
+      },
+      setXrInputProfile(profile) {
+        input.setXrInputProfile(profile);
+      },
+      setDebugXrAxes(axes) {
+        input.setDebugXrAxes(axes);
+      },
+      setXrRayVisibleLatched(visible) {
+        input.setXrRayVisibleLatched(visible);
+      },
+      setXrTurnCooldown(seconds) {
+        input.setXrTurnCooldown(seconds);
+      },
+      setXrTurnArmed(armed) {
+        input.setXrTurnArmed(armed);
+      },
+      setXrSelectPressedLastFrame(pressed) {
+        input.setXrSelectPressedLastFrame(pressed);
+      },
+      clearXrAvatarDebug() {
+        input.clearXrAvatarDebug();
       },
       setDebugLocomotionMode(mode) {
         input.setDebugLocomotionMode(mode);

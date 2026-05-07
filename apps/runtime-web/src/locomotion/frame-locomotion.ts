@@ -44,13 +44,6 @@ export interface FrameXrControlInput {
 }
 
 export interface FrameXrControlPlanHandlers {
-  setXrInputProfile(profile: string | null): void;
-  setDebugXrAxes(axes: XrAxesSample): void;
-  setXrRayVisibleLatched(visible: boolean): void;
-  setXrTurnCooldown(seconds: number): void;
-  setXrTurnArmed(armed: boolean): void;
-  setXrSelectPressedLastFrame(pressed: boolean): void;
-  clearXrAvatarDebug(): void;
   executeCommands(commands: RuntimeCommand[]): void;
   confirmInteractionTarget(): void;
 }
@@ -197,11 +190,13 @@ export function executeFrameXrControlPlan(
   handlers: FrameXrControlPlanHandlers
 ): void {
   if (plan.kind === "xr") {
-    handlers.setXrInputProfile(plan.inputProfile);
-    handlers.setDebugXrAxes(plan.sanitizedAxes);
-    handlers.setXrRayVisibleLatched(plan.rayVisibleLatched);
-    handlers.setXrTurnCooldown(plan.turnCooldownSeconds);
-    handlers.setXrTurnArmed(plan.turnArmed);
+    handlers.executeCommands([
+      { type: "set_xr_input_profile", profile: plan.inputProfile },
+      { type: "set_debug_xr_axes", axes: plan.sanitizedAxes },
+      { type: "set_xr_ray_visible_latched", visible: plan.rayVisibleLatched },
+      { type: "set_xr_turn_cooldown", seconds: plan.turnCooldownSeconds },
+      { type: "set_xr_turn_armed", armed: plan.turnArmed }
+    ]);
     if (plan.snapTurnCommands.length > 0) {
       handlers.executeCommands(plan.snapTurnCommands);
     }
@@ -213,18 +208,18 @@ export function executeFrameXrControlPlan(
       }
       handlers.confirmInteractionTarget();
     }
-    handlers.setXrSelectPressedLastFrame(plan.triggerPressedLastFrame);
+    handlers.executeCommands([{ type: "set_xr_select_pressed_last_frame", pressed: plan.triggerPressedLastFrame }]);
     return;
   }
 
-  handlers.setXrSelectPressedLastFrame(plan.triggerPressedLastFrame);
-  handlers.setXrRayVisibleLatched(plan.rayVisibleLatched);
-  handlers.setXrTurnArmed(plan.turnArmed);
-  handlers.setXrInputProfile(plan.inputProfile);
-  if (plan.clearAvatarDebug) {
-    handlers.clearXrAvatarDebug();
-  }
-  handlers.setDebugXrAxes(plan.sanitizedAxes);
+  handlers.executeCommands([
+    { type: "set_xr_select_pressed_last_frame", pressed: plan.triggerPressedLastFrame },
+    { type: "set_xr_ray_visible_latched", visible: plan.rayVisibleLatched },
+    { type: "set_xr_turn_armed", armed: plan.turnArmed },
+    { type: "set_xr_input_profile", profile: plan.inputProfile },
+    ...(plan.clearAvatarDebug ? [{ type: "clear_xr_avatar_debug" } as const] : []),
+    { type: "set_debug_xr_axes", axes: plan.sanitizedAxes }
+  ]);
 }
 
 export function planFrameLocomotionMovement(input: FrameLocomotionMovementInput): FrameLocomotionMovementPlan {

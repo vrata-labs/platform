@@ -27,8 +27,13 @@ interface FlowState {
   currentSeatId: string | null;
   pendingSeatId: string | null;
   lastAppliedSeatLockId: string | null;
+  xrInputProfile: string | null;
+  debugXrAxes: XrAxesSample;
+  xrRayVisibleLatched: boolean;
   xrTurnCooldown: number;
   xrTurnArmed: boolean;
+  xrSelectPressedLastFrame: boolean;
+  xrAvatarDebugCleared: boolean;
   lastInteractionConfirmAtMs: number;
   debugLocomotionMode: string | null;
   commands: RuntimeCommand[];
@@ -47,8 +52,13 @@ function createState(input: Partial<FlowState> = {}): FlowState {
     currentSeatId: input.currentSeatId ?? null,
     pendingSeatId: input.pendingSeatId ?? null,
     lastAppliedSeatLockId: input.lastAppliedSeatLockId ?? null,
+    xrInputProfile: input.xrInputProfile ?? null,
+    debugXrAxes: input.debugXrAxes ?? { moveX: 0, moveY: 0, turnX: 0, turnY: 0 },
+    xrRayVisibleLatched: input.xrRayVisibleLatched ?? false,
     xrTurnCooldown: input.xrTurnCooldown ?? 0,
     xrTurnArmed: input.xrTurnArmed ?? true,
+    xrSelectPressedLastFrame: input.xrSelectPressedLastFrame ?? false,
+    xrAvatarDebugCleared: input.xrAvatarDebugCleared ?? false,
     lastInteractionConfirmAtMs: input.lastInteractionConfirmAtMs ?? 0,
     debugLocomotionMode: input.debugLocomotionMode ?? null,
     commands: input.commands ?? [],
@@ -150,6 +160,27 @@ function executeCommands(state: FlowState, commands: RuntimeCommand[]): void {
     applySnapTurnYaw: (yaw) => {
       state.pose = { ...state.pose, yaw };
     },
+    setXrInputProfile: (profile) => {
+      state.xrInputProfile = profile;
+    },
+    setDebugXrAxes: (axes) => {
+      state.debugXrAxes = axes;
+    },
+    setXrRayVisibleLatched: (visible) => {
+      state.xrRayVisibleLatched = visible;
+    },
+    setXrTurnCooldown: (seconds) => {
+      state.xrTurnCooldown = seconds;
+    },
+    setXrTurnArmed: (armed) => {
+      state.xrTurnArmed = armed;
+    },
+    setXrSelectPressedLastFrame: (pressed) => {
+      state.xrSelectPressedLastFrame = pressed;
+    },
+    clearXrAvatarDebug: () => {
+      state.xrAvatarDebugCleared = true;
+    },
     setDebugLocomotionMode: (mode) => {
       state.debugLocomotionMode = mode;
     },
@@ -203,17 +234,6 @@ function runFrame(state: FlowState, input: {
     getCameraForward: () => input.cameraForward ?? { x: 0, z: -1 },
     getDesktopFastMove: () => false,
     getBotMove: () => null,
-    setXrInputProfile: () => {},
-    setDebugXrAxes: () => {},
-    setXrRayVisibleLatched: () => {},
-    setXrTurnCooldown: (seconds) => {
-      state.xrTurnCooldown = seconds;
-    },
-    setXrTurnArmed: (armed) => {
-      state.xrTurnArmed = armed;
-    },
-    setXrSelectPressedLastFrame: () => {},
-    clearXrAvatarDebug: () => {},
     confirmInteractionTarget: () => {
       if (!input.target) {
         return;
@@ -248,11 +268,17 @@ test("frame locomotion flow moves a standing desktop user from sampled frame int
   assert.equal(state.debugLocomotionMode, "desktop");
   assert.deepEqual(state.lastAvatarMove, { x: 0, z: -1 });
   assert.equal(state.localPositionDebugUpdates, 1);
-  assert.deepEqual(state.commands, [
-    { type: "set_debug_locomotion_mode", mode: "desktop" },
-    { type: "move_flat_to", position: { x: 3.2, z: 0 }, reason: "desktop_move" },
-    { type: "set_avatar_movement", move: { x: 0, z: -1 }, turnRate: 0 },
-    { type: "update_local_position_debug" }
+  assert.deepEqual(state.commands.map((command) => command.type), [
+    "set_xr_select_pressed_last_frame",
+    "set_xr_ray_visible_latched",
+    "set_xr_turn_armed",
+    "set_xr_input_profile",
+    "clear_xr_avatar_debug",
+    "set_debug_xr_axes",
+    "set_debug_locomotion_mode",
+    "move_flat_to",
+    "set_avatar_movement",
+    "update_local_position_debug"
   ]);
 });
 
@@ -272,18 +298,18 @@ test("frame locomotion flow keeps a seated user locked to the seat anchor", () =
   assert.equal(state.debugLocomotionMode, "vr-seated");
   assert.deepEqual(state.lastAvatarMove, { x: 0, z: 0 });
   assert.equal(state.localPositionDebugUpdates, 1);
-  assert.deepEqual(state.commands, [
-    { type: "set_debug_locomotion_mode", mode: "vr-seated" },
-    {
-      type: "lock_to_seat",
-      seatId: "seat-a",
-      position: { x: 5, y: 0.45, z: -2 },
-      reason: "seat_enter",
-      yaw: Math.PI / 2
-    },
-    { type: "set_last_applied_seat_lock_id", seatId: "seat-a" },
-    { type: "set_avatar_movement", move: { x: 0, z: 0 }, turnRate: 0 },
-    { type: "update_local_position_debug" }
+  assert.deepEqual(state.commands.map((command) => command.type), [
+    "set_xr_input_profile",
+    "set_debug_xr_axes",
+    "set_xr_ray_visible_latched",
+    "set_xr_turn_cooldown",
+    "set_xr_turn_armed",
+    "set_debug_locomotion_mode",
+    "set_xr_select_pressed_last_frame",
+    "lock_to_seat",
+    "set_last_applied_seat_lock_id",
+    "set_avatar_movement",
+    "update_local_position_debug"
   ]);
 });
 
@@ -302,12 +328,18 @@ test("frame locomotion flow applies XR snap-turn before movement planning", () =
   assert.equal(state.xrTurnCooldown, 0.28);
   assert.equal(state.xrTurnArmed, false);
   assert.deepEqual(state.telemetry, ["snap_turn"]);
-  assert.deepEqual(state.commands, [
-    { type: "apply_snap_turn_yaw", yaw: Math.PI / 6 },
-    { type: "telemetry", kind: "snap_turn" },
-    { type: "set_debug_locomotion_mode", mode: "vr" },
-    { type: "set_avatar_movement", move: { x: 0, z: 0 }, turnRate: 0 },
-    { type: "update_local_position_debug" }
+  assert.deepEqual(state.commands.map((command) => command.type), [
+    "set_xr_input_profile",
+    "set_debug_xr_axes",
+    "set_xr_ray_visible_latched",
+    "set_xr_turn_cooldown",
+    "set_xr_turn_armed",
+    "apply_snap_turn_yaw",
+    "telemetry",
+    "set_debug_locomotion_mode",
+    "set_xr_select_pressed_last_frame",
+    "set_avatar_movement",
+    "update_local_position_debug"
   ]);
 });
 
@@ -327,10 +359,16 @@ test("frame locomotion flow suppresses snap-turn while the XR ray intent owns di
   assert.equal(state.pose.yaw, 0);
   assert.equal(state.xrTurnArmed, false);
   assert.deepEqual(state.telemetry, []);
-  assert.deepEqual(state.commands, [
-    { type: "set_debug_locomotion_mode", mode: "vr" },
-    { type: "set_avatar_movement", move: { x: 0, z: 0 }, turnRate: 0 },
-    { type: "update_local_position_debug" }
+  assert.deepEqual(state.commands.map((command) => command.type), [
+    "set_xr_input_profile",
+    "set_debug_xr_axes",
+    "set_xr_ray_visible_latched",
+    "set_xr_turn_cooldown",
+    "set_xr_turn_armed",
+    "set_debug_locomotion_mode",
+    "set_xr_select_pressed_last_frame",
+    "set_avatar_movement",
+    "update_local_position_debug"
   ]);
 });
 
@@ -343,6 +381,11 @@ test("frame locomotion flow releases a seated user before floor teleport", () =>
   });
 
   assert.deepEqual(state.commands.map((command) => command.type), [
+    "set_xr_input_profile",
+    "set_debug_xr_axes",
+    "set_xr_ray_visible_latched",
+    "set_xr_turn_cooldown",
+    "set_xr_turn_armed",
     "set_debug_locomotion_mode",
     "telemetry",
     "telemetry",
@@ -350,6 +393,7 @@ test("frame locomotion flow releases a seated user before floor teleport", () =>
     "release_local_seat",
     "teleport_to_floor",
     "status",
+    "set_xr_select_pressed_last_frame",
     "set_avatar_movement",
     "update_local_position_debug"
   ]);
@@ -368,12 +412,18 @@ test("frame locomotion flow claims a targeted seat without local teleport", () =
   });
 
   assert.deepEqual(state.commands.map((command) => command.type), [
+    "set_xr_input_profile",
+    "set_debug_xr_axes",
+    "set_xr_ray_visible_latched",
+    "set_xr_turn_cooldown",
+    "set_xr_turn_armed",
     "set_debug_locomotion_mode",
     "telemetry",
     "request_seat_claim",
     "telemetry",
     "send_seat_claim",
     "status",
+    "set_xr_select_pressed_last_frame",
     "set_avatar_movement",
     "update_local_position_debug"
   ]);

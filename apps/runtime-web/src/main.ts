@@ -609,6 +609,27 @@ const executeRuntimeCommandList = createRuntimeCommandExecutor({
     localPoseController.moveFlatTo(position, reason);
   },
   applySnapTurnYaw: applyYawAroundXrCamera,
+  setXrInputProfile(profile) {
+    lastAvatarXrInputProfile = profile;
+  },
+  setDebugXrAxes(axes) {
+    debugState.xrAxes = axes;
+  },
+  setXrRayVisibleLatched(visible) {
+    xrRayVisibleLatched = visible;
+  },
+  setXrTurnCooldown(seconds) {
+    xrTurnCooldown = seconds;
+  },
+  setXrTurnArmed(armed) {
+    xrTurnArmed = armed;
+  },
+  setXrSelectPressedLastFrame(pressed) {
+    xrSelectPressedLastFrame = pressed;
+  },
+  clearXrAvatarDebug() {
+    debugState.xrAvatarDebug = null;
+  },
   setDebugLocomotionMode(mode) {
     debugState.locomotionMode = mode;
   },
@@ -2196,27 +2217,6 @@ function updateMovement(delta: number, frameContext: RuntimeFrameContext): void 
     getBotMove: () => frameContext.source !== "xr" && botMode !== "off"
       ? botDirection(performance.now() / 1000)
       : null,
-    setXrInputProfile: (profile) => {
-      lastAvatarXrInputProfile = profile;
-    },
-    setDebugXrAxes: (axes) => {
-      debugState.xrAxes = axes;
-    },
-    setXrRayVisibleLatched: (visible) => {
-      xrRayVisibleLatched = visible;
-    },
-    setXrTurnCooldown: (seconds) => {
-      xrTurnCooldown = seconds;
-    },
-    setXrTurnArmed: (armed) => {
-      xrTurnArmed = armed;
-    },
-    setXrSelectPressedLastFrame: (pressed) => {
-      xrSelectPressedLastFrame = pressed;
-    },
-    clearXrAvatarDebug: () => {
-      debugState.xrAvatarDebug = null;
-    },
     confirmInteractionTarget: () => {
       confirmInteractionTarget(frameContext);
     },

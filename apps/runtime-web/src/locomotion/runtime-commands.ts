@@ -1,4 +1,5 @@
 import type { LocalPoseMutationReason, Vector3Like } from "../local/local-pose.js";
+import type { XrAxesSample } from "../movement.js";
 import type { LocomotionMode } from "./local-locomotion.js";
 
 export interface FlatPositionLike {
@@ -31,6 +32,13 @@ export type RuntimeCommand =
     reason: Extract<LocalPoseMutationReason, "desktop_move" | "xr_move">;
   }
   | { type: "apply_snap_turn_yaw"; yaw: number }
+  | { type: "set_xr_input_profile"; profile: string | null }
+  | { type: "set_debug_xr_axes"; axes: XrAxesSample }
+  | { type: "set_xr_ray_visible_latched"; visible: boolean }
+  | { type: "set_xr_turn_cooldown"; seconds: number }
+  | { type: "set_xr_turn_armed"; armed: boolean }
+  | { type: "set_xr_select_pressed_last_frame"; pressed: boolean }
+  | { type: "clear_xr_avatar_debug" }
   | { type: "set_debug_locomotion_mode"; mode: RuntimeDebugLocomotionMode }
   | { type: "set_last_applied_seat_lock_id"; seatId: string }
   | { type: "set_avatar_movement"; move: FlatVectorLike; turnRate: number }
@@ -71,6 +79,13 @@ export interface RuntimeCommandHandlers {
   ): void;
   moveFlatTo(position: FlatPositionLike, reason: Extract<LocalPoseMutationReason, "desktop_move" | "xr_move">): void;
   applySnapTurnYaw(yaw: number): void;
+  setXrInputProfile(profile: string | null): void;
+  setDebugXrAxes(axes: XrAxesSample): void;
+  setXrRayVisibleLatched(visible: boolean): void;
+  setXrTurnCooldown(seconds: number): void;
+  setXrTurnArmed(armed: boolean): void;
+  setXrSelectPressedLastFrame(pressed: boolean): void;
+  clearXrAvatarDebug(): void;
   setDebugLocomotionMode(mode: RuntimeDebugLocomotionMode): void;
   setLastAppliedSeatLockId(seatId: string): void;
   setAvatarMovement(move: FlatVectorLike, turnRate: number): void;
@@ -155,6 +170,27 @@ export function executeRuntimeCommands(commands: RuntimeCommand[], handlers: Run
         break;
       case "apply_snap_turn_yaw":
         handlers.applySnapTurnYaw(command.yaw);
+        break;
+      case "set_xr_input_profile":
+        handlers.setXrInputProfile(command.profile);
+        break;
+      case "set_debug_xr_axes":
+        handlers.setDebugXrAxes(command.axes);
+        break;
+      case "set_xr_ray_visible_latched":
+        handlers.setXrRayVisibleLatched(command.visible);
+        break;
+      case "set_xr_turn_cooldown":
+        handlers.setXrTurnCooldown(command.seconds);
+        break;
+      case "set_xr_turn_armed":
+        handlers.setXrTurnArmed(command.armed);
+        break;
+      case "set_xr_select_pressed_last_frame":
+        handlers.setXrSelectPressedLastFrame(command.pressed);
+        break;
+      case "clear_xr_avatar_debug":
+        handlers.clearXrAvatarDebug();
         break;
       case "set_debug_locomotion_mode":
         handlers.setDebugLocomotionMode(command.mode);

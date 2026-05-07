@@ -192,24 +192,12 @@ test("frame XR controls executor resets non-XR frame debug state", () => {
   const calls: string[] = [];
 
   executeFrameXrControlPlan(plan, {
-    setXrInputProfile: (profile) => calls.push(`profile:${profile ?? "none"}`),
-    setDebugXrAxes: (axes) => calls.push(`axes:${axes.turnX}`),
-    setXrRayVisibleLatched: (visible) => calls.push(`ray:${visible}`),
-    setXrTurnCooldown: (seconds) => calls.push(`cooldown:${seconds}`),
-    setXrTurnArmed: (armed) => calls.push(`armed:${armed}`),
-    setXrSelectPressedLastFrame: (pressed) => calls.push(`pressed:${pressed}`),
-    clearXrAvatarDebug: () => calls.push("clear-avatar-debug"),
     executeCommands: (commands) => calls.push(`commands:${commands.map((command) => command.type).join(",")}`),
     confirmInteractionTarget: () => calls.push("confirm")
   });
 
   assert.deepEqual(calls, [
-    "pressed:false",
-    "ray:false",
-    "armed:true",
-    "profile:none",
-    "clear-avatar-debug",
-    "axes:0"
+    "commands:set_xr_select_pressed_last_frame,set_xr_ray_visible_latched,set_xr_turn_armed,set_xr_input_profile,clear_xr_avatar_debug,set_debug_xr_axes"
   ]);
 });
 
