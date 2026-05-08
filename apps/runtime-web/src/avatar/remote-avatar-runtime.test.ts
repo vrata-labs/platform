@@ -191,6 +191,56 @@ test("remote avatar runtime forces VR hands visible when pose frames arrive", ()
   assert.equal(debugState.remoteAvatarParticipants[0]?.rightHandVisible, true);
 });
 
+test("remote avatar runtime applies transported head yaw independently from body yaw", () => {
+  const scene = new THREE.Scene();
+  const runtime = createRemoteAvatarRuntime({
+    scene,
+    bodyGeometry: new THREE.CapsuleGeometry(0.24, 0.8, 6, 12),
+    headGeometry: new THREE.SphereGeometry(0.18, 20, 20),
+    localParticipantId: "local"
+  });
+  const debugState = createDebugState();
+
+  runtime.ingestReliableState({
+    participantId: "remote-head-yaw",
+    avatarId: "preset-01",
+    inputMode: "vr-controller",
+    updatedAt: new Date().toISOString(),
+    audioActive: false,
+    seated: false
+  }, debugState);
+  runtime.applySnapshotParticipants([
+    {
+      participantId: "remote-head-yaw",
+      displayName: "Remote Head Yaw",
+      mode: "vr",
+      muted: false,
+      activeMedia: { audio: false, screenShare: false },
+      rootTransform: { x: 0, y: 0, z: 0 },
+      bodyTransform: { x: 0, y: 0, z: 0 },
+      headTransform: { x: 0, y: 1.6, z: 0 },
+      updatedAt: new Date().toISOString()
+    }
+  ] as never, debugState);
+  runtime.ingestPoseFrame("remote-head-yaw", {
+    seq: 1,
+    sentAtMs: Date.now(),
+    flags: 0,
+    root: { x: 0, y: 0, z: 0, yaw: 0, vx: 0, vz: 0 },
+    head: { x: 0, y: 1.6, z: 0, qx: 0, qy: Math.sin(Math.PI / 4), qz: 0, qw: Math.cos(Math.PI / 4) },
+    leftHand: { x: -0.2, y: 1.2, z: 0, qx: 0, qy: 0, qz: 0, qw: 1, gesture: 0 },
+    rightHand: { x: 0.2, y: 1.2, z: 0, qx: 0, qy: 0, qz: 0, qw: 1, gesture: 0 },
+    locomotion: { mode: 1, speed: 1, angularVelocity: 0 }
+  }, debugState);
+
+  runtime.update(0.016, debugState);
+  const head = scene.children[1] as THREE.Mesh | undefined;
+
+  assert.ok(head);
+  assert.equal(head.rotation.y > 0.5, true);
+  assert.equal(head.rotation.y < Math.PI / 2, true);
+});
+
 test("remote avatar runtime keeps last known hands visible through pose gaps", async () => {
   const scene = new THREE.Scene();
   const runtime = createRemoteAvatarRuntime({

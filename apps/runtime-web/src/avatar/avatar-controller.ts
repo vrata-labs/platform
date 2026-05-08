@@ -30,6 +30,7 @@ export interface LocalAvatarController {
     rootPosition: AvatarPosePoint;
     yaw: number;
     headPosition: AvatarPosePoint;
+    headYaw?: number;
     leftHand?: AvatarPosePoint | null;
     rightHand?: AvatarPosePoint | null;
     moveX: number;
@@ -196,7 +197,7 @@ export function createLocalAvatarController(input: {
     animationState: "idle",
     fallbackReason: null,
     root: { x: 0, y: 0, z: 0, yaw: 0 },
-    head: { x: 0, y: 1.58, z: 0 },
+    head: { x: 0, y: 1.58, z: 0, yaw: 0 },
     leftHand: { x: -0.28, y: 1.16, z: 0.12, visible: true },
     rightHand: { x: 0.28, y: 1.16, z: 0.12, visible: true },
     updatedAt: new Date(0).toISOString()
@@ -261,6 +262,7 @@ export function createLocalAvatarController(input: {
         vrDirectTracking ? solve.headLocal.y : Math.max(solve.headLocal.y, viewProfile.poseProfile.headHeight),
         solve.headLocal.z
       );
+      visual.head.rotation.y = (frame.headYaw ?? frame.yaw) - frame.yaw;
       visual.head.rotation.z = pose.headTilt;
       applyProceduralMouthState(visual.mouth, mouthAmount);
       visual.mouth.visible = visibility !== "hidden";
@@ -333,7 +335,8 @@ export function createLocalAvatarController(input: {
       snapshot.head = {
         x: visual.head.position.x,
         y: visual.head.position.y,
-        z: visual.head.position.z
+        z: visual.head.position.z,
+        yaw: frame.headYaw ?? frame.yaw
       };
       snapshot.leftHand = {
         x: visual.leftHand.position.x,

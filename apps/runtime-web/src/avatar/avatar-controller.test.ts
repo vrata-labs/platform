@@ -177,6 +177,39 @@ test("createLocalAvatarController applies visible walk pose to body and hands", 
   assert.notEqual(rightHand.position.z, 0.12);
 });
 
+test("createLocalAvatarController preserves tracked head yaw in snapshot", () => {
+  const controller = createLocalAvatarController({
+    presets: [createPreset("preset-01")],
+    diagnosticsInput: {
+      catalogId: "technical-v1",
+      packUrl: "/assets/avatars/avatar-pack.v1.glb",
+      packFormat: "procedural-debug-v1",
+      presetCount: 1,
+      validatorSummary: ["preset-01:1000"],
+      sandboxEntryPoint: "/assets/avatars/catalog.v1.json"
+    }
+  });
+
+  controller.update({
+    deltaSeconds: 0.016,
+    inputMode: "vr-controller",
+    xrPresenting: true,
+    xrInputProfile: "dual",
+    rootPosition: { x: 0, y: 0, z: 0 },
+    yaw: 0,
+    headPosition: { x: 0, y: 1.6, z: 0 },
+    headYaw: Math.PI / 2,
+    leftHand: { x: -0.2, y: 1.2, z: 0.2 },
+    rightHand: { x: 0.2, y: 1.2, z: 0.2 },
+    moveX: 0,
+    moveZ: 0,
+    turnRate: 0
+  });
+
+  assert.equal(controller.snapshot.head.yaw, Math.PI / 2);
+  assert.equal(controller.root.children[2]?.rotation.y, Math.PI / 2);
+});
+
 test("createLocalAvatarController keeps VR hand marker on tracked hand after yaw", () => {
   const controller = createLocalAvatarController({
     presets: [createPreset("preset-01")],

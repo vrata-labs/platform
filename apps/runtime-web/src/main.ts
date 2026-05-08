@@ -1822,6 +1822,14 @@ function botDirection(timeSeconds: number): { x: number; z: number } {
   return { x: 0, z: 0 };
 }
 
+function getCameraWorldYaw(): number {
+  const cameraWorldQuaternion = new THREE.Quaternion();
+  const cameraWorldEuler = new THREE.Euler(0, 0, 0, "YXZ");
+  camera.getWorldQuaternion(cameraWorldQuaternion);
+  cameraWorldEuler.setFromQuaternion(cameraWorldQuaternion, "YXZ");
+  return cameraWorldEuler.y;
+}
+
 function getLocalAvatarHandTargets(frameContext: RuntimeFrameContext): { leftHand: { x: number; y: number; z: number } | null; rightHand: { x: number; y: number; z: number } | null } {
   const pose = localPoseController.getPose();
   if (avatarVrMockEnabled && !renderer.xr.isPresenting) {
@@ -1966,6 +1974,7 @@ function updateLocalAvatar(delta: number, frameContext: RuntimeFrameContext): vo
     ? headWorldPosition.y - viewProfile.poseProfile.headHeight
     : pose.position.y;
   const avatarRootZ = xrPresenting ? headWorldPosition.z : pose.position.z;
+  const headYaw = xrPresenting ? getCameraWorldYaw() : pose.yaw;
 
   localAvatarController.update({
     deltaSeconds: delta,
@@ -1983,6 +1992,7 @@ function updateLocalAvatar(delta: number, frameContext: RuntimeFrameContext): vo
       y: headWorldPosition.y,
       z: headWorldPosition.z
     },
+    headYaw,
     leftHand: handTargets.leftHand,
     rightHand: handTargets.rightHand,
     moveX: lastAvatarMove.x,

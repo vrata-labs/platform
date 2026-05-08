@@ -94,7 +94,7 @@ export interface LocalAvatarSnapshotV1 {
   animationState: string;
   fallbackReason: string | null;
   root: { x: number; y: number; z: number; yaw: number };
-  head: { x: number; y: number; z: number };
+  head: { x: number; y: number; z: number; yaw: number };
   leftHand: { x: number; y: number; z: number; visible: boolean };
   rightHand: { x: number; y: number; z: number; visible: boolean };
   updatedAt: string;

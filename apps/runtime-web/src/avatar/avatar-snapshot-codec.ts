@@ -19,6 +19,16 @@ function toWorldPoint(snapshot: LocalAvatarSnapshotV1, point: { x: number; y: nu
   };
 }
 
+function yawToQuaternion(yaw: number): { qx: number; qy: number; qz: number; qw: number } {
+  const halfYaw = yaw / 2;
+  return {
+    qx: 0,
+    qy: Math.sin(halfYaw),
+    qz: 0,
+    qw: Math.cos(halfYaw)
+  };
+}
+
 function mapLocomotionMode(mode: string): number {
   switch (mode) {
     case "walk":
@@ -100,6 +110,7 @@ export function serializeCompactPoseFrame(input: {
   const headWorld = toWorldPoint(input.snapshot, input.snapshot.head);
   const leftHandWorld = toWorldPoint(input.snapshot, input.snapshot.leftHand);
   const rightHandWorld = toWorldPoint(input.snapshot, input.snapshot.rightHand);
+  const headRotation = yawToQuaternion(input.snapshot.head.yaw);
   return {
     seq: input.seq,
     sentAtMs: input.sentAtMs,
@@ -116,10 +127,10 @@ export function serializeCompactPoseFrame(input: {
       x: headWorld.x,
       y: headWorld.y,
       z: headWorld.z,
-      qx: 0,
-      qy: 0,
-      qz: 0,
-      qw: 1
+      qx: headRotation.qx,
+      qy: headRotation.qy,
+      qz: headRotation.qz,
+      qw: headRotation.qw
     },
     leftHand: {
       x: leftHandWorld.x,

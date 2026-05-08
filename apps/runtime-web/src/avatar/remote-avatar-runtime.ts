@@ -126,6 +126,12 @@ function lerpAngleRadians(current: number, target: number, alpha: number): numbe
   return current + delta * alpha;
 }
 
+function yawFromQuaternion(rotation: { qx: number; qy: number; qz: number; qw: number }): number {
+  const sinyCosp = 2 * (rotation.qw * rotation.qy + rotation.qx * rotation.qz);
+  const cosyCosp = 1 - 2 * (rotation.qy * rotation.qy + rotation.qz * rotation.qz);
+  return Math.atan2(sinyCosp, cosyCosp);
+}
+
 function resolvePlaybackDelayMs(recommendedPlaybackDelayMs: number, inputMode: string | null | undefined): number {
   if (inputMode === "desktop") {
     return Math.max(130, recommendedPlaybackDelayMs);
@@ -441,7 +447,9 @@ export function createRemoteAvatarRuntime(input: {
           entity.leftHand.position.lerp(new THREE.Vector3(poseFrame.leftHand.x, poseFrame.leftHand.y, poseFrame.leftHand.z), 0.45);
           entity.rightHand.position.lerp(new THREE.Vector3(poseFrame.rightHand.x, poseFrame.rightHand.y, poseFrame.rightHand.z), 0.45);
           entity.body.rotation.y = lerpAngleRadians(entity.body.rotation.y, poseFrame.root.yaw, 0.35);
-          entity.head.rotation.y = lerpAngleRadians(entity.head.rotation.y, entity.body.rotation.y, 0.35);
+          entity.head.rotation.y = lerpAngleRadians(entity.head.rotation.y, yawFromQuaternion(poseFrame.head), 0.45);
+          entity.head.rotation.x = 0;
+          entity.head.rotation.z = 0;
           const forceVrHandsVisible = reliableState?.inputMode === "vr-controller" || reliableState?.inputMode === "vr-hand";
           entity.leftHand.visible = forceVrHandsVisible || poseFrame.leftHand.gesture > 0;
           entity.rightHand.visible = forceVrHandsVisible || poseFrame.rightHand.gesture > 0;
