@@ -4,8 +4,8 @@ import assert from "node:assert/strict";
 import type { InputIntents } from "../input/input-intents.js";
 import type { RuntimeFrameContext } from "../input/runtime-frame-context.js";
 import type { LocalPose } from "../local/local-pose.js";
+import { executeFrameLocomotionCommands } from "./frame-command-bridge.js";
 import {
-  executeFrameLocomotionCommands,
   executeFrameXrControlPlan,
   planFrameLocomotionMovement,
   planFrameLocomotionMovementCommands,

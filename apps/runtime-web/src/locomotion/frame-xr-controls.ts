@@ -1,6 +1,6 @@
 import type { RuntimeFrameContext } from "../input/runtime-frame-context.js";
 import { applySnapTurn, type XrAxesSample } from "../movement.js";
-import type { FrameLocomotionCommand } from "./frame-locomotion.js";
+import type { FrameLocomotionCommand } from "./frame-command-bridge.js";
 import type { RuntimeCommand, RuntimeDebugLocomotionMode } from "./runtime-commands.js";
 
 export type FrameXrControlPlan =

@@ -1,8 +1,8 @@
 import type { RuntimeFrameContext } from "../input/runtime-frame-context.js";
 import type { LocalPose, LocalPoseMutationReason, Vector3Like } from "../local/local-pose.js";
 import { projectMovementToWorld, type FlatVector } from "../movement.js";
+import type { FrameLocomotionCommand } from "./frame-command-bridge.js";
 import { resolveLocomotionMode, stepLocalLocomotion } from "./local-locomotion.js";
-import type { FrameLocomotionCommand } from "./frame-locomotion.js";
 import type { RuntimeCommand, RuntimeDebugLocomotionMode } from "./runtime-commands.js";
 
 export type FrameLocomotionMovementPlan =

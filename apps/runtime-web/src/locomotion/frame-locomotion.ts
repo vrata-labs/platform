@@ -1,6 +1,7 @@
 import type { RuntimeFrameContext } from "../input/runtime-frame-context.js";
 import type { LocalPose, Vector3Like } from "../local/local-pose.js";
 import type { FlatVector } from "../movement.js";
+import type { FrameLocomotionCommand } from "./frame-command-bridge.js";
 import {
   executeFrameLocomotionMovementPlan,
   planFrameLocomotionMovement,
@@ -12,8 +13,12 @@ import {
   planFrameXrControls,
   type FrameXrControlPlan
 } from "./frame-xr-controls.js";
-import type { RuntimeCommand } from "./runtime-commands.js";
 
+export {
+  executeFrameLocomotionCommands,
+  type FrameLocomotionCommand,
+  type FrameLocomotionCommandHandlers
+} from "./frame-command-bridge.js";
 export {
   executeFrameLocomotionMovementPlan,
   planFrameLocomotionMovement,
@@ -30,13 +35,6 @@ export {
   type FrameXrControlPlan,
   type FrameXrControlPlanHandlers
 } from "./frame-xr-controls.js";
-
-export type FrameLocomotionCommand = RuntimeCommand | { type: "confirm_interaction_target" };
-
-export interface FrameLocomotionCommandHandlers {
-  executeRuntimeCommands(commands: RuntimeCommand[]): void;
-  confirmInteractionTarget(): void;
-}
 
 export interface FrameLocomotionPipelineInput {
   frameContext: RuntimeFrameContext;
@@ -67,29 +65,6 @@ export type FrameLocomotionPipelineHandlers = FrameLocomotionReadModel & FrameLo
 export interface FrameLocomotionPipelineResult {
   xrControlPlan: FrameXrControlPlan;
   movementPlan: FrameLocomotionMovementPlan;
-}
-
-export function executeFrameLocomotionCommands(
-  commands: FrameLocomotionCommand[],
-  handlers: FrameLocomotionCommandHandlers
-): void {
-  const runtimeCommands: RuntimeCommand[] = [];
-  const flushRuntimeCommands = () => {
-    if (runtimeCommands.length > 0) {
-      handlers.executeRuntimeCommands(runtimeCommands.splice(0));
-    }
-  };
-
-  for (const command of commands) {
-    if (command.type === "confirm_interaction_target") {
-      flushRuntimeCommands();
-      handlers.confirmInteractionTarget();
-      continue;
-    }
-    runtimeCommands.push(command);
-  }
-
-  flushRuntimeCommands();
 }
 
 function executeFrameXrControlStage(

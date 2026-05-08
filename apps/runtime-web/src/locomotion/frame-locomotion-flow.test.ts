@@ -6,10 +6,9 @@ import type { RuntimeFrameContext } from "../input/runtime-frame-context.js";
 import type { LocalPose, Vector3Like } from "../local/local-pose.js";
 import type { FlatVector, XrAxesSample } from "../movement.js";
 import { resolveLocomotionMode } from "./local-locomotion.js";
+import { executeFrameLocomotionCommands, type FrameLocomotionCommand } from "./frame-command-bridge.js";
 import {
-  executeFrameLocomotionCommands,
   executeFrameLocomotionPipeline,
-  type FrameLocomotionCommand,
   type FrameLocomotionPipelineResult
 } from "./frame-locomotion.js";
 import {
