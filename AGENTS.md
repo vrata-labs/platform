@@ -37,6 +37,18 @@ Regression policy:
 - At minimum cover standing movement, seated movement lock, snap-turn, ray-intent suppression of snap-turn, teleport from seated, and seat claim/release behavior when relevant.
 - Before considering the change complete, run `pnpm --filter @noah/runtime-web build` and `pnpm --filter @noah/runtime-web test`. For user-facing runtime behavior, also run the repository e2e/staging checks required by the testing policy.
 
+Frame locomotion maintenance rules:
+
+- The runtime locomotion refactor slices in `docs/plans/noah_runtime_locomotion_refactor_prompt.md` are complete. Do not restart those slices as new work.
+- Treat frame locomotion as maintenance-mode architecture: future behavior changes should be separate bugfix or feature tasks with focused tests.
+- `apps/runtime-web/src/locomotion/frame-locomotion.ts` should remain the frame locomotion pipeline entry point, not a mixed domain implementation file.
+- Keep XR-control planning in `apps/runtime-web/src/locomotion/frame-xr-controls.ts`, movement planning in `apps/runtime-web/src/locomotion/frame-movement.ts`, and frame command flushing in `apps/runtime-web/src/locomotion/frame-command-bridge.ts`.
+- Preserve the rule that movement-stage input is collected after XR/confirm command execution, so post-confirm seating state is observed before movement planning.
+- Preserve the frame command bridge flush semantics around `{ type: "confirm_interaction_target" }`: runtime commands flush before confirm and again after confirm.
+- `updateMovement(...)` in `main.ts` should stay a short orchestration call that delegates through `executeFrameLocomotionPipeline(...)` and local `createFrameLocomotionHandlers(frameContext)`.
+- Future runtime behavior changes should add or update tests in the specific domain module they touch: local pose, input, locomotion, interaction, seating, runtime commands, or avatar transport.
+- Preserve the current acceptance invariants for direct pose writes, XR frame sampling, seating `three` imports, and main seat command routing.
+
 ## Confirmed working Hall path
 
 - The first reliable Hall asset is not raw FBX. It is the exported GLB at `/mnt/d/Repository/project-noah/examples/assets/TheHallScene.glb`.
