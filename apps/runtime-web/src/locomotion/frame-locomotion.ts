@@ -4,14 +4,12 @@ import type { FlatVector } from "../movement.js";
 import {
   executeFrameLocomotionMovementPlan,
   planFrameLocomotionMovement,
-  type FrameLocomotionMovementPlan,
-  type FrameLocomotionMovementPlanHandlers
+  type FrameLocomotionMovementPlan
 } from "./frame-movement.js";
 import {
   executeFrameXrControlPlan,
   planFrameXrControls,
-  type FrameXrControlPlan,
-  type FrameXrControlPlanHandlers
+  type FrameXrControlPlan
 } from "./frame-xr-controls.js";
 import type { RuntimeCommand } from "./runtime-commands.js";
 
@@ -47,19 +45,23 @@ export interface FrameLocomotionPipelineInput {
   turnArmed: boolean;
 }
 
-export type FrameLocomotionPipelineHandlers = FrameXrControlPlanHandlers
-  & FrameLocomotionMovementPlanHandlers
-  & {
-    getYaw(): number;
-    getPose(): LocalPose;
-    getCurrentSeatId(): string | null;
-    getSeatRootPosition(seatId: string): Vector3Like | null;
-    getSeatYaw(seatId: string): number | undefined;
-    getLastAppliedSeatLockId(): string | null;
-    getCameraForward(): FlatVector;
-    getDesktopFastMove(): boolean;
-    getBotMove(): FlatVector | null;
-  };
+export interface FrameLocomotionReadModel {
+  getYaw(): number;
+  getPose(): LocalPose;
+  getCurrentSeatId(): string | null;
+  getSeatRootPosition(seatId: string): Vector3Like | null;
+  getSeatYaw(seatId: string): number | undefined;
+  getLastAppliedSeatLockId(): string | null;
+  getCameraForward(): FlatVector;
+  getDesktopFastMove(): boolean;
+  getBotMove(): FlatVector | null;
+}
+
+export interface FrameLocomotionCommandSink {
+  executeCommands(commands: FrameLocomotionCommand[]): void;
+}
+
+export type FrameLocomotionPipelineHandlers = FrameLocomotionReadModel & FrameLocomotionCommandSink;
 
 export interface FrameLocomotionPipelineResult {
   xrControlPlan: FrameXrControlPlan;
