@@ -34,7 +34,7 @@ import { createLocalPoseController, type Vector3Like } from "./local/local-pose.
 import { resolveDesktopTouchInputIntents, resolveTouchMoveVector, resolveXrConfirmInteractionIntent, resolveXrInputIntents } from "./input/input-intents.js";
 import type { RuntimeFrameContext } from "./input/runtime-frame-context.js";
 import { executeFrameLocomotionCommands, type FrameLocomotionCommand } from "./locomotion/frame-command-bridge.js";
-import { executeFrameLocomotionPipeline } from "./locomotion/frame-locomotion.js";
+import { executeFrameLocomotionPipeline, type FrameLocomotionPipelineHandlers } from "./locomotion/frame-locomotion.js";
 import { createInteractionCommandPlanner } from "./locomotion/interaction-command-planner.js";
 import { createRuntimeCommandExecutor } from "./locomotion/runtime-command-bridge.js";
 import {
@@ -2202,14 +2202,8 @@ function sampleRuntimeFrameContext(deltaSeconds: number, nowMs: number): Runtime
   };
 }
 
-function updateMovement(delta: number, frameContext: RuntimeFrameContext): void {
-  executeFrameLocomotionPipeline({
-    frameContext,
-    deltaSeconds: delta,
-    floorY: sceneTeleportFloorY,
-    turnCooldownSeconds: xrTurnCooldown,
-    turnArmed: xrTurnArmed
-  }, {
+function createFrameLocomotionHandlers(frameContext: RuntimeFrameContext): FrameLocomotionPipelineHandlers {
+  return {
     getYaw: () => localPoseController.getYaw(),
     getPose: () => localPoseController.getPose(),
     getCurrentSeatId,
@@ -2228,7 +2222,17 @@ function updateMovement(delta: number, frameContext: RuntimeFrameContext): void 
       ? botDirection(performance.now() / 1000)
       : null,
     executeCommands: (commands) => executeFrameRuntimeCommandList(frameContext, commands)
-  });
+  };
+}
+
+function updateMovement(delta: number, frameContext: RuntimeFrameContext): void {
+  executeFrameLocomotionPipeline({
+    frameContext,
+    deltaSeconds: delta,
+    floorY: sceneTeleportFloorY,
+    turnCooldownSeconds: xrTurnCooldown,
+    turnArmed: xrTurnArmed
+  }, createFrameLocomotionHandlers(frameContext));
 }
 
 async function syncPresence(mode: PresenceState["mode"], audioActive: boolean): Promise<void> {
