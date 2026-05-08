@@ -329,36 +329,33 @@ export function executeFrameLocomotionMovementPlan(
   plan: FrameLocomotionMovementPlan,
   handlers: FrameLocomotionMovementPlanHandlers
 ): void {
+  const commands = planFrameLocomotionMovementCommands(plan);
+  if (commands.length > 0) {
+    handlers.executeCommands(commands);
+  }
+}
+
+export function planFrameLocomotionMovementCommands(
+  plan: FrameLocomotionMovementPlan
+): FrameLocomotionCommand[] {
   if (plan.kind === "seat_lock") {
-    if (plan.commands.length > 0) {
-      handlers.executeCommands(plan.commands);
-    }
-    handlers.executeCommands([
+    return [
+      ...plan.commands,
       { type: "set_last_applied_seat_lock_id", seatId: plan.seatId },
       { type: "set_avatar_movement", move: plan.avatarMove, turnRate: plan.avatarTurnRate },
       { type: "update_local_position_debug" }
-    ]);
-    return;
+    ];
   }
 
   const movementCommands = plan.commands.filter((command) => command.type === "move_flat_to");
   const preMovementCommands = plan.commands.filter((command) => command.type !== "move_flat_to");
-  if (preMovementCommands.length > 0) {
-    handlers.executeCommands(preMovementCommands);
-  }
-
-  if (plan.debugLocomotionMode) {
-    handlers.executeCommands([{ type: "set_debug_locomotion_mode", mode: plan.debugLocomotionMode }]);
-  }
-
-  if (movementCommands.length > 0) {
-    handlers.executeCommands(movementCommands);
-  }
-
-  handlers.executeCommands([
+  return [
+    ...preMovementCommands,
+    ...(plan.debugLocomotionMode ? [{ type: "set_debug_locomotion_mode", mode: plan.debugLocomotionMode } as const] : []),
+    ...movementCommands,
     { type: "set_avatar_movement", move: plan.avatarMove, turnRate: plan.avatarTurnRate },
     { type: "update_local_position_debug" }
-  ]);
+  ];
 }
 
 function executeFrameXrControlStage(

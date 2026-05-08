@@ -8,6 +8,7 @@ import {
   executeFrameLocomotionCommands,
   executeFrameXrControlPlan,
   planFrameLocomotionMovement,
+  planFrameLocomotionMovementCommands,
   planFrameXrControlCommands,
   planFrameXrControls
 } from "./frame-locomotion.js";
@@ -393,6 +394,53 @@ test("frame locomotion releases missing seat anchor and falls through to standin
   assert.equal(plan.avatarTurnRate, 0);
   assert.equal(plan.pose.position.x, 0);
   assert.equal(plan.pose.position.z, -2.4);
+});
+
+test("frame locomotion movement command planner preserves release, debug, move, and avatar order", () => {
+  const plan = planFrameLocomotionMovement({
+    pose,
+    frameContext: {
+      source: "desktop",
+      intents: { ...idleIntents, move: { x: 0, z: -1 } }
+    },
+    deltaSeconds: 1,
+    floorY: 0,
+    currentSeatId: "missing-seat",
+    seatRootPosition: null,
+    lastAppliedSeatLockId: "missing-seat",
+    cameraForward: { x: 0, z: -1 },
+    desktopFastMove: false
+  });
+
+  assert.deepEqual(planFrameLocomotionMovementCommands(plan).map((command) => command.type), [
+    "release_local_seat",
+    "set_debug_locomotion_mode",
+    "move_flat_to",
+    "set_avatar_movement",
+    "update_local_position_debug"
+  ]);
+});
+
+test("frame locomotion movement command planner preserves seat lock side-effect order", () => {
+  const plan = planFrameLocomotionMovement({
+    pose,
+    frameContext: { source: "xr", intents: { ...idleIntents, source: "xr" } },
+    deltaSeconds: 0.016,
+    floorY: 0,
+    currentSeatId: "seat-a",
+    seatRootPosition: { x: 5, y: 0.45, z: -2 },
+    seatYaw: Math.PI / 2,
+    lastAppliedSeatLockId: null,
+    cameraForward: { x: 0, z: -1 },
+    desktopFastMove: false
+  });
+
+  assert.deepEqual(planFrameLocomotionMovementCommands(plan).map((command) => command.type), [
+    "lock_to_seat",
+    "set_last_applied_seat_lock_id",
+    "set_avatar_movement",
+    "update_local_position_debug"
+  ]);
 });
 
 test("frame locomotion uses bot move for non-XR movement planning", () => {
