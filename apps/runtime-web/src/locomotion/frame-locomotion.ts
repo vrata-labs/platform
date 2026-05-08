@@ -4,6 +4,7 @@ import type { FlatVector } from "../movement.js";
 import {
   executeFrameLocomotionMovementPlan,
   planFrameLocomotionMovement,
+  type FrameLocomotionMovementInput,
   type FrameLocomotionMovementPlan
 } from "./frame-movement.js";
 import {
@@ -108,24 +109,31 @@ function executeFrameXrControlStage(
   return xrControlPlan;
 }
 
-function executeFrameMovementStage(
+function buildFrameMovementInput(
   input: FrameLocomotionPipelineInput,
-  handlers: FrameLocomotionPipelineHandlers
-): FrameLocomotionMovementPlan {
-  const currentSeatId = handlers.getCurrentSeatId();
-  const movementPlan = planFrameLocomotionMovement({
-    pose: handlers.getPose(),
+  readModel: FrameLocomotionReadModel
+): FrameLocomotionMovementInput {
+  const currentSeatId = readModel.getCurrentSeatId();
+  return {
+    pose: readModel.getPose(),
     frameContext: input.frameContext,
     deltaSeconds: input.deltaSeconds,
     floorY: input.floorY,
     currentSeatId,
-    seatRootPosition: currentSeatId ? handlers.getSeatRootPosition(currentSeatId) : null,
-    seatYaw: currentSeatId ? handlers.getSeatYaw(currentSeatId) : undefined,
-    lastAppliedSeatLockId: handlers.getLastAppliedSeatLockId(),
-    cameraForward: handlers.getCameraForward(),
-    desktopFastMove: handlers.getDesktopFastMove(),
-    botMove: handlers.getBotMove()
-  });
+    seatRootPosition: currentSeatId ? readModel.getSeatRootPosition(currentSeatId) : null,
+    seatYaw: currentSeatId ? readModel.getSeatYaw(currentSeatId) : undefined,
+    lastAppliedSeatLockId: readModel.getLastAppliedSeatLockId(),
+    cameraForward: readModel.getCameraForward(),
+    desktopFastMove: readModel.getDesktopFastMove(),
+    botMove: readModel.getBotMove()
+  };
+}
+
+function executeFrameMovementStage(
+  input: FrameLocomotionPipelineInput,
+  handlers: FrameLocomotionPipelineHandlers
+): FrameLocomotionMovementPlan {
+  const movementPlan = planFrameLocomotionMovement(buildFrameMovementInput(input, handlers));
 
   executeFrameLocomotionMovementPlan(movementPlan, handlers);
   return movementPlan;

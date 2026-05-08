@@ -6,7 +6,12 @@ import type { RuntimeFrameContext } from "../input/runtime-frame-context.js";
 import type { LocalPose, Vector3Like } from "../local/local-pose.js";
 import type { FlatVector, XrAxesSample } from "../movement.js";
 import { resolveLocomotionMode } from "./local-locomotion.js";
-import { executeFrameLocomotionCommands, executeFrameLocomotionPipeline, type FrameLocomotionCommand } from "./frame-locomotion.js";
+import {
+  executeFrameLocomotionCommands,
+  executeFrameLocomotionPipeline,
+  type FrameLocomotionCommand,
+  type FrameLocomotionPipelineResult
+} from "./frame-locomotion.js";
 import {
   executeRuntimeCommands,
   planInteractionCommands,
@@ -215,7 +220,7 @@ function runFrame(state: FlowState, input: {
   seatYaw?: number;
   cameraForward?: FlatVector;
   nowMs?: number;
-}): void {
+}): FrameLocomotionPipelineResult {
   const deltaSeconds = input.deltaSeconds ?? input.frameContext.deltaSeconds;
   const floorY = input.floorY ?? 0;
   const executeFrameCommands = (commands: FrameLocomotionCommand[]) => {
@@ -240,7 +245,7 @@ function runFrame(state: FlowState, input: {
     });
   };
 
-  executeFrameLocomotionPipeline({
+  return executeFrameLocomotionPipeline({
     frameContext: input.frameContext,
     deltaSeconds,
     floorY,
@@ -407,6 +412,27 @@ test("frame locomotion flow releases a seated user before floor teleport", () =>
   assert.deepEqual(state.telemetry, ["trigger_press", "seat_release"]);
   assert.equal(state.currentSeatId, null);
   assert.deepEqual(state.pose.position, { x: 2, y: 0, z: -3 });
+});
+
+test("frame locomotion movement stage reads post-confirm seat release state", () => {
+  const state = createState({ currentSeatId: "seat-a", lastAppliedSeatLockId: "seat-a" });
+
+  const result = runFrame(state, {
+    frameContext: frameContext({ source: "xr", confirmInteraction: true, triggerPressed: true }),
+    target: { kind: "floor", point: { x: 2, y: 0, z: -3 } },
+    seatRootPosition: { x: 5, y: 0.45, z: -2 },
+    seatYaw: Math.PI / 2
+  });
+
+  assert.equal(result.movementPlan.kind, "standing");
+  if (result.movementPlan.kind !== "standing") {
+    throw new Error("expected movement stage to observe released seat state");
+  }
+  assert.deepEqual(result.movementPlan.commands, []);
+  assert.equal(state.currentSeatId, null);
+  assert.equal(state.lastAppliedSeatLockId, null);
+  assert.deepEqual(state.pose.position, { x: 2, y: 0, z: -3 });
+  assert.equal(state.commands.some((command) => command.type === "lock_to_seat"), false);
 });
 
 test("frame locomotion flow claims a targeted seat without local teleport", () => {
