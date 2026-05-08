@@ -5,6 +5,7 @@ import { Room, RoomEvent, Track } from "livekit-client";
 import { appendBrandingSuffix, applyRoomShellBootState } from "./boot-session.js";
 import { bootRuntime, fetchRuntimeSpaces, listPresence, planVoiceSession, removePresence, resolveCurrentSpace, upsertPresence, type PresenceState, type RuntimeSpaceOption } from "./index.js";
 import { createMotionTrack, pushMotionSample, sampleMotion, type MotionTrack } from "./motion-state.js";
+import { mergePresenceSources } from "./presence-sources.js";
 import { connectRoomState, sendAvatarPoseFrame, sendAvatarReliableState, sendParticipantUpdate, type RoomStateClient, type RoomStateSnapshot } from "./room-state-client.js";
 import { classifyMediaError, classifyRoomStateError, createFaultError, getRuntimeIssue, shouldRetryConnection, type RuntimeIssue } from "./runtime-errors.js";
 import { canRetry, createReconnectPolicy, getReconnectDelayMs } from "./reconnect.js";
@@ -261,6 +262,8 @@ const fallbackEnvironment: THREE.Object3D[] = [floor, grid, roomBox, displaySurf
 
 const bodyGeometry = new THREE.CapsuleGeometry(0.24, 0.8, 6, 12);
 const headGeometry = new THREE.SphereGeometry(0.18, 20, 20);
+const API_PRESENCE_SYNC_INTERVAL_MS = 1000;
+const API_PRESENCE_REFRESH_INTERVAL_MS = 1000;
 
 const keyState: Record<string, boolean> = {};
 let pointerActive = false;
@@ -285,6 +288,12 @@ let activeMockScreenShareStream: MediaStream | null = null;
 let mediaRoomReady = false;
 let roomStateClient: RoomStateClient | null = null;
 let roomStateConnected = false;
+let latestRealtimeParticipants: PresenceState[] = [];
+let latestFallbackParticipants: PresenceState[] = [];
+let lastApiPresenceSyncAtMs = 0;
+let lastApiPresenceRefreshAtMs = 0;
+let apiPresenceSyncInFlight = false;
+let apiPresenceRefreshInFlight = false;
 let roomStateReconnectTimer: number | null = null;
 let seatReclaimRetryTimer: number | null = null;
 let xrSelectPressedLastFrame = false;
@@ -469,6 +478,10 @@ function applySnapshotParticipants(people: PresenceState[]): void {
   debugState.lastPresenceRefreshAt = Date.now();
 }
 
+function applyMergedPresenceParticipants(): void {
+  applySnapshotParticipants(mergePresenceSources(latestRealtimeParticipants, latestFallbackParticipants));
+}
+
 function clearInteractionVisuals(): void {
   clearInteractionRayView({
     view: interactionRayView,
@@ -547,7 +560,8 @@ function syncSeatStateFromOccupancy(): void {
 function handleRoomSnapshot(snapshot: RoomStateSnapshot): void {
   roomSeatOccupancy = { ...(snapshot.seatOccupancy ?? {}) };
   syncSeatStateFromOccupancy();
-  applySnapshotParticipants(snapshot.participants);
+  latestRealtimeParticipants = snapshot.participants;
+  applyMergedPresenceParticipants();
 }
 
 function updatePointerNdcFromClientPosition(clientX: number, clientY: number): void {
@@ -1574,7 +1588,11 @@ async function reportDiagnostics(note?: string): Promise<void> {
       displayName,
       mode: latestMode,
       userAgent: navigator.userAgent,
+      statusLine: debugState.statusLine,
       locomotionMode: debugState.locomotionMode,
+      roomStateConnected: debugState.roomStateConnected,
+      roomStateUrl: debugState.roomStateUrl,
+      roomStateMode: debugState.roomStateMode,
       audioState: debugState.audioState,
       screenShareState: debugState.screenShareState,
       localPosition: debugState.localPosition,
@@ -1596,6 +1614,7 @@ async function reportDiagnostics(note?: string): Promise<void> {
       avatarDebug: debugState.avatarDebug,
       avatarSnapshot: debugState.avatarSnapshot,
       avatarTransportPreview: debugState.avatarTransportPreview,
+      avatarPoseTransport: debugState.avatarPoseTransport,
       xrAvatarDebug: debugState.xrAvatarDebug,
       sceneDebug: {
         ...debugState.sceneDebug,
@@ -2271,24 +2290,67 @@ async function syncPresence(mode: PresenceState["mode"], audioActive: boolean): 
     updatedAt: new Date().toISOString()
   };
 
+  let sentRealtimePresence = false;
   if (roomStateClient && roomStateConnected) {
     sendParticipantUpdate(roomStateClient, presencePayload);
     if (runtimeFlags.avatarsEnabled && debugState.avatarTransportPreview) {
       sendAvatarReliableState(roomStateClient, debugState.avatarTransportPreview.reliableState);
     }
-  } else {
-    await upsertPresence(apiBaseUrl, roomId, presencePayload);
+    sentRealtimePresence = true;
   }
-  debugState.lastPresenceSyncAt = Date.now();
+
+  const nowMs = Date.now();
+  let sentFallbackPresence = false;
+  if (!apiPresenceSyncInFlight && nowMs - lastApiPresenceSyncAtMs >= API_PRESENCE_SYNC_INTERVAL_MS) {
+    apiPresenceSyncInFlight = true;
+    lastApiPresenceSyncAtMs = nowMs;
+    try {
+      await upsertPresence(apiBaseUrl, roomId, presencePayload);
+      sentFallbackPresence = true;
+    } catch (error) {
+      console.error(error);
+      if (!sentRealtimePresence) {
+        const issue = classifyRoomStateError(error);
+        applyIssue(issue, {
+          degradedMode: "api_fallback",
+          roomStateMode: "fallback",
+          lastRecoveryAction: "presence_sync_failed",
+          roomStateLabel: "Room-state: fallback API"
+        });
+        void reportDiagnostics("presence_sync_issue");
+      }
+    } finally {
+      apiPresenceSyncInFlight = false;
+    }
+  }
+
+  if (sentRealtimePresence || sentFallbackPresence) {
+    debugState.lastPresenceSyncAt = Date.now();
+  }
 }
 
 async function refreshPresence(): Promise<void> {
-  if (roomStateConnected) {
-    debugState.lastPresenceRefreshAt = Date.now();
+  const nowMs = Date.now();
+  if (apiPresenceRefreshInFlight || nowMs - lastApiPresenceRefreshAtMs < API_PRESENCE_REFRESH_INTERVAL_MS) {
     return;
   }
-  const people = await listPresence(apiBaseUrl, roomId);
-  applySnapshotParticipants(people);
+  apiPresenceRefreshInFlight = true;
+  lastApiPresenceRefreshAtMs = nowMs;
+  const apiFallbackRequired = !roomStateConnected;
+  try {
+    latestFallbackParticipants = await listPresence(apiBaseUrl, roomId);
+    if (apiFallbackRequired) {
+      latestRealtimeParticipants = [];
+    }
+    applyMergedPresenceParticipants();
+  } catch (error) {
+    if (apiFallbackRequired) {
+      throw error;
+    }
+    console.warn("api_presence_refresh_failed", error);
+  } finally {
+    apiPresenceRefreshInFlight = false;
+  }
 }
 
 function setupAudio(room: Room): void {

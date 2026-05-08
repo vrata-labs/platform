@@ -133,6 +133,52 @@ test("two participants can coexist in same room", async ({ browser, request }) =
   await pageB.close();
 });
 
+test("API fallback presence stays visible to realtime room-state clients", async ({ browser, request }) => {
+  const room = await createAvatarHallRoom(request, `Mixed Presence ${Date.now()}`);
+  const realtimePage = await browser.newPage();
+  const fallbackPage = await browser.newPage();
+
+  try {
+    await realtimePage.goto(`http://127.0.0.1:4000/rooms/${room.roomId}?debug=1&bot=line`);
+    await fallbackPage.goto(`http://127.0.0.1:4000/rooms/${room.roomId}?debug=1&failroomstate=1&bot=line`);
+
+    await expect.poll(async () => {
+      const realtimeDebug = await realtimePage.evaluate(() => (window as Window & {
+        __NOAH_DEBUG__?: {
+          roomStateConnected?: boolean;
+          remoteAvatarCount?: number;
+          remoteAvatarParticipants?: Array<{ presenceSeen?: boolean }>;
+        };
+      }).__NOAH_DEBUG__);
+      const fallbackDebug = await fallbackPage.evaluate(() => (window as Window & {
+        __NOAH_DEBUG__?: {
+          roomStateConnected?: boolean;
+          remoteAvatarCount?: number;
+          remoteAvatarParticipants?: Array<{ presenceSeen?: boolean }>;
+        };
+      }).__NOAH_DEBUG__);
+
+      return {
+        realtimeConnected: realtimeDebug?.roomStateConnected ?? false,
+        realtimeSeesFallback: (realtimeDebug?.remoteAvatarCount ?? 0) >= 1
+          && Boolean(realtimeDebug?.remoteAvatarParticipants?.some((item) => item.presenceSeen)),
+        fallbackSeesRealtime: (fallbackDebug?.remoteAvatarCount ?? 0) >= 1
+          && Boolean(fallbackDebug?.remoteAvatarParticipants?.some((item) => item.presenceSeen))
+      };
+    }, {
+      timeout: 30000,
+      intervals: [1000, 2000, 3000]
+    }).toEqual({
+      realtimeConnected: true,
+      realtimeSeesFallback: true,
+      fallbackSeesRealtime: true
+    });
+  } finally {
+    await realtimePage.close();
+    await fallbackPage.close();
+  }
+});
+
 test("bot mode emits movement diagnostics automatically", async ({ page, request }) => {
   await page.goto("/rooms/demo-room?bot=line&debug=1");
 

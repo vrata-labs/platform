@@ -633,6 +633,85 @@ test.describe("@staging runtime HUD space selector", () => {
     }
   });
 
+  test("staging bridges API fallback presence with realtime room-state clients", async ({ browser, request }) => {
+    const targetName = `Staging Mixed Presence ${Date.now()}`;
+    let roomId: string | null = null;
+
+    try {
+      const createRoomResponse = await request.post("/api/rooms", {
+        headers: {
+          "x-noah-admin-token": stagingAdminToken
+        },
+        data: {
+          tenantId: "demo-tenant",
+          templateId: "meeting-room-basic",
+          name: targetName,
+          guestAllowed: true,
+          avatarConfig: {
+            avatarsEnabled: true,
+            avatarCatalogUrl: "/assets/avatars/catalog.v1.json",
+            avatarQualityProfile: "desktop-standard",
+            avatarFallbackCapsulesEnabled: true,
+            avatarSeatsEnabled: false
+          }
+        }
+      });
+      expect(createRoomResponse.ok()).toBeTruthy();
+      const room = await createRoomResponse.json() as { roomId: string };
+      roomId = room.roomId;
+
+      const realtimePage = await browser.newPage();
+      const fallbackPage = await browser.newPage();
+      try {
+        await realtimePage.goto(`/rooms/${room.roomId}?debug=1&bot=line`, { waitUntil: "domcontentloaded" });
+        await fallbackPage.goto(`/rooms/${room.roomId}?debug=1&failroomstate=1&bot=line`, { waitUntil: "domcontentloaded" });
+
+        await expect.poll(async () => {
+          const realtimeDebug = await realtimePage.evaluate(() => (window as Window & {
+            __NOAH_DEBUG__?: {
+              roomStateConnected?: boolean;
+              remoteAvatarCount?: number;
+              remoteAvatarParticipants?: Array<{ presenceSeen?: boolean }>;
+            };
+          }).__NOAH_DEBUG__);
+          const fallbackDebug = await fallbackPage.evaluate(() => (window as Window & {
+            __NOAH_DEBUG__?: {
+              remoteAvatarCount?: number;
+              remoteAvatarParticipants?: Array<{ presenceSeen?: boolean }>;
+            };
+          }).__NOAH_DEBUG__);
+
+          return {
+            realtimeConnected: realtimeDebug?.roomStateConnected ?? false,
+            realtimeSeesFallback: (realtimeDebug?.remoteAvatarCount ?? 0) >= 1
+              && Boolean(realtimeDebug?.remoteAvatarParticipants?.some((item) => item.presenceSeen)),
+            fallbackSeesRealtime: (fallbackDebug?.remoteAvatarCount ?? 0) >= 1
+              && Boolean(fallbackDebug?.remoteAvatarParticipants?.some((item) => item.presenceSeen))
+          };
+        }, {
+          timeout: 45000,
+          intervals: [1000, 2000, 3000]
+        }).toEqual({
+          realtimeConnected: true,
+          realtimeSeesFallback: true,
+          fallbackSeesRealtime: true
+        });
+      } finally {
+        await realtimePage.close();
+        await fallbackPage.close();
+      }
+    } finally {
+      if (roomId) {
+        const deleteResponse = await request.delete(`/api/rooms/${roomId}`, {
+          headers: {
+            "x-noah-admin-token": stagingAdminToken
+          }
+        });
+        expect(deleteResponse.ok()).toBeTruthy();
+      }
+    }
+  });
+
   test("staging keeps baseline avatar presence by default and isolates experimental leg IK behind query override", async ({ page }) => {
     test.setTimeout(90000);
 
