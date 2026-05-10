@@ -11,8 +11,8 @@ test("resolveSelfAvatarVisibility keeps hands only on desktop", () => {
   assert.equal(resolveSelfAvatarVisibility({ inputMode: "desktop", xrPresenting: false }), "hands-only");
 });
 
-test("resolveSelfAvatarVisibility keeps upper body on mobile", () => {
-  assert.equal(resolveSelfAvatarVisibility({ inputMode: "mobile", xrPresenting: false }), "upper-body");
+test("resolveSelfAvatarVisibility keeps hands only on mobile", () => {
+  assert.equal(resolveSelfAvatarVisibility({ inputMode: "mobile", xrPresenting: false }), "hands-only");
 });
 
 test("resolveSelfAvatarVisibility returns hidden during fallback", () => {
@@ -21,6 +21,6 @@ test("resolveSelfAvatarVisibility returns hidden during fallback", () => {
 
 test("resolveAvatarViewProfile returns mobile pose profile", () => {
   const profile = resolveAvatarViewProfile({ inputMode: "mobile", xrPresenting: false });
-  assert.equal(profile.visibility, "upper-body");
+  assert.equal(profile.visibility, "hands-only");
   assert.equal(profile.poseProfile.handHeight, 1.02);
 });

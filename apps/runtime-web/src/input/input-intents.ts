@@ -1,5 +1,7 @@
 import { computeKeyboardDirection, resolveXrSnapTurnAxis, sanitizeXrAxes, type FlatVector, type XrAxesSample } from "../movement.js";
 
+export type TouchControlZone = "move" | "look";
+
 export interface InputIntents {
   move: { x: number; z: number };
   snapTurn: { axis: number };
@@ -47,6 +49,30 @@ export function createIdleInputIntents(source: InputIntents["source"]): InputInt
 
 function clampInputAxis(value: number): number {
   return Math.max(-1, Math.min(1, value));
+}
+
+export function resolveTouchControlZone(input: {
+  clientX: number;
+  viewportWidth: number;
+}): TouchControlZone {
+  if (input.viewportWidth <= 0) {
+    return "move";
+  }
+  return input.clientX < input.viewportWidth / 2 ? "move" : "look";
+}
+
+export function resolveTouchDragMoveVector(input: {
+  startClientX: number;
+  startClientY: number;
+  clientX: number;
+  clientY: number;
+  radiusPx?: number;
+}): FlatVector {
+  const radiusPx = Math.max(1, input.radiusPx ?? 90);
+  return {
+    x: clampInputAxis((input.clientX - input.startClientX) / radiusPx),
+    z: clampInputAxis((input.clientY - input.startClientY) / radiusPx)
+  };
 }
 
 export function resolveTouchMoveVector(input: {

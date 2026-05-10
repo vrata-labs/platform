@@ -138,6 +138,60 @@ test("mobile room HUD can collapse and scroll without covering the scene", async
   expect(collapsedHeight).toBeLessThan(openMetrics.height);
 });
 
+test("mobile right-side drag turns the camera", async ({ browser }) => {
+  const mobileContext = await browser.newContext({
+    hasTouch: true,
+    isMobile: true,
+    viewport: { width: 390, height: 844 },
+    userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+  });
+  const mobilePage = await mobileContext.newPage();
+
+  async function dispatchTouch(type: "touchstart" | "touchmove" | "touchend", clientX: number, clientY: number): Promise<void> {
+    await mobilePage.evaluate(({ type, clientX, clientY }) => {
+      const canvas = document.querySelector("canvas");
+      if (!canvas) {
+        throw new Error("canvas missing");
+      }
+      const touch = new Touch({
+        identifier: 1,
+        target: canvas,
+        clientX,
+        clientY
+      });
+      canvas.dispatchEvent(new TouchEvent(type, {
+        bubbles: true,
+        cancelable: true,
+        touches: type === "touchend" ? [] : [touch],
+        targetTouches: type === "touchend" ? [] : [touch],
+        changedTouches: [touch]
+      }));
+    }, { type, clientX, clientY });
+  }
+
+  try {
+    await mobilePage.goto("/rooms/demo-room?debug=1");
+    await mobilePage.locator("canvas").waitFor();
+
+    const yawBefore = await mobilePage.evaluate(() => (window as Window & {
+      __NOAH_DEBUG__?: { localPose?: { root?: { yaw?: number } } };
+    }).__NOAH_DEBUG__?.localPose?.root?.yaw ?? 0);
+
+    await dispatchTouch("touchstart", 340, 420);
+    await dispatchTouch("touchmove", 260, 420);
+    await dispatchTouch("touchend", 260, 420);
+
+    await expect.poll(async () => mobilePage.evaluate(() => (window as Window & {
+      __NOAH_DEBUG__?: { localPose?: { root?: { yaw?: number } } };
+    }).__NOAH_DEBUG__?.localPose?.root?.yaw ?? 0), {
+      timeout: 5000,
+      intervals: [100, 250, 500]
+    }).not.toBe(yawBefore);
+  } finally {
+    await mobileContext.close();
+  }
+});
+
 test("room-state service health endpoint responds", async () => {
   const response = await fetch("http://127.0.0.1:2567/health");
   expect(response.ok).toBeTruthy();
@@ -870,7 +924,7 @@ test("avatar-enabled room recovers remote avatar state after late join and force
   }
 });
 
-test("avatar-enabled room uses mobile upper-body profile on mobile user agent", async ({ browser, request }) => {
+test("avatar-enabled room keeps mobile self avatar hands-only on mobile user agent", async ({ browser, request }) => {
   const createRoomResponse = await request.post("/api/rooms", {
     headers: {
       "x-noah-admin-token": "test-admin-token"
@@ -922,7 +976,7 @@ test("avatar-enabled room uses mobile upper-body profile on mobile user agent", 
       intervals: [1000, 2000, 3000]
     }).toEqual({
       state: "loaded",
-      visibilityState: "upper-body",
+      visibilityState: "hands-only",
       controllerProfile: "mobile_touch_fallback",
       inputMode: "mobile"
     });

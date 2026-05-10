@@ -279,7 +279,7 @@ test("createLocalAvatarController reflects lipsync state in diagnostics", () => 
   assert.equal(controller.diagnostics.lipsyncSourceState, "active");
 });
 
-test("createLocalAvatarController hides lower body for mobile upper-body profile", () => {
+test("createLocalAvatarController keeps mobile self avatar hands-only", () => {
   const controller = createLocalAvatarController({
     presets: [createPreset("preset-01")],
     diagnosticsInput: {
@@ -307,9 +307,17 @@ test("createLocalAvatarController hides lower body for mobile upper-body profile
 
   const torso = controller.root.children[0]!;
   const lowerBody = controller.root.children[1]!;
-  assert.equal(torso.visible, true);
+  const head = controller.root.children[2]!;
+  const mouth = head.children[0]!;
+  const leftHand = controller.root.children[3]!;
+  const rightHand = controller.root.children[4]!;
+  assert.equal(torso.visible, false);
   assert.equal(lowerBody.visible, false);
-  assert.equal(controller.diagnostics.visibilityState, "upper-body");
+  assert.equal(head.visible, false);
+  assert.equal(mouth.visible, false);
+  assert.equal(leftHand.visible, true);
+  assert.equal(rightHand.visible, true);
+  assert.equal(controller.diagnostics.visibilityState, "hands-only");
   assert.equal(controller.diagnostics.controllerProfile, "mobile_touch_fallback");
 });
 

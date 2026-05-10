@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 
 import {
   resolveDesktopTouchInputIntents,
+  resolveTouchControlZone,
+  resolveTouchDragMoveVector,
   resolveTouchMoveVector,
   resolveXrConfirmInteractionIntent,
   resolveXrInputIntents
@@ -103,4 +105,27 @@ test("touch move vector normalizes viewport position and clamps edges", () => {
     viewportWidth: 100,
     viewportHeight: 100
   }), { x: 1, z: -1 });
+});
+
+test("touch control zone splits mobile screen into move and look halves", () => {
+  assert.equal(resolveTouchControlZone({ clientX: 120, viewportWidth: 390 }), "move");
+  assert.equal(resolveTouchControlZone({ clientX: 300, viewportWidth: 390 }), "look");
+});
+
+test("touch drag move vector uses drag direction from touch start", () => {
+  assert.deepEqual(resolveTouchDragMoveVector({
+    startClientX: 100,
+    startClientY: 300,
+    clientX: 145,
+    clientY: 255,
+    radiusPx: 90
+  }), { x: 0.5, z: -0.5 });
+
+  assert.deepEqual(resolveTouchDragMoveVector({
+    startClientX: 100,
+    startClientY: 300,
+    clientX: -100,
+    clientY: 600,
+    radiusPx: 90
+  }), { x: -1, z: 1 });
 });

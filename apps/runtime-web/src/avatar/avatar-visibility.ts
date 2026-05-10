@@ -47,10 +47,6 @@ export function resolveSelfAvatarVisibility(input: {
     return "hands-only";
   }
 
-  if (input.inputMode === "mobile") {
-    return "upper-body";
-  }
-
   return "hands-only";
 }
 
@@ -61,7 +57,7 @@ export function resolveAvatarViewProfile(input: {
 }): AvatarViewProfile {
   const visibility = resolveSelfAvatarVisibility(input);
   if (visibility === "hands-only") {
-    return { visibility, poseProfile: VR_PROFILE };
+    return { visibility, poseProfile: input.inputMode === "mobile" ? MOBILE_PROFILE : VR_PROFILE };
   }
   if (visibility === "upper-body") {
     return { visibility, poseProfile: MOBILE_PROFILE };

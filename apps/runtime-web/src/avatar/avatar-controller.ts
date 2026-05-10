@@ -265,7 +265,7 @@ export function createLocalAvatarController(input: {
       visual.head.rotation.y = (frame.headYaw ?? frame.yaw) - frame.yaw;
       visual.head.rotation.z = pose.headTilt;
       applyProceduralMouthState(visual.mouth, mouthAmount);
-      visual.mouth.visible = visibility !== "hidden";
+      visual.mouth.visible = visibility === "full-body" || visibility === "upper-body";
       visual.leftHand.position.set(
         solve.leftHandLocal.x,
         solve.leftHandLocal.y + (vrDirectTracking ? 0 : pose.leftHandYOffset),

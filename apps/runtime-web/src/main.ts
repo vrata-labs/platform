@@ -32,7 +32,7 @@ import type { LocalAvatarSnapshotV1 } from "./avatar/avatar-types.js";
 import { createAvatarRegistry } from "./avatar/avatar-registry.js";
 import type { SceneBundleSeatAnchor } from "./scene-bundle.js";
 import { createLocalPoseController, type Vector3Like } from "./local/local-pose.js";
-import { resolveDesktopTouchInputIntents, resolveTouchMoveVector, resolveXrConfirmInteractionIntent, resolveXrInputIntents } from "./input/input-intents.js";
+import { resolveDesktopTouchInputIntents, resolveTouchControlZone, resolveTouchDragMoveVector, resolveXrConfirmInteractionIntent, resolveXrInputIntents, type TouchControlZone } from "./input/input-intents.js";
 import type { RuntimeFrameContext } from "./input/runtime-frame-context.js";
 import { executeFrameLocomotionCommands, type FrameLocomotionCommand } from "./locomotion/frame-command-bridge.js";
 import { executeFrameLocomotionPipeline, type FrameLocomotionPipelineHandlers } from "./locomotion/frame-locomotion.js";
@@ -301,6 +301,13 @@ let microphoneEnabled = false;
 let xrTurnCooldown = 0;
 let xrTurnArmed = true;
 let mobileTouchActive = false;
+let mobileTouchIdentifier: number | null = null;
+let mobileTouchZone: TouchControlZone | null = null;
+let mobileTouchMovedSinceStart = false;
+let mobileTouchStartClientX = 0;
+let mobileTouchStartClientY = 0;
+let mobileTouchLastClientX = 0;
+let mobileTouchLastClientY = 0;
 const mobileTouchVector = { x: 0, z: 0 };
 let diagnosticsAccumulator = 0;
 let latestMode: PresenceState["mode"] = presenceXrMockEnabled ? "vr" : /android|iphone|ipad/i.test(navigator.userAgent) ? "mobile" : "desktop";
@@ -2875,7 +2882,7 @@ renderer.domElement.addEventListener("click", (event) => {
 
 window.addEventListener("pointermove", (event) => {
   updatePointerNdcFromClientPosition(event.clientX, event.clientY);
-  if (!pointerActive || renderer.xr.isPresenting) {
+  if (event.pointerType === "touch" || !pointerActive || renderer.xr.isPresenting) {
     return;
   }
 
@@ -2899,29 +2906,74 @@ renderer.domElement.addEventListener("touchstart", (event) => {
   if (event.touches.length === 0 || renderer.xr.isPresenting) {
     return;
   }
+  const touch = event.touches[0];
+  if (!touch) {
+    return;
+  }
   mobileTouchActive = true;
-});
+  mobileTouchIdentifier = touch.identifier;
+  mobileTouchZone = resolveTouchControlZone({
+    clientX: touch.clientX,
+    viewportWidth: window.innerWidth
+  });
+  mobileTouchMovedSinceStart = false;
+  mobileTouchStartClientX = touch.clientX;
+  mobileTouchStartClientY = touch.clientY;
+  mobileTouchLastClientX = touch.clientX;
+  mobileTouchLastClientY = touch.clientY;
+  mobileTouchVector.x = 0;
+  mobileTouchVector.z = 0;
+}, { passive: true });
 
 renderer.domElement.addEventListener("touchmove", (event) => {
   if (!mobileTouchActive || event.touches.length === 0 || renderer.xr.isPresenting) {
     return;
   }
-  const touch = event.touches[0];
-  const vector = resolveTouchMoveVector({
-    clientX: touch.clientX,
-    clientY: touch.clientY,
-    viewportWidth: window.innerWidth,
-    viewportHeight: window.innerHeight
-  });
-  mobileTouchVector.x = vector.x;
-  mobileTouchVector.z = vector.z;
-});
+  const touch = Array.from(event.touches).find((candidate) => candidate.identifier === mobileTouchIdentifier) ?? event.touches[0];
+  if (!touch) {
+    return;
+  }
+  event.preventDefault();
+  const totalDistance = Math.hypot(touch.clientX - mobileTouchStartClientX, touch.clientY - mobileTouchStartClientY);
+  if (totalDistance > 4) {
+    mobileTouchMovedSinceStart = true;
+    pointerMovedSinceDown = true;
+  }
+  if (mobileTouchZone === "look") {
+    localPoseController.applyPointerLookDelta({
+      movementX: touch.clientX - mobileTouchLastClientX,
+      movementY: touch.clientY - mobileTouchLastClientY
+    });
+    mobileTouchVector.x = 0;
+    mobileTouchVector.z = 0;
+  } else {
+    const vector = resolveTouchDragMoveVector({
+      startClientX: mobileTouchStartClientX,
+      startClientY: mobileTouchStartClientY,
+      clientX: touch.clientX,
+      clientY: touch.clientY
+    });
+    mobileTouchVector.x = vector.x;
+    mobileTouchVector.z = vector.z;
+  }
+  mobileTouchLastClientX = touch.clientX;
+  mobileTouchLastClientY = touch.clientY;
+}, { passive: false });
 
-renderer.domElement.addEventListener("touchend", () => {
+function resetMobileTouchInput(): void {
+  if (mobileTouchMovedSinceStart) {
+    suppressPointerClick = true;
+  }
   mobileTouchActive = false;
+  mobileTouchIdentifier = null;
+  mobileTouchZone = null;
+  mobileTouchMovedSinceStart = false;
   mobileTouchVector.x = 0;
   mobileTouchVector.z = 0;
-});
+}
+
+renderer.domElement.addEventListener("touchend", resetMobileTouchInput);
+renderer.domElement.addEventListener("touchcancel", resetMobileTouchInput);
 
 window.addEventListener("resize", () => {
   camera.aspect = window.innerWidth / window.innerHeight;

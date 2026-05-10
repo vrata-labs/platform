@@ -82,7 +82,7 @@ interface RemoteAvatarParticipantModel {
   rightHandVisible: boolean;
   lastPoseAppliedAtMs: number | null;
   presenceUpdateTimesMs: number[];
-  maxObservedJumpM: number;
+  observedJumpSamples: Array<{ observedAtMs: number; meters: number }>;
   lastPresenceRoot: { x: number; y: number; z: number } | null;
   lipsync: AvatarLipsyncState;
 }
@@ -199,6 +199,13 @@ function computeUpdateHz(updateTimesMs: number[], nowMs: number): number {
     return 0;
   }
   return (updateTimesMs.length - 1) / (spanMs / 1000);
+}
+
+function computeMaxObservedJumpM(samples: Array<{ observedAtMs: number; meters: number }>, nowMs: number): number {
+  while (samples.length > 0 && nowMs - samples[0]!.observedAtMs > 5000) {
+    samples.shift();
+  }
+  return samples.reduce((maxJump, sample) => Math.max(maxJump, sample.meters), 0);
 }
 
 function resolvePlaybackDelayMs(recommendedPlaybackDelayMs: number, inputMode: string | null | undefined): number {
@@ -331,7 +338,7 @@ export function createRemoteAvatarRuntime(input: {
         rightHandVisible: false,
         lastPoseAppliedAtMs: null,
         presenceUpdateTimesMs: [],
-        maxObservedJumpM: 0,
+        observedJumpSamples: [],
         lastPresenceRoot: null,
         lipsync: {
           mouthAmount: 0,
@@ -430,7 +437,7 @@ export function createRemoteAvatarRuntime(input: {
           staleMs: Math.max(0, nowMs - captureTimeMs),
           updateHz: roundNumber(computeUpdateHz(participant.presenceUpdateTimesMs, nowMs), 2),
           interpolationDelayMs: playbackDelayMs,
-          maxObservedJumpM: roundNumber(participant.maxObservedJumpM),
+          maxObservedJumpM: roundNumber(computeMaxObservedJumpM(participant.observedJumpSamples, nowMs)),
           muted: presence?.muted ?? participant.reliableState?.audioActive === false,
           activeAudio: presence?.activeMedia.audio ?? participant.reliableState?.audioActive ?? false,
           hasVisualEntity: Boolean(entity),
@@ -487,7 +494,8 @@ export function createRemoteAvatarRuntime(input: {
           bodyMaterial.color.setHex(person.activeMedia.audio ? 0x5fc8ff : 0xbfd8ee);
         }
         const current = remoteMotionTracks.get(person.participantId) ?? { root: createMotionTrack(), body: createMotionTrack(), head: createMotionTrack() };
-        const capturedAtMs = getPresenceCaptureTime(person.updatedAt, Date.now());
+        const nowMs = Date.now();
+        const capturedAtMs = getPresenceCaptureTime(person.updatedAt, nowMs);
         if (model.presenceUpdateTimesMs[model.presenceUpdateTimesMs.length - 1] !== capturedAtMs) {
           model.presenceUpdateTimesMs.push(capturedAtMs);
         }
@@ -496,7 +504,10 @@ export function createRemoteAvatarRuntime(input: {
         const headTransform = normalizePoseTransform(person.headTransform, { x: root.x, y: 1.58, z: root.z, yaw: root.yaw, pitch: 0 });
         const nextRoot = { x: root.x, y: root.y, z: root.z };
         if (model.lastPresenceRoot && (previousPresence?.seq ?? 0) > 0 && (person.seq ?? 0) > 0) {
-          model.maxObservedJumpM = Math.max(model.maxObservedJumpM, distance3(model.lastPresenceRoot, nextRoot));
+          model.observedJumpSamples.push({
+            observedAtMs: nowMs,
+            meters: distance3(model.lastPresenceRoot, nextRoot)
+          });
         }
         model.lastPresenceRoot = nextRoot;
         remoteMotionTracks.set(person.participantId, {
