@@ -93,7 +93,6 @@ interface RemoteAvatarEntity {
   mouth: THREE.Mesh;
   leftHand: THREE.Mesh;
   rightHand: THREE.Mesh;
-  direction: THREE.Mesh;
 }
 
 interface RemoteAvatarMotion {
@@ -136,13 +135,6 @@ function makeHand(color: number): THREE.Mesh {
   );
 }
 
-function makeDirectionIndicator(): THREE.Mesh {
-  return new THREE.Mesh(
-    new THREE.BoxGeometry(0.04, 0.04, 0.45),
-    new THREE.MeshStandardMaterial({ color: 0x9cff8f, roughness: 0.4, metalness: 0.02 })
-  );
-}
-
 function roundNumber(value: number, decimals = 3): number {
   const scale = 10 ** decimals;
   return Math.round(value * scale) / scale;
@@ -178,13 +170,6 @@ function eulerFromQuaternion(rotation: { qx: number; qy: number; qz: number; qw:
     yaw: euler.y,
     pitch: euler.x
   };
-}
-
-function updateDirectionIndicator(entity: RemoteAvatarEntity, yaw: number, pitch: number): void {
-  const forward = new THREE.Vector3(Math.sin(yaw), -Math.sin(pitch), Math.cos(yaw)).normalize();
-  entity.direction.position.copy(entity.head.position).addScaledVector(forward, 0.34);
-  entity.direction.rotation.set(pitch, yaw, 0);
-  entity.direction.visible = entity.head.visible;
 }
 
 function computeUpdateHz(updateTimesMs: number[], nowMs: number): number {
@@ -360,9 +345,8 @@ export function createRemoteAvatarRuntime(input: {
       const mouth = headVisual.mouth;
       const leftHand = makeHand(0xf2b3a0);
       const rightHand = makeHand(0xf2b3a0);
-      const direction = makeDirectionIndicator();
-      input.scene.add(body, head, leftHand, rightHand, direction);
-      entity = { body, head, mouth, leftHand, rightHand, direction };
+      input.scene.add(body, head, leftHand, rightHand);
+      entity = { body, head, mouth, leftHand, rightHand };
       remoteAvatars.set(participant.participantId, entity);
       const root = normalizePoseTransform(participant.rootTransform);
       const bodyTransform = normalizePoseTransform(participant.bodyTransform, { x: root.x, y: 0.92, z: root.z, yaw: root.yaw });
@@ -521,12 +505,11 @@ export function createRemoteAvatarRuntime(input: {
           entity.body.rotation.y = bodyTransform.yaw;
           entity.head.rotation.y = headTransform.yaw;
           entity.head.rotation.x = headTransform.pitch;
-          updateDirectionIndicator(entity, headTransform.yaw, headTransform.pitch);
         }
       }
       for (const [id, mesh] of remoteAvatars.entries()) {
         if (!activeIds.has(id)) {
-          input.scene.remove(mesh.body, mesh.head, mesh.leftHand, mesh.rightHand, mesh.direction);
+          input.scene.remove(mesh.body, mesh.head, mesh.leftHand, mesh.rightHand);
           remoteAvatars.delete(id);
           remoteMotionTracks.delete(id);
           remoteAvatarParticipants.delete(id);
@@ -614,7 +597,6 @@ export function createRemoteAvatarRuntime(input: {
           entity.head.rotation.z = 0;
           entity.body.rotation.x = 0;
           entity.body.rotation.z = 0;
-          updateDirectionIndicator(entity, entity.head.rotation.y, entity.head.rotation.x);
           const forceVrHandsVisible = reliableState?.inputMode === "vr-controller" || reliableState?.inputMode === "vr-hand";
           entity.leftHand.visible = forceVrHandsVisible || poseFrame.leftHand.gesture > 0;
           entity.rightHand.visible = forceVrHandsVisible || poseFrame.rightHand.gesture > 0;
@@ -642,7 +624,6 @@ export function createRemoteAvatarRuntime(input: {
             entity.head.rotation.y = lerpAngleRadians(entity.head.rotation.y, headSample.yaw ?? fallbackBodyYaw, 0.25);
             entity.head.rotation.x = lerpAngleRadians(entity.head.rotation.x, headSample.pitch ?? 0, 0.25);
             entity.head.rotation.z = 0;
-            updateDirectionIndicator(entity, entity.head.rotation.y, entity.head.rotation.x);
           }
           entity.leftHand.visible = participant?.leftHandVisible ?? false;
           entity.rightHand.visible = participant?.rightHandVisible ?? false;
@@ -652,7 +633,7 @@ export function createRemoteAvatarRuntime(input: {
     },
     reset(debugState: RemoteAvatarDebugState): void {
       for (const mesh of remoteAvatars.values()) {
-        input.scene.remove(mesh.body, mesh.head, mesh.leftHand, mesh.rightHand, mesh.direction);
+        input.scene.remove(mesh.body, mesh.head, mesh.leftHand, mesh.rightHand);
       }
       remoteAvatars.clear();
       remoteMotionTracks.clear();

@@ -161,6 +161,37 @@ test("remote avatar runtime reflects hand visibility from pose gestures", () => 
   assert.equal(debugState.remoteAvatarParticipants[0]?.rightHandVisible, false);
 });
 
+test("remote avatar runtime does not add visible direction helpers", () => {
+  const scene = new THREE.Scene();
+  const runtime = createRemoteAvatarRuntime({
+    scene,
+    bodyGeometry: new THREE.CapsuleGeometry(0.24, 0.8, 6, 12),
+    headGeometry: new THREE.SphereGeometry(0.18, 20, 20),
+    localParticipantId: "local"
+  });
+  const debugState = createDebugState();
+
+  runtime.applySnapshotParticipants([{
+    participantId: "remote-no-helper",
+    displayName: "Remote No Helper",
+    mode: "desktop",
+    rootTransform: { x: 1, y: 0, z: 2 },
+    bodyTransform: { x: 1, y: 0, z: 2 },
+    headTransform: { x: 1, y: 0, z: 2 },
+    muted: false,
+    activeMedia: { audio: false, screenShare: false },
+    updatedAt: new Date(0).toISOString()
+  }], debugState);
+
+  const hasDirectionHelper = scene.children.some((child) => {
+    if (!(child instanceof THREE.Mesh) || !(child.material instanceof THREE.MeshStandardMaterial)) {
+      return false;
+    }
+    return child.material.color.getHex() === 0x9cff8f;
+  });
+  assert.equal(hasDirectionHelper, false);
+});
+
 test("remote avatar runtime forces VR hands visible when pose frames arrive", () => {
   const scene = new THREE.Scene();
   const runtime = createRemoteAvatarRuntime({
