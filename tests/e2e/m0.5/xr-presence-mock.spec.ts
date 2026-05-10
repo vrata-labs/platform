@@ -11,6 +11,18 @@ test("M0.5 XR mock publishes VR mode and changing head pose", async ({ browser, 
     await observer.goto(roomPath(roomId, "debug=1&name=Observer"));
     await xrMock.goto(roomPath(roomId, "debug=1&xrmock=1&bot=turn&name=XrMock&botSpeed=1"));
     await waitForRemoteCount(observer, 1);
+
+    await expect.poll(async () => {
+      const remote = (await readM05Debug(observer))?.remoteParticipants?.[0];
+      return {
+        mode: remote?.mode,
+        pitchNumber: typeof remote?.head.pitch === "number"
+      };
+    }, {
+      timeout: 15000,
+      intervals: [250, 500, 1000]
+    }).toEqual({ mode: "vr", pitchNumber: true });
+
     const initial = (await readM05Debug(observer))?.remoteParticipants?.[0];
     expect(initial?.mode).toBe("vr");
     expect(typeof initial?.head.pitch).toBe("number");
