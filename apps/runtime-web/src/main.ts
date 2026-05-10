@@ -7,10 +7,11 @@ import { bootRuntime, fetchRuntimeSpaces, listPresence, planVoiceSession, remove
 import { createMotionTrack, pushMotionSample, sampleMotion, type MotionTrack } from "./motion-state.js";
 import { mergePresenceSources } from "./presence-sources.js";
 import { connectRoomState, sendAvatarPoseFrame, sendAvatarReliableState, sendParticipantUpdate, type RoomStateClient, type RoomStateSnapshot } from "./room-state-client.js";
-import { classifyMediaError, classifyRoomStateError, createFaultError, getRuntimeIssue, shouldRetryConnection, type RuntimeIssue } from "./runtime-errors.js";
+import { classifyMediaError, classifyRoomStateError, classifyScreenShareError, createFaultError, getRuntimeIssue, shouldRetryConnection, type RuntimeIssue } from "./runtime-errors.js";
 import { canRetry, createReconnectPolicy, getReconnectDelayMs } from "./reconnect.js";
 import { applyRuntimeIssueState, clearRuntimeIssueState, createRuntimeUiState } from "./runtime-state.js";
 import { applyPassiveMediaRecovery, applyPostBootControls, shouldStartPassiveMedia } from "./runtime-startup.js";
+import { describeMediaCapabilityReason, detectBrowserMediaCapabilities, formatUnsupportedMediaCapabilities } from "./media-capabilities.js";
 import { applySpatialSettings, createSpatialAudioSettings } from "./spatial-audio.js";
 import { captureCanvasDiagnostics, createEmptySceneDiagnostics, inspectSceneObject } from "./scene-debug.js";
 import { loadSceneBundle } from "./scene-loader.js";
@@ -121,6 +122,11 @@ const displayName = displayNameFromQuery ?? localStorage.getItem("noah.displayNa
 if (!displayNameFromQuery) {
   localStorage.setItem("noah.displayName", displayName);
 }
+const browserMediaCapabilities = detectBrowserMediaCapabilities({
+  isSecureContext: window.isSecureContext,
+  mediaDevices: navigator.mediaDevices,
+  rtcPeerConnection: globalThis.RTCPeerConnection
+});
 
 const roomNameEl = mustElement<HTMLDivElement>("#room-name");
 const statusLineEl = mustElement<HTMLDivElement>("#status-line");
@@ -492,7 +498,7 @@ function deriveMediaDebugAudioState(): "not_joined" | "joining" | "joined" | "mu
   if (debugState.issueCode === "mic_denied" || debugState.issueCode === "no_audio_device") {
     return "degraded";
   }
-  if (debugState.issueCode === "livekit_failed" || debugState.audioState === "disabled") {
+  if (debugState.issueCode === "audio_unsupported" || debugState.issueCode === "livekit_failed" || debugState.audioState === "disabled") {
     return "failed";
   }
   if (!livekitRoom) {
@@ -843,6 +849,10 @@ function supportsAudioOutputSelection(): boolean {
   return Boolean(context?.setSinkId) || "setSinkId" in HTMLMediaElement.prototype;
 }
 
+function canUseScreenShareControl(): boolean {
+  return shareMockEnabled || (runtimeFlags.screenShare && browserMediaCapabilities.screenShare.supported);
+}
+
 function formatDeviceLabel(device: MediaDeviceInfo, fallbackLabel: string, index: number): string {
   return device.label || `${fallbackLabel} ${index + 1}`;
 }
@@ -892,6 +902,16 @@ function ensureAudioContext(): AudioContext {
 }
 
 async function refreshAudioDevices(requestPermissions = false): Promise<void> {
+  if (!navigator.mediaDevices?.enumerateDevices) {
+    audioInputDevices = [];
+    audioOutputDevices = [];
+    renderAudioDeviceOptions(micSelect, audioInputDevices, preferredMicDeviceId, "Microphone");
+    renderAudioDeviceOptions(speakerSelect, audioOutputDevices, preferredSpeakerDeviceId, "Speaker");
+    speakerSelect.disabled = true;
+    updateAudioDeviceStatus(formatUnsupportedMediaCapabilities(browserMediaCapabilities) || "Audio devices unavailable");
+    return;
+  }
+
   try {
     const [inputs, outputs] = await Promise.all([
       Room.getLocalDevices("audioinput", requestPermissions),
@@ -908,9 +928,34 @@ async function refreshAudioDevices(requestPermissions = false): Promise<void> {
   renderAudioDeviceOptions(micSelect, audioInputDevices, preferredMicDeviceId, "Microphone");
   renderAudioDeviceOptions(speakerSelect, audioOutputDevices, preferredSpeakerDeviceId, "Speaker");
   speakerSelect.disabled = !supportsAudioOutputSelection();
+  const unsupportedStatus = formatUnsupportedMediaCapabilities(browserMediaCapabilities);
+  const deviceStatus =
+    `Inputs: ${audioInputDevices.length || 1}, outputs: ${audioOutputDevices.length || 1}${supportsAudioOutputSelection() ? "" : " (speaker switching unsupported here)"}`;
   updateAudioDeviceStatus(
-    `Inputs: ${audioInputDevices.length || 1}, outputs: ${audioOutputDevices.length || 1}${supportsAudioOutputSelection() ? "" : " (speaker switching unsupported here)"}`
+    unsupportedStatus ? `${deviceStatus}; ${unsupportedStatus}` : deviceStatus
   );
+}
+
+function syncMediaCapabilityControls(): void {
+  const unsupportedStatus = formatUnsupportedMediaCapabilities(browserMediaCapabilities);
+  if (unsupportedStatus) {
+    updateAudioDeviceStatus(unsupportedStatus);
+  }
+
+  if (runtimeFlags.audioJoin && !browserMediaCapabilities.audioInput.supported) {
+    joinAudioButton.disabled = true;
+    joinAudioButton.textContent = "Audio Unsupported";
+    joinAudioButton.title = `Microphone unsupported: ${describeMediaCapabilityReason(browserMediaCapabilities.audioInput.reason)}`;
+    muteButton.disabled = true;
+  }
+
+  if (runtimeFlags.screenShare && !shareMockEnabled && !browserMediaCapabilities.screenShare.supported) {
+    startShareButton.disabled = true;
+    startShareButton.textContent = "Share Unsupported";
+    startShareButton.title = `Screen share unsupported: ${describeMediaCapabilityReason(browserMediaCapabilities.screenShare.reason)}`;
+    stopShareButton.disabled = true;
+    debugState.screenShareState = "unsupported";
+  }
 }
 
 async function applyPreferredAudioDevices(room: Room): Promise<void> {
@@ -1182,6 +1227,7 @@ const debugState = {
     subscribedAudioCount: 0
   },
   screenShareState: "idle",
+  mediaCapabilities: browserMediaCapabilities,
   spatialAudioState: "idle",
   spatialAudio: {
     enabled: spatialAudioRequested,
@@ -1524,7 +1570,7 @@ function clearIssue(statusLine: string): void {
 }
 
 function clearAudioIssue(statusLine: string): void {
-  if (runtimeUiState.issueCode === "mic_denied" || runtimeUiState.issueCode === "no_audio_device" || runtimeUiState.issueCode === "livekit_failed") {
+  if (runtimeUiState.issueCode === "mic_denied" || runtimeUiState.issueCode === "no_audio_device" || runtimeUiState.issueCode === "audio_unsupported" || runtimeUiState.issueCode === "livekit_failed") {
     clearIssue(statusLine);
   } else {
     setStatus(statusLine);
@@ -1767,6 +1813,7 @@ async function reportDiagnostics(note?: string): Promise<void> {
       audioState: debugState.audioState,
       media: debugState.media,
       screenShareState: debugState.screenShareState,
+      mediaCapabilities: debugState.mediaCapabilities,
       localPose: debugState.localPose,
       localPosition: debugState.localPosition,
       spatialAudio: debugState.spatialAudio,
@@ -1975,7 +2022,7 @@ async function ensureMediaRoom(): Promise<Room> {
   await applyPreferredAudioDevices(room);
   livekitRoom = room;
   mediaRoomReady = true;
-  startShareButton.disabled = false;
+  startShareButton.disabled = !canUseScreenShareControl();
   return room;
 }
 
@@ -2644,6 +2691,9 @@ function setupAudio(room: Room): void {
 }
 
 async function startScreenShare(): Promise<void> {
+  if (!shareMockEnabled && !browserMediaCapabilities.screenShare.supported) {
+    throw createFaultError("NotSupportedError", `screen_share_unsupported:${browserMediaCapabilities.screenShare.reason}`);
+  }
   if (startShareButton.disabled) {
     return;
   }
@@ -2714,6 +2764,10 @@ async function joinAudio(): Promise<void> {
     return;
   }
 
+  if (!browserMediaCapabilities.audioInput.supported) {
+    throw createFaultError("NotSupportedError", `audio_unsupported:${browserMediaCapabilities.audioInput.reason}`);
+  }
+
   if (faultConfig.audio === "mic_denied") {
     throw createFaultError("NotAllowedError", "mic_denied");
   }
@@ -2747,7 +2801,7 @@ async function joinAudio(): Promise<void> {
   await refreshAudioDevices(true);
   muteButton.disabled = false;
   joinAudioButton.disabled = true;
-  startShareButton.disabled = false;
+  startShareButton.disabled = !canUseScreenShareControl();
   clearAudioIssue("Audio connected");
   debugState.audioState = "connected";
   void reportDiagnostics("audio_connected");
@@ -2814,10 +2868,16 @@ joinAudioButton.addEventListener("click", () => {
     console.error(error);
     const issue = classifyMediaError(error);
     muteButton.disabled = true;
-    joinAudioButton.disabled = false;
+    if (issue.code === "audio_unsupported") {
+      joinAudioButton.disabled = true;
+      joinAudioButton.textContent = "Audio Unsupported";
+      joinAudioButton.title = `Microphone unsupported: ${describeMediaCapabilityReason(browserMediaCapabilities.audioInput.reason)}`;
+    } else {
+      joinAudioButton.disabled = false;
+    }
     applyIssue(issue, {
       degradedMode: "audio_unavailable",
-      audioState: "degraded",
+      audioState: issue.code === "audio_unsupported" ? "unsupported" : "degraded",
       lastRecoveryAction: "audio_join_failed"
     });
     void reportDiagnostics(issue.diagnosticsNote);
@@ -2827,6 +2887,25 @@ joinAudioButton.addEventListener("click", () => {
 startShareButton.addEventListener("click", () => {
   void startScreenShare().catch((error: unknown) => {
     console.error(error);
+    const issue = classifyScreenShareError(error);
+    if (issue.code === "screen_share_denied" || issue.code === "screen_share_unsupported") {
+      if (issue.code === "screen_share_unsupported") {
+        startShareButton.disabled = true;
+        startShareButton.textContent = "Share Unsupported";
+        startShareButton.title = `Screen share unsupported: ${describeMediaCapabilityReason(browserMediaCapabilities.screenShare.reason)}`;
+        debugState.screenShareState = "unsupported";
+      } else {
+        startShareButton.disabled = !canUseScreenShareControl();
+        debugState.screenShareState = "denied";
+      }
+      stopShareButton.disabled = true;
+      applyIssue(issue, {
+        degradedMode: "screen_share_unavailable",
+        lastRecoveryAction: "screen_share_failed"
+      });
+      void reportDiagnostics(issue.diagnosticsNote);
+      return;
+    }
     setStatus("Screen share failed");
     debugState.screenShareState = error instanceof Error ? error.name : "failed";
     void reportDiagnostics("screenshare_failed");
@@ -3247,8 +3326,9 @@ async function main(): Promise<void> {
       debugState.audioState = "disabled";
     }
   });
+  syncMediaCapabilityControls();
 
-  if (shouldStartPassiveMedia({
+  if (browserMediaCapabilities.rtcPeerConnection && shouldStartPassiveMedia({
     audioJoin: runtimeFlags.audioJoin,
     screenShare: runtimeFlags.screenShare,
     audioFault: faultConfig.audio ?? undefined

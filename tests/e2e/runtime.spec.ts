@@ -138,6 +138,52 @@ test("mobile room HUD can collapse and scroll without covering the scene", async
   expect(collapsedHeight).toBeLessThan(openMetrics.height);
 });
 
+test("mobile unsupported media APIs disable audio and share controls with diagnostics", async ({ browser }) => {
+  const mobileContext = await browser.newContext({
+    hasTouch: true,
+    isMobile: true,
+    viewport: { width: 390, height: 844 },
+    userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 12_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/12.1 Mobile/15E148 Safari/604.1"
+  });
+  await mobileContext.addInitScript(() => {
+    Object.defineProperty(navigator, "mediaDevices", {
+      configurable: true,
+      value: {
+        enumerateDevices: async () => []
+      }
+    });
+  });
+  const mobilePage = await mobileContext.newPage();
+
+  try {
+    await mobilePage.goto("/rooms/demo-room?debug=1");
+
+    await expect(mobilePage.locator("#join-audio")).toBeDisabled();
+    await expect(mobilePage.locator("#join-audio")).toContainText("Audio Unsupported");
+    await expect(mobilePage.locator("#start-share")).toBeDisabled();
+    await expect(mobilePage.locator("#start-share")).toContainText("Share Unsupported");
+    await expect(mobilePage.locator("#audio-device-status")).toContainText("Microphone unsupported");
+    await expect(mobilePage.locator("#audio-device-status")).toContainText("Screen share unsupported");
+
+    const debug = await mobilePage.evaluate(() => (window as Window & {
+      __NOAH_DEBUG__?: {
+        mediaCapabilities?: {
+          audioInput?: { supported?: boolean; reason?: string };
+          screenShare?: { supported?: boolean; reason?: string };
+        };
+        screenShareState?: string;
+      };
+    }).__NOAH_DEBUG__);
+    expect(debug?.mediaCapabilities?.audioInput?.supported).toBe(false);
+    expect(debug?.mediaCapabilities?.audioInput?.reason).toBe("get_user_media_missing");
+    expect(debug?.mediaCapabilities?.screenShare?.supported).toBe(false);
+    expect(debug?.mediaCapabilities?.screenShare?.reason).toBe("get_display_media_missing");
+    expect(debug?.screenShareState).toBe("unsupported");
+  } finally {
+    await mobileContext.close();
+  }
+});
+
 test("mobile right-side drag turns the camera", async ({ browser }) => {
   const mobileContext = await browser.newContext({
     hasTouch: true,

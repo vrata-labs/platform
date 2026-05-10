@@ -1,7 +1,10 @@
 export type RuntimeIssueCode =
   | "mic_denied"
   | "no_audio_device"
+  | "audio_unsupported"
   | "livekit_failed"
+  | "screen_share_denied"
+  | "screen_share_unsupported"
   | "room_state_failed"
   | "xr_unavailable";
 
@@ -37,6 +40,15 @@ function createRuntimeIssueMap(): Record<RuntimeIssueCode, RuntimeIssue> {
       diagnosticsNote: "no_audio_device",
       suggestedAction: "Connect a microphone and retry audio"
     },
+    audio_unsupported: {
+      code: "audio_unsupported",
+      recoverable: true,
+      retryable: false,
+      severity: "warn",
+      userMessage: "Microphone unsupported by this browser; room continues without audio",
+      diagnosticsNote: "audio_unsupported",
+      suggestedAction: "Use a browser and device with WebRTC microphone support"
+    },
     livekit_failed: {
       code: "livekit_failed",
       recoverable: true,
@@ -45,6 +57,24 @@ function createRuntimeIssueMap(): Record<RuntimeIssueCode, RuntimeIssue> {
       userMessage: "Audio service unavailable; room continues in presence-only mode",
       diagnosticsNote: "livekit_failed",
       suggestedAction: "Retry audio when connection recovers"
+    },
+    screen_share_denied: {
+      code: "screen_share_denied",
+      recoverable: true,
+      retryable: false,
+      severity: "warn",
+      userMessage: "Screen sharing was not allowed; room continues without sharing",
+      diagnosticsNote: "screen_share_denied",
+      suggestedAction: "Allow screen sharing and retry"
+    },
+    screen_share_unsupported: {
+      code: "screen_share_unsupported",
+      recoverable: true,
+      retryable: false,
+      severity: "warn",
+      userMessage: "Screen sharing unsupported by this browser; room continues without sharing",
+      diagnosticsNote: "screen_share_unsupported",
+      suggestedAction: "Use a browser and device with getDisplayMedia screen capture support"
     },
     room_state_failed: {
       code: "room_state_failed",
@@ -79,11 +109,33 @@ export function shouldRetryConnection(code: RuntimeIssueCode): boolean {
 
 export function classifyMediaError(error: unknown): RuntimeIssue {
   if (error instanceof Error) {
+    if (error.message.includes("audio_unsupported") || error.message.includes("getUserMedia") || error.name === "NotSupportedError") {
+      return getRuntimeIssue("audio_unsupported");
+    }
     if (error.name === "NotAllowedError" || error.message.includes("mic_denied")) {
       return getRuntimeIssue("mic_denied");
     }
     if (error.name === "NotFoundError" || error.name === "DevicesNotFoundError" || error.message.includes("no_audio_device")) {
       return getRuntimeIssue("no_audio_device");
+    }
+  }
+
+  return getRuntimeIssue("livekit_failed");
+}
+
+export function classifyScreenShareError(error: unknown): RuntimeIssue {
+  if (error instanceof Error) {
+    if (error.name === "NotAllowedError") {
+      return getRuntimeIssue("screen_share_denied");
+    }
+    if (
+      error.name === "NotSupportedError"
+      || error.message.includes("screen_share_unsupported")
+      || error.message.includes("getDisplayMedia")
+      || error.message.includes("display media")
+      || error.message.includes("screen capture")
+    ) {
+      return getRuntimeIssue("screen_share_unsupported");
     }
   }
 
