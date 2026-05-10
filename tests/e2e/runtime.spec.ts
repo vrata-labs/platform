@@ -103,6 +103,41 @@ test("room shell exposes audio device selectors and level meters", async ({ page
   await expect(page.locator("#audio-device-status")).not.toHaveText("");
 });
 
+test("mobile room HUD can collapse and scroll without covering the scene", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 520 });
+  await page.goto("/rooms/demo-room?debug=1");
+
+  const hud = page.locator(".hud");
+  const summary = page.locator(".hud-summary");
+
+  await expect(summary).toBeVisible();
+  await expect(hud).toHaveJSProperty("open", true);
+
+  const openMetrics = await hud.evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    const content = element.querySelector<HTMLElement>(".hud-content");
+    return {
+      bottom: rect.bottom,
+      contentClientHeight: content?.clientHeight ?? 0,
+      contentOverflowY: content ? getComputedStyle(content).overflowY : "",
+      contentScrollHeight: content?.scrollHeight ?? 0,
+      height: rect.height,
+      viewportHeight: window.innerHeight
+    };
+  });
+
+  expect(openMetrics.bottom).toBeLessThanOrEqual(openMetrics.viewportHeight);
+  expect(openMetrics.height).toBeLessThanOrEqual(openMetrics.viewportHeight * 0.75);
+  expect(openMetrics.contentOverflowY).toBe("auto");
+  expect(openMetrics.contentScrollHeight).toBeGreaterThan(openMetrics.contentClientHeight);
+
+  await summary.click();
+  await expect(hud).toHaveJSProperty("open", false);
+
+  const collapsedHeight = await hud.evaluate((element) => element.getBoundingClientRect().height);
+  expect(collapsedHeight).toBeLessThan(openMetrics.height);
+});
+
 test("room-state service health endpoint responds", async () => {
   const response = await fetch("http://127.0.0.1:2567/health");
   expect(response.ok).toBeTruthy();

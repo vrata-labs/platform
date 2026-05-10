@@ -8,66 +8,70 @@
   </head>
   <body>
     <div id="app">
-      <aside class="hud">
-        <div class="brand">Noah Staging</div>
-        <div class="room-meta">
-          <div id="room-name">Loading room...</div>
-          <div id="status-line">Connecting...</div>
-          <div id="branding-line"></div>
-          <div id="room-state-line"></div>
-          <div id="guest-access-line"></div>
-        </div>
-        <div class="space-picker">
-          <label for="space-select">Space</label>
-          <select id="space-select" disabled>
-            <option>Loading spaces...</option>
-          </select>
-          <div id="space-select-status" class="space-select-status">Loading spaces...</div>
-        </div>
-        <div class="controls">
-          <button id="join-audio">Join Audio</button>
-          <button id="toggle-mute" disabled>Mute</button>
-          <button id="start-share" disabled>Start Share</button>
-          <button id="stop-share" disabled>Stop Share</button>
-        </div>
-        <div class="audio-panel">
-          <label for="mic-select">Microphone</label>
-          <select id="mic-select">
-            <option value="default">System default microphone</option>
-          </select>
-          <div class="audio-meter-row">
-            <span>Mic level</span>
-            <div class="audio-meter"><div id="mic-level-fill" class="audio-meter-fill"></div></div>
+      <details class="hud" open>
+        <summary class="hud-summary">
+          <span class="brand">Noah Staging</span>
+        </summary>
+        <div class="hud-content">
+          <div class="room-meta">
+            <div id="room-name">Loading room...</div>
+            <div id="status-line">Connecting...</div>
+            <div id="branding-line"></div>
+            <div id="room-state-line"></div>
+            <div id="guest-access-line"></div>
           </div>
-          <label for="speaker-select">Speaker</label>
-          <select id="speaker-select">
-            <option value="default">System default speaker</option>
-          </select>
-          <div class="audio-meter-row">
-            <span>Speaker level</span>
-            <div class="audio-meter"><div id="speaker-level-fill" class="audio-meter-fill"></div></div>
+          <div class="space-picker">
+            <label for="space-select">Space</label>
+            <select id="space-select" disabled>
+              <option>Loading spaces...</option>
+            </select>
+            <div id="space-select-status" class="space-select-status">Loading spaces...</div>
           </div>
-          <div id="audio-device-status" class="audio-device-status">Audio devices idle</div>
+          <div class="controls">
+            <button id="join-audio">Join Audio</button>
+            <button id="toggle-mute" disabled>Mute</button>
+            <button id="start-share" disabled>Start Share</button>
+            <button id="stop-share" disabled>Stop Share</button>
+          </div>
+          <div class="audio-panel">
+            <label for="mic-select">Microphone</label>
+            <select id="mic-select">
+              <option value="default">System default microphone</option>
+            </select>
+            <div class="audio-meter-row">
+              <span>Mic level</span>
+              <div class="audio-meter"><div id="mic-level-fill" class="audio-meter-fill"></div></div>
+            </div>
+            <label for="speaker-select">Speaker</label>
+            <select id="speaker-select">
+              <option value="default">System default speaker</option>
+            </select>
+            <div class="audio-meter-row">
+              <span>Speaker level</span>
+              <div class="audio-meter"><div id="speaker-level-fill" class="audio-meter-fill"></div></div>
+            </div>
+            <div id="audio-device-status" class="audio-device-status">Audio devices idle</div>
+          </div>
+          <div id="avatar-sandbox-panel" class="avatar-sandbox" hidden>
+            <label for="avatar-preset-select">Avatar Sandbox</label>
+            <select id="avatar-preset-select" disabled>
+              <option>Loading presets...</option>
+            </select>
+            <div id="avatar-sandbox-status" class="avatar-sandbox-status">Sandbox idle</div>
+          </div>
+          <div id="xr-debug-panel" class="audio-device-status" hidden></div>
+          <pre id="debug-panel" hidden></pre>
+          <div class="help">
+            <div>WASD or arrows - move</div>
+            <div>Hold Shift - sprint</div>
+            <div>Drag mouse - look around</div>
+            <div>Mobile drag - move</div>
+            <div>VR: left stick move, right stick snap turn</div>
+            <div>`?debug=1` shows diagnostics, `?bot=orbit` emulates second client</div>
+            <div>`?avatarsandbox=1` opens the technical avatar sandbox</div>
+          </div>
         </div>
-        <div id="avatar-sandbox-panel" class="avatar-sandbox" hidden>
-          <label for="avatar-preset-select">Avatar Sandbox</label>
-          <select id="avatar-preset-select" disabled>
-            <option>Loading presets...</option>
-          </select>
-          <div id="avatar-sandbox-status" class="avatar-sandbox-status">Sandbox idle</div>
-        </div>
-        <div id="xr-debug-panel" class="audio-device-status" hidden></div>
-        <pre id="debug-panel" hidden></pre>
-        <div class="help">
-          <div>WASD or arrows - move</div>
-          <div>Hold Shift - sprint</div>
-          <div>Drag mouse - look around</div>
-          <div>Mobile drag - move</div>
-          <div>VR: left stick move, right stick snap turn</div>
-          <div>`?debug=1` shows diagnostics, `?bot=orbit` emulates second client</div>
-          <div>`?avatarsandbox=1` opens the technical avatar sandbox</div>
-        </div>
-      </aside>
+      </details>
       <div id="scene"></div>
     </div>
     <script type="module" src="/src/main.ts"></script>
