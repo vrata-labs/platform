@@ -1953,6 +1953,26 @@ test("fault-injected mic denied keeps room usable without audio", async ({ page,
   expect(diagnostics.items.some((item) => item.note === "mic_denied" && item.issueCode === "mic_denied")).toBeTruthy();
 });
 
+test("fault-injected media network block explains WebRTC can fail while scene loads", async ({ page, request }) => {
+  await page.goto("/rooms/demo-room?failaudio=connection_failed&debug=1");
+  await page.waitForTimeout(2500);
+  await page.click("#start-share");
+
+  await expect(page.locator("#status-line")).toContainText("Media connection blocked");
+
+  const debug = await page.evaluate(() => (window as Window & {
+    __NOAH_DEBUG__?: { issueCode?: string | null; degradedMode?: string; screenShareState?: string; statusLine?: string };
+  }).__NOAH_DEBUG__);
+  expect(debug?.issueCode).toBe("media_network_blocked");
+  expect(debug?.degradedMode).toBe("media_transport_unavailable");
+  expect(debug?.screenShareState).toBe("media_network_blocked");
+  expect(debug?.statusLine).toContain("scene can load");
+
+  const diagnosticsResponse = await request.get("/api/rooms/demo-room/diagnostics");
+  const diagnostics = (await diagnosticsResponse.json()) as { items: Array<{ note?: string; issueCode?: string }> };
+  expect(diagnostics.items.some((item) => item.note === "media_network_blocked" && item.issueCode === "media_network_blocked")).toBeTruthy();
+});
+
 test("fault-injected room-state failure falls back to API mode", async ({ page, request }) => {
   await page.goto("/rooms/demo-room?failroomstate=1&debug=1");
   await page.waitForTimeout(3000);

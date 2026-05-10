@@ -29,5 +29,5 @@ test("M0.5 degraded room-state and audio modes remain explicit", async ({ page, 
   }, {
     timeout: 10000,
     intervals: [500, 1000, 2000]
-  }).toEqual({ issueCode: "livekit_failed", audioState: "failed", hasLocalPose: true });
+  }).toEqual({ issueCode: "media_network_blocked", audioState: "failed", hasLocalPose: true });
 });

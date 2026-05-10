@@ -3,6 +3,7 @@ export type RuntimeIssueCode =
   | "no_audio_device"
   | "audio_unsupported"
   | "livekit_failed"
+  | "media_network_blocked"
   | "screen_share_denied"
   | "screen_share_unsupported"
   | "room_state_failed"
@@ -58,6 +59,15 @@ function createRuntimeIssueMap(): Record<RuntimeIssueCode, RuntimeIssue> {
       diagnosticsNote: "livekit_failed",
       suggestedAction: "Retry audio when connection recovers"
     },
+    media_network_blocked: {
+      code: "media_network_blocked",
+      recoverable: true,
+      retryable: true,
+      severity: "warn",
+      userMessage: "Media connection blocked; scene can load, but audio and sharing need WebRTC network access",
+      diagnosticsNote: "media_network_blocked",
+      suggestedAction: "Try Wi-Fi or a network that allows WebRTC traffic"
+    },
     screen_share_denied: {
       code: "screen_share_denied",
       recoverable: true,
@@ -99,6 +109,23 @@ function createRuntimeIssueMap(): Record<RuntimeIssueCode, RuntimeIssue> {
 
 const runtimeIssueMap = createRuntimeIssueMap();
 
+function isMediaTransportError(error: Error): boolean {
+  const name = error.name.toLowerCase();
+  const message = error.message.toLowerCase();
+  return name.includes("connection")
+    || name.includes("timeout")
+    || message.includes("media_network_blocked")
+    || message.includes("websocket")
+    || message.includes("signal")
+    || message.includes("ice")
+    || message.includes("transport")
+    || message.includes("network")
+    || message.includes("timed out")
+    || message.includes("timeout")
+    || message.includes("failed to connect")
+    || message.includes("connection failed");
+}
+
 export function getRuntimeIssue(code: RuntimeIssueCode): RuntimeIssue {
   return runtimeIssueMap[code];
 }
@@ -118,6 +145,9 @@ export function classifyMediaError(error: unknown): RuntimeIssue {
     if (error.name === "NotFoundError" || error.name === "DevicesNotFoundError" || error.message.includes("no_audio_device")) {
       return getRuntimeIssue("no_audio_device");
     }
+    if (isMediaTransportError(error)) {
+      return getRuntimeIssue("media_network_blocked");
+    }
   }
 
   return getRuntimeIssue("livekit_failed");
@@ -136,6 +166,9 @@ export function classifyScreenShareError(error: unknown): RuntimeIssue {
       || error.message.includes("screen capture")
     ) {
       return getRuntimeIssue("screen_share_unsupported");
+    }
+    if (isMediaTransportError(error)) {
+      return getRuntimeIssue("media_network_blocked");
     }
   }
 

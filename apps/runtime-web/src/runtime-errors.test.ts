@@ -19,6 +19,12 @@ test("classifyMediaError maps unsupported capture to audio_unsupported", () => {
   assert.equal(issue.code, "audio_unsupported");
 });
 
+test("classifyMediaError maps LiveKit transport failures to media_network_blocked", () => {
+  const issue = classifyMediaError(createFaultError("ConnectionError", "websocket connection failed"));
+  assert.equal(issue.code, "media_network_blocked");
+  assert.match(issue.userMessage, /scene can load/);
+});
+
 test("classifyScreenShareError maps unsupported and denied paths", () => {
   assert.equal(
     classifyScreenShareError(createFaultError("NotSupportedError", "screen_share_unsupported:getDisplayMedia missing")).code,
@@ -28,10 +34,15 @@ test("classifyScreenShareError maps unsupported and denied paths", () => {
     classifyScreenShareError(createFaultError("NotAllowedError", "user denied screen share")).code,
     "screen_share_denied"
   );
+  assert.equal(
+    classifyScreenShareError(createFaultError("TimeoutError", "ICE transport timed out")).code,
+    "media_network_blocked"
+  );
 });
 
 test("shouldRetryConnection only retries transport issues", () => {
   assert.equal(shouldRetryConnection("livekit_failed"), true);
+  assert.equal(shouldRetryConnection("media_network_blocked"), true);
   assert.equal(shouldRetryConnection("room_state_failed"), true);
   assert.equal(shouldRetryConnection("audio_unsupported"), false);
   assert.equal(shouldRetryConnection("screen_share_unsupported"), false);

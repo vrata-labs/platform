@@ -112,7 +112,7 @@ const failSpaces = query.get("failspaces") === "1";
 const roomStateFaultMode = query.get("failroomstate");
 const audioFaultMode = query.get("failaudio");
 const faultConfig = {
-  audio: (audioFaultMode === "connection_failed" ? "livekit_failed" : audioFaultMode) as RuntimeIssue["code"] | null,
+  audio: (audioFaultMode === "connection_failed" ? "media_network_blocked" : audioFaultMode) as RuntimeIssue["code"] | null,
   roomState: roomStateFaultMode === "1" || roomStateFaultMode === "temporary",
   xrUnavailable: query.get("failxr") === "1"
 };
@@ -498,7 +498,7 @@ function deriveMediaDebugAudioState(): "not_joined" | "joining" | "joined" | "mu
   if (debugState.issueCode === "mic_denied" || debugState.issueCode === "no_audio_device") {
     return "degraded";
   }
-  if (debugState.issueCode === "audio_unsupported" || debugState.issueCode === "livekit_failed" || debugState.audioState === "disabled") {
+  if (debugState.issueCode === "audio_unsupported" || debugState.issueCode === "livekit_failed" || debugState.issueCode === "media_network_blocked" || debugState.audioState === "disabled") {
     return "failed";
   }
   if (!livekitRoom) {
@@ -1570,7 +1570,7 @@ function clearIssue(statusLine: string): void {
 }
 
 function clearAudioIssue(statusLine: string): void {
-  if (runtimeUiState.issueCode === "mic_denied" || runtimeUiState.issueCode === "no_audio_device" || runtimeUiState.issueCode === "audio_unsupported" || runtimeUiState.issueCode === "livekit_failed") {
+  if (runtimeUiState.issueCode === "mic_denied" || runtimeUiState.issueCode === "no_audio_device" || runtimeUiState.issueCode === "audio_unsupported" || runtimeUiState.issueCode === "livekit_failed" || runtimeUiState.issueCode === "media_network_blocked") {
     clearIssue(statusLine);
   } else {
     setStatus(statusLine);
@@ -2013,6 +2013,9 @@ async function ensureMediaRoom(): Promise<Room> {
 
   if (faultConfig.audio === "livekit_failed") {
     throw createFaultError("FaultInjectedError", "livekit_failed");
+  }
+  if (faultConfig.audio === "media_network_blocked") {
+    throw createFaultError("ConnectionError", "media_network_blocked");
   }
 
   const voicePlan = await planVoiceSession(apiBaseUrl, roomId, participantId);
@@ -2888,19 +2891,22 @@ startShareButton.addEventListener("click", () => {
   void startScreenShare().catch((error: unknown) => {
     console.error(error);
     const issue = classifyScreenShareError(error);
-    if (issue.code === "screen_share_denied" || issue.code === "screen_share_unsupported") {
+    if (issue.code === "screen_share_denied" || issue.code === "screen_share_unsupported" || issue.code === "media_network_blocked") {
       if (issue.code === "screen_share_unsupported") {
         startShareButton.disabled = true;
         startShareButton.textContent = "Share Unsupported";
         startShareButton.title = `Screen share unsupported: ${describeMediaCapabilityReason(browserMediaCapabilities.screenShare.reason)}`;
         debugState.screenShareState = "unsupported";
+      } else if (issue.code === "media_network_blocked") {
+        startShareButton.disabled = !canUseScreenShareControl();
+        debugState.screenShareState = "media_network_blocked";
       } else {
         startShareButton.disabled = !canUseScreenShareControl();
         debugState.screenShareState = "denied";
       }
       stopShareButton.disabled = true;
       applyIssue(issue, {
-        degradedMode: "screen_share_unavailable",
+        degradedMode: issue.code === "media_network_blocked" ? "media_transport_unavailable" : "screen_share_unavailable",
         lastRecoveryAction: "screen_share_failed"
       });
       void reportDiagnostics(issue.diagnosticsNote);
