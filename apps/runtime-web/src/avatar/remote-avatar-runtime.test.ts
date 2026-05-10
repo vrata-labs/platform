@@ -289,6 +289,60 @@ test("remote avatar runtime applies transported head yaw independently from body
   assert.equal(head.rotation.y < Math.PI / 2, true);
 });
 
+test("remote avatar runtime applies transported head pitch without xz drift", () => {
+  const scene = new THREE.Scene();
+  const runtime = createRemoteAvatarRuntime({
+    scene,
+    bodyGeometry: new THREE.CapsuleGeometry(0.24, 0.8, 6, 12),
+    headGeometry: new THREE.SphereGeometry(0.18, 20, 20),
+    localParticipantId: "local"
+  });
+  const debugState = createDebugState();
+  const pitch = 0.5;
+  const headQuaternion = new THREE.Quaternion().setFromEuler(new THREE.Euler(pitch, 0, 0, "YXZ"));
+
+  runtime.ingestReliableState({
+    participantId: "remote-head-pitch",
+    avatarId: "preset-01",
+    inputMode: "desktop",
+    updatedAt: new Date().toISOString(),
+    audioActive: false,
+    seated: false
+  }, debugState);
+  runtime.applySnapshotParticipants([
+    {
+      participantId: "remote-head-pitch",
+      displayName: "Remote Head Pitch",
+      mode: "desktop",
+      muted: false,
+      activeMedia: { audio: false, screenShare: false },
+      rootTransform: { x: 0, y: 0, z: 0 },
+      bodyTransform: { x: 0, y: 0, z: 0 },
+      headTransform: { x: 0, y: 1.6, z: 0 },
+      updatedAt: new Date().toISOString()
+    }
+  ] as never, debugState);
+  runtime.ingestPoseFrame("remote-head-pitch", {
+    seq: 1,
+    sentAtMs: Date.now(),
+    flags: 0,
+    root: { x: 0, y: 0, z: 0, yaw: 0, vx: 0, vz: 0 },
+    head: { x: 0, y: 1.6, z: 0, qx: headQuaternion.x, qy: headQuaternion.y, qz: headQuaternion.z, qw: headQuaternion.w },
+    leftHand: { x: -0.2, y: 1.2, z: 0, qx: 0, qy: 0, qz: 0, qw: 1, gesture: 0 },
+    rightHand: { x: 0.2, y: 1.2, z: 0, qx: 0, qy: 0, qz: 0, qw: 1, gesture: 0 },
+    locomotion: { mode: 0, speed: 0, angularVelocity: 0 }
+  }, debugState);
+
+  runtime.update(0.016, debugState);
+  const head = scene.children[1] as THREE.Mesh | undefined;
+
+  assert.ok(head);
+  assert.equal(Number(head.position.x.toFixed(3)), 0);
+  assert.equal(Number(head.position.z.toFixed(3)), 0);
+  assert.equal(head.rotation.x > 0.2, true);
+  assert.equal(debugState.remoteParticipants[0]?.head.pitch > 0.2, true);
+});
+
 test("remote avatar runtime keeps last known hands visible through pose gaps", async () => {
   const scene = new THREE.Scene();
   const runtime = createRemoteAvatarRuntime({

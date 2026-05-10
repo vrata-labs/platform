@@ -1,3 +1,5 @@
+import * as THREE from "three";
+
 import type { AvatarReliableState, CompactPoseFrame, LocalAvatarSnapshotV1 } from "./avatar-types.js";
 
 function rotateAroundYaw(point: { x: number; y: number; z: number }, yaw: number): { x: number; y: number; z: number } {
@@ -19,13 +21,13 @@ function toWorldPoint(snapshot: LocalAvatarSnapshotV1, point: { x: number; y: nu
   };
 }
 
-function yawToQuaternion(yaw: number): { qx: number; qy: number; qz: number; qw: number } {
-  const halfYaw = yaw / 2;
+function headRotationToQuaternion(input: { yaw: number; pitch: number }): { qx: number; qy: number; qz: number; qw: number } {
+  const quaternion = new THREE.Quaternion().setFromEuler(new THREE.Euler(input.pitch, input.yaw, 0, "YXZ"));
   return {
-    qx: 0,
-    qy: Math.sin(halfYaw),
-    qz: 0,
-    qw: Math.cos(halfYaw)
+    qx: quaternion.x,
+    qy: quaternion.y,
+    qz: quaternion.z,
+    qw: quaternion.w
   };
 }
 
@@ -110,7 +112,10 @@ export function serializeCompactPoseFrame(input: {
   const headWorld = toWorldPoint(input.snapshot, input.snapshot.head);
   const leftHandWorld = toWorldPoint(input.snapshot, input.snapshot.leftHand);
   const rightHandWorld = toWorldPoint(input.snapshot, input.snapshot.rightHand);
-  const headRotation = yawToQuaternion(input.snapshot.head.yaw);
+  const headRotation = headRotationToQuaternion({
+    yaw: input.snapshot.head.yaw,
+    pitch: input.snapshot.head.pitch
+  });
   return {
     seq: input.seq,
     sentAtMs: input.sentAtMs,

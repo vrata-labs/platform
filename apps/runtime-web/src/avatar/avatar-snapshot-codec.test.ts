@@ -15,7 +15,7 @@ function createSnapshot(): LocalAvatarSnapshotV1 {
     animationState: "idle",
     fallbackReason: null,
     root: { x: 1, y: 0, z: 2, yaw: 0.5 },
-    head: { x: 0, y: 1.58, z: 0, yaw: 0.5 },
+    head: { x: 0, y: 1.58, z: 0, yaw: 0.5, pitch: 0 },
     leftHand: { x: -0.2, y: 1.1, z: 0.1, visible: true },
     rightHand: { x: 0.2, y: 1.1, z: 0.1, visible: true },
     updatedAt: new Date(0).toISOString()
@@ -56,7 +56,7 @@ test("serializeCompactPoseFrame maps snapshot into transport-ready pose frame", 
 test("serializeCompactPoseFrame converts local avatar points into world space", () => {
   const snapshot = createSnapshot();
   snapshot.root = { x: 3, y: 0, z: 4, yaw: Math.PI / 2 };
-  snapshot.head = { x: 0.2, y: 1.58, z: 0, yaw: Math.PI / 2 };
+  snapshot.head = { x: 0.2, y: 1.58, z: 0, yaw: Math.PI / 2, pitch: 0 };
   snapshot.leftHand = { x: -0.3, y: 1.1, z: 0.15, visible: true };
 
   const frame = serializeCompactPoseFrame({
@@ -86,6 +86,25 @@ test("serializeCompactPoseFrame carries head yaw as a quaternion", () => {
   assert.equal(Number(frame.head.qy.toFixed(3)), Number(Math.sin(Math.PI / 4).toFixed(3)));
   assert.equal(frame.head.qz, 0);
   assert.equal(Number(frame.head.qw.toFixed(3)), Number(Math.cos(Math.PI / 4).toFixed(3)));
+});
+
+test("serializeCompactPoseFrame carries head pitch as a quaternion without moving the head", () => {
+  const snapshot = createSnapshot();
+  snapshot.root.yaw = 0;
+  snapshot.head = { x: 0, y: 1.58, z: 0, yaw: 0, pitch: 0.5 };
+
+  const frame = serializeCompactPoseFrame({
+    seq: 11,
+    sentAtMs: 100,
+    snapshot
+  });
+
+  assert.equal(frame.head.x, snapshot.root.x);
+  assert.equal(frame.head.z, snapshot.root.z);
+  assert.equal(Number(frame.head.qx.toFixed(3)), Number(Math.sin(0.25).toFixed(3)));
+  assert.equal(frame.head.qy, 0);
+  assert.equal(frame.head.qz, 0);
+  assert.equal(Number(frame.head.qw.toFixed(3)), Number(Math.cos(0.25).toFixed(3)));
 });
 
 test("serializeCompactPoseFrame encodes fallback and hidden hands into flags", () => {

@@ -210,6 +210,40 @@ test("createLocalAvatarController preserves tracked head yaw in snapshot", () =>
   assert.equal(controller.root.children[2]?.rotation.y, Math.PI / 2);
 });
 
+test("createLocalAvatarController applies head pitch without moving head xz", () => {
+  const controller = createLocalAvatarController({
+    presets: [createPreset("preset-01")],
+    diagnosticsInput: {
+      catalogId: "technical-v1",
+      packUrl: "/assets/avatars/avatar-pack.v1.glb",
+      packFormat: "procedural-debug-v1",
+      presetCount: 1,
+      validatorSummary: ["preset-01:1000"],
+      sandboxEntryPoint: "/assets/avatars/catalog.v1.json"
+    }
+  });
+
+  controller.update({
+    deltaSeconds: 0.016,
+    inputMode: "desktop",
+    xrPresenting: false,
+    rootPosition: { x: 0, y: 0, z: 0 },
+    yaw: 0,
+    headPosition: { x: 0, y: 1.6, z: 0 },
+    headYaw: 0,
+    headPitch: 0.45,
+    moveX: 0,
+    moveZ: 0,
+    turnRate: 0
+  });
+
+  const head = controller.root.children[2] as THREE.Mesh;
+  assert.equal(controller.snapshot.head.pitch, 0.45);
+  assert.equal(head.rotation.x, 0.45);
+  assert.equal(controller.snapshot.head.x, 0);
+  assert.equal(controller.snapshot.head.z, 0);
+});
+
 test("createLocalAvatarController keeps VR hand marker on tracked hand after yaw", () => {
   const controller = createLocalAvatarController({
     presets: [createPreset("preset-01")],

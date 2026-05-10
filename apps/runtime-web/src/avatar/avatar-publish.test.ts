@@ -15,7 +15,7 @@ function createSnapshot(): LocalAvatarSnapshotV1 {
     animationState: "idle",
     fallbackReason: null,
     root: { x: 1, y: 0, z: 2, yaw: 0.5 },
-    head: { x: 0, y: 1.58, z: 0, yaw: 0.5 },
+    head: { x: 0, y: 1.58, z: 0, yaw: 0.5, pitch: 0 },
     leftHand: { x: -0.2, y: 1.1, z: 0.1, visible: true },
     rightHand: { x: 0.2, y: 1.1, z: 0.1, visible: true },
     updatedAt: new Date(0).toISOString()

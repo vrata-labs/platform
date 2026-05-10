@@ -115,6 +115,7 @@ function makeHeadVisual(headGeometry: THREE.BufferGeometry, color: number): { he
     skinColor: color,
     accentColor: 0x4f6a8a
   });
+  headVisual.head.rotation.order = "YXZ";
   headVisual.head.geometry.dispose();
   headVisual.head.geometry = headGeometry;
   const headMaterial = headVisual.head.material;

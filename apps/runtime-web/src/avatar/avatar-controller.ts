@@ -31,6 +31,7 @@ export interface LocalAvatarController {
     yaw: number;
     headPosition: AvatarPosePoint;
     headYaw?: number;
+    headPitch?: number;
     leftHand?: AvatarPosePoint | null;
     rightHand?: AvatarPosePoint | null;
     moveX: number;
@@ -86,6 +87,7 @@ function createLocalAvatarVisual(preset: LoadedAvatarPreset): LocalAvatarVisual 
     accentColor: preset.recipe.palette.accent
   });
   const head = headVisual.head;
+  head.rotation.order = "YXZ";
   head.position.y = 1.58;
   root.add(head);
   const mouth = headVisual.mouth;
@@ -197,7 +199,7 @@ export function createLocalAvatarController(input: {
     animationState: "idle",
     fallbackReason: null,
     root: { x: 0, y: 0, z: 0, yaw: 0 },
-    head: { x: 0, y: 1.58, z: 0, yaw: 0 },
+    head: { x: 0, y: 1.58, z: 0, yaw: 0, pitch: 0 },
     leftHand: { x: -0.28, y: 1.16, z: 0.12, visible: true },
     rightHand: { x: 0.28, y: 1.16, z: 0.12, visible: true },
     updatedAt: new Date(0).toISOString()
@@ -249,6 +251,7 @@ export function createLocalAvatarController(input: {
       const vrDirectTracking = frame.xrPresenting && (frame.inputMode === "vr-controller" || frame.inputMode === "vr-hand");
       const mouthAmount = THREE.MathUtils.clamp(frame.mouthAmount ?? 0, 0, 1);
       const speakingActive = Boolean(frame.speakingActive);
+      const headPitch = frame.headPitch ?? 0;
 
       visual.root.position.set(frame.rootPosition.x, frame.rootPosition.y, frame.rootPosition.z);
       visual.root.rotation.y = frame.yaw;
@@ -262,6 +265,7 @@ export function createLocalAvatarController(input: {
         vrDirectTracking ? solve.headLocal.y : Math.max(solve.headLocal.y, viewProfile.poseProfile.headHeight),
         solve.headLocal.z
       );
+      visual.head.rotation.x = headPitch;
       visual.head.rotation.y = (frame.headYaw ?? frame.yaw) - frame.yaw;
       visual.head.rotation.z = pose.headTilt;
       applyProceduralMouthState(visual.mouth, mouthAmount);
@@ -336,7 +340,8 @@ export function createLocalAvatarController(input: {
         x: visual.head.position.x,
         y: visual.head.position.y,
         z: visual.head.position.z,
-        yaw: frame.headYaw ?? frame.yaw
+        yaw: frame.headYaw ?? frame.yaw,
+        pitch: headPitch
       };
       snapshot.leftHand = {
         x: visual.leftHand.position.x,

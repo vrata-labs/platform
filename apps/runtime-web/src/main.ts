@@ -457,12 +457,16 @@ function roundDebugNumber(value: number, decimals = 3): number {
   return Math.round(value * scale) / scale;
 }
 
+function resolveNonXrHeadWorldPosition(pose: ReturnType<typeof localPoseController.getPose>, headHeight = 1.6): THREE.Vector3 {
+  return new THREE.Vector3(pose.position.x, pose.position.y + headHeight, pose.position.z);
+}
+
 function updateLocalPresenceDiagnostics(): void {
   const pose = localPoseController.getPose();
-  const headWorld = new THREE.Vector3();
-  camera.getWorldPosition(headWorld);
-  const headYaw = renderer.xr.isPresenting && !presenceXrMockEnabled ? getCameraWorldYaw() : pose.yaw;
-  const headPitch = renderer.xr.isPresenting && !presenceXrMockEnabled ? getCameraWorldPitch() : pose.pitch;
+  const useTrackedHead = renderer.xr.isPresenting && !presenceXrMockEnabled;
+  const headWorld = useTrackedHead ? camera.getWorldPosition(new THREE.Vector3()) : resolveNonXrHeadWorldPosition(pose);
+  const headYaw = useTrackedHead ? getCameraWorldYaw() : pose.yaw;
+  const headPitch = useTrackedHead ? getCameraWorldPitch() : pose.pitch;
   debugState.mode = latestMode;
   debugState.localPose = {
     root: {
@@ -2202,12 +2206,17 @@ function updateLocalAvatar(delta: number, frameContext: RuntimeFrameContext): vo
     xrPresenting
   });
   const pose = localPoseController.getPose();
-  const avatarRootX = xrPresenting ? headWorldPosition.x : pose.position.x;
-  const avatarRootY = xrPresenting
+  const useTrackedHead = renderer.xr.isPresenting;
+  const avatarRootX = useTrackedHead ? headWorldPosition.x : pose.position.x;
+  const avatarRootY = useTrackedHead
     ? headWorldPosition.y - viewProfile.poseProfile.headHeight
     : pose.position.y;
-  const avatarRootZ = xrPresenting ? headWorldPosition.z : pose.position.z;
-  const headYaw = xrPresenting ? getCameraWorldYaw() : pose.yaw;
+  const avatarRootZ = useTrackedHead ? headWorldPosition.z : pose.position.z;
+  const avatarHeadWorldPosition = useTrackedHead
+    ? headWorldPosition
+    : resolveNonXrHeadWorldPosition(pose, viewProfile.poseProfile.headHeight);
+  const headYaw = useTrackedHead ? getCameraWorldYaw() : pose.yaw;
+  const headPitch = useTrackedHead ? getCameraWorldPitch() : pose.pitch;
 
   localAvatarController.update({
     deltaSeconds: delta,
@@ -2221,11 +2230,12 @@ function updateLocalAvatar(delta: number, frameContext: RuntimeFrameContext): vo
     },
     yaw: pose.yaw,
     headPosition: {
-      x: headWorldPosition.x,
-      y: headWorldPosition.y,
-      z: headWorldPosition.z
+      x: avatarHeadWorldPosition.x,
+      y: avatarHeadWorldPosition.y,
+      z: avatarHeadWorldPosition.z
     },
     headYaw,
+    headPitch,
     leftHand: handTargets.leftHand,
     rightHand: handTargets.rightHand,
     moveX: lastAvatarMove.x,
@@ -2496,16 +2506,18 @@ function updateMovement(delta: number, frameContext: RuntimeFrameContext): void 
 }
 
 async function syncPresence(mode: PresenceState["mode"], audioActive: boolean): Promise<void> {
-  const worldPosition = new THREE.Vector3();
-  camera.getWorldPosition(worldPosition);
   const pose = localPoseController.getPose();
+  const useTrackedHead = renderer.xr.isPresenting && !presenceXrMockEnabled;
+  const worldPosition = useTrackedHead ? camera.getWorldPosition(new THREE.Vector3()) : resolveNonXrHeadWorldPosition(pose);
   const effectiveMode = presenceXrMockEnabled ? "vr" : mode;
-  const headYaw = renderer.xr.isPresenting && !presenceXrMockEnabled ? getCameraWorldYaw() : pose.yaw;
-  const headPitch = renderer.xr.isPresenting && !presenceXrMockEnabled ? getCameraWorldPitch() : pose.pitch;
-  const bodyXZ = deriveBodyTransform(
-    { x: pose.position.x, z: pose.position.z },
-    { x: worldPosition.x, z: worldPosition.z }
-  );
+  const headYaw = useTrackedHead ? getCameraWorldYaw() : pose.yaw;
+  const headPitch = useTrackedHead ? getCameraWorldPitch() : pose.pitch;
+  const bodyXZ = useTrackedHead
+    ? deriveBodyTransform(
+      { x: pose.position.x, z: pose.position.z },
+      { x: worldPosition.x, z: worldPosition.z }
+    )
+    : { x: pose.position.x, z: pose.position.z };
   presenceSeq += 1;
   const clientTimeMs = Date.now();
 
