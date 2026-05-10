@@ -15,6 +15,7 @@
     "lint": "pnpm -r --if-present lint",
     "test": "pnpm -r --if-present test && node --test tools/*.test.mjs",
     "typecheck": "pnpm -r --if-present typecheck",
+    "test:m0.5": "pnpm run lint && pnpm run typecheck && pnpm run build && pnpm run test && pnpm exec playwright test tests/e2e/m0.5 --workers=1",
     "validate:avatars": "pnpm --filter @noah/asset-pipeline build && pnpm --filter @noah/asset-pipeline validate:avatars",
     "test:e2e": "playwright test --grep-invert @staging",
     "test:e2e:staging": "BASE_URL=\"${BASE_URL:-https://89.169.161.91.sslip.io}\" PLAYWRIGHT_NO_WEB_SERVER=1 playwright test --grep @staging",

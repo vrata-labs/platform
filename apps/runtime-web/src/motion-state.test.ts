@@ -35,3 +35,14 @@ test("pushMotionSample replaces matching timestamps instead of duplicating them"
   assert.equal(track.samples.length, 1);
   assert.deepEqual(track.samples[0], { x: 5, z: 6, capturedAtMs: 1000 });
 });
+
+test("sampleMotion interpolates yaw on shortest angular path", () => {
+  let track = createMotionTrack();
+  track = pushMotionSample(track, { x: 0, z: 0, yaw: Math.PI - 0.1, capturedAtMs: 1000 });
+  track = pushMotionSample(track, { x: 0, z: 0, yaw: -Math.PI + 0.1, capturedAtMs: 2000 });
+
+  const sample = sampleMotion(track, 1500);
+
+  assert.ok(sample);
+  assert.equal(Math.abs(Math.abs(sample.yaw ?? 0) - Math.PI) < 0.001, true);
+});

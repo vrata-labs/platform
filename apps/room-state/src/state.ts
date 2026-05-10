@@ -27,10 +27,16 @@ function mergeTransformState(current: TransformState | undefined, next: Transfor
   if (!current && !next) {
     return undefined;
   }
+  if (!next) {
+    return current ? { ...current } : undefined;
+  }
   return {
     x: next?.x ?? current?.x ?? 0,
     y: next?.y ?? current?.y ?? 0,
-    z: next?.z ?? current?.z ?? 0
+    z: next?.z ?? current?.z ?? 0,
+    yaw: next?.yaw ?? current?.yaw ?? 0,
+    pitch: next?.pitch ?? current?.pitch ?? 0,
+    roll: next?.roll ?? current?.roll ?? 0
   };
 }
 
@@ -39,19 +45,25 @@ export function createParticipantState(participantId: string): ParticipantState 
     participantId,
     displayName: participantId,
     mode: "desktop",
-    rootTransform: { x: 0, y: 0, z: 0 },
-    bodyTransform: { x: 0, y: 0.92, z: 0 },
-    headTransform: { x: 0, y: 1.58, z: 0 },
+    rootTransform: { x: 0, y: 0, z: 0, yaw: 0 },
+    bodyTransform: { x: 0, y: 0.92, z: 0, yaw: 0 },
+    headTransform: { x: 0, y: 1.58, z: 0, yaw: 0, pitch: 0 },
     muted: true,
     activeMedia: {
       audio: false,
       screenShare: false
     },
+    seq: 0,
+    clientTimeMs: 0,
     updatedAt: new Date(0).toISOString()
   };
 }
 
 export function mergeParticipantState(current: ParticipantState, nextState: Partial<ParticipantState>): ParticipantState {
+  if (typeof nextState.seq === "number" && typeof current.seq === "number" && nextState.seq < current.seq) {
+    return current;
+  }
+
   return {
     participantId: current.participantId,
     displayName: nextState.displayName ?? current.displayName,
@@ -64,6 +76,9 @@ export function mergeParticipantState(current: ParticipantState, nextState: Part
       audio: nextState.activeMedia?.audio ?? current.activeMedia.audio,
       screenShare: nextState.activeMedia?.screenShare ?? current.activeMedia.screenShare
     },
+    seq: nextState.seq ?? current.seq,
+    clientTimeMs: nextState.clientTimeMs ?? current.clientTimeMs,
+    serverTimeMs: nextState.serverTimeMs ?? current.serverTimeMs,
     updatedAt: nextState.updatedAt ?? current.updatedAt
   };
 }

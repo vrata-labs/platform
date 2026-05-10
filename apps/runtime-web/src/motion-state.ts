@@ -1,6 +1,8 @@
 export interface MotionSample {
   x: number;
   z: number;
+  yaw?: number;
+  pitch?: number;
   capturedAtMs: number;
 }
 
@@ -61,9 +63,18 @@ export function sampleMotion(track: MotionTrack, targetTimeMs: number): MotionSa
   const span = next.capturedAtMs - previous.capturedAtMs;
   const alpha = (targetTimeMs - previous.capturedAtMs) / span;
 
+  const yaw = typeof previous.yaw === "number" && typeof next.yaw === "number"
+    ? previous.yaw + Math.atan2(Math.sin(next.yaw - previous.yaw), Math.cos(next.yaw - previous.yaw)) * alpha
+    : previous.yaw ?? next.yaw;
+  const pitch = typeof previous.pitch === "number" && typeof next.pitch === "number"
+    ? previous.pitch + (next.pitch - previous.pitch) * alpha
+    : previous.pitch ?? next.pitch;
+
   return {
     x: previous.x + (next.x - previous.x) * alpha,
     z: previous.z + (next.z - previous.z) * alpha,
+    ...(typeof yaw === "number" ? { yaw } : {}),
+    ...(typeof pitch === "number" ? { pitch } : {}),
     capturedAtMs: targetTimeMs
   };
 }

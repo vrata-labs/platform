@@ -89,11 +89,14 @@ interface PresenceRecord {
   participantId: string;
   displayName: string;
   mode: "desktop" | "mobile" | "vr";
-  rootTransform: { x: number; y: number; z: number };
-  headTransform?: { x: number; y: number; z: number };
-  bodyTransform?: { x: number; y: number; z: number };
+  rootTransform: { x: number; y: number; z: number; yaw?: number; pitch?: number; roll?: number };
+  headTransform?: { x: number; y: number; z: number; yaw?: number; pitch?: number; roll?: number };
+  bodyTransform?: { x: number; y: number; z: number; yaw?: number; pitch?: number; roll?: number };
   muted: boolean;
   activeMedia: { audio: boolean; screenShare: boolean };
+  seq?: number;
+  clientTimeMs?: number;
+  serverTimeMs?: number;
   updatedAt: string;
 }
 

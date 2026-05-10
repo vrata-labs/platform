@@ -2,7 +2,7 @@
 
 ## Current phase
 
-- Active phase: `M1 scaffold baseline complete`
+- Active phase: `M0.5 — приемка базового присутствия`
 - Overall state: `in_progress`
 
 ## Phase checklist
@@ -40,6 +40,8 @@
 
 ## Notes
 
+- M0.5 focuses on acceptance of the existing basic multi-user presence path: diagnostics, pose orientation, remote visibility, join/leave cleanup, voice state, spatial-audio diagnostics, and XR-mode simulation.
+- M0.5 explicitly excludes humanoid avatars, new room templates, and control-plane expansion.
 - Current repository state is greenfield with docs and skeleton only.
 - `Phase 1` should stay time-boxed and must not redefine the product stack.
 - `Phase 0` is complete enough to move into `M0` foundation work.

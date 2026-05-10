@@ -40,6 +40,41 @@ test("mergeParticipantState preserves existing head and body transforms on parti
   assert.equal(merged.updatedAt, "2026-03-28T10:00:00.000Z");
 });
 
+test("mergeParticipantState defaults missing orientation to zero and preserves new orientation", () => {
+  const current = createParticipantState("p1");
+  const legacy = mergeParticipantState(current, {
+    rootTransform: { x: 1, y: 0, z: 2 }
+  });
+  const oriented = mergeParticipantState(legacy, {
+    rootTransform: { x: 1, y: 0, z: 2, yaw: 0.8 },
+    headTransform: { x: 1, y: 1.6, z: 2, yaw: 0.9, pitch: -0.2 }
+  });
+
+  assert.equal(legacy.rootTransform.yaw, 0);
+  assert.equal(oriented.rootTransform.yaw, 0.8);
+  assert.equal(oriented.headTransform?.yaw, 0.9);
+  assert.equal(oriented.headTransform?.pitch, -0.2);
+});
+
+test("updateParticipantState ignores stale lower sequence updates", () => {
+  const room = updateParticipantState(joinRoom(createRoomState("demo"), "p1"), {
+    participantId: "p1",
+    rootTransform: { x: 5, y: 0, z: 7, yaw: 1 },
+    seq: 5,
+    clientTimeMs: 500
+  });
+  const stale = updateParticipantState(room, {
+    participantId: "p1",
+    rootTransform: { x: 99, y: 0, z: 99, yaw: 3 },
+    seq: 4,
+    clientTimeMs: 400
+  });
+
+  assert.equal(stale.participants[0]?.rootTransform.x, 5);
+  assert.equal(stale.participants[0]?.rootTransform.yaw, 1);
+  assert.equal(stale.participants[0]?.seq, 5);
+});
+
 test("claimSeat assigns free seat to participant", () => {
   const room = joinRoom(createRoomState("demo"), "p1");
   const result = claimSeat(room, "p1", "seat-a");

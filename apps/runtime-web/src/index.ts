@@ -72,22 +72,34 @@ export interface PresenceState {
     x: number;
     y: number;
     z: number;
+    yaw?: number;
+    pitch?: number;
+    roll?: number;
   };
   headTransform?: {
     x: number;
     y: number;
     z: number;
+    yaw?: number;
+    pitch?: number;
+    roll?: number;
   };
   bodyTransform?: {
     x: number;
     y: number;
     z: number;
+    yaw?: number;
+    pitch?: number;
+    roll?: number;
   };
   muted: boolean;
   activeMedia: {
     audio: boolean;
     screenShare: boolean;
   };
+  seq?: number;
+  clientTimeMs?: number;
+  serverTimeMs?: number;
   updatedAt: string;
 }
 

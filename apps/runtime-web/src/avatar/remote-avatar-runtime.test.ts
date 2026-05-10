@@ -8,6 +8,23 @@ function createDebugState() {
   return {
     remoteAvatarCount: 0,
     remoteTargets: [] as Array<{ id: string; x: number; z: number }>,
+    remoteParticipants: [] as Array<{
+      participantId: string;
+      mode: "desktop" | "mobile" | "vr";
+      root: { x: number; y: number; z: number; yaw: number };
+      head: { x: number; y: number; z: number; yaw: number; pitch: number };
+      lastSeq: number;
+      staleMs: number;
+      updateHz: number;
+      interpolationDelayMs: number;
+      maxObservedJumpM: number;
+      muted: boolean;
+      activeAudio: boolean;
+      hasVisualEntity: boolean;
+      hasAudioNode: boolean;
+      appliedRootYaw: number;
+      appliedHeadYaw: number;
+    }>,
     remoteAvatarReliableCount: 0,
     remoteAvatarPoseCount: 0,
     remoteAvatarReliableStates: [] as Array<{ participantId: string; avatarId: string; inputMode: string; updatedAt: string }>,

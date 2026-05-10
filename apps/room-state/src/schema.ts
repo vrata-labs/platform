@@ -2,6 +2,9 @@ export interface TransformState {
   x: number;
   y: number;
   z: number;
+  yaw?: number;
+  pitch?: number;
+  roll?: number;
 }
 
 export type PresenceMode = "desktop" | "mobile" | "vr";
@@ -18,5 +21,8 @@ export interface PresenceState {
     audio: boolean;
     screenShare: boolean;
   };
+  seq?: number;
+  clientTimeMs?: number;
+  serverTimeMs?: number;
   updatedAt: string;
 }

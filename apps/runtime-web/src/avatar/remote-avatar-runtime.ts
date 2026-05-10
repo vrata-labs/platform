@@ -6,6 +6,7 @@ import { createAvatarPoseBuffer, pushAvatarPoseFrame, pruneAvatarPoseBuffer, sam
 import { createMotionTrack, pushMotionSample, sampleMotion, type MotionTrack } from "../motion-state.js";
 import type { PresenceState } from "../index.js";
 import type { CompactPoseFrame } from "./avatar-types.js";
+import { normalizePoseTransform } from "../pose.js";
 
 export interface RemoteAvatarReliableStateView {
   participantId: string;
@@ -28,6 +29,23 @@ export interface RemoteAvatarPoseFrameView {
 export interface RemoteAvatarDebugState {
   remoteAvatarCount: number;
   remoteTargets: Array<{ id: string; x: number; z: number }>;
+  remoteParticipants: Array<{
+    participantId: string;
+    mode: PresenceState["mode"];
+    root: { x: number; y: number; z: number; yaw: number };
+    head: { x: number; y: number; z: number; yaw: number; pitch: number };
+    lastSeq: number;
+    staleMs: number;
+    updateHz: number;
+    interpolationDelayMs: number;
+    maxObservedJumpM: number;
+    muted: boolean;
+    activeAudio: boolean;
+    hasVisualEntity: boolean;
+    hasAudioNode: boolean;
+    appliedRootYaw: number;
+    appliedHeadYaw: number;
+  }>;
   remoteAvatarReliableCount: number;
   remoteAvatarPoseCount: number;
   remoteAvatarReliableStates: Array<{ participantId: string; avatarId: string; inputMode: string; updatedAt: string }>;
@@ -58,10 +76,14 @@ interface RemoteAvatarParticipantModel {
   presenceSeen: boolean;
   reliableState: RemoteAvatarReliableStateView | null;
   poseFrame: RemoteAvatarPoseFrameView | null;
+  presenceState: PresenceState | null;
   poseBuffer: AvatarPoseBuffer;
   leftHandVisible: boolean;
   rightHandVisible: boolean;
   lastPoseAppliedAtMs: number | null;
+  presenceUpdateTimesMs: number[];
+  maxObservedJumpM: number;
+  lastPresenceRoot: { x: number; y: number; z: number } | null;
   lipsync: AvatarLipsyncState;
 }
 
@@ -71,6 +93,7 @@ interface RemoteAvatarEntity {
   mouth: THREE.Mesh;
   leftHand: THREE.Mesh;
   rightHand: THREE.Mesh;
+  direction: THREE.Mesh;
 }
 
 interface RemoteAvatarMotion {
@@ -113,6 +136,22 @@ function makeHand(color: number): THREE.Mesh {
   );
 }
 
+function makeDirectionIndicator(): THREE.Mesh {
+  return new THREE.Mesh(
+    new THREE.BoxGeometry(0.04, 0.04, 0.45),
+    new THREE.MeshStandardMaterial({ color: 0x9cff8f, roughness: 0.4, metalness: 0.02 })
+  );
+}
+
+function roundNumber(value: number, decimals = 3): number {
+  const scale = 10 ** decimals;
+  return Math.round(value * scale) / scale;
+}
+
+function distance3(a: { x: number; y: number; z: number }, b: { x: number; y: number; z: number }): number {
+  return Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
+}
+
 function lerpPosePoint(a: { x: number; y: number; z: number }, b: { x: number; y: number; z: number }, alpha: number): { x: number; y: number; z: number } {
   return {
     x: THREE.MathUtils.lerp(a.x, b.x, alpha),
@@ -130,6 +169,36 @@ function yawFromQuaternion(rotation: { qx: number; qy: number; qz: number; qw: n
   const sinyCosp = 2 * (rotation.qw * rotation.qy + rotation.qx * rotation.qz);
   const cosyCosp = 1 - 2 * (rotation.qy * rotation.qy + rotation.qz * rotation.qz);
   return Math.atan2(sinyCosp, cosyCosp);
+}
+
+function eulerFromQuaternion(rotation: { qx: number; qy: number; qz: number; qw: number }): { yaw: number; pitch: number } {
+  const euler = new THREE.Euler(0, 0, 0, "YXZ");
+  euler.setFromQuaternion(new THREE.Quaternion(rotation.qx, rotation.qy, rotation.qz, rotation.qw), "YXZ");
+  return {
+    yaw: euler.y,
+    pitch: euler.x
+  };
+}
+
+function updateDirectionIndicator(entity: RemoteAvatarEntity, yaw: number, pitch: number): void {
+  const forward = new THREE.Vector3(Math.sin(yaw), -Math.sin(pitch), Math.cos(yaw)).normalize();
+  entity.direction.position.copy(entity.head.position).addScaledVector(forward, 0.34);
+  entity.direction.rotation.set(pitch, yaw, 0);
+  entity.direction.visible = entity.head.visible;
+}
+
+function computeUpdateHz(updateTimesMs: number[], nowMs: number): number {
+  while (updateTimesMs.length > 0 && nowMs - updateTimesMs[0]! > 5000) {
+    updateTimesMs.shift();
+  }
+  if (updateTimesMs.length < 2) {
+    return 0;
+  }
+  const spanMs = updateTimesMs[updateTimesMs.length - 1]! - updateTimesMs[0]!;
+  if (spanMs <= 0) {
+    return 0;
+  }
+  return (updateTimesMs.length - 1) / (spanMs / 1000);
 }
 
 function resolvePlaybackDelayMs(recommendedPlaybackDelayMs: number, inputMode: string | null | undefined): number {
@@ -256,10 +325,14 @@ export function createRemoteAvatarRuntime(input: {
         presenceSeen: false,
         reliableState: null,
         poseFrame: null,
+        presenceState: null,
         poseBuffer: createAvatarPoseBuffer(),
         leftHandVisible: false,
         rightHandVisible: false,
         lastPoseAppliedAtMs: null,
+        presenceUpdateTimesMs: [],
+        maxObservedJumpM: 0,
+        lastPresenceRoot: null,
         lipsync: {
           mouthAmount: 0,
           speakingActive: false,
@@ -280,19 +353,24 @@ export function createRemoteAvatarRuntime(input: {
       const mouth = headVisual.mouth;
       const leftHand = makeHand(0xf2b3a0);
       const rightHand = makeHand(0xf2b3a0);
-      input.scene.add(body, head, leftHand, rightHand);
-      entity = { body, head, mouth, leftHand, rightHand };
+      const direction = makeDirectionIndicator();
+      input.scene.add(body, head, leftHand, rightHand, direction);
+      entity = { body, head, mouth, leftHand, rightHand, direction };
       remoteAvatars.set(participant.participantId, entity);
+      const root = normalizePoseTransform(participant.rootTransform);
+      const bodyTransform = normalizePoseTransform(participant.bodyTransform, { x: root.x, y: 0.92, z: root.z, yaw: root.yaw });
+      const headTransform = normalizePoseTransform(participant.headTransform, { x: root.x, y: 1.58, z: root.z, yaw: root.yaw, pitch: 0 });
       remoteMotionTracks.set(participant.participantId, {
-        root: pushMotionSample(createMotionTrack(), { x: participant.rootTransform.x, z: participant.rootTransform.z, capturedAtMs: getPresenceCaptureTime(participant.updatedAt, Date.now()) }),
-        body: pushMotionSample(createMotionTrack(), { x: participant.bodyTransform?.x ?? participant.rootTransform.x, z: participant.bodyTransform?.z ?? participant.rootTransform.z, capturedAtMs: getPresenceCaptureTime(participant.updatedAt, Date.now()) }),
-        head: pushMotionSample(createMotionTrack(), { x: participant.headTransform?.x ?? participant.rootTransform.x, z: participant.headTransform?.z ?? participant.rootTransform.z, capturedAtMs: getPresenceCaptureTime(participant.updatedAt, Date.now()) })
+        root: pushMotionSample(createMotionTrack(), { x: root.x, z: root.z, yaw: root.yaw, capturedAtMs: getPresenceCaptureTime(participant.updatedAt, Date.now()) }),
+        body: pushMotionSample(createMotionTrack(), { x: bodyTransform.x, z: bodyTransform.z, yaw: bodyTransform.yaw, capturedAtMs: getPresenceCaptureTime(participant.updatedAt, Date.now()) }),
+        head: pushMotionSample(createMotionTrack(), { x: headTransform.x, z: headTransform.z, yaw: headTransform.yaw, pitch: headTransform.pitch, capturedAtMs: getPresenceCaptureTime(participant.updatedAt, Date.now()) })
       });
     }
     return entity;
   }
 
   function syncDebugState(debugState: RemoteAvatarDebugState): void {
+    const nowMs = Date.now();
     debugState.remoteAvatarCount = remoteAvatars.size;
     debugState.remoteTargets = Array.from(remoteMotionTracks.entries()).map(([id, track]) => {
       const latest = track.root.samples[track.root.samples.length - 1];
@@ -308,6 +386,59 @@ export function createRemoteAvatarRuntime(input: {
       .filter((frame): frame is RemoteAvatarPoseFrameView => Boolean(frame))
       .sort((a, b) => a.participantId.localeCompare(b.participantId))
       .map(({ participantId, seq, locomotionMode, sentAtMs }) => ({ participantId, seq, locomotionMode, sentAtMs }));
+    debugState.remoteParticipants = Array.from(remoteAvatarParticipants.values())
+      .filter((participant) => participant.presenceState !== null || remoteAvatars.has(participant.participantId))
+      .sort((a, b) => a.participantId.localeCompare(b.participantId))
+      .map((participant) => {
+        const entity = remoteAvatars.get(participant.participantId);
+        const presence = participant.presenceState;
+        const root = normalizePoseTransform(presence?.rootTransform);
+        const head = normalizePoseTransform(presence?.headTransform, {
+          x: root.x,
+          y: 1.58,
+          z: root.z,
+          yaw: root.yaw,
+          pitch: 0
+        });
+        const poseFrame = participant.poseFrame?.frame ?? null;
+        const poseHead = poseFrame ? eulerFromQuaternion(poseFrame.head) : null;
+        const debugRoot = poseFrame
+          ? { x: poseFrame.root.x, y: poseFrame.root.y, z: poseFrame.root.z, yaw: poseFrame.root.yaw }
+          : root;
+        const debugHead = poseFrame && poseHead
+          ? { x: poseFrame.head.x, y: poseFrame.head.y, z: poseFrame.head.z, yaw: poseHead.yaw, pitch: poseHead.pitch }
+          : head;
+        const playbackDelayMs = resolvePlaybackDelayMs(participant.poseBuffer.recommendedPlaybackDelayMs, participant.reliableState?.inputMode ?? null);
+        const captureTimeMs = presence ? getPresenceCaptureTime(presence.updatedAt, nowMs) : participant.poseFrame?.sentAtMs ?? nowMs;
+        return {
+          participantId: participant.participantId,
+          mode: presence?.mode ?? "desktop",
+          root: {
+            x: roundNumber(debugRoot.x),
+            y: roundNumber(debugRoot.y),
+            z: roundNumber(debugRoot.z),
+            yaw: roundNumber(debugRoot.yaw)
+          },
+          head: {
+            x: roundNumber(debugHead.x),
+            y: roundNumber(debugHead.y),
+            z: roundNumber(debugHead.z),
+            yaw: roundNumber(debugHead.yaw),
+            pitch: roundNumber(debugHead.pitch)
+          },
+          lastSeq: Math.max(presence?.seq ?? 0, participant.poseBuffer.lastSeq ?? 0),
+          staleMs: Math.max(0, nowMs - captureTimeMs),
+          updateHz: roundNumber(computeUpdateHz(participant.presenceUpdateTimesMs, nowMs), 2),
+          interpolationDelayMs: playbackDelayMs,
+          maxObservedJumpM: roundNumber(participant.maxObservedJumpM),
+          muted: presence?.muted ?? participant.reliableState?.audioActive === false,
+          activeAudio: presence?.activeMedia.audio ?? participant.reliableState?.audioActive ?? false,
+          hasVisualEntity: Boolean(entity),
+          hasAudioNode: false,
+          appliedRootYaw: roundNumber(entity?.body.rotation.y ?? root.yaw),
+          appliedHeadYaw: roundNumber(entity?.head.rotation.y ?? head.yaw)
+        };
+      });
     debugState.remoteAvatarParticipants = Array.from(remoteAvatarParticipants.values())
       .sort((a, b) => a.participantId.localeCompare(b.participantId))
       .map((participant) => {
@@ -346,7 +477,10 @@ export function createRemoteAvatarRuntime(input: {
       for (const person of people) {
         if (person.participantId === input.localParticipantId) continue;
         activeIds.add(person.participantId);
-        ensureParticipantModel(person.participantId).presenceSeen = true;
+        const model = ensureParticipantModel(person.participantId);
+        const previousPresence = model.presenceState;
+        model.presenceSeen = true;
+        model.presenceState = person;
         const entity = ensureRemoteAvatar(person);
         const bodyMaterial = entity.body.material;
         if (bodyMaterial instanceof THREE.MeshStandardMaterial) {
@@ -354,19 +488,34 @@ export function createRemoteAvatarRuntime(input: {
         }
         const current = remoteMotionTracks.get(person.participantId) ?? { root: createMotionTrack(), body: createMotionTrack(), head: createMotionTrack() };
         const capturedAtMs = getPresenceCaptureTime(person.updatedAt, Date.now());
+        if (model.presenceUpdateTimesMs[model.presenceUpdateTimesMs.length - 1] !== capturedAtMs) {
+          model.presenceUpdateTimesMs.push(capturedAtMs);
+        }
+        const root = normalizePoseTransform(person.rootTransform);
+        const bodyTransform = normalizePoseTransform(person.bodyTransform, { x: root.x, y: 0.92, z: root.z, yaw: root.yaw });
+        const headTransform = normalizePoseTransform(person.headTransform, { x: root.x, y: 1.58, z: root.z, yaw: root.yaw, pitch: 0 });
+        const nextRoot = { x: root.x, y: root.y, z: root.z };
+        if (model.lastPresenceRoot && (previousPresence?.seq ?? 0) > 0 && (person.seq ?? 0) > 0) {
+          model.maxObservedJumpM = Math.max(model.maxObservedJumpM, distance3(model.lastPresenceRoot, nextRoot));
+        }
+        model.lastPresenceRoot = nextRoot;
         remoteMotionTracks.set(person.participantId, {
-          root: pushMotionSample(current.root, { x: person.rootTransform.x, z: person.rootTransform.z, capturedAtMs }),
-          body: pushMotionSample(current.body, { x: person.bodyTransform?.x ?? person.rootTransform.x, z: person.bodyTransform?.z ?? person.rootTransform.z, capturedAtMs }),
-          head: pushMotionSample(current.head, { x: person.headTransform?.x ?? person.rootTransform.x, z: person.headTransform?.z ?? person.rootTransform.z, capturedAtMs })
+          root: pushMotionSample(current.root, { x: root.x, z: root.z, yaw: root.yaw, capturedAtMs }),
+          body: pushMotionSample(current.body, { x: bodyTransform.x, z: bodyTransform.z, yaw: bodyTransform.yaw, capturedAtMs }),
+          head: pushMotionSample(current.head, { x: headTransform.x, z: headTransform.z, yaw: headTransform.yaw, pitch: headTransform.pitch, capturedAtMs })
         });
         if (entity.body.position.lengthSq() === 0) {
-          entity.body.position.set(person.bodyTransform?.x ?? person.rootTransform.x, 0.92, person.bodyTransform?.z ?? person.rootTransform.z);
-          entity.head.position.set(person.headTransform?.x ?? person.rootTransform.x, 1.58, person.headTransform?.z ?? person.rootTransform.z);
+          entity.body.position.set(bodyTransform.x, bodyTransform.y, bodyTransform.z);
+          entity.head.position.set(headTransform.x, headTransform.y, headTransform.z);
+          entity.body.rotation.y = bodyTransform.yaw;
+          entity.head.rotation.y = headTransform.yaw;
+          entity.head.rotation.x = headTransform.pitch;
+          updateDirectionIndicator(entity, headTransform.yaw, headTransform.pitch);
         }
       }
       for (const [id, mesh] of remoteAvatars.entries()) {
         if (!activeIds.has(id)) {
-          input.scene.remove(mesh.body, mesh.head, mesh.leftHand, mesh.rightHand);
+          input.scene.remove(mesh.body, mesh.head, mesh.leftHand, mesh.rightHand, mesh.direction);
           remoteAvatars.delete(id);
           remoteMotionTracks.delete(id);
           remoteAvatarParticipants.delete(id);
@@ -416,6 +565,7 @@ export function createRemoteAvatarRuntime(input: {
         const renderAtMs = nowMs - playbackDelayMs;
         const bodySample = sampleMotion(tracks.body, renderAtMs);
         const headSample = sampleMotion(tracks.head, renderAtMs);
+        const rootSample = sampleMotion(tracks.root, renderAtMs);
         const reliableState = participant?.reliableState ?? null;
         const lipsync = participant?.lipsync ?? { mouthAmount: 0, speakingActive: false, sourceState: "idle" as const };
         const bodyYOffset = resolveRemoteBodyY(reliableState?.inputMode ?? null);
@@ -447,9 +597,13 @@ export function createRemoteAvatarRuntime(input: {
           entity.leftHand.position.lerp(new THREE.Vector3(poseFrame.leftHand.x, poseFrame.leftHand.y, poseFrame.leftHand.z), 0.45);
           entity.rightHand.position.lerp(new THREE.Vector3(poseFrame.rightHand.x, poseFrame.rightHand.y, poseFrame.rightHand.z), 0.45);
           entity.body.rotation.y = lerpAngleRadians(entity.body.rotation.y, poseFrame.root.yaw, 0.35);
-          entity.head.rotation.y = lerpAngleRadians(entity.head.rotation.y, yawFromQuaternion(poseFrame.head), 0.45);
-          entity.head.rotation.x = 0;
+          const headEuler = eulerFromQuaternion(poseFrame.head);
+          entity.head.rotation.y = lerpAngleRadians(entity.head.rotation.y, headEuler.yaw, 0.45);
+          entity.head.rotation.x = lerpAngleRadians(entity.head.rotation.x, headEuler.pitch, 0.45);
           entity.head.rotation.z = 0;
+          entity.body.rotation.x = 0;
+          entity.body.rotation.z = 0;
+          updateDirectionIndicator(entity, entity.head.rotation.y, entity.head.rotation.x);
           const forceVrHandsVisible = reliableState?.inputMode === "vr-controller" || reliableState?.inputMode === "vr-hand";
           entity.leftHand.visible = forceVrHandsVisible || poseFrame.leftHand.gesture > 0;
           entity.rightHand.visible = forceVrHandsVisible || poseFrame.rightHand.gesture > 0;
@@ -468,12 +622,16 @@ export function createRemoteAvatarRuntime(input: {
             entity.head.position.lerp(new THREE.Vector3(headSample.x, 1.58, headSample.z), 0.25);
             entity.body.rotation.x = 0;
             entity.body.rotation.z = 0;
+            const fallbackBodyYaw = rootSample?.yaw ?? bodySample.yaw ?? Math.atan2(headSample.x - bodySample.x, headSample.z - bodySample.z);
             entity.body.rotation.y = lerpAngleRadians(
               entity.body.rotation.y,
-              Math.atan2(headSample.x - bodySample.x, headSample.z - bodySample.z),
+              fallbackBodyYaw,
               0.25
             );
-            entity.head.rotation.y = lerpAngleRadians(entity.head.rotation.y, entity.body.rotation.y, 0.25);
+            entity.head.rotation.y = lerpAngleRadians(entity.head.rotation.y, headSample.yaw ?? fallbackBodyYaw, 0.25);
+            entity.head.rotation.x = lerpAngleRadians(entity.head.rotation.x, headSample.pitch ?? 0, 0.25);
+            entity.head.rotation.z = 0;
+            updateDirectionIndicator(entity, entity.head.rotation.y, entity.head.rotation.x);
           }
           entity.leftHand.visible = participant?.leftHandVisible ?? false;
           entity.rightHand.visible = participant?.rightHandVisible ?? false;
@@ -483,7 +641,7 @@ export function createRemoteAvatarRuntime(input: {
     },
     reset(debugState: RemoteAvatarDebugState): void {
       for (const mesh of remoteAvatars.values()) {
-        input.scene.remove(mesh.body, mesh.head, mesh.leftHand, mesh.rightHand);
+        input.scene.remove(mesh.body, mesh.head, mesh.leftHand, mesh.rightHand, mesh.direction);
       }
       remoteAvatars.clear();
       remoteMotionTracks.clear();

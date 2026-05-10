@@ -1828,7 +1828,7 @@ test("fault-injected room-state failure falls back to API mode", async ({ page, 
     __NOAH_DEBUG__?: { issueCode?: string | null; roomStateMode?: string; degradedMode?: string };
   }).__NOAH_DEBUG__);
   expect(debug?.issueCode).toBe("room_state_failed");
-  expect(debug?.roomStateMode).toBe("fallback");
+  expect(debug?.roomStateMode).toBe("api_fallback");
   expect(debug?.degradedMode).toBe("api_fallback");
 
   const presenceResponse = await request.get("/api/rooms/demo-room/presence");

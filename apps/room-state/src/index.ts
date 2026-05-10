@@ -233,7 +233,10 @@ export function disconnectParticipant(server: RoomStateServer, roomId: string, p
 
 export function applyParticipantUpdate(server: RoomStateServer, roomId: string, nextState: Partial<PresenceState> & { participantId: string }): void {
   const room = ensureRoom(server, roomId);
-  server.rooms.set(roomId, updateParticipantState(room, nextState));
+  server.rooms.set(roomId, updateParticipantState(room, {
+    ...nextState,
+    serverTimeMs: Date.now()
+  }));
   broadcastRoom(server, roomId);
 }
 

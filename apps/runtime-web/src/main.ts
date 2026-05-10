@@ -78,6 +78,19 @@ function mustElement<T extends Element>(selector: string): T {
   return element;
 }
 
+function parseBotStart(value: string | null): { x: number; z: number } | null {
+  if (!value) {
+    return null;
+  }
+  const [xRaw, zRaw] = value.split(",");
+  const x = Number.parseFloat(xRaw ?? "");
+  const z = Number.parseFloat(zRaw ?? "");
+  if (!Number.isFinite(x) || !Number.isFinite(z)) {
+    return null;
+  }
+  return { x, z };
+}
+
 const apiBaseUrl = window.location.origin;
 const roomId = window.location.pathname.split("/").filter(Boolean)[1] ?? "demo-room";
 const query = new URLSearchParams(window.location.search);
@@ -88,17 +101,26 @@ const requestedCleanSceneMode = query.get("clean") === "1";
 const avatarSandboxEnabled = query.get("avatarsandbox") === "1" || query.get("avatarSandbox") === "1";
 const avatarLegIkQueryOverrideEnabled = query.get("avatarik") === "1";
 const avatarVrMockEnabled = debugEnabled && query.get("avatarvrmock") === "1";
+const presenceXrMockEnabled = debugEnabled && query.get("xrmock") === "1";
 const botMode = query.get("bot") ?? "off";
+const botSpeed = Math.max(0.1, Number.parseFloat(query.get("botSpeed") ?? "1") || 1);
+const botStart = parseBotStart(query.get("botStart"));
+const spatialAudioRequested = query.get("spatial") !== "0";
 const shareMockEnabled = query.get("sharemock") === "1";
 const failSpaces = query.get("failspaces") === "1";
+const roomStateFaultMode = query.get("failroomstate");
+const audioFaultMode = query.get("failaudio");
 const faultConfig = {
-  audio: query.get("failaudio") as RuntimeIssue["code"] | null,
-  roomState: query.get("failroomstate") === "1",
+  audio: (audioFaultMode === "connection_failed" ? "livekit_failed" : audioFaultMode) as RuntimeIssue["code"] | null,
+  roomState: roomStateFaultMode === "1" || roomStateFaultMode === "temporary",
   xrUnavailable: query.get("failxr") === "1"
 };
 const participantId = getParticipantId();
-const displayName = localStorage.getItem("noah.displayName") ?? `Guest-${participantId.slice(0, 4)}`;
-localStorage.setItem("noah.displayName", displayName);
+const displayNameFromQuery = query.get("name");
+const displayName = displayNameFromQuery ?? localStorage.getItem("noah.displayName") ?? `Guest-${participantId.slice(0, 4)}`;
+if (!displayNameFromQuery) {
+  localStorage.setItem("noah.displayName", displayName);
+}
 
 const roomNameEl = mustElement<HTMLDivElement>("#room-name");
 const statusLineEl = mustElement<HTMLDivElement>("#status-line");
@@ -166,11 +188,12 @@ const pitch = new THREE.Group();
 pitch.add(camera);
 player.add(pitch);
 scene.add(player);
+const initialLocalPosition = { x: botStart?.x ?? 0, y: 0, z: botStart?.z ?? 6 };
 const localPoseController = createLocalPoseController({
   player,
   pitch,
   initialPose: {
-    position: { x: 0, y: 0, z: 6 },
+    position: initialLocalPosition,
     yaw: 0,
     pitch: 0
   }
@@ -280,7 +303,7 @@ let xrTurnArmed = true;
 let mobileTouchActive = false;
 const mobileTouchVector = { x: 0, z: 0 };
 let diagnosticsAccumulator = 0;
-let latestMode: PresenceState["mode"] = /android|iphone|ipad/i.test(navigator.userAgent) ? "mobile" : "desktop";
+let latestMode: PresenceState["mode"] = presenceXrMockEnabled ? "vr" : /android|iphone|ipad/i.test(navigator.userAgent) ? "mobile" : "desktop";
 let activeScreenShareTrack: Track | null = null;
 let activeScreenShareElement: HTMLVideoElement | null = null;
 let isScreenSharing = false;
@@ -335,6 +358,7 @@ const forcedInteractionDirection = new THREE.Vector3();
 const avatarOutboundPublisher = createAvatarOutboundPublisher();
 let lastAvatarMove = { x: 0, z: 0 };
 let lastAvatarTurnRate = 0;
+let currentBotMove = { x: 0, z: 0 };
 let lastAvatarXrInputProfile: string | null = null;
 let lastAvatarPoseSentAtMs = 0;
 let preferredMicDeviceId = localStorage.getItem("noah.audioinput") ?? "default";
@@ -350,6 +374,8 @@ const roomStateReconnectPolicy = createReconnectPolicy({
   baseDelayMs: Number.parseInt(query.get("roomstatedelay") ?? "1000", 10),
   maxDelayMs: Number.parseInt(query.get("roomstatemaxdelay") ?? "8000", 10)
 });
+const botStartedAtSeconds = performance.now() / 1000;
+const botInitialPosition = { x: initialLocalPosition.x, z: initialLocalPosition.z };
 
 interface RemoteAudioNode {
   participantId: string;
@@ -357,7 +383,7 @@ interface RemoteAudioNode {
   source: MediaElementAudioSourceNode;
   gain: GainNode;
   analyser: AnalyserNode;
-  panner: PannerNode;
+  panner: PannerNode | null;
   sampleBuffer: Uint8Array;
   lipsync: AvatarLipsyncDriver;
   trackId: string;
@@ -416,6 +442,72 @@ function updateLocalPositionDebug(): void {
     x: Number(pose.position.x.toFixed(2)),
     z: Number(pose.position.z.toFixed(2))
   };
+  updateLocalPresenceDiagnostics();
+}
+
+function roundDebugNumber(value: number, decimals = 3): number {
+  const scale = 10 ** decimals;
+  return Math.round(value * scale) / scale;
+}
+
+function updateLocalPresenceDiagnostics(): void {
+  const pose = localPoseController.getPose();
+  const headWorld = new THREE.Vector3();
+  camera.getWorldPosition(headWorld);
+  const headYaw = renderer.xr.isPresenting && !presenceXrMockEnabled ? getCameraWorldYaw() : pose.yaw;
+  const headPitch = renderer.xr.isPresenting && !presenceXrMockEnabled ? getCameraWorldPitch() : pose.pitch;
+  debugState.mode = latestMode;
+  debugState.localPose = {
+    root: {
+      x: roundDebugNumber(pose.position.x),
+      y: roundDebugNumber(pose.position.y),
+      z: roundDebugNumber(pose.position.z),
+      yaw: roundDebugNumber(pose.yaw)
+    },
+    head: {
+      x: roundDebugNumber(headWorld.x),
+      y: roundDebugNumber(headWorld.y),
+      z: roundDebugNumber(headWorld.z),
+      yaw: roundDebugNumber(headYaw),
+      pitch: roundDebugNumber(headPitch)
+    }
+  };
+}
+
+function deriveMediaDebugAudioState(): "not_joined" | "joining" | "joined" | "muted" | "degraded" | "failed" {
+  if (debugState.audioState === "joining") {
+    return "joining";
+  }
+  if (debugState.issueCode === "mic_denied" || debugState.issueCode === "no_audio_device") {
+    return "degraded";
+  }
+  if (debugState.issueCode === "livekit_failed" || debugState.audioState === "disabled") {
+    return "failed";
+  }
+  if (!livekitRoom) {
+    return "not_joined";
+  }
+  if (!microphoneEnabled) {
+    return "muted";
+  }
+  return "joined";
+}
+
+function updateMediaDiagnostics(): void {
+  debugState.media = {
+    audioState: deriveMediaDebugAudioState(),
+    muted: !microphoneEnabled,
+    publishedAudio: Boolean(livekitRoom && microphoneEnabled),
+    subscribedAudioCount: remoteAudioNodes.size
+  };
+}
+
+function syncRemoteAudioDiagnostics(): void {
+  debugState.remoteParticipants = debugState.remoteParticipants.map((participant) => ({
+    ...participant,
+    hasAudioNode: remoteAudioNodes.has(participant.participantId),
+    activeAudio: participant.activeAudio || remoteAudioNodes.has(participant.participantId)
+  }));
 }
 
 function getCurrentSeatId(): string | null {
@@ -910,12 +1002,18 @@ function connectRemoteAudioTrack(track: Track, participantId: string): void {
   void element.play().catch(() => undefined);
   const source = context.createMediaElementSource(element);
   const gain = context.createGain();
-  const panner = context.createPanner();
-  applySpatialSettings(panner, createSpatialAudioSettings());
+  const panner = spatialAudioRequested ? context.createPanner() : null;
+  if (panner) {
+    applySpatialSettings(panner, createSpatialAudioSettings());
+  }
   source.connect(gain);
   gain.connect(analyserSetup.analyser);
-  analyserSetup.analyser.connect(panner);
-  panner.connect(context.destination);
+  if (panner) {
+    analyserSetup.analyser.connect(panner);
+    panner.connect(context.destination);
+  } else {
+    analyserSetup.analyser.connect(context.destination);
+  }
   remoteAudioNodes.set(participantId, {
     participantId,
     element,
@@ -927,7 +1025,7 @@ function connectRemoteAudioTrack(track: Track, participantId: string): void {
     lipsync: analyserSetup.lipsync,
     trackId: mediaStreamTrack?.id ?? participantId
   });
-  debugState.spatialAudioState = "active";
+  debugState.spatialAudioState = panner ? "active" : "fallback";
 }
 
 function disconnectRemoteAudioElement(participantId: string): void {
@@ -939,7 +1037,7 @@ function disconnectRemoteAudioElement(participantId: string): void {
   node.source.disconnect();
   node.gain.disconnect();
   node.analyser.disconnect();
-  node.panner.disconnect();
+  node.panner?.disconnect();
   remoteAvatarRuntime.setParticipantLipsync(participantId, {
     mouthAmount: 0,
     speakingActive: false,
@@ -952,19 +1050,41 @@ function disconnectRemoteAudioElement(participantId: string): void {
 }
 
 function updateSpatialAudio(): void {
-  if (!audioContext) {
+  const listenerPosition = new THREE.Vector3();
+  camera.getWorldPosition(listenerPosition);
+  const listenerYaw = getCameraWorldYaw();
+  debugState.spatialAudio = {
+    enabled: spatialAudioRequested,
+    fallback: !spatialAudioRequested || !audioContext,
+    listener: {
+      x: roundDebugNumber(listenerPosition.x),
+      y: roundDebugNumber(listenerPosition.y),
+      z: roundDebugNumber(listenerPosition.z),
+      yaw: roundDebugNumber(listenerYaw)
+    },
+    remoteSources: debugState.remoteParticipants.map((participant) => {
+      const target = remoteAvatarRuntime.getAudioTarget(participant.participantId);
+      return {
+        participantId: participant.participantId,
+        x: roundDebugNumber(target?.x ?? participant.head.x),
+        y: roundDebugNumber(target?.y ?? participant.head.y),
+        z: roundDebugNumber(target?.z ?? participant.head.z),
+        attachedTo: "head" as const
+      };
+    })
+  };
+
+  if (!audioContext || !spatialAudioRequested) {
     return;
   }
   const listener = audioContext.listener;
-  const listenerPosition = new THREE.Vector3();
-  camera.getWorldPosition(listenerPosition);
   listener.positionX.value = listenerPosition.x;
   listener.positionY.value = listenerPosition.y;
   listener.positionZ.value = listenerPosition.z;
 
   for (const [participantId, node] of remoteAudioNodes.entries()) {
     const target = remoteAvatarRuntime.getAudioTarget(participantId);
-    if (!target) {
+    if (!target || !node.panner) {
       continue;
     }
     node.panner.positionX.value = target.x;
@@ -1034,6 +1154,7 @@ function updateAvatarLipsync(deltaSeconds: number): void {
 
 const debugState = {
   participantId,
+  mode: latestMode,
   remoteAvatarCount: 0,
   remoteAvatarReliableCount: 0,
   remoteAvatarPoseCount: 0,
@@ -1041,11 +1162,33 @@ const debugState = {
   locomotionMode: "desktop",
   roomStateConnected: false,
   roomStateUrl: "",
-  roomStateMode: "connecting",
+  roomStateMode: "disconnected",
   audioState: "idle",
+  media: {
+    audioState: "not_joined" as "not_joined" | "joining" | "joined" | "muted" | "degraded" | "failed",
+    muted: true,
+    publishedAudio: false,
+    subscribedAudioCount: 0
+  },
   screenShareState: "idle",
   spatialAudioState: "idle",
-  localPosition: { x: 0, z: 6 },
+  spatialAudio: {
+    enabled: spatialAudioRequested,
+    fallback: !spatialAudioRequested,
+    listener: { x: 0, y: 1.6, z: 6, yaw: 0 },
+    remoteSources: [] as Array<{
+      participantId: string;
+      x: number;
+      y: number;
+      z: number;
+      attachedTo: "head" | "body" | "root";
+    }>
+  },
+  localPosition: { x: initialLocalPosition.x, z: initialLocalPosition.z },
+  localPose: {
+    root: { x: initialLocalPosition.x, y: initialLocalPosition.y, z: initialLocalPosition.z, yaw: 0 },
+    head: { x: initialLocalPosition.x, y: initialLocalPosition.y + 1.6, z: initialLocalPosition.z, yaw: 0, pitch: 0 }
+  },
   xrAxes: { moveX: 0, moveY: 0, turnX: 0, turnY: 0 },
   botMode,
   issueCode: null as RuntimeIssue["code"] | null,
@@ -1058,6 +1201,23 @@ const debugState = {
   lastPresenceSyncAt: 0,
   lastPresenceRefreshAt: 0,
   remoteTargets: [] as Array<{ id: string; x: number; z: number }>,
+  remoteParticipants: [] as Array<{
+    participantId: string;
+    mode: PresenceState["mode"];
+    root: { x: number; y: number; z: number; yaw: number };
+    head: { x: number; y: number; z: number; yaw: number; pitch: number };
+    lastSeq: number;
+    staleMs: number;
+    updateHz: number;
+    interpolationDelayMs: number;
+    maxObservedJumpM: number;
+    muted: boolean;
+    activeAudio: boolean;
+    hasVisualEntity: boolean;
+    hasAudioNode: boolean;
+    appliedRootYaw: number;
+    appliedHeadYaw: number;
+  }>,
   sceneBundleUrl: null as string | null,
   sceneBundleState: "fallback" as "fallback" | "loaded" | "failed",
   sceneDebug: createEmptySceneDiagnostics(),
@@ -1377,7 +1537,7 @@ function clearSeatReclaimRetry(): void {
 function connectRoomStateWithRetry(roomStateUrl: string): void {
   clearRoomStateReconnect();
   clearSeatReclaimRetry();
-  debugState.roomStateMode = "connecting";
+  debugState.roomStateMode = "disconnected";
   setRoomStateStatus("Room-state: connecting");
 
   if (!runtimeFlags.roomStateRealtime || faultConfig.roomState) {
@@ -1386,7 +1546,7 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
     debugState.roomStateConnected = false;
     applyIssue(issue, {
       degradedMode: "api_fallback",
-      roomStateMode: "fallback",
+      roomStateMode: "api_fallback",
       lastRecoveryAction: "fallback_api",
       roomStateLabel: "Room-state: fallback API"
     });
@@ -1399,7 +1559,7 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
       const reopened = debugState.avatarPoseTransport.lastPoseSentAtMs > 0;
       roomStateConnected = true;
       debugState.roomStateConnected = true;
-      debugState.roomStateMode = "connected";
+      debugState.roomStateMode = "colyseus";
       setRoomStateStatus("Room-state: connected");
       if (runtimeUiState.issueCode === "room_state_failed") {
         clearIssue(debugState.audioState === "connected-passive" ? `Joined as ${displayName}` : debugState.statusLine);
@@ -1431,12 +1591,12 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
           executeRuntimeCommandList([{ type: "send_seat_claim", seatId: reclaimSeatId }]);
         }, seatReclaim.retryDelayMs);
       }
-      void syncPresence(latestMode, Boolean(livekitRoom));
+      void syncPresence(latestMode, Boolean(livekitRoom && microphoneEnabled));
     },
     onRoomState: (snapshot: RoomStateSnapshot) => {
       roomStateConnected = true;
       debugState.roomStateConnected = true;
-      debugState.roomStateMode = "connected";
+      debugState.roomStateMode = "colyseus";
       handleRoomSnapshot(snapshot);
     },
     onAvatarReliableState: (state) => {
@@ -1474,7 +1634,7 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
       clearSeatReclaimRetry();
       applyIssue(issue, {
         degradedMode: "api_fallback",
-        roomStateMode: "fallback",
+        roomStateMode: "api_fallback",
         lastRecoveryAction: "fallback_api",
         roomStateLabel: "Room-state: fallback API"
       });
@@ -1486,7 +1646,7 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
       debugState.roomStateConnected = false;
       applyIssue(issue, {
         degradedMode: "api_fallback",
-        roomStateMode: "reconnecting",
+        roomStateMode: "disconnected",
         lastRecoveryAction: "retry_room_state",
         incrementRetry: true,
         roomStateLabel: "Room-state: reconnecting"
@@ -1502,7 +1662,7 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
       }
       applyIssue(issue, {
         degradedMode: "api_fallback",
-        roomStateMode: "fallback",
+        roomStateMode: "api_fallback",
         lastRecoveryAction: "room_state_retry_exhausted",
         roomStateLabel: "Room-state: fallback API"
       });
@@ -1586,7 +1746,7 @@ async function reportDiagnostics(note?: string): Promise<void> {
     body: JSON.stringify({
       participantId,
       displayName,
-      mode: latestMode,
+      mode: debugState.mode,
       userAgent: navigator.userAgent,
       statusLine: debugState.statusLine,
       locomotionMode: debugState.locomotionMode,
@@ -1594,11 +1754,15 @@ async function reportDiagnostics(note?: string): Promise<void> {
       roomStateUrl: debugState.roomStateUrl,
       roomStateMode: debugState.roomStateMode,
       audioState: debugState.audioState,
+      media: debugState.media,
       screenShareState: debugState.screenShareState,
+      localPose: debugState.localPose,
       localPosition: debugState.localPosition,
+      spatialAudio: debugState.spatialAudio,
       xrAxes: debugState.xrAxes,
       remoteAvatarCount: debugState.remoteAvatarCount,
       remoteTargets: debugState.remoteTargets,
+      remoteParticipants: debugState.remoteParticipants,
       remoteAvatarReliableStates: debugState.remoteAvatarReliableStates,
       remoteAvatarPoseFrames: debugState.remoteAvatarPoseFrames,
       remoteAvatarParticipants: debugState.remoteAvatarParticipants,
@@ -1804,22 +1968,76 @@ async function ensureMediaRoom(): Promise<Room> {
   return room;
 }
 
-function botDirection(timeSeconds: number): { x: number; z: number } {
-  if (botMode === "orbit") {
-    return {
-      x: Math.sin(timeSeconds * 0.8),
-      z: Math.cos(timeSeconds * 0.8)
-    };
+function applyBotPose(timeSeconds: number): void {
+  if (botMode === "off") {
+    return;
   }
+
+  const elapsed = Math.max(0, timeSeconds - botStartedAtSeconds);
+  const pose = localPoseController.getPose();
+  let x = botInitialPosition.x;
+  let z = botInitialPosition.z;
+  let yaw = pose.yaw;
+  let pitchAngle = presenceXrMockEnabled ? Math.sin(elapsed * botSpeed * 0.7) * 0.25 : pose.pitch;
+  let avatarMove = { x: 0, z: 0 };
+  let avatarTurnRate = 0;
 
   if (botMode === "line") {
-    return {
-      x: 0,
-      z: Math.sin(timeSeconds * 0.7)
-    };
+    const phase = elapsed * botSpeed * 0.7;
+    x = botInitialPosition.x;
+    z = botInitialPosition.z + Math.sin(phase) * 2;
+    yaw = Math.cos(phase) >= 0 ? 0 : Math.PI;
+    avatarMove = { x: 0, z: Math.cos(phase) >= 0 ? 1 : -1 };
+  } else if (botMode === "turn") {
+    yaw = elapsed * botSpeed;
+    avatarTurnRate = botSpeed;
+  } else if (botMode === "square") {
+    const sideLength = 2;
+    const perimeter = sideLength * 4;
+    const progress = (elapsed * botSpeed) % perimeter;
+    const side = Math.floor(progress / sideLength);
+    const t = (progress % sideLength) / sideLength;
+    if (side === 0) {
+      x = botInitialPosition.x - sideLength / 2 + t * sideLength;
+      z = botInitialPosition.z - sideLength / 2;
+      yaw = Math.PI / 2;
+      avatarMove = { x: 1, z: 0 };
+    } else if (side === 1) {
+      x = botInitialPosition.x + sideLength / 2;
+      z = botInitialPosition.z - sideLength / 2 + t * sideLength;
+      yaw = 0;
+      avatarMove = { x: 0, z: 1 };
+    } else if (side === 2) {
+      x = botInitialPosition.x + sideLength / 2 - t * sideLength;
+      z = botInitialPosition.z + sideLength / 2;
+      yaw = -Math.PI / 2;
+      avatarMove = { x: -1, z: 0 };
+    } else {
+      x = botInitialPosition.x - sideLength / 2;
+      z = botInitialPosition.z + sideLength / 2 - t * sideLength;
+      yaw = Math.PI;
+      avatarMove = { x: 0, z: -1 };
+    }
+  } else if (botMode === "orbit") {
+    x = botInitialPosition.x + Math.sin(elapsed * botSpeed * 0.8) * 2;
+    z = botInitialPosition.z + Math.cos(elapsed * botSpeed * 0.8) * 2;
+    yaw = elapsed * botSpeed * 0.8 + Math.PI / 2;
+    avatarMove = { x: Math.cos(elapsed * botSpeed * 0.8), z: -Math.sin(elapsed * botSpeed * 0.8) };
+    avatarTurnRate = botSpeed * 0.8;
   }
 
-  return { x: 0, z: 0 };
+  if (!presenceXrMockEnabled) {
+    pitchAngle = pose.pitch;
+  }
+  localPoseController.setPose({
+    position: { x, y: pose.position.y, z },
+    yaw,
+    pitch: pitchAngle
+  }, "desktop_move");
+  currentBotMove = avatarMove;
+  lastAvatarMove = avatarMove;
+  lastAvatarTurnRate = avatarTurnRate;
+  updateLocalPositionDebug();
 }
 
 function getCameraWorldYaw(): number {
@@ -1828,6 +2046,14 @@ function getCameraWorldYaw(): number {
   camera.getWorldQuaternion(cameraWorldQuaternion);
   cameraWorldEuler.setFromQuaternion(cameraWorldQuaternion, "YXZ");
   return cameraWorldEuler.y;
+}
+
+function getCameraWorldPitch(): number {
+  const cameraWorldQuaternion = new THREE.Quaternion();
+  const cameraWorldEuler = new THREE.Euler(0, 0, 0, "YXZ");
+  camera.getWorldQuaternion(cameraWorldQuaternion);
+  cameraWorldEuler.setFromQuaternion(cameraWorldQuaternion, "YXZ");
+  return cameraWorldEuler.x;
 }
 
 function getLocalAvatarHandTargets(frameContext: RuntimeFrameContext): { leftHand: { x: number; y: number; z: number } | null; rightHand: { x: number; y: number; z: number } | null } {
@@ -2247,9 +2473,7 @@ function createFrameLocomotionHandlers(frameContext: RuntimeFrameContext): Frame
       return { x: viewForward.x, z: viewForward.z };
     },
     getDesktopFastMove: () => Boolean(keyState.ShiftLeft),
-    getBotMove: () => frameContext.source !== "xr" && botMode !== "off"
-      ? botDirection(performance.now() / 1000)
-      : null,
+    getBotMove: () => botMode !== "off" ? currentBotMove : null,
     executeCommands: (commands) => executeFrameRuntimeCommandList(frameContext, commands)
   };
 }
@@ -2268,36 +2492,47 @@ async function syncPresence(mode: PresenceState["mode"], audioActive: boolean): 
   const worldPosition = new THREE.Vector3();
   camera.getWorldPosition(worldPosition);
   const pose = localPoseController.getPose();
+  const effectiveMode = presenceXrMockEnabled ? "vr" : mode;
+  const headYaw = renderer.xr.isPresenting && !presenceXrMockEnabled ? getCameraWorldYaw() : pose.yaw;
+  const headPitch = renderer.xr.isPresenting && !presenceXrMockEnabled ? getCameraWorldPitch() : pose.pitch;
   const bodyXZ = deriveBodyTransform(
     { x: pose.position.x, z: pose.position.z },
     { x: worldPosition.x, z: worldPosition.z }
   );
+  presenceSeq += 1;
+  const clientTimeMs = Date.now();
 
   const presencePayload: PresenceState = {
     participantId,
     displayName,
-    mode,
+    mode: effectiveMode,
     rootTransform: {
       x: pose.position.x,
       y: pose.position.y,
-      z: pose.position.z
+      z: pose.position.z,
+      yaw: pose.yaw
     },
     bodyTransform: {
       x: bodyXZ.x,
       y: 0.92,
-      z: bodyXZ.z
+      z: bodyXZ.z,
+      yaw: pose.yaw
     },
     headTransform: {
       x: worldPosition.x,
       y: worldPosition.y,
-      z: worldPosition.z
+      z: worldPosition.z,
+      yaw: headYaw,
+      pitch: headPitch
     },
     muted: !microphoneEnabled,
     activeMedia: {
       audio: audioActive,
       screenShare: isScreenSharing
     },
-    updatedAt: new Date().toISOString()
+    seq: presenceSeq,
+    clientTimeMs,
+    updatedAt: new Date(clientTimeMs).toISOString()
   };
 
   let sentRealtimePresence = false;
@@ -2323,7 +2558,7 @@ async function syncPresence(mode: PresenceState["mode"], audioActive: boolean): 
         const issue = classifyRoomStateError(error);
         applyIssue(issue, {
           degradedMode: "api_fallback",
-          roomStateMode: "fallback",
+          roomStateMode: "api_fallback",
           lastRecoveryAction: "presence_sync_failed",
           roomStateLabel: "Room-state: fallback API"
         });
@@ -2711,6 +2946,7 @@ const clock = new THREE.Clock();
 let syncAccumulator = 0;
 let presenceAccumulator = 0;
 let runtimeBootReady = false;
+let presenceSeq = 0;
 
 renderer.setAnimationLoop(() => {
   const delta = clock.getDelta();
@@ -2722,8 +2958,11 @@ renderer.setAnimationLoop(() => {
     recentFrameBudgetMs.splice(0, recentFrameBudgetMs.length - 60);
   }
   updateMovement(delta, frameContext);
+  applyBotPose(nowMs / 1000);
+  updateLocalPresenceDiagnostics();
   updateAvatarLipsync(delta);
   updateAudioUi();
+  updateMediaDiagnostics();
   updateLocalAvatar(delta, frameContext);
   remoteAvatarRuntime.update(delta, debugState);
   updateInteractionRayState(getInteractionFrameInput(frameContext));
@@ -2733,6 +2972,7 @@ renderer.setAnimationLoop(() => {
     ? Math.max(...debugState.remoteAvatarParticipants.map((participant) => participant.playbackDelayMs))
     : 100;
   updateSpatialAudio();
+  syncRemoteAudioDiagnostics();
   renderDebugPanel();
 
   syncAccumulator += delta;
@@ -2741,8 +2981,8 @@ renderer.setAnimationLoop(() => {
   if (runtimeBootReady) {
     if (syncAccumulator >= 0.08) {
       syncAccumulator = 0;
-      latestMode = renderer.xr.isPresenting ? "vr" : /android|iphone|ipad/i.test(navigator.userAgent) ? "mobile" : "desktop";
-      void syncPresence(latestMode, Boolean(livekitRoom));
+      latestMode = presenceXrMockEnabled ? "vr" : renderer.xr.isPresenting ? "vr" : /android|iphone|ipad/i.test(navigator.userAgent) ? "mobile" : "desktop";
+      void syncPresence(latestMode, Boolean(livekitRoom && microphoneEnabled));
     }
 
     syncAvatarPoseRealtime(nowMs);
@@ -2754,7 +2994,7 @@ renderer.setAnimationLoop(() => {
         const issue = classifyRoomStateError(error);
         applyIssue(issue, {
           degradedMode: "api_fallback",
-          roomStateMode: "fallback",
+          roomStateMode: "api_fallback",
           lastRecoveryAction: "presence_refresh_failed",
           roomStateLabel: "Room-state: fallback API"
         });
@@ -2804,7 +3044,7 @@ async function main(): Promise<void> {
     wallMaterial,
     setRoomStateStatus
   });
-  latestMode = boot.joinMode;
+  latestMode = presenceXrMockEnabled ? "vr" : boot.joinMode;
   await syncPresence(boot.joinMode, false);
   await loadAvailableSpaces(boot.roomId);
   const avatarCatalogUrl = resolveAvatarCatalogUrl(boot);
@@ -2845,7 +3085,7 @@ async function main(): Promise<void> {
   } catch (error) {
     console.error(error);
     roomStateConnected = false;
-    debugState.roomStateMode = "fallback";
+    debugState.roomStateMode = "api_fallback";
     setRoomStateStatus("Room-state: fallback API");
     void reportDiagnostics("room_state_connect_failed");
   }
