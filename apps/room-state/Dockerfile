@@ -20,6 +20,8 @@ COPY --from=build /app/apps/room-state/package.json ./apps/room-state/package.js
 COPY --from=build /app/apps/room-state/dist ./apps/room-state/dist
 COPY --from=build /app/packages/shared-types/package.json ./packages/shared-types/package.json
 COPY --from=build /app/packages/shared-types/dist ./packages/shared-types/dist
+COPY --from=build /app/packages/shared-types/package.json ./node_modules/@noah/shared-types/package.json
+COPY --from=build /app/packages/shared-types/dist ./node_modules/@noah/shared-types/dist
 
 EXPOSE 2567
 
