@@ -418,6 +418,7 @@ let sceneAnchorsReady = true;
 let roomSeatOccupancy: Record<string, string> = {};
 let roomMediaObjects: RoomMediaObjectsState | null = null;
 let surfaceAudioCommandPending = false;
+let surfaceAudioPendingEnabled: boolean | null = null;
 const pointerNdc = new THREE.Vector2(0, 0);
 const interactionRaycaster = new THREE.Raycaster();
 const surfaceInputRaycaster = new THREE.Raycaster();
@@ -880,12 +881,13 @@ function canConfigureSurfaceAudio(): boolean {
 function syncSurfaceAudioControl(): void {
   const surface = roomMediaObjects?.surfaces[DEBUG_SURFACE_ID] ?? null;
   const canConfigure = canConfigureSurfaceAudio();
+  const mediaAudioEnabled = surfaceAudioPendingEnabled ?? surface?.mediaAudioEnabled === true;
   surfaceAudioControlEl.hidden = !canConfigure;
-  surfaceAudioCheckbox.checked = surface?.mediaAudioEnabled === true;
+  surfaceAudioCheckbox.checked = mediaAudioEnabled;
   surfaceAudioCheckbox.disabled = !canConfigure || !roomStateConnected || !surface || surfaceAudioCommandPending;
   debugState.surfaceAudio = {
     surfaceId: surface?.surfaceId ?? DEBUG_SURFACE_ID,
-    mediaAudioEnabled: surface?.mediaAudioEnabled === true,
+    mediaAudioEnabled,
     canConfigure,
     pending: surfaceAudioCommandPending,
     subscribedAudioCount: mediaSurfaceAudioNodes.size
@@ -3789,6 +3791,7 @@ spaceSelect.addEventListener("change", () => {
 surfaceAudioCheckbox.addEventListener("change", () => {
   const enabled = surfaceAudioCheckbox.checked;
   surfaceAudioCommandPending = true;
+  surfaceAudioPendingEnabled = enabled;
   syncSurfaceAudioControl();
   void setMediaSurfaceAudioEnabled(DEBUG_SURFACE_ID, enabled).then((result) => {
     if (!result.accepted) {
@@ -3800,6 +3803,7 @@ surfaceAudioCheckbox.addEventListener("change", () => {
     surfaceAudioStatusEl.textContent = "Surface audio update failed";
   }).finally(() => {
     surfaceAudioCommandPending = false;
+    surfaceAudioPendingEnabled = null;
     syncSurfaceAudioControl();
   });
 });
