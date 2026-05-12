@@ -6,7 +6,7 @@ COPY . .
 
 RUN corepack enable
 RUN pnpm install --frozen-lockfile --config.node-linker=hoisted
-RUN pnpm --filter @noah/room-state build
+RUN pnpm --filter @noah/shared-types build && pnpm --filter @noah/room-state build
 RUN pnpm prune --prod --config.confirmModulesPurge=false --config.node-linker=hoisted
 
 FROM node:22-bookworm-slim AS runtime
@@ -18,6 +18,8 @@ COPY --from=build /app/package.json ./package.json
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/apps/room-state/package.json ./apps/room-state/package.json
 COPY --from=build /app/apps/room-state/dist ./apps/room-state/dist
+COPY --from=build /app/packages/shared-types/package.json ./packages/shared-types/package.json
+COPY --from=build /app/packages/shared-types/dist ./packages/shared-types/dist
 
 EXPOSE 2567
 
