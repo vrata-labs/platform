@@ -2,7 +2,7 @@
 
 ## Current phase
 
-- Active phase: `M1.4 — объект трансляции экрана ведущего`
+- Active phase: `M1.5 — интерактивная доска`
 - Overall state: `in_progress`
 
 ## Phase checklist
@@ -47,7 +47,9 @@
 - M1.2 verification: local runtime/shared-types/unit/e2e checks passed, CI `25736402601` passed, Docker Publish `25736402599` passed, Staging Deploy `25736527346` passed, `pnpm test:e2e:staging` passed with 33 tests, and staging `surface-input-protocol` passed with 4 tests.
 - M1.3 media surface kernel is complete as of 2026-05-12. Deployed commit: `ce2aa7ef806996d7fc05594009709ecfa7008585`.
 - M1.3 verification: local lint/typecheck/build/test/e2e checks passed, CI `25747564664` passed, Docker Publish `25747564641` passed after transient YCR OAuth retry, Staging Deploy `25748083239` passed, `pnpm test:e2e:staging` passed with 33 tests, and staging `media-surface-kernel` passed with 3 tests.
-- Next focus: M1.4 screen share object on the media surface kernel.
+- M1.4 screen share object is complete as of 2026-05-12. Deployed commit: `530ec378c922291ba90d66b61f274ad573695262`.
+- M1.4 verification: local lint/typecheck/build/test/e2e checks passed, CI `25754283093` passed, Docker Publish `25754283110` passed, Staging Deploy `25754417823` passed, `pnpm test:e2e:staging` passed with 33 tests, and staging `screen-share-object` passed with 3 tests.
+- Next focus: M1.5 whiteboard object on the media surface kernel.
 
 - M0.5 focuses on acceptance of the existing basic multi-user presence path: diagnostics, pose orientation, remote visibility, join/leave cleanup, voice state, spatial-audio diagnostics, and XR-mode simulation.
 - M0.5 explicitly excludes humanoid avatars, new room templates, and control-plane expansion.
