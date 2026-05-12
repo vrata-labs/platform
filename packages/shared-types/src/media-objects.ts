@@ -2,8 +2,9 @@ import type { RoomPermission, RoomRole } from "./access.js";
 
 export const DEFAULT_MEDIA_SURFACE_ID = "debug-main";
 export const SURFACE_TEST_CARD_TYPE = "surface-test-card";
+export const SCREEN_SHARE_OBJECT_TYPE = "screen-share";
 
-export type MediaObjectType = typeof SURFACE_TEST_CARD_TYPE | string;
+export type MediaObjectType = typeof SURFACE_TEST_CARD_TYPE | typeof SCREEN_SHARE_OBJECT_TYPE | string;
 
 export type MediaObjectStatus = "active" | "stopped" | "failed";
 
@@ -42,10 +43,37 @@ export interface SurfaceTestCardState {
   lastInputEventId: string | null;
 }
 
+export type ScreenShareObjectStatus = "idle" | "selecting" | "publishing" | "active" | "stopping" | "stopped" | "failed";
+
+export type ScreenShareErrorCode =
+  | "display_capture_unsupported"
+  | "display_capture_denied"
+  | "display_capture_failed"
+  | "media_network_blocked"
+  | "track_unpublished"
+  | "unknown";
+
+export interface ScreenShareObjectState {
+  status: ScreenShareObjectStatus;
+  ownerParticipantId: string;
+  surfaceId: string;
+  mediaTrackSid?: string;
+  startedAtMs?: number;
+  stoppedAtMs?: number;
+  errorCode?: ScreenShareErrorCode;
+}
+
 export type SurfaceTestCardPatch = {
   type: "increment-click-count";
   inputEventId: string;
 };
+
+export type ScreenSharePatch =
+  | { type: "mark-selecting" }
+  | { type: "mark-publishing" }
+  | { type: "mark-active"; mediaTrackSid: string }
+  | { type: "mark-failed"; errorCode: ScreenShareErrorCode }
+  | { type: "mark-stopped" };
 
 export type MediaObjectCommandBlockedReason =
   | "missing-permission"
@@ -80,7 +108,7 @@ export function createDefaultRoomMediaObjectsState(roomId: string): RoomMediaObj
         heightPx: 1080,
         inputEnabled: true,
         visible: true,
-        allowedObjectTypes: [SURFACE_TEST_CARD_TYPE],
+        allowedObjectTypes: [SURFACE_TEST_CARD_TYPE, SCREEN_SHARE_OBJECT_TYPE],
         activeObjectId: null,
         lockedByParticipantId: null
       }

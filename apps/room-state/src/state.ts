@@ -1,5 +1,6 @@
 import {
   DEFAULT_MEDIA_SURFACE_ID,
+  SCREEN_SHARE_OBJECT_TYPE,
   SURFACE_TEST_CARD_TYPE,
   createDefaultRoomMediaObjectsState,
   getRoomPermissions,
@@ -11,6 +12,9 @@ import {
   type RoomMediaObjectsState,
   type RoomPermission,
   type RoomRole,
+  type ScreenShareErrorCode,
+  type ScreenShareObjectState,
+  type ScreenSharePatch,
   type SurfaceTestCardPatch,
   type SurfaceTestCardState
 } from "@noah/shared-types";
@@ -190,12 +194,89 @@ function createSurfaceTestCardState(): SurfaceTestCardState {
   };
 }
 
+function createScreenShareState(ownerParticipantId: string, surfaceId: string): ScreenShareObjectState {
+  return {
+    status: "idle",
+    ownerParticipantId,
+    surfaceId
+  };
+}
+
+function isSupportedMediaObjectType(type: string): type is typeof SURFACE_TEST_CARD_TYPE | typeof SCREEN_SHARE_OBJECT_TYPE {
+  return type === SURFACE_TEST_CARD_TYPE || type === SCREEN_SHARE_OBJECT_TYPE;
+}
+
 function isSurfaceTestCardPatch(input: unknown): input is SurfaceTestCardPatch {
   return Boolean(input)
     && typeof input === "object"
     && (input as { type?: unknown }).type === "increment-click-count"
     && typeof (input as { inputEventId?: unknown }).inputEventId === "string"
     && (input as { inputEventId: string }).inputEventId.trim().length > 0;
+}
+
+function isScreenShareErrorCode(input: unknown): input is ScreenShareErrorCode {
+  return input === "display_capture_unsupported"
+    || input === "display_capture_denied"
+    || input === "display_capture_failed"
+    || input === "media_network_blocked"
+    || input === "track_unpublished"
+    || input === "unknown";
+}
+
+function isScreenSharePatch(input: unknown): input is ScreenSharePatch {
+  if (!input || typeof input !== "object") {
+    return false;
+  }
+  const patch = input as { type?: unknown; mediaTrackSid?: unknown; errorCode?: unknown };
+  if (patch.type === "mark-selecting" || patch.type === "mark-publishing" || patch.type === "mark-stopped") {
+    return true;
+  }
+  if (patch.type === "mark-active") {
+    return typeof patch.mediaTrackSid === "string" && patch.mediaTrackSid.trim().length > 0;
+  }
+  if (patch.type === "mark-failed") {
+    return isScreenShareErrorCode(patch.errorCode);
+  }
+  return false;
+}
+
+function reduceScreenShareState(current: ScreenShareObjectState, patch: ScreenSharePatch, nowMs: number): ScreenShareObjectState {
+  if (patch.type === "mark-selecting") {
+    return {
+      ownerParticipantId: current.ownerParticipantId,
+      surfaceId: current.surfaceId,
+      status: "selecting"
+    };
+  }
+  if (patch.type === "mark-publishing") {
+    return {
+      ...current,
+      status: "publishing",
+      errorCode: undefined
+    };
+  }
+  if (patch.type === "mark-active") {
+    return {
+      ...current,
+      status: "active",
+      mediaTrackSid: patch.mediaTrackSid.trim(),
+      startedAtMs: current.startedAtMs ?? nowMs,
+      stoppedAtMs: undefined,
+      errorCode: undefined
+    };
+  }
+  if (patch.type === "mark-failed") {
+    return {
+      ...current,
+      status: "failed",
+      errorCode: patch.errorCode
+    };
+  }
+  return {
+    ...current,
+    status: "stopped",
+    stoppedAtMs: nowMs
+  };
 }
 
 function getParticipantAccess(state: RoomState, participantId: string): { role: RoomRole; permissions: RoomPermission[] } {
@@ -262,7 +343,7 @@ export function createMediaObject(state: RoomState, participantId: string, input
   if (!surface) {
     return rejectMediaObjectCommand(state, { commandId: input.commandId, role: access.role, permission, blockedReason: "missing-surface", surfaceId: input.surfaceId, objectType: input.objectType });
   }
-  if (input.objectType !== SURFACE_TEST_CARD_TYPE) {
+  if (!isSupportedMediaObjectType(input.objectType)) {
     return rejectMediaObjectCommand(state, { commandId: input.commandId, role: access.role, permission, blockedReason: "unknown-object-type", surfaceId: input.surfaceId, objectType: input.objectType });
   }
   if (!surface.allowedObjectTypes.includes(input.objectType)) {
@@ -272,13 +353,16 @@ export function createMediaObject(state: RoomState, participantId: string, input
     return rejectMediaObjectCommand(state, { commandId: input.commandId, role: access.role, permission, blockedReason: "surface-occupied", surfaceId: input.surfaceId, objectId: surface.activeObjectId, objectType: input.objectType });
   }
 
-  const object: MediaObjectInstance<SurfaceTestCardState> = {
+  const objectState = input.objectType === SCREEN_SHARE_OBJECT_TYPE
+    ? createScreenShareState(participantId, input.surfaceId)
+    : createSurfaceTestCardState();
+  const object: MediaObjectInstance<SurfaceTestCardState | ScreenShareObjectState> = {
     objectId: input.objectId,
     type: input.objectType,
     roomId: state.roomId,
     surfaceId: input.surfaceId,
     ownerParticipantId: participantId,
-    state: createSurfaceTestCardState(),
+    state: objectState,
     status: "active",
     revision: 0,
     createdAtMs: input.nowMs,
@@ -363,8 +447,8 @@ export function stopMediaObject(state: RoomState, participantId: string, input: 
 
 export function patchMediaObjectState(state: RoomState, participantId: string, input: PatchMediaObjectInput): MediaObjectMutationResult {
   const access = getParticipantAccess(state, participantId);
-  const permission: RoomPermission = "surface.input";
-  if (!hasRoomPermission(access.permissions, permission)) {
+  let permission: RoomPermission = "surface.input";
+  if (!hasRoomPermission(access.permissions, "surface.input") && !hasRoomPermission(access.permissions, "screen-share.start")) {
     return rejectMediaObjectCommand(state, { commandId: input.commandId, role: access.role, permission, blockedReason: "missing-permission", surfaceId: input.surfaceId, objectId: input.objectId });
   }
 
@@ -380,8 +464,45 @@ export function patchMediaObjectState(state: RoomState, participantId: string, i
   if (object.surfaceId !== input.surfaceId || surface.activeObjectId !== input.objectId) {
     return rejectMediaObjectCommand(state, { commandId: input.commandId, role: access.role, permission, blockedReason: "object-surface-mismatch", surfaceId: input.surfaceId, objectId: input.objectId, objectType: object.type, revision: object.revision });
   }
+  permission = object.type === SCREEN_SHARE_OBJECT_TYPE ? "screen-share.start" : "surface.input";
+  if (!hasRoomPermission(access.permissions, permission)) {
+    return rejectMediaObjectCommand(state, { commandId: input.commandId, role: access.role, permission, blockedReason: "missing-permission", surfaceId: input.surfaceId, objectId: input.objectId, objectType: object.type, revision: object.revision });
+  }
   if (object.revision !== input.expectedRevision) {
     return rejectMediaObjectCommand(state, { commandId: input.commandId, role: access.role, permission, blockedReason: "revision-mismatch", surfaceId: input.surfaceId, objectId: input.objectId, objectType: object.type, revision: object.revision });
+  }
+  if (object.type === SCREEN_SHARE_OBJECT_TYPE) {
+    if (!isScreenSharePatch(input.patch)) {
+      return rejectMediaObjectCommand(state, { commandId: input.commandId, role: access.role, permission, blockedReason: "invalid-patch", surfaceId: input.surfaceId, objectId: input.objectId, objectType: object.type, revision: object.revision });
+    }
+    const nextObject: MediaObjectInstance<ScreenShareObjectState> = {
+      ...object,
+      state: reduceScreenShareState(object.state as ScreenShareObjectState, input.patch, input.nowMs),
+      status: input.patch.type === "mark-failed" ? "failed" : input.patch.type === "mark-stopped" ? "stopped" : "active",
+      revision: object.revision + 1,
+      updatedAtMs: input.nowMs
+    };
+    const nextMediaObjects: RoomMediaObjectsState = {
+      surfaces: mediaObjects.surfaces,
+      objects: {
+        ...mediaObjects.objects,
+        [input.objectId]: nextObject
+      }
+    };
+    return {
+      room: { ...state, mediaObjects: nextMediaObjects },
+      result: createMediaObjectCommandResult({
+        accepted: true,
+        commandId: input.commandId,
+        role: access.role,
+        permission,
+        blockedReason: null,
+        surfaceId: input.surfaceId,
+        objectId: input.objectId,
+        objectType: object.type,
+        revision: nextObject.revision
+      })
+    };
   }
   if (object.type !== SURFACE_TEST_CARD_TYPE || !isSurfaceTestCardPatch(input.patch)) {
     return rejectMediaObjectCommand(state, { commandId: input.commandId, role: access.role, permission, blockedReason: "invalid-patch", surfaceId: input.surfaceId, objectId: input.objectId, objectType: object.type, revision: object.revision });
@@ -444,10 +565,26 @@ export function leaveRoom(state: RoomState, participantId: string): RoomState {
       delete nextSeatOccupancy[seatId];
     }
   }
+  const mediaObjects = ensureMediaObjectsState(state);
+  const nextObjects = { ...mediaObjects.objects };
+  const nextSurfaces = { ...mediaObjects.surfaces };
+  let mediaObjectsChanged = false;
+  for (const [objectId, object] of Object.entries(mediaObjects.objects)) {
+    if (object.type !== SCREEN_SHARE_OBJECT_TYPE || object.ownerParticipantId !== participantId) {
+      continue;
+    }
+    delete nextObjects[objectId];
+    const surface = nextSurfaces[object.surfaceId];
+    if (surface?.activeObjectId === objectId) {
+      nextSurfaces[object.surfaceId] = { ...surface, activeObjectId: null };
+    }
+    mediaObjectsChanged = true;
+  }
   return {
     ...state,
     participants: state.participants.filter((item) => item.participantId !== participantId),
-    seatOccupancy: nextSeatOccupancy
+    seatOccupancy: nextSeatOccupancy,
+    mediaObjects: mediaObjectsChanged ? { surfaces: nextSurfaces, objects: nextObjects } : state.mediaObjects
   };
 }
 

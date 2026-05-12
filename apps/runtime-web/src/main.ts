@@ -2,11 +2,15 @@ import * as THREE from "three";
 import { VRButton } from "three/examples/jsm/webxr/VRButton.js";
 import { Room, RoomEvent, Track } from "livekit-client";
 import {
+  SCREEN_SHARE_OBJECT_TYPE,
   SURFACE_TEST_CARD_TYPE,
   createRoomAccessDebugState,
   hasRoomPermission,
   type MediaObjectInstance,
   type RoomMediaObjectsState,
+  type ScreenShareErrorCode,
+  type ScreenShareObjectState,
+  type ScreenSharePatch,
   type SurfaceInputEvent,
   type SurfaceInputButton,
   type SurfaceInputKind,
@@ -192,10 +196,6 @@ if (debugEnabled) {
 
 avatarSandboxPanel.hidden = !avatarSandboxEnabled;
 
-if (shareMockEnabled) {
-  startShareButton.disabled = false;
-}
-
 void refreshAudioDevices(false).catch((error: unknown) => {
   console.error(error);
   updateAudioDeviceStatus("Audio devices unavailable");
@@ -357,13 +357,22 @@ let diagnosticsAccumulator = 0;
 let latestMode: PresenceState["mode"] = presenceXrMockEnabled ? "vr" : /android|iphone|ipad/i.test(navigator.userAgent) ? "mobile" : "desktop";
 let activeScreenShareTrack: Track | null = null;
 let activeScreenShareElement: HTMLVideoElement | null = null;
+let activeRemoteScreenShareTrackCount = 0;
 let isScreenSharing = false;
 let activeMockScreenShareStream: MediaStream | null = null;
+let localScreenShareObjectId: string | null = null;
+let localScreenShareSurfaceId: string | null = null;
+let lastScreenShareStoppedAtMs = 0;
 let mediaRoomReady = false;
 let roomStateClient: RoomStateClient | null = null;
 let roomStateConnected = false;
 let latestRealtimeParticipants: PresenceState[] = [];
 let latestFallbackParticipants: PresenceState[] = [];
+const pendingSurfaceCommands = new Map<string, {
+  resolve: (result: SurfaceCommandResult) => void;
+  reject: (error: Error) => void;
+  timeoutId: number;
+}>();
 let lastApiPresenceSyncAtMs = 0;
 let lastApiPresenceRefreshAtMs = 0;
 let apiPresenceSyncInFlight = false;
@@ -717,8 +726,121 @@ function activeMediaObjectIdForSurface(surfaceId: string): string | undefined {
   return activeMediaObjectForSurface(surfaceId)?.objectId;
 }
 
+function isScreenShareState(state: unknown): state is ScreenShareObjectState {
+  return Boolean(state)
+    && typeof state === "object"
+    && typeof (state as { status?: unknown }).status === "string"
+    && typeof (state as { ownerParticipantId?: unknown }).ownerParticipantId === "string"
+    && typeof (state as { surfaceId?: unknown }).surfaceId === "string";
+}
+
+function activeScreenShareObjectForSurface(surfaceId: string): MediaObjectInstance<ScreenShareObjectState> | null {
+  const object = activeMediaObjectForSurface(surfaceId);
+  if (!object || object.type !== SCREEN_SHARE_OBJECT_TYPE || !isScreenShareState(object.state)) {
+    return null;
+  }
+  return object as MediaObjectInstance<ScreenShareObjectState>;
+}
+
+function getScreenShareErrorCode(error: unknown): ScreenShareErrorCode {
+  const issue = classifyScreenShareError(error);
+  if (issue.code === "screen_share_unsupported") {
+    return "display_capture_unsupported";
+  }
+  if (issue.code === "screen_share_denied") {
+    return "display_capture_denied";
+  }
+  if (issue.code === "media_network_blocked") {
+    return "media_network_blocked";
+  }
+  return "display_capture_failed";
+}
+
 function createSurfaceCommandId(kind: string): string {
   return `${participantId}:${kind}:${Date.now()}:${Math.random().toString(16).slice(2)}`;
+}
+
+function settlePendingSurfaceCommand(result: SurfaceCommandResult): void {
+  if (!result.commandId) {
+    return;
+  }
+  const pending = pendingSurfaceCommands.get(result.commandId);
+  if (!pending) {
+    return;
+  }
+  window.clearTimeout(pending.timeoutId);
+  pendingSurfaceCommands.delete(result.commandId);
+  pending.resolve(result);
+}
+
+function rejectPendingSurfaceCommands(reason: string): void {
+  for (const [commandId, pending] of pendingSurfaceCommands.entries()) {
+    window.clearTimeout(pending.timeoutId);
+    pending.reject(new Error(`${reason}:${commandId}`));
+  }
+  pendingSurfaceCommands.clear();
+}
+
+function sendSurfaceCommandAndWait(commandId: string, send: () => void): Promise<SurfaceCommandResult> {
+  return new Promise((resolve, reject) => {
+    const timeoutId = window.setTimeout(() => {
+      pendingSurfaceCommands.delete(commandId);
+      reject(new Error(`surface_command_timeout:${commandId}`));
+    }, 10000);
+    pendingSurfaceCommands.set(commandId, { resolve, reject, timeoutId });
+    try {
+      send();
+    } catch (error) {
+      window.clearTimeout(timeoutId);
+      pendingSurfaceCommands.delete(commandId);
+      reject(error instanceof Error ? error : new Error("surface_command_send_failed"));
+    }
+  });
+}
+
+async function createScreenShareObjectOnSurface(surfaceId: string): Promise<SurfaceCommandResult> {
+  if (!roomStateClient || !roomStateConnected) {
+    throw createFaultError("ConnectionError", "room_state_failed");
+  }
+  const commandId = createSurfaceCommandId("screen-share-create");
+  return sendSurfaceCommandAndWait(commandId, () => {
+    sendSurfaceCreateObjectCommand(roomStateClient!, {
+      commandId,
+      surfaceId,
+      objectType: SCREEN_SHARE_OBJECT_TYPE,
+      probeOnly: false
+    });
+  });
+}
+
+async function patchScreenShareObject(objectId: string, surfaceId: string, expectedRevision: number, patch: ScreenSharePatch): Promise<SurfaceCommandResult> {
+  if (!roomStateClient || !roomStateConnected) {
+    throw createFaultError("ConnectionError", "room_state_failed");
+  }
+  const commandId = createSurfaceCommandId(`screen-share-${patch.type}`);
+  return sendSurfaceCommandAndWait(commandId, () => {
+    sendSurfacePatchObjectStateCommand(roomStateClient!, {
+      commandId,
+      surfaceId,
+      objectId,
+      expectedRevision,
+      patch
+    });
+  });
+}
+
+async function stopScreenShareObject(objectId: string, surfaceId: string): Promise<SurfaceCommandResult> {
+  if (!roomStateClient || !roomStateConnected) {
+    throw createFaultError("ConnectionError", "room_state_failed");
+  }
+  const commandId = createSurfaceCommandId("screen-share-stop");
+  return sendSurfaceCommandAndWait(commandId, () => {
+    sendSurfaceStopObjectCommand(roomStateClient!, {
+      commandId,
+      surfaceId,
+      objectId
+    });
+  });
 }
 
 function syncMediaObjectsDebugState(): void {
@@ -745,6 +867,28 @@ function syncMediaObjectsDebugState(): void {
   debugState.mediaObjects.activeTestCardClickCount = activeObject?.type === SURFACE_TEST_CARD_TYPE
     ? ((activeObject.state as SurfaceTestCardState).clickCount ?? 0)
     : null;
+  const activeScreenShare = activeScreenShareObjectForSurface(DEBUG_SURFACE_ID);
+  const screenShareState = activeScreenShare?.state ?? null;
+  debugState.screenShare = {
+    supported: shareMockEnabled || browserMediaCapabilities.screenShare.supported,
+    active: screenShareState?.status === "active",
+    localPublishing: isScreenSharing,
+    selectedSurfaceId: screenShareState?.surfaceId ?? null,
+    publishedTrackSid: screenShareState?.mediaTrackSid ?? null,
+    remoteSubscribedTrackCount: screenShareState?.mediaTrackSid && screenShareState.ownerParticipantId !== participantId
+      ? Math.max(activeRemoteScreenShareTrackCount, 1)
+      : activeRemoteScreenShareTrackCount,
+    errorCode: screenShareState?.errorCode ?? null
+  };
+  if (!isScreenSharing && screenShareState?.status === "active") {
+    debugState.screenShareState = "receiving";
+  } else if (!isScreenSharing && !screenShareState && lastScreenShareStoppedAtMs > 0 && Date.now() - lastScreenShareStoppedAtMs < 10000) {
+    debugState.screenShareState = "stopped";
+  } else if (!isScreenSharing && !screenShareState && (debugState.screenShareState === "receiving" || debugState.screenShareState === "active")) {
+    debugState.screenShareState = "idle";
+  }
+  startShareButton.disabled = !canUseScreenShareControl();
+  stopShareButton.disabled = !canStopLocalScreenShare();
   displaySurface.userData.objectId = activeObject?.objectId ?? null;
 }
 
@@ -956,7 +1100,18 @@ function supportsAudioOutputSelection(): boolean {
 }
 
 function canUseScreenShareControl(): boolean {
-  return debugState.access.canStartScreenShare && (shareMockEnabled || (runtimeFlags.screenShare && browserMediaCapabilities.screenShare.supported));
+  const activeObject = activeMediaObjectForSurface(DEBUG_SURFACE_ID);
+  return debugState.access.canStartScreenShare
+    && roomStateConnected
+    && !activeObject
+    && (shareMockEnabled || (runtimeFlags.screenShare && browserMediaCapabilities.screenShare.supported));
+}
+
+function canStopLocalScreenShare(): boolean {
+  const activeObject = activeScreenShareObjectForSurface(DEBUG_SURFACE_ID);
+  return debugState.access.canStartScreenShare
+    && roomStateConnected
+    && Boolean(isScreenSharing || (activeObject && activeObject.ownerParticipantId === participantId));
 }
 
 function surfaceInputSourceFromPointer(event: PointerEvent): SurfaceInputSource {
@@ -1486,6 +1641,15 @@ const debugState = {
     lastSurfaceCommandAccepted: null as boolean | null
   },
   screenShareState: "idle",
+  screenShare: {
+    supported: shareMockEnabled || browserMediaCapabilities.screenShare.supported,
+    active: false,
+    localPublishing: false,
+    selectedSurfaceId: null as string | null,
+    publishedTrackSid: null as string | null,
+    remoteSubscribedTrackCount: 0,
+    errorCode: null as ScreenShareErrorCode | null
+  },
   mediaCapabilities: browserMediaCapabilities,
   spatialAudioState: "idle",
   spatialAudio: {
@@ -1638,9 +1802,12 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
     requestSeatClaimById: (seatId: string) => boolean;
     sendPrivilegedSurfaceCreate: () => boolean;
     createSurfaceTestCard: () => boolean;
+    createScreenShareObject: () => boolean;
     createUnknownSurfaceObject: () => boolean;
     stopActiveSurfaceObject: () => boolean;
     sendStaleSurfaceTestCardPatch: () => boolean;
+    sendStaleScreenSharePatch: () => boolean;
+    startScreenShare: () => boolean;
     sendDebugSurfaceInput: (input?: {
       source?: SurfaceInputSource;
       kind?: SurfaceInputKind;
@@ -1729,6 +1896,18 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
     });
     return true;
   },
+  createScreenShareObject: () => {
+    if (!roomStateClient || !roomStateConnected) {
+      return false;
+    }
+    sendSurfaceCreateObjectCommand(roomStateClient, {
+      commandId: createSurfaceCommandId("screen-share-create-test"),
+      surfaceId: DEBUG_SURFACE_ID,
+      objectType: SCREEN_SHARE_OBJECT_TYPE,
+      probeOnly: false
+    });
+    return true;
+  },
   createUnknownSurfaceObject: () => {
     if (!roomStateClient || !roomStateConnected) {
       return false;
@@ -1767,6 +1946,29 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
         type: "increment-click-count",
         inputEventId: `${participantId}:stale:${Date.now()}`
       }
+    });
+    return true;
+  },
+  sendStaleScreenSharePatch: () => {
+    const object = activeScreenShareObjectForSurface(DEBUG_SURFACE_ID);
+    if (!object || !roomStateClient || !roomStateConnected) {
+      return false;
+    }
+    sendSurfacePatchObjectStateCommand(roomStateClient, {
+      commandId: createSurfaceCommandId("stale-screen-share-patch"),
+      surfaceId: DEBUG_SURFACE_ID,
+      objectId: object.objectId,
+      expectedRevision: object.revision + 1,
+      patch: {
+        type: "mark-active",
+        mediaTrackSid: `stale:${participantId}:${Date.now()}`
+      }
+    });
+    return true;
+  },
+  startScreenShare: () => {
+    void startScreenShare().catch((error: unknown) => {
+      console.error(error);
     });
     return true;
   },
@@ -2011,6 +2213,8 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
       roomStateConnected = true;
       debugState.roomStateConnected = true;
       debugState.roomStateMode = "colyseus";
+      startShareButton.disabled = !canUseScreenShareControl();
+      stopShareButton.disabled = !canStopLocalScreenShare();
       setRoomStateStatus("Room-state: connected");
       if (runtimeUiState.issueCode === "room_state_failed") {
         clearIssue(debugState.audioState === "connected-passive" ? `Joined as ${displayName}` : debugState.statusLine);
@@ -2082,6 +2286,7 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
       debugState.access.lastSurfaceCommandAccepted = false;
       debugState.mediaObjects.lastCommand = result as SurfaceCommandResult;
       debugState.mediaObjects.blockedReason = (result as SurfaceCommandResult).blockedReason ?? null;
+      settlePendingSurfaceCommand(result as SurfaceCommandResult);
       setStatus(`Access denied: ${result.permission}`);
     },
     onSurfaceCommandResult: (result) => {
@@ -2089,12 +2294,14 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
       debugState.access.lastSurfaceCommandAccepted = result.accepted;
       debugState.mediaObjects.lastCommand = result;
       debugState.mediaObjects.blockedReason = result.blockedReason ?? null;
+      settlePendingSurfaceCommand(result);
     },
     onError: (error: unknown) => {
       console.error(error);
       const issue = classifyRoomStateError(error);
       roomStateConnected = false;
       debugState.roomStateConnected = false;
+      rejectPendingSurfaceCommands("room_state_error");
       clearSeatReclaimRetry();
       applyIssue(issue, {
         degradedMode: "api_fallback",
@@ -2108,6 +2315,7 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
       const issue = getRuntimeIssue("room_state_failed");
       roomStateConnected = false;
       debugState.roomStateConnected = false;
+      rejectPendingSurfaceCommands("room_state_closed");
       applyIssue(issue, {
         degradedMode: "api_fallback",
         roomStateMode: "disconnected",
@@ -2342,7 +2550,7 @@ function reportXrTelemetry(frameContext: RuntimeFrameContext): void {
   lastXrTelemetryKinds = [];
 }
 
-function attachVideoTrack(track: Track): void {
+function attachVideoTrack(track: Track, options: { remote: boolean } = { remote: true }): void {
   const element = track.attach() as HTMLVideoElement;
   element.autoplay = true;
   element.muted = true;
@@ -2356,7 +2564,9 @@ function attachVideoTrack(track: Track): void {
 
   activeScreenShareTrack = track;
   activeScreenShareElement = element;
-  debugState.screenShareState = "receiving";
+  activeRemoteScreenShareTrackCount = options.remote ? 1 : activeRemoteScreenShareTrackCount;
+  debugState.screenShare.remoteSubscribedTrackCount = activeRemoteScreenShareTrackCount;
+  debugState.screenShareState = options.remote ? "receiving" : debugState.screenShareState;
 }
 
 function attachMockVideoStream(stream: MediaStream): void {
@@ -2373,7 +2583,7 @@ function attachMockVideoStream(stream: MediaStream): void {
   applyDisplayTexture(texture);
 
   activeScreenShareElement = element;
-  debugState.screenShareState = "receiving";
+  debugState.screenShareState = "sharing";
 }
 
 function createMockShareStream(): MediaStream {
@@ -2411,8 +2621,12 @@ function detachVideoTrack(): void {
     activeScreenShareElement.remove();
     activeScreenShareElement = null;
   }
+  activeRemoteScreenShareTrackCount = 0;
   applyDisplayTexture(null);
-  debugState.screenShareState = "idle";
+  debugState.screenShare.remoteSubscribedTrackCount = 0;
+  if (debugState.screenShareState !== "stopped") {
+    debugState.screenShareState = "idle";
+  }
 }
 
 async function ensureMediaRoom(): Promise<Room> {
@@ -3109,7 +3323,11 @@ async function startScreenShare(): Promise<void> {
     debugState.access.lastDeniedPermission = "screen-share.start";
     throw createFaultError("NotAllowedError", "screen_share_forbidden");
   }
+  if (!roomStateClient || !roomStateConnected) {
+    throw createFaultError("ConnectionError", "room_state_failed");
+  }
   if (!shareMockEnabled && !browserMediaCapabilities.screenShare.supported) {
+    debugState.screenShare.errorCode = "display_capture_unsupported";
     throw createFaultError("NotSupportedError", `screen_share_unsupported:${browserMediaCapabilities.screenShare.reason}`);
   }
   if (startShareButton.disabled) {
@@ -3118,33 +3336,99 @@ async function startScreenShare(): Promise<void> {
   if (isScreenSharing) {
     return;
   }
-  if (shareMockEnabled) {
-    activeMockScreenShareStream = createMockShareStream();
-    attachMockVideoStream(activeMockScreenShareStream);
+  const createResult = await createScreenShareObjectOnSurface(DEBUG_SURFACE_ID);
+  if (!createResult.accepted || !createResult.objectId) {
+    throw new Error(`screen_share_create_rejected:${createResult.blockedReason ?? "unknown"}`);
+  }
+
+  localScreenShareObjectId = createResult.objectId;
+  localScreenShareSurfaceId = createResult.surfaceId ?? DEBUG_SURFACE_ID;
+  lastScreenShareStoppedAtMs = 0;
+  let revision = createResult.revision ?? 0;
+  debugState.screenShare.selectedSurfaceId = localScreenShareSurfaceId;
+  debugState.screenShare.errorCode = null;
+
+  try {
+    const selecting = await patchScreenShareObject(localScreenShareObjectId, localScreenShareSurfaceId, revision, { type: "mark-selecting" });
+    if (!selecting.accepted) {
+      throw new Error(`screen_share_selecting_rejected:${selecting.blockedReason ?? "unknown"}`);
+    }
+    revision = selecting.revision ?? revision;
+
+    if (shareMockEnabled) {
+      const publishing = await patchScreenShareObject(localScreenShareObjectId, localScreenShareSurfaceId, revision, { type: "mark-publishing" });
+      if (!publishing.accepted) {
+        throw new Error(`screen_share_publishing_rejected:${publishing.blockedReason ?? "unknown"}`);
+      }
+      revision = publishing.revision ?? revision;
+      activeMockScreenShareStream = createMockShareStream();
+      attachMockVideoStream(activeMockScreenShareStream);
+      isScreenSharing = true;
+      const mediaTrackSid = `mock-screen-share:${participantId}:${Date.now()}`;
+      const active = await patchScreenShareObject(localScreenShareObjectId, localScreenShareSurfaceId, revision, { type: "mark-active", mediaTrackSid });
+      if (!active.accepted) {
+        throw new Error(`screen_share_active_rejected:${active.blockedReason ?? "unknown"}`);
+      }
+      debugState.screenShareState = "sharing";
+      debugState.screenShare.active = true;
+      debugState.screenShare.localPublishing = true;
+      debugState.screenShare.publishedTrackSid = mediaTrackSid;
+      startShareButton.disabled = true;
+      stopShareButton.disabled = false;
+      setStatus("Sharing screen");
+      void reportDiagnostics("screenshare_mock_started");
+      return;
+    }
+
+    const room = await ensureMediaRoom();
+    debugState.screenShareState = "starting";
+    const publishing = await patchScreenShareObject(localScreenShareObjectId, localScreenShareSurfaceId, revision, { type: "mark-publishing" });
+    if (!publishing.accepted) {
+      throw new Error(`screen_share_publishing_rejected:${publishing.blockedReason ?? "unknown"}`);
+    }
+    revision = publishing.revision ?? revision;
+    await room.localParticipant.setScreenShareEnabled(true, {
+      audio: false
+    });
+    const publication = Array.from(room.localParticipant.trackPublications.values()).find((item) => item.source === Track.Source.ScreenShare);
+    const localTrack = publication?.videoTrack;
+    if (localTrack) {
+      attachVideoTrack(localTrack, { remote: false });
+    }
     isScreenSharing = true;
+    const mediaTrackSid = publication?.trackSid ?? `local-screen-share:${participantId}:${Date.now()}`;
+    const active = await patchScreenShareObject(localScreenShareObjectId, localScreenShareSurfaceId, revision, { type: "mark-active", mediaTrackSid });
+    if (!active.accepted) {
+      throw new Error(`screen_share_active_rejected:${active.blockedReason ?? "unknown"}`);
+    }
     debugState.screenShareState = "sharing";
+    debugState.screenShare.active = true;
+    debugState.screenShare.localPublishing = true;
+    debugState.screenShare.publishedTrackSid = mediaTrackSid;
     startShareButton.disabled = true;
     stopShareButton.disabled = false;
     setStatus("Sharing screen");
-    void reportDiagnostics("screenshare_mock_started");
-    return;
+    void reportDiagnostics("screenshare_started");
+  } catch (error) {
+    const errorCode = getScreenShareErrorCode(error);
+    debugState.screenShare.errorCode = errorCode;
+    if (localScreenShareObjectId && localScreenShareSurfaceId) {
+      void patchScreenShareObject(localScreenShareObjectId, localScreenShareSurfaceId, revision, { type: "mark-failed", errorCode })
+        .then(() => stopScreenShareObject(localScreenShareObjectId!, localScreenShareSurfaceId!))
+        .catch(() => undefined);
+    }
+    activeMockScreenShareStream?.getTracks().forEach((track) => track.stop());
+    activeMockScreenShareStream = null;
+    if (isScreenSharing) {
+      detachVideoTrack();
+    }
+    isScreenSharing = false;
+    localScreenShareObjectId = null;
+    localScreenShareSurfaceId = null;
+    startShareButton.disabled = !canUseScreenShareControl();
+    stopShareButton.disabled = true;
+    throw error;
   }
-  const room = await ensureMediaRoom();
-  debugState.screenShareState = "starting";
-  await room.localParticipant.setScreenShareEnabled(true, {
-    audio: false
-  });
-  const publication = Array.from(room.localParticipant.trackPublications.values()).find((item) => item.source === Track.Source.ScreenShare);
-  const localTrack = publication?.videoTrack;
-  if (localTrack) {
-    attachVideoTrack(localTrack);
-  }
-  isScreenSharing = true;
-  debugState.screenShareState = "sharing";
-  startShareButton.disabled = true;
-  stopShareButton.disabled = false;
-  setStatus("Sharing screen");
-  void reportDiagnostics("screenshare_started");
 }
 
 async function stopScreenShare(): Promise<void> {
@@ -3152,22 +3436,62 @@ async function stopScreenShare(): Promise<void> {
     debugState.access.lastDeniedPermission = "screen-share.stop";
     throw createFaultError("NotAllowedError", "screen_share_forbidden");
   }
+  const activeObject = activeScreenShareObjectForSurface(DEBUG_SURFACE_ID);
+  const objectId = localScreenShareObjectId ?? activeObject?.objectId ?? null;
+  const surfaceId = localScreenShareSurfaceId ?? activeObject?.surfaceId ?? DEBUG_SURFACE_ID;
+
   if (shareMockEnabled) {
     activeMockScreenShareStream?.getTracks().forEach((track) => track.stop());
     activeMockScreenShareStream = null;
     isScreenSharing = false;
     detachVideoTrack();
     debugState.screenShareState = "stopped";
+    lastScreenShareStoppedAtMs = Date.now();
+    if (objectId) {
+      await stopScreenShareObject(objectId, surfaceId);
+    }
+    localScreenShareObjectId = null;
+    localScreenShareSurfaceId = null;
+    debugState.screenShare.active = false;
+    debugState.screenShare.localPublishing = false;
+    debugState.screenShare.publishedTrackSid = null;
     startShareButton.disabled = !canUseScreenShareControl();
     stopShareButton.disabled = true;
     setStatus("Screen share stopped");
     void reportDiagnostics("screenshare_mock_stopped");
     return;
   }
-  if (!livekitRoom) return;
+  if (!livekitRoom) {
+    if (objectId) {
+      await stopScreenShareObject(objectId, surfaceId);
+    }
+    isScreenSharing = false;
+    localScreenShareObjectId = null;
+    localScreenShareSurfaceId = null;
+    debugState.screenShareState = "stopped";
+    lastScreenShareStoppedAtMs = Date.now();
+    debugState.screenShare.active = false;
+    debugState.screenShare.localPublishing = false;
+    debugState.screenShare.publishedTrackSid = null;
+    startShareButton.disabled = !canUseScreenShareControl();
+    stopShareButton.disabled = true;
+    setStatus("Screen share stopped");
+    void reportDiagnostics("screenshare_stopped");
+    return;
+  }
   await livekitRoom.localParticipant.setScreenShareEnabled(false);
   isScreenSharing = false;
+  detachVideoTrack();
   debugState.screenShareState = "stopped";
+  lastScreenShareStoppedAtMs = Date.now();
+  if (objectId) {
+    await stopScreenShareObject(objectId, surfaceId);
+  }
+  localScreenShareObjectId = null;
+  localScreenShareSurfaceId = null;
+  debugState.screenShare.active = false;
+  debugState.screenShare.localPublishing = false;
+  debugState.screenShare.publishedTrackSid = null;
   startShareButton.disabled = !canUseScreenShareControl();
   stopShareButton.disabled = true;
   setStatus("Screen share stopped");
@@ -3777,6 +4101,8 @@ async function main(): Promise<void> {
     }
   });
   syncMediaCapabilityControls();
+  startShareButton.disabled = !canUseScreenShareControl();
+  stopShareButton.disabled = !canStopLocalScreenShare();
 
   if (browserMediaCapabilities.rtcPeerConnection && shouldStartPassiveMedia({
     audioJoin: runtimeFlags.audioJoin,

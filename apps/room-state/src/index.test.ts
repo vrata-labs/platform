@@ -168,6 +168,30 @@ test("media object commands mutate authoritative room state", () => {
   assert.equal(server.rooms.get("demo-room")?.mediaObjects.surfaces["debug-main"]?.activeObjectId, null);
 });
 
+test("screen-share commands mutate authoritative room state", () => {
+  const server = createRoomStateServer();
+  connectParticipant(server, "demo-room", "host", createSocket() as never, { role: "host" });
+
+  const created = applyMediaObjectCreateCommand(server, "demo-room", "host", {
+    commandId: "cmd-create-share",
+    surfaceId: "debug-main",
+    objectType: "screen-share"
+  });
+  assert.equal(created.accepted, true);
+  assert.equal(created.objectType, "screen-share");
+
+  const active = applyMediaObjectPatchCommand(server, "demo-room", "host", {
+    commandId: "cmd-active-share",
+    surfaceId: "debug-main",
+    objectId: created.objectId ?? "",
+    expectedRevision: 0,
+    patch: { type: "mark-active", mediaTrackSid: "track-1" }
+  });
+  assert.equal(active.accepted, true);
+  assert.equal(active.revision, 1);
+  assert.equal((server.rooms.get("demo-room")?.mediaObjects.objects[created.objectId ?? ""]?.state as { mediaTrackSid?: string } | undefined)?.mediaTrackSid, "track-1");
+});
+
 test("applySeatClaim switches seats for same participant atomically", () => {
   const server = createRoomStateServer();
   connectParticipant(server, "demo-room", "p1", createSocket() as never);

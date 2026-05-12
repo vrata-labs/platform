@@ -147,6 +147,7 @@ test("createRoomState includes default media surface", () => {
   const room = createRoomState("demo");
   assert.equal(room.mediaObjects.surfaces["debug-main"]?.activeObjectId, null);
   assert.equal(room.mediaObjects.surfaces["debug-main"]?.allowedObjectTypes.includes("surface-test-card"), true);
+  assert.equal(room.mediaObjects.surfaces["debug-main"]?.allowedObjectTypes.includes("screen-share"), true);
 });
 
 test("createMediaObject enforces host permissions and rejects unknown types", () => {
@@ -251,4 +252,92 @@ test("createMediaObject rejects occupied surface and stop clears active object",
   assert.equal(stopped.result.accepted, true);
   assert.equal(stopped.room.mediaObjects.surfaces["debug-main"]?.activeObjectId, null);
   assert.equal(stopped.room.mediaObjects.objects["obj-1"], undefined);
+});
+
+test("screen-share object state updates through host-only revisioned reducer", () => {
+  const hostRoom = joinRoom(createRoomState("demo"), "host", { role: "host" });
+  const created = createMediaObject(hostRoom, "host", {
+    commandId: "cmd-create",
+    surfaceId: "debug-main",
+    objectType: "screen-share",
+    objectId: "share-1",
+    nowMs: 1
+  });
+  assert.equal(created.result.accepted, true);
+  assert.deepEqual(created.room.mediaObjects.objects["share-1"]?.state, {
+    status: "idle",
+    ownerParticipantId: "host",
+    surfaceId: "debug-main"
+  });
+
+  const selecting = patchMediaObjectState(created.room, "host", {
+    commandId: "cmd-selecting",
+    surfaceId: "debug-main",
+    objectId: "share-1",
+    expectedRevision: 0,
+    patch: { type: "mark-selecting" },
+    nowMs: 2
+  });
+  assert.equal(selecting.result.accepted, true);
+  assert.equal(selecting.result.revision, 1);
+
+  const active = patchMediaObjectState(selecting.room, "host", {
+    commandId: "cmd-active",
+    surfaceId: "debug-main",
+    objectId: "share-1",
+    expectedRevision: 1,
+    patch: { type: "mark-active", mediaTrackSid: "track-1" },
+    nowMs: 3
+  });
+  assert.equal(active.result.accepted, true);
+  const activeState = active.room.mediaObjects.objects["share-1"]?.state as {
+    status?: string;
+    ownerParticipantId?: string;
+    surfaceId?: string;
+    mediaTrackSid?: string;
+    startedAtMs?: number;
+  } | undefined;
+  assert.equal(activeState?.status, "active");
+  assert.equal(activeState?.ownerParticipantId, "host");
+  assert.equal(activeState?.surfaceId, "debug-main");
+  assert.equal(activeState?.mediaTrackSid, "track-1");
+  assert.equal(activeState?.startedAtMs, 3);
+
+  const memberRoom = joinRoom(active.room, "member", { role: "member" });
+  const memberPatch = patchMediaObjectState(memberRoom, "member", {
+    commandId: "cmd-member",
+    surfaceId: "debug-main",
+    objectId: "share-1",
+    expectedRevision: 2,
+    patch: { type: "mark-stopped" },
+    nowMs: 4
+  });
+  assert.equal(memberPatch.result.accepted, false);
+  assert.equal(memberPatch.result.permission, "screen-share.start");
+  assert.equal(memberPatch.result.blockedReason, "missing-permission");
+
+  const stale = patchMediaObjectState(active.room, "host", {
+    commandId: "cmd-stale",
+    surfaceId: "debug-main",
+    objectId: "share-1",
+    expectedRevision: 1,
+    patch: { type: "mark-stopped" },
+    nowMs: 5
+  });
+  assert.equal(stale.result.accepted, false);
+  assert.equal(stale.result.blockedReason, "revision-mismatch");
+});
+
+test("leaveRoom clears owned active screen-share object", () => {
+  const hostRoom = joinRoom(createRoomState("demo"), "host", { role: "host" });
+  const created = createMediaObject(hostRoom, "host", {
+    commandId: "cmd-create",
+    surfaceId: "debug-main",
+    objectType: "screen-share",
+    objectId: "share-1",
+    nowMs: 1
+  });
+  const left = leaveRoom(created.room, "host");
+  assert.equal(left.mediaObjects.surfaces["debug-main"]?.activeObjectId, null);
+  assert.equal(left.mediaObjects.objects["share-1"], undefined);
 });

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { DEFAULT_MEDIA_SURFACE_ID, SURFACE_TEST_CARD_TYPE, createDefaultRoomMediaObjectsState, createRoomAccessDebugState } from "./index.js";
+import { DEFAULT_MEDIA_SURFACE_ID, SCREEN_SHARE_OBJECT_TYPE, SURFACE_TEST_CARD_TYPE, createDefaultRoomMediaObjectsState, createRoomAccessDebugState } from "./index.js";
 import type {
   AvatarCatalogV1,
   AvatarRecipeCatalogV1,
@@ -11,6 +11,7 @@ import type {
   MediaObjectCommandResult,
   SurfaceInputEvent,
   SurfaceInputDebugState,
+  ScreenShareObjectState,
   SurfaceTestCardState,
   UserRole
 } from "./index.js";
@@ -61,6 +62,13 @@ test("media object shared contracts compile in tests", () => {
     clickCount: 1,
     lastInputEventId: "p-1:1"
   };
+  const screenShareState: ScreenShareObjectState = {
+    status: "active",
+    ownerParticipantId: "host-1",
+    surfaceId: DEFAULT_MEDIA_SURFACE_ID,
+    mediaTrackSid: "track-1",
+    startedAtMs: 1
+  };
   const result: MediaObjectCommandResult = {
     accepted: true,
     commandId: "cmd-1",
@@ -74,7 +82,9 @@ test("media object shared contracts compile in tests", () => {
   };
 
   assert.equal(mediaObjects.surfaces[DEFAULT_MEDIA_SURFACE_ID]?.activeObjectId, null);
+  assert.equal(mediaObjects.surfaces[DEFAULT_MEDIA_SURFACE_ID]?.allowedObjectTypes.includes(SCREEN_SHARE_OBJECT_TYPE), true);
   assert.equal(cardState.clickCount, 1);
+  assert.equal(screenShareState.mediaTrackSid, "track-1");
   assert.equal(result.accepted, true);
 });
 

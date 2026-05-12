@@ -125,6 +125,7 @@ test("media object commands send object lifecycle envelopes", () => {
   const client = createClient(sent);
 
   sendSurfaceCreateObjectCommand(client, { commandId: "cmd-create", surfaceId: "debug-main", objectType: "surface-test-card", probeOnly: false });
+  sendSurfaceCreateObjectCommand(client, { commandId: "cmd-create-share", surfaceId: "debug-main", objectType: "screen-share", probeOnly: false });
   sendSurfacePatchObjectStateCommand(client, {
     commandId: "cmd-patch",
     surfaceId: "debug-main",
@@ -136,9 +137,10 @@ test("media object commands send object lifecycle envelopes", () => {
 
   assert.equal(JSON.parse(sent[0]!).probeOnly, false);
   assert.equal(JSON.parse(sent[0]!).objectType, "surface-test-card");
-  assert.equal(JSON.parse(sent[1]!).type, "surface_patch_object_state");
-  assert.equal(JSON.parse(sent[1]!).expectedRevision, 0);
-  assert.equal(JSON.parse(sent[2]!).type, "surface_stop_object");
+  assert.equal(JSON.parse(sent[1]!).objectType, "screen-share");
+  assert.equal(JSON.parse(sent[2]!).type, "surface_patch_object_state");
+  assert.equal(JSON.parse(sent[2]!).expectedRevision, 0);
+  assert.equal(JSON.parse(sent[3]!).type, "surface_stop_object");
 });
 
 test("connectRoomState routes inbound avatar reliable state, pose frame and seat claim result", async () => {
