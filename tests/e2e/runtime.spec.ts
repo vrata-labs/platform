@@ -67,7 +67,7 @@ test("room shell loads and presence is registered", async ({ page, request }) =>
   await expect(page.locator("#room-name")).toContainText("meeting-room-basic - demo-room");
   await expect(page.locator("#status-line")).toContainText("Joined as");
   await expect(page.locator("#room-state-line")).toContainText(/Room-state:/);
-  await expect(page.locator("#start-share")).toBeEnabled();
+  await expect(page.locator("#start-share")).toBeHidden();
 
   const debug = await page.evaluate(() => (window as Window & { __NOAH_DEBUG__?: unknown }).__NOAH_DEBUG__);
   expect(debug).toBeTruthy();
@@ -156,7 +156,7 @@ test("mobile unsupported media APIs disable audio and share controls with diagno
   const mobilePage = await mobileContext.newPage();
 
   try {
-    await mobilePage.goto("/rooms/demo-room?debug=1");
+    await mobilePage.goto("/rooms/demo-room?role=host&debug=1");
 
     await expect(mobilePage.locator("#join-audio")).toBeDisabled();
     await expect(mobilePage.locator("#join-audio")).toContainText("Audio Unsupported");
@@ -1910,7 +1910,7 @@ test("control plane can delete selected room", async ({ page }) => {
 });
 
 test("mock screen share updates UI and diagnostics", async ({ page, request }) => {
-  await page.goto("/rooms/demo-room?sharemock=1&debug=1");
+  await page.goto("/rooms/demo-room?role=host&sharemock=1&debug=1");
   await page.waitForFunction(() => {
     const button = document.querySelector<HTMLButtonElement>("#start-share");
     return Boolean(button && !button.disabled);
@@ -1954,7 +1954,7 @@ test("fault-injected mic denied keeps room usable without audio", async ({ page,
 });
 
 test("fault-injected media network block explains WebRTC can fail while scene loads", async ({ page, request }) => {
-  await page.goto("/rooms/demo-room?failaudio=connection_failed&debug=1");
+  await page.goto("/rooms/demo-room?role=host&failaudio=connection_failed&debug=1");
   await page.waitForTimeout(2500);
   await page.click("#start-share");
 

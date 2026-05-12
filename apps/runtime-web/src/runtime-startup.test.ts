@@ -15,6 +15,7 @@ test("applyPostBootControls sets joined status and disables controls by flags", 
   applyPostBootControls({
     displayName: "Tester",
     runtimeFlags: { audioJoin: false, screenShare: false },
+    canStartScreenShare: true,
     shareMockEnabled: false,
     elements: { joinAudioButton, muteButton, startShareButton },
     setStatus(message) {

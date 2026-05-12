@@ -1,3 +1,5 @@
+import { getRoomPermissions, parseRoomRole, type RoomPermission, type RoomRole } from "@noah/shared-types";
+
 import type { PresenceState, TransformState } from "./schema.js";
 
 export type ParticipantState = PresenceState;
@@ -23,6 +25,11 @@ export interface SeatReleaseResult {
   releasedSeatId: string | null;
 }
 
+export interface ParticipantAccessState {
+  role: RoomRole;
+  permissions?: RoomPermission[];
+}
+
 function mergeTransformState(current: TransformState | undefined, next: TransformState | undefined): TransformState | undefined {
   if (!current && !next) {
     return undefined;
@@ -40,10 +47,22 @@ function mergeTransformState(current: TransformState | undefined, next: Transfor
   };
 }
 
-export function createParticipantState(participantId: string): ParticipantState {
+function applyParticipantAccess(participant: ParticipantState, access?: ParticipantAccessState): ParticipantState {
+  const role = parseRoomRole(access?.role, participant.role ?? "guest");
+  return {
+    ...participant,
+    role,
+    permissions: getRoomPermissions(role)
+  };
+}
+
+export function createParticipantState(participantId: string, access?: ParticipantAccessState): ParticipantState {
+  const role = parseRoomRole(access?.role, "guest");
   return {
     participantId,
     displayName: participantId,
+    role,
+    permissions: getRoomPermissions(role),
     mode: "desktop",
     rootTransform: { x: 0, y: 0, z: 0, yaw: 0 },
     bodyTransform: { x: 0, y: 0.92, z: 0, yaw: 0 },
@@ -67,6 +86,8 @@ export function mergeParticipantState(current: ParticipantState, nextState: Part
   return {
     participantId: current.participantId,
     displayName: nextState.displayName ?? current.displayName,
+    role: current.role,
+    permissions: [...current.permissions],
     mode: nextState.mode ?? current.mode,
     rootTransform: mergeTransformState(current.rootTransform, nextState.rootTransform) ?? current.rootTransform,
     bodyTransform: mergeTransformState(current.bodyTransform, nextState.bodyTransform),
@@ -91,13 +112,16 @@ export function createRoomState(roomId: string): RoomState {
   };
 }
 
-export function joinRoom(state: RoomState, participantId: string): RoomState {
+export function joinRoom(state: RoomState, participantId: string, access?: ParticipantAccessState): RoomState {
   if (state.participants.some((item) => item.participantId === participantId)) {
-    return state;
+    return {
+      ...state,
+      participants: state.participants.map((item) => item.participantId === participantId ? applyParticipantAccess(item, access) : item)
+    };
   }
   return {
     ...state,
-    participants: [...state.participants, createParticipantState(participantId)]
+    participants: [...state.participants, createParticipantState(participantId, access)]
   };
 }
 

@@ -16,6 +16,8 @@ test("PresenceState carries sequence timing metadata", () => {
   const state: PresenceState = {
     participantId: "p1",
     displayName: "Guest",
+    role: "guest",
+    permissions: ["room.join", "audio.join", "surface.view"],
     mode: "desktop",
     rootTransform: { x: 0, y: 0, z: 0, yaw: 1 },
     headTransform: { x: 0, y: 1.6, z: 0, yaw: 1, pitch: 0.2 },

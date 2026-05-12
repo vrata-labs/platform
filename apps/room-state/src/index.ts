@@ -1,9 +1,11 @@
 import { createServer } from "node:http";
+import { createHmac, timingSafeEqual } from "node:crypto";
 
 import { WebSocketServer, type WebSocket } from "ws";
+import { getRoomPermissions, hasRoomPermission, isRoomRole, parseRoomRole, type RoomPermission, type RoomRole } from "@noah/shared-types";
 
 import type { PresenceState } from "./schema.js";
-import { claimSeat, createRoomState, joinRoom, leaveRoom, releaseSeat, serializeRoomState, updateParticipantState, type RoomState } from "./state.js";
+import { claimSeat, createRoomState, joinRoom, leaveRoom, releaseSeat, serializeRoomState, updateParticipantState, type ParticipantAccessState, type RoomState } from "./state.js";
 
 interface AvatarReliableStatePayload {
   participantId: string;
@@ -32,8 +34,17 @@ export interface RoomStateServer {
   rooms: Map<string, RoomState>;
   clients: Map<string, Set<WebSocket>>;
   avatarReliableStates: Map<string, Map<string, AvatarReliableStatePayload>>;
-  socketParticipants: Map<WebSocket, { roomId: string; participantId: string }>;
+  socketParticipants: Map<WebSocket, { roomId: string; participantId: string; access: ParticipantAccessState }>;
   pendingDisconnects: Map<string, Map<string, ReturnType<typeof setTimeout>>>;
+}
+
+interface RoomAccessTokenPayload {
+  roomId: string;
+  participantId: string;
+  displayName: string;
+  role: RoomRole;
+  permissions: RoomPermission[];
+  exp: number;
 }
 
 const DISCONNECT_GRACE_MS = 1500;
@@ -45,8 +56,108 @@ export interface SeatClaimResultPayload {
   previousSeatId: string | null;
 }
 
+export interface PrivilegedRoomCommandResultPayload {
+  accepted: boolean;
+  permission: RoomPermission;
+  role: RoomRole;
+}
+
 function logEvent(event: Record<string, unknown>): void {
   process.stdout.write(`${JSON.stringify(event)}\n`);
+}
+
+function isEnabledEnvValue(value: string | undefined): boolean | null {
+  if (value === undefined || value.trim().length === 0) {
+    return null;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) {
+    return true;
+  }
+  if (["0", "false", "no", "off"].includes(normalized)) {
+    return false;
+  }
+  return null;
+}
+
+function isDevRoleQueryAllowed(env: NodeJS.ProcessEnv = process.env): boolean {
+  const explicit = isEnabledEnvValue(env.NOAH_DEV_ROLE_QUERY ?? env.FEATURE_DEV_ROLE_QUERY);
+  if (explicit !== null) {
+    return explicit;
+  }
+  return env.NODE_ENV !== "production";
+}
+
+function defaultAccess(role: RoomRole = "guest"): ParticipantAccessState {
+  return {
+    role,
+    permissions: getRoomPermissions(role)
+  };
+}
+
+function signAccessTokenBody(body: string, env: NodeJS.ProcessEnv = process.env): string {
+  const secret = env.STATE_TOKEN_SECRET ?? "dev-state-secret";
+  return createHmac("sha256", secret).update(body).digest("base64url");
+}
+
+function safeEqual(left: string, right: string): boolean {
+  const leftBuffer = Buffer.from(left);
+  const rightBuffer = Buffer.from(right);
+  return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer);
+}
+
+function parseAccessTokenPayload(input: unknown): RoomAccessTokenPayload | null {
+  if (!isObjectRecord(input)) {
+    return null;
+  }
+  const permissions = Array.isArray(input.permissions) ? input.permissions : [];
+  if (typeof input.roomId !== "string"
+    || typeof input.participantId !== "string"
+    || typeof input.displayName !== "string"
+    || !isRoomRole(input.role)
+    || typeof input.exp !== "number"
+    || !permissions.every((permission) => typeof permission === "string")) {
+    return null;
+  }
+  return {
+    roomId: input.roomId,
+    participantId: input.participantId,
+    displayName: input.displayName,
+    role: input.role,
+    permissions: getRoomPermissions(input.role),
+    exp: input.exp
+  };
+}
+
+function decodeAccessToken(token: string | null, env: NodeJS.ProcessEnv = process.env): RoomAccessTokenPayload | null {
+  if (!token) {
+    return null;
+  }
+  const [body, signature] = token.split(".");
+  if (!body || !signature || !safeEqual(signAccessTokenBody(body, env), signature)) {
+    return null;
+  }
+  try {
+    const payload = JSON.parse(Buffer.from(body, "base64url").toString("utf8"));
+    const parsed = parseAccessTokenPayload(payload);
+    if (!parsed || parsed.exp < Math.floor(Date.now() / 1000)) {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function resolveConnectionAccess(url: URL, roomId: string, participantId: string, env: NodeJS.ProcessEnv = process.env): ParticipantAccessState {
+  const tokenAccess = decodeAccessToken(url.searchParams.get("accessToken"), env);
+  if (tokenAccess?.roomId === roomId && tokenAccess.participantId === participantId) {
+    return defaultAccess(tokenAccess.role);
+  }
+  if (isDevRoleQueryAllowed(env)) {
+    return defaultAccess(parseRoomRole(url.searchParams.get("role"), "guest"));
+  }
+  return defaultAccess("guest");
 }
 
 export function createRoomStateServer(): RoomStateServer {
@@ -54,7 +165,7 @@ export function createRoomStateServer(): RoomStateServer {
     rooms: new Map<string, RoomState>(),
     clients: new Map<string, Set<WebSocket>>(),
     avatarReliableStates: new Map<string, Map<string, AvatarReliableStatePayload>>(),
-    socketParticipants: new Map<WebSocket, { roomId: string; participantId: string }>(),
+    socketParticipants: new Map<WebSocket, { roomId: string; participantId: string; access: ParticipantAccessState }>(),
     pendingDisconnects: new Map<string, Map<string, ReturnType<typeof setTimeout>>>()
   };
 }
@@ -203,14 +314,14 @@ function broadcastToRoom(server: RoomStateServer, roomId: string, payload: unkno
   }
 }
 
-export function connectParticipant(server: RoomStateServer, roomId: string, participantId: string, socket: WebSocket): void {
+export function connectParticipant(server: RoomStateServer, roomId: string, participantId: string, socket: WebSocket, access: ParticipantAccessState = defaultAccess()): void {
   cancelPendingDisconnect(server, roomId, participantId);
   const room = ensureRoom(server, roomId);
-  server.rooms.set(roomId, joinRoom(room, participantId));
+  server.rooms.set(roomId, joinRoom(room, participantId, access));
   const set = server.clients.get(roomId) ?? new Set<WebSocket>();
   set.add(socket);
   server.clients.set(roomId, set);
-  server.socketParticipants.set(socket, { roomId, participantId });
+  server.socketParticipants.set(socket, { roomId, participantId, access });
   broadcastRoom(server, roomId);
   for (const reliableState of getRoomReliableStates(server, roomId).values()) {
     sendToSocket(socket, {
@@ -238,6 +349,18 @@ export function applyParticipantUpdate(server: RoomStateServer, roomId: string, 
     serverTimeMs: Date.now()
   }));
   broadcastRoom(server, roomId);
+}
+
+export function applyPrivilegedRoomCommand(server: RoomStateServer, roomId: string, participantId: string, permission: RoomPermission): PrivilegedRoomCommandResultPayload {
+  const room = ensureRoom(server, roomId);
+  const participant = room.participants.find((item) => item.participantId === participantId);
+  const role = participant?.role ?? "guest";
+  const permissions = participant?.permissions ?? getRoomPermissions(role);
+  return {
+    accepted: hasRoomPermission(permissions, permission),
+    permission,
+    role
+  };
 }
 
 export function applyAvatarReliableState(server: RoomStateServer, roomId: string, participantId: string, reliableState: unknown): void {
@@ -325,8 +448,9 @@ export function startRoomStateService(port = Number.parseInt(process.env.ROOM_ST
     const url = new URL(request.url ?? "/", `http://${request.headers.host ?? `localhost:${port}`}`);
     const roomId = url.searchParams.get("roomId") ?? "demo-room";
     const participantId = url.searchParams.get("participantId") ?? crypto.randomUUID();
+    const access = resolveConnectionAccess(url, roomId, participantId);
 
-    connectParticipant(authority, roomId, participantId, socket);
+    connectParticipant(authority, roomId, participantId, socket, access);
 
     socket.on("message", (raw) => {
       try {
@@ -365,6 +489,14 @@ export function startRoomStateService(port = Number.parseInt(process.env.ROOM_ST
         }
         if (payload.type === "seat_release") {
           applySeatRelease(authority, roomId, participantId, typeof payload.seatId === "string" ? payload.seatId : undefined);
+          return;
+        }
+        if (payload.type === "surface_create_object") {
+          const result = applyPrivilegedRoomCommand(authority, roomId, participantId, "surface.create-object");
+          sendToSocket(socket, {
+            type: result.accepted ? "surface_command_result" : "access_denied",
+            result
+          });
         }
       } catch (error) {
         logEvent({

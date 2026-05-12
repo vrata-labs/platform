@@ -1,10 +1,12 @@
 import { readFile, stat } from "node:fs/promises";
 import { existsSync } from "node:fs";
+import { createHmac } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { AccessToken } from "livekit-server-sdk";
+import { createRoomAccessDebugState, getRoomPermissions, parseRoomRole, type RoomPermission, type RoomRole } from "@noah/shared-types";
 
 import {
   resolveSceneBundlePublicUrl,
@@ -20,8 +22,6 @@ import {
   type RuntimeDiagnosticRecord,
   type TenantRecord
 } from "./storage.js";
-
-type UserRole = "guest" | "member" | "host" | "admin";
 
 interface RoomManifest {
   schemaVersion: number;
@@ -69,13 +69,27 @@ interface RoomManifest {
   access: {
     joinMode: "link";
     guestAllowed: boolean;
+    roleQueryAllowed: boolean;
   };
 }
 
-interface StateTokenPayload {
+interface RoomAccessTokenPayload {
+  tenantId?: string;
   roomId: string;
   participantId: string;
-  role: UserRole;
+  displayName: string;
+  role: RoomRole;
+  permissions: RoomPermission[];
+  exp: number;
+}
+
+interface StateTokenRequest {
+  tenantId?: string;
+  roomId?: string;
+  participantId?: string;
+  displayName?: string;
+  requestedRole?: string;
+  role?: string;
 }
 
 interface MediaTokenPayload {
@@ -88,6 +102,8 @@ interface MediaTokenPayload {
 interface PresenceRecord {
   participantId: string;
   displayName: string;
+  role?: RoomRole;
+  permissions?: RoomPermission[];
   mode: "desktop" | "mobile" | "vr";
   rootTransform: { x: number; y: number; z: number; yaw?: number; pitch?: number; roll?: number };
   headTransform?: { x: number; y: number; z: number; yaw?: number; pitch?: number; roll?: number };
@@ -181,6 +197,42 @@ const presenceByRoom = new Map<string, Map<string, PresenceRecord>>();
 const xrTelemetryByRoom = new Map<string, Map<string, XrTelemetryParticipantBuffer>>();
 const xrTelemetryHistoryLimit = 80;
 
+function isEnabledEnvValue(value: string | undefined): boolean | null {
+  if (value === undefined || value.trim().length === 0) {
+    return null;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) {
+    return true;
+  }
+  if (["0", "false", "no", "off"].includes(normalized)) {
+    return false;
+  }
+  return null;
+}
+
+function isDevRoleQueryAllowed(env: NodeJS.ProcessEnv = process.env): boolean {
+  const explicit = isEnabledEnvValue(env.NOAH_DEV_ROLE_QUERY ?? env.FEATURE_DEV_ROLE_QUERY);
+  if (explicit !== null) {
+    return explicit;
+  }
+  return env.NODE_ENV !== "production";
+}
+
+function resolveAccessRole(requestedRole: unknown, env: NodeJS.ProcessEnv = process.env): RoomRole {
+  if (!isDevRoleQueryAllowed(env)) {
+    return "guest";
+  }
+  return parseRoomRole(requestedRole, "guest");
+}
+
+function encodeAccessToken(payload: RoomAccessTokenPayload, env: NodeJS.ProcessEnv = process.env): string {
+  const body = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
+  const secret = env.STATE_TOKEN_SECRET ?? "dev-state-secret";
+  const signature = createHmac("sha256", secret).update(body).digest("base64url");
+  return `${body}.${signature}`;
+}
+
 export function getMissingRequiredApiEnvVars(env: NodeJS.ProcessEnv = process.env): string[] {
   return requiredProductionApiEnvVars.filter((name) => !env[name] || env[name]?.trim().length === 0);
 }
@@ -228,7 +280,7 @@ function defaultManifest(roomId: string, request?: IncomingMessage): RoomManifes
       avatarCustomizationEnabled: false
     },
     quality: { default: "desktop-standard", mobile: "mobile-lite", xr: "xr" },
-    access: { joinMode: "link", guestAllowed: true }
+    access: { joinMode: "link", guestAllowed: true, roleQueryAllowed: isDevRoleQueryAllowed() }
   };
 }
 
@@ -516,7 +568,7 @@ async function buildManifest(roomId: string, request?: IncomingMessage): Promise
       avatarCustomizationEnabled: process.env.FEATURE_AVATAR_CUSTOMIZATION === "true"
     },
     quality: { default: "desktop-standard", mobile: "mobile-lite", xr: "xr" },
-    access: { joinMode: "link", guestAllowed: room.guestAllowed ?? true }
+    access: { joinMode: "link", guestAllowed: room.guestAllowed ?? true, roleQueryAllowed: isDevRoleQueryAllowed() }
   };
 }
 
@@ -669,10 +721,6 @@ function validateSceneBundleInput(input: Partial<SceneBundleCreateInput>): strin
 
 function getCurrentSceneBundleVersion(bundle: SceneBundleRecord): string {
   return bundle.version;
-}
-
-function encodeToken(payload: StateTokenPayload | MediaTokenPayload): string {
-  return Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
 }
 
 async function listRuntimeSpaces(storage: Awaited<typeof storagePromise>, roomId: string, request?: IncomingMessage): Promise<RuntimeSpaceRecord[]> {
@@ -1115,8 +1163,26 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   }
 
   if (method === "POST" && url.pathname === "/api/tokens/state") {
-    const payload = (await parseBody<StateTokenPayload>(request)) ?? { roomId: "demo-room", participantId: crypto.randomUUID(), role: "guest" as const };
-    json(response, 200, { token: encodeToken(payload), expiresInSeconds: Number.parseInt(process.env.STATE_TOKEN_TTL_SECONDS ?? "900", 10) });
+    const requestPayload = await parseBody<StateTokenRequest>(request);
+    const ttlSeconds = Number.parseInt(process.env.STATE_TOKEN_TTL_SECONDS ?? "900", 10);
+    const role = resolveAccessRole(requestPayload?.requestedRole ?? requestPayload?.role);
+    const permissions = getRoomPermissions(role);
+    const payload: RoomAccessTokenPayload = {
+      tenantId: requestPayload?.tenantId,
+      roomId: requestPayload?.roomId ?? "demo-room",
+      participantId: requestPayload?.participantId ?? crypto.randomUUID(),
+      displayName: requestPayload?.displayName ?? requestPayload?.participantId ?? "Guest",
+      role,
+      permissions,
+      exp: Math.floor(Date.now() / 1000) + ttlSeconds
+    };
+    json(response, 200, {
+      token: encodeAccessToken(payload),
+      expiresInSeconds: ttlSeconds,
+      access: createRoomAccessDebugState(role),
+      role,
+      permissions
+    });
     return;
   }
 

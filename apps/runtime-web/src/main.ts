@@ -1,12 +1,13 @@
 import * as THREE from "three";
 import { VRButton } from "three/examples/jsm/webxr/VRButton.js";
 import { Room, RoomEvent, Track } from "livekit-client";
+import { createRoomAccessDebugState } from "@noah/shared-types";
 
 import { appendBrandingSuffix, applyRoomShellBootState } from "./boot-session.js";
 import { bootRuntime, fetchRuntimeSpaces, listPresence, planVoiceSession, removePresence, resolveCurrentSpace, upsertPresence, type PresenceState, type RuntimeSpaceOption } from "./index.js";
 import { createMotionTrack, pushMotionSample, sampleMotion, type MotionTrack } from "./motion-state.js";
 import { mergePresenceSources } from "./presence-sources.js";
-import { connectRoomState, sendAvatarPoseFrame, sendAvatarReliableState, sendParticipantUpdate, type RoomStateClient, type RoomStateSnapshot } from "./room-state-client.js";
+import { connectRoomState, sendAvatarPoseFrame, sendAvatarReliableState, sendParticipantUpdate, sendSurfaceCreateObjectCommand, type RoomStateClient, type RoomStateSnapshot } from "./room-state-client.js";
 import { classifyMediaError, classifyRoomStateError, classifyScreenShareError, createFaultError, getRuntimeIssue, shouldRetryConnection, type RuntimeIssue } from "./runtime-errors.js";
 import { canRetry, createReconnectPolicy, getReconnectDelayMs } from "./reconnect.js";
 import { applyRuntimeIssueState, clearRuntimeIssueState, createRuntimeUiState } from "./runtime-state.js";
@@ -850,7 +851,7 @@ function supportsAudioOutputSelection(): boolean {
 }
 
 function canUseScreenShareControl(): boolean {
-  return shareMockEnabled || (runtimeFlags.screenShare && browserMediaCapabilities.screenShare.supported);
+  return debugState.access.canStartScreenShare && (shareMockEnabled || (runtimeFlags.screenShare && browserMediaCapabilities.screenShare.supported));
 }
 
 function formatDeviceLabel(device: MediaDeviceInfo, fallbackLabel: string, index: number): string {
@@ -942,6 +943,14 @@ function syncMediaCapabilityControls(): void {
     updateAudioDeviceStatus(unsupportedStatus);
   }
 
+  startShareButton.hidden = !debugState.access.canStartScreenShare;
+  stopShareButton.hidden = !debugState.access.canStartScreenShare;
+  if (!debugState.access.canStartScreenShare) {
+    startShareButton.disabled = true;
+    startShareButton.title = "Host role required";
+    stopShareButton.disabled = true;
+  }
+
   if (runtimeFlags.audioJoin && !browserMediaCapabilities.audioInput.supported) {
     joinAudioButton.disabled = true;
     joinAudioButton.textContent = "Audio Unsupported";
@@ -949,7 +958,7 @@ function syncMediaCapabilityControls(): void {
     muteButton.disabled = true;
   }
 
-  if (runtimeFlags.screenShare && !shareMockEnabled && !browserMediaCapabilities.screenShare.supported) {
+  if (debugState.access.canStartScreenShare && runtimeFlags.screenShare && !shareMockEnabled && !browserMediaCapabilities.screenShare.supported) {
     startShareButton.disabled = true;
     startShareButton.textContent = "Share Unsupported";
     startShareButton.title = `Screen share unsupported: ${describeMediaCapabilityReason(browserMediaCapabilities.screenShare.reason)}`;
@@ -1226,6 +1235,14 @@ const debugState = {
     publishedAudio: false,
     subscribedAudioCount: 0
   },
+  access: {
+    ...createRoomAccessDebugState("guest"),
+    token: "",
+    expiresInSeconds: 0,
+    roleQueryAllowed: false,
+    lastDeniedPermission: null as string | null,
+    lastSurfaceCommandAccepted: null as boolean | null
+  },
   screenShareState: "idle",
   mediaCapabilities: browserMediaCapabilities,
   spatialAudioState: "idle",
@@ -1354,6 +1371,7 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
     confirmInteraction: () => void;
     claimSeatById: (seatId: string) => boolean;
     requestSeatClaimById: (seatId: string) => boolean;
+    sendPrivilegedSurfaceCreate: () => boolean;
     teleportToFloor: (x: number, z: number) => boolean;
     forceXrInteractionAtSeat: (seatId: string) => boolean;
     setSyntheticXrState: (state: {
@@ -1411,6 +1429,13 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
       { type: "send_seat_claim", seatId: seatAnchor.id },
       { type: "status", message: `Claiming seat ${seatAnchor.label ?? seatAnchor.id}` }
     ]);
+    return true;
+  },
+  sendPrivilegedSurfaceCreate: () => {
+    if (!roomStateClient || !roomStateConnected) {
+      return false;
+    }
+    sendSurfaceCreateObjectCommand(roomStateClient);
     return true;
   },
   forceXrInteractionAtSeat: (seatId: string) => {
@@ -1683,6 +1708,15 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
       syncSeatDebugState();
       setStatus(result.occupantId ? `Seat occupied by ${result.occupantId}` : "Seat unavailable");
     },
+    onAccessDenied: (result) => {
+      debugState.access.lastDeniedPermission = result.permission;
+      debugState.access.lastSurfaceCommandAccepted = false;
+      setStatus(`Access denied: ${result.permission}`);
+    },
+    onSurfaceCommandResult: (result) => {
+      debugState.access.lastDeniedPermission = null;
+      debugState.access.lastSurfaceCommandAccepted = result.accepted;
+    },
     onError: (error: unknown) => {
       console.error(error);
       const issue = classifyRoomStateError(error);
@@ -1724,7 +1758,7 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
         roomStateLabel: "Room-state: fallback API"
       });
     }
-  });
+  }, debugState.access.token);
 }
 
 function renderDebugPanel(): void {
@@ -1812,6 +1846,7 @@ async function reportDiagnostics(note?: string): Promise<void> {
       roomStateMode: debugState.roomStateMode,
       audioState: debugState.audioState,
       media: debugState.media,
+      access: debugState.access,
       screenShareState: debugState.screenShareState,
       mediaCapabilities: debugState.mediaCapabilities,
       localPose: debugState.localPose,
@@ -2574,6 +2609,8 @@ async function syncPresence(mode: PresenceState["mode"], audioActive: boolean): 
   const presencePayload: PresenceState = {
     participantId,
     displayName,
+    role: debugState.access.role,
+    permissions: debugState.access.permissions,
     mode: effectiveMode,
     rootTransform: {
       x: pose.position.x,
@@ -2694,6 +2731,10 @@ function setupAudio(room: Room): void {
 }
 
 async function startScreenShare(): Promise<void> {
+  if (!debugState.access.canStartScreenShare) {
+    debugState.access.lastDeniedPermission = "screen-share.start";
+    throw createFaultError("NotAllowedError", "screen_share_forbidden");
+  }
   if (!shareMockEnabled && !browserMediaCapabilities.screenShare.supported) {
     throw createFaultError("NotSupportedError", `screen_share_unsupported:${browserMediaCapabilities.screenShare.reason}`);
   }
@@ -2733,13 +2774,17 @@ async function startScreenShare(): Promise<void> {
 }
 
 async function stopScreenShare(): Promise<void> {
+  if (!debugState.access.canStartScreenShare) {
+    debugState.access.lastDeniedPermission = "screen-share.stop";
+    throw createFaultError("NotAllowedError", "screen_share_forbidden");
+  }
   if (shareMockEnabled) {
     activeMockScreenShareStream?.getTracks().forEach((track) => track.stop());
     activeMockScreenShareStream = null;
     isScreenSharing = false;
     detachVideoTrack();
     debugState.screenShareState = "stopped";
-    startShareButton.disabled = false;
+    startShareButton.disabled = !canUseScreenShareControl();
     stopShareButton.disabled = true;
     setStatus("Screen share stopped");
     void reportDiagnostics("screenshare_mock_stopped");
@@ -2749,7 +2794,7 @@ async function stopScreenShare(): Promise<void> {
   await livekitRoom.localParticipant.setScreenShareEnabled(false);
   isScreenSharing = false;
   debugState.screenShareState = "stopped";
-  startShareButton.disabled = false;
+  startShareButton.disabled = !canUseScreenShareControl();
   stopShareButton.disabled = true;
   setStatus("Screen share stopped");
   void reportDiagnostics("screenshare_stopped");
@@ -3164,7 +3209,11 @@ renderer.setAnimationLoop(() => {
 });
 
 async function main(): Promise<void> {
-  const boot = await bootRuntime(apiBaseUrl, roomId, navigator.userAgent);
+  const boot = await bootRuntime(apiBaseUrl, roomId, navigator.userAgent, {
+    participantId,
+    displayName,
+    requestedRole: query.get("role")
+  });
   runtimeFlags = {
     enterVr: boot.envFlags.enterVr,
     audioJoin: boot.envFlags.audioJoin && boot.voiceEnabled,
@@ -3178,6 +3227,11 @@ async function main(): Promise<void> {
     runtimeFlags.avatarLegIkEnabled = true;
   }
   debugState.featureFlags = runtimeFlags;
+  debugState.access = {
+    ...boot.access,
+    lastDeniedPermission: null,
+    lastSurfaceCommandAccepted: null
+  };
   debugState.avatarPresenceMode = runtimeFlags.avatarLegIkEnabled ? "experimental-leg-ik" : "baseline";
   debugState.roomStateUrl = boot.roomStateUrl;
   debugState.sceneBundleUrl = boot.sceneBundleUrl ?? null;
@@ -3321,6 +3375,7 @@ async function main(): Promise<void> {
       audioJoin: runtimeFlags.audioJoin,
       screenShare: runtimeFlags.screenShare
     },
+    canStartScreenShare: debugState.access.canStartScreenShare,
     shareMockEnabled,
     elements: {
       joinAudioButton,

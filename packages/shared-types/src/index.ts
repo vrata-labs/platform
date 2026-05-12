@@ -1,4 +1,4 @@
-export type UserRole = "guest" | "member" | "host" | "admin";
+export type { RoomAccessDebugState, RoomPermission, RoomRole as UserRole, RoomRole } from "./access.js";
 
 export type ClientMode = "desktop" | "mobile" | "vr";
 
@@ -20,13 +20,18 @@ export interface RoomManifest {
   access: {
     joinMode: "link";
     guestAllowed: boolean;
+    roleQueryAllowed: boolean;
   };
 }
 
 export interface StateTokenPayload {
+  tenantId?: string;
   roomId: string;
   participantId: string;
-  role: UserRole;
+  displayName: string;
+  role: import("./access.js").RoomRole;
+  permissions: import("./access.js").RoomPermission[];
+  exp: number;
 }
 
 export interface MediaTokenPayload {
@@ -39,3 +44,4 @@ export interface MediaTokenPayload {
 export * from "./avatar.js";
 export * from "./avatar-recipe.js";
 export * from "./avatar-transport.js";
+export * from "./access.js";

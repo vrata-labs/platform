@@ -66,6 +66,45 @@ test("api health exposes env timestamp and dependencies", async () => {
   }
 });
 
+test("state token resolves dev host role and falls back to guest when gated off", async () => {
+  process.env.NOAH_DISABLE_AUTOSTART = "1";
+  process.env.API_PORT = "4025";
+  process.env.NOAH_DEV_ROLE_QUERY = "true";
+  process.env.STATE_TOKEN_SECRET = "test-secret";
+  const module = await import("./index.js");
+  const server = module.startApiServer(4025);
+
+  try {
+    const hostResponse = await fetch("http://127.0.0.1:4025/api/tokens/state", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ roomId: "demo-room", participantId: "p-host", displayName: "Host", requestedRole: "host" })
+    });
+    assert.equal(hostResponse.ok, true);
+    const hostPayload = (await hostResponse.json()) as { token?: string; role?: string; access?: { canStartScreenShare?: boolean } };
+    assert.equal(typeof hostPayload.token, "string");
+    assert.equal(hostPayload.role, "host");
+    assert.equal(hostPayload.access?.canStartScreenShare, true);
+
+    process.env.NOAH_DEV_ROLE_QUERY = "false";
+    const guestResponse = await fetch("http://127.0.0.1:4025/api/tokens/state", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ roomId: "demo-room", participantId: "p-guest", displayName: "Guest", requestedRole: "host" })
+    });
+    assert.equal(guestResponse.ok, true);
+    const guestPayload = (await guestResponse.json()) as { role?: string; access?: { canStartScreenShare?: boolean } };
+    assert.equal(guestPayload.role, "guest");
+    assert.equal(guestPayload.access?.canStartScreenShare, false);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    delete process.env.NOAH_DISABLE_AUTOSTART;
+    delete process.env.API_PORT;
+    delete process.env.NOAH_DEV_ROLE_QUERY;
+    delete process.env.STATE_TOKEN_SECRET;
+  }
+});
+
 test("room manifest exposes optional scene bundle url", async () => {
   process.env.NOAH_DISABLE_AUTOSTART = "1";
   process.env.API_PORT = "4012";

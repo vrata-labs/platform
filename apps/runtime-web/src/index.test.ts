@@ -21,7 +21,8 @@ test("describeManifest returns room and template", () => {
       },
       access: {
         joinMode: "link",
-        guestAllowed: true
+        guestAllowed: true,
+        roleQueryAllowed: true
       },
       assets: [],
       features: { voice: true, spatialAudio: true, screenShare: false },
@@ -65,6 +66,22 @@ test("bootRuntime maps reserved avatar feature flags from health payload", async
       }), { status: 200, headers: { "content-type": "application/json" } });
     }
 
+    if (url.endsWith("/api/tokens/state")) {
+      return new Response(JSON.stringify({
+        token: "test-token",
+        expiresInSeconds: 900,
+        role: "guest",
+        permissions: ["room.join", "audio.join", "surface.view"],
+        access: {
+          role: "guest",
+          permissions: ["room.join", "audio.join", "surface.view"],
+          canStartScreenShare: false,
+          canCreateWhiteboard: false,
+          canControlSurface: false
+        }
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+
     return new Response(JSON.stringify({
       roomId: "demo-room",
       template: "meeting-room-basic",
@@ -83,7 +100,7 @@ test("bootRuntime maps reserved avatar feature flags from health payload", async
         avatarSeatsEnabled: false,
         avatarCustomizationEnabled: false
       },
-      access: { joinMode: "link", guestAllowed: true }
+      access: { joinMode: "link", guestAllowed: true, roleQueryAllowed: true }
     }), { status: 200, headers: { "content-type": "application/json" } });
   };
 

@@ -13,13 +13,14 @@ export function applyPostBootControls(input: {
     audioJoin: boolean;
     screenShare: boolean;
   };
+  canStartScreenShare: boolean;
   shareMockEnabled: boolean;
   elements: RuntimeStartupElements;
   setStatus(message: string): void;
   setAudioStateDisabled(): void;
 }): void {
   input.setStatus(`Joined as ${input.displayName}`);
-  input.elements.startShareButton.disabled = !input.runtimeFlags.screenShare && !input.shareMockEnabled;
+  input.elements.startShareButton.disabled = !input.canStartScreenShare || (!input.runtimeFlags.screenShare && !input.shareMockEnabled);
   input.elements.joinAudioButton.disabled = !input.runtimeFlags.audioJoin;
   if (!input.runtimeFlags.audioJoin) {
     input.elements.muteButton.disabled = true;

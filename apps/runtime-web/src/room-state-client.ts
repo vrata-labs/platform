@@ -1,3 +1,5 @@
+import type { RoomPermission, RoomRole } from "@noah/shared-types";
+
 import type { PresenceState } from "./index.js";
 import type { AvatarReliableState, CompactPoseFrame } from "./avatar/avatar-types.js";
 import { parseCompactPoseFrame } from "./avatar/avatar-pose-frame.js";
@@ -25,15 +27,20 @@ export interface RoomStateClientHandlers {
   onAvatarReliableState?: (state: AvatarReliableState) => void;
   onAvatarPoseFrame?: (participantId: string, frame: CompactPoseFrame) => void;
   onSeatClaimResult?: (result: { seatId: string; accepted: boolean; occupantId: string | null; previousSeatId: string | null }) => void;
+  onAccessDenied?: (result: { accepted: boolean; permission: RoomPermission; role: RoomRole }) => void;
+  onSurfaceCommandResult?: (result: { accepted: boolean; permission: RoomPermission; role: RoomRole }) => void;
   onError: (error: unknown) => void;
   onOpen?: () => void;
   onClose?: () => void;
 }
 
-export function createRoomStateUrl(baseHost: string, roomId: string, participantId: string): string {
+export function createRoomStateUrl(baseHost: string, roomId: string, participantId: string, accessToken?: string): string {
   const url = new URL(baseHost);
   url.searchParams.set("roomId", roomId);
   url.searchParams.set("participantId", participantId);
+  if (accessToken) {
+    url.searchParams.set("accessToken", accessToken);
+  }
   return url.toString();
 }
 
@@ -41,9 +48,10 @@ export function connectRoomState(
   baseHost: string,
   roomId: string,
   participantId: string,
-  handlers: RoomStateClientHandlers
+  handlers: RoomStateClientHandlers,
+  accessToken?: string
 ): RoomStateClient {
-  const socket = new WebSocket(createRoomStateUrl(baseHost, roomId, participantId));
+  const socket = new WebSocket(createRoomStateUrl(baseHost, roomId, participantId, accessToken));
 
   socket.addEventListener("open", () => {
     handlers.onOpen?.();
@@ -62,6 +70,11 @@ export function connectRoomState(
           accepted?: unknown;
           occupantId?: unknown;
           previousSeatId?: unknown;
+        };
+        result?: {
+          accepted?: unknown;
+          permission?: unknown;
+          role?: unknown;
         };
       };
       if (payload.type === "room_state" && payload.room) {
@@ -96,6 +109,22 @@ export function connectRoomState(
           occupantId: typeof payload.seatClaimResult.occupantId === "string" ? payload.seatClaimResult.occupantId : null,
           previousSeatId: typeof payload.seatClaimResult.previousSeatId === "string" ? payload.seatClaimResult.previousSeatId : null
         });
+        return;
+      }
+      if ((payload.type === "access_denied" || payload.type === "surface_command_result") && payload.result) {
+        if (typeof payload.result.accepted !== "boolean" || typeof payload.result.permission !== "string" || typeof payload.result.role !== "string") {
+          throw new Error("invalid_access_result");
+        }
+        const result = {
+          accepted: payload.result.accepted,
+          permission: payload.result.permission as RoomPermission,
+          role: payload.result.role as RoomRole
+        };
+        if (payload.type === "access_denied") {
+          handlers.onAccessDenied?.(result);
+        } else {
+          handlers.onSurfaceCommandResult?.(result);
+        }
       }
     } catch (error) {
       handlers.onError(error);
@@ -148,4 +177,11 @@ export function sendSeatRelease(client: RoomStateClient, seatId?: string): void 
     return;
   }
   client.socket.send(JSON.stringify({ type: "seat_release", seatId }));
+}
+
+export function sendSurfaceCreateObjectCommand(client: RoomStateClient): void {
+  if (!canSend(client.socket)) {
+    return;
+  }
+  client.socket.send(JSON.stringify({ type: "surface_create_object" }));
 }

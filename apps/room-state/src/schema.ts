@@ -1,3 +1,5 @@
+import type { RoomPermission, RoomRole } from "@noah/shared-types";
+
 export interface TransformState {
   x: number;
   y: number;
@@ -12,6 +14,8 @@ export type PresenceMode = "desktop" | "mobile" | "vr";
 export interface PresenceState {
   participantId: string;
   displayName: string;
+  role: RoomRole;
+  permissions: RoomPermission[];
   mode: PresenceMode;
   rootTransform: TransformState;
   bodyTransform?: TransformState;

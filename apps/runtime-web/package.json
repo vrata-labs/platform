@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "type": "module",
   "dependencies": {
+    "@noah/shared-types": "workspace:*",
     "livekit-client": "^2.15.6",
     "three": "^0.176.0"
   },

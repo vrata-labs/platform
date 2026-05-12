@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   applySeatClaim,
   applySeatRelease,
+  applyPrivilegedRoomCommand,
   applyAvatarReliableState,
   connectParticipant,
   createRoomStateServer,
@@ -113,6 +114,20 @@ test("applySeatClaim uses first claim wins and keeps previous occupant", () => {
   assert.equal(second.accepted, false);
   assert.equal(second.occupantId, "p1");
   assert.equal(server.rooms.get("demo-room")?.seatOccupancy["seat-a"], "p1");
+});
+
+test("applyPrivilegedRoomCommand rejects guest and accepts host permissions", () => {
+  const server = createRoomStateServer();
+  connectParticipant(server, "demo-room", "guest", createSocket() as never);
+  connectParticipant(server, "demo-room", "host", createSocket() as never, { role: "host" });
+
+  const guestResult = applyPrivilegedRoomCommand(server, "demo-room", "guest", "surface.create-object");
+  const hostResult = applyPrivilegedRoomCommand(server, "demo-room", "host", "surface.create-object");
+
+  assert.equal(guestResult.accepted, false);
+  assert.equal(guestResult.role, "guest");
+  assert.equal(hostResult.accepted, true);
+  assert.equal(hostResult.role, "host");
 });
 
 test("applySeatClaim switches seats for same participant atomically", () => {

@@ -23,6 +23,9 @@ importers:
 
   apps/api:
     dependencies:
+      '@noah/shared-types':
+        specifier: workspace:*
+        version: link:../../packages/shared-types
       livekit-server-sdk:
         specifier: ^2.13.1
         version: 2.15.0
@@ -42,6 +45,9 @@ importers:
 
   apps/room-state:
     dependencies:
+      '@noah/shared-types':
+        specifier: workspace:*
+        version: link:../../packages/shared-types
       ws:
         specifier: ^8.18.3
         version: 8.20.0
@@ -52,6 +58,9 @@ importers:
 
   apps/runtime-web:
     dependencies:
+      '@noah/shared-types':
+        specifier: workspace:*
+        version: link:../../packages/shared-types
       livekit-client:
         specifier: ^2.15.6
         version: 2.18.0(@types/dom-mediacapture-record@1.0.22)

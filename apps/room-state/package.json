@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "type": "module",
   "dependencies": {
+    "@noah/shared-types": "workspace:*",
     "ws": "^8.18.3"
   },
   "devDependencies": {

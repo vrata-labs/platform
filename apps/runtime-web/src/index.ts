@@ -1,3 +1,5 @@
+import { createRoomAccessDebugState, type RoomAccessDebugState, type RoomPermission, type RoomRole } from "@noah/shared-types";
+
 interface RoomManifest {
   roomId: string;
   template: string;
@@ -37,7 +39,16 @@ interface RoomManifest {
   access: {
     joinMode: "link";
     guestAllowed: boolean;
+    roleQueryAllowed: boolean;
   };
+}
+
+interface StateTokenResponse {
+  token: string;
+  expiresInSeconds: number;
+  access: RoomAccessDebugState;
+  role: RoomRole;
+  permissions: RoomPermission[];
 }
 
 interface MediaTokenResponse {
@@ -67,6 +78,8 @@ interface RuntimeHealthResponse {
 export interface PresenceState {
   participantId: string;
   displayName: string;
+  role?: RoomRole;
+  permissions?: RoomPermission[];
   mode: "desktop" | "mobile" | "vr";
   rootTransform: {
     x: number;
@@ -151,6 +164,27 @@ export async function fetchRoomManifest(apiBaseUrl: string, roomId: string): Pro
   return (await response.json()) as RoomManifest;
 }
 
+export async function fetchStateToken(apiBaseUrl: string, roomId: string, accessRequest: RuntimeAccessRequest): Promise<StateTokenResponse> {
+  const response = await fetch(new URL("/api/tokens/state", apiBaseUrl), {
+    method: "POST",
+    headers: {
+      "content-type": "application/json"
+    },
+    body: JSON.stringify({
+      roomId,
+      participantId: accessRequest.participantId,
+      displayName: accessRequest.displayName,
+      requestedRole: accessRequest.requestedRole
+    })
+  });
+
+  if (!response.ok) {
+    throw new Error(`failed_to_load_state_token:${response.status}`);
+  }
+
+  return (await response.json()) as StateTokenResponse;
+}
+
 export async function fetchRuntimeSpaces(apiBaseUrl: string, roomId: string, search = ""): Promise<RuntimeSpaceOption[]> {
   const response = await fetch(new URL(`/api/rooms/${roomId}/spaces${search}`, apiBaseUrl), {
     cache: "no-store"
@@ -185,6 +219,11 @@ export interface RuntimeBootResult {
   spatialAudioEnabled: boolean;
   screenShareEnabled: boolean;
   guestAllowed: boolean;
+  access: RoomAccessDebugState & {
+    token: string;
+    expiresInSeconds: number;
+    roleQueryAllowed: boolean;
+  };
   avatarConfig: RoomManifest["avatars"];
   envFlags: {
     enterVr: boolean;
@@ -201,6 +240,12 @@ export interface RuntimeBootResult {
     avatarCustomizationEnabled: boolean;
     avatarFallbackCapsulesEnabled: boolean;
   };
+}
+
+export interface RuntimeAccessRequest {
+  participantId: string;
+  displayName: string;
+  requestedRole?: string | null;
 }
 
 export interface VoiceSessionPlan {
@@ -224,11 +269,14 @@ export async function fetchRuntimeHealth(apiBaseUrl: string): Promise<RuntimeHea
 export async function bootRuntime(
   apiBaseUrl: string,
   roomId: string,
-  userAgent: string
+  userAgent: string,
+  accessRequest?: RuntimeAccessRequest
 ): Promise<RuntimeBootResult> {
   const manifest = await fetchRoomManifest(apiBaseUrl, roomId);
   const health = await fetchRuntimeHealth(apiBaseUrl);
   const healthFeatures = health.features ?? {};
+  const accessResponse = accessRequest ? await fetchStateToken(apiBaseUrl, roomId, accessRequest) : null;
+  const accessDebug = accessResponse?.access ?? createRoomAccessDebugState("guest");
 
   return {
     roomId: manifest.roomId,
@@ -242,6 +290,12 @@ export async function bootRuntime(
     spatialAudioEnabled: manifest.features.spatialAudio,
     screenShareEnabled: manifest.features.screenShare,
     guestAllowed: manifest.access.guestAllowed,
+    access: {
+      ...accessDebug,
+      token: accessResponse?.token ?? "",
+      expiresInSeconds: accessResponse?.expiresInSeconds ?? 0,
+      roleQueryAllowed: manifest.access.roleQueryAllowed ?? false
+    },
     avatarConfig: manifest.avatars,
     envFlags: {
       enterVr: healthFeatures.xrEnabled ?? true,

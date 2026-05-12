@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
+import { createRoomAccessDebugState } from "./index.js";
 import type {
   AvatarCatalogV1,
   AvatarRecipeCatalogV1,
@@ -14,6 +15,12 @@ test("shared role and mode types compile in tests", () => {
   const role: UserRole = "guest";
   const mode: ClientMode = "desktop";
   assert.equal(`${role}:${mode}`, "guest:desktop");
+});
+
+test("room access policy grants screen share to host only", () => {
+  assert.equal(createRoomAccessDebugState("guest").canStartScreenShare, false);
+  assert.equal(createRoomAccessDebugState("host").canStartScreenShare, true);
+  assert.equal(createRoomAccessDebugState("admin").permissions.includes("room.admin"), true);
 });
 
 test("avatar shared contracts compile in tests", () => {

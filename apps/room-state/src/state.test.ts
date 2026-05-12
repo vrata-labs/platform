@@ -9,6 +9,23 @@ test("joinRoom adds participant once", () => {
   assert.equal(duplicated.participants.length, 1);
 });
 
+test("joinRoom assigns access role and permissions", () => {
+  const room = joinRoom(createRoomState("demo"), "p1", { role: "host" });
+  assert.equal(room.participants[0]?.role, "host");
+  assert.equal(room.participants[0]?.permissions.includes("screen-share.start"), true);
+});
+
+test("updateParticipantState does not allow client-side role escalation", () => {
+  const joined = joinRoom(createRoomState("demo"), "p1");
+  const updated = updateParticipantState(joined, {
+    participantId: "p1",
+    role: "host",
+    permissions: ["screen-share.start"]
+  });
+  assert.equal(updated.participants[0]?.role, "guest");
+  assert.equal(updated.participants[0]?.permissions.includes("screen-share.start"), false);
+});
+
 test("leaveRoom removes participant", () => {
   const room = leaveRoom(joinRoom(createRoomState("demo"), "p1"), "p1");
   assert.equal(room.participants.length, 0);

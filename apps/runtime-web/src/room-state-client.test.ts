@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { connectRoomState, sendAvatarPoseFrame, sendAvatarReliableState, sendParticipantUpdate, sendSeatClaim, sendSeatRelease, type RoomStateClient } from "./room-state-client.js";
+import { connectRoomState, createRoomStateUrl, sendAvatarPoseFrame, sendAvatarReliableState, sendParticipantUpdate, sendSeatClaim, sendSeatRelease, sendSurfaceCreateObjectCommand, type RoomStateClient } from "./room-state-client.js";
 
 function createClient(sent: string[] = [], readyState = 1): RoomStateClient {
   return {
@@ -96,6 +96,17 @@ test("seat claim and release send envelopes", () => {
   assert.equal(JSON.parse(sent[1]!).type, "seat_release");
 });
 
+test("room-state url includes access token when provided", () => {
+  const url = createRoomStateUrl("ws://example.test/state", "room-1", "p-1", "token.123");
+  assert.equal(url, "ws://example.test/state?roomId=room-1&participantId=p-1&accessToken=token.123");
+});
+
+test("surface create command sends privileged envelope", () => {
+  const sent: string[] = [];
+  sendSurfaceCreateObjectCommand(createClient(sent));
+  assert.equal(JSON.parse(sent[0]!).type, "surface_create_object");
+});
+
 test("connectRoomState routes inbound avatar reliable state, pose frame and seat claim result", async () => {
   const listeners = new Map<string, Array<(event: { data?: string }) => void>>();
   class FakeWebSocket {
@@ -128,6 +139,7 @@ test("connectRoomState routes inbound avatar reliable state, pose frame and seat
       let reliableAvatarId: string | null = null;
       let poseSeq: number | null = null;
       let acceptedSeatId: string | null = null;
+      let deniedPermission: string | null = null;
       connectRoomState("ws://example.test/room-state", "room-1", "p-1", {
         onRoomState() {},
         onAvatarReliableState(state) {
@@ -140,6 +152,9 @@ test("connectRoomState routes inbound avatar reliable state, pose frame and seat
           if (result.accepted) {
             acceptedSeatId = result.seatId;
           }
+        },
+        onAccessDenied(result) {
+          deniedPermission = result.permission;
         },
         onError(error) {
           throw error;
@@ -189,10 +204,21 @@ test("connectRoomState routes inbound avatar reliable state, pose frame and seat
         }
       })
     });
+    socket.emit("message", {
+      data: JSON.stringify({
+        type: "access_denied",
+        result: {
+          accepted: false,
+          permission: "surface.create-object",
+          role: "guest"
+        }
+      })
+    });
 
     assert.equal(reliableAvatarId, "preset-02");
     assert.equal(poseSeq, 9);
     assert.equal(acceptedSeatId, "seat-a");
+    assert.equal(deniedPermission, "surface.create-object");
   } finally {
     globalThis.WebSocket = originalWebSocket;
   }
