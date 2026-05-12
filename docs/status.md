@@ -2,7 +2,7 @@
 
 ## Current phase
 
-- Active phase: `M1.2 — протокол ввода на медийную поверхность`
+- Active phase: `M1.3 — ядро медийных поверхностей и медийных объектов`
 - Overall state: `in_progress`
 
 ## Phase checklist
@@ -43,7 +43,9 @@
 - M1.1 access roles foundation is complete as of 2026-05-12. Deployed commit: `065b6a92a8139fa4f4b3208e8e81b60a4f8ad26a`.
 - M1.1 verification: local full suite passed, CI `25726722155` passed, Docker Publish `25726722173` passed, Staging Deploy `25726820329` passed, and `pnpm test:e2e:staging` passed with 33 tests.
 - Manual staging QA in `demo-room` confirmed the admin/host role path works normally.
-- Next focus: M1.2 unified surface input protocol for mouse, touch, keyboard, and XR ray input.
+- M1.2 unified surface input protocol is complete as of 2026-05-12. Deployed commit: `c0bda45f541fcba8a89d7830ffef4c38bc3e4605`.
+- M1.2 verification: local runtime/shared-types/unit/e2e checks passed, CI `25736402601` passed, Docker Publish `25736402599` passed, Staging Deploy `25736527346` passed, `pnpm test:e2e:staging` passed with 33 tests, and staging `surface-input-protocol` passed with 4 tests.
+- Next focus: M1.3 media surface kernel and media object registry.
 
 - M0.5 focuses on acceptance of the existing basic multi-user presence path: diagnostics, pose orientation, remote visibility, join/leave cleanup, voice state, spatial-audio diagnostics, and XR-mode simulation.
 - M0.5 explicitly excludes humanoid avatars, new room templates, and control-plane expansion.
