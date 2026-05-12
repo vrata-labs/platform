@@ -8,6 +8,8 @@ import type {
   AvatarReliableState,
   ClientMode,
   CompactPoseFrame,
+  SurfaceInputEvent,
+  SurfaceInputDebugState,
   UserRole
 } from "./index.js";
 
@@ -21,6 +23,34 @@ test("room access policy grants screen share to host only", () => {
   assert.equal(createRoomAccessDebugState("guest").canStartScreenShare, false);
   assert.equal(createRoomAccessDebugState("host").canStartScreenShare, true);
   assert.equal(createRoomAccessDebugState("admin").permissions.includes("room.admin"), true);
+});
+
+test("surface input shared contracts compile in tests", () => {
+  const event: SurfaceInputEvent = {
+    eventId: "evt-1",
+    roomId: "room-1",
+    surfaceId: "debug-main",
+    participantId: "p-1",
+    source: "mouse",
+    kind: "click",
+    uv: { u: 0.5, v: 0.5 },
+    pixel: { x: 960, y: 540 },
+    clientTimeMs: 42,
+    seq: 1
+  };
+  const state: SurfaceInputDebugState = {
+    enabled: true,
+    debugSurfaceId: event.surfaceId,
+    focusedSurfaceId: event.surfaceId,
+    lastHit: null,
+    lastEvent: event,
+    blockedReason: null,
+    acceptedEventCount: 1,
+    seq: event.seq
+  };
+
+  assert.equal(state.lastEvent?.source, "mouse");
+  assert.equal(state.lastEvent?.uv?.v, 0.5);
 });
 
 test("avatar shared contracts compile in tests", () => {

@@ -1,7 +1,13 @@
 import * as THREE from "three";
 import { VRButton } from "three/examples/jsm/webxr/VRButton.js";
 import { Room, RoomEvent, Track } from "livekit-client";
-import { createRoomAccessDebugState } from "@noah/shared-types";
+import {
+  createRoomAccessDebugState,
+  hasRoomPermission,
+  type SurfaceInputButton,
+  type SurfaceInputKind,
+  type SurfaceInputSource
+} from "@noah/shared-types";
 
 import { appendBrandingSuffix, applyRoomShellBootState } from "./boot-session.js";
 import { bootRuntime, fetchRuntimeSpaces, listPresence, planVoiceSession, removePresence, resolveCurrentSpace, upsertPresence, type PresenceState, type RuntimeSpaceOption } from "./index.js";
@@ -36,6 +42,16 @@ import type { SceneBundleSeatAnchor } from "./scene-bundle.js";
 import { createLocalPoseController, type Vector3Like } from "./local/local-pose.js";
 import { resolveDesktopTouchInputIntents, resolveTouchControlZone, resolveTouchDragMoveVector, resolveXrConfirmInteractionIntent, resolveXrInputIntents, type TouchControlZone } from "./input/input-intents.js";
 import type { RuntimeFrameContext } from "./input/runtime-frame-context.js";
+import {
+  applySurfaceInputResolution,
+  createSurfaceInputDebugState,
+  createSyntheticSurfaceHit,
+  recordSurfaceInputHit,
+  resolveSurfaceHitFromRay,
+  resolveSurfaceInputEvent,
+  tryFocusSurface,
+  type ResolvedSurfaceHit
+} from "./input/surface-input.js";
 import { executeFrameLocomotionCommands, type FrameLocomotionCommand } from "./locomotion/frame-command-bridge.js";
 import { executeFrameLocomotionPipeline, type FrameLocomotionPipelineHandlers } from "./locomotion/frame-locomotion.js";
 import { createInteractionCommandPlanner } from "./locomotion/interaction-command-planner.js";
@@ -52,7 +68,7 @@ import {
   planSeatAnchorReconciliation
 } from "./seating/seat-anchor-reconcile.js";
 import { planSeatReclaimOnReconnect, shouldRetrySeatReclaim } from "./seating/seat-reclaim.js";
-import { updateInteractionRayState } from "./interaction/interaction-frame.js";
+import { resolveRuntimeInteractionRay, updateInteractionRayState } from "./interaction/interaction-frame.js";
 import { clearInteractionRayView, createInteractionRayView } from "./interaction/interaction-ray-view.js";
 import { createInteractionTargetPerformer } from "./interaction/interaction-perform.js";
 import { createSeatMarkerViewController } from "./interaction/seat-marker-view.js";
@@ -288,6 +304,11 @@ const displaySurface = new THREE.Mesh(
 displaySurface.position.set(0, 2.2, -6.6);
 scene.add(displaySurface);
 
+const DEBUG_SURFACE_ID = "debug-main";
+const DEBUG_SURFACE_WIDTH_PX = 1920;
+const DEBUG_SURFACE_HEIGHT_PX = 1080;
+displaySurface.userData.surfaceId = DEBUG_SURFACE_ID;
+
 const fallbackEnvironment: THREE.Object3D[] = [floor, grid, roomBox, displaySurface];
 
 const bodyGeometry = new THREE.CapsuleGeometry(0.24, 0.8, 6, 12);
@@ -367,12 +388,14 @@ let sceneAnchorsReady = true;
 let roomSeatOccupancy: Record<string, string> = {};
 const pointerNdc = new THREE.Vector2(0, 0);
 const interactionRaycaster = new THREE.Raycaster();
+const surfaceInputRaycaster = new THREE.Raycaster();
 const cameraWorldPosition = new THREE.Vector3();
 const forcedInteractionDirection = new THREE.Vector3();
 const avatarOutboundPublisher = createAvatarOutboundPublisher();
 let lastAvatarMove = { x: 0, z: 0 };
 let lastAvatarTurnRate = 0;
 let currentBotMove = { x: 0, z: 0 };
+let surfaceInputSeq = 0;
 let lastAvatarXrInputProfile: string | null = null;
 let lastAvatarPoseSentAtMs = 0;
 let preferredMicDeviceId = localStorage.getItem("noah.audioinput") ?? "default";
@@ -816,6 +839,7 @@ function getInteractionFrameInput(frameContext: RuntimeFrameContext) {
 }
 
 function confirmInteractionTarget(frameContext: RuntimeFrameContext): void {
+  commitDebugSurfaceInputFromFrameRay(frameContext, "pointer-down");
   const target = updateInteractionRayState(getInteractionFrameInput(frameContext));
   interactionTargetPerformer.performTarget(target);
   forcedTestInteractionSeatId = null;
@@ -852,6 +876,133 @@ function supportsAudioOutputSelection(): boolean {
 
 function canUseScreenShareControl(): boolean {
   return debugState.access.canStartScreenShare && (shareMockEnabled || (runtimeFlags.screenShare && browserMediaCapabilities.screenShare.supported));
+}
+
+function surfaceInputSourceFromPointer(event: PointerEvent): SurfaceInputSource {
+  return event.pointerType === "touch" ? "touch" : "mouse";
+}
+
+function surfaceInputButtonFromPointer(button: number): SurfaceInputButton | undefined {
+  if (button === 0) {
+    return "primary";
+  }
+  if (button === 1) {
+    return "middle";
+  }
+  if (button === 2) {
+    return "secondary";
+  }
+  return undefined;
+}
+
+function resolveDebugSurfaceHit(ray: THREE.Ray, source: SurfaceInputSource): ResolvedSurfaceHit | null {
+  return resolveSurfaceHitFromRay({
+    ray,
+    raycaster: surfaceInputRaycaster,
+    source,
+    surfaces: [{
+      surfaceId: DEBUG_SURFACE_ID,
+      object: displaySurface,
+      widthPx: DEBUG_SURFACE_WIDTH_PX,
+      heightPx: DEBUG_SURFACE_HEIGHT_PX,
+      inputEnabled: debugState.surfaceInput.enabled && displaySurface.visible
+    }]
+  });
+}
+
+function resolveDebugSurfaceHitFromPointer(clientX: number, clientY: number, source: SurfaceInputSource): ResolvedSurfaceHit | null {
+  updatePointerNdcFromClientPosition(clientX, clientY);
+  surfaceInputRaycaster.setFromCamera(pointerNdc, camera);
+  return resolveDebugSurfaceHit(surfaceInputRaycaster.ray.clone(), source);
+}
+
+function commitDebugSurfaceInput(input: {
+  hit: ResolvedSurfaceHit | null;
+  source: SurfaceInputSource;
+  kind: SurfaceInputKind;
+  clientTimeMs: number;
+  button?: SurfaceInputButton;
+  pressure?: number;
+  key?: string;
+  text?: string;
+}): boolean {
+  recordSurfaceInputHit(debugState.surfaceInput, input.hit);
+  surfaceInputSeq += 1;
+  const resolution = resolveSurfaceInputEvent({
+    roomId,
+    participantId,
+    permissions: debugState.access.permissions,
+    hit: input.hit,
+    kind: input.kind,
+    source: input.source,
+    clientTimeMs: input.clientTimeMs,
+    seq: surfaceInputSeq,
+    focusedSurfaceId: debugState.surfaceInput.focusedSurfaceId,
+    button: input.button,
+    pressure: input.pressure,
+    key: input.key,
+    text: input.text
+  });
+  applySurfaceInputResolution(debugState.surfaceInput, resolution);
+  if (resolution.accepted && input.kind === "click" && hasRoomPermission(debugState.access.permissions, "surface.select")) {
+    tryFocusSurface({ state: debugState.surfaceInput, permissions: debugState.access.permissions, hit: input.hit });
+  }
+  return resolution.accepted;
+}
+
+function commitDebugSurfaceInputFromPointer(event: PointerEvent, kind: SurfaceInputKind): boolean {
+  const source = surfaceInputSourceFromPointer(event);
+  const hit = resolveDebugSurfaceHitFromPointer(event.clientX, event.clientY, source);
+  return commitDebugSurfaceInput({
+    hit,
+    source,
+    kind,
+    clientTimeMs: Date.now(),
+    button: surfaceInputButtonFromPointer(event.button),
+    pressure: event.pressure
+  });
+}
+
+function commitDebugSurfaceInputFromFocusedKeyboard(kind: Extract<SurfaceInputKind, "key-down" | "key-up">, event: KeyboardEvent): boolean {
+  if (debugState.surfaceInput.focusedSurfaceId !== DEBUG_SURFACE_ID) {
+    return false;
+  }
+  const uv = debugState.surfaceInput.lastHit?.uv ?? { u: 0.5, v: 0.5 };
+  const hit = createSyntheticSurfaceHit({
+    surfaceId: DEBUG_SURFACE_ID,
+    source: "keyboard",
+    uv,
+    widthPx: DEBUG_SURFACE_WIDTH_PX,
+    heightPx: DEBUG_SURFACE_HEIGHT_PX,
+    inputEnabled: debugState.surfaceInput.enabled && displaySurface.visible
+  });
+  return commitDebugSurfaceInput({
+    hit,
+    source: "keyboard",
+    kind,
+    clientTimeMs: Date.now(),
+    key: event.key,
+    text: event.key.length === 1 ? event.key : undefined
+  });
+}
+
+function commitDebugSurfaceInputFromFrameRay(frameContext: RuntimeFrameContext, kind: SurfaceInputKind): boolean {
+  const resolvedRay = resolveRuntimeInteractionRay(getInteractionFrameInput(frameContext));
+  if (!resolvedRay) {
+    return false;
+  }
+  const source: SurfaceInputSource = frameContext.source === "xr" ? "xr-controller" : "mouse";
+  const hit = resolveDebugSurfaceHit(resolvedRay.ray, source);
+  if (!hit) {
+    return false;
+  }
+  return commitDebugSurfaceInput({
+    hit,
+    source,
+    kind,
+    clientTimeMs: frameContext.nowMs,
+    button: "primary"
+  });
 }
 
 function formatDeviceLabel(device: MediaDeviceInfo, fallbackLabel: string, index: number): string {
@@ -1339,6 +1490,7 @@ const debugState = {
     direction: null as null | { x: number; y: number; z: number },
     source: null as null | { index: number; handedness: string | null }
   },
+  surfaceInput: createSurfaceInputDebugState(DEBUG_SURFACE_ID),
   remoteAvatarParticipants: [] as Array<{
     participantId: string;
     avatarId: string | null;
@@ -1372,6 +1524,16 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
     claimSeatById: (seatId: string) => boolean;
     requestSeatClaimById: (seatId: string) => boolean;
     sendPrivilegedSurfaceCreate: () => boolean;
+    sendDebugSurfaceInput: (input?: {
+      source?: SurfaceInputSource;
+      kind?: SurfaceInputKind;
+      u?: number;
+      v?: number;
+      key?: string;
+      text?: string;
+    }) => boolean;
+    setDebugSurfaceInputEnabled: (enabled: boolean) => boolean;
+    focusDebugSurface: () => boolean;
     teleportToFloor: (x: number, z: number) => boolean;
     forceXrInteractionAtSeat: (seatId: string) => boolean;
     setSyntheticXrState: (state: {
@@ -1437,6 +1599,41 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
     }
     sendSurfaceCreateObjectCommand(roomStateClient);
     return true;
+  },
+  sendDebugSurfaceInput: (input = {}) => {
+    const source = input.source ?? "mouse";
+    const hit = createSyntheticSurfaceHit({
+      surfaceId: DEBUG_SURFACE_ID,
+      source,
+      uv: { u: input.u ?? 0.5, v: input.v ?? 0.5 },
+      widthPx: DEBUG_SURFACE_WIDTH_PX,
+      heightPx: DEBUG_SURFACE_HEIGHT_PX,
+      inputEnabled: debugState.surfaceInput.enabled
+    });
+    return commitDebugSurfaceInput({
+      hit,
+      source,
+      kind: input.kind ?? "click",
+      key: input.key,
+      text: input.text,
+      clientTimeMs: Date.now()
+    });
+  },
+  setDebugSurfaceInputEnabled: (enabled) => {
+    debugState.surfaceInput.enabled = enabled;
+    return true;
+  },
+  focusDebugSurface: () => {
+    const hit = createSyntheticSurfaceHit({
+      surfaceId: DEBUG_SURFACE_ID,
+      source: "mouse",
+      uv: { u: 0.5, v: 0.5 },
+      widthPx: DEBUG_SURFACE_WIDTH_PX,
+      heightPx: DEBUG_SURFACE_HEIGHT_PX,
+      inputEnabled: debugState.surfaceInput.enabled
+    });
+    recordSurfaceInputHit(debugState.surfaceInput, hit);
+    return tryFocusSurface({ state: debugState.surfaceInput, permissions: debugState.access.permissions, hit }) === null;
   },
   forceXrInteractionAtSeat: (seatId: string) => {
     const seatAnchor = sceneSeatAnchorMap.get(seatId);
@@ -1847,6 +2044,7 @@ async function reportDiagnostics(note?: string): Promise<void> {
       audioState: debugState.audioState,
       media: debugState.media,
       access: debugState.access,
+      surfaceInput: debugState.surfaceInput,
       screenShareState: debugState.screenShareState,
       mediaCapabilities: debugState.mediaCapabilities,
       localPose: debugState.localPose,
@@ -2974,13 +3172,20 @@ stopShareButton.addEventListener("click", () => {
 
 window.addEventListener("keydown", (event) => {
   keyState[event.code] = true;
+  if (!(event.target instanceof HTMLInputElement) && !(event.target instanceof HTMLTextAreaElement) && !(event.target instanceof HTMLSelectElement)) {
+    commitDebugSurfaceInputFromFocusedKeyboard("key-down", event);
+  }
 });
 
 window.addEventListener("keyup", (event) => {
   keyState[event.code] = false;
+  if (!(event.target instanceof HTMLInputElement) && !(event.target instanceof HTMLTextAreaElement) && !(event.target instanceof HTMLSelectElement)) {
+    commitDebugSurfaceInputFromFocusedKeyboard("key-up", event);
+  }
 });
 
 renderer.domElement.addEventListener("pointerdown", (event) => {
+  commitDebugSurfaceInputFromPointer(event, "pointer-down");
   pointerActive = true;
   pointerMovedSinceDown = false;
   suppressPointerClick = false;
@@ -2990,6 +3195,7 @@ renderer.domElement.addEventListener("pointerdown", (event) => {
 });
 
 window.addEventListener("pointerup", (event) => {
+  commitDebugSurfaceInputFromPointer(event, "pointer-up");
   pointerActive = false;
   const pointerDistance = Math.hypot(event.clientX - pointerDownClientX, event.clientY - pointerDownClientY);
   const pointerHeldMs = performance.now() - pointerDownAtMs;
@@ -3006,6 +3212,13 @@ renderer.domElement.addEventListener("click", (event) => {
     return;
   }
   updatePointerNdcFromClientPosition(event.clientX, event.clientY);
+  commitDebugSurfaceInput({
+    hit: resolveDebugSurfaceHitFromPointer(event.clientX, event.clientY, "mouse"),
+    source: "mouse",
+    kind: "click",
+    clientTimeMs: Date.now(),
+    button: "primary"
+  });
   pointerHoveringScene = true;
   interactionRaycaster.setFromCamera(pointerNdc, camera);
   interactionTargetPerformer.performDirectRayTarget({

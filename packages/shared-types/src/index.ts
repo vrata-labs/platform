@@ -45,3 +45,4 @@ export * from "./avatar.js";
 export * from "./avatar-recipe.js";
 export * from "./avatar-transport.js";
 export * from "./access.js";
+export * from "./surface-input.js";
