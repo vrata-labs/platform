@@ -2,7 +2,7 @@
 
 ## Current phase
 
-- Active phase: `M1.3 — ядро медийных поверхностей и медийных объектов`
+- Active phase: `M1.4 — объект трансляции экрана ведущего`
 - Overall state: `in_progress`
 
 ## Phase checklist
@@ -45,7 +45,9 @@
 - Manual staging QA in `demo-room` confirmed the admin/host role path works normally.
 - M1.2 unified surface input protocol is complete as of 2026-05-12. Deployed commit: `c0bda45f541fcba8a89d7830ffef4c38bc3e4605`.
 - M1.2 verification: local runtime/shared-types/unit/e2e checks passed, CI `25736402601` passed, Docker Publish `25736402599` passed, Staging Deploy `25736527346` passed, `pnpm test:e2e:staging` passed with 33 tests, and staging `surface-input-protocol` passed with 4 tests.
-- Next focus: M1.3 media surface kernel and media object registry.
+- M1.3 media surface kernel is complete as of 2026-05-12. Deployed commit: `ce2aa7ef806996d7fc05594009709ecfa7008585`.
+- M1.3 verification: local lint/typecheck/build/test/e2e checks passed, CI `25747564664` passed, Docker Publish `25747564641` passed after transient YCR OAuth retry, Staging Deploy `25748083239` passed, `pnpm test:e2e:staging` passed with 33 tests, and staging `media-surface-kernel` passed with 3 tests.
+- Next focus: M1.4 screen share object on the media surface kernel.
 
 - M0.5 focuses on acceptance of the existing basic multi-user presence path: diagnostics, pose orientation, remote visibility, join/leave cleanup, voice state, spatial-audio diagnostics, and XR-mode simulation.
 - M0.5 explicitly excludes humanoid avatars, new room templates, and control-plane expansion.
