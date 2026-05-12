@@ -46,3 +46,4 @@ export * from "./avatar-recipe.js";
 export * from "./avatar-transport.js";
 export * from "./access.js";
 export * from "./surface-input.js";
+export * from "./media-objects.js";

@@ -1,11 +1,24 @@
 import { createServer } from "node:http";
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 
 import { WebSocketServer, type WebSocket } from "ws";
-import { getRoomPermissions, hasRoomPermission, isRoomRole, parseRoomRole, type RoomPermission, type RoomRole } from "@noah/shared-types";
+import { getRoomPermissions, hasRoomPermission, isRoomRole, parseRoomRole, type MediaObjectCommandResult, type RoomPermission, type RoomRole } from "@noah/shared-types";
 
 import type { PresenceState } from "./schema.js";
-import { claimSeat, createRoomState, joinRoom, leaveRoom, releaseSeat, serializeRoomState, updateParticipantState, type ParticipantAccessState, type RoomState } from "./state.js";
+import {
+  claimSeat,
+  createMediaObject,
+  createRoomState,
+  joinRoom,
+  leaveRoom,
+  patchMediaObjectState,
+  releaseSeat,
+  serializeRoomState,
+  stopMediaObject,
+  updateParticipantState,
+  type ParticipantAccessState,
+  type RoomState
+} from "./state.js";
 
 interface AvatarReliableStatePayload {
   participantId: string;
@@ -61,6 +74,8 @@ export interface PrivilegedRoomCommandResultPayload {
   permission: RoomPermission;
   role: RoomRole;
 }
+
+export type MediaObjectCommandResultPayload = MediaObjectCommandResult;
 
 function logEvent(event: Record<string, unknown>): void {
   process.stdout.write(`${JSON.stringify(event)}\n`);
@@ -363,6 +378,67 @@ export function applyPrivilegedRoomCommand(server: RoomStateServer, roomId: stri
   };
 }
 
+export function applyMediaObjectCreateCommand(server: RoomStateServer, roomId: string, participantId: string, input: {
+  commandId?: string;
+  surfaceId?: string;
+  objectType?: string;
+}): MediaObjectCommandResultPayload {
+  const room = ensureRoom(server, roomId);
+  const result = createMediaObject(room, participantId, {
+    commandId: input.commandId?.trim() || randomUUID(),
+    surfaceId: input.surfaceId?.trim() || "debug-main",
+    objectType: input.objectType?.trim() || "surface-test-card",
+    objectId: randomUUID(),
+    nowMs: Date.now()
+  });
+  server.rooms.set(roomId, result.room);
+  if (result.result.accepted) {
+    broadcastRoom(server, roomId);
+  }
+  return result.result;
+}
+
+export function applyMediaObjectStopCommand(server: RoomStateServer, roomId: string, participantId: string, input: {
+  commandId?: string;
+  surfaceId?: string;
+  objectId?: string;
+}): MediaObjectCommandResultPayload {
+  const room = ensureRoom(server, roomId);
+  const result = stopMediaObject(room, participantId, {
+    commandId: input.commandId?.trim() || randomUUID(),
+    surfaceId: input.surfaceId?.trim() || "debug-main",
+    objectId: input.objectId?.trim() || ""
+  });
+  server.rooms.set(roomId, result.room);
+  if (result.result.accepted) {
+    broadcastRoom(server, roomId);
+  }
+  return result.result;
+}
+
+export function applyMediaObjectPatchCommand(server: RoomStateServer, roomId: string, participantId: string, input: {
+  commandId?: string;
+  surfaceId?: string;
+  objectId?: string;
+  expectedRevision?: number;
+  patch?: unknown;
+}): MediaObjectCommandResultPayload {
+  const room = ensureRoom(server, roomId);
+  const result = patchMediaObjectState(room, participantId, {
+    commandId: input.commandId?.trim() || randomUUID(),
+    surfaceId: input.surfaceId?.trim() || "debug-main",
+    objectId: input.objectId?.trim() || "",
+    expectedRevision: typeof input.expectedRevision === "number" ? input.expectedRevision : -1,
+    patch: input.patch,
+    nowMs: Date.now()
+  });
+  server.rooms.set(roomId, result.room);
+  if (result.result.accepted) {
+    broadcastRoom(server, roomId);
+  }
+  return result.result;
+}
+
 export function applyAvatarReliableState(server: RoomStateServer, roomId: string, participantId: string, reliableState: unknown): void {
   if (!isAvatarReliableStatePayload(reliableState)) {
     throw new Error("invalid_avatar_reliable_state");
@@ -460,6 +536,13 @@ export function startRoomStateService(port = Number.parseInt(process.env.ROOM_ST
           reliableState?: unknown;
           poseFrame?: unknown;
           seatId?: unknown;
+          commandId?: unknown;
+          surfaceId?: unknown;
+          objectType?: unknown;
+          objectId?: unknown;
+          expectedRevision?: unknown;
+          patch?: unknown;
+          probeOnly?: unknown;
         };
         if (payload.type === "participant_update") {
           if (!payload.participant) {
@@ -492,11 +575,44 @@ export function startRoomStateService(port = Number.parseInt(process.env.ROOM_ST
           return;
         }
         if (payload.type === "surface_create_object") {
-          const result = applyPrivilegedRoomCommand(authority, roomId, participantId, "surface.create-object");
+          const result = payload.probeOnly !== false
+            ? applyPrivilegedRoomCommand(authority, roomId, participantId, "surface.create-object")
+            : applyMediaObjectCreateCommand(authority, roomId, participantId, {
+              commandId: typeof payload.commandId === "string" ? payload.commandId : undefined,
+              surfaceId: typeof payload.surfaceId === "string" ? payload.surfaceId : undefined,
+              objectType: typeof payload.objectType === "string" ? payload.objectType : undefined
+            });
           sendToSocket(socket, {
             type: result.accepted ? "surface_command_result" : "access_denied",
             result
           });
+          return;
+        }
+        if (payload.type === "surface_stop_object") {
+          const result = applyMediaObjectStopCommand(authority, roomId, participantId, {
+            commandId: typeof payload.commandId === "string" ? payload.commandId : undefined,
+            surfaceId: typeof payload.surfaceId === "string" ? payload.surfaceId : undefined,
+            objectId: typeof payload.objectId === "string" ? payload.objectId : undefined
+          });
+          sendToSocket(socket, {
+            type: result.accepted ? "surface_command_result" : "access_denied",
+            result
+          });
+          return;
+        }
+        if (payload.type === "surface_patch_object_state") {
+          const result = applyMediaObjectPatchCommand(authority, roomId, participantId, {
+            commandId: typeof payload.commandId === "string" ? payload.commandId : undefined,
+            surfaceId: typeof payload.surfaceId === "string" ? payload.surfaceId : undefined,
+            objectId: typeof payload.objectId === "string" ? payload.objectId : undefined,
+            expectedRevision: typeof payload.expectedRevision === "number" ? payload.expectedRevision : undefined,
+            patch: payload.patch
+          });
+          sendToSocket(socket, {
+            type: result.accepted ? "surface_command_result" : "access_denied",
+            result
+          });
+          return;
         }
       } catch (error) {
         logEvent({

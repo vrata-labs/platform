@@ -2,18 +2,34 @@ import * as THREE from "three";
 import { VRButton } from "three/examples/jsm/webxr/VRButton.js";
 import { Room, RoomEvent, Track } from "livekit-client";
 import {
+  SURFACE_TEST_CARD_TYPE,
   createRoomAccessDebugState,
   hasRoomPermission,
+  type MediaObjectInstance,
+  type RoomMediaObjectsState,
+  type SurfaceInputEvent,
   type SurfaceInputButton,
   type SurfaceInputKind,
-  type SurfaceInputSource
+  type SurfaceInputSource,
+  type SurfaceTestCardState
 } from "@noah/shared-types";
 
 import { appendBrandingSuffix, applyRoomShellBootState } from "./boot-session.js";
 import { bootRuntime, fetchRuntimeSpaces, listPresence, planVoiceSession, removePresence, resolveCurrentSpace, upsertPresence, type PresenceState, type RuntimeSpaceOption } from "./index.js";
 import { createMotionTrack, pushMotionSample, sampleMotion, type MotionTrack } from "./motion-state.js";
 import { mergePresenceSources } from "./presence-sources.js";
-import { connectRoomState, sendAvatarPoseFrame, sendAvatarReliableState, sendParticipantUpdate, sendSurfaceCreateObjectCommand, type RoomStateClient, type RoomStateSnapshot } from "./room-state-client.js";
+import {
+  connectRoomState,
+  sendAvatarPoseFrame,
+  sendAvatarReliableState,
+  sendParticipantUpdate,
+  sendSurfaceCreateObjectCommand,
+  sendSurfacePatchObjectStateCommand,
+  sendSurfaceStopObjectCommand,
+  type RoomStateClient,
+  type RoomStateSnapshot,
+  type SurfaceCommandResult
+} from "./room-state-client.js";
 import { classifyMediaError, classifyRoomStateError, classifyScreenShareError, createFaultError, getRuntimeIssue, shouldRetryConnection, type RuntimeIssue } from "./runtime-errors.js";
 import { canRetry, createReconnectPolicy, getReconnectDelayMs } from "./reconnect.js";
 import { applyRuntimeIssueState, clearRuntimeIssueState, createRuntimeUiState } from "./runtime-state.js";
@@ -386,6 +402,7 @@ let sceneSeatAnchors: SceneBundleSeatAnchor[] = [];
 let sceneSeatAnchorMap = createSeatAnchorReadModel([]).anchorMap;
 let sceneAnchorsReady = true;
 let roomSeatOccupancy: Record<string, string> = {};
+let roomMediaObjects: RoomMediaObjectsState | null = null;
 const pointerNdc = new THREE.Vector2(0, 0);
 const interactionRaycaster = new THREE.Raycaster();
 const surfaceInputRaycaster = new THREE.Raycaster();
@@ -690,9 +707,73 @@ function syncSeatStateFromOccupancy(): void {
   }
 }
 
+function activeMediaObjectForSurface(surfaceId: string): MediaObjectInstance | null {
+  const surface = roomMediaObjects?.surfaces[surfaceId];
+  const objectId = surface?.activeObjectId;
+  return objectId ? roomMediaObjects?.objects[objectId] ?? null : null;
+}
+
+function activeMediaObjectIdForSurface(surfaceId: string): string | undefined {
+  return activeMediaObjectForSurface(surfaceId)?.objectId;
+}
+
+function createSurfaceCommandId(kind: string): string {
+  return `${participantId}:${kind}:${Date.now()}:${Math.random().toString(16).slice(2)}`;
+}
+
+function syncMediaObjectsDebugState(): void {
+  const surfaces = roomMediaObjects ? Object.values(roomMediaObjects.surfaces) : [];
+  const objects = roomMediaObjects ? Object.values(roomMediaObjects.objects) : [];
+  debugState.mediaObjects.surfaces = surfaces.map((surface) => ({
+    surfaceId: surface.surfaceId,
+    activeObjectId: surface.activeObjectId,
+    activeObjectType: surface.activeObjectId ? roomMediaObjects?.objects[surface.activeObjectId]?.type ?? null : null,
+    inputEnabled: surface.inputEnabled,
+    lockedByParticipantId: surface.lockedByParticipantId,
+    visible: surface.visible
+  }));
+  debugState.mediaObjects.objects = objects.map((object) => ({
+    objectId: object.objectId,
+    type: object.type,
+    surfaceId: object.surfaceId,
+    ownerParticipantId: object.ownerParticipantId,
+    state: object.state,
+    revision: object.revision,
+    status: object.status
+  }));
+  const activeObject = activeMediaObjectForSurface(DEBUG_SURFACE_ID);
+  debugState.mediaObjects.activeTestCardClickCount = activeObject?.type === SURFACE_TEST_CARD_TYPE
+    ? ((activeObject.state as SurfaceTestCardState).clickCount ?? 0)
+    : null;
+  displaySurface.userData.objectId = activeObject?.objectId ?? null;
+}
+
+function routeSurfaceInputToMediaObject(event: SurfaceInputEvent): boolean {
+  if (event.kind !== "click" || !roomStateClient || !roomStateConnected) {
+    return false;
+  }
+  const object = event.objectId ? roomMediaObjects?.objects[event.objectId] : activeMediaObjectForSurface(event.surfaceId);
+  if (!object || object.type !== SURFACE_TEST_CARD_TYPE) {
+    return false;
+  }
+  sendSurfacePatchObjectStateCommand(roomStateClient, {
+    commandId: createSurfaceCommandId("patch"),
+    surfaceId: object.surfaceId,
+    objectId: object.objectId,
+    expectedRevision: object.revision,
+    patch: {
+      type: "increment-click-count",
+      inputEventId: event.eventId
+    }
+  });
+  return true;
+}
+
 function handleRoomSnapshot(snapshot: RoomStateSnapshot): void {
   roomSeatOccupancy = { ...(snapshot.seatOccupancy ?? {}) };
+  roomMediaObjects = snapshot.mediaObjects;
   syncSeatStateFromOccupancy();
+  syncMediaObjectsDebugState();
   latestRealtimeParticipants = snapshot.participants;
   applyMergedPresenceParticipants();
 }
@@ -902,6 +983,7 @@ function resolveDebugSurfaceHit(ray: THREE.Ray, source: SurfaceInputSource): Res
     source,
     surfaces: [{
       surfaceId: DEBUG_SURFACE_ID,
+      objectId: activeMediaObjectIdForSurface(DEBUG_SURFACE_ID),
       object: displaySurface,
       widthPx: DEBUG_SURFACE_WIDTH_PX,
       heightPx: DEBUG_SURFACE_HEIGHT_PX,
@@ -943,11 +1025,19 @@ function commitDebugSurfaceInput(input: {
     key: input.key,
     text: input.text
   });
-  applySurfaceInputResolution(debugState.surfaceInput, resolution);
-  if (resolution.accepted && input.kind === "click" && hasRoomPermission(debugState.access.permissions, "surface.select")) {
+  const resolvedEvent = resolution.accepted && !resolution.event.objectId
+    ? { ...resolution.event, objectId: activeMediaObjectIdForSurface(resolution.event.surfaceId) }
+    : resolution.accepted
+      ? resolution.event
+      : null;
+  applySurfaceInputResolution(debugState.surfaceInput, resolvedEvent ? { accepted: true, event: resolvedEvent } : resolution);
+  if (resolvedEvent) {
+    routeSurfaceInputToMediaObject(resolvedEvent);
+  }
+  if (resolvedEvent && input.kind === "click" && hasRoomPermission(debugState.access.permissions, "surface.select")) {
     tryFocusSurface({ state: debugState.surfaceInput, permissions: debugState.access.permissions, hit: input.hit });
   }
-  return resolution.accepted;
+  return Boolean(resolvedEvent);
 }
 
 function commitDebugSurfaceInputFromPointer(event: PointerEvent, kind: SurfaceInputKind): boolean {
@@ -970,6 +1060,7 @@ function commitDebugSurfaceInputFromFocusedKeyboard(kind: Extract<SurfaceInputKi
   const uv = debugState.surfaceInput.lastHit?.uv ?? { u: 0.5, v: 0.5 };
   const hit = createSyntheticSurfaceHit({
     surfaceId: DEBUG_SURFACE_ID,
+    objectId: activeMediaObjectIdForSurface(DEBUG_SURFACE_ID),
     source: "keyboard",
     uv,
     widthPx: DEBUG_SURFACE_WIDTH_PX,
@@ -1491,6 +1582,28 @@ const debugState = {
     source: null as null | { index: number; handedness: string | null }
   },
   surfaceInput: createSurfaceInputDebugState(DEBUG_SURFACE_ID),
+  mediaObjects: {
+    surfaces: [] as Array<{
+      surfaceId: string;
+      activeObjectId: string | null;
+      activeObjectType: string | null;
+      inputEnabled: boolean;
+      lockedByParticipantId: string | null;
+      visible: boolean;
+    }>,
+    objects: [] as Array<{
+      objectId: string;
+      type: string;
+      surfaceId: string;
+      ownerParticipantId: string;
+      state: unknown;
+      revision: number;
+      status: string;
+    }>,
+    lastCommand: null as SurfaceCommandResult | null,
+    blockedReason: null as string | null,
+    activeTestCardClickCount: null as number | null
+  },
   remoteAvatarParticipants: [] as Array<{
     participantId: string;
     avatarId: string | null;
@@ -1524,6 +1637,10 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
     claimSeatById: (seatId: string) => boolean;
     requestSeatClaimById: (seatId: string) => boolean;
     sendPrivilegedSurfaceCreate: () => boolean;
+    createSurfaceTestCard: () => boolean;
+    createUnknownSurfaceObject: () => boolean;
+    stopActiveSurfaceObject: () => boolean;
+    sendStaleSurfaceTestCardPatch: () => boolean;
     sendDebugSurfaceInput: (input?: {
       source?: SurfaceInputSource;
       kind?: SurfaceInputKind;
@@ -1600,10 +1717,64 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
     sendSurfaceCreateObjectCommand(roomStateClient);
     return true;
   },
+  createSurfaceTestCard: () => {
+    if (!roomStateClient || !roomStateConnected) {
+      return false;
+    }
+    sendSurfaceCreateObjectCommand(roomStateClient, {
+      commandId: createSurfaceCommandId("create"),
+      surfaceId: DEBUG_SURFACE_ID,
+      objectType: SURFACE_TEST_CARD_TYPE,
+      probeOnly: false
+    });
+    return true;
+  },
+  createUnknownSurfaceObject: () => {
+    if (!roomStateClient || !roomStateConnected) {
+      return false;
+    }
+    sendSurfaceCreateObjectCommand(roomStateClient, {
+      commandId: createSurfaceCommandId("unknown"),
+      surfaceId: DEBUG_SURFACE_ID,
+      objectType: "unknown-object",
+      probeOnly: false
+    });
+    return true;
+  },
+  stopActiveSurfaceObject: () => {
+    const object = activeMediaObjectForSurface(DEBUG_SURFACE_ID);
+    if (!object || !roomStateClient || !roomStateConnected) {
+      return false;
+    }
+    sendSurfaceStopObjectCommand(roomStateClient, {
+      commandId: createSurfaceCommandId("stop"),
+      surfaceId: DEBUG_SURFACE_ID,
+      objectId: object.objectId
+    });
+    return true;
+  },
+  sendStaleSurfaceTestCardPatch: () => {
+    const object = activeMediaObjectForSurface(DEBUG_SURFACE_ID);
+    if (!object || !roomStateClient || !roomStateConnected) {
+      return false;
+    }
+    sendSurfacePatchObjectStateCommand(roomStateClient, {
+      commandId: createSurfaceCommandId("stale-patch"),
+      surfaceId: DEBUG_SURFACE_ID,
+      objectId: object.objectId,
+      expectedRevision: object.revision + 1,
+      patch: {
+        type: "increment-click-count",
+        inputEventId: `${participantId}:stale:${Date.now()}`
+      }
+    });
+    return true;
+  },
   sendDebugSurfaceInput: (input = {}) => {
     const source = input.source ?? "mouse";
     const hit = createSyntheticSurfaceHit({
       surfaceId: DEBUG_SURFACE_ID,
+      objectId: activeMediaObjectIdForSurface(DEBUG_SURFACE_ID),
       source,
       uv: { u: input.u ?? 0.5, v: input.v ?? 0.5 },
       widthPx: DEBUG_SURFACE_WIDTH_PX,
@@ -1626,6 +1797,7 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
   focusDebugSurface: () => {
     const hit = createSyntheticSurfaceHit({
       surfaceId: DEBUG_SURFACE_ID,
+      objectId: activeMediaObjectIdForSurface(DEBUG_SURFACE_ID),
       source: "mouse",
       uv: { u: 0.5, v: 0.5 },
       widthPx: DEBUG_SURFACE_WIDTH_PX,
@@ -1908,11 +2080,15 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
     onAccessDenied: (result) => {
       debugState.access.lastDeniedPermission = result.permission;
       debugState.access.lastSurfaceCommandAccepted = false;
+      debugState.mediaObjects.lastCommand = result as SurfaceCommandResult;
+      debugState.mediaObjects.blockedReason = (result as SurfaceCommandResult).blockedReason ?? null;
       setStatus(`Access denied: ${result.permission}`);
     },
     onSurfaceCommandResult: (result) => {
       debugState.access.lastDeniedPermission = null;
       debugState.access.lastSurfaceCommandAccepted = result.accepted;
+      debugState.mediaObjects.lastCommand = result;
+      debugState.mediaObjects.blockedReason = result.blockedReason ?? null;
     },
     onError: (error: unknown) => {
       console.error(error);

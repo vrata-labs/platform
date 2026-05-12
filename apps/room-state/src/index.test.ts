@@ -2,10 +2,13 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  applyAvatarReliableState,
+  applyMediaObjectCreateCommand,
+  applyMediaObjectPatchCommand,
+  applyMediaObjectStopCommand,
+  applyPrivilegedRoomCommand,
   applySeatClaim,
   applySeatRelease,
-  applyPrivilegedRoomCommand,
-  applyAvatarReliableState,
   connectParticipant,
   createRoomStateServer,
   disconnectParticipant,
@@ -128,6 +131,41 @@ test("applyPrivilegedRoomCommand rejects guest and accepts host permissions", ()
   assert.equal(guestResult.role, "guest");
   assert.equal(hostResult.accepted, true);
   assert.equal(hostResult.role, "host");
+});
+
+test("media object commands mutate authoritative room state", () => {
+  const server = createRoomStateServer();
+  connectParticipant(server, "demo-room", "host", createSocket() as never, { role: "host" });
+  connectParticipant(server, "demo-room", "member", createSocket() as never, { role: "member" });
+
+  const created = applyMediaObjectCreateCommand(server, "demo-room", "host", {
+    commandId: "cmd-create",
+    surfaceId: "debug-main",
+    objectType: "surface-test-card"
+  });
+
+  assert.equal(created.accepted, true);
+  assert.equal(server.rooms.get("demo-room")?.mediaObjects.surfaces["debug-main"]?.activeObjectId, created.objectId);
+
+  const patched = applyMediaObjectPatchCommand(server, "demo-room", "member", {
+    commandId: "cmd-patch",
+    surfaceId: "debug-main",
+    objectId: created.objectId ?? "",
+    expectedRevision: 0,
+    patch: { type: "increment-click-count", inputEventId: "member:1" }
+  });
+
+  assert.equal(patched.accepted, true);
+  assert.equal(patched.revision, 1);
+
+  const stopped = applyMediaObjectStopCommand(server, "demo-room", "host", {
+    commandId: "cmd-stop",
+    surfaceId: "debug-main",
+    objectId: created.objectId ?? ""
+  });
+
+  assert.equal(stopped.accepted, true);
+  assert.equal(server.rooms.get("demo-room")?.mediaObjects.surfaces["debug-main"]?.activeObjectId, null);
 });
 
 test("applySeatClaim switches seats for same participant atomically", () => {

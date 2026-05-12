@@ -1,4 +1,4 @@
-import type { RoomPermission, RoomRole } from "@noah/shared-types";
+import { createDefaultRoomMediaObjectsState, type RoomMediaObjectsState, type RoomPermission, type RoomRole } from "@noah/shared-types";
 
 import type { PresenceState } from "./index.js";
 import type { AvatarReliableState, CompactPoseFrame } from "./avatar/avatar-types.js";
@@ -9,6 +9,7 @@ export interface RoomStateSnapshot {
   roomId: string;
   participants: PresenceState[];
   seatOccupancy: Record<string, string>;
+  mediaObjects: RoomMediaObjectsState;
 }
 
 export interface RoomStateClient {
@@ -28,10 +29,22 @@ export interface RoomStateClientHandlers {
   onAvatarPoseFrame?: (participantId: string, frame: CompactPoseFrame) => void;
   onSeatClaimResult?: (result: { seatId: string; accepted: boolean; occupantId: string | null; previousSeatId: string | null }) => void;
   onAccessDenied?: (result: { accepted: boolean; permission: RoomPermission; role: RoomRole }) => void;
-  onSurfaceCommandResult?: (result: { accepted: boolean; permission: RoomPermission; role: RoomRole }) => void;
+  onSurfaceCommandResult?: (result: SurfaceCommandResult) => void;
   onError: (error: unknown) => void;
   onOpen?: () => void;
   onClose?: () => void;
+}
+
+export interface SurfaceCommandResult {
+  accepted: boolean;
+  permission: RoomPermission;
+  role: RoomRole;
+  commandId?: string;
+  blockedReason?: string | null;
+  surfaceId?: string | null;
+  objectId?: string | null;
+  objectType?: string | null;
+  revision?: number | null;
 }
 
 export function createRoomStateUrl(baseHost: string, roomId: string, participantId: string, accessToken?: string): string {
@@ -75,13 +88,20 @@ export function connectRoomState(
           accepted?: unknown;
           permission?: unknown;
           role?: unknown;
+          commandId?: unknown;
+          blockedReason?: unknown;
+          surfaceId?: unknown;
+          objectId?: unknown;
+          objectType?: unknown;
+          revision?: unknown;
         };
       };
       if (payload.type === "room_state" && payload.room) {
         handlers.onRoomState({
           roomId: payload.room.roomId,
           participants: payload.room.participants,
-          seatOccupancy: payload.room.seatOccupancy ?? {}
+          seatOccupancy: payload.room.seatOccupancy ?? {},
+          mediaObjects: payload.room.mediaObjects ?? createDefaultRoomMediaObjectsState(payload.room.roomId)
         });
         return;
       }
@@ -118,7 +138,13 @@ export function connectRoomState(
         const result = {
           accepted: payload.result.accepted,
           permission: payload.result.permission as RoomPermission,
-          role: payload.result.role as RoomRole
+          role: payload.result.role as RoomRole,
+          commandId: typeof payload.result.commandId === "string" ? payload.result.commandId : undefined,
+          blockedReason: typeof payload.result.blockedReason === "string" ? payload.result.blockedReason : payload.result.blockedReason === null ? null : undefined,
+          surfaceId: typeof payload.result.surfaceId === "string" ? payload.result.surfaceId : payload.result.surfaceId === null ? null : undefined,
+          objectId: typeof payload.result.objectId === "string" ? payload.result.objectId : payload.result.objectId === null ? null : undefined,
+          objectType: typeof payload.result.objectType === "string" ? payload.result.objectType : payload.result.objectType === null ? null : undefined,
+          revision: typeof payload.result.revision === "number" ? payload.result.revision : payload.result.revision === null ? null : undefined
         };
         if (payload.type === "access_denied") {
           handlers.onAccessDenied?.(result);
@@ -179,9 +205,56 @@ export function sendSeatRelease(client: RoomStateClient, seatId?: string): void 
   client.socket.send(JSON.stringify({ type: "seat_release", seatId }));
 }
 
-export function sendSurfaceCreateObjectCommand(client: RoomStateClient): void {
+export function sendSurfaceCreateObjectCommand(client: RoomStateClient, input: {
+  commandId?: string;
+  surfaceId?: string;
+  objectType?: string;
+  probeOnly?: boolean;
+} = {}): void {
   if (!canSend(client.socket)) {
     return;
   }
-  client.socket.send(JSON.stringify({ type: "surface_create_object" }));
+  client.socket.send(JSON.stringify({
+    type: "surface_create_object",
+    commandId: input.commandId,
+    surfaceId: input.surfaceId,
+    objectType: input.objectType,
+    probeOnly: input.probeOnly ?? true
+  }));
+}
+
+export function sendSurfaceStopObjectCommand(client: RoomStateClient, input: {
+  commandId?: string;
+  surfaceId: string;
+  objectId: string;
+}): void {
+  if (!canSend(client.socket)) {
+    return;
+  }
+  client.socket.send(JSON.stringify({
+    type: "surface_stop_object",
+    commandId: input.commandId,
+    surfaceId: input.surfaceId,
+    objectId: input.objectId
+  }));
+}
+
+export function sendSurfacePatchObjectStateCommand(client: RoomStateClient, input: {
+  commandId?: string;
+  surfaceId: string;
+  objectId: string;
+  expectedRevision: number;
+  patch: unknown;
+}): void {
+  if (!canSend(client.socket)) {
+    return;
+  }
+  client.socket.send(JSON.stringify({
+    type: "surface_patch_object_state",
+    commandId: input.commandId,
+    surfaceId: input.surfaceId,
+    objectId: input.objectId,
+    expectedRevision: input.expectedRevision,
+    patch: input.patch
+  }));
 }

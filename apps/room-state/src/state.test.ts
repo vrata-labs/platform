@@ -1,7 +1,19 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { claimSeat, createParticipantState, createRoomState, joinRoom, leaveRoom, mergeParticipantState, releaseSeat, updateParticipantState } from "./state.js";
+import {
+  claimSeat,
+  createMediaObject,
+  createParticipantState,
+  createRoomState,
+  joinRoom,
+  leaveRoom,
+  mergeParticipantState,
+  patchMediaObjectState,
+  releaseSeat,
+  stopMediaObject,
+  updateParticipantState
+} from "./state.js";
 
 test("joinRoom adds participant once", () => {
   const room = joinRoom(createRoomState("demo"), "p1");
@@ -129,4 +141,114 @@ test("leaveRoom clears occupied seats for participant", () => {
   const left = leaveRoom(room, "p1");
   assert.equal(left.participants.length, 0);
   assert.equal(left.seatOccupancy["seat-a"], undefined);
+});
+
+test("createRoomState includes default media surface", () => {
+  const room = createRoomState("demo");
+  assert.equal(room.mediaObjects.surfaces["debug-main"]?.activeObjectId, null);
+  assert.equal(room.mediaObjects.surfaces["debug-main"]?.allowedObjectTypes.includes("surface-test-card"), true);
+});
+
+test("createMediaObject enforces host permissions and rejects unknown types", () => {
+  const guestRoom = joinRoom(createRoomState("demo"), "guest");
+  const guest = createMediaObject(guestRoom, "guest", {
+    commandId: "cmd-guest",
+    surfaceId: "debug-main",
+    objectType: "surface-test-card",
+    objectId: "obj-guest",
+    nowMs: 1
+  });
+  assert.equal(guest.result.accepted, false);
+  assert.equal(guest.result.blockedReason, "missing-permission");
+
+  const hostRoom = joinRoom(createRoomState("demo"), "host", { role: "host" });
+  const unknown = createMediaObject(hostRoom, "host", {
+    commandId: "cmd-unknown",
+    surfaceId: "debug-main",
+    objectType: "unknown-object",
+    objectId: "obj-unknown",
+    nowMs: 1
+  });
+  assert.equal(unknown.result.accepted, false);
+  assert.equal(unknown.result.blockedReason, "unknown-object-type");
+});
+
+test("surface-test-card state updates through revisioned reducer", () => {
+  const hostRoom = joinRoom(createRoomState("demo"), "host", { role: "host" });
+  const created = createMediaObject(hostRoom, "host", {
+    commandId: "cmd-create",
+    surfaceId: "debug-main",
+    objectType: "surface-test-card",
+    objectId: "obj-1",
+    nowMs: 1
+  });
+  assert.equal(created.result.accepted, true);
+
+  const memberRoom = joinRoom(created.room, "member", { role: "member" });
+  const patched = patchMediaObjectState(memberRoom, "member", {
+    commandId: "cmd-patch",
+    surfaceId: "debug-main",
+    objectId: "obj-1",
+    expectedRevision: 0,
+    patch: { type: "increment-click-count", inputEventId: "member:1" },
+    nowMs: 2
+  });
+
+  assert.equal(patched.result.accepted, true);
+  assert.equal(patched.result.revision, 1);
+  assert.deepEqual(patched.room.mediaObjects.objects["obj-1"]?.state, {
+    clickCount: 1,
+    lastInputEventId: "member:1"
+  });
+
+  const stale = patchMediaObjectState(patched.room, "member", {
+    commandId: "cmd-stale",
+    surfaceId: "debug-main",
+    objectId: "obj-1",
+    expectedRevision: 0,
+    patch: { type: "increment-click-count", inputEventId: "member:2" },
+    nowMs: 3
+  });
+  assert.equal(stale.result.accepted, false);
+  assert.equal(stale.result.blockedReason, "revision-mismatch");
+
+  const duplicate = patchMediaObjectState(patched.room, "member", {
+    commandId: "cmd-duplicate",
+    surfaceId: "debug-main",
+    objectId: "obj-1",
+    expectedRevision: 1,
+    patch: { type: "increment-click-count", inputEventId: "member:1" },
+    nowMs: 4
+  });
+  assert.equal(duplicate.result.accepted, false);
+  assert.equal(duplicate.result.blockedReason, "duplicate-input-event");
+});
+
+test("createMediaObject rejects occupied surface and stop clears active object", () => {
+  const hostRoom = joinRoom(createRoomState("demo"), "host", { role: "host" });
+  const created = createMediaObject(hostRoom, "host", {
+    commandId: "cmd-create",
+    surfaceId: "debug-main",
+    objectType: "surface-test-card",
+    objectId: "obj-1",
+    nowMs: 1
+  });
+  const occupied = createMediaObject(created.room, "host", {
+    commandId: "cmd-create-2",
+    surfaceId: "debug-main",
+    objectType: "surface-test-card",
+    objectId: "obj-2",
+    nowMs: 2
+  });
+  assert.equal(occupied.result.accepted, false);
+  assert.equal(occupied.result.blockedReason, "surface-occupied");
+
+  const stopped = stopMediaObject(created.room, "host", {
+    commandId: "cmd-stop",
+    surfaceId: "debug-main",
+    objectId: "obj-1"
+  });
+  assert.equal(stopped.result.accepted, true);
+  assert.equal(stopped.room.mediaObjects.surfaces["debug-main"]?.activeObjectId, null);
+  assert.equal(stopped.room.mediaObjects.objects["obj-1"], undefined);
 });

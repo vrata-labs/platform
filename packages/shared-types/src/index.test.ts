@@ -1,15 +1,17 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { createRoomAccessDebugState } from "./index.js";
+import { DEFAULT_MEDIA_SURFACE_ID, SURFACE_TEST_CARD_TYPE, createDefaultRoomMediaObjectsState, createRoomAccessDebugState } from "./index.js";
 import type {
   AvatarCatalogV1,
   AvatarRecipeCatalogV1,
   AvatarReliableState,
   ClientMode,
   CompactPoseFrame,
+  MediaObjectCommandResult,
   SurfaceInputEvent,
   SurfaceInputDebugState,
+  SurfaceTestCardState,
   UserRole
 } from "./index.js";
 
@@ -51,6 +53,29 @@ test("surface input shared contracts compile in tests", () => {
 
   assert.equal(state.lastEvent?.source, "mouse");
   assert.equal(state.lastEvent?.uv?.v, 0.5);
+});
+
+test("media object shared contracts compile in tests", () => {
+  const mediaObjects = createDefaultRoomMediaObjectsState("room-1");
+  const cardState: SurfaceTestCardState = {
+    clickCount: 1,
+    lastInputEventId: "p-1:1"
+  };
+  const result: MediaObjectCommandResult = {
+    accepted: true,
+    commandId: "cmd-1",
+    role: "host",
+    permission: "surface.create-object",
+    blockedReason: null,
+    surfaceId: DEFAULT_MEDIA_SURFACE_ID,
+    objectId: "obj-1",
+    objectType: SURFACE_TEST_CARD_TYPE,
+    revision: 1
+  };
+
+  assert.equal(mediaObjects.surfaces[DEFAULT_MEDIA_SURFACE_ID]?.activeObjectId, null);
+  assert.equal(cardState.clickCount, 1);
+  assert.equal(result.accepted, true);
 });
 
 test("avatar shared contracts compile in tests", () => {

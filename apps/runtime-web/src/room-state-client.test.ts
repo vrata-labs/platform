@@ -1,7 +1,19 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { connectRoomState, createRoomStateUrl, sendAvatarPoseFrame, sendAvatarReliableState, sendParticipantUpdate, sendSeatClaim, sendSeatRelease, sendSurfaceCreateObjectCommand, type RoomStateClient } from "./room-state-client.js";
+import {
+  connectRoomState,
+  createRoomStateUrl,
+  sendAvatarPoseFrame,
+  sendAvatarReliableState,
+  sendParticipantUpdate,
+  sendSeatClaim,
+  sendSeatRelease,
+  sendSurfaceCreateObjectCommand,
+  sendSurfacePatchObjectStateCommand,
+  sendSurfaceStopObjectCommand,
+  type RoomStateClient
+} from "./room-state-client.js";
 
 function createClient(sent: string[] = [], readyState = 1): RoomStateClient {
   return {
@@ -105,6 +117,28 @@ test("surface create command sends privileged envelope", () => {
   const sent: string[] = [];
   sendSurfaceCreateObjectCommand(createClient(sent));
   assert.equal(JSON.parse(sent[0]!).type, "surface_create_object");
+  assert.equal(JSON.parse(sent[0]!).probeOnly, true);
+});
+
+test("media object commands send object lifecycle envelopes", () => {
+  const sent: string[] = [];
+  const client = createClient(sent);
+
+  sendSurfaceCreateObjectCommand(client, { commandId: "cmd-create", surfaceId: "debug-main", objectType: "surface-test-card", probeOnly: false });
+  sendSurfacePatchObjectStateCommand(client, {
+    commandId: "cmd-patch",
+    surfaceId: "debug-main",
+    objectId: "obj-1",
+    expectedRevision: 0,
+    patch: { type: "increment-click-count", inputEventId: "p-1:1" }
+  });
+  sendSurfaceStopObjectCommand(client, { commandId: "cmd-stop", surfaceId: "debug-main", objectId: "obj-1" });
+
+  assert.equal(JSON.parse(sent[0]!).probeOnly, false);
+  assert.equal(JSON.parse(sent[0]!).objectType, "surface-test-card");
+  assert.equal(JSON.parse(sent[1]!).type, "surface_patch_object_state");
+  assert.equal(JSON.parse(sent[1]!).expectedRevision, 0);
+  assert.equal(JSON.parse(sent[2]!).type, "surface_stop_object");
 });
 
 test("connectRoomState routes inbound avatar reliable state, pose frame and seat claim result", async () => {
