@@ -28,6 +28,7 @@ import {
   sendAvatarReliableState,
   sendParticipantUpdate,
   sendSurfaceCreateObjectCommand,
+  sendSurfaceMediaAudioCommand,
   sendSurfacePatchObjectStateCommand,
   sendSurfaceStopObjectCommand,
   type RoomStateClient,
@@ -39,6 +40,7 @@ import { canRetry, createReconnectPolicy, getReconnectDelayMs } from "./reconnec
 import { applyRuntimeIssueState, clearRuntimeIssueState, createRuntimeUiState } from "./runtime-state.js";
 import { applyPassiveMediaRecovery, applyPostBootControls, shouldStartPassiveMedia } from "./runtime-startup.js";
 import { describeMediaCapabilityReason, detectBrowserMediaCapabilities, formatUnsupportedMediaCapabilities } from "./media-capabilities.js";
+import { isScreenShareAudioSource, shouldPublishMediaSurfaceAudio } from "./media-surface-audio.js";
 import { applySpatialSettings, createSpatialAudioSettings } from "./spatial-audio.js";
 import { captureCanvasDiagnostics, createEmptySceneDiagnostics, inspectSceneObject } from "./scene-debug.js";
 import { loadSceneBundle } from "./scene-loader.js";
@@ -182,6 +184,9 @@ const speakerSelect = mustElement<HTMLSelectElement>("#speaker-select");
 const micLevelFill = mustElement<HTMLDivElement>("#mic-level-fill");
 const speakerLevelFill = mustElement<HTMLDivElement>("#speaker-level-fill");
 const audioDeviceStatusEl = mustElement<HTMLDivElement>("#audio-device-status");
+const surfaceAudioControlEl = mustElement<HTMLDivElement>("#surface-audio-control");
+const surfaceAudioCheckbox = mustElement<HTMLInputElement>("#surface-audio-enabled");
+const surfaceAudioStatusEl = mustElement<HTMLDivElement>("#surface-audio-status");
 const xrDebugPanelEl = mustElement<HTMLDivElement>("#xr-debug-panel");
 const debugPanel = mustElement<HTMLPreElement>("#debug-panel");
 const avatarSandboxPanel = mustElement<HTMLDivElement>("#avatar-sandbox-panel");
@@ -412,6 +417,7 @@ let sceneSeatAnchorMap = createSeatAnchorReadModel([]).anchorMap;
 let sceneAnchorsReady = true;
 let roomSeatOccupancy: Record<string, string> = {};
 let roomMediaObjects: RoomMediaObjectsState | null = null;
+let surfaceAudioCommandPending = false;
 const pointerNdc = new THREE.Vector2(0, 0);
 const interactionRaycaster = new THREE.Raycaster();
 const surfaceInputRaycaster = new THREE.Raycaster();
@@ -452,6 +458,15 @@ interface RemoteAudioNode {
   trackId: string;
 }
 
+interface MediaSurfaceAudioNode {
+  surfaceId: string;
+  element: HTMLMediaElement;
+  source: MediaStreamAudioSourceNode | null;
+  analyser: AnalyserNode | null;
+  sampleBuffer: Uint8Array | null;
+  trackId: string;
+}
+
 interface LocalAudioNode {
   source: MediaStreamAudioSourceNode;
   analyser: AnalyserNode;
@@ -461,6 +476,7 @@ interface LocalAudioNode {
 }
 
 const remoteAudioNodes = new Map<string, RemoteAudioNode>();
+const mediaSurfaceAudioNodes = new Map<string, MediaSurfaceAudioNode>();
 let localAudioNode: LocalAudioNode | null = null;
 const localAvatarLipsync = createAvatarLipsyncDriver();
 let runtimeUiState = createRuntimeUiState();
@@ -843,6 +859,48 @@ async function stopScreenShareObject(objectId: string, surfaceId: string): Promi
   });
 }
 
+async function setMediaSurfaceAudioEnabled(surfaceId: string, enabled: boolean): Promise<SurfaceCommandResult> {
+  if (!roomStateClient || !roomStateConnected) {
+    throw createFaultError("ConnectionError", "room_state_failed");
+  }
+  const commandId = createSurfaceCommandId("surface-audio");
+  return sendSurfaceCommandAndWait(commandId, () => {
+    sendSurfaceMediaAudioCommand(roomStateClient!, {
+      commandId,
+      surfaceId,
+      enabled
+    });
+  });
+}
+
+function canConfigureSurfaceAudio(): boolean {
+  return hasRoomPermission(debugState.access.permissions, "surface.configure-audio");
+}
+
+function syncSurfaceAudioControl(): void {
+  const surface = roomMediaObjects?.surfaces[DEBUG_SURFACE_ID] ?? null;
+  const canConfigure = canConfigureSurfaceAudio();
+  surfaceAudioControlEl.hidden = !canConfigure;
+  surfaceAudioCheckbox.checked = surface?.mediaAudioEnabled === true;
+  surfaceAudioCheckbox.disabled = !canConfigure || !roomStateConnected || !surface || surfaceAudioCommandPending;
+  debugState.surfaceAudio = {
+    surfaceId: surface?.surfaceId ?? DEBUG_SURFACE_ID,
+    mediaAudioEnabled: surface?.mediaAudioEnabled === true,
+    canConfigure,
+    pending: surfaceAudioCommandPending,
+    subscribedAudioCount: mediaSurfaceAudioNodes.size
+  };
+  if (!surface) {
+    surfaceAudioStatusEl.textContent = "Media surface unavailable";
+  } else if (surfaceAudioCommandPending) {
+    surfaceAudioStatusEl.textContent = "Updating media surface audio...";
+  } else {
+    surfaceAudioStatusEl.textContent = surface.mediaAudioEnabled
+      ? "Media audio will be requested when a share starts"
+      : "Media audio is muted for new media on this surface";
+  }
+}
+
 function syncMediaObjectsDebugState(): void {
   const surfaces = roomMediaObjects ? Object.values(roomMediaObjects.surfaces) : [];
   const objects = roomMediaObjects ? Object.values(roomMediaObjects.objects) : [];
@@ -851,6 +909,7 @@ function syncMediaObjectsDebugState(): void {
     activeObjectId: surface.activeObjectId,
     activeObjectType: surface.activeObjectId ? roomMediaObjects?.objects[surface.activeObjectId]?.type ?? null : null,
     inputEnabled: surface.inputEnabled,
+    mediaAudioEnabled: surface.mediaAudioEnabled,
     lockedByParticipantId: surface.lockedByParticipantId,
     visible: surface.visible
   }));
@@ -878,6 +937,7 @@ function syncMediaObjectsDebugState(): void {
     remoteSubscribedTrackCount: screenShareState?.mediaTrackSid && screenShareState.ownerParticipantId !== participantId
       ? Math.max(activeRemoteScreenShareTrackCount, 1)
       : activeRemoteScreenShareTrackCount,
+    mediaAudioEnabled: shouldPublishMediaSurfaceAudio(roomMediaObjects, DEBUG_SURFACE_ID),
     errorCode: screenShareState?.errorCode ?? null
   };
   if (!isScreenSharing && screenShareState?.status === "active") {
@@ -889,6 +949,7 @@ function syncMediaObjectsDebugState(): void {
   }
   startShareButton.disabled = !canUseScreenShareControl();
   stopShareButton.disabled = !canStopLocalScreenShare();
+  syncSurfaceAudioControl();
   displaySurface.userData.objectId = activeObject?.objectId ?? null;
 }
 
@@ -1362,6 +1423,7 @@ function syncMediaCapabilityControls(): void {
     stopShareButton.disabled = true;
     debugState.screenShareState = "unsupported";
   }
+  syncSurfaceAudioControl();
 }
 
 async function applyPreferredAudioDevices(room: Room): Promise<void> {
@@ -1490,6 +1552,82 @@ function connectRemoteAudioTrack(track: Track, participantId: string): void {
   debugState.spatialAudioState = panner ? "active" : "fallback";
 }
 
+function getTrackNodeId(track: Track, fallback: string): string {
+  return (track as { sid?: string; mediaStreamTrack?: MediaStreamTrack }).sid
+    ?? (track as { mediaStreamTrack?: MediaStreamTrack }).mediaStreamTrack?.id
+    ?? fallback;
+}
+
+function resolveScreenShareSurfaceForParticipant(ownerParticipantId: string | null | undefined): string {
+  if (ownerParticipantId && roomMediaObjects) {
+    const object = Object.values(roomMediaObjects.objects).find((item) => {
+      if (item.type !== SCREEN_SHARE_OBJECT_TYPE || !isScreenShareState(item.state)) {
+        return false;
+      }
+      return item.state.ownerParticipantId === ownerParticipantId && item.state.status === "active";
+    });
+    if (object) {
+      return object.surfaceId;
+    }
+  }
+  return DEBUG_SURFACE_ID;
+}
+
+function connectMediaSurfaceAudioTrack(track: Track, surfaceId: string): void {
+  const trackId = getTrackNodeId(track, `${surfaceId}:screen-share-audio`);
+  const existing = mediaSurfaceAudioNodes.get(surfaceId);
+  if (existing?.trackId === trackId) {
+    return;
+  }
+  if (existing) {
+    disconnectMediaSurfaceAudioTrack(surfaceId);
+  }
+  const element = track.attach() as HTMLMediaElement & { playsInline?: boolean };
+  element.autoplay = true;
+  element.playsInline = true;
+  element.style.display = "none";
+  document.body.appendChild(element);
+  void element.play().catch(() => undefined);
+  const mediaStreamTrack = (track as { mediaStreamTrack?: MediaStreamTrack }).mediaStreamTrack;
+  const context = mediaStreamTrack ? ensureAudioContext() : null;
+  const analyserSetup = context ? createAudioAnalyser(context) : null;
+  const source = context && mediaStreamTrack ? context.createMediaStreamSource(new MediaStream([mediaStreamTrack])) : null;
+  if (source && analyserSetup) {
+    void resumeAudioContext();
+    source.connect(analyserSetup.analyser);
+  }
+  mediaSurfaceAudioNodes.set(surfaceId, {
+    surfaceId,
+    element,
+    source,
+    analyser: analyserSetup?.analyser ?? null,
+    sampleBuffer: analyserSetup?.sampleBuffer ?? null,
+    trackId
+  });
+  syncSurfaceAudioControl();
+}
+
+function disconnectMediaSurfaceAudioTrack(surfaceId: string): void {
+  const node = mediaSurfaceAudioNodes.get(surfaceId);
+  if (!node) {
+    return;
+  }
+  node.element.remove();
+  node.source?.disconnect();
+  node.analyser?.disconnect();
+  mediaSurfaceAudioNodes.delete(surfaceId);
+  syncSurfaceAudioControl();
+}
+
+function disconnectMediaSurfaceAudioTrackByTrack(track: Track): void {
+  const trackId = getTrackNodeId(track, "");
+  for (const [surfaceId, node] of mediaSurfaceAudioNodes.entries()) {
+    if (!trackId || node.trackId === trackId) {
+      disconnectMediaSurfaceAudioTrack(surfaceId);
+    }
+  }
+}
+
 function disconnectRemoteAudioElement(participantId: string): void {
   const node = remoteAudioNodes.get(participantId);
   if (!node) {
@@ -1595,6 +1733,11 @@ function updateAvatarLipsync(deltaSeconds: number): void {
   for (const participant of livekitRoom.remoteParticipants.values()) {
     maxSpeakerLevel = Math.max(maxSpeakerLevel, participant.audioLevel ?? 0);
   }
+  for (const node of mediaSurfaceAudioNodes.values()) {
+    if (node.analyser && node.sampleBuffer) {
+      maxSpeakerLevel = Math.max(maxSpeakerLevel, sampleAvatarLipsyncLevel(node.analyser, node.sampleBuffer));
+    }
+  }
   speakerOutputLevel = maxSpeakerLevel;
 
   for (const [remoteParticipantId, participant] of livekitRoom.remoteParticipants.entries()) {
@@ -1648,7 +1791,15 @@ const debugState = {
     selectedSurfaceId: null as string | null,
     publishedTrackSid: null as string | null,
     remoteSubscribedTrackCount: 0,
+    mediaAudioEnabled: false,
     errorCode: null as ScreenShareErrorCode | null
+  },
+  surfaceAudio: {
+    surfaceId: DEBUG_SURFACE_ID,
+    mediaAudioEnabled: false,
+    canConfigure: false,
+    pending: false,
+    subscribedAudioCount: 0
   },
   mediaCapabilities: browserMediaCapabilities,
   spatialAudioState: "idle",
@@ -1752,6 +1903,7 @@ const debugState = {
       activeObjectId: string | null;
       activeObjectType: string | null;
       inputEnabled: boolean;
+      mediaAudioEnabled: boolean;
       lockedByParticipantId: string | null;
       visible: boolean;
     }>,
@@ -1807,6 +1959,7 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
     stopActiveSurfaceObject: () => boolean;
     sendStaleSurfaceTestCardPatch: () => boolean;
     sendStaleScreenSharePatch: () => boolean;
+    setDebugSurfaceMediaAudioEnabled: (enabled: boolean) => boolean;
     startScreenShare: () => boolean;
     sendDebugSurfaceInput: (input?: {
       source?: SurfaceInputSource;
@@ -1963,6 +2116,17 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
         type: "mark-active",
         mediaTrackSid: `stale:${participantId}:${Date.now()}`
       }
+    });
+    return true;
+  },
+  setDebugSurfaceMediaAudioEnabled: (enabled) => {
+    if (!roomStateClient || !roomStateConnected) {
+      return false;
+    }
+    sendSurfaceMediaAudioCommand(roomStateClient, {
+      commandId: createSurfaceCommandId("surface-audio-test"),
+      surfaceId: DEBUG_SURFACE_ID,
+      enabled
     });
     return true;
   },
@@ -2287,7 +2451,9 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
       debugState.mediaObjects.lastCommand = result as SurfaceCommandResult;
       debugState.mediaObjects.blockedReason = (result as SurfaceCommandResult).blockedReason ?? null;
       settlePendingSurfaceCommand(result as SurfaceCommandResult);
-      setStatus(`Access denied: ${result.permission}`);
+      if (!debugState.issueCode) {
+        setStatus(`Access denied: ${result.permission}`);
+      }
     },
     onSurfaceCommandResult: (result) => {
       debugState.access.lastDeniedPermission = null;
@@ -3293,24 +3459,33 @@ async function refreshPresence(): Promise<void> {
 }
 
 function setupAudio(room: Room): void {
-  room.on(RoomEvent.TrackSubscribed, (track, _publication, participant) => {
+  room.on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
     if (track.kind === Track.Kind.Video) {
       attachVideoTrack(track);
       return;
     }
     if (track.kind !== Track.Kind.Audio) return;
+    if (isScreenShareAudioSource((publication as { source?: unknown }).source)) {
+      connectMediaSurfaceAudioTrack(track, resolveScreenShareSurfaceForParticipant(participant?.identity));
+      return;
+    }
     if (participant?.identity) {
       connectRemoteAudioTrack(track, participant.identity);
     }
     debugState.audioState = "remote-track";
   });
 
-  room.on(RoomEvent.TrackUnsubscribed, (track, _publication, participant) => {
+  room.on(RoomEvent.TrackUnsubscribed, (track, publication, participant) => {
     if (track.kind === Track.Kind.Video) {
       detachVideoTrack();
       return;
     }
     if (track.kind !== Track.Kind.Audio) return;
+    if (isScreenShareAudioSource((publication as { source?: unknown }).source)) {
+      disconnectMediaSurfaceAudioTrackByTrack(track);
+      track.detach().forEach((element) => element.remove());
+      return;
+    }
     if (participant?.identity) {
       disconnectRemoteAudioElement(participant.identity);
     }
@@ -3387,8 +3562,10 @@ async function startScreenShare(): Promise<void> {
       throw new Error(`screen_share_publishing_rejected:${publishing.blockedReason ?? "unknown"}`);
     }
     revision = publishing.revision ?? revision;
+    const mediaAudioEnabled = shouldPublishMediaSurfaceAudio(roomMediaObjects, localScreenShareSurfaceId ?? DEBUG_SURFACE_ID);
+    debugState.screenShare.mediaAudioEnabled = mediaAudioEnabled;
     await room.localParticipant.setScreenShareEnabled(true, {
-      audio: false
+      audio: mediaAudioEnabled
     });
     const publication = Array.from(room.localParticipant.trackPublications.values()).find((item) => item.source === Track.Source.ScreenShare);
     const localTrack = publication?.videoTrack;
@@ -3607,6 +3784,24 @@ spaceSelect.addEventListener("change", () => {
     return;
   }
   window.location.assign(targetRoomLink);
+});
+
+surfaceAudioCheckbox.addEventListener("change", () => {
+  const enabled = surfaceAudioCheckbox.checked;
+  surfaceAudioCommandPending = true;
+  syncSurfaceAudioControl();
+  void setMediaSurfaceAudioEnabled(DEBUG_SURFACE_ID, enabled).then((result) => {
+    if (!result.accepted) {
+      debugState.mediaObjects.blockedReason = result.blockedReason ?? null;
+      surfaceAudioStatusEl.textContent = `Surface audio rejected: ${result.blockedReason ?? "unknown"}`;
+    }
+  }).catch((error: unknown) => {
+    console.error(error);
+    surfaceAudioStatusEl.textContent = "Surface audio update failed";
+  }).finally(() => {
+    surfaceAudioCommandPending = false;
+    syncSurfaceAudioControl();
+  });
 });
 
 joinAudioButton.addEventListener("click", () => {
@@ -3845,6 +4040,9 @@ window.addEventListener("beforeunload", () => {
   roomStateClient?.close();
   for (const participantId of remoteAudioNodes.keys()) {
     disconnectRemoteAudioElement(participantId);
+  }
+  for (const surfaceId of mediaSurfaceAudioNodes.keys()) {
+    disconnectMediaSurfaceAudioTrack(surfaceId);
   }
   void livekitRoom?.disconnect();
 });

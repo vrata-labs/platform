@@ -73,6 +73,12 @@ export interface PatchMediaObjectInput {
   nowMs: number;
 }
 
+export interface SetSurfaceMediaAudioInput {
+  commandId: string;
+  surfaceId: string;
+  enabled: boolean;
+}
+
 export interface MediaObjectMutationResult {
   room: RoomState;
   result: MediaObjectCommandResult;
@@ -170,7 +176,11 @@ function cloneObjectState<State>(state: State): State {
 
 function cloneMediaObjectsState(mediaObjects: RoomMediaObjectsState): RoomMediaObjectsState {
   return {
-    surfaces: Object.fromEntries(Object.entries(mediaObjects.surfaces).map(([surfaceId, surface]) => [surfaceId, { ...surface, allowedObjectTypes: [...surface.allowedObjectTypes] }])),
+    surfaces: Object.fromEntries(Object.entries(mediaObjects.surfaces).map(([surfaceId, surface]) => [surfaceId, {
+      ...surface,
+      mediaAudioEnabled: surface.mediaAudioEnabled ?? false,
+      allowedObjectTypes: [...surface.allowedObjectTypes]
+    }])),
     objects: Object.fromEntries(Object.entries(mediaObjects.objects).map(([objectId, object]) => [objectId, { ...object, state: cloneObjectState(object.state) }]))
   };
 }
@@ -541,6 +551,42 @@ export function patchMediaObjectState(state: RoomState, participantId: string, i
       objectId: input.objectId,
       objectType: object.type,
       revision: nextObject.revision
+    })
+  };
+}
+
+export function setSurfaceMediaAudioEnabled(state: RoomState, participantId: string, input: SetSurfaceMediaAudioInput): MediaObjectMutationResult {
+  const access = getParticipantAccess(state, participantId);
+  const permission: RoomPermission = "surface.configure-audio";
+  if (!hasRoomPermission(access.permissions, permission)) {
+    return rejectMediaObjectCommand(state, { commandId: input.commandId, role: access.role, permission, blockedReason: "missing-permission", surfaceId: input.surfaceId });
+  }
+
+  const mediaObjects = ensureMediaObjectsState(state);
+  const surface = mediaObjects.surfaces[input.surfaceId];
+  if (!surface) {
+    return rejectMediaObjectCommand(state, { commandId: input.commandId, role: access.role, permission, blockedReason: "missing-surface", surfaceId: input.surfaceId });
+  }
+
+  const nextMediaObjects: RoomMediaObjectsState = {
+    surfaces: {
+      ...mediaObjects.surfaces,
+      [input.surfaceId]: {
+        ...surface,
+        mediaAudioEnabled: input.enabled
+      }
+    },
+    objects: mediaObjects.objects
+  };
+  return {
+    room: { ...state, mediaObjects: nextMediaObjects },
+    result: createMediaObjectCommandResult({
+      accepted: true,
+      commandId: input.commandId,
+      role: access.role,
+      permission,
+      blockedReason: null,
+      surfaceId: input.surfaceId
     })
   };
 }

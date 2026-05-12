@@ -14,6 +14,7 @@ export interface MediaSurface {
   widthPx: number;
   heightPx: number;
   inputEnabled: boolean;
+  mediaAudioEnabled: boolean;
   visible: boolean;
   allowedObjectTypes: string[];
   activeObjectId: string | null;
@@ -107,6 +108,7 @@ export function createDefaultRoomMediaObjectsState(roomId: string): RoomMediaObj
         widthPx: 1920,
         heightPx: 1080,
         inputEnabled: true,
+        mediaAudioEnabled: false,
         visible: true,
         allowedObjectTypes: [SURFACE_TEST_CARD_TYPE, SCREEN_SHARE_OBJECT_TYPE],
         activeObjectId: null,

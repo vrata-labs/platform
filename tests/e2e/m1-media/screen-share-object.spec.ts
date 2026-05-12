@@ -10,13 +10,19 @@ type ScreenShareDebug = {
     selectedSurfaceId?: string | null;
     publishedTrackSid?: string | null;
     remoteSubscribedTrackCount?: number;
+    mediaAudioEnabled?: boolean;
     errorCode?: string | null;
+  };
+  surfaceAudio?: {
+    mediaAudioEnabled?: boolean;
+    canConfigure?: boolean;
   };
   mediaObjects?: {
     surfaces?: Array<{
       surfaceId?: string;
       activeObjectId?: string | null;
       activeObjectType?: string | null;
+      mediaAudioEnabled?: boolean;
     }>;
     objects?: Array<{
       objectId?: string;
@@ -29,7 +35,7 @@ type ScreenShareDebug = {
   };
 };
 
-function roomUrl(roomId: string, role: "guest" | "member" | "host", extra = "") {
+function roomUrl(roomId: string, role: "guest" | "member" | "host" | "admin", extra = "") {
   const params = new URLSearchParams("debug=1");
   if (role !== "guest") {
     params.set("role", role);
@@ -46,7 +52,7 @@ async function readDebug(page: Page): Promise<ScreenShareDebug | undefined> {
   return page.evaluate(() => (window as Window & { __NOAH_DEBUG__?: ScreenShareDebug }).__NOAH_DEBUG__);
 }
 
-async function waitForKernel(page: Page, role: "guest" | "member" | "host") {
+async function waitForKernel(page: Page, role: "guest" | "member" | "host" | "admin") {
   await expect.poll(async () => {
     const debug = await readDebug(page);
     return {
@@ -162,6 +168,73 @@ test("M1.4 host mock screen share becomes active media object and syncs to membe
   } finally {
     await host.close();
     await member.close();
+  }
+});
+
+test("M1.4 admin controls per-surface media audio policy", async ({ browser }) => {
+  const roomId = `m1-screen-share-audio-${Date.now()}`;
+  const admin = await browser.newPage();
+  const host = await browser.newPage();
+  try {
+    await admin.goto(roomUrl(roomId, "admin", "sharemock=1"));
+    await host.goto(roomUrl(roomId, "host"));
+    await waitForKernel(admin, "admin");
+    await waitForKernel(host, "host");
+
+    await expect(admin.locator("#surface-audio-control")).toBeVisible();
+    await expect(admin.locator("#surface-audio-enabled")).not.toBeChecked();
+    await admin.locator("#surface-audio-enabled").check();
+
+    await expect.poll(async () => {
+      const debug = await readDebug(admin);
+      const surface = debug?.mediaObjects?.surfaces?.find((item) => item.surfaceId === "debug-main");
+      return {
+        mediaAudioEnabled: surface?.mediaAudioEnabled ?? false,
+        canConfigure: debug?.surfaceAudio?.canConfigure ?? false
+      };
+    }, {
+      timeout: 10000,
+      intervals: [500, 1000, 2000]
+    }).toEqual({
+      mediaAudioEnabled: true,
+      canConfigure: true
+    });
+
+    await expect.poll(async () => {
+      const debug = await readDebug(host);
+      return debug?.mediaObjects?.surfaces?.find((item) => item.surfaceId === "debug-main")?.mediaAudioEnabled ?? false;
+    }, {
+      timeout: 10000,
+      intervals: [500, 1000, 2000]
+    }).toBe(true);
+
+    await expect(host.locator("#surface-audio-control")).toBeHidden();
+    const hostSent = await host.evaluate(() => (window as Window & {
+      __NOAH_TEST__?: { setDebugSurfaceMediaAudioEnabled: (enabled: boolean) => boolean };
+    }).__NOAH_TEST__?.setDebugSurfaceMediaAudioEnabled(false) ?? false);
+    expect(hostSent).toBe(true);
+    await expect.poll(async () => (await readDebug(host))?.mediaObjects?.blockedReason ?? null, {
+      timeout: 10000,
+      intervals: [500, 1000, 2000]
+    }).toBe("missing-permission");
+
+    await admin.click("#start-share");
+    await expect.poll(async () => {
+      const debug = await readDebug(admin);
+      return {
+        screenShareActive: debug?.screenShare?.active ?? false,
+        screenShareAudioEnabled: debug?.screenShare?.mediaAudioEnabled ?? false
+      };
+    }, {
+      timeout: 15000,
+      intervals: [500, 1000, 2000]
+    }).toEqual({
+      screenShareActive: true,
+      screenShareAudioEnabled: true
+    });
+  } finally {
+    await admin.close();
+    await host.close();
   }
 });
 

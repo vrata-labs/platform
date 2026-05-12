@@ -34,6 +34,13 @@
             <button id="stop-share" disabled>Stop Share</button>
           </div>
           <div class="audio-panel">
+            <div id="surface-audio-control" class="surface-audio-control" hidden>
+              <label class="surface-audio-toggle" for="surface-audio-enabled">
+                <input id="surface-audio-enabled" type="checkbox" />
+                Share media surface audio
+              </label>
+              <div id="surface-audio-status" class="audio-device-status">Surface audio follows admin policy</div>
+            </div>
             <label for="mic-select">Microphone</label>
             <select id="mic-select">
               <option value="default">System default microphone</option>

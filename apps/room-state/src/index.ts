@@ -14,6 +14,7 @@ import {
   patchMediaObjectState,
   releaseSeat,
   serializeRoomState,
+  setSurfaceMediaAudioEnabled,
   stopMediaObject,
   updateParticipantState,
   type ParticipantAccessState,
@@ -439,6 +440,24 @@ export function applyMediaObjectPatchCommand(server: RoomStateServer, roomId: st
   return result.result;
 }
 
+export function applySurfaceMediaAudioCommand(server: RoomStateServer, roomId: string, participantId: string, input: {
+  commandId?: string;
+  surfaceId?: string;
+  enabled?: boolean;
+}): MediaObjectCommandResultPayload {
+  const room = ensureRoom(server, roomId);
+  const result = setSurfaceMediaAudioEnabled(room, participantId, {
+    commandId: input.commandId?.trim() || randomUUID(),
+    surfaceId: input.surfaceId?.trim() || "debug-main",
+    enabled: input.enabled === true
+  });
+  server.rooms.set(roomId, result.room);
+  if (result.result.accepted) {
+    broadcastRoom(server, roomId);
+  }
+  return result.result;
+}
+
 export function applyAvatarReliableState(server: RoomStateServer, roomId: string, participantId: string, reliableState: unknown): void {
   if (!isAvatarReliableStatePayload(reliableState)) {
     throw new Error("invalid_avatar_reliable_state");
@@ -542,6 +561,7 @@ export function startRoomStateService(port = Number.parseInt(process.env.ROOM_ST
           objectId?: unknown;
           expectedRevision?: unknown;
           patch?: unknown;
+          enabled?: unknown;
           probeOnly?: unknown;
         };
         if (payload.type === "participant_update") {
@@ -607,6 +627,18 @@ export function startRoomStateService(port = Number.parseInt(process.env.ROOM_ST
             objectId: typeof payload.objectId === "string" ? payload.objectId : undefined,
             expectedRevision: typeof payload.expectedRevision === "number" ? payload.expectedRevision : undefined,
             patch: payload.patch
+          });
+          sendToSocket(socket, {
+            type: result.accepted ? "surface_command_result" : "access_denied",
+            result
+          });
+          return;
+        }
+        if (payload.type === "surface_set_media_audio") {
+          const result = applySurfaceMediaAudioCommand(authority, roomId, participantId, {
+            commandId: typeof payload.commandId === "string" ? payload.commandId : undefined,
+            surfaceId: typeof payload.surfaceId === "string" ? payload.surfaceId : undefined,
+            enabled: typeof payload.enabled === "boolean" ? payload.enabled : undefined
           });
           sendToSocket(socket, {
             type: result.accepted ? "surface_command_result" : "access_denied",

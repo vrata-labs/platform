@@ -11,6 +11,7 @@ import {
   mergeParticipantState,
   patchMediaObjectState,
   releaseSeat,
+  setSurfaceMediaAudioEnabled,
   stopMediaObject,
   updateParticipantState
 } from "./state.js";
@@ -148,6 +149,30 @@ test("createRoomState includes default media surface", () => {
   assert.equal(room.mediaObjects.surfaces["debug-main"]?.activeObjectId, null);
   assert.equal(room.mediaObjects.surfaces["debug-main"]?.allowedObjectTypes.includes("surface-test-card"), true);
   assert.equal(room.mediaObjects.surfaces["debug-main"]?.allowedObjectTypes.includes("screen-share"), true);
+  assert.equal(room.mediaObjects.surfaces["debug-main"]?.mediaAudioEnabled, false);
+});
+
+test("setSurfaceMediaAudioEnabled is admin-only and updates one surface", () => {
+  const hostRoom = joinRoom(createRoomState("demo"), "host", { role: "host" });
+  const rejected = setSurfaceMediaAudioEnabled(hostRoom, "host", {
+    commandId: "cmd-host-audio",
+    surfaceId: "debug-main",
+    enabled: true
+  });
+  assert.equal(rejected.result.accepted, false);
+  assert.equal(rejected.result.permission, "surface.configure-audio");
+  assert.equal(rejected.result.blockedReason, "missing-permission");
+  assert.equal(rejected.room.mediaObjects.surfaces["debug-main"]?.mediaAudioEnabled, false);
+
+  const adminRoom = joinRoom(hostRoom, "admin", { role: "admin" });
+  const accepted = setSurfaceMediaAudioEnabled(adminRoom, "admin", {
+    commandId: "cmd-admin-audio",
+    surfaceId: "debug-main",
+    enabled: true
+  });
+  assert.equal(accepted.result.accepted, true);
+  assert.equal(accepted.result.permission, "surface.configure-audio");
+  assert.equal(accepted.room.mediaObjects.surfaces["debug-main"]?.mediaAudioEnabled, true);
 });
 
 test("createMediaObject enforces host permissions and rejects unknown types", () => {

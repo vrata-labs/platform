@@ -25,6 +25,8 @@ test("shared role and mode types compile in tests", () => {
 test("room access policy grants screen share to host only", () => {
   assert.equal(createRoomAccessDebugState("guest").canStartScreenShare, false);
   assert.equal(createRoomAccessDebugState("host").canStartScreenShare, true);
+  assert.equal(createRoomAccessDebugState("host").canConfigureSurfaceAudio, false);
+  assert.equal(createRoomAccessDebugState("admin").canConfigureSurfaceAudio, true);
   assert.equal(createRoomAccessDebugState("admin").permissions.includes("room.admin"), true);
 });
 
@@ -83,6 +85,7 @@ test("media object shared contracts compile in tests", () => {
 
   assert.equal(mediaObjects.surfaces[DEFAULT_MEDIA_SURFACE_ID]?.activeObjectId, null);
   assert.equal(mediaObjects.surfaces[DEFAULT_MEDIA_SURFACE_ID]?.allowedObjectTypes.includes(SCREEN_SHARE_OBJECT_TYPE), true);
+  assert.equal(mediaObjects.surfaces[DEFAULT_MEDIA_SURFACE_ID]?.mediaAudioEnabled, false);
   assert.equal(cardState.clickCount, 1);
   assert.equal(screenShareState.mediaTrackSid, "track-1");
   assert.equal(result.accepted, true);

@@ -258,3 +258,19 @@ export function sendSurfacePatchObjectStateCommand(client: RoomStateClient, inpu
     patch: input.patch
   }));
 }
+
+export function sendSurfaceMediaAudioCommand(client: RoomStateClient, input: {
+  commandId?: string;
+  surfaceId: string;
+  enabled: boolean;
+}): void {
+  if (!canSend(client.socket)) {
+    return;
+  }
+  client.socket.send(JSON.stringify({
+    type: "surface_set_media_audio",
+    commandId: input.commandId,
+    surfaceId: input.surfaceId,
+    enabled: input.enabled
+  }));
+}

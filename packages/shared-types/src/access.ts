@@ -8,6 +8,7 @@ export type RoomPermission =
   | "surface.create-object"
   | "surface.stop-object"
   | "surface.lock"
+  | "surface.configure-audio"
   | "surface.input"
   | "screen-share.start"
   | "screen-share.stop"
@@ -23,6 +24,7 @@ export interface RoomAccessDebugState {
   canStartScreenShare: boolean;
   canCreateWhiteboard: boolean;
   canControlSurface: boolean;
+  canConfigureSurfaceAudio: boolean;
 }
 
 const roomRoles = new Set<RoomRole>(["guest", "member", "host", "admin"]);
@@ -52,6 +54,7 @@ const rolePermissions: Record<RoomRole, readonly RoomPermission[]> = {
     "surface.create-object",
     "surface.stop-object",
     "surface.lock",
+    "surface.configure-audio",
     "surface.input",
     "screen-share.start",
     "screen-share.stop",
@@ -84,6 +87,7 @@ export function createRoomAccessDebugState(role: RoomRole): RoomAccessDebugState
     permissions,
     canStartScreenShare: hasRoomPermission(permissions, "screen-share.start"),
     canCreateWhiteboard: hasRoomPermission(permissions, "surface.create-object") && hasRoomPermission(permissions, "whiteboard.draw"),
-    canControlSurface: hasRoomPermission(permissions, "surface.lock") || hasRoomPermission(permissions, "surface.stop-object")
+    canControlSurface: hasRoomPermission(permissions, "surface.lock") || hasRoomPermission(permissions, "surface.stop-object"),
+    canConfigureSurfaceAudio: hasRoomPermission(permissions, "surface.configure-audio")
   };
 }

@@ -9,6 +9,7 @@ import {
   applyPrivilegedRoomCommand,
   applySeatClaim,
   applySeatRelease,
+  applySurfaceMediaAudioCommand,
   connectParticipant,
   createRoomStateServer,
   disconnectParticipant,
@@ -190,6 +191,36 @@ test("screen-share commands mutate authoritative room state", () => {
   assert.equal(active.accepted, true);
   assert.equal(active.revision, 1);
   assert.equal((server.rooms.get("demo-room")?.mediaObjects.objects[created.objectId ?? ""]?.state as { mediaTrackSid?: string } | undefined)?.mediaTrackSid, "track-1");
+});
+
+test("surface media audio command is admin-only and broadcasts accepted changes", () => {
+  const server = createRoomStateServer();
+  const hostSocket = createSocket();
+  const adminSocket = createSocket();
+  connectParticipant(server, "demo-room", "host", hostSocket as never, { role: "host" });
+  connectParticipant(server, "demo-room", "admin", adminSocket as never, { role: "admin" });
+
+  const rejected = applySurfaceMediaAudioCommand(server, "demo-room", "host", {
+    commandId: "cmd-host-audio",
+    surfaceId: "debug-main",
+    enabled: true
+  });
+  assert.equal(rejected.accepted, false);
+  assert.equal(rejected.permission, "surface.configure-audio");
+  assert.equal(rejected.blockedReason, "missing-permission");
+  assert.equal(server.rooms.get("demo-room")?.mediaObjects.surfaces["debug-main"]?.mediaAudioEnabled, false);
+
+  const accepted = applySurfaceMediaAudioCommand(server, "demo-room", "admin", {
+    commandId: "cmd-admin-audio",
+    surfaceId: "debug-main",
+    enabled: true
+  });
+  assert.equal(accepted.accepted, true);
+  assert.equal(server.rooms.get("demo-room")?.mediaObjects.surfaces["debug-main"]?.mediaAudioEnabled, true);
+
+  const payload = JSON.parse(hostSocket.sent[hostSocket.sent.length - 1]!);
+  assert.equal(payload.type, "room_state");
+  assert.equal(payload.room.mediaObjects.surfaces["debug-main"].mediaAudioEnabled, true);
 });
 
 test("applySeatClaim switches seats for same participant atomically", () => {
