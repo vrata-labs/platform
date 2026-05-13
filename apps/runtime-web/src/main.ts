@@ -4,7 +4,6 @@ import { Room, RoomEvent, Track } from "livekit-client";
 import {
   SCREEN_SHARE_OBJECT_TYPE,
   SURFACE_TEST_CARD_TYPE,
-  WHITEBOARD_MAX_POINTS_PER_STROKE,
   WHITEBOARD_OBJECT_TYPE,
   createRoomAccessDebugState,
   hasRoomPermission,
@@ -12,16 +11,12 @@ import {
   type RoomMediaObjectsState,
   type ScreenShareErrorCode,
   type ScreenShareObjectState,
-  type ScreenSharePatch,
   type SurfaceInputEvent,
   type SurfaceInputButton,
   type SurfaceInputKind,
   type SurfaceInputSource,
   type SurfaceTestCardState,
-  type WhiteboardPatch,
-  type WhiteboardPoint,
-  type WhiteboardState,
-  type WhiteboardStroke
+  type WhiteboardState
 } from "@noah/shared-types";
 
 import { appendBrandingSuffix, applyRoomShellBootState } from "./boot-session.js";
@@ -33,10 +28,6 @@ import {
   sendAvatarPoseFrame,
   sendAvatarReliableState,
   sendParticipantUpdate,
-  sendSurfaceCreateObjectCommand,
-  sendSurfaceMediaAudioCommand,
-  sendSurfacePatchObjectStateCommand,
-  sendSurfaceStopObjectCommand,
   type RoomStateClient,
   type RoomStateSnapshot,
   type SurfaceCommandResult
@@ -47,6 +38,17 @@ import { applyRuntimeIssueState, clearRuntimeIssueState, createRuntimeUiState } 
 import { applyPassiveMediaRecovery, applyPostBootControls, shouldStartPassiveMedia } from "./runtime-startup.js";
 import { describeMediaCapabilityReason, detectBrowserMediaCapabilities, formatUnsupportedMediaCapabilities } from "./media-capabilities.js";
 import { isScreenShareAudioSource, shouldPublishMediaSurfaceAudio } from "./media-surface-audio.js";
+import { createMediaSurfaceCommandClient } from "./media/media-surface-commands.js";
+import {
+  activeMediaObjectForSurface as selectActiveMediaObjectForSurface,
+  activeMediaObjectIdForSurface as selectActiveMediaObjectIdForSurface,
+  activeScreenShareObjectForSurface as selectActiveScreenShareObjectForSurface,
+  activeWhiteboardObjectForSurface as selectActiveWhiteboardObjectForSurface,
+  resolveScreenShareSurfaceForOwner
+} from "./media/media-object-state.js";
+import { routeMediaObjectSurfaceInput } from "./media/media-object-router.js";
+import { getScreenShareErrorCode } from "./media/screen-share-object.js";
+import { createWhiteboardObjectRuntime } from "./media/whiteboard-object.js";
 import { applySpatialSettings, createSpatialAudioSettings } from "./spatial-audio.js";
 import { captureCanvasDiagnostics, createEmptySceneDiagnostics, inspectSceneObject } from "./scene-debug.js";
 import { loadSceneBundle } from "./scene-loader.js";
@@ -375,24 +377,13 @@ let isScreenSharing = false;
 let activeMockScreenShareStream: MediaStream | null = null;
 let localScreenShareObjectId: string | null = null;
 let localScreenShareSurfaceId: string | null = null;
-const whiteboardCanvas = document.createElement("canvas");
-whiteboardCanvas.width = DEBUG_SURFACE_WIDTH_PX;
-whiteboardCanvas.height = DEBUG_SURFACE_HEIGHT_PX;
-const whiteboardContext = whiteboardCanvas.getContext("2d");
-const whiteboardTexture = new THREE.CanvasTexture(whiteboardCanvas);
-whiteboardTexture.colorSpace = THREE.SRGBColorSpace;
-let localWhiteboardPreview: WhiteboardStroke | null = null;
 let lastScreenShareStoppedAtMs = 0;
 let mediaRoomReady = false;
 let roomStateClient: RoomStateClient | null = null;
 let roomStateConnected = false;
 let latestRealtimeParticipants: PresenceState[] = [];
 let latestFallbackParticipants: PresenceState[] = [];
-const pendingSurfaceCommands = new Map<string, {
-  resolve: (result: SurfaceCommandResult) => void;
-  reject: (error: Error) => void;
-  timeoutId: number;
-}>();
+const retainedDisplayTextures = new Set<THREE.Texture>();
 let lastApiPresenceSyncAtMs = 0;
 let lastApiPresenceRefreshAtMs = 0;
 let apiPresenceSyncInFlight = false;
@@ -432,6 +423,27 @@ let sceneSeatAnchorMap = createSeatAnchorReadModel([]).anchorMap;
 let sceneAnchorsReady = true;
 let roomSeatOccupancy: Record<string, string> = {};
 let roomMediaObjects: RoomMediaObjectsState | null = null;
+const mediaSurfaceCommands = createMediaSurfaceCommandClient({
+  participantId,
+  getClient: () => roomStateClient,
+  isConnected: () => roomStateConnected,
+  createConnectionError: () => createFaultError("ConnectionError", "room_state_failed")
+});
+const whiteboardRuntime = createWhiteboardObjectRuntime({
+  participantId,
+  surfaceId: DEBUG_SURFACE_ID,
+  widthPx: DEBUG_SURFACE_WIDTH_PX,
+  heightPx: DEBUG_SURFACE_HEIGHT_PX,
+  getPermissions: () => debugState.access.permissions,
+  getLatestObject: (surfaceId) => activeWhiteboardObjectForSurface(surfaceId),
+  patchObject: (objectId, surfaceId, expectedRevision, patch) => mediaSurfaceCommands.patchWhiteboardObject(objectId, surfaceId, expectedRevision, patch),
+  applyTexture: (texture) => applyDisplayTexture(texture),
+  onBlocked: (blockedReason, errorCode) => {
+    debugState.mediaObjects.blockedReason = blockedReason;
+    debugState.whiteboard.errorCode = errorCode;
+  }
+});
+retainedDisplayTextures.add(whiteboardRuntime.texture);
 let surfaceAudioCommandPending = false;
 let surfaceAudioPendingEnabled: boolean | null = null;
 const pointerNdc = new THREE.Vector2(0, 0);
@@ -749,191 +761,23 @@ function syncSeatStateFromOccupancy(): void {
 }
 
 function activeMediaObjectForSurface(surfaceId: string): MediaObjectInstance | null {
-  const surface = roomMediaObjects?.surfaces[surfaceId];
-  const objectId = surface?.activeObjectId;
-  return objectId ? roomMediaObjects?.objects[objectId] ?? null : null;
+  return selectActiveMediaObjectForSurface(roomMediaObjects, surfaceId);
 }
 
 function activeMediaObjectIdForSurface(surfaceId: string): string | undefined {
-  return activeMediaObjectForSurface(surfaceId)?.objectId;
-}
-
-function isScreenShareState(state: unknown): state is ScreenShareObjectState {
-  return Boolean(state)
-    && typeof state === "object"
-    && typeof (state as { status?: unknown }).status === "string"
-    && typeof (state as { ownerParticipantId?: unknown }).ownerParticipantId === "string"
-    && typeof (state as { surfaceId?: unknown }).surfaceId === "string";
+  return selectActiveMediaObjectIdForSurface(roomMediaObjects, surfaceId);
 }
 
 function activeScreenShareObjectForSurface(surfaceId: string): MediaObjectInstance<ScreenShareObjectState> | null {
-  const object = activeMediaObjectForSurface(surfaceId);
-  if (!object || object.type !== SCREEN_SHARE_OBJECT_TYPE || !isScreenShareState(object.state)) {
-    return null;
-  }
-  return object as MediaObjectInstance<ScreenShareObjectState>;
-}
-
-function isWhiteboardState(state: unknown): state is WhiteboardState {
-  return Boolean(state)
-    && typeof state === "object"
-    && (state as { status?: unknown }).status === "active"
-    && Array.isArray((state as { strokes?: unknown }).strokes)
-    && typeof (state as { revision?: unknown }).revision === "number";
+  return selectActiveScreenShareObjectForSurface(roomMediaObjects, surfaceId);
 }
 
 function activeWhiteboardObjectForSurface(surfaceId: string): MediaObjectInstance<WhiteboardState> | null {
-  const object = activeMediaObjectForSurface(surfaceId);
-  if (!object || object.type !== WHITEBOARD_OBJECT_TYPE || !isWhiteboardState(object.state)) {
-    return null;
-  }
-  return object as MediaObjectInstance<WhiteboardState>;
-}
-
-function getScreenShareErrorCode(error: unknown): ScreenShareErrorCode {
-  const issue = classifyScreenShareError(error);
-  if (issue.code === "screen_share_unsupported") {
-    return "display_capture_unsupported";
-  }
-  if (issue.code === "screen_share_denied") {
-    return "display_capture_denied";
-  }
-  if (issue.code === "media_network_blocked") {
-    return "media_network_blocked";
-  }
-  return "display_capture_failed";
-}
-
-function createSurfaceCommandId(kind: string): string {
-  return `${participantId}:${kind}:${Date.now()}:${Math.random().toString(16).slice(2)}`;
-}
-
-function settlePendingSurfaceCommand(result: SurfaceCommandResult): void {
-  if (!result.commandId) {
-    return;
-  }
-  const pending = pendingSurfaceCommands.get(result.commandId);
-  if (!pending) {
-    return;
-  }
-  window.clearTimeout(pending.timeoutId);
-  pendingSurfaceCommands.delete(result.commandId);
-  pending.resolve(result);
-}
-
-function rejectPendingSurfaceCommands(reason: string): void {
-  for (const [commandId, pending] of pendingSurfaceCommands.entries()) {
-    window.clearTimeout(pending.timeoutId);
-    pending.reject(new Error(`${reason}:${commandId}`));
-  }
-  pendingSurfaceCommands.clear();
-}
-
-function sendSurfaceCommandAndWait(commandId: string, send: () => void): Promise<SurfaceCommandResult> {
-  return new Promise((resolve, reject) => {
-    const timeoutId = window.setTimeout(() => {
-      pendingSurfaceCommands.delete(commandId);
-      reject(new Error(`surface_command_timeout:${commandId}`));
-    }, 10000);
-    pendingSurfaceCommands.set(commandId, { resolve, reject, timeoutId });
-    try {
-      send();
-    } catch (error) {
-      window.clearTimeout(timeoutId);
-      pendingSurfaceCommands.delete(commandId);
-      reject(error instanceof Error ? error : new Error("surface_command_send_failed"));
-    }
-  });
-}
-
-async function createScreenShareObjectOnSurface(surfaceId: string): Promise<SurfaceCommandResult> {
-  if (!roomStateClient || !roomStateConnected) {
-    throw createFaultError("ConnectionError", "room_state_failed");
-  }
-  const commandId = createSurfaceCommandId("screen-share-create");
-  return sendSurfaceCommandAndWait(commandId, () => {
-    sendSurfaceCreateObjectCommand(roomStateClient!, {
-      commandId,
-      surfaceId,
-      objectType: SCREEN_SHARE_OBJECT_TYPE,
-      probeOnly: false
-    });
-  });
-}
-
-async function patchScreenShareObject(objectId: string, surfaceId: string, expectedRevision: number, patch: ScreenSharePatch): Promise<SurfaceCommandResult> {
-  if (!roomStateClient || !roomStateConnected) {
-    throw createFaultError("ConnectionError", "room_state_failed");
-  }
-  const commandId = createSurfaceCommandId(`screen-share-${patch.type}`);
-  return sendSurfaceCommandAndWait(commandId, () => {
-    sendSurfacePatchObjectStateCommand(roomStateClient!, {
-      commandId,
-      surfaceId,
-      objectId,
-      expectedRevision,
-      patch
-    });
-  });
-}
-
-async function stopScreenShareObject(objectId: string, surfaceId: string): Promise<SurfaceCommandResult> {
-  if (!roomStateClient || !roomStateConnected) {
-    throw createFaultError("ConnectionError", "room_state_failed");
-  }
-  const commandId = createSurfaceCommandId("screen-share-stop");
-  return sendSurfaceCommandAndWait(commandId, () => {
-    sendSurfaceStopObjectCommand(roomStateClient!, {
-      commandId,
-      surfaceId,
-      objectId
-    });
-  });
-}
-
-async function createWhiteboardObjectOnSurface(surfaceId: string): Promise<SurfaceCommandResult> {
-  if (!roomStateClient || !roomStateConnected) {
-    throw createFaultError("ConnectionError", "room_state_failed");
-  }
-  const commandId = createSurfaceCommandId("whiteboard-create");
-  return sendSurfaceCommandAndWait(commandId, () => {
-    sendSurfaceCreateObjectCommand(roomStateClient!, {
-      commandId,
-      surfaceId,
-      objectType: WHITEBOARD_OBJECT_TYPE,
-      probeOnly: false
-    });
-  });
-}
-
-async function patchWhiteboardObject(objectId: string, surfaceId: string, expectedRevision: number, patch: WhiteboardPatch): Promise<SurfaceCommandResult> {
-  if (!roomStateClient || !roomStateConnected) {
-    throw createFaultError("ConnectionError", "room_state_failed");
-  }
-  const commandId = createSurfaceCommandId(`whiteboard-${patch.type}`);
-  return sendSurfaceCommandAndWait(commandId, () => {
-    sendSurfacePatchObjectStateCommand(roomStateClient!, {
-      commandId,
-      surfaceId,
-      objectId,
-      expectedRevision,
-      patch
-    });
-  });
+  return selectActiveWhiteboardObjectForSurface(roomMediaObjects, surfaceId);
 }
 
 async function setMediaSurfaceAudioEnabled(surfaceId: string, enabled: boolean): Promise<SurfaceCommandResult> {
-  if (!roomStateClient || !roomStateConnected) {
-    throw createFaultError("ConnectionError", "room_state_failed");
-  }
-  const commandId = createSurfaceCommandId("surface-audio");
-  return sendSurfaceCommandAndWait(commandId, () => {
-    sendSurfaceMediaAudioCommand(roomStateClient!, {
-      commandId,
-      surfaceId,
-      enabled
-    });
-  });
+  return mediaSurfaceCommands.setMediaSurfaceAudioEnabled(surfaceId, enabled);
 }
 
 function canConfigureSurfaceAudio(): boolean {
@@ -991,23 +835,11 @@ function syncMediaObjectsDebugState(): void {
     ? ((activeObject.state as SurfaceTestCardState).clickCount ?? 0)
     : null;
   const activeWhiteboard = activeWhiteboardObjectForSurface(DEBUG_SURFACE_ID);
-  debugState.whiteboard = {
-    objectId: activeWhiteboard?.objectId ?? null,
-    surfaceId: activeWhiteboard?.surfaceId ?? DEBUG_SURFACE_ID,
-    active: Boolean(activeWhiteboard),
-    strokeCount: activeWhiteboard?.state.strokes.length ?? 0,
-    revision: activeWhiteboard?.revision ?? 0,
-    localCanDraw: hasRoomPermission(debugState.access.permissions, "whiteboard.draw"),
-    localCanClear: hasRoomPermission(debugState.access.permissions, "whiteboard.clear"),
-    localPreviewPointCount: localWhiteboardPreview?.points.length ?? 0,
-    lastInputSource: debugState.whiteboard.lastInputSource,
-    lastPoint: debugState.whiteboard.lastPoint,
-    errorCode: debugState.whiteboard.errorCode
-  };
+  debugState.whiteboard = whiteboardRuntime.createDebugSnapshot(activeWhiteboard);
   if (activeWhiteboard) {
-    renderWhiteboardSurface(activeWhiteboard.state);
-  } else if (displaySurface.material instanceof THREE.MeshBasicMaterial && displaySurface.material.map === whiteboardTexture) {
-    clearWhiteboardPreview();
+    whiteboardRuntime.render(activeWhiteboard.state);
+  } else if (displaySurface.material instanceof THREE.MeshBasicMaterial && whiteboardRuntime.ownsTexture(displaySurface.material.map)) {
+    whiteboardRuntime.clearPreview();
     applyDisplayTexture(null);
   }
   const activeScreenShare = activeScreenShareObjectForSurface(DEBUG_SURFACE_ID);
@@ -1038,96 +870,25 @@ function syncMediaObjectsDebugState(): void {
   displaySurface.userData.objectId = activeObject?.objectId ?? null;
 }
 
-function routeWhiteboardInput(event: SurfaceInputEvent, object: MediaObjectInstance<WhiteboardState>): boolean {
-  const point = whiteboardPointFromSurfaceInput(event);
-  if (!point) {
-    return false;
-  }
-  debugState.whiteboard.lastInputSource = event.source;
-  debugState.whiteboard.lastPoint = { u: point.u, v: point.v };
-
-  if (event.kind === "pointer-down") {
-    if (!hasRoomPermission(debugState.access.permissions, "whiteboard.draw")) {
-      debugState.mediaObjects.blockedReason = "missing-permission";
-      debugState.whiteboard.errorCode = "missing-permission:whiteboard.draw";
-      return false;
-    }
-    if (event.source === "xr-controller" || event.source === "xr-hand") {
-      sendWhiteboardPatch(object, {
-        type: "append-stroke",
-        inputEventId: event.eventId,
-        stroke: createLocalWhiteboardStroke(point)
-      });
-      return true;
-    }
-    localWhiteboardPreview = createLocalWhiteboardStroke(point);
-    renderWhiteboardSurface(object.state);
-    return true;
-  }
-
-  if (event.kind === "pointer-move") {
-    if (!localWhiteboardPreview) {
-      return false;
-    }
-    localWhiteboardPreview = appendPreviewPoint(localWhiteboardPreview, point);
-    renderWhiteboardSurface(object.state);
-    return true;
-  }
-
-  if (event.kind === "pointer-up") {
-    const stroke = localWhiteboardPreview ? appendPreviewPoint(localWhiteboardPreview, point) : createLocalWhiteboardStroke(point);
-    localWhiteboardPreview = null;
-    sendWhiteboardPatch(object, {
-      type: "append-stroke",
-      inputEventId: event.eventId,
-      stroke
-    });
-    renderWhiteboardSurface(object.state);
-    return true;
-  }
-
-  if (event.kind === "click") {
-    if (!hasRoomPermission(debugState.access.permissions, "whiteboard.draw")) {
-      debugState.mediaObjects.blockedReason = "missing-permission";
-      debugState.whiteboard.errorCode = "missing-permission:whiteboard.draw";
-      return false;
-    }
-    sendWhiteboardPatch(object, {
-      type: "append-stroke",
-      inputEventId: event.eventId,
-      stroke: createLocalWhiteboardStroke(point)
-    });
-    return true;
-  }
-
-  return false;
-}
-
 function routeSurfaceInputToMediaObject(event: SurfaceInputEvent): boolean {
   if (!roomStateClient || !roomStateConnected) {
     return false;
   }
   const object = event.objectId ? roomMediaObjects?.objects[event.objectId] : activeMediaObjectForSurface(event.surfaceId);
-  if (!object) {
-    return false;
-  }
-  if (object.type === WHITEBOARD_OBJECT_TYPE && isWhiteboardState(object.state)) {
-    return routeWhiteboardInput(event, object as MediaObjectInstance<WhiteboardState>);
-  }
-  if (event.kind !== "click" || object.type !== SURFACE_TEST_CARD_TYPE) {
-    return false;
-  }
-  sendSurfacePatchObjectStateCommand(roomStateClient, {
-    commandId: createSurfaceCommandId("patch"),
-    surfaceId: object.surfaceId,
-    objectId: object.objectId,
-    expectedRevision: object.revision,
-    patch: {
-      type: "increment-click-count",
-      inputEventId: event.eventId
-    }
+  return routeMediaObjectSurfaceInput({
+    event,
+    object,
+    routeWhiteboardInput: (surfaceEvent, whiteboardObject) => whiteboardRuntime.routeInput(surfaceEvent, whiteboardObject),
+    sendTestCardPatch: (testCardObject, surfaceEvent) => mediaSurfaceCommands.sendPatchObjectState("patch", {
+      surfaceId: testCardObject.surfaceId,
+      objectId: testCardObject.objectId,
+      expectedRevision: testCardObject.revision,
+      patch: {
+        type: "increment-click-count",
+        inputEventId: surfaceEvent.eventId
+      }
+    })
   });
-  return true;
 }
 
 function handleRoomSnapshot(snapshot: RoomStateSnapshot): void {
@@ -1521,140 +1282,12 @@ function applyDisplayTexture(texture: THREE.Texture | null): void {
   if (!(material instanceof THREE.MeshBasicMaterial)) {
     return;
   }
-  if (material.map && material.map !== texture && material.map !== whiteboardTexture) {
+  if (material.map && material.map !== texture && !retainedDisplayTextures.has(material.map)) {
     material.map.dispose();
   }
   material.color.setHex(0xffffff);
   material.map = texture;
   material.needsUpdate = true;
-}
-
-function whiteboardPointFromSurfaceInput(event: SurfaceInputEvent): WhiteboardPoint | null {
-  if (!event.uv) {
-    return null;
-  }
-  return {
-    u: event.uv.u,
-    v: event.uv.v,
-    t: event.clientTimeMs,
-    ...(event.pressure === undefined ? {} : { pressure: event.pressure })
-  };
-}
-
-function drawWhiteboardStroke(context: CanvasRenderingContext2D, stroke: WhiteboardStroke): void {
-  if (stroke.points.length === 0) {
-    return;
-  }
-  context.strokeStyle = stroke.color;
-  context.fillStyle = stroke.color;
-  context.lineWidth = stroke.width * 2;
-  context.lineCap = "round";
-  context.lineJoin = "round";
-  context.beginPath();
-  const first = stroke.points[0]!;
-  context.moveTo(first.u * whiteboardCanvas.width, first.v * whiteboardCanvas.height);
-  for (const point of stroke.points.slice(1)) {
-    context.lineTo(point.u * whiteboardCanvas.width, point.v * whiteboardCanvas.height);
-  }
-  if (stroke.points.length === 1) {
-    context.arc(first.u * whiteboardCanvas.width, first.v * whiteboardCanvas.height, Math.max(2, stroke.width), 0, Math.PI * 2);
-    context.fill();
-  } else {
-    context.stroke();
-  }
-}
-
-function renderWhiteboardSurface(state: WhiteboardState | null): void {
-  if (!whiteboardContext) {
-    return;
-  }
-  whiteboardContext.fillStyle = "#f8fafc";
-  whiteboardContext.fillRect(0, 0, whiteboardCanvas.width, whiteboardCanvas.height);
-  whiteboardContext.strokeStyle = "rgba(37, 99, 235, 0.12)";
-  whiteboardContext.lineWidth = 2;
-  for (let x = 0; x <= whiteboardCanvas.width; x += 120) {
-    whiteboardContext.beginPath();
-    whiteboardContext.moveTo(x, 0);
-    whiteboardContext.lineTo(x, whiteboardCanvas.height);
-    whiteboardContext.stroke();
-  }
-  for (let y = 0; y <= whiteboardCanvas.height; y += 120) {
-    whiteboardContext.beginPath();
-    whiteboardContext.moveTo(0, y);
-    whiteboardContext.lineTo(whiteboardCanvas.width, y);
-    whiteboardContext.stroke();
-  }
-  for (const stroke of state?.strokes ?? []) {
-    drawWhiteboardStroke(whiteboardContext, stroke);
-  }
-  if (localWhiteboardPreview) {
-    drawWhiteboardStroke(whiteboardContext, localWhiteboardPreview);
-  }
-  whiteboardContext.fillStyle = "rgba(15, 23, 42, 0.72)";
-  whiteboardContext.font = "36px sans-serif";
-  whiteboardContext.fillText("Noah Whiteboard", 40, 64);
-  whiteboardTexture.needsUpdate = true;
-  applyDisplayTexture(whiteboardTexture);
-}
-
-function clearWhiteboardPreview(): void {
-  localWhiteboardPreview = null;
-}
-
-function createLocalWhiteboardStroke(point: WhiteboardPoint): WhiteboardStroke {
-  return {
-    strokeId: `${participantId}:stroke:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`,
-    participantId,
-    tool: "pen",
-    color: "#2563eb",
-    width: 4,
-    points: [point]
-  };
-}
-
-function appendPreviewPoint(stroke: WhiteboardStroke, point: WhiteboardPoint): WhiteboardStroke {
-  const previous = stroke.points[stroke.points.length - 1];
-  if (previous && Math.hypot(previous.u - point.u, previous.v - point.v) < 0.002) {
-    return stroke;
-  }
-  return {
-    ...stroke,
-    points: [...stroke.points, point].slice(-WHITEBOARD_MAX_POINTS_PER_STROKE)
-  };
-}
-
-function sendWhiteboardPatch(object: MediaObjectInstance<WhiteboardState>, patch: WhiteboardPatch): void {
-  if (!roomStateClient || !roomStateConnected) {
-    return;
-  }
-  const sendAttempt = (target: MediaObjectInstance<WhiteboardState>, allowRevisionRetry: boolean): void => {
-    const commandId = createSurfaceCommandId(`whiteboard-${patch.type}`);
-    void sendSurfaceCommandAndWait(commandId, () => {
-      sendSurfacePatchObjectStateCommand(roomStateClient!, {
-        commandId,
-        surfaceId: target.surfaceId,
-        objectId: target.objectId,
-        expectedRevision: target.revision,
-        patch
-      });
-    }).then((result) => {
-      if (result.accepted) {
-        debugState.whiteboard.errorCode = null;
-        return;
-      }
-      debugState.mediaObjects.blockedReason = result.blockedReason ?? null;
-      debugState.whiteboard.errorCode = result.blockedReason ?? "patch-rejected";
-      if (allowRevisionRetry && result.blockedReason === "revision-mismatch") {
-        const latest = activeWhiteboardObjectForSurface(target.surfaceId);
-        if (latest && latest.objectId === target.objectId && latest.revision !== target.revision) {
-          sendAttempt(latest, false);
-        }
-      }
-    }).catch((error: unknown) => {
-      debugState.whiteboard.errorCode = error instanceof Error ? error.message : "patch-failed";
-    });
-  };
-  sendAttempt(object, true);
 }
 
 function ensureAudioContext(): AudioContext {
@@ -1870,18 +1503,7 @@ function getTrackNodeId(track: Track, fallback: string): string {
 }
 
 function resolveScreenShareSurfaceForParticipant(ownerParticipantId: string | null | undefined): string {
-  if (ownerParticipantId && roomMediaObjects) {
-    const object = Object.values(roomMediaObjects.objects).find((item) => {
-      if (item.type !== SCREEN_SHARE_OBJECT_TYPE || !isScreenShareState(item.state)) {
-        return false;
-      }
-      return item.state.ownerParticipantId === ownerParticipantId && item.state.status === "active";
-    });
-    if (object) {
-      return object.surfaceId;
-    }
-  }
-  return DEBUG_SURFACE_ID;
+  return resolveScreenShareSurfaceForOwner(roomMediaObjects, ownerParticipantId, DEBUG_SURFACE_ID);
 }
 
 function connectMediaSurfaceAudioTrack(track: Track, surfaceId: string): void {
@@ -2359,79 +1981,57 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
     return true;
   },
   sendPrivilegedSurfaceCreate: () => {
-    if (!roomStateClient || !roomStateConnected) {
-      return false;
-    }
-    sendSurfaceCreateObjectCommand(roomStateClient);
-    return true;
+    return mediaSurfaceCommands.sendCreateObject();
   },
   createSurfaceTestCard: () => {
-    if (!roomStateClient || !roomStateConnected) {
-      return false;
-    }
-    sendSurfaceCreateObjectCommand(roomStateClient, {
-      commandId: createSurfaceCommandId("create"),
+    return mediaSurfaceCommands.sendCreateObject({
+      commandId: mediaSurfaceCommands.createCommandId("create"),
       surfaceId: DEBUG_SURFACE_ID,
       objectType: SURFACE_TEST_CARD_TYPE,
       probeOnly: false
     });
-    return true;
   },
   createScreenShareObject: () => {
-    if (!roomStateClient || !roomStateConnected) {
-      return false;
-    }
-    sendSurfaceCreateObjectCommand(roomStateClient, {
-      commandId: createSurfaceCommandId("screen-share-create-test"),
+    return mediaSurfaceCommands.sendCreateObject({
+      commandId: mediaSurfaceCommands.createCommandId("screen-share-create-test"),
       surfaceId: DEBUG_SURFACE_ID,
       objectType: SCREEN_SHARE_OBJECT_TYPE,
       probeOnly: false
     });
-    return true;
   },
   createWhiteboardObject: () => {
-    if (!roomStateClient || !roomStateConnected) {
-      return false;
-    }
-    sendSurfaceCreateObjectCommand(roomStateClient, {
-      commandId: createSurfaceCommandId("whiteboard-create-test"),
+    return mediaSurfaceCommands.sendCreateObject({
+      commandId: mediaSurfaceCommands.createCommandId("whiteboard-create-test"),
       surfaceId: DEBUG_SURFACE_ID,
       objectType: WHITEBOARD_OBJECT_TYPE,
       probeOnly: false
     });
-    return true;
   },
   createUnknownSurfaceObject: () => {
-    if (!roomStateClient || !roomStateConnected) {
-      return false;
-    }
-    sendSurfaceCreateObjectCommand(roomStateClient, {
-      commandId: createSurfaceCommandId("unknown"),
+    return mediaSurfaceCommands.sendCreateObject({
+      commandId: mediaSurfaceCommands.createCommandId("unknown"),
       surfaceId: DEBUG_SURFACE_ID,
       objectType: "unknown-object",
       probeOnly: false
     });
-    return true;
   },
   stopActiveSurfaceObject: () => {
     const object = activeMediaObjectForSurface(DEBUG_SURFACE_ID);
-    if (!object || !roomStateClient || !roomStateConnected) {
+    if (!object) {
       return false;
     }
-    sendSurfaceStopObjectCommand(roomStateClient, {
-      commandId: createSurfaceCommandId("stop"),
+    return mediaSurfaceCommands.sendStopObject({
+      commandId: mediaSurfaceCommands.createCommandId("stop"),
       surfaceId: DEBUG_SURFACE_ID,
       objectId: object.objectId
     });
-    return true;
   },
   sendStaleSurfaceTestCardPatch: () => {
     const object = activeMediaObjectForSurface(DEBUG_SURFACE_ID);
-    if (!object || !roomStateClient || !roomStateConnected) {
+    if (!object) {
       return false;
     }
-    sendSurfacePatchObjectStateCommand(roomStateClient, {
-      commandId: createSurfaceCommandId("stale-patch"),
+    return mediaSurfaceCommands.sendPatchObjectState("stale-patch", {
       surfaceId: DEBUG_SURFACE_ID,
       objectId: object.objectId,
       expectedRevision: object.revision + 1,
@@ -2440,15 +2040,13 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
         inputEventId: `${participantId}:stale:${Date.now()}`
       }
     });
-    return true;
   },
   sendStaleScreenSharePatch: () => {
     const object = activeScreenShareObjectForSurface(DEBUG_SURFACE_ID);
-    if (!object || !roomStateClient || !roomStateConnected) {
+    if (!object) {
       return false;
     }
-    sendSurfacePatchObjectStateCommand(roomStateClient, {
-      commandId: createSurfaceCommandId("stale-screen-share-patch"),
+    return mediaSurfaceCommands.sendPatchObjectState("stale-screen-share-patch", {
       surfaceId: DEBUG_SURFACE_ID,
       objectId: object.objectId,
       expectedRevision: object.revision + 1,
@@ -2457,15 +2055,13 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
         mediaTrackSid: `stale:${participantId}:${Date.now()}`
       }
     });
-    return true;
   },
   sendStaleWhiteboardPatch: () => {
     const object = activeWhiteboardObjectForSurface(DEBUG_SURFACE_ID);
-    if (!object || !roomStateClient || !roomStateConnected) {
+    if (!object) {
       return false;
     }
-    sendSurfacePatchObjectStateCommand(roomStateClient, {
-      commandId: createSurfaceCommandId("stale-whiteboard-patch"),
+    return mediaSurfaceCommands.sendPatchObjectState("stale-whiteboard-patch", {
       surfaceId: DEBUG_SURFACE_ID,
       objectId: object.objectId,
       expectedRevision: object.revision + 1,
@@ -2482,15 +2078,13 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
         }
       }
     });
-    return true;
   },
   sendDuplicateWhiteboardPatch: () => {
     const object = activeWhiteboardObjectForSurface(DEBUG_SURFACE_ID);
-    if (!object || !object.state.lastInputEventId || !roomStateClient || !roomStateConnected) {
+    if (!object || !object.state.lastInputEventId) {
       return false;
     }
-    sendSurfacePatchObjectStateCommand(roomStateClient, {
-      commandId: createSurfaceCommandId("duplicate-whiteboard-patch"),
+    return mediaSurfaceCommands.sendPatchObjectState("duplicate-whiteboard-patch", {
       surfaceId: DEBUG_SURFACE_ID,
       objectId: object.objectId,
       expectedRevision: object.revision,
@@ -2507,35 +2101,25 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
         }
       }
     });
-    return true;
   },
   clearWhiteboardObject: () => {
     const object = activeWhiteboardObjectForSurface(DEBUG_SURFACE_ID);
-    if (!object || !roomStateClient || !roomStateConnected) {
+    if (!object) {
       return false;
     }
-    sendSurfacePatchObjectStateCommand(roomStateClient, {
-      commandId: createSurfaceCommandId("whiteboard-clear-test"),
+    return mediaSurfaceCommands.sendPatchObjectState("whiteboard-clear-test", {
       surfaceId: DEBUG_SURFACE_ID,
       objectId: object.objectId,
       expectedRevision: object.revision,
-      patch: {
-        type: "clear",
-        inputEventId: `${participantId}:clear:${Date.now()}`
-      }
+      patch: whiteboardRuntime.createClearPatch()
     });
-    return true;
   },
   setDebugSurfaceMediaAudioEnabled: (enabled) => {
-    if (!roomStateClient || !roomStateConnected) {
-      return false;
-    }
-    sendSurfaceMediaAudioCommand(roomStateClient, {
-      commandId: createSurfaceCommandId("surface-audio-test"),
+    return mediaSurfaceCommands.sendMediaAudio({
+      commandId: mediaSurfaceCommands.createCommandId("surface-audio-test"),
       surfaceId: DEBUG_SURFACE_ID,
       enabled
     });
-    return true;
   },
   startScreenShare: () => {
     void startScreenShare().catch((error: unknown) => {
@@ -2857,7 +2441,7 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
       debugState.access.lastSurfaceCommandAccepted = false;
       debugState.mediaObjects.lastCommand = result as SurfaceCommandResult;
       debugState.mediaObjects.blockedReason = (result as SurfaceCommandResult).blockedReason ?? null;
-      settlePendingSurfaceCommand(result as SurfaceCommandResult);
+      mediaSurfaceCommands.settle(result as SurfaceCommandResult);
       if (!debugState.issueCode) {
         setStatus(`Access denied: ${result.permission}`);
       }
@@ -2867,14 +2451,14 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
       debugState.access.lastSurfaceCommandAccepted = result.accepted;
       debugState.mediaObjects.lastCommand = result;
       debugState.mediaObjects.blockedReason = result.blockedReason ?? null;
-      settlePendingSurfaceCommand(result);
+      mediaSurfaceCommands.settle(result);
     },
     onError: (error: unknown) => {
       console.error(error);
       const issue = classifyRoomStateError(error);
       roomStateConnected = false;
       debugState.roomStateConnected = false;
-      rejectPendingSurfaceCommands("room_state_error");
+      mediaSurfaceCommands.rejectAll("room_state_error");
       clearSeatReclaimRetry();
       applyIssue(issue, {
         degradedMode: "api_fallback",
@@ -2888,7 +2472,7 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
       const issue = getRuntimeIssue("room_state_failed");
       roomStateConnected = false;
       debugState.roomStateConnected = false;
-      rejectPendingSurfaceCommands("room_state_closed");
+      mediaSurfaceCommands.rejectAll("room_state_closed");
       applyIssue(issue, {
         degradedMode: "api_fallback",
         roomStateMode: "disconnected",
@@ -3918,7 +3502,7 @@ async function startScreenShare(): Promise<void> {
   if (isScreenSharing) {
     return;
   }
-  const createResult = await createScreenShareObjectOnSurface(DEBUG_SURFACE_ID);
+  const createResult = await mediaSurfaceCommands.createScreenShareObjectOnSurface(DEBUG_SURFACE_ID);
   if (!createResult.accepted || !createResult.objectId) {
     throw new Error(`screen_share_create_rejected:${createResult.blockedReason ?? "unknown"}`);
   }
@@ -3931,14 +3515,14 @@ async function startScreenShare(): Promise<void> {
   debugState.screenShare.errorCode = null;
 
   try {
-    const selecting = await patchScreenShareObject(localScreenShareObjectId, localScreenShareSurfaceId, revision, { type: "mark-selecting" });
+    const selecting = await mediaSurfaceCommands.patchScreenShareObject(localScreenShareObjectId, localScreenShareSurfaceId, revision, { type: "mark-selecting" });
     if (!selecting.accepted) {
       throw new Error(`screen_share_selecting_rejected:${selecting.blockedReason ?? "unknown"}`);
     }
     revision = selecting.revision ?? revision;
 
     if (shareMockEnabled) {
-      const publishing = await patchScreenShareObject(localScreenShareObjectId, localScreenShareSurfaceId, revision, { type: "mark-publishing" });
+      const publishing = await mediaSurfaceCommands.patchScreenShareObject(localScreenShareObjectId, localScreenShareSurfaceId, revision, { type: "mark-publishing" });
       if (!publishing.accepted) {
         throw new Error(`screen_share_publishing_rejected:${publishing.blockedReason ?? "unknown"}`);
       }
@@ -3947,7 +3531,7 @@ async function startScreenShare(): Promise<void> {
       attachMockVideoStream(activeMockScreenShareStream);
       isScreenSharing = true;
       const mediaTrackSid = `mock-screen-share:${participantId}:${Date.now()}`;
-      const active = await patchScreenShareObject(localScreenShareObjectId, localScreenShareSurfaceId, revision, { type: "mark-active", mediaTrackSid });
+      const active = await mediaSurfaceCommands.patchScreenShareObject(localScreenShareObjectId, localScreenShareSurfaceId, revision, { type: "mark-active", mediaTrackSid });
       if (!active.accepted) {
         throw new Error(`screen_share_active_rejected:${active.blockedReason ?? "unknown"}`);
       }
@@ -3964,7 +3548,7 @@ async function startScreenShare(): Promise<void> {
 
     const room = await ensureMediaRoom();
     debugState.screenShareState = "starting";
-    const publishing = await patchScreenShareObject(localScreenShareObjectId, localScreenShareSurfaceId, revision, { type: "mark-publishing" });
+    const publishing = await mediaSurfaceCommands.patchScreenShareObject(localScreenShareObjectId, localScreenShareSurfaceId, revision, { type: "mark-publishing" });
     if (!publishing.accepted) {
       throw new Error(`screen_share_publishing_rejected:${publishing.blockedReason ?? "unknown"}`);
     }
@@ -3981,7 +3565,7 @@ async function startScreenShare(): Promise<void> {
     }
     isScreenSharing = true;
     const mediaTrackSid = publication?.trackSid ?? `local-screen-share:${participantId}:${Date.now()}`;
-    const active = await patchScreenShareObject(localScreenShareObjectId, localScreenShareSurfaceId, revision, { type: "mark-active", mediaTrackSid });
+    const active = await mediaSurfaceCommands.patchScreenShareObject(localScreenShareObjectId, localScreenShareSurfaceId, revision, { type: "mark-active", mediaTrackSid });
     if (!active.accepted) {
       throw new Error(`screen_share_active_rejected:${active.blockedReason ?? "unknown"}`);
     }
@@ -3997,8 +3581,8 @@ async function startScreenShare(): Promise<void> {
     const errorCode = getScreenShareErrorCode(error);
     debugState.screenShare.errorCode = errorCode;
     if (localScreenShareObjectId && localScreenShareSurfaceId) {
-      void patchScreenShareObject(localScreenShareObjectId, localScreenShareSurfaceId, revision, { type: "mark-failed", errorCode })
-        .then(() => stopScreenShareObject(localScreenShareObjectId!, localScreenShareSurfaceId!))
+      void mediaSurfaceCommands.patchScreenShareObject(localScreenShareObjectId, localScreenShareSurfaceId, revision, { type: "mark-failed", errorCode })
+        .then(() => mediaSurfaceCommands.stopScreenShareObject(localScreenShareObjectId!, localScreenShareSurfaceId!))
         .catch(() => undefined);
     }
     activeMockScreenShareStream?.getTracks().forEach((track) => track.stop());
@@ -4023,11 +3607,12 @@ async function startWhiteboard(): Promise<void> {
   if (startWhiteboardButton.disabled) {
     return;
   }
-  const result = await createWhiteboardObjectOnSurface(DEBUG_SURFACE_ID);
+  const result = await mediaSurfaceCommands.createWhiteboardObjectOnSurface(DEBUG_SURFACE_ID);
   if (!result.accepted) {
     debugState.mediaObjects.blockedReason = result.blockedReason ?? null;
     throw new Error(`whiteboard_create_rejected:${result.blockedReason ?? "unknown"}`);
   }
+  whiteboardRuntime.clearError();
   setStatus("Whiteboard started");
   syncWhiteboardControls();
 }
@@ -4041,15 +3626,13 @@ async function clearWhiteboard(): Promise<void> {
     debugState.access.lastDeniedPermission = "whiteboard.clear";
     throw createFaultError("NotAllowedError", "whiteboard_clear_forbidden");
   }
-  const result = await patchWhiteboardObject(object.objectId, object.surfaceId, object.revision, {
-    type: "clear",
-    inputEventId: `${participantId}:clear:${Date.now()}`
-  });
+  const result = await mediaSurfaceCommands.patchWhiteboardObject(object.objectId, object.surfaceId, object.revision, whiteboardRuntime.createClearPatch());
   if (!result.accepted) {
     debugState.mediaObjects.blockedReason = result.blockedReason ?? null;
     throw new Error(`whiteboard_clear_rejected:${result.blockedReason ?? "unknown"}`);
   }
-  clearWhiteboardPreview();
+  whiteboardRuntime.clearPreview();
+  whiteboardRuntime.clearError();
   setStatus("Whiteboard cleared");
 }
 
@@ -4070,7 +3653,7 @@ async function stopScreenShare(): Promise<void> {
     debugState.screenShareState = "stopped";
     lastScreenShareStoppedAtMs = Date.now();
     if (objectId) {
-      await stopScreenShareObject(objectId, surfaceId);
+      await mediaSurfaceCommands.stopScreenShareObject(objectId, surfaceId);
     }
     localScreenShareObjectId = null;
     localScreenShareSurfaceId = null;
@@ -4085,7 +3668,7 @@ async function stopScreenShare(): Promise<void> {
   }
   if (!livekitRoom) {
     if (objectId) {
-      await stopScreenShareObject(objectId, surfaceId);
+      await mediaSurfaceCommands.stopScreenShareObject(objectId, surfaceId);
     }
     isScreenSharing = false;
     localScreenShareObjectId = null;
@@ -4107,7 +3690,7 @@ async function stopScreenShare(): Promise<void> {
   debugState.screenShareState = "stopped";
   lastScreenShareStoppedAtMs = Date.now();
   if (objectId) {
-    await stopScreenShareObject(objectId, surfaceId);
+    await mediaSurfaceCommands.stopScreenShareObject(objectId, surfaceId);
   }
   localScreenShareObjectId = null;
   localScreenShareSurfaceId = null;
@@ -4308,7 +3891,8 @@ startWhiteboardButton.addEventListener("click", () => {
   void startWhiteboard().catch((error: unknown) => {
     console.error(error);
     setStatus("Whiteboard start failed");
-    debugState.whiteboard.errorCode = error instanceof Error ? error.message : "failed";
+    whiteboardRuntime.setError(error instanceof Error ? error.message : "failed");
+    debugState.whiteboard.errorCode = whiteboardRuntime.createDebugSnapshot(activeWhiteboardObjectForSurface(DEBUG_SURFACE_ID)).errorCode;
   });
 });
 
@@ -4316,7 +3900,8 @@ clearWhiteboardButton.addEventListener("click", () => {
   void clearWhiteboard().catch((error: unknown) => {
     console.error(error);
     setStatus("Whiteboard clear failed");
-    debugState.whiteboard.errorCode = error instanceof Error ? error.message : "clear_failed";
+    whiteboardRuntime.setError(error instanceof Error ? error.message : "clear_failed");
+    debugState.whiteboard.errorCode = whiteboardRuntime.createDebugSnapshot(activeWhiteboardObjectForSurface(DEBUG_SURFACE_ID)).errorCode;
   });
 });
 
