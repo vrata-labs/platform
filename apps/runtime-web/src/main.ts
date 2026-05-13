@@ -186,6 +186,7 @@ const sceneHost = mustElement<HTMLDivElement>("#scene");
 const joinAudioButton = mustElement<HTMLButtonElement>("#join-audio");
 const muteButton = mustElement<HTMLButtonElement>("#toggle-mute");
 const startWhiteboardButton = mustElement<HTMLButtonElement>("#start-whiteboard");
+const drawWhiteboardButton = mustElement<HTMLButtonElement>("#draw-whiteboard");
 const clearWhiteboardButton = mustElement<HTMLButtonElement>("#clear-whiteboard");
 const startShareButton = mustElement<HTMLButtonElement>("#start-share");
 const stopShareButton = mustElement<HTMLButtonElement>("#stop-share");
@@ -254,6 +255,24 @@ const localPoseController = createLocalPoseController({
 });
 const xrControllers = [renderer.xr.getController(0), renderer.xr.getController(1)];
 const xrControllerGrips = [renderer.xr.getControllerGrip(0), renderer.xr.getControllerGrip(1)];
+const whiteboardPencils = xrControllers.map(() => {
+  const pencil = new THREE.Group();
+  const shaft = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.012, 0.012, 0.28, 10),
+    new THREE.MeshBasicMaterial({ color: 0x2563eb })
+  );
+  shaft.rotation.x = Math.PI / 2;
+  shaft.position.z = -0.12;
+  const tip = new THREE.Mesh(
+    new THREE.ConeGeometry(0.022, 0.07, 10),
+    new THREE.MeshBasicMaterial({ color: 0x111827 })
+  );
+  tip.rotation.x = -Math.PI / 2;
+  tip.position.z = -0.285;
+  pencil.add(shaft, tip);
+  pencil.visible = false;
+  return pencil;
+});
 for (const controller of xrControllers) {
   controller.addEventListener("connected", (event) => {
     const payload = (event as { data?: { handedness?: string } }).data;
@@ -263,6 +282,9 @@ for (const controller of xrControllers) {
     controller.userData.handedness = "";
   });
   scene.add(controller);
+}
+for (const [index, pencil] of whiteboardPencils.entries()) {
+  xrControllers[index]?.add(pencil);
 }
 for (const grip of xrControllerGrips) {
   scene.add(grip);
@@ -349,6 +371,9 @@ const API_PRESENCE_REFRESH_INTERVAL_MS = 1000;
 
 const keyState: Record<string, boolean> = {};
 let pointerActive = false;
+let whiteboardPointerActive = false;
+let whiteboardDrawToolActive = false;
+let xrWhiteboardPointerActive = false;
 let pointerMovedSinceDown = false;
 let suppressPointerClick = false;
 let pointerHoveringScene = false;
@@ -835,7 +860,11 @@ function syncMediaObjectsDebugState(): void {
     ? ((activeObject.state as SurfaceTestCardState).clickCount ?? 0)
     : null;
   const activeWhiteboard = activeWhiteboardObjectForSurface(DEBUG_SURFACE_ID);
-  debugState.whiteboard = whiteboardRuntime.createDebugSnapshot(activeWhiteboard);
+  debugState.whiteboard = {
+    ...whiteboardRuntime.createDebugSnapshot(activeWhiteboard),
+    drawToolActive: whiteboardDrawToolActive,
+    xrPointerActive: xrWhiteboardPointerActive
+  };
   if (activeWhiteboard) {
     whiteboardRuntime.render(activeWhiteboard.state);
   } else if (displaySurface.material instanceof THREE.MeshBasicMaterial && whiteboardRuntime.ownsTexture(displaySurface.material.map)) {
@@ -1042,10 +1071,58 @@ function getInteractionFrameInput(frameContext: RuntimeFrameContext) {
 }
 
 function confirmInteractionTarget(frameContext: RuntimeFrameContext): void {
+  if (canUseWhiteboardXrDrawInput(frameContext)) {
+    const hit = resolveDebugSurfaceHitFromFrameRay(frameContext, "xr-controller");
+    if (hit) {
+      xrWhiteboardPointerActive = commitDebugSurfaceInput({
+        hit,
+        source: "xr-controller",
+        kind: "pointer-down",
+        clientTimeMs: frameContext.nowMs,
+        button: "primary"
+      });
+      syncWhiteboardPencilVisuals(frameContext, xrWhiteboardPointerActive);
+      if (xrWhiteboardPointerActive) {
+        return;
+      }
+    }
+  }
   commitDebugSurfaceInputFromFrameRay(frameContext, "pointer-down");
   const target = updateInteractionRayState(getInteractionFrameInput(frameContext));
   interactionTargetPerformer.performTarget(target);
   forcedTestInteractionSeatId = null;
+}
+
+function updateWhiteboardXrDrawInput(frameContext: RuntimeFrameContext): void {
+  const canDraw = canUseWhiteboardXrDrawInput(frameContext);
+  if (!canDraw) {
+    if (xrWhiteboardPointerActive) {
+      cancelWhiteboardPreview();
+    }
+    xrWhiteboardPointerActive = false;
+    syncWhiteboardPencilVisuals(frameContext, false);
+    return;
+  }
+  if (!xrWhiteboardPointerActive) {
+    const hit = resolveDebugSurfaceHitFromFrameRay(frameContext, "xr-controller");
+    syncWhiteboardPencilVisuals(frameContext, Boolean(hit));
+    return;
+  }
+  if (!frameContext.xr?.triggerPressed) {
+    const committed = commitDebugSurfaceInputFromFrameRay(frameContext, "pointer-up");
+    if (!committed) {
+      cancelWhiteboardPreview();
+    }
+    xrWhiteboardPointerActive = false;
+    syncWhiteboardPencilVisuals(frameContext, false);
+    return;
+  }
+  const moved = commitDebugSurfaceInputFromFrameRay(frameContext, "pointer-move");
+  if (!moved) {
+    cancelWhiteboardPreview();
+    xrWhiteboardPointerActive = false;
+  }
+  syncWhiteboardPencilVisuals(frameContext, xrWhiteboardPointerActive);
 }
 
 function executeFrameRuntimeCommandList(frameContext: RuntimeFrameContext, commands: FrameLocomotionCommand[]): void {
@@ -1098,10 +1175,29 @@ function canClearWhiteboardControl(): boolean {
     && Boolean(activeWhiteboardObjectForSurface(DEBUG_SURFACE_ID));
 }
 
+function canUseWhiteboardDrawTool(): boolean {
+  return hasRoomPermission(debugState.access.permissions, "whiteboard.draw")
+    && roomStateConnected
+    && Boolean(activeWhiteboardObjectForSurface(DEBUG_SURFACE_ID));
+}
+
 function syncWhiteboardControls(): void {
+  const canDraw = canUseWhiteboardDrawTool();
+  if (!canDraw) {
+    whiteboardDrawToolActive = false;
+    whiteboardPointerActive = false;
+    xrWhiteboardPointerActive = false;
+    syncWhiteboardPencilVisuals(lastRuntimeFrameContext, false);
+  }
   startWhiteboardButton.hidden = !debugState.access.canCreateWhiteboard;
+  drawWhiteboardButton.hidden = !hasRoomPermission(debugState.access.permissions, "whiteboard.draw");
   clearWhiteboardButton.hidden = !hasRoomPermission(debugState.access.permissions, "whiteboard.clear");
   startWhiteboardButton.disabled = !canUseWhiteboardControl();
+  drawWhiteboardButton.disabled = !canDraw;
+  drawWhiteboardButton.textContent = whiteboardDrawToolActive ? "Draw: On" : "Draw: Off";
+  drawWhiteboardButton.setAttribute("aria-pressed", whiteboardDrawToolActive ? "true" : "false");
+  drawWhiteboardButton.classList.toggle("tool-active", whiteboardDrawToolActive);
+  renderer.domElement.style.cursor = whiteboardDrawToolActive ? "crosshair" : "";
   clearWhiteboardButton.disabled = !canClearWhiteboardControl();
 }
 
@@ -1151,6 +1247,40 @@ function resolveDebugSurfaceHitFromPointer(clientX: number, clientY: number, sou
   return resolveDebugSurfaceHit(surfaceInputRaycaster.ray.clone(), source);
 }
 
+function resolveDebugSurfaceHitFromFrameRay(frameContext: RuntimeFrameContext, source: SurfaceInputSource): ResolvedSurfaceHit | null {
+  const resolvedRay = resolveRuntimeInteractionRay(getInteractionFrameInput(frameContext));
+  if (!resolvedRay) {
+    return null;
+  }
+  return resolveDebugSurfaceHit(resolvedRay.ray, source);
+}
+
+function renderActiveWhiteboardAfterPreviewChange(): void {
+  const object = activeWhiteboardObjectForSurface(DEBUG_SURFACE_ID);
+  if (object) {
+    whiteboardRuntime.render(object.state);
+  }
+}
+
+function cancelWhiteboardPreview(): void {
+  whiteboardRuntime.clearPreview();
+  renderActiveWhiteboardAfterPreviewChange();
+}
+
+function syncWhiteboardPencilVisuals(frameContext: RuntimeFrameContext | null, visible: boolean): void {
+  const primaryController = frameContext?.source === "xr" ? getPrimaryRightXrControllerForSession(frameContext.xr?.session) : null;
+  for (const [index, pencil] of whiteboardPencils.entries()) {
+    pencil.visible = visible && xrControllers[index] === primaryController;
+  }
+}
+
+function canUseWhiteboardXrDrawInput(frameContext: RuntimeFrameContext): boolean {
+  return frameContext.source === "xr"
+    && hasRoomPermission(debugState.access.permissions, "whiteboard.draw")
+    && roomStateConnected
+    && Boolean(activeWhiteboardObjectForSurface(DEBUG_SURFACE_ID));
+}
+
 function commitDebugSurfaceInput(input: {
   hit: ResolvedSurfaceHit | null;
   source: SurfaceInputSource;
@@ -1160,6 +1290,7 @@ function commitDebugSurfaceInput(input: {
   pressure?: number;
   key?: string;
   text?: string;
+  routeMediaObjectInput?: boolean;
 }): boolean {
   recordSurfaceInputHit(debugState.surfaceInput, input.hit);
   surfaceInputSeq += 1;
@@ -1184,7 +1315,7 @@ function commitDebugSurfaceInput(input: {
       ? resolution.event
       : null;
   applySurfaceInputResolution(debugState.surfaceInput, resolvedEvent ? { accepted: true, event: resolvedEvent } : resolution);
-  if (resolvedEvent) {
+  if (resolvedEvent && input.routeMediaObjectInput !== false) {
     routeSurfaceInputToMediaObject(resolvedEvent);
   }
   if (resolvedEvent && input.kind === "click" && hasRoomPermission(debugState.access.permissions, "surface.select")) {
@@ -1231,12 +1362,8 @@ function commitDebugSurfaceInputFromFocusedKeyboard(kind: Extract<SurfaceInputKi
 }
 
 function commitDebugSurfaceInputFromFrameRay(frameContext: RuntimeFrameContext, kind: SurfaceInputKind): boolean {
-  const resolvedRay = resolveRuntimeInteractionRay(getInteractionFrameInput(frameContext));
-  if (!resolvedRay) {
-    return false;
-  }
   const source: SurfaceInputSource = frameContext.source === "xr" ? "xr-controller" : "mouse";
-  const hit = resolveDebugSurfaceHit(resolvedRay.ray, source);
+  const hit = resolveDebugSurfaceHitFromFrameRay(frameContext, source);
   if (!hit) {
     return false;
   }
@@ -1280,6 +1407,12 @@ function updateAudioDeviceStatus(message: string): void {
 function applyDisplayTexture(texture: THREE.Texture | null): void {
   const material = displaySurface.material;
   if (!(material instanceof THREE.MeshBasicMaterial)) {
+    return;
+  }
+  if (material.map === texture) {
+    if (texture && material.color.getHex() !== 0xffffff) {
+      material.color.setHex(0xffffff);
+    }
     return;
   }
   if (material.map && material.map !== texture && !retainedDisplayTextures.has(material.map)) {
@@ -1742,6 +1875,8 @@ const debugState = {
     revision: 0,
     localCanDraw: false,
     localCanClear: false,
+    drawToolActive: false,
+    xrPointerActive: false,
     localPreviewPointCount: 0,
     lastInputSource: null as SurfaceInputSource | null,
     lastPoint: null as null | { u: number; v: number },
@@ -3613,7 +3748,7 @@ async function startWhiteboard(): Promise<void> {
     throw new Error(`whiteboard_create_rejected:${result.blockedReason ?? "unknown"}`);
   }
   whiteboardRuntime.clearError();
-  setStatus("Whiteboard started");
+  setStatus("Whiteboard started. Select Draw to sketch.");
   syncWhiteboardControls();
 }
 
@@ -3896,6 +4031,18 @@ startWhiteboardButton.addEventListener("click", () => {
   });
 });
 
+drawWhiteboardButton.addEventListener("click", () => {
+  if (!canUseWhiteboardDrawTool()) {
+    return;
+  }
+  whiteboardDrawToolActive = !whiteboardDrawToolActive;
+  if (!whiteboardDrawToolActive) {
+    cancelWhiteboardPreview();
+  }
+  whiteboardPointerActive = false;
+  syncWhiteboardControls();
+});
+
 clearWhiteboardButton.addEventListener("click", () => {
   void clearWhiteboard().catch((error: unknown) => {
     console.error(error);
@@ -3929,7 +4076,9 @@ window.addEventListener("keyup", (event) => {
 });
 
 renderer.domElement.addEventListener("pointerdown", (event) => {
-  commitDebugSurfaceInputFromPointer(event, "pointer-down");
+  whiteboardPointerActive = whiteboardDrawToolActive && canUseWhiteboardDrawTool()
+    ? commitDebugSurfaceInputFromPointer(event, "pointer-down")
+    : false;
   pointerActive = true;
   pointerMovedSinceDown = false;
   suppressPointerClick = false;
@@ -3939,7 +4088,17 @@ renderer.domElement.addEventListener("pointerdown", (event) => {
 });
 
 window.addEventListener("pointerup", (event) => {
-  commitDebugSurfaceInputFromPointer(event, "pointer-up");
+  if (whiteboardPointerActive) {
+    const committed = commitDebugSurfaceInputFromPointer(event, "pointer-up");
+    if (!committed) {
+      cancelWhiteboardPreview();
+    }
+    whiteboardPointerActive = false;
+    pointerActive = false;
+    pointerMovedSinceDown = false;
+    suppressPointerClick = true;
+    return;
+  }
   pointerActive = false;
   const pointerDistance = Math.hypot(event.clientX - pointerDownClientX, event.clientY - pointerDownClientY);
   const pointerHeldMs = performance.now() - pointerDownAtMs;
@@ -3956,13 +4115,20 @@ renderer.domElement.addEventListener("click", (event) => {
     return;
   }
   updatePointerNdcFromClientPosition(event.clientX, event.clientY);
-  commitDebugSurfaceInput({
-    hit: resolveDebugSurfaceHitFromPointer(event.clientX, event.clientY, "mouse"),
+  const hit = resolveDebugSurfaceHitFromPointer(event.clientX, event.clientY, "mouse");
+  const activeObject = activeMediaObjectForSurface(DEBUG_SURFACE_ID);
+  const whiteboardClickCanDraw = whiteboardDrawToolActive && canUseWhiteboardDrawTool();
+  const clickHandled = commitDebugSurfaceInput({
+    hit,
     source: "mouse",
     kind: "click",
     clientTimeMs: Date.now(),
-    button: "primary"
+    button: "primary",
+    routeMediaObjectInput: activeObject?.type !== WHITEBOARD_OBJECT_TYPE || whiteboardClickCanDraw
   });
+  if (clickHandled && activeObject?.type === WHITEBOARD_OBJECT_TYPE && whiteboardClickCanDraw) {
+    return;
+  }
   pointerHoveringScene = true;
   interactionRaycaster.setFromCamera(pointerNdc, camera);
   interactionTargetPerformer.performDirectRayTarget({
@@ -3981,9 +4147,13 @@ renderer.domElement.addEventListener("click", (event) => {
 
 window.addEventListener("pointermove", (event) => {
   updatePointerNdcFromClientPosition(event.clientX, event.clientY);
-  if (pointerActive && activeWhiteboardObjectForSurface(DEBUG_SURFACE_ID)) {
+  if (whiteboardPointerActive) {
     pointerMovedSinceDown = true;
-    commitDebugSurfaceInputFromPointer(event, "pointer-move");
+    const moved = commitDebugSurfaceInputFromPointer(event, "pointer-move");
+    if (!moved) {
+      cancelWhiteboardPreview();
+      whiteboardPointerActive = false;
+    }
     return;
   }
   if (event.pointerType === "touch" || !pointerActive || renderer.xr.isPresenting) {
@@ -4117,6 +4287,7 @@ renderer.setAnimationLoop(() => {
     recentFrameBudgetMs.splice(0, recentFrameBudgetMs.length - 60);
   }
   updateMovement(delta, frameContext);
+  updateWhiteboardXrDrawInput(frameContext);
   applyBotPose(nowMs / 1000);
   updateLocalPresenceDiagnostics();
   updateAvatarLipsync(delta);

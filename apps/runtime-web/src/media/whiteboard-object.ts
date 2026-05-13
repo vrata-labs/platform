@@ -39,6 +39,18 @@ export interface WhiteboardDebugSnapshot {
   errorCode: string | null;
 }
 
+export function whiteboardPointFromSurfaceInput(event: SurfaceInputEvent): WhiteboardPoint | null {
+  if (!event.uv) {
+    return null;
+  }
+  return {
+    u: event.uv.u,
+    v: 1 - event.uv.v,
+    t: event.clientTimeMs,
+    ...(event.pressure === undefined ? {} : { pressure: event.pressure })
+  };
+}
+
 export class WhiteboardObjectRuntime {
   readonly texture: THREE.CanvasTexture;
 
@@ -48,6 +60,8 @@ export class WhiteboardObjectRuntime {
   private lastInputSource: SurfaceInputSource | null = null;
   private lastPoint: null | { u: number; v: number } = null;
   private errorCode: string | null = null;
+  private previewVersion = 0;
+  private renderedSignature: string | null = null;
 
   constructor(private readonly options: WhiteboardObjectRuntimeOptions) {
     this.canvas = document.createElement("canvas");
@@ -83,6 +97,10 @@ export class WhiteboardObjectRuntime {
     if (!this.context) {
       return;
     }
+    const signature = this.createRenderSignature(state);
+    if (signature === this.renderedSignature) {
+      return;
+    }
     this.context.fillStyle = "#f8fafc";
     this.context.fillRect(0, 0, this.canvas.width, this.canvas.height);
     this.context.strokeStyle = "rgba(37, 99, 235, 0.12)";
@@ -109,11 +127,15 @@ export class WhiteboardObjectRuntime {
     this.context.font = "36px sans-serif";
     this.context.fillText("Noah Whiteboard", 40, 64);
     this.texture.needsUpdate = true;
+    this.renderedSignature = signature;
     this.options.applyTexture(this.texture);
   }
 
   clearPreview(): void {
-    this.localPreview = null;
+    if (this.localPreview) {
+      this.localPreview = null;
+      this.previewVersion += 1;
+    }
   }
 
   clearError(): void {
@@ -132,7 +154,7 @@ export class WhiteboardObjectRuntime {
   }
 
   routeInput(event: SurfaceInputEvent, object: MediaObjectInstance<WhiteboardState>): boolean {
-    const point = this.pointFromSurfaceInput(event);
+    const point = whiteboardPointFromSurfaceInput(event);
     if (!point) {
       return false;
     }
@@ -144,15 +166,8 @@ export class WhiteboardObjectRuntime {
         this.reportBlocked("missing-permission", "missing-permission:whiteboard.draw");
         return false;
       }
-      if (event.source === "xr-controller" || event.source === "xr-hand") {
-        this.sendPatch(object, {
-          type: "append-stroke",
-          inputEventId: event.eventId,
-          stroke: this.createLocalStroke(point)
-        });
-        return true;
-      }
       this.localPreview = this.createLocalStroke(point);
+      this.previewVersion += 1;
       this.render(object.state);
       return true;
     }
@@ -161,14 +176,27 @@ export class WhiteboardObjectRuntime {
       if (!this.localPreview) {
         return false;
       }
-      this.localPreview = this.appendPreviewPoint(this.localPreview, point);
+      const nextPreview = this.appendPreviewPoint(this.localPreview, point);
+      if (nextPreview === this.localPreview) {
+        return true;
+      }
+      this.localPreview = nextPreview;
+      this.previewVersion += 1;
       this.render(object.state);
       return true;
     }
 
     if (event.kind === "pointer-up") {
-      const stroke = this.localPreview ? this.appendPreviewPoint(this.localPreview, point) : this.createLocalStroke(point);
+      if (!this.canDraw()) {
+        this.reportBlocked("missing-permission", "missing-permission:whiteboard.draw");
+        return false;
+      }
+      if (!this.localPreview) {
+        return false;
+      }
+      const stroke = this.appendPreviewPoint(this.localPreview, point);
       this.localPreview = null;
+      this.previewVersion += 1;
       this.sendPatch(object, {
         type: "append-stroke",
         inputEventId: event.eventId,
@@ -194,20 +222,19 @@ export class WhiteboardObjectRuntime {
     return false;
   }
 
-  private canDraw(): boolean {
-    return this.options.getPermissions().includes("whiteboard.draw");
+  private createRenderSignature(state: WhiteboardState | null): string {
+    return [
+      state?.revision ?? -1,
+      state?.lastInputEventId ?? "",
+      state?.strokes.length ?? 0,
+      this.localPreview?.strokeId ?? "",
+      this.localPreview?.points.length ?? 0,
+      this.previewVersion
+    ].join(":");
   }
 
-  private pointFromSurfaceInput(event: SurfaceInputEvent): WhiteboardPoint | null {
-    if (!event.uv) {
-      return null;
-    }
-    return {
-      u: event.uv.u,
-      v: event.uv.v,
-      t: event.clientTimeMs,
-      ...(event.pressure === undefined ? {} : { pressure: event.pressure })
-    };
+  private canDraw(): boolean {
+    return this.options.getPermissions().includes("whiteboard.draw");
   }
 
   private drawStroke(stroke: WhiteboardStroke): void {

@@ -111,8 +111,13 @@ test("M1.5 host creates whiteboard and member stroke syncs to viewers", async ({
 
     await expect(host.locator("#start-whiteboard")).toBeVisible();
     await expect(host.locator("#start-whiteboard")).toBeEnabled();
+    await expect(host.locator("#draw-whiteboard")).toBeDisabled();
     await host.click("#start-whiteboard");
     await waitForWhiteboard(guest, 0);
+    await expect(host.locator("#draw-whiteboard")).toBeEnabled();
+    await expect(host.locator("#draw-whiteboard")).toHaveAttribute("aria-pressed", "false");
+    await host.click("#draw-whiteboard");
+    await expect(host.locator("#draw-whiteboard")).toHaveAttribute("aria-pressed", "true");
 
     await sendSurfaceInput(member, { kind: "pointer-down", u: 0.2, v: 0.2 });
     await sendSurfaceInput(member, { kind: "pointer-move", u: 0.3, v: 0.3 });
@@ -187,6 +192,8 @@ test("M1.5 XR surface input creates whiteboard stroke", async ({ page }) => {
   await waitForWhiteboard(page, 0);
 
   await sendSurfaceInput(page, { kind: "pointer-down", source: "xr-controller", u: 0.25, v: 0.75 });
+  await sendSurfaceInput(page, { kind: "pointer-move", source: "xr-controller", u: 0.3, v: 0.7 });
+  await sendSurfaceInput(page, { kind: "pointer-up", source: "xr-controller", u: 0.35, v: 0.65 });
 
   await waitForWhiteboard(page, 1);
   await expect.poll(async () => {
@@ -196,7 +203,7 @@ test("M1.5 XR surface input creates whiteboard stroke", async ({ page }) => {
       u: debug?.whiteboard?.lastPoint?.u ?? null,
       v: debug?.whiteboard?.lastPoint?.v ?? null
     };
-  }).toEqual({ source: "xr-controller", u: 0.25, v: 0.75 });
+  }).toEqual({ source: "xr-controller", u: 0.35, v: 0.35 });
 });
 
 test("M1.5 rejoin restores whiteboard state", async ({ browser }) => {
