@@ -63,7 +63,7 @@ import { createRemoteAvatarRuntime } from "./avatar/remote-avatar-runtime.js";
 import { createInitialAvatarRuntimeFlags, resolveAvatarCatalogUrl, resolveAvatarRuntimeFlags } from "./avatar/avatar-runtime.js";
 import { resolveSeatRootPosition } from "./avatar/avatar-seating.js";
 import { resolveAvatarViewProfile } from "./avatar/avatar-visibility.js";
-import { resolveLocalAvatarHandFrame } from "./avatar/avatar-xr-hands.js";
+import { createSyntheticLocalAvatarHandFrame, resolveLocalAvatarHandFrame, type LocalAvatarHandFrameResult } from "./avatar/avatar-xr-hands.js";
 import { resolveAvatarXrInput } from "./avatar/avatar-xr-input.js";
 import { setAvatarSandboxStatus } from "./avatar/avatar-sandbox.js";
 import { resetAvatarSession, startAvatarSandboxSession, startLocalAvatarSession } from "./avatar/avatar-session.js";
@@ -85,7 +85,7 @@ import {
   tryFocusSurface,
   type ResolvedSurfaceHit
 } from "./input/surface-input.js";
-import { resolveSyntheticXrPencilPose, resolveXrPencilPose, type XrPencilPose } from "./input/xr-pencil.js";
+import { resolveXrPencilPose, type XrPencilPose } from "./input/xr-pencil.js";
 import { executeFrameLocomotionCommands, type FrameLocomotionCommand } from "./locomotion/frame-command-bridge.js";
 import { executeFrameLocomotionPipeline, type FrameLocomotionPipelineHandlers } from "./locomotion/frame-locomotion.js";
 import { createInteractionCommandPlanner } from "./locomotion/interaction-command-planner.js";
@@ -443,6 +443,7 @@ let localHeadMesh: THREE.Mesh | null = null;
 const seatingController = createSeatingController({ participantId });
 let lastAppliedSeatLockId: string | null = null;
 let lastRuntimeFrameContext: RuntimeFrameContext | null = null;
+const localAvatarHandFrameCache = new WeakMap<RuntimeFrameContext, LocalAvatarHandFrameResult | null>();
 const interactionCommandPlanner = createInteractionCommandPlanner();
 let forcedTestInteractionRay: THREE.Ray | null = null;
 let forcedTestInteractionSeatId: string | null = null;
@@ -1050,6 +1051,7 @@ const interactionTargetPerformer = createInteractionTargetPerformer({
 function getInteractionFrameInput(frameContext: RuntimeFrameContext) {
   return {
     frameContext,
+    localAvatarHandFrame: getFrameLocalAvatarHandFrame(frameContext),
     forcedRay: forcedTestInteractionRay,
     forcedSeatId: forcedTestInteractionSeatId,
     avatarVrMockEnabled,
@@ -1074,6 +1076,45 @@ function getInteractionFrameInput(frameContext: RuntimeFrameContext) {
     updateSeatMarkerVisuals,
     nowSeconds: () => performance.now() / 1000
   };
+}
+
+function createFrameLocalAvatarHandFrame(frameContext: RuntimeFrameContext): LocalAvatarHandFrameResult | null {
+  if (avatarVrMockEnabled && syntheticXrState) {
+    return createSyntheticLocalAvatarHandFrame({
+      rightController: syntheticXrState.rightController,
+      rightGrip: syntheticXrState.rightGrip,
+      rayDirection: syntheticXrState.rayDirection
+    });
+  }
+
+  if (frameContext.source !== "xr" || !renderer.xr.isPresenting) {
+    return null;
+  }
+
+  const pose = localPoseController.getPose();
+  return resolveLocalAvatarHandFrame({
+    presenting: renderer.xr.isPresenting,
+    inputSources: frameContext.xr?.inputSources ?? [],
+    grips: xrControllerGrips,
+    controllers: xrControllers,
+    xrFrame: frameContext.xr?.frame,
+    referenceSpace: frameContext.xr?.referenceSpace ?? null,
+    playerOffset: {
+      x: pose.position.x,
+      y: pose.position.y,
+      z: pose.position.z
+    },
+    playerYaw: pose.yaw
+  });
+}
+
+function getFrameLocalAvatarHandFrame(frameContext: RuntimeFrameContext): LocalAvatarHandFrameResult | null {
+  if (localAvatarHandFrameCache.has(frameContext)) {
+    return localAvatarHandFrameCache.get(frameContext) ?? null;
+  }
+  const handFrame = createFrameLocalAvatarHandFrame(frameContext);
+  localAvatarHandFrameCache.set(frameContext, handFrame);
+  return handFrame;
 }
 
 function confirmInteractionTarget(frameContext: RuntimeFrameContext): void {
@@ -1308,27 +1349,9 @@ function resolveDebugSurfaceHitFromFrameRay(frameContext: RuntimeFrameContext, s
 }
 
 function resolveWhiteboardPencilPose(frameContext: RuntimeFrameContext): XrPencilPose | null {
-  if (avatarVrMockEnabled && syntheticXrState) {
-    return resolveSyntheticXrPencilPose({
-      anchor: syntheticXrState.rightGrip ?? syntheticXrState.rightController,
-      direction: syntheticXrState.rayDirection,
-      tipLocalZ: WHITEBOARD_PENCIL_TIP_LOCAL_Z
-    });
-  }
-
-  if (frameContext.source !== "xr") {
-    return null;
-  }
-  const localPose = localPoseController.getPose();
+  const handFrame = getFrameLocalAvatarHandFrame(frameContext);
   return resolveXrPencilPose({
-    presenting: renderer.xr.isPresenting,
-    inputSources: frameContext.xr?.inputSources ?? [],
-    grips: xrControllerGrips,
-    controllers: xrControllers,
-    xrFrame: frameContext.xr?.frame,
-    referenceSpace: frameContext.xr?.referenceSpace ?? undefined,
-    playerOffset: localPose.position,
-    playerYaw: localPose.yaw,
+    handPose: handFrame?.worldHandPoses.rightHand ?? null,
     tipLocalZ: WHITEBOARD_PENCIL_TIP_LOCAL_Z
   });
 }
@@ -3161,8 +3184,9 @@ function getCameraWorldPitch(): number {
 
 function getLocalAvatarHandTargets(frameContext: RuntimeFrameContext): { leftHand: { x: number; y: number; z: number } | null; rightHand: { x: number; y: number; z: number } | null } {
   const pose = localPoseController.getPose();
+  const handFrame = getFrameLocalAvatarHandFrame(frameContext);
   if (avatarVrMockEnabled && !renderer.xr.isPresenting) {
-    if (syntheticXrState) {
+    if (handFrame) {
       const headWorldPosition = camera.getWorldPosition(new THREE.Vector3());
       debugState.xrAvatarDebug = {
         profile: "synthetic",
@@ -3178,18 +3202,15 @@ function getLocalAvatarHandTargets(frameContext: RuntimeFrameContext): { leftHan
           z: headWorldPosition.z
         },
         leftGrip: null,
-        rightGrip: syntheticXrState.rightGrip,
+        rightGrip: handFrame.debug.rightGrip,
         leftController: null,
-        rightController: syntheticXrState.rightController,
+        rightController: handFrame.debug.rightController,
         leftResolved: null,
-        rightResolved: syntheticXrState.rightGrip ?? syntheticXrState.rightController,
-        rightHandWorld: syntheticXrState.rightGrip ?? syntheticXrState.rightController,
-        rightControllerWorld: syntheticXrState.rightController
+        rightResolved: handFrame.debug.rightResolved,
+        rightHandWorld: handFrame.worldHands.rightHand,
+        rightControllerWorld: handFrame.controllerWorldHands.rightHand
       };
-      return {
-        leftHand: null,
-        rightHand: syntheticXrState.rightGrip ?? syntheticXrState.rightController
-      };
+      return handFrame.worldHands;
     }
     const headWorldPosition = camera.getWorldPosition(new THREE.Vector3());
     debugState.xrAvatarDebug = {
@@ -3220,24 +3241,11 @@ function getLocalAvatarHandTargets(frameContext: RuntimeFrameContext): { leftHan
     debugState.xrAvatarDebug = null;
     return { leftHand: null, rightHand: null };
   }
-  const xrFrame = frameContext.xr?.frame;
-  const inputSources = frameContext.xr?.inputSources ?? [];
-  const referenceSpace = frameContext.xr?.referenceSpace ?? null;
+  if (!handFrame) {
+    debugState.xrAvatarDebug = null;
+    return { leftHand: null, rightHand: null };
+  }
   const headWorldPosition = camera.getWorldPosition(new THREE.Vector3());
-  const handFrame = resolveLocalAvatarHandFrame({
-    presenting: renderer.xr.isPresenting,
-    inputSources,
-    grips: xrControllerGrips,
-    controllers: xrControllers,
-    xrFrame,
-    referenceSpace,
-    playerOffset: {
-      x: pose.position.x,
-      y: pose.position.y,
-      z: pose.position.z
-    },
-    playerYaw: pose.yaw
-  });
   debugState.xrAvatarDebug = {
     profile: lastAvatarXrInputProfile,
     playerRoot: {
@@ -3260,7 +3268,7 @@ function getLocalAvatarHandTargets(frameContext: RuntimeFrameContext): { leftHan
     rightHandWorld: handFrame.worldHands.rightHand,
     rightControllerWorld: handFrame.controllerWorldHands.rightHand
   };
-  return handFrame.controllerWorldHands;
+  return handFrame.worldHands;
 }
 
 function updateLocalAvatar(delta: number, frameContext: RuntimeFrameContext): void {

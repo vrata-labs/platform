@@ -1,6 +1,6 @@
 import * as THREE from "three";
 
-import { resolveLocalAvatarHandTargets, type XrSpatialLike } from "../avatar/avatar-xr-hands.js";
+import { resolveLocalAvatarHandTargets, type LocalAvatarHandFrameResult, type XrSpatialLike } from "../avatar/avatar-xr-hands.js";
 import { resolveXrInteractionRay } from "../avatar/avatar-xr-ray.js";
 import type { RuntimeFrameContext } from "../input/runtime-frame-context.js";
 
@@ -37,6 +37,7 @@ function roundVector3(input: Vector3Like): Vector3Like {
 
 export function resolveInteractionRay(input: {
   frameContext: RuntimeFrameContext;
+  localAvatarHandFrame?: LocalAvatarHandFrameResult | null;
   forcedRay?: THREE.Ray | null;
   avatarVrMockEnabled: boolean;
   syntheticXrState?: SyntheticXrInteractionState | null;
@@ -94,17 +95,19 @@ export function resolveInteractionRay(input: {
     if (!xrRay) {
       return null;
     }
-    const xrHands = resolveLocalAvatarHandTargets({
-      presenting: true,
-      inputSources: frameContext.xr.inputSources,
-      grips: input.xrControllerGrips,
-      controllers: input.xrControllers,
-      xrFrame: frameContext.xr.frame,
-      referenceSpace: frameContext.xr.referenceSpace,
-      playerOffset: input.playerPosition,
-      playerYaw: input.playerYaw
-    });
-    const rayOrigin = xrHands.rightHand ?? xrRay.origin;
+    const xrHands = input.localAvatarHandFrame === undefined
+      ? resolveLocalAvatarHandTargets({
+        presenting: true,
+        inputSources: frameContext.xr.inputSources,
+        grips: input.xrControllerGrips,
+        controllers: input.xrControllers,
+        xrFrame: frameContext.xr.frame,
+        referenceSpace: frameContext.xr.referenceSpace,
+        playerOffset: input.playerPosition,
+        playerYaw: input.playerYaw
+      })
+      : input.localAvatarHandFrame?.worldHands ?? null;
+    const rayOrigin = xrHands?.rightHand ?? xrRay.origin;
     const origin = new THREE.Vector3(rayOrigin.x, rayOrigin.y, rayOrigin.z);
     const direction = new THREE.Vector3(xrRay.direction.x, xrRay.direction.y, xrRay.direction.z).normalize();
     return {

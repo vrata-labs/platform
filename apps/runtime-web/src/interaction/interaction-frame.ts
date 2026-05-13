@@ -1,6 +1,6 @@
 import * as THREE from "three";
 
-import type { XrSpatialLike } from "../avatar/avatar-xr-hands.js";
+import type { LocalAvatarHandFrameResult, XrSpatialLike } from "../avatar/avatar-xr-hands.js";
 import type { RuntimeFrameContext } from "../input/runtime-frame-context.js";
 import type { SceneBundleSeatAnchor } from "../scene-bundle.js";
 import {
@@ -24,6 +24,7 @@ interface Vector3Like {
 
 export interface RuntimeInteractionRayInput {
   frameContext: RuntimeFrameContext;
+  localAvatarHandFrame?: LocalAvatarHandFrameResult | null;
   forcedRay?: THREE.Ray | null;
   avatarVrMockEnabled: boolean;
   syntheticXrState?: SyntheticXrInteractionState | null;
@@ -66,6 +67,7 @@ export interface RuntimeInteractionFrameInput extends RuntimeInteractionRayInput
 export function resolveRuntimeInteractionRay(input: RuntimeInteractionRayInput): ResolvedInteractionRay | null {
   return resolveInteractionRay({
     frameContext: input.frameContext,
+    localAvatarHandFrame: input.localAvatarHandFrame,
     forcedRay: input.forcedRay,
     avatarVrMockEnabled: input.avatarVrMockEnabled,
     syntheticXrState: input.syntheticXrState,

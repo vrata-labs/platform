@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import * as THREE from "three";
 
-import { collectLocalAvatarHandDebug, resolveLocalAvatarHandFrame, resolveLocalAvatarHandTargets } from "./avatar-xr-hands.js";
+import { collectLocalAvatarHandDebug, createSyntheticLocalAvatarHandFrame, resolveLocalAvatarHandFrame, resolveLocalAvatarHandTargets } from "./avatar-xr-hands.js";
 
 function spatial(x: number, y: number, z: number) {
   const object = new THREE.Object3D();
@@ -11,7 +11,22 @@ function spatial(x: number, y: number, z: number) {
   return object;
 }
 
-function frameWithPoses(entries: Array<{ space: unknown; x: number; y: number; z: number }>) {
+const Y_AXIS = new THREE.Vector3(0, 1, 0);
+
+function assertQuaternionClose(actual: { x: number; y: number; z: number; w: number }, expected: THREE.Quaternion) {
+  assert.ok(Math.abs(actual.x - expected.x) < 1e-9);
+  assert.ok(Math.abs(actual.y - expected.y) < 1e-9);
+  assert.ok(Math.abs(actual.z - expected.z) < 1e-9);
+  assert.ok(Math.abs(actual.w - expected.w) < 1e-9);
+}
+
+function frameWithPoses(entries: Array<{
+  space: unknown;
+  x: number;
+  y: number;
+  z: number;
+  orientation?: { x: number; y: number; z: number; w: number };
+}>) {
   return {
     getPose(space: unknown) {
       const found = entries.find((entry) => entry.space === space);
@@ -20,7 +35,8 @@ function frameWithPoses(entries: Array<{ space: unknown; x: number; y: number; z
       }
       return {
         transform: {
-          position: { x: found.x, y: found.y, z: found.z }
+          position: { x: found.x, y: found.y, z: found.z },
+          ...(found.orientation ? { orientation: found.orientation } : {})
         }
       };
     }
@@ -179,6 +195,49 @@ test("resolveLocalAvatarHandTargets rotates XR hand poses with player yaw", () =
   assert.ok(Math.abs(result.rightHand.z - 5.75) < 1e-9);
 });
 
+test("resolveLocalAvatarHandFrame exposes shared grip pose orientation and source index", () => {
+  const leftGripSpace = { id: "left-grip" };
+  const rightGripSpace = { id: "right-grip" };
+  const rightOrientation = new THREE.Quaternion().setFromAxisAngle(Y_AXIS, Math.PI / 4).normalize();
+  const result = resolveLocalAvatarHandFrame({
+    presenting: true,
+    inputSources: [
+      { handedness: "left", gripSpace: leftGripSpace },
+      { handedness: "right", gripSpace: rightGripSpace }
+    ],
+    grips: [null, null],
+    controllers: [null, null],
+    xrFrame: frameWithPoses([
+      { space: leftGripSpace, x: -0.2, y: 1.2, z: 0.3 },
+      { space: rightGripSpace, x: 0.2, y: 1.2, z: 0.3, orientation: rightOrientation }
+    ]),
+    referenceSpace: { id: "ref" },
+    playerYaw: Math.PI / 2
+  });
+
+  assert.equal(result.worldHandPoses.rightHand?.sourceIndex, 1);
+  assert.ok(result.worldHandPoses.rightHand);
+  assert.ok(Math.abs(result.worldHandPoses.rightHand.position.x - 0.3) < 1e-9);
+  assert.ok(Math.abs(result.worldHandPoses.rightHand.position.y - 1.2) < 1e-9);
+  assert.ok(Math.abs(result.worldHandPoses.rightHand.position.z + 0.2) < 1e-9);
+  assertQuaternionClose(
+    result.worldHandPoses.rightHand.orientation,
+    new THREE.Quaternion().setFromAxisAngle(Y_AXIS, Math.PI / 2).multiply(rightOrientation).normalize()
+  );
+});
+
+test("createSyntheticLocalAvatarHandFrame shares the synthetic grip as hand pose", () => {
+  const result = createSyntheticLocalAvatarHandFrame({
+    rightController: { x: 0, y: 2, z: 0 },
+    rightGrip: { x: 0.5, y: 1.5, z: -2 },
+    rayDirection: { x: 0, y: 0, z: -1 }
+  });
+
+  assert.equal(result.worldHandPoses.rightHand?.sourceIndex, 0);
+  assert.deepEqual(result.worldHands.rightHand, { x: 0.5, y: 1.5, z: -2 });
+  assert.deepEqual(result.controllerWorldHands.rightHand, { x: 0, y: 2, z: 0 });
+});
+
 test("resolveLocalAvatarHandFrame uses one XR pose sample for debug and hand targets", () => {
   const rightGripSpace = { id: "right-grip" };
   const rightTargetRaySpace = { id: "right-target-ray" };
@@ -211,4 +270,6 @@ test("resolveLocalAvatarHandFrame uses one XR pose sample for debug and hand tar
   assert.deepEqual(result.debug.rightController, { x: 0.4, y: 1.3, z: 0.5 });
   assert.deepEqual(result.worldHands.rightHand, { x: 1.2, y: 1.1, z: 6.3 });
   assert.deepEqual(result.controllerWorldHands.rightHand, { x: 1.4, y: 1.3, z: 6.5 });
+  assert.equal(result.worldHandPoses.rightHand?.sourceIndex, 0);
+  assert.deepEqual(result.worldHandPoses.rightHand?.position, { x: 1.2, y: 1.1, z: 6.3 });
 });
