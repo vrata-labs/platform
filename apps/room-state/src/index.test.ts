@@ -193,6 +193,67 @@ test("screen-share commands mutate authoritative room state", () => {
   assert.equal((server.rooms.get("demo-room")?.mediaObjects.objects[created.objectId ?? ""]?.state as { mediaTrackSid?: string } | undefined)?.mediaTrackSid, "track-1");
 });
 
+test("whiteboard commands append and clear strokes through authoritative room state", () => {
+  const server = createRoomStateServer();
+  const memberSocket = createSocket();
+  connectParticipant(server, "demo-room", "host", createSocket() as never, { role: "host" });
+  connectParticipant(server, "demo-room", "member", memberSocket as never, { role: "member" });
+
+  const created = applyMediaObjectCreateCommand(server, "demo-room", "host", {
+    commandId: "cmd-create-whiteboard",
+    surfaceId: "debug-main",
+    objectType: "whiteboard"
+  });
+  assert.equal(created.accepted, true);
+  assert.equal(created.objectType, "whiteboard");
+
+  const appended = applyMediaObjectPatchCommand(server, "demo-room", "member", {
+    commandId: "cmd-append-whiteboard",
+    surfaceId: "debug-main",
+    objectId: created.objectId ?? "",
+    expectedRevision: 0,
+    patch: {
+      type: "append-stroke",
+      inputEventId: "member:stroke:1",
+      stroke: {
+        strokeId: "stroke-1",
+        participantId: "member",
+        tool: "pen",
+        color: "#2563eb",
+        width: 4,
+        points: [{ u: 0.2, v: 0.3, t: 10 }]
+      }
+    }
+  });
+  assert.equal(appended.accepted, true);
+  assert.equal(appended.permission, "whiteboard.draw");
+  assert.equal((server.rooms.get("demo-room")?.mediaObjects.objects[created.objectId ?? ""]?.state as { strokes?: unknown[] } | undefined)?.strokes?.length, 1);
+
+  const rejectedClear = applyMediaObjectPatchCommand(server, "demo-room", "member", {
+    commandId: "cmd-member-clear-whiteboard",
+    surfaceId: "debug-main",
+    objectId: created.objectId ?? "",
+    expectedRevision: 1,
+    patch: { type: "clear", inputEventId: "member:clear:1" }
+  });
+  assert.equal(rejectedClear.accepted, false);
+  assert.equal(rejectedClear.permission, "whiteboard.clear");
+
+  const cleared = applyMediaObjectPatchCommand(server, "demo-room", "host", {
+    commandId: "cmd-clear-whiteboard",
+    surfaceId: "debug-main",
+    objectId: created.objectId ?? "",
+    expectedRevision: 1,
+    patch: { type: "clear", inputEventId: "host:clear:1" }
+  });
+  assert.equal(cleared.accepted, true);
+  assert.equal((server.rooms.get("demo-room")?.mediaObjects.objects[created.objectId ?? ""]?.state as { strokes?: unknown[] } | undefined)?.strokes?.length, 0);
+
+  const payload = JSON.parse(memberSocket.sent[memberSocket.sent.length - 1]!);
+  assert.equal(payload.type, "room_state");
+  assert.equal(payload.room.mediaObjects.objects[created.objectId ?? ""].state.strokes.length, 0);
+});
+
 test("surface media audio command is admin-only and broadcasts accepted changes", () => {
   const server = createRoomStateServer();
   const hostSocket = createSocket();

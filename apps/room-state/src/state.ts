@@ -2,6 +2,11 @@ import {
   DEFAULT_MEDIA_SURFACE_ID,
   SCREEN_SHARE_OBJECT_TYPE,
   SURFACE_TEST_CARD_TYPE,
+  WHITEBOARD_ALLOWED_COLORS,
+  WHITEBOARD_ALLOWED_WIDTHS,
+  WHITEBOARD_MAX_POINTS_PER_STROKE,
+  WHITEBOARD_MAX_STROKES,
+  WHITEBOARD_OBJECT_TYPE,
   createDefaultRoomMediaObjectsState,
   getRoomPermissions,
   hasRoomPermission,
@@ -16,7 +21,11 @@ import {
   type ScreenShareObjectState,
   type ScreenSharePatch,
   type SurfaceTestCardPatch,
-  type SurfaceTestCardState
+  type SurfaceTestCardState,
+  type WhiteboardPatch,
+  type WhiteboardPoint,
+  type WhiteboardState,
+  type WhiteboardStroke
 } from "@noah/shared-types";
 
 import type { PresenceState, TransformState } from "./schema.js";
@@ -212,8 +221,17 @@ function createScreenShareState(ownerParticipantId: string, surfaceId: string): 
   };
 }
 
-function isSupportedMediaObjectType(type: string): type is typeof SURFACE_TEST_CARD_TYPE | typeof SCREEN_SHARE_OBJECT_TYPE {
-  return type === SURFACE_TEST_CARD_TYPE || type === SCREEN_SHARE_OBJECT_TYPE;
+function createWhiteboardState(): WhiteboardState {
+  return {
+    status: "active",
+    strokes: [],
+    revision: 0,
+    lastInputEventId: null
+  };
+}
+
+function isSupportedMediaObjectType(type: string): type is typeof SURFACE_TEST_CARD_TYPE | typeof SCREEN_SHARE_OBJECT_TYPE | typeof WHITEBOARD_OBJECT_TYPE {
+  return type === SURFACE_TEST_CARD_TYPE || type === SCREEN_SHARE_OBJECT_TYPE || type === WHITEBOARD_OBJECT_TYPE;
 }
 
 function isSurfaceTestCardPatch(input: unknown): input is SurfaceTestCardPatch {
@@ -248,6 +266,108 @@ function isScreenSharePatch(input: unknown): input is ScreenSharePatch {
     return isScreenShareErrorCode(patch.errorCode);
   }
   return false;
+}
+
+function isWhiteboardColor(input: unknown): input is WhiteboardStroke["color"] {
+  return typeof input === "string" && (WHITEBOARD_ALLOWED_COLORS as readonly string[]).includes(input);
+}
+
+function isWhiteboardWidth(input: unknown): input is WhiteboardStroke["width"] {
+  return typeof input === "number" && (WHITEBOARD_ALLOWED_WIDTHS as readonly number[]).includes(input);
+}
+
+function normalizeWhiteboardNumber(value: number): number {
+  return Number(value.toFixed(4));
+}
+
+function isValidWhiteboardPoint(input: unknown): input is WhiteboardPoint {
+  if (!input || typeof input !== "object") {
+    return false;
+  }
+  const point = input as { u?: unknown; v?: unknown; t?: unknown; pressure?: unknown };
+  const validPressure = point.pressure === undefined || (typeof point.pressure === "number" && Number.isFinite(point.pressure) && point.pressure >= 0 && point.pressure <= 1);
+  return typeof point.u === "number"
+    && Number.isFinite(point.u)
+    && point.u >= 0
+    && point.u <= 1
+    && typeof point.v === "number"
+    && Number.isFinite(point.v)
+    && point.v >= 0
+    && point.v <= 1
+    && typeof point.t === "number"
+    && Number.isFinite(point.t)
+    && validPressure;
+}
+
+function normalizeWhiteboardStroke(input: unknown, participantId: string): WhiteboardStroke | null {
+  if (!input || typeof input !== "object") {
+    return null;
+  }
+  const stroke = input as { strokeId?: unknown; tool?: unknown; color?: unknown; width?: unknown; points?: unknown };
+  if (typeof stroke.strokeId !== "string" || stroke.strokeId.trim().length === 0 || stroke.tool !== "pen" || !isWhiteboardColor(stroke.color) || !isWhiteboardWidth(stroke.width) || !Array.isArray(stroke.points)) {
+    return null;
+  }
+  if (stroke.points.length < 1 || stroke.points.length > WHITEBOARD_MAX_POINTS_PER_STROKE || !stroke.points.every(isValidWhiteboardPoint)) {
+    return null;
+  }
+  return {
+    strokeId: stroke.strokeId.trim(),
+    participantId,
+    tool: "pen",
+    color: stroke.color,
+    width: stroke.width,
+    points: stroke.points.map((point) => ({
+      u: normalizeWhiteboardNumber((point as WhiteboardPoint).u),
+      v: normalizeWhiteboardNumber((point as WhiteboardPoint).v),
+      t: Math.max(0, Math.floor((point as WhiteboardPoint).t)),
+      ...((point as WhiteboardPoint).pressure === undefined ? {} : { pressure: normalizeWhiteboardNumber((point as WhiteboardPoint).pressure!) })
+    }))
+  };
+}
+
+function isWhiteboardInputEventId(input: unknown): input is string {
+  return typeof input === "string" && input.trim().length > 0;
+}
+
+function getWhiteboardPatchPermission(input: unknown): RoomPermission | null {
+  if (!input || typeof input !== "object") {
+    return null;
+  }
+  const patch = input as { type?: unknown };
+  if (patch.type === "append-stroke") {
+    return "whiteboard.draw";
+  }
+  if (patch.type === "clear") {
+    return "whiteboard.clear";
+  }
+  return null;
+}
+
+function reduceWhiteboardState(state: WhiteboardState, patch: WhiteboardPatch, participantId: string): WhiteboardState | null {
+  if (!isWhiteboardInputEventId(patch.inputEventId)) {
+    return null;
+  }
+  if (state.lastInputEventId === patch.inputEventId) {
+    return state;
+  }
+  if (patch.type === "clear") {
+    return {
+      ...state,
+      strokes: [],
+      revision: state.revision + 1,
+      lastInputEventId: patch.inputEventId
+    };
+  }
+  const stroke = normalizeWhiteboardStroke(patch.stroke, participantId);
+  if (!stroke) {
+    return null;
+  }
+  return {
+    ...state,
+    strokes: [...state.strokes, stroke].slice(-WHITEBOARD_MAX_STROKES),
+    revision: state.revision + 1,
+    lastInputEventId: patch.inputEventId
+  };
 }
 
 function reduceScreenShareState(current: ScreenShareObjectState, patch: ScreenSharePatch, nowMs: number): ScreenShareObjectState {
@@ -365,8 +485,10 @@ export function createMediaObject(state: RoomState, participantId: string, input
 
   const objectState = input.objectType === SCREEN_SHARE_OBJECT_TYPE
     ? createScreenShareState(participantId, input.surfaceId)
-    : createSurfaceTestCardState();
-  const object: MediaObjectInstance<SurfaceTestCardState | ScreenShareObjectState> = {
+    : input.objectType === WHITEBOARD_OBJECT_TYPE
+      ? createWhiteboardState()
+      : createSurfaceTestCardState();
+  const object: MediaObjectInstance<SurfaceTestCardState | ScreenShareObjectState | WhiteboardState> = {
     objectId: input.objectId,
     type: input.objectType,
     roomId: state.roomId,
@@ -458,9 +580,6 @@ export function stopMediaObject(state: RoomState, participantId: string, input: 
 export function patchMediaObjectState(state: RoomState, participantId: string, input: PatchMediaObjectInput): MediaObjectMutationResult {
   const access = getParticipantAccess(state, participantId);
   let permission: RoomPermission = "surface.input";
-  if (!hasRoomPermission(access.permissions, "surface.input") && !hasRoomPermission(access.permissions, "screen-share.start")) {
-    return rejectMediaObjectCommand(state, { commandId: input.commandId, role: access.role, permission, blockedReason: "missing-permission", surfaceId: input.surfaceId, objectId: input.objectId });
-  }
 
   const mediaObjects = ensureMediaObjectsState(state);
   const surface = mediaObjects.surfaces[input.surfaceId];
@@ -474,14 +593,14 @@ export function patchMediaObjectState(state: RoomState, participantId: string, i
   if (object.surfaceId !== input.surfaceId || surface.activeObjectId !== input.objectId) {
     return rejectMediaObjectCommand(state, { commandId: input.commandId, role: access.role, permission, blockedReason: "object-surface-mismatch", surfaceId: input.surfaceId, objectId: input.objectId, objectType: object.type, revision: object.revision });
   }
-  permission = object.type === SCREEN_SHARE_OBJECT_TYPE ? "screen-share.start" : "surface.input";
-  if (!hasRoomPermission(access.permissions, permission)) {
-    return rejectMediaObjectCommand(state, { commandId: input.commandId, role: access.role, permission, blockedReason: "missing-permission", surfaceId: input.surfaceId, objectId: input.objectId, objectType: object.type, revision: object.revision });
-  }
   if (object.revision !== input.expectedRevision) {
     return rejectMediaObjectCommand(state, { commandId: input.commandId, role: access.role, permission, blockedReason: "revision-mismatch", surfaceId: input.surfaceId, objectId: input.objectId, objectType: object.type, revision: object.revision });
   }
   if (object.type === SCREEN_SHARE_OBJECT_TYPE) {
+    permission = "screen-share.start";
+    if (!hasRoomPermission(access.permissions, permission)) {
+      return rejectMediaObjectCommand(state, { commandId: input.commandId, role: access.role, permission, blockedReason: "missing-permission", surfaceId: input.surfaceId, objectId: input.objectId, objectType: object.type, revision: object.revision });
+    }
     if (!isScreenSharePatch(input.patch)) {
       return rejectMediaObjectCommand(state, { commandId: input.commandId, role: access.role, permission, blockedReason: "invalid-patch", surfaceId: input.surfaceId, objectId: input.objectId, objectType: object.type, revision: object.revision });
     }
@@ -513,6 +632,56 @@ export function patchMediaObjectState(state: RoomState, participantId: string, i
         revision: nextObject.revision
       })
     };
+  }
+  if (object.type === WHITEBOARD_OBJECT_TYPE) {
+    permission = getWhiteboardPatchPermission(input.patch) ?? "whiteboard.draw";
+    if (!hasRoomPermission(access.permissions, permission)) {
+      return rejectMediaObjectCommand(state, { commandId: input.commandId, role: access.role, permission, blockedReason: "missing-permission", surfaceId: input.surfaceId, objectId: input.objectId, objectType: object.type, revision: object.revision });
+    }
+    const currentState = object.state as WhiteboardState;
+    const patch = input.patch as WhiteboardPatch;
+    if (!patch || typeof patch !== "object" || !isWhiteboardInputEventId(patch.inputEventId)) {
+      return rejectMediaObjectCommand(state, { commandId: input.commandId, role: access.role, permission, blockedReason: "invalid-patch", surfaceId: input.surfaceId, objectId: input.objectId, objectType: object.type, revision: object.revision });
+    }
+    if (currentState.lastInputEventId === patch.inputEventId) {
+      return rejectMediaObjectCommand(state, { commandId: input.commandId, role: access.role, permission, blockedReason: "duplicate-input-event", surfaceId: input.surfaceId, objectId: input.objectId, objectType: object.type, revision: object.revision });
+    }
+    const nextState = reduceWhiteboardState(currentState, patch, participantId);
+    if (!nextState) {
+      return rejectMediaObjectCommand(state, { commandId: input.commandId, role: access.role, permission, blockedReason: "invalid-patch", surfaceId: input.surfaceId, objectId: input.objectId, objectType: object.type, revision: object.revision });
+    }
+    const nextObject: MediaObjectInstance<WhiteboardState> = {
+      ...object,
+      state: nextState,
+      status: nextState.status === "failed" ? "failed" : "active",
+      revision: object.revision + 1,
+      updatedAtMs: input.nowMs
+    };
+    const nextMediaObjects: RoomMediaObjectsState = {
+      surfaces: mediaObjects.surfaces,
+      objects: {
+        ...mediaObjects.objects,
+        [input.objectId]: nextObject
+      }
+    };
+    return {
+      room: { ...state, mediaObjects: nextMediaObjects },
+      result: createMediaObjectCommandResult({
+        accepted: true,
+        commandId: input.commandId,
+        role: access.role,
+        permission,
+        blockedReason: null,
+        surfaceId: input.surfaceId,
+        objectId: input.objectId,
+        objectType: object.type,
+        revision: nextObject.revision
+      })
+    };
+  }
+  permission = "surface.input";
+  if (!hasRoomPermission(access.permissions, permission)) {
+    return rejectMediaObjectCommand(state, { commandId: input.commandId, role: access.role, permission, blockedReason: "missing-permission", surfaceId: input.surfaceId, objectId: input.objectId, objectType: object.type, revision: object.revision });
   }
   if (object.type !== SURFACE_TEST_CARD_TYPE || !isSurfaceTestCardPatch(input.patch)) {
     return rejectMediaObjectCommand(state, { commandId: input.commandId, role: access.role, permission, blockedReason: "invalid-patch", surfaceId: input.surfaceId, objectId: input.objectId, objectType: object.type, revision: object.revision });

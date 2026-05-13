@@ -3,8 +3,13 @@ import type { RoomPermission, RoomRole } from "./access.js";
 export const DEFAULT_MEDIA_SURFACE_ID = "debug-main";
 export const SURFACE_TEST_CARD_TYPE = "surface-test-card";
 export const SCREEN_SHARE_OBJECT_TYPE = "screen-share";
+export const WHITEBOARD_OBJECT_TYPE = "whiteboard";
+export const WHITEBOARD_MAX_STROKES = 500;
+export const WHITEBOARD_MAX_POINTS_PER_STROKE = 256;
+export const WHITEBOARD_ALLOWED_COLORS = ["#111827", "#2563eb", "#dc2626"] as const;
+export const WHITEBOARD_ALLOWED_WIDTHS = [2, 4, 8] as const;
 
-export type MediaObjectType = typeof SURFACE_TEST_CARD_TYPE | typeof SCREEN_SHARE_OBJECT_TYPE | string;
+export type MediaObjectType = typeof SURFACE_TEST_CARD_TYPE | typeof SCREEN_SHARE_OBJECT_TYPE | typeof WHITEBOARD_OBJECT_TYPE | string;
 
 export type MediaObjectStatus = "active" | "stopped" | "failed";
 
@@ -64,6 +69,34 @@ export interface ScreenShareObjectState {
   errorCode?: ScreenShareErrorCode;
 }
 
+export type WhiteboardStatus = "active" | "locked" | "failed";
+export type WhiteboardTool = "pen";
+export type WhiteboardColor = typeof WHITEBOARD_ALLOWED_COLORS[number];
+export type WhiteboardWidth = typeof WHITEBOARD_ALLOWED_WIDTHS[number];
+
+export interface WhiteboardPoint {
+  u: number;
+  v: number;
+  t: number;
+  pressure?: number;
+}
+
+export interface WhiteboardStroke {
+  strokeId: string;
+  participantId: string;
+  tool: WhiteboardTool;
+  color: WhiteboardColor;
+  width: WhiteboardWidth;
+  points: WhiteboardPoint[];
+}
+
+export interface WhiteboardState {
+  status: WhiteboardStatus;
+  strokes: WhiteboardStroke[];
+  revision: number;
+  lastInputEventId: string | null;
+}
+
 export type SurfaceTestCardPatch = {
   type: "increment-click-count";
   inputEventId: string;
@@ -75,6 +108,10 @@ export type ScreenSharePatch =
   | { type: "mark-active"; mediaTrackSid: string }
   | { type: "mark-failed"; errorCode: ScreenShareErrorCode }
   | { type: "mark-stopped" };
+
+export type WhiteboardPatch =
+  | { type: "append-stroke"; stroke: WhiteboardStroke; inputEventId: string }
+  | { type: "clear"; inputEventId: string };
 
 export type MediaObjectCommandBlockedReason =
   | "missing-permission"
@@ -110,7 +147,7 @@ export function createDefaultRoomMediaObjectsState(roomId: string): RoomMediaObj
         inputEnabled: true,
         mediaAudioEnabled: false,
         visible: true,
-        allowedObjectTypes: [SURFACE_TEST_CARD_TYPE, SCREEN_SHARE_OBJECT_TYPE],
+        allowedObjectTypes: [SURFACE_TEST_CARD_TYPE, SCREEN_SHARE_OBJECT_TYPE, WHITEBOARD_OBJECT_TYPE],
         activeObjectId: null,
         lockedByParticipantId: null
       }

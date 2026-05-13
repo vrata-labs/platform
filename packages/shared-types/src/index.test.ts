@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { DEFAULT_MEDIA_SURFACE_ID, SCREEN_SHARE_OBJECT_TYPE, SURFACE_TEST_CARD_TYPE, createDefaultRoomMediaObjectsState, createRoomAccessDebugState } from "./index.js";
+import { DEFAULT_MEDIA_SURFACE_ID, SCREEN_SHARE_OBJECT_TYPE, SURFACE_TEST_CARD_TYPE, WHITEBOARD_OBJECT_TYPE, createDefaultRoomMediaObjectsState, createRoomAccessDebugState } from "./index.js";
 import type {
   AvatarCatalogV1,
   AvatarRecipeCatalogV1,
@@ -85,6 +85,7 @@ test("media object shared contracts compile in tests", () => {
 
   assert.equal(mediaObjects.surfaces[DEFAULT_MEDIA_SURFACE_ID]?.activeObjectId, null);
   assert.equal(mediaObjects.surfaces[DEFAULT_MEDIA_SURFACE_ID]?.allowedObjectTypes.includes(SCREEN_SHARE_OBJECT_TYPE), true);
+  assert.equal(mediaObjects.surfaces[DEFAULT_MEDIA_SURFACE_ID]?.allowedObjectTypes.includes(WHITEBOARD_OBJECT_TYPE), true);
   assert.equal(mediaObjects.surfaces[DEFAULT_MEDIA_SURFACE_ID]?.mediaAudioEnabled, false);
   assert.equal(cardState.clickCount, 1);
   assert.equal(screenShareState.mediaTrackSid, "track-1");

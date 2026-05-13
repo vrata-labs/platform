@@ -149,6 +149,7 @@ test("createRoomState includes default media surface", () => {
   assert.equal(room.mediaObjects.surfaces["debug-main"]?.activeObjectId, null);
   assert.equal(room.mediaObjects.surfaces["debug-main"]?.allowedObjectTypes.includes("surface-test-card"), true);
   assert.equal(room.mediaObjects.surfaces["debug-main"]?.allowedObjectTypes.includes("screen-share"), true);
+  assert.equal(room.mediaObjects.surfaces["debug-main"]?.allowedObjectTypes.includes("whiteboard"), true);
   assert.equal(room.mediaObjects.surfaces["debug-main"]?.mediaAudioEnabled, false);
 });
 
@@ -277,6 +278,119 @@ test("createMediaObject rejects occupied surface and stop clears active object",
   assert.equal(stopped.result.accepted, true);
   assert.equal(stopped.room.mediaObjects.surfaces["debug-main"]?.activeObjectId, null);
   assert.equal(stopped.room.mediaObjects.objects["obj-1"], undefined);
+});
+
+test("whiteboard object appends strokes and enforces draw and clear permissions", () => {
+  const hostRoom = joinRoom(createRoomState("demo"), "host", { role: "host" });
+  const created = createMediaObject(hostRoom, "host", {
+    commandId: "cmd-create-whiteboard",
+    surfaceId: "debug-main",
+    objectType: "whiteboard",
+    objectId: "board-1",
+    nowMs: 1
+  });
+  assert.equal(created.result.accepted, true);
+
+  const memberRoom = joinRoom(created.room, "member", { role: "member" });
+  const appended = patchMediaObjectState(memberRoom, "member", {
+    commandId: "cmd-stroke",
+    surfaceId: "debug-main",
+    objectId: "board-1",
+    expectedRevision: 0,
+    patch: {
+      type: "append-stroke",
+      inputEventId: "member:stroke:1",
+      stroke: {
+        strokeId: "stroke-1",
+        participantId: "spoofed",
+        tool: "pen",
+        color: "#2563eb",
+        width: 4,
+        points: [
+          { u: 0.1, v: 0.2, t: 10, pressure: 0.5 },
+          { u: 0.2, v: 0.3, t: 12 }
+        ]
+      }
+    },
+    nowMs: 2
+  });
+  assert.equal(appended.result.accepted, true);
+  assert.equal(appended.result.permission, "whiteboard.draw");
+  assert.equal(appended.result.revision, 1);
+  const appendedState = appended.room.mediaObjects.objects["board-1"]?.state as { strokes?: Array<{ participantId?: string }>; lastInputEventId?: string } | undefined;
+  assert.equal(appendedState?.strokes?.length, 1);
+  assert.equal(appendedState?.strokes?.[0]?.participantId, "member");
+  assert.equal(appendedState?.lastInputEventId, "member:stroke:1");
+
+  const duplicate = patchMediaObjectState(appended.room, "member", {
+    commandId: "cmd-duplicate-stroke",
+    surfaceId: "debug-main",
+    objectId: "board-1",
+    expectedRevision: 1,
+    patch: {
+      type: "append-stroke",
+      inputEventId: "member:stroke:1",
+      stroke: {
+        strokeId: "stroke-1",
+        participantId: "member",
+        tool: "pen",
+        color: "#2563eb",
+        width: 4,
+        points: [{ u: 0.1, v: 0.2, t: 10 }]
+      }
+    },
+    nowMs: 3
+  });
+  assert.equal(duplicate.result.accepted, false);
+  assert.equal(duplicate.result.blockedReason, "duplicate-input-event");
+
+  const guestRoom = joinRoom(appended.room, "guest");
+  const guestDraw = patchMediaObjectState(guestRoom, "guest", {
+    commandId: "cmd-guest-draw",
+    surfaceId: "debug-main",
+    objectId: "board-1",
+    expectedRevision: 1,
+    patch: {
+      type: "append-stroke",
+      inputEventId: "guest:stroke:1",
+      stroke: {
+        strokeId: "stroke-guest",
+        participantId: "guest",
+        tool: "pen",
+        color: "#111827",
+        width: 2,
+        points: [{ u: 0.5, v: 0.5, t: 20 }]
+      }
+    },
+    nowMs: 4
+  });
+  assert.equal(guestDraw.result.accepted, false);
+  assert.equal(guestDraw.result.permission, "whiteboard.draw");
+  assert.equal(guestDraw.result.blockedReason, "missing-permission");
+
+  const memberClear = patchMediaObjectState(appended.room, "member", {
+    commandId: "cmd-member-clear",
+    surfaceId: "debug-main",
+    objectId: "board-1",
+    expectedRevision: 1,
+    patch: { type: "clear", inputEventId: "member:clear:1" },
+    nowMs: 5
+  });
+  assert.equal(memberClear.result.accepted, false);
+  assert.equal(memberClear.result.permission, "whiteboard.clear");
+  assert.equal(memberClear.result.blockedReason, "missing-permission");
+
+  const cleared = patchMediaObjectState(appended.room, "host", {
+    commandId: "cmd-clear",
+    surfaceId: "debug-main",
+    objectId: "board-1",
+    expectedRevision: 1,
+    patch: { type: "clear", inputEventId: "host:clear:1" },
+    nowMs: 6
+  });
+  assert.equal(cleared.result.accepted, true);
+  assert.equal(cleared.result.permission, "whiteboard.clear");
+  assert.deepEqual((cleared.room.mediaObjects.objects["board-1"]?.state as { strokes?: unknown[] } | undefined)?.strokes, []);
 });
 
 test("screen-share object state updates through host-only revisioned reducer", () => {
