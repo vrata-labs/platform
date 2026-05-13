@@ -85,6 +85,7 @@ import {
   tryFocusSurface,
   type ResolvedSurfaceHit
 } from "./input/surface-input.js";
+import { resolveSyntheticXrPencilPose, resolveXrPencilPose, type XrPencilPose } from "./input/xr-pencil.js";
 import { executeFrameLocomotionCommands, type FrameLocomotionCommand } from "./locomotion/frame-command-bridge.js";
 import { executeFrameLocomotionPipeline, type FrameLocomotionPipelineHandlers } from "./locomotion/frame-locomotion.js";
 import { createInteractionCommandPlanner } from "./locomotion/interaction-command-planner.js";
@@ -289,31 +290,11 @@ for (const controller of xrControllers) {
   scene.add(controller);
 }
 for (const [index, pencil] of whiteboardPencils.entries()) {
-  xrControllers[index]?.add(pencil);
+  pencil.userData.controllerIndex = index;
+  scene.add(pencil);
 }
 for (const grip of xrControllerGrips) {
   scene.add(grip);
-}
-
-function getPrimaryRightXrController(): THREE.Group | null {
-  return xrControllers.find((controller) => controller.userData.handedness === "right")
-    ?? xrControllers.find((controller) => controller.userData.handedness === "")
-    ?? xrControllers[1]
-    ?? xrControllers[0]
-    ?? null;
-}
-
-function getPrimaryRightXrControllerForSession(session: XRSession | undefined): THREE.Group | null {
-  const inputSources = Array.from(session?.inputSources ?? []);
-  const rightIndex = inputSources.findIndex((source) => source.handedness === "right");
-  if (rightIndex >= 0 && xrControllers[rightIndex]) {
-    return xrControllers[rightIndex]!;
-  }
-  const trackedIndex = inputSources.findIndex((source) => source.targetRayMode === "tracked-pointer");
-  if (trackedIndex >= 0 && xrControllers[trackedIndex]) {
-    return xrControllers[trackedIndex]!;
-  }
-  return getPrimaryRightXrController();
 }
 
 for (const controller of xrControllers) {
@@ -501,7 +482,6 @@ const interactionRaycaster = new THREE.Raycaster();
 const surfaceInputRaycaster = new THREE.Raycaster();
 const cameraWorldPosition = new THREE.Vector3();
 const forcedInteractionDirection = new THREE.Vector3();
-const whiteboardPencilTipWorld = new THREE.Vector3();
 const avatarOutboundPublisher = createAvatarOutboundPublisher();
 let lastAvatarMove = { x: 0, z: 0 };
 let lastAvatarTurnRate = 0;
@@ -1327,40 +1307,40 @@ function resolveDebugSurfaceHitFromFrameRay(frameContext: RuntimeFrameContext, s
   return resolveDebugSurfaceHit(resolvedRay.ray, source);
 }
 
-function resolveWhiteboardPencilTipWorld(frameContext: RuntimeFrameContext): THREE.Vector3 | null {
+function resolveWhiteboardPencilPose(frameContext: RuntimeFrameContext): XrPencilPose | null {
   if (avatarVrMockEnabled && syntheticXrState) {
-    const direction = new THREE.Vector3(
-      syntheticXrState.rayDirection.x,
-      syntheticXrState.rayDirection.y,
-      syntheticXrState.rayDirection.z
-    );
-    whiteboardPencilTipWorld.set(
-      syntheticXrState.rightController.x,
-      syntheticXrState.rightController.y,
-      syntheticXrState.rightController.z
-    );
-    if (direction.lengthSq() > 0) {
-      whiteboardPencilTipWorld.addScaledVector(direction.normalize(), Math.abs(WHITEBOARD_PENCIL_TIP_LOCAL_Z));
-    }
-    return whiteboardPencilTipWorld;
+    return resolveSyntheticXrPencilPose({
+      anchor: syntheticXrState.rightGrip ?? syntheticXrState.rightController,
+      direction: syntheticXrState.rayDirection,
+      tipLocalZ: WHITEBOARD_PENCIL_TIP_LOCAL_Z
+    });
   }
 
-  const controller = frameContext.source === "xr" ? getPrimaryRightXrControllerForSession(frameContext.xr?.session) : null;
-  if (!controller) {
+  if (frameContext.source !== "xr") {
     return null;
   }
-  controller.updateWorldMatrix(true, false);
-  return controller.localToWorld(whiteboardPencilTipWorld.set(0, 0, WHITEBOARD_PENCIL_TIP_LOCAL_Z));
+  const localPose = localPoseController.getPose();
+  return resolveXrPencilPose({
+    presenting: renderer.xr.isPresenting,
+    inputSources: frameContext.xr?.inputSources ?? [],
+    grips: xrControllerGrips,
+    controllers: xrControllers,
+    xrFrame: frameContext.xr?.frame,
+    referenceSpace: frameContext.xr?.referenceSpace ?? undefined,
+    playerOffset: localPose.position,
+    playerYaw: localPose.yaw,
+    tipLocalZ: WHITEBOARD_PENCIL_TIP_LOCAL_Z
+  });
 }
 
 function resolveDebugSurfaceHitFromXrPencil(frameContext: RuntimeFrameContext, source: SurfaceInputSource): ResolvedSurfaceHit | null {
-  const tipWorld = resolveWhiteboardPencilTipWorld(frameContext);
-  if (!tipWorld) {
+  const pencilPose = resolveWhiteboardPencilPose(frameContext);
+  if (!pencilPose) {
     return null;
   }
   displaySurface.updateMatrixWorld(true);
   return resolveSurfaceHitFromPlanePoint({
-    point: tipWorld,
+    point: pencilPose.tipWorld,
     source,
     surfaces: [{
       surfaceId: DEBUG_SURFACE_ID,
@@ -1410,9 +1390,14 @@ function applyWhiteboardPreviewOverlay(stroke: WhiteboardStroke | null): void {
 }
 
 function syncWhiteboardPencilVisuals(frameContext: RuntimeFrameContext | null, visible: boolean): void {
-  const primaryController = frameContext?.source === "xr" ? getPrimaryRightXrControllerForSession(frameContext.xr?.session) : null;
+  const pencilPose = visible && frameContext ? resolveWhiteboardPencilPose(frameContext) : null;
   for (const [index, pencil] of whiteboardPencils.entries()) {
-    pencil.visible = visible && xrControllers[index] === primaryController;
+    const pencilVisible = Boolean(pencilPose && index === pencilPose.sourceIndex);
+    pencil.visible = pencilVisible;
+    if (pencilVisible && pencilPose) {
+      pencil.position.copy(pencilPose.anchorWorld);
+      pencil.quaternion.copy(pencilPose.orientationWorld);
+    }
   }
 }
 
