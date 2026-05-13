@@ -4,6 +4,7 @@ import { Room, RoomEvent, Track } from "livekit-client";
 import {
   SCREEN_SHARE_OBJECT_TYPE,
   SURFACE_TEST_CARD_TYPE,
+  WHITEBOARD_MAX_POINTS_PER_STROKE,
   WHITEBOARD_OBJECT_TYPE,
   createRoomAccessDebugState,
   hasRoomPermission,
@@ -16,6 +17,7 @@ import {
   type SurfaceInputKind,
   type SurfaceInputSource,
   type SurfaceTestCardState,
+  type WhiteboardStroke,
   type WhiteboardState
 } from "@noah/shared-types";
 
@@ -350,12 +352,30 @@ const roomBox = new THREE.Mesh(new THREE.BoxGeometry(14, 5, 14), wallMaterial);
 roomBox.position.set(0, 2.5, 0);
 scene.add(roomBox);
 
+const DEBUG_SURFACE_WIDTH_M = 5.8;
+const DEBUG_SURFACE_HEIGHT_M = 3.3;
 const displaySurface = new THREE.Mesh(
-  new THREE.PlaneGeometry(5.8, 3.3),
+  new THREE.PlaneGeometry(DEBUG_SURFACE_WIDTH_M, DEBUG_SURFACE_HEIGHT_M),
   new THREE.MeshBasicMaterial({ color: 0xffffff, toneMapped: false })
 );
 displaySurface.position.set(0, 2.2, -6.6);
 scene.add(displaySurface);
+
+const whiteboardPreviewPositions = new Float32Array(WHITEBOARD_MAX_POINTS_PER_STROKE * 3);
+const whiteboardPreviewGeometry = new THREE.BufferGeometry();
+const whiteboardPreviewPositionAttribute = new THREE.BufferAttribute(whiteboardPreviewPositions, 3);
+whiteboardPreviewPositionAttribute.setUsage(THREE.DynamicDrawUsage);
+whiteboardPreviewGeometry.setAttribute("position", whiteboardPreviewPositionAttribute);
+whiteboardPreviewGeometry.setDrawRange(0, 0);
+const whiteboardPreviewLine = new THREE.Line(
+  whiteboardPreviewGeometry,
+  new THREE.LineBasicMaterial({ color: 0x2563eb, transparent: true, opacity: 0.95, depthTest: false, depthWrite: false })
+);
+whiteboardPreviewLine.position.z = 0.018;
+whiteboardPreviewLine.renderOrder = 40;
+whiteboardPreviewLine.frustumCulled = false;
+whiteboardPreviewLine.visible = false;
+displaySurface.add(whiteboardPreviewLine);
 
 const DEBUG_SURFACE_ID = "debug-main";
 const DEBUG_SURFACE_WIDTH_PX = 1920;
@@ -463,6 +483,7 @@ const whiteboardRuntime = createWhiteboardObjectRuntime({
   getLatestObject: (surfaceId) => activeWhiteboardObjectForSurface(surfaceId),
   patchObject: (objectId, surfaceId, expectedRevision, patch) => mediaSurfaceCommands.patchWhiteboardObject(objectId, surfaceId, expectedRevision, patch),
   applyTexture: (texture) => applyDisplayTexture(texture),
+  applyPreview: (stroke) => applyWhiteboardPreviewOverlay(stroke),
   onBlocked: (blockedReason, errorCode) => {
     debugState.mediaObjects.blockedReason = blockedReason;
     debugState.whiteboard.errorCode = errorCode;
@@ -1265,6 +1286,27 @@ function renderActiveWhiteboardAfterPreviewChange(): void {
 function cancelWhiteboardPreview(): void {
   whiteboardRuntime.clearPreview();
   renderActiveWhiteboardAfterPreviewChange();
+}
+
+function applyWhiteboardPreviewOverlay(stroke: WhiteboardStroke | null): void {
+  const points = stroke?.points ?? [];
+  if (points.length < 2) {
+    whiteboardPreviewGeometry.setDrawRange(0, 0);
+    whiteboardPreviewLine.visible = false;
+    return;
+  }
+
+  const count = Math.min(points.length, WHITEBOARD_MAX_POINTS_PER_STROKE);
+  for (let index = 0; index < count; index += 1) {
+    const point = points[index]!;
+    const offset = index * 3;
+    whiteboardPreviewPositions[offset] = (point.u - 0.5) * DEBUG_SURFACE_WIDTH_M;
+    whiteboardPreviewPositions[offset + 1] = (0.5 - point.v) * DEBUG_SURFACE_HEIGHT_M;
+    whiteboardPreviewPositions[offset + 2] = 0;
+  }
+  whiteboardPreviewPositionAttribute.needsUpdate = true;
+  whiteboardPreviewGeometry.setDrawRange(0, count);
+  whiteboardPreviewLine.visible = true;
 }
 
 function syncWhiteboardPencilVisuals(frameContext: RuntimeFrameContext | null, visible: boolean): void {

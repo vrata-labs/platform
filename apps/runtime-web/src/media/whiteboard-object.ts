@@ -22,6 +22,7 @@ export interface WhiteboardObjectRuntimeOptions {
   getLatestObject: (surfaceId: string) => MediaObjectInstance<WhiteboardState> | null;
   patchObject: (objectId: string, surfaceId: string, expectedRevision: number, patch: WhiteboardPatch) => Promise<SurfaceCommandResult>;
   applyTexture: (texture: THREE.Texture | null) => void;
+  applyPreview: (stroke: WhiteboardStroke | null) => void;
   onBlocked: (blockedReason: string | null, errorCode: string | null) => void;
 }
 
@@ -60,7 +61,6 @@ export class WhiteboardObjectRuntime {
   private lastInputSource: SurfaceInputSource | null = null;
   private lastPoint: null | { u: number; v: number } = null;
   private errorCode: string | null = null;
-  private previewVersion = 0;
   private renderedSignature: string | null = null;
 
   constructor(private readonly options: WhiteboardObjectRuntimeOptions) {
@@ -120,9 +120,6 @@ export class WhiteboardObjectRuntime {
     for (const stroke of state?.strokes ?? []) {
       this.drawStroke(stroke);
     }
-    if (this.localPreview) {
-      this.drawStroke(this.localPreview);
-    }
     this.context.fillStyle = "rgba(15, 23, 42, 0.72)";
     this.context.font = "36px sans-serif";
     this.context.fillText("Noah Whiteboard", 40, 64);
@@ -134,7 +131,7 @@ export class WhiteboardObjectRuntime {
   clearPreview(): void {
     if (this.localPreview) {
       this.localPreview = null;
-      this.previewVersion += 1;
+      this.options.applyPreview(null);
     }
   }
 
@@ -167,8 +164,7 @@ export class WhiteboardObjectRuntime {
         return false;
       }
       this.localPreview = this.createLocalStroke(point);
-      this.previewVersion += 1;
-      this.render(object.state);
+      this.options.applyPreview(this.localPreview);
       return true;
     }
 
@@ -181,8 +177,7 @@ export class WhiteboardObjectRuntime {
         return true;
       }
       this.localPreview = nextPreview;
-      this.previewVersion += 1;
-      this.render(object.state);
+      this.options.applyPreview(this.localPreview);
       return true;
     }
 
@@ -196,13 +191,12 @@ export class WhiteboardObjectRuntime {
       }
       const stroke = this.appendPreviewPoint(this.localPreview, point);
       this.localPreview = null;
-      this.previewVersion += 1;
+      this.options.applyPreview(null);
       this.sendPatch(object, {
         type: "append-stroke",
         inputEventId: event.eventId,
         stroke
       });
-      this.render(object.state);
       return true;
     }
 
@@ -226,10 +220,7 @@ export class WhiteboardObjectRuntime {
     return [
       state?.revision ?? -1,
       state?.lastInputEventId ?? "",
-      state?.strokes.length ?? 0,
-      this.localPreview?.strokeId ?? "",
-      this.localPreview?.points.length ?? 0,
-      this.previewVersion
+      state?.strokes.length ?? 0
     ].join(":");
   }
 
