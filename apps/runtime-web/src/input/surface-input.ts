@@ -22,6 +22,12 @@ export interface DebugSurfaceDefinition {
   inputEnabled: boolean;
 }
 
+export interface DebugSurfacePlaneDefinition extends DebugSurfaceDefinition {
+  widthM: number;
+  heightM: number;
+  maxDistanceM: number;
+}
+
 export interface ResolvedSurfaceHit extends SurfaceInputHitDebug {
   inputEnabled: boolean;
 }
@@ -116,6 +122,44 @@ export function resolveSurfaceHitFromRay(input: {
       uv,
       pixel: pixelFromUv(uv, surface.widthPx, surface.heightPx),
       distanceM: roundSurfaceNumber(hit.distance),
+      inputEnabled: surface.inputEnabled
+    };
+  }
+
+  return bestHit;
+}
+
+export function resolveSurfaceHitFromPlanePoint(input: {
+  point: THREE.Vector3;
+  surfaces: DebugSurfacePlaneDefinition[];
+  source: SurfaceInputSource;
+}): ResolvedSurfaceHit | null {
+  let bestHit: ResolvedSurfaceHit | null = null;
+  let bestDistance = Number.POSITIVE_INFINITY;
+
+  for (const surface of input.surfaces) {
+    const localPoint = surface.object.worldToLocal(input.point.clone());
+    const distance = Math.abs(localPoint.z);
+    if (distance > surface.maxDistanceM || distance >= bestDistance) {
+      continue;
+    }
+    const halfWidth = surface.widthM / 2;
+    const halfHeight = surface.heightM / 2;
+    if (localPoint.x < -halfWidth || localPoint.x > halfWidth || localPoint.y < -halfHeight || localPoint.y > halfHeight) {
+      continue;
+    }
+    const uv = {
+      u: roundSurfaceNumber(localPoint.x / surface.widthM + 0.5),
+      v: roundSurfaceNumber(localPoint.y / surface.heightM + 0.5)
+    };
+    bestDistance = distance;
+    bestHit = {
+      surfaceId: surface.surfaceId,
+      objectId: surface.objectId,
+      source: input.source,
+      uv,
+      pixel: pixelFromUv(uv, surface.widthPx, surface.heightPx),
+      distanceM: roundSurfaceNumber(distance),
       inputEnabled: surface.inputEnabled
     };
   }

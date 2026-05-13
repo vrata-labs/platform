@@ -12,6 +12,13 @@ type WhiteboardDebug = {
     lastInputSource?: string | null;
     lastPoint?: { u?: number; v?: number } | null;
   };
+  surfaceInput?: {
+    lastEvent?: {
+      kind?: string | null;
+      source?: string | null;
+      uv?: { u?: number | null; v?: number | null } | null;
+    } | null;
+  };
   mediaObjects?: {
     surfaces?: Array<{
       surfaceId?: string;
@@ -29,10 +36,13 @@ type WhiteboardDebug = {
   };
 };
 
-function roomUrl(roomId: string, role: "guest" | "member" | "host") {
+function roomUrl(roomId: string, role: "guest" | "member" | "host", extraParams: Record<string, string> = {}) {
   const params = new URLSearchParams("debug=1");
   if (role !== "guest") {
     params.set("role", role);
+  }
+  for (const [key, value] of Object.entries(extraParams)) {
+    params.set(key, value);
   }
   return `/rooms/${roomId}?${params.toString()}`;
 }
@@ -74,6 +84,25 @@ async function trySendSurfaceInput(page: Page, input: { kind: string; source?: s
 
 async function sendSurfaceInput(page: Page, input: { kind: string; source?: string; u?: number; v?: number }) {
   const sent = await trySendSurfaceInput(page, input);
+  expect(sent).toBe(true);
+}
+
+async function setSyntheticXrState(page: Page, input: {
+  rightController: { x: number; y: number; z: number };
+  rayDirection: { x: number; y: number; z: number };
+  triggerPressed: boolean;
+  rayVisible?: boolean;
+}) {
+  const sent = await page.evaluate((value) => (window as Window & {
+    __NOAH_TEST__?: {
+      setSyntheticXrState: (state: {
+        rightController: { x: number; y: number; z: number };
+        rayDirection: { x: number; y: number; z: number };
+        triggerPressed?: boolean;
+        rayVisible?: boolean;
+      } | null) => boolean;
+    };
+  }).__NOAH_TEST__?.setSyntheticXrState(value) ?? false, input);
   expect(sent).toBe(true);
 }
 
@@ -204,6 +233,81 @@ test("M1.5 XR surface input creates whiteboard stroke", async ({ page }) => {
       v: debug?.whiteboard?.lastPoint?.v ?? null
     };
   }).toEqual({ source: "xr-controller", u: 0.35, v: 0.35 });
+});
+
+test("M1.5 XR contact pencil draws from controller tip instead of ray cursor", async ({ page }) => {
+  const roomId = `m1-whiteboard-xr-contact-${Date.now()}`;
+  await page.goto(roomUrl(roomId, "host", { avatarvrmock: "1" }));
+  await waitForKernel(page, "host");
+  await createWhiteboard(page);
+  await waitForWhiteboard(page, 0);
+
+  await setSyntheticXrState(page, {
+    rightController: { x: 0, y: 2.2, z: 0 },
+    rayDirection: { x: 0, y: 0, z: -1 },
+    triggerPressed: true,
+    rayVisible: true
+  });
+  await page.waitForTimeout(150);
+  expect((await readDebug(page))?.whiteboard?.strokeCount).toBe(0);
+
+  await setSyntheticXrState(page, {
+    rightController: { x: -0.58, y: 2.53, z: -6.28 },
+    rayDirection: { x: 0, y: 0, z: -1 },
+    triggerPressed: false,
+    rayVisible: false
+  });
+  await page.waitForTimeout(50);
+  await setSyntheticXrState(page, {
+    rightController: { x: -0.58, y: 2.53, z: -6.28 },
+    rayDirection: { x: 0, y: 0, z: -1 },
+    triggerPressed: true,
+    rayVisible: false
+  });
+  await expect.poll(async () => {
+    const event = (await readDebug(page))?.surfaceInput?.lastEvent;
+    return {
+      source: event?.source ?? null,
+      u: event?.uv?.u ?? null,
+      v: event?.uv?.v ?? null
+    };
+  }, {
+    timeout: 5000,
+    intervals: [100, 250, 500]
+  }).toEqual({ source: "xr-controller", u: 0.4, v: 0.6 });
+  await setSyntheticXrState(page, {
+    rightController: { x: 0.58, y: 1.87, z: -6.28 },
+    rayDirection: { x: 0, y: 0, z: -1 },
+    triggerPressed: true,
+    rayVisible: false
+  });
+  await expect.poll(async () => {
+    const event = (await readDebug(page))?.surfaceInput?.lastEvent;
+    return {
+      kind: event?.kind ?? null,
+      u: event?.uv?.u ?? null,
+      v: event?.uv?.v ?? null
+    };
+  }, {
+    timeout: 5000,
+    intervals: [100, 250, 500]
+  }).toEqual({ kind: "pointer-move", u: 0.6, v: 0.4 });
+  await setSyntheticXrState(page, {
+    rightController: { x: 0.58, y: 1.87, z: -6.28 },
+    rayDirection: { x: 0, y: 0, z: -1 },
+    triggerPressed: false,
+    rayVisible: false
+  });
+
+  await waitForWhiteboard(page, 1);
+  await expect.poll(async () => {
+    const debug = await readDebug(page);
+    return {
+      source: debug?.whiteboard?.lastInputSource ?? null,
+      u: debug?.whiteboard?.lastPoint?.u ?? null,
+      v: debug?.whiteboard?.lastPoint?.v ?? null
+    };
+  }).toEqual({ source: "xr-controller", u: 0.6, v: 0.6 });
 });
 
 test("M1.5 rejoin restores whiteboard state", async ({ browser }) => {

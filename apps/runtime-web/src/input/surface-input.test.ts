@@ -6,6 +6,7 @@ import {
   applySurfaceInputResolution,
   createSurfaceInputDebugState,
   createSyntheticSurfaceHit,
+  resolveSurfaceHitFromPlanePoint,
   resolveSurfaceHitFromRay,
   resolveSurfaceInputEvent,
   tryFocusSurface
@@ -27,6 +28,33 @@ test("resolveSurfaceHitFromRay maps plane hit to stable uv and pixels", () => {
   assert.equal(hit!.surfaceId, "debug-main");
   assert.deepEqual(hit!.uv, { u: 0.5, v: 0.5 });
   assert.deepEqual(hit!.pixel, { x: 100, y: 50 });
+});
+
+test("resolveSurfaceHitFromPlanePoint maps a nearby pencil tip to surface uv", () => {
+  const surface = new THREE.Mesh(new THREE.PlaneGeometry(2, 1), new THREE.MeshBasicMaterial());
+  surface.position.set(0, 0, -2);
+  surface.updateMatrixWorld(true);
+
+  const hit = resolveSurfaceHitFromPlanePoint({
+    point: new THREE.Vector3(0.5, 0.25, -2.02),
+    surfaces: [{ surfaceId: "debug-main", object: surface, widthPx: 200, heightPx: 100, widthM: 2, heightM: 1, maxDistanceM: 0.05, inputEnabled: true }],
+    source: "xr-controller"
+  });
+
+  assert.ok(hit);
+  assert.deepEqual(hit!.uv, { u: 0.75, v: 0.75 });
+  assert.deepEqual(hit!.pixel, { x: 150, y: 75 });
+  assert.equal(hit!.distanceM, 0.02);
+});
+
+test("resolveSurfaceHitFromPlanePoint rejects distant or out-of-bounds tips", () => {
+  const surface = new THREE.Mesh(new THREE.PlaneGeometry(2, 1), new THREE.MeshBasicMaterial());
+  surface.position.set(0, 0, -2);
+  surface.updateMatrixWorld(true);
+  const surfaces = [{ surfaceId: "debug-main", object: surface, widthPx: 200, heightPx: 100, widthM: 2, heightM: 1, maxDistanceM: 0.05, inputEnabled: true }];
+
+  assert.equal(resolveSurfaceHitFromPlanePoint({ point: new THREE.Vector3(0, 0, -2.1), surfaces, source: "xr-controller" }), null);
+  assert.equal(resolveSurfaceHitFromPlanePoint({ point: new THREE.Vector3(1.2, 0, -2.01), surfaces, source: "xr-controller" }), null);
 });
 
 test("resolveSurfaceInputEvent accepts member surface input", () => {

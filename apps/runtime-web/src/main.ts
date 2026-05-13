@@ -80,6 +80,7 @@ import {
   createSyntheticSurfaceHit,
   recordSurfaceInputHit,
   resolveSurfaceHitFromRay,
+  resolveSurfaceHitFromPlanePoint,
   resolveSurfaceInputEvent,
   tryFocusSurface,
   type ResolvedSurfaceHit
@@ -255,6 +256,8 @@ const localPoseController = createLocalPoseController({
     pitch: 0
   }
 });
+const WHITEBOARD_PENCIL_TIP_LOCAL_Z = -0.32;
+const WHITEBOARD_PENCIL_CONTACT_DISTANCE_M = 0.06;
 const xrControllers = [renderer.xr.getController(0), renderer.xr.getController(1)];
 const xrControllerGrips = [renderer.xr.getControllerGrip(0), renderer.xr.getControllerGrip(1)];
 const whiteboardPencils = xrControllers.map(() => {
@@ -394,6 +397,7 @@ let pointerActive = false;
 let whiteboardPointerActive = false;
 let whiteboardDrawToolActive = false;
 let xrWhiteboardPointerActive = false;
+let lastXrWhiteboardHit: ResolvedSurfaceHit | null = null;
 let pointerMovedSinceDown = false;
 let suppressPointerClick = false;
 let pointerHoveringScene = false;
@@ -497,6 +501,7 @@ const interactionRaycaster = new THREE.Raycaster();
 const surfaceInputRaycaster = new THREE.Raycaster();
 const cameraWorldPosition = new THREE.Vector3();
 const forcedInteractionDirection = new THREE.Vector3();
+const whiteboardPencilTipWorld = new THREE.Vector3();
 const avatarOutboundPublisher = createAvatarOutboundPublisher();
 let lastAvatarMove = { x: 0, z: 0 };
 let lastAvatarTurnRate = 0;
@@ -1092,8 +1097,9 @@ function getInteractionFrameInput(frameContext: RuntimeFrameContext) {
 }
 
 function confirmInteractionTarget(frameContext: RuntimeFrameContext): void {
-  if (canUseWhiteboardXrDrawInput(frameContext)) {
-    const hit = resolveDebugSurfaceHitFromFrameRay(frameContext, "xr-controller");
+  const whiteboardXrDrawInput = canUseWhiteboardXrDrawInput(frameContext);
+  if (whiteboardXrDrawInput) {
+    const hit = resolveDebugSurfaceHitFromXrPencil(frameContext, "xr-controller");
     if (hit) {
       xrWhiteboardPointerActive = commitDebugSurfaceInput({
         hit,
@@ -1102,13 +1108,16 @@ function confirmInteractionTarget(frameContext: RuntimeFrameContext): void {
         clientTimeMs: frameContext.nowMs,
         button: "primary"
       });
+      lastXrWhiteboardHit = xrWhiteboardPointerActive ? hit : null;
       syncWhiteboardPencilVisuals(frameContext, xrWhiteboardPointerActive);
       if (xrWhiteboardPointerActive) {
         return;
       }
     }
   }
-  commitDebugSurfaceInputFromFrameRay(frameContext, "pointer-down");
+  if (!whiteboardXrDrawInput) {
+    commitDebugSurfaceInputFromFrameRay(frameContext, "pointer-down");
+  }
   const target = updateInteractionRayState(getInteractionFrameInput(frameContext));
   interactionTargetPerformer.performTarget(target);
   forcedTestInteractionSeatId = null;
@@ -1121,28 +1130,70 @@ function updateWhiteboardXrDrawInput(frameContext: RuntimeFrameContext): void {
       cancelWhiteboardPreview();
     }
     xrWhiteboardPointerActive = false;
+    lastXrWhiteboardHit = null;
     syncWhiteboardPencilVisuals(frameContext, false);
     return;
   }
+  const hit = resolveDebugSurfaceHitFromXrPencil(frameContext, "xr-controller");
   if (!xrWhiteboardPointerActive) {
-    const hit = resolveDebugSurfaceHitFromFrameRay(frameContext, "xr-controller");
-    syncWhiteboardPencilVisuals(frameContext, Boolean(hit));
+    syncWhiteboardPencilVisuals(frameContext, true);
+    if (frameContext.xr?.triggerPressed && hit) {
+      xrWhiteboardPointerActive = commitDebugSurfaceInput({
+        hit,
+        source: "xr-controller",
+        kind: "pointer-down",
+        clientTimeMs: frameContext.nowMs,
+        button: "primary"
+      });
+      lastXrWhiteboardHit = xrWhiteboardPointerActive ? hit : null;
+    }
     return;
   }
   if (!frameContext.xr?.triggerPressed) {
-    const committed = commitDebugSurfaceInputFromFrameRay(frameContext, "pointer-up");
+    const committed = lastXrWhiteboardHit
+      ? commitDebugSurfaceInput({
+        hit: hit ?? lastXrWhiteboardHit,
+        source: "xr-controller",
+        kind: "pointer-up",
+        clientTimeMs: frameContext.nowMs,
+        button: "primary"
+      })
+      : false;
     if (!committed) {
       cancelWhiteboardPreview();
     }
     xrWhiteboardPointerActive = false;
-    syncWhiteboardPencilVisuals(frameContext, false);
+    lastXrWhiteboardHit = null;
+    syncWhiteboardPencilVisuals(frameContext, true);
     return;
   }
-  const moved = commitDebugSurfaceInputFromFrameRay(frameContext, "pointer-move");
+  const moved = hit
+    ? commitDebugSurfaceInput({
+      hit,
+      source: "xr-controller",
+      kind: "pointer-move",
+      clientTimeMs: frameContext.nowMs,
+      button: "primary"
+    })
+    : false;
   if (!moved) {
-    cancelWhiteboardPreview();
+    if (lastXrWhiteboardHit) {
+      commitDebugSurfaceInput({
+        hit: lastXrWhiteboardHit,
+        source: "xr-controller",
+        kind: "pointer-up",
+        clientTimeMs: frameContext.nowMs,
+        button: "primary"
+      });
+    } else {
+      cancelWhiteboardPreview();
+    }
     xrWhiteboardPointerActive = false;
+    lastXrWhiteboardHit = null;
+    syncWhiteboardPencilVisuals(frameContext, true);
+    return;
   }
+  lastXrWhiteboardHit = hit;
   syncWhiteboardPencilVisuals(frameContext, xrWhiteboardPointerActive);
 }
 
@@ -1274,6 +1325,55 @@ function resolveDebugSurfaceHitFromFrameRay(frameContext: RuntimeFrameContext, s
     return null;
   }
   return resolveDebugSurfaceHit(resolvedRay.ray, source);
+}
+
+function resolveWhiteboardPencilTipWorld(frameContext: RuntimeFrameContext): THREE.Vector3 | null {
+  if (avatarVrMockEnabled && syntheticXrState) {
+    const direction = new THREE.Vector3(
+      syntheticXrState.rayDirection.x,
+      syntheticXrState.rayDirection.y,
+      syntheticXrState.rayDirection.z
+    );
+    whiteboardPencilTipWorld.set(
+      syntheticXrState.rightController.x,
+      syntheticXrState.rightController.y,
+      syntheticXrState.rightController.z
+    );
+    if (direction.lengthSq() > 0) {
+      whiteboardPencilTipWorld.addScaledVector(direction.normalize(), Math.abs(WHITEBOARD_PENCIL_TIP_LOCAL_Z));
+    }
+    return whiteboardPencilTipWorld;
+  }
+
+  const controller = frameContext.source === "xr" ? getPrimaryRightXrControllerForSession(frameContext.xr?.session) : null;
+  if (!controller) {
+    return null;
+  }
+  controller.updateWorldMatrix(true, false);
+  return controller.localToWorld(whiteboardPencilTipWorld.set(0, 0, WHITEBOARD_PENCIL_TIP_LOCAL_Z));
+}
+
+function resolveDebugSurfaceHitFromXrPencil(frameContext: RuntimeFrameContext, source: SurfaceInputSource): ResolvedSurfaceHit | null {
+  const tipWorld = resolveWhiteboardPencilTipWorld(frameContext);
+  if (!tipWorld) {
+    return null;
+  }
+  displaySurface.updateMatrixWorld(true);
+  return resolveSurfaceHitFromPlanePoint({
+    point: tipWorld,
+    source,
+    surfaces: [{
+      surfaceId: DEBUG_SURFACE_ID,
+      objectId: activeMediaObjectIdForSurface(DEBUG_SURFACE_ID),
+      object: displaySurface,
+      widthPx: DEBUG_SURFACE_WIDTH_PX,
+      heightPx: DEBUG_SURFACE_HEIGHT_PX,
+      widthM: DEBUG_SURFACE_WIDTH_M,
+      heightM: DEBUG_SURFACE_HEIGHT_M,
+      maxDistanceM: WHITEBOARD_PENCIL_CONTACT_DISTANCE_M,
+      inputEnabled: debugState.surfaceInput.enabled && displaySurface.visible
+    }]
+  });
 }
 
 function renderActiveWhiteboardAfterPreviewChange(): void {
