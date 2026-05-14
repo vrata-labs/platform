@@ -34,10 +34,18 @@ cleanup_docker_state() {
   docker network prune -f || true
 }
 
+cleanup_transient_docker_state() {
+  echo "== docker transient cleanup =="
+  docker container prune -f || true
+  docker image prune -f || true
+  docker builder prune -af || true
+  docker network prune -f || true
+}
+
 pull_compose_service() {
   local service="$1"
   docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" pull "$service"
-  cleanup_docker_state
+  cleanup_transient_docker_state
   log_disk_state
 }
 
