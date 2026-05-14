@@ -39,6 +39,7 @@ export function resolveInteractionRay(input: {
   frameContext: RuntimeFrameContext;
   localAvatarHandFrame?: LocalAvatarHandFrameResult | null;
   forcedRay?: THREE.Ray | null;
+  forceXrAimRay?: boolean;
   avatarVrMockEnabled: boolean;
   syntheticXrState?: SyntheticXrInteractionState | null;
   xrPresenting: boolean;
@@ -82,7 +83,7 @@ export function resolveInteractionRay(input: {
 
   if (input.xrPresenting) {
     const frameContext = input.frameContext;
-    if (frameContext.source !== "xr" || !frameContext.xr || !frameContext.intents.aimRay) {
+    if (frameContext.source !== "xr" || !frameContext.xr || (!frameContext.intents.aimRay && !input.forceXrAimRay)) {
       return null;
     }
     const xrRay = resolveXrInteractionRay({

@@ -151,6 +151,51 @@ test("resolveInteractionRay uses sampled XR frame context and right hand origin"
   });
 });
 
+test("resolveInteractionRay can force an XR ray without stick aim intent", () => {
+  const rightTargetRaySpace = { id: "right-target-ray" };
+  const xrFrame = {
+    getPose(space: unknown) {
+      if (space === rightTargetRaySpace) {
+        return {
+          transform: {
+            position: { x: 0, y: 1.2, z: 0 },
+            orientation: { x: 0, y: 0, z: 0, w: 1 }
+          }
+        };
+      }
+      return null;
+    }
+  } as unknown as XRFrame;
+  const inputSources = [{
+    handedness: "right",
+    targetRayMode: "tracked-pointer",
+    targetRaySpace: rightTargetRaySpace
+  }] as unknown as XRInputSource[];
+
+  const resolved = resolveInteractionRay(makeInput({
+    frameContext: frameContext({
+      source: "xr",
+      aimRay: false,
+      xr: {
+        frame: xrFrame,
+        session: undefined,
+        referenceSpace: {} as XRReferenceSpace,
+        inputSources,
+        profile: "right-only",
+        sanitizedAxes: { moveX: 0, moveY: 0, turnX: 0, turnY: 0 },
+        rawAxes: { moveX: 0, moveY: 0, turnX: 0, turnY: 0 },
+        triggerPressed: false,
+        rayVisibleLatched: false
+      }
+    }),
+    forceXrAimRay: true,
+    xrPresenting: true
+  }));
+
+  assert.ok(resolved);
+  assert.deepEqual(resolved!.ray.direction, new THREE.Vector3(0, 0, -1));
+});
+
 test("resolveInteractionRay does not resolve XR ray without sampled XR context", () => {
   const resolved = resolveInteractionRay(makeInput({
     frameContext: frameContext({ source: "desktop", aimRay: true }),

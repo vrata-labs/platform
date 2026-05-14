@@ -7,6 +7,7 @@ import {
   clearInteractionRayView,
   createInteractionRayView,
   setInteractionRayDebugTarget,
+  showInteractionRayPointView,
   showInteractionRayView,
   type InteractionRayDebugState
 } from "./interaction-ray-view.js";
@@ -107,6 +108,30 @@ test("showInteractionRayView draws seat target with seat color", () => {
   assert.equal(view.reticleMaterial.color.getHex(), 0xb8ff8d);
   assert.equal(state.targetKind, "seat");
   assert.equal(state.seatId, "seat-a");
+});
+
+test("showInteractionRayPointView draws surface target", () => {
+  const view = createInteractionRayView(new THREE.Scene());
+  const state = createDebugState();
+
+  showInteractionRayPointView({
+    view,
+    state,
+    ray: new THREE.Ray(new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, 0, -1)),
+    point: new THREE.Vector3(0, 1, -3),
+    targetKind: "surface",
+    mode: "xr-right-stick",
+    color: 0xffc857
+  });
+
+  assert.equal(view.line.visible, true);
+  assert.equal(view.beam.visible, true);
+  assert.equal(view.reticle.visible, true);
+  assert.equal(view.lineMaterial.color.getHex(), 0xffc857);
+  assert.equal(state.active, true);
+  assert.equal(state.targetKind, "surface");
+  assert.equal(state.seatId, null);
+  assert.deepEqual(state.point, { x: 0, y: 1, z: -3 });
 });
 
 test("clearInteractionRayView hides visuals and clears debug state", () => {

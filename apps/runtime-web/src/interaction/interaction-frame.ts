@@ -26,6 +26,7 @@ export interface RuntimeInteractionRayInput {
   frameContext: RuntimeFrameContext;
   localAvatarHandFrame?: LocalAvatarHandFrameResult | null;
   forcedRay?: THREE.Ray | null;
+  forceXrAimRay?: boolean;
   avatarVrMockEnabled: boolean;
   syntheticXrState?: SyntheticXrInteractionState | null;
   xrPresenting: boolean;
@@ -69,6 +70,7 @@ export function resolveRuntimeInteractionRay(input: RuntimeInteractionRayInput):
     frameContext: input.frameContext,
     localAvatarHandFrame: input.localAvatarHandFrame,
     forcedRay: input.forcedRay,
+    forceXrAimRay: input.forceXrAimRay,
     avatarVrMockEnabled: input.avatarVrMockEnabled,
     syntheticXrState: input.syntheticXrState,
     xrPresenting: input.xrPresenting,

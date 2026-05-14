@@ -8,7 +8,7 @@ export type InteractionRayMode = "none" | "cursor" | "xr-right-stick";
 export interface InteractionRayDebugState {
   active: boolean;
   mode: InteractionRayMode;
-  targetKind: "none" | "floor" | "seat";
+  targetKind: "none" | "floor" | "seat" | "surface";
   seatId: string | null;
   point: null | { x: number; y: number; z: number };
   origin: null | { x: number; y: number; z: number };
@@ -155,10 +155,36 @@ export function showInteractionRayView(input: {
   markTelemetry?: (kind: string) => void;
 }): void {
   const color = input.target.kind === "seat" ? 0xb8ff8d : 0x00f6ff;
+  showInteractionRayPointView({
+    view: input.view,
+    state: input.state,
+    ray: input.ray,
+    point: input.target.point,
+    targetKind: input.target.kind,
+    mode: input.mode,
+    debug: input.debug,
+    color,
+    markTelemetry: input.markTelemetry
+  });
+  input.state.seatId = input.target.kind === "seat" ? input.target.seatAnchor.id : null;
+}
+
+export function showInteractionRayPointView(input: {
+  view: InteractionRayView;
+  state: InteractionRayDebugState;
+  ray: THREE.Ray;
+  point: THREE.Vector3;
+  targetKind: Exclude<InteractionRayDebugState["targetKind"], "none">;
+  mode: InteractionRayMode;
+  debug?: InteractionRayDebugSample | null;
+  color?: number;
+  markTelemetry?: (kind: string) => void;
+}): void {
+  const color = input.color ?? 0x00f6ff;
   const view = input.view;
 
   view.points[0].copy(input.ray.origin);
-  view.end.copy(input.target.point);
+  view.end.copy(input.point);
   view.points[1].copy(view.end);
   view.lineGeometry.setFromPoints(view.points);
 
@@ -178,8 +204,17 @@ export function showInteractionRayView(input: {
   }
 
   view.reticle.visible = true;
-  view.reticle.position.copy(input.target.point);
+  view.reticle.position.copy(input.point);
   view.reticleMaterial.color.setHex(color);
-  setInteractionRayDebugTarget(input);
+  input.state.active = true;
+  input.state.mode = input.mode;
+  input.state.targetKind = input.targetKind;
+  input.state.seatId = null;
+  input.state.point = roundPoint(input.point);
+  if (input.debug) {
+    input.state.origin = input.debug.origin;
+    input.state.direction = input.debug.direction;
+    input.state.source = input.debug.source;
+  }
   input.markTelemetry?.("ray_on");
 }

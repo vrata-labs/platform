@@ -55,6 +55,7 @@ import {
 } from "./media/media-object-state.js";
 import { routeMediaObjectSurfaceInput } from "./media/media-object-router.js";
 import { createRemoteBrowserObjectRuntime } from "./media/remote-browser-object.js";
+import { planRemoteBrowserXrPointer } from "./media/remote-browser-xr-input.js";
 import { getScreenShareErrorCode } from "./media/screen-share-object.js";
 import { createWhiteboardObjectRuntime } from "./media/whiteboard-object.js";
 import { applySpatialSettings, createSpatialAudioSettings } from "./spatial-audio.js";
@@ -109,7 +110,7 @@ import {
 } from "./seating/seat-anchor-reconcile.js";
 import { planSeatReclaimOnReconnect, shouldRetrySeatReclaim } from "./seating/seat-reclaim.js";
 import { resolveRuntimeInteractionRay, updateInteractionRayState } from "./interaction/interaction-frame.js";
-import { clearInteractionRayView, createInteractionRayView } from "./interaction/interaction-ray-view.js";
+import { clearInteractionRayView, createInteractionRayView, showInteractionRayPointView } from "./interaction/interaction-ray-view.js";
 import { createInteractionTargetPerformer } from "./interaction/interaction-perform.js";
 import { createSeatMarkerViewController } from "./interaction/seat-marker-view.js";
 
@@ -394,6 +395,8 @@ let remoteBrowserPointerActive = false;
 let whiteboardDrawToolActive = false;
 let xrWhiteboardPointerActive = false;
 let lastXrWhiteboardHit: ResolvedSurfaceHit | null = null;
+let xrRemoteBrowserPointerActive = false;
+let lastXrRemoteBrowserHit: ResolvedSurfaceHit | null = null;
 let pointerMovedSinceDown = false;
 let suppressPointerClick = false;
 let pointerHoveringScene = false;
@@ -1143,11 +1146,12 @@ const interactionTargetPerformer = createInteractionTargetPerformer({
   })
 });
 
-function getInteractionFrameInput(frameContext: RuntimeFrameContext) {
+function getInteractionFrameInput(frameContext: RuntimeFrameContext, options: { forceXrAimRay?: boolean } = {}) {
   return {
     frameContext,
     localAvatarHandFrame: getFrameLocalAvatarHandFrame(frameContext),
     forcedRay: forcedTestInteractionRay,
+    forceXrAimRay: options.forceXrAimRay,
     forcedSeatId: forcedTestInteractionSeatId,
     avatarVrMockEnabled,
     syntheticXrState,
@@ -1230,6 +1234,9 @@ function confirmInteractionTarget(frameContext: RuntimeFrameContext): void {
         return;
       }
     }
+  }
+  if (resolveRemoteBrowserXrSurfaceRayHit(frameContext)) {
+    return;
   }
   if (!whiteboardXrDrawInput) {
     commitDebugSurfaceInputFromFrameRay(frameContext, "pointer-down");
@@ -1435,12 +1442,17 @@ function resolveDebugSurfaceHitFromPointer(clientX: number, clientY: number, sou
   return resolveDebugSurfaceHit(surfaceInputRaycaster.ray.clone(), source);
 }
 
-function resolveDebugSurfaceHitFromFrameRay(frameContext: RuntimeFrameContext, source: SurfaceInputSource): ResolvedSurfaceHit | null {
-  const resolvedRay = resolveRuntimeInteractionRay(getInteractionFrameInput(frameContext));
+function resolveDebugSurfaceRayHit(frameContext: RuntimeFrameContext, source: SurfaceInputSource, options: { forceXrAimRay?: boolean } = {}): { ray: THREE.Ray; hit: ResolvedSurfaceHit } | null {
+  const resolvedRay = resolveRuntimeInteractionRay(getInteractionFrameInput(frameContext, options));
   if (!resolvedRay) {
     return null;
   }
-  return resolveDebugSurfaceHit(resolvedRay.ray, source);
+  const hit = resolveDebugSurfaceHit(resolvedRay.ray, source);
+  return hit ? { ray: resolvedRay.ray, hit } : null;
+}
+
+function resolveDebugSurfaceHitFromFrameRay(frameContext: RuntimeFrameContext, source: SurfaceInputSource, options: { forceXrAimRay?: boolean } = {}): ResolvedSurfaceHit | null {
+  return resolveDebugSurfaceRayHit(frameContext, source, options)?.hit ?? null;
 }
 
 function resolveWhiteboardPencilPose(frameContext: RuntimeFrameContext): XrPencilPose | null {
@@ -1627,6 +1639,70 @@ function commitDebugSurfaceInputFromFrameRay(frameContext: RuntimeFrameContext, 
     button: "primary",
     routeMediaObjectInput: activeObject?.type !== WHITEBOARD_OBJECT_TYPE || whiteboardXrToolCanDraw
   });
+}
+
+function isRemoteBrowserXrInputActive(frameContext: RuntimeFrameContext): boolean {
+  return frameContext.source === "xr"
+    && Boolean(activeRemoteBrowserObjectForSurface(DEBUG_SURFACE_ID))
+    && debugState.surfaceInput.enabled
+    && displaySurface.visible;
+}
+
+function resolveRemoteBrowserXrSurfaceRayHit(frameContext: RuntimeFrameContext): { ray: THREE.Ray; hit: ResolvedSurfaceHit } | null {
+  if (!isRemoteBrowserXrInputActive(frameContext)) {
+    return null;
+  }
+  return resolveDebugSurfaceRayHit(frameContext, "xr-controller", { forceXrAimRay: true });
+}
+
+function showRemoteBrowserXrSurfaceRay(rayHit: { ray: THREE.Ray; hit: ResolvedSurfaceHit }): void {
+  const point = typeof rayHit.hit.distanceM === "number"
+    ? rayHit.ray.at(rayHit.hit.distanceM, new THREE.Vector3())
+    : rayHit.ray.at(3, new THREE.Vector3());
+  showInteractionRayPointView({
+    view: interactionRayView,
+    state: debugState.interactionRay,
+    ray: rayHit.ray,
+    point,
+    targetKind: "surface",
+    mode: "xr-right-stick",
+    color: 0xffc857,
+    markTelemetry: markXrTelemetry
+  });
+}
+
+function updateRemoteBrowserXrInput(frameContext: RuntimeFrameContext): boolean {
+  const pointerWasActive = xrRemoteBrowserPointerActive;
+  const browserActive = isRemoteBrowserXrInputActive(frameContext);
+  const rayHit = browserActive ? resolveRemoteBrowserXrSurfaceRayHit(frameContext) : null;
+  if (rayHit) {
+    showRemoteBrowserXrSurfaceRay(rayHit);
+  }
+  const plan = planRemoteBrowserXrPointer({
+    browserActive,
+    pointerActive: xrRemoteBrowserPointerActive,
+    triggerPressed: Boolean(frameContext.xr?.triggerPressed),
+    confirmInteraction: frameContext.intents.confirmInteraction,
+    hasHit: Boolean(rayHit),
+    hasLastHit: Boolean(lastXrRemoteBrowserHit)
+  });
+  const hit = plan.useLastHit ? lastXrRemoteBrowserHit : rayHit?.hit ?? null;
+  const committed = plan.kind
+    ? commitDebugSurfaceInput({
+      hit,
+      source: "xr-controller",
+      kind: plan.kind,
+      clientTimeMs: frameContext.nowMs,
+      button: "primary"
+    })
+    : false;
+  xrRemoteBrowserPointerActive = plan.nextPointerActive && (!plan.kind || committed);
+  if (xrRemoteBrowserPointerActive && rayHit?.hit) {
+    lastXrRemoteBrowserHit = rayHit.hit;
+  } else if (!xrRemoteBrowserPointerActive) {
+    lastXrRemoteBrowserHit = null;
+  }
+  return Boolean(rayHit) || pointerWasActive || xrRemoteBrowserPointerActive;
 }
 
 function formatDeviceLabel(device: MediaDeviceInfo, fallbackLabel: string, index: number): string {
@@ -2245,7 +2321,7 @@ const debugState = {
   interactionRay: {
     active: false,
     mode: "none" as "none" | "cursor" | "xr-right-stick",
-    targetKind: "none" as "none" | "floor" | "seat",
+    targetKind: "none" as "none" | "floor" | "seat" | "surface",
     seatId: null as string | null,
     point: null as null | { x: number; y: number; z: number },
     origin: null as null | { x: number; y: number; z: number },
@@ -4753,7 +4829,9 @@ renderer.setAnimationLoop(() => {
   updateMediaDiagnostics();
   updateLocalAvatar(delta, frameContext);
   remoteAvatarRuntime.update(delta, debugState);
-  updateInteractionRayState(getInteractionFrameInput(frameContext));
+  if (!updateRemoteBrowserXrInput(frameContext)) {
+    updateInteractionRayState(getInteractionFrameInput(frameContext));
+  }
   updateSeatMarkerVisuals(nowMs / 1000);
   reportXrTelemetry(frameContext);
   debugState.avatarPoseTransport.adaptivePlaybackDelayMs = debugState.remoteAvatarParticipants.length > 0
