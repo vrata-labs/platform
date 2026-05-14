@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
+import { chromium, type Browser, type BrowserContext, type Page } from "playwright-core";
 import { WebSocketServer, type WebSocket } from "ws";
 import type { RemoteBrowserPatch, SurfaceInputEvent } from "@noah/shared-types";
 
@@ -68,7 +68,11 @@ function parseBody<T>(request: IncomingMessage): Promise<T | null> {
 }
 
 async function getBrowser(): Promise<Browser> {
-  browserPromise ??= chromium.launch({ headless: true });
+  const executablePath =
+    process.env.REMOTE_BROWSER_CHROMIUM_PATH ||
+    process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ||
+    undefined;
+  browserPromise ??= chromium.launch({ executablePath, headless: true });
   return browserPromise;
 }
 

@@ -1,4 +1,6 @@
-FROM mcr.microsoft.com/playwright:v1.58.2-noble AS build
+FROM node:22-bookworm-slim AS build
+
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 
 WORKDIR /app
 
@@ -9,10 +11,16 @@ RUN pnpm install --frozen-lockfile --config.node-linker=hoisted
 RUN pnpm --filter @noah/shared-types build && pnpm --filter @noah/remote-browser build
 RUN pnpm prune --prod --config.confirmModulesPurge=false --config.node-linker=hoisted
 
-FROM mcr.microsoft.com/playwright:v1.58.2-noble AS runtime
+FROM node:22-bookworm-slim AS runtime
 
-ENV NODE_ENV=production
+ENV NODE_ENV=production \
+    PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
+    REMOTE_BROWSER_CHROMIUM_PATH=/usr/bin/chromium
 WORKDIR /app
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates chromium fonts-liberation \
+  && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /app/package.json ./package.json
 COPY --from=build /app/node_modules ./node_modules
