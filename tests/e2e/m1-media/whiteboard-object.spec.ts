@@ -11,6 +11,7 @@ type WhiteboardDebug = {
     localCanClear?: boolean;
     lastInputSource?: string | null;
     lastPoint?: { u?: number; v?: number } | null;
+    xrPencilVisible?: boolean;
   };
   surfaceInput?: {
     lastEvent?: {
@@ -243,15 +244,32 @@ test("M1.5 XR contact pencil draws from controller tip instead of ray cursor", a
   await waitForKernel(page, "host");
   await createWhiteboard(page);
   await waitForWhiteboard(page, 0);
+  await expect(page.locator("#draw-whiteboard")).toBeEnabled();
 
   await setSyntheticXrState(page, {
     rightController: { x: 0, y: 2.2, z: 0 },
+    rightGrip: { x: -0.58, y: 2.6525, z: -6.28 },
     rayDirection: { x: 0, y: 0, z: -1 },
     triggerPressed: true,
     rayVisible: true
   });
   await page.waitForTimeout(150);
   expect((await readDebug(page))?.whiteboard?.strokeCount).toBe(0);
+  expect((await readDebug(page))?.whiteboard?.xrPencilVisible).toBe(false);
+
+  await setSyntheticXrState(page, {
+    rightController: { x: 0, y: 2.2, z: 0 },
+    rightGrip: { x: -0.58, y: 2.6525, z: -6.28 },
+    rayDirection: { x: 0, y: 0, z: -1 },
+    triggerPressed: false,
+    rayVisible: false
+  });
+  await page.click("#draw-whiteboard");
+  await expect(page.locator("#draw-whiteboard")).toHaveAttribute("aria-pressed", "true");
+  await expect.poll(async () => (await readDebug(page))?.whiteboard?.xrPencilVisible ?? false, {
+    timeout: 5000,
+    intervals: [100, 250, 500]
+  }).toBe(true);
 
   await setSyntheticXrState(page, {
     rightController: { x: 0, y: 2.2, z: 0 },
@@ -314,6 +332,22 @@ test("M1.5 XR contact pencil draws from controller tip instead of ray cursor", a
       v: debug?.whiteboard?.lastPoint?.v ?? null
     };
   }).toEqual({ source: "xr-controller", u: 0.6, v: 0.6 });
+
+  await page.click("#draw-whiteboard");
+  await expect(page.locator("#draw-whiteboard")).toHaveAttribute("aria-pressed", "false");
+  await expect.poll(async () => (await readDebug(page))?.whiteboard?.xrPencilVisible ?? true, {
+    timeout: 5000,
+    intervals: [100, 250, 500]
+  }).toBe(false);
+  await setSyntheticXrState(page, {
+    rightController: { x: 0, y: 2.2, z: 0 },
+    rightGrip: { x: 0, y: 2.3225, z: -6.28 },
+    rayDirection: { x: 0, y: 0, z: -1 },
+    triggerPressed: true,
+    rayVisible: true
+  });
+  await page.waitForTimeout(150);
+  expect((await readDebug(page))?.whiteboard?.strokeCount).toBe(1);
 });
 
 test("M1.5 rejoin restores whiteboard state", async ({ browser }) => {

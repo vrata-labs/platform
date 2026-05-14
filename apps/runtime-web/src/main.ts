@@ -871,7 +871,8 @@ function syncMediaObjectsDebugState(): void {
   debugState.whiteboard = {
     ...whiteboardRuntime.createDebugSnapshot(activeWhiteboard),
     drawToolActive: whiteboardDrawToolActive,
-    xrPointerActive: xrWhiteboardPointerActive
+    xrPointerActive: xrWhiteboardPointerActive,
+    xrPencilVisible: whiteboardPencils.some((pencil) => pencil.visible)
   };
   if (activeWhiteboard) {
     whiteboardRuntime.render(activeWhiteboard.state);
@@ -1424,10 +1425,12 @@ function syncWhiteboardPencilVisuals(frameContext: RuntimeFrameContext | null, v
       pencil.quaternion.copy(pencilPose.orientationWorld);
     }
   }
+  debugState.whiteboard.xrPencilVisible = whiteboardPencils.some((pencil) => pencil.visible);
 }
 
 function canUseWhiteboardXrDrawInput(frameContext: RuntimeFrameContext): boolean {
   return frameContext.source === "xr"
+    && whiteboardDrawToolActive
     && hasRoomPermission(debugState.access.permissions, "whiteboard.draw")
     && roomStateConnected
     && Boolean(activeWhiteboardObjectForSurface(DEBUG_SURFACE_ID));
@@ -1519,12 +1522,15 @@ function commitDebugSurfaceInputFromFrameRay(frameContext: RuntimeFrameContext, 
   if (!hit) {
     return false;
   }
+  const activeObject = activeMediaObjectForSurface(DEBUG_SURFACE_ID);
+  const whiteboardXrToolCanDraw = frameContext.source === "xr" && whiteboardDrawToolActive && canUseWhiteboardDrawTool();
   return commitDebugSurfaceInput({
     hit,
     source,
     kind,
     clientTimeMs: frameContext.nowMs,
-    button: "primary"
+    button: "primary",
+    routeMediaObjectInput: activeObject?.type !== WHITEBOARD_OBJECT_TYPE || whiteboardXrToolCanDraw
   });
 }
 
@@ -2029,6 +2035,7 @@ const debugState = {
     localCanClear: false,
     drawToolActive: false,
     xrPointerActive: false,
+    xrPencilVisible: false,
     localPreviewPointCount: 0,
     lastInputSource: null as SurfaceInputSource | null,
     lastPoint: null as null | { u: number; v: number },
@@ -4175,9 +4182,12 @@ drawWhiteboardButton.addEventListener("click", () => {
   whiteboardDrawToolActive = !whiteboardDrawToolActive;
   if (!whiteboardDrawToolActive) {
     cancelWhiteboardPreview();
+    xrWhiteboardPointerActive = false;
+    lastXrWhiteboardHit = null;
   }
   whiteboardPointerActive = false;
   syncWhiteboardControls();
+  syncWhiteboardPencilVisuals(lastRuntimeFrameContext, whiteboardDrawToolActive);
 });
 
 clearWhiteboardButton.addEventListener("click", () => {
