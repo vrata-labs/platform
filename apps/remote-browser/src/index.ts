@@ -163,12 +163,12 @@ async function createSession(input: { sessionId: string; frameStreamId: string; 
   return session;
 }
 
-function eventPoint(event: SurfaceInputEvent): { x: number; y: number } {
+export function remoteBrowserEventPoint(event: SurfaceInputEvent, size = viewport): { x: number; y: number } {
   const u = event.uv?.u ?? 0.5;
   const v = event.uv?.v ?? 0.5;
   return {
-    x: Math.max(0, Math.min(viewport.width - 1, Math.round(u * viewport.width))),
-    y: Math.max(0, Math.min(viewport.height - 1, Math.round(v * viewport.height)))
+    x: Math.max(0, Math.min(size.width - 1, Math.round(u * size.width))),
+    y: Math.max(0, Math.min(size.height - 1, Math.round((1 - v) * size.height)))
   };
 }
 
@@ -176,7 +176,7 @@ async function applyInput(session: RemoteBrowserSession, patch: RemoteBrowserPat
   if (patch.type !== "pointer" && patch.type !== "scroll" && patch.type !== "keyboard") {
     return;
   }
-  const { x, y } = eventPoint(patch.event);
+  const { x, y } = remoteBrowserEventPoint(patch.event);
   if (patch.type === "scroll") {
     await session.page.mouse.move(x, y);
     await session.page.mouse.wheel(0, 480);
