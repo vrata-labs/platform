@@ -34,6 +34,13 @@ cleanup_docker_state() {
   docker network prune -f || true
 }
 
+pull_compose_service() {
+  local service="$1"
+  docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" pull "$service"
+  cleanup_docker_state
+  log_disk_state
+}
+
 env_value() {
   local key="$1"
   python3 - "$ENV_FILE" "$key" <<'PY'
@@ -235,7 +242,10 @@ if [ -f "$ROOT_DIR/tools/snapshot-scene-assets.sh" ]; then
     bash "$ROOT_DIR/tools/snapshot-scene-assets.sh"
 fi
 
-docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" pull api room-state remote-browser minio-bootstrap
+pull_compose_service remote-browser
+pull_compose_service room-state
+pull_compose_service api
+pull_compose_service minio-bootstrap
 docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" up -d --no-build --pull never --remove-orphans api room-state remote-browser caddy
 docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" exec -T caddy caddy validate --config /etc/caddy/Caddyfile
 docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" restart caddy
