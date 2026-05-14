@@ -188,6 +188,21 @@ for line in lines:
 
 values.setdefault('API_IMAGE_REPO', 'cr.yandex/crp9cm29k6p76hqo8lti/noah-api')
 values.setdefault('ROOM_STATE_IMAGE_REPO', 'cr.yandex/crp9cm29k6p76hqo8lti/noah-room-state')
+values.setdefault('REMOTE_BROWSER_IMAGE_REPO', 'cr.yandex/crp9cm29k6p76hqo8lti/noah-remote-browser')
+if not values.get('NOAH_BROWSER_DOMAIN') and values.get('NOAH_APP_DOMAIN'):
+    values['NOAH_BROWSER_DOMAIN'] = 'browser.' + values['NOAH_APP_DOMAIN']
+if not values.get('REMOTE_BROWSER_PUBLIC_URL') and values.get('NOAH_BROWSER_DOMAIN'):
+    values['REMOTE_BROWSER_PUBLIC_URL'] = 'https://' + values['NOAH_BROWSER_DOMAIN']
+if not values.get('REMOTE_BROWSER_ALLOWED_ORIGINS'):
+    allowed_origins = []
+    if values.get('NOAH_APP_BASE_URL'):
+        allowed_origins.append(values['NOAH_APP_BASE_URL'])
+    if values.get('NOAH_APP_DOMAIN'):
+        allowed_origins.append('https://' + values['NOAH_APP_DOMAIN'])
+    values['REMOTE_BROWSER_ALLOWED_ORIGINS'] = ','.join(dict.fromkeys(allowed_origins))
+values.setdefault('REMOTE_BROWSER_ALLOW_PRIVATE_ALLOWED_ORIGINS', 'false')
+values.setdefault('REMOTE_BROWSER_TOKEN_SECRET', values.get('STATE_TOKEN_SECRET', 'dev-remote-browser-secret'))
+values.setdefault('REMOTE_BROWSER_TOKEN_TTL_SECONDS', '300')
 values['IMAGE_TAG'] = image_tag
 
 rendered = []
@@ -203,7 +218,7 @@ for line in lines:
     else:
       rendered.append(line)
 
-for key in ('API_IMAGE_REPO', 'ROOM_STATE_IMAGE_REPO', 'IMAGE_TAG'):
+for key in ('API_IMAGE_REPO', 'ROOM_STATE_IMAGE_REPO', 'REMOTE_BROWSER_IMAGE_REPO', 'NOAH_BROWSER_DOMAIN', 'REMOTE_BROWSER_PUBLIC_URL', 'REMOTE_BROWSER_ALLOWED_ORIGINS', 'REMOTE_BROWSER_ALLOW_PRIVATE_ALLOWED_ORIGINS', 'REMOTE_BROWSER_TOKEN_SECRET', 'REMOTE_BROWSER_TOKEN_TTL_SECONDS', 'IMAGE_TAG'):
     if key not in seen:
         rendered.append(f'{key}={values[key]}')
 
@@ -220,8 +235,8 @@ if [ -f "$ROOT_DIR/tools/snapshot-scene-assets.sh" ]; then
     bash "$ROOT_DIR/tools/snapshot-scene-assets.sh"
 fi
 
-docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" pull api room-state minio-bootstrap
-docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" up -d --no-build --pull never --remove-orphans api room-state caddy
+docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" pull api room-state remote-browser minio-bootstrap
+docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" up -d --no-build --pull never --remove-orphans api room-state remote-browser caddy
 docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" exec -T caddy caddy validate --config /etc/caddy/Caddyfile
 docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" restart caddy
 patch_canonical_scene_bundles

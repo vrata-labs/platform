@@ -36,6 +36,19 @@
             <button id="start-share" disabled>Start Share</button>
             <button id="stop-share" disabled>Stop Share</button>
           </div>
+          <div id="remote-browser-control" class="remote-browser-panel" hidden>
+            <label for="remote-browser-url">Remote Browser URL</label>
+            <div class="remote-browser-row">
+              <input id="remote-browser-url" type="url" value="/remote-browser-demo.html" spellcheck="false" />
+              <button id="open-remote-browser" disabled>Open Browser</button>
+            </div>
+            <div class="controls compact-controls">
+              <button id="take-remote-browser-control" disabled>Take Control</button>
+              <button id="release-remote-browser-control" disabled>Release Control</button>
+              <button id="stop-remote-browser" disabled>Stop Browser</button>
+            </div>
+            <div id="remote-browser-status" class="audio-device-status">Remote browser idle</div>
+          </div>
           <div class="audio-panel">
             <div id="surface-audio-control" class="surface-audio-control" hidden>
               <label class="surface-audio-toggle" for="surface-audio-enabled">

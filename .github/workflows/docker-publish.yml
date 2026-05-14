@@ -14,6 +14,7 @@ env:
   REGISTRY: cr.yandex
   API_IMAGE_NAME: noah-api
   ROOM_STATE_IMAGE_NAME: noah-room-state
+  REMOTE_BROWSER_IMAGE_NAME: noah-remote-browser
 
 jobs:
   build-and-publish:
@@ -36,10 +37,12 @@ jobs:
           BRANCH_SLUG="$(echo "${GITHUB_REF_NAME}" | tr '[:upper:]' '[:lower:]' | tr '/_' '--' | tr -cd 'a-z0-9-.')"
           API_IMAGE="${REGISTRY}/${YCR_REGISTRY_ID}/${API_IMAGE_NAME}"
           ROOM_STATE_IMAGE="${REGISTRY}/${YCR_REGISTRY_ID}/${ROOM_STATE_IMAGE_NAME}"
+          REMOTE_BROWSER_IMAGE="${REGISTRY}/${YCR_REGISTRY_ID}/${REMOTE_BROWSER_IMAGE_NAME}"
           echo "sha_tag=${SHA_TAG}" >> "$GITHUB_OUTPUT"
           echo "branch_slug=${BRANCH_SLUG}" >> "$GITHUB_OUTPUT"
           echo "api_image=${API_IMAGE}" >> "$GITHUB_OUTPUT"
           echo "room_state_image=${ROOM_STATE_IMAGE}" >> "$GITHUB_OUTPUT"
+          echo "remote_browser_image=${REMOTE_BROWSER_IMAGE}" >> "$GITHUB_OUTPUT"
 
       - name: Login to Yandex Container Registry
         uses: docker/login-action@v3
@@ -78,6 +81,21 @@ jobs:
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
 
+      - name: Build and push remote-browser image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/remote-browser/Dockerfile
+          push: true
+          platforms: linux/amd64
+          tags: |
+            ${{ steps.meta.outputs.remote_browser_image }}:${{ steps.meta.outputs.sha_tag }}
+            ${{ steps.meta.outputs.remote_browser_image }}:${{ steps.meta.outputs.branch_slug }}
+            ${{ steps.meta.outputs.remote_browser_image }}:staging
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+
       - name: Print published image refs
         run: |
           echo "API image SHA: ${{ steps.meta.outputs.api_image }}:${{ steps.meta.outputs.sha_tag }}"
@@ -86,3 +104,6 @@ jobs:
           echo "Room-state image SHA: ${{ steps.meta.outputs.room_state_image }}:${{ steps.meta.outputs.sha_tag }}"
           echo "Room-state image alias: ${{ steps.meta.outputs.room_state_image }}:${{ steps.meta.outputs.branch_slug }}"
           echo "Room-state image staging alias: ${{ steps.meta.outputs.room_state_image }}:staging"
+          echo "Remote-browser image SHA: ${{ steps.meta.outputs.remote_browser_image }}:${{ steps.meta.outputs.sha_tag }}"
+          echo "Remote-browser image alias: ${{ steps.meta.outputs.remote_browser_image }}:${{ steps.meta.outputs.branch_slug }}"
+          echo "Remote-browser image staging alias: ${{ steps.meta.outputs.remote_browser_image }}:staging"

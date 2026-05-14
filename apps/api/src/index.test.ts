@@ -105,6 +105,49 @@ test("state token resolves dev host role and falls back to guest when gated off"
   }
 });
 
+test("remote browser frame token endpoint returns websocket URL and short-lived token", async () => {
+  process.env.NOAH_DISABLE_AUTOSTART = "1";
+  process.env.API_PORT = "4026";
+  process.env.REMOTE_BROWSER_PUBLIC_URL = "https://browser.89.169.161.91.sslip.io";
+  process.env.REMOTE_BROWSER_TOKEN_SECRET = "remote-browser-test-secret";
+  process.env.REMOTE_BROWSER_TOKEN_TTL_SECONDS = "120";
+  const module = await import("./index.js");
+  const server = module.startApiServer(4026);
+
+  try {
+    const response = await fetch("http://127.0.0.1:4026/api/tokens/remote-browser-frame", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        roomId: "room-1",
+        objectId: "object-1",
+        executorSessionId: "remote-browser:object-1",
+        frameStreamId: "remote-browser:object-1:frames"
+      })
+    });
+    assert.equal(response.ok, true);
+    const payload = (await response.json()) as { token?: string; expiresInSeconds?: number; frameStreamUrl?: string };
+    assert.equal(typeof payload.token, "string");
+    assert.equal(payload.expiresInSeconds, 120);
+    assert.equal(payload.frameStreamUrl?.startsWith("wss://browser.89.169.161.91.sslip.io/frames?token="), true);
+
+    const tokenBody = payload.token?.split(".")[0] ?? "";
+    const tokenPayload = JSON.parse(Buffer.from(tokenBody, "base64url").toString("utf8")) as { roomId?: string; objectId?: string; executorSessionId?: string; frameStreamId?: string; exp?: number };
+    assert.equal(tokenPayload.roomId, "room-1");
+    assert.equal(tokenPayload.objectId, "object-1");
+    assert.equal(tokenPayload.executorSessionId, "remote-browser:object-1");
+    assert.equal(tokenPayload.frameStreamId, "remote-browser:object-1:frames");
+    assert.equal(typeof tokenPayload.exp, "number");
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    delete process.env.NOAH_DISABLE_AUTOSTART;
+    delete process.env.API_PORT;
+    delete process.env.REMOTE_BROWSER_PUBLIC_URL;
+    delete process.env.REMOTE_BROWSER_TOKEN_SECRET;
+    delete process.env.REMOTE_BROWSER_TOKEN_TTL_SECONDS;
+  }
+});
+
 test("room manifest exposes optional scene bundle url", async () => {
   process.env.NOAH_DISABLE_AUTOSTART = "1";
   process.env.API_PORT = "4012";

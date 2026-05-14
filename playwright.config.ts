@@ -11,13 +11,17 @@ export default defineConfig({
     headless: true
   },
   webServer: useWebServer ? {
-    command: "bash -lc 'node apps/room-state/dist/index.js >/tmp/noah-room-state.log 2>&1 & node apps/api/dist/index.js'",
+    command: "bash -lc 'node apps/remote-browser/dist/index.js >/tmp/noah-remote-browser.log 2>&1 & node apps/room-state/dist/index.js >/tmp/noah-room-state.log 2>&1 & node apps/api/dist/index.js'",
     url: "http://127.0.0.1:4000/health",
     reuseExistingServer: true,
     env: {
       NOAH_DISABLE_AUTOSTART: "0",
       CONTROL_PLANE_ADMIN_TOKEN: "test-admin-token",
-      FEATURE_AVATAR_POSE_BINARY: "true"
+      FEATURE_AVATAR_POSE_BINARY: "true",
+      REMOTE_BROWSER_INTERNAL_URL: "http://127.0.0.1:4010",
+      REMOTE_BROWSER_PUBLIC_URL: "ws://127.0.0.1:4010",
+      REMOTE_BROWSER_ALLOWED_ORIGINS: "http://127.0.0.1:4000,http://localhost:4000",
+      REMOTE_BROWSER_ALLOW_PRIVATE_ALLOWED_ORIGINS: "true"
     }
   } : undefined
 });

@@ -1,5 +1,6 @@
 import {
   DEFAULT_MEDIA_SURFACE_ID,
+  REMOTE_BROWSER_OBJECT_TYPE,
   SCREEN_SHARE_OBJECT_TYPE,
   SURFACE_TEST_CARD_TYPE,
   WHITEBOARD_ALLOWED_COLORS,
@@ -14,6 +15,9 @@ import {
   type MediaObjectCommandBlockedReason,
   type MediaObjectCommandResult,
   type MediaObjectInstance,
+  type RemoteBrowserErrorCode,
+  type RemoteBrowserObjectState,
+  type RemoteBrowserPatch,
   type RoomMediaObjectsState,
   type RoomPermission,
   type RoomRole,
@@ -22,6 +26,7 @@ import {
   type ScreenSharePatch,
   type SurfaceTestCardPatch,
   type SurfaceTestCardState,
+  type SurfaceInputEvent,
   type WhiteboardPatch,
   type WhiteboardPoint,
   type WhiteboardState,
@@ -230,8 +235,26 @@ function createWhiteboardState(): WhiteboardState {
   };
 }
 
-function isSupportedMediaObjectType(type: string): type is typeof SURFACE_TEST_CARD_TYPE | typeof SCREEN_SHARE_OBJECT_TYPE | typeof WHITEBOARD_OBJECT_TYPE {
-  return type === SURFACE_TEST_CARD_TYPE || type === SCREEN_SHARE_OBJECT_TYPE || type === WHITEBOARD_OBJECT_TYPE;
+function createRemoteBrowserState(ownerParticipantId: string, surfaceId: string): RemoteBrowserObjectState {
+  return {
+    status: "idle",
+    ownerParticipantId,
+    surfaceId,
+    lastInputEventId: null
+  };
+}
+
+function isSupportedMediaObjectType(type: string): type is typeof SURFACE_TEST_CARD_TYPE | typeof SCREEN_SHARE_OBJECT_TYPE | typeof WHITEBOARD_OBJECT_TYPE | typeof REMOTE_BROWSER_OBJECT_TYPE {
+  return type === SURFACE_TEST_CARD_TYPE || type === SCREEN_SHARE_OBJECT_TYPE || type === WHITEBOARD_OBJECT_TYPE || type === REMOTE_BROWSER_OBJECT_TYPE;
+}
+
+function isAllowedRemoteBrowserUrlCandidate(input: string): boolean {
+  try {
+    const url = new URL(input);
+    return url.protocol === "https:" || url.protocol === "http:";
+  } catch {
+    return false;
+  }
 }
 
 function isSurfaceTestCardPatch(input: unknown): input is SurfaceTestCardPatch {
@@ -266,6 +289,73 @@ function isScreenSharePatch(input: unknown): input is ScreenSharePatch {
     return isScreenShareErrorCode(patch.errorCode);
   }
   return false;
+}
+
+function isRemoteBrowserErrorCode(input: unknown): input is RemoteBrowserErrorCode {
+  return input === "url_not_allowed"
+    || input === "url_resolution_blocked"
+    || input === "redirect_not_allowed"
+    || input === "executor_unavailable"
+    || input === "executor_crashed"
+    || input === "executor_timeout"
+    || input === "navigation_failed"
+    || input === "input_rejected"
+    || input === "stream_failed"
+    || input === "unknown";
+}
+
+function isSurfaceInputEvent(input: unknown): input is SurfaceInputEvent {
+  if (!input || typeof input !== "object") {
+    return false;
+  }
+  const event = input as { eventId?: unknown; surfaceId?: unknown; kind?: unknown; source?: unknown; uv?: { u?: unknown; v?: unknown } };
+  return typeof event.eventId === "string"
+    && typeof event.surfaceId === "string"
+    && typeof event.kind === "string"
+    && typeof event.source === "string"
+    && typeof event.uv?.u === "number"
+    && Number.isFinite(event.uv.u)
+    && event.uv.u >= 0
+    && event.uv.u <= 1
+    && typeof event.uv.v === "number"
+    && Number.isFinite(event.uv.v)
+    && event.uv.v >= 0
+    && event.uv.v <= 1;
+}
+
+function isRemoteBrowserInputEventId(input: unknown): input is string {
+  return typeof input === "string" && input.trim().length > 0;
+}
+
+function isRemoteBrowserPatch(input: unknown): input is RemoteBrowserPatch {
+  if (!input || typeof input !== "object") {
+    return false;
+  }
+  const patch = input as { type?: unknown; url?: unknown; event?: unknown; inputEventId?: unknown; errorCode?: unknown };
+  if (!isRemoteBrowserInputEventId(patch.inputEventId)) {
+    return false;
+  }
+  if (patch.type === "open-url") {
+    return typeof patch.url === "string" && isAllowedRemoteBrowserUrlCandidate(patch.url);
+  }
+  if (patch.type === "pointer" || patch.type === "scroll" || patch.type === "keyboard") {
+    return isSurfaceInputEvent(patch.event);
+  }
+  if (patch.type === "take-control" || patch.type === "release-control") {
+    return true;
+  }
+  if (patch.type === "mark-failed") {
+    return isRemoteBrowserErrorCode(patch.errorCode);
+  }
+  return false;
+}
+
+function isRemoteBrowserRealtimeInputPatch(input: unknown): input is Extract<RemoteBrowserPatch, { type: "pointer" | "scroll" | "keyboard" }> {
+  if (!input || typeof input !== "object") {
+    return false;
+  }
+  const patch = input as { type?: unknown };
+  return patch.type === "pointer" || patch.type === "scroll" || patch.type === "keyboard";
 }
 
 function isWhiteboardColor(input: unknown): input is WhiteboardStroke["color"] {
@@ -343,6 +433,23 @@ function getWhiteboardPatchPermission(input: unknown): RoomPermission | null {
   return null;
 }
 
+function getRemoteBrowserPatchPermission(input: unknown): RoomPermission | null {
+  if (!input || typeof input !== "object") {
+    return null;
+  }
+  const patch = input as { type?: unknown };
+  if (patch.type === "open-url") {
+    return "remote-browser.open-url";
+  }
+  if (patch.type === "pointer" || patch.type === "scroll" || patch.type === "keyboard" || patch.type === "take-control" || patch.type === "release-control") {
+    return "remote-browser.input";
+  }
+  if (patch.type === "mark-failed") {
+    return "remote-browser.stop";
+  }
+  return null;
+}
+
 function reduceWhiteboardState(state: WhiteboardState, patch: WhiteboardPatch, participantId: string): WhiteboardState | null {
   if (!isWhiteboardInputEventId(patch.inputEventId)) {
     return null;
@@ -406,6 +513,67 @@ function reduceScreenShareState(current: ScreenShareObjectState, patch: ScreenSh
     ...current,
     status: "stopped",
     stoppedAtMs: nowMs
+  };
+}
+
+function reduceRemoteBrowserState(current: RemoteBrowserObjectState, patch: RemoteBrowserPatch, participantId: string, objectId: string, nowMs: number): RemoteBrowserObjectState | null {
+  if (current.lastInputEventId === patch.inputEventId) {
+    return current;
+  }
+  if (patch.type === "take-control") {
+    if (current.controllerParticipantId && current.controllerParticipantId !== participantId) {
+      return null;
+    }
+    return {
+      ...current,
+      controllerParticipantId: participantId,
+      lastInputEventId: patch.inputEventId
+    };
+  }
+  if (patch.type === "release-control") {
+    if (current.controllerParticipantId && current.controllerParticipantId !== participantId) {
+      return null;
+    }
+    return {
+      ...current,
+      controllerParticipantId: undefined,
+      lastInputEventId: patch.inputEventId
+    };
+  }
+  if (patch.type === "open-url") {
+    const executorSessionId = current.executorSessionId ?? `remote-browser:${objectId}`;
+    const frameStreamId = current.frameStreamId ?? `remote-browser:${objectId}:frames`;
+    return {
+      ...current,
+      status: "active",
+      controllerParticipantId: current.controllerParticipantId ?? participantId,
+      executorSessionId,
+      frameStreamId,
+      currentUrl: patch.url,
+      errorCode: undefined,
+      loadedAtMs: nowMs,
+      lastInputEventId: patch.inputEventId
+    };
+  }
+  if (patch.type === "mark-failed") {
+    return {
+      ...current,
+      status: "failed",
+      errorCode: patch.errorCode,
+      lastInputEventId: patch.inputEventId
+    };
+  }
+  if (current.controllerParticipantId && current.controllerParticipantId !== participantId) {
+    return null;
+  }
+  if (!current.executorSessionId) {
+    return null;
+  }
+  return {
+    ...current,
+    controllerParticipantId: current.controllerParticipantId ?? participantId,
+    lastInputSeq: (current.lastInputSeq ?? 0) + 1,
+    lastInputEventId: patch.inputEventId
   };
 }
 
@@ -487,8 +655,10 @@ export function createMediaObject(state: RoomState, participantId: string, input
     ? createScreenShareState(participantId, input.surfaceId)
     : input.objectType === WHITEBOARD_OBJECT_TYPE
       ? createWhiteboardState()
-      : createSurfaceTestCardState();
-  const object: MediaObjectInstance<SurfaceTestCardState | ScreenShareObjectState | WhiteboardState> = {
+      : input.objectType === REMOTE_BROWSER_OBJECT_TYPE
+        ? createRemoteBrowserState(participantId, input.surfaceId)
+        : createSurfaceTestCardState();
+  const object: MediaObjectInstance<SurfaceTestCardState | ScreenShareObjectState | WhiteboardState | RemoteBrowserObjectState> = {
     objectId: input.objectId,
     type: input.objectType,
     roomId: state.roomId,
@@ -593,7 +763,8 @@ export function patchMediaObjectState(state: RoomState, participantId: string, i
   if (object.surfaceId !== input.surfaceId || surface.activeObjectId !== input.objectId) {
     return rejectMediaObjectCommand(state, { commandId: input.commandId, role: access.role, permission, blockedReason: "object-surface-mismatch", surfaceId: input.surfaceId, objectId: input.objectId, objectType: object.type, revision: object.revision });
   }
-  if (object.revision !== input.expectedRevision) {
+  const allowRemoteBrowserInputRevisionSkew = object.type === REMOTE_BROWSER_OBJECT_TYPE && isRemoteBrowserRealtimeInputPatch(input.patch);
+  if (object.revision !== input.expectedRevision && !allowRemoteBrowserInputRevisionSkew) {
     return rejectMediaObjectCommand(state, { commandId: input.commandId, role: access.role, permission, blockedReason: "revision-mismatch", surfaceId: input.surfaceId, objectId: input.objectId, objectType: object.type, revision: object.revision });
   }
   if (object.type === SCREEN_SHARE_OBJECT_TYPE) {
@@ -651,6 +822,52 @@ export function patchMediaObjectState(state: RoomState, participantId: string, i
       return rejectMediaObjectCommand(state, { commandId: input.commandId, role: access.role, permission, blockedReason: "invalid-patch", surfaceId: input.surfaceId, objectId: input.objectId, objectType: object.type, revision: object.revision });
     }
     const nextObject: MediaObjectInstance<WhiteboardState> = {
+      ...object,
+      state: nextState,
+      status: nextState.status === "failed" ? "failed" : "active",
+      revision: object.revision + 1,
+      updatedAtMs: input.nowMs
+    };
+    const nextMediaObjects: RoomMediaObjectsState = {
+      surfaces: mediaObjects.surfaces,
+      objects: {
+        ...mediaObjects.objects,
+        [input.objectId]: nextObject
+      }
+    };
+    return {
+      room: { ...state, mediaObjects: nextMediaObjects },
+      result: createMediaObjectCommandResult({
+        accepted: true,
+        commandId: input.commandId,
+        role: access.role,
+        permission,
+        blockedReason: null,
+        surfaceId: input.surfaceId,
+        objectId: input.objectId,
+        objectType: object.type,
+        revision: nextObject.revision
+      })
+    };
+  }
+  if (object.type === REMOTE_BROWSER_OBJECT_TYPE) {
+    permission = getRemoteBrowserPatchPermission(input.patch) ?? "remote-browser.input";
+    if (!hasRoomPermission(access.permissions, permission)) {
+      return rejectMediaObjectCommand(state, { commandId: input.commandId, role: access.role, permission, blockedReason: "missing-permission", surfaceId: input.surfaceId, objectId: input.objectId, objectType: object.type, revision: object.revision });
+    }
+    const currentState = object.state as RemoteBrowserObjectState;
+    const patch = input.patch as RemoteBrowserPatch;
+    if (!isRemoteBrowserPatch(patch)) {
+      return rejectMediaObjectCommand(state, { commandId: input.commandId, role: access.role, permission, blockedReason: "invalid-patch", surfaceId: input.surfaceId, objectId: input.objectId, objectType: object.type, revision: object.revision });
+    }
+    if (currentState.lastInputEventId === patch.inputEventId) {
+      return rejectMediaObjectCommand(state, { commandId: input.commandId, role: access.role, permission, blockedReason: "duplicate-input-event", surfaceId: input.surfaceId, objectId: input.objectId, objectType: object.type, revision: object.revision });
+    }
+    const nextState = reduceRemoteBrowserState(currentState, patch, participantId, object.objectId, input.nowMs);
+    if (!nextState) {
+      return rejectMediaObjectCommand(state, { commandId: input.commandId, role: access.role, permission, blockedReason: "invalid-patch", surfaceId: input.surfaceId, objectId: input.objectId, objectType: object.type, revision: object.revision });
+    }
+    const nextObject: MediaObjectInstance<RemoteBrowserObjectState> = {
       ...object,
       state: nextState,
       status: nextState.status === "failed" ? "failed" : "active",
@@ -785,15 +1002,25 @@ export function leaveRoom(state: RoomState, participantId: string): RoomState {
   const nextSurfaces = { ...mediaObjects.surfaces };
   let mediaObjectsChanged = false;
   for (const [objectId, object] of Object.entries(mediaObjects.objects)) {
-    if (object.type !== SCREEN_SHARE_OBJECT_TYPE || object.ownerParticipantId !== participantId) {
+    if ((object.type === SCREEN_SHARE_OBJECT_TYPE || object.type === REMOTE_BROWSER_OBJECT_TYPE) && object.ownerParticipantId === participantId) {
+      delete nextObjects[objectId];
+      const surface = nextSurfaces[object.surfaceId];
+      if (surface?.activeObjectId === objectId) {
+        nextSurfaces[object.surfaceId] = { ...surface, activeObjectId: null };
+      }
+      mediaObjectsChanged = true;
       continue;
     }
-    delete nextObjects[objectId];
-    const surface = nextSurfaces[object.surfaceId];
-    if (surface?.activeObjectId === objectId) {
-      nextSurfaces[object.surfaceId] = { ...surface, activeObjectId: null };
+    if (object.type === REMOTE_BROWSER_OBJECT_TYPE && (object.state as RemoteBrowserObjectState).controllerParticipantId === participantId) {
+      nextObjects[objectId] = {
+        ...object,
+        state: {
+          ...(object.state as RemoteBrowserObjectState),
+          controllerParticipantId: undefined
+        }
+      };
+      mediaObjectsChanged = true;
     }
-    mediaObjectsChanged = true;
   }
   return {
     ...state,

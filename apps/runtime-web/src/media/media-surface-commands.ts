@@ -1,6 +1,8 @@
 import {
+  REMOTE_BROWSER_OBJECT_TYPE,
   SCREEN_SHARE_OBJECT_TYPE,
   WHITEBOARD_OBJECT_TYPE,
+  type RemoteBrowserPatch,
   type ScreenSharePatch,
   type WhiteboardPatch
 } from "@noah/shared-types";
@@ -189,6 +191,18 @@ export class MediaSurfaceCommandClient {
 
   patchWhiteboardObject(objectId: string, surfaceId: string, expectedRevision: number, patch: WhiteboardPatch): Promise<SurfaceCommandResult> {
     return this.patchObjectState(objectId, surfaceId, expectedRevision, patch, `whiteboard-${patch.type}`);
+  }
+
+  createRemoteBrowserObjectOnSurface(surfaceId: string): Promise<SurfaceCommandResult> {
+    return this.createObjectOnSurface(surfaceId, REMOTE_BROWSER_OBJECT_TYPE, "remote-browser-create");
+  }
+
+  patchRemoteBrowserObject(objectId: string, surfaceId: string, expectedRevision: number, patch: RemoteBrowserPatch): Promise<SurfaceCommandResult> {
+    return this.patchObjectState(objectId, surfaceId, expectedRevision, patch, `remote-browser-${patch.type}`);
+  }
+
+  stopRemoteBrowserObject(objectId: string, surfaceId: string): Promise<SurfaceCommandResult> {
+    return this.stopObject(objectId, surfaceId, "remote-browser-stop");
   }
 
   setMediaSurfaceAudioEnabled(surfaceId: string, enabled: boolean): Promise<SurfaceCommandResult> {

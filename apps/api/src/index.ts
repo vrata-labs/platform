@@ -99,6 +99,13 @@ interface MediaTokenPayload {
   canPublishVideo: boolean;
 }
 
+interface RemoteBrowserFrameTokenRequest {
+  roomId?: string;
+  objectId?: string;
+  executorSessionId?: string;
+  frameStreamId?: string;
+}
+
 interface PresenceRecord {
   participantId: string;
   displayName: string;
@@ -233,6 +240,13 @@ function encodeAccessToken(payload: RoomAccessTokenPayload, env: NodeJS.ProcessE
   return `${body}.${signature}`;
 }
 
+function encodeRemoteBrowserFrameToken(payload: { roomId: string; objectId: string; executorSessionId: string; frameStreamId: string; exp: number }, env: NodeJS.ProcessEnv = process.env): string {
+  const body = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
+  const secret = env.REMOTE_BROWSER_TOKEN_SECRET ?? "dev-remote-browser-secret";
+  const signature = createHmac("sha256", secret).update(body).digest("base64url");
+  return `${body}.${signature}`;
+}
+
 export function getMissingRequiredApiEnvVars(env: NodeJS.ProcessEnv = process.env): string[] {
   return requiredProductionApiEnvVars.filter((name) => !env[name] || env[name]?.trim().length === 0);
 }
@@ -355,6 +369,33 @@ function getDefaultLivekitUrl(request?: IncomingMessage): string {
     return `${protocol}://livekit.${hostname}`;
   }
   return `${protocol}://livekit-${hostname}`;
+}
+
+function getDefaultRemoteBrowserFrameStreamUrl(request?: IncomingMessage): string {
+  const configured = process.env.REMOTE_BROWSER_PUBLIC_URL;
+  if (configured) {
+    const configuredUrl = new URL("/frames", configured);
+    if (configuredUrl.protocol === "https:") {
+      configuredUrl.protocol = "wss:";
+    } else if (configuredUrl.protocol === "http:") {
+      configuredUrl.protocol = "ws:";
+    }
+    return configuredUrl.toString();
+  }
+  const host = getRequestHost(request);
+  const proto = getRequestProto(request);
+  if (!host) {
+    return "ws://localhost:4010/frames";
+  }
+  const protocol = proto === "https" ? "wss" : "ws";
+  const hostname = host.split(":")[0] ?? host;
+  if (hostname === "localhost" || hostname === "127.0.0.1") {
+    return `${protocol}://${hostname}:4010/frames`;
+  }
+  if (hostname.endsWith(".sslip.io")) {
+    return `${protocol}://browser.${hostname}/frames`;
+  }
+  return `${protocol}://browser-${hostname}/frames`;
 }
 
 function createRoomLink(roomId: string, request?: IncomingMessage): string {
@@ -818,6 +859,12 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     return;
   }
 
+  if (method === "GET" && url.pathname === "/remote-browser-demo.html") {
+    const served = await serveStatic(response, join(runtimePublicRoot, "remote-browser-demo.html"));
+    if (!served) json(response, 404, { error: "remote_browser_demo_missing" });
+    return;
+  }
+
   if (method === "GET" && url.pathname.startsWith("/assets/")) {
     const served = await serveStatic(response, join(runtimeStaticRoot, url.pathname.slice(1)))
       || await serveStatic(response, join(runtimePublicRoot, url.pathname.slice(1)));
@@ -1203,6 +1250,30 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       token: await accessToken.toJwt(),
       expiresInSeconds: Number.parseInt(process.env.MEDIA_TOKEN_TTL_SECONDS ?? "900", 10),
       livekitUrl: getDefaultLivekitUrl(request)
+    });
+    return;
+  }
+
+  if (method === "POST" && url.pathname === "/api/tokens/remote-browser-frame") {
+    const payload = await parseBody<RemoteBrowserFrameTokenRequest>(request);
+    if (!payload?.roomId || !payload.objectId || !payload.executorSessionId || !payload.frameStreamId) {
+      json(response, 400, { error: "remote_browser_frame_token_payload_required" });
+      return;
+    }
+    const ttlSeconds = Number.parseInt(process.env.REMOTE_BROWSER_TOKEN_TTL_SECONDS ?? "300", 10);
+    const token = encodeRemoteBrowserFrameToken({
+      roomId: payload.roomId,
+      objectId: payload.objectId,
+      executorSessionId: payload.executorSessionId,
+      frameStreamId: payload.frameStreamId,
+      exp: Math.floor(Date.now() / 1000) + ttlSeconds
+    });
+    const frameStreamUrl = new URL(getDefaultRemoteBrowserFrameStreamUrl(request));
+    frameStreamUrl.searchParams.set("token", token);
+    json(response, 200, {
+      token,
+      expiresInSeconds: ttlSeconds,
+      frameStreamUrl: frameStreamUrl.toString()
     });
     return;
   }

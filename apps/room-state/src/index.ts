@@ -2,7 +2,18 @@ import { createServer } from "node:http";
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 
 import { WebSocketServer, type WebSocket } from "ws";
-import { getRoomPermissions, hasRoomPermission, isRoomRole, parseRoomRole, type MediaObjectCommandResult, type RoomPermission, type RoomRole } from "@noah/shared-types";
+import {
+  REMOTE_BROWSER_OBJECT_TYPE,
+  getRoomPermissions,
+  hasRoomPermission,
+  isRoomRole,
+  parseRoomRole,
+  type MediaObjectCommandResult,
+  type RemoteBrowserObjectState,
+  type RemoteBrowserPatch,
+  type RoomPermission,
+  type RoomRole
+} from "@noah/shared-types";
 
 import type { PresenceState } from "./schema.js";
 import {
@@ -204,6 +215,11 @@ function scheduleDisconnectCleanup(server: RoomStateServer, roomId: string, part
   const timer = setTimeout(() => {
     const room = server.rooms.get(roomId);
     if (room) {
+      for (const object of Object.values(room.mediaObjects.objects)) {
+        if (object.type === REMOTE_BROWSER_OBJECT_TYPE && object.ownerParticipantId === participantId) {
+          stopRemoteBrowserSession((object.state as RemoteBrowserObjectState).executorSessionId);
+        }
+      }
       server.rooms.set(roomId, leaveRoom(room, participantId));
     }
     getRoomReliableStates(server, roomId).delete(participantId);
@@ -405,13 +421,18 @@ export function applyMediaObjectStopCommand(server: RoomStateServer, roomId: str
   objectId?: string;
 }): MediaObjectCommandResultPayload {
   const room = ensureRoom(server, roomId);
+  const objectId = input.objectId?.trim() || "";
+  const remoteBrowserSessionId = getRemoteBrowserObjectState(server, roomId, objectId)?.executorSessionId ?? null;
   const result = stopMediaObject(room, participantId, {
     commandId: input.commandId?.trim() || randomUUID(),
     surfaceId: input.surfaceId?.trim() || "debug-main",
-    objectId: input.objectId?.trim() || ""
+    objectId
   });
   server.rooms.set(roomId, result.room);
   if (result.result.accepted) {
+    if (result.result.objectType === REMOTE_BROWSER_OBJECT_TYPE) {
+      stopRemoteBrowserSession(remoteBrowserSessionId);
+    }
     broadcastRoom(server, roomId);
   }
   return result.result;
@@ -435,6 +456,9 @@ export function applyMediaObjectPatchCommand(server: RoomStateServer, roomId: st
   });
   server.rooms.set(roomId, result.room);
   if (result.result.accepted) {
+    if (result.result.objectType === REMOTE_BROWSER_OBJECT_TYPE) {
+      forwardRemoteBrowserPatch(server, roomId, result.result.objectId, input.patch);
+    }
     broadcastRoom(server, roomId);
   }
   return result.result;
@@ -512,6 +536,84 @@ export function relayAvatarPoseFrame(server: RoomStateServer, roomId: string, pa
     type: "avatar_pose_preview",
     participantId,
     poseFrame
+  });
+}
+
+function getRemoteBrowserInternalUrl(env: NodeJS.ProcessEnv = process.env): string | null {
+  const url = env.REMOTE_BROWSER_INTERNAL_URL?.trim();
+  return url && /^https?:\/\//.test(url) ? url.replace(/\/$/, "") : null;
+}
+
+function getRemoteBrowserObjectState(server: RoomStateServer, roomId: string, objectId?: string | null): RemoteBrowserObjectState | null {
+  if (!objectId) {
+    return null;
+  }
+  const object = server.rooms.get(roomId)?.mediaObjects.objects[objectId];
+  if (object?.type !== REMOTE_BROWSER_OBJECT_TYPE) {
+    return null;
+  }
+  return object.state as RemoteBrowserObjectState;
+}
+
+function forwardRemoteBrowserPatch(server: RoomStateServer, roomId: string, objectId: string | null | undefined, patch: unknown): void {
+  const baseUrl = getRemoteBrowserInternalUrl();
+  if (!baseUrl || !patch || typeof patch !== "object") {
+    return;
+  }
+  const state = getRemoteBrowserObjectState(server, roomId, objectId);
+  if (!state?.executorSessionId || !state.frameStreamId) {
+    return;
+  }
+  const remotePatch = patch as RemoteBrowserPatch;
+  const request = remotePatch.type === "open-url"
+    ? fetch(`${baseUrl}/api/sessions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        sessionId: state.executorSessionId,
+        frameStreamId: state.frameStreamId,
+        roomId,
+        objectId,
+        url: remotePatch.url
+      })
+    })
+    : remotePatch.type === "pointer" || remotePatch.type === "scroll" || remotePatch.type === "keyboard"
+      ? fetch(`${baseUrl}/api/sessions/${encodeURIComponent(state.executorSessionId)}/input`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(remotePatch)
+      })
+      : null;
+  if (!request) {
+    return;
+  }
+  request.catch((error: unknown) => {
+    logEvent({
+      service: "room-state",
+      env: process.env.NODE_ENV ?? "development",
+      errorCode: "remote_browser_forward_failed",
+      roomId,
+      objectId,
+      message: error instanceof Error ? error.message : "unknown",
+      timestamp: new Date().toISOString()
+    });
+  });
+}
+
+function stopRemoteBrowserSession(sessionId: string | null | undefined): void {
+  const baseUrl = getRemoteBrowserInternalUrl();
+  if (!baseUrl || !sessionId) {
+    return;
+  }
+  fetch(`${baseUrl}/api/sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE" }).catch((error: unknown) => {
+    logEvent({
+      service: "room-state",
+      env: process.env.NODE_ENV ?? "development",
+      errorCode: "remote_browser_stop_failed",
+      sessionId,
+      message: error instanceof Error ? error.message : "unknown",
+      timestamp: new Date().toISOString()
+    });
   });
 }
 

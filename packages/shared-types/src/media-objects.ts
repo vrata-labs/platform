@@ -1,15 +1,17 @@
 import type { RoomPermission, RoomRole } from "./access.js";
+import type { SurfaceInputEvent } from "./surface-input.js";
 
 export const DEFAULT_MEDIA_SURFACE_ID = "debug-main";
 export const SURFACE_TEST_CARD_TYPE = "surface-test-card";
 export const SCREEN_SHARE_OBJECT_TYPE = "screen-share";
 export const WHITEBOARD_OBJECT_TYPE = "whiteboard";
+export const REMOTE_BROWSER_OBJECT_TYPE = "remote-browser";
 export const WHITEBOARD_MAX_STROKES = 500;
 export const WHITEBOARD_MAX_POINTS_PER_STROKE = 256;
 export const WHITEBOARD_ALLOWED_COLORS = ["#111827", "#2563eb", "#dc2626"] as const;
 export const WHITEBOARD_ALLOWED_WIDTHS = [2, 4, 8] as const;
 
-export type MediaObjectType = typeof SURFACE_TEST_CARD_TYPE | typeof SCREEN_SHARE_OBJECT_TYPE | typeof WHITEBOARD_OBJECT_TYPE | string;
+export type MediaObjectType = typeof SURFACE_TEST_CARD_TYPE | typeof SCREEN_SHARE_OBJECT_TYPE | typeof WHITEBOARD_OBJECT_TYPE | typeof REMOTE_BROWSER_OBJECT_TYPE | string;
 
 export type MediaObjectStatus = "active" | "stopped" | "failed";
 
@@ -97,6 +99,36 @@ export interface WhiteboardState {
   lastInputEventId: string | null;
 }
 
+export type RemoteBrowserStatus = "idle" | "starting" | "loading" | "active" | "stopping" | "failed";
+
+export type RemoteBrowserErrorCode =
+  | "url_not_allowed"
+  | "url_resolution_blocked"
+  | "redirect_not_allowed"
+  | "executor_unavailable"
+  | "executor_crashed"
+  | "executor_timeout"
+  | "navigation_failed"
+  | "input_rejected"
+  | "stream_failed"
+  | "unknown";
+
+export interface RemoteBrowserObjectState {
+  status: RemoteBrowserStatus;
+  ownerParticipantId: string;
+  surfaceId: string;
+  controllerParticipantId?: string;
+  executorSessionId?: string;
+  frameStreamId?: string;
+  currentUrl?: string;
+  title?: string;
+  loadedAtMs?: number;
+  lastFrameAtMs?: number;
+  lastInputSeq?: number;
+  lastInputEventId: string | null;
+  errorCode?: RemoteBrowserErrorCode;
+}
+
 export type SurfaceTestCardPatch = {
   type: "increment-click-count";
   inputEventId: string;
@@ -112,6 +144,15 @@ export type ScreenSharePatch =
 export type WhiteboardPatch =
   | { type: "append-stroke"; stroke: WhiteboardStroke; inputEventId: string }
   | { type: "clear"; inputEventId: string };
+
+export type RemoteBrowserPatch =
+  | { type: "open-url"; url: string; inputEventId: string }
+  | { type: "pointer"; event: SurfaceInputEvent; inputEventId: string }
+  | { type: "scroll"; event: SurfaceInputEvent; inputEventId: string }
+  | { type: "keyboard"; event: SurfaceInputEvent; inputEventId: string }
+  | { type: "take-control"; inputEventId: string }
+  | { type: "release-control"; inputEventId: string }
+  | { type: "mark-failed"; errorCode: RemoteBrowserErrorCode; inputEventId: string };
 
 export type MediaObjectCommandBlockedReason =
   | "missing-permission"
@@ -147,7 +188,7 @@ export function createDefaultRoomMediaObjectsState(roomId: string): RoomMediaObj
         inputEnabled: true,
         mediaAudioEnabled: false,
         visible: true,
-        allowedObjectTypes: [SURFACE_TEST_CARD_TYPE, SCREEN_SHARE_OBJECT_TYPE, WHITEBOARD_OBJECT_TYPE],
+        allowedObjectTypes: [SURFACE_TEST_CARD_TYPE, SCREEN_SHARE_OBJECT_TYPE, WHITEBOARD_OBJECT_TYPE, REMOTE_BROWSER_OBJECT_TYPE],
         activeObjectId: null,
         lockedByParticipantId: null
       }

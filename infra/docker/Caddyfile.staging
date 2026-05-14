@@ -45,3 +45,11 @@
 {$NOAH_LIVEKIT_DOMAIN} {
   reverse_proxy livekit:7880
 }
+
+{$NOAH_BROWSER_DOMAIN} {
+  handle /frames* {
+    reverse_proxy remote-browser:4010
+  }
+
+  respond "not found" 404
+}

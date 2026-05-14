@@ -150,6 +150,7 @@ test("createRoomState includes default media surface", () => {
   assert.equal(room.mediaObjects.surfaces["debug-main"]?.allowedObjectTypes.includes("surface-test-card"), true);
   assert.equal(room.mediaObjects.surfaces["debug-main"]?.allowedObjectTypes.includes("screen-share"), true);
   assert.equal(room.mediaObjects.surfaces["debug-main"]?.allowedObjectTypes.includes("whiteboard"), true);
+  assert.equal(room.mediaObjects.surfaces["debug-main"]?.allowedObjectTypes.includes("remote-browser"), true);
   assert.equal(room.mediaObjects.surfaces["debug-main"]?.mediaAudioEnabled, false);
 });
 
@@ -465,6 +466,105 @@ test("screen-share object state updates through host-only revisioned reducer", (
   });
   assert.equal(stale.result.accepted, false);
   assert.equal(stale.result.blockedReason, "revision-mismatch");
+});
+
+test("remote-browser object opens URL, streams input, and enforces controller lock", () => {
+  const hostRoom = joinRoom(createRoomState("demo"), "host", { role: "host" });
+  const created = createMediaObject(hostRoom, "host", {
+    commandId: "cmd-create-browser",
+    surfaceId: "debug-main",
+    objectType: "remote-browser",
+    objectId: "browser-1",
+    nowMs: 1
+  });
+  assert.equal(created.result.accepted, true);
+
+  const opened = patchMediaObjectState(created.room, "host", {
+    commandId: "cmd-open",
+    surfaceId: "debug-main",
+    objectId: "browser-1",
+    expectedRevision: 0,
+    patch: {
+      type: "open-url",
+      url: "https://example.com/remote-browser-demo.html",
+      inputEventId: "host:open:1"
+    },
+    nowMs: 2
+  });
+  assert.equal(opened.result.accepted, true);
+  assert.equal(opened.result.permission, "remote-browser.open-url");
+  const openedState = opened.room.mediaObjects.objects["browser-1"]?.state as {
+    status?: string;
+    controllerParticipantId?: string;
+    executorSessionId?: string;
+    frameStreamId?: string;
+    currentUrl?: string;
+  } | undefined;
+  assert.equal(openedState?.status, "active");
+  assert.equal(openedState?.controllerParticipantId, "host");
+  assert.equal(openedState?.executorSessionId, "remote-browser:browser-1");
+  assert.equal(openedState?.frameStreamId, "remote-browser:browser-1:frames");
+  assert.equal(openedState?.currentUrl, "https://example.com/remote-browser-demo.html");
+
+  const staleInput = patchMediaObjectState(opened.room, "host", {
+    commandId: "cmd-input-stale-revision",
+    surfaceId: "debug-main",
+    objectId: "browser-1",
+    expectedRevision: 0,
+    patch: {
+      type: "pointer",
+      inputEventId: "host:pointer:1",
+      event: {
+        eventId: "host:pointer:1",
+        roomId: "demo",
+        surfaceId: "debug-main",
+        objectId: "browser-1",
+        participantId: "host",
+        source: "mouse",
+        kind: "click",
+        uv: { u: 0.5, v: 0.5 },
+        pixel: { x: 960, y: 540 },
+        clientTimeMs: 3,
+        seq: 1
+      }
+    },
+    nowMs: 3
+  });
+  assert.equal(staleInput.result.accepted, true);
+  assert.equal(staleInput.result.permission, "remote-browser.input");
+  assert.equal((staleInput.room.mediaObjects.objects["browser-1"]?.state as { lastInputSeq?: number } | undefined)?.lastInputSeq, 1);
+
+  const adminRoom = joinRoom(staleInput.room, "admin", { role: "admin" });
+  const adminInput = patchMediaObjectState(adminRoom, "admin", {
+    commandId: "cmd-admin-input",
+    surfaceId: "debug-main",
+    objectId: "browser-1",
+    expectedRevision: staleInput.result.revision ?? 2,
+    patch: {
+      type: "pointer",
+      inputEventId: "admin:pointer:1",
+      event: {
+        eventId: "admin:pointer:1",
+        roomId: "demo",
+        surfaceId: "debug-main",
+        objectId: "browser-1",
+        participantId: "admin",
+        source: "mouse",
+        kind: "click",
+        uv: { u: 0.5, v: 0.5 },
+        pixel: { x: 960, y: 540 },
+        clientTimeMs: 4,
+        seq: 1
+      }
+    },
+    nowMs: 4
+  });
+  assert.equal(adminInput.result.accepted, false);
+  assert.equal(adminInput.result.blockedReason, "invalid-patch");
+
+  const hostLeft = leaveRoom(adminRoom, "host");
+  assert.equal(hostLeft.mediaObjects.surfaces["debug-main"]?.activeObjectId, null);
+  assert.equal(hostLeft.mediaObjects.objects["browser-1"], undefined);
 });
 
 test("leaveRoom clears owned active screen-share object", () => {

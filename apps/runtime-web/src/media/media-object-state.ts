@@ -1,7 +1,9 @@
 import {
+  REMOTE_BROWSER_OBJECT_TYPE,
   SCREEN_SHARE_OBJECT_TYPE,
   WHITEBOARD_OBJECT_TYPE,
   type MediaObjectInstance,
+  type RemoteBrowserObjectState,
   type RoomMediaObjectsState,
   type ScreenShareObjectState,
   type WhiteboardState
@@ -47,6 +49,22 @@ export function activeWhiteboardObjectForSurface(mediaObjects: RoomMediaObjectsS
     return null;
   }
   return object as MediaObjectInstance<WhiteboardState>;
+}
+
+export function isRemoteBrowserState(state: unknown): state is RemoteBrowserObjectState {
+  return Boolean(state)
+    && typeof state === "object"
+    && typeof (state as { status?: unknown }).status === "string"
+    && typeof (state as { ownerParticipantId?: unknown }).ownerParticipantId === "string"
+    && typeof (state as { surfaceId?: unknown }).surfaceId === "string";
+}
+
+export function activeRemoteBrowserObjectForSurface(mediaObjects: RoomMediaObjectsState | null, surfaceId: string): MediaObjectInstance<RemoteBrowserObjectState> | null {
+  const object = activeMediaObjectForSurface(mediaObjects, surfaceId);
+  if (!object || object.type !== REMOTE_BROWSER_OBJECT_TYPE || !isRemoteBrowserState(object.state)) {
+    return null;
+  }
+  return object as MediaObjectInstance<RemoteBrowserObjectState>;
 }
 
 export function resolveScreenShareSurfaceForOwner(mediaObjects: RoomMediaObjectsState | null, ownerParticipantId: string | null | undefined, fallbackSurfaceId: string): string {
