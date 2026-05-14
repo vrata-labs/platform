@@ -49,6 +49,14 @@ pull_compose_service() {
   log_disk_state
 }
 
+rollout_compose_service() {
+  local service="$1"
+  pull_compose_service "$service"
+  docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" up -d --no-build --pull never --no-deps "$service"
+  cleanup_docker_state
+  log_disk_state
+}
+
 env_value() {
   local key="$1"
   python3 - "$ENV_FILE" "$key" <<'PY'
@@ -250,11 +258,10 @@ if [ -f "$ROOT_DIR/tools/snapshot-scene-assets.sh" ]; then
     bash "$ROOT_DIR/tools/snapshot-scene-assets.sh"
 fi
 
-pull_compose_service remote-browser
-pull_compose_service room-state
-pull_compose_service api
-pull_compose_service minio-bootstrap
-docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" up -d --no-build --pull never --remove-orphans api room-state remote-browser caddy
+rollout_compose_service room-state
+rollout_compose_service remote-browser
+rollout_compose_service api
+docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" up -d --no-build --pull never --no-deps caddy
 docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" exec -T caddy caddy validate --config /etc/caddy/Caddyfile
 docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" restart caddy
 patch_canonical_scene_bundles
