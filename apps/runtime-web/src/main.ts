@@ -259,6 +259,7 @@ const localPoseController = createLocalPoseController({
 });
 const WHITEBOARD_PENCIL_TIP_LOCAL_Z = -0.32;
 const WHITEBOARD_PENCIL_CONTACT_DISTANCE_M = 0.06;
+const WHITEBOARD_PENCIL_GRIP_ROTATION = new THREE.Quaternion().setFromEuler(new THREE.Euler(-Math.PI / 8, 0, 0, "XYZ"));
 const xrControllers = [renderer.xr.getController(0), renderer.xr.getController(1)];
 const xrControllerGrips = [renderer.xr.getControllerGrip(0), renderer.xr.getControllerGrip(1)];
 const whiteboardPencils = xrControllers.map(() => {
@@ -1352,7 +1353,8 @@ function resolveWhiteboardPencilPose(frameContext: RuntimeFrameContext): XrPenci
   const handFrame = getFrameLocalAvatarHandFrame(frameContext);
   return resolveXrPencilPose({
     handPose: handFrame?.worldHandPoses.rightHand ?? null,
-    tipLocalZ: WHITEBOARD_PENCIL_TIP_LOCAL_Z
+    tipLocalZ: WHITEBOARD_PENCIL_TIP_LOCAL_Z,
+    orientationOffset: WHITEBOARD_PENCIL_GRIP_ROTATION
   });
 }
 

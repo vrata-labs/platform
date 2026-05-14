@@ -87,3 +87,25 @@ test("resolveXrPencilPose uses the shared synthetic hand frame", () => {
   assert.deepEqual(pencilPose.anchorWorld.toArray(), [0.5, 1.5, -2]);
   assert.deepEqual(pencilPose.tipWorld.toArray(), [0.5, 1.5, -2.32]);
 });
+
+test("resolveXrPencilPose applies a local pencil grip rotation without changing hand source", () => {
+  const handFrame = createSyntheticLocalAvatarHandFrame({
+    rightController: { x: 0, y: 2, z: 0 },
+    rightGrip: { x: 0.5, y: 1.5, z: -2 },
+    rayDirection: { x: 0, y: 0, z: -1 }
+  });
+  const orientationOffset = new THREE.Quaternion().setFromEuler(new THREE.Euler(-Math.PI / 8, 0, 0, "XYZ"));
+  const pencilPose = resolveXrPencilPose({
+    handPose: handFrame.worldHandPoses.rightHand,
+    tipLocalZ: -0.32,
+    orientationOffset
+  });
+  const expectedTip = new THREE.Vector3(0, 0, -0.32)
+    .applyQuaternion(orientationOffset)
+    .add(new THREE.Vector3(0.5, 1.5, -2));
+
+  assert.ok(pencilPose);
+  assert.equal(pencilPose.sourceIndex, 0);
+  assert.deepEqual(pencilPose.anchorWorld.toArray(), [0.5, 1.5, -2]);
+  assert.ok(pencilPose.tipWorld.distanceTo(expectedTip) < 1e-9);
+});

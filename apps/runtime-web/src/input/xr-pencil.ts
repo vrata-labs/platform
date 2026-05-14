@@ -12,6 +12,7 @@ export interface XrPencilPose {
 export function resolveXrPencilPose(input: {
   handPose: AvatarHandPose | null;
   tipLocalZ: number;
+  orientationOffset?: THREE.Quaternion;
 }): XrPencilPose | null {
   if (!input.handPose) {
     return null;
@@ -21,12 +22,15 @@ export function resolveXrPencilPose(input: {
     input.handPose.position.y,
     input.handPose.position.z
   );
-  const orientationWorld = new THREE.Quaternion(
+  const handOrientationWorld = new THREE.Quaternion(
     input.handPose.orientation.x,
     input.handPose.orientation.y,
     input.handPose.orientation.z,
     input.handPose.orientation.w
   ).normalize();
+  const orientationWorld = input.orientationOffset
+    ? handOrientationWorld.multiply(input.orientationOffset).normalize()
+    : handOrientationWorld;
   const tipWorld = new THREE.Vector3(0, 0, input.tipLocalZ).applyQuaternion(orientationWorld).add(anchorWorld);
   return {
     sourceIndex: input.handPose.sourceIndex,

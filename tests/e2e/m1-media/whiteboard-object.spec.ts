@@ -255,7 +255,7 @@ test("M1.5 XR contact pencil draws from controller tip instead of ray cursor", a
 
   await setSyntheticXrState(page, {
     rightController: { x: 0, y: 2.2, z: 0 },
-    rightGrip: { x: -0.58, y: 2.53, z: -6.28 },
+    rightGrip: { x: -0.58, y: 2.6525, z: -6.28 },
     rayDirection: { x: 0, y: 0, z: -1 },
     triggerPressed: false,
     rayVisible: false
@@ -263,7 +263,7 @@ test("M1.5 XR contact pencil draws from controller tip instead of ray cursor", a
   await page.waitForTimeout(50);
   await setSyntheticXrState(page, {
     rightController: { x: 0, y: 2.2, z: 0 },
-    rightGrip: { x: -0.58, y: 2.53, z: -6.28 },
+    rightGrip: { x: -0.58, y: 2.6525, z: -6.28 },
     rayDirection: { x: 0, y: 0, z: -1 },
     triggerPressed: true,
     rayVisible: false
@@ -281,7 +281,7 @@ test("M1.5 XR contact pencil draws from controller tip instead of ray cursor", a
   }).toEqual({ source: "xr-controller", u: 0.4, v: 0.6 });
   await setSyntheticXrState(page, {
     rightController: { x: 0, y: 2.2, z: 0 },
-    rightGrip: { x: 0.58, y: 1.87, z: -6.28 },
+    rightGrip: { x: 0.58, y: 1.9925, z: -6.28 },
     rayDirection: { x: 0, y: 0, z: -1 },
     triggerPressed: true,
     rayVisible: false
@@ -299,7 +299,7 @@ test("M1.5 XR contact pencil draws from controller tip instead of ray cursor", a
   }).toEqual({ kind: "pointer-move", u: 0.6, v: 0.4 });
   await setSyntheticXrState(page, {
     rightController: { x: 0, y: 2.2, z: 0 },
-    rightGrip: { x: 0.58, y: 1.87, z: -6.28 },
+    rightGrip: { x: 0.58, y: 1.9925, z: -6.28 },
     rayDirection: { x: 0, y: 0, z: -1 },
     triggerPressed: false,
     rayVisible: false
