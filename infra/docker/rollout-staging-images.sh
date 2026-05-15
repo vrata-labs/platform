@@ -44,7 +44,24 @@ cleanup_transient_docker_state() {
 
 pull_compose_service() {
   local service="$1"
-  docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" pull "$service"
+  local output
+  if ! output="$(docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" pull "$service" 2>&1)"; then
+    printf '%s\n' "$output" >&2
+    case "$output" in
+      *"no space left on device"* )
+        echo "pull_no_space_retry:$service" >&2
+        docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" stop "$service" || true
+        cleanup_docker_state
+        log_disk_state
+        docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" pull "$service"
+        ;;
+      * )
+        return 1
+        ;;
+    esac
+  else
+    printf '%s\n' "$output"
+  fi
   cleanup_transient_docker_state
   log_disk_state
 }
