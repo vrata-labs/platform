@@ -405,7 +405,6 @@ const API_PRESENCE_REFRESH_INTERVAL_MS = 1000;
 const XR_REMOTE_BROWSER_SCROLL_AXIS_THRESHOLD = 0.22;
 const XR_REMOTE_BROWSER_SCROLL_INTERVAL_MS = 80;
 const XR_REMOTE_BROWSER_SCROLL_DELTA_PX = 360;
-const XR_REMOTE_BROWSER_KEYBOARD_RAY_END_OFFSET_M = 0.3;
 
 const keyState: Record<string, boolean> = {};
 let pointerActive = false;
@@ -1776,7 +1775,6 @@ function showRemoteBrowserVrKeyboardRay(ray: THREE.Ray, hit: RemoteBrowserVrKeyb
     point: hit.point,
     targetKind: "keyboard",
     color: 0xff8c42,
-    visualEndOffsetM: XR_REMOTE_BROWSER_KEYBOARD_RAY_END_OFFSET_M,
     showReticle: false
   });
 }

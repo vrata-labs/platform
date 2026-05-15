@@ -53,7 +53,7 @@ export function createInteractionRayView(scene: THREE.Scene): InteractionRayView
   });
   const line = new THREE.Line(lineGeometry, lineMaterial);
   line.visible = false;
-  line.renderOrder = 1000;
+  line.renderOrder = 1300;
   scene.add(line);
 
   const beamMaterial = new THREE.MeshBasicMaterial({
@@ -69,7 +69,7 @@ export function createInteractionRayView(scene: THREE.Scene): InteractionRayView
     beamMaterial
   );
   beam.visible = false;
-  beam.renderOrder = 1001;
+  beam.renderOrder = 1301;
   scene.add(beam);
 
   const reticleMaterial = new THREE.MeshBasicMaterial({
@@ -85,7 +85,7 @@ export function createInteractionRayView(scene: THREE.Scene): InteractionRayView
     reticleMaterial
   );
   reticle.visible = false;
-  reticle.renderOrder = 1002;
+  reticle.renderOrder = 1302;
   scene.add(reticle);
 
   return {

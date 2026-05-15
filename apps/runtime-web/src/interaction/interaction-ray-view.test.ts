@@ -45,9 +45,10 @@ test("createInteractionRayView creates hidden scene visuals", () => {
   assert.equal(view.line.visible, false);
   assert.equal(view.beam.visible, false);
   assert.equal(view.reticle.visible, false);
-  assert.equal(view.line.renderOrder, 1000);
-  assert.equal(view.beam.renderOrder, 1001);
-  assert.equal(view.reticle.renderOrder, 1002);
+  assert.equal(view.line.renderOrder, 1300);
+  assert.equal(view.beam.renderOrder, 1301);
+  assert.equal(view.reticle.renderOrder, 1302);
+  assert.ok(view.line.renderOrder > 1202);
 });
 
 test("showInteractionRayView draws floor target and updates debug state", () => {
@@ -145,14 +146,14 @@ test("showInteractionRayPointView can stop visuals before the target point", () 
     point: new THREE.Vector3(0, 1, -3),
     targetKind: "keyboard",
     mode: "xr-right-stick",
-    visualEndOffsetM: 0.3,
+    visualEndOffsetM: 0.1,
     showReticle: false
   });
 
   assert.equal(view.line.visible, true);
   assert.equal(view.beam.visible, true);
   assert.equal(view.reticle.visible, false);
-  assert.deepEqual(view.end.toArray(), [0, 1, -2.7]);
+  assert.deepEqual(view.end.toArray(), [0, 1, -2.9]);
   assert.deepEqual(state.point, { x: 0, y: 1, z: -3 });
   assert.equal(state.targetKind, "keyboard");
 });
