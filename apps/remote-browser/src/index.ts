@@ -74,6 +74,60 @@ const remoteBrowserScrollbarStyle = `
   }
 `;
 
+const remoteBrowserInitScript = (styleContent: string) => {
+  const installStyle = () => {
+    const styleId = "noah-remote-browser-scrollbar-style";
+    if (document.getElementById(styleId)) {
+      return;
+    }
+    const style = document.createElement("style");
+    style.id = styleId;
+    style.textContent = styleContent;
+    (document.head || document.documentElement).appendChild(style);
+  };
+
+  const noopFullscreen = () => Promise.resolve();
+  const defineValue = (target: object, key: string, value: unknown) => {
+    try {
+      Object.defineProperty(target, key, { configurable: true, value });
+    } catch {
+      // Some browser-provided properties are non-configurable on specific pages.
+    }
+  };
+  const defineGetter = (target: object, key: string, get: () => unknown) => {
+    try {
+      Object.defineProperty(target, key, { configurable: true, get });
+    } catch {
+      // Best-effort guard; playback should continue even if one property is locked.
+    }
+  };
+
+  defineValue(Element.prototype, "requestFullscreen", noopFullscreen);
+  defineValue(Element.prototype, "webkitRequestFullscreen", noopFullscreen);
+  defineValue(Element.prototype, "webkitRequestFullScreen", noopFullscreen);
+  defineValue(Element.prototype, "mozRequestFullScreen", noopFullscreen);
+  defineValue(Element.prototype, "msRequestFullscreen", noopFullscreen);
+  defineValue(Document.prototype, "exitFullscreen", noopFullscreen);
+  defineValue(Document.prototype, "webkitExitFullscreen", noopFullscreen);
+  defineValue(Document.prototype, "mozCancelFullScreen", noopFullscreen);
+  defineValue(Document.prototype, "msExitFullscreen", noopFullscreen);
+  defineGetter(Document.prototype, "fullscreenEnabled", () => false);
+  defineGetter(Document.prototype, "webkitFullscreenEnabled", () => false);
+  defineGetter(Document.prototype, "mozFullScreenEnabled", () => false);
+  defineGetter(Document.prototype, "msFullscreenEnabled", () => false);
+  defineValue(HTMLVideoElement.prototype, "webkitEnterFullscreen", () => undefined);
+  defineValue(HTMLVideoElement.prototype, "webkitExitFullscreen", () => undefined);
+  defineValue(HTMLVideoElement.prototype, "webkitSetPresentationMode", () => undefined);
+  document.addEventListener("fullscreenchange", () => {
+    if (document.fullscreenElement) {
+      void document.exitFullscreen().catch(() => undefined);
+    }
+  }, true);
+
+  installStyle();
+  document.addEventListener("DOMContentLoaded", installStyle, { once: true });
+};
+
 let browserPromise: Promise<Browser> | null = null;
 const sessions = new Map<string, RemoteBrowserSession>();
 const urlPolicy = createRemoteBrowserUrlPolicy();
@@ -321,20 +375,7 @@ async function installRequestGuard(page: Page, policy: RemoteBrowserUrlPolicy): 
 }
 
 async function installRemoteBrowserPageStyles(page: Page): Promise<void> {
-  await page.addInitScript((styleContent) => {
-    const styleId = "noah-remote-browser-scrollbar-style";
-    const installStyle = () => {
-      if (document.getElementById(styleId)) {
-        return;
-      }
-      const style = document.createElement("style");
-      style.id = styleId;
-      style.textContent = String(styleContent);
-      (document.head || document.documentElement).appendChild(style);
-    };
-    installStyle();
-    document.addEventListener("DOMContentLoaded", installStyle, { once: true });
-  }, remoteBrowserScrollbarStyle);
+  await page.addInitScript(remoteBrowserInitScript, remoteBrowserScrollbarStyle);
 }
 
 async function ensureRemoteBrowserPageStyles(page: Page): Promise<void> {

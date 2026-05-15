@@ -105,6 +105,8 @@ export class RemoteBrowserObjectRuntime {
 
   private readonly canvas: HTMLCanvasElement;
   private readonly context: CanvasRenderingContext2D | null;
+  private readonly frameSampleCanvas: HTMLCanvasElement;
+  private readonly frameSampleContext: CanvasRenderingContext2D | null;
   private frameSocket: WebSocket | null = null;
   private frameStreamKey: string | null = null;
   private frameStreamUrl: string | null = null;
@@ -118,23 +120,33 @@ export class RemoteBrowserObjectRuntime {
   private mediaStream: MediaStream | null = null;
   private mediaElement: HTMLVideoElement | null = null;
   private mediaTexture: THREE.VideoTexture | null = null;
+  private mediaTextureActivationPending = false;
   private mediaState: RemoteBrowserMediaState = "idle";
   private mediaHasVideo = false;
   private mediaHasAudio = false;
   private mediaErrorCode: string | null = null;
+  private firstVisibleFrame = false;
+  private skippedBlankFrameCount = 0;
 
   constructor(private readonly options: RemoteBrowserObjectRuntimeOptions) {
     this.canvas = document.createElement("canvas");
     this.canvas.width = options.widthPx;
     this.canvas.height = options.heightPx;
     this.context = this.canvas.getContext("2d");
+    this.frameSampleCanvas = document.createElement("canvas");
+    this.frameSampleCanvas.width = 16;
+    this.frameSampleCanvas.height = 16;
+    this.frameSampleContext = this.frameSampleCanvas.getContext("2d", { willReadFrequently: true });
     this.texture = new THREE.CanvasTexture(this.canvas);
     this.texture.colorSpace = THREE.SRGBColorSpace;
+    this.texture.generateMipmaps = false;
+    this.texture.minFilter = THREE.LinearFilter;
+    this.texture.magFilter = THREE.LinearFilter;
     this.renderPlaceholder("Remote Browser", "Open an allowed URL to start.");
   }
 
   ownsTexture(texture: THREE.Texture | null | undefined): boolean {
-    return texture === this.texture;
+    return texture === this.texture || texture === this.mediaTexture;
   }
 
   createOpenUrlPatch(url: string): RemoteBrowserPatch {
@@ -184,7 +196,7 @@ export class RemoteBrowserObjectRuntime {
       return;
     }
     this.ensureFrameStream(object);
-    if (this.lastFrameAtMs <= 0) {
+    if (this.lastFrameAtMs <= 0 && !this.mediaTexture) {
       this.renderPlaceholder("Remote Browser", state.currentUrl ?? "Waiting for first frame...");
     }
   }
@@ -381,6 +393,9 @@ export class RemoteBrowserObjectRuntime {
       if (!this.context) {
         return;
       }
+      if (this.shouldSkipInitialFrame(image)) {
+        return;
+      }
       this.context.fillStyle = "#020617";
       this.context.fillRect(0, 0, this.canvas.width, this.canvas.height);
       this.context.drawImage(image, 0, 0, this.canvas.width, this.canvas.height);
@@ -390,6 +405,7 @@ export class RemoteBrowserObjectRuntime {
         width: payload.width ?? image.width,
         height: payload.height ?? image.height
       };
+      this.firstVisibleFrame = true;
       this.renderedPlaceholder = "";
       if (!this.mediaTexture) {
         this.options.applyTexture(this.texture);
@@ -430,7 +446,9 @@ export class RemoteBrowserObjectRuntime {
         return;
       }
       if (pc.connectionState === "connected") {
-        this.mediaState = "connected";
+        if (this.mediaTexture) {
+          this.mediaState = "connected";
+        }
         this.mediaErrorCode = null;
         return;
       }
@@ -505,13 +523,8 @@ export class RemoteBrowserObjectRuntime {
       element.srcObject = stream;
     }
     if (event.track.kind === "video" && !this.mediaTexture) {
-      const texture = new THREE.VideoTexture(element);
-      texture.colorSpace = THREE.SRGBColorSpace;
-      this.mediaTexture = texture;
-      this.options.applyTexture(texture);
-      this.frameSocket?.send(JSON.stringify({ type: "media-connected" }));
+      this.scheduleMediaTextureActivation(element, 2);
     }
-    this.mediaState = "connected";
     this.mediaErrorCode = null;
     this.playRemoteMedia();
     event.track.addEventListener("ended", () => {
@@ -546,6 +559,83 @@ export class RemoteBrowserObjectRuntime {
     });
   }
 
+  private scheduleMediaTextureActivation(element: HTMLVideoElement, warmupFrames: number): void {
+    if (this.mediaTexture || this.mediaTextureActivationPending) {
+      return;
+    }
+    this.mediaTextureActivationPending = true;
+    const waitForFrame = (remainingFrames: number) => {
+      if (this.mediaElement !== element || this.mediaTexture) {
+        this.mediaTextureActivationPending = false;
+        return;
+      }
+      if (element.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || element.videoWidth <= 0 || element.videoHeight <= 0) {
+        this.waitForNextVideoFrame(element, () => waitForFrame(remainingFrames));
+        return;
+      }
+      if (remainingFrames > 0) {
+        this.waitForNextVideoFrame(element, () => waitForFrame(remainingFrames - 1));
+        return;
+      }
+      this.mediaTextureActivationPending = false;
+      this.activateMediaTexture(element);
+    };
+    waitForFrame(warmupFrames);
+  }
+
+  private waitForNextVideoFrame(element: HTMLVideoElement, callback: () => void): void {
+    const video = element as HTMLVideoElement & {
+      requestVideoFrameCallback?: (callback: () => void) => number;
+    };
+    if (video.requestVideoFrameCallback) {
+      video.requestVideoFrameCallback(callback);
+      return;
+    }
+    window.setTimeout(callback, 80);
+  }
+
+  private activateMediaTexture(element: HTMLVideoElement): void {
+    if (this.mediaElement !== element || this.mediaTexture) {
+      return;
+    }
+    const texture = new THREE.VideoTexture(element);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.generateMipmaps = false;
+    texture.minFilter = THREE.LinearFilter;
+    texture.magFilter = THREE.LinearFilter;
+    this.mediaTexture = texture;
+    this.mediaState = "connected";
+    this.mediaErrorCode = null;
+    this.options.applyTexture(texture);
+    this.frameSocket?.send(JSON.stringify({ type: "media-connected" }));
+  }
+
+  private shouldSkipInitialFrame(image: HTMLImageElement): boolean {
+    if (this.firstVisibleFrame || this.skippedBlankFrameCount >= 8 || !this.frameSampleContext) {
+      return false;
+    }
+    this.frameSampleContext.drawImage(image, 0, 0, this.frameSampleCanvas.width, this.frameSampleCanvas.height);
+    const data = this.frameSampleContext.getImageData(0, 0, this.frameSampleCanvas.width, this.frameSampleCanvas.height).data;
+    let min = 255;
+    let max = 0;
+    let total = 0;
+    let count = 0;
+    for (let index = 0; index < data.length; index += 4) {
+      const luminance = (data[index] ?? 0) * 0.2126 + (data[index + 1] ?? 0) * 0.7152 + (data[index + 2] ?? 0) * 0.0722;
+      min = Math.min(min, luminance);
+      max = Math.max(max, luminance);
+      total += luminance;
+      count += 1;
+    }
+    const average = count > 0 ? total / count : 0;
+    const blankWhite = average > 246 && max - min < 10;
+    if (blankWhite) {
+      this.skippedBlankFrameCount += 1;
+      return true;
+    }
+    return false;
+  }
+
   private scheduleMediaRetry(): void {
     if (this.mediaRetryTimer || !this.frameSocket || this.frameSocket.readyState !== WebSocket.OPEN || !this.frameStreamKey) {
       return;
@@ -573,6 +663,7 @@ export class RemoteBrowserObjectRuntime {
     this.mediaStream = null;
     this.mediaTexture?.dispose();
     this.mediaTexture = null;
+    this.mediaTextureActivationPending = false;
     if (this.mediaElement) {
       this.mediaElement.pause();
       this.mediaElement.srcObject = null;
@@ -596,6 +687,8 @@ export class RemoteBrowserObjectRuntime {
     this.frameStreamKey = null;
     this.frameStreamUrl = null;
     this.frameConnected = false;
+    this.firstVisibleFrame = false;
+    this.skippedBlankFrameCount = 0;
     if (socket && socket.readyState !== socket.CLOSED && socket.readyState !== socket.CLOSING) {
       socket.close(1000, "runtime_disconnect");
     }
