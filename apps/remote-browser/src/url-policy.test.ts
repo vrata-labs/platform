@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { isPrivateAddress, parseAllowedOrigins, validateRemoteBrowserUrl } from "./url-policy.js";
+import { isPrivateAddress, isRemoteBrowserOriginAllowed, parseAllowedOrigins, validateRemoteBrowserUrl } from "./url-policy.js";
 
 test("remote browser URL policy allows only configured origins", async () => {
   const policy = { allowedOrigins: ["http://localhost:4000"], allowPrivateAllowedOrigins: true };
@@ -33,4 +33,15 @@ test("private address helper covers baseline blocked ranges", () => {
 
 test("allowed origin parser normalizes URL origins", () => {
   assert.deepEqual(parseAllowedOrigins("https://example.com/a,http://localhost:4000/test"), ["https://example.com", "http://localhost:4000"]);
+});
+
+test("remote browser URL policy supports wildcard subdomain origins", () => {
+  const allowedOrigins = parseAllowedOrigins("https://rutube.ru,https://*.rutube.ru,https://*.rtbcdn.ru");
+
+  assert.equal(isRemoteBrowserOriginAllowed("https://rutube.ru", allowedOrigins), true);
+  assert.equal(isRemoteBrowserOriginAllowed("https://goya.rutube.ru", allowedOrigins), true);
+  assert.equal(isRemoteBrowserOriginAllowed("https://static.rtbcdn.ru", allowedOrigins), true);
+  assert.equal(isRemoteBrowserOriginAllowed("https://rtbcdn.ru", allowedOrigins), false);
+  assert.equal(isRemoteBrowserOriginAllowed("http://static.rtbcdn.ru", allowedOrigins), false);
+  assert.equal(isRemoteBrowserOriginAllowed("https://evilrutube.ru", allowedOrigins), false);
 });

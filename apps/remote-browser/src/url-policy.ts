@@ -29,6 +29,36 @@ export function parseAllowedOrigins(value: string | undefined): string[] {
     });
 }
 
+export function isRemoteBrowserOriginAllowed(origin: string, allowedOrigins: string[]): boolean {
+  let originUrl: URL;
+  try {
+    originUrl = new URL(origin);
+  } catch {
+    return allowedOrigins.includes(origin);
+  }
+
+  return allowedOrigins.some((allowedOrigin) => {
+    if (allowedOrigin === originUrl.origin) {
+      return true;
+    }
+    let allowedUrl: URL;
+    try {
+      allowedUrl = new URL(allowedOrigin);
+    } catch {
+      return false;
+    }
+    if (!allowedUrl.hostname.startsWith("*.")) {
+      return false;
+    }
+    const suffix = allowedUrl.hostname.slice(2).toLowerCase();
+    const hostname = originUrl.hostname.toLowerCase();
+    return allowedUrl.protocol === originUrl.protocol
+      && allowedUrl.port === originUrl.port
+      && hostname !== suffix
+      && hostname.endsWith(`.${suffix}`);
+  });
+}
+
 export function createRemoteBrowserUrlPolicy(env: NodeJS.ProcessEnv = process.env): RemoteBrowserUrlPolicy {
   return {
     allowedOrigins: parseAllowedOrigins(env.REMOTE_BROWSER_ALLOWED_ORIGINS),
@@ -81,7 +111,7 @@ export async function validateRemoteBrowserUrl(input: string, policy: RemoteBrow
   if (url.protocol !== "https:" && url.protocol !== "http:") {
     return { allowed: false, errorCode: "scheme_not_allowed" };
   }
-  if (!policy.allowedOrigins.includes(url.origin)) {
+  if (!isRemoteBrowserOriginAllowed(url.origin, policy.allowedOrigins)) {
     return { allowed: false, errorCode: "origin_not_allowed" };
   }
   if (policy.allowPrivateAllowedOrigins && (isLocalHostname(url.hostname) || (isIP(url.hostname) && isPrivateAddress(url.hostname)))) {

@@ -229,6 +229,7 @@ for line in lines:
 values.setdefault('API_IMAGE_REPO', 'cr.yandex/crp9cm29k6p76hqo8lti/noah-api')
 values.setdefault('ROOM_STATE_IMAGE_REPO', 'cr.yandex/crp9cm29k6p76hqo8lti/noah-room-state')
 values.setdefault('REMOTE_BROWSER_IMAGE_REPO', 'cr.yandex/crp9cm29k6p76hqo8lti/noah-remote-browser')
+public_remote_browser_origins = ['https://rutube.ru', 'https://*.rutube.ru', 'https://*.rtbcdn.ru']
 if not values.get('NOAH_BROWSER_DOMAIN') and values.get('NOAH_APP_DOMAIN'):
     values['NOAH_BROWSER_DOMAIN'] = 'browser.' + values['NOAH_APP_DOMAIN']
 if not values.get('REMOTE_BROWSER_PUBLIC_URL') and values.get('NOAH_BROWSER_DOMAIN'):
@@ -240,6 +241,9 @@ if not values.get('REMOTE_BROWSER_ALLOWED_ORIGINS'):
     if values.get('NOAH_APP_DOMAIN'):
         allowed_origins.append('https://' + values['NOAH_APP_DOMAIN'])
     values['REMOTE_BROWSER_ALLOWED_ORIGINS'] = ','.join(dict.fromkeys(allowed_origins))
+configured_origins = [item.strip() for item in values.get('REMOTE_BROWSER_ALLOWED_ORIGINS', '').split(',') if item.strip()]
+configured_origins.extend(public_remote_browser_origins)
+values['REMOTE_BROWSER_ALLOWED_ORIGINS'] = ','.join(dict.fromkeys(configured_origins))
 values.setdefault('REMOTE_BROWSER_ALLOW_PRIVATE_ALLOWED_ORIGINS', 'false')
 values.setdefault('REMOTE_BROWSER_TOKEN_SECRET', values.get('STATE_TOKEN_SECRET', 'dev-remote-browser-secret'))
 values.setdefault('REMOTE_BROWSER_TOKEN_TTL_SECONDS', '300')
