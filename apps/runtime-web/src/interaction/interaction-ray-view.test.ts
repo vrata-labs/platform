@@ -39,16 +39,18 @@ test("createInteractionRayView creates hidden scene visuals", () => {
   const scene = new THREE.Scene();
   const view = createInteractionRayView(scene);
 
-  assert.equal(scene.children.includes(view.line), true);
-  assert.equal(scene.children.includes(view.beam), true);
-  assert.equal(scene.children.includes(view.reticle), true);
+  assert.equal(scene.children.includes(view.root), true);
+  assert.equal(view.root.children.includes(view.line), true);
+  assert.equal(view.root.children.includes(view.beam), true);
+  assert.equal(view.root.children.includes(view.reticle), true);
   assert.equal(view.line.visible, false);
   assert.equal(view.beam.visible, false);
   assert.equal(view.reticle.visible, false);
+  assert.equal(view.root.renderOrder, 1300);
   assert.equal(view.line.renderOrder, 1300);
   assert.equal(view.beam.renderOrder, 1301);
   assert.equal(view.reticle.renderOrder, 1302);
-  assert.ok(view.line.renderOrder > 1202);
+  assert.ok(view.root.renderOrder > 1202);
 });
 
 test("showInteractionRayView draws floor target and updates debug state", () => {

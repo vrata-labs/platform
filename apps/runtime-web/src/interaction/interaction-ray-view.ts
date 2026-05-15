@@ -17,6 +17,7 @@ export interface InteractionRayDebugState {
 }
 
 export interface InteractionRayView {
+  root: THREE.Group;
   lineGeometry: THREE.BufferGeometry;
   lineMaterial: THREE.LineBasicMaterial;
   line: THREE.Line;
@@ -40,6 +41,11 @@ function roundPoint(point: THREE.Vector3): { x: number; y: number; z: number } {
 }
 
 export function createInteractionRayView(scene: THREE.Scene): InteractionRayView {
+  const root = new THREE.Group();
+  root.name = "interaction-ray-view";
+  root.renderOrder = 1300;
+  scene.add(root);
+
   const lineGeometry = new THREE.BufferGeometry().setFromPoints([
     new THREE.Vector3(0, 0, 0),
     new THREE.Vector3(0, 0, -1)
@@ -54,7 +60,7 @@ export function createInteractionRayView(scene: THREE.Scene): InteractionRayView
   const line = new THREE.Line(lineGeometry, lineMaterial);
   line.visible = false;
   line.renderOrder = 1300;
-  scene.add(line);
+  root.add(line);
 
   const beamMaterial = new THREE.MeshBasicMaterial({
     color: 0x00f6ff,
@@ -70,7 +76,7 @@ export function createInteractionRayView(scene: THREE.Scene): InteractionRayView
   );
   beam.visible = false;
   beam.renderOrder = 1301;
-  scene.add(beam);
+  root.add(beam);
 
   const reticleMaterial = new THREE.MeshBasicMaterial({
     color: 0x00f6ff,
@@ -86,9 +92,10 @@ export function createInteractionRayView(scene: THREE.Scene): InteractionRayView
   );
   reticle.visible = false;
   reticle.renderOrder = 1302;
-  scene.add(reticle);
+  root.add(reticle);
 
   return {
+    root,
     lineGeometry,
     lineMaterial,
     line,
