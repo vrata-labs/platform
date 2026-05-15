@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { remoteBrowserEventPoint, remoteBrowserScrollDelta, resolveRemoteBrowserFrameIntervalMs, resolveRemoteBrowserMediaIceServers } from "./index.js";
+import { remoteBrowserEventPoint, remoteBrowserInitScript, remoteBrowserScrollDelta, resolveRemoteBrowserFrameIntervalMs, resolveRemoteBrowserMediaIceServers } from "./index.js";
 import type { SurfaceInputEvent } from "@noah/shared-types";
 
 function surfaceInput(uv: { u: number; v: number }): SurfaceInputEvent {
@@ -68,4 +68,82 @@ test("resolveRemoteBrowserMediaIceServers parses comma-separated STUN/TURN URLs"
   assert.deepEqual(resolveRemoteBrowserMediaIceServers(undefined), [{ urls: ["stun:stun.l.google.com:19302"] }]);
   assert.deepEqual(resolveRemoteBrowserMediaIceServers(" stun:a.example.test, turn:b.example.test "), [{ urls: ["stun:a.example.test", "turn:b.example.test"] }]);
   assert.deepEqual(resolveRemoteBrowserMediaIceServers(" , "), []);
+});
+
+test("remoteBrowserInitScript blocks fullscreen entry but preserves native exit", async () => {
+  type Listener = ((event?: Event) => void) | { handleEvent: (event?: Event) => void };
+  const listeners = new Map<string, Listener[]>();
+  let exitCalls = 0;
+
+  class TestElement {}
+  class TestDocument {
+    fullscreenElement: unknown = null;
+    head = { appendChild: () => undefined };
+    documentElement = { appendChild: () => undefined };
+
+    getElementById(): null {
+      return null;
+    }
+
+    createElement(): { id: string; textContent: string } {
+      return { id: "", textContent: "" };
+    }
+
+    addEventListener(type: string, listener: Listener): void {
+      const existing = listeners.get(type) ?? [];
+      existing.push(listener);
+      listeners.set(type, existing);
+    }
+
+    exitFullscreen(): Promise<void> {
+      exitCalls += 1;
+      this.fullscreenElement = null;
+      return Promise.resolve();
+    }
+  }
+  class TestVideoElement extends TestElement {}
+
+  const document = new TestDocument();
+  const nativeExitFullscreen = TestDocument.prototype.exitFullscreen;
+  const globalDescriptors = new Map<PropertyKey, PropertyDescriptor | undefined>();
+  const installGlobal = (key: string, value: unknown) => {
+    globalDescriptors.set(key, Object.getOwnPropertyDescriptor(globalThis, key));
+    Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
+  };
+  const restoreGlobals = () => {
+    for (const [key, descriptor] of globalDescriptors) {
+      if (descriptor) {
+        Object.defineProperty(globalThis, key, descriptor);
+      } else {
+        delete (globalThis as Record<PropertyKey, unknown>)[key];
+      }
+    }
+  };
+
+  installGlobal("Element", TestElement);
+  installGlobal("Document", TestDocument);
+  installGlobal("HTMLVideoElement", TestVideoElement);
+  installGlobal("document", document);
+
+  try {
+    remoteBrowserInitScript("");
+
+    assert.equal(TestDocument.prototype.exitFullscreen, nativeExitFullscreen);
+    assert.equal(exitCalls, 0);
+    assert.equal(await (new TestElement() as TestElement & { requestFullscreen: () => Promise<void> }).requestFullscreen(), undefined);
+    assert.equal(exitCalls, 0);
+
+    document.fullscreenElement = new TestElement();
+    for (const listener of listeners.get("fullscreenchange") ?? []) {
+      if (typeof listener === "function") {
+        listener();
+      } else {
+        listener.handleEvent();
+      }
+    }
+    assert.equal(exitCalls, 1);
+    assert.equal(document.fullscreenElement, null);
+  } finally {
+    restoreGlobals();
+  }
 });

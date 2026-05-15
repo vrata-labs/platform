@@ -74,7 +74,7 @@ const remoteBrowserScrollbarStyle = `
   }
 `;
 
-const remoteBrowserInitScript = (styleContent: string) => {
+export const remoteBrowserInitScript = (styleContent: string) => {
   const installStyle = () => {
     const styleId = "noah-remote-browser-scrollbar-style";
     if (document.getElementById(styleId)) {
@@ -86,7 +86,50 @@ const remoteBrowserInitScript = (styleContent: string) => {
     (document.head || document.documentElement).appendChild(style);
   };
 
+  type FullscreenDocument = Document & {
+    webkitFullscreenElement?: Element | null;
+    mozFullScreenElement?: Element | null;
+    msFullscreenElement?: Element | null;
+  };
+  type FullscreenDocumentPrototype = Document & {
+    webkitExitFullscreen?: () => Promise<void> | void;
+    mozCancelFullScreen?: () => Promise<void> | void;
+    msExitFullscreen?: () => Promise<void> | void;
+  };
+
+  const documentPrototype = Document.prototype as FullscreenDocumentPrototype;
+  const nativeExitFullscreen = documentPrototype.exitFullscreen;
+  const nativeWebkitExitFullscreen = documentPrototype.webkitExitFullscreen;
+  const nativeMozCancelFullScreen = documentPrototype.mozCancelFullScreen;
+  const nativeMsExitFullscreen = documentPrototype.msExitFullscreen;
+
   const noopFullscreen = () => Promise.resolve();
+  const swallowPromise = (value: Promise<void> | void) => {
+    if (value && typeof (value as Promise<void>).catch === "function") {
+      (value as Promise<void>).catch(() => undefined);
+    }
+  };
+  const getFullscreenElement = () => {
+    const fullscreenDocument = document as FullscreenDocument;
+    return fullscreenDocument.fullscreenElement ?? fullscreenDocument.webkitFullscreenElement ?? fullscreenDocument.mozFullScreenElement ?? fullscreenDocument.msFullscreenElement ?? null;
+  };
+  const exitFullscreen = () => {
+    if (nativeExitFullscreen) {
+      swallowPromise(nativeExitFullscreen.call(document));
+      return;
+    }
+    if (nativeWebkitExitFullscreen) {
+      swallowPromise(nativeWebkitExitFullscreen.call(document));
+      return;
+    }
+    if (nativeMozCancelFullScreen) {
+      swallowPromise(nativeMozCancelFullScreen.call(document));
+      return;
+    }
+    if (nativeMsExitFullscreen) {
+      swallowPromise(nativeMsExitFullscreen.call(document));
+    }
+  };
   const defineValue = (target: object, key: string, value: unknown) => {
     try {
       Object.defineProperty(target, key, { configurable: true, value });
@@ -107,10 +150,6 @@ const remoteBrowserInitScript = (styleContent: string) => {
   defineValue(Element.prototype, "webkitRequestFullScreen", noopFullscreen);
   defineValue(Element.prototype, "mozRequestFullScreen", noopFullscreen);
   defineValue(Element.prototype, "msRequestFullscreen", noopFullscreen);
-  defineValue(Document.prototype, "exitFullscreen", noopFullscreen);
-  defineValue(Document.prototype, "webkitExitFullscreen", noopFullscreen);
-  defineValue(Document.prototype, "mozCancelFullScreen", noopFullscreen);
-  defineValue(Document.prototype, "msExitFullscreen", noopFullscreen);
   defineGetter(Document.prototype, "fullscreenEnabled", () => false);
   defineGetter(Document.prototype, "webkitFullscreenEnabled", () => false);
   defineGetter(Document.prototype, "mozFullScreenEnabled", () => false);
@@ -118,11 +157,15 @@ const remoteBrowserInitScript = (styleContent: string) => {
   defineValue(HTMLVideoElement.prototype, "webkitEnterFullscreen", () => undefined);
   defineValue(HTMLVideoElement.prototype, "webkitExitFullscreen", () => undefined);
   defineValue(HTMLVideoElement.prototype, "webkitSetPresentationMode", () => undefined);
-  document.addEventListener("fullscreenchange", () => {
-    if (document.fullscreenElement) {
-      void document.exitFullscreen().catch(() => undefined);
+  const onFullscreenChange = () => {
+    if (getFullscreenElement()) {
+      exitFullscreen();
     }
-  }, true);
+  };
+  document.addEventListener("fullscreenchange", onFullscreenChange, true);
+  document.addEventListener("webkitfullscreenchange", onFullscreenChange, true);
+  document.addEventListener("mozfullscreenchange", onFullscreenChange, true);
+  document.addEventListener("MSFullscreenChange", onFullscreenChange, true);
 
   installStyle();
   document.addEventListener("DOMContentLoaded", installStyle, { once: true });
