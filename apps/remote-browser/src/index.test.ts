@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { remoteBrowserEventPoint, remoteBrowserScrollDelta } from "./index.js";
+import { remoteBrowserEventPoint, remoteBrowserScrollDelta, resolveRemoteBrowserFrameIntervalMs } from "./index.js";
 import type { SurfaceInputEvent } from "@noah/shared-types";
 
 function surfaceInput(uv: { u: number; v: number }): SurfaceInputEvent {
@@ -55,4 +55,11 @@ test("remoteBrowserScrollDelta keeps legacy scroll events scrolling down", () =>
 test("remoteBrowserScrollDelta clamps invalid or extreme values", () => {
   assert.deepEqual(remoteBrowserScrollDelta(scrollEvent({ x: Number.NaN, y: 5000 })), { x: 0, y: 1600 });
   assert.deepEqual(remoteBrowserScrollDelta(scrollEvent({ x: -5000, y: -5000 })), { x: -1600, y: -1600 });
+});
+
+test("resolveRemoteBrowserFrameIntervalMs defaults to the fastest supported screenshot cadence", () => {
+  assert.equal(resolveRemoteBrowserFrameIntervalMs(undefined), 250);
+  assert.equal(resolveRemoteBrowserFrameIntervalMs("100"), 250);
+  assert.equal(resolveRemoteBrowserFrameIntervalMs("500"), 500);
+  assert.equal(resolveRemoteBrowserFrameIntervalMs("not-a-number"), 250);
 });

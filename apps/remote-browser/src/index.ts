@@ -24,7 +24,12 @@ const viewport = {
   width: Number.parseInt(process.env.REMOTE_BROWSER_VIEWPORT_WIDTH ?? "1280", 10),
   height: Number.parseInt(process.env.REMOTE_BROWSER_VIEWPORT_HEIGHT ?? "720", 10)
 };
-const frameIntervalMs = Math.max(250, Number.parseInt(process.env.REMOTE_BROWSER_FRAME_INTERVAL_MS ?? "500", 10));
+export function resolveRemoteBrowserFrameIntervalMs(value: string | undefined): number {
+  const parsed = Number.parseInt(value ?? "250", 10);
+  return Math.max(250, Number.isFinite(parsed) ? parsed : 250);
+}
+
+const frameIntervalMs = resolveRemoteBrowserFrameIntervalMs(process.env.REMOTE_BROWSER_FRAME_INTERVAL_MS);
 const tokenSecret = process.env.REMOTE_BROWSER_TOKEN_SECRET ?? "dev-remote-browser-secret";
 const remoteBrowserScrollbarStyle = `
   html {

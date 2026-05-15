@@ -245,6 +245,7 @@ configured_origins = [item.strip() for item in values.get('REMOTE_BROWSER_ALLOWE
 configured_origins.extend(public_remote_browser_origins)
 values['REMOTE_BROWSER_ALLOWED_ORIGINS'] = ','.join(dict.fromkeys(configured_origins))
 values.setdefault('REMOTE_BROWSER_ALLOW_PRIVATE_ALLOWED_ORIGINS', 'false')
+values.setdefault('REMOTE_BROWSER_FRAME_INTERVAL_MS', '250')
 values.setdefault('REMOTE_BROWSER_TOKEN_SECRET', values.get('STATE_TOKEN_SECRET', 'dev-remote-browser-secret'))
 values.setdefault('REMOTE_BROWSER_TOKEN_TTL_SECONDS', '300')
 values['IMAGE_TAG'] = image_tag
@@ -262,7 +263,7 @@ for line in lines:
     else:
       rendered.append(line)
 
-for key in ('API_IMAGE_REPO', 'ROOM_STATE_IMAGE_REPO', 'REMOTE_BROWSER_IMAGE_REPO', 'NOAH_BROWSER_DOMAIN', 'REMOTE_BROWSER_PUBLIC_URL', 'REMOTE_BROWSER_ALLOWED_ORIGINS', 'REMOTE_BROWSER_ALLOW_PRIVATE_ALLOWED_ORIGINS', 'REMOTE_BROWSER_TOKEN_SECRET', 'REMOTE_BROWSER_TOKEN_TTL_SECONDS', 'IMAGE_TAG'):
+for key in ('API_IMAGE_REPO', 'ROOM_STATE_IMAGE_REPO', 'REMOTE_BROWSER_IMAGE_REPO', 'NOAH_BROWSER_DOMAIN', 'REMOTE_BROWSER_PUBLIC_URL', 'REMOTE_BROWSER_ALLOWED_ORIGINS', 'REMOTE_BROWSER_ALLOW_PRIVATE_ALLOWED_ORIGINS', 'REMOTE_BROWSER_FRAME_INTERVAL_MS', 'REMOTE_BROWSER_TOKEN_SECRET', 'REMOTE_BROWSER_TOKEN_TTL_SECONDS', 'IMAGE_TAG'):
     if key not in seen:
         rendered.append(f'{key}={values[key]}')
 

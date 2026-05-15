@@ -45,6 +45,7 @@ services:
       REMOTE_BROWSER_TOKEN_SECRET: ${REMOTE_BROWSER_TOKEN_SECRET:-dev-remote-browser-secret}
       REMOTE_BROWSER_ALLOWED_ORIGINS: ${REMOTE_BROWSER_ALLOWED_ORIGINS}
       REMOTE_BROWSER_ALLOW_PRIVATE_ALLOWED_ORIGINS: ${REMOTE_BROWSER_ALLOW_PRIVATE_ALLOWED_ORIGINS:-false}
+      REMOTE_BROWSER_FRAME_INTERVAL_MS: ${REMOTE_BROWSER_FRAME_INTERVAL_MS:-250}
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4010/health').then((r) => { if (!r.ok) process.exit(1); }).catch(() => process.exit(1))"]
       interval: 10s
