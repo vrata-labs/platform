@@ -55,6 +55,14 @@ import {
 } from "./media/media-object-state.js";
 import { routeMediaObjectSurfaceInput } from "./media/media-object-router.js";
 import { createRemoteBrowserObjectRuntime } from "./media/remote-browser-object.js";
+import {
+  createRemoteBrowserVrKeyboardView,
+  planRemoteBrowserVrKeyboardInput,
+  resolveRemoteBrowserVrKeyboardHit,
+  setRemoteBrowserVrKeyboardHover,
+  setRemoteBrowserVrKeyboardVisible,
+  type RemoteBrowserVrKeyboardHit
+} from "./media/remote-browser-vr-keyboard.js";
 import { planRemoteBrowserXrPointer } from "./media/remote-browser-xr-input.js";
 import { getScreenShareErrorCode } from "./media/screen-share-object.js";
 import { createWhiteboardObjectRuntime } from "./media/whiteboard-object.js";
@@ -359,6 +367,8 @@ const displaySurface = new THREE.Mesh(
 );
 displaySurface.position.set(0, 2.2, -6.6);
 scene.add(displaySurface);
+const remoteBrowserVrKeyboardView = createRemoteBrowserVrKeyboardView();
+displaySurface.add(remoteBrowserVrKeyboardView.root);
 
 const whiteboardPreviewPositions = new Float32Array(WHITEBOARD_MAX_POINTS_PER_STROKE * 3);
 const whiteboardPreviewGeometry = new THREE.BufferGeometry();
@@ -516,6 +526,7 @@ let surfaceAudioPendingEnabled: boolean | null = null;
 const pointerNdc = new THREE.Vector2(0, 0);
 const interactionRaycaster = new THREE.Raycaster();
 const surfaceInputRaycaster = new THREE.Raycaster();
+const remoteBrowserVrKeyboardRaycaster = new THREE.Raycaster();
 const cameraWorldPosition = new THREE.Vector3();
 const forcedInteractionDirection = new THREE.Vector3();
 const avatarOutboundPublisher = createAvatarOutboundPublisher();
@@ -682,7 +693,7 @@ function updateMediaDiagnostics(): void {
   if (activeRemoteBrowser) {
     remoteBrowserRuntime.sync(activeRemoteBrowser);
   }
-  debugState.remoteBrowser = remoteBrowserRuntime.createDebugSnapshot(activeRemoteBrowser);
+  debugState.remoteBrowser = { ...debugState.remoteBrowser, ...remoteBrowserRuntime.createDebugSnapshot(activeRemoteBrowser) };
 }
 
 function syncRemoteAudioDiagnostics(): void {
@@ -901,7 +912,7 @@ function syncRemoteBrowserControls(): void {
   const activeObject = activeMediaObjectForSurface(DEBUG_SURFACE_ID);
   const remoteBrowser = activeRemoteBrowserObjectForSurface(DEBUG_SURFACE_ID);
   const snapshot = remoteBrowserRuntime.createDebugSnapshot(remoteBrowser);
-  debugState.remoteBrowser = snapshot;
+  debugState.remoteBrowser = { ...debugState.remoteBrowser, ...snapshot };
   const canOpen = canUseRemoteBrowserOpenControl();
   const canInput = hasRoomPermission(debugState.access.permissions, "remote-browser.input");
   const hasOtherObject = Boolean(activeObject && activeObject.type !== REMOTE_BROWSER_OBJECT_TYPE);
@@ -1235,7 +1246,7 @@ function confirmInteractionTarget(frameContext: RuntimeFrameContext): void {
       }
     }
   }
-  if (resolveRemoteBrowserXrSurfaceRayHit(frameContext)) {
+  if (resolveRemoteBrowserXrInputTarget(frameContext)) {
     return;
   }
   if (!whiteboardXrDrawInput) {
@@ -1648,45 +1659,135 @@ function isRemoteBrowserXrInputActive(frameContext: RuntimeFrameContext): boolea
     && displaySurface.visible;
 }
 
-function resolveRemoteBrowserXrSurfaceRayHit(frameContext: RuntimeFrameContext): { ray: THREE.Ray; hit: ResolvedSurfaceHit } | null {
+function syncRemoteBrowserVrKeyboardState(active: boolean): void {
+  setRemoteBrowserVrKeyboardVisible(remoteBrowserVrKeyboardView, active);
+  debugState.remoteBrowser.xrKeyboardVisible = active;
+  if (!active) {
+    debugState.remoteBrowser.xrKeyboardHoveredKey = null;
+  }
+}
+
+function resolveRemoteBrowserXrRay(frameContext: RuntimeFrameContext): { ray: THREE.Ray } | null {
   if (!isRemoteBrowserXrInputActive(frameContext)) {
     return null;
   }
-  return resolveDebugSurfaceRayHit(frameContext, "xr-controller", { forceXrAimRay: true });
+  return resolveRuntimeInteractionRay(getInteractionFrameInput(frameContext, { forceXrAimRay: true }));
 }
 
-function showRemoteBrowserXrSurfaceRay(rayHit: { ray: THREE.Ray; hit: ResolvedSurfaceHit }): void {
-  const point = typeof rayHit.hit.distanceM === "number"
-    ? rayHit.ray.at(rayHit.hit.distanceM, new THREE.Vector3())
-    : rayHit.ray.at(3, new THREE.Vector3());
+function resolveRemoteBrowserXrInputTarget(frameContext: RuntimeFrameContext): {
+  ray: THREE.Ray;
+  keyboardHit: RemoteBrowserVrKeyboardHit | null;
+  surfaceHit: ResolvedSurfaceHit | null;
+} | null {
+  const browserActive = isRemoteBrowserXrInputActive(frameContext);
+  syncRemoteBrowserVrKeyboardState(browserActive);
+  if (!browserActive) {
+    return null;
+  }
+  const resolvedRay = resolveRemoteBrowserXrRay(frameContext);
+  if (!resolvedRay) {
+    return null;
+  }
+  const keyboardHit = resolveRemoteBrowserVrKeyboardHit({
+    view: remoteBrowserVrKeyboardView,
+    ray: resolvedRay.ray,
+    raycaster: remoteBrowserVrKeyboardRaycaster
+  });
+  const surfaceHit = resolveDebugSurfaceHit(resolvedRay.ray, "xr-controller");
+  return keyboardHit || surfaceHit
+    ? { ray: resolvedRay.ray, keyboardHit, surfaceHit }
+    : null;
+}
+
+function showRemoteBrowserXrRayPoint(input: { ray: THREE.Ray; point: THREE.Vector3; targetKind: "surface" | "keyboard"; color: number }): void {
   showInteractionRayPointView({
     view: interactionRayView,
     state: debugState.interactionRay,
-    ray: rayHit.ray,
-    point,
-    targetKind: "surface",
+    ray: input.ray,
+    point: input.point,
+    targetKind: input.targetKind,
     mode: "xr-right-stick",
-    color: 0xffc857,
+    color: input.color,
     markTelemetry: markXrTelemetry
   });
+}
+
+function showRemoteBrowserXrSurfaceRay(ray: THREE.Ray, hit: ResolvedSurfaceHit): void {
+  showRemoteBrowserXrRayPoint({
+    ray,
+    point: typeof hit.distanceM === "number" ? ray.at(hit.distanceM, new THREE.Vector3()) : ray.at(3, new THREE.Vector3()),
+    targetKind: "surface",
+    color: 0xffc857
+  });
+}
+
+function showRemoteBrowserVrKeyboardRay(ray: THREE.Ray, hit: RemoteBrowserVrKeyboardHit): void {
+  showRemoteBrowserXrRayPoint({
+    ray,
+    point: hit.point,
+    targetKind: "keyboard",
+    color: 0xff8c42
+  });
+}
+
+function commitRemoteBrowserVrKeyboardInput(input: { keyId: string | null; key?: string; text?: string }, nowMs: number): boolean {
+  if (!input.keyId || (!input.key && !input.text)) {
+    return false;
+  }
+  const uv = debugState.surfaceInput.lastHit?.surfaceId === DEBUG_SURFACE_ID
+    ? debugState.surfaceInput.lastHit.uv
+    : { u: 0.5, v: 0.5 };
+  const hit = createSyntheticSurfaceHit({
+    surfaceId: DEBUG_SURFACE_ID,
+    objectId: activeMediaObjectIdForSurface(DEBUG_SURFACE_ID),
+    source: "keyboard",
+    uv,
+    widthPx: DEBUG_SURFACE_WIDTH_PX,
+    heightPx: DEBUG_SURFACE_HEIGHT_PX,
+    inputEnabled: debugState.surfaceInput.enabled && displaySurface.visible
+  });
+  if (debugState.surfaceInput.focusedSurfaceId !== DEBUG_SURFACE_ID) {
+    tryFocusSurface({ state: debugState.surfaceInput, permissions: debugState.access.permissions, hit });
+  }
+  const committed = commitDebugSurfaceInput({
+    hit,
+    source: "keyboard",
+    kind: "key-down",
+    clientTimeMs: nowMs,
+    key: input.key,
+    text: input.text
+  });
+  if (committed) {
+    debugState.remoteBrowser.xrKeyboardLastKey = input.keyId;
+  }
+  return committed;
 }
 
 function updateRemoteBrowserXrInput(frameContext: RuntimeFrameContext): boolean {
   const pointerWasActive = xrRemoteBrowserPointerActive;
   const browserActive = isRemoteBrowserXrInputActive(frameContext);
-  const rayHit = browserActive ? resolveRemoteBrowserXrSurfaceRayHit(frameContext) : null;
-  if (rayHit) {
-    showRemoteBrowserXrSurfaceRay(rayHit);
+  const target = browserActive ? resolveRemoteBrowserXrInputTarget(frameContext) : null;
+  if (!browserActive) {
+    syncRemoteBrowserVrKeyboardState(false);
+  }
+  const keyboardHit = target?.keyboardHit ?? null;
+  const surfaceHit = keyboardHit ? null : target?.surfaceHit ?? null;
+  setRemoteBrowserVrKeyboardHover(remoteBrowserVrKeyboardView, keyboardHit?.key.id ?? null);
+  debugState.remoteBrowser.xrKeyboardHoveredKey = keyboardHit?.key.id ?? null;
+  if (target && keyboardHit) {
+    showRemoteBrowserVrKeyboardRay(target.ray, keyboardHit);
+  } else if (target && surfaceHit) {
+    showRemoteBrowserXrSurfaceRay(target.ray, surfaceHit);
   }
   const plan = planRemoteBrowserXrPointer({
     browserActive,
     pointerActive: xrRemoteBrowserPointerActive,
     triggerPressed: Boolean(frameContext.xr?.triggerPressed),
-    confirmInteraction: frameContext.intents.confirmInteraction,
-    hasHit: Boolean(rayHit),
+    confirmInteraction: keyboardHit ? false : frameContext.intents.confirmInteraction,
+    hasHit: Boolean(surfaceHit),
     hasLastHit: Boolean(lastXrRemoteBrowserHit)
   });
-  const hit = plan.useLastHit ? lastXrRemoteBrowserHit : rayHit?.hit ?? null;
+  const hit = plan.useLastHit ? lastXrRemoteBrowserHit : surfaceHit;
   const committed = plan.kind
     ? commitDebugSurfaceInput({
       hit,
@@ -1697,12 +1798,19 @@ function updateRemoteBrowserXrInput(frameContext: RuntimeFrameContext): boolean 
     })
     : false;
   xrRemoteBrowserPointerActive = plan.nextPointerActive && (!plan.kind || committed);
-  if (xrRemoteBrowserPointerActive && rayHit?.hit) {
-    lastXrRemoteBrowserHit = rayHit.hit;
+  if (xrRemoteBrowserPointerActive && surfaceHit) {
+    lastXrRemoteBrowserHit = surfaceHit;
   } else if (!xrRemoteBrowserPointerActive) {
     lastXrRemoteBrowserHit = null;
   }
-  return Boolean(rayHit) || pointerWasActive || xrRemoteBrowserPointerActive;
+  if (!xrRemoteBrowserPointerActive && keyboardHit) {
+    commitRemoteBrowserVrKeyboardInput(planRemoteBrowserVrKeyboardInput({
+      keyboardActive: browserActive,
+      confirmInteraction: frameContext.intents.confirmInteraction,
+      hoveredKey: keyboardHit.key
+    }), frameContext.nowMs);
+  }
+  return Boolean(keyboardHit || surfaceHit) || pointerWasActive || xrRemoteBrowserPointerActive;
 }
 
 function formatDeviceLabel(device: MediaDeviceInfo, fallbackLabel: string, index: number): string {
@@ -2208,7 +2316,10 @@ const debugState = {
     localCanInput: false,
     localHasControl: false,
     lastInputSeq: 0,
-    errorCode: null as RemoteBrowserErrorCode | string | null
+    errorCode: null as RemoteBrowserErrorCode | string | null,
+    xrKeyboardVisible: false,
+    xrKeyboardHoveredKey: null as string | null,
+    xrKeyboardLastKey: null as string | null
   },
   surfaceAudio: {
     surfaceId: DEBUG_SURFACE_ID,
@@ -2321,7 +2432,7 @@ const debugState = {
   interactionRay: {
     active: false,
     mode: "none" as "none" | "cursor" | "xr-right-stick",
-    targetKind: "none" as "none" | "floor" | "seat" | "surface",
+    targetKind: "none" as "none" | "floor" | "seat" | "surface" | "keyboard",
     seatId: null as string | null,
     point: null as null | { x: number; y: number; z: number },
     origin: null as null | { x: number; y: number; z: number },
@@ -2411,6 +2522,7 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
     }) => boolean;
     setDebugSurfaceInputEnabled: (enabled: boolean) => boolean;
     focusDebugSurface: () => boolean;
+    getRemoteBrowserVrKeyboardKeyWorldPosition: (keyId: string) => { x: number; y: number; z: number } | null;
     teleportToFloor: (x: number, z: number) => boolean;
     forceXrInteractionAtSeat: (seatId: string) => boolean;
     setSyntheticXrState: (state: {
@@ -2691,6 +2803,20 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
     });
     recordSurfaceInputHit(debugState.surfaceInput, hit);
     return tryFocusSurface({ state: debugState.surfaceInput, permissions: debugState.access.permissions, hit }) === null;
+  },
+  getRemoteBrowserVrKeyboardKeyWorldPosition: (keyId) => {
+    const mesh = remoteBrowserVrKeyboardView.meshById.get(keyId);
+    if (!mesh) {
+      return null;
+    }
+    displaySurface.updateMatrixWorld(true);
+    mesh.updateMatrixWorld(true);
+    const position = mesh.getWorldPosition(new THREE.Vector3());
+    return {
+      x: position.x,
+      y: position.y,
+      z: position.z
+    };
   },
   forceXrInteractionAtSeat: (seatId: string) => {
     const seatAnchor = sceneSeatAnchorMap.get(seatId);

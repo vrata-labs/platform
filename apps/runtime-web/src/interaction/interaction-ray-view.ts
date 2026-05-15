@@ -8,7 +8,7 @@ export type InteractionRayMode = "none" | "cursor" | "xr-right-stick";
 export interface InteractionRayDebugState {
   active: boolean;
   mode: InteractionRayMode;
-  targetKind: "none" | "floor" | "seat" | "surface";
+  targetKind: "none" | "floor" | "seat" | "surface" | "keyboard";
   seatId: string | null;
   point: null | { x: number; y: number; z: number };
   origin: null | { x: number; y: number; z: number };
