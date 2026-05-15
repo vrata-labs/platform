@@ -25,6 +25,17 @@ interface RemoteBrowserFrameMessage {
   capturedAtMs?: number;
 }
 
+interface RemoteBrowserMediaAnswerMessage {
+  type?: string;
+  answer?: RTCSessionDescriptionInit;
+  hasVideo?: boolean;
+  hasAudio?: boolean;
+  trackKinds?: string[];
+  errorCode?: string;
+}
+
+type RemoteBrowserMediaState = "idle" | "connecting" | "connected" | "failed" | "unsupported";
+
 export interface RemoteBrowserObjectRuntimeOptions {
   apiBaseUrl: string;
   roomId: string;
@@ -57,6 +68,12 @@ export interface RemoteBrowserDebugSnapshot {
   localHasControl: boolean;
   lastInputSeq: number;
   errorCode: string | null;
+  mediaState: RemoteBrowserMediaState;
+  mediaConnected: boolean;
+  mediaHasVideo: boolean;
+  mediaHasAudio: boolean;
+  mediaPeerConnectionState: RTCPeerConnectionState | null;
+  mediaErrorCode: string | null;
 }
 
 function remoteBrowserInputEventId(participantId: string, kind: string): string {
@@ -96,6 +113,15 @@ export class RemoteBrowserObjectRuntime {
   private frameSize: { width: number; height: number } | null = null;
   private errorCode: string | null = null;
   private renderedPlaceholder = "";
+  private mediaPeerConnection: RTCPeerConnection | null = null;
+  private mediaRetryTimer: number | null = null;
+  private mediaStream: MediaStream | null = null;
+  private mediaElement: HTMLVideoElement | null = null;
+  private mediaTexture: THREE.VideoTexture | null = null;
+  private mediaState: RemoteBrowserMediaState = "idle";
+  private mediaHasVideo = false;
+  private mediaHasAudio = false;
+  private mediaErrorCode: string | null = null;
 
   constructor(private readonly options: RemoteBrowserObjectRuntimeOptions) {
     this.canvas = document.createElement("canvas");
@@ -150,7 +176,7 @@ export class RemoteBrowserObjectRuntime {
       this.closeFrameStream();
       return;
     }
-    this.options.applyTexture(this.texture);
+    this.applyActiveTexture();
     const state = object.state;
     if (!state.executorSessionId || !state.frameStreamId) {
       this.closeFrameStream();
@@ -184,7 +210,13 @@ export class RemoteBrowserObjectRuntime {
       localCanInput: permissions.includes("remote-browser.input"),
       localHasControl: !controllerParticipantId || controllerParticipantId === this.options.participantId,
       lastInputSeq: state?.lastInputSeq ?? 0,
-      errorCode: state?.errorCode ?? this.errorCode
+      errorCode: state?.errorCode ?? this.errorCode,
+      mediaState: this.mediaState,
+      mediaConnected: this.mediaState === "connected",
+      mediaHasVideo: this.mediaHasVideo,
+      mediaHasAudio: this.mediaHasAudio,
+      mediaPeerConnectionState: this.mediaPeerConnection?.connectionState ?? null,
+      mediaErrorCode: this.mediaErrorCode
     };
   }
 
@@ -201,6 +233,7 @@ export class RemoteBrowserObjectRuntime {
     if (!patch) {
       return false;
     }
+    this.playRemoteMedia();
     this.sendPatch(object, patch);
     return true;
   }
@@ -286,19 +319,21 @@ export class RemoteBrowserObjectRuntime {
         if (this.frameSocket === socket) {
           this.frameConnected = true;
           this.errorCode = null;
+          this.startMediaTransport(socket, key);
         }
       });
       socket.addEventListener("message", (event) => {
         if (this.frameSocket !== socket) {
           return;
         }
-        this.handleFrameMessage(String(event.data));
+        this.handleFrameSocketMessage(String(event.data));
       });
       socket.addEventListener("close", () => {
         if (this.frameSocket === socket) {
           this.frameConnected = false;
           this.frameSocket = null;
           this.frameStreamKey = null;
+          this.closeMediaTransport(false);
         }
       });
       socket.addEventListener("error", () => {
@@ -316,13 +351,28 @@ export class RemoteBrowserObjectRuntime {
     }
   }
 
-  private handleFrameMessage(message: string): void {
-    let payload: RemoteBrowserFrameMessage;
+  private handleFrameSocketMessage(message: string): void {
+    let payload: RemoteBrowserFrameMessage | RemoteBrowserMediaAnswerMessage;
     try {
-      payload = JSON.parse(message) as RemoteBrowserFrameMessage;
+      payload = JSON.parse(message) as RemoteBrowserFrameMessage | RemoteBrowserMediaAnswerMessage;
     } catch {
       return;
     }
+    if (payload.type === "media-answer") {
+      this.handleMediaAnswer(payload as RemoteBrowserMediaAnswerMessage);
+      return;
+    }
+    if (payload.type === "media-error") {
+      this.closeMediaTransport(false);
+      this.mediaState = "failed";
+      this.mediaErrorCode = (payload as RemoteBrowserMediaAnswerMessage).errorCode ?? "media_answer_failed";
+      this.scheduleMediaRetry();
+      return;
+    }
+    this.handleFrameMessage(payload as RemoteBrowserFrameMessage);
+  }
+
+  private handleFrameMessage(payload: RemoteBrowserFrameMessage): void {
     if (payload.type !== "frame" || !payload.dataUrl) {
       return;
     }
@@ -341,13 +391,207 @@ export class RemoteBrowserObjectRuntime {
         height: payload.height ?? image.height
       };
       this.renderedPlaceholder = "";
-      this.options.applyTexture(this.texture);
+      if (!this.mediaTexture) {
+        this.options.applyTexture(this.texture);
+      }
     };
     image.src = payload.dataUrl;
   }
 
+  private startMediaTransport(socket: WebSocket, key: string): void {
+    if (!("RTCPeerConnection" in window)) {
+      this.mediaState = "unsupported";
+      this.mediaErrorCode = "rtc_unsupported";
+      return;
+    }
+    if (this.mediaPeerConnection || this.mediaState === "connecting" || this.mediaState === "connected") {
+      return;
+    }
+    void this.createAndSendMediaOffer(socket, key);
+  }
+
+  private async createAndSendMediaOffer(socket: WebSocket, key: string): Promise<void> {
+    if (this.frameSocket !== socket || this.frameStreamKey !== key || socket.readyState !== WebSocket.OPEN) {
+      return;
+    }
+    this.closeMediaTransport(false);
+    const pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
+    this.mediaPeerConnection = pc;
+    this.mediaStream = new MediaStream();
+    this.mediaState = "connecting";
+    this.mediaErrorCode = null;
+    this.mediaHasVideo = false;
+    this.mediaHasAudio = false;
+    pc.addTransceiver("video", { direction: "recvonly" });
+    pc.addTransceiver("audio", { direction: "recvonly" });
+    pc.addEventListener("track", (event) => this.attachRemoteMediaTrack(event));
+    pc.addEventListener("connectionstatechange", () => {
+      if (this.mediaPeerConnection !== pc) {
+        return;
+      }
+      if (pc.connectionState === "connected") {
+        this.mediaState = "connected";
+        this.mediaErrorCode = null;
+        return;
+      }
+      if (pc.connectionState === "failed" || pc.connectionState === "disconnected" || pc.connectionState === "closed") {
+        this.mediaState = "failed";
+        this.mediaErrorCode = `rtc_${pc.connectionState}`;
+        this.closeMediaTransport(true);
+        this.scheduleMediaRetry();
+      }
+    });
+    await pc.setLocalDescription(await pc.createOffer());
+    await this.waitForIceGatheringComplete(pc);
+    if (this.frameSocket !== socket || this.frameStreamKey !== key || this.mediaPeerConnection !== pc || socket.readyState !== WebSocket.OPEN) {
+      pc.close();
+      return;
+    }
+    socket.send(JSON.stringify({ type: "media-offer", offer: pc.localDescription }));
+  }
+
+  private waitForIceGatheringComplete(pc: RTCPeerConnection): Promise<void> {
+    if (pc.iceGatheringState === "complete") {
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => {
+      const timeout = window.setTimeout(() => {
+        pc.removeEventListener("icegatheringstatechange", onStateChange);
+        resolve();
+      }, 2500);
+      const onStateChange = () => {
+        if (pc.iceGatheringState !== "complete") {
+          return;
+        }
+        window.clearTimeout(timeout);
+        pc.removeEventListener("icegatheringstatechange", onStateChange);
+        resolve();
+      };
+      pc.addEventListener("icegatheringstatechange", onStateChange);
+    });
+  }
+
+  private handleMediaAnswer(payload: RemoteBrowserMediaAnswerMessage): void {
+    const pc = this.mediaPeerConnection;
+    if (!pc || !payload.answer) {
+      return;
+    }
+    void pc.setRemoteDescription(payload.answer).then(() => {
+      this.mediaHasVideo = this.mediaHasVideo || payload.hasVideo === true;
+      this.mediaHasAudio = this.mediaHasAudio || payload.hasAudio === true;
+      this.mediaErrorCode = null;
+    }).catch(() => {
+      this.mediaState = "failed";
+      this.mediaErrorCode = "media_answer_rejected";
+      this.closeMediaTransport(true);
+      this.scheduleMediaRetry();
+    });
+  }
+
+  private attachRemoteMediaTrack(event: RTCTrackEvent): void {
+    const stream = this.mediaStream ?? new MediaStream();
+    this.mediaStream = stream;
+    if (!stream.getTracks().some((track) => track.id === event.track.id)) {
+      stream.addTrack(event.track);
+    }
+    if (event.track.kind === "video") {
+      this.mediaHasVideo = true;
+    }
+    if (event.track.kind === "audio") {
+      this.mediaHasAudio = true;
+    }
+    const element = this.ensureMediaElement();
+    if (element.srcObject !== stream) {
+      element.srcObject = stream;
+    }
+    if (event.track.kind === "video" && !this.mediaTexture) {
+      const texture = new THREE.VideoTexture(element);
+      texture.colorSpace = THREE.SRGBColorSpace;
+      this.mediaTexture = texture;
+      this.options.applyTexture(texture);
+      this.frameSocket?.send(JSON.stringify({ type: "media-connected" }));
+    }
+    this.mediaState = "connected";
+    this.mediaErrorCode = null;
+    this.playRemoteMedia();
+    event.track.addEventListener("ended", () => {
+      if (this.mediaStream === stream) {
+        this.closeMediaTransport(true);
+        this.scheduleMediaRetry();
+      }
+    }, { once: true });
+  }
+
+  private ensureMediaElement(): HTMLVideoElement {
+    if (this.mediaElement) {
+      return this.mediaElement;
+    }
+    const element = document.createElement("video");
+    element.autoplay = true;
+    element.muted = false;
+    element.playsInline = true;
+    element.style.display = "none";
+    document.body.appendChild(element);
+    this.mediaElement = element;
+    return element;
+  }
+
+  private playRemoteMedia(): void {
+    const element = this.mediaElement;
+    if (!element) {
+      return;
+    }
+    void element.play().catch(() => {
+      this.mediaErrorCode = "media_play_blocked";
+    });
+  }
+
+  private scheduleMediaRetry(): void {
+    if (this.mediaRetryTimer || !this.frameSocket || this.frameSocket.readyState !== WebSocket.OPEN || !this.frameStreamKey) {
+      return;
+    }
+    const socket = this.frameSocket;
+    const key = this.frameStreamKey;
+    this.mediaRetryTimer = window.setTimeout(() => {
+      this.mediaRetryTimer = null;
+      this.startMediaTransport(socket, key);
+    }, 2000);
+  }
+
+  private closeMediaTransport(notifyExecutor: boolean): void {
+    if (this.mediaRetryTimer) {
+      window.clearTimeout(this.mediaRetryTimer);
+      this.mediaRetryTimer = null;
+    }
+    if (notifyExecutor && this.frameSocket?.readyState === WebSocket.OPEN) {
+      this.frameSocket.send(JSON.stringify({ type: "media-disconnected" }));
+    }
+    const peerConnection = this.mediaPeerConnection;
+    this.mediaPeerConnection = null;
+    peerConnection?.close();
+    this.mediaStream?.getTracks().forEach((track) => track.stop());
+    this.mediaStream = null;
+    this.mediaTexture?.dispose();
+    this.mediaTexture = null;
+    if (this.mediaElement) {
+      this.mediaElement.pause();
+      this.mediaElement.srcObject = null;
+      this.mediaElement.remove();
+      this.mediaElement = null;
+    }
+    this.mediaHasVideo = false;
+    this.mediaHasAudio = false;
+    this.mediaState = "idle";
+    this.applyActiveTexture();
+  }
+
+  private applyActiveTexture(): void {
+    this.options.applyTexture(this.mediaTexture ?? this.texture);
+  }
+
   private closeFrameStream(): void {
     const socket = this.frameSocket;
+    this.closeMediaTransport(true);
     this.frameSocket = null;
     this.frameStreamKey = null;
     this.frameStreamUrl = null;

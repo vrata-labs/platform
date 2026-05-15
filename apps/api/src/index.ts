@@ -865,6 +865,12 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     return;
   }
 
+  if (method === "GET" && url.pathname === "/remote-browser-media-demo.html") {
+    const served = await serveStatic(response, join(runtimePublicRoot, "remote-browser-media-demo.html"));
+    if (!served) json(response, 404, { error: "remote_browser_media_demo_missing" });
+    return;
+  }
+
   if (method === "GET" && url.pathname.startsWith("/assets/")) {
     const served = await serveStatic(response, join(runtimeStaticRoot, url.pathname.slice(1)))
       || await serveStatic(response, join(runtimePublicRoot, url.pathname.slice(1)));

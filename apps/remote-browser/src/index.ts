@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { chromium, type Browser, type BrowserContext, type Page } from "playwright-core";
+import { chromium, type Browser, type BrowserContext, type Frame, type Page } from "playwright-core";
 import { WebSocketServer, type WebSocket } from "ws";
 import type { RemoteBrowserPatch, SurfaceInputEvent } from "@noah/shared-types";
 
@@ -15,9 +15,25 @@ interface RemoteBrowserSession {
   context: BrowserContext;
   page: Page;
   clients: Set<WebSocket>;
+  mediaClients: Set<WebSocket>;
   frameTimer: ReturnType<typeof setInterval>;
   frameCaptureInFlight: boolean;
   lastFrameAtMs: number;
+}
+
+interface RemoteBrowserMediaOfferMessage {
+  type?: string;
+  offer?: RTCSessionDescriptionInit;
+}
+
+interface RemoteBrowserMediaAnswerResult {
+  ok: boolean;
+  answer?: RTCSessionDescriptionInit;
+  hasVideo?: boolean;
+  hasAudio?: boolean;
+  trackKinds?: string[];
+  sourceFrameUrl?: string;
+  errorCode?: string;
 }
 
 const port = Number.parseInt(process.env.REMOTE_BROWSER_PORT ?? "4010", 10);
@@ -32,6 +48,7 @@ export function resolveRemoteBrowserFrameIntervalMs(value: string | undefined): 
 
 const frameIntervalMs = resolveRemoteBrowserFrameIntervalMs(process.env.REMOTE_BROWSER_FRAME_INTERVAL_MS);
 const tokenSecret = process.env.REMOTE_BROWSER_TOKEN_SECRET ?? "dev-remote-browser-secret";
+const mediaIceServers = resolveRemoteBrowserMediaIceServers(process.env.REMOTE_BROWSER_MEDIA_ICE_SERVERS);
 const remoteBrowserScrollbarStyle = `
   html {
     scrollbar-gutter: stable !important;
@@ -102,8 +119,20 @@ async function getBrowser(): Promise<Browser> {
     process.env.REMOTE_BROWSER_CHROMIUM_PATH ||
     process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ||
     undefined;
-  browserPromise ??= chromium.launch({ executablePath, headless: true });
+  browserPromise ??= chromium.launch({
+    executablePath,
+    headless: true,
+    args: ["--autoplay-policy=no-user-gesture-required"]
+  });
   return browserPromise;
+}
+
+export function resolveRemoteBrowserMediaIceServers(value: string | undefined): RTCIceServer[] {
+  const urls = (value ?? "stun:stun.l.google.com:19302")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+  return urls.length > 0 ? [{ urls }] : [];
 }
 
 function broadcastFrame(session: RemoteBrowserSession, dataUrl: string): void {
@@ -124,7 +153,7 @@ function broadcastFrame(session: RemoteBrowserSession, dataUrl: string): void {
 }
 
 async function captureFrame(session: RemoteBrowserSession): Promise<void> {
-  if (session.clients.size === 0 || session.frameCaptureInFlight) {
+  if (session.clients.size === 0 || session.mediaClients.size > 0 || session.frameCaptureInFlight) {
     return;
   }
   session.frameCaptureInFlight = true;
@@ -135,6 +164,149 @@ async function captureFrame(session: RemoteBrowserSession): Promise<void> {
   } finally {
     session.frameCaptureInFlight = false;
   }
+}
+
+async function createMediaAnswerInFrame(frame: Frame, offer: RTCSessionDescriptionInit): Promise<RemoteBrowserMediaAnswerResult> {
+  return await frame.evaluate(async ({ offer: serializedOffer, iceServers }) => {
+    type MediaState = {
+      pc?: RTCPeerConnection;
+      stream?: MediaStream;
+    };
+    type CapturableVideo = HTMLVideoElement & {
+      captureStream?: () => MediaStream;
+      mozCaptureStream?: () => MediaStream;
+    };
+    const mediaWindow = window as Window & { __NOAH_REMOTE_BROWSER_MEDIA__?: MediaState };
+    const state = mediaWindow.__NOAH_REMOTE_BROWSER_MEDIA__ ?? {};
+
+    const collectVideos = (root: ParentNode): CapturableVideo[] => {
+      const videos = [...root.querySelectorAll("video")] as CapturableVideo[];
+      for (const element of [...root.querySelectorAll("*")] as HTMLElement[]) {
+        if (element.shadowRoot) {
+          videos.push(...collectVideos(element.shadowRoot));
+        }
+      }
+      return videos;
+    };
+    const pickVideo = (): CapturableVideo | null => {
+      const candidates = collectVideos(document)
+        .filter((video) => typeof video.captureStream === "function" || typeof video.mozCaptureStream === "function")
+        .sort((left, right) => (right.videoWidth * right.videoHeight) - (left.videoWidth * left.videoHeight));
+      return candidates[0] ?? null;
+    };
+    const waitForVideo = async (): Promise<CapturableVideo | null> => {
+      const startedAt = Date.now();
+      while (Date.now() - startedAt < 5000) {
+        const video = pickVideo();
+        if (video) {
+          return video;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+      return null;
+    };
+    const waitForIceGatheringComplete = async (pc: RTCPeerConnection): Promise<void> => {
+      if (pc.iceGatheringState === "complete") {
+        return;
+      }
+      await new Promise<void>((resolve) => {
+        const timeout = window.setTimeout(() => {
+          pc.removeEventListener("icegatheringstatechange", onStateChange);
+          resolve();
+        }, 2500);
+        const onStateChange = () => {
+          if (pc.iceGatheringState !== "complete") {
+            return;
+          }
+          window.clearTimeout(timeout);
+          pc.removeEventListener("icegatheringstatechange", onStateChange);
+          resolve();
+        };
+        pc.addEventListener("icegatheringstatechange", onStateChange);
+      });
+    };
+
+    const source = await waitForVideo();
+    if (!source) {
+      return { ok: false, errorCode: "media_source_missing" };
+    }
+    const captureStream = source.captureStream?.bind(source) ?? source.mozCaptureStream?.bind(source);
+    if (!captureStream) {
+      return { ok: false, errorCode: "media_capture_unsupported" };
+    }
+    const stream = captureStream();
+    const tracks: MediaStreamTrack[] = stream.getTracks().filter((track: MediaStreamTrack) => track.readyState === "live");
+    if (!tracks.some((track) => track.kind === "video")) {
+      return { ok: false, errorCode: "media_video_track_missing" };
+    }
+
+    state.pc?.close();
+    const pc = new RTCPeerConnection({ iceServers });
+    for (const track of tracks) {
+      pc.addTrack(track, stream);
+    }
+    await pc.setRemoteDescription(serializedOffer);
+    await pc.setLocalDescription(await pc.createAnswer());
+    await waitForIceGatheringComplete(pc);
+    state.pc = pc;
+    state.stream = stream;
+    mediaWindow.__NOAH_REMOTE_BROWSER_MEDIA__ = state;
+    return {
+      ok: true,
+      answer: pc.localDescription ? { type: pc.localDescription.type, sdp: pc.localDescription.sdp } : undefined,
+      hasVideo: tracks.some((track) => track.kind === "video"),
+      hasAudio: tracks.some((track) => track.kind === "audio"),
+      trackKinds: tracks.map((track) => track.kind),
+      sourceFrameUrl: location.href
+    };
+  }, { offer, iceServers: mediaIceServers });
+}
+
+async function createMediaAnswer(session: RemoteBrowserSession, offer: RTCSessionDescriptionInit): Promise<RemoteBrowserMediaAnswerResult> {
+  for (const frame of session.page.frames()) {
+    try {
+      const result = await createMediaAnswerInFrame(frame, offer);
+      if (result.ok || result.errorCode !== "media_source_missing") {
+        return result;
+      }
+    } catch {
+      // Cross-navigation and detached frames are expected while heavy pages load.
+    }
+  }
+  return { ok: false, errorCode: "media_source_missing" };
+}
+
+async function handleFrameSocketMessage(session: RemoteBrowserSession, ws: WebSocket, raw: WebSocket.RawData): Promise<void> {
+  let message: RemoteBrowserMediaOfferMessage;
+  try {
+    message = JSON.parse(raw.toString()) as RemoteBrowserMediaOfferMessage;
+  } catch {
+    return;
+  }
+  if (message.type === "media-connected") {
+    session.mediaClients.add(ws);
+    return;
+  }
+  if (message.type === "media-disconnected") {
+    session.mediaClients.delete(ws);
+    return;
+  }
+  if (message.type !== "media-offer" || !message.offer) {
+    return;
+  }
+  const result = await createMediaAnswer(session, message.offer);
+  if (!result.ok || !result.answer) {
+    ws.send(JSON.stringify({ type: "media-error", errorCode: result.errorCode ?? "media_answer_failed" }));
+    return;
+  }
+  ws.send(JSON.stringify({
+    type: "media-answer",
+    answer: result.answer,
+    hasVideo: result.hasVideo ?? false,
+    hasAudio: result.hasAudio ?? false,
+    trackKinds: result.trackKinds ?? [],
+    sourceFrameUrl: result.sourceFrameUrl ?? null
+  }));
 }
 
 async function installRequestGuard(page: Page, policy: RemoteBrowserUrlPolicy): Promise<void> {
@@ -212,6 +384,7 @@ async function createSession(input: { sessionId: string; frameStreamId: string; 
     context,
     page,
     clients: new Set<WebSocket>(),
+    mediaClients: new Set<WebSocket>(),
     frameTimer: setInterval(() => {
       void captureFrame(session).catch(() => undefined);
     }, frameIntervalMs),
@@ -336,7 +509,15 @@ export function startRemoteBrowserService(listenPort = port) {
     }
     wss.handleUpgrade(request, socket, head, (ws) => {
       session.clients.add(ws);
-      ws.on("close", () => session.clients.delete(ws));
+      ws.on("message", (raw) => {
+        void handleFrameSocketMessage(session, ws, raw).catch(() => {
+          ws.send(JSON.stringify({ type: "media-error", errorCode: "media_signal_failed" }));
+        });
+      });
+      ws.on("close", () => {
+        session.clients.delete(ws);
+        session.mediaClients.delete(ws);
+      });
       void captureFrame(session).catch(() => undefined);
     });
   });

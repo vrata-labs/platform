@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { remoteBrowserEventPoint, remoteBrowserScrollDelta, resolveRemoteBrowserFrameIntervalMs } from "./index.js";
+import { remoteBrowserEventPoint, remoteBrowserScrollDelta, resolveRemoteBrowserFrameIntervalMs, resolveRemoteBrowserMediaIceServers } from "./index.js";
 import type { SurfaceInputEvent } from "@noah/shared-types";
 
 function surfaceInput(uv: { u: number; v: number }): SurfaceInputEvent {
@@ -62,4 +62,10 @@ test("resolveRemoteBrowserFrameIntervalMs defaults to the fastest supported scre
   assert.equal(resolveRemoteBrowserFrameIntervalMs("100"), 250);
   assert.equal(resolveRemoteBrowserFrameIntervalMs("500"), 500);
   assert.equal(resolveRemoteBrowserFrameIntervalMs("not-a-number"), 250);
+});
+
+test("resolveRemoteBrowserMediaIceServers parses comma-separated STUN/TURN URLs", () => {
+  assert.deepEqual(resolveRemoteBrowserMediaIceServers(undefined), [{ urls: ["stun:stun.l.google.com:19302"] }]);
+  assert.deepEqual(resolveRemoteBrowserMediaIceServers(" stun:a.example.test, turn:b.example.test "), [{ urls: ["stun:a.example.test", "turn:b.example.test"] }]);
+  assert.deepEqual(resolveRemoteBrowserMediaIceServers(" , "), []);
 });

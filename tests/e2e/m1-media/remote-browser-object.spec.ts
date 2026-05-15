@@ -10,6 +10,12 @@ type RemoteBrowserDebug = {
     frameConnected?: boolean;
     lastFrameAtMs?: number;
     lastInputSeq?: number;
+    mediaState?: string;
+    mediaConnected?: boolean;
+    mediaHasVideo?: boolean;
+    mediaHasAudio?: boolean;
+    mediaPeerConnectionState?: string | null;
+    mediaErrorCode?: string | null;
     localCanOpen?: boolean;
     localCanInput?: boolean;
     xrKeyboardToggleVisible?: boolean;
@@ -433,4 +439,39 @@ test("M1.7 VR keyboard toggles, switches layout, and sends remote browser key in
     timeout: 10000,
     intervals: [250, 500, 1000]
   }).toEqual({ lastKey: "key-ru-ef", pressed: "key-ru-ef", advanced: true });
+});
+
+test("M1.7 remote browser streams page video and audio over media transport", async ({ page }) => {
+  test.setTimeout(90000);
+  const roomId = `m1-remote-browser-media-${Date.now()}`;
+  await page.goto(`/rooms/${roomId}?role=host&debug=1`);
+  await waitForKernel(page);
+
+  await expect(page.locator("#open-remote-browser")).toBeEnabled();
+  await page.fill("#remote-browser-url", "/remote-browser-media-demo.html");
+  await page.click("#open-remote-browser");
+
+  await expect.poll(async () => {
+    const debug = await readDebug(page);
+    return {
+      active: debug?.remoteBrowser?.active ?? false,
+      status: debug?.remoteBrowser?.status ?? null,
+      frameConnected: debug?.remoteBrowser?.frameConnected ?? false,
+      mediaState: debug?.remoteBrowser?.mediaState ?? null,
+      mediaConnected: debug?.remoteBrowser?.mediaConnected ?? false,
+      mediaHasVideo: debug?.remoteBrowser?.mediaHasVideo ?? false,
+      mediaHasAudio: debug?.remoteBrowser?.mediaHasAudio ?? false
+    };
+  }, {
+    timeout: 45000,
+    intervals: [500, 1000, 2000]
+  }).toEqual({
+    active: true,
+    status: "active",
+    frameConnected: true,
+    mediaState: "connected",
+    mediaConnected: true,
+    mediaHasVideo: true,
+    mediaHasAudio: true
+  });
 });
