@@ -402,6 +402,10 @@ const bodyGeometry = new THREE.CapsuleGeometry(0.24, 0.8, 6, 12);
 const headGeometry = new THREE.SphereGeometry(0.18, 20, 20);
 const API_PRESENCE_SYNC_INTERVAL_MS = 1000;
 const API_PRESENCE_REFRESH_INTERVAL_MS = 1000;
+const XR_REMOTE_BROWSER_SCROLL_AXIS_THRESHOLD = 0.22;
+const XR_REMOTE_BROWSER_SCROLL_INTERVAL_MS = 80;
+const XR_REMOTE_BROWSER_SCROLL_DELTA_PX = 360;
+const XR_REMOTE_BROWSER_KEYBOARD_RAY_END_OFFSET_M = 0.3;
 
 const keyState: Record<string, boolean> = {};
 let pointerActive = false;
@@ -412,6 +416,7 @@ let xrWhiteboardPointerActive = false;
 let lastXrWhiteboardHit: ResolvedSurfaceHit | null = null;
 let xrRemoteBrowserPointerActive = false;
 let lastXrRemoteBrowserHit: ResolvedSurfaceHit | null = null;
+let lastXrRemoteBrowserScrollAtMs = 0;
 let remoteBrowserVrKeyboardOpen = false;
 let remoteBrowserVrKeyboardPress: RemoteBrowserVrKeyboardHit | null = null;
 let pointerMovedSinceDown = false;
@@ -1771,8 +1776,32 @@ function showRemoteBrowserVrKeyboardRay(ray: THREE.Ray, hit: RemoteBrowserVrKeyb
     point: hit.point,
     targetKind: "keyboard",
     color: 0xff8c42,
-    visualEndOffsetM: 0.08,
+    visualEndOffsetM: XR_REMOTE_BROWSER_KEYBOARD_RAY_END_OFFSET_M,
     showReticle: false
+  });
+}
+
+function commitRemoteBrowserXrScrollInput(frameContext: RuntimeFrameContext, hit: ResolvedSurfaceHit | null, triggerPressed: boolean): boolean {
+  if (!hit || triggerPressed) {
+    return false;
+  }
+  const axis = frameContext.xr?.sanitizedAxes.turnY ?? 0;
+  if (Math.abs(axis) < XR_REMOTE_BROWSER_SCROLL_AXIS_THRESHOLD) {
+    return false;
+  }
+  if (frameContext.nowMs - lastXrRemoteBrowserScrollAtMs < XR_REMOTE_BROWSER_SCROLL_INTERVAL_MS) {
+    return false;
+  }
+  lastXrRemoteBrowserScrollAtMs = frameContext.nowMs;
+  return commitDebugSurfaceInput({
+    hit,
+    source: "xr-controller",
+    kind: "scroll",
+    clientTimeMs: frameContext.nowMs,
+    scrollDelta: {
+      x: 0,
+      y: clampScrollDeltaPx(axis * XR_REMOTE_BROWSER_SCROLL_DELTA_PX)
+    }
   });
 }
 
@@ -1857,6 +1886,7 @@ function updateRemoteBrowserXrInput(frameContext: RuntimeFrameContext): boolean 
   } else if (target && surfaceHit) {
     showRemoteBrowserXrSurfaceRay(target.ray, surfaceHit);
   }
+  const scrollCommitted = commitRemoteBrowserXrScrollInput(frameContext, surfaceHit, triggerPressed);
   const plan = planRemoteBrowserXrPointer({
     browserActive,
     pointerActive: xrRemoteBrowserPointerActive,
@@ -1885,7 +1915,7 @@ function updateRemoteBrowserXrInput(frameContext: RuntimeFrameContext): boolean 
     remoteBrowserVrKeyboardPress = keyboardHit;
     handleRemoteBrowserVrKeyboardHit(keyboardHit, frameContext.nowMs);
   }
-  return Boolean(visibleKeyboardHit || surfaceHit) || pointerWasActive || xrRemoteBrowserPointerActive;
+  return Boolean(visibleKeyboardHit || surfaceHit) || pointerWasActive || xrRemoteBrowserPointerActive || scrollCommitted;
 }
 
 function formatDeviceLabel(device: MediaDeviceInfo, fallbackLabel: string, index: number): string {
@@ -2603,6 +2633,7 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
     }) => boolean;
     setDebugSurfaceInputEnabled: (enabled: boolean) => boolean;
     focusDebugSurface: () => boolean;
+    getDebugSurfaceWorldPosition: (u: number, v: number) => { x: number; y: number; z: number } | null;
     getRemoteBrowserVrKeyboardTargetWorldPosition: (targetId: string) => { x: number; y: number; z: number } | null;
     getRemoteBrowserVrKeyboardKeyWorldPosition: (keyId: string) => { x: number; y: number; z: number } | null;
     teleportToFloor: (x: number, z: number) => boolean;
@@ -2886,6 +2917,22 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
     });
     recordSurfaceInputHit(debugState.surfaceInput, hit);
     return tryFocusSurface({ state: debugState.surfaceInput, permissions: debugState.access.permissions, hit }) === null;
+  },
+  getDebugSurfaceWorldPosition: (u, v) => {
+    if (!Number.isFinite(u) || !Number.isFinite(v)) {
+      return null;
+    }
+    displaySurface.updateMatrixWorld(true);
+    const position = displaySurface.localToWorld(new THREE.Vector3(
+      (Math.max(0, Math.min(1, u)) - 0.5) * DEBUG_SURFACE_WIDTH_M,
+      (Math.max(0, Math.min(1, v)) - 0.5) * DEBUG_SURFACE_HEIGHT_M,
+      0
+    ));
+    return {
+      x: position.x,
+      y: position.y,
+      z: position.z
+    };
   },
   getRemoteBrowserVrKeyboardTargetWorldPosition: (targetId) => {
     const mesh = targetId === "toggle" ? remoteBrowserVrKeyboardView.toggleMesh : remoteBrowserVrKeyboardView.meshById.get(targetId);

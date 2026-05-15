@@ -26,8 +26,8 @@ export function planRemoteBrowserXrPointer(input: RemoteBrowserXrPointerPlanInpu
 
   if (!input.pointerActive) {
     return {
-      kind: input.confirmInteraction && input.hasHit ? "pointer-down" : null,
-      nextPointerActive: input.confirmInteraction && input.hasHit,
+      kind: input.confirmInteraction && input.hasHit ? "click" : null,
+      nextPointerActive: false,
       useLastHit: false
     };
   }

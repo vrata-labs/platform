@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { planRemoteBrowserXrPointer } from "./remote-browser-xr-input.js";
 
-test("remote browser XR trigger starts a pointer press on surface hit", () => {
+test("remote browser XR trigger clicks a surface hit atomically", () => {
   assert.deepEqual(planRemoteBrowserXrPointer({
     browserActive: true,
     pointerActive: false,
@@ -12,8 +12,8 @@ test("remote browser XR trigger starts a pointer press on surface hit", () => {
     hasHit: true,
     hasLastHit: false
   }), {
-    kind: "pointer-down",
-    nextPointerActive: true,
+    kind: "click",
+    nextPointerActive: false,
     useLastHit: false
   });
 });

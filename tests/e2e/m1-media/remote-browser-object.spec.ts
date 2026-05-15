@@ -74,6 +74,7 @@ async function setSyntheticXrState(page: Page, input: {
   rightController: { x: number; y: number; z: number };
   rayDirection: { x: number; y: number; z: number };
   triggerPressed: boolean;
+  axes?: { moveX?: number; moveY?: number; turnX?: number; turnY?: number };
   rayVisible?: boolean;
 }) {
   const sent = await page.evaluate((value) => (window as Window & {
@@ -81,12 +82,21 @@ async function setSyntheticXrState(page: Page, input: {
       setSyntheticXrState: (state: {
         rightController: { x: number; y: number; z: number };
         rayDirection: { x: number; y: number; z: number };
+        axes?: { moveX?: number; moveY?: number; turnX?: number; turnY?: number };
         triggerPressed?: boolean;
         rayVisible?: boolean;
       } | null) => boolean;
     };
   }).__NOAH_TEST__?.setSyntheticXrState(value) ?? false, input);
   expect(sent).toBe(true);
+}
+
+async function getDebugSurfaceWorldPosition(page: Page, u: number, v: number): Promise<{ x: number; y: number; z: number }> {
+  const position = await page.evaluate((value) => (window as Window & {
+    __NOAH_TEST__?: { getDebugSurfaceWorldPosition: (u: number, v: number) => { x: number; y: number; z: number } | null };
+  }).__NOAH_TEST__?.getDebugSurfaceWorldPosition(value.u, value.v) ?? null, { u, v });
+  expect(position).not.toBeNull();
+  return position!;
 }
 
 async function getKeyboardTargetWorldPosition(page: Page, targetId: string): Promise<{ x: number; y: number; z: number }> {
@@ -164,6 +174,101 @@ test("M1.7 host opens remote browser and routes input through room-state", async
     timeout: 10000,
     intervals: [500, 1000]
   }).toBe(false);
+});
+
+test("M1.7 VR surface click and stick scroll route to the remote browser", async ({ page }) => {
+  test.setTimeout(60000);
+  const roomId = `m1-remote-browser-vr-surface-${Date.now()}`;
+  await page.goto(`/rooms/${roomId}?role=host&debug=1&avatarvrmock=1`);
+  await waitForKernel(page);
+
+  await expect(page.locator("#open-remote-browser")).toBeEnabled();
+  await page.fill("#remote-browser-url", "/remote-browser-demo.html");
+  await page.click("#open-remote-browser");
+
+  await expect.poll(async () => {
+    const debug = await readDebug(page);
+    return {
+      active: debug?.remoteBrowser?.active ?? false,
+      status: debug?.remoteBrowser?.status ?? null,
+      frameConnected: debug?.remoteBrowser?.frameConnected ?? false,
+      hasFrame: (debug?.remoteBrowser?.lastFrameAtMs ?? 0) > 0
+    };
+  }, {
+    timeout: 30000,
+    intervals: [500, 1000, 2000]
+  }).toEqual({
+    active: true,
+    status: "active",
+    frameConnected: true,
+    hasFrame: true
+  });
+
+  const origin = { x: 0, y: 2.2, z: 0 };
+  const incrementTarget = await getDebugSurfaceWorldPosition(page, 0.1, 0.78);
+  const incrementRayDirection = directionTo(origin, incrementTarget);
+  await setSyntheticXrState(page, {
+    rightController: origin,
+    rayDirection: incrementRayDirection,
+    triggerPressed: false,
+    rayVisible: true
+  });
+
+  await expect.poll(async () => (await readDebug(page))?.interactionRay?.targetKind ?? null, {
+    timeout: 10000,
+    intervals: [100, 250, 500]
+  }).toBe("surface");
+
+  const previousClickSeq = (await readDebug(page))?.remoteBrowser?.lastInputSeq ?? 0;
+  await setSyntheticXrState(page, {
+    rightController: origin,
+    rayDirection: incrementRayDirection,
+    triggerPressed: true,
+    rayVisible: true
+  });
+
+  await expect.poll(async () => {
+    const debug = await readDebug(page);
+    return {
+      advanced: (debug?.remoteBrowser?.lastInputSeq ?? 0) > previousClickSeq,
+      eventKind: debug?.surfaceInput?.lastEvent?.kind ?? null,
+      target: debug?.interactionRay?.targetKind ?? null
+    };
+  }, {
+    timeout: 10000,
+    intervals: [100, 250, 500]
+  }).toEqual({ advanced: true, eventKind: "click", target: "surface" });
+
+  const scrollTarget = await getDebugSurfaceWorldPosition(page, 0.5, 0.5);
+  const scrollRayDirection = directionTo(origin, scrollTarget);
+  await setSyntheticXrState(page, {
+    rightController: origin,
+    rayDirection: scrollRayDirection,
+    triggerPressed: false,
+    rayVisible: true
+  });
+
+  const previousScrollSeq = (await readDebug(page))?.remoteBrowser?.lastInputSeq ?? 0;
+  await setSyntheticXrState(page, {
+    rightController: origin,
+    rayDirection: scrollRayDirection,
+    triggerPressed: false,
+    axes: { turnY: 0.8 },
+    rayVisible: true
+  });
+
+  await expect.poll(async () => {
+    const debug = await readDebug(page);
+    const delta = debug?.surfaceInput?.lastEvent?.scrollDelta ?? null;
+    return {
+      advanced: (debug?.remoteBrowser?.lastInputSeq ?? 0) > previousScrollSeq,
+      eventKind: debug?.surfaceInput?.lastEvent?.kind ?? null,
+      scrollsDown: typeof delta?.y === "number" && delta.y > 0
+    };
+  }, {
+    timeout: 10000,
+    intervals: [100, 250, 500]
+  }).toEqual({ advanced: true, eventKind: "scroll", scrollsDown: true });
 });
 
 test("M1.7 VR keyboard toggles, switches layout, and sends remote browser key input", async ({ page }) => {

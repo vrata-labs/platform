@@ -145,14 +145,14 @@ test("showInteractionRayPointView can stop visuals before the target point", () 
     point: new THREE.Vector3(0, 1, -3),
     targetKind: "keyboard",
     mode: "xr-right-stick",
-    visualEndOffsetM: 0.1,
+    visualEndOffsetM: 0.3,
     showReticle: false
   });
 
   assert.equal(view.line.visible, true);
   assert.equal(view.beam.visible, true);
   assert.equal(view.reticle.visible, false);
-  assert.deepEqual(view.end.toArray(), [0, 1, -2.9]);
+  assert.deepEqual(view.end.toArray(), [0, 1, -2.7]);
   assert.deepEqual(state.point, { x: 0, y: 1, z: -3 });
   assert.equal(state.targetKind, "keyboard");
 });
