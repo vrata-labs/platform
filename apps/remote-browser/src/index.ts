@@ -16,6 +16,7 @@ interface RemoteBrowserSession {
   page: Page;
   clients: Set<WebSocket>;
   frameTimer: ReturnType<typeof setInterval>;
+  frameCaptureInFlight: boolean;
   lastFrameAtMs: number;
 }
 
@@ -123,12 +124,17 @@ function broadcastFrame(session: RemoteBrowserSession, dataUrl: string): void {
 }
 
 async function captureFrame(session: RemoteBrowserSession): Promise<void> {
-  if (session.clients.size === 0) {
+  if (session.clients.size === 0 || session.frameCaptureInFlight) {
     return;
   }
-  const buffer = await session.page.screenshot({ type: "jpeg", quality: 60, animations: "disabled" });
-  session.lastFrameAtMs = Date.now();
-  broadcastFrame(session, `data:image/jpeg;base64,${buffer.toString("base64")}`);
+  session.frameCaptureInFlight = true;
+  try {
+    const buffer = await session.page.screenshot({ type: "jpeg", quality: 60, animations: "disabled" });
+    session.lastFrameAtMs = Date.now();
+    broadcastFrame(session, `data:image/jpeg;base64,${buffer.toString("base64")}`);
+  } finally {
+    session.frameCaptureInFlight = false;
+  }
 }
 
 async function installRequestGuard(page: Page, policy: RemoteBrowserUrlPolicy): Promise<void> {
@@ -209,6 +215,7 @@ async function createSession(input: { sessionId: string; frameStreamId: string; 
     frameTimer: setInterval(() => {
       void captureFrame(session).catch(() => undefined);
     }, frameIntervalMs),
+    frameCaptureInFlight: false,
     lastFrameAtMs: 0
   };
   sessions.set(input.sessionId, session);
