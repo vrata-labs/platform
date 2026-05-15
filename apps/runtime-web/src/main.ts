@@ -57,11 +57,15 @@ import { routeMediaObjectSurfaceInput } from "./media/media-object-router.js";
 import { createRemoteBrowserObjectRuntime } from "./media/remote-browser-object.js";
 import {
   createRemoteBrowserVrKeyboardView,
+  cycleRemoteBrowserVrKeyboardLayout,
   planRemoteBrowserVrKeyboardInput,
   resolveRemoteBrowserVrKeyboardHit,
-  setRemoteBrowserVrKeyboardHover,
-  setRemoteBrowserVrKeyboardVisible,
-  type RemoteBrowserVrKeyboardHit
+  setRemoteBrowserVrKeyboardActive,
+  setRemoteBrowserVrKeyboardOpen,
+  setRemoteBrowserVrKeyboardTargets,
+  targetFromRemoteBrowserVrKeyboardHit,
+  type RemoteBrowserVrKeyboardHit,
+  type RemoteBrowserVrKeyboardTarget
 } from "./media/remote-browser-vr-keyboard.js";
 import { planRemoteBrowserXrPointer } from "./media/remote-browser-xr-input.js";
 import { getScreenShareErrorCode } from "./media/screen-share-object.js";
@@ -407,6 +411,8 @@ let xrWhiteboardPointerActive = false;
 let lastXrWhiteboardHit: ResolvedSurfaceHit | null = null;
 let xrRemoteBrowserPointerActive = false;
 let lastXrRemoteBrowserHit: ResolvedSurfaceHit | null = null;
+let remoteBrowserVrKeyboardOpen = false;
+let remoteBrowserVrKeyboardPress: RemoteBrowserVrKeyboardHit | null = null;
 let pointerMovedSinceDown = false;
 let suppressPointerClick = false;
 let pointerHoveringScene = false;
@@ -1659,11 +1665,25 @@ function isRemoteBrowserXrInputActive(frameContext: RuntimeFrameContext): boolea
     && displaySurface.visible;
 }
 
+function remoteBrowserVrKeyboardTargetDebugId(target: RemoteBrowserVrKeyboardTarget | null): string | null {
+  return target?.kind === "toggle" ? "toggle" : target?.keyId ?? null;
+}
+
 function syncRemoteBrowserVrKeyboardState(active: boolean): void {
-  setRemoteBrowserVrKeyboardVisible(remoteBrowserVrKeyboardView, active);
-  debugState.remoteBrowser.xrKeyboardVisible = active;
+  if (!active) {
+    remoteBrowserVrKeyboardOpen = false;
+    remoteBrowserVrKeyboardPress = null;
+  }
+  setRemoteBrowserVrKeyboardActive(remoteBrowserVrKeyboardView, active);
+  setRemoteBrowserVrKeyboardOpen(remoteBrowserVrKeyboardView, active && remoteBrowserVrKeyboardOpen);
+  debugState.remoteBrowser.xrKeyboardToggleVisible = active;
+  debugState.remoteBrowser.xrKeyboardVisible = active && remoteBrowserVrKeyboardOpen;
+  debugState.remoteBrowser.xrKeyboardOpen = active && remoteBrowserVrKeyboardOpen;
+  debugState.remoteBrowser.xrKeyboardLayout = remoteBrowserVrKeyboardView.currentLayoutId;
   if (!active) {
     debugState.remoteBrowser.xrKeyboardHoveredKey = null;
+    debugState.remoteBrowser.xrKeyboardHoveredTarget = null;
+    debugState.remoteBrowser.xrKeyboardPressedTarget = null;
   }
 }
 
@@ -1693,7 +1713,7 @@ function resolveRemoteBrowserXrInputTarget(frameContext: RuntimeFrameContext): {
     ray: resolvedRay.ray,
     raycaster: remoteBrowserVrKeyboardRaycaster
   });
-  const surfaceHit = resolveDebugSurfaceHit(resolvedRay.ray, "xr-controller");
+  const surfaceHit = keyboardHit ? null : resolveDebugSurfaceHit(resolvedRay.ray, "xr-controller");
   return keyboardHit || surfaceHit
     ? { ray: resolvedRay.ray, keyboardHit, surfaceHit }
     : null;
@@ -1763,27 +1783,59 @@ function commitRemoteBrowserVrKeyboardInput(input: { keyId: string | null; key?:
   return committed;
 }
 
+function handleRemoteBrowserVrKeyboardHit(hit: RemoteBrowserVrKeyboardHit, nowMs: number): boolean {
+  const plan = planRemoteBrowserVrKeyboardInput({
+    keyboardActive: true,
+    confirmInteraction: true,
+    hit
+  });
+  if (plan.toggleKeyboard) {
+    remoteBrowserVrKeyboardOpen = !remoteBrowserVrKeyboardOpen;
+    syncRemoteBrowserVrKeyboardState(true);
+    debugState.remoteBrowser.xrKeyboardLastKey = "toggle";
+    return true;
+  }
+  if (plan.layoutNext) {
+    const layoutId = cycleRemoteBrowserVrKeyboardLayout(remoteBrowserVrKeyboardView);
+    debugState.remoteBrowser.xrKeyboardLayout = layoutId;
+    debugState.remoteBrowser.xrKeyboardLastKey = plan.keyId;
+    return true;
+  }
+  return commitRemoteBrowserVrKeyboardInput(plan, nowMs);
+}
+
 function updateRemoteBrowserXrInput(frameContext: RuntimeFrameContext): boolean {
   const pointerWasActive = xrRemoteBrowserPointerActive;
   const browserActive = isRemoteBrowserXrInputActive(frameContext);
+  const triggerPressed = Boolean(frameContext.xr?.triggerPressed);
+  if (!triggerPressed && remoteBrowserVrKeyboardPress) {
+    remoteBrowserVrKeyboardPress = null;
+  }
   const target = browserActive ? resolveRemoteBrowserXrInputTarget(frameContext) : null;
   if (!browserActive) {
     syncRemoteBrowserVrKeyboardState(false);
   }
   const keyboardHit = target?.keyboardHit ?? null;
-  const surfaceHit = keyboardHit ? null : target?.surfaceHit ?? null;
-  setRemoteBrowserVrKeyboardHover(remoteBrowserVrKeyboardView, keyboardHit?.key.id ?? null);
-  debugState.remoteBrowser.xrKeyboardHoveredKey = keyboardHit?.key.id ?? null;
-  if (target && keyboardHit) {
-    showRemoteBrowserVrKeyboardRay(target.ray, keyboardHit);
+  const visibleKeyboardHit = remoteBrowserVrKeyboardPress ?? keyboardHit;
+  const pressedTarget = targetFromRemoteBrowserVrKeyboardHit(remoteBrowserVrKeyboardPress);
+  const hoveredTarget = targetFromRemoteBrowserVrKeyboardHit(keyboardHit);
+  const surfaceHit = visibleKeyboardHit ? null : target?.surfaceHit ?? null;
+  const fallbackRay = !target && remoteBrowserVrKeyboardPress && browserActive ? resolveRemoteBrowserXrRay(frameContext) : null;
+  const ray = target?.ray ?? fallbackRay?.ray ?? null;
+  setRemoteBrowserVrKeyboardTargets(remoteBrowserVrKeyboardView, hoveredTarget, pressedTarget);
+  debugState.remoteBrowser.xrKeyboardHoveredKey = keyboardHit?.kind === "key" ? keyboardHit.key.id : null;
+  debugState.remoteBrowser.xrKeyboardHoveredTarget = remoteBrowserVrKeyboardTargetDebugId(hoveredTarget);
+  debugState.remoteBrowser.xrKeyboardPressedTarget = remoteBrowserVrKeyboardTargetDebugId(pressedTarget);
+  if (ray && visibleKeyboardHit) {
+    showRemoteBrowserVrKeyboardRay(ray, visibleKeyboardHit);
   } else if (target && surfaceHit) {
     showRemoteBrowserXrSurfaceRay(target.ray, surfaceHit);
   }
   const plan = planRemoteBrowserXrPointer({
     browserActive,
     pointerActive: xrRemoteBrowserPointerActive,
-    triggerPressed: Boolean(frameContext.xr?.triggerPressed),
-    confirmInteraction: keyboardHit ? false : frameContext.intents.confirmInteraction,
+    triggerPressed,
+    confirmInteraction: visibleKeyboardHit ? false : frameContext.intents.confirmInteraction,
     hasHit: Boolean(surfaceHit),
     hasLastHit: Boolean(lastXrRemoteBrowserHit)
   });
@@ -1803,14 +1855,11 @@ function updateRemoteBrowserXrInput(frameContext: RuntimeFrameContext): boolean 
   } else if (!xrRemoteBrowserPointerActive) {
     lastXrRemoteBrowserHit = null;
   }
-  if (!xrRemoteBrowserPointerActive && keyboardHit) {
-    commitRemoteBrowserVrKeyboardInput(planRemoteBrowserVrKeyboardInput({
-      keyboardActive: browserActive,
-      confirmInteraction: frameContext.intents.confirmInteraction,
-      hoveredKey: keyboardHit.key
-    }), frameContext.nowMs);
+  if (!xrRemoteBrowserPointerActive && keyboardHit && frameContext.intents.confirmInteraction && !remoteBrowserVrKeyboardPress) {
+    remoteBrowserVrKeyboardPress = keyboardHit;
+    handleRemoteBrowserVrKeyboardHit(keyboardHit, frameContext.nowMs);
   }
-  return Boolean(keyboardHit || surfaceHit) || pointerWasActive || xrRemoteBrowserPointerActive;
+  return Boolean(visibleKeyboardHit || surfaceHit) || pointerWasActive || xrRemoteBrowserPointerActive;
 }
 
 function formatDeviceLabel(device: MediaDeviceInfo, fallbackLabel: string, index: number): string {
@@ -2317,8 +2366,13 @@ const debugState = {
     localHasControl: false,
     lastInputSeq: 0,
     errorCode: null as RemoteBrowserErrorCode | string | null,
+    xrKeyboardToggleVisible: false,
     xrKeyboardVisible: false,
+    xrKeyboardOpen: false,
+    xrKeyboardLayout: "en-US" as string,
     xrKeyboardHoveredKey: null as string | null,
+    xrKeyboardHoveredTarget: null as string | null,
+    xrKeyboardPressedTarget: null as string | null,
     xrKeyboardLastKey: null as string | null
   },
   surfaceAudio: {
@@ -2522,6 +2576,7 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
     }) => boolean;
     setDebugSurfaceInputEnabled: (enabled: boolean) => boolean;
     focusDebugSurface: () => boolean;
+    getRemoteBrowserVrKeyboardTargetWorldPosition: (targetId: string) => { x: number; y: number; z: number } | null;
     getRemoteBrowserVrKeyboardKeyWorldPosition: (keyId: string) => { x: number; y: number; z: number } | null;
     teleportToFloor: (x: number, z: number) => boolean;
     forceXrInteractionAtSeat: (seatId: string) => boolean;
@@ -2804,8 +2859,8 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
     recordSurfaceInputHit(debugState.surfaceInput, hit);
     return tryFocusSurface({ state: debugState.surfaceInput, permissions: debugState.access.permissions, hit }) === null;
   },
-  getRemoteBrowserVrKeyboardKeyWorldPosition: (keyId) => {
-    const mesh = remoteBrowserVrKeyboardView.meshById.get(keyId);
+  getRemoteBrowserVrKeyboardTargetWorldPosition: (targetId) => {
+    const mesh = targetId === "toggle" ? remoteBrowserVrKeyboardView.toggleMesh : remoteBrowserVrKeyboardView.meshById.get(targetId);
     if (!mesh) {
       return null;
     }
@@ -2817,6 +2872,11 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
       y: position.y,
       z: position.z
     };
+  },
+  getRemoteBrowserVrKeyboardKeyWorldPosition: (keyId) => {
+    return (window as Window & {
+      __NOAH_TEST__?: { getRemoteBrowserVrKeyboardTargetWorldPosition: (targetId: string) => { x: number; y: number; z: number } | null };
+    }).__NOAH_TEST__?.getRemoteBrowserVrKeyboardTargetWorldPosition(keyId) ?? null;
   },
   forceXrInteractionAtSeat: (seatId: string) => {
     const seatAnchor = sceneSeatAnchorMap.get(seatId);

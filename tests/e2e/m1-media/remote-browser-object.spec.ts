@@ -12,8 +12,13 @@ type RemoteBrowserDebug = {
     lastInputSeq?: number;
     localCanOpen?: boolean;
     localCanInput?: boolean;
+    xrKeyboardToggleVisible?: boolean;
     xrKeyboardVisible?: boolean;
+    xrKeyboardOpen?: boolean;
+    xrKeyboardLayout?: string | null;
     xrKeyboardHoveredKey?: string | null;
+    xrKeyboardHoveredTarget?: string | null;
+    xrKeyboardPressedTarget?: string | null;
     xrKeyboardLastKey?: string | null;
     errorCode?: string | null;
   };
@@ -25,6 +30,7 @@ type RemoteBrowserDebug = {
     }>;
     blockedReason?: string | null;
   };
+  interactionRay?: { targetKind?: string | null };
 };
 
 async function readDebug(page: Page): Promise<RemoteBrowserDebug | undefined> {
@@ -77,10 +83,10 @@ async function setSyntheticXrState(page: Page, input: {
   expect(sent).toBe(true);
 }
 
-async function getKeyboardKeyWorldPosition(page: Page, keyId: string): Promise<{ x: number; y: number; z: number }> {
+async function getKeyboardTargetWorldPosition(page: Page, targetId: string): Promise<{ x: number; y: number; z: number }> {
   const position = await page.evaluate((id) => (window as Window & {
-    __NOAH_TEST__?: { getRemoteBrowserVrKeyboardKeyWorldPosition: (keyId: string) => { x: number; y: number; z: number } | null };
-  }).__NOAH_TEST__?.getRemoteBrowserVrKeyboardKeyWorldPosition(id) ?? null, keyId);
+    __NOAH_TEST__?: { getRemoteBrowserVrKeyboardTargetWorldPosition: (targetId: string) => { x: number; y: number; z: number } | null };
+  }).__NOAH_TEST__?.getRemoteBrowserVrKeyboardTargetWorldPosition(id) ?? null, targetId);
   expect(position).not.toBeNull();
   return position!;
 }
@@ -140,7 +146,7 @@ test("M1.7 host opens remote browser and routes input through room-state", async
   }).toBe(false);
 });
 
-test("M1.7 VR keyboard sends remote browser key input", async ({ page }) => {
+test("M1.7 VR keyboard toggles, switches layout, and sends remote browser key input", async ({ page }) => {
   test.setTimeout(60000);
   const roomId = `m1-remote-browser-vr-keyboard-${Date.now()}`;
   await page.goto(`/rooms/${roomId}?role=host&debug=1&avatarvrmock=1`);
@@ -169,8 +175,28 @@ test("M1.7 VR keyboard sends remote browser key input", async ({ page }) => {
   });
 
   const origin = { x: 0, y: 2.2, z: 0 };
-  const target = await getKeyboardKeyWorldPosition(page, "key-h");
-  const rayDirection = directionTo(origin, target);
+  await setSyntheticXrState(page, {
+    rightController: origin,
+    rayDirection: { x: 0, y: 0, z: -1 },
+    triggerPressed: false,
+    rayVisible: false
+  });
+
+  await expect.poll(async () => {
+    const debug = await readDebug(page);
+    return {
+      toggleVisible: debug?.remoteBrowser?.xrKeyboardToggleVisible ?? false,
+      keyboardVisible: debug?.remoteBrowser?.xrKeyboardVisible ?? true,
+      keyboardOpen: debug?.remoteBrowser?.xrKeyboardOpen ?? true,
+      layout: debug?.remoteBrowser?.xrKeyboardLayout ?? null
+    };
+  }, {
+    timeout: 10000,
+    intervals: [100, 250, 500]
+  }).toEqual({ toggleVisible: true, keyboardVisible: false, keyboardOpen: false, layout: "en-US" });
+
+  let target = await getKeyboardTargetWorldPosition(page, "toggle");
+  let rayDirection = directionTo(origin, target);
   await setSyntheticXrState(page, {
     rightController: origin,
     rayDirection,
@@ -181,15 +207,89 @@ test("M1.7 VR keyboard sends remote browser key input", async ({ page }) => {
   await expect.poll(async () => {
     const debug = await readDebug(page);
     return {
-      visible: debug?.remoteBrowser?.xrKeyboardVisible ?? false,
-      hovered: debug?.remoteBrowser?.xrKeyboardHoveredKey ?? null
+      hovered: debug?.remoteBrowser?.xrKeyboardHoveredTarget ?? null,
+      target: debug?.interactionRay?.targetKind ?? null
     };
   }, {
     timeout: 10000,
     intervals: [100, 250, 500]
-  }).toEqual({ visible: true, hovered: "key-h" });
+  }).toEqual({ hovered: "toggle", target: "keyboard" });
+
+  await setSyntheticXrState(page, {
+    rightController: origin,
+    rayDirection,
+    triggerPressed: true,
+    rayVisible: true
+  });
+
+  await expect.poll(async () => {
+    const debug = await readDebug(page);
+    return {
+      visible: debug?.remoteBrowser?.xrKeyboardVisible ?? false,
+      open: debug?.remoteBrowser?.xrKeyboardOpen ?? false,
+      pressed: debug?.remoteBrowser?.xrKeyboardPressedTarget ?? null,
+      lastKey: debug?.remoteBrowser?.xrKeyboardLastKey ?? null
+    };
+  }, {
+    timeout: 10000,
+    intervals: [100, 250, 500]
+  }).toEqual({ visible: true, open: true, pressed: "toggle", lastKey: "toggle" });
+
+  await setSyntheticXrState(page, {
+    rightController: origin,
+    rayDirection,
+    triggerPressed: false,
+    rayVisible: true
+  });
+
+  target = await getKeyboardTargetWorldPosition(page, "key-layout-next");
+  rayDirection = directionTo(origin, target);
+  await setSyntheticXrState(page, {
+    rightController: origin,
+    rayDirection,
+    triggerPressed: false,
+    rayVisible: true
+  });
+
+  await expect.poll(async () => (await readDebug(page))?.remoteBrowser?.xrKeyboardHoveredTarget ?? null, {
+    timeout: 10000,
+    intervals: [100, 250, 500]
+  }).toBe("key-layout-next");
+
+  await setSyntheticXrState(page, {
+    rightController: origin,
+    rayDirection,
+    triggerPressed: true,
+    rayVisible: true
+  });
+
+  await expect.poll(async () => (await readDebug(page))?.remoteBrowser?.xrKeyboardLayout ?? null, {
+    timeout: 10000,
+    intervals: [100, 250, 500]
+  }).toBe("ru-RU");
+
+  await setSyntheticXrState(page, {
+    rightController: origin,
+    rayDirection,
+    triggerPressed: false,
+    rayVisible: true
+  });
 
   const previousSeq = (await readDebug(page))?.remoteBrowser?.lastInputSeq ?? 0;
+  target = await getKeyboardTargetWorldPosition(page, "key-ru-ef");
+  rayDirection = directionTo(origin, target);
+  await setSyntheticXrState(page, {
+    rightController: origin,
+    rayDirection,
+    triggerPressed: false,
+    rayVisible: true
+  });
+
+  await expect.poll(async () => (await readDebug(page))?.remoteBrowser?.xrKeyboardHoveredTarget ?? null, {
+    timeout: 10000,
+    intervals: [100, 250, 500]
+  }).toBe("key-ru-ef");
+
   await setSyntheticXrState(page, {
     rightController: origin,
     rayDirection,
@@ -201,10 +301,11 @@ test("M1.7 VR keyboard sends remote browser key input", async ({ page }) => {
     const debug = await readDebug(page);
     return {
       lastKey: debug?.remoteBrowser?.xrKeyboardLastKey ?? null,
+      pressed: debug?.remoteBrowser?.xrKeyboardPressedTarget ?? null,
       advanced: (debug?.remoteBrowser?.lastInputSeq ?? 0) > previousSeq
     };
   }, {
     timeout: 10000,
     intervals: [250, 500, 1000]
-  }).toEqual({ lastKey: "key-h", advanced: true });
+  }).toEqual({ lastKey: "key-ru-ef", pressed: "key-ru-ef", advanced: true });
 });
