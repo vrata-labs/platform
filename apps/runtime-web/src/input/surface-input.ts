@@ -9,6 +9,7 @@ import {
   type SurfaceInputHitDebug,
   type SurfaceInputKind,
   type SurfaceInputPixel,
+  type SurfaceInputScrollDelta,
   type SurfaceInputSource,
   type SurfaceInputUv
 } from "@noah/shared-types";
@@ -42,6 +43,16 @@ function clampPixel(value: number, maxExclusive: number): number {
 
 function roundSurfaceNumber(value: number): number {
   return Number(value.toFixed(4));
+}
+
+function normalizeScrollDelta(delta: SurfaceInputScrollDelta | undefined): SurfaceInputScrollDelta | undefined {
+  if (!delta || !Number.isFinite(delta.x) || !Number.isFinite(delta.y)) {
+    return undefined;
+  }
+  return {
+    x: roundSurfaceNumber(delta.x),
+    y: roundSurfaceNumber(delta.y)
+  };
 }
 
 export function createSurfaceInputDebugState(debugSurfaceId: string): SurfaceInputDebugState {
@@ -188,6 +199,7 @@ export function resolveSurfaceInputEvent(input: {
   pressure?: number;
   key?: string;
   text?: string;
+  scrollDelta?: SurfaceInputScrollDelta;
 }): SurfaceInputResolution {
   if (!input.hit) {
     return { accepted: false, blockedReason: "missing-hit" };
@@ -220,6 +232,7 @@ export function resolveSurfaceInputEvent(input: {
     pressure: input.pressure,
     key: input.key,
     text: input.text,
+    scrollDelta: input.kind === "scroll" ? normalizeScrollDelta(input.scrollDelta) : undefined,
     clientTimeMs: input.clientTimeMs,
     seq: input.seq
   };

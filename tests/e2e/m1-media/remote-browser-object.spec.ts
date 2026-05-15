@@ -30,6 +30,12 @@ type RemoteBrowserDebug = {
     }>;
     blockedReason?: string | null;
   };
+  surfaceInput?: {
+    lastEvent?: {
+      kind?: string;
+      scrollDelta?: { x: number; y: number };
+    } | null;
+  };
   interactionRay?: { targetKind?: string | null };
 };
 
@@ -57,9 +63,9 @@ async function waitForKernel(page: Page) {
   });
 }
 
-async function sendSurfaceInput(page: Page, input: { kind: string; u?: number; v?: number }) {
+async function sendSurfaceInput(page: Page, input: { kind: string; u?: number; v?: number; scrollDelta?: { x: number; y: number } }) {
   const sent = await page.evaluate((value) => (window as Window & {
-    __NOAH_TEST__?: { sendDebugSurfaceInput: (input?: { kind?: string; u?: number; v?: number }) => boolean };
+    __NOAH_TEST__?: { sendDebugSurfaceInput: (input?: { kind?: string; u?: number; v?: number; scrollDelta?: { x: number; y: number } }) => boolean };
   }).__NOAH_TEST__?.sendDebugSurfaceInput(value) ?? false, input);
   expect(sent).toBe(true);
 }
@@ -137,6 +143,20 @@ test("M1.7 host opens remote browser and routes input through room-state", async
     timeout: 10000,
     intervals: [500, 1000]
   }).toBeGreaterThan(0);
+
+  const previousSeq = (await readDebug(page))?.remoteBrowser?.lastInputSeq ?? 0;
+  await sendSurfaceInput(page, { kind: "scroll", u: 0.5, v: 0.5, scrollDelta: { x: 0, y: -480 } });
+  await expect.poll(async () => {
+    const debug = await readDebug(page);
+    return {
+      advanced: (debug?.remoteBrowser?.lastInputSeq ?? 0) > previousSeq,
+      eventKind: debug?.surfaceInput?.lastEvent?.kind ?? null,
+      scrollDelta: debug?.surfaceInput?.lastEvent?.scrollDelta ?? null
+    };
+  }, {
+    timeout: 10000,
+    intervals: [500, 1000]
+  }).toEqual({ advanced: true, eventKind: "scroll", scrollDelta: { x: 0, y: -480 } });
 
   await expect(page.locator("#stop-remote-browser")).toBeEnabled();
   await page.click("#stop-remote-browser");

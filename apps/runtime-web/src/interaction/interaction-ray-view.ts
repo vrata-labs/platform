@@ -178,13 +178,20 @@ export function showInteractionRayPointView(input: {
   mode: InteractionRayMode;
   debug?: InteractionRayDebugSample | null;
   color?: number;
+  visualEndOffsetM?: number;
+  showReticle?: boolean;
   markTelemetry?: (kind: string) => void;
 }): void {
   const color = input.color ?? 0x00f6ff;
   const view = input.view;
+  const targetLength = input.point.distanceTo(input.ray.origin);
+  const visualEndOffsetM = Math.max(0, input.visualEndOffsetM ?? 0);
 
   view.points[0].copy(input.ray.origin);
   view.end.copy(input.point);
+  if (visualEndOffsetM > 0 && targetLength > visualEndOffsetM) {
+    view.end.addScaledVector(input.ray.direction, -visualEndOffsetM);
+  }
   view.points[1].copy(view.end);
   view.lineGeometry.setFromPoints(view.points);
 
@@ -203,7 +210,7 @@ export function showInteractionRayPointView(input: {
     view.beam.visible = false;
   }
 
-  view.reticle.visible = true;
+  view.reticle.visible = input.showReticle ?? true;
   view.reticle.position.copy(input.point);
   view.reticleMaterial.color.setHex(color);
   input.state.active = true;

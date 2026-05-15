@@ -134,6 +134,29 @@ test("showInteractionRayPointView draws surface target", () => {
   assert.deepEqual(state.point, { x: 0, y: 1, z: -3 });
 });
 
+test("showInteractionRayPointView can stop visuals before the target point", () => {
+  const view = createInteractionRayView(new THREE.Scene());
+  const state = createDebugState();
+
+  showInteractionRayPointView({
+    view,
+    state,
+    ray: new THREE.Ray(new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, 0, -1)),
+    point: new THREE.Vector3(0, 1, -3),
+    targetKind: "keyboard",
+    mode: "xr-right-stick",
+    visualEndOffsetM: 0.1,
+    showReticle: false
+  });
+
+  assert.equal(view.line.visible, true);
+  assert.equal(view.beam.visible, true);
+  assert.equal(view.reticle.visible, false);
+  assert.deepEqual(view.end.toArray(), [0, 1, -2.9]);
+  assert.deepEqual(state.point, { x: 0, y: 1, z: -3 });
+  assert.equal(state.targetKind, "keyboard");
+});
+
 test("clearInteractionRayView hides visuals and clears debug state", () => {
   const view = createInteractionRayView(new THREE.Scene());
   const state = createDebugState();

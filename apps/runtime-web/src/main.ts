@@ -19,6 +19,7 @@ import {
   type SurfaceInputEvent,
   type SurfaceInputButton,
   type SurfaceInputKind,
+  type SurfaceInputScrollDelta,
   type SurfaceInputSource,
   type SurfaceTestCardState,
   type WhiteboardStroke,
@@ -1567,6 +1568,7 @@ function commitDebugSurfaceInput(input: {
   pressure?: number;
   key?: string;
   text?: string;
+  scrollDelta?: SurfaceInputScrollDelta;
   routeMediaObjectInput?: boolean;
 }): boolean {
   recordSurfaceInputHit(debugState.surfaceInput, input.hit);
@@ -1584,7 +1586,8 @@ function commitDebugSurfaceInput(input: {
     button: input.button,
     pressure: input.pressure,
     key: input.key,
-    text: input.text
+    text: input.text,
+    scrollDelta: input.scrollDelta
   });
   const resolvedEvent = resolution.accepted && !resolution.event.objectId
     ? { ...resolution.event, objectId: activeMediaObjectIdForSurface(resolution.event.surfaceId) }
@@ -1638,6 +1641,25 @@ function commitDebugSurfaceInputFromFocusedKeyboard(kind: Extract<SurfaceInputKi
     key: event.key,
     text: event.key.length === 1 ? event.key : undefined
   });
+}
+
+function clampScrollDeltaPx(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+  return Number(Math.max(-1600, Math.min(1600, value)).toFixed(2));
+}
+
+function scrollDeltaFromWheelEvent(event: WheelEvent): SurfaceInputScrollDelta {
+  const scale = event.deltaMode === WheelEvent.DOM_DELTA_LINE
+    ? 40
+    : event.deltaMode === WheelEvent.DOM_DELTA_PAGE
+      ? DEBUG_SURFACE_HEIGHT_PX
+      : 1;
+  return {
+    x: clampScrollDeltaPx(event.deltaX * scale),
+    y: clampScrollDeltaPx(event.deltaY * scale)
+  };
 }
 
 function commitDebugSurfaceInputFromFrameRay(frameContext: RuntimeFrameContext, kind: SurfaceInputKind): boolean {
@@ -1719,7 +1741,7 @@ function resolveRemoteBrowserXrInputTarget(frameContext: RuntimeFrameContext): {
     : null;
 }
 
-function showRemoteBrowserXrRayPoint(input: { ray: THREE.Ray; point: THREE.Vector3; targetKind: "surface" | "keyboard"; color: number }): void {
+function showRemoteBrowserXrRayPoint(input: { ray: THREE.Ray; point: THREE.Vector3; targetKind: "surface" | "keyboard"; color: number; visualEndOffsetM?: number; showReticle?: boolean }): void {
   showInteractionRayPointView({
     view: interactionRayView,
     state: debugState.interactionRay,
@@ -1728,6 +1750,8 @@ function showRemoteBrowserXrRayPoint(input: { ray: THREE.Ray; point: THREE.Vecto
     targetKind: input.targetKind,
     mode: "xr-right-stick",
     color: input.color,
+    visualEndOffsetM: input.visualEndOffsetM,
+    showReticle: input.showReticle,
     markTelemetry: markXrTelemetry
   });
 }
@@ -1746,7 +1770,9 @@ function showRemoteBrowserVrKeyboardRay(ray: THREE.Ray, hit: RemoteBrowserVrKeyb
     ray,
     point: hit.point,
     targetKind: "keyboard",
-    color: 0xff8c42
+    color: 0xff8c42,
+    visualEndOffsetM: 0.08,
+    showReticle: false
   });
 }
 
@@ -2573,6 +2599,7 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
       v?: number;
       key?: string;
       text?: string;
+      scrollDelta?: SurfaceInputScrollDelta;
     }) => boolean;
     setDebugSurfaceInputEnabled: (enabled: boolean) => boolean;
     focusDebugSurface: () => boolean;
@@ -2839,6 +2866,7 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
       kind: input.kind ?? "click",
       key: input.key,
       text: input.text,
+      scrollDelta: input.scrollDelta,
       clientTimeMs: Date.now()
     });
   },
@@ -4844,19 +4872,21 @@ renderer.domElement.addEventListener("click", (event) => {
 });
 
 renderer.domElement.addEventListener("wheel", (event) => {
-  if (!activeRemoteBrowserObjectForSurface(DEBUG_SURFACE_ID)) {
+  const activeRemoteBrowser = activeRemoteBrowserObjectForSurface(DEBUG_SURFACE_ID);
+  if (!activeRemoteBrowser) {
     return;
   }
   const hit = resolveDebugSurfaceHitFromPointer(event.clientX, event.clientY, "mouse");
-  const committed = commitDebugSurfaceInput({
-    hit,
-    source: "mouse",
-    kind: "scroll",
-    clientTimeMs: Date.now()
-  });
-  if (committed) {
-    event.preventDefault();
+  if (hit) {
+    commitDebugSurfaceInput({
+      hit,
+      source: "mouse",
+      kind: "scroll",
+      clientTimeMs: Date.now(),
+      scrollDelta: scrollDeltaFromWheelEvent(event)
+    });
   }
+  event.preventDefault();
 }, { passive: false });
 
 window.addEventListener("pointermove", (event) => {

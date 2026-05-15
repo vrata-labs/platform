@@ -26,6 +26,30 @@ const viewport = {
 };
 const frameIntervalMs = Math.max(250, Number.parseInt(process.env.REMOTE_BROWSER_FRAME_INTERVAL_MS ?? "500", 10));
 const tokenSecret = process.env.REMOTE_BROWSER_TOKEN_SECRET ?? "dev-remote-browser-secret";
+const remoteBrowserScrollbarStyle = `
+  html {
+    scrollbar-gutter: stable !important;
+    scrollbar-color: #64748b #e2e8f0 !important;
+  }
+  html::-webkit-scrollbar,
+  body::-webkit-scrollbar,
+  *::-webkit-scrollbar {
+    width: 16px !important;
+    height: 16px !important;
+  }
+  html::-webkit-scrollbar-thumb,
+  body::-webkit-scrollbar-thumb,
+  *::-webkit-scrollbar-thumb {
+    background: #64748b !important;
+    border: 3px solid #e2e8f0 !important;
+    border-radius: 999px !important;
+  }
+  html::-webkit-scrollbar-track,
+  body::-webkit-scrollbar-track,
+  *::-webkit-scrollbar-track {
+    background: #e2e8f0 !important;
+  }
+`;
 
 let browserPromise: Promise<Browser> | null = null;
 const sessions = new Map<string, RemoteBrowserSession>();
@@ -113,6 +137,27 @@ async function installRequestGuard(page: Page, policy: RemoteBrowserUrlPolicy): 
   });
 }
 
+async function installRemoteBrowserPageStyles(page: Page): Promise<void> {
+  await page.addInitScript((styleContent) => {
+    const styleId = "noah-remote-browser-scrollbar-style";
+    const installStyle = () => {
+      if (document.getElementById(styleId)) {
+        return;
+      }
+      const style = document.createElement("style");
+      style.id = styleId;
+      style.textContent = String(styleContent);
+      (document.head || document.documentElement).appendChild(style);
+    };
+    installStyle();
+    document.addEventListener("DOMContentLoaded", installStyle, { once: true });
+  }, remoteBrowserScrollbarStyle);
+}
+
+async function ensureRemoteBrowserPageStyles(page: Page): Promise<void> {
+  await page.addStyleTag({ content: remoteBrowserScrollbarStyle }).catch(() => undefined);
+}
+
 async function stopSession(sessionId: string): Promise<boolean> {
   const session = sessions.get(sessionId);
   if (!session) {
@@ -142,7 +187,9 @@ async function createSession(input: { sessionId: string; frameStreamId: string; 
   });
   const page = await context.newPage();
   await installRequestGuard(page, urlPolicy);
+  await installRemoteBrowserPageStyles(page);
   await page.goto(validation.normalizedUrl, { waitUntil: "domcontentloaded", timeout: 15000 });
+  await ensureRemoteBrowserPageStyles(page);
   const finalValidation = await validateRemoteBrowserUrl(page.url(), urlPolicy);
   if (!finalValidation.allowed) {
     await context.close().catch(() => undefined);
@@ -172,14 +219,32 @@ export function remoteBrowserEventPoint(event: SurfaceInputEvent, size = viewpor
   };
 }
 
+function clampRemoteBrowserScrollDelta(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+  return Math.max(-1600, Math.min(1600, value));
+}
+
+export function remoteBrowserScrollDelta(event: SurfaceInputEvent): { x: number; y: number } {
+  if (!event.scrollDelta) {
+    return { x: 0, y: 480 };
+  }
+  return {
+    x: clampRemoteBrowserScrollDelta(event.scrollDelta.x),
+    y: clampRemoteBrowserScrollDelta(event.scrollDelta.y)
+  };
+}
+
 async function applyInput(session: RemoteBrowserSession, patch: RemoteBrowserPatch): Promise<void> {
   if (patch.type !== "pointer" && patch.type !== "scroll" && patch.type !== "keyboard") {
     return;
   }
   const { x, y } = remoteBrowserEventPoint(patch.event);
   if (patch.type === "scroll") {
+    const delta = remoteBrowserScrollDelta(patch.event);
     await session.page.mouse.move(x, y);
-    await session.page.mouse.wheel(0, 480);
+    await session.page.mouse.wheel(delta.x, delta.y);
     return;
   }
   if (patch.type === "keyboard") {

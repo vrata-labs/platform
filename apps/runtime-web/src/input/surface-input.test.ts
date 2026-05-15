@@ -74,6 +74,23 @@ test("resolveSurfaceInputEvent accepts member surface input", () => {
   assert.deepEqual(resolution.accepted ? resolution.event.pixel : null, { x: 100, y: 150 });
 });
 
+test("resolveSurfaceInputEvent preserves signed scroll delta", () => {
+  const resolution = resolveSurfaceInputEvent({
+    roomId: "room-1",
+    participantId: "p-1",
+    permissions: ["surface.input"],
+    hit: createSyntheticSurfaceHit({ surfaceId: "debug-main", source: "mouse", uv: { u: 0.5, v: 0.5 }, widthPx: 400, heightPx: 200 }),
+    kind: "scroll",
+    source: "mouse",
+    clientTimeMs: 10,
+    seq: 2,
+    scrollDelta: { x: -12.34567, y: -240.5 }
+  });
+
+  assert.equal(resolution.accepted, true);
+  assert.deepEqual(resolution.accepted ? resolution.event.scrollDelta : null, { x: -12.3457, y: -240.5 });
+});
+
 test("resolveSurfaceInputEvent rejects guest, disabled surfaces, and invalid uv", () => {
   const hit = createSyntheticSurfaceHit({ surfaceId: "debug-main", source: "mouse", uv: { u: 0.5, v: 0.5 }, widthPx: 100, heightPx: 100 });
   const guest = resolveSurfaceInputEvent({

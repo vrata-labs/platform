@@ -24,6 +24,11 @@ export interface SurfaceInputPixel {
   y: number;
 }
 
+export interface SurfaceInputScrollDelta {
+  x: number;
+  y: number;
+}
+
 export interface SurfaceInputEvent {
   eventId: string;
   roomId: string;
@@ -38,6 +43,7 @@ export interface SurfaceInputEvent {
   pressure?: number;
   key?: string;
   text?: string;
+  scrollDelta?: SurfaceInputScrollDelta;
   clientTimeMs: number;
   seq: number;
 }
