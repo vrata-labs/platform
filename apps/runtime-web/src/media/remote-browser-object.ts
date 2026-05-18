@@ -458,6 +458,9 @@ export class RemoteBrowserObjectRuntime {
       this.context.fillStyle = "#020617";
       this.context.fillRect(0, 0, this.canvas.width, this.canvas.height);
       this.context.drawImage(image, 0, 0, this.canvas.width, this.canvas.height);
+      if (this.mediaVisualActive && this.mediaElement) {
+        this.drawMediaFrame(this.mediaElement);
+      }
       this.texture.needsUpdate = true;
       this.lastFrameAtMs = payload.capturedAtMs ?? Date.now();
       this.frameSize = {

@@ -106,6 +106,14 @@ async function getDebugSurfaceWorldPosition(page: Page, u: number, v: number): P
   return position!;
 }
 
+async function getDebugSurfaceClientPosition(page: Page, u: number, v: number): Promise<{ x: number; y: number }> {
+  const position = await page.evaluate((value) => (window as Window & {
+    __NOAH_TEST__?: { getDebugSurfaceClientPosition: (u: number, v: number) => { x: number; y: number } | null };
+  }).__NOAH_TEST__?.getDebugSurfaceClientPosition(value.u, value.v) ?? null, { u, v });
+  expect(position).not.toBeNull();
+  return position!;
+}
+
 async function getKeyboardTargetWorldPosition(page: Page, targetId: string): Promise<{ x: number; y: number; z: number }> {
   const position = await page.evaluate((id) => (window as Window & {
     __NOAH_TEST__?: { getRemoteBrowserVrKeyboardTargetWorldPosition: (targetId: string) => { x: number; y: number; z: number } | null };
@@ -154,6 +162,20 @@ test("M1.7 host opens remote browser and routes input through room-state", async
     hasFrame: true,
     errorCode: null
   });
+
+  const previousMoveSeq = (await readDebug(page))?.remoteBrowser?.lastInputSeq ?? 0;
+  const hoverPoint = await getDebugSurfaceClientPosition(page, 0.5, 0.5);
+  await page.mouse.move(hoverPoint.x, hoverPoint.y);
+  await expect.poll(async () => {
+    const debug = await readDebug(page);
+    return {
+      advanced: (debug?.remoteBrowser?.lastInputSeq ?? 0) > previousMoveSeq,
+      eventKind: debug?.surfaceInput?.lastEvent?.kind ?? null
+    };
+  }, {
+    timeout: 10000,
+    intervals: [100, 250, 500]
+  }).toEqual({ advanced: true, eventKind: "pointer-move" });
 
   await sendSurfaceInput(page, { kind: "click", u: 0.17, v: 0.2 });
   await expect.poll(async () => (await readDebug(page))?.remoteBrowser?.lastInputSeq ?? 0, {
@@ -481,4 +503,10 @@ test("M1.7 remote browser streams page video and audio over media transport", as
     mediaHasAudio: true,
     mediaSourceIsPageBounded: true
   });
+
+  const frameAtMediaConnect = (await readDebug(page))?.remoteBrowser?.lastFrameAtMs ?? 0;
+  await expect.poll(async () => (await readDebug(page))?.remoteBrowser?.lastFrameAtMs ?? 0, {
+    timeout: 10000,
+    intervals: [500, 1000]
+  }).toBeGreaterThan(frameAtMediaConnect);
 });

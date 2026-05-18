@@ -406,6 +406,7 @@ const XR_REMOTE_BROWSER_SCROLL_AXIS_THRESHOLD = 0.22;
 const XR_REMOTE_BROWSER_SCROLL_INTERVAL_MS = 80;
 const XR_REMOTE_BROWSER_SCROLL_DELTA_PX = 360;
 const XR_REMOTE_BROWSER_KEYBOARD_RAY_END_OFFSET_M = 0.03;
+const REMOTE_BROWSER_HOVER_MOVE_INTERVAL_MS = 50;
 
 const keyState: Record<string, boolean> = {};
 let pointerActive = false;
@@ -419,6 +420,7 @@ let lastXrRemoteBrowserHit: ResolvedSurfaceHit | null = null;
 let lastXrRemoteBrowserScrollAtMs = 0;
 let remoteBrowserVrKeyboardOpen = false;
 let remoteBrowserVrKeyboardPress: RemoteBrowserVrKeyboardHit | null = null;
+let lastRemoteBrowserHoverMoveAtMs = 0;
 let pointerMovedSinceDown = false;
 let suppressPointerClick = false;
 let pointerHoveringScene = false;
@@ -1624,6 +1626,32 @@ function commitDebugSurfaceInputFromPointer(event: PointerEvent, kind: SurfaceIn
   });
 }
 
+function commitRemoteBrowserHoverMoveFromPointer(event: PointerEvent): boolean {
+  if (event.pointerType === "touch" || renderer.xr.isPresenting || !activeRemoteBrowserObjectForSurface(DEBUG_SURFACE_ID)) {
+    return false;
+  }
+  const nowMs = Date.now();
+  if (nowMs - lastRemoteBrowserHoverMoveAtMs < REMOTE_BROWSER_HOVER_MOVE_INTERVAL_MS) {
+    return false;
+  }
+  const hit = resolveDebugSurfaceHitFromPointer(event.clientX, event.clientY, "mouse");
+  if (!hit) {
+    return false;
+  }
+  const committed = commitDebugSurfaceInput({
+    hit,
+    source: "mouse",
+    kind: "pointer-move",
+    clientTimeMs: nowMs,
+    button: surfaceInputButtonFromPointer(event.button),
+    pressure: event.pressure
+  });
+  if (committed) {
+    lastRemoteBrowserHoverMoveAtMs = nowMs;
+  }
+  return committed;
+}
+
 function commitDebugSurfaceInputFromFocusedKeyboard(kind: Extract<SurfaceInputKind, "key-down" | "key-up">, event: KeyboardEvent): boolean {
   if (debugState.surfaceInput.focusedSurfaceId !== DEBUG_SURFACE_ID) {
     return false;
@@ -2634,6 +2662,7 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
     setDebugSurfaceInputEnabled: (enabled: boolean) => boolean;
     focusDebugSurface: () => boolean;
     getDebugSurfaceWorldPosition: (u: number, v: number) => { x: number; y: number; z: number } | null;
+    getDebugSurfaceClientPosition: (u: number, v: number) => { x: number; y: number } | null;
     getRemoteBrowserVrKeyboardTargetWorldPosition: (targetId: string) => { x: number; y: number; z: number } | null;
     getRemoteBrowserVrKeyboardKeyWorldPosition: (keyId: string) => { x: number; y: number; z: number } | null;
     teleportToFloor: (x: number, z: number) => boolean;
@@ -2932,6 +2961,22 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
       x: position.x,
       y: position.y,
       z: position.z
+    };
+  },
+  getDebugSurfaceClientPosition: (u, v) => {
+    if (!Number.isFinite(u) || !Number.isFinite(v)) {
+      return null;
+    }
+    displaySurface.updateMatrixWorld(true);
+    camera.updateMatrixWorld(true);
+    const ndc = displaySurface.localToWorld(new THREE.Vector3(
+      (Math.max(0, Math.min(1, u)) - 0.5) * DEBUG_SURFACE_WIDTH_M,
+      (Math.max(0, Math.min(1, v)) - 0.5) * DEBUG_SURFACE_HEIGHT_M,
+      0
+    )).project(camera);
+    return {
+      x: (ndc.x + 1) * 0.5 * window.innerWidth,
+      y: (1 - ndc.y) * 0.5 * window.innerHeight
     };
   },
   getRemoteBrowserVrKeyboardTargetWorldPosition: (targetId) => {
@@ -4950,6 +4995,9 @@ window.addEventListener("pointermove", (event) => {
       cancelWhiteboardPreview();
       whiteboardPointerActive = false;
     }
+    return;
+  }
+  if (!pointerActive && commitRemoteBrowserHoverMoveFromPointer(event)) {
     return;
   }
   if (event.pointerType === "touch" || !pointerActive || renderer.xr.isPresenting) {

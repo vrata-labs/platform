@@ -260,7 +260,7 @@ function broadcastFrame(session: RemoteBrowserSession, dataUrl: string): void {
 }
 
 async function captureFrame(session: RemoteBrowserSession): Promise<void> {
-  if (session.clients.size === 0 || session.mediaClients.size > 0 || session.frameCaptureInFlight) {
+  if (session.clients.size === 0 || session.frameCaptureInFlight) {
     return;
   }
   session.frameCaptureInFlight = true;
