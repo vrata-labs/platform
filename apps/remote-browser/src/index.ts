@@ -33,7 +33,17 @@ interface RemoteBrowserMediaAnswerResult {
   hasAudio?: boolean;
   trackKinds?: string[];
   sourceFrameUrl?: string;
+  sourceRect?: RemoteBrowserMediaSourceRect;
   errorCode?: string;
+}
+
+interface RemoteBrowserMediaSourceRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  viewportWidth: number;
+  viewportHeight: number;
 }
 
 const port = Number.parseInt(process.env.REMOTE_BROWSER_PORT ?? "4010", 10);
@@ -354,9 +364,46 @@ async function createMediaAnswerInFrame(frame: Frame, offer: RTCSessionDescripti
       hasVideo: tracks.some((track) => track.kind === "video"),
       hasAudio: tracks.some((track) => track.kind === "audio"),
       trackKinds: tracks.map((track) => track.kind),
-      sourceFrameUrl: location.href
+      sourceFrameUrl: location.href,
+      sourceRect: (() => {
+        const rect = source.getBoundingClientRect();
+        return {
+          x: rect.x,
+          y: rect.y,
+          width: rect.width,
+          height: rect.height,
+          viewportWidth: window.innerWidth,
+          viewportHeight: window.innerHeight
+        };
+      })()
     };
   }, { offer, iceServers: mediaIceServers });
+}
+
+async function mapSourceRectToPageViewport(frame: Frame, rect: RemoteBrowserMediaSourceRect | undefined): Promise<RemoteBrowserMediaSourceRect | undefined> {
+  if (!rect) {
+    return undefined;
+  }
+  let x = rect.x;
+  let y = rect.y;
+  let current: Frame | null = frame;
+  while (current?.parentFrame()) {
+    const element = await current.frameElement();
+    const box = await element.boundingBox();
+    await element.dispose();
+    if (box) {
+      x += box.x;
+      y += box.y;
+    }
+    current = current.parentFrame();
+  }
+  return {
+    ...rect,
+    x,
+    y,
+    viewportWidth: viewport.width,
+    viewportHeight: viewport.height
+  };
 }
 
 async function createMediaAnswer(session: RemoteBrowserSession, offer: RTCSessionDescriptionInit): Promise<RemoteBrowserMediaAnswerResult> {
@@ -364,6 +411,7 @@ async function createMediaAnswer(session: RemoteBrowserSession, offer: RTCSessio
     try {
       const result = await createMediaAnswerInFrame(frame, offer);
       if (result.ok || result.errorCode !== "media_source_missing") {
+        result.sourceRect = await mapSourceRectToPageViewport(frame, result.sourceRect).catch(() => result.sourceRect);
         return result;
       }
     } catch {
@@ -402,7 +450,8 @@ async function handleFrameSocketMessage(session: RemoteBrowserSession, ws: WebSo
     hasVideo: result.hasVideo ?? false,
     hasAudio: result.hasAudio ?? false,
     trackKinds: result.trackKinds ?? [],
-    sourceFrameUrl: result.sourceFrameUrl ?? null
+    sourceFrameUrl: result.sourceFrameUrl ?? null,
+    sourceRect: result.sourceRect ?? null
   }));
 }
 

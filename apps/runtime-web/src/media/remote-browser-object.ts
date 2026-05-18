@@ -31,10 +31,31 @@ interface RemoteBrowserMediaAnswerMessage {
   hasVideo?: boolean;
   hasAudio?: boolean;
   trackKinds?: string[];
+  sourceRect?: RemoteBrowserMediaSourceRect | null;
   errorCode?: string;
 }
 
 type RemoteBrowserMediaState = "idle" | "connecting" | "connected" | "failed" | "unsupported";
+
+export interface RemoteBrowserMediaSourceRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  viewportWidth: number;
+  viewportHeight: number;
+}
+
+export interface RemoteBrowserMediaDrawRegion {
+  sx: number;
+  sy: number;
+  sw: number;
+  sh: number;
+  dx: number;
+  dy: number;
+  dw: number;
+  dh: number;
+}
 
 export interface RemoteBrowserObjectRuntimeOptions {
   apiBaseUrl: string;
@@ -74,6 +95,7 @@ export interface RemoteBrowserDebugSnapshot {
   mediaHasAudio: boolean;
   mediaPeerConnectionState: RTCPeerConnectionState | null;
   mediaErrorCode: string | null;
+  mediaSourceRect: RemoteBrowserMediaSourceRect | null;
 }
 
 function remoteBrowserInputEventId(participantId: string, kind: string): string {
@@ -100,6 +122,41 @@ function redactFrameStreamUrl(input: string): string {
   }
 }
 
+export function remoteBrowserMediaDrawRegion(input: {
+  sourceRect: RemoteBrowserMediaSourceRect;
+  canvasWidth: number;
+  canvasHeight: number;
+  mediaWidth: number;
+  mediaHeight: number;
+}): RemoteBrowserMediaDrawRegion | null {
+  const { sourceRect, canvasWidth, canvasHeight, mediaWidth, mediaHeight } = input;
+  if (sourceRect.width <= 0 || sourceRect.height <= 0 || sourceRect.viewportWidth <= 0 || sourceRect.viewportHeight <= 0 || canvasWidth <= 0 || canvasHeight <= 0 || mediaWidth <= 0 || mediaHeight <= 0) {
+    return null;
+  }
+
+  const scaleX = canvasWidth / sourceRect.viewportWidth;
+  const scaleY = canvasHeight / sourceRect.viewportHeight;
+  const rectX = sourceRect.x * scaleX;
+  const rectY = sourceRect.y * scaleY;
+  const rectWidth = sourceRect.width * scaleX;
+  const rectHeight = sourceRect.height * scaleY;
+  const dx = Math.max(0, rectX);
+  const dy = Math.max(0, rectY);
+  const right = Math.min(canvasWidth, rectX + rectWidth);
+  const bottom = Math.min(canvasHeight, rectY + rectHeight);
+  const dw = right - dx;
+  const dh = bottom - dy;
+  if (dw <= 0 || dh <= 0) {
+    return null;
+  }
+
+  const sx = ((dx - rectX) / rectWidth) * mediaWidth;
+  const sy = ((dy - rectY) / rectHeight) * mediaHeight;
+  const sw = (dw / rectWidth) * mediaWidth;
+  const sh = (dh / rectHeight) * mediaHeight;
+  return { sx, sy, sw, sh, dx, dy, dw, dh };
+}
+
 export class RemoteBrowserObjectRuntime {
   readonly texture: THREE.CanvasTexture;
 
@@ -119,8 +176,9 @@ export class RemoteBrowserObjectRuntime {
   private mediaRetryTimer: number | null = null;
   private mediaStream: MediaStream | null = null;
   private mediaElement: HTMLVideoElement | null = null;
-  private mediaTexture: THREE.VideoTexture | null = null;
   private mediaTextureActivationPending = false;
+  private mediaVisualActive = false;
+  private mediaSourceRect: RemoteBrowserMediaSourceRect | null = null;
   private mediaState: RemoteBrowserMediaState = "idle";
   private mediaHasVideo = false;
   private mediaHasAudio = false;
@@ -146,7 +204,7 @@ export class RemoteBrowserObjectRuntime {
   }
 
   ownsTexture(texture: THREE.Texture | null | undefined): boolean {
-    return texture === this.texture || texture === this.mediaTexture;
+    return texture === this.texture;
   }
 
   createOpenUrlPatch(url: string): RemoteBrowserPatch {
@@ -196,7 +254,7 @@ export class RemoteBrowserObjectRuntime {
       return;
     }
     this.ensureFrameStream(object);
-    if (this.lastFrameAtMs <= 0 && !this.mediaTexture) {
+    if (this.lastFrameAtMs <= 0 && !this.mediaVisualActive) {
       this.renderPlaceholder("Remote Browser", state.currentUrl ?? "Waiting for first frame...");
     }
   }
@@ -228,7 +286,8 @@ export class RemoteBrowserObjectRuntime {
       mediaHasVideo: this.mediaHasVideo,
       mediaHasAudio: this.mediaHasAudio,
       mediaPeerConnectionState: this.mediaPeerConnection?.connectionState ?? null,
-      mediaErrorCode: this.mediaErrorCode
+      mediaErrorCode: this.mediaErrorCode,
+      mediaSourceRect: this.mediaSourceRect
     };
   }
 
@@ -407,9 +466,7 @@ export class RemoteBrowserObjectRuntime {
       };
       this.firstVisibleFrame = true;
       this.renderedPlaceholder = "";
-      if (!this.mediaTexture) {
-        this.options.applyTexture(this.texture);
-      }
+      this.options.applyTexture(this.texture);
     };
     image.src = payload.dataUrl;
   }
@@ -446,7 +503,7 @@ export class RemoteBrowserObjectRuntime {
         return;
       }
       if (pc.connectionState === "connected") {
-        if (this.mediaTexture) {
+        if (this.mediaVisualActive) {
           this.mediaState = "connected";
         }
         this.mediaErrorCode = null;
@@ -497,6 +554,7 @@ export class RemoteBrowserObjectRuntime {
     void pc.setRemoteDescription(payload.answer).then(() => {
       this.mediaHasVideo = this.mediaHasVideo || payload.hasVideo === true;
       this.mediaHasAudio = this.mediaHasAudio || payload.hasAudio === true;
+      this.mediaSourceRect = payload.sourceRect ?? null;
       this.mediaErrorCode = null;
     }).catch(() => {
       this.mediaState = "failed";
@@ -522,8 +580,8 @@ export class RemoteBrowserObjectRuntime {
     if (element.srcObject !== stream) {
       element.srcObject = stream;
     }
-    if (event.track.kind === "video" && !this.mediaTexture) {
-      this.scheduleMediaTextureActivation(element, 2);
+    if (event.track.kind === "video" && !this.mediaVisualActive) {
+      this.scheduleMediaVisualActivation(element, 2);
     }
     this.mediaErrorCode = null;
     this.playRemoteMedia();
@@ -559,13 +617,13 @@ export class RemoteBrowserObjectRuntime {
     });
   }
 
-  private scheduleMediaTextureActivation(element: HTMLVideoElement, warmupFrames: number): void {
-    if (this.mediaTexture || this.mediaTextureActivationPending) {
+  private scheduleMediaVisualActivation(element: HTMLVideoElement, warmupFrames: number): void {
+    if (this.mediaVisualActive || this.mediaTextureActivationPending) {
       return;
     }
     this.mediaTextureActivationPending = true;
     const waitForFrame = (remainingFrames: number) => {
-      if (this.mediaElement !== element || this.mediaTexture) {
+      if (this.mediaElement !== element || this.mediaVisualActive) {
         this.mediaTextureActivationPending = false;
         return;
       }
@@ -578,7 +636,7 @@ export class RemoteBrowserObjectRuntime {
         return;
       }
       this.mediaTextureActivationPending = false;
-      this.activateMediaTexture(element);
+      this.activateMediaVisual(element);
     };
     waitForFrame(warmupFrames);
   }
@@ -594,20 +652,45 @@ export class RemoteBrowserObjectRuntime {
     window.setTimeout(callback, 80);
   }
 
-  private activateMediaTexture(element: HTMLVideoElement): void {
-    if (this.mediaElement !== element || this.mediaTexture) {
+  private activateMediaVisual(element: HTMLVideoElement): void {
+    if (this.mediaElement !== element || this.mediaVisualActive) {
       return;
     }
-    const texture = new THREE.VideoTexture(element);
-    texture.colorSpace = THREE.SRGBColorSpace;
-    texture.generateMipmaps = false;
-    texture.minFilter = THREE.LinearFilter;
-    texture.magFilter = THREE.LinearFilter;
-    this.mediaTexture = texture;
+    this.mediaVisualActive = true;
     this.mediaState = "connected";
     this.mediaErrorCode = null;
-    this.options.applyTexture(texture);
+    this.options.applyTexture(this.texture);
+    this.drawMediaFrame(element);
+    this.scheduleMediaCompositeFrame(element);
     this.frameSocket?.send(JSON.stringify({ type: "media-connected" }));
+  }
+
+  private scheduleMediaCompositeFrame(element: HTMLVideoElement): void {
+    this.waitForNextVideoFrame(element, () => {
+      if (this.mediaElement !== element || !this.mediaVisualActive) {
+        return;
+      }
+      this.drawMediaFrame(element);
+      this.scheduleMediaCompositeFrame(element);
+    });
+  }
+
+  private drawMediaFrame(element: HTMLVideoElement): void {
+    if (!this.context || !this.mediaSourceRect || element.videoWidth <= 0 || element.videoHeight <= 0) {
+      return;
+    }
+    const region = remoteBrowserMediaDrawRegion({
+      sourceRect: this.mediaSourceRect,
+      canvasWidth: this.canvas.width,
+      canvasHeight: this.canvas.height,
+      mediaWidth: element.videoWidth,
+      mediaHeight: element.videoHeight
+    });
+    if (!region) {
+      return;
+    }
+    this.context.drawImage(element, region.sx, region.sy, region.sw, region.sh, region.dx, region.dy, region.dw, region.dh);
+    this.texture.needsUpdate = true;
   }
 
   private shouldSkipInitialFrame(image: HTMLImageElement): boolean {
@@ -661,8 +744,8 @@ export class RemoteBrowserObjectRuntime {
     peerConnection?.close();
     this.mediaStream?.getTracks().forEach((track) => track.stop());
     this.mediaStream = null;
-    this.mediaTexture?.dispose();
-    this.mediaTexture = null;
+    this.mediaVisualActive = false;
+    this.mediaSourceRect = null;
     this.mediaTextureActivationPending = false;
     if (this.mediaElement) {
       this.mediaElement.pause();
@@ -677,7 +760,7 @@ export class RemoteBrowserObjectRuntime {
   }
 
   private applyActiveTexture(): void {
-    this.options.applyTexture(this.mediaTexture ?? this.texture);
+    this.options.applyTexture(this.texture);
   }
 
   private closeFrameStream(): void {

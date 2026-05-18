@@ -16,6 +16,7 @@ type RemoteBrowserDebug = {
     mediaHasAudio?: boolean;
     mediaPeerConnectionState?: string | null;
     mediaErrorCode?: string | null;
+    mediaSourceRect?: { x: number; y: number; width: number; height: number; viewportWidth: number; viewportHeight: number } | null;
     localCanOpen?: boolean;
     localCanInput?: boolean;
     xrKeyboardToggleVisible?: boolean;
@@ -460,7 +461,12 @@ test("M1.7 remote browser streams page video and audio over media transport", as
       mediaState: debug?.remoteBrowser?.mediaState ?? null,
       mediaConnected: debug?.remoteBrowser?.mediaConnected ?? false,
       mediaHasVideo: debug?.remoteBrowser?.mediaHasVideo ?? false,
-      mediaHasAudio: debug?.remoteBrowser?.mediaHasAudio ?? false
+      mediaHasAudio: debug?.remoteBrowser?.mediaHasAudio ?? false,
+      mediaSourceIsPageBounded: Boolean(
+        debug?.remoteBrowser?.mediaSourceRect
+        && debug.remoteBrowser.mediaSourceRect.width < debug.remoteBrowser.mediaSourceRect.viewportWidth
+        && debug.remoteBrowser.mediaSourceRect.height < debug.remoteBrowser.mediaSourceRect.viewportHeight
+      )
     };
   }, {
     timeout: 45000,
@@ -472,6 +478,7 @@ test("M1.7 remote browser streams page video and audio over media transport", as
     mediaState: "connected",
     mediaConnected: true,
     mediaHasVideo: true,
-    mediaHasAudio: true
+    mediaHasAudio: true,
+    mediaSourceIsPageBounded: true
   });
 });
