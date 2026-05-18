@@ -1,7 +1,16 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { remoteBrowserEventPoint, remoteBrowserInitScript, remoteBrowserScrollDelta, resolveRemoteBrowserFrameIntervalMs, resolveRemoteBrowserMediaIceServers } from "./index.js";
+import {
+  remoteBrowserEventPoint,
+  remoteBrowserInitScript,
+  remoteBrowserScrollDelta,
+  resolveRemoteBrowserFrameBackpressureBytes,
+  resolveRemoteBrowserFrameIntervalMs,
+  resolveRemoteBrowserMediaFrameIntervalMs,
+  resolveRemoteBrowserMediaIceServers,
+  shouldCaptureRemoteBrowserFrame
+} from "./index.js";
 import type { SurfaceInputEvent } from "@noah/shared-types";
 
 function surfaceInput(uv: { u: number; v: number }): SurfaceInputEvent {
@@ -62,6 +71,47 @@ test("resolveRemoteBrowserFrameIntervalMs defaults to the fastest supported scre
   assert.equal(resolveRemoteBrowserFrameIntervalMs("100"), 250);
   assert.equal(resolveRemoteBrowserFrameIntervalMs("500"), 500);
   assert.equal(resolveRemoteBrowserFrameIntervalMs("not-a-number"), 250);
+});
+
+test("remote browser throttles screenshots after media transport connects", () => {
+  assert.equal(resolveRemoteBrowserMediaFrameIntervalMs(undefined), 1000);
+  assert.equal(resolveRemoteBrowserMediaFrameIntervalMs("250"), 1000);
+  assert.equal(resolveRemoteBrowserMediaFrameIntervalMs("1500"), 1500);
+  assert.equal(resolveRemoteBrowserFrameBackpressureBytes(undefined), 1000000);
+  assert.equal(resolveRemoteBrowserFrameBackpressureBytes("0"), 0);
+
+  assert.equal(shouldCaptureRemoteBrowserFrame({
+    frameCaptureInFlight: false,
+    writableClientCount: 1,
+    mediaClientCount: 0,
+    lastFrameAtMs: 9900,
+    nowMs: 10000,
+    mediaFrameIntervalMs: 1000
+  }), true);
+  assert.equal(shouldCaptureRemoteBrowserFrame({
+    frameCaptureInFlight: false,
+    writableClientCount: 1,
+    mediaClientCount: 1,
+    lastFrameAtMs: 9500,
+    nowMs: 10000,
+    mediaFrameIntervalMs: 1000
+  }), false);
+  assert.equal(shouldCaptureRemoteBrowserFrame({
+    frameCaptureInFlight: false,
+    writableClientCount: 1,
+    mediaClientCount: 1,
+    lastFrameAtMs: 9000,
+    nowMs: 10000,
+    mediaFrameIntervalMs: 1000
+  }), true);
+  assert.equal(shouldCaptureRemoteBrowserFrame({
+    frameCaptureInFlight: false,
+    writableClientCount: 0,
+    mediaClientCount: 1,
+    lastFrameAtMs: 9000,
+    nowMs: 10000,
+    mediaFrameIntervalMs: 1000
+  }), false);
 });
 
 test("resolveRemoteBrowserMediaIceServers parses comma-separated STUN/TURN URLs", () => {

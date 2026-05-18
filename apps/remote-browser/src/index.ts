@@ -21,6 +21,15 @@ interface RemoteBrowserSession {
   lastFrameAtMs: number;
 }
 
+interface RemoteBrowserFrameCaptureDecisionInput {
+  frameCaptureInFlight: boolean;
+  writableClientCount: number;
+  mediaClientCount: number;
+  lastFrameAtMs: number;
+  nowMs: number;
+  mediaFrameIntervalMs: number;
+}
+
 interface RemoteBrowserMediaOfferMessage {
   type?: string;
   offer?: RTCSessionDescriptionInit;
@@ -56,7 +65,29 @@ export function resolveRemoteBrowserFrameIntervalMs(value: string | undefined): 
   return Math.max(250, Number.isFinite(parsed) ? parsed : 250);
 }
 
+export function resolveRemoteBrowserMediaFrameIntervalMs(value: string | undefined): number {
+  const parsed = Number.parseInt(value ?? "1000", 10);
+  return Math.max(1000, Number.isFinite(parsed) ? parsed : 1000);
+}
+
+export function resolveRemoteBrowserFrameBackpressureBytes(value: string | undefined): number {
+  const parsed = Number.parseInt(value ?? "1000000", 10);
+  return Math.max(0, Number.isFinite(parsed) ? parsed : 1000000);
+}
+
+export function shouldCaptureRemoteBrowserFrame(input: RemoteBrowserFrameCaptureDecisionInput): boolean {
+  if (input.frameCaptureInFlight || input.writableClientCount <= 0) {
+    return false;
+  }
+  if (input.mediaClientCount <= 0 || input.lastFrameAtMs <= 0) {
+    return true;
+  }
+  return input.nowMs - input.lastFrameAtMs >= input.mediaFrameIntervalMs;
+}
+
 const frameIntervalMs = resolveRemoteBrowserFrameIntervalMs(process.env.REMOTE_BROWSER_FRAME_INTERVAL_MS);
+const mediaFrameIntervalMs = resolveRemoteBrowserMediaFrameIntervalMs(process.env.REMOTE_BROWSER_MEDIA_FRAME_INTERVAL_MS);
+const frameBackpressureBytes = resolveRemoteBrowserFrameBackpressureBytes(process.env.REMOTE_BROWSER_FRAME_BACKPRESSURE_BYTES);
 const tokenSecret = process.env.REMOTE_BROWSER_TOKEN_SECRET ?? "dev-remote-browser-secret";
 const mediaIceServers = resolveRemoteBrowserMediaIceServers(process.env.REMOTE_BROWSER_MEDIA_ICE_SERVERS);
 const remoteBrowserScrollbarStyle = `
@@ -242,7 +273,11 @@ export function resolveRemoteBrowserMediaIceServers(value: string | undefined): 
   return urls.length > 0 ? [{ urls }] : [];
 }
 
-function broadcastFrame(session: RemoteBrowserSession, dataUrl: string): void {
+function getWritableFrameClients(session: RemoteBrowserSession): WebSocket[] {
+  return Array.from(session.clients).filter((client) => client.readyState === client.OPEN && client.bufferedAmount <= frameBackpressureBytes);
+}
+
+function broadcastFrame(session: RemoteBrowserSession, clients: WebSocket[], dataUrl: string): void {
   const payload = JSON.stringify({
     type: "frame",
     sessionId: session.sessionId,
@@ -252,22 +287,30 @@ function broadcastFrame(session: RemoteBrowserSession, dataUrl: string): void {
     dataUrl,
     capturedAtMs: session.lastFrameAtMs
   });
-  for (const client of session.clients) {
-    if (client.readyState === client.OPEN) {
+  for (const client of clients) {
+    if (client.readyState === client.OPEN && client.bufferedAmount <= frameBackpressureBytes) {
       client.send(payload);
     }
   }
 }
 
 async function captureFrame(session: RemoteBrowserSession): Promise<void> {
-  if (session.clients.size === 0 || session.frameCaptureInFlight) {
+  const writableClients = getWritableFrameClients(session);
+  if (!shouldCaptureRemoteBrowserFrame({
+    frameCaptureInFlight: session.frameCaptureInFlight,
+    writableClientCount: writableClients.length,
+    mediaClientCount: session.mediaClients.size,
+    lastFrameAtMs: session.lastFrameAtMs,
+    nowMs: Date.now(),
+    mediaFrameIntervalMs
+  })) {
     return;
   }
   session.frameCaptureInFlight = true;
   try {
     const buffer = await session.page.screenshot({ type: "jpeg", quality: 60, animations: "disabled" });
     session.lastFrameAtMs = Date.now();
-    broadcastFrame(session, `data:image/jpeg;base64,${buffer.toString("base64")}`);
+    broadcastFrame(session, writableClients, `data:image/jpeg;base64,${buffer.toString("base64")}`);
   } finally {
     session.frameCaptureInFlight = false;
   }
