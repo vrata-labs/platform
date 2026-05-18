@@ -128,6 +128,25 @@ async function waitForWhiteboard(page: Page, strokeCount: number) {
   });
 }
 
+async function waitForNoWhiteboard(page: Page) {
+  await expect.poll(async () => {
+    const debug = await readDebug(page);
+    const surface = debug?.mediaObjects?.surfaces?.find((item) => item.surfaceId === "debug-main");
+    return {
+      activeObjectType: surface?.activeObjectType ?? null,
+      activeObjectId: surface?.activeObjectId ?? null,
+      active: debug?.whiteboard?.active ?? false
+    };
+  }, {
+    timeout: 10000,
+    intervals: [500, 1000, 2000]
+  }).toEqual({
+    activeObjectType: null,
+    activeObjectId: null,
+    active: false
+  });
+}
+
 test("M1.5 host creates whiteboard and member stroke syncs to viewers", async ({ browser }) => {
   const roomId = `m1-whiteboard-sync-${Date.now()}`;
   const host = await browser.newPage();
@@ -146,6 +165,9 @@ test("M1.5 host creates whiteboard and member stroke syncs to viewers", async ({
     await expect(host.locator("#draw-whiteboard")).toBeDisabled();
     await host.click("#start-whiteboard");
     await waitForWhiteboard(guest, 0);
+    await expect(host.locator("#start-whiteboard")).toBeDisabled();
+    await expect(host.locator("#stop-whiteboard")).toBeVisible();
+    await expect(host.locator("#stop-whiteboard")).toBeEnabled();
     await expect(host.locator("#draw-whiteboard")).toBeEnabled();
     await expect(host.locator("#draw-whiteboard")).toHaveAttribute("aria-pressed", "false");
     await host.click("#draw-whiteboard");
@@ -164,6 +186,14 @@ test("M1.5 host creates whiteboard and member stroke syncs to viewers", async ({
       const points = board?.state?.strokes?.[0]?.points ?? [];
       return points.every((point) => typeof point.u === "number" && point.u >= 0 && point.u <= 1 && typeof point.v === "number" && point.v >= 0 && point.v <= 1);
     }).toBe(true);
+
+    await host.click("#stop-whiteboard");
+    await waitForNoWhiteboard(host);
+    await waitForNoWhiteboard(guest);
+    await expect(host.locator("#start-whiteboard")).toBeEnabled();
+    await expect(host.locator("#draw-whiteboard")).toBeDisabled();
+    await expect(host.locator("#clear-whiteboard")).toBeDisabled();
+    await expect(host.locator("#stop-whiteboard")).toBeDisabled();
   } finally {
     await host.close();
     await member.close();

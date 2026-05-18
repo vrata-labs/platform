@@ -193,6 +193,10 @@ export class MediaSurfaceCommandClient {
     return this.patchObjectState(objectId, surfaceId, expectedRevision, patch, `whiteboard-${patch.type}`);
   }
 
+  stopWhiteboardObject(objectId: string, surfaceId: string): Promise<SurfaceCommandResult> {
+    return this.stopObject(objectId, surfaceId, "whiteboard-stop");
+  }
+
   createRemoteBrowserObjectOnSurface(surfaceId: string): Promise<SurfaceCommandResult> {
     return this.createObjectOnSurface(surfaceId, REMOTE_BROWSER_OBJECT_TYPE, "remote-browser-create");
   }

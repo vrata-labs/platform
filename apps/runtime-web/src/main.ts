@@ -212,6 +212,7 @@ const muteButton = mustElement<HTMLButtonElement>("#toggle-mute");
 const startWhiteboardButton = mustElement<HTMLButtonElement>("#start-whiteboard");
 const drawWhiteboardButton = mustElement<HTMLButtonElement>("#draw-whiteboard");
 const clearWhiteboardButton = mustElement<HTMLButtonElement>("#clear-whiteboard");
+const stopWhiteboardButton = mustElement<HTMLButtonElement>("#stop-whiteboard");
 const startShareButton = mustElement<HTMLButtonElement>("#start-share");
 const stopShareButton = mustElement<HTMLButtonElement>("#stop-share");
 const remoteBrowserControlEl = mustElement<HTMLDivElement>("#remote-browser-control");
@@ -1395,6 +1396,12 @@ function canClearWhiteboardControl(): boolean {
     && Boolean(activeWhiteboardObjectForSurface(DEBUG_SURFACE_ID));
 }
 
+function canStopWhiteboardControl(): boolean {
+  return hasRoomPermission(debugState.access.permissions, "surface.stop-object")
+    && roomStateConnected
+    && Boolean(activeWhiteboardObjectForSurface(DEBUG_SURFACE_ID));
+}
+
 function canUseWhiteboardDrawTool(): boolean {
   return hasRoomPermission(debugState.access.permissions, "whiteboard.draw")
     && roomStateConnected
@@ -1412,6 +1419,7 @@ function syncWhiteboardControls(): void {
   startWhiteboardButton.hidden = !debugState.access.canCreateWhiteboard;
   drawWhiteboardButton.hidden = !hasRoomPermission(debugState.access.permissions, "whiteboard.draw");
   clearWhiteboardButton.hidden = !hasRoomPermission(debugState.access.permissions, "whiteboard.clear");
+  stopWhiteboardButton.hidden = !hasRoomPermission(debugState.access.permissions, "surface.stop-object");
   startWhiteboardButton.disabled = !canUseWhiteboardControl();
   drawWhiteboardButton.disabled = !canDraw;
   drawWhiteboardButton.textContent = whiteboardDrawToolActive ? "Draw: On" : "Draw: Off";
@@ -1419,6 +1427,7 @@ function syncWhiteboardControls(): void {
   drawWhiteboardButton.classList.toggle("tool-active", whiteboardDrawToolActive);
   renderer.domElement.style.cursor = whiteboardDrawToolActive ? "crosshair" : "";
   clearWhiteboardButton.disabled = !canClearWhiteboardControl();
+  stopWhiteboardButton.disabled = !canStopWhiteboardControl();
 }
 
 function canStopLocalScreenShare(): boolean {
@@ -2045,6 +2054,7 @@ function syncMediaCapabilityControls(): void {
   stopShareButton.hidden = !debugState.access.canStartScreenShare;
   startWhiteboardButton.hidden = !debugState.access.canCreateWhiteboard;
   clearWhiteboardButton.hidden = !hasRoomPermission(debugState.access.permissions, "whiteboard.clear");
+  stopWhiteboardButton.hidden = !hasRoomPermission(debugState.access.permissions, "surface.stop-object");
   remoteBrowserControlEl.hidden = !debugState.access.canCreateRemoteBrowser && !activeRemoteBrowserObjectForSurface(DEBUG_SURFACE_ID);
   if (!debugState.access.canStartScreenShare) {
     startShareButton.disabled = true;
@@ -2054,6 +2064,9 @@ function syncMediaCapabilityControls(): void {
   if (!debugState.access.canCreateWhiteboard) {
     startWhiteboardButton.disabled = true;
     startWhiteboardButton.title = "Host role required";
+  }
+  if (!hasRoomPermission(debugState.access.permissions, "surface.stop-object")) {
+    stopWhiteboardButton.disabled = true;
   }
 
   if (runtimeFlags.audioJoin && !browserMediaCapabilities.audioInput.supported) {
@@ -4455,6 +4468,31 @@ async function clearWhiteboard(): Promise<void> {
   setStatus("Whiteboard cleared");
 }
 
+async function stopWhiteboard(): Promise<void> {
+  const object = activeWhiteboardObjectForSurface(DEBUG_SURFACE_ID);
+  if (!object) {
+    return;
+  }
+  if (!hasRoomPermission(debugState.access.permissions, "surface.stop-object")) {
+    debugState.access.lastDeniedPermission = "surface.stop-object";
+    throw createFaultError("NotAllowedError", "whiteboard_stop_forbidden");
+  }
+  const result = await mediaSurfaceCommands.stopWhiteboardObject(object.objectId, object.surfaceId);
+  if (!result.accepted) {
+    debugState.mediaObjects.blockedReason = result.blockedReason ?? null;
+    throw new Error(`whiteboard_stop_rejected:${result.blockedReason ?? "unknown"}`);
+  }
+  whiteboardDrawToolActive = false;
+  whiteboardPointerActive = false;
+  xrWhiteboardPointerActive = false;
+  lastXrWhiteboardHit = null;
+  cancelWhiteboardPreview();
+  whiteboardRuntime.clearError();
+  syncWhiteboardPencilVisuals(lastRuntimeFrameContext, false);
+  setStatus("Whiteboard stopped");
+  syncWhiteboardControls();
+}
+
 async function openRemoteBrowser(rawUrl: string): Promise<void> {
   if (!hasRoomPermission(debugState.access.permissions, "remote-browser.open-url")) {
     debugState.access.lastDeniedPermission = "remote-browser.open-url";
@@ -4820,6 +4858,16 @@ clearWhiteboardButton.addEventListener("click", () => {
     setStatus("Whiteboard clear failed");
     whiteboardRuntime.setError(error instanceof Error ? error.message : "clear_failed");
     debugState.whiteboard.errorCode = whiteboardRuntime.createDebugSnapshot(activeWhiteboardObjectForSurface(DEBUG_SURFACE_ID)).errorCode;
+  });
+});
+
+stopWhiteboardButton.addEventListener("click", () => {
+  void stopWhiteboard().catch((error: unknown) => {
+    console.error(error);
+    setStatus("Whiteboard stop failed");
+    whiteboardRuntime.setError(error instanceof Error ? error.message : "stop_failed");
+    debugState.whiteboard.errorCode = whiteboardRuntime.createDebugSnapshot(activeWhiteboardObjectForSurface(DEBUG_SURFACE_ID)).errorCode;
+    syncWhiteboardControls();
   });
 });
 
