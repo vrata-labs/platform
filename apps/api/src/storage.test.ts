@@ -36,3 +36,16 @@ test("MemoryStorage xr telemetry snapshots are cloned on read", async () => {
   const secondRead = await storage.getXrTelemetry("room-a");
   assert.equal((secondRead[0]?.payload.xrAxes as { turnX?: number }).turnX, -0.16);
 });
+
+test("MemoryStorage enables screen share for new rooms by default", async () => {
+  const storage = new MemoryStorage();
+
+  const defaultRoom = await storage.createRoom({ name: "Default Feature Room" });
+  const disabledRoom = await storage.createRoom({
+    name: "Share Disabled Room",
+    features: { voice: true, spatialAudio: true, screenShare: false }
+  });
+
+  assert.equal(defaultRoom.features.screenShare, true);
+  assert.equal(disabledRoom.features.screenShare, false);
+});

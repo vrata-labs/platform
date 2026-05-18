@@ -252,16 +252,16 @@ export class MemoryStorage implements Storage {
   async listRooms(): Promise<RoomRecord[]> { return Array.from(this.rooms.values()); }
   async getRoom(roomId: string): Promise<RoomRecord | null> { return this.rooms.get(roomId) ?? null; }
   async createRoom(input: Partial<RoomRecord>): Promise<RoomRecord> {
-      const room: RoomRecord = {
-        roomId: input.roomId ?? crypto.randomUUID(),
-        tenantId: input.tenantId ?? "demo-tenant",
-        templateId: input.templateId ?? "meeting-room-basic",
-        name: input.name ?? "New Room",
-        sceneBundleUrl: input.sceneBundleUrl,
-        features: {
-          voice: input.features?.voice ?? true,
-          spatialAudio: input.features?.spatialAudio ?? true,
-        screenShare: input.features?.screenShare ?? false
+    const room: RoomRecord = {
+      roomId: input.roomId ?? crypto.randomUUID(),
+      tenantId: input.tenantId ?? "demo-tenant",
+      templateId: input.templateId ?? "meeting-room-basic",
+      name: input.name ?? "New Room",
+      sceneBundleUrl: input.sceneBundleUrl,
+      features: {
+        voice: input.features?.voice ?? true,
+        spatialAudio: input.features?.spatialAudio ?? true,
+        screenShare: input.features?.screenShare ?? true
       },
       assetIds: input.assetIds ?? [],
       theme: input.theme ?? {
@@ -567,7 +567,7 @@ export class PostgresStorage implements Storage {
       features: {
         voice: input.features?.voice ?? true,
         spatialAudio: input.features?.spatialAudio ?? true,
-        screenShare: input.features?.screenShare ?? false
+        screenShare: input.features?.screenShare ?? true
       },
       assetIds: input.assetIds ?? [],
       theme: input.theme ?? {
