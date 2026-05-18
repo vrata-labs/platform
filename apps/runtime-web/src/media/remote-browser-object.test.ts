@@ -1,7 +1,113 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { remoteBrowserMediaDrawRegion } from "./remote-browser-object.js";
+import {
+  createRemoteBrowserObjectRuntime,
+  remoteBrowserMediaDrawRegion
+} from "./remote-browser-object.js";
+import {
+  REMOTE_BROWSER_OBJECT_TYPE,
+  type MediaObjectInstance,
+  type RemoteBrowserObjectState
+} from "@noah/shared-types";
+
+function installFakeCanvasDocument(): () => void {
+  const previousDocument = globalThis.document;
+  const context = {
+    createLinearGradient: () => ({ addColorStop: () => undefined }),
+    drawImage: () => undefined,
+    fillRect: () => undefined,
+    fillText: () => undefined,
+    getImageData: () => ({ data: new Uint8ClampedArray(16 * 16 * 4) })
+  } as unknown as CanvasRenderingContext2D;
+  const fakeDocument = {
+    createElement: (tagName: string) => {
+      if (tagName === "canvas") {
+        return {
+          width: 0,
+          height: 0,
+          getContext: () => context
+        };
+      }
+      return {};
+    },
+    body: { appendChild: () => undefined }
+  } as unknown as Document;
+  Object.defineProperty(globalThis, "document", { configurable: true, value: fakeDocument });
+  return () => {
+    if (previousDocument) {
+      Object.defineProperty(globalThis, "document", { configurable: true, value: previousDocument });
+    } else {
+      Reflect.deleteProperty(globalThis, "document");
+    }
+  };
+}
+
+function createRuntimeObject(state: Partial<RemoteBrowserObjectState> = {}): MediaObjectInstance<RemoteBrowserObjectState> {
+  return {
+    objectId: "remote-browser-1",
+    type: REMOTE_BROWSER_OBJECT_TYPE,
+    roomId: "room-1",
+    surfaceId: "debug-main",
+    ownerParticipantId: "host-1",
+    state: {
+      status: "idle",
+      ownerParticipantId: "host-1",
+      surfaceId: "debug-main",
+      lastInputEventId: null,
+      ...state
+    },
+    status: "active",
+    revision: 1,
+    createdAtMs: 0,
+    updatedAtMs: 0
+  };
+}
+
+function createTestRuntime(appliedTextures: unknown[]) {
+  return createRemoteBrowserObjectRuntime({
+    apiBaseUrl: "http://localhost:4000",
+    roomId: "room-1",
+    participantId: "host-1",
+    surfaceId: "debug-main",
+    widthPx: 1920,
+    heightPx: 1080,
+    getPermissions: () => [],
+    getLatestObject: () => null,
+    patchObject: async () => ({ accepted: true, permission: "remote-browser.input", role: "host" }),
+    applyTexture: (texture) => { appliedTextures.push(texture); },
+    onBlocked: () => undefined
+  });
+}
+
+test("remote browser runtime does not publish its texture while idle", () => {
+  const restoreDocument = installFakeCanvasDocument();
+  try {
+    const appliedTextures: unknown[] = [];
+    const runtime = createTestRuntime(appliedTextures);
+
+    runtime.sync(null);
+    runtime.close();
+
+    assert.equal(appliedTextures.length, 0);
+  } finally {
+    restoreDocument();
+  }
+});
+
+test("remote browser runtime publishes its texture when a browser object is active", () => {
+  const restoreDocument = installFakeCanvasDocument();
+  try {
+    const appliedTextures: unknown[] = [];
+    const runtime = createTestRuntime(appliedTextures);
+
+    runtime.sync(createRuntimeObject());
+
+    assert(appliedTextures.includes(runtime.texture));
+  } finally {
+    restoreDocument();
+  }
+});
 
 test("remoteBrowserMediaDrawRegion maps page video bounds to canvas bounds", () => {
   const region = remoteBrowserMediaDrawRegion({

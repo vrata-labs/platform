@@ -200,7 +200,7 @@ export class RemoteBrowserObjectRuntime {
     this.texture.generateMipmaps = false;
     this.texture.minFilter = THREE.LinearFilter;
     this.texture.magFilter = THREE.LinearFilter;
-    this.renderPlaceholder("Remote Browser", "Open an allowed URL to start.");
+    this.renderPlaceholder("Remote Browser", "Open an allowed URL to start.", false);
   }
 
   ownsTexture(texture: THREE.Texture | null | undefined): boolean {
@@ -756,7 +756,6 @@ export class RemoteBrowserObjectRuntime {
     this.mediaHasVideo = false;
     this.mediaHasAudio = false;
     this.mediaState = "idle";
-    this.applyActiveTexture();
   }
 
   private applyActiveTexture(): void {
@@ -777,10 +776,12 @@ export class RemoteBrowserObjectRuntime {
     }
   }
 
-  private renderPlaceholder(title: string, subtitle: string): void {
+  private renderPlaceholder(title: string, subtitle: string, publishTexture = true): void {
     const signature = `${title}:${subtitle}`;
     if (signature === this.renderedPlaceholder || !this.context) {
-      this.options.applyTexture(this.texture);
+      if (publishTexture) {
+        this.options.applyTexture(this.texture);
+      }
       return;
     }
     const gradient = this.context.createLinearGradient(0, 0, this.canvas.width, this.canvas.height);
@@ -797,7 +798,9 @@ export class RemoteBrowserObjectRuntime {
     this.context.fillText(subtitle.slice(0, 80), 140, 290);
     this.texture.needsUpdate = true;
     this.renderedPlaceholder = signature;
-    this.options.applyTexture(this.texture);
+    if (publishTexture) {
+      this.options.applyTexture(this.texture);
+    }
   }
 
   private reportBlocked(blockedReason: string | null, errorCode: string | null): void {
