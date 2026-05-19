@@ -18,6 +18,7 @@ type RemoteBrowserDebug = {
     mediaPeerConnectionState?: string | null;
     mediaErrorCode?: string | null;
     mediaSourceRect?: { x: number; y: number; width: number; height: number; viewportWidth: number; viewportHeight: number } | null;
+    mediaCompositeHoldActive?: boolean;
     errorCode?: string | null;
   };
   mediaObjects?: {
@@ -279,6 +280,10 @@ async function expectVisibleHoverResponse(page: Page, candidates: Array<{ u: num
     const before = await sampleSurfaceRegion(page, candidate);
     const beforeFrameAt = (await readDebug(page))?.remoteBrowser?.lastFrameAtMs ?? 0;
     const inputLatencyMs = await moveMouseToSurface(page, candidate.u, candidate.v);
+    await expect.poll(async () => (await readDebug(page))?.remoteBrowser?.mediaCompositeHoldActive ?? false, {
+      timeout: 2000,
+      intervals: [50, 100, 250]
+    }).toBe(true);
     const frameLatencyMs = await waitForFreshFrame(page, beforeFrameAt);
     await page.waitForTimeout(800);
     const after = await sampleSurfaceRegion(page, candidate);
@@ -292,6 +297,14 @@ async function expectVisibleHoverResponse(page: Page, candidates: Array<{ u: num
   expect(bestDiff).toBeGreaterThan(6);
 }
 
+function surfaceUvFromRemoteBrowserPagePoint(rect: NonNullable<RemoteBrowserDebug["remoteBrowser"]>["mediaSourceRect"], x: number, y: number): { u: number; v: number } {
+  expect(rect).toBeTruthy();
+  return {
+    u: Math.max(0, Math.min(1, x / rect!.viewportWidth)),
+    v: Math.max(0, Math.min(1, 1 - y / rect!.viewportHeight))
+  };
+}
+
 function playerHoverCandidates(debug: RemoteBrowserDebug | undefined): Array<{ u: number; v: number }> {
   const rect = debug?.remoteBrowser?.mediaSourceRect;
   if (!rect) {
@@ -300,12 +313,12 @@ function playerHoverCandidates(debug: RemoteBrowserDebug | undefined): Array<{ u
   const xCenter = (rect.x + rect.width * 0.5) / rect.viewportWidth;
   const xLeft = (rect.x + rect.width * 0.2) / rect.viewportWidth;
   const yCenter = (rect.y + rect.height * 0.55) / rect.viewportHeight;
-  const yBottom = Math.min(rect.viewportHeight - 24, rect.y + rect.height - 32) / rect.viewportHeight;
   return [
-    { u: xCenter, v: yBottom },
-    { u: xCenter, v: yCenter },
-    { u: xLeft, v: yCenter },
-    { u: 0.5, v: 0.2 }
+    surfaceUvFromRemoteBrowserPagePoint(rect, rect.x + rect.width * 0.5, Math.min(rect.viewportHeight - 24, rect.y + rect.height - 32)),
+    surfaceUvFromRemoteBrowserPagePoint(rect, rect.x + rect.width * 0.5, rect.y + rect.height * 0.55),
+    surfaceUvFromRemoteBrowserPagePoint(rect, rect.x + rect.width * 0.2, rect.y + rect.height * 0.55),
+    { u: xCenter, v: 1 - yCenter },
+    { u: xLeft, v: 1 - yCenter }
   ];
 }
 

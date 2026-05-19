@@ -19,6 +19,8 @@ interface RemoteBrowserSession {
   frameTimer: ReturnType<typeof setInterval>;
   frameCaptureInFlight: boolean;
   lastFrameAtMs: number;
+  lastInputAtMs: number;
+  lastInputFrameAtMs: number;
 }
 
 interface RemoteBrowserFrameCaptureDecisionInput {
@@ -28,6 +30,7 @@ interface RemoteBrowserFrameCaptureDecisionInput {
   lastFrameAtMs: number;
   nowMs: number;
   mediaFrameIntervalMs: number;
+  force?: boolean;
 }
 
 interface RemoteBrowserMediaOfferMessage {
@@ -79,10 +82,22 @@ export function shouldCaptureRemoteBrowserFrame(input: RemoteBrowserFrameCapture
   if (input.frameCaptureInFlight || input.writableClientCount <= 0) {
     return false;
   }
+  if (input.force) {
+    return true;
+  }
   if (input.mediaClientCount <= 0 || input.lastFrameAtMs <= 0) {
     return true;
   }
   return input.nowMs - input.lastFrameAtMs >= input.mediaFrameIntervalMs;
+}
+
+const mediaOverlayPreserveMs = 3000;
+
+export function shouldPreserveRemoteBrowserMediaOverlays(input: { lastInputAtMs: number; capturedAtMs: number; preserveMs?: number }): boolean {
+  if (input.lastInputAtMs <= 0 || input.capturedAtMs < input.lastInputAtMs) {
+    return false;
+  }
+  return input.capturedAtMs - input.lastInputAtMs <= (input.preserveMs ?? mediaOverlayPreserveMs);
 }
 
 const frameIntervalMs = resolveRemoteBrowserFrameIntervalMs(process.env.REMOTE_BROWSER_FRAME_INTERVAL_MS);
@@ -285,7 +300,11 @@ function broadcastFrame(session: RemoteBrowserSession, clients: WebSocket[], dat
     width: viewport.width,
     height: viewport.height,
     dataUrl,
-    capturedAtMs: session.lastFrameAtMs
+    capturedAtMs: session.lastFrameAtMs,
+    preserveMediaOverlays: shouldPreserveRemoteBrowserMediaOverlays({
+      lastInputAtMs: session.lastInputAtMs,
+      capturedAtMs: session.lastFrameAtMs
+    })
   });
   for (const client of clients) {
     if (client.readyState === client.OPEN && client.bufferedAmount <= frameBackpressureBytes) {
@@ -294,7 +313,7 @@ function broadcastFrame(session: RemoteBrowserSession, clients: WebSocket[], dat
   }
 }
 
-async function captureFrame(session: RemoteBrowserSession): Promise<void> {
+async function captureFrame(session: RemoteBrowserSession, options: { force?: boolean } = {}): Promise<void> {
   const writableClients = getWritableFrameClients(session);
   if (!shouldCaptureRemoteBrowserFrame({
     frameCaptureInFlight: session.frameCaptureInFlight,
@@ -302,7 +321,8 @@ async function captureFrame(session: RemoteBrowserSession): Promise<void> {
     mediaClientCount: session.mediaClients.size,
     lastFrameAtMs: session.lastFrameAtMs,
     nowMs: Date.now(),
-    mediaFrameIntervalMs
+    mediaFrameIntervalMs,
+    force: options.force
   })) {
     return;
   }
@@ -565,7 +585,9 @@ async function createSession(input: { sessionId: string; frameStreamId: string; 
       void captureFrame(session).catch(() => undefined);
     }, frameIntervalMs),
     frameCaptureInFlight: false,
-    lastFrameAtMs: 0
+    lastFrameAtMs: 0,
+    lastInputAtMs: 0,
+    lastInputFrameAtMs: 0
   };
   sessions.set(input.sessionId, session);
   return session;
@@ -601,11 +623,13 @@ async function applyInput(session: RemoteBrowserSession, patch: RemoteBrowserPat
   if (patch.type !== "pointer" && patch.type !== "scroll" && patch.type !== "keyboard") {
     return;
   }
+  session.lastInputAtMs = Date.now();
   const { x, y } = remoteBrowserEventPoint(patch.event);
   if (patch.type === "scroll") {
     const delta = remoteBrowserScrollDelta(patch.event);
     await session.page.mouse.move(x, y);
     await session.page.mouse.wheel(delta.x, delta.y);
+    requestInputFrameCapture(session);
     return;
   }
   if (patch.type === "keyboard") {
@@ -616,6 +640,7 @@ async function applyInput(session: RemoteBrowserSession, patch: RemoteBrowserPat
         await session.page.keyboard.press(patch.event.key);
       }
     }
+    requestInputFrameCapture(session);
     return;
   }
   await session.page.mouse.move(x, y);
@@ -626,6 +651,16 @@ async function applyInput(session: RemoteBrowserSession, patch: RemoteBrowserPat
   } else if (patch.event.kind === "click") {
     await session.page.mouse.click(x, y);
   }
+  requestInputFrameCapture(session);
+}
+
+function requestInputFrameCapture(session: RemoteBrowserSession): void {
+  const nowMs = Date.now();
+  if (nowMs - session.lastInputFrameAtMs < frameIntervalMs) {
+    return;
+  }
+  session.lastInputFrameAtMs = nowMs;
+  void captureFrame(session, { force: true }).catch(() => undefined);
 }
 
 async function handleRequest(request: IncomingMessage, response: ServerResponse): Promise<void> {

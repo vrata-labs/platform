@@ -23,6 +23,7 @@ interface RemoteBrowserFrameMessage {
   height?: number;
   dataUrl?: string;
   capturedAtMs?: number;
+  preserveMediaOverlays?: boolean;
 }
 
 interface RemoteBrowserMediaAnswerMessage {
@@ -96,7 +97,10 @@ export interface RemoteBrowserDebugSnapshot {
   mediaPeerConnectionState: RTCPeerConnectionState | null;
   mediaErrorCode: string | null;
   mediaSourceRect: RemoteBrowserMediaSourceRect | null;
+  mediaCompositeHoldActive: boolean;
 }
+
+const REMOTE_BROWSER_MEDIA_COMPOSITE_HOLD_MS = 3000;
 
 function remoteBrowserInputEventId(participantId: string, kind: string): string {
   return `${participantId}:remote-browser:${kind}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
@@ -157,6 +161,10 @@ export function remoteBrowserMediaDrawRegion(input: {
   return { sx, sy, sw, sh, dx, dy, dw, dh };
 }
 
+export function shouldCompositeRemoteBrowserMediaFrame(input: { mediaVisualActive: boolean; mediaCompositeHoldUntilMs: number; nowMs: number }): boolean {
+  return input.mediaVisualActive && input.nowMs >= input.mediaCompositeHoldUntilMs;
+}
+
 export class RemoteBrowserObjectRuntime {
   readonly texture: THREE.CanvasTexture;
 
@@ -185,6 +193,7 @@ export class RemoteBrowserObjectRuntime {
   private mediaErrorCode: string | null = null;
   private firstVisibleFrame = false;
   private skippedBlankFrameCount = 0;
+  private mediaCompositeHoldUntilMs = 0;
 
   constructor(private readonly options: RemoteBrowserObjectRuntimeOptions) {
     this.canvas = document.createElement("canvas");
@@ -287,7 +296,8 @@ export class RemoteBrowserObjectRuntime {
       mediaHasAudio: this.mediaHasAudio,
       mediaPeerConnectionState: this.mediaPeerConnection?.connectionState ?? null,
       mediaErrorCode: this.mediaErrorCode,
-      mediaSourceRect: this.mediaSourceRect
+      mediaSourceRect: this.mediaSourceRect,
+      mediaCompositeHoldActive: this.isMediaCompositeHoldActive()
     };
   }
 
@@ -304,6 +314,7 @@ export class RemoteBrowserObjectRuntime {
     if (!patch) {
       return false;
     }
+    this.holdMediaCompositeForInput(event.kind);
     this.playRemoteMedia();
     this.sendPatch(object, patch);
     return true;
@@ -324,6 +335,25 @@ export class RemoteBrowserObjectRuntime {
       return { type: "pointer", event, inputEventId: event.eventId };
     }
     return null;
+  }
+
+  private holdMediaCompositeForInput(kind: SurfaceInputKind): void {
+    if (kind !== "pointer-move" && kind !== "pointer-down" && kind !== "pointer-up" && kind !== "click" && kind !== "scroll") {
+      return;
+    }
+    this.mediaCompositeHoldUntilMs = Math.max(this.mediaCompositeHoldUntilMs, Date.now() + REMOTE_BROWSER_MEDIA_COMPOSITE_HOLD_MS);
+  }
+
+  private isMediaCompositeHoldActive(nowMs = Date.now()): boolean {
+    return nowMs < this.mediaCompositeHoldUntilMs;
+  }
+
+  private shouldCompositeMediaFrame(nowMs = Date.now()): boolean {
+    return shouldCompositeRemoteBrowserMediaFrame({
+      mediaVisualActive: this.mediaVisualActive,
+      mediaCompositeHoldUntilMs: this.mediaCompositeHoldUntilMs,
+      nowMs
+    });
   }
 
   private sendPatch(object: MediaObjectInstance<RemoteBrowserObjectState>, patch: RemoteBrowserPatch): void {
@@ -458,7 +488,10 @@ export class RemoteBrowserObjectRuntime {
       this.context.fillStyle = "#020617";
       this.context.fillRect(0, 0, this.canvas.width, this.canvas.height);
       this.context.drawImage(image, 0, 0, this.canvas.width, this.canvas.height);
-      if (this.mediaVisualActive && this.mediaElement) {
+      if (payload.preserveMediaOverlays) {
+        this.mediaCompositeHoldUntilMs = Math.max(this.mediaCompositeHoldUntilMs, Date.now() + REMOTE_BROWSER_MEDIA_COMPOSITE_HOLD_MS);
+      }
+      if (this.shouldCompositeMediaFrame() && this.mediaElement) {
         this.drawMediaFrame(this.mediaElement);
       }
       this.texture.needsUpdate = true;
@@ -663,7 +696,9 @@ export class RemoteBrowserObjectRuntime {
     this.mediaState = "connected";
     this.mediaErrorCode = null;
     this.options.applyTexture(this.texture);
-    this.drawMediaFrame(element);
+    if (this.shouldCompositeMediaFrame()) {
+      this.drawMediaFrame(element);
+    }
     this.scheduleMediaCompositeFrame(element);
     this.frameSocket?.send(JSON.stringify({ type: "media-connected" }));
   }
@@ -673,7 +708,9 @@ export class RemoteBrowserObjectRuntime {
       if (this.mediaElement !== element || !this.mediaVisualActive) {
         return;
       }
-      this.drawMediaFrame(element);
+      if (this.shouldCompositeMediaFrame()) {
+        this.drawMediaFrame(element);
+      }
       this.scheduleMediaCompositeFrame(element);
     });
   }
@@ -750,6 +787,7 @@ export class RemoteBrowserObjectRuntime {
     this.mediaVisualActive = false;
     this.mediaSourceRect = null;
     this.mediaTextureActivationPending = false;
+    this.mediaCompositeHoldUntilMs = 0;
     if (this.mediaElement) {
       this.mediaElement.pause();
       this.mediaElement.srcObject = null;

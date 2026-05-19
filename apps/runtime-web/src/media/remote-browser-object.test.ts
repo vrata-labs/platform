@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 
 import {
   createRemoteBrowserObjectRuntime,
-  remoteBrowserMediaDrawRegion
+  remoteBrowserMediaDrawRegion,
+  shouldCompositeRemoteBrowserMediaFrame
 } from "./remote-browser-object.js";
 import {
   REMOTE_BROWSER_OBJECT_TYPE,
@@ -164,4 +165,22 @@ test("remoteBrowserMediaDrawRegion ignores invalid or offscreen bounds", () => {
     mediaWidth: 1280,
     mediaHeight: 720
   }), null);
+});
+
+test("remote browser media composite pauses while screenshot overlays are preserved", () => {
+  assert.equal(shouldCompositeRemoteBrowserMediaFrame({
+    mediaVisualActive: false,
+    mediaCompositeHoldUntilMs: 0,
+    nowMs: 1000
+  }), false);
+  assert.equal(shouldCompositeRemoteBrowserMediaFrame({
+    mediaVisualActive: true,
+    mediaCompositeHoldUntilMs: 1500,
+    nowMs: 1000
+  }), false);
+  assert.equal(shouldCompositeRemoteBrowserMediaFrame({
+    mediaVisualActive: true,
+    mediaCompositeHoldUntilMs: 1500,
+    nowMs: 1500
+  }), true);
 });

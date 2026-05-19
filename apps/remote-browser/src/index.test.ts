@@ -9,7 +9,8 @@ import {
   resolveRemoteBrowserFrameIntervalMs,
   resolveRemoteBrowserMediaFrameIntervalMs,
   resolveRemoteBrowserMediaIceServers,
-  shouldCaptureRemoteBrowserFrame
+  shouldCaptureRemoteBrowserFrame,
+  shouldPreserveRemoteBrowserMediaOverlays
 } from "./index.js";
 import type { SurfaceInputEvent } from "@noah/shared-types";
 
@@ -112,6 +113,22 @@ test("remote browser throttles screenshots after media transport connects", () =
     nowMs: 10000,
     mediaFrameIntervalMs: 1000
   }), false);
+  assert.equal(shouldCaptureRemoteBrowserFrame({
+    frameCaptureInFlight: false,
+    writableClientCount: 1,
+    mediaClientCount: 1,
+    lastFrameAtMs: 9900,
+    nowMs: 10000,
+    mediaFrameIntervalMs: 1000,
+    force: true
+  }), true);
+});
+
+test("remote browser marks frames after input as media overlay preserving", () => {
+  assert.equal(shouldPreserveRemoteBrowserMediaOverlays({ lastInputAtMs: 0, capturedAtMs: 1000, preserveMs: 3000 }), false);
+  assert.equal(shouldPreserveRemoteBrowserMediaOverlays({ lastInputAtMs: 1200, capturedAtMs: 1000, preserveMs: 3000 }), false);
+  assert.equal(shouldPreserveRemoteBrowserMediaOverlays({ lastInputAtMs: 1000, capturedAtMs: 3900, preserveMs: 3000 }), true);
+  assert.equal(shouldPreserveRemoteBrowserMediaOverlays({ lastInputAtMs: 1000, capturedAtMs: 4101, preserveMs: 3000 }), false);
 });
 
 test("resolveRemoteBrowserMediaIceServers parses comma-separated STUN/TURN URLs", () => {
