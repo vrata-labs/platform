@@ -197,7 +197,7 @@ async function moveMouseToSurface(page: Page, u: number, v: number): Promise<num
   const beforeSeq = (await readDebug(page))?.remoteBrowser?.lastInputSeq ?? 0;
   const point = await surfaceClientPoint(page, u, v);
   const startedAt = Date.now();
-  await page.mouse.move(point.x, point.y, { steps: 10 });
+  await page.mouse.move(point.x, point.y);
   await expect.poll(async () => (await readDebug(page))?.remoteBrowser?.lastInputSeq ?? 0, {
     timeout: 10000,
     intervals: [100, 250, 500]
