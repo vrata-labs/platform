@@ -138,6 +138,7 @@ export interface RemoteBrowserObjectState {
   streamUpdatedAtMs?: number;
   stoppedAtMs?: number;
   streamErrorCode?: RemoteBrowserErrorCode;
+  errorDetail?: string;
   lastInputSeq?: number;
   lastInputEventId: string | null;
   errorCode?: RemoteBrowserErrorCode;
@@ -169,7 +170,7 @@ export type RemoteBrowserPatch =
   | { type: "keyboard"; event: SurfaceInputEvent; inputEventId: string }
   | { type: "take-control"; inputEventId: string }
   | { type: "release-control"; inputEventId: string }
-  | { type: "mark-failed"; errorCode: RemoteBrowserErrorCode; inputEventId: string };
+  | { type: "mark-failed"; errorCode: RemoteBrowserErrorCode; errorDetail?: string; inputEventId: string };
 
 export type MediaObjectCommandBlockedReason =
   | "missing-permission"

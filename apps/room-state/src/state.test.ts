@@ -618,6 +618,48 @@ test("remote-browser object opens URL, streams input, and enforces controller lo
   assert.equal(hostLeft.mediaObjects.objects["browser-1"], undefined);
 });
 
+test("remote-browser executor failure stores sanitized diagnostic detail", () => {
+  const hostRoom = joinRoom(createRoomState("demo"), "host", { role: "host" });
+  const created = createMediaObject(hostRoom, "host", {
+    commandId: "cmd-create-browser-failed",
+    surfaceId: "debug-main",
+    objectType: "remote-browser",
+    objectId: "browser-failed",
+    nowMs: 1
+  });
+  const opened = patchMediaObjectState(created.room, "host", {
+    commandId: "cmd-open-browser-failed",
+    surfaceId: "debug-main",
+    objectId: "browser-failed",
+    expectedRevision: 0,
+    patch: {
+      type: "open-url",
+      url: "https://example.com/remote-browser-demo.html",
+      inputEventId: "host:open-failed:1"
+    },
+    nowMs: 2
+  });
+  const failed = patchRemoteBrowserExecutorState(opened.room, {
+    commandId: "cmd-browser-failed",
+    surfaceId: "debug-main",
+    objectId: "browser-failed",
+    executorSessionId: "remote-browser:browser-failed",
+    patch: {
+      type: "mark-failed",
+      errorCode: "viewport_capture_failed",
+      errorDetail: "NotReadableError:\nCould not start video source",
+      inputEventId: "executor:failed:1"
+    },
+    nowMs: 3
+  });
+
+  assert.equal(failed.result.accepted, true);
+  const failedState = failed.room.mediaObjects.objects["browser-failed"]?.state as { status?: string; errorCode?: string; errorDetail?: string } | undefined;
+  assert.equal(failedState?.status, "failed");
+  assert.equal(failedState?.errorCode, "viewport_capture_failed");
+  assert.equal(failedState?.errorDetail, "NotReadableError: Could not start video source");
+});
+
 test("leaveRoom clears owned active screen-share object", () => {
   const hostRoom = joinRoom(createRoomState("demo"), "host", { role: "host" });
   const created = createMediaObject(hostRoom, "host", {

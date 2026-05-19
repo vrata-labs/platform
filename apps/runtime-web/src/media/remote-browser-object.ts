@@ -96,6 +96,7 @@ export interface RemoteBrowserDebugSnapshot {
   localHasControl: boolean;
   lastInputSeq: number;
   errorCode: string | null;
+  errorDetail: string | null;
   mediaState: RemoteBrowserMediaState;
   mediaConnected: boolean;
   mediaHasVideo: boolean;
@@ -309,6 +310,7 @@ export class RemoteBrowserObjectRuntime {
       localHasControl: !controllerParticipantId || controllerParticipantId === this.options.participantId,
       lastInputSeq: state?.lastInputSeq ?? 0,
       errorCode: state?.errorCode ?? this.errorCode,
+      errorDetail: state?.errorDetail ?? null,
       mediaState: externalVideoActive ? "connected" : this.mediaState,
       mediaConnected: externalVideoActive || this.mediaState === "connected",
       mediaHasVideo: Boolean(state?.mediaTrackSid) || externalVideoActive || this.mediaHasVideo,

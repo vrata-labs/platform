@@ -351,7 +351,7 @@ function isRemoteBrowserPatch(input: unknown): input is RemoteBrowserPatch {
   if (!input || typeof input !== "object") {
     return false;
   }
-  const patch = input as { type?: unknown; url?: unknown; event?: unknown; inputEventId?: unknown; errorCode?: unknown; mediaParticipantId?: unknown; mediaTrackSid?: unknown; audioTrackSid?: unknown };
+  const patch = input as { type?: unknown; url?: unknown; event?: unknown; inputEventId?: unknown; errorCode?: unknown; errorDetail?: unknown; mediaParticipantId?: unknown; mediaTrackSid?: unknown; audioTrackSid?: unknown };
   if (!isRemoteBrowserInputEventId(patch.inputEventId)) {
     return false;
   }
@@ -374,9 +374,14 @@ function isRemoteBrowserPatch(input: unknown): input is RemoteBrowserPatch {
     return true;
   }
   if (patch.type === "mark-failed") {
-    return isRemoteBrowserErrorCode(patch.errorCode);
+    return isRemoteBrowserErrorCode(patch.errorCode) && (patch.errorDetail === undefined || typeof patch.errorDetail === "string");
   }
   return false;
+}
+
+function normalizeRemoteBrowserErrorDetail(input: string | undefined): string | undefined {
+  const normalized = input?.replace(/[\r\n\t]+/g, " ").trim().slice(0, 500);
+  return normalized || undefined;
 }
 
 function isRemoteBrowserRealtimeInputPatch(input: unknown): input is Extract<RemoteBrowserPatch, { type: "pointer" | "scroll" | "keyboard" }> {
@@ -590,6 +595,7 @@ function reduceRemoteBrowserState(current: RemoteBrowserObjectState, patch: Remo
       currentUrl: patch.url,
       errorCode: undefined,
       streamErrorCode: undefined,
+      errorDetail: undefined,
       loadedAtMs: undefined,
       streamStartedAtMs: undefined,
       streamUpdatedAtMs: undefined,
@@ -609,6 +615,7 @@ function reduceRemoteBrowserState(current: RemoteBrowserObjectState, patch: Remo
       audioTrackSid: undefined,
       errorCode: undefined,
       streamErrorCode: undefined,
+      errorDetail: undefined,
       streamUpdatedAtMs: nowMs,
       lastInputEventId: patch.inputEventId
     };
@@ -629,6 +636,7 @@ function reduceRemoteBrowserState(current: RemoteBrowserObjectState, patch: Remo
       stoppedAtMs: undefined,
       errorCode: undefined,
       streamErrorCode: undefined,
+      errorDetail: undefined,
       lastInputEventId: patch.inputEventId
     };
   }
@@ -651,6 +659,7 @@ function reduceRemoteBrowserState(current: RemoteBrowserObjectState, patch: Remo
       audioTrackSid: undefined,
       errorCode: patch.errorCode,
       streamErrorCode: patch.errorCode,
+      errorDetail: normalizeRemoteBrowserErrorDetail(patch.errorDetail),
       streamUpdatedAtMs: nowMs,
       lastInputEventId: patch.inputEventId
     };

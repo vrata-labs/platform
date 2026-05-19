@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   createRemoteBrowserViewportCaptureOptions,
   remoteBrowserCaptureTargetTitle,
+  remoteBrowserCaptureTitleGuard,
   remoteBrowserEventPoint,
   remoteBrowserInitScript,
   remoteBrowserScrollDelta,
@@ -65,6 +66,49 @@ test("remote browser viewport publisher page is not the capture target tab", () 
   assert.match(html, new RegExp(`<button id="${remoteBrowserViewportPublisherButtonId}"`));
   assert.notEqual(remoteBrowserViewportPublisherTitle, remoteBrowserCaptureTargetTitle);
   assert.equal(html.includes(`<title>${remoteBrowserCaptureTargetTitle}</title>`), false);
+});
+
+test("remote browser capture title guard keeps target tab selectable", () => {
+  const originalWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+  const originalDocument = Object.getOwnPropertyDescriptor(globalThis, "document");
+  const intervals: Array<() => void> = [];
+  const cleared: number[] = [];
+  const fakeDocument = { title: "Rutube live" };
+  const fakeWindow = {
+    setInterval: (callback: () => void) => {
+      intervals.push(callback);
+      return intervals.length;
+    },
+    clearInterval: (id: number) => {
+      cleared.push(id);
+    }
+  };
+
+  Object.defineProperty(globalThis, "window", { configurable: true, value: fakeWindow });
+  Object.defineProperty(globalThis, "document", { configurable: true, value: fakeDocument });
+
+  try {
+    remoteBrowserCaptureTitleGuard(remoteBrowserCaptureTargetTitle);
+    assert.equal(fakeDocument.title, remoteBrowserCaptureTargetTitle);
+
+    fakeDocument.title = "Rutube changed title";
+    intervals[0]?.();
+    assert.equal(fakeDocument.title, remoteBrowserCaptureTargetTitle);
+
+    remoteBrowserCaptureTitleGuard(remoteBrowserCaptureTargetTitle);
+    assert.deepEqual(cleared, [1]);
+  } finally {
+    if (originalWindow) {
+      Object.defineProperty(globalThis, "window", originalWindow);
+    } else {
+      delete (globalThis as Record<string, unknown>).window;
+    }
+    if (originalDocument) {
+      Object.defineProperty(globalThis, "document", originalDocument);
+    } else {
+      delete (globalThis as Record<string, unknown>).document;
+    }
+  }
 });
 
 test("remote browser viewport capture excludes the publisher tab and requests audio", () => {

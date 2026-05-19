@@ -158,6 +158,7 @@ const roomStateInternalUrl = resolveInternalHttpUrl(process.env.ROOM_STATE_INTER
 export const remoteBrowserCaptureTargetTitle = "Noah Remote Browser";
 export const remoteBrowserViewportPublisherTitle = "Noah Remote Browser Publisher";
 export const remoteBrowserViewportPublisherButtonId = "noah-remote-browser-start-capture";
+const remoteBrowserCaptureTitleGuardKey = "__NOAH_REMOTE_BROWSER_CAPTURE_TITLE_GUARD__";
 let activeListenPort = port;
 const remoteBrowserScrollbarStyle = `
   html {
@@ -287,6 +288,21 @@ const urlPolicy = createRemoteBrowserUrlPolicy();
 
 export function remoteBrowserViewportPublisherHtml(): string {
   return `<!doctype html><html><head><meta charset="utf-8"><title>${remoteBrowserViewportPublisherTitle}</title></head><body><button id="${remoteBrowserViewportPublisherButtonId}" type="button">Start capture</button></body></html>`;
+}
+
+export function remoteBrowserCaptureTitleGuard(title: string): void {
+  const pageWindow = window as Window & { [remoteBrowserCaptureTitleGuardKey]?: number };
+  const existing = pageWindow[remoteBrowserCaptureTitleGuardKey];
+  if (typeof existing === "number") {
+    window.clearInterval(existing);
+  }
+  const applyTitle = () => {
+    if (document.title !== title) {
+      document.title = title;
+    }
+  };
+  applyTitle();
+  pageWindow[remoteBrowserCaptureTitleGuardKey] = window.setInterval(applyTitle, 100);
 }
 
 function getRemoteBrowserViewportPublisherUrl(): string {
@@ -461,9 +477,7 @@ async function requestRemoteBrowserMediaToken(session: RemoteBrowserSession): Pr
 }
 
 async function prepareViewportPublisherPage(session: RemoteBrowserSession): Promise<void> {
-  await session.page.evaluate((title) => {
-    document.title = title;
-  }, remoteBrowserCaptureTargetTitle).catch(() => undefined);
+  await session.page.evaluate(remoteBrowserCaptureTitleGuard, remoteBrowserCaptureTargetTitle).catch(() => undefined);
   try {
     await session.publisherPage.goto(getRemoteBrowserViewportPublisherUrl(), { waitUntil: "domcontentloaded", timeout: 5000 });
   } catch {
@@ -477,9 +491,12 @@ async function prepareViewportPublisherPage(session: RemoteBrowserSession): Prom
 async function grantViewportPublisherDisplayCapture(session: RemoteBrowserSession): Promise<void> {
   const cdp = await session.context.newCDPSession(session.publisherPage);
   try {
+    const targetInfo = await cdp.send("Target.getTargetInfo").catch(() => null) as { targetInfo?: { browserContextId?: string } } | null;
+    const browserContextId = targetInfo?.targetInfo?.browserContextId;
     await cdp.send("Browser.grantPermissions", {
       origin: getRemoteBrowserViewportPublisherOrigin(),
-      permissions: ["displayCapture"]
+      permissions: ["displayCapture"],
+      ...(browserContextId ? { browserContextId } : {})
     });
   } finally {
     await cdp.detach().catch(() => undefined);
@@ -537,6 +554,11 @@ function remoteBrowserSessionErrorCode(error: unknown): RemoteBrowserErrorCode {
     return "navigation_failed";
   }
   return "executor_crashed";
+}
+
+function remoteBrowserErrorDetail(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.replace(/[\r\n\t]+/g, " ").slice(0, 500);
 }
 
 async function publishViewportToLiveKit(session: RemoteBrowserSession): Promise<RemoteBrowserViewportPublishResult> {
@@ -667,6 +689,7 @@ async function startViewportPublisher(session: RemoteBrowserSession): Promise<vo
     await patchRemoteBrowserExecutorState(session, {
       type: "mark-failed",
       errorCode: remoteBrowserPublishErrorCode(error),
+      errorDetail: remoteBrowserErrorDetail(error),
       inputEventId: remoteBrowserExecutorInputEventId(session, "failed")
     }).catch(() => undefined);
   }
@@ -969,9 +992,7 @@ async function createSession(input: { sessionId: string; frameStreamId?: string;
     throw new Error(`navigation_failed:${error instanceof Error ? error.message : "unknown"}`);
   }
   await ensureRemoteBrowserPageStyles(page);
-  await page.evaluate((title) => {
-    document.title = title;
-  }, remoteBrowserCaptureTargetTitle).catch(() => undefined);
+  await page.evaluate(remoteBrowserCaptureTitleGuard, remoteBrowserCaptureTargetTitle).catch(() => undefined);
   const finalValidation = await validateRemoteBrowserUrl(page.url(), urlPolicy);
   if (!finalValidation.allowed) {
     await context.close().catch(() => undefined);
