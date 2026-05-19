@@ -131,6 +131,11 @@ export function shouldCaptureRemoteBrowserFrame(input: RemoteBrowserFrameCapture
 }
 
 const mediaOverlayPreserveMs = 3000;
+const remoteBrowserPointerMoveSteps = 8;
+
+export function remoteBrowserMouseMoveSteps(kind: SurfaceInputEvent["kind"]): number {
+  return kind === "pointer-move" ? remoteBrowserPointerMoveSteps : 1;
+}
 
 export function shouldPreserveRemoteBrowserMediaOverlays(input: { lastInputAtMs: number; capturedAtMs: number; preserveMs?: number }): boolean {
   if (input.lastInputAtMs <= 0 || input.capturedAtMs < input.lastInputAtMs) {
@@ -1210,6 +1215,7 @@ async function applyInput(session: RemoteBrowserSession, patch: RemoteBrowserPat
   }
   session.lastInputAtMs = Date.now();
   const { x, y } = remoteBrowserEventPoint(patch.event);
+  await session.page.bringToFront().catch(() => undefined);
   if (patch.type === "scroll") {
     const delta = remoteBrowserScrollDelta(patch.event);
     await session.page.mouse.move(x, y);
@@ -1228,7 +1234,7 @@ async function applyInput(session: RemoteBrowserSession, patch: RemoteBrowserPat
     requestInputFrameCapture(session);
     return;
   }
-  await session.page.mouse.move(x, y);
+  await session.page.mouse.move(x, y, { steps: remoteBrowserMouseMoveSteps(patch.event.kind) });
   if (patch.event.kind === "pointer-down") {
     await session.page.mouse.down();
   } else if (patch.event.kind === "pointer-up") {

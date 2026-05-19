@@ -9,6 +9,7 @@ import {
   remoteBrowserCaptureTitleGuard,
   remoteBrowserEventPoint,
   remoteBrowserInitScript,
+  remoteBrowserMouseMoveSteps,
   remoteBrowserScrollDelta,
   remoteBrowserViewportPublisherButtonId,
   remoteBrowserViewportPublisherHtml,
@@ -59,6 +60,11 @@ test("remote browser maps surface UV to browser viewport coordinates", () => {
   assert.deepEqual(remoteBrowserEventPoint(surfaceInput({ u: 0, v: 1 }), viewport), { x: 0, y: 0 });
   assert.deepEqual(remoteBrowserEventPoint(surfaceInput({ u: 1, v: 0 }), viewport), { x: 1279, y: 719 });
   assert.deepEqual(remoteBrowserEventPoint(surfaceInput({ u: 0.25, v: 0.75 }), viewport), { x: 320, y: 180 });
+});
+
+test("remote browser smooths hover pointer movement", () => {
+  assert.equal(remoteBrowserMouseMoveSteps("pointer-move"), 8);
+  assert.equal(remoteBrowserMouseMoveSteps("click"), 1);
 });
 
 test("remote browser viewport publisher page is not the capture target tab", () => {

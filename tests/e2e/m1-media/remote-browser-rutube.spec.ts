@@ -273,6 +273,7 @@ function averageRgbDiff(left: SurfaceSample, right: SurfaceSample): number {
 async function expectVisibleHoverResponse(page: Page, candidates: Array<{ u: number; v: number }>): Promise<void> {
   let bestDiff = 0;
   let bestLatencyMs = Number.POSITIVE_INFINITY;
+  const attempts: Array<{ candidate: { u: number; v: number }; clip: SurfaceSample["clip"]; diff: number; inputLatencyMs: number; debug: RemoteBrowserDebug["remoteBrowser"] | null }> = [];
   for (const candidate of candidates) {
     await moveMouseToSurface(page, 0.02, 0.98);
     await page.waitForTimeout(3500);
@@ -282,22 +283,31 @@ async function expectVisibleHoverResponse(page: Page, candidates: Array<{ u: num
     const before = await sampleSurfaceRegion(page, candidate, sampleSize);
     const inputLatencyMs = await moveMouseToSurface(page, candidate.u, candidate.v);
     const visualStartedAt = Date.now();
+    let candidateBestDiff = 0;
     while (Date.now() - visualStartedAt < 5000) {
       await page.waitForTimeout(500);
       const after = await sampleSurfaceRegion(page, candidate, sampleSize);
-      bestDiff = Math.max(bestDiff, averageRgbDiff(before, after));
+      candidateBestDiff = Math.max(candidateBestDiff, averageRgbDiff(before, after));
+      bestDiff = Math.max(bestDiff, candidateBestDiff);
       if (bestDiff > 6) {
         break;
       }
     }
     bestLatencyMs = Math.min(bestLatencyMs, inputLatencyMs);
+    attempts.push({
+      candidate,
+      clip: before.clip,
+      diff: Number(candidateBestDiff.toFixed(3)),
+      inputLatencyMs,
+      debug: (await readDebug(page))?.remoteBrowser ?? null
+    });
     if (bestDiff > 6) {
       break;
     }
   }
 
   expect(bestLatencyMs).toBeLessThan(2500);
-  expect(bestDiff).toBeGreaterThan(6);
+  expect(bestDiff, `Rutube hover produced no visible response: ${JSON.stringify({ bestDiff, bestLatencyMs, attempts }, null, 2)}`).toBeGreaterThan(6);
 }
 
 async function dismissRutubeOverlays(page: Page): Promise<void> {
