@@ -293,6 +293,10 @@ function getRemoteBrowserViewportPublisherUrl(): string {
   return `http://127.0.0.1:${activeListenPort}/internal/viewport-publisher`;
 }
 
+function getRemoteBrowserViewportPublisherOrigin(): string {
+  return new URL(getRemoteBrowserViewportPublisherUrl()).origin;
+}
+
 export function createRemoteBrowserViewportCaptureOptions(size: { width: number; height: number } = viewport): DisplayMediaStreamOptions {
   return {
     video: {
@@ -470,6 +474,18 @@ async function prepareViewportPublisherPage(session: RemoteBrowserSession): Prom
   }, remoteBrowserViewportPublisherTitle).catch(() => undefined);
 }
 
+async function grantViewportPublisherDisplayCapture(session: RemoteBrowserSession): Promise<void> {
+  const cdp = await session.context.newCDPSession(session.publisherPage);
+  try {
+    await cdp.send("Browser.grantPermissions", {
+      origin: getRemoteBrowserViewportPublisherOrigin(),
+      permissions: ["displayCapture"]
+    });
+  } finally {
+    await cdp.detach().catch(() => undefined);
+  }
+}
+
 async function patchRemoteBrowserExecutorState(session: RemoteBrowserSessionRef, patch: RemoteBrowserPatch): Promise<void> {
   const response = await fetch(`${roomStateInternalUrl}/api/internal/remote-browser/sessions/${encodeURIComponent(session.sessionId)}`, {
     method: "POST",
@@ -526,6 +542,7 @@ function remoteBrowserSessionErrorCode(error: unknown): RemoteBrowserErrorCode {
 async function publishViewportToLiveKit(session: RemoteBrowserSession): Promise<RemoteBrowserViewportPublishResult> {
   const { token, livekitUrl } = await requestRemoteBrowserMediaToken(session);
   await prepareViewportPublisherPage(session);
+  await grantViewportPublisherDisplayCapture(session);
   await session.publisherPage.addScriptTag({ path: resolveLiveKitClientBundlePath() });
   const captureOptions = createRemoteBrowserViewportCaptureOptions({ width: viewport.width, height: viewport.height });
   await session.publisherPage.evaluate(({ livekitUrl: targetLivekitUrl, token: targetToken, displayMediaOptions, buttonId }) => {
