@@ -19,13 +19,14 @@ ENV NODE_ENV=production \
 WORKDIR /app
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates chromium fonts-liberation xvfb dbus-x11 pulseaudio \
+  && apt-get install -y --no-install-recommends ca-certificates chromium fonts-liberation xvfb dbus-x11 pulseaudio pulseaudio-utils libasound2-plugins \
   && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /app/package.json ./package.json
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/apps/remote-browser/package.json ./apps/remote-browser/package.json
 COPY --from=build /app/apps/remote-browser/dist ./apps/remote-browser/dist
+COPY --chmod=755 apps/remote-browser/start.sh ./apps/remote-browser/start.sh
 COPY --from=build /app/packages/shared-types/package.json ./packages/shared-types/package.json
 COPY --from=build /app/packages/shared-types/dist ./packages/shared-types/dist
 COPY --from=build /app/packages/shared-types/package.json ./node_modules/@noah/shared-types/package.json
@@ -35,4 +36,6 @@ EXPOSE 4010
 
 HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=5 CMD node -e "fetch('http://127.0.0.1:' + (process.env.REMOTE_BROWSER_PORT || '4010') + '/health').then((r) => { if (!r.ok) process.exit(1); }).catch(() => process.exit(1))"
 
-CMD ["sh", "-lc", "Xvfb :99 -screen 0 ${REMOTE_BROWSER_VIEWPORT_WIDTH:-1280}x${REMOTE_BROWSER_VIEWPORT_HEIGHT:-720}x24 >/tmp/noah-xvfb.log 2>&1 & export DISPLAY=:99; pulseaudio --start --exit-idle-time=-1 >/tmp/noah-pulseaudio.log 2>&1 || true; node apps/remote-browser/dist/index.js"]
+USER node
+
+CMD ["./apps/remote-browser/start.sh"]

@@ -413,6 +413,7 @@ async function getBrowser(): Promise<Browser> {
       "--use-fake-ui-for-media-stream",
       "--auto-accept-this-tab-capture",
       "--allow-http-screen-capture",
+      "--alsa-output-device=pulse",
       `--auto-select-desktop-capture-source=${remoteBrowserCaptureTargetTitle}`,
       `--auto-select-tab-capture-source-by-title=${remoteBrowserCaptureTargetTitle}`,
       "--disable-background-timer-throttling",
