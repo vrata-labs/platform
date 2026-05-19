@@ -269,19 +269,19 @@ function averageRgbDiff(left: SurfaceSample, right: SurfaceSample): number {
 }
 
 async function expectVisibleHoverResponse(page: Page, candidates: Array<{ u: number; v: number }>): Promise<void> {
-  const awayPoint = await surfaceClientPoint(page, 0.02, 0.04);
-  await page.mouse.move(awayPoint.x, awayPoint.y, { steps: 4 });
-  await page.waitForTimeout(1500);
-
   let bestDiff = 0;
   let bestLatencyMs = Number.POSITIVE_INFINITY;
   for (const candidate of candidates) {
-    const before = await sampleSurfaceRegion(page, candidate);
+    await page.waitForTimeout(2500);
+    const sampleSize = candidate.v < 0.2
+      ? { width: 0.34, height: 0.08 }
+      : { width: 0.18, height: 0.18 };
+    const before = await sampleSurfaceRegion(page, candidate, sampleSize);
     const inputLatencyMs = await moveMouseToSurface(page, candidate.u, candidate.v);
     const visualStartedAt = Date.now();
     while (Date.now() - visualStartedAt < 5000) {
       await page.waitForTimeout(500);
-      const after = await sampleSurfaceRegion(page, candidate);
+      const after = await sampleSurfaceRegion(page, candidate, sampleSize);
       bestDiff = Math.max(bestDiff, averageRgbDiff(before, after));
       if (bestDiff > 6) {
         break;
