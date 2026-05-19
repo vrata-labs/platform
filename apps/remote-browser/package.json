@@ -5,6 +5,7 @@
   "type": "module",
   "dependencies": {
     "@noah/shared-types": "workspace:*",
+    "livekit-client": "^2.15.6",
     "playwright-core": "^1.58.2",
     "ws": "^8.18.3"
   },

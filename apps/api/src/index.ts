@@ -1,6 +1,6 @@
 import { readFile, stat } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { createHmac } from "node:crypto";
+import { createHmac, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -97,6 +97,13 @@ interface MediaTokenPayload {
   participantId: string;
   canPublishAudio: boolean;
   canPublishVideo: boolean;
+}
+
+interface RemoteBrowserMediaTokenRequest {
+  roomId?: string;
+  objectId?: string;
+  executorSessionId?: string;
+  mediaParticipantId?: string;
 }
 
 interface RemoteBrowserFrameTokenRequest {
@@ -618,7 +625,7 @@ function json(response: ServerResponse, statusCode: number, body: unknown): void
     "content-type": "application/json; charset=utf-8",
     "access-control-allow-origin": process.env.API_CORS_ORIGIN ?? "*",
     "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
-    "access-control-allow-headers": "content-type,authorization,x-noah-admin-token",
+    "access-control-allow-headers": "content-type,authorization,x-noah-admin-token,x-noah-internal-token",
     "x-content-type-options": "nosniff",
     "x-frame-options": "DENY",
     "referrer-policy": "no-referrer",
@@ -632,6 +639,26 @@ function isAuthorizedControlPlaneRequest(request: IncomingMessage): boolean {
     return true;
   }
   return request.headers["x-noah-admin-token"] === controlPlaneAdminToken;
+}
+
+function safeEqual(left: string, right: string): boolean {
+  const leftBuffer = Buffer.from(left);
+  const rightBuffer = Buffer.from(right);
+  return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer);
+}
+
+function getInternalServiceToken(env: NodeJS.ProcessEnv = process.env): string | null {
+  const token = env.NOAH_INTERNAL_SERVICE_TOKEN?.trim() || env.REMOTE_BROWSER_INTERNAL_TOKEN?.trim() || "";
+  return token || null;
+}
+
+function isAuthorizedInternalRequest(request: IncomingMessage, env: NodeJS.ProcessEnv = process.env): boolean {
+  const token = getInternalServiceToken(env);
+  if (!token) {
+    return true;
+  }
+  const provided = request.headers["x-noah-internal-token"];
+  return typeof provided === "string" && safeEqual(provided, token);
 }
 
 function parseBody<T>(request: IncomingMessage): Promise<T | null> {
@@ -807,7 +834,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     response.writeHead(204, {
       "access-control-allow-origin": process.env.API_CORS_ORIGIN ?? "*",
       "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
-      "access-control-allow-headers": "content-type,authorization"
+      "access-control-allow-headers": "content-type,authorization,x-noah-admin-token,x-noah-internal-token"
     });
     response.end();
     return;
@@ -1256,6 +1283,37 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       token: await accessToken.toJwt(),
       expiresInSeconds: Number.parseInt(process.env.MEDIA_TOKEN_TTL_SECONDS ?? "900", 10),
       livekitUrl: getDefaultLivekitUrl(request)
+    });
+    return;
+  }
+
+  if (method === "POST" && url.pathname === "/api/tokens/remote-browser-media") {
+    if (!isAuthorizedInternalRequest(request)) {
+      json(response, 403, { error: "forbidden" });
+      return;
+    }
+    const payload = (await parseBody<RemoteBrowserMediaTokenRequest>(request)) ?? {};
+    if (!payload.roomId || !payload.objectId || !payload.executorSessionId || !payload.mediaParticipantId) {
+      json(response, 400, { error: "remote_browser_media_token_payload_required" });
+      return;
+    }
+    const ttlSeconds = Number.parseInt(process.env.MEDIA_TOKEN_TTL_SECONDS ?? "900", 10);
+    const accessToken = new AccessToken(livekitApiKey, livekitApiSecret, {
+      identity: payload.mediaParticipantId,
+      name: `Remote Browser ${payload.objectId}`,
+      ttl: `${ttlSeconds}s`
+    });
+    accessToken.addGrant({
+      room: `${process.env.LIVEKIT_ROOM_PREFIX ?? "noah-"}${payload.roomId}`,
+      roomJoin: true,
+      canPublish: true,
+      canSubscribe: false
+    });
+    json(response, 200, {
+      token: await accessToken.toJwt(),
+      expiresInSeconds: ttlSeconds,
+      livekitUrl: getDefaultLivekitUrl(request),
+      participantId: payload.mediaParticipantId
     });
     return;
   }

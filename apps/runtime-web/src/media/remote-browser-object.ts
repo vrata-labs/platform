@@ -68,6 +68,7 @@ export interface RemoteBrowserObjectRuntimeOptions {
   getPermissions: () => readonly RoomPermission[];
   getLatestObject: (surfaceId: string) => MediaObjectInstance<RemoteBrowserObjectState> | null;
   patchObject: (objectId: string, surfaceId: string, expectedRevision: number, patch: RemoteBrowserPatch) => Promise<SurfaceCommandResult>;
+  isExternalVideoActive?: (object: MediaObjectInstance<RemoteBrowserObjectState>) => boolean;
   applyTexture: (texture: THREE.Texture | null) => void;
   onBlocked: (blockedReason: string | null, errorCode: string | null) => void;
 }
@@ -81,6 +82,11 @@ export interface RemoteBrowserDebugSnapshot {
   controllerParticipantId: string | null;
   executorSessionId: string | null;
   frameStreamId: string | null;
+  mediaParticipantId: string | null;
+  mediaTrackSid: string | null;
+  audioTrackSid: string | null;
+  streamStartedAtMs: number | null;
+  streamUpdatedAtMs: number | null;
   frameConnected: boolean;
   frameStreamUrl: string | null;
   lastFrameAtMs: number;
@@ -255,23 +261,31 @@ export class RemoteBrowserObjectRuntime {
       this.closeFrameStream();
       return;
     }
-    this.applyActiveTexture();
     const state = object.state;
-    if (!state.executorSessionId || !state.frameStreamId) {
+    if (this.options.isExternalVideoActive?.(object)) {
+      this.closeFrameStream();
+      return;
+    }
+    this.applyActiveTexture();
+    if (!state.executorSessionId) {
       this.closeFrameStream();
       this.renderPlaceholder("Remote Browser", state.currentUrl ? "Starting executor..." : "Open an allowed URL to start.");
       return;
     }
-    this.ensureFrameStream(object);
-    if (this.lastFrameAtMs <= 0 && !this.mediaVisualActive) {
-      this.renderPlaceholder("Remote Browser", state.currentUrl ?? "Waiting for first frame...");
-    }
+    this.closeFrameStream();
+    const subtitle = state.status === "failed"
+      ? `Failed: ${state.errorCode ?? "unknown"}`
+      : state.status === "active" && state.mediaTrackSid
+        ? "Waiting for LiveKit viewport track..."
+        : state.currentUrl ?? "Starting LiveKit viewport stream...";
+    this.renderPlaceholder("Remote Browser", subtitle);
   }
 
   createDebugSnapshot(object: MediaObjectInstance<RemoteBrowserObjectState> | null): RemoteBrowserDebugSnapshot {
     const permissions = this.options.getPermissions();
     const state = object?.state ?? null;
     const controllerParticipantId = state?.controllerParticipantId ?? null;
+    const externalVideoActive = object ? this.options.isExternalVideoActive?.(object) === true : false;
     return {
       objectId: object?.objectId ?? null,
       surfaceId: object?.surfaceId ?? this.options.surfaceId,
@@ -281,6 +295,11 @@ export class RemoteBrowserObjectRuntime {
       controllerParticipantId,
       executorSessionId: state?.executorSessionId ?? null,
       frameStreamId: state?.frameStreamId ?? null,
+      mediaParticipantId: state?.mediaParticipantId ?? null,
+      mediaTrackSid: state?.mediaTrackSid ?? null,
+      audioTrackSid: state?.audioTrackSid ?? null,
+      streamStartedAtMs: state?.streamStartedAtMs ?? null,
+      streamUpdatedAtMs: state?.streamUpdatedAtMs ?? null,
       frameConnected: this.frameConnected,
       frameStreamUrl: this.frameStreamUrl,
       lastFrameAtMs: this.lastFrameAtMs,
@@ -290,10 +309,10 @@ export class RemoteBrowserObjectRuntime {
       localHasControl: !controllerParticipantId || controllerParticipantId === this.options.participantId,
       lastInputSeq: state?.lastInputSeq ?? 0,
       errorCode: state?.errorCode ?? this.errorCode,
-      mediaState: this.mediaState,
-      mediaConnected: this.mediaState === "connected",
-      mediaHasVideo: this.mediaHasVideo,
-      mediaHasAudio: this.mediaHasAudio,
+      mediaState: externalVideoActive ? "connected" : this.mediaState,
+      mediaConnected: externalVideoActive || this.mediaState === "connected",
+      mediaHasVideo: Boolean(state?.mediaTrackSid) || externalVideoActive || this.mediaHasVideo,
+      mediaHasAudio: Boolean(state?.audioTrackSid) || this.mediaHasAudio,
       mediaPeerConnectionState: this.mediaPeerConnection?.connectionState ?? null,
       mediaErrorCode: this.mediaErrorCode,
       mediaSourceRect: this.mediaSourceRect,
@@ -321,7 +340,7 @@ export class RemoteBrowserObjectRuntime {
   }
 
   private canInput(state: RemoteBrowserObjectState): boolean {
-    return Boolean(state.executorSessionId) && this.options.getPermissions().includes("remote-browser.input");
+    return Boolean(state.executorSessionId) && state.status !== "failed" && state.status !== "stopped" && this.options.getPermissions().includes("remote-browser.input");
   }
 
   private patchFromInputEvent(event: SurfaceInputEvent): RemoteBrowserPatch | null {

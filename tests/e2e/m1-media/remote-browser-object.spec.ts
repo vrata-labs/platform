@@ -9,6 +9,9 @@ type RemoteBrowserDebug = {
     currentUrl?: string | null;
     frameConnected?: boolean;
     lastFrameAtMs?: number;
+    mediaParticipantId?: string | null;
+    mediaTrackSid?: string | null;
+    audioTrackSid?: string | null;
     lastInputSeq?: number;
     mediaState?: string;
     mediaConnected?: boolean;
@@ -147,8 +150,9 @@ test("M1.7 host opens remote browser and routes input through room-state", async
       activeObjectType: debug?.mediaObjects?.surfaces?.find((surface) => surface.surfaceId === "debug-main")?.activeObjectType ?? null,
       active: debug?.remoteBrowser?.active ?? false,
       status: debug?.remoteBrowser?.status ?? null,
-      frameConnected: debug?.remoteBrowser?.frameConnected ?? false,
-      hasFrame: (debug?.remoteBrowser?.lastFrameAtMs ?? 0) > 0,
+      hasMediaParticipant: Boolean(debug?.remoteBrowser?.mediaParticipantId),
+      hasVideoTrackState: Boolean(debug?.remoteBrowser?.mediaTrackSid),
+      hasAudioTrackState: Boolean(debug?.remoteBrowser?.audioTrackSid),
       errorCode: debug?.remoteBrowser?.errorCode ?? null
     };
   }, {
@@ -158,8 +162,9 @@ test("M1.7 host opens remote browser and routes input through room-state", async
     activeObjectType: "remote-browser",
     active: true,
     status: "active",
-    frameConnected: true,
-    hasFrame: true,
+    hasMediaParticipant: true,
+    hasVideoTrackState: true,
+    hasAudioTrackState: true,
     errorCode: null
   });
 
@@ -216,21 +221,23 @@ test("M1.7 VR surface click and stick scroll route to the remote browser", async
   await page.click("#open-remote-browser");
 
   await expect.poll(async () => {
-    const debug = await readDebug(page);
-    return {
-      active: debug?.remoteBrowser?.active ?? false,
-      status: debug?.remoteBrowser?.status ?? null,
-      frameConnected: debug?.remoteBrowser?.frameConnected ?? false,
-      hasFrame: (debug?.remoteBrowser?.lastFrameAtMs ?? 0) > 0
-    };
+      const debug = await readDebug(page);
+      return {
+        active: debug?.remoteBrowser?.active ?? false,
+        status: debug?.remoteBrowser?.status ?? null,
+        hasMediaParticipant: Boolean(debug?.remoteBrowser?.mediaParticipantId),
+        hasVideoTrackState: Boolean(debug?.remoteBrowser?.mediaTrackSid),
+        hasAudioTrackState: Boolean(debug?.remoteBrowser?.audioTrackSid)
+      };
   }, {
     timeout: 30000,
     intervals: [500, 1000, 2000]
   }).toEqual({
     active: true,
     status: "active",
-    frameConnected: true,
-    hasFrame: true
+    hasMediaParticipant: true,
+    hasVideoTrackState: true,
+    hasAudioTrackState: true
   });
 
   const origin = { x: 0, y: 2.2, z: 0 };
@@ -315,8 +322,9 @@ test("M1.7 VR keyboard toggles, switches layout, and sends remote browser key in
     return {
       active: debug?.remoteBrowser?.active ?? false,
       status: debug?.remoteBrowser?.status ?? null,
-      frameConnected: debug?.remoteBrowser?.frameConnected ?? false,
-      hasFrame: (debug?.remoteBrowser?.lastFrameAtMs ?? 0) > 0
+      hasMediaParticipant: Boolean(debug?.remoteBrowser?.mediaParticipantId),
+      hasVideoTrackState: Boolean(debug?.remoteBrowser?.mediaTrackSid),
+      hasAudioTrackState: Boolean(debug?.remoteBrowser?.audioTrackSid)
     };
   }, {
     timeout: 30000,
@@ -324,8 +332,9 @@ test("M1.7 VR keyboard toggles, switches layout, and sends remote browser key in
   }).toEqual({
     active: true,
     status: "active",
-    frameConnected: true,
-    hasFrame: true
+    hasMediaParticipant: true,
+    hasVideoTrackState: true,
+    hasAudioTrackState: true
   });
 
   const origin = { x: 0, y: 2.2, z: 0 };
@@ -464,7 +473,7 @@ test("M1.7 VR keyboard toggles, switches layout, and sends remote browser key in
   }).toEqual({ lastKey: "key-ru-ef", pressed: "key-ru-ef", advanced: true });
 });
 
-test("M1.7 remote browser streams page video and audio over media transport", async ({ page }) => {
+test("M1.7 remote browser publishes required viewport video and audio track state", async ({ page }) => {
   test.setTimeout(90000);
   const roomId = `m1-remote-browser-media-${Date.now()}`;
   await page.goto(`/rooms/${roomId}?role=host&debug=1`);
@@ -479,16 +488,10 @@ test("M1.7 remote browser streams page video and audio over media transport", as
     return {
       active: debug?.remoteBrowser?.active ?? false,
       status: debug?.remoteBrowser?.status ?? null,
-      frameConnected: debug?.remoteBrowser?.frameConnected ?? false,
-      mediaState: debug?.remoteBrowser?.mediaState ?? null,
-      mediaConnected: debug?.remoteBrowser?.mediaConnected ?? false,
-      mediaHasVideo: debug?.remoteBrowser?.mediaHasVideo ?? false,
-      mediaHasAudio: debug?.remoteBrowser?.mediaHasAudio ?? false,
-      mediaSourceIsPageBounded: Boolean(
-        debug?.remoteBrowser?.mediaSourceRect
-        && debug.remoteBrowser.mediaSourceRect.width < debug.remoteBrowser.mediaSourceRect.viewportWidth
-        && debug.remoteBrowser.mediaSourceRect.height < debug.remoteBrowser.mediaSourceRect.viewportHeight
-      )
+      hasMediaParticipant: Boolean(debug?.remoteBrowser?.mediaParticipantId),
+      hasVideoTrackState: Boolean(debug?.remoteBrowser?.mediaTrackSid),
+      hasAudioTrackState: Boolean(debug?.remoteBrowser?.audioTrackSid),
+      mediaHasAudio: debug?.remoteBrowser?.mediaHasAudio ?? false
     };
   }, {
     timeout: 45000,
@@ -496,17 +499,9 @@ test("M1.7 remote browser streams page video and audio over media transport", as
   }).toEqual({
     active: true,
     status: "active",
-    frameConnected: true,
-    mediaState: "connected",
-    mediaConnected: true,
-    mediaHasVideo: true,
-    mediaHasAudio: true,
-    mediaSourceIsPageBounded: true
+    hasMediaParticipant: true,
+    hasVideoTrackState: true,
+    hasAudioTrackState: true,
+    mediaHasAudio: true
   });
-
-  const frameAtMediaConnect = (await readDebug(page))?.remoteBrowser?.lastFrameAtMs ?? 0;
-  await expect.poll(async () => (await readDebug(page))?.remoteBrowser?.lastFrameAtMs ?? 0, {
-    timeout: 10000,
-    intervals: [500, 1000]
-  }).toBeGreaterThan(frameAtMediaConnect);
 });

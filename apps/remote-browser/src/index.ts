@@ -1,14 +1,19 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { timingSafeEqual } from "node:crypto";
+import { existsSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { createRequire } from "node:module";
 import { chromium, type Browser, type BrowserContext, type Frame, type Page } from "playwright-core";
 import { WebSocketServer, type WebSocket } from "ws";
-import type { RemoteBrowserPatch, SurfaceInputEvent } from "@noah/shared-types";
+import type { RemoteBrowserErrorCode, RemoteBrowserPatch, SurfaceInputEvent } from "@noah/shared-types";
 
 import { decodeRemoteBrowserFrameToken } from "./frame-token.js";
 import { createRemoteBrowserUrlPolicy, validateRemoteBrowserUrl, type RemoteBrowserUrlPolicy } from "./url-policy.js";
 
 interface RemoteBrowserSession {
   sessionId: string;
-  frameStreamId: string;
+  frameStreamId?: string;
+  mediaParticipantId: string;
   roomId: string;
   objectId: string;
   url: string;
@@ -21,7 +26,22 @@ interface RemoteBrowserSession {
   lastFrameAtMs: number;
   lastInputAtMs: number;
   lastInputFrameAtMs: number;
+  publisherStarted: boolean;
 }
+
+interface RemoteBrowserMediaTokenResponse {
+  token?: string;
+  livekitUrl?: string;
+  participantId?: string;
+  expiresInSeconds?: number;
+}
+
+interface RemoteBrowserViewportPublishResult {
+  videoTrackSid: string;
+  audioTrackSid: string;
+}
+
+type RemoteBrowserSessionRef = Pick<RemoteBrowserSession, "sessionId" | "roomId" | "objectId" | "mediaParticipantId">;
 
 interface RemoteBrowserFrameCaptureDecisionInput {
   frameCaptureInFlight: boolean;
@@ -63,6 +83,33 @@ const viewport = {
   width: Number.parseInt(process.env.REMOTE_BROWSER_VIEWPORT_WIDTH ?? "1280", 10),
   height: Number.parseInt(process.env.REMOTE_BROWSER_VIEWPORT_HEIGHT ?? "720", 10)
 };
+const require = createRequire(import.meta.url);
+
+function resolveInternalHttpUrl(value: string | undefined, fallback: string): string {
+  const resolved = value?.trim() || fallback;
+  return resolved.replace(/\/$/, "");
+}
+
+function getInternalServiceToken(): string | null {
+  const token = process.env.NOAH_INTERNAL_SERVICE_TOKEN?.trim() || process.env.REMOTE_BROWSER_INTERNAL_TOKEN?.trim() || "";
+  return token || null;
+}
+
+function safeEqual(left: string, right: string): boolean {
+  const leftBuffer = Buffer.from(left);
+  const rightBuffer = Buffer.from(right);
+  return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer);
+}
+
+function isAuthorizedInternalRequest(request: IncomingMessage): boolean {
+  const token = getInternalServiceToken();
+  if (!token) {
+    return true;
+  }
+  const provided = request.headers["x-noah-internal-token"];
+  return typeof provided === "string" && safeEqual(provided, token);
+}
+
 export function resolveRemoteBrowserFrameIntervalMs(value: string | undefined): number {
   const parsed = Number.parseInt(value ?? "250", 10);
   return Math.max(250, Number.isFinite(parsed) ? parsed : 250);
@@ -105,6 +152,8 @@ const mediaFrameIntervalMs = resolveRemoteBrowserMediaFrameIntervalMs(process.en
 const frameBackpressureBytes = resolveRemoteBrowserFrameBackpressureBytes(process.env.REMOTE_BROWSER_FRAME_BACKPRESSURE_BYTES);
 const tokenSecret = process.env.REMOTE_BROWSER_TOKEN_SECRET ?? "dev-remote-browser-secret";
 const mediaIceServers = resolveRemoteBrowserMediaIceServers(process.env.REMOTE_BROWSER_MEDIA_ICE_SERVERS);
+const apiInternalUrl = resolveInternalHttpUrl(process.env.API_INTERNAL_URL ?? process.env.NOAH_API_INTERNAL_URL, "http://127.0.0.1:4000");
+const roomStateInternalUrl = resolveInternalHttpUrl(process.env.ROOM_STATE_INTERNAL_URL ?? process.env.NOAH_ROOM_STATE_INTERNAL_URL, "http://127.0.0.1:2567");
 const remoteBrowserScrollbarStyle = `
   html {
     scrollbar-gutter: stable !important;
@@ -272,10 +321,19 @@ async function getBrowser(): Promise<Browser> {
     process.env.REMOTE_BROWSER_CHROMIUM_PATH ||
     process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ||
     undefined;
+  const headless = process.env.REMOTE_BROWSER_HEADLESS === "true" || (!process.env.DISPLAY && !process.env.WAYLAND_DISPLAY);
   browserPromise ??= chromium.launch({
     executablePath,
-    headless: true,
-    args: ["--autoplay-policy=no-user-gesture-required"]
+    headless,
+    args: [
+      "--autoplay-policy=no-user-gesture-required",
+      "--enable-usermedia-screen-capturing",
+      "--use-fake-ui-for-media-stream",
+      "--allow-http-screen-capture",
+      "--auto-select-desktop-capture-source=Noah Remote Browser",
+      "--auto-select-tab-capture-source-by-title=Noah Remote Browser",
+      `--window-size=${viewport.width},${viewport.height}`
+    ]
   });
   return browserPromise;
 }
@@ -286,6 +344,240 @@ export function resolveRemoteBrowserMediaIceServers(value: string | undefined): 
     .map((item) => item.trim())
     .filter(Boolean);
   return urls.length > 0 ? [{ urls }] : [];
+}
+
+let liveKitClientBundlePath: string | null = null;
+
+function resolveLiveKitClientBundlePath(): string {
+  if (liveKitClientBundlePath) {
+    return liveKitClientBundlePath;
+  }
+  let packageRoot: string;
+  try {
+    packageRoot = dirname(require.resolve("livekit-client/package.json"));
+  } catch {
+    let resolved = dirname(require.resolve("livekit-client"));
+    while (resolved && !resolved.endsWith("livekit-client")) {
+      const parent = dirname(resolved);
+      if (parent === resolved) {
+        break;
+      }
+      resolved = parent;
+    }
+    packageRoot = resolved;
+  }
+  const candidates = [
+    "dist/livekit-client.umd.min.js",
+    "dist/livekit-client.umd.js",
+    "dist/livekit-client.esm.mjs"
+  ].map((candidate) => join(packageRoot, candidate));
+  const found = candidates.find((candidate) => existsSync(candidate));
+  if (!found) {
+    throw new Error("livekit_client_bundle_missing");
+  }
+  liveKitClientBundlePath = found;
+  return found;
+}
+
+function remoteBrowserExecutorInputEventId(session: RemoteBrowserSessionRef, kind: string): string {
+  return `${session.sessionId}:${kind}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function getInternalHeaders(): Record<string, string> {
+  const token = getInternalServiceToken();
+  return {
+    "content-type": "application/json",
+    ...(token ? { "x-noah-internal-token": token } : {})
+  };
+}
+
+async function requestRemoteBrowserMediaToken(session: RemoteBrowserSession): Promise<Required<Pick<RemoteBrowserMediaTokenResponse, "token" | "livekitUrl">>> {
+  const response = await fetch(`${apiInternalUrl}/api/tokens/remote-browser-media`, {
+    method: "POST",
+    headers: getInternalHeaders(),
+    body: JSON.stringify({
+      roomId: session.roomId,
+      objectId: session.objectId,
+      executorSessionId: session.sessionId,
+      mediaParticipantId: session.mediaParticipantId
+    })
+  });
+  if (!response.ok) {
+    throw new Error(`livekit_token_failed:${response.status}`);
+  }
+  const payload = await response.json() as RemoteBrowserMediaTokenResponse;
+  if (!payload.token || !payload.livekitUrl) {
+    throw new Error("livekit_token_failed:invalid_payload");
+  }
+  return { token: payload.token, livekitUrl: payload.livekitUrl };
+}
+
+async function patchRemoteBrowserExecutorState(session: RemoteBrowserSessionRef, patch: RemoteBrowserPatch): Promise<void> {
+  const response = await fetch(`${roomStateInternalUrl}/api/internal/remote-browser/sessions/${encodeURIComponent(session.sessionId)}`, {
+    method: "POST",
+    headers: getInternalHeaders(),
+    body: JSON.stringify({
+      roomId: session.roomId,
+      surfaceId: "debug-main",
+      objectId: session.objectId,
+      patch
+    })
+  });
+  if (!response.ok) {
+    throw new Error(`room_state_callback_failed:${response.status}`);
+  }
+}
+
+function remoteBrowserPublishErrorCode(error: unknown): RemoteBrowserErrorCode {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.includes("livekit_token_failed")) {
+    return "livekit_token_failed";
+  }
+  if (message.includes("NotAllowedError") || message.includes("Permission denied")) {
+    return "viewport_capture_denied";
+  }
+  if (message.includes("getDisplayMedia") || message.includes("NotSupportedError") || message.includes("livekit_client_bundle_missing")) {
+    return "viewport_capture_unsupported";
+  }
+  if (message.includes("audio_track_missing")) {
+    return "audio_track_missing";
+  }
+  if (message.includes("video_track_missing")) {
+    return "video_track_missing";
+  }
+  if (message.includes("livekit_publish_failed")) {
+    return "livekit_publish_failed";
+  }
+  return "viewport_capture_failed";
+}
+
+function remoteBrowserSessionErrorCode(error: unknown): RemoteBrowserErrorCode {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.includes("url_not_allowed")) {
+    return "url_not_allowed";
+  }
+  if (message.includes("redirect_not_allowed")) {
+    return "redirect_not_allowed";
+  }
+  if (message.includes("navigation_failed")) {
+    return "navigation_failed";
+  }
+  return "executor_crashed";
+}
+
+async function publishViewportToLiveKit(session: RemoteBrowserSession): Promise<RemoteBrowserViewportPublishResult> {
+  const { token, livekitUrl } = await requestRemoteBrowserMediaToken(session);
+  await session.page.addScriptTag({ path: resolveLiveKitClientBundlePath() });
+  const result = await session.page.evaluate(async ({ livekitUrl: targetLivekitUrl, token: targetToken, width, height }) => {
+    type PublishState = {
+      room?: { disconnect: () => void };
+      stream?: MediaStream;
+    };
+    const pageWindow = window as Window & {
+      LivekitClient?: any;
+      LiveKitClient?: any;
+      livekitClient?: any;
+      __NOAH_REMOTE_BROWSER_LIVEKIT__?: PublishState;
+    };
+    const LiveKit = pageWindow.LivekitClient ?? pageWindow.LiveKitClient ?? pageWindow.livekitClient;
+    if (!LiveKit?.Room || !LiveKit?.Track) {
+      return { ok: false, errorCode: "livekit_publish_failed", message: "livekit_client_missing" };
+    }
+    if (!navigator.mediaDevices?.getDisplayMedia) {
+      return { ok: false, errorCode: "viewport_capture_unsupported", message: "getDisplayMedia_missing" };
+    }
+    pageWindow.__NOAH_REMOTE_BROWSER_LIVEKIT__?.room?.disconnect();
+    pageWindow.__NOAH_REMOTE_BROWSER_LIVEKIT__?.stream?.getTracks().forEach((track) => track.stop());
+    let stream: MediaStream;
+    try {
+      const displayMediaOptions = {
+        video: {
+          frameRate: { ideal: 30, max: 30 },
+          width: { ideal: width },
+          height: { ideal: height }
+        },
+        audio: {
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: false
+        },
+        preferCurrentTab: true,
+        selfBrowserSurface: "include",
+        systemAudio: "include"
+      } as DisplayMediaStreamOptions;
+      stream = await navigator.mediaDevices.getDisplayMedia(displayMediaOptions);
+    } catch (error) {
+      return { ok: false, errorCode: error instanceof DOMException && error.name === "NotAllowedError" ? "viewport_capture_denied" : "viewport_capture_failed", message: error instanceof Error ? `${error.name}:${error.message}` : "capture_failed" };
+    }
+    const videoTrack = stream.getVideoTracks().find((track) => track.readyState === "live");
+    const audioTrack = stream.getAudioTracks().find((track) => track.readyState === "live");
+    if (!videoTrack) {
+      stream.getTracks().forEach((track) => track.stop());
+      return { ok: false, errorCode: "video_track_missing", message: "video_track_missing" };
+    }
+    if (!audioTrack) {
+      stream.getTracks().forEach((track) => track.stop());
+      return { ok: false, errorCode: "audio_track_missing", message: "audio_track_missing" };
+    }
+    try {
+      const room = new LiveKit.Room({ adaptiveStream: false, dynacast: false });
+      await room.connect(targetLivekitUrl, targetToken, { autoSubscribe: false });
+      const videoPublication = await room.localParticipant.publishTrack(videoTrack, {
+        name: "remote-browser-viewport",
+        source: LiveKit.Track.Source.ScreenShare
+      });
+      const audioPublication = await room.localParticipant.publishTrack(audioTrack, {
+        name: "remote-browser-audio",
+        source: LiveKit.Track.Source.ScreenShareAudio ?? "screen_share_audio"
+      });
+      pageWindow.__NOAH_REMOTE_BROWSER_LIVEKIT__ = { room, stream };
+      return {
+        ok: true,
+        videoTrackSid: videoPublication.trackSid ?? videoPublication.sid ?? videoTrack.id,
+        audioTrackSid: audioPublication.trackSid ?? audioPublication.sid ?? audioTrack.id
+      };
+    } catch (error) {
+      stream.getTracks().forEach((track) => track.stop());
+      return { ok: false, errorCode: "livekit_publish_failed", message: error instanceof Error ? error.message : "publish_failed" };
+    }
+  }, { livekitUrl, token, width: viewport.width, height: viewport.height }) as { ok?: boolean; videoTrackSid?: string; audioTrackSid?: string; errorCode?: string; message?: string };
+  if (!result.ok || !result.videoTrackSid || !result.audioTrackSid) {
+    throw new Error(`${result.errorCode ?? "livekit_publish_failed"}:${result.message ?? "unknown"}`);
+  }
+  return { videoTrackSid: result.videoTrackSid, audioTrackSid: result.audioTrackSid };
+}
+
+async function startViewportPublisher(session: RemoteBrowserSession): Promise<void> {
+  if (session.publisherStarted) {
+    return;
+  }
+  session.publisherStarted = true;
+  try {
+    await patchRemoteBrowserExecutorState(session, {
+      type: "mark-publishing",
+      mediaParticipantId: session.mediaParticipantId,
+      inputEventId: remoteBrowserExecutorInputEventId(session, "publishing")
+    });
+    const published = process.env.REMOTE_BROWSER_VIEWPORT_MOCK === "1"
+      ? {
+        videoTrackSid: `mock-remote-browser-video:${session.objectId}:${Date.now()}`,
+        audioTrackSid: `mock-remote-browser-audio:${session.objectId}:${Date.now()}`
+      }
+      : await publishViewportToLiveKit(session);
+    await patchRemoteBrowserExecutorState(session, {
+      type: "mark-active",
+      mediaParticipantId: session.mediaParticipantId,
+      mediaTrackSid: published.videoTrackSid,
+      audioTrackSid: published.audioTrackSid,
+      inputEventId: remoteBrowserExecutorInputEventId(session, "active")
+    });
+  } catch (error) {
+    await patchRemoteBrowserExecutorState(session, {
+      type: "mark-failed",
+      errorCode: remoteBrowserPublishErrorCode(error),
+      inputEventId: remoteBrowserExecutorInputEventId(session, "failed")
+    }).catch(() => undefined);
+  }
 }
 
 function getWritableFrameClients(session: RemoteBrowserSession): WebSocket[] {
@@ -547,11 +839,21 @@ async function stopSession(sessionId: string): Promise<boolean> {
   for (const client of session.clients) {
     client.close(1000, "session_stopped");
   }
+  await session.page.evaluate(() => {
+    const pageWindow = window as Window & { __NOAH_REMOTE_BROWSER_LIVEKIT__?: { room?: { disconnect: () => void }; stream?: MediaStream } };
+    pageWindow.__NOAH_REMOTE_BROWSER_LIVEKIT__?.room?.disconnect();
+    pageWindow.__NOAH_REMOTE_BROWSER_LIVEKIT__?.stream?.getTracks().forEach((track) => track.stop());
+    pageWindow.__NOAH_REMOTE_BROWSER_LIVEKIT__ = undefined;
+  }).catch(() => undefined);
+  await patchRemoteBrowserExecutorState(session, {
+    type: "mark-stopped",
+    inputEventId: remoteBrowserExecutorInputEventId(session, "stopped")
+  }).catch(() => undefined);
   await session.context.close().catch(() => undefined);
   return true;
 }
 
-async function createSession(input: { sessionId: string; frameStreamId: string; roomId: string; objectId: string; url: string }): Promise<RemoteBrowserSession> {
+async function createSession(input: { sessionId: string; frameStreamId?: string; mediaParticipantId: string; roomId: string; objectId: string; url: string }): Promise<RemoteBrowserSession> {
   const validation = await validateRemoteBrowserUrl(input.url, urlPolicy);
   if (!validation.allowed || !validation.normalizedUrl) {
     throw new Error(`url_not_allowed:${validation.errorCode ?? "unknown"}`);
@@ -562,13 +864,22 @@ async function createSession(input: { sessionId: string; frameStreamId: string; 
     viewport,
     acceptDownloads: false,
     ignoreHTTPSErrors: false,
+    bypassCSP: true,
     permissions: []
   });
   const page = await context.newPage();
   await installRequestGuard(page, urlPolicy);
   await installRemoteBrowserPageStyles(page);
-  await page.goto(validation.normalizedUrl, { waitUntil: "domcontentloaded", timeout: 15000 });
+  try {
+    await page.goto(validation.normalizedUrl, { waitUntil: "domcontentloaded", timeout: 15000 });
+  } catch (error) {
+    await context.close().catch(() => undefined);
+    throw new Error(`navigation_failed:${error instanceof Error ? error.message : "unknown"}`);
+  }
   await ensureRemoteBrowserPageStyles(page);
+  await page.evaluate(() => {
+    document.title = "Noah Remote Browser";
+  }).catch(() => undefined);
   const finalValidation = await validateRemoteBrowserUrl(page.url(), urlPolicy);
   if (!finalValidation.allowed) {
     await context.close().catch(() => undefined);
@@ -587,9 +898,11 @@ async function createSession(input: { sessionId: string; frameStreamId: string; 
     frameCaptureInFlight: false,
     lastFrameAtMs: 0,
     lastInputAtMs: 0,
-    lastInputFrameAtMs: 0
+    lastInputFrameAtMs: 0,
+    publisherStarted: false
   };
   sessions.set(input.sessionId, session);
+  void startViewportPublisher(session);
   return session;
 }
 
@@ -670,22 +983,44 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     return;
   }
   if (request.method === "POST" && url.pathname === "/api/sessions") {
-    const payload = await parseBody<{ sessionId?: string; frameStreamId?: string; roomId?: string; objectId?: string; url?: string }>(request);
-    if (!payload?.sessionId || !payload.frameStreamId || !payload.roomId || !payload.objectId || !payload.url) {
+    if (!isAuthorizedInternalRequest(request)) {
+      json(response, 403, { error: "forbidden" });
+      return;
+    }
+    const payload = await parseBody<{ sessionId?: string; frameStreamId?: string; mediaParticipantId?: string; roomId?: string; objectId?: string; url?: string }>(request);
+    if (!payload?.sessionId || !payload.mediaParticipantId || !payload.roomId || !payload.objectId || !payload.url) {
       json(response, 400, { error: "invalid_session_payload" });
       return;
     }
-    const session = await createSession({ sessionId: payload.sessionId, frameStreamId: payload.frameStreamId, roomId: payload.roomId, objectId: payload.objectId, url: payload.url });
-    json(response, 200, { ok: true, sessionId: session.sessionId, frameStreamId: session.frameStreamId, url: session.url });
+    let session: RemoteBrowserSession;
+    try {
+      session = await createSession({ sessionId: payload.sessionId, frameStreamId: payload.frameStreamId, mediaParticipantId: payload.mediaParticipantId, roomId: payload.roomId, objectId: payload.objectId, url: payload.url });
+    } catch (error) {
+      await patchRemoteBrowserExecutorState({ sessionId: payload.sessionId, mediaParticipantId: payload.mediaParticipantId, roomId: payload.roomId, objectId: payload.objectId }, {
+        type: "mark-failed",
+        errorCode: remoteBrowserSessionErrorCode(error),
+        inputEventId: `${payload.sessionId}:failed:${Date.now()}`
+      }).catch(() => undefined);
+      throw error;
+    }
+    json(response, 200, { ok: true, sessionId: session.sessionId, mediaParticipantId: session.mediaParticipantId, frameStreamId: session.frameStreamId, url: session.url });
     return;
   }
   const sessionMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)$/);
   if (sessionMatch && request.method === "DELETE") {
+    if (!isAuthorizedInternalRequest(request)) {
+      json(response, 403, { error: "forbidden" });
+      return;
+    }
     json(response, 200, { ok: await stopSession(decodeURIComponent(sessionMatch[1] ?? "")) });
     return;
   }
   const inputMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/input$/);
   if (inputMatch && request.method === "POST") {
+    if (!isAuthorizedInternalRequest(request)) {
+      json(response, 403, { error: "forbidden" });
+      return;
+    }
     const session = sessions.get(decodeURIComponent(inputMatch[1] ?? ""));
     const payload = await parseBody<RemoteBrowserPatch>(request);
     if (!session || !payload) {

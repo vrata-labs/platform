@@ -5,6 +5,7 @@ import {
   applyAvatarReliableState,
   applyMediaObjectCreateCommand,
   applyMediaObjectPatchCommand,
+  applyRemoteBrowserExecutorPatchCommand,
   applyMediaObjectStopCommand,
   applyPrivilegedRoomCommand,
   applySeatClaim,
@@ -282,6 +283,51 @@ test("surface media audio command is admin-only and broadcasts accepted changes"
   const payload = JSON.parse(hostSocket.sent[hostSocket.sent.length - 1]!);
   assert.equal(payload.type, "room_state");
   assert.equal(payload.room.mediaObjects.surfaces["debug-main"].mediaAudioEnabled, true);
+});
+
+test("remote browser executor callback activates LiveKit media tracks", () => {
+  const server = createRoomStateServer();
+  const hostSocket = createSocket();
+  connectParticipant(server, "demo-room", "host", hostSocket as never, { role: "host" });
+
+  const created = applyMediaObjectCreateCommand(server, "demo-room", "host", {
+    commandId: "cmd-create-browser",
+    surfaceId: "debug-main",
+    objectType: "remote-browser"
+  });
+  assert.equal(created.accepted, true);
+  const objectId = created.objectId ?? "";
+  const opened = applyMediaObjectPatchCommand(server, "demo-room", "host", {
+    commandId: "cmd-open-browser",
+    surfaceId: "debug-main",
+    objectId,
+    expectedRevision: 0,
+    patch: { type: "open-url", url: "https://example.com", inputEventId: "host:open:1" }
+  });
+  assert.equal(opened.accepted, true);
+
+  const active = applyRemoteBrowserExecutorPatchCommand(server, {
+    roomId: "demo-room",
+    surfaceId: "debug-main",
+    objectId,
+    executorSessionId: `remote-browser:${objectId}`,
+    patch: {
+      type: "mark-active",
+      mediaParticipantId: `remote-browser:${objectId}`,
+      mediaTrackSid: "TR_VP",
+      audioTrackSid: "TR_AUDIO",
+      inputEventId: "executor:active:1"
+    }
+  });
+  assert.equal(active.accepted, true);
+  const state = server.rooms.get("demo-room")?.mediaObjects.objects[objectId]?.state as { status?: string; mediaTrackSid?: string; audioTrackSid?: string } | undefined;
+  assert.equal(state?.status, "active");
+  assert.equal(state?.mediaTrackSid, "TR_VP");
+  assert.equal(state?.audioTrackSid, "TR_AUDIO");
+
+  const payload = JSON.parse(hostSocket.sent[hostSocket.sent.length - 1]!);
+  assert.equal(payload.type, "room_state");
+  assert.equal(payload.room.mediaObjects.objects[objectId].state.mediaTrackSid, "TR_VP");
 });
 
 test("applySeatClaim switches seats for same participant atomically", () => {

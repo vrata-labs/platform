@@ -10,6 +10,9 @@ type RemoteBrowserDebug = {
     currentUrl?: string | null;
     frameConnected?: boolean;
     lastFrameAtMs?: number;
+    mediaParticipantId?: string | null;
+    mediaTrackSid?: string | null;
+    audioTrackSid?: string | null;
     lastInputSeq?: number;
     mediaState?: string | null;
     mediaConnected?: boolean;
@@ -101,7 +104,7 @@ async function openRemoteBrowserUrl(page: Page, url: string): Promise<void> {
   await page.locator("#open-remote-browser").click();
 }
 
-async function waitForRemoteBrowserFrames(page: Page, expectedUrl: string): Promise<void> {
+async function waitForRemoteBrowserViewportState(page: Page, expectedUrl: string): Promise<void> {
   await expect.poll(async () => {
     const debug = await readDebug(page);
     return {
@@ -109,8 +112,9 @@ async function waitForRemoteBrowserFrames(page: Page, expectedUrl: string): Prom
       active: debug?.remoteBrowser?.active ?? false,
       status: debug?.remoteBrowser?.status ?? null,
       currentUrl: debug?.remoteBrowser?.currentUrl ?? null,
-      frameConnected: debug?.remoteBrowser?.frameConnected ?? false,
-      hasFrame: (debug?.remoteBrowser?.lastFrameAtMs ?? 0) > 0,
+      hasMediaParticipant: Boolean(debug?.remoteBrowser?.mediaParticipantId),
+      hasVideoTrackState: Boolean(debug?.remoteBrowser?.mediaTrackSid),
+      hasAudioTrackState: Boolean(debug?.remoteBrowser?.audioTrackSid),
       errorCode: debug?.remoteBrowser?.errorCode ?? null
     };
   }, {
@@ -121,8 +125,9 @@ async function waitForRemoteBrowserFrames(page: Page, expectedUrl: string): Prom
     active: true,
     status: "active",
     currentUrl: expectedUrl,
-    frameConnected: true,
-    hasFrame: true,
+    hasMediaParticipant: true,
+    hasVideoTrackState: true,
+    hasAudioTrackState: true,
     errorCode: null
   });
 }
@@ -130,22 +135,14 @@ async function waitForRemoteBrowserFrames(page: Page, expectedUrl: string): Prom
 async function waitForRutubeMedia(page: Page): Promise<void> {
   await expect.poll(async () => {
     const debug = await readDebug(page);
-    const rect = debug?.remoteBrowser?.mediaSourceRect ?? null;
     return {
       mediaState: debug?.remoteBrowser?.mediaState ?? null,
       mediaConnected: debug?.remoteBrowser?.mediaConnected ?? false,
       mediaHasVideo: debug?.remoteBrowser?.mediaHasVideo ?? false,
       mediaHasAudio: debug?.remoteBrowser?.mediaHasAudio ?? false,
-      mediaPeerConnectionState: debug?.remoteBrowser?.mediaPeerConnectionState ?? null,
       mediaErrorCode: debug?.remoteBrowser?.mediaErrorCode ?? null,
-      sourceBounded: Boolean(
-        rect
-        && rect.width > 100
-        && rect.height > 100
-        && rect.width < rect.viewportWidth
-        && rect.x >= 0
-        && rect.y >= 0
-      )
+      hasVideoTrackState: Boolean(debug?.remoteBrowser?.mediaTrackSid),
+      hasAudioTrackState: Boolean(debug?.remoteBrowser?.audioTrackSid)
     };
   }, {
     timeout: 90000,
@@ -155,9 +152,9 @@ async function waitForRutubeMedia(page: Page): Promise<void> {
     mediaConnected: true,
     mediaHasVideo: true,
     mediaHasAudio: true,
-    mediaPeerConnectionState: "connected",
     mediaErrorCode: null,
-    sourceBounded: true
+    hasVideoTrackState: true,
+    hasAudioTrackState: true
   });
 }
 
@@ -275,56 +272,29 @@ async function expectVisibleHoverResponse(page: Page, candidates: Array<{ u: num
 
   let bestDiff = 0;
   let bestLatencyMs = Number.POSITIVE_INFINITY;
-  let bestFrameLatencyMs = Number.POSITIVE_INFINITY;
   for (const candidate of candidates) {
     const before = await sampleSurfaceRegion(page, candidate);
-    const beforeFrameAt = (await readDebug(page))?.remoteBrowser?.lastFrameAtMs ?? 0;
     const inputLatencyMs = await moveMouseToSurface(page, candidate.u, candidate.v);
-    await expect.poll(async () => (await readDebug(page))?.remoteBrowser?.mediaCompositeHoldActive ?? false, {
-      timeout: 2000,
-      intervals: [50, 100, 250]
-    }).toBe(true);
-    const frameLatencyMs = await waitForFreshFrame(page, beforeFrameAt);
-    await page.waitForTimeout(800);
+    await page.waitForTimeout(1500);
     const after = await sampleSurfaceRegion(page, candidate);
     bestDiff = Math.max(bestDiff, averageRgbDiff(before, after));
     bestLatencyMs = Math.min(bestLatencyMs, inputLatencyMs);
-    bestFrameLatencyMs = Math.min(bestFrameLatencyMs, frameLatencyMs);
   }
 
   expect(bestLatencyMs).toBeLessThan(2500);
-  expect(bestFrameLatencyMs).toBeLessThan(7000);
   expect(bestDiff).toBeGreaterThan(6);
 }
 
-function surfaceUvFromRemoteBrowserPagePoint(rect: NonNullable<RemoteBrowserDebug["remoteBrowser"]>["mediaSourceRect"], x: number, y: number): { u: number; v: number } {
-  expect(rect).toBeTruthy();
-  return {
-    u: Math.max(0, Math.min(1, x / rect!.viewportWidth)),
-    v: Math.max(0, Math.min(1, 1 - y / rect!.viewportHeight))
-  };
-}
-
-function playerHoverCandidates(debug: RemoteBrowserDebug | undefined): Array<{ u: number; v: number }> {
-  const rect = debug?.remoteBrowser?.mediaSourceRect;
-  if (!rect) {
-    return [{ u: 0.5, v: 0.5 }];
-  }
-  const xCenter = (rect.x + rect.width * 0.5) / rect.viewportWidth;
-  const xLeft = (rect.x + rect.width * 0.2) / rect.viewportWidth;
-  const yCenter = (rect.y + rect.height * 0.55) / rect.viewportHeight;
+function playerHoverCandidates(): Array<{ u: number; v: number }> {
   return [
-    surfaceUvFromRemoteBrowserPagePoint(rect, rect.x + rect.width * 0.5, Math.min(rect.viewportHeight - 24, rect.y + rect.height - 32)),
-    surfaceUvFromRemoteBrowserPagePoint(rect, rect.x + rect.width * 0.5, rect.y + rect.height * 0.55),
-    surfaceUvFromRemoteBrowserPagePoint(rect, rect.x + rect.width * 0.2, rect.y + rect.height * 0.55),
-    { u: xCenter, v: 1 - yCenter },
-    { u: xLeft, v: 1 - yCenter }
+    { u: 0.5, v: 0.08 },
+    { u: 0.5, v: 0.45 },
+    { u: 0.2, v: 0.45 }
   ];
 }
 
 async function expectNoFrameBacklog(page: Page, sampleSeconds: number[]): Promise<void> {
   const startedAt = Date.now();
-  const frameAges: number[] = [];
   const inputLatencies: number[] = [];
   for (const targetSecond of sampleSeconds) {
     const waitMs = startedAt + targetSecond * 1000 - Date.now();
@@ -334,13 +304,12 @@ async function expectNoFrameBacklog(page: Page, sampleSeconds: number[]): Promis
     const inputLatency = await sendSurfaceInput(page, { kind: "pointer-move", u: 0.5, v: 0.5 });
     inputLatencies.push(inputLatency);
     const debug = await readDebug(page);
-    const frameAt = debug?.remoteBrowser?.lastFrameAtMs ?? 0;
-    frameAges.push(frameAt > 0 ? Date.now() - frameAt : Number.POSITIVE_INFINITY);
     expect(debug?.remoteBrowser?.mediaConnected).toBe(true);
     expect(debug?.remoteBrowser?.mediaHasVideo).toBe(true);
+    expect(debug?.remoteBrowser?.mediaHasAudio).toBe(true);
+    expect(debug?.remoteBrowser?.errorCode ?? null).toBeNull();
   }
 
-  expect(Math.max(...frameAges)).toBeLessThan(7000);
   expect(Math.max(...inputLatencies)).toBeLessThan(2500);
 }
 
@@ -354,16 +323,16 @@ test("@staging @rutube real Rutube remote browser keeps hover UI, video transpor
     await waitForBlueOfficeKernel(page);
 
     await openRemoteBrowserUrl(page, rutubePrimaryUrl);
-    await waitForRemoteBrowserFrames(page, rutubePrimaryUrl);
+    await waitForRemoteBrowserViewportState(page, rutubePrimaryUrl);
     await waitForRutubeMedia(page);
-    await expectVisibleHoverResponse(page, playerHoverCandidates(await readDebug(page)));
+    await expectVisibleHoverResponse(page, playerHoverCandidates());
     await sendSurfaceInput(page, { kind: "click", u: 0.5, v: 0.5 });
     await expectNoFrameBacklog(page, [0, 30, 60, 90]);
 
     await openRemoteBrowserUrl(page, rutubeSecondaryUrl);
-    await waitForRemoteBrowserFrames(page, rutubeSecondaryUrl);
+    await waitForRemoteBrowserViewportState(page, rutubeSecondaryUrl);
     await waitForRutubeMedia(page);
-    await expectVisibleHoverResponse(page, playerHoverCandidates(await readDebug(page)));
+    await expectVisibleHoverResponse(page, playerHoverCandidates());
     await expectNoFrameBacklog(page, [0, 20, 40]);
   } finally {
     if (roomId) {

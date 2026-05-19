@@ -67,6 +67,27 @@ export function activeRemoteBrowserObjectForSurface(mediaObjects: RoomMediaObjec
   return object as MediaObjectInstance<RemoteBrowserObjectState>;
 }
 
+export function remoteBrowserObjectForMediaTrack(mediaObjects: RoomMediaObjectsState | null, participantId: string | null | undefined, trackSid: string | null | undefined, kind: "audio" | "video"): MediaObjectInstance<RemoteBrowserObjectState> | null {
+  if (!mediaObjects || !participantId) {
+    return null;
+  }
+  for (const object of Object.values(mediaObjects.objects)) {
+    if (object.type !== REMOTE_BROWSER_OBJECT_TYPE || !isRemoteBrowserState(object.state)) {
+      continue;
+    }
+    const state = object.state as RemoteBrowserObjectState;
+    if (state.mediaParticipantId !== participantId || state.status !== "active") {
+      continue;
+    }
+    const expectedTrackSid = kind === "video" ? state.mediaTrackSid : state.audioTrackSid;
+    if (!expectedTrackSid || (trackSid && expectedTrackSid !== trackSid)) {
+      continue;
+    }
+    return object as MediaObjectInstance<RemoteBrowserObjectState>;
+  }
+  return null;
+}
+
 export function resolveScreenShareSurfaceForOwner(mediaObjects: RoomMediaObjectsState | null, ownerParticipantId: string | null | undefined, fallbackSurfaceId: string): string {
   if (!ownerParticipantId || !mediaObjects) {
     return fallbackSurfaceId;

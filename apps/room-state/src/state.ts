@@ -87,6 +87,15 @@ export interface PatchMediaObjectInput {
   nowMs: number;
 }
 
+export interface PatchRemoteBrowserExecutorInput {
+  commandId: string;
+  surfaceId: string;
+  objectId: string;
+  executorSessionId: string;
+  patch: unknown;
+  nowMs: number;
+}
+
 export interface SetSurfaceMediaAudioInput {
   commandId: string;
   surfaceId: string;
@@ -299,9 +308,20 @@ function isRemoteBrowserErrorCode(input: unknown): input is RemoteBrowserErrorCo
     || input === "executor_crashed"
     || input === "executor_timeout"
     || input === "navigation_failed"
+    || input === "viewport_capture_unsupported"
+    || input === "viewport_capture_denied"
+    || input === "viewport_capture_failed"
+    || input === "audio_track_missing"
+    || input === "video_track_missing"
+    || input === "livekit_token_failed"
+    || input === "livekit_publish_failed"
     || input === "input_rejected"
     || input === "stream_failed"
     || input === "unknown";
+}
+
+function isNonEmptyString(input: unknown): input is string {
+  return typeof input === "string" && input.trim().length > 0;
 }
 
 function isSurfaceInputEvent(input: unknown): input is SurfaceInputEvent {
@@ -331,12 +351,21 @@ function isRemoteBrowserPatch(input: unknown): input is RemoteBrowserPatch {
   if (!input || typeof input !== "object") {
     return false;
   }
-  const patch = input as { type?: unknown; url?: unknown; event?: unknown; inputEventId?: unknown; errorCode?: unknown };
+  const patch = input as { type?: unknown; url?: unknown; event?: unknown; inputEventId?: unknown; errorCode?: unknown; mediaParticipantId?: unknown; mediaTrackSid?: unknown; audioTrackSid?: unknown };
   if (!isRemoteBrowserInputEventId(patch.inputEventId)) {
     return false;
   }
   if (patch.type === "open-url") {
     return typeof patch.url === "string" && isAllowedRemoteBrowserUrlCandidate(patch.url);
+  }
+  if (patch.type === "mark-publishing") {
+    return isNonEmptyString(patch.mediaParticipantId);
+  }
+  if (patch.type === "mark-active") {
+    return isNonEmptyString(patch.mediaParticipantId) && isNonEmptyString(patch.mediaTrackSid) && isNonEmptyString(patch.audioTrackSid);
+  }
+  if (patch.type === "mark-stopped") {
+    return true;
   }
   if (patch.type === "pointer" || patch.type === "scroll" || patch.type === "keyboard") {
     return isSurfaceInputEvent(patch.event);
@@ -356,6 +385,13 @@ function isRemoteBrowserRealtimeInputPatch(input: unknown): input is Extract<Rem
   }
   const patch = input as { type?: unknown };
   return patch.type === "pointer" || patch.type === "scroll" || patch.type === "keyboard";
+}
+
+function isRemoteBrowserExecutorPatch(input: unknown): input is Extract<RemoteBrowserPatch, { type: "mark-publishing" | "mark-active" | "mark-failed" | "mark-stopped" }> {
+  if (!isRemoteBrowserPatch(input)) {
+    return false;
+  }
+  return input.type === "mark-publishing" || input.type === "mark-active" || input.type === "mark-failed" || input.type === "mark-stopped";
 }
 
 function isWhiteboardColor(input: unknown): input is WhiteboardStroke["color"] {
@@ -444,7 +480,7 @@ function getRemoteBrowserPatchPermission(input: unknown): RoomPermission | null 
   if (patch.type === "pointer" || patch.type === "scroll" || patch.type === "keyboard" || patch.type === "take-control" || patch.type === "release-control") {
     return "remote-browser.input";
   }
-  if (patch.type === "mark-failed") {
+  if (patch.type === "mark-publishing" || patch.type === "mark-active" || patch.type === "mark-stopped" || patch.type === "mark-failed") {
     return "remote-browser.stop";
   }
   return null;
@@ -542,16 +578,68 @@ function reduceRemoteBrowserState(current: RemoteBrowserObjectState, patch: Remo
   }
   if (patch.type === "open-url") {
     const executorSessionId = current.executorSessionId ?? `remote-browser:${objectId}`;
-    const frameStreamId = current.frameStreamId ?? `remote-browser:${objectId}:frames`;
+    const mediaParticipantId = current.mediaParticipantId ?? executorSessionId;
+    return {
+      ...current,
+      status: "loading",
+      controllerParticipantId: current.controllerParticipantId ?? participantId,
+      executorSessionId,
+      mediaParticipantId,
+      mediaTrackSid: undefined,
+      audioTrackSid: undefined,
+      currentUrl: patch.url,
+      errorCode: undefined,
+      streamErrorCode: undefined,
+      loadedAtMs: undefined,
+      streamStartedAtMs: undefined,
+      streamUpdatedAtMs: undefined,
+      stoppedAtMs: undefined,
+      lastInputEventId: patch.inputEventId
+    };
+  }
+  if (patch.type === "mark-publishing") {
+    if (!current.executorSessionId) {
+      return null;
+    }
+    return {
+      ...current,
+      status: "publishing",
+      mediaParticipantId: patch.mediaParticipantId.trim(),
+      mediaTrackSid: undefined,
+      audioTrackSid: undefined,
+      errorCode: undefined,
+      streamErrorCode: undefined,
+      streamUpdatedAtMs: nowMs,
+      lastInputEventId: patch.inputEventId
+    };
+  }
+  if (patch.type === "mark-active") {
+    if (!current.executorSessionId || current.mediaParticipantId !== patch.mediaParticipantId.trim()) {
+      return null;
+    }
     return {
       ...current,
       status: "active",
-      controllerParticipantId: current.controllerParticipantId ?? participantId,
-      executorSessionId,
-      frameStreamId,
-      currentUrl: patch.url,
+      mediaParticipantId: patch.mediaParticipantId.trim(),
+      mediaTrackSid: patch.mediaTrackSid.trim(),
+      audioTrackSid: patch.audioTrackSid.trim(),
+      loadedAtMs: current.loadedAtMs ?? nowMs,
+      streamStartedAtMs: current.streamStartedAtMs ?? nowMs,
+      streamUpdatedAtMs: nowMs,
+      stoppedAtMs: undefined,
       errorCode: undefined,
-      loadedAtMs: nowMs,
+      streamErrorCode: undefined,
+      lastInputEventId: patch.inputEventId
+    };
+  }
+  if (patch.type === "mark-stopped") {
+    return {
+      ...current,
+      status: "stopped",
+      mediaTrackSid: undefined,
+      audioTrackSid: undefined,
+      stoppedAtMs: nowMs,
+      streamUpdatedAtMs: nowMs,
       lastInputEventId: patch.inputEventId
     };
   }
@@ -559,7 +647,11 @@ function reduceRemoteBrowserState(current: RemoteBrowserObjectState, patch: Remo
     return {
       ...current,
       status: "failed",
+      mediaTrackSid: undefined,
+      audioTrackSid: undefined,
       errorCode: patch.errorCode,
+      streamErrorCode: patch.errorCode,
+      streamUpdatedAtMs: nowMs,
       lastInputEventId: patch.inputEventId
     };
   }
@@ -860,6 +952,9 @@ export function patchMediaObjectState(state: RoomState, participantId: string, i
     if (!isRemoteBrowserPatch(patch)) {
       return rejectMediaObjectCommand(state, { commandId: input.commandId, role: access.role, permission, blockedReason: "invalid-patch", surfaceId: input.surfaceId, objectId: input.objectId, objectType: object.type, revision: object.revision });
     }
+    if (isRemoteBrowserExecutorPatch(patch)) {
+      return rejectMediaObjectCommand(state, { commandId: input.commandId, role: access.role, permission, blockedReason: "invalid-patch", surfaceId: input.surfaceId, objectId: input.objectId, objectType: object.type, revision: object.revision });
+    }
     if (currentState.lastInputEventId === patch.inputEventId) {
       return rejectMediaObjectCommand(state, { commandId: input.commandId, role: access.role, permission, blockedReason: "duplicate-input-event", surfaceId: input.surfaceId, objectId: input.objectId, objectType: object.type, revision: object.revision });
     }
@@ -870,7 +965,7 @@ export function patchMediaObjectState(state: RoomState, participantId: string, i
     const nextObject: MediaObjectInstance<RemoteBrowserObjectState> = {
       ...object,
       state: nextState,
-      status: nextState.status === "failed" ? "failed" : "active",
+      status: nextState.status === "failed" ? "failed" : nextState.status === "stopped" ? "stopped" : "active",
       revision: object.revision + 1,
       updatedAtMs: input.nowMs
     };
@@ -931,6 +1026,67 @@ export function patchMediaObjectState(state: RoomState, participantId: string, i
       accepted: true,
       commandId: input.commandId,
       role: access.role,
+      permission,
+      blockedReason: null,
+      surfaceId: input.surfaceId,
+      objectId: input.objectId,
+      objectType: object.type,
+      revision: nextObject.revision
+    })
+  };
+}
+
+export function patchRemoteBrowserExecutorState(state: RoomState, input: PatchRemoteBrowserExecutorInput): MediaObjectMutationResult {
+  const permission: RoomPermission = "remote-browser.stop";
+  const mediaObjects = ensureMediaObjectsState(state);
+  const surface = mediaObjects.surfaces[input.surfaceId];
+  if (!surface) {
+    return rejectMediaObjectCommand(state, { commandId: input.commandId, role: "admin", permission, blockedReason: "missing-surface", surfaceId: input.surfaceId, objectId: input.objectId });
+  }
+  const object = mediaObjects.objects[input.objectId];
+  if (!object) {
+    return rejectMediaObjectCommand(state, { commandId: input.commandId, role: "admin", permission, blockedReason: "missing-object", surfaceId: input.surfaceId, objectId: input.objectId });
+  }
+  if (object.type !== REMOTE_BROWSER_OBJECT_TYPE || object.surfaceId !== input.surfaceId || surface.activeObjectId !== input.objectId) {
+    return rejectMediaObjectCommand(state, { commandId: input.commandId, role: "admin", permission, blockedReason: "object-surface-mismatch", surfaceId: input.surfaceId, objectId: input.objectId, objectType: object.type, revision: object.revision });
+  }
+
+  const currentState = object.state as RemoteBrowserObjectState;
+  if (currentState.executorSessionId !== input.executorSessionId) {
+    return rejectMediaObjectCommand(state, { commandId: input.commandId, role: "admin", permission, blockedReason: "invalid-patch", surfaceId: input.surfaceId, objectId: input.objectId, objectType: object.type, revision: object.revision });
+  }
+  if (!isRemoteBrowserExecutorPatch(input.patch)) {
+    return rejectMediaObjectCommand(state, { commandId: input.commandId, role: "admin", permission, blockedReason: "invalid-patch", surfaceId: input.surfaceId, objectId: input.objectId, objectType: object.type, revision: object.revision });
+  }
+  if (currentState.lastInputEventId === input.patch.inputEventId) {
+    return rejectMediaObjectCommand(state, { commandId: input.commandId, role: "admin", permission, blockedReason: "duplicate-input-event", surfaceId: input.surfaceId, objectId: input.objectId, objectType: object.type, revision: object.revision });
+  }
+  const nextState = reduceRemoteBrowserState(currentState, input.patch, object.ownerParticipantId, object.objectId, input.nowMs);
+  if (!nextState) {
+    return rejectMediaObjectCommand(state, { commandId: input.commandId, role: "admin", permission, blockedReason: "invalid-patch", surfaceId: input.surfaceId, objectId: input.objectId, objectType: object.type, revision: object.revision });
+  }
+  const nextObject: MediaObjectInstance<RemoteBrowserObjectState> = {
+    ...object,
+    state: nextState,
+    status: nextState.status === "failed" ? "failed" : nextState.status === "stopped" ? "stopped" : "active",
+    revision: object.revision + 1,
+    updatedAtMs: input.nowMs
+  };
+  return {
+    room: {
+      ...state,
+      mediaObjects: {
+        surfaces: mediaObjects.surfaces,
+        objects: {
+          ...mediaObjects.objects,
+          [input.objectId]: nextObject
+        }
+      }
+    },
+    result: createMediaObjectCommandResult({
+      accepted: true,
+      commandId: input.commandId,
+      role: "admin",
       permission,
       blockedReason: null,
       surfaceId: input.surfaceId,

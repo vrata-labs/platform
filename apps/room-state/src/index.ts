@@ -1,4 +1,4 @@
-import { createServer } from "node:http";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 
 import { WebSocketServer, type WebSocket } from "ws";
@@ -23,6 +23,7 @@ import {
   joinRoom,
   leaveRoom,
   patchMediaObjectState,
+  patchRemoteBrowserExecutorState,
   releaseSeat,
   serializeRoomState,
   setSurfaceMediaAudioEnabled,
@@ -89,8 +90,75 @@ export interface PrivilegedRoomCommandResultPayload {
 
 export type MediaObjectCommandResultPayload = MediaObjectCommandResult;
 
+interface RemoteBrowserExecutorPatchRequest {
+  roomId?: string;
+  surfaceId?: string;
+  objectId?: string;
+  commandId?: string;
+  patch?: unknown;
+}
+
 function logEvent(event: Record<string, unknown>): void {
   process.stdout.write(`${JSON.stringify(event)}\n`);
+}
+
+function json(response: ServerResponse, statusCode: number, body: unknown): void {
+  response.writeHead(statusCode, {
+    "content-type": "application/json; charset=utf-8",
+    "cache-control": "no-store",
+    "x-content-type-options": "nosniff"
+  });
+  response.end(JSON.stringify(body));
+}
+
+function parseBody<T>(request: IncomingMessage): Promise<T | null> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let bytes = 0;
+    request.on("data", (chunk: Buffer) => {
+      bytes += chunk.byteLength;
+      if (bytes > 64 * 1024) {
+        reject(new Error("payload_too_large"));
+        request.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    request.on("end", () => {
+      if (chunks.length === 0) {
+        resolve(null);
+        return;
+      }
+      try {
+        resolve(JSON.parse(Buffer.concat(chunks).toString("utf8")) as T);
+      } catch (error) {
+        reject(error);
+      }
+    });
+    request.on("error", reject);
+  });
+}
+
+function getInternalServiceToken(env: NodeJS.ProcessEnv = process.env): string | null {
+  const token = env.NOAH_INTERNAL_SERVICE_TOKEN?.trim() || env.REMOTE_BROWSER_INTERNAL_TOKEN?.trim() || "";
+  return token || null;
+}
+
+function isAuthorizedInternalRequest(request: IncomingMessage, env: NodeJS.ProcessEnv = process.env): boolean {
+  const token = getInternalServiceToken(env);
+  if (!token) {
+    return true;
+  }
+  const provided = request.headers["x-noah-internal-token"];
+  return typeof provided === "string" && safeEqual(provided, token);
+}
+
+function getInternalFetchHeaders(): Record<string, string> {
+  const token = getInternalServiceToken();
+  return {
+    "content-type": "application/json",
+    ...(token ? { "x-noah-internal-token": token } : {})
+  };
 }
 
 function isEnabledEnvValue(value: string | undefined): boolean | null {
@@ -464,6 +532,31 @@ export function applyMediaObjectPatchCommand(server: RoomStateServer, roomId: st
   return result.result;
 }
 
+export function applyRemoteBrowserExecutorPatchCommand(server: RoomStateServer, input: {
+  roomId?: string;
+  surfaceId?: string;
+  objectId?: string;
+  executorSessionId?: string;
+  commandId?: string;
+  patch?: unknown;
+}): MediaObjectCommandResultPayload {
+  const roomId = input.roomId?.trim() || "demo-room";
+  const room = ensureRoom(server, roomId);
+  const result = patchRemoteBrowserExecutorState(room, {
+    commandId: input.commandId?.trim() || randomUUID(),
+    surfaceId: input.surfaceId?.trim() || "debug-main",
+    objectId: input.objectId?.trim() || "",
+    executorSessionId: input.executorSessionId?.trim() || "",
+    patch: input.patch,
+    nowMs: Date.now()
+  });
+  server.rooms.set(roomId, result.room);
+  if (result.result.accepted) {
+    broadcastRoom(server, roomId);
+  }
+  return result.result;
+}
+
 export function applySurfaceMediaAudioCommand(server: RoomStateServer, roomId: string, participantId: string, input: {
   commandId?: string;
   surfaceId?: string;
@@ -561,17 +654,18 @@ function forwardRemoteBrowserPatch(server: RoomStateServer, roomId: string, obje
     return;
   }
   const state = getRemoteBrowserObjectState(server, roomId, objectId);
-  if (!state?.executorSessionId || !state.frameStreamId) {
+  if (!state?.executorSessionId || !state.mediaParticipantId) {
     return;
   }
   const remotePatch = patch as RemoteBrowserPatch;
   const request = remotePatch.type === "open-url"
     ? fetch(`${baseUrl}/api/sessions`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: getInternalFetchHeaders(),
       body: JSON.stringify({
         sessionId: state.executorSessionId,
         frameStreamId: state.frameStreamId,
+        mediaParticipantId: state.mediaParticipantId,
         roomId,
         objectId,
         url: remotePatch.url
@@ -580,7 +674,7 @@ function forwardRemoteBrowserPatch(server: RoomStateServer, roomId: string, obje
     : remotePatch.type === "pointer" || remotePatch.type === "scroll" || remotePatch.type === "keyboard"
       ? fetch(`${baseUrl}/api/sessions/${encodeURIComponent(state.executorSessionId)}/input`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: getInternalFetchHeaders(),
         body: JSON.stringify(remotePatch)
       })
       : null;
@@ -605,7 +699,7 @@ function stopRemoteBrowserSession(sessionId: string | null | undefined): void {
   if (!baseUrl || !sessionId) {
     return;
   }
-  fetch(`${baseUrl}/api/sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE" }).catch((error: unknown) => {
+  fetch(`${baseUrl}/api/sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE", headers: getInternalFetchHeaders() }).catch((error: unknown) => {
     logEvent({
       service: "room-state",
       env: process.env.NODE_ENV ?? "development",
@@ -620,24 +714,46 @@ function stopRemoteBrowserSession(sessionId: string | null | undefined): void {
 export function startRoomStateService(port = Number.parseInt(process.env.ROOM_STATE_PORT ?? "2567", 10)) {
   const authority = createRoomStateServer();
   const httpServer = createServer((request, response) => {
-    if (request.url === "/health") {
-      response.writeHead(200, { "content-type": "application/json; charset=utf-8" });
-      response.end(JSON.stringify({
-        status: "ok",
-        service: "room-state",
-        env: process.env.NODE_ENV ?? "development",
-        port,
-        timestamp: new Date().toISOString(),
-        dependencies: {
-          websocketServer: true
-        },
-        featureFlags: {
-          realtimeEnabled: process.env.FEATURE_ROOM_STATE_REALTIME !== "false"
+    void (async () => {
+      const url = new URL(request.url ?? "/", `http://${request.headers.host ?? `localhost:${port}`}`);
+      if (request.method === "GET" && url.pathname === "/health") {
+        json(response, 200, {
+          status: "ok",
+          service: "room-state",
+          env: process.env.NODE_ENV ?? "development",
+          port,
+          timestamp: new Date().toISOString(),
+          dependencies: {
+            websocketServer: true
+          },
+          featureFlags: {
+            realtimeEnabled: process.env.FEATURE_ROOM_STATE_REALTIME !== "false"
+          }
+        });
+        return;
+      }
+      const remoteBrowserSessionMatch = url.pathname.match(/^\/api\/internal\/remote-browser\/sessions\/([^/]+)$/);
+      if (request.method === "POST" && remoteBrowserSessionMatch) {
+        if (!isAuthorizedInternalRequest(request)) {
+          json(response, 403, { error: "forbidden" });
+          return;
         }
-      }));
-      return;
-    }
-    response.writeHead(404).end();
+        const payload = await parseBody<RemoteBrowserExecutorPatchRequest>(request);
+        const result = applyRemoteBrowserExecutorPatchCommand(authority, {
+          roomId: payload?.roomId,
+          surfaceId: payload?.surfaceId,
+          objectId: payload?.objectId,
+          commandId: payload?.commandId,
+          executorSessionId: decodeURIComponent(remoteBrowserSessionMatch[1] ?? ""),
+          patch: payload?.patch
+        });
+        json(response, result.accepted ? 200 : 409, { result });
+        return;
+      }
+      json(response, 404, { error: "not_found" });
+    })().catch((error: unknown) => {
+      json(response, 500, { error: "room_state_error", message: error instanceof Error ? error.message : "unknown" });
+    });
   });
   const wss = new WebSocketServer({ server: httpServer });
 

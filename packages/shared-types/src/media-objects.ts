@@ -99,7 +99,7 @@ export interface WhiteboardState {
   lastInputEventId: string | null;
 }
 
-export type RemoteBrowserStatus = "idle" | "starting" | "loading" | "active" | "stopping" | "failed";
+export type RemoteBrowserStatus = "idle" | "starting" | "loading" | "publishing" | "active" | "stopping" | "stopped" | "failed";
 
 export type RemoteBrowserErrorCode =
   | "url_not_allowed"
@@ -109,6 +109,13 @@ export type RemoteBrowserErrorCode =
   | "executor_crashed"
   | "executor_timeout"
   | "navigation_failed"
+  | "viewport_capture_unsupported"
+  | "viewport_capture_denied"
+  | "viewport_capture_failed"
+  | "audio_track_missing"
+  | "video_track_missing"
+  | "livekit_token_failed"
+  | "livekit_publish_failed"
   | "input_rejected"
   | "stream_failed"
   | "unknown";
@@ -120,10 +127,17 @@ export interface RemoteBrowserObjectState {
   controllerParticipantId?: string;
   executorSessionId?: string;
   frameStreamId?: string;
+  mediaParticipantId?: string;
+  mediaTrackSid?: string;
+  audioTrackSid?: string;
   currentUrl?: string;
   title?: string;
   loadedAtMs?: number;
   lastFrameAtMs?: number;
+  streamStartedAtMs?: number;
+  streamUpdatedAtMs?: number;
+  stoppedAtMs?: number;
+  streamErrorCode?: RemoteBrowserErrorCode;
   lastInputSeq?: number;
   lastInputEventId: string | null;
   errorCode?: RemoteBrowserErrorCode;
@@ -147,6 +161,9 @@ export type WhiteboardPatch =
 
 export type RemoteBrowserPatch =
   | { type: "open-url"; url: string; inputEventId: string }
+  | { type: "mark-publishing"; mediaParticipantId: string; inputEventId: string }
+  | { type: "mark-active"; mediaParticipantId: string; mediaTrackSid: string; audioTrackSid: string; inputEventId: string }
+  | { type: "mark-stopped"; inputEventId: string }
   | { type: "pointer"; event: SurfaceInputEvent; inputEventId: string }
   | { type: "scroll"; event: SurfaceInputEvent; inputEventId: string }
   | { type: "keyboard"; event: SurfaceInputEvent; inputEventId: string }

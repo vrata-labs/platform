@@ -19,7 +19,7 @@ ENV NODE_ENV=production \
 WORKDIR /app
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates chromium fonts-liberation \
+  && apt-get install -y --no-install-recommends ca-certificates chromium fonts-liberation xvfb dbus-x11 pulseaudio \
   && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /app/package.json ./package.json
@@ -35,4 +35,4 @@ EXPOSE 4010
 
 HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=5 CMD node -e "fetch('http://127.0.0.1:' + (process.env.REMOTE_BROWSER_PORT || '4010') + '/health').then((r) => { if (!r.ok) process.exit(1); }).catch(() => process.exit(1))"
 
-CMD ["node", "apps/remote-browser/dist/index.js"]
+CMD ["sh", "-lc", "Xvfb :99 -screen 0 ${REMOTE_BROWSER_VIEWPORT_WIDTH:-1280}x${REMOTE_BROWSER_VIEWPORT_HEIGHT:-720}x24 >/tmp/noah-xvfb.log 2>&1 & export DISPLAY=:99; pulseaudio --start --exit-idle-time=-1 >/tmp/noah-pulseaudio.log 2>&1 || true; node apps/remote-browser/dist/index.js"]

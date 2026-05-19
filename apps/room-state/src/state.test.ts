@@ -10,6 +10,7 @@ import {
   leaveRoom,
   mergeParticipantState,
   patchMediaObjectState,
+  patchRemoteBrowserExecutorState,
   releaseSeat,
   setSurfaceMediaAudioEnabled,
   stopMediaObject,
@@ -498,15 +499,65 @@ test("remote-browser object opens URL, streams input, and enforces controller lo
     controllerParticipantId?: string;
     executorSessionId?: string;
     frameStreamId?: string;
+    mediaParticipantId?: string;
+    mediaTrackSid?: string;
+    audioTrackSid?: string;
     currentUrl?: string;
   } | undefined;
-  assert.equal(openedState?.status, "active");
+  assert.equal(openedState?.status, "loading");
   assert.equal(openedState?.controllerParticipantId, "host");
   assert.equal(openedState?.executorSessionId, "remote-browser:browser-1");
-  assert.equal(openedState?.frameStreamId, "remote-browser:browser-1:frames");
+  assert.equal(openedState?.frameStreamId, undefined);
+  assert.equal(openedState?.mediaParticipantId, "remote-browser:browser-1");
+  assert.equal(openedState?.mediaTrackSid, undefined);
+  assert.equal(openedState?.audioTrackSid, undefined);
   assert.equal(openedState?.currentUrl, "https://example.com/remote-browser-demo.html");
 
-  const staleInput = patchMediaObjectState(opened.room, "host", {
+  const publishing = patchRemoteBrowserExecutorState(opened.room, {
+    commandId: "cmd-publishing",
+    surfaceId: "debug-main",
+    objectId: "browser-1",
+    executorSessionId: "remote-browser:browser-1",
+    patch: {
+      type: "mark-publishing",
+      mediaParticipantId: "remote-browser:browser-1",
+      inputEventId: "executor:publishing:1"
+    },
+    nowMs: 3
+  });
+  assert.equal(publishing.result.accepted, true);
+  assert.equal((publishing.room.mediaObjects.objects["browser-1"]?.state as { status?: string; streamUpdatedAtMs?: number } | undefined)?.status, "publishing");
+  assert.equal((publishing.room.mediaObjects.objects["browser-1"]?.state as { streamUpdatedAtMs?: number } | undefined)?.streamUpdatedAtMs, 3);
+
+  const active = patchRemoteBrowserExecutorState(publishing.room, {
+    commandId: "cmd-browser-active",
+    surfaceId: "debug-main",
+    objectId: "browser-1",
+    executorSessionId: "remote-browser:browser-1",
+    patch: {
+      type: "mark-active",
+      mediaParticipantId: "remote-browser:browser-1",
+      mediaTrackSid: "TR_VP",
+      audioTrackSid: "TR_AUDIO",
+      inputEventId: "executor:active:1"
+    },
+    nowMs: 4
+  });
+  assert.equal(active.result.accepted, true);
+  const activeRemoteBrowserState = active.room.mediaObjects.objects["browser-1"]?.state as {
+    status?: string;
+    mediaTrackSid?: string;
+    audioTrackSid?: string;
+    loadedAtMs?: number;
+    streamStartedAtMs?: number;
+  } | undefined;
+  assert.equal(activeRemoteBrowserState?.status, "active");
+  assert.equal(activeRemoteBrowserState?.mediaTrackSid, "TR_VP");
+  assert.equal(activeRemoteBrowserState?.audioTrackSid, "TR_AUDIO");
+  assert.equal(activeRemoteBrowserState?.loadedAtMs, 4);
+  assert.equal(activeRemoteBrowserState?.streamStartedAtMs, 4);
+
+  const staleInput = patchMediaObjectState(active.room, "host", {
     commandId: "cmd-input-stale-revision",
     surfaceId: "debug-main",
     objectId: "browser-1",
@@ -528,7 +579,7 @@ test("remote-browser object opens URL, streams input, and enforces controller lo
         seq: 1
       }
     },
-    nowMs: 3
+    nowMs: 5
   });
   assert.equal(staleInput.result.accepted, true);
   assert.equal(staleInput.result.permission, "remote-browser.input");
@@ -539,7 +590,7 @@ test("remote-browser object opens URL, streams input, and enforces controller lo
     commandId: "cmd-admin-input",
     surfaceId: "debug-main",
     objectId: "browser-1",
-    expectedRevision: staleInput.result.revision ?? 2,
+    expectedRevision: staleInput.result.revision ?? 4,
     patch: {
       type: "pointer",
       inputEventId: "admin:pointer:1",
@@ -553,11 +604,11 @@ test("remote-browser object opens URL, streams input, and enforces controller lo
         kind: "click",
         uv: { u: 0.5, v: 0.5 },
         pixel: { x: 960, y: 540 },
-        clientTimeMs: 4,
+        clientTimeMs: 6,
         seq: 1
       }
     },
-    nowMs: 4
+    nowMs: 6
   });
   assert.equal(adminInput.result.accepted, false);
   assert.equal(adminInput.result.blockedReason, "invalid-patch");

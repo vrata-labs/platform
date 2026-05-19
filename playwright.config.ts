@@ -20,6 +20,10 @@ export default defineConfig({
       FEATURE_AVATAR_POSE_BINARY: "true",
       REMOTE_BROWSER_INTERNAL_URL: "http://127.0.0.1:4010",
       REMOTE_BROWSER_PUBLIC_URL: "ws://127.0.0.1:4010",
+      NOAH_INTERNAL_SERVICE_TOKEN: "test-internal-token",
+      API_INTERNAL_URL: "http://127.0.0.1:4000",
+      ROOM_STATE_INTERNAL_URL: "http://127.0.0.1:2567",
+      REMOTE_BROWSER_VIEWPORT_MOCK: "1",
       REMOTE_BROWSER_ALLOWED_ORIGINS: "http://127.0.0.1:4000,http://localhost:4000",
       REMOTE_BROWSER_ALLOW_PRIVATE_ALLOWED_ORIGINS: "true"
     }

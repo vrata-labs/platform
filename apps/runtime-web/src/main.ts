@@ -52,6 +52,7 @@ import {
   activeRemoteBrowserObjectForSurface as selectActiveRemoteBrowserObjectForSurface,
   activeScreenShareObjectForSurface as selectActiveScreenShareObjectForSurface,
   activeWhiteboardObjectForSurface as selectActiveWhiteboardObjectForSurface,
+  remoteBrowserObjectForMediaTrack,
   resolveScreenShareSurfaceForOwner
 } from "./media/media-object-state.js";
 import { routeMediaObjectSurfaceInput } from "./media/media-object-router.js";
@@ -446,6 +447,10 @@ let latestMode: PresenceState["mode"] = presenceXrMockEnabled ? "vr" : /android|
 let activeScreenShareTrack: Track | null = null;
 let activeScreenShareElement: HTMLVideoElement | null = null;
 let activeRemoteScreenShareTrackCount = 0;
+let activeRemoteBrowserVideoTrack: Track | null = null;
+let activeRemoteBrowserVideoElement: HTMLVideoElement | null = null;
+let activeRemoteBrowserVideoTrackSid: string | null = null;
+let activeRemoteBrowserObjectId: string | null = null;
 let isScreenSharing = false;
 let activeMockScreenShareStream: MediaStream | null = null;
 let localScreenShareObjectId: string | null = null;
@@ -529,6 +534,7 @@ const remoteBrowserRuntime = createRemoteBrowserObjectRuntime({
   getPermissions: () => debugState.access.permissions,
   getLatestObject: (surfaceId) => activeRemoteBrowserObjectForSurface(surfaceId),
   patchObject: (objectId, surfaceId, expectedRevision, patch) => mediaSurfaceCommands.patchRemoteBrowserObject(objectId, surfaceId, expectedRevision, patch),
+  isExternalVideoActive: (object) => activeRemoteBrowserObjectId === object.objectId && Boolean(activeRemoteBrowserVideoElement),
   applyTexture: (texture) => applyDisplayTexture(texture),
   onBlocked: (blockedReason, errorCode) => {
     debugState.mediaObjects.blockedReason = blockedReason;
@@ -994,11 +1000,16 @@ function syncMediaObjectsDebugState(): void {
   const activeRemoteBrowser = activeRemoteBrowserObjectForSurface(DEBUG_SURFACE_ID);
   if (activeRemoteBrowser) {
     remoteBrowserRuntime.sync(activeRemoteBrowser);
+    if (activeRemoteBrowserObjectId && activeRemoteBrowserObjectId !== activeRemoteBrowser.objectId) {
+      detachRemoteBrowserVideoTrack();
+    }
   } else if (displaySurface.material instanceof THREE.MeshBasicMaterial && remoteBrowserRuntime.ownsTexture(displaySurface.material.map)) {
     remoteBrowserRuntime.close();
+    detachRemoteBrowserVideoTrack();
     applyDisplayTexture(null);
   } else {
     remoteBrowserRuntime.close();
+    detachRemoteBrowserVideoTrack();
   }
   const activeScreenShare = activeScreenShareObjectForSurface(DEBUG_SURFACE_ID);
   const screenShareState = activeScreenShare?.state ?? null;
@@ -1056,6 +1067,7 @@ function handleRoomSnapshot(snapshot: RoomStateSnapshot): void {
   roomMediaObjects = snapshot.mediaObjects;
   syncSeatStateFromOccupancy();
   syncMediaObjectsDebugState();
+  syncRemoteBrowserLiveKitTracks();
   latestRealtimeParticipants = snapshot.participants;
   applyMergedPresenceParticipants();
 }
@@ -2220,6 +2232,42 @@ function getTrackNodeId(track: Track, fallback: string): string {
     ?? fallback;
 }
 
+function getPublicationTrackSid(publication: unknown, track: Track, fallback: string): string {
+  return (publication as { trackSid?: string; sid?: string } | null)?.trackSid
+    ?? (publication as { sid?: string } | null)?.sid
+    ?? getTrackNodeId(track, fallback);
+}
+
+function resolveRemoteBrowserObjectForTrack(participantIdentity: string | null | undefined, publication: unknown, track: Track, kind: "audio" | "video"): MediaObjectInstance<RemoteBrowserObjectState> | null {
+  const trackSid = getPublicationTrackSid(publication, track, "");
+  return remoteBrowserObjectForMediaTrack(roomMediaObjects, participantIdentity, trackSid || null, kind);
+}
+
+function syncRemoteBrowserLiveKitTracks(): void {
+  if (!livekitRoom) {
+    return;
+  }
+  for (const participant of livekitRoom.remoteParticipants.values()) {
+    for (const publication of participant.trackPublications.values()) {
+      const videoTrack = (publication as { videoTrack?: Track; track?: Track }).videoTrack ?? ((publication as { kind?: unknown }).kind === Track.Kind.Video ? (publication as { track?: Track }).track : undefined);
+      if (videoTrack) {
+        const object = resolveRemoteBrowserObjectForTrack(participant.identity, publication, videoTrack, "video");
+        if (object) {
+          attachRemoteBrowserVideoTrack(videoTrack, object, publication);
+        }
+      }
+      const audioTrack = (publication as { audioTrack?: Track; track?: Track }).audioTrack ?? ((publication as { kind?: unknown }).kind === Track.Kind.Audio ? (publication as { track?: Track }).track : undefined);
+      if (audioTrack) {
+        const object = resolveRemoteBrowserObjectForTrack(participant.identity, publication, audioTrack, "audio");
+        if (object) {
+          connectMediaSurfaceAudioTrack(audioTrack, object.surfaceId);
+          debugState.remoteBrowser.mediaHasAudio = true;
+        }
+      }
+    }
+  }
+}
+
 function resolveScreenShareSurfaceForParticipant(ownerParticipantId: string | null | undefined): string {
   return resolveScreenShareSurfaceForOwner(roomMediaObjects, ownerParticipantId, DEBUG_SURFACE_ID);
 }
@@ -2454,6 +2502,11 @@ const debugState = {
     controllerParticipantId: null as string | null,
     executorSessionId: null as string | null,
     frameStreamId: null as string | null,
+    mediaParticipantId: null as string | null,
+    mediaTrackSid: null as string | null,
+    audioTrackSid: null as string | null,
+    streamStartedAtMs: null as number | null,
+    streamUpdatedAtMs: null as number | null,
     frameConnected: false,
     frameStreamUrl: null as string | null,
     lastFrameAtMs: 0,
@@ -2463,6 +2516,14 @@ const debugState = {
     localHasControl: false,
     lastInputSeq: 0,
     errorCode: null as RemoteBrowserErrorCode | string | null,
+    mediaState: "idle" as string,
+    mediaConnected: false,
+    mediaHasVideo: false,
+    mediaHasAudio: false,
+    mediaPeerConnectionState: null as RTCPeerConnectionState | null,
+    mediaErrorCode: null as string | null,
+    mediaSourceRect: null as null | { x: number; y: number; width: number; height: number; viewportWidth: number; viewportHeight: number },
+    mediaCompositeHoldActive: false,
     xrKeyboardToggleVisible: false,
     xrKeyboardVisible: false,
     xrKeyboardOpen: false,
@@ -3573,6 +3634,32 @@ function attachVideoTrack(track: Track, options: { remote: boolean } = { remote:
   debugState.screenShareState = options.remote ? "receiving" : debugState.screenShareState;
 }
 
+function attachRemoteBrowserVideoTrack(track: Track, object: MediaObjectInstance<RemoteBrowserObjectState>, publication: unknown): void {
+  const trackSid = getPublicationTrackSid(publication, track, object.state.mediaTrackSid ?? `${object.objectId}:remote-browser-video`);
+  if (activeRemoteBrowserVideoTrackSid === trackSid && activeRemoteBrowserVideoElement) {
+    return;
+  }
+  detachRemoteBrowserVideoTrack();
+  const element = track.attach() as HTMLVideoElement;
+  element.autoplay = true;
+  element.muted = true;
+  element.playsInline = true;
+  element.style.display = "none";
+  document.body.appendChild(element);
+
+  const texture = new THREE.VideoTexture(element);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  applyDisplayTexture(texture);
+
+  activeRemoteBrowserVideoTrack = track;
+  activeRemoteBrowserVideoElement = element;
+  activeRemoteBrowserVideoTrackSid = trackSid;
+  activeRemoteBrowserObjectId = object.objectId;
+  debugState.remoteBrowser.mediaConnected = true;
+  debugState.remoteBrowser.mediaState = "connected";
+  debugState.remoteBrowser.mediaHasVideo = true;
+}
+
 function attachMockVideoStream(stream: MediaStream): void {
   const element = document.createElement("video");
   element.autoplay = true;
@@ -3630,6 +3717,28 @@ function detachVideoTrack(): void {
   debugState.screenShare.remoteSubscribedTrackCount = 0;
   if (debugState.screenShareState !== "stopped") {
     debugState.screenShareState = "idle";
+  }
+}
+
+function detachRemoteBrowserVideoTrack(track?: Track): void {
+  if (track && activeRemoteBrowserVideoTrack && track !== activeRemoteBrowserVideoTrack) {
+    return;
+  }
+  if (activeRemoteBrowserVideoTrack) {
+    activeRemoteBrowserVideoTrack.detach().forEach((element) => element.remove());
+    activeRemoteBrowserVideoTrack = null;
+  }
+  if (activeRemoteBrowserVideoElement) {
+    activeRemoteBrowserVideoElement.remove();
+    activeRemoteBrowserVideoElement = null;
+  }
+  activeRemoteBrowserVideoTrackSid = null;
+  activeRemoteBrowserObjectId = null;
+  debugState.remoteBrowser.mediaConnected = false;
+  debugState.remoteBrowser.mediaHasVideo = false;
+  const remoteBrowser = activeRemoteBrowserObjectForSurface(DEBUG_SURFACE_ID);
+  if (remoteBrowser) {
+    remoteBrowserRuntime.sync(remoteBrowser);
   }
 }
 
@@ -4284,10 +4393,22 @@ async function refreshPresence(): Promise<void> {
 function setupAudio(room: Room): void {
   room.on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
     if (track.kind === Track.Kind.Video) {
+      const remoteBrowser = resolveRemoteBrowserObjectForTrack(participant?.identity, publication, track, "video");
+      if (remoteBrowser) {
+        attachRemoteBrowserVideoTrack(track, remoteBrowser, publication);
+        return;
+      }
       attachVideoTrack(track);
       return;
     }
     if (track.kind !== Track.Kind.Audio) return;
+    const remoteBrowser = resolveRemoteBrowserObjectForTrack(participant?.identity, publication, track, "audio");
+    if (remoteBrowser) {
+      connectMediaSurfaceAudioTrack(track, remoteBrowser.surfaceId);
+      debugState.remoteBrowser.mediaHasAudio = true;
+      debugState.audioState = "remote-track";
+      return;
+    }
     if (isScreenShareAudioSource((publication as { source?: unknown }).source)) {
       connectMediaSurfaceAudioTrack(track, resolveScreenShareSurfaceForParticipant(participant?.identity));
       return;
@@ -4300,10 +4421,20 @@ function setupAudio(room: Room): void {
 
   room.on(RoomEvent.TrackUnsubscribed, (track, publication, participant) => {
     if (track.kind === Track.Kind.Video) {
+      if (resolveRemoteBrowserObjectForTrack(participant?.identity, publication, track, "video") || track === activeRemoteBrowserVideoTrack) {
+        detachRemoteBrowserVideoTrack(track);
+        return;
+      }
       detachVideoTrack();
       return;
     }
     if (track.kind !== Track.Kind.Audio) return;
+    if (resolveRemoteBrowserObjectForTrack(participant?.identity, publication, track, "audio")) {
+      disconnectMediaSurfaceAudioTrackByTrack(track);
+      debugState.remoteBrowser.mediaHasAudio = false;
+      track.detach().forEach((element) => element.remove());
+      return;
+    }
     if (isScreenShareAudioSource((publication as { source?: unknown }).source)) {
       disconnectMediaSurfaceAudioTrackByTrack(track);
       track.detach().forEach((element) => element.remove());
