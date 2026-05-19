@@ -1354,6 +1354,102 @@ test("two rooms load two different real SenseTower scene assets", async ({ brows
   await officePage.close();
 });
 
+test("Livadia Nicholas II office scene loads with readable diagnostics", async ({ page, request }) => {
+  const roomResponse = await request.post("/api/rooms", {
+    headers: {
+      "x-noah-admin-token": "test-admin-token"
+    },
+    data: {
+      tenantId: "demo-tenant",
+      templateId: "meeting-room-basic",
+      name: "Livadia Nicholas II Office Room",
+      sceneBundleUrl: "/assets/scenes/livadia-nicholas-office-v1/scene.json"
+    }
+  });
+  expect(roomResponse.ok()).toBeTruthy();
+  const room = (await roomResponse.json()) as { roomLink: string };
+
+  await page.goto(`${room.roomLink}?debug=1&scenefit=0`);
+
+  const readSceneDebug = async () => {
+    return page.evaluate(() => {
+      const debug = (window as Window & {
+        __NOAH_DEBUG__?: {
+          sceneBundleState?: string;
+          sceneDebug?: {
+            label?: string | null;
+            state?: string | null;
+            failureReason?: string | null;
+            spawnApplied?: boolean;
+            meshCount?: number;
+            triangleEstimate?: number;
+            missingAssets?: string[];
+            boundingBox?: { size?: { x?: number; y?: number; z?: number } } | null;
+            screenshot?: {
+              averageColor?: { r?: number; g?: number; b?: number; a?: number };
+              darkPixelRatio?: number;
+            } | null;
+          };
+        };
+      }).__NOAH_DEBUG__;
+      const scene = debug?.sceneDebug;
+      const average = scene?.screenshot?.averageColor;
+      const luminance = average ? ((average.r ?? 0) + (average.g ?? 0) + (average.b ?? 0)) / 3 : 0;
+      return {
+        sceneBundleState: debug?.sceneBundleState ?? null,
+        label: scene?.label ?? null,
+        state: scene?.state ?? null,
+        failureReason: scene?.failureReason ?? null,
+        spawnApplied: scene?.spawnApplied ?? false,
+        missingAssetCount: scene?.missingAssets?.length ?? -1,
+        meshCount: scene?.meshCount ?? 0,
+        triangleEstimate: scene?.triangleEstimate ?? 0,
+        bounds: scene?.boundingBox?.size ?? null,
+        alpha: average?.a ?? 0,
+        darkPixelRatio: scene?.screenshot?.darkPixelRatio ?? 1,
+        averageLuminance: luminance
+      };
+    });
+  };
+
+  await expect.poll(readSceneDebug, {
+    timeout: 20000,
+    intervals: [1000, 2000, 3000]
+  }).toMatchObject({
+    sceneBundleState: "loaded",
+    label: "Livadia Nicholas II Office",
+    state: "loaded",
+    failureReason: null,
+    spawnApplied: true,
+    missingAssetCount: 0
+  });
+  await expect.poll(async () => {
+    const debug = await readSceneDebug();
+    return {
+      alphaReady: debug.alpha >= 250,
+      brightnessReady: debug.averageLuminance >= 40,
+      darkRatioReady: debug.darkPixelRatio <= 0.7
+    };
+  }, {
+    timeout: 10000,
+    intervals: [1000, 2000]
+  }).toEqual({
+    alphaReady: true,
+    brightnessReady: true,
+    darkRatioReady: true
+  });
+  const sceneDebug = await readSceneDebug();
+
+  expect(sceneDebug.meshCount).toBeLessThanOrEqual(300);
+  expect(sceneDebug.triangleEstimate).toBeLessThan(120000);
+  expect(sceneDebug.bounds?.x ?? Number.POSITIVE_INFINITY).toBeLessThan(20);
+  expect(sceneDebug.bounds?.y ?? Number.POSITIVE_INFINITY).toBeLessThan(6);
+  expect(sceneDebug.bounds?.z ?? Number.POSITIVE_INFINITY).toBeLessThan(20);
+  expect(sceneDebug.alpha).toBeGreaterThanOrEqual(250);
+  expect(sceneDebug.darkPixelRatio).toBeLessThanOrEqual(0.7);
+  expect(sceneDebug.averageLuminance).toBeGreaterThanOrEqual(40);
+});
+
 test("scene bundle diagnostics include render and geometry debug info", async ({ page, request }) => {
   const roomResponse = await request.post("/api/rooms", {
     headers: {

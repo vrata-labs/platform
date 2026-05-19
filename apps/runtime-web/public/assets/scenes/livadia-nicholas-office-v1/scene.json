@@ -1,0 +1,130 @@
+{
+  "schemaVersion": 1,
+  "sceneId": "livadia-nicholas-office-v1",
+  "label": "Livadia Nicholas II Office",
+  "source": "Noah original procedural scene inspired by public-domain Livadia Palace imperial office history",
+  "glbPath": "scene.glb",
+  "renderMode": "clean",
+  "spawnPoints": [
+    {
+      "id": "main",
+      "position": {
+        "x": 0,
+        "y": 0,
+        "z": 3.25
+      }
+    }
+  ],
+  "anchors": {
+    "teleportFloorY": 0,
+    "seatAnchors": [
+      {
+        "id": "livadia-office-desk-chair",
+        "position": {
+          "x": 0,
+          "y": 0.45,
+          "z": -2.2
+        },
+        "yaw": 3.142,
+        "seatHeight": 0.06,
+        "radius": 0.5,
+        "label": "Imperial writing desk chair"
+      },
+      {
+        "id": "livadia-office-guest-left",
+        "position": {
+          "x": -0.9,
+          "y": 0.45,
+          "z": 0.55
+        },
+        "yaw": 0,
+        "seatHeight": 0.06,
+        "radius": 0.48,
+        "label": "Guest chair left"
+      },
+      {
+        "id": "livadia-office-guest-right",
+        "position": {
+          "x": 0.9,
+          "y": 0.45,
+          "z": 0.55
+        },
+        "yaw": 0,
+        "seatHeight": 0.06,
+        "radius": 0.48,
+        "label": "Guest chair right"
+      },
+      {
+        "id": "livadia-office-sofa-left",
+        "position": {
+          "x": -4.08,
+          "y": 0.46,
+          "z": 1.16
+        },
+        "yaw": -1.571,
+        "seatHeight": 0.06,
+        "radius": 0.5,
+        "label": "Left sofa seat"
+      },
+      {
+        "id": "livadia-office-sofa-right",
+        "position": {
+          "x": -4.08,
+          "y": 0.46,
+          "z": 2.28
+        },
+        "yaw": -1.571,
+        "seatHeight": 0.06,
+        "radius": 0.5,
+        "label": "Right sofa seat"
+      },
+      {
+        "id": "livadia-office-fireplace-armchair",
+        "position": {
+          "x": 3.62,
+          "y": 0.45,
+          "z": 1.25
+        },
+        "yaw": 1.571,
+        "seatHeight": 0.06,
+        "radius": 0.5,
+        "label": "Fireplace armchair"
+      }
+    ]
+  },
+  "bounds": {
+    "width": 10.6,
+    "height": 4.3,
+    "depth": 8.6
+  },
+  "preview": "preview.webp",
+  "rights": {
+    "owner": "noah",
+    "license": "internal-original",
+    "clearedFor": [
+      "staging",
+      "production",
+      "web-runtime",
+      "screenshots",
+      "optimization"
+    ],
+    "sourceAssets": [
+      {
+        "id": "livadia-nicholas-office-v1-procedural-geometry",
+        "type": "mesh",
+        "author": "Noah/OpenCode",
+        "licenseRef": "LICENSES.md"
+      },
+      {
+        "id": "livadia-nicholas-office-v1-procedural-preview",
+        "type": "texture",
+        "author": "Noah/OpenCode",
+        "licenseRef": "LICENSES.md"
+      }
+    ]
+  },
+  "visual": {
+    "intentionalDark": false
+  },
+  "notes": "Original room-scale VR office scene: warm Livadia-inspired imperial study, central writing desk, bookcases, Crimean coast windows, fireplace, seating anchors, and clean-mode lighting. No external meshes, textures, fonts, or private source paths."
+}
