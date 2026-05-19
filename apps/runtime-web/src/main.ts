@@ -3755,7 +3755,7 @@ async function ensureMediaRoom(): Promise<Room> {
   }
 
   const voicePlan = await planVoiceSession(apiBaseUrl, roomId, participantId);
-  const room = new Room();
+  const room = new Room({ adaptiveStream: false, dynacast: false });
   setupAudio(room);
   await room.connect(voicePlan.livekitUrl, voicePlan.token);
   await applyPreferredAudioDevices(room);
