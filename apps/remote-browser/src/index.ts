@@ -158,6 +158,7 @@ const roomStateInternalUrl = resolveInternalHttpUrl(process.env.ROOM_STATE_INTER
 export const remoteBrowserCaptureTargetTitle = "Noah Remote Browser";
 export const remoteBrowserViewportPublisherTitle = "Noah Remote Browser Publisher";
 export const remoteBrowserViewportPublisherButtonId = "noah-remote-browser-start-capture";
+export const remoteBrowserCurrentTabCaptureButtonId = "noah-remote-browser-current-tab-capture";
 const remoteBrowserCaptureTitleGuardKey = "__NOAH_REMOTE_BROWSER_CAPTURE_TITLE_GUARD__";
 let activeListenPort = port;
 const remoteBrowserScrollbarStyle = `
@@ -332,6 +333,26 @@ export function createRemoteBrowserViewportCaptureOptions(size: { width: number;
   } as unknown as DisplayMediaStreamOptions;
 }
 
+export function createRemoteBrowserCurrentTabCaptureOptions(size: { width: number; height: number } = viewport): DisplayMediaStreamOptions {
+  return {
+    video: {
+      displaySurface: "browser",
+      frameRate: { ideal: 30, max: 30 },
+      width: { ideal: size.width },
+      height: { ideal: size.height }
+    },
+    audio: {
+      echoCancellation: false,
+      noiseSuppression: false,
+      autoGainControl: false
+    },
+    preferCurrentTab: true,
+    selfBrowserSurface: "include",
+    surfaceSwitching: "exclude",
+    systemAudio: "include"
+  } as unknown as DisplayMediaStreamOptions;
+}
+
 function json(response: ServerResponse, statusCode: number, body: unknown): void {
   response.writeHead(statusCode, {
     "content-type": "application/json; charset=utf-8",
@@ -390,6 +411,7 @@ async function getBrowser(): Promise<Browser> {
       "--autoplay-policy=no-user-gesture-required",
       "--enable-usermedia-screen-capturing",
       "--use-fake-ui-for-media-stream",
+      "--auto-accept-this-tab-capture",
       "--allow-http-screen-capture",
       `--auto-select-desktop-capture-source=${remoteBrowserCaptureTargetTitle}`,
       `--auto-select-tab-capture-source-by-title=${remoteBrowserCaptureTargetTitle}`,
@@ -488,19 +510,27 @@ async function prepareViewportPublisherPage(session: RemoteBrowserSession): Prom
   }, remoteBrowserViewportPublisherTitle).catch(() => undefined);
 }
 
-async function grantViewportPublisherDisplayCapture(session: RemoteBrowserSession): Promise<void> {
-  const cdp = await session.context.newCDPSession(session.publisherPage);
+async function grantPageDisplayCapture(session: RemoteBrowserSession, page: Page, origin: string): Promise<void> {
+  const cdp = await session.context.newCDPSession(page);
   try {
     const targetInfo = await cdp.send("Target.getTargetInfo").catch(() => null) as { targetInfo?: { browserContextId?: string } } | null;
     const browserContextId = targetInfo?.targetInfo?.browserContextId;
     await cdp.send("Browser.grantPermissions", {
-      origin: getRemoteBrowserViewportPublisherOrigin(),
+      origin,
       permissions: ["displayCapture"],
       ...(browserContextId ? { browserContextId } : {})
     });
   } finally {
     await cdp.detach().catch(() => undefined);
   }
+}
+
+async function grantViewportPublisherDisplayCapture(session: RemoteBrowserSession): Promise<void> {
+  await grantPageDisplayCapture(session, session.publisherPage, getRemoteBrowserViewportPublisherOrigin());
+}
+
+async function grantCurrentTabDisplayCapture(session: RemoteBrowserSession): Promise<void> {
+  await grantPageDisplayCapture(session, session.page, new URL(session.page.url()).origin);
 }
 
 async function patchRemoteBrowserExecutorState(session: RemoteBrowserSessionRef, patch: RemoteBrowserPatch): Promise<void> {
@@ -561,13 +591,8 @@ function remoteBrowserErrorDetail(error: unknown): string {
   return message.replace(/[\r\n\t]+/g, " ").slice(0, 500);
 }
 
-async function publishViewportToLiveKit(session: RemoteBrowserSession): Promise<RemoteBrowserViewportPublishResult> {
-  const { token, livekitUrl } = await requestRemoteBrowserMediaToken(session);
-  await prepareViewportPublisherPage(session);
-  await grantViewportPublisherDisplayCapture(session);
-  await session.publisherPage.addScriptTag({ path: resolveLiveKitClientBundlePath() });
-  const captureOptions = createRemoteBrowserViewportCaptureOptions({ width: viewport.width, height: viewport.height });
-  await session.publisherPage.evaluate(({ livekitUrl: targetLivekitUrl, token: targetToken, displayMediaOptions, buttonId }) => {
+async function publishViewportFromCapturePage(input: { page: Page; livekitUrl: string; token: string; captureOptions: DisplayMediaStreamOptions; buttonId: string; removeButtonAfterCapture?: boolean }): Promise<RemoteBrowserViewportPublishResult> {
+  await input.page.evaluate(({ livekitUrl: targetLivekitUrl, token: targetToken, displayMediaOptions, buttonId, removeButtonAfterCapture }) => {
     type PublishResult = { ok?: boolean; videoTrackSid?: string; audioTrackSid?: string; errorCode?: string; message?: string };
     type PublishState = {
       room?: { disconnect: () => void };
@@ -582,6 +607,11 @@ async function publishViewportToLiveKit(session: RemoteBrowserSession): Promise<
     };
     const button = document.getElementById(buttonId) as HTMLButtonElement | null;
     pageWindow.__NOAH_REMOTE_BROWSER_PUBLISH_RESULT__ = undefined;
+    const removeCaptureButton = () => {
+      if (removeButtonAfterCapture) {
+        document.getElementById(buttonId)?.remove();
+      }
+    };
 
     const publish = async (): Promise<PublishResult> => {
       const LiveKit = pageWindow.LivekitClient ?? pageWindow.LiveKitClient ?? pageWindow.livekitClient;
@@ -597,8 +627,10 @@ async function publishViewportToLiveKit(session: RemoteBrowserSession): Promise<
       try {
         stream = await navigator.mediaDevices.getDisplayMedia(displayMediaOptions as DisplayMediaStreamOptions);
       } catch (error) {
+        removeCaptureButton();
         return { ok: false, errorCode: error instanceof DOMException && error.name === "NotAllowedError" ? "viewport_capture_denied" : "viewport_capture_failed", message: error instanceof Error ? `${error.name}:${error.message}` : "capture_failed" };
       }
+      removeCaptureButton();
       const videoTrack = stream.getVideoTracks().find((track) => track.readyState === "live");
       const audioTrack = stream.getAudioTracks().find((track) => track.readyState === "live");
       if (!videoTrack) {
@@ -645,10 +677,10 @@ async function publishViewportToLiveKit(session: RemoteBrowserSession): Promise<
           pageWindow.__NOAH_REMOTE_BROWSER_PUBLISH_RESULT__ = { ok: false, errorCode: "viewport_capture_failed", message: error instanceof Error ? error.message : "publish_exception" };
         });
     };
-  }, { livekitUrl, token, displayMediaOptions: captureOptions, buttonId: remoteBrowserViewportPublisherButtonId });
-  await session.publisherPage.bringToFront().catch(() => undefined);
-  await session.publisherPage.click(`#${remoteBrowserViewportPublisherButtonId}`, { timeout: 5000 });
-  const resultHandle = await session.publisherPage.waitForFunction(() => {
+  }, { livekitUrl: input.livekitUrl, token: input.token, displayMediaOptions: input.captureOptions, buttonId: input.buttonId, removeButtonAfterCapture: input.removeButtonAfterCapture === true });
+  await input.page.bringToFront().catch(() => undefined);
+  await input.page.click(`#${input.buttonId}`, { timeout: 5000 });
+  const resultHandle = await input.page.waitForFunction(() => {
     const pageWindow = window as Window & { __NOAH_REMOTE_BROWSER_PUBLISH_RESULT__?: unknown };
     return pageWindow.__NOAH_REMOTE_BROWSER_PUBLISH_RESULT__ ?? false;
   }, undefined, { timeout: 45000 });
@@ -657,8 +689,73 @@ async function publishViewportToLiveKit(session: RemoteBrowserSession): Promise<
   if (!result.ok || !result.videoTrackSid || !result.audioTrackSid) {
     throw new Error(`${result.errorCode ?? "livekit_publish_failed"}:${result.message ?? "unknown"}`);
   }
-  await session.page.bringToFront().catch(() => undefined);
   return { videoTrackSid: result.videoTrackSid, audioTrackSid: result.audioTrackSid };
+}
+
+async function publishViewportFromPublisherPage(session: RemoteBrowserSession, livekitUrl: string, token: string): Promise<RemoteBrowserViewportPublishResult> {
+  await prepareViewportPublisherPage(session);
+  await grantViewportPublisherDisplayCapture(session);
+  await session.publisherPage.addScriptTag({ path: resolveLiveKitClientBundlePath() });
+  const result = await publishViewportFromCapturePage({
+    page: session.publisherPage,
+    livekitUrl,
+    token,
+    captureOptions: createRemoteBrowserViewportCaptureOptions({ width: viewport.width, height: viewport.height }),
+    buttonId: remoteBrowserViewportPublisherButtonId
+  });
+  await session.page.bringToFront().catch(() => undefined);
+  return result;
+}
+
+async function prepareCurrentTabCaptureButton(page: Page): Promise<void> {
+  await page.evaluate((buttonId) => {
+    document.getElementById(buttonId)?.remove();
+    const button = document.createElement("button");
+    button.id = buttonId;
+    button.type = "button";
+    button.textContent = "Start current tab capture";
+    Object.assign(button.style, {
+      position: "fixed",
+      left: "0",
+      top: "0",
+      width: "2px",
+      height: "2px",
+      opacity: "0.01",
+      zIndex: "2147483647",
+      pointerEvents: "auto"
+    });
+    document.documentElement.appendChild(button);
+  }, remoteBrowserCurrentTabCaptureButtonId);
+}
+
+async function publishViewportFromCurrentTab(session: RemoteBrowserSession, livekitUrl: string, token: string): Promise<RemoteBrowserViewportPublishResult> {
+  await grantCurrentTabDisplayCapture(session);
+  await session.page.addScriptTag({ path: resolveLiveKitClientBundlePath() });
+  await prepareCurrentTabCaptureButton(session.page);
+  const result = await publishViewportFromCapturePage({
+    page: session.page,
+    livekitUrl,
+    token,
+    captureOptions: createRemoteBrowserCurrentTabCaptureOptions({ width: viewport.width, height: viewport.height }),
+    buttonId: remoteBrowserCurrentTabCaptureButtonId,
+    removeButtonAfterCapture: true
+  });
+  await session.page.bringToFront().catch(() => undefined);
+  return result;
+}
+
+async function publishViewportToLiveKit(session: RemoteBrowserSession): Promise<RemoteBrowserViewportPublishResult> {
+  const { token, livekitUrl } = await requestRemoteBrowserMediaToken(session);
+  try {
+    return await publishViewportFromPublisherPage(session, livekitUrl, token);
+  } catch (publisherError) {
+    try {
+      return await publishViewportFromCurrentTab(session, livekitUrl, token);
+    } catch (currentTabError) {
+      const currentTabCode = remoteBrowserPublishErrorCode(currentTabError);
+      throw new Error(`${currentTabCode}:publisher=${remoteBrowserErrorDetail(publisherError)}; currentTab=${remoteBrowserErrorDetail(currentTabError)}`);
+    }
+  }
 }
 
 async function startViewportPublisher(session: RemoteBrowserSession): Promise<void> {

@@ -23,6 +23,7 @@ type RemoteBrowserDebug = {
     mediaSourceRect?: { x: number; y: number; width: number; height: number; viewportWidth: number; viewportHeight: number } | null;
     mediaCompositeHoldActive?: boolean;
     errorCode?: string | null;
+    errorDetail?: string | null;
   };
   mediaObjects?: {
     surfaces?: Array<{ surfaceId?: string; activeObjectType?: string | null }>;
@@ -115,7 +116,8 @@ async function waitForRemoteBrowserViewportState(page: Page, expectedUrl: string
       hasMediaParticipant: Boolean(debug?.remoteBrowser?.mediaParticipantId),
       hasVideoTrackState: Boolean(debug?.remoteBrowser?.mediaTrackSid),
       hasAudioTrackState: Boolean(debug?.remoteBrowser?.audioTrackSid),
-      errorCode: debug?.remoteBrowser?.errorCode ?? null
+      errorCode: debug?.remoteBrowser?.errorCode ?? null,
+      errorDetail: debug?.remoteBrowser?.errorDetail ?? null
     };
   }, {
     timeout: 60000,
@@ -128,7 +130,8 @@ async function waitForRemoteBrowserViewportState(page: Page, expectedUrl: string
     hasMediaParticipant: true,
     hasVideoTrackState: true,
     hasAudioTrackState: true,
-    errorCode: null
+    errorCode: null,
+    errorDetail: null
   });
 }
 

@@ -2,7 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  createRemoteBrowserCurrentTabCaptureOptions,
   createRemoteBrowserViewportCaptureOptions,
+  remoteBrowserCurrentTabCaptureButtonId,
   remoteBrowserCaptureTargetTitle,
   remoteBrowserCaptureTitleGuard,
   remoteBrowserEventPoint,
@@ -126,6 +128,24 @@ test("remote browser viewport capture excludes the publisher tab and requests au
   assert.equal(options.surfaceSwitching, "exclude");
   assert.equal(options.systemAudio, "include");
   assert.equal("preferCurrentTab" in options, false);
+});
+
+test("remote browser current-tab capture requests this tab with audio", () => {
+  const options = createRemoteBrowserCurrentTabCaptureOptions({ width: 640, height: 360 }) as Record<string, unknown>;
+  const video = options.video as { displaySurface?: string; width?: { ideal?: number }; height?: { ideal?: number } };
+  const audio = options.audio as { echoCancellation?: boolean; noiseSuppression?: boolean; autoGainControl?: boolean };
+
+  assert.equal(video.displaySurface, "browser");
+  assert.equal(video.width?.ideal, 640);
+  assert.equal(video.height?.ideal, 360);
+  assert.equal(audio.echoCancellation, false);
+  assert.equal(audio.noiseSuppression, false);
+  assert.equal(audio.autoGainControl, false);
+  assert.equal(options.preferCurrentTab, true);
+  assert.equal(options.selfBrowserSurface, "include");
+  assert.equal(options.surfaceSwitching, "exclude");
+  assert.equal(options.systemAudio, "include");
+  assert.notEqual(remoteBrowserCurrentTabCaptureButtonId, remoteBrowserViewportPublisherButtonId);
 });
 
 test("remoteBrowserScrollDelta preserves desktop wheel direction", () => {
