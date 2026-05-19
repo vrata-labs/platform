@@ -11,12 +11,23 @@ test("M0.5 spatial audio diagnostics follow remote participant pose and expose f
     await observer.goto(roomPath(roomId, "debug=1&name=Observer"));
     await bot.goto(roomPath(roomId, "debug=1&bot=line&name=AudioSource&botSpeed=1"));
     await waitForRemoteCount(observer, 1);
-    const initial = (await readM05Debug(observer))?.spatialAudio?.remoteSources?.[0];
-    expect(initial?.attachedTo).toBe("head");
+    let initialX = 0;
+    let initialZ = 0;
+    await expect.poll(async () => {
+      const source = (await readM05Debug(observer))?.spatialAudio?.remoteSources?.[0];
+      if (source?.attachedTo === "head") {
+        initialX = source.x;
+        initialZ = source.z;
+      }
+      return source?.attachedTo ?? null;
+    }, {
+      timeout: 15000,
+      intervals: [250, 500, 1000]
+    }).toBe("head");
 
     await expect.poll(async () => {
       const source = (await readM05Debug(observer))?.spatialAudio?.remoteSources?.[0];
-      return Math.hypot((source?.x ?? 0) - (initial?.x ?? 0), (source?.z ?? 0) - (initial?.z ?? 0));
+      return Math.hypot((source?.x ?? 0) - initialX, (source?.z ?? 0) - initialZ);
     }, {
       timeout: 12000,
       intervals: [500, 1000, 2000]
