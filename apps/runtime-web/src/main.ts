@@ -3650,6 +3650,7 @@ function attachVideoTrack(track: Track, options: { remote: boolean } = { remote:
   element.playsInline = true;
   element.style.display = "none";
   document.body.appendChild(element);
+  void element.play().catch(() => undefined);
 
   const texture = new THREE.VideoTexture(element);
   texture.colorSpace = THREE.SRGBColorSpace;
@@ -3674,6 +3675,7 @@ function attachRemoteBrowserVideoTrack(track: Track, object: MediaObjectInstance
   element.playsInline = true;
   element.style.display = "none";
   document.body.appendChild(element);
+  void element.play().catch(() => undefined);
 
   const texture = new THREE.VideoTexture(element);
   texture.colorSpace = THREE.SRGBColorSpace;
