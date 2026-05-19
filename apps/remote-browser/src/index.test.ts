@@ -116,14 +116,11 @@ test("remote browser capture title guard keeps target tab selectable", () => {
 test("remote browser viewport capture excludes the publisher tab and requests audio", () => {
   const options = createRemoteBrowserViewportCaptureOptions({ width: 640, height: 360 }) as Record<string, unknown>;
   const video = options.video as { displaySurface?: string; width?: { ideal?: number }; height?: { ideal?: number } };
-  const audio = options.audio as { echoCancellation?: boolean; noiseSuppression?: boolean; autoGainControl?: boolean };
 
   assert.equal(video.displaySurface, "browser");
   assert.equal(video.width?.ideal, 640);
   assert.equal(video.height?.ideal, 360);
-  assert.equal(audio.echoCancellation, false);
-  assert.equal(audio.noiseSuppression, false);
-  assert.equal(audio.autoGainControl, false);
+  assert.equal(options.audio, true);
   assert.equal(options.selfBrowserSurface, "exclude");
   assert.equal(options.surfaceSwitching, "exclude");
   assert.equal(options.systemAudio, "include");
@@ -133,14 +130,11 @@ test("remote browser viewport capture excludes the publisher tab and requests au
 test("remote browser current-tab capture requests this tab with audio", () => {
   const options = createRemoteBrowserCurrentTabCaptureOptions({ width: 640, height: 360 }) as Record<string, unknown>;
   const video = options.video as { displaySurface?: string; width?: { ideal?: number }; height?: { ideal?: number } };
-  const audio = options.audio as { echoCancellation?: boolean; noiseSuppression?: boolean; autoGainControl?: boolean };
 
   assert.equal(video.displaySurface, "browser");
   assert.equal(video.width?.ideal, 640);
   assert.equal(video.height?.ideal, 360);
-  assert.equal(audio.echoCancellation, false);
-  assert.equal(audio.noiseSuppression, false);
-  assert.equal(audio.autoGainControl, false);
+  assert.equal(options.audio, true);
   assert.equal(options.preferCurrentTab, true);
   assert.equal(options.selfBrowserSurface, "include");
   assert.equal(options.surfaceSwitching, "exclude");

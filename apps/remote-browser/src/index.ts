@@ -322,11 +322,8 @@ export function createRemoteBrowserViewportCaptureOptions(size: { width: number;
       width: { ideal: size.width },
       height: { ideal: size.height }
     },
-    audio: {
-      echoCancellation: false,
-      noiseSuppression: false,
-      autoGainControl: false
-    },
+    // Microphone constraints can make Chromium fail display-audio capture with NotReadableError.
+    audio: true,
     selfBrowserSurface: "exclude",
     surfaceSwitching: "exclude",
     systemAudio: "include"
@@ -341,11 +338,8 @@ export function createRemoteBrowserCurrentTabCaptureOptions(size: { width: numbe
       width: { ideal: size.width },
       height: { ideal: size.height }
     },
-    audio: {
-      echoCancellation: false,
-      noiseSuppression: false,
-      autoGainControl: false
-    },
+    // Microphone constraints can make Chromium fail display-audio capture with NotReadableError.
+    audio: true,
     preferCurrentTab: true,
     selfBrowserSurface: "include",
     surfaceSwitching: "exclude",
