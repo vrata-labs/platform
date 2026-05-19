@@ -7,6 +7,7 @@ import {
   remoteBrowserEventPoint,
   remoteBrowserInitScript,
   remoteBrowserScrollDelta,
+  remoteBrowserViewportPublisherButtonId,
   remoteBrowserViewportPublisherHtml,
   remoteBrowserViewportPublisherTitle,
   resolveRemoteBrowserFrameBackpressureBytes,
@@ -61,6 +62,7 @@ test("remote browser viewport publisher page is not the capture target tab", () 
   const html = remoteBrowserViewportPublisherHtml();
 
   assert.match(html, new RegExp(`<title>${remoteBrowserViewportPublisherTitle}</title>`));
+  assert.match(html, new RegExp(`<button id="${remoteBrowserViewportPublisherButtonId}"`));
   assert.notEqual(remoteBrowserViewportPublisherTitle, remoteBrowserCaptureTargetTitle);
   assert.equal(html.includes(`<title>${remoteBrowserCaptureTargetTitle}</title>`), false);
 });

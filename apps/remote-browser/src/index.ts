@@ -157,6 +157,7 @@ const apiInternalUrl = resolveInternalHttpUrl(process.env.API_INTERNAL_URL ?? pr
 const roomStateInternalUrl = resolveInternalHttpUrl(process.env.ROOM_STATE_INTERNAL_URL ?? process.env.NOAH_ROOM_STATE_INTERNAL_URL, "http://127.0.0.1:2567");
 export const remoteBrowserCaptureTargetTitle = "Noah Remote Browser";
 export const remoteBrowserViewportPublisherTitle = "Noah Remote Browser Publisher";
+export const remoteBrowserViewportPublisherButtonId = "noah-remote-browser-start-capture";
 let activeListenPort = port;
 const remoteBrowserScrollbarStyle = `
   html {
@@ -285,7 +286,7 @@ const sessions = new Map<string, RemoteBrowserSession>();
 const urlPolicy = createRemoteBrowserUrlPolicy();
 
 export function remoteBrowserViewportPublisherHtml(): string {
-  return `<!doctype html><html><head><meta charset="utf-8"><title>${remoteBrowserViewportPublisherTitle}</title></head><body></body></html>`;
+  return `<!doctype html><html><head><meta charset="utf-8"><title>${remoteBrowserViewportPublisherTitle}</title></head><body><button id="${remoteBrowserViewportPublisherButtonId}" type="button">Start capture</button></body></html>`;
 }
 
 function getRemoteBrowserViewportPublisherUrl(): string {
@@ -527,7 +528,8 @@ async function publishViewportToLiveKit(session: RemoteBrowserSession): Promise<
   await prepareViewportPublisherPage(session);
   await session.publisherPage.addScriptTag({ path: resolveLiveKitClientBundlePath() });
   const captureOptions = createRemoteBrowserViewportCaptureOptions({ width: viewport.width, height: viewport.height });
-  const result = await session.publisherPage.evaluate(async ({ livekitUrl: targetLivekitUrl, token: targetToken, displayMediaOptions }) => {
+  await session.publisherPage.evaluate(({ livekitUrl: targetLivekitUrl, token: targetToken, displayMediaOptions, buttonId }) => {
+    type PublishResult = { ok?: boolean; videoTrackSid?: string; audioTrackSid?: string; errorCode?: string; message?: string };
     type PublishState = {
       room?: { disconnect: () => void };
       stream?: MediaStream;
@@ -537,54 +539,82 @@ async function publishViewportToLiveKit(session: RemoteBrowserSession): Promise<
       LiveKitClient?: any;
       livekitClient?: any;
       __NOAH_REMOTE_BROWSER_LIVEKIT__?: PublishState;
+      __NOAH_REMOTE_BROWSER_PUBLISH_RESULT__?: PublishResult;
     };
-    const LiveKit = pageWindow.LivekitClient ?? pageWindow.LiveKitClient ?? pageWindow.livekitClient;
-    if (!LiveKit?.Room || !LiveKit?.Track) {
-      return { ok: false, errorCode: "livekit_publish_failed", message: "livekit_client_missing" };
+    const button = document.getElementById(buttonId) as HTMLButtonElement | null;
+    pageWindow.__NOAH_REMOTE_BROWSER_PUBLISH_RESULT__ = undefined;
+
+    const publish = async (): Promise<PublishResult> => {
+      const LiveKit = pageWindow.LivekitClient ?? pageWindow.LiveKitClient ?? pageWindow.livekitClient;
+      if (!LiveKit?.Room || !LiveKit?.Track) {
+        return { ok: false, errorCode: "livekit_publish_failed", message: "livekit_client_missing" };
+      }
+      if (!navigator.mediaDevices?.getDisplayMedia) {
+        return { ok: false, errorCode: "viewport_capture_unsupported", message: "getDisplayMedia_missing" };
+      }
+      pageWindow.__NOAH_REMOTE_BROWSER_LIVEKIT__?.room?.disconnect();
+      pageWindow.__NOAH_REMOTE_BROWSER_LIVEKIT__?.stream?.getTracks().forEach((track) => track.stop());
+      let stream: MediaStream;
+      try {
+        stream = await navigator.mediaDevices.getDisplayMedia(displayMediaOptions as DisplayMediaStreamOptions);
+      } catch (error) {
+        return { ok: false, errorCode: error instanceof DOMException && error.name === "NotAllowedError" ? "viewport_capture_denied" : "viewport_capture_failed", message: error instanceof Error ? `${error.name}:${error.message}` : "capture_failed" };
+      }
+      const videoTrack = stream.getVideoTracks().find((track) => track.readyState === "live");
+      const audioTrack = stream.getAudioTracks().find((track) => track.readyState === "live");
+      if (!videoTrack) {
+        stream.getTracks().forEach((track) => track.stop());
+        return { ok: false, errorCode: "video_track_missing", message: "video_track_missing" };
+      }
+      if (!audioTrack) {
+        stream.getTracks().forEach((track) => track.stop());
+        return { ok: false, errorCode: "audio_track_missing", message: "audio_track_missing" };
+      }
+      try {
+        const room = new LiveKit.Room({ adaptiveStream: false, dynacast: false });
+        await room.connect(targetLivekitUrl, targetToken, { autoSubscribe: false });
+        const videoPublication = await room.localParticipant.publishTrack(videoTrack, {
+          name: "remote-browser-viewport",
+          source: LiveKit.Track.Source.ScreenShare
+        });
+        const audioPublication = await room.localParticipant.publishTrack(audioTrack, {
+          name: "remote-browser-audio",
+          source: LiveKit.Track.Source.ScreenShareAudio ?? "screen_share_audio"
+        });
+        pageWindow.__NOAH_REMOTE_BROWSER_LIVEKIT__ = { room, stream };
+        return {
+          ok: true,
+          videoTrackSid: videoPublication.trackSid ?? videoPublication.sid ?? videoTrack.id,
+          audioTrackSid: audioPublication.trackSid ?? audioPublication.sid ?? audioTrack.id
+        };
+      } catch (error) {
+        stream.getTracks().forEach((track) => track.stop());
+        return { ok: false, errorCode: "livekit_publish_failed", message: error instanceof Error ? error.message : "publish_failed" };
+      }
+    };
+
+    if (!button) {
+      pageWindow.__NOAH_REMOTE_BROWSER_PUBLISH_RESULT__ = { ok: false, errorCode: "viewport_capture_failed", message: "publisher_button_missing" };
+      return;
     }
-    if (!navigator.mediaDevices?.getDisplayMedia) {
-      return { ok: false, errorCode: "viewport_capture_unsupported", message: "getDisplayMedia_missing" };
-    }
-    pageWindow.__NOAH_REMOTE_BROWSER_LIVEKIT__?.room?.disconnect();
-    pageWindow.__NOAH_REMOTE_BROWSER_LIVEKIT__?.stream?.getTracks().forEach((track) => track.stop());
-    let stream: MediaStream;
-    try {
-      stream = await navigator.mediaDevices.getDisplayMedia(displayMediaOptions as DisplayMediaStreamOptions);
-    } catch (error) {
-      return { ok: false, errorCode: error instanceof DOMException && error.name === "NotAllowedError" ? "viewport_capture_denied" : "viewport_capture_failed", message: error instanceof Error ? `${error.name}:${error.message}` : "capture_failed" };
-    }
-    const videoTrack = stream.getVideoTracks().find((track) => track.readyState === "live");
-    const audioTrack = stream.getAudioTracks().find((track) => track.readyState === "live");
-    if (!videoTrack) {
-      stream.getTracks().forEach((track) => track.stop());
-      return { ok: false, errorCode: "video_track_missing", message: "video_track_missing" };
-    }
-    if (!audioTrack) {
-      stream.getTracks().forEach((track) => track.stop());
-      return { ok: false, errorCode: "audio_track_missing", message: "audio_track_missing" };
-    }
-    try {
-      const room = new LiveKit.Room({ adaptiveStream: false, dynacast: false });
-      await room.connect(targetLivekitUrl, targetToken, { autoSubscribe: false });
-      const videoPublication = await room.localParticipant.publishTrack(videoTrack, {
-        name: "remote-browser-viewport",
-        source: LiveKit.Track.Source.ScreenShare
-      });
-      const audioPublication = await room.localParticipant.publishTrack(audioTrack, {
-        name: "remote-browser-audio",
-        source: LiveKit.Track.Source.ScreenShareAudio ?? "screen_share_audio"
-      });
-      pageWindow.__NOAH_REMOTE_BROWSER_LIVEKIT__ = { room, stream };
-      return {
-        ok: true,
-        videoTrackSid: videoPublication.trackSid ?? videoPublication.sid ?? videoTrack.id,
-        audioTrackSid: audioPublication.trackSid ?? audioPublication.sid ?? audioTrack.id
-      };
-    } catch (error) {
-      stream.getTracks().forEach((track) => track.stop());
-      return { ok: false, errorCode: "livekit_publish_failed", message: error instanceof Error ? error.message : "publish_failed" };
-    }
-  }, { livekitUrl, token, displayMediaOptions: captureOptions }) as { ok?: boolean; videoTrackSid?: string; audioTrackSid?: string; errorCode?: string; message?: string };
+    button.onclick = () => {
+      void publish()
+        .then((result) => {
+          pageWindow.__NOAH_REMOTE_BROWSER_PUBLISH_RESULT__ = result;
+        })
+        .catch((error: unknown) => {
+          pageWindow.__NOAH_REMOTE_BROWSER_PUBLISH_RESULT__ = { ok: false, errorCode: "viewport_capture_failed", message: error instanceof Error ? error.message : "publish_exception" };
+        });
+    };
+  }, { livekitUrl, token, displayMediaOptions: captureOptions, buttonId: remoteBrowserViewportPublisherButtonId });
+  await session.publisherPage.bringToFront().catch(() => undefined);
+  await session.publisherPage.click(`#${remoteBrowserViewportPublisherButtonId}`, { timeout: 5000 });
+  const resultHandle = await session.publisherPage.waitForFunction(() => {
+    const pageWindow = window as Window & { __NOAH_REMOTE_BROWSER_PUBLISH_RESULT__?: unknown };
+    return pageWindow.__NOAH_REMOTE_BROWSER_PUBLISH_RESULT__ ?? false;
+  }, undefined, { timeout: 45000 });
+  const result = await resultHandle.jsonValue() as { ok?: boolean; videoTrackSid?: string; audioTrackSid?: string; errorCode?: string; message?: string };
+  await resultHandle.dispose();
   if (!result.ok || !result.videoTrackSid || !result.audioTrackSid) {
     throw new Error(`${result.errorCode ?? "livekit_publish_failed"}:${result.message ?? "unknown"}`);
   }
