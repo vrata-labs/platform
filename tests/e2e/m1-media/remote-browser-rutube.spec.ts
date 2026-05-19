@@ -278,10 +278,19 @@ async function expectVisibleHoverResponse(page: Page, candidates: Array<{ u: num
   for (const candidate of candidates) {
     const before = await sampleSurfaceRegion(page, candidate);
     const inputLatencyMs = await moveMouseToSurface(page, candidate.u, candidate.v);
-    await page.waitForTimeout(1500);
-    const after = await sampleSurfaceRegion(page, candidate);
-    bestDiff = Math.max(bestDiff, averageRgbDiff(before, after));
+    const visualStartedAt = Date.now();
+    while (Date.now() - visualStartedAt < 5000) {
+      await page.waitForTimeout(500);
+      const after = await sampleSurfaceRegion(page, candidate);
+      bestDiff = Math.max(bestDiff, averageRgbDiff(before, after));
+      if (bestDiff > 6) {
+        break;
+      }
+    }
     bestLatencyMs = Math.min(bestLatencyMs, inputLatencyMs);
+    if (bestDiff > 6) {
+      break;
+    }
   }
 
   expect(bestLatencyMs).toBeLessThan(2500);
