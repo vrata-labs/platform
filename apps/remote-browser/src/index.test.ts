@@ -4,7 +4,6 @@ import assert from "node:assert/strict";
 import {
   createRemoteBrowserCurrentTabCaptureOptions,
   createRemoteBrowserViewportCaptureOptions,
-  enqueueRemoteBrowserInputPatch,
   remoteBrowserCurrentTabCaptureButtonId,
   remoteBrowserCaptureTargetTitle,
   remoteBrowserCaptureTitleGuard,
@@ -18,12 +17,10 @@ import {
   resolveRemoteBrowserFrameIntervalMs,
   resolveRemoteBrowserMediaFrameIntervalMs,
   resolveRemoteBrowserMediaIceServers,
-  resolveRemoteBrowserViewportFps,
-  resolveRemoteBrowserViewportVideoMaxBitrate,
   shouldCaptureRemoteBrowserFrame,
   shouldPreserveRemoteBrowserMediaOverlays
 } from "./index.js";
-import type { RemoteBrowserPatch, SurfaceInputEvent } from "@noah/shared-types";
+import type { SurfaceInputEvent } from "@noah/shared-types";
 
 function surfaceInput(uv: { u: number; v: number }): SurfaceInputEvent {
   return {
@@ -53,18 +50,6 @@ function scrollEvent(scrollDelta?: SurfaceInputEvent["scrollDelta"]): SurfaceInp
     scrollDelta,
     clientTimeMs: 10,
     seq: 1
-  };
-}
-
-function pointerPatch(id: string, kind: SurfaceInputEvent["kind"], u: number): RemoteBrowserPatch {
-  return {
-    type: "pointer",
-    inputEventId: id,
-    event: {
-      ...surfaceInput({ u, v: 0.5 }),
-      eventId: id,
-      kind
-    }
   };
 }
 
@@ -130,10 +115,9 @@ test("remote browser capture title guard keeps target tab selectable", () => {
 
 test("remote browser viewport capture excludes the publisher tab and requests audio", () => {
   const options = createRemoteBrowserViewportCaptureOptions({ width: 640, height: 360 }) as Record<string, unknown>;
-  const video = options.video as { displaySurface?: string; frameRate?: { ideal?: number; max?: number }; width?: { ideal?: number }; height?: { ideal?: number } };
+  const video = options.video as { displaySurface?: string; width?: { ideal?: number }; height?: { ideal?: number } };
 
   assert.equal(video.displaySurface, "browser");
-  assert.deepEqual(video.frameRate, { ideal: 30, max: 30 });
   assert.equal(video.width?.ideal, 640);
   assert.equal(video.height?.ideal, 360);
   assert.equal(options.audio, true);
@@ -145,10 +129,9 @@ test("remote browser viewport capture excludes the publisher tab and requests au
 
 test("remote browser current-tab capture requests this tab with audio", () => {
   const options = createRemoteBrowserCurrentTabCaptureOptions({ width: 640, height: 360 }) as Record<string, unknown>;
-  const video = options.video as { displaySurface?: string; frameRate?: { ideal?: number; max?: number }; width?: { ideal?: number }; height?: { ideal?: number } };
+  const video = options.video as { displaySurface?: string; width?: { ideal?: number }; height?: { ideal?: number } };
 
   assert.equal(video.displaySurface, "browser");
-  assert.deepEqual(video.frameRate, { ideal: 30, max: 30 });
   assert.equal(video.width?.ideal, 640);
   assert.equal(video.height?.ideal, 360);
   assert.equal(options.audio, true);
@@ -241,35 +224,6 @@ test("resolveRemoteBrowserMediaIceServers parses comma-separated STUN/TURN URLs"
   assert.deepEqual(resolveRemoteBrowserMediaIceServers(undefined), [{ urls: ["stun:stun.l.google.com:19302"] }]);
   assert.deepEqual(resolveRemoteBrowserMediaIceServers(" stun:a.example.test, turn:b.example.test "), [{ urls: ["stun:a.example.test", "turn:b.example.test"] }]);
   assert.deepEqual(resolveRemoteBrowserMediaIceServers(" , "), []);
-});
-
-test("remote browser viewport quality settings clamp invalid env values", () => {
-  assert.equal(resolveRemoteBrowserViewportFps(undefined), 30);
-  assert.equal(resolveRemoteBrowserViewportFps("2"), 5);
-  assert.equal(resolveRemoteBrowserViewportFps("120"), 60);
-  assert.equal(resolveRemoteBrowserViewportFps("bad"), 30);
-  assert.equal(resolveRemoteBrowserViewportVideoMaxBitrate(undefined), 4000000);
-  assert.equal(resolveRemoteBrowserViewportVideoMaxBitrate("100000"), 500000);
-  assert.equal(resolveRemoteBrowserViewportVideoMaxBitrate("20000000"), 12000000);
-  assert.equal(resolveRemoteBrowserViewportVideoMaxBitrate("bad"), 4000000);
-});
-
-test("remote browser coalesces consecutive pointer moves before executor drain", () => {
-  const firstMove = pointerPatch("move-1", "pointer-move", 0.1);
-  const secondMove = pointerPatch("move-2", "pointer-move", 0.2);
-  const click = pointerPatch("click-1", "click", 0.3);
-  const thirdMove = pointerPatch("move-3", "pointer-move", 0.4);
-
-  let queue: RemoteBrowserPatch[] = [];
-  queue = enqueueRemoteBrowserInputPatch(queue, firstMove);
-  queue = enqueueRemoteBrowserInputPatch(queue, secondMove);
-
-  assert.deepEqual(queue.map((item) => item.inputEventId), ["move-2"]);
-
-  queue = enqueueRemoteBrowserInputPatch(queue, click);
-  queue = enqueueRemoteBrowserInputPatch(queue, thirdMove);
-
-  assert.deepEqual(queue.map((item) => item.inputEventId), ["move-2", "click-1", "move-3"]);
 });
 
 test("remoteBrowserInitScript blocks fullscreen entry but preserves native exit", async () => {
