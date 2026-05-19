@@ -67,10 +67,26 @@ export function activeRemoteBrowserObjectForSurface(mediaObjects: RoomMediaObjec
   return object as MediaObjectInstance<RemoteBrowserObjectState>;
 }
 
+function isMockRemoteBrowserTrackSid(trackSid: string): boolean {
+  return trackSid.startsWith("mock-remote-browser-");
+}
+
+export function remoteBrowserObjectNeedsLiveKitRoom(object: MediaObjectInstance<RemoteBrowserObjectState> | null | undefined): boolean {
+  if (!object || object.type !== REMOTE_BROWSER_OBJECT_TYPE || !isRemoteBrowserState(object.state)) {
+    return false;
+  }
+  if (!object.state.mediaParticipantId || object.state.status !== "active") {
+    return false;
+  }
+  const trackSids = [object.state.mediaTrackSid, object.state.audioTrackSid].filter((trackSid): trackSid is string => Boolean(trackSid));
+  return trackSids.some((trackSid) => !isMockRemoteBrowserTrackSid(trackSid));
+}
+
 export function remoteBrowserObjectForMediaTrack(mediaObjects: RoomMediaObjectsState | null, participantId: string | null | undefined, trackSid: string | null | undefined, kind: "audio" | "video"): MediaObjectInstance<RemoteBrowserObjectState> | null {
   if (!mediaObjects || !participantId) {
     return null;
   }
+  let participantScopedMatch: MediaObjectInstance<RemoteBrowserObjectState> | null = null;
   for (const object of Object.values(mediaObjects.objects)) {
     if (object.type !== REMOTE_BROWSER_OBJECT_TYPE || !isRemoteBrowserState(object.state)) {
       continue;
@@ -81,11 +97,14 @@ export function remoteBrowserObjectForMediaTrack(mediaObjects: RoomMediaObjectsS
     }
     const expectedTrackSid = kind === "video" ? state.mediaTrackSid : state.audioTrackSid;
     if (!expectedTrackSid || (trackSid && expectedTrackSid !== trackSid)) {
+      if (expectedTrackSid && trackSid && expectedTrackSid !== trackSid) {
+        participantScopedMatch ??= object as MediaObjectInstance<RemoteBrowserObjectState>;
+      }
       continue;
     }
     return object as MediaObjectInstance<RemoteBrowserObjectState>;
   }
-  return null;
+  return participantScopedMatch;
 }
 
 export function resolveScreenShareSurfaceForOwner(mediaObjects: RoomMediaObjectsState | null, ownerParticipantId: string | null | undefined, fallbackSurfaceId: string): string {

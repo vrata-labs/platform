@@ -53,6 +53,7 @@ import {
   activeScreenShareObjectForSurface as selectActiveScreenShareObjectForSurface,
   activeWhiteboardObjectForSurface as selectActiveWhiteboardObjectForSurface,
   remoteBrowserObjectForMediaTrack,
+  remoteBrowserObjectNeedsLiveKitRoom,
   resolveScreenShareSurfaceForOwner
 } from "./media/media-object-state.js";
 import { routeMediaObjectSurfaceInput } from "./media/media-object-router.js";
@@ -457,6 +458,7 @@ let localScreenShareObjectId: string | null = null;
 let localScreenShareSurfaceId: string | null = null;
 let lastScreenShareStoppedAtMs = 0;
 let mediaRoomReady = false;
+let remoteBrowserMediaRoomPromise: Promise<void> | null = null;
 let roomStateClient: RoomStateClient | null = null;
 let roomStateConnected = false;
 let latestRealtimeParticipants: PresenceState[] = [];
@@ -1067,6 +1069,7 @@ function handleRoomSnapshot(snapshot: RoomStateSnapshot): void {
   roomMediaObjects = snapshot.mediaObjects;
   syncSeatStateFromOccupancy();
   syncMediaObjectsDebugState();
+  ensureRemoteBrowserLiveKitRoom();
   syncRemoteBrowserLiveKitTracks();
   latestRealtimeParticipants = snapshot.participants;
   applyMergedPresenceParticipants();
@@ -2266,6 +2269,31 @@ function syncRemoteBrowserLiveKitTracks(): void {
       }
     }
   }
+}
+
+function ensureRemoteBrowserLiveKitRoom(): void {
+  const remoteBrowser = activeRemoteBrowserObjectForSurface(DEBUG_SURFACE_ID);
+  if (!remoteBrowserObjectNeedsLiveKitRoom(remoteBrowser)) {
+    return;
+  }
+  if (livekitRoom) {
+    syncRemoteBrowserLiveKitTracks();
+    return;
+  }
+  if (remoteBrowserMediaRoomPromise) {
+    return;
+  }
+  remoteBrowserMediaRoomPromise = ensureMediaRoom()
+    .then(() => {
+      syncRemoteBrowserLiveKitTracks();
+    })
+    .catch((error: unknown) => {
+      console.error(error);
+      remoteBrowserRuntime.setError(error instanceof Error ? error.message : "remote_browser_livekit_connect_failed");
+    })
+    .finally(() => {
+      remoteBrowserMediaRoomPromise = null;
+    });
 }
 
 function resolveScreenShareSurfaceForParticipant(ownerParticipantId: string | null | undefined): string {
