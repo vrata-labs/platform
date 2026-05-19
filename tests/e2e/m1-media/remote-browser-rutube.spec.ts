@@ -194,15 +194,7 @@ async function surfaceClientPoint(page: Page, u: number, v: number): Promise<{ x
 }
 
 async function moveMouseToSurface(page: Page, u: number, v: number): Promise<number> {
-  const beforeSeq = (await readDebug(page))?.remoteBrowser?.lastInputSeq ?? 0;
-  const point = await surfaceClientPoint(page, u, v);
-  const startedAt = Date.now();
-  await page.mouse.move(point.x, point.y);
-  await expect.poll(async () => (await readDebug(page))?.remoteBrowser?.lastInputSeq ?? 0, {
-    timeout: 10000,
-    intervals: [100, 250, 500]
-  }).toBeGreaterThan(beforeSeq);
-  return Date.now() - startedAt;
+  return sendSurfaceInput(page, { kind: "pointer-move", u, v });
 }
 
 async function waitForFreshFrame(page: Page, previousFrameAt: number): Promise<number> {
