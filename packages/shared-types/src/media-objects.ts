@@ -130,6 +130,7 @@ export interface RemoteBrowserObjectState {
   mediaParticipantId?: string;
   mediaTrackSid?: string;
   audioTrackSid?: string;
+  mediaSourceRect?: RemoteBrowserMediaSourceRect;
   currentUrl?: string;
   title?: string;
   loadedAtMs?: number;
@@ -142,6 +143,15 @@ export interface RemoteBrowserObjectState {
   lastInputSeq?: number;
   lastInputEventId: string | null;
   errorCode?: RemoteBrowserErrorCode;
+}
+
+export interface RemoteBrowserMediaSourceRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  viewportWidth: number;
+  viewportHeight: number;
 }
 
 export type SurfaceTestCardPatch = {
@@ -163,7 +173,8 @@ export type WhiteboardPatch =
 export type RemoteBrowserPatch =
   | { type: "open-url"; url: string; inputEventId: string }
   | { type: "mark-publishing"; mediaParticipantId: string; inputEventId: string }
-  | { type: "mark-active"; mediaParticipantId: string; mediaTrackSid: string; audioTrackSid: string; inputEventId: string }
+  | { type: "mark-active"; mediaParticipantId: string; mediaTrackSid: string; audioTrackSid: string; mediaSourceRect?: RemoteBrowserMediaSourceRect; inputEventId: string }
+  | { type: "mark-source-rect"; mediaSourceRect: RemoteBrowserMediaSourceRect; inputEventId: string }
   | { type: "mark-stopped"; inputEventId: string }
   | { type: "pointer"; event: SurfaceInputEvent; inputEventId: string }
   | { type: "scroll"; event: SurfaceInputEvent; inputEventId: string }

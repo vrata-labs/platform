@@ -138,6 +138,7 @@ async function waitForRemoteBrowserViewportState(page: Page, expectedUrl: string
 async function waitForRutubeMedia(page: Page): Promise<void> {
   await expect.poll(async () => {
     const debug = await readDebug(page);
+    const rect = debug?.remoteBrowser?.mediaSourceRect ?? null;
     return {
       mediaState: debug?.remoteBrowser?.mediaState ?? null,
       mediaConnected: debug?.remoteBrowser?.mediaConnected ?? false,
@@ -145,7 +146,15 @@ async function waitForRutubeMedia(page: Page): Promise<void> {
       mediaHasAudio: debug?.remoteBrowser?.mediaHasAudio ?? false,
       mediaErrorCode: debug?.remoteBrowser?.mediaErrorCode ?? null,
       hasVideoTrackState: Boolean(debug?.remoteBrowser?.mediaTrackSid),
-      hasAudioTrackState: Boolean(debug?.remoteBrowser?.audioTrackSid)
+      hasAudioTrackState: Boolean(debug?.remoteBrowser?.audioTrackSid),
+      sourceBounded: Boolean(
+        rect
+        && rect.width > 100
+        && rect.height > 100
+        && rect.width < rect.viewportWidth
+        && rect.x >= 0
+        && rect.y >= 0
+      )
     };
   }, {
     timeout: 90000,
@@ -157,7 +166,8 @@ async function waitForRutubeMedia(page: Page): Promise<void> {
     mediaHasAudio: true,
     mediaErrorCode: null,
     hasVideoTrackState: true,
-    hasAudioTrackState: true
+    hasAudioTrackState: true,
+    sourceBounded: true
   });
 }
 
@@ -297,11 +307,42 @@ async function expectVisibleHoverResponse(page: Page, candidates: Array<{ u: num
   expect(bestDiff).toBeGreaterThan(6);
 }
 
-function playerHoverCandidates(): Array<{ u: number; v: number }> {
+async function dismissRutubeOverlays(page: Page): Promise<void> {
+  const overlayTargets = [
+    { u: 0.68, v: 0.87 },
+    { u: 0.68, v: 0.85 },
+    { u: 0.4, v: 0.16 },
+    { u: 0.36, v: 0.08 }
+  ];
+  for (const target of overlayTargets) {
+    await sendSurfaceInput(page, { kind: "click", u: target.u, v: target.v });
+    await page.waitForTimeout(700);
+  }
+  await page.waitForTimeout(1500);
+}
+
+function surfaceUvFromRemoteBrowserPagePoint(rect: NonNullable<RemoteBrowserDebug["remoteBrowser"]>["mediaSourceRect"], x: number, y: number): { u: number; v: number } {
+  expect(rect).toBeTruthy();
+  return {
+    u: Math.max(0, Math.min(1, x / rect!.viewportWidth)),
+    v: Math.max(0, Math.min(1, 1 - y / rect!.viewportHeight))
+  };
+}
+
+function playerHoverCandidates(debug: RemoteBrowserDebug | undefined): Array<{ u: number; v: number }> {
+  const rect = debug?.remoteBrowser?.mediaSourceRect;
+  if (!rect) {
+    return [{ u: 0.5, v: 0.5 }];
+  }
+  const xCenter = (rect.x + rect.width * 0.5) / rect.viewportWidth;
+  const xLeft = (rect.x + rect.width * 0.2) / rect.viewportWidth;
+  const yCenter = (rect.y + rect.height * 0.55) / rect.viewportHeight;
   return [
-    { u: 0.5, v: 0.08 },
-    { u: 0.5, v: 0.45 },
-    { u: 0.2, v: 0.45 }
+    surfaceUvFromRemoteBrowserPagePoint(rect, rect.x + rect.width * 0.5, Math.min(rect.viewportHeight - 24, rect.y + rect.height - 32)),
+    surfaceUvFromRemoteBrowserPagePoint(rect, rect.x + rect.width * 0.5, rect.y + rect.height * 0.55),
+    surfaceUvFromRemoteBrowserPagePoint(rect, rect.x + rect.width * 0.2, rect.y + rect.height * 0.55),
+    { u: xCenter, v: 1 - yCenter },
+    { u: xLeft, v: 1 - yCenter }
   ];
 }
 
@@ -337,14 +378,16 @@ test("@staging @rutube real Rutube remote browser keeps hover UI, video transpor
     await openRemoteBrowserUrl(page, rutubePrimaryUrl);
     await waitForRemoteBrowserViewportState(page, rutubePrimaryUrl);
     await waitForRutubeMedia(page);
-    await expectVisibleHoverResponse(page, playerHoverCandidates());
+    await dismissRutubeOverlays(page);
+    await expectVisibleHoverResponse(page, playerHoverCandidates(await readDebug(page)));
     await sendSurfaceInput(page, { kind: "click", u: 0.5, v: 0.5 });
     await expectNoFrameBacklog(page, [0, 30, 60, 90]);
 
     await openRemoteBrowserUrl(page, rutubeSecondaryUrl);
     await waitForRemoteBrowserViewportState(page, rutubeSecondaryUrl);
     await waitForRutubeMedia(page);
-    await expectVisibleHoverResponse(page, playerHoverCandidates());
+    await dismissRutubeOverlays(page);
+    await expectVisibleHoverResponse(page, playerHoverCandidates(await readDebug(page)));
     await expectNoFrameBacklog(page, [0, 20, 40]);
   } finally {
     if (roomId) {

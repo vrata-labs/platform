@@ -317,7 +317,7 @@ export class RemoteBrowserObjectRuntime {
       mediaHasAudio: Boolean(state?.audioTrackSid) || this.mediaHasAudio,
       mediaPeerConnectionState: this.mediaPeerConnection?.connectionState ?? null,
       mediaErrorCode: this.mediaErrorCode,
-      mediaSourceRect: this.mediaSourceRect,
+      mediaSourceRect: state?.mediaSourceRect ?? this.mediaSourceRect,
       mediaCompositeHoldActive: this.isMediaCompositeHoldActive()
     };
   }

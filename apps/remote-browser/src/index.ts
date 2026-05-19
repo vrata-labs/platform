@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { createRequire } from "node:module";
 import { chromium, type Browser, type BrowserContext, type Frame, type Page } from "playwright-core";
 import { WebSocketServer, type WebSocket } from "ws";
-import type { RemoteBrowserErrorCode, RemoteBrowserPatch, SurfaceInputEvent } from "@noah/shared-types";
+import type { RemoteBrowserErrorCode, RemoteBrowserMediaSourceRect, RemoteBrowserPatch, SurfaceInputEvent } from "@noah/shared-types";
 
 import { decodeRemoteBrowserFrameToken } from "./frame-token.js";
 import { createRemoteBrowserUrlPolicy, validateRemoteBrowserUrl, type RemoteBrowserUrlPolicy } from "./url-policy.js";
@@ -68,15 +68,6 @@ interface RemoteBrowserMediaAnswerResult {
   sourceFrameUrl?: string;
   sourceRect?: RemoteBrowserMediaSourceRect;
   errorCode?: string;
-}
-
-interface RemoteBrowserMediaSourceRect {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  viewportWidth: number;
-  viewportHeight: number;
 }
 
 const port = Number.parseInt(process.env.REMOTE_BROWSER_PORT ?? "4010", 10);
@@ -764,7 +755,8 @@ async function startViewportPublisher(session: RemoteBrowserSession): Promise<vo
       mediaParticipantId: session.mediaParticipantId,
       inputEventId: remoteBrowserExecutorInputEventId(session, "publishing")
     });
-    const published = process.env.REMOTE_BROWSER_VIEWPORT_MOCK === "1"
+    const mockViewport = process.env.REMOTE_BROWSER_VIEWPORT_MOCK === "1";
+    const published = mockViewport
       ? {
         videoTrackSid: `mock-remote-browser-video:${session.objectId}:${Date.now()}`,
         audioTrackSid: `mock-remote-browser-audio:${session.objectId}:${Date.now()}`
@@ -777,6 +769,9 @@ async function startViewportPublisher(session: RemoteBrowserSession): Promise<vo
       audioTrackSid: published.audioTrackSid,
       inputEventId: remoteBrowserExecutorInputEventId(session, "active")
     });
+    if (!mockViewport) {
+      void reportRemoteBrowserMediaSourceRect(session).catch(() => undefined);
+    }
   } catch (error) {
     await patchRemoteBrowserExecutorState(session, {
       type: "mark-failed",
@@ -785,6 +780,18 @@ async function startViewportPublisher(session: RemoteBrowserSession): Promise<vo
       inputEventId: remoteBrowserExecutorInputEventId(session, "failed")
     }).catch(() => undefined);
   }
+}
+
+async function reportRemoteBrowserMediaSourceRect(session: RemoteBrowserSession): Promise<void> {
+  const rect = await waitForRemoteBrowserMediaSourceRect(session.page);
+  if (!rect || sessions.get(session.sessionId) !== session) {
+    return;
+  }
+  await patchRemoteBrowserExecutorState(session, {
+    type: "mark-source-rect",
+    mediaSourceRect: rect,
+    inputEventId: remoteBrowserExecutorInputEventId(session, "source-rect")
+  });
 }
 
 function getWritableFrameClients(session: RemoteBrowserSession): WebSocket[] {
@@ -966,6 +973,63 @@ async function mapSourceRectToPageViewport(frame: Frame, rect: RemoteBrowserMedi
     viewportWidth: viewport.width,
     viewportHeight: viewport.height
   };
+}
+
+async function findLargestVideoRectInFrame(frame: Frame): Promise<RemoteBrowserMediaSourceRect | undefined> {
+  return await frame.evaluate(() => {
+    const candidates = [...document.querySelectorAll("video")]
+      .map((video) => {
+        const rect = video.getBoundingClientRect();
+        return {
+          x: rect.x,
+          y: rect.y,
+          width: rect.width,
+          height: rect.height,
+          viewportWidth: window.innerWidth,
+          viewportHeight: window.innerHeight,
+          area: rect.width * rect.height,
+          readyState: video.readyState,
+          videoArea: video.videoWidth * video.videoHeight
+        };
+      })
+      .filter((rect) => rect.width > 100 && rect.height > 100 && rect.area > 10000 && rect.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA)
+      .sort((left, right) => (right.videoArea || right.area) - (left.videoArea || left.area));
+    const rect = candidates[0];
+    return rect
+      ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height, viewportWidth: rect.viewportWidth, viewportHeight: rect.viewportHeight }
+      : undefined;
+  });
+}
+
+async function resolveRemoteBrowserMediaSourceRect(page: Page): Promise<RemoteBrowserMediaSourceRect | undefined> {
+  let bestRect: RemoteBrowserMediaSourceRect | undefined;
+  let bestArea = 0;
+  for (const frame of page.frames()) {
+    try {
+      const rect = await findLargestVideoRectInFrame(frame);
+      const mapped = await mapSourceRectToPageViewport(frame, rect);
+      const area = mapped ? mapped.width * mapped.height : 0;
+      if (mapped && area > bestArea) {
+        bestRect = mapped;
+        bestArea = area;
+      }
+    } catch {
+      // Cross-navigation and detached frames are expected while heavy pages load.
+    }
+  }
+  return bestRect;
+}
+
+async function waitForRemoteBrowserMediaSourceRect(page: Page, timeoutMs = 30000): Promise<RemoteBrowserMediaSourceRect | undefined> {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    const rect = await resolveRemoteBrowserMediaSourceRect(page);
+    if (rect) {
+      return rect;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  return undefined;
 }
 
 async function createMediaAnswer(session: RemoteBrowserSession, offer: RTCSessionDescriptionInit): Promise<RemoteBrowserMediaAnswerResult> {

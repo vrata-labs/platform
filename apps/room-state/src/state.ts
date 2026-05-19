@@ -16,6 +16,7 @@ import {
   type MediaObjectCommandResult,
   type MediaObjectInstance,
   type RemoteBrowserErrorCode,
+  type RemoteBrowserMediaSourceRect,
   type RemoteBrowserObjectState,
   type RemoteBrowserPatch,
   type RoomMediaObjectsState,
@@ -347,11 +348,48 @@ function isRemoteBrowserInputEventId(input: unknown): input is string {
   return typeof input === "string" && input.trim().length > 0;
 }
 
+function isRemoteBrowserMediaSourceRect(input: unknown): input is RemoteBrowserMediaSourceRect {
+  if (!input || typeof input !== "object") {
+    return false;
+  }
+  const rect = input as Partial<RemoteBrowserMediaSourceRect>;
+  return typeof rect.x === "number"
+    && Number.isFinite(rect.x)
+    && typeof rect.y === "number"
+    && Number.isFinite(rect.y)
+    && typeof rect.width === "number"
+    && Number.isFinite(rect.width)
+    && rect.width > 0
+    && typeof rect.height === "number"
+    && Number.isFinite(rect.height)
+    && rect.height > 0
+    && typeof rect.viewportWidth === "number"
+    && Number.isFinite(rect.viewportWidth)
+    && rect.viewportWidth > 0
+    && typeof rect.viewportHeight === "number"
+    && Number.isFinite(rect.viewportHeight)
+    && rect.viewportHeight > 0;
+}
+
+function normalizeRemoteBrowserMediaSourceRect(input: RemoteBrowserMediaSourceRect | undefined): RemoteBrowserMediaSourceRect | undefined {
+  if (!input || !isRemoteBrowserMediaSourceRect(input)) {
+    return undefined;
+  }
+  return {
+    x: Number(input.x.toFixed(2)),
+    y: Number(input.y.toFixed(2)),
+    width: Number(input.width.toFixed(2)),
+    height: Number(input.height.toFixed(2)),
+    viewportWidth: Number(input.viewportWidth.toFixed(2)),
+    viewportHeight: Number(input.viewportHeight.toFixed(2))
+  };
+}
+
 function isRemoteBrowserPatch(input: unknown): input is RemoteBrowserPatch {
   if (!input || typeof input !== "object") {
     return false;
   }
-  const patch = input as { type?: unknown; url?: unknown; event?: unknown; inputEventId?: unknown; errorCode?: unknown; errorDetail?: unknown; mediaParticipantId?: unknown; mediaTrackSid?: unknown; audioTrackSid?: unknown };
+  const patch = input as { type?: unknown; url?: unknown; event?: unknown; inputEventId?: unknown; errorCode?: unknown; errorDetail?: unknown; mediaParticipantId?: unknown; mediaTrackSid?: unknown; audioTrackSid?: unknown; mediaSourceRect?: unknown };
   if (!isRemoteBrowserInputEventId(patch.inputEventId)) {
     return false;
   }
@@ -362,7 +400,13 @@ function isRemoteBrowserPatch(input: unknown): input is RemoteBrowserPatch {
     return isNonEmptyString(patch.mediaParticipantId);
   }
   if (patch.type === "mark-active") {
-    return isNonEmptyString(patch.mediaParticipantId) && isNonEmptyString(patch.mediaTrackSid) && isNonEmptyString(patch.audioTrackSid);
+    return isNonEmptyString(patch.mediaParticipantId)
+      && isNonEmptyString(patch.mediaTrackSid)
+      && isNonEmptyString(patch.audioTrackSid)
+      && (patch.mediaSourceRect === undefined || isRemoteBrowserMediaSourceRect(patch.mediaSourceRect));
+  }
+  if (patch.type === "mark-source-rect") {
+    return isRemoteBrowserMediaSourceRect(patch.mediaSourceRect);
   }
   if (patch.type === "mark-stopped") {
     return true;
@@ -392,11 +436,11 @@ function isRemoteBrowserRealtimeInputPatch(input: unknown): input is Extract<Rem
   return patch.type === "pointer" || patch.type === "scroll" || patch.type === "keyboard";
 }
 
-function isRemoteBrowserExecutorPatch(input: unknown): input is Extract<RemoteBrowserPatch, { type: "mark-publishing" | "mark-active" | "mark-failed" | "mark-stopped" }> {
+function isRemoteBrowserExecutorPatch(input: unknown): input is Extract<RemoteBrowserPatch, { type: "mark-publishing" | "mark-active" | "mark-source-rect" | "mark-failed" | "mark-stopped" }> {
   if (!isRemoteBrowserPatch(input)) {
     return false;
   }
-  return input.type === "mark-publishing" || input.type === "mark-active" || input.type === "mark-failed" || input.type === "mark-stopped";
+  return input.type === "mark-publishing" || input.type === "mark-active" || input.type === "mark-source-rect" || input.type === "mark-failed" || input.type === "mark-stopped";
 }
 
 function isWhiteboardColor(input: unknown): input is WhiteboardStroke["color"] {
@@ -592,6 +636,7 @@ function reduceRemoteBrowserState(current: RemoteBrowserObjectState, patch: Remo
       mediaParticipantId,
       mediaTrackSid: undefined,
       audioTrackSid: undefined,
+      mediaSourceRect: undefined,
       currentUrl: patch.url,
       errorCode: undefined,
       streamErrorCode: undefined,
@@ -613,6 +658,7 @@ function reduceRemoteBrowserState(current: RemoteBrowserObjectState, patch: Remo
       mediaParticipantId: patch.mediaParticipantId.trim(),
       mediaTrackSid: undefined,
       audioTrackSid: undefined,
+      mediaSourceRect: undefined,
       errorCode: undefined,
       streamErrorCode: undefined,
       errorDetail: undefined,
@@ -630,6 +676,7 @@ function reduceRemoteBrowserState(current: RemoteBrowserObjectState, patch: Remo
       mediaParticipantId: patch.mediaParticipantId.trim(),
       mediaTrackSid: patch.mediaTrackSid.trim(),
       audioTrackSid: patch.audioTrackSid.trim(),
+      mediaSourceRect: normalizeRemoteBrowserMediaSourceRect(patch.mediaSourceRect) ?? current.mediaSourceRect,
       loadedAtMs: current.loadedAtMs ?? nowMs,
       streamStartedAtMs: current.streamStartedAtMs ?? nowMs,
       streamUpdatedAtMs: nowMs,
@@ -640,12 +687,24 @@ function reduceRemoteBrowserState(current: RemoteBrowserObjectState, patch: Remo
       lastInputEventId: patch.inputEventId
     };
   }
+  if (patch.type === "mark-source-rect") {
+    if (!current.executorSessionId) {
+      return null;
+    }
+    return {
+      ...current,
+      mediaSourceRect: normalizeRemoteBrowserMediaSourceRect(patch.mediaSourceRect),
+      streamUpdatedAtMs: nowMs,
+      lastInputEventId: patch.inputEventId
+    };
+  }
   if (patch.type === "mark-stopped") {
     return {
       ...current,
       status: "stopped",
       mediaTrackSid: undefined,
       audioTrackSid: undefined,
+      mediaSourceRect: undefined,
       stoppedAtMs: nowMs,
       streamUpdatedAtMs: nowMs,
       lastInputEventId: patch.inputEventId
@@ -657,6 +716,7 @@ function reduceRemoteBrowserState(current: RemoteBrowserObjectState, patch: Remo
       status: "failed",
       mediaTrackSid: undefined,
       audioTrackSid: undefined,
+      mediaSourceRect: undefined,
       errorCode: patch.errorCode,
       streamErrorCode: patch.errorCode,
       errorDetail: normalizeRemoteBrowserErrorDetail(patch.errorDetail),

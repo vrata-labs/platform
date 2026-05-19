@@ -539,6 +539,7 @@ test("remote-browser object opens URL, streams input, and enforces controller lo
       mediaParticipantId: "remote-browser:browser-1",
       mediaTrackSid: "TR_VP",
       audioTrackSid: "TR_AUDIO",
+      mediaSourceRect: { x: 12.345, y: 34.567, width: 640.111, height: 360.222, viewportWidth: 1280, viewportHeight: 720 },
       inputEventId: "executor:active:1"
     },
     nowMs: 4
@@ -548,12 +549,14 @@ test("remote-browser object opens URL, streams input, and enforces controller lo
     status?: string;
     mediaTrackSid?: string;
     audioTrackSid?: string;
+    mediaSourceRect?: { x: number; y: number; width: number; height: number; viewportWidth: number; viewportHeight: number };
     loadedAtMs?: number;
     streamStartedAtMs?: number;
   } | undefined;
   assert.equal(activeRemoteBrowserState?.status, "active");
   assert.equal(activeRemoteBrowserState?.mediaTrackSid, "TR_VP");
   assert.equal(activeRemoteBrowserState?.audioTrackSid, "TR_AUDIO");
+  assert.deepEqual(activeRemoteBrowserState?.mediaSourceRect, { x: 12.35, y: 34.57, width: 640.11, height: 360.22, viewportWidth: 1280, viewportHeight: 720 });
   assert.equal(activeRemoteBrowserState?.loadedAtMs, 4);
   assert.equal(activeRemoteBrowserState?.streamStartedAtMs, 4);
 
