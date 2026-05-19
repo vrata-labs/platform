@@ -19,6 +19,7 @@ interface RemoteBrowserSession {
   url: string;
   context: BrowserContext;
   page: Page;
+  publisherPage: Page;
   clients: Set<WebSocket>;
   mediaClients: Set<WebSocket>;
   frameTimer: ReturnType<typeof setInterval>;
@@ -154,6 +155,9 @@ const tokenSecret = process.env.REMOTE_BROWSER_TOKEN_SECRET ?? "dev-remote-brows
 const mediaIceServers = resolveRemoteBrowserMediaIceServers(process.env.REMOTE_BROWSER_MEDIA_ICE_SERVERS);
 const apiInternalUrl = resolveInternalHttpUrl(process.env.API_INTERNAL_URL ?? process.env.NOAH_API_INTERNAL_URL, "http://127.0.0.1:4000");
 const roomStateInternalUrl = resolveInternalHttpUrl(process.env.ROOM_STATE_INTERNAL_URL ?? process.env.NOAH_ROOM_STATE_INTERNAL_URL, "http://127.0.0.1:2567");
+export const remoteBrowserCaptureTargetTitle = "Noah Remote Browser";
+export const remoteBrowserViewportPublisherTitle = "Noah Remote Browser Publisher";
+let activeListenPort = port;
 const remoteBrowserScrollbarStyle = `
   html {
     scrollbar-gutter: stable !important;
@@ -280,6 +284,33 @@ let browserPromise: Promise<Browser> | null = null;
 const sessions = new Map<string, RemoteBrowserSession>();
 const urlPolicy = createRemoteBrowserUrlPolicy();
 
+export function remoteBrowserViewportPublisherHtml(): string {
+  return `<!doctype html><html><head><meta charset="utf-8"><title>${remoteBrowserViewportPublisherTitle}</title></head><body></body></html>`;
+}
+
+function getRemoteBrowserViewportPublisherUrl(): string {
+  return `http://127.0.0.1:${activeListenPort}/internal/viewport-publisher`;
+}
+
+export function createRemoteBrowserViewportCaptureOptions(size: { width: number; height: number } = viewport): DisplayMediaStreamOptions {
+  return {
+    video: {
+      displaySurface: "browser",
+      frameRate: { ideal: 30, max: 30 },
+      width: { ideal: size.width },
+      height: { ideal: size.height }
+    },
+    audio: {
+      echoCancellation: false,
+      noiseSuppression: false,
+      autoGainControl: false
+    },
+    selfBrowserSurface: "exclude",
+    surfaceSwitching: "exclude",
+    systemAudio: "include"
+  } as unknown as DisplayMediaStreamOptions;
+}
+
 function json(response: ServerResponse, statusCode: number, body: unknown): void {
   response.writeHead(statusCode, {
     "content-type": "application/json; charset=utf-8",
@@ -287,6 +318,15 @@ function json(response: ServerResponse, statusCode: number, body: unknown): void
     "x-content-type-options": "nosniff"
   });
   response.end(JSON.stringify(body));
+}
+
+function html(response: ServerResponse, statusCode: number, body: string): void {
+  response.writeHead(statusCode, {
+    "content-type": "text/html; charset=utf-8",
+    "cache-control": "no-store",
+    "x-content-type-options": "nosniff"
+  });
+  response.end(body);
 }
 
 function parseBody<T>(request: IncomingMessage): Promise<T | null> {
@@ -330,8 +370,11 @@ async function getBrowser(): Promise<Browser> {
       "--enable-usermedia-screen-capturing",
       "--use-fake-ui-for-media-stream",
       "--allow-http-screen-capture",
-      "--auto-select-desktop-capture-source=Noah Remote Browser",
-      "--auto-select-tab-capture-source-by-title=Noah Remote Browser",
+      `--auto-select-desktop-capture-source=${remoteBrowserCaptureTargetTitle}`,
+      `--auto-select-tab-capture-source-by-title=${remoteBrowserCaptureTargetTitle}`,
+      "--disable-background-timer-throttling",
+      "--disable-backgrounding-occluded-windows",
+      "--disable-renderer-backgrounding",
       `--window-size=${viewport.width},${viewport.height}`
     ]
   });
@@ -412,6 +455,20 @@ async function requestRemoteBrowserMediaToken(session: RemoteBrowserSession): Pr
   return { token: payload.token, livekitUrl: payload.livekitUrl };
 }
 
+async function prepareViewportPublisherPage(session: RemoteBrowserSession): Promise<void> {
+  await session.page.evaluate((title) => {
+    document.title = title;
+  }, remoteBrowserCaptureTargetTitle).catch(() => undefined);
+  try {
+    await session.publisherPage.goto(getRemoteBrowserViewportPublisherUrl(), { waitUntil: "domcontentloaded", timeout: 5000 });
+  } catch {
+    await session.publisherPage.setContent(remoteBrowserViewportPublisherHtml(), { waitUntil: "domcontentloaded" });
+  }
+  await session.publisherPage.evaluate((title) => {
+    document.title = title;
+  }, remoteBrowserViewportPublisherTitle).catch(() => undefined);
+}
+
 async function patchRemoteBrowserExecutorState(session: RemoteBrowserSessionRef, patch: RemoteBrowserPatch): Promise<void> {
   const response = await fetch(`${roomStateInternalUrl}/api/internal/remote-browser/sessions/${encodeURIComponent(session.sessionId)}`, {
     method: "POST",
@@ -467,8 +524,10 @@ function remoteBrowserSessionErrorCode(error: unknown): RemoteBrowserErrorCode {
 
 async function publishViewportToLiveKit(session: RemoteBrowserSession): Promise<RemoteBrowserViewportPublishResult> {
   const { token, livekitUrl } = await requestRemoteBrowserMediaToken(session);
-  await session.page.addScriptTag({ path: resolveLiveKitClientBundlePath() });
-  const result = await session.page.evaluate(async ({ livekitUrl: targetLivekitUrl, token: targetToken, width, height }) => {
+  await prepareViewportPublisherPage(session);
+  await session.publisherPage.addScriptTag({ path: resolveLiveKitClientBundlePath() });
+  const captureOptions = createRemoteBrowserViewportCaptureOptions({ width: viewport.width, height: viewport.height });
+  const result = await session.publisherPage.evaluate(async ({ livekitUrl: targetLivekitUrl, token: targetToken, displayMediaOptions }) => {
     type PublishState = {
       room?: { disconnect: () => void };
       stream?: MediaStream;
@@ -490,22 +549,7 @@ async function publishViewportToLiveKit(session: RemoteBrowserSession): Promise<
     pageWindow.__NOAH_REMOTE_BROWSER_LIVEKIT__?.stream?.getTracks().forEach((track) => track.stop());
     let stream: MediaStream;
     try {
-      const displayMediaOptions = {
-        video: {
-          frameRate: { ideal: 30, max: 30 },
-          width: { ideal: width },
-          height: { ideal: height }
-        },
-        audio: {
-          echoCancellation: false,
-          noiseSuppression: false,
-          autoGainControl: false
-        },
-        preferCurrentTab: true,
-        selfBrowserSurface: "include",
-        systemAudio: "include"
-      } as DisplayMediaStreamOptions;
-      stream = await navigator.mediaDevices.getDisplayMedia(displayMediaOptions);
+      stream = await navigator.mediaDevices.getDisplayMedia(displayMediaOptions as DisplayMediaStreamOptions);
     } catch (error) {
       return { ok: false, errorCode: error instanceof DOMException && error.name === "NotAllowedError" ? "viewport_capture_denied" : "viewport_capture_failed", message: error instanceof Error ? `${error.name}:${error.message}` : "capture_failed" };
     }
@@ -540,10 +584,11 @@ async function publishViewportToLiveKit(session: RemoteBrowserSession): Promise<
       stream.getTracks().forEach((track) => track.stop());
       return { ok: false, errorCode: "livekit_publish_failed", message: error instanceof Error ? error.message : "publish_failed" };
     }
-  }, { livekitUrl, token, width: viewport.width, height: viewport.height }) as { ok?: boolean; videoTrackSid?: string; audioTrackSid?: string; errorCode?: string; message?: string };
+  }, { livekitUrl, token, displayMediaOptions: captureOptions }) as { ok?: boolean; videoTrackSid?: string; audioTrackSid?: string; errorCode?: string; message?: string };
   if (!result.ok || !result.videoTrackSid || !result.audioTrackSid) {
     throw new Error(`${result.errorCode ?? "livekit_publish_failed"}:${result.message ?? "unknown"}`);
   }
+  await session.page.bringToFront().catch(() => undefined);
   return { videoTrackSid: result.videoTrackSid, audioTrackSid: result.audioTrackSid };
 }
 
@@ -839,7 +884,7 @@ async function stopSession(sessionId: string): Promise<boolean> {
   for (const client of session.clients) {
     client.close(1000, "session_stopped");
   }
-  await session.page.evaluate(() => {
+  await session.publisherPage.evaluate(() => {
     const pageWindow = window as Window & { __NOAH_REMOTE_BROWSER_LIVEKIT__?: { room?: { disconnect: () => void }; stream?: MediaStream } };
     pageWindow.__NOAH_REMOTE_BROWSER_LIVEKIT__?.room?.disconnect();
     pageWindow.__NOAH_REMOTE_BROWSER_LIVEKIT__?.stream?.getTracks().forEach((track) => track.stop());
@@ -877,19 +922,22 @@ async function createSession(input: { sessionId: string; frameStreamId?: string;
     throw new Error(`navigation_failed:${error instanceof Error ? error.message : "unknown"}`);
   }
   await ensureRemoteBrowserPageStyles(page);
-  await page.evaluate(() => {
-    document.title = "Noah Remote Browser";
-  }).catch(() => undefined);
+  await page.evaluate((title) => {
+    document.title = title;
+  }, remoteBrowserCaptureTargetTitle).catch(() => undefined);
   const finalValidation = await validateRemoteBrowserUrl(page.url(), urlPolicy);
   if (!finalValidation.allowed) {
     await context.close().catch(() => undefined);
     throw new Error(`redirect_not_allowed:${finalValidation.errorCode ?? "unknown"}`);
   }
+  const publisherPage = await context.newPage();
+  await publisherPage.setContent(remoteBrowserViewportPublisherHtml(), { waitUntil: "domcontentloaded" });
   const session: RemoteBrowserSession = {
     ...input,
     url: page.url(),
     context,
     page,
+    publisherPage,
     clients: new Set<WebSocket>(),
     mediaClients: new Set<WebSocket>(),
     frameTimer: setInterval(() => {
@@ -982,6 +1030,10 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     json(response, 200, { status: "ok", service: "remote-browser", sessions: sessions.size, timestamp: new Date().toISOString() });
     return;
   }
+  if (request.method === "GET" && url.pathname === "/internal/viewport-publisher") {
+    html(response, 200, remoteBrowserViewportPublisherHtml());
+    return;
+  }
   if (request.method === "POST" && url.pathname === "/api/sessions") {
     if (!isAuthorizedInternalRequest(request)) {
       json(response, 403, { error: "forbidden" });
@@ -1035,6 +1087,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
 }
 
 export function startRemoteBrowserService(listenPort = port) {
+  activeListenPort = listenPort;
   const server = createServer((request, response) => {
     handleRequest(request, response).catch((error: unknown) => {
       json(response, 500, { error: "remote_browser_error", message: error instanceof Error ? error.message : "unknown" });
@@ -1068,6 +1121,10 @@ export function startRemoteBrowserService(listenPort = port) {
     });
   });
   return server.listen(listenPort, () => {
+    const address = server.address();
+    if (typeof address === "object" && address?.port) {
+      activeListenPort = address.port;
+    }
     process.stdout.write(`remote-browser listening on ${listenPort}\n`);
   });
 }

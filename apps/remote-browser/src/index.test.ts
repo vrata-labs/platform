@@ -2,9 +2,13 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  createRemoteBrowserViewportCaptureOptions,
+  remoteBrowserCaptureTargetTitle,
   remoteBrowserEventPoint,
   remoteBrowserInitScript,
   remoteBrowserScrollDelta,
+  remoteBrowserViewportPublisherHtml,
+  remoteBrowserViewportPublisherTitle,
   resolveRemoteBrowserFrameBackpressureBytes,
   resolveRemoteBrowserFrameIntervalMs,
   resolveRemoteBrowserMediaFrameIntervalMs,
@@ -51,6 +55,31 @@ test("remote browser maps surface UV to browser viewport coordinates", () => {
   assert.deepEqual(remoteBrowserEventPoint(surfaceInput({ u: 0, v: 1 }), viewport), { x: 0, y: 0 });
   assert.deepEqual(remoteBrowserEventPoint(surfaceInput({ u: 1, v: 0 }), viewport), { x: 1279, y: 719 });
   assert.deepEqual(remoteBrowserEventPoint(surfaceInput({ u: 0.25, v: 0.75 }), viewport), { x: 320, y: 180 });
+});
+
+test("remote browser viewport publisher page is not the capture target tab", () => {
+  const html = remoteBrowserViewportPublisherHtml();
+
+  assert.match(html, new RegExp(`<title>${remoteBrowserViewportPublisherTitle}</title>`));
+  assert.notEqual(remoteBrowserViewportPublisherTitle, remoteBrowserCaptureTargetTitle);
+  assert.equal(html.includes(`<title>${remoteBrowserCaptureTargetTitle}</title>`), false);
+});
+
+test("remote browser viewport capture excludes the publisher tab and requests audio", () => {
+  const options = createRemoteBrowserViewportCaptureOptions({ width: 640, height: 360 }) as Record<string, unknown>;
+  const video = options.video as { displaySurface?: string; width?: { ideal?: number }; height?: { ideal?: number } };
+  const audio = options.audio as { echoCancellation?: boolean; noiseSuppression?: boolean; autoGainControl?: boolean };
+
+  assert.equal(video.displaySurface, "browser");
+  assert.equal(video.width?.ideal, 640);
+  assert.equal(video.height?.ideal, 360);
+  assert.equal(audio.echoCancellation, false);
+  assert.equal(audio.noiseSuppression, false);
+  assert.equal(audio.autoGainControl, false);
+  assert.equal(options.selfBrowserSurface, "exclude");
+  assert.equal(options.surfaceSwitching, "exclude");
+  assert.equal(options.systemAudio, "include");
+  assert.equal("preferCurrentTab" in options, false);
 });
 
 test("remoteBrowserScrollDelta preserves desktop wheel direction", () => {
