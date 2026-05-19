@@ -282,7 +282,8 @@ async function expectVisibleHoverResponse(page: Page, candidates: Array<{ u: num
   let bestDiff = 0;
   let bestLatencyMs = Number.POSITIVE_INFINITY;
   for (const candidate of candidates) {
-    await page.waitForTimeout(2500);
+    await moveMouseToSurface(page, 0.02, 0.98);
+    await page.waitForTimeout(3500);
     const sampleSize = candidate.v < 0.2
       ? { width: 0.34, height: 0.08 }
       : { width: 0.18, height: 0.18 };
