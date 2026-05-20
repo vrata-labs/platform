@@ -472,6 +472,7 @@ async function dismissRutubeOverlays(page: Page): Promise<void> {
   const overlayTargets = [
     { u: 0.68, v: 0.87 },
     { u: 0.68, v: 0.85 },
+    { u: 0.5, v: 0.23 },
     { u: 0.4, v: 0.16 },
     { u: 0.36, v: 0.08 }
   ];

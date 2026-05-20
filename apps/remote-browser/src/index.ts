@@ -787,13 +787,13 @@ async function publishViewportFromCurrentTab(session: RemoteBrowserSession, live
 async function publishViewportToLiveKit(session: RemoteBrowserSession): Promise<RemoteBrowserViewportPublishResult> {
   const { token, livekitUrl } = await requestRemoteBrowserMediaToken(session);
   try {
-    return await publishViewportFromPublisherPage(session, livekitUrl, token);
-  } catch (publisherError) {
+    return await publishViewportFromCurrentTab(session, livekitUrl, token);
+  } catch (currentTabError) {
     try {
-      return await publishViewportFromCurrentTab(session, livekitUrl, token);
-    } catch (currentTabError) {
-      const currentTabCode = remoteBrowserPublishErrorCode(currentTabError);
-      throw new Error(`${currentTabCode}:publisher=${remoteBrowserErrorDetail(publisherError)}; currentTab=${remoteBrowserErrorDetail(currentTabError)}`);
+      return await publishViewportFromPublisherPage(session, livekitUrl, token);
+    } catch (publisherError) {
+      const publisherCode = remoteBrowserPublishErrorCode(publisherError);
+      throw new Error(`${publisherCode}:currentTab=${remoteBrowserErrorDetail(currentTabError)}; publisher=${remoteBrowserErrorDetail(publisherError)}`);
     }
   }
 }
