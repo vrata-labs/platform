@@ -274,10 +274,29 @@ const textures = {
     if (small) return mixColor(crimson, gold, 0.36);
     return mixColor(crimson, navy, hashNoise(x, y, 4) * 0.12);
   }, [1, 1]),
-  coast: makeTexture("livadia-crimean-coast-window-view-procedural", 256, 256, (u, v) => {
-    if (v < 0.42) return mixColor(rgb(0x2e73a5), rgb(0x89c8e8), v * 0.5);
-    if (v < 0.54) return mixColor(rgb(0x536d4e), rgb(0xa4a76d), Math.sin(u * Math.PI * 4) * 0.25 + 0.4);
-    return mixColor(rgb(0x8fd3f2), rgb(0xf1dba6), v - 0.54);
+  panorama: makeTexture("livadia-crimean-estate-panorama-equirect-procedural", 1024, 512, (u, v, x, y) => {
+    const noise = hashNoise(Math.floor(x / 3), Math.floor(y / 3), 71);
+    if (v > 0.66) {
+      const sky = mixColor(rgb(0x75b5e4), rgb(0xf2d8ad), 1 - v);
+      const cloud = Math.abs(Math.sin((u * 7.5 + v * 2.1) * Math.PI)) < 0.08 && v > 0.74;
+      return cloud ? mixColor(sky, rgb(0xffefd6), 0.55 + noise * 0.18) : sky;
+    }
+    if (v > 0.51) {
+      const ridge = 0.54 + Math.sin(u * Math.PI * 8) * 0.035 + hashNoise(Math.floor(x / 12), 2, 75) * 0.025;
+      return v < ridge
+        ? mixColor(rgb(0x41593f), rgb(0xa6a86b), 0.38 + noise * 0.22)
+        : mixColor(rgb(0xd9c28d), rgb(0x84bfdf), 0.34);
+    }
+    if (v > 0.29) {
+      const shimmer = Math.sin((u * 44 + v * 9) * Math.PI) * 0.055 + noise * 0.08;
+      return mixColor(rgb(0x1e668f), rgb(0x9bd6ef), 0.36 + (v - 0.29) * 0.9 + shimmer);
+    }
+    const cypressBand = ((u * 22 + Math.sin(u * Math.PI * 6) * 0.4) % 1 + 1) % 1;
+    const cypress = cypressBand > 0.47 && cypressBand < 0.56 && v > 0.08 && v < 0.33;
+    const roof = Math.abs(Math.sin(u * Math.PI * 11)) < 0.12 && v > 0.18 && v < 0.25;
+    if (cypress) return mixColor(rgb(0x0d2a1f), rgb(0x2f5634), noise * 0.25);
+    if (roof) return mixColor(rgb(0xb27a4a), rgb(0x6f3c27), noise * 0.2);
+    return mixColor(rgb(0x31543a), rgb(0x9c9f64), 0.28 + noise * 0.22);
   }, [1, 1])
 };
 
@@ -294,11 +313,12 @@ function material(name, color, options = {}) {
     opacity: options.opacity ?? 1,
     side: options.side ?? THREE.FrontSide
   });
+  if (options.depthWrite !== undefined) result.depthWrite = options.depthWrite;
   return result;
 }
 
 function basicMaterial(name, color, options = {}) {
-  return new THREE.MeshBasicMaterial({
+  const result = new THREE.MeshBasicMaterial({
     name,
     color,
     map: options.map ?? null,
@@ -306,6 +326,8 @@ function basicMaterial(name, color, options = {}) {
     opacity: options.opacity ?? 1,
     side: options.side ?? THREE.FrontSide
   });
+  if (options.depthWrite !== undefined) result.depthWrite = options.depthWrite;
+  return result;
 }
 
 const mats = {
@@ -320,8 +342,8 @@ const mats = {
   oliveVelvet: material("livadia-olive-green-velvet-pbr", 0x3e5733, { roughness: 0.86, map: textures.velvet, emissive: 0x10190d, emissiveIntensity: 0.04 }),
   leather: material("livadia-green-leather-gold-tooled-pbr", 0x1f5139, { roughness: 0.48, map: textures.leather }),
   rug: material("livadia-crimson-rug-with-medallion-pbr", 0x992f3c, { roughness: 0.9, map: textures.rug, side: THREE.DoubleSide }),
-  glass: material("livadia-tall-window-soft-blue-glass-pbr", 0xb9e5f6, { roughness: 0.12, transparent: true, opacity: 0.48, emissive: 0x8acbec, emissiveIntensity: 0.18, side: THREE.DoubleSide }),
-  coast: basicMaterial("livadia-window-black-sea-crimean-coast-unlit", 0xffffff, { map: textures.coast, side: THREE.DoubleSide }),
+  glass: material("livadia-clear-arched-window-glass-pbr", 0xe1f8ff, { roughness: 0.06, transparent: true, opacity: 0.22, emissive: 0x8acbec, emissiveIntensity: 0.035, side: THREE.DoubleSide, depthWrite: false }),
+  panorama: basicMaterial("livadia-exterior-crimean-panorama-sphere-unlit", 0xffffff, { map: textures.panorama, side: THREE.BackSide }),
   paper: material("livadia-aged-paper-pbr", 0xf1ddad, { roughness: 0.86, emissive: 0xe6c98d, emissiveIntensity: 0.035 }),
   ink: material("livadia-black-glass-inkwell-pbr", 0x0b0e12, { roughness: 0.24, metalness: 0.12 }),
   porcelain: material("livadia-warm-porcelain-lamp-shade-pbr", 0xf1ddba, { roughness: 0.42, emissive: 0xffc982, emissiveIntensity: 0.16 }),
@@ -421,6 +443,61 @@ function addSegmentBox(name, a, b, height, y, depth, mat, yRotationOffset = 0) {
   return addBox(name, [length, height, depth], [(a[0] + b[0]) / 2, y, (a[1] + b[1]) / 2], mat, [0, segmentAngle(a, b) + yRotationOffset, 0]);
 }
 
+function projectPointOnSegment(point, a, b) {
+  const dx = b[0] - a[0];
+  const dz = b[1] - a[1];
+  const length = Math.hypot(dx, dz);
+  return ((point[0] - (a[0] + b[0]) / 2) * dx + (point[1] - (a[1] + b[1]) / 2) * dz) / length;
+}
+
+function archOpeningPath(width, height, xOffset, yOffset) {
+  const r = width / 2;
+  const left = xOffset - width / 2;
+  const right = xOffset + width / 2;
+  const springY = yOffset + height - r;
+  const path = new THREE.Path();
+  path.moveTo(left, yOffset);
+  path.lineTo(left, springY);
+  path.quadraticCurveTo(left, yOffset + height, xOffset, yOffset + height);
+  path.quadraticCurveTo(right, yOffset + height, right, springY);
+  path.lineTo(right, yOffset);
+  path.lineTo(left, yOffset);
+  return path;
+}
+
+function wallSegmentGeometry(length, height, depth, openings = []) {
+  const shape = new THREE.Shape();
+  shape.moveTo(-length / 2, 0);
+  shape.lineTo(length / 2, 0);
+  shape.lineTo(length / 2, height);
+  shape.lineTo(-length / 2, height);
+  shape.lineTo(-length / 2, 0);
+
+  for (const opening of openings) {
+    const halfWidth = Math.min(opening.width / 2, length / 2 - 0.18);
+    const x = clamp(opening.x, -length / 2 + halfWidth + 0.08, length / 2 - halfWidth - 0.08);
+    shape.holes.push(archOpeningPath(halfWidth * 2, opening.height, x, opening.y));
+  }
+
+  const geometry = new THREE.ExtrudeGeometry(shape, { depth, bevelEnabled: false, steps: 1 });
+  geometry.translate(0, 0, -depth / 2);
+  geometry.computeVertexNormals();
+  return geometry;
+}
+
+function addWallSegment(name, a, b, height, depth, mat, openings = []) {
+  const dx = b[0] - a[0];
+  const dz = b[1] - a[1];
+  const length = Math.hypot(dx, dz);
+  return addMesh(
+    name,
+    wallSegmentGeometry(length, height, depth, openings),
+    mat,
+    [(a[0] + b[0]) / 2, 0, (a[1] + b[1]) / 2],
+    [0, segmentAngle(a, b), 0]
+  );
+}
+
 function polygonGeometry(points, y) {
   const vertices = [];
   const uvs = [];
@@ -490,8 +567,7 @@ function addWindow(prefix, position, yaw, width = 1.9, height = 3.25) {
   group.rotation.y = yaw;
   root.add(group);
 
-  addArchPanel(`${prefix}-crimean-coast-view`, width * 0.86, height * 0.82, [0, 0.15, -0.035], mats.coast, [0, 0, 0], false, group);
-  addArchPanel(`${prefix}-blue-glass-arch`, width * 0.92, height * 0.88, [0, 0.06, -0.055], mats.glass, [0, 0, 0], false, group);
+  addArchPanel(`${prefix}-transparent-glass-arch`, width * 0.92, height * 0.88, [0, 0.06, -0.055], mats.glass, [0, 0, 0], false, group);
   addArchPanel(`${prefix}-carved-walnut-arch-frame`, width, height, [0, 0, 0], mats.walnut, [0, 0, 0], true, group);
   addBox(`${prefix}-center-mullion`, [0.065, height * 0.72, 0.09], [0, height * 0.38, -0.11], mats.walnut, [0, 0, 0], group);
   addBox(`${prefix}-lower-crossbar`, [width * 0.72, 0.065, 0.09], [0, height * 0.34, -0.11], mats.walnut, [0, 0, 0], group);
@@ -634,9 +710,13 @@ function drawPreviewPpm(filePath) {
   fillPoly([[140, 612], [1140, 612], [870, 346], [410, 346]], [28, 48, 75]);
   fillRect(350, 300, 580, 8, [200, 154, 75]);
   for (const x of [296, 496, 694, 892]) {
-    fillRect(x, 92, 130, 230, [124, 193, 224]);
-    fillRect(x + 10, 210, 110, 56, [43, 111, 157]);
-    fillRect(x + 24, 185, 86, 26, [102, 132, 91]);
+    fillRect(x, 92, 130, 230, [145, 204, 231]);
+    fillRect(x + 4, 206, 122, 58, [36, 105, 150]);
+    fillRect(x + 14, 184, 102, 30, [106, 139, 89]);
+    fillRect(x + 22, 242, 18, 58, [27, 67, 44]);
+    fillRect(x + 82, 238, 18, 62, [24, 61, 42]);
+    fillRect(x + 22, 100, 12, 188, [219, 244, 250]);
+    fillRect(x + 82, 92, 8, 176, [205, 235, 246]);
     fillRect(x - 18, 70, 166, 16, [92, 47, 27]);
     fillRect(x - 18, 322, 166, 16, [92, 47, 27]);
     fillRect(x - 36, 76, 22, 280, [106, 31, 45]);
@@ -676,14 +756,29 @@ const floorPlan = [
   [-6.9, -2.6]
 ];
 
+function windowOpening(segmentIndex, point, width, height, y = 0.86) {
+  const a = floorPlan[segmentIndex];
+  const b = floorPlan[(segmentIndex + 1) % floorPlan.length];
+  return { x: projectPointOnSegment(point, a, b), width, height, y };
+}
+
+const wallWindowOpenings = new Map([
+  [1, [windowOpening(1, [6.9, -0.65], 1.46, 3.18)]],
+  [3, [windowOpening(3, [3.45, -5.12], 1.78, 3.45)]],
+  [6, [windowOpening(6, [-3.45, -5.12], 1.78, 3.45)]],
+  [8, [windowOpening(8, [-6.9, -0.65], 1.46, 3.18)]]
+]);
+
 // Enlarged non-box plan: broad study plus faceted sea-facing bay.
+const panoramaSphere = addMesh("livadia-exterior-panorama-sphere", new THREE.SphereGeometry(34, 72, 36), mats.panorama, [0, 2.35, -0.8], [0, -0.35, 0]);
+panoramaSphere.userData.noahExcludeFromSceneBounds = true;
 addMesh("livadia-herringbone-parquet-irregular-floor", polygonGeometry(floorPlan, 0), mats.parquet);
 addMesh("livadia-coffered-plaster-ceiling-irregular-plan", polygonGeometry(floorPlan, 5.18), mats.wall);
 
 for (let i = 0; i < floorPlan.length; i += 1) {
   const a = floorPlan[i];
   const b = floorPlan[(i + 1) % floorPlan.length];
-  addSegmentBox(`livadia-articulated-wall-${i}`, a, b, 5.18, 2.59, 0.18, mats.wall);
+  addWallSegment(`livadia-articulated-wall-${i}`, a, b, 5.18, 0.18, mats.wall, wallWindowOpenings.get(i) ?? []);
   addSegmentBox(`livadia-walnut-baseboard-${i}`, a, b, 0.28, 0.16, 0.25, mats.walnut);
   addSegmentBox(`livadia-brass-picture-rail-${i}`, a, b, 0.08, 3.18, 0.23, mats.brass);
   addSegmentBox(`livadia-deep-crown-molding-${i}`, a, b, 0.24, 4.96, 0.32, mats.walnut);
@@ -882,6 +977,12 @@ async function main() {
           licenseRef: "LICENSES.md"
         },
         {
+          id: "livadia-nicholas-office-v1-procedural-panorama-sphere",
+          type: "texture",
+          author: "Noah/OpenCode",
+          licenseRef: "LICENSES.md"
+        },
+        {
           id: "livadia-nicholas-office-v1-procedural-preview",
           type: "texture",
           author: "Noah/OpenCode",
@@ -892,11 +993,11 @@ async function main() {
     visual: {
       intentionalDark: false
     },
-    notes: "Original larger-scale VR office art pass: faceted sea-facing bay, arched windows, columns, coffered ceiling, procedural PBR-style damask, herringbone parquet, walnut, marble, velvet, leather, central imperial writing desk, fireplace lounge, library shelves, readable spawn, and clean-mode lighting. No external meshes, textures, fonts, photos, scans, or private source paths."
+    notes: "Original larger-scale VR office art pass: faceted sea-facing bay, transparent arched windows, procedural exterior panorama sphere, columns, coffered ceiling, procedural PBR-style damask, herringbone parquet, walnut, marble, velvet, leather, central imperial writing desk, fireplace lounge, library shelves, readable spawn, and clean-mode lighting. No external meshes, textures, fonts, photos, scans, or private source paths."
   };
 
   await writeFile(join(outputDir, "scene.json"), `${JSON.stringify(manifest, null, 2)}\n`);
-  await writeFile(join(outputDir, "LICENSES.md"), `# Licenses And Provenance\n\nScene: ${manifest.label}\n\n- Geometry: original procedural mesh composition authored for Noah/OpenCode.\n- Materials: original named PBR-style procedural materials and embedded procedural textures generated by tools/generate-livadia-office-scene.mjs.\n- Preview: original procedural raster preview generated from the same concept.\n- External assets: none. No third-party meshes, textures, fonts, photos, scans, or proprietary scene layouts are included.\n- Historical basis: public-domain historical theme of Nicholas II's Livadia Palace office, interpreted as a new Noah scene rather than copied from any prior digital room or copyrighted reference package.\n- Cleared usage: staging, production, web runtime, screenshots, and optimization.\n`);
+  await writeFile(join(outputDir, "LICENSES.md"), `# Licenses And Provenance\n\nScene: ${manifest.label}\n\n- Geometry: original procedural mesh composition authored for Noah/OpenCode.\n- Materials: original named PBR-style procedural materials and embedded procedural textures generated by tools/generate-livadia-office-scene.mjs.\n- Exterior panorama: original procedural equirectangular Crimea/estate panorama texture generated by tools/generate-livadia-office-scene.mjs.\n- Preview: original procedural raster preview generated from the same concept.\n- External assets: none. No third-party meshes, textures, fonts, photos, scans, or proprietary scene layouts are included.\n- Historical basis: public-domain historical theme of Nicholas II's Livadia Palace office, interpreted as a new Noah scene rather than copied from any prior digital room or copyrighted reference package.\n- Cleared usage: staging, production, web runtime, screenshots, and optimization.\n`);
 }
 
 await main();

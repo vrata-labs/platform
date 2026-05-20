@@ -65,6 +65,21 @@ function colorFromData(data: Uint8ClampedArray, offset: number) {
   };
 }
 
+function isExcludedFromSceneBounds(object: THREE.Object3D): boolean {
+  let current: THREE.Object3D | null = object;
+  while (current) {
+    const userData = current.userData as Record<string, unknown>;
+    if (userData.noahExcludeFromSceneBounds === true || userData.excludeFromSceneBounds === true) {
+      return true;
+    }
+    if (current.name.includes("panorama-sphere") || current.name.includes("skybox")) {
+      return true;
+    }
+    current = current.parent;
+  }
+  return false;
+}
+
 export function createEmptySceneDiagnostics(): SceneDiagnosticsSnapshot {
   return {
     bundleUrl: null,
@@ -173,7 +188,17 @@ export function inspectSceneObject(input: {
     }
   });
 
-  const boundingBox = new THREE.Box3().setFromObject(input.root);
+  const boundingBox = new THREE.Box3();
+  input.root.updateWorldMatrix(true, true);
+  input.root.traverse((child) => {
+    if (!(child instanceof THREE.Mesh) || isExcludedFromSceneBounds(child)) {
+      return;
+    }
+    const childBox = new THREE.Box3().setFromObject(child);
+    if (Number.isFinite(childBox.min.x) && !childBox.isEmpty()) {
+      boundingBox.union(childBox);
+    }
+  });
   const size = new THREE.Vector3();
   const center = new THREE.Vector3();
   const hasBounds = Number.isFinite(boundingBox.min.x) && !boundingBox.isEmpty();

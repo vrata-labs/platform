@@ -122,6 +122,12 @@
         "licenseRef": "LICENSES.md"
       },
       {
+        "id": "livadia-nicholas-office-v1-procedural-panorama-sphere",
+        "type": "texture",
+        "author": "Noah/OpenCode",
+        "licenseRef": "LICENSES.md"
+      },
+      {
         "id": "livadia-nicholas-office-v1-procedural-preview",
         "type": "texture",
         "author": "Noah/OpenCode",
@@ -132,5 +138,5 @@
   "visual": {
     "intentionalDark": false
   },
-  "notes": "Original larger-scale VR office art pass: faceted sea-facing bay, arched windows, columns, coffered ceiling, procedural PBR-style damask, herringbone parquet, walnut, marble, velvet, leather, central imperial writing desk, fireplace lounge, library shelves, readable spawn, and clean-mode lighting. No external meshes, textures, fonts, photos, scans, or private source paths."
+  "notes": "Original larger-scale VR office art pass: faceted sea-facing bay, transparent arched windows, procedural exterior panorama sphere, columns, coffered ceiling, procedural PBR-style damask, herringbone parquet, walnut, marble, velvet, leather, central imperial writing desk, fireplace lounge, library shelves, readable spawn, and clean-mode lighting. No external meshes, textures, fonts, photos, scans, or private source paths."
 }

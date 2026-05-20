@@ -41,3 +41,34 @@ test("inspectSceneObject reports mesh and bounds stats", () => {
   assert.equal(diagnostics.boundingBox?.size.z, 6);
   assert.equal(diagnostics.camera?.world.z, 8);
 });
+
+test("inspectSceneObject excludes panorama sphere from bounds", () => {
+  const root = new THREE.Group();
+  const roomMesh = new THREE.Mesh(
+    new THREE.BoxGeometry(2, 3, 4),
+    new THREE.MeshStandardMaterial({ color: 0xffaa00 })
+  );
+  const panorama = new THREE.Mesh(
+    new THREE.SphereGeometry(50, 16, 8),
+    new THREE.MeshBasicMaterial({ side: THREE.BackSide })
+  );
+  panorama.name = "test-panorama-sphere";
+  panorama.userData.noahExcludeFromSceneBounds = true;
+  root.add(roomMesh, panorama);
+
+  const camera = new THREE.PerspectiveCamera(70, 1, 0.1, 100);
+  camera.position.set(0, 1.6, 8);
+  camera.updateMatrixWorld();
+  root.updateMatrixWorld(true);
+
+  const diagnostics = inspectSceneObject({
+    root,
+    camera,
+    previous: createEmptySceneDiagnostics()
+  });
+
+  assert.equal(diagnostics.meshCount, 2);
+  assert.equal(diagnostics.boundingBox?.size.x, 2);
+  assert.equal(diagnostics.boundingBox?.size.y, 3);
+  assert.equal(diagnostics.boundingBox?.size.z, 4);
+});
