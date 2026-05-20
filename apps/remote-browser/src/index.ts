@@ -183,6 +183,17 @@ const remoteBrowserScrollbarStyle = `
 `;
 
 export const remoteBrowserInitScript = (styleContent: string) => {
+  type InputDebugState = {
+    pointerMoveCount: number;
+    mouseMoveCount: number;
+    clickCount: number;
+    lastType?: string;
+    lastClientX?: number;
+    lastClientY?: number;
+    lastTarget?: string;
+  };
+  type InputDebugWindow = Window & { __NOAH_REMOTE_BROWSER_INPUT_DEBUG__?: InputDebugState };
+
   const installStyle = () => {
     const styleId = "noah-remote-browser-scrollbar-style";
     if (document.getElementById(styleId)) {
@@ -252,6 +263,40 @@ export const remoteBrowserInitScript = (styleContent: string) => {
       // Best-effort guard; playback should continue even if one property is locked.
     }
   };
+  const targetLabel = (target: EventTarget | null): string | undefined => {
+    if (!(target instanceof Element)) {
+      return undefined;
+    }
+    const className = typeof target.className === "string" ? target.className.trim().replace(/\s+/g, ".") : "";
+    return `${target.tagName.toLowerCase()}${target.id ? `#${target.id}` : ""}${className ? `.${className.slice(0, 80)}` : ""}`;
+  };
+  const installInputDebug = () => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    const inputWindow = window as InputDebugWindow;
+    if (inputWindow.__NOAH_REMOTE_BROWSER_INPUT_DEBUG__) {
+      return;
+    }
+    const state: InputDebugState = { pointerMoveCount: 0, mouseMoveCount: 0, clickCount: 0 };
+    inputWindow.__NOAH_REMOTE_BROWSER_INPUT_DEBUG__ = state;
+    const record = (event: MouseEvent | PointerEvent) => {
+      if (event.type === "pointermove") {
+        state.pointerMoveCount += 1;
+      } else if (event.type === "mousemove") {
+        state.mouseMoveCount += 1;
+      } else if (event.type === "click") {
+        state.clickCount += 1;
+      }
+      state.lastType = event.type;
+      state.lastClientX = Math.round(event.clientX);
+      state.lastClientY = Math.round(event.clientY);
+      state.lastTarget = targetLabel(event.composedPath()[0] ?? event.target);
+    };
+    document.addEventListener("pointermove", record, true);
+    document.addEventListener("mousemove", record, true);
+    document.addEventListener("click", record, true);
+  };
 
   defineValue(Element.prototype, "requestFullscreen", noopFullscreen);
   defineValue(Element.prototype, "webkitRequestFullscreen", noopFullscreen);
@@ -276,7 +321,9 @@ export const remoteBrowserInitScript = (styleContent: string) => {
   document.addEventListener("MSFullscreenChange", onFullscreenChange, true);
 
   installStyle();
+  installInputDebug();
   document.addEventListener("DOMContentLoaded", installStyle, { once: true });
+  document.addEventListener("DOMContentLoaded", installInputDebug, { once: true });
 };
 
 let browserPromise: Promise<Browser> | null = null;
@@ -1219,9 +1266,49 @@ function remoteBrowserPageUrl(page: Page): string | undefined {
   }
 }
 
+async function remoteBrowserInputTargetDetail(page: Page, point: { x: number; y: number }): Promise<string | undefined> {
+  return await page.evaluate(({ x, y }) => {
+    type InputDebugState = {
+      pointerMoveCount?: number;
+      mouseMoveCount?: number;
+      clickCount?: number;
+      lastType?: string;
+      lastClientX?: number;
+      lastClientY?: number;
+      lastTarget?: string;
+    };
+    const labelElement = (element: Element | null): string => {
+      if (!element) {
+        return "none";
+      }
+      const className = typeof (element as HTMLElement).className === "string" ? (element as HTMLElement).className.trim().replace(/\s+/g, ".") : "";
+      return `${element.tagName.toLowerCase()}${element.id ? `#${element.id}` : ""}${className ? `.${className.slice(0, 80)}` : ""}`;
+    };
+    const target = document.elementFromPoint(x, y) as HTMLElement | null;
+    const targetRect = target?.getBoundingClientRect();
+    const targetStyle = target ? window.getComputedStyle(target) : null;
+    const inputDebug = (window as Window & { __NOAH_REMOTE_BROWSER_INPUT_DEBUG__?: InputDebugState }).__NOAH_REMOTE_BROWSER_INPUT_DEBUG__;
+    const videos = Array.from(document.querySelectorAll("video"))
+      .map((video) => {
+        const rect = video.getBoundingClientRect();
+        return `${Math.round(rect.x)},${Math.round(rect.y)},${Math.round(rect.width)}x${Math.round(rect.height)}:${video.readyState}:${video.videoWidth}x${video.videoHeight}`;
+      })
+      .slice(0, 3)
+      .join("|");
+    return [
+      `target=${labelElement(target)}`,
+      targetRect ? `rect=${Math.round(targetRect.x)},${Math.round(targetRect.y)},${Math.round(targetRect.width)}x${Math.round(targetRect.height)}` : "rect=none",
+      targetStyle ? `pointerEvents=${targetStyle.pointerEvents}` : "pointerEvents=none",
+      `events=${inputDebug?.lastType ?? "none"}@${inputDebug?.lastClientX ?? "?"},${inputDebug?.lastClientY ?? "?"};pm=${inputDebug?.pointerMoveCount ?? 0};mm=${inputDebug?.mouseMoveCount ?? 0};click=${inputDebug?.clickCount ?? 0};lastTarget=${inputDebug?.lastTarget ?? "none"}`,
+      `videos=${videos || "none"}`
+    ].join(";");
+  }, point).catch(() => undefined);
+}
+
 function createInputDiagnostic(session: RemoteBrowserSession, patch: RemoteBrowserRealtimeInputPatch, point: { x: number; y: number }, input: {
   receivedAtMs: number;
   status: RemoteBrowserExecutorInputState["status"];
+  targetDetail?: string;
   errorDetail?: string;
 }): RemoteBrowserExecutorInputState {
   return {
@@ -1235,6 +1322,7 @@ function createInputDiagnostic(session: RemoteBrowserSession, patch: RemoteBrows
     status: input.status,
     pageUrl: remoteBrowserPageUrl(session.page),
     pageClosed: session.page.isClosed(),
+    targetDetail: input.targetDetail,
     errorDetail: input.errorDetail
   };
 }
@@ -1254,7 +1342,7 @@ async function applyInput(session: RemoteBrowserSession, patch: RemoteBrowserPat
       await session.page.mouse.move(x, y);
       await session.page.mouse.wheel(delta.x, delta.y);
       requestInputFrameCapture(session);
-      return createInputDiagnostic(session, patch, point, { receivedAtMs, status: "applied" });
+      return createInputDiagnostic(session, patch, point, { receivedAtMs, status: "applied", targetDetail: await remoteBrowserInputTargetDetail(session.page, point) });
     }
     if (patch.type === "keyboard") {
       if (patch.event.kind === "key-down") {
@@ -1265,7 +1353,7 @@ async function applyInput(session: RemoteBrowserSession, patch: RemoteBrowserPat
         }
       }
       requestInputFrameCapture(session);
-      return createInputDiagnostic(session, patch, point, { receivedAtMs, status: "applied" });
+      return createInputDiagnostic(session, patch, point, { receivedAtMs, status: "applied", targetDetail: await remoteBrowserInputTargetDetail(session.page, point) });
     }
     await session.page.mouse.move(x, y, { steps: remoteBrowserMouseMoveSteps(patch.event.kind) });
     if (patch.event.kind === "pointer-down") {
@@ -1276,9 +1364,9 @@ async function applyInput(session: RemoteBrowserSession, patch: RemoteBrowserPat
       await session.page.mouse.click(x, y);
     }
     requestInputFrameCapture(session);
-    return createInputDiagnostic(session, patch, point, { receivedAtMs, status: "applied" });
+    return createInputDiagnostic(session, patch, point, { receivedAtMs, status: "applied", targetDetail: await remoteBrowserInputTargetDetail(session.page, point) });
   } catch (error) {
-    return createInputDiagnostic(session, patch, point, { receivedAtMs, status: "failed", errorDetail: remoteBrowserErrorDetail(error) });
+    return createInputDiagnostic(session, patch, point, { receivedAtMs, status: "failed", targetDetail: await remoteBrowserInputTargetDetail(session.page, point), errorDetail: remoteBrowserErrorDetail(error) });
   }
 }
 

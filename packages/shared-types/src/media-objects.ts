@@ -157,6 +157,7 @@ export interface RemoteBrowserExecutorInputState {
   status: "applied" | "failed";
   pageUrl?: string;
   pageClosed: boolean;
+  targetDetail?: string;
   errorDetail?: string;
 }
 

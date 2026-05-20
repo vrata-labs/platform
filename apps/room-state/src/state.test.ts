@@ -605,7 +605,8 @@ test("remote-browser object opens URL, streams input, and enforces controller lo
         appliedAtMs: 7,
         status: "applied",
         pageUrl: "https://example.com/remote-browser-demo.html",
-        pageClosed: false
+        pageClosed: false,
+        targetDetail: "target=VIDEO;events=pointermove:1"
       },
       inputEventId: "executor:input-applied:1"
     },
@@ -623,6 +624,7 @@ test("remote-browser object opens URL, streams input, and enforces controller lo
     status: "applied",
     pageUrl: "https://example.com/remote-browser-demo.html",
     pageClosed: false,
+    targetDetail: "target=VIDEO;events=pointermove:1",
     errorDetail: undefined
   });
 

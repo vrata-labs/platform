@@ -33,6 +33,7 @@ type RemoteBrowserDebug = {
       status: "applied" | "failed";
       pageUrl?: string;
       pageClosed: boolean;
+      targetDetail?: string;
       errorDetail?: string;
     } | null;
     errorCode?: string | null;

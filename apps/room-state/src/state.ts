@@ -410,6 +410,7 @@ function isRemoteBrowserExecutorInputState(input: unknown): input is RemoteBrows
     && (state.status === "applied" || state.status === "failed")
     && typeof state.pageClosed === "boolean"
     && (state.pageUrl === undefined || typeof state.pageUrl === "string")
+    && (state.targetDetail === undefined || typeof state.targetDetail === "string")
     && (state.errorDetail === undefined || typeof state.errorDetail === "string");
 }
 
@@ -428,6 +429,7 @@ function normalizeRemoteBrowserExecutorInputState(input: RemoteBrowserExecutorIn
     status: input.status,
     pageUrl: input.pageUrl?.trim().slice(0, 500) || undefined,
     pageClosed: input.pageClosed,
+    targetDetail: input.targetDetail?.replace(/[\r\n\t]+/g, " ").trim().slice(0, 500) || undefined,
     errorDetail: normalizeRemoteBrowserErrorDetail(input.errorDetail)
   };
 }
