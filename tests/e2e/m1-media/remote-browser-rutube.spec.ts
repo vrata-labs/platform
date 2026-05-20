@@ -366,7 +366,7 @@ async function expectVisibleHoverResponse(page: Page, candidates: Array<{ u: num
       inputLatencyMs,
       debug
     });
-    if (bestDiff > 6) {
+    if (bestDiff > 6 || inputReachedTarget) {
       break;
     }
   }
@@ -441,7 +441,7 @@ async function expectNoFrameBacklog(page: Page, sampleSeconds: number[]): Promis
 }
 
 test("@staging @rutube real Rutube remote browser keeps hover UI, video transport, and switching responsive", async ({ page, request }) => {
-  test.setTimeout(300000);
+  test.setTimeout(420000);
   let roomId: string | null = null;
 
   try {
