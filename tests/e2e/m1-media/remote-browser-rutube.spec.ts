@@ -356,6 +356,8 @@ async function expectVisibleHoverResponse(page: Page, candidates: Array<{ u: num
 
 async function dismissRutubeOverlays(page: Page): Promise<void> {
   const overlayTargets = [
+    { u: 0.5, v: 0.235 },
+    { u: 0.5, v: 0.265 },
     { u: 0.68, v: 0.87 },
     { u: 0.68, v: 0.85 },
     { u: 0.4, v: 0.16 },
