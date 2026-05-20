@@ -209,10 +209,17 @@ async function waitForFreshFrame(page: Page, previousFrameAt: number): Promise<n
 async function sampleSurfaceRegion(page: Page, center: { u: number; v: number }, size = { width: 0.18, height: 0.18 }): Promise<SurfaceSample> {
   return page.evaluate(({ center: sampleCenter, size: sampleSize }) => {
     const noahWindow = window as Window & {
-      __NOAH_TEST__?: { getDebugSurfaceClientPosition: (u: number, v: number) => { x: number; y: number } | null };
+      __NOAH_TEST__?: {
+        getDebugSurfaceClientPosition: (u: number, v: number) => { x: number; y: number } | null;
+        sampleDebugSurfaceTexture?: (center: { u: number; v: number }, size?: { width: number; height: number }) => SurfaceSample | null;
+      };
     };
     const canvas = document.querySelector("canvas") as HTMLCanvasElement | null;
     const helper = noahWindow.__NOAH_TEST__;
+    const textureSample = helper?.sampleDebugSurfaceTexture?.(sampleCenter, sampleSize);
+    if (textureSample) {
+      return textureSample;
+    }
     if (!canvas || !helper) {
       throw new Error("rutube_sample_canvas_unavailable");
     }

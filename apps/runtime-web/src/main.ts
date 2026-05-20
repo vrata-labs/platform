@@ -2875,6 +2875,7 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
     focusDebugSurface: () => boolean;
     getDebugSurfaceWorldPosition: (u: number, v: number) => { x: number; y: number; z: number } | null;
     getDebugSurfaceClientPosition: (u: number, v: number) => { x: number; y: number } | null;
+    sampleDebugSurfaceTexture: (center: { u: number; v: number }, size?: { width: number; height: number }) => { clip: { sx: number; sy: number; sw: number; sh: number }; samples: Array<[number, number, number]> } | null;
     getRemoteBrowserVrKeyboardTargetWorldPosition: (targetId: string) => { x: number; y: number; z: number } | null;
     getRemoteBrowserVrKeyboardKeyWorldPosition: (keyId: string) => { x: number; y: number; z: number } | null;
     teleportToFloor: (x: number, z: number) => boolean;
@@ -3190,6 +3191,55 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
       x: (ndc.x + 1) * 0.5 * window.innerWidth,
       y: (1 - ndc.y) * 0.5 * window.innerHeight
     };
+  },
+  sampleDebugSurfaceTexture: (center, size = { width: 0.18, height: 0.18 }) => {
+    const material = displaySurface.material;
+    const image = material instanceof THREE.MeshBasicMaterial ? material.map?.image : null;
+    if (!(image instanceof HTMLCanvasElement) && !(image instanceof HTMLVideoElement) && !(image instanceof HTMLImageElement) && !(typeof ImageBitmap !== "undefined" && image instanceof ImageBitmap)) {
+      return null;
+    }
+    const imageWidth = image instanceof HTMLVideoElement
+      ? image.videoWidth
+      : image instanceof HTMLImageElement
+        ? image.naturalWidth || image.width
+        : image.width;
+    const imageHeight = image instanceof HTMLVideoElement
+      ? image.videoHeight
+      : image instanceof HTMLImageElement
+        ? image.naturalHeight || image.height
+        : image.height;
+    if (imageWidth <= 0 || imageHeight <= 0) {
+      return null;
+    }
+
+    const scratch = document.createElement("canvas");
+    scratch.width = imageWidth;
+    scratch.height = imageHeight;
+    const context = scratch.getContext("2d", { willReadFrequently: true });
+    if (!context) {
+      return null;
+    }
+    try {
+      context.drawImage(image, 0, 0, imageWidth, imageHeight);
+    } catch {
+      return null;
+    }
+
+    const clampedU = Math.max(0, Math.min(1, center.u));
+    const clampedV = Math.max(0, Math.min(1, center.v));
+    const sw = Math.max(1, Math.floor(imageWidth * Math.max(0.001, Math.min(1, size.width))));
+    const sh = Math.max(1, Math.floor(imageHeight * Math.max(0.001, Math.min(1, size.height))));
+    const sx = Math.max(0, Math.min(imageWidth - sw, Math.floor(clampedU * imageWidth - sw / 2)));
+    const sy = Math.max(0, Math.min(imageHeight - sh, Math.floor((1 - clampedV) * imageHeight - sh / 2)));
+    const data = context.getImageData(sx, sy, sw, sh).data;
+    const samples: Array<[number, number, number]> = [];
+    for (let sampleIndex = 0; sampleIndex < 128; sampleIndex += 1) {
+      const x = Math.min(sw - 1, Math.floor(((sampleIndex % 16) + 0.5) * sw / 16));
+      const y = Math.min(sh - 1, Math.floor((Math.floor(sampleIndex / 16) + 0.5) * sh / 8));
+      const pixelIndex = (y * sw + x) * 4;
+      samples.push([data[pixelIndex] ?? 0, data[pixelIndex + 1] ?? 0, data[pixelIndex + 2] ?? 0]);
+    }
+    return { clip: { sx, sy, sw, sh }, samples };
   },
   getRemoteBrowserVrKeyboardTargetWorldPosition: (targetId) => {
     const mesh = targetId === "toggle" ? remoteBrowserVrKeyboardView.toggleMesh : remoteBrowserVrKeyboardView.meshById.get(targetId);
