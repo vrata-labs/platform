@@ -1305,6 +1305,51 @@ async function remoteBrowserInputTargetDetail(page: Page, point: { x: number; y:
   }, point).catch(() => undefined);
 }
 
+async function ensureRemoteBrowserInputDebug(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    type InputDebugState = {
+      pointerMoveCount: number;
+      mouseMoveCount: number;
+      clickCount: number;
+      lastType?: string;
+      lastClientX?: number;
+      lastClientY?: number;
+      lastTarget?: string;
+    };
+    type InputDebugWindow = Window & { __NOAH_REMOTE_BROWSER_INPUT_DEBUG__?: InputDebugState };
+
+    const inputWindow = window as InputDebugWindow;
+    if (inputWindow.__NOAH_REMOTE_BROWSER_INPUT_DEBUG__) {
+      return;
+    }
+    const targetLabel = (target: EventTarget | null): string | undefined => {
+      if (!(target instanceof Element)) {
+        return undefined;
+      }
+      const className = typeof target.className === "string" ? target.className.trim().replace(/\s+/g, ".") : "";
+      return `${target.tagName.toLowerCase()}${target.id ? `#${target.id}` : ""}${className ? `.${className.slice(0, 80)}` : ""}`;
+    };
+    const state: InputDebugState = { pointerMoveCount: 0, mouseMoveCount: 0, clickCount: 0 };
+    inputWindow.__NOAH_REMOTE_BROWSER_INPUT_DEBUG__ = state;
+    const record = (event: MouseEvent | PointerEvent) => {
+      if (event.type === "pointermove") {
+        state.pointerMoveCount += 1;
+      } else if (event.type === "mousemove") {
+        state.mouseMoveCount += 1;
+      } else if (event.type === "click") {
+        state.clickCount += 1;
+      }
+      state.lastType = event.type;
+      state.lastClientX = Math.round(event.clientX);
+      state.lastClientY = Math.round(event.clientY);
+      state.lastTarget = targetLabel(event.composedPath()[0] ?? event.target);
+    };
+    document.addEventListener("pointermove", record, true);
+    document.addEventListener("mousemove", record, true);
+    document.addEventListener("click", record, true);
+  }).catch(() => undefined);
+}
+
 function createInputDiagnostic(session: RemoteBrowserSession, patch: RemoteBrowserRealtimeInputPatch, point: { x: number; y: number }, input: {
   receivedAtMs: number;
   status: RemoteBrowserExecutorInputState["status"];
@@ -1336,6 +1381,7 @@ async function applyInput(session: RemoteBrowserSession, patch: RemoteBrowserPat
   const { x, y } = remoteBrowserEventPoint(patch.event);
   const point = { x, y };
   try {
+    await ensureRemoteBrowserInputDebug(session.page);
     await session.page.bringToFront().catch(() => undefined);
     if (patch.type === "scroll") {
       const delta = remoteBrowserScrollDelta(patch.event);
