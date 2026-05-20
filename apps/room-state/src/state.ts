@@ -16,6 +16,7 @@ import {
   type MediaObjectCommandResult,
   type MediaObjectInstance,
   type RemoteBrowserErrorCode,
+  type RemoteBrowserExecutorInputState,
   type RemoteBrowserMediaSourceRect,
   type RemoteBrowserObjectState,
   type RemoteBrowserPatch,
@@ -385,11 +386,57 @@ function normalizeRemoteBrowserMediaSourceRect(input: RemoteBrowserMediaSourceRe
   };
 }
 
+function isRemoteBrowserExecutorInputState(input: unknown): input is RemoteBrowserExecutorInputState {
+  if (!input || typeof input !== "object") {
+    return false;
+  }
+  const state = input as Partial<RemoteBrowserExecutorInputState>;
+  return isRemoteBrowserInputEventId(state.inputEventId)
+    && (state.inputType === "pointer" || state.inputType === "scroll" || state.inputType === "keyboard")
+    && typeof state.eventKind === "string"
+    && state.eventKind.trim().length > 0
+    && typeof state.x === "number"
+    && Number.isFinite(state.x)
+    && state.x >= 0
+    && typeof state.y === "number"
+    && Number.isFinite(state.y)
+    && state.y >= 0
+    && typeof state.receivedAtMs === "number"
+    && Number.isFinite(state.receivedAtMs)
+    && state.receivedAtMs >= 0
+    && typeof state.appliedAtMs === "number"
+    && Number.isFinite(state.appliedAtMs)
+    && state.appliedAtMs >= 0
+    && (state.status === "applied" || state.status === "failed")
+    && typeof state.pageClosed === "boolean"
+    && (state.pageUrl === undefined || typeof state.pageUrl === "string")
+    && (state.errorDetail === undefined || typeof state.errorDetail === "string");
+}
+
+function normalizeRemoteBrowserExecutorInputState(input: RemoteBrowserExecutorInputState | undefined): RemoteBrowserExecutorInputState | undefined {
+  if (!input || !isRemoteBrowserExecutorInputState(input)) {
+    return undefined;
+  }
+  return {
+    inputEventId: input.inputEventId.trim().slice(0, 200),
+    inputType: input.inputType,
+    eventKind: input.eventKind,
+    x: Number(input.x.toFixed(2)),
+    y: Number(input.y.toFixed(2)),
+    receivedAtMs: Math.round(input.receivedAtMs),
+    appliedAtMs: Math.round(input.appliedAtMs),
+    status: input.status,
+    pageUrl: input.pageUrl?.trim().slice(0, 500) || undefined,
+    pageClosed: input.pageClosed,
+    errorDetail: normalizeRemoteBrowserErrorDetail(input.errorDetail)
+  };
+}
+
 function isRemoteBrowserPatch(input: unknown): input is RemoteBrowserPatch {
   if (!input || typeof input !== "object") {
     return false;
   }
-  const patch = input as { type?: unknown; url?: unknown; event?: unknown; inputEventId?: unknown; errorCode?: unknown; errorDetail?: unknown; mediaParticipantId?: unknown; mediaTrackSid?: unknown; audioTrackSid?: unknown; mediaSourceRect?: unknown };
+  const patch = input as { type?: unknown; url?: unknown; event?: unknown; input?: unknown; inputEventId?: unknown; errorCode?: unknown; errorDetail?: unknown; mediaParticipantId?: unknown; mediaTrackSid?: unknown; audioTrackSid?: unknown; mediaSourceRect?: unknown };
   if (!isRemoteBrowserInputEventId(patch.inputEventId)) {
     return false;
   }
@@ -407,6 +454,9 @@ function isRemoteBrowserPatch(input: unknown): input is RemoteBrowserPatch {
   }
   if (patch.type === "mark-source-rect") {
     return isRemoteBrowserMediaSourceRect(patch.mediaSourceRect);
+  }
+  if (patch.type === "mark-input-applied") {
+    return isRemoteBrowserExecutorInputState(patch.input);
   }
   if (patch.type === "mark-stopped") {
     return true;
@@ -436,11 +486,11 @@ function isRemoteBrowserRealtimeInputPatch(input: unknown): input is Extract<Rem
   return patch.type === "pointer" || patch.type === "scroll" || patch.type === "keyboard";
 }
 
-function isRemoteBrowserExecutorPatch(input: unknown): input is Extract<RemoteBrowserPatch, { type: "mark-publishing" | "mark-active" | "mark-source-rect" | "mark-failed" | "mark-stopped" }> {
+function isRemoteBrowserExecutorPatch(input: unknown): input is Extract<RemoteBrowserPatch, { type: "mark-publishing" | "mark-active" | "mark-source-rect" | "mark-input-applied" | "mark-failed" | "mark-stopped" }> {
   if (!isRemoteBrowserPatch(input)) {
     return false;
   }
-  return input.type === "mark-publishing" || input.type === "mark-active" || input.type === "mark-source-rect" || input.type === "mark-failed" || input.type === "mark-stopped";
+  return input.type === "mark-publishing" || input.type === "mark-active" || input.type === "mark-source-rect" || input.type === "mark-input-applied" || input.type === "mark-failed" || input.type === "mark-stopped";
 }
 
 function isWhiteboardColor(input: unknown): input is WhiteboardStroke["color"] {
@@ -641,6 +691,7 @@ function reduceRemoteBrowserState(current: RemoteBrowserObjectState, patch: Remo
       errorCode: undefined,
       streamErrorCode: undefined,
       errorDetail: undefined,
+      lastExecutorInput: undefined,
       loadedAtMs: undefined,
       streamStartedAtMs: undefined,
       streamUpdatedAtMs: undefined,
@@ -695,6 +746,16 @@ function reduceRemoteBrowserState(current: RemoteBrowserObjectState, patch: Remo
       ...current,
       mediaSourceRect: normalizeRemoteBrowserMediaSourceRect(patch.mediaSourceRect),
       streamUpdatedAtMs: nowMs,
+      lastInputEventId: patch.inputEventId
+    };
+  }
+  if (patch.type === "mark-input-applied") {
+    if (!current.executorSessionId) {
+      return null;
+    }
+    return {
+      ...current,
+      lastExecutorInput: normalizeRemoteBrowserExecutorInputState(patch.input),
       lastInputEventId: patch.inputEventId
     };
   }

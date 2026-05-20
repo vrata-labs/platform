@@ -141,8 +141,23 @@ export interface RemoteBrowserObjectState {
   streamErrorCode?: RemoteBrowserErrorCode;
   errorDetail?: string;
   lastInputSeq?: number;
+  lastExecutorInput?: RemoteBrowserExecutorInputState;
   lastInputEventId: string | null;
   errorCode?: RemoteBrowserErrorCode;
+}
+
+export interface RemoteBrowserExecutorInputState {
+  inputEventId: string;
+  inputType: "pointer" | "scroll" | "keyboard";
+  eventKind: SurfaceInputEvent["kind"];
+  x: number;
+  y: number;
+  receivedAtMs: number;
+  appliedAtMs: number;
+  status: "applied" | "failed";
+  pageUrl?: string;
+  pageClosed: boolean;
+  errorDetail?: string;
 }
 
 export interface RemoteBrowserMediaSourceRect {
@@ -175,6 +190,7 @@ export type RemoteBrowserPatch =
   | { type: "mark-publishing"; mediaParticipantId: string; inputEventId: string }
   | { type: "mark-active"; mediaParticipantId: string; mediaTrackSid: string; audioTrackSid: string; mediaSourceRect?: RemoteBrowserMediaSourceRect; inputEventId: string }
   | { type: "mark-source-rect"; mediaSourceRect: RemoteBrowserMediaSourceRect; inputEventId: string }
+  | { type: "mark-input-applied"; input: RemoteBrowserExecutorInputState; inputEventId: string }
   | { type: "mark-stopped"; inputEventId: string }
   | { type: "pointer"; event: SurfaceInputEvent; inputEventId: string }
   | { type: "scroll"; event: SurfaceInputEvent; inputEventId: string }

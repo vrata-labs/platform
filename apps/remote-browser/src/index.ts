@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { createRequire } from "node:module";
 import { chromium, type Browser, type BrowserContext, type Frame, type Page } from "playwright-core";
 import { WebSocketServer, type WebSocket } from "ws";
-import type { RemoteBrowserErrorCode, RemoteBrowserMediaSourceRect, RemoteBrowserPatch, SurfaceInputEvent } from "@noah/shared-types";
+import type { RemoteBrowserErrorCode, RemoteBrowserExecutorInputState, RemoteBrowserMediaSourceRect, RemoteBrowserPatch, SurfaceInputEvent } from "@noah/shared-types";
 
 import { decodeRemoteBrowserFrameToken } from "./frame-token.js";
 import { createRemoteBrowserUrlPolicy, validateRemoteBrowserUrl, type RemoteBrowserUrlPolicy } from "./url-policy.js";
@@ -1209,40 +1209,77 @@ export function remoteBrowserScrollDelta(event: SurfaceInputEvent): { x: number;
   };
 }
 
-async function applyInput(session: RemoteBrowserSession, patch: RemoteBrowserPatch): Promise<void> {
+type RemoteBrowserRealtimeInputPatch = Extract<RemoteBrowserPatch, { type: "pointer" | "scroll" | "keyboard" }>;
+
+function remoteBrowserPageUrl(page: Page): string | undefined {
+  try {
+    return page.url();
+  } catch {
+    return undefined;
+  }
+}
+
+function createInputDiagnostic(session: RemoteBrowserSession, patch: RemoteBrowserRealtimeInputPatch, point: { x: number; y: number }, input: {
+  receivedAtMs: number;
+  status: RemoteBrowserExecutorInputState["status"];
+  errorDetail?: string;
+}): RemoteBrowserExecutorInputState {
+  return {
+    inputEventId: patch.inputEventId,
+    inputType: patch.type,
+    eventKind: patch.event.kind,
+    x: point.x,
+    y: point.y,
+    receivedAtMs: input.receivedAtMs,
+    appliedAtMs: Date.now(),
+    status: input.status,
+    pageUrl: remoteBrowserPageUrl(session.page),
+    pageClosed: session.page.isClosed(),
+    errorDetail: input.errorDetail
+  };
+}
+
+async function applyInput(session: RemoteBrowserSession, patch: RemoteBrowserPatch): Promise<RemoteBrowserExecutorInputState | null> {
   if (patch.type !== "pointer" && patch.type !== "scroll" && patch.type !== "keyboard") {
-    return;
+    return null;
   }
-  session.lastInputAtMs = Date.now();
+  const receivedAtMs = Date.now();
+  session.lastInputAtMs = receivedAtMs;
   const { x, y } = remoteBrowserEventPoint(patch.event);
-  await session.page.bringToFront().catch(() => undefined);
-  if (patch.type === "scroll") {
-    const delta = remoteBrowserScrollDelta(patch.event);
-    await session.page.mouse.move(x, y);
-    await session.page.mouse.wheel(delta.x, delta.y);
-    requestInputFrameCapture(session);
-    return;
-  }
-  if (patch.type === "keyboard") {
-    if (patch.event.kind === "key-down") {
-      if (patch.event.text) {
-        await session.page.keyboard.insertText(patch.event.text);
-      } else if (patch.event.key) {
-        await session.page.keyboard.press(patch.event.key);
+  const point = { x, y };
+  try {
+    await session.page.bringToFront().catch(() => undefined);
+    if (patch.type === "scroll") {
+      const delta = remoteBrowserScrollDelta(patch.event);
+      await session.page.mouse.move(x, y);
+      await session.page.mouse.wheel(delta.x, delta.y);
+      requestInputFrameCapture(session);
+      return createInputDiagnostic(session, patch, point, { receivedAtMs, status: "applied" });
+    }
+    if (patch.type === "keyboard") {
+      if (patch.event.kind === "key-down") {
+        if (patch.event.text) {
+          await session.page.keyboard.insertText(patch.event.text);
+        } else if (patch.event.key) {
+          await session.page.keyboard.press(patch.event.key);
+        }
       }
+      requestInputFrameCapture(session);
+      return createInputDiagnostic(session, patch, point, { receivedAtMs, status: "applied" });
+    }
+    await session.page.mouse.move(x, y, { steps: remoteBrowserMouseMoveSteps(patch.event.kind) });
+    if (patch.event.kind === "pointer-down") {
+      await session.page.mouse.down();
+    } else if (patch.event.kind === "pointer-up") {
+      await session.page.mouse.up();
+    } else if (patch.event.kind === "click") {
+      await session.page.mouse.click(x, y);
     }
     requestInputFrameCapture(session);
-    return;
+    return createInputDiagnostic(session, patch, point, { receivedAtMs, status: "applied" });
+  } catch (error) {
+    return createInputDiagnostic(session, patch, point, { receivedAtMs, status: "failed", errorDetail: remoteBrowserErrorDetail(error) });
   }
-  await session.page.mouse.move(x, y, { steps: remoteBrowserMouseMoveSteps(patch.event.kind) });
-  if (patch.event.kind === "pointer-down") {
-    await session.page.mouse.down();
-  } else if (patch.event.kind === "pointer-up") {
-    await session.page.mouse.up();
-  } else if (patch.event.kind === "click") {
-    await session.page.mouse.click(x, y);
-  }
-  requestInputFrameCapture(session);
 }
 
 function requestInputFrameCapture(session: RemoteBrowserSession): void {
@@ -1309,8 +1346,19 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       json(response, 404, { error: "session_not_found" });
       return;
     }
-    await applyInput(session, payload);
-    json(response, 200, { ok: true, sessionId: session.sessionId });
+    const inputDiagnostic = await applyInput(session, payload);
+    if (inputDiagnostic) {
+      await patchRemoteBrowserExecutorState(session, {
+        type: "mark-input-applied",
+        input: inputDiagnostic,
+        inputEventId: remoteBrowserExecutorInputEventId(session, `input-${inputDiagnostic.status}`)
+      }).catch(() => undefined);
+    }
+    if (inputDiagnostic?.status === "failed") {
+      json(response, 500, { error: "input_failed", sessionId: session.sessionId, detail: inputDiagnostic.errorDetail ?? "unknown" });
+      return;
+    }
+    json(response, 200, { ok: true, sessionId: session.sessionId, input: inputDiagnostic });
     return;
   }
   json(response, 404, { error: "not_found" });

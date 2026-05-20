@@ -681,7 +681,21 @@ function forwardRemoteBrowserPatch(server: RoomStateServer, roomId: string, obje
   if (!request) {
     return;
   }
-  request.catch((error: unknown) => {
+  request.then((response) => {
+    if (response.ok) {
+      return;
+    }
+    logEvent({
+      service: "room-state",
+      env: process.env.NODE_ENV ?? "development",
+      errorCode: "remote_browser_forward_rejected",
+      roomId,
+      objectId,
+      patchType: remotePatch.type,
+      status: response.status,
+      timestamp: new Date().toISOString()
+    });
+  }).catch((error: unknown) => {
     logEvent({
       service: "room-state",
       env: process.env.NODE_ENV ?? "development",

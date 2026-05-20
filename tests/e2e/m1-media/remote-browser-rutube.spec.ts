@@ -22,6 +22,19 @@ type RemoteBrowserDebug = {
     mediaErrorCode?: string | null;
     mediaSourceRect?: { x: number; y: number; width: number; height: number; viewportWidth: number; viewportHeight: number } | null;
     mediaCompositeHoldActive?: boolean;
+    lastExecutorInput?: {
+      inputEventId: string;
+      inputType: "pointer" | "scroll" | "keyboard";
+      eventKind: string;
+      x: number;
+      y: number;
+      receivedAtMs: number;
+      appliedAtMs: number;
+      status: "applied" | "failed";
+      pageUrl?: string;
+      pageClosed: boolean;
+      errorDetail?: string;
+    } | null;
     errorCode?: string | null;
     errorDetail?: string | null;
   };
@@ -172,7 +185,9 @@ async function waitForRutubeMedia(page: Page): Promise<void> {
 }
 
 async function sendSurfaceInput(page: Page, input: { kind: string; u?: number; v?: number; scrollDelta?: { x: number; y: number } }): Promise<number> {
-  const beforeSeq = (await readDebug(page))?.remoteBrowser?.lastInputSeq ?? 0;
+  const beforeDebug = await readDebug(page);
+  const beforeSeq = beforeDebug?.remoteBrowser?.lastInputSeq ?? 0;
+  const beforeExecutorInput = beforeDebug?.remoteBrowser?.lastExecutorInput ?? null;
   const sent = await page.evaluate((value) => (window as Window & {
     __NOAH_TEST__?: { sendDebugSurfaceInput: (input?: { kind?: string; u?: number; v?: number; scrollDelta?: { x: number; y: number } }) => boolean };
   }).__NOAH_TEST__?.sendDebugSurfaceInput(value) ?? false, input);
@@ -182,6 +197,27 @@ async function sendSurfaceInput(page: Page, input: { kind: string; u?: number; v
     timeout: 10000,
     intervals: [100, 250, 500]
   }).toBeGreaterThan(beforeSeq);
+  await expect.poll(async () => {
+    const lastExecutorInput = (await readDebug(page))?.remoteBrowser?.lastExecutorInput ?? null;
+    const updated = Boolean(lastExecutorInput && (
+      lastExecutorInput.inputEventId !== beforeExecutorInput?.inputEventId
+      || lastExecutorInput.appliedAtMs > (beforeExecutorInput?.appliedAtMs ?? 0)
+    ));
+    return {
+      updated,
+      status: updated ? lastExecutorInput?.status ?? null : null,
+      pageClosed: updated ? lastExecutorInput?.pageClosed ?? null : null,
+      errorDetail: updated ? lastExecutorInput?.errorDetail ?? null : null
+    };
+  }, {
+    timeout: 10000,
+    intervals: [100, 250, 500]
+  }).toEqual({
+    updated: true,
+    status: "applied",
+    pageClosed: false,
+    errorDetail: null
+  });
   return Date.now() - startedAt;
 }
 

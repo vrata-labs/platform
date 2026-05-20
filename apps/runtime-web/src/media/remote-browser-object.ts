@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import type {
   MediaObjectInstance,
+  RemoteBrowserExecutorInputState,
   RemoteBrowserObjectState,
   RemoteBrowserPatch,
   RoomPermission,
@@ -95,6 +96,7 @@ export interface RemoteBrowserDebugSnapshot {
   localCanInput: boolean;
   localHasControl: boolean;
   lastInputSeq: number;
+  lastExecutorInput: RemoteBrowserExecutorInputState | null;
   errorCode: string | null;
   errorDetail: string | null;
   mediaState: RemoteBrowserMediaState;
@@ -309,6 +311,7 @@ export class RemoteBrowserObjectRuntime {
       localCanInput: permissions.includes("remote-browser.input"),
       localHasControl: !controllerParticipantId || controllerParticipantId === this.options.participantId,
       lastInputSeq: state?.lastInputSeq ?? 0,
+      lastExecutorInput: state?.lastExecutorInput ?? null,
       errorCode: state?.errorCode ?? this.errorCode,
       errorDetail: state?.errorDetail ?? null,
       mediaState: externalVideoActive ? "connected" : this.mediaState,

@@ -588,12 +588,50 @@ test("remote-browser object opens URL, streams input, and enforces controller lo
   assert.equal(staleInput.result.permission, "remote-browser.input");
   assert.equal((staleInput.room.mediaObjects.objects["browser-1"]?.state as { lastInputSeq?: number } | undefined)?.lastInputSeq, 1);
 
-  const adminRoom = joinRoom(staleInput.room, "admin", { role: "admin" });
+  const inputApplied = patchRemoteBrowserExecutorState(staleInput.room, {
+    commandId: "cmd-input-applied",
+    surfaceId: "debug-main",
+    objectId: "browser-1",
+    executorSessionId: "remote-browser:browser-1",
+    patch: {
+      type: "mark-input-applied",
+      input: {
+        inputEventId: "host:pointer:1",
+        inputType: "pointer",
+        eventKind: "click",
+        x: 640.123,
+        y: 360.456,
+        receivedAtMs: 5,
+        appliedAtMs: 7,
+        status: "applied",
+        pageUrl: "https://example.com/remote-browser-demo.html",
+        pageClosed: false
+      },
+      inputEventId: "executor:input-applied:1"
+    },
+    nowMs: 7
+  });
+  assert.equal(inputApplied.result.accepted, true);
+  assert.deepEqual((inputApplied.room.mediaObjects.objects["browser-1"]?.state as { lastExecutorInput?: unknown } | undefined)?.lastExecutorInput, {
+    inputEventId: "host:pointer:1",
+    inputType: "pointer",
+    eventKind: "click",
+    x: 640.12,
+    y: 360.46,
+    receivedAtMs: 5,
+    appliedAtMs: 7,
+    status: "applied",
+    pageUrl: "https://example.com/remote-browser-demo.html",
+    pageClosed: false,
+    errorDetail: undefined
+  });
+
+  const adminRoom = joinRoom(inputApplied.room, "admin", { role: "admin" });
   const adminInput = patchMediaObjectState(adminRoom, "admin", {
     commandId: "cmd-admin-input",
     surfaceId: "debug-main",
     objectId: "browser-1",
-    expectedRevision: staleInput.result.revision ?? 4,
+    expectedRevision: inputApplied.result.revision ?? 5,
     patch: {
       type: "pointer",
       inputEventId: "admin:pointer:1",
