@@ -452,6 +452,10 @@ let activeRemoteBrowserVideoTrack: Track | null = null;
 let activeRemoteBrowserVideoElement: HTMLVideoElement | null = null;
 let activeRemoteBrowserVideoTrackSid: string | null = null;
 let activeRemoteBrowserObjectId: string | null = null;
+let activeRemoteBrowserVideoPlayError: string | null = null;
+let activeRemoteBrowserVideoFrameCount = 0;
+let activeRemoteBrowserVideoLastFrameAtMs = 0;
+let activeRemoteBrowserVideoPresentedFrames = 0;
 let isScreenSharing = false;
 let activeMockScreenShareStream: MediaStream | null = null;
 let localScreenShareObjectId: string | null = null;
@@ -716,7 +720,11 @@ function updateMediaDiagnostics(): void {
   if (activeRemoteBrowser) {
     remoteBrowserRuntime.sync(activeRemoteBrowser);
   }
-  debugState.remoteBrowser = { ...debugState.remoteBrowser, ...remoteBrowserRuntime.createDebugSnapshot(activeRemoteBrowser) };
+  debugState.remoteBrowser = {
+    ...debugState.remoteBrowser,
+    ...remoteBrowserRuntime.createDebugSnapshot(activeRemoteBrowser),
+    ...createRemoteBrowserExternalVideoDebugSnapshot()
+  };
 }
 
 function syncRemoteAudioDiagnostics(): void {
@@ -935,7 +943,7 @@ function syncRemoteBrowserControls(): void {
   const activeObject = activeMediaObjectForSurface(DEBUG_SURFACE_ID);
   const remoteBrowser = activeRemoteBrowserObjectForSurface(DEBUG_SURFACE_ID);
   const snapshot = remoteBrowserRuntime.createDebugSnapshot(remoteBrowser);
-  debugState.remoteBrowser = { ...debugState.remoteBrowser, ...snapshot };
+  debugState.remoteBrowser = { ...debugState.remoteBrowser, ...snapshot, ...createRemoteBrowserExternalVideoDebugSnapshot() };
   const canOpen = canUseRemoteBrowserOpenControl();
   const canInput = hasRoomPermission(debugState.access.permissions, "remote-browser.input");
   const hasOtherObject = Boolean(activeObject && activeObject.type !== REMOTE_BROWSER_OBJECT_TYPE);
@@ -2241,6 +2249,94 @@ function getPublicationTrackSid(publication: unknown, track: Track, fallback: st
     ?? getTrackNodeId(track, fallback);
 }
 
+function prepareHiddenVideoElement(element: HTMLVideoElement, options: { muted: boolean }): void {
+  element.autoplay = true;
+  element.muted = options.muted;
+  element.playsInline = true;
+  element.style.position = "fixed";
+  element.style.left = "-1px";
+  element.style.top = "-1px";
+  element.style.width = "1px";
+  element.style.height = "1px";
+  element.style.opacity = "0";
+  element.style.pointerEvents = "none";
+}
+
+function startHiddenVideoPlayback(element: HTMLVideoElement, onError?: (error: string | null) => void): void {
+  const play = () => {
+    void element.play().then(() => {
+      onError?.(null);
+    }).catch((error: unknown) => {
+      const message = error instanceof Error ? `${error.name}:${error.message}` : "video_play_failed";
+      onError?.(message);
+    });
+  };
+  play();
+  element.addEventListener("loadedmetadata", play, { once: true });
+  element.addEventListener("canplay", play, { once: true });
+}
+
+function resetRemoteBrowserExternalVideoDiagnostics(): void {
+  activeRemoteBrowserVideoPlayError = null;
+  activeRemoteBrowserVideoFrameCount = 0;
+  activeRemoteBrowserVideoLastFrameAtMs = 0;
+  activeRemoteBrowserVideoPresentedFrames = 0;
+}
+
+function startRemoteBrowserExternalVideoFrameDiagnostics(element: HTMLVideoElement): void {
+  const video = element as HTMLVideoElement & {
+    requestVideoFrameCallback?: (callback: (now: number, metadata: { presentedFrames?: number }) => void) => number;
+  };
+  if (!video.requestVideoFrameCallback) {
+    return;
+  }
+  const onFrame = (_now: number, metadata: { presentedFrames?: number }) => {
+    if (activeRemoteBrowserVideoElement !== element) {
+      return;
+    }
+    activeRemoteBrowserVideoFrameCount += 1;
+    activeRemoteBrowserVideoLastFrameAtMs = Date.now();
+    activeRemoteBrowserVideoPresentedFrames = metadata.presentedFrames ?? activeRemoteBrowserVideoPresentedFrames;
+    video.requestVideoFrameCallback?.(onFrame);
+  };
+  video.requestVideoFrameCallback(onFrame);
+}
+
+function createRemoteBrowserExternalVideoDebugSnapshot(): {
+  externalVideoAttached: boolean;
+  externalVideoObjectId: string | null;
+  externalVideoTrackSid: string | null;
+  externalVideoPaused: boolean | null;
+  externalVideoReadyState: number | null;
+  externalVideoCurrentTime: number | null;
+  externalVideoWidth: number;
+  externalVideoHeight: number;
+  externalVideoMuted: boolean | null;
+  externalVideoAutoplay: boolean | null;
+  externalVideoPlayError: string | null;
+  externalVideoFrameCount: number;
+  externalVideoLastFrameAtMs: number;
+  externalVideoPresentedFrames: number;
+} {
+  const element = activeRemoteBrowserVideoElement;
+  return {
+    externalVideoAttached: Boolean(element),
+    externalVideoObjectId: activeRemoteBrowserObjectId,
+    externalVideoTrackSid: activeRemoteBrowserVideoTrackSid,
+    externalVideoPaused: element?.paused ?? null,
+    externalVideoReadyState: element?.readyState ?? null,
+    externalVideoCurrentTime: element ? Number(element.currentTime.toFixed(3)) : null,
+    externalVideoWidth: element?.videoWidth ?? 0,
+    externalVideoHeight: element?.videoHeight ?? 0,
+    externalVideoMuted: element?.muted ?? null,
+    externalVideoAutoplay: element?.autoplay ?? null,
+    externalVideoPlayError: activeRemoteBrowserVideoPlayError,
+    externalVideoFrameCount: activeRemoteBrowserVideoFrameCount,
+    externalVideoLastFrameAtMs: activeRemoteBrowserVideoLastFrameAtMs,
+    externalVideoPresentedFrames: activeRemoteBrowserVideoPresentedFrames
+  };
+}
+
 function resolveRemoteBrowserObjectForTrack(participantIdentity: string | null | undefined, publication: unknown, track: Track, kind: "audio" | "video"): MediaObjectInstance<RemoteBrowserObjectState> | null {
   const trackSid = getPublicationTrackSid(publication, track, "");
   return remoteBrowserObjectForMediaTrack(roomMediaObjects, participantIdentity, trackSid || null, kind);
@@ -2552,6 +2648,20 @@ const debugState = {
     mediaErrorCode: null as string | null,
     mediaSourceRect: null as null | { x: number; y: number; width: number; height: number; viewportWidth: number; viewportHeight: number },
     mediaCompositeHoldActive: false,
+    externalVideoAttached: false,
+    externalVideoObjectId: null as string | null,
+    externalVideoTrackSid: null as string | null,
+    externalVideoPaused: null as boolean | null,
+    externalVideoReadyState: null as number | null,
+    externalVideoCurrentTime: null as number | null,
+    externalVideoWidth: 0,
+    externalVideoHeight: 0,
+    externalVideoMuted: null as boolean | null,
+    externalVideoAutoplay: null as boolean | null,
+    externalVideoPlayError: null as string | null,
+    externalVideoFrameCount: 0,
+    externalVideoLastFrameAtMs: 0,
+    externalVideoPresentedFrames: 0,
     xrKeyboardToggleVisible: false,
     xrKeyboardVisible: false,
     xrKeyboardOpen: false,
@@ -3645,12 +3755,9 @@ function reportXrTelemetry(frameContext: RuntimeFrameContext): void {
 
 function attachVideoTrack(track: Track, options: { remote: boolean } = { remote: true }): void {
   const element = track.attach() as HTMLVideoElement;
-  element.autoplay = true;
-  element.muted = true;
-  element.playsInline = true;
-  element.style.display = "none";
+  prepareHiddenVideoElement(element, { muted: true });
   document.body.appendChild(element);
-  void element.play().catch(() => undefined);
+  startHiddenVideoPlayback(element);
 
   const texture = new THREE.VideoTexture(element);
   texture.colorSpace = THREE.SRGBColorSpace;
@@ -3670,34 +3777,36 @@ function attachRemoteBrowserVideoTrack(track: Track, object: MediaObjectInstance
   }
   detachRemoteBrowserVideoTrack();
   const element = track.attach() as HTMLVideoElement;
-  element.autoplay = true;
-  element.muted = true;
-  element.playsInline = true;
-  element.style.display = "none";
+  prepareHiddenVideoElement(element, { muted: true });
   document.body.appendChild(element);
-  void element.play().catch(() => undefined);
 
   const texture = new THREE.VideoTexture(element);
   texture.colorSpace = THREE.SRGBColorSpace;
   applyDisplayTexture(texture);
 
+  resetRemoteBrowserExternalVideoDiagnostics();
   activeRemoteBrowserVideoTrack = track;
   activeRemoteBrowserVideoElement = element;
   activeRemoteBrowserVideoTrackSid = trackSid;
   activeRemoteBrowserObjectId = object.objectId;
+  startHiddenVideoPlayback(element, (error) => {
+    if (activeRemoteBrowserVideoElement === element) {
+      activeRemoteBrowserVideoPlayError = error;
+    }
+  });
+  startRemoteBrowserExternalVideoFrameDiagnostics(element);
   debugState.remoteBrowser.mediaConnected = true;
   debugState.remoteBrowser.mediaState = "connected";
   debugState.remoteBrowser.mediaHasVideo = true;
+  Object.assign(debugState.remoteBrowser, createRemoteBrowserExternalVideoDebugSnapshot());
 }
 
 function attachMockVideoStream(stream: MediaStream): void {
   const element = document.createElement("video");
-  element.autoplay = true;
-  element.muted = true;
-  element.playsInline = true;
-  element.style.display = "none";
+  prepareHiddenVideoElement(element, { muted: true });
   element.srcObject = stream;
   document.body.appendChild(element);
+  startHiddenVideoPlayback(element);
 
   const texture = new THREE.VideoTexture(element);
   texture.colorSpace = THREE.SRGBColorSpace;
@@ -3764,8 +3873,10 @@ function detachRemoteBrowserVideoTrack(track?: Track): void {
   }
   activeRemoteBrowserVideoTrackSid = null;
   activeRemoteBrowserObjectId = null;
+  resetRemoteBrowserExternalVideoDiagnostics();
   debugState.remoteBrowser.mediaConnected = false;
   debugState.remoteBrowser.mediaHasVideo = false;
+  Object.assign(debugState.remoteBrowser, createRemoteBrowserExternalVideoDebugSnapshot());
   const remoteBrowser = activeRemoteBrowserObjectForSurface(DEBUG_SURFACE_ID);
   if (remoteBrowser) {
     remoteBrowserRuntime.sync(remoteBrowser);
