@@ -73,6 +73,7 @@ test("remote browser viewport publisher page is not the capture target tab", () 
   assert.match(html, new RegExp(`<title>${remoteBrowserViewportPublisherTitle}</title>`));
   assert.match(html, new RegExp(`<button id="${remoteBrowserViewportPublisherButtonId}"`));
   assert.notEqual(remoteBrowserViewportPublisherTitle, remoteBrowserCaptureTargetTitle);
+  assert.equal(remoteBrowserViewportPublisherTitle.includes(remoteBrowserCaptureTargetTitle), false);
   assert.equal(html.includes(`<title>${remoteBrowserCaptureTargetTitle}</title>`), false);
 });
 

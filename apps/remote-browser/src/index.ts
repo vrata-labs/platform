@@ -152,7 +152,7 @@ const mediaIceServers = resolveRemoteBrowserMediaIceServers(process.env.REMOTE_B
 const apiInternalUrl = resolveInternalHttpUrl(process.env.API_INTERNAL_URL ?? process.env.NOAH_API_INTERNAL_URL, "http://127.0.0.1:4000");
 const roomStateInternalUrl = resolveInternalHttpUrl(process.env.ROOM_STATE_INTERNAL_URL ?? process.env.NOAH_ROOM_STATE_INTERNAL_URL, "http://127.0.0.1:2567");
 export const remoteBrowserCaptureTargetTitle = "Noah Remote Browser";
-export const remoteBrowserViewportPublisherTitle = "Noah Remote Browser Publisher";
+export const remoteBrowserViewportPublisherTitle = "Noah Capture Control";
 export const remoteBrowserViewportPublisherButtonId = "noah-remote-browser-start-capture";
 export const remoteBrowserCurrentTabCaptureButtonId = "noah-remote-browser-current-tab-capture";
 const remoteBrowserCaptureTitleGuardKey = "__NOAH_REMOTE_BROWSER_CAPTURE_TITLE_GUARD__";
@@ -331,7 +331,7 @@ const sessions = new Map<string, RemoteBrowserSession>();
 const urlPolicy = createRemoteBrowserUrlPolicy();
 
 export function remoteBrowserViewportPublisherHtml(): string {
-  return `<!doctype html><html><head><meta charset="utf-8"><title>${remoteBrowserViewportPublisherTitle}</title></head><body><button id="${remoteBrowserViewportPublisherButtonId}" type="button">Start capture</button></body></html>`;
+  return `<!doctype html><html><head><meta charset="utf-8"><title>${remoteBrowserViewportPublisherTitle}</title></head><body><button id="${remoteBrowserViewportPublisherButtonId}" type="button" style="position:fixed;left:0;top:0;width:2px;height:2px;opacity:0.01;z-index:2147483647;">Start capture</button></body></html>`;
 }
 
 export function remoteBrowserCaptureTitleGuard(title: string): void {
