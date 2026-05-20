@@ -454,6 +454,7 @@ export function remoteBrowserChromiumArgs(size: { width: number; height: number 
     "--autoplay-policy=no-user-gesture-required",
     "--enable-usermedia-screen-capturing",
     "--use-fake-ui-for-media-stream",
+    "--auto-accept-this-tab-capture",
     "--allow-http-screen-capture",
     "--alsa-output-device=pulse",
     `--auto-select-tab-capture-source-by-title=${remoteBrowserCaptureTargetTitle}`,
@@ -548,6 +549,13 @@ async function prepareViewportPublisherPage(session: RemoteBrowserSession): Prom
   await session.publisherPage.evaluate((title) => {
     document.title = title;
   }, remoteBrowserViewportPublisherTitle).catch(() => undefined);
+}
+
+async function waitForPagePaint(page: Page): Promise<void> {
+  await page.bringToFront().catch(() => undefined);
+  await page.evaluate(() => new Promise<void>((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+  })).catch(() => undefined);
 }
 
 async function grantPageDisplayCapture(session: RemoteBrowserSession, page: Page, origin: string): Promise<void> {
@@ -718,7 +726,7 @@ async function publishViewportFromCapturePage(input: { page: Page; livekitUrl: s
         });
     };
   }, { livekitUrl: input.livekitUrl, token: input.token, displayMediaOptions: input.captureOptions, buttonId: input.buttonId, removeButtonAfterCapture: input.removeButtonAfterCapture === true });
-  await input.page.bringToFront().catch(() => undefined);
+  await waitForPagePaint(input.page);
   await input.page.click(`#${input.buttonId}`, { timeout: 5000 });
   const resultHandle = await input.page.waitForFunction(() => {
     const pageWindow = window as Window & { __NOAH_REMOTE_BROWSER_PUBLISH_RESULT__?: unknown };
@@ -734,6 +742,7 @@ async function publishViewportFromCapturePage(input: { page: Page; livekitUrl: s
 
 async function publishViewportFromPublisherPage(session: RemoteBrowserSession, livekitUrl: string, token: string): Promise<RemoteBrowserViewportPublishResult> {
   await prepareViewportPublisherPage(session);
+  await waitForPagePaint(session.page);
   await grantViewportPublisherDisplayCapture(session);
   await session.publisherPage.addScriptTag({ path: resolveLiveKitClientBundlePath() });
   const result = await publishViewportFromCapturePage({
@@ -769,6 +778,7 @@ async function prepareCurrentTabCaptureButton(page: Page): Promise<void> {
 }
 
 async function publishViewportFromCurrentTab(session: RemoteBrowserSession, livekitUrl: string, token: string): Promise<RemoteBrowserViewportPublishResult> {
+  await waitForPagePaint(session.page);
   await grantCurrentTabDisplayCapture(session);
   await session.page.addScriptTag({ path: resolveLiveKitClientBundlePath() });
   await prepareCurrentTabCaptureButton(session.page);
