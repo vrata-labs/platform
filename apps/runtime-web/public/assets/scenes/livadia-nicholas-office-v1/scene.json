@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "sceneId": "livadia-nicholas-office-v1",
   "label": "Livadia Nicholas II Office",
-  "source": "Noah original procedural scene inspired by public-domain Livadia Palace imperial office history",
+  "source": "Noah original procedural art-pass scene inspired by public-domain Livadia Palace imperial office history",
   "glbPath": "scene.glb",
   "renderMode": "clean",
   "spawnPoints": [
@@ -11,7 +11,7 @@
       "position": {
         "x": 0,
         "y": 0,
-        "z": 3.25
+        "z": 4.05
       }
     }
   ],
@@ -22,80 +22,80 @@
         "id": "livadia-office-desk-chair",
         "position": {
           "x": 0,
-          "y": 0.45,
-          "z": -2.2
+          "y": 0.48,
+          "z": -2.85
         },
         "yaw": 3.142,
         "seatHeight": 0.06,
-        "radius": 0.5,
+        "radius": 0.56,
         "label": "Imperial writing desk chair"
       },
       {
         "id": "livadia-office-guest-left",
         "position": {
-          "x": -0.9,
-          "y": 0.45,
-          "z": 0.55
+          "x": -1.18,
+          "y": 0.48,
+          "z": 0.8
         },
         "yaw": 0,
         "seatHeight": 0.06,
-        "radius": 0.48,
-        "label": "Guest chair left"
+        "radius": 0.54,
+        "label": "Guest armchair left"
       },
       {
         "id": "livadia-office-guest-right",
         "position": {
-          "x": 0.9,
-          "y": 0.45,
-          "z": 0.55
+          "x": 1.18,
+          "y": 0.48,
+          "z": 0.8
         },
         "yaw": 0,
         "seatHeight": 0.06,
-        "radius": 0.48,
-        "label": "Guest chair right"
+        "radius": 0.54,
+        "label": "Guest armchair right"
       },
       {
         "id": "livadia-office-sofa-left",
         "position": {
-          "x": -4.08,
-          "y": 0.46,
-          "z": 1.16
+          "x": -5.45,
+          "y": 0.5,
+          "z": 1.32
         },
         "yaw": -1.571,
         "seatHeight": 0.06,
-        "radius": 0.5,
-        "label": "Left sofa seat"
+        "radius": 0.56,
+        "label": "Sofa left seat"
       },
       {
         "id": "livadia-office-sofa-right",
         "position": {
-          "x": -4.08,
-          "y": 0.46,
-          "z": 2.28
+          "x": -5.45,
+          "y": 0.5,
+          "z": 2.68
         },
         "yaw": -1.571,
         "seatHeight": 0.06,
-        "radius": 0.5,
-        "label": "Right sofa seat"
+        "radius": 0.56,
+        "label": "Sofa right seat"
       },
       {
         "id": "livadia-office-fireplace-armchair",
         "position": {
-          "x": 3.62,
-          "y": 0.45,
-          "z": 1.25
+          "x": 4.65,
+          "y": 0.48,
+          "z": 1.2
         },
         "yaw": 1.571,
         "seatHeight": 0.06,
-        "radius": 0.5,
-        "label": "Fireplace armchair"
+        "radius": 0.56,
+        "label": "Fireplace reading armchair"
       }
     ]
   },
   "bounds": {
-    "width": 10.6,
-    "height": 4.3,
-    "depth": 8.6
+    "width": 14.2,
+    "height": 5.35,
+    "depth": 11.4
   },
   "preview": "preview.webp",
   "rights": {
@@ -110,8 +110,14 @@
     ],
     "sourceAssets": [
       {
-        "id": "livadia-nicholas-office-v1-procedural-geometry",
+        "id": "livadia-nicholas-office-v1-procedural-geometry-art-pass",
         "type": "mesh",
+        "author": "Noah/OpenCode",
+        "licenseRef": "LICENSES.md"
+      },
+      {
+        "id": "livadia-nicholas-office-v1-procedural-pbr-textures",
+        "type": "texture",
         "author": "Noah/OpenCode",
         "licenseRef": "LICENSES.md"
       },
@@ -126,5 +132,5 @@
   "visual": {
     "intentionalDark": false
   },
-  "notes": "Original room-scale VR office scene: warm Livadia-inspired imperial study, central writing desk, bookcases, Crimean coast windows, fireplace, seating anchors, and clean-mode lighting. No external meshes, textures, fonts, or private source paths."
+  "notes": "Original larger-scale VR office art pass: faceted sea-facing bay, arched windows, columns, coffered ceiling, procedural PBR-style damask, herringbone parquet, walnut, marble, velvet, leather, central imperial writing desk, fireplace lounge, library shelves, readable spawn, and clean-mode lighting. No external meshes, textures, fonts, photos, scans, or private source paths."
 }
