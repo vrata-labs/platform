@@ -381,13 +381,21 @@ function countDemoUiPixels(sample: SurfaceSample): number {
 }
 
 async function expectDefaultDemoViewportVisible(page: Page): Promise<void> {
-  await expect.poll(async () => {
+  let lastSample: SurfaceSample | null = null;
+  let lastUiPixels = 0;
+  let lastDebug: RemoteBrowserDebug["remoteBrowser"] | null = null;
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < 15000) {
     const sample = await sampleSurfaceRegion(page, { u: 0.13, v: 0.76 }, { width: 0.14, height: 0.14 });
-    return countDemoUiPixels(sample);
-  }, {
-    timeout: 15000,
-    intervals: [500, 1000]
-  }).toBeGreaterThan(4);
+    lastSample = sample;
+    lastUiPixels = countDemoUiPixels(sample);
+    lastDebug = (await readDebug(page))?.remoteBrowser ?? null;
+    if (lastUiPixels > 4) {
+      return;
+    }
+    await page.waitForTimeout(500);
+  }
+  expect(lastUiPixels, `default demo viewport stayed visually blank: ${JSON.stringify({ lastUiPixels, lastSample, remoteBrowser: lastDebug }, null, 2)}`).toBeGreaterThan(4);
 }
 
 function inputReachedRutubeHoverTarget(debug: RemoteBrowserDebug["remoteBrowser"] | null): boolean {

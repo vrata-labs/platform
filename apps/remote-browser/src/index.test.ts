@@ -139,6 +139,7 @@ test("remote browser Chromium auto-selects target tab by title instead of self-c
   const args = remoteBrowserChromiumArgs({ width: 640, height: 360 });
 
   assert.ok(args.includes(`--auto-select-tab-capture-source-by-title=${remoteBrowserCaptureTargetTitle}`));
+  assert.equal(args.some((arg) => arg.startsWith("--auto-select-desktop-capture-source=")), false);
   assert.equal(args.includes("--auto-accept-this-tab-capture"), false);
   assert.ok(args.includes("--window-size=640,360"));
 });
