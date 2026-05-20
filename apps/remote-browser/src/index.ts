@@ -444,22 +444,25 @@ async function getBrowser(): Promise<Browser> {
   browserPromise ??= chromium.launch({
     executablePath,
     headless,
-    args: [
-      "--autoplay-policy=no-user-gesture-required",
-      "--enable-usermedia-screen-capturing",
-      "--use-fake-ui-for-media-stream",
-      "--auto-accept-this-tab-capture",
-      "--allow-http-screen-capture",
-      "--alsa-output-device=pulse",
-      `--auto-select-desktop-capture-source=${remoteBrowserCaptureTargetTitle}`,
-      `--auto-select-tab-capture-source-by-title=${remoteBrowserCaptureTargetTitle}`,
-      "--disable-background-timer-throttling",
-      "--disable-backgrounding-occluded-windows",
-      "--disable-renderer-backgrounding",
-      `--window-size=${viewport.width},${viewport.height}`
-    ]
+    args: remoteBrowserChromiumArgs()
   });
   return browserPromise;
+}
+
+export function remoteBrowserChromiumArgs(size: { width: number; height: number } = viewport): string[] {
+  return [
+    "--autoplay-policy=no-user-gesture-required",
+    "--enable-usermedia-screen-capturing",
+    "--use-fake-ui-for-media-stream",
+    "--allow-http-screen-capture",
+    "--alsa-output-device=pulse",
+    `--auto-select-desktop-capture-source=${remoteBrowserCaptureTargetTitle}`,
+    `--auto-select-tab-capture-source-by-title=${remoteBrowserCaptureTargetTitle}`,
+    "--disable-background-timer-throttling",
+    "--disable-backgrounding-occluded-windows",
+    "--disable-renderer-backgrounding",
+    `--window-size=${size.width},${size.height}`
+  ];
 }
 
 export function resolveRemoteBrowserMediaIceServers(value: string | undefined): RTCIceServer[] {
@@ -785,13 +788,13 @@ async function publishViewportFromCurrentTab(session: RemoteBrowserSession, live
 async function publishViewportToLiveKit(session: RemoteBrowserSession): Promise<RemoteBrowserViewportPublishResult> {
   const { token, livekitUrl } = await requestRemoteBrowserMediaToken(session);
   try {
-    return await publishViewportFromCurrentTab(session, livekitUrl, token);
-  } catch (currentTabError) {
+    return await publishViewportFromPublisherPage(session, livekitUrl, token);
+  } catch (publisherError) {
     try {
-      return await publishViewportFromPublisherPage(session, livekitUrl, token);
-    } catch (publisherError) {
-      const publisherCode = remoteBrowserPublishErrorCode(publisherError);
-      throw new Error(`${publisherCode}:currentTab=${remoteBrowserErrorDetail(currentTabError)}; publisher=${remoteBrowserErrorDetail(publisherError)}`);
+      return await publishViewportFromCurrentTab(session, livekitUrl, token);
+    } catch (currentTabError) {
+      const currentTabCode = remoteBrowserPublishErrorCode(currentTabError);
+      throw new Error(`${currentTabCode}:publisher=${remoteBrowserErrorDetail(publisherError)}; currentTab=${remoteBrowserErrorDetail(currentTabError)}`);
     }
   }
 }

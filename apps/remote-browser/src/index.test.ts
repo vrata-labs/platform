@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   createRemoteBrowserCurrentTabCaptureOptions,
   createRemoteBrowserViewportCaptureOptions,
+  remoteBrowserChromiumArgs,
   remoteBrowserCurrentTabCaptureButtonId,
   remoteBrowserCaptureTargetTitle,
   remoteBrowserCaptureTitleGuard,
@@ -132,6 +133,14 @@ test("remote browser viewport capture excludes the publisher tab and requests au
   assert.equal(options.surfaceSwitching, "exclude");
   assert.equal(options.systemAudio, "include");
   assert.equal("preferCurrentTab" in options, false);
+});
+
+test("remote browser Chromium auto-selects target tab by title instead of self-capturing", () => {
+  const args = remoteBrowserChromiumArgs({ width: 640, height: 360 });
+
+  assert.ok(args.includes(`--auto-select-tab-capture-source-by-title=${remoteBrowserCaptureTargetTitle}`));
+  assert.equal(args.includes("--auto-accept-this-tab-capture"), false);
+  assert.ok(args.includes("--window-size=640,360"));
 });
 
 test("remote browser current-tab capture requests this tab with audio", () => {

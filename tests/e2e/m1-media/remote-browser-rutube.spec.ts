@@ -121,6 +121,14 @@ async function openRemoteBrowserUrl(page: Page, url: string): Promise<void> {
   await page.locator("#open-remote-browser").click();
 }
 
+async function openDefaultRemoteBrowserUrl(page: Page): Promise<string> {
+  await expect(page.locator("#remote-browser-url")).toHaveValue("/remote-browser-demo.html");
+  await expect(page.locator("#open-remote-browser")).toBeEnabled();
+  const expectedUrl = await page.evaluate(() => new URL("/remote-browser-demo.html", window.location.origin).toString());
+  await page.locator("#open-remote-browser").click();
+  return expectedUrl;
+}
+
 async function waitForRemoteBrowserViewportState(page: Page, expectedUrl: string): Promise<void> {
   await expect.poll(async () => {
     const debug = await readDebug(page);
@@ -184,6 +192,48 @@ async function waitForRutubeMedia(page: Page): Promise<void> {
     hasVideoTrackState: true,
     hasAudioTrackState: true,
     sourceBounded: true
+  });
+}
+
+async function waitForRemoteBrowserViewportMedia(page: Page, expectedUrl: string): Promise<void> {
+  await expect.poll(async () => {
+    const debug = await readDebug(page);
+    return {
+      status: debug?.remoteBrowser?.status ?? null,
+      currentUrl: debug?.remoteBrowser?.currentUrl ?? null,
+      mediaState: debug?.remoteBrowser?.mediaState ?? null,
+      mediaConnected: debug?.remoteBrowser?.mediaConnected ?? false,
+      mediaHasVideo: debug?.remoteBrowser?.mediaHasVideo ?? false,
+      mediaHasAudio: debug?.remoteBrowser?.mediaHasAudio ?? false,
+      hasVideoTrackState: Boolean(debug?.remoteBrowser?.mediaTrackSid),
+      hasAudioTrackState: Boolean(debug?.remoteBrowser?.audioTrackSid),
+      externalVideoAttached: debug?.remoteBrowser?.externalVideoAttached ?? false,
+      externalVideoReadyState: debug?.remoteBrowser?.externalVideoReadyState ?? null,
+      externalVideoWidth: debug?.remoteBrowser?.externalVideoWidth ?? 0,
+      externalVideoHeight: debug?.remoteBrowser?.externalVideoHeight ?? 0,
+      externalVideoFrameCountReady: (debug?.remoteBrowser?.externalVideoFrameCount ?? 0) > 5,
+      errorCode: debug?.remoteBrowser?.errorCode ?? null,
+      mediaErrorCode: debug?.remoteBrowser?.mediaErrorCode ?? null
+    };
+  }, {
+    timeout: 90000,
+    intervals: [500, 1000, 2000, 3000]
+  }).toEqual({
+    status: "active",
+    currentUrl: expectedUrl,
+    mediaState: "connected",
+    mediaConnected: true,
+    mediaHasVideo: true,
+    mediaHasAudio: true,
+    hasVideoTrackState: true,
+    hasAudioTrackState: true,
+    externalVideoAttached: true,
+    externalVideoReadyState: 4,
+    externalVideoWidth: 1280,
+    externalVideoHeight: 720,
+    externalVideoFrameCountReady: true,
+    errorCode: null,
+    mediaErrorCode: null
   });
 }
 
@@ -321,6 +371,23 @@ function averageRgbDiff(left: SurfaceSample, right: SurfaceSample): number {
     total += Math.abs(leftSample[2] - rightSample[2]);
   }
   return total / Math.max(1, count * 3);
+}
+
+function countDemoUiPixels(sample: SurfaceSample): number {
+  return sample.samples.filter(([r, g, b]) => (
+    (b > 140 && r < 120)
+    || (r < 110 && g < 110 && b < 140)
+  )).length;
+}
+
+async function expectDefaultDemoViewportVisible(page: Page): Promise<void> {
+  await expect.poll(async () => {
+    const sample = await sampleSurfaceRegion(page, { u: 0.13, v: 0.76 }, { width: 0.14, height: 0.14 });
+    return countDemoUiPixels(sample);
+  }, {
+    timeout: 15000,
+    intervals: [500, 1000]
+  }).toBeGreaterThan(4);
 }
 
 function inputReachedRutubeHoverTarget(debug: RemoteBrowserDebug["remoteBrowser"] | null): boolean {
@@ -475,6 +542,35 @@ test("@staging @rutube real Rutube remote browser keeps hover UI, video transpor
     await dismissRutubeOverlays(page);
     await expectVisibleHoverResponse(page);
     await expectNoFrameBacklog(page, [0, 20, 40]);
+  } finally {
+    if (roomId) {
+      await deleteTemporaryRoom(request, roomId);
+    }
+  }
+});
+
+test("@staging remote browser default demo renders visible viewport and receives input", async ({ page, request }) => {
+  test.setTimeout(180000);
+  let roomId: string | null = null;
+
+  try {
+    roomId = await createTemporaryBlueOfficeRoom(request);
+    await page.goto(`/rooms/${roomId}?role=host&debug=1&scenefit=0`, { waitUntil: "domcontentloaded" });
+    await waitForBlueOfficeKernel(page);
+
+    const expectedUrl = await openDefaultRemoteBrowserUrl(page);
+    await waitForRemoteBrowserViewportState(page, expectedUrl);
+    await waitForRemoteBrowserViewportMedia(page, expectedUrl);
+    await expectDefaultDemoViewportVisible(page);
+
+    await sendSurfaceInput(page, { kind: "click", u: 0.13, v: 0.76 });
+    await expect.poll(async () => {
+      const debug = await readDebug(page);
+      return debug?.remoteBrowser?.lastExecutorInput?.targetDetail ?? "";
+    }, {
+      timeout: 10000,
+      intervals: [250, 500]
+    }).toContain("button#increment");
   } finally {
     if (roomId) {
       await deleteTemporaryRoom(request, roomId);
