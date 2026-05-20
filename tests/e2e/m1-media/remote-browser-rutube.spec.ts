@@ -222,6 +222,13 @@ async function sendSurfaceInput(page: Page, input: { source?: string; kind: stri
   return Date.now() - startedAt;
 }
 
+async function focusDebugSurface(page: Page): Promise<void> {
+  const focused = await page.evaluate(() => (window as Window & {
+    __NOAH_TEST__?: { focusDebugSurface: () => boolean };
+  }).__NOAH_TEST__?.focusDebugSurface() ?? false);
+  expect(focused).toBe(true);
+}
+
 async function surfaceClientPoint(page: Page, u: number, v: number): Promise<{ x: number; y: number }> {
   const point = await page.evaluate((value) => (window as Window & {
     __NOAH_TEST__?: { getDebugSurfaceClientPosition: (u: number, v: number) => { x: number; y: number } | null };
@@ -369,6 +376,7 @@ async function expectVisibleHoverResponse(page: Page, candidates: Array<{ u: num
 }
 
 async function dismissRutubeOverlays(page: Page): Promise<void> {
+  await focusDebugSurface(page);
   for (let index = 0; index < 2; index += 1) {
     await sendSurfaceInput(page, { source: "keyboard", kind: "key-down", key: "Escape" });
     await sendSurfaceInput(page, { source: "keyboard", kind: "key-up", key: "Escape" });
