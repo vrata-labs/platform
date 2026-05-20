@@ -22,6 +22,7 @@ interface RemoteBrowserSession {
   publisherPage: Page;
   clients: Set<WebSocket>;
   mediaClients: Set<WebSocket>;
+  serviceAllowedOrigins: Set<string>;
   frameTimer: ReturnType<typeof setInterval>;
   frameCaptureInFlight: boolean;
   lastFrameAtMs: number;
@@ -388,6 +389,29 @@ export function createRemoteBrowserCurrentTabCaptureOptions(size: { width: numbe
     surfaceSwitching: "exclude",
     systemAudio: "include"
   } as unknown as DisplayMediaStreamOptions;
+}
+
+export function remoteBrowserServiceUrlOrigins(value: string): string[] {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return [];
+  }
+  if (url.protocol !== "wss:" && url.protocol !== "ws:" && url.protocol !== "https:" && url.protocol !== "http:") {
+    return [];
+  }
+  const origins = new Set<string>([url.origin]);
+  if (url.protocol === "wss:") {
+    origins.add(`https://${url.host}`);
+  } else if (url.protocol === "ws:") {
+    origins.add(`http://${url.host}`);
+  } else if (url.protocol === "https:") {
+    origins.add(`wss://${url.host}`);
+  } else if (url.protocol === "http:") {
+    origins.add(`ws://${url.host}`);
+  }
+  return [...origins];
 }
 
 function json(response: ServerResponse, statusCode: number, body: unknown): void {
@@ -796,16 +820,10 @@ async function publishViewportFromCurrentTab(session: RemoteBrowserSession, live
 
 async function publishViewportToLiveKit(session: RemoteBrowserSession): Promise<RemoteBrowserViewportPublishResult> {
   const { token, livekitUrl } = await requestRemoteBrowserMediaToken(session);
-  try {
-    return await publishViewportFromCurrentTab(session, livekitUrl, token);
-  } catch (currentTabError) {
-    try {
-      return await publishViewportFromPublisherPage(session, livekitUrl, token);
-    } catch (publisherError) {
-      const publisherCode = remoteBrowserPublishErrorCode(publisherError);
-      throw new Error(`${publisherCode}:currentTab=${remoteBrowserErrorDetail(currentTabError)}; publisher=${remoteBrowserErrorDetail(publisherError)}`);
-    }
+  for (const origin of remoteBrowserServiceUrlOrigins(livekitUrl)) {
+    session.serviceAllowedOrigins.add(origin);
   }
+  return await publishViewportFromCurrentTab(session, livekitUrl, token);
 }
 
 async function startViewportPublisher(session: RemoteBrowserSession): Promise<void> {
@@ -1154,9 +1172,19 @@ async function handleFrameSocketMessage(session: RemoteBrowserSession, ws: WebSo
   }));
 }
 
-async function installRequestGuard(page: Page, policy: RemoteBrowserUrlPolicy): Promise<void> {
+async function installRequestGuard(page: Page, policy: RemoteBrowserUrlPolicy, options: { serviceAllowedOrigins?: () => ReadonlySet<string> } = {}): Promise<void> {
   await page.route("**/*", async (route) => {
-    const validation = await validateRemoteBrowserUrl(route.request().url(), policy);
+    const requestUrl = route.request().url();
+    try {
+      const origin = new URL(requestUrl).origin;
+      if (options.serviceAllowedOrigins?.().has(origin)) {
+        await route.continue();
+        return;
+      }
+    } catch {
+      // Fall through to the normal URL policy validation.
+    }
+    const validation = await validateRemoteBrowserUrl(requestUrl, policy);
     if (!validation.allowed) {
       await route.abort("blockedbyclient");
       return;
@@ -1211,8 +1239,9 @@ async function createSession(input: { sessionId: string; frameStreamId?: string;
     bypassCSP: true,
     permissions: []
   });
+  const serviceAllowedOrigins = new Set<string>();
   const page = await context.newPage();
-  await installRequestGuard(page, urlPolicy);
+  await installRequestGuard(page, urlPolicy, { serviceAllowedOrigins: () => serviceAllowedOrigins });
   await installRemoteBrowserPageStyles(page);
   try {
     await page.goto(validation.normalizedUrl, { waitUntil: "domcontentloaded", timeout: 15000 });
@@ -1237,6 +1266,7 @@ async function createSession(input: { sessionId: string; frameStreamId?: string;
     publisherPage,
     clients: new Set<WebSocket>(),
     mediaClients: new Set<WebSocket>(),
+    serviceAllowedOrigins,
     frameTimer: setInterval(() => {
       void captureFrame(session).catch(() => undefined);
     }, frameIntervalMs),

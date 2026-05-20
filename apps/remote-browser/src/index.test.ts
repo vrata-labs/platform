@@ -11,6 +11,7 @@ import {
   remoteBrowserEventPoint,
   remoteBrowserInitScript,
   remoteBrowserMouseMoveSteps,
+  remoteBrowserServiceUrlOrigins,
   remoteBrowserScrollDelta,
   remoteBrowserViewportPublisherButtonId,
   remoteBrowserViewportPublisherHtml,
@@ -157,6 +158,18 @@ test("remote browser current-tab capture requests this tab with audio", () => {
   assert.equal(options.surfaceSwitching, "exclude");
   assert.equal(options.systemAudio, "include");
   assert.notEqual(remoteBrowserCurrentTabCaptureButtonId, remoteBrowserViewportPublisherButtonId);
+});
+
+test("remote browser allows LiveKit service origins through the page request guard", () => {
+  assert.deepEqual(remoteBrowserServiceUrlOrigins("wss://livekit.89.169.161.91.sslip.io"), [
+    "wss://livekit.89.169.161.91.sslip.io",
+    "https://livekit.89.169.161.91.sslip.io"
+  ]);
+  assert.deepEqual(remoteBrowserServiceUrlOrigins("https://livekit.example.test/rtc"), [
+    "https://livekit.example.test",
+    "wss://livekit.example.test"
+  ]);
+  assert.deepEqual(remoteBrowserServiceUrlOrigins("ftp://example.test"), []);
 });
 
 test("remoteBrowserScrollDelta preserves desktop wheel direction", () => {
