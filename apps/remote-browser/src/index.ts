@@ -401,15 +401,9 @@ export function remoteBrowserServiceUrlOrigins(value: string): string[] {
   if (url.protocol !== "wss:" && url.protocol !== "ws:" && url.protocol !== "https:" && url.protocol !== "http:") {
     return [];
   }
-  const origins = new Set<string>([url.origin]);
-  if (url.protocol === "wss:") {
-    origins.add(`https://${url.host}`);
-  } else if (url.protocol === "ws:") {
-    origins.add(`http://${url.host}`);
-  } else if (url.protocol === "https:") {
-    origins.add(`wss://${url.host}`);
-  } else if (url.protocol === "http:") {
-    origins.add(`ws://${url.host}`);
+  const origins = new Set<string>();
+  for (const protocol of ["wss", "https", "ws", "http"]) {
+    origins.add(`${protocol}://${url.host}`);
   }
   return [...origins];
 }

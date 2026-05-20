@@ -163,11 +163,15 @@ test("remote browser current-tab capture requests this tab with audio", () => {
 test("remote browser allows LiveKit service origins through the page request guard", () => {
   assert.deepEqual(remoteBrowserServiceUrlOrigins("wss://livekit.89.169.161.91.sslip.io"), [
     "wss://livekit.89.169.161.91.sslip.io",
-    "https://livekit.89.169.161.91.sslip.io"
+    "https://livekit.89.169.161.91.sslip.io",
+    "ws://livekit.89.169.161.91.sslip.io",
+    "http://livekit.89.169.161.91.sslip.io"
   ]);
   assert.deepEqual(remoteBrowserServiceUrlOrigins("https://livekit.example.test/rtc"), [
+    "wss://livekit.example.test",
     "https://livekit.example.test",
-    "wss://livekit.example.test"
+    "ws://livekit.example.test",
+    "http://livekit.example.test"
   ]);
   assert.deepEqual(remoteBrowserServiceUrlOrigins("ftp://example.test"), []);
 });
