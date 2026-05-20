@@ -185,12 +185,12 @@ async function waitForRutubeMedia(page: Page): Promise<void> {
   });
 }
 
-async function sendSurfaceInput(page: Page, input: { kind: string; u?: number; v?: number; scrollDelta?: { x: number; y: number } }): Promise<number> {
+async function sendSurfaceInput(page: Page, input: { source?: string; kind: string; u?: number; v?: number; key?: string; text?: string; scrollDelta?: { x: number; y: number } }): Promise<number> {
   const beforeDebug = await readDebug(page);
   const beforeSeq = beforeDebug?.remoteBrowser?.lastInputSeq ?? 0;
   const beforeExecutorInput = beforeDebug?.remoteBrowser?.lastExecutorInput ?? null;
   const sent = await page.evaluate((value) => (window as Window & {
-    __NOAH_TEST__?: { sendDebugSurfaceInput: (input?: { kind?: string; u?: number; v?: number; scrollDelta?: { x: number; y: number } }) => boolean };
+    __NOAH_TEST__?: { sendDebugSurfaceInput: (input?: { source?: string; kind?: string; u?: number; v?: number; key?: string; text?: string; scrollDelta?: { x: number; y: number } }) => boolean };
   }).__NOAH_TEST__?.sendDebugSurfaceInput(value) ?? false, input);
   expect(sent).toBe(true);
   const startedAt = Date.now();
@@ -369,9 +369,12 @@ async function expectVisibleHoverResponse(page: Page, candidates: Array<{ u: num
 }
 
 async function dismissRutubeOverlays(page: Page): Promise<void> {
+  for (let index = 0; index < 2; index += 1) {
+    await sendSurfaceInput(page, { source: "keyboard", kind: "key-down", key: "Escape" });
+    await sendSurfaceInput(page, { source: "keyboard", kind: "key-up", key: "Escape" });
+    await page.waitForTimeout(500);
+  }
   const overlayTargets = [
-    { u: 0.5, v: 0.235 },
-    { u: 0.5, v: 0.265 },
     { u: 0.68, v: 0.87 },
     { u: 0.68, v: 0.85 },
     { u: 0.4, v: 0.16 },
