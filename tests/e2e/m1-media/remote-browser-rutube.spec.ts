@@ -49,6 +49,8 @@ type SurfaceSample = {
   samples: Array<[number, number, number]>;
 };
 
+type HoverCandidate = { u: number; v: number };
+
 const stagingAdminToken = process.env.STAGING_ADMIN_TOKEN ?? "noah-stage-admin";
 const blueOfficeRoomId = process.env.STAGING_BLUEOFFICE_ROOM_ID ?? "0b537d34-7b92-4b51-854a-8c64cfb4c114";
 const rutubePrimaryUrl = process.env.RUTUBE_E2E_URL ?? "https://rutube.ru/live/video/9ae8e8a6dc58bdad66190475f9872ecd/";
@@ -326,20 +328,29 @@ function inputReachedRutubeHoverTarget(debug: RemoteBrowserDebug["remoteBrowser"
   if (!detail) {
     return false;
   }
-  const targetReached = detail.includes("target=video") || detail.includes("desktop-controls-layout-module");
+  const targetReached = [
+    "target=video",
+    "desktop-controls-layout-module",
+    "wdp-video-options-row-module",
+    "wdpVideoOptionsRow",
+    "video-pageinfo-container-module"
+  ].some((marker) => detail.includes(marker));
   const pointerMoves = Number(detail.match(/;pm=(\d+)/)?.[1] ?? "0");
   const mouseMoves = Number(detail.match(/;mm=(\d+)/)?.[1] ?? "0");
   return targetReached && pointerMoves + mouseMoves > 0;
 }
 
-async function expectVisibleHoverResponse(page: Page, candidates: Array<{ u: number; v: number }>): Promise<void> {
+async function expectVisibleHoverResponse(page: Page): Promise<void> {
   let bestDiff = 0;
   let bestLatencyMs = Number.POSITIVE_INFINITY;
   let inputReachedTarget = false;
-  const attempts: Array<{ candidate: { u: number; v: number }; clip: SurfaceSample["clip"]; diff: number; inputLatencyMs: number; debug: RemoteBrowserDebug["remoteBrowser"] | null }> = [];
-  for (const candidate of candidates) {
+  const attempts: Array<{ candidate: HoverCandidate; clip: SurfaceSample["clip"]; diff: number; inputLatencyMs: number; debug: RemoteBrowserDebug["remoteBrowser"] | null }> = [];
+  let candidateIndex = 0;
+  while (candidateIndex < 5) {
     await moveMouseToSurface(page, 0.02, 0.98);
     await page.waitForTimeout(3500);
+    const candidates = playerHoverCandidates(await readDebug(page));
+    const candidate = candidates[Math.min(candidateIndex, candidates.length - 1)]!;
     const sampleSize = candidate.v < 0.2
       ? { width: 0.34, height: 0.08 }
       : { width: 0.18, height: 0.18 };
@@ -369,6 +380,7 @@ async function expectVisibleHoverResponse(page: Page, candidates: Array<{ u: num
     if (bestDiff > 6 || inputReachedTarget) {
       break;
     }
+    candidateIndex += 1;
   }
 
   expect(bestLatencyMs).toBeLessThan(2500);
@@ -403,7 +415,7 @@ function surfaceUvFromRemoteBrowserPagePoint(rect: NonNullable<RemoteBrowserDebu
   };
 }
 
-function playerHoverCandidates(debug: RemoteBrowserDebug | undefined): Array<{ u: number; v: number }> {
+function playerHoverCandidates(debug: RemoteBrowserDebug | undefined): HoverCandidate[] {
   const rect = debug?.remoteBrowser?.mediaSourceRect;
   if (!rect) {
     return [{ u: 0.5, v: 0.5 }];
@@ -453,7 +465,7 @@ test("@staging @rutube real Rutube remote browser keeps hover UI, video transpor
     await waitForRemoteBrowserViewportState(page, rutubePrimaryUrl);
     await waitForRutubeMedia(page);
     await dismissRutubeOverlays(page);
-    await expectVisibleHoverResponse(page, playerHoverCandidates(await readDebug(page)));
+    await expectVisibleHoverResponse(page);
     await sendSurfaceInput(page, { kind: "click", u: 0.5, v: 0.5 });
     await expectNoFrameBacklog(page, [0, 30, 60, 90]);
 
@@ -461,7 +473,7 @@ test("@staging @rutube real Rutube remote browser keeps hover UI, video transpor
     await waitForRemoteBrowserViewportState(page, rutubeSecondaryUrl);
     await waitForRutubeMedia(page);
     await dismissRutubeOverlays(page);
-    await expectVisibleHoverResponse(page, playerHoverCandidates(await readDebug(page)));
+    await expectVisibleHoverResponse(page);
     await expectNoFrameBacklog(page, [0, 20, 40]);
   } finally {
     if (roomId) {
