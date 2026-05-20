@@ -836,13 +836,22 @@ async function startViewportPublisher(session: RemoteBrowserSession): Promise<vo
 
 async function reportRemoteBrowserMediaSourceRect(session: RemoteBrowserSession): Promise<void> {
   const rect = await waitForRemoteBrowserMediaSourceRect(session.page);
+  await patchRemoteBrowserMediaSourceRect(session, rect, "source-rect");
+}
+
+async function refreshRemoteBrowserMediaSourceRect(session: RemoteBrowserSession): Promise<void> {
+  const rect = await resolveRemoteBrowserMediaSourceRect(session.page);
+  await patchRemoteBrowserMediaSourceRect(session, rect, "source-rect-input");
+}
+
+async function patchRemoteBrowserMediaSourceRect(session: RemoteBrowserSession, rect: RemoteBrowserMediaSourceRect | undefined, kind: string): Promise<void> {
   if (!rect || sessions.get(session.sessionId) !== session) {
     return;
   }
   await patchRemoteBrowserExecutorState(session, {
     type: "mark-source-rect",
     mediaSourceRect: rect,
-    inputEventId: remoteBrowserExecutorInputEventId(session, "source-rect")
+    inputEventId: remoteBrowserExecutorInputEventId(session, kind)
   });
 }
 
@@ -1482,6 +1491,9 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     }
     const inputDiagnostic = await applyInput(session, payload);
     if (inputDiagnostic) {
+      if (inputDiagnostic.status === "applied") {
+        await refreshRemoteBrowserMediaSourceRect(session).catch(() => undefined);
+      }
       await patchRemoteBrowserExecutorState(session, {
         type: "mark-input-applied",
         input: inputDiagnostic,
