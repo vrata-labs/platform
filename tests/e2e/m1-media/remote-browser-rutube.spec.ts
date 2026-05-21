@@ -572,7 +572,7 @@ test("@staging remote browser default demo renders visible viewport and receives
     await waitForRemoteBrowserViewportMedia(page, expectedUrl);
     await expectDefaultDemoViewportVisible(page);
 
-    await sendSurfaceInput(page, { kind: "click", u: 0.13, v: 0.76 });
+    await sendSurfaceInput(page, { kind: "click", u: 0.13, v: 0.67 });
     await expect.poll(async () => {
       const debug = await readDebug(page);
       return debug?.remoteBrowser?.lastExecutorInput?.targetDetail ?? "";
