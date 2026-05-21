@@ -408,6 +408,14 @@ export function remoteBrowserServiceUrlOrigins(value: string): string[] {
   return [...origins];
 }
 
+export function shouldRequestPublicLivekitUrlForPage(pageUrl: string): boolean {
+  try {
+    return new URL(pageUrl).protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
 function json(response: ServerResponse, statusCode: number, body: unknown): void {
   response.writeHead(statusCode, {
     "content-type": "application/json; charset=utf-8",
@@ -544,7 +552,8 @@ async function requestRemoteBrowserMediaToken(session: RemoteBrowserSession): Pr
       roomId: session.roomId,
       objectId: session.objectId,
       executorSessionId: session.sessionId,
-      mediaParticipantId: session.mediaParticipantId
+      mediaParticipantId: session.mediaParticipantId,
+      preferPublicLivekitUrl: shouldRequestPublicLivekitUrlForPage(session.page.url() || session.url)
     })
   });
   if (!response.ok) {

@@ -549,6 +549,52 @@ test("remote browser media token requires internal auth and scoped publisher ide
   }
 });
 
+test("remote browser media token can prefer public livekit url for secure captured pages", async () => {
+  process.env.NOAH_DISABLE_AUTOSTART = "1";
+  process.env.API_PORT = "4028";
+  process.env.NOAH_INTERNAL_SERVICE_TOKEN = "internal-token";
+  process.env.LIVEKIT_URL = "ws://89.169.161.91:7880";
+  process.env.NOAH_LIVEKIT_DOMAIN = "livekit.89.169.161.91.sslip.io";
+  const module = await import("./index.js");
+  const server = module.startApiServer(4028);
+
+  try {
+    const headers = {
+      "content-type": "application/json",
+      "x-noah-internal-token": "internal-token"
+    };
+    const basePayload = {
+      roomId: "demo-room",
+      objectId: "browser-1",
+      executorSessionId: "remote-browser:browser-1",
+      mediaParticipantId: "remote-browser:browser-1"
+    };
+    const internalResponse = await fetch("http://127.0.0.1:4028/api/tokens/remote-browser-media", {
+      method: "POST",
+      headers,
+      body: JSON.stringify(basePayload)
+    });
+    assert.equal(internalResponse.ok, true);
+    const internalPayload = (await internalResponse.json()) as { livekitUrl?: string };
+    assert.equal(internalPayload.livekitUrl, "ws://89.169.161.91:7880");
+
+    const publicResponse = await fetch("http://127.0.0.1:4028/api/tokens/remote-browser-media", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ ...basePayload, preferPublicLivekitUrl: true })
+    });
+    assert.equal(publicResponse.ok, true);
+    const publicPayload = (await publicResponse.json()) as { livekitUrl?: string };
+    assert.equal(publicPayload.livekitUrl, "wss://livekit.89.169.161.91.sslip.io");
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    delete process.env.NOAH_DISABLE_AUTOSTART;
+    delete process.env.NOAH_INTERNAL_SERVICE_TOKEN;
+    delete process.env.LIVEKIT_URL;
+    delete process.env.NOAH_LIVEKIT_DOMAIN;
+  }
+});
+
 test("room api accepts legacy top-level avatar fields and normalizes them into avatarConfig", async () => {
   process.env.NOAH_DISABLE_AUTOSTART = "1";
   process.env.API_PORT = "4018";

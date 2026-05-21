@@ -21,7 +21,8 @@ import {
   resolveRemoteBrowserMediaFrameIntervalMs,
   resolveRemoteBrowserMediaIceServers,
   shouldCaptureRemoteBrowserFrame,
-  shouldPreserveRemoteBrowserMediaOverlays
+  shouldPreserveRemoteBrowserMediaOverlays,
+  shouldRequestPublicLivekitUrlForPage
 } from "./index.js";
 import type { SurfaceInputEvent } from "@noah/shared-types";
 
@@ -174,6 +175,13 @@ test("remote browser allows LiveKit service origins through the page request gua
     "http://livekit.example.test"
   ]);
   assert.deepEqual(remoteBrowserServiceUrlOrigins("ftp://example.test"), []);
+});
+
+test("remote browser requests a public LiveKit URL for secure captured pages", () => {
+  assert.equal(shouldRequestPublicLivekitUrlForPage("https://rutube.ru/live/video/1/"), true);
+  assert.equal(shouldRequestPublicLivekitUrlForPage("https://89.169.161.91.sslip.io/remote-browser-demo.html"), true);
+  assert.equal(shouldRequestPublicLivekitUrlForPage("http://127.0.0.1:4000/remote-browser-demo.html"), false);
+  assert.equal(shouldRequestPublicLivekitUrlForPage("not a url"), false);
 });
 
 test("remoteBrowserScrollDelta preserves desktop wheel direction", () => {

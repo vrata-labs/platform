@@ -104,6 +104,7 @@ interface RemoteBrowserMediaTokenRequest {
   objectId?: string;
   executorSessionId?: string;
   mediaParticipantId?: string;
+  preferPublicLivekitUrl?: boolean;
 }
 
 interface RemoteBrowserFrameTokenRequest {
@@ -376,6 +377,30 @@ function getDefaultLivekitUrl(request?: IncomingMessage): string {
     return `${protocol}://livekit.${hostname}`;
   }
   return `${protocol}://livekit-${hostname}`;
+}
+
+function getConfiguredPublicLivekitUrl(): string | null {
+  const configured = process.env.LIVEKIT_PUBLIC_URL?.trim() || process.env.NOAH_LIVEKIT_DOMAIN?.trim();
+  if (!configured) {
+    return null;
+  }
+  try {
+    const url = new URL(configured.includes("://") ? configured : `wss://${configured}`);
+    url.protocol = "wss:";
+    url.pathname = "";
+    url.search = "";
+    url.hash = "";
+    return url.toString().replace(/\/$/, "");
+  } catch {
+    return null;
+  }
+}
+
+function getRemoteBrowserLivekitUrl(request: IncomingMessage, payload: RemoteBrowserMediaTokenRequest): string {
+  if (payload.preferPublicLivekitUrl) {
+    return getConfiguredPublicLivekitUrl() ?? getDefaultLivekitUrl(request);
+  }
+  return getDefaultLivekitUrl(request);
 }
 
 function getDefaultRemoteBrowserFrameStreamUrl(request?: IncomingMessage): string {
@@ -1312,7 +1337,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     json(response, 200, {
       token: await accessToken.toJwt(),
       expiresInSeconds: ttlSeconds,
-      livekitUrl: getDefaultLivekitUrl(request),
+      livekitUrl: getRemoteBrowserLivekitUrl(request, payload),
       participantId: payload.mediaParticipantId
     });
     return;
