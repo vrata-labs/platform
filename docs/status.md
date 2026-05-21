@@ -2,8 +2,8 @@
 
 ## Current phase
 
-- Active phase: `M1.8 — несколько медийных поверхностей и схемы размещения`
-- Overall state: `local_verified_pending_staging`
+- Active phase: `M1.9 — протокол расширений для независимых разработчиков`
+- Overall state: `ready_for_implementation`
 
 ## Phase checklist
 
@@ -59,9 +59,11 @@
 - M1.7 result: `remote-browser` works as a server-side browser executor with allowlisted URL opening, authoritative surface input, LiveKit viewport publishing, and normal remote audio playback path. The final audio fix exposes the PulseAudio monitor as a Chromium-compatible input source instead of accepting muted/video-only success.
 - M1.7 verification: focused local remote-browser/runtime checks passed, Docker audio probe passed, full local E2E passed with `90 passed` using `--workers=2`, CI `26223417565` passed, Docker Publish `26223417566` passed, Staging Deploy `26223562956` passed, and the staging gate passed with `35 passed` on deployed SHA `c6023ec1ae4e3ba4d75e7bb284be2bdb30f01828`.
 - M1.7 accepted limitations: audio can still stutter on VR and mobile under real device conditions. Treat this as a QoS/performance follow-up, not a blocker for starting M1.8, unless it regresses the core media-surface flow.
-- M1.8 local implementation is complete as of 2026-05-21 and pending commit/push/staging verification. The first product slice adds default independent surfaces `debug-main`, `whiteboard-wall`, and `laptop-screen`; a runtime surface selector; per-surface active object/texture routing; and hit-surface-based input routing for screen share, whiteboard, and remote browser.
-- M1.8 local verification: package-specific builds/tests/lint for touched packages passed; root `pnpm run lint`, `pnpm run typecheck`, `pnpm run build`, and `pnpm run test` passed; focused `multi-surface-layouts` passed; related M1 media specs passed (`18 passed` including M1.8); and full local E2E with `--workers=2` passed (`90 passed`, `1 skipped`).
-- Next focus: publish M1.8 through the normal git-based staging pipeline and verify the deployed commit on staging.
+- M1.8 multi-surface layouts are complete as of 2026-05-21. Final deployed commit: `e7a3187b89a4f16a441e22909339436d9c62e697`.
+- M1.8 result: the first product slice adds default independent surfaces `debug-main`, `whiteboard-wall`, and `laptop-screen`; a runtime surface selector; per-surface active object/texture routing; legacy room default-surface repair; and hit-surface-based input routing for screen share, whiteboard, and remote browser.
+- M1.8 verification: package-specific builds/tests/lint for touched packages passed; root `pnpm run lint`, `pnpm run typecheck`, `pnpm run build`, and `pnpm run test` passed; related M1 media specs passed (`18 passed` including M1.8); full local E2E with `--workers=2` passed (`90 passed`, `1 skipped`); CI `26237312112` passed; Docker Publish `26237312118` passed; Staging Deploy `26237508379` passed; staging gate passed with `35 passed`; and focused staging `multi-surface-layouts` passed with `1 passed`.
+- M1.8 rollback/retry notes: no rollback and no deploy retry were needed.
+- Next focus: M1.9 extension protocol.
 
 - M0.5 focuses on acceptance of the existing basic multi-user presence path: diagnostics, pose orientation, remote visibility, join/leave cleanup, voice state, spatial-audio diagnostics, and XR-mode simulation.
 - M0.5 explicitly excludes humanoid avatars, new room templates, and control-plane expansion.
