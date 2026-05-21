@@ -119,3 +119,27 @@ export function resolveScreenShareSurfaceForOwner(mediaObjects: RoomMediaObjects
   });
   return object?.surfaceId ?? fallbackSurfaceId;
 }
+
+export function screenShareObjectForMediaTrack(mediaObjects: RoomMediaObjectsState | null, ownerParticipantId: string | null | undefined, trackSid: string | null | undefined): MediaObjectInstance<ScreenShareObjectState> | null {
+  if (!mediaObjects || !ownerParticipantId) {
+    return null;
+  }
+  let ownerScopedMatch: MediaObjectInstance<ScreenShareObjectState> | null = null;
+  for (const object of Object.values(mediaObjects.objects)) {
+    if (object.type !== SCREEN_SHARE_OBJECT_TYPE || !isScreenShareState(object.state)) {
+      continue;
+    }
+    const state = object.state as ScreenShareObjectState;
+    if (state.ownerParticipantId !== ownerParticipantId || state.status !== "active") {
+      continue;
+    }
+    if (!state.mediaTrackSid || (trackSid && state.mediaTrackSid !== trackSid)) {
+      if (!ownerScopedMatch) {
+        ownerScopedMatch = object as MediaObjectInstance<ScreenShareObjectState>;
+      }
+      continue;
+    }
+    return object as MediaObjectInstance<ScreenShareObjectState>;
+  }
+  return ownerScopedMatch;
+}

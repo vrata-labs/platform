@@ -58,7 +58,8 @@ import {
   activeWhiteboardObjectForSurface as selectActiveWhiteboardObjectForSurface,
   remoteBrowserObjectForMediaTrack,
   remoteBrowserObjectNeedsLiveKitRoom,
-  resolveScreenShareSurfaceForOwner
+  resolveScreenShareSurfaceForOwner,
+  screenShareObjectForMediaTrack
 } from "./media/media-object-state.js";
 import { routeMediaObjectSurfaceInput } from "./media/media-object-router.js";
 import { createRemoteBrowserObjectRuntime } from "./media/remote-browser-object.js";
@@ -485,10 +486,22 @@ let mobileTouchLastClientY = 0;
 const mobileTouchVector = { x: 0, z: 0 };
 let diagnosticsAccumulator = 0;
 let latestMode: PresenceState["mode"] = presenceXrMockEnabled ? "vr" : /android|iphone|ipad/i.test(navigator.userAgent) ? "mobile" : "desktop";
-let activeScreenShareTrack: Track | null = null;
-let activeScreenShareElement: HTMLVideoElement | null = null;
-let activeScreenShareSurfaceId: string | null = null;
-let activeRemoteScreenShareTrackCount = 0;
+
+type ScreenShareRuntimeEntry = {
+  objectId: string;
+  surfaceId: string;
+  ownerParticipantId: string | null;
+  mediaTrackSid: string | null;
+  remote: boolean;
+  track: Track | null;
+  element: HTMLVideoElement | null;
+  texture: THREE.Texture | null;
+  stream: MediaStream | null;
+  publishedTracks: MediaStreamTrack[];
+  stopping: boolean;
+};
+
+const screenShareRuntimeByObjectId = new Map<string, ScreenShareRuntimeEntry>();
 let activeRemoteBrowserVideoTrack: Track | null = null;
 let activeRemoteBrowserVideoElement: HTMLVideoElement | null = null;
 let activeRemoteBrowserVideoTrackSid: string | null = null;
@@ -498,10 +511,6 @@ let activeRemoteBrowserVideoPlayError: string | null = null;
 let activeRemoteBrowserVideoFrameCount = 0;
 let activeRemoteBrowserVideoLastFrameAtMs = 0;
 let activeRemoteBrowserVideoPresentedFrames = 0;
-let isScreenSharing = false;
-let activeMockScreenShareStream: MediaStream | null = null;
-let localScreenShareObjectId: string | null = null;
-let localScreenShareSurfaceId: string | null = null;
 let lastScreenShareStoppedAtMs = 0;
 let mediaRoomReady = false;
 let remoteBrowserMediaRoomPromise: Promise<void> | null = null;
@@ -1004,6 +1013,24 @@ function findActiveScreenShareObject(): MediaObjectInstance<ScreenShareObjectSta
   return findActiveObjectByType<ScreenShareObjectState>(SCREEN_SHARE_OBJECT_TYPE);
 }
 
+function findLocalActiveScreenShareObject(surfaceId?: string): MediaObjectInstance<ScreenShareObjectState> | null {
+  if (!roomMediaObjects) {
+    return null;
+  }
+  for (const object of Object.values(roomMediaObjects.objects)) {
+    if (object.type !== SCREEN_SHARE_OBJECT_TYPE || object.ownerParticipantId !== participantId) {
+      continue;
+    }
+    if (surfaceId && object.surfaceId !== surfaceId) {
+      continue;
+    }
+    if (roomMediaObjects.surfaces[object.surfaceId]?.activeObjectId === object.objectId) {
+      return object as MediaObjectInstance<ScreenShareObjectState>;
+    }
+  }
+  return null;
+}
+
 function findActiveWhiteboardObject(): MediaObjectInstance<WhiteboardState> | null {
   return findActiveObjectByType<WhiteboardState>(WHITEBOARD_OBJECT_TYPE);
 }
@@ -1199,25 +1226,30 @@ function syncMediaObjectsDebugState(): void {
     remoteBrowserRuntime.close();
     detachRemoteBrowserVideoTrack();
   }
+  syncScreenShareRuntimeWithObjects();
   const activeScreenShare = activeScreenShareObjectForSurface(selectedMediaSurfaceId) ?? findActiveScreenShareObject();
   const screenShareState = activeScreenShare?.state ?? null;
+  const localPublishing = hasLocalScreenSharePublishing();
+  const remoteSubscribedTrackCount = remoteScreenShareTrackCount();
   debugState.screenShare = {
     supported: shareMockEnabled || browserMediaCapabilities.screenShare.supported,
     active: screenShareState?.status === "active",
-    localPublishing: isScreenSharing,
+    localPublishing,
     selectedSurfaceId: screenShareState?.surfaceId ?? null,
     publishedTrackSid: screenShareState?.mediaTrackSid ?? null,
     remoteSubscribedTrackCount: screenShareState?.mediaTrackSid && screenShareState.ownerParticipantId !== participantId
-      ? Math.max(activeRemoteScreenShareTrackCount, 1)
-      : activeRemoteScreenShareTrackCount,
+      ? Math.max(remoteSubscribedTrackCount, 1)
+      : remoteSubscribedTrackCount,
     mediaAudioEnabled: shouldPublishMediaSurfaceAudio(roomMediaObjects, activeScreenShare?.surfaceId ?? selectedMediaSurfaceId),
     errorCode: screenShareState?.errorCode ?? null
   };
-  if (!isScreenSharing && screenShareState?.status === "active") {
+  if (localPublishing) {
+    debugState.screenShareState = "sharing";
+  } else if (screenShareState?.status === "active") {
     debugState.screenShareState = "receiving";
-  } else if (!isScreenSharing && !screenShareState && lastScreenShareStoppedAtMs > 0 && Date.now() - lastScreenShareStoppedAtMs < 10000) {
+  } else if (!screenShareState && lastScreenShareStoppedAtMs > 0 && Date.now() - lastScreenShareStoppedAtMs < 10000) {
     debugState.screenShareState = "stopped";
-  } else if (!isScreenSharing && !screenShareState && (debugState.screenShareState === "receiving" || debugState.screenShareState === "active")) {
+  } else if (!screenShareState && (debugState.screenShareState === "receiving" || debugState.screenShareState === "active" || debugState.screenShareState === "sharing")) {
     debugState.screenShareState = "idle";
   }
   startShareButton.disabled = !canUseScreenShareControl();
@@ -1257,6 +1289,7 @@ function handleRoomSnapshot(snapshot: RoomStateSnapshot): void {
   syncMediaObjectsDebugState();
   ensureRemoteBrowserLiveKitRoom();
   syncRemoteBrowserLiveKitTracks();
+  syncScreenShareLiveKitTracks();
   latestRealtimeParticipants = snapshot.participants;
   applyMergedPresenceParticipants();
 }
@@ -1634,10 +1667,10 @@ function syncWhiteboardControls(): void {
 }
 
 function canStopLocalScreenShare(): boolean {
-  const activeObject = activeScreenShareObjectForSurface(selectedMediaSurfaceId) ?? findActiveScreenShareObject();
+  const activeObject = activeScreenShareObjectForSurface(selectedMediaSurfaceId) ?? findLocalActiveScreenShareObject();
   return debugState.access.canStartScreenShare
     && roomStateConnected
-    && Boolean(isScreenSharing || (activeObject && activeObject.ownerParticipantId === participantId));
+    && Boolean(activeObject && activeObject.ownerParticipantId === participantId);
 }
 
 function surfaceInputSourceFromPointer(event: PointerEvent): SurfaceInputSource {
@@ -2527,6 +2560,180 @@ function getPublicationTrackSid(publication: unknown, track: Track, fallback: st
     ?? getTrackNodeId(track, fallback);
 }
 
+function screenShareEntries(): ScreenShareRuntimeEntry[] {
+  return Array.from(screenShareRuntimeByObjectId.values());
+}
+
+function hasLocalScreenSharePublishing(): boolean {
+  return screenShareEntries().some((entry) => !entry.remote);
+}
+
+function remoteScreenShareTrackCount(): number {
+  return screenShareEntries().filter((entry) => entry.remote && (entry.track || entry.element)).length;
+}
+
+function localScreenShareEntryForSurface(surfaceId: string): ScreenShareRuntimeEntry | null {
+  return screenShareEntries().find((entry) => !entry.remote && entry.surfaceId === surfaceId) ?? null;
+}
+
+function anyLocalScreenShareEntry(): ScreenShareRuntimeEntry | null {
+  return screenShareEntries().find((entry) => !entry.remote) ?? null;
+}
+
+function screenShareEntryForTrack(track: Track): ScreenShareRuntimeEntry | null {
+  return screenShareEntries().find((entry) => entry.track === track) ?? null;
+}
+
+function screenShareEntryForObject(objectId: string | null | undefined): ScreenShareRuntimeEntry | null {
+  return objectId ? screenShareRuntimeByObjectId.get(objectId) ?? null : null;
+}
+
+function createScreenShareVideoTexture(element: HTMLVideoElement): THREE.VideoTexture {
+  const texture = new THREE.VideoTexture(element);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
+function clearScreenShareEntryTexture(entry: ScreenShareRuntimeEntry): void {
+  if (!entry.texture) {
+    return;
+  }
+  const material = getMediaSurfaceView(entry.surfaceId).object.material;
+  if (material instanceof THREE.MeshBasicMaterial && material.map === entry.texture) {
+    applySurfaceTexture(entry.surfaceId, null);
+  } else if (!retainedDisplayTextures.has(entry.texture)) {
+    entry.texture.dispose();
+  }
+  entry.texture = null;
+}
+
+function moveScreenShareEntryToSurface(entry: ScreenShareRuntimeEntry, surfaceId: string): void {
+  if (entry.surfaceId === surfaceId) {
+    return;
+  }
+  const texture = entry.texture;
+  if (texture) {
+    const material = getMediaSurfaceView(entry.surfaceId).object.material;
+    if (material instanceof THREE.MeshBasicMaterial && material.map === texture) {
+      retainedDisplayTextures.add(texture);
+      applySurfaceTexture(entry.surfaceId, null);
+      retainedDisplayTextures.delete(texture);
+    }
+    applySurfaceTexture(surfaceId, texture);
+  }
+  entry.surfaceId = surfaceId;
+}
+
+function registerScreenShareEntry(entry: ScreenShareRuntimeEntry): ScreenShareRuntimeEntry {
+  const existing = screenShareRuntimeByObjectId.get(entry.objectId);
+  if (existing && existing !== entry) {
+    detachScreenShareEntry(existing);
+  }
+  screenShareRuntimeByObjectId.set(entry.objectId, entry);
+  return entry;
+}
+
+function detachScreenShareEntry(entry: ScreenShareRuntimeEntry): void {
+  entry.stopping = true;
+  if (entry.track) {
+    entry.track.detach().forEach((element) => element.remove());
+    entry.track = null;
+  }
+  if (entry.element) {
+    entry.element.remove();
+    entry.element = null;
+  }
+  clearScreenShareEntryTexture(entry);
+  entry.stream?.getTracks().forEach((track) => track.stop());
+  entry.stream = null;
+  entry.publishedTracks.forEach((track) => {
+    if (track.readyState !== "ended") {
+      track.stop();
+    }
+  });
+  entry.publishedTracks = [];
+  screenShareRuntimeByObjectId.delete(entry.objectId);
+  debugState.screenShare.remoteSubscribedTrackCount = remoteScreenShareTrackCount();
+  if (!hasLocalScreenSharePublishing() && remoteScreenShareTrackCount() === 0 && debugState.screenShareState !== "stopped") {
+    debugState.screenShareState = "idle";
+  }
+}
+
+async function unpublishScreenShareEntry(entry: ScreenShareRuntimeEntry): Promise<void> {
+  const localParticipant = livekitRoom?.localParticipant as {
+    unpublishTrack?: (track: MediaStreamTrack, stopOnUnpublish?: boolean) => Promise<unknown> | unknown;
+  } | undefined;
+  if (!localParticipant?.unpublishTrack) {
+    return;
+  }
+  await Promise.all(entry.publishedTracks.map((track) => Promise.resolve(localParticipant.unpublishTrack!(track, true)).catch(() => undefined)));
+}
+
+function handleLocalScreenShareTrackEnded(objectId: string, surfaceId: string): void {
+  const entry = screenShareRuntimeByObjectId.get(objectId);
+  if (!entry || entry.remote || entry.stopping) {
+    return;
+  }
+  entry.stopping = true;
+  void unpublishScreenShareEntry(entry).finally(() => {
+    detachScreenShareEntry(entry);
+    debugState.screenShareState = "stopped";
+    lastScreenShareStoppedAtMs = Date.now();
+    debugState.screenShare.active = hasLocalScreenSharePublishing();
+    debugState.screenShare.localPublishing = hasLocalScreenSharePublishing();
+    debugState.screenShare.publishedTrackSid = null;
+    startShareButton.disabled = !canUseScreenShareControl();
+    stopShareButton.disabled = !canStopLocalScreenShare();
+    void mediaSurfaceCommands.stopScreenShareObject(objectId, surfaceId).catch(() => undefined);
+    void reportDiagnostics("screenshare_track_ended");
+  });
+}
+
+function bindLocalScreenShareTrackEnd(objectId: string, surfaceId: string, tracks: MediaStreamTrack[]): void {
+  for (const track of tracks) {
+    track.addEventListener("ended", () => handleLocalScreenShareTrackEnded(objectId, surfaceId), { once: true });
+  }
+}
+
+function isActiveScreenShareObject(object: MediaObjectInstance<ScreenShareObjectState> | null | undefined): object is MediaObjectInstance<ScreenShareObjectState> {
+  return isCurrentScreenShareObject(object)
+    && object.state.status === "active";
+}
+
+function isCurrentScreenShareObject(object: MediaObjectInstance<ScreenShareObjectState> | null | undefined): object is MediaObjectInstance<ScreenShareObjectState> {
+  if (!object) {
+    return false;
+  }
+  return object.type === SCREEN_SHARE_OBJECT_TYPE
+    && object.state.status !== "stopped"
+    && object.state.status !== "failed"
+    && roomMediaObjects?.surfaces[object.surfaceId]?.activeObjectId === object.objectId;
+}
+
+function syncScreenShareRuntimeWithObjects(): void {
+  if (!roomMediaObjects) {
+    return;
+  }
+  for (const entry of screenShareEntries()) {
+    const currentObject = roomMediaObjects.objects[entry.objectId] as MediaObjectInstance<ScreenShareObjectState> | undefined;
+    const matchedObject = isCurrentScreenShareObject(currentObject)
+      ? currentObject
+      : screenShareObjectForMediaTrack(roomMediaObjects, entry.ownerParticipantId, entry.mediaTrackSid);
+    if (!isCurrentScreenShareObject(matchedObject)) {
+      detachScreenShareEntry(entry);
+      continue;
+    }
+    if (matchedObject.objectId !== entry.objectId) {
+      screenShareRuntimeByObjectId.delete(entry.objectId);
+      entry.objectId = matchedObject.objectId;
+      screenShareRuntimeByObjectId.set(entry.objectId, entry);
+    }
+    entry.ownerParticipantId = matchedObject.ownerParticipantId;
+    entry.mediaTrackSid = matchedObject.state.mediaTrackSid ?? entry.mediaTrackSid;
+    moveScreenShareEntryToSurface(entry, matchedObject.surfaceId);
+  }
+}
+
 function prepareHiddenVideoElement(element: HTMLVideoElement, options: { muted: boolean }): void {
   element.autoplay = true;
   element.muted = options.muted;
@@ -2620,6 +2827,32 @@ function resolveRemoteBrowserObjectForTrack(participantIdentity: string | null |
   return remoteBrowserObjectForMediaTrack(roomMediaObjects, participantIdentity, trackSid || null, kind);
 }
 
+function getPublicationName(publication: unknown): string | null {
+  const name = (publication as { trackName?: unknown; name?: unknown } | null)?.trackName
+    ?? (publication as { name?: unknown } | null)?.name;
+  return typeof name === "string" ? name : null;
+}
+
+function screenShareObjectForPublicationName(name: string | null): MediaObjectInstance<ScreenShareObjectState> | null {
+  const match = /^screen-share:([^:]+):(video|audio)$/.exec(name ?? "");
+  if (!match || !roomMediaObjects) {
+    return null;
+  }
+  const object = roomMediaObjects.objects[match[1]!];
+  return isCurrentScreenShareObject(object as MediaObjectInstance<ScreenShareObjectState> | undefined)
+    ? object as MediaObjectInstance<ScreenShareObjectState>
+    : null;
+}
+
+function resolveScreenShareObjectForTrack(participantIdentity: string | null | undefined, publication: unknown, track: Track): MediaObjectInstance<ScreenShareObjectState> | null {
+  const publicationNamedObject = screenShareObjectForPublicationName(getPublicationName(publication));
+  if (publicationNamedObject) {
+    return publicationNamedObject;
+  }
+  const trackSid = getPublicationTrackSid(publication, track, "");
+  return screenShareObjectForMediaTrack(roomMediaObjects, participantIdentity, trackSid || null);
+}
+
 function syncRemoteBrowserLiveKitTracks(): void {
   if (!livekitRoom) {
     return;
@@ -2640,6 +2873,34 @@ function syncRemoteBrowserLiveKitTracks(): void {
           connectMediaSurfaceAudioTrack(audioTrack, object.surfaceId);
           debugState.remoteBrowser.mediaHasAudio = true;
         }
+      }
+    }
+  }
+}
+
+function syncScreenShareLiveKitTracks(): void {
+  if (!livekitRoom) {
+    return;
+  }
+  for (const participant of livekitRoom.remoteParticipants.values()) {
+    for (const publication of participant.trackPublications.values()) {
+      const videoTrack = (publication as { videoTrack?: Track; track?: Track }).videoTrack ?? ((publication as { kind?: unknown }).kind === Track.Kind.Video ? (publication as { track?: Track }).track : undefined);
+      if (videoTrack && !resolveRemoteBrowserObjectForTrack(participant.identity, publication, videoTrack, "video")) {
+        const object = resolveScreenShareObjectForTrack(participant.identity, publication, videoTrack);
+        if (object) {
+          attachVideoTrack(videoTrack, {
+            remote: true,
+            objectId: object.objectId,
+            surfaceId: object.surfaceId,
+            ownerParticipantId: object.ownerParticipantId,
+            mediaTrackSid: object.state.mediaTrackSid ?? getPublicationTrackSid(publication, videoTrack, object.objectId)
+          });
+        }
+      }
+      const audioTrack = (publication as { audioTrack?: Track; track?: Track }).audioTrack ?? ((publication as { kind?: unknown }).kind === Track.Kind.Audio ? (publication as { track?: Track }).track : undefined);
+      if (audioTrack && isScreenShareAudioSource((publication as { source?: unknown }).source)) {
+        const object = resolveScreenShareObjectForTrack(participant.identity, publication, audioTrack);
+        connectMediaSurfaceAudioTrack(audioTrack, object?.surfaceId ?? resolveScreenShareSurfaceForParticipant(participant.identity));
       }
     }
   }
@@ -4090,22 +4351,47 @@ function reportXrTelemetry(frameContext: RuntimeFrameContext): void {
   lastXrTelemetryKinds = [];
 }
 
-function attachVideoTrack(track: Track, options: { remote: boolean; surfaceId?: string } = { remote: true }): void {
+function attachVideoTrack(track: Track, options: {
+  remote: boolean;
+  surfaceId?: string;
+  objectId?: string;
+  ownerParticipantId?: string | null;
+  mediaTrackSid?: string | null;
+} = { remote: true }): void {
   const surfaceId = options.surfaceId ?? selectedMediaSurfaceId;
+  const mediaTrackSid = options.mediaTrackSid ?? getTrackNodeId(track, `${surfaceId}:screen-share-video`);
+  const objectId = options.objectId ?? `screen-share-track:${mediaTrackSid}`;
+  const existing = screenShareRuntimeByObjectId.get(objectId);
+  if (existing?.track === track && existing.element) {
+    moveScreenShareEntryToSurface(existing, surfaceId);
+    return;
+  }
+  if (existing) {
+    detachScreenShareEntry(existing);
+  }
+
   const element = track.attach() as HTMLVideoElement;
   prepareHiddenVideoElement(element, { muted: true });
   document.body.appendChild(element);
   startHiddenVideoPlayback(element);
 
-  const texture = new THREE.VideoTexture(element);
-  texture.colorSpace = THREE.SRGBColorSpace;
+  const texture = createScreenShareVideoTexture(element);
   applySurfaceTexture(surfaceId, texture);
 
-  activeScreenShareTrack = track;
-  activeScreenShareElement = element;
-  activeScreenShareSurfaceId = surfaceId;
-  activeRemoteScreenShareTrackCount = options.remote ? 1 : activeRemoteScreenShareTrackCount;
-  debugState.screenShare.remoteSubscribedTrackCount = activeRemoteScreenShareTrackCount;
+  registerScreenShareEntry({
+    objectId,
+    surfaceId,
+    ownerParticipantId: options.ownerParticipantId ?? null,
+    mediaTrackSid,
+    remote: options.remote,
+    track,
+    element,
+    texture,
+    stream: null,
+    publishedTracks: [],
+    stopping: false
+  });
+  debugState.screenShare.remoteSubscribedTrackCount = remoteScreenShareTrackCount();
   debugState.screenShareState = options.remote ? "receiving" : debugState.screenShareState;
 }
 
@@ -4141,20 +4427,49 @@ function attachRemoteBrowserVideoTrack(track: Track, object: MediaObjectInstance
   Object.assign(debugState.remoteBrowser, createRemoteBrowserExternalVideoDebugSnapshot());
 }
 
-function attachMockVideoStream(stream: MediaStream, surfaceId = selectedMediaSurfaceId): void {
+function attachScreenShareStream(stream: MediaStream, options: {
+  objectId: string;
+  surfaceId: string;
+  ownerParticipantId: string;
+  mediaTrackSid: string;
+  publishedTracks?: MediaStreamTrack[];
+}): void {
+  const existing = screenShareRuntimeByObjectId.get(options.objectId);
+  if (existing) {
+    detachScreenShareEntry(existing);
+  }
   const element = document.createElement("video");
   prepareHiddenVideoElement(element, { muted: true });
   element.srcObject = stream;
   document.body.appendChild(element);
   startHiddenVideoPlayback(element);
 
-  const texture = new THREE.VideoTexture(element);
-  texture.colorSpace = THREE.SRGBColorSpace;
-  applySurfaceTexture(surfaceId, texture);
+  const texture = createScreenShareVideoTexture(element);
+  applySurfaceTexture(options.surfaceId, texture);
 
-  activeScreenShareElement = element;
-  activeScreenShareSurfaceId = surfaceId;
+  registerScreenShareEntry({
+    objectId: options.objectId,
+    surfaceId: options.surfaceId,
+    ownerParticipantId: options.ownerParticipantId,
+    mediaTrackSid: options.mediaTrackSid,
+    remote: false,
+    track: null,
+    element,
+    texture,
+    stream,
+    publishedTracks: options.publishedTracks ?? [],
+    stopping: false
+  });
   debugState.screenShareState = "sharing";
+}
+
+function attachMockVideoStream(stream: MediaStream, objectId: string, surfaceId: string, mediaTrackSid: string): void {
+  attachScreenShareStream(stream, {
+    objectId,
+    surfaceId,
+    ownerParticipantId: participantId,
+    mediaTrackSid
+  });
 }
 
 function createMockShareStream(): MediaStream {
@@ -4183,25 +4498,59 @@ function createMockShareStream(): MediaStream {
   return canvas.captureStream(24);
 }
 
-function detachVideoTrack(): void {
-  if (activeScreenShareTrack) {
-    activeScreenShareTrack.detach().forEach((element) => element.remove());
-    activeScreenShareTrack = null;
+async function captureAndPublishScreenShareStream(room: Room, input: {
+  objectId: string;
+  mediaAudioEnabled: boolean;
+}): Promise<{ stream: MediaStream; publishedTracks: MediaStreamTrack[]; mediaTrackSid: string }> {
+  if (!navigator.mediaDevices?.getDisplayMedia) {
+    throw createFaultError("NotSupportedError", "screen_share_unsupported:getDisplayMedia missing");
   }
-  if (activeScreenShareElement) {
-    activeScreenShareElement.remove();
-    activeScreenShareElement = null;
+  const stream = await navigator.mediaDevices.getDisplayMedia({
+    video: true,
+    audio: input.mediaAudioEnabled
+  });
+  const videoTrack = stream.getVideoTracks().find((track) => track.readyState === "live");
+  if (!videoTrack) {
+    stream.getTracks().forEach((track) => track.stop());
+    throw createFaultError("NotFoundError", "screen_share_video_track_missing");
   }
-  const surfaceId = activeScreenShareSurfaceId;
-  activeScreenShareSurfaceId = null;
-  activeRemoteScreenShareTrackCount = 0;
-  if (surfaceId) {
-    applySurfaceTexture(surfaceId, null);
+  const localParticipant = room.localParticipant as {
+    publishTrack: (track: MediaStreamTrack, options?: { name?: string; source?: Track.Source | string }) => Promise<{ trackSid?: string; sid?: string }>;
+  };
+  const publishedTracks: MediaStreamTrack[] = [];
+  try {
+    const videoPublication = await localParticipant.publishTrack(videoTrack, {
+      name: `screen-share:${input.objectId}:video`,
+      source: Track.Source.ScreenShare
+    });
+    publishedTracks.push(videoTrack);
+    const audioTrack = stream.getAudioTracks().find((track) => track.readyState === "live");
+    if (input.mediaAudioEnabled && audioTrack) {
+      await localParticipant.publishTrack(audioTrack, {
+        name: `screen-share:${input.objectId}:audio`,
+        source: (Track.Source as Record<string, Track.Source | string>).ScreenShareAudio ?? "screen_share_audio"
+      });
+      publishedTracks.push(audioTrack);
+    }
+    return {
+      stream,
+      publishedTracks,
+      mediaTrackSid: videoPublication.trackSid ?? videoPublication.sid ?? videoTrack.id
+    };
+  } catch (error) {
+    stream.getTracks().forEach((track) => track.stop());
+    throw error;
   }
-  debugState.screenShare.remoteSubscribedTrackCount = 0;
-  if (debugState.screenShareState !== "stopped") {
-    debugState.screenShareState = "idle";
+}
+
+function detachVideoTrack(track?: Track): void {
+  const entry = track
+    ? screenShareEntryForTrack(track)
+    : localScreenShareEntryForSurface(selectedMediaSurfaceId) ?? anyLocalScreenShareEntry() ?? screenShareEntries()[0] ?? null;
+  if (!entry) {
+    return;
   }
+  detachScreenShareEntry(entry);
 }
 
 function detachRemoteBrowserVideoTrack(track?: Track): void {
@@ -4811,7 +5160,7 @@ async function syncPresence(mode: PresenceState["mode"], audioActive: boolean): 
     muted: !microphoneEnabled,
     activeMedia: {
       audio: audioActive,
-      screenShare: isScreenSharing
+      screenShare: hasLocalScreenSharePublishing()
     },
     seq: presenceSeq,
     clientTimeMs,
@@ -4889,7 +5238,15 @@ function setupAudio(room: Room): void {
         attachRemoteBrowserVideoTrack(track, remoteBrowser, publication);
         return;
       }
-      attachVideoTrack(track, { remote: true, surfaceId: resolveScreenShareSurfaceForParticipant(participant?.identity) });
+      const screenShare = resolveScreenShareObjectForTrack(participant?.identity, publication, track);
+      const trackSid = getPublicationTrackSid(publication, track, `${participant?.identity ?? "remote"}:screen-share-video`);
+      attachVideoTrack(track, {
+        remote: true,
+        objectId: screenShare?.objectId ?? `screen-share-track:${trackSid}`,
+        surfaceId: screenShare?.surfaceId ?? resolveScreenShareSurfaceForParticipant(participant?.identity),
+        ownerParticipantId: screenShare?.ownerParticipantId ?? participant?.identity ?? null,
+        mediaTrackSid: screenShare?.state.mediaTrackSid ?? trackSid
+      });
       return;
     }
     if (track.kind !== Track.Kind.Audio) return;
@@ -4901,7 +5258,8 @@ function setupAudio(room: Room): void {
       return;
     }
     if (isScreenShareAudioSource((publication as { source?: unknown }).source)) {
-      connectMediaSurfaceAudioTrack(track, resolveScreenShareSurfaceForParticipant(participant?.identity));
+      const screenShare = resolveScreenShareObjectForTrack(participant?.identity, publication, track);
+      connectMediaSurfaceAudioTrack(track, screenShare?.surfaceId ?? resolveScreenShareSurfaceForParticipant(participant?.identity));
       return;
     }
     if (participant?.identity) {
@@ -4916,7 +5274,7 @@ function setupAudio(room: Room): void {
         detachRemoteBrowserVideoTrack(track);
         return;
       }
-      detachVideoTrack();
+      detachVideoTrack(track);
       return;
     }
     if (track.kind !== Track.Kind.Audio) return;
@@ -4953,39 +5311,35 @@ async function startScreenShare(): Promise<void> {
   if (startShareButton.disabled) {
     return;
   }
-  if (isScreenSharing) {
-    return;
-  }
-  const createResult = await mediaSurfaceCommands.createScreenShareObjectOnSurface(selectedMediaSurfaceId);
+  const targetSurfaceId = selectedMediaSurfaceId;
+  const createResult = await mediaSurfaceCommands.createScreenShareObjectOnSurface(targetSurfaceId);
   if (!createResult.accepted || !createResult.objectId) {
     throw new Error(`screen_share_create_rejected:${createResult.blockedReason ?? "unknown"}`);
   }
 
-  localScreenShareObjectId = createResult.objectId;
-  localScreenShareSurfaceId = createResult.surfaceId ?? selectedMediaSurfaceId;
+  const objectId = createResult.objectId;
+  const surfaceId = createResult.surfaceId ?? targetSurfaceId;
   lastScreenShareStoppedAtMs = 0;
   let revision = createResult.revision ?? 0;
-  debugState.screenShare.selectedSurfaceId = localScreenShareSurfaceId;
+  debugState.screenShare.selectedSurfaceId = surfaceId;
   debugState.screenShare.errorCode = null;
 
   try {
-    const selecting = await mediaSurfaceCommands.patchScreenShareObject(localScreenShareObjectId, localScreenShareSurfaceId, revision, { type: "mark-selecting" });
+    const selecting = await mediaSurfaceCommands.patchScreenShareObject(objectId, surfaceId, revision, { type: "mark-selecting" });
     if (!selecting.accepted) {
       throw new Error(`screen_share_selecting_rejected:${selecting.blockedReason ?? "unknown"}`);
     }
     revision = selecting.revision ?? revision;
 
     if (shareMockEnabled) {
-      const publishing = await mediaSurfaceCommands.patchScreenShareObject(localScreenShareObjectId, localScreenShareSurfaceId, revision, { type: "mark-publishing" });
+      const publishing = await mediaSurfaceCommands.patchScreenShareObject(objectId, surfaceId, revision, { type: "mark-publishing" });
       if (!publishing.accepted) {
         throw new Error(`screen_share_publishing_rejected:${publishing.blockedReason ?? "unknown"}`);
       }
       revision = publishing.revision ?? revision;
-      activeMockScreenShareStream = createMockShareStream();
-      attachMockVideoStream(activeMockScreenShareStream, localScreenShareSurfaceId ?? selectedMediaSurfaceId);
-      isScreenSharing = true;
-      const mediaTrackSid = `mock-screen-share:${participantId}:${Date.now()}`;
-      const active = await mediaSurfaceCommands.patchScreenShareObject(localScreenShareObjectId, localScreenShareSurfaceId, revision, { type: "mark-active", mediaTrackSid });
+      const mediaTrackSid = `mock-screen-share:${participantId}:${objectId}:${Date.now()}`;
+      attachMockVideoStream(createMockShareStream(), objectId, surfaceId, mediaTrackSid);
+      const active = await mediaSurfaceCommands.patchScreenShareObject(objectId, surfaceId, revision, { type: "mark-active", mediaTrackSid });
       if (!active.accepted) {
         throw new Error(`screen_share_active_rejected:${active.blockedReason ?? "unknown"}`);
       }
@@ -4993,8 +5347,8 @@ async function startScreenShare(): Promise<void> {
       debugState.screenShare.active = true;
       debugState.screenShare.localPublishing = true;
       debugState.screenShare.publishedTrackSid = mediaTrackSid;
-      startShareButton.disabled = true;
-      stopShareButton.disabled = false;
+      startShareButton.disabled = !canUseScreenShareControl();
+      stopShareButton.disabled = !canStopLocalScreenShare();
       setStatus("Sharing screen");
       void reportDiagnostics("screenshare_mock_started");
       return;
@@ -5002,51 +5356,46 @@ async function startScreenShare(): Promise<void> {
 
     const room = await ensureMediaRoom();
     debugState.screenShareState = "starting";
-    const publishing = await mediaSurfaceCommands.patchScreenShareObject(localScreenShareObjectId, localScreenShareSurfaceId, revision, { type: "mark-publishing" });
+    const publishing = await mediaSurfaceCommands.patchScreenShareObject(objectId, surfaceId, revision, { type: "mark-publishing" });
     if (!publishing.accepted) {
       throw new Error(`screen_share_publishing_rejected:${publishing.blockedReason ?? "unknown"}`);
     }
     revision = publishing.revision ?? revision;
-    const mediaAudioEnabled = shouldPublishMediaSurfaceAudio(roomMediaObjects, localScreenShareSurfaceId ?? selectedMediaSurfaceId);
+    const mediaAudioEnabled = shouldPublishMediaSurfaceAudio(roomMediaObjects, surfaceId);
     debugState.screenShare.mediaAudioEnabled = mediaAudioEnabled;
-    await room.localParticipant.setScreenShareEnabled(true, {
-      audio: mediaAudioEnabled
+    const published = await captureAndPublishScreenShareStream(room, { objectId, mediaAudioEnabled });
+    attachScreenShareStream(published.stream, {
+      objectId,
+      surfaceId,
+      ownerParticipantId: participantId,
+      mediaTrackSid: published.mediaTrackSid,
+      publishedTracks: published.publishedTracks
     });
-    const publication = Array.from(room.localParticipant.trackPublications.values()).find((item) => item.source === Track.Source.ScreenShare);
-    const localTrack = publication?.videoTrack;
-    if (localTrack) {
-      attachVideoTrack(localTrack, { remote: false, surfaceId: localScreenShareSurfaceId ?? selectedMediaSurfaceId });
-    }
-    isScreenSharing = true;
-    const mediaTrackSid = publication?.trackSid ?? `local-screen-share:${participantId}:${Date.now()}`;
-    const active = await mediaSurfaceCommands.patchScreenShareObject(localScreenShareObjectId, localScreenShareSurfaceId, revision, { type: "mark-active", mediaTrackSid });
+    bindLocalScreenShareTrackEnd(objectId, surfaceId, published.publishedTracks);
+    const active = await mediaSurfaceCommands.patchScreenShareObject(objectId, surfaceId, revision, { type: "mark-active", mediaTrackSid: published.mediaTrackSid });
     if (!active.accepted) {
       throw new Error(`screen_share_active_rejected:${active.blockedReason ?? "unknown"}`);
     }
     debugState.screenShareState = "sharing";
     debugState.screenShare.active = true;
     debugState.screenShare.localPublishing = true;
-    debugState.screenShare.publishedTrackSid = mediaTrackSid;
-    startShareButton.disabled = true;
-    stopShareButton.disabled = false;
+    debugState.screenShare.publishedTrackSid = published.mediaTrackSid;
+    startShareButton.disabled = !canUseScreenShareControl();
+    stopShareButton.disabled = !canStopLocalScreenShare();
     setStatus("Sharing screen");
     void reportDiagnostics("screenshare_started");
   } catch (error) {
     const errorCode = getScreenShareErrorCode(error);
     debugState.screenShare.errorCode = errorCode;
-    if (localScreenShareObjectId && localScreenShareSurfaceId) {
-      void mediaSurfaceCommands.patchScreenShareObject(localScreenShareObjectId, localScreenShareSurfaceId, revision, { type: "mark-failed", errorCode })
-        .then(() => mediaSurfaceCommands.stopScreenShareObject(localScreenShareObjectId!, localScreenShareSurfaceId!))
-        .catch(() => undefined);
+    void mediaSurfaceCommands.patchScreenShareObject(objectId, surfaceId, revision, { type: "mark-failed", errorCode })
+      .then(() => mediaSurfaceCommands.stopScreenShareObject(objectId, surfaceId))
+      .catch(() => undefined);
+    const entry = screenShareRuntimeByObjectId.get(objectId);
+    if (entry) {
+      entry.stopping = true;
+      await unpublishScreenShareEntry(entry);
+      detachScreenShareEntry(entry);
     }
-    activeMockScreenShareStream?.getTracks().forEach((track) => track.stop());
-    activeMockScreenShareStream = null;
-    if (isScreenSharing) {
-      detachVideoTrack();
-    }
-    isScreenSharing = false;
-    localScreenShareObjectId = null;
-    localScreenShareSurfaceId = null;
     startShareButton.disabled = !canUseScreenShareControl();
     stopShareButton.disabled = true;
     throw error;
@@ -5205,66 +5554,26 @@ async function stopScreenShare(): Promise<void> {
     debugState.access.lastDeniedPermission = "screen-share.stop";
     throw createFaultError("NotAllowedError", "screen_share_forbidden");
   }
-  const activeObject = activeScreenShareObjectForSurface(selectedMediaSurfaceId) ?? findActiveScreenShareObject();
-  const objectId = localScreenShareObjectId ?? activeObject?.objectId ?? null;
-  const surfaceId = localScreenShareSurfaceId ?? activeObject?.surfaceId ?? selectedMediaSurfaceId;
-
-  if (shareMockEnabled) {
-    activeMockScreenShareStream?.getTracks().forEach((track) => track.stop());
-    activeMockScreenShareStream = null;
-    isScreenSharing = false;
-    detachVideoTrack();
-    debugState.screenShareState = "stopped";
-    lastScreenShareStoppedAtMs = Date.now();
-    if (objectId) {
-      await mediaSurfaceCommands.stopScreenShareObject(objectId, surfaceId);
-    }
-    localScreenShareObjectId = null;
-    localScreenShareSurfaceId = null;
-    debugState.screenShare.active = false;
-    debugState.screenShare.localPublishing = false;
-    debugState.screenShare.publishedTrackSid = null;
-    startShareButton.disabled = !canUseScreenShareControl();
-    stopShareButton.disabled = true;
-    setStatus("Screen share stopped");
-    void reportDiagnostics("screenshare_mock_stopped");
+  const activeObject = activeScreenShareObjectForSurface(selectedMediaSurfaceId) ?? findLocalActiveScreenShareObject();
+  if (!activeObject || activeObject.ownerParticipantId !== participantId) {
     return;
   }
-  if (!livekitRoom) {
-    if (objectId) {
-      await mediaSurfaceCommands.stopScreenShareObject(objectId, surfaceId);
-    }
-    isScreenSharing = false;
-    localScreenShareObjectId = null;
-    localScreenShareSurfaceId = null;
-    debugState.screenShareState = "stopped";
-    lastScreenShareStoppedAtMs = Date.now();
-    debugState.screenShare.active = false;
-    debugState.screenShare.localPublishing = false;
-    debugState.screenShare.publishedTrackSid = null;
-    startShareButton.disabled = !canUseScreenShareControl();
-    stopShareButton.disabled = true;
-    setStatus("Screen share stopped");
-    void reportDiagnostics("screenshare_stopped");
-    return;
+  const entry = screenShareEntryForObject(activeObject.objectId) ?? localScreenShareEntryForSurface(activeObject.surfaceId);
+  if (entry) {
+    entry.stopping = true;
+    await unpublishScreenShareEntry(entry);
+    detachScreenShareEntry(entry);
   }
-  await livekitRoom.localParticipant.setScreenShareEnabled(false);
-  isScreenSharing = false;
-  detachVideoTrack();
   debugState.screenShareState = "stopped";
   lastScreenShareStoppedAtMs = Date.now();
-  if (objectId) {
-    await mediaSurfaceCommands.stopScreenShareObject(objectId, surfaceId);
-  }
-  localScreenShareObjectId = null;
-  localScreenShareSurfaceId = null;
-  debugState.screenShare.active = false;
-  debugState.screenShare.localPublishing = false;
+  await mediaSurfaceCommands.stopScreenShareObject(activeObject.objectId, activeObject.surfaceId);
+  debugState.screenShare.active = hasLocalScreenSharePublishing();
+  debugState.screenShare.localPublishing = hasLocalScreenSharePublishing();
   debugState.screenShare.publishedTrackSid = null;
   startShareButton.disabled = !canUseScreenShareControl();
-  stopShareButton.disabled = true;
+  stopShareButton.disabled = !canStopLocalScreenShare();
   setStatus("Screen share stopped");
-  void reportDiagnostics("screenshare_stopped");
+  void reportDiagnostics(shareMockEnabled ? "screenshare_mock_stopped" : "screenshare_stopped");
 }
 
 async function joinAudio(): Promise<void> {

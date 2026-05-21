@@ -12,7 +12,7 @@ type MultiSurfaceDebug = {
   mediaObjects?: {
     selectedSurfaceId?: string;
     surfaces?: Array<{ surfaceId?: string; activeObjectId?: string | null; activeObjectType?: string | null; runtimeVisible?: boolean }>;
-    objects?: Array<{ objectId?: string; type?: string; surfaceId?: string; revision?: number; state?: { strokes?: unknown[] } }>;
+    objects?: Array<{ objectId?: string; type?: string; surfaceId?: string; revision?: number; state?: { strokes?: unknown[]; status?: string } }>;
     blockedReason?: string | null;
   };
 };
@@ -97,6 +97,10 @@ function surfaceRuntimeVisible(debug: MultiSurfaceDebug | undefined, surfaceId: 
 function whiteboardStrokeCount(debug: MultiSurfaceDebug | undefined, surfaceId: string): number | null {
   const object = debug?.mediaObjects?.objects?.find((item) => item.type === "whiteboard" && item.surfaceId === surfaceId);
   return object?.state?.strokes?.length ?? null;
+}
+
+function activeScreenShareCount(debug: MultiSurfaceDebug | undefined): number {
+  return debug?.mediaObjects?.objects?.filter((item) => item.type === "screen-share" && item.state?.status === "active").length ?? 0;
 }
 
 function blueStrokeSampleCount(sample: TextureSample | null): number {
@@ -286,6 +290,57 @@ test("M1.8 whiteboards run independently on any default surface", async ({ page 
     mainOtherStroke: true,
     laptopOwnStroke: true,
     laptopOtherStroke: true
+  });
+});
+
+test("M1.8 screen shares run independently on any default surface", async ({ page }) => {
+  const roomId = `m1-multi-screen-share-${Date.now()}`;
+
+  await page.goto(roomUrl(roomId, "host", "sharemock=1"));
+  await waitForKernel(page, "host");
+
+  await selectSurface(page, MAIN_SURFACE_ID);
+  await expect(page.locator("#start-share")).toBeEnabled();
+  await page.click("#start-share");
+
+  await selectSurface(page, LAPTOP_SURFACE_ID);
+  await expect(page.locator("#start-share")).toBeEnabled();
+  await page.click("#start-share");
+
+  await expect.poll(async () => {
+    const debug = await readDebug(page);
+    return {
+      mainObject: surfaceObjectType(debug, MAIN_SURFACE_ID),
+      laptopObject: surfaceObjectType(debug, LAPTOP_SURFACE_ID),
+      activeShares: activeScreenShareCount(debug)
+    };
+  }, {
+    timeout: 10000,
+    intervals: [500, 1000, 2000]
+  }).toEqual({
+    mainObject: "screen-share",
+    laptopObject: "screen-share",
+    activeShares: 2
+  });
+
+  await selectSurface(page, LAPTOP_SURFACE_ID);
+  await expect(page.locator("#stop-share")).toBeEnabled();
+  await page.click("#stop-share");
+
+  await expect.poll(async () => {
+    const debug = await readDebug(page);
+    return {
+      mainObject: surfaceObjectType(debug, MAIN_SURFACE_ID),
+      laptopObject: surfaceObjectType(debug, LAPTOP_SURFACE_ID),
+      activeShares: activeScreenShareCount(debug)
+    };
+  }, {
+    timeout: 10000,
+    intervals: [500, 1000, 2000]
+  }).toEqual({
+    mainObject: "screen-share",
+    laptopObject: null,
+    activeShares: 1
   });
 });
 
