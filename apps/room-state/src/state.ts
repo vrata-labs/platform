@@ -212,8 +212,16 @@ function cloneMediaObjectsState(mediaObjects: RoomMediaObjectsState): RoomMediaO
 function ensureMediaObjectsState(state: RoomState): RoomMediaObjectsState {
   const current = state.mediaObjects ?? createDefaultRoomMediaObjectsState(state.roomId);
   const defaults = createDefaultRoomMediaObjectsState(state.roomId);
+  const mergedSurfaces = { ...defaults.surfaces, ...current.surfaces };
+  for (const [surfaceId, defaultSurface] of Object.entries(defaults.surfaces)) {
+    const surface = mergedSurfaces[surfaceId] ?? defaultSurface;
+    mergedSurfaces[surfaceId] = {
+      ...surface,
+      allowedObjectTypes: Array.from(new Set([...surface.allowedObjectTypes, ...defaultSurface.allowedObjectTypes]))
+    };
+  }
   return cloneMediaObjectsState({
-    surfaces: { ...defaults.surfaces, ...current.surfaces },
+    surfaces: mergedSurfaces,
     objects: current.objects ?? {}
   });
 }

@@ -271,7 +271,7 @@ export function createDefaultRoomMediaObjectsState(roomId: string): RoomMediaObj
         inputEnabled: true,
         mediaAudioEnabled: false,
         visible: true,
-        allowedObjectTypes: [SURFACE_TEST_CARD_TYPE, WHITEBOARD_OBJECT_TYPE],
+        allowedObjectTypes: commonObjectTypes,
         activeObjectId: null,
         lockedByParticipantId: null
       },
@@ -288,7 +288,7 @@ export function createDefaultRoomMediaObjectsState(roomId: string): RoomMediaObj
         inputEnabled: true,
         mediaAudioEnabled: false,
         visible: true,
-        allowedObjectTypes: [SURFACE_TEST_CARD_TYPE, SCREEN_SHARE_OBJECT_TYPE, REMOTE_BROWSER_OBJECT_TYPE],
+        allowedObjectTypes: commonObjectTypes,
         activeObjectId: null,
         lockedByParticipantId: null
       }

@@ -155,9 +155,24 @@ test("createRoomState includes default media surface", () => {
   assert.equal(room.mediaObjects.surfaces["debug-main"]?.allowedObjectTypes.includes("remote-browser"), true);
   assert.equal(room.mediaObjects.surfaces["debug-main"]?.mediaAudioEnabled, false);
   assert.equal(room.mediaObjects.surfaces["whiteboard-wall"]?.label, "Whiteboard wall");
+  assert.equal(room.mediaObjects.surfaces["whiteboard-wall"]?.allowedObjectTypes.includes("screen-share"), true);
   assert.equal(room.mediaObjects.surfaces["whiteboard-wall"]?.allowedObjectTypes.includes("whiteboard"), true);
+  assert.equal(room.mediaObjects.surfaces["whiteboard-wall"]?.allowedObjectTypes.includes("remote-browser"), true);
   assert.equal(room.mediaObjects.surfaces["laptop-screen"]?.label, "Laptop screen");
+  assert.equal(room.mediaObjects.surfaces["laptop-screen"]?.allowedObjectTypes.includes("screen-share"), true);
+  assert.equal(room.mediaObjects.surfaces["laptop-screen"]?.allowedObjectTypes.includes("whiteboard"), true);
   assert.equal(room.mediaObjects.surfaces["laptop-screen"]?.allowedObjectTypes.includes("remote-browser"), true);
+});
+
+test("joinRoom upgrades legacy default surface object allow lists", () => {
+  const room = createRoomState("demo");
+  room.mediaObjects.surfaces["whiteboard-wall"]!.allowedObjectTypes = ["surface-test-card", "whiteboard"];
+  room.mediaObjects.surfaces["laptop-screen"]!.allowedObjectTypes = ["surface-test-card", "screen-share", "remote-browser"];
+
+  const joined = joinRoom(room, "host", { role: "host" });
+
+  assert.equal(joined.mediaObjects.surfaces["whiteboard-wall"]?.allowedObjectTypes.includes("remote-browser"), true);
+  assert.equal(joined.mediaObjects.surfaces["laptop-screen"]?.allowedObjectTypes.includes("whiteboard"), true);
 });
 
 test("joinRoom restores missing default media surfaces for legacy room state", () => {

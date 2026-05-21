@@ -12,10 +12,12 @@ type MultiSurfaceDebug = {
   mediaObjects?: {
     selectedSurfaceId?: string;
     surfaces?: Array<{ surfaceId?: string; activeObjectId?: string | null; activeObjectType?: string | null; runtimeVisible?: boolean }>;
-    objects?: Array<{ objectId?: string; type?: string; surfaceId?: string; revision?: number }>;
+    objects?: Array<{ objectId?: string; type?: string; surfaceId?: string; revision?: number; state?: { strokes?: unknown[] } }>;
     blockedReason?: string | null;
   };
 };
+
+type TextureSample = { samples: Array<[number, number, number]> };
 
 const MAIN_SURFACE_ID = "debug-main";
 const WHITEBOARD_SURFACE_ID = "whiteboard-wall";
@@ -75,12 +77,39 @@ async function sendSurfaceInput(page: Page, input: { surfaceId: string; source?:
   expect(sent).toBe(true);
 }
 
+async function sendSurfaceStroke(page: Page, surfaceId: string, points: Array<{ u: number; v: number }>) {
+  expect(points.length).toBeGreaterThanOrEqual(2);
+  await sendSurfaceInput(page, { surfaceId, kind: "pointer-down", ...points[0]! });
+  for (const point of points.slice(1, -1)) {
+    await sendSurfaceInput(page, { surfaceId, kind: "pointer-move", ...point });
+  }
+  await sendSurfaceInput(page, { surfaceId, kind: "pointer-up", ...points[points.length - 1]! });
+}
+
 function surfaceObjectType(debug: MultiSurfaceDebug | undefined, surfaceId: string): string | null {
   return debug?.mediaObjects?.surfaces?.find((surface) => surface.surfaceId === surfaceId)?.activeObjectType ?? null;
 }
 
 function surfaceRuntimeVisible(debug: MultiSurfaceDebug | undefined, surfaceId: string): boolean {
   return debug?.mediaObjects?.surfaces?.find((surface) => surface.surfaceId === surfaceId)?.runtimeVisible === true;
+}
+
+function whiteboardStrokeCount(debug: MultiSurfaceDebug | undefined, surfaceId: string): number | null {
+  const object = debug?.mediaObjects?.objects?.find((item) => item.type === "whiteboard" && item.surfaceId === surfaceId);
+  return object?.state?.strokes?.length ?? null;
+}
+
+function blueStrokeSampleCount(sample: TextureSample | null): number {
+  return sample?.samples.filter(([r, g, b]) => b > 150 && r < 120 && g < 170).length ?? 0;
+}
+
+async function sampleSurfaceBlueStrokeCount(page: Page, surfaceId: string, center: { u: number; v: number }): Promise<number> {
+  const sample = await page.evaluate((value) => (window as Window & {
+    __NOAH_TEST__?: {
+      sampleMediaSurfaceTexture: (surfaceId: string, center: { u: number; v: number }, size?: { width: number; height: number }) => TextureSample | null;
+    };
+  }).__NOAH_TEST__?.sampleMediaSurfaceTexture(value.surfaceId, value.center, { width: 0.18, height: 0.03 }) ?? null, { surfaceId, center });
+  return blueStrokeSampleCount(sample);
 }
 
 test("M1.8 screen share and whiteboard run on independent surfaces", async ({ browser }) => {
@@ -187,6 +216,77 @@ test("M1.8 screen share and whiteboard run on independent surfaces", async ({ br
     await host.close();
     await member.close();
   }
+});
+
+test("M1.8 whiteboards run independently on any default surface", async ({ page }) => {
+  const roomId = `m1-multi-whiteboard-${Date.now()}`;
+
+  await page.goto(roomUrl(roomId, "host"));
+  await waitForKernel(page, "host");
+
+  await selectSurface(page, MAIN_SURFACE_ID);
+  await expect(page.locator("#start-whiteboard")).toBeEnabled();
+  await page.click("#start-whiteboard");
+
+  await selectSurface(page, LAPTOP_SURFACE_ID);
+  await expect(page.locator("#start-whiteboard")).toBeEnabled();
+  await page.click("#start-whiteboard");
+
+  await expect.poll(async () => {
+    const debug = await readDebug(page);
+    return {
+      mainObject: surfaceObjectType(debug, MAIN_SURFACE_ID),
+      laptopObject: surfaceObjectType(debug, LAPTOP_SURFACE_ID),
+      objectCount: debug?.mediaObjects?.objects?.length ?? 0
+    };
+  }, {
+    timeout: 10000,
+    intervals: [500, 1000, 2000]
+  }).toEqual({
+    mainObject: "whiteboard",
+    laptopObject: "whiteboard",
+    objectCount: 2
+  });
+
+  await sendSurfaceStroke(page, MAIN_SURFACE_ID, [{ u: 0.22, v: 0.34 }, { u: 0.34, v: 0.34 }, { u: 0.46, v: 0.34 }]);
+  await sendSurfaceStroke(page, LAPTOP_SURFACE_ID, [{ u: 0.54, v: 0.66 }, { u: 0.66, v: 0.66 }, { u: 0.78, v: 0.66 }]);
+
+  await expect.poll(async () => {
+    const debug = await readDebug(page);
+    return {
+      mainStrokes: whiteboardStrokeCount(debug, MAIN_SURFACE_ID),
+      laptopStrokes: whiteboardStrokeCount(debug, LAPTOP_SURFACE_ID)
+    };
+  }, {
+    timeout: 10000,
+    intervals: [500, 1000, 2000]
+  }).toEqual({
+    mainStrokes: 1,
+    laptopStrokes: 1
+  });
+
+  await expect.poll(async () => {
+    const [mainOwnStroke, mainOtherStroke, laptopOwnStroke, laptopOtherStroke] = await Promise.all([
+      sampleSurfaceBlueStrokeCount(page, MAIN_SURFACE_ID, { u: 0.34, v: 0.34 }),
+      sampleSurfaceBlueStrokeCount(page, MAIN_SURFACE_ID, { u: 0.66, v: 0.66 }),
+      sampleSurfaceBlueStrokeCount(page, LAPTOP_SURFACE_ID, { u: 0.66, v: 0.66 }),
+      sampleSurfaceBlueStrokeCount(page, LAPTOP_SURFACE_ID, { u: 0.34, v: 0.34 })
+    ]);
+    return {
+      mainOwnStroke: mainOwnStroke >= 2,
+      mainOtherStroke: mainOtherStroke <= 1,
+      laptopOwnStroke: laptopOwnStroke >= 2,
+      laptopOtherStroke: laptopOtherStroke <= 1
+    };
+  }, {
+    timeout: 10000,
+    intervals: [500, 1000, 2000]
+  }).toEqual({
+    mainOwnStroke: true,
+    mainOtherStroke: true,
+    laptopOwnStroke: true,
+    laptopOtherStroke: true
+  });
 });
 
 test("M1.8 media surfaces remain visible after a scene bundle loads", async ({ page, request }) => {
