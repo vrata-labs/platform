@@ -2,6 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 
 type MultiSurfaceDebug = {
   roomStateConnected?: boolean;
+  sceneBundleState?: string;
   access?: { role?: string };
   screenShare?: { active?: boolean; localPublishing?: boolean; selectedSurfaceId?: string | null };
   whiteboard?: { active?: boolean; strokeCount?: number; surfaceId?: string | null };
@@ -10,7 +11,7 @@ type MultiSurfaceDebug = {
   };
   mediaObjects?: {
     selectedSurfaceId?: string;
-    surfaces?: Array<{ surfaceId?: string; activeObjectId?: string | null; activeObjectType?: string | null }>;
+    surfaces?: Array<{ surfaceId?: string; activeObjectId?: string | null; activeObjectType?: string | null; runtimeVisible?: boolean }>;
     objects?: Array<{ objectId?: string; type?: string; surfaceId?: string; revision?: number }>;
     blockedReason?: string | null;
   };
@@ -76,6 +77,10 @@ async function sendSurfaceInput(page: Page, input: { surfaceId: string; source?:
 
 function surfaceObjectType(debug: MultiSurfaceDebug | undefined, surfaceId: string): string | null {
   return debug?.mediaObjects?.surfaces?.find((surface) => surface.surfaceId === surfaceId)?.activeObjectType ?? null;
+}
+
+function surfaceRuntimeVisible(debug: MultiSurfaceDebug | undefined, surfaceId: string): boolean {
+  return debug?.mediaObjects?.surfaces?.find((surface) => surface.surfaceId === surfaceId)?.runtimeVisible === true;
 }
 
 test("M1.8 screen share and whiteboard run on independent surfaces", async ({ browser }) => {
@@ -182,4 +187,40 @@ test("M1.8 screen share and whiteboard run on independent surfaces", async ({ br
     await host.close();
     await member.close();
   }
+});
+
+test("M1.8 media surfaces remain visible after a scene bundle loads", async ({ page, request }) => {
+  const roomResponse = await request.post("/api/rooms", {
+    headers: {
+      "x-noah-admin-token": process.env.STAGING_ADMIN_TOKEN ?? "test-admin-token"
+    },
+    data: {
+      tenantId: "demo-tenant",
+      templateId: "meeting-room-basic",
+      name: `M1.8 Scene Surface Room ${Date.now()}`,
+      sceneBundleUrl: "/assets/scenes/the-office-v1/scene.json"
+    }
+  });
+  expect(roomResponse.ok()).toBeTruthy();
+  const room = (await roomResponse.json()) as { roomLink: string };
+
+  await page.goto(`${room.roomLink}?debug=1&role=host`);
+
+  await expect.poll(async () => {
+    const debug = await readDebug(page);
+    return {
+      sceneBundleState: debug?.sceneBundleState ?? null,
+      mainVisible: surfaceRuntimeVisible(debug, MAIN_SURFACE_ID),
+      whiteboardVisible: surfaceRuntimeVisible(debug, WHITEBOARD_SURFACE_ID),
+      laptopVisible: surfaceRuntimeVisible(debug, LAPTOP_SURFACE_ID)
+    };
+  }, {
+    timeout: 20000,
+    intervals: [500, 1000, 2000]
+  }).toEqual({
+    sceneBundleState: "loaded",
+    mainVisible: true,
+    whiteboardVisible: true,
+    laptopVisible: true
+  });
 });

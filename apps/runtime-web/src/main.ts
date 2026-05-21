@@ -439,7 +439,7 @@ const mediaSurfaceViews = new Map<string, RuntimeMediaSurfaceView>([
   [LAPTOP_MEDIA_SURFACE_ID, { surfaceId: LAPTOP_MEDIA_SURFACE_ID, object: laptopSurface, widthPx: 1280, heightPx: 720, widthM: LAPTOP_SURFACE_WIDTH_M, heightM: LAPTOP_SURFACE_HEIGHT_M }]
 ]);
 
-const fallbackEnvironment: THREE.Object3D[] = [floor, grid, roomBox, ...Array.from(mediaSurfaceViews.values()).map((surface) => surface.object)];
+const fallbackEnvironment: THREE.Object3D[] = [floor, grid, roomBox];
 
 const bodyGeometry = new THREE.CapsuleGeometry(0.24, 0.8, 6, 12);
 const headGeometry = new THREE.SphereGeometry(0.18, 20, 20);
@@ -1110,7 +1110,8 @@ function syncMediaObjectsDebugState(): void {
     inputEnabled: surface.inputEnabled,
     mediaAudioEnabled: surface.mediaAudioEnabled,
     lockedByParticipantId: surface.lockedByParticipantId,
-    visible: surface.visible
+    visible: surface.visible,
+    runtimeVisible: getMediaSurfaceView(surface.surfaceId).object.visible
   }));
   debugState.mediaObjects.objects = objects.map((object) => ({
     objectId: object.objectId,
@@ -2983,6 +2984,7 @@ const debugState = {
       mediaAudioEnabled: boolean;
       lockedByParticipantId: string | null;
       visible: boolean;
+      runtimeVisible: boolean;
     }>,
     objects: [] as Array<{
       objectId: string;
