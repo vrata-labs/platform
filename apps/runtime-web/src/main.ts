@@ -2537,6 +2537,7 @@ function updateAvatarLipsync(deltaSeconds: number): void {
     ? sampleAvatarLipsyncLevel(localAudioNode.analyser, localAudioNode.sampleBuffer)
     : 0;
   localMicLevel = localLevel;
+  debugState.localMicLevel = Number(localMicLevel.toFixed(3));
   const localLipsync = updateAvatarLipsyncDriver(localAudioNode?.lipsync ?? localAvatarLipsync, {
     deltaSeconds,
     level: localLevel,
@@ -2550,6 +2551,7 @@ function updateAvatarLipsync(deltaSeconds: number): void {
 
   if (!livekitRoom) {
     speakerOutputLevel = 0;
+    debugState.speakerOutputLevel = 0;
     return;
   }
 
@@ -2563,6 +2565,7 @@ function updateAvatarLipsync(deltaSeconds: number): void {
     }
   }
   speakerOutputLevel = maxSpeakerLevel;
+  debugState.speakerOutputLevel = Number(speakerOutputLevel.toFixed(3));
 
   for (const [remoteParticipantId, participant] of livekitRoom.remoteParticipants.entries()) {
     const node = remoteAudioNodes.get(remoteParticipantId);
@@ -2593,6 +2596,8 @@ const debugState = {
   roomStateUrl: "",
   roomStateMode: "disconnected",
   audioState: "idle",
+  localMicLevel: 0,
+  speakerOutputLevel: 0,
   media: {
     audioState: "not_joined" as "not_joined" | "joining" | "joined" | "muted" | "degraded" | "failed",
     muted: true,

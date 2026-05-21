@@ -366,8 +366,7 @@ export function createRemoteBrowserViewportCaptureOptions(size: { width: number;
       width: { ideal: size.width },
       height: { ideal: size.height }
     },
-    // Microphone constraints can make Chromium fail display-audio capture with NotReadableError.
-    audio: true,
+    audio: false,
     selfBrowserSurface: "exclude",
     surfaceSwitching: "exclude",
     systemAudio: "include"
@@ -382,13 +381,23 @@ export function createRemoteBrowserCurrentTabCaptureOptions(size: { width: numbe
       width: { ideal: size.width },
       height: { ideal: size.height }
     },
-    // Microphone constraints can make Chromium fail display-audio capture with NotReadableError.
-    audio: true,
+    audio: false,
     preferCurrentTab: true,
     selfBrowserSurface: "include",
     surfaceSwitching: "exclude",
     systemAudio: "include"
   } as unknown as DisplayMediaStreamOptions;
+}
+
+export function createRemoteBrowserAudioCaptureOptions(): MediaStreamConstraints {
+  return {
+    audio: {
+      echoCancellation: false,
+      noiseSuppression: false,
+      autoGainControl: false,
+      channelCount: { ideal: 2 }
+    }
+  };
 }
 
 export function remoteBrowserServiceUrlOrigins(value: string): string[] {
@@ -666,12 +675,13 @@ function remoteBrowserErrorDetail(error: unknown): string {
   return message.replace(/[\r\n\t]+/g, " ").slice(0, 500);
 }
 
-async function publishViewportFromCapturePage(input: { page: Page; livekitUrl: string; token: string; captureOptions: DisplayMediaStreamOptions; buttonId: string; removeButtonAfterCapture?: boolean }): Promise<RemoteBrowserViewportPublishResult> {
-  await input.page.evaluate(({ livekitUrl: targetLivekitUrl, token: targetToken, displayMediaOptions, buttonId, removeButtonAfterCapture }) => {
+async function publishViewportFromCapturePage(input: { page: Page; livekitUrl: string; token: string; captureOptions: DisplayMediaStreamOptions; audioOptions: MediaStreamConstraints; buttonId: string; removeButtonAfterCapture?: boolean }): Promise<RemoteBrowserViewportPublishResult> {
+  await input.page.evaluate(({ livekitUrl: targetLivekitUrl, token: targetToken, displayMediaOptions, audioMediaOptions, buttonId, removeButtonAfterCapture }) => {
     type PublishResult = { ok?: boolean; videoTrackSid?: string; audioTrackSid?: string; errorCode?: string; message?: string };
     type PublishState = {
       room?: { disconnect: () => void };
       stream?: MediaStream;
+      streams?: MediaStream[];
     };
     const pageWindow = window as Window & {
       LivekitClient?: any;
@@ -696,24 +706,46 @@ async function publishViewportFromCapturePage(input: { page: Page; livekitUrl: s
       if (!navigator.mediaDevices?.getDisplayMedia) {
         return { ok: false, errorCode: "viewport_capture_unsupported", message: "getDisplayMedia_missing" };
       }
+      if (!navigator.mediaDevices?.getUserMedia) {
+        return { ok: false, errorCode: "audio_track_missing", message: "getUserMedia_missing" };
+      }
       pageWindow.__NOAH_REMOTE_BROWSER_LIVEKIT__?.room?.disconnect();
       pageWindow.__NOAH_REMOTE_BROWSER_LIVEKIT__?.stream?.getTracks().forEach((track) => track.stop());
-      let stream: MediaStream;
+      pageWindow.__NOAH_REMOTE_BROWSER_LIVEKIT__?.streams?.forEach((stream) => stream.getTracks().forEach((track) => track.stop()));
+      let displayStream: MediaStream | null = null;
+      let audioStream: MediaStream | null = null;
+      const stopStreams = () => {
+        displayStream?.getTracks().forEach((track) => track.stop());
+        audioStream?.getTracks().forEach((track) => track.stop());
+      };
       try {
-        stream = await navigator.mediaDevices.getDisplayMedia(displayMediaOptions as DisplayMediaStreamOptions);
+        displayStream = await navigator.mediaDevices.getDisplayMedia(displayMediaOptions as DisplayMediaStreamOptions);
       } catch (error) {
         removeCaptureButton();
         return { ok: false, errorCode: error instanceof DOMException && error.name === "NotAllowedError" ? "viewport_capture_denied" : "viewport_capture_failed", message: error instanceof Error ? `${error.name}:${error.message}` : "capture_failed" };
       }
+      if (!displayStream) {
+        return { ok: false, errorCode: "viewport_capture_failed", message: "display_stream_missing" };
+      }
       removeCaptureButton();
-      const videoTrack = stream.getVideoTracks().find((track) => track.readyState === "live");
-      const audioTrack = stream.getAudioTracks().find((track) => track.readyState === "live");
+      try {
+        audioStream = await navigator.mediaDevices.getUserMedia(audioMediaOptions as MediaStreamConstraints);
+      } catch (error) {
+        stopStreams();
+        return { ok: false, errorCode: "audio_track_missing", message: error instanceof Error ? `getUserMedia:${error.name}:${error.message}` : "getUserMedia_failed" };
+      }
+      if (!audioStream) {
+        stopStreams();
+        return { ok: false, errorCode: "audio_track_missing", message: "audio_stream_missing" };
+      }
+      const videoTrack = displayStream.getVideoTracks().find((track) => track.readyState === "live");
+      const audioTrack = audioStream.getAudioTracks().find((track) => track.readyState === "live");
       if (!videoTrack) {
-        stream.getTracks().forEach((track) => track.stop());
+        stopStreams();
         return { ok: false, errorCode: "video_track_missing", message: "video_track_missing" };
       }
       if (!audioTrack) {
-        stream.getTracks().forEach((track) => track.stop());
+        stopStreams();
         return { ok: false, errorCode: "audio_track_missing", message: "audio_track_missing" };
       }
       try {
@@ -727,14 +759,14 @@ async function publishViewportFromCapturePage(input: { page: Page; livekitUrl: s
           name: "remote-browser-audio",
           source: LiveKit.Track.Source.ScreenShareAudio ?? "screen_share_audio"
         });
-        pageWindow.__NOAH_REMOTE_BROWSER_LIVEKIT__ = { room, stream };
+        pageWindow.__NOAH_REMOTE_BROWSER_LIVEKIT__ = { room, streams: [displayStream, audioStream] };
         return {
           ok: true,
           videoTrackSid: videoPublication.trackSid ?? videoPublication.sid ?? videoTrack.id,
           audioTrackSid: audioPublication.trackSid ?? audioPublication.sid ?? audioTrack.id
         };
       } catch (error) {
-        stream.getTracks().forEach((track) => track.stop());
+        stopStreams();
         return { ok: false, errorCode: "livekit_publish_failed", message: error instanceof Error ? error.message : "publish_failed" };
       }
     };
@@ -752,7 +784,7 @@ async function publishViewportFromCapturePage(input: { page: Page; livekitUrl: s
           pageWindow.__NOAH_REMOTE_BROWSER_PUBLISH_RESULT__ = { ok: false, errorCode: "viewport_capture_failed", message: error instanceof Error ? error.message : "publish_exception" };
         });
     };
-  }, { livekitUrl: input.livekitUrl, token: input.token, displayMediaOptions: input.captureOptions, buttonId: input.buttonId, removeButtonAfterCapture: input.removeButtonAfterCapture === true });
+  }, { livekitUrl: input.livekitUrl, token: input.token, displayMediaOptions: input.captureOptions, audioMediaOptions: input.audioOptions, buttonId: input.buttonId, removeButtonAfterCapture: input.removeButtonAfterCapture === true });
   await waitForPagePaint(input.page);
   await input.page.click(`#${input.buttonId}`, { timeout: 5000 });
   const resultHandle = await input.page.waitForFunction(() => {
@@ -777,6 +809,7 @@ async function publishViewportFromPublisherPage(session: RemoteBrowserSession, l
     livekitUrl,
     token,
     captureOptions: createRemoteBrowserViewportCaptureOptions({ width: viewport.width, height: viewport.height }),
+    audioOptions: createRemoteBrowserAudioCaptureOptions(),
     buttonId: remoteBrowserViewportPublisherButtonId
   });
   await session.page.bringToFront().catch(() => undefined);
@@ -814,6 +847,7 @@ async function publishViewportFromCurrentTab(session: RemoteBrowserSession, live
     livekitUrl,
     token,
     captureOptions: createRemoteBrowserCurrentTabCaptureOptions({ width: viewport.width, height: viewport.height }),
+    audioOptions: createRemoteBrowserAudioCaptureOptions(),
     buttonId: remoteBrowserCurrentTabCaptureButtonId,
     removeButtonAfterCapture: true
   });

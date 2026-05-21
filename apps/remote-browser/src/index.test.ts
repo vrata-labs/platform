@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  createRemoteBrowserAudioCaptureOptions,
   createRemoteBrowserCurrentTabCaptureOptions,
   createRemoteBrowserViewportCaptureOptions,
   remoteBrowserChromiumArgs,
@@ -123,18 +124,28 @@ test("remote browser capture title guard keeps target tab selectable", () => {
   }
 });
 
-test("remote browser viewport capture excludes the publisher tab and requests audio", () => {
+test("remote browser viewport capture excludes the publisher tab and uses separate audio capture", () => {
   const options = createRemoteBrowserViewportCaptureOptions({ width: 640, height: 360 }) as Record<string, unknown>;
   const video = options.video as { displaySurface?: string; width?: { ideal?: number }; height?: { ideal?: number } };
 
   assert.equal(video.displaySurface, "browser");
   assert.equal(video.width?.ideal, 640);
   assert.equal(video.height?.ideal, 360);
-  assert.equal(options.audio, true);
+  assert.equal(options.audio, false);
   assert.equal(options.selfBrowserSurface, "exclude");
   assert.equal(options.surfaceSwitching, "exclude");
   assert.equal(options.systemAudio, "include");
   assert.equal("preferCurrentTab" in options, false);
+});
+
+test("remote browser audio capture reads the browser output monitor without voice processing", () => {
+  const options = createRemoteBrowserAudioCaptureOptions();
+  const audio = options.audio as MediaTrackConstraints;
+
+  assert.equal(audio.echoCancellation, false);
+  assert.equal(audio.noiseSuppression, false);
+  assert.equal(audio.autoGainControl, false);
+  assert.deepEqual(audio.channelCount, { ideal: 2 });
 });
 
 test("remote browser Chromium auto-selects tab capture without desktop capture", () => {
@@ -146,14 +157,14 @@ test("remote browser Chromium auto-selects tab capture without desktop capture",
   assert.ok(args.includes("--window-size=640,360"));
 });
 
-test("remote browser current-tab capture requests this tab with audio", () => {
+test("remote browser current-tab capture requests this tab without display audio", () => {
   const options = createRemoteBrowserCurrentTabCaptureOptions({ width: 640, height: 360 }) as Record<string, unknown>;
   const video = options.video as { displaySurface?: string; width?: { ideal?: number }; height?: { ideal?: number } };
 
   assert.equal(video.displaySurface, "browser");
   assert.equal(video.width?.ideal, 640);
   assert.equal(video.height?.ideal, 360);
-  assert.equal(options.audio, true);
+  assert.equal(options.audio, false);
   assert.equal(options.preferCurrentTab, true);
   assert.equal(options.selfBrowserSurface, "include");
   assert.equal(options.surfaceSwitching, "exclude");

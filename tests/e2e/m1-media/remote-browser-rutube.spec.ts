@@ -3,6 +3,7 @@ import { expect, test, type APIRequestContext, type Page } from "@playwright/tes
 type RemoteBrowserDebug = {
   roomStateConnected?: boolean;
   sceneBundleState?: string | null;
+  speakerOutputLevel?: number;
   access?: { role?: string; canCreateRemoteBrowser?: boolean };
   remoteBrowser?: {
     active?: boolean;
@@ -398,6 +399,17 @@ async function expectDefaultDemoViewportVisible(page: Page): Promise<void> {
   expect(lastUiPixels, `default demo viewport stayed visually blank: ${JSON.stringify({ lastUiPixels, lastSample, remoteBrowser: lastDebug }, null, 2)}`).toBeGreaterThan(4);
 }
 
+async function expectSilentRemoteBrowserAudio(page: Page): Promise<void> {
+  const levels: number[] = [];
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < 5000) {
+    const debug = await readDebug(page);
+    levels.push(debug?.speakerOutputLevel ?? 0);
+    await page.waitForTimeout(250);
+  }
+  expect(Math.max(...levels)).toBeLessThan(0.03);
+}
+
 function inputReachedRutubeHoverTarget(debug: RemoteBrowserDebug["remoteBrowser"] | null): boolean {
   const detail = debug?.lastExecutorInput?.targetDetail;
   if (!detail) {
@@ -571,6 +583,7 @@ test("@staging remote browser default demo renders visible viewport and receives
     await waitForRemoteBrowserViewportState(page, expectedUrl);
     await waitForRemoteBrowserViewportMedia(page, expectedUrl);
     await expectDefaultDemoViewportVisible(page);
+    await expectSilentRemoteBrowserAudio(page);
 
     await sendSurfaceInput(page, { kind: "click", u: 0.13, v: 0.67 });
     await expect.poll(async () => {
