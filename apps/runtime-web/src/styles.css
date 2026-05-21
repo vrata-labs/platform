@@ -181,6 +181,7 @@ canvas {
 }
 
 .space-picker label,
+.surface-picker,
 .space-select-status,
 .avatar-sandbox label,
 .avatar-sandbox-status,
@@ -194,6 +195,7 @@ canvas {
 }
 
 #space-select,
+#media-surface-select,
 #avatar-preset-select,
 #remote-browser-url,
 #mic-select,
@@ -209,6 +211,7 @@ canvas {
 }
 
 #space-select option,
+#media-surface-select option,
 #avatar-preset-select option,
 #mic-select option,
 #speaker-select option {
@@ -217,6 +220,7 @@ canvas {
 }
 
 #space-select:disabled,
+#media-surface-select:disabled,
 #avatar-preset-select:disabled,
 #remote-browser-url:disabled,
 #mic-select:disabled,

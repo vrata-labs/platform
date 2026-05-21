@@ -2,6 +2,8 @@ import type { RoomPermission, RoomRole } from "./access.js";
 import type { SurfaceInputEvent } from "./surface-input.js";
 
 export const DEFAULT_MEDIA_SURFACE_ID = "debug-main";
+export const WHITEBOARD_MEDIA_SURFACE_ID = "whiteboard-wall";
+export const LAPTOP_MEDIA_SURFACE_ID = "laptop-screen";
 export const SURFACE_TEST_CARD_TYPE = "surface-test-card";
 export const SCREEN_SHARE_OBJECT_TYPE = "screen-share";
 export const WHITEBOARD_OBJECT_TYPE = "whiteboard";
@@ -18,6 +20,18 @@ export type MediaObjectStatus = "active" | "stopped" | "failed";
 export interface MediaSurface {
   surfaceId: string;
   roomId: string;
+  label?: string;
+  kind?: "wall" | "table" | "laptop" | "floating" | "custom";
+  widthM?: number;
+  heightM?: number;
+  transform?: {
+    x: number;
+    y: number;
+    z: number;
+    yaw: number;
+    pitch: number;
+    roll: number;
+  };
   widthPx: number;
   heightPx: number;
   inputEnabled: boolean;
@@ -224,17 +238,57 @@ export interface MediaObjectCommandResult {
 }
 
 export function createDefaultRoomMediaObjectsState(roomId: string): RoomMediaObjectsState {
+  const commonObjectTypes = [SURFACE_TEST_CARD_TYPE, SCREEN_SHARE_OBJECT_TYPE, WHITEBOARD_OBJECT_TYPE, REMOTE_BROWSER_OBJECT_TYPE];
   return {
     surfaces: {
       [DEFAULT_MEDIA_SURFACE_ID]: {
         surfaceId: DEFAULT_MEDIA_SURFACE_ID,
         roomId,
+        label: "Main screen",
+        kind: "wall",
+        widthM: 5.8,
+        heightM: 3.3,
+        transform: { x: 0, y: 2.2, z: -6.6, yaw: 0, pitch: 0, roll: 0 },
         widthPx: 1920,
         heightPx: 1080,
         inputEnabled: true,
         mediaAudioEnabled: false,
         visible: true,
-        allowedObjectTypes: [SURFACE_TEST_CARD_TYPE, SCREEN_SHARE_OBJECT_TYPE, WHITEBOARD_OBJECT_TYPE, REMOTE_BROWSER_OBJECT_TYPE],
+        allowedObjectTypes: commonObjectTypes,
+        activeObjectId: null,
+        lockedByParticipantId: null
+      },
+      [WHITEBOARD_MEDIA_SURFACE_ID]: {
+        surfaceId: WHITEBOARD_MEDIA_SURFACE_ID,
+        roomId,
+        label: "Whiteboard wall",
+        kind: "wall",
+        widthM: 3.2,
+        heightM: 2.0,
+        transform: { x: -4.6, y: 2.0, z: -5.8, yaw: 0.18, pitch: 0, roll: 0 },
+        widthPx: 1920,
+        heightPx: 1080,
+        inputEnabled: true,
+        mediaAudioEnabled: false,
+        visible: true,
+        allowedObjectTypes: [SURFACE_TEST_CARD_TYPE, WHITEBOARD_OBJECT_TYPE],
+        activeObjectId: null,
+        lockedByParticipantId: null
+      },
+      [LAPTOP_MEDIA_SURFACE_ID]: {
+        surfaceId: LAPTOP_MEDIA_SURFACE_ID,
+        roomId,
+        label: "Laptop screen",
+        kind: "laptop",
+        widthM: 1.9,
+        heightM: 1.1,
+        transform: { x: 3.7, y: 1.45, z: -4.2, yaw: -0.28, pitch: 0, roll: 0 },
+        widthPx: 1280,
+        heightPx: 720,
+        inputEnabled: true,
+        mediaAudioEnabled: false,
+        visible: true,
+        allowedObjectTypes: [SURFACE_TEST_CARD_TYPE, SCREEN_SHARE_OBJECT_TYPE, REMOTE_BROWSER_OBJECT_TYPE],
         activeObjectId: null,
         lockedByParticipantId: null
       }

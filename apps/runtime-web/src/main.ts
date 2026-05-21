@@ -2,9 +2,12 @@ import * as THREE from "three";
 import { VRButton } from "three/examples/jsm/webxr/VRButton.js";
 import { Room, RoomEvent, Track } from "livekit-client";
 import {
+  DEFAULT_MEDIA_SURFACE_ID,
+  LAPTOP_MEDIA_SURFACE_ID,
   REMOTE_BROWSER_OBJECT_TYPE,
   SCREEN_SHARE_OBJECT_TYPE,
   SURFACE_TEST_CARD_TYPE,
+  WHITEBOARD_MEDIA_SURFACE_ID,
   WHITEBOARD_MAX_POINTS_PER_STROKE,
   WHITEBOARD_OBJECT_TYPE,
   createRoomAccessDebugState,
@@ -210,6 +213,7 @@ const guestAccessLineEl = mustElement<HTMLDivElement>("#guest-access-line");
 const spaceSelect = mustElement<HTMLSelectElement>("#space-select");
 const spaceSelectStatusEl = mustElement<HTMLDivElement>("#space-select-status");
 const sceneHost = mustElement<HTMLDivElement>("#scene");
+const mediaSurfaceSelect = mustElement<HTMLSelectElement>("#media-surface-select");
 const joinAudioButton = mustElement<HTMLButtonElement>("#join-audio");
 const muteButton = mustElement<HTMLButtonElement>("#toggle-mute");
 const startWhiteboardButton = mustElement<HTMLButtonElement>("#start-whiteboard");
@@ -368,14 +372,33 @@ const roomBox = new THREE.Mesh(new THREE.BoxGeometry(14, 5, 14), wallMaterial);
 roomBox.position.set(0, 2.5, 0);
 scene.add(roomBox);
 
+const DEBUG_SURFACE_ID = DEFAULT_MEDIA_SURFACE_ID;
 const DEBUG_SURFACE_WIDTH_M = 5.8;
 const DEBUG_SURFACE_HEIGHT_M = 3.3;
+const WHITEBOARD_SURFACE_WIDTH_M = 3.2;
+const WHITEBOARD_SURFACE_HEIGHT_M = 2.0;
+const LAPTOP_SURFACE_WIDTH_M = 1.9;
+const LAPTOP_SURFACE_HEIGHT_M = 1.1;
+function createMediaSurfaceMesh(widthM: number, heightM: number, color = 0xffffff): THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial> {
+  return new THREE.Mesh(
+    new THREE.PlaneGeometry(widthM, heightM),
+    new THREE.MeshBasicMaterial({ color, toneMapped: false })
+  );
+}
 const displaySurface = new THREE.Mesh(
   new THREE.PlaneGeometry(DEBUG_SURFACE_WIDTH_M, DEBUG_SURFACE_HEIGHT_M),
   new THREE.MeshBasicMaterial({ color: 0xffffff, toneMapped: false })
 );
 displaySurface.position.set(0, 2.2, -6.6);
 scene.add(displaySurface);
+const whiteboardSurface = createMediaSurfaceMesh(WHITEBOARD_SURFACE_WIDTH_M, WHITEBOARD_SURFACE_HEIGHT_M, 0xf8fafc);
+whiteboardSurface.position.set(-4.6, 2.0, -5.8);
+whiteboardSurface.rotation.y = 0.18;
+scene.add(whiteboardSurface);
+const laptopSurface = createMediaSurfaceMesh(LAPTOP_SURFACE_WIDTH_M, LAPTOP_SURFACE_HEIGHT_M, 0xf8fbff);
+laptopSurface.position.set(3.7, 1.45, -4.2);
+laptopSurface.rotation.y = -0.28;
+scene.add(laptopSurface);
 const remoteBrowserVrKeyboardView = createRemoteBrowserVrKeyboardView();
 displaySurface.add(remoteBrowserVrKeyboardView.root);
 
@@ -395,12 +418,28 @@ whiteboardPreviewLine.frustumCulled = false;
 whiteboardPreviewLine.visible = false;
 displaySurface.add(whiteboardPreviewLine);
 
-const DEBUG_SURFACE_ID = "debug-main";
 const DEBUG_SURFACE_WIDTH_PX = 1920;
 const DEBUG_SURFACE_HEIGHT_PX = 1080;
 displaySurface.userData.surfaceId = DEBUG_SURFACE_ID;
+whiteboardSurface.userData.surfaceId = WHITEBOARD_MEDIA_SURFACE_ID;
+laptopSurface.userData.surfaceId = LAPTOP_MEDIA_SURFACE_ID;
 
-const fallbackEnvironment: THREE.Object3D[] = [floor, grid, roomBox, displaySurface];
+interface RuntimeMediaSurfaceView {
+  surfaceId: string;
+  object: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
+  widthPx: number;
+  heightPx: number;
+  widthM: number;
+  heightM: number;
+}
+
+const mediaSurfaceViews = new Map<string, RuntimeMediaSurfaceView>([
+  [DEBUG_SURFACE_ID, { surfaceId: DEBUG_SURFACE_ID, object: displaySurface, widthPx: DEBUG_SURFACE_WIDTH_PX, heightPx: DEBUG_SURFACE_HEIGHT_PX, widthM: DEBUG_SURFACE_WIDTH_M, heightM: DEBUG_SURFACE_HEIGHT_M }],
+  [WHITEBOARD_MEDIA_SURFACE_ID, { surfaceId: WHITEBOARD_MEDIA_SURFACE_ID, object: whiteboardSurface, widthPx: DEBUG_SURFACE_WIDTH_PX, heightPx: DEBUG_SURFACE_HEIGHT_PX, widthM: WHITEBOARD_SURFACE_WIDTH_M, heightM: WHITEBOARD_SURFACE_HEIGHT_M }],
+  [LAPTOP_MEDIA_SURFACE_ID, { surfaceId: LAPTOP_MEDIA_SURFACE_ID, object: laptopSurface, widthPx: 1280, heightPx: 720, widthM: LAPTOP_SURFACE_WIDTH_M, heightM: LAPTOP_SURFACE_HEIGHT_M }]
+]);
+
+const fallbackEnvironment: THREE.Object3D[] = [floor, grid, roomBox, ...Array.from(mediaSurfaceViews.values()).map((surface) => surface.object)];
 
 const bodyGeometry = new THREE.CapsuleGeometry(0.24, 0.8, 6, 12);
 const headGeometry = new THREE.SphereGeometry(0.18, 20, 20);
@@ -448,11 +487,13 @@ let diagnosticsAccumulator = 0;
 let latestMode: PresenceState["mode"] = presenceXrMockEnabled ? "vr" : /android|iphone|ipad/i.test(navigator.userAgent) ? "mobile" : "desktop";
 let activeScreenShareTrack: Track | null = null;
 let activeScreenShareElement: HTMLVideoElement | null = null;
+let activeScreenShareSurfaceId: string | null = null;
 let activeRemoteScreenShareTrackCount = 0;
 let activeRemoteBrowserVideoTrack: Track | null = null;
 let activeRemoteBrowserVideoElement: HTMLVideoElement | null = null;
 let activeRemoteBrowserVideoTrackSid: string | null = null;
 let activeRemoteBrowserObjectId: string | null = null;
+let activeRemoteBrowserVideoSurfaceId: string | null = null;
 let activeRemoteBrowserVideoPlayError: string | null = null;
 let activeRemoteBrowserVideoFrameCount = 0;
 let activeRemoteBrowserVideoLastFrameAtMs = 0;
@@ -509,6 +550,7 @@ let sceneSeatAnchorMap = createSeatAnchorReadModel([]).anchorMap;
 let sceneAnchorsReady = true;
 let roomSeatOccupancy: Record<string, string> = {};
 let roomMediaObjects: RoomMediaObjectsState | null = null;
+let selectedMediaSurfaceId = DEBUG_SURFACE_ID;
 const mediaSurfaceCommands = createMediaSurfaceCommandClient({
   participantId,
   getClient: () => roomStateClient,
@@ -523,7 +565,7 @@ const whiteboardRuntime = createWhiteboardObjectRuntime({
   getPermissions: () => debugState.access.permissions,
   getLatestObject: (surfaceId) => activeWhiteboardObjectForSurface(surfaceId),
   patchObject: (objectId, surfaceId, expectedRevision, patch) => mediaSurfaceCommands.patchWhiteboardObject(objectId, surfaceId, expectedRevision, patch),
-  applyTexture: (texture) => applyDisplayTexture(texture),
+  applyTexture: (texture) => applySurfaceTexture((activeWhiteboardObjectForSurface(selectedMediaSurfaceId) ?? findActiveWhiteboardObject())?.surfaceId ?? selectedMediaSurfaceId, texture),
   applyPreview: (stroke) => applyWhiteboardPreviewOverlay(stroke),
   onBlocked: (blockedReason, errorCode) => {
     debugState.mediaObjects.blockedReason = blockedReason;
@@ -542,7 +584,7 @@ const remoteBrowserRuntime = createRemoteBrowserObjectRuntime({
   getLatestObject: (surfaceId) => activeRemoteBrowserObjectForSurface(surfaceId),
   patchObject: (objectId, surfaceId, expectedRevision, patch) => mediaSurfaceCommands.patchRemoteBrowserObject(objectId, surfaceId, expectedRevision, patch),
   isExternalVideoActive: (object) => activeRemoteBrowserObjectId === object.objectId && Boolean(activeRemoteBrowserVideoElement),
-  applyTexture: (texture) => applyDisplayTexture(texture),
+  applyTexture: (texture) => applySurfaceTexture((activeRemoteBrowserObjectForSurface(selectedMediaSurfaceId) ?? findActiveRemoteBrowserObject())?.surfaceId ?? selectedMediaSurfaceId, texture),
   onBlocked: (blockedReason, errorCode) => {
     debugState.mediaObjects.blockedReason = blockedReason;
     debugState.remoteBrowser.errorCode = errorCode as RemoteBrowserErrorCode | string | null;
@@ -646,7 +688,9 @@ function applyCleanSceneMode(enabled: boolean): void {
   floor.visible = !enabled;
   grid.visible = !enabled;
   roomBox.visible = !enabled;
-  displaySurface.visible = true;
+  for (const surface of mediaSurfaceViews.values()) {
+    surface.object.visible = true;
+  }
 }
 
 function updateLocalPositionDebug(): void {
@@ -717,7 +761,7 @@ function updateMediaDiagnostics(): void {
     publishedAudio: Boolean(livekitRoom && microphoneEnabled),
     subscribedAudioCount: remoteAudioNodes.size
   };
-  const activeRemoteBrowser = activeRemoteBrowserObjectForSurface(DEBUG_SURFACE_ID);
+  const activeRemoteBrowser = activeRemoteBrowserObjectForSurface(selectedMediaSurfaceId) ?? findActiveRemoteBrowserObject();
   if (activeRemoteBrowser) {
     remoteBrowserRuntime.sync(activeRemoteBrowser);
   }
@@ -895,6 +939,88 @@ function activeRemoteBrowserObjectForSurface(surfaceId: string): MediaObjectInst
   return selectActiveRemoteBrowserObjectForSurface(roomMediaObjects, surfaceId);
 }
 
+function findActiveObjectByType<State>(type: string): MediaObjectInstance<State> | null {
+  if (!roomMediaObjects) {
+    return null;
+  }
+  for (const object of Object.values(roomMediaObjects.objects)) {
+    if (object.type === type && roomMediaObjects.surfaces[object.surfaceId]?.activeObjectId === object.objectId) {
+      return object as MediaObjectInstance<State>;
+    }
+  }
+  return null;
+}
+
+function findActiveScreenShareObject(): MediaObjectInstance<ScreenShareObjectState> | null {
+  return findActiveObjectByType<ScreenShareObjectState>(SCREEN_SHARE_OBJECT_TYPE);
+}
+
+function findActiveWhiteboardObject(): MediaObjectInstance<WhiteboardState> | null {
+  return findActiveObjectByType<WhiteboardState>(WHITEBOARD_OBJECT_TYPE);
+}
+
+function findActiveRemoteBrowserObject(): MediaObjectInstance<RemoteBrowserObjectState> | null {
+  return findActiveObjectByType<RemoteBrowserObjectState>(REMOTE_BROWSER_OBJECT_TYPE);
+}
+
+function syncMediaSurfaceObjectIds(): void {
+  for (const surface of mediaSurfaceViews.values()) {
+    surface.object.userData.objectId = activeMediaObjectIdForSurface(surface.surfaceId) ?? null;
+  }
+}
+
+function getMediaSurfaceView(surfaceId: string): RuntimeMediaSurfaceView {
+  return mediaSurfaceViews.get(surfaceId) ?? mediaSurfaceViews.get(DEBUG_SURFACE_ID)!;
+}
+
+function getSelectedMediaSurfaceView(): RuntimeMediaSurfaceView {
+  return getMediaSurfaceView(selectedMediaSurfaceId);
+}
+
+function getKnownMediaSurfaceIds(): string[] {
+  const ids = new Set<string>([DEBUG_SURFACE_ID, WHITEBOARD_MEDIA_SURFACE_ID, LAPTOP_MEDIA_SURFACE_ID]);
+  for (const surfaceId of Object.keys(roomMediaObjects?.surfaces ?? {})) {
+    ids.add(surfaceId);
+  }
+  return Array.from(ids);
+}
+
+function getMediaSurfaceLabel(surfaceId: string): string {
+  return roomMediaObjects?.surfaces[surfaceId]?.label
+    ?? (surfaceId === DEBUG_SURFACE_ID ? "Main screen" : surfaceId === WHITEBOARD_MEDIA_SURFACE_ID ? "Whiteboard wall" : surfaceId === LAPTOP_MEDIA_SURFACE_ID ? "Laptop screen" : surfaceId);
+}
+
+function surfaceAllowsObject(surfaceId: string, objectType: string): boolean {
+  const surface = roomMediaObjects?.surfaces[surfaceId];
+  return surface?.allowedObjectTypes.includes(objectType) ?? true;
+}
+
+function selectMediaSurface(surfaceId: string): boolean {
+  if (!mediaSurfaceViews.has(surfaceId) && !roomMediaObjects?.surfaces[surfaceId]) {
+    return false;
+  }
+  selectedMediaSurfaceId = surfaceId;
+  mediaSurfaceSelect.value = surfaceId;
+  syncMediaObjectsDebugState();
+  return true;
+}
+
+function syncMediaSurfaceSelector(): void {
+  const surfaceIds = getKnownMediaSurfaceIds();
+  if (!surfaceIds.includes(selectedMediaSurfaceId)) {
+    selectedMediaSurfaceId = DEBUG_SURFACE_ID;
+  }
+  mediaSurfaceSelect.replaceChildren();
+  for (const surfaceId of surfaceIds) {
+    const option = document.createElement("option");
+    option.value = surfaceId;
+    option.textContent = getMediaSurfaceLabel(surfaceId);
+    option.selected = surfaceId === selectedMediaSurfaceId;
+    mediaSurfaceSelect.appendChild(option);
+  }
+  mediaSurfaceSelect.disabled = surfaceIds.length < 2;
+}
+
 async function setMediaSurfaceAudioEnabled(surfaceId: string, enabled: boolean): Promise<SurfaceCommandResult> {
   return mediaSurfaceCommands.setMediaSurfaceAudioEnabled(surfaceId, enabled);
 }
@@ -904,14 +1030,14 @@ function canConfigureSurfaceAudio(): boolean {
 }
 
 function syncSurfaceAudioControl(): void {
-  const surface = roomMediaObjects?.surfaces[DEBUG_SURFACE_ID] ?? null;
+  const surface = roomMediaObjects?.surfaces[selectedMediaSurfaceId] ?? null;
   const canConfigure = canConfigureSurfaceAudio();
   const mediaAudioEnabled = surfaceAudioPendingEnabled ?? surface?.mediaAudioEnabled === true;
   surfaceAudioControlEl.hidden = !canConfigure;
   surfaceAudioCheckbox.checked = mediaAudioEnabled;
   surfaceAudioCheckbox.disabled = !canConfigure || !roomStateConnected || !surface || surfaceAudioCommandPending;
   debugState.surfaceAudio = {
-    surfaceId: surface?.surfaceId ?? DEBUG_SURFACE_ID,
+    surfaceId: surface?.surfaceId ?? selectedMediaSurfaceId,
     mediaAudioEnabled,
     canConfigure,
     pending: surfaceAudioCommandPending,
@@ -937,12 +1063,14 @@ function normalizeRemoteBrowserUrlInput(value: string): string {
 }
 
 function canUseRemoteBrowserOpenControl(): boolean {
-  return roomStateConnected && hasRoomPermission(debugState.access.permissions, "remote-browser.open-url");
+  return roomStateConnected
+    && hasRoomPermission(debugState.access.permissions, "remote-browser.open-url")
+    && surfaceAllowsObject(selectedMediaSurfaceId, REMOTE_BROWSER_OBJECT_TYPE);
 }
 
 function syncRemoteBrowserControls(): void {
-  const activeObject = activeMediaObjectForSurface(DEBUG_SURFACE_ID);
-  const remoteBrowser = activeRemoteBrowserObjectForSurface(DEBUG_SURFACE_ID);
+  const activeObject = activeMediaObjectForSurface(selectedMediaSurfaceId);
+  const remoteBrowser = activeRemoteBrowserObjectForSurface(selectedMediaSurfaceId);
   const snapshot = remoteBrowserRuntime.createDebugSnapshot(remoteBrowser);
   debugState.remoteBrowser = { ...debugState.remoteBrowser, ...snapshot, ...createRemoteBrowserExternalVideoDebugSnapshot() };
   const canOpen = canUseRemoteBrowserOpenControl();
@@ -971,10 +1099,12 @@ function syncRemoteBrowserControls(): void {
 }
 
 function syncMediaObjectsDebugState(): void {
+  syncMediaSurfaceSelector();
   const surfaces = roomMediaObjects ? Object.values(roomMediaObjects.surfaces) : [];
   const objects = roomMediaObjects ? Object.values(roomMediaObjects.objects) : [];
   debugState.mediaObjects.surfaces = surfaces.map((surface) => ({
     surfaceId: surface.surfaceId,
+    label: getMediaSurfaceLabel(surface.surfaceId),
     activeObjectId: surface.activeObjectId,
     activeObjectType: surface.activeObjectId ? roomMediaObjects?.objects[surface.activeObjectId]?.type ?? null : null,
     inputEnabled: surface.inputEnabled,
@@ -991,11 +1121,12 @@ function syncMediaObjectsDebugState(): void {
     revision: object.revision,
     status: object.status
   }));
-  const activeObject = activeMediaObjectForSurface(DEBUG_SURFACE_ID);
+  debugState.mediaObjects.selectedSurfaceId = selectedMediaSurfaceId;
+  const activeObject = activeMediaObjectForSurface(selectedMediaSurfaceId);
   debugState.mediaObjects.activeTestCardClickCount = activeObject?.type === SURFACE_TEST_CARD_TYPE
     ? ((activeObject.state as SurfaceTestCardState).clickCount ?? 0)
     : null;
-  const activeWhiteboard = activeWhiteboardObjectForSurface(DEBUG_SURFACE_ID);
+  const activeWhiteboard = activeWhiteboardObjectForSurface(selectedMediaSurfaceId) ?? findActiveWhiteboardObject();
   debugState.whiteboard = {
     ...whiteboardRuntime.createDebugSnapshot(activeWhiteboard),
     drawToolActive: whiteboardDrawToolActive,
@@ -1003,26 +1134,27 @@ function syncMediaObjectsDebugState(): void {
     xrPencilVisible: whiteboardPencils.some((pencil) => pencil.visible)
   };
   if (activeWhiteboard) {
+    attachWhiteboardPreviewToSurface(activeWhiteboard.surfaceId);
     whiteboardRuntime.render(activeWhiteboard.state);
-  } else if (displaySurface.material instanceof THREE.MeshBasicMaterial && whiteboardRuntime.ownsTexture(displaySurface.material.map)) {
+  } else if (findSurfaceWithTexture((texture) => whiteboardRuntime.ownsTexture(texture))) {
     whiteboardRuntime.clearPreview();
-    applyDisplayTexture(null);
+    clearSurfaceTextureWhere((texture) => whiteboardRuntime.ownsTexture(texture));
   }
-  const activeRemoteBrowser = activeRemoteBrowserObjectForSurface(DEBUG_SURFACE_ID);
+  const activeRemoteBrowser = activeRemoteBrowserObjectForSurface(selectedMediaSurfaceId) ?? findActiveRemoteBrowserObject();
   if (activeRemoteBrowser) {
     remoteBrowserRuntime.sync(activeRemoteBrowser);
     if (activeRemoteBrowserObjectId && activeRemoteBrowserObjectId !== activeRemoteBrowser.objectId) {
       detachRemoteBrowserVideoTrack();
     }
-  } else if (displaySurface.material instanceof THREE.MeshBasicMaterial && remoteBrowserRuntime.ownsTexture(displaySurface.material.map)) {
+  } else if (findSurfaceWithTexture((texture) => remoteBrowserRuntime.ownsTexture(texture))) {
     remoteBrowserRuntime.close();
     detachRemoteBrowserVideoTrack();
-    applyDisplayTexture(null);
+    clearSurfaceTextureWhere((texture) => remoteBrowserRuntime.ownsTexture(texture));
   } else {
     remoteBrowserRuntime.close();
     detachRemoteBrowserVideoTrack();
   }
-  const activeScreenShare = activeScreenShareObjectForSurface(DEBUG_SURFACE_ID);
+  const activeScreenShare = activeScreenShareObjectForSurface(selectedMediaSurfaceId) ?? findActiveScreenShareObject();
   const screenShareState = activeScreenShare?.state ?? null;
   debugState.screenShare = {
     supported: shareMockEnabled || browserMediaCapabilities.screenShare.supported,
@@ -1033,7 +1165,7 @@ function syncMediaObjectsDebugState(): void {
     remoteSubscribedTrackCount: screenShareState?.mediaTrackSid && screenShareState.ownerParticipantId !== participantId
       ? Math.max(activeRemoteScreenShareTrackCount, 1)
       : activeRemoteScreenShareTrackCount,
-    mediaAudioEnabled: shouldPublishMediaSurfaceAudio(roomMediaObjects, DEBUG_SURFACE_ID),
+    mediaAudioEnabled: shouldPublishMediaSurfaceAudio(roomMediaObjects, activeScreenShare?.surfaceId ?? selectedMediaSurfaceId),
     errorCode: screenShareState?.errorCode ?? null
   };
   if (!isScreenSharing && screenShareState?.status === "active") {
@@ -1048,7 +1180,7 @@ function syncMediaObjectsDebugState(): void {
   syncWhiteboardControls();
   syncRemoteBrowserControls();
   syncSurfaceAudioControl();
-  displaySurface.userData.objectId = activeObject?.objectId ?? null;
+  syncMediaSurfaceObjectIds();
 }
 
 function routeSurfaceInputToMediaObject(event: SurfaceInputEvent): boolean {
@@ -1400,36 +1532,38 @@ function supportsAudioOutputSelection(): boolean {
 }
 
 function canUseScreenShareControl(): boolean {
-  const activeObject = activeMediaObjectForSurface(DEBUG_SURFACE_ID);
+  const activeObject = activeMediaObjectForSurface(selectedMediaSurfaceId);
   return debugState.access.canStartScreenShare
     && roomStateConnected
     && !activeObject
+    && surfaceAllowsObject(selectedMediaSurfaceId, SCREEN_SHARE_OBJECT_TYPE)
     && (shareMockEnabled || (runtimeFlags.screenShare && browserMediaCapabilities.screenShare.supported));
 }
 
 function canUseWhiteboardControl(): boolean {
-  const activeObject = activeMediaObjectForSurface(DEBUG_SURFACE_ID);
+  const activeObject = activeMediaObjectForSurface(selectedMediaSurfaceId);
   return debugState.access.canCreateWhiteboard
     && roomStateConnected
-    && !activeObject;
+    && !activeObject
+    && surfaceAllowsObject(selectedMediaSurfaceId, WHITEBOARD_OBJECT_TYPE);
 }
 
 function canClearWhiteboardControl(): boolean {
   return hasRoomPermission(debugState.access.permissions, "whiteboard.clear")
     && roomStateConnected
-    && Boolean(activeWhiteboardObjectForSurface(DEBUG_SURFACE_ID));
+    && Boolean(activeWhiteboardObjectForSurface(selectedMediaSurfaceId));
 }
 
 function canStopWhiteboardControl(): boolean {
   return hasRoomPermission(debugState.access.permissions, "surface.stop-object")
     && roomStateConnected
-    && Boolean(activeWhiteboardObjectForSurface(DEBUG_SURFACE_ID));
+    && Boolean(activeWhiteboardObjectForSurface(selectedMediaSurfaceId));
 }
 
 function canUseWhiteboardDrawTool(): boolean {
   return hasRoomPermission(debugState.access.permissions, "whiteboard.draw")
     && roomStateConnected
-    && Boolean(activeWhiteboardObjectForSurface(DEBUG_SURFACE_ID));
+    && Boolean(activeWhiteboardObjectForSurface(selectedMediaSurfaceId));
 }
 
 function syncWhiteboardControls(): void {
@@ -1455,7 +1589,7 @@ function syncWhiteboardControls(): void {
 }
 
 function canStopLocalScreenShare(): boolean {
-  const activeObject = activeScreenShareObjectForSurface(DEBUG_SURFACE_ID);
+  const activeObject = activeScreenShareObjectForSurface(selectedMediaSurfaceId) ?? findActiveScreenShareObject();
   return debugState.access.canStartScreenShare
     && roomStateConnected
     && Boolean(isScreenSharing || (activeObject && activeObject.ownerParticipantId === participantId));
@@ -1483,14 +1617,14 @@ function resolveDebugSurfaceHit(ray: THREE.Ray, source: SurfaceInputSource): Res
     ray,
     raycaster: surfaceInputRaycaster,
     source,
-    surfaces: [{
-      surfaceId: DEBUG_SURFACE_ID,
-      objectId: activeMediaObjectIdForSurface(DEBUG_SURFACE_ID),
-      object: displaySurface,
-      widthPx: DEBUG_SURFACE_WIDTH_PX,
-      heightPx: DEBUG_SURFACE_HEIGHT_PX,
-      inputEnabled: debugState.surfaceInput.enabled && displaySurface.visible
-    }]
+    surfaces: Array.from(mediaSurfaceViews.values()).map((surface) => ({
+      surfaceId: surface.surfaceId,
+      objectId: activeMediaObjectIdForSurface(surface.surfaceId),
+      object: surface.object,
+      widthPx: surface.widthPx,
+      heightPx: surface.heightPx,
+      inputEnabled: debugState.surfaceInput.enabled && surface.object.visible && roomMediaObjects?.surfaces[surface.surfaceId]?.visible !== false
+    }))
   });
 }
 
@@ -1527,26 +1661,28 @@ function resolveDebugSurfaceHitFromXrPencil(frameContext: RuntimeFrameContext, s
   if (!pencilPose) {
     return null;
   }
-  displaySurface.updateMatrixWorld(true);
+  for (const surface of mediaSurfaceViews.values()) {
+    surface.object.updateMatrixWorld(true);
+  }
   return resolveSurfaceHitFromPlanePoint({
     point: pencilPose.tipWorld,
     source,
-    surfaces: [{
-      surfaceId: DEBUG_SURFACE_ID,
-      objectId: activeMediaObjectIdForSurface(DEBUG_SURFACE_ID),
-      object: displaySurface,
-      widthPx: DEBUG_SURFACE_WIDTH_PX,
-      heightPx: DEBUG_SURFACE_HEIGHT_PX,
-      widthM: DEBUG_SURFACE_WIDTH_M,
-      heightM: DEBUG_SURFACE_HEIGHT_M,
+    surfaces: Array.from(mediaSurfaceViews.values()).map((surface) => ({
+      surfaceId: surface.surfaceId,
+      objectId: activeMediaObjectIdForSurface(surface.surfaceId),
+      object: surface.object,
+      widthPx: surface.widthPx,
+      heightPx: surface.heightPx,
+      widthM: surface.widthM,
+      heightM: surface.heightM,
       maxDistanceM: WHITEBOARD_PENCIL_CONTACT_DISTANCE_M,
-      inputEnabled: debugState.surfaceInput.enabled && displaySurface.visible
-    }]
+      inputEnabled: debugState.surfaceInput.enabled && surface.object.visible && roomMediaObjects?.surfaces[surface.surfaceId]?.visible !== false
+    }))
   });
 }
 
 function renderActiveWhiteboardAfterPreviewChange(): void {
-  const object = activeWhiteboardObjectForSurface(DEBUG_SURFACE_ID);
+  const object = activeWhiteboardObjectForSurface(selectedMediaSurfaceId) ?? findActiveWhiteboardObject();
   if (object) {
     whiteboardRuntime.render(object.state);
   }
@@ -1557,6 +1693,15 @@ function cancelWhiteboardPreview(): void {
   renderActiveWhiteboardAfterPreviewChange();
 }
 
+function attachWhiteboardPreviewToSurface(surfaceId: string): RuntimeMediaSurfaceView {
+  const surface = getMediaSurfaceView(surfaceId);
+  if (whiteboardPreviewLine.parent !== surface.object) {
+    surface.object.add(whiteboardPreviewLine);
+    whiteboardPreviewLine.position.set(0, 0, 0.018);
+  }
+  return surface;
+}
+
 function applyWhiteboardPreviewOverlay(stroke: WhiteboardStroke | null): void {
   const points = stroke?.points ?? [];
   if (points.length < 2) {
@@ -1565,12 +1710,14 @@ function applyWhiteboardPreviewOverlay(stroke: WhiteboardStroke | null): void {
     return;
   }
 
+  const activeWhiteboard = activeWhiteboardObjectForSurface(selectedMediaSurfaceId) ?? findActiveWhiteboardObject();
+  const surface = attachWhiteboardPreviewToSurface(activeWhiteboard?.surfaceId ?? selectedMediaSurfaceId);
   const count = Math.min(points.length, WHITEBOARD_MAX_POINTS_PER_STROKE);
   for (let index = 0; index < count; index += 1) {
     const point = points[index]!;
     const offset = index * 3;
-    whiteboardPreviewPositions[offset] = (point.u - 0.5) * DEBUG_SURFACE_WIDTH_M;
-    whiteboardPreviewPositions[offset + 1] = (0.5 - point.v) * DEBUG_SURFACE_HEIGHT_M;
+    whiteboardPreviewPositions[offset] = (point.u - 0.5) * surface.widthM;
+    whiteboardPreviewPositions[offset + 1] = (0.5 - point.v) * surface.heightM;
     whiteboardPreviewPositions[offset + 2] = 0;
   }
   whiteboardPreviewPositionAttribute.needsUpdate = true;
@@ -1596,7 +1743,7 @@ function canUseWhiteboardXrDrawInput(frameContext: RuntimeFrameContext): boolean
     && whiteboardDrawToolActive
     && hasRoomPermission(debugState.access.permissions, "whiteboard.draw")
     && roomStateConnected
-    && Boolean(activeWhiteboardObjectForSurface(DEBUG_SURFACE_ID));
+    && Boolean(activeWhiteboardObjectForSurface(selectedMediaSurfaceId) ?? findActiveWhiteboardObject());
 }
 
 function commitDebugSurfaceInput(input: {
@@ -1660,7 +1807,7 @@ function commitDebugSurfaceInputFromPointer(event: PointerEvent, kind: SurfaceIn
 }
 
 function commitRemoteBrowserHoverMoveFromPointer(event: PointerEvent): boolean {
-  if (event.pointerType === "touch" || renderer.xr.isPresenting || !activeRemoteBrowserObjectForSurface(DEBUG_SURFACE_ID)) {
+  if (event.pointerType === "touch" || renderer.xr.isPresenting) {
     return false;
   }
   const nowMs = Date.now();
@@ -1668,7 +1815,7 @@ function commitRemoteBrowserHoverMoveFromPointer(event: PointerEvent): boolean {
     return false;
   }
   const hit = resolveDebugSurfaceHitFromPointer(event.clientX, event.clientY, "mouse");
-  if (!hit) {
+  if (!hit || !activeRemoteBrowserObjectForSurface(hit.surfaceId)) {
     return false;
   }
   const committed = commitDebugSurfaceInput({
@@ -1686,18 +1833,20 @@ function commitRemoteBrowserHoverMoveFromPointer(event: PointerEvent): boolean {
 }
 
 function commitDebugSurfaceInputFromFocusedKeyboard(kind: Extract<SurfaceInputKind, "key-down" | "key-up">, event: KeyboardEvent): boolean {
-  if (debugState.surfaceInput.focusedSurfaceId !== DEBUG_SURFACE_ID) {
+  const focusedSurfaceId = debugState.surfaceInput.focusedSurfaceId;
+  if (!focusedSurfaceId) {
     return false;
   }
+  const surface = getMediaSurfaceView(focusedSurfaceId);
   const uv = debugState.surfaceInput.lastHit?.uv ?? { u: 0.5, v: 0.5 };
   const hit = createSyntheticSurfaceHit({
-    surfaceId: DEBUG_SURFACE_ID,
-    objectId: activeMediaObjectIdForSurface(DEBUG_SURFACE_ID),
+    surfaceId: focusedSurfaceId,
+    objectId: activeMediaObjectIdForSurface(focusedSurfaceId),
     source: "keyboard",
     uv,
-    widthPx: DEBUG_SURFACE_WIDTH_PX,
-    heightPx: DEBUG_SURFACE_HEIGHT_PX,
-    inputEnabled: debugState.surfaceInput.enabled && displaySurface.visible
+    widthPx: surface.widthPx,
+    heightPx: surface.heightPx,
+    inputEnabled: debugState.surfaceInput.enabled && surface.object.visible
   });
   return commitDebugSurfaceInput({
     hit,
@@ -1734,7 +1883,7 @@ function commitDebugSurfaceInputFromFrameRay(frameContext: RuntimeFrameContext, 
   if (!hit) {
     return false;
   }
-  const activeObject = activeMediaObjectForSurface(DEBUG_SURFACE_ID);
+  const activeObject = activeMediaObjectForSurface(hit.surfaceId);
   const whiteboardXrToolCanDraw = frameContext.source === "xr" && whiteboardDrawToolActive && canUseWhiteboardDrawTool();
   return commitDebugSurfaceInput({
     hit,
@@ -1748,9 +1897,9 @@ function commitDebugSurfaceInputFromFrameRay(frameContext: RuntimeFrameContext, 
 
 function isRemoteBrowserXrInputActive(frameContext: RuntimeFrameContext): boolean {
   return frameContext.source === "xr"
-    && Boolean(activeRemoteBrowserObjectForSurface(DEBUG_SURFACE_ID))
+    && Boolean(findActiveRemoteBrowserObject())
     && debugState.surfaceInput.enabled
-    && displaySurface.visible;
+    && Array.from(mediaSurfaceViews.values()).some((surface) => surface.object.visible);
 }
 
 function remoteBrowserVrKeyboardTargetDebugId(target: RemoteBrowserVrKeyboardTarget | null): string | null {
@@ -1870,19 +2019,22 @@ function commitRemoteBrowserVrKeyboardInput(input: { keyId: string | null; key?:
   if (!input.keyId || (!input.key && !input.text)) {
     return false;
   }
-  const uv = debugState.surfaceInput.lastHit?.surfaceId === DEBUG_SURFACE_ID
+  const remoteBrowser = activeRemoteBrowserObjectForSurface(selectedMediaSurfaceId) ?? findActiveRemoteBrowserObject();
+  const surfaceId = remoteBrowser?.surfaceId ?? selectedMediaSurfaceId;
+  const surface = getMediaSurfaceView(surfaceId);
+  const uv = debugState.surfaceInput.lastHit?.surfaceId === surfaceId
     ? debugState.surfaceInput.lastHit.uv
     : { u: 0.5, v: 0.5 };
   const hit = createSyntheticSurfaceHit({
-    surfaceId: DEBUG_SURFACE_ID,
-    objectId: activeMediaObjectIdForSurface(DEBUG_SURFACE_ID),
+    surfaceId,
+    objectId: activeMediaObjectIdForSurface(surfaceId),
     source: "keyboard",
     uv,
-    widthPx: DEBUG_SURFACE_WIDTH_PX,
-    heightPx: DEBUG_SURFACE_HEIGHT_PX,
-    inputEnabled: debugState.surfaceInput.enabled && displaySurface.visible
+    widthPx: surface.widthPx,
+    heightPx: surface.heightPx,
+    inputEnabled: debugState.surfaceInput.enabled && surface.object.visible
   });
-  if (debugState.surfaceInput.focusedSurfaceId !== DEBUG_SURFACE_ID) {
+  if (debugState.surfaceInput.focusedSurfaceId !== surfaceId) {
     tryFocusSurface({ state: debugState.surfaceInput, permissions: debugState.access.permissions, hit });
   }
   const committed = commitDebugSurfaceInput({
@@ -2007,8 +2159,8 @@ function updateAudioDeviceStatus(message: string): void {
   audioDeviceStatusEl.textContent = message;
 }
 
-function applyDisplayTexture(texture: THREE.Texture | null): void {
-  const material = displaySurface.material;
+function applySurfaceTexture(surfaceId: string, texture: THREE.Texture | null): void {
+  const material = getMediaSurfaceView(surfaceId).object.material;
   if (!(material instanceof THREE.MeshBasicMaterial)) {
     return;
   }
@@ -2024,6 +2176,29 @@ function applyDisplayTexture(texture: THREE.Texture | null): void {
   material.color.setHex(0xffffff);
   material.map = texture;
   material.needsUpdate = true;
+}
+
+function applyDisplayTexture(texture: THREE.Texture | null): void {
+  applySurfaceTexture(DEBUG_SURFACE_ID, texture);
+}
+
+function findSurfaceWithTexture(predicate: (texture: THREE.Texture | null) => boolean): RuntimeMediaSurfaceView | null {
+  for (const surface of mediaSurfaceViews.values()) {
+    const material = surface.object.material;
+    if (material instanceof THREE.MeshBasicMaterial && predicate(material.map)) {
+      return surface;
+    }
+  }
+  return null;
+}
+
+function clearSurfaceTextureWhere(predicate: (texture: THREE.Texture | null) => boolean): void {
+  for (const surface of mediaSurfaceViews.values()) {
+    const material = surface.object.material;
+    if (material instanceof THREE.MeshBasicMaterial && predicate(material.map)) {
+      applySurfaceTexture(surface.surfaceId, null);
+    }
+  }
 }
 
 function ensureAudioContext(): AudioContext {
@@ -2079,7 +2254,7 @@ function syncMediaCapabilityControls(): void {
   startWhiteboardButton.hidden = !debugState.access.canCreateWhiteboard;
   clearWhiteboardButton.hidden = !hasRoomPermission(debugState.access.permissions, "whiteboard.clear");
   stopWhiteboardButton.hidden = !hasRoomPermission(debugState.access.permissions, "surface.stop-object");
-  remoteBrowserControlEl.hidden = !debugState.access.canCreateRemoteBrowser && !activeRemoteBrowserObjectForSurface(DEBUG_SURFACE_ID);
+  remoteBrowserControlEl.hidden = !debugState.access.canCreateRemoteBrowser && !activeRemoteBrowserObjectForSurface(selectedMediaSurfaceId) && !findActiveRemoteBrowserObject();
   if (!debugState.access.canStartScreenShare) {
     startShareButton.disabled = true;
     startShareButton.title = "Host role required";
@@ -2369,7 +2544,7 @@ function syncRemoteBrowserLiveKitTracks(): void {
 }
 
 function ensureRemoteBrowserLiveKitRoom(): void {
-  const remoteBrowser = activeRemoteBrowserObjectForSurface(DEBUG_SURFACE_ID);
+  const remoteBrowser = findActiveRemoteBrowserObject();
   if (!remoteBrowserObjectNeedsLiveKitRoom(remoteBrowser)) {
     return;
   }
@@ -2798,8 +2973,10 @@ const debugState = {
   },
   surfaceInput: createSurfaceInputDebugState(DEBUG_SURFACE_ID),
   mediaObjects: {
+    selectedSurfaceId: DEBUG_SURFACE_ID,
     surfaces: [] as Array<{
       surfaceId: string;
+      label?: string;
       activeObjectId: string | null;
       activeObjectType: string | null;
       inputEnabled: boolean;
@@ -2854,20 +3031,21 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
     requestSeatClaimById: (seatId: string) => boolean;
     sendPrivilegedSurfaceCreate: () => boolean;
     createSurfaceTestCard: () => boolean;
-    createScreenShareObject: () => boolean;
-    createWhiteboardObject: () => boolean;
-    createRemoteBrowserObject: () => boolean;
+    createScreenShareObject: (surfaceId?: string) => boolean;
+    createWhiteboardObject: (surfaceId?: string) => boolean;
+    createRemoteBrowserObject: (surfaceId?: string) => boolean;
+    selectMediaSurface: (surfaceId: string) => boolean;
     openRemoteBrowser: (url?: string) => boolean;
     takeRemoteBrowserControl: () => boolean;
     releaseRemoteBrowserControl: () => boolean;
     createUnknownSurfaceObject: () => boolean;
-    stopActiveSurfaceObject: () => boolean;
+    stopActiveSurfaceObject: (surfaceId?: string) => boolean;
     sendStaleSurfaceTestCardPatch: () => boolean;
     sendStaleScreenSharePatch: () => boolean;
     sendStaleWhiteboardPatch: () => boolean;
     sendDuplicateWhiteboardPatch: () => boolean;
     clearWhiteboardObject: () => boolean;
-    setDebugSurfaceMediaAudioEnabled: (enabled: boolean) => boolean;
+    setDebugSurfaceMediaAudioEnabled: (enabled: boolean, surfaceId?: string) => boolean;
     startScreenShare: () => boolean;
     sendDebugSurfaceInput: (input?: {
       source?: SurfaceInputSource;
@@ -2877,11 +3055,14 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
       key?: string;
       text?: string;
       scrollDelta?: SurfaceInputScrollDelta;
+      surfaceId?: string;
     }) => boolean;
     setDebugSurfaceInputEnabled: (enabled: boolean) => boolean;
-    focusDebugSurface: () => boolean;
+    focusDebugSurface: (surfaceId?: string) => boolean;
     getDebugSurfaceWorldPosition: (u: number, v: number) => { x: number; y: number; z: number } | null;
     getDebugSurfaceClientPosition: (u: number, v: number) => { x: number; y: number } | null;
+    getMediaSurfaceWorldPosition: (surfaceId: string, u: number, v: number) => { x: number; y: number; z: number } | null;
+    getMediaSurfaceClientPosition: (surfaceId: string, u: number, v: number) => { x: number; y: number } | null;
     sampleDebugSurfaceTexture: (center: { u: number; v: number }, size?: { width: number; height: number }) => { clip: { sx: number; sy: number; sw: number; sh: number }; samples: Array<[number, number, number]> } | null;
     getRemoteBrowserVrKeyboardTargetWorldPosition: (targetId: string) => { x: number; y: number; z: number } | null;
     getRemoteBrowserVrKeyboardKeyWorldPosition: (keyId: string) => { x: number; y: number; z: number } | null;
@@ -2955,30 +3136,31 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
       probeOnly: false
     });
   },
-  createScreenShareObject: () => {
+  createScreenShareObject: (surfaceId = selectedMediaSurfaceId) => {
     return mediaSurfaceCommands.sendCreateObject({
       commandId: mediaSurfaceCommands.createCommandId("screen-share-create-test"),
-      surfaceId: DEBUG_SURFACE_ID,
+      surfaceId,
       objectType: SCREEN_SHARE_OBJECT_TYPE,
       probeOnly: false
     });
   },
-  createWhiteboardObject: () => {
+  createWhiteboardObject: (surfaceId = selectedMediaSurfaceId) => {
     return mediaSurfaceCommands.sendCreateObject({
       commandId: mediaSurfaceCommands.createCommandId("whiteboard-create-test"),
-      surfaceId: DEBUG_SURFACE_ID,
+      surfaceId,
       objectType: WHITEBOARD_OBJECT_TYPE,
       probeOnly: false
     });
   },
-  createRemoteBrowserObject: () => {
+  createRemoteBrowserObject: (surfaceId = selectedMediaSurfaceId) => {
     return mediaSurfaceCommands.sendCreateObject({
       commandId: mediaSurfaceCommands.createCommandId("remote-browser-create-test"),
-      surfaceId: DEBUG_SURFACE_ID,
+      surfaceId,
       objectType: REMOTE_BROWSER_OBJECT_TYPE,
       probeOnly: false
     });
   },
+  selectMediaSurface: (surfaceId) => selectMediaSurface(surfaceId),
   openRemoteBrowser: (url = "/remote-browser-demo.html") => {
     void openRemoteBrowser(url).catch((error: unknown) => {
       console.error(error);
@@ -2986,7 +3168,7 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
     return true;
   },
   takeRemoteBrowserControl: () => {
-    const object = activeRemoteBrowserObjectForSurface(DEBUG_SURFACE_ID);
+    const object = activeRemoteBrowserObjectForSurface(selectedMediaSurfaceId) ?? findActiveRemoteBrowserObject();
     if (!object) {
       return false;
     }
@@ -2998,7 +3180,7 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
     });
   },
   releaseRemoteBrowserControl: () => {
-    const object = activeRemoteBrowserObjectForSurface(DEBUG_SURFACE_ID);
+    const object = activeRemoteBrowserObjectForSurface(selectedMediaSurfaceId) ?? findActiveRemoteBrowserObject();
     if (!object) {
       return false;
     }
@@ -3017,24 +3199,24 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
       probeOnly: false
     });
   },
-  stopActiveSurfaceObject: () => {
-    const object = activeMediaObjectForSurface(DEBUG_SURFACE_ID);
+  stopActiveSurfaceObject: (surfaceId = selectedMediaSurfaceId) => {
+    const object = activeMediaObjectForSurface(surfaceId);
     if (!object) {
       return false;
     }
     return mediaSurfaceCommands.sendStopObject({
       commandId: mediaSurfaceCommands.createCommandId("stop"),
-      surfaceId: DEBUG_SURFACE_ID,
+      surfaceId,
       objectId: object.objectId
     });
   },
   sendStaleSurfaceTestCardPatch: () => {
-    const object = activeMediaObjectForSurface(DEBUG_SURFACE_ID);
+    const object = activeMediaObjectForSurface(selectedMediaSurfaceId);
     if (!object) {
       return false;
     }
     return mediaSurfaceCommands.sendPatchObjectState("stale-patch", {
-      surfaceId: DEBUG_SURFACE_ID,
+      surfaceId: selectedMediaSurfaceId,
       objectId: object.objectId,
       expectedRevision: object.revision + 1,
       patch: {
@@ -3044,12 +3226,12 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
     });
   },
   sendStaleScreenSharePatch: () => {
-    const object = activeScreenShareObjectForSurface(DEBUG_SURFACE_ID);
+    const object = activeScreenShareObjectForSurface(selectedMediaSurfaceId) ?? findActiveScreenShareObject();
     if (!object) {
       return false;
     }
     return mediaSurfaceCommands.sendPatchObjectState("stale-screen-share-patch", {
-      surfaceId: DEBUG_SURFACE_ID,
+      surfaceId: object.surfaceId,
       objectId: object.objectId,
       expectedRevision: object.revision + 1,
       patch: {
@@ -3059,12 +3241,12 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
     });
   },
   sendStaleWhiteboardPatch: () => {
-    const object = activeWhiteboardObjectForSurface(DEBUG_SURFACE_ID);
+    const object = activeWhiteboardObjectForSurface(selectedMediaSurfaceId) ?? findActiveWhiteboardObject();
     if (!object) {
       return false;
     }
     return mediaSurfaceCommands.sendPatchObjectState("stale-whiteboard-patch", {
-      surfaceId: DEBUG_SURFACE_ID,
+      surfaceId: object.surfaceId,
       objectId: object.objectId,
       expectedRevision: object.revision + 1,
       patch: {
@@ -3082,12 +3264,12 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
     });
   },
   sendDuplicateWhiteboardPatch: () => {
-    const object = activeWhiteboardObjectForSurface(DEBUG_SURFACE_ID);
+    const object = activeWhiteboardObjectForSurface(selectedMediaSurfaceId) ?? findActiveWhiteboardObject();
     if (!object || !object.state.lastInputEventId) {
       return false;
     }
     return mediaSurfaceCommands.sendPatchObjectState("duplicate-whiteboard-patch", {
-      surfaceId: DEBUG_SURFACE_ID,
+      surfaceId: object.surfaceId,
       objectId: object.objectId,
       expectedRevision: object.revision,
       patch: {
@@ -3105,21 +3287,21 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
     });
   },
   clearWhiteboardObject: () => {
-    const object = activeWhiteboardObjectForSurface(DEBUG_SURFACE_ID);
+    const object = activeWhiteboardObjectForSurface(selectedMediaSurfaceId) ?? findActiveWhiteboardObject();
     if (!object) {
       return false;
     }
     return mediaSurfaceCommands.sendPatchObjectState("whiteboard-clear-test", {
-      surfaceId: DEBUG_SURFACE_ID,
+      surfaceId: object.surfaceId,
       objectId: object.objectId,
       expectedRevision: object.revision,
       patch: whiteboardRuntime.createClearPatch()
     });
   },
-  setDebugSurfaceMediaAudioEnabled: (enabled) => {
+  setDebugSurfaceMediaAudioEnabled: (enabled, surfaceId = selectedMediaSurfaceId) => {
     return mediaSurfaceCommands.sendMediaAudio({
       commandId: mediaSurfaceCommands.createCommandId("surface-audio-test"),
-      surfaceId: DEBUG_SURFACE_ID,
+      surfaceId,
       enabled
     });
   },
@@ -3131,13 +3313,15 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
   },
   sendDebugSurfaceInput: (input = {}) => {
     const source = input.source ?? "mouse";
+    const surfaceId = input.surfaceId ?? selectedMediaSurfaceId;
+    const surface = getMediaSurfaceView(surfaceId);
     const hit = createSyntheticSurfaceHit({
-      surfaceId: DEBUG_SURFACE_ID,
-      objectId: activeMediaObjectIdForSurface(DEBUG_SURFACE_ID),
+      surfaceId,
+      objectId: activeMediaObjectIdForSurface(surfaceId),
       source,
       uv: { u: input.u ?? 0.5, v: input.v ?? 0.5 },
-      widthPx: DEBUG_SURFACE_WIDTH_PX,
-      heightPx: DEBUG_SURFACE_HEIGHT_PX,
+      widthPx: surface.widthPx,
+      heightPx: surface.heightPx,
       inputEnabled: debugState.surfaceInput.enabled
     });
     return commitDebugSurfaceInput({
@@ -3154,15 +3338,16 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
     debugState.surfaceInput.enabled = enabled;
     return true;
   },
-  focusDebugSurface: () => {
+  focusDebugSurface: (surfaceId = selectedMediaSurfaceId) => {
+    const surface = getMediaSurfaceView(surfaceId);
     const hit = createSyntheticSurfaceHit({
-      surfaceId: DEBUG_SURFACE_ID,
-      objectId: activeMediaObjectIdForSurface(DEBUG_SURFACE_ID),
+      surfaceId,
+      objectId: activeMediaObjectIdForSurface(surfaceId),
       source: "mouse",
       uv: { u: 0.5, v: 0.5 },
-      widthPx: DEBUG_SURFACE_WIDTH_PX,
-      heightPx: DEBUG_SURFACE_HEIGHT_PX,
-      inputEnabled: debugState.surfaceInput.enabled
+      widthPx: surface.widthPx,
+      heightPx: surface.heightPx,
+      inputEnabled: debugState.surfaceInput.enabled && surface.object.visible
     });
     recordSurfaceInputHit(debugState.surfaceInput, hit);
     return tryFocusSurface({ state: debugState.surfaceInput, permissions: debugState.access.permissions, hit }) === null;
@@ -3192,6 +3377,40 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
     const ndc = displaySurface.localToWorld(new THREE.Vector3(
       (Math.max(0, Math.min(1, u)) - 0.5) * DEBUG_SURFACE_WIDTH_M,
       (Math.max(0, Math.min(1, v)) - 0.5) * DEBUG_SURFACE_HEIGHT_M,
+      0
+    )).project(camera);
+    return {
+      x: (ndc.x + 1) * 0.5 * window.innerWidth,
+      y: (1 - ndc.y) * 0.5 * window.innerHeight
+    };
+  },
+  getMediaSurfaceWorldPosition: (surfaceId, u, v) => {
+    if (!Number.isFinite(u) || !Number.isFinite(v)) {
+      return null;
+    }
+    const surface = getMediaSurfaceView(surfaceId);
+    surface.object.updateMatrixWorld(true);
+    const position = surface.object.localToWorld(new THREE.Vector3(
+      (Math.max(0, Math.min(1, u)) - 0.5) * surface.widthM,
+      (Math.max(0, Math.min(1, v)) - 0.5) * surface.heightM,
+      0
+    ));
+    return {
+      x: position.x,
+      y: position.y,
+      z: position.z
+    };
+  },
+  getMediaSurfaceClientPosition: (surfaceId, u, v) => {
+    if (!Number.isFinite(u) || !Number.isFinite(v)) {
+      return null;
+    }
+    const surface = getMediaSurfaceView(surfaceId);
+    surface.object.updateMatrixWorld(true);
+    camera.updateMatrixWorld(true);
+    const ndc = surface.object.localToWorld(new THREE.Vector3(
+      (Math.max(0, Math.min(1, u)) - 0.5) * surface.widthM,
+      (Math.max(0, Math.min(1, v)) - 0.5) * surface.heightM,
       0
     )).project(camera);
     return {
@@ -3810,7 +4029,8 @@ function reportXrTelemetry(frameContext: RuntimeFrameContext): void {
   lastXrTelemetryKinds = [];
 }
 
-function attachVideoTrack(track: Track, options: { remote: boolean } = { remote: true }): void {
+function attachVideoTrack(track: Track, options: { remote: boolean; surfaceId?: string } = { remote: true }): void {
+  const surfaceId = options.surfaceId ?? selectedMediaSurfaceId;
   const element = track.attach() as HTMLVideoElement;
   prepareHiddenVideoElement(element, { muted: true });
   document.body.appendChild(element);
@@ -3818,10 +4038,11 @@ function attachVideoTrack(track: Track, options: { remote: boolean } = { remote:
 
   const texture = new THREE.VideoTexture(element);
   texture.colorSpace = THREE.SRGBColorSpace;
-  applyDisplayTexture(texture);
+  applySurfaceTexture(surfaceId, texture);
 
   activeScreenShareTrack = track;
   activeScreenShareElement = element;
+  activeScreenShareSurfaceId = surfaceId;
   activeRemoteScreenShareTrackCount = options.remote ? 1 : activeRemoteScreenShareTrackCount;
   debugState.screenShare.remoteSubscribedTrackCount = activeRemoteScreenShareTrackCount;
   debugState.screenShareState = options.remote ? "receiving" : debugState.screenShareState;
@@ -3839,13 +4060,14 @@ function attachRemoteBrowserVideoTrack(track: Track, object: MediaObjectInstance
 
   const texture = new THREE.VideoTexture(element);
   texture.colorSpace = THREE.SRGBColorSpace;
-  applyDisplayTexture(texture);
+  applySurfaceTexture(object.surfaceId, texture);
 
   resetRemoteBrowserExternalVideoDiagnostics();
   activeRemoteBrowserVideoTrack = track;
   activeRemoteBrowserVideoElement = element;
   activeRemoteBrowserVideoTrackSid = trackSid;
   activeRemoteBrowserObjectId = object.objectId;
+  activeRemoteBrowserVideoSurfaceId = object.surfaceId;
   startHiddenVideoPlayback(element, (error) => {
     if (activeRemoteBrowserVideoElement === element) {
       activeRemoteBrowserVideoPlayError = error;
@@ -3858,7 +4080,7 @@ function attachRemoteBrowserVideoTrack(track: Track, object: MediaObjectInstance
   Object.assign(debugState.remoteBrowser, createRemoteBrowserExternalVideoDebugSnapshot());
 }
 
-function attachMockVideoStream(stream: MediaStream): void {
+function attachMockVideoStream(stream: MediaStream, surfaceId = selectedMediaSurfaceId): void {
   const element = document.createElement("video");
   prepareHiddenVideoElement(element, { muted: true });
   element.srcObject = stream;
@@ -3867,9 +4089,10 @@ function attachMockVideoStream(stream: MediaStream): void {
 
   const texture = new THREE.VideoTexture(element);
   texture.colorSpace = THREE.SRGBColorSpace;
-  applyDisplayTexture(texture);
+  applySurfaceTexture(surfaceId, texture);
 
   activeScreenShareElement = element;
+  activeScreenShareSurfaceId = surfaceId;
   debugState.screenShareState = "sharing";
 }
 
@@ -3908,8 +4131,12 @@ function detachVideoTrack(): void {
     activeScreenShareElement.remove();
     activeScreenShareElement = null;
   }
+  const surfaceId = activeScreenShareSurfaceId;
+  activeScreenShareSurfaceId = null;
   activeRemoteScreenShareTrackCount = 0;
-  applyDisplayTexture(null);
+  if (surfaceId) {
+    applySurfaceTexture(surfaceId, null);
+  }
   debugState.screenShare.remoteSubscribedTrackCount = 0;
   if (debugState.screenShareState !== "stopped") {
     debugState.screenShareState = "idle";
@@ -3930,11 +4157,16 @@ function detachRemoteBrowserVideoTrack(track?: Track): void {
   }
   activeRemoteBrowserVideoTrackSid = null;
   activeRemoteBrowserObjectId = null;
+  const surfaceId = activeRemoteBrowserVideoSurfaceId;
+  activeRemoteBrowserVideoSurfaceId = null;
   resetRemoteBrowserExternalVideoDiagnostics();
   debugState.remoteBrowser.mediaConnected = false;
   debugState.remoteBrowser.mediaHasVideo = false;
   Object.assign(debugState.remoteBrowser, createRemoteBrowserExternalVideoDebugSnapshot());
-  const remoteBrowser = activeRemoteBrowserObjectForSurface(DEBUG_SURFACE_ID);
+  if (surfaceId) {
+    applySurfaceTexture(surfaceId, null);
+  }
+  const remoteBrowser = findActiveRemoteBrowserObject();
   if (remoteBrowser) {
     remoteBrowserRuntime.sync(remoteBrowser);
   }
@@ -4596,7 +4828,7 @@ function setupAudio(room: Room): void {
         attachRemoteBrowserVideoTrack(track, remoteBrowser, publication);
         return;
       }
-      attachVideoTrack(track);
+      attachVideoTrack(track, { remote: true, surfaceId: resolveScreenShareSurfaceForParticipant(participant?.identity) });
       return;
     }
     if (track.kind !== Track.Kind.Audio) return;
@@ -4663,13 +4895,13 @@ async function startScreenShare(): Promise<void> {
   if (isScreenSharing) {
     return;
   }
-  const createResult = await mediaSurfaceCommands.createScreenShareObjectOnSurface(DEBUG_SURFACE_ID);
+  const createResult = await mediaSurfaceCommands.createScreenShareObjectOnSurface(selectedMediaSurfaceId);
   if (!createResult.accepted || !createResult.objectId) {
     throw new Error(`screen_share_create_rejected:${createResult.blockedReason ?? "unknown"}`);
   }
 
   localScreenShareObjectId = createResult.objectId;
-  localScreenShareSurfaceId = createResult.surfaceId ?? DEBUG_SURFACE_ID;
+  localScreenShareSurfaceId = createResult.surfaceId ?? selectedMediaSurfaceId;
   lastScreenShareStoppedAtMs = 0;
   let revision = createResult.revision ?? 0;
   debugState.screenShare.selectedSurfaceId = localScreenShareSurfaceId;
@@ -4689,7 +4921,7 @@ async function startScreenShare(): Promise<void> {
       }
       revision = publishing.revision ?? revision;
       activeMockScreenShareStream = createMockShareStream();
-      attachMockVideoStream(activeMockScreenShareStream);
+      attachMockVideoStream(activeMockScreenShareStream, localScreenShareSurfaceId ?? selectedMediaSurfaceId);
       isScreenSharing = true;
       const mediaTrackSid = `mock-screen-share:${participantId}:${Date.now()}`;
       const active = await mediaSurfaceCommands.patchScreenShareObject(localScreenShareObjectId, localScreenShareSurfaceId, revision, { type: "mark-active", mediaTrackSid });
@@ -4714,7 +4946,7 @@ async function startScreenShare(): Promise<void> {
       throw new Error(`screen_share_publishing_rejected:${publishing.blockedReason ?? "unknown"}`);
     }
     revision = publishing.revision ?? revision;
-    const mediaAudioEnabled = shouldPublishMediaSurfaceAudio(roomMediaObjects, localScreenShareSurfaceId ?? DEBUG_SURFACE_ID);
+    const mediaAudioEnabled = shouldPublishMediaSurfaceAudio(roomMediaObjects, localScreenShareSurfaceId ?? selectedMediaSurfaceId);
     debugState.screenShare.mediaAudioEnabled = mediaAudioEnabled;
     await room.localParticipant.setScreenShareEnabled(true, {
       audio: mediaAudioEnabled
@@ -4722,7 +4954,7 @@ async function startScreenShare(): Promise<void> {
     const publication = Array.from(room.localParticipant.trackPublications.values()).find((item) => item.source === Track.Source.ScreenShare);
     const localTrack = publication?.videoTrack;
     if (localTrack) {
-      attachVideoTrack(localTrack, { remote: false });
+      attachVideoTrack(localTrack, { remote: false, surfaceId: localScreenShareSurfaceId ?? selectedMediaSurfaceId });
     }
     isScreenSharing = true;
     const mediaTrackSid = publication?.trackSid ?? `local-screen-share:${participantId}:${Date.now()}`;
@@ -4768,7 +5000,7 @@ async function startWhiteboard(): Promise<void> {
   if (startWhiteboardButton.disabled) {
     return;
   }
-  const result = await mediaSurfaceCommands.createWhiteboardObjectOnSurface(DEBUG_SURFACE_ID);
+  const result = await mediaSurfaceCommands.createWhiteboardObjectOnSurface(selectedMediaSurfaceId);
   if (!result.accepted) {
     debugState.mediaObjects.blockedReason = result.blockedReason ?? null;
     throw new Error(`whiteboard_create_rejected:${result.blockedReason ?? "unknown"}`);
@@ -4779,7 +5011,7 @@ async function startWhiteboard(): Promise<void> {
 }
 
 async function clearWhiteboard(): Promise<void> {
-  const object = activeWhiteboardObjectForSurface(DEBUG_SURFACE_ID);
+  const object = activeWhiteboardObjectForSurface(selectedMediaSurfaceId) ?? findActiveWhiteboardObject();
   if (!object) {
     return;
   }
@@ -4798,7 +5030,7 @@ async function clearWhiteboard(): Promise<void> {
 }
 
 async function stopWhiteboard(): Promise<void> {
-  const object = activeWhiteboardObjectForSurface(DEBUG_SURFACE_ID);
+  const object = activeWhiteboardObjectForSurface(selectedMediaSurfaceId) ?? findActiveWhiteboardObject();
   if (!object) {
     return;
   }
@@ -4831,30 +5063,30 @@ async function openRemoteBrowser(rawUrl: string): Promise<void> {
     throw createFaultError("ConnectionError", "room_state_failed");
   }
   const targetUrl = normalizeRemoteBrowserUrlInput(rawUrl);
-  const activeObject = activeMediaObjectForSurface(DEBUG_SURFACE_ID);
+  const activeObject = activeMediaObjectForSurface(selectedMediaSurfaceId);
   if (activeObject && activeObject.type !== REMOTE_BROWSER_OBJECT_TYPE) {
     throw new Error(`remote_browser_surface_occupied:${activeObject.type}`);
   }
-  let remoteBrowser = activeRemoteBrowserObjectForSurface(DEBUG_SURFACE_ID);
+  let remoteBrowser = activeRemoteBrowserObjectForSurface(selectedMediaSurfaceId);
   let revision = remoteBrowser?.revision ?? 0;
   if (!remoteBrowser) {
-    const createResult = await mediaSurfaceCommands.createRemoteBrowserObjectOnSurface(DEBUG_SURFACE_ID);
+    const createResult = await mediaSurfaceCommands.createRemoteBrowserObjectOnSurface(selectedMediaSurfaceId);
     if (!createResult.accepted || !createResult.objectId) {
       debugState.mediaObjects.blockedReason = createResult.blockedReason ?? null;
       throw new Error(`remote_browser_create_rejected:${createResult.blockedReason ?? "unknown"}`);
     }
     revision = createResult.revision ?? 0;
-    remoteBrowser = activeRemoteBrowserObjectForSurface(DEBUG_SURFACE_ID)
+    remoteBrowser = activeRemoteBrowserObjectForSurface(selectedMediaSurfaceId)
       ?? ({
         objectId: createResult.objectId,
         type: REMOTE_BROWSER_OBJECT_TYPE,
         roomId,
-        surfaceId: createResult.surfaceId ?? DEBUG_SURFACE_ID,
+        surfaceId: createResult.surfaceId ?? selectedMediaSurfaceId,
         ownerParticipantId: participantId,
         state: {
           status: "idle",
           ownerParticipantId: participantId,
-          surfaceId: createResult.surfaceId ?? DEBUG_SURFACE_ID,
+          surfaceId: createResult.surfaceId ?? selectedMediaSurfaceId,
           lastInputEventId: null
         },
         status: "active",
@@ -4875,7 +5107,7 @@ async function openRemoteBrowser(rawUrl: string): Promise<void> {
 }
 
 async function patchRemoteBrowserControl(patch: RemoteBrowserPatch): Promise<void> {
-  const object = activeRemoteBrowserObjectForSurface(DEBUG_SURFACE_ID);
+  const object = activeRemoteBrowserObjectForSurface(selectedMediaSurfaceId) ?? findActiveRemoteBrowserObject();
   if (!object) {
     return;
   }
@@ -4892,7 +5124,7 @@ async function stopRemoteBrowser(): Promise<void> {
     debugState.access.lastDeniedPermission = "remote-browser.stop";
     throw createFaultError("NotAllowedError", "remote_browser_stop_forbidden");
   }
-  const object = activeRemoteBrowserObjectForSurface(DEBUG_SURFACE_ID);
+  const object = activeRemoteBrowserObjectForSurface(selectedMediaSurfaceId) ?? findActiveRemoteBrowserObject();
   if (!object) {
     return;
   }
@@ -4911,9 +5143,9 @@ async function stopScreenShare(): Promise<void> {
     debugState.access.lastDeniedPermission = "screen-share.stop";
     throw createFaultError("NotAllowedError", "screen_share_forbidden");
   }
-  const activeObject = activeScreenShareObjectForSurface(DEBUG_SURFACE_ID);
+  const activeObject = activeScreenShareObjectForSurface(selectedMediaSurfaceId) ?? findActiveScreenShareObject();
   const objectId = localScreenShareObjectId ?? activeObject?.objectId ?? null;
-  const surfaceId = localScreenShareSurfaceId ?? activeObject?.surfaceId ?? DEBUG_SURFACE_ID;
+  const surfaceId = localScreenShareSurfaceId ?? activeObject?.surfaceId ?? selectedMediaSurfaceId;
 
   if (shareMockEnabled) {
     activeMockScreenShareStream?.getTracks().forEach((track) => track.stop());
@@ -5085,12 +5317,17 @@ spaceSelect.addEventListener("change", () => {
   window.location.assign(targetRoomLink);
 });
 
+mediaSurfaceSelect.addEventListener("change", () => {
+  selectMediaSurface(mediaSurfaceSelect.value);
+});
+
 surfaceAudioCheckbox.addEventListener("change", () => {
   const enabled = surfaceAudioCheckbox.checked;
   surfaceAudioCommandPending = true;
   surfaceAudioPendingEnabled = enabled;
   syncSurfaceAudioControl();
-  void setMediaSurfaceAudioEnabled(DEBUG_SURFACE_ID, enabled).then((result) => {
+  const surfaceId = selectedMediaSurfaceId;
+  void setMediaSurfaceAudioEnabled(surfaceId, enabled).then((result) => {
     if (!result.accepted) {
       debugState.mediaObjects.blockedReason = result.blockedReason ?? null;
       surfaceAudioStatusEl.textContent = `Surface audio rejected: ${result.blockedReason ?? "unknown"}`;
@@ -5162,7 +5399,7 @@ startWhiteboardButton.addEventListener("click", () => {
     console.error(error);
     setStatus("Whiteboard start failed");
     whiteboardRuntime.setError(error instanceof Error ? error.message : "failed");
-    debugState.whiteboard.errorCode = whiteboardRuntime.createDebugSnapshot(activeWhiteboardObjectForSurface(DEBUG_SURFACE_ID)).errorCode;
+    debugState.whiteboard.errorCode = whiteboardRuntime.createDebugSnapshot(activeWhiteboardObjectForSurface(selectedMediaSurfaceId) ?? findActiveWhiteboardObject()).errorCode;
   });
 });
 
@@ -5186,7 +5423,7 @@ clearWhiteboardButton.addEventListener("click", () => {
     console.error(error);
     setStatus("Whiteboard clear failed");
     whiteboardRuntime.setError(error instanceof Error ? error.message : "clear_failed");
-    debugState.whiteboard.errorCode = whiteboardRuntime.createDebugSnapshot(activeWhiteboardObjectForSurface(DEBUG_SURFACE_ID)).errorCode;
+    debugState.whiteboard.errorCode = whiteboardRuntime.createDebugSnapshot(activeWhiteboardObjectForSurface(selectedMediaSurfaceId) ?? findActiveWhiteboardObject()).errorCode;
   });
 });
 
@@ -5195,7 +5432,7 @@ stopWhiteboardButton.addEventListener("click", () => {
     console.error(error);
     setStatus("Whiteboard stop failed");
     whiteboardRuntime.setError(error instanceof Error ? error.message : "stop_failed");
-    debugState.whiteboard.errorCode = whiteboardRuntime.createDebugSnapshot(activeWhiteboardObjectForSurface(DEBUG_SURFACE_ID)).errorCode;
+    debugState.whiteboard.errorCode = whiteboardRuntime.createDebugSnapshot(activeWhiteboardObjectForSurface(selectedMediaSurfaceId) ?? findActiveWhiteboardObject()).errorCode;
     syncWhiteboardControls();
   });
 });
@@ -5263,9 +5500,16 @@ renderer.domElement.addEventListener("pointerdown", (event) => {
   whiteboardPointerActive = whiteboardDrawToolActive && canUseWhiteboardDrawTool()
     ? commitDebugSurfaceInputFromPointer(event, "pointer-down")
     : false;
-  remoteBrowserPointerActive = !whiteboardPointerActive && Boolean(activeRemoteBrowserObjectForSurface(DEBUG_SURFACE_ID))
-    ? commitDebugSurfaceInputFromPointer(event, "pointer-down")
-    : false;
+  const remoteBrowserHit = !whiteboardPointerActive ? resolveDebugSurfaceHitFromPointer(event.clientX, event.clientY, surfaceInputSourceFromPointer(event)) : null;
+  remoteBrowserPointerActive = Boolean(remoteBrowserHit && activeRemoteBrowserObjectForSurface(remoteBrowserHit.surfaceId))
+    && commitDebugSurfaceInput({
+      hit: remoteBrowserHit,
+      source: surfaceInputSourceFromPointer(event),
+      kind: "pointer-down",
+      clientTimeMs: Date.now(),
+      button: surfaceInputButtonFromPointer(event.button),
+      pressure: event.pressure
+    });
   pointerActive = !remoteBrowserPointerActive;
   pointerMovedSinceDown = false;
   suppressPointerClick = false;
@@ -5311,7 +5555,7 @@ renderer.domElement.addEventListener("click", (event) => {
   }
   updatePointerNdcFromClientPosition(event.clientX, event.clientY);
   const hit = resolveDebugSurfaceHitFromPointer(event.clientX, event.clientY, "mouse");
-  const activeObject = activeMediaObjectForSurface(DEBUG_SURFACE_ID);
+  const activeObject = hit ? activeMediaObjectForSurface(hit.surfaceId) : null;
   const whiteboardClickCanDraw = whiteboardDrawToolActive && canUseWhiteboardDrawTool();
   const clickHandled = commitDebugSurfaceInput({
     hit,
@@ -5341,12 +5585,8 @@ renderer.domElement.addEventListener("click", (event) => {
 });
 
 renderer.domElement.addEventListener("wheel", (event) => {
-  const activeRemoteBrowser = activeRemoteBrowserObjectForSurface(DEBUG_SURFACE_ID);
-  if (!activeRemoteBrowser) {
-    return;
-  }
   const hit = resolveDebugSurfaceHitFromPointer(event.clientX, event.clientY, "mouse");
-  if (hit) {
+  if (hit && activeRemoteBrowserObjectForSurface(hit.surfaceId)) {
     commitDebugSurfaceInput({
       hit,
       source: "mouse",
@@ -5354,8 +5594,8 @@ renderer.domElement.addEventListener("wheel", (event) => {
       clientTimeMs: Date.now(),
       scrollDelta: scrollDeltaFromWheelEvent(event)
     });
+    event.preventDefault();
   }
-  event.preventDefault();
 }, { passive: false });
 
 window.addEventListener("pointermove", (event) => {

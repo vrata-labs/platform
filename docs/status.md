@@ -2,8 +2,8 @@
 
 ## Current phase
 
-- Active phase: `M1.5 — интерактивная доска`
-- Overall state: `in_progress`
+- Active phase: `M1.8 — несколько медийных поверхностей и схемы размещения`
+- Overall state: `local_verified_pending_staging`
 
 ## Phase checklist
 
@@ -49,7 +49,19 @@
 - M1.3 verification: local lint/typecheck/build/test/e2e checks passed, CI `25747564664` passed, Docker Publish `25747564641` passed after transient YCR OAuth retry, Staging Deploy `25748083239` passed, `pnpm test:e2e:staging` passed with 33 tests, and staging `media-surface-kernel` passed with 3 tests.
 - M1.4 screen share object is complete as of 2026-05-12. Deployed commit: `530ec378c922291ba90d66b61f274ad573695262`.
 - M1.4 verification: local lint/typecheck/build/test/e2e checks passed, CI `25754283093` passed, Docker Publish `25754283110` passed, Staging Deploy `25754417823` passed, `pnpm test:e2e:staging` passed with 33 tests, and staging `screen-share-object` passed with 3 tests.
-- Next focus: M1.5 whiteboard object on the media surface kernel.
+- Post-M1.4 per-surface media audio policy is complete as of 2026-05-13. Final deployed commit: `6293b84fc7ae0f2da8e95830f2a8c5f442fdc9a0`.
+- Post-M1.4 audio verification: local runtime build/test passed, local full e2e passed with 78 passed and 1 skipped, CI `25762802250` passed, Docker Publish `25762802227` passed, Staging Deploy `25762892542` passed, `pnpm test:e2e:staging` passed with 33 tests, and staging `screen-share-object` passed with 4 tests.
+- M1.5 whiteboard object is complete as of 2026-05-14. Baseline deployed commit: `b3f54520e27cfd15f7b8c504056bd2e7ebb6314f`; final VR pencil Draw-toggle gating deployed commit: `50d1bbc6885e14df61edd93d6ea14c98ddb2c500`.
+- M1.5 follow-up fixes completed the product path for web/VR whiteboard drawing: draw input handling, preview texture flicker removal, contact-pencil drawing, hand anchoring, shared hand-pose source, grip-angle tuning, and explicit `Draw: On/Off` gating for pencil visibility and XR drawing.
+- M1.5 final verification: local runtime build/test, lint, typecheck, repo build/test, local full e2e, CI `25847859871`, Docker Publish `25847859884`, Staging Deploy `25847941037`, staging deploy gate `33 passed`, workspace `pnpm test:e2e:staging` `33 passed`, and staging `whiteboard-object` `6 passed`.
+- M1.6 host web-content broadcast is skipped as a separate implementation phase as of 2026-05-14: the user-facing scenario is already covered by M1.4/post-M1.4 `screen-share`, which shows the host's screen, window, or browser tab as a video stream and explicitly does not provide remote page control.
+- M1.7 remote browser object is accepted as complete for this stage as of 2026-05-21. Final deployed commit: `c6023ec1ae4e3ba4d75e7bb284be2bdb30f01828`.
+- M1.7 result: `remote-browser` works as a server-side browser executor with allowlisted URL opening, authoritative surface input, LiveKit viewport publishing, and normal remote audio playback path. The final audio fix exposes the PulseAudio monitor as a Chromium-compatible input source instead of accepting muted/video-only success.
+- M1.7 verification: focused local remote-browser/runtime checks passed, Docker audio probe passed, full local E2E passed with `90 passed` using `--workers=2`, CI `26223417565` passed, Docker Publish `26223417566` passed, Staging Deploy `26223562956` passed, and the staging gate passed with `35 passed` on deployed SHA `c6023ec1ae4e3ba4d75e7bb284be2bdb30f01828`.
+- M1.7 accepted limitations: audio can still stutter on VR and mobile under real device conditions. Treat this as a QoS/performance follow-up, not a blocker for starting M1.8, unless it regresses the core media-surface flow.
+- M1.8 local implementation is complete as of 2026-05-21 and pending commit/push/staging verification. The first product slice adds default independent surfaces `debug-main`, `whiteboard-wall`, and `laptop-screen`; a runtime surface selector; per-surface active object/texture routing; and hit-surface-based input routing for screen share, whiteboard, and remote browser.
+- M1.8 local verification: package-specific builds/tests/lint for touched packages passed; root `pnpm run lint`, `pnpm run typecheck`, `pnpm run build`, and `pnpm run test` passed; focused `multi-surface-layouts` passed; related M1 media specs passed (`18 passed` including M1.8); and full local E2E with `--workers=2` passed (`90 passed`, `1 skipped`).
+- Next focus: publish M1.8 through the normal git-based staging pipeline and verify the deployed commit on staging.
 
 - M0.5 focuses on acceptance of the existing basic multi-user presence path: diagnostics, pose orientation, remote visibility, join/leave cleanup, voice state, spatial-audio diagnostics, and XR-mode simulation.
 - M0.5 explicitly excludes humanoid avatars, new room templates, and control-plane expansion.

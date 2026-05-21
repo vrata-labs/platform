@@ -1,5 +1,4 @@
 import {
-  DEFAULT_MEDIA_SURFACE_ID,
   REMOTE_BROWSER_OBJECT_TYPE,
   SCREEN_SHARE_OBJECT_TYPE,
   SURFACE_TEST_CARD_TYPE,
@@ -212,9 +211,6 @@ function cloneMediaObjectsState(mediaObjects: RoomMediaObjectsState): RoomMediaO
 
 function ensureMediaObjectsState(state: RoomState): RoomMediaObjectsState {
   const current = state.mediaObjects ?? createDefaultRoomMediaObjectsState(state.roomId);
-  if (current.surfaces[DEFAULT_MEDIA_SURFACE_ID]) {
-    return cloneMediaObjectsState(current);
-  }
   const defaults = createDefaultRoomMediaObjectsState(state.roomId);
   return cloneMediaObjectsState({
     surfaces: { ...defaults.surfaces, ...current.surfaces },
@@ -1266,14 +1262,17 @@ export function setSurfaceMediaAudioEnabled(state: RoomState, participantId: str
 }
 
 export function joinRoom(state: RoomState, participantId: string, access?: ParticipantAccessState): RoomState {
+  const mediaObjects = ensureMediaObjectsState(state);
   if (state.participants.some((item) => item.participantId === participantId)) {
     return {
       ...state,
+      mediaObjects,
       participants: state.participants.map((item) => item.participantId === participantId ? applyParticipantAccess(item, access) : item)
     };
   }
   return {
     ...state,
+    mediaObjects,
     participants: [...state.participants, createParticipantState(participantId, access)]
   };
 }

@@ -148,11 +148,61 @@ test("leaveRoom clears occupied seats for participant", () => {
 test("createRoomState includes default media surface", () => {
   const room = createRoomState("demo");
   assert.equal(room.mediaObjects.surfaces["debug-main"]?.activeObjectId, null);
+  assert.equal(room.mediaObjects.surfaces["debug-main"]?.label, "Main screen");
   assert.equal(room.mediaObjects.surfaces["debug-main"]?.allowedObjectTypes.includes("surface-test-card"), true);
   assert.equal(room.mediaObjects.surfaces["debug-main"]?.allowedObjectTypes.includes("screen-share"), true);
   assert.equal(room.mediaObjects.surfaces["debug-main"]?.allowedObjectTypes.includes("whiteboard"), true);
   assert.equal(room.mediaObjects.surfaces["debug-main"]?.allowedObjectTypes.includes("remote-browser"), true);
   assert.equal(room.mediaObjects.surfaces["debug-main"]?.mediaAudioEnabled, false);
+  assert.equal(room.mediaObjects.surfaces["whiteboard-wall"]?.label, "Whiteboard wall");
+  assert.equal(room.mediaObjects.surfaces["whiteboard-wall"]?.allowedObjectTypes.includes("whiteboard"), true);
+  assert.equal(room.mediaObjects.surfaces["laptop-screen"]?.label, "Laptop screen");
+  assert.equal(room.mediaObjects.surfaces["laptop-screen"]?.allowedObjectTypes.includes("remote-browser"), true);
+});
+
+test("joinRoom restores missing default media surfaces for legacy room state", () => {
+  const room = createRoomState("demo");
+  delete room.mediaObjects.surfaces["whiteboard-wall"];
+  delete room.mediaObjects.surfaces["laptop-screen"];
+
+  const joined = joinRoom(room, "host", { role: "host" });
+
+  assert.equal(joined.mediaObjects.surfaces["debug-main"]?.activeObjectId, null);
+  assert.equal(joined.mediaObjects.surfaces["whiteboard-wall"]?.label, "Whiteboard wall");
+  assert.equal(joined.mediaObjects.surfaces["laptop-screen"]?.label, "Laptop screen");
+});
+
+test("media objects remain independent across surfaces", () => {
+  const hostRoom = joinRoom(createRoomState("demo"), "host", { role: "host" });
+  const share = createMediaObject(hostRoom, "host", {
+    commandId: "cmd-create-share",
+    surfaceId: "debug-main",
+    objectType: "screen-share",
+    objectId: "share-1",
+    nowMs: 1
+  });
+  assert.equal(share.result.accepted, true);
+
+  const board = createMediaObject(share.room, "host", {
+    commandId: "cmd-create-board",
+    surfaceId: "whiteboard-wall",
+    objectType: "whiteboard",
+    objectId: "board-1",
+    nowMs: 2
+  });
+  assert.equal(board.result.accepted, true);
+  assert.equal(board.room.mediaObjects.surfaces["debug-main"]?.activeObjectId, "share-1");
+  assert.equal(board.room.mediaObjects.surfaces["whiteboard-wall"]?.activeObjectId, "board-1");
+
+  const stoppedShare = stopMediaObject(board.room, "host", {
+    commandId: "cmd-stop-share",
+    surfaceId: "debug-main",
+    objectId: "share-1"
+  });
+  assert.equal(stoppedShare.result.accepted, true);
+  assert.equal(stoppedShare.room.mediaObjects.surfaces["debug-main"]?.activeObjectId, null);
+  assert.equal(stoppedShare.room.mediaObjects.surfaces["whiteboard-wall"]?.activeObjectId, "board-1");
+  assert.equal(stoppedShare.room.mediaObjects.objects["board-1"]?.type, "whiteboard");
 });
 
 test("setSurfaceMediaAudioEnabled is admin-only and updates one surface", () => {
