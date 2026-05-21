@@ -491,6 +491,7 @@ export function remoteBrowserChromiumArgs(size: { width: number; height: number 
     "--use-fake-ui-for-media-stream",
     "--auto-accept-this-tab-capture",
     "--allow-http-screen-capture",
+    "--alsa-input-device=pulse",
     "--alsa-output-device=pulse",
     `--auto-select-tab-capture-source-by-title=${remoteBrowserCaptureTargetTitle}`,
     "--disable-background-timer-throttling",

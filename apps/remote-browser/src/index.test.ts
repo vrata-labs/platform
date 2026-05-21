@@ -153,6 +153,8 @@ test("remote browser Chromium auto-selects tab capture without desktop capture",
 
   assert.ok(args.includes("--auto-accept-this-tab-capture"));
   assert.ok(args.includes(`--auto-select-tab-capture-source-by-title=${remoteBrowserCaptureTargetTitle}`));
+  assert.ok(args.includes("--alsa-input-device=pulse"));
+  assert.ok(args.includes("--alsa-output-device=pulse"));
   assert.equal(args.some((arg) => arg.startsWith("--auto-select-desktop-capture-source=")), false);
   assert.ok(args.includes("--window-size=640,360"));
 });
