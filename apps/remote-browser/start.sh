@@ -18,9 +18,11 @@ for attempt in 1 2 3 4 5; do
 done
 
 pactl load-module module-null-sink sink_name=noah_browser_audio sink_properties=device.description=NoahBrowserAudio >/tmp/noah-pulse-sink.log 2>&1 || true
+# Chromium does not expose PulseAudio monitor sources as microphone devices directly.
+pactl load-module module-remap-source master=noah_browser_audio.monitor source_name=noah_browser_audio_input source_properties=device.description=NoahBrowserAudioInput >/tmp/noah-pulse-source.log 2>&1 || true
 pactl set-default-sink noah_browser_audio >/tmp/noah-pulse-default-sink.log 2>&1 || true
-pactl set-default-source noah_browser_audio.monitor >/tmp/noah-pulse-default-source.log 2>&1 || true
+pactl set-default-source noah_browser_audio_input >/tmp/noah-pulse-default-source.log 2>&1 || true
 export PULSE_SINK=noah_browser_audio
-export PULSE_SOURCE=noah_browser_audio.monitor
+export PULSE_SOURCE=noah_browser_audio_input
 
 exec node apps/remote-browser/dist/index.js
