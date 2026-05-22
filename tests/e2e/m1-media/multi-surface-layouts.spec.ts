@@ -11,7 +11,7 @@ type MultiSurfaceDebug = {
   };
   mediaObjects?: {
     selectedSurfaceId?: string;
-    surfaces?: Array<{ surfaceId?: string; activeObjectId?: string | null; activeObjectType?: string | null; runtimeVisible?: boolean }>;
+    surfaces?: Array<{ surfaceId?: string; activeObjectId?: string | null; activeObjectType?: string | null; runtimeVisible?: boolean; textureId?: number | null }>;
     objects?: Array<{ objectId?: string; type?: string; surfaceId?: string; revision?: number; state?: { strokes?: unknown[]; status?: string } }>;
     blockedReason?: string | null;
   };
@@ -92,6 +92,10 @@ function surfaceObjectType(debug: MultiSurfaceDebug | undefined, surfaceId: stri
 
 function surfaceRuntimeVisible(debug: MultiSurfaceDebug | undefined, surfaceId: string): boolean {
   return debug?.mediaObjects?.surfaces?.find((surface) => surface.surfaceId === surfaceId)?.runtimeVisible === true;
+}
+
+function surfaceTextureId(debug: MultiSurfaceDebug | undefined, surfaceId: string): number | null {
+  return debug?.mediaObjects?.surfaces?.find((surface) => surface.surfaceId === surfaceId)?.textureId ?? null;
 }
 
 function whiteboardStrokeCount(debug: MultiSurfaceDebug | undefined, surfaceId: string): number | null {
@@ -342,6 +346,63 @@ test("M1.8 screen shares run independently on any default surface", async ({ pag
     laptopObject: null,
     activeShares: 1
   });
+});
+
+test("M1.8 remote browsers run independently on any default surface", async ({ page }) => {
+  const roomId = `m1-multi-browser-${Date.now()}`;
+
+  await page.goto(roomUrl(roomId, "host"));
+  await waitForKernel(page, "host");
+
+  await selectSurface(page, MAIN_SURFACE_ID);
+  await expect(page.locator("#open-remote-browser")).toBeEnabled();
+  await page.fill("#remote-browser-url", "/remote-browser-demo.html?surface=main");
+  await page.click("#open-remote-browser");
+
+  await selectSurface(page, LAPTOP_SURFACE_ID);
+  await expect(page.locator("#open-remote-browser")).toBeEnabled();
+  await page.fill("#remote-browser-url", "/remote-browser-demo.html?surface=laptop");
+  await page.click("#open-remote-browser");
+
+  await expect.poll(async () => {
+    const debug = await readDebug(page);
+    const mainTextureId = surfaceTextureId(debug, MAIN_SURFACE_ID);
+    const laptopTextureId = surfaceTextureId(debug, LAPTOP_SURFACE_ID);
+    return {
+      mainObject: surfaceObjectType(debug, MAIN_SURFACE_ID),
+      laptopObject: surfaceObjectType(debug, LAPTOP_SURFACE_ID),
+      hasSeparateTextures: Boolean(mainTextureId && laptopTextureId && mainTextureId !== laptopTextureId)
+    };
+  }, {
+    timeout: 30000,
+    intervals: [500, 1000, 2000]
+  }).toEqual({
+    mainObject: "remote-browser",
+    laptopObject: "remote-browser",
+    hasSeparateTextures: true
+  });
+
+  await selectSurface(page, LAPTOP_SURFACE_ID);
+  await expect(page.locator("#stop-remote-browser")).toBeEnabled();
+  await page.click("#stop-remote-browser");
+
+  await expect.poll(async () => {
+    const debug = await readDebug(page);
+    return {
+      mainObject: surfaceObjectType(debug, MAIN_SURFACE_ID),
+      laptopObject: surfaceObjectType(debug, LAPTOP_SURFACE_ID)
+    };
+  }, {
+    timeout: 10000,
+    intervals: [500, 1000, 2000]
+  }).toEqual({
+    mainObject: "remote-browser",
+    laptopObject: null
+  });
+
+  await selectSurface(page, MAIN_SURFACE_ID);
+  await expect(page.locator("#stop-remote-browser")).toBeEnabled();
+  await page.click("#stop-remote-browser");
 });
 
 test("M1.8 media surfaces remain visible after a scene bundle loads", async ({ page, request }) => {

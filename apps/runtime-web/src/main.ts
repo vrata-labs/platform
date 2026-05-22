@@ -502,15 +502,20 @@ type ScreenShareRuntimeEntry = {
 };
 
 const screenShareRuntimeByObjectId = new Map<string, ScreenShareRuntimeEntry>();
-let activeRemoteBrowserVideoTrack: Track | null = null;
-let activeRemoteBrowserVideoElement: HTMLVideoElement | null = null;
-let activeRemoteBrowserVideoTrackSid: string | null = null;
-let activeRemoteBrowserObjectId: string | null = null;
-let activeRemoteBrowserVideoSurfaceId: string | null = null;
-let activeRemoteBrowserVideoPlayError: string | null = null;
-let activeRemoteBrowserVideoFrameCount = 0;
-let activeRemoteBrowserVideoLastFrameAtMs = 0;
-let activeRemoteBrowserVideoPresentedFrames = 0;
+type RemoteBrowserVideoEntry = {
+  objectId: string;
+  surfaceId: string;
+  track: Track;
+  element: HTMLVideoElement;
+  texture: THREE.Texture;
+  trackSid: string;
+  playError: string | null;
+  frameCount: number;
+  lastFrameAtMs: number;
+  presentedFrames: number;
+};
+
+const remoteBrowserVideoByObjectId = new Map<string, RemoteBrowserVideoEntry>();
 let lastScreenShareStoppedAtMs = 0;
 let mediaRoomReady = false;
 let remoteBrowserMediaRoomPromise: Promise<void> | null = null;
@@ -519,6 +524,8 @@ let roomStateConnected = false;
 let latestRealtimeParticipants: PresenceState[] = [];
 let latestFallbackParticipants: PresenceState[] = [];
 const retainedDisplayTextures = new Set<THREE.Texture>();
+const debugTextureIds = new WeakMap<THREE.Texture, number>();
+let nextDebugTextureId = 1;
 let lastApiPresenceSyncAtMs = 0;
 let lastApiPresenceRefreshAtMs = 0;
 let apiPresenceSyncInFlight = false;
@@ -567,6 +574,7 @@ const mediaSurfaceCommands = createMediaSurfaceCommandClient({
   createConnectionError: () => createFaultError("ConnectionError", "room_state_failed")
 });
 const whiteboardRuntimes = new Map<string, ReturnType<typeof createWhiteboardObjectRuntime>>();
+const remoteBrowserRuntimes = new Map<string, ReturnType<typeof createRemoteBrowserObjectRuntime>>();
 
 function getWhiteboardRuntime(surfaceId: string): ReturnType<typeof createWhiteboardObjectRuntime> {
   const existing = whiteboardRuntimes.get(surfaceId);
@@ -596,6 +604,38 @@ function getWhiteboardRuntime(surfaceId: string): ReturnType<typeof createWhiteb
 
 function currentWhiteboardObject(): MediaObjectInstance<WhiteboardState> | null {
   return activeWhiteboardObjectForSurface(selectedMediaSurfaceId) ?? findActiveWhiteboardObject();
+}
+
+function getRemoteBrowserRuntime(surfaceId: string): ReturnType<typeof createRemoteBrowserObjectRuntime> {
+  const existing = remoteBrowserRuntimes.get(surfaceId);
+  if (existing) {
+    return existing;
+  }
+  const surface = getMediaSurfaceView(surfaceId);
+  const runtime = createRemoteBrowserObjectRuntime({
+    apiBaseUrl,
+    roomId,
+    participantId,
+    surfaceId,
+    widthPx: surface.widthPx,
+    heightPx: surface.heightPx,
+    getPermissions: () => debugState.access.permissions,
+    getLatestObject: (targetSurfaceId) => activeRemoteBrowserObjectForSurface(targetSurfaceId),
+    patchObject: (objectId, targetSurfaceId, expectedRevision, patch) => mediaSurfaceCommands.patchRemoteBrowserObject(objectId, targetSurfaceId, expectedRevision, patch),
+    isExternalVideoActive: (object) => Boolean(remoteBrowserVideoEntryForObject(object.objectId)?.element),
+    applyTexture: (texture) => applySurfaceTexture(surfaceId, texture),
+    onBlocked: (blockedReason, errorCode) => {
+      debugState.mediaObjects.blockedReason = blockedReason;
+      debugState.remoteBrowser.errorCode = errorCode as RemoteBrowserErrorCode | string | null;
+    }
+  });
+  remoteBrowserRuntimes.set(surfaceId, runtime);
+  retainedDisplayTextures.add(runtime.texture);
+  return runtime;
+}
+
+function currentRemoteBrowserObject(): MediaObjectInstance<RemoteBrowserObjectState> | null {
+  return activeRemoteBrowserObjectForSurface(selectedMediaSurfaceId) ?? findActiveRemoteBrowserObject();
 }
 
 function activeWhiteboardObjects(): Array<MediaObjectInstance<WhiteboardState>> {
@@ -631,24 +671,43 @@ function syncWhiteboardSurfaceTextures(): void {
     }
   }
 }
-const remoteBrowserRuntime = createRemoteBrowserObjectRuntime({
-  apiBaseUrl,
-  roomId,
-  participantId,
-  surfaceId: DEBUG_SURFACE_ID,
-  widthPx: DEBUG_SURFACE_WIDTH_PX,
-  heightPx: DEBUG_SURFACE_HEIGHT_PX,
-  getPermissions: () => debugState.access.permissions,
-  getLatestObject: (surfaceId) => activeRemoteBrowserObjectForSurface(surfaceId),
-  patchObject: (objectId, surfaceId, expectedRevision, patch) => mediaSurfaceCommands.patchRemoteBrowserObject(objectId, surfaceId, expectedRevision, patch),
-  isExternalVideoActive: (object) => activeRemoteBrowserObjectId === object.objectId && Boolean(activeRemoteBrowserVideoElement),
-  applyTexture: (texture) => applySurfaceTexture((activeRemoteBrowserObjectForSurface(selectedMediaSurfaceId) ?? findActiveRemoteBrowserObject())?.surfaceId ?? selectedMediaSurfaceId, texture),
-  onBlocked: (blockedReason, errorCode) => {
-    debugState.mediaObjects.blockedReason = blockedReason;
-    debugState.remoteBrowser.errorCode = errorCode as RemoteBrowserErrorCode | string | null;
+
+function activeRemoteBrowserObjects(): Array<MediaObjectInstance<RemoteBrowserObjectState>> {
+  if (!roomMediaObjects) {
+    return [];
   }
-});
-retainedDisplayTextures.add(remoteBrowserRuntime.texture);
+  const objects: Array<MediaObjectInstance<RemoteBrowserObjectState>> = [];
+  for (const surfaceId of Object.keys(roomMediaObjects.surfaces)) {
+    const object = activeRemoteBrowserObjectForSurface(surfaceId);
+    if (object) {
+      objects.push(object);
+    }
+  }
+  return objects;
+}
+
+function syncRemoteBrowserSurfaceTextures(): void {
+  const activeSurfaceIds = new Set<string>();
+  syncRemoteBrowserVideoRuntimeWithObjects();
+  for (const object of activeRemoteBrowserObjects()) {
+    if (!mediaSurfaceViews.has(object.surfaceId)) {
+      continue;
+    }
+    activeSurfaceIds.add(object.surfaceId);
+    getRemoteBrowserRuntime(object.surfaceId).sync(object);
+  }
+  for (const [surfaceId, runtime] of remoteBrowserRuntimes) {
+    if (activeSurfaceIds.has(surfaceId)) {
+      continue;
+    }
+    runtime.close();
+    const material = getMediaSurfaceView(surfaceId).object.material;
+    if (material instanceof THREE.MeshBasicMaterial && runtime.ownsTexture(material.map)) {
+      applySurfaceTexture(surfaceId, null);
+    }
+  }
+}
+
 let surfaceAudioCommandPending = false;
 let surfaceAudioPendingEnabled: boolean | null = null;
 const pointerNdc = new THREE.Vector2(0, 0);
@@ -819,14 +878,15 @@ function updateMediaDiagnostics(): void {
     publishedAudio: Boolean(livekitRoom && microphoneEnabled),
     subscribedAudioCount: remoteAudioNodes.size
   };
-  const activeRemoteBrowser = activeRemoteBrowserObjectForSurface(selectedMediaSurfaceId) ?? findActiveRemoteBrowserObject();
+  const activeRemoteBrowser = currentRemoteBrowserObject();
+  const remoteBrowserRuntime = getRemoteBrowserRuntime(activeRemoteBrowser?.surfaceId ?? selectedMediaSurfaceId);
   if (activeRemoteBrowser) {
     remoteBrowserRuntime.sync(activeRemoteBrowser);
   }
   debugState.remoteBrowser = {
     ...debugState.remoteBrowser,
     ...remoteBrowserRuntime.createDebugSnapshot(activeRemoteBrowser),
-    ...createRemoteBrowserExternalVideoDebugSnapshot()
+    ...createRemoteBrowserExternalVideoDebugSnapshot(activeRemoteBrowser)
   };
 }
 
@@ -1039,6 +1099,10 @@ function findActiveRemoteBrowserObject(): MediaObjectInstance<RemoteBrowserObjec
   return findActiveObjectByType<RemoteBrowserObjectState>(REMOTE_BROWSER_OBJECT_TYPE);
 }
 
+function findRemoteBrowserObjectNeedingLiveKitRoom(): MediaObjectInstance<RemoteBrowserObjectState> | null {
+  return activeRemoteBrowserObjects().find((object) => remoteBrowserObjectNeedsLiveKitRoom(object)) ?? null;
+}
+
 function syncMediaSurfaceObjectIds(): void {
   for (const surface of mediaSurfaceViews.values()) {
     surface.object.userData.objectId = activeMediaObjectIdForSurface(surface.surfaceId) ?? null;
@@ -1147,8 +1211,9 @@ function canUseRemoteBrowserOpenControl(): boolean {
 function syncRemoteBrowserControls(): void {
   const activeObject = activeMediaObjectForSurface(selectedMediaSurfaceId);
   const remoteBrowser = activeRemoteBrowserObjectForSurface(selectedMediaSurfaceId);
+  const remoteBrowserRuntime = getRemoteBrowserRuntime(selectedMediaSurfaceId);
   const snapshot = remoteBrowserRuntime.createDebugSnapshot(remoteBrowser);
-  debugState.remoteBrowser = { ...debugState.remoteBrowser, ...snapshot, ...createRemoteBrowserExternalVideoDebugSnapshot() };
+  debugState.remoteBrowser = { ...debugState.remoteBrowser, ...snapshot, ...createRemoteBrowserExternalVideoDebugSnapshot(remoteBrowser) };
   const canOpen = canUseRemoteBrowserOpenControl();
   const canInput = hasRoomPermission(debugState.access.permissions, "remote-browser.input");
   const hasOtherObject = Boolean(activeObject && activeObject.type !== REMOTE_BROWSER_OBJECT_TYPE);
@@ -1187,7 +1252,8 @@ function syncMediaObjectsDebugState(): void {
     mediaAudioEnabled: surface.mediaAudioEnabled,
     lockedByParticipantId: surface.lockedByParticipantId,
     visible: surface.visible,
-    runtimeVisible: getMediaSurfaceView(surface.surfaceId).object.visible
+    runtimeVisible: getMediaSurfaceView(surface.surfaceId).object.visible,
+    textureId: getSurfaceTextureDebugId(surface.surfaceId)
   }));
   debugState.mediaObjects.objects = objects.map((object) => ({
     objectId: object.objectId,
@@ -1212,20 +1278,7 @@ function syncMediaObjectsDebugState(): void {
     xrPencilVisible: whiteboardPencils.some((pencil) => pencil.visible)
   };
   syncWhiteboardSurfaceTextures();
-  const activeRemoteBrowser = activeRemoteBrowserObjectForSurface(selectedMediaSurfaceId) ?? findActiveRemoteBrowserObject();
-  if (activeRemoteBrowser) {
-    remoteBrowserRuntime.sync(activeRemoteBrowser);
-    if (activeRemoteBrowserObjectId && activeRemoteBrowserObjectId !== activeRemoteBrowser.objectId) {
-      detachRemoteBrowserVideoTrack();
-    }
-  } else if (findSurfaceWithTexture((texture) => remoteBrowserRuntime.ownsTexture(texture))) {
-    remoteBrowserRuntime.close();
-    detachRemoteBrowserVideoTrack();
-    clearSurfaceTextureWhere((texture) => remoteBrowserRuntime.ownsTexture(texture));
-  } else {
-    remoteBrowserRuntime.close();
-    detachRemoteBrowserVideoTrack();
-  }
+  syncRemoteBrowserSurfaceTextures();
   syncScreenShareRuntimeWithObjects();
   const activeScreenShare = activeScreenShareObjectForSurface(selectedMediaSurfaceId) ?? findActiveScreenShareObject();
   const screenShareState = activeScreenShare?.state ?? null;
@@ -1269,7 +1322,7 @@ function routeSurfaceInputToMediaObject(event: SurfaceInputEvent): boolean {
     event,
     object,
     routeWhiteboardInput: (surfaceEvent, whiteboardObject) => getWhiteboardRuntime(whiteboardObject.surfaceId).routeInput(surfaceEvent, whiteboardObject),
-    routeRemoteBrowserInput: (surfaceEvent, remoteBrowserObject) => remoteBrowserRuntime.routeInput(surfaceEvent, remoteBrowserObject),
+    routeRemoteBrowserInput: (surfaceEvent, remoteBrowserObject) => getRemoteBrowserRuntime(remoteBrowserObject.surfaceId).routeInput(surfaceEvent, remoteBrowserObject),
     sendTestCardPatch: (testCardObject, surfaceEvent) => mediaSurfaceCommands.sendPatchObjectState("patch", {
       surfaceId: testCardObject.surfaceId,
       objectId: testCardObject.objectId,
@@ -2257,6 +2310,22 @@ function applySurfaceTexture(surfaceId: string, texture: THREE.Texture | null): 
   material.needsUpdate = true;
 }
 
+function getSurfaceTextureDebugId(surfaceId: string): number | null {
+  const material = getMediaSurfaceView(surfaceId).object.material;
+  const texture = material instanceof THREE.MeshBasicMaterial ? material.map : null;
+  if (!texture) {
+    return null;
+  }
+  const existing = debugTextureIds.get(texture);
+  if (existing) {
+    return existing;
+  }
+  const next = nextDebugTextureId;
+  nextDebugTextureId += 1;
+  debugTextureIds.set(texture, next);
+  return next;
+}
+
 function applyDisplayTexture(texture: THREE.Texture | null): void {
   applySurfaceTexture(DEBUG_SURFACE_ID, texture);
 }
@@ -2761,14 +2830,81 @@ function startHiddenVideoPlayback(element: HTMLVideoElement, onError?: (error: s
   element.addEventListener("canplay", play, { once: true });
 }
 
-function resetRemoteBrowserExternalVideoDiagnostics(): void {
-  activeRemoteBrowserVideoPlayError = null;
-  activeRemoteBrowserVideoFrameCount = 0;
-  activeRemoteBrowserVideoLastFrameAtMs = 0;
-  activeRemoteBrowserVideoPresentedFrames = 0;
+function remoteBrowserVideoEntryForObject(objectId: string | null | undefined): RemoteBrowserVideoEntry | null {
+  return objectId ? remoteBrowserVideoByObjectId.get(objectId) ?? null : null;
 }
 
-function startRemoteBrowserExternalVideoFrameDiagnostics(element: HTMLVideoElement): void {
+function remoteBrowserVideoEntryForTrack(track: Track): RemoteBrowserVideoEntry | null {
+  for (const entry of remoteBrowserVideoByObjectId.values()) {
+    if (entry.track === track) {
+      return entry;
+    }
+  }
+  return null;
+}
+
+function createRemoteBrowserVideoTexture(element: HTMLVideoElement): THREE.VideoTexture {
+  const texture = new THREE.VideoTexture(element);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
+function moveRemoteBrowserVideoEntryToSurface(entry: RemoteBrowserVideoEntry, surfaceId: string): void {
+  if (entry.surfaceId === surfaceId) {
+    return;
+  }
+  const material = getMediaSurfaceView(entry.surfaceId).object.material;
+  if (material instanceof THREE.MeshBasicMaterial && material.map === entry.texture) {
+    retainedDisplayTextures.add(entry.texture);
+    applySurfaceTexture(entry.surfaceId, null);
+    retainedDisplayTextures.delete(entry.texture);
+  }
+  applySurfaceTexture(surfaceId, entry.texture);
+  entry.surfaceId = surfaceId;
+}
+
+function detachRemoteBrowserVideoEntry(entry: RemoteBrowserVideoEntry): void {
+  entry.track.detach().forEach((element) => element.remove());
+  entry.element.remove();
+  const material = getMediaSurfaceView(entry.surfaceId).object.material;
+  if (material instanceof THREE.MeshBasicMaterial && material.map === entry.texture) {
+    applySurfaceTexture(entry.surfaceId, null);
+  } else if (!retainedDisplayTextures.has(entry.texture)) {
+    entry.texture.dispose();
+  }
+  remoteBrowserVideoByObjectId.delete(entry.objectId);
+  const object = activeRemoteBrowserObjectForSurface(entry.surfaceId);
+  if (object) {
+    getRemoteBrowserRuntime(entry.surfaceId).sync(object);
+  }
+}
+
+function isCurrentRemoteBrowserObject(object: MediaObjectInstance<RemoteBrowserObjectState> | null | undefined): object is MediaObjectInstance<RemoteBrowserObjectState> {
+  if (!object) {
+    return false;
+  }
+  return object.type === REMOTE_BROWSER_OBJECT_TYPE
+    && object.state.status !== "stopped"
+    && object.state.status !== "failed"
+    && roomMediaObjects?.surfaces[object.surfaceId]?.activeObjectId === object.objectId;
+}
+
+function syncRemoteBrowserVideoRuntimeWithObjects(): void {
+  if (!roomMediaObjects) {
+    return;
+  }
+  for (const entry of Array.from(remoteBrowserVideoByObjectId.values())) {
+    const object = roomMediaObjects.objects[entry.objectId] as MediaObjectInstance<RemoteBrowserObjectState> | undefined;
+    if (!isCurrentRemoteBrowserObject(object) || (object.state.mediaTrackSid && object.state.mediaTrackSid !== entry.trackSid)) {
+      detachRemoteBrowserVideoEntry(entry);
+      continue;
+    }
+    moveRemoteBrowserVideoEntryToSurface(entry, object.surfaceId);
+  }
+}
+
+function startRemoteBrowserExternalVideoFrameDiagnostics(entry: RemoteBrowserVideoEntry): void {
+  const element = entry.element;
   const video = element as HTMLVideoElement & {
     requestVideoFrameCallback?: (callback: (now: number, metadata: { presentedFrames?: number }) => void) => number;
   };
@@ -2776,18 +2912,18 @@ function startRemoteBrowserExternalVideoFrameDiagnostics(element: HTMLVideoEleme
     return;
   }
   const onFrame = (_now: number, metadata: { presentedFrames?: number }) => {
-    if (activeRemoteBrowserVideoElement !== element) {
+    if (remoteBrowserVideoByObjectId.get(entry.objectId) !== entry) {
       return;
     }
-    activeRemoteBrowserVideoFrameCount += 1;
-    activeRemoteBrowserVideoLastFrameAtMs = Date.now();
-    activeRemoteBrowserVideoPresentedFrames = metadata.presentedFrames ?? activeRemoteBrowserVideoPresentedFrames;
+    entry.frameCount += 1;
+    entry.lastFrameAtMs = Date.now();
+    entry.presentedFrames = metadata.presentedFrames ?? entry.presentedFrames;
     video.requestVideoFrameCallback?.(onFrame);
   };
   video.requestVideoFrameCallback(onFrame);
 }
 
-function createRemoteBrowserExternalVideoDebugSnapshot(): {
+function createRemoteBrowserExternalVideoDebugSnapshot(object: MediaObjectInstance<RemoteBrowserObjectState> | null): {
   externalVideoAttached: boolean;
   externalVideoObjectId: string | null;
   externalVideoTrackSid: string | null;
@@ -2803,11 +2939,12 @@ function createRemoteBrowserExternalVideoDebugSnapshot(): {
   externalVideoLastFrameAtMs: number;
   externalVideoPresentedFrames: number;
 } {
-  const element = activeRemoteBrowserVideoElement;
+  const entry = remoteBrowserVideoEntryForObject(object?.objectId);
+  const element = entry?.element ?? null;
   return {
     externalVideoAttached: Boolean(element),
-    externalVideoObjectId: activeRemoteBrowserObjectId,
-    externalVideoTrackSid: activeRemoteBrowserVideoTrackSid,
+    externalVideoObjectId: entry?.objectId ?? null,
+    externalVideoTrackSid: entry?.trackSid ?? null,
     externalVideoPaused: element?.paused ?? null,
     externalVideoReadyState: element?.readyState ?? null,
     externalVideoCurrentTime: element ? Number(element.currentTime.toFixed(3)) : null,
@@ -2815,10 +2952,10 @@ function createRemoteBrowserExternalVideoDebugSnapshot(): {
     externalVideoHeight: element?.videoHeight ?? 0,
     externalVideoMuted: element?.muted ?? null,
     externalVideoAutoplay: element?.autoplay ?? null,
-    externalVideoPlayError: activeRemoteBrowserVideoPlayError,
-    externalVideoFrameCount: activeRemoteBrowserVideoFrameCount,
-    externalVideoLastFrameAtMs: activeRemoteBrowserVideoLastFrameAtMs,
-    externalVideoPresentedFrames: activeRemoteBrowserVideoPresentedFrames
+    externalVideoPlayError: entry?.playError ?? null,
+    externalVideoFrameCount: entry?.frameCount ?? 0,
+    externalVideoLastFrameAtMs: entry?.lastFrameAtMs ?? 0,
+    externalVideoPresentedFrames: entry?.presentedFrames ?? 0
   };
 }
 
@@ -2907,8 +3044,8 @@ function syncScreenShareLiveKitTracks(): void {
 }
 
 function ensureRemoteBrowserLiveKitRoom(): void {
-  const remoteBrowser = findActiveRemoteBrowserObject();
-  if (!remoteBrowserObjectNeedsLiveKitRoom(remoteBrowser)) {
+  const remoteBrowser = findRemoteBrowserObjectNeedingLiveKitRoom();
+  if (!remoteBrowser) {
     return;
   }
   if (livekitRoom) {
@@ -2924,7 +3061,8 @@ function ensureRemoteBrowserLiveKitRoom(): void {
     })
     .catch((error: unknown) => {
       console.error(error);
-      remoteBrowserRuntime.setError(error instanceof Error ? error.message : "remote_browser_livekit_connect_failed");
+      const object = currentRemoteBrowserObject();
+      getRemoteBrowserRuntime(object?.surfaceId ?? selectedMediaSurfaceId).setError(error instanceof Error ? error.message : "remote_browser_livekit_connect_failed");
     })
     .finally(() => {
       remoteBrowserMediaRoomPromise = null;
@@ -3541,7 +3679,7 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
       surfaceId: object.surfaceId,
       objectId: object.objectId,
       expectedRevision: object.revision,
-      patch: remoteBrowserRuntime.createTakeControlPatch()
+      patch: getRemoteBrowserRuntime(object.surfaceId).createTakeControlPatch()
     });
   },
   releaseRemoteBrowserControl: () => {
@@ -3553,7 +3691,7 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
       surfaceId: object.surfaceId,
       objectId: object.objectId,
       expectedRevision: object.revision,
-      patch: remoteBrowserRuntime.createReleaseControlPatch()
+      patch: getRemoteBrowserRuntime(object.surfaceId).createReleaseControlPatch()
     });
   },
   createUnknownSurfaceObject: () => {
@@ -4397,34 +4535,44 @@ function attachVideoTrack(track: Track, options: {
 
 function attachRemoteBrowserVideoTrack(track: Track, object: MediaObjectInstance<RemoteBrowserObjectState>, publication: unknown): void {
   const trackSid = getPublicationTrackSid(publication, track, object.state.mediaTrackSid ?? `${object.objectId}:remote-browser-video`);
-  if (activeRemoteBrowserVideoTrackSid === trackSid && activeRemoteBrowserVideoElement) {
+  const existing = remoteBrowserVideoByObjectId.get(object.objectId);
+  if (existing?.trackSid === trackSid && existing.element) {
+    moveRemoteBrowserVideoEntryToSurface(existing, object.surfaceId);
     return;
   }
-  detachRemoteBrowserVideoTrack();
+  if (existing) {
+    detachRemoteBrowserVideoEntry(existing);
+  }
   const element = track.attach() as HTMLVideoElement;
   prepareHiddenVideoElement(element, { muted: true });
   document.body.appendChild(element);
 
-  const texture = new THREE.VideoTexture(element);
-  texture.colorSpace = THREE.SRGBColorSpace;
+  const texture = createRemoteBrowserVideoTexture(element);
   applySurfaceTexture(object.surfaceId, texture);
 
-  resetRemoteBrowserExternalVideoDiagnostics();
-  activeRemoteBrowserVideoTrack = track;
-  activeRemoteBrowserVideoElement = element;
-  activeRemoteBrowserVideoTrackSid = trackSid;
-  activeRemoteBrowserObjectId = object.objectId;
-  activeRemoteBrowserVideoSurfaceId = object.surfaceId;
+  const entry: RemoteBrowserVideoEntry = {
+    objectId: object.objectId,
+    surfaceId: object.surfaceId,
+    track,
+    element,
+    texture,
+    trackSid,
+    playError: null,
+    frameCount: 0,
+    lastFrameAtMs: 0,
+    presentedFrames: 0
+  };
+  remoteBrowserVideoByObjectId.set(object.objectId, entry);
   startHiddenVideoPlayback(element, (error) => {
-    if (activeRemoteBrowserVideoElement === element) {
-      activeRemoteBrowserVideoPlayError = error;
+    if (remoteBrowserVideoByObjectId.get(object.objectId) === entry) {
+      entry.playError = error;
     }
   });
-  startRemoteBrowserExternalVideoFrameDiagnostics(element);
+  startRemoteBrowserExternalVideoFrameDiagnostics(entry);
   debugState.remoteBrowser.mediaConnected = true;
   debugState.remoteBrowser.mediaState = "connected";
   debugState.remoteBrowser.mediaHasVideo = true;
-  Object.assign(debugState.remoteBrowser, createRemoteBrowserExternalVideoDebugSnapshot());
+  Object.assign(debugState.remoteBrowser, createRemoteBrowserExternalVideoDebugSnapshot(object));
 }
 
 function attachScreenShareStream(stream: MediaStream, options: {
@@ -4554,32 +4702,16 @@ function detachVideoTrack(track?: Track): void {
 }
 
 function detachRemoteBrowserVideoTrack(track?: Track): void {
-  if (track && activeRemoteBrowserVideoTrack && track !== activeRemoteBrowserVideoTrack) {
+  const entry = track
+    ? remoteBrowserVideoEntryForTrack(track)
+    : remoteBrowserVideoEntryForObject(activeRemoteBrowserObjectForSurface(selectedMediaSurfaceId)?.objectId ?? findActiveRemoteBrowserObject()?.objectId);
+  if (!entry) {
     return;
   }
-  if (activeRemoteBrowserVideoTrack) {
-    activeRemoteBrowserVideoTrack.detach().forEach((element) => element.remove());
-    activeRemoteBrowserVideoTrack = null;
-  }
-  if (activeRemoteBrowserVideoElement) {
-    activeRemoteBrowserVideoElement.remove();
-    activeRemoteBrowserVideoElement = null;
-  }
-  activeRemoteBrowserVideoTrackSid = null;
-  activeRemoteBrowserObjectId = null;
-  const surfaceId = activeRemoteBrowserVideoSurfaceId;
-  activeRemoteBrowserVideoSurfaceId = null;
-  resetRemoteBrowserExternalVideoDiagnostics();
+  detachRemoteBrowserVideoEntry(entry);
   debugState.remoteBrowser.mediaConnected = false;
   debugState.remoteBrowser.mediaHasVideo = false;
-  Object.assign(debugState.remoteBrowser, createRemoteBrowserExternalVideoDebugSnapshot());
-  if (surfaceId) {
-    applySurfaceTexture(surfaceId, null);
-  }
-  const remoteBrowser = findActiveRemoteBrowserObject();
-  if (remoteBrowser) {
-    remoteBrowserRuntime.sync(remoteBrowser);
-  }
+  Object.assign(debugState.remoteBrowser, createRemoteBrowserExternalVideoDebugSnapshot(currentRemoteBrowserObject()));
 }
 
 async function ensureMediaRoom(): Promise<Room> {
@@ -5270,7 +5402,7 @@ function setupAudio(room: Room): void {
 
   room.on(RoomEvent.TrackUnsubscribed, (track, publication, participant) => {
     if (track.kind === Track.Kind.Video) {
-      if (resolveRemoteBrowserObjectForTrack(participant?.identity, publication, track, "video") || track === activeRemoteBrowserVideoTrack) {
+      if (resolveRemoteBrowserObjectForTrack(participant?.identity, publication, track, "video") || remoteBrowserVideoEntryForTrack(track)) {
         detachRemoteBrowserVideoTrack(track);
         return;
       }
@@ -5506,12 +5638,13 @@ async function openRemoteBrowser(rawUrl: string): Promise<void> {
         updatedAtMs: Date.now()
       } satisfies MediaObjectInstance<RemoteBrowserObjectState>);
   }
-  const result = await mediaSurfaceCommands.patchRemoteBrowserObject(remoteBrowser.objectId, remoteBrowser.surfaceId, revision, remoteBrowserRuntime.createOpenUrlPatch(targetUrl));
+  const runtime = getRemoteBrowserRuntime(remoteBrowser.surfaceId);
+  const result = await mediaSurfaceCommands.patchRemoteBrowserObject(remoteBrowser.objectId, remoteBrowser.surfaceId, revision, runtime.createOpenUrlPatch(targetUrl));
   if (!result.accepted) {
     debugState.mediaObjects.blockedReason = result.blockedReason ?? null;
     throw new Error(`remote_browser_open_rejected:${result.blockedReason ?? "unknown"}`);
   }
-  remoteBrowserRuntime.clearError();
+  runtime.clearError();
   remoteBrowserUrlInput.value = targetUrl;
   setStatus("Remote browser opening");
   syncRemoteBrowserControls();
@@ -5544,7 +5677,11 @@ async function stopRemoteBrowser(): Promise<void> {
     debugState.mediaObjects.blockedReason = result.blockedReason ?? null;
     throw new Error(`remote_browser_stop_rejected:${result.blockedReason ?? "unknown"}`);
   }
-  remoteBrowserRuntime.close();
+  const entry = remoteBrowserVideoEntryForObject(object.objectId);
+  if (entry) {
+    detachRemoteBrowserVideoEntry(entry);
+  }
+  getRemoteBrowserRuntime(object.surfaceId).close();
   setStatus("Remote browser stopped");
   syncRemoteBrowserControls();
 }
@@ -5818,25 +5955,29 @@ openRemoteBrowserButton.addEventListener("click", () => {
   void openRemoteBrowser(remoteBrowserUrlInput.value).catch((error: unknown) => {
     console.error(error);
     setStatus("Remote browser open failed");
-    remoteBrowserRuntime.setError(error instanceof Error ? error.message : "open_failed");
+    getRemoteBrowserRuntime(selectedMediaSurfaceId).setError(error instanceof Error ? error.message : "open_failed");
     syncRemoteBrowserControls();
   });
 });
 
 takeRemoteBrowserControlButton.addEventListener("click", () => {
-  void patchRemoteBrowserControl(remoteBrowserRuntime.createTakeControlPatch()).catch((error: unknown) => {
+  const object = currentRemoteBrowserObject();
+  const runtime = getRemoteBrowserRuntime(object?.surfaceId ?? selectedMediaSurfaceId);
+  void patchRemoteBrowserControl(runtime.createTakeControlPatch()).catch((error: unknown) => {
     console.error(error);
     setStatus("Remote browser control failed");
-    remoteBrowserRuntime.setError(error instanceof Error ? error.message : "control_failed");
+    runtime.setError(error instanceof Error ? error.message : "control_failed");
     syncRemoteBrowserControls();
   });
 });
 
 releaseRemoteBrowserControlButton.addEventListener("click", () => {
-  void patchRemoteBrowserControl(remoteBrowserRuntime.createReleaseControlPatch()).catch((error: unknown) => {
+  const object = currentRemoteBrowserObject();
+  const runtime = getRemoteBrowserRuntime(object?.surfaceId ?? selectedMediaSurfaceId);
+  void patchRemoteBrowserControl(runtime.createReleaseControlPatch()).catch((error: unknown) => {
     console.error(error);
     setStatus("Remote browser release failed");
-    remoteBrowserRuntime.setError(error instanceof Error ? error.message : "release_failed");
+    runtime.setError(error instanceof Error ? error.message : "release_failed");
     syncRemoteBrowserControls();
   });
 });
@@ -5845,7 +5986,8 @@ stopRemoteBrowserButton.addEventListener("click", () => {
   void stopRemoteBrowser().catch((error: unknown) => {
     console.error(error);
     setStatus("Remote browser stop failed");
-    remoteBrowserRuntime.setError(error instanceof Error ? error.message : "stop_failed");
+    const object = currentRemoteBrowserObject();
+    getRemoteBrowserRuntime(object?.surfaceId ?? selectedMediaSurfaceId).setError(error instanceof Error ? error.message : "stop_failed");
     syncRemoteBrowserControls();
   });
 });
@@ -6096,7 +6238,12 @@ window.addEventListener("resize", () => {
 window.addEventListener("beforeunload", () => {
   void removePresence(apiBaseUrl, roomId, participantId);
   detachVideoTrack();
-  remoteBrowserRuntime.close();
+  for (const entry of Array.from(remoteBrowserVideoByObjectId.values())) {
+    detachRemoteBrowserVideoEntry(entry);
+  }
+  for (const runtime of remoteBrowserRuntimes.values()) {
+    runtime.close();
+  }
   disconnectLocalAudioTrack();
   localAvatarController?.dispose();
   clearRoomStateReconnect();
