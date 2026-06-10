@@ -92,6 +92,9 @@ jobs:
           cd /opt/noah
           git -c safe.directory=/opt/noah fetch origin
           git -c safe.directory=/opt/noah checkout ${DEPLOY_SHA}
+          if [ -x /usr/local/bin/noah-write-domains.sh ]; then
+            /usr/local/bin/noah-write-domains.sh
+          fi
           if [ -f ./tools/snapshot-scene-assets.sh ]; then
             STAGING_SCENE_BUNDLE_VERSION='${DEPLOY_SHA}' STAGING_SCENE_IDS='sense-hall2-v1,sense-blueoffice-glb-v4' bash ./tools/snapshot-scene-assets.sh
           fi

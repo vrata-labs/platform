@@ -283,6 +283,7 @@ fi
 rollout_compose_service room-state
 rollout_compose_service remote-browser
 rollout_compose_service api
+pull_compose_service caddy
 docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" up -d --no-build --pull never --no-deps caddy
 docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" exec -T caddy caddy validate --config /etc/caddy/Caddyfile
 docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" restart caddy
