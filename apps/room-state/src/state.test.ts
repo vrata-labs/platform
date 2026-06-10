@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { DISABLED_EXTENSION_CARD_TYPE, EXTENSION_TEST_CARD_TYPE, MISSING_CAPABILITY_EXTENSION_CARD_TYPE } from "@noah/shared-types";
 
 import {
   claimSeat,
@@ -265,6 +266,82 @@ test("createMediaObject enforces host permissions and rejects unknown types", ()
   });
   assert.equal(unknown.result.accepted, false);
   assert.equal(unknown.result.blockedReason, "unknown-object-type");
+});
+
+test("extension protocol creates registered test object and rejects invalid extensions", () => {
+  const hostRoom = joinRoom(createRoomState("demo"), "host", { role: "host" });
+  const created = createMediaObject(hostRoom, "host", {
+    commandId: "cmd-create-extension-card",
+    surfaceId: "debug-main",
+    objectType: EXTENSION_TEST_CARD_TYPE,
+    objectId: "extension-card-1",
+    nowMs: 1
+  });
+  assert.equal(created.result.accepted, true);
+  assert.equal(created.room.mediaObjects.objects["extension-card-1"]?.type, EXTENSION_TEST_CARD_TYPE);
+  assert.deepEqual(created.room.mediaObjects.objects["extension-card-1"]?.state, {
+    clickCount: 0,
+    lastInputEventId: null
+  });
+
+  const memberRoom = joinRoom(created.room, "member", { role: "member" });
+  const patched = patchMediaObjectState(memberRoom, "member", {
+    commandId: "cmd-patch-extension-card",
+    surfaceId: "debug-main",
+    objectId: "extension-card-1",
+    expectedRevision: 0,
+    patch: { type: "increment-click-count", inputEventId: "member:extension:1" },
+    nowMs: 2
+  });
+  assert.equal(patched.result.accepted, true);
+  assert.equal(patched.result.permission, "surface.input");
+  assert.deepEqual(patched.room.mediaObjects.objects["extension-card-1"]?.state, {
+    clickCount: 1,
+    lastInputEventId: "member:extension:1"
+  });
+
+  const missingCapability = createMediaObject(hostRoom, "host", {
+    commandId: "cmd-create-missing-capability",
+    surfaceId: "debug-main",
+    objectType: MISSING_CAPABILITY_EXTENSION_CARD_TYPE,
+    objectId: "missing-capability-1",
+    nowMs: 3
+  });
+  assert.equal(missingCapability.result.accepted, false);
+  assert.equal(missingCapability.result.blockedReason, "missing-extension-capability");
+
+  const disabled = createMediaObject(hostRoom, "host", {
+    commandId: "cmd-create-disabled",
+    surfaceId: "debug-main",
+    objectType: DISABLED_EXTENSION_CARD_TYPE,
+    objectId: "disabled-1",
+    nowMs: 4
+  });
+  assert.equal(disabled.result.accepted, false);
+  assert.equal(disabled.result.blockedReason, "extension-disabled");
+});
+
+test("extension protocol enforces action permissions through generic reducer", () => {
+  const hostRoom = joinRoom(createRoomState("demo"), "host", { role: "host" });
+  const created = createMediaObject(hostRoom, "host", {
+    commandId: "cmd-create-extension-card-permission",
+    surfaceId: "debug-main",
+    objectType: EXTENSION_TEST_CARD_TYPE,
+    objectId: "extension-card-permission",
+    nowMs: 1
+  });
+  const guestRoom = joinRoom(created.room, "guest", { role: "guest" });
+  const patched = patchMediaObjectState(guestRoom, "guest", {
+    commandId: "cmd-guest-extension-action",
+    surfaceId: "debug-main",
+    objectId: "extension-card-permission",
+    expectedRevision: 0,
+    patch: { type: "increment-click-count", inputEventId: "guest:extension:1" },
+    nowMs: 2
+  });
+  assert.equal(patched.result.accepted, false);
+  assert.equal(patched.result.permission, "surface.input");
+  assert.equal(patched.result.blockedReason, "missing-permission");
 });
 
 test("surface-test-card state updates through revisioned reducer", () => {

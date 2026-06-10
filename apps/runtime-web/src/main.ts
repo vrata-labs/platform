@@ -3,7 +3,10 @@ import { VRButton } from "three/examples/jsm/webxr/VRButton.js";
 import { Room, RoomEvent, Track } from "livekit-client";
 import {
   DEFAULT_MEDIA_SURFACE_ID,
+  DISABLED_EXTENSION_CARD_TYPE,
+  EXTENSION_TEST_CARD_TYPE,
   LAPTOP_MEDIA_SURFACE_ID,
+  MISSING_CAPABILITY_EXTENSION_CARD_TYPE,
   REMOTE_BROWSER_OBJECT_TYPE,
   SCREEN_SHARE_OBJECT_TYPE,
   SURFACE_TEST_CARD_TYPE,
@@ -11,7 +14,9 @@ import {
   WHITEBOARD_MAX_POINTS_PER_STROKE,
   WHITEBOARD_OBJECT_TYPE,
   createRoomAccessDebugState,
+  getMediaExtensionDebugSnapshot,
   hasRoomPermission,
+  isMediaObjectTypeAvailable,
   type MediaObjectInstance,
   type RemoteBrowserErrorCode,
   type RemoteBrowserExecutorInputState,
@@ -1246,6 +1251,7 @@ function syncMediaObjectsDebugState(): void {
   debugState.mediaObjects.surfaces = surfaces.map((surface) => ({
     surfaceId: surface.surfaceId,
     label: getMediaSurfaceLabel(surface.surfaceId),
+    allowedObjectTypes: [...surface.allowedObjectTypes],
     activeObjectId: surface.activeObjectId,
     activeObjectType: surface.activeObjectId ? roomMediaObjects?.objects[surface.activeObjectId]?.type ?? null : null,
     inputEnabled: surface.inputEnabled,
@@ -1265,6 +1271,9 @@ function syncMediaObjectsDebugState(): void {
     status: object.status
   }));
   debugState.mediaObjects.selectedSurfaceId = selectedMediaSurfaceId;
+  debugState.mediaObjects.extensions = getMediaExtensionDebugSnapshot();
+  debugState.mediaObjects.availableObjectTypes = (roomMediaObjects?.surfaces[selectedMediaSurfaceId]?.allowedObjectTypes ?? [])
+    .filter((objectType) => isMediaObjectTypeAvailable(objectType));
   const activeObject = activeMediaObjectForSurface(selectedMediaSurfaceId);
   debugState.mediaObjects.activeTestCardClickCount = activeObject?.type === SURFACE_TEST_CARD_TYPE
     ? ((activeObject.state as SurfaceTestCardState).clickCount ?? 0)
@@ -3478,6 +3487,7 @@ const debugState = {
     surfaces: [] as Array<{
       surfaceId: string;
       label?: string;
+      allowedObjectTypes: string[];
       activeObjectId: string | null;
       activeObjectType: string | null;
       inputEnabled: boolean;
@@ -3495,6 +3505,8 @@ const debugState = {
       revision: number;
       status: string;
     }>,
+    extensions: getMediaExtensionDebugSnapshot(),
+    availableObjectTypes: [] as string[],
     lastCommand: null as SurfaceCommandResult | null,
     blockedReason: null as string | null,
     activeTestCardClickCount: null as number | null
@@ -3533,6 +3545,9 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
     requestSeatClaimById: (seatId: string) => boolean;
     sendPrivilegedSurfaceCreate: () => boolean;
     createSurfaceTestCard: () => boolean;
+    createExtensionTestCard: (surfaceId?: string) => boolean;
+    createMissingCapabilityExtensionObject: (surfaceId?: string) => boolean;
+    createDisabledExtensionObject: (surfaceId?: string) => boolean;
     createScreenShareObject: (surfaceId?: string) => boolean;
     createWhiteboardObject: (surfaceId?: string) => boolean;
     createRemoteBrowserObject: (surfaceId?: string) => boolean;
@@ -3636,6 +3651,30 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
       commandId: mediaSurfaceCommands.createCommandId("create"),
       surfaceId: DEBUG_SURFACE_ID,
       objectType: SURFACE_TEST_CARD_TYPE,
+      probeOnly: false
+    });
+  },
+  createExtensionTestCard: (surfaceId = selectedMediaSurfaceId) => {
+    return mediaSurfaceCommands.sendCreateObject({
+      commandId: mediaSurfaceCommands.createCommandId("extension-test-card-create"),
+      surfaceId,
+      objectType: EXTENSION_TEST_CARD_TYPE,
+      probeOnly: false
+    });
+  },
+  createMissingCapabilityExtensionObject: (surfaceId = selectedMediaSurfaceId) => {
+    return mediaSurfaceCommands.sendCreateObject({
+      commandId: mediaSurfaceCommands.createCommandId("missing-capability-extension-create"),
+      surfaceId,
+      objectType: MISSING_CAPABILITY_EXTENSION_CARD_TYPE,
+      probeOnly: false
+    });
+  },
+  createDisabledExtensionObject: (surfaceId = selectedMediaSurfaceId) => {
+    return mediaSurfaceCommands.sendCreateObject({
+      commandId: mediaSurfaceCommands.createCommandId("disabled-extension-create"),
+      surfaceId,
+      objectType: DISABLED_EXTENSION_CARD_TYPE,
       probeOnly: false
     });
   },

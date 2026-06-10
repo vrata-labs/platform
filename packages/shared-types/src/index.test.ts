@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { DEFAULT_MEDIA_SURFACE_ID, SCREEN_SHARE_OBJECT_TYPE, SURFACE_TEST_CARD_TYPE, WHITEBOARD_OBJECT_TYPE, createDefaultRoomMediaObjectsState, createRoomAccessDebugState } from "./index.js";
+import { DEFAULT_MEDIA_SURFACE_ID, DISABLED_EXTENSION_CARD_TYPE, EXTENSION_TEST_CARD_TYPE, MISSING_CAPABILITY_EXTENSION_CARD_TYPE, SCREEN_SHARE_OBJECT_TYPE, SURFACE_TEST_CARD_TYPE, WHITEBOARD_OBJECT_TYPE, createDefaultRoomMediaObjectsState, createRoomAccessDebugState, getMediaExtensionDebugSnapshot, getMediaObjectDefinition, isMediaObjectTypeAvailable, listAvailableMediaObjectTypes } from "./index.js";
 import type {
   AvatarCatalogV1,
   AvatarRecipeCatalogV1,
@@ -86,10 +86,39 @@ test("media object shared contracts compile in tests", () => {
   assert.equal(mediaObjects.surfaces[DEFAULT_MEDIA_SURFACE_ID]?.activeObjectId, null);
   assert.equal(mediaObjects.surfaces[DEFAULT_MEDIA_SURFACE_ID]?.allowedObjectTypes.includes(SCREEN_SHARE_OBJECT_TYPE), true);
   assert.equal(mediaObjects.surfaces[DEFAULT_MEDIA_SURFACE_ID]?.allowedObjectTypes.includes(WHITEBOARD_OBJECT_TYPE), true);
+  assert.equal(mediaObjects.surfaces[DEFAULT_MEDIA_SURFACE_ID]?.allowedObjectTypes.includes(EXTENSION_TEST_CARD_TYPE), true);
   assert.equal(mediaObjects.surfaces[DEFAULT_MEDIA_SURFACE_ID]?.mediaAudioEnabled, false);
   assert.equal(cardState.clickCount, 1);
   assert.equal(screenShareState.mediaTrackSid, "track-1");
   assert.equal(result.accepted, true);
+});
+
+test("media extension registry exposes available and rejected object definitions", () => {
+  const availableTypes = listAvailableMediaObjectTypes();
+  assert.equal(availableTypes.includes(SURFACE_TEST_CARD_TYPE), true);
+  assert.equal(availableTypes.includes(SCREEN_SHARE_OBJECT_TYPE), true);
+  assert.equal(availableTypes.includes(WHITEBOARD_OBJECT_TYPE), true);
+  assert.equal(availableTypes.includes(EXTENSION_TEST_CARD_TYPE), true);
+  assert.equal(availableTypes.includes(MISSING_CAPABILITY_EXTENSION_CARD_TYPE), false);
+  assert.equal(availableTypes.includes(DISABLED_EXTENSION_CARD_TYPE), false);
+
+  const extensionCard = getMediaObjectDefinition(EXTENSION_TEST_CARD_TYPE);
+  assert.equal(extensionCard?.extensionId, "noah.extension-test-card");
+  assert.equal(extensionCard?.stateKind, "surface-test-card");
+  assert.equal(extensionCard?.missingCapabilities.length, 0);
+  assert.equal(isMediaObjectTypeAvailable(EXTENSION_TEST_CARD_TYPE), true);
+
+  const missingCapabilityCard = getMediaObjectDefinition(MISSING_CAPABILITY_EXTENSION_CARD_TYPE);
+  assert.deepEqual(missingCapabilityCard?.missingCapabilities, ["surface.render"]);
+  assert.equal(isMediaObjectTypeAvailable(MISSING_CAPABILITY_EXTENSION_CARD_TYPE), false);
+
+  const disabledCard = getMediaObjectDefinition(DISABLED_EXTENSION_CARD_TYPE);
+  assert.equal(disabledCard?.extensionEnabled, false);
+  assert.equal(isMediaObjectTypeAvailable(DISABLED_EXTENSION_CARD_TYPE), false);
+
+  const debug = getMediaExtensionDebugSnapshot();
+  assert.equal(debug.some((extension) => extension.id === "noah.whiteboard" && extension.valid), true);
+  assert.equal(debug.some((extension) => extension.id === "noah.missing-capability-demo" && !extension.valid), true);
 });
 
 test("avatar shared contracts compile in tests", () => {

@@ -8,12 +8,330 @@ export const SURFACE_TEST_CARD_TYPE = "surface-test-card";
 export const SCREEN_SHARE_OBJECT_TYPE = "screen-share";
 export const WHITEBOARD_OBJECT_TYPE = "whiteboard";
 export const REMOTE_BROWSER_OBJECT_TYPE = "remote-browser";
+export const EXTENSION_TEST_CARD_TYPE = "extension-test-card";
+export const MISSING_CAPABILITY_EXTENSION_CARD_TYPE = "missing-capability-extension-card";
+export const DISABLED_EXTENSION_CARD_TYPE = "disabled-extension-card";
 export const WHITEBOARD_MAX_STROKES = 500;
 export const WHITEBOARD_MAX_POINTS_PER_STROKE = 256;
 export const WHITEBOARD_ALLOWED_COLORS = ["#111827", "#2563eb", "#dc2626"] as const;
 export const WHITEBOARD_ALLOWED_WIDTHS = [2, 4, 8] as const;
 
-export type MediaObjectType = typeof SURFACE_TEST_CARD_TYPE | typeof SCREEN_SHARE_OBJECT_TYPE | typeof WHITEBOARD_OBJECT_TYPE | typeof REMOTE_BROWSER_OBJECT_TYPE | string;
+export type MediaObjectType = typeof SURFACE_TEST_CARD_TYPE | typeof SCREEN_SHARE_OBJECT_TYPE | typeof WHITEBOARD_OBJECT_TYPE | typeof REMOTE_BROWSER_OBJECT_TYPE | typeof EXTENSION_TEST_CARD_TYPE | string;
+
+export type MediaExtensionCapability =
+  | "surface.render"
+  | "surface.input.pointer"
+  | "surface.input.keyboard"
+  | "room.state.read"
+  | "room.state.write"
+  | "media.publish"
+  | "media.subscribe"
+  | "remote.executor";
+
+export type MediaObjectStateKind = "surface-test-card" | "screen-share" | "whiteboard" | "remote-browser";
+
+export interface MediaObjectDefinition {
+  objectType: MediaObjectType;
+  displayName: string;
+  stateKind: MediaObjectStateKind;
+  requiredCapabilities: MediaExtensionCapability[];
+  requiredPermissions: RoomPermission[];
+  supportedSurfaceKinds?: MediaSurface["kind"][];
+  enabled?: boolean;
+}
+
+export interface NoahMediaExtensionManifest {
+  id: string;
+  version: string;
+  displayName: string;
+  objectTypes: MediaObjectDefinition[];
+  requiredCapabilities: MediaExtensionCapability[];
+  requiredPermissions: RoomPermission[];
+  compatibility: {
+    noahRuntime: string;
+    roomManifestSchema: number;
+  };
+  entry: string;
+  enabled?: boolean;
+}
+
+export interface RegisteredMediaObjectDefinition extends MediaObjectDefinition {
+  extensionId: string;
+  extensionDisplayName: string;
+  extensionEnabled: boolean;
+  validationErrors: string[];
+  missingCapabilities: MediaExtensionCapability[];
+  missingPermissions: RoomPermission[];
+}
+
+export interface MediaExtensionDebugEntry {
+  id: string;
+  version: string;
+  displayName: string;
+  enabled: boolean;
+  valid: boolean;
+  validationErrors: string[];
+  objectTypes: Array<{
+    objectType: string;
+    displayName: string;
+    stateKind: MediaObjectStateKind;
+    enabled: boolean;
+    available: boolean;
+    requiredCapabilities: MediaExtensionCapability[];
+    requiredPermissions: RoomPermission[];
+    missingCapabilities: MediaExtensionCapability[];
+    missingPermissions: RoomPermission[];
+  }>;
+}
+
+const NOAH_RUNTIME_EXTENSION_COMPATIBILITY = {
+  noahRuntime: ">=0.1.0",
+  roomManifestSchema: 1
+};
+
+export const BUILTIN_MEDIA_EXTENSION_MANIFESTS: NoahMediaExtensionManifest[] = [
+  {
+    id: "noah.surface-test-card",
+    version: "0.1.0",
+    displayName: "Surface Test Card",
+    requiredCapabilities: ["surface.render", "surface.input.pointer", "room.state.read", "room.state.write"],
+    requiredPermissions: ["surface.input"],
+    compatibility: NOAH_RUNTIME_EXTENSION_COMPATIBILITY,
+    entry: "internal:surface-test-card",
+    objectTypes: [{
+      objectType: SURFACE_TEST_CARD_TYPE,
+      displayName: "Surface Test Card",
+      stateKind: "surface-test-card",
+      requiredCapabilities: ["surface.render", "surface.input.pointer", "room.state.read", "room.state.write"],
+      requiredPermissions: ["surface.input"],
+      supportedSurfaceKinds: ["wall", "table", "laptop", "floating", "custom"]
+    }]
+  },
+  {
+    id: "noah.screen-share",
+    version: "0.1.0",
+    displayName: "Screen Share",
+    requiredCapabilities: ["surface.render", "room.state.read", "room.state.write", "media.publish", "media.subscribe"],
+    requiredPermissions: ["screen-share.start", "screen-share.stop"],
+    compatibility: NOAH_RUNTIME_EXTENSION_COMPATIBILITY,
+    entry: "internal:screen-share",
+    objectTypes: [{
+      objectType: SCREEN_SHARE_OBJECT_TYPE,
+      displayName: "Screen Share",
+      stateKind: "screen-share",
+      requiredCapabilities: ["surface.render", "room.state.read", "room.state.write", "media.publish", "media.subscribe"],
+      requiredPermissions: ["screen-share.start", "screen-share.stop"],
+      supportedSurfaceKinds: ["wall", "table", "laptop", "floating", "custom"]
+    }]
+  },
+  {
+    id: "noah.whiteboard",
+    version: "0.1.0",
+    displayName: "Interactive Whiteboard",
+    requiredCapabilities: ["surface.render", "surface.input.pointer", "room.state.read", "room.state.write"],
+    requiredPermissions: ["whiteboard.draw", "whiteboard.clear"],
+    compatibility: NOAH_RUNTIME_EXTENSION_COMPATIBILITY,
+    entry: "internal:whiteboard",
+    objectTypes: [{
+      objectType: WHITEBOARD_OBJECT_TYPE,
+      displayName: "Interactive Whiteboard",
+      stateKind: "whiteboard",
+      requiredCapabilities: ["surface.render", "surface.input.pointer", "room.state.read", "room.state.write"],
+      requiredPermissions: ["whiteboard.draw", "whiteboard.clear"],
+      supportedSurfaceKinds: ["wall", "table", "laptop", "floating", "custom"]
+    }]
+  },
+  {
+    id: "noah.remote-browser",
+    version: "0.1.0",
+    displayName: "Remote Browser",
+    requiredCapabilities: ["surface.render", "surface.input.pointer", "surface.input.keyboard", "room.state.read", "room.state.write", "media.subscribe", "remote.executor"],
+    requiredPermissions: ["remote-browser.open-url", "remote-browser.input", "remote-browser.stop"],
+    compatibility: NOAH_RUNTIME_EXTENSION_COMPATIBILITY,
+    entry: "internal:remote-browser",
+    objectTypes: [{
+      objectType: REMOTE_BROWSER_OBJECT_TYPE,
+      displayName: "Remote Browser",
+      stateKind: "remote-browser",
+      requiredCapabilities: ["surface.render", "surface.input.pointer", "surface.input.keyboard", "room.state.read", "room.state.write", "media.subscribe", "remote.executor"],
+      requiredPermissions: ["remote-browser.open-url", "remote-browser.input", "remote-browser.stop"],
+      supportedSurfaceKinds: ["wall", "table", "laptop", "floating", "custom"]
+    }]
+  },
+  {
+    id: "noah.extension-test-card",
+    version: "0.1.0",
+    displayName: "Extension Test Card",
+    requiredCapabilities: ["surface.render", "surface.input.pointer", "room.state.read", "room.state.write"],
+    requiredPermissions: ["surface.input"],
+    compatibility: NOAH_RUNTIME_EXTENSION_COMPATIBILITY,
+    entry: "internal:extension-test-card",
+    objectTypes: [{
+      objectType: EXTENSION_TEST_CARD_TYPE,
+      displayName: "Extension Test Card",
+      stateKind: "surface-test-card",
+      requiredCapabilities: ["surface.render", "surface.input.pointer", "room.state.read", "room.state.write"],
+      requiredPermissions: ["surface.input"],
+      supportedSurfaceKinds: ["wall", "table", "laptop", "floating", "custom"]
+    }]
+  },
+  {
+    id: "noah.missing-capability-demo",
+    version: "0.1.0",
+    displayName: "Missing Capability Demo",
+    requiredCapabilities: ["room.state.read"],
+    requiredPermissions: ["surface.input"],
+    compatibility: NOAH_RUNTIME_EXTENSION_COMPATIBILITY,
+    entry: "internal:missing-capability-demo",
+    objectTypes: [{
+      objectType: MISSING_CAPABILITY_EXTENSION_CARD_TYPE,
+      displayName: "Missing Capability Card",
+      stateKind: "surface-test-card",
+      requiredCapabilities: ["surface.render", "room.state.read"],
+      requiredPermissions: ["surface.input"]
+    }]
+  },
+  {
+    id: "noah.disabled-demo",
+    version: "0.1.0",
+    displayName: "Disabled Demo Extension",
+    enabled: false,
+    requiredCapabilities: ["surface.render", "surface.input.pointer", "room.state.read", "room.state.write"],
+    requiredPermissions: ["surface.input"],
+    compatibility: NOAH_RUNTIME_EXTENSION_COMPATIBILITY,
+    entry: "internal:disabled-demo",
+    objectTypes: [{
+      objectType: DISABLED_EXTENSION_CARD_TYPE,
+      displayName: "Disabled Extension Card",
+      stateKind: "surface-test-card",
+      requiredCapabilities: ["surface.render", "surface.input.pointer", "room.state.read", "room.state.write"],
+      requiredPermissions: ["surface.input"]
+    }]
+  }
+];
+
+function uniqueValues<T extends string>(values: readonly T[]): T[] {
+  return Array.from(new Set(values));
+}
+
+function listMissingValues<T extends string>(required: readonly T[], declared: readonly T[]): T[] {
+  return uniqueValues(required.filter((item) => !declared.includes(item)));
+}
+
+export function validateMediaExtensionManifest(manifest: NoahMediaExtensionManifest): string[] {
+  const errors: string[] = [];
+  if (!manifest.id.trim()) {
+    errors.push("missing-id");
+  }
+  if (!manifest.version.trim()) {
+    errors.push("missing-version");
+  }
+  if (!manifest.displayName.trim()) {
+    errors.push("missing-display-name");
+  }
+  if (!manifest.entry.trim()) {
+    errors.push("missing-entry");
+  }
+  if (!Array.isArray(manifest.objectTypes) || manifest.objectTypes.length === 0) {
+    errors.push("missing-object-types");
+  }
+  for (const objectType of manifest.objectTypes) {
+    if (!String(objectType.objectType).trim()) {
+      errors.push("missing-object-type");
+    }
+    for (const capability of listMissingValues(objectType.requiredCapabilities, manifest.requiredCapabilities)) {
+      errors.push(`missing-capability:${String(objectType.objectType)}:${capability}`);
+    }
+    for (const permission of listMissingValues(objectType.requiredPermissions, manifest.requiredPermissions)) {
+      errors.push(`missing-permission:${String(objectType.objectType)}:${permission}`);
+    }
+  }
+  return uniqueValues(errors);
+}
+
+export function getMediaObjectDefinition(objectType: string, manifests: readonly NoahMediaExtensionManifest[] = BUILTIN_MEDIA_EXTENSION_MANIFESTS): RegisteredMediaObjectDefinition | null {
+  for (const manifest of manifests) {
+    for (const definition of manifest.objectTypes) {
+      if (definition.objectType !== objectType) {
+        continue;
+      }
+      return {
+        ...definition,
+        requiredCapabilities: [...definition.requiredCapabilities],
+        requiredPermissions: [...definition.requiredPermissions],
+        supportedSurfaceKinds: definition.supportedSurfaceKinds ? [...definition.supportedSurfaceKinds] : undefined,
+        enabled: definition.enabled !== false,
+        extensionId: manifest.id,
+        extensionDisplayName: manifest.displayName,
+        extensionEnabled: manifest.enabled !== false,
+        validationErrors: validateMediaExtensionManifest(manifest),
+        missingCapabilities: listMissingValues(definition.requiredCapabilities, manifest.requiredCapabilities),
+        missingPermissions: listMissingValues(definition.requiredPermissions, manifest.requiredPermissions)
+      };
+    }
+  }
+  return null;
+}
+
+export function isMediaObjectDefinitionEnabled(definition: RegisteredMediaObjectDefinition): boolean {
+  return definition.extensionEnabled && definition.enabled !== false;
+}
+
+export function isMediaObjectDefinitionAvailable(definition: RegisteredMediaObjectDefinition): boolean {
+  return isMediaObjectDefinitionEnabled(definition)
+    && definition.missingCapabilities.length === 0
+    && definition.missingPermissions.length === 0
+    && definition.validationErrors.length === 0;
+}
+
+export function isMediaObjectTypeAvailable(objectType: string): boolean {
+  const definition = getMediaObjectDefinition(objectType);
+  return Boolean(definition && isMediaObjectDefinitionAvailable(definition));
+}
+
+export function listAvailableMediaObjectTypes(manifests: readonly NoahMediaExtensionManifest[] = BUILTIN_MEDIA_EXTENSION_MANIFESTS): string[] {
+  const types: string[] = [];
+  for (const manifest of manifests) {
+    for (const definition of manifest.objectTypes) {
+      const registered = getMediaObjectDefinition(definition.objectType, manifests);
+      if (registered && isMediaObjectDefinitionAvailable(registered)) {
+        types.push(registered.objectType);
+      }
+    }
+  }
+  return uniqueValues(types);
+}
+
+export function getMediaExtensionDebugSnapshot(manifests: readonly NoahMediaExtensionManifest[] = BUILTIN_MEDIA_EXTENSION_MANIFESTS): MediaExtensionDebugEntry[] {
+  return manifests.map((manifest) => {
+    const validationErrors = validateMediaExtensionManifest(manifest);
+    const extensionEnabled = manifest.enabled !== false;
+    return {
+      id: manifest.id,
+      version: manifest.version,
+      displayName: manifest.displayName,
+      enabled: extensionEnabled,
+      valid: validationErrors.length === 0,
+      validationErrors,
+      objectTypes: manifest.objectTypes.map((definition) => {
+        const registered = getMediaObjectDefinition(definition.objectType, manifests)!;
+        const enabled = isMediaObjectDefinitionEnabled(registered);
+        const available = isMediaObjectDefinitionAvailable(registered);
+        return {
+          objectType: registered.objectType,
+          displayName: registered.displayName,
+          stateKind: registered.stateKind,
+          enabled,
+          available,
+          requiredCapabilities: [...registered.requiredCapabilities],
+          requiredPermissions: [...registered.requiredPermissions],
+          missingCapabilities: [...registered.missingCapabilities],
+          missingPermissions: [...registered.missingPermissions]
+        };
+      })
+    };
+  });
+}
 
 export type MediaObjectStatus = "active" | "stopped" | "failed";
 
@@ -216,6 +534,8 @@ export type RemoteBrowserPatch =
 
 export type MediaObjectCommandBlockedReason =
   | "missing-permission"
+  | "missing-extension-capability"
+  | "extension-disabled"
   | "missing-surface"
   | "missing-object"
   | "unknown-object-type"
@@ -238,7 +558,7 @@ export interface MediaObjectCommandResult {
 }
 
 export function createDefaultRoomMediaObjectsState(roomId: string): RoomMediaObjectsState {
-  const commonObjectTypes = [SURFACE_TEST_CARD_TYPE, SCREEN_SHARE_OBJECT_TYPE, WHITEBOARD_OBJECT_TYPE, REMOTE_BROWSER_OBJECT_TYPE];
+  const commonObjectTypes = listAvailableMediaObjectTypes();
   return {
     surfaces: {
       [DEFAULT_MEDIA_SURFACE_ID]: {

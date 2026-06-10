@@ -1,19 +1,21 @@
 import {
   REMOTE_BROWSER_OBJECT_TYPE,
   SCREEN_SHARE_OBJECT_TYPE,
-  SURFACE_TEST_CARD_TYPE,
   WHITEBOARD_ALLOWED_COLORS,
   WHITEBOARD_ALLOWED_WIDTHS,
   WHITEBOARD_MAX_POINTS_PER_STROKE,
   WHITEBOARD_MAX_STROKES,
-  WHITEBOARD_OBJECT_TYPE,
   createDefaultRoomMediaObjectsState,
+  getMediaObjectDefinition,
   getRoomPermissions,
   hasRoomPermission,
+  isMediaObjectDefinitionAvailable,
+  isMediaObjectDefinitionEnabled,
   parseRoomRole,
   type MediaObjectCommandBlockedReason,
   type MediaObjectCommandResult,
   type MediaObjectInstance,
+  type MediaObjectStateKind,
   type RemoteBrowserErrorCode,
   type RemoteBrowserExecutorInputState,
   type RemoteBrowserMediaSourceRect,
@@ -259,8 +261,22 @@ function createRemoteBrowserState(ownerParticipantId: string, surfaceId: string)
   };
 }
 
-function isSupportedMediaObjectType(type: string): type is typeof SURFACE_TEST_CARD_TYPE | typeof SCREEN_SHARE_OBJECT_TYPE | typeof WHITEBOARD_OBJECT_TYPE | typeof REMOTE_BROWSER_OBJECT_TYPE {
-  return type === SURFACE_TEST_CARD_TYPE || type === SCREEN_SHARE_OBJECT_TYPE || type === WHITEBOARD_OBJECT_TYPE || type === REMOTE_BROWSER_OBJECT_TYPE;
+function createInitialMediaObjectState(stateKind: MediaObjectStateKind, ownerParticipantId: string, surfaceId: string): SurfaceTestCardState | ScreenShareObjectState | WhiteboardState | RemoteBrowserObjectState {
+  if (stateKind === "screen-share") {
+    return createScreenShareState(ownerParticipantId, surfaceId);
+  }
+  if (stateKind === "whiteboard") {
+    return createWhiteboardState();
+  }
+  if (stateKind === "remote-browser") {
+    return createRemoteBrowserState(ownerParticipantId, surfaceId);
+  }
+  return createSurfaceTestCardState();
+}
+
+function getAvailableMediaObjectStateKind(objectType: string): MediaObjectStateKind | null {
+  const definition = getMediaObjectDefinition(objectType);
+  return definition && isMediaObjectDefinitionAvailable(definition) ? definition.stateKind : null;
 }
 
 function isAllowedRemoteBrowserUrlCandidate(input: string): boolean {
@@ -869,8 +885,20 @@ export function createMediaObject(state: RoomState, participantId: string, input
   if (!surface) {
     return rejectMediaObjectCommand(state, { commandId: input.commandId, role: access.role, permission, blockedReason: "missing-surface", surfaceId: input.surfaceId, objectType: input.objectType });
   }
-  if (!isSupportedMediaObjectType(input.objectType)) {
+  const definition = getMediaObjectDefinition(input.objectType);
+  if (!definition) {
     return rejectMediaObjectCommand(state, { commandId: input.commandId, role: access.role, permission, blockedReason: "unknown-object-type", surfaceId: input.surfaceId, objectType: input.objectType });
+  }
+  if (!isMediaObjectDefinitionEnabled(definition)) {
+    return rejectMediaObjectCommand(state, { commandId: input.commandId, role: access.role, permission, blockedReason: "extension-disabled", surfaceId: input.surfaceId, objectType: input.objectType });
+  }
+  if (definition.missingCapabilities.length > 0 || definition.validationErrors.length > 0) {
+    return rejectMediaObjectCommand(state, { commandId: input.commandId, role: access.role, permission, blockedReason: "missing-extension-capability", surfaceId: input.surfaceId, objectType: input.objectType });
+  }
+  for (const requiredPermission of definition.requiredPermissions) {
+    if (!hasRoomPermission(access.permissions, requiredPermission)) {
+      return rejectMediaObjectCommand(state, { commandId: input.commandId, role: access.role, permission: requiredPermission, blockedReason: "missing-permission", surfaceId: input.surfaceId, objectType: input.objectType });
+    }
   }
   if (!surface.allowedObjectTypes.includes(input.objectType)) {
     return rejectMediaObjectCommand(state, { commandId: input.commandId, role: access.role, permission, blockedReason: "unknown-object-type", surfaceId: input.surfaceId, objectType: input.objectType });
@@ -879,13 +907,7 @@ export function createMediaObject(state: RoomState, participantId: string, input
     return rejectMediaObjectCommand(state, { commandId: input.commandId, role: access.role, permission, blockedReason: "surface-occupied", surfaceId: input.surfaceId, objectId: surface.activeObjectId, objectType: input.objectType });
   }
 
-  const objectState = input.objectType === SCREEN_SHARE_OBJECT_TYPE
-    ? createScreenShareState(participantId, input.surfaceId)
-    : input.objectType === WHITEBOARD_OBJECT_TYPE
-      ? createWhiteboardState()
-      : input.objectType === REMOTE_BROWSER_OBJECT_TYPE
-        ? createRemoteBrowserState(participantId, input.surfaceId)
-        : createSurfaceTestCardState();
+  const objectState = createInitialMediaObjectState(definition.stateKind, participantId, input.surfaceId);
   const object: MediaObjectInstance<SurfaceTestCardState | ScreenShareObjectState | WhiteboardState | RemoteBrowserObjectState> = {
     objectId: input.objectId,
     type: input.objectType,
@@ -995,7 +1017,11 @@ export function patchMediaObjectState(state: RoomState, participantId: string, i
   if (object.revision !== input.expectedRevision && !allowRemoteBrowserInputRevisionSkew) {
     return rejectMediaObjectCommand(state, { commandId: input.commandId, role: access.role, permission, blockedReason: "revision-mismatch", surfaceId: input.surfaceId, objectId: input.objectId, objectType: object.type, revision: object.revision });
   }
-  if (object.type === SCREEN_SHARE_OBJECT_TYPE) {
+  const stateKind = getAvailableMediaObjectStateKind(object.type);
+  if (!stateKind) {
+    return rejectMediaObjectCommand(state, { commandId: input.commandId, role: access.role, permission, blockedReason: "unknown-object-type", surfaceId: input.surfaceId, objectId: input.objectId, objectType: object.type, revision: object.revision });
+  }
+  if (stateKind === "screen-share") {
     permission = "screen-share.start";
     if (!hasRoomPermission(access.permissions, permission)) {
       return rejectMediaObjectCommand(state, { commandId: input.commandId, role: access.role, permission, blockedReason: "missing-permission", surfaceId: input.surfaceId, objectId: input.objectId, objectType: object.type, revision: object.revision });
@@ -1032,7 +1058,7 @@ export function patchMediaObjectState(state: RoomState, participantId: string, i
       })
     };
   }
-  if (object.type === WHITEBOARD_OBJECT_TYPE) {
+  if (stateKind === "whiteboard") {
     permission = getWhiteboardPatchPermission(input.patch) ?? "whiteboard.draw";
     if (!hasRoomPermission(access.permissions, permission)) {
       return rejectMediaObjectCommand(state, { commandId: input.commandId, role: access.role, permission, blockedReason: "missing-permission", surfaceId: input.surfaceId, objectId: input.objectId, objectType: object.type, revision: object.revision });
@@ -1078,7 +1104,7 @@ export function patchMediaObjectState(state: RoomState, participantId: string, i
       })
     };
   }
-  if (object.type === REMOTE_BROWSER_OBJECT_TYPE) {
+  if (stateKind === "remote-browser") {
     permission = getRemoteBrowserPatchPermission(input.patch) ?? "remote-browser.input";
     if (!hasRoomPermission(access.permissions, permission)) {
       return rejectMediaObjectCommand(state, { commandId: input.commandId, role: access.role, permission, blockedReason: "missing-permission", surfaceId: input.surfaceId, objectId: input.objectId, objectType: object.type, revision: object.revision });
@@ -1131,7 +1157,7 @@ export function patchMediaObjectState(state: RoomState, participantId: string, i
   if (!hasRoomPermission(access.permissions, permission)) {
     return rejectMediaObjectCommand(state, { commandId: input.commandId, role: access.role, permission, blockedReason: "missing-permission", surfaceId: input.surfaceId, objectId: input.objectId, objectType: object.type, revision: object.revision });
   }
-  if (object.type !== SURFACE_TEST_CARD_TYPE || !isSurfaceTestCardPatch(input.patch)) {
+  if (stateKind !== "surface-test-card" || !isSurfaceTestCardPatch(input.patch)) {
     return rejectMediaObjectCommand(state, { commandId: input.commandId, role: access.role, permission, blockedReason: "invalid-patch", surfaceId: input.surfaceId, objectId: input.objectId, objectType: object.type, revision: object.revision });
   }
 

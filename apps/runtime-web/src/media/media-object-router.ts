@@ -1,7 +1,8 @@
 import {
   REMOTE_BROWSER_OBJECT_TYPE,
-  SURFACE_TEST_CARD_TYPE,
   WHITEBOARD_OBJECT_TYPE,
+  getMediaObjectDefinition,
+  isMediaObjectDefinitionAvailable,
   type MediaObjectInstance,
   type RemoteBrowserObjectState,
   type SurfaceInputEvent,
@@ -29,7 +30,8 @@ export function routeMediaObjectSurfaceInput(options: MediaObjectSurfaceInputRou
   if (object.type === REMOTE_BROWSER_OBJECT_TYPE && isRemoteBrowserState(object.state)) {
     return options.routeRemoteBrowserInput(event, object as MediaObjectInstance<RemoteBrowserObjectState>);
   }
-  if (event.kind === "click" && object.type === SURFACE_TEST_CARD_TYPE) {
+  const definition = getMediaObjectDefinition(object.type);
+  if (event.kind === "click" && definition && isMediaObjectDefinitionAvailable(definition) && definition.stateKind === "surface-test-card") {
     return options.sendTestCardPatch(object, event);
   }
   return false;
