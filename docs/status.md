@@ -3,7 +3,7 @@
 ## Current phase
 
 - Active phase: `M1.10 — приемка и выпуск M1-MEDIA`
-- Overall state: `m1_9_local_verification_complete`
+- Overall state: `m1_9_done`
 
 ## Phase checklist
 
@@ -63,8 +63,9 @@
 - M1.8 result: the first product slice adds default independent surfaces `debug-main`, `whiteboard-wall`, and `laptop-screen`; a runtime surface selector; per-surface active object/texture routing; legacy room default-surface repair; and hit-surface-based input routing for screen share, whiteboard, and remote browser.
 - M1.8 verification: package-specific builds/tests/lint for touched packages passed; root `pnpm run lint`, `pnpm run typecheck`, `pnpm run build`, and `pnpm run test` passed; related M1 media specs passed (`18 passed` including M1.8); full local E2E with `--workers=2` passed (`90 passed`, `1 skipped`); CI `26237312112` passed; Docker Publish `26237312118` passed; Staging Deploy `26237508379` passed; staging gate passed with `35 passed`; and focused staging `multi-surface-layouts` passed with `1 passed`.
 - M1.8 rollback/retry notes: no rollback and no deploy retry were needed.
-- M1.9 extension protocol is implemented locally as of 2026-06-10. Result: internal media extension manifests, registry/debug snapshot, capability validation, disabled-extension gating, generic test-card extension state routing, room-state permission checks, and focused e2e `extension-protocol` are in place.
-- M1.9 local verification so far: focused package builds/tests for `@noah/shared-types`, `@noah/room-state`, and `@noah/runtime-web` passed; root `pnpm run lint`, `pnpm run typecheck`, `pnpm run build`, and `pnpm run test` passed; focused local e2e `tests/e2e/m1-media/extension-protocol.spec.ts` passed with `2 passed`. Full local `pnpm run test:e2e` ran after the change with `92 passed`, `1 skipped`, and `4 failed`; all failures were in the pre-existing local `remote-browser-object` media track tests that also failed during baseline before M1.9 changes.
+- M1.9 extension protocol is complete as of 2026-06-10. Final deployed commit: `972e98af1d550b782bb7c91452bbedc8484ccfe7`; implementation commit: `d51ff697f35014a11e91e4d44bff16567fb52d24`.
+- M1.9 result: internal media extension manifests, registry/debug snapshot, capability validation, disabled-extension gating, generic test-card extension state routing, room-state permission checks, and focused e2e `extension-protocol` are in place.
+- M1.9 verification: focused package builds/tests for `@noah/shared-types`, `@noah/room-state`, and `@noah/runtime-web` passed; root `pnpm run lint`, `pnpm run typecheck`, `pnpm run build`, and `pnpm run test` passed; focused local e2e `tests/e2e/m1-media/extension-protocol.spec.ts` passed with `2 passed`; CI `27265856141` passed; Docker Publish `27265856222` passed; Staging Deploy `27266041607` passed; focused staging `extension-protocol` passed with `2 passed` against `https://158.160.10.234.sslip.io`. Full local `pnpm run test:e2e` ran after the change with `92 passed`, `1 skipped`, and `4 failed`; all failures were in the pre-existing local `remote-browser-object` media track tests that also failed during baseline before M1.9 changes.
 - Next focus: M1.10 acceptance and release.
 
 - M0.5 focuses on acceptance of the existing basic multi-user presence path: diagnostics, pose orientation, remote visibility, join/leave cleanup, voice state, spatial-audio diagnostics, and XR-mode simulation.
