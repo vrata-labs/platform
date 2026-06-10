@@ -74,6 +74,17 @@ rollout_compose_service() {
   log_disk_state
 }
 
+ensure_compose_foundation() {
+  local service
+  for service in postgres livekit minio minio-bootstrap; do
+    pull_compose_service "$service"
+  done
+  docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" up -d --no-build --pull never postgres livekit minio
+  docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" up --no-build --pull never --force-recreate minio-bootstrap
+  cleanup_docker_state
+  log_disk_state
+}
+
 env_value() {
   local key="$1"
   python3 - "$ENV_FILE" "$key" <<'PY'
@@ -212,8 +223,15 @@ if [ ! -f "$ENV_FILE" ]; then
   exit 1
 fi
 
+NOAH_STAGING_PUBLIC_IP="${NOAH_STAGING_PUBLIC_IP:-}"
+if [ -z "$NOAH_STAGING_PUBLIC_IP" ]; then
+  NOAH_STAGING_PUBLIC_IP="$(curl -fsH 'Metadata-Flavor: Google' http://169.254.169.254/computeMetadata/v1/instance/network-interfaces/0/access-configs/0/external-ip || true)"
+fi
+export NOAH_STAGING_PUBLIC_IP
+
 python3 - "$ENV_FILE" "$IMAGE_TAG" <<'PY'
 from pathlib import Path
+import os
 import sys
 
 env_path = Path(sys.argv[1])
@@ -229,6 +247,29 @@ for line in lines:
 values.setdefault('API_IMAGE_REPO', 'cr.yandex/crp9cm29k6p76hqo8lti/noah-api')
 values.setdefault('ROOM_STATE_IMAGE_REPO', 'cr.yandex/crp9cm29k6p76hqo8lti/noah-room-state')
 values.setdefault('REMOTE_BROWSER_IMAGE_REPO', 'cr.yandex/crp9cm29k6p76hqo8lti/noah-remote-browser')
+public_ip = os.environ.get('NOAH_STAGING_PUBLIC_IP', '').strip()
+if public_ip:
+    app_domain = f'{public_ip}.sslip.io'
+    state_domain = f'state.{app_domain}'
+    livekit_domain = f'livekit.{app_domain}'
+    browser_domain = f'browser.{app_domain}'
+    values.update({
+        'NOAH_APP_BASE_URL': f'http://{public_ip}:4000',
+        'NOAH_APP_DOMAIN': app_domain,
+        'NOAH_STATE_DOMAIN': state_domain,
+        'NOAH_LIVEKIT_DOMAIN': livekit_domain,
+        'NOAH_BROWSER_DOMAIN': browser_domain,
+        'ROOM_STATE_PUBLIC_URL': f'ws://{public_ip}:2567',
+        'LIVEKIT_URL': f'ws://{public_ip}:7880',
+        'REMOTE_BROWSER_PUBLIC_URL': f'https://{browser_domain}',
+        'REMOTE_BROWSER_ALLOWED_ORIGINS': ','.join([
+            f'https://{app_domain}',
+            f'http://{public_ip}:4000',
+            'http://127.0.0.1:4000',
+            'http://localhost:4000'
+        ]),
+        'MINIO_PUBLIC_BASE_URL': f'http://{public_ip}:9000'
+    })
 public_remote_browser_origins = ['https://rutube.ru', 'https://*.rutube.ru', 'https://*.rtbcdn.ru']
 if not values.get('NOAH_BROWSER_DOMAIN') and values.get('NOAH_APP_DOMAIN'):
     values['NOAH_BROWSER_DOMAIN'] = 'browser.' + values['NOAH_APP_DOMAIN']
@@ -263,7 +304,7 @@ for line in lines:
     else:
       rendered.append(line)
 
-for key in ('API_IMAGE_REPO', 'ROOM_STATE_IMAGE_REPO', 'REMOTE_BROWSER_IMAGE_REPO', 'NOAH_BROWSER_DOMAIN', 'REMOTE_BROWSER_PUBLIC_URL', 'REMOTE_BROWSER_ALLOWED_ORIGINS', 'REMOTE_BROWSER_ALLOW_PRIVATE_ALLOWED_ORIGINS', 'REMOTE_BROWSER_FRAME_INTERVAL_MS', 'REMOTE_BROWSER_TOKEN_SECRET', 'REMOTE_BROWSER_TOKEN_TTL_SECONDS', 'IMAGE_TAG'):
+for key in ('API_IMAGE_REPO', 'ROOM_STATE_IMAGE_REPO', 'REMOTE_BROWSER_IMAGE_REPO', 'NOAH_APP_BASE_URL', 'NOAH_APP_DOMAIN', 'NOAH_STATE_DOMAIN', 'NOAH_LIVEKIT_DOMAIN', 'NOAH_BROWSER_DOMAIN', 'ROOM_STATE_PUBLIC_URL', 'LIVEKIT_URL', 'REMOTE_BROWSER_PUBLIC_URL', 'REMOTE_BROWSER_ALLOWED_ORIGINS', 'REMOTE_BROWSER_ALLOW_PRIVATE_ALLOWED_ORIGINS', 'REMOTE_BROWSER_FRAME_INTERVAL_MS', 'REMOTE_BROWSER_TOKEN_SECRET', 'REMOTE_BROWSER_TOKEN_TTL_SECONDS', 'MINIO_PUBLIC_BASE_URL', 'IMAGE_TAG'):
     if key not in seen:
         rendered.append(f'{key}={values[key]}')
 
@@ -280,6 +321,7 @@ if [ -f "$ROOT_DIR/tools/snapshot-scene-assets.sh" ]; then
     bash "$ROOT_DIR/tools/snapshot-scene-assets.sh"
 fi
 
+ensure_compose_foundation
 rollout_compose_service room-state
 rollout_compose_service remote-browser
 rollout_compose_service api
