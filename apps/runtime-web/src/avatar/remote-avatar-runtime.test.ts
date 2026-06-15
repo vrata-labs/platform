@@ -473,3 +473,64 @@ test("remote avatar runtime prefers pose root over coarse presence sample", () =
   assert.equal(body.position.x < 10, true);
   assert.equal(body.position.z < 10, true);
 });
+
+test("remote avatar pose smoothing is normalized by frame delta", () => {
+  function simulate(deltaSeconds: number, frames: number): { bodyX: number; headX: number } {
+    const scene = new THREE.Scene();
+    const runtime = createRemoteAvatarRuntime({
+      scene,
+      bodyGeometry: new THREE.CapsuleGeometry(0.24, 0.8, 6, 12),
+      headGeometry: new THREE.SphereGeometry(0.18, 20, 20),
+      localParticipantId: "local"
+    });
+    const debugState = createDebugState();
+    runtime.ingestReliableState({
+      participantId: "remote-fps",
+      avatarId: "preset-01",
+      inputMode: "desktop",
+      updatedAt: new Date().toISOString(),
+      audioActive: false,
+      seated: false
+    }, debugState);
+    runtime.applySnapshotParticipants([
+      {
+        participantId: "remote-fps",
+        displayName: "Remote FPS",
+        mode: "desktop",
+        muted: false,
+        activeMedia: { audio: false, screenShare: false },
+        rootTransform: { x: 0, y: 0, z: 0 },
+        bodyTransform: { x: 0, y: 0, z: 0 },
+        headTransform: { x: 0, y: 1.6, z: 0 },
+        updatedAt: new Date().toISOString()
+      }
+    ] as never, debugState);
+    runtime.ingestPoseFrame("remote-fps", {
+      seq: 1,
+      sentAtMs: Date.now(),
+      flags: 0,
+      root: { x: 10, y: 0, z: 0, yaw: 0, vx: 0, vz: 0 },
+      head: { x: 10, y: 1.6, z: 0, qx: 0, qy: 0, qz: 0, qw: 1 },
+      leftHand: { x: 9.8, y: 1.2, z: 0, qx: 0, qy: 0, qz: 0, qw: 1, gesture: 1 },
+      rightHand: { x: 10.2, y: 1.2, z: 0, qx: 0, qy: 0, qz: 0, qw: 1, gesture: 1 },
+      locomotion: { mode: 1, speed: 1, angularVelocity: 0 }
+    }, debugState);
+
+    for (let index = 0; index < frames; index += 1) {
+      runtime.update(deltaSeconds, debugState);
+    }
+
+    const body = scene.children[0] as THREE.Mesh | undefined;
+    const head = scene.children[1] as THREE.Mesh | undefined;
+    assert.ok(body);
+    assert.ok(head);
+    return { bodyX: body.position.x, headX: head.position.x };
+  }
+
+  const lowFps = simulate(1 / 30, 6);
+  const highFps = simulate(1 / 120, 24);
+
+  assert.ok(Math.abs(lowFps.bodyX - highFps.bodyX) < 0.001);
+  assert.ok(Math.abs(lowFps.headX - highFps.headX) < 0.001);
+  assert.ok(lowFps.bodyX > 9.9);
+});

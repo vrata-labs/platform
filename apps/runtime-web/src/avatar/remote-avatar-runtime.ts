@@ -159,6 +159,14 @@ function lerpAngleRadians(current: number, target: number, alpha: number): numbe
   return current + delta * alpha;
 }
 
+function smoothingAlphaForDelta(baseAlphaAt60Hz: number, deltaSeconds: number): number {
+  if (!Number.isFinite(deltaSeconds) || deltaSeconds <= 0) {
+    return baseAlphaAt60Hz;
+  }
+  const normalizedDeltaSeconds = THREE.MathUtils.clamp(deltaSeconds, 1 / 240, 0.1);
+  return THREE.MathUtils.clamp(1 - Math.pow(1 - baseAlphaAt60Hz, normalizedDeltaSeconds * 60), 0, 1);
+}
+
 function yawFromQuaternion(rotation: { qx: number; qy: number; qz: number; qw: number }): number {
   const sinyCosp = 2 * (rotation.qw * rotation.qy + rotation.qx * rotation.qz);
   const cosyCosp = 1 - 2 * (rotation.qy * rotation.qy + rotation.qz * rotation.qz);
@@ -567,8 +575,11 @@ export function createRemoteAvatarRuntime(input: {
       syncDebugState(debugState);
     },
     update(delta: number, debugState: RemoteAvatarDebugState): void {
-      void delta;
       const nowMs = Date.now();
+      const bodyPoseAlpha = smoothingAlphaForDelta(0.35, delta);
+      const headPoseAlpha = smoothingAlphaForDelta(0.45, delta);
+      const fallbackBodyAlpha = smoothingAlphaForDelta(0.2, delta);
+      const fallbackPoseAlpha = smoothingAlphaForDelta(0.25, delta);
       for (const [participantId, entity] of remoteAvatars.entries()) {
         const tracks = remoteMotionTracks.get(participantId);
         if (!tracks) continue;
@@ -606,15 +617,15 @@ export function createRemoteAvatarRuntime(input: {
         if (poseFrame) {
           entity.body.position.lerp(
             new THREE.Vector3(poseFrame.root.x, resolveRemoteBodyWorldY(poseFrame.root.y, reliableState?.inputMode ?? null), poseFrame.root.z),
-            0.35
+            bodyPoseAlpha
           );
-          entity.head.position.lerp(new THREE.Vector3(poseFrame.head.x, poseFrame.head.y, poseFrame.head.z), 0.45);
-          entity.leftHand.position.lerp(new THREE.Vector3(poseFrame.leftHand.x, poseFrame.leftHand.y, poseFrame.leftHand.z), 0.45);
-          entity.rightHand.position.lerp(new THREE.Vector3(poseFrame.rightHand.x, poseFrame.rightHand.y, poseFrame.rightHand.z), 0.45);
-          entity.body.rotation.y = lerpAngleRadians(entity.body.rotation.y, poseFrame.root.yaw, 0.35);
+          entity.head.position.lerp(new THREE.Vector3(poseFrame.head.x, poseFrame.head.y, poseFrame.head.z), headPoseAlpha);
+          entity.leftHand.position.lerp(new THREE.Vector3(poseFrame.leftHand.x, poseFrame.leftHand.y, poseFrame.leftHand.z), headPoseAlpha);
+          entity.rightHand.position.lerp(new THREE.Vector3(poseFrame.rightHand.x, poseFrame.rightHand.y, poseFrame.rightHand.z), headPoseAlpha);
+          entity.body.rotation.y = lerpAngleRadians(entity.body.rotation.y, poseFrame.root.yaw, bodyPoseAlpha);
           const headEuler = eulerFromQuaternion(poseFrame.head);
-          entity.head.rotation.y = lerpAngleRadians(entity.head.rotation.y, headEuler.yaw, 0.45);
-          entity.head.rotation.x = lerpAngleRadians(entity.head.rotation.x, headEuler.pitch, 0.45);
+          entity.head.rotation.y = lerpAngleRadians(entity.head.rotation.y, headEuler.yaw, headPoseAlpha);
+          entity.head.rotation.x = lerpAngleRadians(entity.head.rotation.x, headEuler.pitch, headPoseAlpha);
           entity.head.rotation.z = 0;
           entity.body.rotation.x = 0;
           entity.body.rotation.z = 0;
@@ -631,19 +642,19 @@ export function createRemoteAvatarRuntime(input: {
             const fallbackBodyY = participant ? participant.poseFrame?.frame.root.y ?? entity.body.position.y : entity.body.position.y;
             entity.body.position.lerp(
               new THREE.Vector3(bodySample.x, resolveRemoteBodyWorldY(fallbackBodyY, reliableState?.inputMode ?? null), bodySample.z),
-              0.2
+              fallbackBodyAlpha
             );
-            entity.head.position.lerp(new THREE.Vector3(headSample.x, 1.58, headSample.z), 0.25);
+            entity.head.position.lerp(new THREE.Vector3(headSample.x, 1.58, headSample.z), fallbackPoseAlpha);
             entity.body.rotation.x = 0;
             entity.body.rotation.z = 0;
             const fallbackBodyYaw = rootSample?.yaw ?? bodySample.yaw ?? Math.atan2(headSample.x - bodySample.x, headSample.z - bodySample.z);
             entity.body.rotation.y = lerpAngleRadians(
               entity.body.rotation.y,
               fallbackBodyYaw,
-              0.25
+              fallbackPoseAlpha
             );
-            entity.head.rotation.y = lerpAngleRadians(entity.head.rotation.y, headSample.yaw ?? fallbackBodyYaw, 0.25);
-            entity.head.rotation.x = lerpAngleRadians(entity.head.rotation.x, headSample.pitch ?? 0, 0.25);
+            entity.head.rotation.y = lerpAngleRadians(entity.head.rotation.y, headSample.yaw ?? fallbackBodyYaw, fallbackPoseAlpha);
+            entity.head.rotation.x = lerpAngleRadians(entity.head.rotation.x, headSample.pitch ?? 0, fallbackPoseAlpha);
             entity.head.rotation.z = 0;
           }
           entity.leftHand.visible = participant?.leftHandVisible ?? false;
