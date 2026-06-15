@@ -2,8 +2,8 @@
 
 ## Current phase
 
-- Active phase: `M1.10 — приемка и выпуск M1-MEDIA`
-- Overall state: `m1_9_done`
+- Active phase: `M1-MEDIA complete`
+- Overall state: `m1_media_complete`
 
 ## Phase checklist
 
@@ -40,6 +40,11 @@
 
 ## Notes
 
+- M1.10 acceptance and M1-MEDIA release are complete as of 2026-06-15. Final deployed commit: `e5cae261979b0c9d3ff5b134aac9ea882b6b718c`.
+- M1.10 automated verification: `pnpm run test:m1-media` passed, full local `pnpm test:e2e` passed with `97 passed`, `1 skipped`, local `pnpm run build` passed, CI `27555689241` passed, Docker Publish `27555689508` passed, Staging Deploy `27556254992` passed, public staging smoke passed, and local `pnpm test:e2e:staging` passed with `35 passed`.
+- M1.10 manual acceptance: real display capture, real VR ray interaction, multiple surfaces in one room, screen-share plus whiteboard independence, participant rejoin, and subjective usability check passed on staging.
+- M1-MEDIA result: `complete`. Access roles, surface input protocol, media surface kernel, screen share, whiteboard, remote browser, multi-surface layouts, extension protocol, and integrated M1-MEDIA acceptance are complete and verified.
+- M1-MEDIA known limitations: screen broadcast is a video stream, not direct web-page control; the remote browser object is separate from screen broadcast; third-party extensions remain gated until signing and sandboxing are implemented.
 - M1.1 access roles foundation is complete as of 2026-05-12. Deployed commit: `065b6a92a8139fa4f4b3208e8e81b60a4f8ad26a`.
 - M1.1 verification: local full suite passed, CI `25726722155` passed, Docker Publish `25726722173` passed, Staging Deploy `25726820329` passed, and `pnpm test:e2e:staging` passed with 33 tests.
 - Manual staging QA in `demo-room` confirmed the admin/host role path works normally.
