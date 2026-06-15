@@ -191,6 +191,7 @@ const botSpeed = Math.max(0.1, Number.parseFloat(query.get("botSpeed") ?? "1") |
 const botStart = parseBotStart(query.get("botStart"));
 const spatialAudioRequested = query.get("spatial") !== "0";
 const shareMockEnabled = query.get("sharemock") === "1";
+const audioMockEnabled = debugEnabled && query.get("audiomock") === "1";
 const failSpaces = query.get("failspaces") === "1";
 const roomStateFaultMode = query.get("failroomstate");
 const audioFaultMode = query.get("failaudio");
@@ -773,9 +774,17 @@ interface LocalAudioNode {
   trackId: string;
 }
 
+interface MockAudioSource {
+  oscillator: OscillatorNode;
+  gain: GainNode;
+  destination: MediaStreamAudioDestinationNode;
+  track: MediaStreamTrack;
+}
+
 const remoteAudioNodes = new Map<string, RemoteAudioNode>();
 const mediaSurfaceAudioNodes = new Map<string, MediaSurfaceAudioNode>();
 let localAudioNode: LocalAudioNode | null = null;
+let mockAudioSource: MockAudioSource | null = null;
 const localAvatarLipsync = createAvatarLipsyncDriver();
 let runtimeUiState = createRuntimeUiState();
 let runtimeFlags = {
@@ -881,6 +890,7 @@ function updateMediaDiagnostics(): void {
     audioState: deriveMediaDebugAudioState(),
     muted: !microphoneEnabled,
     publishedAudio: Boolean(livekitRoom && microphoneEnabled),
+    audioSource: livekitRoom && microphoneEnabled ? audioMockEnabled ? "mock" : "microphone" : "none",
     subscribedAudioCount: remoteAudioNodes.size
   };
   const activeRemoteBrowser = currentRemoteBrowserObject();
@@ -2481,7 +2491,7 @@ function syncMediaCapabilityControls(): void {
     stopWhiteboardButton.disabled = true;
   }
 
-  if (runtimeFlags.audioJoin && !browserMediaCapabilities.audioInput.supported) {
+  if (runtimeFlags.audioJoin && !audioMockEnabled && !browserMediaCapabilities.audioInput.supported) {
     joinAudioButton.disabled = true;
     joinAudioButton.textContent = "Audio Unsupported";
     joinAudioButton.title = `Microphone unsupported: ${describeMediaCapabilityReason(browserMediaCapabilities.audioInput.reason)}`;
@@ -2536,6 +2546,43 @@ function createAudioAnalyser(context: AudioContext): {
   };
 }
 
+function createMockAudioSource(): MockAudioSource {
+  const context = ensureAudioContext();
+  const oscillator = context.createOscillator();
+  const gain = context.createGain();
+  const destination = context.createMediaStreamDestination();
+  oscillator.type = "sine";
+  oscillator.frequency.value = 440;
+  gain.gain.value = 0.08;
+  oscillator.connect(gain);
+  gain.connect(destination);
+  oscillator.start();
+  const track = destination.stream.getAudioTracks()[0];
+  if (!track) {
+    throw createFaultError("NotFoundError", "no_audio_device");
+  }
+  return { oscillator, gain, destination, track };
+}
+
+function getMockAudioSource(): MockAudioSource {
+  if (!mockAudioSource || mockAudioSource.track.readyState === "ended") {
+    mockAudioSource = createMockAudioSource();
+  }
+  mockAudioSource.track.enabled = true;
+  return mockAudioSource;
+}
+
+function stopMockAudioSource(): void {
+  if (!mockAudioSource) {
+    return;
+  }
+  mockAudioSource.oscillator.stop();
+  mockAudioSource.oscillator.disconnect();
+  mockAudioSource.gain.disconnect();
+  mockAudioSource.track.stop();
+  mockAudioSource = null;
+}
+
 function disconnectLocalAudioTrack(): void {
   if (!localAudioNode) {
     return;
@@ -2554,6 +2601,24 @@ function getLocalMicrophoneMediaTrack(room: Room): MediaStreamTrack | null {
     audioTrack?: { mediaStreamTrack?: MediaStreamTrack };
   }).audioTrack?.mediaStreamTrack ?? (publication as { track?: { mediaStreamTrack?: MediaStreamTrack } }).track?.mediaStreamTrack;
   return track ?? null;
+}
+
+async function publishMockMicrophoneTrack(room: Room): Promise<void> {
+  const source = getMockAudioSource();
+  const existingTrack = getLocalMicrophoneMediaTrack(room);
+  if (existingTrack?.id === source.track.id) {
+    return;
+  }
+  const localParticipant = room.localParticipant as {
+    publishTrack?: (track: MediaStreamTrack, options?: { name?: string; source?: Track.Source }) => Promise<unknown> | unknown;
+  };
+  if (!localParticipant.publishTrack) {
+    throw createFaultError("NotSupportedError", "audio_unsupported:publishTrack_missing");
+  }
+  await Promise.resolve(localParticipant.publishTrack(source.track, {
+    name: "noah-audio-mock",
+    source: Track.Source.Microphone
+  }));
 }
 
 function connectLocalAudioTrack(room: Room): void {
@@ -3173,12 +3238,17 @@ function updateSpatialAudio(): void {
     },
     remoteSources: debugState.remoteParticipants.map((participant) => {
       const target = remoteAvatarRuntime.getAudioTarget(participant.participantId);
+      const audioNode = remoteAudioNodes.get(participant.participantId);
+      const remoteParticipant = livekitRoom?.remoteParticipants.get(participant.participantId);
       return {
         participantId: participant.participantId,
         x: roundDebugNumber(target?.x ?? participant.head.x),
         y: roundDebugNumber(target?.y ?? participant.head.y),
         z: roundDebugNumber(target?.z ?? participant.head.z),
-        attachedTo: "head" as const
+        attachedTo: "head" as const,
+        hasAudioNode: Boolean(audioNode),
+        pannerActive: Boolean(audioNode?.panner),
+        audioLevel: roundDebugNumber(remoteParticipant?.audioLevel ?? 0)
       };
     })
   };
@@ -3287,6 +3357,7 @@ const debugState = {
     audioState: "not_joined" as "not_joined" | "joining" | "joined" | "muted" | "degraded" | "failed",
     muted: true,
     publishedAudio: false,
+    audioSource: "none" as "none" | "microphone" | "mock",
     subscribedAudioCount: 0
   },
   access: {
@@ -3398,6 +3469,9 @@ const debugState = {
       y: number;
       z: number;
       attachedTo: "head" | "body" | "root";
+      hasAudioNode: boolean;
+      pannerActive: boolean;
+      audioLevel: number;
     }>
   },
   localPosition: { x: initialLocalPosition.x, z: initialLocalPosition.z },
@@ -4405,6 +4479,8 @@ async function reportDiagnostics(note?: string): Promise<void> {
       roomStateUrl: debugState.roomStateUrl,
       roomStateMode: debugState.roomStateMode,
       audioState: debugState.audioState,
+      localMicLevel: debugState.localMicLevel,
+      speakerOutputLevel: debugState.speakerOutputLevel,
       media: debugState.media,
       access: debugState.access,
       surfaceInput: debugState.surfaceInput,
@@ -4412,6 +4488,7 @@ async function reportDiagnostics(note?: string): Promise<void> {
       mediaCapabilities: debugState.mediaCapabilities,
       localPose: debugState.localPose,
       localPosition: debugState.localPosition,
+      spatialAudioState: debugState.spatialAudioState,
       spatialAudio: debugState.spatialAudio,
       xrAxes: debugState.xrAxes,
       remoteAvatarCount: debugState.remoteAvatarCount,
@@ -5765,7 +5842,7 @@ async function joinAudio(): Promise<void> {
     return;
   }
 
-  if (!browserMediaCapabilities.audioInput.supported) {
+  if (!audioMockEnabled && !browserMediaCapabilities.audioInput.supported) {
     throw createFaultError("NotSupportedError", `audio_unsupported:${browserMediaCapabilities.audioInput.reason}`);
   }
 
@@ -5778,11 +5855,15 @@ async function joinAudio(): Promise<void> {
 
   if (livekitRoom) {
     if (!microphoneEnabled) {
-      await livekitRoom.localParticipant.setMicrophoneEnabled(true);
+      if (audioMockEnabled) {
+        await publishMockMicrophoneTrack(livekitRoom);
+      } else {
+        await livekitRoom.localParticipant.setMicrophoneEnabled(true);
+      }
       microphoneEnabled = true;
       await resumeAudioContext();
       connectLocalAudioTrack(livekitRoom);
-      await refreshAudioDevices(true);
+      await refreshAudioDevices(!audioMockEnabled);
       muteButton.disabled = false;
       joinAudioButton.disabled = true;
       clearAudioIssue("Audio connected");
@@ -5795,11 +5876,15 @@ async function joinAudio(): Promise<void> {
   setStatus("Joining audio...");
   debugState.audioState = "joining";
   const room = await ensureMediaRoom();
-  await room.localParticipant.setMicrophoneEnabled(true);
+  if (audioMockEnabled) {
+    await publishMockMicrophoneTrack(room);
+  } else {
+    await room.localParticipant.setMicrophoneEnabled(true);
+  }
   microphoneEnabled = true;
   await resumeAudioContext();
   connectLocalAudioTrack(room);
-  await refreshAudioDevices(true);
+  await refreshAudioDevices(!audioMockEnabled);
   muteButton.disabled = false;
   joinAudioButton.disabled = true;
   startShareButton.disabled = !canUseScreenShareControl();
@@ -5814,8 +5899,18 @@ muteButton.addEventListener("click", async () => {
     return;
   }
   microphoneEnabled = !microphoneEnabled;
-  await livekitRoom.localParticipant.setMicrophoneEnabled(microphoneEnabled);
+  if (audioMockEnabled) {
+    const track = mockAudioSource?.track;
+    if (track) {
+      track.enabled = microphoneEnabled;
+    }
+  } else {
+    await livekitRoom.localParticipant.setMicrophoneEnabled(microphoneEnabled);
+  }
   if (microphoneEnabled) {
+    if (audioMockEnabled) {
+      await publishMockMicrophoneTrack(livekitRoom);
+    }
     await resumeAudioContext();
     connectLocalAudioTrack(livekitRoom);
   }
@@ -6294,6 +6389,7 @@ window.addEventListener("beforeunload", () => {
   for (const surfaceId of mediaSurfaceAudioNodes.keys()) {
     disconnectMediaSurfaceAudioTrack(surfaceId);
   }
+  stopMockAudioSource();
   void livekitRoom?.disconnect();
 });
 

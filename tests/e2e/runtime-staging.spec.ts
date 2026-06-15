@@ -358,6 +358,129 @@ test.describe("@staging runtime HUD space selector", () => {
     await expect(page.locator("#speaker-level-fill").locator("..")).toBeVisible();
   });
 
+  test("voice diagnostics bind LiveKit audio to spatial sources on staging", async ({ browser, request }) => {
+    const targetName = `Staging Voice Diagnostics ${Date.now()}`;
+    let roomId: string | null = null;
+
+    try {
+      const createRoomResponse = await request.post("/api/rooms", {
+        headers: {
+          "x-noah-admin-token": stagingAdminToken
+        },
+        data: {
+          tenantId: "demo-tenant",
+          templateId: "meeting-room-basic",
+          name: targetName,
+          guestAllowed: true,
+          avatarConfig: {
+            avatarsEnabled: true,
+            avatarCatalogUrl: "/assets/avatars/catalog.v1.json",
+            avatarQualityProfile: "desktop-standard",
+            avatarFallbackCapsulesEnabled: true,
+            avatarSeatsEnabled: true
+          }
+        }
+      });
+      expect(createRoomResponse.ok()).toBeTruthy();
+      const room = await createRoomResponse.json() as { roomId: string };
+      roomId = room.roomId;
+
+      const listener = await browser.newPage();
+      const source = await browser.newPage();
+      try {
+        await listener.goto(`/rooms/${room.roomId}?debug=1&audiomock=1&name=VoiceListener`, { waitUntil: "domcontentloaded" });
+        await source.goto(`/rooms/${room.roomId}?debug=1&audiomock=1&bot=line&name=VoiceSource&botSpeed=1`, { waitUntil: "domcontentloaded" });
+
+        await expect.poll(async () => {
+          const debug = await listener.evaluate(() => (window as Window & {
+            __NOAH_DEBUG__?: { remoteAvatarCount?: number; roomStateConnected?: boolean };
+          }).__NOAH_DEBUG__);
+          return {
+            connected: debug?.roomStateConnected ?? false,
+            remoteAvatarCount: debug?.remoteAvatarCount ?? 0
+          };
+        }, {
+          timeout: 30000,
+          intervals: [1000, 2000, 3000]
+        }).toEqual({ connected: true, remoteAvatarCount: 1 });
+
+        await Promise.all([
+          listener.click("#join-audio"),
+          source.click("#join-audio")
+        ]);
+
+        await expect.poll(async () => {
+          const debug = await listener.evaluate(() => (window as Window & {
+            __NOAH_DEBUG__?: {
+              media?: {
+                audioState?: string;
+                publishedAudio?: boolean;
+                audioSource?: string;
+                subscribedAudioCount?: number;
+              };
+              localMicLevel?: number;
+              speakerOutputLevel?: number;
+              remoteParticipants?: Array<{ participantId?: string; hasAudioNode?: boolean; activeAudio?: boolean }>;
+              spatialAudio?: {
+                remoteSources?: Array<{
+                  participantId?: string;
+                  attachedTo?: string;
+                  hasAudioNode?: boolean;
+                  pannerActive?: boolean;
+                  audioLevel?: number;
+                }>;
+              };
+            };
+          }).__NOAH_DEBUG__);
+          const participant = debug?.remoteParticipants?.find((item) => item.participantId);
+          const spatialSource = debug?.spatialAudio?.remoteSources?.find((item) => item.participantId === participant?.participantId);
+          return {
+            audioState: debug?.media?.audioState ?? null,
+            publishedAudio: debug?.media?.publishedAudio ?? false,
+            audioSource: debug?.media?.audioSource ?? null,
+            subscribedAudioCount: debug?.media?.subscribedAudioCount ?? 0,
+            localMicActive: (debug?.localMicLevel ?? 0) > 0,
+            speakerLevelPresent: typeof debug?.speakerOutputLevel === "number",
+            participantHasAudioNode: participant?.hasAudioNode ?? false,
+            participantActiveAudio: participant?.activeAudio ?? false,
+            spatialAttachedTo: spatialSource?.attachedTo ?? null,
+            spatialHasAudioNode: spatialSource?.hasAudioNode ?? false,
+            spatialPannerActive: spatialSource?.pannerActive ?? false,
+            spatialAudioLevelPresent: typeof spatialSource?.audioLevel === "number"
+          };
+        }, {
+          timeout: 45000,
+          intervals: [1000, 2000, 3000]
+        }).toEqual({
+          audioState: "joined",
+          publishedAudio: true,
+          audioSource: "mock",
+          subscribedAudioCount: 1,
+          localMicActive: true,
+          speakerLevelPresent: true,
+          participantHasAudioNode: true,
+          participantActiveAudio: true,
+          spatialAttachedTo: "head",
+          spatialHasAudioNode: true,
+          spatialPannerActive: true,
+          spatialAudioLevelPresent: true
+        });
+      } finally {
+        await listener.close();
+        await source.close();
+      }
+    } finally {
+      if (roomId) {
+        const deleteResponse = await request.delete(`/api/rooms/${roomId}`, {
+          headers: {
+            "x-noah-admin-token": stagingAdminToken
+          }
+        });
+        expect(deleteResponse.ok()).toBeTruthy();
+      }
+    }
+  });
+
   test("staging selector exposes canonical rooms with avatars enabled", async ({ request, baseURL }) => {
     const spacesResponse = await request.get(`/api/rooms/${stagingRoomId}/spaces`);
     expect(spacesResponse.ok()).toBeTruthy();

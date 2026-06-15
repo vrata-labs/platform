@@ -40,13 +40,22 @@ export interface M05DebugState {
     audioState: "not_joined" | "joining" | "joined" | "muted" | "degraded" | "failed";
     muted: boolean;
     publishedAudio: boolean;
+    audioSource?: "none" | "microphone" | "mock";
     subscribedAudioCount: number;
   };
+  localMicLevel?: number;
+  speakerOutputLevel?: number;
   spatialAudio?: {
     enabled: boolean;
     fallback: boolean;
     listener: M05PosePoint & { yaw: number };
-    remoteSources: Array<M05PosePoint & { participantId: string; attachedTo: "head" | "body" | "root" }>;
+    remoteSources: Array<M05PosePoint & {
+      participantId: string;
+      attachedTo: "head" | "body" | "root";
+      hasAudioNode?: boolean;
+      pannerActive?: boolean;
+      audioLevel?: number;
+    }>;
   };
   botMode?: string;
   issueCode?: string | null;
