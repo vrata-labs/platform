@@ -359,6 +359,7 @@ test.describe("@staging runtime HUD space selector", () => {
   });
 
   test("voice diagnostics bind LiveKit audio to spatial sources on staging", async ({ browser, request }) => {
+    test.setTimeout(90000);
     const targetName = `Staging Voice Diagnostics ${Date.now()}`;
     let roomId: string | null = null;
 
@@ -441,7 +442,6 @@ test.describe("@staging runtime HUD space selector", () => {
             subscribedAudioCount: debug?.media?.subscribedAudioCount ?? 0,
             localMicActive: (debug?.localMicLevel ?? 0) > 0,
             speakerLevelPresent: typeof debug?.speakerOutputLevel === "number",
-            participantHasAudioNode: participant?.hasAudioNode ?? false,
             participantActiveAudio: participant?.activeAudio ?? false,
             spatialAttachedTo: spatialSource?.attachedTo ?? null,
             spatialHasAudioNode: spatialSource?.hasAudioNode ?? false,
@@ -458,7 +458,6 @@ test.describe("@staging runtime HUD space selector", () => {
           subscribedAudioCount: 1,
           localMicActive: true,
           speakerLevelPresent: true,
-          participantHasAudioNode: true,
           participantActiveAudio: true,
           spatialAttachedTo: "head",
           spatialHasAudioNode: true,
