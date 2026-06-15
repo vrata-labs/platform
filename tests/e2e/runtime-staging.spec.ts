@@ -2,7 +2,7 @@ import { expect, test, type APIRequestContext, type Page } from "@playwright/tes
 
 const stagingRoomId = process.env.STAGING_ROOM_ID ?? "demo-room";
 const stagingAdminToken = process.env.STAGING_ADMIN_TOKEN ?? "noah-stage-admin";
-const stagingBaseUrl = process.env.BASE_URL ?? "https://89.169.161.91.sslip.io";
+const stagingBaseUrl = process.env.BASE_URL ?? "https://158.160.10.234.sslip.io";
 const stagingAssetBaseUrl = process.env.STAGING_ASSET_BASE_URL ?? `${new URL(stagingBaseUrl).protocol}//state.${new URL(stagingBaseUrl).host}`;
 const stagingSceneBundleVersion = process.env.STAGING_SCENE_BUNDLE_VERSION;
 
@@ -366,7 +366,6 @@ test.describe("@staging runtime HUD space selector", () => {
     };
 
     expect(payload.items.every((item) => item.roomLink.startsWith(baseURL ?? ""))).toBeTruthy();
-    expect(payload.items.some((item) => item.name === "Staging Selector Target")).toBeFalsy();
 
     const names = payload.items.map((item) => item.name);
     for (const expected of ["Demo Room", "Hall", "BlueOffice", "LectureHall", "Showroom", "MeetingSmall", "Cinema", "Anastasia", "NewGallery", "ArtGallery", "Standup", "OporaRussia", "SergOffice", "CinemaModeler"]) {

@@ -83,11 +83,12 @@ Known staging pitfalls:
 Phase 2 compose-based staging is now real and validated.
 
 - Bootstrap a fresh compose staging VM with `infra/yandex/scripts/provision-staging-compose.sh <instance-name>`
+- Reuse the reserved staging IP on a fresh VM with `YC_NAT_ADDRESS=158.160.10.234 infra/yandex/scripts/provision-staging-compose.sh <instance-name>`
 - Current verified compose host is `noah-stage-compose-v11`
-- Primary public app URL: `https://89.169.161.91.sslip.io`
-- Direct app fallback: `http://89.169.161.91:4000`
-- Public room-state URL: `https://state.89.169.161.91.sslip.io`
-- Public LiveKit URL: `https://livekit.89.169.161.91.sslip.io`
+- Primary public app URL: `https://158.160.10.234.sslip.io`
+- Direct app fallback: `http://158.160.10.234:4000`
+- Public room-state URL: `https://state.158.160.10.234.sslip.io`
+- Public LiveKit URL: `https://livekit.158.160.10.234.sslip.io`
 - Local validation path remains `docker compose --env-file infra/docker/.env.staging.example -f infra/docker/compose.staging.yml up -d --build`
 - Staging rollout on the VM is `git checkout <commit>` or `git pull`, then `docker compose --env-file infra/docker/.env.staging -f infra/docker/compose.staging.yml build && docker compose --env-file infra/docker/.env.staging -f infra/docker/compose.staging.yml up -d`
 - Verified staging checks for Phase 2: `/health`, `/rooms/demo-room`, `/control-plane`, `pnpm test:e2e:staging`, and manual Hall/BlueOffice diagnostics

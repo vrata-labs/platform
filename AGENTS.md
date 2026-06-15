@@ -80,8 +80,9 @@ Frame locomotion maintenance rules:
 
 - Temporary Yandex Cloud stage VMs were repeatedly created from `infra/yandex/cloud-init/staging-scenes.yaml` because direct SSH/update flow on older staging hosts was unreliable.
 - Compose-based staging bootstrap now lives in `infra/yandex/cloud-init/staging-compose.yaml`, and fresh compose hosts should be created through `infra/yandex/scripts/provision-staging-compose.sh`.
-- The current compose staging host after Phase 2 is `noah-stage-compose-v11` at `89.169.161.91`; primary public app URL is `https://89.169.161.91.sslip.io`, direct smoke fallback is `http://89.169.161.91:4000`.
-- Working public auxiliary domains are `https://state.89.169.161.91.sslip.io` for room-state and `https://livekit.89.169.161.91.sslip.io` for LiveKit.
+- To keep the current reserved staging IP on a fresh compose VM, run provisioning with `YC_NAT_ADDRESS=158.160.10.234`.
+- The current compose staging host after Phase 2 is `noah-stage-compose-v11` at static IP `158.160.10.234`; primary public app URL is `https://158.160.10.234.sslip.io`, direct smoke fallback is `http://158.160.10.234:4000`.
+- Working public auxiliary domains are `https://state.158.160.10.234.sslip.io` for room-state and `https://livekit.158.160.10.234.sslip.io` for LiveKit.
 - The practical publish/update path was: commit scene bundle changes to branch `deploy/scene-bundles-stage-20260328`, push to GitHub, and point stage rooms at raw GitHub or jsDelivr scene bundle URLs instead of depending on local VM assets.
 - Compose staging rollout path is now: `git checkout <commit>` (or `git pull` on branch) -> `docker compose --env-file infra/docker/.env.staging -f infra/docker/compose.staging.yml build` -> `docker compose ... up -d`.
 - Phase 5 switched the active staging rollout contract to registry images by SHA: `docker login cr.yandex` -> `infra/docker/rollout-staging-images.sh <full-sha>` -> `docker compose pull && up -d`.

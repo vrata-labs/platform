@@ -12,6 +12,11 @@ USER_DATA_FILE="infra/yandex/cloud-init/staging-compose.yaml"
 SSH_KEY_FILE="${YC_SSH_KEY_FILE:-$HOME/.ssh/id_ed25519.pub}"
 SSH_LOGIN="${YC_SSH_LOGIN:-$USER}"
 TEMP_USER_DATA_FILE=""
+NETWORK_INTERFACE="subnet-name=default-${ZONE},nat-ip-version=ipv4"
+
+if [ -n "${YC_NAT_ADDRESS:-}" ]; then
+  NETWORK_INTERFACE="${NETWORK_INTERFACE},nat-address=${YC_NAT_ADDRESS}"
+fi
 
 cleanup() {
   if [ -n "$TEMP_USER_DATA_FILE" ] && [ -f "$TEMP_USER_DATA_FILE" ]; then
@@ -49,7 +54,7 @@ YC_ARGS=(
   --create-boot-disk image-folder-id="$IMAGE_FOLDER",image-family="$IMAGE_FAMILY",size=20GB
   --cores "$CORES"
   --memory "$MEMORY"
-  --network-interface subnet-name=default-"$ZONE",nat-ip-version=ipv4
+  --network-interface "$NETWORK_INTERFACE"
   --metadata-from-file user-data="$USER_DATA_TO_USE"
 )
 

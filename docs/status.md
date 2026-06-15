@@ -77,10 +77,10 @@
 - Current progress now includes a public staging room shell with Three.js runtime, presence sync, LiveKit-backed audio join flow, and HTTPS via `sslip.io`.
 - Voice transport is wired for staging; browser E2E now covers room load and two-participant presence. Persistent storage, auth, richer XR locomotion, and production hardening are still pending.
 - GitHub repository published: `https://github.com/psilon2000/noah`
-- Current staging room URL: `https://epdt15bceu6l26iqkk9n.158.160.66.37.sslip.io/rooms/demo-room`
-- Current staging control-plane URL: `https://epdt15bceu6l26iqkk9n.158.160.66.37.sslip.io/control-plane`
-- Current staging API health endpoint: `https://epdt15bceu6l26iqkk9n.158.160.66.37.sslip.io/health`
-- Current staging LiveKit endpoint: `wss://livekit-epdt15bceu6l26iqkk9n.158.160.66.37.sslip.io`
+- Current staging room URL: `https://158.160.10.234.sslip.io/rooms/demo-room`
+- Current staging control-plane URL: `https://158.160.10.234.sslip.io/control-plane`
+- Current staging API health endpoint: `https://158.160.10.234.sslip.io/health`
+- Current staging LiveKit endpoint: `wss://livekit.158.160.10.234.sslip.io`
 - Current staging control-plane admin token: `noah-stage-admin`
 
 ## Latest manual QA

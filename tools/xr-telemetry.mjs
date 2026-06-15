@@ -7,7 +7,7 @@ const roomAliases = {
 
 function parseArgs(argv) {
   const options = {
-    baseUrl: process.env.BASE_URL ?? "https://89.169.161.91.sslip.io",
+    baseUrl: process.env.BASE_URL ?? "https://158.160.10.234.sslip.io",
     adminToken: process.env.STAGING_ADMIN_TOKEN ?? process.env.NOAH_ADMIN_TOKEN ?? "noah-stage-admin",
     roomId: process.env.XR_ROOM_ID ?? roomAliases.blueoffice,
     includeSynthetic: false,

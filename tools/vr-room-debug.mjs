@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-const baseUrl = process.env.BASE_URL ?? "https://89.169.161.91.sslip.io";
+const baseUrl = process.env.BASE_URL ?? "https://158.160.10.234.sslip.io";
 const adminToken = process.env.STAGING_ADMIN_TOKEN ?? process.env.NOAH_ADMIN_TOKEN ?? "noah-stage-admin";
 
 function parseArgs(argv) {

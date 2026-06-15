@@ -17,7 +17,7 @@ export const defaultRooms = [
   }
 ];
 
-const defaultBaseUrl = "https://89.169.161.91.sslip.io";
+const defaultBaseUrl = "https://158.160.10.234.sslip.io";
 const defaultAdminToken = "noah-stage-admin";
 const defaultBranch = "deploy/scene-bundles-stage-20260328";
 
