@@ -47,7 +47,9 @@
 - M1-MEDIA known limitations: screen broadcast is a video stream, not direct web-page control; the remote browser object is separate from screen broadcast; third-party extensions remain gated until signing and sandboxing are implemented.
 - Avatar root/head/body replication staging validation is complete as of 2026-06-16. Final deployed commit: `ca4aa5ec6dbb849f11554fecb4801115a0d1431d`.
 - Avatar root/head/body verification: remote avatar diagnostics now expose separate `root`, `body`, and `head` transforms; local `pnpm run lint`, `pnpm run typecheck`, `pnpm run test`, `pnpm run build`, and `pnpm test:e2e` passed; CI `27576109871` passed; Docker Publish `27576109858` passed; Staging Deploy `27576307094` passed; public staging smoke passed; and `pnpm test:e2e:staging` passed with `35 passed`.
-- Next focus: revisit spatial audio / voice diagnostics.
+- Spatial audio / voice diagnostics staging validation is complete as of 2026-06-16. Final deployed commit: `0457bb6dab6c3acaa3c4b6e6fca8ef9cb6627464`.
+- Spatial audio / voice diagnostics verification: stable debug `audiomock=1` now validates LiveKit voice publishing/subscription, local mic level, speaker level, and spatial audio source attachment on staging; local `pnpm run lint`, `pnpm run typecheck`, `pnpm run test`, `pnpm run build`, and `pnpm test:e2e` passed; CI `27579793004` passed; Docker Publish `27579793008` passed; Staging Deploy `27579967529` passed; public staging smoke passed; and staging gate `pnpm test:e2e:staging` passed with `36 passed`.
+- Next focus: remote avatar motion smoothness / QoS follow-up.
 - M1.1 access roles foundation is complete as of 2026-05-12. Deployed commit: `065b6a92a8139fa4f4b3208e8e81b60a4f8ad26a`.
 - M1.1 verification: local full suite passed, CI `25726722155` passed, Docker Publish `25726722173` passed, Staging Deploy `25726820329` passed, and `pnpm test:e2e:staging` passed with 33 tests.
 - Manual staging QA in `demo-room` confirmed the admin/host role path works normally.
@@ -74,7 +76,7 @@
 - M1.9 extension protocol is complete as of 2026-06-10. Final deployed commit: `972e98af1d550b782bb7c91452bbedc8484ccfe7`; implementation commit: `d51ff697f35014a11e91e4d44bff16567fb52d24`.
 - M1.9 result: internal media extension manifests, registry/debug snapshot, capability validation, disabled-extension gating, generic test-card extension state routing, room-state permission checks, and focused e2e `extension-protocol` are in place.
 - M1.9 verification: focused package builds/tests for `@noah/shared-types`, `@noah/room-state`, and `@noah/runtime-web` passed; root `pnpm run lint`, `pnpm run typecheck`, `pnpm run build`, and `pnpm run test` passed; focused local e2e `tests/e2e/m1-media/extension-protocol.spec.ts` passed with `2 passed`; CI `27265856141` passed; Docker Publish `27265856222` passed; Staging Deploy `27266041607` passed; focused staging `extension-protocol` passed with `2 passed` against `https://158.160.10.234.sslip.io`. Full local `pnpm run test:e2e` ran after the change with `92 passed`, `1 skipped`, and `4 failed`; all failures were in the pre-existing local `remote-browser-object` media track tests that also failed during baseline before M1.9 changes.
-- Avatar root/head/body replication staging validation is complete; next focus is spatial audio / voice diagnostics.
+- Avatar root/head/body replication and spatial audio / voice diagnostics staging validation are complete; next focus is remote avatar motion smoothness / QoS follow-up.
 
 - M0.5 focuses on acceptance of the existing basic multi-user presence path: diagnostics, pose orientation, remote visibility, join/leave cleanup, voice state, spatial-audio diagnostics, and XR-mode simulation.
 - M0.5 explicitly excludes humanoid avatars, new room templates, and control-plane expansion.
@@ -96,8 +98,8 @@
 - Scenario: `Quest 2 VR + web desktop`
 - Result: two-way room presence works; VR movement works; web and VR clients now see each other's motion more smoothly than before.
 - Improvement confirmed: previous severe self-avatar jitter and remote teleporting were reduced after buffered motion and XR input fixes.
-- Remaining issue: motion is better but still not perfectly smooth; voice behavior still needs deeper validation/tuning.
-- Next focus: revisit spatial audio / voice diagnostics.
+- Remaining issue: motion is better but still not perfectly smooth.
+- Next focus: remote avatar motion smoothness / QoS follow-up.
 
 ## Current hardening snapshot
 
