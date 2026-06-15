@@ -1235,7 +1235,16 @@ test.describe("@staging runtime HUD space selector", () => {
           const webDebug = await webPage.evaluate(() => (window as Window & {
             __NOAH_DEBUG__?: {
               remoteAvatarReliableStates?: Array<{ inputMode?: string | null }>;
+              remoteParticipants?: Array<{
+                participantId?: string | null;
+                root?: { x?: number | null; y?: number | null; z?: number | null; yaw?: number | null };
+                body?: { x?: number | null; y?: number | null; z?: number | null; yaw?: number | null };
+                head?: { x?: number | null; y?: number | null; z?: number | null; yaw?: number | null; pitch?: number | null };
+                appliedRootYaw?: number | null;
+                appliedHeadYaw?: number | null;
+              }>;
               remoteAvatarParticipants?: Array<{
+                participantId?: string | null;
                 inputMode?: string | null;
                 presenceSeen?: boolean;
                 hasReliableState?: boolean;
@@ -1245,19 +1254,46 @@ test.describe("@staging runtime HUD space selector", () => {
               }>;
             };
           }).__NOAH_DEBUG__);
+          const remoteVrParticipant = webDebug?.remoteAvatarParticipants?.find((item) =>
+            item.inputMode === "vr-controller"
+            && item.presenceSeen
+            && item.hasReliableState
+            && item.hasPoseFrame
+            && item.leftHandVisible
+            && item.rightHandVisible
+          );
+          const remoteVrModel = webDebug?.remoteParticipants?.find((item) =>
+            item.participantId === remoteVrParticipant?.participantId
+          );
+          const root = remoteVrModel?.root;
+          const body = remoteVrModel?.body;
+          const head = remoteVrModel?.head;
+          const headAboveRoot = typeof root?.y === "number" && typeof head?.y === "number"
+            ? head.y - root.y
+            : null;
+          const bodyAboveRoot = typeof root?.y === "number" && typeof body?.y === "number"
+            ? body.y - root.y
+            : null;
+          const bodyRootDistance = typeof root?.x === "number" && typeof root?.z === "number" && typeof body?.x === "number" && typeof body?.z === "number"
+            ? Math.hypot(body.x - root.x, body.z - root.z)
+            : null;
 
           return {
             vrHandsOnly: vrDebug?.avatarSnapshot?.visibilityState ?? null,
             vrControllerProfile: vrDebug?.avatarDebug?.controllerProfile ?? null,
             remoteReliableVr: Boolean(webDebug?.remoteAvatarReliableStates?.some((item) => item.inputMode === "vr-controller")),
-            remoteVrHands: Boolean(webDebug?.remoteAvatarParticipants?.some((item) =>
-              item.inputMode === "vr-controller"
-              && item.presenceSeen
-              && item.hasReliableState
-              && item.hasPoseFrame
-              && item.leftHandVisible
-              && item.rightHandVisible
-            ))
+            remoteVrHands: Boolean(remoteVrParticipant),
+            remoteVrRootHeadBody: Boolean(remoteVrParticipant)
+              && typeof root?.yaw === "number"
+              && typeof body?.yaw === "number"
+              && typeof head?.yaw === "number"
+              && typeof remoteVrModel?.appliedRootYaw === "number"
+              && typeof remoteVrModel?.appliedHeadYaw === "number"
+              && (headAboveRoot ?? 0) > 1.2
+              && (headAboveRoot ?? 0) < 2.1
+              && (bodyAboveRoot ?? 0) > 0.5
+              && (bodyAboveRoot ?? 0) < (headAboveRoot ?? 0)
+              && (bodyRootDistance ?? 1) < 0.05
           };
         }, {
           timeout: 60000,
@@ -1266,7 +1302,8 @@ test.describe("@staging runtime HUD space selector", () => {
           vrHandsOnly: "hands-only",
           vrControllerProfile: "vr_no_controllers",
           remoteReliableVr: true,
-          remoteVrHands: true
+          remoteVrHands: true,
+          remoteVrRootHeadBody: true
         });
       } finally {
         await vrPage.close();

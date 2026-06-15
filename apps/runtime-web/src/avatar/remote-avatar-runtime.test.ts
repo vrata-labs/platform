@@ -12,6 +12,7 @@ function createDebugState() {
       participantId: string;
       mode: "desktop" | "mobile" | "vr";
       root: { x: number; y: number; z: number; yaw: number };
+      body: { x: number; y: number; z: number; yaw: number };
       head: { x: number; y: number; z: number; yaw: number; pitch: number };
       lastSeq: number;
       staleMs: number;
@@ -335,12 +336,15 @@ test("remote avatar runtime applies transported head pitch without xz drift", ()
 
   runtime.update(0.016, debugState);
   const head = scene.children[1] as THREE.Mesh | undefined;
+  const participant = debugState.remoteParticipants[0];
 
   assert.ok(head);
   assert.equal(Number(head.position.x.toFixed(3)), 0);
   assert.equal(Number(head.position.z.toFixed(3)), 0);
   assert.equal(head.rotation.x > 0.2, true);
-  assert.equal(debugState.remoteParticipants[0]?.head.pitch > 0.2, true);
+  assert.equal(participant?.body.y, 0.92);
+  assert.equal(participant?.head.y, 1.6);
+  assert.equal((participant?.head.pitch ?? 0) > 0.2, true);
 });
 
 test("remote avatar runtime keeps last known hands visible through pose gaps", async () => {

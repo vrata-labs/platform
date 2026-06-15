@@ -33,6 +33,7 @@ export interface RemoteAvatarDebugState {
     participantId: string;
     mode: PresenceState["mode"];
     root: { x: number; y: number; z: number; yaw: number };
+    body: { x: number; y: number; z: number; yaw: number };
     head: { x: number; y: number; z: number; yaw: number; pitch: number };
     lastSeq: number;
     staleMs: number;
@@ -397,6 +398,19 @@ export function createRemoteAvatarRuntime(input: {
         const debugRoot = poseFrame
           ? { x: poseFrame.root.x, y: poseFrame.root.y, z: poseFrame.root.z, yaw: poseFrame.root.yaw }
           : root;
+        const debugBody = poseFrame
+          ? {
+            x: poseFrame.root.x,
+            y: resolveRemoteBodyWorldY(poseFrame.root.y, participant.reliableState?.inputMode ?? null),
+            z: poseFrame.root.z,
+            yaw: poseFrame.root.yaw
+          }
+          : normalizePoseTransform(presence?.bodyTransform, {
+            x: root.x,
+            y: resolveRemoteBodyWorldY(root.y, participant.reliableState?.inputMode ?? null),
+            z: root.z,
+            yaw: root.yaw
+          });
         const debugHead = poseFrame && poseHead
           ? { x: poseFrame.head.x, y: poseFrame.head.y, z: poseFrame.head.z, yaw: poseHead.yaw, pitch: poseHead.pitch }
           : head;
@@ -410,6 +424,12 @@ export function createRemoteAvatarRuntime(input: {
             y: roundNumber(debugRoot.y),
             z: roundNumber(debugRoot.z),
             yaw: roundNumber(debugRoot.yaw)
+          },
+          body: {
+            x: roundNumber(debugBody.x),
+            y: roundNumber(debugBody.y),
+            z: roundNumber(debugBody.z),
+            yaw: roundNumber(debugBody.yaw)
           },
           head: {
             x: roundNumber(debugHead.x),

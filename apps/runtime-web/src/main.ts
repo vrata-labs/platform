@@ -3421,6 +3421,7 @@ const debugState = {
     participantId: string;
     mode: PresenceState["mode"];
     root: { x: number; y: number; z: number; yaw: number };
+    body: { x: number; y: number; z: number; yaw: number };
     head: { x: number; y: number; z: number; yaw: number; pitch: number };
     lastSeq: number;
     staleMs: number;
