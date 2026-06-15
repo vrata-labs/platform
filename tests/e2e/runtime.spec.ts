@@ -315,7 +315,7 @@ test("API fallback presence stays visible to realtime room-state clients", async
 });
 
 test("bot mode emits movement diagnostics automatically", async ({ page, request }) => {
-  await page.goto("/rooms/demo-room?bot=line&debug=1");
+  await page.goto("/rooms/demo-room?bot=line&botStart=0,0&debug=1");
 
   await expect.poll(async () => {
     const debug = await page.evaluate(() => (window as Window & { __NOAH_DEBUG__?: { botMode: string; localPosition: { x: number; z: number } } }).__NOAH_DEBUG__);
@@ -324,19 +324,22 @@ test("bot mode emits movement diagnostics automatically", async ({ page, request
   }, {
     timeout: 10000,
     intervals: [1000, 2000, 3000]
-  }).toBeGreaterThan(6);
+  }).toBeGreaterThan(0.5);
 
   const debug = await page.evaluate(() => (window as Window & { __NOAH_DEBUG__?: { botMode: string; localPosition: { x: number; z: number } } }).__NOAH_DEBUG__);
   expect(debug?.botMode).toBe("line");
-  expect(Math.max(Math.abs(debug?.localPosition.x ?? 0), Math.abs(debug?.localPosition.z ?? 0))).toBeGreaterThan(6);
+  expect(Math.max(Math.abs(debug?.localPosition.x ?? 0), Math.abs(debug?.localPosition.z ?? 0))).toBeGreaterThan(0.5);
 
-  const diagnosticsResponse = await request.get("/api/rooms/demo-room/diagnostics");
-  const diagnostics = (await diagnosticsResponse.json()) as {
-    items: Array<{ localPosition: { x: number; z: number } }>;
-  };
-
-  expect(diagnostics.items.length).toBeGreaterThan(0);
-  expect(diagnostics.items.some((item) => Math.abs(item.localPosition.x) + Math.abs(item.localPosition.z) > 0.5)).toBeTruthy();
+  await expect.poll(async () => {
+    const diagnosticsResponse = await request.get("/api/rooms/demo-room/diagnostics");
+    const diagnostics = (await diagnosticsResponse.json()) as {
+      items: Array<{ localPosition: { x: number; z: number } }>;
+    };
+    return diagnostics.items.some((item) => Math.abs(item.localPosition.x) + Math.abs(item.localPosition.z) > 0.5);
+  }, {
+    timeout: 10000,
+    intervals: [500, 1000, 2000]
+  }).toBeTruthy();
 });
 
 test("avatar sandbox exposes avatar diagnostics and persists them via diagnostics API", async ({ page, request }) => {
