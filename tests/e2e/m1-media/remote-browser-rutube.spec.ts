@@ -540,7 +540,7 @@ async function expectNoFrameBacklog(page: Page, sampleSeconds: number[]): Promis
   expect(Math.max(...inputLatencies)).toBeLessThan(2500);
 }
 
-test("@staging @rutube real Rutube remote browser keeps hover UI, video transport, and switching responsive", async ({ page, request }) => {
+test("@staging @private-assets @rutube real Rutube remote browser keeps hover UI, video transport, and switching responsive", async ({ page, request }) => {
   test.setTimeout(420000);
   let roomId: string | null = null;
 
@@ -570,7 +570,7 @@ test("@staging @rutube real Rutube remote browser keeps hover UI, video transpor
   }
 });
 
-test("@staging remote browser default demo renders visible viewport and receives input", async ({ page, request }) => {
+test("@staging @private-assets remote browser default demo renders visible viewport and receives input", async ({ page, request }) => {
   test.setTimeout(180000);
   let roomId: string | null = null;
 

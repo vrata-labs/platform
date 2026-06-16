@@ -2,13 +2,13 @@
 
 ## Hosts
 
-- Legacy API host: `epdr3avkecd7cen45502.51.250.19.248.sslip.io`
-- Previous scenes host: `epdiop503j59q9rqkuum.213.165.211.86.sslip.io`
-- New scenes host: `epdt15bceu6l26iqkk9n.158.160.66.37.sslip.io`
+- Legacy API host: `<legacy-api-host>`
+- Previous scenes host: `<previous-scenes-host>`
+- New scenes host: `<new-scenes-host>`
 
 ## Preserved room inventory
 
-- Source inventory was copied from `https://epdiop503j59q9rqkuum.213.165.211.86.sslip.io/api/rooms`.
+- Source inventory was copied from `<previous-scenes-host>/api/rooms`.
 - `24` scene rooms were recreated on the new host with the same `roomId` values.
 - `sceneBundleUrl` values were patched onto the recreated rooms after import.
 - `demo-room` remained present on the new host.

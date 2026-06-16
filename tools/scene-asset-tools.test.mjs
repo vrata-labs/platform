@@ -12,6 +12,15 @@ import {
   preflightSceneBundle,
   resolveSceneBundleVersion
 } from "./patch-staging-scene-bundles.mjs";
+import {
+  findBlockedPublicSceneDirs,
+  listSceneBundleDirs
+} from "./check-public-assets.mjs";
+import {
+  exportPrivateSceneAssets,
+  listPrivateSceneBundleDirs
+} from "./export-private-scene-assets.mjs";
+import { syncPrivateSceneAssets } from "./sync-private-scene-assets.mjs";
 
 const fullSha = "0123456789abcdef0123456789abcdef01234567";
 
@@ -103,4 +112,65 @@ test("snapshot-scene-assets creates immutable version directory without copying 
   assert.equal(await readFile(join(scene, fullSha, "scene.json"), "utf8"), JSON.stringify({ glbPath: "scene.glb" }));
   assert.equal(await readFile(join(scene, fullSha, "scene.glb"), "utf8"), "glb");
   await assert.rejects(readFile(join(scene, fullSha, oldSha, "old.txt"), "utf8"));
+});
+
+test("public asset checker blocks non-allowlisted scene bundles", async () => {
+  const root = await mkdtemp(join(tmpdir(), "noah-public-assets-"));
+  await mkdir(join(root, "livadia-nicholas-office-v1"));
+  await mkdir(join(root, "the-hall-v1"));
+  await mkdir(join(root, "the-office-v1"));
+  await mkdir(join(root, "sense-private-scene"));
+
+  const sceneDirs = await listSceneBundleDirs(root);
+  assert.deepEqual(sceneDirs, ["livadia-nicholas-office-v1", "sense-private-scene", "the-hall-v1", "the-office-v1"]);
+  assert.deepEqual(findBlockedPublicSceneDirs(sceneDirs), ["sense-private-scene"]);
+});
+
+test("private scene asset exporter copies sense bundles and writes a manifest", async () => {
+  const sourceRoot = await mkdtemp(join(tmpdir(), "noah-private-scene-source-"));
+  const targetRoot = await mkdtemp(join(tmpdir(), "noah-private-scene-target-"));
+  await mkdir(join(sourceRoot, "sense-hall2-v1"));
+  await mkdir(join(sourceRoot, "public-sample-v1"));
+  await writeFile(join(sourceRoot, "sense-hall2-v1", "scene.json"), JSON.stringify({
+    schemaVersion: 1,
+    sceneId: "sense-hall2-v1",
+    label: "Sense Hall",
+    source: "private-export",
+    glbPath: "scene.glb"
+  }));
+  await writeFile(join(sourceRoot, "sense-hall2-v1", "scene.glb"), "glb");
+  await writeFile(join(sourceRoot, "public-sample-v1", "scene.json"), "{}");
+
+  assert.deepEqual(await listPrivateSceneBundleDirs(sourceRoot), ["sense-hall2-v1"]);
+  const result = await exportPrivateSceneAssets({
+    sceneRoot: sourceRoot,
+    targetScenesRoot: join(targetRoot, "assets", "scenes")
+  });
+
+  assert.equal(result.sceneCount, 1);
+  const manifest = JSON.parse(await readFile(join(targetRoot, "assets", "manifest.json"), "utf8"));
+  assert.equal(manifest.schemaVersion, 1);
+  assert.equal(manifest.scenesRoot, "scenes");
+  assert.equal(manifest.scenes[0].sceneId, "sense-hall2-v1");
+  assert.equal(await readFile(join(targetRoot, "assets", "scenes", "sense-hall2-v1", "scene.glb"), "utf8"), "glb");
+});
+
+test("private scene asset sync copies manifest scenes into platform scene root", async () => {
+  const privateRoot = await mkdtemp(join(tmpdir(), "noah-private-scene-repo-"));
+  const platformRoot = await mkdtemp(join(tmpdir(), "noah-platform-scenes-"));
+  await mkdir(join(privateRoot, "assets", "scenes", "sense-hall2-v1"), { recursive: true });
+  await writeFile(join(privateRoot, "assets", "manifest.json"), JSON.stringify({
+    schemaVersion: 1,
+    scenesRoot: "scenes",
+    scenes: [{ sceneDir: "sense-hall2-v1", sceneId: "sense-hall2-v1" }]
+  }));
+  await writeFile(join(privateRoot, "assets", "scenes", "sense-hall2-v1", "scene.json"), "{}\n");
+
+  const result = await syncPrivateSceneAssets({
+    privateAssetsRoot: join(privateRoot, "assets"),
+    targetSceneRoot: platformRoot
+  });
+
+  assert.deepEqual(result, { sceneCount: 1, scenes: ["sense-hall2-v1"] });
+  assert.equal(await readFile(join(platformRoot, "sense-hall2-v1", "scene.json"), "utf8"), "{}\n");
 });

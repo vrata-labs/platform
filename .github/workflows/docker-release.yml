@@ -1,0 +1,135 @@
+name: Docker Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "SemVer image tag without leading v, for example 0.1.0-rc.1"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  API_IMAGE_NAME: noah-api
+  ROOM_STATE_IMAGE_NAME: noah-room-state
+  REMOTE_BROWSER_IMAGE_NAME: noah-remote-browser
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Derive image metadata
+        id: meta
+        run: |
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            VERSION="${{ inputs.version }}"
+          else
+            VERSION="${GITHUB_REF_NAME#v}"
+          fi
+          test -n "$VERSION"
+          case "$VERSION" in
+            v*)
+              echo "version input must not include the leading v" >&2
+              exit 1
+              ;;
+          esac
+          if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([-.+][0-9A-Za-z.-]+)?$'; then
+            echo "version must be SemVer, for example 0.1.0 or 0.1.0-rc.1" >&2
+            exit 1
+          fi
+          OWNER="$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
+          API_IMAGE="${REGISTRY}/${OWNER}/${API_IMAGE_NAME}"
+          ROOM_STATE_IMAGE="${REGISTRY}/${OWNER}/${ROOM_STATE_IMAGE_NAME}"
+          REMOTE_BROWSER_IMAGE="${REGISTRY}/${OWNER}/${REMOTE_BROWSER_IMAGE_NAME}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "sha_tag=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          echo "api_image=${API_IMAGE}" >> "$GITHUB_OUTPUT"
+          echo "room_state_image=${ROOM_STATE_IMAGE}" >> "$GITHUB_OUTPUT"
+          echo "remote_browser_image=${REMOTE_BROWSER_IMAGE}" >> "$GITHUB_OUTPUT"
+
+      - name: Enforce release safety gates
+        run: |
+          if [ ! -f LICENSE ]; then
+            echo "Root LICENSE is required before publishing public release images." >&2
+            exit 1
+          fi
+
+      - name: Enforce public asset audit gate
+        run: node tools/check-public-assets.mjs
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push api image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/api/Dockerfile
+          push: true
+          platforms: linux/amd64
+          tags: |
+            ${{ steps.meta.outputs.api_image }}:${{ steps.meta.outputs.version }}
+            ${{ steps.meta.outputs.api_image }}:${{ steps.meta.outputs.sha_tag }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ steps.meta.outputs.version }}
+            org.opencontainers.image.licenses=Apache-2.0
+
+      - name: Build and push room-state image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/room-state/Dockerfile
+          push: true
+          platforms: linux/amd64
+          tags: |
+            ${{ steps.meta.outputs.room_state_image }}:${{ steps.meta.outputs.version }}
+            ${{ steps.meta.outputs.room_state_image }}:${{ steps.meta.outputs.sha_tag }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ steps.meta.outputs.version }}
+            org.opencontainers.image.licenses=Apache-2.0
+
+      - name: Build and push remote-browser image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/remote-browser/Dockerfile
+          push: true
+          platforms: linux/amd64
+          tags: |
+            ${{ steps.meta.outputs.remote_browser_image }}:${{ steps.meta.outputs.version }}
+            ${{ steps.meta.outputs.remote_browser_image }}:${{ steps.meta.outputs.sha_tag }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ steps.meta.outputs.version }}
+            org.opencontainers.image.licenses=Apache-2.0
+
+      - name: Print published image refs
+        run: |
+          echo "API image: ${{ steps.meta.outputs.api_image }}:${{ steps.meta.outputs.version }}"
+          echo "API image SHA: ${{ steps.meta.outputs.api_image }}:${{ steps.meta.outputs.sha_tag }}"
+          echo "Room-state image: ${{ steps.meta.outputs.room_state_image }}:${{ steps.meta.outputs.version }}"
+          echo "Room-state image SHA: ${{ steps.meta.outputs.room_state_image }}:${{ steps.meta.outputs.sha_tag }}"
+          echo "Remote-browser image: ${{ steps.meta.outputs.remote_browser_image }}:${{ steps.meta.outputs.version }}"
+          echo "Remote-browser image SHA: ${{ steps.meta.outputs.remote_browser_image }}:${{ steps.meta.outputs.sha_tag }}"

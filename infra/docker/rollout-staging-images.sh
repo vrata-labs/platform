@@ -112,6 +112,21 @@ print(urljoin(sys.argv[1], sys.argv[2]))
 PY
 }
 
+sync_private_scene_assets() {
+  local private_assets_root="${NOAH_PRIVATE_SCENE_ASSETS_ROOT:-/opt/noah-private-scene-assets/assets}"
+
+  if [ ! -f "$private_assets_root/manifest.json" ]; then
+    echo "missing_private_scene_assets_manifest:$private_assets_root/manifest.json" >&2
+    exit 2
+  fi
+  if [ ! -f "$ROOT_DIR/tools/sync-private-scene-assets.mjs" ]; then
+    echo "missing_private_scene_assets_sync_tool:$ROOT_DIR/tools/sync-private-scene-assets.mjs" >&2
+    exit 2
+  fi
+
+  node "$ROOT_DIR/tools/sync-private-scene-assets.mjs" "$private_assets_root"
+}
+
 wait_for_api() {
   local api_base="$1"
   for _ in $(seq 1 30); do
@@ -315,6 +330,8 @@ PY
 log_disk_state
 cleanup_docker_state
 log_disk_state
+
+sync_private_scene_assets
 
 if [ -f "$ROOT_DIR/tools/snapshot-scene-assets.sh" ]; then
   STAGING_SCENE_BUNDLE_VERSION="$IMAGE_TAG" \

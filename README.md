@@ -1,183 +1,80 @@
-# noah
+# Noah
 
-Monorepo skeleton for a web-native immersive room platform MVP.
+Noah is a web-native immersive room platform. The project is moving toward a public open source `0.1` beta focused on self-hosted rooms, browser-first access, scene bundles, real-time presence, voice, and extensible collaboration surfaces.
 
-See `docs/product-scope.md` for scope and `docs/architecture.md` for the layer map.
+`0.1` is not a production SLA release. Treat it as an early platform baseline for experimentation, demos, and self-hosted evaluation.
 
-## Runtime local pose architecture
+## What Noah Includes
 
-The immersive client in `apps/runtime-web` separates local-user behavior into explicit domains:
+- Web runtime in `apps/runtime-web` built around Three.js and WebXR progressive enhancement.
+- API/control plane in `apps/api` and `apps/control-plane` for rooms, templates, assets, and scene bundle metadata.
+- Realtime room state in `apps/room-state`.
+- LiveKit-based media integration for voice and room media features.
+- Remote browser service in `apps/remote-browser` for web surface streaming experiments.
+- Docker Compose infrastructure for local/staging today and self-hosting as the public `0.1` target.
 
-```text
-Raw input adapters
-        ↓
-InputIntentResolver
-        ↓
-InteractionResolver
-        ↓
-LocomotionController
-        ↓
-LocalPoseController / PlayerRigAdapter
-        ↓
-Avatar publishing, audio, debug, rendering readers
-```
+## Beta Platform Scope
 
-The local `player` rig is not a general-purpose object that feature code may move directly. Seating, teleport, spawn, debug fit, XR session start, and future movement-like features should flow through the locomotion/local-pose pipeline. This keeps VR snap-turn, interaction ray, teleport, seating, avatar pose publishing, and spatial audio aligned around one source of truth.
+For `0.1`, “platform” means a user can:
 
-See `apps/runtime-web/README.md` and `AGENTS.md` for ownership rules and required tests before changing runtime locomotion, input, ray, teleport, or seating behavior.
+- clone the repository or pull public Docker images after the first public release;
+- run the stack on a single host with Docker Compose;
+- configure domains, secrets, Postgres, LiveKit, and MinIO/S3-compatible storage;
+- add rooms/spaces through the documented API/control-plane path;
+- bind custom scene bundles to rooms;
+- update between SemVer releases with backup and rollback instructions.
 
-## Staging notes
+See `docs/platform.md` for the stability boundary and known beta limitations.
 
-Default post-change verification flow:
+## Quickstart Status
 
-- After finishing code changes, publish the current changes to staging and verify them there, not only locally.
-- Run the full local e2e suite first: `pnpm test:e2e`.
-- Then run staging verification on the current staging host: at minimum `pnpm test:e2e:staging`.
-- If the change affects runtime behavior, deployment, room manifests, scene bundles, or staging infrastructure, also verify the important public staging flows directly: room load, selector/navigation when relevant, and key scene rooms such as Hall and BlueOffice.
-- Do not treat local green tests as sufficient for runtime/staging-facing changes unless staging verification is also green.
-
-Practical scene-bundle staging workflow used during SenseTower migration:
-
-- Put scene bundle files under `apps/runtime-web/public/assets/scenes/<scene-id>/`.
-- Commit the bundle changes to the deployment branch `deploy/scene-bundles-stage-20260328` and push to GitHub.
-- Staging deploy snapshots canonical scene bundles into immutable versioned paths: `apps/runtime-web/public/assets/scenes/<scene-id>/<full-git-sha>/scene.json`.
-- Create or update a stage room through the API, then patch its `sceneBundleUrl` to a published bundle URL.
-- Do not use mutable overwrite paths like `/assets/scenes/<scene-id>/scene.json` as the normal publishing path for changed scene resources; bind rooms to a versioned URL instead.
-- Canonical staging `Hall` and `BlueOffice` should use the dedicated asset origin `https://state.<staging-host>/assets/scenes/<scene-id>/<full-git-sha>/scene.json` so large scene files do not compete with same-origin app traffic and browser cache cannot hide updates.
-- Staging Caddy should stay on `h1/h2` only. Allowing `HTTP/3` on this host made browser scene-asset fetches intermittently explode from seconds to minutes, even when `curl` over `HTTP/2` stayed fast.
-
-Typical room patch flow:
+The public self-host path is being prepared. Until `v0.1.0` is released, use the source-build self-host path from `docs/self-hosting.md` rather than expecting published GHCR images to exist.
 
 ```bash
-curl -X PATCH "$BASE/api/rooms/$ROOM_ID" \
-  -H 'content-type: application/json' \
-  -H 'x-noah-admin-token: noah-stage-admin' \
-  -d '{"sceneBundleUrl":"https://state.<staging-host>/assets/scenes/<scene-id>/<full-git-sha>/scene.json"}'
+pnpm install --frozen-lockfile
+pnpm lint
+pnpm typecheck
+pnpm build
+pnpm test
+pnpm test:e2e
 ```
 
-Canonical staging patch helper. The snapshot command must run on the staging checkout that backs `/srv/runtime-public`:
+Self-host compose config check:
 
 ```bash
-STAGING_SCENE_BUNDLE_VERSION=<full-git-sha> STAGING_SCENE_IDS=sense-hall2-v1,sense-blueoffice-glb-v4 bash tools/snapshot-scene-assets.sh
-STAGING_SCENE_BUNDLE_VERSION=<full-git-sha> node tools/patch-staging-scene-bundles.mjs
+docker compose --env-file infra/docker/.env.selfhost.example -f infra/docker/compose.selfhost.yml config
 ```
 
-Known staging pitfalls:
+## Documentation
 
-- Stage `/assets/...` could return `404`; this caused many false negatives during scene validation.
-- `apps/api/src/index.ts` now falls back to serving assets from both `apps/runtime-web/dist` and `apps/runtime-web/public`, but remote bundle URLs were still the most reliable external test path.
-- Old stage VMs were often not worth patching in place; spinning up a fresh VM from `infra/yandex/cloud-init/staging-scenes.yaml` was usually faster.
-- Some scenes load slowly; do not treat early fallback as a final failure without waiting for diagnostics.
-- `Cinema` showed that a bad spawn point can look like a broken export even when the scene itself is fine.
+- `docs/platform.md` - public beta platform scope and stability policy.
+- `docs/self-hosting.md` - Docker Compose self-host setup.
+- `docs/upgrades.md` - backup, upgrade, smoke, and rollback flow.
+- `docs/releases.md` - SemVer and release process.
+- `docs/testing-checklist.md` - where tests live, run, and store artifacts.
+- `docs/ci-cd.md` - GitHub Actions and staging/release operations.
+- `docs/product-scope.md` - product hypothesis and MVP scope.
+- `docs/architecture.md` - layer map.
+- `docs/scene-bundle-contract.md` - scene bundle runtime contract.
+- `docs/api-contracts.md` - API contracts.
+- `docs/security.md` and `SECURITY.md` - security baseline and reporting policy.
+- `docs/asset-license-audit.md` - asset provenance and public release blockers.
+- `docs/scene-assets-repository.md` - boundary between platform code and private scene assets.
 
-## XR telemetry
+## Development Workflow
 
-- For live XR debugging on staging, use `pnpm xr:telemetry:blueoffice` to fetch and summarize `BlueOffice` XR telemetry.
-- Meaningful XR telemetry rows are persisted on staging, so after a repro you can inspect them later without keeping a live watcher open.
-- The helper filters out synthetic participants by default and shows only meaningful XR history rows.
-- To inspect all participants including synthetic harness runs: `pnpm xr:telemetry -- --room blueoffice --include-synthetic`.
-- To wait for a real device repro and print it as soon as it appears: `pnpm xr:telemetry -- --room blueoffice --watch --wait-real --timeout-ms 120000`.
+Noah uses GitHub Flow for the public path:
 
-## Compose staging
+- create a short-lived branch from `main`;
+- open a pull request;
+- keep CI green;
+- squash/merge to `main` after review;
+- release from SemVer tags such as `v0.1.0`.
 
-Phase 2 compose-based staging is now real and validated.
+See `CONTRIBUTING.md` for details.
 
-- Bootstrap a fresh compose staging VM with `infra/yandex/scripts/provision-staging-compose.sh <instance-name>`
-- Reuse the reserved staging IP on a fresh VM with `YC_NAT_ADDRESS=158.160.10.234 infra/yandex/scripts/provision-staging-compose.sh <instance-name>`
-- Current verified compose host is `noah-stage-compose-v11`
-- Primary public app URL: `https://158.160.10.234.sslip.io`
-- Direct app fallback: `http://158.160.10.234:4000`
-- Public room-state URL: `https://state.158.160.10.234.sslip.io`
-- Public LiveKit URL: `https://livekit.158.160.10.234.sslip.io`
-- Local validation path remains `docker compose --env-file infra/docker/.env.staging.example -f infra/docker/compose.staging.yml up -d --build`
-- Staging rollout on the VM is `git checkout <commit>` or `git pull`, then `docker compose --env-file infra/docker/.env.staging -f infra/docker/compose.staging.yml build && docker compose --env-file infra/docker/.env.staging -f infra/docker/compose.staging.yml up -d`
-- Verified staging checks for Phase 2: `/health`, `/rooms/demo-room`, `/control-plane`, `pnpm test:e2e:staging`, and manual Hall/BlueOffice diagnostics
-- Verified rollback path for Phase 2: switch to previous commit, rebuild with the same compose file, bring the stack back up, and confirm `/health` plus `/rooms/demo-room`
-- For sslip/Caddy, use the `*.sslip.io` hostnames above; bare `http://<ip>` or `https://<ip>` is not the stable public path.
-- Staging e2e should now run against the public HTTPS app URL and validate selector flow plus the full restored scene catalog. Stable baseline scenes such as Hall, BlueOffice, and ArtGallery are checked for `sceneDebug.state=loaded`; the rest are covered by HTTPS room-shell + manifest + diagnostics smoke so catalog regressions are still caught.
+## License
 
-## Scene bundle storage
+Noah source code is licensed under Apache-2.0. See `LICENSE`.
 
-Phase 3 adds minimal scene bundle metadata and bind flow in `apps/api`.
-
-- Scene bundle metadata API: `GET /api/scene-bundles`, `GET /api/scene-bundles/:bundleId`, `POST /api/scene-bundles`
-- Room bind API: `POST /api/rooms/:roomId/bind-scene-bundle`
-- Runtime compatibility rule: manifest still reads `room.sceneBundleUrl`; bundle metadata only helps compute and persist that URL
-- Default self-hosted provider: `SCENE_BUNDLE_PROVIDER=minio-default`
-- MinIO env contract: `MINIO_PUBLIC_BASE_URL`, `MINIO_BUCKET`
-- External S3-compatible env contract: `SCENE_BUNDLE_S3_ENDPOINT`, `SCENE_BUNDLE_S3_REGION`, `SCENE_BUNDLE_S3_BUCKET`, `SCENE_BUNDLE_S3_PUBLIC_BASE_URL`
-- Example external config check: set those env vars locally and run `pnpm --filter @noah/api test` to validate provider config resolution before using a real bucket
-- Productized Phase 7 API adds version lifecycle paths:
-  - `GET /api/scene-bundles/:bundleId/versions`
-  - `POST /api/scene-bundles/:bundleId/versions`
-  - `POST /api/scene-bundles/:bundleId/current`
-  - `POST /api/scene-bundles/:bundleId/versions/:version/status`
-- Runtime still stays simple: current/version switching only changes which URL gets written into `room.sceneBundleUrl`
-- For cache-safe scene updates, `publicUrl` should include a version directory, typically `.../assets/scenes/<scene-id>/<full-git-sha>/scene.json`; do not replace GLB/texture files inside an existing version directory.
-- Cleanup in Phase 7 is metadata-only (`active` / `obsolete` / `cleanup-ready`) and does not physically delete blob objects
-
-## CI and image publish
-
-Phase 4 CI/publish contract:
-
-- Main CI workflow: `.github/workflows/ci.yml`
-- Docker publish workflow: `.github/workflows/docker-publish.yml`
-- PRs run CI checks only; image publish is for push to `main`, push to `deploy/scene-bundles-stage-20260328`, or manual `workflow_dispatch`
-- Target registry: `Yandex Container Registry` via `cr.yandex/<registry-id>/noah-api` and `cr.yandex/<registry-id>/noah-room-state`
-- Immutable deploy tag is always the full `git sha`
-- Alias tags are limited to `staging` and branch slug; `latest` is intentionally not used
-- Required GitHub secrets for publish: `YCR_REGISTRY_ID`, `YCR_USERNAME`, `YCR_PASSWORD`
-- Live registry id: `crp9cm29k6p76hqo8lti`
-- Published image names:
-  - `cr.yandex/crp9cm29k6p76hqo8lti/noah-api`
-  - `cr.yandex/crp9cm29k6p76hqo8lti/noah-room-state`
-- Verified publish run: GitHub Actions workflow `Docker Publish` successfully pushed SHA and alias tags for branch `deploy/scene-bundles-stage-20260328`
-
-## Staging deploy by SHA
-
-- Active staging VM now runs `api` and `room-state` from registry images, not from `docker compose build`
-- Manual/SSH rollout contract on the VM: `docker login cr.yandex` -> `infra/docker/rollout-staging-images.sh <full-git-sha>`
-- The rollout script updates `IMAGE_TAG` in `infra/docker/.env.staging`, pulls `api` and `room-state`, and runs `docker compose up -d --no-build`
-- Verified rollback contract: rerun the same script with the previous published SHA, then smoke `health`, `demo-room`, `control-plane`
-- GitHub Actions deploy workflow source: `.github/workflows/staging-deploy.yml`
-- Verified GitHub Actions deploy run: `Staging Deploy` workflow run `23801431402`
-
-## Staging verification gate
-
-- `Staging Deploy` is now the source of truth for staging rollout verification
-- After rollout it runs:
-  - public smoke: `/health`, `/rooms/demo-room`, `/control-plane`
-  - `pnpm test:e2e:staging` against the public HTTPS URL
-- Successful deploys persist the current successful SHA on the VM for future rollback
-- Failed verification triggers automatic rollback to the previous successful SHA and still leaves the workflow failed
-- Verified failed rollout with rollback: workflow run `23804157870`
-- Verified successful gated deploy: workflow run `23804311484`
-
-## Container smoke
-
-Phase 1 container smoke commands:
-
-Docker build context inputs used by the current Dockerfiles:
-
-- Root: `package.json`, `pnpm-lock.yaml`, `pnpm-workspace.yaml`, `tsconfig.base.json`
-- App manifests/config: `apps/api/package.json`, `apps/room-state/package.json`, `apps/runtime-web/package.json`, `apps/control-plane/package.json`, all `apps/*/tsconfig.json`
-- Source/build inputs: `apps/api/src/**`, `apps/room-state/src/**`, `apps/runtime-web/src/**`, `apps/runtime-web/public/**`, `apps/control-plane/src/**`
-- Shared workspace packages if referenced by app builds: `packages/**`
-
-- Required env for `api` smoke: `API_PORT`, `CONTROL_PLANE_ADMIN_TOKEN`, `ROOM_STATE_PUBLIC_URL`, `RUNTIME_BASE_URL`
-- Required env for `room-state` smoke: `ROOM_STATE_PORT` if you want a non-default port; otherwise defaults are enough
-- Optional for both: `POSTGRES_URL`, `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`
-
-```bash
-docker build -f apps/api/Dockerfile -t noah-api .
-docker build -f apps/room-state/Dockerfile -t noah-room-state .
-
-docker run --rm -p 2567:2567 -e ROOM_STATE_PORT=2567 --name noah-room-state noah-room-state
-
-docker run --rm -p 4000:4000 \
-  -e API_PORT=4000 \
-  -e CONTROL_PLANE_ADMIN_TOKEN=noah-stage-admin \
-  -e ROOM_STATE_PUBLIC_URL=ws://127.0.0.1:2567 \
-  -e RUNTIME_BASE_URL=http://127.0.0.1:4000 \
-  --name noah-api noah-api
-```
+Bundled assets may have separate licensing requirements. Public release remains blocked until the asset license audit is complete and non-redistributable assets are removed or isolated.

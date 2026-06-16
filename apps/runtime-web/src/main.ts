@@ -526,6 +526,7 @@ let lastScreenShareStoppedAtMs = 0;
 let mediaRoomReady = false;
 let remoteBrowserMediaRoomPromise: Promise<void> | null = null;
 let roomStateClient: RoomStateClient | null = null;
+let roomStateAccessToken = "";
 let roomStateConnected = false;
 let latestRealtimeParticipants: PresenceState[] = [];
 let latestFallbackParticipants: PresenceState[] = [];
@@ -4392,7 +4393,7 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
         roomStateLabel: "Room-state: fallback API"
       });
     }
-  }, debugState.access.token);
+  }, roomStateAccessToken);
 }
 
 function renderDebugPanel(): void {
@@ -6487,8 +6488,10 @@ async function main(): Promise<void> {
     runtimeFlags.avatarLegIkEnabled = true;
   }
   debugState.featureFlags = runtimeFlags;
+  roomStateAccessToken = boot.access.token;
   debugState.access = {
     ...boot.access,
+    token: boot.access.token ? "[redacted]" : "",
     lastDeniedPermission: null,
     lastSurfaceCommandAccepted: null
   };

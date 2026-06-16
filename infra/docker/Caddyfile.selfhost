@@ -1,0 +1,10 @@
+:80 {
+  handle /assets/scenes/* {
+    root * /srv/runtime-public
+    header Access-Control-Allow-Origin *
+    header Cache-Control "no-cache, must-revalidate"
+    file_server
+  }
+
+  reverse_proxy api:4000
+}

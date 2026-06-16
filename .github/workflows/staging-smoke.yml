@@ -24,6 +24,7 @@ jobs:
       PLAYWRIGHT_NO_WEB_SERVER: "1"
       STAGING_ROOM_ID: ${{ inputs.room_id }}
       STAGING_TARGET_ROOM_ID: ${{ inputs.target_room_id }}
+      PLAYWRIGHT_REPORT_NAME: staging-smoke
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -38,7 +39,7 @@ jobs:
           cache: pnpm
 
       - name: Install dependencies
-        run: pnpm install
+        run: pnpm install --frozen-lockfile
 
       - name: Wait for staging health
         run: |
@@ -56,3 +57,14 @@ jobs:
 
       - name: Run staging smoke
         run: pnpm test:e2e:staging
+
+      - name: Upload staging smoke artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-staging-smoke-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: ignore
+          path: |
+            playwright-report/
+            test-results/

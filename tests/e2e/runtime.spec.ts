@@ -2,7 +2,7 @@ import { expect, test, type APIRequestContext, type Page } from "@playwright/tes
 
 test.describe.configure({ mode: "serial" });
 
-async function createAvatarHallRoom(request: APIRequestContext, name: string): Promise<{ roomId: string; roomLink: string }> {
+async function createAvatarRoom(request: APIRequestContext, name: string, sceneBundleUrl?: string): Promise<{ roomId: string; roomLink: string }> {
   const createRoomResponse = await request.post("/api/rooms", {
     headers: {
       "x-noah-admin-token": "test-admin-token"
@@ -11,7 +11,7 @@ async function createAvatarHallRoom(request: APIRequestContext, name: string): P
       tenantId: "demo-tenant",
       templateId: "meeting-room-basic",
       name,
-      sceneBundleUrl: "/assets/scenes/sense-hall2-v1/scene.json",
+      sceneBundleUrl,
       avatarConfig: {
         avatarsEnabled: true,
         avatarCatalogUrl: "/assets/avatars/catalog.v1.json",
@@ -23,6 +23,10 @@ async function createAvatarHallRoom(request: APIRequestContext, name: string): P
   });
   expect(createRoomResponse.ok()).toBeTruthy();
   return (await createRoomResponse.json()) as { roomId: string; roomLink: string };
+}
+
+async function createAvatarHallRoom(request: APIRequestContext, name: string): Promise<{ roomId: string; roomLink: string }> {
+  return createAvatarRoom(request, name, "/assets/scenes/sense-hall2-v1/scene.json");
 }
 
 async function readInteractionDebug(page: Page) {
@@ -71,8 +75,9 @@ test("room shell loads and presence is registered", async ({ page, request }) =>
 
   const debug = await page.evaluate(() => (window as Window & { __NOAH_DEBUG__?: unknown }).__NOAH_DEBUG__);
   expect(debug).toBeTruthy();
-  const debugState = debug as { roomStateConnected?: boolean; roomStateUrl?: string };
+  const debugState = debug as { roomStateConnected?: boolean; roomStateUrl?: string; access?: { token?: string } };
   expect(debugState.roomStateUrl).toContain("127.0.0.1:2567");
+  expect(debugState.access?.token).toBe("[redacted]");
 
   const presenceResponse = await request.get("/api/rooms/demo-room/presence");
   const presence = (await presenceResponse.json()) as { items: Array<{ participantId: string }> };
@@ -269,7 +274,7 @@ test("two participants can coexist in same room", async ({ browser, request }) =
 });
 
 test("API fallback presence stays visible to realtime room-state clients", async ({ browser, request }) => {
-  const room = await createAvatarHallRoom(request, `Mixed Presence ${Date.now()}`);
+  const room = await createAvatarRoom(request, `Mixed Presence ${Date.now()}`);
   const realtimePage = await browser.newPage();
   const fallbackPage = await browser.newPage();
 
@@ -1304,7 +1309,7 @@ test("two rooms load two different scene bundles", async ({ browser, request }) 
   await officePage.close();
 });
 
-test("two rooms load two different real SenseTower scene assets", async ({ browser, request }) => {
+test("@private-assets two rooms load two different real SenseTower scene assets", async ({ browser, request }) => {
   const hallRoomResponse = await request.post("/api/rooms", {
     headers: {
       "x-noah-admin-token": "test-admin-token"
@@ -1495,7 +1500,7 @@ test("scene bundle diagnostics include render and geometry debug info", async ({
   expect((loaded?.sceneDebug?.screenshot?.dataUrl ?? "")).toContain("data:image/jpeg;base64,");
 });
 
-test("avatar-enabled hall room supports interaction ray teleport, sit, switch and teleport exit", async ({ page, request }) => {
+test("@private-assets avatar-enabled hall room supports interaction ray teleport, sit, switch and teleport exit", async ({ page, request }) => {
   const room = await createAvatarHallRoom(request, "Avatar Hall Interaction Room");
 
   await page.goto(`${room.roomLink}?debug=1`);
@@ -1560,7 +1565,7 @@ test("avatar-enabled hall room supports interaction ray teleport, sit, switch an
   });
 });
 
-test.fixme("avatar-enabled hall room restores seated state after forced room-state reconnect", async ({ browser, request }) => {
+test.fixme("@private-assets avatar-enabled hall room restores seated state after forced room-state reconnect", async ({ browser, request }) => {
   const room = await createAvatarHallRoom(request, "Avatar Hall Reconnect Seating Room");
   const pageA = await browser.newPage();
   const pageB = await browser.newPage();

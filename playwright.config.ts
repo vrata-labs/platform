@@ -2,13 +2,22 @@ import { defineConfig } from "playwright/test";
 
 const baseURL = process.env.BASE_URL ?? "http://127.0.0.1:4000";
 const useWebServer = process.env.PLAYWRIGHT_NO_WEB_SERVER !== "1";
+const reportName = process.env.PLAYWRIGHT_REPORT_NAME ?? "e2e";
 
 export default defineConfig({
   testDir: "./tests/e2e",
-  timeout: 30000,
+  timeout: 45000,
+  outputDir: `test-results/${reportName}`,
+  reporter: [
+    ["list"],
+    ["html", { outputFolder: `playwright-report/${reportName}`, open: "never" }],
+    ["json", { outputFile: `test-results/${reportName}.json` }]
+  ],
   use: {
     baseURL,
-    headless: true
+    headless: true,
+    screenshot: "only-on-failure",
+    trace: process.env.PLAYWRIGHT_TRACE === "1" ? "retain-on-failure" : "off"
   },
   webServer: useWebServer ? {
     command: "bash -lc 'node apps/remote-browser/dist/index.js >/tmp/noah-remote-browser.log 2>&1 & node apps/room-state/dist/index.js >/tmp/noah-room-state.log 2>&1 & node apps/api/dist/index.js'",
