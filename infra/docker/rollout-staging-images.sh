@@ -119,12 +119,31 @@ sync_private_scene_assets() {
     echo "missing_private_scene_assets_manifest:$private_assets_root/manifest.json" >&2
     exit 2
   fi
-  if [ ! -f "$ROOT_DIR/tools/sync-private-scene-assets.mjs" ]; then
-    echo "missing_private_scene_assets_sync_tool:$ROOT_DIR/tools/sync-private-scene-assets.mjs" >&2
-    exit 2
-  fi
+  python3 - "$private_assets_root" "$ROOT_DIR/apps/runtime-web/public/assets/scenes" <<'PY'
+import json
+import shutil
+import sys
+from pathlib import Path
 
-  node "$ROOT_DIR/tools/sync-private-scene-assets.mjs" "$private_assets_root"
+private_assets_root = Path(sys.argv[1]).resolve()
+target_scene_root = Path(sys.argv[2]).resolve()
+manifest = json.loads((private_assets_root / 'manifest.json').read_text())
+if manifest.get('schemaVersion') != 1 or not isinstance(manifest.get('scenesRoot'), str) or not isinstance(manifest.get('scenes'), list):
+    raise SystemExit('invalid_private_scene_manifest')
+
+source_scene_root = private_assets_root / manifest['scenesRoot']
+synced = []
+for scene in manifest['scenes']:
+    scene_dir = scene.get('sceneDir') or scene.get('sceneId')
+    if not isinstance(scene_dir, str) or not scene_dir.startswith('sense-'):
+        raise SystemExit(f'invalid_private_scene_dir:{scene_dir}')
+    shutil.copytree(source_scene_root / scene_dir, target_scene_root / scene_dir, dirs_exist_ok=True)
+    synced.append(scene_dir)
+
+print(f'synced_private_scene_assets:{len(synced)}')
+for scene_dir in sorted(synced):
+    print(f'- {scene_dir}')
+PY
 }
 
 wait_for_api() {
