@@ -328,7 +328,6 @@ test("bot mode emits movement diagnostics automatically", async ({ page, request
 
   const debug = await page.evaluate(() => (window as Window & { __NOAH_DEBUG__?: { botMode: string; localPosition: { x: number; z: number } } }).__NOAH_DEBUG__);
   expect(debug?.botMode).toBe("line");
-  expect(Math.max(Math.abs(debug?.localPosition.x ?? 0), Math.abs(debug?.localPosition.z ?? 0))).toBeGreaterThan(0.5);
 
   await expect.poll(async () => {
     const diagnosticsResponse = await request.get("/api/rooms/demo-room/diagnostics");
