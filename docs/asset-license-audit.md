@@ -14,7 +14,7 @@ This document tracks publishability of runtime assets before Noah can be release
 - Cleared for public release: `livadia-nicholas-office-v1`, `the-hall-v1`, `the-office-v1`, and avatar recipe/catalog metadata JSON.
 - Removed from the public tree: all `sense-*` scene bundles.
 - Private scene asset repository: `psilon2000/noah-scene-assets-private`, initial snapshot commit `ea04324`.
-- Public `v0.1.0` release remains blocked until git-history exposure is resolved or explicitly accepted, because removed assets still exist in older repository history.
+- Public `v0.1.0` release must use a clean public import/mirror rather than publishing the existing repository history, because removed assets still exist in older private history.
 
 ## Inventory
 
@@ -39,7 +39,7 @@ See `docs/scene-assets-repository.md` for the repository boundary and migration 
 
 ## Required Before Public Release
 
-- Resolve or explicitly accept git-history exposure for removed `sense-*` assets before making the existing repository public.
+- Do not make the existing repository history public; create the public repository from a clean current-tree import without historical `sense-*` blobs.
 - Verify release Docker images do not include non-cleared assets.
 - Keep `tools/check-public-assets.mjs` green in the public release workflow.
 - If using a separate public mirror instead of history rewrite, verify the mirror starts from a clean tree without `sense-*` blobs.
