@@ -284,6 +284,13 @@ for line in lines:
 values.setdefault('API_IMAGE_REPO', 'cr.yandex/crp9cm29k6p76hqo8lti/vrata-api')
 values.setdefault('ROOM_STATE_IMAGE_REPO', 'cr.yandex/crp9cm29k6p76hqo8lti/vrata-room-state')
 values.setdefault('REMOTE_BROWSER_IMAGE_REPO', 'cr.yandex/crp9cm29k6p76hqo8lti/vrata-remote-browser')
+for key, legacy_name, current_name in (
+    ('API_IMAGE_REPO', 'noah-api', 'vrata-api'),
+    ('ROOM_STATE_IMAGE_REPO', 'noah-room-state', 'vrata-room-state'),
+    ('REMOTE_BROWSER_IMAGE_REPO', 'noah-remote-browser', 'vrata-remote-browser'),
+):
+    if legacy_name in values.get(key, ''):
+        values[key] = values[key].replace(legacy_name, current_name)
 for legacy_key, current_key in (
     ('NOAH_APP_BASE_URL', 'VRATA_APP_BASE_URL'),
     ('NOAH_APP_DOMAIN', 'VRATA_APP_DOMAIN'),
