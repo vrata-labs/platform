@@ -40,7 +40,7 @@ Regression policy:
 
 Frame locomotion maintenance rules:
 
-- The runtime locomotion refactor slices in `docs/plans/noah_runtime_locomotion_refactor_prompt.md` are complete. Do not restart those slices as new work.
+- The runtime locomotion refactor slices in `docs/arch/noah_runtime_locomotion_refactor_prompt.md` are complete. Do not restart those slices as new work.
 - Treat frame locomotion as maintenance-mode architecture: future behavior changes should be separate bugfix or feature tasks with focused tests.
 - `apps/runtime-web/src/locomotion/frame-locomotion.ts` should remain the frame locomotion pipeline entry point, not a mixed domain implementation file.
 - Keep XR-control planning in `apps/runtime-web/src/locomotion/frame-xr-controls.ts`, movement planning in `apps/runtime-web/src/locomotion/frame-movement.ts`, and frame command flushing in `apps/runtime-web/src/locomotion/frame-command-bridge.ts`.
