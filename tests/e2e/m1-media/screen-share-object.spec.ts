@@ -49,7 +49,7 @@ function roomUrl(roomId: string, role: "guest" | "member" | "host" | "admin", ex
 }
 
 async function readDebug(page: Page): Promise<ScreenShareDebug | undefined> {
-  return page.evaluate(() => (window as Window & { __NOAH_DEBUG__?: ScreenShareDebug }).__NOAH_DEBUG__);
+  return page.evaluate(() => (window as Window & { __VRATA_DEBUG__?: ScreenShareDebug }).__VRATA_DEBUG__);
 }
 
 async function waitForKernel(page: Page, role: "guest" | "member" | "host" | "admin") {
@@ -72,15 +72,15 @@ async function waitForKernel(page: Page, role: "guest" | "member" | "host" | "ad
 
 async function createScreenShareObject(page: Page) {
   const sent = await page.evaluate(() => (window as Window & {
-    __NOAH_TEST__?: { createScreenShareObject: () => boolean };
-  }).__NOAH_TEST__?.createScreenShareObject() ?? false);
+    __VRATA_TEST__?: { createScreenShareObject: () => boolean };
+  }).__VRATA_TEST__?.createScreenShareObject() ?? false);
   expect(sent).toBe(true);
 }
 
 async function stopActiveSurfaceObject(page: Page) {
   const sent = await page.evaluate(() => (window as Window & {
-    __NOAH_TEST__?: { stopActiveSurfaceObject: () => boolean };
-  }).__NOAH_TEST__?.stopActiveSurfaceObject() ?? false);
+    __VRATA_TEST__?: { stopActiveSurfaceObject: () => boolean };
+  }).__VRATA_TEST__?.stopActiveSurfaceObject() ?? false);
   expect(sent).toBe(true);
 }
 
@@ -210,8 +210,8 @@ test("M1.4 admin controls per-surface media audio policy", async ({ browser }) =
 
     await expect(host.locator("#surface-audio-control")).toBeHidden();
     const hostSent = await host.evaluate(() => (window as Window & {
-      __NOAH_TEST__?: { setDebugSurfaceMediaAudioEnabled: (enabled: boolean) => boolean };
-    }).__NOAH_TEST__?.setDebugSurfaceMediaAudioEnabled(false) ?? false);
+      __VRATA_TEST__?: { setDebugSurfaceMediaAudioEnabled: (enabled: boolean) => boolean };
+    }).__VRATA_TEST__?.setDebugSurfaceMediaAudioEnabled(false) ?? false);
     expect(hostSent).toBe(true);
     await expect.poll(async () => (await readDebug(host))?.mediaObjects?.blockedReason ?? null, {
       timeout: 10000,
@@ -244,8 +244,8 @@ test("M1.4 rejects occupied surface and stale screen-share patch", async ({ page
   await waitForKernel(page, "host");
 
   const cardSent = await page.evaluate(() => (window as Window & {
-    __NOAH_TEST__?: { createSurfaceTestCard: () => boolean };
-  }).__NOAH_TEST__?.createSurfaceTestCard() ?? false);
+    __VRATA_TEST__?: { createSurfaceTestCard: () => boolean };
+  }).__VRATA_TEST__?.createSurfaceTestCard() ?? false);
   expect(cardSent).toBe(true);
   await expect.poll(async () => {
     const debug = await readDebug(page);
@@ -281,8 +281,8 @@ test("M1.4 rejects occupied surface and stale screen-share patch", async ({ page
   }).toBe("screen-share");
 
   const staleSent = await page.evaluate(() => (window as Window & {
-    __NOAH_TEST__?: { sendStaleScreenSharePatch: () => boolean };
-  }).__NOAH_TEST__?.sendStaleScreenSharePatch() ?? false);
+    __VRATA_TEST__?: { sendStaleScreenSharePatch: () => boolean };
+  }).__VRATA_TEST__?.sendStaleScreenSharePatch() ?? false);
   expect(staleSent).toBe(true);
   await expect.poll(async () => (await readDebug(page))?.mediaObjects?.blockedReason ?? null, {
     timeout: 10000,

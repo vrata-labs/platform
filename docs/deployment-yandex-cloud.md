@@ -22,7 +22,7 @@
 - Existing compose staging rollout on VM: `git pull && docker compose --env-file infra/docker/.env.staging -f infra/docker/compose.staging.yml build && docker compose --env-file infra/docker/.env.staging -f infra/docker/compose.staging.yml up -d`
 - Registry-based rollout on VM: `docker login cr.yandex` -> `infra/docker/rollout-staging-images.sh <full-sha>`
 - Rollback path on VM: rerun `infra/docker/rollout-staging-images.sh <previous-successful-sha>` without rebuild
-- Current verified compose staging VM: `noah-stage-compose-v11` at static IP `158.160.10.234`
+- Current verified compose staging VM: `vrata-stage-compose-v11` at static IP `158.160.10.234`
 - Primary public app URL: `https://158.160.10.234.sslip.io`
 - Public room-state URL: `https://state.158.160.10.234.sslip.io`
 - Public LiveKit URL: `https://livekit.158.160.10.234.sslip.io`
@@ -57,15 +57,15 @@
 - Phase 4 target registry: `Yandex Container Registry`
 - Live registry id: `crp9cm29k6p76hqo8lti`
 - Expected image names:
-  - `cr.yandex/crp9cm29k6p76hqo8lti/noah-api`
-  - `cr.yandex/crp9cm29k6p76hqo8lti/noah-room-state`
+  - `cr.yandex/crp9cm29k6p76hqo8lti/vrata-api`
+  - `cr.yandex/crp9cm29k6p76hqo8lti/vrata-room-state`
 - Immutable tag for future deploy handoff: full `git sha`
 - Alias tags are limited to `staging` and branch slug
 - Current publish workflow expects GitHub secrets:
   - `YCR_REGISTRY_ID`
   - `YCR_USERNAME` (`json_key`)
   - `YCR_PASSWORD`
-- Current GitHub publish service account: `noah-gh-ycr-pusher` (`ajegfvegcehvb09mj977`)
+- Current GitHub publish service account: `vrata-gh-ycr-pusher` (`ajegfvegcehvb09mj977`)
 
 ## Staging deploy workflow
 

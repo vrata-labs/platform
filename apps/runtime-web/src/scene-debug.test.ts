@@ -53,7 +53,7 @@ test("inspectSceneObject excludes panorama sphere from bounds", () => {
     new THREE.MeshBasicMaterial({ side: THREE.BackSide })
   );
   panorama.name = "test-panorama-sphere";
-  panorama.userData.noahExcludeFromSceneBounds = true;
+  panorama.userData.vrataExcludeFromSceneBounds = true;
   root.add(roomMesh, panorama);
 
   const camera = new THREE.PerspectiveCamera(70, 1, 0.1, 100);

@@ -16,7 +16,7 @@
 
 ## Предпосылки и ограничения
 
-- Roadmap уже фиксирует `Phase 4` как `Lipsync, speaking feedback и expressive polish` в `docs/2026-04-01-noah-avatar-system-tz-roadmap.md`.
+- Roadmap уже фиксирует `Phase 4` как `Lipsync, speaking feedback и expressive polish` в `docs/2026-04-01-vrata-avatar-system-tz-roadmap.md`.
 - Базовый multiplayer avatar path уже есть: local snapshot/controller, remote pose sync, reliable state, reconnect/late join path и remote audio subscription.
 - Remote audio уже подключается на стороне клиента через `connectRemoteAudioElement(...)` в `apps/runtime-web/src/main.ts`, а spatial audio path уже строится поверх `AudioContext` и `MediaElementSource`.
 - В avatar catalog уже есть validation для `morphTargets`; это даёт точку входа для проверки наличия `mouth-open`/`viseme`-совместимых morphs без ввода нового asset format.
@@ -102,7 +102,7 @@
 
 ## Затронутые файлы/модули (если известно)
 
-- `docs/2026-04-01-noah-avatar-system-tz-roadmap.md`
+- `docs/2026-04-01-vrata-avatar-system-tz-roadmap.md`
 - `docs/plans/2026-04-08-phase-4-avatar-lipsync-speaking-feedback-v1.md`
 - `apps/runtime-web/src/main.ts`
 - `apps/runtime-web/src/voice.ts`

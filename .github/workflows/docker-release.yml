@@ -17,9 +17,9 @@ permissions:
 
 env:
   REGISTRY: ghcr.io
-  API_IMAGE_NAME: noah-api
-  ROOM_STATE_IMAGE_NAME: noah-room-state
-  REMOTE_BROWSER_IMAGE_NAME: noah-remote-browser
+  API_IMAGE_NAME: vrata-api
+  ROOM_STATE_IMAGE_NAME: vrata-room-state
+  REMOTE_BROWSER_IMAGE_NAME: vrata-remote-browser
 
 jobs:
   build-and-publish:

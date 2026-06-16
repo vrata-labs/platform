@@ -1,4 +1,4 @@
-import type { RoomMediaObjectsState } from "@noah/shared-types";
+import type { RoomMediaObjectsState } from "@vrata/shared-types";
 
 export function shouldPublishMediaSurfaceAudio(mediaObjects: RoomMediaObjectsState | null | undefined, surfaceId: string): boolean {
   return mediaObjects?.surfaces[surfaceId]?.mediaAudioEnabled === true;

@@ -1,4 +1,4 @@
-import { createRoomAccessDebugState, type RoomAccessDebugState, type RoomPermission, type RoomRole } from "@noah/shared-types";
+import { createRoomAccessDebugState, type RoomAccessDebugState, type RoomPermission, type RoomRole } from "@vrata/shared-types";
 
 interface RoomManifest {
   roomId: string;

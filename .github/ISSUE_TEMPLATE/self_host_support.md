@@ -7,7 +7,7 @@ labels: self-host
 
 ## Setup
 
-- Noah version or commit:
+- Vrata version or commit:
 - Deployment method: compose from source, public image, other
 - Host OS:
 - Public URL/domain setup:

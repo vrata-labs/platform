@@ -1,10 +1,10 @@
-# Noah Platform Beta Scope
+# Vrata Platform Beta Scope
 
-Noah `0.1` is a public beta target for a self-hosted immersive room platform. It is intended for evaluation, demos, and early adopters who can tolerate `0.x` changes.
+Vrata `0.1` is a public beta target for a self-hosted immersive room platform. It is intended for evaluation, demos, and early adopters who can tolerate `0.x` changes.
 
 ## What “Platform” Means In `0.1`
 
-- A user can deploy Noah on a single host with Docker Compose.
+- A user can deploy Vrata on a single host with Docker Compose.
 - A user can configure public endpoints, secrets, Postgres, LiveKit, and MinIO/S3-compatible storage.
 - A user can create rooms/spaces through the documented API/control-plane path.
 - A user can bind a scene bundle to a room.

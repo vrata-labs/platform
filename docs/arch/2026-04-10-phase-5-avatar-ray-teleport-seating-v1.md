@@ -14,7 +14,7 @@
 
 ## Предпосылки и ограничения
 
-- В roadmap `docs/2026-04-01-noah-avatar-system-tz-roadmap.md` Phase 5 уже закреплена как `Seating и scene integration`.
+- В roadmap `docs/2026-04-01-vrata-avatar-system-tz-roadmap.md` Phase 5 уже закреплена как `Seating и scene integration`.
 - В runtime уже есть avatar foundation, reliable avatar state, remote pose sync и lipsync, но нет production seating path и нет scene schema для seat anchors.
 - В shared avatar contract уже есть `seated` и `seatId` в `apps/runtime-web/src/avatar/avatar-types.ts`; это даёт точку входа для reliable multiplayer seating без нового отдельного avatar identity contract.
 - `apps/runtime-web/src/scene-bundle.ts` уже парсит versioned scene manifest; туда реалистично добавить anchors, не ломая текущий bundle path.
@@ -144,7 +144,7 @@
 
 ## Затронутые файлы/модули (если известно)
 
-- `docs/2026-04-01-noah-avatar-system-tz-roadmap.md`
+- `docs/2026-04-01-vrata-avatar-system-tz-roadmap.md`
 - `docs/plans/2026-04-10-phase-5-avatar-ray-teleport-seating-v1.md`
 - `apps/room-state/src/state.ts`
 - `apps/room-state/src/index.ts`

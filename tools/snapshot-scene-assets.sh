@@ -75,7 +75,7 @@ is_snapshot_dir() {
   local path="$1"
   local name
   name="$(basename "$path")"
-  [ -f "$path/.noah-scene-snapshot" ] && return 0
+  [ -f "$path/.vrata-scene-snapshot" ] && return 0
   [[ "$name" =~ ^[0-9a-fA-F]{40}$ ]] && return 0
   return 1
 }
@@ -114,7 +114,7 @@ for scene_id in "${scenes[@]}"; do
     fi
     cp -a "$entry" "$tmp_dir/"
   done
-  printf 'version=%s\nsource=%s\n' "$VERSION" "$scene_id" > "$tmp_dir/.noah-scene-snapshot"
+  printf 'version=%s\nsource=%s\n' "$VERSION" "$scene_id" > "$tmp_dir/.vrata-scene-snapshot"
   mv "$tmp_dir" "$target_dir"
   echo "snapshot_created:$scene_id:$target_dir"
 done

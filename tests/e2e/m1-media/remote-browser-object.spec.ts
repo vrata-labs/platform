@@ -50,7 +50,7 @@ type RemoteBrowserDebug = {
 };
 
 async function readDebug(page: Page): Promise<RemoteBrowserDebug | undefined> {
-  return page.evaluate(() => (window as Window & { __NOAH_DEBUG__?: RemoteBrowserDebug }).__NOAH_DEBUG__);
+  return page.evaluate(() => (window as Window & { __VRATA_DEBUG__?: RemoteBrowserDebug }).__VRATA_DEBUG__);
 }
 
 async function waitForKernel(page: Page) {
@@ -75,8 +75,8 @@ async function waitForKernel(page: Page) {
 
 async function sendSurfaceInput(page: Page, input: { kind: string; u?: number; v?: number; scrollDelta?: { x: number; y: number } }) {
   const sent = await page.evaluate((value) => (window as Window & {
-    __NOAH_TEST__?: { sendDebugSurfaceInput: (input?: { kind?: string; u?: number; v?: number; scrollDelta?: { x: number; y: number } }) => boolean };
-  }).__NOAH_TEST__?.sendDebugSurfaceInput(value) ?? false, input);
+    __VRATA_TEST__?: { sendDebugSurfaceInput: (input?: { kind?: string; u?: number; v?: number; scrollDelta?: { x: number; y: number } }) => boolean };
+  }).__VRATA_TEST__?.sendDebugSurfaceInput(value) ?? false, input);
   expect(sent).toBe(true);
 }
 
@@ -88,7 +88,7 @@ async function setSyntheticXrState(page: Page, input: {
   rayVisible?: boolean;
 }) {
   const sent = await page.evaluate((value) => (window as Window & {
-    __NOAH_TEST__?: {
+    __VRATA_TEST__?: {
       setSyntheticXrState: (state: {
         rightController: { x: number; y: number; z: number };
         rayDirection: { x: number; y: number; z: number };
@@ -97,30 +97,30 @@ async function setSyntheticXrState(page: Page, input: {
         rayVisible?: boolean;
       } | null) => boolean;
     };
-  }).__NOAH_TEST__?.setSyntheticXrState(value) ?? false, input);
+  }).__VRATA_TEST__?.setSyntheticXrState(value) ?? false, input);
   expect(sent).toBe(true);
 }
 
 async function getDebugSurfaceWorldPosition(page: Page, u: number, v: number): Promise<{ x: number; y: number; z: number }> {
   const position = await page.evaluate((value) => (window as Window & {
-    __NOAH_TEST__?: { getDebugSurfaceWorldPosition: (u: number, v: number) => { x: number; y: number; z: number } | null };
-  }).__NOAH_TEST__?.getDebugSurfaceWorldPosition(value.u, value.v) ?? null, { u, v });
+    __VRATA_TEST__?: { getDebugSurfaceWorldPosition: (u: number, v: number) => { x: number; y: number; z: number } | null };
+  }).__VRATA_TEST__?.getDebugSurfaceWorldPosition(value.u, value.v) ?? null, { u, v });
   expect(position).not.toBeNull();
   return position!;
 }
 
 async function getDebugSurfaceClientPosition(page: Page, u: number, v: number): Promise<{ x: number; y: number }> {
   const position = await page.evaluate((value) => (window as Window & {
-    __NOAH_TEST__?: { getDebugSurfaceClientPosition: (u: number, v: number) => { x: number; y: number } | null };
-  }).__NOAH_TEST__?.getDebugSurfaceClientPosition(value.u, value.v) ?? null, { u, v });
+    __VRATA_TEST__?: { getDebugSurfaceClientPosition: (u: number, v: number) => { x: number; y: number } | null };
+  }).__VRATA_TEST__?.getDebugSurfaceClientPosition(value.u, value.v) ?? null, { u, v });
   expect(position).not.toBeNull();
   return position!;
 }
 
 async function getKeyboardTargetWorldPosition(page: Page, targetId: string): Promise<{ x: number; y: number; z: number }> {
   const position = await page.evaluate((id) => (window as Window & {
-    __NOAH_TEST__?: { getRemoteBrowserVrKeyboardTargetWorldPosition: (targetId: string) => { x: number; y: number; z: number } | null };
-  }).__NOAH_TEST__?.getRemoteBrowserVrKeyboardTargetWorldPosition(id) ?? null, targetId);
+    __VRATA_TEST__?: { getRemoteBrowserVrKeyboardTargetWorldPosition: (targetId: string) => { x: number; y: number; z: number } | null };
+  }).__VRATA_TEST__?.getRemoteBrowserVrKeyboardTargetWorldPosition(id) ?? null, targetId);
   expect(position).not.toBeNull();
   return position!;
 }

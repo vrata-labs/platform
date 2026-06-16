@@ -216,7 +216,7 @@ export async function deleteTenant(apiBaseUrl: string, tenantId: string, auth?: 
 }
 
 function authHeaders(auth?: ControlPlaneAuth): Record<string, string> {
-  return auth?.adminToken ? { "x-noah-admin-token": auth.adminToken } : {};
+  return auth?.adminToken ? { "x-vrata-admin-token": auth.adminToken } : {};
 }
 
 export async function createRoom(apiBaseUrl: string, input: RoomCreateInput, auth?: ControlPlaneAuth): Promise<RoomRecord> {

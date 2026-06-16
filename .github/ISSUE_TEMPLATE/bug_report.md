@@ -1,6 +1,6 @@
 ---
 name: Bug report
-about: Report a reproducible Noah bug
+about: Report a reproducible Vrata bug
 title: "bug: "
 labels: bug
 ---
@@ -19,7 +19,7 @@ labels: bug
 
 ## Environment
 
-- Noah version or commit:
+- Vrata version or commit:
 - Browser/device:
 - Deployment: local, self-host, staging, other
 - OS/host:

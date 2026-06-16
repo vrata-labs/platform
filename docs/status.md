@@ -75,7 +75,7 @@
 - M1.8 rollback/retry notes: no rollback and no deploy retry were needed.
 - M1.9 extension protocol is complete as of 2026-06-10. Final deployed commit: `972e98af1d550b782bb7c91452bbedc8484ccfe7`; implementation commit: `d51ff697f35014a11e91e4d44bff16567fb52d24`.
 - M1.9 result: internal media extension manifests, registry/debug snapshot, capability validation, disabled-extension gating, generic test-card extension state routing, room-state permission checks, and focused e2e `extension-protocol` are in place.
-- M1.9 verification: focused package builds/tests for `@noah/shared-types`, `@noah/room-state`, and `@noah/runtime-web` passed; root `pnpm run lint`, `pnpm run typecheck`, `pnpm run build`, and `pnpm run test` passed; focused local e2e `tests/e2e/m1-media/extension-protocol.spec.ts` passed with `2 passed`; CI `27265856141` passed; Docker Publish `27265856222` passed; Staging Deploy `27266041607` passed; focused staging `extension-protocol` passed with `2 passed` against `https://158.160.10.234.sslip.io`. Full local `pnpm run test:e2e` ran after the change with `92 passed`, `1 skipped`, and `4 failed`; all failures were in the pre-existing local `remote-browser-object` media track tests that also failed during baseline before M1.9 changes.
+- M1.9 verification: focused package builds/tests for `@vrata/shared-types`, `@vrata/room-state`, and `@vrata/runtime-web` passed; root `pnpm run lint`, `pnpm run typecheck`, `pnpm run build`, and `pnpm run test` passed; focused local e2e `tests/e2e/m1-media/extension-protocol.spec.ts` passed with `2 passed`; CI `27265856141` passed; Docker Publish `27265856222` passed; Staging Deploy `27266041607` passed; focused staging `extension-protocol` passed with `2 passed` against `https://158.160.10.234.sslip.io`. Full local `pnpm run test:e2e` ran after the change with `92 passed`, `1 skipped`, and `4 failed`; all failures were in the pre-existing local `remote-browser-object` media track tests that also failed during baseline before M1.9 changes.
 - Avatar root/head/body replication and spatial audio / voice diagnostics staging validation are complete; next focus is remote avatar motion smoothness / QoS follow-up.
 
 - M0.5 focuses on acceptance of the existing basic multi-user presence path: diagnostics, pose orientation, remote visibility, join/leave cleanup, voice state, spatial-audio diagnostics, and XR-mode simulation.
@@ -86,12 +86,12 @@
 - Current API tokens are placeholder payloads and must be replaced with signed integrations before production use.
 - Current progress now includes a public staging room shell with Three.js runtime, presence sync, LiveKit-backed audio join flow, and HTTPS via `sslip.io`.
 - Voice transport is wired for staging; browser E2E now covers room load and two-participant presence. Persistent storage, auth, richer XR locomotion, and production hardening are still pending.
-- GitHub repository published: `https://github.com/psilon2000/noah`
+- GitHub repository published: `https://github.com/psilon2000/vrata`
 - Current staging room URL: `https://158.160.10.234.sslip.io/rooms/demo-room`
 - Current staging control-plane URL: `https://158.160.10.234.sslip.io/control-plane`
 - Current staging API health endpoint: `https://158.160.10.234.sslip.io/health`
 - Current staging LiveKit endpoint: `wss://livekit.158.160.10.234.sslip.io`
-- Current staging control-plane admin token: `noah-stage-admin`
+- Current staging control-plane admin token: `vrata-stage-admin`
 
 ## Latest manual QA
 

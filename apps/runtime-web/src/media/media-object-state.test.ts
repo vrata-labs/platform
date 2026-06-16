@@ -7,7 +7,7 @@ import {
   type MediaSurface,
   type RemoteBrowserObjectState,
   type RoomMediaObjectsState
-} from "@noah/shared-types";
+} from "@vrata/shared-types";
 
 import {
   remoteBrowserObjectForMediaTrack,

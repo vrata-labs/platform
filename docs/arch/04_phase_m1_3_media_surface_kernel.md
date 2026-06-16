@@ -291,9 +291,9 @@ Unit-тесты должны покрывать:
 
 CI/staging checks:
 
-- `pnpm --filter @noah/room-state test`;
-- `pnpm --filter @noah/runtime-web build`;
-- `pnpm --filter @noah/runtime-web test`;
+- `pnpm --filter @vrata/room-state test`;
+- `pnpm --filter @vrata/runtime-web build`;
+- `pnpm --filter @vrata/runtime-web test`;
 - `pnpm exec playwright test tests/e2e/m1-media --workers=1`;
 - full local `pnpm test:e2e`;
 - after deploy: `pnpm test:e2e:staging` and focused `media-surface-kernel` staging run.

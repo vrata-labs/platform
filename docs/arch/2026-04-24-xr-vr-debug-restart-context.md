@@ -30,7 +30,7 @@
 - XR HUD в runtime,
 - `/api/rooms/:roomId/xr-telemetry` admin endpoint,
 - event-first telemetry history,
-- synthetic XR test hook `__NOAH_TEST__.setSyntheticXrState(...)`.
+- synthetic XR test hook `__VRATA_TEST__.setSyntheticXrState(...)`.
 - Важное организационное ограничение: `Staging Deploy` workflow часто падал не из-за кода, а из-за запуска с short SHA вместо exact remote SHA. Для deploy нужно использовать exact SHA из `git ls-remote origin deploy/scene-bundles-stage-20260328`.
 
 ## Подход
@@ -81,7 +81,7 @@
 
 ### B. Подтвердить, что latest XR instrumentation реально на staging
 
-- [ ] Открыть canonical `BlueOffice` room на staging и через Playwright проверить наличие `__NOAH_TEST__.setSyntheticXrState`.
+- [ ] Открыть canonical `BlueOffice` room на staging и через Playwright проверить наличие `__VRATA_TEST__.setSyntheticXrState`.
 - [ ] Проверить, что synthetic XR self-check всё ещё проходит на live staging после последнего deploy.
 - [ ] Не двигаться дальше, пока synthetic XR path на текущем build не подтверждён.
 

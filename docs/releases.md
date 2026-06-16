@@ -1,6 +1,6 @@
 # Releases
 
-Noah uses SemVer: `MAJOR.MINOR.PATCH`.
+Vrata uses SemVer: `MAJOR.MINOR.PATCH`.
 
 ## Version Policy
 

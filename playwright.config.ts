@@ -20,16 +20,16 @@ export default defineConfig({
     trace: process.env.PLAYWRIGHT_TRACE === "1" ? "retain-on-failure" : "off"
   },
   webServer: useWebServer ? {
-    command: "bash -lc 'node apps/remote-browser/dist/index.js >/tmp/noah-remote-browser.log 2>&1 & node apps/room-state/dist/index.js >/tmp/noah-room-state.log 2>&1 & node apps/api/dist/index.js'",
+    command: "bash -lc 'node apps/remote-browser/dist/index.js >/tmp/vrata-remote-browser.log 2>&1 & node apps/room-state/dist/index.js >/tmp/vrata-room-state.log 2>&1 & node apps/api/dist/index.js'",
     url: "http://127.0.0.1:4000/health",
     reuseExistingServer: true,
     env: {
-      NOAH_DISABLE_AUTOSTART: "0",
+      VRATA_DISABLE_AUTOSTART: "0",
       CONTROL_PLANE_ADMIN_TOKEN: "test-admin-token",
       FEATURE_AVATAR_POSE_BINARY: "true",
       REMOTE_BROWSER_INTERNAL_URL: "http://127.0.0.1:4010",
       REMOTE_BROWSER_PUBLIC_URL: "ws://127.0.0.1:4010",
-      NOAH_INTERNAL_SERVICE_TOKEN: "test-internal-token",
+      VRATA_INTERNAL_SERVICE_TOKEN: "test-internal-token",
       API_INTERNAL_URL: "http://127.0.0.1:4000",
       ROOM_STATE_INTERNAL_URL: "http://127.0.0.1:2567",
       REMOTE_BROWSER_VIEWPORT_MOCK: "1",

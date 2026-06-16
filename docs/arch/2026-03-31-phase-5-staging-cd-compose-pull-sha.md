@@ -2,7 +2,7 @@
 
 ## Цель
 
-Перевести staging deploy `noah` с workspace/build-based path на reproducible CD path из registry: staging VM должна получать конкретные Docker images по immutable SHA tags и обновляться через `docker compose pull && docker compose up -d`, а GitHub Actions должен уметь запускать этот rollout по SSH и проверять базовый post-deploy smoke.
+Перевести staging deploy `vrata` с workspace/build-based path на reproducible CD path из registry: staging VM должна получать конкретные Docker images по immutable SHA tags и обновляться через `docker compose pull && docker compose up -d`, а GitHub Actions должен уметь запускать этот rollout по SSH и проверять базовый post-deploy smoke.
 
 ## Не-цель
 
@@ -16,9 +16,9 @@
 
 - Phase 1-4 уже завершены: Dockerfiles есть, compose staging работает, storage abstraction работает, GitHub Actions публикует образы в `Yandex Container Registry`.
 - Live registry contract уже существует:
-  - `cr.yandex/crp9cm29k6p76hqo8lti/noah-api`
-  - `cr.yandex/crp9cm29k6p76hqo8lti/noah-room-state`
-- Current staging VM — `noah-stage-compose-v11` (`89.169.161.91`), и сейчас она все еще может собирать образы локально из checkout на VM.
+  - `cr.yandex/crp9cm29k6p76hqo8lti/vrata-api`
+  - `cr.yandex/crp9cm29k6p76hqo8lti/vrata-room-state`
+- Current staging VM — `vrata-stage-compose-v11` (`89.169.161.91`), и сейчас она все еще может собирать образы локально из checkout на VM.
 - Goal этой фазы по roadmap: staging VM должна перейти на registry-based deploy path, а не продолжать `docker compose build` как основной путь.
 - В этой фазе post-deploy verification ограничивается health/shell/control-plane smoke; full staging e2e gate остается на Phase 6.
 - Deploy source of truth должен быть только immutable SHA image tag; alias tags не используются как deploy input.

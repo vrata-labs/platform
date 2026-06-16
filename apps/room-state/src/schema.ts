@@ -1,4 +1,4 @@
-import type { RoomPermission, RoomRole } from "@noah/shared-types";
+import type { RoomPermission, RoomRole } from "@vrata/shared-types";
 
 export interface TransformState {
   x: number;

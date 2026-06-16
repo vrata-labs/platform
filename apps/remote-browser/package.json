@@ -1,10 +1,10 @@
 {
-  "name": "@noah/remote-browser",
+  "name": "@vrata/remote-browser",
   "private": true,
   "version": "0.1.0",
   "type": "module",
   "dependencies": {
-    "@noah/shared-types": "workspace:*",
+    "@vrata/shared-types": "workspace:*",
     "livekit-client": "^2.15.6",
     "playwright-core": "^1.58.2",
     "ws": "^8.18.3"
@@ -16,7 +16,7 @@
     "dev": "node --watch src/index.ts",
     "build": "tsc -p tsconfig.json",
     "lint": "tsc -p tsconfig.json --noEmit",
-    "test": "NOAH_DISABLE_AUTOSTART=1 node --test dist/**/*.test.js",
+    "test": "VRATA_DISABLE_AUTOSTART=1 node --test dist/**/*.test.js",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   }
 }

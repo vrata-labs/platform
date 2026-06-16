@@ -69,7 +69,7 @@ function isExcludedFromSceneBounds(object: THREE.Object3D): boolean {
   let current: THREE.Object3D | null = object;
   while (current) {
     const userData = current.userData as Record<string, unknown>;
-    if (userData.noahExcludeFromSceneBounds === true || userData.excludeFromSceneBounds === true) {
+    if (userData.vrataExcludeFromSceneBounds === true || userData.excludeFromSceneBounds === true) {
       return true;
     }
     if (current.name.includes("panorama-sphere") || current.name.includes("skybox")) {

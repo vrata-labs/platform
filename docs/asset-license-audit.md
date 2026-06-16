@@ -1,6 +1,6 @@
 # Asset License Audit
 
-This document tracks publishability of runtime assets before Noah can be released as a public open source project.
+This document tracks publishability of runtime assets before Vrata can be released as a public open source project.
 
 ## Policy
 
@@ -13,23 +13,23 @@ This document tracks publishability of runtime assets before Noah can be release
 
 - Cleared for public release: `livadia-nicholas-office-v1`, `the-hall-v1`, `the-office-v1`, and avatar recipe/catalog metadata JSON.
 - Removed from the public tree: all `sense-*` scene bundles.
-- Private scene asset repository: `psilon2000/noah-scene-assets-private`, initial snapshot commit `ea04324`.
+- Private scene asset repository: `psilon2000/vrata-scene-assets-private`, initial snapshot commit `ea04324`.
 - Public `v0.1.0` release must use a clean public import/mirror rather than publishing the existing repository history, because removed assets still exist in older private history.
 
 ## Inventory
 
 | Path | Source / Provenance | Status | Required Action |
 | --- | --- | --- | --- |
-| `apps/runtime-web/public/assets/scenes/livadia-nicholas-office-v1` | Original procedural Noah scene; has `LICENSES.md` | cleared | Keep in public release |
-| `apps/runtime-web/public/assets/avatars/catalog.v1.json` | Noah avatar catalog metadata; no binary pack or thumbnails are present in the public tree | cleared | Keep in public release |
-| `apps/runtime-web/public/assets/avatars/avatar-recipes.v1.json` | Noah avatar recipe metadata authored for procedural/debug avatar flow | cleared | Keep in public release |
-| `apps/runtime-web/public/assets/scenes/the-hall-v1` | Tiny inline GLTF fixture authored for Noah e2e coverage; has `LICENSES.md` | cleared | Keep in public release |
-| `apps/runtime-web/public/assets/scenes/the-office-v1` | Tiny inline GLTF fixture authored for Noah e2e coverage; has `LICENSES.md` | cleared | Keep in public release |
-| `apps/runtime-web/public/assets/scenes/sense-*` | Sense/research exports and SenseTower-derived scene assets | removed from public HEAD; not cleared | Kept only in private repo `psilon2000/noah-scene-assets-private` |
+| `apps/runtime-web/public/assets/scenes/livadia-nicholas-office-v1` | Original procedural Vrata scene; has `LICENSES.md` | cleared | Keep in public release |
+| `apps/runtime-web/public/assets/avatars/catalog.v1.json` | Vrata avatar catalog metadata; no binary pack or thumbnails are present in the public tree | cleared | Keep in public release |
+| `apps/runtime-web/public/assets/avatars/avatar-recipes.v1.json` | Vrata avatar recipe metadata authored for procedural/debug avatar flow | cleared | Keep in public release |
+| `apps/runtime-web/public/assets/scenes/the-hall-v1` | Tiny inline GLTF fixture authored for Vrata e2e coverage; has `LICENSES.md` | cleared | Keep in public release |
+| `apps/runtime-web/public/assets/scenes/the-office-v1` | Tiny inline GLTF fixture authored for Vrata e2e coverage; has `LICENSES.md` | cleared | Keep in public release |
+| `apps/runtime-web/public/assets/scenes/sense-*` | Sense/research exports and SenseTower-derived scene assets | removed from public HEAD; not cleared | Kept only in private repo `psilon2000/vrata-scene-assets-private` |
 
 ## Recommended Public `0.1` Cut
 
-- Keep source code and generated/original Noah assets.
+- Keep source code and generated/original Vrata assets.
 - Keep `livadia-nicholas-office-v1` as the main public sample scene.
 - Keep documented `the-hall-v1` and `the-office-v1` e2e fixtures.
 - Keep all `sense-*` bundles outside the public platform tree unless explicit redistribution rights are confirmed.

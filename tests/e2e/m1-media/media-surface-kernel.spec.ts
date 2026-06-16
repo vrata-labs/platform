@@ -27,7 +27,7 @@ function roomUrl(roomId: string, role: "guest" | "member" | "host") {
 }
 
 async function readDebug(page: Page): Promise<MediaKernelDebug | undefined> {
-  return page.evaluate(() => (window as Window & { __NOAH_DEBUG__?: MediaKernelDebug }).__NOAH_DEBUG__);
+  return page.evaluate(() => (window as Window & { __VRATA_DEBUG__?: MediaKernelDebug }).__VRATA_DEBUG__);
 }
 
 async function waitForKernel(page: Page, role: "guest" | "member" | "host") {
@@ -50,8 +50,8 @@ async function waitForKernel(page: Page, role: "guest" | "member" | "host") {
 
 async function createTestCard(page: Page) {
   const sent = await page.evaluate(() => (window as Window & {
-    __NOAH_TEST__?: { createSurfaceTestCard: () => boolean };
-  }).__NOAH_TEST__?.createSurfaceTestCard() ?? false);
+    __VRATA_TEST__?: { createSurfaceTestCard: () => boolean };
+  }).__VRATA_TEST__?.createSurfaceTestCard() ?? false);
   expect(sent).toBe(true);
 }
 
@@ -101,8 +101,8 @@ test("M1.3 host creates test card and member input syncs counter", async ({ brow
     }).toBe("surface-test-card");
 
     const sentInput = await member.evaluate(() => (window as Window & {
-      __NOAH_TEST__?: { sendDebugSurfaceInput: (input?: { kind?: string; u?: number; v?: number }) => boolean };
-    }).__NOAH_TEST__?.sendDebugSurfaceInput({ kind: "click", u: 0.5, v: 0.5 }) ?? false);
+      __VRATA_TEST__?: { sendDebugSurfaceInput: (input?: { kind?: string; u?: number; v?: number }) => boolean };
+    }).__VRATA_TEST__?.sendDebugSurfaceInput({ kind: "click", u: 0.5, v: 0.5 }) ?? false);
     expect(sentInput).toBe(true);
 
     await expect.poll(async () => {
@@ -121,8 +121,8 @@ test("M1.3 host creates test card and member input syncs counter", async ({ brow
     });
 
     const stopped = await host.evaluate(() => (window as Window & {
-      __NOAH_TEST__?: { stopActiveSurfaceObject: () => boolean };
-    }).__NOAH_TEST__?.stopActiveSurfaceObject() ?? false);
+      __VRATA_TEST__?: { stopActiveSurfaceObject: () => boolean };
+    }).__VRATA_TEST__?.stopActiveSurfaceObject() ?? false);
     expect(stopped).toBe(true);
 
     await expect.poll(async () => {
@@ -146,8 +146,8 @@ test("M1.3 rejects unknown type, occupied surface, and stale patch", async ({ pa
   await waitForKernel(page, "host");
 
   const unknownSent = await page.evaluate(() => (window as Window & {
-    __NOAH_TEST__?: { createUnknownSurfaceObject: () => boolean };
-  }).__NOAH_TEST__?.createUnknownSurfaceObject() ?? false);
+    __VRATA_TEST__?: { createUnknownSurfaceObject: () => boolean };
+  }).__VRATA_TEST__?.createUnknownSurfaceObject() ?? false);
   expect(unknownSent).toBe(true);
   await expect.poll(async () => (await readDebug(page))?.mediaObjects?.blockedReason ?? null, {
     timeout: 10000,
@@ -167,8 +167,8 @@ test("M1.3 rejects unknown type, occupied surface, and stale patch", async ({ pa
   }).toBe("surface-occupied");
 
   const staleSent = await page.evaluate(() => (window as Window & {
-    __NOAH_TEST__?: { sendStaleSurfaceTestCardPatch: () => boolean };
-  }).__NOAH_TEST__?.sendStaleSurfaceTestCardPatch() ?? false);
+    __VRATA_TEST__?: { sendStaleSurfaceTestCardPatch: () => boolean };
+  }).__VRATA_TEST__?.sendStaleSurfaceTestCardPatch() ?? false);
   expect(staleSent).toBe(true);
   await expect.poll(async () => (await readDebug(page))?.mediaObjects?.blockedReason ?? null, {
     timeout: 10000,

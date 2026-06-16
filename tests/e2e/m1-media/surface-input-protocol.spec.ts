@@ -29,7 +29,7 @@ type SurfaceDebug = {
 };
 
 async function readDebug(page: Page): Promise<SurfaceDebug | undefined> {
-  return page.evaluate(() => (window as Window & { __NOAH_DEBUG__?: SurfaceDebug }).__NOAH_DEBUG__);
+  return page.evaluate(() => (window as Window & { __VRATA_DEBUG__?: SurfaceDebug }).__VRATA_DEBUG__);
 }
 
 async function waitForAccess(page: Page, role: "guest" | "member" | "host") {
@@ -123,10 +123,10 @@ test("M1.2 synthetic XR input uses the same surface input protocol", async ({ pa
   await waitForAccess(page, "member");
 
   const sent = await page.evaluate(() => (window as Window & {
-    __NOAH_TEST__?: {
+    __VRATA_TEST__?: {
       sendDebugSurfaceInput: (input?: { source?: string; kind?: string; u?: number; v?: number }) => boolean;
     };
-  }).__NOAH_TEST__?.sendDebugSurfaceInput({ source: "xr-controller", kind: "pointer-down", u: 0.5, v: 0.5 }) ?? false);
+  }).__VRATA_TEST__?.sendDebugSurfaceInput({ source: "xr-controller", kind: "pointer-down", u: 0.5, v: 0.5 }) ?? false);
   expect(sent).toBe(true);
 
   await expect.poll(async () => {
@@ -152,11 +152,11 @@ test("M1.2 disabled debug surface rejects input", async ({ page }) => {
 
   const sent = await page.evaluate(() => {
     const api = (window as Window & {
-      __NOAH_TEST__?: {
+      __VRATA_TEST__?: {
         setDebugSurfaceInputEnabled: (enabled: boolean) => boolean;
         sendDebugSurfaceInput: () => boolean;
       };
-    }).__NOAH_TEST__;
+    }).__VRATA_TEST__;
     api?.setDebugSurfaceInputEnabled(false);
     return api?.sendDebugSurfaceInput() ?? false;
   });

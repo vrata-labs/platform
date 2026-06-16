@@ -27,9 +27,12 @@ jobs:
       STAGING_SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
       STAGING_SSH_USER: ${{ secrets.STAGING_SSH_USER }}
       STAGING_BASE_URL: ${{ secrets.STAGING_BASE_URL }}
+      STAGING_APP_DIR: ${{ secrets.STAGING_APP_DIR }}
+      PRIVATE_SCENE_ASSETS_REPOSITORY: ${{ secrets.PRIVATE_SCENE_ASSETS_REPOSITORY }}
+      PRIVATE_SCENE_ASSETS_HOST_DIR: ${{ secrets.PRIVATE_SCENE_ASSETS_HOST_DIR }}
+      STAGING_ADMIN_TOKEN: ${{ secrets.STAGING_ADMIN_TOKEN }}
       YCR_USERNAME: ${{ secrets.YCR_USERNAME }}
       YCR_PASSWORD: ${{ secrets.YCR_PASSWORD }}
-      STAGING_SUCCESSFUL_SHA_FILE: /opt/noah/infra/docker/.staging-successful-image-tag
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -67,7 +70,7 @@ jobs:
       - name: Checkout private scene assets
         uses: actions/checkout@v4
         with:
-          repository: psilon2000/noah-scene-assets-private
+          repository: ${{ env.PRIVATE_SCENE_ASSETS_REPOSITORY }}
           ref: main
           ssh-key: ${{ secrets.PRIVATE_SCENE_ASSETS_DEPLOY_KEY }}
           path: private-scene-assets
@@ -79,7 +82,8 @@ jobs:
       - name: Determine previous successful SHA
         id: previous
         run: |
-          PREVIOUS_SHA="$(ssh -o StrictHostKeyChecking=no "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo bash -lc 'if [ -f \"$STAGING_SUCCESSFUL_SHA_FILE\" ]; then cat \"$STAGING_SUCCESSFUL_SHA_FILE\"; else grep -E \"^IMAGE_TAG=\" /opt/noah/infra/docker/.env.staging | cut -d= -f2; fi'")"
+          SUCCESSFUL_SHA_FILE="$STAGING_APP_DIR/infra/docker/.staging-successful-image-tag"
+          PREVIOUS_SHA="$(ssh -o StrictHostKeyChecking=no "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo bash -lc 'if [ -f \"$SUCCESSFUL_SHA_FILE\" ]; then cat \"$SUCCESSFUL_SHA_FILE\"; else grep -E \"^IMAGE_TAG=\" \"$STAGING_APP_DIR/infra/docker/.env.staging\" | cut -d= -f2; fi'")"
           if [ -z "$PREVIOUS_SHA" ]; then
             echo "rollback_precondition_failed: missing previous successful sha" >&2
             exit 1
@@ -94,7 +98,7 @@ jobs:
       - name: Upload private scene assets to staging host
         run: |
           test -f private-scene-assets/assets/manifest.json
-          tar -C private-scene-assets/assets -czf - . | ssh -o StrictHostKeyChecking=no "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo bash -lc 'rm -rf /opt/noah-private-scene-assets && mkdir -p /opt/noah-private-scene-assets/assets && tar -xzf - -C /opt/noah-private-scene-assets/assets'"
+          tar -C private-scene-assets/assets -czf - . | ssh -o StrictHostKeyChecking=no "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo bash -lc 'rm -rf \"$PRIVATE_SCENE_ASSETS_HOST_DIR\" && mkdir -p \"$PRIVATE_SCENE_ASSETS_HOST_DIR/assets\" && tar -xzf - -C \"$PRIVATE_SCENE_ASSETS_HOST_DIR/assets\"'"
 
       - name: Roll out staging images
         env:
@@ -103,11 +107,11 @@ jobs:
           YCR_PASSWORD_B64="$(printf '%s' "$YCR_PASSWORD" | base64 -w0)"
           ssh -o StrictHostKeyChecking=no "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo bash -s" <<EOF
           set -euo pipefail
-          cd /opt/noah
-          git -c safe.directory=/opt/noah fetch origin
-          git -c safe.directory=/opt/noah checkout ${DEPLOY_SHA}
+          cd "$STAGING_APP_DIR"
+          git -c safe.directory="$STAGING_APP_DIR" fetch origin
+          git -c safe.directory="$STAGING_APP_DIR" checkout ${DEPLOY_SHA}
           printf '%s' '${YCR_PASSWORD_B64}' | base64 -d | docker login cr.yandex --username '${YCR_USERNAME}' --password-stdin
-          bash ./infra/docker/rollout-staging-images.sh ${DEPLOY_SHA}
+          VRATA_PRIVATE_SCENE_ASSETS_ROOT="$PRIVATE_SCENE_ASSETS_HOST_DIR/assets" bash ./infra/docker/rollout-staging-images.sh ${DEPLOY_SHA}
           EOF
 
       - name: Install Playwright browser
@@ -116,12 +120,12 @@ jobs:
       - name: Patch canonical staging scene bundles
         env:
           BASE_URL: ${{ env.STAGING_BASE_URL }}
-          STAGING_ADMIN_TOKEN: noah-stage-admin
+          STAGING_ADMIN_TOKEN: ${{ env.STAGING_ADMIN_TOKEN }}
           STAGING_HALL_ROOM_ID: 42db8225-f671-4e46-9c28-9381d66a948c
           STAGING_BLUEOFFICE_ROOM_ID: 0b537d34-7b92-4b51-854a-8c64cfb4c114
           STAGING_SCENE_BUNDLE_BRANCH: deploy/scene-bundles-stage-20260328
           STAGING_SCENE_BUNDLE_VERSION: ${{ steps.deploy.outputs.deploy_sha }}
-          STAGING_SCENE_BUNDLE_PATCH_REPORT: /tmp/noah-scene-bundle-patch-report.json
+          STAGING_SCENE_BUNDLE_PATCH_REPORT: /tmp/vrata-scene-bundle-patch-report.json
         run: node tools/patch-staging-scene-bundles.mjs
 
       - name: Verification gate
@@ -144,12 +148,12 @@ jobs:
           STAGING_OPORARUSSIA_ROOM_ID: d686c23e-78b5-4f55-a47f-b380114d5d1a
           STAGING_SERGOFFICE_ROOM_ID: ba67301b-14f4-4c88-ba7f-2b63e0c1c332
           STAGING_CINEMAMODELER_ROOM_ID: c28e17b5-7b26-408b-926e-aa93fef9915e
-          STAGING_ADMIN_TOKEN: noah-stage-admin
+          STAGING_ADMIN_TOKEN: ${{ env.STAGING_ADMIN_TOKEN }}
           STAGING_SCENE_BUNDLE_VERSION: ${{ steps.deploy.outputs.deploy_sha }}
           PLAYWRIGHT_REPORT_NAME: staging-gate
         run: |
           for attempt in $(seq 1 30); do
-            if curl --fail --silent "$STAGING_BASE_URL/health" >/tmp/noah-staging-health.json; then
+            if curl --fail --silent "$STAGING_BASE_URL/health" >/tmp/vrata-staging-health.json; then
               break
             fi
             sleep 10
@@ -179,7 +183,8 @@ jobs:
         env:
           DEPLOY_SHA: ${{ steps.deploy.outputs.deploy_sha }}
         run: |
-          ssh -o StrictHostKeyChecking=no "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo bash -lc 'printf %s \"$DEPLOY_SHA\" > \"$STAGING_SUCCESSFUL_SHA_FILE\"'"
+          SUCCESSFUL_SHA_FILE="$STAGING_APP_DIR/infra/docker/.staging-successful-image-tag"
+          ssh -o StrictHostKeyChecking=no "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo bash -lc 'printf %s \"$DEPLOY_SHA\" > \"$SUCCESSFUL_SHA_FILE\"'"
           {
             echo "- verification gate: success"
             echo "- persisted successful sha: \`$DEPLOY_SHA\`"
@@ -193,11 +198,11 @@ jobs:
           YCR_PASSWORD_B64="$(printf '%s' "$YCR_PASSWORD" | base64 -w0)"
           ssh -o StrictHostKeyChecking=no "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo bash -s" <<EOF
           set -euo pipefail
-          cd /opt/noah
-          git -c safe.directory=/opt/noah checkout ${ROLLBACK_SHA}
+          cd "$STAGING_APP_DIR"
+          git -c safe.directory="$STAGING_APP_DIR" checkout ${ROLLBACK_SHA}
           printf '%s' '${YCR_PASSWORD_B64}' | base64 -d | docker login cr.yandex --username '${YCR_USERNAME}' --password-stdin
-          bash ./infra/docker/rollout-staging-images.sh ${ROLLBACK_SHA}
-          printf '%s' '${ROLLBACK_SHA}' > '${STAGING_SUCCESSFUL_SHA_FILE}'
+          VRATA_PRIVATE_SCENE_ASSETS_ROOT="$PRIVATE_SCENE_ASSETS_HOST_DIR/assets" bash ./infra/docker/rollout-staging-images.sh ${ROLLBACK_SHA}
+          printf '%s' '${ROLLBACK_SHA}' > "$STAGING_APP_DIR/infra/docker/.staging-successful-image-tag"
           EOF
           curl --fail --silent "$STAGING_BASE_URL/health" >/dev/null
           curl --fail --silent "$STAGING_BASE_URL/rooms/demo-room" >/dev/null
@@ -211,10 +216,10 @@ jobs:
         if: steps.gate.outcome == 'failure'
         env:
           BASE_URL: ${{ env.STAGING_BASE_URL }}
-          STAGING_ADMIN_TOKEN: noah-stage-admin
+          STAGING_ADMIN_TOKEN: ${{ env.STAGING_ADMIN_TOKEN }}
         run: |
-          if [ -f /tmp/noah-scene-bundle-patch-report.json ]; then
-            node tools/patch-staging-scene-bundles.mjs --restore-report /tmp/noah-scene-bundle-patch-report.json
+          if [ -f /tmp/vrata-scene-bundle-patch-report.json ]; then
+            node tools/patch-staging-scene-bundles.mjs --restore-report /tmp/vrata-scene-bundle-patch-report.json
           fi
 
       - name: Fail after rollback

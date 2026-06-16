@@ -2,7 +2,7 @@ services:
   postgres:
     image: postgres:16
     environment:
-      POSTGRES_DB: noah
+      POSTGRES_DB: vrata
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
     ports:

@@ -1,10 +1,10 @@
-# Noah
+# Vrata
 
-Noah is a web-native immersive room platform. The project is moving toward a public open source `0.1` beta focused on self-hosted rooms, browser-first access, scene bundles, real-time presence, voice, and extensible collaboration surfaces.
+Vrata is a web-native immersive room platform. The project is moving toward a public open source `0.1` beta focused on self-hosted rooms, browser-first access, scene bundles, real-time presence, voice, and extensible collaboration surfaces.
 
 `0.1` is not a production SLA release. Treat it as an early platform baseline for experimentation, demos, and self-hosted evaluation.
 
-## What Noah Includes
+## What Vrata Includes
 
 - Web runtime in `apps/runtime-web` built around Three.js and WebXR progressive enhancement.
 - API/control plane in `apps/api` and `apps/control-plane` for rooms, templates, assets, and scene bundle metadata.
@@ -63,7 +63,7 @@ docker compose --env-file infra/docker/.env.selfhost.example -f infra/docker/com
 
 ## Development Workflow
 
-Noah uses GitHub Flow for the public path:
+Vrata uses GitHub Flow for the public path:
 
 - create a short-lived branch from `main`;
 - open a pull request;
@@ -75,6 +75,6 @@ See `CONTRIBUTING.md` for details.
 
 ## License
 
-Noah source code is licensed under Apache-2.0. See `LICENSE`.
+Vrata source code is licensed under Apache-2.0. See `LICENSE`.
 
 Bundled assets may have separate licensing requirements. Public release remains blocked until the asset license audit is complete and non-redistributable assets are removed or isolated.

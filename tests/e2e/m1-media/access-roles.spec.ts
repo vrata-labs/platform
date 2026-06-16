@@ -2,7 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 
 async function readAccessDebug(page: Page) {
   return page.evaluate(() => (window as Window & {
-    __NOAH_DEBUG__?: {
+    __VRATA_DEBUG__?: {
       roomStateConnected?: boolean;
       access?: {
         role?: string;
@@ -14,7 +14,7 @@ async function readAccessDebug(page: Page) {
         lastSurfaceCommandAccepted?: boolean | null;
       };
     };
-  }).__NOAH_DEBUG__);
+  }).__VRATA_DEBUG__);
 }
 
 async function waitForAccess(page: Page, role: "guest" | "host") {
@@ -45,8 +45,8 @@ test("M1.1 guest has guest role and cannot use host controls", async ({ page }) 
   await expect(page.locator("#start-share")).toBeHidden();
 
   const sent = await page.evaluate(() => (window as Window & {
-    __NOAH_TEST__?: { sendPrivilegedSurfaceCreate: () => boolean };
-  }).__NOAH_TEST__?.sendPrivilegedSurfaceCreate() ?? false);
+    __VRATA_TEST__?: { sendPrivilegedSurfaceCreate: () => boolean };
+  }).__VRATA_TEST__?.sendPrivilegedSurfaceCreate() ?? false);
   expect(sent).toBe(true);
 
   await expect.poll(async () => {
@@ -69,8 +69,8 @@ test("M1.1 host role exposes host controls and privileged action", async ({ page
   await expect(page.locator("#start-share")).toBeEnabled();
 
   const sent = await page.evaluate(() => (window as Window & {
-    __NOAH_TEST__?: { sendPrivilegedSurfaceCreate: () => boolean };
-  }).__NOAH_TEST__?.sendPrivilegedSurfaceCreate() ?? false);
+    __VRATA_TEST__?: { sendPrivilegedSurfaceCreate: () => boolean };
+  }).__VRATA_TEST__?.sendPrivilegedSurfaceCreate() ?? false);
   expect(sent).toBe(true);
 
   await expect.poll(async () => {

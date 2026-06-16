@@ -24,13 +24,13 @@ This runbook explains how to diagnose and mitigate room runtime failures in `dev
    - `dependencies.livekit`
    - `dependencies.roomStatePublicUrl`
 3. Open room-state health: `http://127.0.0.1:2567/health` locally or the staging room-state endpoint if exposed.
-4. Load a room with `?debug=1` and inspect `window.__NOAH_DEBUG__`.
+4. Load a room with `?debug=1` and inspect `window.__VRATA_DEBUG__`.
 
 ## Main signals
 
 - `status-line` in the room UI
 - `room-state-line` in the room UI
-- `window.__NOAH_DEBUG__`
+- `window.__VRATA_DEBUG__`
 - `POST /api/rooms/:roomId/diagnostics` records
 - JSON logs from `apps/api`
 - JSON logs from `apps/room-state`

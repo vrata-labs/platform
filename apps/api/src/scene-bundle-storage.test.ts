@@ -6,10 +6,10 @@ import { getSceneBundleProviderConfig, resolveSceneBundlePublicUrl } from "./sce
 test("minio default provider resolves public URL", () => {
   const url = resolveSceneBundlePublicUrl("scenes/demo/v1/scene.json", {
     MINIO_PUBLIC_BASE_URL: "http://127.0.0.1:9000",
-    MINIO_BUCKET: "noah-scene-bundles"
+    MINIO_BUCKET: "vrata-scene-bundles"
   } as NodeJS.ProcessEnv);
 
-  assert.equal(url, "http://127.0.0.1:9000/noah-scene-bundles/scenes/demo/v1/scene.json");
+  assert.equal(url, "http://127.0.0.1:9000/vrata-scene-bundles/scenes/demo/v1/scene.json");
 });
 
 test("s3-compatible provider resolves public URL", () => {
@@ -17,23 +17,23 @@ test("s3-compatible provider resolves public URL", () => {
     SCENE_BUNDLE_PROVIDER: "s3-compatible",
     SCENE_BUNDLE_S3_ENDPOINT: "https://storage.yandexcloud.net",
     SCENE_BUNDLE_S3_REGION: "ru-central1",
-    SCENE_BUNDLE_S3_BUCKET: "noah-scene-bundles",
-    SCENE_BUNDLE_S3_PUBLIC_BASE_URL: "https://storage.example.com/noah-scene-bundles"
+    SCENE_BUNDLE_S3_BUCKET: "vrata-scene-bundles",
+    SCENE_BUNDLE_S3_PUBLIC_BASE_URL: "https://storage.example.com/vrata-scene-bundles"
   } as NodeJS.ProcessEnv, "s3-compatible");
 
-  assert.equal(url, "https://storage.example.com/noah-scene-bundles/scenes/demo/v2/scene.json");
+  assert.equal(url, "https://storage.example.com/vrata-scene-bundles/scenes/demo/v2/scene.json");
 });
 
 test("provider config fails fast when required env is missing", () => {
   assert.throws(
-    () => getSceneBundleProviderConfig({ MINIO_BUCKET: "noah-scene-bundles" } as NodeJS.ProcessEnv),
+    () => getSceneBundleProviderConfig({ MINIO_BUCKET: "vrata-scene-bundles" } as NodeJS.ProcessEnv),
     /misconfigured_storage_provider:minio-default/
   );
 
   assert.throws(
     () => getSceneBundleProviderConfig({
       SCENE_BUNDLE_PROVIDER: "s3-compatible",
-      SCENE_BUNDLE_S3_PUBLIC_BASE_URL: "https://storage.example.com/noah-scene-bundles"
+      SCENE_BUNDLE_S3_PUBLIC_BASE_URL: "https://storage.example.com/vrata-scene-bundles"
     } as NodeJS.ProcessEnv, "s3-compatible"),
     /misconfigured_storage_provider:s3-compatible/
   );

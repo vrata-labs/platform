@@ -2,15 +2,15 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 test("api module exports server starter", async () => {
-  process.env.NOAH_DISABLE_AUTOSTART = "1";
+  process.env.VRATA_DISABLE_AUTOSTART = "1";
   const module = await import("./index.js");
   assert.equal(typeof module.startApiServer, "function");
   assert.equal(typeof module.getMissingRequiredApiEnvVars, "function");
-  delete process.env.NOAH_DISABLE_AUTOSTART;
+  delete process.env.VRATA_DISABLE_AUTOSTART;
 });
 
 test("api production env validator reports missing required vars", async () => {
-  process.env.NOAH_DISABLE_AUTOSTART = "1";
+  process.env.VRATA_DISABLE_AUTOSTART = "1";
   const module = await import("./index.js");
 
   assert.deepEqual(
@@ -24,11 +24,11 @@ test("api production env validator reports missing required vars", async () => {
     ["CONTROL_PLANE_ADMIN_TOKEN", "RUNTIME_BASE_URL"]
   );
 
-  delete process.env.NOAH_DISABLE_AUTOSTART;
+  delete process.env.VRATA_DISABLE_AUTOSTART;
 });
 
 test("api health exposes env timestamp and dependencies", async () => {
-  process.env.NOAH_DISABLE_AUTOSTART = "1";
+  process.env.VRATA_DISABLE_AUTOSTART = "1";
   process.env.API_PORT = "4011";
   const module = await import("./index.js");
   const server = module.startApiServer(4011);
@@ -62,14 +62,14 @@ test("api health exposes env timestamp and dependencies", async () => {
     assert.equal(typeof payload.features?.avatarFallbackCapsulesEnabled, "boolean");
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
-    delete process.env.NOAH_DISABLE_AUTOSTART;
+    delete process.env.VRATA_DISABLE_AUTOSTART;
   }
 });
 
 test("state token resolves dev host role and falls back to guest when gated off", async () => {
-  process.env.NOAH_DISABLE_AUTOSTART = "1";
+  process.env.VRATA_DISABLE_AUTOSTART = "1";
   process.env.API_PORT = "4025";
-  process.env.NOAH_DEV_ROLE_QUERY = "true";
+  process.env.VRATA_DEV_ROLE_QUERY = "true";
   process.env.STATE_TOKEN_SECRET = "test-secret";
   const module = await import("./index.js");
   const server = module.startApiServer(4025);
@@ -86,7 +86,7 @@ test("state token resolves dev host role and falls back to guest when gated off"
     assert.equal(hostPayload.role, "host");
     assert.equal(hostPayload.access?.canStartScreenShare, true);
 
-    process.env.NOAH_DEV_ROLE_QUERY = "false";
+    process.env.VRATA_DEV_ROLE_QUERY = "false";
     const guestResponse = await fetch("http://127.0.0.1:4025/api/tokens/state", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -98,15 +98,15 @@ test("state token resolves dev host role and falls back to guest when gated off"
     assert.equal(guestPayload.access?.canStartScreenShare, false);
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
-    delete process.env.NOAH_DISABLE_AUTOSTART;
+    delete process.env.VRATA_DISABLE_AUTOSTART;
     delete process.env.API_PORT;
-    delete process.env.NOAH_DEV_ROLE_QUERY;
+    delete process.env.VRATA_DEV_ROLE_QUERY;
     delete process.env.STATE_TOKEN_SECRET;
   }
 });
 
 test("remote browser frame token endpoint returns websocket URL and short-lived token", async () => {
-  process.env.NOAH_DISABLE_AUTOSTART = "1";
+  process.env.VRATA_DISABLE_AUTOSTART = "1";
   process.env.API_PORT = "4026";
   process.env.REMOTE_BROWSER_PUBLIC_URL = "https://browser.89.169.161.91.sslip.io";
   process.env.REMOTE_BROWSER_TOKEN_SECRET = "remote-browser-test-secret";
@@ -140,7 +140,7 @@ test("remote browser frame token endpoint returns websocket URL and short-lived 
     assert.equal(typeof tokenPayload.exp, "number");
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
-    delete process.env.NOAH_DISABLE_AUTOSTART;
+    delete process.env.VRATA_DISABLE_AUTOSTART;
     delete process.env.API_PORT;
     delete process.env.REMOTE_BROWSER_PUBLIC_URL;
     delete process.env.REMOTE_BROWSER_TOKEN_SECRET;
@@ -149,7 +149,7 @@ test("remote browser frame token endpoint returns websocket URL and short-lived 
 });
 
 test("room manifest exposes optional scene bundle url", async () => {
-  process.env.NOAH_DISABLE_AUTOSTART = "1";
+  process.env.VRATA_DISABLE_AUTOSTART = "1";
   process.env.API_PORT = "4012";
   process.env.CONTROL_PLANE_ADMIN_TOKEN = "test-admin-token";
   const module = await import("./index.js");
@@ -160,7 +160,7 @@ test("room manifest exposes optional scene bundle url", async () => {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        "x-noah-admin-token": "test-admin-token"
+        "x-vrata-admin-token": "test-admin-token"
       },
       body: JSON.stringify({
         tenantId: "demo-tenant",
@@ -190,13 +190,13 @@ test("room manifest exposes optional scene bundle url", async () => {
       assert.equal(manifest.avatars?.avatarCustomizationEnabled, false);
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
-    delete process.env.NOAH_DISABLE_AUTOSTART;
+    delete process.env.VRATA_DISABLE_AUTOSTART;
     delete process.env.CONTROL_PLANE_ADMIN_TOKEN;
   }
 });
 
 test("room manifest exposes avatar config when enabled", async () => {
-  process.env.NOAH_DISABLE_AUTOSTART = "1";
+  process.env.VRATA_DISABLE_AUTOSTART = "1";
   process.env.API_PORT = "4017";
   process.env.CONTROL_PLANE_ADMIN_TOKEN = "test-admin-token";
   const module = await import("./index.js");
@@ -207,7 +207,7 @@ test("room manifest exposes avatar config when enabled", async () => {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        "x-noah-admin-token": "test-admin-token"
+        "x-vrata-admin-token": "test-admin-token"
       },
       body: JSON.stringify({
         tenantId: "demo-tenant",
@@ -249,13 +249,13 @@ test("room manifest exposes avatar config when enabled", async () => {
     assert.equal(manifest.avatars?.avatarCustomizationEnabled, false);
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
-    delete process.env.NOAH_DISABLE_AUTOSTART;
+    delete process.env.VRATA_DISABLE_AUTOSTART;
     delete process.env.CONTROL_PLANE_ADMIN_TOKEN;
   }
 });
 
 test("room manifest derives secure room-state url behind https proxy", async () => {
-  process.env.NOAH_DISABLE_AUTOSTART = "1";
+  process.env.VRATA_DISABLE_AUTOSTART = "1";
   process.env.API_PORT = "4020";
   process.env.CONTROL_PLANE_ADMIN_TOKEN = "test-admin-token";
   delete process.env.ROOM_STATE_PUBLIC_URL;
@@ -276,13 +276,13 @@ test("room manifest derives secure room-state url behind https proxy", async () 
     assert.equal(manifest.realtime?.roomStateUrl, "wss://state.89.169.161.91.sslip.io");
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
-    delete process.env.NOAH_DISABLE_AUTOSTART;
+    delete process.env.VRATA_DISABLE_AUTOSTART;
     delete process.env.CONTROL_PLANE_ADMIN_TOKEN;
   }
 });
 
 test("room manifest upgrades insecure configured room-state url behind https proxy", async () => {
-  process.env.NOAH_DISABLE_AUTOSTART = "1";
+  process.env.VRATA_DISABLE_AUTOSTART = "1";
   process.env.API_PORT = "4021";
   process.env.CONTROL_PLANE_ADMIN_TOKEN = "test-admin-token";
   process.env.ROOM_STATE_PUBLIC_URL = "ws://89.169.161.91:2567";
@@ -303,14 +303,14 @@ test("room manifest upgrades insecure configured room-state url behind https pro
     assert.equal(manifest.realtime?.roomStateUrl, "wss://state.89.169.161.91.sslip.io");
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
-    delete process.env.NOAH_DISABLE_AUTOSTART;
+    delete process.env.VRATA_DISABLE_AUTOSTART;
     delete process.env.CONTROL_PLANE_ADMIN_TOKEN;
     delete process.env.ROOM_STATE_PUBLIC_URL;
   }
 });
 
 test("xr telemetry endpoint stores latest runtime snapshot for admin inspection", async () => {
-  process.env.NOAH_DISABLE_AUTOSTART = "1";
+  process.env.VRATA_DISABLE_AUTOSTART = "1";
   process.env.API_PORT = "4024";
   process.env.CONTROL_PLANE_ADMIN_TOKEN = "test-admin-token";
   const module = await import("./index.js");
@@ -340,7 +340,7 @@ test("xr telemetry endpoint stores latest runtime snapshot for admin inspection"
 
     const getResponse = await fetch("http://127.0.0.1:4024/api/rooms/demo-room/xr-telemetry", {
       headers: {
-        "x-noah-admin-token": "test-admin-token"
+        "x-vrata-admin-token": "test-admin-token"
       }
     });
     assert.equal(getResponse.ok, true);
@@ -375,7 +375,7 @@ test("xr telemetry endpoint stores latest runtime snapshot for admin inspection"
 
     const secondGet = await fetch("http://127.0.0.1:4024/api/rooms/demo-room/xr-telemetry", {
       headers: {
-        "x-noah-admin-token": "test-admin-token"
+        "x-vrata-admin-token": "test-admin-token"
       }
     });
     const secondPayload = await secondGet.json() as {
@@ -406,7 +406,7 @@ test("xr telemetry endpoint stores latest runtime snapshot for admin inspection"
 
     const idleGet = await fetch("http://127.0.0.1:4024/api/rooms/demo-room/xr-telemetry", {
       headers: {
-        "x-noah-admin-token": "test-admin-token"
+        "x-vrata-admin-token": "test-admin-token"
       }
     });
     const idlePayload = await idleGet.json() as {
@@ -430,7 +430,7 @@ test("xr telemetry endpoint stores latest runtime snapshot for admin inspection"
 
     const repeatedSeatGet = await fetch("http://127.0.0.1:4024/api/rooms/demo-room/xr-telemetry", {
       headers: {
-        "x-noah-admin-token": "test-admin-token"
+        "x-vrata-admin-token": "test-admin-token"
       }
     });
     const repeatedSeatPayload = await repeatedSeatGet.json() as {
@@ -454,7 +454,7 @@ test("xr telemetry endpoint stores latest runtime snapshot for admin inspection"
 
     const repeatedSeatGetAgain = await fetch("http://127.0.0.1:4024/api/rooms/demo-room/xr-telemetry", {
       headers: {
-        "x-noah-admin-token": "test-admin-token"
+        "x-vrata-admin-token": "test-admin-token"
       }
     });
     const repeatedSeatPayloadAgain = await repeatedSeatGetAgain.json() as {
@@ -463,13 +463,13 @@ test("xr telemetry endpoint stores latest runtime snapshot for admin inspection"
     assert.equal(repeatedSeatPayloadAgain.items?.[0]?.history?.length, 3);
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
-    delete process.env.NOAH_DISABLE_AUTOSTART;
+    delete process.env.VRATA_DISABLE_AUTOSTART;
     delete process.env.CONTROL_PLANE_ADMIN_TOKEN;
   }
 });
 
 test("media token derives secure livekit url behind https proxy", async () => {
-  process.env.NOAH_DISABLE_AUTOSTART = "1";
+  process.env.VRATA_DISABLE_AUTOSTART = "1";
   process.env.API_PORT = "4022";
   process.env.LIVEKIT_URL = "ws://89.169.161.91:7880";
   const module = await import("./index.js");
@@ -495,15 +495,15 @@ test("media token derives secure livekit url behind https proxy", async () => {
     assert.equal(payload.livekitUrl, "wss://livekit.89.169.161.91.sslip.io");
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
-    delete process.env.NOAH_DISABLE_AUTOSTART;
+    delete process.env.VRATA_DISABLE_AUTOSTART;
     delete process.env.LIVEKIT_URL;
   }
 });
 
 test("remote browser media token requires internal auth and scoped publisher identity", async () => {
-  process.env.NOAH_DISABLE_AUTOSTART = "1";
+  process.env.VRATA_DISABLE_AUTOSTART = "1";
   process.env.API_PORT = "4027";
-  process.env.NOAH_INTERNAL_SERVICE_TOKEN = "internal-token";
+  process.env.VRATA_INTERNAL_SERVICE_TOKEN = "internal-token";
   process.env.LIVEKIT_URL = "ws://89.169.161.91:7880";
   const module = await import("./index.js");
   const server = module.startApiServer(4027);
@@ -525,7 +525,7 @@ test("remote browser media token requires internal auth and scoped publisher ide
       method: "POST",
       headers: {
         "content-type": "application/json",
-        "x-noah-internal-token": "internal-token",
+        "x-vrata-internal-token": "internal-token",
         "x-forwarded-proto": "https",
         "x-forwarded-host": "89.169.161.91.sslip.io"
       },
@@ -543,25 +543,25 @@ test("remote browser media token requires internal auth and scoped publisher ide
     assert.equal(payload.participantId, "remote-browser:browser-1");
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
-    delete process.env.NOAH_DISABLE_AUTOSTART;
-    delete process.env.NOAH_INTERNAL_SERVICE_TOKEN;
+    delete process.env.VRATA_DISABLE_AUTOSTART;
+    delete process.env.VRATA_INTERNAL_SERVICE_TOKEN;
     delete process.env.LIVEKIT_URL;
   }
 });
 
 test("remote browser media token can prefer public livekit url for secure captured pages", async () => {
-  process.env.NOAH_DISABLE_AUTOSTART = "1";
+  process.env.VRATA_DISABLE_AUTOSTART = "1";
   process.env.API_PORT = "4028";
-  process.env.NOAH_INTERNAL_SERVICE_TOKEN = "internal-token";
+  process.env.VRATA_INTERNAL_SERVICE_TOKEN = "internal-token";
   process.env.LIVEKIT_URL = "ws://89.169.161.91:7880";
-  process.env.NOAH_LIVEKIT_DOMAIN = "livekit.89.169.161.91.sslip.io";
+  process.env.VRATA_LIVEKIT_DOMAIN = "livekit.89.169.161.91.sslip.io";
   const module = await import("./index.js");
   const server = module.startApiServer(4028);
 
   try {
     const headers = {
       "content-type": "application/json",
-      "x-noah-internal-token": "internal-token"
+      "x-vrata-internal-token": "internal-token"
     };
     const basePayload = {
       roomId: "demo-room",
@@ -588,15 +588,15 @@ test("remote browser media token can prefer public livekit url for secure captur
     assert.equal(publicPayload.livekitUrl, "wss://livekit.89.169.161.91.sslip.io");
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
-    delete process.env.NOAH_DISABLE_AUTOSTART;
-    delete process.env.NOAH_INTERNAL_SERVICE_TOKEN;
+    delete process.env.VRATA_DISABLE_AUTOSTART;
+    delete process.env.VRATA_INTERNAL_SERVICE_TOKEN;
     delete process.env.LIVEKIT_URL;
-    delete process.env.NOAH_LIVEKIT_DOMAIN;
+    delete process.env.VRATA_LIVEKIT_DOMAIN;
   }
 });
 
 test("room api accepts legacy top-level avatar fields and normalizes them into avatarConfig", async () => {
-  process.env.NOAH_DISABLE_AUTOSTART = "1";
+  process.env.VRATA_DISABLE_AUTOSTART = "1";
   process.env.API_PORT = "4018";
   process.env.CONTROL_PLANE_ADMIN_TOKEN = "test-admin-token";
   const module = await import("./index.js");
@@ -607,7 +607,7 @@ test("room api accepts legacy top-level avatar fields and normalizes them into a
       method: "POST",
       headers: {
         "content-type": "application/json",
-        "x-noah-admin-token": "test-admin-token"
+        "x-vrata-admin-token": "test-admin-token"
       },
       body: JSON.stringify({
         tenantId: "demo-tenant",
@@ -635,13 +635,13 @@ test("room api accepts legacy top-level avatar fields and normalizes them into a
     assert.equal(manifest.avatars?.avatarSeatsEnabled, true);
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
-    delete process.env.NOAH_DISABLE_AUTOSTART;
+    delete process.env.VRATA_DISABLE_AUTOSTART;
     delete process.env.CONTROL_PLANE_ADMIN_TOKEN;
   }
 });
 
 test("room api merges partial avatarConfig updates onto defaults", async () => {
-  process.env.NOAH_DISABLE_AUTOSTART = "1";
+  process.env.VRATA_DISABLE_AUTOSTART = "1";
   process.env.API_PORT = "4019";
   process.env.CONTROL_PLANE_ADMIN_TOKEN = "test-admin-token";
   const module = await import("./index.js");
@@ -652,7 +652,7 @@ test("room api merges partial avatarConfig updates onto defaults", async () => {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        "x-noah-admin-token": "test-admin-token"
+        "x-vrata-admin-token": "test-admin-token"
       },
       body: JSON.stringify({
         tenantId: "demo-tenant",
@@ -667,7 +667,7 @@ test("room api merges partial avatarConfig updates onto defaults", async () => {
       method: "PATCH",
       headers: {
         "content-type": "application/json",
-        "x-noah-admin-token": "test-admin-token"
+        "x-vrata-admin-token": "test-admin-token"
       },
       body: JSON.stringify({
         avatarConfig: {
@@ -693,13 +693,13 @@ test("room api merges partial avatarConfig updates onto defaults", async () => {
     assert.equal(updated.avatarConfig?.avatarSeatsEnabled, true);
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
-    delete process.env.NOAH_DISABLE_AUTOSTART;
+    delete process.env.VRATA_DISABLE_AUTOSTART;
     delete process.env.CONTROL_PLANE_ADMIN_TOKEN;
   }
 });
 
 test("runtime spaces endpoint keeps same-tenant guest-safe rooms only", async () => {
-  process.env.NOAH_DISABLE_AUTOSTART = "1";
+  process.env.VRATA_DISABLE_AUTOSTART = "1";
   process.env.API_PORT = "4013";
   process.env.CONTROL_PLANE_ADMIN_TOKEN = "test-admin-token";
   const module = await import("./index.js");
@@ -710,7 +710,7 @@ test("runtime spaces endpoint keeps same-tenant guest-safe rooms only", async ()
       method: "POST",
       headers: {
         "content-type": "application/json",
-        "x-noah-admin-token": "test-admin-token"
+        "x-vrata-admin-token": "test-admin-token"
       },
       body: JSON.stringify({
         tenantId: "demo-tenant",
@@ -726,7 +726,7 @@ test("runtime spaces endpoint keeps same-tenant guest-safe rooms only", async ()
       method: "POST",
       headers: {
         "content-type": "application/json",
-        "x-noah-admin-token": "test-admin-token"
+        "x-vrata-admin-token": "test-admin-token"
       },
       body: JSON.stringify({
         tenantId: "demo-tenant",
@@ -748,13 +748,13 @@ test("runtime spaces endpoint keeps same-tenant guest-safe rooms only", async ()
     assert.equal(payload.items.some((item) => item.name === "Private Room"), false);
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
-    delete process.env.NOAH_DISABLE_AUTOSTART;
+    delete process.env.VRATA_DISABLE_AUTOSTART;
     delete process.env.CONTROL_PLANE_ADMIN_TOKEN;
   }
 });
 
 test("runtime spaces endpoint keeps https room links behind https proxy", async () => {
-  process.env.NOAH_DISABLE_AUTOSTART = "1";
+  process.env.VRATA_DISABLE_AUTOSTART = "1";
   process.env.API_PORT = "4023";
   process.env.RUNTIME_BASE_URL = "http://89.169.161.91:4000";
   const module = await import("./index.js");
@@ -777,17 +777,17 @@ test("runtime spaces endpoint keeps https room links behind https proxy", async 
     assert.equal(payload.items[0]?.roomLink, "https://89.169.161.91.sslip.io/rooms/demo-room");
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
-    delete process.env.NOAH_DISABLE_AUTOSTART;
+    delete process.env.VRATA_DISABLE_AUTOSTART;
     delete process.env.RUNTIME_BASE_URL;
   }
 });
 
 test("scene bundle metadata can be created and bound to a room", async () => {
-  process.env.NOAH_DISABLE_AUTOSTART = "1";
+  process.env.VRATA_DISABLE_AUTOSTART = "1";
   process.env.API_PORT = "4014";
   process.env.CONTROL_PLANE_ADMIN_TOKEN = "test-admin-token";
   process.env.MINIO_PUBLIC_BASE_URL = "http://127.0.0.1:9000";
-  process.env.MINIO_BUCKET = "noah-scene-bundles";
+  process.env.MINIO_BUCKET = "vrata-scene-bundles";
   const module = await import("./index.js");
   const server = module.startApiServer(4014);
 
@@ -796,7 +796,7 @@ test("scene bundle metadata can be created and bound to a room", async () => {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        "x-noah-admin-token": "test-admin-token"
+        "x-vrata-admin-token": "test-admin-token"
       },
       body: JSON.stringify({
         bundleId: "hall-bundle",
@@ -807,13 +807,13 @@ test("scene bundle metadata can be created and bound to a room", async () => {
     assert.equal(bundleResponse.ok, true);
     const bundle = (await bundleResponse.json()) as { bundleId: string; publicUrl: string };
     assert.equal(bundle.bundleId, "hall-bundle");
-    assert.equal(bundle.publicUrl, "http://127.0.0.1:9000/noah-scene-bundles/scenes/hall/v1/scene.json");
+    assert.equal(bundle.publicUrl, "http://127.0.0.1:9000/vrata-scene-bundles/scenes/hall/v1/scene.json");
 
     const roomResponse = await fetch("http://127.0.0.1:4014/api/rooms", {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        "x-noah-admin-token": "test-admin-token"
+        "x-vrata-admin-token": "test-admin-token"
       },
       body: JSON.stringify({
         tenantId: "demo-tenant",
@@ -828,7 +828,7 @@ test("scene bundle metadata can be created and bound to a room", async () => {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        "x-noah-admin-token": "test-admin-token"
+        "x-vrata-admin-token": "test-admin-token"
       },
       body: JSON.stringify({ bundleId: "hall-bundle" })
     });
@@ -837,10 +837,10 @@ test("scene bundle metadata can be created and bound to a room", async () => {
     const manifestResponse = await fetch(`http://127.0.0.1:4014/api/rooms/${room.roomId}/manifest`);
     assert.equal(manifestResponse.ok, true);
     const manifest = (await manifestResponse.json()) as { sceneBundle?: { url?: string } };
-    assert.equal(manifest.sceneBundle?.url, "http://127.0.0.1:9000/noah-scene-bundles/scenes/hall/v1/scene.json");
+    assert.equal(manifest.sceneBundle?.url, "http://127.0.0.1:9000/vrata-scene-bundles/scenes/hall/v1/scene.json");
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
-    delete process.env.NOAH_DISABLE_AUTOSTART;
+    delete process.env.VRATA_DISABLE_AUTOSTART;
     delete process.env.CONTROL_PLANE_ADMIN_TOKEN;
     delete process.env.MINIO_PUBLIC_BASE_URL;
     delete process.env.MINIO_BUCKET;
@@ -848,7 +848,7 @@ test("scene bundle metadata can be created and bound to a room", async () => {
 });
 
 test("legacy room scene bundle url remains backward compatible", async () => {
-  process.env.NOAH_DISABLE_AUTOSTART = "1";
+  process.env.VRATA_DISABLE_AUTOSTART = "1";
   process.env.API_PORT = "4015";
   process.env.CONTROL_PLANE_ADMIN_TOKEN = "test-admin-token";
   const module = await import("./index.js");
@@ -859,7 +859,7 @@ test("legacy room scene bundle url remains backward compatible", async () => {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        "x-noah-admin-token": "test-admin-token"
+        "x-vrata-admin-token": "test-admin-token"
       },
       body: JSON.stringify({
         tenantId: "demo-tenant",
@@ -876,17 +876,17 @@ test("legacy room scene bundle url remains backward compatible", async () => {
     assert.equal(manifest.sceneBundle?.url, "https://example.com/scenes/legacy/scene.json");
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
-    delete process.env.NOAH_DISABLE_AUTOSTART;
+    delete process.env.VRATA_DISABLE_AUTOSTART;
     delete process.env.CONTROL_PLANE_ADMIN_TOKEN;
   }
 });
 
 test("scene bundle versions can switch current binding without runtime contract change", async () => {
-  process.env.NOAH_DISABLE_AUTOSTART = "1";
+  process.env.VRATA_DISABLE_AUTOSTART = "1";
   process.env.API_PORT = "4016";
   process.env.CONTROL_PLANE_ADMIN_TOKEN = "test-admin-token";
   process.env.MINIO_PUBLIC_BASE_URL = "http://127.0.0.1:9000";
-  process.env.MINIO_BUCKET = "noah-scene-bundles";
+  process.env.MINIO_BUCKET = "vrata-scene-bundles";
   const module = await import("./index.js");
   const server = module.startApiServer(4016);
 
@@ -896,7 +896,7 @@ test("scene bundle versions can switch current binding without runtime contract 
         method: "POST",
         headers: {
           "content-type": "application/json",
-          "x-noah-admin-token": "test-admin-token"
+          "x-vrata-admin-token": "test-admin-token"
         },
         body: JSON.stringify({
           storageKey: `scenes/hall-productized/${version}/scene.json`,
@@ -909,15 +909,15 @@ test("scene bundle versions can switch current binding without runtime contract 
 
     const versionOne = await createVersion("v1") as { publicUrl: string };
     const versionTwo = await createVersion("v2") as { publicUrl: string };
-    assert.equal(versionOne.publicUrl, "http://127.0.0.1:9000/noah-scene-bundles/scenes/hall-productized/v1/scene.json");
-    assert.equal(versionTwo.publicUrl, "http://127.0.0.1:9000/noah-scene-bundles/scenes/hall-productized/v2/scene.json");
+    assert.equal(versionOne.publicUrl, "http://127.0.0.1:9000/vrata-scene-bundles/scenes/hall-productized/v1/scene.json");
+    assert.equal(versionTwo.publicUrl, "http://127.0.0.1:9000/vrata-scene-bundles/scenes/hall-productized/v2/scene.json");
     assert.notEqual(versionOne.publicUrl, versionTwo.publicUrl);
 
     const duplicateVersionResponse = await fetch(`http://127.0.0.1:4016/api/scene-bundles/hall-productized/versions`, {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        "x-noah-admin-token": "test-admin-token"
+        "x-vrata-admin-token": "test-admin-token"
       },
       body: JSON.stringify({
         storageKey: "scenes/hall-productized/v2/scene.json",
@@ -931,7 +931,7 @@ test("scene bundle versions can switch current binding without runtime contract 
       method: "POST",
       headers: {
         "content-type": "application/json",
-        "x-noah-admin-token": "test-admin-token"
+        "x-vrata-admin-token": "test-admin-token"
       },
       body: JSON.stringify({
         tenantId: "demo-tenant",
@@ -945,20 +945,20 @@ test("scene bundle versions can switch current binding without runtime contract 
       method: "POST",
       headers: {
         "content-type": "application/json",
-        "x-noah-admin-token": "test-admin-token"
+        "x-vrata-admin-token": "test-admin-token"
       },
       body: JSON.stringify({ bundleId: "hall-productized" })
     });
     assert.equal(bindResponse.ok, true);
 
     let manifest = await (await fetch(`http://127.0.0.1:4016/api/rooms/${room.roomId}/manifest`)).json() as { sceneBundle?: { url?: string } };
-    assert.equal(manifest.sceneBundle?.url, "http://127.0.0.1:9000/noah-scene-bundles/scenes/hall-productized/v2/scene.json");
+    assert.equal(manifest.sceneBundle?.url, "http://127.0.0.1:9000/vrata-scene-bundles/scenes/hall-productized/v2/scene.json");
 
     const currentResponse = await fetch("http://127.0.0.1:4016/api/scene-bundles/hall-productized/current", {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        "x-noah-admin-token": "test-admin-token"
+        "x-vrata-admin-token": "test-admin-token"
       },
       body: JSON.stringify({ version: "v1" })
     });
@@ -968,17 +968,17 @@ test("scene bundle versions can switch current binding without runtime contract 
       method: "POST",
       headers: {
         "content-type": "application/json",
-        "x-noah-admin-token": "test-admin-token"
+        "x-vrata-admin-token": "test-admin-token"
       },
       body: JSON.stringify({ bundleId: "hall-productized" })
     });
     assert.equal(reboundResponse.ok, true);
 
     manifest = await (await fetch(`http://127.0.0.1:4016/api/rooms/${room.roomId}/manifest`)).json() as { sceneBundle?: { url?: string } };
-    assert.equal(manifest.sceneBundle?.url, "http://127.0.0.1:9000/noah-scene-bundles/scenes/hall-productized/v1/scene.json");
+    assert.equal(manifest.sceneBundle?.url, "http://127.0.0.1:9000/vrata-scene-bundles/scenes/hall-productized/v1/scene.json");
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
-    delete process.env.NOAH_DISABLE_AUTOSTART;
+    delete process.env.VRATA_DISABLE_AUTOSTART;
     delete process.env.CONTROL_PLANE_ADMIN_TOKEN;
     delete process.env.MINIO_PUBLIC_BASE_URL;
     delete process.env.MINIO_BUCKET;
@@ -986,11 +986,11 @@ test("scene bundle versions can switch current binding without runtime contract 
 });
 
 test("cleanup-ready scene bundle version is rejected while still bound", async () => {
-  process.env.NOAH_DISABLE_AUTOSTART = "1";
+  process.env.VRATA_DISABLE_AUTOSTART = "1";
   process.env.API_PORT = "4017";
   process.env.CONTROL_PLANE_ADMIN_TOKEN = "test-admin-token";
   process.env.MINIO_PUBLIC_BASE_URL = "http://127.0.0.1:9000";
-  process.env.MINIO_BUCKET = "noah-scene-bundles";
+  process.env.MINIO_BUCKET = "vrata-scene-bundles";
   const module = await import("./index.js");
   const server = module.startApiServer(4017);
 
@@ -999,7 +999,7 @@ test("cleanup-ready scene bundle version is rejected while still bound", async (
       method: "POST",
       headers: {
         "content-type": "application/json",
-        "x-noah-admin-token": "test-admin-token"
+        "x-vrata-admin-token": "test-admin-token"
       },
       body: JSON.stringify({
         storageKey: "scenes/cleanup-bundle/v1/scene.json",
@@ -1011,7 +1011,7 @@ test("cleanup-ready scene bundle version is rejected while still bound", async (
       method: "POST",
       headers: {
         "content-type": "application/json",
-        "x-noah-admin-token": "test-admin-token"
+        "x-vrata-admin-token": "test-admin-token"
       },
       body: JSON.stringify({ tenantId: "demo-tenant", templateId: "meeting-room-basic", name: "Cleanup Bound Room One" })
     });
@@ -1021,7 +1021,7 @@ test("cleanup-ready scene bundle version is rejected while still bound", async (
       method: "POST",
       headers: {
         "content-type": "application/json",
-        "x-noah-admin-token": "test-admin-token"
+        "x-vrata-admin-token": "test-admin-token"
       },
       body: JSON.stringify({ bundleId: "cleanup-bundle" })
     });
@@ -1030,14 +1030,14 @@ test("cleanup-ready scene bundle version is rejected while still bound", async (
       method: "POST",
       headers: {
         "content-type": "application/json",
-        "x-noah-admin-token": "test-admin-token"
+        "x-vrata-admin-token": "test-admin-token"
       },
       body: JSON.stringify({ status: "cleanup-ready" })
     });
     assert.equal(cleanupResponse.status, 409);
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
-    delete process.env.NOAH_DISABLE_AUTOSTART;
+    delete process.env.VRATA_DISABLE_AUTOSTART;
     delete process.env.CONTROL_PLANE_ADMIN_TOKEN;
     delete process.env.MINIO_PUBLIC_BASE_URL;
     delete process.env.MINIO_BUCKET;

@@ -1,6 +1,6 @@
 # Open Source Safety Audit
 
-This document tracks blockers before Noah can be published as a public open source repository.
+This document tracks blockers before Vrata can be published as a public open source repository.
 
 ## Current Status
 

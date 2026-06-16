@@ -37,7 +37,7 @@ function roomUrl(roomId: string, role: "guest" | "member" | "host", extra = "") 
 }
 
 async function readDebug(page: Page): Promise<MultiSurfaceDebug | undefined> {
-  return page.evaluate(() => (window as Window & { __NOAH_DEBUG__?: MultiSurfaceDebug }).__NOAH_DEBUG__);
+  return page.evaluate(() => (window as Window & { __VRATA_DEBUG__?: MultiSurfaceDebug }).__VRATA_DEBUG__);
 }
 
 async function waitForKernel(page: Page, role: "guest" | "member" | "host") {
@@ -65,15 +65,15 @@ async function waitForKernel(page: Page, role: "guest" | "member" | "host") {
 
 async function selectSurface(page: Page, surfaceId: string) {
   const selected = await page.evaluate((id) => (window as Window & {
-    __NOAH_TEST__?: { selectMediaSurface: (surfaceId: string) => boolean };
-  }).__NOAH_TEST__?.selectMediaSurface(id) ?? false, surfaceId);
+    __VRATA_TEST__?: { selectMediaSurface: (surfaceId: string) => boolean };
+  }).__VRATA_TEST__?.selectMediaSurface(id) ?? false, surfaceId);
   expect(selected).toBe(true);
 }
 
 async function sendSurfaceInput(page: Page, input: { surfaceId: string; source?: string; kind?: string; u?: number; v?: number }) {
   const sent = await page.evaluate((value) => (window as Window & {
-    __NOAH_TEST__?: { sendDebugSurfaceInput: (input?: { surfaceId?: string; source?: string; kind?: string; u?: number; v?: number }) => boolean };
-  }).__NOAH_TEST__?.sendDebugSurfaceInput(value) ?? false, input);
+    __VRATA_TEST__?: { sendDebugSurfaceInput: (input?: { surfaceId?: string; source?: string; kind?: string; u?: number; v?: number }) => boolean };
+  }).__VRATA_TEST__?.sendDebugSurfaceInput(value) ?? false, input);
   expect(sent).toBe(true);
 }
 
@@ -113,10 +113,10 @@ function blueStrokeSampleCount(sample: TextureSample | null): number {
 
 async function sampleSurfaceBlueStrokeCount(page: Page, surfaceId: string, center: { u: number; v: number }): Promise<number> {
   const sample = await page.evaluate((value) => (window as Window & {
-    __NOAH_TEST__?: {
+    __VRATA_TEST__?: {
       sampleMediaSurfaceTexture: (surfaceId: string, center: { u: number; v: number }, size?: { width: number; height: number }) => TextureSample | null;
     };
-  }).__NOAH_TEST__?.sampleMediaSurfaceTexture(value.surfaceId, value.center, { width: 0.18, height: 0.03 }) ?? null, { surfaceId, center });
+  }).__VRATA_TEST__?.sampleMediaSurfaceTexture(value.surfaceId, value.center, { width: 0.18, height: 0.03 }) ?? null, { surfaceId, center });
   return blueStrokeSampleCount(sample);
 }
 
@@ -408,7 +408,7 @@ test("M1.8 remote browsers run independently on any default surface", async ({ p
 test("M1.8 media surfaces remain visible after a scene bundle loads", async ({ page, request }) => {
   const roomResponse = await request.post("/api/rooms", {
     headers: {
-      "x-noah-admin-token": process.env.STAGING_ADMIN_TOKEN ?? "test-admin-token"
+      "x-vrata-admin-token": process.env.STAGING_ADMIN_TOKEN ?? "test-admin-token"
     },
     data: {
       tenantId: "demo-tenant",

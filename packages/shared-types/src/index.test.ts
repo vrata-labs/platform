@@ -103,7 +103,7 @@ test("media extension registry exposes available and rejected object definitions
   assert.equal(availableTypes.includes(DISABLED_EXTENSION_CARD_TYPE), false);
 
   const extensionCard = getMediaObjectDefinition(EXTENSION_TEST_CARD_TYPE);
-  assert.equal(extensionCard?.extensionId, "noah.extension-test-card");
+  assert.equal(extensionCard?.extensionId, "vrata.extension-test-card");
   assert.equal(extensionCard?.stateKind, "surface-test-card");
   assert.equal(extensionCard?.missingCapabilities.length, 0);
   assert.equal(isMediaObjectTypeAvailable(EXTENSION_TEST_CARD_TYPE), true);
@@ -117,8 +117,8 @@ test("media extension registry exposes available and rejected object definitions
   assert.equal(isMediaObjectTypeAvailable(DISABLED_EXTENSION_CARD_TYPE), false);
 
   const debug = getMediaExtensionDebugSnapshot();
-  assert.equal(debug.some((extension) => extension.id === "noah.whiteboard" && extension.valid), true);
-  assert.equal(debug.some((extension) => extension.id === "noah.missing-capability-demo" && !extension.valid), true);
+  assert.equal(debug.some((extension) => extension.id === "vrata.whiteboard" && extension.valid), true);
+  assert.equal(debug.some((extension) => extension.id === "vrata.missing-capability-demo" && !extension.valid), true);
 });
 
 test("avatar shared contracts compile in tests", () => {

@@ -1,5 +1,5 @@
 {
-  "name": "@noah/runtime-core",
+  "name": "@vrata/runtime-core",
   "private": true,
   "version": "0.1.0",
   "type": "module",

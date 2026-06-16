@@ -65,7 +65,7 @@ export interface M05DebugState {
 export async function createM05Room(request: APIRequestContext, name: string): Promise<string> {
   const response = await request.post("/api/rooms", {
     headers: {
-      "x-noah-admin-token": "test-admin-token"
+      "x-vrata-admin-token": "test-admin-token"
     },
     data: {
       tenantId: "demo-tenant",
@@ -90,7 +90,7 @@ export function roomPath(roomId: string, query: string): string {
 }
 
 export async function readM05Debug(page: Page): Promise<M05DebugState | null> {
-  return page.evaluate(() => (window as Window & { __NOAH_DEBUG__?: unknown }).__NOAH_DEBUG__ ?? null) as Promise<M05DebugState | null>;
+  return page.evaluate(() => (window as Window & { __VRATA_DEBUG__?: unknown }).__VRATA_DEBUG__ ?? null) as Promise<M05DebugState | null>;
 }
 
 export async function waitForM05Debug(page: Page): Promise<void> {

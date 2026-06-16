@@ -5,7 +5,7 @@ test.describe.configure({ mode: "serial" });
 async function createAvatarRoom(request: APIRequestContext, name: string, sceneBundleUrl?: string): Promise<{ roomId: string; roomLink: string }> {
   const createRoomResponse = await request.post("/api/rooms", {
     headers: {
-      "x-noah-admin-token": "test-admin-token"
+      "x-vrata-admin-token": "test-admin-token"
     },
     data: {
       tenantId: "demo-tenant",
@@ -31,7 +31,7 @@ async function createAvatarHallRoom(request: APIRequestContext, name: string): P
 
 async function readInteractionDebug(page: Page) {
   return page.evaluate(() => (window as Window & {
-    __NOAH_DEBUG__?: {
+    __VRATA_DEBUG__?: {
       participantId?: string;
       roomStateConnected?: boolean;
       sceneBundleState?: string;
@@ -45,7 +45,7 @@ async function readInteractionDebug(page: Page) {
       };
       statusLine?: string;
     };
-  }).__NOAH_DEBUG__);
+  }).__VRATA_DEBUG__);
 }
 
 async function waitForHallInteractionReady(page: Page) {
@@ -73,7 +73,7 @@ test("room shell loads and presence is registered", async ({ page, request }) =>
   await expect(page.locator("#room-state-line")).toContainText(/Room-state:/);
   await expect(page.locator("#start-share")).toBeHidden();
 
-  const debug = await page.evaluate(() => (window as Window & { __NOAH_DEBUG__?: unknown }).__NOAH_DEBUG__);
+  const debug = await page.evaluate(() => (window as Window & { __VRATA_DEBUG__?: unknown }).__VRATA_DEBUG__);
   expect(debug).toBeTruthy();
   const debugState = debug as { roomStateConnected?: boolean; roomStateUrl?: string; access?: { token?: string } };
   expect(debugState.roomStateUrl).toContain("127.0.0.1:2567");
@@ -171,14 +171,14 @@ test("mobile unsupported media APIs disable audio and share controls with diagno
     await expect(mobilePage.locator("#audio-device-status")).toContainText("Screen share unsupported");
 
     const debug = await mobilePage.evaluate(() => (window as Window & {
-      __NOAH_DEBUG__?: {
+      __VRATA_DEBUG__?: {
         mediaCapabilities?: {
           audioInput?: { supported?: boolean; reason?: string };
           screenShare?: { supported?: boolean; reason?: string };
         };
         screenShareState?: string;
       };
-    }).__NOAH_DEBUG__);
+    }).__VRATA_DEBUG__);
     expect(debug?.mediaCapabilities?.audioInput?.supported).toBe(false);
     expect(debug?.mediaCapabilities?.audioInput?.reason).toBe("get_user_media_missing");
     expect(debug?.mediaCapabilities?.screenShare?.supported).toBe(false);
@@ -225,16 +225,16 @@ test("mobile right-side drag turns the camera", async ({ browser }) => {
     await mobilePage.locator("canvas").waitFor();
 
     const yawBefore = await mobilePage.evaluate(() => (window as Window & {
-      __NOAH_DEBUG__?: { localPose?: { root?: { yaw?: number } } };
-    }).__NOAH_DEBUG__?.localPose?.root?.yaw ?? 0);
+      __VRATA_DEBUG__?: { localPose?: { root?: { yaw?: number } } };
+    }).__VRATA_DEBUG__?.localPose?.root?.yaw ?? 0);
 
     await dispatchTouch("touchstart", 340, 420);
     await dispatchTouch("touchmove", 260, 420);
     await dispatchTouch("touchend", 260, 420);
 
     await expect.poll(async () => mobilePage.evaluate(() => (window as Window & {
-      __NOAH_DEBUG__?: { localPose?: { root?: { yaw?: number } } };
-    }).__NOAH_DEBUG__?.localPose?.root?.yaw ?? 0), {
+      __VRATA_DEBUG__?: { localPose?: { root?: { yaw?: number } } };
+    }).__VRATA_DEBUG__?.localPose?.root?.yaw ?? 0), {
       timeout: 5000,
       intervals: [100, 250, 500]
     }).not.toBe(yawBefore);
@@ -259,8 +259,8 @@ test("two participants can coexist in same room", async ({ browser, request }) =
   await pageA.waitForTimeout(4000);
   await pageB.waitForTimeout(4000);
 
-  const debugA = await pageA.evaluate(() => (window as Window & { __NOAH_DEBUG__?: { remoteAvatarCount: number } }).__NOAH_DEBUG__);
-  const debugB = await pageB.evaluate(() => (window as Window & { __NOAH_DEBUG__?: { remoteAvatarCount: number } }).__NOAH_DEBUG__);
+  const debugA = await pageA.evaluate(() => (window as Window & { __VRATA_DEBUG__?: { remoteAvatarCount: number } }).__VRATA_DEBUG__);
+  const debugB = await pageB.evaluate(() => (window as Window & { __VRATA_DEBUG__?: { remoteAvatarCount: number } }).__VRATA_DEBUG__);
 
   expect(debugA?.remoteAvatarCount).toBeGreaterThanOrEqual(1);
   expect(debugB?.remoteAvatarCount).toBeGreaterThanOrEqual(1);
@@ -284,19 +284,19 @@ test("API fallback presence stays visible to realtime room-state clients", async
 
     await expect.poll(async () => {
       const realtimeDebug = await realtimePage.evaluate(() => (window as Window & {
-        __NOAH_DEBUG__?: {
+        __VRATA_DEBUG__?: {
           roomStateConnected?: boolean;
           remoteAvatarCount?: number;
           remoteAvatarParticipants?: Array<{ presenceSeen?: boolean }>;
         };
-      }).__NOAH_DEBUG__);
+      }).__VRATA_DEBUG__);
       const fallbackDebug = await fallbackPage.evaluate(() => (window as Window & {
-        __NOAH_DEBUG__?: {
+        __VRATA_DEBUG__?: {
           roomStateConnected?: boolean;
           remoteAvatarCount?: number;
           remoteAvatarParticipants?: Array<{ presenceSeen?: boolean }>;
         };
-      }).__NOAH_DEBUG__);
+      }).__VRATA_DEBUG__);
 
       return {
         realtimeConnected: realtimeDebug?.roomStateConnected ?? false,
@@ -323,7 +323,7 @@ test("bot mode emits movement diagnostics automatically", async ({ page, request
   await page.goto("/rooms/demo-room?bot=line&botStart=0,0&debug=1");
 
   await expect.poll(async () => {
-    const debug = await page.evaluate(() => (window as Window & { __NOAH_DEBUG__?: { botMode: string; localPosition: { x: number; z: number } } }).__NOAH_DEBUG__);
+    const debug = await page.evaluate(() => (window as Window & { __VRATA_DEBUG__?: { botMode: string; localPosition: { x: number; z: number } } }).__VRATA_DEBUG__);
     expect(debug?.botMode).toBe("line");
     return Math.max(Math.abs(debug?.localPosition.x ?? 0), Math.abs(debug?.localPosition.z ?? 0));
   }, {
@@ -331,7 +331,7 @@ test("bot mode emits movement diagnostics automatically", async ({ page, request
     intervals: [1000, 2000, 3000]
   }).toBeGreaterThan(0.5);
 
-  const debug = await page.evaluate(() => (window as Window & { __NOAH_DEBUG__?: { botMode: string; localPosition: { x: number; z: number } } }).__NOAH_DEBUG__);
+  const debug = await page.evaluate(() => (window as Window & { __VRATA_DEBUG__?: { botMode: string; localPosition: { x: number; z: number } } }).__VRATA_DEBUG__);
   expect(debug?.botMode).toBe("line");
 
   await expect.poll(async () => {
@@ -351,7 +351,7 @@ test("avatar sandbox exposes avatar diagnostics and persists them via diagnostic
 
   await expect.poll(async () => {
     const debug = await page.evaluate(() => (window as Window & {
-      __NOAH_DEBUG__?: {
+      __VRATA_DEBUG__?: {
         avatarDebug?: {
           state?: string;
           presetCount?: number;
@@ -359,7 +359,7 @@ test("avatar sandbox exposes avatar diagnostics and persists them via diagnostic
           fallbackActive?: boolean;
         };
       };
-    }).__NOAH_DEBUG__);
+    }).__VRATA_DEBUG__);
 
     return {
       state: debug?.avatarDebug?.state,
@@ -399,7 +399,7 @@ test("avatar sandbox exposes avatar diagnostics and persists them via diagnostic
 test("avatar sandbox falls back cleanly on invalid catalog url", async ({ page, request }) => {
   const createRoomResponse = await request.post("/api/rooms", {
     headers: {
-      "x-noah-admin-token": "test-admin-token"
+      "x-vrata-admin-token": "test-admin-token"
     },
     data: {
       tenantId: "demo-tenant",
@@ -421,10 +421,10 @@ test("avatar sandbox falls back cleanly on invalid catalog url", async ({ page, 
 
   await expect.poll(async () => {
     const debug = await page.evaluate(() => (window as Window & {
-      __NOAH_DEBUG__?: {
+      __VRATA_DEBUG__?: {
         avatarDebug?: { state?: string; fallbackActive?: boolean; fallbackReason?: string | null };
       };
-    }).__NOAH_DEBUG__);
+    }).__VRATA_DEBUG__);
     return {
       state: debug?.avatarDebug?.state,
       fallbackActive: debug?.avatarDebug?.fallbackActive ?? false,
@@ -454,7 +454,7 @@ test("avatar sandbox falls back cleanly on invalid catalog url", async ({ page, 
 test("avatar-enabled room exposes local self-avatar diagnostics in normal room flow", async ({ page, request }) => {
   const createRoomResponse = await request.post("/api/rooms", {
     headers: {
-      "x-noah-admin-token": "test-admin-token"
+      "x-vrata-admin-token": "test-admin-token"
     },
     data: {
       tenantId: "demo-tenant",
@@ -476,7 +476,7 @@ test("avatar-enabled room exposes local self-avatar diagnostics in normal room f
 
   await expect.poll(async () => {
     const debug = await page.evaluate(() => (window as Window & {
-      __NOAH_DEBUG__?: {
+      __VRATA_DEBUG__?: {
         avatarDebug?: {
           state?: string;
           selectedAvatarId?: string | null;
@@ -497,7 +497,7 @@ test("avatar-enabled room exposes local self-avatar diagnostics in normal room f
           poseFrame?: { root?: { x?: number | null }; locomotion?: { mode?: number | null } };
         };
       };
-    }).__NOAH_DEBUG__);
+    }).__VRATA_DEBUG__);
 
     return {
       state: debug?.avatarDebug?.state ?? null,
@@ -569,7 +569,7 @@ test("avatar-enabled room exposes local self-avatar diagnostics in normal room f
 test("avatar-enabled room diagnostics api exposes transport preview payload", async ({ page, request }) => {
   const createRoomResponse = await request.post("/api/rooms", {
     headers: {
-      "x-noah-admin-token": "test-admin-token"
+      "x-vrata-admin-token": "test-admin-token"
     },
     data: {
       tenantId: "demo-tenant",
@@ -613,7 +613,7 @@ test("avatar-enabled room diagnostics api exposes transport preview payload", as
 test("avatar-enabled room exposes lipsync debug signals for local and remote avatars", async ({ browser, request }) => {
   const createRoomResponse = await request.post("/api/rooms", {
     headers: {
-      "x-noah-admin-token": "test-admin-token"
+      "x-vrata-admin-token": "test-admin-token"
     },
     data: {
       tenantId: "demo-tenant",
@@ -640,7 +640,7 @@ test("avatar-enabled room exposes lipsync debug signals for local and remote ava
 
     await expect.poll(async () => {
       const debugA = await pageA.evaluate(() => (window as Window & {
-        __NOAH_DEBUG__?: {
+        __VRATA_DEBUG__?: {
           avatarDebug?: {
             mouthAmount?: number;
             speakingActive?: boolean;
@@ -654,7 +654,7 @@ test("avatar-enabled room exposes lipsync debug signals for local and remote ava
             hasPoseFrame?: boolean;
           }>;
         };
-      }).__NOAH_DEBUG__);
+      }).__VRATA_DEBUG__);
 
       return {
         localMouthAmount: debugA?.avatarDebug?.mouthAmount ?? null,
@@ -718,7 +718,7 @@ test("avatar-enabled room exposes lipsync debug signals for local and remote ava
 test("avatar-enabled room syncs remote reliable state and pose frames between two clients", async ({ browser, request }) => {
   const createRoomResponse = await request.post("/api/rooms", {
     headers: {
-      "x-noah-admin-token": "test-admin-token"
+      "x-vrata-admin-token": "test-admin-token"
     },
     data: {
       tenantId: "demo-tenant",
@@ -745,23 +745,23 @@ test("avatar-enabled room syncs remote reliable state and pose frames between tw
 
     await expect.poll(async () => {
       const debugA = await pageA.evaluate(() => (window as Window & {
-        __NOAH_DEBUG__?: {
+        __VRATA_DEBUG__?: {
           remoteAvatarReliableCount?: number;
           remoteAvatarPoseCount?: number;
           remoteAvatarPoseFrames?: Array<{ seq?: number | null }>;
           remoteAvatarParticipants?: Array<{ hasReliableState?: boolean; hasPoseFrame?: boolean; presenceSeen?: boolean; playbackDelayMs?: number }>;
           avatarPoseTransport?: { targetHz?: number; effectiveHz?: number; adaptivePlaybackDelayMs?: number };
         };
-      }).__NOAH_DEBUG__);
+      }).__VRATA_DEBUG__);
       const debugB = await pageB.evaluate(() => (window as Window & {
-        __NOAH_DEBUG__?: {
+        __VRATA_DEBUG__?: {
           remoteAvatarReliableCount?: number;
           remoteAvatarPoseCount?: number;
           remoteAvatarPoseFrames?: Array<{ seq?: number | null }>;
           remoteAvatarParticipants?: Array<{ hasReliableState?: boolean; hasPoseFrame?: boolean; presenceSeen?: boolean; playbackDelayMs?: number }>;
           avatarPoseTransport?: { targetHz?: number; effectiveHz?: number; adaptivePlaybackDelayMs?: number };
         };
-      }).__NOAH_DEBUG__);
+      }).__VRATA_DEBUG__);
 
       return {
         aReliable: debugA?.remoteAvatarReliableCount ?? 0,
@@ -796,15 +796,15 @@ test("avatar-enabled room syncs remote reliable state and pose frames between tw
     });
 
     const finalA = await pageA.evaluate(() => (window as Window & {
-      __NOAH_DEBUG__?: {
+      __VRATA_DEBUG__?: {
         remoteAvatarPoseFrames?: Array<{ seq?: number | null }>;
       };
-    }).__NOAH_DEBUG__);
+    }).__VRATA_DEBUG__);
     const finalB = await pageB.evaluate(() => (window as Window & {
-      __NOAH_DEBUG__?: {
+      __VRATA_DEBUG__?: {
         remoteAvatarPoseFrames?: Array<{ seq?: number | null }>;
       };
-    }).__NOAH_DEBUG__);
+    }).__VRATA_DEBUG__);
 
     expect((finalA?.remoteAvatarPoseFrames?.[0]?.seq ?? 0)).toBeGreaterThan(0);
     expect((finalB?.remoteAvatarPoseFrames?.[0]?.seq ?? 0)).toBeGreaterThan(0);
@@ -817,7 +817,7 @@ test("avatar-enabled room syncs remote reliable state and pose frames between tw
 test("avatar-enabled room keeps separate identities for same-browser tabs", async ({ browser, request }) => {
   const createRoomResponse = await request.post("/api/rooms", {
     headers: {
-      "x-noah-admin-token": "test-admin-token"
+      "x-vrata-admin-token": "test-admin-token"
     },
     data: {
       tenantId: "demo-tenant",
@@ -845,22 +845,22 @@ test("avatar-enabled room keeps separate identities for same-browser tabs", asyn
 
     await expect.poll(async () => {
       const [idA, debugA, idB, debugB] = await Promise.all([
-        pageA.evaluate(() => sessionStorage.getItem("noah.participantId")),
+        pageA.evaluate(() => sessionStorage.getItem("vrata.participantId")),
         pageA.evaluate(() => (window as Window & {
-          __NOAH_DEBUG__?: {
+          __VRATA_DEBUG__?: {
             remoteAvatarReliableCount?: number;
             remoteAvatarPoseCount?: number;
             remoteAvatarParticipants?: Array<{ presenceSeen?: boolean; hasReliableState?: boolean; hasPoseFrame?: boolean }>;
           };
-        }).__NOAH_DEBUG__),
-        pageB.evaluate(() => sessionStorage.getItem("noah.participantId")),
+        }).__VRATA_DEBUG__),
+        pageB.evaluate(() => sessionStorage.getItem("vrata.participantId")),
         pageB.evaluate(() => (window as Window & {
-          __NOAH_DEBUG__?: {
+          __VRATA_DEBUG__?: {
             remoteAvatarReliableCount?: number;
             remoteAvatarPoseCount?: number;
             remoteAvatarParticipants?: Array<{ presenceSeen?: boolean; hasReliableState?: boolean; hasPoseFrame?: boolean }>;
           };
-        }).__NOAH_DEBUG__)
+        }).__VRATA_DEBUG__)
       ]);
 
       return {
@@ -888,7 +888,7 @@ test("avatar-enabled room keeps separate identities for same-browser tabs", asyn
 test("avatar-enabled room recovers remote avatar state after late join and forced reconnect", async ({ browser, request }) => {
   const createRoomResponse = await request.post("/api/rooms", {
     headers: {
-      "x-noah-admin-token": "test-admin-token"
+      "x-vrata-admin-token": "test-admin-token"
     },
     data: {
       tenantId: "demo-tenant",
@@ -915,10 +915,10 @@ test("avatar-enabled room recovers remote avatar state after late join and force
     await pageB.goto(`${room.roomLink}?debug=1&bot=line`);
     await expect.poll(async () => {
       const debugB = await pageB.evaluate(() => (window as Window & {
-        __NOAH_DEBUG__?: {
+        __VRATA_DEBUG__?: {
           remoteAvatarParticipants?: Array<{ presenceSeen?: boolean; hasReliableState?: boolean; hasPoseFrame?: boolean }>;
         };
-      }).__NOAH_DEBUG__);
+      }).__VRATA_DEBUG__);
       return Boolean(debugB?.remoteAvatarParticipants?.some((item) => item.presenceSeen && item.hasReliableState && item.hasPoseFrame));
     }, {
       timeout: 20000,
@@ -926,18 +926,18 @@ test("avatar-enabled room recovers remote avatar state after late join and force
     }).toBeTruthy();
 
     await pageA.evaluate(() => {
-      (window as Window & { __NOAH_TEST__?: { forceRoomStateReconnect?: () => void } }).__NOAH_TEST__?.forceRoomStateReconnect?.();
+      (window as Window & { __VRATA_TEST__?: { forceRoomStateReconnect?: () => void } }).__VRATA_TEST__?.forceRoomStateReconnect?.();
     });
 
     await expect.poll(async () => {
       const debugA = await pageA.evaluate(() => (window as Window & {
-        __NOAH_DEBUG__?: {
+        __VRATA_DEBUG__?: {
           avatarPoseTransport?: { reconnectRepublishCount?: number; effectiveHz?: number };
           roomStateConnected?: boolean;
         };
-      }).__NOAH_DEBUG__);
+      }).__VRATA_DEBUG__);
       const debugB = await pageB.evaluate(() => (window as Window & {
-        __NOAH_DEBUG__?: {
+        __VRATA_DEBUG__?: {
           remoteAvatarCount?: number;
           remoteAvatarReliableCount?: number;
           remoteAvatarPoseCount?: number;
@@ -949,7 +949,7 @@ test("avatar-enabled room recovers remote avatar state after late join and force
             poseBufferDepth?: number;
           }>;
         };
-      }).__NOAH_DEBUG__);
+      }).__VRATA_DEBUG__);
       return {
         reconnectRepublished: (debugA?.avatarPoseTransport?.reconnectRepublishCount ?? 0) > 0,
         reconnected: debugA?.roomStateConnected ?? false,
@@ -980,7 +980,7 @@ test("avatar-enabled room recovers remote avatar state after late join and force
 test("avatar-enabled room keeps mobile self avatar hands-only on mobile user agent", async ({ browser, request }) => {
   const createRoomResponse = await request.post("/api/rooms", {
     headers: {
-      "x-noah-admin-token": "test-admin-token"
+      "x-vrata-admin-token": "test-admin-token"
     },
     data: {
       tenantId: "demo-tenant",
@@ -1008,7 +1008,7 @@ test("avatar-enabled room keeps mobile self avatar hands-only on mobile user age
     await mobilePage.goto(`${room.roomLink}?debug=1`);
     await expect.poll(async () => {
       const debug = await mobilePage.evaluate(() => (window as Window & {
-        __NOAH_DEBUG__?: {
+        __VRATA_DEBUG__?: {
           avatarDebug?: {
             state?: string;
             visibilityState?: string | null;
@@ -1016,7 +1016,7 @@ test("avatar-enabled room keeps mobile self avatar hands-only on mobile user age
             inputMode?: string | null;
           };
         };
-      }).__NOAH_DEBUG__);
+      }).__VRATA_DEBUG__);
 
       return {
         state: debug?.avatarDebug?.state ?? null,
@@ -1041,7 +1041,7 @@ test("avatar-enabled room keeps mobile self avatar hands-only on mobile user age
 test("avatar-enabled room lets user switch self-avatar preset in normal room flow", async ({ page, request }) => {
   const createRoomResponse = await request.post("/api/rooms", {
     headers: {
-      "x-noah-admin-token": "test-admin-token"
+      "x-vrata-admin-token": "test-admin-token"
     },
     data: {
       tenantId: "demo-tenant",
@@ -1065,7 +1065,7 @@ test("avatar-enabled room lets user switch self-avatar preset in normal room flo
 
   await expect.poll(async () => {
     const debug = await page.evaluate(() => (window as Window & {
-      __NOAH_DEBUG__?: {
+      __VRATA_DEBUG__?: {
         avatarDebug?: {
           state?: string;
           selectedAvatarId?: string | null;
@@ -1074,7 +1074,7 @@ test("avatar-enabled room lets user switch self-avatar preset in normal room flo
           avatarId?: string | null;
         };
       };
-    }).__NOAH_DEBUG__);
+    }).__VRATA_DEBUG__);
     return {
       state: debug?.avatarDebug?.state ?? null,
       selectedAvatarId: debug?.avatarDebug?.selectedAvatarId ?? null,
@@ -1095,7 +1095,7 @@ test("avatar-enabled room lets user switch self-avatar preset in normal room flo
 test("avatar runtime keeps baseline path by default and exposes experimental leg IK only via query override", async ({ page, request }) => {
   const createRoomResponse = await request.post("/api/rooms", {
     headers: {
-      "x-noah-admin-token": "test-admin-token"
+      "x-vrata-admin-token": "test-admin-token"
     },
     data: {
       tenantId: "demo-tenant",
@@ -1116,11 +1116,11 @@ test("avatar runtime keeps baseline path by default and exposes experimental leg
   await page.goto(`${room.roomLink}?debug=1`);
   await expect.poll(async () => {
     const debug = await page.evaluate(() => (window as Window & {
-      __NOAH_DEBUG__?: {
+      __VRATA_DEBUG__?: {
         avatarPresenceMode?: string;
         featureFlags?: { avatarLegIkEnabled?: boolean };
       };
-    }).__NOAH_DEBUG__);
+    }).__VRATA_DEBUG__);
 
     return {
       mode: debug?.avatarPresenceMode ?? null,
@@ -1137,11 +1137,11 @@ test("avatar runtime keeps baseline path by default and exposes experimental leg
   await page.goto(`${room.roomLink}?debug=1&avatarik=1`);
   await expect.poll(async () => {
     const debug = await page.evaluate(() => (window as Window & {
-      __NOAH_DEBUG__?: {
+      __VRATA_DEBUG__?: {
         avatarPresenceMode?: string;
         featureFlags?: { avatarLegIkEnabled?: boolean };
       };
-    }).__NOAH_DEBUG__);
+    }).__VRATA_DEBUG__);
 
     return {
       mode: debug?.avatarPresenceMode ?? null,
@@ -1159,7 +1159,7 @@ test("avatar runtime keeps baseline path by default and exposes experimental leg
 test("room creation API returns a usable room link", async ({ page, request }) => {
   const createRoomResponse = await request.post("/api/rooms", {
     headers: {
-      "x-noah-admin-token": "test-admin-token"
+      "x-vrata-admin-token": "test-admin-token"
     },
     data: {
       tenantId: "demo-tenant",
@@ -1188,7 +1188,7 @@ test("runtime HUD space selector lists guest-safe spaces and marks current room"
   const privateRoomName = `Private Space Room ${uniqueSuffix}`;
   const sharedRoomResponse = await request.post("/api/rooms", {
     headers: {
-      "x-noah-admin-token": "test-admin-token"
+      "x-vrata-admin-token": "test-admin-token"
     },
     data: {
       tenantId: "demo-tenant",
@@ -1201,7 +1201,7 @@ test("runtime HUD space selector lists guest-safe spaces and marks current room"
 
   const privateRoomResponse = await request.post("/api/rooms", {
     headers: {
-      "x-noah-admin-token": "test-admin-token"
+      "x-vrata-admin-token": "test-admin-token"
     },
     data: {
       tenantId: "demo-tenant",
@@ -1228,7 +1228,7 @@ test("runtime HUD space selector lists guest-safe spaces and marks current room"
 test("runtime HUD space selector navigates to another space", async ({ page, request }) => {
   const targetRoomResponse = await request.post("/api/rooms", {
     headers: {
-      "x-noah-admin-token": "test-admin-token"
+      "x-vrata-admin-token": "test-admin-token"
     },
     data: {
       tenantId: "demo-tenant",
@@ -1260,7 +1260,7 @@ test("runtime keeps current room usable when space selector is unavailable", asy
 test("two rooms load two different scene bundles", async ({ browser, request }) => {
   const hallRoomResponse = await request.post("/api/rooms", {
     headers: {
-      "x-noah-admin-token": "test-admin-token"
+      "x-vrata-admin-token": "test-admin-token"
     },
     data: {
       tenantId: "demo-tenant",
@@ -1274,7 +1274,7 @@ test("two rooms load two different scene bundles", async ({ browser, request }) 
 
   const officeRoomResponse = await request.post("/api/rooms", {
     headers: {
-      "x-noah-admin-token": "test-admin-token"
+      "x-vrata-admin-token": "test-admin-token"
     },
     data: {
       tenantId: "demo-tenant",
@@ -1297,8 +1297,8 @@ test("two rooms load two different scene bundles", async ({ browser, request }) 
   await expect(hallPage.locator("#branding-line")).toContainText("Scene: The Hall V1");
   await expect(officePage.locator("#branding-line")).toContainText("Scene: The Office V1");
 
-  const hallDebug = await hallPage.evaluate(() => (window as Window & { __NOAH_DEBUG__?: { sceneBundleState?: string; sceneBundleUrl?: string; localPosition?: { x: number; z: number } } }).__NOAH_DEBUG__);
-  const officeDebug = await officePage.evaluate(() => (window as Window & { __NOAH_DEBUG__?: { sceneBundleState?: string; sceneBundleUrl?: string; localPosition?: { x: number; z: number } } }).__NOAH_DEBUG__);
+  const hallDebug = await hallPage.evaluate(() => (window as Window & { __VRATA_DEBUG__?: { sceneBundleState?: string; sceneBundleUrl?: string; localPosition?: { x: number; z: number } } }).__VRATA_DEBUG__);
+  const officeDebug = await officePage.evaluate(() => (window as Window & { __VRATA_DEBUG__?: { sceneBundleState?: string; sceneBundleUrl?: string; localPosition?: { x: number; z: number } } }).__VRATA_DEBUG__);
 
   expect(hallDebug?.sceneBundleState).toBe("loaded");
   expect(officeDebug?.sceneBundleState).toBe("loaded");
@@ -1312,7 +1312,7 @@ test("two rooms load two different scene bundles", async ({ browser, request }) 
 test("@private-assets two rooms load two different real SenseTower scene assets", async ({ browser, request }) => {
   const hallRoomResponse = await request.post("/api/rooms", {
     headers: {
-      "x-noah-admin-token": "test-admin-token"
+      "x-vrata-admin-token": "test-admin-token"
     },
     data: {
       tenantId: "demo-tenant",
@@ -1326,7 +1326,7 @@ test("@private-assets two rooms load two different real SenseTower scene assets"
 
   const officeRoomResponse = await request.post("/api/rooms", {
     headers: {
-      "x-noah-admin-token": "test-admin-token"
+      "x-vrata-admin-token": "test-admin-token"
     },
     data: {
       tenantId: "demo-tenant",
@@ -1349,8 +1349,8 @@ test("@private-assets two rooms load two different real SenseTower scene assets"
   await expect(hallPage.locator("#branding-line")).toContainText("Scene: SenseTower Hall");
   await expect(officePage.locator("#branding-line")).toContainText("Scene: SenseTower Office");
 
-  const hallDebug = await hallPage.evaluate(() => (window as Window & { __NOAH_DEBUG__?: { sceneBundleState?: string; sceneBundleUrl?: string } }).__NOAH_DEBUG__);
-  const officeDebug = await officePage.evaluate(() => (window as Window & { __NOAH_DEBUG__?: { sceneBundleState?: string; sceneBundleUrl?: string } }).__NOAH_DEBUG__);
+  const hallDebug = await hallPage.evaluate(() => (window as Window & { __VRATA_DEBUG__?: { sceneBundleState?: string; sceneBundleUrl?: string } }).__VRATA_DEBUG__);
+  const officeDebug = await officePage.evaluate(() => (window as Window & { __VRATA_DEBUG__?: { sceneBundleState?: string; sceneBundleUrl?: string } }).__VRATA_DEBUG__);
 
   expect(hallDebug?.sceneBundleState).toBe("loaded");
   expect(officeDebug?.sceneBundleState).toBe("loaded");
@@ -1364,7 +1364,7 @@ test("@private-assets two rooms load two different real SenseTower scene assets"
 test("Livadia Nicholas II office scene loads with readable diagnostics", async ({ page, request }) => {
   const roomResponse = await request.post("/api/rooms", {
     headers: {
-      "x-noah-admin-token": "test-admin-token"
+      "x-vrata-admin-token": "test-admin-token"
     },
     data: {
       tenantId: "demo-tenant",
@@ -1381,7 +1381,7 @@ test("Livadia Nicholas II office scene loads with readable diagnostics", async (
   const readSceneDebug = async () => {
     return page.evaluate(() => {
       const debug = (window as Window & {
-        __NOAH_DEBUG__?: {
+        __VRATA_DEBUG__?: {
           sceneBundleState?: string;
           sceneDebug?: {
             label?: string | null;
@@ -1398,7 +1398,7 @@ test("Livadia Nicholas II office scene loads with readable diagnostics", async (
             } | null;
           };
         };
-      }).__NOAH_DEBUG__;
+      }).__VRATA_DEBUG__;
       const scene = debug?.sceneDebug;
       const average = scene?.screenshot?.averageColor;
       const luminance = average ? ((average.r ?? 0) + (average.g ?? 0) + (average.b ?? 0)) / 3 : 0;
@@ -1460,7 +1460,7 @@ test("Livadia Nicholas II office scene loads with readable diagnostics", async (
 test("scene bundle diagnostics include render and geometry debug info", async ({ page, request }) => {
   const roomResponse = await request.post("/api/rooms", {
     headers: {
-      "x-noah-admin-token": "test-admin-token"
+      "x-vrata-admin-token": "test-admin-token"
     },
     data: {
       tenantId: "demo-tenant",
@@ -1507,8 +1507,8 @@ test("@private-assets avatar-enabled hall room supports interaction ray teleport
   await waitForHallInteractionReady(page);
 
   expect(await page.evaluate(() => (window as Window & {
-    __NOAH_TEST__?: { claimSeatById: (seatId: string) => boolean };
-  }).__NOAH_TEST__?.claimSeatById("hall-seat-a") ?? false)).toBeTruthy();
+    __VRATA_TEST__?: { claimSeatById: (seatId: string) => boolean };
+  }).__VRATA_TEST__?.claimSeatById("hall-seat-a") ?? false)).toBeTruthy();
 
   await expect.poll(async () => {
     const debug = await readInteractionDebug(page);
@@ -1525,8 +1525,8 @@ test("@private-assets avatar-enabled hall room supports interaction ray teleport
   });
 
   expect(await page.evaluate(() => (window as Window & {
-    __NOAH_TEST__?: { claimSeatById: (seatId: string) => boolean };
-  }).__NOAH_TEST__?.claimSeatById("hall-seat-b") ?? false)).toBeTruthy();
+    __VRATA_TEST__?: { claimSeatById: (seatId: string) => boolean };
+  }).__VRATA_TEST__?.claimSeatById("hall-seat-b") ?? false)).toBeTruthy();
 
   await expect.poll(async () => {
     const debug = await readInteractionDebug(page);
@@ -1545,8 +1545,8 @@ test("@private-assets avatar-enabled hall room supports interaction ray teleport
   });
 
   expect(await page.evaluate(() => (window as Window & {
-    __NOAH_TEST__?: { teleportToFloor: (x: number, z: number) => boolean };
-  }).__NOAH_TEST__?.teleportToFloor(0, -4) ?? false)).toBeTruthy();
+    __VRATA_TEST__?: { teleportToFloor: (x: number, z: number) => boolean };
+  }).__VRATA_TEST__?.teleportToFloor(0, -4) ?? false)).toBeTruthy();
 
   await expect.poll(async () => {
     const debug = await readInteractionDebug(page);
@@ -1577,8 +1577,8 @@ test.fixme("@private-assets avatar-enabled hall room restores seated state after
     await waitForHallInteractionReady(pageB);
 
     expect(await pageA.evaluate(() => (window as Window & {
-      __NOAH_TEST__?: { claimSeatById: (seatId: string) => boolean };
-    }).__NOAH_TEST__?.claimSeatById("hall-seat-a") ?? false)).toBeTruthy();
+      __VRATA_TEST__?: { claimSeatById: (seatId: string) => boolean };
+    }).__VRATA_TEST__?.claimSeatById("hall-seat-a") ?? false)).toBeTruthy();
 
     await expect.poll(async () => {
       const debugA = await readInteractionDebug(pageA);
@@ -1595,7 +1595,7 @@ test.fixme("@private-assets avatar-enabled hall room restores seated state after
     });
 
     await pageA.evaluate(() => {
-      (window as Window & { __NOAH_TEST__?: { forceRoomStateReconnect?: () => void } }).__NOAH_TEST__?.forceRoomStateReconnect?.();
+      (window as Window & { __VRATA_TEST__?: { forceRoomStateReconnect?: () => void } }).__VRATA_TEST__?.forceRoomStateReconnect?.();
     });
 
     await expect.poll(async () => {
@@ -1637,7 +1637,7 @@ test("room creation API is forbidden without admin token", async ({ request }) =
 test("room creation API rejects invalid template even with admin token", async ({ request }) => {
   const response = await request.post("/api/rooms", {
     headers: {
-      "x-noah-admin-token": "test-admin-token"
+      "x-vrata-admin-token": "test-admin-token"
     },
     data: {
       tenantId: "demo-tenant",
@@ -1656,7 +1656,7 @@ test("diagnostics capture multi-client remote visibility", async ({ browser, req
 
   const roomResponse = await request.post("/api/rooms", {
     headers: {
-      "x-noah-admin-token": "test-admin-token"
+      "x-vrata-admin-token": "test-admin-token"
     },
     data: {
       tenantId: "demo-tenant",
@@ -1978,8 +1978,8 @@ test("control plane can create room with avatar config", async ({ page }) => {
   await page.goto(`${String(href)}?avatarsandbox=1&debug=1`);
   await page.waitForFunction(() => {
     const debug = (window as Window & {
-      __NOAH_DEBUG__?: { avatarDebug?: { state?: string; presetCount?: number } };
-    }).__NOAH_DEBUG__;
+      __VRATA_DEBUG__?: { avatarDebug?: { state?: string; presetCount?: number } };
+    }).__VRATA_DEBUG__;
     return debug?.avatarDebug?.state === "loaded" && debug.avatarDebug?.presetCount === 10;
   });
 });
@@ -2023,7 +2023,7 @@ test("mock screen share updates UI and diagnostics", async ({ page, request }) =
 
   await expect(page.locator("#join-audio")).toBeEnabled();
 
-  const debug = await page.evaluate(() => (window as Window & { __NOAH_DEBUG__?: { screenShareState: string } }).__NOAH_DEBUG__);
+  const debug = await page.evaluate(() => (window as Window & { __VRATA_DEBUG__?: { screenShareState: string } }).__VRATA_DEBUG__);
   expect(debug?.screenShareState).toBe("sharing");
 
   const diagnosticsResponse = await request.get("/api/rooms/demo-room/diagnostics");
@@ -2032,7 +2032,7 @@ test("mock screen share updates UI and diagnostics", async ({ page, request }) =
 
   await page.click("#stop-share");
   await page.waitForTimeout(1000);
-  const debugAfter = await page.evaluate(() => (window as Window & { __NOAH_DEBUG__?: { screenShareState: string } }).__NOAH_DEBUG__);
+  const debugAfter = await page.evaluate(() => (window as Window & { __VRATA_DEBUG__?: { screenShareState: string } }).__VRATA_DEBUG__);
   expect(debugAfter?.screenShareState).toBe("stopped");
 });
 
@@ -2045,8 +2045,8 @@ test("fault-injected mic denied keeps room usable without audio", async ({ page,
   await expect(page.locator("#status-line")).toContainText("Microphone blocked");
 
   const debug = await page.evaluate(() => (window as Window & {
-    __NOAH_DEBUG__?: { issueCode?: string | null; degradedMode?: string; audioState?: string };
-  }).__NOAH_DEBUG__);
+    __VRATA_DEBUG__?: { issueCode?: string | null; degradedMode?: string; audioState?: string };
+  }).__VRATA_DEBUG__);
   expect(debug?.issueCode).toBe("mic_denied");
   expect(debug?.degradedMode).toBe("audio_unavailable");
   expect(debug?.audioState).toBe("degraded");
@@ -2064,8 +2064,8 @@ test("fault-injected media network block explains WebRTC can fail while scene lo
   await expect(page.locator("#status-line")).toContainText("Media connection blocked");
 
   const debug = await page.evaluate(() => (window as Window & {
-    __NOAH_DEBUG__?: { issueCode?: string | null; degradedMode?: string; screenShareState?: string; statusLine?: string };
-  }).__NOAH_DEBUG__);
+    __VRATA_DEBUG__?: { issueCode?: string | null; degradedMode?: string; screenShareState?: string; statusLine?: string };
+  }).__VRATA_DEBUG__);
   expect(debug?.issueCode).toBe("media_network_blocked");
   expect(debug?.degradedMode).toBe("media_transport_unavailable");
   expect(debug?.screenShareState).toBe("media_network_blocked");
@@ -2083,8 +2083,8 @@ test("fault-injected room-state failure falls back to API mode", async ({ page, 
   await expect(page.locator("#room-state-line")).toContainText("fallback API");
 
   const debug = await page.evaluate(() => (window as Window & {
-    __NOAH_DEBUG__?: { issueCode?: string | null; roomStateMode?: string; degradedMode?: string };
-  }).__NOAH_DEBUG__);
+    __VRATA_DEBUG__?: { issueCode?: string | null; roomStateMode?: string; degradedMode?: string };
+  }).__VRATA_DEBUG__);
   expect(debug?.issueCode).toBe("room_state_failed");
   expect(debug?.roomStateMode).toBe("api_fallback");
   expect(debug?.degradedMode).toBe("api_fallback");

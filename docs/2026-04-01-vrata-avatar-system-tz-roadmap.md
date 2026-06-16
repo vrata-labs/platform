@@ -1,4 +1,4 @@
-# ТЗ и Roadmap: система аватаров для `noah` (web / VR, stylized social avatars)
+# ТЗ и Roadmap: система аватаров для `vrata` (web / VR, stylized social avatars)
 
 ## 1. Что проектируем
 

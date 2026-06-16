@@ -2,7 +2,7 @@
 
 ## Agent instruction priority
 
-- Treat this `AGENTS.md` as the project-specific operating contract for Noah. Read it before deciding that a task is done.
+- Treat this `AGENTS.md` as the project-specific operating contract for Vrata. Read it before deciding that a task is done.
 - Вести диалог с пользователем на русском языке, если пользователь явно не попросил другой язык.
 - For code changes in this repository, the default definition of done is: local verification -> `git commit` -> `git push` -> normal CI/CD staging deploy -> staging verification on the deployed commit.
 - Do not stop after local tests when a change affects runtime behavior, deployment behavior, room manifests, scene bundles, or staging infrastructure. If commit/push/deploy is blocked by a higher-priority instruction or missing credentials, state that blocker explicitly and ask one short question.
@@ -36,11 +36,11 @@ Regression policy:
 
 - Any change touching local pose, XR input, interaction ray, teleport, seating, or avatar publishing must include unit tests for the affected state transition.
 - At minimum cover standing movement, seated movement lock, snap-turn, ray-intent suppression of snap-turn, teleport from seated, and seat claim/release behavior when relevant.
-- Before considering the change complete, run `pnpm --filter @noah/runtime-web build` and `pnpm --filter @noah/runtime-web test`. For user-facing runtime behavior, also run the repository e2e/staging checks required by the testing policy.
+- Before considering the change complete, run `pnpm --filter @vrata/runtime-web build` and `pnpm --filter @vrata/runtime-web test`. For user-facing runtime behavior, also run the repository e2e/staging checks required by the testing policy.
 
 Frame locomotion maintenance rules:
 
-- The runtime locomotion refactor slices in `docs/arch/noah_runtime_locomotion_refactor_prompt.md` are complete. Do not restart those slices as new work.
+- The runtime locomotion refactor slices in `docs/arch/vrata_runtime_locomotion_refactor_prompt.md` are complete. Do not restart those slices as new work.
 - Treat frame locomotion as maintenance-mode architecture: future behavior changes should be separate bugfix or feature tasks with focused tests.
 - `apps/runtime-web/src/locomotion/frame-locomotion.ts` should remain the frame locomotion pipeline entry point, not a mixed domain implementation file.
 - Keep XR-control planning in `apps/runtime-web/src/locomotion/frame-xr-controls.ts`, movement planning in `apps/runtime-web/src/locomotion/frame-movement.ts`, and frame command flushing in `apps/runtime-web/src/locomotion/frame-command-bridge.ts`.
@@ -52,9 +52,9 @@ Frame locomotion maintenance rules:
 
 ## Confirmed working Hall path
 
-- The first reliable Hall asset is not raw FBX. It is the exported GLB at `/mnt/d/Repository/project-noah/examples/assets/TheHallScene.glb`.
+- The first reliable Hall asset is not raw FBX. It is the exported GLB at `/mnt/d/Repository/project-vrata/examples/assets/TheHallScene.glb`.
 - Working Hall scene bundle file is `apps/runtime-web/public/assets/scenes/sense-hall2-v1/scene.json` and it points to `scene.glb`.
-- A working browser setup was derived from `/mnt/d/Repository/project-noah/examples/my-example.html` and `/mnt/d/Repository/project-noah/examples/my-example1.html`.
+- A working browser setup was derived from `/mnt/d/Repository/project-vrata/examples/my-example.html` and `/mnt/d/Repository/project-vrata/examples/my-example1.html`.
 - The A-Frame example uses `TheHallScene.glb` almost as-is with a simple setup: `gltf-model`, `renderer="physicallyCorrectLights: true;"`, one ambient light, and no custom material overrides.
 - For this Hall GLB, raw FBX import paths were misleading and produced black/empty results even when geometry technically loaded.
 
@@ -82,7 +82,7 @@ Frame locomotion maintenance rules:
 - Temporary Yandex Cloud stage VMs were repeatedly created from `infra/yandex/cloud-init/staging-scenes.yaml` because direct SSH/update flow on older staging hosts was unreliable.
 - Compose-based staging bootstrap now lives in `infra/yandex/cloud-init/staging-compose.yaml`, and fresh compose hosts should be created through `infra/yandex/scripts/provision-staging-compose.sh`.
 - To keep the current reserved staging IP on a fresh compose VM, run provisioning with `YC_NAT_ADDRESS=158.160.10.234`.
-- The current compose staging host after Phase 2 is `noah-stage-compose-v11` at static IP `158.160.10.234`; primary public app URL is `https://158.160.10.234.sslip.io`, direct smoke fallback is `http://158.160.10.234:4000`.
+- The current compose staging host after Phase 2 is `vrata-stage-compose-v11` at static IP `158.160.10.234`; primary public app URL is `https://158.160.10.234.sslip.io`, direct smoke fallback is `http://158.160.10.234:4000`.
 - Working public auxiliary domains are `https://state.158.160.10.234.sslip.io` for room-state and `https://livekit.158.160.10.234.sslip.io` for LiveKit.
 - The practical publish/update path was: commit scene bundle changes to branch `deploy/scene-bundles-stage-20260328`, push to GitHub, and point stage rooms at raw GitHub or jsDelivr scene bundle URLs instead of depending on local VM assets.
 - Compose staging rollout path is now: `git checkout <commit>` (or `git pull` on branch) -> `docker compose --env-file infra/docker/.env.staging -f infra/docker/compose.staging.yml build` -> `docker compose ... up -d`.
@@ -92,19 +92,19 @@ Frame locomotion maintenance rules:
 - Fresh stage VMs were usually easier than patching old ones in place; they were created with `yc compute instance create ... --metadata-from-file user-data=infra/yandex/cloud-init/staging-scenes.yaml,ssh-keys=<file>`.
 - For compose VMs, SSH access was made reliable by rendering a real user with `ssh_authorized_keys` directly into cloud-init instead of relying only on OS Login metadata.
 - One compose-specific failure mode was generating invalid sslip domains (`..sslip.io`); the safe pattern is `${ip}.sslip.io` plus subdomains like `state.${ip}.sslip.io` and `livekit.${ip}.sslip.io`.
-- Stage rooms were created/updated through the API with `x-noah-admin-token`, then patched to set `sceneBundleUrl` to the published bundle URL.
+- Stage rooms were created/updated through the API with `x-vrata-admin-token`, then patched to set `sceneBundleUrl` to the published bundle URL.
 - Compose staging now keeps a restored room catalog for the main scene bundles: Hall, BlueOffice, LectureHall, Showroom, MeetingSmall, Cinema, Anastasia, NewGallery, ArtGallery, Standup, OporaRussia, SergOffice, and CinemaModeler.
 - For quick validation, browser automation against public room URLs plus `sceneDebug` diagnostics was more reliable than trying to introspect the VM directly.
 - One real failure mode: stage `/assets/...` requests returned `404`, which made scene bundle tests misleading.
 - `apps/api/src/index.ts` now has a fallback to serve static assets from both `apps/runtime-web/dist` and `apps/runtime-web/public`.
 - One Phase 2 infra failure mode was transient registry instability from `quay.io` for MinIO; compose now uses `minio/minio` from Docker Hub instead.
-- Phase 4 registry path is now live in `Yandex Container Registry` `crp9cm29k6p76hqo8lti` (`noah`); published image names are `cr.yandex/crp9cm29k6p76hqo8lti/noah-api` and `cr.yandex/crp9cm29k6p76hqo8lti/noah-room-state`.
+- Phase 4 registry path is now live in `Yandex Container Registry` `crp9cm29k6p76hqo8lti` (`vrata`); published image names are `cr.yandex/crp9cm29k6p76hqo8lti/vrata-api` and `cr.yandex/crp9cm29k6p76hqo8lti/vrata-room-state`.
 - GitHub Actions publish workflow is `.github/workflows/docker-publish.yml`; it publishes immutable SHA tags plus only `staging` and branch-slug aliases, and PRs do not publish images.
 - Staging deploy workflow is `.github/workflows/staging-deploy.yml`; it deploys immutable SHA tags over SSH and its GitHub Actions `workflow_dispatch` path was verified with run `23801431402`, including post-deploy smoke (`/health`, `demo-room`, `control-plane`).
 - Phase 6 upgraded `.github/workflows/staging-deploy.yml` into the mandatory staging gate: it now runs public smoke plus `pnpm test:e2e:staging`, persists the current successful SHA on the VM, and rolls back automatically on verification failure. Verified failed rollback run: `23804157870`; verified successful gated run: `23804311484`.
 - Required GitHub secrets for YCR publish are `YCR_REGISTRY_ID`, `YCR_USERNAME=json_key`, and `YCR_PASSWORD` containing the full service account key JSON.
-- Current Yandex service account for GitHub image pushes is `noah-gh-ycr-pusher` (`ajegfvegcehvb09mj977`) with `container-registry.images.pusher` on folder `b1g2ndo07lr7l5q8bb08`.
-- For reliable external testing, a CDN-hosted scene bundle URL worked well: `https://cdn.jsdelivr.net/gh/psilon2000/noah@deploy/scene-bundles-stage-20260328/apps/runtime-web/public/assets/scenes/sense-hall2-v1/scene.json`.
+- Current Yandex service account for GitHub image pushes is `vrata-gh-ycr-pusher` (`ajegfvegcehvb09mj977`) with `container-registry.images.pusher` on folder `b1g2ndo07lr7l5q8bb08`.
+- For reliable external testing, a CDN-hosted scene bundle URL worked well: `https://cdn.jsdelivr.net/gh/psilon2000/vrata@deploy/scene-bundles-stage-20260328/apps/runtime-web/public/assets/scenes/sense-hall2-v1/scene.json`.
 - Raw GitHub bundle URLs were often safer than waiting for CDN cache refresh when a scene bundle had just changed.
 - For smooth remote avatar movement, `apps/runtime-web/src/avatar/avatar-pose-buffer.ts` must normalize incoming pose frames onto a receiver-local timeline. Using sender `frame.sentAtMs` directly for playback on the receiver causes moving remote avatars to advance in chunks even when stationary remotes look fine. Keep sender timestamps only as an input for relative frame spacing/jitter calculations, not as the absolute playback clock.
 - A common false negative was judging a scene too early: some heavy scenes like `ArtGallery` stayed in fallback for several seconds before transitioning to `loaded`.
@@ -121,7 +121,7 @@ Frame locomotion maintenance rules:
 
 - For SenseTower scene migration, prefer existing exported GLB/GLTF assets over raw FBX whenever possible.
 - When something looks black or wrong, first inspect `sceneDebug` diagnostics before tweaking spawn/materials by hand.
-- If a scene already worked in another web project, copy its rendering assumptions first and only then adapt to `noah`.
+- If a scene already worked in another web project, copy its rendering assumptions first and only then adapt to `vrata`.
 - User preference: after substantial implementation work, prepare changes so they are ready to commit/push, and if the user asks to finish the task end-to-end they usually want commit + push included unless they explicitly say otherwise. Do not override higher-priority git safety rules when commit was not requested.
 - User preference: all code changes made by the agent should be checked on stage, not only locally; if stage was not updated yet, finish by deploying and verifying there. Pure docs/notes-only changes such as `AGENTS.md` do not require a stage deploy.
 - User preference: for publishing to staging, the normal path is `git commit` + `git push` through the existing CI/CD pipeline; this is expected and normal.

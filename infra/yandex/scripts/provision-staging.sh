@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-INSTANCE_NAME="${1:-noah-staging}"
+INSTANCE_NAME="${1:-vrata-staging}"
 ZONE="${YC_ZONE:-ru-central1-b}"
 PLATFORM_ID="standard-v3"
 CORES="2"

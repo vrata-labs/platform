@@ -1,6 +1,6 @@
 # Security Policy
 
-Noah is preparing for a public `0.1` beta. Treat the current project as early-stage software and do not use default development secrets in production.
+Vrata is preparing for a public `0.1` beta. Treat the current project as early-stage software and do not use default development secrets in production.
 
 ## Supported Versions
 

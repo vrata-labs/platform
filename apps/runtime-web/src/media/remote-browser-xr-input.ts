@@ -1,4 +1,4 @@
-import type { SurfaceInputKind } from "@noah/shared-types";
+import type { SurfaceInputKind } from "@vrata/shared-types";
 
 export interface RemoteBrowserXrPointerPlanInput {
   browserActive: boolean;

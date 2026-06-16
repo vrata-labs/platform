@@ -24,7 +24,7 @@
 
 ## Verification At This Point
 
-- Runtime build and unit tests passed locally: `pnpm --filter @noah/runtime-web build && pnpm --filter @noah/runtime-web test` with `101 passed`.
+- Runtime build and unit tests passed locally: `pnpm --filter @vrata/runtime-web build && pnpm --filter @vrata/runtime-web test` with `101 passed`.
 - Full local e2e passed: `pnpm test:e2e` with `49 passed, 1 skipped`.
 - CI passed for `6f220bd`: run `25044825248`.
 - Docker Publish passed for `6f220bd`: run `25044825303`.

@@ -44,7 +44,7 @@ jobs:
       - name: Wait for staging health
         run: |
           for attempt in $(seq 1 30); do
-            if curl --fail --silent "$BASE_URL/health" >/tmp/noah-staging-health.json; then
+            if curl --fail --silent "$BASE_URL/health" >/tmp/vrata-staging-health.json; then
               exit 0
             fi
             sleep 10

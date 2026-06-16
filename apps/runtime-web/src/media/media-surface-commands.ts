@@ -5,7 +5,7 @@ import {
   type RemoteBrowserPatch,
   type ScreenSharePatch,
   type WhiteboardPatch
-} from "@noah/shared-types";
+} from "@vrata/shared-types";
 
 import {
   sendSurfaceCreateObjectCommand,

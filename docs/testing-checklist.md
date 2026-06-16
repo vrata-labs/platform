@@ -1,6 +1,6 @@
 # Testing And Staging Contract
 
-This document is the source of truth for where Noah tests live, where they run, and where their results are stored.
+This document is the source of truth for where Vrata tests live, where they run, and where their results are stored.
 
 ## Where Tests Live
 
@@ -73,7 +73,7 @@ GitHub Actions uploads these paths as artifacts with 14-day retention:
 - `playwright-staging-gate-<run-id>-<attempt>` from staging deploy;
 - `playwright-staging-smoke-<run-id>-<attempt>` from manual staging smoke.
 
-Do not put secrets in page-visible test output. Runtime access tokens are redacted from `__NOAH_DEBUG__`; keep that invariant before adding new uploaded artifacts. Playwright traces are disabled by default and should only be enabled deliberately with `PLAYWRIGHT_TRACE=1` for short-lived debugging.
+Do not put secrets in page-visible test output. Runtime access tokens are redacted from `__VRATA_DEBUG__`; keep that invariant before adding new uploaded artifacts. Playwright traces are disabled by default and should only be enabled deliberately with `PLAYWRIGHT_TRACE=1` for short-lived debugging.
 
 ## Public Release Requirement
 

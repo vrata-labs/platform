@@ -97,13 +97,13 @@ test("preflightSceneBundle verifies manifest and relative assets", async () => {
 });
 
 test("snapshot-scene-assets creates immutable version directory without copying older snapshots", async () => {
-  const root = await mkdtemp(join(tmpdir(), "noah-scene-assets-"));
+  const root = await mkdtemp(join(tmpdir(), "vrata-scene-assets-"));
   const scene = join(root, "sense-hall2-v1");
   const oldSha = "abcdefabcdefabcdefabcdefabcdefabcdefabcd";
   await mkdir(join(scene, oldSha), { recursive: true });
   await writeFile(join(scene, "scene.json"), JSON.stringify({ glbPath: "scene.glb" }));
   await writeFile(join(scene, "scene.glb"), "glb");
-  await writeFile(join(scene, oldSha, ".noah-scene-snapshot"), "version=old\n");
+  await writeFile(join(scene, oldSha, ".vrata-scene-snapshot"), "version=old\n");
   await writeFile(join(scene, oldSha, "old.txt"), "old");
 
   const scriptPath = fileURLToPath(new URL("./snapshot-scene-assets.sh", import.meta.url));
@@ -115,7 +115,7 @@ test("snapshot-scene-assets creates immutable version directory without copying 
 });
 
 test("public asset checker blocks non-allowlisted scene bundles", async () => {
-  const root = await mkdtemp(join(tmpdir(), "noah-public-assets-"));
+  const root = await mkdtemp(join(tmpdir(), "vrata-public-assets-"));
   await mkdir(join(root, "livadia-nicholas-office-v1"));
   await mkdir(join(root, "the-hall-v1"));
   await mkdir(join(root, "the-office-v1"));
@@ -127,8 +127,8 @@ test("public asset checker blocks non-allowlisted scene bundles", async () => {
 });
 
 test("private scene asset exporter copies sense bundles and writes a manifest", async () => {
-  const sourceRoot = await mkdtemp(join(tmpdir(), "noah-private-scene-source-"));
-  const targetRoot = await mkdtemp(join(tmpdir(), "noah-private-scene-target-"));
+  const sourceRoot = await mkdtemp(join(tmpdir(), "vrata-private-scene-source-"));
+  const targetRoot = await mkdtemp(join(tmpdir(), "vrata-private-scene-target-"));
   await mkdir(join(sourceRoot, "sense-hall2-v1"));
   await mkdir(join(sourceRoot, "public-sample-v1"));
   await writeFile(join(sourceRoot, "sense-hall2-v1", "scene.json"), JSON.stringify({
@@ -156,8 +156,8 @@ test("private scene asset exporter copies sense bundles and writes a manifest", 
 });
 
 test("private scene asset sync copies manifest scenes into platform scene root", async () => {
-  const privateRoot = await mkdtemp(join(tmpdir(), "noah-private-scene-repo-"));
-  const platformRoot = await mkdtemp(join(tmpdir(), "noah-platform-scenes-"));
+  const privateRoot = await mkdtemp(join(tmpdir(), "vrata-private-scene-repo-"));
+  const platformRoot = await mkdtemp(join(tmpdir(), "vrata-platform-scenes-"));
   await mkdir(join(privateRoot, "assets", "scenes", "sense-hall2-v1"), { recursive: true });
   await writeFile(join(privateRoot, "assets", "manifest.json"), JSON.stringify({
     schemaVersion: 1,

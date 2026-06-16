@@ -18,7 +18,7 @@ export const defaultRooms = [
 ];
 
 const defaultBaseUrl = "https://158.160.10.234.sslip.io";
-const defaultAdminToken = "noah-stage-admin";
+const defaultAdminToken = "vrata-stage-admin";
 const defaultBranch = "deploy/scene-bundles-stage-20260328";
 
 function trimTrailingSlash(value) {
@@ -71,8 +71,8 @@ export function desiredSceneBundleUrl(sceneId, input) {
   }
   const branch = input.branch ?? defaultBranch;
   return input.version
-    ? `https://raw.githubusercontent.com/psilon2000/noah/${branch}/apps/runtime-web/public/assets/scenes/${sceneId}/${input.version}/scene.json`
-    : `https://raw.githubusercontent.com/psilon2000/noah/${branch}/apps/runtime-web/public/assets/scenes/${sceneId}/scene.json`;
+    ? `https://raw.githubusercontent.com/psilon2000/vrata/${branch}/apps/runtime-web/public/assets/scenes/${sceneId}/${input.version}/scene.json`
+    : `https://raw.githubusercontent.com/psilon2000/vrata/${branch}/apps/runtime-web/public/assets/scenes/${sceneId}/scene.json`;
 }
 
 function isFetchableUrl(url) {
@@ -180,7 +180,7 @@ async function patchRoom(baseUrl, adminToken, roomId, sceneBundleUrl) {
     method: "PATCH",
     headers: {
       "content-type": "application/json",
-      "x-noah-admin-token": adminToken
+      "x-vrata-admin-token": adminToken
     },
     body: JSON.stringify({ sceneBundleUrl })
   });
@@ -256,7 +256,7 @@ function parseRestoreReportArg(argv) {
 
 async function main() {
   const baseUrl = process.env.BASE_URL ?? defaultBaseUrl;
-  const adminToken = process.env.STAGING_ADMIN_TOKEN ?? process.env.NOAH_ADMIN_TOKEN ?? defaultAdminToken;
+  const adminToken = process.env.STAGING_ADMIN_TOKEN ?? process.env.VRATA_ADMIN_TOKEN ?? defaultAdminToken;
   const restoreReportPath = parseRestoreReportArg(process.argv.slice(2));
 
   if (restoreReportPath) {

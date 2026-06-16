@@ -2,7 +2,7 @@
 
 ## Цель
 
-Вынести в `apps/api` минимальный storage abstraction для scene bundles и bundle-related artifacts, чтобы `noah` одинаково работал с локальным MinIO по умолчанию и с внешним `S3-compatible` backend вроде `Yandex Object Storage`, не меняя runtime contract: room manifest по-прежнему отдает только `sceneBundleUrl`.
+Вынести в `apps/api` минимальный storage abstraction для scene bundles и bundle-related artifacts, чтобы `vrata` одинаково работал с локальным MinIO по умолчанию и с внешним `S3-compatible` backend вроде `Yandex Object Storage`, не меняя runtime contract: room manifest по-прежнему отдает только `sceneBundleUrl`.
 
 ## Не-цель
 

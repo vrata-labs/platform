@@ -50,7 +50,7 @@ function roomUrl(roomId: string, role: "guest" | "member" | "host", extra = "") 
 }
 
 async function readDebug(page: Page): Promise<MediaAcceptanceDebug | undefined> {
-  return page.evaluate(() => (window as Window & { __NOAH_DEBUG__?: MediaAcceptanceDebug }).__NOAH_DEBUG__);
+  return page.evaluate(() => (window as Window & { __VRATA_DEBUG__?: MediaAcceptanceDebug }).__VRATA_DEBUG__);
 }
 
 async function waitForKernel(page: Page, role: "guest" | "member" | "host") {
@@ -91,8 +91,8 @@ function whiteboardStrokeCount(debug: MediaAcceptanceDebug | undefined, surfaceI
 
 async function selectSurface(page: Page, surfaceId: string) {
   const selected = await page.evaluate((id) => (window as Window & {
-    __NOAH_TEST__?: { selectMediaSurface: (surfaceId: string) => boolean };
-  }).__NOAH_TEST__?.selectMediaSurface(id) ?? false, surfaceId);
+    __VRATA_TEST__?: { selectMediaSurface: (surfaceId: string) => boolean };
+  }).__VRATA_TEST__?.selectMediaSurface(id) ?? false, surfaceId);
   expect(selected).toBe(true);
 }
 
@@ -103,8 +103,8 @@ async function sendSurfaceInput(page: Page, input: { surfaceId: string; source?:
 
 async function trySendSurfaceInput(page: Page, input: { surfaceId: string; source?: string; kind?: string; u?: number; v?: number }) {
   return page.evaluate((value) => (window as Window & {
-    __NOAH_TEST__?: { sendDebugSurfaceInput: (input?: { surfaceId?: string; source?: string; kind?: string; u?: number; v?: number }) => boolean };
-  }).__NOAH_TEST__?.sendDebugSurfaceInput(value) ?? false, input);
+    __VRATA_TEST__?: { sendDebugSurfaceInput: (input?: { surfaceId?: string; source?: string; kind?: string; u?: number; v?: number }) => boolean };
+  }).__VRATA_TEST__?.sendDebugSurfaceInput(value) ?? false, input);
 }
 
 test("M1.10 acceptance covers screen share, whiteboard, XR input, permissions, and rejoin", async ({ browser }) => {
@@ -130,8 +130,8 @@ test("M1.10 acceptance covers screen share, whiteboard, XR input, permissions, a
       "remote-browser",
       "extension-test-card"
     ]));
-    expect(registryDebug?.mediaObjects?.extensions?.some((extension) => extension.id === "noah.screen-share" && extension.enabled && extension.valid)).toBe(true);
-    expect(registryDebug?.mediaObjects?.extensions?.some((extension) => extension.id === "noah.whiteboard" && extension.enabled && extension.valid)).toBe(true);
+    expect(registryDebug?.mediaObjects?.extensions?.some((extension) => extension.id === "vrata.screen-share" && extension.enabled && extension.valid)).toBe(true);
+    expect(registryDebug?.mediaObjects?.extensions?.some((extension) => extension.id === "vrata.whiteboard" && extension.enabled && extension.valid)).toBe(true);
 
     await selectSurface(host, MAIN_SURFACE_ID);
     await expect(host.locator("#start-share")).toBeEnabled();

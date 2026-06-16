@@ -6,7 +6,7 @@
 
 Реализованный slice:
 
-- добавлен общий contract для `NoahMediaExtensionManifest`, `MediaObjectDefinition`, capabilities и object `stateKind`;
+- добавлен общий contract для `VrataMediaExtensionManifest`, `MediaObjectDefinition`, capabilities и object `stateKind`;
 - built-in объекты `surface-test-card`, `screen-share`, `whiteboard`, `remote-browser` описаны как internal extensions;
 - добавлен internal `extension-test-card`, который создается через registry и использует generic `surface-test-card` stateKind без отдельной ветки в room-state reducer;
 - disabled и missing-capability demo extensions остаются зарегистрированными в debug snapshot, но недоступны для создания;
@@ -22,7 +22,7 @@ Verification: focused package checks, root `lint`/`typecheck`/`build`/`test`, fo
 
 Описать формальный протокол, по которому новые медийные объекты могут добавляться без изменения ядра среды исполнения.
 
-В ближайшей версии расширения могут быть только внутренними, то есть созданными в рамках проекта NOAH. Но архитектура должна быть готова к будущим независимым разработчикам.
+В ближайшей версии расширения могут быть только внутренними, то есть созданными в рамках проекта VRATA. Но архитектура должна быть готова к будущим независимым разработчикам.
 
 ## Почему это важно
 
@@ -41,7 +41,7 @@ Verification: focused package checks, root `lint`/`typecheck`/`build`/`test`, fo
 ## Описание расширения
 
 ```ts
-type NoahMediaExtensionManifest = {
+type VrataMediaExtensionManifest = {
   id: string;
   version: string;
   displayName: string;
@@ -61,7 +61,7 @@ type NoahMediaExtensionManifest = {
   requiredPermissions: string[];
 
   compatibility: {
-    noahRuntime: string;
+    vrataRuntime: string;
     roomManifestSchema: number;
   };
 
@@ -72,8 +72,8 @@ type NoahMediaExtensionManifest = {
 ## Протокол выполнения объекта
 
 ```ts
-type NoahMediaExtension = {
-  manifest: NoahMediaExtensionManifest;
+type VrataMediaExtension = {
+  manifest: VrataMediaExtensionManifest;
   createController(ctx: MediaObjectMountContext): Promise<MediaObjectController>;
 };
 ```
@@ -153,7 +153,7 @@ type ExtensionRuntimeApi = {
 
 ```json
 {
-  "id": "noah.whiteboard",
+  "id": "vrata.whiteboard",
   "version": "0.1.0",
   "displayName": "Interactive Whiteboard",
   "requiredCapabilities": [
@@ -167,7 +167,7 @@ type ExtensionRuntimeApi = {
     "whiteboard.clear"
   ],
   "compatibility": {
-    "noahRuntime": ">=0.1.0",
+    "vrataRuntime": ">=0.1.0",
     "roomManifestSchema": 1
   },
   "entry": "./whiteboard.js"
@@ -178,7 +178,7 @@ type ExtensionRuntimeApi = {
 
 ```json
 {
-  "id": "noah.screen-share",
+  "id": "vrata.screen-share",
   "version": "0.1.0",
   "displayName": "Screen Share Surface",
   "requiredCapabilities": [
@@ -193,7 +193,7 @@ type ExtensionRuntimeApi = {
     "screen-share.stop"
   ],
   "compatibility": {
-    "noahRuntime": ">=0.1.0",
+    "vrataRuntime": ">=0.1.0",
     "roomManifestSchema": 1
   },
   "entry": "./screen-share.js"

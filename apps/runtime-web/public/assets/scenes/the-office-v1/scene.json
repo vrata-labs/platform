@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "sceneId": "the-office-v1",
   "label": "The Office V1",
-  "source": "noah-test-fixture",
+  "source": "vrata-test-fixture",
   "glbPath": "scene.gltf",
   "spawnPoints": [
     {

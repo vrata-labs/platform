@@ -2,7 +2,7 @@
 
 ## Цель
 
-Перевести текущий staging/self-hosted контур `noah` на воспроизводимую схему из Docker-образов и `docker compose`, чтобы проект можно было развернуть на одной VM без vendor lock-in, а затем без смены контрактов переключать object storage на S3-совместимый backend вроде `Yandex Object Storage`. Одновременно внедрить CI/CD pipeline, который после коммита автоматически прогоняет тесты, публикует образы в registry, выкатывает staging и запускает staging `e2e`.
+Перевести текущий staging/self-hosted контур `vrata` на воспроизводимую схему из Docker-образов и `docker compose`, чтобы проект можно было развернуть на одной VM без vendor lock-in, а затем без смены контрактов переключать object storage на S3-совместимый backend вроде `Yandex Object Storage`. Одновременно внедрить CI/CD pipeline, который после коммита автоматически прогоняет тесты, публикует образы в registry, выкатывает staging и запускает staging `e2e`.
 
 ## Не-цель
 

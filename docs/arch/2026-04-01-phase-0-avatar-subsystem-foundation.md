@@ -2,7 +2,7 @@
 
 ## Цель
 
-Подготовить Phase 0 из `docs/2026-04-01-noah-avatar-system-tz-roadmap.md` так, чтобы следующая реализация аватаров шла через отдельную подсистему, новые versioned contracts и управляемый asset path, а не через дальнейшее разрастание `apps/runtime-web/src/main.ts` и текущего coarse presence state.
+Подготовить Phase 0 из `docs/2026-04-01-vrata-avatar-system-tz-roadmap.md` так, чтобы следующая реализация аватаров шла через отдельную подсистему, новые versioned contracts и управляемый asset path, а не через дальнейшее разрастание `apps/runtime-web/src/main.ts` и текущего coarse presence state.
 
 ## Не-цель
 
@@ -98,7 +98,7 @@
 
 ## Затронутые файлы/модули
 
-- `docs/2026-04-01-noah-avatar-system-tz-roadmap.md`
+- `docs/2026-04-01-vrata-avatar-system-tz-roadmap.md`
 - `docs/architecture.md`
 - `docs/runtime.md`
 - `packages/shared-types/src/index.ts`

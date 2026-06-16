@@ -2,7 +2,7 @@
 
 ## Цель
 
-Сделать staging deploy для `noah` по-настоящему gate-driven: после rollout на staging GitHub Actions должен автоматически запускать `pnpm test:e2e:staging`, проверять обязательные staging flows и считать deploy успешным только если post-deploy smoke и staging verification зеленые; при fail workflow должен помечать deploy неуспешным и выполнять rollback на previous successful SHA.
+Сделать staging deploy для `vrata` по-настоящему gate-driven: после rollout на staging GitHub Actions должен автоматически запускать `pnpm test:e2e:staging`, проверять обязательные staging flows и считать deploy успешным только если post-deploy smoke и staging verification зеленые; при fail workflow должен помечать deploy неуспешным и выполнять rollback на previous successful SHA.
 
 ## Не-цель
 

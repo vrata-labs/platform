@@ -1,6 +1,6 @@
 # Scene Technical Requirements
 
-This document defines the target requirements for new Noah scenes. It is based on the current Scene Bundle v1 runtime contract and on diagnostics from the legacy exported staging scenes. The legacy scenes are useful only as technical probes. New scenes must be original or properly licensed and must not copy their meshes, textures, layouts, names, trade dress, or distinctive visual composition.
+This document defines the target requirements for new Vrata scenes. It is based on the current Scene Bundle v1 runtime contract and on diagnostics from the legacy exported staging scenes. The legacy scenes are useful only as technical probes. New scenes must be original or properly licensed and must not copy their meshes, textures, layouts, names, trade dress, or distinctive visual composition.
 
 ## Goals
 
@@ -42,7 +42,7 @@ Key conclusions:
 
 ### Originality And Rights
 
-- The scene must be newly authored for Noah, generated from Noah-owned assets, or built from assets with explicit commercial web/XR rights.
+- The scene must be newly authored for Vrata, generated from Vrata-owned assets, or built from assets with explicit commercial web/XR rights.
 - The scene must not reproduce the prior company's scene layouts, object arrangements, branded interiors, visual identity, or distinctive material palette.
 - Every non-original asset must have a recorded license, source URL or vendor ID, author, allowed usage, and proof that web, staging, production, screenshots, and derivative optimization are permitted.
 - The bundle must not contain private local paths, employee names, prior-company project paths, or source-system identifiers that cannot be published.
@@ -108,14 +108,14 @@ Recommended rights block:
 ```json
 {
   "rights": {
-    "owner": "noah",
+    "owner": "vrata",
     "license": "internal-original",
     "clearedFor": ["staging", "production", "web-runtime", "screenshots", "optimization"],
     "sourceAssets": [
       {
         "id": "asset-library-or-ticket-id",
         "type": "mesh|texture|hdr|audio|font",
-        "author": "Noah",
+        "author": "Vrata",
         "licenseRef": "LICENSES.md"
       }
     ]
@@ -217,14 +217,14 @@ Notes:
 
 ## Runtime Visual Acceptance
 
-Runtime acceptance must be measured in the real Noah browser runtime, not only through static GLB inspection.
+Runtime acceptance must be measured in the real Vrata browser runtime, not only through static GLB inspection.
 
 Required command shape for automated checks:
 
 ```text
 open /rooms/<room-id>?debug=1&scenefit=0
-wait until window.__NOAH_DEBUG__.sceneBundleState is loaded or failed
-read window.__NOAH_DEBUG__.sceneDebug
+wait until window.__VRATA_DEBUG__.sceneBundleState is loaded or failed
+read window.__VRATA_DEBUG__.sceneDebug
 ```
 
 Hard failures:
@@ -432,7 +432,7 @@ The following JSON is the initial validator profile. It is intentionally stricte
 
 1. Static manifest validation: fields, paths, rights metadata, bundle layout.
 2. Static asset validation: GLB parse, resource references, extension support, sizes, texture dimensions, materials, node transforms, raw stats.
-3. Runtime local validation: load through Noah runtime with `?debug=1&scenefit=0`, assert loaded state, screenshot readability, runtime stats, missing assets.
+3. Runtime local validation: load through Vrata runtime with `?debug=1&scenefit=0`, assert loaded state, screenshot readability, runtime stats, missing assets.
 4. Staging validation: publish immutable bundle URL, bind a test room, run the same runtime checks against staging.
 5. Human review: confirm the scene is original, readable, socially usable, and not visually derived from the legacy copyrighted scenes.
 

@@ -7,7 +7,7 @@ import {
   type RoomMediaObjectsState,
   type ScreenShareObjectState,
   type WhiteboardState
-} from "@noah/shared-types";
+} from "@vrata/shared-types";
 
 export function activeMediaObjectForSurface(mediaObjects: RoomMediaObjectsState | null, surfaceId: string): MediaObjectInstance | null {
   const surface = mediaObjects?.surfaces[surfaceId];

@@ -12,7 +12,7 @@ import {
   type SurfaceInputScrollDelta,
   type SurfaceInputSource,
   type SurfaceInputUv
-} from "@noah/shared-types";
+} from "@vrata/shared-types";
 
 export interface DebugSurfaceDefinition {
   surfaceId: string;

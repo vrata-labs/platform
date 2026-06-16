@@ -31,7 +31,7 @@ Phase 2 доведена до рабочего staging-ready состояния.
 
 ## Предпосылки и ограничения
 
-- В roadmap Phase 2 уже зафиксирована как `Remote avatars и pose sync v1` в `docs/2026-04-01-noah-avatar-system-tz-roadmap.md:1259`; реалистичная граница фазы — transport/sync и рабочий remote runtime, а не финальный visual polish.
+- В roadmap Phase 2 уже зафиксирована как `Remote avatars и pose sync v1` в `docs/2026-04-01-vrata-avatar-system-tz-roadmap.md:1259`; реалистичная граница фазы — transport/sync и рабочий remote runtime, а не финальный visual polish.
 - После Phase 1 в `apps/runtime-web/src/avatar/*` уже есть локальный controller, snapshot contract, reliable state parser, pose-frame parser/publisher и `remote-avatar-runtime` stub.
 - В `apps/runtime-web/src/room-state-client.ts` уже есть клиентские сообщения `avatar_reliable_state` и `avatar_pose_preview`, но `apps/room-state/src/index.ts` пока их не ретранслирует.
 - Текущий `remote-avatar-runtime` уже умеет ingest reliable state и pose frame, хранит debug state и рисует stub body/head/hands; значит Phase 2 должна эволюционно улучшать этот путь.
@@ -125,7 +125,7 @@ Phase 2 доведена до рабочего staging-ready состояния.
 
 ## Затронутые файлы/модули (если известно)
 
-- `docs/2026-04-01-noah-avatar-system-tz-roadmap.md`
+- `docs/2026-04-01-vrata-avatar-system-tz-roadmap.md`
 - `docs/plans/2026-04-02-phase-1-local-self-avatar-body-solve.md`
 - `docs/plans/2026-04-03-phase-2-remote-avatar-pose-sync-v1.md`
 - `apps/room-state/src/index.ts`

@@ -345,7 +345,7 @@ const defaultPolicy = {
 
 ## 7. Отладочные данные
 
-Добавить в `window.__NOAH_DEBUG__` раздел:
+Добавить в `window.__VRATA_DEBUG__` раздел:
 
 ```ts
 mediaObjects: {

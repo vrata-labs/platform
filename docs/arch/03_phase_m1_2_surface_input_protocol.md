@@ -10,7 +10,7 @@
 
 Подтверждение:
 
-- локально прошли `git diff --check`, `pnpm --filter @noah/shared-types test`, `pnpm --filter @noah/runtime-web build`, `pnpm --filter @noah/runtime-web test`, `pnpm exec playwright test tests/e2e/m1-media --workers=1` и `pnpm test:e2e`;
+- локально прошли `git diff --check`, `pnpm --filter @vrata/shared-types test`, `pnpm --filter @vrata/runtime-web build`, `pnpm --filter @vrata/runtime-web test`, `pnpm exec playwright test tests/e2e/m1-media --workers=1` и `pnpm test:e2e`;
 - CI run `25736402601` прошел;
 - Docker Publish run `25736402599` прошел;
 - Staging Deploy run `25736527346` прошел;

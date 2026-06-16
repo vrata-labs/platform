@@ -43,8 +43,8 @@ Behavioral invariants:
 Required checks for local pose / locomotion changes:
 
 ```bash
-pnpm --filter @noah/runtime-web build
-pnpm --filter @noah/runtime-web test
+pnpm --filter @vrata/runtime-web build
+pnpm --filter @vrata/runtime-web test
 ```
 
 For user-facing runtime behavior, also run repository-level e2e/staging verification according to the root `AGENTS.md` testing policy.

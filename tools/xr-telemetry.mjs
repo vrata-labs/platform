@@ -8,7 +8,7 @@ const roomAliases = {
 function parseArgs(argv) {
   const options = {
     baseUrl: process.env.BASE_URL ?? "https://158.160.10.234.sslip.io",
-    adminToken: process.env.STAGING_ADMIN_TOKEN ?? process.env.NOAH_ADMIN_TOKEN ?? "noah-stage-admin",
+    adminToken: process.env.STAGING_ADMIN_TOKEN ?? process.env.VRATA_ADMIN_TOKEN ?? "vrata-stage-admin",
     roomId: process.env.XR_ROOM_ID ?? roomAliases.blueoffice,
     includeSynthetic: false,
     watch: false,
@@ -366,7 +366,7 @@ async function fetchTelemetry(options) {
   const url = new URL(`/api/rooms/${options.roomId}/xr-telemetry`, options.baseUrl);
   const response = await fetch(url, {
     headers: {
-      "x-noah-admin-token": options.adminToken
+      "x-vrata-admin-token": options.adminToken
     }
   });
   if (!response.ok) {

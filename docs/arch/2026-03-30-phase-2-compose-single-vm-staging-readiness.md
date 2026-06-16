@@ -2,7 +2,7 @@
 
 ## Цель
 
-Перевести текущий single-VM/staging runtime `noah` с systemd + workspace deploy на воспроизводимый `docker compose` stack, который поднимает `api`, `room-state`, `livekit`, `postgres`, `caddy` и `minio` одной командой, проходит локальную интеграционную проверку, затем публикуется на staging и подтверждается обязательными `e2e`/staging smoke проверками и понятным rollback path.
+Перевести текущий single-VM/staging runtime `vrata` с systemd + workspace deploy на воспроизводимый `docker compose` stack, который поднимает `api`, `room-state`, `livekit`, `postgres`, `caddy` и `minio` одной командой, проходит локальную интеграционную проверку, затем публикуется на staging и подтверждается обязательными `e2e`/staging smoke проверками и понятным rollback path.
 
 ## Не-цель
 
@@ -145,7 +145,7 @@
 
 - Phase 2 завершена: локальный compose stack, staging publish path, staging smoke, `pnpm test:e2e:staging` и rollback smoke были доведены до рабочего состояния.
 - Рабочие compose-артефакты: `infra/docker/compose.staging.yml`, `infra/docker/.env.staging.example`, `infra/docker/Caddyfile.local`, `infra/docker/Caddyfile.staging`, `infra/docker/minio-bootstrap.sh`, `infra/yandex/cloud-init/staging-compose.yaml`, `infra/yandex/scripts/provision-staging-compose.sh`.
-- Финальный проверенный compose staging host после фазы: `noah-stage-compose-v11` (`89.169.161.91`) с публичным app URL `https://89.169.161.91.sslip.io` и прямым smoke fallback через `http://<ip>:4000`.
+- Финальный проверенный compose staging host после фазы: `vrata-stage-compose-v11` (`89.169.161.91`) с публичным app URL `https://89.169.161.91.sslip.io` и прямым smoke fallback через `http://<ip>:4000`.
 - Для staging e2e подтвердился рабочий запуск через `BASE_URL=http://<ip>:4000 PLAYWRIGHT_NO_WEB_SERVER=1 pnpm test:e2e:staging`.
 - Отдельно подтверждены scene-room проверки для `Hall` и `BlueOffice`; для `BlueOffice` нужно ждать диагностики дольше, чем для простых комнат.
 - Важные инфраструктурные инсайты: cloud-init должен создавать реального SSH user с `ssh_authorized_keys`, MinIO image на staging надежнее тянуть с Docker Hub (`minio/minio`), а sslip-домены должны строиться напрямую от IP (`${ip}.sslip.io`, `state.${ip}.sslip.io`, `livekit.${ip}.sslip.io`).

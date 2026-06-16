@@ -113,7 +113,10 @@ PY
 }
 
 sync_private_scene_assets() {
-  local private_assets_root="${NOAH_PRIVATE_SCENE_ASSETS_ROOT:-/opt/noah-private-scene-assets/assets}"
+  local private_assets_root="${VRATA_PRIVATE_SCENE_ASSETS_ROOT:-${NOAH_PRIVATE_SCENE_ASSETS_ROOT:-/opt/vrata-private-scene-assets/assets}}"
+  if [ ! -f "$private_assets_root/manifest.json" ] && [ -f "/opt/noah-private-scene-assets/assets/manifest.json" ]; then
+    private_assets_root="/opt/noah-private-scene-assets/assets"
+  fi
 
   if [ ! -f "$private_assets_root/manifest.json" ]; then
     echo "missing_private_scene_assets_manifest:$private_assets_root/manifest.json" >&2
@@ -206,7 +209,7 @@ patch_room_scene_bundle() {
   response_file="$(mktemp)"
   curl -fsS -X PATCH "$api_base/api/rooms/$room_id" \
     -H 'content-type: application/json' \
-    -H "x-noah-admin-token: $admin_token" \
+    -H "x-vrata-admin-token: $admin_token" \
     -d "{\"sceneBundleUrl\":\"$scene_url\"}" \
     > "$response_file"
   actual_url="$(python3 - "$response_file" <<'PY'
@@ -234,9 +237,9 @@ patch_canonical_scene_bundles() {
   local hall_room_id
   local blueoffice_room_id
 
-  api_port="$(env_value NOAH_API_DIRECT_PORT)"
+  api_port="$(env_value VRATA_API_DIRECT_PORT)"
   admin_token="$(env_value CONTROL_PLANE_ADMIN_TOKEN)"
-  state_domain="$(env_value NOAH_STATE_DOMAIN)"
+  state_domain="$(env_value VRATA_STATE_DOMAIN)"
   api_base="http://127.0.0.1:${api_port:-4000}"
   asset_base="https://$state_domain"
   hall_room_id="${STAGING_HALL_ROOM_ID:-42db8225-f671-4e46-9c28-9381d66a948c}"
@@ -257,11 +260,11 @@ if [ ! -f "$ENV_FILE" ]; then
   exit 1
 fi
 
-NOAH_STAGING_PUBLIC_IP="${NOAH_STAGING_PUBLIC_IP:-}"
-if [ -z "$NOAH_STAGING_PUBLIC_IP" ]; then
-  NOAH_STAGING_PUBLIC_IP="$(curl -fsH 'Metadata-Flavor: Google' http://169.254.169.254/computeMetadata/v1/instance/network-interfaces/0/access-configs/0/external-ip || true)"
+VRATA_STAGING_PUBLIC_IP="${VRATA_STAGING_PUBLIC_IP:-}"
+if [ -z "$VRATA_STAGING_PUBLIC_IP" ]; then
+  VRATA_STAGING_PUBLIC_IP="$(curl -fsH 'Metadata-Flavor: Google' http://169.254.169.254/computeMetadata/v1/instance/network-interfaces/0/access-configs/0/external-ip || true)"
 fi
-export NOAH_STAGING_PUBLIC_IP
+export VRATA_STAGING_PUBLIC_IP
 
 python3 - "$ENV_FILE" "$IMAGE_TAG" <<'PY'
 from pathlib import Path
@@ -278,21 +281,38 @@ for line in lines:
     key, value = line.split('=', 1)
     values[key] = value
 
-values.setdefault('API_IMAGE_REPO', 'cr.yandex/crp9cm29k6p76hqo8lti/noah-api')
-values.setdefault('ROOM_STATE_IMAGE_REPO', 'cr.yandex/crp9cm29k6p76hqo8lti/noah-room-state')
-values.setdefault('REMOTE_BROWSER_IMAGE_REPO', 'cr.yandex/crp9cm29k6p76hqo8lti/noah-remote-browser')
-public_ip = os.environ.get('NOAH_STAGING_PUBLIC_IP', '').strip()
+values.setdefault('API_IMAGE_REPO', 'cr.yandex/crp9cm29k6p76hqo8lti/vrata-api')
+values.setdefault('ROOM_STATE_IMAGE_REPO', 'cr.yandex/crp9cm29k6p76hqo8lti/vrata-room-state')
+values.setdefault('REMOTE_BROWSER_IMAGE_REPO', 'cr.yandex/crp9cm29k6p76hqo8lti/vrata-remote-browser')
+for legacy_key, current_key in (
+    ('NOAH_APP_BASE_URL', 'VRATA_APP_BASE_URL'),
+    ('NOAH_APP_DOMAIN', 'VRATA_APP_DOMAIN'),
+    ('NOAH_STATE_DOMAIN', 'VRATA_STATE_DOMAIN'),
+    ('NOAH_LIVEKIT_DOMAIN', 'VRATA_LIVEKIT_DOMAIN'),
+    ('NOAH_BROWSER_DOMAIN', 'VRATA_BROWSER_DOMAIN'),
+    ('NOAH_DEV_ROLE_QUERY', 'VRATA_DEV_ROLE_QUERY'),
+    ('NOAH_INTERNAL_SERVICE_TOKEN', 'VRATA_INTERNAL_SERVICE_TOKEN'),
+    ('NOAH_HTTP_PORT', 'VRATA_HTTP_PORT'),
+    ('NOAH_HTTPS_PORT', 'VRATA_HTTPS_PORT'),
+    ('NOAH_API_DIRECT_PORT', 'VRATA_API_DIRECT_PORT'),
+    ('NOAH_ROOM_STATE_PORT', 'VRATA_ROOM_STATE_PORT'),
+    ('NOAH_LIVEKIT_PORT', 'VRATA_LIVEKIT_PORT'),
+    ('NOAH_LIVEKIT_UDP_PORT', 'VRATA_LIVEKIT_UDP_PORT')
+):
+    if current_key not in values and legacy_key in values:
+        values[current_key] = values[legacy_key]
+public_ip = os.environ.get('VRATA_STAGING_PUBLIC_IP', '').strip()
 if public_ip:
     app_domain = f'{public_ip}.sslip.io'
     state_domain = f'state.{app_domain}'
     livekit_domain = f'livekit.{app_domain}'
     browser_domain = f'browser.{app_domain}'
     values.update({
-        'NOAH_APP_BASE_URL': f'http://{public_ip}:4000',
-        'NOAH_APP_DOMAIN': app_domain,
-        'NOAH_STATE_DOMAIN': state_domain,
-        'NOAH_LIVEKIT_DOMAIN': livekit_domain,
-        'NOAH_BROWSER_DOMAIN': browser_domain,
+        'VRATA_APP_BASE_URL': f'http://{public_ip}:4000',
+        'VRATA_APP_DOMAIN': app_domain,
+        'VRATA_STATE_DOMAIN': state_domain,
+        'VRATA_LIVEKIT_DOMAIN': livekit_domain,
+        'VRATA_BROWSER_DOMAIN': browser_domain,
         'LIVEKIT_NODE_IP': public_ip,
         'ROOM_STATE_PUBLIC_URL': f'ws://{public_ip}:2567',
         'LIVEKIT_URL': f'ws://{public_ip}:7880',
@@ -306,16 +326,16 @@ if public_ip:
         'MINIO_PUBLIC_BASE_URL': f'http://{public_ip}:9000'
     })
 public_remote_browser_origins = ['https://rutube.ru', 'https://*.rutube.ru', 'https://*.rtbcdn.ru']
-if not values.get('NOAH_BROWSER_DOMAIN') and values.get('NOAH_APP_DOMAIN'):
-    values['NOAH_BROWSER_DOMAIN'] = 'browser.' + values['NOAH_APP_DOMAIN']
-if not values.get('REMOTE_BROWSER_PUBLIC_URL') and values.get('NOAH_BROWSER_DOMAIN'):
-    values['REMOTE_BROWSER_PUBLIC_URL'] = 'https://' + values['NOAH_BROWSER_DOMAIN']
+if not values.get('VRATA_BROWSER_DOMAIN') and values.get('VRATA_APP_DOMAIN'):
+    values['VRATA_BROWSER_DOMAIN'] = 'browser.' + values['VRATA_APP_DOMAIN']
+if not values.get('REMOTE_BROWSER_PUBLIC_URL') and values.get('VRATA_BROWSER_DOMAIN'):
+    values['REMOTE_BROWSER_PUBLIC_URL'] = 'https://' + values['VRATA_BROWSER_DOMAIN']
 if not values.get('REMOTE_BROWSER_ALLOWED_ORIGINS'):
     allowed_origins = []
-    if values.get('NOAH_APP_BASE_URL'):
-        allowed_origins.append(values['NOAH_APP_BASE_URL'])
-    if values.get('NOAH_APP_DOMAIN'):
-        allowed_origins.append('https://' + values['NOAH_APP_DOMAIN'])
+    if values.get('VRATA_APP_BASE_URL'):
+        allowed_origins.append(values['VRATA_APP_BASE_URL'])
+    if values.get('VRATA_APP_DOMAIN'):
+        allowed_origins.append('https://' + values['VRATA_APP_DOMAIN'])
     values['REMOTE_BROWSER_ALLOWED_ORIGINS'] = ','.join(dict.fromkeys(allowed_origins))
 configured_origins = [item.strip() for item in values.get('REMOTE_BROWSER_ALLOWED_ORIGINS', '').split(',') if item.strip()]
 configured_origins.extend(public_remote_browser_origins)
@@ -339,8 +359,8 @@ for line in lines:
     else:
       rendered.append(line)
 
-for key in ('API_IMAGE_REPO', 'ROOM_STATE_IMAGE_REPO', 'REMOTE_BROWSER_IMAGE_REPO', 'NOAH_APP_BASE_URL', 'NOAH_APP_DOMAIN', 'NOAH_STATE_DOMAIN', 'NOAH_LIVEKIT_DOMAIN', 'NOAH_BROWSER_DOMAIN', 'LIVEKIT_NODE_IP', 'ROOM_STATE_PUBLIC_URL', 'LIVEKIT_URL', 'REMOTE_BROWSER_PUBLIC_URL', 'REMOTE_BROWSER_ALLOWED_ORIGINS', 'REMOTE_BROWSER_ALLOW_PRIVATE_ALLOWED_ORIGINS', 'REMOTE_BROWSER_FRAME_INTERVAL_MS', 'REMOTE_BROWSER_TOKEN_SECRET', 'REMOTE_BROWSER_TOKEN_TTL_SECONDS', 'MINIO_PUBLIC_BASE_URL', 'IMAGE_TAG'):
-    if key not in seen:
+for key in ('API_IMAGE_REPO', 'ROOM_STATE_IMAGE_REPO', 'REMOTE_BROWSER_IMAGE_REPO', 'VRATA_APP_BASE_URL', 'VRATA_APP_DOMAIN', 'VRATA_STATE_DOMAIN', 'VRATA_LIVEKIT_DOMAIN', 'VRATA_BROWSER_DOMAIN', 'VRATA_DEV_ROLE_QUERY', 'VRATA_INTERNAL_SERVICE_TOKEN', 'VRATA_HTTP_PORT', 'VRATA_HTTPS_PORT', 'VRATA_API_DIRECT_PORT', 'VRATA_ROOM_STATE_PORT', 'VRATA_LIVEKIT_PORT', 'VRATA_LIVEKIT_UDP_PORT', 'LIVEKIT_NODE_IP', 'ROOM_STATE_PUBLIC_URL', 'LIVEKIT_URL', 'REMOTE_BROWSER_PUBLIC_URL', 'REMOTE_BROWSER_ALLOWED_ORIGINS', 'REMOTE_BROWSER_ALLOW_PRIVATE_ALLOWED_ORIGINS', 'REMOTE_BROWSER_FRAME_INTERVAL_MS', 'REMOTE_BROWSER_TOKEN_SECRET', 'REMOTE_BROWSER_TOKEN_TTL_SECONDS', 'MINIO_PUBLIC_BASE_URL', 'IMAGE_TAG'):
+    if key not in seen and key in values:
         rendered.append(f'{key}={values[key]}')
 
 env_path.write_text('\n'.join(rendered) + '\n')

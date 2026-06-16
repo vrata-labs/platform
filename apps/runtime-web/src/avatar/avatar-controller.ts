@@ -45,7 +45,8 @@ export interface LocalAvatarController {
   dispose(): void;
 }
 
-const AVATAR_SELECTION_KEY = "noah.avatarPresetId";
+const AVATAR_SELECTION_KEY = "vrata.avatarPresetId";
+const LEGACY_AVATAR_SELECTION_KEY = "noah.avatarPresetId";
 
 interface LocalAvatarVisual {
   root: THREE.Group;
@@ -116,7 +117,8 @@ function resolveSelectedAvatarPreset(input: {
   storage?: AvatarSelectionStorage;
   preferredAvatarId?: string;
 }): LoadedAvatarPreset | null {
-  const preferredId = input.preferredAvatarId ?? input.storage?.getItem(AVATAR_SELECTION_KEY) ?? null;
+  const legacyPreferredId = input.storage?.getItem(LEGACY_AVATAR_SELECTION_KEY) ?? null;
+  const preferredId = input.preferredAvatarId ?? input.storage?.getItem(AVATAR_SELECTION_KEY) ?? legacyPreferredId;
   if (preferredId) {
     const match = input.presets.find((preset) => preset.preset.avatarId === preferredId);
     if (match) {
@@ -174,6 +176,7 @@ export function createLocalAvatarController(input: {
   }
 
   input.storage?.setItem(AVATAR_SELECTION_KEY, selectedPreset.preset.avatarId);
+  input.storage?.setItem(LEGACY_AVATAR_SELECTION_KEY, selectedPreset.preset.avatarId);
 
   const visual = createLocalAvatarVisual(selectedPreset);
   let animationElapsedSeconds = 0;

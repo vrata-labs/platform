@@ -23,7 +23,7 @@ importers:
 
   apps/api:
     dependencies:
-      '@noah/shared-types':
+      '@vrata/shared-types':
         specifier: workspace:*
         version: link:../../packages/shared-types
       livekit-server-sdk:
@@ -45,7 +45,7 @@ importers:
 
   apps/remote-browser:
     dependencies:
-      '@noah/shared-types':
+      '@vrata/shared-types':
         specifier: workspace:*
         version: link:../../packages/shared-types
       livekit-client:
@@ -64,7 +64,7 @@ importers:
 
   apps/room-state:
     dependencies:
-      '@noah/shared-types':
+      '@vrata/shared-types':
         specifier: workspace:*
         version: link:../../packages/shared-types
       ws:
@@ -77,7 +77,7 @@ importers:
 
   apps/runtime-web:
     dependencies:
-      '@noah/shared-types':
+      '@vrata/shared-types':
         specifier: workspace:*
         version: link:../../packages/shared-types
       livekit-client:

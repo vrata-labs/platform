@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { MemoryStorage } from "./storage.js";
+import { MemoryStorage, initPostgresStorageWithRetry } from "./storage.js";
 
 test("MemoryStorage keeps xr telemetry events in insertion order", async () => {
   const storage = new MemoryStorage();
@@ -48,4 +48,57 @@ test("MemoryStorage enables screen share for new rooms by default", async () => 
 
   assert.equal(defaultRoom.features.screenShare, true);
   assert.equal(disabledRoom.features.screenShare, false);
+});
+
+test("Postgres storage init retries transient connection failures", async () => {
+  let attempts = 0;
+  const waits: number[] = [];
+  const retryAttempts: number[] = [];
+
+  await initPostgresStorageWithRetry({
+    async init() {
+      attempts += 1;
+      if (attempts < 3) {
+        const error = new Error("connect ECONNREFUSED 127.0.0.1:5432") as Error & { code: string };
+        error.code = "ECONNREFUSED";
+        throw error;
+      }
+    }
+  }, {
+    maxAttempts: 3,
+    retryDelayMs: 25,
+    onRetry: (_error, attempt) => retryAttempts.push(attempt),
+    wait: async (ms) => {
+      waits.push(ms);
+    }
+  });
+
+  assert.equal(attempts, 3);
+  assert.deepEqual(retryAttempts, [1, 2]);
+  assert.deepEqual(waits, [25, 25]);
+});
+
+test("Postgres storage init fails fast on non-connection errors", async () => {
+  let attempts = 0;
+  const syntaxError = new Error("syntax error at or near create") as Error & { code: string };
+  syntaxError.code = "42601";
+
+  let rejected: unknown;
+  try {
+    await initPostgresStorageWithRetry({
+      async init() {
+        attempts += 1;
+        throw syntaxError;
+      }
+    }, {
+      maxAttempts: 5,
+      retryDelayMs: 25,
+      wait: async () => undefined
+    });
+  } catch (error) {
+    rejected = error;
+  }
+
+  assert.equal(attempts, 1);
+  assert.equal(rejected, syntaxError);
 });

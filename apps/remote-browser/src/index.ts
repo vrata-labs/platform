@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { createRequire } from "node:module";
 import { chromium, type Browser, type BrowserContext, type Frame, type Page } from "playwright-core";
 import { WebSocketServer, type WebSocket } from "ws";
-import type { RemoteBrowserErrorCode, RemoteBrowserExecutorInputState, RemoteBrowserMediaSourceRect, RemoteBrowserPatch, SurfaceInputEvent } from "@noah/shared-types";
+import type { RemoteBrowserErrorCode, RemoteBrowserExecutorInputState, RemoteBrowserMediaSourceRect, RemoteBrowserPatch, SurfaceInputEvent } from "@vrata/shared-types";
 
 import { decodeRemoteBrowserFrameToken } from "./frame-token.js";
 import { createRemoteBrowserUrlPolicy, validateRemoteBrowserUrl, type RemoteBrowserUrlPolicy } from "./url-policy.js";
@@ -84,7 +84,7 @@ function resolveInternalHttpUrl(value: string | undefined, fallback: string): st
 }
 
 function getInternalServiceToken(): string | null {
-  const token = process.env.NOAH_INTERNAL_SERVICE_TOKEN?.trim() || process.env.REMOTE_BROWSER_INTERNAL_TOKEN?.trim() || "";
+  const token = process.env.VRATA_INTERNAL_SERVICE_TOKEN?.trim() || process.env.NOAH_INTERNAL_SERVICE_TOKEN?.trim() || process.env.REMOTE_BROWSER_INTERNAL_TOKEN?.trim() || "";
   return token || null;
 }
 
@@ -99,7 +99,7 @@ function isAuthorizedInternalRequest(request: IncomingMessage): boolean {
   if (!token) {
     return true;
   }
-  const provided = request.headers["x-noah-internal-token"];
+  const provided = request.headers["x-vrata-internal-token"] ?? request.headers["x-noah-internal-token"];
   return typeof provided === "string" && safeEqual(provided, token);
 }
 
@@ -150,13 +150,13 @@ const mediaFrameIntervalMs = resolveRemoteBrowserMediaFrameIntervalMs(process.en
 const frameBackpressureBytes = resolveRemoteBrowserFrameBackpressureBytes(process.env.REMOTE_BROWSER_FRAME_BACKPRESSURE_BYTES);
 const tokenSecret = process.env.REMOTE_BROWSER_TOKEN_SECRET ?? "dev-remote-browser-secret";
 const mediaIceServers = resolveRemoteBrowserMediaIceServers(process.env.REMOTE_BROWSER_MEDIA_ICE_SERVERS);
-const apiInternalUrl = resolveInternalHttpUrl(process.env.API_INTERNAL_URL ?? process.env.NOAH_API_INTERNAL_URL, "http://127.0.0.1:4000");
-const roomStateInternalUrl = resolveInternalHttpUrl(process.env.ROOM_STATE_INTERNAL_URL ?? process.env.NOAH_ROOM_STATE_INTERNAL_URL, "http://127.0.0.1:2567");
-export const remoteBrowserCaptureTargetTitle = "Noah Remote Browser";
-export const remoteBrowserViewportPublisherTitle = "Noah Capture Control";
-export const remoteBrowserViewportPublisherButtonId = "noah-remote-browser-start-capture";
-export const remoteBrowserCurrentTabCaptureButtonId = "noah-remote-browser-current-tab-capture";
-const remoteBrowserCaptureTitleGuardKey = "__NOAH_REMOTE_BROWSER_CAPTURE_TITLE_GUARD__";
+const apiInternalUrl = resolveInternalHttpUrl(process.env.API_INTERNAL_URL ?? process.env.VRATA_API_INTERNAL_URL ?? process.env.NOAH_API_INTERNAL_URL, "http://127.0.0.1:4000");
+const roomStateInternalUrl = resolveInternalHttpUrl(process.env.ROOM_STATE_INTERNAL_URL ?? process.env.VRATA_ROOM_STATE_INTERNAL_URL ?? process.env.NOAH_ROOM_STATE_INTERNAL_URL, "http://127.0.0.1:2567");
+export const remoteBrowserCaptureTargetTitle = "Vrata Remote Browser";
+export const remoteBrowserViewportPublisherTitle = "Vrata Capture Control";
+export const remoteBrowserViewportPublisherButtonId = "vrata-remote-browser-start-capture";
+export const remoteBrowserCurrentTabCaptureButtonId = "vrata-remote-browser-current-tab-capture";
+const remoteBrowserCaptureTitleGuardKey = "__VRATA_REMOTE_BROWSER_CAPTURE_TITLE_GUARD__";
 let activeListenPort = port;
 const remoteBrowserScrollbarStyle = `
   html {
@@ -193,10 +193,10 @@ export const remoteBrowserInitScript = (styleContent: string) => {
     lastClientY?: number;
     lastTarget?: string;
   };
-  type InputDebugWindow = Window & { __NOAH_REMOTE_BROWSER_INPUT_DEBUG__?: InputDebugState };
+  type InputDebugWindow = Window & { __VRATA_REMOTE_BROWSER_INPUT_DEBUG__?: InputDebugState };
 
   const installStyle = () => {
-    const styleId = "noah-remote-browser-scrollbar-style";
+    const styleId = "vrata-remote-browser-scrollbar-style";
     if (document.getElementById(styleId)) {
       return;
     }
@@ -276,11 +276,11 @@ export const remoteBrowserInitScript = (styleContent: string) => {
       return;
     }
     const inputWindow = window as InputDebugWindow;
-    if (inputWindow.__NOAH_REMOTE_BROWSER_INPUT_DEBUG__) {
+    if (inputWindow.__VRATA_REMOTE_BROWSER_INPUT_DEBUG__) {
       return;
     }
     const state: InputDebugState = { pointerMoveCount: 0, mouseMoveCount: 0, clickCount: 0 };
-    inputWindow.__NOAH_REMOTE_BROWSER_INPUT_DEBUG__ = state;
+    inputWindow.__VRATA_REMOTE_BROWSER_INPUT_DEBUG__ = state;
     const record = (event: MouseEvent | PointerEvent) => {
       if (event.type === "pointermove") {
         state.pointerMoveCount += 1;
@@ -550,7 +550,7 @@ function getInternalHeaders(): Record<string, string> {
   const token = getInternalServiceToken();
   return {
     "content-type": "application/json",
-    ...(token ? { "x-noah-internal-token": token } : {})
+    ...(token ? { "x-vrata-internal-token": token } : {})
   };
 }
 
@@ -688,11 +688,11 @@ async function publishViewportFromCapturePage(input: { page: Page; livekitUrl: s
       LivekitClient?: any;
       LiveKitClient?: any;
       livekitClient?: any;
-      __NOAH_REMOTE_BROWSER_LIVEKIT__?: PublishState;
-      __NOAH_REMOTE_BROWSER_PUBLISH_RESULT__?: PublishResult;
+      __VRATA_REMOTE_BROWSER_LIVEKIT__?: PublishState;
+      __VRATA_REMOTE_BROWSER_PUBLISH_RESULT__?: PublishResult;
     };
     const button = document.getElementById(buttonId) as HTMLButtonElement | null;
-    pageWindow.__NOAH_REMOTE_BROWSER_PUBLISH_RESULT__ = undefined;
+    pageWindow.__VRATA_REMOTE_BROWSER_PUBLISH_RESULT__ = undefined;
     const removeCaptureButton = () => {
       if (removeButtonAfterCapture) {
         document.getElementById(buttonId)?.remove();
@@ -710,9 +710,9 @@ async function publishViewportFromCapturePage(input: { page: Page; livekitUrl: s
       if (!navigator.mediaDevices?.getUserMedia) {
         return { ok: false, errorCode: "audio_track_missing", message: "getUserMedia_missing" };
       }
-      pageWindow.__NOAH_REMOTE_BROWSER_LIVEKIT__?.room?.disconnect();
-      pageWindow.__NOAH_REMOTE_BROWSER_LIVEKIT__?.stream?.getTracks().forEach((track) => track.stop());
-      pageWindow.__NOAH_REMOTE_BROWSER_LIVEKIT__?.streams?.forEach((stream) => stream.getTracks().forEach((track) => track.stop()));
+      pageWindow.__VRATA_REMOTE_BROWSER_LIVEKIT__?.room?.disconnect();
+      pageWindow.__VRATA_REMOTE_BROWSER_LIVEKIT__?.stream?.getTracks().forEach((track) => track.stop());
+      pageWindow.__VRATA_REMOTE_BROWSER_LIVEKIT__?.streams?.forEach((stream) => stream.getTracks().forEach((track) => track.stop()));
       let displayStream: MediaStream | null = null;
       let audioStream: MediaStream | null = null;
       const stopStreams = () => {
@@ -760,7 +760,7 @@ async function publishViewportFromCapturePage(input: { page: Page; livekitUrl: s
           name: "remote-browser-audio",
           source: LiveKit.Track.Source.ScreenShareAudio ?? "screen_share_audio"
         });
-        pageWindow.__NOAH_REMOTE_BROWSER_LIVEKIT__ = { room, streams: [displayStream, audioStream] };
+        pageWindow.__VRATA_REMOTE_BROWSER_LIVEKIT__ = { room, streams: [displayStream, audioStream] };
         return {
           ok: true,
           videoTrackSid: videoPublication.trackSid ?? videoPublication.sid ?? videoTrack.id,
@@ -773,24 +773,24 @@ async function publishViewportFromCapturePage(input: { page: Page; livekitUrl: s
     };
 
     if (!button) {
-      pageWindow.__NOAH_REMOTE_BROWSER_PUBLISH_RESULT__ = { ok: false, errorCode: "viewport_capture_failed", message: "publisher_button_missing" };
+      pageWindow.__VRATA_REMOTE_BROWSER_PUBLISH_RESULT__ = { ok: false, errorCode: "viewport_capture_failed", message: "publisher_button_missing" };
       return;
     }
     button.onclick = () => {
       void publish()
         .then((result) => {
-          pageWindow.__NOAH_REMOTE_BROWSER_PUBLISH_RESULT__ = result;
+          pageWindow.__VRATA_REMOTE_BROWSER_PUBLISH_RESULT__ = result;
         })
         .catch((error: unknown) => {
-          pageWindow.__NOAH_REMOTE_BROWSER_PUBLISH_RESULT__ = { ok: false, errorCode: "viewport_capture_failed", message: error instanceof Error ? error.message : "publish_exception" };
+          pageWindow.__VRATA_REMOTE_BROWSER_PUBLISH_RESULT__ = { ok: false, errorCode: "viewport_capture_failed", message: error instanceof Error ? error.message : "publish_exception" };
         });
     };
   }, { livekitUrl: input.livekitUrl, token: input.token, displayMediaOptions: input.captureOptions, audioMediaOptions: input.audioOptions, buttonId: input.buttonId, removeButtonAfterCapture: input.removeButtonAfterCapture === true });
   await waitForPagePaint(input.page);
   await input.page.click(`#${input.buttonId}`, { timeout: 5000 });
   const resultHandle = await input.page.waitForFunction(() => {
-    const pageWindow = window as Window & { __NOAH_REMOTE_BROWSER_PUBLISH_RESULT__?: unknown };
-    return pageWindow.__NOAH_REMOTE_BROWSER_PUBLISH_RESULT__ ?? false;
+    const pageWindow = window as Window & { __VRATA_REMOTE_BROWSER_PUBLISH_RESULT__?: unknown };
+    return pageWindow.__VRATA_REMOTE_BROWSER_PUBLISH_RESULT__ ?? false;
   }, undefined, { timeout: 45000 });
   const result = await resultHandle.jsonValue() as { ok?: boolean; videoTrackSid?: string; audioTrackSid?: string; errorCode?: string; message?: string };
   await resultHandle.dispose();
@@ -981,8 +981,8 @@ async function createMediaAnswerInFrame(frame: Frame, offer: RTCSessionDescripti
       captureStream?: () => MediaStream;
       mozCaptureStream?: () => MediaStream;
     };
-    const mediaWindow = window as Window & { __NOAH_REMOTE_BROWSER_MEDIA__?: MediaState };
-    const state = mediaWindow.__NOAH_REMOTE_BROWSER_MEDIA__ ?? {};
+    const mediaWindow = window as Window & { __VRATA_REMOTE_BROWSER_MEDIA__?: MediaState };
+    const state = mediaWindow.__VRATA_REMOTE_BROWSER_MEDIA__ ?? {};
 
     const collectVideos = (root: ParentNode): CapturableVideo[] => {
       const videos = [...root.querySelectorAll("video")] as CapturableVideo[];
@@ -1055,7 +1055,7 @@ async function createMediaAnswerInFrame(frame: Frame, offer: RTCSessionDescripti
     await waitForIceGatheringComplete(pc);
     state.pc = pc;
     state.stream = stream;
-    mediaWindow.__NOAH_REMOTE_BROWSER_MEDIA__ = state;
+    mediaWindow.__VRATA_REMOTE_BROWSER_MEDIA__ = state;
     return {
       ok: true,
       answer: pc.localDescription ? { type: pc.localDescription.type, sdp: pc.localDescription.sdp } : undefined,
@@ -1250,10 +1250,10 @@ async function stopSession(sessionId: string): Promise<boolean> {
     client.close(1000, "session_stopped");
   }
   await session.publisherPage.evaluate(() => {
-    const pageWindow = window as Window & { __NOAH_REMOTE_BROWSER_LIVEKIT__?: { room?: { disconnect: () => void }; stream?: MediaStream } };
-    pageWindow.__NOAH_REMOTE_BROWSER_LIVEKIT__?.room?.disconnect();
-    pageWindow.__NOAH_REMOTE_BROWSER_LIVEKIT__?.stream?.getTracks().forEach((track) => track.stop());
-    pageWindow.__NOAH_REMOTE_BROWSER_LIVEKIT__ = undefined;
+    const pageWindow = window as Window & { __VRATA_REMOTE_BROWSER_LIVEKIT__?: { room?: { disconnect: () => void }; stream?: MediaStream } };
+    pageWindow.__VRATA_REMOTE_BROWSER_LIVEKIT__?.room?.disconnect();
+    pageWindow.__VRATA_REMOTE_BROWSER_LIVEKIT__?.stream?.getTracks().forEach((track) => track.stop());
+    pageWindow.__VRATA_REMOTE_BROWSER_LIVEKIT__ = undefined;
   }).catch(() => undefined);
   await patchRemoteBrowserExecutorState(session, {
     type: "mark-stopped",
@@ -1376,7 +1376,7 @@ async function remoteBrowserInputTargetDetail(page: Page, point: { x: number; y:
     const target = document.elementFromPoint(x, y) as HTMLElement | null;
     const targetRect = target?.getBoundingClientRect();
     const targetStyle = target ? window.getComputedStyle(target) : null;
-    const inputDebug = (window as Window & { __NOAH_REMOTE_BROWSER_INPUT_DEBUG__?: InputDebugState }).__NOAH_REMOTE_BROWSER_INPUT_DEBUG__;
+    const inputDebug = (window as Window & { __VRATA_REMOTE_BROWSER_INPUT_DEBUG__?: InputDebugState }).__VRATA_REMOTE_BROWSER_INPUT_DEBUG__;
     const videos = Array.from(document.querySelectorAll("video"))
       .map((video) => {
         const rect = video.getBoundingClientRect();
@@ -1405,10 +1405,10 @@ async function ensureRemoteBrowserInputDebug(page: Page): Promise<void> {
       lastClientY?: number;
       lastTarget?: string;
     };
-    type InputDebugWindow = Window & { __NOAH_REMOTE_BROWSER_INPUT_DEBUG__?: InputDebugState };
+    type InputDebugWindow = Window & { __VRATA_REMOTE_BROWSER_INPUT_DEBUG__?: InputDebugState };
 
     const inputWindow = window as InputDebugWindow;
-    if (inputWindow.__NOAH_REMOTE_BROWSER_INPUT_DEBUG__) {
+    if (inputWindow.__VRATA_REMOTE_BROWSER_INPUT_DEBUG__) {
       return;
     }
     const targetLabel = (target: EventTarget | null): string | undefined => {
@@ -1419,7 +1419,7 @@ async function ensureRemoteBrowserInputDebug(page: Page): Promise<void> {
       return `${target.tagName.toLowerCase()}${target.id ? `#${target.id}` : ""}${className ? `.${className.slice(0, 80)}` : ""}`;
     };
     const state: InputDebugState = { pointerMoveCount: 0, mouseMoveCount: 0, clickCount: 0 };
-    inputWindow.__NOAH_REMOTE_BROWSER_INPUT_DEBUG__ = state;
+    inputWindow.__VRATA_REMOTE_BROWSER_INPUT_DEBUG__ = state;
     const record = (event: MouseEvent | PointerEvent) => {
       if (event.type === "pointermove") {
         state.pointerMoveCount += 1;
@@ -1633,6 +1633,6 @@ export function startRemoteBrowserService(listenPort = port) {
   });
 }
 
-if (process.env.NODE_ENV !== "test" && process.env.NOAH_DISABLE_AUTOSTART !== "1") {
+if (process.env.NODE_ENV !== "test" && process.env.VRATA_DISABLE_AUTOSTART !== "1" && process.env.NOAH_DISABLE_AUTOSTART !== "1") {
   startRemoteBrowserService();
 }

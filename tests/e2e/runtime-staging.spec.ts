@@ -1,7 +1,7 @@
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 
 const stagingRoomId = process.env.STAGING_ROOM_ID ?? "demo-room";
-const stagingAdminToken = process.env.STAGING_ADMIN_TOKEN ?? "noah-stage-admin";
+const stagingAdminToken = process.env.STAGING_ADMIN_TOKEN ?? "vrata-stage-admin";
 const stagingBaseUrl = process.env.BASE_URL ?? "https://158.160.10.234.sslip.io";
 const stagingAssetBaseUrl = process.env.STAGING_ASSET_BASE_URL ?? `${new URL(stagingBaseUrl).protocol}//state.${new URL(stagingBaseUrl).host}`;
 const stagingSceneBundleVersion = process.env.STAGING_SCENE_BUNDLE_VERSION;
@@ -200,7 +200,7 @@ async function expectSceneRoomLoaded(
   });
 }
 
-async function readNoahDebug(page: Page): Promise<{
+async function readVrataDebug(page: Page): Promise<{
   roomStateConnected?: boolean;
   sceneBundleState?: string | null;
   remoteAvatarReliableCount?: number;
@@ -214,7 +214,7 @@ async function readNoahDebug(page: Page): Promise<{
   }>;
   } | undefined> {
   return page.evaluate(() => (window as Window & {
-    __NOAH_DEBUG__?: {
+    __VRATA_DEBUG__?: {
       roomStateConnected?: boolean;
       sceneBundleState?: string | null;
       remoteAvatarReliableCount?: number;
@@ -227,7 +227,7 @@ async function readNoahDebug(page: Page): Promise<{
         rightHandVisible?: boolean;
       }>;
     };
-  }).__NOAH_DEBUG__);
+  }).__VRATA_DEBUG__);
 }
 
 async function readSelfAvatarDebug(page: Page): Promise<{
@@ -271,7 +271,7 @@ async function readSelfAvatarDebug(page: Page): Promise<{
   };
 } | undefined> {
   return page.evaluate(() => (window as Window & {
-    __NOAH_DEBUG__?: {
+    __VRATA_DEBUG__?: {
       avatarDebug?: {
         inputMode?: string | null;
         visibilityState?: string | null;
@@ -311,7 +311,7 @@ async function readSelfAvatarDebug(page: Page): Promise<{
         turnY?: number;
       };
     };
-  }).__NOAH_DEBUG__);
+  }).__VRATA_DEBUG__);
 }
 
 test.describe("@staging runtime HUD space selector", () => {
@@ -366,7 +366,7 @@ test.describe("@staging runtime HUD space selector", () => {
     try {
       const createRoomResponse = await request.post("/api/rooms", {
         headers: {
-          "x-noah-admin-token": stagingAdminToken
+          "x-vrata-admin-token": stagingAdminToken
         },
         data: {
           tenantId: "demo-tenant",
@@ -394,8 +394,8 @@ test.describe("@staging runtime HUD space selector", () => {
 
         await expect.poll(async () => {
           const debug = await listener.evaluate(() => (window as Window & {
-            __NOAH_DEBUG__?: { remoteAvatarCount?: number; roomStateConnected?: boolean };
-          }).__NOAH_DEBUG__);
+            __VRATA_DEBUG__?: { remoteAvatarCount?: number; roomStateConnected?: boolean };
+          }).__VRATA_DEBUG__);
           return {
             connected: debug?.roomStateConnected ?? false,
             remoteAvatarCount: debug?.remoteAvatarCount ?? 0
@@ -412,7 +412,7 @@ test.describe("@staging runtime HUD space selector", () => {
 
         await expect.poll(async () => {
           const debug = await listener.evaluate(() => (window as Window & {
-            __NOAH_DEBUG__?: {
+            __VRATA_DEBUG__?: {
               media?: {
                 audioState?: string;
                 publishedAudio?: boolean;
@@ -432,7 +432,7 @@ test.describe("@staging runtime HUD space selector", () => {
                 }>;
               };
             };
-          }).__NOAH_DEBUG__);
+          }).__VRATA_DEBUG__);
           const participant = debug?.remoteParticipants?.find((item) => item.participantId);
           const spatialSource = debug?.spatialAudio?.remoteSources?.find((item) => item.participantId === participant?.participantId);
           return {
@@ -472,7 +472,7 @@ test.describe("@staging runtime HUD space selector", () => {
       if (roomId) {
         const deleteResponse = await request.delete(`/api/rooms/${roomId}`, {
           headers: {
-            "x-noah-admin-token": stagingAdminToken
+            "x-vrata-admin-token": stagingAdminToken
           }
         });
         expect(deleteResponse.ok()).toBeTruthy();
@@ -509,7 +509,7 @@ test.describe("@staging runtime HUD space selector", () => {
     try {
       const createRoomResponse = await request.post("/api/rooms", {
         headers: {
-          "x-noah-admin-token": stagingAdminToken
+          "x-vrata-admin-token": stagingAdminToken
         },
         data: {
           tenantId: "demo-tenant",
@@ -564,7 +564,7 @@ test.describe("@staging runtime HUD space selector", () => {
         try {
           const deleteResponse = await request.delete(`/api/rooms/${targetRoomId}`, {
             headers: {
-              "x-noah-admin-token": stagingAdminToken
+              "x-vrata-admin-token": stagingAdminToken
             }
           });
           expect(deleteResponse.ok()).toBeTruthy();
@@ -635,7 +635,7 @@ test.describe("@staging runtime HUD space selector", () => {
     try {
       const createRoomResponse = await request.post("/api/rooms", {
         headers: {
-          "x-noah-admin-token": stagingAdminToken
+          "x-vrata-admin-token": stagingAdminToken
         },
         data: {
           tenantId: "demo-tenant",
@@ -663,19 +663,19 @@ test.describe("@staging runtime HUD space selector", () => {
 
         await expect.poll(async () => {
           const debugA = await pageA.evaluate(() => (window as Window & {
-            __NOAH_DEBUG__?: {
+            __VRATA_DEBUG__?: {
               remoteAvatarReliableCount?: number;
               remoteAvatarPoseCount?: number;
               remoteAvatarParticipants?: Array<{ hasReliableState?: boolean; hasPoseFrame?: boolean; presenceSeen?: boolean }>;
             };
-          }).__NOAH_DEBUG__);
+          }).__VRATA_DEBUG__);
           const debugB = await pageB.evaluate(() => (window as Window & {
-            __NOAH_DEBUG__?: {
+            __VRATA_DEBUG__?: {
               remoteAvatarReliableCount?: number;
               remoteAvatarPoseCount?: number;
               remoteAvatarParticipants?: Array<{ hasReliableState?: boolean; hasPoseFrame?: boolean; presenceSeen?: boolean }>;
             };
-          }).__NOAH_DEBUG__);
+          }).__VRATA_DEBUG__);
 
           return {
             aReady: (debugA?.remoteAvatarReliableCount ?? 0) === 1
@@ -700,7 +700,7 @@ test.describe("@staging runtime HUD space selector", () => {
       if (roomId) {
         const deleteResponse = await request.delete(`/api/rooms/${roomId}`, {
           headers: {
-            "x-noah-admin-token": stagingAdminToken
+            "x-vrata-admin-token": stagingAdminToken
           }
         });
         expect(deleteResponse.ok()).toBeTruthy();
@@ -716,8 +716,8 @@ test.describe("@staging runtime HUD space selector", () => {
       await pageB.goto(`/rooms/${stagingRoomId}?debug=1&bot=line`, { waitUntil: "domcontentloaded" });
 
       await expect.poll(async () => {
-        const debugA = await readNoahDebug(pageA);
-        const debugB = await readNoahDebug(pageB);
+        const debugA = await readVrataDebug(pageA);
+        const debugB = await readVrataDebug(pageB);
         return {
           aConnected: debugA?.roomStateConnected ?? false,
           bConnected: debugB?.roomStateConnected ?? false
@@ -731,8 +731,8 @@ test.describe("@staging runtime HUD space selector", () => {
       });
 
       await expect.poll(async () => {
-        const debugA = await readNoahDebug(pageA);
-        const debugB = await readNoahDebug(pageB);
+        const debugA = await readVrataDebug(pageA);
+        const debugB = await readVrataDebug(pageB);
         return {
           aReady: (debugA?.remoteAvatarReliableCount ?? 0) >= 1
             && (debugA?.remoteAvatarPoseCount ?? 0) >= 1
@@ -761,7 +761,7 @@ test.describe("@staging runtime HUD space selector", () => {
     try {
       const createRoomResponse = await request.post("/api/rooms", {
         headers: {
-          "x-noah-admin-token": stagingAdminToken
+          "x-vrata-admin-token": stagingAdminToken
         },
         data: {
           tenantId: "demo-tenant",
@@ -789,18 +789,18 @@ test.describe("@staging runtime HUD space selector", () => {
 
         await expect.poll(async () => {
           const realtimeDebug = await realtimePage.evaluate(() => (window as Window & {
-            __NOAH_DEBUG__?: {
+            __VRATA_DEBUG__?: {
               roomStateConnected?: boolean;
               remoteAvatarCount?: number;
               remoteAvatarParticipants?: Array<{ presenceSeen?: boolean }>;
             };
-          }).__NOAH_DEBUG__);
+          }).__VRATA_DEBUG__);
           const fallbackDebug = await fallbackPage.evaluate(() => (window as Window & {
-            __NOAH_DEBUG__?: {
+            __VRATA_DEBUG__?: {
               remoteAvatarCount?: number;
               remoteAvatarParticipants?: Array<{ presenceSeen?: boolean }>;
             };
-          }).__NOAH_DEBUG__);
+          }).__VRATA_DEBUG__);
 
           return {
             realtimeConnected: realtimeDebug?.roomStateConnected ?? false,
@@ -825,7 +825,7 @@ test.describe("@staging runtime HUD space selector", () => {
       if (roomId) {
         const deleteResponse = await request.delete(`/api/rooms/${roomId}`, {
           headers: {
-            "x-noah-admin-token": stagingAdminToken
+            "x-vrata-admin-token": stagingAdminToken
           }
         });
         expect(deleteResponse.ok()).toBeTruthy();
@@ -839,11 +839,11 @@ test.describe("@staging runtime HUD space selector", () => {
     await page.goto(`/rooms/${stagingRoomId}?debug=1`, { waitUntil: "domcontentloaded" });
     await expect.poll(async () => {
       const debug = await page.evaluate(() => (window as Window & {
-        __NOAH_DEBUG__?: {
+        __VRATA_DEBUG__?: {
           avatarPresenceMode?: string;
           featureFlags?: { avatarLegIkEnabled?: boolean };
         };
-      }).__NOAH_DEBUG__);
+      }).__VRATA_DEBUG__);
 
       return {
         mode: debug?.avatarPresenceMode ?? null,
@@ -860,11 +860,11 @@ test.describe("@staging runtime HUD space selector", () => {
     await page.goto(`/rooms/${stagingRoomId}?debug=1&avatarik=1`, { waitUntil: "domcontentloaded" });
     await expect.poll(async () => {
       const debug = await page.evaluate(() => (window as Window & {
-        __NOAH_DEBUG__?: {
+        __VRATA_DEBUG__?: {
           avatarPresenceMode?: string;
           featureFlags?: { avatarLegIkEnabled?: boolean };
         };
-      }).__NOAH_DEBUG__);
+      }).__VRATA_DEBUG__);
 
       return {
         mode: debug?.avatarPresenceMode ?? null,
@@ -964,14 +964,14 @@ test.describe("@staging runtime HUD space selector", () => {
     await expect.poll(async () => {
       return page.evaluate(() => {
         const debug = (window as Window & {
-          __NOAH_DEBUG__?: {
+          __VRATA_DEBUG__?: {
             statusLine?: string | null;
             sceneBundleState?: string | null;
             avatarSnapshot?: {
               root?: { y?: number | null } | null;
             } | null;
           };
-        }).__NOAH_DEBUG__;
+        }).__VRATA_DEBUG__;
         return {
           statusReady: Boolean(debug?.statusLine),
           sceneBundleState: debug?.sceneBundleState ?? null,
@@ -1013,8 +1013,8 @@ test.describe("@staging runtime HUD space selector", () => {
 
     await expect.poll(async () => {
       return page.evaluate(() => (window as Window & {
-        __NOAH_TEST__?: { claimSeatById?: (seatId: string) => boolean };
-      }).__NOAH_TEST__?.claimSeatById?.("hall-seat-a") ?? false);
+        __VRATA_TEST__?: { claimSeatById?: (seatId: string) => boolean };
+      }).__VRATA_TEST__?.claimSeatById?.("hall-seat-a") ?? false);
     }, {
       timeout: 10000,
       intervals: [500, 1000, 1500]
@@ -1034,8 +1034,8 @@ test.describe("@staging runtime HUD space selector", () => {
 
     await expect.poll(async () => {
       return page.evaluate(() => (window as Window & {
-        __NOAH_TEST__?: { teleportToFloor?: (x: number, z: number) => boolean };
-      }).__NOAH_TEST__?.teleportToFloor?.(0, -4) ?? false);
+        __VRATA_TEST__?: { teleportToFloor?: (x: number, z: number) => boolean };
+      }).__VRATA_TEST__?.teleportToFloor?.(0, -4) ?? false);
     }, {
       timeout: 10000,
       intervals: [500, 1000, 1500]
@@ -1064,7 +1064,7 @@ test.describe("@staging runtime HUD space selector", () => {
     try {
       const createRoomResponse = await request.post("/api/rooms", {
         headers: {
-          "x-noah-admin-token": stagingAdminToken
+          "x-vrata-admin-token": stagingAdminToken
         },
         data: {
           tenantId: "demo-tenant",
@@ -1107,8 +1107,8 @@ test.describe("@staging runtime HUD space selector", () => {
 
       await expect.poll(async () => {
         return page.evaluate(() => (window as Window & {
-          __NOAH_TEST__?: { forceXrInteractionAtSeat?: (seatId: string) => boolean };
-        }).__NOAH_TEST__?.forceXrInteractionAtSeat?.("hall-seat-a") ?? false);
+          __VRATA_TEST__?: { forceXrInteractionAtSeat?: (seatId: string) => boolean };
+        }).__VRATA_TEST__?.forceXrInteractionAtSeat?.("hall-seat-a") ?? false);
       }, {
         timeout: 20000,
         intervals: [1000, 2000, 3000]
@@ -1132,7 +1132,7 @@ test.describe("@staging runtime HUD space selector", () => {
 
       await page.evaluate(() => {
         (window as Window & {
-          __NOAH_TEST__?: {
+          __VRATA_TEST__?: {
             setSyntheticXrState?: (state: {
               rightController: { x: number; y: number; z: number };
               rightGrip?: { x: number; y: number; z: number } | null;
@@ -1142,7 +1142,7 @@ test.describe("@staging runtime HUD space selector", () => {
               rayVisible?: boolean;
             } | null) => boolean;
           };
-        }).__NOAH_TEST__?.setSyntheticXrState?.({
+        }).__VRATA_TEST__?.setSyntheticXrState?.({
           rightController: { x: 0.54, y: 0.88, z: -0.81 },
           rightGrip: { x: 0.57, y: 0.88, z: -0.81 },
           rayDirection: { x: 0.74, y: -0.45, z: -0.51 },
@@ -1166,14 +1166,14 @@ test.describe("@staging runtime HUD space selector", () => {
 
       await page.evaluate(() => {
         (window as Window & {
-          __NOAH_TEST__?: { setSyntheticXrState?: (state: null) => boolean };
-        }).__NOAH_TEST__?.setSyntheticXrState?.(null);
+          __VRATA_TEST__?: { setSyntheticXrState?: (state: null) => boolean };
+        }).__VRATA_TEST__?.setSyntheticXrState?.(null);
       });
     } finally {
       if (roomId) {
         const deleteResponse = await request.delete(`/api/rooms/${roomId}`, {
           headers: {
-            "x-noah-admin-token": stagingAdminToken
+            "x-vrata-admin-token": stagingAdminToken
           }
         });
         expect(deleteResponse.ok()).toBeTruthy();
@@ -1189,7 +1189,7 @@ test.describe("@staging runtime HUD space selector", () => {
     try {
       const createRoomResponse = await request.post("/api/rooms", {
         headers: {
-          "x-noah-admin-token": stagingAdminToken
+          "x-vrata-admin-token": stagingAdminToken
         },
         data: {
           tenantId: "demo-tenant",
@@ -1231,8 +1231,8 @@ test.describe("@staging runtime HUD space selector", () => {
 
       await expect.poll(async () => {
         return page.evaluate(() => (window as Window & {
-          __NOAH_TEST__?: { forceXrInteractionAtSeat?: (seatId: string) => boolean };
-        }).__NOAH_TEST__?.forceXrInteractionAtSeat?.("blueoffice-seat-a") ?? false);
+          __VRATA_TEST__?: { forceXrInteractionAtSeat?: (seatId: string) => boolean };
+        }).__VRATA_TEST__?.forceXrInteractionAtSeat?.("blueoffice-seat-a") ?? false);
       }, {
         timeout: 20000,
         intervals: [1000, 2000, 3000]
@@ -1240,7 +1240,7 @@ test.describe("@staging runtime HUD space selector", () => {
 
       await page.evaluate(() => {
         (window as Window & {
-          __NOAH_TEST__?: {
+          __VRATA_TEST__?: {
             setSyntheticXrState?: (state: {
               rightController: { x: number; y: number; z: number };
               rightGrip?: { x: number; y: number; z: number } | null;
@@ -1250,7 +1250,7 @@ test.describe("@staging runtime HUD space selector", () => {
               rayVisible?: boolean;
             } | null) => boolean;
           };
-        }).__NOAH_TEST__?.setSyntheticXrState?.({
+        }).__VRATA_TEST__?.setSyntheticXrState?.({
           rightController: { x: 1.54, y: 0.88, z: -0.81 },
           rightGrip: { x: 1.57, y: 0.88, z: -0.81 },
           rayDirection: { x: 0.74, y: -0.45, z: -0.51 },
@@ -1274,16 +1274,16 @@ test.describe("@staging runtime HUD space selector", () => {
 
       await page.evaluate(() => {
         (window as Window & {
-          __NOAH_TEST__?: {
+          __VRATA_TEST__?: {
             setSyntheticXrState?: (state: null) => boolean;
           };
-        }).__NOAH_TEST__?.setSyntheticXrState?.(null);
+        }).__VRATA_TEST__?.setSyntheticXrState?.(null);
       });
 
       await expect.poll(async () => {
         const telemetryResponse = await request.get(`/api/rooms/${room.roomId}/xr-telemetry`, {
           headers: {
-            "x-noah-admin-token": stagingAdminToken
+            "x-vrata-admin-token": stagingAdminToken
           }
         });
         const payload = await telemetryResponse.json() as {
@@ -1311,7 +1311,7 @@ test.describe("@staging runtime HUD space selector", () => {
       if (roomId) {
         const deleteResponse = await request.delete(`/api/rooms/${roomId}`, {
           headers: {
-            "x-noah-admin-token": stagingAdminToken
+            "x-vrata-admin-token": stagingAdminToken
           }
         });
         expect(deleteResponse.ok()).toBeTruthy();
@@ -1326,7 +1326,7 @@ test.describe("@staging runtime HUD space selector", () => {
     try {
       const createRoomResponse = await request.post("/api/rooms", {
         headers: {
-          "x-noah-admin-token": stagingAdminToken
+          "x-vrata-admin-token": stagingAdminToken
         },
         data: {
           tenantId: "demo-tenant",
@@ -1355,7 +1355,7 @@ test.describe("@staging runtime HUD space selector", () => {
         await expect.poll(async () => {
           const vrDebug = await readSelfAvatarDebug(vrPage);
           const webDebug = await webPage.evaluate(() => (window as Window & {
-            __NOAH_DEBUG__?: {
+            __VRATA_DEBUG__?: {
               remoteAvatarReliableStates?: Array<{ inputMode?: string | null }>;
               remoteParticipants?: Array<{
                 participantId?: string | null;
@@ -1375,7 +1375,7 @@ test.describe("@staging runtime HUD space selector", () => {
                 rightHandVisible?: boolean;
               }>;
             };
-          }).__NOAH_DEBUG__);
+          }).__VRATA_DEBUG__);
           const remoteVrParticipant = webDebug?.remoteAvatarParticipants?.find((item) =>
             item.inputMode === "vr-controller"
             && item.presenceSeen
@@ -1435,7 +1435,7 @@ test.describe("@staging runtime HUD space selector", () => {
       if (roomId) {
         const deleteResponse = await request.delete(`/api/rooms/${roomId}`, {
           headers: {
-            "x-noah-admin-token": stagingAdminToken
+            "x-vrata-admin-token": stagingAdminToken
           }
         });
         expect(deleteResponse.ok()).toBeTruthy();
@@ -1465,10 +1465,10 @@ test.describe("@staging runtime HUD space selector", () => {
       visibility: "hands-only"
     });
 
-    const initialYaw = await page.evaluate(() => window.__NOAH_DEBUG__?.xrAvatarDebug?.playerRoot?.yaw ?? null);
+    const initialYaw = await page.evaluate(() => window.__VRATA_DEBUG__?.xrAvatarDebug?.playerRoot?.yaw ?? null);
 
     await page.evaluate(() => {
-      window.__NOAH_TEST__?.setSyntheticXrState?.({
+      window.__VRATA_TEST__?.setSyntheticXrState?.({
         rightController: { x: 1.54, y: 0.88, z: -0.81 },
         rightGrip: { x: 1.57, y: 0.88, z: -0.81 },
         rayDirection: { x: 0.74, y: -0.45, z: -0.51 },
@@ -1495,7 +1495,7 @@ test.describe("@staging runtime HUD space selector", () => {
     });
 
     await page.evaluate(() => {
-      window.__NOAH_TEST__?.setSyntheticXrState?.({
+      window.__VRATA_TEST__?.setSyntheticXrState?.({
         rightController: { x: 1.54, y: 0.88, z: -0.81 },
         rightGrip: { x: 1.57, y: 0.88, z: -0.81 },
         rayDirection: { x: 0.74, y: -0.45, z: -0.51 },
@@ -1506,15 +1506,15 @@ test.describe("@staging runtime HUD space selector", () => {
     });
 
     await expect.poll(async () => {
-      return page.evaluate(() => window.__NOAH_DEBUG__?.xrAvatarDebug?.playerRoot?.yaw ?? null);
+      return page.evaluate(() => window.__VRATA_DEBUG__?.xrAvatarDebug?.playerRoot?.yaw ?? null);
     }, {
       timeout: 5000,
       intervals: [250, 500, 1000]
     }).not.toBe(initialYaw);
 
     await page.evaluate(() => {
-      window.__NOAH_TEST__?.forceXrInteractionAtSeat?.("blueoffice-seat-a");
-      window.__NOAH_TEST__?.setSyntheticXrState?.({
+      window.__VRATA_TEST__?.forceXrInteractionAtSeat?.("blueoffice-seat-a");
+      window.__VRATA_TEST__?.setSyntheticXrState?.({
         rightController: { x: 1.54, y: 0.88, z: -0.81 },
         rightGrip: { x: 1.57, y: 0.88, z: -0.81 },
         rayDirection: { x: 0.74, y: -0.45, z: -0.51 },
@@ -1537,7 +1537,7 @@ test.describe("@staging runtime HUD space selector", () => {
     });
 
     await page.evaluate(() => {
-      window.__NOAH_TEST__?.setSyntheticXrState?.(null);
+      window.__VRATA_TEST__?.setSyntheticXrState?.(null);
     });
   });
 
@@ -1551,8 +1551,8 @@ test.describe("@staging runtime HUD space selector", () => {
       await pageB.goto(`/rooms/${hallRoomId}?debug=1&bot=line`);
 
       await expect.poll(async () => {
-        const debugA = await readNoahDebug(pageA);
-        const debugB = await readNoahDebug(pageB);
+        const debugA = await readVrataDebug(pageA);
+        const debugB = await readVrataDebug(pageB);
         return {
           aLoaded: debugA?.sceneBundleState ?? null,
           bLoaded: debugB?.sceneBundleState ?? null,
@@ -1588,8 +1588,8 @@ test.describe("@staging runtime HUD space selector", () => {
       await pageB.goto(`/rooms/${hallRoomId}?debug=1&bot=line`);
 
       await expect.poll(async () => {
-        const debugA = await readNoahDebug(pageA);
-        const debugB = await readNoahDebug(pageB);
+        const debugA = await readVrataDebug(pageA);
+        const debugB = await readVrataDebug(pageB);
         return {
           aLoaded: debugA?.sceneBundleState ?? null,
           bLoaded: debugB?.sceneBundleState ?? null,
@@ -1608,8 +1608,8 @@ test.describe("@staging runtime HUD space selector", () => {
 
       await pageA.waitForTimeout(2500);
       await expect.poll(async () => {
-        const debugA = await readNoahDebug(pageA);
-        const debugB = await readNoahDebug(pageB);
+        const debugA = await readVrataDebug(pageA);
+        const debugB = await readVrataDebug(pageB);
         return {
           aHandsStable: Boolean(debugA?.remoteAvatarParticipants?.some((item) => item.presenceSeen && item.hasReliableState && item.hasPoseFrame && item.leftHandVisible && item.rightHandVisible)),
           bHandsStable: Boolean(debugB?.remoteAvatarParticipants?.some((item) => item.presenceSeen && item.hasReliableState && item.hasPoseFrame && item.leftHandVisible && item.rightHandVisible))

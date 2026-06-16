@@ -13,7 +13,7 @@ import {
   type RemoteBrowserPatch,
   type RoomPermission,
   type RoomRole
-} from "@noah/shared-types";
+} from "@vrata/shared-types";
 
 import type { PresenceState } from "./schema.js";
 import {
@@ -140,7 +140,7 @@ function parseBody<T>(request: IncomingMessage): Promise<T | null> {
 }
 
 function getInternalServiceToken(env: NodeJS.ProcessEnv = process.env): string | null {
-  const token = env.NOAH_INTERNAL_SERVICE_TOKEN?.trim() || env.REMOTE_BROWSER_INTERNAL_TOKEN?.trim() || "";
+  const token = env.VRATA_INTERNAL_SERVICE_TOKEN?.trim() || env.NOAH_INTERNAL_SERVICE_TOKEN?.trim() || env.REMOTE_BROWSER_INTERNAL_TOKEN?.trim() || "";
   return token || null;
 }
 
@@ -149,7 +149,7 @@ function isAuthorizedInternalRequest(request: IncomingMessage, env: NodeJS.Proce
   if (!token) {
     return true;
   }
-  const provided = request.headers["x-noah-internal-token"];
+  const provided = request.headers["x-vrata-internal-token"] ?? request.headers["x-noah-internal-token"];
   return typeof provided === "string" && safeEqual(provided, token);
 }
 
@@ -157,7 +157,7 @@ function getInternalFetchHeaders(): Record<string, string> {
   const token = getInternalServiceToken();
   return {
     "content-type": "application/json",
-    ...(token ? { "x-noah-internal-token": token } : {})
+    ...(token ? { "x-vrata-internal-token": token } : {})
   };
 }
 
@@ -176,7 +176,7 @@ function isEnabledEnvValue(value: string | undefined): boolean | null {
 }
 
 function isDevRoleQueryAllowed(env: NodeJS.ProcessEnv = process.env): boolean {
-  const explicit = isEnabledEnvValue(env.NOAH_DEV_ROLE_QUERY ?? env.FEATURE_DEV_ROLE_QUERY);
+  const explicit = isEnabledEnvValue(env.VRATA_DEV_ROLE_QUERY ?? env.NOAH_DEV_ROLE_QUERY ?? env.FEATURE_DEV_ROLE_QUERY);
   if (explicit !== null) {
     return explicit;
   }
@@ -913,6 +913,6 @@ export function startRoomStateService(port = Number.parseInt(process.env.ROOM_ST
   });
 }
 
-if (process.env.NODE_ENV !== "test" && process.env.NOAH_DISABLE_AUTOSTART !== "1" && !process.execArgv.includes("--test")) {
+if (process.env.NODE_ENV !== "test" && process.env.VRATA_DISABLE_AUTOSTART !== "1" && process.env.NOAH_DISABLE_AUTOSTART !== "1" && !process.execArgv.includes("--test")) {
   startRoomStateService();
 }

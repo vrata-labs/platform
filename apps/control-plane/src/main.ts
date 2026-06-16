@@ -33,7 +33,7 @@ function mustElement<T extends Element>(selector: string): T {
 
 const apiBaseUrl = window.location.origin;
 const state = createControlPlanePageState();
-const storedAdminToken = localStorage.getItem("noah.controlPlaneAdminToken") ?? "";
+const storedAdminToken = localStorage.getItem("vrata.controlPlaneAdminToken") ?? "";
 
 const form = mustElement<HTMLFormElement>("#room-form");
 const assetForm = mustElement<HTMLFormElement>("#asset-form");
@@ -220,7 +220,7 @@ function startSelectedRoomPolling(): void {
 
 function currentAuth(): { adminToken?: string } {
   const token = adminTokenInput.value.trim();
-  localStorage.setItem("noah.controlPlaneAdminToken", token);
+  localStorage.setItem("vrata.controlPlaneAdminToken", token);
   return token ? { adminToken: token } : {};
 }
 

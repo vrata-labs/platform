@@ -1,4 +1,4 @@
-import type { ScreenShareErrorCode } from "@noah/shared-types";
+import type { ScreenShareErrorCode } from "@vrata/shared-types";
 
 import { classifyScreenShareError } from "../runtime-errors.js";
 

@@ -2,7 +2,7 @@
 
 ## Product hypothesis
 
-`noah` is a web-native immersive room platform for companies. A customer selects a space template, uploads branded assets, generates a room link, and invites participants who can join from desktop, mobile, or VR.
+`vrata` is a web-native immersive room platform for companies. A customer selects a space template, uploads branded assets, generates a room link, and invites participants who can join from desktop, mobile, or VR.
 
 The first release optimizes for reliable room access, presence, and collaboration instead of visual maximalism or platform breadth.
 

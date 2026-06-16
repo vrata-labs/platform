@@ -22,7 +22,7 @@
   - `demo-room`
   - `8115f026-dd32-435a-a606-943d0f4af696` (`Sense Hall Clean GLB Screen v15`)
 - Control-plane page loads at `/control-plane`.
-- Admin room CRUD works with `x-noah-admin-token: noah-stage-admin`.
+- Admin room CRUD works with `x-vrata-admin-token: vrata-stage-admin`.
 - Presence API updates while a room page is open.
 - Key scene rooms load with `sceneBundleState=loaded`:
   - `8115f026-dd32-435a-a606-943d0f4af696` (`SenseTower Hall`)

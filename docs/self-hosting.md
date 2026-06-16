@@ -1,6 +1,6 @@
 # Self-Hosting
 
-This document describes the target self-host path for Noah `0.1` beta.
+This document describes the target self-host path for Vrata `0.1` beta.
 
 Until `v0.1.0` is released, public GHCR images may not exist. From a source checkout, use `--build` to build images locally.
 
@@ -62,10 +62,10 @@ docker compose --env-file infra/docker/.env.selfhost -f infra/docker/compose.sel
 - `CONTROL_PLANE_ADMIN_TOKEN`: replace with a strong secret.
 - `STATE_TOKEN_SECRET`: replace with a strong secret.
 - `REMOTE_BROWSER_TOKEN_SECRET`: replace with a strong secret.
-- `NOAH_INTERNAL_SERVICE_TOKEN`: replace with a strong secret.
+- `VRATA_INTERNAL_SERVICE_TOKEN`: replace with a strong secret.
 - `POSTGRES_PASSWORD`: replace with a strong password.
 - `MINIO_ROOT_USER` and `MINIO_ROOT_PASSWORD`: replace with production values.
-- `NOAH_APP_BASE_URL`, `ROOM_STATE_PUBLIC_URL`, `LIVEKIT_URL`, and `REMOTE_BROWSER_PUBLIC_URL`: set to the URLs that browsers can reach.
+- `VRATA_APP_BASE_URL`, `ROOM_STATE_PUBLIC_URL`, `LIVEKIT_URL`, and `REMOTE_BROWSER_PUBLIC_URL`: set to the URLs that browsers can reach.
 
 The bundled compose file runs LiveKit in `--dev` mode for the `0.1` beta quickstart, so the local defaults are `LIVEKIT_API_KEY=devkey` and `LIVEKIT_API_SECRET=secret`. Replace this with a hardened LiveKit configuration before exposing a deployment beyond evaluation use.
 

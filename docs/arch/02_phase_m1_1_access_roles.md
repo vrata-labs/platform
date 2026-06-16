@@ -147,7 +147,7 @@ tests/e2e/m1-media/access-roles.spec.ts
 4. Ведущий видит и может нажать кнопку запуска трансляции экрана.
 5. Клиент не может повысить роль через `participant_update`.
 6. Служба состояния комнаты отклоняет privileged command от `guest` в тестовом auth-gated message handler.
-7. `window.__NOAH_DEBUG__.access` содержит роль, permissions и derived booleans.
+7. `window.__VRATA_DEBUG__.access` содержит роль, permissions и derived booleans.
 
 ## Критерии готовности
 

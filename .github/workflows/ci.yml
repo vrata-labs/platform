@@ -84,10 +84,10 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Build asset pipeline
-        run: pnpm --filter @noah/asset-pipeline build
+        run: pnpm --filter @vrata/asset-pipeline build
 
       - name: Asset pipeline tests
-        run: pnpm --filter @noah/asset-pipeline test
+        run: pnpm --filter @vrata/asset-pipeline test
 
       - name: Asset validator sample run
-        run: pnpm --filter @noah/asset-pipeline validate:sample
+        run: pnpm --filter @vrata/asset-pipeline validate:sample

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 const baseUrl = process.env.BASE_URL ?? "https://158.160.10.234.sslip.io";
-const adminToken = process.env.STAGING_ADMIN_TOKEN ?? process.env.NOAH_ADMIN_TOKEN ?? "noah-stage-admin";
+const adminToken = process.env.STAGING_ADMIN_TOKEN ?? process.env.VRATA_ADMIN_TOKEN ?? "vrata-stage-admin";
 
 function parseArgs(argv) {
   const options = {
@@ -81,7 +81,7 @@ function resolveRoomUrl(options) {
 async function fetchJson(url) {
   const response = await fetch(url, {
     headers: {
-      "x-noah-admin-token": adminToken
+      "x-vrata-admin-token": adminToken
     }
   });
   if (!response.ok) {
@@ -105,7 +105,7 @@ async function main() {
     const startedAt = Date.now();
     while (Date.now() - startedAt <= options.durationMs) {
       const snapshot = await page.evaluate(() => {
-        const d = (window).__NOAH_DEBUG__ ?? null;
+        const d = (window).__VRATA_DEBUG__ ?? null;
         if (!d) return null;
         return {
           atMs: Date.now(),

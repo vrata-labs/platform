@@ -52,13 +52,13 @@ type SurfaceSample = {
 
 type HoverCandidate = { u: number; v: number };
 
-const stagingAdminToken = process.env.STAGING_ADMIN_TOKEN ?? "noah-stage-admin";
+const stagingAdminToken = process.env.STAGING_ADMIN_TOKEN ?? "vrata-stage-admin";
 const blueOfficeRoomId = process.env.STAGING_BLUEOFFICE_ROOM_ID ?? "0b537d34-7b92-4b51-854a-8c64cfb4c114";
 const rutubePrimaryUrl = process.env.RUTUBE_E2E_URL ?? "https://rutube.ru/live/video/9ae8e8a6dc58bdad66190475f9872ecd/";
 const rutubeSecondaryUrl = process.env.RUTUBE_E2E_SECOND_URL ?? "https://rutube.ru/video/6c226a4bf389d9801ed7c89f39eef8ae/";
 
 async function readDebug(page: Page): Promise<RemoteBrowserDebug | undefined> {
-  return page.evaluate(() => (window as Window & { __NOAH_DEBUG__?: RemoteBrowserDebug }).__NOAH_DEBUG__);
+  return page.evaluate(() => (window as Window & { __VRATA_DEBUG__?: RemoteBrowserDebug }).__VRATA_DEBUG__);
 }
 
 async function createTemporaryBlueOfficeRoom(request: APIRequestContext): Promise<string> {
@@ -69,7 +69,7 @@ async function createTemporaryBlueOfficeRoom(request: APIRequestContext): Promis
 
   const createRoomResponse = await request.post("/api/rooms", {
     headers: {
-      "x-noah-admin-token": stagingAdminToken
+      "x-vrata-admin-token": stagingAdminToken
     },
     data: {
       tenantId: "demo-tenant",
@@ -88,7 +88,7 @@ async function createTemporaryBlueOfficeRoom(request: APIRequestContext): Promis
 async function deleteTemporaryRoom(request: APIRequestContext, roomId: string): Promise<void> {
   const deleteResponse = await request.delete(`/api/rooms/${roomId}`, {
     headers: {
-      "x-noah-admin-token": stagingAdminToken
+      "x-vrata-admin-token": stagingAdminToken
     }
   });
   expect(deleteResponse.ok()).toBeTruthy();
@@ -243,8 +243,8 @@ async function sendSurfaceInput(page: Page, input: { source?: string; kind: stri
   const beforeSeq = beforeDebug?.remoteBrowser?.lastInputSeq ?? 0;
   const beforeExecutorInput = beforeDebug?.remoteBrowser?.lastExecutorInput ?? null;
   const sent = await page.evaluate((value) => (window as Window & {
-    __NOAH_TEST__?: { sendDebugSurfaceInput: (input?: { source?: string; kind?: string; u?: number; v?: number; key?: string; text?: string; scrollDelta?: { x: number; y: number } }) => boolean };
-  }).__NOAH_TEST__?.sendDebugSurfaceInput(value) ?? false, input);
+    __VRATA_TEST__?: { sendDebugSurfaceInput: (input?: { source?: string; kind?: string; u?: number; v?: number; key?: string; text?: string; scrollDelta?: { x: number; y: number } }) => boolean };
+  }).__VRATA_TEST__?.sendDebugSurfaceInput(value) ?? false, input);
   expect(sent).toBe(true);
   const startedAt = Date.now();
   await expect.poll(async () => (await readDebug(page))?.remoteBrowser?.lastInputSeq ?? 0, {
@@ -277,15 +277,15 @@ async function sendSurfaceInput(page: Page, input: { source?: string; kind: stri
 
 async function focusDebugSurface(page: Page): Promise<void> {
   const focused = await page.evaluate(() => (window as Window & {
-    __NOAH_TEST__?: { focusDebugSurface: () => boolean };
-  }).__NOAH_TEST__?.focusDebugSurface() ?? false);
+    __VRATA_TEST__?: { focusDebugSurface: () => boolean };
+  }).__VRATA_TEST__?.focusDebugSurface() ?? false);
   expect(focused).toBe(true);
 }
 
 async function surfaceClientPoint(page: Page, u: number, v: number): Promise<{ x: number; y: number }> {
   const point = await page.evaluate((value) => (window as Window & {
-    __NOAH_TEST__?: { getDebugSurfaceClientPosition: (u: number, v: number) => { x: number; y: number } | null };
-  }).__NOAH_TEST__?.getDebugSurfaceClientPosition(value.u, value.v) ?? null, { u, v });
+    __VRATA_TEST__?: { getDebugSurfaceClientPosition: (u: number, v: number) => { x: number; y: number } | null };
+  }).__VRATA_TEST__?.getDebugSurfaceClientPosition(value.u, value.v) ?? null, { u, v });
   expect(point).not.toBeNull();
   return point!;
 }
@@ -305,14 +305,14 @@ async function waitForFreshFrame(page: Page, previousFrameAt: number): Promise<n
 
 async function sampleSurfaceRegion(page: Page, center: { u: number; v: number }, size = { width: 0.18, height: 0.18 }): Promise<SurfaceSample> {
   return page.evaluate(({ center: sampleCenter, size: sampleSize }) => {
-    const noahWindow = window as Window & {
-      __NOAH_TEST__?: {
+    const vrataWindow = window as Window & {
+      __VRATA_TEST__?: {
         getDebugSurfaceClientPosition: (u: number, v: number) => { x: number; y: number } | null;
         sampleDebugSurfaceTexture?: (center: { u: number; v: number }, size?: { width: number; height: number }) => SurfaceSample | null;
       };
     };
     const canvas = document.querySelector("canvas") as HTMLCanvasElement | null;
-    const helper = noahWindow.__NOAH_TEST__;
+    const helper = vrataWindow.__VRATA_TEST__;
     const textureSample = helper?.sampleDebugSurfaceTexture?.(sampleCenter, sampleSize);
     if (textureSample) {
       return textureSample;

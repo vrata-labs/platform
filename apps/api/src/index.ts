@@ -6,7 +6,7 @@ import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { AccessToken } from "livekit-server-sdk";
-import { createRoomAccessDebugState, getRoomPermissions, parseRoomRole, type RoomPermission, type RoomRole } from "@noah/shared-types";
+import { createRoomAccessDebugState, getRoomPermissions, parseRoomRole, type RoomPermission, type RoomRole } from "@vrata/shared-types";
 
 import {
   resolveSceneBundlePublicUrl,
@@ -227,7 +227,7 @@ function isEnabledEnvValue(value: string | undefined): boolean | null {
 }
 
 function isDevRoleQueryAllowed(env: NodeJS.ProcessEnv = process.env): boolean {
-  const explicit = isEnabledEnvValue(env.NOAH_DEV_ROLE_QUERY ?? env.FEATURE_DEV_ROLE_QUERY);
+  const explicit = isEnabledEnvValue(env.VRATA_DEV_ROLE_QUERY ?? env.NOAH_DEV_ROLE_QUERY ?? env.FEATURE_DEV_ROLE_QUERY);
   if (explicit !== null) {
     return explicit;
   }
@@ -380,7 +380,7 @@ function getDefaultLivekitUrl(request?: IncomingMessage): string {
 }
 
 function getConfiguredPublicLivekitUrl(): string | null {
-  const configured = process.env.LIVEKIT_PUBLIC_URL?.trim() || process.env.NOAH_LIVEKIT_DOMAIN?.trim();
+  const configured = process.env.LIVEKIT_PUBLIC_URL?.trim() || process.env.VRATA_LIVEKIT_DOMAIN?.trim() || process.env.NOAH_LIVEKIT_DOMAIN?.trim();
   if (!configured) {
     return null;
   }
@@ -650,7 +650,7 @@ function json(response: ServerResponse, statusCode: number, body: unknown): void
     "content-type": "application/json; charset=utf-8",
     "access-control-allow-origin": process.env.API_CORS_ORIGIN ?? "*",
     "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
-    "access-control-allow-headers": "content-type,authorization,x-noah-admin-token,x-noah-internal-token",
+    "access-control-allow-headers": "content-type,authorization,x-vrata-admin-token,x-vrata-internal-token,x-noah-admin-token,x-noah-internal-token",
     "x-content-type-options": "nosniff",
     "x-frame-options": "DENY",
     "referrer-policy": "no-referrer",
@@ -663,7 +663,7 @@ function isAuthorizedControlPlaneRequest(request: IncomingMessage): boolean {
   if (!controlPlaneAdminToken) {
     return true;
   }
-  return request.headers["x-noah-admin-token"] === controlPlaneAdminToken;
+  return request.headers["x-vrata-admin-token"] === controlPlaneAdminToken || request.headers["x-noah-admin-token"] === controlPlaneAdminToken;
 }
 
 function safeEqual(left: string, right: string): boolean {
@@ -673,7 +673,7 @@ function safeEqual(left: string, right: string): boolean {
 }
 
 function getInternalServiceToken(env: NodeJS.ProcessEnv = process.env): string | null {
-  const token = env.NOAH_INTERNAL_SERVICE_TOKEN?.trim() || env.REMOTE_BROWSER_INTERNAL_TOKEN?.trim() || "";
+  const token = env.VRATA_INTERNAL_SERVICE_TOKEN?.trim() || env.NOAH_INTERNAL_SERVICE_TOKEN?.trim() || env.REMOTE_BROWSER_INTERNAL_TOKEN?.trim() || "";
   return token || null;
 }
 
@@ -682,7 +682,7 @@ function isAuthorizedInternalRequest(request: IncomingMessage, env: NodeJS.Proce
   if (!token) {
     return true;
   }
-  const provided = request.headers["x-noah-internal-token"];
+  const provided = request.headers["x-vrata-internal-token"] ?? request.headers["x-noah-internal-token"];
   return typeof provided === "string" && safeEqual(provided, token);
 }
 
@@ -859,7 +859,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     response.writeHead(204, {
       "access-control-allow-origin": process.env.API_CORS_ORIGIN ?? "*",
       "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
-      "access-control-allow-headers": "content-type,authorization,x-noah-admin-token,x-noah-internal-token"
+      "access-control-allow-headers": "content-type,authorization,x-vrata-admin-token,x-vrata-internal-token,x-noah-admin-token,x-noah-internal-token"
     });
     response.end();
     return;
@@ -1299,7 +1299,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       ttl: `${Number.parseInt(process.env.MEDIA_TOKEN_TTL_SECONDS ?? "900", 10)}s`
     });
     accessToken.addGrant({
-      room: `${process.env.LIVEKIT_ROOM_PREFIX ?? "noah-"}${payload.roomId}`,
+      room: `${process.env.LIVEKIT_ROOM_PREFIX ?? "vrata-"}${payload.roomId}`,
       roomJoin: true,
       canPublish: payload.canPublishAudio || payload.canPublishVideo,
       canSubscribe: true
@@ -1329,7 +1329,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       ttl: `${ttlSeconds}s`
     });
     accessToken.addGrant({
-      room: `${process.env.LIVEKIT_ROOM_PREFIX ?? "noah-"}${payload.roomId}`,
+      room: `${process.env.LIVEKIT_ROOM_PREFIX ?? "vrata-"}${payload.roomId}`,
       roomJoin: true,
       canPublish: true,
       canSubscribe: false
@@ -1390,7 +1390,7 @@ export function startApiServer(port = apiPort) {
   });
 }
 
-if (process.env.NODE_ENV !== "test" && process.env.NOAH_DISABLE_AUTOSTART !== "1") {
+if (process.env.NODE_ENV !== "test" && process.env.VRATA_DISABLE_AUTOSTART !== "1" && process.env.NOAH_DISABLE_AUTOSTART !== "1") {
   validateProductionApiEnv();
   startApiServer();
 }

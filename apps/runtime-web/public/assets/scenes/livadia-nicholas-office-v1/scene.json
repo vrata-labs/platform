@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "sceneId": "livadia-nicholas-office-v1",
   "label": "Livadia Nicholas II Office",
-  "source": "Noah original procedural art-pass scene inspired by public-domain Livadia Palace imperial office history",
+  "source": "Vrata original procedural art-pass scene inspired by public-domain Livadia Palace imperial office history",
   "glbPath": "scene.glb",
   "renderMode": "clean",
   "spawnPoints": [
@@ -99,7 +99,7 @@
   },
   "preview": "preview.webp",
   "rights": {
-    "owner": "noah",
+    "owner": "vrata",
     "license": "internal-original",
     "clearedFor": [
       "staging",
@@ -112,25 +112,25 @@
       {
         "id": "livadia-nicholas-office-v1-procedural-geometry-art-pass",
         "type": "mesh",
-        "author": "Noah/OpenCode",
+        "author": "Vrata/OpenCode",
         "licenseRef": "LICENSES.md"
       },
       {
         "id": "livadia-nicholas-office-v1-procedural-pbr-textures",
         "type": "texture",
-        "author": "Noah/OpenCode",
+        "author": "Vrata/OpenCode",
         "licenseRef": "LICENSES.md"
       },
       {
         "id": "livadia-nicholas-office-v1-procedural-panorama-sphere",
         "type": "texture",
-        "author": "Noah/OpenCode",
+        "author": "Vrata/OpenCode",
         "licenseRef": "LICENSES.md"
       },
       {
         "id": "livadia-nicholas-office-v1-procedural-preview",
         "type": "texture",
-        "author": "Noah/OpenCode",
+        "author": "Vrata/OpenCode",
         "licenseRef": "LICENSES.md"
       }
     ]

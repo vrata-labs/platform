@@ -1,6 +1,6 @@
 # Contributing
 
-Noah is preparing for a public `0.1` beta. Contributions should keep the project easy to self-host, test, and roll back.
+Vrata is preparing for a public `0.1` beta. Contributions should keep the project easy to self-host, test, and roll back.
 
 ## Workflow
 

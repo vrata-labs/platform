@@ -1,4 +1,4 @@
-import { createDefaultRoomMediaObjectsState, type RoomMediaObjectsState, type RoomPermission, type RoomRole } from "@noah/shared-types";
+import { createDefaultRoomMediaObjectsState, type RoomMediaObjectsState, type RoomPermission, type RoomRole } from "@vrata/shared-types";
 
 import type { PresenceState } from "./index.js";
 import type { AvatarReliableState, CompactPoseFrame } from "./avatar/avatar-types.js";

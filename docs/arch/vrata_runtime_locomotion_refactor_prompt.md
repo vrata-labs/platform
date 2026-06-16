@@ -1,4 +1,4 @@
-# Noah runtime-web locomotion refactor prompt
+# Vrata runtime-web locomotion refactor prompt
 
 ## Status On 2026-05-08
 
@@ -83,17 +83,17 @@ Verification for `ca26095b77c076672acfea72eb6d38e71f8c3bbf`:
 Slice 5                                 done
 Frame handler helper                    createFrameLocomotionHandlers(frameContext)
 Runtime behavior                        unchanged inline handler extraction
-pnpm --filter @noah/runtime-web build  PASS
-pnpm --filter @noah/runtime-web test   PASS, 191 tests
+pnpm --filter @vrata/runtime-web build  PASS
+pnpm --filter @vrata/runtime-web test   PASS, 191 tests
 git diff --check                       PASS
 pose ownership grep                    PASS, direct writes only in local/player-rig-adapter.ts
 renderer.xr.getFrame grep              PASS, only main.ts XR frame sampling
 seating Three.js grep                  PASS, no imports in apps/runtime-web/src/seating
 main seat command grep                 PASS, no direct sendSeatClaim/sendSeatRelease/requestSeatClaim calls in main.ts
 pnpm test:e2e                          PASS, 49 passed / 1 skipped
-CI                                      PASS, run 25557503143, https://github.com/psilon2000/noah/actions/runs/25557503143
-Docker Publish                          PASS, run 25557503105, https://github.com/psilon2000/noah/actions/runs/25557503105
-Staging Deploy                          PASS, run 25557694223, https://github.com/psilon2000/noah/actions/runs/25557694223
+CI                                      PASS, run 25557503143, https://github.com/psilon2000/vrata/actions/runs/25557503143
+Docker Publish                          PASS, run 25557503105, https://github.com/psilon2000/vrata/actions/runs/25557503105
+Staging Deploy                          PASS, run 25557694223, https://github.com/psilon2000/vrata/actions/runs/25557694223
 Staging smoke                           PASS, /health OK, /rooms/demo-room 200, /control-plane 200
 Rollback                                not triggered
 ```
@@ -105,17 +105,17 @@ Slice 4                                 done
 Frame command bridge                    apps/runtime-web/src/locomotion/frame-command-bridge.ts
 Command flush semantics                 covered by frame locomotion command executor test
 Runtime behavior                        unchanged command order and pipeline delegation
-pnpm --filter @noah/runtime-web build  PASS
-pnpm --filter @noah/runtime-web test   PASS, 191 tests
+pnpm --filter @vrata/runtime-web build  PASS
+pnpm --filter @vrata/runtime-web test   PASS, 191 tests
 git diff --check                       PASS
 pose ownership grep                    PASS, direct writes only in local/player-rig-adapter.ts
 renderer.xr.getFrame grep              PASS, only main.ts XR frame sampling
 seating Three.js grep                  PASS, no imports in apps/runtime-web/src/seating
 main seat command grep                 PASS, no direct sendSeatClaim/sendSeatRelease/requestSeatClaim calls in main.ts
 pnpm test:e2e                          PASS, 49 passed / 1 skipped
-CI                                      PASS, run 25556640892, https://github.com/psilon2000/noah/actions/runs/25556640892
-Docker Publish                          PASS, run 25556640907, https://github.com/psilon2000/noah/actions/runs/25556640907
-Staging Deploy                          PASS, run 25556820126, https://github.com/psilon2000/noah/actions/runs/25556820126
+CI                                      PASS, run 25556640892, https://github.com/psilon2000/vrata/actions/runs/25556640892
+Docker Publish                          PASS, run 25556640907, https://github.com/psilon2000/vrata/actions/runs/25556640907
+Staging Deploy                          PASS, run 25556820126, https://github.com/psilon2000/vrata/actions/runs/25556820126
 Staging smoke                           PASS, /health OK, /rooms/demo-room 200, /control-plane 200
 Rollback                                not triggered
 ```
@@ -127,17 +127,17 @@ Slice 3                                 done
 Movement input collection               buildFrameMovementInput(...)
 Post-confirm seat state                 covered by flow test
 Runtime behavior                        unchanged movement planner behavior
-pnpm --filter @noah/runtime-web build  PASS
-pnpm --filter @noah/runtime-web test   PASS, 191 tests
+pnpm --filter @vrata/runtime-web build  PASS
+pnpm --filter @vrata/runtime-web test   PASS, 191 tests
 git diff --check                       PASS
 pose ownership grep                    PASS, direct writes only in local/player-rig-adapter.ts
 renderer.xr.getFrame grep              PASS, only main.ts XR frame sampling
 seating Three.js grep                  PASS, no imports in apps/runtime-web/src/seating
 main seat command grep                 PASS, no direct sendSeatClaim/sendSeatRelease/requestSeatClaim calls in main.ts
 pnpm test:e2e                          PASS, 49 passed / 1 skipped
-CI                                      PASS, run 25555848463, https://github.com/psilon2000/noah/actions/runs/25555848463
-Docker Publish                          PASS, run 25555848513, https://github.com/psilon2000/noah/actions/runs/25555848513
-Staging Deploy                          PASS, run 25556026457, https://github.com/psilon2000/noah/actions/runs/25556026457
+CI                                      PASS, run 25555848463, https://github.com/psilon2000/vrata/actions/runs/25555848463
+Docker Publish                          PASS, run 25555848513, https://github.com/psilon2000/vrata/actions/runs/25555848513
+Staging Deploy                          PASS, run 25556026457, https://github.com/psilon2000/vrata/actions/runs/25556026457
 Staging smoke                           PASS, /health OK, /rooms/demo-room 200, /control-plane 200
 Rollback                                not triggered
 ```
@@ -149,17 +149,17 @@ Slice 2                                 done
 Pipeline read model                     FrameLocomotionReadModel
 Pipeline command sink                   FrameLocomotionCommandSink
 Runtime behavior                        unchanged, type-only boundary naming
-pnpm --filter @noah/runtime-web build  PASS
-pnpm --filter @noah/runtime-web test   PASS, 190 tests
+pnpm --filter @vrata/runtime-web build  PASS
+pnpm --filter @vrata/runtime-web test   PASS, 190 tests
 git diff --check                       PASS
 pose ownership grep                    PASS, direct writes only in local/player-rig-adapter.ts
 renderer.xr.getFrame grep              PASS, only main.ts XR frame sampling
 seating Three.js grep                  PASS, no imports in apps/runtime-web/src/seating
 main seat command grep                 PASS, no direct sendSeatClaim/sendSeatRelease/requestSeatClaim calls in main.ts
 pnpm test:e2e                          PASS, 49 passed / 1 skipped
-CI                                      PASS, run 25549311791, https://github.com/psilon2000/noah/actions/runs/25549311791
-Docker Publish                          PASS, run 25549311796, https://github.com/psilon2000/noah/actions/runs/25549311796
-Staging Deploy                          PASS, run 25549481989, https://github.com/psilon2000/noah/actions/runs/25549481989
+CI                                      PASS, run 25549311791, https://github.com/psilon2000/vrata/actions/runs/25549311791
+Docker Publish                          PASS, run 25549311796, https://github.com/psilon2000/vrata/actions/runs/25549311796
+Staging Deploy                          PASS, run 25549481989, https://github.com/psilon2000/vrata/actions/runs/25549481989
 Staging smoke                           PASS, /health OK, /rooms/demo-room 200, /control-plane 200
 Rollback                                not triggered
 ```
@@ -171,17 +171,17 @@ Slice 1                                 done
 Split XR controls                       apps/runtime-web/src/locomotion/frame-xr-controls.ts
 Split movement planning                 apps/runtime-web/src/locomotion/frame-movement.ts
 Pipeline entry point                    apps/runtime-web/src/locomotion/frame-locomotion.ts
-pnpm --filter @noah/runtime-web build  PASS
-pnpm --filter @noah/runtime-web test   PASS, 190 tests
+pnpm --filter @vrata/runtime-web build  PASS
+pnpm --filter @vrata/runtime-web test   PASS, 190 tests
 git diff --check                       PASS
 pose ownership grep                    PASS, direct writes only in local/player-rig-adapter.ts
 renderer.xr.getFrame grep              PASS, only main.ts XR frame sampling
 seating Three.js grep                  PASS, no imports in apps/runtime-web/src/seating
 main seat command grep                 PASS, no direct sendSeatClaim/sendSeatRelease/requestSeatClaim calls in main.ts
 pnpm test:e2e                          PASS, 49 passed / 1 skipped
-CI                                      PASS, run 25547940990, https://github.com/psilon2000/noah/actions/runs/25547940990
-Docker Publish                          PASS, run 25547940992, retry after transient cr.yandex oauth token EOF, https://github.com/psilon2000/noah/actions/runs/25547940992
-Staging Deploy                          PASS, run 25548273651, https://github.com/psilon2000/noah/actions/runs/25548273651
+CI                                      PASS, run 25547940990, https://github.com/psilon2000/vrata/actions/runs/25547940990
+Docker Publish                          PASS, run 25547940992, retry after transient cr.yandex oauth token EOF, https://github.com/psilon2000/vrata/actions/runs/25547940992
+Staging Deploy                          PASS, run 25548273651, https://github.com/psilon2000/vrata/actions/runs/25548273651
 Staging smoke                           PASS, /health OK, /rooms/demo-room 200, /control-plane 200
 Rollback                                not triggered
 ```
@@ -189,8 +189,8 @@ Rollback                                not triggered
 Verification for `796841382d6403e567c6a8efd6663dc00cd4a1e0`:
 
 ```text
-pnpm --filter @noah/runtime-web build  PASS
-pnpm --filter @noah/runtime-web test   PASS, 190 tests
+pnpm --filter @vrata/runtime-web build  PASS
+pnpm --filter @vrata/runtime-web test   PASS, 190 tests
 git diff --check                       PASS
 pose ownership grep                    PASS, direct writes only in local/player-rig-adapter.ts
 renderer.xr.getFrame grep              PASS, only sampleRuntimeFrameContext
@@ -443,8 +443,8 @@ Acceptance for Slice 6:
 Run locally before commit:
 
 ```bash
-pnpm --filter @noah/runtime-web build
-pnpm --filter @noah/runtime-web test
+pnpm --filter @vrata/runtime-web build
+pnpm --filter @vrata/runtime-web test
 git diff --check
 grep -R -E "player\.position\.set|player\.position\.[xyz][[:space:]]*=|player\.rotation\.y[[:space:]]*=" apps/runtime-web/src
 grep -R "renderer\.xr\.getFrame" apps/runtime-web/src

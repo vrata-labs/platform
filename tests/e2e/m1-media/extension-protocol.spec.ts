@@ -43,7 +43,7 @@ function roomUrl(roomId: string, role: "guest" | "member" | "host") {
 }
 
 async function readDebug(page: Page): Promise<ExtensionProtocolDebug | undefined> {
-  return page.evaluate(() => (window as Window & { __NOAH_DEBUG__?: ExtensionProtocolDebug }).__NOAH_DEBUG__);
+  return page.evaluate(() => (window as Window & { __VRATA_DEBUG__?: ExtensionProtocolDebug }).__VRATA_DEBUG__);
 }
 
 async function waitForRoom(page: Page, role: "guest" | "member" | "host") {
@@ -63,15 +63,15 @@ async function waitForRoom(page: Page, role: "guest" | "member" | "host") {
 
 async function createExtensionTestCard(page: Page) {
   const sent = await page.evaluate(() => (window as Window & {
-    __NOAH_TEST__?: { createExtensionTestCard: () => boolean };
-  }).__NOAH_TEST__?.createExtensionTestCard() ?? false);
+    __VRATA_TEST__?: { createExtensionTestCard: () => boolean };
+  }).__VRATA_TEST__?.createExtensionTestCard() ?? false);
   expect(sent).toBe(true);
 }
 
 async function sendClick(page: Page) {
   const sent = await page.evaluate(() => (window as Window & {
-    __NOAH_TEST__?: { sendDebugSurfaceInput: (input?: { kind?: string; u?: number; v?: number }) => boolean };
-  }).__NOAH_TEST__?.sendDebugSurfaceInput({ kind: "click", u: 0.5, v: 0.5 }) ?? false);
+    __VRATA_TEST__?: { sendDebugSurfaceInput: (input?: { kind?: string; u?: number; v?: number }) => boolean };
+  }).__VRATA_TEST__?.sendDebugSurfaceInput({ kind: "click", u: 0.5, v: 0.5 }) ?? false);
   expect(sent).toBe(true);
 }
 
@@ -82,11 +82,11 @@ test("M1.9 registry exposes internal extensions and creates a test extension obj
 
   const registry = await readDebug(page);
   const extensions = registry?.mediaObjects?.extensions ?? [];
-  const extensionCard = extensions.find((extension) => extension.id === "noah.extension-test-card")?.objectTypes?.[0];
-  const missingCapabilityCard = extensions.find((extension) => extension.id === "noah.missing-capability-demo")?.objectTypes?.[0];
-  const disabledCard = extensions.find((extension) => extension.id === "noah.disabled-demo")?.objectTypes?.[0];
+  const extensionCard = extensions.find((extension) => extension.id === "vrata.extension-test-card")?.objectTypes?.[0];
+  const missingCapabilityCard = extensions.find((extension) => extension.id === "vrata.missing-capability-demo")?.objectTypes?.[0];
+  const disabledCard = extensions.find((extension) => extension.id === "vrata.disabled-demo")?.objectTypes?.[0];
 
-  expect(extensions.some((extension) => extension.id === "noah.whiteboard" && extension.valid && extension.enabled)).toBe(true);
+  expect(extensions.some((extension) => extension.id === "vrata.whiteboard" && extension.valid && extension.enabled)).toBe(true);
   expect(extensionCard).toMatchObject({ objectType: "extension-test-card", available: true });
   expect(missingCapabilityCard).toMatchObject({ objectType: "missing-capability-extension-card", available: false });
   expect(missingCapabilityCard?.missingCapabilities).toContain("surface.render");
@@ -133,8 +133,8 @@ test("M1.9 extension capability, enabled state, and action permissions are enfor
     await waitForRoom(host, "host");
 
     const missingCapabilitySent = await host.evaluate(() => (window as Window & {
-      __NOAH_TEST__?: { createMissingCapabilityExtensionObject: () => boolean };
-    }).__NOAH_TEST__?.createMissingCapabilityExtensionObject() ?? false);
+      __VRATA_TEST__?: { createMissingCapabilityExtensionObject: () => boolean };
+    }).__VRATA_TEST__?.createMissingCapabilityExtensionObject() ?? false);
     expect(missingCapabilitySent).toBe(true);
     await expect.poll(async () => (await readDebug(host))?.mediaObjects?.blockedReason ?? null, {
       timeout: 10000,
@@ -142,8 +142,8 @@ test("M1.9 extension capability, enabled state, and action permissions are enfor
     }).toBe("missing-extension-capability");
 
     const disabledSent = await host.evaluate(() => (window as Window & {
-      __NOAH_TEST__?: { createDisabledExtensionObject: () => boolean };
-    }).__NOAH_TEST__?.createDisabledExtensionObject() ?? false);
+      __VRATA_TEST__?: { createDisabledExtensionObject: () => boolean };
+    }).__VRATA_TEST__?.createDisabledExtensionObject() ?? false);
     expect(disabledSent).toBe(true);
     await expect.poll(async () => (await readDebug(host))?.mediaObjects?.blockedReason ?? null, {
       timeout: 10000,
@@ -162,8 +162,8 @@ test("M1.9 extension capability, enabled state, and action permissions are enfor
     await guest.goto(roomUrl(roomId, "guest"));
     await waitForRoom(guest, "guest");
     const guestSent = await guest.evaluate(() => (window as Window & {
-      __NOAH_TEST__?: { sendDebugSurfaceInput: (input?: { kind?: string; u?: number; v?: number }) => boolean };
-    }).__NOAH_TEST__?.sendDebugSurfaceInput({ kind: "click", u: 0.5, v: 0.5 }) ?? false);
+      __VRATA_TEST__?: { sendDebugSurfaceInput: (input?: { kind?: string; u?: number; v?: number }) => boolean };
+    }).__VRATA_TEST__?.sendDebugSurfaceInput({ kind: "click", u: 0.5, v: 0.5 }) ?? false);
     expect(guestSent).toBe(false);
 
     await expect.poll(async () => {

@@ -7,7 +7,7 @@ import type {
   RoomPermission,
   SurfaceInputEvent,
   SurfaceInputKind
-} from "@noah/shared-types";
+} from "@vrata/shared-types";
 
 import type { SurfaceCommandResult } from "../room-state-client.js";
 

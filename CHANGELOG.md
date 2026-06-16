@@ -1,8 +1,8 @@
 # Changelog
 
-All notable changes for public Noah releases will be documented in this file.
+All notable changes for public Vrata releases will be documented in this file.
 
-Noah uses SemVer: `MAJOR.MINOR.PATCH`. Until `1.0.0`, breaking changes can happen in minor versions, but they must be called out in release notes and upgrade docs.
+Vrata uses SemVer: `MAJOR.MINOR.PATCH`. Until `1.0.0`, breaking changes can happen in minor versions, but they must be called out in release notes and upgrade docs.
 
 ## Unreleased
 

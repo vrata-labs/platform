@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import type { SurfaceInputEvent } from "@noah/shared-types";
+import type { SurfaceInputEvent } from "@vrata/shared-types";
 
 import { whiteboardPointFromSurfaceInput } from "./whiteboard-object.js";
 

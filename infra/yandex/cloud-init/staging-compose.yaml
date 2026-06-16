@@ -8,38 +8,38 @@ packages:
   - ca-certificates
 
 write_files:
-  - path: /usr/local/bin/noah-write-domains.sh
+  - path: /usr/local/bin/vrata-write-domains.sh
     permissions: "0755"
     content: |
       #!/usr/bin/env bash
       set -euo pipefail
-      NOAH_IP="$(curl -fsH 'Metadata-Flavor: Google' http://169.254.169.254/computeMetadata/v1/instance/network-interfaces/0/access-configs/0/external-ip)"
-      NOAH_APP_DOMAIN="${NOAH_IP}.sslip.io"
-      NOAH_LIVEKIT_DOMAIN="livekit.${NOAH_IP}.sslip.io"
-      NOAH_STATE_DOMAIN="state.${NOAH_IP}.sslip.io"
-      NOAH_BROWSER_DOMAIN="browser.${NOAH_IP}.sslip.io"
+      VRATA_IP="$(curl -fsH 'Metadata-Flavor: Google' http://169.254.169.254/computeMetadata/v1/instance/network-interfaces/0/access-configs/0/external-ip)"
+      VRATA_APP_DOMAIN="${VRATA_IP}.sslip.io"
+      VRATA_LIVEKIT_DOMAIN="livekit.${VRATA_IP}.sslip.io"
+      VRATA_STATE_DOMAIN="state.${VRATA_IP}.sslip.io"
+      VRATA_BROWSER_DOMAIN="browser.${VRATA_IP}.sslip.io"
 
-      mkdir -p /opt/noah/infra/docker
-      export NOAH_IP NOAH_APP_DOMAIN NOAH_STATE_DOMAIN NOAH_LIVEKIT_DOMAIN NOAH_BROWSER_DOMAIN
+      mkdir -p /opt/vrata/infra/docker
+      export VRATA_IP VRATA_APP_DOMAIN VRATA_STATE_DOMAIN VRATA_LIVEKIT_DOMAIN VRATA_BROWSER_DOMAIN
       python3 - <<'PY'
       import os
       from pathlib import Path
-      ip = os.environ["NOAH_IP"]
-      app_domain = os.environ["NOAH_APP_DOMAIN"]
-      state_domain = os.environ["NOAH_STATE_DOMAIN"]
-      livekit_domain = os.environ["NOAH_LIVEKIT_DOMAIN"]
-      browser_domain = os.environ["NOAH_BROWSER_DOMAIN"]
+      ip = os.environ["VRATA_IP"]
+      app_domain = os.environ["VRATA_APP_DOMAIN"]
+      state_domain = os.environ["VRATA_STATE_DOMAIN"]
+      livekit_domain = os.environ["VRATA_LIVEKIT_DOMAIN"]
+      browser_domain = os.environ["VRATA_BROWSER_DOMAIN"]
       lines = [
-          "COMPOSE_PROJECT_NAME=noah",
-          "API_IMAGE_REPO=cr.yandex/crp9cm29k6p76hqo8lti/noah-api",
-          "ROOM_STATE_IMAGE_REPO=cr.yandex/crp9cm29k6p76hqo8lti/noah-room-state",
-          "REMOTE_BROWSER_IMAGE_REPO=cr.yandex/crp9cm29k6p76hqo8lti/noah-remote-browser",
+          "COMPOSE_PROJECT_NAME=vrata",
+          "API_IMAGE_REPO=cr.yandex/crp9cm29k6p76hqo8lti/vrata-api",
+          "ROOM_STATE_IMAGE_REPO=cr.yandex/crp9cm29k6p76hqo8lti/vrata-room-state",
+          "REMOTE_BROWSER_IMAGE_REPO=cr.yandex/crp9cm29k6p76hqo8lti/vrata-remote-browser",
           "IMAGE_TAG=staging",
-          f"NOAH_APP_BASE_URL=http://{ip}:4000",
-          f"NOAH_APP_DOMAIN={app_domain}",
-          f"NOAH_STATE_DOMAIN={state_domain}",
-          f"NOAH_LIVEKIT_DOMAIN={livekit_domain}",
-          f"NOAH_BROWSER_DOMAIN={browser_domain}",
+          f"VRATA_APP_BASE_URL=http://{ip}:4000",
+          f"VRATA_APP_DOMAIN={app_domain}",
+          f"VRATA_STATE_DOMAIN={state_domain}",
+          f"VRATA_LIVEKIT_DOMAIN={livekit_domain}",
+          f"VRATA_BROWSER_DOMAIN={browser_domain}",
           f"LIVEKIT_NODE_IP={ip}",
           f"ROOM_STATE_PUBLIC_URL=ws://{ip}:2567",
           f"LIVEKIT_URL=ws://{ip}:7880",
@@ -47,32 +47,32 @@ write_files:
           f"REMOTE_BROWSER_ALLOWED_ORIGINS=https://{app_domain},http://{ip}:4000,http://127.0.0.1:4000,http://localhost:4000,https://rutube.ru,https://*.rutube.ru,https://*.rtbcdn.ru",
           "REMOTE_BROWSER_ALLOW_PRIVATE_ALLOWED_ORIGINS=true",
           "REMOTE_BROWSER_FRAME_INTERVAL_MS=250",
-          "NOAH_HTTP_PORT=80",
-          "NOAH_HTTPS_PORT=443",
-          "NOAH_API_DIRECT_PORT=4000",
-          "NOAH_ROOM_STATE_PORT=2567",
-          "NOAH_LIVEKIT_PORT=7880",
-          "NOAH_LIVEKIT_UDP_PORT=7881",
+          "VRATA_HTTP_PORT=80",
+          "VRATA_HTTPS_PORT=443",
+          "VRATA_API_DIRECT_PORT=4000",
+          "VRATA_ROOM_STATE_PORT=2567",
+          "VRATA_LIVEKIT_PORT=7880",
+          "VRATA_LIVEKIT_UDP_PORT=7881",
           "MINIO_API_PORT=9000",
           "MINIO_CONSOLE_PORT=9001",
           "API_PORT=4000",
           "API_CORS_ORIGIN=*",
-          "CONTROL_PLANE_ADMIN_TOKEN=noah-stage-admin",
+          "CONTROL_PLANE_ADMIN_TOKEN=vrata-stage-admin",
           "LIVEKIT_API_KEY=devkey",
           "LIVEKIT_API_SECRET=secret",
-          "LIVEKIT_ROOM_PREFIX=noah-",
+          "LIVEKIT_ROOM_PREFIX=vrata-",
           "STATE_TOKEN_TTL_SECONDS=900",
           "REMOTE_BROWSER_TOKEN_SECRET=dev-remote-browser-secret",
           "REMOTE_BROWSER_TOKEN_TTL_SECONDS=300",
           "MEDIA_TOKEN_TTL_SECONDS=900",
-          "POSTGRES_DB=noah",
+          "POSTGRES_DB=vrata",
           "POSTGRES_USER=postgres",
           "POSTGRES_PASSWORD=postgres",
           "POSTGRES_PORT=5432",
-          "POSTGRES_URL=postgres://postgres:postgres@postgres:5432/noah",
-          "MINIO_ROOT_USER=noahminio",
-          "MINIO_ROOT_PASSWORD=noahminio123",
-          "MINIO_BUCKET=noah-scene-bundles",
+          "POSTGRES_URL=postgres://postgres:postgres@postgres:5432/vrata",
+          "MINIO_ROOT_USER=vrataminio",
+          "MINIO_ROOT_PASSWORD=vrataminio123",
+          "MINIO_BUCKET=vrata-scene-bundles",
           f"MINIO_PUBLIC_BASE_URL=http://{ip}:9000",
           "MINIO_SCENE_PREFIX=scenes/",
           "SCENE_BUNDLE_PROVIDER=minio-default",
@@ -83,9 +83,9 @@ write_files:
           "CADDY_CONFIG_FILE=./Caddyfile.staging"
       ]
       content = "\n".join(lines) + "\n"
-      Path("/opt/noah/infra/docker/.env.staging").write_text(content)
+      Path("/opt/vrata/infra/docker/.env.staging").write_text(content)
       PY
-  - path: /usr/local/bin/noah-install-metadata-ssh.sh
+  - path: /usr/local/bin/vrata-install-metadata-ssh.sh
     permissions: "0755"
     content: |
       #!/usr/bin/env bash
@@ -107,7 +107,7 @@ write_files:
       done <<< "$SSH_KEYS"
 
 runcmd:
-  - /usr/local/bin/noah-install-metadata-ssh.sh
+  - /usr/local/bin/vrata-install-metadata-ssh.sh
   - curl -fsSL https://get.docker.com | sh
   - systemctl enable docker
   - systemctl restart docker
@@ -119,8 +119,8 @@ runcmd:
   - ufw allow 2567/tcp
   - ufw allow 9000/tcp
   - ufw allow 9001/tcp
-  - rm -rf /opt/noah
-  - git clone --branch deploy/scene-bundles-stage-20260328 --single-branch https://github.com/psilon2000/noah.git /opt/noah
-  - /usr/local/bin/noah-write-domains.sh
-  - bash -lc 'cd /opt/noah && docker compose --env-file infra/docker/.env.staging -f infra/docker/compose.staging.yml build'
-  - bash -lc 'cd /opt/noah && docker compose --env-file infra/docker/.env.staging -f infra/docker/compose.staging.yml up -d'
+  - rm -rf /opt/vrata
+  - git clone --branch deploy/scene-bundles-stage-20260328 --single-branch https://github.com/psilon2000/vrata.git /opt/vrata
+  - /usr/local/bin/vrata-write-domains.sh
+  - bash -lc 'cd /opt/vrata && docker compose --env-file infra/docker/.env.staging -f infra/docker/compose.staging.yml build'
+  - bash -lc 'cd /opt/vrata && docker compose --env-file infra/docker/.env.staging -f infra/docker/compose.staging.yml up -d'

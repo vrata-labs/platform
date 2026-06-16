@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { createDefaultRoomMediaObjectsState } from "@noah/shared-types";
+import { createDefaultRoomMediaObjectsState } from "@vrata/shared-types";
 
 import { isScreenShareAudioSource, shouldPublishMediaSurfaceAudio } from "../media-surface-audio.js";
 

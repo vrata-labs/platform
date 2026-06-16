@@ -25,7 +25,7 @@ import {
   shouldPreserveRemoteBrowserMediaOverlays,
   shouldRequestPublicLivekitUrlForPage
 } from "./index.js";
-import type { SurfaceInputEvent } from "@noah/shared-types";
+import type { SurfaceInputEvent } from "@vrata/shared-types";
 
 function surfaceInput(uv: { u: number; v: number }): SurfaceInputEvent {
   return {

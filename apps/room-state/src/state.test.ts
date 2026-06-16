@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { DISABLED_EXTENSION_CARD_TYPE, EXTENSION_TEST_CARD_TYPE, MISSING_CAPABILITY_EXTENSION_CARD_TYPE } from "@noah/shared-types";
+import { DISABLED_EXTENSION_CARD_TYPE, EXTENSION_TEST_CARD_TYPE, MISSING_CAPABILITY_EXTENSION_CARD_TYPE } from "@vrata/shared-types";
 
 import {
   claimSeat,

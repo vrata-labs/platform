@@ -7,7 +7,7 @@ import {
   type RemoteBrowserObjectState,
   type SurfaceInputEvent,
   type WhiteboardState
-} from "@noah/shared-types";
+} from "@vrata/shared-types";
 
 import { isRemoteBrowserState, isWhiteboardState } from "./media-object-state.js";
 

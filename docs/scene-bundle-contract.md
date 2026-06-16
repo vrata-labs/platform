@@ -1,6 +1,6 @@
 # Scene Bundle Contract v1
 
-`noah` v1 does not read Unity `.unity` scenes directly. A room can optionally point to a scene bundle manifest URL, and the runtime loads the bundle as a web scene.
+`vrata` v1 does not read Unity `.unity` scenes directly. A room can optionally point to a scene bundle manifest URL, and the runtime loads the bundle as a web scene.
 
 For product-quality scene authoring and validator thresholds, see `docs/scene-technical-requirements.md`. This document describes the runtime compatibility contract; the requirements document is intentionally stricter for new scenes.
 

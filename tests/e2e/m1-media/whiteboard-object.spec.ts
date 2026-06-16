@@ -49,7 +49,7 @@ function roomUrl(roomId: string, role: "guest" | "member" | "host", extraParams:
 }
 
 async function readDebug(page: Page): Promise<WhiteboardDebug | undefined> {
-  return page.evaluate(() => (window as Window & { __NOAH_DEBUG__?: WhiteboardDebug }).__NOAH_DEBUG__);
+  return page.evaluate(() => (window as Window & { __VRATA_DEBUG__?: WhiteboardDebug }).__VRATA_DEBUG__);
 }
 
 async function waitForKernel(page: Page, role: "guest" | "member" | "host") {
@@ -72,15 +72,15 @@ async function waitForKernel(page: Page, role: "guest" | "member" | "host") {
 
 async function createWhiteboard(page: Page) {
   const sent = await page.evaluate(() => (window as Window & {
-    __NOAH_TEST__?: { createWhiteboardObject: () => boolean };
-  }).__NOAH_TEST__?.createWhiteboardObject() ?? false);
+    __VRATA_TEST__?: { createWhiteboardObject: () => boolean };
+  }).__VRATA_TEST__?.createWhiteboardObject() ?? false);
   expect(sent).toBe(true);
 }
 
 async function trySendSurfaceInput(page: Page, input: { kind: string; source?: string; u?: number; v?: number }) {
   return page.evaluate((value) => (window as Window & {
-    __NOAH_TEST__?: { sendDebugSurfaceInput: (input?: { kind?: string; source?: string; u?: number; v?: number }) => boolean };
-  }).__NOAH_TEST__?.sendDebugSurfaceInput(value) ?? false, input);
+    __VRATA_TEST__?: { sendDebugSurfaceInput: (input?: { kind?: string; source?: string; u?: number; v?: number }) => boolean };
+  }).__VRATA_TEST__?.sendDebugSurfaceInput(value) ?? false, input);
 }
 
 async function sendSurfaceInput(page: Page, input: { kind: string; source?: string; u?: number; v?: number }) {
@@ -96,7 +96,7 @@ async function setSyntheticXrState(page: Page, input: {
   rayVisible?: boolean;
 }) {
   const sent = await page.evaluate((value) => (window as Window & {
-    __NOAH_TEST__?: {
+    __VRATA_TEST__?: {
       setSyntheticXrState: (state: {
         rightController: { x: number; y: number; z: number };
         rightGrip?: { x: number; y: number; z: number } | null;
@@ -105,7 +105,7 @@ async function setSyntheticXrState(page: Page, input: {
         rayVisible?: boolean;
       } | null) => boolean;
     };
-  }).__NOAH_TEST__?.setSyntheticXrState(value) ?? false, input);
+  }).__VRATA_TEST__?.setSyntheticXrState(value) ?? false, input);
   expect(sent).toBe(true);
 }
 
@@ -227,8 +227,8 @@ test("M1.5 guest cannot draw and host clear syncs", async ({ browser }) => {
     }).toBe(1);
 
     const memberClearSent = await member.evaluate(() => (window as Window & {
-      __NOAH_TEST__?: { clearWhiteboardObject: () => boolean };
-    }).__NOAH_TEST__?.clearWhiteboardObject() ?? false);
+      __VRATA_TEST__?: { clearWhiteboardObject: () => boolean };
+    }).__VRATA_TEST__?.clearWhiteboardObject() ?? false);
     expect(memberClearSent).toBe(true);
     await expect.poll(async () => (await readDebug(member))?.mediaObjects?.blockedReason ?? null, {
       timeout: 10000,
@@ -415,8 +415,8 @@ test("M1.5 rejects stale and duplicate whiteboard patches", async ({ page }) => 
   await waitForWhiteboard(page, 1);
 
   const staleSent = await page.evaluate(() => (window as Window & {
-    __NOAH_TEST__?: { sendStaleWhiteboardPatch: () => boolean };
-  }).__NOAH_TEST__?.sendStaleWhiteboardPatch() ?? false);
+    __VRATA_TEST__?: { sendStaleWhiteboardPatch: () => boolean };
+  }).__VRATA_TEST__?.sendStaleWhiteboardPatch() ?? false);
   expect(staleSent).toBe(true);
   await expect.poll(async () => (await readDebug(page))?.mediaObjects?.blockedReason ?? null, {
     timeout: 10000,
@@ -424,8 +424,8 @@ test("M1.5 rejects stale and duplicate whiteboard patches", async ({ page }) => 
   }).toBe("revision-mismatch");
 
   const duplicateSent = await page.evaluate(() => (window as Window & {
-    __NOAH_TEST__?: { sendDuplicateWhiteboardPatch: () => boolean };
-  }).__NOAH_TEST__?.sendDuplicateWhiteboardPatch() ?? false);
+    __VRATA_TEST__?: { sendDuplicateWhiteboardPatch: () => boolean };
+  }).__VRATA_TEST__?.sendDuplicateWhiteboardPatch() ?? false);
   expect(duplicateSent).toBe(true);
   await expect.poll(async () => (await readDebug(page))?.mediaObjects?.blockedReason ?? null, {
     timeout: 10000,

@@ -33,7 +33,7 @@ import {
   type SurfaceTestCardState,
   type WhiteboardStroke,
   type WhiteboardState
-} from "@noah/shared-types";
+} from "@vrata/shared-types";
 
 import { appendBrandingSuffix, applyRoomShellBootState } from "./boot-session.js";
 import { bootRuntime, fetchRuntimeSpaces, listPresence, planVoiceSession, removePresence, resolveCurrentSpace, upsertPresence, type PresenceState, type RuntimeSpaceOption } from "./index.js";
@@ -143,14 +143,26 @@ function fallbackUuid(): string {
   return `guest-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+function getStoredValue(storage: Storage, key: string, legacyKey: string): string | null {
+  const value = storage.getItem(key);
+  if (value !== null) {
+    return value;
+  }
+  const legacyValue = storage.getItem(legacyKey);
+  if (legacyValue !== null) {
+    storage.setItem(key, legacyValue);
+  }
+  return legacyValue;
+}
+
 function getParticipantId(): string {
-  const stored = sessionStorage.getItem("noah.participantId");
+  const stored = getStoredValue(sessionStorage, "vrata.participantId", "noah.participantId");
   if (stored) {
     return stored;
   }
 
   const generated = typeof globalThis.crypto?.randomUUID === "function" ? globalThis.crypto.randomUUID() : fallbackUuid();
-  sessionStorage.setItem("noah.participantId", generated);
+  sessionStorage.setItem("vrata.participantId", generated);
   return generated;
 }
 
@@ -202,9 +214,9 @@ const faultConfig = {
 };
 const participantId = getParticipantId();
 const displayNameFromQuery = query.get("name");
-const displayName = displayNameFromQuery ?? localStorage.getItem("noah.displayName") ?? `Guest-${participantId.slice(0, 4)}`;
+const displayName = displayNameFromQuery ?? getStoredValue(localStorage, "vrata.displayName", "noah.displayName") ?? `Guest-${participantId.slice(0, 4)}`;
 if (!displayNameFromQuery) {
-  localStorage.setItem("noah.displayName", displayName);
+  localStorage.setItem("vrata.displayName", displayName);
 }
 const browserMediaCapabilities = detectBrowserMediaCapabilities({
   isSecureContext: window.isSecureContext,
@@ -730,8 +742,8 @@ let currentBotMove = { x: 0, z: 0 };
 let surfaceInputSeq = 0;
 let lastAvatarXrInputProfile: string | null = null;
 let lastAvatarPoseSentAtMs = 0;
-let preferredMicDeviceId = localStorage.getItem("noah.audioinput") ?? "default";
-let preferredSpeakerDeviceId = localStorage.getItem("noah.audiooutput") ?? "default";
+let preferredMicDeviceId = getStoredValue(localStorage, "vrata.audioinput", "noah.audioinput") ?? "default";
+let preferredSpeakerDeviceId = getStoredValue(localStorage, "vrata.audiooutput", "noah.audiooutput") ?? "default";
 let audioInputDevices: MediaDeviceInfo[] = [];
 let audioOutputDevices: MediaDeviceInfo[] = [];
 let localMicLevel = 0;
@@ -2617,7 +2629,7 @@ async function publishMockMicrophoneTrack(room: Room): Promise<void> {
     throw createFaultError("NotSupportedError", "audio_unsupported:publishTrack_missing");
   }
   await Promise.resolve(localParticipant.publishTrack(source.track, {
-    name: "noah-audio-mock",
+    name: "vrata-audio-mock",
     source: Track.Source.Microphone
   }));
 }
@@ -3610,9 +3622,10 @@ const debugState = {
 
 const floorMaterial = floor.material as THREE.MeshStandardMaterial;
 
+(window as Window & { __VRATA_DEBUG__?: typeof debugState }).__VRATA_DEBUG__ = debugState;
 (window as Window & { __NOAH_DEBUG__?: typeof debugState }).__NOAH_DEBUG__ = debugState;
 (window as Window & {
-  __NOAH_TEST__?: {
+  __VRATA_TEST__?: {
     forceRoomStateReconnect: () => void;
     aimInteractionAtSeat: (seatId: string) => boolean;
     aimInteractionAtFloor: (x: number, z: number) => boolean;
@@ -3671,7 +3684,7 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
       rayVisible?: boolean;
     } | null) => boolean;
   };
-}).__NOAH_TEST__ = {
+}).__VRATA_TEST__ = {
   forceRoomStateReconnect: () => {
     roomStateClient?.close();
   },
@@ -4058,8 +4071,8 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
   },
   getRemoteBrowserVrKeyboardKeyWorldPosition: (keyId) => {
     return (window as Window & {
-      __NOAH_TEST__?: { getRemoteBrowserVrKeyboardTargetWorldPosition: (targetId: string) => { x: number; y: number; z: number } | null };
-    }).__NOAH_TEST__?.getRemoteBrowserVrKeyboardTargetWorldPosition(keyId) ?? null;
+      __VRATA_TEST__?: { getRemoteBrowserVrKeyboardTargetWorldPosition: (targetId: string) => { x: number; y: number; z: number } | null };
+    }).__VRATA_TEST__?.getRemoteBrowserVrKeyboardTargetWorldPosition(keyId) ?? null;
   },
   forceXrInteractionAtSeat: (seatId: string) => {
     const seatAnchor = sceneSeatAnchorMap.get(seatId);
@@ -4098,6 +4111,7 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
     return true;
   }
 };
+(window as Window & { __NOAH_TEST__?: unknown }).__NOAH_TEST__ = (window as Window & { __VRATA_TEST__?: unknown }).__VRATA_TEST__;
 
 function setStatus(message: string): void {
   statusLineEl.textContent = message;
@@ -5922,7 +5936,7 @@ muteButton.addEventListener("click", async () => {
 
 micSelect.addEventListener("change", () => {
   preferredMicDeviceId = micSelect.value || "default";
-  localStorage.setItem("noah.audioinput", preferredMicDeviceId);
+  localStorage.setItem("vrata.audioinput", preferredMicDeviceId);
   updateAudioDeviceStatus(`Selected microphone: ${micSelect.selectedOptions[0]?.textContent ?? "default"}`);
   if (!livekitRoom) {
     return;
@@ -5941,7 +5955,7 @@ micSelect.addEventListener("change", () => {
 
 speakerSelect.addEventListener("change", () => {
   preferredSpeakerDeviceId = speakerSelect.value || "default";
-  localStorage.setItem("noah.audiooutput", preferredSpeakerDeviceId);
+  localStorage.setItem("vrata.audiooutput", preferredSpeakerDeviceId);
   updateAudioDeviceStatus(`Selected speaker: ${speakerSelect.selectedOptions[0]?.textContent ?? "default"}`);
   if (!livekitRoom || !supportsAudioOutputSelection()) {
     return;

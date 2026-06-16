@@ -1,10 +1,10 @@
 {
-  "name": "@noah/api",
+  "name": "@vrata/api",
   "private": true,
   "version": "0.1.0",
   "type": "module",
   "dependencies": {
-    "@noah/shared-types": "workspace:*",
+    "@vrata/shared-types": "workspace:*",
     "livekit-server-sdk": "^2.13.1",
     "pg": "^8.16.3"
   },

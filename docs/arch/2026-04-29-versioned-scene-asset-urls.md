@@ -71,7 +71,7 @@
 
 ### Unit / Integration
 
-- [ ] `pnpm --filter @noah/api test`: проверить scene bundle versions, conflict handling, bind конкретной версии и manifest URL.
+- [ ] `pnpm --filter @vrata/api test`: проверить scene bundle versions, conflict handling, bind конкретной версии и manifest URL.
 - [ ] Тест helper URL generation: для `sceneId=sense-hall2-v1`, `version=<sha>` ожидается `https://state.<host>/assets/scenes/sense-hall2-v1/<sha>/scene.json`.
 - [ ] Негативный тест helper: staging mode без version не должен молча писать mutable URL.
 
@@ -122,5 +122,5 @@
 - Patch helper не меняет room URL, если versioned scene assets недоступны.
 - Обычный браузер после смены scene version видит новую сцену без incognito/clear cache.
 - Старые rooms со старым URL не ломаются.
-- `pnpm --filter @noah/api test`, `pnpm test:e2e`, `pnpm test:e2e:staging` проходят.
+- `pnpm --filter @vrata/api test`, `pnpm test:e2e`, `pnpm test:e2e:staging` проходят.
 - README описывает новый workflow и явно запрещает mutable overwrite как нормальный путь публикации.

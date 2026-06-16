@@ -2,7 +2,7 @@
 
 ## Цель
 
-Собрать воспроизводимый GitHub Actions pipeline для `noah`, который на изменениях в репозитории прогоняет основной набор проверок, собирает Docker-образы `api` и `room-state`, публикует их в registry с immutable SHA tags и удобными alias tags, но не делает auto-deploy на staging.
+Собрать воспроизводимый GitHub Actions pipeline для `vrata`, который на изменениях в репозитории прогоняет основной набор проверок, собирает Docker-образы `api` и `room-state`, публикует их в registry с immutable SHA tags и удобными alias tags, но не делает auto-deploy на staging.
 
 ## Не-цель
 
@@ -126,6 +126,6 @@
 ## Итог выполнения
 
 - Phase 4 завершена: GitHub Actions workflow для CI и отдельный workflow для build/push Docker images настроены и проверены.
-- Live target registry: `Yandex Container Registry` `crp9cm29k6p76hqo8lti` (`noah`).
-- Live published image names: `cr.yandex/crp9cm29k6p76hqo8lti/noah-api` и `cr.yandex/crp9cm29k6p76hqo8lti/noah-room-state`.
+- Live target registry: `Yandex Container Registry` `crp9cm29k6p76hqo8lti` (`vrata`).
+- Live published image names: `cr.yandex/crp9cm29k6p76hqo8lti/vrata-api` и `cr.yandex/crp9cm29k6p76hqo8lti/vrata-room-state`.
 - Publish workflow уже прошел end-to-end через GitHub Actions и записал immutable SHA tags плюс alias tags `staging` и branch-slug.

@@ -34,7 +34,7 @@ import {
   type WhiteboardPoint,
   type WhiteboardState,
   type WhiteboardStroke
-} from "@noah/shared-types";
+} from "@vrata/shared-types";
 
 import type { PresenceState, TransformState } from "./schema.js";
 

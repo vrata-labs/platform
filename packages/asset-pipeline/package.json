@@ -1,5 +1,5 @@
 {
-  "name": "@noah/asset-pipeline",
+  "name": "@vrata/asset-pipeline",
   "private": true,
   "version": "0.1.0",
   "type": "module",
@@ -7,7 +7,7 @@
     ".": "./dist/index.js"
   },
   "bin": {
-    "noah-asset-validate": "./dist/cli.js"
+    "vrata-asset-validate": "./dist/cli.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

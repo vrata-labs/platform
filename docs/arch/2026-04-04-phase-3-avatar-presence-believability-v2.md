@@ -89,7 +89,7 @@
 
 ## Затронутые файлы/модули
 
-- `docs/2026-04-01-noah-avatar-system-tz-roadmap.md`
+- `docs/2026-04-01-vrata-avatar-system-tz-roadmap.md`
 - `docs/plans/2026-04-04-phase-3-avatar-presence-believability-v2.md`
 - `apps/runtime-web/src/avatar/avatar-controller.ts`
 - `apps/runtime-web/src/avatar/remote-avatar-runtime.ts`

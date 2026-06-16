@@ -10,7 +10,7 @@ import {
   REMOTE_BROWSER_OBJECT_TYPE,
   type MediaObjectInstance,
   type RemoteBrowserObjectState
-} from "@noah/shared-types";
+} from "@vrata/shared-types";
 
 function installFakeCanvasDocument(): () => void {
   const previousDocument = globalThis.document;

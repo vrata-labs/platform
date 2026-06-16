@@ -1,6 +1,6 @@
 # Code of Conduct
 
-Noah uses a simple contributor standard: be direct, respectful, and focused on the work.
+Vrata uses a simple contributor standard: be direct, respectful, and focused on the work.
 
 ## Expected Behavior
 

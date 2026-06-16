@@ -9,7 +9,7 @@ import {
   type WhiteboardPoint,
   type WhiteboardState,
   type WhiteboardStroke
-} from "@noah/shared-types";
+} from "@vrata/shared-types";
 
 import type { SurfaceCommandResult } from "../room-state-client.js";
 
@@ -122,7 +122,7 @@ export class WhiteboardObjectRuntime {
     }
     this.context.fillStyle = "rgba(15, 23, 42, 0.72)";
     this.context.font = "36px sans-serif";
-    this.context.fillText("Noah Whiteboard", 40, 64);
+    this.context.fillText("Vrata Whiteboard", 40, 64);
     this.texture.needsUpdate = true;
     this.renderedSignature = signature;
     this.options.applyTexture(this.texture);

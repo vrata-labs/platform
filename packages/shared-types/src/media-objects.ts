@@ -40,7 +40,7 @@ export interface MediaObjectDefinition {
   enabled?: boolean;
 }
 
-export interface NoahMediaExtensionManifest {
+export interface VrataMediaExtensionManifest {
   id: string;
   version: string;
   displayName: string;
@@ -48,7 +48,7 @@ export interface NoahMediaExtensionManifest {
   requiredCapabilities: MediaExtensionCapability[];
   requiredPermissions: RoomPermission[];
   compatibility: {
-    noahRuntime: string;
+    vrataRuntime: string;
     roomManifestSchema: number;
   };
   entry: string;
@@ -84,19 +84,19 @@ export interface MediaExtensionDebugEntry {
   }>;
 }
 
-const NOAH_RUNTIME_EXTENSION_COMPATIBILITY = {
-  noahRuntime: ">=0.1.0",
+const VRATA_RUNTIME_EXTENSION_COMPATIBILITY = {
+  vrataRuntime: ">=0.1.0",
   roomManifestSchema: 1
 };
 
-export const BUILTIN_MEDIA_EXTENSION_MANIFESTS: NoahMediaExtensionManifest[] = [
+export const BUILTIN_MEDIA_EXTENSION_MANIFESTS: VrataMediaExtensionManifest[] = [
   {
-    id: "noah.surface-test-card",
+    id: "vrata.surface-test-card",
     version: "0.1.0",
     displayName: "Surface Test Card",
     requiredCapabilities: ["surface.render", "surface.input.pointer", "room.state.read", "room.state.write"],
     requiredPermissions: ["surface.input"],
-    compatibility: NOAH_RUNTIME_EXTENSION_COMPATIBILITY,
+    compatibility: VRATA_RUNTIME_EXTENSION_COMPATIBILITY,
     entry: "internal:surface-test-card",
     objectTypes: [{
       objectType: SURFACE_TEST_CARD_TYPE,
@@ -108,12 +108,12 @@ export const BUILTIN_MEDIA_EXTENSION_MANIFESTS: NoahMediaExtensionManifest[] = [
     }]
   },
   {
-    id: "noah.screen-share",
+    id: "vrata.screen-share",
     version: "0.1.0",
     displayName: "Screen Share",
     requiredCapabilities: ["surface.render", "room.state.read", "room.state.write", "media.publish", "media.subscribe"],
     requiredPermissions: ["screen-share.start", "screen-share.stop"],
-    compatibility: NOAH_RUNTIME_EXTENSION_COMPATIBILITY,
+    compatibility: VRATA_RUNTIME_EXTENSION_COMPATIBILITY,
     entry: "internal:screen-share",
     objectTypes: [{
       objectType: SCREEN_SHARE_OBJECT_TYPE,
@@ -125,12 +125,12 @@ export const BUILTIN_MEDIA_EXTENSION_MANIFESTS: NoahMediaExtensionManifest[] = [
     }]
   },
   {
-    id: "noah.whiteboard",
+    id: "vrata.whiteboard",
     version: "0.1.0",
     displayName: "Interactive Whiteboard",
     requiredCapabilities: ["surface.render", "surface.input.pointer", "room.state.read", "room.state.write"],
     requiredPermissions: ["whiteboard.draw", "whiteboard.clear"],
-    compatibility: NOAH_RUNTIME_EXTENSION_COMPATIBILITY,
+    compatibility: VRATA_RUNTIME_EXTENSION_COMPATIBILITY,
     entry: "internal:whiteboard",
     objectTypes: [{
       objectType: WHITEBOARD_OBJECT_TYPE,
@@ -142,12 +142,12 @@ export const BUILTIN_MEDIA_EXTENSION_MANIFESTS: NoahMediaExtensionManifest[] = [
     }]
   },
   {
-    id: "noah.remote-browser",
+    id: "vrata.remote-browser",
     version: "0.1.0",
     displayName: "Remote Browser",
     requiredCapabilities: ["surface.render", "surface.input.pointer", "surface.input.keyboard", "room.state.read", "room.state.write", "media.subscribe", "remote.executor"],
     requiredPermissions: ["remote-browser.open-url", "remote-browser.input", "remote-browser.stop"],
-    compatibility: NOAH_RUNTIME_EXTENSION_COMPATIBILITY,
+    compatibility: VRATA_RUNTIME_EXTENSION_COMPATIBILITY,
     entry: "internal:remote-browser",
     objectTypes: [{
       objectType: REMOTE_BROWSER_OBJECT_TYPE,
@@ -159,12 +159,12 @@ export const BUILTIN_MEDIA_EXTENSION_MANIFESTS: NoahMediaExtensionManifest[] = [
     }]
   },
   {
-    id: "noah.extension-test-card",
+    id: "vrata.extension-test-card",
     version: "0.1.0",
     displayName: "Extension Test Card",
     requiredCapabilities: ["surface.render", "surface.input.pointer", "room.state.read", "room.state.write"],
     requiredPermissions: ["surface.input"],
-    compatibility: NOAH_RUNTIME_EXTENSION_COMPATIBILITY,
+    compatibility: VRATA_RUNTIME_EXTENSION_COMPATIBILITY,
     entry: "internal:extension-test-card",
     objectTypes: [{
       objectType: EXTENSION_TEST_CARD_TYPE,
@@ -176,12 +176,12 @@ export const BUILTIN_MEDIA_EXTENSION_MANIFESTS: NoahMediaExtensionManifest[] = [
     }]
   },
   {
-    id: "noah.missing-capability-demo",
+    id: "vrata.missing-capability-demo",
     version: "0.1.0",
     displayName: "Missing Capability Demo",
     requiredCapabilities: ["room.state.read"],
     requiredPermissions: ["surface.input"],
-    compatibility: NOAH_RUNTIME_EXTENSION_COMPATIBILITY,
+    compatibility: VRATA_RUNTIME_EXTENSION_COMPATIBILITY,
     entry: "internal:missing-capability-demo",
     objectTypes: [{
       objectType: MISSING_CAPABILITY_EXTENSION_CARD_TYPE,
@@ -192,13 +192,13 @@ export const BUILTIN_MEDIA_EXTENSION_MANIFESTS: NoahMediaExtensionManifest[] = [
     }]
   },
   {
-    id: "noah.disabled-demo",
+    id: "vrata.disabled-demo",
     version: "0.1.0",
     displayName: "Disabled Demo Extension",
     enabled: false,
     requiredCapabilities: ["surface.render", "surface.input.pointer", "room.state.read", "room.state.write"],
     requiredPermissions: ["surface.input"],
-    compatibility: NOAH_RUNTIME_EXTENSION_COMPATIBILITY,
+    compatibility: VRATA_RUNTIME_EXTENSION_COMPATIBILITY,
     entry: "internal:disabled-demo",
     objectTypes: [{
       objectType: DISABLED_EXTENSION_CARD_TYPE,
@@ -218,7 +218,7 @@ function listMissingValues<T extends string>(required: readonly T[], declared: r
   return uniqueValues(required.filter((item) => !declared.includes(item)));
 }
 
-export function validateMediaExtensionManifest(manifest: NoahMediaExtensionManifest): string[] {
+export function validateMediaExtensionManifest(manifest: VrataMediaExtensionManifest): string[] {
   const errors: string[] = [];
   if (!manifest.id.trim()) {
     errors.push("missing-id");
@@ -249,7 +249,7 @@ export function validateMediaExtensionManifest(manifest: NoahMediaExtensionManif
   return uniqueValues(errors);
 }
 
-export function getMediaObjectDefinition(objectType: string, manifests: readonly NoahMediaExtensionManifest[] = BUILTIN_MEDIA_EXTENSION_MANIFESTS): RegisteredMediaObjectDefinition | null {
+export function getMediaObjectDefinition(objectType: string, manifests: readonly VrataMediaExtensionManifest[] = BUILTIN_MEDIA_EXTENSION_MANIFESTS): RegisteredMediaObjectDefinition | null {
   for (const manifest of manifests) {
     for (const definition of manifest.objectTypes) {
       if (definition.objectType !== objectType) {
@@ -289,7 +289,7 @@ export function isMediaObjectTypeAvailable(objectType: string): boolean {
   return Boolean(definition && isMediaObjectDefinitionAvailable(definition));
 }
 
-export function listAvailableMediaObjectTypes(manifests: readonly NoahMediaExtensionManifest[] = BUILTIN_MEDIA_EXTENSION_MANIFESTS): string[] {
+export function listAvailableMediaObjectTypes(manifests: readonly VrataMediaExtensionManifest[] = BUILTIN_MEDIA_EXTENSION_MANIFESTS): string[] {
   const types: string[] = [];
   for (const manifest of manifests) {
     for (const definition of manifest.objectTypes) {
@@ -302,7 +302,7 @@ export function listAvailableMediaObjectTypes(manifests: readonly NoahMediaExten
   return uniqueValues(types);
 }
 
-export function getMediaExtensionDebugSnapshot(manifests: readonly NoahMediaExtensionManifest[] = BUILTIN_MEDIA_EXTENSION_MANIFESTS): MediaExtensionDebugEntry[] {
+export function getMediaExtensionDebugSnapshot(manifests: readonly VrataMediaExtensionManifest[] = BUILTIN_MEDIA_EXTENSION_MANIFESTS): MediaExtensionDebugEntry[] {
   return manifests.map((manifest) => {
     const validationErrors = validateMediaExtensionManifest(manifest);
     const extensionEnabled = manifest.enabled !== false;

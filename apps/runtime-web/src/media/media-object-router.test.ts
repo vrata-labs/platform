@@ -6,7 +6,7 @@ import {
   type MediaObjectInstance,
   type SurfaceInputEvent,
   type SurfaceTestCardState
-} from "@noah/shared-types";
+} from "@vrata/shared-types";
 
 import { routeMediaObjectSurfaceInput } from "./media-object-router.js";
 
