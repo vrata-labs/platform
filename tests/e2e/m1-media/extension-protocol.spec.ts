@@ -52,12 +52,13 @@ async function waitForRoom(page: Page, role: "guest" | "member" | "host") {
     return {
       connected: debug?.roomStateConnected ?? false,
       role: debug?.access?.role ?? null,
-      hasExtensions: (debug?.mediaObjects?.extensions?.length ?? 0) > 0
+      hasExtensions: (debug?.mediaObjects?.extensions?.length ?? 0) > 0,
+      hasExtensionTestCard: debug?.mediaObjects?.availableObjectTypes?.includes("extension-test-card") ?? false
     };
   }, {
     timeout: 15000,
     intervals: [500, 1000, 2000]
-  }).toEqual({ connected: true, role, hasExtensions: true });
+  }).toEqual({ connected: true, role, hasExtensions: true, hasExtensionTestCard: true });
 }
 
 async function createExtensionTestCard(page: Page) {
