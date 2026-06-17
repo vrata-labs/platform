@@ -87,6 +87,7 @@ Internal staging uses the GitHub Actions secret `PRIVATE_SCENE_ASSETS_DEPLOY_KEY
 
 - The public platform repo may include `livadia-nicholas-office-v1` and other cleared/generated sample scenes.
 - The public platform repo must not include `sense-*` scene bundles unless redistribution rights are explicitly confirmed.
+- The public platform repo must not include `research/exports*` Unity/SenseTower-derived export artifacts unless redistribution rights are explicitly confirmed.
 - `tools/check-public-assets.mjs` blocks public GHCR release images if non-cleared scene bundle directories are present in `apps/runtime-web/public/assets/scenes`.
 - Removing private assets from HEAD is not enough to make the current repository public if old git history still contains proprietary blobs.
 
@@ -98,5 +99,5 @@ Internal staging uses the GitHub Actions secret `PRIVATE_SCENE_ASSETS_DEPLOY_KEY
 4. [ ] Add private asset validation/publish workflow.
 5. [x] Update internal staging deploy to fetch the private repository and run `tools/sync-private-scene-assets.mjs` before snapshot/build/publish.
 6. [x] Remove `sense-*` bundles from the public platform repository HEAD.
-7. [ ] Resolve public repository git-history exposure.
-8. [ ] Verify platform CI, self-host compose, public release guard, and internal staging gate.
+7. [x] Resolve public repository git-history exposure with a clean public import.
+8. [x] Verify platform CI, self-host compose, public release guard, and internal staging gate.
