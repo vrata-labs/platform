@@ -6,7 +6,7 @@ Vrata platform development and proprietary scene development must be separated.
 
 - The public platform repository owns runtime code, APIs, self-host infrastructure, scene bundle contracts, validators, and cleared sample assets.
 - Private or customer-specific scene bundles live outside the public platform repository.
-- Current `sense-*` scene bundles are not cleared for public redistribution and live in the private `psilon2000/vrata-scene-assets-private` repository after migration snapshot `ea04324`.
+- Current `sense-*` scene bundles are not cleared for public redistribution and live in the private `psilon2000/noah-scene-assets-private` repository after migration snapshot `ea04324`.
 
 ## Why
 
@@ -20,7 +20,7 @@ Vrata platform development and proprietary scene development must be separated.
 Private repository:
 
 ```text
-psilon2000/vrata-scene-assets-private
+psilon2000/noah-scene-assets-private
 ```
 
 Recommended layout:
@@ -52,7 +52,7 @@ The private repository should document:
 Use the non-destructive export tool from the platform repo:
 
 ```bash
-node tools/export-private-scene-assets.mjs /path/to/vrata-scene-assets-private/assets/scenes
+node tools/export-private-scene-assets.mjs /path/to/noah-scene-assets-private/assets/scenes
 ```
 
 The tool copies current `apps/runtime-web/public/assets/scenes/sense-*` directories and writes `manifest.json` next to the target `scenes` directory.
@@ -64,14 +64,14 @@ It does not delete anything from the platform repository. Deletion from the plat
 After the private scene-assets repository exists, a platform checkout can sync private scenes into the runtime public asset directory before internal staging build/deploy:
 
 ```bash
-node tools/sync-private-scene-assets.mjs /path/to/vrata-scene-assets-private/assets
+node tools/sync-private-scene-assets.mjs /path/to/noah-scene-assets-private/assets
 ```
 
-The sync tool reads `/path/to/vrata-scene-assets-private/assets/manifest.json` and copies listed `sense-*` scene bundles into `apps/runtime-web/public/assets/scenes`.
+The sync tool reads `/path/to/noah-scene-assets-private/assets/manifest.json` and copies listed `sense-*` scene bundles into `apps/runtime-web/public/assets/scenes`.
 
 It does not delete existing platform assets. Public release workflows must not run this sync step.
 
-Internal staging uses the GitHub Actions secret `PRIVATE_SCENE_ASSETS_DEPLOY_KEY` to checkout `psilon2000/vrata-scene-assets-private`, uploads its `assets/` directory to `/opt/vrata-private-scene-assets/assets` on the staging host, and runs the sync tool before staging scene snapshots are created.
+Internal staging uses the GitHub Actions secret `PRIVATE_SCENE_ASSETS_DEPLOY_KEY` to checkout `psilon2000/noah-scene-assets-private`, uploads its `assets/` directory to `/opt/noah-private-scene-assets/assets` on the staging host, and runs the sync tool before staging scene snapshots are created.
 
 ## Staging Flow After Migration
 

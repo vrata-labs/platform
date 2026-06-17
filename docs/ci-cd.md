@@ -11,7 +11,7 @@ Vrata keeps test and deployment automation in the repository and executes it in 
 - Internal staging rollout contract: `.github/workflows/staging-deploy.yml` and `infra/docker/rollout-staging-images.sh`.
 - Private scene asset tests are tagged `@private-assets` and are not part of public platform CI.
 - Private scene assets can be synced into an internal platform checkout with `tools/sync-private-scene-assets.mjs` after the private scene-assets repository is checked out.
-- Staging deploy checks out `psilon2000/vrata-scene-assets-private` with the read-only `PRIVATE_SCENE_ASSETS_DEPLOY_KEY` secret and uploads `assets/` to the staging host before rollout.
+- Staging deploy checks out `psilon2000/noah-scene-assets-private` with the read-only `PRIVATE_SCENE_ASSETS_DEPLOY_KEY` secret and uploads `assets/` to the staging host before rollout.
 
 ## GitHub Actions Roles
 
@@ -25,8 +25,8 @@ Vrata keeps test and deployment automation in the repository and executes it in 
 
 - Workflow logs and summaries are stored in GitHub Actions runs.
 - Playwright HTML/JSON/failure artifacts are uploaded to each relevant workflow run.
-- Staging successful SHA is stored on the staging VM at `/opt/vrata/infra/docker/.staging-successful-image-tag`.
-- Private staging scene assets are uploaded to the staging VM at `/opt/vrata-private-scene-assets/assets` before each rollout.
+- Staging successful SHA is stored on the staging VM at `/opt/noah/infra/docker/.staging-successful-image-tag`.
+- Private staging scene assets are uploaded to the staging VM at `/opt/noah-private-scene-assets/assets` before each rollout.
 - Release notes and changelog live in GitHub Releases and `CHANGELOG.md`.
 
 ## Environments

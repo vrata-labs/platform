@@ -86,7 +86,7 @@
 - Current API tokens are placeholder payloads and must be replaced with signed integrations before production use.
 - Current progress now includes a public staging room shell with Three.js runtime, presence sync, LiveKit-backed audio join flow, and HTTPS via `sslip.io`.
 - Voice transport is wired for staging; browser E2E now covers room load and two-participant presence. Persistent storage, auth, richer XR locomotion, and production hardening are still pending.
-- GitHub repository published: `https://github.com/psilon2000/vrata`
+- GitHub public repository: `https://github.com/vrata-labs/platform`
 - Current staging room URL: `https://158.160.10.234.sslip.io/rooms/demo-room`
 - Current staging control-plane URL: `https://158.160.10.234.sslip.io/control-plane`
 - Current staging API health endpoint: `https://158.160.10.234.sslip.io/health`
