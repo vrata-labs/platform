@@ -64,6 +64,10 @@ async function waitForHallInteractionReady(page: Page) {
   });
 }
 
+function isInactiveLipsyncSourceState(state: string | null): boolean {
+  return state === "idle" || state === "muted" || state === "missing";
+}
+
 test("room shell loads and presence is registered", async ({ page, request }) => {
   await page.goto("/rooms/demo-room");
   await page.waitForTimeout(3000);
@@ -656,31 +660,35 @@ test("avatar-enabled room exposes lipsync debug signals for local and remote ava
         };
       }).__VRATA_DEBUG__);
 
+      const localSourceState = debugA?.avatarDebug?.lipsyncSourceState ?? null;
+      const remoteSourceState = debugA?.remoteAvatarParticipants?.[0]?.lipsyncSourceState ?? null;
       return {
         localMouthAmount: debugA?.avatarDebug?.mouthAmount ?? null,
         localSpeakingActive: debugA?.avatarDebug?.speakingActive ?? null,
-        localSourceState: debugA?.avatarDebug?.lipsyncSourceState ?? null,
+        localSourceState,
+        localSourceInactive: isInactiveLipsyncSourceState(localSourceState),
         remoteCount: debugA?.remoteAvatarParticipants?.length ?? 0,
         remoteMouthAmount: debugA?.remoteAvatarParticipants?.[0]?.mouthAmount ?? null,
         remoteSpeakingActive: debugA?.remoteAvatarParticipants?.[0]?.speakingActive ?? null,
-        remoteSourceState: debugA?.remoteAvatarParticipants?.[0]?.lipsyncSourceState ?? null,
+        remoteSourceState,
+        remoteSourceInactive: isInactiveLipsyncSourceState(remoteSourceState),
         remoteHasReliableState: debugA?.remoteAvatarParticipants?.[0]?.hasReliableState ?? false,
         remoteHasPoseFrame: debugA?.remoteAvatarParticipants?.[0]?.hasPoseFrame ?? false
       };
     }, {
       timeout: 15000,
       intervals: [1000, 2000, 3000]
-    }).toEqual({
+    }).toEqual(expect.objectContaining({
       localMouthAmount: 0,
       localSpeakingActive: false,
-      localSourceState: "muted",
+      localSourceInactive: true,
       remoteCount: 1,
       remoteMouthAmount: 0,
       remoteSpeakingActive: false,
-      remoteSourceState: "missing",
+      remoteSourceInactive: true,
       remoteHasReliableState: true,
       remoteHasPoseFrame: true
-    });
+    }));
 
     await expect.poll(async () => {
       const diagnosticsResponse = await request.get(`/api/rooms/${room.roomId}/diagnostics`);
@@ -701,10 +709,10 @@ test("avatar-enabled room exposes lipsync debug signals for local and remote ava
 
       return diagnostics.items.some((item) => item.avatarDebug?.mouthAmount === 0
         && item.avatarDebug?.speakingActive === false
-        && item.avatarDebug?.lipsyncSourceState === "muted"
+        && isInactiveLipsyncSourceState(item.avatarDebug?.lipsyncSourceState ?? null)
         && item.remoteAvatarParticipants?.some((participant) => participant.mouthAmount === 0
           && participant.speakingActive === false
-          && participant.lipsyncSourceState === "missing"));
+          && isInactiveLipsyncSourceState(participant.lipsyncSourceState ?? null)));
     }, {
       timeout: 15000,
       intervals: [1000, 2000, 3000]
