@@ -14,7 +14,8 @@ import {
   connectParticipant,
   createRoomStateServer,
   disconnectParticipant,
-  relayAvatarPoseFrame
+  relayAvatarPoseFrame,
+  startRoomStateService
 } from "./index.js";
 
 function createSocket() {
@@ -28,6 +29,22 @@ function createSocket() {
     }
   };
 }
+
+test("room-state readiness endpoint reports ready", async () => {
+  process.env.VRATA_DISABLE_AUTOSTART = "1";
+  const server = startRoomStateService(4031);
+
+  try {
+    const response = await fetch("http://127.0.0.1:4031/health/ready");
+    assert.equal(response.ok, true);
+    const payload = (await response.json()) as { status?: string; service?: string };
+    assert.equal(payload.status, "ready");
+    assert.equal(payload.service, "room-state");
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    delete process.env.VRATA_DISABLE_AUTOSTART;
+  }
+});
 
 test("connectParticipant replays stored reliable avatar state to late joiner", () => {
   const server = createRoomStateServer();

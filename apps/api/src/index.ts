@@ -865,6 +865,22 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     return;
   }
 
+  if (method === "GET" && url.pathname === "/health/ready") {
+    json(response, 200, {
+      status: "ready",
+      service: "api",
+      env: process.env.NODE_ENV ?? "development",
+      port: apiPort,
+      timestamp: new Date().toISOString(),
+      dependencies: {
+        postgres: Boolean(process.env.POSTGRES_URL),
+        livekit: Boolean(process.env.LIVEKIT_URL),
+        roomStatePublicUrl: process.env.ROOM_STATE_PUBLIC_URL ?? "ws://127.0.0.1:2567"
+      }
+    });
+    return;
+  }
+
   if (method === "GET" && url.pathname === "/health") {
     json(response, 200, {
       status: "ok",

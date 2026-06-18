@@ -60,6 +60,12 @@ test("api health exposes env timestamp and dependencies", async () => {
     assert.equal(typeof payload.features?.avatarSeatingEnabled, "boolean");
     assert.equal(typeof payload.features?.avatarCustomizationEnabled, "boolean");
     assert.equal(typeof payload.features?.avatarFallbackCapsulesEnabled, "boolean");
+
+    const readyResponse = await fetch("http://127.0.0.1:4011/health/ready");
+    assert.equal(readyResponse.ok, true);
+    const readyPayload = (await readyResponse.json()) as { status?: string; service?: string };
+    assert.equal(readyPayload.status, "ready");
+    assert.equal(readyPayload.service, "api");
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     delete process.env.VRATA_DISABLE_AUTOSTART;

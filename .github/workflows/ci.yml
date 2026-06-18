@@ -38,6 +38,25 @@ jobs:
       - name: Self-host compose config
         run: docker compose --env-file infra/docker/.env.selfhost.example -f infra/docker/compose.selfhost.yml config
 
+      - name: Production compose config
+        run: docker compose --env-file infra/docker/.env.production.example -f infra/docker/compose.production.yml config
+
+      - name: Production preflight rejects example secrets
+        run: |
+          set +e
+          node tools/validate-production-config.mjs --env-file infra/docker/.env.production.example > /tmp/vrata-production-preflight.out 2>&1
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then
+            cat /tmp/vrata-production-preflight.out
+            echo "expected production preflight to reject .env.production.example" >&2
+            exit 1
+          fi
+          if grep -E "REPLACE_WITH_" /tmp/vrata-production-preflight.out; then
+            echo "preflight output leaked placeholder values" >&2
+            exit 1
+          fi
+
       - name: Test
         run: pnpm test
 

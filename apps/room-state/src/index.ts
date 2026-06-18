@@ -730,6 +730,20 @@ export function startRoomStateService(port = Number.parseInt(process.env.ROOM_ST
   const httpServer = createServer((request, response) => {
     void (async () => {
       const url = new URL(request.url ?? "/", `http://${request.headers.host ?? `localhost:${port}`}`);
+      if (request.method === "GET" && url.pathname === "/health/ready") {
+        json(response, 200, {
+          status: "ready",
+          service: "room-state",
+          env: process.env.NODE_ENV ?? "development",
+          port,
+          timestamp: new Date().toISOString(),
+          dependencies: {
+            websocketServer: true
+          }
+        });
+        return;
+      }
+
       if (request.method === "GET" && url.pathname === "/health") {
         json(response, 200, {
           status: "ok",

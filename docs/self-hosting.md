@@ -93,4 +93,49 @@ See `docs/scene-bundle-contract.md` for the bundle layout.
 
 ## Production Notes
 
-Do not expose a self-hosted deployment with example secrets. The `0.1` beta does not yet provide a complete production hardening guide.
+Do not expose a self-hosted deployment with example secrets. The `compose.selfhost.yml` path is for local evaluation and keeps LiveKit in `--dev` mode.
+
+Use the production-safe profile when preparing a public host:
+
+```bash
+cp infra/docker/.env.production.example infra/docker/.env.production
+```
+
+Edit `infra/docker/.env.production` and replace every `REPLACE_WITH_*` value, example hostname, and public URL. Public browser-facing URLs must use `https://` or `wss://` unless you are doing an explicit loopback-only preflight test with `VRATA_ALLOW_INSECURE_PRODUCTION_URLS=true`.
+
+Run the preflight before starting services:
+
+```bash
+node tools/validate-production-config.mjs --env-file infra/docker/.env.production
+```
+
+Validate the compose model:
+
+```bash
+docker compose --env-file infra/docker/.env.production -f infra/docker/compose.production.yml config
+```
+
+Start from source-built images:
+
+```bash
+docker compose --env-file infra/docker/.env.production -f infra/docker/compose.production.yml up -d --build
+```
+
+Or start from published release images after `v0.1.0`:
+
+```bash
+docker compose --env-file infra/docker/.env.production -f infra/docker/compose.production.yml pull
+docker compose --env-file infra/docker/.env.production -f infra/docker/compose.production.yml up -d
+```
+
+Smoke checks:
+
+```bash
+curl -fsS "$VRATA_APP_BASE_URL/health"
+curl -fsS "$VRATA_APP_BASE_URL/rooms/demo-room"
+curl -fsS "$CONTROL_PLANE_PUBLIC_URL"
+```
+
+Production preflight blocks startup when it detects missing required variables, public `http://` / `ws://` URLs, wildcard CORS, dev-role query mode, placeholder secrets, weak secrets, or duplicate secret values. Diagnostics include variable names and reason codes only; secret values must not be printed.
+
+Rollback for this profile is metadata/config-only: restore the previous `.env.production` and image tag, then rerun `docker compose --env-file infra/docker/.env.production -f infra/docker/compose.production.yml up -d`. If the production profile itself is the problem, stop it and return to the previously used documented compose file. This task does not introduce a database migration.

@@ -1,0 +1,205 @@
+services:
+  preflight:
+    image: node:22-bookworm-slim
+    working_dir: /workspace
+    environment:
+      VRATA_DEPLOYMENT_MODE: ${VRATA_DEPLOYMENT_MODE}
+      VRATA_APP_DOMAIN: ${VRATA_APP_DOMAIN}
+      VRATA_STATE_DOMAIN: ${VRATA_STATE_DOMAIN}
+      VRATA_LIVEKIT_DOMAIN: ${VRATA_LIVEKIT_DOMAIN}
+      VRATA_STORAGE_DOMAIN: ${VRATA_STORAGE_DOMAIN}
+      VRATA_APP_BASE_URL: ${VRATA_APP_BASE_URL}
+      CONTROL_PLANE_PUBLIC_URL: ${CONTROL_PLANE_PUBLIC_URL}
+      ROOM_STATE_PUBLIC_URL: ${ROOM_STATE_PUBLIC_URL}
+      LIVEKIT_URL: ${LIVEKIT_URL}
+      LIVEKIT_NODE_IP: ${LIVEKIT_NODE_IP}
+      API_CORS_ORIGIN: ${API_CORS_ORIGIN}
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET}
+      CONTROL_PLANE_ADMIN_TOKEN: ${CONTROL_PLANE_ADMIN_TOKEN}
+      STATE_TOKEN_SECRET: ${STATE_TOKEN_SECRET}
+      VRATA_INTERNAL_SERVICE_TOKEN: ${VRATA_INTERNAL_SERVICE_TOKEN}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_URL: ${POSTGRES_URL}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      MINIO_BUCKET: ${MINIO_BUCKET}
+      MINIO_PUBLIC_BASE_URL: ${MINIO_PUBLIC_BASE_URL}
+      MINIO_SCENE_PREFIX: ${MINIO_SCENE_PREFIX}
+      SCENE_BUNDLE_PROVIDER: ${SCENE_BUNDLE_PROVIDER:-minio-default}
+      SCENE_BUNDLE_S3_ENDPOINT: ${SCENE_BUNDLE_S3_ENDPOINT:-}
+      SCENE_BUNDLE_S3_REGION: ${SCENE_BUNDLE_S3_REGION:-}
+      SCENE_BUNDLE_S3_BUCKET: ${SCENE_BUNDLE_S3_BUCKET:-}
+      SCENE_BUNDLE_S3_PUBLIC_BASE_URL: ${SCENE_BUNDLE_S3_PUBLIC_BASE_URL:-}
+      VRATA_DEV_ROLE_QUERY: ${VRATA_DEV_ROLE_QUERY:-false}
+      VRATA_ALLOW_INSECURE_PRODUCTION_URLS: ${VRATA_ALLOW_INSECURE_PRODUCTION_URLS:-false}
+      REMOTE_BROWSER_ENABLED: ${REMOTE_BROWSER_ENABLED:-false}
+      VRATA_ALLOW_EXPERIMENTAL_SERVICES: ${VRATA_ALLOW_EXPERIMENTAL_SERVICES:-false}
+      REMOTE_BROWSER_PUBLIC_URL: ${REMOTE_BROWSER_PUBLIC_URL:-}
+      REMOTE_BROWSER_ALLOWED_ORIGINS: ${REMOTE_BROWSER_ALLOWED_ORIGINS:-}
+      REMOTE_BROWSER_TOKEN_SECRET: ${REMOTE_BROWSER_TOKEN_SECRET:-}
+    volumes:
+      - ../../tools/validate-production-config.mjs:/workspace/tools/validate-production-config.mjs:ro
+    command: ["node", "tools/validate-production-config.mjs"]
+    restart: "no"
+
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  livekit:
+    image: livekit/livekit-server:latest
+    depends_on:
+      preflight:
+        condition: service_completed_successfully
+    command:
+      - --bind
+      - 0.0.0.0
+      - --keys
+      - "${LIVEKIT_API_KEY}: ${LIVEKIT_API_SECRET}"
+    environment:
+      UDP_PORT: 7881
+      NODE_IP: ${LIVEKIT_NODE_IP}
+    ports:
+      - "${VRATA_LIVEKIT_UDP_PORT}:7881/udp"
+
+  room-state:
+    image: ${ROOM_STATE_IMAGE_REPO}:${IMAGE_TAG}
+    build:
+      context: ../..
+      dockerfile: apps/room-state/Dockerfile
+    depends_on:
+      preflight:
+        condition: service_completed_successfully
+    environment:
+      NODE_ENV: production
+      ROOM_STATE_PORT: 2567
+      STATE_TOKEN_SECRET: ${STATE_TOKEN_SECRET}
+      VRATA_INTERNAL_SERVICE_TOKEN: ${VRATA_INTERNAL_SERVICE_TOKEN}
+      VRATA_DEV_ROLE_QUERY: ${VRATA_DEV_ROLE_QUERY:-false}
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:2567/health').then((r) => { if (!r.ok) process.exit(1); }).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  minio:
+    image: minio/minio:RELEASE.2025-02-28T09-55-16Z
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    volumes:
+      - minio-data:/data
+
+  minio-bootstrap:
+    image: minio/mc:RELEASE.2025-03-12T17-29-24Z
+    depends_on:
+      preflight:
+        condition: service_completed_successfully
+      minio:
+        condition: service_started
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      MINIO_BUCKET: ${MINIO_BUCKET}
+      MINIO_SCENE_PREFIX: ${MINIO_SCENE_PREFIX}
+    volumes:
+      - ./minio-bootstrap.sh:/bootstrap.sh:ro
+      - ./minio-scene-smoke.json:/seed/scene.json:ro
+    entrypoint: ["/bin/sh", "/bootstrap.sh"]
+    restart: "no"
+
+  api:
+    image: ${API_IMAGE_REPO}:${IMAGE_TAG}
+    build:
+      context: ../..
+      dockerfile: apps/api/Dockerfile
+    depends_on:
+      preflight:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      room-state:
+        condition: service_healthy
+      livekit:
+        condition: service_started
+      minio-bootstrap:
+        condition: service_completed_successfully
+    environment:
+      NODE_ENV: production
+      API_PORT: ${API_PORT}
+      API_CORS_ORIGIN: ${API_CORS_ORIGIN}
+      API_PUBLIC_URL: ${VRATA_APP_BASE_URL}
+      RUNTIME_BASE_URL: ${VRATA_APP_BASE_URL}
+      ROOM_STATE_PUBLIC_URL: ${ROOM_STATE_PUBLIC_URL}
+      LIVEKIT_URL: ${LIVEKIT_URL}
+      VRATA_LIVEKIT_DOMAIN: ${VRATA_LIVEKIT_DOMAIN}
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET}
+      LIVEKIT_ROOM_PREFIX: ${LIVEKIT_ROOM_PREFIX}
+      CONTROL_PLANE_ADMIN_TOKEN: ${CONTROL_PLANE_ADMIN_TOKEN}
+      STATE_TOKEN_TTL_SECONDS: ${STATE_TOKEN_TTL_SECONDS}
+      STATE_TOKEN_SECRET: ${STATE_TOKEN_SECRET}
+      VRATA_INTERNAL_SERVICE_TOKEN: ${VRATA_INTERNAL_SERVICE_TOKEN}
+      MEDIA_TOKEN_TTL_SECONDS: ${MEDIA_TOKEN_TTL_SECONDS}
+      VRATA_DEV_ROLE_QUERY: ${VRATA_DEV_ROLE_QUERY:-false}
+      POSTGRES_URL: ${POSTGRES_URL}
+      SCENE_BUNDLE_PROVIDER: ${SCENE_BUNDLE_PROVIDER:-minio-default}
+      MINIO_BUCKET: ${MINIO_BUCKET}
+      MINIO_PUBLIC_BASE_URL: ${MINIO_PUBLIC_BASE_URL}
+      SCENE_BUNDLE_S3_ENDPOINT: ${SCENE_BUNDLE_S3_ENDPOINT:-}
+      SCENE_BUNDLE_S3_REGION: ${SCENE_BUNDLE_S3_REGION:-}
+      SCENE_BUNDLE_S3_BUCKET: ${SCENE_BUNDLE_S3_BUCKET:-}
+      SCENE_BUNDLE_S3_PUBLIC_BASE_URL: ${SCENE_BUNDLE_S3_PUBLIC_BASE_URL:-}
+      FEATURE_AVATAR_POSE_BINARY: ${FEATURE_AVATAR_POSE_BINARY:-true}
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4000/health').then((r) => { if (!r.ok) process.exit(1); }).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  caddy:
+    image: caddy:2-alpine
+    depends_on:
+      preflight:
+        condition: service_completed_successfully
+      api:
+        condition: service_healthy
+      room-state:
+        condition: service_healthy
+      livekit:
+        condition: service_started
+      minio-bootstrap:
+        condition: service_completed_successfully
+    ports:
+      - "${VRATA_HTTP_PORT}:80"
+      - "${VRATA_HTTPS_PORT}:443"
+    environment:
+      VRATA_APP_DOMAIN: ${VRATA_APP_DOMAIN}
+      VRATA_STATE_DOMAIN: ${VRATA_STATE_DOMAIN}
+      VRATA_LIVEKIT_DOMAIN: ${VRATA_LIVEKIT_DOMAIN}
+      VRATA_STORAGE_DOMAIN: ${VRATA_STORAGE_DOMAIN}
+    volumes:
+      - ${CADDY_CONFIG_FILE}:/etc/caddy/Caddyfile:ro
+      - ../../apps/runtime-web/public:/srv/runtime-public:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  postgres-data:
+  minio-data:
+  caddy-data:
+  caddy-config:
