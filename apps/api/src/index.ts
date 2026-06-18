@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 
 import { AccessToken } from "livekit-server-sdk";
 import { createRoomAccessDebugState, getRoomPermissions, hasRoomPermission, parseRoomRole, type RoomPermission, type RoomRole } from "@vrata/shared-types";
-import { signRoomSessionToken, verifyRoomSessionToken, type RoomSessionTokenPayload, type RoomSessionTokenVerificationResult } from "@vrata/shared-types/session-token";
+import { signRoomSessionToken, verifyRoomSessionToken, type RoomSessionRoleSource, type RoomSessionTokenPayload, type RoomSessionTokenVerificationResult } from "@vrata/shared-types/session-token";
 
 import {
   resolveSceneBundlePublicUrl,
@@ -109,6 +109,48 @@ interface RemoteBrowserFrameTokenRequest {
   sessionToken?: string;
 }
 
+type ControlPlanePermission =
+  | "tenant.write"
+  | "room.create"
+  | "room.update"
+  | "room.bind-scene-bundle"
+  | "room.delete"
+  | "asset.write"
+  | "scene-bundle.write"
+  | "xr-telemetry.read"
+  | "audit.read";
+
+interface ControlPlaneActor {
+  actorType: "admin-token" | "room-session";
+  actorId: string;
+  role: RoomRole;
+  roleSource?: RoomSessionRoleSource;
+  tenantId?: string;
+  roomId?: string;
+  participantId?: string;
+  sessionId?: string;
+}
+
+interface ControlPlaneAuditLogEntry {
+  timestamp: string;
+  requestId: string;
+  action: string;
+  permission: ControlPlanePermission;
+  object: { type: string; id?: string };
+  result: "allowed" | "denied";
+  reason?: string;
+  actor?: ControlPlaneActor;
+}
+
+interface ControlPlaneAuthorizationOptions {
+  permission: ControlPlanePermission;
+  action: string;
+  objectType: string;
+  objectId?: string;
+  targetRoomId?: string;
+  allowHostOwnRoom?: boolean;
+}
+
 interface PresenceRecord {
   participantId: string;
   displayName: string;
@@ -198,13 +240,14 @@ const runtimePublicRoot = normalize(join(fileURLToPath(new URL("../../runtime-we
 const controlPlaneStaticRoot = normalize(join(fileURLToPath(new URL("../../control-plane/dist", import.meta.url))));
 const livekitApiKey = process.env.LIVEKIT_API_KEY ?? "devkey";
 const livekitApiSecret = process.env.LIVEKIT_API_SECRET ?? "secret";
-const controlPlaneAdminToken = process.env.CONTROL_PLANE_ADMIN_TOKEN ?? "";
 const presenceTtlMs = Number.parseInt(process.env.PRESENCE_TTL_MS ?? "15000", 10);
 const storagePromise = createStorage();
 const requiredProductionApiEnvVars = ["CONTROL_PLANE_ADMIN_TOKEN", "ROOM_STATE_PUBLIC_URL", "RUNTIME_BASE_URL", "STATE_TOKEN_SECRET"] as const;
 
 const presenceByRoom = new Map<string, Map<string, PresenceRecord>>();
 const xrTelemetryByRoom = new Map<string, Map<string, XrTelemetryParticipantBuffer>>();
+const controlPlaneAuditLog: ControlPlaneAuditLogEntry[] = [];
+const CONTROL_PLANE_AUDIT_LIMIT = 1000;
 const xrTelemetryHistoryLimit = 80;
 
 function isEnabledEnvValue(value: string | undefined): boolean | null {
@@ -229,11 +272,11 @@ function isDevRoleQueryAllowed(env: NodeJS.ProcessEnv = process.env): boolean {
   return env.NODE_ENV !== "production";
 }
 
-function resolveAccessRole(requestedRole: unknown, env: NodeJS.ProcessEnv = process.env): RoomRole {
+function resolveAccessRole(requestedRole: unknown, env: NodeJS.ProcessEnv = process.env): { role: RoomRole; roleSource: RoomSessionRoleSource } {
   if (!isDevRoleQueryAllowed(env)) {
-    return "guest";
+    return { role: "guest", roleSource: "default" };
   }
-  return parseRoomRole(requestedRole, "guest");
+  return { role: parseRoomRole(requestedRole, "guest"), roleSource: requestedRole === undefined || requestedRole === null ? "default" : "dev-query" };
 }
 
 function getStateTokenSecret(env: NodeJS.ProcessEnv = process.env): string {
@@ -646,7 +689,7 @@ function json(response: ServerResponse, statusCode: number, body: unknown): void
     "content-type": "application/json; charset=utf-8",
     "access-control-allow-origin": process.env.API_CORS_ORIGIN ?? "*",
     "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
-    "access-control-allow-headers": "content-type,authorization,x-vrata-admin-token,x-vrata-internal-token,x-noah-admin-token,x-noah-internal-token",
+    "access-control-allow-headers": "content-type,authorization,x-request-id,x-vrata-admin-token,x-vrata-internal-token,x-noah-admin-token,x-noah-internal-token",
     "x-content-type-options": "nosniff",
     "x-frame-options": "DENY",
     "referrer-policy": "no-referrer",
@@ -655,11 +698,35 @@ function json(response: ServerResponse, statusCode: number, body: unknown): void
   response.end(JSON.stringify(body));
 }
 
-function isAuthorizedControlPlaneRequest(request: IncomingMessage): boolean {
-  if (!controlPlaneAdminToken) {
-    return true;
+function getHeaderString(request: IncomingMessage, name: string): string | null {
+  const value = request.headers[name.toLowerCase()];
+  if (typeof value === "string") {
+    return value;
   }
-  return request.headers["x-vrata-admin-token"] === controlPlaneAdminToken || request.headers["x-noah-admin-token"] === controlPlaneAdminToken;
+  if (Array.isArray(value)) {
+    return value[0] ?? null;
+  }
+  return null;
+}
+
+function getRequestId(request: IncomingMessage): string {
+  return getHeaderString(request, "x-request-id")?.trim() || randomUUID();
+}
+
+function getControlPlaneAdminToken(env: NodeJS.ProcessEnv = process.env): string {
+  return env.CONTROL_PLANE_ADMIN_TOKEN?.trim() || "";
+}
+
+function writeControlPlaneAudit(entry: ControlPlaneAuditLogEntry): void {
+  controlPlaneAuditLog.push(entry);
+  if (controlPlaneAuditLog.length > CONTROL_PLANE_AUDIT_LIMIT) {
+    controlPlaneAuditLog.splice(0, controlPlaneAuditLog.length - CONTROL_PLANE_AUDIT_LIMIT);
+  }
+  logEvent({
+    service: "api",
+    event: "control_plane_audit",
+    ...entry
+  });
 }
 
 function safeEqual(left: string, right: string): boolean {
@@ -692,6 +759,100 @@ function getBearerToken(request: IncomingMessage): string | null {
     return null;
   }
   return token;
+}
+
+function resolveControlPlaneActor(request: IncomingMessage):
+  | { ok: true; actor: ControlPlaneActor }
+  | { ok: false; statusCode: 401; reason: string } {
+  const adminToken = getControlPlaneAdminToken();
+  const providedAdminToken = getHeaderString(request, "x-vrata-admin-token") ?? getHeaderString(request, "x-noah-admin-token");
+  if (providedAdminToken !== null) {
+    if (adminToken && safeEqual(providedAdminToken, adminToken)) {
+      return {
+        ok: true,
+        actor: {
+          actorType: "admin-token",
+          actorId: "control-plane-admin",
+          role: "admin"
+        }
+      };
+    }
+    return { ok: false, statusCode: 401, reason: "invalid_control_plane_admin_token" };
+  }
+
+  const bearerToken = getBearerToken(request);
+  if (bearerToken) {
+    const session = verifyRoomSessionToken(bearerToken, getStateTokenSecret());
+    if (!session.ok) {
+      return { ok: false, statusCode: 401, reason: session.code };
+    }
+    return {
+      ok: true,
+      actor: {
+        actorType: "room-session",
+        actorId: session.payload.participantId,
+        role: session.payload.role,
+        roleSource: session.payload.roleSource,
+        tenantId: session.payload.tenantId,
+        roomId: session.payload.roomId,
+        participantId: session.payload.participantId,
+        sessionId: session.payload.sessionId
+      }
+    };
+  }
+
+  return { ok: false, statusCode: 401, reason: "missing_identity" };
+}
+
+function isControlPlaneActorAllowed(actor: ControlPlaneActor, options: ControlPlaneAuthorizationOptions): boolean {
+  if (actor.actorType === "admin-token") {
+    return true;
+  }
+  return Boolean(options.allowHostOwnRoom && actor.role === "host" && actor.roleSource === "trusted" && options.targetRoomId && actor.roomId === options.targetRoomId);
+}
+
+async function requireControlPlanePermission(
+  request: IncomingMessage,
+  response: ServerResponse,
+  options: ControlPlaneAuthorizationOptions
+): Promise<ControlPlaneActor | null> {
+  const requestId = getRequestId(request);
+  const actorResult = resolveControlPlaneActor(request);
+  const auditBase = {
+    timestamp: new Date().toISOString(),
+    requestId,
+    action: options.action,
+    permission: options.permission,
+    object: { type: options.objectType, id: options.objectId }
+  } satisfies Omit<ControlPlaneAuditLogEntry, "result">;
+
+  if (!actorResult.ok) {
+    writeControlPlaneAudit({
+      ...auditBase,
+      result: "denied",
+      reason: actorResult.reason
+    });
+    json(response, actorResult.statusCode, { error: "unauthorized", reason: actorResult.reason, requestId });
+    return null;
+  }
+
+  if (!isControlPlaneActorAllowed(actorResult.actor, options)) {
+    writeControlPlaneAudit({
+      ...auditBase,
+      result: "denied",
+      reason: "permission_denied",
+      actor: actorResult.actor
+    });
+    json(response, 403, { error: "forbidden", reason: "permission_denied", permission: options.permission, requestId });
+    return null;
+  }
+
+  writeControlPlaneAudit({
+    ...auditBase,
+    result: "allowed",
+    actor: actorResult.actor
+  });
+  return actorResult.actor;
 }
 
 function sessionTokenStatusCode(result: RoomSessionTokenVerificationResult): 401 | 403 {
@@ -902,7 +1063,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     response.writeHead(204, {
       "access-control-allow-origin": process.env.API_CORS_ORIGIN ?? "*",
       "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
-      "access-control-allow-headers": "content-type,authorization,x-vrata-admin-token,x-vrata-internal-token,x-noah-admin-token,x-noah-internal-token"
+      "access-control-allow-headers": "content-type,authorization,x-request-id,x-vrata-admin-token,x-vrata-internal-token,x-noah-admin-token,x-noah-internal-token"
     });
     response.end();
     return;
@@ -947,7 +1108,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
         avatarCustomizationEnabled: process.env.FEATURE_AVATAR_CUSTOMIZATION === "true",
         avatarFallbackCapsulesEnabled: process.env.FEATURE_AVATAR_FALLBACK_CAPSULES !== "false",
         postgresEnabled: Boolean(process.env.POSTGRES_URL),
-        controlPlaneAuthEnabled: Boolean(controlPlaneAdminToken)
+        controlPlaneAuthEnabled: Boolean(getControlPlaneAdminToken())
       },
       dependencies: {
         postgres: Boolean(process.env.POSTGRES_URL),
@@ -1045,8 +1206,16 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     return;
   }
 
+  if (method === "GET" && url.pathname === "/api/audit/control-plane") {
+    const actor = await requireControlPlanePermission(request, response, { permission: "audit.read", action: "audit.control-plane.list", objectType: "audit-log", objectId: "control-plane" });
+    if (!actor) return;
+    json(response, 200, { items: controlPlaneAuditLog });
+    return;
+  }
+
   if (method === "POST" && url.pathname === "/api/tenants") {
-    if (!isAuthorizedControlPlaneRequest(request)) return json(response, 403, { error: "forbidden" });
+    const actor = await requireControlPlanePermission(request, response, { permission: "tenant.write", action: "tenant.create", objectType: "tenant" });
+    if (!actor) return;
     const tenant = await storage.createTenant((await parseBody<Partial<TenantRecord>>(request)) ?? {});
     json(response, 201, tenant);
     return;
@@ -1054,23 +1223,28 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
 
   const tenantItemMatch = url.pathname.match(/^\/api\/tenants\/([^/]+)$/);
   if (method === "PATCH" && tenantItemMatch) {
-    if (!isAuthorizedControlPlaneRequest(request)) return json(response, 403, { error: "forbidden" });
-    const tenant = await storage.updateTenant(decodeURIComponent(tenantItemMatch[1]), (await parseBody<Partial<TenantRecord>>(request)) ?? {});
+    const tenantId = decodeURIComponent(tenantItemMatch[1]);
+    const actor = await requireControlPlanePermission(request, response, { permission: "tenant.write", action: "tenant.update", objectType: "tenant", objectId: tenantId });
+    if (!actor) return;
+    const tenant = await storage.updateTenant(tenantId, (await parseBody<Partial<TenantRecord>>(request)) ?? {});
     if (!tenant) return json(response, 404, { error: "tenant_not_found" });
     json(response, 200, tenant);
     return;
   }
 
   if (method === "DELETE" && tenantItemMatch) {
-    if (!isAuthorizedControlPlaneRequest(request)) return json(response, 403, { error: "forbidden" });
-    const deleted = await storage.deleteTenant(decodeURIComponent(tenantItemMatch[1]));
+    const tenantId = decodeURIComponent(tenantItemMatch[1]);
+    const actor = await requireControlPlanePermission(request, response, { permission: "tenant.write", action: "tenant.delete", objectType: "tenant", objectId: tenantId });
+    if (!actor) return;
+    const deleted = await storage.deleteTenant(tenantId);
     if (!deleted) return json(response, 409, { error: "tenant_has_dependencies_or_missing" });
     json(response, 200, { ok: true });
     return;
   }
 
   if (method === "POST" && url.pathname === "/api/assets") {
-    if (!isAuthorizedControlPlaneRequest(request)) return json(response, 403, { error: "forbidden" });
+    const actor = await requireControlPlanePermission(request, response, { permission: "asset.write", action: "asset.create", objectType: "asset" });
+    if (!actor) return;
     const payload = (await parseBody<Partial<AssetRecord>>(request)) ?? {};
     const validationError = validateAssetInput(payload);
     if (validationError) return json(response, 400, { error: validationError });
@@ -1080,7 +1254,8 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   }
 
   if (method === "POST" && url.pathname === "/api/scene-bundles") {
-    if (!isAuthorizedControlPlaneRequest(request)) return json(response, 403, { error: "forbidden" });
+    const actor = await requireControlPlanePermission(request, response, { permission: "scene-bundle.write", action: "scene-bundle.create", objectType: "scene-bundle" });
+    if (!actor) return;
     const payload = (await parseBody<Partial<SceneBundleCreateInput>>(request)) ?? {};
     const validationError = validateSceneBundleInput(payload);
     if (validationError) return json(response, 400, { error: validationError });
@@ -1104,8 +1279,9 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   }
 
   if (method === "POST" && sceneBundleVersionsMatch) {
-    if (!isAuthorizedControlPlaneRequest(request)) return json(response, 403, { error: "forbidden" });
     const bundleId = decodeURIComponent(sceneBundleVersionsMatch[1]);
+    const actor = await requireControlPlanePermission(request, response, { permission: "scene-bundle.write", action: "scene-bundle.version.create", objectType: "scene-bundle", objectId: bundleId });
+    if (!actor) return;
     const payload = (await parseBody<Partial<SceneBundleCreateInput>>(request)) ?? {};
     const validationError = validateSceneBundleInput(payload);
     if (validationError) return json(response, 400, { error: validationError });
@@ -1130,8 +1306,9 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
 
   const sceneBundleCurrentMatch = url.pathname.match(/^\/api\/scene-bundles\/([^/]+)\/current$/);
   if (method === "POST" && sceneBundleCurrentMatch) {
-    if (!isAuthorizedControlPlaneRequest(request)) return json(response, 403, { error: "forbidden" });
     const bundleId = decodeURIComponent(sceneBundleCurrentMatch[1]);
+    const actor = await requireControlPlanePermission(request, response, { permission: "scene-bundle.write", action: "scene-bundle.current.set", objectType: "scene-bundle", objectId: bundleId });
+    if (!actor) return;
     const payload = (await parseBody<{ version?: string }>(request)) ?? {};
     if (!payload.version) return json(response, 400, { error: "missing_scene_bundle_version" });
     const current = await storage.setCurrentSceneBundleVersion(bundleId, payload.version);
@@ -1142,9 +1319,10 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
 
   const sceneBundleStatusMatch = url.pathname.match(/^\/api\/scene-bundles\/([^/]+)\/versions\/([^/]+)\/status$/);
   if (method === "POST" && sceneBundleStatusMatch) {
-    if (!isAuthorizedControlPlaneRequest(request)) return json(response, 403, { error: "forbidden" });
     const bundleId = decodeURIComponent(sceneBundleStatusMatch[1]);
     const version = decodeURIComponent(sceneBundleStatusMatch[2]);
+    const actor = await requireControlPlanePermission(request, response, { permission: "scene-bundle.write", action: "scene-bundle.version.status.update", objectType: "scene-bundle", objectId: `${bundleId}:${version}` });
+    if (!actor) return;
     const payload = (await parseBody<{ status?: SceneBundleRecord["status"] }>(request)) ?? {};
     if (!payload.status || !["active", "obsolete", "cleanup-ready"].includes(payload.status)) {
       return json(response, 400, { error: "invalid_scene_bundle_status" });
@@ -1175,8 +1353,9 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
 
   const assetItemMatch = url.pathname.match(/^\/api\/assets\/([^/]+)$/);
   if (method === "PATCH" && assetItemMatch) {
-    if (!isAuthorizedControlPlaneRequest(request)) return json(response, 403, { error: "forbidden" });
     const assetId = decodeURIComponent(assetItemMatch[1]);
+    const actor = await requireControlPlanePermission(request, response, { permission: "asset.write", action: "asset.update", objectType: "asset", objectId: assetId });
+    if (!actor) return;
     const payload = (await parseBody<Partial<AssetRecord>>(request)) ?? {};
     const validationError = validateAssetInput(payload.url ? payload : { ...payload, url: "placeholder.glb" });
     if (payload.url && validationError) return json(response, 400, { error: validationError });
@@ -1187,15 +1366,18 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   }
 
   if (method === "DELETE" && assetItemMatch) {
-    if (!isAuthorizedControlPlaneRequest(request)) return json(response, 403, { error: "forbidden" });
-    const deleted = await storage.deleteAsset(decodeURIComponent(assetItemMatch[1]));
+    const assetId = decodeURIComponent(assetItemMatch[1]);
+    const actor = await requireControlPlanePermission(request, response, { permission: "asset.write", action: "asset.delete", objectType: "asset", objectId: assetId });
+    if (!actor) return;
+    const deleted = await storage.deleteAsset(assetId);
     if (!deleted) return json(response, 409, { error: "asset_has_dependencies_or_missing" });
     json(response, 200, { ok: true });
     return;
   }
 
   if (method === "POST" && url.pathname === "/api/rooms") {
-    if (!isAuthorizedControlPlaneRequest(request)) return json(response, 403, { error: "forbidden" });
+    const actor = await requireControlPlanePermission(request, response, { permission: "room.create", action: "room.create", objectType: "room" });
+    if (!actor) return;
     const payload = normalizeRoomPayload((await parseBody<Partial<RoomRecord> & {
       avatarsEnabled?: boolean;
       avatarCatalogUrl?: string;
@@ -1216,8 +1398,9 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
 
   const roomItemMatch = url.pathname.match(/^\/api\/rooms\/([^/]+)$/);
   if (method === "PATCH" && roomItemMatch) {
-    if (!isAuthorizedControlPlaneRequest(request)) return json(response, 403, { error: "forbidden" });
     const roomId = decodeURIComponent(roomItemMatch[1]);
+    const actor = await requireControlPlanePermission(request, response, { permission: "room.update", action: "room.update", objectType: "room", objectId: roomId });
+    if (!actor) return;
     const payload = normalizeRoomPayload((await parseBody<Partial<RoomRecord> & {
       avatarsEnabled?: boolean;
       avatarCatalogUrl?: string;
@@ -1239,8 +1422,16 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
 
   const roomBindSceneBundleMatch = url.pathname.match(/^\/api\/rooms\/([^/]+)\/bind-scene-bundle$/);
   if (method === "POST" && roomBindSceneBundleMatch) {
-    if (!isAuthorizedControlPlaneRequest(request)) return json(response, 403, { error: "forbidden" });
     const roomId = decodeURIComponent(roomBindSceneBundleMatch[1]);
+    const actor = await requireControlPlanePermission(request, response, {
+      permission: "room.bind-scene-bundle",
+      action: "room.bind-scene-bundle",
+      objectType: "room",
+      objectId: roomId,
+      targetRoomId: roomId,
+      allowHostOwnRoom: true
+    });
+    if (!actor) return;
     const payload = (await parseBody<{ bundleId?: string; version?: string }>(request)) ?? {};
     if (!payload.bundleId) return json(response, 400, { error: "missing_scene_bundle_id" });
     const bundle = payload.version
@@ -1254,8 +1445,9 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   }
 
   if (method === "DELETE" && roomItemMatch) {
-    if (!isAuthorizedControlPlaneRequest(request)) return json(response, 403, { error: "forbidden" });
     const roomId = decodeURIComponent(roomItemMatch[1]);
+    const actor = await requireControlPlanePermission(request, response, { permission: "room.delete", action: "room.delete", objectType: "room", objectId: roomId });
+    if (!actor) return;
     const deleted = await storage.deleteRoom(roomId);
     if (!deleted) return json(response, 404, { error: "room_not_found" });
     json(response, 200, { ok: true, roomId });
@@ -1317,8 +1509,17 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
 
   const xrTelemetryListMatch = url.pathname.match(/^\/api\/rooms\/([^/]+)\/xr-telemetry$/);
   if (method === "GET" && xrTelemetryListMatch) {
-    if (!isAuthorizedControlPlaneRequest(request)) return json(response, 403, { error: "forbidden" });
-    json(response, 200, { items: await listXrTelemetry(decodeURIComponent(xrTelemetryListMatch[1])) });
+    const roomId = decodeURIComponent(xrTelemetryListMatch[1]);
+    const actor = await requireControlPlanePermission(request, response, {
+      permission: "xr-telemetry.read",
+      action: "xr-telemetry.list",
+      objectType: "room",
+      objectId: roomId,
+      targetRoomId: roomId,
+      allowHostOwnRoom: true
+    });
+    if (!actor) return;
+    json(response, 200, { items: await listXrTelemetry(roomId) });
     return;
   }
 
@@ -1347,7 +1548,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     const ttlSeconds = Number.parseInt(process.env.STATE_TOKEN_TTL_SECONDS ?? "900", 10);
     const nowSeconds = Math.floor(Date.now() / 1000);
     const roomId = requestPayload?.roomId ?? "demo-room";
-    const role = resolveAccessRole(requestPayload?.requestedRole ?? requestPayload?.role);
+    const { role, roleSource } = resolveAccessRole(requestPayload?.requestedRole ?? requestPayload?.role);
     const permissions = getRoomPermissions(role);
     const payload: RoomAccessTokenPayload = {
       tenantId: await resolveRoomTenantId(roomId),
@@ -1355,6 +1556,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       participantId: requestPayload?.participantId ?? randomUUID(),
       displayName: requestPayload?.displayName ?? requestPayload?.participantId ?? "Guest",
       role,
+      roleSource,
       permissions,
       sessionId: randomUUID(),
       iat: nowSeconds,

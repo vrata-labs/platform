@@ -76,7 +76,7 @@ Response:
 }
 ```
 
-Signed payload claims are `tenantId`, `roomId`, `participantId`, `displayName`, `role`, `permissions`, `sessionId`, `iat`, `exp`, and `jti`. The server normalizes permissions from the signed role when validating the token.
+Signed payload claims are `tenantId`, `roomId`, `participantId`, `displayName`, `role`, optional `roleSource`, `permissions`, `sessionId`, `iat`, `exp`, and `jti`. The server normalizes permissions from the signed role when validating the token.
 
 ### `POST /api/tokens/media`
 
@@ -112,6 +112,28 @@ Response:
   "livekitUrl": "ws://localhost:7880"
 }
 ```
+
+### Control-plane AuthN/AuthZ
+
+Control-plane protected actions are deny-by-default. They require either `x-vrata-admin-token: <CONTROL_PLANE_ADMIN_TOKEN>` or `Authorization: Bearer <room-session-token>`.
+
+Only the `CONTROL_PLANE_ADMIN_TOKEN` header is an operator/admin identity. Signed room-session tokens can authorize only explicitly allowed room-scoped actions; a room-session role named `admin` is not treated as a control-plane admin.
+
+Host-owned control-plane actions require a trusted room-session role source. Tokens minted through dev-role query mode are valid runtime tokens but are denied for control-plane host-owned actions.
+
+Missing identity returns `401` with `reason: "missing_identity"`. A valid identity without the declared permission returns `403` with `reason: "permission_denied"`.
+
+The current permission matrix is documented in [`docs/security/permissions.md`](./security/permissions.md). The protected endpoint groups are:
+
+- tenant writes
+- room create/update/delete
+- host-own-room scene-bundle binding
+- asset writes
+- scene-bundle writes
+- XR telemetry admin/host-own-room reads
+- control-plane audit reads
+
+Every protected authorization decision writes a control-plane audit entry with `requestId`, `actor`, `action`, `object`, `permission`, and `result`. Operators can inspect the bounded in-memory log with `GET /api/audit/control-plane` using an admin identity.
 
 ## Notes
 

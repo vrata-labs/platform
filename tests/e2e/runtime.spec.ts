@@ -673,11 +673,11 @@ test("avatar-enabled room exposes lipsync debug signals for local and remote ava
     }).toEqual({
       localMouthAmount: 0,
       localSpeakingActive: false,
-      localSourceState: "idle",
+      localSourceState: "muted",
       remoteCount: 1,
       remoteMouthAmount: 0,
       remoteSpeakingActive: false,
-      remoteSourceState: "idle",
+      remoteSourceState: "missing",
       remoteHasReliableState: true,
       remoteHasPoseFrame: true
     });
@@ -701,10 +701,10 @@ test("avatar-enabled room exposes lipsync debug signals for local and remote ava
 
       return diagnostics.items.some((item) => item.avatarDebug?.mouthAmount === 0
         && item.avatarDebug?.speakingActive === false
-        && item.avatarDebug?.lipsyncSourceState === "idle"
+        && item.avatarDebug?.lipsyncSourceState === "muted"
         && item.remoteAvatarParticipants?.some((participant) => participant.mouthAmount === 0
           && participant.speakingActive === false
-          && participant.lipsyncSourceState === "idle"));
+          && participant.lipsyncSourceState === "missing"));
     }, {
       timeout: 15000,
       intervals: [1000, 2000, 3000]
@@ -1623,7 +1623,7 @@ test.fixme("@private-assets avatar-enabled hall room restores seated state after
   }
 });
 
-test("room creation API is forbidden without admin token", async ({ request }) => {
+test("room creation API is unauthorized without identity", async ({ request }) => {
   const response = await request.post("/api/rooms", {
     data: {
       tenantId: "demo-tenant",
@@ -1631,7 +1631,9 @@ test("room creation API is forbidden without admin token", async ({ request }) =
       name: "Forbidden Room"
     }
   });
-  expect(response.status()).toBe(403);
+  expect(response.status()).toBe(401);
+  const payload = await response.json();
+  expect(payload.reason).toBe("missing_identity");
 });
 
 test("room creation API rejects invalid template even with admin token", async ({ request }) => {

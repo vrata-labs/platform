@@ -40,6 +40,7 @@ export interface RoomCreateInput {
 
 export interface ControlPlaneAuth {
   adminToken?: string;
+  sessionToken?: string;
 }
 
 export interface RoomRecord {
@@ -216,7 +217,10 @@ export async function deleteTenant(apiBaseUrl: string, tenantId: string, auth?: 
 }
 
 function authHeaders(auth?: ControlPlaneAuth): Record<string, string> {
-  return auth?.adminToken ? { "x-vrata-admin-token": auth.adminToken } : {};
+  return {
+    ...(auth?.adminToken ? { "x-vrata-admin-token": auth.adminToken } : {}),
+    ...(auth?.sessionToken ? { "authorization": `Bearer ${auth.sessionToken}` } : {})
+  };
 }
 
 export async function createRoom(apiBaseUrl: string, input: RoomCreateInput, auth?: ControlPlaneAuth): Promise<RoomRecord> {

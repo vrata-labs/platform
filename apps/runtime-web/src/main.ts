@@ -6678,7 +6678,7 @@ async function main(): Promise<void> {
     audioFault: faultConfig.audio ?? undefined
   })) {
     void ensureMediaRoom().then(() => {
-      clearIssue(`Joined as ${displayName}`);
+      clearAudioIssue(`Joined as ${displayName}`);
       debugState.audioState = "connected-passive";
       void reportDiagnostics("media_connected_passive");
     }).catch((error: unknown) => {

@@ -2,12 +2,15 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 
 import { getRoomPermissions, isRoomRole, type RoomPermission, type RoomRole } from "./access.js";
 
+export type RoomSessionRoleSource = "default" | "dev-query" | "trusted";
+
 export interface RoomSessionTokenPayload {
   tenantId: string;
   roomId: string;
   participantId: string;
   displayName: string;
   role: RoomRole;
+  roleSource?: RoomSessionRoleSource;
   permissions: RoomPermission[];
   sessionId: string;
   iat: number;
@@ -46,6 +49,10 @@ function safeEqual(left: string, right: string): boolean {
   return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer);
 }
 
+function isRoomSessionRoleSource(input: unknown): input is RoomSessionRoleSource {
+  return input === "default" || input === "dev-query" || input === "trusted";
+}
+
 function signBody(body: string, secret: string): string {
   return createHmac("sha256", secret).update(body).digest("base64url");
 }
@@ -74,6 +81,7 @@ export function parseRoomSessionTokenPayload(input: unknown): RoomSessionTokenPa
     participantId: input.participantId,
     displayName: input.displayName,
     role: input.role,
+    roleSource: isRoomSessionRoleSource(input.roleSource) ? input.roleSource : "default",
     permissions: getRoomPermissions(input.role),
     sessionId: input.sessionId,
     iat: input.iat,

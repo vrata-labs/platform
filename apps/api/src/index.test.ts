@@ -1,7 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { verifyRoomSessionToken } from "@vrata/shared-types/session-token";
+import { getRoomPermissions, type RoomRole } from "@vrata/shared-types";
+import { signRoomSessionToken, verifyRoomSessionToken } from "@vrata/shared-types/session-token";
 
 test("api module exports server starter", async () => {
   process.env.VRATA_DISABLE_AUTOSTART = "1";
@@ -178,6 +179,197 @@ test("runtime mutating endpoints require matching room session token", async () 
     delete process.env.VRATA_DISABLE_AUTOSTART;
     delete process.env.API_PORT;
     delete process.env.STATE_TOKEN_SECRET;
+  }
+});
+
+test("control-plane authz enforces role matrix and writes audit log", async () => {
+  process.env.VRATA_DISABLE_AUTOSTART = "1";
+  process.env.API_PORT = "4035";
+  process.env.CONTROL_PLANE_ADMIN_TOKEN = "test-admin-token";
+  process.env.STATE_TOKEN_SECRET = "control-plane-state-secret";
+  process.env.VRATA_DEV_ROLE_QUERY = "true";
+  process.env.MINIO_PUBLIC_BASE_URL = "http://127.0.0.1:9000";
+  process.env.MINIO_BUCKET = "vrata-scene-bundles";
+  const module = await import("./index.js");
+  const server = module.startApiServer(4035);
+  const baseUrl = "http://127.0.0.1:4035";
+  const jsonHeaders = { "content-type": "application/json" };
+  const adminHeaders = { ...jsonHeaders, "x-vrata-admin-token": "test-admin-token" };
+
+  const issueToken = async (role: "guest" | "host" | "admin", participantId: string, roomId = "demo-room") => {
+    const response = await fetch(`${baseUrl}/api/tokens/state`, {
+      method: "POST",
+      headers: jsonHeaders,
+      body: JSON.stringify({ roomId, participantId, displayName: participantId, requestedRole: role })
+    });
+    assert.equal(response.ok, true);
+    return (await response.json()) as { token: string };
+  };
+  const trustedToken = (role: RoomRole, participantId: string, roomId = "demo-room") => signRoomSessionToken({
+    tenantId: "demo-tenant",
+    roomId,
+    participantId,
+    displayName: participantId,
+    role,
+    roleSource: "trusted",
+    permissions: getRoomPermissions(role),
+    sessionId: `${participantId}-session`,
+    iat: 100,
+    exp: 4_102_444_800,
+    jti: `${participantId}-jti`
+  }, "control-plane-state-secret");
+
+  try {
+    const protectedRequests: Array<{ method: string; path: string; body?: unknown }> = [
+      { method: "POST", path: "/api/tenants", body: { name: "Tenant" } },
+      { method: "PATCH", path: "/api/tenants/demo-tenant", body: { name: "Tenant" } },
+      { method: "DELETE", path: "/api/tenants/demo-tenant" },
+      { method: "POST", path: "/api/assets", body: { tenantId: "demo-tenant", kind: "logo", url: "logo.glb" } },
+      { method: "PATCH", path: "/api/assets/asset-1", body: { validationStatus: "validated" } },
+      { method: "DELETE", path: "/api/assets/asset-1" },
+      { method: "POST", path: "/api/scene-bundles", body: { bundleId: "bundle-1", storageKey: "scenes/bundle-1/v1/scene.json", version: "v1" } },
+      { method: "POST", path: "/api/scene-bundles/bundle-1/versions", body: { storageKey: "scenes/bundle-1/v2/scene.json", version: "v2" } },
+      { method: "POST", path: "/api/scene-bundles/bundle-1/current", body: { version: "v1" } },
+      { method: "POST", path: "/api/scene-bundles/bundle-1/versions/v1/status", body: { status: "obsolete" } },
+      { method: "POST", path: "/api/rooms", body: { tenantId: "demo-tenant", templateId: "meeting-room-basic", name: "Protected Room" } },
+      { method: "PATCH", path: "/api/rooms/demo-room", body: { name: "Protected Room" } },
+      { method: "POST", path: "/api/rooms/demo-room/bind-scene-bundle", body: { bundleId: "bundle-1" } },
+      { method: "DELETE", path: "/api/rooms/demo-room" },
+      { method: "GET", path: "/api/rooms/demo-room/xr-telemetry" },
+      { method: "GET", path: "/api/audit/control-plane" }
+    ];
+
+    for (const item of protectedRequests) {
+      const response = await fetch(`${baseUrl}${item.path}`, {
+        method: item.method,
+        headers: item.body ? jsonHeaders : undefined,
+        body: item.body ? JSON.stringify(item.body) : undefined
+      });
+      assert.equal(response.status, 401, `${item.method} ${item.path}`);
+      const payload = (await response.json()) as { reason?: string };
+      assert.equal(payload.reason, "missing_identity", `${item.method} ${item.path}`);
+    }
+
+    const bundleResponse = await fetch(`${baseUrl}/api/scene-bundles`, {
+      method: "POST",
+      headers: adminHeaders,
+      body: JSON.stringify({ bundleId: "host-bind-bundle", storageKey: "scenes/host-bind/v1/scene.json", version: "v1" })
+    });
+    assert.equal(bundleResponse.status, 201);
+
+    const adminRoomResponse = await fetch(`${baseUrl}/api/rooms`, {
+      method: "POST",
+      headers: { ...adminHeaders, "x-request-id": "cp-admin-room-create" },
+      body: JSON.stringify({ tenantId: "demo-tenant", templateId: "meeting-room-basic", name: "Admin Matrix Room" })
+    });
+    assert.equal(adminRoomResponse.status, 201);
+
+    const adminAssetResponse = await fetch(`${baseUrl}/api/assets`, {
+      method: "POST",
+      headers: adminHeaders,
+      body: JSON.stringify({ tenantId: "demo-tenant", kind: "logo", url: "logo.glb" })
+    });
+    assert.equal(adminAssetResponse.status, 201);
+
+    const guestToken = (await issueToken("guest", "cp-guest")).token;
+    const guestCreateRoom = await fetch(`${baseUrl}/api/rooms`, {
+      method: "POST",
+      headers: { ...jsonHeaders, "authorization": `Bearer ${guestToken}`, "x-request-id": "cp-guest-room-create" },
+      body: JSON.stringify({ tenantId: "demo-tenant", templateId: "meeting-room-basic", name: "Guest Matrix Room" })
+    });
+    assert.equal(guestCreateRoom.status, 403);
+    assert.equal((await guestCreateRoom.json() as { permission?: string }).permission, "room.create");
+
+    const hostToken = (await issueToken("host", "cp-host", "demo-room")).token;
+    const hostTenantWrite = await fetch(`${baseUrl}/api/tenants`, {
+      method: "POST",
+      headers: { ...jsonHeaders, "authorization": `Bearer ${hostToken}`, "x-request-id": "cp-host-tenant-create" },
+      body: JSON.stringify({ name: "Host Tenant" })
+    });
+    assert.equal(hostTenantWrite.status, 403);
+
+    const hostOwnBind = await fetch(`${baseUrl}/api/rooms/demo-room/bind-scene-bundle`, {
+      method: "POST",
+      headers: { ...jsonHeaders, "authorization": `Bearer ${hostToken}`, "x-request-id": "cp-host-own-bind" },
+      body: JSON.stringify({ bundleId: "host-bind-bundle" })
+    });
+    assert.equal(hostOwnBind.status, 403);
+
+    const trustedHostToken = trustedToken("host", "cp-trusted-host", "demo-room");
+    const trustedHostOwnBind = await fetch(`${baseUrl}/api/rooms/demo-room/bind-scene-bundle`, {
+      method: "POST",
+      headers: { ...jsonHeaders, "authorization": `Bearer ${trustedHostToken}`, "x-request-id": "cp-trusted-host-own-bind" },
+      body: JSON.stringify({ bundleId: "host-bind-bundle" })
+    });
+    assert.equal(trustedHostOwnBind.status, 200);
+
+    const trustedHostOwnTelemetry = await fetch(`${baseUrl}/api/rooms/demo-room/xr-telemetry`, {
+      headers: { "authorization": `Bearer ${trustedHostToken}` }
+    });
+    assert.equal(trustedHostOwnTelemetry.status, 200);
+
+    const otherRoomResponse = await fetch(`${baseUrl}/api/rooms`, {
+      method: "POST",
+      headers: adminHeaders,
+      body: JSON.stringify({ tenantId: "demo-tenant", templateId: "meeting-room-basic", name: "Other Matrix Room" })
+    });
+    const otherRoom = (await otherRoomResponse.json()) as { roomId: string };
+    const hostOtherBind = await fetch(`${baseUrl}/api/rooms/${otherRoom.roomId}/bind-scene-bundle`, {
+      method: "POST",
+      headers: { ...jsonHeaders, "authorization": `Bearer ${trustedHostToken}`, "x-request-id": "cp-host-other-bind" },
+      body: JSON.stringify({ bundleId: "host-bind-bundle" })
+    });
+    assert.equal(hostOtherBind.status, 403);
+
+    const hostOtherTelemetry = await fetch(`${baseUrl}/api/rooms/${otherRoom.roomId}/xr-telemetry`, {
+      headers: { "authorization": `Bearer ${trustedHostToken}` }
+    });
+    assert.equal(hostOtherTelemetry.status, 403);
+
+    const sessionAdminToken = (await issueToken("admin", "cp-session-admin", "demo-room")).token;
+    const sessionAdminTenantWrite = await fetch(`${baseUrl}/api/tenants`, {
+      method: "POST",
+      headers: { ...jsonHeaders, "authorization": `Bearer ${sessionAdminToken}`, "x-request-id": "cp-session-admin-tenant-create" },
+      body: JSON.stringify({ name: "Session Admin Tenant" })
+    });
+    assert.equal(sessionAdminTenantWrite.status, 403);
+    assert.equal((await sessionAdminTenantWrite.json() as { reason?: string; permission?: string }).permission, "tenant.write");
+
+    const tokenBody = guestToken.split(".")[0] ?? "";
+    assert.notEqual(tokenBody, "");
+    const forgedPayload = JSON.parse(Buffer.from(tokenBody, "base64url").toString("utf8")) as { role: string };
+    forgedPayload.role = "admin";
+    const forgedBody = Buffer.from(JSON.stringify(forgedPayload), "utf8").toString("base64url");
+    const forgedToken = guestToken.replace(tokenBody, forgedBody);
+    const forgedResponse = await fetch(`${baseUrl}/api/tenants`, {
+      method: "POST",
+      headers: { ...jsonHeaders, "authorization": `Bearer ${forgedToken}` },
+      body: JSON.stringify({ name: "Forged Tenant" })
+    });
+    assert.equal(forgedResponse.status, 401);
+    assert.equal((await forgedResponse.json() as { reason?: string }).reason, "invalid_signature");
+
+    const auditResponse = await fetch(`${baseUrl}/api/audit/control-plane`, {
+      headers: { "x-vrata-admin-token": "test-admin-token" }
+    });
+    assert.equal(auditResponse.ok, true);
+    const auditPayload = (await auditResponse.json()) as {
+      items: Array<{ requestId?: string; action?: string; permission?: string; object?: { type?: string; id?: string }; result?: string; reason?: string; actor?: { role?: string; actorId?: string } }>;
+    };
+    assert.equal(auditPayload.items.some((item) => item.requestId === "cp-guest-room-create" && item.action === "room.create" && item.result === "denied" && item.actor?.role === "guest"), true);
+    assert.equal(auditPayload.items.some((item) => item.requestId === "cp-host-own-bind" && item.action === "room.bind-scene-bundle" && item.result === "denied" && item.actor?.role === "host"), true);
+    assert.equal(auditPayload.items.some((item) => item.requestId === "cp-trusted-host-own-bind" && item.action === "room.bind-scene-bundle" && item.result === "allowed" && item.actor?.role === "host"), true);
+    assert.equal(auditPayload.items.some((item) => item.requestId === "cp-session-admin-tenant-create" && item.action === "tenant.create" && item.result === "denied" && item.actor?.role === "admin"), true);
+    assert.equal(auditPayload.items.some((item) => item.requestId === "cp-admin-room-create" && item.permission === "room.create" && item.result === "allowed"), true);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    delete process.env.VRATA_DISABLE_AUTOSTART;
+    delete process.env.API_PORT;
+    delete process.env.CONTROL_PLANE_ADMIN_TOKEN;
+    delete process.env.STATE_TOKEN_SECRET;
+    delete process.env.VRATA_DEV_ROLE_QUERY;
+    delete process.env.MINIO_PUBLIC_BASE_URL;
+    delete process.env.MINIO_BUCKET;
   }
 });
 

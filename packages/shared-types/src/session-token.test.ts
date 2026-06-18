@@ -28,6 +28,15 @@ test("room session token verifies signed payload and normalizes permissions", ()
 
   assert.equal(result.ok, true);
   assert.deepEqual(result.ok ? result.payload.permissions : [], getRoomPermissions("host"));
+  assert.equal(result.ok ? result.payload.roleSource : null, "default");
+});
+
+test("room session token preserves trusted role source", () => {
+  const token = signRoomSessionToken({ ...payload, roleSource: "trusted" }, "test-secret");
+  const result = verifyRoomSessionToken(token, "test-secret", { nowSeconds: 150 });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.ok ? result.payload.roleSource : null, "trusted");
 });
 
 test("room session token rejects expired, tampered, and wrong-scope tokens", () => {

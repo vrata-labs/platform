@@ -12,6 +12,7 @@ Vrata uses SemVer: `MAJOR.MINOR.PATCH`. Until `1.0.0`, breaking changes can happ
 - Initial public repository hygiene docs and self-hosting contract.
 - Apache-2.0 source code license.
 - Signed room session tokens for runtime, room-state, media token issuing, diagnostics, XR telemetry, and remote-browser frame token issuing.
+- Deny-by-default control-plane AuthN/AuthZ with explicit permissions and structured audit logging.
 
 ### Known Limitations
 
