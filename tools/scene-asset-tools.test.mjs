@@ -159,18 +159,24 @@ test("private scene asset sync copies manifest scenes into platform scene root",
   const privateRoot = await mkdtemp(join(tmpdir(), "vrata-private-scene-repo-"));
   const platformRoot = await mkdtemp(join(tmpdir(), "vrata-platform-scenes-"));
   await mkdir(join(privateRoot, "assets", "scenes", "sense-hall2-v1"), { recursive: true });
+  await mkdir(join(privateRoot, "assets", "scenes", "livadia-nicholas-office-v1"), { recursive: true });
   await writeFile(join(privateRoot, "assets", "manifest.json"), JSON.stringify({
     schemaVersion: 1,
     scenesRoot: "scenes",
-    scenes: [{ sceneDir: "sense-hall2-v1", sceneId: "sense-hall2-v1" }]
+    scenes: [
+      { sceneDir: "sense-hall2-v1", sceneId: "sense-hall2-v1" },
+      { sceneDir: "livadia-nicholas-office-v1", sceneId: "livadia-nicholas-office-v1" }
+    ]
   }));
   await writeFile(join(privateRoot, "assets", "scenes", "sense-hall2-v1", "scene.json"), "{}\n");
+  await writeFile(join(privateRoot, "assets", "scenes", "livadia-nicholas-office-v1", "scene.json"), "{\"sceneId\":\"livadia-nicholas-office-v1\"}\n");
 
   const result = await syncPrivateSceneAssets({
     privateAssetsRoot: join(privateRoot, "assets"),
     targetSceneRoot: platformRoot
   });
 
-  assert.deepEqual(result, { sceneCount: 1, scenes: ["sense-hall2-v1"] });
+  assert.deepEqual(result, { sceneCount: 2, scenes: ["livadia-nicholas-office-v1", "sense-hall2-v1"] });
   assert.equal(await readFile(join(platformRoot, "sense-hall2-v1", "scene.json"), "utf8"), "{}\n");
+  assert.equal(await readFile(join(platformRoot, "livadia-nicholas-office-v1", "scene.json"), "utf8"), "{\"sceneId\":\"livadia-nicholas-office-v1\"}\n");
 });

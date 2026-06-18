@@ -138,7 +138,8 @@ source_scene_root = private_assets_root / manifest['scenesRoot']
 synced = []
 for scene in manifest['scenes']:
     scene_dir = scene.get('sceneDir') or scene.get('sceneId')
-    if not isinstance(scene_dir, str) or not scene_dir.startswith('sense-'):
+    allowed_public_scene_dirs = {'livadia-nicholas-office-v1', 'the-hall-v1', 'the-office-v1'}
+    if not isinstance(scene_dir, str) or not (scene_dir.startswith('sense-') or scene_dir in allowed_public_scene_dirs):
         raise SystemExit(f'invalid_private_scene_dir:{scene_dir}')
     shutil.copytree(source_scene_root / scene_dir, target_scene_root / scene_dir, dirs_exist_ok=True)
     synced.append(scene_dir)
