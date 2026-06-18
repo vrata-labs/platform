@@ -1,6 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
+import { verifyRoomSessionToken } from "@vrata/shared-types/session-token";
+
 test("api module exports server starter", async () => {
   process.env.VRATA_DISABLE_AUTOSTART = "1";
   const module = await import("./index.js");
@@ -19,9 +21,10 @@ test("api production env validator reports missing required vars", async () => {
       API_PORT: "4000",
       CONTROL_PLANE_ADMIN_TOKEN: "",
       ROOM_STATE_PUBLIC_URL: "ws://127.0.0.1:2567",
-      RUNTIME_BASE_URL: ""
+      RUNTIME_BASE_URL: "",
+      STATE_TOKEN_SECRET: ""
     }),
-    ["CONTROL_PLANE_ADMIN_TOKEN", "RUNTIME_BASE_URL"]
+    ["CONTROL_PLANE_ADMIN_TOKEN", "RUNTIME_BASE_URL", "STATE_TOKEN_SECRET"]
   );
 
   delete process.env.VRATA_DISABLE_AUTOSTART;
@@ -87,10 +90,18 @@ test("state token resolves dev host role and falls back to guest when gated off"
       body: JSON.stringify({ roomId: "demo-room", participantId: "p-host", displayName: "Host", requestedRole: "host" })
     });
     assert.equal(hostResponse.ok, true);
-    const hostPayload = (await hostResponse.json()) as { token?: string; role?: string; access?: { canStartScreenShare?: boolean } };
+    const hostPayload = (await hostResponse.json()) as { token?: string; role?: string; sessionId?: string; access?: { canStartScreenShare?: boolean } };
     assert.equal(typeof hostPayload.token, "string");
+    assert.equal(typeof hostPayload.sessionId, "string");
     assert.equal(hostPayload.role, "host");
     assert.equal(hostPayload.access?.canStartScreenShare, true);
+    const verified = verifyRoomSessionToken(hostPayload.token, "test-secret", {
+      tenantId: "demo-tenant",
+      roomId: "demo-room",
+      participantId: "p-host"
+    });
+    assert.equal(verified.ok, true);
+    assert.equal(verified.ok ? verified.payload.role : null, "host");
 
     process.env.VRATA_DEV_ROLE_QUERY = "false";
     const guestResponse = await fetch("http://127.0.0.1:4025/api/tokens/state", {
@@ -111,9 +122,70 @@ test("state token resolves dev host role and falls back to guest when gated off"
   }
 });
 
+test("runtime mutating endpoints require matching room session token", async () => {
+  process.env.VRATA_DISABLE_AUTOSTART = "1";
+  process.env.API_PORT = "4033";
+  process.env.STATE_TOKEN_SECRET = "runtime-boundary-state-secret";
+  const module = await import("./index.js");
+  const server = module.startApiServer(4033);
+
+  try {
+    const stateResponse = await fetch("http://127.0.0.1:4033/api/tokens/state", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ roomId: "demo-room", participantId: "p-runtime", displayName: "Runtime" })
+    });
+    assert.equal(stateResponse.ok, true);
+    const statePayload = (await stateResponse.json()) as { token?: string };
+    const presencePayload = {
+      participantId: "p-runtime",
+      displayName: "Runtime",
+      mode: "desktop",
+      rootTransform: { x: 0, y: 0, z: 0 },
+      muted: false,
+      activeMedia: { audio: false, screenShare: false },
+      updatedAt: new Date(0).toISOString()
+    };
+
+    const missingToken = await fetch("http://127.0.0.1:4033/api/rooms/demo-room/presence/p-runtime", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(presencePayload)
+    });
+    assert.equal(missingToken.status, 401);
+
+    const wrongParticipant = await fetch("http://127.0.0.1:4033/api/rooms/demo-room/presence/other-participant", {
+      method: "PUT",
+      headers: {
+        "content-type": "application/json",
+        "authorization": `Bearer ${statePayload.token}`
+      },
+      body: JSON.stringify({ ...presencePayload, participantId: "other-participant" })
+    });
+    assert.equal(wrongParticipant.status, 403);
+
+    const allowed = await fetch("http://127.0.0.1:4033/api/rooms/demo-room/presence/p-runtime", {
+      method: "PUT",
+      headers: {
+        "content-type": "application/json",
+        "authorization": `Bearer ${statePayload.token}`
+      },
+      body: JSON.stringify(presencePayload)
+    });
+    assert.equal(allowed.ok, true);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    delete process.env.VRATA_DISABLE_AUTOSTART;
+    delete process.env.API_PORT;
+    delete process.env.STATE_TOKEN_SECRET;
+  }
+});
+
 test("remote browser frame token endpoint returns websocket URL and short-lived token", async () => {
   process.env.VRATA_DISABLE_AUTOSTART = "1";
   process.env.API_PORT = "4026";
+  process.env.VRATA_DEV_ROLE_QUERY = "true";
+  process.env.STATE_TOKEN_SECRET = "remote-browser-frame-state-secret";
   process.env.REMOTE_BROWSER_PUBLIC_URL = "https://browser.89.169.161.91.sslip.io";
   process.env.REMOTE_BROWSER_TOKEN_SECRET = "remote-browser-test-secret";
   process.env.REMOTE_BROWSER_TOKEN_TTL_SECONDS = "120";
@@ -121,9 +193,20 @@ test("remote browser frame token endpoint returns websocket URL and short-lived 
   const server = module.startApiServer(4026);
 
   try {
-    const response = await fetch("http://127.0.0.1:4026/api/tokens/remote-browser-frame", {
+    const stateResponse = await fetch("http://127.0.0.1:4026/api/tokens/state", {
       method: "POST",
       headers: { "content-type": "application/json" },
+      body: JSON.stringify({ roomId: "room-1", participantId: "host-1", displayName: "Host", requestedRole: "host" })
+    });
+    assert.equal(stateResponse.ok, true);
+    const statePayload = (await stateResponse.json()) as { token?: string };
+
+    const response = await fetch("http://127.0.0.1:4026/api/tokens/remote-browser-frame", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "authorization": `Bearer ${statePayload.token}`
+      },
       body: JSON.stringify({
         roomId: "room-1",
         objectId: "object-1",
@@ -148,6 +231,8 @@ test("remote browser frame token endpoint returns websocket URL and short-lived 
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     delete process.env.VRATA_DISABLE_AUTOSTART;
     delete process.env.API_PORT;
+    delete process.env.VRATA_DEV_ROLE_QUERY;
+    delete process.env.STATE_TOKEN_SECRET;
     delete process.env.REMOTE_BROWSER_PUBLIC_URL;
     delete process.env.REMOTE_BROWSER_TOKEN_SECRET;
     delete process.env.REMOTE_BROWSER_TOKEN_TTL_SECONDS;
@@ -323,11 +408,21 @@ test("xr telemetry endpoint stores latest runtime snapshot for admin inspection"
   const server = module.startApiServer(4024);
 
   try {
+    const stateResponse = await fetch("http://127.0.0.1:4024/api/tokens/state", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ roomId: "demo-room", participantId: "p-1", displayName: "XR Runtime" })
+    });
+    assert.equal(stateResponse.ok, true);
+    const statePayload = (await stateResponse.json()) as { token?: string };
+    const runtimeHeaders = {
+      "content-type": "application/json",
+      "authorization": `Bearer ${statePayload.token}`
+    };
+
     const putResponse = await fetch("http://127.0.0.1:4024/api/rooms/demo-room/xr-telemetry/p-1", {
       method: "PUT",
-      headers: {
-        "content-type": "application/json"
-      },
+      headers: runtimeHeaders,
       body: JSON.stringify({
         participantId: "ignored",
         roomId: "ignored",
@@ -368,9 +463,7 @@ test("xr telemetry endpoint stores latest runtime snapshot for admin inspection"
 
     const secondPut = await fetch("http://127.0.0.1:4024/api/rooms/demo-room/xr-telemetry/p-1", {
       method: "PUT",
-      headers: {
-        "content-type": "application/json"
-      },
+      headers: runtimeHeaders,
       body: JSON.stringify({
         updatedAt: "2026-04-16T10:00:01.000Z",
         kind: "trigger_press",
@@ -397,9 +490,7 @@ test("xr telemetry endpoint stores latest runtime snapshot for admin inspection"
 
     const idlePut = await fetch("http://127.0.0.1:4024/api/rooms/demo-room/xr-telemetry/p-1", {
       method: "PUT",
-      headers: {
-        "content-type": "application/json"
-      },
+      headers: runtimeHeaders,
       body: JSON.stringify({
         updatedAt: "2026-04-16T10:00:02.000Z",
         kind: null,
@@ -422,9 +513,7 @@ test("xr telemetry endpoint stores latest runtime snapshot for admin inspection"
 
     const repeatedSeatPut = await fetch("http://127.0.0.1:4024/api/rooms/demo-room/xr-telemetry/p-1", {
       method: "PUT",
-      headers: {
-        "content-type": "application/json"
-      },
+      headers: runtimeHeaders,
       body: JSON.stringify({
         updatedAt: "2026-04-16T10:00:03.000Z",
         currentSeatId: "hall-seat-a",
@@ -446,9 +535,7 @@ test("xr telemetry endpoint stores latest runtime snapshot for admin inspection"
 
     const repeatedSeatPutAgain = await fetch("http://127.0.0.1:4024/api/rooms/demo-room/xr-telemetry/p-1", {
       method: "PUT",
-      headers: {
-        "content-type": "application/json"
-      },
+      headers: runtimeHeaders,
       body: JSON.stringify({
         updatedAt: "2026-04-16T10:00:04.000Z",
         currentSeatId: "hall-seat-a",
@@ -478,14 +565,32 @@ test("media token derives secure livekit url behind https proxy", async () => {
   process.env.VRATA_DISABLE_AUTOSTART = "1";
   process.env.API_PORT = "4022";
   process.env.LIVEKIT_URL = "ws://89.169.161.91:7880";
+  process.env.STATE_TOKEN_SECRET = "media-token-state-secret";
   const module = await import("./index.js");
   const server = module.startApiServer(4022);
 
   try {
+    const denied = await fetch("http://127.0.0.1:4022/api/tokens/media", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ roomId: "demo-room", participantId: "guest-test", canPublishAudio: true, canPublishVideo: false })
+    });
+    assert.equal(denied.status, 401);
+
+    const stateResponse = await fetch("http://127.0.0.1:4022/api/tokens/state", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ roomId: "demo-room", participantId: "guest-test", displayName: "Guest Test" })
+    });
+    assert.equal(stateResponse.ok, true);
+    const statePayload = (await stateResponse.json()) as { token?: string };
+    assert.equal(typeof statePayload.token, "string");
+
     const response = await fetch("http://127.0.0.1:4022/api/tokens/media", {
       method: "POST",
       headers: {
         "content-type": "application/json",
+        "authorization": `Bearer ${statePayload.token}`,
         "x-forwarded-proto": "https",
         "x-forwarded-host": "89.169.161.91.sslip.io"
       },
@@ -503,6 +608,7 @@ test("media token derives secure livekit url behind https proxy", async () => {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     delete process.env.VRATA_DISABLE_AUTOSTART;
     delete process.env.LIVEKIT_URL;
+    delete process.env.STATE_TOKEN_SECRET;
   }
 });
 

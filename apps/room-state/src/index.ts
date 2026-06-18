@@ -1,12 +1,11 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 
 import { WebSocketServer, type WebSocket } from "ws";
 import {
   REMOTE_BROWSER_OBJECT_TYPE,
   getRoomPermissions,
   hasRoomPermission,
-  isRoomRole,
   parseRoomRole,
   type MediaObjectCommandResult,
   type RemoteBrowserObjectState,
@@ -14,6 +13,7 @@ import {
   type RoomPermission,
   type RoomRole
 } from "@vrata/shared-types";
+import { verifyRoomSessionToken } from "@vrata/shared-types/session-token";
 
 import type { PresenceState } from "./schema.js";
 import {
@@ -62,15 +62,6 @@ export interface RoomStateServer {
   avatarReliableStates: Map<string, Map<string, AvatarReliableStatePayload>>;
   socketParticipants: Map<WebSocket, { roomId: string; participantId: string; access: ParticipantAccessState }>;
   pendingDisconnects: Map<string, Map<string, ReturnType<typeof setTimeout>>>;
-}
-
-interface RoomAccessTokenPayload {
-  roomId: string;
-  participantId: string;
-  displayName: string;
-  role: RoomRole;
-  permissions: RoomPermission[];
-  exp: number;
 }
 
 const DISCONNECT_GRACE_MS = 1500;
@@ -190,69 +181,28 @@ function defaultAccess(role: RoomRole = "guest"): ParticipantAccessState {
   };
 }
 
-function signAccessTokenBody(body: string, env: NodeJS.ProcessEnv = process.env): string {
-  const secret = env.STATE_TOKEN_SECRET ?? "dev-state-secret";
-  return createHmac("sha256", secret).update(body).digest("base64url");
-}
-
 function safeEqual(left: string, right: string): boolean {
   const leftBuffer = Buffer.from(left);
   const rightBuffer = Buffer.from(right);
   return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer);
 }
 
-function parseAccessTokenPayload(input: unknown): RoomAccessTokenPayload | null {
-  if (!isObjectRecord(input)) {
-    return null;
-  }
-  const permissions = Array.isArray(input.permissions) ? input.permissions : [];
-  if (typeof input.roomId !== "string"
-    || typeof input.participantId !== "string"
-    || typeof input.displayName !== "string"
-    || !isRoomRole(input.role)
-    || typeof input.exp !== "number"
-    || !permissions.every((permission) => typeof permission === "string")) {
-    return null;
-  }
-  return {
-    roomId: input.roomId,
-    participantId: input.participantId,
-    displayName: input.displayName,
-    role: input.role,
-    permissions: getRoomPermissions(input.role),
-    exp: input.exp
-  };
+function getStateTokenSecret(env: NodeJS.ProcessEnv = process.env): string {
+  return env.STATE_TOKEN_SECRET ?? "dev-state-secret";
 }
 
-function decodeAccessToken(token: string | null, env: NodeJS.ProcessEnv = process.env): RoomAccessTokenPayload | null {
-  if (!token) {
-    return null;
+function resolveConnectionAccess(url: URL, roomId: string, participantId: string, env: NodeJS.ProcessEnv = process.env): ParticipantAccessState | null {
+  const tokenResult = verifyRoomSessionToken(url.searchParams.get("accessToken"), getStateTokenSecret(env), {
+    roomId,
+    participantId
+  });
+  if (tokenResult.ok) {
+    return defaultAccess(tokenResult.payload.role);
   }
-  const [body, signature] = token.split(".");
-  if (!body || !signature || !safeEqual(signAccessTokenBody(body, env), signature)) {
-    return null;
-  }
-  try {
-    const payload = JSON.parse(Buffer.from(body, "base64url").toString("utf8"));
-    const parsed = parseAccessTokenPayload(payload);
-    if (!parsed || parsed.exp < Math.floor(Date.now() / 1000)) {
-      return null;
-    }
-    return parsed;
-  } catch {
-    return null;
-  }
-}
-
-function resolveConnectionAccess(url: URL, roomId: string, participantId: string, env: NodeJS.ProcessEnv = process.env): ParticipantAccessState {
-  const tokenAccess = decodeAccessToken(url.searchParams.get("accessToken"), env);
-  if (tokenAccess?.roomId === roomId && tokenAccess.participantId === participantId) {
-    return defaultAccess(tokenAccess.role);
-  }
-  if (isDevRoleQueryAllowed(env)) {
+  if (tokenResult.code === "missing_token" && isDevRoleQueryAllowed(env)) {
     return defaultAccess(parseRoomRole(url.searchParams.get("role"), "guest"));
   }
-  return defaultAccess("guest");
+  return null;
 }
 
 export function createRoomStateServer(): RoomStateServer {
@@ -788,8 +738,12 @@ export function startRoomStateService(port = Number.parseInt(process.env.ROOM_ST
   wss.on("connection", (socket, request) => {
     const url = new URL(request.url ?? "/", `http://${request.headers.host ?? `localhost:${port}`}`);
     const roomId = url.searchParams.get("roomId") ?? "demo-room";
-    const participantId = url.searchParams.get("participantId") ?? crypto.randomUUID();
+    const participantId = url.searchParams.get("participantId") ?? randomUUID();
     const access = resolveConnectionAccess(url, roomId, participantId);
+    if (!access) {
+      socket.close(1008, "invalid_session_token");
+      return;
+    }
 
     connectParticipant(authority, roomId, participantId, socket, access);
 

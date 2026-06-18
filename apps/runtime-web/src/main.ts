@@ -635,6 +635,7 @@ function getRemoteBrowserRuntime(surfaceId: string): ReturnType<typeof createRem
     apiBaseUrl,
     roomId,
     participantId,
+    getSessionToken: () => roomStateAccessToken,
     surfaceId,
     widthPx: surface.widthPx,
     heightPx: surface.heightPx,
@@ -4481,7 +4482,8 @@ async function reportDiagnostics(note?: string): Promise<void> {
   await fetch(new URL(`/api/rooms/${roomId}/diagnostics`, apiBaseUrl), {
     method: "POST",
     headers: {
-      "content-type": "application/json"
+      "content-type": "application/json",
+      "authorization": `Bearer ${roomStateAccessToken}`
     },
     body: JSON.stringify({
       participantId,
@@ -4614,7 +4616,8 @@ function reportXrTelemetry(frameContext: RuntimeFrameContext): void {
   void fetch(new URL(`/api/rooms/${roomId}/xr-telemetry/${participantId}`, apiBaseUrl), {
     method: "PUT",
     headers: {
-      "content-type": "application/json"
+      "content-type": "application/json",
+      "authorization": `Bearer ${roomStateAccessToken}`
     },
     body: JSON.stringify(payload)
   }).catch(() => undefined);
@@ -4858,7 +4861,7 @@ async function ensureMediaRoom(): Promise<Room> {
     throw createFaultError("ConnectionError", "media_network_blocked");
   }
 
-  const voicePlan = await planVoiceSession(apiBaseUrl, roomId, participantId);
+  const voicePlan = await planVoiceSession(apiBaseUrl, roomId, participantId, roomStateAccessToken);
   const room = new Room();
   setupAudio(room);
   await room.connect(voicePlan.livekitUrl, voicePlan.token);
@@ -5446,7 +5449,7 @@ async function syncPresence(mode: PresenceState["mode"], audioActive: boolean): 
     apiPresenceSyncInFlight = true;
     lastApiPresenceSyncAtMs = nowMs;
     try {
-      await upsertPresence(apiBaseUrl, roomId, presencePayload);
+      await upsertPresence(apiBaseUrl, roomId, presencePayload, roomStateAccessToken);
       sentFallbackPresence = true;
     } catch (error) {
       console.error(error);
@@ -6386,7 +6389,7 @@ window.addEventListener("resize", () => {
 });
 
 window.addEventListener("beforeunload", () => {
-  void removePresence(apiBaseUrl, roomId, participantId);
+  void removePresence(apiBaseUrl, roomId, participantId, roomStateAccessToken);
   detachVideoTrack();
   for (const entry of Array.from(remoteBrowserVideoByObjectId.values())) {
     detachRemoteBrowserVideoEntry(entry);

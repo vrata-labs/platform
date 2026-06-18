@@ -318,12 +318,14 @@ export async function bootRuntime(
 export async function fetchMediaToken(
   apiBaseUrl: string,
   roomId: string,
-  participantId: string
+  participantId: string,
+  sessionToken: string
 ): Promise<MediaTokenResponse> {
   const response = await fetch(new URL("/api/tokens/media", apiBaseUrl), {
     method: "POST",
     headers: {
-      "content-type": "application/json"
+      "content-type": "application/json",
+      "authorization": `Bearer ${sessionToken}`
     },
     body: JSON.stringify({
       roomId,
@@ -343,10 +345,11 @@ export async function fetchMediaToken(
 export async function planVoiceSession(
   apiBaseUrl: string,
   roomId: string,
-  participantId: string
+  participantId: string,
+  sessionToken: string
 ): Promise<VoiceSessionPlan> {
   const manifest = await fetchRoomManifest(apiBaseUrl, roomId);
-  const media = await fetchMediaToken(apiBaseUrl, roomId, participantId);
+  const media = await fetchMediaToken(apiBaseUrl, roomId, participantId, sessionToken);
 
   return {
     roomId,
@@ -371,12 +374,14 @@ export async function listPresence(apiBaseUrl: string, roomId: string): Promise<
 export async function upsertPresence(
   apiBaseUrl: string,
   roomId: string,
-  presence: PresenceState
+  presence: PresenceState,
+  sessionToken: string
 ): Promise<void> {
   const response = await fetch(new URL(`/api/rooms/${roomId}/presence/${presence.participantId}`, apiBaseUrl), {
     method: "PUT",
     headers: {
-      "content-type": "application/json"
+      "content-type": "application/json",
+      "authorization": `Bearer ${sessionToken}`
     },
     body: JSON.stringify(presence)
   });
@@ -386,8 +391,11 @@ export async function upsertPresence(
   }
 }
 
-export async function removePresence(apiBaseUrl: string, roomId: string, participantId: string): Promise<void> {
+export async function removePresence(apiBaseUrl: string, roomId: string, participantId: string, sessionToken: string): Promise<void> {
   await fetch(new URL(`/api/rooms/${roomId}/presence/${participantId}`, apiBaseUrl), {
-    method: "DELETE"
+    method: "DELETE",
+    headers: {
+      "authorization": `Bearer ${sessionToken}`
+    }
   });
 }

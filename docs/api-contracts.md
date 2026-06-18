@@ -51,7 +51,7 @@ Response shape:
 
 ### `POST /api/tokens/state`
 
-Returns a state-plane join token payload for `apps/room-state`.
+Returns a short-lived signed room session token used by runtime, `apps/room-state`, and media token issuing.
 
 Request:
 
@@ -59,7 +59,8 @@ Request:
 {
   "roomId": "demo-room",
   "participantId": "p1",
-  "role": "guest"
+  "displayName": "Guest",
+  "requestedRole": "guest"
 }
 ```
 
@@ -67,14 +68,21 @@ Response:
 
 ```json
 {
-  "token": "base64url-encoded-payload",
-  "expiresInSeconds": 900
+  "token": "base64url-payload.hmac-signature",
+  "expiresInSeconds": 900,
+  "sessionId": "session-id",
+  "role": "guest",
+  "permissions": ["room.join", "audio.join", "surface.view"]
 }
 ```
+
+Signed payload claims are `tenantId`, `roomId`, `participantId`, `displayName`, `role`, `permissions`, `sessionId`, `iat`, `exp`, and `jti`. The server normalizes permissions from the signed role when validating the token.
 
 ### `POST /api/tokens/media`
 
 Returns a media-plane join token payload for `LiveKit`.
+
+Requires `Authorization: Bearer <room-session-token>`. The session token must match the requested room and participant. The API derives publish grants from signed room permissions instead of trusting caller-provided role claims.
 
 Request:
 
@@ -86,6 +94,14 @@ Request:
   "canPublishVideo": false
 }
 ```
+
+Runtime-mutating endpoints also require the same session token:
+
+- `PUT /api/rooms/:roomId/presence/:participantId`
+- `DELETE /api/rooms/:roomId/presence/:participantId`
+- `POST /api/rooms/:roomId/diagnostics`
+- `PUT /api/rooms/:roomId/xr-telemetry/:participantId`
+- `POST /api/tokens/remote-browser-frame`
 
 Response:
 
@@ -99,6 +115,7 @@ Response:
 
 ## Notes
 
-- Current token implementation is a dev-safe placeholder, not signed production auth.
+- Room session tokens are signed with `STATE_TOKEN_SECRET` and expire through the `exp` claim.
+- Dev role escalation through `requestedRole` is allowed only when the dev-role query mode is enabled; production-safe configs disable it.
 - `schemaVersion` must remain explicit in every manifest.
 - Runtime should degrade gracefully if media or XR features are unavailable.

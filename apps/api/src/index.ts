@@ -1,12 +1,13 @@
 import { readFile, stat } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { AccessToken } from "livekit-server-sdk";
-import { createRoomAccessDebugState, getRoomPermissions, parseRoomRole, type RoomPermission, type RoomRole } from "@vrata/shared-types";
+import { createRoomAccessDebugState, getRoomPermissions, hasRoomPermission, parseRoomRole, type RoomPermission, type RoomRole } from "@vrata/shared-types";
+import { signRoomSessionToken, verifyRoomSessionToken, type RoomSessionTokenPayload, type RoomSessionTokenVerificationResult } from "@vrata/shared-types/session-token";
 
 import {
   resolveSceneBundlePublicUrl,
@@ -73,15 +74,7 @@ interface RoomManifest {
   };
 }
 
-interface RoomAccessTokenPayload {
-  tenantId?: string;
-  roomId: string;
-  participantId: string;
-  displayName: string;
-  role: RoomRole;
-  permissions: RoomPermission[];
-  exp: number;
-}
+type RoomAccessTokenPayload = RoomSessionTokenPayload;
 
 interface StateTokenRequest {
   tenantId?: string;
@@ -97,6 +90,7 @@ interface MediaTokenPayload {
   participantId: string;
   canPublishAudio: boolean;
   canPublishVideo: boolean;
+  sessionToken?: string;
 }
 
 interface RemoteBrowserMediaTokenRequest {
@@ -112,6 +106,7 @@ interface RemoteBrowserFrameTokenRequest {
   objectId?: string;
   executorSessionId?: string;
   frameStreamId?: string;
+  sessionToken?: string;
 }
 
 interface PresenceRecord {
@@ -206,7 +201,7 @@ const livekitApiSecret = process.env.LIVEKIT_API_SECRET ?? "secret";
 const controlPlaneAdminToken = process.env.CONTROL_PLANE_ADMIN_TOKEN ?? "";
 const presenceTtlMs = Number.parseInt(process.env.PRESENCE_TTL_MS ?? "15000", 10);
 const storagePromise = createStorage();
-const requiredProductionApiEnvVars = ["CONTROL_PLANE_ADMIN_TOKEN", "ROOM_STATE_PUBLIC_URL", "RUNTIME_BASE_URL"] as const;
+const requiredProductionApiEnvVars = ["CONTROL_PLANE_ADMIN_TOKEN", "ROOM_STATE_PUBLIC_URL", "RUNTIME_BASE_URL", "STATE_TOKEN_SECRET"] as const;
 
 const presenceByRoom = new Map<string, Map<string, PresenceRecord>>();
 const xrTelemetryByRoom = new Map<string, Map<string, XrTelemetryParticipantBuffer>>();
@@ -241,11 +236,12 @@ function resolveAccessRole(requestedRole: unknown, env: NodeJS.ProcessEnv = proc
   return parseRoomRole(requestedRole, "guest");
 }
 
+function getStateTokenSecret(env: NodeJS.ProcessEnv = process.env): string {
+  return env.STATE_TOKEN_SECRET ?? "dev-state-secret";
+}
+
 function encodeAccessToken(payload: RoomAccessTokenPayload, env: NodeJS.ProcessEnv = process.env): string {
-  const body = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
-  const secret = env.STATE_TOKEN_SECRET ?? "dev-state-secret";
-  const signature = createHmac("sha256", secret).update(body).digest("base64url");
-  return `${body}.${signature}`;
+  return signRoomSessionToken(payload, getStateTokenSecret(env));
 }
 
 function encodeRemoteBrowserFrameToken(payload: { roomId: string; objectId: string; executorSessionId: string; frameStreamId: string; exp: number }, env: NodeJS.ProcessEnv = process.env): string {
@@ -684,6 +680,53 @@ function isAuthorizedInternalRequest(request: IncomingMessage, env: NodeJS.Proce
   }
   const provided = request.headers["x-vrata-internal-token"] ?? request.headers["x-noah-internal-token"];
   return typeof provided === "string" && safeEqual(provided, token);
+}
+
+function getBearerToken(request: IncomingMessage): string | null {
+  const authorization = request.headers.authorization;
+  if (typeof authorization !== "string") {
+    return null;
+  }
+  const [scheme, token] = authorization.split(" ");
+  if (scheme?.toLowerCase() !== "bearer" || !token) {
+    return null;
+  }
+  return token;
+}
+
+function sessionTokenStatusCode(result: RoomSessionTokenVerificationResult): 401 | 403 {
+  if (result.ok) {
+    return 403;
+  }
+  return result.code.endsWith("_mismatch") ? 403 : 401;
+}
+
+function writeSessionTokenError(response: ServerResponse, result: RoomSessionTokenVerificationResult): void {
+  if (result.ok) {
+    return;
+  }
+  json(response, sessionTokenStatusCode(result), {
+    error: result.code === "missing_token" ? "session_token_required" : "session_token_invalid",
+    reason: result.code
+  });
+}
+
+async function resolveRoomTenantId(roomId: string): Promise<string> {
+  const storage = await storagePromise;
+  const room = await storage.getRoom(roomId);
+  return room?.tenantId ?? "demo-tenant";
+}
+
+async function verifyRoomSessionRequest(
+  request: IncomingMessage,
+  input: { roomId: string; participantId?: string; sessionToken?: string | null }
+): Promise<RoomSessionTokenVerificationResult> {
+  const tenantId = await resolveRoomTenantId(input.roomId);
+  return verifyRoomSessionToken(input.sessionToken ?? getBearerToken(request), getStateTokenSecret(), {
+    tenantId,
+    roomId: input.roomId,
+    participantId: input.participantId
+  });
 }
 
 function parseBody<T>(request: IncomingMessage): Promise<T | null> {
@@ -1233,15 +1276,23 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
 
   const presenceItemMatch = url.pathname.match(/^\/api\/rooms\/([^/]+)\/presence\/([^/]+)$/);
   if (method === "PUT" && presenceItemMatch) {
+    const roomId = decodeURIComponent(presenceItemMatch[1]);
+    const participantId = decodeURIComponent(presenceItemMatch[2]);
     const payload = await parseBody<PresenceRecord>(request);
     if (!payload) return json(response, 400, { error: "presence_payload_required" });
-    upsertPresence(decodeURIComponent(presenceItemMatch[1]), decodeURIComponent(presenceItemMatch[2]), payload);
+    const session = await verifyRoomSessionRequest(request, { roomId, participantId });
+    if (!session.ok) return writeSessionTokenError(response, session);
+    upsertPresence(roomId, participantId, payload);
     json(response, 200, { ok: true });
     return;
   }
 
   if (method === "DELETE" && presenceItemMatch) {
-    deletePresence(decodeURIComponent(presenceItemMatch[1]), decodeURIComponent(presenceItemMatch[2]));
+    const roomId = decodeURIComponent(presenceItemMatch[1]);
+    const participantId = decodeURIComponent(presenceItemMatch[2]);
+    const session = await verifyRoomSessionRequest(request, { roomId, participantId });
+    if (!session.ok) return writeSessionTokenError(response, session);
+    deletePresence(roomId, participantId);
     json(response, 200, { ok: true });
     return;
   }
@@ -1253,9 +1304,13 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   }
 
   if (method === "POST" && diagnosticsMatch) {
+    const roomId = decodeURIComponent(diagnosticsMatch[1]);
     const payload = await parseBody<RuntimeDiagnosticRecord>(request);
     if (!payload) return json(response, 400, { error: "diagnostics_payload_required" });
-    await storage.addDiagnostic(decodeURIComponent(diagnosticsMatch[1]), payload);
+    const participantId = typeof payload.participantId === "string" ? payload.participantId : undefined;
+    const session = await verifyRoomSessionRequest(request, { roomId, participantId });
+    if (!session.ok) return writeSessionTokenError(response, session);
+    await storage.addDiagnostic(roomId, payload);
     json(response, 201, { ok: true });
     return;
   }
@@ -1269,9 +1324,13 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
 
   const xrTelemetryItemMatch = url.pathname.match(/^\/api\/rooms\/([^/]+)\/xr-telemetry\/([^/]+)$/);
   if (method === "PUT" && xrTelemetryItemMatch) {
+    const roomId = decodeURIComponent(xrTelemetryItemMatch[1]);
+    const participantId = decodeURIComponent(xrTelemetryItemMatch[2]);
     const payload = await parseBody<XrTelemetryRecord>(request);
     if (!payload) return json(response, 400, { error: "xr_telemetry_payload_required" });
-    await upsertXrTelemetry(decodeURIComponent(xrTelemetryItemMatch[1]), decodeURIComponent(xrTelemetryItemMatch[2]), payload);
+    const session = await verifyRoomSessionRequest(request, { roomId, participantId });
+    if (!session.ok) return writeSessionTokenError(response, session);
+    await upsertXrTelemetry(roomId, participantId, payload);
     json(response, 200, { ok: true });
     return;
   }
@@ -1286,20 +1345,26 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   if (method === "POST" && url.pathname === "/api/tokens/state") {
     const requestPayload = await parseBody<StateTokenRequest>(request);
     const ttlSeconds = Number.parseInt(process.env.STATE_TOKEN_TTL_SECONDS ?? "900", 10);
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    const roomId = requestPayload?.roomId ?? "demo-room";
     const role = resolveAccessRole(requestPayload?.requestedRole ?? requestPayload?.role);
     const permissions = getRoomPermissions(role);
     const payload: RoomAccessTokenPayload = {
-      tenantId: requestPayload?.tenantId,
-      roomId: requestPayload?.roomId ?? "demo-room",
-      participantId: requestPayload?.participantId ?? crypto.randomUUID(),
+      tenantId: await resolveRoomTenantId(roomId),
+      roomId,
+      participantId: requestPayload?.participantId ?? randomUUID(),
       displayName: requestPayload?.displayName ?? requestPayload?.participantId ?? "Guest",
       role,
       permissions,
-      exp: Math.floor(Date.now() / 1000) + ttlSeconds
+      sessionId: randomUUID(),
+      iat: nowSeconds,
+      exp: nowSeconds + ttlSeconds,
+      jti: randomUUID()
     };
     json(response, 200, {
       token: encodeAccessToken(payload),
       expiresInSeconds: ttlSeconds,
+      sessionId: payload.sessionId,
       access: createRoomAccessDebugState(role),
       role,
       permissions
@@ -1308,16 +1373,27 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   }
 
   if (method === "POST" && url.pathname === "/api/tokens/media") {
-    const payload = (await parseBody<MediaTokenPayload>(request)) ?? { roomId: "demo-room", participantId: crypto.randomUUID(), canPublishAudio: true, canPublishVideo: false };
+    const payload = (await parseBody<MediaTokenPayload>(request)) ?? { roomId: "demo-room", participantId: randomUUID(), canPublishAudio: true, canPublishVideo: false };
+    const session = await verifyRoomSessionRequest(request, {
+      roomId: payload.roomId,
+      participantId: payload.participantId,
+      sessionToken: payload.sessionToken
+    });
+    if (!session.ok) return writeSessionTokenError(response, session);
+    const canPublishAudio = hasRoomPermission(session.payload.permissions, "audio.join") && payload.canPublishAudio !== false;
+    const canPublishVideo = Boolean(payload.canPublishVideo) && hasRoomPermission(session.payload.permissions, "screen-share.start");
+    if (!canPublishAudio && !canPublishVideo) {
+      return json(response, 403, { error: "forbidden", reason: "media_publish_not_allowed" });
+    }
     const accessToken = new AccessToken(livekitApiKey, livekitApiSecret, {
-      identity: payload.participantId,
-      name: payload.participantId,
+      identity: session.payload.participantId,
+      name: session.payload.displayName,
       ttl: `${Number.parseInt(process.env.MEDIA_TOKEN_TTL_SECONDS ?? "900", 10)}s`
     });
     accessToken.addGrant({
-      room: `${process.env.LIVEKIT_ROOM_PREFIX ?? "vrata-"}${payload.roomId}`,
+      room: `${process.env.LIVEKIT_ROOM_PREFIX ?? "vrata-"}${session.payload.roomId}`,
       roomJoin: true,
-      canPublish: payload.canPublishAudio || payload.canPublishVideo,
+      canPublish: canPublishAudio || canPublishVideo,
       canSubscribe: true
     });
     json(response, 200, {
@@ -1364,6 +1440,14 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     if (!payload?.roomId || !payload.objectId || !payload.executorSessionId || !payload.frameStreamId) {
       json(response, 400, { error: "remote_browser_frame_token_payload_required" });
       return;
+    }
+    const session = await verifyRoomSessionRequest(request, {
+      roomId: payload.roomId,
+      sessionToken: payload.sessionToken
+    });
+    if (!session.ok) return writeSessionTokenError(response, session);
+    if (!hasRoomPermission(session.payload.permissions, "surface.view")) {
+      return json(response, 403, { error: "forbidden", reason: "remote_browser_frame_not_allowed" });
     }
     const ttlSeconds = Number.parseInt(process.env.REMOTE_BROWSER_TOKEN_TTL_SECONDS ?? "300", 10);
     const token = encodeRemoteBrowserFrameToken({

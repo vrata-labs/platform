@@ -1,5 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { WebSocket } from "ws";
+
+import { getRoomPermissions } from "@vrata/shared-types";
+import { signRoomSessionToken } from "@vrata/shared-types/session-token";
 
 import {
   applyAvatarReliableState,
@@ -43,6 +47,48 @@ test("room-state readiness endpoint reports ready", async () => {
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     delete process.env.VRATA_DISABLE_AUTOSTART;
+  }
+});
+
+test("room-state websocket requires valid signed room session token in production", async () => {
+  process.env.VRATA_DISABLE_AUTOSTART = "1";
+  process.env.NODE_ENV = "production";
+  process.env.STATE_TOKEN_SECRET = "room-state-session-secret";
+  const server = startRoomStateService(4034);
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  const token = signRoomSessionToken({
+    tenantId: "demo-tenant",
+    roomId: "demo-room",
+    participantId: "p-session",
+    displayName: "Session Participant",
+    role: "host",
+    permissions: getRoomPermissions("host"),
+    sessionId: "session-1",
+    iat: nowSeconds,
+    exp: nowSeconds + 60,
+    jti: "jti-1"
+  }, "room-state-session-secret");
+
+  try {
+    const allowed = new WebSocket(`ws://127.0.0.1:4034?roomId=demo-room&participantId=p-session&accessToken=${token}`);
+    await new Promise<void>((resolve, reject) => {
+      allowed.once("open", resolve);
+      allowed.once("error", reject);
+    });
+    allowed.close();
+
+    const denied = new WebSocket(`ws://127.0.0.1:4034?roomId=demo-room&participantId=p-session&accessToken=${token.slice(0, -1)}x`);
+    const close = await new Promise<{ code: number; reason: string }>((resolve, reject) => {
+      denied.once("close", (code, reason) => resolve({ code, reason: reason.toString("utf8") }));
+      denied.once("error", reject);
+    });
+    assert.equal(close.code, 1008);
+    assert.equal(close.reason, "invalid_session_token");
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    delete process.env.VRATA_DISABLE_AUTOSTART;
+    delete process.env.NODE_ENV;
+    delete process.env.STATE_TOKEN_SECRET;
   }
 });
 
