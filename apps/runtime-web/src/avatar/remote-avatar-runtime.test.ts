@@ -1,0 +1,536 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import * as THREE from "three";
+
+import { createRemoteAvatarRuntime } from "./remote-avatar-runtime.js";
+
+function createDebugState() {
+  return {
+    remoteAvatarCount: 0,
+    remoteTargets: [] as Array<{ id: string; x: number; z: number }>,
+    remoteParticipants: [] as Array<{
+      participantId: string;
+      mode: "desktop" | "mobile" | "vr";
+      root: { x: number; y: number; z: number; yaw: number };
+      body: { x: number; y: number; z: number; yaw: number };
+      head: { x: number; y: number; z: number; yaw: number; pitch: number };
+      lastSeq: number;
+      staleMs: number;
+      updateHz: number;
+      interpolationDelayMs: number;
+      maxObservedJumpM: number;
+      muted: boolean;
+      activeAudio: boolean;
+      hasVisualEntity: boolean;
+      hasAudioNode: boolean;
+      appliedRootYaw: number;
+      appliedHeadYaw: number;
+    }>,
+    remoteAvatarReliableCount: 0,
+    remoteAvatarPoseCount: 0,
+    remoteAvatarReliableStates: [] as Array<{ participantId: string; avatarId: string; inputMode: string; updatedAt: string }>,
+    remoteAvatarPoseFrames: [] as Array<{ participantId: string; seq: number; locomotionMode: number; sentAtMs: number }>,
+    remoteAvatarParticipants: [] as Array<{
+      participantId: string;
+      avatarId: string | null;
+      inputMode: string | null;
+      presenceSeen: boolean;
+      hasReliableState: boolean;
+      hasPoseFrame: boolean;
+      leftHandVisible: boolean;
+      rightHandVisible: boolean;
+      poseBufferDepth: number;
+      droppedStaleCount: number;
+      droppedReorderCount: number;
+      lastPoseSeq: number | null;
+      poseAgeMs: number | null;
+      playbackDelayMs: number;
+      mouthAmount: number;
+      speakingActive: boolean;
+      lipsyncSourceState: "idle" | "active" | "muted" | "missing" | null;
+    }>
+  };
+}
+
+test("remote avatar runtime ingests reliable state and pose frame into debug state", () => {
+  const scene = new THREE.Scene();
+  const runtime = createRemoteAvatarRuntime({
+    scene,
+    bodyGeometry: new THREE.CapsuleGeometry(0.24, 0.8, 6, 12),
+    headGeometry: new THREE.SphereGeometry(0.18, 20, 20),
+    localParticipantId: "local"
+  });
+  const debugState = createDebugState();
+  const sentAtMs = Date.now();
+
+  runtime.ingestReliableState({
+    participantId: "remote-1",
+    avatarId: "preset-01",
+    inputMode: "desktop",
+    updatedAt: new Date(0).toISOString(),
+    audioActive: true,
+    seated: false
+  }, debugState);
+  runtime.ingestPoseFrame("remote-1", {
+    seq: 1,
+    sentAtMs,
+    flags: 0,
+    root: { x: 0, y: 0, z: 0, yaw: 0, vx: 0, vz: 0 },
+    head: { x: 0, y: 1.6, z: 0, qx: 0, qy: 0, qz: 0, qw: 1 },
+    leftHand: { x: -0.2, y: 1.2, z: 0.1, qx: 0, qy: 0, qz: 0, qw: 1, gesture: 1 },
+    rightHand: { x: 0.2, y: 1.2, z: 0.1, qx: 0, qy: 0, qz: 0, qw: 1, gesture: 1 },
+    locomotion: { mode: 1, speed: 1, angularVelocity: 0 }
+  }, debugState);
+
+  assert.equal(debugState.remoteAvatarReliableCount, 1);
+  assert.equal(debugState.remoteAvatarPoseCount, 1);
+  assert.equal(debugState.remoteAvatarReliableStates[0]?.participantId, "remote-1");
+  assert.equal(debugState.remoteAvatarPoseFrames[0]?.participantId, "remote-1");
+  const model = runtime.getParticipantModel("remote-1");
+  assert.equal(model?.reliableState?.avatarId, "preset-01");
+  assert.equal(model?.poseFrame?.seq, 1);
+  assert.equal(debugState.remoteAvatarParticipants[0]?.participantId, "remote-1");
+  assert.equal(debugState.remoteAvatarParticipants[0]?.presenceSeen, false);
+  assert.equal(debugState.remoteAvatarParticipants[0]?.hasReliableState, true);
+  assert.equal(debugState.remoteAvatarParticipants[0]?.hasPoseFrame, true);
+  assert.equal(debugState.remoteAvatarParticipants[0]?.poseBufferDepth, 1);
+  assert.equal(debugState.remoteAvatarParticipants[0]?.lastPoseSeq, 1);
+  assert.equal((debugState.remoteAvatarParticipants[0]?.playbackDelayMs ?? 0) >= 100, true);
+  assert.equal(debugState.remoteAvatarParticipants[0]?.mouthAmount, 0);
+  assert.equal(debugState.remoteAvatarParticipants[0]?.lipsyncSourceState, "idle");
+});
+
+test("remote avatar runtime stores participant lipsync debug state", () => {
+  const scene = new THREE.Scene();
+  const runtime = createRemoteAvatarRuntime({
+    scene,
+    bodyGeometry: new THREE.CapsuleGeometry(0.24, 0.8, 6, 12),
+    headGeometry: new THREE.SphereGeometry(0.18, 20, 20),
+    localParticipantId: "local"
+  });
+  const debugState = createDebugState();
+
+  runtime.setParticipantLipsync("remote-lipsync", {
+    mouthAmount: 0.4,
+    speakingActive: true,
+    sourceState: "active"
+  }, debugState);
+
+  assert.equal(debugState.remoteAvatarParticipants[0]?.participantId, "remote-lipsync");
+  assert.equal(debugState.remoteAvatarParticipants[0]?.mouthAmount, 0.4);
+  assert.equal(debugState.remoteAvatarParticipants[0]?.speakingActive, true);
+  assert.equal(debugState.remoteAvatarParticipants[0]?.lipsyncSourceState, "active");
+});
+
+test("remote avatar runtime reflects hand visibility from pose gestures", () => {
+  const scene = new THREE.Scene();
+  const runtime = createRemoteAvatarRuntime({
+    scene,
+    bodyGeometry: new THREE.CapsuleGeometry(0.24, 0.8, 6, 12),
+    headGeometry: new THREE.SphereGeometry(0.18, 20, 20),
+    localParticipantId: "local"
+  });
+  const debugState = createDebugState();
+
+  runtime.applySnapshotParticipants([{
+    participantId: "remote-2",
+    displayName: "Remote 2",
+    mode: "desktop",
+    rootTransform: { x: 1, y: 0, z: 2 },
+    bodyTransform: { x: 1, y: 0, z: 2 },
+    headTransform: { x: 1, y: 0, z: 2 },
+    muted: false,
+    activeMedia: { audio: true, screenShare: false },
+    updatedAt: new Date(0).toISOString()
+  }], debugState);
+  const sentAtMs = Date.now();
+  runtime.ingestPoseFrame("remote-2", {
+    seq: 2,
+    sentAtMs,
+    flags: 0,
+    root: { x: 1, y: 0, z: 2, yaw: 0, vx: 0, vz: 0 },
+    head: { x: 1, y: 1.6, z: 2, qx: 0, qy: 0, qz: 0, qw: 1 },
+    leftHand: { x: 0.8, y: 1.2, z: 2.1, qx: 0, qy: 0, qz: 0, qw: 1, gesture: 1 },
+    rightHand: { x: 1.2, y: 1.2, z: 2.1, qx: 0, qy: 0, qz: 0, qw: 1, gesture: 0 },
+    locomotion: { mode: 1, speed: 1, angularVelocity: 0 }
+  }, debugState);
+
+  runtime.update(0.016, debugState);
+
+  assert.equal(debugState.remoteAvatarParticipants[0]?.presenceSeen, true);
+  assert.equal(debugState.remoteAvatarParticipants[0]?.leftHandVisible, true);
+  assert.equal(debugState.remoteAvatarParticipants[0]?.rightHandVisible, false);
+});
+
+test("remote avatar runtime does not add visible direction helpers", () => {
+  const scene = new THREE.Scene();
+  const runtime = createRemoteAvatarRuntime({
+    scene,
+    bodyGeometry: new THREE.CapsuleGeometry(0.24, 0.8, 6, 12),
+    headGeometry: new THREE.SphereGeometry(0.18, 20, 20),
+    localParticipantId: "local"
+  });
+  const debugState = createDebugState();
+
+  runtime.applySnapshotParticipants([{
+    participantId: "remote-no-helper",
+    displayName: "Remote No Helper",
+    mode: "desktop",
+    rootTransform: { x: 1, y: 0, z: 2 },
+    bodyTransform: { x: 1, y: 0, z: 2 },
+    headTransform: { x: 1, y: 0, z: 2 },
+    muted: false,
+    activeMedia: { audio: false, screenShare: false },
+    updatedAt: new Date(0).toISOString()
+  }], debugState);
+
+  const hasDirectionHelper = scene.children.some((child) => {
+    if (!(child instanceof THREE.Mesh) || !(child.material instanceof THREE.MeshStandardMaterial)) {
+      return false;
+    }
+    return child.material.color.getHex() === 0x9cff8f;
+  });
+  assert.equal(hasDirectionHelper, false);
+});
+
+test("remote avatar runtime forces VR hands visible when pose frames arrive", () => {
+  const scene = new THREE.Scene();
+  const runtime = createRemoteAvatarRuntime({
+    scene,
+    bodyGeometry: new THREE.CapsuleGeometry(0.24, 0.8, 6, 12),
+    headGeometry: new THREE.SphereGeometry(0.18, 20, 20),
+    localParticipantId: "local"
+  });
+  const debugState = createDebugState();
+  runtime.ingestReliableState({
+    participantId: "remote-vr",
+    avatarId: "preset-01",
+    inputMode: "vr-controller",
+    updatedAt: new Date().toISOString(),
+    audioActive: false,
+    seated: false
+  }, debugState);
+  runtime.applySnapshotParticipants([
+    {
+      participantId: "remote-vr",
+      displayName: "Remote VR",
+      mode: "vr",
+      muted: false,
+      activeMedia: { audio: false, screenShare: false },
+      rootTransform: { x: 0, y: 0, z: 0 },
+      bodyTransform: { x: 0, y: 0, z: 0 },
+      headTransform: { x: 0, y: 1.6, z: 0 },
+      updatedAt: new Date().toISOString()
+    }
+  ] as never, debugState);
+  runtime.ingestPoseFrame("remote-vr", {
+    seq: 1,
+    sentAtMs: Date.now(),
+    flags: 0,
+    root: { x: 0, y: 0, z: 0, yaw: 0, vx: 0, vz: 0 },
+    head: { x: 0, y: 1.6, z: 0, qx: 0, qy: 0, qz: 0, qw: 1 },
+    leftHand: { x: -0.2, y: 1.2, z: 0, qx: 0, qy: 0, qz: 0, qw: 1, gesture: 0 },
+    rightHand: { x: 0.2, y: 1.2, z: 0, qx: 0, qy: 0, qz: 0, qw: 1, gesture: 0 },
+    locomotion: { mode: 1, speed: 1, angularVelocity: 0 }
+  }, debugState);
+
+  runtime.update(0.016, debugState);
+
+  assert.equal(debugState.remoteAvatarParticipants[0]?.leftHandVisible, true);
+  assert.equal(debugState.remoteAvatarParticipants[0]?.rightHandVisible, true);
+});
+
+test("remote avatar runtime applies transported head yaw independently from body yaw", () => {
+  const scene = new THREE.Scene();
+  const runtime = createRemoteAvatarRuntime({
+    scene,
+    bodyGeometry: new THREE.CapsuleGeometry(0.24, 0.8, 6, 12),
+    headGeometry: new THREE.SphereGeometry(0.18, 20, 20),
+    localParticipantId: "local"
+  });
+  const debugState = createDebugState();
+
+  runtime.ingestReliableState({
+    participantId: "remote-head-yaw",
+    avatarId: "preset-01",
+    inputMode: "vr-controller",
+    updatedAt: new Date().toISOString(),
+    audioActive: false,
+    seated: false
+  }, debugState);
+  runtime.applySnapshotParticipants([
+    {
+      participantId: "remote-head-yaw",
+      displayName: "Remote Head Yaw",
+      mode: "vr",
+      muted: false,
+      activeMedia: { audio: false, screenShare: false },
+      rootTransform: { x: 0, y: 0, z: 0 },
+      bodyTransform: { x: 0, y: 0, z: 0 },
+      headTransform: { x: 0, y: 1.6, z: 0 },
+      updatedAt: new Date().toISOString()
+    }
+  ] as never, debugState);
+  runtime.ingestPoseFrame("remote-head-yaw", {
+    seq: 1,
+    sentAtMs: Date.now(),
+    flags: 0,
+    root: { x: 0, y: 0, z: 0, yaw: 0, vx: 0, vz: 0 },
+    head: { x: 0, y: 1.6, z: 0, qx: 0, qy: Math.sin(Math.PI / 4), qz: 0, qw: Math.cos(Math.PI / 4) },
+    leftHand: { x: -0.2, y: 1.2, z: 0, qx: 0, qy: 0, qz: 0, qw: 1, gesture: 0 },
+    rightHand: { x: 0.2, y: 1.2, z: 0, qx: 0, qy: 0, qz: 0, qw: 1, gesture: 0 },
+    locomotion: { mode: 1, speed: 1, angularVelocity: 0 }
+  }, debugState);
+
+  runtime.update(0.016, debugState);
+  const head = scene.children[1] as THREE.Mesh | undefined;
+
+  assert.ok(head);
+  assert.equal(head.rotation.y > 0.5, true);
+  assert.equal(head.rotation.y < Math.PI / 2, true);
+});
+
+test("remote avatar runtime applies transported head pitch without xz drift", () => {
+  const scene = new THREE.Scene();
+  const runtime = createRemoteAvatarRuntime({
+    scene,
+    bodyGeometry: new THREE.CapsuleGeometry(0.24, 0.8, 6, 12),
+    headGeometry: new THREE.SphereGeometry(0.18, 20, 20),
+    localParticipantId: "local"
+  });
+  const debugState = createDebugState();
+  const pitch = 0.5;
+  const headQuaternion = new THREE.Quaternion().setFromEuler(new THREE.Euler(pitch, 0, 0, "YXZ"));
+
+  runtime.ingestReliableState({
+    participantId: "remote-head-pitch",
+    avatarId: "preset-01",
+    inputMode: "desktop",
+    updatedAt: new Date().toISOString(),
+    audioActive: false,
+    seated: false
+  }, debugState);
+  runtime.applySnapshotParticipants([
+    {
+      participantId: "remote-head-pitch",
+      displayName: "Remote Head Pitch",
+      mode: "desktop",
+      muted: false,
+      activeMedia: { audio: false, screenShare: false },
+      rootTransform: { x: 0, y: 0, z: 0 },
+      bodyTransform: { x: 0, y: 0, z: 0 },
+      headTransform: { x: 0, y: 1.6, z: 0 },
+      updatedAt: new Date().toISOString()
+    }
+  ] as never, debugState);
+  runtime.ingestPoseFrame("remote-head-pitch", {
+    seq: 1,
+    sentAtMs: Date.now(),
+    flags: 0,
+    root: { x: 0, y: 0, z: 0, yaw: 0, vx: 0, vz: 0 },
+    head: { x: 0, y: 1.6, z: 0, qx: headQuaternion.x, qy: headQuaternion.y, qz: headQuaternion.z, qw: headQuaternion.w },
+    leftHand: { x: -0.2, y: 1.2, z: 0, qx: 0, qy: 0, qz: 0, qw: 1, gesture: 0 },
+    rightHand: { x: 0.2, y: 1.2, z: 0, qx: 0, qy: 0, qz: 0, qw: 1, gesture: 0 },
+    locomotion: { mode: 0, speed: 0, angularVelocity: 0 }
+  }, debugState);
+
+  runtime.update(0.016, debugState);
+  const head = scene.children[1] as THREE.Mesh | undefined;
+  const participant = debugState.remoteParticipants[0];
+
+  assert.ok(head);
+  assert.equal(Number(head.position.x.toFixed(3)), 0);
+  assert.equal(Number(head.position.z.toFixed(3)), 0);
+  assert.equal(head.rotation.x > 0.2, true);
+  assert.equal(participant?.body.y, 0.92);
+  assert.equal(participant?.head.y, 1.6);
+  assert.equal((participant?.head.pitch ?? 0) > 0.2, true);
+});
+
+test("remote avatar runtime keeps last known hands visible through pose gaps", async () => {
+  const scene = new THREE.Scene();
+  const runtime = createRemoteAvatarRuntime({
+    scene,
+    bodyGeometry: new THREE.CapsuleGeometry(0.24, 0.8, 6, 12),
+    headGeometry: new THREE.SphereGeometry(0.18, 20, 20),
+    localParticipantId: "local"
+  });
+  const debugState = createDebugState();
+
+  runtime.ingestReliableState({
+    participantId: "remote-stable-hands",
+    avatarId: "preset-01",
+    inputMode: "desktop",
+    updatedAt: new Date().toISOString(),
+    audioActive: false,
+    seated: false
+  }, debugState);
+  runtime.applySnapshotParticipants([
+    {
+      participantId: "remote-stable-hands",
+      displayName: "Remote Stable Hands",
+      mode: "desktop",
+      muted: false,
+      activeMedia: { audio: false, screenShare: false },
+      rootTransform: { x: 0, y: 0, z: 0 },
+      bodyTransform: { x: 0, y: 0, z: 0 },
+      headTransform: { x: 0, y: 1.6, z: 0 },
+      updatedAt: new Date().toISOString()
+    }
+  ] as never, debugState);
+  runtime.ingestPoseFrame("remote-stable-hands", {
+    seq: 1,
+    sentAtMs: Date.now(),
+    flags: 0,
+    root: { x: 0, y: 0, z: 0, yaw: 0, vx: 0, vz: 0 },
+    head: { x: 0, y: 1.6, z: 0, qx: 0, qy: 0, qz: 0, qw: 1 },
+    leftHand: { x: -0.2, y: 1.2, z: 0, qx: 0, qy: 0, qz: 0, qw: 1, gesture: 1 },
+    rightHand: { x: 0.2, y: 1.2, z: 0, qx: 0, qy: 0, qz: 0, qw: 1, gesture: 1 },
+    locomotion: { mode: 1, speed: 1, angularVelocity: 0 }
+  }, debugState);
+
+  runtime.update(0.016, debugState);
+  await new Promise((resolve) => setTimeout(resolve, 450));
+  runtime.update(0.016, debugState);
+
+  assert.equal(debugState.remoteAvatarParticipants[0]?.leftHandVisible, true);
+  assert.equal(debugState.remoteAvatarParticipants[0]?.rightHandVisible, true);
+});
+
+test("remote avatar runtime ignores reordered pose frames", () => {
+  const scene = new THREE.Scene();
+  const runtime = createRemoteAvatarRuntime({
+    scene,
+    bodyGeometry: new THREE.CapsuleGeometry(0.24, 0.8, 6, 12),
+    headGeometry: new THREE.SphereGeometry(0.18, 20, 20),
+    localParticipantId: "local"
+  });
+  const debugState = createDebugState();
+
+  runtime.ingestPoseFrame("remote-3", {
+    seq: 5,
+    sentAtMs: 500,
+    flags: 0,
+    root: { x: 5, y: 0, z: 5, yaw: 0, vx: 0, vz: 0 },
+    head: { x: 5, y: 1.6, z: 5, qx: 0, qy: 0, qz: 0, qw: 1 },
+    leftHand: { x: 5, y: 1.2, z: 5, qx: 0, qy: 0, qz: 0, qw: 1, gesture: 1 },
+    rightHand: { x: 5, y: 1.2, z: 5, qx: 0, qy: 0, qz: 0, qw: 1, gesture: 1 },
+    locomotion: { mode: 1, speed: 1, angularVelocity: 0 }
+  }, debugState);
+  runtime.ingestPoseFrame("remote-3", {
+    seq: 4,
+    sentAtMs: 400,
+    flags: 0,
+    root: { x: 4, y: 0, z: 4, yaw: 0, vx: 0, vz: 0 },
+    head: { x: 4, y: 1.6, z: 4, qx: 0, qy: 0, qz: 0, qw: 1 },
+    leftHand: { x: 4, y: 1.2, z: 4, qx: 0, qy: 0, qz: 0, qw: 1, gesture: 1 },
+    rightHand: { x: 4, y: 1.2, z: 4, qx: 0, qy: 0, qz: 0, qw: 1, gesture: 1 },
+    locomotion: { mode: 1, speed: 1, angularVelocity: 0 }
+  }, debugState);
+
+  const model = runtime.getParticipantModel("remote-3");
+  assert.equal(model?.poseFrame?.seq, 5);
+  assert.equal(debugState.remoteAvatarParticipants[0]?.droppedReorderCount, 1);
+  assert.equal(debugState.remoteAvatarParticipants[0]?.lastPoseSeq, 5);
+});
+
+test("remote avatar runtime prefers pose root over coarse presence sample", () => {
+  const scene = new THREE.Scene();
+  const runtime = createRemoteAvatarRuntime({
+    scene,
+    bodyGeometry: new THREE.CapsuleGeometry(0.24, 0.8, 6, 12),
+    headGeometry: new THREE.SphereGeometry(0.18, 20, 20),
+    localParticipantId: "local"
+  });
+  const debugState = createDebugState();
+
+  runtime.applySnapshotParticipants([{
+    participantId: "remote-4",
+    displayName: "Remote 4",
+    mode: "desktop",
+    muted: false,
+    activeMedia: { audio: false, screenShare: false },
+    rootTransform: { x: 10, y: 0, z: 10 },
+    bodyTransform: { x: 10, y: 0, z: 10 },
+    headTransform: { x: 10, y: 1.6, z: 10 },
+    updatedAt: new Date().toISOString()
+  }], debugState as never);
+
+  runtime.ingestPoseFrame("remote-4", {
+    seq: 1,
+    sentAtMs: Date.now(),
+    flags: 0,
+    root: { x: 1, y: 0, z: 1, yaw: 0, vx: 0, vz: 0 },
+    head: { x: 1, y: 1.6, z: 1, qx: 0, qy: 0, qz: 0, qw: 1 },
+    leftHand: { x: 0.8, y: 1.2, z: 1, qx: 0, qy: 0, qz: 0, qw: 1, gesture: 1 },
+    rightHand: { x: 1.2, y: 1.2, z: 1, qx: 0, qy: 0, qz: 0, qw: 1, gesture: 1 },
+    locomotion: { mode: 1, speed: 1, angularVelocity: 0 }
+  }, debugState);
+
+  runtime.update(0.016, debugState);
+  const body = scene.children.find((item) => item instanceof THREE.Mesh) as THREE.Mesh | undefined;
+  assert.ok(body);
+  assert.equal(body.position.x < 10, true);
+  assert.equal(body.position.z < 10, true);
+});
+
+test("remote avatar pose smoothing is normalized by frame delta", () => {
+  function simulate(deltaSeconds: number, frames: number): { bodyX: number; headX: number } {
+    const scene = new THREE.Scene();
+    const runtime = createRemoteAvatarRuntime({
+      scene,
+      bodyGeometry: new THREE.CapsuleGeometry(0.24, 0.8, 6, 12),
+      headGeometry: new THREE.SphereGeometry(0.18, 20, 20),
+      localParticipantId: "local"
+    });
+    const debugState = createDebugState();
+    runtime.ingestReliableState({
+      participantId: "remote-fps",
+      avatarId: "preset-01",
+      inputMode: "desktop",
+      updatedAt: new Date().toISOString(),
+      audioActive: false,
+      seated: false
+    }, debugState);
+    runtime.applySnapshotParticipants([
+      {
+        participantId: "remote-fps",
+        displayName: "Remote FPS",
+        mode: "desktop",
+        muted: false,
+        activeMedia: { audio: false, screenShare: false },
+        rootTransform: { x: 0, y: 0, z: 0 },
+        bodyTransform: { x: 0, y: 0, z: 0 },
+        headTransform: { x: 0, y: 1.6, z: 0 },
+        updatedAt: new Date().toISOString()
+      }
+    ] as never, debugState);
+    runtime.ingestPoseFrame("remote-fps", {
+      seq: 1,
+      sentAtMs: Date.now(),
+      flags: 0,
+      root: { x: 10, y: 0, z: 0, yaw: 0, vx: 0, vz: 0 },
+      head: { x: 10, y: 1.6, z: 0, qx: 0, qy: 0, qz: 0, qw: 1 },
+      leftHand: { x: 9.8, y: 1.2, z: 0, qx: 0, qy: 0, qz: 0, qw: 1, gesture: 1 },
+      rightHand: { x: 10.2, y: 1.2, z: 0, qx: 0, qy: 0, qz: 0, qw: 1, gesture: 1 },
+      locomotion: { mode: 1, speed: 1, angularVelocity: 0 }
+    }, debugState);
+
+    for (let index = 0; index < frames; index += 1) {
+      runtime.update(deltaSeconds, debugState);
+    }
+
+    const body = scene.children[0] as THREE.Mesh | undefined;
+    const head = scene.children[1] as THREE.Mesh | undefined;
+    assert.ok(body);
+    assert.ok(head);
+    return { bodyX: body.position.x, headX: head.position.x };
+  }
+
+  const lowFps = simulate(1 / 30, 6);
+  const highFps = simulate(1 / 120, 24);
+
+  assert.ok(Math.abs(lowFps.bodyX - highFps.bodyX) < 0.001);
+  assert.ok(Math.abs(lowFps.headX - highFps.headX) < 0.001);
+  assert.ok(lowFps.bodyX > 9.9);
+});

@@ -1,0 +1,98 @@
+html, body {
+  margin: 0;
+  min-height: 100%;
+  background: linear-gradient(180deg, #f4efe8, #e5ecf5);
+  color: #1c2633;
+  font-family: "Trebuchet MS", sans-serif;
+}
+
+.page {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+.panel {
+  width: min(560px, 100%);
+  background: rgba(255, 255, 255, 0.82);
+  border: 1px solid rgba(10, 36, 64, 0.1);
+  border-radius: 20px;
+  padding: 24px;
+  box-shadow: 0 24px 50px rgba(27, 40, 66, 0.12);
+}
+
+form {
+  display: grid;
+  gap: 12px;
+}
+
+label {
+  display: grid;
+  gap: 6px;
+}
+
+input, select, button {
+  font: inherit;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(10, 36, 64, 0.15);
+}
+
+select[multiple] {
+  min-height: 120px;
+}
+
+button {
+  cursor: pointer;
+  background: #0e5bd7;
+  color: white;
+}
+
+#publish-status, #room-link {
+  margin-top: 12px;
+  display: block;
+}
+
+#rooms-list {
+  margin-top: 18px;
+  padding-left: 18px;
+}
+
+#rooms-list li {
+  margin-top: 8px;
+}
+
+#assets-list {
+  margin-top: 18px;
+  padding-left: 18px;
+}
+
+#tenants-list {
+  margin-top: 18px;
+  padding-left: 18px;
+}
+
+#tenants-list li,
+#assets-list li {
+  margin-top: 8px;
+  word-break: break-all;
+}
+
+#room-detail {
+  margin-top: 16px;
+  padding: 12px;
+  border-radius: 12px;
+  background: rgba(10, 36, 64, 0.06);
+  border: 1px solid rgba(10, 36, 64, 0.08);
+  white-space: pre-wrap;
+}
+
+#template-detail {
+  margin-top: 16px;
+  padding: 12px;
+  border-radius: 12px;
+  background: rgba(10, 36, 64, 0.04);
+  border: 1px solid rgba(10, 36, 64, 0.08);
+  white-space: pre-wrap;
+}

@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Vrata Remote Browser Media Demo</title>
+    <style>
+      body { margin: 0; min-height: 100vh; display: grid; place-items: center; font-family: system-ui, sans-serif; color: #e5e7eb; background: #020617; }
+      main { width: min(900px, calc(100vw - 48px)); padding: 28px; border: 1px solid #334155; border-radius: 24px; background: #0f172a; box-shadow: 0 24px 80px rgba(0, 0, 0, 0.35); }
+      h1 { margin: 0 0 16px; }
+      video { width: 100%; border-radius: 18px; background: #111827; }
+      button { margin-top: 16px; padding: 12px 16px; border: 0; border-radius: 12px; color: white; background: #2563eb; font: inherit; cursor: pointer; }
+      p { color: #94a3b8; }
+      canvas { display: none; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Remote Browser Media Demo</h1>
+      <p>This page exposes a real video element with video and audio tracks for remote-browser media transport tests.</p>
+      <video id="media" autoplay playsinline muted></video>
+      <button id="start-audio">Start audible tone</button>
+      <canvas id="source" width="1280" height="720"></canvas>
+    </main>
+    <script>
+      const canvas = document.querySelector('#source');
+      const context = canvas.getContext('2d');
+      const video = document.querySelector('#media');
+      const button = document.querySelector('#start-audio');
+      const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+      const audioContext = new AudioContextCtor();
+      const oscillator = audioContext.createOscillator();
+      const gain = audioContext.createGain();
+      const destination = audioContext.createMediaStreamDestination();
+
+      oscillator.frequency.value = 440;
+      gain.gain.value = 0.04;
+      oscillator.connect(gain).connect(destination);
+      oscillator.start();
+
+      let tick = 0;
+      function render() {
+        tick += 1;
+        const hue = tick % 360;
+        context.fillStyle = `hsl(${hue}, 70%, 24%)`;
+        context.fillRect(0, 0, canvas.width, canvas.height);
+        context.fillStyle = '#f8fafc';
+        context.font = 'bold 72px system-ui, sans-serif';
+        context.fillText('Remote Browser Media', 80, 150);
+        context.font = '42px system-ui, sans-serif';
+        context.fillText(new Date().toLocaleTimeString(), 80, 230);
+        context.fillStyle = '#38bdf8';
+        context.fillRect(80 + (tick * 8) % 880, 360, 240, 120);
+        requestAnimationFrame(render);
+      }
+      render();
+
+      const canvasStream = canvas.captureStream(24);
+      video.srcObject = new MediaStream([
+        ...canvasStream.getVideoTracks(),
+        ...destination.stream.getAudioTracks()
+      ]);
+      video.play().catch(() => undefined);
+
+      button.addEventListener('click', () => {
+        audioContext.resume().catch(() => undefined);
+        video.muted = false;
+        video.play().catch(() => undefined);
+        button.textContent = 'Tone playing';
+      });
+    </script>
+  </body>
+</html>

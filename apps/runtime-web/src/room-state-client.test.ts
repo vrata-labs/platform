@@ -1,0 +1,265 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+
+import {
+  connectRoomState,
+  createRoomStateUrl,
+  sendAvatarPoseFrame,
+  sendAvatarReliableState,
+  sendParticipantUpdate,
+  sendSeatClaim,
+  sendSeatRelease,
+  sendSurfaceCreateObjectCommand,
+  sendSurfaceMediaAudioCommand,
+  sendSurfacePatchObjectStateCommand,
+  sendSurfaceStopObjectCommand,
+  type RoomStateClient
+} from "./room-state-client.js";
+
+function createClient(sent: string[] = [], readyState = 1): RoomStateClient {
+  return {
+    socket: {
+      OPEN: 1,
+      readyState,
+      send(payload: string) {
+        sent.push(payload);
+      }
+    } as unknown as WebSocket,
+    close() {}
+  };
+}
+
+test("sendParticipantUpdate sends json payload when socket is open", () => {
+  const sent: string[] = [];
+  sendParticipantUpdate(createClient(sent), {
+    participantId: "p-1",
+    displayName: "Guest",
+    mode: "desktop",
+    rootTransform: { x: 0, y: 0, z: 0 },
+    muted: false,
+    activeMedia: { audio: false, screenShare: false },
+    updatedAt: new Date(0).toISOString()
+  });
+
+  assert.equal(JSON.parse(sent[0]!).type, "participant_update");
+});
+
+test("sendAvatarReliableState sends reliable state envelope", () => {
+  const sent: string[] = [];
+  sendAvatarReliableState(createClient(sent), {
+    participantId: "p-1",
+    avatarId: "preset-01",
+    recipeVersion: 1,
+    inputMode: "desktop",
+    seated: false,
+    muted: false,
+    audioActive: true,
+    updatedAt: new Date(0).toISOString()
+  });
+
+  const payload = JSON.parse(sent[0]!);
+  assert.equal(payload.type, "avatar_reliable_state");
+  assert.equal(payload.reliableState.avatarId, "preset-01");
+});
+
+test("sendAvatarPoseFrame sends pose frame envelope", () => {
+  const sent: string[] = [];
+  sendAvatarPoseFrame(createClient(sent), "p-1", {
+    seq: 1,
+    sentAtMs: 1,
+    flags: 0,
+    root: { x: 0, y: 0, z: 0, yaw: 0, vx: 0, vz: 0 },
+    head: { x: 0, y: 1.6, z: 0, qx: 0, qy: 0, qz: 0, qw: 1 },
+    leftHand: { x: 0, y: 0, z: 0, qx: 0, qy: 0, qz: 0, qw: 1, gesture: 0 },
+    rightHand: { x: 0, y: 0, z: 0, qx: 0, qy: 0, qz: 0, qw: 1, gesture: 0 },
+    locomotion: { mode: 1, speed: 1, angularVelocity: 0 }
+  });
+
+  const payload = JSON.parse(sent[0]!);
+  assert.equal(payload.type, "avatar_pose_preview");
+  assert.equal(payload.participantId, "p-1");
+  assert.equal(payload.poseFrame.locomotion.mode, 1);
+});
+
+test("avatar sends are skipped when socket is not open", () => {
+  const sent: string[] = [];
+  sendAvatarReliableState(createClient(sent, 0), {
+    participantId: "p-1",
+    avatarId: "preset-01",
+    recipeVersion: 1,
+    inputMode: "desktop",
+    seated: false,
+    muted: false,
+    audioActive: true,
+    updatedAt: new Date(0).toISOString()
+  });
+
+  assert.deepEqual(sent, []);
+});
+
+test("seat claim and release send envelopes", () => {
+  const sent: string[] = [];
+  const client = createClient(sent);
+
+  sendSeatClaim(client, "seat-a");
+  sendSeatRelease(client, "seat-a");
+
+  assert.equal(JSON.parse(sent[0]!).type, "seat_claim");
+  assert.equal(JSON.parse(sent[0]!).seatId, "seat-a");
+  assert.equal(JSON.parse(sent[1]!).type, "seat_release");
+});
+
+test("room-state url includes access token when provided", () => {
+  const url = createRoomStateUrl("ws://example.test/state", "room-1", "p-1", "token.123");
+  assert.equal(url, "ws://example.test/state?roomId=room-1&participantId=p-1&accessToken=token.123");
+});
+
+test("surface create command sends privileged envelope", () => {
+  const sent: string[] = [];
+  sendSurfaceCreateObjectCommand(createClient(sent));
+  assert.equal(JSON.parse(sent[0]!).type, "surface_create_object");
+  assert.equal(JSON.parse(sent[0]!).probeOnly, true);
+});
+
+test("media object commands send object lifecycle envelopes", () => {
+  const sent: string[] = [];
+  const client = createClient(sent);
+
+  sendSurfaceCreateObjectCommand(client, { commandId: "cmd-create", surfaceId: "debug-main", objectType: "surface-test-card", probeOnly: false });
+  sendSurfaceCreateObjectCommand(client, { commandId: "cmd-create-share", surfaceId: "debug-main", objectType: "screen-share", probeOnly: false });
+  sendSurfaceMediaAudioCommand(client, { commandId: "cmd-audio", surfaceId: "debug-main", enabled: true });
+  sendSurfacePatchObjectStateCommand(client, {
+    commandId: "cmd-patch",
+    surfaceId: "debug-main",
+    objectId: "obj-1",
+    expectedRevision: 0,
+    patch: { type: "increment-click-count", inputEventId: "p-1:1" }
+  });
+  sendSurfaceStopObjectCommand(client, { commandId: "cmd-stop", surfaceId: "debug-main", objectId: "obj-1" });
+
+  assert.equal(JSON.parse(sent[0]!).probeOnly, false);
+  assert.equal(JSON.parse(sent[0]!).objectType, "surface-test-card");
+  assert.equal(JSON.parse(sent[1]!).objectType, "screen-share");
+  assert.equal(JSON.parse(sent[2]!).type, "surface_set_media_audio");
+  assert.equal(JSON.parse(sent[2]!).enabled, true);
+  assert.equal(JSON.parse(sent[3]!).type, "surface_patch_object_state");
+  assert.equal(JSON.parse(sent[3]!).expectedRevision, 0);
+  assert.equal(JSON.parse(sent[4]!).type, "surface_stop_object");
+});
+
+test("connectRoomState routes inbound avatar reliable state, pose frame and seat claim result", async () => {
+  const listeners = new Map<string, Array<(event: { data?: string }) => void>>();
+  class FakeWebSocket {
+    static instances: FakeWebSocket[] = [];
+    OPEN = 1;
+    readyState = 1;
+    url: string;
+    constructor(url: string) {
+      this.url = url;
+      FakeWebSocket.instances.push(this);
+    }
+    addEventListener(type: string, listener: (event: { data?: string }) => void) {
+      const current = listeners.get(type) ?? [];
+      current.push(listener);
+      listeners.set(type, current);
+    }
+    send() {}
+    close() {}
+    emit(type: string, event: { data?: string }) {
+      for (const listener of listeners.get(type) ?? []) {
+        listener(event);
+      }
+    }
+  }
+
+  const originalWebSocket = globalThis.WebSocket;
+  globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket;
+
+    try {
+      let reliableAvatarId: string | null = null;
+      let poseSeq: number | null = null;
+      let acceptedSeatId: string | null = null;
+      let deniedPermission: string | null = null;
+      connectRoomState("ws://example.test/room-state", "room-1", "p-1", {
+        onRoomState() {},
+        onAvatarReliableState(state) {
+          reliableAvatarId = state.avatarId;
+        },
+        onAvatarPoseFrame(_participantId, frame) {
+          poseSeq = frame.seq;
+        },
+        onSeatClaimResult(result) {
+          if (result.accepted) {
+            acceptedSeatId = result.seatId;
+          }
+        },
+        onAccessDenied(result) {
+          deniedPermission = result.permission;
+        },
+        onError(error) {
+          throw error;
+        }
+    });
+
+    const socket = FakeWebSocket.instances[0]!;
+    socket.emit("message", {
+      data: JSON.stringify({
+        type: "avatar_reliable_state",
+        reliableState: {
+          participantId: "p-2",
+          avatarId: "preset-02",
+          recipeVersion: 1,
+          inputMode: "desktop",
+          seated: false,
+          muted: false,
+          audioActive: true,
+          updatedAt: new Date(0).toISOString()
+        }
+      })
+    });
+    socket.emit("message", {
+      data: JSON.stringify({
+        type: "avatar_pose_preview",
+        participantId: "p-2",
+        poseFrame: {
+          seq: 9,
+          sentAtMs: 100,
+          flags: 0,
+          root: { x: 0, y: 0, z: 0, yaw: 0, vx: 0, vz: 0 },
+          head: { x: 0, y: 1.6, z: 0, qx: 0, qy: 0, qz: 0, qw: 1 },
+          leftHand: { x: 0, y: 0, z: 0, qx: 0, qy: 0, qz: 0, qw: 1, gesture: 0 },
+          rightHand: { x: 0, y: 0, z: 0, qx: 0, qy: 0, qz: 0, qw: 1, gesture: 0 },
+          locomotion: { mode: 1, speed: 1, angularVelocity: 0 }
+        }
+      })
+    });
+    socket.emit("message", {
+      data: JSON.stringify({
+        type: "seat_claim_result",
+        seatClaimResult: {
+          seatId: "seat-a",
+          accepted: true,
+          occupantId: "p-1",
+          previousSeatId: null
+        }
+      })
+    });
+    socket.emit("message", {
+      data: JSON.stringify({
+        type: "access_denied",
+        result: {
+          accepted: false,
+          permission: "surface.create-object",
+          role: "guest"
+        }
+      })
+    });
+
+    assert.equal(reliableAvatarId, "preset-02");
+    assert.equal(poseSeq, 9);
+    assert.equal(acceptedSeatId, "seat-a");
+    assert.equal(deniedPermission, "surface.create-object");
+  } finally {
+    globalThis.WebSocket = originalWebSocket;
+  }
+});

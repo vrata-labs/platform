@@ -1,0 +1,26 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+
+import { resolveAvatarViewProfile, resolveSelfAvatarVisibility } from "./avatar-visibility.js";
+
+test("resolveSelfAvatarVisibility hides body in vr", () => {
+  assert.equal(resolveSelfAvatarVisibility({ inputMode: "vr-controller", xrPresenting: true }), "hands-only");
+});
+
+test("resolveSelfAvatarVisibility keeps hands only on desktop", () => {
+  assert.equal(resolveSelfAvatarVisibility({ inputMode: "desktop", xrPresenting: false }), "hands-only");
+});
+
+test("resolveSelfAvatarVisibility keeps hands only on mobile", () => {
+  assert.equal(resolveSelfAvatarVisibility({ inputMode: "mobile", xrPresenting: false }), "hands-only");
+});
+
+test("resolveSelfAvatarVisibility returns hidden during fallback", () => {
+  assert.equal(resolveSelfAvatarVisibility({ inputMode: "mobile", xrPresenting: false, fallbackActive: true }), "hidden");
+});
+
+test("resolveAvatarViewProfile returns mobile pose profile", () => {
+  const profile = resolveAvatarViewProfile({ inputMode: "mobile", xrPresenting: false });
+  assert.equal(profile.visibility, "hands-only");
+  assert.equal(profile.poseProfile.handHeight, 1.02);
+});

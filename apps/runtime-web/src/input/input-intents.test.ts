@@ -1,0 +1,131 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+
+import {
+  resolveDesktopTouchInputIntents,
+  resolveTouchControlZone,
+  resolveTouchDragMoveVector,
+  resolveTouchMoveVector,
+  resolveXrConfirmInteractionIntent,
+  resolveXrInputIntents
+} from "./input-intents.js";
+
+test("xr ray intent suppresses diagonal snap-turn", () => {
+  const resolved = resolveXrInputIntents({
+    axes: { moveX: 0, moveY: 0, turnX: -0.8, turnY: -0.6 },
+    triggerPressed: false,
+    rayVisibleLatched: true
+  });
+
+  assert.equal(resolved.intents.aimRay, true);
+  assert.equal(resolved.intents.snapTurn.axis, 0);
+});
+
+test("xr horizontal stick remains snap-turn when ray intent is inactive", () => {
+  const resolved = resolveXrInputIntents({
+    axes: { moveX: 0, moveY: 0, turnX: -0.8, turnY: -0.1 },
+    triggerPressed: false,
+    rayVisibleLatched: false
+  });
+
+  assert.equal(resolved.intents.aimRay, false);
+  assert.equal(resolved.intents.snapTurn.axis, -0.8);
+});
+
+test("xr trigger becomes confirm interaction intent without side effects", () => {
+  const resolved = resolveXrInputIntents({
+    axes: { moveX: 0, moveY: 0, turnX: 0, turnY: 0 },
+    triggerPressed: true,
+    rayVisibleLatched: false
+  });
+
+  assert.equal(resolved.intents.confirmInteraction, true);
+  assert.deepEqual(resolved.intents.move, { x: 0, z: 0 });
+});
+
+test("xr select event becomes confirm intent without a gamepad button edge", () => {
+  assert.equal(resolveXrConfirmInteractionIntent({
+    triggerPressed: false,
+    triggerPressedLastFrame: false,
+    selectEventPending: true
+  }), true);
+});
+
+test("xr held trigger does not repeat confirm intent without a new edge", () => {
+  assert.equal(resolveXrConfirmInteractionIntent({
+    triggerPressed: true,
+    triggerPressedLastFrame: true,
+    selectEventPending: false
+  }), false);
+});
+
+test("xr trigger rising edge becomes confirm intent", () => {
+  assert.equal(resolveXrConfirmInteractionIntent({
+    triggerPressed: true,
+    triggerPressedLastFrame: false,
+    selectEventPending: false
+  }), true);
+});
+
+test("desktop input intents convert keyboard state into move intent", () => {
+  const intents = resolveDesktopTouchInputIntents({
+    keys: { KeyW: true, KeyD: true },
+    touchActive: false,
+    touchVector: { x: 0, z: 0 }
+  });
+
+  assert.equal(intents.source, "desktop");
+  assert.deepEqual(intents.move, { x: 1, z: -1 });
+  assert.equal(intents.aimRay, false);
+  assert.equal(intents.confirmInteraction, false);
+});
+
+test("touch input intents combine touch vector with keyboard state", () => {
+  const intents = resolveDesktopTouchInputIntents({
+    keys: { ArrowLeft: true },
+    touchActive: true,
+    touchVector: { x: 0.25, z: 0.5 }
+  });
+
+  assert.equal(intents.source, "touch");
+  assert.deepEqual(intents.move, { x: -0.75, z: 0.5 });
+});
+
+test("touch move vector normalizes viewport position and clamps edges", () => {
+  assert.deepEqual(resolveTouchMoveVector({
+    clientX: 75,
+    clientY: 25,
+    viewportWidth: 100,
+    viewportHeight: 100
+  }), { x: 0.5, z: -0.5 });
+
+  assert.deepEqual(resolveTouchMoveVector({
+    clientX: 500,
+    clientY: -200,
+    viewportWidth: 100,
+    viewportHeight: 100
+  }), { x: 1, z: -1 });
+});
+
+test("touch control zone splits mobile screen into move and look halves", () => {
+  assert.equal(resolveTouchControlZone({ clientX: 120, viewportWidth: 390 }), "move");
+  assert.equal(resolveTouchControlZone({ clientX: 300, viewportWidth: 390 }), "look");
+});
+
+test("touch drag move vector uses drag direction from touch start", () => {
+  assert.deepEqual(resolveTouchDragMoveVector({
+    startClientX: 100,
+    startClientY: 300,
+    clientX: 145,
+    clientY: 255,
+    radiusPx: 90
+  }), { x: 0.5, z: -0.5 });
+
+  assert.deepEqual(resolveTouchDragMoveVector({
+    startClientX: 100,
+    startClientY: 300,
+    clientX: -100,
+    clientY: 600,
+    radiusPx: 90
+  }), { x: -1, z: 1 });
+});

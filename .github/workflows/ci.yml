@@ -1,0 +1,92 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Build
+        run: pnpm build
+
+      - name: Self-host compose config
+        run: docker compose --env-file infra/docker/.env.selfhost.example -f infra/docker/compose.selfhost.yml config
+
+      - name: Test
+        run: pnpm test
+
+      - name: Install Playwright browser
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: E2E
+        env:
+          PLAYWRIGHT_REPORT_NAME: local-e2e
+        run: pnpm test:e2e
+
+      - name: M0.5 acceptance
+        env:
+          PLAYWRIGHT_REPORT_NAME: local-m0-5
+        run: pnpm run test:m0.5
+
+      - name: Upload Playwright artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-local-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: ignore
+          path: |
+            playwright-report/
+            test-results/
+
+  asset-validation:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build asset pipeline
+        run: pnpm --filter @vrata/asset-pipeline build
+
+      - name: Asset pipeline tests
+        run: pnpm --filter @vrata/asset-pipeline test
+
+      - name: Asset validator sample run
+        run: pnpm --filter @vrata/asset-pipeline validate:sample

@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "sceneId": "compose-demo-smoke",
+  "label": "Compose Demo Smoke",
+  "source": "selfhost-bootstrap-inline-fixture",
+  "glbPath": "data:model/gltf+json,%7B%22asset%22%3A%7B%22version%22%3A%222.0%22%7D%2C%22scene%22%3A0%2C%22scenes%22%3A%5B%7B%22nodes%22%3A%5B0%5D%7D%5D%2C%22nodes%22%3A%5B%7B%22mesh%22%3A0%7D%5D%2C%22meshes%22%3A%5B%7B%22primitives%22%3A%5B%7B%22attributes%22%3A%7B%22POSITION%22%3A0%7D%2C%22indices%22%3A1%7D%5D%7D%5D%2C%22buffers%22%3A%5B%7B%22uri%22%3A%22data%3Aapplication%2Foctet-stream%3Bbase64%2CAACAvwAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAAEAAAAAAAAABAAIAAAA%3D%22%2C%22byteLength%22%3A44%7D%5D%2C%22bufferViews%22%3A%5B%7B%22buffer%22%3A0%2C%22byteOffset%22%3A0%2C%22byteLength%22%3A36%2C%22target%22%3A34962%7D%2C%7B%22buffer%22%3A0%2C%22byteOffset%22%3A36%2C%22byteLength%22%3A6%2C%22target%22%3A34963%7D%5D%2C%22accessors%22%3A%5B%7B%22bufferView%22%3A0%2C%22componentType%22%3A5126%2C%22count%22%3A3%2C%22type%22%3A%22VEC3%22%2C%22min%22%3A%5B-1%2C0%2C0%5D%2C%22max%22%3A%5B1%2C2%2C0%5D%7D%2C%7B%22bufferView%22%3A1%2C%22componentType%22%3A5123%2C%22count%22%3A3%2C%22type%22%3A%22SCALAR%22%2C%22min%22%3A%5B0%5D%2C%22max%22%3A%5B2%5D%7D%5D%7D",
+  "spawn": {
+    "position": {
+      "x": 0,
+      "y": 1.6,
+      "z": 4
+    },
+    "lookAt": {
+      "x": 0,
+      "y": 1.6,
+      "z": 0
+    }
+  }
+}

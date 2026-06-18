@@ -1,0 +1,80 @@
+{
+  "schemaVersion": 1,
+  "catalogId": "technical-avatar-catalog-v1",
+  "assetVersion": "v1",
+  "rig": "humanoid-v1",
+  "packUrl": "/assets/avatars/avatar-pack.v1.glb",
+  "packFormat": "procedural-debug-v1",
+  "presets": [
+    {
+      "avatarId": "preset-01",
+      "label": "North",
+      "recipeId": "preset-01",
+      "thumbnailUrl": "/assets/avatars/thumbs/preset-01.webp",
+      "validation": { "triangleCount": 11800, "materialCount": 1, "textureCount": 1, "morphTargets": ["blink", "viseme-aa"], "animationClips": ["idle"], "skeletonSignature": "humanoid-v1/base" }
+    },
+    {
+      "avatarId": "preset-02",
+      "label": "Orbit",
+      "recipeId": "preset-02",
+      "thumbnailUrl": "/assets/avatars/thumbs/preset-02.webp",
+      "validation": { "triangleCount": 11920, "materialCount": 1, "textureCount": 1, "morphTargets": ["blink", "viseme-aa"], "animationClips": ["idle"], "skeletonSignature": "humanoid-v1/base" }
+    },
+    {
+      "avatarId": "preset-03",
+      "label": "Beacon",
+      "recipeId": "preset-03",
+      "thumbnailUrl": "/assets/avatars/thumbs/preset-03.webp",
+      "validation": { "triangleCount": 12010, "materialCount": 1, "textureCount": 1, "morphTargets": ["blink", "viseme-aa"], "animationClips": ["idle"], "skeletonSignature": "humanoid-v1/base" }
+    },
+    {
+      "avatarId": "preset-04",
+      "label": "Canvas",
+      "recipeId": "preset-04",
+      "thumbnailUrl": "/assets/avatars/thumbs/preset-04.webp",
+      "validation": { "triangleCount": 11650, "materialCount": 1, "textureCount": 1, "morphTargets": ["blink", "viseme-aa"], "animationClips": ["idle"], "skeletonSignature": "humanoid-v1/base" }
+    },
+    {
+      "avatarId": "preset-05",
+      "label": "Signal",
+      "recipeId": "preset-05",
+      "thumbnailUrl": "/assets/avatars/thumbs/preset-05.webp",
+      "validation": { "triangleCount": 11740, "materialCount": 1, "textureCount": 1, "morphTargets": ["blink", "viseme-aa"], "animationClips": ["idle"], "skeletonSignature": "humanoid-v1/base" }
+    },
+    {
+      "avatarId": "preset-06",
+      "label": "Harbor",
+      "recipeId": "preset-06",
+      "thumbnailUrl": "/assets/avatars/thumbs/preset-06.webp",
+      "validation": { "triangleCount": 11980, "materialCount": 1, "textureCount": 1, "morphTargets": ["blink", "viseme-aa"], "animationClips": ["idle"], "skeletonSignature": "humanoid-v1/base" }
+    },
+    {
+      "avatarId": "preset-07",
+      "label": "Pulse",
+      "recipeId": "preset-07",
+      "thumbnailUrl": "/assets/avatars/thumbs/preset-07.webp",
+      "validation": { "triangleCount": 11860, "materialCount": 1, "textureCount": 1, "morphTargets": ["blink", "viseme-aa"], "animationClips": ["idle"], "skeletonSignature": "humanoid-v1/base" }
+    },
+    {
+      "avatarId": "preset-08",
+      "label": "Studio",
+      "recipeId": "preset-08",
+      "thumbnailUrl": "/assets/avatars/thumbs/preset-08.webp",
+      "validation": { "triangleCount": 12100, "materialCount": 1, "textureCount": 1, "morphTargets": ["blink", "viseme-aa"], "animationClips": ["idle"], "skeletonSignature": "humanoid-v1/base" }
+    },
+    {
+      "avatarId": "preset-09",
+      "label": "Summit",
+      "recipeId": "preset-09",
+      "thumbnailUrl": "/assets/avatars/thumbs/preset-09.webp",
+      "validation": { "triangleCount": 11590, "materialCount": 1, "textureCount": 1, "morphTargets": ["blink", "viseme-aa"], "animationClips": ["idle"], "skeletonSignature": "humanoid-v1/base" }
+    },
+    {
+      "avatarId": "preset-10",
+      "label": "Current",
+      "recipeId": "preset-10",
+      "thumbnailUrl": "/assets/avatars/thumbs/preset-10.webp",
+      "validation": { "triangleCount": 11910, "materialCount": 1, "textureCount": 1, "morphTargets": ["blink", "viseme-aa"], "animationClips": ["idle"], "skeletonSignature": "humanoid-v1/base" }
+    }
+  ]
+}
