@@ -8,7 +8,7 @@ Three source dependencies made private scene deployments rebuild or checkout the
 
 - Runtime media surface placement was source-only. Moving the main screen, hiding fallback whiteboard/laptop planes, or matching a screen to a GLB frame required editing `apps/runtime-web/src/main.ts` and rebuilding `@vrata/runtime-web` inside the API image.
 - The self-host compose file mixed release image references with local `build:` blocks for `api`, `room-state`, and `remote-browser`, so `docker compose up` still expected platform sources.
-- Caddy mounted `../../apps/runtime-web/public` from the source tree even though the release API image already contains the runtime app. Private scene assets only need a static mount at `/assets/scenes`.
+- Caddy mounted `../../apps/runtime-web/public` from the source tree even though the release API image already contains the runtime app. Private scene assets need an API upload path into object storage, not a platform source checkout or baked Docker image.
 
 ## Image-Only Requirements
 
@@ -18,8 +18,8 @@ A Docker-image-only deployment needs only these inputs:
 - `infra/docker/Caddyfile.selfhost`.
 - `infra/docker/minio-bootstrap.sh` and `infra/docker/minio-scene-smoke.json` for the default MinIO bootstrap path.
 - An env file based on `infra/docker/.env.selfhost.example` with non-placeholder secrets and a release `IMAGE_TAG`.
-- A private scene-assets directory mounted through `VRATA_SCENE_ASSETS_DIR` when serving same-origin scene bundles through Caddy.
-- Scene bundle metadata registered through the control-plane API or equivalent automation.
+- Scene bundle files uploaded through the control-plane API into the configured MinIO/S3-compatible provider.
+- Scene bundle metadata registered through the control-plane API or equivalent automation after upload.
 
 No `apps/`, `packages/`, `pnpm`, TypeScript compiler, or local Docker build context is required for this path.
 
@@ -36,7 +36,7 @@ Edit `.env.selfhost`:
 - replace every `CHANGE_ME` value;
 - set `IMAGE_TAG` to the published release tag;
 - set browser-reachable `VRATA_APP_BASE_URL`, `ROOM_STATE_PUBLIC_URL`, `LIVEKIT_URL`, and `REMOTE_BROWSER_PUBLIC_URL`;
-- set `VRATA_SCENE_ASSETS_DIR` to a directory containing scene bundle folders such as `old-room-v1/scene.json` and `old-room-v1/scene.glb`.
+- set `MINIO_PUBLIC_BASE_URL` to a browser-reachable base URL for uploaded scene bundles. For same-origin local evaluation, use `$VRATA_APP_BASE_URL/scene-bundles` and keep the `/scene-bundles/*` Caddy proxy enabled.
 
 Then run:
 
@@ -50,8 +50,34 @@ Smoke checks:
 ```bash
 curl -fsS "$VRATA_APP_BASE_URL/health"
 curl -fsS "$VRATA_APP_BASE_URL/control-plane"
-curl -fsS "$VRATA_APP_BASE_URL/assets/scenes/<scene-id>/scene.json"
 ```
+
+## Scene Upload Flow
+
+Upload each file with a raw request body and the control-plane admin token:
+
+```bash
+curl -fsS -X PUT \
+  -H "x-vrata-admin-token: $CONTROL_PLANE_ADMIN_TOKEN" \
+  -H "content-type: model/gltf-binary" \
+  --data-binary @scene.glb \
+  "$VRATA_APP_BASE_URL/api/scene-bundles/old-room/versions/v1/files/scene.glb"
+```
+
+The upload endpoint writes to the configured provider under:
+
+```text
+scenes/<bundleId>/<version>/<relative-file-path>
+```
+
+After uploading `scene.json`, create the scene bundle version with the returned `storageKey`, `publicUrl`, `checksum`, `sizeBytes`, `contentType`, and `provider`, then bind the room through:
+
+```text
+POST /api/scene-bundles/<bundleId>/versions
+POST /api/rooms/<roomId>/bind-scene-bundle
+```
+
+For VR/headset usage, make sure the returned `publicUrl` is HTTPS. The default self-host Caddy config supports this by proxying `/scene-bundles/*` to MinIO, so a stage deployment can set `MINIO_PUBLIC_BASE_URL=https://<stage-domain>/scene-bundles`.
 
 ## Scene Bundle Responsibilities
 
@@ -61,6 +87,6 @@ The platform image must stay generic. Private scene repositories own:
 - `scene.json` metadata;
 - attribution and license notes;
 - scene-specific surface placement and anchors when supported by the scene bundle contract;
-- registration scripts that bind the scene bundle version to a room.
+- upload/registration scripts that publish files through the API and bind the scene bundle version to a room.
 
 This keeps the public platform image free of proprietary assets while still allowing private rooms to use the published runtime image.

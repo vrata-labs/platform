@@ -9,7 +9,10 @@ import { AccessToken } from "livekit-server-sdk";
 import { createRoomAccessDebugState, getRoomPermissions, parseRoomRole, type RoomPermission, type RoomRole } from "@vrata/shared-types";
 
 import {
+  normalizeSceneBundleRelativePath,
+  resolveSceneBundleStorageKey,
   resolveSceneBundlePublicUrl,
+  uploadSceneBundleObject,
   type SceneBundleCreateInput,
   type SceneBundleRecord,
   type SceneBundleProvider
@@ -207,6 +210,7 @@ const controlPlaneAdminToken = process.env.CONTROL_PLANE_ADMIN_TOKEN ?? "";
 const presenceTtlMs = Number.parseInt(process.env.PRESENCE_TTL_MS ?? "15000", 10);
 const storagePromise = createStorage();
 const requiredProductionApiEnvVars = ["CONTROL_PLANE_ADMIN_TOKEN", "ROOM_STATE_PUBLIC_URL", "RUNTIME_BASE_URL"] as const;
+const defaultSceneBundleUploadMaxBytes = 256 * 1024 * 1024;
 
 const presenceByRoom = new Map<string, Map<string, PresenceRecord>>();
 const xrTelemetryByRoom = new Map<string, Map<string, XrTelemetryParticipantBuffer>>();
@@ -710,6 +714,59 @@ function parseBody<T>(request: IncomingMessage): Promise<T | null> {
   });
 }
 
+function getSceneBundleUploadMaxBytes(env: NodeJS.ProcessEnv = process.env): number {
+  const configured = Number.parseInt(env.SCENE_BUNDLE_UPLOAD_MAX_BYTES ?? "", 10);
+  return Number.isFinite(configured) && configured > 0 ? configured : defaultSceneBundleUploadMaxBytes;
+}
+
+function parseContentLength(request: IncomingMessage): number | null {
+  const value = request.headers["content-length"];
+  if (typeof value !== "string") return null;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+}
+
+function readRawBody(request: IncomingMessage, maxBytes: number): Promise<Buffer> {
+  const contentLength = parseContentLength(request);
+  if (contentLength !== null && contentLength > maxBytes) {
+    request.destroy();
+    return Promise.reject(new Error("payload_too_large"));
+  }
+
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let bytes = 0;
+    request.on("data", (chunk) => {
+      const buffer = Buffer.from(chunk);
+      bytes += buffer.byteLength;
+      if (bytes > maxBytes) {
+        reject(new Error("payload_too_large"));
+        request.destroy();
+        return;
+      }
+      chunks.push(buffer);
+    });
+    request.on("end", () => resolve(Buffer.concat(chunks)));
+    request.on("error", reject);
+  });
+}
+
+function inferSceneBundleContentType(request: IncomingMessage, relativePath: string): string {
+  const rawContentType = request.headers["content-type"];
+  if (typeof rawContentType === "string" && rawContentType.trim()) {
+    return rawContentType.split(";")[0].trim() || "application/octet-stream";
+  }
+
+  if (/\.json$/i.test(relativePath)) return "application/json";
+  if (/\.glb$/i.test(relativePath)) return "model/gltf-binary";
+  if (/\.gltf$/i.test(relativePath)) return "model/gltf+json";
+  if (/\.md$/i.test(relativePath)) return "text/markdown; charset=utf-8";
+  if (/\.png$/i.test(relativePath)) return "image/png";
+  if (/\.jpe?g$/i.test(relativePath)) return "image/jpeg";
+  if (/\.webp$/i.test(relativePath)) return "image/webp";
+  return "application/octet-stream";
+}
+
 function validateRoomInput(input: Partial<RoomRecord>, templateIds: Set<string>, tenantIds: Set<string>): string | null {
   if (!input.name || input.name.trim().length < 3 || input.name.trim().length > 80) {
     return "invalid_room_name";
@@ -974,6 +1031,42 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   if (method === "GET" && sceneBundleVersionsMatch) {
     json(response, 200, { items: await storage.listSceneBundleVersions(decodeURIComponent(sceneBundleVersionsMatch[1])) });
     return;
+  }
+
+  const sceneBundleFileUploadMatch = url.pathname.match(/^\/api\/scene-bundles\/([^/]+)\/versions\/([^/]+)\/files\/(.+)$/);
+  if ((method === "PUT" || method === "POST") && sceneBundleFileUploadMatch) {
+    if (!isAuthorizedControlPlaneRequest(request)) return json(response, 403, { error: "forbidden" });
+
+    try {
+      const bundleId = decodeURIComponent(sceneBundleFileUploadMatch[1]);
+      const version = decodeURIComponent(sceneBundleFileUploadMatch[2]);
+      const relativePath = normalizeSceneBundleRelativePath(decodeURIComponent(sceneBundleFileUploadMatch[3]));
+      const providerParam = url.searchParams.get("provider") as SceneBundleProvider | null;
+      const provider = providerParam ?? ((process.env.SCENE_BUNDLE_PROVIDER as SceneBundleProvider | undefined) ?? "minio-default");
+      if (provider !== "minio-default" && provider !== "s3-compatible") {
+        return json(response, 400, { error: "invalid_scene_bundle_provider" });
+      }
+
+      const body = await readRawBody(request, getSceneBundleUploadMaxBytes());
+      const storageKey = resolveSceneBundleStorageKey(bundleId, version, relativePath);
+      const uploaded = await uploadSceneBundleObject({
+        storageKey,
+        body,
+        contentType: inferSceneBundleContentType(request, relativePath),
+        provider
+      });
+      json(response, 201, {
+        ...uploaded,
+        bundleId,
+        version,
+        relativePath
+      });
+      return;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "scene_bundle_upload_failed";
+      json(response, message === "payload_too_large" ? 413 : 400, { error: message });
+      return;
+    }
   }
 
   const roomSpacesMatch = url.pathname.match(/^\/api\/rooms\/([^/]+)\/spaces$/);

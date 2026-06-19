@@ -6,5 +6,12 @@
     file_server
   }
 
+  handle /scene-bundles/* {
+    uri strip_prefix /scene-bundles
+    header Access-Control-Allow-Origin *
+    header Cache-Control "no-cache, must-revalidate"
+    reverse_proxy minio:9000
+  }
+
   reverse_proxy api:4000
 }
