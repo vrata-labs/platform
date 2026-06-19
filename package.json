@@ -24,6 +24,12 @@
     "test:e2e:staging": "BASE_URL=\"${BASE_URL:-https://158.160.10.234.sslip.io}\" PLAYWRIGHT_NO_WEB_SERVER=1 playwright test --grep @staging",
     "test:e2e:rutube": "BASE_URL=\"${BASE_URL:-https://158.160.10.234.sslip.io}\" PLAYWRIGHT_NO_WEB_SERVER=1 playwright test --grep @rutube --workers=1",
     "validate:production-config": "node tools/validate-production-config.mjs",
+    "backup:compose": "node tools/backup-restore.mjs backup",
+    "backup:validate": "node tools/backup-restore.mjs validate",
+    "restore:compose": "node tools/backup-restore.mjs restore",
+    "rollback:compose": "node tools/backup-restore.mjs rollback",
+    "smoke:compose": "node tools/backup-restore.mjs smoke",
+    "backup:prune": "node tools/backup-restore.mjs prune",
     "xr:telemetry": "node tools/xr-telemetry.mjs",
     "xr:telemetry:blueoffice": "XR_ROOM_ID=\"${XR_ROOM_ID:-0b537d34-7b92-4b51-854a-8c64cfb4c114}\" node tools/xr-telemetry.mjs"
   }

@@ -77,7 +77,7 @@ The self-host compose file stores data in Docker volumes:
 - `minio-data` for scene bundle objects;
 - `caddy-data` and `caddy-config` for Caddy state.
 
-Back up these volumes before upgrades. See `docs/upgrades.md`.
+Back up these volumes before upgrades. Use `pnpm backup:compose`, validate the produced manifest with `pnpm backup:validate`, and keep the artifacts outside git. See `docs/backup-restore.md` and `docs/upgrades.md`.
 
 ## Adding A Space
 
@@ -138,4 +138,4 @@ curl -fsS "$CONTROL_PLANE_PUBLIC_URL"
 
 Production preflight blocks startup when it detects missing required variables, public `http://` / `ws://` URLs, wildcard CORS, dev-role query mode, placeholder secrets, weak secrets, or duplicate secret values. Diagnostics include variable names and reason codes only; secret values must not be printed.
 
-Rollback for this profile is metadata/config-only: restore the previous `.env.production` and image tag, then rerun `docker compose --env-file infra/docker/.env.production -f infra/docker/compose.production.yml up -d`. If the production profile itself is the problem, stop it and return to the previously used documented compose file. This task does not introduce a database migration.
+Rollback for this profile is metadata/config-only: restore the previous `.env.production` and image tag through `pnpm rollback:compose`, then smoke the app URL. If the production profile itself is the problem, stop it and return to the previously used documented compose file. This task does not introduce point-in-time database recovery.

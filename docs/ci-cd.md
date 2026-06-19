@@ -28,6 +28,7 @@ Vrata keeps test and deployment automation in the repository and executes it in 
 - Staging successful SHA is stored on the staging VM at `/opt/noah/infra/docker/.staging-successful-image-tag`.
 - Private staging scene assets are uploaded to the staging VM at `/opt/noah-private-scene-assets/assets` before each rollout.
 - Release notes and changelog live in GitHub Releases and `CHANGELOG.md`.
+- Compose backup manifests and local rollback env snapshots are written under `backups/` and must stay out of git.
 
 ## Environments
 
@@ -43,3 +44,4 @@ Vrata keeps test and deployment automation in the repository and executes it in 
 - Do not make public CI depend on private `sense-*` scene assets; use `pnpm test:e2e:private-assets` in private asset/staging contexts only.
 - Do not add private scene assets back to public release images; staging-only sync must stay outside public release workflows.
 - Keep artifacts short-lived and avoid writing secrets to browser-visible output.
+- Run `pnpm backup:compose` before self-host minor upgrades, validate the manifest, and use `pnpm rollback:compose` instead of `docker compose down -v` when reverting image tags.

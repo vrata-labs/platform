@@ -11,3 +11,4 @@ build/
 coverage/
 test-results/
 playwright-report/
+backups/

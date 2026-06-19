@@ -4,6 +4,15 @@ test.describe.configure({ mode: "serial" });
 
 const e2eRoomStatePublicUrl = process.env.E2E_ROOM_STATE_PUBLIC_URL ?? "ws://127.0.0.1:2567";
 const e2eRoomStateHost = new URL(e2eRoomStatePublicUrl).host;
+const e2eBaseUrl = process.env.BASE_URL ?? "http://127.0.0.1:4000";
+
+function e2eUrl(path: string): string {
+  return new URL(path, e2eBaseUrl).toString();
+}
+
+function e2eRoomLink(roomLink: string): string {
+  return roomLink.replace(/^http:\/\/127\.0\.0\.1:4000/, e2eBaseUrl.replace(/\/$/, ""));
+}
 
 function e2eRoomStateHealthUrl(): string {
   const url = new URL(e2eRoomStatePublicUrl);
@@ -269,8 +278,8 @@ test("two participants can coexist in same room", async ({ browser, request }) =
   const pageA = await browser.newPage();
   const pageB = await browser.newPage();
 
-  await pageA.goto("http://127.0.0.1:4000/rooms/demo-room");
-  await pageB.goto("http://127.0.0.1:4000/rooms/demo-room");
+  await pageA.goto(e2eUrl("/rooms/demo-room"));
+  await pageB.goto(e2eUrl("/rooms/demo-room"));
   await pageA.waitForTimeout(4000);
   await pageB.waitForTimeout(4000);
 
@@ -280,7 +289,7 @@ test("two participants can coexist in same room", async ({ browser, request }) =
   expect(debugA?.remoteAvatarCount).toBeGreaterThanOrEqual(1);
   expect(debugB?.remoteAvatarCount).toBeGreaterThanOrEqual(1);
 
-  const presenceResponse = await request.get("http://127.0.0.1:4000/api/rooms/demo-room/presence");
+  const presenceResponse = await request.get(e2eUrl("/api/rooms/demo-room/presence"));
   const presence = (await presenceResponse.json()) as { items: Array<{ participantId: string }> };
   expect(presence.items.length).toBeGreaterThanOrEqual(2);
 
@@ -294,8 +303,8 @@ test("API fallback presence stays visible to realtime room-state clients", async
   const fallbackPage = await browser.newPage();
 
   try {
-    await realtimePage.goto(`http://127.0.0.1:4000/rooms/${room.roomId}?debug=1&bot=line`);
-    await fallbackPage.goto(`http://127.0.0.1:4000/rooms/${room.roomId}?debug=1&failroomstate=1&bot=line`);
+    await realtimePage.goto(e2eUrl(`/rooms/${room.roomId}?debug=1&bot=line`));
+    await fallbackPage.goto(e2eUrl(`/rooms/${room.roomId}?debug=1&failroomstate=1&bot=line`));
 
     await expect.poll(async () => {
       const realtimeDebug = await realtimePage.evaluate(() => (window as Window & {
@@ -1196,7 +1205,7 @@ test("room creation API returns a usable room link", async ({ page, request }) =
   const room = (await createRoomResponse.json()) as { roomId: string; roomLink: string; manifest: { template: string } };
   expect(room.manifest.template).toBe("showroom-basic");
 
-  await page.goto(room.roomLink.replace("http://127.0.0.1:4000", "http://127.0.0.1:4000"));
+  await page.goto(e2eRoomLink(room.roomLink));
   await page.waitForTimeout(3000);
   await expect(page.locator("#room-name")).toContainText(`showroom-basic - ${room.roomId}`);
 });
