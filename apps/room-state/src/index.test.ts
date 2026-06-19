@@ -39,11 +39,26 @@ test("room-state readiness endpoint reports ready", async () => {
   const server = startRoomStateService(4031);
 
   try {
-    const response = await fetch("http://127.0.0.1:4031/health/ready");
+    const response = await fetch("http://127.0.0.1:4031/health/ready", {
+      headers: { "x-request-id": "room-state-request-id" }
+    });
     assert.equal(response.ok, true);
+    assert.equal(response.headers.get("x-request-id"), "room-state-request-id");
     const payload = (await response.json()) as { status?: string; service?: string };
     assert.equal(payload.status, "ready");
     assert.equal(payload.service, "room-state");
+
+    const liveResponse = await fetch("http://127.0.0.1:4031/health/live");
+    assert.equal(liveResponse.ok, true);
+    const livePayload = (await liveResponse.json()) as { status?: string; service?: string };
+    assert.equal(livePayload.status, "live");
+    assert.equal(livePayload.service, "room-state");
+
+    const metricsResponse = await fetch("http://127.0.0.1:4031/metrics");
+    assert.equal(metricsResponse.ok, true);
+    const metricsText = await metricsResponse.text();
+    assert.match(metricsText, /vrata_room_state_active_rooms \d+/);
+    assert.match(metricsText, /vrata_room_state_active_participants \d+/);
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     delete process.env.VRATA_DISABLE_AUTOSTART;

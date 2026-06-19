@@ -7,7 +7,8 @@ export type RuntimeIssueCode =
   | "screen_share_denied"
   | "screen_share_unsupported"
   | "room_state_failed"
-  | "xr_unavailable";
+  | "xr_unavailable"
+  | "runtime_unhandled_error";
 
 export type RuntimeIssueSeverity = "info" | "warn" | "error";
 
@@ -103,6 +104,15 @@ function createRuntimeIssueMap(): Record<RuntimeIssueCode, RuntimeIssue> {
       userMessage: "VR unavailable on this device or disabled for this environment",
       diagnosticsNote: "xr_unavailable",
       suggestedAction: "Continue on desktop or mobile"
+    },
+    runtime_unhandled_error: {
+      code: "runtime_unhandled_error",
+      recoverable: false,
+      retryable: false,
+      severity: "error",
+      userMessage: "Runtime error; include the report ID when contacting support",
+      diagnosticsNote: "runtime_unhandled_error",
+      suggestedAction: "Reload the room and share the report ID if the issue repeats"
     }
   };
 }

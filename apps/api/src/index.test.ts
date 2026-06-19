@@ -38,8 +38,11 @@ test("api health exposes env timestamp and dependencies", async () => {
   const server = module.startApiServer(4011);
 
   try {
-    const response = await fetch("http://127.0.0.1:4011/health");
+    const response = await fetch("http://127.0.0.1:4011/health", {
+      headers: { "x-request-id": "health-request-id" }
+    });
     assert.equal(response.ok, true);
+    assert.equal(response.headers.get("x-request-id"), "health-request-id");
     const payload = (await response.json()) as {
       env?: string;
       timestamp?: string;
@@ -70,9 +73,95 @@ test("api health exposes env timestamp and dependencies", async () => {
     const readyPayload = (await readyResponse.json()) as { status?: string; service?: string };
     assert.equal(readyPayload.status, "ready");
     assert.equal(readyPayload.service, "api");
+
+    const liveResponse = await fetch("http://127.0.0.1:4011/health/live");
+    assert.equal(liveResponse.ok, true);
+    const livePayload = (await liveResponse.json()) as { status?: string; service?: string };
+    assert.equal(livePayload.status, "live");
+    assert.equal(livePayload.service, "api");
+
+    const metricsResponse = await fetch("http://127.0.0.1:4011/metrics");
+    assert.equal(metricsResponse.ok, true);
+    const metricsText = await metricsResponse.text();
+    assert.match(metricsText, /vrata_rooms_total \d+/);
+    assert.match(metricsText, /vrata_active_participants \d+/);
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     delete process.env.VRATA_DISABLE_AUTOSTART;
+  }
+});
+
+test("api diagnostics attach report id, redact secrets, and update metrics", async () => {
+  process.env.VRATA_DISABLE_AUTOSTART = "1";
+  process.env.API_PORT = "4029";
+  process.env.STATE_TOKEN_SECRET = "diagnostics-report-secret";
+  const module = await import("./index.js");
+  const server = module.startApiServer(4029);
+  const baseUrl = "http://127.0.0.1:4029";
+
+  try {
+    const stateResponse = await fetch(`${baseUrl}/api/tokens/state`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ roomId: "demo-room", participantId: "p-diagnostics", displayName: "Diagnostics" })
+    });
+    assert.equal(stateResponse.ok, true);
+    const statePayload = (await stateResponse.json()) as { token?: string };
+    assert.equal(typeof statePayload.token, "string");
+
+    const reportResponse = await fetch(`${baseUrl}/api/rooms/demo-room/diagnostics`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "authorization": `Bearer ${statePayload.token}`,
+        "x-request-id": "diagnostics-request-id"
+      },
+      body: JSON.stringify({
+        participantId: "p-diagnostics",
+        displayName: "Diagnostics",
+        mode: "desktop",
+        userAgent: "test",
+        locomotionMode: "desktop",
+        audioState: "failed",
+        localPosition: { x: 0, z: 0 },
+        xrAxes: { moveX: 0, moveY: 0, turnX: 0 },
+        remoteAvatarCount: 0,
+        remoteTargets: [],
+        lastPresenceSyncAt: 0,
+        lastPresenceRefreshAt: 0,
+        issueCode: "media_network_blocked",
+        access: {
+          token: "secret-token-value",
+          frameStreamUrl: "https://example.test/frames?token=secret-frame-token"
+        },
+        createdAt: new Date(0).toISOString()
+      })
+    });
+    assert.equal(reportResponse.status, 201);
+    assert.equal(reportResponse.headers.get("x-request-id"), "diagnostics-request-id");
+    const reportPayload = (await reportResponse.json()) as { reportId?: string; requestId?: string };
+    assert.match(reportPayload.reportId ?? "", /^rpt_/);
+    assert.equal(reportPayload.requestId, "diagnostics-request-id");
+
+    const diagnosticsResponse = await fetch(`${baseUrl}/api/rooms/demo-room/diagnostics`);
+    assert.equal(diagnosticsResponse.ok, true);
+    const diagnostics = (await diagnosticsResponse.json()) as { items: Array<{ reportId?: string; requestId?: string; access?: { token?: string; frameStreamUrl?: string } }> };
+    const item = diagnostics.items.find((entry) => entry.reportId === reportPayload.reportId);
+    assert.equal(item?.requestId, "diagnostics-request-id");
+    assert.equal(item?.access?.token, "[redacted]");
+    assert.equal(item?.access?.frameStreamUrl?.includes("secret-frame-token"), false);
+    assert.match(item?.access?.frameStreamUrl ?? "", /token=/);
+
+    const metricsResponse = await fetch(`${baseUrl}/metrics`);
+    assert.equal(metricsResponse.ok, true);
+    const metricsText = await metricsResponse.text();
+    assert.match(metricsText, /vrata_diagnostic_reports_created_total \d+/);
+    assert.match(metricsText, /vrata_room_join_failures_total\{reason="media_network_blocked"\} \d+/);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    delete process.env.VRATA_DISABLE_AUTOSTART;
+    delete process.env.API_PORT;
+    delete process.env.STATE_TOKEN_SECRET;
   }
 });
 

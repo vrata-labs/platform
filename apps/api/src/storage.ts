@@ -117,6 +117,8 @@ function defaultAvatarConfig(input?: Partial<RoomAvatarConfig>): RoomAvatarConfi
 }
 
 export interface RuntimeDiagnosticRecord {
+  reportId?: string;
+  requestId?: string;
   participantId: string;
   displayName: string;
   mode: "desktop" | "mobile" | "vr";

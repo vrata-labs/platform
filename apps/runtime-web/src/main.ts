@@ -228,6 +228,7 @@ const roomNameEl = mustElement<HTMLDivElement>("#room-name");
 const statusLineEl = mustElement<HTMLDivElement>("#status-line");
 const brandingLineEl = mustElement<HTMLDivElement>("#branding-line");
 const roomStateLineEl = mustElement<HTMLDivElement>("#room-state-line");
+const reportLineEl = mustElement<HTMLDivElement>("#report-line");
 const guestAccessLineEl = mustElement<HTMLDivElement>("#guest-access-line");
 const spaceSelect = mustElement<HTMLSelectElement>("#space-select");
 const spaceSelectStatusEl = mustElement<HTMLDivElement>("#space-select-status");
@@ -3360,6 +3361,8 @@ const debugState = {
   remoteAvatarReliableCount: 0,
   remoteAvatarPoseCount: 0,
   statusLine: "Connecting...",
+  lastReportId: null as string | null,
+  lastReportRequestId: null as string | null,
   locomotionMode: "desktop",
   roomStateConnected: false,
   roomStateUrl: "",
@@ -4119,6 +4122,20 @@ function setStatus(message: string): void {
   debugState.statusLine = message;
 }
 
+function createClientReportId(): string {
+  return `rpt_${crypto.randomUUID()}`;
+}
+
+function showReportId(reportId: string | null): void {
+  debugState.lastReportId = reportId;
+  reportLineEl.hidden = !reportId;
+  reportLineEl.textContent = reportId ? `Report ID: ${reportId}` : "";
+}
+
+function setReportRequestId(requestId: string | null): void {
+  debugState.lastReportRequestId = requestId;
+}
+
 function setRoomStateStatus(message: string): void {
   roomStateLineEl.textContent = message;
 }
@@ -4462,7 +4479,7 @@ function deriveBodyTransform(root: { x: number; z: number }, head: { x: number; 
   };
 }
 
-async function reportDiagnostics(note?: string): Promise<void> {
+async function reportDiagnostics(note?: string, options: { reportId?: string } = {}): Promise<void> {
   if (!runtimeFlags.remoteDiagnostics) {
     return;
   }
@@ -4479,13 +4496,14 @@ async function reportDiagnostics(note?: string): Promise<void> {
     includeImage
   });
   debugState.sceneDebug.screenshot = screenshot;
-  await fetch(new URL(`/api/rooms/${roomId}/diagnostics`, apiBaseUrl), {
+  const response = await fetch(new URL(`/api/rooms/${roomId}/diagnostics`, apiBaseUrl), {
     method: "POST",
     headers: {
       "content-type": "application/json",
       "authorization": `Bearer ${roomStateAccessToken}`
     },
     body: JSON.stringify({
+      reportId: options.reportId,
       participantId,
       displayName,
       mode: debugState.mode,
@@ -4537,7 +4555,39 @@ async function reportDiagnostics(note?: string): Promise<void> {
       createdAt: new Date().toISOString()
     })
   });
+  const responseRequestId = response.headers.get("x-request-id");
+  if (responseRequestId) {
+    setReportRequestId(responseRequestId);
+  }
+  if (response.ok) {
+    const payload = await response.json().catch(() => null) as { reportId?: string; requestId?: string } | null;
+    if (payload?.requestId) {
+      setReportRequestId(payload.requestId);
+    }
+    if (payload?.reportId) {
+      showReportId(payload.reportId);
+    }
+  }
 }
+
+function reportUnhandledRuntimeError(error: unknown, note: string): void {
+  const reportId = createClientReportId();
+  const message = error instanceof Error ? error.message : String(error ?? "unknown");
+  showReportId(reportId);
+  setStatus(`Runtime error. Report ID: ${reportId}`);
+  debugState.issueCode = "runtime_unhandled_error";
+  debugState.issueSeverity = "error";
+  debugState.lastRecoveryAction = "report_runtime_error";
+  void reportDiagnostics(`${note}:${message.slice(0, 160)}`, { reportId }).catch(() => undefined);
+}
+
+window.addEventListener("error", (event) => {
+  reportUnhandledRuntimeError(event.error ?? event.message, "runtime_error");
+});
+
+window.addEventListener("unhandledrejection", (event) => {
+  reportUnhandledRuntimeError(event.reason, "runtime_unhandled_rejection");
+});
 
 function reportXrTelemetry(frameContext: RuntimeFrameContext): void {
   if (!renderer.xr.isPresenting && !(avatarVrMockEnabled && syntheticXrState)) {

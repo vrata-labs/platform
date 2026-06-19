@@ -23,7 +23,8 @@ import {
   resolveRemoteBrowserMediaIceServers,
   shouldCaptureRemoteBrowserFrame,
   shouldPreserveRemoteBrowserMediaOverlays,
-  shouldRequestPublicLivekitUrlForPage
+  shouldRequestPublicLivekitUrlForPage,
+  startRemoteBrowserService
 } from "./index.js";
 import type { SurfaceInputEvent } from "@vrata/shared-types";
 
@@ -57,6 +58,37 @@ function scrollEvent(scrollDelta?: SurfaceInputEvent["scrollDelta"]): SurfaceInp
     seq: 1
   };
 }
+
+test("remote browser health and metrics endpoints expose observability baseline", async () => {
+  process.env.VRATA_DISABLE_AUTOSTART = "1";
+  const server = startRemoteBrowserService(4041);
+
+  try {
+    const readyResponse = await fetch("http://127.0.0.1:4041/health/ready", {
+      headers: { "x-request-id": "remote-browser-request-id" }
+    });
+    assert.equal(readyResponse.ok, true);
+    assert.equal(readyResponse.headers.get("x-request-id"), "remote-browser-request-id");
+    const readyPayload = (await readyResponse.json()) as { status?: string; service?: string };
+    assert.equal(readyPayload.status, "ready");
+    assert.equal(readyPayload.service, "remote-browser");
+
+    const liveResponse = await fetch("http://127.0.0.1:4041/health/live");
+    assert.equal(liveResponse.ok, true);
+    const livePayload = (await liveResponse.json()) as { status?: string; service?: string };
+    assert.equal(livePayload.status, "live");
+    assert.equal(livePayload.service, "remote-browser");
+
+    const metricsResponse = await fetch("http://127.0.0.1:4041/metrics");
+    assert.equal(metricsResponse.ok, true);
+    const metricsText = await metricsResponse.text();
+    assert.match(metricsText, /vrata_remote_browser_sessions \d+/);
+    assert.match(metricsText, /vrata_remote_browser_frame_clients \d+/);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    delete process.env.VRATA_DISABLE_AUTOSTART;
+  }
+});
 
 test("remote browser maps surface UV to browser viewport coordinates", () => {
   const viewport = { width: 1280, height: 720 };

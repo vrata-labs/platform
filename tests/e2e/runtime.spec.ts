@@ -2,6 +2,17 @@ import { expect, test, type APIRequestContext, type Page } from "@playwright/tes
 
 test.describe.configure({ mode: "serial" });
 
+const e2eRoomStatePublicUrl = process.env.E2E_ROOM_STATE_PUBLIC_URL ?? "ws://127.0.0.1:2567";
+const e2eRoomStateHost = new URL(e2eRoomStatePublicUrl).host;
+
+function e2eRoomStateHealthUrl(): string {
+  const url = new URL(e2eRoomStatePublicUrl);
+  url.protocol = url.protocol === "wss:" ? "https:" : "http:";
+  url.pathname = "/health";
+  url.search = "";
+  return url.toString();
+}
+
 async function createAvatarRoom(request: APIRequestContext, name: string, sceneBundleUrl?: string): Promise<{ roomId: string; roomLink: string }> {
   const createRoomResponse = await request.post("/api/rooms", {
     headers: {
@@ -80,7 +91,7 @@ test("room shell loads and presence is registered", async ({ page, request }) =>
   const debug = await page.evaluate(() => (window as Window & { __VRATA_DEBUG__?: unknown }).__VRATA_DEBUG__);
   expect(debug).toBeTruthy();
   const debugState = debug as { roomStateConnected?: boolean; roomStateUrl?: string; access?: { token?: string } };
-  expect(debugState.roomStateUrl).toContain("127.0.0.1:2567");
+  expect(debugState.roomStateUrl).toContain(e2eRoomStateHost);
   expect(debugState.access?.token).toBe("[redacted]");
 
   const presenceResponse = await request.get("/api/rooms/demo-room/presence");
@@ -248,7 +259,7 @@ test("mobile right-side drag turns the camera", async ({ browser }) => {
 });
 
 test("room-state service health endpoint responds", async () => {
-  const response = await fetch("http://127.0.0.1:2567/health");
+  const response = await fetch(e2eRoomStateHealthUrl());
   expect(response.ok).toBeTruthy();
   const payload = await response.json();
   expect(payload.service).toBe("room-state");
@@ -2055,15 +2066,32 @@ test("fault-injected mic denied keeps room usable without audio", async ({ page,
   await expect(page.locator("#status-line")).toContainText("Microphone blocked");
 
   const debug = await page.evaluate(() => (window as Window & {
-    __VRATA_DEBUG__?: { issueCode?: string | null; degradedMode?: string; audioState?: string };
+    __VRATA_DEBUG__?: { issueCode?: string | null; degradedMode?: string; audioState?: string; lastReportId?: string | null; lastReportRequestId?: string | null };
   }).__VRATA_DEBUG__);
   expect(debug?.issueCode).toBe("mic_denied");
   expect(debug?.degradedMode).toBe("audio_unavailable");
   expect(debug?.audioState).toBe("degraded");
 
+  await expect(page.locator("#report-line")).toContainText(/Report ID: rpt_/);
+  await expect.poll(async () => {
+    const reportDebug = await page.evaluate(() => (window as Window & {
+      __VRATA_DEBUG__?: { lastReportId?: string | null; lastReportRequestId?: string | null };
+    }).__VRATA_DEBUG__);
+    return {
+      reportIdReady: typeof reportDebug?.lastReportId === "string" && reportDebug.lastReportId.startsWith("rpt_"),
+      requestIdReady: typeof reportDebug?.lastReportRequestId === "string" && reportDebug.lastReportRequestId.length > 0
+    };
+  }, {
+    timeout: 10000,
+    intervals: [500, 1000, 2000]
+  }).toEqual({
+    reportIdReady: true,
+    requestIdReady: true
+  });
+
   const diagnosticsResponse = await request.get("/api/rooms/demo-room/diagnostics");
-  const diagnostics = (await diagnosticsResponse.json()) as { items: Array<{ note?: string; issueCode?: string }> };
-  expect(diagnostics.items.some((item) => item.note === "mic_denied" && item.issueCode === "mic_denied")).toBeTruthy();
+  const diagnostics = (await diagnosticsResponse.json()) as { items: Array<{ note?: string; issueCode?: string; reportId?: string; requestId?: string }> };
+  expect(diagnostics.items.some((item) => item.note === "mic_denied" && item.issueCode === "mic_denied" && item.reportId?.startsWith("rpt_") && item.requestId)).toBeTruthy();
 });
 
 test("fault-injected media network block explains WebRTC can fail while scene loads", async ({ page, request }) => {

@@ -33,7 +33,7 @@ Invite-link lifecycle endpoints are not part of the current API surface. `VRATA-
 
 Runtime boot/read endpoints stay public by design and must not mutate tenant or room state:
 
-- `GET /health`, `GET /health/ready`
+- `GET /health`, `GET /health/live`, `GET /health/ready`, `GET /metrics`
 - runtime and control-plane static assets
 - `GET /api/templates`
 - `GET /api/assets`

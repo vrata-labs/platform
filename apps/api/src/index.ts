@@ -249,6 +249,16 @@ const xrTelemetryByRoom = new Map<string, Map<string, XrTelemetryParticipantBuff
 const controlPlaneAuditLog: ControlPlaneAuditLogEntry[] = [];
 const CONTROL_PLANE_AUDIT_LIMIT = 1000;
 const xrTelemetryHistoryLimit = 80;
+const requestIds = new WeakMap<IncomingMessage, string>();
+const sensitiveKeyPattern = /(authorization|cookie|password|secret|token|invite)/i;
+const REDACTED_VALUE = "[redacted]";
+const metrics = {
+  requestsTotal: 0,
+  requestFailuresTotal: 0,
+  diagnosticsReportsCreatedTotal: 0,
+  roomJoinFailuresTotal: new Map<string, number>(),
+  mediaJoinFailuresTotal: new Map<string, number>()
+};
 
 function isEnabledEnvValue(value: string | undefined): boolean | null {
   if (value === undefined || value.trim().length === 0) {
@@ -309,8 +319,44 @@ function validateProductionApiEnv(env: NodeJS.ProcessEnv = process.env): void {
   throw new Error(`missing_required_api_env:${missing.join(",")}`);
 }
 
+function redactString(value: string): string {
+  if (value.length > 80 && /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(value)) {
+    return REDACTED_VALUE;
+  }
+  if (!/[?&](authorization|password|secret|token|invite)=/i.test(value)) {
+    return value;
+  }
+  try {
+    const url = new URL(value);
+    for (const key of Array.from(url.searchParams.keys())) {
+      if (sensitiveKeyPattern.test(key)) {
+        url.searchParams.set(key, REDACTED_VALUE);
+      }
+    }
+    return url.toString();
+  } catch (_error) {
+    return value.replace(/([?&][^=]*(?:authorization|password|secret|token|invite)[^=]*=)[^&]+/gi, `$1${REDACTED_VALUE}`);
+  }
+}
+
+function redactSecrets(value: unknown, key = ""): unknown {
+  if (sensitiveKeyPattern.test(key)) {
+    return REDACTED_VALUE;
+  }
+  if (typeof value === "string") {
+    return redactString(value);
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => redactSecrets(item));
+  }
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([entryKey, entryValue]) => [entryKey, redactSecrets(entryValue, entryKey)]));
+  }
+  return value;
+}
+
 function logEvent(event: Record<string, unknown>): void {
-  process.stdout.write(`${JSON.stringify(event)}\n`);
+  process.stdout.write(`${JSON.stringify(redactSecrets(event))}\n`);
 }
 
 function defaultManifest(roomId: string, request?: IncomingMessage): RoomManifest {
@@ -698,6 +744,16 @@ function json(response: ServerResponse, statusCode: number, body: unknown): void
   response.end(JSON.stringify(body));
 }
 
+function text(response: ServerResponse, statusCode: number, body: string, contentType = "text/plain; charset=utf-8"): void {
+  response.writeHead(statusCode, {
+    "content-type": contentType,
+    "access-control-allow-origin": process.env.API_CORS_ORIGIN ?? "*",
+    "x-content-type-options": "nosniff",
+    "cache-control": "no-store"
+  });
+  response.end(body);
+}
+
 function getHeaderString(request: IncomingMessage, name: string): string | null {
   const value = request.headers[name.toLowerCase()];
   if (typeof value === "string") {
@@ -710,7 +766,120 @@ function getHeaderString(request: IncomingMessage, name: string): string | null 
 }
 
 function getRequestId(request: IncomingMessage): string {
-  return getHeaderString(request, "x-request-id")?.trim() || randomUUID();
+  const existing = requestIds.get(request);
+  if (existing) {
+    return existing;
+  }
+  const requestId = getHeaderString(request, "x-request-id")?.trim() || randomUUID();
+  requestIds.set(request, requestId);
+  return requestId;
+}
+
+function attachRequestId(request: IncomingMessage, response: ServerResponse): string {
+  const requestId = getRequestId(request);
+  response.setHeader("x-request-id", requestId);
+  return requestId;
+}
+
+function incrementCounter(counter: Map<string, number>, reason: string | undefined): void {
+  const label = reason && reason.trim().length > 0 ? reason : "unknown";
+  counter.set(label, (counter.get(label) ?? 0) + 1);
+}
+
+function cleanupAllPresence(): void {
+  for (const roomId of Array.from(presenceByRoom.keys())) {
+    cleanupPresence(roomId);
+  }
+}
+
+function activeParticipantCount(): number {
+  cleanupAllPresence();
+  let total = 0;
+  for (const roomPresence of presenceByRoom.values()) {
+    total += roomPresence.size;
+  }
+  return total;
+}
+
+function formatMetricLine(name: string, value: number, labels?: Record<string, string>): string {
+  const labelEntries = Object.entries(labels ?? {});
+  const labelText = labelEntries.length === 0
+    ? ""
+    : `{${labelEntries.map(([key, labelValue]) => `${key}="${labelValue.replace(/\\/g, "\\\\").replace(/"/g, "\\\"")}"`).join(",")}}`;
+  return `${name}${labelText} ${value}`;
+}
+
+function createReportId(): string {
+  return `rpt_${randomUUID()}`;
+}
+
+function normalizeReportId(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  return /^rpt_[A-Za-z0-9_-]{8,80}$/.test(trimmed) ? trimmed : null;
+}
+
+function createDiagnosticRecord(roomId: string, payload: RuntimeDiagnosticRecord, request: IncomingMessage): RuntimeDiagnosticRecord {
+  const requestId = getRequestId(request);
+  const reportId = normalizeReportId(payload.reportId) ?? createReportId();
+  const sanitized = redactSecrets({
+    ...payload,
+    reportId,
+    requestId,
+    createdAt: payload.createdAt || new Date().toISOString()
+  }) as RuntimeDiagnosticRecord;
+  logEvent({
+    service: "api",
+    event: "runtime_diagnostic_report",
+    roomId,
+    participantId: sanitized.participantId,
+    reportId,
+    requestId,
+    issueCode: sanitized.issueCode ?? null,
+    note: sanitized.note ?? null,
+    timestamp: sanitized.createdAt
+  });
+  return sanitized;
+}
+
+async function apiMetricsText(storage: Awaited<typeof storagePromise>): Promise<string> {
+  cleanupAllPresence();
+  const rooms = await storage.listRooms();
+  const lines = [
+    "# HELP vrata_api_requests_total Total API HTTP requests handled by this process.",
+    "# TYPE vrata_api_requests_total counter",
+    formatMetricLine("vrata_api_requests_total", metrics.requestsTotal),
+    "# HELP vrata_api_request_failures_total Total unhandled API request failures.",
+    "# TYPE vrata_api_request_failures_total counter",
+    formatMetricLine("vrata_api_request_failures_total", metrics.requestFailuresTotal),
+    "# HELP vrata_rooms_total Rooms known to the API storage backend.",
+    "# TYPE vrata_rooms_total gauge",
+    formatMetricLine("vrata_rooms_total", rooms.length),
+    "# HELP vrata_active_rooms Rooms with currently fresh runtime presence.",
+    "# TYPE vrata_active_rooms gauge",
+    formatMetricLine("vrata_active_rooms", presenceByRoom.size),
+    "# HELP vrata_active_participants Fresh runtime participants currently known by API fallback presence.",
+    "# TYPE vrata_active_participants gauge",
+    formatMetricLine("vrata_active_participants", activeParticipantCount()),
+    "# HELP vrata_diagnostic_reports_created_total Runtime diagnostic reports accepted by API.",
+    "# TYPE vrata_diagnostic_reports_created_total counter",
+    formatMetricLine("vrata_diagnostic_reports_created_total", metrics.diagnosticsReportsCreatedTotal),
+    "# HELP vrata_room_join_failures_total Runtime join or room failures reported by clients.",
+    "# TYPE vrata_room_join_failures_total counter"
+  ];
+  for (const [reason, count] of metrics.roomJoinFailuresTotal.entries()) {
+    lines.push(formatMetricLine("vrata_room_join_failures_total", count, { reason }));
+  }
+  lines.push(
+    "# HELP vrata_media_join_failures_total Media token or media join failures observed by API.",
+    "# TYPE vrata_media_join_failures_total counter"
+  );
+  for (const [reason, count] of metrics.mediaJoinFailuresTotal.entries()) {
+    lines.push(formatMetricLine("vrata_media_join_failures_total", count, { reason }));
+  }
+  return `${lines.join("\n")}\n`;
 }
 
 function getControlPlaneAdminToken(env: NodeJS.ProcessEnv = process.env): string {
@@ -1055,6 +1224,8 @@ async function listRuntimeSpaces(storage: Awaited<typeof storagePromise>, roomId
 }
 
 async function handleRequest(request: IncomingMessage, response: ServerResponse): Promise<void> {
+  const requestId = attachRequestId(request, response);
+  metrics.requestsTotal += 1;
   const method = request.method ?? "GET";
   const url = new URL(request.url ?? "/", `http://${request.headers.host ?? `localhost:${apiPort}`}`);
   const storage = await storagePromise;
@@ -1063,9 +1234,21 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     response.writeHead(204, {
       "access-control-allow-origin": process.env.API_CORS_ORIGIN ?? "*",
       "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
-      "access-control-allow-headers": "content-type,authorization,x-request-id,x-vrata-admin-token,x-vrata-internal-token,x-noah-admin-token,x-noah-internal-token"
+      "access-control-allow-headers": "content-type,authorization,x-request-id,x-vrata-admin-token,x-vrata-internal-token,x-noah-admin-token,x-noah-internal-token",
+      "x-request-id": requestId
     });
     response.end();
+    return;
+  }
+
+  if (method === "GET" && url.pathname === "/health/live") {
+    json(response, 200, {
+      status: "live",
+      service: "api",
+      env: process.env.NODE_ENV ?? "development",
+      port: apiPort,
+      timestamp: new Date().toISOString()
+    });
     return;
   }
 
@@ -1082,6 +1265,11 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
         roomStatePublicUrl: process.env.ROOM_STATE_PUBLIC_URL ?? "ws://127.0.0.1:2567"
       }
     });
+    return;
+  }
+
+  if (method === "GET" && url.pathname === "/metrics") {
+    text(response, 200, await apiMetricsText(storage));
     return;
   }
 
@@ -1502,8 +1690,13 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     const participantId = typeof payload.participantId === "string" ? payload.participantId : undefined;
     const session = await verifyRoomSessionRequest(request, { roomId, participantId });
     if (!session.ok) return writeSessionTokenError(response, session);
-    await storage.addDiagnostic(roomId, payload);
-    json(response, 201, { ok: true });
+    const diagnostic = createDiagnosticRecord(roomId, payload, request);
+    metrics.diagnosticsReportsCreatedTotal += 1;
+    if (diagnostic.issueCode) {
+      incrementCounter(metrics.roomJoinFailuresTotal, diagnostic.issueCode);
+    }
+    await storage.addDiagnostic(roomId, diagnostic);
+    json(response, 201, { ok: true, reportId: diagnostic.reportId, requestId: diagnostic.requestId });
     return;
   }
 
@@ -1581,10 +1774,14 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       participantId: payload.participantId,
       sessionToken: payload.sessionToken
     });
-    if (!session.ok) return writeSessionTokenError(response, session);
+    if (!session.ok) {
+      incrementCounter(metrics.mediaJoinFailuresTotal, session.code);
+      return writeSessionTokenError(response, session);
+    }
     const canPublishAudio = hasRoomPermission(session.payload.permissions, "audio.join") && payload.canPublishAudio !== false;
     const canPublishVideo = Boolean(payload.canPublishVideo) && hasRoomPermission(session.payload.permissions, "screen-share.start");
     if (!canPublishAudio && !canPublishVideo) {
+      incrementCounter(metrics.mediaJoinFailuresTotal, "media_publish_not_allowed");
       return json(response, 403, { error: "forbidden", reason: "media_publish_not_allowed" });
     }
     const accessToken = new AccessToken(livekitApiKey, livekitApiSecret, {
@@ -1675,9 +1872,13 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
 export function startApiServer(port = apiPort) {
   const server = createServer((request, response) => {
     handleRequest(request, response).catch((error: unknown) => {
+      const requestId = attachRequestId(request, response);
+      metrics.requestFailuresTotal += 1;
       logEvent({
         service: "api",
+        event: "request_failed",
         env: process.env.NODE_ENV ?? "development",
+        requestId,
         errorCode: "internal_error",
         path: request.url ?? "",
         method: request.method ?? "GET",
@@ -1688,7 +1889,7 @@ export function startApiServer(port = apiPort) {
     });
   });
   return server.listen(port, () => {
-    process.stdout.write(`api listening on ${port}\n`);
+    logEvent({ service: "api", event: "listening", env: process.env.NODE_ENV ?? "development", port, timestamp: new Date().toISOString() });
   });
 }
 

@@ -65,6 +65,12 @@ export interface RoomStateServer {
 }
 
 const DISCONNECT_GRACE_MS = 1500;
+const requestIds = new WeakMap<IncomingMessage, string>();
+const metrics = {
+  requestsTotal: 0,
+  requestFailuresTotal: 0,
+  socketDisconnectsTotal: 0
+};
 
 export interface SeatClaimResultPayload {
   seatId: string;
@@ -100,6 +106,64 @@ function json(response: ServerResponse, statusCode: number, body: unknown): void
     "x-content-type-options": "nosniff"
   });
   response.end(JSON.stringify(body));
+}
+
+function text(response: ServerResponse, statusCode: number, body: string, contentType = "text/plain; charset=utf-8"): void {
+  response.writeHead(statusCode, {
+    "content-type": contentType,
+    "cache-control": "no-store",
+    "x-content-type-options": "nosniff"
+  });
+  response.end(body);
+}
+
+function getHeaderString(request: IncomingMessage, name: string): string | null {
+  const value = request.headers[name.toLowerCase()];
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) return value[0] ?? null;
+  return null;
+}
+
+function requestId(request: IncomingMessage): string {
+  const existing = requestIds.get(request);
+  if (existing) {
+    return existing;
+  }
+  const id = getHeaderString(request, "x-request-id")?.trim() || randomUUID();
+  requestIds.set(request, id);
+  return id;
+}
+
+function formatMetricLine(name: string, value: number, labels?: Record<string, string>): string {
+  const labelEntries = Object.entries(labels ?? {});
+  const labelText = labelEntries.length === 0
+    ? ""
+    : `{${labelEntries.map(([key, labelValue]) => `${key}="${labelValue.replace(/\\/g, "\\\\").replace(/"/g, "\\\"")}"`).join(",")}}`;
+  return `${name}${labelText} ${value}`;
+}
+
+function roomStateMetricsText(authority: RoomStateServer): string {
+  let clientCount = 0;
+  for (const clients of authority.clients.values()) {
+    clientCount += clients.size;
+  }
+  return `${[
+    "# HELP vrata_room_state_requests_total Total room-state HTTP requests handled by this process.",
+    "# TYPE vrata_room_state_requests_total counter",
+    formatMetricLine("vrata_room_state_requests_total", metrics.requestsTotal),
+    "# HELP vrata_room_state_request_failures_total Total unhandled room-state HTTP request failures.",
+    "# TYPE vrata_room_state_request_failures_total counter",
+    formatMetricLine("vrata_room_state_request_failures_total", metrics.requestFailuresTotal),
+    "# HELP vrata_room_state_active_rooms Rooms currently held by room-state.",
+    "# TYPE vrata_room_state_active_rooms gauge",
+    formatMetricLine("vrata_room_state_active_rooms", authority.rooms.size),
+    "# HELP vrata_room_state_active_participants Active websocket participant connections.",
+    "# TYPE vrata_room_state_active_participants gauge",
+    formatMetricLine("vrata_room_state_active_participants", clientCount),
+    "# HELP vrata_room_state_disconnects_total Websocket disconnects observed by room-state.",
+    "# TYPE vrata_room_state_disconnects_total counter",
+    formatMetricLine("vrata_room_state_disconnects_total", metrics.socketDisconnectsTotal)
+  ].join("\n")}\n`;
 }
 
 function parseBody<T>(request: IncomingMessage): Promise<T | null> {
@@ -679,7 +743,20 @@ export function startRoomStateService(port = Number.parseInt(process.env.ROOM_ST
   const authority = createRoomStateServer();
   const httpServer = createServer((request, response) => {
     void (async () => {
+      const id = requestId(request);
+      response.setHeader("x-request-id", id);
+      metrics.requestsTotal += 1;
       const url = new URL(request.url ?? "/", `http://${request.headers.host ?? `localhost:${port}`}`);
+      if (request.method === "GET" && url.pathname === "/health/live") {
+        json(response, 200, {
+          status: "live",
+          service: "room-state",
+          env: process.env.NODE_ENV ?? "development",
+          port,
+          timestamp: new Date().toISOString()
+        });
+        return;
+      }
       if (request.method === "GET" && url.pathname === "/health/ready") {
         json(response, 200, {
           status: "ready",
@@ -710,6 +787,10 @@ export function startRoomStateService(port = Number.parseInt(process.env.ROOM_ST
         });
         return;
       }
+      if (request.method === "GET" && url.pathname === "/metrics") {
+        text(response, 200, roomStateMetricsText(authority));
+        return;
+      }
       const remoteBrowserSessionMatch = url.pathname.match(/^\/api\/internal\/remote-browser\/sessions\/([^/]+)$/);
       if (request.method === "POST" && remoteBrowserSessionMatch) {
         if (!isAuthorizedInternalRequest(request)) {
@@ -730,6 +811,18 @@ export function startRoomStateService(port = Number.parseInt(process.env.ROOM_ST
       }
       json(response, 404, { error: "not_found" });
     })().catch((error: unknown) => {
+      metrics.requestFailuresTotal += 1;
+      logEvent({
+        service: "room-state",
+        event: "request_failed",
+        env: process.env.NODE_ENV ?? "development",
+        requestId: requestId(request),
+        errorCode: "room_state_error",
+        path: request.url ?? "",
+        method: request.method ?? "GET",
+        message: error instanceof Error ? error.message : "unknown",
+        timestamp: new Date().toISOString()
+      });
       json(response, 500, { error: "room_state_error", message: error instanceof Error ? error.message : "unknown" });
     });
   });
@@ -860,6 +953,7 @@ export function startRoomStateService(port = Number.parseInt(process.env.ROOM_ST
     });
 
     socket.on("close", () => {
+      metrics.socketDisconnectsTotal += 1;
       disconnectParticipant(authority, roomId, participantId, socket);
     });
 
@@ -877,7 +971,7 @@ export function startRoomStateService(port = Number.parseInt(process.env.ROOM_ST
   });
 
   return httpServer.listen(port, () => {
-    process.stdout.write(`room-state listening on ${port}\n`);
+    logEvent({ service: "room-state", event: "listening", env: process.env.NODE_ENV ?? "development", port, timestamp: new Date().toISOString() });
   });
 }
 
