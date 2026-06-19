@@ -14,11 +14,13 @@ function validProductionEnv(overrides = {}) {
     VRATA_STATE_DOMAIN: "state.vrata-prod.com",
     VRATA_LIVEKIT_DOMAIN: "livekit.vrata-prod.com",
     VRATA_STORAGE_DOMAIN: "storage.vrata-prod.com",
-    LIVEKIT_NODE_IP: "203.0.113.10",
+    LIVEKIT_NODE_IP: "93.184.216.34",
     VRATA_APP_BASE_URL: "https://app.vrata-prod.com",
     CONTROL_PLANE_PUBLIC_URL: "https://app.vrata-prod.com/control-plane",
     ROOM_STATE_PUBLIC_URL: "wss://state.vrata-prod.com",
     LIVEKIT_URL: "wss://livekit.vrata-prod.com",
+    VRATA_LIVEKIT_TCP_PORT: "7881",
+    VRATA_LIVEKIT_UDP_PORT: "7882",
     API_CORS_ORIGIN: "https://app.vrata-prod.com",
     LIVEKIT_API_KEY: "vrata_livekit_key_20260618",
     LIVEKIT_API_SECRET: "livekit_secret_0123456789abcdef0123456789abcdef",
@@ -35,6 +37,7 @@ function validProductionEnv(overrides = {}) {
     MINIO_PUBLIC_BASE_URL: "https://storage.vrata-prod.com",
     MINIO_SCENE_PREFIX: "scenes/",
     SCENE_BUNDLE_PROVIDER: "minio-default",
+    LIVEKIT_TURN_ENABLED: "false",
     VRATA_DEV_ROLE_QUERY: "false",
     REMOTE_BROWSER_ENABLED: "false",
     VRATA_ALLOW_EXPERIMENTAL_SERVICES: "false",
@@ -49,6 +52,51 @@ function issueCodes(result) {
 test("production config validator accepts a complete production env", () => {
   const result = validateProductionConfig(validProductionEnv());
   assert.deepEqual(result, { ok: true, issues: [] });
+});
+
+test("production config validator accepts TURN/TLS config with external TLS termination", () => {
+  const result = validateProductionConfig(validProductionEnv({
+    LIVEKIT_TURN_ENABLED: "true",
+    LIVEKIT_TURN_DOMAIN: "turn.vrata-prod.com",
+    LIVEKIT_TURN_TLS_PORT: "5349",
+    LIVEKIT_TURN_UDP_PORT: "3478",
+    LIVEKIT_TURN_RELAY_RANGE_START: "50000",
+    LIVEKIT_TURN_RELAY_RANGE_END: "50100",
+    LIVEKIT_TURN_EXTERNAL_TLS: "true"
+  }));
+
+  assert.deepEqual(result, { ok: true, issues: [] });
+});
+
+test("production config validator rejects invalid LiveKit public networking", () => {
+  const result = validateProductionConfig(validProductionEnv({
+    LIVEKIT_NODE_IP: "127.0.0.1",
+    LIVEKIT_URL: "wss://other.vrata-prod.com",
+    VRATA_LIVEKIT_TCP_PORT: "not-a-port",
+    VRATA_LIVEKIT_UDP_PORT: "70000"
+  }));
+
+  assert.equal(result.ok, false);
+  assert.equal(issueCodes(result).includes("invalid_public_ip"), true);
+  assert.equal(issueCodes(result).includes("livekit_url_domain_mismatch"), true);
+  assert.equal(issueCodes(result).includes("invalid_port"), true);
+});
+
+test("production config validator rejects incomplete TURN/TLS config", () => {
+  const result = validateProductionConfig(validProductionEnv({
+    LIVEKIT_TURN_ENABLED: "true",
+    LIVEKIT_TURN_DOMAIN: "livekit.vrata-prod.com",
+    LIVEKIT_TURN_TLS_PORT: "5349",
+    LIVEKIT_TURN_UDP_PORT: "3478",
+    LIVEKIT_TURN_RELAY_RANGE_START: "50100",
+    LIVEKIT_TURN_RELAY_RANGE_END: "50000",
+    LIVEKIT_TURN_EXTERNAL_TLS: "false"
+  }));
+
+  assert.equal(result.ok, false);
+  assert.equal(issueCodes(result).includes("turn_domain_reuses_livekit_domain"), true);
+  assert.equal(issueCodes(result).includes("invalid_port_range"), true);
+  assert.equal(issueCodes(result).includes("missing_required_env"), true);
 });
 
 test("production config validator rejects dev secrets and insecure public urls", () => {

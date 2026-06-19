@@ -239,11 +239,9 @@ const apiPort = Number.parseInt(process.env.API_PORT ?? "4000", 10);
 const runtimeStaticRoot = normalize(join(fileURLToPath(new URL("../../runtime-web/dist", import.meta.url))));
 const runtimePublicRoot = normalize(join(fileURLToPath(new URL("../../runtime-web/public", import.meta.url))));
 const controlPlaneStaticRoot = normalize(join(fileURLToPath(new URL("../../control-plane/dist", import.meta.url))));
-const livekitApiKey = process.env.LIVEKIT_API_KEY ?? "devkey";
-const livekitApiSecret = process.env.LIVEKIT_API_SECRET ?? "secret";
 const presenceTtlMs = Number.parseInt(process.env.PRESENCE_TTL_MS ?? "15000", 10);
 const storagePromise = createStorage();
-const requiredProductionApiEnvVars = ["CONTROL_PLANE_ADMIN_TOKEN", "ROOM_STATE_PUBLIC_URL", "RUNTIME_BASE_URL", "STATE_TOKEN_SECRET"] as const;
+const requiredProductionApiEnvVars = ["CONTROL_PLANE_ADMIN_TOKEN", "ROOM_STATE_PUBLIC_URL", "RUNTIME_BASE_URL", "STATE_TOKEN_SECRET", "LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET"] as const;
 
 const presenceByRoom = new Map<string, Map<string, PresenceRecord>>();
 const xrTelemetryByRoom = new Map<string, Map<string, XrTelemetryParticipantBuffer>>();
@@ -309,15 +307,95 @@ export function getMissingRequiredApiEnvVars(env: NodeJS.ProcessEnv = process.en
   return requiredProductionApiEnvVars.filter((name) => !env[name] || env[name]?.trim().length === 0);
 }
 
-function validateProductionApiEnv(env: NodeJS.ProcessEnv = process.env): void {
+export function validateProductionApiEnv(env: NodeJS.ProcessEnv = process.env): void {
   if (env.NODE_ENV !== "production") {
     return;
   }
   const missing = getMissingRequiredApiEnvVars(env);
-  if (missing.length === 0) {
-    return;
+  if (missing.length > 0) {
+    throw new Error(`missing_required_api_env:${missing.join(",")}`);
   }
-  throw new Error(`missing_required_api_env:${missing.join(",")}`);
+  const livekitConfigError = getMediaTokenConfigError(env);
+  if (livekitConfigError) {
+    throw new Error(`invalid_livekit_config:${livekitConfigError}`);
+  }
+}
+
+function parseBooleanEnv(value: string | undefined): boolean | null {
+  return isEnabledEnvValue(value);
+}
+
+function getLivekitCredentials(env: NodeJS.ProcessEnv = process.env): { apiKey: string; apiSecret: string } {
+  return {
+    apiKey: env.LIVEKIT_API_KEY ?? "devkey",
+    apiSecret: env.LIVEKIT_API_SECRET ?? "secret"
+  };
+}
+
+function hasDevLivekitCredentials(env: NodeJS.ProcessEnv = process.env): boolean {
+  const { apiKey, apiSecret } = getLivekitCredentials(env);
+  return apiKey === "devkey" || apiSecret === "secret" || apiSecret === "devsecret";
+}
+
+function getMediaTokenConfigError(env: NodeJS.ProcessEnv = process.env): string | null {
+  if (env.NODE_ENV !== "production") {
+    return null;
+  }
+  const missing = ["LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET"].filter((name) => !env[name] || env[name]?.trim().length === 0);
+  if (missing.length > 0) {
+    return `missing_required_livekit_env:${missing.join(",")}`;
+  }
+  if (!env.LIVEKIT_URL?.startsWith("wss://")) {
+    return "livekit_url_must_use_wss";
+  }
+  if (hasDevLivekitCredentials(env)) {
+    return "livekit_dev_credentials_forbidden";
+  }
+  return null;
+}
+
+function parsePortEnv(value: string | undefined): number | null {
+  const normalized = value?.trim();
+  if (!normalized) {
+    return null;
+  }
+  const parsed = Number.parseInt(normalized, 10);
+  return Number.isInteger(parsed) && String(parsed) === normalized && parsed > 0 && parsed <= 65535 ? parsed : null;
+}
+
+function getLivekitDeploymentDiagnostics(env: NodeJS.ProcessEnv = process.env) {
+  const livekitUrl = env.LIVEKIT_URL?.trim() ?? "";
+  let livekitUrlProtocol: string | null = null;
+  let livekitUrlHost: string | null = null;
+  if (livekitUrl) {
+    try {
+      const parsed = new URL(livekitUrl);
+      livekitUrlProtocol = parsed.protocol.replace(/:$/, "");
+      livekitUrlHost = parsed.host;
+    } catch {
+      livekitUrlProtocol = "invalid";
+    }
+  }
+
+  return {
+    configured: Boolean(livekitUrl && env.LIVEKIT_API_KEY && env.LIVEKIT_API_SECRET),
+    signalingTls: livekitUrl.startsWith("wss://"),
+    urlProtocol: livekitUrlProtocol,
+    urlHost: livekitUrlHost,
+    turn: {
+      enabled: parseBooleanEnv(env.LIVEKIT_TURN_ENABLED) === true,
+      domain: env.LIVEKIT_TURN_DOMAIN?.trim() || null,
+      tlsPort: parsePortEnv(env.LIVEKIT_TURN_TLS_PORT),
+      udpPort: parsePortEnv(env.LIVEKIT_TURN_UDP_PORT),
+      externalTls: parseBooleanEnv(env.LIVEKIT_TURN_EXTERNAL_TLS) === true,
+      relayRange: env.LIVEKIT_TURN_RELAY_RANGE_START && env.LIVEKIT_TURN_RELAY_RANGE_END
+        ? {
+          start: parsePortEnv(env.LIVEKIT_TURN_RELAY_RANGE_START),
+          end: parsePortEnv(env.LIVEKIT_TURN_RELAY_RANGE_END)
+        }
+        : null
+    }
+  };
 }
 
 function redactString(value: string): string {
@@ -1268,6 +1346,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       dependencies: {
         postgres: Boolean(process.env.POSTGRES_URL),
         livekit: Boolean(process.env.LIVEKIT_URL),
+        livekitConfig: getLivekitDeploymentDiagnostics(),
         roomStatePublicUrl: process.env.ROOM_STATE_PUBLIC_URL ?? "ws://127.0.0.1:2567"
       }
     });
@@ -1307,6 +1386,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       dependencies: {
         postgres: Boolean(process.env.POSTGRES_URL),
         livekit: Boolean(process.env.LIVEKIT_URL),
+        livekitConfig: getLivekitDeploymentDiagnostics(),
         roomStatePublicUrl: process.env.ROOM_STATE_PUBLIC_URL ?? "ws://127.0.0.1:2567"
       }
     });
@@ -1798,7 +1878,13 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       incrementCounter(metrics.mediaJoinFailuresTotal, "media_publish_not_allowed");
       return json(response, 403, { error: "forbidden", reason: "media_publish_not_allowed" });
     }
-    const accessToken = new AccessToken(livekitApiKey, livekitApiSecret, {
+    const configError = getMediaTokenConfigError();
+    if (configError) {
+      incrementCounter(metrics.mediaJoinFailuresTotal, "livekit_config_invalid");
+      return json(response, 503, { error: "livekit_config_invalid", reason: configError });
+    }
+    const { apiKey, apiSecret } = getLivekitCredentials();
+    const accessToken = new AccessToken(apiKey, apiSecret, {
       identity: session.payload.participantId,
       name: session.payload.displayName,
       ttl: `${Number.parseInt(process.env.MEDIA_TOKEN_TTL_SECONDS ?? "900", 10)}s`
@@ -1827,8 +1913,14 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       json(response, 400, { error: "remote_browser_media_token_payload_required" });
       return;
     }
+    const configError = getMediaTokenConfigError();
+    if (configError) {
+      incrementCounter(metrics.mediaJoinFailuresTotal, "livekit_config_invalid");
+      return json(response, 503, { error: "livekit_config_invalid", reason: configError });
+    }
     const ttlSeconds = Number.parseInt(process.env.MEDIA_TOKEN_TTL_SECONDS ?? "900", 10);
-    const accessToken = new AccessToken(livekitApiKey, livekitApiSecret, {
+    const { apiKey, apiSecret } = getLivekitCredentials();
+    const accessToken = new AccessToken(apiKey, apiSecret, {
       identity: payload.mediaParticipantId,
       name: `Remote Browser ${payload.objectId}`,
       ttl: `${ttlSeconds}s`

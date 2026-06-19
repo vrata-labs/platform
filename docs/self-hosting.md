@@ -66,6 +66,8 @@ docker compose --env-file infra/docker/.env.selfhost -f infra/docker/compose.sel
 - `POSTGRES_PASSWORD`: replace with a strong password.
 - `MINIO_ROOT_USER` and `MINIO_ROOT_PASSWORD`: replace with production values.
 - `VRATA_APP_BASE_URL`, `ROOM_STATE_PUBLIC_URL`, `LIVEKIT_URL`, and `REMOTE_BROWSER_PUBLIC_URL`: set to the URLs that browsers can reach.
+- `LIVEKIT_NODE_IP`: set to the public IP address advertised by the LiveKit node. Production preflight rejects loopback, private, reserved, and placeholder values.
+- `VRATA_LIVEKIT_TCP_PORT` and `VRATA_LIVEKIT_UDP_PORT`: open these directly on the host for LiveKit WebRTC ICE/TCP fallback and UDP media traffic.
 
 The bundled compose file runs LiveKit in `--dev` mode for the `0.1` beta quickstart, so the local defaults are `LIVEKIT_API_KEY=devkey` and `LIVEKIT_API_SECRET=secret`. Replace this with a hardened LiveKit configuration before exposing a deployment beyond evaluation use.
 
@@ -136,6 +138,36 @@ curl -fsS "$VRATA_APP_BASE_URL/rooms/demo-room"
 curl -fsS "$CONTROL_PLANE_PUBLIC_URL"
 ```
 
-Production preflight blocks startup when it detects missing required variables, public `http://` / `ws://` URLs, wildcard CORS, dev-role query mode, placeholder secrets, weak secrets, or duplicate secret values. Diagnostics include variable names and reason codes only; secret values must not be printed.
+Production preflight blocks startup when it detects missing required variables, public `http://` / `ws://` URLs, wildcard CORS, dev-role query mode, placeholder secrets, weak secrets, duplicate secret values, invalid LiveKit public IP/ports, or a `LIVEKIT_URL` host that does not match `VRATA_LIVEKIT_DOMAIN`. Diagnostics include variable names and reason codes only; secret values must not be printed.
+
+## LiveKit / TURN Network Profile
+
+The production compose profile runs LiveKit from an explicit `LIVEKIT_CONFIG` body instead of `--dev`. Caddy terminates HTTPS for the signaling endpoint at `LIVEKIT_URL`, for example `wss://livekit.example.com`, and forwards it to `livekit:7880`.
+
+Open these inbound ports on the host or cloud firewall:
+
+- `80/tcp` and `443/tcp` for Caddy ACME and HTTPS application traffic.
+- `VRATA_LIVEKIT_TCP_PORT/tcp`, default `7881/tcp`, for WebRTC ICE/TCP fallback.
+- `VRATA_LIVEKIT_UDP_PORT/udp`, default `7882/udp`, for direct UDP media.
+- `LIVEKIT_TURN_TLS_PORT/tcp`, default `5349/tcp`, only when `LIVEKIT_TURN_ENABLED=true`.
+- `LIVEKIT_TURN_UDP_PORT/udp`, default `3478/udp`, only when `LIVEKIT_TURN_ENABLED=true`.
+- `LIVEKIT_TURN_RELAY_RANGE_START-LIVEKIT_TURN_RELAY_RANGE_END/udp`, default `50000-50100/udp`, only when `LIVEKIT_TURN_ENABLED=true` and your firewall requires an explicit relay range.
+
+DNS requirements:
+
+- `VRATA_APP_DOMAIN` points to the public host.
+- `VRATA_STATE_DOMAIN` points to the same host unless room-state is split out.
+- `VRATA_LIVEKIT_DOMAIN` points to the same host or the LiveKit host and must match `LIVEKIT_URL`.
+- `LIVEKIT_TURN_DOMAIN` should be a separate hostname when TURN/TLS is enabled.
+
+TURN/TLS options:
+
+- Leave `LIVEKIT_TURN_ENABLED=false` for a public signaling-only profile.
+- Set `LIVEKIT_TURN_ENABLED=true` to advertise LiveKit embedded TURN.
+- With `LIVEKIT_TURN_EXTERNAL_TLS=true`, terminate TURN/TLS at an external layer-4 load balancer and forward to `LIVEKIT_TURN_TLS_PORT`.
+- With `LIVEKIT_TURN_EXTERNAL_TLS=false`, provide `LIVEKIT_TURN_CERT_FILE` and `LIVEKIT_TURN_KEY_FILE` inside the LiveKit container through a compose override or host mount.
+- Do not reuse `VRATA_LIVEKIT_DOMAIN` as `LIVEKIT_TURN_DOMAIN`; production preflight rejects this to keep signaling and TURN/TLS routing explicit.
+
+The API `/health` and `/health/ready` payloads expose non-secret LiveKit diagnostics under `dependencies.livekitConfig`: signaling TLS status, configured host, TURN enabled flag, TURN domain, TURN ports, and relay range. `POST /api/tokens/media` and `POST /api/tokens/remote-browser-media` return `livekit_config_invalid` in production if LiveKit URL/key/secret are missing, insecure, or still using dev credentials.
 
 Rollback for this profile is metadata/config-only: restore the previous `.env.production` and image tag through `pnpm rollback:compose`, then smoke the app URL. If the production profile itself is the problem, stop it and return to the previously used documented compose file. This task does not introduce point-in-time database recovery.

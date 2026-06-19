@@ -23,10 +23,42 @@ test("api production env validator reports missing required vars", async () => {
       CONTROL_PLANE_ADMIN_TOKEN: "",
       ROOM_STATE_PUBLIC_URL: "ws://127.0.0.1:2567",
       RUNTIME_BASE_URL: "",
-      STATE_TOKEN_SECRET: ""
+      STATE_TOKEN_SECRET: "",
+      LIVEKIT_URL: "",
+      LIVEKIT_API_KEY: "",
+      LIVEKIT_API_SECRET: ""
     }),
-    ["CONTROL_PLANE_ADMIN_TOKEN", "RUNTIME_BASE_URL", "STATE_TOKEN_SECRET"]
+    ["CONTROL_PLANE_ADMIN_TOKEN", "RUNTIME_BASE_URL", "STATE_TOKEN_SECRET", "LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET"]
   );
+
+  delete process.env.VRATA_DISABLE_AUTOSTART;
+});
+
+test("api production env validator rejects insecure LiveKit startup config", async () => {
+  process.env.VRATA_DISABLE_AUTOSTART = "1";
+  const module = await import("./index.js");
+
+  assert.throws(() => module.validateProductionApiEnv({
+    NODE_ENV: "production",
+    CONTROL_PLANE_ADMIN_TOKEN: "test-admin-token",
+    ROOM_STATE_PUBLIC_URL: "wss://state.vrata-prod.com",
+    RUNTIME_BASE_URL: "https://app.vrata-prod.com",
+    STATE_TOKEN_SECRET: "state-token-secret-0123456789abcdef",
+    LIVEKIT_URL: "ws://livekit.vrata-prod.com",
+    LIVEKIT_API_KEY: "devkey",
+    LIVEKIT_API_SECRET: "secret"
+  }), /invalid_livekit_config:livekit_url_must_use_wss/);
+
+  assert.throws(() => module.validateProductionApiEnv({
+    NODE_ENV: "production",
+    CONTROL_PLANE_ADMIN_TOKEN: "test-admin-token",
+    ROOM_STATE_PUBLIC_URL: "wss://state.vrata-prod.com",
+    RUNTIME_BASE_URL: "https://app.vrata-prod.com",
+    STATE_TOKEN_SECRET: "state-token-secret-0123456789abcdef",
+    LIVEKIT_URL: "wss://livekit.vrata-prod.com",
+    LIVEKIT_API_KEY: "devkey",
+    LIVEKIT_API_SECRET: "secret"
+  }), /invalid_livekit_config:livekit_dev_credentials_forbidden/);
 
   delete process.env.VRATA_DISABLE_AUTOSTART;
 });
@@ -46,7 +78,7 @@ test("api health exposes env timestamp and dependencies", async () => {
     const payload = (await response.json()) as {
       env?: string;
       timestamp?: string;
-      dependencies?: { livekit?: boolean };
+      dependencies?: { livekit?: boolean; livekitConfig?: { configured?: boolean; signalingTls?: boolean; turn?: { enabled?: boolean } } };
       features?: {
         avatarsEnabled?: boolean;
         avatarPoseBinaryEnabled?: boolean;
@@ -60,6 +92,9 @@ test("api health exposes env timestamp and dependencies", async () => {
     assert.equal(typeof payload.env, "string");
     assert.equal(typeof payload.timestamp, "string");
     assert.equal(typeof payload.dependencies?.livekit, "boolean");
+    assert.equal(typeof payload.dependencies?.livekitConfig?.configured, "boolean");
+    assert.equal(typeof payload.dependencies?.livekitConfig?.signalingTls, "boolean");
+    assert.equal(typeof payload.dependencies?.livekitConfig?.turn?.enabled, "boolean");
     assert.equal(typeof payload.features?.avatarsEnabled, "boolean");
     assert.equal(typeof payload.features?.avatarPoseBinaryEnabled, "boolean");
     assert.equal(typeof payload.features?.avatarLipsyncEnabled, "boolean");
@@ -88,6 +123,50 @@ test("api health exposes env timestamp and dependencies", async () => {
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     delete process.env.VRATA_DISABLE_AUTOSTART;
+  }
+});
+
+test("media token rejects invalid production LiveKit config", async () => {
+  process.env.VRATA_DISABLE_AUTOSTART = "1";
+  process.env.NODE_ENV = "production";
+  process.env.API_PORT = "4042";
+  process.env.STATE_TOKEN_SECRET = "media-config-production-secret";
+  process.env.CONTROL_PLANE_ADMIN_TOKEN = "test-admin-token";
+  delete process.env.LIVEKIT_URL;
+  delete process.env.LIVEKIT_API_KEY;
+  delete process.env.LIVEKIT_API_SECRET;
+  const module = await import("./index.js");
+  const server = module.startApiServer(4042);
+
+  try {
+    const stateResponse = await fetch("http://127.0.0.1:4042/api/tokens/state", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ roomId: "demo-room", participantId: "p-media-config", displayName: "Media Config" })
+    });
+    assert.equal(stateResponse.ok, true);
+    const statePayload = await stateResponse.json() as { token?: string };
+
+    const mediaResponse = await fetch("http://127.0.0.1:4042/api/tokens/media", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "authorization": `Bearer ${statePayload.token}`
+      },
+      body: JSON.stringify({ roomId: "demo-room", participantId: "p-media-config", canPublishAudio: true })
+    });
+
+    assert.equal(mediaResponse.status, 503);
+    const payload = await mediaResponse.json() as { error?: string; reason?: string };
+    assert.equal(payload.error, "livekit_config_invalid");
+    assert.match(payload.reason ?? "", /missing_required_livekit_env/);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    delete process.env.VRATA_DISABLE_AUTOSTART;
+    delete process.env.NODE_ENV;
+    delete process.env.API_PORT;
+    delete process.env.STATE_TOKEN_SECRET;
+    delete process.env.CONTROL_PLANE_ADMIN_TOKEN;
   }
 });
 
