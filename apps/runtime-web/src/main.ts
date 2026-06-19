@@ -102,7 +102,7 @@ import { resetAvatarSession, startAvatarSandboxSession, startLocalAvatarSession 
 import type { LocalAvatarController } from "./avatar/avatar-controller.js";
 import type { LocalAvatarSnapshotV1 } from "./avatar/avatar-types.js";
 import { createAvatarRegistry } from "./avatar/avatar-registry.js";
-import type { SceneBundleSeatAnchor } from "./scene-bundle.js";
+import type { SceneBundleMediaSurface, SceneBundleSeatAnchor } from "./scene-bundle.js";
 import { createLocalPoseController, type Vector3Like } from "./local/local-pose.js";
 import { resolveDesktopTouchInputIntents, resolveTouchControlZone, resolveTouchDragMoveVector, resolveXrConfirmInteractionIntent, resolveXrInputIntents, type TouchControlZone } from "./input/input-intents.js";
 import type { RuntimeFrameContext } from "./input/runtime-frame-context.js";
@@ -398,26 +398,80 @@ const WHITEBOARD_SURFACE_WIDTH_M = 3.2;
 const WHITEBOARD_SURFACE_HEIGHT_M = 2.0;
 const LAPTOP_SURFACE_WIDTH_M = 1.9;
 const LAPTOP_SURFACE_HEIGHT_M = 1.1;
+const DEBUG_SURFACE_WIDTH_PX = 1920;
+const DEBUG_SURFACE_HEIGHT_PX = 1080;
+
+interface RuntimeMediaSurfaceDefinition {
+  surfaceId: string;
+  label?: string;
+  widthM: number;
+  heightM: number;
+  widthPx: number;
+  heightPx: number;
+  transform: {
+    x: number;
+    y: number;
+    z: number;
+    yaw: number;
+    pitch: number;
+    roll: number;
+  };
+  visible: boolean;
+  color: number;
+  allowedObjectTypes?: string[];
+}
+
+const DEFAULT_RUNTIME_MEDIA_SURFACES: RuntimeMediaSurfaceDefinition[] = [
+  {
+    surfaceId: DEBUG_SURFACE_ID,
+    label: "Main screen",
+    widthM: DEBUG_SURFACE_WIDTH_M,
+    heightM: DEBUG_SURFACE_HEIGHT_M,
+    widthPx: DEBUG_SURFACE_WIDTH_PX,
+    heightPx: DEBUG_SURFACE_HEIGHT_PX,
+    transform: { x: 0, y: 2.2, z: -6.6, yaw: 0, pitch: 0, roll: 0 },
+    visible: true,
+    color: 0xffffff
+  },
+  {
+    surfaceId: WHITEBOARD_MEDIA_SURFACE_ID,
+    label: "Whiteboard wall",
+    widthM: WHITEBOARD_SURFACE_WIDTH_M,
+    heightM: WHITEBOARD_SURFACE_HEIGHT_M,
+    widthPx: DEBUG_SURFACE_WIDTH_PX,
+    heightPx: DEBUG_SURFACE_HEIGHT_PX,
+    transform: { x: -4.6, y: 2.0, z: -5.8, yaw: 0.18, pitch: 0, roll: 0 },
+    visible: true,
+    color: 0xf8fafc
+  },
+  {
+    surfaceId: LAPTOP_MEDIA_SURFACE_ID,
+    label: "Laptop screen",
+    widthM: LAPTOP_SURFACE_WIDTH_M,
+    heightM: LAPTOP_SURFACE_HEIGHT_M,
+    widthPx: 1280,
+    heightPx: 720,
+    transform: { x: 3.7, y: 1.45, z: -4.2, yaw: -0.28, pitch: 0, roll: 0 },
+    visible: true,
+    color: 0xf8fbff
+  }
+];
+
 function createMediaSurfaceMesh(widthM: number, heightM: number, color = 0xffffff): THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial> {
   return new THREE.Mesh(
     new THREE.PlaneGeometry(widthM, heightM),
     new THREE.MeshBasicMaterial({ color, toneMapped: false })
   );
 }
-const displaySurface = new THREE.Mesh(
-  new THREE.PlaneGeometry(DEBUG_SURFACE_WIDTH_M, DEBUG_SURFACE_HEIGHT_M),
-  new THREE.MeshBasicMaterial({ color: 0xffffff, toneMapped: false })
-);
-displaySurface.position.set(0, 2.2, -6.6);
+
+function applyMediaSurfaceTransform(object: THREE.Object3D, transform: RuntimeMediaSurfaceDefinition["transform"]): void {
+  object.position.set(transform.x, transform.y, transform.z);
+  object.rotation.set(transform.pitch, transform.yaw, transform.roll);
+}
+
+const displaySurface = createMediaSurfaceMesh(DEBUG_SURFACE_WIDTH_M, DEBUG_SURFACE_HEIGHT_M);
+applyMediaSurfaceTransform(displaySurface, DEFAULT_RUNTIME_MEDIA_SURFACES[0]!.transform);
 scene.add(displaySurface);
-const whiteboardSurface = createMediaSurfaceMesh(WHITEBOARD_SURFACE_WIDTH_M, WHITEBOARD_SURFACE_HEIGHT_M, 0xf8fafc);
-whiteboardSurface.position.set(-4.6, 2.0, -5.8);
-whiteboardSurface.rotation.y = 0.18;
-scene.add(whiteboardSurface);
-const laptopSurface = createMediaSurfaceMesh(LAPTOP_SURFACE_WIDTH_M, LAPTOP_SURFACE_HEIGHT_M, 0xf8fbff);
-laptopSurface.position.set(3.7, 1.45, -4.2);
-laptopSurface.rotation.y = -0.28;
-scene.add(laptopSurface);
 const remoteBrowserVrKeyboardView = createRemoteBrowserVrKeyboardView();
 displaySurface.add(remoteBrowserVrKeyboardView.root);
 
@@ -437,26 +491,61 @@ whiteboardPreviewLine.frustumCulled = false;
 whiteboardPreviewLine.visible = false;
 displaySurface.add(whiteboardPreviewLine);
 
-const DEBUG_SURFACE_WIDTH_PX = 1920;
-const DEBUG_SURFACE_HEIGHT_PX = 1080;
-displaySurface.userData.surfaceId = DEBUG_SURFACE_ID;
-whiteboardSurface.userData.surfaceId = WHITEBOARD_MEDIA_SURFACE_ID;
-laptopSurface.userData.surfaceId = LAPTOP_MEDIA_SURFACE_ID;
-
 interface RuntimeMediaSurfaceView {
   surfaceId: string;
+  label?: string;
   object: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
   widthPx: number;
   heightPx: number;
   widthM: number;
   heightM: number;
+  visible: boolean;
+  allowedObjectTypes?: string[];
 }
 
-const mediaSurfaceViews = new Map<string, RuntimeMediaSurfaceView>([
-  [DEBUG_SURFACE_ID, { surfaceId: DEBUG_SURFACE_ID, object: displaySurface, widthPx: DEBUG_SURFACE_WIDTH_PX, heightPx: DEBUG_SURFACE_HEIGHT_PX, widthM: DEBUG_SURFACE_WIDTH_M, heightM: DEBUG_SURFACE_HEIGHT_M }],
-  [WHITEBOARD_MEDIA_SURFACE_ID, { surfaceId: WHITEBOARD_MEDIA_SURFACE_ID, object: whiteboardSurface, widthPx: DEBUG_SURFACE_WIDTH_PX, heightPx: DEBUG_SURFACE_HEIGHT_PX, widthM: WHITEBOARD_SURFACE_WIDTH_M, heightM: WHITEBOARD_SURFACE_HEIGHT_M }],
-  [LAPTOP_MEDIA_SURFACE_ID, { surfaceId: LAPTOP_MEDIA_SURFACE_ID, object: laptopSurface, widthPx: 1280, heightPx: 720, widthM: LAPTOP_SURFACE_WIDTH_M, heightM: LAPTOP_SURFACE_HEIGHT_M }]
-]);
+function updateMediaSurfaceView(view: RuntimeMediaSurfaceView, definition: RuntimeMediaSurfaceDefinition): void {
+  if (view.widthM !== definition.widthM || view.heightM !== definition.heightM) {
+    view.object.geometry.dispose();
+    view.object.geometry = new THREE.PlaneGeometry(definition.widthM, definition.heightM);
+  }
+  view.surfaceId = definition.surfaceId;
+  view.label = definition.label;
+  view.widthPx = definition.widthPx;
+  view.heightPx = definition.heightPx;
+  view.widthM = definition.widthM;
+  view.heightM = definition.heightM;
+  view.visible = definition.visible;
+  view.allowedObjectTypes = definition.allowedObjectTypes;
+  view.object.userData.surfaceId = definition.surfaceId;
+  view.object.visible = definition.visible;
+  view.object.material.color.setHex(definition.color);
+  applyMediaSurfaceTransform(view.object, definition.transform);
+}
+
+function createMediaSurfaceView(definition: RuntimeMediaSurfaceDefinition, object = createMediaSurfaceMesh(definition.widthM, definition.heightM, definition.color)): RuntimeMediaSurfaceView {
+  const view: RuntimeMediaSurfaceView = {
+    surfaceId: definition.surfaceId,
+    label: definition.label,
+    object,
+    widthPx: definition.widthPx,
+    heightPx: definition.heightPx,
+    widthM: definition.widthM,
+    heightM: definition.heightM,
+    visible: definition.visible,
+    allowedObjectTypes: definition.allowedObjectTypes
+  };
+  updateMediaSurfaceView(view, definition);
+  return view;
+}
+
+const mediaSurfaceViews = new Map<string, RuntimeMediaSurfaceView>();
+for (const definition of DEFAULT_RUNTIME_MEDIA_SURFACES) {
+  const view = createMediaSurfaceView(definition, definition.surfaceId === DEBUG_SURFACE_ID ? displaySurface : undefined);
+  mediaSurfaceViews.set(definition.surfaceId, view);
+  if (view.object.parent !== scene) {
+    scene.add(view.object);
+  }
+}
 
 const fallbackEnvironment: THREE.Object3D[] = [floor, grid, roomBox];
 
@@ -594,6 +683,88 @@ const mediaSurfaceCommands = createMediaSurfaceCommandClient({
 });
 const whiteboardRuntimes = new Map<string, ReturnType<typeof createWhiteboardObjectRuntime>>();
 const remoteBrowserRuntimes = new Map<string, ReturnType<typeof createRemoteBrowserObjectRuntime>>();
+
+function runtimeMediaSurfaceDefinitionFromScene(surface: SceneBundleMediaSurface): RuntimeMediaSurfaceDefinition {
+  const fallback = DEFAULT_RUNTIME_MEDIA_SURFACES.find((definition) => definition.surfaceId === surface.surfaceId);
+  return {
+    surfaceId: surface.surfaceId,
+    label: surface.label ?? fallback?.label,
+    widthM: surface.widthM,
+    heightM: surface.heightM,
+    widthPx: surface.widthPx ?? fallback?.widthPx ?? DEBUG_SURFACE_WIDTH_PX,
+    heightPx: surface.heightPx ?? fallback?.heightPx ?? DEBUG_SURFACE_HEIGHT_PX,
+    transform: {
+      x: surface.transform.x,
+      y: surface.transform.y,
+      z: surface.transform.z,
+      yaw: surface.transform.yaw ?? 0,
+      pitch: surface.transform.pitch ?? 0,
+      roll: surface.transform.roll ?? 0
+    },
+    visible: surface.visible ?? true,
+    color: fallback?.color ?? 0xffffff,
+    allowedObjectTypes: surface.allowedObjectTypes
+  };
+}
+
+function getFallbackMediaSurfaceView(): RuntimeMediaSurfaceView {
+  const selected = mediaSurfaceViews.get(selectedMediaSurfaceId);
+  const debug = mediaSurfaceViews.get(DEBUG_SURFACE_ID);
+  const first = mediaSurfaceViews.values().next().value as RuntimeMediaSurfaceView | undefined;
+  const view = selected ?? debug ?? first;
+  if (!view) {
+    throw new Error("missing_runtime_media_surface");
+  }
+  return view;
+}
+
+function closeMediaSurfaceRuntimes(surfaceId: string): void {
+  whiteboardRuntimes.get(surfaceId)?.clearPreview();
+  whiteboardRuntimes.delete(surfaceId);
+  remoteBrowserRuntimes.get(surfaceId)?.close();
+  remoteBrowserRuntimes.delete(surfaceId);
+}
+
+function configureRuntimeMediaSurfaces(sceneSurfaces?: SceneBundleMediaSurface[]): void {
+  const definitions = sceneSurfaces?.length
+    ? sceneSurfaces.map((surface) => runtimeMediaSurfaceDefinitionFromScene(surface))
+    : DEFAULT_RUNTIME_MEDIA_SURFACES;
+  const nextSurfaceIds = new Set(definitions.map((definition) => definition.surfaceId));
+
+  for (const [surfaceId, view] of Array.from(mediaSurfaceViews)) {
+    if (nextSurfaceIds.has(surfaceId)) {
+      continue;
+    }
+    closeMediaSurfaceRuntimes(surfaceId);
+    if (whiteboardPreviewLine.parent === view.object) {
+      whiteboardPreviewLine.visible = false;
+      displaySurface.add(whiteboardPreviewLine);
+    }
+    scene.remove(view.object);
+    view.object.visible = false;
+    mediaSurfaceViews.delete(surfaceId);
+  }
+
+  for (const definition of definitions) {
+    const existing = mediaSurfaceViews.get(definition.surfaceId);
+    if (existing) {
+      updateMediaSurfaceView(existing, definition);
+      if (existing.object.parent !== scene) {
+        scene.add(existing.object);
+      }
+      continue;
+    }
+    const view = createMediaSurfaceView(definition, definition.surfaceId === DEBUG_SURFACE_ID ? displaySurface : undefined);
+    mediaSurfaceViews.set(definition.surfaceId, view);
+    if (view.object.parent !== scene) {
+      scene.add(view.object);
+    }
+  }
+
+  if (!mediaSurfaceViews.has(selectedMediaSurfaceId)) {
+    selectedMediaSurfaceId = definitions[0]?.surfaceId ?? DEBUG_SURFACE_ID;
+  }
+}
 
 function getWhiteboardRuntime(surfaceId: string): ReturnType<typeof createWhiteboardObjectRuntime> {
   const existing = whiteboardRuntimes.get(surfaceId);
@@ -833,7 +1004,7 @@ function applyCleanSceneMode(enabled: boolean): void {
   grid.visible = !enabled;
   roomBox.visible = !enabled;
   for (const surface of mediaSurfaceViews.values()) {
-    surface.object.visible = true;
+    surface.object.visible = surface.visible;
   }
 }
 
@@ -1138,7 +1309,7 @@ function syncMediaSurfaceObjectIds(): void {
 }
 
 function getMediaSurfaceView(surfaceId: string): RuntimeMediaSurfaceView {
-  return mediaSurfaceViews.get(surfaceId) ?? mediaSurfaceViews.get(DEBUG_SURFACE_ID)!;
+  return mediaSurfaceViews.get(surfaceId) ?? getFallbackMediaSurfaceView();
 }
 
 function getSelectedMediaSurfaceView(): RuntimeMediaSurfaceView {
@@ -1146,25 +1317,24 @@ function getSelectedMediaSurfaceView(): RuntimeMediaSurfaceView {
 }
 
 function getKnownMediaSurfaceIds(): string[] {
-  const ids = new Set<string>([DEBUG_SURFACE_ID, WHITEBOARD_MEDIA_SURFACE_ID, LAPTOP_MEDIA_SURFACE_ID]);
-  for (const surfaceId of Object.keys(roomMediaObjects?.surfaces ?? {})) {
-    ids.add(surfaceId);
-  }
-  return Array.from(ids);
+  return Array.from(mediaSurfaceViews.keys());
 }
 
 function getMediaSurfaceLabel(surfaceId: string): string {
   return roomMediaObjects?.surfaces[surfaceId]?.label
-    ?? (surfaceId === DEBUG_SURFACE_ID ? "Main screen" : surfaceId === WHITEBOARD_MEDIA_SURFACE_ID ? "Whiteboard wall" : surfaceId === LAPTOP_MEDIA_SURFACE_ID ? "Laptop screen" : surfaceId);
+    ?? mediaSurfaceViews.get(surfaceId)?.label
+    ?? (surfaceId === DEBUG_SURFACE_ID ? "Main screen" : surfaceId);
 }
 
 function surfaceAllowsObject(surfaceId: string, objectType: string): boolean {
   const surface = roomMediaObjects?.surfaces[surfaceId];
-  return surface?.allowedObjectTypes.includes(objectType) ?? true;
+  return surface?.allowedObjectTypes.includes(objectType)
+    ?? mediaSurfaceViews.get(surfaceId)?.allowedObjectTypes?.includes(objectType)
+    ?? true;
 }
 
 function selectMediaSurface(surfaceId: string): boolean {
-  if (!mediaSurfaceViews.has(surfaceId) && !roomMediaObjects?.surfaces[surfaceId]) {
+  if (!mediaSurfaceViews.has(surfaceId)) {
     return false;
   }
   selectedMediaSurfaceId = surfaceId;
@@ -1281,8 +1451,8 @@ function syncMediaObjectsDebugState(): void {
     mediaAudioEnabled: surface.mediaAudioEnabled,
     lockedByParticipantId: surface.lockedByParticipantId,
     visible: surface.visible,
-    runtimeVisible: getMediaSurfaceView(surface.surfaceId).object.visible,
-    textureId: getSurfaceTextureDebugId(surface.surfaceId)
+    runtimeVisible: mediaSurfaceViews.get(surface.surfaceId)?.object.visible === true,
+    textureId: mediaSurfaceViews.has(surface.surfaceId) ? getSurfaceTextureDebugId(surface.surfaceId) : null
   }));
   debugState.mediaObjects.objects = objects.map((object) => ({
     objectId: object.objectId,
@@ -3987,10 +4157,11 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
     if (!Number.isFinite(u) || !Number.isFinite(v)) {
       return null;
     }
-    displaySurface.updateMatrixWorld(true);
-    const position = displaySurface.localToWorld(new THREE.Vector3(
-      (Math.max(0, Math.min(1, u)) - 0.5) * DEBUG_SURFACE_WIDTH_M,
-      (Math.max(0, Math.min(1, v)) - 0.5) * DEBUG_SURFACE_HEIGHT_M,
+    const surface = getMediaSurfaceView(DEBUG_SURFACE_ID);
+    surface.object.updateMatrixWorld(true);
+    const position = surface.object.localToWorld(new THREE.Vector3(
+      (Math.max(0, Math.min(1, u)) - 0.5) * surface.widthM,
+      (Math.max(0, Math.min(1, v)) - 0.5) * surface.heightM,
       0
     ));
     return {
@@ -4003,11 +4174,12 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
     if (!Number.isFinite(u) || !Number.isFinite(v)) {
       return null;
     }
-    displaySurface.updateMatrixWorld(true);
+    const surface = getMediaSurfaceView(DEBUG_SURFACE_ID);
+    surface.object.updateMatrixWorld(true);
     camera.updateMatrixWorld(true);
-    const ndc = displaySurface.localToWorld(new THREE.Vector3(
-      (Math.max(0, Math.min(1, u)) - 0.5) * DEBUG_SURFACE_WIDTH_M,
-      (Math.max(0, Math.min(1, v)) - 0.5) * DEBUG_SURFACE_HEIGHT_M,
+    const ndc = surface.object.localToWorld(new THREE.Vector3(
+      (Math.max(0, Math.min(1, u)) - 0.5) * surface.widthM,
+      (Math.max(0, Math.min(1, v)) - 0.5) * surface.heightM,
       0
     )).project(camera);
     return {
@@ -6550,6 +6722,7 @@ async function main(): Promise<void> {
   debugState.avatarSnapshot = null;
   debugState.avatarTransportPreview = null;
   setSceneSeatAnchors([], 0);
+  configureRuntimeMediaSurfaces();
   sceneAnchorsReady = !boot.sceneBundleUrl;
   roomSeatOccupancy = {};
   releaseCurrentSeatLocally();
@@ -6633,6 +6806,7 @@ async function main(): Promise<void> {
     });
     activeSceneBundleRoot = sceneResult.activeSceneBundleRoot;
     setSceneSeatAnchors(sceneResult.sceneManifest?.anchors?.seatAnchors ?? [], sceneResult.sceneManifest?.anchors?.teleportFloorY ?? 0);
+    configureRuntimeMediaSurfaces(sceneResult.sceneManifest?.mediaSurfaces);
     syncSeatStateFromOccupancy();
     effectiveCleanSceneMode = sceneResult.effectiveCleanSceneMode;
     debugState.sceneBundleState = sceneResult.sceneBundleState;

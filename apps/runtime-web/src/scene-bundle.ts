@@ -20,6 +20,26 @@ export interface SceneBundleSeatAnchor {
   label?: string;
 }
 
+export interface SceneBundleMediaSurface {
+  surfaceId: string;
+  label?: string;
+  kind?: "wall" | "table" | "laptop" | "floating" | "custom";
+  widthM: number;
+  heightM: number;
+  widthPx?: number;
+  heightPx?: number;
+  transform: {
+    x: number;
+    y: number;
+    z: number;
+    yaw?: number;
+    pitch?: number;
+    roll?: number;
+  };
+  visible?: boolean;
+  allowedObjectTypes?: string[];
+}
+
 export interface SceneBundleManifest {
   schemaVersion: 1;
   sceneId: string;
@@ -32,6 +52,7 @@ export interface SceneBundleManifest {
     teleportFloorY?: number;
     seatAnchors: SceneBundleSeatAnchor[];
   };
+  mediaSurfaces?: SceneBundleMediaSurface[];
   materialOverrides?: Array<{
     match: string;
     mapPath?: string;
@@ -120,6 +141,80 @@ function parseSeatAnchor(input: unknown, index: number): SceneBundleSeatAnchor {
   };
 }
 
+function parseOptionalBoolean(value: unknown, errorCode: string): boolean | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== "boolean") {
+    throw new Error(errorCode);
+  }
+  return value;
+}
+
+function parsePositiveNumber(value: unknown, errorCode: string): number {
+  if (!isFiniteNumber(value) || value <= 0) {
+    throw new Error(errorCode);
+  }
+  return value;
+}
+
+function parseMediaSurface(input: unknown, index: number): SceneBundleMediaSurface {
+  const payload = assertObject(input, `invalid_scene_bundle_media_surface:${index}`);
+  const transform = assertObject(payload.transform, `invalid_scene_bundle_media_surface_transform:${index}`);
+  if (!isFiniteNumber(transform.x) || !isFiniteNumber(transform.y) || !isFiniteNumber(transform.z)) {
+    throw new Error(`invalid_scene_bundle_media_surface_transform:${index}`);
+  }
+  const parsed: SceneBundleMediaSurface = {
+    surfaceId: assertString(payload.surfaceId, `invalid_scene_bundle_media_surface_id:${index}`),
+    widthM: parsePositiveNumber(payload.widthM, `invalid_scene_bundle_media_surface_width_m:${index}`),
+    heightM: parsePositiveNumber(payload.heightM, `invalid_scene_bundle_media_surface_height_m:${index}`),
+    transform: {
+      x: transform.x,
+      y: transform.y,
+      z: transform.z
+    }
+  };
+
+  if (payload.label !== undefined) {
+    parsed.label = assertString(payload.label, `invalid_scene_bundle_media_surface_label:${index}`);
+  }
+  if (payload.kind !== undefined) {
+    if (payload.kind !== "wall" && payload.kind !== "table" && payload.kind !== "laptop" && payload.kind !== "floating" && payload.kind !== "custom") {
+      throw new Error(`invalid_scene_bundle_media_surface_kind:${index}`);
+    }
+    parsed.kind = payload.kind;
+  }
+  if (payload.widthPx !== undefined) {
+    parsed.widthPx = parsePositiveNumber(payload.widthPx, `invalid_scene_bundle_media_surface_width_px:${index}`);
+  }
+  if (payload.heightPx !== undefined) {
+    parsed.heightPx = parsePositiveNumber(payload.heightPx, `invalid_scene_bundle_media_surface_height_px:${index}`);
+  }
+  if (transform.yaw !== undefined) {
+    if (!isFiniteNumber(transform.yaw)) throw new Error(`invalid_scene_bundle_media_surface_yaw:${index}`);
+    parsed.transform.yaw = transform.yaw;
+  }
+  if (transform.pitch !== undefined) {
+    if (!isFiniteNumber(transform.pitch)) throw new Error(`invalid_scene_bundle_media_surface_pitch:${index}`);
+    parsed.transform.pitch = transform.pitch;
+  }
+  if (transform.roll !== undefined) {
+    if (!isFiniteNumber(transform.roll)) throw new Error(`invalid_scene_bundle_media_surface_roll:${index}`);
+    parsed.transform.roll = transform.roll;
+  }
+
+  parsed.visible = parseOptionalBoolean(payload.visible, `invalid_scene_bundle_media_surface_visible:${index}`);
+
+  if (payload.allowedObjectTypes !== undefined) {
+    if (!Array.isArray(payload.allowedObjectTypes)) {
+      throw new Error(`invalid_scene_bundle_media_surface_allowed_object_types:${index}`);
+    }
+    parsed.allowedObjectTypes = payload.allowedObjectTypes.map((entry, typeIndex) => assertString(entry, `invalid_scene_bundle_media_surface_allowed_object_type:${index}:${typeIndex}`));
+  }
+
+  return parsed;
+}
+
 export function parseSceneBundleManifest(input: unknown): SceneBundleManifest {
   const payload = assertObject(input, "invalid_scene_bundle_manifest");
   if (payload.schemaVersion !== 1) {
@@ -163,6 +258,16 @@ export function parseSceneBundleManifest(input: unknown): SceneBundleManifest {
       parsedAnchors.teleportFloorY = anchors.teleportFloorY;
     }
     manifest.anchors = parsedAnchors;
+  }
+
+  if (payload.mediaSurfaces !== undefined) {
+    if (!Array.isArray(payload.mediaSurfaces)) {
+      throw new Error("invalid_scene_bundle_media_surfaces");
+    }
+    if (payload.mediaSurfaces.length === 0) {
+      throw new Error("invalid_scene_bundle_media_surfaces_empty");
+    }
+    manifest.mediaSurfaces = payload.mediaSurfaces.map((entry, index) => parseMediaSurface(entry, index));
   }
 
   if (payload.bounds !== undefined) {
