@@ -37,6 +37,20 @@ test("parseSceneBundleManifest accepts valid v1 manifest", () => {
         }
       ]
     },
+    mediaSurfaces: [
+      {
+        surfaceId: "debug-main",
+        label: "Right wall screen",
+        kind: "wall",
+        widthM: 5.8,
+        heightM: 3.3,
+        widthPx: 1920,
+        heightPx: 1080,
+        transform: { x: 3.83, y: 2.35, z: -0.05, yaw: -Math.PI / 2 },
+        visible: true,
+        allowedObjectTypes: ["screen-share", "remote-browser"]
+      }
+    ],
     bounds: { width: 20, height: 8, depth: 20 },
     preview: "preview.jpg"
   });
@@ -46,6 +60,8 @@ test("parseSceneBundleManifest accepts valid v1 manifest", () => {
   assert.equal(manifest.materialOverrides?.[0]?.match, "chairs*");
   assert.equal(manifest.anchors?.teleportFloorY, 0);
   assert.equal(manifest.anchors?.seatAnchors[0]?.id, "seat-a");
+  assert.equal(manifest.mediaSurfaces?.[0]?.surfaceId, "debug-main");
+  assert.equal(manifest.mediaSurfaces?.[0]?.transform.yaw, -Math.PI / 2);
   assert.equal(pickSceneSpawnPoint(manifest)?.id, "main");
   assert.equal(resolveSceneAssetUrl("https://example.com/scenes/hall/scene.json", manifest.glbPath), "https://example.com/scenes/hall/scene.glb");
 });
@@ -99,5 +115,20 @@ test("parseSceneBundleManifest rejects invalid seat anchor payload", () => {
       }
     }),
     /invalid_scene_bundle_seat_anchor_height/
+  );
+});
+
+test("parseSceneBundleManifest rejects invalid media surface payload", () => {
+  assert.throws(
+    () => parseSceneBundleManifest({
+      schemaVersion: 1,
+      sceneId: "sense-hall",
+      label: "Sense Hall",
+      source: "sensetower",
+      glbPath: "scene.glb",
+      spawnPoints: [],
+      mediaSurfaces: [{ surfaceId: "debug-main", widthM: 0, heightM: 3.3, transform: { x: 0, y: 2, z: -4 } }]
+    }),
+    /invalid_scene_bundle_media_surface_width_m/
   );
 });
