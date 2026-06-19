@@ -15,13 +15,32 @@ services:
 
   livekit:
     image: livekit/livekit-server:latest
-    command: --dev --bind 0.0.0.0
+    command:
+      - --bind
+      - 0.0.0.0
     environment:
-      UDP_PORT: 7881
-      NODE_IP: ${LIVEKIT_NODE_IP}
+      LIVEKIT_CONFIG: |
+        port: 7880
+        log_level: info
+        rtc:
+          tcp_port: ${VRATA_LIVEKIT_TCP_PORT:-7881}
+          udp_port: ${VRATA_LIVEKIT_UDP_PORT}
+          use_external_ip: false
+          node_ip: ${LIVEKIT_NODE_IP}
+        keys:
+          "${LIVEKIT_API_KEY}": "${LIVEKIT_API_SECRET}"
+        turn:
+          enabled: ${LIVEKIT_TURN_ENABLED:-false}
+          domain: ${LIVEKIT_TURN_DOMAIN:-turn.invalid}
+          tls_port: ${LIVEKIT_TURN_TLS_PORT:-5349}
+          udp_port: ${LIVEKIT_TURN_UDP_PORT:-3478}
+          relay_range_start: ${LIVEKIT_TURN_RELAY_RANGE_START:-50000}
+          relay_range_end: ${LIVEKIT_TURN_RELAY_RANGE_END:-50100}
+          external_tls: ${LIVEKIT_TURN_EXTERNAL_TLS:-true}
     ports:
       - "${VRATA_LIVEKIT_PORT}:7880"
-      - "${VRATA_LIVEKIT_UDP_PORT}:7881/udp"
+      - "${VRATA_LIVEKIT_TCP_PORT:-7881}:${VRATA_LIVEKIT_TCP_PORT:-7881}/tcp"
+      - "${VRATA_LIVEKIT_UDP_PORT}:${VRATA_LIVEKIT_UDP_PORT}/udp"
 
   room-state:
     image: ${ROOM_STATE_IMAGE_REPO}:${IMAGE_TAG}
@@ -112,9 +131,18 @@ services:
       ROOM_STATE_PUBLIC_URL: ${ROOM_STATE_PUBLIC_URL}
       LIVEKIT_URL: ${LIVEKIT_URL}
       VRATA_LIVEKIT_DOMAIN: ${VRATA_LIVEKIT_DOMAIN}
+      VRATA_LIVEKIT_TCP_PORT: ${VRATA_LIVEKIT_TCP_PORT:-7881}
+      VRATA_LIVEKIT_UDP_PORT: ${VRATA_LIVEKIT_UDP_PORT}
       LIVEKIT_API_KEY: ${LIVEKIT_API_KEY}
       LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET}
       LIVEKIT_ROOM_PREFIX: ${LIVEKIT_ROOM_PREFIX}
+      LIVEKIT_TURN_ENABLED: ${LIVEKIT_TURN_ENABLED:-false}
+      LIVEKIT_TURN_DOMAIN: ${LIVEKIT_TURN_DOMAIN:-}
+      LIVEKIT_TURN_TLS_PORT: ${LIVEKIT_TURN_TLS_PORT:-}
+      LIVEKIT_TURN_UDP_PORT: ${LIVEKIT_TURN_UDP_PORT:-}
+      LIVEKIT_TURN_RELAY_RANGE_START: ${LIVEKIT_TURN_RELAY_RANGE_START:-}
+      LIVEKIT_TURN_RELAY_RANGE_END: ${LIVEKIT_TURN_RELAY_RANGE_END:-}
+      LIVEKIT_TURN_EXTERNAL_TLS: ${LIVEKIT_TURN_EXTERNAL_TLS:-}
       CONTROL_PLANE_ADMIN_TOKEN: ${CONTROL_PLANE_ADMIN_TOKEN}
       STATE_TOKEN_TTL_SECONDS: ${STATE_TOKEN_TTL_SECONDS}
       STATE_TOKEN_SECRET: ${STATE_TOKEN_SECRET:-dev-state-secret}
@@ -124,6 +152,7 @@ services:
       REMOTE_BROWSER_PUBLIC_URL: ${REMOTE_BROWSER_PUBLIC_URL}
       MEDIA_TOKEN_TTL_SECONDS: ${MEDIA_TOKEN_TTL_SECONDS}
       VRATA_DEV_ROLE_QUERY: ${VRATA_DEV_ROLE_QUERY:-true}
+      VRATA_ALLOW_INSECURE_PRODUCTION_URLS: ${VRATA_ALLOW_INSECURE_PRODUCTION_URLS:-false}
       POSTGRES_URL: ${POSTGRES_URL}
       SCENE_BUNDLE_PROVIDER: ${SCENE_BUNDLE_PROVIDER:-minio-default}
       MINIO_BUCKET: ${MINIO_BUCKET}

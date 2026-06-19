@@ -267,6 +267,7 @@ export VRATA_STAGING_PUBLIC_IP
 python3 - "$ENV_FILE" "$IMAGE_TAG" <<'PY'
 from pathlib import Path
 import os
+import secrets
 import sys
 
 env_path = Path(sys.argv[1])
@@ -302,6 +303,7 @@ for legacy_key, current_key in (
     ('NOAH_API_DIRECT_PORT', 'VRATA_API_DIRECT_PORT'),
     ('NOAH_ROOM_STATE_PORT', 'VRATA_ROOM_STATE_PORT'),
     ('NOAH_LIVEKIT_PORT', 'VRATA_LIVEKIT_PORT'),
+    ('NOAH_LIVEKIT_TCP_PORT', 'VRATA_LIVEKIT_TCP_PORT'),
     ('NOAH_LIVEKIT_UDP_PORT', 'VRATA_LIVEKIT_UDP_PORT')
 ):
     if current_key not in values and legacy_key in values:
@@ -313,14 +315,17 @@ if public_ip:
     livekit_domain = f'livekit.{app_domain}'
     browser_domain = f'browser.{app_domain}'
     values.update({
-        'VRATA_APP_BASE_URL': f'http://{public_ip}:4000',
+        'VRATA_APP_BASE_URL': f'https://{app_domain}',
         'VRATA_APP_DOMAIN': app_domain,
         'VRATA_STATE_DOMAIN': state_domain,
         'VRATA_LIVEKIT_DOMAIN': livekit_domain,
         'VRATA_BROWSER_DOMAIN': browser_domain,
         'LIVEKIT_NODE_IP': public_ip,
-        'ROOM_STATE_PUBLIC_URL': f'ws://{public_ip}:2567',
-        'LIVEKIT_URL': f'ws://{public_ip}:7880',
+        'ROOM_STATE_PUBLIC_URL': f'wss://{state_domain}',
+        'LIVEKIT_URL': f'wss://{livekit_domain}',
+        'VRATA_LIVEKIT_TCP_PORT': values.get('VRATA_LIVEKIT_TCP_PORT') or values.get('VRATA_LIVEKIT_UDP_PORT') or '7881',
+        'LIVEKIT_TURN_ENABLED': values.get('LIVEKIT_TURN_ENABLED') or 'false',
+        'VRATA_ALLOW_INSECURE_PRODUCTION_URLS': 'false',
         'REMOTE_BROWSER_PUBLIC_URL': f'https://{browser_domain}',
         'REMOTE_BROWSER_ALLOWED_ORIGINS': ','.join([
             f'https://{app_domain}',
@@ -330,6 +335,10 @@ if public_ip:
         ]),
         'MINIO_PUBLIC_BASE_URL': f'http://{public_ip}:9000'
     })
+    if values.get('LIVEKIT_API_KEY', '').strip().lower() in ('', 'devkey'):
+        values['LIVEKIT_API_KEY'] = 'vrata-stage'
+    if values.get('LIVEKIT_API_SECRET', '').strip().lower() in ('', 'secret', 'devsecret'):
+        values['LIVEKIT_API_SECRET'] = secrets.token_urlsafe(32)
 public_remote_browser_origins = ['https://rutube.ru', 'https://*.rutube.ru', 'https://*.rtbcdn.ru']
 if not values.get('VRATA_BROWSER_DOMAIN') and values.get('VRATA_APP_DOMAIN'):
     values['VRATA_BROWSER_DOMAIN'] = 'browser.' + values['VRATA_APP_DOMAIN']
@@ -364,7 +373,7 @@ for line in lines:
     else:
       rendered.append(line)
 
-for key in ('API_IMAGE_REPO', 'ROOM_STATE_IMAGE_REPO', 'REMOTE_BROWSER_IMAGE_REPO', 'VRATA_APP_BASE_URL', 'VRATA_APP_DOMAIN', 'VRATA_STATE_DOMAIN', 'VRATA_LIVEKIT_DOMAIN', 'VRATA_BROWSER_DOMAIN', 'VRATA_DEV_ROLE_QUERY', 'VRATA_INTERNAL_SERVICE_TOKEN', 'VRATA_HTTP_PORT', 'VRATA_HTTPS_PORT', 'VRATA_API_DIRECT_PORT', 'VRATA_ROOM_STATE_PORT', 'VRATA_LIVEKIT_PORT', 'VRATA_LIVEKIT_UDP_PORT', 'LIVEKIT_NODE_IP', 'ROOM_STATE_PUBLIC_URL', 'LIVEKIT_URL', 'REMOTE_BROWSER_PUBLIC_URL', 'REMOTE_BROWSER_ALLOWED_ORIGINS', 'REMOTE_BROWSER_ALLOW_PRIVATE_ALLOWED_ORIGINS', 'REMOTE_BROWSER_FRAME_INTERVAL_MS', 'REMOTE_BROWSER_TOKEN_SECRET', 'REMOTE_BROWSER_TOKEN_TTL_SECONDS', 'MINIO_PUBLIC_BASE_URL', 'IMAGE_TAG'):
+for key in ('API_IMAGE_REPO', 'ROOM_STATE_IMAGE_REPO', 'REMOTE_BROWSER_IMAGE_REPO', 'VRATA_APP_BASE_URL', 'VRATA_APP_DOMAIN', 'VRATA_STATE_DOMAIN', 'VRATA_LIVEKIT_DOMAIN', 'VRATA_BROWSER_DOMAIN', 'VRATA_DEV_ROLE_QUERY', 'VRATA_INTERNAL_SERVICE_TOKEN', 'VRATA_ALLOW_INSECURE_PRODUCTION_URLS', 'VRATA_HTTP_PORT', 'VRATA_HTTPS_PORT', 'VRATA_API_DIRECT_PORT', 'VRATA_ROOM_STATE_PORT', 'VRATA_LIVEKIT_PORT', 'VRATA_LIVEKIT_TCP_PORT', 'VRATA_LIVEKIT_UDP_PORT', 'LIVEKIT_NODE_IP', 'ROOM_STATE_PUBLIC_URL', 'LIVEKIT_URL', 'LIVEKIT_API_KEY', 'LIVEKIT_API_SECRET', 'LIVEKIT_TURN_ENABLED', 'REMOTE_BROWSER_PUBLIC_URL', 'REMOTE_BROWSER_ALLOWED_ORIGINS', 'REMOTE_BROWSER_ALLOW_PRIVATE_ALLOWED_ORIGINS', 'REMOTE_BROWSER_FRAME_INTERVAL_MS', 'REMOTE_BROWSER_TOKEN_SECRET', 'REMOTE_BROWSER_TOKEN_TTL_SECONDS', 'MINIO_PUBLIC_BASE_URL', 'IMAGE_TAG'):
     if key not in seen and key in values:
         rendered.append(f'{key}={values[key]}')
 

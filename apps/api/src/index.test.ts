@@ -60,6 +60,18 @@ test("api production env validator rejects insecure LiveKit startup config", asy
     LIVEKIT_API_SECRET: "secret"
   }), /invalid_livekit_config:livekit_dev_credentials_forbidden/);
 
+  assert.doesNotThrow(() => module.validateProductionApiEnv({
+    NODE_ENV: "production",
+    CONTROL_PLANE_ADMIN_TOKEN: "test-admin-token",
+    ROOM_STATE_PUBLIC_URL: "ws://127.0.0.1:2567",
+    RUNTIME_BASE_URL: "http://127.0.0.1:4000",
+    STATE_TOKEN_SECRET: "state-token-secret-0123456789abcdef",
+    LIVEKIT_URL: "ws://127.0.0.1:7880",
+    LIVEKIT_API_KEY: "local-livekit-key",
+    LIVEKIT_API_SECRET: "local-livekit-secret-0123456789abcdef",
+    VRATA_ALLOW_INSECURE_PRODUCTION_URLS: "true"
+  }));
+
   delete process.env.VRATA_DISABLE_AUTOSTART;
 });
 
