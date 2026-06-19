@@ -4490,7 +4490,7 @@ async function reportDiagnostics(note?: string, options: { reportId?: string } =
       previous: debugState.sceneDebug
     });
   }
-  const includeImage = debugEnabled;
+  const includeImage = false;
   const screenshot = captureCanvasDiagnostics({
     canvas: renderer.domElement,
     includeImage

@@ -285,8 +285,10 @@ export async function fetchRoomManifest(apiBaseUrl: string, roomId: string): Pro
   return (await response.json()) as RoomManifestRecord;
 }
 
-export async function fetchRoomDiagnostics(apiBaseUrl: string, roomId: string): Promise<RuntimeDiagnosticRecord[]> {
-  const response = await fetch(new URL(`/api/rooms/${roomId}/diagnostics`, apiBaseUrl));
+export async function fetchRoomDiagnostics(apiBaseUrl: string, roomId: string, auth?: ControlPlaneAuth): Promise<RuntimeDiagnosticRecord[]> {
+  const response = await fetch(new URL(`/api/rooms/${roomId}/diagnostics`, apiBaseUrl), {
+    headers: { ...authHeaders(auth) }
+  });
 
   if (!response.ok) {
     throw new Error(`failed_to_fetch_room_diagnostics:${response.status}`);

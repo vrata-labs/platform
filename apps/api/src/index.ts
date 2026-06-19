@@ -117,6 +117,7 @@ type ControlPlanePermission =
   | "room.delete"
   | "asset.write"
   | "scene-bundle.write"
+  | "diagnostics.read"
   | "xr-telemetry.read"
   | "audit.read";
 
@@ -830,6 +831,11 @@ function createDiagnosticRecord(roomId: string, payload: RuntimeDiagnosticRecord
     requestId,
     createdAt: payload.createdAt || new Date().toISOString()
   }) as RuntimeDiagnosticRecord;
+  if (sanitized.sceneDebug?.screenshot && "dataUrl" in sanitized.sceneDebug.screenshot) {
+    const screenshot = { ...sanitized.sceneDebug.screenshot };
+    delete screenshot.dataUrl;
+    sanitized.sceneDebug = { ...sanitized.sceneDebug, screenshot };
+  }
   logEvent({
     service: "api",
     event: "runtime_diagnostic_report",
@@ -1679,7 +1685,15 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
 
   const diagnosticsMatch = url.pathname.match(/^\/api\/rooms\/([^/]+)\/diagnostics$/);
   if (method === "GET" && diagnosticsMatch) {
-    json(response, 200, { items: await storage.getDiagnostics(decodeURIComponent(diagnosticsMatch[1])) });
+    const roomId = decodeURIComponent(diagnosticsMatch[1]);
+    const actor = await requireControlPlanePermission(request, response, {
+      permission: "diagnostics.read",
+      action: "diagnostics.list",
+      objectType: "room",
+      objectId: roomId
+    });
+    if (!actor) return;
+    json(response, 200, { items: await storage.getDiagnostics(roomId) });
     return;
   }
 

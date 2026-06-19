@@ -17,6 +17,7 @@ on:
         type: boolean
 
 permissions:
+  actions: read
   contents: read
 
 jobs:
@@ -53,12 +54,20 @@ jobs:
 
       - name: Determine deploy SHA
         id: deploy
+        env:
+          MANUAL_DEPLOY_SHA: ${{ inputs.deploy_sha || '' }}
+          WORKFLOW_DEPLOY_SHA: ${{ github.event.workflow_run.head_sha || '' }}
         run: |
           if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
-            echo "deploy_sha=${{ inputs.deploy_sha }}" >> "$GITHUB_OUTPUT"
+            DEPLOY_SHA="$MANUAL_DEPLOY_SHA"
           else
-            echo "deploy_sha=${{ github.event.workflow_run.head_sha }}" >> "$GITHUB_OUTPUT"
+            DEPLOY_SHA="$WORKFLOW_DEPLOY_SHA"
           fi
+          if [[ ! "$DEPLOY_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "invalid_deploy_sha:$DEPLOY_SHA" >&2
+            exit 1
+          fi
+          echo "deploy_sha=$DEPLOY_SHA" >> "$GITHUB_OUTPUT"
 
       - name: Sync workspace to deploy SHA
         env:
@@ -66,6 +75,28 @@ jobs:
         run: |
           git fetch --no-tags --depth=1 origin "$DEPLOY_SHA"
           git checkout --detach FETCH_HEAD
+
+      - name: Wait for CI on deploy SHA
+        if: github.event_name != 'workflow_dispatch'
+        env:
+          DEPLOY_SHA: ${{ steps.deploy.outputs.deploy_sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for attempt in $(seq 1 60); do
+            CONCLUSION="$(gh run list --workflow CI --commit "$DEPLOY_SHA" --limit 10 --json status,conclusion --jq 'map(select(.status == "completed")) | .[0].conclusion // ""')"
+            if [ "$CONCLUSION" = "success" ]; then
+              exit 0
+            fi
+            if [ -n "$CONCLUSION" ]; then
+              echo "ci_failed_for_deploy_sha:$DEPLOY_SHA:$CONCLUSION" >&2
+              exit 1
+            fi
+            STATUS="$(gh run list --workflow CI --commit "$DEPLOY_SHA" --limit 1 --json status --jq '.[0].status // "not_found"')"
+            echo "waiting_for_ci:$DEPLOY_SHA:attempt=$attempt:status=$STATUS"
+            sleep 30
+          done
+          echo "ci_wait_timeout:$DEPLOY_SHA" >&2
+          exit 1
 
       - name: Checkout private scene assets
         uses: actions/checkout@v4
@@ -88,6 +119,10 @@ jobs:
             echo "rollback_precondition_failed: missing previous successful sha" >&2
             exit 1
           fi
+          if [[ ! "$PREVIOUS_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "rollback_precondition_failed: invalid previous successful sha: $PREVIOUS_SHA" >&2
+            exit 1
+          fi
           echo "previous_sha=$PREVIOUS_SHA" >> "$GITHUB_OUTPUT"
           {
             echo "### Staging deploy"
@@ -101,6 +136,8 @@ jobs:
           tar -C private-scene-assets/assets -czf - . | ssh -o StrictHostKeyChecking=no "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo bash -lc 'rm -rf \"$PRIVATE_SCENE_ASSETS_HOST_DIR\" && mkdir -p \"$PRIVATE_SCENE_ASSETS_HOST_DIR/assets\" && tar -xzf - -C \"$PRIVATE_SCENE_ASSETS_HOST_DIR/assets\"'"
 
       - name: Roll out staging images
+        id: rollout
+        continue-on-error: true
         env:
           DEPLOY_SHA: ${{ steps.deploy.outputs.deploy_sha }}
         run: |
@@ -109,15 +146,17 @@ jobs:
           set -euo pipefail
           cd "$STAGING_APP_DIR"
           git -c safe.directory="$STAGING_APP_DIR" fetch origin
-          git -c safe.directory="$STAGING_APP_DIR" checkout ${DEPLOY_SHA}
+          git -c safe.directory="$STAGING_APP_DIR" checkout "$DEPLOY_SHA"
           printf '%s' '${YCR_PASSWORD_B64}' | base64 -d | docker login cr.yandex --username '${YCR_USERNAME}' --password-stdin
-          VRATA_PRIVATE_SCENE_ASSETS_ROOT="$PRIVATE_SCENE_ASSETS_HOST_DIR/assets" bash ./infra/docker/rollout-staging-images.sh ${DEPLOY_SHA}
+          VRATA_PRIVATE_SCENE_ASSETS_ROOT="$PRIVATE_SCENE_ASSETS_HOST_DIR/assets" bash ./infra/docker/rollout-staging-images.sh "$DEPLOY_SHA"
           EOF
 
       - name: Install Playwright browser
+        if: steps.rollout.outcome == 'success'
         run: pnpm exec playwright install --with-deps chromium
 
       - name: Patch canonical staging scene bundles
+        if: steps.rollout.outcome == 'success'
         env:
           BASE_URL: ${{ env.STAGING_BASE_URL }}
           STAGING_ADMIN_TOKEN: ${{ env.STAGING_ADMIN_TOKEN }}
@@ -129,6 +168,7 @@ jobs:
         run: node tools/patch-staging-scene-bundles.mjs
 
       - name: Verification gate
+        if: steps.rollout.outcome == 'success'
         id: gate
         continue-on-error: true
         env:
@@ -168,7 +208,7 @@ jobs:
           pnpm test:e2e:staging
 
       - name: Upload staging Playwright artifacts
-        if: always()
+        if: always() && steps.rollout.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: playwright-staging-gate-${{ github.run_id }}-${{ github.run_attempt }}
@@ -179,7 +219,7 @@ jobs:
             test-results/
 
       - name: Persist successful deploy SHA
-        if: steps.gate.outcome == 'success'
+        if: steps.rollout.outcome == 'success' && steps.gate.outcome == 'success'
         env:
           DEPLOY_SHA: ${{ steps.deploy.outputs.deploy_sha }}
         run: |
@@ -191,7 +231,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Roll back failed deploy
-        if: steps.gate.outcome == 'failure'
+        if: steps.rollout.outcome == 'failure' || steps.gate.outcome == 'failure'
         env:
           ROLLBACK_SHA: ${{ steps.previous.outputs.previous_sha }}
         run: |
@@ -199,9 +239,9 @@ jobs:
           ssh -o StrictHostKeyChecking=no "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo bash -s" <<EOF
           set -euo pipefail
           cd "$STAGING_APP_DIR"
-          git -c safe.directory="$STAGING_APP_DIR" checkout ${ROLLBACK_SHA}
+          git -c safe.directory="$STAGING_APP_DIR" checkout "$ROLLBACK_SHA"
           printf '%s' '${YCR_PASSWORD_B64}' | base64 -d | docker login cr.yandex --username '${YCR_USERNAME}' --password-stdin
-          VRATA_PRIVATE_SCENE_ASSETS_ROOT="$PRIVATE_SCENE_ASSETS_HOST_DIR/assets" bash ./infra/docker/rollout-staging-images.sh ${ROLLBACK_SHA}
+          VRATA_PRIVATE_SCENE_ASSETS_ROOT="$PRIVATE_SCENE_ASSETS_HOST_DIR/assets" bash ./infra/docker/rollout-staging-images.sh "$ROLLBACK_SHA"
           printf '%s' '${ROLLBACK_SHA}' > "$STAGING_APP_DIR/infra/docker/.staging-successful-image-tag"
           EOF
           curl --fail --silent "$STAGING_BASE_URL/health" >/dev/null
@@ -223,5 +263,5 @@ jobs:
           fi
 
       - name: Fail after rollback
-        if: steps.gate.outcome == 'failure'
+        if: steps.rollout.outcome == 'failure' || steps.gate.outcome == 'failure'
         run: exit 1

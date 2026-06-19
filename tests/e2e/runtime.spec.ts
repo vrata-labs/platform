@@ -5,6 +5,7 @@ test.describe.configure({ mode: "serial" });
 const e2eRoomStatePublicUrl = process.env.E2E_ROOM_STATE_PUBLIC_URL ?? "ws://127.0.0.1:2567";
 const e2eRoomStateHost = new URL(e2eRoomStatePublicUrl).host;
 const e2eBaseUrl = process.env.BASE_URL ?? "http://127.0.0.1:4000";
+const e2eAdminToken = process.env.STAGING_ADMIN_TOKEN ?? "test-admin-token";
 
 function e2eUrl(path: string): string {
   return new URL(path, e2eBaseUrl).toString();
@@ -47,6 +48,14 @@ async function createAvatarRoom(request: APIRequestContext, name: string, sceneB
 
 async function createAvatarHallRoom(request: APIRequestContext, name: string): Promise<{ roomId: string; roomLink: string }> {
   return createAvatarRoom(request, name, "/assets/scenes/sense-hall2-v1/scene.json");
+}
+
+async function readDiagnostics<T>(request: APIRequestContext, roomId: string): Promise<T> {
+  const diagnosticsResponse = await request.get(`/api/rooms/${roomId}/diagnostics`, {
+    headers: { "x-vrata-admin-token": e2eAdminToken }
+  });
+  expect(diagnosticsResponse.ok()).toBeTruthy();
+  return await diagnosticsResponse.json() as T;
 }
 
 async function readInteractionDebug(page: Page) {
@@ -108,8 +117,7 @@ test("room shell loads and presence is registered", async ({ page, request }) =>
   expect(presence.items.length).toBeGreaterThan(0);
 
   await expect.poll(async () => {
-    const diagnosticsResponse = await request.get("/api/rooms/demo-room/diagnostics");
-    const diagnostics = (await diagnosticsResponse.json()) as { items: Array<{ note?: string }> };
+    const diagnostics = await readDiagnostics<{ items: Array<{ note?: string }> }>(request, "demo-room");
     return diagnostics.items.some((item) => item.note === "runtime_booted");
   }, {
     timeout: 15000,
@@ -359,10 +367,9 @@ test("bot mode emits movement diagnostics automatically", async ({ page, request
   expect(debug?.botMode).toBe("line");
 
   await expect.poll(async () => {
-    const diagnosticsResponse = await request.get("/api/rooms/demo-room/diagnostics");
-    const diagnostics = (await diagnosticsResponse.json()) as {
+    const diagnostics = await readDiagnostics<{
       items: Array<{ localPosition: { x: number; z: number } }>;
-    };
+    }>(request, "demo-room");
     return diagnostics.items.some((item) => Math.abs(item.localPosition.x) + Math.abs(item.localPosition.z) > 0.5);
   }, {
     timeout: 10000,
@@ -402,13 +409,12 @@ test("avatar sandbox exposes avatar diagnostics and persists them via diagnostic
   });
 
   await expect.poll(async () => {
-    const diagnosticsResponse = await request.get("/api/rooms/demo-room/diagnostics");
-    const diagnostics = (await diagnosticsResponse.json()) as {
+    const diagnostics = await readDiagnostics<{
       items: Array<{
         note?: string;
         avatarDebug?: { state?: string; presetCount?: number; fallbackReason?: string | null };
       }>;
-    };
+    }>(request, "demo-room");
 
     return diagnostics.items.some((item) => item.note === "avatar_sandbox_booted"
       && item.avatarDebug?.state === "loaded"
@@ -464,10 +470,9 @@ test("avatar sandbox falls back cleanly on invalid catalog url", async ({ page, 
   });
 
   await expect.poll(async () => {
-    const diagnosticsResponse = await request.get(`/api/rooms/${room.roomId}/diagnostics`);
-    const diagnostics = (await diagnosticsResponse.json()) as {
+    const diagnostics = await readDiagnostics<{
       items: Array<{ note?: string; avatarDebug?: { fallbackReason?: string | null } }>;
-    };
+    }>(request, room.roomId);
     return diagnostics.items.some((item) => item.note === "avatar_sandbox_failed" && item.avatarDebug?.fallbackReason === "failed_to_load_avatar_catalog:404");
   }, {
     timeout: 15000,
@@ -560,8 +565,7 @@ test("avatar-enabled room exposes local self-avatar diagnostics in normal room f
   });
 
   await expect.poll(async () => {
-    const diagnosticsResponse = await request.get(`/api/rooms/${room.roomId}/diagnostics`);
-    const diagnostics = (await diagnosticsResponse.json()) as {
+    const diagnostics = await readDiagnostics<{
       items: Array<{
         note?: string;
         avatarDebug?: { state?: string; visibilityState?: string | null; locomotionState?: string | null; animationState?: string | null };
@@ -571,7 +575,7 @@ test("avatar-enabled room exposes local self-avatar diagnostics in normal room f
           poseFrame?: { seq?: number | null; locomotion?: { mode?: number | null } };
         };
       }>;
-    };
+    }>(request, room.roomId);
 
     return diagnostics.items.some((item) => (item.note === "local_avatar_ready" || item.note === undefined)
       && item.avatarDebug?.state === "loaded"
@@ -614,15 +618,14 @@ test("avatar-enabled room diagnostics api exposes transport preview payload", as
   await page.goto(`${room.roomLink}?debug=1&bot=line`);
 
   await expect.poll(async () => {
-    const diagnosticsResponse = await request.get(`/api/rooms/${room.roomId}/diagnostics`);
-    const diagnostics = (await diagnosticsResponse.json()) as {
+    const diagnostics = await readDiagnostics<{
       items: Array<{
         avatarTransportPreview?: {
           reliableState?: { avatarId?: string | null; inputMode?: string | null };
           poseFrame?: { seq?: number | null; locomotion?: { mode?: number | null } };
         };
       }>;
-    };
+    }>(request, room.roomId);
 
     return diagnostics.items.some((item) => item.avatarTransportPreview?.reliableState?.avatarId === "preset-01"
       && item.avatarTransportPreview?.reliableState?.inputMode === "desktop"
@@ -711,8 +714,7 @@ test("avatar-enabled room exposes lipsync debug signals for local and remote ava
     }));
 
     await expect.poll(async () => {
-      const diagnosticsResponse = await request.get(`/api/rooms/${room.roomId}/diagnostics`);
-      const diagnostics = (await diagnosticsResponse.json()) as {
+      const diagnostics = await readDiagnostics<{
         items: Array<{
           avatarDebug?: {
             mouthAmount?: number;
@@ -725,7 +727,7 @@ test("avatar-enabled room exposes lipsync debug signals for local and remote ava
             lipsyncSourceState?: string | null;
           }>;
         }>;
-      };
+      }>(request, room.roomId);
 
       return diagnostics.items.some((item) => item.avatarDebug?.mouthAmount === 0
         && item.avatarDebug?.speakingActive === false
@@ -1503,8 +1505,7 @@ test("scene bundle diagnostics include render and geometry debug info", async ({
   await page.goto(`${room.roomLink}?debug=1`);
   await page.waitForTimeout(5000);
 
-  const diagnosticsResponse = await request.get(`/api/rooms/${room.roomId}/diagnostics`);
-  const diagnostics = (await diagnosticsResponse.json()) as {
+  const diagnostics = await readDiagnostics<{
     items: Array<{
       note?: string;
       sceneDebug?: {
@@ -1518,14 +1519,14 @@ test("scene bundle diagnostics include render and geometry debug info", async ({
         };
       };
     }>;
-  };
+  }>(request, room.roomId);
   const loaded = [...diagnostics.items].reverse().find((item) => item.note === "scene_bundle_loaded");
   expect(loaded?.sceneDebug?.state).toBe("loaded");
   expect(loaded?.sceneDebug?.meshCount ?? 0).toBeGreaterThan(0);
   expect(loaded?.sceneDebug?.geometryCount ?? 0).toBeGreaterThan(0);
   expect(loaded?.sceneDebug?.screenshot?.width ?? 0).toBeGreaterThan(0);
   expect(loaded?.sceneDebug?.screenshot?.pixelSamples?.length ?? 0).toBeGreaterThan(0);
-  expect((loaded?.sceneDebug?.screenshot?.dataUrl ?? "")).toContain("data:image/jpeg;base64,");
+  expect(loaded?.sceneDebug?.screenshot?.dataUrl).toBeUndefined();
 });
 
 test("@private-assets avatar-enabled hall room supports interaction ray teleport, sit, switch and teleport exit", async ({ page, request }) => {
@@ -1709,8 +1710,7 @@ test("diagnostics capture multi-client remote visibility", async ({ browser, req
   await pageA.waitForTimeout(5000);
   await pageB.waitForTimeout(5000);
 
-  const diagnosticsResponse = await request.get(`/api/rooms/${room.roomId}/diagnostics`);
-  const diagnostics = (await diagnosticsResponse.json()) as {
+  const diagnostics = await readDiagnostics<{
     items: Array<{
       participantId: string;
       remoteAvatarCount: number;
@@ -1728,7 +1728,7 @@ test("diagnostics capture multi-client remote visibility", async ({ browser, req
         rightHandVisible: boolean;
       }>;
     }>;
-  };
+  }>(request, room.roomId);
 
   expect(diagnostics.items.some((item) => item.remoteAvatarCount >= 1)).toBeTruthy();
   expect(diagnostics.items.some((item) => item.remoteTargets.length >= 1)).toBeTruthy();
@@ -2056,8 +2056,7 @@ test("mock screen share updates UI and diagnostics", async ({ page, request }) =
   const debug = await page.evaluate(() => (window as Window & { __VRATA_DEBUG__?: { screenShareState: string } }).__VRATA_DEBUG__);
   expect(debug?.screenShareState).toBe("sharing");
 
-  const diagnosticsResponse = await request.get("/api/rooms/demo-room/diagnostics");
-  const diagnostics = (await diagnosticsResponse.json()) as { items: Array<{ note?: string; screenShareState?: string }> };
+  const diagnostics = await readDiagnostics<{ items: Array<{ note?: string; screenShareState?: string }> }>(request, "demo-room");
   expect(diagnostics.items.some((item) => item.note === "screenshare_mock_started")).toBeTruthy();
 
   await page.click("#stop-share");
@@ -2098,8 +2097,7 @@ test("fault-injected mic denied keeps room usable without audio", async ({ page,
     requestIdReady: true
   });
 
-  const diagnosticsResponse = await request.get("/api/rooms/demo-room/diagnostics");
-  const diagnostics = (await diagnosticsResponse.json()) as { items: Array<{ note?: string; issueCode?: string; reportId?: string; requestId?: string }> };
+  const diagnostics = await readDiagnostics<{ items: Array<{ note?: string; issueCode?: string; reportId?: string; requestId?: string }> }>(request, "demo-room");
   expect(diagnostics.items.some((item) => item.note === "mic_denied" && item.issueCode === "mic_denied" && item.reportId?.startsWith("rpt_") && item.requestId)).toBeTruthy();
 });
 
@@ -2118,8 +2116,7 @@ test("fault-injected media network block explains WebRTC can fail while scene lo
   expect(debug?.screenShareState).toBe("media_network_blocked");
   expect(debug?.statusLine).toContain("scene can load");
 
-  const diagnosticsResponse = await request.get("/api/rooms/demo-room/diagnostics");
-  const diagnostics = (await diagnosticsResponse.json()) as { items: Array<{ note?: string; issueCode?: string }> };
+  const diagnostics = await readDiagnostics<{ items: Array<{ note?: string; issueCode?: string }> }>(request, "demo-room");
   expect(diagnostics.items.some((item) => item.note === "media_network_blocked" && item.issueCode === "media_network_blocked")).toBeTruthy();
 });
 

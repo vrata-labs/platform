@@ -23,12 +23,43 @@ write_files:
       export VRATA_IP VRATA_APP_DOMAIN VRATA_STATE_DOMAIN VRATA_LIVEKIT_DOMAIN VRATA_BROWSER_DOMAIN
       python3 - <<'PY'
       import os
+      import secrets
+      import urllib.error
+      import urllib.request
       from pathlib import Path
+
+      def metadata_value(name):
+          env_name = name.upper().replace('-', '_')
+          if os.environ.get(env_name):
+              return os.environ[env_name]
+          request = urllib.request.Request(
+              f"http://169.254.169.254/computeMetadata/v1/instance/attributes/{name}",
+              headers={"Metadata-Flavor": "Google"}
+          )
+          try:
+              with urllib.request.urlopen(request, timeout=2) as response:
+                  value = response.read().decode().strip()
+                  return value or None
+          except (urllib.error.URLError, TimeoutError):
+              return None
+
+      def secret_value(name, bytes_count=32):
+          return metadata_value(name) or secrets.token_urlsafe(bytes_count)
+
       ip = os.environ["VRATA_IP"]
       app_domain = os.environ["VRATA_APP_DOMAIN"]
       state_domain = os.environ["VRATA_STATE_DOMAIN"]
       livekit_domain = os.environ["VRATA_LIVEKIT_DOMAIN"]
       browser_domain = os.environ["VRATA_BROWSER_DOMAIN"]
+      control_plane_admin_token = secret_value("vrata-control-plane-admin-token")
+      livekit_api_key = metadata_value("vrata-livekit-api-key") or "vrata-stage"
+      livekit_api_secret = secret_value("vrata-livekit-api-secret")
+      state_token_secret = secret_value("vrata-state-token-secret")
+      internal_service_token = secret_value("vrata-internal-service-token")
+      remote_browser_token_secret = secret_value("vrata-remote-browser-token-secret")
+      postgres_password = secret_value("vrata-postgres-password", 24)
+      minio_root_user = metadata_value("vrata-minio-root-user") or "vrataminio"
+      minio_root_password = secret_value("vrata-minio-root-password", 24)
       lines = [
           "COMPOSE_PROJECT_NAME=vrata",
           "API_IMAGE_REPO=cr.yandex/crp9cm29k6p76hqo8lti/vrata-api",
@@ -57,21 +88,23 @@ write_files:
           "MINIO_CONSOLE_PORT=9001",
           "API_PORT=4000",
           "API_CORS_ORIGIN=*",
-          "CONTROL_PLANE_ADMIN_TOKEN=vrata-stage-admin",
-          "LIVEKIT_API_KEY=devkey",
-          "LIVEKIT_API_SECRET=secret",
+          f"CONTROL_PLANE_ADMIN_TOKEN={control_plane_admin_token}",
+          f"LIVEKIT_API_KEY={livekit_api_key}",
+          f"LIVEKIT_API_SECRET={livekit_api_secret}",
           "LIVEKIT_ROOM_PREFIX=vrata-",
           "STATE_TOKEN_TTL_SECONDS=900",
-          "REMOTE_BROWSER_TOKEN_SECRET=dev-remote-browser-secret",
+          f"STATE_TOKEN_SECRET={state_token_secret}",
+          f"VRATA_INTERNAL_SERVICE_TOKEN={internal_service_token}",
+          f"REMOTE_BROWSER_TOKEN_SECRET={remote_browser_token_secret}",
           "REMOTE_BROWSER_TOKEN_TTL_SECONDS=300",
           "MEDIA_TOKEN_TTL_SECONDS=900",
           "POSTGRES_DB=vrata",
           "POSTGRES_USER=postgres",
-          "POSTGRES_PASSWORD=postgres",
+          f"POSTGRES_PASSWORD={postgres_password}",
           "POSTGRES_PORT=5432",
-          "POSTGRES_URL=postgres://postgres:postgres@postgres:5432/vrata",
-          "MINIO_ROOT_USER=vrataminio",
-          "MINIO_ROOT_PASSWORD=vrataminio123",
+          f"POSTGRES_URL=postgres://postgres:{postgres_password}@postgres:5432/vrata",
+          f"MINIO_ROOT_USER={minio_root_user}",
+          f"MINIO_ROOT_PASSWORD={minio_root_password}",
           "MINIO_BUCKET=vrata-scene-bundles",
           f"MINIO_PUBLIC_BASE_URL=http://{ip}:9000",
           "MINIO_SCENE_PREFIX=scenes/",

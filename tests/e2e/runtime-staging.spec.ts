@@ -137,13 +137,13 @@ type DiagnosticsPayload = {
   }>;
 };
 
-async function getJsonWithRetry<T>(request: APIRequestContext, path: string, timeoutMs: number): Promise<T> {
+async function getJsonWithRetry<T>(request: APIRequestContext, path: string, timeoutMs: number, headers?: Record<string, string>): Promise<T> {
   const startedAt = Date.now();
   let lastError: unknown;
 
   while (Date.now() - startedAt < timeoutMs) {
     try {
-      const response = await request.get(path);
+      const response = await request.get(path, headers ? { headers } : undefined);
       if (!response.ok()) {
         throw new Error(`http_${response.status()}`);
       }
@@ -155,6 +155,12 @@ async function getJsonWithRetry<T>(request: APIRequestContext, path: string, tim
   }
 
   throw lastError instanceof Error ? lastError : new Error("staging_request_failed");
+}
+
+async function getDiagnosticsWithRetry(request: APIRequestContext, roomId: string, timeoutMs: number): Promise<DiagnosticsPayload> {
+  return getJsonWithRetry<DiagnosticsPayload>(request, `/api/rooms/${roomId}/diagnostics`, timeoutMs, {
+    "x-vrata-admin-token": stagingAdminToken
+  });
 }
 
 async function expectSceneRoomLoaded(
@@ -174,14 +180,13 @@ async function expectSceneRoomLoaded(
   expect(loadedBundleUrl).toBeTruthy();
 
   if (!requireLoadedState) {
-    const diagnostics = await getJsonWithRetry<DiagnosticsPayload>(request, `/api/rooms/${roomId}/diagnostics`, timeoutMs);
+    const diagnostics = await getDiagnosticsWithRetry(request, roomId, timeoutMs);
     expect(Array.isArray(diagnostics.items)).toBeTruthy();
     return;
   }
 
   await expect.poll(async () => {
-    const diagnosticsResponse = await request.get(`/api/rooms/${roomId}/diagnostics`);
-    const diagnostics = (await diagnosticsResponse.json()) as DiagnosticsPayload;
+    const diagnostics = await getDiagnosticsWithRetry(request, roomId, timeoutMs);
     const loadedItem = diagnostics.items.find((item) =>
       item.sceneDebug?.bundleUrl === loadedBundleUrl && item.sceneDebug?.state === "loaded"
     );

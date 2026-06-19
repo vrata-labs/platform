@@ -167,7 +167,7 @@ async function selectRoom(room: typeof state.selectedRoom): Promise<void> {
   }
   state.selectedRoom = room;
   state.selectedRoomManifest = await fetchRoomManifest(apiBaseUrl, room.roomId);
-  state.selectedRoomDiagnostics = await fetchRoomDiagnostics(apiBaseUrl, room.roomId);
+  state.selectedRoomDiagnostics = await fetchRoomDiagnostics(apiBaseUrl, room.roomId, currentAuth());
   state.selectedSceneBundle = state.sceneBundles.find((bundle) => bundle.publicUrl === state.selectedRoomManifest?.sceneBundle?.url);
   state.sceneBundleVersions = state.selectedSceneBundle ? await listSceneBundleVersions(apiBaseUrl, state.selectedSceneBundle.bundleId).catch(() => []) : [];
   roomNameInput.value = room.name;

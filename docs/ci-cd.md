@@ -27,6 +27,7 @@ Vrata keeps test and deployment automation in the repository and executes it in 
 - Playwright HTML/JSON/failure artifacts are uploaded to each relevant workflow run.
 - Staging successful SHA is stored on the staging VM at `/opt/noah/infra/docker/.staging-successful-image-tag`.
 - Private staging scene assets are uploaded to the staging VM at `/opt/noah-private-scene-assets/assets` before each rollout.
+- Local full staging e2e loads `.env.staging.local` through `pnpm test:e2e:staging`; populate it with `pnpm staging:e2e:pull-env -- --ssh <user>@158.160.10.234` or set `STAGING_ADMIN_TOKEN` directly in the shell.
 - Release notes and changelog live in GitHub Releases and `CHANGELOG.md`.
 - Compose backup manifests and local rollback env snapshots are written under `backups/` and must stay out of git.
 

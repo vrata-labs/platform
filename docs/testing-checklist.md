@@ -27,6 +27,8 @@ This document is the source of truth for where Vrata tests live, where they run,
 - `pnpm test:e2e`
 - `pnpm test:e2e:private-assets` only when private scene assets are available locally; staging private asset coverage runs through `pnpm test:e2e:staging`.
 - `pnpm test:e2e:staging` only after the target commit is deployed to staging.
+- Full local staging e2e uses a gitignored `.env.staging.local` for staging-only secrets. Generate it with `pnpm staging:e2e:pull-env -- --ssh <user>@158.160.10.234` when you have SSH access to the staging VM, or create it manually from `.env.staging.local.example`.
+- Local staging e2e defaults to `--workers=1` to avoid false negatives in external Rutube/browser transport checks on developer machines. GitHub Actions keeps its normal parallelism, and local runs can still override this with `pnpm test:e2e:staging -- --workers=2`.
 - `docker compose --env-file infra/docker/.env.selfhost.example -f infra/docker/compose.selfhost.yml config`
 
 ## CI Gate

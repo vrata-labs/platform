@@ -94,6 +94,7 @@ test("api health exposes env timestamp and dependencies", async () => {
 test("api diagnostics attach report id, redact secrets, and update metrics", async () => {
   process.env.VRATA_DISABLE_AUTOSTART = "1";
   process.env.API_PORT = "4029";
+  process.env.CONTROL_PLANE_ADMIN_TOKEN = "test-admin-token";
   process.env.STATE_TOKEN_SECRET = "diagnostics-report-secret";
   const module = await import("./index.js");
   const server = module.startApiServer(4029);
@@ -134,6 +135,17 @@ test("api diagnostics attach report id, redact secrets, and update metrics", asy
           token: "secret-token-value",
           frameStreamUrl: "https://example.test/frames?token=secret-frame-token"
         },
+        sceneDebug: {
+          screenshot: {
+            width: 1,
+            height: 1,
+            centerPixel: { r: 0, g: 0, b: 0, a: 255 },
+            averageColor: { r: 0, g: 0, b: 0, a: 255 },
+            darkPixelRatio: 1,
+            pixelSamples: [],
+            dataUrl: "data:image/jpeg;base64,secret"
+          }
+        },
         createdAt: new Date(0).toISOString()
       })
     });
@@ -143,14 +155,20 @@ test("api diagnostics attach report id, redact secrets, and update metrics", asy
     assert.match(reportPayload.reportId ?? "", /^rpt_/);
     assert.equal(reportPayload.requestId, "diagnostics-request-id");
 
-    const diagnosticsResponse = await fetch(`${baseUrl}/api/rooms/demo-room/diagnostics`);
+    const publicDiagnosticsResponse = await fetch(`${baseUrl}/api/rooms/demo-room/diagnostics`);
+    assert.equal(publicDiagnosticsResponse.status, 401);
+
+    const diagnosticsResponse = await fetch(`${baseUrl}/api/rooms/demo-room/diagnostics`, {
+      headers: { "x-vrata-admin-token": "test-admin-token" }
+    });
     assert.equal(diagnosticsResponse.ok, true);
-    const diagnostics = (await diagnosticsResponse.json()) as { items: Array<{ reportId?: string; requestId?: string; access?: { token?: string; frameStreamUrl?: string } }> };
+    const diagnostics = (await diagnosticsResponse.json()) as { items: Array<{ reportId?: string; requestId?: string; access?: { token?: string; frameStreamUrl?: string }; sceneDebug?: { screenshot?: { dataUrl?: string } } }> };
     const item = diagnostics.items.find((entry) => entry.reportId === reportPayload.reportId);
     assert.equal(item?.requestId, "diagnostics-request-id");
     assert.equal(item?.access?.token, "[redacted]");
     assert.equal(item?.access?.frameStreamUrl?.includes("secret-frame-token"), false);
     assert.match(item?.access?.frameStreamUrl ?? "", /token=/);
+    assert.equal(item?.sceneDebug?.screenshot?.dataUrl, undefined);
 
     const metricsResponse = await fetch(`${baseUrl}/metrics`);
     assert.equal(metricsResponse.ok, true);
@@ -161,6 +179,7 @@ test("api diagnostics attach report id, redact secrets, and update metrics", asy
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     delete process.env.VRATA_DISABLE_AUTOSTART;
     delete process.env.API_PORT;
+    delete process.env.CONTROL_PLANE_ADMIN_TOKEN;
     delete process.env.STATE_TOKEN_SECRET;
   }
 });
@@ -320,6 +339,7 @@ test("control-plane authz enforces role matrix and writes audit log", async () =
       { method: "POST", path: "/api/scene-bundles/bundle-1/versions", body: { storageKey: "scenes/bundle-1/v2/scene.json", version: "v2" } },
       { method: "POST", path: "/api/scene-bundles/bundle-1/current", body: { version: "v1" } },
       { method: "POST", path: "/api/scene-bundles/bundle-1/versions/v1/status", body: { status: "obsolete" } },
+      { method: "GET", path: "/api/rooms/demo-room/diagnostics" },
       { method: "POST", path: "/api/rooms", body: { tenantId: "demo-tenant", templateId: "meeting-room-basic", name: "Protected Room" } },
       { method: "PATCH", path: "/api/rooms/demo-room", body: { name: "Protected Room" } },
       { method: "POST", path: "/api/rooms/demo-room/bind-scene-bundle", body: { bundleId: "bundle-1" } },
@@ -1369,6 +1389,26 @@ test("scene bundle versions can switch current binding without runtime contract 
 
     manifest = await (await fetch(`http://127.0.0.1:4016/api/rooms/${room.roomId}/manifest`)).json() as { sceneBundle?: { url?: string } };
     assert.equal(manifest.sceneBundle?.url, "http://127.0.0.1:9000/vrata-scene-bundles/scenes/hall-productized/v1/scene.json");
+
+    const statusResponse = await fetch("http://127.0.0.1:4016/api/scene-bundles/hall-productized/versions/v2/status", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-vrata-admin-token": "test-admin-token"
+      },
+      body: JSON.stringify({ status: "obsolete" })
+    });
+    assert.equal(statusResponse.ok, true);
+    const statusPayload = await statusResponse.json() as { version?: string; status?: string; isCurrent?: boolean };
+    assert.equal(statusPayload.version, "v2");
+    assert.equal(statusPayload.status, "obsolete");
+    assert.equal(statusPayload.isCurrent, false);
+
+    const versionsResponse = await fetch("http://127.0.0.1:4016/api/scene-bundles/hall-productized/versions");
+    const versionsPayload = await versionsResponse.json() as { items: Array<{ version: string; status: string; isCurrent: boolean }> };
+    const updatedVersionTwo = versionsPayload.items.find((item) => item.version === "v2");
+    assert.equal(updatedVersionTwo?.status, "obsolete");
+    assert.equal(updatedVersionTwo?.isCurrent, false);
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     delete process.env.VRATA_DISABLE_AUTOSTART;

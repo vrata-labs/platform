@@ -7,13 +7,10 @@ if [ "$#" -ne 1 ]; then
 fi
 
 IMAGE_TAG="$1"
-case "$IMAGE_TAG" in
-  [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]* ) ;;
-  * )
-    echo "invalid_image_tag: expected immutable sha-like tag" >&2
-    exit 1
-    ;;
-esac
+if [[ ! "$IMAGE_TAG" =~ ^[0-9a-f]{40}$ ]]; then
+  echo "invalid_image_tag: expected immutable full sha tag" >&2
+  exit 1
+fi
 
 ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 ENV_FILE="$ROOT_DIR/infra/docker/.env.staging"

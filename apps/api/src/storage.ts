@@ -236,10 +236,17 @@ export interface Storage {
   listSceneBundles(): Promise<SceneBundleRecord[]>;
   getSceneBundle(bundleId: string): Promise<SceneBundleRecord | null>;
   createSceneBundle(input: SceneBundleCreateInput & { publicUrl: string; provider: SceneBundleRecord["provider"] }): Promise<SceneBundleRecord>;
-  updateSceneBundle(bundleId: string, input: Partial<SceneBundleCreateInput> & { publicUrl?: string; provider?: SceneBundleRecord["provider"] }): Promise<SceneBundleRecord | null>;
+  updateSceneBundle(bundleId: string, input: SceneBundleUpdateInput): Promise<SceneBundleRecord | null>;
   listSceneBundleVersions(bundleId: string): Promise<SceneBundleRecord[]>;
   setCurrentSceneBundleVersion(bundleId: string, version: string): Promise<SceneBundleRecord | null>;
 }
+
+export type SceneBundleUpdateInput = Partial<SceneBundleCreateInput> & {
+  publicUrl?: string;
+  provider?: SceneBundleRecord["provider"];
+  status?: SceneBundleRecord["status"];
+  isCurrent?: boolean;
+};
 
 const defaultTemplates: TemplateRecord[] = [
   { templateId: "meeting-room-basic", label: "Meeting Room Basic", assetSlots: ["logo", "hero-screen"] },
@@ -446,7 +453,7 @@ export class MemoryStorage implements Storage {
     this.sceneBundles.set(this.sceneBundleKey(record.bundleId, record.version), record);
     return record;
   }
-  async updateSceneBundle(bundleId: string, input: Partial<SceneBundleCreateInput> & { publicUrl?: string; provider?: SceneBundleRecord["provider"] }): Promise<SceneBundleRecord | null> {
+  async updateSceneBundle(bundleId: string, input: SceneBundleUpdateInput): Promise<SceneBundleRecord | null> {
     const existing = (await this.listSceneBundleVersions(bundleId)).find((item) => item.version === input.version) ?? await this.getSceneBundle(bundleId);
     if (!existing) return null;
     const updated: SceneBundleRecord = {
@@ -458,9 +465,16 @@ export class MemoryStorage implements Storage {
       contentType: input.contentType ?? existing.contentType,
       provider: input.provider ?? existing.provider,
       version: input.version ?? existing.version,
-      status: existing.status ?? "active",
-      isCurrent: existing.isCurrent ?? true
+      status: input.status ?? existing.status ?? "active",
+      isCurrent: input.isCurrent ?? existing.isCurrent ?? true
     };
+    if (updated.isCurrent) {
+      for (const item of this.sceneBundles.values()) {
+        if (item.bundleId === bundleId && item.version !== updated.version) {
+          item.isCurrent = false;
+        }
+      }
+    }
     this.sceneBundles.set(this.sceneBundleKey(bundleId, updated.version), updated);
     return updated;
   }
@@ -781,8 +795,10 @@ export class PostgresStorage implements Storage {
     );
     return record;
   }
-  async updateSceneBundle(bundleId: string, input: Partial<SceneBundleCreateInput> & { publicUrl?: string; provider?: SceneBundleRecord["provider"] }): Promise<SceneBundleRecord | null> {
-    const existing = await this.getSceneBundle(bundleId);
+  async updateSceneBundle(bundleId: string, input: SceneBundleUpdateInput): Promise<SceneBundleRecord | null> {
+    const existing = input.version
+      ? (await this.listSceneBundleVersions(bundleId)).find((item) => item.version === input.version) ?? null
+      : await this.getSceneBundle(bundleId);
     if (!existing) return null;
     const updated: SceneBundleRecord = {
       ...existing,
@@ -793,9 +809,12 @@ export class PostgresStorage implements Storage {
       contentType: input.contentType ?? existing.contentType,
       provider: input.provider ?? existing.provider,
       version: input.version ?? existing.version,
-      status: existing.status ?? "active",
-      isCurrent: existing.isCurrent ?? true
+      status: input.status ?? existing.status ?? "active",
+      isCurrent: input.isCurrent ?? existing.isCurrent ?? true
     };
+    if (updated.isCurrent) {
+      await this.pool.query(`update scene_bundles set is_current = false where bundle_id = $1 and version <> $2`, [bundleId, existing.version]);
+    }
     await this.pool.query(
       `update scene_bundles set storage_key = $3, public_url = $4, checksum = $5, size_bytes = $6, content_type = $7, provider = $8, status = $9, is_current = $10 where bundle_id = $1 and version = $2`,
       [bundleId, existing.version, updated.storageKey, updated.publicUrl, updated.checksum ?? null, updated.sizeBytes ?? null, updated.contentType, updated.provider, updated.status ?? "active", updated.isCurrent ?? true]
