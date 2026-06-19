@@ -36,8 +36,6 @@ export interface SceneBundleMediaSurface {
     pitch?: number;
     roll?: number;
   };
-  inputEnabled?: boolean;
-  mediaAudioEnabled?: boolean;
   visible?: boolean;
   allowedObjectTypes?: string[];
 }
@@ -205,8 +203,6 @@ function parseMediaSurface(input: unknown, index: number): SceneBundleMediaSurfa
     parsed.transform.roll = transform.roll;
   }
 
-  parsed.inputEnabled = parseOptionalBoolean(payload.inputEnabled, `invalid_scene_bundle_media_surface_input_enabled:${index}`);
-  parsed.mediaAudioEnabled = parseOptionalBoolean(payload.mediaAudioEnabled, `invalid_scene_bundle_media_surface_media_audio_enabled:${index}`);
   parsed.visible = parseOptionalBoolean(payload.visible, `invalid_scene_bundle_media_surface_visible:${index}`);
 
   if (payload.allowedObjectTypes !== undefined) {
