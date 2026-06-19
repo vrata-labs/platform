@@ -42,20 +42,22 @@ docker compose --env-file infra/docker/.env.selfhost.example -f infra/docker/com
 
 ## Release Image Path
 
-After `v0.1.0`, copy the example env file and select a release tag:
+After `v0.1.0`, use the image-only compose file when you want to deploy from published images without a source checkout. Copy the `infra/docker` directory or release deployment bundle to the target host, then copy the example env file and select a release tag:
 
 ```bash
-cp infra/docker/.env.selfhost.example infra/docker/.env.selfhost
+cp .env.selfhost.example .env.selfhost
 ```
 
-Edit `infra/docker/.env.selfhost` and set real secrets, domains, and `IMAGE_TAG`.
+Edit `.env.selfhost` and set real secrets, domains, `IMAGE_TAG`, and optionally `VRATA_SCENE_ASSETS_DIR` for same-origin private scene bundles.
 
 Then run:
 
 ```bash
-docker compose --env-file infra/docker/.env.selfhost -f infra/docker/compose.selfhost.yml pull
-docker compose --env-file infra/docker/.env.selfhost -f infra/docker/compose.selfhost.yml up -d
+docker compose --env-file .env.selfhost -f compose.selfhost.images.yml pull
+docker compose --env-file .env.selfhost -f compose.selfhost.images.yml up -d
 ```
+
+See `docs/docker-image-scene-deployment.md` for the minimal file set and scene asset responsibilities.
 
 ## Required Configuration
 
