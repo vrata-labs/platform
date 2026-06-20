@@ -37,6 +37,7 @@ Edit `.env.selfhost`:
 - set `IMAGE_TAG` to the published release tag;
 - set browser-reachable `VRATA_APP_BASE_URL`, `ROOM_STATE_PUBLIC_URL`, `LIVEKIT_URL`, and `REMOTE_BROWSER_PUBLIC_URL`;
 - set `MINIO_PUBLIC_BASE_URL` to a browser-reachable base URL for uploaded scene bundles. For same-origin local evaluation, use `$VRATA_APP_BASE_URL/scene-bundles` and keep the `/scene-bundles/*` Caddy proxy enabled.
+- keep `MINIO_INTERNAL_ENDPOINT=http://minio:9000` for the default bundled MinIO provider, or configure the `SCENE_BUNDLE_S3_*` values for an external S3-compatible provider.
 
 Then run:
 
