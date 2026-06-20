@@ -53,6 +53,7 @@ import { canRetry, createReconnectPolicy, getReconnectDelayMs } from "./reconnec
 import { applyRuntimeIssueState, clearRuntimeIssueState, createRuntimeUiState } from "./runtime-state.js";
 import { applyPassiveMediaRecovery, applyPostBootControls, shouldStartPassiveMedia } from "./runtime-startup.js";
 import { describeMediaCapabilityReason, detectBrowserMediaCapabilities, formatUnsupportedMediaCapabilities } from "./media-capabilities.js";
+import { collectWebRtcDiagnostics, createUnavailableWebRtcDiagnostics, type WebRtcStatsTransport, type WebRtcTransportRole } from "./webrtc-diagnostics.js";
 import { isScreenShareAudioSource, shouldPublishMediaSurfaceAudio } from "./media-surface-audio.js";
 import { createMediaSurfaceCommandClient } from "./media/media-surface-commands.js";
 import {
@@ -537,6 +538,8 @@ type RemoteBrowserVideoEntry = {
 const remoteBrowserVideoByObjectId = new Map<string, RemoteBrowserVideoEntry>();
 let lastScreenShareStoppedAtMs = 0;
 let mediaRoomReady = false;
+let mediaDiagnosticsTransports: WebRtcStatsTransport[] = [];
+const mediaTransportDiagnosticsRooms = new WeakSet<Room>();
 let remoteBrowserMediaRoomPromise: Promise<void> | null = null;
 let roomStateClient: RoomStateClient | null = null;
 let roomStateAccessToken = "";
@@ -906,7 +909,8 @@ function updateMediaDiagnostics(): void {
     muted: !microphoneEnabled,
     publishedAudio: Boolean(livekitRoom && microphoneEnabled),
     audioSource: livekitRoom && microphoneEnabled ? audioMockEnabled ? "mock" : "microphone" : "none",
-    subscribedAudioCount: remoteAudioNodes.size
+    subscribedAudioCount: remoteAudioNodes.size,
+    webrtc: debugState.media.webrtc
   };
   const activeRemoteBrowser = currentRemoteBrowserObject();
   const remoteBrowserRuntime = getRemoteBrowserRuntime(activeRemoteBrowser?.surfaceId ?? selectedMediaSurfaceId);
@@ -918,6 +922,10 @@ function updateMediaDiagnostics(): void {
     ...remoteBrowserRuntime.createDebugSnapshot(activeRemoteBrowser),
     ...createRemoteBrowserExternalVideoDebugSnapshot(activeRemoteBrowser)
   };
+}
+
+async function refreshWebRtcDiagnostics(): Promise<void> {
+  debugState.media.webrtc = await collectWebRtcDiagnostics(mediaDiagnosticsTransports);
 }
 
 function syncRemoteAudioDiagnostics(): void {
@@ -3375,7 +3383,8 @@ const debugState = {
     muted: true,
     publishedAudio: false,
     audioSource: "none" as "none" | "microphone" | "mock",
-    subscribedAudioCount: 0
+    subscribedAudioCount: 0,
+    webrtc: createUnavailableWebRtcDiagnostics()
   },
   access: {
     ...createRoomAccessDebugState("guest"),
@@ -4483,6 +4492,7 @@ async function reportDiagnostics(note?: string, options: { reportId?: string } =
   if (!runtimeFlags.remoteDiagnostics) {
     return;
   }
+  await refreshWebRtcDiagnostics();
   if (activeSceneBundleRoot) {
     debugState.sceneDebug = inspectSceneObject({
       root: activeSceneBundleRoot,
@@ -4899,6 +4909,60 @@ function detachRemoteBrowserVideoTrack(track?: Track): void {
   Object.assign(debugState.remoteBrowser, createRemoteBrowserExternalVideoDebugSnapshot(currentRemoteBrowserObject()));
 }
 
+type LiveKitTransportCandidate = {
+  getStats?: () => Promise<RTCStatsReport>;
+  getConnectionState?: () => RTCPeerConnectionState | null | undefined;
+  getICEConnectionState?: () => RTCIceConnectionState | null | undefined;
+  getSignallingState?: () => RTCSignalingState | null | undefined;
+  getSignalingState?: () => RTCSignalingState | null | undefined;
+};
+
+type LiveKitEngineDiagnosticsSource = {
+  on?: (eventName: "transportsCreated", callback: (publisher: unknown, subscriber?: unknown) => void) => unknown;
+  pcManager?: {
+    publisher?: unknown;
+    subscriber?: unknown;
+  };
+};
+
+function createWebRtcStatsTransport(role: WebRtcTransportRole, source: unknown): WebRtcStatsTransport | null {
+  const candidate = source as LiveKitTransportCandidate | null | undefined;
+  if (!candidate || typeof candidate.getStats !== "function") {
+    return null;
+  }
+  return {
+    role,
+    getStats: () => candidate.getStats!(),
+    getConnectionState: () => candidate.getConnectionState?.() ?? null,
+    getIceConnectionState: () => candidate.getICEConnectionState?.() ?? null,
+    getSignalingState: () => candidate.getSignalingState?.() ?? candidate.getSignallingState?.() ?? null
+  };
+}
+
+function setMediaDiagnosticsTransports(publisher: unknown, subscriber?: unknown): void {
+  mediaDiagnosticsTransports = [
+    createWebRtcStatsTransport("publisher", publisher),
+    createWebRtcStatsTransport("subscriber", subscriber)
+  ].filter((transport): transport is WebRtcStatsTransport => Boolean(transport));
+  void refreshWebRtcDiagnostics().catch(() => undefined);
+}
+
+function setupMediaTransportDiagnostics(room: Room): void {
+  const engine = (room as { engine?: LiveKitEngineDiagnosticsSource }).engine;
+  if (!engine) {
+    return;
+  }
+  if (!mediaTransportDiagnosticsRooms.has(room)) {
+    mediaTransportDiagnosticsRooms.add(room);
+    engine.on?.("transportsCreated", (publisher, subscriber) => {
+      setMediaDiagnosticsTransports(publisher, subscriber);
+    });
+  }
+  if (engine.pcManager?.publisher || engine.pcManager?.subscriber) {
+    setMediaDiagnosticsTransports(engine.pcManager.publisher, engine.pcManager.subscriber);
+  }
+}
+
 async function ensureMediaRoom(): Promise<Room> {
   if (livekitRoom) {
     return livekitRoom;
@@ -4914,10 +4978,19 @@ async function ensureMediaRoom(): Promise<Room> {
   const voicePlan = await planVoiceSession(apiBaseUrl, roomId, participantId, roomStateAccessToken);
   const room = new Room();
   setupAudio(room);
-  await room.connect(voicePlan.livekitUrl, voicePlan.token);
+  setupMediaTransportDiagnostics(room);
+  try {
+    await room.connect(voicePlan.livekitUrl, voicePlan.token);
+  } catch (error) {
+    mediaDiagnosticsTransports = [];
+    debugState.media.webrtc = createUnavailableWebRtcDiagnostics("livekit_connect_failed");
+    throw error;
+  }
+  setupMediaTransportDiagnostics(room);
   await applyPreferredAudioDevices(room);
   livekitRoom = room;
   mediaRoomReady = true;
+  await refreshWebRtcDiagnostics();
   startShareButton.disabled = !canUseScreenShareControl();
   return room;
 }
@@ -5548,6 +5621,13 @@ async function refreshPresence(): Promise<void> {
 }
 
 function setupAudio(room: Room): void {
+  room.on(RoomEvent.Disconnected, () => {
+    if (livekitRoom === room) {
+      mediaDiagnosticsTransports = [];
+      debugState.media.webrtc = createUnavailableWebRtcDiagnostics("livekit_disconnected");
+    }
+  });
+
   room.on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
     if (track.kind === Track.Kind.Video) {
       const remoteBrowser = resolveRemoteBrowserObjectForTrack(participant?.identity, publication, track, "video");

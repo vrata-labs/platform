@@ -168,6 +168,8 @@ TURN/TLS options:
 - With `LIVEKIT_TURN_EXTERNAL_TLS=false`, provide `LIVEKIT_TURN_CERT_FILE` and `LIVEKIT_TURN_KEY_FILE` inside the LiveKit container through a compose override or host mount.
 - Do not reuse `VRATA_LIVEKIT_DOMAIN` as `LIVEKIT_TURN_DOMAIN`; production preflight rejects this to keep signaling and TURN/TLS routing explicit.
 
-The API `/health` and `/health/ready` payloads expose non-secret LiveKit diagnostics under `dependencies.livekitConfig`: signaling TLS status, configured host, TURN enabled flag, TURN domain, TURN ports, and relay range. `POST /api/tokens/media` and `POST /api/tokens/remote-browser-media` return `livekit_config_invalid` in production if LiveKit URL/key/secret are missing, insecure, or still using dev credentials.
+The API `/health` and `/health/ready` payloads expose non-secret LiveKit deployment diagnostics under `dependencies.livekitConfig`: signaling TLS status, configured host, TURN enabled flag, TURN domain, TURN ports, and relay range. Runtime diagnostics posted to `POST /api/rooms/:roomId/diagnostics` include `media.webrtc` with transport states, selected ICE candidate pair state, candidate types, and TURN relay availability/use booleans. The runtime snapshot intentionally omits raw ICE candidate addresses and ports.
+
+`POST /api/tokens/media` and `POST /api/tokens/remote-browser-media` return `livekit_config_invalid` in production if LiveKit URL/key/secret are missing, insecure, or still using dev credentials.
 
 Rollback for this profile is metadata/config-only: restore the previous `.env.production` and image tag through `pnpm rollback:compose`, then smoke the app URL. If the production profile itself is the problem, stop it and return to the previously used documented compose file. This task does not introduce point-in-time database recovery.
