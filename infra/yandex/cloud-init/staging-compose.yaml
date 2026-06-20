@@ -16,11 +16,12 @@ write_files:
       VRATA_IP="$(curl -fsH 'Metadata-Flavor: Google' http://169.254.169.254/computeMetadata/v1/instance/network-interfaces/0/access-configs/0/external-ip)"
       VRATA_APP_DOMAIN="${VRATA_IP}.sslip.io"
       VRATA_LIVEKIT_DOMAIN="livekit.${VRATA_IP}.sslip.io"
+      VRATA_TURN_DOMAIN="turn.${VRATA_IP}.sslip.io"
       VRATA_STATE_DOMAIN="state.${VRATA_IP}.sslip.io"
       VRATA_BROWSER_DOMAIN="browser.${VRATA_IP}.sslip.io"
 
       mkdir -p /opt/vrata/infra/docker
-      export VRATA_IP VRATA_APP_DOMAIN VRATA_STATE_DOMAIN VRATA_LIVEKIT_DOMAIN VRATA_BROWSER_DOMAIN
+      export VRATA_IP VRATA_APP_DOMAIN VRATA_STATE_DOMAIN VRATA_LIVEKIT_DOMAIN VRATA_TURN_DOMAIN VRATA_BROWSER_DOMAIN
       python3 - <<'PY'
       import os
       import secrets
@@ -50,6 +51,7 @@ write_files:
       app_domain = os.environ["VRATA_APP_DOMAIN"]
       state_domain = os.environ["VRATA_STATE_DOMAIN"]
       livekit_domain = os.environ["VRATA_LIVEKIT_DOMAIN"]
+      turn_domain = os.environ["VRATA_TURN_DOMAIN"]
       browser_domain = os.environ["VRATA_BROWSER_DOMAIN"]
       control_plane_admin_token = secret_value("vrata-control-plane-admin-token")
       livekit_api_key = metadata_value("vrata-livekit-api-key") or "vrata-stage"
@@ -85,7 +87,13 @@ write_files:
           "VRATA_LIVEKIT_PORT=7880",
           "VRATA_LIVEKIT_TCP_PORT=7881",
           "VRATA_LIVEKIT_UDP_PORT=7881",
-          "LIVEKIT_TURN_ENABLED=false",
+          "LIVEKIT_TURN_ENABLED=true",
+          f"LIVEKIT_TURN_DOMAIN={turn_domain}",
+          "LIVEKIT_TURN_TLS_PORT=5349",
+          "LIVEKIT_TURN_UDP_PORT=3478",
+          "LIVEKIT_TURN_RELAY_RANGE_START=50000",
+          "LIVEKIT_TURN_RELAY_RANGE_END=50100",
+          "LIVEKIT_TURN_EXTERNAL_TLS=true",
           "MINIO_API_PORT=9000",
           "MINIO_CONSOLE_PORT=9001",
           "API_PORT=4000",
@@ -151,7 +159,11 @@ runcmd:
   - ufw allow 443/tcp
   - ufw allow 443/udp
   - ufw allow 7880/tcp
+  - ufw allow 7881/tcp
   - ufw allow 7881/udp
+  - ufw allow 5349/tcp
+  - ufw allow 3478/udp
+  - ufw allow 50000:50100/udp
   - ufw allow 2567/tcp
   - ufw allow 9000/tcp
   - ufw allow 9001/tcp

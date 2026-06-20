@@ -39,6 +39,21 @@ cleanup_transient_docker_state() {
   docker network prune -f || true
 }
 
+ensure_staging_firewall_ports() {
+  if ! command -v ufw >/dev/null 2>&1; then
+    return 0
+  fi
+  ufw allow 80/tcp || true
+  ufw allow 443/tcp || true
+  ufw allow 443/udp || true
+  ufw allow 7880/tcp || true
+  ufw allow 7881/tcp || true
+  ufw allow 7881/udp || true
+  ufw allow 5349/tcp || true
+  ufw allow 3478/udp || true
+  ufw allow 50000:50100/udp || true
+}
+
 pull_compose_service() {
   local service="$1"
   local output
@@ -313,6 +328,7 @@ if public_ip:
     app_domain = f'{public_ip}.sslip.io'
     state_domain = f'state.{app_domain}'
     livekit_domain = f'livekit.{app_domain}'
+    turn_domain = f'turn.{app_domain}'
     browser_domain = f'browser.{app_domain}'
     values.update({
         'VRATA_APP_BASE_URL': f'https://{app_domain}',
@@ -324,7 +340,13 @@ if public_ip:
         'ROOM_STATE_PUBLIC_URL': f'wss://{state_domain}',
         'LIVEKIT_URL': f'wss://{livekit_domain}',
         'VRATA_LIVEKIT_TCP_PORT': values.get('VRATA_LIVEKIT_TCP_PORT') or values.get('VRATA_LIVEKIT_UDP_PORT') or '7881',
-        'LIVEKIT_TURN_ENABLED': values.get('LIVEKIT_TURN_ENABLED') or 'false',
+        'LIVEKIT_TURN_ENABLED': 'true',
+        'LIVEKIT_TURN_DOMAIN': turn_domain,
+        'LIVEKIT_TURN_TLS_PORT': values.get('LIVEKIT_TURN_TLS_PORT') or '5349',
+        'LIVEKIT_TURN_UDP_PORT': values.get('LIVEKIT_TURN_UDP_PORT') or '3478',
+        'LIVEKIT_TURN_RELAY_RANGE_START': values.get('LIVEKIT_TURN_RELAY_RANGE_START') or '50000',
+        'LIVEKIT_TURN_RELAY_RANGE_END': values.get('LIVEKIT_TURN_RELAY_RANGE_END') or '50100',
+        'LIVEKIT_TURN_EXTERNAL_TLS': values.get('LIVEKIT_TURN_EXTERNAL_TLS') or 'true',
         'VRATA_ALLOW_INSECURE_PRODUCTION_URLS': 'false',
         'REMOTE_BROWSER_PUBLIC_URL': f'https://{browser_domain}',
         'REMOTE_BROWSER_ALLOWED_ORIGINS': ','.join([
@@ -373,7 +395,7 @@ for line in lines:
     else:
       rendered.append(line)
 
-for key in ('API_IMAGE_REPO', 'ROOM_STATE_IMAGE_REPO', 'REMOTE_BROWSER_IMAGE_REPO', 'VRATA_APP_BASE_URL', 'VRATA_APP_DOMAIN', 'VRATA_STATE_DOMAIN', 'VRATA_LIVEKIT_DOMAIN', 'VRATA_BROWSER_DOMAIN', 'VRATA_DEV_ROLE_QUERY', 'VRATA_INTERNAL_SERVICE_TOKEN', 'VRATA_ALLOW_INSECURE_PRODUCTION_URLS', 'VRATA_HTTP_PORT', 'VRATA_HTTPS_PORT', 'VRATA_API_DIRECT_PORT', 'VRATA_ROOM_STATE_PORT', 'VRATA_LIVEKIT_PORT', 'VRATA_LIVEKIT_TCP_PORT', 'VRATA_LIVEKIT_UDP_PORT', 'LIVEKIT_NODE_IP', 'ROOM_STATE_PUBLIC_URL', 'LIVEKIT_URL', 'LIVEKIT_API_KEY', 'LIVEKIT_API_SECRET', 'LIVEKIT_TURN_ENABLED', 'REMOTE_BROWSER_PUBLIC_URL', 'REMOTE_BROWSER_ALLOWED_ORIGINS', 'REMOTE_BROWSER_ALLOW_PRIVATE_ALLOWED_ORIGINS', 'REMOTE_BROWSER_FRAME_INTERVAL_MS', 'REMOTE_BROWSER_TOKEN_SECRET', 'REMOTE_BROWSER_TOKEN_TTL_SECONDS', 'MINIO_PUBLIC_BASE_URL', 'IMAGE_TAG'):
+for key in ('API_IMAGE_REPO', 'ROOM_STATE_IMAGE_REPO', 'REMOTE_BROWSER_IMAGE_REPO', 'VRATA_APP_BASE_URL', 'VRATA_APP_DOMAIN', 'VRATA_STATE_DOMAIN', 'VRATA_LIVEKIT_DOMAIN', 'VRATA_BROWSER_DOMAIN', 'VRATA_DEV_ROLE_QUERY', 'VRATA_INTERNAL_SERVICE_TOKEN', 'VRATA_ALLOW_INSECURE_PRODUCTION_URLS', 'VRATA_HTTP_PORT', 'VRATA_HTTPS_PORT', 'VRATA_API_DIRECT_PORT', 'VRATA_ROOM_STATE_PORT', 'VRATA_LIVEKIT_PORT', 'VRATA_LIVEKIT_TCP_PORT', 'VRATA_LIVEKIT_UDP_PORT', 'LIVEKIT_NODE_IP', 'ROOM_STATE_PUBLIC_URL', 'LIVEKIT_URL', 'LIVEKIT_API_KEY', 'LIVEKIT_API_SECRET', 'LIVEKIT_TURN_ENABLED', 'LIVEKIT_TURN_DOMAIN', 'LIVEKIT_TURN_TLS_PORT', 'LIVEKIT_TURN_UDP_PORT', 'LIVEKIT_TURN_RELAY_RANGE_START', 'LIVEKIT_TURN_RELAY_RANGE_END', 'LIVEKIT_TURN_EXTERNAL_TLS', 'REMOTE_BROWSER_PUBLIC_URL', 'REMOTE_BROWSER_ALLOWED_ORIGINS', 'REMOTE_BROWSER_ALLOW_PRIVATE_ALLOWED_ORIGINS', 'REMOTE_BROWSER_FRAME_INTERVAL_MS', 'REMOTE_BROWSER_TOKEN_SECRET', 'REMOTE_BROWSER_TOKEN_TTL_SECONDS', 'MINIO_PUBLIC_BASE_URL', 'IMAGE_TAG'):
     if key not in seen and key in values:
         rendered.append(f'{key}={values[key]}')
 
@@ -383,6 +405,7 @@ PY
 log_disk_state
 cleanup_docker_state
 log_disk_state
+ensure_staging_firewall_ports
 
 sync_private_scene_assets
 
