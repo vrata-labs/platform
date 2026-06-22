@@ -508,6 +508,52 @@ test.describe("@staging runtime HUD space selector", () => {
           spatialPannerActive: true,
           spatialAudioLevelPresent: true
         });
+
+        await expect(source.locator("#join-audio")).toContainText("Leave Audio");
+        await source.click("#join-audio");
+
+        await expect.poll(async () => {
+          const listenerDebug = await listener.evaluate(() => (window as Window & {
+            __VRATA_DEBUG__?: { media?: { subscribedAudioCount?: number } };
+          }).__VRATA_DEBUG__);
+          const sourceDebug = await source.evaluate(() => (window as Window & {
+            __VRATA_DEBUG__?: { media?: { audioState?: string; publishedAudio?: boolean } };
+          }).__VRATA_DEBUG__);
+          return {
+            sourceAudioState: sourceDebug?.media?.audioState ?? null,
+            sourcePublishedAudio: sourceDebug?.media?.publishedAudio ?? true,
+            listenerSubscribedAudioCount: listenerDebug?.media?.subscribedAudioCount ?? -1
+          };
+        }, {
+          timeout: 45000,
+          intervals: [1000, 2000, 3000]
+        }).toEqual({
+          sourceAudioState: "not_joined",
+          sourcePublishedAudio: false,
+          listenerSubscribedAudioCount: 0
+        });
+
+        await expect(source.locator("#join-audio")).toContainText("Join Audio");
+        await source.click("#join-audio");
+
+        await expect.poll(async () => {
+          const listenerDebug = await listener.evaluate(() => (window as Window & {
+            __VRATA_DEBUG__?: { media?: { subscribedAudioCount?: number } };
+          }).__VRATA_DEBUG__);
+          const sourceDebug = await source.evaluate(() => (window as Window & {
+            __VRATA_DEBUG__?: { media?: { publishedAudio?: boolean } };
+          }).__VRATA_DEBUG__);
+          return {
+            sourcePublishedAudio: sourceDebug?.media?.publishedAudio ?? false,
+            listenerSubscribedAudioCount: listenerDebug?.media?.subscribedAudioCount ?? 0
+          };
+        }, {
+          timeout: 45000,
+          intervals: [1000, 2000, 3000]
+        }).toEqual({
+          sourcePublishedAudio: true,
+          listenerSubscribedAudioCount: 1
+        });
       } finally {
         await listener.close();
         await source.close();
