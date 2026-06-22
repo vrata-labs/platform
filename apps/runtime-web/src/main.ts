@@ -6067,6 +6067,7 @@ async function joinAudio(): Promise<void> {
 
   if (livekitRoom) {
     if (!microphoneEnabled) {
+      joinAudioButton.disabled = true;
       if (audioMockEnabled) {
         await publishMockMicrophoneTrack(livekitRoom);
       } else {
@@ -6090,6 +6091,7 @@ async function joinAudio(): Promise<void> {
 
   setStatus("Joining audio...");
   debugState.audioState = "joining";
+  joinAudioButton.disabled = true;
   const room = await ensureMediaRoom();
   if (audioMockEnabled) {
     await publishMockMicrophoneTrack(room);
@@ -6118,6 +6120,7 @@ async function leaveAudio(): Promise<void> {
   }
 
   const room = livekitRoom;
+  joinAudioButton.disabled = true;
   if (audioMockEnabled) {
     await unpublishLocalMicrophoneTrack(room);
     stopMockAudioSource();
@@ -6140,6 +6143,7 @@ async function leaveAudio(): Promise<void> {
   } else {
     void refreshWebRtcDiagnostics().catch(() => undefined);
   }
+  joinAudioButton.disabled = !runtimeFlags.audioJoin;
   void reportDiagnostics("audio_left");
 }
 
