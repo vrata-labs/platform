@@ -205,6 +205,15 @@ function gitCommit(cwd = process.cwd()) {
   }
 }
 
+function platformVersion(cwd = process.cwd()) {
+  try {
+    const packageJson = JSON.parse(readFileSync(join(cwd, "package.json"), "utf8"));
+    return typeof packageJson.version === "string" && packageJson.version.trim() ? packageJson.version : "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
 function normalizeArtifactPath(backupDir, filePath) {
   const artifactPath = relative(backupDir, filePath).split(sep).join("/");
   if (!artifactPath || artifactPath.startsWith("../") || artifactPath === ".." || artifactPath.startsWith("/")) {
@@ -290,6 +299,7 @@ export async function createBackupManifest({ backupDir, source, smoke, createdAt
     createdAt,
     source: {
       imageTag: source?.imageTag || "unknown",
+      platformVersion: source?.platformVersion || "unknown",
       gitCommit: source?.gitCommit || "unknown",
       profile: source?.profile || "compose",
       composeFile: source?.composeFile || "unknown",
@@ -472,6 +482,7 @@ async function runBackup(options) {
     backupDir,
     source: {
       imageTag,
+      platformVersion: platformVersion(),
       gitCommit: gitCommit(),
       profile: profileFromComposeFile(compose.composeFile),
       composeFile: basename(compose.composeFile),

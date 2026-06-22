@@ -6,7 +6,7 @@ Vrata self-host and production compose profiles use named Docker volumes for per
 
 - Postgres: a `pg_dump --clean --if-exists --no-owner --no-privileges` SQL dump.
 - MinIO/S3-compatible compose storage: mirrored bucket objects, an object inventory file, and bucket download policy metadata when available.
-- Platform metadata: manifest schema version, created timestamp, `IMAGE_TAG`, git commit, compose profile, compose/env file names, artifact sizes, and SHA-256 checksums.
+- Platform metadata: manifest schema version, created timestamp, Vrata package version, `IMAGE_TAG`, git commit, compose profile, compose/env file names, artifact sizes, and SHA-256 checksums.
 - Compose image snapshot: `docker compose images` output for operator diagnostics.
 
 Backups are written under `backups/` by default. That directory is ignored by git because backup artifacts can contain private room metadata and scene assets.

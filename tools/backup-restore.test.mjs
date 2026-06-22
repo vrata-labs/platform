@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { mkdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
 import { join } from "node:path";
 import test from "node:test";
 
@@ -11,6 +12,7 @@ import {
   formatBackupManifestIssues,
   isSafeImageTag,
   redactText,
+  runSmokeChecks,
   updateImageTagInEnvText,
   validateBackupManifest
 } from "./backup-restore.mjs";
@@ -30,6 +32,7 @@ test("backup manifest validation accepts complete artifacts", async () => {
       backupDir,
       source: {
         imageTag: "0.1.0",
+        platformVersion: "0.1.0",
         gitCommit: "a".repeat(40),
         profile: "selfhost",
         composeFile: "compose.selfhost.yml",
@@ -45,6 +48,7 @@ test("backup manifest validation accepts complete artifacts", async () => {
     assert.equal(manifest.artifacts.some((artifact) => artifact.kind === "postgres-dump"), true);
     assert.equal(manifest.artifacts.some((artifact) => artifact.kind === "minio-inventory"), true);
     assert.equal(manifest.artifacts.some((artifact) => artifact.kind === "minio-object"), true);
+    assert.equal(manifest.source.platformVersion, "0.1.0");
   } finally {
     rmSync(backupDir, { recursive: true, force: true });
   }
@@ -58,6 +62,7 @@ test("backup manifest validation rejects corrupt artifacts", async () => {
       backupDir,
       source: {
         imageTag: "0.1.0",
+        platformVersion: "0.1.0",
         gitCommit: "a".repeat(40),
         profile: "selfhost",
         composeFile: "compose.selfhost.yml",
@@ -114,6 +119,58 @@ test("backup log redaction hides secret env values", () => {
   });
   assert.equal(redacted.includes("postgres_password_123"), false);
   assert.equal(redacted.includes("[redacted]"), true);
+});
+
+test("backup smoke check opens restored room and scene bundle", async () => {
+  const requests = [];
+  const server = createServer((request, response) => {
+    const url = new URL(request.url ?? "/", "http://127.0.0.1");
+    requests.push(url.pathname);
+    if (url.pathname === "/health") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ status: "ok" }));
+      return;
+    }
+    if (url.pathname === "/rooms/restored-room") {
+      response.writeHead(200, { "content-type": "text/html" });
+      response.end("<html>room</html>");
+      return;
+    }
+    if (url.pathname === "/api/rooms/restored-room/manifest") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ sceneBundle: { url: "/assets/scenes/restored/scene.json" } }));
+      return;
+    }
+    if (url.pathname === "/assets/scenes/restored/scene.json") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ schemaVersion: 1 }));
+      return;
+    }
+    response.writeHead(404, { "content-type": "application/json" });
+    response.end(JSON.stringify({ error: "not_found" }));
+  });
+
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => resolve());
+  });
+  try {
+    const address = server.address();
+    assert.equal(typeof address, "object");
+    const result = await runSmokeChecks({
+      baseUrl: `http://127.0.0.1:${address.port}`,
+      roomId: "restored-room"
+    });
+    assert.equal(result.ok, true);
+    assert.deepEqual(requests, [
+      "/health",
+      "/rooms/restored-room",
+      "/api/rooms/restored-room/manifest",
+      "/assets/scenes/restored/scene.json"
+    ]);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
 });
 
 test("backup prune selects only old backup directories", () => {
