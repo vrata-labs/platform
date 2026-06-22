@@ -6133,7 +6133,6 @@ async function leaveAudio(): Promise<void> {
   disconnectLocalAudioTrack();
   muteButton.disabled = true;
   muteButton.textContent = "Mute";
-  joinAudioButton.disabled = !runtimeFlags.audioJoin;
   joinAudioButton.textContent = "Join Audio";
   joinAudioButton.title = "Publish your microphone";
   setStatus("Audio left");
