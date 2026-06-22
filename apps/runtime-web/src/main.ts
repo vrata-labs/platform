@@ -2765,6 +2765,15 @@ function remoteScreenShareTrackCount(): number {
   return screenShareEntries().filter((entry) => entry.remote && (entry.track || entry.element)).length;
 }
 
+function hasActiveMediaRoomSurfaceConsumer(): boolean {
+  return hasLocalScreenSharePublishing()
+    || remoteScreenShareTrackCount() > 0
+    || Boolean(findActiveScreenShareObject())
+    || remoteBrowserVideoByObjectId.size > 0
+    || Boolean(findRemoteBrowserObjectNeedingLiveKitRoom())
+    || mediaSurfaceAudioNodes.size > 0;
+}
+
 function localScreenShareEntryForSurface(surfaceId: string): ScreenShareRuntimeEntry | null {
   return screenShareEntries().find((entry) => !entry.remote && entry.surfaceId === surfaceId) ?? null;
 }
@@ -3271,6 +3280,37 @@ function disconnectRemoteAudioElement(participantId: string): void {
   if (remoteAudioNodes.size === 0) {
     debugState.spatialAudioState = "idle";
   }
+}
+
+function detachMediaRoomRemoteAudioTracks(room: Room): void {
+  for (const participant of room.remoteParticipants.values()) {
+    for (const publication of participant.trackPublications.values()) {
+      const track = (publication as { track?: Track | null }).track;
+      if (track?.kind === Track.Kind.Audio) {
+        track.detach().forEach((element) => element.remove());
+      }
+    }
+  }
+}
+
+function clearMediaRoomReference(room: Room, diagnosticsReason: string): void {
+  if (livekitRoom !== room) {
+    return;
+  }
+  livekitRoom = null;
+  mediaRoomReady = false;
+  mediaDiagnosticsTransports = [];
+  debugState.media.webrtc = createUnavailableWebRtcDiagnostics(diagnosticsReason);
+  startShareButton.disabled = !canUseScreenShareControl();
+}
+
+async function disconnectMediaRoom(room: Room, diagnosticsReason: string): Promise<void> {
+  clearMediaRoomReference(room, diagnosticsReason);
+  detachMediaRoomRemoteAudioTracks(room);
+  for (const participantId of Array.from(remoteAudioNodes.keys())) {
+    disconnectRemoteAudioElement(participantId);
+  }
+  await room.disconnect();
 }
 
 function updateSpatialAudio(): void {
@@ -5649,10 +5689,7 @@ async function refreshPresence(): Promise<void> {
 
 function setupAudio(room: Room): void {
   room.on(RoomEvent.Disconnected, () => {
-    if (livekitRoom === room) {
-      mediaDiagnosticsTransports = [];
-      debugState.media.webrtc = createUnavailableWebRtcDiagnostics("livekit_disconnected");
-    }
+    clearMediaRoomReference(room, "livekit_disconnected");
   });
 
   room.on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
@@ -6098,7 +6135,11 @@ async function leaveAudio(): Promise<void> {
   joinAudioButton.title = "Publish your microphone";
   setStatus("Audio left");
   debugState.audioState = "not_joined";
-  void refreshWebRtcDiagnostics().catch(() => undefined);
+  if (!hasActiveMediaRoomSurfaceConsumer()) {
+    await disconnectMediaRoom(room, "audio_left");
+  } else {
+    void refreshWebRtcDiagnostics().catch(() => undefined);
+  }
   void reportDiagnostics("audio_left");
 }
 
