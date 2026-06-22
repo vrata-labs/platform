@@ -547,6 +547,7 @@ let mediaRoomReady = false;
 let mediaDiagnosticsTransports: WebRtcStatsTransport[] = [];
 const mediaTransportDiagnosticsRooms = new WeakSet<Room>();
 let remoteBrowserMediaRoomPromise: Promise<void> | null = null;
+let mediaRoomIdleDisconnectTimer: number | null = null;
 let roomStateClient: RoomStateClient | null = null;
 let roomStateAccessToken = "";
 let roomStateConnected = false;
@@ -935,6 +936,7 @@ async function refreshWebRtcDiagnostics(): Promise<void> {
 }
 
 function syncRemoteAudioDiagnostics(): void {
+  reconcileRemoteAudioTracksWithPresence();
   debugState.remoteParticipants = debugState.remoteParticipants.map((participant) => ({
     ...participant,
     hasAudioNode: remoteAudioNodes.has(participant.participantId),
@@ -3282,6 +3284,48 @@ function disconnectRemoteAudioElement(participantId: string): void {
   }
 }
 
+function getRemoteParticipantMicrophoneTrack(participantId: string, publication: unknown): Track | null {
+  const track = (publication as { track?: Track | null }).track;
+  if (track?.kind !== Track.Kind.Audio) {
+    return null;
+  }
+  if (resolveRemoteBrowserObjectForTrack(participantId, publication, track, "audio")) {
+    return null;
+  }
+  if (isScreenShareAudioSource((publication as { source?: unknown }).source)) {
+    return null;
+  }
+  return track;
+}
+
+function reconcileRemoteAudioTracksWithPresence(): void {
+  if (!livekitRoom) {
+    return;
+  }
+  const activeAudioParticipantIds = new Set(
+    debugState.remoteParticipants
+      .filter((participant) => participant.activeAudio)
+      .map((participant) => participant.participantId)
+  );
+  for (const participantId of Array.from(remoteAudioNodes.keys())) {
+    if (!activeAudioParticipantIds.has(participantId)) {
+      disconnectRemoteAudioElement(participantId);
+    }
+  }
+  for (const [participantId, participant] of livekitRoom.remoteParticipants.entries()) {
+    if (!activeAudioParticipantIds.has(participantId) || remoteAudioNodes.has(participantId)) {
+      continue;
+    }
+    for (const publication of participant.trackPublications.values()) {
+      const track = getRemoteParticipantMicrophoneTrack(participantId, publication);
+      if (track) {
+        connectRemoteAudioTrack(track, participantId);
+        break;
+      }
+    }
+  }
+}
+
 function detachMediaRoomRemoteAudioTracks(room: Room): void {
   for (const participant of room.remoteParticipants.values()) {
     for (const publication of participant.trackPublications.values()) {
@@ -3297,11 +3341,31 @@ function clearMediaRoomReference(room: Room, diagnosticsReason: string): void {
   if (livekitRoom !== room) {
     return;
   }
+  clearMediaRoomIdleDisconnect();
   livekitRoom = null;
   mediaRoomReady = false;
   mediaDiagnosticsTransports = [];
   debugState.media.webrtc = createUnavailableWebRtcDiagnostics(diagnosticsReason);
   startShareButton.disabled = !canUseScreenShareControl();
+}
+
+function clearMediaRoomIdleDisconnect(): void {
+  if (mediaRoomIdleDisconnectTimer === null) {
+    return;
+  }
+  window.clearTimeout(mediaRoomIdleDisconnectTimer);
+  mediaRoomIdleDisconnectTimer = null;
+}
+
+function scheduleMediaRoomIdleDisconnect(room: Room, diagnosticsReason: string): void {
+  clearMediaRoomIdleDisconnect();
+  mediaRoomIdleDisconnectTimer = window.setTimeout(() => {
+    mediaRoomIdleDisconnectTimer = null;
+    if (livekitRoom !== room || audioSessionJoined || hasActiveMediaRoomSurfaceConsumer()) {
+      return;
+    }
+    void disconnectMediaRoom(room, diagnosticsReason).catch(() => undefined);
+  }, 10000);
 }
 
 async function disconnectMediaRoom(room: Room, diagnosticsReason: string): Promise<void> {
@@ -6065,6 +6129,8 @@ async function joinAudio(): Promise<void> {
     throw createFaultError("NotFoundError", "no_audio_device");
   }
 
+  clearMediaRoomIdleDisconnect();
+
   if (livekitRoom) {
     if (!microphoneEnabled) {
       joinAudioButton.disabled = true;
@@ -6138,10 +6204,9 @@ async function leaveAudio(): Promise<void> {
   setStatus("Audio left");
   debugState.audioState = "not_joined";
   if (!hasActiveMediaRoomSurfaceConsumer()) {
-    await disconnectMediaRoom(room, "audio_left");
-  } else {
-    void refreshWebRtcDiagnostics().catch(() => undefined);
+    scheduleMediaRoomIdleDisconnect(room, "audio_left_idle");
   }
+  void refreshWebRtcDiagnostics().catch(() => undefined);
   joinAudioButton.disabled = !runtimeFlags.audioJoin;
   void reportDiagnostics("audio_left");
 }
