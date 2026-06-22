@@ -2136,4 +2136,43 @@ test("fault-injected room-state failure falls back to API mode", async ({ page, 
   const presenceResponse = await request.get("/api/rooms/demo-room/presence");
   const presence = (await presenceResponse.json()) as { items: Array<{ participantId: string }> };
   expect(presence.items.length).toBeGreaterThan(0);
+  await expect(page.locator("#diagnostics-link")).toHaveAttribute("href", /\/diagnostics\?roomId=demo-room/);
+});
+
+test("public diagnostics page creates a redacted success report without media prompts", async ({ page }) => {
+  await page.goto("/diagnostics?roomId=demo-room&autorun=1&skipMic=1&skipMedia=1&timeoutMs=3000");
+
+  await expect.poll(async () => {
+    return await page.evaluate(() => (window as Window & {
+      __VRATA_CONNECTIVITY_DIAGNOSTICS__?: { summary?: { failed: number }; checks?: Array<{ code: string; status: string }> };
+    }).__VRATA_CONNECTIVITY_DIAGNOSTICS__);
+  }, {
+    timeout: 12000,
+    intervals: [500, 1000, 2000]
+  }).toMatchObject({ summary: { failed: 0 } });
+
+  const reportText = await page.locator("#diagnostics-json").inputValue();
+  expect(reportText).toContain('"api_ok"');
+  expect(reportText).toContain('"admin_details_protected"');
+  expect(reportText).toContain('"room_state_ws_ok"');
+  expect(reportText).toContain('"microphone_skipped"');
+  expect(reportText).toContain('"media_skipped"');
+  expect(reportText).toContain("accessToken=[redacted]");
+  expect(reportText).not.toMatch(/Bearer\s+[A-Za-z0-9._-]+/);
+});
+
+test("public diagnostics page reports blocked room-state WebSocket", async ({ page }) => {
+  await page.goto("/diagnostics?roomId=demo-room&autorun=1&skipMic=1&skipMedia=1&failwss=1&timeoutMs=1500");
+
+  await expect.poll(async () => {
+    return await page.evaluate(() => {
+      const report = (window as Window & {
+        __VRATA_CONNECTIVITY_DIAGNOSTICS__?: { checks?: Array<{ code: string; status: string; name: string }> };
+      }).__VRATA_CONNECTIVITY_DIAGNOSTICS__;
+      return report?.checks?.find((check) => check.name === "roomStateWebSocket") ?? null;
+    });
+  }, {
+    timeout: 12000,
+    intervals: [500, 1000, 2000]
+  }).toMatchObject({ status: "failed", code: "room_state_ws_failed" });
 });

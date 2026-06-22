@@ -64,6 +64,31 @@ The runtime stores the latest values in `window.__VRATA_DEBUG__.lastReportId` an
 
 Unhandled runtime errors create a client-side `rpt_*` before reporting so the user still has a stable support reference.
 
+## Public Connectivity Diagnostics
+
+The runtime serves a self-host friendly diagnostics page at `/diagnostics`. Operators can open `/diagnostics?roomId=<roomId>` from the app origin, or use the `Connectivity diagnostics` link in the room HUD.
+
+The page creates a redacted JSON report with stable check codes for:
+
+- API reachability: `api_ok`, `api_unreachable`, `api_http_error`.
+- Admin diagnostics protection: `admin_details_protected`, `admin_details_public`.
+- Room manifest and state token: `manifest_ok`, `manifest_unreachable`, `state_token_ok`, `state_token_failed`.
+- Room-state WebSocket: `room_state_ws_ok`, `room_state_ws_failed`.
+- Object storage: `storage_ok`, `storage_skipped`, `storage_unreachable`.
+- Browser microphone: `microphone_ok`, `microphone_skipped`, `microphone_unsupported`, `microphone_permission_denied`, `microphone_not_found`, `microphone_check_failed`.
+- LiveKit/WebRTC: `media_ok`, `media_skipped`, `media_token_failed`, `livekit_connect_failed`.
+- Timeouts: `connectivity_check_timeout`.
+
+Useful query parameters:
+
+- `roomId=<roomId>` selects the room, default `demo-room`.
+- `autorun=1` starts checks immediately.
+- `skipMic=1` avoids a microphone permission prompt.
+- `skipMedia=1` skips the LiveKit/WebRTC publish check.
+- `timeoutMs=<number>` changes per-check timeout.
+
+The LiveKit check publishes a generated diagnostics audio track instead of using microphone capture. The microphone check remains separate so a denied microphone can report `microphone_permission_denied` without hiding media transport status.
+
 ## Redaction
 
 Structured API logs and runtime diagnostic payloads redact common sensitive fields and token-bearing URL query parameters.
@@ -77,6 +102,7 @@ Redacted examples:
 - `token`
 - `invite`
 - URL query parameters such as `?token=...`
+- URL query parameters containing token-like key names such as `accessToken=...`
 
 Short dotted action names such as `scene-bundle.version.create` are not treated as tokens.
 

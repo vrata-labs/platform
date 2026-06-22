@@ -363,6 +363,45 @@ test.describe("@staging runtime HUD space selector", () => {
     await expect(page.locator("#speaker-level-fill").locator("..")).toBeVisible();
   });
 
+  test("public diagnostics page validates staging media connectivity", async ({ page }) => {
+    test.setTimeout(90000);
+    await page.goto(`/diagnostics?roomId=${encodeURIComponent(stagingRoomId)}&autorun=1&skipMic=1&timeoutMs=12000`, { waitUntil: "domcontentloaded" });
+
+    await expect.poll(async () => {
+      return await page.evaluate(() => {
+        const report = (window as Window & {
+          __VRATA_CONNECTIVITY_DIAGNOSTICS__?: {
+            summary?: { failed: number };
+            checks?: Array<{ name: string; code: string; status: string; details?: { webrtc?: { available?: boolean; transports?: unknown[] } } }>;
+          };
+        }).__VRATA_CONNECTIVITY_DIAGNOSTICS__;
+        const media = report?.checks?.find((check) => check.name === "media");
+        return {
+          failed: report?.summary?.failed ?? null,
+          mediaStatus: media?.status ?? null,
+          mediaCode: media?.code ?? null,
+          webrtcAvailable: media?.details?.webrtc?.available ?? false,
+          hasTransport: (media?.details?.webrtc?.transports?.length ?? 0) > 0
+        };
+      });
+    }, {
+      timeout: 60000,
+      intervals: [1000, 2000, 3000, 5000]
+    }).toEqual({
+      failed: 0,
+      mediaStatus: "ok",
+      mediaCode: "media_ok",
+      webrtcAvailable: true,
+      hasTransport: true
+    });
+
+    const reportText = await page.locator("#diagnostics-json").inputValue();
+    expect(reportText).toContain('"room_state_ws_ok"');
+    expect(reportText).toContain('"media_ok"');
+    expect(reportText).toContain("accessToken=[redacted]");
+    expect(reportText).not.toMatch(/Bearer\s+[A-Za-z0-9._-]+/);
+  });
+
   test("voice diagnostics bind LiveKit audio to spatial sources on staging", async ({ browser, request }) => {
     test.setTimeout(90000);
     const targetName = `Staging Voice Diagnostics ${Date.now()}`;

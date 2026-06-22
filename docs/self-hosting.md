@@ -135,6 +135,7 @@ Smoke checks:
 ```bash
 curl -fsS "$VRATA_APP_BASE_URL/health"
 curl -fsS "$VRATA_APP_BASE_URL/rooms/demo-room"
+curl -fsS "$VRATA_APP_BASE_URL/diagnostics"
 curl -fsS "$CONTROL_PLANE_PUBLIC_URL"
 ```
 
@@ -169,6 +170,8 @@ TURN/TLS options:
 - Do not reuse `VRATA_LIVEKIT_DOMAIN` as `LIVEKIT_TURN_DOMAIN`; production preflight rejects this to keep signaling and TURN/TLS routing explicit.
 
 The API `/health` and `/health/ready` payloads expose non-secret LiveKit deployment diagnostics under `dependencies.livekitConfig`: signaling TLS status, configured host, TURN enabled flag, TURN domain, TURN ports, and relay range. Runtime diagnostics posted to `POST /api/rooms/:roomId/diagnostics` include `media.webrtc` with transport states, selected ICE candidate pair state, candidate types, and TURN relay availability/use booleans. The runtime snapshot intentionally omits raw ICE candidate addresses and ports.
+
+After public DNS/HTTPS is configured, open `$VRATA_APP_BASE_URL/diagnostics?roomId=demo-room&autorun=1` in a browser. Use `skipMic=1` when you need to avoid a microphone permission prompt but still want API, room-state WSS, storage, LiveKit, and WebRTC/TURN checks. Copy the JSON report into support issues; token-like query values and secret-like keys are redacted.
 
 `POST /api/tokens/media` and `POST /api/tokens/remote-browser-media` return `livekit_config_invalid` in production if LiveKit URL/key/secret are missing, insecure, or still using dev credentials.
 

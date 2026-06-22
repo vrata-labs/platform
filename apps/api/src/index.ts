@@ -1417,6 +1417,12 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     return;
   }
 
+  if (method === "GET" && (url.pathname === "/diagnostics" || url.pathname === "/diagnostics.html")) {
+    const served = await serveStatic(response, join(runtimeStaticRoot, "diagnostics.html"));
+    if (!served) json(response, 503, { error: "diagnostics_build_missing" });
+    return;
+  }
+
   if (method === "GET" && (url.pathname === "/control-plane" || url.pathname === "/control-plane/")) {
     const served = await serveStatic(response, join(controlPlaneStaticRoot, "index.html"));
     if (!served) json(response, 503, { error: "control_plane_build_missing" });

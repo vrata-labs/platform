@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Vrata Connectivity Diagnostics</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body class="diagnostics-body">
+    <main id="diagnostics-app" class="diagnostics-page">
+      <section class="diagnostics-hero">
+        <div>
+          <div class="brand">Vrata</div>
+          <h1>Connectivity Diagnostics</h1>
+          <p>Checks API, room-state WebSocket, LiveKit media, TURN/ICE, microphone access, storage, and client capabilities.</p>
+        </div>
+        <div class="diagnostics-actions">
+          <label for="diagnostics-room-id">Room ID</label>
+          <input id="diagnostics-room-id" value="demo-room" spellcheck="false" />
+          <button id="diagnostics-run">Run Checks</button>
+          <button id="diagnostics-copy" disabled>Copy JSON Report</button>
+        </div>
+      </section>
+      <section id="diagnostics-summary" class="diagnostics-summary">Idle</section>
+      <section id="diagnostics-results" class="diagnostics-results" aria-live="polite"></section>
+      <label class="diagnostics-report-label" for="diagnostics-json">Redacted JSON report</label>
+      <textarea id="diagnostics-json" class="diagnostics-json" readonly spellcheck="false"></textarea>
+    </main>
+    <script type="module" src="/src/diagnostics-page.ts"></script>
+  </body>
+</html>

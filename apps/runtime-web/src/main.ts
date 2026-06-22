@@ -230,6 +230,7 @@ const statusLineEl = mustElement<HTMLDivElement>("#status-line");
 const brandingLineEl = mustElement<HTMLDivElement>("#branding-line");
 const roomStateLineEl = mustElement<HTMLDivElement>("#room-state-line");
 const reportLineEl = mustElement<HTMLDivElement>("#report-line");
+const diagnosticsLink = mustElement<HTMLAnchorElement>("#diagnostics-link");
 const guestAccessLineEl = mustElement<HTMLDivElement>("#guest-access-line");
 const spaceSelect = mustElement<HTMLSelectElement>("#space-select");
 const spaceSelectStatusEl = mustElement<HTMLDivElement>("#space-select-status");
@@ -264,6 +265,10 @@ const avatarSandboxPanel = mustElement<HTMLDivElement>("#avatar-sandbox-panel");
 const avatarPresetSelect = mustElement<HTMLSelectElement>("#avatar-preset-select");
 const avatarSandboxStatusEl = mustElement<HTMLDivElement>("#avatar-sandbox-status");
 const avatarPresetLabel = mustElement<HTMLLabelElement>('label[for="avatar-preset-select"]');
+
+const diagnosticsUrl = new URL("/diagnostics", apiBaseUrl);
+diagnosticsUrl.searchParams.set("roomId", roomId);
+diagnosticsLink.href = diagnosticsUrl.toString();
 
 if (debugEnabled) {
   debugPanel.hidden = false;
