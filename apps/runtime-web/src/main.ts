@@ -253,9 +253,11 @@ const stopRemoteBrowserButton = mustElement<HTMLButtonElement>("#stop-remote-bro
 const remoteBrowserStatusEl = mustElement<HTMLDivElement>("#remote-browser-status");
 const micSelect = mustElement<HTMLSelectElement>("#mic-select");
 const speakerSelect = mustElement<HTMLSelectElement>("#speaker-select");
+const joinMutedCheckbox = mustElement<HTMLInputElement>("#join-muted");
 const micLevelFill = mustElement<HTMLDivElement>("#mic-level-fill");
 const speakerLevelFill = mustElement<HTMLDivElement>("#speaker-level-fill");
 const audioDeviceStatusEl = mustElement<HTMLDivElement>("#audio-device-status");
+const remoteMicStatusEl = mustElement<HTMLDivElement>("#remote-mic-status");
 const surfaceAudioControlEl = mustElement<HTMLDivElement>("#surface-audio-control");
 const surfaceAudioCheckbox = mustElement<HTMLInputElement>("#surface-audio-enabled");
 const surfaceAudioStatusEl = mustElement<HTMLDivElement>("#surface-audio-status");
@@ -756,12 +758,16 @@ let lastAvatarXrInputProfile: string | null = null;
 let lastAvatarPoseSentAtMs = 0;
 let preferredMicDeviceId = getStoredValue(localStorage, "vrata.audioinput", "noah.audioinput") ?? "default";
 let preferredSpeakerDeviceId = getStoredValue(localStorage, "vrata.audiooutput", "noah.audiooutput") ?? "default";
+let joinMutedPreference = getStoredValue(localStorage, "vrata.audio.joinMuted", "noah.audio.joinMuted") === "true";
+joinMutedCheckbox.checked = joinMutedPreference;
+let audioActionInFlight = false;
 let audioInputDevices: MediaDeviceInfo[] = [];
 let audioOutputDevices: MediaDeviceInfo[] = [];
 let localMicLevel = 0;
 let speakerOutputLevel = 0;
 const avatarPoseSendTimestamps: number[] = [];
 const recentFrameBudgetMs: number[] = [];
+const localAudioTrackEndHandlers = new WeakSet<MediaStreamTrack>();
 const roomStateReconnectPolicy = createReconnectPolicy({
   maxRetries: Number.parseInt(query.get("roomstateretries") ?? "3", 10),
   baseDelayMs: Number.parseInt(query.get("roomstatedelay") ?? "1000", 10),
@@ -913,7 +919,9 @@ function deriveMediaDebugAudioState(): "not_joined" | "joining" | "joined" | "mu
 function updateMediaDiagnostics(): void {
   debugState.media = {
     audioState: deriveMediaDebugAudioState(),
+    audioJoined: audioSessionJoined,
     muted: !microphoneEnabled,
+    speaking: Boolean(microphoneEnabled && (localAvatarController?.diagnostics.speakingActive || localMicLevel >= 0.04)),
     publishedAudio: Boolean(livekitRoom && microphoneEnabled),
     audioSource: livekitRoom && microphoneEnabled ? audioMockEnabled ? "mock" : "microphone" : "none",
     subscribedAudioCount: remoteAudioNodes.size,
@@ -942,6 +950,7 @@ function syncRemoteAudioDiagnostics(): void {
     hasAudioNode: remoteAudioNodes.has(participant.participantId),
     activeAudio: participant.activeAudio || remoteAudioNodes.has(participant.participantId)
   }));
+  syncRemoteMicStatus();
 }
 
 function getCurrentSeatId(): string | null {
@@ -2341,6 +2350,54 @@ function updateAudioDeviceStatus(message: string): void {
   audioDeviceStatusEl.textContent = message;
 }
 
+function syncAudioControls(): void {
+  const audioUnsupported = runtimeFlags.audioJoin && !audioMockEnabled && !browserMediaCapabilities.audioInput.supported;
+  if (!runtimeFlags.audioJoin) {
+    joinAudioButton.disabled = true;
+    joinAudioButton.textContent = "Audio Disabled";
+    joinAudioButton.title = "Audio is disabled for this runtime";
+    muteButton.disabled = true;
+    muteButton.textContent = "Mute";
+    joinMutedCheckbox.disabled = true;
+    return;
+  }
+  if (audioUnsupported) {
+    joinAudioButton.disabled = true;
+    joinAudioButton.textContent = "Audio Unsupported";
+    joinAudioButton.title = `Microphone unsupported: ${describeMediaCapabilityReason(browserMediaCapabilities.audioInput.reason)}`;
+    muteButton.disabled = true;
+    muteButton.textContent = "Mute";
+    joinMutedCheckbox.disabled = true;
+    return;
+  }
+  joinAudioButton.disabled = audioActionInFlight;
+  joinAudioButton.textContent = audioSessionJoined ? "Leave Audio" : "Join Audio";
+  joinAudioButton.title = audioSessionJoined ? "Stop publishing your microphone" : "Publish your microphone";
+  muteButton.disabled = audioActionInFlight || !audioSessionJoined || !livekitRoom;
+  muteButton.textContent = microphoneEnabled ? "Mute" : "Unmute";
+  muteButton.title = microphoneEnabled ? "Mute your microphone" : "Unmute your microphone";
+  joinMutedCheckbox.disabled = audioActionInFlight || audioSessionJoined;
+}
+
+function syncRemoteMicStatus(): void {
+  if (debugState.remoteParticipants.length === 0) {
+    remoteMicStatusEl.textContent = "Remote microphones idle";
+    return;
+  }
+  const status = debugState.remoteParticipants.map((participant) => {
+    const label = participant.participantId.slice(0, 8);
+    const state = !participant.audioJoined
+      ? "not joined"
+      : participant.muted
+        ? "muted"
+        : participant.speaking
+          ? "speaking"
+          : "live";
+    return `${label}: ${state}`;
+  }).join(" · ");
+  remoteMicStatusEl.textContent = `Remote microphones: ${status}`;
+}
+
 function applySurfaceTexture(surfaceId: string, texture: THREE.Texture | null): void {
   const material = getMediaSurfaceView(surfaceId).object.material;
   if (!(material instanceof THREE.MeshBasicMaterial)) {
@@ -2522,12 +2579,7 @@ function syncMediaCapabilityControls(): void {
     stopWhiteboardButton.disabled = true;
   }
 
-  if (runtimeFlags.audioJoin && !audioMockEnabled && !browserMediaCapabilities.audioInput.supported) {
-    joinAudioButton.disabled = true;
-    joinAudioButton.textContent = "Audio Unsupported";
-    joinAudioButton.title = `Microphone unsupported: ${describeMediaCapabilityReason(browserMediaCapabilities.audioInput.reason)}`;
-    muteButton.disabled = true;
-  }
+  syncAudioControls();
 
   if (debugState.access.canStartScreenShare && runtimeFlags.screenShare && !shareMockEnabled && !browserMediaCapabilities.screenShare.supported) {
     startShareButton.disabled = true;
@@ -2622,6 +2674,29 @@ function disconnectLocalAudioTrack(): void {
   localAudioNode = null;
 }
 
+function bindLocalAudioTrackEnded(track: MediaStreamTrack): void {
+  if (localAudioTrackEndHandlers.has(track)) {
+    return;
+  }
+  localAudioTrackEndHandlers.add(track);
+  track.addEventListener("ended", () => {
+    if (!audioSessionJoined || !microphoneEnabled) {
+      return;
+    }
+    microphoneEnabled = false;
+    disconnectLocalAudioTrack();
+    syncAudioControls();
+    void syncPresence(latestMode, false);
+    const issue = getRuntimeIssue("no_audio_device");
+    applyIssue(issue, {
+      degradedMode: "audio_unavailable",
+      audioState: "degraded",
+      lastRecoveryAction: "microphone_track_ended"
+    });
+    void reportDiagnostics("microphone_track_ended");
+  }, { once: true });
+}
+
 function getLocalMicrophoneMediaTrack(room: Room): MediaStreamTrack | null {
   const publication = Array.from(room.localParticipant.trackPublications.values()).find((item) => item.source === Track.Source.Microphone);
   if (!publication) {
@@ -2685,6 +2760,7 @@ function connectLocalAudioTrack(room: Room): void {
   disconnectLocalAudioTrack();
   const context = ensureAudioContext();
   void resumeAudioContext();
+  bindLocalAudioTrackEnded(track);
   const analyserSetup = createAudioAnalyser(context);
   const source = context.createMediaStreamSource(new MediaStream([track]));
   source.connect(analyserSetup.analyser);
@@ -3298,6 +3374,10 @@ function getRemoteParticipantMicrophoneTrack(participantId: string, publication:
   return track;
 }
 
+function isMicrophonePublication(publication: unknown): boolean {
+  return (publication as { source?: unknown }).source === Track.Source.Microphone;
+}
+
 function reconcileRemoteAudioTracksWithPresence(): void {
   if (!livekitRoom) {
     return;
@@ -3511,7 +3591,9 @@ const debugState = {
   speakerOutputLevel: 0,
   media: {
     audioState: "not_joined" as "not_joined" | "joining" | "joined" | "muted" | "degraded" | "failed",
+    audioJoined: false,
     muted: true,
+    speaking: false,
     publishedAudio: false,
     audioSource: "none" as "none" | "microphone" | "mock",
     subscribedAudioCount: 0,
@@ -3659,7 +3741,9 @@ const debugState = {
     updateHz: number;
     interpolationDelayMs: number;
     maxObservedJumpM: number;
+    audioJoined: boolean;
     muted: boolean;
+    speaking: boolean;
     activeAudio: boolean;
     hasVisualEntity: boolean;
     hasAudioNode: boolean;
@@ -5678,7 +5762,9 @@ async function syncPresence(mode: PresenceState["mode"], audioActive: boolean): 
       yaw: headYaw,
       pitch: headPitch
     },
+    audioJoined: audioSessionJoined,
     muted: !microphoneEnabled,
+    speaking: Boolean(microphoneEnabled && audioActive && (localAvatarController?.diagnostics.speakingActive || localMicLevel >= 0.04)),
     activeMedia: {
       audio: audioActive,
       screenShare: hasLocalScreenSharePublishing()
@@ -5818,6 +5904,45 @@ function setupAudio(room: Room): void {
       disconnectRemoteAudioElement(participant.identity);
     }
     track.detach().forEach((element) => element.remove());
+  });
+
+  room.on(RoomEvent.TrackMuted, (publication, participant) => {
+    if (!isMicrophonePublication(publication)) {
+      return;
+    }
+    if (participant?.identity === participantId) {
+      microphoneEnabled = false;
+      disconnectLocalAudioTrack();
+      syncAudioControls();
+      syncLocalAudioPresence();
+      return;
+    }
+    if (participant?.identity) {
+      disconnectRemoteAudioElement(participant.identity);
+      syncRemoteAudioDiagnostics();
+    }
+  });
+
+  room.on(RoomEvent.TrackUnmuted, (publication, participant) => {
+    if (!isMicrophonePublication(publication)) {
+      return;
+    }
+    if (participant?.identity === participantId) {
+      microphoneEnabled = audioSessionJoined;
+      if (microphoneEnabled) {
+        connectLocalAudioTrack(room);
+      }
+      syncAudioControls();
+      syncLocalAudioPresence();
+      return;
+    }
+    if (participant?.identity) {
+      const track = getRemoteParticipantMicrophoneTrack(participant.identity, publication);
+      if (track) {
+        connectRemoteAudioTrack(track, participant.identity);
+        syncRemoteAudioDiagnostics();
+      }
+    }
   });
 }
 
@@ -6106,6 +6231,69 @@ async function stopScreenShare(): Promise<void> {
   void reportDiagnostics(shareMockEnabled ? "screenshare_mock_stopped" : "screenshare_stopped");
 }
 
+async function setLocalMicrophoneEnabled(room: Room, enabled: boolean): Promise<void> {
+  if (enabled) {
+    if (audioMockEnabled) {
+      await publishMockMicrophoneTrack(room);
+    } else {
+      await room.localParticipant.setMicrophoneEnabled(true);
+    }
+    microphoneEnabled = true;
+    await resumeAudioContext();
+    connectLocalAudioTrack(room);
+    return;
+  }
+
+  microphoneEnabled = false;
+  if (audioMockEnabled) {
+    const track = mockAudioSource?.track;
+    if (track) {
+      track.enabled = false;
+    }
+  } else {
+    await room.localParticipant.setMicrophoneEnabled(false);
+  }
+  disconnectLocalAudioTrack();
+}
+
+function syncLocalAudioPresence(): void {
+  void syncPresence(latestMode, Boolean(livekitRoom && microphoneEnabled));
+}
+
+async function performAudioAction(action: () => Promise<void>): Promise<void> {
+  if (audioActionInFlight) {
+    return;
+  }
+  audioActionInFlight = true;
+  syncAudioControls();
+  try {
+    await action();
+  } finally {
+    audioActionInFlight = false;
+    syncAudioControls();
+  }
+}
+
+function handleAudioActionError(error: unknown, lastRecoveryAction: string): void {
+  console.error(error);
+  const issue = classifyMediaError(error);
+  muteButton.disabled = true;
+  if (issue.code === "audio_unsupported") {
+    joinAudioButton.disabled = true;
+    joinAudioButton.textContent = "Audio Unsupported";
+    joinAudioButton.title = `Microphone unsupported: ${describeMediaCapabilityReason(browserMediaCapabilities.audioInput.reason)}`;
+  } else {
+    syncAudioControls();
+  }
+  applyIssue(issue, {
+    degradedMode: "audio_unavailable",
+    audioState: issue.code === "audio_unsupported" ? "unsupported" : "degraded",
+    lastRecoveryAction
+  });
+  syncLocalAudioPresence();
+  void reportDiagnostics(issue.diagnosticsNote);
+}
+
 async function joinAudio(): Promise<void> {
   if (!runtimeFlags.audioJoin) {
     const issue = getRuntimeIssue("livekit_failed");
@@ -6130,54 +6318,21 @@ async function joinAudio(): Promise<void> {
   }
 
   clearMediaRoomIdleDisconnect();
-
-  if (livekitRoom) {
-    if (!microphoneEnabled) {
-      joinAudioButton.disabled = true;
-      if (audioMockEnabled) {
-        await publishMockMicrophoneTrack(livekitRoom);
-      } else {
-        await livekitRoom.localParticipant.setMicrophoneEnabled(true);
-      }
-      audioSessionJoined = true;
-      microphoneEnabled = true;
-      await resumeAudioContext();
-      connectLocalAudioTrack(livekitRoom);
-      await refreshAudioDevices(!audioMockEnabled);
-      muteButton.disabled = false;
-      joinAudioButton.disabled = false;
-      joinAudioButton.textContent = "Leave Audio";
-      joinAudioButton.title = "Stop publishing your microphone";
-      clearAudioIssue("Audio connected");
-      debugState.audioState = "connected";
-      void reportDiagnostics("audio_connected");
-    }
-    return;
-  }
-
+  const startMuted = joinMutedPreference;
   setStatus("Joining audio...");
   debugState.audioState = "joining";
-  joinAudioButton.disabled = true;
+
   const room = await ensureMediaRoom();
-  if (audioMockEnabled) {
-    await publishMockMicrophoneTrack(room);
-  } else {
-    await room.localParticipant.setMicrophoneEnabled(true);
-  }
   audioSessionJoined = true;
-  microphoneEnabled = true;
-  await resumeAudioContext();
-  connectLocalAudioTrack(room);
-  await refreshAudioDevices(!audioMockEnabled);
-  muteButton.disabled = false;
-  joinAudioButton.disabled = false;
-  joinAudioButton.textContent = "Leave Audio";
-  joinAudioButton.title = "Stop publishing your microphone";
+  await setLocalMicrophoneEnabled(room, !startMuted);
+  await refreshAudioDevices(!audioMockEnabled && !startMuted);
   startShareButton.disabled = !canUseScreenShareControl();
   syncWhiteboardControls();
-  clearAudioIssue("Audio connected");
-  debugState.audioState = "connected";
-  void reportDiagnostics("audio_connected");
+  syncLocalAudioPresence();
+  syncAudioControls();
+  clearAudioIssue(startMuted ? "Joined muted" : "Audio connected");
+  debugState.audioState = startMuted ? "muted" : "connected";
+  void reportDiagnostics(startMuted ? "audio_joined_muted" : "audio_connected");
 }
 
 async function leaveAudio(): Promise<void> {
@@ -6186,7 +6341,6 @@ async function leaveAudio(): Promise<void> {
   }
 
   const room = livekitRoom;
-  joinAudioButton.disabled = true;
   if (audioMockEnabled) {
     await unpublishLocalMicrophoneTrack(room);
     stopMockAudioSource();
@@ -6206,34 +6360,28 @@ async function leaveAudio(): Promise<void> {
   if (!hasActiveMediaRoomSurfaceConsumer()) {
     scheduleMediaRoomIdleDisconnect(room, "audio_left_idle");
   }
+  syncLocalAudioPresence();
   void refreshWebRtcDiagnostics().catch(() => undefined);
-  joinAudioButton.disabled = !runtimeFlags.audioJoin;
   void reportDiagnostics("audio_left");
 }
 
-muteButton.addEventListener("click", async () => {
-  if (!livekitRoom) {
+async function toggleLocalMute(): Promise<void> {
+  if (!livekitRoom || !audioSessionJoined) {
     return;
   }
-  microphoneEnabled = !microphoneEnabled;
-  if (audioMockEnabled) {
-    const track = mockAudioSource?.track;
-    if (track) {
-      track.enabled = microphoneEnabled;
-    }
-  } else {
-    await livekitRoom.localParticipant.setMicrophoneEnabled(microphoneEnabled);
-  }
-  if (microphoneEnabled) {
-    if (audioMockEnabled) {
-      await publishMockMicrophoneTrack(livekitRoom);
-    }
-    await resumeAudioContext();
-    connectLocalAudioTrack(livekitRoom);
-  }
-  muteButton.textContent = microphoneEnabled ? "Mute" : "Unmute";
+  const nextEnabled = !microphoneEnabled;
+  await setLocalMicrophoneEnabled(livekitRoom, nextEnabled);
+  syncLocalAudioPresence();
+  syncAudioControls();
   setStatus(microphoneEnabled ? "Audio live" : "Muted");
   debugState.audioState = microphoneEnabled ? "live" : "muted";
+  void reportDiagnostics(microphoneEnabled ? "audio_unmuted" : "audio_muted");
+}
+
+muteButton.addEventListener("click", () => {
+  void performAudioAction(toggleLocalMute).catch((error: unknown) => {
+    handleAudioActionError(error, "audio_mute_toggle_failed");
+  });
 });
 
 micSelect.addEventListener("change", () => {
@@ -6303,25 +6451,15 @@ surfaceAudioCheckbox.addEventListener("change", () => {
 });
 
 joinAudioButton.addEventListener("click", () => {
-  const action = audioSessionJoined ? leaveAudio() : joinAudio();
-  void action.catch((error: unknown) => {
-    console.error(error);
-    const issue = classifyMediaError(error);
-    muteButton.disabled = true;
-    if (issue.code === "audio_unsupported") {
-      joinAudioButton.disabled = true;
-      joinAudioButton.textContent = "Audio Unsupported";
-      joinAudioButton.title = `Microphone unsupported: ${describeMediaCapabilityReason(browserMediaCapabilities.audioInput.reason)}`;
-    } else {
-      joinAudioButton.disabled = false;
-    }
-    applyIssue(issue, {
-      degradedMode: "audio_unavailable",
-      audioState: issue.code === "audio_unsupported" ? "unsupported" : "degraded",
-      lastRecoveryAction: "audio_join_failed"
-    });
-    void reportDiagnostics(issue.diagnosticsNote);
+  void performAudioAction(() => audioSessionJoined ? leaveAudio() : joinAudio()).catch((error: unknown) => {
+    handleAudioActionError(error, audioSessionJoined ? "audio_leave_failed" : "audio_join_failed");
   });
+});
+
+joinMutedCheckbox.addEventListener("change", () => {
+  joinMutedPreference = joinMutedCheckbox.checked;
+  localStorage.setItem("vrata.audio.joinMuted", String(joinMutedPreference));
+  updateAudioDeviceStatus(joinMutedPreference ? "Join muted enabled" : "Join muted disabled");
 });
 
 startShareButton.addEventListener("click", () => {

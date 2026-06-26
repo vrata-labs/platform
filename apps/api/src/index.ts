@@ -161,7 +161,9 @@ interface PresenceRecord {
   rootTransform: { x: number; y: number; z: number; yaw?: number; pitch?: number; roll?: number };
   headTransform?: { x: number; y: number; z: number; yaw?: number; pitch?: number; roll?: number };
   bodyTransform?: { x: number; y: number; z: number; yaw?: number; pitch?: number; roll?: number };
+  audioJoined?: boolean;
   muted: boolean;
+  speaking?: boolean;
   activeMedia: { audio: boolean; screenShare: boolean };
   seq?: number;
   clientTimeMs?: number;

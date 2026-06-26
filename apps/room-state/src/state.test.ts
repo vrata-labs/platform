@@ -72,6 +72,29 @@ test("mergeParticipantState preserves existing head and body transforms on parti
   assert.equal(merged.updatedAt, "2026-03-28T10:00:00.000Z");
 });
 
+test("mergeParticipantState preserves joined muted speaking media state", () => {
+  const current = createParticipantState("p1");
+  const joinedMuted = mergeParticipantState(current, {
+    audioJoined: true,
+    muted: true,
+    speaking: false,
+    activeMedia: { audio: false, screenShare: false }
+  });
+  const speaking = mergeParticipantState(joinedMuted, {
+    muted: false,
+    speaking: true,
+    activeMedia: { audio: true, screenShare: false }
+  });
+
+  assert.equal(joinedMuted.audioJoined, true);
+  assert.equal(joinedMuted.muted, true);
+  assert.equal(joinedMuted.activeMedia.audio, false);
+  assert.equal(speaking.audioJoined, true);
+  assert.equal(speaking.muted, false);
+  assert.equal(speaking.speaking, true);
+  assert.equal(speaking.activeMedia.audio, true);
+});
+
 test("mergeParticipantState defaults missing orientation to zero and preserves new orientation", () => {
   const current = createParticipantState("p1");
   const legacy = mergeParticipantState(current, {

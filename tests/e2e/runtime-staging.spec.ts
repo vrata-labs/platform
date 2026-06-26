@@ -509,6 +509,82 @@ test.describe("@staging runtime HUD space selector", () => {
           spatialAudioLevelPresent: true
         });
 
+        await expect(source.locator("#toggle-mute")).toContainText("Mute");
+        await source.click("#toggle-mute");
+
+        await expect.poll(async () => {
+          const listenerDebug = await listener.evaluate(() => (window as Window & {
+            __VRATA_DEBUG__?: {
+              media?: { subscribedAudioCount?: number };
+              remoteParticipants?: Array<{ participantId?: string; audioJoined?: boolean; muted?: boolean; activeAudio?: boolean }>;
+            };
+          }).__VRATA_DEBUG__);
+          const sourceDebug = await source.evaluate(() => (window as Window & {
+            __VRATA_DEBUG__?: { media?: { audioState?: string; audioJoined?: boolean; muted?: boolean; publishedAudio?: boolean } };
+          }).__VRATA_DEBUG__);
+          const participant = listenerDebug?.remoteParticipants?.find((item) => item.participantId);
+          const remoteMicStatus = await listener.locator("#remote-mic-status").textContent();
+          return {
+            sourceAudioState: sourceDebug?.media?.audioState ?? null,
+            sourceAudioJoined: sourceDebug?.media?.audioJoined ?? false,
+            sourceMuted: sourceDebug?.media?.muted ?? false,
+            sourcePublishedAudio: sourceDebug?.media?.publishedAudio ?? true,
+            listenerSubscribedAudioCount: listenerDebug?.media?.subscribedAudioCount ?? -1,
+            participantAudioJoined: participant?.audioJoined ?? false,
+            participantMuted: participant?.muted ?? false,
+            participantActiveAudio: participant?.activeAudio ?? true,
+            remoteMicStatusMuted: remoteMicStatus?.includes("muted") ?? false
+          };
+        }, {
+          timeout: 45000,
+          intervals: [1000, 2000, 3000]
+        }).toEqual({
+          sourceAudioState: "muted",
+          sourceAudioJoined: true,
+          sourceMuted: true,
+          sourcePublishedAudio: false,
+          listenerSubscribedAudioCount: 0,
+          participantAudioJoined: true,
+          participantMuted: true,
+          participantActiveAudio: false,
+          remoteMicStatusMuted: true
+        });
+
+        await expect(source.locator("#toggle-mute")).toContainText("Unmute");
+        await source.click("#toggle-mute");
+
+        await expect.poll(async () => {
+          const listenerDebug = await listener.evaluate(() => (window as Window & {
+            __VRATA_DEBUG__?: {
+              media?: { subscribedAudioCount?: number };
+              remoteParticipants?: Array<{ participantId?: string; audioJoined?: boolean; muted?: boolean; activeAudio?: boolean }>;
+            };
+          }).__VRATA_DEBUG__);
+          const sourceDebug = await source.evaluate(() => (window as Window & {
+            __VRATA_DEBUG__?: { media?: { publishedAudio?: boolean; muted?: boolean } };
+          }).__VRATA_DEBUG__);
+          const participant = listenerDebug?.remoteParticipants?.find((item) => item.participantId);
+          const remoteMicStatus = await listener.locator("#remote-mic-status").textContent();
+          return {
+            sourcePublishedAudio: sourceDebug?.media?.publishedAudio ?? false,
+            sourceMuted: sourceDebug?.media?.muted ?? true,
+            listenerSubscribedAudioCount: listenerDebug?.media?.subscribedAudioCount ?? 0,
+            participantMuted: participant?.muted ?? true,
+            participantActiveAudio: participant?.activeAudio ?? false,
+            remoteMicStatusLive: remoteMicStatus?.includes("live") || remoteMicStatus?.includes("speaking") || false
+          };
+        }, {
+          timeout: 45000,
+          intervals: [1000, 2000, 3000]
+        }).toEqual({
+          sourcePublishedAudio: true,
+          sourceMuted: false,
+          listenerSubscribedAudioCount: 1,
+          participantMuted: false,
+          participantActiveAudio: true,
+          remoteMicStatusLive: true
+        });
+
         await expect(source.locator("#join-audio")).toContainText("Leave Audio");
         await source.click("#join-audio");
 

@@ -147,7 +147,9 @@ export function createParticipantState(participantId: string, access?: Participa
     rootTransform: { x: 0, y: 0, z: 0, yaw: 0 },
     bodyTransform: { x: 0, y: 0.92, z: 0, yaw: 0 },
     headTransform: { x: 0, y: 1.58, z: 0, yaw: 0, pitch: 0 },
+    audioJoined: false,
     muted: true,
+    speaking: false,
     activeMedia: {
       audio: false,
       screenShare: false
@@ -172,7 +174,9 @@ export function mergeParticipantState(current: ParticipantState, nextState: Part
     rootTransform: mergeTransformState(current.rootTransform, nextState.rootTransform) ?? current.rootTransform,
     bodyTransform: mergeTransformState(current.bodyTransform, nextState.bodyTransform),
     headTransform: mergeTransformState(current.headTransform, nextState.headTransform),
+    audioJoined: nextState.audioJoined ?? current.audioJoined,
     muted: nextState.muted ?? current.muted,
+    speaking: nextState.speaking ?? current.speaking,
     activeMedia: {
       audio: nextState.activeMedia?.audio ?? current.activeMedia.audio,
       screenShare: nextState.activeMedia?.screenShare ?? current.activeMedia.screenShare

@@ -69,6 +69,10 @@
             <select id="mic-select">
               <option value="default">System default microphone</option>
             </select>
+            <label class="surface-audio-toggle" for="join-muted">
+              <input id="join-muted" type="checkbox" />
+              Join muted
+            </label>
             <div class="audio-meter-row">
               <span>Mic level</span>
               <div class="audio-meter"><div id="mic-level-fill" class="audio-meter-fill"></div></div>
@@ -82,6 +86,7 @@
               <div class="audio-meter"><div id="speaker-level-fill" class="audio-meter-fill"></div></div>
             </div>
             <div id="audio-device-status" class="audio-device-status">Audio devices idle</div>
+            <div id="remote-mic-status" class="audio-device-status">Remote microphones idle</div>
           </div>
           <div id="avatar-sandbox-panel" class="avatar-sandbox" hidden>
             <label for="avatar-preset-select">Avatar Sandbox</label>

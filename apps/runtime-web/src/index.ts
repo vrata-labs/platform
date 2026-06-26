@@ -105,7 +105,9 @@ export interface PresenceState {
     pitch?: number;
     roll?: number;
   };
+  audioJoined?: boolean;
   muted: boolean;
+  speaking?: boolean;
   activeMedia: {
     audio: boolean;
     screenShare: boolean;

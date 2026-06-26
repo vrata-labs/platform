@@ -19,7 +19,9 @@ function createDebugState() {
       updateHz: number;
       interpolationDelayMs: number;
       maxObservedJumpM: number;
+      audioJoined: boolean;
       muted: boolean;
+      speaking: boolean;
       activeAudio: boolean;
       hasVisualEntity: boolean;
       hasAudioNode: boolean;

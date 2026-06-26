@@ -235,6 +235,10 @@ canvas {
   opacity: 0.7;
 }
 
+#join-muted {
+  accent-color: var(--accent);
+}
+
 .audio-meter-row {
   display: grid;
   gap: 6px;

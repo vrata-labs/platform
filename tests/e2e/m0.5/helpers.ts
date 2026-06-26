@@ -16,7 +16,9 @@ export interface M05RemoteParticipant {
   updateHz: number;
   interpolationDelayMs: number;
   maxObservedJumpM: number;
+  audioJoined: boolean;
   muted: boolean;
+  speaking: boolean;
   activeAudio: boolean;
   hasVisualEntity: boolean;
   hasAudioNode: boolean;
@@ -38,7 +40,9 @@ export interface M05DebugState {
   remoteParticipants?: M05RemoteParticipant[];
   media?: {
     audioState: "not_joined" | "joining" | "joined" | "muted" | "degraded" | "failed";
+    audioJoined: boolean;
     muted: boolean;
+    speaking: boolean;
     publishedAudio: boolean;
     audioSource?: "none" | "microphone" | "mock";
     subscribedAudioCount: number;
