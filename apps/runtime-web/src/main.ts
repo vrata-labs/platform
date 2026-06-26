@@ -901,6 +901,9 @@ function deriveMediaDebugAudioState(): "not_joined" | "joining" | "joined" | "mu
   if (debugState.audioState === "joining") {
     return "joining";
   }
+  if (debugState.audioState === "not_joined") {
+    return "not_joined";
+  }
   if (debugState.issueCode === "mic_denied" || debugState.issueCode === "no_audio_device") {
     return "degraded";
   }

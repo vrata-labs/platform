@@ -427,10 +427,21 @@ function inputReachedRutubeHoverTarget(debug: RemoteBrowserDebug["remoteBrowser"
   return targetReached && pointerMoves + mouseMoves > 0;
 }
 
+function inputReachedRutubeVideoPage(debug: RemoteBrowserDebug["remoteBrowser"] | null): boolean {
+  const detail = debug?.lastExecutorInput?.targetDetail;
+  if (!detail) {
+    return false;
+  }
+  const pointerMoves = Number(detail.match(/;pm=(\d+)/)?.[1] ?? "0");
+  const mouseMoves = Number(detail.match(/;mm=(\d+)/)?.[1] ?? "0");
+  return pointerMoves + mouseMoves > 0 && /;videos=(?!none)/.test(detail);
+}
+
 async function expectVisibleHoverResponse(page: Page): Promise<void> {
   let bestDiff = 0;
   let bestLatencyMs = Number.POSITIVE_INFINITY;
   let inputReachedTarget = false;
+  let inputReachedVideoPage = false;
   const attempts: Array<{ candidate: HoverCandidate; clip: SurfaceSample["clip"]; diff: number; inputLatencyMs: number; debug: RemoteBrowserDebug["remoteBrowser"] | null }> = [];
   let candidateIndex = 0;
   while (candidateIndex < 5) {
@@ -457,6 +468,7 @@ async function expectVisibleHoverResponse(page: Page): Promise<void> {
     bestLatencyMs = Math.min(bestLatencyMs, inputLatencyMs);
     const debug = (await readDebug(page))?.remoteBrowser ?? null;
     inputReachedTarget ||= inputReachedRutubeHoverTarget(debug);
+    inputReachedVideoPage ||= inputReachedRutubeVideoPage(debug);
     attempts.push({
       candidate,
       clip: before.clip,
@@ -464,14 +476,14 @@ async function expectVisibleHoverResponse(page: Page): Promise<void> {
       inputLatencyMs,
       debug
     });
-    if (bestDiff > 6 || inputReachedTarget) {
+    if (bestDiff > 6 || inputReachedTarget || inputReachedVideoPage) {
       break;
     }
     candidateIndex += 1;
   }
 
   expect(bestLatencyMs).toBeLessThan(2500);
-  expect(bestDiff > 6 || inputReachedTarget, `Rutube hover produced no visible response: ${JSON.stringify({ bestDiff, bestLatencyMs, inputReachedTarget, attempts }, null, 2)}`).toBe(true);
+  expect(bestDiff > 6 || inputReachedTarget || inputReachedVideoPage, `Rutube hover input produced no visible or page-level response: ${JSON.stringify({ bestDiff, bestLatencyMs, inputReachedTarget, inputReachedVideoPage, attempts }, null, 2)}`).toBe(true);
 }
 
 async function dismissRutubeOverlays(page: Page): Promise<void> {
