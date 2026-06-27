@@ -62,6 +62,7 @@ interface RuntimeHealthResponse {
     xrEnabled?: boolean;
     voiceEnabled?: boolean;
     screenShareEnabled?: boolean;
+    spatialAudioEnabled?: boolean;
     roomStateRealtimeEnabled?: boolean;
     remoteDiagnosticsEnabled?: boolean;
     sceneBundlesEnabled?: boolean;
@@ -231,6 +232,7 @@ export interface RuntimeBootResult {
     enterVr: boolean;
     audioJoin: boolean;
     screenShare: boolean;
+    spatialAudio: boolean;
     roomStateRealtime: boolean;
     remoteDiagnostics: boolean;
     sceneBundles: boolean;
@@ -303,6 +305,7 @@ export async function bootRuntime(
       enterVr: healthFeatures.xrEnabled ?? true,
       audioJoin: healthFeatures.voiceEnabled ?? true,
       screenShare: healthFeatures.screenShareEnabled ?? true,
+      spatialAudio: healthFeatures.spatialAudioEnabled ?? true,
       roomStateRealtime: healthFeatures.roomStateRealtimeEnabled ?? true,
       remoteDiagnostics: healthFeatures.remoteDiagnosticsEnabled ?? true,
       sceneBundles: healthFeatures.sceneBundlesEnabled ?? true,
@@ -351,6 +354,8 @@ export async function planVoiceSession(
   sessionToken: string
 ): Promise<VoiceSessionPlan> {
   const manifest = await fetchRoomManifest(apiBaseUrl, roomId);
+  const health = await fetchRuntimeHealth(apiBaseUrl);
+  const healthFeatures = health.features ?? {};
   const media = await fetchMediaToken(apiBaseUrl, roomId, participantId, sessionToken);
 
   return {
@@ -358,7 +363,7 @@ export async function planVoiceSession(
     participantId,
     livekitUrl: media.livekitUrl,
     token: media.token,
-    spatialAudioEnabled: manifest.features.spatialAudio
+    spatialAudioEnabled: manifest.features.spatialAudio && (healthFeatures.spatialAudioEnabled ?? true)
   };
 }
 

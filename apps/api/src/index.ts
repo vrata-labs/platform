@@ -283,6 +283,14 @@ function isDevRoleQueryAllowed(env: NodeJS.ProcessEnv = process.env): boolean {
   return env.NODE_ENV !== "production";
 }
 
+export function isSpatialAudioFeatureEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  const explicit = isEnabledEnvValue(env.SPATIAL_AUDIO_ENABLED);
+  if (explicit !== null) {
+    return explicit;
+  }
+  return isEnabledEnvValue(env.FEATURE_SPATIAL_AUDIO) ?? true;
+}
+
 function resolveAccessRole(requestedRole: unknown, env: NodeJS.ProcessEnv = process.env): { role: RoomRole; roleSource: RoomSessionRoleSource } {
   if (!isDevRoleQueryAllowed(env)) {
     return { role: "guest", roleSource: "default" };
@@ -1389,7 +1397,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
         xrEnabled: process.env.FEATURE_XR !== "false",
         voiceEnabled: process.env.FEATURE_VOICE !== "false",
         screenShareEnabled: process.env.FEATURE_SCREEN_SHARE !== "false",
-        spatialAudioEnabled: process.env.FEATURE_SPATIAL_AUDIO !== "false",
+        spatialAudioEnabled: isSpatialAudioFeatureEnabled(),
         roomStateRealtimeEnabled: process.env.FEATURE_ROOM_STATE_REALTIME !== "false",
         remoteDiagnosticsEnabled: process.env.FEATURE_REMOTE_DIAGNOSTICS !== "false",
         sceneBundlesEnabled: process.env.FEATURE_SCENE_BUNDLES !== "false",

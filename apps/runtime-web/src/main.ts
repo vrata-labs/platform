@@ -84,7 +84,7 @@ import {
 import { planRemoteBrowserXrPointer } from "./media/remote-browser-xr-input.js";
 import { getScreenShareErrorCode } from "./media/screen-share-object.js";
 import { createWhiteboardObjectRuntime } from "./media/whiteboard-object.js";
-import { applySpatialSettings, createSpatialAudioSettings } from "./spatial-audio.js";
+import { applySpatialSettings, createSpatialAudioSettings, resolveSpatialAudioMode } from "./spatial-audio.js";
 import { captureCanvasDiagnostics, createEmptySceneDiagnostics, inspectSceneObject } from "./scene-debug.js";
 import { loadSceneBundle } from "./scene-loader.js";
 import { startSceneBundleSession } from "./scene-session.js";
@@ -202,7 +202,7 @@ const presenceXrMockEnabled = debugEnabled && query.get("xrmock") === "1";
 const botMode = query.get("bot") ?? "off";
 const botSpeed = Math.max(0.1, Number.parseFloat(query.get("botSpeed") ?? "1") || 1);
 const botStart = parseBotStart(query.get("botStart"));
-const spatialAudioRequested = query.get("spatial") !== "0";
+const spatialAudioQueryEnabled = query.get("spatial") !== "0";
 const shareMockEnabled = query.get("sharemock") === "1";
 const audioMockEnabled = debugEnabled && query.get("audiomock") === "1";
 const failSpaces = query.get("failspaces") === "1";
@@ -571,6 +571,9 @@ let xrRayVisibleLatched = false;
 let lastXrTelemetryReportAt = 0;
 let lastXrTelemetryKinds: string[] = [];
 let audioContext: AudioContext | null = null;
+let spatialAudioServerEnabled = true;
+let spatialAudioRoomEnabled = true;
+let spatialAudioFallbackReason: string | null = null;
 let syntheticXrState: {
   rightController: { x: number; y: number; z: number };
   rightGrip: { x: number; y: number; z: number } | null;
@@ -779,13 +782,14 @@ const botInitialPosition = { x: initialLocalPosition.x, z: initialLocalPosition.
 interface RemoteAudioNode {
   participantId: string;
   element: HTMLMediaElement;
-  source: MediaElementAudioSourceNode;
-  gain: GainNode;
-  analyser: AnalyserNode;
+  source: MediaElementAudioSourceNode | null;
+  gain: GainNode | null;
+  analyser: AnalyserNode | null;
   panner: PannerNode | null;
-  sampleBuffer: Uint8Array;
+  sampleBuffer: Uint8Array | null;
   lipsync: AvatarLipsyncDriver;
   trackId: string;
+  fallbackReason: string | null;
 }
 
 interface MediaSurfaceAudioNode {
@@ -825,6 +829,7 @@ let runtimeFlags = {
   roomStateRealtime: true,
   remoteDiagnostics: true,
   sceneBundles: true,
+  spatialAudio: true,
   ...createInitialAvatarRuntimeFlags(),
   avatarFallbackCapsulesEnabled: true
 };
@@ -2522,6 +2527,16 @@ function ensureAudioContext(): AudioContext {
   return audioContext;
 }
 
+function tryEnsureAudioContext(fallbackReason: string): AudioContext | null {
+  try {
+    return ensureAudioContext();
+  } catch (error) {
+    spatialAudioFallbackReason = fallbackReason;
+    console.warn("AudioContext unavailable; remote audio will use plain element playback", error);
+    return null;
+  }
+}
+
 async function refreshAudioDevices(requestPermissions = false): Promise<void> {
   if (!navigator.mediaDevices?.enumerateDevices) {
     audioInputDevices = [];
@@ -2785,41 +2800,82 @@ function connectRemoteAudioTrack(track: Track, participantId: string): void {
   if (existing) {
     disconnectRemoteAudioElement(participantId);
   }
-  const context = ensureAudioContext();
-  void resumeAudioContext();
-  const analyserSetup = createAudioAnalyser(context);
   const element = track.attach() as HTMLMediaElement & { playsInline?: boolean };
   element.autoplay = true;
   element.playsInline = true;
   element.style.display = "none";
   document.body.appendChild(element);
   void element.play().catch(() => undefined);
-  const source = context.createMediaElementSource(element);
-  const gain = context.createGain();
-  const panner = spatialAudioRequested ? context.createPanner() : null;
-  if (panner) {
-    applySpatialSettings(panner, createSpatialAudioSettings());
-  }
-  source.connect(gain);
-  gain.connect(analyserSetup.analyser);
-  if (panner) {
-    analyserSetup.analyser.connect(panner);
-    panner.connect(context.destination);
-  } else {
-    analyserSetup.analyser.connect(context.destination);
+  const context = tryEnsureAudioContext("audio_context_unavailable");
+  let source: MediaElementAudioSourceNode | null = null;
+  let gain: GainNode | null = null;
+  let analyser: AnalyserNode | null = null;
+  let panner: PannerNode | null = null;
+  let sampleBuffer: Uint8Array | null = null;
+  let lipsync = createAvatarLipsyncDriver();
+  let fallbackReason: string | null = context ? null : "audio_context_unavailable";
+  if (context) {
+    try {
+      if (context.state === "suspended") {
+        void context.resume().catch(() => undefined);
+      }
+      const analyserSetup = createAudioAnalyser(context);
+      analyser = analyserSetup.analyser;
+      sampleBuffer = analyserSetup.sampleBuffer;
+      lipsync = analyserSetup.lipsync;
+      gain = context.createGain();
+      source = context.createMediaElementSource(element);
+      source.connect(gain);
+      gain.connect(analyser);
+      if (runtimeFlags.spatialAudio) {
+        try {
+          panner = context.createPanner();
+          applySpatialSettings(panner, createSpatialAudioSettings());
+          analyser.connect(panner);
+          panner.connect(context.destination);
+        } catch (error) {
+          panner?.disconnect();
+          panner = null;
+          fallbackReason = "panner_node_unavailable";
+          spatialAudioFallbackReason = fallbackReason;
+          analyser.connect(context.destination);
+          console.warn("Spatial panner unavailable; remote audio will use non-spatial Web Audio playback", error);
+        }
+      } else {
+        analyser.connect(context.destination);
+      }
+      if (!fallbackReason) {
+        spatialAudioFallbackReason = null;
+      }
+    } catch (error) {
+      source?.disconnect();
+      gain?.disconnect();
+      analyser?.disconnect();
+      panner?.disconnect();
+      source = null;
+      gain = null;
+      analyser = null;
+      panner = null;
+      sampleBuffer = null;
+      lipsync = createAvatarLipsyncDriver();
+      fallbackReason = "web_audio_graph_failed";
+      spatialAudioFallbackReason = fallbackReason;
+      console.warn("Web Audio graph unavailable; remote audio will use plain element playback", error);
+    }
   }
   remoteAudioNodes.set(participantId, {
     participantId,
     element,
     source,
     gain,
-    analyser: analyserSetup.analyser,
+    analyser,
     panner,
-    sampleBuffer: analyserSetup.sampleBuffer,
-    lipsync: analyserSetup.lipsync,
-    trackId: mediaStreamTrack?.id ?? participantId
+    sampleBuffer,
+    lipsync,
+    trackId: mediaStreamTrack?.id ?? participantId,
+    fallbackReason
   });
-  debugState.spatialAudioState = panner ? "active" : "fallback";
+  debugState.spatialAudioState = panner ? "active" : fallbackReason ? "fallback" : "idle";
 }
 
 function getTrackNodeId(track: Track, fallback: string): string {
@@ -3348,9 +3404,9 @@ function disconnectRemoteAudioElement(participantId: string): void {
     return;
   }
   node.element.remove();
-  node.source.disconnect();
-  node.gain.disconnect();
-  node.analyser.disconnect();
+  node.source?.disconnect();
+  node.gain?.disconnect();
+  node.analyser?.disconnect();
   node.panner?.disconnect();
   remoteAvatarRuntime.setParticipantLipsync(participantId, {
     mouthAmount: 0,
@@ -3359,6 +3415,7 @@ function disconnectRemoteAudioElement(participantId: string): void {
   }, debugState);
   remoteAudioNodes.delete(participantId);
   if (remoteAudioNodes.size === 0) {
+    spatialAudioFallbackReason = null;
     debugState.spatialAudioState = "idle";
   }
 }
@@ -3460,13 +3517,34 @@ async function disconnectMediaRoom(room: Room, diagnosticsReason: string): Promi
   await room.disconnect();
 }
 
+function getSpatialAudioFallbackReason(): string | null {
+  for (const node of remoteAudioNodes.values()) {
+    if (node.fallbackReason) {
+      return node.fallbackReason;
+    }
+  }
+  return spatialAudioFallbackReason;
+}
+
 function updateSpatialAudio(): void {
   const listenerPosition = new THREE.Vector3();
   camera.getWorldPosition(listenerPosition);
   const listenerYaw = getCameraWorldYaw();
+  const pannerNodeCount = Array.from(remoteAudioNodes.values()).filter((node) => node.panner).length;
+  const modeState = resolveSpatialAudioMode({
+    queryEnabled: spatialAudioQueryEnabled,
+    featureEnabled: spatialAudioServerEnabled,
+    roomEnabled: spatialAudioRoomEnabled,
+    audioContextAvailable: Boolean(audioContext),
+    pannerNodeCount,
+    fallbackReason: getSpatialAudioFallbackReason()
+  });
+  debugState.spatialAudioState = modeState.mode === "spatial" ? "active" : modeState.mode;
   debugState.spatialAudio = {
-    enabled: spatialAudioRequested,
-    fallback: !spatialAudioRequested || !audioContext,
+    enabled: modeState.enabled,
+    fallback: modeState.fallback,
+    mode: modeState.mode,
+    fallbackReason: modeState.fallbackReason,
     listener: {
       x: roundDebugNumber(listenerPosition.x),
       y: roundDebugNumber(listenerPosition.y),
@@ -3485,12 +3563,13 @@ function updateSpatialAudio(): void {
         attachedTo: "head" as const,
         hasAudioNode: Boolean(audioNode),
         pannerActive: Boolean(audioNode?.panner),
+        fallbackReason: audioNode?.fallbackReason ?? null,
         audioLevel: roundDebugNumber(remoteParticipant?.audioLevel ?? 0)
       };
     })
   };
 
-  if (!audioContext || !spatialAudioRequested) {
+  if (!audioContext || !runtimeFlags.spatialAudio) {
     return;
   }
   const listener = audioContext.listener;
@@ -3702,8 +3781,10 @@ const debugState = {
   mediaCapabilities: browserMediaCapabilities,
   spatialAudioState: "idle",
   spatialAudio: {
-    enabled: spatialAudioRequested,
-    fallback: !spatialAudioRequested,
+    enabled: spatialAudioQueryEnabled,
+    fallback: !spatialAudioQueryEnabled,
+    mode: spatialAudioQueryEnabled ? "idle" : "disabled",
+    fallbackReason: spatialAudioQueryEnabled ? null as string | null : "query_disabled",
     listener: { x: 0, y: 1.6, z: 6, yaw: 0 },
     remoteSources: [] as Array<{
       participantId: string;
@@ -3713,6 +3794,7 @@ const debugState = {
       attachedTo: "head" | "body" | "root";
       hasAudioNode: boolean;
       pannerActive: boolean;
+      fallbackReason: string | null;
       audioLevel: number;
     }>
   },
@@ -6933,6 +7015,8 @@ async function main(): Promise<void> {
     displayName,
     requestedRole: query.get("role")
   });
+  spatialAudioServerEnabled = boot.envFlags.spatialAudio;
+  spatialAudioRoomEnabled = boot.spatialAudioEnabled;
   runtimeFlags = {
     enterVr: boot.envFlags.enterVr,
     audioJoin: boot.envFlags.audioJoin && boot.voiceEnabled,
@@ -6940,6 +7024,7 @@ async function main(): Promise<void> {
     roomStateRealtime: boot.envFlags.roomStateRealtime,
     remoteDiagnostics: boot.envFlags.remoteDiagnostics,
     sceneBundles: boot.envFlags.sceneBundles,
+    spatialAudio: spatialAudioServerEnabled && spatialAudioRoomEnabled && spatialAudioQueryEnabled,
     ...resolveAvatarRuntimeFlags(boot)
   };
   if (avatarLegIkQueryOverrideEnabled) {

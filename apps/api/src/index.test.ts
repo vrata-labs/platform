@@ -75,6 +75,18 @@ test("api production env validator rejects insecure LiveKit startup config", asy
   delete process.env.VRATA_DISABLE_AUTOSTART;
 });
 
+test("api spatial audio flag supports SPATIAL_AUDIO_ENABLED with legacy fallback", async () => {
+  process.env.VRATA_DISABLE_AUTOSTART = "1";
+  const module = await import("./index.js");
+
+  assert.equal(module.isSpatialAudioFeatureEnabled({ SPATIAL_AUDIO_ENABLED: "false", FEATURE_SPATIAL_AUDIO: "true" }), false);
+  assert.equal(module.isSpatialAudioFeatureEnabled({ SPATIAL_AUDIO_ENABLED: "true", FEATURE_SPATIAL_AUDIO: "false" }), true);
+  assert.equal(module.isSpatialAudioFeatureEnabled({ FEATURE_SPATIAL_AUDIO: "false" }), false);
+  assert.equal(module.isSpatialAudioFeatureEnabled({}), true);
+
+  delete process.env.VRATA_DISABLE_AUTOSTART;
+});
+
 test("api health exposes env timestamp and dependencies", async () => {
   process.env.VRATA_DISABLE_AUTOSTART = "1";
   process.env.API_PORT = "4011";
@@ -92,6 +104,7 @@ test("api health exposes env timestamp and dependencies", async () => {
       timestamp?: string;
       dependencies?: { livekit?: boolean; livekitConfig?: { configured?: boolean; signalingTls?: boolean; turn?: { enabled?: boolean } } };
       features?: {
+        spatialAudioEnabled?: boolean;
         avatarsEnabled?: boolean;
         avatarPoseBinaryEnabled?: boolean;
         avatarLipsyncEnabled?: boolean;
@@ -107,6 +120,7 @@ test("api health exposes env timestamp and dependencies", async () => {
     assert.equal(typeof payload.dependencies?.livekitConfig?.configured, "boolean");
     assert.equal(typeof payload.dependencies?.livekitConfig?.signalingTls, "boolean");
     assert.equal(typeof payload.dependencies?.livekitConfig?.turn?.enabled, "boolean");
+    assert.equal(typeof payload.features?.spatialAudioEnabled, "boolean");
     assert.equal(typeof payload.features?.avatarsEnabled, "boolean");
     assert.equal(typeof payload.features?.avatarPoseBinaryEnabled, "boolean");
     assert.equal(typeof payload.features?.avatarLipsyncEnabled, "boolean");

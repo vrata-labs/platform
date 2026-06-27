@@ -52,12 +52,15 @@ export interface M05DebugState {
   spatialAudio?: {
     enabled: boolean;
     fallback: boolean;
+    mode?: "disabled" | "idle" | "spatial" | "fallback";
+    fallbackReason?: string | null;
     listener: M05PosePoint & { yaw: number };
     remoteSources: Array<M05PosePoint & {
       participantId: string;
       attachedTo: "head" | "body" | "root";
       hasAudioNode?: boolean;
       pannerActive?: boolean;
+      fallbackReason?: string | null;
       audioLevel?: number;
     }>;
   };
