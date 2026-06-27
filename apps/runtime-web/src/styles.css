@@ -137,6 +137,46 @@ canvas {
   gap: 6px;
 }
 
+.attributions-panel {
+  margin-top: 14px;
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid rgba(95, 200, 255, 0.2);
+  border-radius: 14px;
+  background: rgba(15, 23, 42, 0.42);
+}
+
+.attributions-panel[hidden] {
+  display: none;
+}
+
+.attributions-title {
+  color: var(--accent);
+  font-size: 0.72rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+#scene-attributions-list {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+#scene-attributions-list a {
+  color: var(--text);
+}
+
+.attribution-changes {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
 .remote-browser-panel {
   margin-top: 14px;
   display: grid;

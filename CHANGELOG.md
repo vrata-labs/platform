@@ -11,6 +11,7 @@ Vrata uses SemVer: `MAJOR.MINOR.PATCH`. Until `1.0.0`, breaking changes can happ
 - Public open source readiness plan.
 - Initial public repository hygiene docs and self-hosting contract.
 - Apache-2.0 source code license.
+- Runtime HUD scene attribution block for scene bundle credits.
 
 ### Known Limitations
 
