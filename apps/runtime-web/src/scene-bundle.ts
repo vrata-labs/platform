@@ -100,6 +100,20 @@ function assertString(value: unknown, errorCode: string): string {
   return value;
 }
 
+function assertHttpUrl(value: unknown, errorCode: string): string {
+  const url = assertString(value, errorCode);
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error(errorCode);
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error(errorCode);
+  }
+  return url;
+}
+
 function parseSpawnPoint(input: unknown, index: number): SceneBundleSpawnPoint {
   const payload = assertObject(input, `invalid_scene_bundle_spawn_point:${index}`);
   const position = assertObject(payload.position, `invalid_scene_bundle_spawn_position:${index}`);
@@ -231,15 +245,15 @@ function parseAttribution(input: unknown, index: number): SceneBundleAttribution
   const parsed: SceneBundleAttribution = {
     title: assertString(payload.title, `invalid_scene_bundle_attribution_title:${index}`),
     author: assertString(payload.author, `invalid_scene_bundle_attribution_author:${index}`),
-    source: assertString(payload.source, `invalid_scene_bundle_attribution_source:${index}`),
+    source: assertHttpUrl(payload.source, `invalid_scene_bundle_attribution_source:${index}`),
     license: assertString(payload.license, `invalid_scene_bundle_attribution_license:${index}`)
   };
 
   if (payload.authorUrl !== undefined) {
-    parsed.authorUrl = assertString(payload.authorUrl, `invalid_scene_bundle_attribution_author_url:${index}`);
+    parsed.authorUrl = assertHttpUrl(payload.authorUrl, `invalid_scene_bundle_attribution_author_url:${index}`);
   }
   if (payload.licenseUrl !== undefined) {
-    parsed.licenseUrl = assertString(payload.licenseUrl, `invalid_scene_bundle_attribution_license_url:${index}`);
+    parsed.licenseUrl = assertHttpUrl(payload.licenseUrl, `invalid_scene_bundle_attribution_license_url:${index}`);
   }
   if (payload.changes !== undefined) {
     parsed.changes = assertString(payload.changes, `invalid_scene_bundle_attribution_changes:${index}`);

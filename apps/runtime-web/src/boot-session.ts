@@ -68,7 +68,7 @@ export function renderSceneAttributions(input: {
 }
 
 function createAttributionLink(label: string, href?: string): HTMLElement | Text {
-  if (!href) {
+  if (!href || !isSafeAttributionHref(href)) {
     return document.createTextNode(label);
   }
   const link = document.createElement("a");
@@ -77,4 +77,13 @@ function createAttributionLink(label: string, href?: string): HTMLElement | Text
   link.rel = "noopener noreferrer";
   link.textContent = label;
   return link;
+}
+
+function isSafeAttributionHref(href: string): boolean {
+  try {
+    const parsed = new URL(href);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
 }
