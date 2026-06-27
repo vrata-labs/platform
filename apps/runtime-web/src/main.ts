@@ -35,7 +35,7 @@ import {
   type WhiteboardState
 } from "@vrata/shared-types";
 
-import { appendBrandingSuffix, applyRoomShellBootState } from "./boot-session.js";
+import { appendBrandingSuffix, applyRoomShellBootState, renderSceneAttributions } from "./boot-session.js";
 import { bootRuntime, fetchRuntimeSpaces, listPresence, planVoiceSession, removePresence, resolveCurrentSpace, upsertPresence, type PresenceState, type RuntimeSpaceOption } from "./index.js";
 import { createMotionTrack, pushMotionSample, sampleMotion, type MotionTrack } from "./motion-state.js";
 import { mergePresenceSources } from "./presence-sources.js";
@@ -232,6 +232,8 @@ const roomStateLineEl = mustElement<HTMLDivElement>("#room-state-line");
 const reportLineEl = mustElement<HTMLDivElement>("#report-line");
 const diagnosticsLink = mustElement<HTMLAnchorElement>("#diagnostics-link");
 const guestAccessLineEl = mustElement<HTMLDivElement>("#guest-access-line");
+const sceneAttributionsPanelEl = mustElement<HTMLDivElement>("#scene-attributions");
+const sceneAttributionsListEl = mustElement<HTMLUListElement>("#scene-attributions-list");
 const spaceSelect = mustElement<HTMLSelectElement>("#space-select");
 const spaceSelectStatusEl = mustElement<HTMLDivElement>("#space-select-status");
 const sceneHost = mustElement<HTMLDivElement>("#scene");
@@ -7167,6 +7169,11 @@ async function main(): Promise<void> {
     debugState.sceneBundleState = sceneResult.sceneBundleState;
     debugState.sceneDebug = sceneResult.sceneDebug;
     appendBrandingSuffix(brandingLineEl, sceneResult.brandingSuffix);
+    renderSceneAttributions({
+      panelEl: sceneAttributionsPanelEl,
+      listEl: sceneAttributionsListEl,
+      attributions: sceneResult.sceneManifest?.attributions
+    });
     if (sceneResult.note) {
       void reportDiagnostics(sceneResult.note);
     }

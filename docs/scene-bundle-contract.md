@@ -35,7 +35,22 @@ Optional fields:
 
 - `bounds`: `{ width, height, depth }`
 - `preview`: relative preview asset path
+- `attributions`: optional source credit records displayed in the runtime HUD
 - `notes`: free-form export notes
+
+### `attributions`
+
+Scene bundles can declare visible credit records for source assets used by the scene. The runtime shows them in a separate HUD block after the scene bundle loads.
+
+Each entry describes one credited source work:
+
+- `title`: credited work title
+- `author`: credited author or licensor name
+- `source`: HTTP(S) URL where users can find the original work
+- `license`: license label, such as `CC-BY-4.0`
+- `authorUrl`: optional HTTP(S) author profile URL
+- `licenseUrl`: optional HTTP(S) license URL
+- `changes`: optional short note describing modifications made for the scene
 
 Example:
 
@@ -54,6 +69,17 @@ Example:
   ],
   "bounds": { "width": 24, "height": 8, "depth": 24 },
   "preview": "preview.jpg",
+  "attributions": [
+    {
+      "title": "Old Room",
+      "author": "Hansalex",
+      "authorUrl": "https://sketchfab.com/Hansalex",
+      "source": "https://sketchfab.com/3d-models/old-room-6173a3c88c384f768dfc80967b6527b4",
+      "license": "CC-BY-4.0",
+      "licenseUrl": "https://creativecommons.org/licenses/by/4.0/",
+      "changes": "Normalized to meters and optimized for Vrata runtime."
+    }
+  ],
   "notes": "v1 export without Unity behaviors"
 }
 ```
@@ -64,3 +90,4 @@ Example:
 - If `scene.json` fails validation or has an unknown `schemaVersion`, runtime uses the fallback room.
 - If `scene.glb` fails to load, runtime uses the fallback room.
 - Successful scene bundle load hides the fallback meshes and applies the first spawn point to the player root.
+- Successful scene bundle load shows `attributions` in the HUD when present.

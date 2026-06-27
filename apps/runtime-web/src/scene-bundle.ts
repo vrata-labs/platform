@@ -20,6 +20,16 @@ export interface SceneBundleSeatAnchor {
   label?: string;
 }
 
+export interface SceneBundleAttribution {
+  title: string;
+  author: string;
+  source: string;
+  license: string;
+  authorUrl?: string;
+  licenseUrl?: string;
+  changes?: string;
+}
+
 export interface SceneBundleManifest {
   schemaVersion: 1;
   sceneId: string;
@@ -47,6 +57,7 @@ export interface SceneBundleManifest {
     depth: number;
   };
   preview?: string;
+  attributions?: SceneBundleAttribution[];
   notes?: string;
 }
 
@@ -66,6 +77,20 @@ function assertString(value: unknown, errorCode: string): string {
     throw new Error(errorCode);
   }
   return value;
+}
+
+function assertHttpUrl(value: unknown, errorCode: string): string {
+  const url = assertString(value, errorCode);
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error(errorCode);
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error(errorCode);
+  }
+  return url;
 }
 
 function parseSpawnPoint(input: unknown, index: number): SceneBundleSpawnPoint {
@@ -118,6 +143,28 @@ function parseSeatAnchor(input: unknown, index: number): SceneBundleSeatAnchor {
     radius,
     label: payload.label === undefined ? undefined : assertString(payload.label, `invalid_scene_bundle_seat_anchor_label:${index}`)
   };
+}
+
+function parseAttribution(input: unknown, index: number): SceneBundleAttribution {
+  const payload = assertObject(input, `invalid_scene_bundle_attribution:${index}`);
+  const parsed: SceneBundleAttribution = {
+    title: assertString(payload.title, `invalid_scene_bundle_attribution_title:${index}`),
+    author: assertString(payload.author, `invalid_scene_bundle_attribution_author:${index}`),
+    source: assertHttpUrl(payload.source, `invalid_scene_bundle_attribution_source:${index}`),
+    license: assertString(payload.license, `invalid_scene_bundle_attribution_license:${index}`)
+  };
+
+  if (payload.authorUrl !== undefined) {
+    parsed.authorUrl = assertHttpUrl(payload.authorUrl, `invalid_scene_bundle_attribution_author_url:${index}`);
+  }
+  if (payload.licenseUrl !== undefined) {
+    parsed.licenseUrl = assertHttpUrl(payload.licenseUrl, `invalid_scene_bundle_attribution_license_url:${index}`);
+  }
+  if (payload.changes !== undefined) {
+    parsed.changes = assertString(payload.changes, `invalid_scene_bundle_attribution_changes:${index}`);
+  }
+
+  return parsed;
 }
 
 export function parseSceneBundleManifest(input: unknown): SceneBundleManifest {
@@ -206,6 +253,12 @@ export function parseSceneBundleManifest(input: unknown): SceneBundleManifest {
 
   if (payload.preview !== undefined) {
     manifest.preview = assertString(payload.preview, "invalid_scene_bundle_preview");
+  }
+  if (payload.attributions !== undefined) {
+    if (!Array.isArray(payload.attributions)) {
+      throw new Error("invalid_scene_bundle_attributions");
+    }
+    manifest.attributions = payload.attributions.map((entry, index) => parseAttribution(entry, index));
   }
   if (payload.notes !== undefined) {
     manifest.notes = assertString(payload.notes, "invalid_scene_bundle_notes");
