@@ -160,3 +160,34 @@ test("parseSceneBundleManifest rejects invalid attribution payload", () => {
     /invalid_scene_bundle_attribution_license/
   );
 });
+
+test("parseSceneBundleManifest rejects unsafe attribution URLs", () => {
+  const manifest = (attribution: Record<string, unknown>) => ({
+    schemaVersion: 1,
+    sceneId: "sense-hall",
+    label: "Sense Hall",
+    source: "sensetower",
+    glbPath: "scene.glb",
+    spawnPoints: [],
+    attributions: [{
+      title: "Room",
+      author: "Author",
+      source: "https://example.test/source",
+      license: "CC-BY-4.0",
+      ...attribution
+    }]
+  });
+
+  assert.throws(
+    () => parseSceneBundleManifest(manifest({ source: "javascript:alert(1)" })),
+    /invalid_scene_bundle_attribution_source/
+  );
+  assert.throws(
+    () => parseSceneBundleManifest(manifest({ authorUrl: "data:text/html,unsafe" })),
+    /invalid_scene_bundle_attribution_author_url/
+  );
+  assert.throws(
+    () => parseSceneBundleManifest(manifest({ licenseUrl: "mailto:license@example.test" })),
+    /invalid_scene_bundle_attribution_license_url/
+  );
+});
