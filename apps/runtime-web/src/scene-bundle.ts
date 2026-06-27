@@ -40,6 +40,16 @@ export interface SceneBundleMediaSurface {
   allowedObjectTypes?: string[];
 }
 
+export interface SceneBundleAttribution {
+  title: string;
+  author: string;
+  source: string;
+  license: string;
+  authorUrl?: string;
+  licenseUrl?: string;
+  changes?: string;
+}
+
 export interface SceneBundleManifest {
   schemaVersion: 1;
   sceneId: string;
@@ -68,6 +78,7 @@ export interface SceneBundleManifest {
     depth: number;
   };
   preview?: string;
+  attributions?: SceneBundleAttribution[];
   notes?: string;
 }
 
@@ -215,6 +226,28 @@ function parseMediaSurface(input: unknown, index: number): SceneBundleMediaSurfa
   return parsed;
 }
 
+function parseAttribution(input: unknown, index: number): SceneBundleAttribution {
+  const payload = assertObject(input, `invalid_scene_bundle_attribution:${index}`);
+  const parsed: SceneBundleAttribution = {
+    title: assertString(payload.title, `invalid_scene_bundle_attribution_title:${index}`),
+    author: assertString(payload.author, `invalid_scene_bundle_attribution_author:${index}`),
+    source: assertString(payload.source, `invalid_scene_bundle_attribution_source:${index}`),
+    license: assertString(payload.license, `invalid_scene_bundle_attribution_license:${index}`)
+  };
+
+  if (payload.authorUrl !== undefined) {
+    parsed.authorUrl = assertString(payload.authorUrl, `invalid_scene_bundle_attribution_author_url:${index}`);
+  }
+  if (payload.licenseUrl !== undefined) {
+    parsed.licenseUrl = assertString(payload.licenseUrl, `invalid_scene_bundle_attribution_license_url:${index}`);
+  }
+  if (payload.changes !== undefined) {
+    parsed.changes = assertString(payload.changes, `invalid_scene_bundle_attribution_changes:${index}`);
+  }
+
+  return parsed;
+}
+
 export function parseSceneBundleManifest(input: unknown): SceneBundleManifest {
   const payload = assertObject(input, "invalid_scene_bundle_manifest");
   if (payload.schemaVersion !== 1) {
@@ -311,6 +344,12 @@ export function parseSceneBundleManifest(input: unknown): SceneBundleManifest {
 
   if (payload.preview !== undefined) {
     manifest.preview = assertString(payload.preview, "invalid_scene_bundle_preview");
+  }
+  if (payload.attributions !== undefined) {
+    if (!Array.isArray(payload.attributions)) {
+      throw new Error("invalid_scene_bundle_attributions");
+    }
+    manifest.attributions = payload.attributions.map((entry, index) => parseAttribution(entry, index));
   }
   if (payload.notes !== undefined) {
     manifest.notes = assertString(payload.notes, "invalid_scene_bundle_notes");

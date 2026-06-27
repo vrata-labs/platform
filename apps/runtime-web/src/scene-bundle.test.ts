@@ -52,7 +52,18 @@ test("parseSceneBundleManifest accepts valid v1 manifest", () => {
       }
     ],
     bounds: { width: 20, height: 8, depth: 20 },
-    preview: "preview.jpg"
+    preview: "preview.jpg",
+    attributions: [
+      {
+        title: "Old Room",
+        author: "Hansalex",
+        authorUrl: "https://sketchfab.com/Hansalex",
+        source: "https://sketchfab.com/3d-models/old-room-6173a3c88c384f768dfc80967b6527b4",
+        license: "CC-BY-4.0",
+        licenseUrl: "https://creativecommons.org/licenses/by/4.0/",
+        changes: "Normalized to meters."
+      }
+    ]
   });
 
   assert.equal(manifest.sceneId, "sense-hall");
@@ -62,6 +73,8 @@ test("parseSceneBundleManifest accepts valid v1 manifest", () => {
   assert.equal(manifest.anchors?.seatAnchors[0]?.id, "seat-a");
   assert.equal(manifest.mediaSurfaces?.[0]?.surfaceId, "debug-main");
   assert.equal(manifest.mediaSurfaces?.[0]?.transform.yaw, -Math.PI / 2);
+  assert.equal(manifest.attributions?.[0]?.author, "Hansalex");
+  assert.equal(manifest.attributions?.[0]?.changes, "Normalized to meters.");
   assert.equal(pickSceneSpawnPoint(manifest)?.id, "main");
   assert.equal(resolveSceneAssetUrl("https://example.com/scenes/hall/scene.json", manifest.glbPath), "https://example.com/scenes/hall/scene.glb");
 });
@@ -130,5 +143,20 @@ test("parseSceneBundleManifest rejects invalid media surface payload", () => {
       mediaSurfaces: [{ surfaceId: "debug-main", widthM: 0, heightM: 3.3, transform: { x: 0, y: 2, z: -4 } }]
     }),
     /invalid_scene_bundle_media_surface_width_m/
+  );
+});
+
+test("parseSceneBundleManifest rejects invalid attribution payload", () => {
+  assert.throws(
+    () => parseSceneBundleManifest({
+      schemaVersion: 1,
+      sceneId: "sense-hall",
+      label: "Sense Hall",
+      source: "sensetower",
+      glbPath: "scene.glb",
+      spawnPoints: [],
+      attributions: [{ title: "Room", author: "Author", source: "https://example.test" }]
+    }),
+    /invalid_scene_bundle_attribution_license/
   );
 });
