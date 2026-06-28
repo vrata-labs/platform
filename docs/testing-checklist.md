@@ -45,6 +45,22 @@ This document is the source of truth for where Vrata tests live, where they run,
 - M0.5 acceptance;
 - asset pipeline validation.
 
+The M0.5 release gate includes `tests/e2e/m0.5/reliable-room-scenario.spec.ts`, which creates a clean room and verifies four unique browser participants, cross-client presence, movement visibility, reload stability, stale participant replacement, and late-join state catch-up. Local runs validate voice join when the local LiveKit stack is available and otherwise require an explicit failed audio state while keeping the room usable; staging remains the authoritative successful voice gate.
+
+## Manual 3-4 Participant Checklist
+
+Use this checklist before public demos and release candidates when real devices are available:
+
+- Create or select one clean meeting room on staging.
+- Join as host on desktop, member on a second desktop/browser, guest on mobile, and guest/member in VR or a fourth browser.
+- Confirm every participant sees the other three in diagnostics: `remoteAvatarCount=3`, stable `participantId`s, and no duplicate stale rows after 30 seconds.
+- Move participant A and confirm B/C/D see root/head movement update without large jumps or stale diagnostics.
+- Join audio on at least two participants and confirm remote mic status becomes live/speaking plus `subscribedAudioCount>=1` for the listener.
+- Reload one non-host participant and confirm the other participants stay connected and the reloaded participant returns with the expected identity for same-browser reload.
+- Close and reopen one participant in a fresh browser context and confirm stale participant removal plus replacement visibility.
+- Join a late fourth participant after movement/audio are already active and confirm it receives current presence, visuals, and audio joined/muted state.
+- Save the staging deploy run URL, Playwright artifact URL if present, browser/device list, room id, and any diagnostics report ids in the release notes.
+
 ## Staging Gate
 
 `.github/workflows/staging-deploy.yml` is the source of truth for internal staging rollout verification.
