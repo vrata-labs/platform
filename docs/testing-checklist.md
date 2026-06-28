@@ -47,6 +47,20 @@ This document is the source of truth for where Vrata tests live, where they run,
 
 The M0.5 release gate includes `tests/e2e/m0.5/reliable-room-scenario.spec.ts`, which creates a clean room and verifies four unique browser participants, cross-client presence, movement visibility, reload stability, stale participant replacement, and late-join state catch-up. Local runs validate voice join when the local LiveKit stack is available and otherwise require an explicit failed audio state while keeping the room usable; staging remains the authoritative successful voice gate.
 
+The M0.5 cross-device gate includes `tests/e2e/m0.5/cross-device-join-flow.spec.ts`, which creates a clean room and verifies desktop, mobile-touch, and VR-mock clients in one shared session. It asserts resolved join modes, non-blocking degraded compatibility diagnostics, touch-control readiness, VR mock diagnostics, and cross-client visibility.
+
+## Cross-Device Compatibility Matrix
+
+Use this matrix for manual compatibility checks when real devices are available. Automated CI covers Chrome desktop, mobile emulation, no-WebXR fallback, and VR mock presence; hardware Quest checks remain manual until a real device lab is available.
+
+| Client | Expected mode | Expected controls | Expected VR button | Required result |
+| --- | --- | --- | --- | --- |
+| Chrome desktop | `desktop` | keyboard and mouse | active only when WebXR is supported | room joins, diagnostics show `clientCompatibility.resolvedJoinMode=desktop` |
+| Mobile Chrome/Safari | `mobile` | left-drag move, right-drag look | disabled/hidden when WebXR is unavailable | room joins without XR crash, diagnostics show touch controls supported |
+| Quest Browser | `desktop` before session, `vr` after user gesture | Enter VR then XR controllers | active when WebXR immersive VR is supported | room joins before VR, then publishes `mode=vr` after Enter VR |
+| Browser without microphone | desktop or mobile | normal navigation controls | unchanged by audio capability | room joins with audio disabled/degraded, diagnostics include `audio_input_unavailable` |
+| Browser without WebXR | desktop or mobile | normal non-XR controls | disabled with VR unavailable messaging | room joins without XR crash, diagnostics include `xr_unavailable` |
+
 ## Manual 3-4 Participant Checklist
 
 Use this checklist before public demos and release candidates when real devices are available:

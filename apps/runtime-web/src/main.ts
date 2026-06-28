@@ -36,7 +36,8 @@ import {
 } from "@vrata/shared-types";
 
 import { appendBrandingSuffix, applyRoomShellBootState, renderSceneAttributions } from "./boot-session.js";
-import { bootRuntime, fetchRuntimeSpaces, listPresence, planVoiceSession, removePresence, resolveCurrentSpace, upsertPresence, type PresenceState, type RuntimeSpaceOption } from "./index.js";
+import { bootRuntime, fetchRuntimeSpaces, listPresence, planVoiceSession, removePresence, resolveCurrentSpace, resolveJoinMode, upsertPresence, type PresenceState, type RuntimeSpaceOption } from "./index.js";
+import { formatClientCompatibilityStatus, resolveClientCompatibility, type ClientCompatibilitySummary } from "./client-capabilities.js";
 import { createMotionTrack, pushMotionSample, sampleMotion, type MotionTrack } from "./motion-state.js";
 import { mergePresenceSources } from "./presence-sources.js";
 import {
@@ -224,6 +225,9 @@ const browserMediaCapabilities = detectBrowserMediaCapabilities({
   mediaDevices: navigator.mediaDevices,
   rtcPeerConnection: globalThis.RTCPeerConnection
 });
+const browserWebGlAvailable = Boolean(globalThis.WebGLRenderingContext || globalThis.WebGL2RenderingContext);
+const browserWebSocketAvailable = typeof globalThis.WebSocket === "function";
+const browserTouchInputAvailable = navigator.maxTouchPoints > 0 || "ontouchstart" in window;
 
 const roomNameEl = mustElement<HTMLDivElement>("#room-name");
 const statusLineEl = mustElement<HTMLDivElement>("#status-line");
@@ -232,6 +236,7 @@ const roomStateLineEl = mustElement<HTMLDivElement>("#room-state-line");
 const reportLineEl = mustElement<HTMLDivElement>("#report-line");
 const diagnosticsLink = mustElement<HTMLAnchorElement>("#diagnostics-link");
 const guestAccessLineEl = mustElement<HTMLDivElement>("#guest-access-line");
+const compatibilityStatusEl = mustElement<HTMLDivElement>("#compatibility-status");
 const sceneAttributionsPanelEl = mustElement<HTMLDivElement>("#scene-attributions");
 const sceneAttributionsListEl = mustElement<HTMLUListElement>("#scene-attributions-list");
 const spaceSelect = mustElement<HTMLSelectElement>("#space-select");
@@ -515,7 +520,7 @@ let mobileTouchLastClientX = 0;
 let mobileTouchLastClientY = 0;
 const mobileTouchVector = { x: 0, z: 0 };
 let diagnosticsAccumulator = 0;
-let latestMode: PresenceState["mode"] = presenceXrMockEnabled ? "vr" : /android|iphone|ipad/i.test(navigator.userAgent) ? "mobile" : "desktop";
+let latestMode: PresenceState["mode"] = presenceXrMockEnabled ? "vr" : resolveJoinMode(navigator.userAgent);
 
 type ScreenShareRuntimeEntry = {
   objectId: string;
@@ -835,6 +840,24 @@ let runtimeFlags = {
   ...createInitialAvatarRuntimeFlags(),
   avatarFallbackCapsulesEnabled: true
 };
+let xrSupport = detectXrSupport({
+  navigatorXr: faultConfig.xrUnavailable ? undefined : (navigator as Navigator & { xr?: unknown }).xr,
+  immersiveVrSupported: !faultConfig.xrUnavailable
+});
+function buildClientCompatibility(): ClientCompatibilitySummary {
+  return resolveClientCompatibility({
+    resolvedJoinMode: latestMode,
+    media: browserMediaCapabilities,
+    xr: xrSupport,
+    enterVrFeatureEnabled: runtimeFlags.enterVr,
+    webGlAvailable: browserWebGlAvailable,
+    webSocketAvailable: browserWebSocketAvailable,
+    touchInputAvailable: browserTouchInputAvailable,
+    xrMockEnabled: presenceXrMockEnabled,
+    xrSessionActive: renderer.xr.isPresenting
+  });
+}
+let clientCompatibility = buildClientCompatibility();
 let effectiveCleanSceneMode = requestedCleanSceneMode;
 let availableSpaces: RuntimeSpaceOption[] = [];
 const remoteAvatarRuntime = createRemoteAvatarRuntime({
@@ -3781,6 +3804,7 @@ const debugState = {
     errorCode: null as string | null
   },
   mediaCapabilities: browserMediaCapabilities,
+  clientCompatibility,
   spatialAudioState: "idle",
   spatialAudio: {
     enabled: spatialAudioQueryEnabled,
@@ -3939,6 +3963,14 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
 
 (window as Window & { __VRATA_DEBUG__?: typeof debugState }).__VRATA_DEBUG__ = debugState;
 (window as Window & { __NOAH_DEBUG__?: typeof debugState }).__NOAH_DEBUG__ = debugState;
+
+function refreshClientCompatibility(): void {
+  clientCompatibility = buildClientCompatibility();
+  debugState.clientCompatibility = clientCompatibility;
+  compatibilityStatusEl.textContent = formatClientCompatibilityStatus(clientCompatibility);
+}
+
+refreshClientCompatibility();
 (window as Window & {
   __VRATA_TEST__?: {
     forceRoomStateReconnect: () => void;
@@ -4833,6 +4865,7 @@ async function reportDiagnostics(note?: string, options: { reportId?: string } =
       surfaceInput: debugState.surfaceInput,
       screenShareState: debugState.screenShareState,
       mediaCapabilities: debugState.mediaCapabilities,
+      clientCompatibility: debugState.clientCompatibility,
       localPose: debugState.localPose,
       localPosition: debugState.localPosition,
       spatialAudioState: debugState.spatialAudioState,
@@ -5501,9 +5534,7 @@ function updateLocalAvatar(delta: number, frameContext: RuntimeFrameContext): vo
       : null;
   const inputMode = xrPresenting
     ? "vr-controller"
-    : /android|iphone|ipad/i.test(navigator.userAgent)
-      ? "mobile"
-      : "desktop";
+    : resolveJoinMode(navigator.userAgent);
   const viewProfile = resolveAvatarViewProfile({
     inputMode,
     xrPresenting
@@ -6978,7 +7009,10 @@ renderer.setAnimationLoop(() => {
   if (runtimeBootReady) {
     if (syncAccumulator >= 0.08) {
       syncAccumulator = 0;
-      latestMode = presenceXrMockEnabled ? "vr" : renderer.xr.isPresenting ? "vr" : /android|iphone|ipad/i.test(navigator.userAgent) ? "mobile" : "desktop";
+      latestMode = presenceXrMockEnabled ? "vr" : renderer.xr.isPresenting ? "vr" : resolveJoinMode(navigator.userAgent);
+      if (debugState.clientCompatibility.resolvedJoinMode !== latestMode || debugState.clientCompatibility.xr.enterVrVisible !== getEnterVrVisibility(xrSupport, runtimeFlags.enterVr)) {
+        refreshClientCompatibility();
+      }
       void syncPresence(latestMode, Boolean(livekitRoom && microphoneEnabled));
     }
 
@@ -7056,6 +7090,7 @@ async function main(): Promise<void> {
     setRoomStateStatus
   });
   latestMode = presenceXrMockEnabled ? "vr" : boot.joinMode;
+  refreshClientCompatibility();
   await syncPresence(boot.joinMode, false);
   await loadAvailableSpaces(boot.roomId);
   const avatarCatalogUrl = resolveAvatarCatalogUrl(boot);
@@ -7234,10 +7269,11 @@ async function main(): Promise<void> {
     });
   }
 
-  const xrSupport = detectXrSupport({
+  xrSupport = detectXrSupport({
     navigatorXr: faultConfig.xrUnavailable ? undefined : (navigator as Navigator & { xr?: unknown }).xr,
     immersiveVrSupported: !faultConfig.xrUnavailable
   });
+  refreshClientCompatibility();
 
   const vrButton = VRButton.createButton(renderer);
   vrButton.classList.add("vr-button");
@@ -7254,10 +7290,14 @@ async function main(): Promise<void> {
       localPoseController.alignFloorY(sceneTeleportFloorY, "xr_session_start");
     }
     clearInteractionVisuals();
+    latestMode = "vr";
+    refreshClientCompatibility();
   });
   renderer.xr.addEventListener("sessionend", () => {
     pointerActive = false;
     clearInteractionVisuals();
+    latestMode = presenceXrMockEnabled ? "vr" : resolveJoinMode(navigator.userAgent);
+    refreshClientCompatibility();
   });
   if (!getEnterVrVisibility(xrSupport, runtimeFlags.enterVr)) {
     vrButton.setAttribute("disabled", "true");

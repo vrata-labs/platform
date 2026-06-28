@@ -64,6 +64,23 @@ export interface M05DebugState {
       audioLevel?: number;
     }>;
   };
+  clientCompatibility?: {
+    resolvedJoinMode: "desktop" | "mobile" | "vr";
+    modeSource: "user_agent" | "xr_mock" | "xr_session";
+    entryBlocked: boolean;
+    degradedMode: string;
+    warnings: string[];
+    touchControls: {
+      supported: boolean;
+      required: boolean;
+    };
+    xr: {
+      available: boolean;
+      canEnterVr: boolean;
+      enterVrVisible: boolean;
+      mocked: boolean;
+    };
+  };
   botMode?: string;
   issueCode?: string | null;
   degradedMode?: string;
