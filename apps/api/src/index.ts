@@ -291,6 +291,14 @@ export function isSpatialAudioFeatureEnabled(env: NodeJS.ProcessEnv = process.en
   return isEnabledEnvValue(env.FEATURE_SPATIAL_AUDIO) ?? true;
 }
 
+export function isXrFeatureEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  const explicit = isEnabledEnvValue(env.XR_ENABLED);
+  if (explicit !== null) {
+    return explicit;
+  }
+  return isEnabledEnvValue(env.FEATURE_XR) ?? true;
+}
+
 function resolveAccessRole(requestedRole: unknown, env: NodeJS.ProcessEnv = process.env): { role: RoomRole; roleSource: RoomSessionRoleSource } {
   if (!isDevRoleQueryAllowed(env)) {
     return { role: "guest", roleSource: "default" };
@@ -1394,7 +1402,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       port: apiPort,
       timestamp: new Date().toISOString(),
       features: {
-        xrEnabled: process.env.FEATURE_XR !== "false",
+        xrEnabled: isXrFeatureEnabled(),
         voiceEnabled: process.env.FEATURE_VOICE !== "false",
         screenShareEnabled: process.env.FEATURE_SCREEN_SHARE !== "false",
         spatialAudioEnabled: isSpatialAudioFeatureEnabled(),

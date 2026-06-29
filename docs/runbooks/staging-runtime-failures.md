@@ -121,12 +121,12 @@ Symptoms:
 
 Checks:
 1. Confirm browser/device supports `navigator.xr`.
-2. Verify `FEATURE_XR` is not `false`.
+2. Verify `XR_ENABLED` / legacy `FEATURE_XR` is not `false`.
 3. Re-test on supported headset/browser.
 
 Mitigation:
 - Continue validation on desktop/mobile.
-- Disable XR intentionally with `FEATURE_XR=false` if the path is noisy.
+- Disable XR intentionally with `XR_ENABLED=false` if the path is noisy.
 
 ## Deterministic fault injection
 
@@ -151,7 +151,8 @@ Examples:
 
 Use env flags before code rollback:
 
-- `FEATURE_XR=false`
+- `XR_ENABLED=false`
+- `FEATURE_XR=false` (legacy fallback)
 - `FEATURE_VOICE=false`
 - `FEATURE_SCREEN_SHARE=false`
 - `FEATURE_ROOM_STATE_REALTIME=false`

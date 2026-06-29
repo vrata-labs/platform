@@ -49,6 +49,8 @@ The M0.5 release gate includes `tests/e2e/m0.5/reliable-room-scenario.spec.ts`, 
 
 The M0.5 cross-device gate includes `tests/e2e/m0.5/cross-device-join-flow.spec.ts`, which creates a clean room and verifies desktop, mobile-touch, and VR-mock clients in one shared session. It asserts resolved join modes, non-blocking degraded compatibility diagnostics, touch-control readiness, VR mock diagnostics, and cross-client visibility.
 
+The M0.5 WebXR renderer gate includes `tests/e2e/m0.5/webxr-renderer-wiring.spec.ts`, which verifies the XR renderer/session diagnostics contract, hides the VR entry point when `XR_ENABLED=false`, and confirms failed Enter VR attempts report `xr_enter_failed` without crashing the room.
+
 ## Cross-Device Compatibility Matrix
 
 Use this matrix for manual compatibility checks when real devices are available. Automated CI covers Chrome desktop, mobile emulation, no-WebXR fallback, and VR mock presence; hardware Quest checks remain manual until a real device lab is available.
@@ -60,6 +62,18 @@ Use this matrix for manual compatibility checks when real devices are available.
 | Quest Browser | `desktop` before session, `vr` after user gesture | Enter VR then XR controllers | active when WebXR immersive VR is supported | room joins before VR, then publishes `mode=vr` after Enter VR |
 | Browser without microphone | desktop or mobile | normal navigation controls | unchanged by audio capability | room joins with audio disabled/degraded, diagnostics include `audio_input_unavailable` |
 | Browser without WebXR | desktop or mobile | normal non-XR controls | disabled with VR unavailable messaging | room joins without XR crash, diagnostics include `xr_unavailable` |
+
+## Manual WebXR Checklist
+
+Run this checklist on a real WebXR-compatible headset before public demos and release candidates that include VR changes:
+
+| Check | Expected result |
+| --- | --- |
+| Enter VR from a loaded room | `xrSession.sessionState=active`, `mode=vr`, room remains connected |
+| Move or turn in VR | desktop observer sees XR root/head movement, diagnostics increment `xrSession.transformSyncCount` |
+| Observe desktop participant from VR | non-XR participant remains visible in `remoteParticipants` and in scene |
+| Exit VR | `xrSession.sessionState=idle`, room-state/audio session remains connected |
+| Deny or fail Enter VR | room stays usable, diagnostics show `xr_enter_failed`, no white screen |
 
 ## Manual 3-4 Participant Checklist
 

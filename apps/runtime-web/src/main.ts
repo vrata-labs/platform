@@ -1,5 +1,4 @@
 import * as THREE from "three";
-import { VRButton } from "three/examples/jsm/webxr/VRButton.js";
 import { Room, RoomEvent, Track } from "livekit-client";
 import {
   DEFAULT_MEDIA_SURFACE_ID,
@@ -89,7 +88,19 @@ import { applySpatialSettings, createSpatialAudioSettings, resolveSpatialAudioMo
 import { captureCanvasDiagnostics, createEmptySceneDiagnostics, inspectSceneObject } from "./scene-debug.js";
 import { loadSceneBundle } from "./scene-loader.js";
 import { startSceneBundleSession } from "./scene-session.js";
-import { detectXrSupport, getEnterVrVisibility } from "./xr.js";
+import {
+  createXrRendererWiringDebug,
+  detectXrSupport,
+  getEnterVrVisibility,
+  markXrSessionEnded,
+  markXrSessionEntering,
+  markXrSessionFailed,
+  markXrSessionStarted,
+  recordXrTransformSync,
+  shouldSyncXrTransform,
+  type XrRendererWiringDebug,
+  type XrSessionLifecycleState
+} from "./xr.js";
 import { createAvatarLoadingDiagnostics, createEmptyAvatarDiagnostics } from "./avatar/avatar-debug.js";
 import { createAvatarLipsyncDriver, sampleAvatarLipsyncLevel, updateAvatarLipsyncDriver, type AvatarLipsyncDriver, type AvatarLipsyncSourceState } from "./avatar/avatar-lipsync.js";
 import { createAvatarOutboundPublisher, type AvatarOutboundPayload } from "./avatar/avatar-publish.js";
@@ -213,6 +224,13 @@ const faultConfig = {
   audio: (audioFaultMode === "connection_failed" ? "media_network_blocked" : audioFaultMode) as RuntimeIssue["code"] | null,
   roomState: roomStateFaultMode === "1" || roomStateFaultMode === "temporary",
   xrUnavailable: query.get("failxr") === "1"
+};
+type RuntimeNavigatorXr = {
+  isSessionSupported?: (mode: "immersive-vr") => Promise<boolean>;
+  requestSession?: (mode: "immersive-vr", options?: XRSessionInit) => Promise<XRSession>;
+};
+const XR_SESSION_OPTIONS: XRSessionInit = {
+  optionalFeatures: ["local-floor", "bounded-floor", "layers"]
 };
 const participantId = getParticipantId();
 const displayNameFromQuery = query.get("name");
@@ -844,6 +862,8 @@ let xrSupport = detectXrSupport({
   navigatorXr: faultConfig.xrUnavailable ? undefined : (navigator as Navigator & { xr?: unknown }).xr,
   immersiveVrSupported: !faultConfig.xrUnavailable
 });
+let currentXrSession: XRSession | null = null;
+let vrButton: HTMLButtonElement | null = null;
 function buildClientCompatibility(): ClientCompatibilitySummary {
   return resolveClientCompatibility({
     resolvedJoinMode: latestMode,
@@ -858,6 +878,13 @@ function buildClientCompatibility(): ClientCompatibilitySummary {
   });
 }
 let clientCompatibility = buildClientCompatibility();
+let xrSessionDebug = createXrRendererWiringDebug({
+  featureEnabled: runtimeFlags.enterVr,
+  support: xrSupport,
+  rendererXrEnabled: renderer.xr.enabled,
+  animationLoopConfigured: true,
+  presenting: renderer.xr.isPresenting
+});
 let effectiveCleanSceneMode = requestedCleanSceneMode;
 let availableSpaces: RuntimeSpaceOption[] = [];
 const remoteAvatarRuntime = createRemoteAvatarRuntime({
@@ -3829,6 +3856,7 @@ const debugState = {
     root: { x: initialLocalPosition.x, y: initialLocalPosition.y, z: initialLocalPosition.z, yaw: 0 },
     head: { x: initialLocalPosition.x, y: initialLocalPosition.y + 1.6, z: initialLocalPosition.z, yaw: 0, pitch: 0 }
   },
+  xrSession: xrSessionDebug,
   xrAxes: { moveX: 0, moveY: 0, turnX: 0, turnY: 0 },
   botMode,
   issueCode: null as RuntimeIssue["code"] | null,
@@ -3970,7 +3998,151 @@ function refreshClientCompatibility(): void {
   compatibilityStatusEl.textContent = formatClientCompatibilityStatus(clientCompatibility);
 }
 
+function refreshXrSessionDebug(sessionState?: XrSessionLifecycleState): void {
+  xrSessionDebug = createXrRendererWiringDebug({
+    featureEnabled: runtimeFlags.enterVr,
+    support: xrSupport,
+    rendererXrEnabled: renderer.xr.enabled,
+    animationLoopConfigured: true,
+    presenting: renderer.xr.isPresenting,
+    previous: debugState.xrSession,
+    sessionState
+  });
+  debugState.xrSession = xrSessionDebug;
+}
+
+function setXrSessionDebug(next: XrRendererWiringDebug): void {
+  xrSessionDebug = next;
+  debugState.xrSession = next;
+}
+
+function updateVrButtonState(): void {
+  if (!vrButton) {
+    return;
+  }
+
+  if (!runtimeFlags.enterVr) {
+    vrButton.hidden = true;
+    return;
+  }
+
+  vrButton.hidden = false;
+  if (!getEnterVrVisibility(xrSupport, runtimeFlags.enterVr)) {
+    vrButton.disabled = true;
+    vrButton.textContent = "VR unavailable";
+    return;
+  }
+
+  vrButton.disabled = debugState.xrSession.sessionState === "entering" || debugState.xrSession.sessionState === "exiting";
+  if (debugState.xrSession.sessionState === "entering") {
+    vrButton.textContent = "Starting VR";
+  } else if (debugState.xrSession.sessionState === "exiting") {
+    vrButton.textContent = "Exiting VR";
+  } else if (currentXrSession || renderer.xr.isPresenting) {
+    vrButton.textContent = "Exit VR";
+  } else if (debugState.xrSession.sessionState === "failed") {
+    vrButton.textContent = "Retry VR";
+  } else {
+    vrButton.textContent = "Enter VR";
+  }
+}
+
+function getRuntimeNavigatorXr(): RuntimeNavigatorXr | null {
+  if (faultConfig.xrUnavailable) {
+    return null;
+  }
+  return ((navigator as Navigator & { xr?: RuntimeNavigatorXr }).xr ?? null);
+}
+
+async function resolveRuntimeXrSupport(): Promise<void> {
+  const navigatorXr = getRuntimeNavigatorXr();
+  if (!navigatorXr) {
+    xrSupport = detectXrSupport({ navigatorXr: undefined, immersiveVrSupported: false });
+    refreshClientCompatibility();
+    refreshXrSessionDebug();
+    return;
+  }
+
+  try {
+    const immersiveVrSupported = typeof navigatorXr.isSessionSupported === "function"
+      ? await navigatorXr.isSessionSupported("immersive-vr")
+      : true;
+    xrSupport = detectXrSupport({ navigatorXr, immersiveVrSupported });
+  } catch (error) {
+    console.warn("xr_support_check_failed", error);
+    xrSupport = detectXrSupport({ navigatorXr, immersiveVrSupported: false });
+    setXrSessionDebug(markXrSessionFailed(debugState.xrSession, error, performance.now()));
+  }
+  refreshClientCompatibility();
+  refreshXrSessionDebug(debugState.xrSession.sessionState === "failed" ? "failed" : undefined);
+}
+
+function handleXrEnterFailure(error: unknown): void {
+  console.error(error);
+  currentXrSession = null;
+  latestMode = presenceXrMockEnabled ? "vr" : resolveJoinMode(navigator.userAgent);
+  setXrSessionDebug(markXrSessionFailed(debugState.xrSession, error, performance.now()));
+  refreshClientCompatibility();
+  updateVrButtonState();
+  const issue = getRuntimeIssue("xr_enter_failed");
+  applyIssue(issue, {
+    degradedMode: debugState.degradedMode === "none" ? "xr_disabled" : debugState.degradedMode,
+    lastRecoveryAction: "xr_enter_failed",
+    updateStatus: false
+  });
+  void syncPresence(latestMode, Boolean(livekitRoom && microphoneEnabled));
+  void reportDiagnostics(issue.diagnosticsNote);
+}
+
+async function toggleXrSession(): Promise<void> {
+  if (!runtimeFlags.enterVr || !getEnterVrVisibility(xrSupport, runtimeFlags.enterVr)) {
+    return;
+  }
+
+  if (currentXrSession) {
+    setXrSessionDebug({ ...debugState.xrSession, sessionState: "exiting" });
+    updateVrButtonState();
+    try {
+      await currentXrSession.end();
+    } catch (error) {
+      handleXrEnterFailure(error);
+    }
+    return;
+  }
+
+  const navigatorXr = getRuntimeNavigatorXr();
+  if (!navigatorXr || typeof navigatorXr.requestSession !== "function") {
+    handleXrEnterFailure(new Error("xr_request_session_unavailable"));
+    return;
+  }
+
+  setXrSessionDebug(markXrSessionEntering(debugState.xrSession, performance.now()));
+  updateVrButtonState();
+  try {
+    const session = await navigatorXr.requestSession("immersive-vr", XR_SESSION_OPTIONS);
+    currentXrSession = session;
+    await renderer.xr.setSession(session);
+  } catch (error) {
+    await currentXrSession?.end().catch(() => undefined);
+    handleXrEnterFailure(error);
+  }
+}
+
+function createControlledVrButton(): HTMLButtonElement {
+  const button = document.createElement("button");
+  button.id = "VRButton";
+  button.type = "button";
+  button.classList.add("vr-button");
+  button.style.position = "static";
+  button.style.marginTop = "10px";
+  button.addEventListener("click", () => {
+    void toggleXrSession();
+  });
+  return button;
+}
+
 refreshClientCompatibility();
+refreshXrSessionDebug();
 (window as Window & {
   __VRATA_TEST__?: {
     forceRoomStateReconnect: () => void;
@@ -4781,6 +4953,7 @@ function renderDebugPanel(): void {
   const ray = debugState.interactionRay;
   const axes = debugState.xrAxes;
   xrDebugPanelEl.textContent = [
+    `XR session: ${debugState.xrSession.sessionState} visible=${debugState.xrSession.enterVrVisible}`,
     `XR profile: ${xrAvatarDebug?.profile ?? "none"}`,
     `XR axes: turn=(${axes.turnX?.toFixed?.(2) ?? axes.turnX ?? 0}, ${axes.turnY?.toFixed?.(2) ?? axes.turnY ?? 0}) move=(${axes.moveX?.toFixed?.(2) ?? axes.moveX ?? 0}, ${axes.moveY?.toFixed?.(2) ?? axes.moveY ?? 0})`,
     `Ray active: ${ray.active} mode=${ray.mode} target=${ray.targetKind} seat=${ray.seatId ?? "-"}`,
@@ -4870,6 +5043,7 @@ async function reportDiagnostics(note?: string, options: { reportId?: string } =
       localPosition: debugState.localPosition,
       spatialAudioState: debugState.spatialAudioState,
       spatialAudio: debugState.spatialAudio,
+      xrSession: debugState.xrSession,
       xrAxes: debugState.xrAxes,
       remoteAvatarCount: debugState.remoteAvatarCount,
       remoteTargets: debugState.remoteTargets,
@@ -7013,7 +7187,18 @@ renderer.setAnimationLoop(() => {
       if (debugState.clientCompatibility.resolvedJoinMode !== latestMode || debugState.clientCompatibility.xr.enterVrVisible !== getEnterVrVisibility(xrSupport, runtimeFlags.enterVr)) {
         refreshClientCompatibility();
       }
-      void syncPresence(latestMode, Boolean(livekitRoom && microphoneEnabled));
+      const shouldSyncPresence = latestMode !== "vr" || shouldSyncXrTransform({
+        presenting: renderer.xr.isPresenting || presenceXrMockEnabled,
+        nowMs,
+        lastSyncAtMs: debugState.xrSession.lastTransformSyncAtMs,
+        minIntervalMs: debugState.xrSession.transformThrottleMs
+      });
+      if (shouldSyncPresence) {
+        if (latestMode === "vr") {
+          setXrSessionDebug(recordXrTransformSync(debugState.xrSession, nowMs));
+        }
+        void syncPresence(latestMode, Boolean(livekitRoom && microphoneEnabled));
+      }
     }
 
     syncAvatarPoseRealtime(nowMs);
@@ -7243,6 +7428,7 @@ async function main(): Promise<void> {
   if (browserMediaCapabilities.rtcPeerConnection && shouldStartPassiveMedia({
     audioJoin: runtimeFlags.audioJoin,
     screenShare: runtimeFlags.screenShare,
+    joinMuted: joinMutedPreference,
     audioFault: faultConfig.audio ?? undefined
   })) {
     void ensureMediaRoom().then(() => {
@@ -7252,7 +7438,7 @@ async function main(): Promise<void> {
     }).catch((error: unknown) => {
       console.error(error);
       const issue = classifyMediaError(error);
-      if (runtimeUiState.issueCode === "room_state_failed") {
+      if (runtimeUiState.issueCode === "room_state_failed" || runtimeUiState.issueCode === "xr_enter_failed" || runtimeUiState.roomStateMode === "api_fallback") {
         runtimeUiState = applyPassiveMediaRecovery({ runtimeUiState, issue });
         debugState.audioState = runtimeUiState.audioState;
         debugState.lastRecoveryAction = runtimeUiState.lastRecoveryAction;
@@ -7269,17 +7455,11 @@ async function main(): Promise<void> {
     });
   }
 
-  xrSupport = detectXrSupport({
-    navigatorXr: faultConfig.xrUnavailable ? undefined : (navigator as Navigator & { xr?: unknown }).xr,
-    immersiveVrSupported: !faultConfig.xrUnavailable
-  });
-  refreshClientCompatibility();
+  await resolveRuntimeXrSupport();
 
-  const vrButton = VRButton.createButton(renderer);
-  vrButton.classList.add("vr-button");
-  vrButton.style.position = "static";
-  vrButton.style.marginTop = "10px";
+  vrButton = createControlledVrButton();
   renderer.xr.addEventListener("sessionstart", () => {
+    currentXrSession = renderer.xr.getSession();
     pointerActive = false;
     mobileTouchActive = false;
     mobileTouchVector.x = 0;
@@ -7291,25 +7471,37 @@ async function main(): Promise<void> {
     }
     clearInteractionVisuals();
     latestMode = "vr";
+    setXrSessionDebug(markXrSessionStarted(debugState.xrSession, performance.now()));
     refreshClientCompatibility();
+    updateVrButtonState();
+    void syncPresence(latestMode, Boolean(livekitRoom && microphoneEnabled));
+    void reportDiagnostics("xr_session_started");
   });
   renderer.xr.addEventListener("sessionend", () => {
+    currentXrSession = null;
     pointerActive = false;
     clearInteractionVisuals();
     latestMode = presenceXrMockEnabled ? "vr" : resolveJoinMode(navigator.userAgent);
+    setXrSessionDebug(markXrSessionEnded(debugState.xrSession, performance.now()));
     refreshClientCompatibility();
+    updateVrButtonState();
+    void syncPresence(latestMode, Boolean(livekitRoom && microphoneEnabled));
+    void reportDiagnostics("xr_session_ended");
   });
-  if (!getEnterVrVisibility(xrSupport, runtimeFlags.enterVr)) {
-    vrButton.setAttribute("disabled", "true");
-    vrButton.textContent = "VR unavailable";
-    const issue = getRuntimeIssue("xr_unavailable");
-    applyIssue(issue, {
-      degradedMode: debugState.degradedMode === "none" ? "xr_disabled" : debugState.degradedMode,
-      lastRecoveryAction: "xr_path_disabled",
-      updateStatus: false
-    });
+  updateVrButtonState();
+  if (runtimeFlags.enterVr) {
+    document.querySelector(".controls")?.appendChild(vrButton);
   }
-  document.querySelector(".controls")?.appendChild(vrButton);
+  if (runtimeFlags.enterVr && !getEnterVrVisibility(xrSupport, runtimeFlags.enterVr)) {
+    const issue = getRuntimeIssue("xr_unavailable");
+    if (!runtimeUiState.issueCode) {
+      applyIssue(issue, {
+        degradedMode: debugState.degradedMode === "none" ? "xr_disabled" : debugState.degradedMode,
+        lastRecoveryAction: "xr_path_disabled",
+        updateStatus: false
+      });
+    }
+  }
 
   localBodyMesh = new THREE.Mesh(
     bodyGeometry,

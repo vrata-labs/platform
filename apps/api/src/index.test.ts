@@ -87,6 +87,18 @@ test("api spatial audio flag supports SPATIAL_AUDIO_ENABLED with legacy fallback
   delete process.env.VRATA_DISABLE_AUTOSTART;
 });
 
+test("api xr flag supports XR_ENABLED with legacy fallback", async () => {
+  process.env.VRATA_DISABLE_AUTOSTART = "1";
+  const module = await import("./index.js");
+
+  assert.equal(module.isXrFeatureEnabled({ XR_ENABLED: "false", FEATURE_XR: "true" }), false);
+  assert.equal(module.isXrFeatureEnabled({ XR_ENABLED: "true", FEATURE_XR: "false" }), true);
+  assert.equal(module.isXrFeatureEnabled({ FEATURE_XR: "false" }), false);
+  assert.equal(module.isXrFeatureEnabled({}), true);
+
+  delete process.env.VRATA_DISABLE_AUTOSTART;
+});
+
 test("api health exposes env timestamp and dependencies", async () => {
   process.env.VRATA_DISABLE_AUTOSTART = "1";
   process.env.API_PORT = "4011";

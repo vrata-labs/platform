@@ -81,6 +81,19 @@ export interface M05DebugState {
       mocked: boolean;
     };
   };
+  xrSession?: {
+    rendererXrEnabled: boolean;
+    animationLoop: "xr_compatible" | "disabled";
+    cameraRig: "local_pose_controller";
+    pointer: "controller_or_gaze";
+    transformSync: "room_state_presence";
+    sessionState: "disabled" | "unsupported" | "idle" | "entering" | "active" | "exiting" | "failed";
+    featureEnabled: boolean;
+    enterVrVisible: boolean;
+    active: boolean;
+    lastErrorCode: string | null;
+    transformSyncCount: number;
+  };
   botMode?: string;
   issueCode?: string | null;
   degradedMode?: string;

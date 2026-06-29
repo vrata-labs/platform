@@ -8,6 +8,7 @@ export type RuntimeIssueCode =
   | "screen_share_unsupported"
   | "room_state_failed"
   | "xr_unavailable"
+  | "xr_enter_failed"
   | "runtime_unhandled_error";
 
 export type RuntimeIssueSeverity = "info" | "warn" | "error";
@@ -104,6 +105,15 @@ function createRuntimeIssueMap(): Record<RuntimeIssueCode, RuntimeIssue> {
       userMessage: "VR unavailable on this device or disabled for this environment",
       diagnosticsNote: "xr_unavailable",
       suggestedAction: "Continue on desktop or mobile"
+    },
+    xr_enter_failed: {
+      code: "xr_enter_failed",
+      recoverable: true,
+      retryable: false,
+      severity: "warn",
+      userMessage: "VR session could not start; room continues in desktop mode",
+      diagnosticsNote: "xr_enter_failed",
+      suggestedAction: "Retry Enter VR or continue on desktop"
     },
     runtime_unhandled_error: {
       code: "runtime_unhandled_error",

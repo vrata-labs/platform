@@ -34,8 +34,9 @@ test("applyPostBootControls sets joined status and disables controls by flags", 
 });
 
 test("shouldStartPassiveMedia rejects mic-denied path", () => {
-  assert.equal(shouldStartPassiveMedia({ audioJoin: true, screenShare: false, audioFault: "mic_denied" }), false);
-  assert.equal(shouldStartPassiveMedia({ audioJoin: false, screenShare: true, audioFault: "none" }), true);
+  assert.equal(shouldStartPassiveMedia({ audioJoin: true, screenShare: false, joinMuted: false, audioFault: "mic_denied" }), false);
+  assert.equal(shouldStartPassiveMedia({ audioJoin: true, screenShare: false, joinMuted: true, audioFault: "none" }), false);
+  assert.equal(shouldStartPassiveMedia({ audioJoin: false, screenShare: true, joinMuted: false, audioFault: "none" }), true);
 });
 
 test("applyPassiveMediaRecovery marks degraded audio state", () => {
