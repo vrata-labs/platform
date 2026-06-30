@@ -334,7 +334,7 @@ export async function validateBackupManifest(manifest, options = {}) {
   if (!manifest.source || typeof manifest.source !== "object") {
     addIssue(issues, "missing_source", "source");
   } else {
-    for (const name of ["imageTag", "gitCommit", "profile", "composeFile", "envFile"]) {
+    for (const name of ["imageTag", "platformVersion", "gitCommit", "profile", "composeFile", "envFile"]) {
       if (typeof manifest.source[name] !== "string" || !manifest.source[name].trim()) {
         addIssue(issues, "missing_source_field", `source.${name}`);
       }
@@ -604,6 +604,11 @@ async function runRollback(options) {
   }
 
   const compose = resolveComposeOptions(options);
+  const smokeBaseUrl = options["smoke-base-url"] || compose.env.VRATA_APP_BASE_URL;
+  if (!smokeBaseUrl) {
+    throw new Error("rollback_requires_smoke_base_url");
+  }
+
   const rollbackEnvDir = resolve(options["rollback-env-dir"] || join(DEFAULT_OUTPUT_DIR, "rollback-env"));
   mkdirSync(rollbackEnvDir, { recursive: true, mode: 0o700 });
   const envBackupPath = join(rollbackEnvDir, `${basename(compose.envFile)}.${timestampForName()}`);
@@ -616,10 +621,6 @@ async function runRollback(options) {
   }
   runDockerCompose(compose, ["up", "-d", "--no-build"]);
 
-  const smokeBaseUrl = options["smoke-base-url"] || compose.env.VRATA_APP_BASE_URL;
-  if (!smokeBaseUrl) {
-    throw new Error("rollback_requires_smoke_base_url");
-  }
   await runSmokeChecks({
     baseUrl: smokeBaseUrl,
     roomId: options["smoke-room-id"] || DEFAULT_SMOKE_ROOM_ID
@@ -729,7 +730,7 @@ function runPrune(options) {
   process.stdout.write(`[backup] prune_ok count=${candidates.length} retentionDays=${retentionDays}\n`);
 }
 
-async function main(argv) {
+export async function main(argv) {
   const { command, options } = parseBackupRestoreArgs(argv);
   switch (command) {
     case "backup":

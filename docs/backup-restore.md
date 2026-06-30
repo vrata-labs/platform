@@ -58,7 +58,7 @@ Restore always validates the manifest first. After applying the dump and objects
 
 ## Rollback Image Tag
 
-Rollback is config/image-only. It updates `IMAGE_TAG`, pulls app service images, and runs `docker compose up -d --no-build`. It does not run `docker compose down -v`, and it does not delete Postgres or MinIO volumes.
+Rollback is config/image-only. It validates the target tag and smoke URL before editing the env file, updates `IMAGE_TAG`, pulls app service images, and runs `docker compose up -d --no-build`. It does not run `docker compose down -v`, and it does not delete Postgres or MinIO volumes.
 
 ```bash
 pnpm rollback:compose -- \

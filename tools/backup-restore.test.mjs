@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { join } from "node:path";
 import test from "node:test";
@@ -8,6 +8,7 @@ import {
   createBackupManifest,
   createTempBackupDir,
   findPruneCandidates,
+  main,
   parseBackupRestoreArgs,
   formatBackupManifestIssues,
   isSafeImageTag,
@@ -99,6 +100,27 @@ test("backup manifest validation rejects unsafe artifact paths", async () => {
 
   assert.equal(result.ok, false);
   assert.equal(formatBackupManifestIssues(result.issues).some((line) => line.includes("invalid_artifact_path")), true);
+});
+
+test("backup manifest validation requires platform version metadata", async () => {
+  const result = await validateBackupManifest({
+    schemaVersion: 1,
+    createdAt: "2026-06-19T00:00:00.000Z",
+    source: {
+      imageTag: "0.1.0",
+      gitCommit: "a".repeat(40),
+      profile: "selfhost",
+      composeFile: "compose.selfhost.yml",
+      envFile: ".env.selfhost"
+    },
+    artifacts: [
+      { path: "postgres.sql", kind: "postgres-dump", bytes: 1, sha256: "a".repeat(64) },
+      { path: "minio/objects.jsonl", kind: "minio-inventory", bytes: 1, sha256: "b".repeat(64) }
+    ]
+  }, { checkFiles: false });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.issues.some((issue) => issue.code === "missing_source_field" && issue.path === "source.platformVersion"), true);
 });
 
 test("rollback env update validates image tags and preserves other values", () => {
@@ -199,4 +221,29 @@ test("backup CLI parser ignores pnpm argument separator", () => {
   const parsed = parseBackupRestoreArgs(["backup", "--", "--env-file", "infra/docker/.env.selfhost"]);
   assert.equal(parsed.command, "backup");
   assert.equal(parsed.options["env-file"], "infra/docker/.env.selfhost");
+});
+
+test("rollback preflight requires smoke URL before editing env file", async () => {
+  const root = createTempBackupDir();
+  try {
+    const envFile = join(root, ".env.selfhost");
+    const composeFile = join(root, "compose.selfhost.yml");
+    const envText = "IMAGE_TAG=0.1.0\nPOSTGRES_PASSWORD=secret-password\n";
+    writeFileSync(envFile, envText);
+    writeFileSync(composeFile, "services: {}\n");
+
+    await assert.rejects(() => main([
+      "rollback",
+      "--previous-image-tag",
+      "0.1.1",
+      "--env-file",
+      envFile,
+      "--compose-file",
+      composeFile,
+      "--confirm-rollback"
+    ]), /rollback_requires_smoke_base_url/);
+    assert.equal(readFileSync(envFile, "utf8"), envText);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
