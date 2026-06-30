@@ -22,7 +22,8 @@ test("describeManifest returns room and template", () => {
       access: {
         joinMode: "link",
         guestAllowed: true,
-        roleQueryAllowed: true
+        roleQueryAllowed: true,
+        visibility: "public"
       },
       assets: [],
       features: { voice: true, spatialAudio: true, screenShare: false },
@@ -101,7 +102,7 @@ test("bootRuntime maps reserved avatar feature flags from health payload", async
         avatarSeatsEnabled: false,
         avatarCustomizationEnabled: false
       },
-      access: { joinMode: "link", guestAllowed: true, roleQueryAllowed: true }
+      access: { joinMode: "link", guestAllowed: true, roleQueryAllowed: true, visibility: "public" }
     }), { status: 200, headers: { "content-type": "application/json" } });
   };
 

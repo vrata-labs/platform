@@ -17,6 +17,7 @@ export interface RoomCreateInput {
   tenantId: string;
   templateId: string;
   name: string;
+  visibility?: "public" | "unlisted" | "private";
   sceneBundleUrl?: string;
   assetIds?: string[];
   guestAllowed?: boolean;
@@ -48,6 +49,7 @@ export interface RoomRecord {
   tenantId: string;
   templateId: string;
   name: string;
+  visibility?: "public" | "unlisted" | "private";
   sceneBundleUrl?: string;
   assetIds?: string[];
   guestAllowed?: boolean;
@@ -106,7 +108,33 @@ export interface RoomManifestRecord {
   access: {
     joinMode: "link";
     guestAllowed: boolean;
+    visibility?: "public" | "unlisted" | "private";
   };
+}
+
+export interface RoomInviteRecord {
+  inviteId: string;
+  roomId: string;
+  role: "guest" | "member" | "host" | "admin";
+  waitingRoomEnabled: boolean;
+  createdAt: string;
+  expiresAt: string;
+  revokedAt?: string | null;
+  createdBy?: string | null;
+  revokedBy?: string | null;
+  inviteLink?: string;
+}
+
+export interface WaitingRoomRequestRecord {
+  requestId: string;
+  roomId: string;
+  inviteId: string;
+  participantId: string;
+  displayName: string;
+  status: "pending" | "approved" | "rejected";
+  createdAt: string;
+  decidedAt?: string | null;
+  decidedBy?: string | null;
 }
 
 export interface RuntimeDiagnosticRecord {
@@ -264,8 +292,10 @@ export async function deleteRoom(apiBaseUrl: string, roomId: string, auth?: Cont
   }
 }
 
-export async function listRooms(apiBaseUrl: string): Promise<RoomRecord[]> {
-  const response = await fetch(new URL("/api/rooms", apiBaseUrl));
+export async function listRooms(apiBaseUrl: string, auth?: ControlPlaneAuth): Promise<RoomRecord[]> {
+  const response = await fetch(new URL("/api/rooms", apiBaseUrl), {
+    headers: { ...authHeaders(auth) }
+  });
 
   if (!response.ok) {
     throw new Error(`failed_to_list_rooms:${response.status}`);
@@ -275,14 +305,75 @@ export async function listRooms(apiBaseUrl: string): Promise<RoomRecord[]> {
   return payload.items;
 }
 
-export async function fetchRoomManifest(apiBaseUrl: string, roomId: string): Promise<RoomManifestRecord> {
-  const response = await fetch(new URL(`/api/rooms/${roomId}/manifest`, apiBaseUrl));
+export async function fetchRoomManifest(apiBaseUrl: string, roomId: string, auth?: ControlPlaneAuth): Promise<RoomManifestRecord> {
+  const response = await fetch(new URL(`/api/rooms/${roomId}/manifest`, apiBaseUrl), {
+    headers: { ...authHeaders(auth) }
+  });
 
   if (!response.ok) {
     throw new Error(`failed_to_fetch_room_manifest:${response.status}`);
   }
 
   return (await response.json()) as RoomManifestRecord;
+}
+
+export async function listRoomInvites(apiBaseUrl: string, roomId: string, auth?: ControlPlaneAuth): Promise<RoomInviteRecord[]> {
+  const response = await fetch(new URL(`/api/rooms/${roomId}/invites`, apiBaseUrl), {
+    headers: { ...authHeaders(auth) }
+  });
+  if (!response.ok) {
+    throw new Error(`failed_to_list_room_invites:${response.status}`);
+  }
+  const payload = (await response.json()) as { items: RoomInviteRecord[] };
+  return payload.items;
+}
+
+export async function createRoomInvite(apiBaseUrl: string, roomId: string, input: { expiresInSeconds?: number; waitingRoomEnabled?: boolean }, auth?: ControlPlaneAuth): Promise<RoomInviteRecord> {
+  const response = await fetch(new URL(`/api/rooms/${roomId}/invites`, apiBaseUrl), {
+    method: "POST",
+    headers: { "content-type": "application/json", ...authHeaders(auth) },
+    body: JSON.stringify(input)
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({ error: `failed_to_create_room_invite:${response.status}` }));
+    throw new Error(payload.error ?? `failed_to_create_room_invite:${response.status}`);
+  }
+  return (await response.json()) as RoomInviteRecord;
+}
+
+export async function revokeRoomInvite(apiBaseUrl: string, roomId: string, inviteId: string, auth?: ControlPlaneAuth): Promise<RoomInviteRecord> {
+  const response = await fetch(new URL(`/api/rooms/${roomId}/invites/${inviteId}/revoke`, apiBaseUrl), {
+    method: "POST",
+    headers: { ...authHeaders(auth) }
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({ error: `failed_to_revoke_room_invite:${response.status}` }));
+    throw new Error(payload.error ?? `failed_to_revoke_room_invite:${response.status}`);
+  }
+  return (await response.json()) as RoomInviteRecord;
+}
+
+export async function listWaitingRoomRequests(apiBaseUrl: string, roomId: string, auth?: ControlPlaneAuth): Promise<WaitingRoomRequestRecord[]> {
+  const response = await fetch(new URL(`/api/rooms/${roomId}/waiting-room`, apiBaseUrl), {
+    headers: { ...authHeaders(auth) }
+  });
+  if (!response.ok) {
+    throw new Error(`failed_to_list_waiting_room:${response.status}`);
+  }
+  const payload = (await response.json()) as { items: WaitingRoomRequestRecord[] };
+  return payload.items;
+}
+
+export async function decideWaitingRoomRequest(apiBaseUrl: string, roomId: string, requestId: string, decision: "approve" | "reject", auth?: ControlPlaneAuth): Promise<WaitingRoomRequestRecord> {
+  const response = await fetch(new URL(`/api/rooms/${roomId}/waiting-room/${requestId}/${decision}`, apiBaseUrl), {
+    method: "POST",
+    headers: { ...authHeaders(auth) }
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({ error: `failed_to_decide_waiting_room:${response.status}` }));
+    throw new Error(payload.error ?? `failed_to_decide_waiting_room:${response.status}`);
+  }
+  return (await response.json()) as WaitingRoomRequestRecord;
 }
 
 export async function fetchRoomDiagnostics(apiBaseUrl: string, roomId: string, auth?: ControlPlaneAuth): Promise<RuntimeDiagnosticRecord[]> {
@@ -438,6 +529,8 @@ export interface ControlPlanePageState {
   selectedSceneBundle?: SceneBundleRecord;
   selectedRoomManifest?: RoomManifestRecord;
   selectedRoomDiagnostics: RuntimeDiagnosticRecord[];
+  selectedRoomInvites: RoomInviteRecord[];
+  selectedWaitingRoomRequests: WaitingRoomRequestRecord[];
   roomLink?: string;
   publishStatus: "idle" | "publishing" | "published" | "failed";
   statusMessage?: string;
@@ -453,6 +546,8 @@ export function createControlPlanePageState(): ControlPlanePageState {
     sceneBundleVersions: [],
     assets: [],
     selectedRoomDiagnostics: [],
+    selectedRoomInvites: [],
+    selectedWaitingRoomRequests: [],
     publishStatus: "idle",
     statusMessage: "idle"
   };

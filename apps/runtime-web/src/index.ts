@@ -40,6 +40,7 @@ interface RoomManifest {
     joinMode: "link";
     guestAllowed: boolean;
     roleQueryAllowed: boolean;
+    visibility: "public" | "unlisted" | "private";
   };
 }
 
@@ -73,6 +74,7 @@ interface RuntimeHealthResponse {
     avatarSeatingEnabled?: boolean;
     avatarCustomizationEnabled?: boolean;
     avatarFallbackCapsulesEnabled?: boolean;
+    roomAccessPolicyEnabled?: boolean;
   };
 }
 
@@ -157,8 +159,10 @@ export function resolveCurrentSpace(spaces: RuntimeSpaceRecord[], roomId: string
   return spaces.find((space) => space.roomId === roomId) ?? null;
 }
 
-export async function fetchRoomManifest(apiBaseUrl: string, roomId: string): Promise<RoomManifest> {
-  const response = await fetch(new URL(`/api/rooms/${roomId}/manifest`, apiBaseUrl));
+export async function fetchRoomManifest(apiBaseUrl: string, roomId: string, sessionToken?: string): Promise<RoomManifest> {
+  const response = await fetch(new URL(`/api/rooms/${roomId}/manifest`, apiBaseUrl), {
+    headers: sessionToken ? { "authorization": `Bearer ${sessionToken}` } : undefined
+  });
 
   if (!response.ok) {
     throw new Error(`failed_to_load_manifest:${response.status}`);
@@ -177,9 +181,17 @@ export async function fetchStateToken(apiBaseUrl: string, roomId: string, access
       roomId,
       participantId: accessRequest.participantId,
       displayName: accessRequest.displayName,
-      requestedRole: accessRequest.requestedRole
+      requestedRole: accessRequest.requestedRole,
+      inviteToken: accessRequest.inviteToken
     })
   });
+
+  if (response.status === 202 || response.status === 403 || response.status === 401) {
+    const payload = await response.json().catch(() => ({})) as { reason?: string; accessRequestId?: string; requestId?: string };
+    if (payload.reason) {
+      throw new RuntimeAccessError(response.status, payload.reason, payload.accessRequestId, payload.requestId);
+    }
+  }
 
   if (!response.ok) {
     throw new Error(`failed_to_load_state_token:${response.status}`);
@@ -250,6 +262,23 @@ export interface RuntimeAccessRequest {
   participantId: string;
   displayName: string;
   requestedRole?: string | null;
+  inviteToken?: string | null;
+}
+
+export class RuntimeAccessError extends Error {
+  readonly status: number;
+  readonly reason: string;
+  readonly accessRequestId?: string;
+  readonly requestId?: string;
+
+  constructor(status: number, reason: string, accessRequestId?: string, requestId?: string) {
+    super(`room_access_denied:${reason}:${status}`);
+    this.name = "RuntimeAccessError";
+    this.status = status;
+    this.reason = reason;
+    this.accessRequestId = accessRequestId;
+    this.requestId = requestId;
+  }
 }
 
 export interface VoiceSessionPlan {
@@ -276,11 +305,11 @@ export async function bootRuntime(
   userAgent: string,
   accessRequest?: RuntimeAccessRequest
 ): Promise<RuntimeBootResult> {
-  const manifest = await fetchRoomManifest(apiBaseUrl, roomId);
   const health = await fetchRuntimeHealth(apiBaseUrl);
   const healthFeatures = health.features ?? {};
   const accessResponse = accessRequest ? await fetchStateToken(apiBaseUrl, roomId, accessRequest) : null;
   const accessDebug = accessResponse?.access ?? createRoomAccessDebugState("guest");
+  const manifest = await fetchRoomManifest(apiBaseUrl, roomId, accessResponse?.token);
 
   return {
     roomId: manifest.roomId,
@@ -353,7 +382,7 @@ export async function planVoiceSession(
   participantId: string,
   sessionToken: string
 ): Promise<VoiceSessionPlan> {
-  const manifest = await fetchRoomManifest(apiBaseUrl, roomId);
+  const manifest = await fetchRoomManifest(apiBaseUrl, roomId, sessionToken);
   const health = await fetchRuntimeHealth(apiBaseUrl);
   const healthFeatures = health.features ?? {};
   const media = await fetchMediaToken(apiBaseUrl, roomId, participantId, sessionToken);

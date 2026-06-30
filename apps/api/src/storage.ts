@@ -36,6 +36,33 @@ export interface RoomAvatarConfig {
   avatarSeatsEnabled?: boolean;
 }
 
+export type RoomVisibility = "public" | "unlisted" | "private";
+
+export interface RoomInviteRecord {
+  inviteId: string;
+  roomId: string;
+  tokenHash: string;
+  role: "guest" | "member" | "host" | "admin";
+  waitingRoomEnabled: boolean;
+  createdAt: string;
+  expiresAt: string;
+  revokedAt?: string | null;
+  createdBy?: string | null;
+  revokedBy?: string | null;
+}
+
+export interface WaitingRoomRequestRecord {
+  requestId: string;
+  roomId: string;
+  inviteId: string;
+  participantId: string;
+  displayName: string;
+  status: "pending" | "approved" | "rejected";
+  createdAt: string;
+  decidedAt?: string | null;
+  decidedBy?: string | null;
+}
+
 const DEFAULT_AVATAR_CONFIG_JSON = '{"avatarsEnabled":true,"avatarCatalogUrl":"/assets/avatars/catalog.v1.json","avatarQualityProfile":"desktop-standard","avatarFallbackCapsulesEnabled":true,"avatarSeatsEnabled":true}' as const;
 const POSTGRES_INIT_MAX_ATTEMPTS = 12;
 const POSTGRES_INIT_RETRY_DELAY_MS = 1000;
@@ -46,6 +73,7 @@ export interface RoomRecord {
   tenantId: string;
   templateId: string;
   name: string;
+  visibility?: RoomVisibility;
   sceneBundleUrl?: string;
   features: RoomFeatures;
   assetIds: string[];
@@ -113,6 +141,65 @@ function defaultAvatarConfig(input?: Partial<RoomAvatarConfig>): RoomAvatarConfi
     avatarQualityProfile: input?.avatarQualityProfile ?? "desktop-standard",
     avatarFallbackCapsulesEnabled: input?.avatarFallbackCapsulesEnabled ?? true,
     avatarSeatsEnabled: input?.avatarSeatsEnabled ?? true
+  };
+}
+
+function defaultRoomVisibility(input?: RoomVisibility): RoomVisibility {
+  return input === "private" || input === "unlisted" ? input : "public";
+}
+
+function isoString(value: string | Date | null | undefined): string | null {
+  if (!value) return null;
+  return value instanceof Date ? value.toISOString() : value;
+}
+
+function mapRoomInviteRow(row: {
+  invite_id: string;
+  room_id: string;
+  token_hash: string;
+  role: RoomInviteRecord["role"];
+  waiting_room_enabled: boolean;
+  created_at: string | Date;
+  expires_at: string | Date;
+  revoked_at?: string | Date | null;
+  created_by?: string | null;
+  revoked_by?: string | null;
+}): RoomInviteRecord {
+  return {
+    inviteId: row.invite_id,
+    roomId: row.room_id,
+    tokenHash: row.token_hash,
+    role: row.role,
+    waitingRoomEnabled: row.waiting_room_enabled,
+    createdAt: isoString(row.created_at) ?? new Date().toISOString(),
+    expiresAt: isoString(row.expires_at) ?? new Date().toISOString(),
+    revokedAt: isoString(row.revoked_at),
+    createdBy: row.created_by ?? null,
+    revokedBy: row.revoked_by ?? null
+  };
+}
+
+function mapWaitingRoomRequestRow(row: {
+  request_id: string;
+  room_id: string;
+  invite_id: string;
+  participant_id: string;
+  display_name: string;
+  status: WaitingRoomRequestRecord["status"];
+  created_at: string | Date;
+  decided_at?: string | Date | null;
+  decided_by?: string | null;
+}): WaitingRoomRequestRecord {
+  return {
+    requestId: row.request_id,
+    roomId: row.room_id,
+    inviteId: row.invite_id,
+    participantId: row.participant_id,
+    displayName: row.display_name,
+    status: row.status,
+    createdAt: isoString(row.created_at) ?? new Date().toISOString(),
+    decidedAt: isoString(row.decided_at),
+    decidedBy: row.decided_by ?? null
   };
 }
 
@@ -226,6 +313,16 @@ export interface Storage {
   createRoom(input: Partial<RoomRecord>): Promise<RoomRecord>;
   updateRoom(roomId: string, input: Partial<RoomRecord>): Promise<RoomRecord | null>;
   deleteRoom(roomId: string): Promise<boolean>;
+  createRoomInvite(input: Omit<RoomInviteRecord, "inviteId" | "createdAt" | "revokedAt" | "revokedBy"> & { inviteId?: string; createdAt?: string }): Promise<RoomInviteRecord>;
+  listRoomInvites(roomId: string): Promise<RoomInviteRecord[]>;
+  getRoomInvite(inviteId: string): Promise<RoomInviteRecord | null>;
+  getRoomInviteByTokenHash(tokenHash: string): Promise<RoomInviteRecord | null>;
+  revokeRoomInvite(roomId: string, inviteId: string, revokedAt: string, revokedBy?: string | null): Promise<RoomInviteRecord | null>;
+  createWaitingRoomRequest(input: Omit<WaitingRoomRequestRecord, "requestId" | "createdAt" | "status" | "decidedAt" | "decidedBy"> & { requestId?: string; createdAt?: string; status?: WaitingRoomRequestRecord["status"] }): Promise<WaitingRoomRequestRecord>;
+  listWaitingRoomRequests(roomId: string): Promise<WaitingRoomRequestRecord[]>;
+  getWaitingRoomRequest(requestId: string): Promise<WaitingRoomRequestRecord | null>;
+  getWaitingRoomRequestForInviteParticipant(inviteId: string, participantId: string): Promise<WaitingRoomRequestRecord | null>;
+  updateWaitingRoomRequest(roomId: string, requestId: string, input: Partial<Pick<WaitingRoomRequestRecord, "status" | "decidedAt" | "decidedBy">>): Promise<WaitingRoomRequestRecord | null>;
   createAsset(input: Partial<AssetRecord>): Promise<AssetRecord>;
   updateAsset(assetId: string, input: Partial<AssetRecord>): Promise<AssetRecord | null>;
   deleteAsset(assetId: string): Promise<boolean>;
@@ -266,6 +363,7 @@ export class MemoryStorage implements Storage {
         tenantId: "demo-tenant",
         templateId: "meeting-room-basic",
         name: "Demo Room",
+        visibility: "public",
         sceneBundleUrl: undefined,
         features: { voice: true, spatialAudio: true, screenShare: true },
         assetIds: [],
@@ -281,6 +379,8 @@ export class MemoryStorage implements Storage {
   private diagnostics = new Map<string, RuntimeDiagnosticRecord[]>();
   private xrTelemetry = new Map<string, XrTelemetryEventRecord[]>();
   private sceneBundles = new Map<string, SceneBundleRecord>();
+  private roomInvites = new Map<string, RoomInviteRecord>();
+  private waitingRoomRequests = new Map<string, WaitingRoomRequestRecord>();
 
   private sceneBundleKey(bundleId: string, version: string): string {
     return `${bundleId}::${version}`;
@@ -318,6 +418,7 @@ export class MemoryStorage implements Storage {
       tenantId: input.tenantId ?? "demo-tenant",
       templateId: input.templateId ?? "meeting-room-basic",
       name: input.name ?? "New Room",
+      visibility: defaultRoomVisibility(input.visibility),
       sceneBundleUrl: input.sceneBundleUrl,
       features: {
         voice: input.features?.voice ?? true,
@@ -352,6 +453,7 @@ export class MemoryStorage implements Storage {
         accentColor: input.theme?.accentColor ?? existing.theme?.accentColor ?? "#163354"
       },
       assetIds: input.assetIds ?? existing.assetIds,
+      visibility: defaultRoomVisibility(input.visibility ?? existing.visibility),
       guestAllowed: input.guestAllowed ?? existing.guestAllowed ?? true,
       avatarConfig: defaultAvatarConfig({
         ...existing.avatarConfig,
@@ -363,6 +465,69 @@ export class MemoryStorage implements Storage {
   }
   async deleteRoom(roomId: string): Promise<boolean> {
     return this.rooms.delete(roomId);
+  }
+  async createRoomInvite(input: Omit<RoomInviteRecord, "inviteId" | "createdAt" | "revokedAt" | "revokedBy"> & { inviteId?: string; createdAt?: string }): Promise<RoomInviteRecord> {
+    const invite: RoomInviteRecord = {
+      inviteId: input.inviteId ?? crypto.randomUUID(),
+      roomId: input.roomId,
+      tokenHash: input.tokenHash,
+      role: input.role,
+      waitingRoomEnabled: input.waitingRoomEnabled,
+      createdAt: input.createdAt ?? new Date().toISOString(),
+      expiresAt: input.expiresAt,
+      revokedAt: null,
+      createdBy: input.createdBy ?? null,
+      revokedBy: null
+    };
+    this.roomInvites.set(invite.inviteId, invite);
+    return invite;
+  }
+  async listRoomInvites(roomId: string): Promise<RoomInviteRecord[]> {
+    return Array.from(this.roomInvites.values()).filter((invite) => invite.roomId === roomId);
+  }
+  async getRoomInvite(inviteId: string): Promise<RoomInviteRecord | null> {
+    return this.roomInvites.get(inviteId) ?? null;
+  }
+  async getRoomInviteByTokenHash(tokenHash: string): Promise<RoomInviteRecord | null> {
+    return Array.from(this.roomInvites.values()).find((invite) => invite.tokenHash === tokenHash) ?? null;
+  }
+  async revokeRoomInvite(roomId: string, inviteId: string, revokedAt: string, revokedBy?: string | null): Promise<RoomInviteRecord | null> {
+    const invite = this.roomInvites.get(inviteId);
+    if (!invite || invite.roomId !== roomId) return null;
+    const updated = { ...invite, revokedAt, revokedBy: revokedBy ?? null };
+    this.roomInvites.set(inviteId, updated);
+    return updated;
+  }
+  async createWaitingRoomRequest(input: Omit<WaitingRoomRequestRecord, "requestId" | "createdAt" | "status" | "decidedAt" | "decidedBy"> & { requestId?: string; createdAt?: string; status?: WaitingRoomRequestRecord["status"] }): Promise<WaitingRoomRequestRecord> {
+    const request: WaitingRoomRequestRecord = {
+      requestId: input.requestId ?? crypto.randomUUID(),
+      roomId: input.roomId,
+      inviteId: input.inviteId,
+      participantId: input.participantId,
+      displayName: input.displayName,
+      status: input.status ?? "pending",
+      createdAt: input.createdAt ?? new Date().toISOString(),
+      decidedAt: null,
+      decidedBy: null
+    };
+    this.waitingRoomRequests.set(request.requestId, request);
+    return request;
+  }
+  async listWaitingRoomRequests(roomId: string): Promise<WaitingRoomRequestRecord[]> {
+    return Array.from(this.waitingRoomRequests.values()).filter((request) => request.roomId === roomId);
+  }
+  async getWaitingRoomRequest(requestId: string): Promise<WaitingRoomRequestRecord | null> {
+    return this.waitingRoomRequests.get(requestId) ?? null;
+  }
+  async getWaitingRoomRequestForInviteParticipant(inviteId: string, participantId: string): Promise<WaitingRoomRequestRecord | null> {
+    return Array.from(this.waitingRoomRequests.values()).find((request) => request.inviteId === inviteId && request.participantId === participantId) ?? null;
+  }
+  async updateWaitingRoomRequest(roomId: string, requestId: string, input: Partial<Pick<WaitingRoomRequestRecord, "status" | "decidedAt" | "decidedBy">>): Promise<WaitingRoomRequestRecord | null> {
+    const existing = this.waitingRoomRequests.get(requestId);
+    if (!existing || existing.roomId !== roomId) return null;
+    const updated = { ...existing, ...input };
+    this.waitingRoomRequests.set(requestId, updated);
+    return updated;
   }
   async createAsset(input: Partial<AssetRecord>): Promise<AssetRecord> {
     const asset = {
@@ -507,6 +672,7 @@ export class PostgresStorage implements Storage {
         tenant_id text not null references tenants(tenant_id),
         template_id text not null references templates(template_id),
       name text not null,
+      visibility text not null default 'public',
       scene_bundle_url text,
       features jsonb not null,
       asset_ids jsonb not null default '[]'::jsonb,
@@ -550,9 +716,35 @@ export class PostgresStorage implements Storage {
         created_at timestamptz not null default now(),
         primary key (bundle_id, version)
       );
+      create table if not exists room_invites (
+        invite_id text primary key,
+        room_id text not null references rooms(room_id) on delete cascade,
+        token_hash text not null unique,
+        role text not null default 'guest',
+        waiting_room_enabled boolean not null default false,
+        created_at timestamptz not null default now(),
+        expires_at timestamptz not null,
+        revoked_at timestamptz,
+        created_by text,
+        revoked_by text
+      );
+      create table if not exists room_waiting_requests (
+        request_id text primary key,
+        room_id text not null references rooms(room_id) on delete cascade,
+        invite_id text not null references room_invites(invite_id) on delete cascade,
+        participant_id text not null,
+        display_name text not null,
+        status text not null default 'pending',
+        created_at timestamptz not null default now(),
+        decided_at timestamptz,
+        decided_by text,
+        unique (invite_id, participant_id)
+      );
     `);
     await this.pool.query(`create index if not exists xr_telemetry_room_id_id_idx on xr_telemetry (room_id, id)`);
     await this.pool.query(`alter table rooms add column if not exists scene_bundle_url text`);
+    await this.pool.query(`alter table rooms add column if not exists visibility text not null default 'public'`);
+    await this.pool.query(`update rooms set visibility = 'private' where guest_allowed = false and (visibility is null or visibility = 'public')`);
     await this.pool.query(`alter table rooms add column if not exists avatar_config jsonb not null default '${DEFAULT_AVATAR_CONFIG_JSON}'::jsonb`);
     await this.pool.query(`update rooms set avatar_config = '${DEFAULT_AVATAR_CONFIG_JSON}'::jsonb where avatar_config is null`);
     await this.pool.query(`update rooms set avatar_config = '${DEFAULT_AVATAR_CONFIG_JSON}'::jsonb || avatar_config`);
@@ -571,8 +763,8 @@ export class PostgresStorage implements Storage {
       );
     }
     await this.pool.query(
-       `insert into rooms (room_id, tenant_id, template_id, name, scene_bundle_url, features, asset_ids, theme, guest_allowed, avatar_config)
-       values ('demo-room','demo-tenant','meeting-room-basic','Demo Room',null,$1::jsonb,'[]'::jsonb,'{"primaryColor":"#5fc8ff","accentColor":"#163354"}'::jsonb,true,$2::jsonb)
+       `insert into rooms (room_id, tenant_id, template_id, name, visibility, scene_bundle_url, features, asset_ids, theme, guest_allowed, avatar_config)
+       values ('demo-room','demo-tenant','meeting-room-basic','Demo Room','public',null,$1::jsonb,'[]'::jsonb,'{"primaryColor":"#5fc8ff","accentColor":"#163354"}'::jsonb,true,$2::jsonb)
        on conflict do nothing`,
        [JSON.stringify({ voice: true, spatialAudio: true, screenShare: true }), JSON.stringify(defaultAvatarConfig())]
     );
@@ -617,13 +809,13 @@ export class PostgresStorage implements Storage {
     }));
   }
   async listRooms(): Promise<RoomRecord[]> {
-    const result = await this.pool.query(`select room_id, tenant_id, template_id, name, scene_bundle_url, features, asset_ids, theme, guest_allowed, avatar_config from rooms order by room_id`);
-    return result.rows.map((row: { room_id: string; tenant_id: string; template_id: string; name: string; scene_bundle_url: string | null; features: RoomFeatures; asset_ids: string[]; theme: { primaryColor: string; accentColor: string }; guest_allowed: boolean; avatar_config: Partial<RoomAvatarConfig> }) => ({ roomId: row.room_id, tenantId: row.tenant_id, templateId: row.template_id, name: row.name, sceneBundleUrl: row.scene_bundle_url ?? undefined, features: row.features, assetIds: row.asset_ids, theme: row.theme, guestAllowed: row.guest_allowed, avatarConfig: defaultAvatarConfig(row.avatar_config) }));
+    const result = await this.pool.query(`select room_id, tenant_id, template_id, name, visibility, scene_bundle_url, features, asset_ids, theme, guest_allowed, avatar_config from rooms order by room_id`);
+    return result.rows.map((row: { room_id: string; tenant_id: string; template_id: string; name: string; visibility?: RoomVisibility; scene_bundle_url: string | null; features: RoomFeatures; asset_ids: string[]; theme: { primaryColor: string; accentColor: string }; guest_allowed: boolean; avatar_config: Partial<RoomAvatarConfig> }) => ({ roomId: row.room_id, tenantId: row.tenant_id, templateId: row.template_id, name: row.name, visibility: defaultRoomVisibility(row.visibility), sceneBundleUrl: row.scene_bundle_url ?? undefined, features: row.features, assetIds: row.asset_ids, theme: row.theme, guestAllowed: row.guest_allowed, avatarConfig: defaultAvatarConfig(row.avatar_config) }));
   }
   async getRoom(roomId: string): Promise<RoomRecord | null> {
-    const result = await this.pool.query(`select room_id, tenant_id, template_id, name, scene_bundle_url, features, asset_ids, theme, guest_allowed, avatar_config from rooms where room_id = $1`, [roomId]);
+    const result = await this.pool.query(`select room_id, tenant_id, template_id, name, visibility, scene_bundle_url, features, asset_ids, theme, guest_allowed, avatar_config from rooms where room_id = $1`, [roomId]);
     const row = result.rows[0];
-    return row ? { roomId: row.room_id, tenantId: row.tenant_id, templateId: row.template_id, name: row.name, sceneBundleUrl: row.scene_bundle_url ?? undefined, features: row.features, assetIds: row.asset_ids, theme: row.theme, guestAllowed: row.guest_allowed, avatarConfig: defaultAvatarConfig(row.avatar_config) } : null;
+    return row ? { roomId: row.room_id, tenantId: row.tenant_id, templateId: row.template_id, name: row.name, visibility: defaultRoomVisibility(row.visibility), sceneBundleUrl: row.scene_bundle_url ?? undefined, features: row.features, assetIds: row.asset_ids, theme: row.theme, guestAllowed: row.guest_allowed, avatarConfig: defaultAvatarConfig(row.avatar_config) } : null;
   }
   async createRoom(input: Partial<RoomRecord>): Promise<RoomRecord> {
     const room: RoomRecord = {
@@ -631,6 +823,7 @@ export class PostgresStorage implements Storage {
       tenantId: input.tenantId ?? "demo-tenant",
       templateId: input.templateId ?? "meeting-room-basic",
       name: input.name ?? "New Room",
+      visibility: defaultRoomVisibility(input.visibility),
       sceneBundleUrl: input.sceneBundleUrl,
       features: {
         voice: input.features?.voice ?? true,
@@ -646,8 +839,8 @@ export class PostgresStorage implements Storage {
       avatarConfig: defaultAvatarConfig(input.avatarConfig)
     };
     await this.pool.query(
-      `insert into rooms (room_id, tenant_id, template_id, name, scene_bundle_url, features, asset_ids, theme, guest_allowed, avatar_config) values ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8::jsonb,$9,$10::jsonb)`,
-      [room.roomId, room.tenantId, room.templateId, room.name, room.sceneBundleUrl ?? null, JSON.stringify(room.features), JSON.stringify(room.assetIds), JSON.stringify(room.theme), room.guestAllowed, JSON.stringify(room.avatarConfig)]
+      `insert into rooms (room_id, tenant_id, template_id, name, visibility, scene_bundle_url, features, asset_ids, theme, guest_allowed, avatar_config) values ($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9::jsonb,$10,$11::jsonb)`,
+      [room.roomId, room.tenantId, room.templateId, room.name, room.visibility, room.sceneBundleUrl ?? null, JSON.stringify(room.features), JSON.stringify(room.assetIds), JSON.stringify(room.theme), room.guestAllowed, JSON.stringify(room.avatarConfig)]
     );
     return room;
   }
@@ -668,6 +861,7 @@ export class PostgresStorage implements Storage {
         accentColor: input.theme?.accentColor ?? existing.theme?.accentColor ?? "#163354"
       },
       assetIds: input.assetIds ?? existing.assetIds,
+      visibility: defaultRoomVisibility(input.visibility ?? existing.visibility),
       guestAllowed: input.guestAllowed ?? existing.guestAllowed ?? true,
       avatarConfig: defaultAvatarConfig({
         ...existing.avatarConfig,
@@ -675,14 +869,91 @@ export class PostgresStorage implements Storage {
       })
     };
     await this.pool.query(
-      `update rooms set template_id = $2, name = $3, scene_bundle_url = $4, features = $5::jsonb, asset_ids = $6::jsonb, theme = $7::jsonb, guest_allowed = $8, avatar_config = $9::jsonb where room_id = $1`,
-      [roomId, updated.templateId, updated.name, updated.sceneBundleUrl ?? null, JSON.stringify(updated.features), JSON.stringify(updated.assetIds), JSON.stringify(updated.theme), updated.guestAllowed, JSON.stringify(updated.avatarConfig)]
+      `update rooms set template_id = $2, name = $3, visibility = $4, scene_bundle_url = $5, features = $6::jsonb, asset_ids = $7::jsonb, theme = $8::jsonb, guest_allowed = $9, avatar_config = $10::jsonb where room_id = $1`,
+      [roomId, updated.templateId, updated.name, updated.visibility, updated.sceneBundleUrl ?? null, JSON.stringify(updated.features), JSON.stringify(updated.assetIds), JSON.stringify(updated.theme), updated.guestAllowed, JSON.stringify(updated.avatarConfig)]
     );
     return updated;
   }
   async deleteRoom(roomId: string): Promise<boolean> {
     const result = await this.pool.query(`delete from rooms where room_id = $1`, [roomId]);
     return (result.rowCount ?? 0) > 0;
+  }
+  async createRoomInvite(input: Omit<RoomInviteRecord, "inviteId" | "createdAt" | "revokedAt" | "revokedBy"> & { inviteId?: string; createdAt?: string }): Promise<RoomInviteRecord> {
+    const invite: RoomInviteRecord = {
+      inviteId: input.inviteId ?? crypto.randomUUID(),
+      roomId: input.roomId,
+      tokenHash: input.tokenHash,
+      role: input.role,
+      waitingRoomEnabled: input.waitingRoomEnabled,
+      createdAt: input.createdAt ?? new Date().toISOString(),
+      expiresAt: input.expiresAt,
+      revokedAt: null,
+      createdBy: input.createdBy ?? null,
+      revokedBy: null
+    };
+    await this.pool.query(
+      `insert into room_invites (invite_id, room_id, token_hash, role, waiting_room_enabled, created_at, expires_at, created_by) values ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      [invite.inviteId, invite.roomId, invite.tokenHash, invite.role, invite.waitingRoomEnabled, invite.createdAt, invite.expiresAt, invite.createdBy]
+    );
+    return invite;
+  }
+  async listRoomInvites(roomId: string): Promise<RoomInviteRecord[]> {
+    const result = await this.pool.query(`select invite_id, room_id, token_hash, role, waiting_room_enabled, created_at, expires_at, revoked_at, created_by, revoked_by from room_invites where room_id = $1 order by created_at desc`, [roomId]);
+    return result.rows.map(mapRoomInviteRow);
+  }
+  async getRoomInvite(inviteId: string): Promise<RoomInviteRecord | null> {
+    const result = await this.pool.query(`select invite_id, room_id, token_hash, role, waiting_room_enabled, created_at, expires_at, revoked_at, created_by, revoked_by from room_invites where invite_id = $1`, [inviteId]);
+    return result.rows[0] ? mapRoomInviteRow(result.rows[0]) : null;
+  }
+  async getRoomInviteByTokenHash(tokenHash: string): Promise<RoomInviteRecord | null> {
+    const result = await this.pool.query(`select invite_id, room_id, token_hash, role, waiting_room_enabled, created_at, expires_at, revoked_at, created_by, revoked_by from room_invites where token_hash = $1`, [tokenHash]);
+    return result.rows[0] ? mapRoomInviteRow(result.rows[0]) : null;
+  }
+  async revokeRoomInvite(roomId: string, inviteId: string, revokedAt: string, revokedBy?: string | null): Promise<RoomInviteRecord | null> {
+    const result = await this.pool.query(
+      `update room_invites set revoked_at = $3, revoked_by = $4 where room_id = $1 and invite_id = $2 returning invite_id, room_id, token_hash, role, waiting_room_enabled, created_at, expires_at, revoked_at, created_by, revoked_by`,
+      [roomId, inviteId, revokedAt, revokedBy ?? null]
+    );
+    return result.rows[0] ? mapRoomInviteRow(result.rows[0]) : null;
+  }
+  async createWaitingRoomRequest(input: Omit<WaitingRoomRequestRecord, "requestId" | "createdAt" | "status" | "decidedAt" | "decidedBy"> & { requestId?: string; createdAt?: string; status?: WaitingRoomRequestRecord["status"] }): Promise<WaitingRoomRequestRecord> {
+    const waitingRequest: WaitingRoomRequestRecord = {
+      requestId: input.requestId ?? crypto.randomUUID(),
+      roomId: input.roomId,
+      inviteId: input.inviteId,
+      participantId: input.participantId,
+      displayName: input.displayName,
+      status: input.status ?? "pending",
+      createdAt: input.createdAt ?? new Date().toISOString(),
+      decidedAt: null,
+      decidedBy: null
+    };
+    const result = await this.pool.query(
+      `insert into room_waiting_requests (request_id, room_id, invite_id, participant_id, display_name, status, created_at) values ($1,$2,$3,$4,$5,$6,$7)
+       on conflict (invite_id, participant_id) do update set display_name = excluded.display_name
+       returning request_id, room_id, invite_id, participant_id, display_name, status, created_at, decided_at, decided_by`,
+      [waitingRequest.requestId, waitingRequest.roomId, waitingRequest.inviteId, waitingRequest.participantId, waitingRequest.displayName, waitingRequest.status, waitingRequest.createdAt]
+    );
+    return mapWaitingRoomRequestRow(result.rows[0]);
+  }
+  async listWaitingRoomRequests(roomId: string): Promise<WaitingRoomRequestRecord[]> {
+    const result = await this.pool.query(`select request_id, room_id, invite_id, participant_id, display_name, status, created_at, decided_at, decided_by from room_waiting_requests where room_id = $1 order by created_at desc`, [roomId]);
+    return result.rows.map(mapWaitingRoomRequestRow);
+  }
+  async getWaitingRoomRequest(requestId: string): Promise<WaitingRoomRequestRecord | null> {
+    const result = await this.pool.query(`select request_id, room_id, invite_id, participant_id, display_name, status, created_at, decided_at, decided_by from room_waiting_requests where request_id = $1`, [requestId]);
+    return result.rows[0] ? mapWaitingRoomRequestRow(result.rows[0]) : null;
+  }
+  async getWaitingRoomRequestForInviteParticipant(inviteId: string, participantId: string): Promise<WaitingRoomRequestRecord | null> {
+    const result = await this.pool.query(`select request_id, room_id, invite_id, participant_id, display_name, status, created_at, decided_at, decided_by from room_waiting_requests where invite_id = $1 and participant_id = $2`, [inviteId, participantId]);
+    return result.rows[0] ? mapWaitingRoomRequestRow(result.rows[0]) : null;
+  }
+  async updateWaitingRoomRequest(roomId: string, requestId: string, input: Partial<Pick<WaitingRoomRequestRecord, "status" | "decidedAt" | "decidedBy">>): Promise<WaitingRoomRequestRecord | null> {
+    const result = await this.pool.query(
+      `update room_waiting_requests set status = coalesce($3, status), decided_at = coalesce($4, decided_at), decided_by = coalesce($5, decided_by) where room_id = $1 and request_id = $2 returning request_id, room_id, invite_id, participant_id, display_name, status, created_at, decided_at, decided_by`,
+      [roomId, requestId, input.status ?? null, input.decidedAt ?? null, input.decidedBy ?? null]
+    );
+    return result.rows[0] ? mapWaitingRoomRequestRow(result.rows[0]) : null;
   }
   async createAsset(input: Partial<AssetRecord>): Promise<AssetRecord> {
     const asset = {

@@ -1283,6 +1283,199 @@ test("runtime spaces endpoint keeps same-tenant guest-safe rooms only", async ()
   }
 });
 
+test("private room access requires valid invite and records invite audit", async () => {
+  process.env.VRATA_DISABLE_AUTOSTART = "1";
+  process.env.API_PORT = "4047";
+  process.env.CONTROL_PLANE_ADMIN_TOKEN = "test-admin-token";
+  process.env.STATE_TOKEN_SECRET = "private-room-access-secret";
+  const module = await import("./index.js");
+  const server = module.startApiServer(4047);
+  const baseUrl = "http://127.0.0.1:4047";
+
+  try {
+    const createRoomResponse = await fetch(`${baseUrl}/api/rooms`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-vrata-admin-token": "test-admin-token" },
+      body: JSON.stringify({
+        tenantId: "demo-tenant",
+        templateId: "meeting-room-basic",
+        name: "Private Invite Room",
+        visibility: "private",
+        guestAllowed: false
+      })
+    });
+    assert.equal(createRoomResponse.ok, true);
+    const room = (await createRoomResponse.json()) as { roomId: string };
+
+    const privateManifest = await fetch(`${baseUrl}/api/rooms/${room.roomId}/manifest`);
+    assert.equal(privateManifest.status, 404);
+
+    const noInviteToken = await fetch(`${baseUrl}/api/tokens/state`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ roomId: room.roomId, participantId: "guest-no-invite", displayName: "No Invite" })
+    });
+    assert.equal(noInviteToken.status, 403);
+    assert.equal(((await noInviteToken.json()) as { reason?: string }).reason, "invite_required");
+
+    const createInviteResponse = await fetch(`${baseUrl}/api/rooms/${room.roomId}/invites`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-vrata-admin-token": "test-admin-token" },
+      body: JSON.stringify({ expiresInSeconds: 60 })
+    });
+    assert.equal(createInviteResponse.ok, true);
+    const invite = (await createInviteResponse.json()) as { inviteId: string; inviteLink: string };
+    const inviteToken = new URL(invite.inviteLink).searchParams.get("invite");
+    assert.ok(inviteToken);
+
+    const stateResponse = await fetch(`${baseUrl}/api/tokens/state`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ roomId: room.roomId, participantId: "guest-valid", displayName: "Valid Guest", inviteToken })
+    });
+    assert.equal(stateResponse.ok, true);
+    const statePayload = (await stateResponse.json()) as { token: string; role?: string };
+    assert.equal(statePayload.role, "guest");
+
+    const authorizedManifest = await fetch(`${baseUrl}/api/rooms/${room.roomId}/manifest`, {
+      headers: { authorization: `Bearer ${statePayload.token}` }
+    });
+    assert.equal(authorizedManifest.ok, true);
+    assert.equal(((await authorizedManifest.json()) as { access?: { visibility?: string } }).access?.visibility, "private");
+
+    const revokeResponse = await fetch(`${baseUrl}/api/rooms/${room.roomId}/invites/${invite.inviteId}/revoke`, {
+      method: "POST",
+      headers: { "x-vrata-admin-token": "test-admin-token" }
+    });
+    assert.equal(revokeResponse.ok, true);
+
+    const revokedState = await fetch(`${baseUrl}/api/tokens/state`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ roomId: room.roomId, participantId: "guest-revoked", displayName: "Revoked Guest", inviteToken })
+    });
+    assert.equal(revokedState.status, 403);
+    assert.equal(((await revokedState.json()) as { reason?: string }).reason, "invite_revoked");
+
+    const expiredInviteResponse = await fetch(`${baseUrl}/api/rooms/${room.roomId}/invites`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-vrata-admin-token": "test-admin-token" },
+      body: JSON.stringify({ expiresAt: new Date(Date.now() - 1000).toISOString() })
+    });
+    assert.equal(expiredInviteResponse.ok, true);
+    const expiredInvite = (await expiredInviteResponse.json()) as { inviteLink: string };
+    const expiredToken = new URL(expiredInvite.inviteLink).searchParams.get("invite");
+    const expiredState = await fetch(`${baseUrl}/api/tokens/state`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ roomId: room.roomId, participantId: "guest-expired", displayName: "Expired Guest", inviteToken: expiredToken })
+    });
+    assert.equal(expiredState.status, 403);
+    assert.equal(((await expiredState.json()) as { reason?: string }).reason, "invite_expired");
+
+    const auditResponse = await fetch(`${baseUrl}/api/audit/control-plane`, {
+      headers: { "x-vrata-admin-token": "test-admin-token" }
+    });
+    assert.equal(auditResponse.ok, true);
+    const auditPayload = (await auditResponse.json()) as { items: Array<{ action?: string; result?: string; reason?: string }> };
+    assert.equal(auditPayload.items.some((item) => item.action === "invite.create" && item.result === "allowed"), true);
+    assert.equal(auditPayload.items.some((item) => item.action === "invite.revoke" && item.result === "allowed"), true);
+    assert.equal(auditPayload.items.some((item) => item.action === "invite.use" && item.result === "allowed"), true);
+    assert.equal(auditPayload.items.some((item) => item.action === "invite.use" && item.reason === "invite_expired"), true);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    delete process.env.VRATA_DISABLE_AUTOSTART;
+    delete process.env.API_PORT;
+    delete process.env.CONTROL_PLANE_ADMIN_TOKEN;
+    delete process.env.STATE_TOKEN_SECRET;
+  }
+});
+
+test("waiting room invite keeps guest pending until host decision", async () => {
+  process.env.VRATA_DISABLE_AUTOSTART = "1";
+  process.env.API_PORT = "4046";
+  process.env.CONTROL_PLANE_ADMIN_TOKEN = "test-admin-token";
+  process.env.STATE_TOKEN_SECRET = "waiting-room-secret";
+  const module = await import("./index.js");
+  const server = module.startApiServer(4046);
+  const baseUrl = "http://127.0.0.1:4046";
+
+  try {
+    const createRoomResponse = await fetch(`${baseUrl}/api/rooms`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-vrata-admin-token": "test-admin-token" },
+      body: JSON.stringify({ tenantId: "demo-tenant", templateId: "meeting-room-basic", name: "Waiting Room", visibility: "private" })
+    });
+    assert.equal(createRoomResponse.ok, true);
+    const room = (await createRoomResponse.json()) as { roomId: string };
+    const createInviteResponse = await fetch(`${baseUrl}/api/rooms/${room.roomId}/invites`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-vrata-admin-token": "test-admin-token" },
+      body: JSON.stringify({ expiresInSeconds: 60, waitingRoomEnabled: true })
+    });
+    assert.equal(createInviteResponse.ok, true);
+    const invite = (await createInviteResponse.json()) as { inviteLink: string };
+    const inviteToken = new URL(invite.inviteLink).searchParams.get("invite");
+
+    const pendingResponse = await fetch(`${baseUrl}/api/tokens/state`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ roomId: room.roomId, participantId: "guest-pending", displayName: "Pending Guest", inviteToken })
+    });
+    assert.equal(pendingResponse.status, 202);
+    const pendingPayload = (await pendingResponse.json()) as { reason?: string; accessRequestId?: string };
+    assert.equal(pendingPayload.reason, "waiting_room_pending");
+    assert.ok(pendingPayload.accessRequestId);
+
+    const waitingList = await fetch(`${baseUrl}/api/rooms/${room.roomId}/waiting-room`, {
+      headers: { "x-vrata-admin-token": "test-admin-token" }
+    });
+    assert.equal(waitingList.ok, true);
+    const waitingPayload = (await waitingList.json()) as { items: Array<{ requestId: string; status: string }> };
+    assert.equal(waitingPayload.items.some((item) => item.requestId === pendingPayload.accessRequestId && item.status === "pending"), true);
+
+    const approveResponse = await fetch(`${baseUrl}/api/rooms/${room.roomId}/waiting-room/${pendingPayload.accessRequestId}/approve`, {
+      method: "POST",
+      headers: { "x-vrata-admin-token": "test-admin-token" }
+    });
+    assert.equal(approveResponse.ok, true);
+
+    const approvedState = await fetch(`${baseUrl}/api/tokens/state`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ roomId: room.roomId, participantId: "guest-pending", displayName: "Pending Guest", inviteToken })
+    });
+    assert.equal(approvedState.ok, true);
+
+    const rejectedPending = await fetch(`${baseUrl}/api/tokens/state`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ roomId: room.roomId, participantId: "guest-rejected", displayName: "Rejected Guest", inviteToken })
+    });
+    assert.equal(rejectedPending.status, 202);
+    const rejectedPendingPayload = (await rejectedPending.json()) as { accessRequestId?: string };
+    assert.ok(rejectedPendingPayload.accessRequestId);
+    const rejectResponse = await fetch(`${baseUrl}/api/rooms/${room.roomId}/waiting-room/${rejectedPendingPayload.accessRequestId}/reject`, {
+      method: "POST",
+      headers: { "x-vrata-admin-token": "test-admin-token" }
+    });
+    assert.equal(rejectResponse.ok, true);
+    const rejectedState = await fetch(`${baseUrl}/api/tokens/state`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ roomId: room.roomId, participantId: "guest-rejected", displayName: "Rejected Guest", inviteToken })
+    });
+    assert.equal(rejectedState.status, 403);
+    assert.equal(((await rejectedState.json()) as { reason?: string }).reason, "waiting_room_rejected");
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    delete process.env.VRATA_DISABLE_AUTOSTART;
+    delete process.env.API_PORT;
+    delete process.env.CONTROL_PLANE_ADMIN_TOKEN;
+    delete process.env.STATE_TOKEN_SECRET;
+  }
+});
+
 test("runtime spaces endpoint keeps https room links behind https proxy", async () => {
   process.env.VRATA_DISABLE_AUTOSTART = "1";
   process.env.API_PORT = "4023";

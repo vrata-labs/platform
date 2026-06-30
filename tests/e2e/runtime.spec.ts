@@ -46,6 +46,37 @@ async function createAvatarRoom(request: APIRequestContext, name: string, sceneB
   return (await createRoomResponse.json()) as { roomId: string; roomLink: string };
 }
 
+async function createPrivateRoom(request: APIRequestContext, name: string): Promise<{ roomId: string; roomLink: string }> {
+  const createRoomResponse = await request.post("/api/rooms", {
+    headers: {
+      "x-vrata-admin-token": e2eAdminToken
+    },
+    data: {
+      tenantId: "demo-tenant",
+      templateId: "meeting-room-basic",
+      name,
+      visibility: "private",
+      guestAllowed: false
+    }
+  });
+  expect(createRoomResponse.ok()).toBeTruthy();
+  return (await createRoomResponse.json()) as { roomId: string; roomLink: string };
+}
+
+async function createRoomInvite(request: APIRequestContext, roomId: string, waitingRoomEnabled = false): Promise<{ inviteLink: string }> {
+  const inviteResponse = await request.post(`/api/rooms/${roomId}/invites`, {
+    headers: {
+      "x-vrata-admin-token": e2eAdminToken
+    },
+    data: {
+      expiresInSeconds: 300,
+      waitingRoomEnabled
+    }
+  });
+  expect(inviteResponse.ok()).toBeTruthy();
+  return (await inviteResponse.json()) as { inviteLink: string };
+}
+
 async function createAvatarHallRoom(request: APIRequestContext, name: string): Promise<{ roomId: string; roomLink: string }> {
   return createAvatarRoom(request, name, "/assets/scenes/sense-hall2-v1/scene.json");
 }
@@ -138,6 +169,18 @@ test("room shell exposes audio device selectors and level meters", async ({ page
   await expect(page.locator("#mic-select option").first()).toContainText("System default microphone");
   await expect(page.locator("#speaker-select option").first()).toContainText("System default speaker");
   await expect(page.locator("#audio-device-status")).not.toHaveText("");
+});
+
+test("private room opens only through a valid invite link", async ({ page, request }) => {
+  const room = await createPrivateRoom(request, `Private E2E ${Date.now()}`);
+
+  await page.goto(e2eRoomLink(room.roomLink));
+  await expect(page.locator("#status-line")).toContainText("Access denied: private invite required");
+
+  const invite = await createRoomInvite(request, room.roomId);
+  await page.goto(e2eRoomLink(invite.inviteLink));
+  await expect(page.locator("#status-line")).toContainText("Joined as");
+  await expect(page.locator("#guest-access-line")).toContainText("Guest access: members only");
 });
 
 test("mobile room HUD can collapse and scroll without covering the scene", async ({ page }) => {

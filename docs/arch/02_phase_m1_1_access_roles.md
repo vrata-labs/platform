@@ -81,6 +81,27 @@ M1.1 вводит фундамент доступа: роль участника
 
 M1.1 не создает полноценные медийные поверхности и медийные объекты. Разрешения `surface.create-object`, `surface.stop-object` и `surface.lock` добавляются в политику как будущие значения, но серверные проверки конкретных surface-команд реализуются в M1.3, когда появится протокол поверхностей.
 
+## Private Room Access Mode
+
+`VRATA-FEAT-014` расширяет базовую роль/permission модель политикой входа в комнату:
+
+- `visibility=public` — комната видна в runtime space selector и открывается по прямой ссылке;
+- `visibility=unlisted` — комната не попадает в публичный selector, но открывается по прямой ссылке;
+- `visibility=private` — manifest и room detail не раскрывают метаданные без admin/session token, а `/api/tokens/state` выдаёт session token гостю только по валидному invite;
+- invite хранится как opaque token hash, имеет `expiresAt`, `revokedAt`, роль и optional `waitingRoomEnabled`;
+- waiting-room invite создаёт pending request, host/admin подтверждает или отклоняет его через control-plane API;
+- audit log фиксирует `invite.create`, `invite.revoke`, `invite.use` и waiting-room decisions; raw invite tokens не логируются.
+
+Стабильные причины отказа для runtime/support:
+
+- `invite_required`;
+- `invite_expired`;
+- `invite_revoked`;
+- `waiting_room_pending`;
+- `waiting_room_rejected`.
+
+Фича включена по умолчанию и может быть отключена для self-host troubleshooting через `ROOM_ACCESS_POLICY_ENABLED=false` или legacy `FEATURE_ROOM_ACCESS_POLICY=false`.
+
 ## Источник истины роли
 
 - по умолчанию участник входит как `guest`;

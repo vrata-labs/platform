@@ -19,9 +19,12 @@ import {
 import {
   createStorage,
   type AssetRecord,
+  type RoomInviteRecord,
   type RoomRecord,
+  type RoomVisibility,
   type RuntimeDiagnosticRecord,
-  type TenantRecord
+  type TenantRecord,
+  type WaitingRoomRequestRecord
 } from "./storage.js";
 
 interface RoomManifest {
@@ -71,6 +74,7 @@ interface RoomManifest {
     joinMode: "link";
     guestAllowed: boolean;
     roleQueryAllowed: boolean;
+    visibility: RoomVisibility;
   };
 }
 
@@ -83,6 +87,7 @@ interface StateTokenRequest {
   displayName?: string;
   requestedRole?: string;
   role?: string;
+  inviteToken?: string;
 }
 
 interface MediaTokenPayload {
@@ -119,7 +124,9 @@ type ControlPlanePermission =
   | "scene-bundle.write"
   | "diagnostics.read"
   | "xr-telemetry.read"
-  | "audit.read";
+  | "audit.read"
+  | "room.invite"
+  | "room.join";
 
 interface ControlPlaneActor {
   actorType: "admin-token" | "room-session";
@@ -258,7 +265,8 @@ const metrics = {
   requestFailuresTotal: 0,
   diagnosticsReportsCreatedTotal: 0,
   roomJoinFailuresTotal: new Map<string, number>(),
-  mediaJoinFailuresTotal: new Map<string, number>()
+  mediaJoinFailuresTotal: new Map<string, number>(),
+  roomAccessDeniedTotal: new Map<string, number>()
 };
 
 function isEnabledEnvValue(value: string | undefined): boolean | null {
@@ -299,6 +307,14 @@ export function isXrFeatureEnabled(env: NodeJS.ProcessEnv = process.env): boolea
   return isEnabledEnvValue(env.FEATURE_XR) ?? true;
 }
 
+export function isRoomAccessPolicyEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  const explicit = isEnabledEnvValue(env.ROOM_ACCESS_POLICY_ENABLED);
+  if (explicit !== null) {
+    return explicit;
+  }
+  return isEnabledEnvValue(env.FEATURE_ROOM_ACCESS_POLICY) ?? true;
+}
+
 function resolveAccessRole(requestedRole: unknown, env: NodeJS.ProcessEnv = process.env): { role: RoomRole; roleSource: RoomSessionRoleSource } {
   if (!isDevRoleQueryAllowed(env)) {
     return { role: "guest", roleSource: "default" };
@@ -312,6 +328,22 @@ function getStateTokenSecret(env: NodeJS.ProcessEnv = process.env): string {
 
 function encodeAccessToken(payload: RoomAccessTokenPayload, env: NodeJS.ProcessEnv = process.env): string {
   return signRoomSessionToken(payload, getStateTokenSecret(env));
+}
+
+function createInviteToken(): string {
+  return `${randomUUID()}${randomUUID()}`.replace(/-/g, "");
+}
+
+function hashInviteToken(token: string, env: NodeJS.ProcessEnv = process.env): string {
+  return createHmac("sha256", getStateTokenSecret(env)).update(token).digest("base64url");
+}
+
+function isRoomVisibility(input: unknown): input is RoomVisibility {
+  return input === "public" || input === "unlisted" || input === "private";
+}
+
+function sanitizeRoomVisibility(input: unknown, fallback: RoomVisibility = "public"): RoomVisibility {
+  return isRoomVisibility(input) ? input : fallback;
 }
 
 function encodeRemoteBrowserFrameToken(payload: { roomId: string; objectId: string; executorSessionId: string; frameStreamId: string; exp: number }, env: NodeJS.ProcessEnv = process.env): string {
@@ -502,7 +534,7 @@ function defaultManifest(roomId: string, request?: IncomingMessage): RoomManifes
       avatarCustomizationEnabled: false
     },
     quality: { default: "desktop-standard", mobile: "mobile-lite", xr: "xr" },
-    access: { joinMode: "link", guestAllowed: true, roleQueryAllowed: isDevRoleQueryAllowed() }
+    access: { joinMode: "link", guestAllowed: true, roleQueryAllowed: isDevRoleQueryAllowed(), visibility: "public" }
   };
 }
 
@@ -640,6 +672,12 @@ function createRoomLink(roomId: string, request?: IncomingMessage): string {
       : `https://${host}`)
     : `${proto}://${host}`;
   return new URL(`/rooms/${roomId}`, publicUrl).toString();
+}
+
+function createInviteLink(roomId: string, inviteToken: string, request?: IncomingMessage): string {
+  const url = new URL(createRoomLink(roomId, request));
+  url.searchParams.set("invite", inviteToken);
+  return url.toString();
 }
 
 function cleanupPresence(roomId: string): void {
@@ -841,7 +879,7 @@ async function buildManifest(roomId: string, request?: IncomingMessage): Promise
       avatarCustomizationEnabled: process.env.FEATURE_AVATAR_CUSTOMIZATION === "true"
     },
     quality: { default: "desktop-standard", mobile: "mobile-lite", xr: "xr" },
-    access: { joinMode: "link", guestAllowed: room.guestAllowed ?? true, roleQueryAllowed: isDevRoleQueryAllowed() }
+    access: { joinMode: "link", guestAllowed: room.guestAllowed ?? true, roleQueryAllowed: isDevRoleQueryAllowed(), visibility: sanitizeRoomVisibility(room.visibility) }
   };
 }
 
@@ -849,7 +887,7 @@ function json(response: ServerResponse, statusCode: number, body: unknown): void
   response.writeHead(statusCode, {
     "content-type": "application/json; charset=utf-8",
     "access-control-allow-origin": process.env.API_CORS_ORIGIN ?? "*",
-    "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+    "access-control-allow-methods": "GET,POST,PUT,PATCH,DELETE,OPTIONS",
     "access-control-allow-headers": "content-type,authorization,x-request-id,x-vrata-admin-token,x-vrata-internal-token,x-noah-admin-token,x-noah-internal-token",
     "x-content-type-options": "nosniff",
     "x-frame-options": "DENY",
@@ -991,6 +1029,13 @@ async function apiMetricsText(storage: Awaited<typeof storagePromise>): Promise<
   ];
   for (const [reason, count] of metrics.roomJoinFailuresTotal.entries()) {
     lines.push(formatMetricLine("vrata_room_join_failures_total", count, { reason }));
+  }
+  lines.push(
+    "# HELP vrata_room_access_denied_total Room access policy denials observed by API.",
+    "# TYPE vrata_room_access_denied_total counter"
+  );
+  for (const [reason, count] of metrics.roomAccessDeniedTotal.entries()) {
+    lines.push(formatMetricLine("vrata_room_access_denied_total", count, { reason }));
   }
   lines.push(
     "# HELP vrata_media_join_failures_total Media token or media join failures observed by API.",
@@ -1179,6 +1224,146 @@ async function verifyRoomSessionRequest(
   });
 }
 
+function isPrivateRoom(room: RoomRecord): boolean {
+  return isRoomAccessPolicyEnabled() && sanitizeRoomVisibility(room.visibility) === "private";
+}
+
+function canReadPrivateRoomWithControlPlaneActor(request: IncomingMessage, roomId: string): boolean {
+  const actorResult = resolveControlPlaneActor(request);
+  if (!actorResult.ok) {
+    return false;
+  }
+  if (actorResult.actor.actorType === "admin-token") {
+    return true;
+  }
+  return actorResult.actor.roomId === roomId;
+}
+
+async function canReadRoomDetails(request: IncomingMessage, room: RoomRecord): Promise<boolean> {
+  if (!isPrivateRoom(room)) {
+    return true;
+  }
+  if (canReadPrivateRoomWithControlPlaneActor(request, room.roomId)) {
+    return true;
+  }
+  const session = await verifyRoomSessionRequest(request, { roomId: room.roomId });
+  return session.ok;
+}
+
+function sanitizeRoomInvite(invite: RoomInviteRecord, inviteLink?: string): Omit<RoomInviteRecord, "tokenHash"> & { inviteLink?: string } {
+  const { tokenHash: _tokenHash, ...rest } = invite;
+  return inviteLink ? { ...rest, inviteLink } : rest;
+}
+
+function sanitizeWaitingRoomRequest(request: WaitingRoomRequestRecord): WaitingRoomRequestRecord {
+  return { ...request };
+}
+
+function parseInviteToken(input: unknown): string | null {
+  if (typeof input !== "string") {
+    return null;
+  }
+  const trimmed = input.trim();
+  return trimmed.length >= 20 && /^[A-Za-z0-9_-]+$/.test(trimmed) ? trimmed : null;
+}
+
+function writeInviteUseAudit(input: {
+  request: IncomingMessage;
+  roomId: string;
+  invite?: RoomInviteRecord;
+  result: "allowed" | "denied";
+  reason?: string;
+  participantId?: string;
+}): void {
+  writeControlPlaneAudit({
+    timestamp: new Date().toISOString(),
+    requestId: getRequestId(input.request),
+    action: "invite.use",
+    permission: "room.join",
+    object: { type: "room-invite", id: input.invite?.inviteId ?? input.roomId },
+    result: input.result,
+    reason: input.reason,
+    actor: input.participantId
+      ? {
+        actorType: "room-session",
+        actorId: input.participantId,
+        role: input.invite?.role ?? "guest",
+        roomId: input.roomId,
+        participantId: input.participantId
+      }
+      : undefined
+  });
+}
+
+type StateTokenAccessResult =
+  | { ok: true; role: RoomRole; roleSource: RoomSessionRoleSource; invite?: RoomInviteRecord }
+  | { ok: false; statusCode: 202 | 403; reason: string; accessRequestId?: string };
+
+async function resolveStateTokenAccess(
+  storage: Awaited<typeof storagePromise>,
+  request: IncomingMessage,
+  room: RoomRecord | null,
+  requestPayload: StateTokenRequest | null,
+  requested: { role: RoomRole; roleSource: RoomSessionRoleSource }
+): Promise<StateTokenAccessResult> {
+  if (!room) {
+    return { ok: true, ...requested };
+  }
+
+  const visibility = isRoomAccessPolicyEnabled() ? sanitizeRoomVisibility(room.visibility) : "public";
+  if (visibility !== "private") {
+    return { ok: true, ...requested };
+  }
+
+  const existingSession = await verifyRoomSessionRequest(request, { roomId: room.roomId, participantId: requestPayload?.participantId });
+  if (existingSession.ok) {
+    return { ok: true, role: existingSession.payload.role, roleSource: existingSession.payload.roleSource ?? "trusted" };
+  }
+
+  const participantId = requestPayload?.participantId ?? randomUUID();
+  const inviteToken = parseInviteToken(requestPayload?.inviteToken);
+  if (!inviteToken) {
+    writeInviteUseAudit({ request, roomId: room.roomId, result: "denied", reason: "invite_required", participantId });
+    return { ok: false, statusCode: 403, reason: "invite_required" };
+  }
+
+  const invite = await storage.getRoomInviteByTokenHash(hashInviteToken(inviteToken));
+  if (!invite || invite.roomId !== room.roomId) {
+    writeInviteUseAudit({ request, roomId: room.roomId, result: "denied", reason: "invite_required", participantId });
+    return { ok: false, statusCode: 403, reason: "invite_required" };
+  }
+  if (invite.revokedAt) {
+    writeInviteUseAudit({ request, roomId: room.roomId, invite, result: "denied", reason: "invite_revoked", participantId });
+    return { ok: false, statusCode: 403, reason: "invite_revoked" };
+  }
+  if (Date.parse(invite.expiresAt) <= Date.now()) {
+    writeInviteUseAudit({ request, roomId: room.roomId, invite, result: "denied", reason: "invite_expired", participantId });
+    return { ok: false, statusCode: 403, reason: "invite_expired" };
+  }
+
+  if (invite.waitingRoomEnabled) {
+    const existingRequest = await storage.getWaitingRoomRequestForInviteParticipant(invite.inviteId, participantId);
+    if (existingRequest?.status === "approved") {
+      writeInviteUseAudit({ request, roomId: room.roomId, invite, result: "allowed", participantId });
+      return { ok: true, role: invite.role, roleSource: "trusted", invite };
+    }
+    if (existingRequest?.status === "rejected") {
+      writeInviteUseAudit({ request, roomId: room.roomId, invite, result: "denied", reason: "waiting_room_rejected", participantId });
+      return { ok: false, statusCode: 403, reason: "waiting_room_rejected", accessRequestId: existingRequest.requestId };
+    }
+    const waitingRequest = existingRequest ?? await storage.createWaitingRoomRequest({
+      roomId: room.roomId,
+      inviteId: invite.inviteId,
+      participantId,
+      displayName: requestPayload?.displayName ?? participantId
+    });
+    return { ok: false, statusCode: 202, reason: "waiting_room_pending", accessRequestId: waitingRequest.requestId };
+  }
+
+  writeInviteUseAudit({ request, roomId: room.roomId, invite, result: "allowed", participantId });
+  return { ok: true, role: invite.role, roleSource: "trusted", invite };
+}
+
 function parseBody<T>(request: IncomingMessage): Promise<T | null> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
@@ -1213,6 +1398,9 @@ function validateRoomInput(input: Partial<RoomRecord>, templateIds: Set<string>,
   if (!input.tenantId || !tenantIds.has(input.tenantId)) {
     return "invalid_tenant";
   }
+  if (input.visibility !== undefined && !isRoomVisibility(input.visibility)) {
+    return "invalid_room_visibility";
+  }
   return null;
 }
 
@@ -1240,6 +1428,9 @@ function normalizeRoomPayload(input: Partial<RoomRecord> & {
       ...input.avatarConfig
     } as RoomRecord["avatarConfig"];
   }
+  normalized.visibility = input.visibility === undefined || isRoomVisibility(input.visibility)
+    ? sanitizeRoomVisibility(input.visibility, input.guestAllowed === false ? "private" : "public")
+    : input.visibility;
 
   return normalized;
 }
@@ -1323,7 +1514,7 @@ async function listRuntimeSpaces(storage: Awaited<typeof storagePromise>, roomId
 
   const rooms = (await storage.listRooms())
     .filter((room) => room.tenantId === currentRoom.tenantId)
-    .filter((room) => room.roomId === currentRoom.roomId || room.guestAllowed !== false)
+    .filter((room) => room.roomId === currentRoom.roomId || ((!isRoomAccessPolicyEnabled() || sanitizeRoomVisibility(room.visibility) === "public") && room.guestAllowed !== false))
     .map((room) => ({
       roomId: room.roomId,
       tenantId: room.tenantId,
@@ -1353,7 +1544,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   if (method === "OPTIONS") {
     response.writeHead(204, {
       "access-control-allow-origin": process.env.API_CORS_ORIGIN ?? "*",
-      "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+      "access-control-allow-methods": "GET,POST,PUT,PATCH,DELETE,OPTIONS",
       "access-control-allow-headers": "content-type,authorization,x-request-id,x-vrata-admin-token,x-vrata-internal-token,x-noah-admin-token,x-noah-internal-token",
       "x-request-id": requestId
     });
@@ -1416,6 +1607,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
         avatarSeatingEnabled: process.env.FEATURE_AVATAR_SEATING !== "false",
         avatarCustomizationEnabled: process.env.FEATURE_AVATAR_CUSTOMIZATION === "true",
         avatarFallbackCapsulesEnabled: process.env.FEATURE_AVATAR_FALLBACK_CAPSULES !== "false",
+        roomAccessPolicyEnabled: isRoomAccessPolicyEnabled(),
         postgresEnabled: Boolean(process.env.POSTGRES_URL),
         controlPlaneAuthEnabled: Boolean(getControlPlaneAdminToken())
       },
@@ -1488,7 +1680,9 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   }
 
   if (method === "GET" && url.pathname === "/api/rooms") {
-    const rooms = await storage.listRooms();
+    const actorResult = resolveControlPlaneActor(request);
+    const canListPrivate = actorResult.ok && actorResult.actor.actorType === "admin-token";
+    const rooms = (await storage.listRooms()).filter((room) => canListPrivate || !isRoomAccessPolicyEnabled() || sanitizeRoomVisibility(room.visibility) === "public");
     json(response, 200, { items: rooms.map((room) => ({ ...room, roomLink: createRoomLink(room.roomId, request) })) });
     return;
   }
@@ -1726,6 +1920,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     }>(request)) ?? {});
     const existingRoom = await storage.getRoom(roomId);
     if (!existingRoom) return json(response, 404, { error: "room_not_found" });
+    if (payload.visibility !== undefined && !isRoomVisibility(payload.visibility)) return json(response, 400, { error: "invalid_room_visibility" });
     if (payload.assetIds) {
       const assetValidationError = await validateRoomAssetIds(storage, payload.assetIds, payload.templateId ?? existingRoom.templateId);
       if (assetValidationError) return json(response, 400, { error: assetValidationError });
@@ -1733,6 +1928,103 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     const updated = await storage.updateRoom(roomId, payload);
     if (!updated) return json(response, 404, { error: "room_not_found" });
     json(response, 200, { ...updated, roomLink: createRoomLink(updated.roomId, request), manifest: await buildManifest(updated.roomId, request) });
+    return;
+  }
+
+  const roomInvitesMatch = url.pathname.match(/^\/api\/rooms\/([^/]+)\/invites$/);
+  if (roomInvitesMatch && (method === "GET" || method === "POST")) {
+    const roomId = decodeURIComponent(roomInvitesMatch[1]);
+    const actor = await requireControlPlanePermission(request, response, {
+      permission: "room.invite",
+      action: method === "POST" ? "invite.create" : "invite.list",
+      objectType: "room",
+      objectId: roomId,
+      targetRoomId: roomId,
+      allowHostOwnRoom: true
+    });
+    if (!actor) return;
+    const room = await storage.getRoom(roomId);
+    if (!room) return json(response, 404, { error: "room_not_found" });
+    if (method === "GET") {
+      json(response, 200, { items: (await storage.listRoomInvites(roomId)).map((invite) => sanitizeRoomInvite(invite)) });
+      return;
+    }
+
+    const payload = (await parseBody<{ expiresInSeconds?: number; expiresAt?: string; role?: string; waitingRoomEnabled?: boolean }>(request)) ?? {};
+    const nowMs = Date.now();
+    const expiresAtMs = payload.expiresAt
+      ? Date.parse(payload.expiresAt)
+      : nowMs + Math.max(1, Math.min(30 * 24 * 60 * 60, Math.floor(payload.expiresInSeconds ?? 3600))) * 1000;
+    if (!Number.isFinite(expiresAtMs)) return json(response, 400, { error: "invalid_invite_expiry" });
+    const token = createInviteToken();
+    const invite = await storage.createRoomInvite({
+      roomId,
+      tokenHash: hashInviteToken(token),
+      role: parseRoomRole(payload.role, "guest"),
+      waitingRoomEnabled: payload.waitingRoomEnabled === true,
+      expiresAt: new Date(expiresAtMs).toISOString(),
+      createdBy: actor.actorId
+    });
+    json(response, 201, sanitizeRoomInvite(invite, createInviteLink(roomId, token, request)));
+    return;
+  }
+
+  const roomInviteRevokeMatch = url.pathname.match(/^\/api\/rooms\/([^/]+)\/invites\/([^/]+)\/revoke$/);
+  if (method === "POST" && roomInviteRevokeMatch) {
+    const roomId = decodeURIComponent(roomInviteRevokeMatch[1]);
+    const inviteId = decodeURIComponent(roomInviteRevokeMatch[2]);
+    const actor = await requireControlPlanePermission(request, response, {
+      permission: "room.invite",
+      action: "invite.revoke",
+      objectType: "room-invite",
+      objectId: inviteId,
+      targetRoomId: roomId,
+      allowHostOwnRoom: true
+    });
+    if (!actor) return;
+    const invite = await storage.revokeRoomInvite(roomId, inviteId, new Date().toISOString(), actor.actorId);
+    if (!invite) return json(response, 404, { error: "invite_not_found" });
+    json(response, 200, sanitizeRoomInvite(invite));
+    return;
+  }
+
+  const waitingRoomMatch = url.pathname.match(/^\/api\/rooms\/([^/]+)\/waiting-room$/);
+  if (method === "GET" && waitingRoomMatch) {
+    const roomId = decodeURIComponent(waitingRoomMatch[1]);
+    const actor = await requireControlPlanePermission(request, response, {
+      permission: "room.invite",
+      action: "waiting-room.list",
+      objectType: "room",
+      objectId: roomId,
+      targetRoomId: roomId,
+      allowHostOwnRoom: true
+    });
+    if (!actor) return;
+    json(response, 200, { items: (await storage.listWaitingRoomRequests(roomId)).map(sanitizeWaitingRoomRequest) });
+    return;
+  }
+
+  const waitingRoomDecisionMatch = url.pathname.match(/^\/api\/rooms\/([^/]+)\/waiting-room\/([^/]+)\/(approve|reject)$/);
+  if (method === "POST" && waitingRoomDecisionMatch) {
+    const roomId = decodeURIComponent(waitingRoomDecisionMatch[1]);
+    const waitingRequestId = decodeURIComponent(waitingRoomDecisionMatch[2]);
+    const decision = waitingRoomDecisionMatch[3] === "approve" ? "approved" : "rejected";
+    const actor = await requireControlPlanePermission(request, response, {
+      permission: "room.invite",
+      action: `waiting-room.${waitingRoomDecisionMatch[3]}`,
+      objectType: "waiting-room-request",
+      objectId: waitingRequestId,
+      targetRoomId: roomId,
+      allowHostOwnRoom: true
+    });
+    if (!actor) return;
+    const waitingRequest = await storage.updateWaitingRoomRequest(roomId, waitingRequestId, {
+      status: decision,
+      decidedAt: new Date().toISOString(),
+      decidedBy: actor.actorId
+    });
+    if (!waitingRequest) return json(response, 404, { error: "waiting_room_request_not_found" });
+    json(response, 200, sanitizeWaitingRoomRequest(waitingRequest));
     return;
   }
 
@@ -1772,7 +2064,10 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
 
   const manifestMatch = url.pathname.match(/^\/api\/rooms\/([^/]+)\/manifest$/);
   if (method === "GET" && manifestMatch) {
-    json(response, 200, await buildManifest(decodeURIComponent(manifestMatch[1]), request));
+    const roomId = decodeURIComponent(manifestMatch[1]);
+    const room = await storage.getRoom(roomId);
+    if (room && !(await canReadRoomDetails(request, room))) return json(response, 404, { error: "room_not_found" });
+    json(response, 200, await buildManifest(roomId, request));
     return;
   }
 
@@ -1868,6 +2163,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   if (method === "GET" && roomItemMatch) {
     const room = await storage.getRoom(decodeURIComponent(roomItemMatch[1]));
     if (!room) return json(response, 404, { error: "room_not_found" });
+    if (!(await canReadRoomDetails(request, room))) return json(response, 404, { error: "room_not_found" });
     json(response, 200, { ...room, roomLink: createRoomLink(room.roomId, request), manifest: await buildManifest(room.roomId, request) });
     return;
   }
@@ -1877,10 +2173,22 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     const ttlSeconds = Number.parseInt(process.env.STATE_TOKEN_TTL_SECONDS ?? "900", 10);
     const nowSeconds = Math.floor(Date.now() / 1000);
     const roomId = requestPayload?.roomId ?? "demo-room";
-    const { role, roleSource } = resolveAccessRole(requestPayload?.requestedRole ?? requestPayload?.role);
+    const room = await storage.getRoom(roomId);
+    const requested = resolveAccessRole(requestPayload?.requestedRole ?? requestPayload?.role);
+    const accessResult = await resolveStateTokenAccess(storage, request, room, requestPayload, requested);
+    if (!accessResult.ok) {
+      incrementCounter(metrics.roomAccessDeniedTotal, accessResult.reason);
+      return json(response, accessResult.statusCode, {
+        error: "room_access_denied",
+        reason: accessResult.reason,
+        accessRequestId: accessResult.accessRequestId,
+        requestId
+      });
+    }
+    const { role, roleSource } = accessResult;
     const permissions = getRoomPermissions(role);
     const payload: RoomAccessTokenPayload = {
-      tenantId: await resolveRoomTenantId(roomId),
+      tenantId: room?.tenantId ?? await resolveRoomTenantId(roomId),
       roomId,
       participantId: requestPayload?.participantId ?? randomUUID(),
       displayName: requestPayload?.displayName ?? requestPayload?.participantId ?? "Guest",

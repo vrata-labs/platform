@@ -21,6 +21,7 @@ export interface RoomManifest {
     joinMode: "link";
     guestAllowed: boolean;
     roleQueryAllowed: boolean;
+    visibility: "public" | "unlisted" | "private";
   };
 }
 

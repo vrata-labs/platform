@@ -53,6 +53,8 @@ The M0.5 WebXR renderer gate includes `tests/e2e/m0.5/webxr-renderer-wiring.spec
 
 The public connectivity diagnostics gate is covered by `tests/e2e/runtime.spec.ts` and staging tests. It verifies stable report codes for API reachability (`api_ok` / `api_unreachable`), room-state WSS (`room_state_ws_ok` / `room_state_ws_failed`), microphone denial (`microphone_permission_denied`), LiveKit media (`media_ok`), object storage (`storage_ok` / `storage_unreachable` / `storage_skipped`), admin-detail protection (`admin_details_protected`), timeout handling (`connectivity_check_timeout`), and redacted JSON reports that can be copied into GitHub issues.
 
+The private room access gate is covered by `apps/api/src/index.test.ts` and `tests/e2e/runtime.spec.ts`. It verifies private room denial without invite, valid invite entry, expired/revoked invite denial, waiting-room approve/reject, no private manifest metadata leakage, invite audit entries, and the runtime access-denied UX.
+
 ## Cross-Device Compatibility Matrix
 
 Use this matrix for manual compatibility checks when real devices are available. Automated CI covers Chrome desktop, mobile emulation, no-WebXR fallback, and VR mock presence; hardware Quest checks remain manual until a real device lab is available.

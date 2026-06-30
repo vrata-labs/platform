@@ -35,7 +35,7 @@ import {
 } from "@vrata/shared-types";
 
 import { appendBrandingSuffix, applyRoomShellBootState, renderSceneAttributions } from "./boot-session.js";
-import { bootRuntime, fetchRuntimeSpaces, listPresence, planVoiceSession, removePresence, resolveCurrentSpace, resolveJoinMode, upsertPresence, type PresenceState, type RuntimeSpaceOption } from "./index.js";
+import { RuntimeAccessError, bootRuntime, fetchRuntimeSpaces, listPresence, planVoiceSession, removePresence, resolveCurrentSpace, resolveJoinMode, upsertPresence, type PresenceState, type RuntimeSpaceOption } from "./index.js";
 import { formatClientCompatibilityStatus, resolveClientCompatibility, type ClientCompatibilitySummary } from "./client-capabilities.js";
 import { createMotionTrack, pushMotionSample, sampleMotion, type MotionTrack } from "./motion-state.js";
 import { mergePresenceSources } from "./presence-sources.js";
@@ -7234,7 +7234,8 @@ async function main(): Promise<void> {
   const boot = await bootRuntime(apiBaseUrl, roomId, navigator.userAgent, {
     participantId,
     displayName,
-    requestedRole: query.get("role")
+    requestedRole: query.get("role"),
+    inviteToken: query.get("invite")
   });
   spatialAudioServerEnabled = boot.envFlags.spatialAudio;
   spatialAudioRoomEnabled = boot.spatialAudioEnabled;
@@ -7526,8 +7527,37 @@ async function main(): Promise<void> {
   runtimeBootReady = true;
 }
 
+function describeRoomAccessError(error: RuntimeAccessError): string {
+  switch (error.reason) {
+    case "invite_expired":
+      return "Ссылка истекла";
+    case "invite_revoked":
+      return "Ссылка отозвана";
+    case "waiting_room_pending":
+      return "Waiting for host approval";
+    case "waiting_room_rejected":
+      return "Access denied: host rejected the request";
+    case "invite_required":
+      return "Access denied: private invite required";
+    default:
+      return "Access denied";
+  }
+}
+
 void main().catch((error: unknown) => {
   console.error(error);
+  if (error instanceof RuntimeAccessError) {
+    const message = describeRoomAccessError(error);
+    setStatus(message);
+    guestAccessLineEl.textContent = error.accessRequestId
+      ? `${message}. Request: ${error.accessRequestId}`
+      : message;
+    debugState.issueCode = "room_access_denied";
+    debugState.issueSeverity = error.status === 202 ? "warn" : "error";
+    debugState.degradedMode = "access_denied";
+    debugState.lastRecoveryAction = error.requestId ? `access_request:${error.requestId}` : "access_denied";
+    return;
+  }
   setStatus("Runtime failed to boot");
   void reportDiagnostics("runtime_boot_failed");
 });

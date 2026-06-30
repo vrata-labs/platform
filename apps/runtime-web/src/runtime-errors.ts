@@ -7,6 +7,7 @@ export type RuntimeIssueCode =
   | "screen_share_denied"
   | "screen_share_unsupported"
   | "room_state_failed"
+  | "room_access_denied"
   | "xr_unavailable"
   | "xr_enter_failed"
   | "runtime_unhandled_error";
@@ -96,6 +97,15 @@ function createRuntimeIssueMap(): Record<RuntimeIssueCode, RuntimeIssue> {
       userMessage: "Realtime sync unavailable; using API fallback",
       diagnosticsNote: "room_state_failed",
       suggestedAction: "Keep room open while realtime reconnects"
+    },
+    room_access_denied: {
+      code: "room_access_denied",
+      recoverable: false,
+      retryable: false,
+      severity: "warn",
+      userMessage: "Room access denied",
+      diagnosticsNote: "room_access_denied",
+      suggestedAction: "Use a valid invite link or ask the host for approval"
     },
     xr_unavailable: {
       code: "xr_unavailable",

@@ -23,6 +23,11 @@
           <label><input id="feature-voice-input" type="checkbox" checked /> Voice</label>
           <label><input id="feature-spatial-input" type="checkbox" checked /> Spatial audio</label>
           <label><input id="feature-share-input" type="checkbox" checked /> Screen share</label>
+          <label>Visibility <select id="room-visibility-select">
+            <option value="public">public</option>
+            <option value="unlisted">unlisted</option>
+            <option value="private">private</option>
+          </select></label>
           <label><input id="guest-access-input" type="checkbox" checked /> Guest access</label>
           <label><input id="avatar-enabled-input" type="checkbox" /> Avatars enabled</label>
           <label>Avatar catalog URL <input id="avatar-catalog-url-input" value="/assets/avatars/catalog.v1.json" /></label>
@@ -40,6 +45,16 @@
           <button id="mark-scene-bundle-obsolete" type="button">Mark version obsolete</button>
           <button id="delete-room" type="button">Delete selected room</button>
         </form>
+        <section class="subpanel">
+          <h2>Invites</h2>
+          <label>Invite TTL seconds <input id="invite-ttl-input" type="number" min="1" value="3600" /></label>
+          <label><input id="invite-waiting-room-input" type="checkbox" /> Waiting room</label>
+          <button id="create-invite" type="button">Create invite</button>
+          <label>Room invites <select id="invite-select"></select></label>
+          <button id="revoke-invite" type="button">Revoke selected invite</button>
+          <a id="invite-link" target="_blank" rel="noreferrer"></a>
+          <ul id="waiting-room-list"></ul>
+        </section>
         <form id="scene-bundle-form">
           <label>Bundle id <input id="scene-bundle-id-input" value="sense-demo" /></label>
           <label>Version <input id="scene-bundle-version-input" value="v1" /></label>

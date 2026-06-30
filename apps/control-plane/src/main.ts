@@ -4,6 +4,8 @@ import {
   createTenant,
   createControlPlanePageState,
   createRoom,
+  createRoomInvite,
+  decideWaitingRoomRequest,
   deleteAsset,
   deleteTenant,
   deleteRoom,
@@ -11,8 +13,10 @@ import {
   fetchRoomManifest,
   fetchTemplates,
   listAssets,
+  listRoomInvites,
   listSceneBundleVersions,
   listSceneBundles,
+  listWaitingRoomRequests,
   setCurrentSceneBundleVersion,
   listRooms,
   listTenants,
@@ -20,7 +24,8 @@ import {
   updateAsset,
   updateTenant,
   updateRoom,
-  uploadAsset
+  uploadAsset,
+  revokeRoomInvite
 } from "./index.js";
 
 function mustElement<T extends Element>(selector: string): T {
@@ -63,7 +68,15 @@ const accentColorInput = mustElement<HTMLInputElement>("#accent-color-input");
 const featureVoiceInput = mustElement<HTMLInputElement>("#feature-voice-input");
 const featureSpatialInput = mustElement<HTMLInputElement>("#feature-spatial-input");
 const featureShareInput = mustElement<HTMLInputElement>("#feature-share-input");
+const roomVisibilitySelect = mustElement<HTMLSelectElement>("#room-visibility-select");
 const guestAccessInput = mustElement<HTMLInputElement>("#guest-access-input");
+const inviteTtlInput = mustElement<HTMLInputElement>("#invite-ttl-input");
+const inviteWaitingRoomInput = mustElement<HTMLInputElement>("#invite-waiting-room-input");
+const createInviteButton = mustElement<HTMLButtonElement>("#create-invite");
+const inviteSelect = mustElement<HTMLSelectElement>("#invite-select");
+const revokeInviteButton = mustElement<HTMLButtonElement>("#revoke-invite");
+const inviteLink = mustElement<HTMLAnchorElement>("#invite-link");
+const waitingRoomList = mustElement<HTMLUListElement>("#waiting-room-list");
 const avatarEnabledInput = mustElement<HTMLInputElement>("#avatar-enabled-input");
 const avatarCatalogUrlInput = mustElement<HTMLInputElement>("#avatar-catalog-url-input");
 const avatarQualitySelect = mustElement<HTMLSelectElement>("#avatar-quality-select");
@@ -102,7 +115,7 @@ function render(): void {
       const item = document.createElement("li");
       const inspect = document.createElement("button");
       inspect.type = "button";
-      inspect.textContent = `${room.name} (${room.templateId})${room.assetIds?.length ? ` assets:${room.assetIds.length}` : ""}${room.theme ? ` theme:${room.theme.primaryColor}` : ""}`;
+      inspect.textContent = `${room.name} (${room.templateId}) [${room.visibility ?? "public"}]${room.assetIds?.length ? ` assets:${room.assetIds.length}` : ""}${room.theme ? ` theme:${room.theme.primaryColor}` : ""}`;
       inspect.addEventListener("click", () => {
         void selectRoom(room);
       });
@@ -122,9 +135,49 @@ function render(): void {
         room: state.selectedRoom,
         selectedSceneBundle: state.selectedSceneBundle,
         manifest: state.selectedRoomManifest,
+        invites: state.selectedRoomInvites,
+        waitingRoom: state.selectedWaitingRoomRequests,
         diagnostics: state.selectedRoomDiagnostics.slice(-5)
       }, null, 2)
     : "Select a room to inspect details";
+  inviteSelect.replaceChildren(
+    ...state.selectedRoomInvites.map((invite) => {
+      const option = document.createElement("option");
+      option.value = invite.inviteId;
+      option.textContent = `${invite.inviteId.slice(0, 8)} expires:${invite.expiresAt}${invite.revokedAt ? " [revoked]" : ""}${invite.waitingRoomEnabled ? " [waiting]" : ""}`;
+      return option;
+    })
+  );
+  const selectedInvite = state.selectedRoomInvites.find((invite) => invite.inviteId === inviteSelect.value) ?? state.selectedRoomInvites[0];
+  inviteLink.href = selectedInvite?.inviteLink ?? "#";
+  inviteLink.textContent = selectedInvite?.inviteLink ?? "";
+  waitingRoomList.replaceChildren(
+    ...state.selectedWaitingRoomRequests.map((request) => {
+      const item = document.createElement("li");
+      const label = document.createElement("span");
+      label.textContent = `${request.displayName} (${request.participantId}) ${request.status}`;
+      item.appendChild(label);
+      if (request.status === "pending" && state.selectedRoom) {
+        const approve = document.createElement("button");
+        approve.type = "button";
+        approve.textContent = "approve";
+        approve.addEventListener("click", () => {
+          void decideSelectedWaitingRequest(request.requestId, "approve");
+        });
+        const reject = document.createElement("button");
+        reject.type = "button";
+        reject.textContent = "reject";
+        reject.addEventListener("click", () => {
+          void decideSelectedWaitingRequest(request.requestId, "reject");
+        });
+        item.appendChild(document.createTextNode(" "));
+        item.appendChild(approve);
+        item.appendChild(document.createTextNode(" "));
+        item.appendChild(reject);
+      }
+      return item;
+    })
+  );
   tenantsList.replaceChildren(
     ...state.tenants.map((tenant) => {
       const item = document.createElement("li");
@@ -166,8 +219,10 @@ async function selectRoom(room: typeof state.selectedRoom): Promise<void> {
     return;
   }
   state.selectedRoom = room;
-  state.selectedRoomManifest = await fetchRoomManifest(apiBaseUrl, room.roomId);
+  state.selectedRoomManifest = await fetchRoomManifest(apiBaseUrl, room.roomId, currentAuth());
   state.selectedRoomDiagnostics = await fetchRoomDiagnostics(apiBaseUrl, room.roomId, currentAuth());
+  state.selectedRoomInvites = await listRoomInvites(apiBaseUrl, room.roomId, currentAuth()).catch(() => []);
+  state.selectedWaitingRoomRequests = await listWaitingRoomRequests(apiBaseUrl, room.roomId, currentAuth()).catch(() => []);
   state.selectedSceneBundle = state.sceneBundles.find((bundle) => bundle.publicUrl === state.selectedRoomManifest?.sceneBundle?.url);
   state.sceneBundleVersions = state.selectedSceneBundle ? await listSceneBundleVersions(apiBaseUrl, state.selectedSceneBundle.bundleId).catch(() => []) : [];
   roomNameInput.value = room.name;
@@ -177,6 +232,7 @@ async function selectRoom(room: typeof state.selectedRoom): Promise<void> {
   featureVoiceInput.checked = room.features?.voice ?? true;
   featureSpatialInput.checked = room.features?.spatialAudio ?? true;
   featureShareInput.checked = room.features?.screenShare ?? true;
+  roomVisibilitySelect.value = room.visibility ?? state.selectedRoomManifest?.access.visibility ?? "public";
   guestAccessInput.checked = room.guestAllowed ?? state.selectedRoomManifest?.access.guestAllowed ?? true;
   avatarEnabledInput.checked = room.avatarConfig?.avatarsEnabled ?? state.selectedRoomManifest?.avatars?.avatarsEnabled ?? false;
   avatarCatalogUrlInput.value = room.avatarConfig?.avatarCatalogUrl ?? state.selectedRoomManifest?.avatars?.avatarCatalogUrl ?? "/assets/avatars/catalog.v1.json";
@@ -216,6 +272,34 @@ function startSelectedRoomPolling(): void {
     }
     void selectRoom(state.selectedRoom);
   }, 5000);
+}
+
+async function refreshSelectedRoomAccessState(): Promise<void> {
+  if (!state.selectedRoom) {
+    return;
+  }
+  state.selectedRoomInvites = await listRoomInvites(apiBaseUrl, state.selectedRoom.roomId, currentAuth()).catch(() => []);
+  state.selectedWaitingRoomRequests = await listWaitingRoomRequests(apiBaseUrl, state.selectedRoom.roomId, currentAuth()).catch(() => []);
+  render();
+}
+
+async function decideSelectedWaitingRequest(requestId: string, decision: "approve" | "reject"): Promise<void> {
+  if (!state.selectedRoom) {
+    return;
+  }
+  state.publishStatus = "publishing";
+  state.statusMessage = `waiting-room-${decision}`;
+  render();
+  try {
+    await decideWaitingRoomRequest(apiBaseUrl, state.selectedRoom.roomId, requestId, decision, currentAuth());
+    state.publishStatus = "published";
+    state.statusMessage = `waiting-room-${decision}ed`;
+    await refreshSelectedRoomAccessState();
+  } catch (error) {
+    state.publishStatus = "failed";
+    state.statusMessage = error instanceof Error ? `failed:${error.message}` : "failed";
+    render();
+  }
 }
 
 function currentAuth(): { adminToken?: string } {
@@ -268,7 +352,7 @@ function renderTenantOptions(): void {
 async function bootstrap(): Promise<void> {
   state.templates = await fetchTemplates(apiBaseUrl);
   state.tenants = await listTenants(apiBaseUrl);
-  state.rooms = await listRooms(apiBaseUrl);
+  state.rooms = await listRooms(apiBaseUrl, currentAuth());
   state.sceneBundles = await listSceneBundles(apiBaseUrl).catch(() => []);
   state.assets = await listAssets(apiBaseUrl);
   renderTenantOptions();
@@ -364,6 +448,7 @@ form.addEventListener("submit", (event) => {
     templateId: templateSelect.value,
     name: roomNameInput.value,
     assetIds: Array.from(assetSelect.selectedOptions).map((option) => option.value),
+    visibility: roomVisibilitySelect.value as "public" | "unlisted" | "private",
     guestAllowed: guestAccessInput.checked,
     avatarConfig: collectAvatarConfig(),
     theme: {
@@ -570,6 +655,52 @@ refreshRoomDetailButton.addEventListener("click", () => {
   void selectRoom(state.selectedRoom);
 });
 
+createInviteButton.addEventListener("click", () => {
+  if (!state.selectedRoom) {
+    return;
+  }
+  state.publishStatus = "publishing";
+  state.statusMessage = "creating-invite";
+  render();
+  void createRoomInvite(apiBaseUrl, state.selectedRoom.roomId, {
+    expiresInSeconds: Number.parseInt(inviteTtlInput.value, 10) || 3600,
+    waitingRoomEnabled: inviteWaitingRoomInput.checked
+  }, currentAuth())
+    .then(async (invite) => {
+      state.publishStatus = "published";
+      state.statusMessage = "invite-created";
+      state.selectedRoomInvites = [invite, ...state.selectedRoomInvites.filter((item) => item.inviteId !== invite.inviteId)];
+      inviteLink.href = invite.inviteLink ?? "#";
+      inviteLink.textContent = invite.inviteLink ?? "";
+      render();
+    })
+    .catch((error: unknown) => {
+      state.publishStatus = "failed";
+      state.statusMessage = error instanceof Error ? `failed:${error.message}` : "failed";
+      render();
+    });
+});
+
+revokeInviteButton.addEventListener("click", () => {
+  if (!state.selectedRoom || !inviteSelect.value) {
+    return;
+  }
+  state.publishStatus = "publishing";
+  state.statusMessage = "revoking-invite";
+  render();
+  void revokeRoomInvite(apiBaseUrl, state.selectedRoom.roomId, inviteSelect.value, currentAuth())
+    .then(async () => {
+      state.publishStatus = "published";
+      state.statusMessage = "invite-revoked";
+      await refreshSelectedRoomAccessState();
+    })
+    .catch((error: unknown) => {
+      state.publishStatus = "failed";
+      state.statusMessage = error instanceof Error ? `failed:${error.message}` : "failed";
+      render();
+    });
+});
+
 bindSceneBundleButton.addEventListener("click", () => {
   if (!state.selectedRoom || !sceneBundleSelect.value) {
     return;
@@ -669,6 +800,8 @@ deleteRoomButton.addEventListener("click", () => {
       state.selectedRoom = undefined;
       state.selectedRoomManifest = undefined;
       state.selectedRoomDiagnostics = [];
+      state.selectedRoomInvites = [];
+      state.selectedWaitingRoomRequests = [];
       render();
     })
     .catch(() => {
@@ -689,6 +822,7 @@ updateRoomButton.addEventListener("click", () => {
     name: roomNameInput.value,
     templateId: templateSelect.value,
     assetIds: Array.from(assetSelect.selectedOptions).map((option) => option.value),
+    visibility: roomVisibilitySelect.value as "public" | "unlisted" | "private",
     guestAllowed: guestAccessInput.checked,
     avatarConfig: collectAvatarConfig(),
     theme: {
