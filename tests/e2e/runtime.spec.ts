@@ -2140,6 +2140,16 @@ test("fault-injected room-state failure falls back to API mode", async ({ page, 
 });
 
 test("public diagnostics page creates a redacted success report without media prompts", async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText: async (text: string) => {
+          (window as Window & { __VRATA_COPIED_DIAGNOSTICS__?: string }).__VRATA_COPIED_DIAGNOSTICS__ = text;
+        }
+      }
+    });
+  });
   await page.goto("/diagnostics?roomId=demo-room&autorun=1&skipMic=1&skipMedia=1&timeoutMs=3000");
 
   await expect.poll(async () => {
@@ -2159,6 +2169,59 @@ test("public diagnostics page creates a redacted success report without media pr
   expect(reportText).toContain('"media_skipped"');
   expect(reportText).toContain("accessToken=[redacted]");
   expect(reportText).not.toMatch(/Bearer\s+[A-Za-z0-9._-]+/);
+
+  await expect(page.locator("#diagnostics-copy-status")).toContainText("ready");
+  await page.locator("#diagnostics-copy").click();
+  await expect(page.locator("#diagnostics-copy-status")).toContainText("copied");
+  const copiedText = await page.evaluate(() => (window as Window & { __VRATA_COPIED_DIAGNOSTICS__?: string }).__VRATA_COPIED_DIAGNOSTICS__ ?? "");
+  expect(copiedText).toContain('"api_ok"');
+  expect(copiedText).toContain("accessToken=[redacted]");
+  expect(copiedText).not.toMatch(/Bearer\s+[A-Za-z0-9._-]+/);
+});
+
+test("public diagnostics page reports unreachable API with stable code", async ({ page }) => {
+  await page.goto("/diagnostics?roomId=demo-room&autorun=1&skipMic=1&skipMedia=1&apiBaseUrl=http://127.0.0.1:9&timeoutMs=1000");
+
+  await expect.poll(async () => {
+    return await page.evaluate(() => {
+      const report = (window as Window & {
+        __VRATA_CONNECTIVITY_DIAGNOSTICS__?: { checks?: Array<{ code: string; status: string; name: string }> };
+      }).__VRATA_CONNECTIVITY_DIAGNOSTICS__;
+      return report?.checks?.find((check) => check.name === "api") ?? null;
+    });
+  }, {
+    timeout: 12000,
+    intervals: [500, 1000, 2000]
+  }).toMatchObject({ status: "failed", code: "api_unreachable" });
+});
+
+test("public diagnostics page reports denied microphone permission", async ({ page }) => {
+  await page.addInitScript(() => {
+    const mediaDevices = navigator.mediaDevices;
+    Object.defineProperty(navigator, "mediaDevices", {
+      configurable: true,
+      value: {
+        enumerateDevices: mediaDevices?.enumerateDevices?.bind(mediaDevices) ?? (async () => []),
+        getDisplayMedia: mediaDevices?.getDisplayMedia?.bind(mediaDevices),
+        getUserMedia: async () => {
+          throw new DOMException("Microphone blocked by test", "NotAllowedError");
+        }
+      }
+    });
+  });
+  await page.goto("/diagnostics?roomId=demo-room&autorun=1&skipMedia=1&timeoutMs=3000");
+
+  await expect.poll(async () => {
+    return await page.evaluate(() => {
+      const report = (window as Window & {
+        __VRATA_CONNECTIVITY_DIAGNOSTICS__?: { checks?: Array<{ code: string; status: string; name: string }> };
+      }).__VRATA_CONNECTIVITY_DIAGNOSTICS__;
+      return report?.checks?.find((check) => check.name === "microphone") ?? null;
+    });
+  }, {
+    timeout: 12000,
+    intervals: [500, 1000, 2000]
+  }).toMatchObject({ status: "failed", code: "microphone_permission_denied" });
 });
 
 test("public diagnostics page reports blocked room-state WebSocket", async ({ page }) => {

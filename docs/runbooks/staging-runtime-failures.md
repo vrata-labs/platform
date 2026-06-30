@@ -31,9 +31,12 @@ This runbook explains how to diagnose and mitigate room runtime failures in `dev
 - `status-line` in the room UI
 - `room-state-line` in the room UI
 - `window.__VRATA_DEBUG__`
+- public connectivity report from `/diagnostics?roomId=<roomId>`
 - `POST /api/rooms/:roomId/diagnostics` records
 - JSON logs from `apps/api`
 - JSON logs from `apps/room-state`
+
+Public report codes are stable for support triage: `api_unreachable`, `room_state_ws_failed`, `microphone_permission_denied`, `media_ok`, `storage_unreachable`, and `connectivity_check_timeout`. The public report is redacted for GitHub issues; if copy fails in the browser, select the `Redacted JSON report` textarea manually.
 
 ## Debug fields to inspect
 

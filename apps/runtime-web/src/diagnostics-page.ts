@@ -16,6 +16,7 @@ const copyButton = mustElement<HTMLButtonElement>("#diagnostics-copy");
 const summaryEl = mustElement<HTMLElement>("#diagnostics-summary");
 const resultsEl = mustElement<HTMLElement>("#diagnostics-results");
 const jsonEl = mustElement<HTMLTextAreaElement>("#diagnostics-json");
+const copyStatusEl = mustElement<HTMLElement>("#diagnostics-copy-status");
 
 roomIdInput.value = query.get("roomId") || query.get("room") || "demo-room";
 
@@ -50,7 +51,27 @@ function renderReport(report: PublicConnectivityReport): void {
   summaryEl.textContent = `OK ${report.summary.ok} / Failed ${report.summary.failed} / Skipped ${report.summary.skipped}`;
   jsonEl.value = JSON.stringify(report, null, 2);
   copyButton.disabled = false;
+  copyStatusEl.textContent = "Redacted JSON report ready for GitHub issues.";
   (window as Window & { __VRATA_CONNECTIVITY_DIAGNOSTICS__?: PublicConnectivityReport }).__VRATA_CONNECTIVITY_DIAGNOSTICS__ = report;
+}
+
+async function copyDiagnosticsReport(): Promise<void> {
+  if (!jsonEl.value) {
+    copyStatusEl.textContent = "Run checks before copying the report.";
+    return;
+  }
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(jsonEl.value);
+    } else {
+      jsonEl.select();
+      document.execCommand("copy");
+      jsonEl.blur();
+    }
+    copyStatusEl.textContent = "Redacted JSON report copied.";
+  } catch (_error: unknown) {
+    copyStatusEl.textContent = "Copy failed; select the redacted JSON report manually.";
+  }
 }
 
 async function runDiagnostics(): Promise<void> {
@@ -59,6 +80,7 @@ async function runDiagnostics(): Promise<void> {
   copyButton.disabled = true;
   runButton.disabled = true;
   summaryEl.textContent = "Running checks...";
+  copyStatusEl.textContent = "Report pending.";
   try {
     const report = await runPublicConnectivityDiagnostics({
       apiBaseUrl: query.get("apiBaseUrl") || window.location.origin,
@@ -83,7 +105,7 @@ runButton.addEventListener("click", () => {
 });
 
 copyButton.addEventListener("click", () => {
-  void navigator.clipboard?.writeText(jsonEl.value);
+  void copyDiagnosticsReport();
 });
 
 if (query.get("autorun") === "1") {

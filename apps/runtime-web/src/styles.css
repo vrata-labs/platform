@@ -365,9 +365,14 @@ body.diagnostics-body {
 }
 
 .diagnostics-actions label,
+.diagnostics-copy-status,
 .diagnostics-report-label {
   color: var(--muted);
   font-size: 0.84rem;
+}
+
+.diagnostics-copy-status {
+  min-height: 1.2em;
 }
 
 #diagnostics-room-id,
