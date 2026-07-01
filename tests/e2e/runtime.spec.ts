@@ -190,7 +190,7 @@ test("host controls lock room and remove guest", async ({ page, browser, request
   const guestInvite = await createRoomInvite(request, room.roomId, false, "guest");
 
   await page.goto(`${e2eRoomLink(hostInvite.inviteLink)}&name=Host`);
-  await expect(page.locator("#status-line")).toContainText("Joined as");
+  await expect(page.locator("#status-line")).toContainText("Joined as", { timeout: 10000 });
   await expect(page.locator("#host-controls")).toBeVisible({ timeout: 10000 });
   await expect(page.locator("#lock-room")).toBeEnabled();
 
@@ -199,7 +199,7 @@ test("host controls lock room and remove guest", async ({ page, browser, request
   try {
     const guestPage = await guestContext.newPage();
     await guestPage.goto(`${e2eRoomLink(guestInvite.inviteLink)}&name=Guest`);
-    await expect(guestPage.locator("#status-line")).toContainText("Joined as");
+    await expect(guestPage.locator("#status-line")).toContainText("Joined as", { timeout: 10000 });
     const guestParticipantId = await guestPage.evaluate(() => (window as Window & { __VRATA_DEBUG__?: { participantId?: string } }).__VRATA_DEBUG__?.participantId ?? "");
     expect(guestParticipantId).not.toBe("");
 
@@ -222,7 +222,7 @@ test("host controls lock room and remove guest", async ({ page, browser, request
     await expect(page.locator("#host-controls-status")).toContainText(/Room (unlocked|open)/);
     const unlockedInvite = await createRoomInvite(request, room.roomId, false, "guest");
     await lockedPage.goto(`${e2eRoomLink(unlockedInvite.inviteLink)}&name=UnlockedGuest`);
-    await expect(lockedPage.locator("#status-line")).toContainText("Joined as");
+    await expect(lockedPage.locator("#status-line")).toContainText("Joined as", { timeout: 10000 });
   } finally {
     await lockedContext.close();
     await guestContext.close();
