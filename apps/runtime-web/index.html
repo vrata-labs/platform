@@ -49,6 +49,23 @@
             <button id="start-share" disabled>Start Share</button>
             <button id="stop-share" disabled>Stop Share</button>
           </div>
+          <div id="host-controls" class="host-controls-panel" hidden>
+            <div class="host-controls-title">Host Controls</div>
+            <div id="host-controls-status" class="audio-device-status">Host controls idle</div>
+            <div class="controls compact-controls">
+              <button id="lock-room" disabled>Lock Room</button>
+              <button id="unlock-room" disabled>Unlock Room</button>
+              <button id="end-session" disabled>End Session</button>
+            </div>
+            <label for="host-participant-select">Participant</label>
+            <select id="host-participant-select" disabled>
+              <option value="">No participants</option>
+            </select>
+            <div class="controls compact-controls">
+              <button id="remove-participant" disabled>Remove</button>
+              <button id="transfer-host" disabled>Transfer Host</button>
+            </div>
+          </div>
           <div id="remote-browser-control" class="remote-browser-panel" hidden>
             <label for="remote-browser-url">Remote Browser URL</label>
             <div class="remote-browser-row">

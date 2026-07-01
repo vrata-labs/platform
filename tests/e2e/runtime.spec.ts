@@ -63,14 +63,15 @@ async function createPrivateRoom(request: APIRequestContext, name: string): Prom
   return (await createRoomResponse.json()) as { roomId: string; roomLink: string };
 }
 
-async function createRoomInvite(request: APIRequestContext, roomId: string, waitingRoomEnabled = false): Promise<{ inviteLink: string }> {
+async function createRoomInvite(request: APIRequestContext, roomId: string, waitingRoomEnabled = false, role: "guest" | "member" | "host" | "admin" = "guest"): Promise<{ inviteLink: string }> {
   const inviteResponse = await request.post(`/api/rooms/${roomId}/invites`, {
     headers: {
       "x-vrata-admin-token": e2eAdminToken
     },
     data: {
       expiresInSeconds: 300,
-      waitingRoomEnabled
+      waitingRoomEnabled,
+      role
     }
   });
   expect(inviteResponse.ok()).toBeTruthy();
@@ -181,6 +182,51 @@ test("private room opens only through a valid invite link", async ({ page, reque
   await page.goto(e2eRoomLink(invite.inviteLink));
   await expect(page.locator("#status-line")).toContainText("Joined as");
   await expect(page.locator("#guest-access-line")).toContainText("Guest access: members only");
+});
+
+test("host controls lock room and remove guest", async ({ page, browser, request }) => {
+  const room = await createPrivateRoom(request, `Host Controls E2E ${Date.now()}`);
+  const hostInvite = await createRoomInvite(request, room.roomId, false, "host");
+  const guestInvite = await createRoomInvite(request, room.roomId, false, "guest");
+
+  await page.goto(`${e2eRoomLink(hostInvite.inviteLink)}&name=Host`);
+  await expect(page.locator("#status-line")).toContainText("Joined as");
+  await expect(page.locator("#host-controls")).toBeVisible({ timeout: 10000 });
+  await expect(page.locator("#lock-room")).toBeEnabled();
+
+  const guestContext = await browser.newContext();
+  const lockedContext = await browser.newContext();
+  try {
+    const guestPage = await guestContext.newPage();
+    await guestPage.goto(`${e2eRoomLink(guestInvite.inviteLink)}&name=Guest`);
+    await expect(guestPage.locator("#status-line")).toContainText("Joined as");
+    const guestParticipantId = await guestPage.evaluate(() => (window as Window & { __VRATA_DEBUG__?: { participantId?: string } }).__VRATA_DEBUG__?.participantId ?? "");
+    expect(guestParticipantId).not.toBe("");
+
+    await expect.poll(async () => page.locator("#host-participant-select").evaluate((select) => Array.from((select as HTMLSelectElement).options).map((option) => option.value)), {
+      timeout: 10000,
+      intervals: [500, 1000]
+    }).toContain(guestParticipantId);
+    await page.locator("#host-participant-select").selectOption(guestParticipantId);
+    await page.locator("#remove-participant").click();
+    await expect(guestPage.locator("#status-line")).toContainText("Access denied: removed by host", { timeout: 10000 });
+
+    await page.locator("#lock-room").click();
+    await expect(page.locator("#host-controls-status")).toContainText("Room locked");
+    const lockedInvite = await createRoomInvite(request, room.roomId, false, "guest");
+    const lockedPage = await lockedContext.newPage();
+    await lockedPage.goto(`${e2eRoomLink(lockedInvite.inviteLink)}&name=LockedGuest`);
+    await expect(lockedPage.locator("#status-line")).toContainText("Access denied: room is locked");
+
+    await page.locator("#unlock-room").click();
+    await expect(page.locator("#host-controls-status")).toContainText(/Room (unlocked|open)/);
+    const unlockedInvite = await createRoomInvite(request, room.roomId, false, "guest");
+    await lockedPage.goto(`${e2eRoomLink(unlockedInvite.inviteLink)}&name=UnlockedGuest`);
+    await expect(lockedPage.locator("#status-line")).toContainText("Joined as");
+  } finally {
+    await lockedContext.close();
+    await guestContext.close();
+  }
 });
 
 test("mobile room HUD can collapse and scroll without covering the scene", async ({ page }) => {

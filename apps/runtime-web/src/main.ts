@@ -35,7 +35,7 @@ import {
 } from "@vrata/shared-types";
 
 import { appendBrandingSuffix, applyRoomShellBootState, renderSceneAttributions } from "./boot-session.js";
-import { RuntimeAccessError, bootRuntime, fetchRuntimeSpaces, listPresence, planVoiceSession, removePresence, resolveCurrentSpace, resolveJoinMode, upsertPresence, type PresenceState, type RuntimeSpaceOption } from "./index.js";
+import { RuntimeAccessError, bootRuntime, fetchRoomSessionControl, fetchRuntimeSpaces, listPresence, planVoiceSession, removePresence, removeRoomParticipant, resolveCurrentSpace, resolveJoinMode, runRoomSessionControlAction, transferRoomHost, upsertPresence, type PresenceState, type RuntimeSessionControlResponse, type RuntimeSpaceOption } from "./index.js";
 import { formatClientCompatibilityStatus, resolveClientCompatibility, type ClientCompatibilitySummary } from "./client-capabilities.js";
 import { createMotionTrack, pushMotionSample, sampleMotion, type MotionTrack } from "./motion-state.js";
 import { mergePresenceSources } from "./presence-sources.js";
@@ -269,6 +269,14 @@ const clearWhiteboardButton = mustElement<HTMLButtonElement>("#clear-whiteboard"
 const stopWhiteboardButton = mustElement<HTMLButtonElement>("#stop-whiteboard");
 const startShareButton = mustElement<HTMLButtonElement>("#start-share");
 const stopShareButton = mustElement<HTMLButtonElement>("#stop-share");
+const hostControlsEl = mustElement<HTMLDivElement>("#host-controls");
+const hostControlsStatusEl = mustElement<HTMLDivElement>("#host-controls-status");
+const lockRoomButton = mustElement<HTMLButtonElement>("#lock-room");
+const unlockRoomButton = mustElement<HTMLButtonElement>("#unlock-room");
+const endSessionButton = mustElement<HTMLButtonElement>("#end-session");
+const hostParticipantSelect = mustElement<HTMLSelectElement>("#host-participant-select");
+const removeParticipantButton = mustElement<HTMLButtonElement>("#remove-participant");
+const transferHostButton = mustElement<HTMLButtonElement>("#transfer-host");
 const remoteBrowserControlEl = mustElement<HTMLDivElement>("#remote-browser-control");
 const remoteBrowserUrlInput = mustElement<HTMLInputElement>("#remote-browser-url");
 const openRemoteBrowserButton = mustElement<HTMLButtonElement>("#open-remote-browser");
@@ -498,6 +506,7 @@ const bodyGeometry = new THREE.CapsuleGeometry(0.24, 0.8, 6, 12);
 const headGeometry = new THREE.SphereGeometry(0.18, 20, 20);
 const API_PRESENCE_SYNC_INTERVAL_MS = 1000;
 const API_PRESENCE_REFRESH_INTERVAL_MS = 1000;
+const SESSION_CONTROL_REFRESH_INTERVAL_MS = 1000;
 const XR_REMOTE_BROWSER_SCROLL_AXIS_THRESHOLD = 0.22;
 const XR_REMOTE_BROWSER_SCROLL_INTERVAL_MS = 80;
 const XR_REMOTE_BROWSER_SCROLL_DELTA_PX = 360;
@@ -855,6 +864,7 @@ let runtimeFlags = {
   remoteDiagnostics: true,
   sceneBundles: true,
   spatialAudio: true,
+  hostControlsEnabled: true,
   ...createInitialAvatarRuntimeFlags(),
   avatarFallbackCapsulesEnabled: true
 };
@@ -887,6 +897,11 @@ let xrSessionDebug = createXrRendererWiringDebug({
 });
 let effectiveCleanSceneMode = requestedCleanSceneMode;
 let availableSpaces: RuntimeSpaceOption[] = [];
+let latestSessionControl: RuntimeSessionControlResponse["state"] | null = null;
+let hostControlActionInFlight = false;
+let sessionControlRefreshInFlight = false;
+let lastSessionControlRefreshAtMs = 0;
+let sessionControlBlocked = false;
 const remoteAvatarRuntime = createRemoteAvatarRuntime({
   scene,
   bodyGeometry,
@@ -1075,6 +1090,156 @@ function applySnapshotParticipants(people: PresenceState[]): void {
 
 function applyMergedPresenceParticipants(): void {
   applySnapshotParticipants(mergePresenceSources(latestRealtimeParticipants, latestFallbackParticipants));
+  renderHostControls();
+}
+
+function canManageHostControls(): boolean {
+  return runtimeFlags.hostControlsEnabled && debugState.access.canManageRoomSession === true;
+}
+
+function currentVisibleParticipants(): PresenceState[] {
+  return mergePresenceSources(latestRealtimeParticipants, latestFallbackParticipants)
+    .sort((left, right) => (left.displayName || left.participantId).localeCompare(right.displayName || right.participantId));
+}
+
+function renderHostControls(statusMessage?: string): void {
+  const visible = canManageHostControls() && latestSessionControl?.endedAt == null;
+  hostControlsEl.hidden = !visible;
+  debugState.hostControls.enabled = runtimeFlags.hostControlsEnabled;
+  debugState.hostControls.visible = visible;
+  debugState.hostControls.locked = Boolean(latestSessionControl?.lockedAt);
+  debugState.hostControls.ended = Boolean(latestSessionControl?.endedAt);
+  debugState.hostControls.hostParticipantId = latestSessionControl?.hostParticipantId ?? null;
+  if (statusMessage) {
+    hostControlsStatusEl.textContent = statusMessage;
+    debugState.hostControls.status = statusMessage;
+  } else if (visible) {
+    const state = latestSessionControl?.lockedAt ? "locked" : "open";
+    hostControlsStatusEl.textContent = `Room ${state}${latestSessionControl?.hostParticipantId ? `; host ${latestSessionControl.hostParticipantId}` : ""}`;
+    debugState.hostControls.status = hostControlsStatusEl.textContent;
+  }
+
+  const previousSelection = hostParticipantSelect.value;
+  hostParticipantSelect.replaceChildren();
+  const participants = currentVisibleParticipants();
+  for (const participant of participants) {
+    const option = document.createElement("option");
+    option.value = participant.participantId;
+    option.textContent = `${participant.displayName || participant.participantId} (${participant.role ?? "guest"})`;
+    option.selected = participant.participantId === previousSelection;
+    hostParticipantSelect.appendChild(option);
+  }
+  if (participants.length === 0) {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = "No participants";
+    hostParticipantSelect.appendChild(option);
+  }
+  const selected = hostParticipantSelect.value || participants[0]?.participantId || "";
+  if (selected) {
+    hostParticipantSelect.value = selected;
+  }
+  debugState.hostControls.selectedParticipantId = selected || null;
+
+  hostParticipantSelect.disabled = !visible || participants.length === 0 || hostControlActionInFlight;
+  lockRoomButton.disabled = !visible || Boolean(latestSessionControl?.lockedAt) || hostControlActionInFlight;
+  unlockRoomButton.disabled = !visible || !latestSessionControl?.lockedAt || hostControlActionInFlight;
+  endSessionButton.disabled = !visible || hostControlActionInFlight;
+  removeParticipantButton.disabled = !visible || !selected || selected === participantId || hostControlActionInFlight;
+  transferHostButton.disabled = !visible || !selected || selected === latestSessionControl?.hostParticipantId || hostControlActionInFlight;
+}
+
+function applyAccessDebug(access: NonNullable<RuntimeSessionControlResponse["access"]>, token: string, expiresInSeconds?: number): void {
+  const previousRole = debugState.access.role;
+  const previousLastDeniedPermission = debugState.access.lastDeniedPermission;
+  const previousLastSurfaceCommandAccepted = debugState.access.lastSurfaceCommandAccepted;
+  roomStateAccessToken = token;
+  debugState.access = {
+    ...access,
+    token: token ? "[redacted]" : "",
+    expiresInSeconds: expiresInSeconds ?? debugState.access.expiresInSeconds,
+    roleQueryAllowed: debugState.access.roleQueryAllowed,
+    lastDeniedPermission: previousLastDeniedPermission,
+    lastSurfaceCommandAccepted: previousLastSurfaceCommandAccepted
+  };
+  if (previousRole !== access.role && debugState.roomStateUrl) {
+    roomStateClient?.close();
+    roomStateClient = null;
+    connectRoomStateWithRetry(debugState.roomStateUrl);
+  }
+  startShareButton.disabled = !canUseScreenShareControl();
+  stopShareButton.disabled = !canStopLocalScreenShare();
+  syncWhiteboardControls();
+  syncRemoteBrowserControls();
+  syncSurfaceAudioControl();
+  renderHostControls();
+}
+
+function disableRuntimeForSessionBlock(reason: string): void {
+  const message = describeSessionControlReason(reason);
+  sessionControlBlocked = true;
+  setStatus(message);
+  guestAccessLineEl.textContent = message;
+  debugState.issueCode = "room_access_denied";
+  debugState.issueSeverity = "warn";
+  debugState.degradedMode = "access_denied";
+  debugState.lastRecoveryAction = reason;
+  debugState.hostControls.lastReason = reason;
+  runtimeBootReady = false;
+  roomStateClient?.close();
+  roomStateClient = null;
+  void livekitRoom?.disconnect();
+  joinAudioButton.disabled = true;
+  muteButton.disabled = true;
+  startShareButton.disabled = true;
+  stopShareButton.disabled = true;
+  syncWhiteboardControls();
+  renderHostControls(message);
+}
+
+function applySessionControlResponse(payload: RuntimeSessionControlResponse, statusMessage?: string): void {
+  latestSessionControl = payload.state;
+  if (payload.participant?.status === "blocked" && payload.participant.reason) {
+    disableRuntimeForSessionBlock(payload.participant.reason);
+    return;
+  }
+  if (payload.access && payload.token) {
+    applyAccessDebug(payload.access, payload.token, payload.expiresInSeconds);
+  }
+  renderHostControls(statusMessage);
+}
+
+async function refreshSessionControl(force = false): Promise<void> {
+  const nowMs = Date.now();
+  if (!runtimeFlags.hostControlsEnabled || !roomStateAccessToken || sessionControlRefreshInFlight || (!force && nowMs - lastSessionControlRefreshAtMs < SESSION_CONTROL_REFRESH_INTERVAL_MS)) {
+    return;
+  }
+  sessionControlRefreshInFlight = true;
+  lastSessionControlRefreshAtMs = nowMs;
+  try {
+    applySessionControlResponse(await fetchRoomSessionControl(apiBaseUrl, roomId, roomStateAccessToken));
+  } catch (error) {
+    console.warn("session_control_refresh_failed", error);
+  } finally {
+    sessionControlRefreshInFlight = false;
+  }
+}
+
+async function runHostControlAction(action: () => Promise<RuntimeSessionControlResponse>, statusMessage: string): Promise<void> {
+  if (hostControlActionInFlight) {
+    return;
+  }
+  hostControlActionInFlight = true;
+  renderHostControls("Applying host action...");
+  try {
+    applySessionControlResponse(await action(), statusMessage);
+  } catch (error) {
+    console.error(error);
+    renderHostControls("Host action failed");
+  } finally {
+    hostControlActionInFlight = false;
+    renderHostControls();
+  }
 }
 
 function clearInteractionVisuals(): void {
@@ -3741,6 +3906,16 @@ const debugState = {
     lastDeniedPermission: null as string | null,
     lastSurfaceCommandAccepted: null as boolean | null
   },
+  hostControls: {
+    enabled: false,
+    visible: false,
+    locked: false,
+    ended: false,
+    hostParticipantId: null as string | null,
+    selectedParticipantId: null as string | null,
+    status: "idle" as string,
+    lastReason: null as string | null
+  },
   screenShareState: "idle",
   screenShare: {
     supported: shareMockEnabled || browserMediaCapabilities.screenShare.supported,
@@ -4898,6 +5073,9 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
       mediaSurfaceCommands.settle(result);
     },
     onError: (error: unknown) => {
+      if (sessionControlBlocked) {
+        return;
+      }
       console.error(error);
       const issue = classifyRoomStateError(error);
       roomStateConnected = false;
@@ -4913,6 +5091,9 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
       void reportDiagnostics(issue.diagnosticsNote);
     },
     onClose: () => {
+      if (sessionControlBlocked) {
+        return;
+      }
       const issue = getRuntimeIssue("room_state_failed");
       roomStateConnected = false;
       debugState.roomStateConnected = false;
@@ -6742,6 +6923,54 @@ surfaceAudioCheckbox.addEventListener("change", () => {
   });
 });
 
+lockRoomButton.addEventListener("click", () => {
+  void runHostControlAction(
+    () => runRoomSessionControlAction(apiBaseUrl, roomId, roomStateAccessToken, "lock"),
+    "Room locked"
+  );
+});
+
+unlockRoomButton.addEventListener("click", () => {
+  void runHostControlAction(
+    () => runRoomSessionControlAction(apiBaseUrl, roomId, roomStateAccessToken, "unlock"),
+    "Room unlocked"
+  );
+});
+
+endSessionButton.addEventListener("click", () => {
+  void runHostControlAction(
+    () => runRoomSessionControlAction(apiBaseUrl, roomId, roomStateAccessToken, "end"),
+    "Session ended"
+  );
+});
+
+hostParticipantSelect.addEventListener("change", () => {
+  debugState.hostControls.selectedParticipantId = hostParticipantSelect.value || null;
+  renderHostControls();
+});
+
+removeParticipantButton.addEventListener("click", () => {
+  const targetParticipantId = hostParticipantSelect.value;
+  if (!targetParticipantId) {
+    return;
+  }
+  void runHostControlAction(
+    () => removeRoomParticipant(apiBaseUrl, roomId, roomStateAccessToken, targetParticipantId),
+    `Removed ${targetParticipantId}`
+  );
+});
+
+transferHostButton.addEventListener("click", () => {
+  const targetParticipantId = hostParticipantSelect.value;
+  if (!targetParticipantId) {
+    return;
+  }
+  void runHostControlAction(
+    () => transferRoomHost(apiBaseUrl, roomId, roomStateAccessToken, targetParticipantId),
+    `Transferred host to ${targetParticipantId}`
+  );
+});
+
 joinAudioButton.addEventListener("click", () => {
   void performAudioAction(() => audioSessionJoined ? leaveAudio() : joinAudio()).catch((error: unknown) => {
     handleAudioActionError(error, audioSessionJoined ? "audio_leave_failed" : "audio_join_failed");
@@ -7202,6 +7431,7 @@ renderer.setAnimationLoop(() => {
     }
 
     syncAvatarPoseRealtime(nowMs);
+    void refreshSessionControl().catch(() => undefined);
 
     if (presenceAccumulator >= 0.12) {
       presenceAccumulator = 0;
@@ -7246,6 +7476,7 @@ async function main(): Promise<void> {
     roomStateRealtime: boot.envFlags.roomStateRealtime,
     remoteDiagnostics: boot.envFlags.remoteDiagnostics,
     sceneBundles: boot.envFlags.sceneBundles,
+    hostControlsEnabled: boot.envFlags.hostControlsEnabled,
     spatialAudio: spatialAudioServerEnabled && spatialAudioRoomEnabled && spatialAudioQueryEnabled,
     ...resolveAvatarRuntimeFlags(boot)
   };
@@ -7278,6 +7509,7 @@ async function main(): Promise<void> {
   latestMode = presenceXrMockEnabled ? "vr" : boot.joinMode;
   refreshClientCompatibility();
   await syncPresence(boot.joinMode, false);
+  await refreshSessionControl(true);
   await loadAvailableSpaces(boot.roomId);
   const avatarCatalogUrl = resolveAvatarCatalogUrl(boot);
   const avatarElements = {
@@ -7539,6 +7771,25 @@ function describeRoomAccessError(error: RuntimeAccessError): string {
       return "Access denied: host rejected the request";
     case "invite_required":
       return "Access denied: private invite required";
+    case "room_locked":
+      return "Access denied: room is locked";
+    case "participant_removed":
+      return "Access denied: removed by host";
+    case "session_ended":
+      return "Session ended by host";
+    default:
+      return "Access denied";
+  }
+}
+
+function describeSessionControlReason(reason: string): string {
+  switch (reason) {
+    case "room_locked":
+      return "Access denied: room is locked";
+    case "participant_removed":
+      return "Access denied: removed by host";
+    case "session_ended":
+      return "Session ended by host";
     default:
       return "Access denied";
   }

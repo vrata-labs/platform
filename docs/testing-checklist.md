@@ -55,6 +55,8 @@ The public connectivity diagnostics gate is covered by `tests/e2e/runtime.spec.t
 
 The private room access gate is covered by `apps/api/src/index.test.ts` and `tests/e2e/runtime.spec.ts`. It verifies private room denial without invite, valid invite entry, expired/revoked invite denial, waiting-room approve/reject, no private manifest metadata leakage, invite audit entries, and the runtime access-denied UX.
 
+The host controls gate is covered by `apps/api/src/index.test.ts` and `tests/e2e/runtime.spec.ts`. It verifies trusted host/admin lock and unlock, new-guest denial while locked, participant removal, host transfer with refreshed runtime access, session end, audit entries, and the runtime blocked-session UX.
+
 ## Cross-Device Compatibility Matrix
 
 Use this matrix for manual compatibility checks when real devices are available. Automated CI covers Chrome desktop, mobile emulation, no-WebXR fallback, and VR mock presence; hardware Quest checks remain manual until a real device lab is available.

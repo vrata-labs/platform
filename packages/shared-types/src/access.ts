@@ -17,6 +17,7 @@ export type RoomPermission =
   | "remote-browser.open-url"
   | "remote-browser.input"
   | "remote-browser.stop"
+  | "room.session-control"
   | "room.admin";
 
 export interface RoomAccessDebugState {
@@ -27,6 +28,7 @@ export interface RoomAccessDebugState {
   canCreateRemoteBrowser: boolean;
   canControlSurface: boolean;
   canConfigureSurfaceAudio: boolean;
+  canManageRoomSession: boolean;
 }
 
 const roomRoles = new Set<RoomRole>(["guest", "member", "host", "admin"]);
@@ -49,7 +51,8 @@ const rolePermissions: Record<RoomRole, readonly RoomPermission[]> = {
     "whiteboard.clear",
     "remote-browser.open-url",
     "remote-browser.input",
-    "remote-browser.stop"
+    "remote-browser.stop",
+    "room.session-control"
   ],
   admin: [
     "room.join",
@@ -68,6 +71,7 @@ const rolePermissions: Record<RoomRole, readonly RoomPermission[]> = {
     "remote-browser.open-url",
     "remote-browser.input",
     "remote-browser.stop",
+    "room.session-control",
     "room.admin"
   ]
 };
@@ -97,6 +101,7 @@ export function createRoomAccessDebugState(role: RoomRole): RoomAccessDebugState
     canCreateWhiteboard: hasRoomPermission(permissions, "surface.create-object") && hasRoomPermission(permissions, "whiteboard.draw"),
     canCreateRemoteBrowser: hasRoomPermission(permissions, "surface.create-object") && hasRoomPermission(permissions, "remote-browser.open-url"),
     canControlSurface: hasRoomPermission(permissions, "surface.lock") || hasRoomPermission(permissions, "surface.stop-object"),
-    canConfigureSurfaceAudio: hasRoomPermission(permissions, "surface.configure-audio")
+    canConfigureSurfaceAudio: hasRoomPermission(permissions, "surface.configure-audio"),
+    canManageRoomSession: hasRoomPermission(permissions, "room.session-control")
   };
 }

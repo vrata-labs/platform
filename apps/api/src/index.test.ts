@@ -1476,6 +1476,175 @@ test("waiting room invite keeps guest pending until host decision", async () => 
   }
 });
 
+test("host controls enforce lock remove transfer end and audit", async () => {
+  process.env.VRATA_DISABLE_AUTOSTART = "1";
+  process.env.API_PORT = "4048";
+  process.env.CONTROL_PLANE_ADMIN_TOKEN = "test-admin-token";
+  process.env.STATE_TOKEN_SECRET = "host-controls-secret";
+  const module = await import("./index.js");
+  const server = module.startApiServer(4048);
+  const baseUrl = "http://127.0.0.1:4048";
+  const jsonHeaders = { "content-type": "application/json" };
+  const adminHeaders = { ...jsonHeaders, "x-vrata-admin-token": "test-admin-token" };
+
+  const createInvite = async (roomId: string, role: RoomRole) => {
+    const response = await fetch(`${baseUrl}/api/rooms/${roomId}/invites`, {
+      method: "POST",
+      headers: adminHeaders,
+      body: JSON.stringify({ expiresInSeconds: 300, role })
+    });
+    assert.equal(response.status, 201);
+    const payload = (await response.json()) as { inviteLink: string };
+    return new URL(payload.inviteLink).searchParams.get("invite") ?? "";
+  };
+  const issueToken = async (roomId: string, participantId: string, role: RoomRole) => {
+    const inviteToken = await createInvite(roomId, role);
+    const response = await fetch(`${baseUrl}/api/tokens/state`, {
+      method: "POST",
+      headers: jsonHeaders,
+      body: JSON.stringify({ roomId, participantId, displayName: participantId, inviteToken })
+    });
+    assert.equal(response.status, 200);
+    return (await response.json()) as { token: string; role: RoomRole; access: { canManageRoomSession?: boolean } };
+  };
+  const putPresence = async (roomId: string, participantId: string, token: string, role: RoomRole) => {
+    const response = await fetch(`${baseUrl}/api/rooms/${roomId}/presence/${participantId}`, {
+      method: "PUT",
+      headers: { ...jsonHeaders, "authorization": `Bearer ${token}` },
+      body: JSON.stringify({
+        participantId,
+        displayName: participantId,
+        role,
+        mode: "desktop",
+        rootTransform: { x: 0, y: 0, z: 0 },
+        muted: true,
+        activeMedia: { audio: false, screenShare: false },
+        updatedAt: new Date().toISOString()
+      })
+    });
+    assert.equal(response.status, 200);
+  };
+
+  try {
+    const createRoomResponse = await fetch(`${baseUrl}/api/rooms`, {
+      method: "POST",
+      headers: adminHeaders,
+      body: JSON.stringify({ tenantId: "demo-tenant", templateId: "meeting-room-basic", name: "Host Controls", visibility: "private" })
+    });
+    assert.equal(createRoomResponse.status, 201);
+    const room = (await createRoomResponse.json()) as { roomId: string };
+
+    const host = await issueToken(room.roomId, "host-1", "host");
+    assert.equal(host.role, "host");
+    assert.equal(host.access.canManageRoomSession, true);
+    await putPresence(room.roomId, "host-1", host.token, "host");
+
+    const guest = await issueToken(room.roomId, "guest-1", "guest");
+    await putPresence(room.roomId, "guest-1", guest.token, "guest");
+    const member = await issueToken(room.roomId, "member-1", "member");
+    await putPresence(room.roomId, "member-1", member.token, "member");
+
+    const memberRemoveHost = await fetch(`${baseUrl}/api/rooms/${room.roomId}/participants/host-1/remove`, {
+      method: "POST",
+      headers: { ...jsonHeaders, "authorization": `Bearer ${member.token}` }
+    });
+    assert.equal(memberRemoveHost.status, 403);
+
+    const removeGuest = await fetch(`${baseUrl}/api/rooms/${room.roomId}/participants/guest-1/remove`, {
+      method: "POST",
+      headers: { ...jsonHeaders, "authorization": `Bearer ${host.token}` }
+    });
+    assert.equal(removeGuest.status, 200);
+    const removedGuestState = await fetch(`${baseUrl}/api/tokens/state`, {
+      method: "POST",
+      headers: { ...jsonHeaders, "authorization": `Bearer ${guest.token}` },
+      body: JSON.stringify({ roomId: room.roomId, participantId: "guest-1", displayName: "guest-1" })
+    });
+    assert.equal(removedGuestState.status, 403);
+    assert.equal(((await removedGuestState.json()) as { reason?: string }).reason, "participant_removed");
+
+    const lockResponse = await fetch(`${baseUrl}/api/rooms/${room.roomId}/session-control/lock`, {
+      method: "POST",
+      headers: { ...jsonHeaders, "authorization": `Bearer ${host.token}` }
+    });
+    assert.equal(lockResponse.status, 200);
+    assert.ok(((await lockResponse.json()) as { state: { lockedAt?: string | null } }).state.lockedAt);
+
+    const lockedGuest = await fetch(`${baseUrl}/api/tokens/state`, {
+      method: "POST",
+      headers: jsonHeaders,
+      body: JSON.stringify({ roomId: room.roomId, participantId: "guest-locked", displayName: "guest-locked", inviteToken: await createInvite(room.roomId, "guest") })
+    });
+    assert.equal(lockedGuest.status, 403);
+    assert.equal(((await lockedGuest.json()) as { reason?: string }).reason, "room_locked");
+
+    const unlockResponse = await fetch(`${baseUrl}/api/rooms/${room.roomId}/session-control/unlock`, {
+      method: "POST",
+      headers: { ...jsonHeaders, "authorization": `Bearer ${host.token}` }
+    });
+    assert.equal(unlockResponse.status, 200);
+    assert.equal(((await unlockResponse.json()) as { state: { lockedAt?: string | null } }).state.lockedAt, null);
+
+    const nextHostBase = await issueToken(room.roomId, "guest-2", "guest");
+    await putPresence(room.roomId, "guest-2", nextHostBase.token, "guest");
+    const transferResponse = await fetch(`${baseUrl}/api/rooms/${room.roomId}/host/transfer`, {
+      method: "POST",
+      headers: { ...jsonHeaders, "authorization": `Bearer ${host.token}` },
+      body: JSON.stringify({ participantId: "guest-2" })
+    });
+    assert.equal(transferResponse.status, 200);
+    assert.equal(((await transferResponse.json()) as { hostParticipantId?: string }).hostParticipantId, "guest-2");
+
+    const promotedStatus = await fetch(`${baseUrl}/api/rooms/${room.roomId}/session-control`, {
+      headers: { "authorization": `Bearer ${nextHostBase.token}` }
+    });
+    assert.equal(promotedStatus.status, 200);
+    const promotedPayload = (await promotedStatus.json()) as { role?: string; token?: string; access?: { canManageRoomSession?: boolean } };
+    assert.equal(promotedPayload.role, "host");
+    assert.equal(promotedPayload.access?.canManageRoomSession, true);
+    assert.equal(typeof promotedPayload.token, "string");
+
+    const oldHostRemove = await fetch(`${baseUrl}/api/rooms/${room.roomId}/participants/member-1/remove`, {
+      method: "POST",
+      headers: { ...jsonHeaders, "authorization": `Bearer ${host.token}` }
+    });
+    assert.equal(oldHostRemove.status, 403);
+
+    const endResponse = await fetch(`${baseUrl}/api/rooms/${room.roomId}/session-control/end`, {
+      method: "POST",
+      headers: { ...jsonHeaders, "authorization": `Bearer ${promotedPayload.token}` }
+    });
+    assert.equal(endResponse.status, 200);
+    assert.ok(((await endResponse.json()) as { state: { endedAt?: string | null } }).state.endedAt);
+
+    const endedState = await fetch(`${baseUrl}/api/tokens/state`, {
+      method: "POST",
+      headers: { ...jsonHeaders, "authorization": `Bearer ${nextHostBase.token}` },
+      body: JSON.stringify({ roomId: room.roomId, participantId: "guest-2", displayName: "guest-2" })
+    });
+    assert.equal(endedState.status, 403);
+    assert.equal(((await endedState.json()) as { reason?: string }).reason, "session_ended");
+
+    const auditResponse = await fetch(`${baseUrl}/api/audit/control-plane`, {
+      headers: { "x-vrata-admin-token": "test-admin-token" }
+    });
+    assert.equal(auditResponse.status, 200);
+    const auditPayload = (await auditResponse.json()) as { items: Array<{ action?: string; result?: string; reason?: string }> };
+    assert.equal(auditPayload.items.some((item) => item.action === "room.session-control.participant.remove" && item.result === "allowed"), true);
+    assert.equal(auditPayload.items.some((item) => item.action === "room.session-control.lock" && item.result === "allowed"), true);
+    assert.equal(auditPayload.items.some((item) => item.action === "room.session-control.host.transfer" && item.result === "allowed"), true);
+    assert.equal(auditPayload.items.some((item) => item.action === "room.session-control.end" && item.result === "allowed"), true);
+    assert.equal(auditPayload.items.some((item) => item.action === "room.session-control.participant.remove" && item.result === "denied"), true);
+    assert.equal(auditPayload.items.some((item) => item.action === "invite.use" && item.result === "denied" && item.reason === "room_locked"), true);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    delete process.env.VRATA_DISABLE_AUTOSTART;
+    delete process.env.API_PORT;
+    delete process.env.CONTROL_PLANE_ADMIN_TOKEN;
+    delete process.env.STATE_TOKEN_SECRET;
+  }
+});
+
 test("runtime spaces endpoint keeps https room links behind https proxy", async () => {
   process.env.VRATA_DISABLE_AUTOSTART = "1";
   process.env.API_PORT = "4023";

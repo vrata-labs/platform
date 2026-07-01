@@ -75,6 +75,7 @@ interface RuntimeHealthResponse {
     avatarCustomizationEnabled?: boolean;
     avatarFallbackCapsulesEnabled?: boolean;
     roomAccessPolicyEnabled?: boolean;
+    hostControlsEnabled?: boolean;
   };
 }
 
@@ -255,6 +256,7 @@ export interface RuntimeBootResult {
     avatarSeatingEnabled: boolean;
     avatarCustomizationEnabled: boolean;
     avatarFallbackCapsulesEnabled: boolean;
+    hostControlsEnabled: boolean;
   };
 }
 
@@ -279,6 +281,31 @@ export class RuntimeAccessError extends Error {
     this.accessRequestId = accessRequestId;
     this.requestId = requestId;
   }
+}
+
+export interface RuntimeSessionControlState {
+  hostParticipantId?: string | null;
+  lockedAt?: string | null;
+  lockedBy?: string | null;
+  endedAt?: string | null;
+  endedBy?: string | null;
+  removedParticipants?: Record<string, { removedAt: string; removedBy?: string | null; reason?: string | null }>;
+}
+
+export interface RuntimeSessionControlResponse {
+  state: RuntimeSessionControlState;
+  participant?: {
+    participantId: string;
+    role: RoomRole;
+    permissions: RoomPermission[];
+    status: "active" | "blocked";
+    reason?: string | null;
+  } | null;
+  token?: string;
+  expiresInSeconds?: number;
+  access?: RoomAccessDebugState;
+  role?: RoomRole;
+  permissions?: RoomPermission[];
 }
 
 export interface VoiceSessionPlan {
@@ -344,9 +371,67 @@ export async function bootRuntime(
       avatarLegIkEnabled: healthFeatures.avatarLegIkEnabled ?? false,
       avatarSeatingEnabled: healthFeatures.avatarSeatingEnabled ?? false,
       avatarCustomizationEnabled: healthFeatures.avatarCustomizationEnabled ?? false,
-      avatarFallbackCapsulesEnabled: healthFeatures.avatarFallbackCapsulesEnabled ?? true
+      avatarFallbackCapsulesEnabled: healthFeatures.avatarFallbackCapsulesEnabled ?? true,
+      hostControlsEnabled: healthFeatures.hostControlsEnabled ?? true
     }
   };
+}
+
+export async function fetchRoomSessionControl(apiBaseUrl: string, roomId: string, sessionToken: string): Promise<RuntimeSessionControlResponse> {
+  const response = await fetch(new URL(`/api/rooms/${roomId}/session-control`, apiBaseUrl), {
+    headers: {
+      "authorization": `Bearer ${sessionToken}`
+    },
+    cache: "no-store"
+  });
+  if (!response.ok) {
+    throw new Error(`failed_to_load_session_control:${response.status}`);
+  }
+  return (await response.json()) as RuntimeSessionControlResponse;
+}
+
+export async function runRoomSessionControlAction(apiBaseUrl: string, roomId: string, sessionToken: string, action: "lock" | "unlock" | "end"): Promise<RuntimeSessionControlResponse> {
+  const response = await fetch(new URL(`/api/rooms/${roomId}/session-control/${action}`, apiBaseUrl), {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "authorization": `Bearer ${sessionToken}`
+    }
+  });
+  if (!response.ok) {
+    throw new Error(`failed_to_run_session_control:${action}:${response.status}`);
+  }
+  return (await response.json()) as RuntimeSessionControlResponse;
+}
+
+export async function removeRoomParticipant(apiBaseUrl: string, roomId: string, sessionToken: string, participantId: string): Promise<RuntimeSessionControlResponse> {
+  const response = await fetch(new URL(`/api/rooms/${roomId}/participants/${encodeURIComponent(participantId)}/remove`, apiBaseUrl), {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "authorization": `Bearer ${sessionToken}`
+    },
+    body: JSON.stringify({ reason: "host_removed" })
+  });
+  if (!response.ok) {
+    throw new Error(`failed_to_remove_participant:${response.status}`);
+  }
+  return (await response.json()) as RuntimeSessionControlResponse;
+}
+
+export async function transferRoomHost(apiBaseUrl: string, roomId: string, sessionToken: string, participantId: string): Promise<RuntimeSessionControlResponse> {
+  const response = await fetch(new URL(`/api/rooms/${roomId}/host/transfer`, apiBaseUrl), {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "authorization": `Bearer ${sessionToken}`
+    },
+    body: JSON.stringify({ participantId })
+  });
+  if (!response.ok) {
+    throw new Error(`failed_to_transfer_host:${response.status}`);
+  }
+  return (await response.json()) as RuntimeSessionControlResponse;
 }
 
 export async function fetchMediaToken(
