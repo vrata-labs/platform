@@ -4,11 +4,14 @@
   "version": "0.1.0",
   "type": "module",
   "exports": {
-    ".": "./dist/index.js"
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./dist/index.js"
+    }
   },
   "bin": {
-    "vrata": "./dist/cli.js",
-    "vrata-asset-validate": "./dist/cli.js"
+    "vrata": "./bin/vrata.mjs",
+    "vrata-asset-validate": "./bin/vrata.mjs"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
