@@ -1701,6 +1701,21 @@ test("scene bundle metadata can be created and bound to a room", async () => {
     assert.equal(bundle.bundleId, "hall-bundle");
     assert.equal(bundle.publicUrl, "http://127.0.0.1:9000/vrata-scene-bundles/scenes/hall/v1/scene.json");
 
+    const invalidBundleResponse = await fetch("http://127.0.0.1:4014/api/scene-bundles", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-vrata-admin-token": "test-admin-token"
+      },
+      body: JSON.stringify({
+        bundleId: "bad-bundle",
+        storageKey: "../scene.json",
+        version: "v1"
+      })
+    });
+    assert.equal(invalidBundleResponse.status, 400);
+    assert.deepEqual(await invalidBundleResponse.json(), { error: "invalid_scene_bundle_storage_key" });
+
     const roomResponse = await fetch("http://127.0.0.1:4014/api/rooms", {
       method: "POST",
       headers: {

@@ -11,3 +11,4 @@ export const defaultBudgets: AssetBudget[] = [
 
 export * from "./validator.js";
 export * from "./presets.js";
+export * from "./scene-bundle-validator.js";

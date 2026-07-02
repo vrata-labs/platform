@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "type": "module",
   "dependencies": {
+    "@vrata/asset-pipeline": "workspace:*",
     "@vrata/shared-types": "workspace:*",
     "livekit-server-sdk": "^2.13.1",
     "pg": "^8.16.3"

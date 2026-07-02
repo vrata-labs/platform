@@ -20,6 +20,25 @@ scenes/the-hall-v1/
   preview.jpg
 ```
 
+## Local Validation
+
+Scene authors can validate a bundle directory, `scene.json` file, or `.zip` archive before publishing:
+
+```bash
+pnpm --filter @vrata/asset-pipeline build
+pnpm exec vrata scenes validate apps/runtime-web/public/assets/scenes/the-hall-v1
+pnpm exec vrata scenes validate apps/runtime-web/public/assets/scenes/the-hall-v1 --json
+```
+
+The validator checks `scene.json` schema basics, relative path safety, spawn points, referenced main scene assets, optional preview files, optional material override maps, zip entry safety, and basic file size budgets. Human output is intended for local authoring; `--json` returns `{ ok, issues, stats }` with stable `code`, `path`, and `message` fields for CI or upload workflows.
+
+Example CI gate:
+
+```bash
+pnpm --filter @vrata/asset-pipeline build
+pnpm exec vrata scenes validate path/to/scene-bundle --json
+```
+
 ## `scene.json`
 
 Required fields:

@@ -6,6 +6,7 @@ import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { AccessToken } from "livekit-server-sdk";
+import { validateSceneBundleReference } from "@vrata/asset-pipeline";
 import { createRoomAccessDebugState, getRoomPermissions, hasRoomPermission, parseRoomRole, type RoomPermission, type RoomRole } from "@vrata/shared-types";
 import { signRoomSessionToken, verifyRoomSessionToken, type RoomSessionRoleSource, type RoomSessionTokenPayload, type RoomSessionTokenVerificationResult } from "@vrata/shared-types/session-token";
 
@@ -1655,20 +1656,7 @@ function validateAssetInput(input: Partial<AssetRecord>): string | null {
 }
 
 function validateSceneBundleInput(input: Partial<SceneBundleCreateInput>): string | null {
-  if (!input.storageKey || input.storageKey.trim().length === 0) {
-    return "invalid_scene_bundle_storage_key";
-  }
-  if (input.provider && input.provider !== "minio-default" && input.provider !== "s3-compatible") {
-    return "invalid_scene_bundle_provider";
-  }
-  if (input.publicUrl) {
-    try {
-      new URL(input.publicUrl);
-    } catch {
-      return "invalid_scene_bundle_public_url";
-    }
-  }
-  return null;
+  return validateSceneBundleReference(input).find((issue) => issue.severity === "error")?.code ?? null;
 }
 
 function getCurrentSceneBundleVersion(bundle: SceneBundleRecord): string {

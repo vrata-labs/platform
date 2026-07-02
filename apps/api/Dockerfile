@@ -6,7 +6,7 @@ COPY . .
 
 RUN corepack enable
 RUN pnpm install --frozen-lockfile --config.node-linker=hoisted
-RUN pnpm --filter @vrata/shared-types build && pnpm --filter @vrata/runtime-web build && pnpm --filter @vrata/control-plane build && pnpm --filter @vrata/api build
+RUN pnpm --filter @vrata/shared-types build && pnpm --filter @vrata/asset-pipeline build && pnpm --filter @vrata/runtime-web build && pnpm --filter @vrata/control-plane build && pnpm --filter @vrata/api build
 RUN pnpm prune --prod --config.confirmModulesPurge=false --config.node-linker=hoisted
 
 FROM node:22-bookworm-slim AS runtime
@@ -22,6 +22,10 @@ COPY --from=build /app/packages/shared-types/package.json ./packages/shared-type
 COPY --from=build /app/packages/shared-types/dist ./packages/shared-types/dist
 COPY --from=build /app/packages/shared-types/package.json ./node_modules/@vrata/shared-types/package.json
 COPY --from=build /app/packages/shared-types/dist ./node_modules/@vrata/shared-types/dist
+COPY --from=build /app/packages/asset-pipeline/package.json ./packages/asset-pipeline/package.json
+COPY --from=build /app/packages/asset-pipeline/dist ./packages/asset-pipeline/dist
+COPY --from=build /app/packages/asset-pipeline/package.json ./node_modules/@vrata/asset-pipeline/package.json
+COPY --from=build /app/packages/asset-pipeline/dist ./node_modules/@vrata/asset-pipeline/dist
 COPY --from=build /app/apps/runtime-web/dist ./apps/runtime-web/dist
 COPY --from=build /app/apps/runtime-web/public ./apps/runtime-web/public
 COPY --from=build /app/apps/control-plane/dist ./apps/control-plane/dist
