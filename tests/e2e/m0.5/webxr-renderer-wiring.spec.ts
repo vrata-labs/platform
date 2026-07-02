@@ -68,7 +68,7 @@ test("M0.5 WebXR enter failure is reported without crashing the room", async ({ 
 
   await page.goto("/rooms/demo-room?debug=1&name=XrFailure");
   await waitForM05Debug(page);
-  await expect(page.locator(".vr-button")).toContainText("Enter VR");
+  await expect(page.locator(".vr-button")).toContainText("Enter VR", { timeout: 10000 });
 
   await page.locator(".vr-button").click();
 

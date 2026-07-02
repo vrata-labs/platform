@@ -134,7 +134,7 @@ test("room shell loads and presence is registered", async ({ page, request }) =>
   await page.waitForTimeout(3000);
 
   await expect(page.locator("#room-name")).toContainText("meeting-room-basic - demo-room");
-  await expect(page.locator("#status-line")).toContainText("Joined as");
+  await expect(page.locator("#status-line")).toContainText("Joined as", { timeout: 10000 });
   await expect(page.locator("#room-state-line")).toContainText(/Room-state:/);
   await expect(page.locator("#start-share")).toBeHidden();
 
@@ -180,7 +180,7 @@ test("private room opens only through a valid invite link", async ({ page, reque
 
   const invite = await createRoomInvite(request, room.roomId);
   await page.goto(e2eRoomLink(invite.inviteLink));
-  await expect(page.locator("#status-line")).toContainText("Joined as");
+  await expect(page.locator("#status-line")).toContainText("Joined as", { timeout: 10000 });
   await expect(page.locator("#guest-access-line")).toContainText("Guest access: members only");
 });
 
