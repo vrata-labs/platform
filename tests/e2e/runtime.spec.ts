@@ -1886,22 +1886,63 @@ test("diagnostics capture multi-client remote visibility", async ({ browser, req
 });
 
 test("control plane creates a room through the browser UI", async ({ page }) => {
+  const roomSlug = `control-plane-room-${Date.now()}`;
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
   await page.goto("/control-plane");
   await expect(page.locator("#template-detail")).not.toContainText("Select a template to inspect details");
   await page.fill("#admin-token-input", "test-admin-token");
   await page.fill("#room-name-input", "Control Plane Room");
+  await page.fill("#room-slug-input", roomSlug);
   await page.selectOption("#template-select", "showroom-basic");
   await expect(page.locator("#template-detail")).toContainText("showroom-basic");
+  await expect(page.locator("#room-preview")).toContainText(roomSlug);
+  await expect(page.locator("#room-preview")).toContainText("fallback scene");
   await page.click("#create-room");
   await expect(page.locator("#publish-status")).toContainText("published");
   await expect(page.locator("#room-link")).not.toHaveText("");
   const href = await page.locator("#room-link").getAttribute("href");
-  expect(href).toContain("/rooms/");
+  expect(href).toContain(`/rooms/${roomSlug}`);
+  await page.click("#copy-room-link");
+  await expect(page.locator("#publish-status")).toContainText("room-url-copied");
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toContain(`/rooms/${roomSlug}`);
   await expect(page.locator("#rooms-list li").first()).toContainText("Control Plane Room");
   await page.locator("#rooms-list button").first().click();
   await expect(page.locator("#room-detail")).toContainText("Control Plane Room");
   await expect(page.locator("#room-detail")).toContainText('"manifest"');
   await expect(page.locator("#room-detail")).toContainText('"diagnostics"');
+});
+
+test("control plane shows duplicate room slug validation", async ({ page }) => {
+  const roomSlug = `duplicate-room-${Date.now()}`;
+  await page.goto("/control-plane");
+  await page.fill("#admin-token-input", "test-admin-token");
+  await page.fill("#room-name-input", "Duplicate Room One");
+  await page.fill("#room-slug-input", roomSlug);
+  await page.click("#create-room");
+  await expect(page.locator("#publish-status")).toContainText("published");
+
+  await page.fill("#room-name-input", "Duplicate Room Two");
+  await page.fill("#room-slug-input", roomSlug);
+  await expect(page.locator("#room-validation-message")).toContainText("already exists");
+  await page.click("#create-room");
+  await expect(page.locator("#publish-status")).toContainText("failed:room_slug_conflict");
+});
+
+test("control plane creates a private room and auto-generates an invite", async ({ page }) => {
+  const roomSlug = `private-ui-room-${Date.now()}`;
+  await page.goto("/control-plane");
+  await page.fill("#admin-token-input", "test-admin-token");
+  await page.fill("#room-name-input", "Private UI Room");
+  await page.fill("#room-slug-input", roomSlug);
+  await page.selectOption("#room-visibility-select", "private");
+  await expect(page.locator("#room-preview")).toContainText('"visibility": "private"');
+  await page.click("#create-room");
+  await expect(page.locator("#publish-status")).toContainText("published-invite-created");
+  await expect(page.locator("#invite-link")).toContainText(`/rooms/${roomSlug}?invite=`);
+  const inviteHref = await page.locator("#invite-link").getAttribute("href");
+  expect(inviteHref).toBeTruthy();
+  await page.goto(e2eRoomLink(String(inviteHref)));
+  await expect(page.locator("#status-line")).toContainText("Joined as", { timeout: 30000 });
 });
 
 test("control plane remembers admin token locally", async ({ page }) => {
@@ -1973,8 +2014,9 @@ test("control plane uploads asset metadata through the browser UI", async ({ pag
   await expect(page.locator("#assets-list")).toContainText("validated");
 });
 
-test("control plane uploads and binds a scene bundle zip through the browser UI", async ({ page }, testInfo) => {
+test("control plane uploads and creates a room with selected scene bundle through the browser UI", async ({ page }, testInfo) => {
   const bundleId = `ui-upload-${Date.now()}`;
+  const roomSlug = `uploaded-room-${Date.now()}`;
   const version = "v1";
   const glb = await readFile(join(process.cwd(), "apps/runtime-web/public/assets/scenes/livadia-nicholas-office-v1/scene.glb"));
   const zipPath = testInfo.outputPath("uploaded-scene-bundle.zip");
@@ -2005,11 +2047,10 @@ test("control plane uploads and binds a scene bundle zip through the browser UI"
   await expect(page.locator("#scene-bundles-list")).toContainText("scene.glb");
 
   await page.fill("#room-name-input", "Uploaded Scene Bundle Room");
+  await page.fill("#room-slug-input", roomSlug);
+  await expect(page.locator("#room-preview")).toContainText(bundleId);
   await page.click("#create-room");
   await expect(page.locator("#publish-status")).toContainText("published");
-  await page.selectOption("#scene-bundle-select", bundleId);
-  await page.click("#bind-scene-bundle");
-  await expect(page.locator("#publish-status")).toContainText("scene-bundle-bound");
 
   const href = await page.locator("#room-link").getAttribute("href");
   expect(href).toBeTruthy();

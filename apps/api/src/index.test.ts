@@ -1762,6 +1762,78 @@ test("runtime spaces endpoint keeps https room links behind https proxy", async 
   }
 });
 
+test("room creation accepts explicit slug and rejects duplicate slug", async () => {
+  process.env.VRATA_DISABLE_AUTOSTART = "1";
+  process.env.API_PORT = "4050";
+  process.env.CONTROL_PLANE_ADMIN_TOKEN = "test-admin-token";
+  const module = await import("./index.js");
+  const server = module.startApiServer(4050);
+
+  try {
+    const response = await fetch("http://127.0.0.1:4050/api/rooms", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-vrata-admin-token": "test-admin-token"
+      },
+      body: JSON.stringify({
+        roomId: "launch-room",
+        tenantId: "demo-tenant",
+        templateId: "meeting-room-basic",
+        name: "Launch Room"
+      })
+    });
+    assert.equal(response.status, 201);
+    const room = (await response.json()) as { roomId: string; roomLink: string };
+    assert.equal(room.roomId, "launch-room");
+    assert.equal(room.roomLink, "http://127.0.0.1:4050/rooms/launch-room");
+
+    const duplicate = await fetch("http://127.0.0.1:4050/api/rooms", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-vrata-admin-token": "test-admin-token"
+      },
+      body: JSON.stringify({
+        roomId: "launch-room",
+        tenantId: "demo-tenant",
+        templateId: "meeting-room-basic",
+        name: "Duplicate Launch Room"
+      })
+    });
+    assert.equal(duplicate.status, 409);
+    assert.deepEqual(await duplicate.json(), { error: "room_slug_conflict" });
+
+    const invalid = await fetch("http://127.0.0.1:4050/api/rooms", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-vrata-admin-token": "test-admin-token"
+      },
+      body: JSON.stringify({
+        roomId: "Bad Slug",
+        tenantId: "demo-tenant",
+        templateId: "meeting-room-basic",
+        name: "Bad Slug Room"
+      })
+    });
+    assert.equal(invalid.status, 400);
+    assert.deepEqual(await invalid.json(), { error: "invalid_room_slug" });
+
+    const metricsResponse = await fetch("http://127.0.0.1:4050/metrics");
+    assert.equal(metricsResponse.ok, true);
+    const metrics = await metricsResponse.text();
+    assert.match(metrics, /vrata_rooms_created_total\{source="control-plane",visibility="public"\} \d+/);
+    assert.match(metrics, /vrata_room_creation_failures_total\{reason="room_slug_conflict"\} 1/);
+    assert.match(metrics, /vrata_room_creation_failures_total\{reason="invalid_room_slug"\} 1/);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    delete process.env.VRATA_DISABLE_AUTOSTART;
+    delete process.env.API_PORT;
+    delete process.env.CONTROL_PLANE_ADMIN_TOKEN;
+  }
+});
+
 test("scene bundle metadata can be created and bound to a room", async () => {
   process.env.VRATA_DISABLE_AUTOSTART = "1";
   process.env.API_PORT = "4014";

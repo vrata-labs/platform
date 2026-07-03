@@ -14,6 +14,7 @@ export interface TenantRecord {
 }
 
 export interface RoomCreateInput {
+  roomId?: string;
   tenantId: string;
   templateId: string;
   name: string;

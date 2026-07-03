@@ -4,6 +4,7 @@ import {
   createTenant,
   createControlPlanePageState,
   createRoom,
+  createRoomUrl,
   createRoomInvite,
   decideWaitingRoomRequest,
   deleteAsset,
@@ -57,6 +58,8 @@ const assetStatusSelect = mustElement<HTMLSelectElement>("#asset-status-select")
 const updateAssetButton = mustElement<HTMLButtonElement>("#update-asset");
 const deleteAssetButton = mustElement<HTMLButtonElement>("#delete-asset");
 const templateSelect = mustElement<HTMLSelectElement>("#template-select");
+const roomSlugInput = mustElement<HTMLInputElement>("#room-slug-input");
+const roomValidationMessage = mustElement<HTMLDivElement>("#room-validation-message");
 const assetSelect = mustElement<HTMLSelectElement>("#asset-select");
 const sceneBundleSelect = mustElement<HTMLSelectElement>("#scene-bundle-select");
 const sceneBundleVersionSelect = mustElement<HTMLSelectElement>("#scene-bundle-version-select");
@@ -88,6 +91,8 @@ const updateRoomButton = mustElement<HTMLButtonElement>("#update-room");
 const deleteRoomButton = mustElement<HTMLButtonElement>("#delete-room");
 const publishStatus = mustElement<HTMLDivElement>("#publish-status");
 const roomLink = mustElement<HTMLAnchorElement>("#room-link");
+const roomPreview = mustElement<HTMLPreElement>("#room-preview");
+const copyRoomLinkButton = mustElement<HTMLButtonElement>("#copy-room-link");
 const refreshRoomDetailButton = mustElement<HTMLButtonElement>("#refresh-room-detail");
 const bindSceneBundleButton = mustElement<HTMLButtonElement>("#bind-scene-bundle");
 const setCurrentSceneBundleButton = mustElement<HTMLButtonElement>("#set-current-scene-bundle");
@@ -100,8 +105,58 @@ const tenantsList = mustElement<HTMLUListElement>("#tenants-list");
 const assetsList = mustElement<HTMLUListElement>("#assets-list");
 const sceneBundlesList = mustElement<HTMLUListElement>("#scene-bundles-list");
 let selectedRoomPoll: number | undefined;
+let roomSlugTouched = false;
 
 adminTokenInput.value = storedAdminToken;
+
+function slugifyRoomName(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 64) || "new-room";
+}
+
+function selectedSceneBundlePublicUrl(): string | undefined {
+  if (!sceneBundleSelect.value) return undefined;
+  const selectedVersion = sceneBundleVersionSelect.value
+    ? state.sceneBundleVersions.find((bundle) => bundle.version === sceneBundleVersionSelect.value)
+    : undefined;
+  const currentVersion = state.sceneBundleVersions.find((bundle) => bundle.isCurrent);
+  return selectedVersion?.publicUrl ?? currentVersion?.publicUrl ?? state.selectedSceneBundle?.publicUrl;
+}
+
+function roomSlugValidationError(): string | null {
+  const slug = roomSlugInput.value.trim();
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug) || slug.length < 3 || slug.length > 64) {
+    return "invalid_room_slug";
+  }
+  if (state.rooms.some((room) => room.roomId === slug)) {
+    return "room_slug_conflict";
+  }
+  return null;
+}
+
+function renderRoomPreview(): void {
+  const validationError = roomSlugValidationError();
+  roomValidationMessage.textContent = validationError === "room_slug_conflict"
+    ? "Room slug already exists."
+    : validationError === "invalid_room_slug"
+      ? "Use 3-64 lowercase letters, numbers, and single hyphens."
+      : "";
+  const roomUrl = roomSlugInput.value.trim() ? createRoomUrl(apiBaseUrl, roomSlugInput.value.trim()) : "";
+  roomPreview.textContent = JSON.stringify({
+    slug: roomSlugInput.value.trim(),
+    name: roomNameInput.value.trim(),
+    tenantId: tenantSelect.value,
+    templateId: templateSelect.value,
+    visibility: roomVisibilitySelect.value,
+    guestAllowed: guestAccessInput.checked,
+    sceneBundleUrl: selectedSceneBundlePublicUrl() ?? "fallback scene",
+    roomUrl
+  }, null, 2);
+}
 
 function render(): void {
   publishStatus.textContent = state.statusMessage ?? state.publishStatus;
@@ -241,6 +296,7 @@ function render(): void {
       return item;
     })
   );
+  renderRoomPreview();
 }
 
 async function selectRoom(room: typeof state.selectedRoom): Promise<void> {
@@ -255,6 +311,8 @@ async function selectRoom(room: typeof state.selectedRoom): Promise<void> {
   state.selectedSceneBundle = state.sceneBundles.find((bundle) => bundle.publicUrl === state.selectedRoomManifest?.sceneBundle?.url);
   state.sceneBundleVersions = state.selectedSceneBundle ? await listSceneBundleVersions(apiBaseUrl, state.selectedSceneBundle.bundleId).catch(() => []) : [];
   roomNameInput.value = room.name;
+  roomSlugInput.value = room.roomId;
+  roomSlugTouched = true;
   templateSelect.value = room.templateId;
   primaryColorInput.value = room.theme?.primaryColor ?? "#5fc8ff";
   accentColorInput.value = room.theme?.accentColor ?? "#163354";
@@ -469,6 +527,35 @@ templateSelect.addEventListener("change", () => {
   render();
 });
 
+roomNameInput.addEventListener("input", () => {
+  if (!roomSlugTouched) {
+    roomSlugInput.value = slugifyRoomName(roomNameInput.value);
+  }
+  renderRoomPreview();
+});
+
+roomSlugInput.addEventListener("input", () => {
+  roomSlugTouched = true;
+  roomSlugInput.value = roomSlugInput.value.toLowerCase().replace(/[^a-z0-9-]/g, "-");
+  renderRoomPreview();
+});
+
+tenantSelect.addEventListener("change", () => {
+  renderRoomPreview();
+});
+
+roomVisibilitySelect.addEventListener("change", () => {
+  renderRoomPreview();
+});
+
+guestAccessInput.addEventListener("change", () => {
+  renderRoomPreview();
+});
+
+sceneBundleVersionSelect.addEventListener("change", () => {
+  renderRoomPreview();
+});
+
 roomFilterTenant.addEventListener("change", () => {
   state.roomFilterTenantId = roomFilterTenant.value || undefined;
   render();
@@ -476,13 +563,22 @@ roomFilterTenant.addEventListener("change", () => {
 
 form.addEventListener("submit", (event) => {
   event.preventDefault();
+  const validationError = roomSlugValidationError();
+  if (validationError) {
+    state.publishStatus = "failed";
+    state.statusMessage = `failed:${validationError}`;
+    render();
+    return;
+  }
   state.publishStatus = "publishing";
   state.statusMessage = "publishing";
   render();
   void createRoom(apiBaseUrl, {
+    roomId: roomSlugInput.value.trim(),
     tenantId: tenantSelect.value,
     templateId: templateSelect.value,
     name: roomNameInput.value,
+    sceneBundleUrl: selectedSceneBundlePublicUrl(),
     assetIds: Array.from(assetSelect.selectedOptions).map((option) => option.value),
     visibility: roomVisibilitySelect.value as "public" | "unlisted" | "private",
     guestAllowed: guestAccessInput.checked,
@@ -497,18 +593,60 @@ form.addEventListener("submit", (event) => {
       screenShare: featureShareInput.checked
     }
   }, currentAuth())
-    .then((room) => {
+    .then(async (room) => {
       state.publishStatus = "published";
       state.statusMessage = "published";
       state.roomLink = room.roomLink;
       state.rooms = [room, ...state.rooms];
-      void selectRoom(room);
+      await selectRoom(room);
+      if (room.visibility === "private") {
+        const invite = await createRoomInvite(apiBaseUrl, room.roomId, {
+          expiresInSeconds: Number.parseInt(inviteTtlInput.value, 10) || 3600,
+          waitingRoomEnabled: inviteWaitingRoomInput.checked
+        }, currentAuth());
+        state.selectedRoomInvites = [invite, ...state.selectedRoomInvites];
+        inviteSelect.value = invite.inviteId;
+        state.statusMessage = "published-invite-created";
+        render();
+      }
     })
     .catch((error: unknown) => {
       state.publishStatus = "failed";
       state.statusMessage = error instanceof Error ? `failed:${error.message}` : "failed";
       render();
     });
+});
+
+copyRoomLinkButton.addEventListener("click", () => {
+  const url = state.roomLink || (state.selectedRoom ? createRoomUrl(apiBaseUrl, state.selectedRoom.roomId) : "");
+  if (!url) {
+    state.publishStatus = "failed";
+    state.statusMessage = "failed:missing_room_url";
+    render();
+    return;
+  }
+  void (async () => {
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(url);
+      } else {
+        const textarea = document.createElement("textarea");
+        textarea.value = url;
+        textarea.style.position = "fixed";
+        textarea.style.left = "-9999px";
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand("copy");
+        textarea.remove();
+      }
+      state.publishStatus = "published";
+      state.statusMessage = "room-url-copied";
+    } catch (error) {
+      state.publishStatus = "failed";
+      state.statusMessage = error instanceof Error ? `failed:${error.message}` : "failed:copy_room_url";
+    }
+    render();
+  })();
 });
 
 assetForm.addEventListener("submit", (event) => {

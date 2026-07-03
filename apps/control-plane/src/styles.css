@@ -54,6 +54,12 @@ button {
   display: block;
 }
 
+.validation-message {
+  min-height: 20px;
+  color: #9a3412;
+  font-size: 0.9rem;
+}
+
 #rooms-list {
   margin-top: 18px;
   padding-left: 18px;
@@ -100,6 +106,15 @@ button {
   border-radius: 12px;
   background: rgba(10, 36, 64, 0.06);
   border: 1px solid rgba(10, 36, 64, 0.08);
+  white-space: pre-wrap;
+}
+
+#room-preview {
+  margin-top: 16px;
+  padding: 12px;
+  border-radius: 12px;
+  background: rgba(14, 91, 215, 0.06);
+  border: 1px solid rgba(14, 91, 215, 0.16);
   white-space: pre-wrap;
 }
 

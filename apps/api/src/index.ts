@@ -305,6 +305,8 @@ const metrics = {
   roomLockedTotal: 0,
   participantsRemovedTotal: 0,
   sessionsEndedTotal: 0,
+  roomsCreatedTotal: new Map<string, number>(),
+  roomCreationFailuresTotal: new Map<string, number>(),
   sceneBundleUploadsTotal: new Map<string, number>(),
   sceneBundleUploadBytesTotal: 0,
   sceneBundleValidationFailuresTotal: new Map<string, number>()
@@ -1109,6 +1111,15 @@ async function apiMetricsText(storage: Awaited<typeof storagePromise>): Promise<
     "# HELP vrata_sessions_ended_total Session end actions accepted by API.",
     "# TYPE vrata_sessions_ended_total counter",
     formatMetricLine("vrata_sessions_ended_total", metrics.sessionsEndedTotal),
+    "# HELP vrata_rooms_created_total Rooms created through the API by source and visibility.",
+    "# TYPE vrata_rooms_created_total counter",
+    ...Array.from(metrics.roomsCreatedTotal.entries()).map(([label, count]) => {
+      const [source = "unknown", visibility = "unknown"] = label.split(":");
+      return formatMetricLine("vrata_rooms_created_total", count, { source, visibility });
+    }),
+    "# HELP vrata_room_creation_failures_total Room creation failures by reason.",
+    "# TYPE vrata_room_creation_failures_total counter",
+    ...Array.from(metrics.roomCreationFailuresTotal.entries()).map(([reason, count]) => formatMetricLine("vrata_room_creation_failures_total", count, { reason })),
     "# HELP vrata_scene_bundle_upload_bytes_total Uploaded scene bundle bytes accepted by API.",
     "# TYPE vrata_scene_bundle_upload_bytes_total counter",
     formatMetricLine("vrata_scene_bundle_upload_bytes_total", metrics.sceneBundleUploadBytesTotal)
@@ -2001,6 +2012,9 @@ async function handleSceneBundleZipUpload(
 }
 
 function validateRoomInput(input: Partial<RoomRecord>, templateIds: Set<string>, tenantIds: Set<string>): string | null {
+  if (input.roomId !== undefined && (typeof input.roomId !== "string" || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(input.roomId) || input.roomId.length < 3 || input.roomId.length > 64)) {
+    return "invalid_room_slug";
+  }
   if (!input.name || input.name.trim().length < 3 || input.name.trim().length > 80) {
     return "invalid_room_name";
   }
@@ -2034,6 +2048,9 @@ function normalizeRoomPayload(input: Partial<RoomRecord> & {
   const hasLegacyAvatarField = Object.values(legacyAvatarConfig).some((value) => value !== undefined);
 
   const normalized = { ...input } as Partial<RoomRecord>;
+  if (typeof input.roomId === "string") {
+    normalized.roomId = input.roomId.trim() || undefined;
+  }
   if (hasLegacyAvatarField) {
     normalized.avatarConfig = {
       ...legacyAvatarConfig,
@@ -2511,10 +2528,29 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     const tenantIds = new Set((await storage.listTenants()).map((tenant) => tenant.tenantId));
     const templateIds = new Set((await storage.listTemplates()).map((template) => template.templateId));
     const validationError = validateRoomInput(payload, templateIds, tenantIds);
-    if (validationError) return json(response, 400, { error: validationError });
+    if (validationError) {
+      incrementCounter(metrics.roomCreationFailuresTotal, validationError);
+      return json(response, 400, { error: validationError });
+    }
     const assetValidationError = await validateRoomAssetIds(storage, payload.assetIds, payload.templateId);
-    if (assetValidationError) return json(response, 400, { error: assetValidationError });
-    const room = await storage.createRoom(payload);
+    if (assetValidationError) {
+      incrementCounter(metrics.roomCreationFailuresTotal, assetValidationError);
+      return json(response, 400, { error: assetValidationError });
+    }
+    if (payload.roomId && await storage.getRoom(payload.roomId)) {
+      incrementCounter(metrics.roomCreationFailuresTotal, "room_slug_conflict");
+      return json(response, 409, { error: "room_slug_conflict" });
+    }
+    let room: RoomRecord;
+    try {
+      room = await storage.createRoom(payload);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "room_create_failed";
+      const reason = /duplicate key|unique constraint|already exists/i.test(message) ? "room_slug_conflict" : "room_create_failed";
+      incrementCounter(metrics.roomCreationFailuresTotal, reason);
+      return json(response, reason === "room_slug_conflict" ? 409 : 400, { error: reason });
+    }
+    incrementCounter(metrics.roomsCreatedTotal, `control-plane:${sanitizeRoomVisibility(room.visibility)}`);
     json(response, 201, { ...room, roomLink: createRoomLink(room.roomId, request), manifest: await buildManifest(room.roomId, request) });
     return;
   }

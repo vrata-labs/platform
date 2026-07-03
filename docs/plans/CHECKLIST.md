@@ -30,7 +30,7 @@
 
 - [x] **VRATA-FEAT-014** — [Private room access mode](./014-private-room-access-mode/README.md) — зависит от: 002, 003
 - [x] **VRATA-FEAT-015** — [Host controls for small meetings](./015-host-controls-for-small-meetings/README.md) — зависит от: 002, 014
-- [ ] **VRATA-FEAT-016** — [Room creation UI without developer](./016-room-creation-ui-without-developer/README.md) — зависит от: 002, 014, 017
+- [x] **VRATA-FEAT-016** — [Room creation UI without developer](./016-room-creation-ui-without-developer/README.md) — зависит от: 002, 014, 017
 - [x] **VRATA-FEAT-017** — [Scene bundle upload UI](./017-scene-bundle-upload-ui/README.md) — зависит от: 002, 018
 - [x] **VRATA-FEAT-018** — [Scene bundle validator CLI](./018-scene-bundle-validator-cli/README.md)
 - [ ] **VRATA-FEAT-019** — [Personal room mode](./019-personal-room-mode/README.md) — зависит от: 014, 020, 022
@@ -82,7 +82,7 @@
 ### Спринт 3 — управляемые комнаты
 - [x] VRATA-FEAT-014
 - [x] VRATA-FEAT-015
-- [ ] VRATA-FEAT-016
+- [x] VRATA-FEAT-016
 - [x] VRATA-FEAT-017
 - [x] VRATA-FEAT-018
 - [ ] VRATA-FEAT-030

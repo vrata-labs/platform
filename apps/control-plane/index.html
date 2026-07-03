@@ -14,6 +14,8 @@
           <label>Admin token <input id="admin-token-input" type="password" placeholder="required on secured env" /></label>
           <label>Tenant <select id="tenant-select"></select></label>
           <label>Room name <input id="room-name-input" value="Showroom Demo" /></label>
+          <label>Room slug <input id="room-slug-input" value="showroom-demo" inputmode="latin" autocomplete="off" /></label>
+          <div id="room-validation-message" class="validation-message" aria-live="polite"></div>
           <label>Template <select id="template-select"></select></label>
           <label>Attach assets <select id="asset-select" multiple></select></label>
           <label>Registered scene bundle <select id="scene-bundle-select"></select></label>
@@ -39,6 +41,7 @@
           <label><input id="avatar-fallback-input" type="checkbox" checked /> Capsule fallback enabled</label>
           <label><input id="avatar-seats-input" type="checkbox" /> Avatar seats enabled</label>
           <button id="create-room" type="submit">Create room</button>
+          <button id="copy-room-link" type="button">Copy room URL</button>
           <button id="update-room" type="button">Update selected room</button>
           <button id="bind-scene-bundle" type="button">Bind selected scene bundle</button>
           <button id="set-current-scene-bundle" type="button">Set version current</button>
@@ -83,6 +86,7 @@
         </form>
         <div id="publish-status">idle</div>
         <a id="room-link" target="_blank" rel="noreferrer"></a>
+        <pre id="room-preview">Room preview will appear here</pre>
         <button id="refresh-room-detail" type="button">Refresh room detail</button>
         <pre id="template-detail">Select a template to inspect details</pre>
         <label>Filter rooms by tenant <select id="room-filter-tenant"></select></label>
