@@ -99,6 +99,32 @@ test("production config validator rejects incomplete TURN/TLS config", () => {
   assert.equal(issueCodes(result).includes("missing_required_env"), true);
 });
 
+test("production config validator checks s3-compatible scene bundle credentials", () => {
+  const validS3 = validateProductionConfig(validProductionEnv({
+    SCENE_BUNDLE_PROVIDER: "s3-compatible",
+    SCENE_BUNDLE_S3_ENDPOINT: "https://object-storage.vrata-prod.com",
+    SCENE_BUNDLE_S3_REGION: "ru-central1",
+    SCENE_BUNDLE_S3_BUCKET: "vrata-scene-bundles",
+    SCENE_BUNDLE_S3_PUBLIC_BASE_URL: "https://storage.vrata-prod.com",
+    SCENE_BUNDLE_S3_ACCESS_KEY_ID: "s3_access_key",
+    SCENE_BUNDLE_S3_SECRET_ACCESS_KEY: "s3_secret_key_0123456789abcdef"
+  }));
+  assert.deepEqual(validS3, { ok: true, issues: [] });
+
+  const missingCredentials = validateProductionConfig(validProductionEnv({
+    SCENE_BUNDLE_PROVIDER: "s3-compatible",
+    SCENE_BUNDLE_S3_ENDPOINT: "https://object-storage.vrata-prod.com",
+    SCENE_BUNDLE_S3_REGION: "ru-central1",
+    SCENE_BUNDLE_S3_BUCKET: "vrata-scene-bundles",
+    SCENE_BUNDLE_S3_PUBLIC_BASE_URL: "https://storage.vrata-prod.com",
+    SCENE_BUNDLE_S3_ACCESS_KEY_ID: "",
+    SCENE_BUNDLE_S3_SECRET_ACCESS_KEY: ""
+  }));
+
+  assert.equal(missingCredentials.ok, false);
+  assert.equal(issueCodes(missingCredentials).includes("missing_required_env"), true);
+});
+
 test("production config validator rejects dev secrets and insecure public urls", () => {
   const result = validateProductionConfig(validProductionEnv({
     LIVEKIT_API_KEY: "devkey",

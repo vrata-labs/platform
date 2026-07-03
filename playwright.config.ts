@@ -47,6 +47,7 @@ export default defineConfig({
       API_INTERNAL_URL: apiInternalUrl,
       ROOM_STATE_INTERNAL_URL: `http://127.0.0.1:${roomStatePort}`,
       ROOM_STATE_PUBLIC_URL: roomStateUrl,
+      SCENE_BUNDLE_LOCAL_UPLOAD_ROOT: process.env.SCENE_BUNDLE_LOCAL_UPLOAD_ROOT ?? "/tmp/vrata-e2e-scene-bundles",
       REMOTE_BROWSER_VIEWPORT_MOCK: "1",
       REMOTE_BROWSER_ALLOWED_ORIGINS: allowedOrigins,
       REMOTE_BROWSER_ALLOW_PRIVATE_ALLOWED_ORIGINS: "true"

@@ -193,7 +193,7 @@ function readZipEntry(buffer: Buffer, entry: ZipEntry): Buffer {
   throw new Error(`unsupported_zip_compression:${entry.compressionMethod}`);
 }
 
-async function extractZipToTemp(zipPath: string): Promise<{ root: string; files: string[] }> {
+export async function extractSceneBundleZipToTemp(zipPath: string): Promise<{ root: string; files: string[] }> {
   const buffer = await readFile(zipPath);
   const entries = parseZipEntries(buffer);
   const root = await mkdtemp(join(tmpdir(), "vrata-scene-bundle-zip-"));
@@ -429,7 +429,7 @@ export async function validateSceneBundlePath(inputPath: string, options: SceneB
   if (inputType === "zip") {
     let extracted: { root: string; files: string[] } | null = null;
     try {
-      extracted = await extractZipToTemp(resolvedInputPath);
+      extracted = await extractSceneBundleZipToTemp(resolvedInputPath);
       const rootManifestExists = extracted.files.includes("scene.json");
       const sceneJsonFiles = extracted.files.filter((filePath) => basename(filePath) === "scene.json");
       if (!rootManifestExists && sceneJsonFiles.length > 1) {

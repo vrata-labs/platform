@@ -1,12 +1,13 @@
-import { readFile, stat } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { extname, join, normalize } from "node:path";
+import { basename, dirname, extname, join, normalize, relative, resolve, sep } from "node:path";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
 import { AccessToken } from "livekit-server-sdk";
-import { validateSceneBundleReference } from "@vrata/asset-pipeline";
+import { extractSceneBundleZipToTemp, normalizeSceneBundleRelativePath, validateSceneBundlePath, validateSceneBundleReference } from "@vrata/asset-pipeline";
 import { createRoomAccessDebugState, getRoomPermissions, hasRoomPermission, parseRoomRole, type RoomPermission, type RoomRole } from "@vrata/shared-types";
 import { signRoomSessionToken, verifyRoomSessionToken, type RoomSessionRoleSource, type RoomSessionTokenPayload, type RoomSessionTokenVerificationResult } from "@vrata/shared-types/session-token";
 
@@ -190,6 +191,35 @@ interface RuntimeSpaceRecord {
   roomLink: string;
 }
 
+interface MultipartPart {
+  name: string;
+  filename?: string;
+  contentType?: string;
+  data: Buffer;
+}
+
+interface SceneBundleManifestMetadata {
+  schemaVersion?: number;
+  sceneId?: string;
+  glbPath?: string;
+  preview?: string;
+}
+
+type SceneBundleUploadStorage = {
+  type: "local";
+  provider: SceneBundleProvider;
+  root: string;
+  publicBaseUrl: string;
+} | {
+  type: "s3";
+  provider: SceneBundleProvider;
+  endpoint: string;
+  region: string;
+  bucket: string;
+  accessKeyId: string;
+  secretAccessKey: string;
+};
+
 interface XrTelemetryRecord {
   participantId: string;
   roomId: string;
@@ -274,7 +304,10 @@ const metrics = {
   hostActionsTotal: new Map<string, number>(),
   roomLockedTotal: 0,
   participantsRemovedTotal: 0,
-  sessionsEndedTotal: 0
+  sessionsEndedTotal: 0,
+  sceneBundleUploadsTotal: new Map<string, number>(),
+  sceneBundleUploadBytesTotal: 0,
+  sceneBundleValidationFailuresTotal: new Map<string, number>()
 };
 
 function isEnabledEnvValue(value: string | undefined): boolean | null {
@@ -321,6 +354,11 @@ export function isRoomAccessPolicyEnabled(env: NodeJS.ProcessEnv = process.env):
     return explicit;
   }
   return isEnabledEnvValue(env.FEATURE_ROOM_ACCESS_POLICY) ?? true;
+}
+
+function isSceneBundleUploadEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  if (env.FEATURE_SCENE_BUNDLES === "false") return false;
+  return isEnabledEnvValue(env.FEATURE_SCENE_BUNDLE_UPLOAD) ?? true;
 }
 
 export function isHostControlsEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -1070,8 +1108,25 @@ async function apiMetricsText(storage: Awaited<typeof storagePromise>): Promise<
     formatMetricLine("vrata_participants_removed_total", metrics.participantsRemovedTotal),
     "# HELP vrata_sessions_ended_total Session end actions accepted by API.",
     "# TYPE vrata_sessions_ended_total counter",
-    formatMetricLine("vrata_sessions_ended_total", metrics.sessionsEndedTotal)
+    formatMetricLine("vrata_sessions_ended_total", metrics.sessionsEndedTotal),
+    "# HELP vrata_scene_bundle_upload_bytes_total Uploaded scene bundle bytes accepted by API.",
+    "# TYPE vrata_scene_bundle_upload_bytes_total counter",
+    formatMetricLine("vrata_scene_bundle_upload_bytes_total", metrics.sceneBundleUploadBytesTotal)
   );
+  lines.push(
+    "# HELP vrata_scene_bundle_uploads_total Scene bundle upload attempts by result.",
+    "# TYPE vrata_scene_bundle_uploads_total counter"
+  );
+  for (const [result, count] of metrics.sceneBundleUploadsTotal.entries()) {
+    lines.push(formatMetricLine("vrata_scene_bundle_uploads_total", count, { result }));
+  }
+  lines.push(
+    "# HELP vrata_scene_bundle_validation_failures_total Scene bundle upload validation failures by reason.",
+    "# TYPE vrata_scene_bundle_validation_failures_total counter"
+  );
+  for (const [reason, count] of metrics.sceneBundleValidationFailuresTotal.entries()) {
+    lines.push(formatMetricLine("vrata_scene_bundle_validation_failures_total", count, { reason }));
+  }
   lines.push(
     "# HELP vrata_media_join_failures_total Media token or media join failures observed by API.",
     "# TYPE vrata_media_join_failures_total counter"
@@ -1564,6 +1619,387 @@ function parseBody<T>(request: IncomingMessage): Promise<T | null> {
   });
 }
 
+function readRequestBuffer(request: IncomingMessage, maxBytes: number): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let bytes = 0;
+    request.on("data", (chunk) => {
+      const buffer = Buffer.from(chunk);
+      bytes += buffer.byteLength;
+      if (bytes > maxBytes) {
+        reject(new Error("payload_too_large"));
+        request.destroy();
+        return;
+      }
+      chunks.push(buffer);
+    });
+    request.on("end", () => resolve(Buffer.concat(chunks)));
+    request.on("error", reject);
+  });
+}
+
+function parseMultipartBoundary(contentType: string | undefined): string | null {
+  const match = contentType?.match(/(?:^|;)\s*boundary=("([^"]+)"|[^;]+)/i);
+  return match ? (match[2] ?? match[1]).replace(/^"|"$/g, "") : null;
+}
+
+function parseContentDisposition(value: string | undefined): { name?: string; filename?: string } {
+  const result: { name?: string; filename?: string } = {};
+  for (const part of value?.split(";") ?? []) {
+    const [rawKey, ...rawValueParts] = part.trim().split("=");
+    const key = rawKey?.trim().toLowerCase();
+    if (!key || rawValueParts.length === 0) continue;
+    const rawValue = rawValueParts.join("=").trim();
+    const valueText = rawValue.replace(/^"|"$/g, "");
+    if (key === "name") result.name = valueText;
+    if (key === "filename") result.filename = valueText;
+  }
+  return result;
+}
+
+function parseMultipartFormData(buffer: Buffer, boundary: string): MultipartPart[] {
+  const delimiter = Buffer.from(`--${boundary}`);
+  const prefixedDelimiter = Buffer.from(`\r\n--${boundary}`);
+  const headerTerminator = Buffer.from("\r\n\r\n");
+  const parts: MultipartPart[] = [];
+  let cursor = buffer.indexOf(delimiter);
+  if (cursor < 0) throw new Error("invalid_multipart_body");
+
+  while (cursor >= 0) {
+    cursor += delimiter.byteLength;
+    if (buffer.subarray(cursor, cursor + 2).toString("utf8") === "--") break;
+    if (buffer.subarray(cursor, cursor + 2).toString("utf8") === "\r\n") cursor += 2;
+    const headerEnd = buffer.indexOf(headerTerminator, cursor);
+    if (headerEnd < 0) throw new Error("invalid_multipart_part_headers");
+    const headers = new Map<string, string>();
+    const headerText = buffer.subarray(cursor, headerEnd).toString("utf8");
+    for (const line of headerText.split("\r\n")) {
+      const separator = line.indexOf(":");
+      if (separator <= 0) continue;
+      headers.set(line.slice(0, separator).trim().toLowerCase(), line.slice(separator + 1).trim());
+    }
+    const contentStart = headerEnd + headerTerminator.byteLength;
+    const nextBoundary = buffer.indexOf(prefixedDelimiter, contentStart);
+    if (nextBoundary < 0) throw new Error("invalid_multipart_part_body");
+    const disposition = parseContentDisposition(headers.get("content-disposition"));
+    if (disposition.name) {
+      parts.push({
+        name: disposition.name,
+        filename: disposition.filename,
+        contentType: headers.get("content-type"),
+        data: buffer.subarray(contentStart, nextBoundary)
+      });
+    }
+    cursor = nextBoundary + 2;
+  }
+
+  return parts;
+}
+
+function textPart(parts: MultipartPart[], name: string): string | undefined {
+  const value = parts.find((part) => part.name === name && !part.filename)?.data.toString("utf8").trim();
+  return value && value.length > 0 ? value : undefined;
+}
+
+function filePart(parts: MultipartPart[], name: string): MultipartPart | undefined {
+  return parts.find((part) => part.name === name && Boolean(part.filename));
+}
+
+function sanitizeSceneBundleId(value: string | undefined, fallback: string): string | null {
+  const candidate = (value ?? fallback).trim();
+  return /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(candidate) ? candidate : null;
+}
+
+function sanitizeSceneBundleVersion(value: string | undefined): string | null {
+  const candidate = (value ?? "v1").trim();
+  return /^[a-zA-Z0-9._-]{1,64}$/.test(candidate) ? candidate : null;
+}
+
+function trimSlashes(value: string): string {
+  return value.replace(/^\/+|\/+$/g, "");
+}
+
+function joinUrlPath(baseUrl: string, path: string): string {
+  const base = baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`;
+  return new URL(path.split("/").map(encodeURIComponent).join("/"), base).toString();
+}
+
+function contentTypeForPath(filePath: string): string {
+  switch (extname(filePath).toLowerCase()) {
+    case ".json": return "application/json";
+    case ".glb": return "model/gltf-binary";
+    case ".gltf": return "model/gltf+json";
+    case ".fbx": return "application/octet-stream";
+    case ".jpg":
+    case ".jpeg": return "image/jpeg";
+    case ".png": return "image/png";
+    case ".webp": return "image/webp";
+    case ".ktx2": return "image/ktx2";
+    default: return "application/octet-stream";
+  }
+}
+
+async function listFilesRecursive(root: string, current = root): Promise<string[]> {
+  const entries = await readdir(current, { withFileTypes: true });
+  const files: string[] = [];
+  for (const entry of entries) {
+    const absolutePath = join(current, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...await listFilesRecursive(root, absolutePath));
+      continue;
+    }
+    if (entry.isFile()) {
+      files.push(relative(root, absolutePath).split(sep).join("/"));
+    }
+  }
+  return files;
+}
+
+function publicBaseUrlFromRequest(request: IncomingMessage): string {
+  const url = new URL(createRoomLink("__scene_bundle_upload__", request));
+  url.pathname = "/";
+  url.search = "";
+  url.hash = "";
+  return url.toString();
+}
+
+function getSceneBundleUploadStorage(request: IncomingMessage): SceneBundleUploadStorage {
+  const provider = (process.env.SCENE_BUNDLE_PROVIDER as SceneBundleProvider | undefined) ?? "minio-default";
+  if (provider === "minio-default") {
+    if (process.env.MINIO_ROOT_USER && process.env.MINIO_ROOT_PASSWORD && process.env.MINIO_BUCKET && process.env.MINIO_PUBLIC_BASE_URL) {
+      return {
+        type: "s3",
+        provider,
+        endpoint: process.env.MINIO_ENDPOINT ?? "http://minio:9000",
+        region: process.env.SCENE_BUNDLE_S3_REGION || "us-east-1",
+        bucket: process.env.MINIO_BUCKET,
+        accessKeyId: process.env.MINIO_ROOT_USER,
+        secretAccessKey: process.env.MINIO_ROOT_PASSWORD
+      };
+    }
+  } else if (provider === "s3-compatible") {
+    if (process.env.SCENE_BUNDLE_S3_ENDPOINT && process.env.SCENE_BUNDLE_S3_REGION && process.env.SCENE_BUNDLE_S3_BUCKET && process.env.SCENE_BUNDLE_S3_PUBLIC_BASE_URL && process.env.SCENE_BUNDLE_S3_ACCESS_KEY_ID && process.env.SCENE_BUNDLE_S3_SECRET_ACCESS_KEY) {
+      return {
+        type: "s3",
+        provider,
+        endpoint: process.env.SCENE_BUNDLE_S3_ENDPOINT,
+        region: process.env.SCENE_BUNDLE_S3_REGION,
+        bucket: process.env.SCENE_BUNDLE_S3_BUCKET,
+        accessKeyId: process.env.SCENE_BUNDLE_S3_ACCESS_KEY_ID,
+        secretAccessKey: process.env.SCENE_BUNDLE_S3_SECRET_ACCESS_KEY
+      };
+    }
+  }
+
+  if (process.env.NODE_ENV === "production") {
+    throw new Error(`misconfigured_scene_bundle_upload_storage:${provider}`);
+  }
+
+  const root = resolve(process.env.SCENE_BUNDLE_LOCAL_UPLOAD_ROOT ?? join(runtimePublicRoot, "assets", "uploaded-scene-bundles"));
+  return {
+    type: "local",
+    provider: "minio-default",
+    root,
+    publicBaseUrl: new URL("/assets/uploaded-scene-bundles/", publicBaseUrlFromRequest(request)).toString()
+  };
+}
+
+function sha256Hex(value: Buffer | string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function hmac(key: Buffer | string, value: string): Buffer {
+  return createHmac("sha256", key).update(value).digest();
+}
+
+function formatAmzDate(date: Date): { amzDate: string; dateStamp: string } {
+  const iso = date.toISOString().replace(/[:-]|\.\d{3}/g, "");
+  return { amzDate: iso, dateStamp: iso.slice(0, 8) };
+}
+
+async function putS3Object(storage: Extract<SceneBundleUploadStorage, { type: "s3" }>, key: string, body: Buffer, contentType: string): Promise<void> {
+  const endpoint = storage.endpoint.endsWith("/") ? storage.endpoint : `${storage.endpoint}/`;
+  const url = new URL(`${trimSlashes(storage.bucket)}/${key.split("/").map(encodeURIComponent).join("/")}`, endpoint);
+  const payloadHash = sha256Hex(body);
+  const { amzDate, dateStamp } = formatAmzDate(new Date());
+  const headers = new Map<string, string>([
+    ["content-type", contentType],
+    ["host", url.host],
+    ["x-amz-content-sha256", payloadHash],
+    ["x-amz-date", amzDate]
+  ]);
+  const signedHeaders = Array.from(headers.keys()).sort().join(";");
+  const canonicalHeaders = Array.from(headers.entries()).sort(([left], [right]) => left.localeCompare(right)).map(([name, value]) => `${name}:${value.trim()}\n`).join("");
+  const canonicalRequest = ["PUT", url.pathname, "", canonicalHeaders, signedHeaders, payloadHash].join("\n");
+  const credentialScope = `${dateStamp}/${storage.region}/s3/aws4_request`;
+  const stringToSign = ["AWS4-HMAC-SHA256", amzDate, credentialScope, sha256Hex(canonicalRequest)].join("\n");
+  const signingKey = hmac(hmac(hmac(hmac(`AWS4${storage.secretAccessKey}`, dateStamp), storage.region), "s3"), "aws4_request");
+  const signature = createHmac("sha256", signingKey).update(stringToSign).digest("hex");
+  const authorization = `AWS4-HMAC-SHA256 Credential=${storage.accessKeyId}/${credentialScope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
+
+  const response = await fetch(url, {
+    method: "PUT",
+    headers: {
+      "authorization": authorization,
+      "content-type": contentType,
+      "x-amz-content-sha256": payloadHash,
+      "x-amz-date": amzDate
+    },
+    body: new Uint8Array(body)
+  });
+  if (!response.ok) {
+    throw new Error(`scene_bundle_object_upload_failed:${response.status}`);
+  }
+}
+
+async function publishSceneBundleFiles(storage: SceneBundleUploadStorage, bundleRoot: string, storagePrefix: string): Promise<void> {
+  const files = await listFilesRecursive(bundleRoot);
+  for (const filePath of files) {
+    const normalizedPath = normalizeSceneBundleRelativePath(filePath);
+    if (!normalizedPath) throw new Error("unsafe_scene_bundle_file_path");
+    const sourcePath = join(bundleRoot, normalizedPath);
+    const objectKey = `${storagePrefix}/${normalizedPath}`;
+    if (storage.type === "local") {
+      const target = join(storage.root, storagePrefix, normalizedPath);
+      if (!target.startsWith(`${storage.root}${sep}`)) throw new Error("unsafe_scene_bundle_file_path");
+      await mkdir(dirname(target), { recursive: true });
+      await copyFile(sourcePath, target);
+    } else {
+      await putS3Object(storage, objectKey, await readFile(sourcePath), contentTypeForPath(normalizedPath));
+    }
+  }
+}
+
+function resolveUploadedSceneBundlePublicUrl(storage: SceneBundleUploadStorage, storageKey: string): string {
+  if (storage.type === "local") {
+    return joinUrlPath(storage.publicBaseUrl, storageKey);
+  }
+  return resolveSceneBundlePublicUrl(storageKey, process.env, storage.provider);
+}
+
+function relativeManifestPathFromZipManifest(inputPath: string, manifestPath: string | null): string {
+  const marker = `${inputPath}!/`;
+  if (manifestPath?.startsWith(marker)) {
+    return manifestPath.slice(marker.length);
+  }
+  return "scene.json";
+}
+
+function readManifestMetadata(value: unknown): SceneBundleManifestMetadata {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const manifest = value as Record<string, unknown>;
+  return {
+    schemaVersion: typeof manifest.schemaVersion === "number" ? manifest.schemaVersion : undefined,
+    sceneId: typeof manifest.sceneId === "string" ? manifest.sceneId : undefined,
+    glbPath: typeof manifest.glbPath === "string" ? manifest.glbPath : undefined,
+    preview: typeof manifest.preview === "string" ? manifest.preview : undefined
+  };
+}
+
+async function handleSceneBundleZipUpload(
+  request: IncomingMessage,
+  response: ServerResponse,
+  storage: Awaited<typeof storagePromise>,
+  actor: ControlPlaneActor
+): Promise<void> {
+  const maxBytes = Number.parseInt(process.env.SCENE_BUNDLE_UPLOAD_MAX_BYTES ?? `${50 * 1024 * 1024}`, 10);
+  const boundary = parseMultipartBoundary(request.headers["content-type"]);
+  if (!boundary) {
+    incrementCounter(metrics.sceneBundleUploadsTotal, "rejected");
+    json(response, 415, { error: "expected_multipart_scene_bundle_upload" });
+    return;
+  }
+
+  const body = await readRequestBuffer(request, maxBytes);
+  const parts = parseMultipartFormData(body, boundary);
+  const bundleFile = filePart(parts, "bundle") ?? filePart(parts, "file");
+  if (!bundleFile || !bundleFile.filename || extname(bundleFile.filename).toLowerCase() !== ".zip") {
+    incrementCounter(metrics.sceneBundleUploadsTotal, "rejected");
+    json(response, 400, { error: "unsupported_scene_bundle_upload_format" });
+    return;
+  }
+
+  const tempRoot = await mkdtemp(join(tmpdir(), "vrata-scene-upload-"));
+  const zipPath = join(tempRoot, basename(bundleFile.filename));
+  let extracted: Awaited<ReturnType<typeof extractSceneBundleZipToTemp>> | null = null;
+  try {
+    await writeFile(zipPath, bundleFile.data);
+    const validation = await validateSceneBundlePath(zipPath, { maxBundleBytes: maxBytes });
+    if (!validation.ok) {
+      incrementCounter(metrics.sceneBundleUploadsTotal, "validation_failed");
+      for (const issue of validation.issues.filter((entry) => entry.severity === "error")) {
+        incrementCounter(metrics.sceneBundleValidationFailuresTotal, issue.code);
+      }
+      json(response, 400, { error: "scene_bundle_validation_failed", issues: validation.issues, stats: validation.stats });
+      return;
+    }
+
+    extracted = await extractSceneBundleZipToTemp(zipPath);
+    const manifestRelativePath = relativeManifestPathFromZipManifest(zipPath, validation.manifestPath);
+    const manifestDir = dirname(manifestRelativePath);
+    const extractedBundleRoot = manifestDir === "." ? extracted.root : join(extracted.root, manifestDir);
+    const resolvedExtractedRoot = resolve(extracted.root);
+    const resolvedBundleRoot = resolve(extractedBundleRoot);
+    if (resolvedBundleRoot !== resolvedExtractedRoot && !resolvedBundleRoot.startsWith(`${resolvedExtractedRoot}${sep}`)) {
+      throw new Error("unsafe_scene_bundle_manifest_root");
+    }
+
+    const manifest = readManifestMetadata(JSON.parse(await readFile(join(resolvedBundleRoot, "scene.json"), "utf8")));
+    const bundleId = sanitizeSceneBundleId(textPart(parts, "bundleId"), manifest.sceneId ?? "uploaded-scene");
+    if (!bundleId) {
+      incrementCounter(metrics.sceneBundleUploadsTotal, "rejected");
+      json(response, 400, { error: "invalid_scene_bundle_id" });
+      return;
+    }
+    const version = sanitizeSceneBundleVersion(textPart(parts, "version"));
+    if (!version) {
+      incrementCounter(metrics.sceneBundleUploadsTotal, "rejected");
+      json(response, 400, { error: "invalid_scene_bundle_version" });
+      return;
+    }
+    if ((await storage.listSceneBundleVersions(bundleId)).some((item) => item.version === version)) {
+      incrementCounter(metrics.sceneBundleUploadsTotal, "rejected");
+      json(response, 409, { error: "scene_bundle_version_conflict" });
+      return;
+    }
+
+    const uploadStorage = getSceneBundleUploadStorage(request);
+    const scenePrefix = trimSlashes(process.env.MINIO_SCENE_PREFIX ?? "scenes");
+    const storagePrefix = [scenePrefix, bundleId, version].filter(Boolean).join("/");
+    const storageKey = `${storagePrefix}/scene.json`;
+    await publishSceneBundleFiles(uploadStorage, resolvedBundleRoot, storagePrefix);
+    const publicUrl = resolveUploadedSceneBundlePublicUrl(uploadStorage, storageKey);
+    const previewPath = manifest.preview ? normalizeSceneBundleRelativePath(manifest.preview) : null;
+    const previewUrl = previewPath ? resolveUploadedSceneBundlePublicUrl(uploadStorage, `${storagePrefix}/${previewPath}`) : undefined;
+    const record = await storage.createSceneBundle({
+      bundleId,
+      version,
+      storageKey,
+      publicUrl,
+      checksum: `sha256:${sha256Hex(bundleFile.data)}`,
+      sizeBytes: validation.stats.bundleBytes,
+      schemaVersion: manifest.schemaVersion,
+      entryScene: manifest.glbPath,
+      previewUrl,
+      createdBy: actor.actorId,
+      contentType: "application/json",
+      provider: uploadStorage.provider
+    });
+    metrics.sceneBundleUploadBytesTotal += bundleFile.data.byteLength;
+    incrementCounter(metrics.sceneBundleUploadsTotal, "success");
+    json(response, 201, { ...record, validation: { issues: validation.issues, stats: validation.stats } });
+  } catch (error) {
+    if (!response.writableEnded) {
+      const message = error instanceof Error ? error.message : "scene_bundle_upload_failed";
+      incrementCounter(metrics.sceneBundleUploadsTotal, "failed");
+      json(response, message.startsWith("misconfigured_scene_bundle_upload_storage") ? 503 : 400, { error: message });
+    }
+  } finally {
+    if (extracted) await rm(extracted.root, { recursive: true, force: true });
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+}
+
 function validateRoomInput(input: Partial<RoomRecord>, templateIds: Set<string>, tenantIds: Set<string>): string | null {
   if (!input.name || input.name.trim().length < 3 || input.name.trim().length > 80) {
     return "invalid_room_name";
@@ -1763,6 +2199,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
         roomStateRealtimeEnabled: process.env.FEATURE_ROOM_STATE_REALTIME !== "false",
         remoteDiagnosticsEnabled: process.env.FEATURE_REMOTE_DIAGNOSTICS !== "false",
         sceneBundlesEnabled: process.env.FEATURE_SCENE_BUNDLES !== "false",
+        sceneBundleUploadEnabled: isSceneBundleUploadEnabled(),
         avatarsEnabled: process.env.FEATURE_AVATARS !== "false",
         avatarPoseBinaryEnabled: process.env.FEATURE_AVATAR_POSE_BINARY !== "false",
         avatarLipsyncEnabled: process.env.FEATURE_AVATAR_LIPSYNC === "true",
@@ -1816,7 +2253,11 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   }
 
   if (method === "GET" && url.pathname.startsWith("/assets/")) {
-    const served = await serveStatic(response, join(runtimeStaticRoot, url.pathname.slice(1)))
+    const localUploadRoot = process.env.SCENE_BUNDLE_LOCAL_UPLOAD_ROOT ? resolve(process.env.SCENE_BUNDLE_LOCAL_UPLOAD_ROOT) : null;
+    const uploadedScenePath = url.pathname.match(/^\/assets\/uploaded-scene-bundles\/(.+)$/)?.[1];
+    const normalizedUploadedScenePath = uploadedScenePath ? normalizeSceneBundleRelativePath(uploadedScenePath) : null;
+    const served = (localUploadRoot && normalizedUploadedScenePath ? await serveStatic(response, join(localUploadRoot, normalizedUploadedScenePath)) : false)
+      || await serveStatic(response, join(runtimeStaticRoot, url.pathname.slice(1)))
       || await serveStatic(response, join(runtimePublicRoot, url.pathname.slice(1)));
     if (!served) json(response, 404, { error: "asset_not_found" });
     return;
@@ -1924,6 +2365,14 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     if (validationError) return json(response, 400, { error: validationError });
     const asset = await storage.createAsset(payload);
     json(response, 201, asset);
+    return;
+  }
+
+  if (method === "POST" && url.pathname === "/api/scene-bundles/uploads") {
+    if (!isSceneBundleUploadEnabled()) return json(response, 404, { error: "scene_bundle_upload_disabled" });
+    const actor = await requireControlPlanePermission(request, response, { permission: "scene-bundle.write", action: "scene-bundle.upload", objectType: "scene-bundle" });
+    if (!actor) return;
+    await handleSceneBundleZipUpload(request, response, storage, actor);
     return;
   }
 

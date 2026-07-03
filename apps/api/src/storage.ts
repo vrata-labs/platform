@@ -634,6 +634,10 @@ export class MemoryStorage implements Storage {
       publicUrl: input.publicUrl,
       checksum: input.checksum,
       sizeBytes: input.sizeBytes,
+      schemaVersion: input.schemaVersion,
+      entryScene: input.entryScene,
+      previewUrl: input.previewUrl,
+      createdBy: input.createdBy,
       contentType: input.contentType ?? "application/json",
       provider: input.provider,
       version,
@@ -656,6 +660,10 @@ export class MemoryStorage implements Storage {
       publicUrl: input.publicUrl ?? existing.publicUrl,
       checksum: input.checksum ?? existing.checksum,
       sizeBytes: input.sizeBytes ?? existing.sizeBytes,
+      schemaVersion: input.schemaVersion ?? existing.schemaVersion,
+      entryScene: input.entryScene ?? existing.entryScene,
+      previewUrl: input.previewUrl ?? existing.previewUrl,
+      createdBy: input.createdBy ?? existing.createdBy,
       contentType: input.contentType ?? existing.contentType,
       provider: input.provider ?? existing.provider,
       version: input.version ?? existing.version,
@@ -738,6 +746,10 @@ export class PostgresStorage implements Storage {
         public_url text not null,
         checksum text,
         size_bytes bigint,
+        schema_version integer,
+        entry_scene text,
+        preview_url text,
+        created_by text,
         content_type text not null,
         provider text not null,
         version text not null,
@@ -784,6 +796,10 @@ export class PostgresStorage implements Storage {
     await this.pool.query(`update rooms set session_control = '${DEFAULT_SESSION_CONTROL_JSON}'::jsonb || session_control`);
     await this.pool.query(`alter table scene_bundles add column if not exists status text not null default 'active'`);
     await this.pool.query(`alter table scene_bundles add column if not exists is_current boolean not null default true`);
+    await this.pool.query(`alter table scene_bundles add column if not exists schema_version integer`);
+    await this.pool.query(`alter table scene_bundles add column if not exists entry_scene text`);
+    await this.pool.query(`alter table scene_bundles add column if not exists preview_url text`);
+    await this.pool.query(`alter table scene_bundles add column if not exists created_by text`);
     await this.pool.query(`do $$ begin alter table scene_bundles drop constraint if exists scene_bundles_pkey; alter table scene_bundles add primary key (bundle_id, version); exception when duplicate_object then null; end $$;`);
     await this.seed();
   }
@@ -1045,13 +1061,17 @@ export class PostgresStorage implements Storage {
     }));
   }
   async listSceneBundles(): Promise<SceneBundleRecord[]> {
-    const result = await this.pool.query(`select distinct on (bundle_id) bundle_id, storage_key, public_url, checksum, size_bytes, content_type, provider, version, status, is_current, created_at from scene_bundles order by bundle_id, is_current desc, created_at desc`);
-    return result.rows.map((row: { bundle_id: string; storage_key: string; public_url: string; checksum: string | null; size_bytes: string | number | null; content_type: string; provider: SceneBundleRecord["provider"]; version: string; status: SceneBundleRecord["status"]; is_current: boolean; created_at: string }) => ({
+    const result = await this.pool.query(`select distinct on (bundle_id) bundle_id, storage_key, public_url, checksum, size_bytes, schema_version, entry_scene, preview_url, created_by, content_type, provider, version, status, is_current, created_at from scene_bundles order by bundle_id, is_current desc, created_at desc`);
+    return result.rows.map((row: { bundle_id: string; storage_key: string; public_url: string; checksum: string | null; size_bytes: string | number | null; schema_version: number | null; entry_scene: string | null; preview_url: string | null; created_by: string | null; content_type: string; provider: SceneBundleRecord["provider"]; version: string; status: SceneBundleRecord["status"]; is_current: boolean; created_at: string }) => ({
       bundleId: row.bundle_id,
       storageKey: row.storage_key,
       publicUrl: row.public_url,
       checksum: row.checksum ?? undefined,
       sizeBytes: row.size_bytes == null ? undefined : Number(row.size_bytes),
+      schemaVersion: row.schema_version ?? undefined,
+      entryScene: row.entry_scene ?? undefined,
+      previewUrl: row.preview_url ?? undefined,
+      createdBy: row.created_by ?? undefined,
       contentType: row.content_type,
       provider: row.provider,
       version: row.version,
@@ -1061,7 +1081,7 @@ export class PostgresStorage implements Storage {
     }));
   }
   async getSceneBundle(bundleId: string): Promise<SceneBundleRecord | null> {
-    const result = await this.pool.query(`select bundle_id, storage_key, public_url, checksum, size_bytes, content_type, provider, version, status, is_current, created_at from scene_bundles where bundle_id = $1 order by is_current desc, created_at desc limit 1`, [bundleId]);
+    const result = await this.pool.query(`select bundle_id, storage_key, public_url, checksum, size_bytes, schema_version, entry_scene, preview_url, created_by, content_type, provider, version, status, is_current, created_at from scene_bundles where bundle_id = $1 order by is_current desc, created_at desc limit 1`, [bundleId]);
     const row = result.rows[0];
     return row ? {
       bundleId: row.bundle_id,
@@ -1069,6 +1089,10 @@ export class PostgresStorage implements Storage {
       publicUrl: row.public_url,
       checksum: row.checksum ?? undefined,
       sizeBytes: row.size_bytes == null ? undefined : Number(row.size_bytes),
+      schemaVersion: row.schema_version ?? undefined,
+      entryScene: row.entry_scene ?? undefined,
+      previewUrl: row.preview_url ?? undefined,
+      createdBy: row.created_by ?? undefined,
       contentType: row.content_type,
       provider: row.provider,
       version: row.version,
@@ -1088,6 +1112,10 @@ export class PostgresStorage implements Storage {
       publicUrl: input.publicUrl,
       checksum: input.checksum,
       sizeBytes: input.sizeBytes,
+      schemaVersion: input.schemaVersion,
+      entryScene: input.entryScene,
+      previewUrl: input.previewUrl,
+      createdBy: input.createdBy,
       contentType: input.contentType ?? "application/json",
       provider: input.provider,
       version: input.version ?? "v1",
@@ -1097,8 +1125,8 @@ export class PostgresStorage implements Storage {
     };
     await this.pool.query(`update scene_bundles set is_current = false where bundle_id = $1`, [record.bundleId]);
     await this.pool.query(
-      `insert into scene_bundles (bundle_id, storage_key, public_url, checksum, size_bytes, content_type, provider, version, status, is_current, created_at) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)` ,
-      [record.bundleId, record.storageKey, record.publicUrl, record.checksum ?? null, record.sizeBytes ?? null, record.contentType, record.provider, record.version, record.status, record.isCurrent, record.createdAt]
+      `insert into scene_bundles (bundle_id, storage_key, public_url, checksum, size_bytes, schema_version, entry_scene, preview_url, created_by, content_type, provider, version, status, is_current, created_at) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)` ,
+      [record.bundleId, record.storageKey, record.publicUrl, record.checksum ?? null, record.sizeBytes ?? null, record.schemaVersion ?? null, record.entryScene ?? null, record.previewUrl ?? null, record.createdBy ?? null, record.contentType, record.provider, record.version, record.status, record.isCurrent, record.createdAt]
     );
     return record;
   }
@@ -1113,6 +1141,10 @@ export class PostgresStorage implements Storage {
       publicUrl: input.publicUrl ?? existing.publicUrl,
       checksum: input.checksum ?? existing.checksum,
       sizeBytes: input.sizeBytes ?? existing.sizeBytes,
+      schemaVersion: input.schemaVersion ?? existing.schemaVersion,
+      entryScene: input.entryScene ?? existing.entryScene,
+      previewUrl: input.previewUrl ?? existing.previewUrl,
+      createdBy: input.createdBy ?? existing.createdBy,
       contentType: input.contentType ?? existing.contentType,
       provider: input.provider ?? existing.provider,
       version: input.version ?? existing.version,
@@ -1123,19 +1155,23 @@ export class PostgresStorage implements Storage {
       await this.pool.query(`update scene_bundles set is_current = false where bundle_id = $1 and version <> $2`, [bundleId, existing.version]);
     }
     await this.pool.query(
-      `update scene_bundles set storage_key = $3, public_url = $4, checksum = $5, size_bytes = $6, content_type = $7, provider = $8, status = $9, is_current = $10 where bundle_id = $1 and version = $2`,
-      [bundleId, existing.version, updated.storageKey, updated.publicUrl, updated.checksum ?? null, updated.sizeBytes ?? null, updated.contentType, updated.provider, updated.status ?? "active", updated.isCurrent ?? true]
+      `update scene_bundles set storage_key = $3, public_url = $4, checksum = $5, size_bytes = $6, schema_version = $7, entry_scene = $8, preview_url = $9, created_by = $10, content_type = $11, provider = $12, status = $13, is_current = $14 where bundle_id = $1 and version = $2`,
+      [bundleId, existing.version, updated.storageKey, updated.publicUrl, updated.checksum ?? null, updated.sizeBytes ?? null, updated.schemaVersion ?? null, updated.entryScene ?? null, updated.previewUrl ?? null, updated.createdBy ?? null, updated.contentType, updated.provider, updated.status ?? "active", updated.isCurrent ?? true]
     );
     return updated;
   }
   async listSceneBundleVersions(bundleId: string): Promise<SceneBundleRecord[]> {
-    const result = await this.pool.query(`select bundle_id, storage_key, public_url, checksum, size_bytes, content_type, provider, version, status, is_current, created_at from scene_bundles where bundle_id = $1 order by created_at desc`, [bundleId]);
-    return result.rows.map((row: { bundle_id: string; storage_key: string; public_url: string; checksum: string | null; size_bytes: string | number | null; content_type: string; provider: SceneBundleRecord["provider"]; version: string; status: SceneBundleRecord["status"]; is_current: boolean; created_at: string }) => ({
+    const result = await this.pool.query(`select bundle_id, storage_key, public_url, checksum, size_bytes, schema_version, entry_scene, preview_url, created_by, content_type, provider, version, status, is_current, created_at from scene_bundles where bundle_id = $1 order by created_at desc`, [bundleId]);
+    return result.rows.map((row: { bundle_id: string; storage_key: string; public_url: string; checksum: string | null; size_bytes: string | number | null; schema_version: number | null; entry_scene: string | null; preview_url: string | null; created_by: string | null; content_type: string; provider: SceneBundleRecord["provider"]; version: string; status: SceneBundleRecord["status"]; is_current: boolean; created_at: string }) => ({
       bundleId: row.bundle_id,
       storageKey: row.storage_key,
       publicUrl: row.public_url,
       checksum: row.checksum ?? undefined,
       sizeBytes: row.size_bytes == null ? undefined : Number(row.size_bytes),
+      schemaVersion: row.schema_version ?? undefined,
+      entryScene: row.entry_scene ?? undefined,
+      previewUrl: row.preview_url ?? undefined,
+      createdBy: row.created_by ?? undefined,
       contentType: row.content_type,
       provider: row.provider,
       version: row.version,

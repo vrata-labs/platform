@@ -20,6 +20,7 @@ Vrata uses SemVer: `MAJOR.MINOR.PATCH`. Until `1.0.0`, breaking changes can happ
 - Host controls for small meetings with trusted host/admin lock, unlock, participant removal, host transfer, session end, runtime HUD states, metrics, and audit entries.
 - Runtime HUD scene attribution block for scene bundle credits.
 - Scene bundle validator CLI via `vrata scenes validate <path>` with JSON output and shared server-side scene bundle reference validation.
+- Control-plane scene bundle zip upload with server-side validation, MinIO/S3-compatible publishing, metadata registration, preview display, and room binding.
 
 ### Known Limitations
 

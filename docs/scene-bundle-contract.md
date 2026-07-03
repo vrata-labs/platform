@@ -39,6 +39,31 @@ pnpm --filter @vrata/asset-pipeline build
 pnpm exec vrata scenes validate path/to/scene-bundle --json
 ```
 
+## Upload And Publish Flow
+
+Control-plane admins can publish `.zip` scene bundles from `/control-plane`:
+
+- Choose a bundle id and immutable version.
+- Select a `.zip` file containing `scene.json` and referenced bundle assets.
+- Submit the scene bundle form. The API validates the zip with the shared validator before publishing any metadata.
+- A valid upload appears in the registered scene bundles list with size, entry scene, and optional preview.
+- Select a room and use `Bind selected scene bundle` to attach the current or selected version.
+
+The upload endpoint is `POST /api/scene-bundles/uploads` with `multipart/form-data` fields:
+
+- `bundle`: required `.zip` file.
+- `bundleId`: optional lower-kebab id. Defaults to `scene.json#/sceneId` when omitted.
+- `version`: optional immutable version. Defaults to `v1`.
+
+Successful responses return the stored `SceneBundleRecord` plus validation warnings/stats. Invalid bundles return `400` with `error: "scene_bundle_validation_failed"` and validator `issues` containing stable `code`, `path`, and `message` fields. Uploads require the `scene-bundle.write` control-plane permission.
+
+Storage modes:
+
+- Production/staging self-host uploads write objects to MinIO/S3-compatible storage using `SCENE_BUNDLE_PROVIDER`, `MINIO_ENDPOINT`, `MINIO_ROOT_USER`, `MINIO_ROOT_PASSWORD`, `MINIO_BUCKET`, and `MINIO_PUBLIC_BASE_URL`.
+- `s3-compatible` deployments must additionally configure `SCENE_BUNDLE_S3_ENDPOINT`, `SCENE_BUNDLE_S3_REGION`, `SCENE_BUNDLE_S3_BUCKET`, `SCENE_BUNDLE_S3_PUBLIC_BASE_URL`, `SCENE_BUNDLE_S3_ACCESS_KEY_ID`, and `SCENE_BUNDLE_S3_SECRET_ACCESS_KEY`.
+- Dev/test without object-storage credentials uses a local filesystem fallback under `SCENE_BUNDLE_LOCAL_UPLOAD_ROOT` or `apps/runtime-web/public/assets/uploaded-scene-bundles`.
+- `FEATURE_SCENE_BUNDLE_UPLOAD=false` disables the upload endpoint while leaving existing metadata/list/bind APIs available.
+
 ## `scene.json`
 
 Required fields:

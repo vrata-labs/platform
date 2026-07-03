@@ -26,6 +26,7 @@
 - Primary public app URL: `https://158.160.10.234.sslip.io`
 - Public room-state URL: `https://state.158.160.10.234.sslip.io`
 - Public LiveKit URL: `https://livekit.158.160.10.234.sslip.io`
+- Public upload storage URL: `https://storage.158.160.10.234.sslip.io`
 - Verified direct smoke endpoints on compose staging: `http://<ip>:4000/health`, `http://<ip>:4000/rooms/demo-room`, `http://<ip>:4000/control-plane`
 - `pnpm test:e2e:staging` is currently intended to run against direct `BASE_URL=http://<ip>:4000` with `PLAYWRIGHT_NO_WEB_SERVER=1`
 - Compose VM SSH is provisioned through rendered cloud-init users in `infra/yandex/scripts/provision-staging-compose.sh`; this was required for reliable rollback verification
@@ -41,6 +42,7 @@
 
 - Default compose/self-hosted path uses `SCENE_BUNDLE_PROVIDER=minio-default`
 - Required MinIO vars for bundle URL resolution: `MINIO_PUBLIC_BASE_URL`, `MINIO_BUCKET`
+- On HTTPS staging/production, `MINIO_PUBLIC_BASE_URL` must also be HTTPS, typically `https://<storage-domain>` proxied by Caddy to MinIO.
 - Alternate S3-compatible path uses:
   - `SCENE_BUNDLE_PROVIDER=s3-compatible`
   - `SCENE_BUNDLE_S3_ENDPOINT`

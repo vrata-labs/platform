@@ -68,15 +68,30 @@ button {
   padding-left: 18px;
 }
 
+#scene-bundles-list {
+  margin-top: 18px;
+  padding-left: 18px;
+}
+
 #tenants-list {
   margin-top: 18px;
   padding-left: 18px;
 }
 
 #tenants-list li,
-#assets-list li {
+#assets-list li,
+#scene-bundles-list li {
   margin-top: 8px;
   word-break: break-all;
+}
+
+.scene-bundle-preview {
+  width: 64px;
+  height: 40px;
+  object-fit: cover;
+  vertical-align: middle;
+  border-radius: 8px;
+  border: 1px solid rgba(10, 36, 64, 0.15);
 }
 
 #room-detail {

@@ -266,7 +266,7 @@ function validateStorageConfig(issues, env) {
   }
 
   if (provider === "s3-compatible") {
-    for (const name of ["SCENE_BUNDLE_S3_ENDPOINT", "SCENE_BUNDLE_S3_REGION", "SCENE_BUNDLE_S3_BUCKET", "SCENE_BUNDLE_S3_PUBLIC_BASE_URL"]) {
+    for (const name of ["SCENE_BUNDLE_S3_ENDPOINT", "SCENE_BUNDLE_S3_REGION", "SCENE_BUNDLE_S3_BUCKET", "SCENE_BUNDLE_S3_PUBLIC_BASE_URL", "SCENE_BUNDLE_S3_ACCESS_KEY_ID", "SCENE_BUNDLE_S3_SECRET_ACCESS_KEY"]) {
       if (!trimmed(env[name])) {
         addIssue(issues, "missing_required_env", name);
       }

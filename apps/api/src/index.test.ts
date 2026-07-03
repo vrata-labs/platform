@@ -1,8 +1,96 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { getRoomPermissions, type RoomRole } from "@vrata/shared-types";
 import { signRoomSessionToken, verifyRoomSessionToken } from "@vrata/shared-types/session-token";
+
+function createStoredZip(files: Record<string, string | Buffer>): Buffer {
+  const localParts: Buffer[] = [];
+  const centralParts: Buffer[] = [];
+  let offset = 0;
+
+  for (const [name, rawContent] of Object.entries(files)) {
+    const nameBuffer = Buffer.from(name);
+    const content = Buffer.isBuffer(rawContent) ? rawContent : Buffer.from(rawContent);
+    const localHeader = Buffer.alloc(30);
+    localHeader.writeUInt32LE(0x04034b50, 0);
+    localHeader.writeUInt16LE(20, 4);
+    localHeader.writeUInt16LE(0, 6);
+    localHeader.writeUInt16LE(0, 8);
+    localHeader.writeUInt32LE(0, 10);
+    localHeader.writeUInt32LE(0, 14);
+    localHeader.writeUInt32LE(content.byteLength, 18);
+    localHeader.writeUInt32LE(content.byteLength, 22);
+    localHeader.writeUInt16LE(nameBuffer.byteLength, 26);
+    localHeader.writeUInt16LE(0, 28);
+    localParts.push(localHeader, nameBuffer, content);
+
+    const centralHeader = Buffer.alloc(46);
+    centralHeader.writeUInt32LE(0x02014b50, 0);
+    centralHeader.writeUInt16LE(20, 4);
+    centralHeader.writeUInt16LE(20, 6);
+    centralHeader.writeUInt16LE(0, 8);
+    centralHeader.writeUInt16LE(0, 10);
+    centralHeader.writeUInt32LE(0, 12);
+    centralHeader.writeUInt32LE(0, 16);
+    centralHeader.writeUInt32LE(content.byteLength, 20);
+    centralHeader.writeUInt32LE(content.byteLength, 24);
+    centralHeader.writeUInt16LE(nameBuffer.byteLength, 28);
+    centralHeader.writeUInt16LE(0, 30);
+    centralHeader.writeUInt16LE(0, 32);
+    centralHeader.writeUInt16LE(0, 34);
+    centralHeader.writeUInt16LE(0, 36);
+    centralHeader.writeUInt32LE(0, 38);
+    centralHeader.writeUInt32LE(offset, 42);
+    centralParts.push(centralHeader, nameBuffer);
+
+    offset += localHeader.byteLength + nameBuffer.byteLength + content.byteLength;
+  }
+
+  const centralDirectory = Buffer.concat(centralParts);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0);
+  end.writeUInt16LE(0, 4);
+  end.writeUInt16LE(0, 6);
+  end.writeUInt16LE(Object.keys(files).length, 8);
+  end.writeUInt16LE(Object.keys(files).length, 10);
+  end.writeUInt32LE(centralDirectory.byteLength, 12);
+  end.writeUInt32LE(offset, 16);
+  end.writeUInt16LE(0, 20);
+
+  return Buffer.concat([...localParts, centralDirectory, end]);
+}
+
+function validSceneJson(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    schemaVersion: 1,
+    sceneId: "uploaded-test-scene",
+    label: "Uploaded Test Scene",
+    source: "api-test",
+    glbPath: "scene.glb",
+    spawnPoints: [{ id: "main", position: { x: 0, y: 0, z: 4 } }],
+    bounds: { width: 10, height: 4, depth: 10 },
+    preview: "preview.webp",
+    ...overrides
+  };
+}
+
+async function createMultipartSceneBundleBody(input: { bundleId?: string; version?: string; zip: Buffer }): Promise<{ body: Buffer; contentType: string }> {
+  const boundary = `----vrata-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const parts: Buffer[] = [];
+  const appendField = (name: string, value: string) => {
+    parts.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${name}"\r\n\r\n${value}\r\n`));
+  };
+  if (input.bundleId) appendField("bundleId", input.bundleId);
+  if (input.version) appendField("version", input.version);
+  parts.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="bundle"; filename="bundle.zip"\r\nContent-Type: application/zip\r\n\r\n`));
+  parts.push(input.zip);
+  parts.push(Buffer.from(`\r\n--${boundary}--\r\n`));
+  return { body: Buffer.concat(parts), contentType: `multipart/form-data; boundary=${boundary}` };
+}
 
 test("api module exports server starter", async () => {
   process.env.VRATA_DISABLE_AUTOSTART = "1";
@@ -1751,6 +1839,109 @@ test("scene bundle metadata can be created and bound to a room", async () => {
     delete process.env.CONTROL_PLANE_ADMIN_TOKEN;
     delete process.env.MINIO_PUBLIC_BASE_URL;
     delete process.env.MINIO_BUCKET;
+  }
+});
+
+test("scene bundle zip upload validates, stores files, and registers metadata", async () => {
+  process.env.VRATA_DISABLE_AUTOSTART = "1";
+  process.env.API_PORT = "4018";
+  process.env.NODE_ENV = "test";
+  process.env.CONTROL_PLANE_ADMIN_TOKEN = "test-admin-token";
+  process.env.SCENE_BUNDLE_LOCAL_UPLOAD_ROOT = await mkdtemp(join(tmpdir(), "vrata-upload-root-"));
+  delete process.env.MINIO_ROOT_USER;
+  delete process.env.MINIO_ROOT_PASSWORD;
+  const module = await import("./index.js");
+  const server = module.startApiServer(4018);
+  const bundleId = `uploaded-test-${Date.now()}`;
+  const zip = createStoredZip({
+    "scene.json": `${JSON.stringify(validSceneJson({ sceneId: bundleId }), null, 2)}\n`,
+    "scene.glb": Buffer.from("glb"),
+    "preview.webp": Buffer.from("webp")
+  });
+  const multipart = await createMultipartSceneBundleBody({ bundleId, version: "v1", zip });
+
+  try {
+    const unauthorized = await fetch("http://127.0.0.1:4018/api/scene-bundles/uploads", {
+      method: "POST",
+      headers: { "content-type": multipart.contentType },
+      body: new Uint8Array(multipart.body)
+    });
+    assert.equal(unauthorized.ok, false);
+
+    const response = await fetch("http://127.0.0.1:4018/api/scene-bundles/uploads", {
+      method: "POST",
+      headers: {
+        "content-type": multipart.contentType,
+        "x-vrata-admin-token": "test-admin-token"
+      },
+      body: new Uint8Array(multipart.body)
+    });
+    assert.equal(response.status, 201);
+    const payload = await response.json() as { bundleId: string; version: string; publicUrl: string; previewUrl?: string; schemaVersion?: number; entryScene?: string; createdBy?: string };
+    assert.equal(payload.bundleId, bundleId);
+    assert.equal(payload.version, "v1");
+    assert.equal(payload.schemaVersion, 1);
+    assert.equal(payload.entryScene, "scene.glb");
+    assert.equal(payload.createdBy, "control-plane-admin");
+    assert.equal(payload.publicUrl, `http://127.0.0.1:4018/assets/uploaded-scene-bundles/scenes/${bundleId}/v1/scene.json`);
+    assert.equal(payload.previewUrl, `http://127.0.0.1:4018/assets/uploaded-scene-bundles/scenes/${bundleId}/v1/preview.webp`);
+
+    const manifestResponse = await fetch(payload.publicUrl);
+    assert.equal(manifestResponse.ok, true);
+    assert.equal((await manifestResponse.json() as { sceneId?: string }).sceneId, bundleId);
+
+    const storedManifest = await readFile(join(process.env.SCENE_BUNDLE_LOCAL_UPLOAD_ROOT, "scenes", bundleId, "v1", "scene.json"), "utf8");
+    assert.equal(JSON.parse(storedManifest).sceneId, bundleId);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    await rm(process.env.SCENE_BUNDLE_LOCAL_UPLOAD_ROOT!, { recursive: true, force: true });
+    delete process.env.VRATA_DISABLE_AUTOSTART;
+    delete process.env.API_PORT;
+    delete process.env.NODE_ENV;
+    delete process.env.CONTROL_PLANE_ADMIN_TOKEN;
+    delete process.env.SCENE_BUNDLE_LOCAL_UPLOAD_ROOT;
+  }
+});
+
+test("scene bundle zip upload returns actionable validation issues", async () => {
+  process.env.VRATA_DISABLE_AUTOSTART = "1";
+  process.env.API_PORT = "4019";
+  process.env.NODE_ENV = "test";
+  process.env.CONTROL_PLANE_ADMIN_TOKEN = "test-admin-token";
+  process.env.SCENE_BUNDLE_LOCAL_UPLOAD_ROOT = await mkdtemp(join(tmpdir(), "vrata-upload-root-"));
+  delete process.env.MINIO_ROOT_USER;
+  delete process.env.MINIO_ROOT_PASSWORD;
+  const module = await import("./index.js");
+  const server = module.startApiServer(4019);
+  const multipart = await createMultipartSceneBundleBody({
+    bundleId: "invalid-upload-test",
+    version: "v1",
+    zip: createStoredZip({
+      "scene.json": `${JSON.stringify(validSceneJson({ glbPath: "missing.glb", preview: undefined }), null, 2)}\n`
+    })
+  });
+
+  try {
+    const response = await fetch("http://127.0.0.1:4019/api/scene-bundles/uploads", {
+      method: "POST",
+      headers: {
+        "content-type": multipart.contentType,
+        "x-vrata-admin-token": "test-admin-token"
+      },
+      body: new Uint8Array(multipart.body)
+    });
+    assert.equal(response.status, 400);
+    const payload = await response.json() as { error?: string; issues?: Array<{ code: string; path: string; message: string }> };
+    assert.equal(payload.error, "scene_bundle_validation_failed");
+    assert.equal(payload.issues?.some((issue) => issue.code === "missing_scene_asset" && issue.path === "missing.glb" && issue.message.length > 0), true);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    await rm(process.env.SCENE_BUNDLE_LOCAL_UPLOAD_ROOT!, { recursive: true, force: true });
+    delete process.env.VRATA_DISABLE_AUTOSTART;
+    delete process.env.API_PORT;
+    delete process.env.NODE_ENV;
+    delete process.env.CONTROL_PLANE_ADMIN_TOKEN;
+    delete process.env.SCENE_BUNDLE_LOCAL_UPLOAD_ROOT;
   }
 });
 

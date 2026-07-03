@@ -58,8 +58,9 @@
         <form id="scene-bundle-form">
           <label>Bundle id <input id="scene-bundle-id-input" value="sense-demo" /></label>
           <label>Version <input id="scene-bundle-version-input" value="v1" /></label>
+          <label>Scene bundle zip <input id="scene-bundle-file-input" type="file" accept=".zip,application/zip" /></label>
           <label>Storage key <input id="scene-bundle-storage-key-input" value="scenes/sense-demo/v1/scene.json" /></label>
-          <button id="create-scene-bundle-version" type="submit">Add bundle version</button>
+          <button id="create-scene-bundle-version" type="submit">Upload zip or add bundle version</button>
         </form>
         <form id="asset-form">
           <label>Asset kind <input id="asset-kind-input" value="logo" /></label>
@@ -89,6 +90,7 @@
         <pre id="room-detail">Select a room to inspect details</pre>
         <ul id="tenants-list"></ul>
         <ul id="assets-list"></ul>
+        <ul id="scene-bundles-list"></ul>
       </section>
     </main>
     <script type="module" src="/src/main.ts"></script>

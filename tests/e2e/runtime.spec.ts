@@ -1,4 +1,6 @@
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
+import { readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 
 test.describe.configure({ mode: "serial" });
 
@@ -6,6 +8,61 @@ const e2eRoomStatePublicUrl = process.env.E2E_ROOM_STATE_PUBLIC_URL ?? "ws://127
 const e2eRoomStateHost = new URL(e2eRoomStatePublicUrl).host;
 const e2eBaseUrl = process.env.BASE_URL ?? "http://127.0.0.1:4000";
 const e2eAdminToken = process.env.STAGING_ADMIN_TOKEN ?? "test-admin-token";
+
+function createStoredZip(files: Record<string, string | Buffer>): Buffer {
+  const localParts: Buffer[] = [];
+  const centralParts: Buffer[] = [];
+  let offset = 0;
+
+  for (const [name, rawContent] of Object.entries(files)) {
+    const nameBuffer = Buffer.from(name);
+    const content = Buffer.isBuffer(rawContent) ? rawContent : Buffer.from(rawContent);
+    const localHeader = Buffer.alloc(30);
+    localHeader.writeUInt32LE(0x04034b50, 0);
+    localHeader.writeUInt16LE(20, 4);
+    localHeader.writeUInt16LE(0, 6);
+    localHeader.writeUInt16LE(0, 8);
+    localHeader.writeUInt32LE(0, 10);
+    localHeader.writeUInt32LE(0, 14);
+    localHeader.writeUInt32LE(content.byteLength, 18);
+    localHeader.writeUInt32LE(content.byteLength, 22);
+    localHeader.writeUInt16LE(nameBuffer.byteLength, 26);
+    localHeader.writeUInt16LE(0, 28);
+    localParts.push(localHeader, nameBuffer, content);
+
+    const centralHeader = Buffer.alloc(46);
+    centralHeader.writeUInt32LE(0x02014b50, 0);
+    centralHeader.writeUInt16LE(20, 4);
+    centralHeader.writeUInt16LE(20, 6);
+    centralHeader.writeUInt16LE(0, 8);
+    centralHeader.writeUInt16LE(0, 10);
+    centralHeader.writeUInt32LE(0, 12);
+    centralHeader.writeUInt32LE(0, 16);
+    centralHeader.writeUInt32LE(content.byteLength, 20);
+    centralHeader.writeUInt32LE(content.byteLength, 24);
+    centralHeader.writeUInt16LE(nameBuffer.byteLength, 28);
+    centralHeader.writeUInt16LE(0, 30);
+    centralHeader.writeUInt16LE(0, 32);
+    centralHeader.writeUInt16LE(0, 34);
+    centralHeader.writeUInt16LE(0, 36);
+    centralHeader.writeUInt32LE(0, 38);
+    centralHeader.writeUInt32LE(offset, 42);
+    centralParts.push(centralHeader, nameBuffer);
+    offset += localHeader.byteLength + nameBuffer.byteLength + content.byteLength;
+  }
+
+  const centralDirectory = Buffer.concat(centralParts);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0);
+  end.writeUInt16LE(0, 4);
+  end.writeUInt16LE(0, 6);
+  end.writeUInt16LE(Object.keys(files).length, 8);
+  end.writeUInt16LE(Object.keys(files).length, 10);
+  end.writeUInt32LE(centralDirectory.byteLength, 12);
+  end.writeUInt32LE(offset, 16);
+  end.writeUInt16LE(0, 20);
+  return Buffer.concat([...localParts, centralDirectory, end]);
+}
 
 function e2eUrl(path: string): string {
   return new URL(path, e2eBaseUrl).toString();
@@ -1914,6 +1971,57 @@ test("control plane uploads asset metadata through the browser UI", async ({ pag
   await expect(page.locator("#assets-list")).toContainText("https://example.com/test-logo.glb");
   await expect(page.locator("#assets-list")).toContainText("https://cdn.example.com/test-logo.glb");
   await expect(page.locator("#assets-list")).toContainText("validated");
+});
+
+test("control plane uploads and binds a scene bundle zip through the browser UI", async ({ page }, testInfo) => {
+  const bundleId = `ui-upload-${Date.now()}`;
+  const version = "v1";
+  const glb = await readFile(join(process.cwd(), "apps/runtime-web/public/assets/scenes/livadia-nicholas-office-v1/scene.glb"));
+  const zipPath = testInfo.outputPath("uploaded-scene-bundle.zip");
+  await writeFile(zipPath, createStoredZip({
+    "scene.json": `${JSON.stringify({
+      schemaVersion: 1,
+      sceneId: bundleId,
+      label: "UI Uploaded Scene",
+      source: "runtime-e2e",
+      glbPath: "scene.glb",
+      spawnPoints: [{ id: "main", position: { x: 0, y: 1.6, z: 4 } }],
+      bounds: { width: 20, height: 8, depth: 20 },
+      preview: "preview.webp",
+      renderMode: "clean"
+    }, null, 2)}\n`,
+    "scene.glb": glb,
+    "preview.webp": Buffer.from("webp")
+  }));
+
+  await page.goto("/control-plane");
+  await page.fill("#admin-token-input", "test-admin-token");
+  await page.fill("#scene-bundle-id-input", bundleId);
+  await page.fill("#scene-bundle-version-input", version);
+  await page.setInputFiles("#scene-bundle-file-input", zipPath);
+  await page.click("#create-scene-bundle-version");
+  await expect(page.locator("#publish-status")).toContainText("scene-bundle-uploaded");
+  await expect(page.locator("#scene-bundles-list")).toContainText(bundleId);
+  await expect(page.locator("#scene-bundles-list")).toContainText("scene.glb");
+
+  await page.fill("#room-name-input", "Uploaded Scene Bundle Room");
+  await page.click("#create-room");
+  await expect(page.locator("#publish-status")).toContainText("published");
+  await page.selectOption("#scene-bundle-select", bundleId);
+  await page.click("#bind-scene-bundle");
+  await expect(page.locator("#publish-status")).toContainText("scene-bundle-bound");
+
+  const href = await page.locator("#room-link").getAttribute("href");
+  expect(href).toBeTruthy();
+  const roomUrl = new URL(e2eRoomLink(String(href)));
+  roomUrl.searchParams.set("debug", "1");
+  await page.goto(roomUrl.toString());
+  const loadedDebug = await page.waitForFunction(() => {
+    const debug = (window as Window & { __VRATA_DEBUG__?: { sceneBundleState?: string; sceneBundleUrl?: string } }).__VRATA_DEBUG__;
+    return debug?.sceneBundleState === "loaded" ? debug : null;
+  }, null, { timeout: 30000 });
+  const debug = await loadedDebug.jsonValue() as { sceneBundleState?: string; sceneBundleUrl?: string };
+  expect(debug.sceneBundleUrl).toContain(`/assets/uploaded-scene-bundles/scenes/${bundleId}/${version}/scene.json`);
 });
 
 test("control plane can update and delete asset without room dependencies", async ({ page }) => {

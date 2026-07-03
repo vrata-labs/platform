@@ -6,6 +6,10 @@ export interface SceneBundleRecord {
   publicUrl: string;
   checksum?: string;
   sizeBytes?: number;
+  schemaVersion?: number;
+  entryScene?: string;
+  previewUrl?: string;
+  createdBy?: string;
   contentType: string;
   provider: SceneBundleProvider;
   version: string;
@@ -20,6 +24,10 @@ export interface SceneBundleCreateInput {
   publicUrl?: string;
   checksum?: string;
   sizeBytes?: number;
+  schemaVersion?: number;
+  entryScene?: string;
+  previewUrl?: string;
+  createdBy?: string;
   contentType?: string;
   provider?: SceneBundleProvider;
   version?: string;

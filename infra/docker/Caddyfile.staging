@@ -46,6 +46,10 @@
   reverse_proxy livekit:7880
 }
 
+{$VRATA_STORAGE_DOMAIN} {
+  reverse_proxy minio:9000
+}
+
 {$VRATA_BROWSER_DOMAIN} {
   handle /frames* {
     reverse_proxy remote-browser:4010

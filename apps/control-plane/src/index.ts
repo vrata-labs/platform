@@ -170,6 +170,10 @@ export interface SceneBundleRecord {
   publicUrl: string;
   checksum?: string;
   sizeBytes?: number;
+  schemaVersion?: number;
+  entryScene?: string;
+  previewUrl?: string;
+  createdBy?: string;
   contentType: string;
   provider: "minio-default" | "s3-compatible";
   version: string;
@@ -186,6 +190,12 @@ export interface SceneBundleVersionInput {
   contentType?: string;
   provider?: "minio-default" | "s3-compatible";
   version: string;
+}
+
+export interface SceneBundleUploadInput {
+  bundleId?: string;
+  version?: string;
+  file: File;
 }
 
 export async function fetchTemplates(apiBaseUrl: string): Promise<TemplateRecord[]> {
@@ -431,6 +441,24 @@ export async function createSceneBundleVersion(apiBaseUrl: string, bundleId: str
   if (!response.ok) {
     const payload = await response.json().catch(() => ({ error: `failed_to_create_scene_bundle_version:${response.status}` }));
     throw new Error(payload.error ?? `failed_to_create_scene_bundle_version:${response.status}`);
+  }
+  return (await response.json()) as SceneBundleRecord;
+}
+
+export async function uploadSceneBundleZip(apiBaseUrl: string, input: SceneBundleUploadInput, auth?: ControlPlaneAuth): Promise<SceneBundleRecord> {
+  const form = new FormData();
+  if (input.bundleId) form.set("bundleId", input.bundleId);
+  if (input.version) form.set("version", input.version);
+  form.set("bundle", input.file);
+  const response = await fetch(new URL("/api/scene-bundles/uploads", apiBaseUrl), {
+    method: "POST",
+    headers: { ...authHeaders(auth) },
+    body: form
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({ error: `failed_to_upload_scene_bundle:${response.status}` }));
+    const issueCodes = Array.isArray(payload.issues) ? payload.issues.map((issue: { code?: string }) => issue.code).filter(Boolean).join(",") : "";
+    throw new Error(issueCodes ? `${payload.error}:${issueCodes}` : (payload.error ?? `failed_to_upload_scene_bundle:${response.status}`));
   }
   return (await response.json()) as SceneBundleRecord;
 }
