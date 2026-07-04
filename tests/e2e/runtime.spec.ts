@@ -135,6 +135,27 @@ async function createRoomInvite(request: APIRequestContext, roomId: string, wait
   return (await inviteResponse.json()) as { inviteLink: string };
 }
 
+async function createExpiredRoomInvite(request: APIRequestContext, roomId: string): Promise<{ inviteLink: string }> {
+  const inviteResponse = await request.post(`/api/rooms/${roomId}/invites`, {
+    headers: {
+      "x-vrata-admin-token": e2eAdminToken
+    },
+    data: {
+      expiresAt: new Date(Date.now() - 1000).toISOString(),
+      role: "guest"
+    }
+  });
+  expect(inviteResponse.ok()).toBeTruthy();
+  return (await inviteResponse.json()) as { inviteLink: string };
+}
+
+async function completeGuestOnboarding(page: Page, displayName: string, withoutAudio = false): Promise<void> {
+  await expect(page.locator("#guest-onboarding")).toBeVisible({ timeout: 10000 });
+  await page.fill("#guest-name-input", displayName);
+  await page.click(withoutAudio ? "#guest-enter-without-audio" : "#guest-enter-room");
+  await expect(page.locator("#guest-onboarding")).toBeHidden({ timeout: 10000 });
+}
+
 async function createAvatarHallRoom(request: APIRequestContext, name: string): Promise<{ roomId: string; roomLink: string }> {
   return createAvatarRoom(request, name, "/assets/scenes/sense-hall2-v1/scene.json");
 }
@@ -237,8 +258,116 @@ test("private room opens only through a valid invite link", async ({ page, reque
 
   const invite = await createRoomInvite(request, room.roomId);
   await page.goto(e2eRoomLink(invite.inviteLink));
-  await expect(page.locator("#status-line")).toContainText("Joined as", { timeout: 10000 });
+  await expect(page.locator("#guest-onboarding")).toBeVisible();
+  await expect(page.locator("#guest-controls-hint")).toContainText("WASD");
+  await completeGuestOnboarding(page, "Private Guest");
+  await expect(page.locator("#status-line")).toContainText("Joined as Private Guest", { timeout: 10000 });
   await expect(page.locator("#guest-access-line")).toContainText("Guest access: members only");
+});
+
+test("guest onboarding supports public join, muted preference, and device hints", async ({ page }) => {
+  await page.goto("/rooms/demo-room?onboard=1");
+
+  await expect(page.locator("#guest-onboarding")).toBeVisible();
+  await expect(page.locator("#guest-controls-hint")).toContainText("WASD");
+  await expect(page.locator("#guest-join-muted")).toBeChecked();
+  await completeGuestOnboarding(page, "Onboarded Guest");
+  await expect(page.locator("#status-line")).toContainText("Joined as Onboarded Guest", { timeout: 10000 });
+  await expect(page.locator("#join-muted")).toBeChecked();
+  await expect.poll(async () => page.evaluate(() => {
+    const debug = (window as Window & { __VRATA_DEBUG__?: { media?: { audioJoined?: boolean; publishedAudio?: boolean }; guestOnboarding?: { completed?: boolean; joinMuted?: boolean } } }).__VRATA_DEBUG__;
+    return {
+      completed: debug?.guestOnboarding?.completed ?? false,
+      joinMuted: debug?.guestOnboarding?.joinMuted ?? false,
+      audioJoined: debug?.media?.audioJoined ?? true,
+      publishedAudio: debug?.media?.publishedAudio ?? true
+    };
+  }), {
+    timeout: 10000,
+    intervals: [500, 1000, 2000]
+  }).toEqual({ completed: true, joinMuted: true, audioJoined: false, publishedAudio: false });
+});
+
+test("guest onboarding lets guest enter without audio after microphone denial", async ({ page }) => {
+  await page.addInitScript(() => {
+    const mediaDevices = navigator.mediaDevices;
+    Object.defineProperty(navigator, "mediaDevices", {
+      configurable: true,
+      value: {
+        enumerateDevices: mediaDevices?.enumerateDevices?.bind(mediaDevices) ?? (async () => []),
+        getDisplayMedia: mediaDevices?.getDisplayMedia?.bind(mediaDevices),
+        getUserMedia: async () => {
+          throw new DOMException("Microphone blocked by test", "NotAllowedError");
+        }
+      }
+    });
+  });
+
+  await page.goto("/rooms/demo-room?onboard=1");
+  await page.fill("#guest-name-input", "No Audio Guest");
+  await page.click("#guest-check-microphone");
+  await expect(page.locator("#guest-onboarding-status")).toContainText("Microphone permission denied");
+  await page.click("#guest-enter-without-audio");
+  await expect(page.locator("#status-line")).toContainText("Joined as No Audio Guest", { timeout: 10000 });
+  await expect.poll(async () => page.evaluate(() => {
+    const debug = (window as Window & { __VRATA_DEBUG__?: { media?: { audioJoined?: boolean; publishedAudio?: boolean }; guestOnboarding?: { audioMode?: string } } }).__VRATA_DEBUG__;
+    return {
+      audioMode: debug?.guestOnboarding?.audioMode ?? null,
+      audioJoined: debug?.media?.audioJoined ?? true,
+      publishedAudio: debug?.media?.publishedAudio ?? true
+    };
+  }), {
+    timeout: 10000,
+    intervals: [500, 1000, 2000]
+  }).toEqual({ audioMode: "without_audio", audioJoined: false, publishedAudio: false });
+});
+
+test("guest onboarding shows unsupported media warning without blocking entry", async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, "mediaDevices", {
+      configurable: true,
+      value: {
+        enumerateDevices: async () => []
+      }
+    });
+  });
+
+  await page.goto("/rooms/demo-room?onboard=1");
+  await expect(page.locator("#guest-compatibility-warning")).toContainText("Microphone unsupported");
+  await completeGuestOnboarding(page, "Unsupported Media Guest", true);
+  await expect(page.locator("#status-line")).toContainText("Joined as Unsupported Media Guest", { timeout: 10000 });
+});
+
+test("guest onboarding shows clear expired invite message", async ({ page, request }) => {
+  const room = await createPrivateRoom(request, `Expired Invite E2E ${Date.now()}`);
+  const invite = await createExpiredRoomInvite(request, room.roomId);
+
+  await page.goto(e2eRoomLink(invite.inviteLink));
+  await completeGuestOnboarding(page, "Expired Guest");
+  await expect(page.locator("#status-line")).toContainText("Access denied: invite link expired", { timeout: 10000 });
+  await expect(page.locator("#guest-access-line")).toContainText("Access denied: invite link expired");
+});
+
+test("guest onboarding controls hint matches mobile and XR modes", async ({ browser }) => {
+  const mobileContext = await browser.newContext({
+    hasTouch: true,
+    isMobile: true,
+    viewport: { width: 390, height: 844 },
+    userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1"
+  });
+  const xrContext = await browser.newContext();
+  try {
+    const mobilePage = await mobileContext.newPage();
+    await mobilePage.goto("/rooms/demo-room?onboard=1");
+    await expect(mobilePage.locator("#guest-controls-hint")).toContainText("left drag");
+
+    const xrPage = await xrContext.newPage();
+    await xrPage.goto("/rooms/demo-room?debug=1&xrmock=1&onboard=1");
+    await expect(xrPage.locator("#guest-controls-hint")).toContainText("left stick");
+  } finally {
+    await xrContext.close();
+    await mobileContext.close();
+  }
 });
 
 test("host controls lock room and remove guest", async ({ page, browser, request }) => {
@@ -1942,7 +2071,8 @@ test("control plane creates a private room and auto-generates an invite", async 
   const inviteHref = await page.locator("#invite-link").getAttribute("href");
   expect(inviteHref).toBeTruthy();
   await page.goto(e2eRoomLink(String(inviteHref)));
-  await expect(page.locator("#status-line")).toContainText("Joined as", { timeout: 30000 });
+  await completeGuestOnboarding(page, "Private UI Guest");
+  await expect(page.locator("#status-line")).toContainText("Joined as Private UI Guest", { timeout: 30000 });
 });
 
 test("control plane remembers admin token locally", async ({ page }) => {

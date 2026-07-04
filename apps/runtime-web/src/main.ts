@@ -37,6 +37,7 @@ import {
 import { appendBrandingSuffix, applyRoomShellBootState, renderSceneAttributions } from "./boot-session.js";
 import { RuntimeAccessError, bootRuntime, fetchRoomSessionControl, fetchRuntimeSpaces, listPresence, planVoiceSession, removePresence, removeRoomParticipant, resolveCurrentSpace, resolveJoinMode, runRoomSessionControlAction, transferRoomHost, upsertPresence, type PresenceState, type RuntimeSessionControlResponse, type RuntimeSpaceOption } from "./index.js";
 import { formatClientCompatibilityStatus, resolveClientCompatibility, type ClientCompatibilitySummary } from "./client-capabilities.js";
+import { formatGuestCompatibilityWarnings, formatGuestControlsHint, shouldShowGuestOnboarding, validateGuestDisplayName } from "./guest-onboarding.js";
 import { createMotionTrack, pushMotionSample, sampleMotion, type MotionTrack } from "./motion-state.js";
 import { mergePresenceSources } from "./presence-sources.js";
 import {
@@ -233,10 +234,11 @@ const XR_SESSION_OPTIONS: XRSessionInit = {
   optionalFeatures: ["local-floor", "bounded-floor", "layers"]
 };
 const participantId = getParticipantId();
-const displayNameFromQuery = query.get("name");
-const displayName = displayNameFromQuery ?? getStoredValue(localStorage, "vrata.displayName", "noah.displayName") ?? `Guest-${participantId.slice(0, 4)}`;
-if (!displayNameFromQuery) {
-  localStorage.setItem("vrata.displayName", displayName);
+const displayNameFromQuery = query.get("name")?.trim() || null;
+const storedDisplayName = getStoredValue(localStorage, "vrata.displayName", "noah.displayName")?.trim() || null;
+let displayName = displayNameFromQuery ?? storedDisplayName ?? `Guest-${participantId.slice(0, 4)}`;
+if (displayNameFromQuery) {
+  localStorage.setItem("vrata.displayName", displayNameFromQuery);
 }
 const browserMediaCapabilities = detectBrowserMediaCapabilities({
   isSecureContext: window.isSecureContext,
@@ -255,6 +257,15 @@ const reportLineEl = mustElement<HTMLDivElement>("#report-line");
 const diagnosticsLink = mustElement<HTMLAnchorElement>("#diagnostics-link");
 const guestAccessLineEl = mustElement<HTMLDivElement>("#guest-access-line");
 const compatibilityStatusEl = mustElement<HTMLDivElement>("#compatibility-status");
+const guestOnboardingEl = mustElement<HTMLElement>("#guest-onboarding");
+const guestNameInput = mustElement<HTMLInputElement>("#guest-name-input");
+const guestJoinMutedCheckbox = mustElement<HTMLInputElement>("#guest-join-muted");
+const guestCheckMicrophoneButton = mustElement<HTMLButtonElement>("#guest-check-microphone");
+const guestEnterWithoutAudioButton = mustElement<HTMLButtonElement>("#guest-enter-without-audio");
+const guestEnterRoomButton = mustElement<HTMLButtonElement>("#guest-enter-room");
+const guestCompatibilityWarningEl = mustElement<HTMLDivElement>("#guest-compatibility-warning");
+const guestControlsHintEl = mustElement<HTMLDivElement>("#guest-controls-hint");
+const guestOnboardingStatusEl = mustElement<HTMLDivElement>("#guest-onboarding-status");
 const sceneAttributionsPanelEl = mustElement<HTMLDivElement>("#scene-attributions");
 const sceneAttributionsListEl = mustElement<HTMLUListElement>("#scene-attributions-list");
 const spaceSelect = mustElement<HTMLSelectElement>("#space-select");
@@ -797,6 +808,7 @@ let preferredMicDeviceId = getStoredValue(localStorage, "vrata.audioinput", "noa
 let preferredSpeakerDeviceId = getStoredValue(localStorage, "vrata.audiooutput", "noah.audiooutput") ?? "default";
 let joinMutedPreference = getStoredValue(localStorage, "vrata.audio.joinMuted", "noah.audio.joinMuted") === "true";
 joinMutedCheckbox.checked = joinMutedPreference;
+guestJoinMutedCheckbox.checked = joinMutedPreference || !getStoredValue(localStorage, "vrata.audio.joinMuted", "noah.audio.joinMuted");
 let audioActionInFlight = false;
 let audioInputDevices: MediaDeviceInfo[] = [];
 let audioOutputDevices: MediaDeviceInfo[] = [];
@@ -3906,6 +3918,15 @@ const debugState = {
     lastDeniedPermission: null as string | null,
     lastSurfaceCommandAccepted: null as boolean | null
   },
+  guestOnboarding: {
+    required: false,
+    completed: false,
+    displayNameProvided: Boolean(displayNameFromQuery),
+    joinMuted: joinMutedPreference,
+    audioMode: "not_checked" as "not_checked" | "microphone_ok" | "microphone_denied" | "without_audio",
+    controlsHint: "",
+    warnings: [] as string[]
+  },
   hostControls: {
     enabled: false,
     visible: false,
@@ -4171,6 +4192,114 @@ function refreshClientCompatibility(): void {
   clientCompatibility = buildClientCompatibility();
   debugState.clientCompatibility = clientCompatibility;
   compatibilityStatusEl.textContent = formatClientCompatibilityStatus(clientCompatibility);
+}
+
+function resolveGuestOnboardingMode(): "desktop" | "mobile" | "vr" {
+  return presenceXrMockEnabled ? "vr" : resolveJoinMode(navigator.userAgent);
+}
+
+function renderGuestOnboarding(): void {
+  const mode = resolveGuestOnboardingMode();
+  const warnings = formatGuestCompatibilityWarnings({
+    webGlAvailable: browserWebGlAvailable,
+    webSocketAvailable: browserWebSocketAvailable,
+    audioInputSupported: audioMockEnabled || browserMediaCapabilities.audioInput.supported,
+    screenShareSupported: shareMockEnabled || browserMediaCapabilities.screenShare.supported
+  });
+  guestNameInput.value = storedDisplayName ?? displayName;
+  guestControlsHintEl.textContent = formatGuestControlsHint(mode);
+  guestCompatibilityWarningEl.textContent = warnings.length > 0
+    ? `Compatibility warning: ${warnings.join(" ")}`
+    : "Compatibility: this browser can enter the room.";
+  debugState.guestOnboarding.required = true;
+  debugState.guestOnboarding.controlsHint = guestControlsHintEl.textContent;
+  debugState.guestOnboarding.warnings = warnings;
+  debugState.guestOnboarding.joinMuted = guestJoinMutedCheckbox.checked;
+}
+
+async function checkGuestMicrophone(): Promise<boolean> {
+  guestCheckMicrophoneButton.disabled = true;
+  guestOnboardingStatusEl.textContent = "Checking microphone permission...";
+  try {
+    if (audioMockEnabled) {
+      guestOnboardingStatusEl.textContent = "Microphone check passed in mock mode.";
+      debugState.guestOnboarding.audioMode = "microphone_ok";
+      return true;
+    }
+    if (faultConfig.audio === "mic_denied") {
+      throw createFaultError("NotAllowedError", "mic_denied");
+    }
+    if (!navigator.mediaDevices?.getUserMedia) {
+      throw createFaultError("NotSupportedError", "audio_unsupported:mediaDevices_missing");
+    }
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    stream.getTracks().forEach((track) => track.stop());
+    await refreshAudioDevices(false);
+    guestOnboardingStatusEl.textContent = "Microphone permission granted. You can still join muted.";
+    debugState.guestOnboarding.audioMode = "microphone_ok";
+    return true;
+  } catch (error) {
+    console.warn("guest_microphone_check_failed", error);
+    guestOnboardingStatusEl.textContent = "Microphone permission denied or unavailable. You can enter without audio.";
+    debugState.guestOnboarding.audioMode = "microphone_denied";
+    return false;
+  } finally {
+    guestCheckMicrophoneButton.disabled = false;
+  }
+}
+
+function completeGuestOnboarding(options: { withoutAudio: boolean; resolve: () => void }): void {
+  const validation = validateGuestDisplayName(guestNameInput.value);
+  if (!validation.accepted) {
+    guestOnboardingStatusEl.textContent = validation.error ?? "Enter a display name.";
+    guestNameInput.focus();
+    return;
+  }
+  displayName = validation.displayName;
+  joinMutedPreference = options.withoutAudio ? true : guestJoinMutedCheckbox.checked;
+  joinMutedCheckbox.checked = joinMutedPreference;
+  guestJoinMutedCheckbox.checked = joinMutedPreference;
+  localStorage.setItem("vrata.displayName", displayName);
+  localStorage.setItem("vrata.audio.joinMuted", String(joinMutedPreference));
+  debugState.guestOnboarding.completed = true;
+  debugState.guestOnboarding.displayNameProvided = true;
+  debugState.guestOnboarding.joinMuted = joinMutedPreference;
+  debugState.guestOnboarding.audioMode = options.withoutAudio ? "without_audio" : debugState.guestOnboarding.audioMode;
+  guestOnboardingEl.hidden = true;
+  options.resolve();
+}
+
+async function waitForGuestOnboardingIfNeeded(): Promise<void> {
+  const required = shouldShowGuestOnboarding({
+    hasInviteToken: Boolean(query.get("invite")),
+    hasExplicitDisplayName: Boolean(displayNameFromQuery),
+    forced: query.get("onboard") === "1",
+    disabled: query.get("onboard") === "0" || query.get("prejoin") === "0",
+    avatarSandboxEnabled,
+    botMode
+  });
+  debugState.guestOnboarding.required = required;
+  if (!required) {
+    guestOnboardingEl.hidden = true;
+    localStorage.setItem("vrata.displayName", displayName);
+    return;
+  }
+
+  renderGuestOnboarding();
+  guestOnboardingEl.hidden = false;
+  setStatus("Pre-join ready");
+  await new Promise<void>((resolve) => {
+    guestCheckMicrophoneButton.onclick = () => {
+      void checkGuestMicrophone();
+    };
+    guestEnterRoomButton.onclick = () => completeGuestOnboarding({ withoutAudio: false, resolve });
+    guestEnterWithoutAudioButton.onclick = () => completeGuestOnboarding({ withoutAudio: true, resolve });
+    guestNameInput.onkeydown = (event) => {
+      if (event.key === "Enter") {
+        completeGuestOnboarding({ withoutAudio: false, resolve });
+      }
+    };
+  });
 }
 
 function refreshXrSessionDebug(sessionState?: XrSessionLifecycleState): void {
@@ -7461,6 +7590,7 @@ renderer.setAnimationLoop(() => {
 });
 
 async function main(): Promise<void> {
+  await waitForGuestOnboardingIfNeeded();
   const boot = await bootRuntime(apiBaseUrl, roomId, navigator.userAgent, {
     participantId,
     displayName,
@@ -7762,9 +7892,9 @@ async function main(): Promise<void> {
 function describeRoomAccessError(error: RuntimeAccessError): string {
   switch (error.reason) {
     case "invite_expired":
-      return "Ссылка истекла";
+      return "Access denied: invite link expired";
     case "invite_revoked":
-      return "Ссылка отозвана";
+      return "Access denied: invite link revoked";
     case "waiting_room_pending":
       return "Waiting for host approval";
     case "waiting_room_rejected":

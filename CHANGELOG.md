@@ -22,6 +22,7 @@ Vrata uses SemVer: `MAJOR.MINOR.PATCH`. Until `1.0.0`, breaking changes can happ
 - Scene bundle validator CLI via `vrata scenes validate <path>` with JSON output and shared server-side scene bundle reference validation.
 - Control-plane scene bundle zip upload with server-side validation, MinIO/S3-compatible publishing, metadata registration, preview display, and room binding.
 - Control-plane room creation now supports operator-friendly slugs, pre-publish preview, selected scene bundle binding, private-room invite generation, duplicate slug validation, copy room URL, and creation metrics.
+- Runtime guest onboarding for external invite links with display name entry, join-muted preference, microphone check, without-audio entry, compatibility warnings, controls hints, and clearer expired/revoked invite messages.
 
 ### Known Limitations
 

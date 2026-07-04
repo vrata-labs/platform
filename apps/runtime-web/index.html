@@ -8,6 +8,27 @@
   </head>
   <body>
     <div id="app">
+      <section id="guest-onboarding" class="guest-onboarding" hidden aria-labelledby="guest-onboarding-title">
+        <div class="guest-onboarding-card">
+          <div class="brand">Vrata</div>
+          <h1 id="guest-onboarding-title">Join this room</h1>
+          <p class="guest-onboarding-copy">Set your display name, review device status, then enter. You can join without microphone access.</p>
+          <label for="guest-name-input">Display name</label>
+          <input id="guest-name-input" type="text" autocomplete="name" maxlength="40" placeholder="Your name" />
+          <label class="surface-audio-toggle" for="guest-join-muted">
+            <input id="guest-join-muted" type="checkbox" checked />
+            Join muted
+          </label>
+          <div id="guest-compatibility-warning" class="guest-onboarding-status"></div>
+          <div id="guest-controls-hint" class="guest-onboarding-hint"></div>
+          <div class="guest-onboarding-actions">
+            <button id="guest-check-microphone" type="button">Check microphone</button>
+            <button id="guest-enter-without-audio" type="button">Enter without audio</button>
+            <button id="guest-enter-room" type="button">Enter room</button>
+          </div>
+          <div id="guest-onboarding-status" class="guest-onboarding-status" role="status" aria-live="polite">Ready to join.</div>
+        </div>
+      </section>
       <details class="hud" open>
         <summary class="hud-summary">
           <span class="brand">Vrata</span>
