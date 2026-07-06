@@ -11,6 +11,7 @@ import {
   deleteTenant,
   deleteRoom,
   fetchRoomDiagnostics,
+  fetchControlPlaneSession,
   fetchRoomManifest,
   fetchTemplates,
   listAssets,
@@ -27,7 +28,8 @@ import {
   updateRoom,
   uploadAsset,
   uploadSceneBundleZip,
-  revokeRoomInvite
+  revokeRoomInvite,
+  setRoomDisabled
 } from "./index.js";
 
 function mustElement<T extends Element>(selector: string): T {
@@ -45,9 +47,14 @@ const storedAdminToken = localStorage.getItem("vrata.controlPlaneAdminToken") ??
 const form = mustElement<HTMLFormElement>("#room-form");
 const assetForm = mustElement<HTMLFormElement>("#asset-form");
 const tenantForm = mustElement<HTMLFormElement>("#tenant-form");
+const createRoomButton = mustElement<HTMLButtonElement>("#create-room");
 const adminTokenInput = mustElement<HTMLInputElement>("#admin-token-input");
+const applyAdminTokenButton = mustElement<HTMLButtonElement>("#apply-admin-token");
+const dashboardAuthStatus = mustElement<HTMLDivElement>("#dashboard-auth-status");
+const dashboardContent = mustElement<HTMLElement>("#dashboard-content");
 const tenantSelect = mustElement<HTMLSelectElement>("#tenant-select");
 const tenantNameInput = mustElement<HTMLInputElement>("#tenant-name-input");
+const createTenantButton = mustElement<HTMLButtonElement>("#create-tenant");
 const updateTenantButton = mustElement<HTMLButtonElement>("#update-tenant");
 const deleteTenantButton = mustElement<HTMLButtonElement>("#delete-tenant");
 const roomNameInput = mustElement<HTMLInputElement>("#room-name-input");
@@ -55,6 +62,7 @@ const assetKindInput = mustElement<HTMLInputElement>("#asset-kind-input");
 const assetUrlInput = mustElement<HTMLInputElement>("#asset-url-input");
 const assetProcessedUrlInput = mustElement<HTMLInputElement>("#asset-processed-url-input");
 const assetStatusSelect = mustElement<HTMLSelectElement>("#asset-status-select");
+const createAssetButton = mustElement<HTMLButtonElement>("#create-asset");
 const updateAssetButton = mustElement<HTMLButtonElement>("#update-asset");
 const deleteAssetButton = mustElement<HTMLButtonElement>("#delete-asset");
 const templateSelect = mustElement<HTMLSelectElement>("#template-select");
@@ -64,6 +72,7 @@ const assetSelect = mustElement<HTMLSelectElement>("#asset-select");
 const sceneBundleSelect = mustElement<HTMLSelectElement>("#scene-bundle-select");
 const sceneBundleVersionSelect = mustElement<HTMLSelectElement>("#scene-bundle-version-select");
 const sceneBundleForm = mustElement<HTMLFormElement>("#scene-bundle-form");
+const createSceneBundleVersionButton = mustElement<HTMLButtonElement>("#create-scene-bundle-version");
 const sceneBundleIdInput = mustElement<HTMLInputElement>("#scene-bundle-id-input");
 const sceneBundleVersionInput = mustElement<HTMLInputElement>("#scene-bundle-version-input");
 const sceneBundleStorageKeyInput = mustElement<HTMLInputElement>("#scene-bundle-storage-key-input");
@@ -88,6 +97,8 @@ const avatarQualitySelect = mustElement<HTMLSelectElement>("#avatar-quality-sele
 const avatarFallbackInput = mustElement<HTMLInputElement>("#avatar-fallback-input");
 const avatarSeatsInput = mustElement<HTMLInputElement>("#avatar-seats-input");
 const updateRoomButton = mustElement<HTMLButtonElement>("#update-room");
+const disableRoomButton = mustElement<HTMLButtonElement>("#disable-room");
+const enableRoomButton = mustElement<HTMLButtonElement>("#enable-room");
 const deleteRoomButton = mustElement<HTMLButtonElement>("#delete-room");
 const publishStatus = mustElement<HTMLDivElement>("#publish-status");
 const roomLink = mustElement<HTMLAnchorElement>("#room-link");
@@ -106,6 +117,7 @@ const assetsList = mustElement<HTMLUListElement>("#assets-list");
 const sceneBundlesList = mustElement<HTMLUListElement>("#scene-bundles-list");
 let selectedRoomPoll: number | undefined;
 let roomSlugTouched = false;
+let authVerificationSeq = 0;
 
 adminTokenInput.value = storedAdminToken;
 
@@ -125,6 +137,48 @@ function selectedSceneBundlePublicUrl(): string | undefined {
     : undefined;
   const currentVersion = state.sceneBundleVersions.find((bundle) => bundle.isCurrent);
   return selectedVersion?.publicUrl ?? currentVersion?.publicUrl ?? state.selectedSceneBundle?.publicUrl;
+}
+
+function roomSceneBundleLabel(room: typeof state.rooms[number]): string {
+  if (!room.sceneBundleUrl) return "bundle:fallback";
+  const bundle = state.sceneBundles.find((item) => item.publicUrl === room.sceneBundleUrl);
+  if (bundle) return `bundle:${bundle.bundleId}@${bundle.version}`;
+  return `bundle:${room.sceneBundleUrl.split("/").slice(-3).join("/")}`;
+}
+
+function roomStatusLabel(room: typeof state.rooms[number]): string {
+  return room.status === "disabled" || room.disabledAt ? "disabled" : "active";
+}
+
+function renderAuthorizationState(): void {
+  dashboardContent.dataset.authorized = state.adminAuthorized ? "true" : "false";
+  dashboardAuthStatus.textContent = state.adminAuthorized
+    ? `Admin dashboard authorized as ${state.controlPlaneSession?.actor.actorId ?? "admin"}.`
+    : adminTokenInput.value.trim()
+      ? "Admin token not verified. Actions will be denied until a valid token is applied."
+      : "Admin token required for dashboard actions.";
+  const actionButtons = [
+    createRoomButton,
+    updateRoomButton,
+    disableRoomButton,
+    enableRoomButton,
+    deleteRoomButton,
+    bindSceneBundleButton,
+    setCurrentSceneBundleButton,
+    markSceneBundleObsoleteButton,
+    createInviteButton,
+    revokeInviteButton,
+    createSceneBundleVersionButton,
+    createAssetButton,
+    updateAssetButton,
+    deleteAssetButton,
+    createTenantButton,
+    updateTenantButton,
+    deleteTenantButton
+  ];
+  actionButtons.forEach((button) => {
+    button.hidden = !state.adminAuthorized;
+  });
 }
 
 function roomSlugValidationError(): string | null {
@@ -159,6 +213,7 @@ function renderRoomPreview(): void {
 }
 
 function render(): void {
+  renderAuthorizationState();
   publishStatus.textContent = state.statusMessage ?? state.publishStatus;
   roomLink.href = state.roomLink ?? "#";
   roomLink.textContent = state.roomLink ?? "";
@@ -173,7 +228,7 @@ function render(): void {
       const item = document.createElement("li");
       const inspect = document.createElement("button");
       inspect.type = "button";
-      inspect.textContent = `${room.name} (${room.templateId}) [${room.visibility ?? "public"}]${room.assetIds?.length ? ` assets:${room.assetIds.length}` : ""}${room.theme ? ` theme:${room.theme.primaryColor}` : ""}`;
+      inspect.textContent = `${room.name} (${room.templateId}) [${room.visibility ?? "public"}] status:${roomStatusLabel(room)} ${roomSceneBundleLabel(room)}${room.assetIds?.length ? ` assets:${room.assetIds.length}` : ""}${room.theme ? ` theme:${room.theme.primaryColor}` : ""}`;
       inspect.addEventListener("click", () => {
         void selectRoom(room);
       });
@@ -209,6 +264,9 @@ function render(): void {
   const selectedInvite = state.selectedRoomInvites.find((invite) => invite.inviteId === inviteSelect.value) ?? state.selectedRoomInvites[0];
   inviteLink.href = selectedInvite?.inviteLink ?? "#";
   inviteLink.textContent = selectedInvite?.inviteLink ?? "";
+  const selectedRoomDisabled = state.selectedRoom ? roomStatusLabel(state.selectedRoom) === "disabled" : false;
+  disableRoomButton.hidden = !state.adminAuthorized || selectedRoomDisabled;
+  enableRoomButton.hidden = !state.adminAuthorized || !selectedRoomDisabled;
   waitingRoomList.replaceChildren(
     ...state.selectedWaitingRoomRequests.map((request) => {
       const item = document.createElement("li");
@@ -395,6 +453,40 @@ function currentAuth(): { adminToken?: string } {
   return token ? { adminToken: token } : {};
 }
 
+async function verifyControlPlaneSession(options: { optimistic?: boolean } = {}): Promise<void> {
+  const verificationSeq = ++authVerificationSeq;
+  const token = adminTokenInput.value.trim();
+  localStorage.setItem("vrata.controlPlaneAdminToken", token);
+  if (!token) {
+    state.adminAuthorized = false;
+    state.controlPlaneSession = undefined;
+    render();
+    return;
+  }
+  if (options.optimistic) {
+    state.adminAuthorized = false;
+    state.controlPlaneSession = undefined;
+    state.statusMessage = "admin-token-pending";
+    render();
+  }
+  try {
+    const session = await fetchControlPlaneSession(apiBaseUrl, currentAuth());
+    if (verificationSeq !== authVerificationSeq) return;
+    state.controlPlaneSession = session;
+    state.adminAuthorized = true;
+    const rooms = await listRooms(apiBaseUrl, currentAuth());
+    if (verificationSeq !== authVerificationSeq) return;
+    state.rooms = rooms;
+    state.statusMessage = "admin-dashboard-authorized";
+  } catch (error) {
+    if (verificationSeq !== authVerificationSeq) return;
+    state.adminAuthorized = false;
+    state.controlPlaneSession = undefined;
+    state.statusMessage = error instanceof Error ? `failed:${error.message}` : "failed:admin_dashboard_auth";
+  }
+  render();
+}
+
 function collectAvatarConfig(): {
   avatarsEnabled: boolean;
   avatarCatalogUrl?: string;
@@ -488,8 +580,19 @@ async function bootstrap(): Promise<void> {
     sceneBundleIdInput.value = state.sceneBundles[0].bundleId;
   }
   render();
+  if (adminTokenInput.value.trim()) {
+    await verifyControlPlaneSession();
+  }
   startSelectedRoomPolling();
 }
+
+applyAdminTokenButton.addEventListener("click", () => {
+  void verifyControlPlaneSession({ optimistic: true });
+});
+
+adminTokenInput.addEventListener("input", () => {
+  void verifyControlPlaneSession({ optimistic: true });
+});
 
 sceneBundleSelect.addEventListener("change", () => {
   const selected = state.sceneBundles.find((bundle) => bundle.bundleId === sceneBundleSelect.value);
@@ -973,6 +1076,37 @@ markSceneBundleObsoleteButton.addEventListener("click", () => {
       state.statusMessage = error instanceof Error ? `failed:${error.message}` : "failed";
       render();
     });
+});
+
+function setSelectedRoomDisabled(disabled: boolean): void {
+  if (!state.selectedRoom) {
+    return;
+  }
+  const roomId = state.selectedRoom.roomId;
+  state.publishStatus = "publishing";
+  state.statusMessage = disabled ? "disabling-room" : "enabling-room";
+  render();
+  void setRoomDisabled(apiBaseUrl, roomId, disabled, currentAuth())
+    .then(async (room) => {
+      state.publishStatus = "published";
+      state.statusMessage = disabled ? "room-disabled" : "room-enabled";
+      state.roomLink = room.roomLink;
+      state.rooms = state.rooms.map((item) => item.roomId === room.roomId ? room : item);
+      await selectRoom(room);
+    })
+    .catch((error: unknown) => {
+      state.publishStatus = "failed";
+      state.statusMessage = error instanceof Error ? `failed:${error.message}` : "failed";
+      render();
+    });
+}
+
+disableRoomButton.addEventListener("click", () => {
+  setSelectedRoomDisabled(true);
+});
+
+enableRoomButton.addEventListener("click", () => {
+  setSelectedRoomDisabled(false);
 });
 
 deleteRoomButton.addEventListener("click", () => {

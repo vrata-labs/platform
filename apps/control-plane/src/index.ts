@@ -45,11 +45,25 @@ export interface ControlPlaneAuth {
   sessionToken?: string;
 }
 
+export interface ControlPlaneSession {
+  actor: {
+    actorType: "admin-token" | "room-session";
+    actorId: string;
+    role: string;
+    tenantId?: string;
+    roomId?: string;
+  };
+  permissions: string[];
+}
+
 export interface RoomRecord {
   roomId: string;
   tenantId: string;
   templateId: string;
   name: string;
+  status?: "active" | "disabled";
+  disabledAt?: string | null;
+  disabledBy?: string | null;
   visibility?: "public" | "unlisted" | "private";
   sceneBundleUrl?: string;
   assetIds?: string[];
@@ -110,6 +124,7 @@ export interface RoomManifestRecord {
     joinMode: "link";
     guestAllowed: boolean;
     visibility?: "public" | "unlisted" | "private";
+    disabled?: boolean;
   };
 }
 
@@ -262,6 +277,17 @@ function authHeaders(auth?: ControlPlaneAuth): Record<string, string> {
   };
 }
 
+export async function fetchControlPlaneSession(apiBaseUrl: string, auth?: ControlPlaneAuth): Promise<ControlPlaneSession> {
+  const response = await fetch(new URL("/api/control-plane/session", apiBaseUrl), {
+    headers: { ...authHeaders(auth) }
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({ reason: `failed_to_fetch_control_plane_session:${response.status}` }));
+    throw new Error(payload.reason ?? `failed_to_fetch_control_plane_session:${response.status}`);
+  }
+  return (await response.json()) as ControlPlaneSession;
+}
+
 export async function createRoom(apiBaseUrl: string, input: RoomCreateInput, auth?: ControlPlaneAuth): Promise<RoomRecord> {
   const response = await fetch(new URL("/api/rooms", apiBaseUrl), {
     method: "POST",
@@ -301,6 +327,20 @@ export async function deleteRoom(apiBaseUrl: string, roomId: string, auth?: Cont
   if (!response.ok) {
     throw new Error(`failed_to_delete_room:${response.status}`);
   }
+}
+
+export async function setRoomDisabled(apiBaseUrl: string, roomId: string, disabled: boolean, auth?: ControlPlaneAuth): Promise<RoomRecord> {
+  const response = await fetch(new URL(`/api/rooms/${roomId}/${disabled ? "disable" : "enable"}`, apiBaseUrl), {
+    method: "POST",
+    headers: { ...authHeaders(auth) }
+  });
+
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({ error: `failed_to_${disabled ? "disable" : "enable"}_room:${response.status}` }));
+    throw new Error(payload.error ?? `failed_to_${disabled ? "disable" : "enable"}_room:${response.status}`);
+  }
+
+  return (await response.json()) as RoomRecord;
 }
 
 export async function listRooms(apiBaseUrl: string, auth?: ControlPlaneAuth): Promise<RoomRecord[]> {
@@ -553,6 +593,8 @@ export interface ControlPlanePageState {
   sceneBundles: SceneBundleRecord[];
   sceneBundleVersions: SceneBundleRecord[];
   assets: AssetRecord[];
+  controlPlaneSession?: ControlPlaneSession;
+  adminAuthorized: boolean;
   selectedAsset?: AssetRecord;
   selectedRoom?: RoomRecord;
   selectedSceneBundle?: SceneBundleRecord;
@@ -574,6 +616,7 @@ export function createControlPlanePageState(): ControlPlanePageState {
     sceneBundles: [],
     sceneBundleVersions: [],
     assets: [],
+    adminAuthorized: false,
     selectedRoomDiagnostics: [],
     selectedRoomInvites: [],
     selectedWaitingRoomRequests: [],

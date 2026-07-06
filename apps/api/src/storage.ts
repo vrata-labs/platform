@@ -37,6 +37,7 @@ export interface RoomAvatarConfig {
 }
 
 export type RoomVisibility = "public" | "unlisted" | "private";
+export type RoomStatus = "active" | "disabled";
 
 export interface RoomInviteRecord {
   inviteId: string;
@@ -87,6 +88,9 @@ export interface RoomRecord {
   tenantId: string;
   templateId: string;
   name: string;
+  status?: RoomStatus;
+  disabledAt?: string | null;
+  disabledBy?: string | null;
   visibility?: RoomVisibility;
   sceneBundleUrl?: string;
   features: RoomFeatures;
@@ -163,6 +167,10 @@ function defaultRoomVisibility(input?: RoomVisibility): RoomVisibility {
   return input === "private" || input === "unlisted" ? input : "public";
 }
 
+function defaultRoomStatus(input?: RoomStatus): RoomStatus {
+  return input === "disabled" ? "disabled" : "active";
+}
+
 function defaultSessionControl(input?: Partial<RoomSessionControlState> | null): RoomSessionControlState {
   return {
     hostParticipantId: input?.hostParticipantId ?? null,
@@ -226,6 +234,42 @@ function mapWaitingRoomRequestRow(row: {
     createdAt: isoString(row.created_at) ?? new Date().toISOString(),
     decidedAt: isoString(row.decided_at),
     decidedBy: row.decided_by ?? null
+  };
+}
+
+function mapRoomRow(row: {
+  room_id: string;
+  tenant_id: string;
+  template_id: string;
+  name: string;
+  status?: RoomStatus;
+  disabled_at?: string | Date | null;
+  disabled_by?: string | null;
+  visibility?: RoomVisibility;
+  scene_bundle_url: string | null;
+  features: RoomFeatures;
+  asset_ids: string[];
+  theme: { primaryColor: string; accentColor: string };
+  guest_allowed: boolean;
+  avatar_config: Partial<RoomAvatarConfig>;
+  session_control: Partial<RoomSessionControlState> | null;
+}): RoomRecord {
+  return {
+    roomId: row.room_id,
+    tenantId: row.tenant_id,
+    templateId: row.template_id,
+    name: row.name,
+    status: defaultRoomStatus(row.status),
+    disabledAt: isoString(row.disabled_at),
+    disabledBy: row.disabled_by ?? null,
+    visibility: defaultRoomVisibility(row.visibility),
+    sceneBundleUrl: row.scene_bundle_url ?? undefined,
+    features: row.features,
+    assetIds: row.asset_ids,
+    theme: row.theme,
+    guestAllowed: row.guest_allowed,
+    avatarConfig: defaultAvatarConfig(row.avatar_config),
+    sessionControl: defaultSessionControl(row.session_control)
   };
 }
 
@@ -389,6 +433,9 @@ export class MemoryStorage implements Storage {
         tenantId: "demo-tenant",
         templateId: "meeting-room-basic",
         name: "Demo Room",
+        status: "active",
+        disabledAt: null,
+        disabledBy: null,
         visibility: "public",
         sceneBundleUrl: undefined,
         features: { voice: true, spatialAudio: true, screenShare: true },
@@ -445,6 +492,9 @@ export class MemoryStorage implements Storage {
       tenantId: input.tenantId ?? "demo-tenant",
       templateId: input.templateId ?? "meeting-room-basic",
       name: input.name ?? "New Room",
+      status: defaultRoomStatus(input.status),
+      disabledAt: input.disabledAt ?? null,
+      disabledBy: input.disabledBy ?? null,
       visibility: defaultRoomVisibility(input.visibility),
       sceneBundleUrl: input.sceneBundleUrl,
       features: {
@@ -469,9 +519,12 @@ export class MemoryStorage implements Storage {
     if (!existing) {
       return null;
     }
-      const updated: RoomRecord = {
-        ...existing,
-        ...input,
+    const updated: RoomRecord = {
+      ...existing,
+      ...input,
+      status: defaultRoomStatus(input.status ?? existing.status),
+      disabledAt: input.disabledAt !== undefined ? input.disabledAt : existing.disabledAt ?? null,
+      disabledBy: input.disabledBy !== undefined ? input.disabledBy : existing.disabledBy ?? null,
       features: {
         ...existing.features,
         ...input.features
@@ -709,6 +762,9 @@ export class PostgresStorage implements Storage {
         tenant_id text not null references tenants(tenant_id),
         template_id text not null references templates(template_id),
       name text not null,
+      status text not null default 'active',
+      disabled_at timestamptz,
+      disabled_by text,
       visibility text not null default 'public',
       scene_bundle_url text,
       features jsonb not null,
@@ -785,7 +841,11 @@ export class PostgresStorage implements Storage {
     `);
     await this.pool.query(`create index if not exists xr_telemetry_room_id_id_idx on xr_telemetry (room_id, id)`);
     await this.pool.query(`alter table rooms add column if not exists scene_bundle_url text`);
+    await this.pool.query(`alter table rooms add column if not exists status text not null default 'active'`);
+    await this.pool.query(`alter table rooms add column if not exists disabled_at timestamptz`);
+    await this.pool.query(`alter table rooms add column if not exists disabled_by text`);
     await this.pool.query(`alter table rooms add column if not exists visibility text not null default 'public'`);
+    await this.pool.query(`update rooms set status = 'disabled' where disabled_at is not null and (status is null or status = 'active')`);
     await this.pool.query(`update rooms set visibility = 'private' where guest_allowed = false and (visibility is null or visibility = 'public')`);
     await this.pool.query(`alter table rooms add column if not exists avatar_config jsonb not null default '${DEFAULT_AVATAR_CONFIG_JSON}'::jsonb`);
     await this.pool.query(`update rooms set avatar_config = '${DEFAULT_AVATAR_CONFIG_JSON}'::jsonb where avatar_config is null`);
@@ -813,8 +873,8 @@ export class PostgresStorage implements Storage {
       );
     }
     await this.pool.query(
-      `insert into rooms (room_id, tenant_id, template_id, name, visibility, scene_bundle_url, features, asset_ids, theme, guest_allowed, avatar_config, session_control)
-       values ('demo-room','demo-tenant','meeting-room-basic','Demo Room','public',null,$1::jsonb,'[]'::jsonb,'{"primaryColor":"#5fc8ff","accentColor":"#163354"}'::jsonb,true,$2::jsonb,$3::jsonb)
+      `insert into rooms (room_id, tenant_id, template_id, name, status, disabled_at, disabled_by, visibility, scene_bundle_url, features, asset_ids, theme, guest_allowed, avatar_config, session_control)
+       values ('demo-room','demo-tenant','meeting-room-basic','Demo Room','active',null,null,'public',null,$1::jsonb,'[]'::jsonb,'{"primaryColor":"#5fc8ff","accentColor":"#163354"}'::jsonb,true,$2::jsonb,$3::jsonb)
        on conflict do nothing`,
       [JSON.stringify({ voice: true, spatialAudio: true, screenShare: true }), JSON.stringify(defaultAvatarConfig()), DEFAULT_SESSION_CONTROL_JSON]
     );
@@ -859,13 +919,13 @@ export class PostgresStorage implements Storage {
     }));
   }
   async listRooms(): Promise<RoomRecord[]> {
-    const result = await this.pool.query(`select room_id, tenant_id, template_id, name, visibility, scene_bundle_url, features, asset_ids, theme, guest_allowed, avatar_config, session_control from rooms order by room_id`);
-    return result.rows.map((row: { room_id: string; tenant_id: string; template_id: string; name: string; visibility?: RoomVisibility; scene_bundle_url: string | null; features: RoomFeatures; asset_ids: string[]; theme: { primaryColor: string; accentColor: string }; guest_allowed: boolean; avatar_config: Partial<RoomAvatarConfig>; session_control: Partial<RoomSessionControlState> | null }) => ({ roomId: row.room_id, tenantId: row.tenant_id, templateId: row.template_id, name: row.name, visibility: defaultRoomVisibility(row.visibility), sceneBundleUrl: row.scene_bundle_url ?? undefined, features: row.features, assetIds: row.asset_ids, theme: row.theme, guestAllowed: row.guest_allowed, avatarConfig: defaultAvatarConfig(row.avatar_config), sessionControl: defaultSessionControl(row.session_control) }));
+    const result = await this.pool.query(`select room_id, tenant_id, template_id, name, status, disabled_at, disabled_by, visibility, scene_bundle_url, features, asset_ids, theme, guest_allowed, avatar_config, session_control from rooms order by room_id`);
+    return result.rows.map(mapRoomRow);
   }
   async getRoom(roomId: string): Promise<RoomRecord | null> {
-    const result = await this.pool.query(`select room_id, tenant_id, template_id, name, visibility, scene_bundle_url, features, asset_ids, theme, guest_allowed, avatar_config, session_control from rooms where room_id = $1`, [roomId]);
+    const result = await this.pool.query(`select room_id, tenant_id, template_id, name, status, disabled_at, disabled_by, visibility, scene_bundle_url, features, asset_ids, theme, guest_allowed, avatar_config, session_control from rooms where room_id = $1`, [roomId]);
     const row = result.rows[0];
-    return row ? { roomId: row.room_id, tenantId: row.tenant_id, templateId: row.template_id, name: row.name, visibility: defaultRoomVisibility(row.visibility), sceneBundleUrl: row.scene_bundle_url ?? undefined, features: row.features, assetIds: row.asset_ids, theme: row.theme, guestAllowed: row.guest_allowed, avatarConfig: defaultAvatarConfig(row.avatar_config), sessionControl: defaultSessionControl(row.session_control) } : null;
+    return row ? mapRoomRow(row) : null;
   }
   async createRoom(input: Partial<RoomRecord>): Promise<RoomRecord> {
     const room: RoomRecord = {
@@ -873,6 +933,9 @@ export class PostgresStorage implements Storage {
       tenantId: input.tenantId ?? "demo-tenant",
       templateId: input.templateId ?? "meeting-room-basic",
       name: input.name ?? "New Room",
+      status: defaultRoomStatus(input.status),
+      disabledAt: input.disabledAt ?? null,
+      disabledBy: input.disabledBy ?? null,
       visibility: defaultRoomVisibility(input.visibility),
       sceneBundleUrl: input.sceneBundleUrl,
       features: {
@@ -890,8 +953,8 @@ export class PostgresStorage implements Storage {
       sessionControl: defaultSessionControl(input.sessionControl)
     };
     await this.pool.query(
-      `insert into rooms (room_id, tenant_id, template_id, name, visibility, scene_bundle_url, features, asset_ids, theme, guest_allowed, avatar_config, session_control) values ($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9::jsonb,$10,$11::jsonb,$12::jsonb)`,
-      [room.roomId, room.tenantId, room.templateId, room.name, room.visibility, room.sceneBundleUrl ?? null, JSON.stringify(room.features), JSON.stringify(room.assetIds), JSON.stringify(room.theme), room.guestAllowed, JSON.stringify(room.avatarConfig), JSON.stringify(room.sessionControl)]
+      `insert into rooms (room_id, tenant_id, template_id, name, status, disabled_at, disabled_by, visibility, scene_bundle_url, features, asset_ids, theme, guest_allowed, avatar_config, session_control) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb,$12::jsonb,$13,$14::jsonb,$15::jsonb)`,
+      [room.roomId, room.tenantId, room.templateId, room.name, room.status, room.disabledAt ?? null, room.disabledBy ?? null, room.visibility, room.sceneBundleUrl ?? null, JSON.stringify(room.features), JSON.stringify(room.assetIds), JSON.stringify(room.theme), room.guestAllowed, JSON.stringify(room.avatarConfig), JSON.stringify(room.sessionControl)]
     );
     return room;
   }
@@ -903,6 +966,9 @@ export class PostgresStorage implements Storage {
     const updated: RoomRecord = {
       ...existing,
       ...input,
+      status: defaultRoomStatus(input.status ?? existing.status),
+      disabledAt: input.disabledAt !== undefined ? input.disabledAt : existing.disabledAt ?? null,
+      disabledBy: input.disabledBy !== undefined ? input.disabledBy : existing.disabledBy ?? null,
       features: {
         ...existing.features,
         ...input.features
@@ -921,8 +987,8 @@ export class PostgresStorage implements Storage {
       sessionControl: defaultSessionControl(input.sessionControl ?? existing.sessionControl)
     };
     await this.pool.query(
-      `update rooms set template_id = $2, name = $3, visibility = $4, scene_bundle_url = $5, features = $6::jsonb, asset_ids = $7::jsonb, theme = $8::jsonb, guest_allowed = $9, avatar_config = $10::jsonb, session_control = $11::jsonb where room_id = $1`,
-      [roomId, updated.templateId, updated.name, updated.visibility, updated.sceneBundleUrl ?? null, JSON.stringify(updated.features), JSON.stringify(updated.assetIds), JSON.stringify(updated.theme), updated.guestAllowed, JSON.stringify(updated.avatarConfig), JSON.stringify(updated.sessionControl)]
+      `update rooms set template_id = $2, name = $3, status = $4, disabled_at = $5, disabled_by = $6, visibility = $7, scene_bundle_url = $8, features = $9::jsonb, asset_ids = $10::jsonb, theme = $11::jsonb, guest_allowed = $12, avatar_config = $13::jsonb, session_control = $14::jsonb where room_id = $1`,
+      [roomId, updated.templateId, updated.name, updated.status, updated.disabledAt ?? null, updated.disabledBy ?? null, updated.visibility, updated.sceneBundleUrl ?? null, JSON.stringify(updated.features), JSON.stringify(updated.assetIds), JSON.stringify(updated.theme), updated.guestAllowed, JSON.stringify(updated.avatarConfig), JSON.stringify(updated.sessionControl)]
     );
     return updated;
   }

@@ -547,9 +547,12 @@ test("control-plane authz enforces role matrix and writes audit log", async () =
       { method: "GET", path: "/api/rooms/demo-room/diagnostics" },
       { method: "POST", path: "/api/rooms", body: { tenantId: "demo-tenant", templateId: "meeting-room-basic", name: "Protected Room" } },
       { method: "PATCH", path: "/api/rooms/demo-room", body: { name: "Protected Room" } },
+      { method: "POST", path: "/api/rooms/demo-room/disable" },
+      { method: "POST", path: "/api/rooms/demo-room/enable" },
       { method: "POST", path: "/api/rooms/demo-room/bind-scene-bundle", body: { bundleId: "bundle-1" } },
       { method: "DELETE", path: "/api/rooms/demo-room" },
       { method: "GET", path: "/api/rooms/demo-room/xr-telemetry" },
+      { method: "GET", path: "/api/control-plane/session" },
       { method: "GET", path: "/api/audit/control-plane" }
     ];
 
@@ -593,6 +596,12 @@ test("control-plane authz enforces role matrix and writes audit log", async () =
     });
     assert.equal(guestCreateRoom.status, 403);
     assert.equal((await guestCreateRoom.json() as { permission?: string }).permission, "room.create");
+
+    const guestDashboard = await fetch(`${baseUrl}/api/control-plane/session`, {
+      headers: { "authorization": `Bearer ${guestToken}`, "x-request-id": "cp-guest-dashboard" }
+    });
+    assert.equal(guestDashboard.status, 403);
+    assert.equal((await guestDashboard.json() as { permission?: string }).permission, "dashboard.read");
 
     const hostToken = (await issueToken("host", "cp-host", "demo-room")).token;
     const hostTenantWrite = await fetch(`${baseUrl}/api/tenants`, {
@@ -640,6 +649,44 @@ test("control-plane authz enforces role matrix and writes audit log", async () =
     });
     assert.equal(hostOtherTelemetry.status, 403);
 
+    const dashboardSession = await fetch(`${baseUrl}/api/control-plane/session`, {
+      headers: { "x-vrata-admin-token": "test-admin-token", "x-request-id": "cp-dashboard-view" }
+    });
+    assert.equal(dashboardSession.status, 200);
+    assert.equal(((await dashboardSession.json()) as { permissions: string[] }).permissions.includes("room.update"), true);
+
+    const disableOtherRoom = await fetch(`${baseUrl}/api/rooms/${otherRoom.roomId}/disable`, {
+      method: "POST",
+      headers: { "x-vrata-admin-token": "test-admin-token", "x-request-id": "cp-room-disable" }
+    });
+    assert.equal(disableOtherRoom.status, 200);
+    assert.equal(((await disableOtherRoom.json()) as { status?: string }).status, "disabled");
+
+    const disabledToken = await fetch(`${baseUrl}/api/tokens/state`, {
+      method: "POST",
+      headers: jsonHeaders,
+      body: JSON.stringify({ roomId: otherRoom.roomId, participantId: "disabled-guest", displayName: "Disabled Guest" })
+    });
+    assert.equal(disabledToken.status, 403);
+    assert.equal(((await disabledToken.json()) as { reason?: string }).reason, "room_disabled");
+
+    const disabledPublicManifest = await fetch(`${baseUrl}/api/rooms/${otherRoom.roomId}/manifest`);
+    assert.equal(disabledPublicManifest.status, 403);
+    assert.equal(((await disabledPublicManifest.json()) as { reason?: string }).reason, "room_disabled");
+
+    const disabledAdminRead = await fetch(`${baseUrl}/api/rooms/${otherRoom.roomId}`, {
+      headers: { "x-vrata-admin-token": "test-admin-token" }
+    });
+    assert.equal(disabledAdminRead.status, 200);
+    assert.equal(((await disabledAdminRead.json()) as { manifest?: { access?: { disabled?: boolean } } }).manifest?.access?.disabled, true);
+
+    const enableOtherRoom = await fetch(`${baseUrl}/api/rooms/${otherRoom.roomId}/enable`, {
+      method: "POST",
+      headers: { "x-vrata-admin-token": "test-admin-token", "x-request-id": "cp-room-enable" }
+    });
+    assert.equal(enableOtherRoom.status, 200);
+    assert.equal(((await enableOtherRoom.json()) as { status?: string }).status, "active");
+
     const sessionAdminToken = (await issueToken("admin", "cp-session-admin", "demo-room")).token;
     const sessionAdminTenantWrite = await fetch(`${baseUrl}/api/tenants`, {
       method: "POST",
@@ -671,10 +718,14 @@ test("control-plane authz enforces role matrix and writes audit log", async () =
       items: Array<{ requestId?: string; action?: string; permission?: string; object?: { type?: string; id?: string }; result?: string; reason?: string; actor?: { role?: string; actorId?: string } }>;
     };
     assert.equal(auditPayload.items.some((item) => item.requestId === "cp-guest-room-create" && item.action === "room.create" && item.result === "denied" && item.actor?.role === "guest"), true);
+    assert.equal(auditPayload.items.some((item) => item.requestId === "cp-guest-dashboard" && item.action === "admin.dashboard.view" && item.result === "denied" && item.actor?.role === "guest"), true);
     assert.equal(auditPayload.items.some((item) => item.requestId === "cp-host-own-bind" && item.action === "room.bind-scene-bundle" && item.result === "denied" && item.actor?.role === "host"), true);
     assert.equal(auditPayload.items.some((item) => item.requestId === "cp-trusted-host-own-bind" && item.action === "room.bind-scene-bundle" && item.result === "allowed" && item.actor?.role === "host"), true);
     assert.equal(auditPayload.items.some((item) => item.requestId === "cp-session-admin-tenant-create" && item.action === "tenant.create" && item.result === "denied" && item.actor?.role === "admin"), true);
     assert.equal(auditPayload.items.some((item) => item.requestId === "cp-admin-room-create" && item.permission === "room.create" && item.result === "allowed"), true);
+    assert.equal(auditPayload.items.some((item) => item.requestId === "cp-dashboard-view" && item.action === "admin.dashboard.view" && item.result === "allowed"), true);
+    assert.equal(auditPayload.items.some((item) => item.requestId === "cp-room-disable" && item.action === "room.disable" && item.result === "allowed"), true);
+    assert.equal(auditPayload.items.some((item) => item.requestId === "cp-room-enable" && item.action === "room.enable" && item.result === "allowed"), true);
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     delete process.env.VRATA_DISABLE_AUTOSTART;

@@ -78,6 +78,7 @@ interface RoomManifest {
     guestAllowed: boolean;
     roleQueryAllowed: boolean;
     visibility: RoomVisibility;
+    disabled?: boolean;
   };
 }
 
@@ -118,6 +119,7 @@ interface RemoteBrowserFrameTokenRequest {
 }
 
 type ControlPlanePermission =
+  | "dashboard.read"
   | "tenant.write"
   | "room.create"
   | "room.update"
@@ -305,6 +307,10 @@ const metrics = {
   roomLockedTotal: 0,
   participantsRemovedTotal: 0,
   sessionsEndedTotal: 0,
+  adminDashboardViewsTotal: 0,
+  adminActionsTotal: new Map<string, number>(),
+  roomsDisabledTotal: 0,
+  invitesRevokedTotal: 0,
   roomsCreatedTotal: new Map<string, number>(),
   roomCreationFailuresTotal: new Map<string, number>(),
   sceneBundleUploadsTotal: new Map<string, number>(),
@@ -401,6 +407,27 @@ function isRoomVisibility(input: unknown): input is RoomVisibility {
 function sanitizeRoomVisibility(input: unknown, fallback: RoomVisibility = "public"): RoomVisibility {
   return isRoomVisibility(input) ? input : fallback;
 }
+
+function isRoomDisabled(room: RoomRecord | null | undefined): boolean {
+  return room?.status === "disabled" || Boolean(room?.disabledAt);
+}
+
+const controlPlanePermissions: ControlPlanePermission[] = [
+  "dashboard.read",
+  "tenant.write",
+  "room.create",
+  "room.update",
+  "room.bind-scene-bundle",
+  "room.delete",
+  "asset.write",
+  "scene-bundle.write",
+  "diagnostics.read",
+  "xr-telemetry.read",
+  "audit.read",
+  "room.invite",
+  "room.session-control",
+  "room.join"
+];
 
 function encodeRemoteBrowserFrameToken(payload: { roomId: string; objectId: string; executorSessionId: string; frameStreamId: string; exp: number }, env: NodeJS.ProcessEnv = process.env): string {
   const body = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
@@ -590,7 +617,7 @@ function defaultManifest(roomId: string, request?: IncomingMessage): RoomManifes
       avatarCustomizationEnabled: false
     },
     quality: { default: "desktop-standard", mobile: "mobile-lite", xr: "xr" },
-    access: { joinMode: "link", guestAllowed: true, roleQueryAllowed: isDevRoleQueryAllowed(), visibility: "public" }
+    access: { joinMode: "link", guestAllowed: true, roleQueryAllowed: isDevRoleQueryAllowed(), visibility: "public", disabled: false }
   };
 }
 
@@ -935,7 +962,7 @@ async function buildManifest(roomId: string, request?: IncomingMessage): Promise
       avatarCustomizationEnabled: process.env.FEATURE_AVATAR_CUSTOMIZATION === "true"
     },
     quality: { default: "desktop-standard", mobile: "mobile-lite", xr: "xr" },
-    access: { joinMode: "link", guestAllowed: room.guestAllowed ?? true, roleQueryAllowed: isDevRoleQueryAllowed(), visibility: sanitizeRoomVisibility(room.visibility) }
+    access: { joinMode: "link", guestAllowed: room.guestAllowed ?? true, roleQueryAllowed: isDevRoleQueryAllowed(), visibility: sanitizeRoomVisibility(room.visibility), disabled: isRoomDisabled(room) }
   };
 }
 
@@ -1111,6 +1138,15 @@ async function apiMetricsText(storage: Awaited<typeof storagePromise>): Promise<
     "# HELP vrata_sessions_ended_total Session end actions accepted by API.",
     "# TYPE vrata_sessions_ended_total counter",
     formatMetricLine("vrata_sessions_ended_total", metrics.sessionsEndedTotal),
+    "# HELP vrata_admin_dashboard_views_total Admin dashboard session views accepted by API.",
+    "# TYPE vrata_admin_dashboard_views_total counter",
+    formatMetricLine("vrata_admin_dashboard_views_total", metrics.adminDashboardViewsTotal),
+    "# HELP vrata_rooms_disabled_total Rooms disabled through the control plane.",
+    "# TYPE vrata_rooms_disabled_total counter",
+    formatMetricLine("vrata_rooms_disabled_total", metrics.roomsDisabledTotal),
+    "# HELP vrata_invites_revoked_total Room invites revoked through the control plane.",
+    "# TYPE vrata_invites_revoked_total counter",
+    formatMetricLine("vrata_invites_revoked_total", metrics.invitesRevokedTotal),
     "# HELP vrata_rooms_created_total Rooms created through the API by source and visibility.",
     "# TYPE vrata_rooms_created_total counter",
     ...Array.from(metrics.roomsCreatedTotal.entries()).map(([label, count]) => {
@@ -1124,6 +1160,14 @@ async function apiMetricsText(storage: Awaited<typeof storagePromise>): Promise<
     "# TYPE vrata_scene_bundle_upload_bytes_total counter",
     formatMetricLine("vrata_scene_bundle_upload_bytes_total", metrics.sceneBundleUploadBytesTotal)
   );
+  lines.push(
+    "# HELP vrata_admin_actions_total Control-plane admin authorization decisions by action and result.",
+    "# TYPE vrata_admin_actions_total counter"
+  );
+  for (const [label, count] of metrics.adminActionsTotal.entries()) {
+    const [action = "unknown", result = "unknown"] = label.split(":");
+    lines.push(formatMetricLine("vrata_admin_actions_total", count, { action, result }));
+  }
   lines.push(
     "# HELP vrata_scene_bundle_uploads_total Scene bundle upload attempts by result.",
     "# TYPE vrata_scene_bundle_uploads_total counter"
@@ -1265,6 +1309,7 @@ async function requireControlPlanePermission(
   } satisfies Omit<ControlPlaneAuditLogEntry, "result">;
 
   if (!actorResult.ok) {
+    incrementCounter(metrics.adminActionsTotal, `${options.action}:denied`);
     writeControlPlaneAudit({
       ...auditBase,
       result: "denied",
@@ -1275,6 +1320,7 @@ async function requireControlPlanePermission(
   }
 
   if (!isControlPlaneActorAllowed(actorResult.actor, options)) {
+    incrementCounter(metrics.adminActionsTotal, `${options.action}:denied`);
     writeControlPlaneAudit({
       ...auditBase,
       result: "denied",
@@ -1285,6 +1331,7 @@ async function requireControlPlanePermission(
     return null;
   }
 
+  incrementCounter(metrics.adminActionsTotal, `${options.action}:allowed`);
   writeControlPlaneAudit({
     ...auditBase,
     result: "allowed",
@@ -1341,6 +1388,11 @@ function canReadPrivateRoomWithControlPlaneActor(request: IncomingMessage, roomI
     return true;
   }
   return actorResult.actor.roomId === roomId;
+}
+
+function canManageDisabledRoom(request: IncomingMessage): boolean {
+  const actorResult = resolveControlPlaneActor(request);
+  return actorResult.ok && actorResult.actor.actorType === "admin-token";
 }
 
 async function canReadRoomDetails(request: IncomingMessage, room: RoomRecord): Promise<boolean> {
@@ -1405,7 +1457,13 @@ function canJoinLockedRoom(role: RoomRole): boolean {
 }
 
 function getSessionControlBlockReason(room: RoomRecord | null, participantId: string, role: RoomRole, hasExistingSession: boolean): string | null {
-  if (!room || !isHostControlsEnabled()) {
+  if (!room) {
+    return null;
+  }
+  if (isRoomDisabled(room)) {
+    return "room_disabled";
+  }
+  if (!isHostControlsEnabled()) {
     return null;
   }
   const control = defaultSessionControlState(room.sessionControl);
@@ -1529,6 +1587,9 @@ async function resolveStateTokenAccess(
   const participantId = requestPayload?.participantId ?? randomUUID();
   if (!room) {
     return { ok: true, ...requested };
+  }
+  if (isRoomDisabled(room)) {
+    return { ok: false, statusCode: 403, reason: "room_disabled" };
   }
 
   const existingSession = await verifyRoomSessionRequest(request, { roomId: room.roomId, participantId: requestPayload?.participantId });
@@ -2130,6 +2191,7 @@ async function listRuntimeSpaces(storage: Awaited<typeof storagePromise>, roomId
 
   const rooms = (await storage.listRooms())
     .filter((room) => room.tenantId === currentRoom.tenantId)
+    .filter((room) => !isRoomDisabled(room))
     .filter((room) => room.roomId === currentRoom.roomId || ((!isRoomAccessPolicyEnabled() || sanitizeRoomVisibility(room.visibility) === "public") && room.guestAllowed !== false))
     .map((room) => ({
       roomId: room.roomId,
@@ -2304,8 +2366,25 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   if (method === "GET" && url.pathname === "/api/rooms") {
     const actorResult = resolveControlPlaneActor(request);
     const canListPrivate = actorResult.ok && actorResult.actor.actorType === "admin-token";
-    const rooms = (await storage.listRooms()).filter((room) => canListPrivate || !isRoomAccessPolicyEnabled() || sanitizeRoomVisibility(room.visibility) === "public");
+    const rooms = (await storage.listRooms()).filter((room) => canListPrivate || (!isRoomDisabled(room) && (!isRoomAccessPolicyEnabled() || sanitizeRoomVisibility(room.visibility) === "public")));
     json(response, 200, { items: rooms.map((room) => ({ ...room, roomLink: createRoomLink(room.roomId, request) })) });
+    return;
+  }
+
+  if (method === "GET" && url.pathname === "/api/control-plane/session") {
+    const actor = await requireControlPlanePermission(request, response, { permission: "dashboard.read", action: "admin.dashboard.view", objectType: "dashboard", objectId: "control-plane" });
+    if (!actor) return;
+    metrics.adminDashboardViewsTotal += 1;
+    json(response, 200, {
+      actor: {
+        actorType: actor.actorType,
+        actorId: actor.actorId,
+        role: actor.role,
+        tenantId: actor.tenantId,
+        roomId: actor.roomId
+      },
+      permissions: controlPlanePermissions
+    });
     return;
   }
 
@@ -2580,6 +2659,26 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     return;
   }
 
+  const roomLifecycleMatch = url.pathname.match(/^\/api\/rooms\/([^/]+)\/(disable|enable)$/);
+  if (method === "POST" && roomLifecycleMatch) {
+    const roomId = decodeURIComponent(roomLifecycleMatch[1]);
+    const lifecycleAction = roomLifecycleMatch[2] as "disable" | "enable";
+    const actor = await requireControlPlanePermission(request, response, { permission: "room.update", action: `room.${lifecycleAction}`, objectType: "room", objectId: roomId });
+    if (!actor) return;
+    const existingRoom = await storage.getRoom(roomId);
+    if (!existingRoom) return json(response, 404, { error: "room_not_found" });
+    const updated = await storage.updateRoom(roomId, lifecycleAction === "disable"
+      ? { status: "disabled", disabledAt: new Date().toISOString(), disabledBy: actor.actorId }
+      : { status: "active", disabledAt: null, disabledBy: null });
+    if (!updated) return json(response, 404, { error: "room_not_found" });
+    if (lifecycleAction === "disable") {
+      metrics.roomsDisabledTotal += 1;
+      presenceByRoom.delete(roomId);
+    }
+    json(response, 200, { ...updated, roomLink: createRoomLink(updated.roomId, request), manifest: await buildManifest(updated.roomId, request) });
+    return;
+  }
+
   const roomInvitesMatch = url.pathname.match(/^\/api\/rooms\/([^/]+)\/invites$/);
   if (roomInvitesMatch && (method === "GET" || method === "POST")) {
     const roomId = decodeURIComponent(roomInvitesMatch[1]);
@@ -2633,6 +2732,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     if (!actor) return;
     const invite = await storage.revokeRoomInvite(roomId, inviteId, new Date().toISOString(), actor.actorId);
     if (!invite) return json(response, 404, { error: "invite_not_found" });
+    metrics.invitesRevokedTotal += 1;
     json(response, 200, sanitizeRoomInvite(invite));
     return;
   }
@@ -2892,6 +2992,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   if (method === "GET" && manifestMatch) {
     const roomId = decodeURIComponent(manifestMatch[1]);
     const room = await storage.getRoom(roomId);
+    if (room && isRoomDisabled(room) && !canManageDisabledRoom(request)) return json(response, 403, { error: "room_access_denied", reason: "room_disabled" });
     if (room && !(await canReadRoomDetails(request, room))) return json(response, 404, { error: "room_not_found" });
     json(response, 200, await buildManifest(roomId, request));
     return;
@@ -2999,6 +3100,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   if (method === "GET" && roomItemMatch) {
     const room = await storage.getRoom(decodeURIComponent(roomItemMatch[1]));
     if (!room) return json(response, 404, { error: "room_not_found" });
+    if (isRoomDisabled(room) && !canManageDisabledRoom(request)) return json(response, 403, { error: "room_access_denied", reason: "room_disabled" });
     if (!(await canReadRoomDetails(request, room))) return json(response, 404, { error: "room_not_found" });
     json(response, 200, { ...room, roomLink: createRoomLink(room.roomId, request), manifest: await buildManifest(room.roomId, request) });
     return;

@@ -10,8 +10,13 @@
     <main class="page">
       <section class="panel">
         <h1>Vrata Control Plane</h1>
-        <form id="room-form">
+        <section class="subpanel auth-panel">
           <label>Admin token <input id="admin-token-input" type="password" placeholder="required on secured env" /></label>
+          <button id="apply-admin-token" type="button">Apply token</button>
+          <div id="dashboard-auth-status" class="validation-message" aria-live="polite">Admin token required for dashboard actions.</div>
+        </section>
+        <section id="dashboard-content" class="dashboard-content" data-authorized="false">
+        <form id="room-form">
           <label>Tenant <select id="tenant-select"></select></label>
           <label>Room name <input id="room-name-input" value="Showroom Demo" /></label>
           <label>Room slug <input id="room-slug-input" value="showroom-demo" inputmode="latin" autocomplete="off" /></label>
@@ -46,6 +51,8 @@
           <button id="bind-scene-bundle" type="button">Bind selected scene bundle</button>
           <button id="set-current-scene-bundle" type="button">Set version current</button>
           <button id="mark-scene-bundle-obsolete" type="button">Mark version obsolete</button>
+          <button id="disable-room" type="button">Disable selected room</button>
+          <button id="enable-room" type="button">Enable selected room</button>
           <button id="delete-room" type="button">Delete selected room</button>
         </form>
         <section class="subpanel">
@@ -95,6 +102,7 @@
         <ul id="tenants-list"></ul>
         <ul id="assets-list"></ul>
         <ul id="scene-bundles-list"></ul>
+        </section>
       </section>
     </main>
     <script type="module" src="/src/main.ts"></script>

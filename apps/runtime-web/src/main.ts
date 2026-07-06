@@ -7895,6 +7895,8 @@ function describeRoomAccessError(error: RuntimeAccessError): string {
       return "Access denied: invite link expired";
     case "invite_revoked":
       return "Access denied: invite link revoked";
+    case "room_disabled":
+      return "Access denied: room disabled";
     case "waiting_room_pending":
       return "Waiting for host approval";
     case "waiting_room_rejected":

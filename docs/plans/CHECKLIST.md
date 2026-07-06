@@ -48,7 +48,7 @@
 
 - [ ] **VRATA-FEAT-029** — [Compatibility matrix page](./029-compatibility-matrix-page/README.md) — зависит от: 008, 009, 034
 - [x] **VRATA-FEAT-030** — [Guest onboarding and permissions UX](./030-guest-onboarding-and-permissions-ux/README.md) — зависит от: 014, 008, 004
-- [ ] **VRATA-FEAT-031** — [Admin dashboard for tenant rooms/assets/users](./031-admin-dashboard-for-tenant-rooms-assets-users/README.md) — зависит от: 002, 016, 017
+- [x] **VRATA-FEAT-031** — [Admin dashboard for tenant rooms/assets/users](./031-admin-dashboard-for-tenant-rooms-assets-users/README.md) — зависит от: 002, 016, 017
 - [ ] **VRATA-FEAT-032** — [Standard room templates: personal, meeting, presentation](./032-standard-room-templates-personal-meeting-presentation/README.md) — зависит от: 016, 019, 024, 025
 - [ ] **VRATA-FEAT-033** — [Public demo scenario: one private room, four participants, slides, notes](./033-public-demo-scenario-one-private-room-four-participants-slides-notes/README.md) — зависит от: 007, 014, 020, 025, 015
 - [ ] **VRATA-FEAT-034** — [Release readiness checklist with product gates](./034-release-readiness-checklist-with-product-gates/README.md) — зависит от: 007, 029, 035
@@ -86,7 +86,7 @@
 - [x] VRATA-FEAT-017
 - [x] VRATA-FEAT-018
 - [x] VRATA-FEAT-030
-- [ ] VRATA-FEAT-031
+- [x] VRATA-FEAT-031
 
 ### Спринт 4 — личное пространство
 - [ ] VRATA-FEAT-019

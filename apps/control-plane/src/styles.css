@@ -27,6 +27,20 @@ form {
   gap: 12px;
 }
 
+.dashboard-content[data-authorized="false"] {
+  opacity: 0.72;
+}
+
+.auth-panel {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 16px;
+  padding: 12px;
+  border: 1px solid rgba(10, 36, 64, 0.08);
+  border-radius: 14px;
+  background: rgba(14, 91, 215, 0.05);
+}
+
 label {
   display: grid;
   gap: 6px;

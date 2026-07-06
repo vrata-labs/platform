@@ -2041,6 +2041,67 @@ test("control plane creates a room through the browser UI", async ({ page }) => 
   await expect(page.locator("#room-detail")).toContainText('"diagnostics"');
 });
 
+test("control plane verifies admin session and toggles disabled room access", async ({ page, request }) => {
+  const roomSlug = `disabled-ui-room-${Date.now()}`;
+  await page.goto("/control-plane");
+
+  await expect(page.locator("#create-room")).toBeHidden();
+  await page.fill("#admin-token-input", "bad-token");
+  await page.click("#apply-admin-token");
+  await expect(page.locator("#dashboard-auth-status")).toContainText("not verified");
+  await expect(page.locator("#create-room")).toBeHidden();
+
+  await page.fill("#admin-token-input", e2eAdminToken);
+  await page.click("#apply-admin-token");
+  await expect(page.locator("#dashboard-auth-status")).toContainText("authorized");
+  await expect(page.locator("#create-room")).toBeVisible();
+
+  await page.fill("#room-name-input", "Disabled UI Room");
+  await page.fill("#room-slug-input", roomSlug);
+  await page.click("#create-room");
+  await expect(page.locator("#publish-status")).toContainText("published");
+  const roomHref = await page.locator("#room-link").getAttribute("href");
+  expect(roomHref).toBeTruthy();
+
+  await expect(page.locator("#disable-room")).toBeVisible();
+  await page.click("#disable-room");
+  await expect(page.locator("#publish-status")).toContainText("room-disabled");
+  await expect(page.locator("#enable-room")).toBeVisible();
+  await expect(page.locator("#rooms-list")).toContainText("Disabled UI Room");
+  await expect(page.locator("#rooms-list")).toContainText("status:disabled");
+  await expect(page.locator("#room-detail")).toContainText('"status": "disabled"');
+  await expect(page.locator("#room-detail")).toContainText('"disabled": true');
+
+  const disabledTokenResponse = await request.post("/api/tokens/state", {
+    data: { roomId: roomSlug, participantId: "disabled-ui-guest", displayName: "Disabled UI Guest" }
+  });
+  expect(disabledTokenResponse.status()).toBe(403);
+  expect((await disabledTokenResponse.json()).reason).toBe("room_disabled");
+
+  const disabledManifestResponse = await request.get(`/api/rooms/${roomSlug}/manifest`);
+  expect(disabledManifestResponse.status()).toBe(403);
+  expect((await disabledManifestResponse.json()).reason).toBe("room_disabled");
+
+  const runtimePage = await page.context().newPage();
+  try {
+    await runtimePage.goto(e2eRoomLink(String(roomHref)));
+    await expect(runtimePage.locator("#status-line")).toContainText("Access denied: room disabled");
+  } finally {
+    await runtimePage.close();
+  }
+
+  await page.click("#enable-room");
+  await expect(page.locator("#publish-status")).toContainText("room-enabled");
+  await expect(page.locator("#disable-room")).toBeVisible();
+  await expect(page.locator("#room-detail")).toContainText('"status": "active"');
+  await expect(page.locator("#room-detail")).toContainText('"disabled": false');
+
+  const enabledTokenResponse = await request.post("/api/tokens/state", {
+    data: { roomId: roomSlug, participantId: "enabled-ui-guest", displayName: "Enabled UI Guest" }
+  });
+  expect(enabledTokenResponse.ok()).toBeTruthy();
+});
+
 test("control plane shows duplicate room slug validation", async ({ page }) => {
   const roomSlug = `duplicate-room-${Date.now()}`;
   await page.goto("/control-plane");
