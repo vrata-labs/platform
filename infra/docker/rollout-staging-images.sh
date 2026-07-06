@@ -115,6 +115,85 @@ for line in env_path.read_text().splitlines():
 PY
 }
 
+expected_service_image() {
+  local repo_key="$1"
+  local default_repo="$2"
+  local repo
+  repo="$(env_value "$repo_key")"
+  if [ -z "$repo" ]; then
+    repo="$default_repo"
+  fi
+  printf '%s:%s' "$repo" "$IMAGE_TAG"
+}
+
+contains_line() {
+  local needle="$1"
+  local line
+  while IFS= read -r line; do
+    if [ "$line" = "$needle" ]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+assert_compose_config_image_tag() {
+  local config_images
+  local expected
+  config_images="$(docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" config --images)"
+
+  expected="$(expected_service_image ROOM_STATE_IMAGE_REPO cr.yandex/crp9cm29k6p76hqo8lti/vrata-room-state)"
+  if ! contains_line "$expected" <<< "$config_images"; then
+    echo "compose_image_tag_mismatch:room-state:expected=$expected" >&2
+    printf '%s\n' "$config_images" >&2
+    exit 1
+  fi
+
+  expected="$(expected_service_image REMOTE_BROWSER_IMAGE_REPO cr.yandex/crp9cm29k6p76hqo8lti/vrata-remote-browser)"
+  if ! contains_line "$expected" <<< "$config_images"; then
+    echo "compose_image_tag_mismatch:remote-browser:expected=$expected" >&2
+    printf '%s\n' "$config_images" >&2
+    exit 1
+  fi
+
+  expected="$(expected_service_image API_IMAGE_REPO cr.yandex/crp9cm29k6p76hqo8lti/vrata-api)"
+  if ! contains_line "$expected" <<< "$config_images"; then
+    echo "compose_image_tag_mismatch:api:expected=$expected" >&2
+    printf '%s\n' "$config_images" >&2
+    exit 1
+  fi
+
+  echo "compose_image_tag_verified:$IMAGE_TAG"
+}
+
+assert_running_service_image_tag() {
+  local service="$1"
+  local repo_key="$2"
+  local default_repo="$3"
+  local expected
+  local container_id
+  local actual
+
+  expected="$(expected_service_image "$repo_key" "$default_repo")"
+  container_id="$(docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" ps -q "$service")"
+  if [ -z "$container_id" ]; then
+    echo "service_container_missing:$service" >&2
+    exit 1
+  fi
+  actual="$(docker inspect --format '{{.Config.Image}}' "$container_id")"
+  if [ "$actual" != "$expected" ]; then
+    echo "running_image_tag_mismatch:$service:expected=$expected:actual=$actual" >&2
+    exit 1
+  fi
+}
+
+assert_running_image_tags() {
+  assert_running_service_image_tag room-state ROOM_STATE_IMAGE_REPO cr.yandex/crp9cm29k6p76hqo8lti/vrata-room-state
+  assert_running_service_image_tag remote-browser REMOTE_BROWSER_IMAGE_REPO cr.yandex/crp9cm29k6p76hqo8lti/vrata-remote-browser
+  assert_running_service_image_tag api API_IMAGE_REPO cr.yandex/crp9cm29k6p76hqo8lti/vrata-api
+  echo "running_image_tag_verified:$IMAGE_TAG"
+}
+
 url_join() {
   python3 - "$1" "$2" <<'PY'
 from urllib.parse import urljoin
@@ -404,6 +483,8 @@ for key in ('API_IMAGE_REPO', 'ROOM_STATE_IMAGE_REPO', 'REMOTE_BROWSER_IMAGE_REP
 env_path.write_text('\n'.join(rendered) + '\n')
 PY
 
+assert_compose_config_image_tag
+
 log_disk_state
 cleanup_docker_state
 log_disk_state
@@ -421,6 +502,7 @@ ensure_compose_foundation
 rollout_compose_service room-state
 rollout_compose_service remote-browser
 rollout_compose_service api
+assert_running_image_tags
 pull_compose_service caddy
 docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" up -d --no-build --pull never --no-deps caddy
 docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" exec -T caddy caddy validate --config /etc/caddy/Caddyfile

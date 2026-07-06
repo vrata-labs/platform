@@ -20,6 +20,10 @@ permissions:
   actions: read
   contents: read
 
+concurrency:
+  group: staging-deploy
+  cancel-in-progress: false
+
 jobs:
   deploy:
     if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'deploy/scene-bundles-stage-20260328')
@@ -201,6 +205,15 @@ jobs:
           curl --fail --silent "$STAGING_BASE_URL/health" >/dev/null
           curl --fail --silent "$STAGING_BASE_URL/rooms/demo-room" >/dev/null
           curl --fail --silent "$STAGING_BASE_URL/control-plane" >/dev/null
+          curl --fail --silent -H "x-vrata-admin-token: $STAGING_ADMIN_TOKEN" "$STAGING_BASE_URL/api/control-plane/session" >/tmp/vrata-control-plane-session.json
+          node - /tmp/vrata-control-plane-session.json <<'NODE'
+          const fs = require('node:fs');
+          const payload = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (!Array.isArray(payload.permissions) || !payload.permissions.includes('dashboard.read')) {
+            console.error('control_plane_session_missing_dashboard_read');
+            process.exit(1);
+          }
+          NODE
           if [ "${{ inputs.force_fail_gate || 'false' }}" = "true" ]; then
             echo "forced_gate_failure" >&2
             exit 1
