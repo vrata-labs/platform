@@ -17,6 +17,8 @@ export type RoomPermission =
   | "remote-browser.open-url"
   | "remote-browser.input"
   | "remote-browser.stop"
+  | "notes.view"
+  | "notes.edit"
   | "room.session-control"
   | "room.admin";
 
@@ -34,8 +36,8 @@ export interface RoomAccessDebugState {
 const roomRoles = new Set<RoomRole>(["guest", "member", "host", "admin"]);
 
 const rolePermissions: Record<RoomRole, readonly RoomPermission[]> = {
-  guest: ["room.join", "audio.join", "surface.view"],
-  member: ["room.join", "audio.join", "surface.view", "surface.input", "whiteboard.draw"],
+  guest: ["room.join", "audio.join", "surface.view", "notes.view"],
+  member: ["room.join", "audio.join", "surface.view", "surface.input", "whiteboard.draw", "notes.view", "notes.edit"],
   host: [
     "room.join",
     "audio.join",
@@ -52,6 +54,8 @@ const rolePermissions: Record<RoomRole, readonly RoomPermission[]> = {
     "remote-browser.open-url",
     "remote-browser.input",
     "remote-browser.stop",
+    "notes.view",
+    "notes.edit",
     "room.session-control"
   ],
   admin: [
@@ -71,10 +75,14 @@ const rolePermissions: Record<RoomRole, readonly RoomPermission[]> = {
     "remote-browser.open-url",
     "remote-browser.input",
     "remote-browser.stop",
+    "notes.view",
+    "notes.edit",
     "room.session-control",
     "room.admin"
   ]
 };
+
+const roomPermissions = new Set<RoomPermission>(Object.values(rolePermissions).flat());
 
 export function isRoomRole(input: unknown): input is RoomRole {
   return typeof input === "string" && roomRoles.has(input as RoomRole);
@@ -86,6 +94,10 @@ export function parseRoomRole(input: unknown, fallback: RoomRole = "guest"): Roo
 
 export function getRoomPermissions(role: RoomRole): RoomPermission[] {
   return [...rolePermissions[role]];
+}
+
+export function isRoomPermission(input: unknown): input is RoomPermission {
+  return typeof input === "string" && roomPermissions.has(input as RoomPermission);
 }
 
 export function hasRoomPermission(permissions: readonly RoomPermission[], permission: RoomPermission): boolean {

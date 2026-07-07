@@ -1,4 +1,4 @@
-import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
+import { expect, test, type APIRequestContext, type Page, type Route } from "@playwright/test";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -248,6 +248,61 @@ test("room shell exposes audio device selectors and level meters", async ({ page
   await expect(page.locator("#mic-select option").first()).toContainText("System default microphone");
   await expect(page.locator("#speaker-select option").first()).toContainText("System default speaker");
   await expect(page.locator("#audio-device-status")).not.toHaveText("");
+});
+
+test("persistent notes panel autosaves markdown and reloads safely", async ({ page, request }) => {
+  const roomResponse = await request.post("/api/rooms", {
+    headers: { "x-vrata-admin-token": e2eAdminToken },
+    data: {
+      tenantId: "demo-tenant",
+      templateId: "meeting-room-basic",
+      name: `Notes E2E ${Date.now()}`
+    }
+  });
+  expect(roomResponse.ok()).toBeTruthy();
+  const room = (await roomResponse.json()) as { roomId: string; roomLink: string };
+  const invite = await createRoomInvite(request, room.roomId, false, "member");
+
+  await page.goto(e2eRoomLink(invite.inviteLink));
+  await completeGuestOnboarding(page, "Notes Member", true);
+  await expect(page.locator("#notes-panel")).toBeVisible();
+  await page.selectOption("#notes-scope-select", "private");
+  await expect(page.locator("#notes-status")).toContainText(/Notes ready|Notes saved/, { timeout: 10000 });
+
+  const note = "# Sprint notes\n- persisted item\n<script>alert(1)</script>";
+  await page.fill("#notes-editor", note);
+  await expect(page.locator("#notes-status")).toContainText("Notes saved", { timeout: 10000 });
+  await expect(page.locator("#notes-preview")).toContainText("Sprint notes");
+  await expect(page.locator("#notes-preview")).toContainText("<script>alert(1)</script>");
+  await expect(page.locator("#notes-preview script")).toHaveCount(0);
+
+  const privateNotesEndpoint = `**/api/rooms/${room.roomId}/notes/private`;
+  const failPrivateSaves = async (route: Route): Promise<void> => {
+    if (route.request().method() !== "PUT") {
+      await route.continue();
+      return;
+    }
+    await route.fulfill({
+      status: 503,
+      contentType: "application/json",
+      body: JSON.stringify({ error: "temporary_notes_failure" })
+    });
+  };
+  const retriedNote = `${note}\n- retry after failed save`;
+  await page.route(privateNotesEndpoint, failPrivateSaves);
+  await page.fill("#notes-editor", retriedNote);
+  await expect(page.locator("#notes-status")).toContainText("Notes save failed", { timeout: 10000 });
+  await expect(page.locator("#notes-retry-save")).toBeVisible();
+  await page.unroute(privateNotesEndpoint, failPrivateSaves);
+  await page.click("#notes-retry-save");
+  await expect(page.locator("#notes-status")).toContainText("Notes saved", { timeout: 10000 });
+
+  await page.reload();
+  await completeGuestOnboarding(page, "Notes Member", true);
+  await expect(page.locator("#notes-editor")).toHaveValue(retriedNote, { timeout: 10000 });
+  const debug = await page.evaluate(() => (window as Window & { __VRATA_DEBUG__?: { notes?: { contentLength?: number; saveState?: string } } }).__VRATA_DEBUG__);
+  expect(debug?.notes?.contentLength).toBe(retriedNote.length);
+  expect(debug?.notes?.saveState).toMatch(/ready|saved/);
 });
 
 test("private room opens only through a valid invite link", async ({ page, request }) => {

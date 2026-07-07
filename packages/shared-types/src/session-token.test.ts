@@ -39,6 +39,18 @@ test("room session token preserves trusted role source", () => {
   assert.equal(result.ok ? result.payload.roleSource : null, "trusted");
 });
 
+test("room session token preserves signed extra known permissions", () => {
+  const token = signRoomSessionToken({
+    ...payload,
+    role: "guest",
+    permissions: [...getRoomPermissions("guest"), "notes.edit"]
+  }, "test-secret");
+  const result = verifyRoomSessionToken(token, "test-secret", { nowSeconds: 150 });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.ok ? result.payload.permissions.includes("notes.edit") : false, true);
+});
+
 test("room session token rejects expired, tampered, and wrong-scope tokens", () => {
   const token = signRoomSessionToken(payload, "test-secret");
 

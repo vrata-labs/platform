@@ -21,6 +21,8 @@ import {
 import {
   createStorage,
   type AssetRecord,
+  type RoomNoteRecord,
+  type RoomNoteScope,
   type RoomInviteRecord,
   type RoomRecord,
   type RoomSessionControlState,
@@ -132,6 +134,8 @@ type ControlPlanePermission =
   | "audit.read"
   | "room.invite"
   | "room.session-control"
+  | "notes.view"
+  | "notes.edit"
   | "room.join";
 
 interface ControlPlaneActor {
@@ -143,6 +147,7 @@ interface ControlPlaneActor {
   roomId?: string;
   participantId?: string;
   sessionId?: string;
+  permissions?: RoomPermission[];
 }
 
 interface ControlPlaneAuditLogEntry {
@@ -315,7 +320,11 @@ const metrics = {
   roomCreationFailuresTotal: new Map<string, number>(),
   sceneBundleUploadsTotal: new Map<string, number>(),
   sceneBundleUploadBytesTotal: 0,
-  sceneBundleValidationFailuresTotal: new Map<string, number>()
+  sceneBundleValidationFailuresTotal: new Map<string, number>(),
+  notesCreatedTotal: new Map<string, number>(),
+  notesSavedTotal: new Map<string, number>(),
+  notesSaveFailuresTotal: new Map<string, number>(),
+  notesPermissionDeniedTotal: 0
 };
 
 function isEnabledEnvValue(value: string | undefined): boolean | null {
@@ -362,6 +371,10 @@ export function isRoomAccessPolicyEnabled(env: NodeJS.ProcessEnv = process.env):
     return explicit;
   }
   return isEnabledEnvValue(env.FEATURE_ROOM_ACCESS_POLICY) ?? true;
+}
+
+export function isNotesFeatureEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return isEnabledEnvValue(env.FEATURE_NOTES) ?? true;
 }
 
 function isSceneBundleUploadEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -426,6 +439,8 @@ const controlPlanePermissions: ControlPlanePermission[] = [
   "audit.read",
   "room.invite",
   "room.session-control",
+  "notes.view",
+  "notes.edit",
   "room.join"
 ];
 
@@ -1158,7 +1173,22 @@ async function apiMetricsText(storage: Awaited<typeof storagePromise>): Promise<
     ...Array.from(metrics.roomCreationFailuresTotal.entries()).map(([reason, count]) => formatMetricLine("vrata_room_creation_failures_total", count, { reason })),
     "# HELP vrata_scene_bundle_upload_bytes_total Uploaded scene bundle bytes accepted by API.",
     "# TYPE vrata_scene_bundle_upload_bytes_total counter",
-    formatMetricLine("vrata_scene_bundle_upload_bytes_total", metrics.sceneBundleUploadBytesTotal)
+    formatMetricLine("vrata_scene_bundle_upload_bytes_total", metrics.sceneBundleUploadBytesTotal),
+    "# HELP vrata_notes_created_total Notes first created through the API by scope.",
+    "# TYPE vrata_notes_created_total counter",
+    ...Array.from(metrics.notesCreatedTotal.entries()).map(([scope, count]) => formatMetricLine("vrata_notes_created_total", count, { scope })),
+    "# HELP vrata_notes_saved_total Notes save attempts by scope and result.",
+    "# TYPE vrata_notes_saved_total counter",
+    ...Array.from(metrics.notesSavedTotal.entries()).map(([label, count]) => {
+      const [scope = "unknown", result = "unknown"] = label.split(":");
+      return formatMetricLine("vrata_notes_saved_total", count, { scope, result });
+    }),
+    "# HELP vrata_notes_save_failures_total Notes save failures by reason.",
+    "# TYPE vrata_notes_save_failures_total counter",
+    ...Array.from(metrics.notesSaveFailuresTotal.entries()).map(([reason, count]) => formatMetricLine("vrata_notes_save_failures_total", count, { reason })),
+    "# HELP vrata_notes_permission_denied_total Notes permission denials.",
+    "# TYPE vrata_notes_permission_denied_total counter",
+    formatMetricLine("vrata_notes_permission_denied_total", metrics.notesPermissionDeniedTotal)
   );
   lines.push(
     "# HELP vrata_admin_actions_total Control-plane admin authorization decisions by action and result.",
@@ -1252,7 +1282,8 @@ function resolveControlPlaneActor(request: IncomingMessage):
         actor: {
           actorType: "admin-token",
           actorId: "control-plane-admin",
-          role: "admin"
+          role: "admin",
+          permissions: getRoomPermissions("admin")
         }
       };
     }
@@ -1275,7 +1306,8 @@ function resolveControlPlaneActor(request: IncomingMessage):
         tenantId: session.payload.tenantId,
         roomId: session.payload.roomId,
         participantId: session.payload.participantId,
-        sessionId: session.payload.sessionId
+        sessionId: session.payload.sessionId,
+        permissions: session.payload.permissions
       }
     };
   }
@@ -1393,6 +1425,98 @@ function canReadPrivateRoomWithControlPlaneActor(request: IncomingMessage, roomI
 function canManageDisabledRoom(request: IncomingMessage): boolean {
   const actorResult = resolveControlPlaneActor(request);
   return actorResult.ok && actorResult.actor.actorType === "admin-token";
+}
+
+function roomNoteId(roomId: string, scope: RoomNoteScope, ownerParticipantId?: string | null): string {
+  return scope === "shared" ? `${roomId}:shared` : `${roomId}:private:${ownerParticipantId ?? ""}`;
+}
+
+function emptyRoomNote(roomId: string, scope: RoomNoteScope, ownerParticipantId?: string | null): RoomNoteRecord {
+  return {
+    noteId: roomNoteId(roomId, scope, ownerParticipantId),
+    roomId,
+    scope,
+    ownerParticipantId: scope === "private" ? ownerParticipantId ?? null : null,
+    content: "",
+    updatedAt: null,
+    updatedBy: null
+  };
+}
+
+function writeRoomNotesAudit(input: {
+  request: IncomingMessage;
+  action: "notes.read" | "notes.save";
+  roomId: string;
+  scope: RoomNoteScope;
+  result: "allowed" | "denied";
+  reason?: string;
+  actor?: ControlPlaneActor;
+}): void {
+  logEvent({
+    service: "api",
+    event: "room_notes_audit",
+    timestamp: new Date().toISOString(),
+    requestId: getRequestId(input.request),
+    action: input.action,
+    roomId: input.roomId,
+    scope: input.scope,
+    result: input.result,
+    reason: input.reason,
+    actor: input.actor ? {
+      actorType: input.actor.actorType,
+      actorId: input.actor.actorId,
+      role: input.actor.role,
+      tenantId: input.actor.tenantId,
+      roomId: input.actor.roomId,
+      participantId: input.actor.participantId,
+      sessionId: input.actor.sessionId
+    } : undefined
+  });
+}
+
+function noteActorPermissions(actor: ControlPlaneActor): RoomPermission[] {
+  return actor.permissions ?? getRoomPermissions(actor.role);
+}
+
+function resolveRoomNoteOwner(scope: RoomNoteScope, actor: ControlPlaneActor, url: URL): string | null {
+  if (scope === "shared") return null;
+  if (actor.actorType === "room-session") return actor.participantId ?? null;
+  return url.searchParams.get("participantId")?.trim() || null;
+}
+
+function resolveRoomNotesActor(
+  request: IncomingMessage,
+  response: ServerResponse,
+  input: { room: RoomRecord; scope: RoomNoteScope; permission: "notes.view" | "notes.edit"; action: "notes.read" | "notes.save" }
+): ControlPlaneActor | null {
+  const actorResult = resolveControlPlaneActor(request);
+  if (!actorResult.ok) {
+    metrics.notesPermissionDeniedTotal += 1;
+    writeRoomNotesAudit({ request, action: input.action, roomId: input.room.roomId, scope: input.scope, result: "denied", reason: actorResult.reason });
+    json(response, actorResult.statusCode, { error: "unauthorized", reason: actorResult.reason, requestId: getRequestId(request) });
+    return null;
+  }
+
+  const actor = actorResult.actor;
+  const deny = (reason: string): null => {
+    metrics.notesPermissionDeniedTotal += 1;
+    writeRoomNotesAudit({ request, action: input.action, roomId: input.room.roomId, scope: input.scope, result: "denied", reason, actor });
+    json(response, reason === "room_mismatch" ? 403 : 403, { error: "forbidden", reason, permission: input.permission, requestId: getRequestId(request) });
+    return null;
+  };
+
+  if (actor.actorType === "room-session" && actor.roomId !== input.room.roomId) {
+    return deny("room_mismatch");
+  }
+  if (isRoomDisabled(input.room) && actor.actorType !== "admin-token") {
+    return deny("room_disabled");
+  }
+  if (!hasRoomPermission(noteActorPermissions(actor), input.permission)) {
+    return deny("permission_denied");
+  }
+
+  writeRoomNotesAudit({ request, action: input.action, roomId: input.room.roomId, scope: input.scope, result: "allowed", actor });
+  return actor;
 }
 
 async function canReadRoomDetails(request: IncomingMessage, room: RoomRecord): Promise<boolean> {
@@ -2288,6 +2412,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
         avatarFallbackCapsulesEnabled: process.env.FEATURE_AVATAR_FALLBACK_CAPSULES !== "false",
         roomAccessPolicyEnabled: isRoomAccessPolicyEnabled(),
         hostControlsEnabled: isHostControlsEnabled(),
+        notesEnabled: isNotesFeatureEnabled(),
         postgresEnabled: Boolean(process.env.POSTGRES_URL),
         controlPlaneAuthEnabled: Boolean(getControlPlaneAdminToken())
       },
@@ -2631,6 +2756,60 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     }
     incrementCounter(metrics.roomsCreatedTotal, `control-plane:${sanitizeRoomVisibility(room.visibility)}`);
     json(response, 201, { ...room, roomLink: createRoomLink(room.roomId, request), manifest: await buildManifest(room.roomId, request) });
+    return;
+  }
+
+  const roomNotesMatch = url.pathname.match(/^\/api\/rooms\/([^/]+)\/notes\/(shared|private)$/);
+  if ((method === "GET" || method === "PUT") && roomNotesMatch) {
+    if (!isNotesFeatureEnabled()) return json(response, 404, { error: "notes_disabled" });
+    const roomId = decodeURIComponent(roomNotesMatch[1]);
+    const scope = roomNotesMatch[2] as RoomNoteScope;
+    const room = await storage.getRoom(roomId);
+    if (!room) return json(response, 404, { error: "room_not_found" });
+    const permission: "notes.view" | "notes.edit" = method === "GET" || scope === "private" ? "notes.view" : "notes.edit";
+    const actor = resolveRoomNotesActor(request, response, { room, scope, permission, action: method === "GET" ? "notes.read" : "notes.save" });
+    if (!actor) return;
+    const requestedOwnerParticipantId = scope === "private" ? url.searchParams.get("participantId")?.trim() || null : null;
+    if (scope === "private" && actor.actorType === "room-session" && requestedOwnerParticipantId && requestedOwnerParticipantId !== actor.participantId) {
+      metrics.notesPermissionDeniedTotal += 1;
+      writeRoomNotesAudit({ request, action: method === "GET" ? "notes.read" : "notes.save", roomId, scope, result: "denied", reason: "note_owner_mismatch", actor });
+      return json(response, 403, { error: "forbidden", reason: "note_owner_mismatch", permission, requestId });
+    }
+    const ownerParticipantId = resolveRoomNoteOwner(scope, actor, url);
+    if (scope === "private" && !ownerParticipantId) {
+      incrementCounter(metrics.notesSaveFailuresTotal, "missing_private_note_owner");
+      return json(response, 400, { error: "missing_private_note_owner" });
+    }
+
+    if (method === "GET") {
+      const note = await storage.getRoomNote(roomId, scope, ownerParticipantId);
+      json(response, 200, { note: note ?? emptyRoomNote(roomId, scope, ownerParticipantId) });
+      return;
+    }
+
+    const payload = (await parseBody<{ content?: unknown }>(request)) ?? {};
+    if (typeof payload.content !== "string") {
+      incrementCounter(metrics.notesSaveFailuresTotal, "invalid_note_content");
+      incrementCounter(metrics.notesSavedTotal, `${scope}:failed`);
+      return json(response, 400, { error: "invalid_note_content" });
+    }
+    if (payload.content.length > 20_000) {
+      incrementCounter(metrics.notesSaveFailuresTotal, "note_too_large");
+      incrementCounter(metrics.notesSavedTotal, `${scope}:failed`);
+      return json(response, 413, { error: "note_too_large" });
+    }
+
+    const existing = await storage.getRoomNote(roomId, scope, ownerParticipantId);
+    const note = await storage.upsertRoomNote({
+      roomId,
+      scope,
+      ownerParticipantId,
+      content: payload.content,
+      updatedBy: actor.actorId
+    });
+    if (!existing) incrementCounter(metrics.notesCreatedTotal, scope);
+    incrementCounter(metrics.notesSavedTotal, `${scope}:saved`);
+    json(response, existing ? 200 : 201, { note });
     return;
   }
 

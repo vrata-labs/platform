@@ -1,6 +1,6 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 
-import { getRoomPermissions, isRoomRole, type RoomPermission, type RoomRole } from "./access.js";
+import { getRoomPermissions, isRoomPermission, isRoomRole, type RoomPermission, type RoomRole } from "./access.js";
 
 export type RoomSessionRoleSource = "default" | "dev-query" | "trusted";
 
@@ -57,6 +57,18 @@ function signBody(body: string, secret: string): string {
   return createHmac("sha256", secret).update(body).digest("base64url");
 }
 
+function normalizeRoomSessionPermissions(role: RoomRole, input: unknown): RoomPermission[] {
+  const permissions = new Set<RoomPermission>(getRoomPermissions(role));
+  if (Array.isArray(input)) {
+    for (const item of input) {
+      if (isRoomPermission(item)) {
+        permissions.add(item);
+      }
+    }
+  }
+  return [...permissions];
+}
+
 export function parseRoomSessionTokenPayload(input: unknown): RoomSessionTokenPayload | null {
   if (!isObjectRecord(input)) {
     return null;
@@ -82,7 +94,7 @@ export function parseRoomSessionTokenPayload(input: unknown): RoomSessionTokenPa
     displayName: input.displayName,
     role: input.role,
     roleSource: isRoomSessionRoleSource(input.roleSource) ? input.roleSource : "default",
-    permissions: getRoomPermissions(input.role),
+    permissions: normalizeRoomSessionPermissions(input.role, input.permissions),
     sessionId: input.sessionId,
     iat: input.iat,
     exp: input.exp,
@@ -93,7 +105,7 @@ export function parseRoomSessionTokenPayload(input: unknown): RoomSessionTokenPa
 export function signRoomSessionToken(payload: RoomSessionTokenPayload, secret: string): string {
   const body = Buffer.from(JSON.stringify({
     ...payload,
-    permissions: getRoomPermissions(payload.role)
+    permissions: normalizeRoomSessionPermissions(payload.role, payload.permissions)
   }), "utf8").toString("base64url");
   return `${body}.${signBody(body, secret)}`;
 }

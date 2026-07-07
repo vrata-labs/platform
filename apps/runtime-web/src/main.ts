@@ -35,7 +35,7 @@ import {
 } from "@vrata/shared-types";
 
 import { appendBrandingSuffix, applyRoomShellBootState, renderSceneAttributions } from "./boot-session.js";
-import { RuntimeAccessError, bootRuntime, fetchRoomSessionControl, fetchRuntimeSpaces, listPresence, planVoiceSession, removePresence, removeRoomParticipant, resolveCurrentSpace, resolveJoinMode, runRoomSessionControlAction, transferRoomHost, upsertPresence, type PresenceState, type RuntimeSessionControlResponse, type RuntimeSpaceOption } from "./index.js";
+import { RuntimeAccessError, bootRuntime, fetchRoomNote, fetchRoomSessionControl, fetchRuntimeSpaces, listPresence, planVoiceSession, removePresence, removeRoomParticipant, resolveCurrentSpace, resolveJoinMode, runRoomSessionControlAction, saveRoomNote, transferRoomHost, upsertPresence, type PresenceState, type RuntimeNoteScope, type RuntimeSessionControlResponse, type RuntimeSpaceOption } from "./index.js";
 import { formatClientCompatibilityStatus, resolveClientCompatibility, type ClientCompatibilitySummary } from "./client-capabilities.js";
 import { formatGuestCompatibilityWarnings, formatGuestControlsHint, shouldShowGuestOnboarding, validateGuestDisplayName } from "./guest-onboarding.js";
 import { createMotionTrack, pushMotionSample, sampleMotion, type MotionTrack } from "./motion-state.js";
@@ -52,6 +52,7 @@ import {
 import { classifyMediaError, classifyRoomStateError, classifyScreenShareError, createFaultError, getRuntimeIssue, shouldRetryConnection, type RuntimeIssue } from "./runtime-errors.js";
 import { canRetry, createReconnectPolicy, getReconnectDelayMs } from "./reconnect.js";
 import { applyRuntimeIssueState, clearRuntimeIssueState, createRuntimeUiState } from "./runtime-state.js";
+import { nextNotesSaveState, parseSafeMarkdown, type NotesSaveState } from "./notes.js";
 import { applyPassiveMediaRecovery, applyPostBootControls, shouldStartPassiveMedia } from "./runtime-startup.js";
 import { describeMediaCapabilityReason, detectBrowserMediaCapabilities, formatUnsupportedMediaCapabilities } from "./media-capabilities.js";
 import { collectWebRtcDiagnostics, createUnavailableWebRtcDiagnostics, type WebRtcStatsTransport, type WebRtcTransportRole } from "./webrtc-diagnostics.js";
@@ -270,6 +271,12 @@ const sceneAttributionsPanelEl = mustElement<HTMLDivElement>("#scene-attribution
 const sceneAttributionsListEl = mustElement<HTMLUListElement>("#scene-attributions-list");
 const spaceSelect = mustElement<HTMLSelectElement>("#space-select");
 const spaceSelectStatusEl = mustElement<HTMLDivElement>("#space-select-status");
+const notesPanelEl = mustElement<HTMLDivElement>("#notes-panel");
+const notesScopeSelect = mustElement<HTMLSelectElement>("#notes-scope-select");
+const notesEditor = mustElement<HTMLTextAreaElement>("#notes-editor");
+const notesRetrySaveButton = mustElement<HTMLButtonElement>("#notes-retry-save");
+const notesStatusEl = mustElement<HTMLDivElement>("#notes-status");
+const notesPreviewEl = mustElement<HTMLDivElement>("#notes-preview");
 const sceneHost = mustElement<HTMLDivElement>("#scene");
 const mediaSurfaceSelect = mustElement<HTMLSelectElement>("#media-surface-select");
 const joinAudioButton = mustElement<HTMLButtonElement>("#join-audio");
@@ -807,8 +814,18 @@ let lastAvatarPoseSentAtMs = 0;
 let preferredMicDeviceId = getStoredValue(localStorage, "vrata.audioinput", "noah.audioinput") ?? "default";
 let preferredSpeakerDeviceId = getStoredValue(localStorage, "vrata.audiooutput", "noah.audiooutput") ?? "default";
 let joinMutedPreference = getStoredValue(localStorage, "vrata.audio.joinMuted", "noah.audio.joinMuted") === "true";
+let activeNotesScope: RuntimeNoteScope = getStoredValue(localStorage, "vrata.notes.scope", "noah.notes.scope") === "private" ? "private" : "shared";
+let notesSaveState: NotesSaveState = "idle";
+let notesLastSavedContent = "";
+let notesLastUpdatedAt: string | null = null;
+let notesLoadSeq = 0;
+let notesSaveSeq = 0;
+let notesAutosaveTimer: number | null = null;
 joinMutedCheckbox.checked = joinMutedPreference;
 guestJoinMutedCheckbox.checked = joinMutedPreference || !getStoredValue(localStorage, "vrata.audio.joinMuted", "noah.audio.joinMuted");
+notesScopeSelect.value = activeNotesScope;
+notesEditor.disabled = true;
+notesScopeSelect.disabled = true;
 let audioActionInFlight = false;
 let audioInputDevices: MediaDeviceInfo[] = [];
 let audioOutputDevices: MediaDeviceInfo[] = [];
@@ -877,6 +894,7 @@ let runtimeFlags = {
   sceneBundles: true,
   spatialAudio: true,
   hostControlsEnabled: true,
+  notesEnabled: true,
   ...createInitialAvatarRuntimeFlags(),
   avatarFallbackCapsulesEnabled: true
 };
@@ -1184,7 +1202,11 @@ function applyAccessDebug(access: NonNullable<RuntimeSessionControlResponse["acc
   syncWhiteboardControls();
   syncRemoteBrowserControls();
   syncSurfaceAudioControl();
+  syncNotesAccessUi();
   renderHostControls();
+  if (canViewNotes() && notesSaveState === "idle") {
+    void loadActiveNote();
+  }
 }
 
 function disableRuntimeForSessionBlock(reason: string): void {
@@ -3937,6 +3959,15 @@ const debugState = {
     status: "idle" as string,
     lastReason: null as string | null
   },
+  notes: {
+    enabled: true,
+    scope: activeNotesScope,
+    saveState: notesSaveState as NotesSaveState,
+    canEdit: false,
+    contentLength: 0,
+    updatedAt: null as string | null,
+    errorCode: null as string | null
+  },
   screenShareState: "idle",
   screenShare: {
     supported: shareMockEnabled || browserMediaCapabilities.screenShare.supported,
@@ -4187,6 +4218,164 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
 
 (window as Window & { __VRATA_DEBUG__?: typeof debugState }).__VRATA_DEBUG__ = debugState;
 (window as Window & { __NOAH_DEBUG__?: typeof debugState }).__NOAH_DEBUG__ = debugState;
+
+function canViewNotes(): boolean {
+  return runtimeFlags.notesEnabled && hasRoomPermission(debugState.access.permissions, "notes.view");
+}
+
+function canEditNotes(): boolean {
+  if (!canViewNotes()) return false;
+  return activeNotesScope === "private" || hasRoomPermission(debugState.access.permissions, "notes.edit");
+}
+
+function setNotesSaveState(event: Parameters<typeof nextNotesSaveState>[1], message?: string, errorCode: string | null = null): void {
+  notesSaveState = nextNotesSaveState(notesSaveState, event);
+  notesStatusEl.textContent = message ?? notesStatusEl.textContent;
+  notesRetrySaveButton.hidden = notesSaveState !== "failed";
+  debugState.notes = {
+    enabled: runtimeFlags.notesEnabled,
+    scope: activeNotesScope,
+    saveState: notesSaveState,
+    canEdit: canEditNotes(),
+    contentLength: notesEditor.value.length,
+    updatedAt: notesLastUpdatedAt,
+    errorCode
+  };
+}
+
+function renderNotesPreview(): void {
+  const blocks = parseSafeMarkdown(notesEditor.value);
+  const children: Node[] = [];
+  let list: HTMLUListElement | null = null;
+
+  const flushList = (): void => {
+    if (list) {
+      children.push(list);
+      list = null;
+    }
+  };
+
+  for (const block of blocks) {
+    if (block.type !== "listItem") flushList();
+    if (block.type === "heading") {
+      const heading = document.createElement(`h${block.level}`);
+      heading.textContent = block.text;
+      children.push(heading);
+    } else if (block.type === "paragraph") {
+      const paragraph = document.createElement("p");
+      paragraph.textContent = block.text;
+      children.push(paragraph);
+    } else if (block.type === "listItem") {
+      list ??= document.createElement("ul");
+      const item = document.createElement("li");
+      item.textContent = block.text;
+      list.append(item);
+    } else {
+      const code = document.createElement("pre");
+      code.textContent = block.text;
+      children.push(code);
+    }
+  }
+  flushList();
+
+  if (children.length === 0) {
+    const placeholder = document.createElement("p");
+    placeholder.textContent = "No notes yet.";
+    children.push(placeholder);
+  }
+  notesPreviewEl.replaceChildren(...children);
+  debugState.notes.contentLength = notesEditor.value.length;
+}
+
+function syncNotesAccessUi(): void {
+  const visible = runtimeFlags.notesEnabled && canViewNotes();
+  notesPanelEl.hidden = !visible;
+  notesEditor.disabled = !visible || !canEditNotes() || notesSaveState === "loading";
+  notesScopeSelect.disabled = !visible || notesSaveState === "loading";
+  if (!visible) {
+    notesStatusEl.textContent = runtimeFlags.notesEnabled ? "Notes permission required" : "Notes disabled";
+  } else if (!canEditNotes()) {
+    notesStatusEl.textContent = "Notes read-only";
+  }
+  debugState.notes.enabled = runtimeFlags.notesEnabled;
+  debugState.notes.canEdit = canEditNotes();
+}
+
+function notesErrorCode(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.split(":").slice(0, 3).join(":") || "notes_error";
+}
+
+async function loadActiveNote(): Promise<void> {
+  if (!runtimeFlags.notesEnabled || !canViewNotes()) {
+    syncNotesAccessUi();
+    return;
+  }
+  const loadSeq = ++notesLoadSeq;
+  setNotesSaveState("load", "Notes loading...");
+  syncNotesAccessUi();
+  try {
+    const note = await fetchRoomNote(apiBaseUrl, roomId, activeNotesScope, roomStateAccessToken);
+    if (loadSeq !== notesLoadSeq) return;
+    notesEditor.value = note.content;
+    notesLastSavedContent = note.content;
+    notesLastUpdatedAt = note.updatedAt;
+    setNotesSaveState("load_ok", note.updatedAt ? "Notes saved" : "Notes ready");
+    renderNotesPreview();
+    syncNotesAccessUi();
+  } catch (error) {
+    if (loadSeq !== notesLoadSeq) return;
+    const code = notesErrorCode(error);
+    console.warn("notes_load_failed", error);
+    setNotesSaveState("save_failed", "Notes unavailable", code);
+    syncNotesAccessUi();
+  }
+}
+
+function scheduleNotesAutosave(delayMs = 650): void {
+  if (!runtimeFlags.notesEnabled || !canEditNotes()) {
+    syncNotesAccessUi();
+    return;
+  }
+  if (notesAutosaveTimer !== null) {
+    window.clearTimeout(notesAutosaveTimer);
+  }
+  setNotesSaveState("edit", "Notes pending save");
+  renderNotesPreview();
+  notesAutosaveTimer = window.setTimeout(() => {
+    notesAutosaveTimer = null;
+    void saveActiveNote();
+  }, delayMs);
+}
+
+async function saveActiveNote(): Promise<void> {
+  if (!runtimeFlags.notesEnabled || !canEditNotes()) {
+    syncNotesAccessUi();
+    return;
+  }
+  const content = notesEditor.value;
+  if (content === notesLastSavedContent) {
+    setNotesSaveState("save_ok", notesLastUpdatedAt ? "Notes saved" : "Notes ready");
+    return;
+  }
+  const saveSeq = ++notesSaveSeq;
+  setNotesSaveState("save_start", "Saving notes...");
+  try {
+    const note = await saveRoomNote(apiBaseUrl, roomId, activeNotesScope, roomStateAccessToken, content);
+    if (saveSeq !== notesSaveSeq) return;
+    notesLastSavedContent = content;
+    notesLastUpdatedAt = note.updatedAt;
+    setNotesSaveState("save_ok", "Notes saved");
+    if (notesEditor.value !== content) {
+      scheduleNotesAutosave();
+    }
+  } catch (error) {
+    if (saveSeq !== notesSaveSeq) return;
+    const code = notesErrorCode(error);
+    console.warn("notes_save_failed", error);
+    setNotesSaveState("save_failed", "Notes save failed; retry available", code);
+  }
+}
 
 function refreshClientCompatibility(): void {
   clientCompatibility = buildClientCompatibility();
@@ -7038,6 +7227,23 @@ spaceSelect.addEventListener("change", () => {
   window.location.assign(targetRoomLink);
 });
 
+notesScopeSelect.addEventListener("change", () => {
+  activeNotesScope = notesScopeSelect.value === "private" ? "private" : "shared";
+  localStorage.setItem("vrata.notes.scope", activeNotesScope);
+  notesLastSavedContent = "";
+  notesLastUpdatedAt = null;
+  notesSaveState = "idle";
+  void loadActiveNote();
+});
+
+notesEditor.addEventListener("input", () => {
+  scheduleNotesAutosave();
+});
+
+notesRetrySaveButton.addEventListener("click", () => {
+  void saveActiveNote();
+});
+
 mediaSurfaceSelect.addEventListener("change", () => {
   selectMediaSurface(mediaSurfaceSelect.value);
 });
@@ -7618,6 +7824,7 @@ async function main(): Promise<void> {
     remoteDiagnostics: boot.envFlags.remoteDiagnostics,
     sceneBundles: boot.envFlags.sceneBundles,
     hostControlsEnabled: boot.envFlags.hostControlsEnabled,
+    notesEnabled: boot.envFlags.notesEnabled,
     spatialAudio: spatialAudioServerEnabled && spatialAudioRoomEnabled && spatialAudioQueryEnabled,
     ...resolveAvatarRuntimeFlags(boot)
   };
@@ -7652,6 +7859,8 @@ async function main(): Promise<void> {
   await syncPresence(boot.joinMode, false);
   await refreshSessionControl(true);
   await loadAvailableSpaces(boot.roomId);
+  syncNotesAccessUi();
+  void loadActiveNote();
   const avatarCatalogUrl = resolveAvatarCatalogUrl(boot);
   const avatarElements = {
     panelEl: avatarSandboxPanel,

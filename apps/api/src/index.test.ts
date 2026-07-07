@@ -738,6 +738,106 @@ test("control-plane authz enforces role matrix and writes audit log", async () =
   }
 });
 
+test("room notes API persists shared and private notes with permissions", async () => {
+  process.env.VRATA_DISABLE_AUTOSTART = "1";
+  process.env.API_PORT = "4051";
+  process.env.CONTROL_PLANE_ADMIN_TOKEN = "test-admin-token";
+  process.env.STATE_TOKEN_SECRET = "notes-state-secret";
+  process.env.VRATA_DEV_ROLE_QUERY = "true";
+  const module = await import("./index.js");
+  const server = module.startApiServer(4051);
+  const baseUrl = "http://127.0.0.1:4051";
+  const jsonHeaders = { "content-type": "application/json" };
+  const tokenFor = (role: RoomRole, participantId: string, roomId: string, permissions = getRoomPermissions(role)) => signRoomSessionToken({
+    tenantId: "demo-tenant",
+    roomId,
+    participantId,
+    displayName: participantId,
+    role,
+    roleSource: "trusted",
+    permissions,
+    sessionId: `${participantId}-session`,
+    iat: 100,
+    exp: 4_102_444_800,
+    jti: `${participantId}-jti`
+  }, "notes-state-secret");
+
+  try {
+    const roomResponse = await fetch(`${baseUrl}/api/rooms`, {
+      method: "POST",
+      headers: { ...jsonHeaders, "x-vrata-admin-token": "test-admin-token" },
+      body: JSON.stringify({ roomId: "notes-room", tenantId: "demo-tenant", templateId: "meeting-room-basic", name: "Notes Room" })
+    });
+    assert.equal(roomResponse.status, 201);
+
+    const hostToken = tokenFor("host", "notes-host", "notes-room");
+    const guestToken = tokenFor("guest", "notes-guest", "notes-room");
+    const guestEditorToken = tokenFor("guest", "notes-editor", "notes-room", [...getRoomPermissions("guest"), "notes.edit"]);
+
+    const saveShared = await fetch(`${baseUrl}/api/rooms/notes-room/notes/shared`, {
+      method: "PUT",
+      headers: { ...jsonHeaders, "authorization": `Bearer ${hostToken}` },
+      body: JSON.stringify({ content: "# Shared\nhello" })
+    });
+    assert.equal(saveShared.status, 201);
+    assert.equal(((await saveShared.json()) as { note: { scope: string; content: string } }).note.content, "# Shared\nhello");
+
+    const readShared = await fetch(`${baseUrl}/api/rooms/notes-room/notes/shared`, {
+      headers: { "authorization": `Bearer ${guestToken}` }
+    });
+    assert.equal(readShared.status, 200);
+    assert.equal(((await readShared.json()) as { note: { content: string } }).note.content, "# Shared\nhello");
+
+    const guestDenied = await fetch(`${baseUrl}/api/rooms/notes-room/notes/shared`, {
+      method: "PUT",
+      headers: { ...jsonHeaders, "authorization": `Bearer ${guestToken}` },
+      body: JSON.stringify({ content: "guest write" })
+    });
+    assert.equal(guestDenied.status, 403);
+    assert.equal(((await guestDenied.json()) as { permission?: string }).permission, "notes.edit");
+
+    const guestEditorSave = await fetch(`${baseUrl}/api/rooms/notes-room/notes/shared`, {
+      method: "PUT",
+      headers: { ...jsonHeaders, "authorization": `Bearer ${guestEditorToken}` },
+      body: JSON.stringify({ content: "guest editor write" })
+    });
+    assert.equal(guestEditorSave.status, 200);
+
+    const savePrivate = await fetch(`${baseUrl}/api/rooms/notes-room/notes/private`, {
+      method: "PUT",
+      headers: { ...jsonHeaders, "authorization": `Bearer ${hostToken}` },
+      body: JSON.stringify({ content: "private host note" })
+    });
+    assert.equal(savePrivate.status, 201);
+
+    const guestPrivateDenied = await fetch(`${baseUrl}/api/rooms/notes-room/notes/private?participantId=notes-host`, {
+      headers: { "authorization": `Bearer ${guestToken}` }
+    });
+    assert.equal(guestPrivateDenied.status, 403);
+    assert.equal(((await guestPrivateDenied.json()) as { reason?: string }).reason, "note_owner_mismatch");
+
+    const guestOwnPrivate = await fetch(`${baseUrl}/api/rooms/notes-room/notes/private`, {
+      headers: { "authorization": `Bearer ${guestToken}` }
+    });
+    assert.equal(guestOwnPrivate.status, 200);
+    assert.equal(((await guestOwnPrivate.json()) as { note: { content: string } }).note.content, "");
+
+    const metricsResponse = await fetch(`${baseUrl}/metrics`);
+    assert.equal(metricsResponse.status, 200);
+    const metricsText = await metricsResponse.text();
+    assert.match(metricsText, /vrata_notes_created_total\{scope="shared"\} 1/);
+    assert.match(metricsText, /vrata_notes_created_total\{scope="private"\} 1/);
+    assert.match(metricsText, /vrata_notes_permission_denied_total 2/);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    delete process.env.VRATA_DISABLE_AUTOSTART;
+    delete process.env.API_PORT;
+    delete process.env.CONTROL_PLANE_ADMIN_TOKEN;
+    delete process.env.STATE_TOKEN_SECRET;
+    delete process.env.VRATA_DEV_ROLE_QUERY;
+  }
+});
+
 test("remote browser frame token endpoint returns websocket URL and short-lived token", async () => {
   process.env.VRATA_DISABLE_AUTOSTART = "1";
   process.env.API_PORT = "4026";

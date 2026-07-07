@@ -34,7 +34,7 @@
 - [x] **VRATA-FEAT-017** — [Scene bundle upload UI](./017-scene-bundle-upload-ui/README.md) — зависит от: 002, 018
 - [x] **VRATA-FEAT-018** — [Scene bundle validator CLI](./018-scene-bundle-validator-cli/README.md)
 - [ ] **VRATA-FEAT-019** — [Personal room mode](./019-personal-room-mode/README.md) — зависит от: 014, 020, 022
-- [ ] **VRATA-FEAT-020** — [Persistent notes panel](./020-persistent-notes-panel/README.md) — зависит от: 002, 014
+- [x] **VRATA-FEAT-020** — [Persistent notes panel](./020-persistent-notes-panel/README.md) — зависит от: 002, 014
 - [ ] **VRATA-FEAT-021** — [Markdown board / sticky notes surface](./021-markdown-board-sticky-notes-surface/README.md) — зависит от: 020, 007
 - [ ] **VRATA-FEAT-022** — [Documents library for room](./022-documents-library-for-room/README.md) — зависит от: 002, 014
 - [ ] **VRATA-FEAT-023** — [Notes history and export](./023-notes-history-and-export/README.md) — зависит от: 020, 021
@@ -90,7 +90,7 @@
 
 ### Спринт 4 — личное пространство
 - [ ] VRATA-FEAT-019
-- [ ] VRATA-FEAT-020
+- [x] VRATA-FEAT-020
 - [ ] VRATA-FEAT-021
 - [ ] VRATA-FEAT-022
 - [ ] VRATA-FEAT-023

@@ -64,6 +64,18 @@ export interface WaitingRoomRequestRecord {
   decidedBy?: string | null;
 }
 
+export type RoomNoteScope = "shared" | "private";
+
+export interface RoomNoteRecord {
+  noteId: string;
+  roomId: string;
+  scope: RoomNoteScope;
+  ownerParticipantId?: string | null;
+  content: string;
+  updatedAt: string | null;
+  updatedBy?: string | null;
+}
+
 export interface RoomSessionControlState {
   hostParticipantId?: string | null;
   lockedAt?: string | null;
@@ -237,6 +249,30 @@ function mapWaitingRoomRequestRow(row: {
   };
 }
 
+function mapRoomNoteRow(row: {
+  note_id: string;
+  room_id: string;
+  scope: RoomNoteScope;
+  owner_participant_id?: string | null;
+  content: string;
+  updated_at: string | Date;
+  updated_by?: string | null;
+}): RoomNoteRecord {
+  return {
+    noteId: row.note_id,
+    roomId: row.room_id,
+    scope: row.scope,
+    ownerParticipantId: row.owner_participant_id ?? null,
+    content: row.content,
+    updatedAt: isoString(row.updated_at) ?? new Date().toISOString(),
+    updatedBy: row.updated_by ?? null
+  };
+}
+
+function roomNoteId(roomId: string, scope: RoomNoteScope, ownerParticipantId?: string | null): string {
+  return scope === "shared" ? `${roomId}:shared` : `${roomId}:private:${ownerParticipantId ?? ""}`;
+}
+
 function mapRoomRow(row: {
   room_id: string;
   tenant_id: string;
@@ -393,6 +429,8 @@ export interface Storage {
   getWaitingRoomRequest(requestId: string): Promise<WaitingRoomRequestRecord | null>;
   getWaitingRoomRequestForInviteParticipant(inviteId: string, participantId: string): Promise<WaitingRoomRequestRecord | null>;
   updateWaitingRoomRequest(roomId: string, requestId: string, input: Partial<Pick<WaitingRoomRequestRecord, "status" | "decidedAt" | "decidedBy">>): Promise<WaitingRoomRequestRecord | null>;
+  getRoomNote(roomId: string, scope: RoomNoteScope, ownerParticipantId?: string | null): Promise<RoomNoteRecord | null>;
+  upsertRoomNote(input: Pick<RoomNoteRecord, "roomId" | "scope" | "content"> & { ownerParticipantId?: string | null; updatedBy?: string | null }): Promise<RoomNoteRecord>;
   createAsset(input: Partial<AssetRecord>): Promise<AssetRecord>;
   updateAsset(assetId: string, input: Partial<AssetRecord>): Promise<AssetRecord | null>;
   deleteAsset(assetId: string): Promise<boolean>;
@@ -455,6 +493,7 @@ export class MemoryStorage implements Storage {
   private sceneBundles = new Map<string, SceneBundleRecord>();
   private roomInvites = new Map<string, RoomInviteRecord>();
   private waitingRoomRequests = new Map<string, WaitingRoomRequestRecord>();
+  private roomNotes = new Map<string, RoomNoteRecord>();
 
   private sceneBundleKey(bundleId: string, version: string): string {
     return `${bundleId}::${version}`;
@@ -610,6 +649,22 @@ export class MemoryStorage implements Storage {
     const updated = { ...existing, ...input };
     this.waitingRoomRequests.set(requestId, updated);
     return updated;
+  }
+  async getRoomNote(roomId: string, scope: RoomNoteScope, ownerParticipantId?: string | null): Promise<RoomNoteRecord | null> {
+    return this.roomNotes.get(roomNoteId(roomId, scope, ownerParticipantId)) ?? null;
+  }
+  async upsertRoomNote(input: Pick<RoomNoteRecord, "roomId" | "scope" | "content"> & { ownerParticipantId?: string | null; updatedBy?: string | null }): Promise<RoomNoteRecord> {
+    const note: RoomNoteRecord = {
+      noteId: roomNoteId(input.roomId, input.scope, input.ownerParticipantId),
+      roomId: input.roomId,
+      scope: input.scope,
+      ownerParticipantId: input.scope === "private" ? input.ownerParticipantId ?? null : null,
+      content: input.content,
+      updatedAt: new Date().toISOString(),
+      updatedBy: input.updatedBy ?? null
+    };
+    this.roomNotes.set(note.noteId, note);
+    return structuredClone(note);
   }
   async createAsset(input: Partial<AssetRecord>): Promise<AssetRecord> {
     const asset = {
@@ -838,8 +893,18 @@ export class PostgresStorage implements Storage {
         decided_by text,
         unique (invite_id, participant_id)
       );
+      create table if not exists room_notes (
+        note_id text primary key,
+        room_id text not null references rooms(room_id) on delete cascade,
+        scope text not null,
+        owner_participant_id text,
+        content text not null,
+        updated_at timestamptz not null default now(),
+        updated_by text
+      );
     `);
     await this.pool.query(`create index if not exists xr_telemetry_room_id_id_idx on xr_telemetry (room_id, id)`);
+    await this.pool.query(`create unique index if not exists room_notes_room_scope_owner_idx on room_notes (room_id, scope, coalesce(owner_participant_id, ''))`);
     await this.pool.query(`alter table rooms add column if not exists scene_bundle_url text`);
     await this.pool.query(`alter table rooms add column if not exists status text not null default 'active'`);
     await this.pool.query(`alter table rooms add column if not exists disabled_at timestamptz`);
@@ -1072,6 +1137,24 @@ export class PostgresStorage implements Storage {
       [roomId, requestId, input.status ?? null, input.decidedAt ?? null, input.decidedBy ?? null]
     );
     return result.rows[0] ? mapWaitingRoomRequestRow(result.rows[0]) : null;
+  }
+  async getRoomNote(roomId: string, scope: RoomNoteScope, ownerParticipantId?: string | null): Promise<RoomNoteRecord | null> {
+    const result = await this.pool.query(
+      `select note_id, room_id, scope, owner_participant_id, content, updated_at, updated_by from room_notes where room_id = $1 and scope = $2 and coalesce(owner_participant_id, '') = coalesce($3, '') limit 1`,
+      [roomId, scope, scope === "private" ? ownerParticipantId ?? "" : ""]
+    );
+    return result.rows[0] ? mapRoomNoteRow(result.rows[0]) : null;
+  }
+  async upsertRoomNote(input: Pick<RoomNoteRecord, "roomId" | "scope" | "content"> & { ownerParticipantId?: string | null; updatedBy?: string | null }): Promise<RoomNoteRecord> {
+    const noteId = roomNoteId(input.roomId, input.scope, input.ownerParticipantId);
+    const result = await this.pool.query(
+      `insert into room_notes (note_id, room_id, scope, owner_participant_id, content, updated_at, updated_by)
+       values ($1,$2,$3,$4,$5,now(),$6)
+       on conflict (note_id) do update set content = excluded.content, updated_at = now(), updated_by = excluded.updated_by
+       returning note_id, room_id, scope, owner_participant_id, content, updated_at, updated_by`,
+      [noteId, input.roomId, input.scope, input.scope === "private" ? input.ownerParticipantId ?? null : null, input.content, input.updatedBy ?? null]
+    );
+    return mapRoomNoteRow(result.rows[0]);
   }
   async createAsset(input: Partial<AssetRecord>): Promise<AssetRecord> {
     const asset = {

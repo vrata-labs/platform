@@ -76,7 +76,20 @@ interface RuntimeHealthResponse {
     avatarFallbackCapsulesEnabled?: boolean;
     roomAccessPolicyEnabled?: boolean;
     hostControlsEnabled?: boolean;
+    notesEnabled?: boolean;
   };
+}
+
+export type RuntimeNoteScope = "shared" | "private";
+
+export interface RuntimeNoteRecord {
+  noteId: string;
+  roomId: string;
+  scope: RuntimeNoteScope;
+  ownerParticipantId?: string | null;
+  content: string;
+  updatedAt: string | null;
+  updatedBy?: string | null;
 }
 
 export interface PresenceState {
@@ -257,6 +270,7 @@ export interface RuntimeBootResult {
     avatarCustomizationEnabled: boolean;
     avatarFallbackCapsulesEnabled: boolean;
     hostControlsEnabled: boolean;
+    notesEnabled: boolean;
   };
 }
 
@@ -372,9 +386,40 @@ export async function bootRuntime(
       avatarSeatingEnabled: healthFeatures.avatarSeatingEnabled ?? false,
       avatarCustomizationEnabled: healthFeatures.avatarCustomizationEnabled ?? false,
       avatarFallbackCapsulesEnabled: healthFeatures.avatarFallbackCapsulesEnabled ?? true,
-      hostControlsEnabled: healthFeatures.hostControlsEnabled ?? true
+      hostControlsEnabled: healthFeatures.hostControlsEnabled ?? true,
+      notesEnabled: healthFeatures.notesEnabled ?? true
     }
   };
+}
+
+export async function fetchRoomNote(apiBaseUrl: string, roomId: string, scope: RuntimeNoteScope, sessionToken: string): Promise<RuntimeNoteRecord> {
+  const response = await fetch(new URL(`/api/rooms/${roomId}/notes/${scope}`, apiBaseUrl), {
+    headers: {
+      "authorization": `Bearer ${sessionToken}`
+    },
+    cache: "no-store"
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({})) as { reason?: string; error?: string };
+    throw new Error(`failed_to_load_note:${response.status}:${payload.reason ?? payload.error ?? "unknown"}`);
+  }
+  return ((await response.json()) as { note: RuntimeNoteRecord }).note;
+}
+
+export async function saveRoomNote(apiBaseUrl: string, roomId: string, scope: RuntimeNoteScope, sessionToken: string, content: string): Promise<RuntimeNoteRecord> {
+  const response = await fetch(new URL(`/api/rooms/${roomId}/notes/${scope}`, apiBaseUrl), {
+    method: "PUT",
+    headers: {
+      "content-type": "application/json",
+      "authorization": `Bearer ${sessionToken}`
+    },
+    body: JSON.stringify({ content })
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({})) as { reason?: string; error?: string };
+    throw new Error(`failed_to_save_note:${response.status}:${payload.reason ?? payload.error ?? "unknown"}`);
+  }
+  return ((await response.json()) as { note: RuntimeNoteRecord }).note;
 }
 
 export async function fetchRoomSessionControl(apiBaseUrl: string, roomId: string, sessionToken: string): Promise<RuntimeSessionControlResponse> {
