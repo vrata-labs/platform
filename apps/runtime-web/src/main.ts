@@ -6943,28 +6943,39 @@ async function leaveAudio(): Promise<void> {
   }
 
   const room = livekitRoom;
-  if (audioMockEnabled) {
-    await unpublishLocalMicrophoneTrack(room);
-    stopMockAudioSource();
-  } else {
-    await room.localParticipant.setMicrophoneEnabled(false);
-    await unpublishLocalMicrophoneTrack(room);
-  }
   audioSessionJoined = false;
   microphoneEnabled = false;
   disconnectLocalAudioTrack();
+
+  let cleanupFailed = false;
+  const runCleanup = async (label: string, action: () => Promise<unknown> | unknown): Promise<void> => {
+    try {
+      await action();
+    } catch (error) {
+      cleanupFailed = true;
+      console.warn(`audio_leave_${label}_failed`, error);
+    }
+  };
+
+  if (audioMockEnabled) {
+    await runCleanup("unpublish", () => unpublishLocalMicrophoneTrack(room));
+    await runCleanup("mock_stop", () => stopMockAudioSource());
+  } else {
+    await runCleanup("mute", () => room.localParticipant.setMicrophoneEnabled(false));
+    await runCleanup("unpublish", () => unpublishLocalMicrophoneTrack(room));
+  }
   muteButton.disabled = true;
   muteButton.textContent = "Mute";
   joinAudioButton.textContent = "Join Audio";
   joinAudioButton.title = "Publish your microphone";
-  setStatus("Audio left");
+  clearAudioIssue("Audio left");
   debugState.audioState = "not_joined";
   if (!hasActiveMediaRoomSurfaceConsumer()) {
     scheduleMediaRoomIdleDisconnect(room, "audio_left_idle");
   }
   syncLocalAudioPresence();
   void refreshWebRtcDiagnostics().catch(() => undefined);
-  void reportDiagnostics("audio_left");
+  void reportDiagnostics(cleanupFailed ? "audio_left_cleanup_failed" : "audio_left");
 }
 
 async function toggleLocalMute(): Promise<void> {
