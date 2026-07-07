@@ -35,7 +35,7 @@ import {
 } from "@vrata/shared-types";
 
 import { appendBrandingSuffix, applyRoomShellBootState, renderSceneAttributions } from "./boot-session.js";
-import { RuntimeAccessError, bootRuntime, fetchRoomNote, fetchRoomSessionControl, fetchRuntimeSpaces, listPresence, planVoiceSession, removePresence, removeRoomParticipant, resolveCurrentSpace, resolveJoinMode, runRoomSessionControlAction, saveRoomNote, transferRoomHost, upsertPresence, type PresenceState, type RuntimeNoteScope, type RuntimeSessionControlResponse, type RuntimeSpaceOption } from "./index.js";
+import { RuntimeAccessError, bootRuntime, deleteRoomDocument, downloadRoomDocument, fetchRoomNote, fetchRoomSessionControl, fetchRuntimeSpaces, listPresence, listRoomDocuments, planVoiceSession, removePresence, removeRoomParticipant, resolveCurrentSpace, resolveJoinMode, runRoomSessionControlAction, saveRoomNote, selectRoomDocumentSurface, transferRoomHost, uploadRoomDocument, upsertPresence, type PresenceState, type RuntimeDocumentRecord, type RuntimeNoteScope, type RuntimeSessionControlResponse, type RuntimeSpaceOption } from "./index.js";
 import { formatClientCompatibilityStatus, resolveClientCompatibility, type ClientCompatibilitySummary } from "./client-capabilities.js";
 import { formatGuestCompatibilityWarnings, formatGuestControlsHint, shouldShowGuestOnboarding, validateGuestDisplayName } from "./guest-onboarding.js";
 import { createMotionTrack, pushMotionSample, sampleMotion, type MotionTrack } from "./motion-state.js";
@@ -277,6 +277,14 @@ const notesEditor = mustElement<HTMLTextAreaElement>("#notes-editor");
 const notesRetrySaveButton = mustElement<HTMLButtonElement>("#notes-retry-save");
 const notesStatusEl = mustElement<HTMLDivElement>("#notes-status");
 const notesPreviewEl = mustElement<HTMLDivElement>("#notes-preview");
+const documentsPanelEl = mustElement<HTMLDivElement>("#documents-panel");
+const documentUploadInput = mustElement<HTMLInputElement>("#document-upload-input");
+const documentUploadButton = mustElement<HTMLButtonElement>("#document-upload-button");
+const documentSelect = mustElement<HTMLSelectElement>("#document-select");
+const documentDownloadButton = mustElement<HTMLButtonElement>("#document-download-button");
+const documentSurfaceButton = mustElement<HTMLButtonElement>("#document-surface-button");
+const documentDeleteButton = mustElement<HTMLButtonElement>("#document-delete-button");
+const documentStatusEl = mustElement<HTMLDivElement>("#document-status");
 const sceneHost = mustElement<HTMLDivElement>("#scene");
 const mediaSurfaceSelect = mustElement<HTMLSelectElement>("#media-surface-select");
 const joinAudioButton = mustElement<HTMLButtonElement>("#join-audio");
@@ -821,11 +829,21 @@ let notesLastUpdatedAt: string | null = null;
 let notesLoadSeq = 0;
 let notesSaveSeq = 0;
 let notesAutosaveTimer: number | null = null;
+let roomDocuments: RuntimeDocumentRecord[] = [];
+let selectedDocumentId = getStoredValue(localStorage, `vrata.documents.selected.${roomId}`, `noah.documents.selected.${roomId}`) ?? "";
+let documentsLoading = false;
+let documentUploadInFlight = false;
 joinMutedCheckbox.checked = joinMutedPreference;
 guestJoinMutedCheckbox.checked = joinMutedPreference || !getStoredValue(localStorage, "vrata.audio.joinMuted", "noah.audio.joinMuted");
 notesScopeSelect.value = activeNotesScope;
 notesEditor.disabled = true;
 notesScopeSelect.disabled = true;
+documentUploadInput.disabled = true;
+documentUploadButton.disabled = true;
+documentSelect.disabled = true;
+documentDownloadButton.disabled = true;
+documentSurfaceButton.disabled = true;
+documentDeleteButton.disabled = true;
 let audioActionInFlight = false;
 let audioInputDevices: MediaDeviceInfo[] = [];
 let audioOutputDevices: MediaDeviceInfo[] = [];
@@ -894,6 +912,7 @@ let runtimeFlags = {
   sceneBundles: true,
   spatialAudio: true,
   hostControlsEnabled: true,
+  documentsEnabled: true,
   notesEnabled: true,
   ...createInitialAvatarRuntimeFlags(),
   avatarFallbackCapsulesEnabled: true
@@ -1203,9 +1222,13 @@ function applyAccessDebug(access: NonNullable<RuntimeSessionControlResponse["acc
   syncRemoteBrowserControls();
   syncSurfaceAudioControl();
   syncNotesAccessUi();
+  renderDocumentsUi();
   renderHostControls();
   if (canViewNotes() && notesSaveState === "idle") {
     void loadActiveNote();
+  }
+  if (canViewDocuments()) {
+    void loadRoomDocuments();
   }
 }
 
@@ -3968,6 +3991,15 @@ const debugState = {
     updatedAt: null as string | null,
     errorCode: null as string | null
   },
+  documents: {
+    enabled: true,
+    count: 0,
+    selectedDocumentId,
+    selectedFilename: null as string | null,
+    selectedSurfaceId: null as string | null,
+    lastStatus: "idle" as string,
+    errorCode: null as string | null
+  },
   screenShareState: "idle",
   screenShare: {
     supported: shareMockEnabled || browserMediaCapabilities.screenShare.supported,
@@ -4374,6 +4406,190 @@ async function saveActiveNote(): Promise<void> {
     const code = notesErrorCode(error);
     console.warn("notes_save_failed", error);
     setNotesSaveState("save_failed", "Notes save failed; retry available", code);
+  }
+}
+
+function canViewDocuments(): boolean {
+  return runtimeFlags.documentsEnabled && hasRoomPermission(debugState.access.permissions, "document.view");
+}
+
+function canUploadDocuments(): boolean {
+  return canViewDocuments() && hasRoomPermission(debugState.access.permissions, "document.upload");
+}
+
+function canDownloadDocuments(): boolean {
+  return canViewDocuments() && hasRoomPermission(debugState.access.permissions, "document.download");
+}
+
+function canDeleteDocuments(): boolean {
+  return canViewDocuments() && hasRoomPermission(debugState.access.permissions, "document.delete");
+}
+
+function selectedDocument(): RuntimeDocumentRecord | null {
+  return roomDocuments.find((document) => document.documentId === selectedDocumentId) ?? roomDocuments[0] ?? null;
+}
+
+function documentErrorCode(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.split(":").slice(0, 3).join(":") || "document_error";
+}
+
+function setDocumentStatus(message: string, errorCode: string | null = null): void {
+  documentStatusEl.textContent = message;
+  const selected = selectedDocument();
+  debugState.documents = {
+    enabled: runtimeFlags.documentsEnabled,
+    count: roomDocuments.length,
+    selectedDocumentId: selected?.documentId ?? "",
+    selectedFilename: selected?.filename ?? null,
+    selectedSurfaceId: selected?.linkedSurfaceId ?? null,
+    lastStatus: message,
+    errorCode
+  };
+}
+
+function renderDocumentsUi(message?: string): void {
+  const visible = canViewDocuments();
+  documentsPanelEl.hidden = !visible;
+  if (!visible) {
+    documentUploadInput.disabled = true;
+    documentUploadButton.disabled = true;
+    documentSelect.disabled = true;
+    documentDownloadButton.disabled = true;
+    documentSurfaceButton.disabled = true;
+    documentDeleteButton.disabled = true;
+    setDocumentStatus(runtimeFlags.documentsEnabled ? "Documents permission required" : "Documents disabled");
+    return;
+  }
+
+  const selected = selectedDocument();
+  if (selected && selected.documentId !== selectedDocumentId) {
+    selectedDocumentId = selected.documentId;
+    localStorage.setItem(`vrata.documents.selected.${roomId}`, selectedDocumentId);
+  }
+  documentSelect.replaceChildren(
+    ...(roomDocuments.length > 0
+      ? roomDocuments.map((doc) => {
+        const option = document.createElement("option");
+        option.value = doc.documentId;
+        option.textContent = `${doc.filename} (${Math.ceil(doc.sizeBytes / 1024)} KB)`;
+        option.selected = doc.documentId === selectedDocumentId;
+        return option;
+      })
+      : [new Option("No documents", "")])
+  );
+  documentUploadInput.disabled = !canUploadDocuments() || documentsLoading || documentUploadInFlight;
+  documentUploadButton.disabled = !canUploadDocuments() || documentsLoading || documentUploadInFlight;
+  documentSelect.disabled = documentsLoading || roomDocuments.length === 0;
+  documentDownloadButton.disabled = !selected || !canDownloadDocuments() || documentsLoading;
+  documentSurfaceButton.disabled = !selected || !canUploadDocuments() || documentsLoading;
+  documentDeleteButton.disabled = !selected || !canDeleteDocuments() || documentsLoading;
+  setDocumentStatus(message ?? (roomDocuments.length > 0 ? `Documents ready: ${roomDocuments.length}` : "No room documents yet"));
+}
+
+async function loadRoomDocuments(): Promise<void> {
+  if (!runtimeFlags.documentsEnabled || !canViewDocuments()) {
+    renderDocumentsUi();
+    return;
+  }
+  documentsLoading = true;
+  renderDocumentsUi("Documents loading...");
+  try {
+    roomDocuments = await listRoomDocuments(apiBaseUrl, roomId, roomStateAccessToken);
+    if (selectedDocumentId && !roomDocuments.some((document) => document.documentId === selectedDocumentId)) {
+      selectedDocumentId = "";
+      localStorage.removeItem(`vrata.documents.selected.${roomId}`);
+    }
+    renderDocumentsUi();
+  } catch (error) {
+    console.warn("documents_load_failed", error);
+    setDocumentStatus("Documents unavailable", documentErrorCode(error));
+  } finally {
+    documentsLoading = false;
+    renderDocumentsUi(documentStatusEl.textContent || undefined);
+  }
+}
+
+async function uploadSelectedDocument(): Promise<void> {
+  const file = documentUploadInput.files?.[0];
+  if (!file) {
+    setDocumentStatus("Choose a document first");
+    return;
+  }
+  if (!canUploadDocuments()) {
+    renderDocumentsUi("Document upload permission required");
+    return;
+  }
+  documentUploadInFlight = true;
+  renderDocumentsUi("Uploading document...");
+  try {
+    const uploadedDocument = await uploadRoomDocument(apiBaseUrl, roomId, roomStateAccessToken, file);
+    roomDocuments = [uploadedDocument, ...roomDocuments.filter((item) => item.documentId !== uploadedDocument.documentId)];
+    selectedDocumentId = uploadedDocument.documentId;
+    localStorage.setItem(`vrata.documents.selected.${roomId}`, selectedDocumentId);
+    documentUploadInput.value = "";
+    renderDocumentsUi(`Document uploaded: ${uploadedDocument.filename}`);
+  } catch (error) {
+    console.warn("document_upload_failed", error);
+    setDocumentStatus(`Document upload failed: ${documentErrorCode(error)}`, documentErrorCode(error));
+  } finally {
+    documentUploadInFlight = false;
+    renderDocumentsUi(documentStatusEl.textContent || undefined);
+  }
+}
+
+async function downloadSelectedDocument(): Promise<void> {
+  const selected = selectedDocument();
+  if (!selected) return;
+  try {
+    setDocumentStatus("Downloading document...");
+    const download = await downloadRoomDocument(apiBaseUrl, selected, roomStateAccessToken);
+    const objectUrl = URL.createObjectURL(download.blob);
+    const link = document.createElement("a");
+    link.href = objectUrl;
+    link.download = download.filename;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+    setDocumentStatus(`Document downloaded: ${download.filename}`);
+  } catch (error) {
+    console.warn("document_download_failed", error);
+    setDocumentStatus(`Document download failed: ${documentErrorCode(error)}`, documentErrorCode(error));
+  }
+}
+
+async function deleteSelectedDocument(): Promise<void> {
+  const selected = selectedDocument();
+  if (!selected) return;
+  try {
+    setDocumentStatus("Deleting document...");
+    await deleteRoomDocument(apiBaseUrl, roomId, selected.documentId, roomStateAccessToken);
+    roomDocuments = roomDocuments.filter((item) => item.documentId !== selected.documentId);
+    selectedDocumentId = roomDocuments[0]?.documentId ?? "";
+    if (selectedDocumentId) {
+      localStorage.setItem(`vrata.documents.selected.${roomId}`, selectedDocumentId);
+    } else {
+      localStorage.removeItem(`vrata.documents.selected.${roomId}`);
+    }
+    renderDocumentsUi(`Document deleted: ${selected.filename}`);
+  } catch (error) {
+    console.warn("document_delete_failed", error);
+    setDocumentStatus(`Document delete failed: ${documentErrorCode(error)}`, documentErrorCode(error));
+  }
+}
+
+async function selectDocumentForSurface(): Promise<void> {
+  const selected = selectedDocument();
+  if (!selected) return;
+  try {
+    setDocumentStatus("Selecting document for surface...");
+    const updated = await selectRoomDocumentSurface(apiBaseUrl, roomId, selected.documentId, selectedMediaSurfaceId, roomStateAccessToken);
+    roomDocuments = roomDocuments.map((item) => item.documentId === updated.documentId ? updated : item);
+    renderDocumentsUi(`Document selected for surface: ${updated.filename}`);
+  } catch (error) {
+    console.warn("document_surface_select_failed", error);
+    setDocumentStatus(`Document surface selection failed: ${documentErrorCode(error)}`, documentErrorCode(error));
   }
 }
 
@@ -7244,6 +7460,32 @@ notesRetrySaveButton.addEventListener("click", () => {
   void saveActiveNote();
 });
 
+documentSelect.addEventListener("change", () => {
+  selectedDocumentId = documentSelect.value;
+  if (selectedDocumentId) {
+    localStorage.setItem(`vrata.documents.selected.${roomId}`, selectedDocumentId);
+  } else {
+    localStorage.removeItem(`vrata.documents.selected.${roomId}`);
+  }
+  renderDocumentsUi();
+});
+
+documentUploadButton.addEventListener("click", () => {
+  void uploadSelectedDocument();
+});
+
+documentDownloadButton.addEventListener("click", () => {
+  void downloadSelectedDocument();
+});
+
+documentSurfaceButton.addEventListener("click", () => {
+  void selectDocumentForSurface();
+});
+
+documentDeleteButton.addEventListener("click", () => {
+  void deleteSelectedDocument();
+});
+
 mediaSurfaceSelect.addEventListener("change", () => {
   selectMediaSurface(mediaSurfaceSelect.value);
 });
@@ -7824,6 +8066,7 @@ async function main(): Promise<void> {
     remoteDiagnostics: boot.envFlags.remoteDiagnostics,
     sceneBundles: boot.envFlags.sceneBundles,
     hostControlsEnabled: boot.envFlags.hostControlsEnabled,
+    documentsEnabled: boot.envFlags.documentsEnabled,
     notesEnabled: boot.envFlags.notesEnabled,
     spatialAudio: spatialAudioServerEnabled && spatialAudioRoomEnabled && spatialAudioQueryEnabled,
     ...resolveAvatarRuntimeFlags(boot)
@@ -7861,6 +8104,8 @@ async function main(): Promise<void> {
   await loadAvailableSpaces(boot.roomId);
   syncNotesAccessUi();
   void loadActiveNote();
+  renderDocumentsUi();
+  void loadRoomDocuments();
   const avatarCatalogUrl = resolveAvatarCatalogUrl(boot);
   const avatarElements = {
     panelEl: avatarSandboxPanel,

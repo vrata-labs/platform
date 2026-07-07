@@ -21,6 +21,7 @@ import {
 import {
   createStorage,
   type AssetRecord,
+  type RoomDocumentRecord,
   type RoomNoteRecord,
   type RoomNoteScope,
   type RoomInviteRecord,
@@ -134,6 +135,10 @@ type ControlPlanePermission =
   | "audit.read"
   | "room.invite"
   | "room.session-control"
+  | "document.view"
+  | "document.download"
+  | "document.upload"
+  | "document.delete"
   | "notes.view"
   | "notes.edit"
   | "room.join";
@@ -226,6 +231,8 @@ type SceneBundleUploadStorage = {
   accessKeyId: string;
   secretAccessKey: string;
 };
+
+type DocumentUploadStorage = SceneBundleUploadStorage;
 
 interface XrTelemetryRecord {
   participantId: string;
@@ -324,7 +331,13 @@ const metrics = {
   notesCreatedTotal: new Map<string, number>(),
   notesSavedTotal: new Map<string, number>(),
   notesSaveFailuresTotal: new Map<string, number>(),
-  notesPermissionDeniedTotal: 0
+  notesPermissionDeniedTotal: 0,
+  documentsUploadedTotal: new Map<string, number>(),
+  documentDownloadsTotal: 0,
+  documentStorageBytesTotal: new Map<string, number>(),
+  documentPermissionDeniedTotal: 0,
+  documentDeletesTotal: 0,
+  documentSurfaceSelectionsTotal: 0
 };
 
 function isEnabledEnvValue(value: string | undefined): boolean | null {
@@ -375,6 +388,10 @@ export function isRoomAccessPolicyEnabled(env: NodeJS.ProcessEnv = process.env):
 
 export function isNotesFeatureEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   return isEnabledEnvValue(env.FEATURE_NOTES) ?? true;
+}
+
+export function isDocumentsFeatureEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return isEnabledEnvValue(env.FEATURE_DOCUMENTS) ?? true;
 }
 
 function isSceneBundleUploadEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -439,6 +456,10 @@ const controlPlanePermissions: ControlPlanePermission[] = [
   "audit.read",
   "room.invite",
   "room.session-control",
+  "document.view",
+  "document.download",
+  "document.upload",
+  "document.delete",
   "notes.view",
   "notes.edit",
   "room.join"
@@ -1032,9 +1053,9 @@ function attachRequestId(request: IncomingMessage, response: ServerResponse): st
   return requestId;
 }
 
-function incrementCounter(counter: Map<string, number>, reason: string | undefined): void {
+function incrementCounter(counter: Map<string, number>, reason: string | undefined, amount = 1): void {
   const label = reason && reason.trim().length > 0 ? reason : "unknown";
-  counter.set(label, (counter.get(label) ?? 0) + 1);
+  counter.set(label, (counter.get(label) ?? 0) + amount);
 }
 
 function cleanupAllPresence(): void {
@@ -1174,6 +1195,27 @@ async function apiMetricsText(storage: Awaited<typeof storagePromise>): Promise<
     "# HELP vrata_scene_bundle_upload_bytes_total Uploaded scene bundle bytes accepted by API.",
     "# TYPE vrata_scene_bundle_upload_bytes_total counter",
     formatMetricLine("vrata_scene_bundle_upload_bytes_total", metrics.sceneBundleUploadBytesTotal),
+    "# HELP vrata_documents_uploaded_total Document upload attempts by MIME and result.",
+    "# TYPE vrata_documents_uploaded_total counter",
+    ...Array.from(metrics.documentsUploadedTotal.entries()).map(([label, count]) => {
+      const [mime = "unknown", result = "unknown"] = label.split(":");
+      return formatMetricLine("vrata_documents_uploaded_total", count, { mime, result });
+    }),
+    "# HELP vrata_document_downloads_total Authorized document downloads.",
+    "# TYPE vrata_document_downloads_total counter",
+    formatMetricLine("vrata_document_downloads_total", metrics.documentDownloadsTotal),
+    "# HELP vrata_document_storage_bytes Document bytes accepted by tenant.",
+    "# TYPE vrata_document_storage_bytes counter",
+    ...Array.from(metrics.documentStorageBytesTotal.entries()).map(([tenant, count]) => formatMetricLine("vrata_document_storage_bytes", count, { tenant })),
+    "# HELP vrata_document_permission_denied_total Document permission denials.",
+    "# TYPE vrata_document_permission_denied_total counter",
+    formatMetricLine("vrata_document_permission_denied_total", metrics.documentPermissionDeniedTotal),
+    "# HELP vrata_document_deletes_total Document delete actions accepted by API.",
+    "# TYPE vrata_document_deletes_total counter",
+    formatMetricLine("vrata_document_deletes_total", metrics.documentDeletesTotal),
+    "# HELP vrata_document_surface_selections_total Document surface selection actions accepted by API.",
+    "# TYPE vrata_document_surface_selections_total counter",
+    formatMetricLine("vrata_document_surface_selections_total", metrics.documentSurfaceSelectionsTotal),
     "# HELP vrata_notes_created_total Notes first created through the API by scope.",
     "# TYPE vrata_notes_created_total counter",
     ...Array.from(metrics.notesCreatedTotal.entries()).map(([scope, count]) => formatMetricLine("vrata_notes_created_total", count, { scope })),
@@ -1519,6 +1561,138 @@ function resolveRoomNotesActor(
   return actor;
 }
 
+const allowedDocumentContentTypes = new Set([
+  "application/pdf",
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+  "text/plain"
+]);
+
+function writeRoomDocumentsAudit(input: {
+  request: IncomingMessage;
+  action: "documents.list" | "documents.upload" | "documents.download" | "documents.delete" | "documents.select-surface";
+  roomId: string;
+  documentId?: string;
+  result: "allowed" | "denied";
+  reason?: string;
+  actor?: ControlPlaneActor;
+}): void {
+  logEvent({
+    service: "api",
+    event: "room_documents_audit",
+    timestamp: new Date().toISOString(),
+    requestId: getRequestId(input.request),
+    action: input.action,
+    roomId: input.roomId,
+    documentId: input.documentId,
+    result: input.result,
+    reason: input.reason,
+    actor: input.actor ? {
+      actorType: input.actor.actorType,
+      actorId: input.actor.actorId,
+      role: input.actor.role,
+      tenantId: input.actor.tenantId,
+      roomId: input.actor.roomId,
+      participantId: input.actor.participantId,
+      sessionId: input.actor.sessionId
+    } : undefined
+  });
+}
+
+function resolveRoomDocumentsActor(
+  request: IncomingMessage,
+  response: ServerResponse,
+  input: { room: RoomRecord; permission: "document.view" | "document.download" | "document.upload" | "document.delete"; action: Parameters<typeof writeRoomDocumentsAudit>[0]["action"]; documentId?: string }
+): ControlPlaneActor | null {
+  const actorResult = resolveControlPlaneActor(request);
+  if (!actorResult.ok) {
+    metrics.documentPermissionDeniedTotal += 1;
+    writeRoomDocumentsAudit({ request, action: input.action, roomId: input.room.roomId, documentId: input.documentId, result: "denied", reason: actorResult.reason });
+    json(response, actorResult.statusCode, { error: "unauthorized", reason: actorResult.reason, requestId: getRequestId(request) });
+    return null;
+  }
+
+  const actor = actorResult.actor;
+  const deny = (reason: string): null => {
+    metrics.documentPermissionDeniedTotal += 1;
+    writeRoomDocumentsAudit({ request, action: input.action, roomId: input.room.roomId, documentId: input.documentId, result: "denied", reason, actor });
+    json(response, 403, { error: "forbidden", reason, permission: input.permission, requestId: getRequestId(request) });
+    return null;
+  };
+
+  if (actor.actorType === "room-session" && actor.roomId !== input.room.roomId) {
+    return deny("room_mismatch");
+  }
+  if (isRoomDisabled(input.room) && actor.actorType !== "admin-token") {
+    return deny("room_disabled");
+  }
+  if (!hasRoomPermission(actor.permissions ?? getRoomPermissions(actor.role), input.permission)) {
+    return deny("permission_denied");
+  }
+
+  writeRoomDocumentsAudit({ request, action: input.action, roomId: input.room.roomId, documentId: input.documentId, result: "allowed", actor });
+  return actor;
+}
+
+function inferDocumentContentType(filename: string): string | null {
+  switch (extname(filename).toLowerCase()) {
+    case ".pdf": return "application/pdf";
+    case ".png": return "image/png";
+    case ".jpg":
+    case ".jpeg": return "image/jpeg";
+    case ".webp": return "image/webp";
+    case ".txt": return "text/plain";
+    default: return null;
+  }
+}
+
+function normalizeDocumentContentType(part: MultipartPart, filename: string): string | null {
+  const raw = part.contentType?.split(";")[0]?.trim().toLowerCase() || "";
+  const inferred = inferDocumentContentType(filename);
+  const contentType = raw && raw !== "application/octet-stream" ? raw : inferred;
+  return contentType && allowedDocumentContentTypes.has(contentType) ? contentType : null;
+}
+
+function normalizeDocumentFilename(input: string | undefined): string | null {
+  const raw = input?.trim() ?? "";
+  if (!raw || raw.length > 160 || /[\\/\0]/.test(raw)) return null;
+  const safe = basename(raw).replace(/[^A-Za-z0-9._ -]/g, "_").trim();
+  if (!safe || safe === "." || safe === "..") return null;
+  return safe;
+}
+
+function documentStorageKey(tenantId: string, roomId: string, documentId: string, filename: string): string {
+  return [trimSlashes(process.env.MINIO_DOCUMENT_PREFIX ?? "documents"), tenantId, roomId, documentId, filename].filter(Boolean).join("/");
+}
+
+function serializeRoomDocument(request: IncomingMessage, document: RoomDocumentRecord) {
+  return {
+    documentId: document.documentId,
+    roomId: document.roomId,
+    tenantId: document.tenantId,
+    filename: document.filename,
+    contentType: document.contentType,
+    sizeBytes: document.sizeBytes,
+    checksum: document.checksum,
+    uploadedBy: document.uploadedBy ?? null,
+    uploadedAt: document.uploadedAt,
+    linkedSurfaceId: document.linkedSurfaceId ?? null,
+    downloadUrl: `/api/rooms/${encodeURIComponent(document.roomId)}/documents/${encodeURIComponent(document.documentId)}/download`
+  };
+}
+
+function normalizeDocumentSurfaceId(input: unknown): string | null | undefined {
+  if (input === null || input === undefined || input === "") return null;
+  if (typeof input !== "string") return undefined;
+  const value = input.trim();
+  return /^[A-Za-z0-9._:-]{1,80}$/.test(value) ? value : undefined;
+}
+
+function safeHeaderFilename(filename: string): string {
+  return filename.replace(/[^\x20-\x7e]/g, "_").replace(/["\\]/g, "_");
+}
+
 async function canReadRoomDetails(request: IncomingMessage, room: RoomRecord): Promise<boolean> {
   if (!isPrivateRoom(room)) {
     return true;
@@ -1726,18 +1900,17 @@ async function resolveStateTokenAccess(
     return { ok: true, role, roleSource: existingSession.payload.roleSource ?? "trusted" };
   }
 
-  const visibility = isRoomAccessPolicyEnabled() ? sanitizeRoomVisibility(room.visibility) : "public";
-  if (visibility !== "private") {
-    const role = resolveEffectiveRoomRole(room, participantId, requested.role);
-    const blockReason = getSessionControlBlockReason(room, participantId, role, false);
-    if (blockReason) {
-      return { ok: false, statusCode: 403, reason: blockReason };
-    }
-    return { ok: true, role, roleSource: requested.roleSource };
-  }
-
   const inviteToken = parseInviteToken(requestPayload?.inviteToken);
   if (!inviteToken) {
+    const visibility = isRoomAccessPolicyEnabled() ? sanitizeRoomVisibility(room.visibility) : "public";
+    if (visibility !== "private") {
+      const role = resolveEffectiveRoomRole(room, participantId, requested.role);
+      const blockReason = getSessionControlBlockReason(room, participantId, role, false);
+      if (blockReason) {
+        return { ok: false, statusCode: 403, reason: blockReason };
+      }
+      return { ok: true, role, roleSource: requested.roleSource };
+    }
     writeInviteUseAudit({ request, roomId: room.roomId, result: "denied", reason: "invite_required", participantId });
     return { ok: false, statusCode: 403, reason: "invite_required" };
   }
@@ -2000,6 +2173,47 @@ function getSceneBundleUploadStorage(request: IncomingMessage): SceneBundleUploa
   };
 }
 
+function getDocumentUploadStorage(request: IncomingMessage): DocumentUploadStorage {
+  const provider = ((process.env.DOCUMENT_PROVIDER as SceneBundleProvider | undefined) ?? (process.env.SCENE_BUNDLE_PROVIDER as SceneBundleProvider | undefined)) ?? "minio-default";
+  if (provider === "minio-default") {
+    if (process.env.MINIO_ROOT_USER && process.env.MINIO_ROOT_PASSWORD && process.env.MINIO_BUCKET && process.env.MINIO_PUBLIC_BASE_URL) {
+      return {
+        type: "s3",
+        provider,
+        endpoint: process.env.MINIO_ENDPOINT ?? "http://minio:9000",
+        region: process.env.SCENE_BUNDLE_S3_REGION || "us-east-1",
+        bucket: process.env.MINIO_BUCKET,
+        accessKeyId: process.env.MINIO_ROOT_USER,
+        secretAccessKey: process.env.MINIO_ROOT_PASSWORD
+      };
+    }
+  } else if (provider === "s3-compatible") {
+    if (process.env.SCENE_BUNDLE_S3_ENDPOINT && process.env.SCENE_BUNDLE_S3_REGION && process.env.SCENE_BUNDLE_S3_BUCKET && process.env.SCENE_BUNDLE_S3_PUBLIC_BASE_URL && process.env.SCENE_BUNDLE_S3_ACCESS_KEY_ID && process.env.SCENE_BUNDLE_S3_SECRET_ACCESS_KEY) {
+      return {
+        type: "s3",
+        provider,
+        endpoint: process.env.SCENE_BUNDLE_S3_ENDPOINT,
+        region: process.env.SCENE_BUNDLE_S3_REGION,
+        bucket: process.env.SCENE_BUNDLE_S3_BUCKET,
+        accessKeyId: process.env.SCENE_BUNDLE_S3_ACCESS_KEY_ID,
+        secretAccessKey: process.env.SCENE_BUNDLE_S3_SECRET_ACCESS_KEY
+      };
+    }
+  }
+
+  if (process.env.NODE_ENV === "production") {
+    throw new Error(`misconfigured_document_upload_storage:${provider}`);
+  }
+
+  const root = resolve(process.env.DOCUMENT_LOCAL_UPLOAD_ROOT ?? join(runtimePublicRoot, "assets", "uploaded-documents"));
+  return {
+    type: "local",
+    provider: "minio-default",
+    root,
+    publicBaseUrl: new URL("/assets/uploaded-documents/", publicBaseUrlFromRequest(request)).toString()
+  };
+}
+
 function sha256Hex(value: Buffer | string): string {
   return createHash("sha256").update(value).digest("hex");
 }
@@ -2013,7 +2227,7 @@ function formatAmzDate(date: Date): { amzDate: string; dateStamp: string } {
   return { amzDate: iso, dateStamp: iso.slice(0, 8) };
 }
 
-async function putS3Object(storage: Extract<SceneBundleUploadStorage, { type: "s3" }>, key: string, body: Buffer, contentType: string): Promise<void> {
+async function putS3Object(storage: Extract<SceneBundleUploadStorage, { type: "s3" }>, key: string, body: Buffer, contentType: string, errorPrefix = "scene_bundle_object_upload_failed"): Promise<void> {
   const endpoint = storage.endpoint.endsWith("/") ? storage.endpoint : `${storage.endpoint}/`;
   const url = new URL(`${trimSlashes(storage.bucket)}/${key.split("/").map(encodeURIComponent).join("/")}`, endpoint);
   const payloadHash = sha256Hex(body);
@@ -2044,8 +2258,39 @@ async function putS3Object(storage: Extract<SceneBundleUploadStorage, { type: "s
     body: new Uint8Array(body)
   });
   if (!response.ok) {
-    throw new Error(`scene_bundle_object_upload_failed:${response.status}`);
+    throw new Error(`${errorPrefix}:${response.status}`);
   }
+}
+
+async function writeDocumentObject(storage: DocumentUploadStorage, storageKey: string, body: Buffer, contentType: string): Promise<void> {
+  if (storage.type === "local") {
+    const target = join(storage.root, storageKey);
+    if (!target.startsWith(`${storage.root}${sep}`)) throw new Error("unsafe_document_storage_key");
+    await mkdir(dirname(target), { recursive: true });
+    await writeFile(target, body);
+    return;
+  }
+  await putS3Object(storage, storageKey, body, contentType, "document_object_upload_failed");
+}
+
+function resolveUploadedDocumentPublicUrl(storage: DocumentUploadStorage, storageKey: string): string {
+  if (storage.type === "local") {
+    return joinUrlPath(storage.publicBaseUrl, storageKey);
+  }
+  return resolveSceneBundlePublicUrl(storageKey, process.env, storage.provider);
+}
+
+async function readDocumentObject(storage: DocumentUploadStorage, storageKey: string): Promise<Buffer> {
+  if (storage.type === "local") {
+    const target = join(storage.root, storageKey);
+    if (!target.startsWith(`${storage.root}${sep}`)) throw new Error("unsafe_document_storage_key");
+    return readFile(target);
+  }
+  const response = await fetch(resolveUploadedDocumentPublicUrl(storage, storageKey));
+  if (!response.ok) {
+    throw new Error(`document_object_download_failed:${response.status}`);
+  }
+  return Buffer.from(await response.arrayBuffer());
 }
 
 async function publishSceneBundleFiles(storage: SceneBundleUploadStorage, bundleRoot: string, storagePrefix: string): Promise<void> {
@@ -2412,6 +2657,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
         avatarFallbackCapsulesEnabled: process.env.FEATURE_AVATAR_FALLBACK_CAPSULES !== "false",
         roomAccessPolicyEnabled: isRoomAccessPolicyEnabled(),
         hostControlsEnabled: isHostControlsEnabled(),
+        documentsEnabled: isDocumentsFeatureEnabled(),
         notesEnabled: isNotesFeatureEnabled(),
         postgresEnabled: Boolean(process.env.POSTGRES_URL),
         controlPlaneAuthEnabled: Boolean(getControlPlaneAdminToken())
@@ -2756,6 +3002,129 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     }
     incrementCounter(metrics.roomsCreatedTotal, `control-plane:${sanitizeRoomVisibility(room.visibility)}`);
     json(response, 201, { ...room, roomLink: createRoomLink(room.roomId, request), manifest: await buildManifest(room.roomId, request) });
+    return;
+  }
+
+  const roomDocumentsListMatch = url.pathname.match(/^\/api\/rooms\/([^/]+)\/documents$/);
+  if ((method === "GET" || method === "POST") && roomDocumentsListMatch) {
+    if (!isDocumentsFeatureEnabled()) return json(response, 404, { error: "documents_disabled" });
+    const roomId = decodeURIComponent(roomDocumentsListMatch[1]);
+    const room = await storage.getRoom(roomId);
+    if (!room) return json(response, 404, { error: "room_not_found" });
+    const permission = method === "GET" ? "document.view" : "document.upload";
+    const actor = resolveRoomDocumentsActor(request, response, { room, permission, action: method === "GET" ? "documents.list" : "documents.upload" });
+    if (!actor) return;
+
+    if (method === "GET") {
+      const documents = await storage.listRoomDocuments(roomId);
+      json(response, 200, { items: documents.map((document) => serializeRoomDocument(request, document)) });
+      return;
+    }
+
+    const maxBytes = Number.parseInt(process.env.DOCUMENT_UPLOAD_MAX_BYTES ?? `${10 * 1024 * 1024}`, 10);
+    const boundary = parseMultipartBoundary(request.headers["content-type"]);
+    if (!boundary) {
+      incrementCounter(metrics.documentsUploadedTotal, "unknown:rejected");
+      return json(response, 415, { error: "expected_multipart_document_upload" });
+    }
+    const body = await readRequestBuffer(request, maxBytes);
+    const parts = parseMultipartFormData(body, boundary);
+    const documentFile = filePart(parts, "document") ?? filePart(parts, "file");
+    const filename = normalizeDocumentFilename(documentFile?.filename);
+    if (!documentFile || !filename) {
+      incrementCounter(metrics.documentsUploadedTotal, "unknown:rejected");
+      return json(response, 400, { error: "invalid_document_filename" });
+    }
+    const contentType = normalizeDocumentContentType(documentFile, filename);
+    if (!contentType) {
+      incrementCounter(metrics.documentsUploadedTotal, "unsupported:rejected");
+      return json(response, 400, { error: "unsupported_document_mime" });
+    }
+    if (documentFile.data.byteLength > maxBytes) {
+      incrementCounter(metrics.documentsUploadedTotal, `${contentType}:rejected`);
+      return json(response, 413, { error: "document_too_large" });
+    }
+
+    try {
+      const documentId = randomUUID();
+      const uploadStorage = getDocumentUploadStorage(request);
+      const storageKey = documentStorageKey(room.tenantId, roomId, documentId, filename);
+      await writeDocumentObject(uploadStorage, storageKey, documentFile.data, contentType);
+      const document = await storage.createRoomDocument({
+        documentId,
+        roomId,
+        tenantId: room.tenantId,
+        filename,
+        contentType,
+        sizeBytes: documentFile.data.byteLength,
+        storageKey,
+        checksum: `sha256:${sha256Hex(documentFile.data)}`,
+        uploadedBy: actor.actorId
+      });
+      incrementCounter(metrics.documentsUploadedTotal, `${contentType}:success`);
+      incrementCounter(metrics.documentStorageBytesTotal, room.tenantId, document.sizeBytes);
+      json(response, 201, { document: serializeRoomDocument(request, document) });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "document_upload_failed";
+      incrementCounter(metrics.documentsUploadedTotal, `${contentType}:failed`);
+      json(response, message.startsWith("misconfigured_document_upload_storage") ? 503 : 400, { error: message, requestId });
+    }
+    return;
+  }
+
+  const roomDocumentItemMatch = url.pathname.match(/^\/api\/rooms\/([^/]+)\/documents\/([^/]+)(?:\/(download|surface))?$/);
+  if ((method === "GET" || method === "DELETE" || method === "POST") && roomDocumentItemMatch) {
+    if (!isDocumentsFeatureEnabled()) return json(response, 404, { error: "documents_disabled" });
+    const roomId = decodeURIComponent(roomDocumentItemMatch[1]);
+    const documentId = decodeURIComponent(roomDocumentItemMatch[2]);
+    const actionPath = roomDocumentItemMatch[3] ?? "item";
+    const room = await storage.getRoom(roomId);
+    if (!room) return json(response, 404, { error: "room_not_found" });
+    const permission = actionPath === "download" ? "document.download" : method === "DELETE" ? "document.delete" : "document.upload";
+    const action = actionPath === "download" ? "documents.download" : method === "DELETE" ? "documents.delete" : "documents.select-surface";
+    const actor = resolveRoomDocumentsActor(request, response, { room, permission, action, documentId });
+    if (!actor) return;
+    const document = await storage.getRoomDocument(roomId, documentId);
+    if (!document || document.deletedAt) return json(response, 404, { error: "document_not_found" });
+
+    if (method === "GET" && actionPath === "download") {
+      try {
+        const bytes = await readDocumentObject(getDocumentUploadStorage(request), document.storageKey);
+        metrics.documentDownloadsTotal += 1;
+        response.writeHead(200, {
+          "content-type": document.contentType,
+          "content-length": String(bytes.byteLength),
+          "content-disposition": `attachment; filename="${safeHeaderFilename(document.filename)}"`,
+          "x-request-id": requestId
+        });
+        response.end(bytes);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "document_download_failed";
+        json(response, 503, { error: message, requestId });
+      }
+      return;
+    }
+
+    if (method === "DELETE" && actionPath === "item") {
+      const deleted = await storage.markRoomDocumentDeleted(roomId, documentId, new Date().toISOString(), actor.actorId);
+      if (!deleted) return json(response, 404, { error: "document_not_found" });
+      metrics.documentDeletesTotal += 1;
+      json(response, 200, { document: serializeRoomDocument(request, deleted) });
+      return;
+    }
+
+    if (method === "POST" && actionPath === "surface") {
+      const payload = (await parseBody<{ surfaceId?: unknown }>(request)) ?? {};
+      const surfaceId = normalizeDocumentSurfaceId(payload.surfaceId);
+      if (surfaceId === undefined) return json(response, 400, { error: "invalid_document_surface_id" });
+      const updated = await storage.updateRoomDocumentSurface(roomId, documentId, surfaceId);
+      if (!updated) return json(response, 404, { error: "document_not_found" });
+      metrics.documentSurfaceSelectionsTotal += 1;
+      json(response, 200, { document: serializeRoomDocument(request, updated) });
+      return;
+    }
+
+    json(response, 405, { error: "unsupported_document_action" });
     return;
   }
 

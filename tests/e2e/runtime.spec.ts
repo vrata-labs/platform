@@ -305,6 +305,97 @@ test("persistent notes panel autosaves markdown and reloads safely", async ({ pa
   expect(debug?.notes?.saveState).toMatch(/ready|saved/);
 });
 
+test("room documents library uploads downloads selects and deletes PDF", async ({ page, request }) => {
+  const roomResponse = await request.post("/api/rooms", {
+    headers: { "x-vrata-admin-token": e2eAdminToken },
+    data: {
+      tenantId: "demo-tenant",
+      templateId: "meeting-room-basic",
+      name: `Documents E2E ${Date.now()}`
+    }
+  });
+  expect(roomResponse.ok()).toBeTruthy();
+  const room = (await roomResponse.json()) as { roomId: string; roomLink: string };
+  const hostInvite = await createRoomInvite(request, room.roomId, false, "host");
+  const memberInvite = await createRoomInvite(request, room.roomId, false, "member");
+  const guestInvite = await createRoomInvite(request, room.roomId, false, "guest");
+
+  await page.goto(e2eRoomLink(hostInvite.inviteLink));
+  await completeGuestOnboarding(page, "Documents Host", true);
+  await expect(page.locator("#documents-panel")).toBeVisible();
+  await expect(page.locator("#document-upload-button")).toBeEnabled({ timeout: 10000 });
+  await expect(page.locator("#document-status")).toContainText(/No room documents yet|Documents ready/, { timeout: 10000 });
+
+  await page.setInputFiles("#document-upload-input", {
+    name: "meeting.pdf",
+    mimeType: "application/pdf",
+    buffer: Buffer.from("%PDF-1.4\n1 0 obj\n<<>>\nendobj\n%%EOF\n")
+  });
+  await expect.poll(async () => page.locator("#document-upload-input").evaluate((input: HTMLInputElement) => input.files?.[0]?.name ?? ""), {
+    timeout: 5000
+  }).toBe("meeting.pdf");
+  const uploadPromise = page.waitForResponse((response) =>
+    response.request().method() === "POST" && response.url().endsWith(`/api/rooms/${room.roomId}/documents`)
+  );
+  await page.click("#document-upload-button");
+  const uploadResponse = await uploadPromise;
+  expect(uploadResponse.status()).toBe(201);
+  await expect(page.locator("#document-select")).toContainText("meeting.pdf");
+
+  await page.click("#document-surface-button");
+  await expect(page.locator("#document-status")).toContainText("Document selected for surface: meeting.pdf", { timeout: 10000 });
+
+  const memberPage = await page.context().newPage();
+  try {
+    await memberPage.goto(e2eRoomLink(memberInvite.inviteLink));
+    await completeGuestOnboarding(memberPage, "Documents Member", true);
+    await expect(memberPage.locator("#documents-panel")).toBeVisible();
+    await expect(memberPage.locator("#document-select")).toContainText("meeting.pdf", { timeout: 10000 });
+    await memberPage.evaluate(() => {
+      const state = window as Window & {
+        __VRATA_DOCUMENT_DOWNLOADS__?: Array<{ filename: string; href: string }>;
+        __VRATA_DOCUMENT_DOWNLOAD_CLICK_PATCHED__?: boolean;
+      };
+      state.__VRATA_DOCUMENT_DOWNLOADS__ = [];
+      if (state.__VRATA_DOCUMENT_DOWNLOAD_CLICK_PATCHED__) return;
+      state.__VRATA_DOCUMENT_DOWNLOAD_CLICK_PATCHED__ = true;
+      const originalClick = HTMLAnchorElement.prototype.click;
+      HTMLAnchorElement.prototype.click = function patchedDocumentDownloadClick(this: HTMLAnchorElement): void {
+        if (this.download) {
+          state.__VRATA_DOCUMENT_DOWNLOADS__?.push({ filename: this.download, href: this.href });
+          return;
+        }
+        originalClick.call(this);
+      };
+    });
+    const downloadPromise = memberPage.waitForResponse((response) =>
+      response.url().includes(`/api/rooms/${room.roomId}/documents/`) && response.url().endsWith("/download")
+    );
+    await memberPage.click("#document-download-button");
+    const downloadResponse = await downloadPromise;
+    expect(downloadResponse.ok()).toBeTruthy();
+    expect(downloadResponse.headers()["content-disposition"]).toContain('filename="meeting.pdf"');
+    const downloads = await memberPage.evaluate(() => (window as Window & { __VRATA_DOCUMENT_DOWNLOADS__?: Array<{ filename: string; href: string }> }).__VRATA_DOCUMENT_DOWNLOADS__ ?? []);
+    expect(downloads[0]?.filename).toBe("meeting.pdf");
+    expect(downloads[0]?.href).toContain("blob:");
+  } finally {
+    await memberPage.close();
+  }
+
+  const guestPage = await page.context().newPage();
+  try {
+    await guestPage.goto(e2eRoomLink(guestInvite.inviteLink));
+    await completeGuestOnboarding(guestPage, "Documents Guest", true);
+    await expect(guestPage.locator("#documents-panel")).toBeHidden();
+  } finally {
+    await guestPage.close();
+  }
+
+  await page.click("#document-delete-button");
+  await expect(page.locator("#document-status")).toContainText("Document deleted: meeting.pdf", { timeout: 10000 });
+  await expect(page.locator("#document-select")).toContainText("No documents");
+});
+
 test("private room opens only through a valid invite link", async ({ page, request }) => {
   const room = await createPrivateRoom(request, `Private E2E ${Date.now()}`);
 

@@ -70,6 +70,22 @@
             <div class="notes-preview-title">Preview</div>
             <div id="notes-preview" class="notes-preview" aria-live="polite"></div>
           </div>
+          <div id="documents-panel" class="documents-panel" hidden>
+            <div class="documents-title">Documents</div>
+            <label for="document-upload-input">Upload PDF/image/text</label>
+            <input id="document-upload-input" type="file" accept="application/pdf,image/png,image/jpeg,image/webp,text/plain,.pdf,.png,.jpg,.jpeg,.webp,.txt" />
+            <button id="document-upload-button" type="button">Upload document</button>
+            <label for="document-select">Room library</label>
+            <select id="document-select" disabled>
+              <option value="">No documents</option>
+            </select>
+            <div class="documents-actions">
+              <button id="document-download-button" type="button" disabled>Download selected</button>
+              <button id="document-surface-button" type="button" disabled>Select for surface</button>
+              <button id="document-delete-button" type="button" disabled>Delete selected</button>
+            </div>
+            <div id="document-status" class="audio-device-status" role="status" aria-live="polite">Documents loading...</div>
+          </div>
           <div class="controls">
             <label class="surface-picker" for="media-surface-select">Surface
               <select id="media-surface-select" disabled>

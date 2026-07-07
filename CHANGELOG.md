@@ -25,6 +25,7 @@ Vrata uses SemVer: `MAJOR.MINOR.PATCH`. Until `1.0.0`, breaking changes can happ
 - Runtime guest onboarding for external invite links with display name entry, join-muted preference, microphone check, without-audio entry, compatibility warnings, controls hints, and clearer expired/revoked invite messages.
 - Control-plane admin dashboard now verifies admin sessions, shows room status and bound scene bundle labels, supports invite management and room disable/enable lifecycle, and blocks disabled-room runtime access with `room_disabled`.
 - Persistent runtime notes panel with room/private scopes, autosave/retry states, sanitized Markdown preview, notes API persistence, permissions, metrics, and audit events.
+- Room documents library with authenticated upload/list/download/delete, document permissions, object-storage metadata, surface selection hooks, runtime HUD controls, metrics, and audit events.
 
 ### Known Limitations
 

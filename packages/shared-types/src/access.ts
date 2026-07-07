@@ -17,6 +17,10 @@ export type RoomPermission =
   | "remote-browser.open-url"
   | "remote-browser.input"
   | "remote-browser.stop"
+  | "document.view"
+  | "document.download"
+  | "document.upload"
+  | "document.delete"
   | "notes.view"
   | "notes.edit"
   | "room.session-control"
@@ -37,7 +41,7 @@ const roomRoles = new Set<RoomRole>(["guest", "member", "host", "admin"]);
 
 const rolePermissions: Record<RoomRole, readonly RoomPermission[]> = {
   guest: ["room.join", "audio.join", "surface.view", "notes.view"],
-  member: ["room.join", "audio.join", "surface.view", "surface.input", "whiteboard.draw", "notes.view", "notes.edit"],
+  member: ["room.join", "audio.join", "surface.view", "surface.input", "whiteboard.draw", "document.view", "document.download", "notes.view", "notes.edit"],
   host: [
     "room.join",
     "audio.join",
@@ -54,6 +58,10 @@ const rolePermissions: Record<RoomRole, readonly RoomPermission[]> = {
     "remote-browser.open-url",
     "remote-browser.input",
     "remote-browser.stop",
+    "document.view",
+    "document.download",
+    "document.upload",
+    "document.delete",
     "notes.view",
     "notes.edit",
     "room.session-control"
@@ -75,6 +83,10 @@ const rolePermissions: Record<RoomRole, readonly RoomPermission[]> = {
     "remote-browser.open-url",
     "remote-browser.input",
     "remote-browser.stop",
+    "document.view",
+    "document.download",
+    "document.upload",
+    "document.delete",
     "notes.view",
     "notes.edit",
     "room.session-control",

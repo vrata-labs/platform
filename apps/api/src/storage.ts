@@ -76,6 +76,22 @@ export interface RoomNoteRecord {
   updatedBy?: string | null;
 }
 
+export interface RoomDocumentRecord {
+  documentId: string;
+  roomId: string;
+  tenantId: string;
+  filename: string;
+  contentType: string;
+  sizeBytes: number;
+  storageKey: string;
+  checksum: string;
+  uploadedBy?: string | null;
+  uploadedAt: string;
+  deletedAt?: string | null;
+  deletedBy?: string | null;
+  linkedSurfaceId?: string | null;
+}
+
 export interface RoomSessionControlState {
   hostParticipantId?: string | null;
   lockedAt?: string | null;
@@ -273,6 +289,38 @@ function roomNoteId(roomId: string, scope: RoomNoteScope, ownerParticipantId?: s
   return scope === "shared" ? `${roomId}:shared` : `${roomId}:private:${ownerParticipantId ?? ""}`;
 }
 
+function mapRoomDocumentRow(row: {
+  document_id: string;
+  room_id: string;
+  tenant_id: string;
+  filename: string;
+  content_type: string;
+  size_bytes: string | number;
+  storage_key: string;
+  checksum: string;
+  uploaded_by?: string | null;
+  uploaded_at: string | Date;
+  deleted_at?: string | Date | null;
+  deleted_by?: string | null;
+  linked_surface_id?: string | null;
+}): RoomDocumentRecord {
+  return {
+    documentId: row.document_id,
+    roomId: row.room_id,
+    tenantId: row.tenant_id,
+    filename: row.filename,
+    contentType: row.content_type,
+    sizeBytes: Number(row.size_bytes),
+    storageKey: row.storage_key,
+    checksum: row.checksum,
+    uploadedBy: row.uploaded_by ?? null,
+    uploadedAt: isoString(row.uploaded_at) ?? new Date().toISOString(),
+    deletedAt: isoString(row.deleted_at),
+    deletedBy: row.deleted_by ?? null,
+    linkedSurfaceId: row.linked_surface_id ?? null
+  };
+}
+
 function mapRoomRow(row: {
   room_id: string;
   tenant_id: string;
@@ -431,6 +479,11 @@ export interface Storage {
   updateWaitingRoomRequest(roomId: string, requestId: string, input: Partial<Pick<WaitingRoomRequestRecord, "status" | "decidedAt" | "decidedBy">>): Promise<WaitingRoomRequestRecord | null>;
   getRoomNote(roomId: string, scope: RoomNoteScope, ownerParticipantId?: string | null): Promise<RoomNoteRecord | null>;
   upsertRoomNote(input: Pick<RoomNoteRecord, "roomId" | "scope" | "content"> & { ownerParticipantId?: string | null; updatedBy?: string | null }): Promise<RoomNoteRecord>;
+  listRoomDocuments(roomId: string, includeDeleted?: boolean): Promise<RoomDocumentRecord[]>;
+  getRoomDocument(roomId: string, documentId: string): Promise<RoomDocumentRecord | null>;
+  createRoomDocument(input: Omit<RoomDocumentRecord, "uploadedAt" | "deletedAt" | "deletedBy" | "linkedSurfaceId"> & { uploadedAt?: string; linkedSurfaceId?: string | null }): Promise<RoomDocumentRecord>;
+  markRoomDocumentDeleted(roomId: string, documentId: string, deletedAt: string, deletedBy?: string | null): Promise<RoomDocumentRecord | null>;
+  updateRoomDocumentSurface(roomId: string, documentId: string, linkedSurfaceId: string | null): Promise<RoomDocumentRecord | null>;
   createAsset(input: Partial<AssetRecord>): Promise<AssetRecord>;
   updateAsset(assetId: string, input: Partial<AssetRecord>): Promise<AssetRecord | null>;
   deleteAsset(assetId: string): Promise<boolean>;
@@ -463,6 +516,7 @@ export class MemoryStorage implements Storage {
   private tenants = new Map<string, TenantRecord>([["demo-tenant", { tenantId: "demo-tenant", name: "Demo Tenant" }]]);
   private templates = new Map<string, TemplateRecord>(defaultTemplates.map((item) => [item.templateId, item]));
   private assets = new Map<string, AssetRecord>();
+  private roomDocuments = new Map<string, RoomDocumentRecord>();
   private rooms = new Map<string, RoomRecord>([
     [
       "demo-room",
@@ -665,6 +719,41 @@ export class MemoryStorage implements Storage {
     };
     this.roomNotes.set(note.noteId, note);
     return structuredClone(note);
+  }
+  async listRoomDocuments(roomId: string, includeDeleted = false): Promise<RoomDocumentRecord[]> {
+    return Array.from(this.roomDocuments.values())
+      .filter((document) => document.roomId === roomId && (includeDeleted || !document.deletedAt))
+      .sort((left, right) => right.uploadedAt.localeCompare(left.uploadedAt))
+      .map((document) => structuredClone(document));
+  }
+  async getRoomDocument(roomId: string, documentId: string): Promise<RoomDocumentRecord | null> {
+    const document = this.roomDocuments.get(documentId);
+    return document && document.roomId === roomId ? structuredClone(document) : null;
+  }
+  async createRoomDocument(input: Omit<RoomDocumentRecord, "uploadedAt" | "deletedAt" | "deletedBy" | "linkedSurfaceId"> & { uploadedAt?: string; linkedSurfaceId?: string | null }): Promise<RoomDocumentRecord> {
+    const document: RoomDocumentRecord = {
+      ...input,
+      uploadedAt: input.uploadedAt ?? new Date().toISOString(),
+      deletedAt: null,
+      deletedBy: null,
+      linkedSurfaceId: input.linkedSurfaceId ?? null
+    };
+    this.roomDocuments.set(document.documentId, document);
+    return structuredClone(document);
+  }
+  async markRoomDocumentDeleted(roomId: string, documentId: string, deletedAt: string, deletedBy?: string | null): Promise<RoomDocumentRecord | null> {
+    const existing = this.roomDocuments.get(documentId);
+    if (!existing || existing.roomId !== roomId) return null;
+    const updated = { ...existing, deletedAt, deletedBy: deletedBy ?? null };
+    this.roomDocuments.set(documentId, updated);
+    return structuredClone(updated);
+  }
+  async updateRoomDocumentSurface(roomId: string, documentId: string, linkedSurfaceId: string | null): Promise<RoomDocumentRecord | null> {
+    const existing = this.roomDocuments.get(documentId);
+    if (!existing || existing.roomId !== roomId || existing.deletedAt) return null;
+    const updated = { ...existing, linkedSurfaceId };
+    this.roomDocuments.set(documentId, updated);
+    return structuredClone(updated);
   }
   async createAsset(input: Partial<AssetRecord>): Promise<AssetRecord> {
     const asset = {
@@ -902,9 +991,25 @@ export class PostgresStorage implements Storage {
         updated_at timestamptz not null default now(),
         updated_by text
       );
+      create table if not exists room_documents (
+        document_id text primary key,
+        room_id text not null references rooms(room_id) on delete cascade,
+        tenant_id text not null references tenants(tenant_id),
+        filename text not null,
+        content_type text not null,
+        size_bytes bigint not null,
+        storage_key text not null,
+        checksum text not null,
+        uploaded_by text,
+        uploaded_at timestamptz not null default now(),
+        deleted_at timestamptz,
+        deleted_by text,
+        linked_surface_id text
+      );
     `);
     await this.pool.query(`create index if not exists xr_telemetry_room_id_id_idx on xr_telemetry (room_id, id)`);
     await this.pool.query(`create unique index if not exists room_notes_room_scope_owner_idx on room_notes (room_id, scope, coalesce(owner_participant_id, ''))`);
+    await this.pool.query(`create index if not exists room_documents_room_uploaded_idx on room_documents (room_id, uploaded_at desc)`);
     await this.pool.query(`alter table rooms add column if not exists scene_bundle_url text`);
     await this.pool.query(`alter table rooms add column if not exists status text not null default 'active'`);
     await this.pool.query(`alter table rooms add column if not exists disabled_at timestamptz`);
@@ -1155,6 +1260,43 @@ export class PostgresStorage implements Storage {
       [noteId, input.roomId, input.scope, input.scope === "private" ? input.ownerParticipantId ?? null : null, input.content, input.updatedBy ?? null]
     );
     return mapRoomNoteRow(result.rows[0]);
+  }
+  async listRoomDocuments(roomId: string, includeDeleted = false): Promise<RoomDocumentRecord[]> {
+    const result = await this.pool.query(
+      `select document_id, room_id, tenant_id, filename, content_type, size_bytes, storage_key, checksum, uploaded_by, uploaded_at, deleted_at, deleted_by, linked_surface_id from room_documents where room_id = $1 and ($2 = true or deleted_at is null) order by uploaded_at desc`,
+      [roomId, includeDeleted]
+    );
+    return result.rows.map(mapRoomDocumentRow);
+  }
+  async getRoomDocument(roomId: string, documentId: string): Promise<RoomDocumentRecord | null> {
+    const result = await this.pool.query(
+      `select document_id, room_id, tenant_id, filename, content_type, size_bytes, storage_key, checksum, uploaded_by, uploaded_at, deleted_at, deleted_by, linked_surface_id from room_documents where room_id = $1 and document_id = $2 limit 1`,
+      [roomId, documentId]
+    );
+    return result.rows[0] ? mapRoomDocumentRow(result.rows[0]) : null;
+  }
+  async createRoomDocument(input: Omit<RoomDocumentRecord, "uploadedAt" | "deletedAt" | "deletedBy" | "linkedSurfaceId"> & { uploadedAt?: string; linkedSurfaceId?: string | null }): Promise<RoomDocumentRecord> {
+    const result = await this.pool.query(
+      `insert into room_documents (document_id, room_id, tenant_id, filename, content_type, size_bytes, storage_key, checksum, uploaded_by, uploaded_at, linked_surface_id)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,coalesce($10::timestamptz, now()),$11)
+       returning document_id, room_id, tenant_id, filename, content_type, size_bytes, storage_key, checksum, uploaded_by, uploaded_at, deleted_at, deleted_by, linked_surface_id`,
+      [input.documentId, input.roomId, input.tenantId, input.filename, input.contentType, input.sizeBytes, input.storageKey, input.checksum, input.uploadedBy ?? null, input.uploadedAt ?? null, input.linkedSurfaceId ?? null]
+    );
+    return mapRoomDocumentRow(result.rows[0]);
+  }
+  async markRoomDocumentDeleted(roomId: string, documentId: string, deletedAt: string, deletedBy?: string | null): Promise<RoomDocumentRecord | null> {
+    const result = await this.pool.query(
+      `update room_documents set deleted_at = $3, deleted_by = $4 where room_id = $1 and document_id = $2 and deleted_at is null returning document_id, room_id, tenant_id, filename, content_type, size_bytes, storage_key, checksum, uploaded_by, uploaded_at, deleted_at, deleted_by, linked_surface_id`,
+      [roomId, documentId, deletedAt, deletedBy ?? null]
+    );
+    return result.rows[0] ? mapRoomDocumentRow(result.rows[0]) : null;
+  }
+  async updateRoomDocumentSurface(roomId: string, documentId: string, linkedSurfaceId: string | null): Promise<RoomDocumentRecord | null> {
+    const result = await this.pool.query(
+      `update room_documents set linked_surface_id = $3 where room_id = $1 and document_id = $2 and deleted_at is null returning document_id, room_id, tenant_id, filename, content_type, size_bytes, storage_key, checksum, uploaded_by, uploaded_at, deleted_at, deleted_by, linked_surface_id`,
+      [roomId, documentId, linkedSurfaceId]
+    );
+    return result.rows[0] ? mapRoomDocumentRow(result.rows[0]) : null;
   }
   async createAsset(input: Partial<AssetRecord>): Promise<AssetRecord> {
     const asset = {

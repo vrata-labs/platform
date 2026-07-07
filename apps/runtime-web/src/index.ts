@@ -76,6 +76,7 @@ interface RuntimeHealthResponse {
     avatarFallbackCapsulesEnabled?: boolean;
     roomAccessPolicyEnabled?: boolean;
     hostControlsEnabled?: boolean;
+    documentsEnabled?: boolean;
     notesEnabled?: boolean;
   };
 }
@@ -90,6 +91,20 @@ export interface RuntimeNoteRecord {
   content: string;
   updatedAt: string | null;
   updatedBy?: string | null;
+}
+
+export interface RuntimeDocumentRecord {
+  documentId: string;
+  roomId: string;
+  tenantId: string;
+  filename: string;
+  contentType: string;
+  sizeBytes: number;
+  checksum: string;
+  uploadedBy?: string | null;
+  uploadedAt: string;
+  linkedSurfaceId?: string | null;
+  downloadUrl: string;
 }
 
 export interface PresenceState {
@@ -270,6 +285,7 @@ export interface RuntimeBootResult {
     avatarCustomizationEnabled: boolean;
     avatarFallbackCapsulesEnabled: boolean;
     hostControlsEnabled: boolean;
+    documentsEnabled: boolean;
     notesEnabled: boolean;
   };
 }
@@ -387,9 +403,86 @@ export async function bootRuntime(
       avatarCustomizationEnabled: healthFeatures.avatarCustomizationEnabled ?? false,
       avatarFallbackCapsulesEnabled: healthFeatures.avatarFallbackCapsulesEnabled ?? true,
       hostControlsEnabled: healthFeatures.hostControlsEnabled ?? true,
+      documentsEnabled: healthFeatures.documentsEnabled ?? true,
       notesEnabled: healthFeatures.notesEnabled ?? true
     }
   };
+}
+
+export async function listRoomDocuments(apiBaseUrl: string, roomId: string, sessionToken: string): Promise<RuntimeDocumentRecord[]> {
+  const response = await fetch(new URL(`/api/rooms/${roomId}/documents`, apiBaseUrl), {
+    headers: {
+      "authorization": `Bearer ${sessionToken}`
+    },
+    cache: "no-store"
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({})) as { reason?: string; error?: string };
+    throw new Error(`failed_to_list_documents:${response.status}:${payload.reason ?? payload.error ?? "unknown"}`);
+  }
+  return ((await response.json()) as { items: RuntimeDocumentRecord[] }).items;
+}
+
+export async function uploadRoomDocument(apiBaseUrl: string, roomId: string, sessionToken: string, file: File): Promise<RuntimeDocumentRecord> {
+  const form = new FormData();
+  form.set("document", file);
+  const response = await fetch(new URL(`/api/rooms/${roomId}/documents`, apiBaseUrl), {
+    method: "POST",
+    headers: {
+      "authorization": `Bearer ${sessionToken}`
+    },
+    body: form
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({})) as { reason?: string; error?: string };
+    throw new Error(`failed_to_upload_document:${response.status}:${payload.reason ?? payload.error ?? "unknown"}`);
+  }
+  return ((await response.json()) as { document: RuntimeDocumentRecord }).document;
+}
+
+export async function downloadRoomDocument(apiBaseUrl: string, document: RuntimeDocumentRecord, sessionToken: string): Promise<{ blob: Blob; filename: string }> {
+  const response = await fetch(new URL(document.downloadUrl, apiBaseUrl), {
+    headers: {
+      "authorization": `Bearer ${sessionToken}`
+    }
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({})) as { reason?: string; error?: string };
+    throw new Error(`failed_to_download_document:${response.status}:${payload.reason ?? payload.error ?? "unknown"}`);
+  }
+  const disposition = response.headers.get("content-disposition") ?? "";
+  const filename = disposition.match(/filename="([^"]+)"/)?.[1] ?? document.filename;
+  return { blob: await response.blob(), filename };
+}
+
+export async function deleteRoomDocument(apiBaseUrl: string, roomId: string, documentId: string, sessionToken: string): Promise<RuntimeDocumentRecord> {
+  const response = await fetch(new URL(`/api/rooms/${roomId}/documents/${documentId}`, apiBaseUrl), {
+    method: "DELETE",
+    headers: {
+      "authorization": `Bearer ${sessionToken}`
+    }
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({})) as { reason?: string; error?: string };
+    throw new Error(`failed_to_delete_document:${response.status}:${payload.reason ?? payload.error ?? "unknown"}`);
+  }
+  return ((await response.json()) as { document: RuntimeDocumentRecord }).document;
+}
+
+export async function selectRoomDocumentSurface(apiBaseUrl: string, roomId: string, documentId: string, surfaceId: string | null, sessionToken: string): Promise<RuntimeDocumentRecord> {
+  const response = await fetch(new URL(`/api/rooms/${roomId}/documents/${documentId}/surface`, apiBaseUrl), {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "authorization": `Bearer ${sessionToken}`
+    },
+    body: JSON.stringify({ surfaceId })
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({})) as { reason?: string; error?: string };
+    throw new Error(`failed_to_select_document_surface:${response.status}:${payload.reason ?? payload.error ?? "unknown"}`);
+  }
+  return ((await response.json()) as { document: RuntimeDocumentRecord }).document;
 }
 
 export async function fetchRoomNote(apiBaseUrl: string, roomId: string, scope: RuntimeNoteScope, sessionToken: string): Promise<RuntimeNoteRecord> {

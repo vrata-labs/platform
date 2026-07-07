@@ -312,6 +312,39 @@ canvas {
   background: rgba(0, 0, 0, 0.28);
 }
 
+.documents-panel {
+  margin-top: 14px;
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid rgba(95, 200, 255, 0.2);
+  border-radius: 14px;
+  background: rgba(15, 23, 42, 0.42);
+}
+
+.documents-panel[hidden] {
+  display: none;
+}
+
+.documents-title {
+  color: var(--accent);
+  font-size: 0.72rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+#document-upload-input,
+#document-select {
+  width: 100%;
+}
+
+.documents-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .avatar-sandbox {
   margin-top: 14px;
   display: grid;

@@ -92,6 +92,15 @@ async function createMultipartSceneBundleBody(input: { bundleId?: string; versio
   return { body: Buffer.concat(parts), contentType: `multipart/form-data; boundary=${boundary}` };
 }
 
+async function createMultipartDocumentBody(input: { filename: string; contentType: string; body: Buffer }): Promise<{ body: Buffer; contentType: string }> {
+  const boundary = `----vrata-doc-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const parts: Buffer[] = [];
+  parts.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="document"; filename="${input.filename}"\r\nContent-Type: ${input.contentType}\r\n\r\n`));
+  parts.push(input.body);
+  parts.push(Buffer.from(`\r\n--${boundary}--\r\n`));
+  return { body: Buffer.concat(parts), contentType: `multipart/form-data; boundary=${boundary}` };
+}
+
 test("api module exports server starter", async () => {
   process.env.VRATA_DISABLE_AUTOSTART = "1";
   const module = await import("./index.js");
@@ -835,6 +844,126 @@ test("room notes API persists shared and private notes with permissions", async 
     delete process.env.CONTROL_PLANE_ADMIN_TOKEN;
     delete process.env.STATE_TOKEN_SECRET;
     delete process.env.VRATA_DEV_ROLE_QUERY;
+  }
+});
+
+test("room documents API uploads lists downloads selects and soft-deletes with permissions", async () => {
+  process.env.VRATA_DISABLE_AUTOSTART = "1";
+  process.env.API_PORT = "4052";
+  process.env.CONTROL_PLANE_ADMIN_TOKEN = "test-admin-token";
+  process.env.STATE_TOKEN_SECRET = "documents-state-secret";
+  process.env.DOCUMENT_LOCAL_UPLOAD_ROOT = await mkdtemp(join(tmpdir(), "vrata-documents-"));
+  const module = await import("./index.js");
+  const server = module.startApiServer(4052);
+  const baseUrl = "http://127.0.0.1:4052";
+  const jsonHeaders = { "content-type": "application/json" };
+  const tokenFor = (role: RoomRole, participantId: string, roomId: string, permissions = getRoomPermissions(role)) => signRoomSessionToken({
+    tenantId: "demo-tenant",
+    roomId,
+    participantId,
+    displayName: participantId,
+    role,
+    roleSource: "trusted",
+    permissions,
+    sessionId: `${participantId}-session`,
+    iat: 100,
+    exp: 4_102_444_800,
+    jti: `${participantId}-jti`
+  }, "documents-state-secret");
+
+  try {
+    const roomResponse = await fetch(`${baseUrl}/api/rooms`, {
+      method: "POST",
+      headers: { ...jsonHeaders, "x-vrata-admin-token": "test-admin-token" },
+      body: JSON.stringify({ roomId: "documents-room", tenantId: "demo-tenant", templateId: "meeting-room-basic", name: "Documents Room" })
+    });
+    assert.equal(roomResponse.status, 201);
+    const hostToken = tokenFor("host", "documents-host", "documents-room");
+    const memberToken = tokenFor("member", "documents-member", "documents-room");
+    const guestToken = tokenFor("guest", "documents-guest", "documents-room");
+
+    const unsupported = await createMultipartDocumentBody({ filename: "page.html", contentType: "text/html", body: Buffer.from("<html></html>") });
+    const unsupportedResponse = await fetch(`${baseUrl}/api/rooms/documents-room/documents`, {
+      method: "POST",
+      headers: { "content-type": unsupported.contentType, "authorization": `Bearer ${hostToken}` },
+      body: new Uint8Array(unsupported.body)
+    });
+    assert.equal(unsupportedResponse.status, 400);
+    assert.equal(((await unsupportedResponse.json()) as { error?: string }).error, "unsupported_document_mime");
+
+    const pdfBytes = Buffer.from("%PDF-1.4\n1 0 obj\n<<>>\nendobj\n%%EOF\n");
+    const uploadBody = await createMultipartDocumentBody({ filename: "meeting.pdf", contentType: "application/pdf", body: pdfBytes });
+    const uploadResponse = await fetch(`${baseUrl}/api/rooms/documents-room/documents`, {
+      method: "POST",
+      headers: { "content-type": uploadBody.contentType, "authorization": `Bearer ${hostToken}` },
+      body: new Uint8Array(uploadBody.body)
+    });
+    assert.equal(uploadResponse.status, 201);
+    const uploaded = (await uploadResponse.json()) as { document: { documentId: string; filename: string; contentType: string; sizeBytes: number; downloadUrl: string } };
+    assert.equal(uploaded.document.filename, "meeting.pdf");
+    assert.equal(uploaded.document.contentType, "application/pdf");
+    assert.equal(uploaded.document.sizeBytes, pdfBytes.byteLength);
+
+    const listResponse = await fetch(`${baseUrl}/api/rooms/documents-room/documents`, {
+      headers: { "authorization": `Bearer ${memberToken}` }
+    });
+    assert.equal(listResponse.status, 200);
+    const listed = (await listResponse.json()) as { items: Array<{ documentId: string; filename: string }> };
+    assert.equal(listed.items.length, 1);
+    assert.equal(listed.items[0]?.filename, "meeting.pdf");
+
+    const guestDenied = await fetch(`${baseUrl}${uploaded.document.downloadUrl}`, {
+      headers: { "authorization": `Bearer ${guestToken}` }
+    });
+    assert.equal(guestDenied.status, 403);
+    assert.equal(((await guestDenied.json()) as { permission?: string }).permission, "document.download");
+
+    const memberDownload = await fetch(`${baseUrl}${uploaded.document.downloadUrl}`, {
+      headers: { "authorization": `Bearer ${memberToken}` }
+    });
+    assert.equal(memberDownload.status, 200);
+    assert.equal(Buffer.from(await memberDownload.arrayBuffer()).toString("utf8"), pdfBytes.toString("utf8"));
+
+    const surfaceResponse = await fetch(`${baseUrl}/api/rooms/documents-room/documents/${uploaded.document.documentId}/surface`, {
+      method: "POST",
+      headers: { ...jsonHeaders, "authorization": `Bearer ${hostToken}` },
+      body: JSON.stringify({ surfaceId: "debug-main" })
+    });
+    assert.equal(surfaceResponse.status, 200);
+    assert.equal(((await surfaceResponse.json()) as { document: { linkedSurfaceId?: string | null } }).document.linkedSurfaceId, "debug-main");
+
+    const deleteDenied = await fetch(`${baseUrl}/api/rooms/documents-room/documents/${uploaded.document.documentId}`, {
+      method: "DELETE",
+      headers: { "authorization": `Bearer ${memberToken}` }
+    });
+    assert.equal(deleteDenied.status, 403);
+
+    const deleteResponse = await fetch(`${baseUrl}/api/rooms/documents-room/documents/${uploaded.document.documentId}`, {
+      method: "DELETE",
+      headers: { "authorization": `Bearer ${hostToken}` }
+    });
+    assert.equal(deleteResponse.status, 200);
+
+    const listAfterDelete = await fetch(`${baseUrl}/api/rooms/documents-room/documents`, {
+      headers: { "authorization": `Bearer ${memberToken}` }
+    });
+    assert.equal(listAfterDelete.status, 200);
+    assert.deepEqual(((await listAfterDelete.json()) as { items: unknown[] }).items, []);
+
+    const metricsResponse = await fetch(`${baseUrl}/metrics`);
+    assert.equal(metricsResponse.status, 200);
+    const metricsText = await metricsResponse.text();
+    assert.match(metricsText, /vrata_documents_uploaded_total\{mime="application\/pdf",result="success"\} 1/);
+    assert.match(metricsText, /vrata_document_downloads_total 1/);
+    assert.match(metricsText, /vrata_document_permission_denied_total 2/);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    await rm(process.env.DOCUMENT_LOCAL_UPLOAD_ROOT!, { recursive: true, force: true });
+    delete process.env.VRATA_DISABLE_AUTOSTART;
+    delete process.env.API_PORT;
+    delete process.env.CONTROL_PLANE_ADMIN_TOKEN;
+    delete process.env.STATE_TOKEN_SECRET;
+    delete process.env.DOCUMENT_LOCAL_UPLOAD_ROOT;
   }
 });
 
@@ -1621,6 +1750,66 @@ test("private room access requires valid invite and records invite audit", async
     assert.equal(auditPayload.items.some((item) => item.action === "invite.revoke" && item.result === "allowed"), true);
     assert.equal(auditPayload.items.some((item) => item.action === "invite.use" && item.result === "allowed"), true);
     assert.equal(auditPayload.items.some((item) => item.action === "invite.use" && item.reason === "invite_expired"), true);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    delete process.env.VRATA_DISABLE_AUTOSTART;
+    delete process.env.API_PORT;
+    delete process.env.CONTROL_PLANE_ADMIN_TOKEN;
+    delete process.env.STATE_TOKEN_SECRET;
+  }
+});
+
+test("public room invite role grants trusted room permissions", async () => {
+  process.env.VRATA_DISABLE_AUTOSTART = "1";
+  process.env.API_PORT = "4053";
+  process.env.CONTROL_PLANE_ADMIN_TOKEN = "test-admin-token";
+  process.env.STATE_TOKEN_SECRET = "public-invite-role-secret";
+  const module = await import("./index.js");
+  const server = module.startApiServer(4053);
+  const baseUrl = "http://127.0.0.1:4053";
+
+  try {
+    const createRoomResponse = await fetch(`${baseUrl}/api/rooms`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-vrata-admin-token": "test-admin-token" },
+      body: JSON.stringify({
+        tenantId: "demo-tenant",
+        templateId: "meeting-room-basic",
+        name: "Public Host Invite"
+      })
+    });
+    assert.equal(createRoomResponse.ok, true);
+    const room = (await createRoomResponse.json()) as { roomId: string };
+
+    const noInviteState = await fetch(`${baseUrl}/api/tokens/state`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ roomId: room.roomId, participantId: "public-guest", displayName: "Public Guest" })
+    });
+    assert.equal(noInviteState.ok, true);
+    assert.equal(((await noInviteState.json()) as { role?: string }).role, "guest");
+
+    const createInviteResponse = await fetch(`${baseUrl}/api/rooms/${room.roomId}/invites`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-vrata-admin-token": "test-admin-token" },
+      body: JSON.stringify({ expiresInSeconds: 60, role: "host" })
+    });
+    assert.equal(createInviteResponse.ok, true);
+    const invite = (await createInviteResponse.json()) as { inviteLink: string };
+    const inviteToken = new URL(invite.inviteLink).searchParams.get("invite");
+    assert.ok(inviteToken);
+
+    const hostState = await fetch(`${baseUrl}/api/tokens/state`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ roomId: room.roomId, participantId: "public-host", displayName: "Public Host", inviteToken })
+    });
+    assert.equal(hostState.ok, true);
+    const hostPayload = (await hostState.json()) as { role?: string; permissions?: string[]; access?: { canManageRoomSession?: boolean } };
+    assert.equal(hostPayload.role, "host");
+    assert.equal(hostPayload.permissions?.includes("document.upload"), true);
+    assert.equal(hostPayload.permissions?.includes("document.delete"), true);
+    assert.equal(hostPayload.access?.canManageRoomSession, true);
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     delete process.env.VRATA_DISABLE_AUTOSTART;
