@@ -17,6 +17,8 @@ export type RoomPermission =
   | "remote-browser.open-url"
   | "remote-browser.input"
   | "remote-browser.stop"
+  | "markdown-board.view"
+  | "markdown-board.edit"
   | "document.view"
   | "document.download"
   | "document.upload"
@@ -31,6 +33,8 @@ export interface RoomAccessDebugState {
   permissions: RoomPermission[];
   canStartScreenShare: boolean;
   canCreateWhiteboard: boolean;
+  canCreateMarkdownBoard: boolean;
+  canEditMarkdownBoard: boolean;
   canCreateRemoteBrowser: boolean;
   canControlSurface: boolean;
   canConfigureSurfaceAudio: boolean;
@@ -40,8 +44,8 @@ export interface RoomAccessDebugState {
 const roomRoles = new Set<RoomRole>(["guest", "member", "host", "admin"]);
 
 const rolePermissions: Record<RoomRole, readonly RoomPermission[]> = {
-  guest: ["room.join", "audio.join", "surface.view", "notes.view"],
-  member: ["room.join", "audio.join", "surface.view", "surface.input", "whiteboard.draw", "document.view", "document.download", "notes.view", "notes.edit"],
+  guest: ["room.join", "audio.join", "surface.view", "markdown-board.view", "notes.view"],
+  member: ["room.join", "audio.join", "surface.view", "surface.input", "whiteboard.draw", "markdown-board.view", "markdown-board.edit", "document.view", "document.download", "notes.view", "notes.edit"],
   host: [
     "room.join",
     "audio.join",
@@ -58,6 +62,8 @@ const rolePermissions: Record<RoomRole, readonly RoomPermission[]> = {
     "remote-browser.open-url",
     "remote-browser.input",
     "remote-browser.stop",
+    "markdown-board.view",
+    "markdown-board.edit",
     "document.view",
     "document.download",
     "document.upload",
@@ -83,6 +89,8 @@ const rolePermissions: Record<RoomRole, readonly RoomPermission[]> = {
     "remote-browser.open-url",
     "remote-browser.input",
     "remote-browser.stop",
+    "markdown-board.view",
+    "markdown-board.edit",
     "document.view",
     "document.download",
     "document.upload",
@@ -123,6 +131,8 @@ export function createRoomAccessDebugState(role: RoomRole): RoomAccessDebugState
     permissions,
     canStartScreenShare: hasRoomPermission(permissions, "screen-share.start"),
     canCreateWhiteboard: hasRoomPermission(permissions, "surface.create-object") && hasRoomPermission(permissions, "whiteboard.draw"),
+    canCreateMarkdownBoard: hasRoomPermission(permissions, "surface.create-object") && hasRoomPermission(permissions, "markdown-board.edit"),
+    canEditMarkdownBoard: hasRoomPermission(permissions, "markdown-board.edit"),
     canCreateRemoteBrowser: hasRoomPermission(permissions, "surface.create-object") && hasRoomPermission(permissions, "remote-browser.open-url"),
     canControlSurface: hasRoomPermission(permissions, "surface.lock") || hasRoomPermission(permissions, "surface.stop-object"),
     canConfigureSurfaceAudio: hasRoomPermission(permissions, "surface.configure-audio"),

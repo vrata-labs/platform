@@ -357,7 +357,8 @@ canvas {
   gap: 6px;
 }
 
-.remote-browser-panel {
+.remote-browser-panel,
+.markdown-board-panel {
   margin-top: 14px;
   display: grid;
   gap: 8px;
@@ -367,7 +368,8 @@ canvas {
   background: rgba(15, 23, 42, 0.42);
 }
 
-.remote-browser-panel[hidden] {
+.remote-browser-panel[hidden],
+.markdown-board-panel[hidden] {
   display: none;
 }
 
@@ -427,6 +429,7 @@ canvas {
 .avatar-sandbox label,
 .avatar-sandbox-status,
 .remote-browser-panel label,
+.markdown-board-panel label,
 .host-controls-panel label,
 .audio-panel label,
 .surface-audio-toggle,
@@ -440,6 +443,7 @@ canvas {
 #media-surface-select,
 #avatar-preset-select,
 #remote-browser-url,
+#markdown-board-note-text,
 #host-participant-select,
 #mic-select,
 #speaker-select {
@@ -451,6 +455,12 @@ canvas {
   padding: 10px 12px;
   color: var(--text);
   background: rgba(255, 255, 255, 0.08);
+}
+
+#markdown-board-note-text {
+  min-height: 78px;
+  resize: vertical;
+  font: inherit;
 }
 
 #space-select option,
@@ -467,6 +477,7 @@ canvas {
 #media-surface-select:disabled,
 #avatar-preset-select:disabled,
 #remote-browser-url:disabled,
+#markdown-board-note-text:disabled,
 #host-participant-select:disabled,
 #mic-select:disabled,
 #speaker-select:disabled {

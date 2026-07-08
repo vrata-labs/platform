@@ -79,6 +79,8 @@ test("bootRuntime maps reserved avatar feature flags from health payload", async
           permissions: ["room.join", "audio.join", "surface.view"],
           canStartScreenShare: false,
           canCreateWhiteboard: false,
+          canCreateMarkdownBoard: false,
+          canEditMarkdownBoard: false,
           canControlSurface: false
         }
       }), { status: 200, headers: { "content-type": "application/json" } });

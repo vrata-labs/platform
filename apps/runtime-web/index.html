@@ -99,8 +99,21 @@
             <button id="draw-whiteboard" disabled aria-pressed="false">Draw: Off</button>
             <button id="clear-whiteboard" disabled>Clear Board</button>
             <button id="stop-whiteboard" disabled>Stop Board</button>
+            <button id="start-markdown-board" disabled>Start Sticky Board</button>
             <button id="start-share" disabled>Start Share</button>
             <button id="stop-share" disabled>Stop Share</button>
+          </div>
+          <div id="markdown-board-control" class="markdown-board-panel" hidden>
+            <label for="markdown-board-note-text">Sticky note Markdown</label>
+            <textarea id="markdown-board-note-text" rows="3" maxlength="2000" placeholder="# Decision\n- next step"></textarea>
+            <div class="controls compact-controls">
+              <button id="add-sticky-note" type="button" disabled>Add Note</button>
+              <button id="update-sticky-note" type="button" disabled>Update Last</button>
+              <button id="move-sticky-note" type="button" disabled>Move Last</button>
+              <button id="delete-sticky-note" type="button" disabled>Delete Last</button>
+              <button id="stop-markdown-board" type="button" disabled>Stop Sticky Board</button>
+            </div>
+            <div id="markdown-board-status" class="audio-device-status" role="status" aria-live="polite">Sticky board idle</div>
           </div>
           <div id="host-controls" class="host-controls-panel" hidden>
             <div class="host-controls-title">Host Controls</div>

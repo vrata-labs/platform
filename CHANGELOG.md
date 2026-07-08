@@ -27,6 +27,7 @@ Vrata uses SemVer: `MAJOR.MINOR.PATCH`. Until `1.0.0`, breaking changes can happ
 - Persistent runtime notes panel with room/private scopes, autosave/retry states, sanitized Markdown preview, notes API persistence, permissions, metrics, and audit events.
 - Room documents library with authenticated upload/list/download/delete, document permissions, object-storage metadata, surface selection hooks, runtime HUD controls, metrics, and audit events.
 - Personal room mode with self-service owner room creation, owner-only default access, invite guest support, personal workspace template, last pose persistence, runtime entry point, diagnostics, and metrics.
+- Markdown sticky board surface with room-state-synced notes, safe canvas Markdown rendering, move/update/delete actions, permissions, diagnostics, and e2e coverage.
 
 ### Known Limitations
 

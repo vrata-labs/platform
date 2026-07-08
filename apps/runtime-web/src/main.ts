@@ -5,6 +5,7 @@ import {
   DISABLED_EXTENSION_CARD_TYPE,
   EXTENSION_TEST_CARD_TYPE,
   LAPTOP_MEDIA_SURFACE_ID,
+  MARKDOWN_BOARD_OBJECT_TYPE,
   MISSING_CAPABILITY_EXTENSION_CARD_TYPE,
   REMOTE_BROWSER_OBJECT_TYPE,
   SCREEN_SHARE_OBJECT_TYPE,
@@ -17,6 +18,8 @@ import {
   hasRoomPermission,
   isMediaObjectTypeAvailable,
   type MediaObjectInstance,
+  type MarkdownBoardPatch,
+  type MarkdownBoardState,
   type RemoteBrowserErrorCode,
   type RemoteBrowserExecutorInputState,
   type RemoteBrowserObjectState,
@@ -61,6 +64,7 @@ import { createMediaSurfaceCommandClient } from "./media/media-surface-commands.
 import {
   activeMediaObjectForSurface as selectActiveMediaObjectForSurface,
   activeMediaObjectIdForSurface as selectActiveMediaObjectIdForSurface,
+  activeMarkdownBoardObjectForSurface as selectActiveMarkdownBoardObjectForSurface,
   activeRemoteBrowserObjectForSurface as selectActiveRemoteBrowserObjectForSurface,
   activeScreenShareObjectForSurface as selectActiveScreenShareObjectForSurface,
   activeWhiteboardObjectForSurface as selectActiveWhiteboardObjectForSurface,
@@ -70,6 +74,7 @@ import {
   screenShareObjectForMediaTrack
 } from "./media/media-object-state.js";
 import { routeMediaObjectSurfaceInput } from "./media/media-object-router.js";
+import { createMarkdownBoardObjectRuntime } from "./media/markdown-board-object.js";
 import { createRemoteBrowserObjectRuntime } from "./media/remote-browser-object.js";
 import {
   createRemoteBrowserVrKeyboardView,
@@ -307,6 +312,15 @@ const startWhiteboardButton = mustElement<HTMLButtonElement>("#start-whiteboard"
 const drawWhiteboardButton = mustElement<HTMLButtonElement>("#draw-whiteboard");
 const clearWhiteboardButton = mustElement<HTMLButtonElement>("#clear-whiteboard");
 const stopWhiteboardButton = mustElement<HTMLButtonElement>("#stop-whiteboard");
+const startMarkdownBoardButton = mustElement<HTMLButtonElement>("#start-markdown-board");
+const markdownBoardControlEl = mustElement<HTMLDivElement>("#markdown-board-control");
+const markdownBoardNoteText = mustElement<HTMLTextAreaElement>("#markdown-board-note-text");
+const addStickyNoteButton = mustElement<HTMLButtonElement>("#add-sticky-note");
+const updateStickyNoteButton = mustElement<HTMLButtonElement>("#update-sticky-note");
+const moveStickyNoteButton = mustElement<HTMLButtonElement>("#move-sticky-note");
+const deleteStickyNoteButton = mustElement<HTMLButtonElement>("#delete-sticky-note");
+const stopMarkdownBoardButton = mustElement<HTMLButtonElement>("#stop-markdown-board");
+const markdownBoardStatusEl = mustElement<HTMLDivElement>("#markdown-board-status");
 const startShareButton = mustElement<HTMLButtonElement>("#start-share");
 const stopShareButton = mustElement<HTMLButtonElement>("#stop-share");
 const hostControlsEl = mustElement<HTMLDivElement>("#host-controls");
@@ -683,6 +697,7 @@ const mediaSurfaceCommands = createMediaSurfaceCommandClient({
   createConnectionError: () => createFaultError("ConnectionError", "room_state_failed")
 });
 const whiteboardRuntimes = new Map<string, ReturnType<typeof createWhiteboardObjectRuntime>>();
+const markdownBoardRuntimes = new Map<string, ReturnType<typeof createMarkdownBoardObjectRuntime>>();
 const remoteBrowserRuntimes = new Map<string, ReturnType<typeof createRemoteBrowserObjectRuntime>>();
 
 function getWhiteboardRuntime(surfaceId: string): ReturnType<typeof createWhiteboardObjectRuntime> {
@@ -713,6 +728,29 @@ function getWhiteboardRuntime(surfaceId: string): ReturnType<typeof createWhiteb
 
 function currentWhiteboardObject(): MediaObjectInstance<WhiteboardState> | null {
   return activeWhiteboardObjectForSurface(selectedMediaSurfaceId) ?? findActiveWhiteboardObject();
+}
+
+function getMarkdownBoardRuntime(surfaceId: string): ReturnType<typeof createMarkdownBoardObjectRuntime> {
+  const existing = markdownBoardRuntimes.get(surfaceId);
+  if (existing) {
+    return existing;
+  }
+  const surface = getMediaSurfaceView(surfaceId);
+  const runtime = createMarkdownBoardObjectRuntime({
+    participantId,
+    surfaceId,
+    widthPx: surface.widthPx,
+    heightPx: surface.heightPx,
+    getPermissions: () => debugState.access.permissions,
+    applyTexture: (texture) => applySurfaceTexture(surfaceId, texture)
+  });
+  markdownBoardRuntimes.set(surfaceId, runtime);
+  retainedDisplayTextures.add(runtime.texture);
+  return runtime;
+}
+
+function currentMarkdownBoardObject(): MediaObjectInstance<MarkdownBoardState> | null {
+  return activeMarkdownBoardObjectForSurface(selectedMediaSurfaceId) ?? findActiveMarkdownBoardObject();
 }
 
 function getRemoteBrowserRuntime(surfaceId: string): ReturnType<typeof createRemoteBrowserObjectRuntime> {
@@ -778,6 +816,40 @@ function syncWhiteboardSurfaceTextures(): void {
       if (material instanceof THREE.MeshBasicMaterial && runtime.ownsTexture(material.map)) {
         applySurfaceTexture(surfaceId, null);
       }
+    }
+  }
+}
+
+function activeMarkdownBoardObjects(): Array<MediaObjectInstance<MarkdownBoardState>> {
+  if (!roomMediaObjects) {
+    return [];
+  }
+  const objects: Array<MediaObjectInstance<MarkdownBoardState>> = [];
+  for (const surfaceId of Object.keys(roomMediaObjects.surfaces)) {
+    const object = activeMarkdownBoardObjectForSurface(surfaceId);
+    if (object) {
+      objects.push(object);
+    }
+  }
+  return objects;
+}
+
+function syncMarkdownBoardSurfaceTextures(): void {
+  const activeSurfaceIds = new Set<string>();
+  for (const object of activeMarkdownBoardObjects()) {
+    if (!mediaSurfaceViews.has(object.surfaceId)) {
+      continue;
+    }
+    activeSurfaceIds.add(object.surfaceId);
+    getMarkdownBoardRuntime(object.surfaceId).render(object.state);
+  }
+  for (const [surfaceId, runtime] of markdownBoardRuntimes) {
+    if (activeSurfaceIds.has(surfaceId)) {
+      continue;
+    }
+    const material = getMediaSurfaceView(surfaceId).object.material;
+    if (material instanceof THREE.MeshBasicMaterial && runtime.ownsTexture(material.map)) {
+      applySurfaceTexture(surfaceId, null);
     }
   }
 }
@@ -1234,6 +1306,7 @@ function applyAccessDebug(access: NonNullable<RuntimeSessionControlResponse["acc
   startShareButton.disabled = !canUseScreenShareControl();
   stopShareButton.disabled = !canStopLocalScreenShare();
   syncWhiteboardControls();
+  syncMarkdownBoardControls();
   syncRemoteBrowserControls();
   syncSurfaceAudioControl();
   syncNotesAccessUi();
@@ -1405,6 +1478,10 @@ function activeWhiteboardObjectForSurface(surfaceId: string): MediaObjectInstanc
   return selectActiveWhiteboardObjectForSurface(roomMediaObjects, surfaceId);
 }
 
+function activeMarkdownBoardObjectForSurface(surfaceId: string): MediaObjectInstance<MarkdownBoardState> | null {
+  return selectActiveMarkdownBoardObjectForSurface(roomMediaObjects, surfaceId);
+}
+
 function activeRemoteBrowserObjectForSurface(surfaceId: string): MediaObjectInstance<RemoteBrowserObjectState> | null {
   return selectActiveRemoteBrowserObjectForSurface(roomMediaObjects, surfaceId);
 }
@@ -1445,6 +1522,10 @@ function findLocalActiveScreenShareObject(surfaceId?: string): MediaObjectInstan
 
 function findActiveWhiteboardObject(): MediaObjectInstance<WhiteboardState> | null {
   return findActiveObjectByType<WhiteboardState>(WHITEBOARD_OBJECT_TYPE);
+}
+
+function findActiveMarkdownBoardObject(): MediaObjectInstance<MarkdownBoardState> | null {
+  return findActiveObjectByType<MarkdownBoardState>(MARKDOWN_BOARD_OBJECT_TYPE);
 }
 
 function findActiveRemoteBrowserObject(): MediaObjectInstance<RemoteBrowserObjectState> | null {
@@ -1634,6 +1715,10 @@ function syncMediaObjectsDebugState(): void {
     xrPencilVisible: whiteboardPencils.some((pencil) => pencil.visible)
   };
   syncWhiteboardSurfaceTextures();
+  const activeMarkdownBoard = currentMarkdownBoardObject();
+  const activeMarkdownBoardRuntime = getMarkdownBoardRuntime(activeMarkdownBoard?.surfaceId ?? selectedMediaSurfaceId);
+  debugState.markdownBoard = activeMarkdownBoardRuntime.createDebugSnapshot(activeMarkdownBoard);
+  syncMarkdownBoardSurfaceTextures();
   syncRemoteBrowserSurfaceTextures();
   syncScreenShareRuntimeWithObjects();
   const activeScreenShare = activeScreenShareObjectForSurface(selectedMediaSurfaceId) ?? findActiveScreenShareObject();
@@ -1664,6 +1749,7 @@ function syncMediaObjectsDebugState(): void {
   startShareButton.disabled = !canUseScreenShareControl();
   stopShareButton.disabled = !canStopLocalScreenShare();
   syncWhiteboardControls();
+  syncMarkdownBoardControls();
   syncRemoteBrowserControls();
   syncSurfaceAudioControl();
   syncMediaSurfaceObjectIds();
@@ -2051,6 +2137,53 @@ function canUseWhiteboardDrawTool(): boolean {
   return hasRoomPermission(debugState.access.permissions, "whiteboard.draw")
     && roomStateConnected
     && Boolean(currentWhiteboardObject());
+}
+
+function canUseMarkdownBoardControl(): boolean {
+  const activeObject = activeMediaObjectForSurface(selectedMediaSurfaceId);
+  return debugState.access.canCreateMarkdownBoard
+    && roomStateConnected
+    && !activeObject
+    && surfaceAllowsObject(selectedMediaSurfaceId, MARKDOWN_BOARD_OBJECT_TYPE);
+}
+
+function canEditMarkdownBoardControl(): boolean {
+  return hasRoomPermission(debugState.access.permissions, "markdown-board.edit")
+    && roomStateConnected
+    && Boolean(currentMarkdownBoardObject());
+}
+
+function canStopMarkdownBoardControl(): boolean {
+  return hasRoomPermission(debugState.access.permissions, "surface.stop-object")
+    && roomStateConnected
+    && Boolean(activeMarkdownBoardObjectForSurface(selectedMediaSurfaceId));
+}
+
+function latestStickyNoteId(object: MediaObjectInstance<MarkdownBoardState> | null = currentMarkdownBoardObject()): string | null {
+  return object?.state.notes[object.state.notes.length - 1]?.noteId ?? null;
+}
+
+function syncMarkdownBoardControls(): void {
+  const canView = hasRoomPermission(debugState.access.permissions, "markdown-board.view");
+  const canEdit = canEditMarkdownBoardControl();
+  const board = currentMarkdownBoardObject();
+  startMarkdownBoardButton.hidden = !debugState.access.canCreateMarkdownBoard;
+  startMarkdownBoardButton.disabled = !canUseMarkdownBoardControl();
+  markdownBoardControlEl.hidden = !canView && !debugState.access.canCreateMarkdownBoard;
+  markdownBoardNoteText.disabled = !canEdit;
+  addStickyNoteButton.disabled = !canEdit;
+  updateStickyNoteButton.disabled = !canEdit || !latestStickyNoteId(board);
+  moveStickyNoteButton.disabled = !canEdit || !latestStickyNoteId(board);
+  deleteStickyNoteButton.disabled = !canEdit || !latestStickyNoteId(board);
+  stopMarkdownBoardButton.hidden = !hasRoomPermission(debugState.access.permissions, "surface.stop-object");
+  stopMarkdownBoardButton.disabled = !canStopMarkdownBoardControl();
+  if (!board) {
+    markdownBoardStatusEl.textContent = canView ? "Sticky board idle" : "View permission required";
+  } else if (debugState.markdownBoard.errorCode) {
+    markdownBoardStatusEl.textContent = `Sticky board issue: ${debugState.markdownBoard.errorCode}`;
+  } else {
+    markdownBoardStatusEl.textContent = `Sticky board active: ${board.state.notes.length} note${board.state.notes.length === 1 ? "" : "s"}`;
+  }
 }
 
 function syncWhiteboardControls(): void {
@@ -2870,6 +3003,7 @@ function syncMediaCapabilityControls(): void {
   startShareButton.hidden = !debugState.access.canStartScreenShare;
   stopShareButton.hidden = !debugState.access.canStartScreenShare;
   startWhiteboardButton.hidden = !debugState.access.canCreateWhiteboard;
+  startMarkdownBoardButton.hidden = !debugState.access.canCreateMarkdownBoard;
   clearWhiteboardButton.hidden = !hasRoomPermission(debugState.access.permissions, "whiteboard.clear");
   stopWhiteboardButton.hidden = !hasRoomPermission(debugState.access.permissions, "surface.stop-object");
   remoteBrowserControlEl.hidden = !debugState.access.canCreateRemoteBrowser && !activeRemoteBrowserObjectForSurface(selectedMediaSurfaceId) && !findActiveRemoteBrowserObject();
@@ -2881,6 +3015,10 @@ function syncMediaCapabilityControls(): void {
   if (!debugState.access.canCreateWhiteboard) {
     startWhiteboardButton.disabled = true;
     startWhiteboardButton.title = "Host role required";
+  }
+  if (!debugState.access.canCreateMarkdownBoard) {
+    startMarkdownBoardButton.disabled = true;
+    startMarkdownBoardButton.title = "Host role required";
   }
   if (!hasRoomPermission(debugState.access.permissions, "surface.stop-object")) {
     stopWhiteboardButton.disabled = true;
@@ -2897,6 +3035,7 @@ function syncMediaCapabilityControls(): void {
   }
   syncSurfaceAudioControl();
   syncWhiteboardControls();
+  syncMarkdownBoardControls();
   syncRemoteBrowserControls();
 }
 
@@ -4114,6 +4253,17 @@ const debugState = {
     lastPoint: null as null | { u: number; v: number },
     errorCode: null as string | null
   },
+  markdownBoard: {
+    objectId: null as string | null,
+    surfaceId: DEBUG_SURFACE_ID,
+    active: false,
+    noteCount: 0,
+    revision: 0,
+    localCanEdit: false,
+    lastInputEventId: null as string | null,
+    errorCode: null as string | null,
+    notes: [] as Array<{ noteId: string; text: string; x: number; y: number; width: number; height: number }>
+  },
   mediaCapabilities: browserMediaCapabilities,
   clientCompatibility,
   spatialAudioState: "idle",
@@ -4892,6 +5042,11 @@ refreshXrSessionDebug();
     createDisabledExtensionObject: (surfaceId?: string) => boolean;
     createScreenShareObject: (surfaceId?: string) => boolean;
     createWhiteboardObject: (surfaceId?: string) => boolean;
+    createMarkdownBoardObject: (surfaceId?: string) => boolean;
+    createStickyNote: (input?: { text?: string; x?: number; y?: number; surfaceId?: string }) => boolean;
+    updateStickyNote: (noteId?: string, text?: string, surfaceId?: string) => boolean;
+    moveStickyNote: (noteId?: string, x?: number, y?: number, surfaceId?: string) => boolean;
+    deleteStickyNote: (noteId?: string, surfaceId?: string) => boolean;
     createRemoteBrowserObject: (surfaceId?: string) => boolean;
     selectMediaSurface: (surfaceId: string) => boolean;
     openRemoteBrowser: (url?: string) => boolean;
@@ -4902,6 +5057,8 @@ refreshXrSessionDebug();
     sendStaleSurfaceTestCardPatch: () => boolean;
     sendStaleScreenSharePatch: () => boolean;
     sendStaleWhiteboardPatch: () => boolean;
+    sendStaleMarkdownBoardPatch: () => boolean;
+    sendDuplicateMarkdownBoardPatch: () => boolean;
     sendDuplicateWhiteboardPatch: () => boolean;
     clearWhiteboardObject: () => boolean;
     setDebugSurfaceMediaAudioEnabled: (enabled: boolean, surfaceId?: string) => boolean;
@@ -5036,6 +5193,69 @@ refreshXrSessionDebug();
       probeOnly: false
     });
   },
+  createMarkdownBoardObject: (surfaceId = selectedMediaSurfaceId) => {
+    return mediaSurfaceCommands.sendCreateObject({
+      commandId: mediaSurfaceCommands.createCommandId("markdown-board-create-test"),
+      surfaceId,
+      objectType: MARKDOWN_BOARD_OBJECT_TYPE,
+      probeOnly: false
+    });
+  },
+  createStickyNote: (input = {}) => {
+    const object = activeMarkdownBoardObjectForSurface(input.surfaceId ?? selectedMediaSurfaceId) ?? findActiveMarkdownBoardObject();
+    if (!object || !hasRoomPermission(debugState.access.permissions, "markdown-board.edit")) {
+      return false;
+    }
+    return mediaSurfaceCommands.sendPatchObjectState("markdown-board-create-note-test", {
+      surfaceId: object.surfaceId,
+      objectId: object.objectId,
+      expectedRevision: object.revision,
+      patch: getMarkdownBoardRuntime(object.surfaceId).createNotePatch({
+        text: input.text ?? "# Sticky note\n- synced",
+        x: input.x ?? 0.12,
+        y: input.y ?? 0.18
+      })
+    });
+  },
+  updateStickyNote: (noteId, text = "## Updated\nSafe Markdown", surfaceId = selectedMediaSurfaceId) => {
+    const object = activeMarkdownBoardObjectForSurface(surfaceId) ?? findActiveMarkdownBoardObject();
+    const targetNoteId = noteId ?? latestStickyNoteId(object);
+    if (!object || !targetNoteId || !hasRoomPermission(debugState.access.permissions, "markdown-board.edit")) {
+      return false;
+    }
+    return mediaSurfaceCommands.sendPatchObjectState("markdown-board-update-note-test", {
+      surfaceId: object.surfaceId,
+      objectId: object.objectId,
+      expectedRevision: object.revision,
+      patch: getMarkdownBoardRuntime(object.surfaceId).createUpdateNotePatch(targetNoteId, text)
+    });
+  },
+  moveStickyNote: (noteId, x = 0.54, y = 0.42, surfaceId = selectedMediaSurfaceId) => {
+    const object = activeMarkdownBoardObjectForSurface(surfaceId) ?? findActiveMarkdownBoardObject();
+    const targetNoteId = noteId ?? latestStickyNoteId(object);
+    if (!object || !targetNoteId || !hasRoomPermission(debugState.access.permissions, "markdown-board.edit")) {
+      return false;
+    }
+    return mediaSurfaceCommands.sendPatchObjectState("markdown-board-move-note-test", {
+      surfaceId: object.surfaceId,
+      objectId: object.objectId,
+      expectedRevision: object.revision,
+      patch: getMarkdownBoardRuntime(object.surfaceId).createMoveNotePatch(targetNoteId, x, y)
+    });
+  },
+  deleteStickyNote: (noteId, surfaceId = selectedMediaSurfaceId) => {
+    const object = activeMarkdownBoardObjectForSurface(surfaceId) ?? findActiveMarkdownBoardObject();
+    const targetNoteId = noteId ?? latestStickyNoteId(object);
+    if (!object || !targetNoteId || !hasRoomPermission(debugState.access.permissions, "markdown-board.edit")) {
+      return false;
+    }
+    return mediaSurfaceCommands.sendPatchObjectState("markdown-board-delete-note-test", {
+      surfaceId: object.surfaceId,
+      objectId: object.objectId,
+      expectedRevision: object.revision,
+      patch: getMarkdownBoardRuntime(object.surfaceId).createDeleteNotePatch(targetNoteId)
+    });
+  },
   createRemoteBrowserObject: (surfaceId = selectedMediaSurfaceId) => {
     return mediaSurfaceCommands.sendCreateObject({
       commandId: mediaSurfaceCommands.createCommandId("remote-browser-create-test"),
@@ -5144,6 +5364,41 @@ refreshXrSessionDebug();
           width: 2,
           points: [{ u: 0.25, v: 0.25, t: Date.now() }]
         }
+      }
+    });
+  },
+  sendStaleMarkdownBoardPatch: () => {
+    const object = activeMarkdownBoardObjectForSurface(selectedMediaSurfaceId) ?? findActiveMarkdownBoardObject();
+    if (!object) {
+      return false;
+    }
+    return mediaSurfaceCommands.sendPatchObjectState("stale-markdown-board-patch", {
+      surfaceId: object.surfaceId,
+      objectId: object.objectId,
+      expectedRevision: object.revision + 1,
+      patch: getMarkdownBoardRuntime(object.surfaceId).createNotePatch({
+        text: "# Stale note",
+        x: 0.2,
+        y: 0.2
+      })
+    });
+  },
+  sendDuplicateMarkdownBoardPatch: () => {
+    const object = activeMarkdownBoardObjectForSurface(selectedMediaSurfaceId) ?? findActiveMarkdownBoardObject();
+    if (!object || !object.state.lastInputEventId) {
+      return false;
+    }
+    return mediaSurfaceCommands.sendPatchObjectState("duplicate-markdown-board-patch", {
+      surfaceId: object.surfaceId,
+      objectId: object.objectId,
+      expectedRevision: object.revision,
+      patch: {
+        type: "create-note",
+        inputEventId: object.state.lastInputEventId,
+        noteId: `${participantId}:duplicate-note`,
+        text: "Duplicate",
+        x: 0.24,
+        y: 0.24
       }
     });
   },
@@ -7209,6 +7464,105 @@ async function stopWhiteboard(): Promise<void> {
   syncWhiteboardControls();
 }
 
+async function startMarkdownBoard(): Promise<void> {
+  if (!debugState.access.canCreateMarkdownBoard) {
+    debugState.access.lastDeniedPermission = "surface.create-object";
+    throw createFaultError("NotAllowedError", "markdown_board_forbidden");
+  }
+  if (startMarkdownBoardButton.disabled) {
+    return;
+  }
+  const result = await mediaSurfaceCommands.createMarkdownBoardObjectOnSurface(selectedMediaSurfaceId);
+  if (!result.accepted) {
+    debugState.mediaObjects.blockedReason = result.blockedReason ?? null;
+    throw new Error(`markdown_board_create_rejected:${result.blockedReason ?? "unknown"}`);
+  }
+  getMarkdownBoardRuntime(result.surfaceId ?? selectedMediaSurfaceId).clearError();
+  setStatus("Sticky board started. Add Markdown notes from the control panel.");
+  syncMarkdownBoardControls();
+}
+
+async function patchMarkdownBoard(patchFactory: (object: MediaObjectInstance<MarkdownBoardState>) => MarkdownBoardPatch, status: string): Promise<void> {
+  const object = currentMarkdownBoardObject();
+  if (!object) {
+    return;
+  }
+  if (!hasRoomPermission(debugState.access.permissions, "markdown-board.edit")) {
+    debugState.access.lastDeniedPermission = "markdown-board.edit";
+    throw createFaultError("NotAllowedError", "markdown_board_edit_forbidden");
+  }
+  const runtime = getMarkdownBoardRuntime(object.surfaceId);
+  const result = await mediaSurfaceCommands.patchMarkdownBoardObject(object.objectId, object.surfaceId, object.revision, patchFactory(object));
+  if (!result.accepted) {
+    debugState.mediaObjects.blockedReason = result.blockedReason ?? null;
+    throw new Error(`markdown_board_patch_rejected:${result.blockedReason ?? "unknown"}`);
+  }
+  runtime.clearError();
+  setStatus(status);
+  syncMarkdownBoardControls();
+}
+
+function stickyNoteTextValue(): string {
+  return markdownBoardNoteText.value.trim() || "# Note\n- Write Markdown here";
+}
+
+async function addStickyNote(): Promise<void> {
+  await patchMarkdownBoard((object) => getMarkdownBoardRuntime(object.surfaceId).createNotePatch({
+    text: stickyNoteTextValue(),
+    x: 0.08 + Math.min(0.48, object.state.notes.length * 0.06),
+    y: 0.16 + Math.min(0.34, object.state.notes.length * 0.04)
+  }), "Sticky note added");
+}
+
+async function updateLatestStickyNote(): Promise<void> {
+  await patchMarkdownBoard((object) => {
+    const noteId = latestStickyNoteId(object);
+    if (!noteId) {
+      throw new Error("markdown_board_note_missing");
+    }
+    return getMarkdownBoardRuntime(object.surfaceId).createUpdateNotePatch(noteId, stickyNoteTextValue());
+  }, "Sticky note updated");
+}
+
+async function moveLatestStickyNote(): Promise<void> {
+  await patchMarkdownBoard((object) => {
+    const note = object.state.notes[object.state.notes.length - 1];
+    if (!note) {
+      throw new Error("markdown_board_note_missing");
+    }
+    return getMarkdownBoardRuntime(object.surfaceId).createMoveNotePatch(note.noteId, Math.min(0.72, note.x + 0.12), Math.min(0.72, note.y + 0.1));
+  }, "Sticky note moved");
+}
+
+async function deleteLatestStickyNote(): Promise<void> {
+  await patchMarkdownBoard((object) => {
+    const noteId = latestStickyNoteId(object);
+    if (!noteId) {
+      throw new Error("markdown_board_note_missing");
+    }
+    return getMarkdownBoardRuntime(object.surfaceId).createDeleteNotePatch(noteId);
+  }, "Sticky note deleted");
+}
+
+async function stopMarkdownBoard(): Promise<void> {
+  const object = activeMarkdownBoardObjectForSurface(selectedMediaSurfaceId);
+  if (!object) {
+    return;
+  }
+  if (!hasRoomPermission(debugState.access.permissions, "surface.stop-object")) {
+    debugState.access.lastDeniedPermission = "surface.stop-object";
+    throw createFaultError("NotAllowedError", "markdown_board_stop_forbidden");
+  }
+  const result = await mediaSurfaceCommands.stopMarkdownBoardObject(object.objectId, object.surfaceId);
+  if (!result.accepted) {
+    debugState.mediaObjects.blockedReason = result.blockedReason ?? null;
+    throw new Error(`markdown_board_stop_rejected:${result.blockedReason ?? "unknown"}`);
+  }
+  getMarkdownBoardRuntime(object.surfaceId).clearError();
+  setStatus("Sticky board stopped");
+  syncMarkdownBoardControls();
+}
+
 async function openRemoteBrowser(rawUrl: string): Promise<void> {
   if (!hasRoomPermission(debugState.access.permissions, "remote-browser.open-url")) {
     debugState.access.lastDeniedPermission = "remote-browser.open-url";
@@ -7753,6 +8107,52 @@ stopWhiteboardButton.addEventListener("click", () => {
     runtime.setError(error instanceof Error ? error.message : "stop_failed");
     debugState.whiteboard.errorCode = runtime.createDebugSnapshot(object).errorCode;
     syncWhiteboardControls();
+  });
+});
+
+startMarkdownBoardButton.addEventListener("click", () => {
+  void startMarkdownBoard().catch((error: unknown) => {
+    console.error(error);
+    setStatus("Sticky board start failed");
+    const object = currentMarkdownBoardObject();
+    const runtime = getMarkdownBoardRuntime(object?.surfaceId ?? selectedMediaSurfaceId);
+    runtime.setError(error instanceof Error ? error.message : "start_failed");
+    debugState.markdownBoard.errorCode = runtime.createDebugSnapshot(object).errorCode;
+  });
+});
+
+addStickyNoteButton.addEventListener("click", () => {
+  void addStickyNote().catch((error: unknown) => {
+    console.error(error);
+    setStatus("Sticky note add failed");
+  });
+});
+
+updateStickyNoteButton.addEventListener("click", () => {
+  void updateLatestStickyNote().catch((error: unknown) => {
+    console.error(error);
+    setStatus("Sticky note update failed");
+  });
+});
+
+moveStickyNoteButton.addEventListener("click", () => {
+  void moveLatestStickyNote().catch((error: unknown) => {
+    console.error(error);
+    setStatus("Sticky note move failed");
+  });
+});
+
+deleteStickyNoteButton.addEventListener("click", () => {
+  void deleteLatestStickyNote().catch((error: unknown) => {
+    console.error(error);
+    setStatus("Sticky note delete failed");
+  });
+});
+
+stopMarkdownBoardButton.addEventListener("click", () => {
+  void stopMarkdownBoard().catch((error: unknown) => {
+    console.error(error);
+    setStatus("Sticky board stop failed");
   });
 });
 
@@ -8372,6 +8772,7 @@ async function main(): Promise<void> {
   syncMediaCapabilityControls();
   startShareButton.disabled = !canUseScreenShareControl();
   syncWhiteboardControls();
+  syncMarkdownBoardControls();
   stopShareButton.disabled = !canStopLocalScreenShare();
 
   if (browserMediaCapabilities.rtcPeerConnection && shouldStartPassiveMedia({

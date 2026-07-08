@@ -7,6 +7,7 @@ export const LAPTOP_MEDIA_SURFACE_ID = "laptop-screen";
 export const SURFACE_TEST_CARD_TYPE = "surface-test-card";
 export const SCREEN_SHARE_OBJECT_TYPE = "screen-share";
 export const WHITEBOARD_OBJECT_TYPE = "whiteboard";
+export const MARKDOWN_BOARD_OBJECT_TYPE = "markdown-board";
 export const REMOTE_BROWSER_OBJECT_TYPE = "remote-browser";
 export const EXTENSION_TEST_CARD_TYPE = "extension-test-card";
 export const MISSING_CAPABILITY_EXTENSION_CARD_TYPE = "missing-capability-extension-card";
@@ -15,6 +16,9 @@ export const WHITEBOARD_MAX_STROKES = 500;
 export const WHITEBOARD_MAX_POINTS_PER_STROKE = 256;
 export const WHITEBOARD_ALLOWED_COLORS = ["#111827", "#2563eb", "#dc2626"] as const;
 export const WHITEBOARD_ALLOWED_WIDTHS = [2, 4, 8] as const;
+export const MARKDOWN_BOARD_MAX_NOTES = 80;
+export const MARKDOWN_BOARD_MAX_TEXT_LENGTH = 2000;
+export const MARKDOWN_BOARD_ALLOWED_COLORS = ["#fde68a", "#bfdbfe", "#fecdd3", "#bbf7d0"] as const;
 
 export type MediaObjectType = typeof SURFACE_TEST_CARD_TYPE | typeof SCREEN_SHARE_OBJECT_TYPE | typeof WHITEBOARD_OBJECT_TYPE | typeof REMOTE_BROWSER_OBJECT_TYPE | typeof EXTENSION_TEST_CARD_TYPE | string;
 
@@ -28,7 +32,7 @@ export type MediaExtensionCapability =
   | "media.subscribe"
   | "remote.executor";
 
-export type MediaObjectStateKind = "surface-test-card" | "screen-share" | "whiteboard" | "remote-browser";
+export type MediaObjectStateKind = "surface-test-card" | "screen-share" | "whiteboard" | "markdown-board" | "remote-browser";
 
 export interface MediaObjectDefinition {
   objectType: MediaObjectType;
@@ -138,6 +142,23 @@ export const BUILTIN_MEDIA_EXTENSION_MANIFESTS: VrataMediaExtensionManifest[] = 
       stateKind: "whiteboard",
       requiredCapabilities: ["surface.render", "surface.input.pointer", "room.state.read", "room.state.write"],
       requiredPermissions: ["whiteboard.draw", "whiteboard.clear"],
+      supportedSurfaceKinds: ["wall", "table", "laptop", "floating", "custom"]
+    }]
+  },
+  {
+    id: "vrata.markdown-board",
+    version: "0.1.0",
+    displayName: "Markdown Sticky Board",
+    requiredCapabilities: ["surface.render", "room.state.read", "room.state.write"],
+    requiredPermissions: ["markdown-board.view", "markdown-board.edit"],
+    compatibility: VRATA_RUNTIME_EXTENSION_COMPATIBILITY,
+    entry: "internal:markdown-board",
+    objectTypes: [{
+      objectType: MARKDOWN_BOARD_OBJECT_TYPE,
+      displayName: "Markdown Sticky Board",
+      stateKind: "markdown-board",
+      requiredCapabilities: ["surface.render", "room.state.read", "room.state.write"],
+      requiredPermissions: ["markdown-board.view", "markdown-board.edit"],
       supportedSurfaceKinds: ["wall", "table", "laptop", "floating", "custom"]
     }]
   },
@@ -431,6 +452,29 @@ export interface WhiteboardState {
   lastInputEventId: string | null;
 }
 
+export type MarkdownBoardStatus = "active" | "locked" | "failed";
+export type MarkdownBoardNoteColor = typeof MARKDOWN_BOARD_ALLOWED_COLORS[number];
+
+export interface MarkdownBoardStickyNote {
+  noteId: string;
+  authorParticipantId: string;
+  text: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  color: MarkdownBoardNoteColor;
+  createdAtMs: number;
+  updatedAtMs: number;
+}
+
+export interface MarkdownBoardState {
+  status: MarkdownBoardStatus;
+  notes: MarkdownBoardStickyNote[];
+  revision: number;
+  lastInputEventId: string | null;
+}
+
 export type RemoteBrowserStatus = "idle" | "starting" | "loading" | "publishing" | "active" | "stopping" | "stopped" | "failed";
 
 export type RemoteBrowserErrorCode =
@@ -517,6 +561,12 @@ export type ScreenSharePatch =
 export type WhiteboardPatch =
   | { type: "append-stroke"; stroke: WhiteboardStroke; inputEventId: string }
   | { type: "clear"; inputEventId: string };
+
+export type MarkdownBoardPatch =
+  | { type: "create-note"; inputEventId: string; noteId: string; text: string; x: number; y: number; width?: number; height?: number; color?: MarkdownBoardNoteColor }
+  | { type: "update-note"; inputEventId: string; noteId: string; text: string }
+  | { type: "move-note"; inputEventId: string; noteId: string; x: number; y: number }
+  | { type: "delete-note"; inputEventId: string; noteId: string };
 
 export type RemoteBrowserPatch =
   | { type: "open-url"; url: string; inputEventId: string }

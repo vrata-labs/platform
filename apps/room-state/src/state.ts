@@ -1,6 +1,9 @@
 import {
   REMOTE_BROWSER_OBJECT_TYPE,
   SCREEN_SHARE_OBJECT_TYPE,
+  MARKDOWN_BOARD_ALLOWED_COLORS,
+  MARKDOWN_BOARD_MAX_NOTES,
+  MARKDOWN_BOARD_MAX_TEXT_LENGTH,
   WHITEBOARD_ALLOWED_COLORS,
   WHITEBOARD_ALLOWED_WIDTHS,
   WHITEBOARD_MAX_POINTS_PER_STROKE,
@@ -16,6 +19,9 @@ import {
   type MediaObjectCommandResult,
   type MediaObjectInstance,
   type MediaObjectStateKind,
+  type MarkdownBoardPatch,
+  type MarkdownBoardState,
+  type MarkdownBoardStickyNote,
   type RemoteBrowserErrorCode,
   type RemoteBrowserExecutorInputState,
   type RemoteBrowserMediaSourceRect,
@@ -256,6 +262,15 @@ function createWhiteboardState(): WhiteboardState {
   };
 }
 
+function createMarkdownBoardState(): MarkdownBoardState {
+  return {
+    status: "active",
+    notes: [],
+    revision: 0,
+    lastInputEventId: null
+  };
+}
+
 function createRemoteBrowserState(ownerParticipantId: string, surfaceId: string): RemoteBrowserObjectState {
   return {
     status: "idle",
@@ -265,12 +280,15 @@ function createRemoteBrowserState(ownerParticipantId: string, surfaceId: string)
   };
 }
 
-function createInitialMediaObjectState(stateKind: MediaObjectStateKind, ownerParticipantId: string, surfaceId: string): SurfaceTestCardState | ScreenShareObjectState | WhiteboardState | RemoteBrowserObjectState {
+function createInitialMediaObjectState(stateKind: MediaObjectStateKind, ownerParticipantId: string, surfaceId: string): SurfaceTestCardState | ScreenShareObjectState | WhiteboardState | MarkdownBoardState | RemoteBrowserObjectState {
   if (stateKind === "screen-share") {
     return createScreenShareState(ownerParticipantId, surfaceId);
   }
   if (stateKind === "whiteboard") {
     return createWhiteboardState();
+  }
+  if (stateKind === "markdown-board") {
+    return createMarkdownBoardState();
   }
   if (stateKind === "remote-browser") {
     return createRemoteBrowserState(ownerParticipantId, surfaceId);
@@ -594,6 +612,17 @@ function getWhiteboardPatchPermission(input: unknown): RoomPermission | null {
   return null;
 }
 
+function getMarkdownBoardPatchPermission(input: unknown): RoomPermission | null {
+  if (!input || typeof input !== "object") {
+    return null;
+  }
+  const patch = input as { type?: unknown };
+  if (patch.type === "create-note" || patch.type === "update-note" || patch.type === "move-note" || patch.type === "delete-note") {
+    return "markdown-board.edit";
+  }
+  return null;
+}
+
 function getRemoteBrowserPatchPermission(input: unknown): RoomPermission | null {
   if (!input || typeof input !== "object") {
     return null;
@@ -636,6 +665,135 @@ function reduceWhiteboardState(state: WhiteboardState, patch: WhiteboardPatch, p
     revision: state.revision + 1,
     lastInputEventId: patch.inputEventId
   };
+}
+
+function isMarkdownBoardInputEventId(input: unknown): input is string {
+  return typeof input === "string" && input.trim().length > 0;
+}
+
+function normalizeMarkdownBoardNoteId(input: unknown): string | null {
+  if (typeof input !== "string") {
+    return null;
+  }
+  const value = input.trim().slice(0, 120);
+  return value.length > 0 ? value : null;
+}
+
+function normalizeMarkdownBoardText(input: unknown): string | null {
+  if (typeof input !== "string") {
+    return null;
+  }
+  const value = input.replace(/\0/g, "").slice(0, MARKDOWN_BOARD_MAX_TEXT_LENGTH);
+  return value.trim().length > 0 ? value : null;
+}
+
+function normalizeMarkdownBoardColor(input: unknown): MarkdownBoardStickyNote["color"] {
+  return typeof input === "string" && (MARKDOWN_BOARD_ALLOWED_COLORS as readonly string[]).includes(input)
+    ? input as MarkdownBoardStickyNote["color"]
+    : "#fde68a";
+}
+
+function normalizeMarkdownBoardCoordinate(input: unknown): number | null {
+  if (typeof input !== "number" || !Number.isFinite(input)) {
+    return null;
+  }
+  return Number(Math.min(1, Math.max(0, input)).toFixed(4));
+}
+
+function normalizeMarkdownBoardSize(input: unknown, fallback: number): number {
+  if (typeof input !== "number" || !Number.isFinite(input)) {
+    return fallback;
+  }
+  return Number(Math.min(0.7, Math.max(0.12, input)).toFixed(4));
+}
+
+function createMarkdownBoardNote(patch: Extract<MarkdownBoardPatch, { type: "create-note" }>, participantId: string, nowMs: number): MarkdownBoardStickyNote | null {
+  const noteId = normalizeMarkdownBoardNoteId(patch.noteId);
+  const text = normalizeMarkdownBoardText(patch.text);
+  const x = normalizeMarkdownBoardCoordinate(patch.x);
+  const y = normalizeMarkdownBoardCoordinate(patch.y);
+  if (!noteId || !text || x === null || y === null) {
+    return null;
+  }
+  return {
+    noteId,
+    authorParticipantId: participantId,
+    text,
+    x,
+    y,
+    width: normalizeMarkdownBoardSize(patch.width, 0.24),
+    height: normalizeMarkdownBoardSize(patch.height, 0.18),
+    color: normalizeMarkdownBoardColor(patch.color),
+    createdAtMs: nowMs,
+    updatedAtMs: nowMs
+  };
+}
+
+function reduceMarkdownBoardState(state: MarkdownBoardState, patch: MarkdownBoardPatch, participantId: string, nowMs: number): MarkdownBoardState | null {
+  if (!isMarkdownBoardInputEventId(patch.inputEventId)) {
+    return null;
+  }
+  if (state.lastInputEventId === patch.inputEventId) {
+    return state;
+  }
+  if (patch.type === "create-note") {
+    const noteId = normalizeMarkdownBoardNoteId(patch.noteId);
+    if (!noteId || state.notes.length >= MARKDOWN_BOARD_MAX_NOTES || state.notes.some((note) => note.noteId === noteId)) {
+      return null;
+    }
+    const note = createMarkdownBoardNote(patch, participantId, nowMs);
+    if (!note) {
+      return null;
+    }
+    return {
+      ...state,
+      notes: [...state.notes, note],
+      revision: state.revision + 1,
+      lastInputEventId: patch.inputEventId
+    };
+  }
+  const noteId = normalizeMarkdownBoardNoteId(patch.noteId);
+  if (!noteId) {
+    return null;
+  }
+  const note = state.notes.find((item) => item.noteId === noteId);
+  if (!note) {
+    return null;
+  }
+  if (patch.type === "update-note") {
+    const text = normalizeMarkdownBoardText(patch.text);
+    if (!text) {
+      return null;
+    }
+    return {
+      ...state,
+      notes: state.notes.map((item) => item.noteId === noteId ? { ...item, text, updatedAtMs: nowMs } : item),
+      revision: state.revision + 1,
+      lastInputEventId: patch.inputEventId
+    };
+  }
+  if (patch.type === "move-note") {
+    const x = normalizeMarkdownBoardCoordinate(patch.x);
+    const y = normalizeMarkdownBoardCoordinate(patch.y);
+    if (x === null || y === null) {
+      return null;
+    }
+    return {
+      ...state,
+      notes: state.notes.map((item) => item.noteId === noteId ? { ...item, x, y, updatedAtMs: nowMs } : item),
+      revision: state.revision + 1,
+      lastInputEventId: patch.inputEventId
+    };
+  }
+  if (patch.type === "delete-note") {
+    return {
+      ...state,
+      notes: state.notes.filter((item) => item.noteId !== noteId),
+      revision: state.revision + 1,
+      lastInputEventId: patch.inputEventId
+    };
+  }
+  return null;
 }
 
 function reduceScreenShareState(current: ScreenShareObjectState, patch: ScreenSharePatch, nowMs: number): ScreenShareObjectState {
@@ -912,7 +1070,7 @@ export function createMediaObject(state: RoomState, participantId: string, input
   }
 
   const objectState = createInitialMediaObjectState(definition.stateKind, participantId, input.surfaceId);
-  const object: MediaObjectInstance<SurfaceTestCardState | ScreenShareObjectState | WhiteboardState | RemoteBrowserObjectState> = {
+  const object: MediaObjectInstance<SurfaceTestCardState | ScreenShareObjectState | WhiteboardState | MarkdownBoardState | RemoteBrowserObjectState> = {
     objectId: input.objectId,
     type: input.objectType,
     roomId: state.roomId,
@@ -1080,6 +1238,52 @@ export function patchMediaObjectState(state: RoomState, participantId: string, i
       return rejectMediaObjectCommand(state, { commandId: input.commandId, role: access.role, permission, blockedReason: "invalid-patch", surfaceId: input.surfaceId, objectId: input.objectId, objectType: object.type, revision: object.revision });
     }
     const nextObject: MediaObjectInstance<WhiteboardState> = {
+      ...object,
+      state: nextState,
+      status: nextState.status === "failed" ? "failed" : "active",
+      revision: object.revision + 1,
+      updatedAtMs: input.nowMs
+    };
+    const nextMediaObjects: RoomMediaObjectsState = {
+      surfaces: mediaObjects.surfaces,
+      objects: {
+        ...mediaObjects.objects,
+        [input.objectId]: nextObject
+      }
+    };
+    return {
+      room: { ...state, mediaObjects: nextMediaObjects },
+      result: createMediaObjectCommandResult({
+        accepted: true,
+        commandId: input.commandId,
+        role: access.role,
+        permission,
+        blockedReason: null,
+        surfaceId: input.surfaceId,
+        objectId: input.objectId,
+        objectType: object.type,
+        revision: nextObject.revision
+      })
+    };
+  }
+  if (stateKind === "markdown-board") {
+    permission = getMarkdownBoardPatchPermission(input.patch) ?? "markdown-board.edit";
+    if (!hasRoomPermission(access.permissions, permission)) {
+      return rejectMediaObjectCommand(state, { commandId: input.commandId, role: access.role, permission, blockedReason: "missing-permission", surfaceId: input.surfaceId, objectId: input.objectId, objectType: object.type, revision: object.revision });
+    }
+    const currentState = object.state as MarkdownBoardState;
+    const patch = input.patch as MarkdownBoardPatch;
+    if (!patch || typeof patch !== "object" || !isMarkdownBoardInputEventId(patch.inputEventId)) {
+      return rejectMediaObjectCommand(state, { commandId: input.commandId, role: access.role, permission, blockedReason: "invalid-patch", surfaceId: input.surfaceId, objectId: input.objectId, objectType: object.type, revision: object.revision });
+    }
+    if (currentState.lastInputEventId === patch.inputEventId) {
+      return rejectMediaObjectCommand(state, { commandId: input.commandId, role: access.role, permission, blockedReason: "duplicate-input-event", surfaceId: input.surfaceId, objectId: input.objectId, objectType: object.type, revision: object.revision });
+    }
+    const nextState = reduceMarkdownBoardState(currentState, patch, participantId, input.nowMs);
+    if (!nextState) {
+      return rejectMediaObjectCommand(state, { commandId: input.commandId, role: access.role, permission, blockedReason: "invalid-patch", surfaceId: input.surfaceId, objectId: input.objectId, objectType: object.type, revision: object.revision });
+    }
+    const nextObject: MediaObjectInstance<MarkdownBoardState> = {
       ...object,
       state: nextState,
       status: nextState.status === "failed" ? "failed" : "active",

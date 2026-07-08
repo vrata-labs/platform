@@ -333,6 +333,74 @@ test("whiteboard commands append and clear strokes through authoritative room st
   assert.equal(payload.room.mediaObjects.objects[created.objectId ?? ""].state.strokes.length, 0);
 });
 
+test("markdown board commands sync sticky note create move and delete", () => {
+  const server = createRoomStateServer();
+  const memberSocket = createSocket();
+  connectParticipant(server, "demo-room", "host", createSocket() as never, { role: "host" });
+  connectParticipant(server, "demo-room", "member", memberSocket as never, { role: "member" });
+  connectParticipant(server, "demo-room", "guest", createSocket() as never, { role: "guest" });
+
+  const created = applyMediaObjectCreateCommand(server, "demo-room", "host", {
+    commandId: "cmd-create-markdown-board",
+    surfaceId: "debug-main",
+    objectType: "markdown-board"
+  });
+  assert.equal(created.accepted, true);
+  assert.equal(created.objectType, "markdown-board");
+
+  const added = applyMediaObjectPatchCommand(server, "demo-room", "member", {
+    commandId: "cmd-add-note",
+    surfaceId: "debug-main",
+    objectId: created.objectId ?? "",
+    expectedRevision: 0,
+    patch: {
+      type: "create-note",
+      inputEventId: "member:note:create:1",
+      noteId: "note-1",
+      text: "# Hello\n<script>alert(1)</script>",
+      x: 0.2,
+      y: 0.3
+    }
+  });
+  assert.equal(added.accepted, true);
+  assert.equal(added.permission, "markdown-board.edit");
+  assert.equal((server.rooms.get("demo-room")?.mediaObjects.objects[created.objectId ?? ""]?.state as { notes?: unknown[] } | undefined)?.notes?.length, 1);
+
+  const denied = applyMediaObjectPatchCommand(server, "demo-room", "guest", {
+    commandId: "cmd-guest-note",
+    surfaceId: "debug-main",
+    objectId: created.objectId ?? "",
+    expectedRevision: 1,
+    patch: { type: "move-note", inputEventId: "guest:note:move:1", noteId: "note-1", x: 0.5, y: 0.5 }
+  });
+  assert.equal(denied.accepted, false);
+  assert.equal(denied.permission, "markdown-board.edit");
+
+  const moved = applyMediaObjectPatchCommand(server, "demo-room", "member", {
+    commandId: "cmd-move-note",
+    surfaceId: "debug-main",
+    objectId: created.objectId ?? "",
+    expectedRevision: 1,
+    patch: { type: "move-note", inputEventId: "member:note:move:1", noteId: "note-1", x: 0.6, y: 0.4 }
+  });
+  assert.equal(moved.accepted, true);
+  assert.equal(moved.revision, 2);
+
+  const deleted = applyMediaObjectPatchCommand(server, "demo-room", "member", {
+    commandId: "cmd-delete-note",
+    surfaceId: "debug-main",
+    objectId: created.objectId ?? "",
+    expectedRevision: 2,
+    patch: { type: "delete-note", inputEventId: "member:note:delete:1", noteId: "note-1" }
+  });
+  assert.equal(deleted.accepted, true);
+  assert.equal((server.rooms.get("demo-room")?.mediaObjects.objects[created.objectId ?? ""]?.state as { notes?: unknown[] } | undefined)?.notes?.length, 0);
+
+  const payload = JSON.parse(memberSocket.sent[memberSocket.sent.length - 1]!);
+  assert.equal(payload.type, "room_state");
+  assert.equal(payload.room.mediaObjects.objects[created.objectId ?? ""].state.notes.length, 0);
+});
+
 test("surface media audio command is admin-only and broadcasts accepted changes", () => {
   const server = createRoomStateServer();
   const hostSocket = createSocket();
