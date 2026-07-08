@@ -509,6 +509,7 @@ test("personal room mode opens owner room, restores pose, and allows invite gues
     }, guestId);
     const guestPage = await guestContext.newPage();
     await guestPage.goto(e2eRoomLink(invite.inviteLink));
+    await completeGuestOnboarding(guestPage, "Personal Guest");
     await expect(guestPage.locator("#status-line")).toContainText("Joined as", { timeout: 10000 });
     await expect.poll(async () => guestPage.evaluate(() => {
       const debug = (window as Window & { __VRATA_DEBUG__?: { access?: { role?: string }; personalRoom?: { isOwner?: boolean } } }).__VRATA_DEBUG__;
