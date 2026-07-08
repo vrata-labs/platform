@@ -300,9 +300,12 @@ test("persistent notes panel autosaves markdown and reloads safely", async ({ pa
   await page.reload();
   await completeGuestOnboarding(page, "Notes Member", true);
   await expect(page.locator("#notes-editor")).toHaveValue(retriedNote, { timeout: 10000 });
-  const debug = await page.evaluate(() => (window as Window & { __VRATA_DEBUG__?: { notes?: { contentLength?: number; saveState?: string } } }).__VRATA_DEBUG__);
-  expect(debug?.notes?.contentLength).toBe(retriedNote.length);
-  expect(debug?.notes?.saveState).toMatch(/ready|saved/);
+  await expect.poll(async () => page.evaluate(() => (window as Window & { __VRATA_DEBUG__?: { notes?: { contentLength?: number } } }).__VRATA_DEBUG__?.notes?.contentLength ?? 0), {
+    timeout: 10000
+  }).toBe(retriedNote.length);
+  await expect.poll(async () => page.evaluate(() => (window as Window & { __VRATA_DEBUG__?: { notes?: { saveState?: string } } }).__VRATA_DEBUG__?.notes?.saveState ?? ""), {
+    timeout: 10000
+  }).toMatch(/ready|saved/);
 });
 
 test("room documents library uploads downloads selects and deletes PDF", async ({ page, request }) => {
@@ -334,16 +337,28 @@ test("room documents library uploads downloads selects and deletes PDF", async (
   await expect.poll(async () => page.locator("#document-upload-input").evaluate((input: HTMLInputElement) => input.files?.[0]?.name ?? ""), {
     timeout: 5000
   }).toBe("meeting.pdf");
+  await expect(page.locator("#document-upload-button")).toBeEnabled({ timeout: 10000 });
   const uploadPromise = page.waitForResponse((response) =>
     response.request().method() === "POST" && response.url().endsWith(`/api/rooms/${room.roomId}/documents`)
   );
-  await page.click("#document-upload-button");
+  await page.locator("#document-upload-button").click();
   const uploadResponse = await uploadPromise;
   expect(uploadResponse.status()).toBe(201);
   await expect(page.locator("#document-select")).toContainText("meeting.pdf");
 
+  const surfaceSelectionPromise = page.waitForResponse((response) =>
+    response.request().method() === "POST" && response.url().includes(`/api/rooms/${room.roomId}/documents/`) && response.url().endsWith("/surface")
+  );
   await page.click("#document-surface-button");
-  await expect(page.locator("#document-status")).toContainText("Document selected for surface: meeting.pdf", { timeout: 10000 });
+  const surfaceSelectionResponse = await surfaceSelectionPromise;
+  expect(surfaceSelectionResponse.ok()).toBeTruthy();
+  const surfaceSelection = (await surfaceSelectionResponse.json()) as { document: { filename: string; linkedSurfaceId: string | null } };
+  expect(surfaceSelection.document.filename).toBe("meeting.pdf");
+  expect(surfaceSelection.document.linkedSurfaceId).toBeTruthy();
+  await expect.poll(async () => page.evaluate(() => {
+    const debug = (window as Window & { __VRATA_DEBUG__?: { documents?: { selectedSurfaceId?: string | null } } }).__VRATA_DEBUG__;
+    return debug?.documents?.selectedSurfaceId ?? null;
+  }), { timeout: 10000 }).toBe(surfaceSelection.document.linkedSurfaceId);
 
   const memberPage = await page.context().newPage();
   try {
@@ -375,6 +390,9 @@ test("room documents library uploads downloads selects and deletes PDF", async (
     const downloadResponse = await downloadPromise;
     expect(downloadResponse.ok()).toBeTruthy();
     expect(downloadResponse.headers()["content-disposition"]).toContain('filename="meeting.pdf"');
+    await expect.poll(async () => memberPage.evaluate(() => (window as Window & { __VRATA_DOCUMENT_DOWNLOADS__?: Array<{ filename: string; href: string }> }).__VRATA_DOCUMENT_DOWNLOADS__?.length ?? 0), {
+      timeout: 10000
+    }).toBe(1);
     const downloads = await memberPage.evaluate(() => (window as Window & { __VRATA_DOCUMENT_DOWNLOADS__?: Array<{ filename: string; href: string }> }).__VRATA_DOCUMENT_DOWNLOADS__ ?? []);
     expect(downloads[0]?.filename).toBe("meeting.pdf");
     expect(downloads[0]?.href).toContain("blob:");
@@ -391,8 +409,14 @@ test("room documents library uploads downloads selects and deletes PDF", async (
     await guestPage.close();
   }
 
+  const deletePromise = page.waitForResponse((response) =>
+    response.request().method() === "DELETE" && response.url().includes(`/api/rooms/${room.roomId}/documents/`)
+  );
   await page.click("#document-delete-button");
-  await expect(page.locator("#document-status")).toContainText("Document deleted: meeting.pdf", { timeout: 10000 });
+  const deleteResponse = await deletePromise;
+  expect(deleteResponse.ok()).toBeTruthy();
+  const deletePayload = (await deleteResponse.json()) as { document: { filename: string } };
+  expect(deletePayload.document.filename).toBe("meeting.pdf");
   await expect(page.locator("#document-select")).toContainText("No documents");
 });
 
