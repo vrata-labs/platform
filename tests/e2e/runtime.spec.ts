@@ -420,6 +420,82 @@ test("room documents library uploads downloads selects and deletes PDF", async (
   await expect(page.locator("#document-select")).toContainText("No documents");
 });
 
+test("personal room mode opens owner room, restores pose, and allows invite guest", async ({ page, request, browser }) => {
+  const ownerId = `owner-e2e-${Date.now()}`;
+  await page.addInitScript((id) => {
+    localStorage.setItem("vrata.participantId", id);
+    localStorage.setItem("vrata.displayName", "Personal Owner");
+  }, ownerId);
+
+  await page.goto("/rooms/demo-room");
+  await expect(page.locator("#open-personal-room")).toBeVisible({ timeout: 10000 });
+  await page.click("#open-personal-room");
+  await page.waitForURL(/\/rooms\/personal-[a-f0-9]{16}$/,{ timeout: 15000 });
+  await expect(page.locator("#status-line")).toContainText("Joined as", { timeout: 10000 });
+
+  const roomId = new URL(page.url()).pathname.split("/").filter(Boolean)[1];
+  expect(roomId).toMatch(/^personal-[a-f0-9]{16}$/);
+  await expect.poll(async () => page.evaluate(() => {
+    const debug = (window as Window & { __VRATA_DEBUG__?: { personalRoom?: { roomType?: string; isOwner?: boolean } } }).__VRATA_DEBUG__;
+    return debug?.personalRoom ?? null;
+  }), { timeout: 10000 }).toMatchObject({ roomType: "personal", isOwner: true });
+
+  const denied = await request.post("/api/tokens/state", {
+    data: { roomId, participantId: `other-${ownerId}`, displayName: "Other" }
+  });
+  expect(denied.status()).toBe(403);
+  expect(((await denied.json()) as { reason?: string }).reason).toBe("invite_required");
+
+  const ownerTokenResponse = await request.post("/api/tokens/state", {
+    data: { roomId, participantId: ownerId, displayName: "Personal Owner" }
+  });
+  expect(ownerTokenResponse.ok()).toBeTruthy();
+  const ownerToken = ((await ownerTokenResponse.json()) as { token: string }).token;
+
+  const savePoseResponse = await request.put(`/api/rooms/${roomId}/personal-state`, {
+    headers: { "authorization": `Bearer ${ownerToken}` },
+    data: { lastPose: { position: { x: 2.5, y: 0, z: 3.25 }, yaw: 0.4, pitch: -0.1 } }
+  });
+  expect(savePoseResponse.ok()).toBeTruthy();
+
+  await page.reload();
+  await expect(page.locator("#status-line")).toContainText("Joined as", { timeout: 10000 });
+  await expect.poll(async () => page.evaluate(() => {
+    const debug = (window as Window & { __VRATA_DEBUG__?: { personalRoom?: { lastPoseRestored?: boolean }; localPose?: { root?: { x?: number; z?: number; yaw?: number } } } }).__VRATA_DEBUG__;
+    return {
+      restored: debug?.personalRoom?.lastPoseRestored ?? false,
+      x: Math.round((debug?.localPose?.root?.x ?? 0) * 100) / 100,
+      z: Math.round((debug?.localPose?.root?.z ?? 0) * 100) / 100,
+      yaw: Math.round((debug?.localPose?.root?.yaw ?? 0) * 10) / 10
+    };
+  }), { timeout: 10000 }).toEqual({ restored: true, x: 2.5, z: 3.25, yaw: 0.4 });
+
+  const inviteResponse = await request.post(`/api/rooms/${roomId}/invites`, {
+    headers: { "authorization": `Bearer ${ownerToken}` },
+    data: { expiresInSeconds: 300, role: "guest" }
+  });
+  expect(inviteResponse.ok()).toBeTruthy();
+  const invite = (await inviteResponse.json()) as { inviteLink: string };
+
+  const guestContext = await browser.newContext();
+  try {
+    const guestId = `guest-${ownerId}`;
+    await guestContext.addInitScript((id) => {
+      localStorage.setItem("vrata.participantId", id);
+      localStorage.setItem("vrata.displayName", "Personal Guest");
+    }, guestId);
+    const guestPage = await guestContext.newPage();
+    await guestPage.goto(e2eRoomLink(invite.inviteLink));
+    await expect(guestPage.locator("#status-line")).toContainText("Joined as", { timeout: 10000 });
+    await expect.poll(async () => guestPage.evaluate(() => {
+      const debug = (window as Window & { __VRATA_DEBUG__?: { access?: { role?: string }; personalRoom?: { isOwner?: boolean } } }).__VRATA_DEBUG__;
+      return { role: debug?.access?.role ?? null, isOwner: debug?.personalRoom?.isOwner ?? true };
+    }), { timeout: 10000 }).toEqual({ role: "guest", isOwner: false });
+  } finally {
+    await guestContext.close();
+  }
+});
+
 test("private room opens only through a valid invite link", async ({ page, request }) => {
   const room = await createPrivateRoom(request, `Private E2E ${Date.now()}`);
 

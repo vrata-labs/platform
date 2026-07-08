@@ -228,7 +228,7 @@ function render(): void {
       const item = document.createElement("li");
       const inspect = document.createElement("button");
       inspect.type = "button";
-      inspect.textContent = `${room.name} (${room.templateId}) [${room.visibility ?? "public"}] status:${roomStatusLabel(room)} ${roomSceneBundleLabel(room)}${room.assetIds?.length ? ` assets:${room.assetIds.length}` : ""}${room.theme ? ` theme:${room.theme.primaryColor}` : ""}`;
+      inspect.textContent = `${room.name} (${room.templateId}) type:${room.roomType ?? "standard"} [${room.visibility ?? "public"}] status:${roomStatusLabel(room)} ${roomSceneBundleLabel(room)}${room.assetIds?.length ? ` assets:${room.assetIds.length}` : ""}${room.theme ? ` theme:${room.theme.primaryColor}` : ""}`;
       inspect.addEventListener("click", () => {
         void selectRoom(room);
       });

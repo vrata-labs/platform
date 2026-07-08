@@ -26,7 +26,9 @@ import {
   type RoomNoteScope,
   type RoomInviteRecord,
   type RoomRecord,
+  type RoomPersonalState,
   type RoomSessionControlState,
+  type RoomType,
   type RoomVisibility,
   type RuntimeDiagnosticRecord,
   type TenantRecord,
@@ -37,6 +39,8 @@ interface RoomManifest {
   schemaVersion: number;
   tenantId: string;
   roomId: string;
+  roomType: RoomType;
+  ownerParticipantId?: string | null;
   template: string;
   sceneBundle?: {
     url: string;
@@ -337,7 +341,11 @@ const metrics = {
   documentStorageBytesTotal: new Map<string, number>(),
   documentPermissionDeniedTotal: 0,
   documentDeletesTotal: 0,
-  documentSurfaceSelectionsTotal: 0
+  documentSurfaceSelectionsTotal: 0,
+  personalRoomsCreatedTotal: 0,
+  personalRoomOpensTotal: new Map<string, number>(),
+  personalRoomAccessDeniedTotal: new Map<string, number>(),
+  personalStateSaveFailuresTotal: new Map<string, number>()
 };
 
 function isEnabledEnvValue(value: string | undefined): boolean | null {
@@ -392,6 +400,10 @@ export function isNotesFeatureEnabled(env: NodeJS.ProcessEnv = process.env): boo
 
 export function isDocumentsFeatureEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   return isEnabledEnvValue(env.FEATURE_DOCUMENTS) ?? true;
+}
+
+export function isPersonalRoomsFeatureEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return isEnabledEnvValue(env.FEATURE_PERSONAL_ROOMS) ?? true;
 }
 
 function isSceneBundleUploadEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -630,6 +642,8 @@ function defaultManifest(roomId: string, request?: IncomingMessage): RoomManifes
     schemaVersion: 1,
     tenantId: "demo-tenant",
     roomId,
+    roomType: "standard",
+    ownerParticipantId: null,
     template: "meeting-room-basic",
     sceneBundle: undefined,
     realtime: {
@@ -969,6 +983,8 @@ async function buildManifest(roomId: string, request?: IncomingMessage): Promise
     schemaVersion: 1,
     tenantId: room.tenantId,
     roomId: room.roomId,
+    roomType: room.roomType ?? "standard",
+    ownerParticipantId: room.ownerParticipantId ?? null,
     template: room.templateId,
     sceneBundle: room.sceneBundleUrl ? { url: room.sceneBundleUrl } : undefined,
     realtime: {
@@ -1192,6 +1208,18 @@ async function apiMetricsText(storage: Awaited<typeof storagePromise>): Promise<
     "# HELP vrata_room_creation_failures_total Room creation failures by reason.",
     "# TYPE vrata_room_creation_failures_total counter",
     ...Array.from(metrics.roomCreationFailuresTotal.entries()).map(([reason, count]) => formatMetricLine("vrata_room_creation_failures_total", count, { reason })),
+    "# HELP vrata_personal_rooms_created_total Personal rooms created through the self-service runtime flow.",
+    "# TYPE vrata_personal_rooms_created_total counter",
+    formatMetricLine("vrata_personal_rooms_created_total", metrics.personalRoomsCreatedTotal),
+    "# HELP vrata_personal_room_opens_total Personal room open requests by result.",
+    "# TYPE vrata_personal_room_opens_total counter",
+    ...Array.from(metrics.personalRoomOpensTotal.entries()).map(([result, count]) => formatMetricLine("vrata_personal_room_opens_total", count, { result })),
+    "# HELP vrata_personal_room_access_denied_total Personal room access denials by reason.",
+    "# TYPE vrata_personal_room_access_denied_total counter",
+    ...Array.from(metrics.personalRoomAccessDeniedTotal.entries()).map(([reason, count]) => formatMetricLine("vrata_personal_room_access_denied_total", count, { reason })),
+    "# HELP vrata_personal_state_save_failures_total Personal state save failures by reason.",
+    "# TYPE vrata_personal_state_save_failures_total counter",
+    ...Array.from(metrics.personalStateSaveFailuresTotal.entries()).map(([reason, count]) => formatMetricLine("vrata_personal_state_save_failures_total", count, { reason })),
     "# HELP vrata_scene_bundle_upload_bytes_total Uploaded scene bundle bytes accepted by API.",
     "# TYPE vrata_scene_bundle_upload_bytes_total counter",
     formatMetricLine("vrata_scene_bundle_upload_bytes_total", metrics.sceneBundleUploadBytesTotal),
@@ -1451,6 +1479,82 @@ async function verifyRoomSessionRequest(
 
 function isPrivateRoom(room: RoomRecord): boolean {
   return isRoomAccessPolicyEnabled() && sanitizeRoomVisibility(room.visibility) === "private";
+}
+
+function isPersonalRoom(room: RoomRecord | null | undefined): boolean {
+  return room?.roomType === "personal";
+}
+
+function isPersonalRoomOwner(room: RoomRecord, participantId: string | null | undefined): boolean {
+  return isPersonalRoom(room) && Boolean(participantId) && room.ownerParticipantId === participantId;
+}
+
+function normalizeParticipantId(input: unknown): string | null {
+  if (typeof input !== "string") {
+    return null;
+  }
+  const value = input.trim();
+  return /^[A-Za-z0-9._:-]{3,128}$/.test(value) ? value : null;
+}
+
+function normalizeDisplayName(input: unknown, participantId: string): string {
+  if (typeof input !== "string") {
+    return `Guest-${participantId.slice(0, 4)}`;
+  }
+  const value = input.trim().replace(/\s+/g, " ").slice(0, 40);
+  return value || `Guest-${participantId.slice(0, 4)}`;
+}
+
+function createPersonalRoomId(participantId: string): string {
+  return `personal-${sha256Hex(participantId).slice(0, 16)}`;
+}
+
+function personalRoomName(displayName: string): string {
+  const ownerName = displayName.replace(/[<>]/g, "").trim().slice(0, 48);
+  return ownerName ? `${ownerName} Personal Room` : "Personal Room";
+}
+
+function numberFromRecord(record: Record<string, unknown>, key: string): number | null {
+  const value = record[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function normalizePersonalState(input: unknown, updatedBy: string | null): RoomPersonalState | null {
+  if (!input || typeof input !== "object") {
+    return null;
+  }
+  const payload = input as Record<string, unknown>;
+  const posePayload = payload.lastPose;
+  if (!posePayload || typeof posePayload !== "object") {
+    return {};
+  }
+  const pose = posePayload as Record<string, unknown>;
+  const positionPayload = pose.position;
+  if (!positionPayload || typeof positionPayload !== "object") {
+    return null;
+  }
+  const position = positionPayload as Record<string, unknown>;
+  const x = numberFromRecord(position, "x");
+  const y = numberFromRecord(position, "y");
+  const z = numberFromRecord(position, "z");
+  const yaw = numberFromRecord(pose, "yaw");
+  const pitch = numberFromRecord(pose, "pitch");
+  if (x === null || y === null || z === null || yaw === null || pitch === null) {
+    return null;
+  }
+  return {
+    lastPose: {
+      position: {
+        x: Math.max(-1000, Math.min(1000, x)),
+        y: Math.max(-100, Math.min(100, y)),
+        z: Math.max(-1000, Math.min(1000, z))
+      },
+      yaw: Math.max(-Math.PI * 4, Math.min(Math.PI * 4, yaw)),
+      pitch: Math.max(-Math.PI / 2, Math.min(Math.PI / 2, pitch)),
+      updatedAt: new Date().toISOString(),
+      updatedBy
+    }
+  };
 }
 
 function canReadPrivateRoomWithControlPlaneActor(request: IncomingMessage, roomId: string): boolean {
@@ -1902,6 +2006,21 @@ async function resolveStateTokenAccess(
 
   const inviteToken = parseInviteToken(requestPayload?.inviteToken);
   if (!inviteToken) {
+    if (isPersonalRoom(room)) {
+      if (isPersonalRoomOwner(room, participantId)) {
+        const role = resolveEffectiveRoomRole(room, participantId, "host");
+        const blockReason = getSessionControlBlockReason(room, participantId, role, false);
+        if (blockReason) {
+          incrementCounter(metrics.personalRoomAccessDeniedTotal, blockReason);
+          return { ok: false, statusCode: 403, reason: blockReason };
+        }
+        incrementCounter(metrics.personalRoomOpensTotal, "owner");
+        return { ok: true, role, roleSource: "trusted" };
+      }
+      incrementCounter(metrics.personalRoomAccessDeniedTotal, "invite_required");
+      writeInviteUseAudit({ request, roomId: room.roomId, result: "denied", reason: "invite_required", participantId });
+      return { ok: false, statusCode: 403, reason: "invite_required" };
+    }
     const visibility = isRoomAccessPolicyEnabled() ? sanitizeRoomVisibility(room.visibility) : "public";
     if (visibility !== "private") {
       const role = resolveEffectiveRoomRole(room, participantId, requested.role);
@@ -1918,14 +2037,17 @@ async function resolveStateTokenAccess(
   const invite = await storage.getRoomInviteByTokenHash(hashInviteToken(inviteToken));
   if (!invite || invite.roomId !== room.roomId) {
     writeInviteUseAudit({ request, roomId: room.roomId, result: "denied", reason: "invite_required", participantId });
+    if (isPersonalRoom(room)) incrementCounter(metrics.personalRoomAccessDeniedTotal, "invite_required");
     return { ok: false, statusCode: 403, reason: "invite_required" };
   }
   if (invite.revokedAt) {
     writeInviteUseAudit({ request, roomId: room.roomId, invite, result: "denied", reason: "invite_revoked", participantId });
+    if (isPersonalRoom(room)) incrementCounter(metrics.personalRoomAccessDeniedTotal, "invite_revoked");
     return { ok: false, statusCode: 403, reason: "invite_revoked" };
   }
   if (Date.parse(invite.expiresAt) <= Date.now()) {
     writeInviteUseAudit({ request, roomId: room.roomId, invite, result: "denied", reason: "invite_expired", participantId });
+    if (isPersonalRoom(room)) incrementCounter(metrics.personalRoomAccessDeniedTotal, "invite_expired");
     return { ok: false, statusCode: 403, reason: "invite_expired" };
   }
 
@@ -1936,13 +2058,16 @@ async function resolveStateTokenAccess(
       const blockReason = getSessionControlBlockReason(room, participantId, role, false);
       if (blockReason) {
         writeInviteUseAudit({ request, roomId: room.roomId, invite, result: "denied", reason: blockReason, participantId });
+        if (isPersonalRoom(room)) incrementCounter(metrics.personalRoomAccessDeniedTotal, blockReason);
         return { ok: false, statusCode: 403, reason: blockReason };
       }
       writeInviteUseAudit({ request, roomId: room.roomId, invite, result: "allowed", participantId });
+      if (isPersonalRoom(room)) incrementCounter(metrics.personalRoomOpensTotal, "invite");
       return { ok: true, role, roleSource: "trusted", invite };
     }
     if (existingRequest?.status === "rejected") {
       writeInviteUseAudit({ request, roomId: room.roomId, invite, result: "denied", reason: "waiting_room_rejected", participantId });
+      if (isPersonalRoom(room)) incrementCounter(metrics.personalRoomAccessDeniedTotal, "waiting_room_rejected");
       return { ok: false, statusCode: 403, reason: "waiting_room_rejected", accessRequestId: existingRequest.requestId };
     }
     const waitingRequest = existingRequest ?? await storage.createWaitingRoomRequest({
@@ -1958,9 +2083,11 @@ async function resolveStateTokenAccess(
   const blockReason = getSessionControlBlockReason(room, participantId, role, false);
   if (blockReason) {
     writeInviteUseAudit({ request, roomId: room.roomId, invite, result: "denied", reason: blockReason, participantId });
+    if (isPersonalRoom(room)) incrementCounter(metrics.personalRoomAccessDeniedTotal, blockReason);
     return { ok: false, statusCode: 403, reason: blockReason };
   }
   writeInviteUseAudit({ request, roomId: room.roomId, invite, result: "allowed", participantId });
+  if (isPersonalRoom(room)) incrementCounter(metrics.personalRoomOpensTotal, "invite");
   return { ok: true, role, roleSource: "trusted", invite };
 }
 
@@ -2457,6 +2584,12 @@ function validateRoomInput(input: Partial<RoomRecord>, templateIds: Set<string>,
   if (input.visibility !== undefined && !isRoomVisibility(input.visibility)) {
     return "invalid_room_visibility";
   }
+  if (input.roomType !== undefined && input.roomType !== "standard" && input.roomType !== "personal") {
+    return "invalid_room_type";
+  }
+  if (input.roomType === "personal" && !normalizeParticipantId(input.ownerParticipantId)) {
+    return "missing_personal_room_owner";
+  }
   return null;
 }
 
@@ -2487,8 +2620,13 @@ function normalizeRoomPayload(input: Partial<RoomRecord> & {
       ...input.avatarConfig
     } as RoomRecord["avatarConfig"];
   }
+  if (input.roomType === "personal") {
+    normalized.visibility = "private";
+    normalized.guestAllowed = false;
+    normalized.templateId = input.templateId ?? "personal-workspace-basic";
+  }
   normalized.visibility = input.visibility === undefined || isRoomVisibility(input.visibility)
-    ? sanitizeRoomVisibility(input.visibility, input.guestAllowed === false ? "private" : "public")
+    ? sanitizeRoomVisibility(normalized.visibility ?? input.visibility, input.guestAllowed === false || input.roomType === "personal" ? "private" : "public")
     : input.visibility;
 
   return normalized;
@@ -2659,6 +2797,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
         hostControlsEnabled: isHostControlsEnabled(),
         documentsEnabled: isDocumentsFeatureEnabled(),
         notesEnabled: isNotesFeatureEnabled(),
+        personalRoomsEnabled: isPersonalRoomsFeatureEnabled(),
         postgresEnabled: Boolean(process.env.POSTGRES_URL),
         controlPlaneAuthEnabled: Boolean(getControlPlaneAdminToken())
       },
@@ -3002,6 +3141,104 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     }
     incrementCounter(metrics.roomsCreatedTotal, `control-plane:${sanitizeRoomVisibility(room.visibility)}`);
     json(response, 201, { ...room, roomLink: createRoomLink(room.roomId, request), manifest: await buildManifest(room.roomId, request) });
+    return;
+  }
+
+  if (method === "POST" && url.pathname === "/api/personal-room") {
+    if (!isPersonalRoomsFeatureEnabled()) return json(response, 404, { error: "personal_rooms_disabled" });
+    const payload = (await parseBody<{ participantId?: unknown; displayName?: unknown; tenantId?: unknown }>(request)) ?? {};
+    const participantId = normalizeParticipantId(payload.participantId);
+    if (!participantId) {
+      incrementCounter(metrics.personalRoomOpensTotal, "invalid_participant");
+      return json(response, 400, { error: "invalid_participant_id" });
+    }
+    const tenantId = typeof payload.tenantId === "string" && payload.tenantId.trim() ? payload.tenantId.trim() : "demo-tenant";
+    const tenantIds = new Set((await storage.listTenants()).map((tenant) => tenant.tenantId));
+    if (!tenantIds.has(tenantId)) {
+      incrementCounter(metrics.personalRoomOpensTotal, "invalid_tenant");
+      return json(response, 400, { error: "invalid_tenant" });
+    }
+
+    const existing = (await storage.listRooms()).find((room) => room.roomType === "personal" && room.ownerParticipantId === participantId && room.tenantId === tenantId) ?? null;
+    if (existing) {
+      if (isRoomDisabled(existing)) {
+        incrementCounter(metrics.personalRoomOpensTotal, "disabled");
+        return json(response, 403, { error: "room_access_denied", reason: "room_disabled", roomId: existing.roomId });
+      }
+      incrementCounter(metrics.personalRoomOpensTotal, "existing");
+      return json(response, 200, { created: false, room: existing, roomLink: createRoomLink(existing.roomId, request), manifest: await buildManifest(existing.roomId, request) });
+    }
+
+    const displayName = normalizeDisplayName(payload.displayName, participantId);
+    const roomId = createPersonalRoomId(`${tenantId}:${participantId}`);
+    if (await storage.getRoom(roomId)) {
+      incrementCounter(metrics.personalRoomOpensTotal, "slug_conflict");
+      return json(response, 409, { error: "room_slug_conflict" });
+    }
+    const room = await storage.createRoom({
+      roomId,
+      tenantId,
+      templateId: "personal-workspace-basic",
+      name: personalRoomName(displayName),
+      roomType: "personal",
+      ownerParticipantId: participantId,
+      visibility: "private",
+      guestAllowed: false,
+      features: { voice: true, spatialAudio: true, screenShare: true },
+      theme: { primaryColor: "#7dd3fc", accentColor: "#312e81" },
+      sessionControl: { hostParticipantId: participantId }
+    });
+    metrics.personalRoomsCreatedTotal += 1;
+    incrementCounter(metrics.roomsCreatedTotal, "self-service:private");
+    incrementCounter(metrics.personalRoomOpensTotal, "created");
+    logEvent({
+      service: "api",
+      event: "personal_room_created",
+      requestId,
+      roomId: room.roomId,
+      tenantId: room.tenantId,
+      ownerParticipantId: participantId,
+      timestamp: new Date().toISOString()
+    });
+    json(response, 201, { created: true, room, roomLink: createRoomLink(room.roomId, request), manifest: await buildManifest(room.roomId, request) });
+    return;
+  }
+
+  const roomPersonalStateMatch = url.pathname.match(/^\/api\/rooms\/([^/]+)\/personal-state$/);
+  if ((method === "GET" || method === "PUT") && roomPersonalStateMatch) {
+    if (!isPersonalRoomsFeatureEnabled()) return json(response, 404, { error: "personal_rooms_disabled" });
+    const roomId = decodeURIComponent(roomPersonalStateMatch[1]);
+    const room = await storage.getRoom(roomId);
+    if (!room) return json(response, 404, { error: "room_not_found" });
+    if (!isPersonalRoom(room)) return json(response, 404, { error: "personal_state_not_available" });
+    const actorResult = resolveControlPlaneActor(request);
+    if (!actorResult.ok) {
+      incrementCounter(metrics.personalStateSaveFailuresTotal, method === "PUT" ? actorResult.reason : "read_unauthorized");
+      return json(response, actorResult.statusCode, { error: "unauthorized", reason: actorResult.reason, requestId });
+    }
+    const actor = actorResult.actor;
+    const canAccessPersonalState = actor.actorType === "admin-token" || (actor.actorType === "room-session" && actor.roomId === roomId && actor.participantId === room.ownerParticipantId);
+    if (!canAccessPersonalState) {
+      if (method === "PUT") incrementCounter(metrics.personalStateSaveFailuresTotal, "owner_required");
+      return json(response, 403, { error: "forbidden", reason: "owner_required", requestId });
+    }
+
+    if (method === "GET") {
+      json(response, 200, { state: room.personalState ?? {} });
+      return;
+    }
+
+    const state = normalizePersonalState(await parseBody<unknown>(request), actor.actorId);
+    if (!state) {
+      incrementCounter(metrics.personalStateSaveFailuresTotal, "invalid_personal_state");
+      return json(response, 400, { error: "invalid_personal_state" });
+    }
+    const updated = await storage.updateRoom(roomId, { personalState: state });
+    if (!updated) {
+      incrementCounter(metrics.personalStateSaveFailuresTotal, "room_not_found");
+      return json(response, 404, { error: "room_not_found" });
+    }
+    json(response, 200, { state: updated.personalState ?? state });
     return;
   }
 

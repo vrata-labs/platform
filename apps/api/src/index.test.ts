@@ -967,6 +967,127 @@ test("room documents API uploads lists downloads selects and soft-deletes with p
   }
 });
 
+test("personal room API creates owner-only room with invite guest and persisted pose", async () => {
+  process.env.VRATA_DISABLE_AUTOSTART = "1";
+  process.env.API_PORT = "4054";
+  process.env.CONTROL_PLANE_ADMIN_TOKEN = "test-admin-token";
+  process.env.STATE_TOKEN_SECRET = "personal-state-secret";
+  const module = await import("./index.js");
+  const server = module.startApiServer(4054);
+  const baseUrl = "http://127.0.0.1:4054";
+  const jsonHeaders = { "content-type": "application/json" };
+
+  try {
+    const createResponse = await fetch(`${baseUrl}/api/personal-room`, {
+      method: "POST",
+      headers: jsonHeaders,
+      body: JSON.stringify({ participantId: "owner-019", displayName: "Owner 019" })
+    });
+    assert.equal(createResponse.status, 201);
+    const created = (await createResponse.json()) as { room: { roomId: string; roomType?: string; ownerParticipantId?: string | null; visibility?: string; guestAllowed?: boolean }; roomLink: string };
+    assert.equal(created.room.roomType, "personal");
+    assert.equal(created.room.ownerParticipantId, "owner-019");
+    assert.equal(created.room.visibility, "private");
+    assert.equal(created.room.guestAllowed, false);
+
+    const openAgainResponse = await fetch(`${baseUrl}/api/personal-room`, {
+      method: "POST",
+      headers: jsonHeaders,
+      body: JSON.stringify({ participantId: "owner-019", displayName: "Owner 019" })
+    });
+    assert.equal(openAgainResponse.status, 200);
+    assert.equal(((await openAgainResponse.json()) as { room: { roomId: string } }).room.roomId, created.room.roomId);
+
+    const ownerTokenResponse = await fetch(`${baseUrl}/api/tokens/state`, {
+      method: "POST",
+      headers: jsonHeaders,
+      body: JSON.stringify({ roomId: created.room.roomId, participantId: "owner-019", displayName: "Owner 019" })
+    });
+    assert.equal(ownerTokenResponse.status, 200);
+    const ownerTokenPayload = (await ownerTokenResponse.json()) as { token: string; role: string; access: { canManageRoomSession?: boolean } };
+    assert.equal(ownerTokenPayload.role, "host");
+    assert.equal(ownerTokenPayload.access.canManageRoomSession, true);
+
+    const deniedResponse = await fetch(`${baseUrl}/api/tokens/state`, {
+      method: "POST",
+      headers: jsonHeaders,
+      body: JSON.stringify({ roomId: created.room.roomId, participantId: "other-019", displayName: "Other 019" })
+    });
+    assert.equal(deniedResponse.status, 403);
+    assert.equal(((await deniedResponse.json()) as { reason?: string }).reason, "invite_required");
+
+    const inviteResponse = await fetch(`${baseUrl}/api/rooms/${created.room.roomId}/invites`, {
+      method: "POST",
+      headers: { ...jsonHeaders, "authorization": `Bearer ${ownerTokenPayload.token}` },
+      body: JSON.stringify({ expiresInSeconds: 300, role: "guest" })
+    });
+    assert.equal(inviteResponse.status, 201);
+    const inviteToken = new URL(((await inviteResponse.json()) as { inviteLink: string }).inviteLink).searchParams.get("invite");
+    assert.ok(inviteToken);
+
+    const guestTokenResponse = await fetch(`${baseUrl}/api/tokens/state`, {
+      method: "POST",
+      headers: jsonHeaders,
+      body: JSON.stringify({ roomId: created.room.roomId, participantId: "guest-019", displayName: "Guest 019", inviteToken })
+    });
+    assert.equal(guestTokenResponse.status, 200);
+    const guestTokenPayload = (await guestTokenResponse.json()) as { token: string; role: string };
+    assert.equal(guestTokenPayload.role, "guest");
+
+    const guestStateResponse = await fetch(`${baseUrl}/api/rooms/${created.room.roomId}/personal-state`, {
+      headers: { "authorization": `Bearer ${guestTokenPayload.token}` }
+    });
+    assert.equal(guestStateResponse.status, 403);
+    assert.equal(((await guestStateResponse.json()) as { reason?: string }).reason, "owner_required");
+
+    const saveStateResponse = await fetch(`${baseUrl}/api/rooms/${created.room.roomId}/personal-state`, {
+      method: "PUT",
+      headers: { ...jsonHeaders, "authorization": `Bearer ${ownerTokenPayload.token}` },
+      body: JSON.stringify({ lastPose: { position: { x: 1.25, y: 0, z: 4.5 }, yaw: 0.7, pitch: -0.2 } })
+    });
+    assert.equal(saveStateResponse.status, 200);
+    assert.equal(((await saveStateResponse.json()) as { state: { lastPose?: { updatedBy?: string | null } } }).state.lastPose?.updatedBy, "owner-019");
+
+    const loadStateResponse = await fetch(`${baseUrl}/api/rooms/${created.room.roomId}/personal-state`, {
+      headers: { "authorization": `Bearer ${ownerTokenPayload.token}` }
+    });
+    assert.equal(loadStateResponse.status, 200);
+    const loadedState = (await loadStateResponse.json()) as { state: { lastPose?: { position: { x: number; z: number }; yaw: number } } };
+    assert.equal(loadedState.state.lastPose?.position.x, 1.25);
+    assert.equal(loadedState.state.lastPose?.position.z, 4.5);
+    assert.equal(loadedState.state.lastPose?.yaw, 0.7);
+
+    const notesResponse = await fetch(`${baseUrl}/api/rooms/${created.room.roomId}/notes/shared`, {
+      method: "PUT",
+      headers: { ...jsonHeaders, "authorization": `Bearer ${ownerTokenPayload.token}` },
+      body: JSON.stringify({ content: "personal note" })
+    });
+    assert.equal(notesResponse.status, 201);
+
+    const documentsResponse = await fetch(`${baseUrl}/api/rooms/${created.room.roomId}/documents`, {
+      headers: { "authorization": `Bearer ${ownerTokenPayload.token}` }
+    });
+    assert.equal(documentsResponse.status, 200);
+
+    const publicRoomsResponse = await fetch(`${baseUrl}/api/rooms`);
+    assert.equal(publicRoomsResponse.status, 200);
+    const publicRooms = (await publicRoomsResponse.json()) as { items: Array<{ roomId: string }> };
+    assert.equal(publicRooms.items.some((room) => room.roomId === created.room.roomId), false);
+
+    const metricsResponse = await fetch(`${baseUrl}/metrics`);
+    assert.equal(metricsResponse.status, 200);
+    const metricsText = await metricsResponse.text();
+    assert.match(metricsText, /vrata_personal_rooms_created_total 1/);
+    assert.match(metricsText, /vrata_personal_room_access_denied_total\{reason="invite_required"\} 1/);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    delete process.env.VRATA_DISABLE_AUTOSTART;
+    delete process.env.API_PORT;
+    delete process.env.CONTROL_PLANE_ADMIN_TOKEN;
+    delete process.env.STATE_TOKEN_SECRET;
+  }
+});
+
 test("remote browser frame token endpoint returns websocket URL and short-lived token", async () => {
   process.env.VRATA_DISABLE_AUTOSTART = "1";
   process.env.API_PORT = "4026";

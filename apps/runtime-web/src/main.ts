@@ -35,7 +35,7 @@ import {
 } from "@vrata/shared-types";
 
 import { appendBrandingSuffix, applyRoomShellBootState, renderSceneAttributions } from "./boot-session.js";
-import { RuntimeAccessError, bootRuntime, deleteRoomDocument, downloadRoomDocument, fetchRoomNote, fetchRoomSessionControl, fetchRuntimeSpaces, listPresence, listRoomDocuments, planVoiceSession, removePresence, removeRoomParticipant, resolveCurrentSpace, resolveJoinMode, runRoomSessionControlAction, saveRoomNote, selectRoomDocumentSurface, transferRoomHost, uploadRoomDocument, upsertPresence, type PresenceState, type RuntimeDocumentRecord, type RuntimeNoteScope, type RuntimeSessionControlResponse, type RuntimeSpaceOption } from "./index.js";
+import { RuntimeAccessError, bootRuntime, deleteRoomDocument, downloadRoomDocument, fetchRoomNote, fetchRoomSessionControl, fetchRuntimeSpaces, listPresence, listRoomDocuments, openPersonalRoom, planVoiceSession, removePresence, removeRoomParticipant, resolveCurrentSpace, resolveJoinMode, runRoomSessionControlAction, savePersonalRoomState, saveRoomNote, selectRoomDocumentSurface, transferRoomHost, uploadRoomDocument, upsertPresence, type PresenceState, type RuntimeDocumentRecord, type RuntimeNoteScope, type RuntimePersonalState, type RuntimeSessionControlResponse, type RuntimeSpaceOption } from "./index.js";
 import { formatClientCompatibilityStatus, resolveClientCompatibility, type ClientCompatibilitySummary } from "./client-capabilities.js";
 import { formatGuestCompatibilityWarnings, formatGuestControlsHint, shouldShowGuestOnboarding, validateGuestDisplayName } from "./guest-onboarding.js";
 import { createMotionTrack, pushMotionSample, sampleMotion, type MotionTrack } from "./motion-state.js";
@@ -171,12 +171,16 @@ function getStoredValue(storage: Storage, key: string, legacyKey: string): strin
 }
 
 function getParticipantId(): string {
-  const stored = getStoredValue(sessionStorage, "vrata.participantId", "noah.participantId");
+  const stored = getStoredValue(localStorage, "vrata.participantId", "noah.participantId")
+    ?? getStoredValue(sessionStorage, "vrata.participantId", "noah.participantId");
   if (stored) {
+    localStorage.setItem("vrata.participantId", stored);
+    sessionStorage.setItem("vrata.participantId", stored);
     return stored;
   }
 
   const generated = typeof globalThis.crypto?.randomUUID === "function" ? globalThis.crypto.randomUUID() : fallbackUuid();
+  localStorage.setItem("vrata.participantId", generated);
   sessionStorage.setItem("vrata.participantId", generated);
   return generated;
 }
@@ -270,6 +274,7 @@ const guestOnboardingStatusEl = mustElement<HTMLDivElement>("#guest-onboarding-s
 const sceneAttributionsPanelEl = mustElement<HTMLDivElement>("#scene-attributions");
 const sceneAttributionsListEl = mustElement<HTMLUListElement>("#scene-attributions-list");
 const spaceSelect = mustElement<HTMLSelectElement>("#space-select");
+const openPersonalRoomButton = mustElement<HTMLButtonElement>("#open-personal-room");
 const spaceSelectStatusEl = mustElement<HTMLDivElement>("#space-select-status");
 const notesPanelEl = mustElement<HTMLDivElement>("#notes-panel");
 const notesScopeSelect = mustElement<HTMLSelectElement>("#notes-scope-select");
@@ -914,6 +919,7 @@ let runtimeFlags = {
   hostControlsEnabled: true,
   documentsEnabled: true,
   notesEnabled: true,
+  personalRoomsEnabled: true,
   ...createInitialAvatarRuntimeFlags(),
   avatarFallbackCapsulesEnabled: true
 };
@@ -3982,6 +3988,16 @@ const debugState = {
     status: "idle" as string,
     lastReason: null as string | null
   },
+  personalRoom: {
+    enabled: true,
+    roomType: "standard" as "standard" | "personal",
+    ownerParticipantId: null as string | null,
+    isOwner: false,
+    openState: "idle" as "idle" | "opening" | "failed",
+    lastPoseRestored: false,
+    lastPoseSavedAt: null as string | null,
+    errorCode: null as string | null
+  },
   notes: {
     enabled: true,
     scope: activeNotesScope,
@@ -5427,6 +5443,68 @@ async function loadAvailableSpaces(currentRoomId: string): Promise<void> {
     availableSpaces = [];
     renderSpaceSelector("unavailable", [], currentRoomId);
   }
+}
+
+function currentPersonalPoseState(): RuntimePersonalState {
+  const pose = localPoseController.getPose();
+  return {
+    lastPose: {
+      position: {
+        x: Number(pose.position.x.toFixed(3)),
+        y: Number(pose.position.y.toFixed(3)),
+        z: Number(pose.position.z.toFixed(3))
+      },
+      yaw: Number(pose.yaw.toFixed(4)),
+      pitch: Number(pose.pitch.toFixed(4))
+    }
+  };
+}
+
+function personalPoseSignature(state: RuntimePersonalState): string {
+  const pose = state.lastPose;
+  if (!pose) return "none";
+  return [pose.position.x, pose.position.y, pose.position.z, pose.yaw, pose.pitch].map((value) => value.toFixed(3)).join(":");
+}
+
+function restorePersonalPose(state: RuntimePersonalState): void {
+  const pose = state.lastPose;
+  if (!pose) return;
+  localPoseController.setPose({
+    position: pose.position,
+    yaw: pose.yaw,
+    pitch: pose.pitch
+  }, "personal_state_restore");
+  debugState.personalRoom.lastPoseRestored = true;
+  updateLocalPositionDebug();
+}
+
+function startPersonalStatePersistence(input: { roomId: string; sessionToken: string; isOwner: boolean; enabled: boolean }): void {
+  if (!input.enabled || !input.isOwner || !input.sessionToken) {
+    return;
+  }
+  let lastSavedSignature = personalPoseSignature(debugState.personalRoom.lastPoseRestored ? currentPersonalPoseState() : {});
+  const save = async (force = false): Promise<void> => {
+    const state = currentPersonalPoseState();
+    const signature = personalPoseSignature(state);
+    if (!force && signature === lastSavedSignature) {
+      return;
+    }
+    try {
+      const saved = await savePersonalRoomState(apiBaseUrl, input.roomId, input.sessionToken, state);
+      lastSavedSignature = signature;
+      debugState.personalRoom.lastPoseSavedAt = saved.lastPose?.updatedAt ?? new Date().toISOString();
+      debugState.personalRoom.errorCode = null;
+    } catch (error: unknown) {
+      console.error(error);
+      debugState.personalRoom.errorCode = error instanceof Error ? error.message : "personal_state_save_failed";
+    }
+  };
+  window.setInterval(() => {
+    void save();
+  }, 1500);
+  window.addEventListener("pagehide", () => {
+    void save(true);
+  });
 }
 
 function commitRuntimeUiState(nextState: ReturnType<typeof createRuntimeUiState>, updateStatus = true): void {
@@ -7443,6 +7521,23 @@ spaceSelect.addEventListener("change", () => {
   window.location.assign(targetRoomLink);
 });
 
+openPersonalRoomButton.addEventListener("click", () => {
+  openPersonalRoomButton.disabled = true;
+  openPersonalRoomButton.textContent = "Opening...";
+  debugState.personalRoom.openState = "opening";
+  void openPersonalRoom(apiBaseUrl, { participantId, displayName }).then((result) => {
+    debugState.personalRoom.openState = "idle";
+    window.location.assign(result.roomLink);
+  }).catch((error: unknown) => {
+    console.error(error);
+    debugState.personalRoom.openState = "failed";
+    debugState.personalRoom.errorCode = error instanceof Error ? error.message : "personal_room_open_failed";
+    openPersonalRoomButton.disabled = false;
+    openPersonalRoomButton.textContent = "Open my room";
+    spaceSelectStatusEl.textContent = "Personal room unavailable";
+  });
+});
+
 notesScopeSelect.addEventListener("change", () => {
   activeNotesScope = notesScopeSelect.value === "private" ? "private" : "shared";
   localStorage.setItem("vrata.notes.scope", activeNotesScope);
@@ -8068,6 +8163,7 @@ async function main(): Promise<void> {
     hostControlsEnabled: boot.envFlags.hostControlsEnabled,
     documentsEnabled: boot.envFlags.documentsEnabled,
     notesEnabled: boot.envFlags.notesEnabled,
+    personalRoomsEnabled: boot.envFlags.personalRoomsEnabled,
     spatialAudio: spatialAudioServerEnabled && spatialAudioRoomEnabled && spatialAudioQueryEnabled,
     ...resolveAvatarRuntimeFlags(boot)
   };
@@ -8075,6 +8171,11 @@ async function main(): Promise<void> {
     runtimeFlags.avatarLegIkEnabled = true;
   }
   debugState.featureFlags = runtimeFlags;
+  debugState.personalRoom.enabled = runtimeFlags.personalRoomsEnabled;
+  debugState.personalRoom.roomType = boot.roomType;
+  debugState.personalRoom.ownerParticipantId = boot.ownerParticipantId ?? null;
+  debugState.personalRoom.isOwner = boot.roomType === "personal" && boot.ownerParticipantId === participantId;
+  openPersonalRoomButton.hidden = !runtimeFlags.personalRoomsEnabled;
   roomStateAccessToken = boot.access.token;
   debugState.access = {
     ...boot.access,
@@ -8228,6 +8329,16 @@ async function main(): Promise<void> {
   } else {
     setSceneSeatAnchors([], 0);
     syncSeatStateFromOccupancy();
+  }
+
+  if (boot.roomType === "personal" && debugState.personalRoom.isOwner) {
+    restorePersonalPose(boot.personalState);
+    startPersonalStatePersistence({
+      roomId: boot.roomId,
+      sessionToken: boot.access.token,
+      isOwner: debugState.personalRoom.isOwner,
+      enabled: runtimeFlags.personalRoomsEnabled
+    });
   }
 
   applyPostBootControls({

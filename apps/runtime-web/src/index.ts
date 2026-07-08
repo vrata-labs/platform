@@ -2,6 +2,8 @@ import { createRoomAccessDebugState, type RoomAccessDebugState, type RoomPermiss
 
 interface RoomManifest {
   roomId: string;
+  roomType?: "standard" | "personal";
+  ownerParticipantId?: string | null;
   template: string;
   sceneBundle?: {
     url: string;
@@ -78,6 +80,7 @@ interface RuntimeHealthResponse {
     hostControlsEnabled?: boolean;
     documentsEnabled?: boolean;
     notesEnabled?: boolean;
+    personalRoomsEnabled?: boolean;
   };
 }
 
@@ -105,6 +108,18 @@ export interface RuntimeDocumentRecord {
   uploadedAt: string;
   linkedSurfaceId?: string | null;
   downloadUrl: string;
+}
+
+export interface RuntimePersonalPoseState {
+  position: { x: number; y: number; z: number };
+  yaw: number;
+  pitch: number;
+  updatedAt?: string;
+  updatedBy?: string | null;
+}
+
+export interface RuntimePersonalState {
+  lastPose?: RuntimePersonalPoseState | null;
 }
 
 export interface PresenceState {
@@ -160,6 +175,19 @@ export interface RuntimeSpaceRecord {
 
 export interface RuntimeSpaceOption extends RuntimeSpaceRecord {
   label: string;
+}
+
+export interface RuntimePersonalRoomResponse {
+  created: boolean;
+  room: {
+    roomId: string;
+    tenantId: string;
+    name: string;
+    templateId: string;
+    roomType?: "standard" | "personal";
+    ownerParticipantId?: string | null;
+  };
+  roomLink: string;
 }
 
 export function resolveJoinMode(userAgent: string): "desktop" | "mobile" {
@@ -242,8 +270,55 @@ export async function fetchRuntimeSpaces(apiBaseUrl: string, roomId: string, sea
   return formatSpaceOptions(payload.items);
 }
 
+export async function openPersonalRoom(apiBaseUrl: string, input: { participantId: string; displayName: string }): Promise<RuntimePersonalRoomResponse> {
+  const response = await fetch(new URL("/api/personal-room", apiBaseUrl), {
+    method: "POST",
+    headers: {
+      "content-type": "application/json"
+    },
+    body: JSON.stringify(input)
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({})) as { reason?: string; error?: string };
+    throw new Error(`failed_to_open_personal_room:${response.status}:${payload.reason ?? payload.error ?? "unknown"}`);
+  }
+  return (await response.json()) as RuntimePersonalRoomResponse;
+}
+
+export async function fetchPersonalRoomState(apiBaseUrl: string, roomId: string, sessionToken: string): Promise<RuntimePersonalState> {
+  const response = await fetch(new URL(`/api/rooms/${roomId}/personal-state`, apiBaseUrl), {
+    headers: {
+      "authorization": `Bearer ${sessionToken}`
+    },
+    cache: "no-store"
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({})) as { reason?: string; error?: string };
+    throw new Error(`failed_to_load_personal_state:${response.status}:${payload.reason ?? payload.error ?? "unknown"}`);
+  }
+  return ((await response.json()) as { state: RuntimePersonalState }).state;
+}
+
+export async function savePersonalRoomState(apiBaseUrl: string, roomId: string, sessionToken: string, state: RuntimePersonalState): Promise<RuntimePersonalState> {
+  const response = await fetch(new URL(`/api/rooms/${roomId}/personal-state`, apiBaseUrl), {
+    method: "PUT",
+    headers: {
+      "content-type": "application/json",
+      "authorization": `Bearer ${sessionToken}`
+    },
+    body: JSON.stringify(state)
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({})) as { reason?: string; error?: string };
+    throw new Error(`failed_to_save_personal_state:${response.status}:${payload.reason ?? payload.error ?? "unknown"}`);
+  }
+  return ((await response.json()) as { state: RuntimePersonalState }).state;
+}
+
 export interface RuntimeBootResult {
   roomId: string;
+  roomType: "standard" | "personal";
+  ownerParticipantId?: string | null;
   template: string;
   sceneBundleUrl?: string;
   roomStateUrl: string;
@@ -269,6 +344,7 @@ export interface RuntimeBootResult {
     roleQueryAllowed: boolean;
   };
   avatarConfig: RoomManifest["avatars"];
+  personalState: RuntimePersonalState;
   envFlags: {
     enterVr: boolean;
     audioJoin: boolean;
@@ -287,6 +363,7 @@ export interface RuntimeBootResult {
     hostControlsEnabled: boolean;
     documentsEnabled: boolean;
     notesEnabled: boolean;
+    personalRoomsEnabled: boolean;
   };
 }
 
@@ -367,9 +444,14 @@ export async function bootRuntime(
   const accessResponse = accessRequest ? await fetchStateToken(apiBaseUrl, roomId, accessRequest) : null;
   const accessDebug = accessResponse?.access ?? createRoomAccessDebugState("guest");
   const manifest = await fetchRoomManifest(apiBaseUrl, roomId, accessResponse?.token);
+  const personalState = manifest.roomType === "personal" && accessResponse?.token
+    ? await fetchPersonalRoomState(apiBaseUrl, roomId, accessResponse.token).catch(() => ({}))
+    : {};
 
   return {
     roomId: manifest.roomId,
+    roomType: manifest.roomType ?? "standard",
+    ownerParticipantId: manifest.ownerParticipantId ?? null,
     template: manifest.template,
     sceneBundleUrl: manifest.sceneBundle?.url,
     roomStateUrl: manifest.realtime.roomStateUrl,
@@ -387,6 +469,7 @@ export async function bootRuntime(
       roleQueryAllowed: manifest.access.roleQueryAllowed ?? false
     },
     avatarConfig: manifest.avatars,
+    personalState,
     envFlags: {
       enterVr: healthFeatures.xrEnabled ?? true,
       audioJoin: healthFeatures.voiceEnabled ?? true,
@@ -404,7 +487,8 @@ export async function bootRuntime(
       avatarFallbackCapsulesEnabled: healthFeatures.avatarFallbackCapsulesEnabled ?? true,
       hostControlsEnabled: healthFeatures.hostControlsEnabled ?? true,
       documentsEnabled: healthFeatures.documentsEnabled ?? true,
-      notesEnabled: healthFeatures.notesEnabled ?? true
+      notesEnabled: healthFeatures.notesEnabled ?? true,
+      personalRoomsEnabled: healthFeatures.personalRoomsEnabled ?? true
     }
   };
 }

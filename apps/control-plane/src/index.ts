@@ -18,6 +18,8 @@ export interface RoomCreateInput {
   tenantId: string;
   templateId: string;
   name: string;
+  roomType?: "standard" | "personal";
+  ownerParticipantId?: string | null;
   visibility?: "public" | "unlisted" | "private";
   sceneBundleUrl?: string;
   assetIds?: string[];
@@ -61,6 +63,8 @@ export interface RoomRecord {
   tenantId: string;
   templateId: string;
   name: string;
+  roomType?: "standard" | "personal";
+  ownerParticipantId?: string | null;
   status?: "active" | "disabled";
   disabledAt?: string | null;
   disabledBy?: string | null;
@@ -91,6 +95,8 @@ export interface RoomManifestRecord {
   schemaVersion: number;
   tenantId: string;
   roomId: string;
+  roomType?: "standard" | "personal";
+  ownerParticipantId?: string | null;
   template: string;
   sceneBundle?: {
     url: string;

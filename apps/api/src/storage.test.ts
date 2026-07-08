@@ -50,6 +50,21 @@ test("MemoryStorage enables screen share for new rooms by default", async () => 
   assert.equal(disabledRoom.features.screenShare, false);
 });
 
+test("MemoryStorage defaults personal rooms to private owner state", async () => {
+  const storage = new MemoryStorage();
+
+  const room = await storage.createRoom({
+    name: "Owner Personal Room",
+    roomType: "personal",
+    ownerParticipantId: "owner-personal"
+  });
+
+  assert.equal(room.templateId, "personal-workspace-basic");
+  assert.equal(room.visibility, "private");
+  assert.equal(room.guestAllowed, false);
+  assert.equal(room.personalState?.lastPose, undefined);
+});
+
 test("Postgres storage init retries transient connection failures", async () => {
   let attempts = 0;
   const waits: number[] = [];

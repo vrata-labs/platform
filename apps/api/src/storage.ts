@@ -38,6 +38,19 @@ export interface RoomAvatarConfig {
 
 export type RoomVisibility = "public" | "unlisted" | "private";
 export type RoomStatus = "active" | "disabled";
+export type RoomType = "standard" | "personal";
+
+export interface RoomPersonalPoseState {
+  position: { x: number; y: number; z: number };
+  yaw: number;
+  pitch: number;
+  updatedAt: string;
+  updatedBy?: string | null;
+}
+
+export interface RoomPersonalState {
+  lastPose?: RoomPersonalPoseState | null;
+}
 
 export interface RoomInviteRecord {
   inviteId: string;
@@ -107,6 +120,7 @@ export interface RoomSessionControlState {
 
 const DEFAULT_AVATAR_CONFIG_JSON = '{"avatarsEnabled":true,"avatarCatalogUrl":"/assets/avatars/catalog.v1.json","avatarQualityProfile":"desktop-standard","avatarFallbackCapsulesEnabled":true,"avatarSeatsEnabled":true}' as const;
 const DEFAULT_SESSION_CONTROL_JSON = '{"hostParticipantId":null,"lockedAt":null,"lockedBy":null,"endedAt":null,"endedBy":null,"removedParticipants":{}}' as const;
+const DEFAULT_PERSONAL_STATE_JSON = '{}' as const;
 const POSTGRES_INIT_MAX_ATTEMPTS = 12;
 const POSTGRES_INIT_RETRY_DELAY_MS = 1000;
 const RETRYABLE_POSTGRES_INIT_ERROR_CODES = new Set(["ECONNREFUSED", "ECONNRESET", "ETIMEDOUT", "EAI_AGAIN", "ENOTFOUND"]);
@@ -116,6 +130,8 @@ export interface RoomRecord {
   tenantId: string;
   templateId: string;
   name: string;
+  roomType?: RoomType;
+  ownerParticipantId?: string | null;
   status?: RoomStatus;
   disabledAt?: string | null;
   disabledBy?: string | null;
@@ -130,6 +146,7 @@ export interface RoomRecord {
   guestAllowed?: boolean;
   avatarConfig?: RoomAvatarConfig;
   sessionControl?: RoomSessionControlState;
+  personalState?: RoomPersonalState;
 }
 
 type InitializableStorage = { init(): Promise<void> };
@@ -191,8 +208,16 @@ function defaultAvatarConfig(input?: Partial<RoomAvatarConfig>): RoomAvatarConfi
   };
 }
 
-function defaultRoomVisibility(input?: RoomVisibility): RoomVisibility {
-  return input === "private" || input === "unlisted" ? input : "public";
+function defaultRoomType(input?: RoomType): RoomType {
+  return input === "personal" ? "personal" : "standard";
+}
+
+function defaultRoomVisibility(input?: RoomVisibility, roomType?: RoomType): RoomVisibility {
+  return input === "private" || input === "unlisted" ? input : roomType === "personal" ? "private" : "public";
+}
+
+function defaultGuestAllowed(input: boolean | undefined, roomType?: RoomType): boolean {
+  return input ?? roomType !== "personal";
 }
 
 function defaultRoomStatus(input?: RoomStatus): RoomStatus {
@@ -207,6 +232,25 @@ function defaultSessionControl(input?: Partial<RoomSessionControlState> | null):
     endedAt: input?.endedAt ?? null,
     endedBy: input?.endedBy ?? null,
     removedParticipants: input?.removedParticipants ?? {}
+  };
+}
+
+function defaultPersonalState(input?: Partial<RoomPersonalState> | null): RoomPersonalState {
+  if (!input?.lastPose) {
+    return {};
+  }
+  return {
+    lastPose: {
+      position: {
+        x: input.lastPose.position.x,
+        y: input.lastPose.position.y,
+        z: input.lastPose.position.z
+      },
+      yaw: input.lastPose.yaw,
+      pitch: input.lastPose.pitch,
+      updatedAt: input.lastPose.updatedAt,
+      updatedBy: input.lastPose.updatedBy ?? null
+    }
   };
 }
 
@@ -326,6 +370,8 @@ function mapRoomRow(row: {
   tenant_id: string;
   template_id: string;
   name: string;
+  room_type?: RoomType;
+  owner_participant_id?: string | null;
   status?: RoomStatus;
   disabled_at?: string | Date | null;
   disabled_by?: string | null;
@@ -337,23 +383,28 @@ function mapRoomRow(row: {
   guest_allowed: boolean;
   avatar_config: Partial<RoomAvatarConfig>;
   session_control: Partial<RoomSessionControlState> | null;
+  personal_state?: Partial<RoomPersonalState> | null;
 }): RoomRecord {
+  const roomType = defaultRoomType(row.room_type);
   return {
     roomId: row.room_id,
     tenantId: row.tenant_id,
     templateId: row.template_id,
     name: row.name,
+    roomType,
+    ownerParticipantId: row.owner_participant_id ?? null,
     status: defaultRoomStatus(row.status),
     disabledAt: isoString(row.disabled_at),
     disabledBy: row.disabled_by ?? null,
-    visibility: defaultRoomVisibility(row.visibility),
+    visibility: defaultRoomVisibility(row.visibility, roomType),
     sceneBundleUrl: row.scene_bundle_url ?? undefined,
     features: row.features,
     assetIds: row.asset_ids,
     theme: row.theme,
-    guestAllowed: row.guest_allowed,
+    guestAllowed: defaultGuestAllowed(row.guest_allowed, roomType),
     avatarConfig: defaultAvatarConfig(row.avatar_config),
-    sessionControl: defaultSessionControl(row.session_control)
+    sessionControl: defaultSessionControl(row.session_control),
+    personalState: defaultPersonalState(row.personal_state)
   };
 }
 
@@ -509,7 +560,8 @@ export type SceneBundleUpdateInput = Partial<SceneBundleCreateInput> & {
 const defaultTemplates: TemplateRecord[] = [
   { templateId: "meeting-room-basic", label: "Meeting Room Basic", assetSlots: ["logo", "hero-screen"] },
   { templateId: "showroom-basic", label: "Showroom Basic", assetSlots: ["logo", "wall-graphic"] },
-  { templateId: "event-demo-basic", label: "Event Demo Basic", assetSlots: ["logo", "media-placeholder"] }
+  { templateId: "event-demo-basic", label: "Event Demo Basic", assetSlots: ["logo", "media-placeholder"] },
+  { templateId: "personal-workspace-basic", label: "Personal Workspace Basic", assetSlots: ["logo", "personal-surface"] }
 ];
 
 export class MemoryStorage implements Storage {
@@ -525,6 +577,8 @@ export class MemoryStorage implements Storage {
         tenantId: "demo-tenant",
         templateId: "meeting-room-basic",
         name: "Demo Room",
+        roomType: "standard",
+        ownerParticipantId: null,
         status: "active",
         disabledAt: null,
         disabledBy: null,
@@ -538,7 +592,8 @@ export class MemoryStorage implements Storage {
         },
         guestAllowed: true,
         avatarConfig: defaultAvatarConfig(),
-        sessionControl: defaultSessionControl()
+        sessionControl: defaultSessionControl(),
+        personalState: defaultPersonalState()
       }
     ]
   ]);
@@ -580,15 +635,18 @@ export class MemoryStorage implements Storage {
   async listRooms(): Promise<RoomRecord[]> { return Array.from(this.rooms.values()); }
   async getRoom(roomId: string): Promise<RoomRecord | null> { return this.rooms.get(roomId) ?? null; }
   async createRoom(input: Partial<RoomRecord>): Promise<RoomRecord> {
+    const roomType = defaultRoomType(input.roomType);
     const room: RoomRecord = {
       roomId: input.roomId ?? crypto.randomUUID(),
       tenantId: input.tenantId ?? "demo-tenant",
-      templateId: input.templateId ?? "meeting-room-basic",
+      templateId: input.templateId ?? (roomType === "personal" ? "personal-workspace-basic" : "meeting-room-basic"),
       name: input.name ?? "New Room",
+      roomType,
+      ownerParticipantId: input.ownerParticipantId ?? null,
       status: defaultRoomStatus(input.status),
       disabledAt: input.disabledAt ?? null,
       disabledBy: input.disabledBy ?? null,
-      visibility: defaultRoomVisibility(input.visibility),
+      visibility: defaultRoomVisibility(input.visibility, roomType),
       sceneBundleUrl: input.sceneBundleUrl,
       features: {
         voice: input.features?.voice ?? true,
@@ -600,9 +658,10 @@ export class MemoryStorage implements Storage {
         primaryColor: "#5fc8ff",
         accentColor: "#163354"
       },
-      guestAllowed: input.guestAllowed ?? true,
+      guestAllowed: defaultGuestAllowed(input.guestAllowed, roomType),
       avatarConfig: defaultAvatarConfig(input.avatarConfig),
-      sessionControl: defaultSessionControl(input.sessionControl)
+      sessionControl: defaultSessionControl(input.sessionControl),
+      personalState: defaultPersonalState(input.personalState)
     };
     this.rooms.set(room.roomId, room);
     return room;
@@ -615,6 +674,8 @@ export class MemoryStorage implements Storage {
     const updated: RoomRecord = {
       ...existing,
       ...input,
+      roomType: defaultRoomType(input.roomType ?? existing.roomType),
+      ownerParticipantId: input.ownerParticipantId !== undefined ? input.ownerParticipantId : existing.ownerParticipantId ?? null,
       status: defaultRoomStatus(input.status ?? existing.status),
       disabledAt: input.disabledAt !== undefined ? input.disabledAt : existing.disabledAt ?? null,
       disabledBy: input.disabledBy !== undefined ? input.disabledBy : existing.disabledBy ?? null,
@@ -627,13 +688,14 @@ export class MemoryStorage implements Storage {
         accentColor: input.theme?.accentColor ?? existing.theme?.accentColor ?? "#163354"
       },
       assetIds: input.assetIds ?? existing.assetIds,
-      visibility: defaultRoomVisibility(input.visibility ?? existing.visibility),
-      guestAllowed: input.guestAllowed ?? existing.guestAllowed ?? true,
+      visibility: defaultRoomVisibility(input.visibility ?? existing.visibility, input.roomType ?? existing.roomType),
+      guestAllowed: defaultGuestAllowed(input.guestAllowed ?? existing.guestAllowed, input.roomType ?? existing.roomType),
       avatarConfig: defaultAvatarConfig({
         ...existing.avatarConfig,
         ...input.avatarConfig
       }),
-      sessionControl: defaultSessionControl(input.sessionControl ?? existing.sessionControl)
+      sessionControl: defaultSessionControl(input.sessionControl ?? existing.sessionControl),
+      personalState: defaultPersonalState(input.personalState ?? existing.personalState)
     };
     this.rooms.set(roomId, updated);
     return updated;
@@ -906,6 +968,8 @@ export class PostgresStorage implements Storage {
         tenant_id text not null references tenants(tenant_id),
         template_id text not null references templates(template_id),
       name text not null,
+      room_type text not null default 'standard',
+      owner_participant_id text,
       status text not null default 'active',
       disabled_at timestamptz,
       disabled_by text,
@@ -916,7 +980,8 @@ export class PostgresStorage implements Storage {
       theme jsonb not null default '{"primaryColor":"#5fc8ff","accentColor":"#163354"}'::jsonb,
       guest_allowed boolean not null default true,
         avatar_config jsonb not null default '{"avatarsEnabled":true,"avatarCatalogUrl":"/assets/avatars/catalog.v1.json","avatarQualityProfile":"desktop-standard","avatarFallbackCapsulesEnabled":true,"avatarSeatsEnabled":true}'::jsonb,
-        session_control jsonb not null default '{"hostParticipantId":null,"lockedAt":null,"lockedBy":null,"endedAt":null,"endedBy":null,"removedParticipants":{}}'::jsonb
+        session_control jsonb not null default '{"hostParticipantId":null,"lockedAt":null,"lockedBy":null,"endedAt":null,"endedBy":null,"removedParticipants":{}}'::jsonb,
+        personal_state jsonb not null default '{}'::jsonb
        );
       alter table rooms alter column avatar_config set default '{"avatarsEnabled":true,"avatarCatalogUrl":"/assets/avatars/catalog.v1.json","avatarQualityProfile":"desktop-standard","avatarFallbackCapsulesEnabled":true,"avatarSeatsEnabled":true}'::jsonb;
       create table if not exists assets (
@@ -1015,6 +1080,12 @@ export class PostgresStorage implements Storage {
     await this.pool.query(`alter table rooms add column if not exists disabled_at timestamptz`);
     await this.pool.query(`alter table rooms add column if not exists disabled_by text`);
     await this.pool.query(`alter table rooms add column if not exists visibility text not null default 'public'`);
+    await this.pool.query(`alter table rooms add column if not exists room_type text not null default 'standard'`);
+    await this.pool.query(`alter table rooms add column if not exists owner_participant_id text`);
+    await this.pool.query(`alter table rooms add column if not exists personal_state jsonb not null default '${DEFAULT_PERSONAL_STATE_JSON}'::jsonb`);
+    await this.pool.query(`alter table rooms alter column personal_state set default '${DEFAULT_PERSONAL_STATE_JSON}'::jsonb`);
+    await this.pool.query(`update rooms set room_type = 'standard' where room_type is null`);
+    await this.pool.query(`update rooms set personal_state = '${DEFAULT_PERSONAL_STATE_JSON}'::jsonb where personal_state is null`);
     await this.pool.query(`update rooms set status = 'disabled' where disabled_at is not null and (status is null or status = 'active')`);
     await this.pool.query(`update rooms set visibility = 'private' where guest_allowed = false and (visibility is null or visibility = 'public')`);
     await this.pool.query(`alter table rooms add column if not exists avatar_config jsonb not null default '${DEFAULT_AVATAR_CONFIG_JSON}'::jsonb`);
@@ -1043,10 +1114,10 @@ export class PostgresStorage implements Storage {
       );
     }
     await this.pool.query(
-      `insert into rooms (room_id, tenant_id, template_id, name, status, disabled_at, disabled_by, visibility, scene_bundle_url, features, asset_ids, theme, guest_allowed, avatar_config, session_control)
-       values ('demo-room','demo-tenant','meeting-room-basic','Demo Room','active',null,null,'public',null,$1::jsonb,'[]'::jsonb,'{"primaryColor":"#5fc8ff","accentColor":"#163354"}'::jsonb,true,$2::jsonb,$3::jsonb)
+      `insert into rooms (room_id, tenant_id, template_id, name, room_type, owner_participant_id, status, disabled_at, disabled_by, visibility, scene_bundle_url, features, asset_ids, theme, guest_allowed, avatar_config, session_control, personal_state)
+       values ('demo-room','demo-tenant','meeting-room-basic','Demo Room','standard',null,'active',null,null,'public',null,$1::jsonb,'[]'::jsonb,'{"primaryColor":"#5fc8ff","accentColor":"#163354"}'::jsonb,true,$2::jsonb,$3::jsonb,$4::jsonb)
        on conflict do nothing`,
-      [JSON.stringify({ voice: true, spatialAudio: true, screenShare: true }), JSON.stringify(defaultAvatarConfig()), DEFAULT_SESSION_CONTROL_JSON]
+      [JSON.stringify({ voice: true, spatialAudio: true, screenShare: true }), JSON.stringify(defaultAvatarConfig()), DEFAULT_SESSION_CONTROL_JSON, DEFAULT_PERSONAL_STATE_JSON]
     );
   }
 
@@ -1089,24 +1160,27 @@ export class PostgresStorage implements Storage {
     }));
   }
   async listRooms(): Promise<RoomRecord[]> {
-    const result = await this.pool.query(`select room_id, tenant_id, template_id, name, status, disabled_at, disabled_by, visibility, scene_bundle_url, features, asset_ids, theme, guest_allowed, avatar_config, session_control from rooms order by room_id`);
+    const result = await this.pool.query(`select room_id, tenant_id, template_id, name, room_type, owner_participant_id, status, disabled_at, disabled_by, visibility, scene_bundle_url, features, asset_ids, theme, guest_allowed, avatar_config, session_control, personal_state from rooms order by room_id`);
     return result.rows.map(mapRoomRow);
   }
   async getRoom(roomId: string): Promise<RoomRecord | null> {
-    const result = await this.pool.query(`select room_id, tenant_id, template_id, name, status, disabled_at, disabled_by, visibility, scene_bundle_url, features, asset_ids, theme, guest_allowed, avatar_config, session_control from rooms where room_id = $1`, [roomId]);
+    const result = await this.pool.query(`select room_id, tenant_id, template_id, name, room_type, owner_participant_id, status, disabled_at, disabled_by, visibility, scene_bundle_url, features, asset_ids, theme, guest_allowed, avatar_config, session_control, personal_state from rooms where room_id = $1`, [roomId]);
     const row = result.rows[0];
     return row ? mapRoomRow(row) : null;
   }
   async createRoom(input: Partial<RoomRecord>): Promise<RoomRecord> {
+    const roomType = defaultRoomType(input.roomType);
     const room: RoomRecord = {
       roomId: input.roomId ?? crypto.randomUUID(),
       tenantId: input.tenantId ?? "demo-tenant",
-      templateId: input.templateId ?? "meeting-room-basic",
+      templateId: input.templateId ?? (roomType === "personal" ? "personal-workspace-basic" : "meeting-room-basic"),
       name: input.name ?? "New Room",
+      roomType,
+      ownerParticipantId: input.ownerParticipantId ?? null,
       status: defaultRoomStatus(input.status),
       disabledAt: input.disabledAt ?? null,
       disabledBy: input.disabledBy ?? null,
-      visibility: defaultRoomVisibility(input.visibility),
+      visibility: defaultRoomVisibility(input.visibility, roomType),
       sceneBundleUrl: input.sceneBundleUrl,
       features: {
         voice: input.features?.voice ?? true,
@@ -1118,13 +1192,14 @@ export class PostgresStorage implements Storage {
         primaryColor: "#5fc8ff",
         accentColor: "#163354"
       },
-      guestAllowed: input.guestAllowed ?? true,
+      guestAllowed: defaultGuestAllowed(input.guestAllowed, roomType),
       avatarConfig: defaultAvatarConfig(input.avatarConfig),
-      sessionControl: defaultSessionControl(input.sessionControl)
+      sessionControl: defaultSessionControl(input.sessionControl),
+      personalState: defaultPersonalState(input.personalState)
     };
     await this.pool.query(
-      `insert into rooms (room_id, tenant_id, template_id, name, status, disabled_at, disabled_by, visibility, scene_bundle_url, features, asset_ids, theme, guest_allowed, avatar_config, session_control) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb,$12::jsonb,$13,$14::jsonb,$15::jsonb)`,
-      [room.roomId, room.tenantId, room.templateId, room.name, room.status, room.disabledAt ?? null, room.disabledBy ?? null, room.visibility, room.sceneBundleUrl ?? null, JSON.stringify(room.features), JSON.stringify(room.assetIds), JSON.stringify(room.theme), room.guestAllowed, JSON.stringify(room.avatarConfig), JSON.stringify(room.sessionControl)]
+      `insert into rooms (room_id, tenant_id, template_id, name, room_type, owner_participant_id, status, disabled_at, disabled_by, visibility, scene_bundle_url, features, asset_ids, theme, guest_allowed, avatar_config, session_control, personal_state) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13::jsonb,$14::jsonb,$15,$16::jsonb,$17::jsonb,$18::jsonb)`,
+      [room.roomId, room.tenantId, room.templateId, room.name, room.roomType, room.ownerParticipantId ?? null, room.status, room.disabledAt ?? null, room.disabledBy ?? null, room.visibility, room.sceneBundleUrl ?? null, JSON.stringify(room.features), JSON.stringify(room.assetIds), JSON.stringify(room.theme), room.guestAllowed, JSON.stringify(room.avatarConfig), JSON.stringify(room.sessionControl), JSON.stringify(room.personalState)]
     );
     return room;
   }
@@ -1136,6 +1211,8 @@ export class PostgresStorage implements Storage {
     const updated: RoomRecord = {
       ...existing,
       ...input,
+      roomType: defaultRoomType(input.roomType ?? existing.roomType),
+      ownerParticipantId: input.ownerParticipantId !== undefined ? input.ownerParticipantId : existing.ownerParticipantId ?? null,
       status: defaultRoomStatus(input.status ?? existing.status),
       disabledAt: input.disabledAt !== undefined ? input.disabledAt : existing.disabledAt ?? null,
       disabledBy: input.disabledBy !== undefined ? input.disabledBy : existing.disabledBy ?? null,
@@ -1148,17 +1225,18 @@ export class PostgresStorage implements Storage {
         accentColor: input.theme?.accentColor ?? existing.theme?.accentColor ?? "#163354"
       },
       assetIds: input.assetIds ?? existing.assetIds,
-      visibility: defaultRoomVisibility(input.visibility ?? existing.visibility),
-      guestAllowed: input.guestAllowed ?? existing.guestAllowed ?? true,
+      visibility: defaultRoomVisibility(input.visibility ?? existing.visibility, input.roomType ?? existing.roomType),
+      guestAllowed: defaultGuestAllowed(input.guestAllowed ?? existing.guestAllowed, input.roomType ?? existing.roomType),
       avatarConfig: defaultAvatarConfig({
         ...existing.avatarConfig,
         ...input.avatarConfig
       }),
-      sessionControl: defaultSessionControl(input.sessionControl ?? existing.sessionControl)
+      sessionControl: defaultSessionControl(input.sessionControl ?? existing.sessionControl),
+      personalState: defaultPersonalState(input.personalState ?? existing.personalState)
     };
     await this.pool.query(
-      `update rooms set template_id = $2, name = $3, status = $4, disabled_at = $5, disabled_by = $6, visibility = $7, scene_bundle_url = $8, features = $9::jsonb, asset_ids = $10::jsonb, theme = $11::jsonb, guest_allowed = $12, avatar_config = $13::jsonb, session_control = $14::jsonb where room_id = $1`,
-      [roomId, updated.templateId, updated.name, updated.status, updated.disabledAt ?? null, updated.disabledBy ?? null, updated.visibility, updated.sceneBundleUrl ?? null, JSON.stringify(updated.features), JSON.stringify(updated.assetIds), JSON.stringify(updated.theme), updated.guestAllowed, JSON.stringify(updated.avatarConfig), JSON.stringify(updated.sessionControl)]
+      `update rooms set template_id = $2, name = $3, room_type = $4, owner_participant_id = $5, status = $6, disabled_at = $7, disabled_by = $8, visibility = $9, scene_bundle_url = $10, features = $11::jsonb, asset_ids = $12::jsonb, theme = $13::jsonb, guest_allowed = $14, avatar_config = $15::jsonb, session_control = $16::jsonb, personal_state = $17::jsonb where room_id = $1`,
+      [roomId, updated.templateId, updated.name, updated.roomType, updated.ownerParticipantId ?? null, updated.status, updated.disabledAt ?? null, updated.disabledBy ?? null, updated.visibility, updated.sceneBundleUrl ?? null, JSON.stringify(updated.features), JSON.stringify(updated.assetIds), JSON.stringify(updated.theme), updated.guestAllowed, JSON.stringify(updated.avatarConfig), JSON.stringify(updated.sessionControl), JSON.stringify(updated.personalState)]
     );
     return updated;
   }
