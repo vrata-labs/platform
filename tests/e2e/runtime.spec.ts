@@ -452,11 +452,34 @@ test("personal room mode opens owner room, restores pose, and allows invite gues
   expect(ownerTokenResponse.ok()).toBeTruthy();
   const ownerToken = ((await ownerTokenResponse.json()) as { token: string }).token;
 
-  const savePoseResponse = await request.put(`/api/rooms/${roomId}/personal-state`, {
-    headers: { "authorization": `Bearer ${ownerToken}` },
-    data: { lastPose: { position: { x: 2.5, y: 0, z: 3.25 }, yaw: 0.4, pitch: -0.1 } }
+  const initialPose = await page.evaluate(() => {
+    const root = (window as Window & { __VRATA_DEBUG__?: { localPose?: { root?: { x?: number; z?: number; yaw?: number } } } }).__VRATA_DEBUG__?.localPose?.root;
+    return {
+      x: root?.x ?? 0,
+      z: root?.z ?? 0,
+      yaw: root?.yaw ?? 0
+    };
   });
-  expect(savePoseResponse.ok()).toBeTruthy();
+  const savedAtBeforeMove = await page.evaluate(() => (window as Window & { __VRATA_DEBUG__?: { personalRoom?: { lastPoseSavedAt?: string | null } } }).__VRATA_DEBUG__?.personalRoom?.lastPoseSavedAt ?? null);
+  await page.keyboard.down("KeyW");
+  await page.waitForTimeout(800);
+  await page.keyboard.up("KeyW");
+  await expect.poll(async () => page.evaluate((start) => {
+    const root = (window as Window & { __VRATA_DEBUG__?: { localPose?: { root?: { x?: number; z?: number } } } }).__VRATA_DEBUG__?.localPose?.root;
+    return Math.hypot((root?.x ?? start.x) - start.x, (root?.z ?? start.z) - start.z) > 0.2;
+  }, initialPose), { timeout: 10000 }).toBe(true);
+  await expect.poll(async () => page.evaluate((previousSavedAt) => {
+    const savedAt = (window as Window & { __VRATA_DEBUG__?: { personalRoom?: { lastPoseSavedAt?: string | null } } }).__VRATA_DEBUG__?.personalRoom?.lastPoseSavedAt ?? null;
+    return Boolean(savedAt && savedAt !== previousSavedAt);
+  }, savedAtBeforeMove), { timeout: 10000 }).toBe(true);
+  const savedPose = await page.evaluate(() => {
+    const root = (window as Window & { __VRATA_DEBUG__?: { localPose?: { root?: { x?: number; z?: number; yaw?: number } } } }).__VRATA_DEBUG__?.localPose?.root;
+    return {
+      x: Math.round((root?.x ?? 0) * 100) / 100,
+      z: Math.round((root?.z ?? 0) * 100) / 100,
+      yaw: Math.round((root?.yaw ?? 0) * 10) / 10
+    };
+  });
 
   await page.reload();
   await expect(page.locator("#status-line")).toContainText("Joined as", { timeout: 10000 });
@@ -468,7 +491,7 @@ test("personal room mode opens owner room, restores pose, and allows invite gues
       z: Math.round((debug?.localPose?.root?.z ?? 0) * 100) / 100,
       yaw: Math.round((debug?.localPose?.root?.yaw ?? 0) * 10) / 10
     };
-  }), { timeout: 10000 }).toEqual({ restored: true, x: 2.5, z: 3.25, yaw: 0.4 });
+  }), { timeout: 10000 }).toEqual({ restored: true, ...savedPose });
 
   const inviteResponse = await request.post(`/api/rooms/${roomId}/invites`, {
     headers: { "authorization": `Bearer ${ownerToken}` },
