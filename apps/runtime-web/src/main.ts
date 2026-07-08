@@ -171,17 +171,25 @@ function getStoredValue(storage: Storage, key: string, legacyKey: string): strin
 }
 
 function getParticipantId(): string {
-  const stored = getStoredValue(localStorage, "vrata.participantId", "noah.participantId")
-    ?? getStoredValue(sessionStorage, "vrata.participantId", "noah.participantId");
+  const stored = getStoredValue(sessionStorage, "vrata.participantId", "noah.participantId");
   if (stored) {
-    localStorage.setItem("vrata.participantId", stored);
     sessionStorage.setItem("vrata.participantId", stored);
     return stored;
   }
 
   const generated = typeof globalThis.crypto?.randomUUID === "function" ? globalThis.crypto.randomUUID() : fallbackUuid();
-  localStorage.setItem("vrata.participantId", generated);
   sessionStorage.setItem("vrata.participantId", generated);
+  return generated;
+}
+
+function getPersonalOwnerId(): string {
+  const stored = getStoredValue(localStorage, "vrata.personalOwnerId", "noah.personalOwnerId");
+  if (stored) {
+    return stored;
+  }
+
+  const generated = typeof globalThis.crypto?.randomUUID === "function" ? globalThis.crypto.randomUUID() : fallbackUuid();
+  localStorage.setItem("vrata.personalOwnerId", generated);
   return generated;
 }
 
@@ -239,6 +247,7 @@ const XR_SESSION_OPTIONS: XRSessionInit = {
   optionalFeatures: ["local-floor", "bounded-floor", "layers"]
 };
 const participantId = getParticipantId();
+const personalOwnerId = getPersonalOwnerId();
 const displayNameFromQuery = query.get("name")?.trim() || null;
 const storedDisplayName = getStoredValue(localStorage, "vrata.displayName", "noah.displayName")?.trim() || null;
 let displayName = displayNameFromQuery ?? storedDisplayName ?? `Guest-${participantId.slice(0, 4)}`;
@@ -7525,8 +7534,9 @@ openPersonalRoomButton.addEventListener("click", () => {
   openPersonalRoomButton.disabled = true;
   openPersonalRoomButton.textContent = "Opening...";
   debugState.personalRoom.openState = "opening";
-  void openPersonalRoom(apiBaseUrl, { participantId, displayName }).then((result) => {
+  void openPersonalRoom(apiBaseUrl, { participantId: personalOwnerId, displayName }).then((result) => {
     debugState.personalRoom.openState = "idle";
+    sessionStorage.setItem("vrata.participantId", result.room.ownerParticipantId ?? personalOwnerId);
     window.location.assign(result.roomLink);
   }).catch((error: unknown) => {
     console.error(error);

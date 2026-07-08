@@ -423,7 +423,8 @@ test("room documents library uploads downloads selects and deletes PDF", async (
 test("personal room mode opens owner room, restores pose, and allows invite guest", async ({ page, request, browser }) => {
   const ownerId = `owner-e2e-${Date.now()}`;
   await page.addInitScript((id) => {
-    localStorage.setItem("vrata.participantId", id);
+    localStorage.setItem("vrata.personalOwnerId", id);
+    sessionStorage.setItem("vrata.participantId", id);
     localStorage.setItem("vrata.displayName", "Personal Owner");
   }, ownerId);
 
@@ -504,7 +505,7 @@ test("personal room mode opens owner room, restores pose, and allows invite gues
   try {
     const guestId = `guest-${ownerId}`;
     await guestContext.addInitScript((id) => {
-      localStorage.setItem("vrata.participantId", id);
+      sessionStorage.setItem("vrata.participantId", id);
       localStorage.setItem("vrata.displayName", "Personal Guest");
     }, guestId);
     const guestPage = await guestContext.newPage();
