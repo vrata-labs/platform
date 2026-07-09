@@ -1,6 +1,5 @@
 import { expect, test, type APIRequestContext, type Page, type Route } from "@playwright/test";
-import { readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { writeFile } from "node:fs/promises";
 import { inlineSceneBundleUrl } from "./scene-bundle-fixtures.js";
 
 test.describe.configure({ mode: "serial" });
@@ -2492,21 +2491,71 @@ test("control plane uploads and creates a room with selected scene bundle throug
   const bundleId = `ui-upload-${Date.now()}`;
   const roomSlug = `uploaded-room-${Date.now()}`;
   const version = "v1";
-  const glb = await readFile(join(process.cwd(), "apps/runtime-web/public/assets/scenes/livadia-nicholas-office-v1/scene.glb"));
   const zipPath = testInfo.outputPath("uploaded-scene-bundle.zip");
+  const gltf = {
+    asset: { version: "2.0" },
+    scene: 0,
+    scenes: [{ nodes: [0] }],
+    nodes: [{ mesh: 0 }],
+    meshes: [{
+      primitives: [{
+        attributes: { POSITION: 0 },
+        indices: 1,
+        material: 0
+      }]
+    }],
+    materials: [{
+      pbrMetallicRoughness: {
+        baseColorFactor: [0.24, 0.55, 0.99, 1],
+        metallicFactor: 0,
+        roughnessFactor: 1
+      },
+      doubleSided: true
+    }],
+    buffers: [{
+      uri: "data:application/octet-stream;base64,AACAvwAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAAEAAAAAAAAABAAIAAAA=",
+      byteLength: 44
+    }],
+    bufferViews: [{
+      buffer: 0,
+      byteOffset: 0,
+      byteLength: 36,
+      target: 34962
+    }, {
+      buffer: 0,
+      byteOffset: 36,
+      byteLength: 6,
+      target: 34963
+    }],
+    accessors: [{
+      bufferView: 0,
+      componentType: 5126,
+      count: 3,
+      type: "VEC3",
+      min: [-1, 0, 0],
+      max: [1, 2, 0]
+    }, {
+      bufferView: 1,
+      componentType: 5123,
+      count: 3,
+      type: "SCALAR",
+      min: [0],
+      max: [2]
+    }]
+  };
   await writeFile(zipPath, createStoredZip({
     "scene.json": `${JSON.stringify({
       schemaVersion: 1,
       sceneId: bundleId,
       label: "UI Uploaded Scene",
       source: "runtime-e2e",
-      glbPath: "scene.glb",
+      glbPath: "scene.gltf",
       spawnPoints: [{ id: "main", position: { x: 0, y: 1.6, z: 4 } }],
       bounds: { width: 20, height: 8, depth: 20 },
       preview: "preview.webp",
       renderMode: "clean"
     }, null, 2)}\n`,
-    "scene.glb": glb,
+    "scene.gltf": `${JSON.stringify(gltf)}\n`,
     "preview.webp": Buffer.from("webp")
   }));
 
@@ -2518,7 +2567,7 @@ test("control plane uploads and creates a room with selected scene bundle throug
   await page.click("#create-scene-bundle-version");
   await expect(page.locator("#publish-status")).toContainText("scene-bundle-uploaded");
   await expect(page.locator("#scene-bundles-list")).toContainText(bundleId);
-  await expect(page.locator("#scene-bundles-list")).toContainText("scene.glb");
+  await expect(page.locator("#scene-bundles-list")).toContainText("scene.gltf");
 
   await page.fill("#room-name-input", "Uploaded Scene Bundle Room");
   await page.fill("#room-slug-input", roomSlug);
