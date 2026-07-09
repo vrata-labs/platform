@@ -1944,7 +1944,7 @@ test("@private-assets two rooms load two different real SenseTower scene assets"
   await officePage.close();
 });
 
-test("Livadia Nicholas II office scene loads with readable diagnostics", async ({ page, request }) => {
+test("@private-assets Livadia Nicholas II office scene loads with readable diagnostics", async ({ page, request }) => {
   const roomResponse = await request.post("/api/rooms", {
     headers: {
       "x-vrata-admin-token": "test-admin-token"
@@ -2041,6 +2041,11 @@ test("Livadia Nicholas II office scene loads with readable diagnostics", async (
 });
 
 test("scene bundle diagnostics include render and geometry debug info", async ({ page, request }) => {
+  const sceneBundleUrl = inlineSceneBundleUrl({
+    sceneId: "debug-scene-fixture",
+    label: "Debug Scene Fixture",
+    color: [0.25, 0.6, 0.95]
+  });
   const roomResponse = await request.post("/api/rooms", {
     headers: {
       "x-vrata-admin-token": "test-admin-token"
@@ -2049,7 +2054,7 @@ test("scene bundle diagnostics include render and geometry debug info", async ({
       tenantId: "demo-tenant",
       templateId: "meeting-room-basic",
       name: "Debug Scene Room",
-      sceneBundleUrl: "/assets/scenes/the-office-v1/scene.json"
+      sceneBundleUrl
     }
   });
   expect(roomResponse.ok()).toBeTruthy();
