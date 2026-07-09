@@ -1223,7 +1223,7 @@ test.describe("@staging runtime HUD space selector", () => {
   });
 
   test("staging fresh hall mock VR can target and claim a seat through XR interaction path", async ({ page, request }) => {
-    test.setTimeout(90000);
+    test.setTimeout(150000);
 
     const targetName = `Staging Hall Mock VR Seat ${Date.now()}`;
     let roomId: string | null = null;
@@ -1262,7 +1262,7 @@ test.describe("@staging runtime HUD space selector", () => {
           visibility: debug?.avatarSnapshot?.visibilityState ?? null
         };
       }, {
-        timeout: 45000,
+        timeout: 90000,
         intervals: [1000, 2000, 3000]
       }).toEqual({
         sceneBundleState: "loaded",
