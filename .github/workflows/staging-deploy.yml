@@ -26,7 +26,7 @@ concurrency:
 
 jobs:
   deploy:
-    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'deploy/scene-bundles-stage-20260328')
+    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main')
     runs-on: ubuntu-latest
     env:
       STAGING_SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
@@ -166,7 +166,7 @@ jobs:
           STAGING_ADMIN_TOKEN: ${{ env.STAGING_ADMIN_TOKEN }}
           STAGING_HALL_ROOM_ID: 42db8225-f671-4e46-9c28-9381d66a948c
           STAGING_BLUEOFFICE_ROOM_ID: 0b537d34-7b92-4b51-854a-8c64cfb4c114
-          STAGING_SCENE_BUNDLE_BRANCH: deploy/scene-bundles-stage-20260328
+          STAGING_SCENE_BUNDLE_BRANCH: main
           STAGING_SCENE_BUNDLE_VERSION: ${{ steps.deploy.outputs.deploy_sha }}
           STAGING_SCENE_BUNDLE_PATCH_REPORT: /tmp/vrata-scene-bundle-patch-report.json
         run: node tools/patch-staging-scene-bundles.mjs
