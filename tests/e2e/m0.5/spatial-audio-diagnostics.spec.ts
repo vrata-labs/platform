@@ -40,6 +40,9 @@ test("M0.5 spatial audio diagnostics follow remote participant pose and expose f
         timeout: 10000,
         intervals: [500, 1000, 2000]
       }).toBe(true);
+      const fallbackDebug = await readM05Debug(fallback);
+      expect(fallbackDebug?.spatialAudio?.mode).toBe("disabled");
+      expect(fallbackDebug?.spatialAudio?.fallbackReason).toBe("query_disabled");
     } finally {
       await fallback.close();
     }

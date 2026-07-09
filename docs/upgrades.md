@@ -12,16 +12,14 @@ This document describes the target upgrade policy for Vrata `0.1` self-host depl
 
 ## Backup Before Upgrade
 
-Example Postgres dump from the compose stack:
+Create and validate a compose backup before changing image tags:
 
 ```bash
-set -a
-. infra/docker/.env.selfhost
-set +a
-docker compose --env-file infra/docker/.env.selfhost -f infra/docker/compose.selfhost.yml exec -T postgres pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB" > vrata-postgres-backup.sql
+pnpm backup:compose -- --env-file infra/docker/.env.selfhost --compose-file infra/docker/compose.selfhost.yml --output-dir backups
+pnpm backup:validate -- --backup-dir backups/vrata-<timestamp>-<image-tag>
 ```
 
-Back up MinIO data according to your storage backend. For local Docker volumes, snapshot the `minio-data` volume or copy the objects with an S3-compatible client.
+The backup command exports Postgres, MinIO bucket objects, object inventory, bucket policy metadata when available, image metadata, and a checksum manifest. See `docs/backup-restore.md` for restore and disaster recovery details.
 
 ## Upgrade
 
@@ -51,7 +49,12 @@ curl -fsS "$VRATA_APP_BASE_URL/control-plane"
 If smoke fails, set `IMAGE_TAG` back to the previous known-good tag and restart:
 
 ```bash
-docker compose --env-file infra/docker/.env.selfhost -f infra/docker/compose.selfhost.yml up -d
+pnpm rollback:compose -- \
+  --previous-image-tag 0.1.0 \
+  --env-file infra/docker/.env.selfhost \
+  --compose-file infra/docker/compose.selfhost.yml \
+  --smoke-base-url "$VRATA_APP_BASE_URL" \
+  --confirm-rollback
 ```
 
 Do not run `down -v` during rollback unless you intentionally want to delete data.

@@ -93,12 +93,22 @@ test("M1.3 host creates test card and member input syncs counter", async ({ brow
     await createTestCard(host);
 
     await expect.poll(async () => {
-      const debug = await readDebug(guest);
-      return debug?.mediaObjects?.surfaces?.find((surface) => surface.surfaceId === "debug-main")?.activeObjectType ?? null;
+      const hostDebug = await readDebug(host);
+      const memberDebug = await readDebug(member);
+      const guestDebug = await readDebug(guest);
+      return {
+        hostType: hostDebug?.mediaObjects?.surfaces?.find((surface) => surface.surfaceId === "debug-main")?.activeObjectType ?? null,
+        memberType: memberDebug?.mediaObjects?.surfaces?.find((surface) => surface.surfaceId === "debug-main")?.activeObjectType ?? null,
+        guestType: guestDebug?.mediaObjects?.surfaces?.find((surface) => surface.surfaceId === "debug-main")?.activeObjectType ?? null
+      };
     }, {
       timeout: 10000,
       intervals: [500, 1000, 2000]
-    }).toBe("surface-test-card");
+    }).toEqual({
+      hostType: "surface-test-card",
+      memberType: "surface-test-card",
+      guestType: "surface-test-card"
+    });
 
     const sentInput = await member.evaluate(() => (window as Window & {
       __VRATA_TEST__?: { sendDebugSurfaceInput: (input?: { kind?: string; u?: number; v?: number }) => boolean };

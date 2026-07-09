@@ -1,7 +1,84 @@
-import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
-import { inlineSceneBundleUrl } from "./scene-bundle-fixtures";
+import { expect, test, type APIRequestContext, type Page, type Route } from "@playwright/test";
+import { readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 
 test.describe.configure({ mode: "serial" });
+
+const e2eRoomStatePublicUrl = process.env.E2E_ROOM_STATE_PUBLIC_URL ?? "ws://127.0.0.1:2567";
+const e2eRoomStateHost = new URL(e2eRoomStatePublicUrl).host;
+const e2eBaseUrl = process.env.BASE_URL ?? "http://127.0.0.1:4000";
+const e2eAdminToken = process.env.STAGING_ADMIN_TOKEN ?? "test-admin-token";
+
+function createStoredZip(files: Record<string, string | Buffer>): Buffer {
+  const localParts: Buffer[] = [];
+  const centralParts: Buffer[] = [];
+  let offset = 0;
+
+  for (const [name, rawContent] of Object.entries(files)) {
+    const nameBuffer = Buffer.from(name);
+    const content = Buffer.isBuffer(rawContent) ? rawContent : Buffer.from(rawContent);
+    const localHeader = Buffer.alloc(30);
+    localHeader.writeUInt32LE(0x04034b50, 0);
+    localHeader.writeUInt16LE(20, 4);
+    localHeader.writeUInt16LE(0, 6);
+    localHeader.writeUInt16LE(0, 8);
+    localHeader.writeUInt32LE(0, 10);
+    localHeader.writeUInt32LE(0, 14);
+    localHeader.writeUInt32LE(content.byteLength, 18);
+    localHeader.writeUInt32LE(content.byteLength, 22);
+    localHeader.writeUInt16LE(nameBuffer.byteLength, 26);
+    localHeader.writeUInt16LE(0, 28);
+    localParts.push(localHeader, nameBuffer, content);
+
+    const centralHeader = Buffer.alloc(46);
+    centralHeader.writeUInt32LE(0x02014b50, 0);
+    centralHeader.writeUInt16LE(20, 4);
+    centralHeader.writeUInt16LE(20, 6);
+    centralHeader.writeUInt16LE(0, 8);
+    centralHeader.writeUInt16LE(0, 10);
+    centralHeader.writeUInt32LE(0, 12);
+    centralHeader.writeUInt32LE(0, 16);
+    centralHeader.writeUInt32LE(content.byteLength, 20);
+    centralHeader.writeUInt32LE(content.byteLength, 24);
+    centralHeader.writeUInt16LE(nameBuffer.byteLength, 28);
+    centralHeader.writeUInt16LE(0, 30);
+    centralHeader.writeUInt16LE(0, 32);
+    centralHeader.writeUInt16LE(0, 34);
+    centralHeader.writeUInt16LE(0, 36);
+    centralHeader.writeUInt32LE(0, 38);
+    centralHeader.writeUInt32LE(offset, 42);
+    centralParts.push(centralHeader, nameBuffer);
+    offset += localHeader.byteLength + nameBuffer.byteLength + content.byteLength;
+  }
+
+  const centralDirectory = Buffer.concat(centralParts);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0);
+  end.writeUInt16LE(0, 4);
+  end.writeUInt16LE(0, 6);
+  end.writeUInt16LE(Object.keys(files).length, 8);
+  end.writeUInt16LE(Object.keys(files).length, 10);
+  end.writeUInt32LE(centralDirectory.byteLength, 12);
+  end.writeUInt32LE(offset, 16);
+  end.writeUInt16LE(0, 20);
+  return Buffer.concat([...localParts, centralDirectory, end]);
+}
+
+function e2eUrl(path: string): string {
+  return new URL(path, e2eBaseUrl).toString();
+}
+
+function e2eRoomLink(roomLink: string): string {
+  return roomLink.replace(/^http:\/\/127\.0\.0\.1:4000/, e2eBaseUrl.replace(/\/$/, ""));
+}
+
+function e2eRoomStateHealthUrl(): string {
+  const url = new URL(e2eRoomStatePublicUrl);
+  url.protocol = url.protocol === "wss:" ? "https:" : "http:";
+  url.pathname = "/health";
+  url.search = "";
+  return url.toString();
+}
 
 async function createAvatarRoom(request: APIRequestContext, name: string, sceneBundleUrl?: string): Promise<{ roomId: string; roomLink: string }> {
   const createRoomResponse = await request.post("/api/rooms", {
@@ -26,8 +103,83 @@ async function createAvatarRoom(request: APIRequestContext, name: string, sceneB
   return (await createRoomResponse.json()) as { roomId: string; roomLink: string };
 }
 
+async function createPrivateRoom(request: APIRequestContext, name: string): Promise<{ roomId: string; roomLink: string }> {
+  const createRoomResponse = await request.post("/api/rooms", {
+    headers: {
+      "x-vrata-admin-token": e2eAdminToken
+    },
+    data: {
+      tenantId: "demo-tenant",
+      templateId: "meeting-room-basic",
+      name,
+      visibility: "private",
+      guestAllowed: false
+    }
+  });
+  expect(createRoomResponse.ok()).toBeTruthy();
+  return (await createRoomResponse.json()) as { roomId: string; roomLink: string };
+}
+
+async function createRoomInvite(request: APIRequestContext, roomId: string, waitingRoomEnabled = false, role: "guest" | "member" | "host" | "admin" = "guest"): Promise<{ inviteLink: string }> {
+  const inviteResponse = await request.post(`/api/rooms/${roomId}/invites`, {
+    headers: {
+      "x-vrata-admin-token": e2eAdminToken
+    },
+    data: {
+      expiresInSeconds: 300,
+      waitingRoomEnabled,
+      role
+    }
+  });
+  expect(inviteResponse.ok()).toBeTruthy();
+  return (await inviteResponse.json()) as { inviteLink: string };
+}
+
+async function createExpiredRoomInvite(request: APIRequestContext, roomId: string): Promise<{ inviteLink: string }> {
+  const inviteResponse = await request.post(`/api/rooms/${roomId}/invites`, {
+    headers: {
+      "x-vrata-admin-token": e2eAdminToken
+    },
+    data: {
+      expiresAt: new Date(Date.now() - 1000).toISOString(),
+      role: "guest"
+    }
+  });
+  expect(inviteResponse.ok()).toBeTruthy();
+  return (await inviteResponse.json()) as { inviteLink: string };
+}
+
+async function completeGuestOnboarding(page: Page, displayName: string, withoutAudio = false): Promise<void> {
+  await expect(page.locator("#guest-onboarding")).toBeVisible({ timeout: 10000 });
+  await page.fill("#guest-name-input", displayName);
+  await page.click(withoutAudio ? "#guest-enter-without-audio" : "#guest-enter-room");
+  await expect(page.locator("#guest-onboarding")).toBeHidden({ timeout: 10000 });
+}
+
+async function clickEnabledDomButton(page: Page, selector: string): Promise<void> {
+  await expect.poll(async () => page.evaluate((targetSelector) => {
+    const button = document.querySelector<HTMLButtonElement>(targetSelector);
+    if (!button || button.disabled) {
+      return false;
+    }
+    button.click();
+    return true;
+  }, selector), {
+    timeout: 15000,
+    intervals: [100, 250, 500, 1000]
+  }).toBe(true);
+}
+
 async function createAvatarHallRoom(request: APIRequestContext, name: string): Promise<{ roomId: string; roomLink: string }> {
   return createAvatarRoom(request, name, "/assets/scenes/sense-hall2-v1/scene.json");
+}
+
+async function readDiagnostics<T>(request: APIRequestContext, roomId: string): Promise<T> {
+  const diagnosticsResponse = await request.get(`/api/rooms/${roomId}/diagnostics`, {
+    headers: { "x-vrata-admin-token": e2eAdminToken }
+  });
+  expect(diagnosticsResponse.ok()).toBeTruthy();
+  return await diagnosticsResponse.json() as T;
 }
 
 async function readInteractionDebug(page: Page) {
@@ -65,19 +217,23 @@ async function waitForHallInteractionReady(page: Page) {
   });
 }
 
+function isInactiveLipsyncSourceState(state: string | null): boolean {
+  return state === "idle" || state === "muted" || state === "missing";
+}
+
 test("room shell loads and presence is registered", async ({ page, request }) => {
   await page.goto("/rooms/demo-room");
   await page.waitForTimeout(3000);
 
   await expect(page.locator("#room-name")).toContainText("meeting-room-basic - demo-room");
-  await expect(page.locator("#status-line")).toContainText("Joined as");
+  await expect(page.locator("#status-line")).toContainText("Joined as", { timeout: 10000 });
   await expect(page.locator("#room-state-line")).toContainText(/Room-state:/);
   await expect(page.locator("#start-share")).toBeHidden();
 
   const debug = await page.evaluate(() => (window as Window & { __VRATA_DEBUG__?: unknown }).__VRATA_DEBUG__);
   expect(debug).toBeTruthy();
   const debugState = debug as { roomStateConnected?: boolean; roomStateUrl?: string; access?: { token?: string } };
-  expect(debugState.roomStateUrl).toContain("127.0.0.1:2567");
+  expect(debugState.roomStateUrl).toContain(e2eRoomStateHost);
   expect(debugState.access?.token).toBe("[redacted]");
 
   const presenceResponse = await request.get("/api/rooms/demo-room/presence");
@@ -85,8 +241,7 @@ test("room shell loads and presence is registered", async ({ page, request }) =>
   expect(presence.items.length).toBeGreaterThan(0);
 
   await expect.poll(async () => {
-    const diagnosticsResponse = await request.get("/api/rooms/demo-room/diagnostics");
-    const diagnostics = (await diagnosticsResponse.json()) as { items: Array<{ note?: string }> };
+    const diagnostics = await readDiagnostics<{ items: Array<{ note?: string }> }>(request, "demo-room");
     return diagnostics.items.some((item) => item.note === "runtime_booted");
   }, {
     timeout: 15000,
@@ -107,6 +262,422 @@ test("room shell exposes audio device selectors and level meters", async ({ page
   await expect(page.locator("#mic-select option").first()).toContainText("System default microphone");
   await expect(page.locator("#speaker-select option").first()).toContainText("System default speaker");
   await expect(page.locator("#audio-device-status")).not.toHaveText("");
+});
+
+test("persistent notes panel autosaves markdown and reloads safely", async ({ page, request }) => {
+  const roomResponse = await request.post("/api/rooms", {
+    headers: { "x-vrata-admin-token": e2eAdminToken },
+    data: {
+      tenantId: "demo-tenant",
+      templateId: "meeting-room-basic",
+      name: `Notes E2E ${Date.now()}`
+    }
+  });
+  expect(roomResponse.ok()).toBeTruthy();
+  const room = (await roomResponse.json()) as { roomId: string; roomLink: string };
+  const invite = await createRoomInvite(request, room.roomId, false, "member");
+
+  await page.goto(e2eRoomLink(invite.inviteLink));
+  await completeGuestOnboarding(page, "Notes Member", true);
+  await expect(page.locator("#notes-panel")).toBeVisible();
+  await page.selectOption("#notes-scope-select", "private");
+  await expect(page.locator("#notes-status")).toContainText(/Notes ready|Notes saved/, { timeout: 10000 });
+
+  const note = "# Sprint notes\n- persisted item\n<script>alert(1)</script>";
+  await page.fill("#notes-editor", note);
+  await expect(page.locator("#notes-status")).toContainText("Notes saved", { timeout: 10000 });
+  await expect(page.locator("#notes-preview")).toContainText("Sprint notes");
+  await expect(page.locator("#notes-preview")).toContainText("<script>alert(1)</script>");
+  await expect(page.locator("#notes-preview script")).toHaveCount(0);
+
+  const privateNotesEndpoint = `**/api/rooms/${room.roomId}/notes/private`;
+  const failPrivateSaves = async (route: Route): Promise<void> => {
+    if (route.request().method() !== "PUT") {
+      await route.continue();
+      return;
+    }
+    await route.fulfill({
+      status: 503,
+      contentType: "application/json",
+      body: JSON.stringify({ error: "temporary_notes_failure" })
+    });
+  };
+  const retriedNote = `${note}\n- retry after failed save`;
+  await page.route(privateNotesEndpoint, failPrivateSaves);
+  await page.fill("#notes-editor", retriedNote);
+  await expect(page.locator("#notes-status")).toContainText("Notes save failed", { timeout: 10000 });
+  await expect(page.locator("#notes-retry-save")).toBeVisible();
+  await page.unroute(privateNotesEndpoint, failPrivateSaves);
+  await page.click("#notes-retry-save");
+  await expect(page.locator("#notes-status")).toContainText("Notes saved", { timeout: 10000 });
+
+  await page.reload();
+  await completeGuestOnboarding(page, "Notes Member", true);
+  await expect(page.locator("#notes-editor")).toHaveValue(retriedNote, { timeout: 10000 });
+  await expect.poll(async () => page.evaluate(() => (window as Window & { __VRATA_DEBUG__?: { notes?: { contentLength?: number } } }).__VRATA_DEBUG__?.notes?.contentLength ?? 0), {
+    timeout: 10000
+  }).toBe(retriedNote.length);
+  await expect.poll(async () => page.evaluate(() => (window as Window & { __VRATA_DEBUG__?: { notes?: { saveState?: string } } }).__VRATA_DEBUG__?.notes?.saveState ?? ""), {
+    timeout: 10000
+  }).toMatch(/ready|saved/);
+});
+
+test("room documents library uploads downloads selects and deletes PDF", async ({ page, request }) => {
+  test.setTimeout(120000);
+  const roomResponse = await request.post("/api/rooms", {
+    headers: { "x-vrata-admin-token": e2eAdminToken },
+    data: {
+      tenantId: "demo-tenant",
+      templateId: "meeting-room-basic",
+      name: `Documents E2E ${Date.now()}`
+    }
+  });
+  expect(roomResponse.ok()).toBeTruthy();
+  const room = (await roomResponse.json()) as { roomId: string; roomLink: string };
+  const hostInvite = await createRoomInvite(request, room.roomId, false, "host");
+  const memberInvite = await createRoomInvite(request, room.roomId, false, "member");
+  const guestInvite = await createRoomInvite(request, room.roomId, false, "guest");
+
+  await page.goto(e2eRoomLink(hostInvite.inviteLink));
+  await completeGuestOnboarding(page, "Documents Host", true);
+  await expect(page.locator("#documents-panel")).toBeVisible();
+  await expect(page.locator("#document-upload-button")).toBeEnabled({ timeout: 10000 });
+  await expect(page.locator("#document-status")).toContainText(/No room documents yet|Documents ready/, { timeout: 10000 });
+
+  await page.setInputFiles("#document-upload-input", {
+    name: "meeting.pdf",
+    mimeType: "application/pdf",
+    buffer: Buffer.from("%PDF-1.4\n1 0 obj\n<<>>\nendobj\n%%EOF\n")
+  });
+  await expect.poll(async () => page.locator("#document-upload-input").evaluate((input: HTMLInputElement) => input.files?.[0]?.name ?? ""), {
+    timeout: 5000
+  }).toBe("meeting.pdf");
+  await expect(page.locator("#document-upload-button")).toBeEnabled({ timeout: 10000 });
+  const uploadPromise = page.waitForResponse((response) =>
+    response.request().method() === "POST" && response.url().endsWith(`/api/rooms/${room.roomId}/documents`)
+  );
+  await page.locator("#document-upload-button").click();
+  const uploadResponse = await uploadPromise;
+  expect(uploadResponse.status()).toBe(201);
+  await expect(page.locator("#document-select")).toContainText("meeting.pdf");
+
+  await clickEnabledDomButton(page, "#document-surface-button");
+  await expect.poll(async () => page.evaluate(() => {
+    const debug = (window as Window & { __VRATA_DEBUG__?: { documents?: { selectedSurfaceId?: string | null } } }).__VRATA_DEBUG__;
+    return debug?.documents?.selectedSurfaceId ?? null;
+  }), { timeout: 10000 }).toBe("debug-main");
+
+  const memberPage = await page.context().newPage();
+  try {
+    await memberPage.goto(e2eRoomLink(memberInvite.inviteLink));
+    await completeGuestOnboarding(memberPage, "Documents Member", true);
+    await expect(memberPage.locator("#documents-panel")).toBeVisible();
+    await expect(memberPage.locator("#document-select")).toContainText("meeting.pdf", { timeout: 10000 });
+    await memberPage.evaluate(() => {
+      const state = window as Window & {
+        __VRATA_DOCUMENT_DOWNLOADS__?: Array<{ filename: string; href: string }>;
+        __VRATA_DOCUMENT_DOWNLOAD_CLICK_PATCHED__?: boolean;
+      };
+      state.__VRATA_DOCUMENT_DOWNLOADS__ = [];
+      if (state.__VRATA_DOCUMENT_DOWNLOAD_CLICK_PATCHED__) return;
+      state.__VRATA_DOCUMENT_DOWNLOAD_CLICK_PATCHED__ = true;
+      const originalClick = HTMLAnchorElement.prototype.click;
+      HTMLAnchorElement.prototype.click = function patchedDocumentDownloadClick(this: HTMLAnchorElement): void {
+        if (this.download) {
+          state.__VRATA_DOCUMENT_DOWNLOADS__?.push({ filename: this.download, href: this.href });
+          return;
+        }
+        originalClick.call(this);
+      };
+    });
+    await clickEnabledDomButton(memberPage, "#document-download-button");
+    await expect.poll(async () => memberPage.evaluate(() => (window as Window & { __VRATA_DOCUMENT_DOWNLOADS__?: Array<{ filename: string; href: string }> }).__VRATA_DOCUMENT_DOWNLOADS__?.length ?? 0), {
+      timeout: 10000
+    }).toBe(1);
+    const downloads = await memberPage.evaluate(() => (window as Window & { __VRATA_DOCUMENT_DOWNLOADS__?: Array<{ filename: string; href: string }> }).__VRATA_DOCUMENT_DOWNLOADS__ ?? []);
+    expect(downloads[0]?.filename).toBe("meeting.pdf");
+    expect(downloads[0]?.href).toContain("blob:");
+  } finally {
+    await memberPage.close();
+  }
+
+  const guestPage = await page.context().newPage();
+  try {
+    await guestPage.goto(e2eRoomLink(guestInvite.inviteLink));
+    await completeGuestOnboarding(guestPage, "Documents Guest", true);
+    await expect(guestPage.locator("#documents-panel")).toBeHidden();
+  } finally {
+    await guestPage.close();
+  }
+
+  await clickEnabledDomButton(page, "#document-delete-button");
+  await expect(page.locator("#document-select")).toContainText("No documents");
+});
+
+test("personal room mode opens owner room, restores pose, and allows invite guest", async ({ page, request, browser }) => {
+  const ownerId = `owner-e2e-${Date.now()}`;
+  await page.addInitScript((id) => {
+    localStorage.setItem("vrata.personalOwnerId", id);
+    sessionStorage.setItem("vrata.participantId", id);
+    localStorage.setItem("vrata.displayName", "Personal Owner");
+  }, ownerId);
+
+  await page.goto("/rooms/demo-room");
+  await expect(page.locator("#open-personal-room")).toBeVisible({ timeout: 10000 });
+  await page.click("#open-personal-room");
+  await page.waitForURL(/\/rooms\/personal-[a-f0-9]{16}$/,{ timeout: 15000 });
+  await expect(page.locator("#status-line")).toContainText("Joined as", { timeout: 10000 });
+
+  const roomId = new URL(page.url()).pathname.split("/").filter(Boolean)[1];
+  expect(roomId).toMatch(/^personal-[a-f0-9]{16}$/);
+  await expect.poll(async () => page.evaluate(() => {
+    const debug = (window as Window & { __VRATA_DEBUG__?: { personalRoom?: { roomType?: string; isOwner?: boolean } } }).__VRATA_DEBUG__;
+    return debug?.personalRoom ?? null;
+  }), { timeout: 10000 }).toMatchObject({ roomType: "personal", isOwner: true });
+
+  const denied = await request.post("/api/tokens/state", {
+    data: { roomId, participantId: `other-${ownerId}`, displayName: "Other" }
+  });
+  expect(denied.status()).toBe(403);
+  expect(((await denied.json()) as { reason?: string }).reason).toBe("invite_required");
+
+  const ownerTokenResponse = await request.post("/api/tokens/state", {
+    data: { roomId, participantId: ownerId, displayName: "Personal Owner" }
+  });
+  expect(ownerTokenResponse.ok()).toBeTruthy();
+  const ownerToken = ((await ownerTokenResponse.json()) as { token: string }).token;
+
+  const initialPose = await page.evaluate(() => {
+    const root = (window as Window & { __VRATA_DEBUG__?: { localPose?: { root?: { x?: number; z?: number; yaw?: number } } } }).__VRATA_DEBUG__?.localPose?.root;
+    return {
+      x: root?.x ?? 0,
+      z: root?.z ?? 0,
+      yaw: root?.yaw ?? 0
+    };
+  });
+  const savedAtBeforeMove = await page.evaluate(() => (window as Window & { __VRATA_DEBUG__?: { personalRoom?: { lastPoseSavedAt?: string | null } } }).__VRATA_DEBUG__?.personalRoom?.lastPoseSavedAt ?? null);
+  await page.keyboard.down("KeyW");
+  await page.waitForTimeout(800);
+  await page.keyboard.up("KeyW");
+  await expect.poll(async () => page.evaluate((start) => {
+    const root = (window as Window & { __VRATA_DEBUG__?: { localPose?: { root?: { x?: number; z?: number } } } }).__VRATA_DEBUG__?.localPose?.root;
+    return Math.hypot((root?.x ?? start.x) - start.x, (root?.z ?? start.z) - start.z) > 0.2;
+  }, initialPose), { timeout: 10000 }).toBe(true);
+  await expect.poll(async () => page.evaluate((previousSavedAt) => {
+    const savedAt = (window as Window & { __VRATA_DEBUG__?: { personalRoom?: { lastPoseSavedAt?: string | null } } }).__VRATA_DEBUG__?.personalRoom?.lastPoseSavedAt ?? null;
+    return Boolean(savedAt && savedAt !== previousSavedAt);
+  }, savedAtBeforeMove), { timeout: 10000 }).toBe(true);
+  const savedPose = await page.evaluate(() => {
+    const root = (window as Window & { __VRATA_DEBUG__?: { localPose?: { root?: { x?: number; z?: number; yaw?: number } } } }).__VRATA_DEBUG__?.localPose?.root;
+    return {
+      x: Math.round((root?.x ?? 0) * 100) / 100,
+      z: Math.round((root?.z ?? 0) * 100) / 100,
+      yaw: Math.round((root?.yaw ?? 0) * 10) / 10
+    };
+  });
+
+  await page.reload();
+  await expect(page.locator("#status-line")).toContainText("Joined as", { timeout: 10000 });
+  await expect.poll(async () => page.evaluate(() => {
+    const debug = (window as Window & { __VRATA_DEBUG__?: { personalRoom?: { lastPoseRestored?: boolean }; localPose?: { root?: { x?: number; z?: number; yaw?: number } } } }).__VRATA_DEBUG__;
+    return {
+      restored: debug?.personalRoom?.lastPoseRestored ?? false,
+      x: Math.round((debug?.localPose?.root?.x ?? 0) * 100) / 100,
+      z: Math.round((debug?.localPose?.root?.z ?? 0) * 100) / 100,
+      yaw: Math.round((debug?.localPose?.root?.yaw ?? 0) * 10) / 10
+    };
+  }), { timeout: 10000 }).toEqual({ restored: true, ...savedPose });
+
+  const inviteResponse = await request.post(`/api/rooms/${roomId}/invites`, {
+    headers: { "authorization": `Bearer ${ownerToken}` },
+    data: { expiresInSeconds: 300, role: "guest" }
+  });
+  expect(inviteResponse.ok()).toBeTruthy();
+  const invite = (await inviteResponse.json()) as { inviteLink: string };
+
+  const guestContext = await browser.newContext();
+  try {
+    const guestId = `guest-${ownerId}`;
+    await guestContext.addInitScript((id) => {
+      sessionStorage.setItem("vrata.participantId", id);
+      localStorage.setItem("vrata.displayName", "Personal Guest");
+    }, guestId);
+    const guestPage = await guestContext.newPage();
+    await guestPage.goto(e2eRoomLink(invite.inviteLink));
+    await completeGuestOnboarding(guestPage, "Personal Guest");
+    await expect(guestPage.locator("#status-line")).toContainText("Joined as", { timeout: 10000 });
+    await expect.poll(async () => guestPage.evaluate(() => {
+      const debug = (window as Window & { __VRATA_DEBUG__?: { access?: { role?: string }; personalRoom?: { isOwner?: boolean } } }).__VRATA_DEBUG__;
+      return { role: debug?.access?.role ?? null, isOwner: debug?.personalRoom?.isOwner ?? true };
+    }), { timeout: 10000 }).toEqual({ role: "guest", isOwner: false });
+  } finally {
+    await guestContext.close();
+  }
+});
+
+test("private room opens only through a valid invite link", async ({ page, request }) => {
+  const room = await createPrivateRoom(request, `Private E2E ${Date.now()}`);
+
+  await page.goto(e2eRoomLink(room.roomLink));
+  await expect(page.locator("#status-line")).toContainText("Access denied: private invite required");
+
+  const invite = await createRoomInvite(request, room.roomId);
+  await page.goto(e2eRoomLink(invite.inviteLink));
+  await expect(page.locator("#guest-onboarding")).toBeVisible();
+  await expect(page.locator("#guest-controls-hint")).toContainText("WASD");
+  await completeGuestOnboarding(page, "Private Guest");
+  await expect(page.locator("#status-line")).toContainText("Joined as Private Guest", { timeout: 10000 });
+  await expect(page.locator("#guest-access-line")).toContainText("Guest access: members only");
+});
+
+test("guest onboarding supports public join, muted preference, and device hints", async ({ page }) => {
+  await page.goto("/rooms/demo-room?onboard=1");
+
+  await expect(page.locator("#guest-onboarding")).toBeVisible();
+  await expect(page.locator("#guest-controls-hint")).toContainText("WASD");
+  await expect(page.locator("#guest-join-muted")).toBeChecked();
+  await completeGuestOnboarding(page, "Onboarded Guest");
+  await expect(page.locator("#status-line")).toContainText("Joined as Onboarded Guest", { timeout: 10000 });
+  await expect(page.locator("#join-muted")).toBeChecked();
+  await expect.poll(async () => page.evaluate(() => {
+    const debug = (window as Window & { __VRATA_DEBUG__?: { media?: { audioJoined?: boolean; publishedAudio?: boolean }; guestOnboarding?: { completed?: boolean; joinMuted?: boolean } } }).__VRATA_DEBUG__;
+    return {
+      completed: debug?.guestOnboarding?.completed ?? false,
+      joinMuted: debug?.guestOnboarding?.joinMuted ?? false,
+      audioJoined: debug?.media?.audioJoined ?? true,
+      publishedAudio: debug?.media?.publishedAudio ?? true
+    };
+  }), {
+    timeout: 10000,
+    intervals: [500, 1000, 2000]
+  }).toEqual({ completed: true, joinMuted: true, audioJoined: false, publishedAudio: false });
+});
+
+test("guest onboarding lets guest enter without audio after microphone denial", async ({ page }) => {
+  await page.addInitScript(() => {
+    const mediaDevices = navigator.mediaDevices;
+    Object.defineProperty(navigator, "mediaDevices", {
+      configurable: true,
+      value: {
+        enumerateDevices: mediaDevices?.enumerateDevices?.bind(mediaDevices) ?? (async () => []),
+        getDisplayMedia: mediaDevices?.getDisplayMedia?.bind(mediaDevices),
+        getUserMedia: async () => {
+          throw new DOMException("Microphone blocked by test", "NotAllowedError");
+        }
+      }
+    });
+  });
+
+  await page.goto("/rooms/demo-room?onboard=1");
+  await page.fill("#guest-name-input", "No Audio Guest");
+  await page.click("#guest-check-microphone");
+  await expect(page.locator("#guest-onboarding-status")).toContainText("Microphone permission denied");
+  await page.click("#guest-enter-without-audio");
+  await expect(page.locator("#status-line")).toContainText("Joined as No Audio Guest", { timeout: 10000 });
+  await expect.poll(async () => page.evaluate(() => {
+    const debug = (window as Window & { __VRATA_DEBUG__?: { media?: { audioJoined?: boolean; publishedAudio?: boolean }; guestOnboarding?: { audioMode?: string } } }).__VRATA_DEBUG__;
+    return {
+      audioMode: debug?.guestOnboarding?.audioMode ?? null,
+      audioJoined: debug?.media?.audioJoined ?? true,
+      publishedAudio: debug?.media?.publishedAudio ?? true
+    };
+  }), {
+    timeout: 10000,
+    intervals: [500, 1000, 2000]
+  }).toEqual({ audioMode: "without_audio", audioJoined: false, publishedAudio: false });
+});
+
+test("guest onboarding shows unsupported media warning without blocking entry", async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, "mediaDevices", {
+      configurable: true,
+      value: {
+        enumerateDevices: async () => []
+      }
+    });
+  });
+
+  await page.goto("/rooms/demo-room?onboard=1");
+  await expect(page.locator("#guest-compatibility-warning")).toContainText("Microphone unsupported");
+  await completeGuestOnboarding(page, "Unsupported Media Guest", true);
+  await expect(page.locator("#status-line")).toContainText("Joined as Unsupported Media Guest", { timeout: 10000 });
+});
+
+test("guest onboarding shows clear expired invite message", async ({ page, request }) => {
+  const room = await createPrivateRoom(request, `Expired Invite E2E ${Date.now()}`);
+  const invite = await createExpiredRoomInvite(request, room.roomId);
+
+  await page.goto(e2eRoomLink(invite.inviteLink));
+  await completeGuestOnboarding(page, "Expired Guest");
+  await expect(page.locator("#status-line")).toContainText("Access denied: invite link expired", { timeout: 10000 });
+  await expect(page.locator("#guest-access-line")).toContainText("Access denied: invite link expired");
+});
+
+test("guest onboarding controls hint matches mobile and XR modes", async ({ browser }) => {
+  const mobileContext = await browser.newContext({
+    hasTouch: true,
+    isMobile: true,
+    viewport: { width: 390, height: 844 },
+    userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1"
+  });
+  const xrContext = await browser.newContext();
+  try {
+    const mobilePage = await mobileContext.newPage();
+    await mobilePage.goto("/rooms/demo-room?onboard=1");
+    await expect(mobilePage.locator("#guest-controls-hint")).toContainText("left drag");
+
+    const xrPage = await xrContext.newPage();
+    await xrPage.goto("/rooms/demo-room?debug=1&xrmock=1&onboard=1");
+    await expect(xrPage.locator("#guest-controls-hint")).toContainText("left stick");
+  } finally {
+    await xrContext.close();
+    await mobileContext.close();
+  }
+});
+
+test("host controls lock room and remove guest", async ({ page, browser, request }) => {
+  const room = await createPrivateRoom(request, `Host Controls E2E ${Date.now()}`);
+  const hostInvite = await createRoomInvite(request, room.roomId, false, "host");
+  const guestInvite = await createRoomInvite(request, room.roomId, false, "guest");
+
+  await page.goto(`${e2eRoomLink(hostInvite.inviteLink)}&name=Host`);
+  await expect(page.locator("#status-line")).toContainText("Joined as", { timeout: 10000 });
+  await expect(page.locator("#host-controls")).toBeVisible({ timeout: 10000 });
+  await expect(page.locator("#lock-room")).toBeEnabled();
+
+  const guestContext = await browser.newContext();
+  const lockedContext = await browser.newContext();
+  try {
+    const guestPage = await guestContext.newPage();
+    await guestPage.goto(`${e2eRoomLink(guestInvite.inviteLink)}&name=Guest`);
+    await expect(guestPage.locator("#status-line")).toContainText("Joined as", { timeout: 10000 });
+    const guestParticipantId = await guestPage.evaluate(() => (window as Window & { __VRATA_DEBUG__?: { participantId?: string } }).__VRATA_DEBUG__?.participantId ?? "");
+    expect(guestParticipantId).not.toBe("");
+
+    await expect.poll(async () => page.locator("#host-participant-select").evaluate((select) => Array.from((select as HTMLSelectElement).options).map((option) => option.value)), {
+      timeout: 10000,
+      intervals: [500, 1000]
+    }).toContain(guestParticipantId);
+    await page.locator("#host-participant-select").selectOption(guestParticipantId);
+    await page.locator("#remove-participant").click();
+    await expect(guestPage.locator("#status-line")).toContainText("Access denied: removed by host", { timeout: 10000 });
+
+    await page.locator("#lock-room").click();
+    await expect(page.locator("#host-controls-status")).toContainText("Room locked");
+    const lockedInvite = await createRoomInvite(request, room.roomId, false, "guest");
+    const lockedPage = await lockedContext.newPage();
+    await lockedPage.goto(`${e2eRoomLink(lockedInvite.inviteLink)}&name=LockedGuest`);
+    await expect(lockedPage.locator("#status-line")).toContainText("Access denied: room is locked");
+
+    await page.locator("#unlock-room").click();
+    await expect(page.locator("#host-controls-status")).toContainText(/Room (unlocked|open)/);
+    const unlockedInvite = await createRoomInvite(request, room.roomId, false, "guest");
+    await lockedPage.goto(`${e2eRoomLink(unlockedInvite.inviteLink)}&name=UnlockedGuest`);
+    await expect(lockedPage.locator("#status-line")).toContainText("Joined as", { timeout: 10000 });
+  } finally {
+    await lockedContext.close();
+    await guestContext.close();
+  }
 });
 
 test("mobile room HUD can collapse and scroll without covering the scene", async ({ page }) => {
@@ -245,7 +816,7 @@ test("mobile right-side drag turns the camera", async ({ browser }) => {
 });
 
 test("room-state service health endpoint responds", async () => {
-  const response = await fetch("http://127.0.0.1:2567/health");
+  const response = await fetch(e2eRoomStateHealthUrl());
   expect(response.ok).toBeTruthy();
   const payload = await response.json();
   expect(payload.service).toBe("room-state");
@@ -255,8 +826,8 @@ test("two participants can coexist in same room", async ({ browser, request }) =
   const pageA = await browser.newPage();
   const pageB = await browser.newPage();
 
-  await pageA.goto("http://127.0.0.1:4000/rooms/demo-room");
-  await pageB.goto("http://127.0.0.1:4000/rooms/demo-room");
+  await pageA.goto(e2eUrl("/rooms/demo-room"));
+  await pageB.goto(e2eUrl("/rooms/demo-room"));
   await pageA.waitForTimeout(4000);
   await pageB.waitForTimeout(4000);
 
@@ -266,7 +837,7 @@ test("two participants can coexist in same room", async ({ browser, request }) =
   expect(debugA?.remoteAvatarCount).toBeGreaterThanOrEqual(1);
   expect(debugB?.remoteAvatarCount).toBeGreaterThanOrEqual(1);
 
-  const presenceResponse = await request.get("http://127.0.0.1:4000/api/rooms/demo-room/presence");
+  const presenceResponse = await request.get(e2eUrl("/api/rooms/demo-room/presence"));
   const presence = (await presenceResponse.json()) as { items: Array<{ participantId: string }> };
   expect(presence.items.length).toBeGreaterThanOrEqual(2);
 
@@ -280,8 +851,8 @@ test("API fallback presence stays visible to realtime room-state clients", async
   const fallbackPage = await browser.newPage();
 
   try {
-    await realtimePage.goto(`http://127.0.0.1:4000/rooms/${room.roomId}?debug=1&bot=line`);
-    await fallbackPage.goto(`http://127.0.0.1:4000/rooms/${room.roomId}?debug=1&failroomstate=1&bot=line`);
+    await realtimePage.goto(e2eUrl(`/rooms/${room.roomId}?debug=1&bot=line`));
+    await fallbackPage.goto(e2eUrl(`/rooms/${room.roomId}?debug=1&failroomstate=1&bot=line`));
 
     await expect.poll(async () => {
       const realtimeDebug = await realtimePage.evaluate(() => (window as Window & {
@@ -336,10 +907,9 @@ test("bot mode emits movement diagnostics automatically", async ({ page, request
   expect(debug?.botMode).toBe("line");
 
   await expect.poll(async () => {
-    const diagnosticsResponse = await request.get("/api/rooms/demo-room/diagnostics");
-    const diagnostics = (await diagnosticsResponse.json()) as {
+    const diagnostics = await readDiagnostics<{
       items: Array<{ localPosition: { x: number; z: number } }>;
-    };
+    }>(request, "demo-room");
     return diagnostics.items.some((item) => Math.abs(item.localPosition.x) + Math.abs(item.localPosition.z) > 0.5);
   }, {
     timeout: 10000,
@@ -379,13 +949,12 @@ test("avatar sandbox exposes avatar diagnostics and persists them via diagnostic
   });
 
   await expect.poll(async () => {
-    const diagnosticsResponse = await request.get("/api/rooms/demo-room/diagnostics");
-    const diagnostics = (await diagnosticsResponse.json()) as {
+    const diagnostics = await readDiagnostics<{
       items: Array<{
         note?: string;
         avatarDebug?: { state?: string; presetCount?: number; fallbackReason?: string | null };
       }>;
-    };
+    }>(request, "demo-room");
 
     return diagnostics.items.some((item) => item.note === "avatar_sandbox_booted"
       && item.avatarDebug?.state === "loaded"
@@ -441,10 +1010,9 @@ test("avatar sandbox falls back cleanly on invalid catalog url", async ({ page, 
   });
 
   await expect.poll(async () => {
-    const diagnosticsResponse = await request.get(`/api/rooms/${room.roomId}/diagnostics`);
-    const diagnostics = (await diagnosticsResponse.json()) as {
+    const diagnostics = await readDiagnostics<{
       items: Array<{ note?: string; avatarDebug?: { fallbackReason?: string | null } }>;
-    };
+    }>(request, room.roomId);
     return diagnostics.items.some((item) => item.note === "avatar_sandbox_failed" && item.avatarDebug?.fallbackReason === "failed_to_load_avatar_catalog:404");
   }, {
     timeout: 15000,
@@ -537,8 +1105,7 @@ test("avatar-enabled room exposes local self-avatar diagnostics in normal room f
   });
 
   await expect.poll(async () => {
-    const diagnosticsResponse = await request.get(`/api/rooms/${room.roomId}/diagnostics`);
-    const diagnostics = (await diagnosticsResponse.json()) as {
+    const diagnostics = await readDiagnostics<{
       items: Array<{
         note?: string;
         avatarDebug?: { state?: string; visibilityState?: string | null; locomotionState?: string | null; animationState?: string | null };
@@ -548,7 +1115,7 @@ test("avatar-enabled room exposes local self-avatar diagnostics in normal room f
           poseFrame?: { seq?: number | null; locomotion?: { mode?: number | null } };
         };
       }>;
-    };
+    }>(request, room.roomId);
 
     return diagnostics.items.some((item) => (item.note === "local_avatar_ready" || item.note === undefined)
       && item.avatarDebug?.state === "loaded"
@@ -591,15 +1158,14 @@ test("avatar-enabled room diagnostics api exposes transport preview payload", as
   await page.goto(`${room.roomLink}?debug=1&bot=line`);
 
   await expect.poll(async () => {
-    const diagnosticsResponse = await request.get(`/api/rooms/${room.roomId}/diagnostics`);
-    const diagnostics = (await diagnosticsResponse.json()) as {
+    const diagnostics = await readDiagnostics<{
       items: Array<{
         avatarTransportPreview?: {
           reliableState?: { avatarId?: string | null; inputMode?: string | null };
           poseFrame?: { seq?: number | null; locomotion?: { mode?: number | null } };
         };
       }>;
-    };
+    }>(request, room.roomId);
 
     return diagnostics.items.some((item) => item.avatarTransportPreview?.reliableState?.avatarId === "preset-01"
       && item.avatarTransportPreview?.reliableState?.inputMode === "desktop"
@@ -657,35 +1223,38 @@ test("avatar-enabled room exposes lipsync debug signals for local and remote ava
         };
       }).__VRATA_DEBUG__);
 
+      const localSourceState = debugA?.avatarDebug?.lipsyncSourceState ?? null;
+      const remoteSourceState = debugA?.remoteAvatarParticipants?.[0]?.lipsyncSourceState ?? null;
       return {
         localMouthAmount: debugA?.avatarDebug?.mouthAmount ?? null,
         localSpeakingActive: debugA?.avatarDebug?.speakingActive ?? null,
-        localSourceState: debugA?.avatarDebug?.lipsyncSourceState ?? null,
+        localSourceState,
+        localSourceInactive: isInactiveLipsyncSourceState(localSourceState),
         remoteCount: debugA?.remoteAvatarParticipants?.length ?? 0,
         remoteMouthAmount: debugA?.remoteAvatarParticipants?.[0]?.mouthAmount ?? null,
         remoteSpeakingActive: debugA?.remoteAvatarParticipants?.[0]?.speakingActive ?? null,
-        remoteSourceState: debugA?.remoteAvatarParticipants?.[0]?.lipsyncSourceState ?? null,
+        remoteSourceState,
+        remoteSourceInactive: isInactiveLipsyncSourceState(remoteSourceState),
         remoteHasReliableState: debugA?.remoteAvatarParticipants?.[0]?.hasReliableState ?? false,
         remoteHasPoseFrame: debugA?.remoteAvatarParticipants?.[0]?.hasPoseFrame ?? false
       };
     }, {
       timeout: 15000,
       intervals: [1000, 2000, 3000]
-    }).toEqual({
+    }).toEqual(expect.objectContaining({
       localMouthAmount: 0,
       localSpeakingActive: false,
-      localSourceState: "idle",
+      localSourceInactive: true,
       remoteCount: 1,
       remoteMouthAmount: 0,
       remoteSpeakingActive: false,
-      remoteSourceState: "idle",
+      remoteSourceInactive: true,
       remoteHasReliableState: true,
       remoteHasPoseFrame: true
-    });
+    }));
 
     await expect.poll(async () => {
-      const diagnosticsResponse = await request.get(`/api/rooms/${room.roomId}/diagnostics`);
-      const diagnostics = (await diagnosticsResponse.json()) as {
+      const diagnostics = await readDiagnostics<{
         items: Array<{
           avatarDebug?: {
             mouthAmount?: number;
@@ -698,14 +1267,14 @@ test("avatar-enabled room exposes lipsync debug signals for local and remote ava
             lipsyncSourceState?: string | null;
           }>;
         }>;
-      };
+      }>(request, room.roomId);
 
       return diagnostics.items.some((item) => item.avatarDebug?.mouthAmount === 0
         && item.avatarDebug?.speakingActive === false
-        && item.avatarDebug?.lipsyncSourceState === "idle"
+        && isInactiveLipsyncSourceState(item.avatarDebug?.lipsyncSourceState ?? null)
         && item.remoteAvatarParticipants?.some((participant) => participant.mouthAmount === 0
           && participant.speakingActive === false
-          && participant.lipsyncSourceState === "idle"));
+          && isInactiveLipsyncSourceState(participant.lipsyncSourceState ?? null)));
     }, {
       timeout: 15000,
       intervals: [1000, 2000, 3000]
@@ -1178,7 +1747,7 @@ test("room creation API returns a usable room link", async ({ page, request }) =
   const room = (await createRoomResponse.json()) as { roomId: string; roomLink: string; manifest: { template: string } };
   expect(room.manifest.template).toBe("showroom-basic");
 
-  await page.goto(room.roomLink.replace("http://127.0.0.1:4000", "http://127.0.0.1:4000"));
+  await page.goto(e2eRoomLink(room.roomLink));
   await page.waitForTimeout(3000);
   await expect(page.locator("#room-name")).toContainText(`showroom-basic - ${room.roomId}`);
 });
@@ -1259,17 +1828,6 @@ test("runtime keeps current room usable when space selector is unavailable", asy
 });
 
 test("two rooms load two different scene bundles", async ({ browser, request }) => {
-  const hallSceneUrl = inlineSceneBundleUrl({
-    sceneId: "inline-hall-v1",
-    label: "Inline Hall Fixture",
-    color: [0.239, 0.545, 0.992]
-  });
-  const officeSceneUrl = inlineSceneBundleUrl({
-    sceneId: "inline-office-v1",
-    label: "Inline Office Fixture",
-    color: [1, 0.541, 0.239],
-    spawn: { x: 1, y: 0, z: 5 }
-  });
   const hallRoomResponse = await request.post("/api/rooms", {
     headers: {
       "x-vrata-admin-token": "test-admin-token"
@@ -1278,7 +1836,7 @@ test("two rooms load two different scene bundles", async ({ browser, request }) 
       tenantId: "demo-tenant",
       templateId: "meeting-room-basic",
       name: "Hall Scene Room",
-      sceneBundleUrl: hallSceneUrl
+      sceneBundleUrl: "/assets/scenes/the-hall-v1/scene.json"
     }
   });
   expect(hallRoomResponse.ok()).toBeTruthy();
@@ -1292,7 +1850,7 @@ test("two rooms load two different scene bundles", async ({ browser, request }) 
       tenantId: "demo-tenant",
       templateId: "meeting-room-basic",
       name: "Office Scene Room",
-      sceneBundleUrl: officeSceneUrl
+      sceneBundleUrl: "/assets/scenes/the-office-v1/scene.json"
     }
   });
   expect(officeRoomResponse.ok()).toBeTruthy();
@@ -1306,16 +1864,16 @@ test("two rooms load two different scene bundles", async ({ browser, request }) 
   await hallPage.waitForTimeout(3000);
   await officePage.waitForTimeout(3000);
 
-  await expect(hallPage.locator("#branding-line")).toContainText("Scene: Inline Hall Fixture");
-  await expect(officePage.locator("#branding-line")).toContainText("Scene: Inline Office Fixture");
+  await expect(hallPage.locator("#branding-line")).toContainText("Scene: The Hall V1");
+  await expect(officePage.locator("#branding-line")).toContainText("Scene: The Office V1");
 
   const hallDebug = await hallPage.evaluate(() => (window as Window & { __VRATA_DEBUG__?: { sceneBundleState?: string; sceneBundleUrl?: string; localPosition?: { x: number; z: number } } }).__VRATA_DEBUG__);
   const officeDebug = await officePage.evaluate(() => (window as Window & { __VRATA_DEBUG__?: { sceneBundleState?: string; sceneBundleUrl?: string; localPosition?: { x: number; z: number } } }).__VRATA_DEBUG__);
 
   expect(hallDebug?.sceneBundleState).toBe("loaded");
   expect(officeDebug?.sceneBundleState).toBe("loaded");
-  expect(hallDebug?.sceneBundleUrl).toContain("data:application/json");
-  expect(officeDebug?.sceneBundleUrl).toContain("data:application/json");
+  expect(hallDebug?.sceneBundleUrl).toContain("/assets/scenes/the-hall-v1/scene.json");
+  expect(officeDebug?.sceneBundleUrl).toContain("/assets/scenes/the-office-v1/scene.json");
 
   await hallPage.close();
   await officePage.close();
@@ -1373,12 +1931,103 @@ test("@private-assets two rooms load two different real SenseTower scene assets"
   await officePage.close();
 });
 
-test("scene bundle diagnostics include render and geometry debug info", async ({ page, request }) => {
-  const sceneBundleUrl = inlineSceneBundleUrl({
-    sceneId: "inline-debug-v1",
-    label: "Inline Debug Fixture",
-    color: [0.5, 0.8, 0.4]
+test("Livadia Nicholas II office scene loads with readable diagnostics", async ({ page, request }) => {
+  const roomResponse = await request.post("/api/rooms", {
+    headers: {
+      "x-vrata-admin-token": "test-admin-token"
+    },
+    data: {
+      tenantId: "demo-tenant",
+      templateId: "meeting-room-basic",
+      name: "Livadia Nicholas II Office Room",
+      sceneBundleUrl: "/assets/scenes/livadia-nicholas-office-v1/scene.json"
+    }
   });
+  expect(roomResponse.ok()).toBeTruthy();
+  const room = (await roomResponse.json()) as { roomLink: string };
+
+  await page.goto(`${room.roomLink}?debug=1&scenefit=0`);
+
+  const readSceneDebug = async () => {
+    return page.evaluate(() => {
+      const debug = (window as Window & {
+        __VRATA_DEBUG__?: {
+          sceneBundleState?: string;
+          sceneDebug?: {
+            label?: string | null;
+            state?: string | null;
+            failureReason?: string | null;
+            spawnApplied?: boolean;
+            meshCount?: number;
+            triangleEstimate?: number;
+            missingAssets?: string[];
+            boundingBox?: { size?: { x?: number; y?: number; z?: number } } | null;
+            screenshot?: {
+              averageColor?: { r?: number; g?: number; b?: number; a?: number };
+              darkPixelRatio?: number;
+            } | null;
+          };
+        };
+      }).__VRATA_DEBUG__;
+      const scene = debug?.sceneDebug;
+      const average = scene?.screenshot?.averageColor;
+      const luminance = average ? ((average.r ?? 0) + (average.g ?? 0) + (average.b ?? 0)) / 3 : 0;
+      return {
+        sceneBundleState: debug?.sceneBundleState ?? null,
+        label: scene?.label ?? null,
+        state: scene?.state ?? null,
+        failureReason: scene?.failureReason ?? null,
+        spawnApplied: scene?.spawnApplied ?? false,
+        missingAssetCount: scene?.missingAssets?.length ?? -1,
+        meshCount: scene?.meshCount ?? 0,
+        triangleEstimate: scene?.triangleEstimate ?? 0,
+        bounds: scene?.boundingBox?.size ?? null,
+        alpha: average?.a ?? 0,
+        darkPixelRatio: scene?.screenshot?.darkPixelRatio ?? 1,
+        averageLuminance: luminance
+      };
+    });
+  };
+
+  await expect.poll(readSceneDebug, {
+    timeout: 20000,
+    intervals: [1000, 2000, 3000]
+  }).toMatchObject({
+    sceneBundleState: "loaded",
+    label: "Livadia Nicholas II Office",
+    state: "loaded",
+    failureReason: null,
+    spawnApplied: true,
+    missingAssetCount: 0
+  });
+  await expect.poll(async () => {
+    const debug = await readSceneDebug();
+    return {
+      alphaReady: debug.alpha >= 250,
+      brightnessReady: debug.averageLuminance >= 40,
+      darkRatioReady: debug.darkPixelRatio <= 0.7
+    };
+  }, {
+    timeout: 10000,
+    intervals: [1000, 2000]
+  }).toEqual({
+    alphaReady: true,
+    brightnessReady: true,
+    darkRatioReady: true
+  });
+  const sceneDebug = await readSceneDebug();
+
+  expect(sceneDebug.meshCount).toBeLessThanOrEqual(300);
+  expect(sceneDebug.triangleEstimate).toBeLessThan(120000);
+  expect(sceneDebug.bounds?.x ?? Number.POSITIVE_INFINITY).toBeLessThan(20);
+  expect(sceneDebug.bounds?.y ?? Number.POSITIVE_INFINITY).toBeLessThan(6);
+  expect(sceneDebug.bounds?.z ?? Number.POSITIVE_INFINITY).toBeLessThan(20);
+  expect(sceneDebug.alpha).toBeGreaterThanOrEqual(250);
+  expect(sceneDebug.darkPixelRatio).toBeLessThanOrEqual(0.7);
+  expect(sceneDebug.averageLuminance).toBeGreaterThanOrEqual(40);
+});
+
+test("scene bundle diagnostics include render and geometry debug info", async ({ page, request }) => {
   const roomResponse = await request.post("/api/rooms", {
     headers: {
       "x-vrata-admin-token": "test-admin-token"
@@ -1387,7 +2036,7 @@ test("scene bundle diagnostics include render and geometry debug info", async ({
       tenantId: "demo-tenant",
       templateId: "meeting-room-basic",
       name: "Debug Scene Room",
-      sceneBundleUrl
+      sceneBundleUrl: "/assets/scenes/the-office-v1/scene.json"
     }
   });
   expect(roomResponse.ok()).toBeTruthy();
@@ -1396,8 +2045,7 @@ test("scene bundle diagnostics include render and geometry debug info", async ({
   await page.goto(`${room.roomLink}?debug=1`);
   await page.waitForTimeout(5000);
 
-  const diagnosticsResponse = await request.get(`/api/rooms/${room.roomId}/diagnostics`);
-  const diagnostics = (await diagnosticsResponse.json()) as {
+  const diagnostics = await readDiagnostics<{
     items: Array<{
       note?: string;
       sceneDebug?: {
@@ -1411,14 +2059,14 @@ test("scene bundle diagnostics include render and geometry debug info", async ({
         };
       };
     }>;
-  };
+  }>(request, room.roomId);
   const loaded = [...diagnostics.items].reverse().find((item) => item.note === "scene_bundle_loaded");
   expect(loaded?.sceneDebug?.state).toBe("loaded");
   expect(loaded?.sceneDebug?.meshCount ?? 0).toBeGreaterThan(0);
   expect(loaded?.sceneDebug?.geometryCount ?? 0).toBeGreaterThan(0);
   expect(loaded?.sceneDebug?.screenshot?.width ?? 0).toBeGreaterThan(0);
   expect(loaded?.sceneDebug?.screenshot?.pixelSamples?.length ?? 0).toBeGreaterThan(0);
-  expect((loaded?.sceneDebug?.screenshot?.dataUrl ?? "")).toContain("data:image/jpeg;base64,");
+  expect(loaded?.sceneDebug?.screenshot?.dataUrl).toBeUndefined();
 });
 
 test("@private-assets avatar-enabled hall room supports interaction ray teleport, sit, switch and teleport exit", async ({ page, request }) => {
@@ -1544,7 +2192,7 @@ test.fixme("@private-assets avatar-enabled hall room restores seated state after
   }
 });
 
-test("room creation API is forbidden without admin token", async ({ request }) => {
+test("room creation API is unauthorized without identity", async ({ request }) => {
   const response = await request.post("/api/rooms", {
     data: {
       tenantId: "demo-tenant",
@@ -1552,7 +2200,9 @@ test("room creation API is forbidden without admin token", async ({ request }) =
       name: "Forbidden Room"
     }
   });
-  expect(response.status()).toBe(403);
+  expect(response.status()).toBe(401);
+  const payload = await response.json();
+  expect(payload.reason).toBe("missing_identity");
 });
 
 test("room creation API rejects invalid template even with admin token", async ({ request }) => {
@@ -1600,8 +2250,7 @@ test("diagnostics capture multi-client remote visibility", async ({ browser, req
   await pageA.waitForTimeout(5000);
   await pageB.waitForTimeout(5000);
 
-  const diagnosticsResponse = await request.get(`/api/rooms/${room.roomId}/diagnostics`);
-  const diagnostics = (await diagnosticsResponse.json()) as {
+  const diagnostics = await readDiagnostics<{
     items: Array<{
       participantId: string;
       remoteAvatarCount: number;
@@ -1619,7 +2268,7 @@ test("diagnostics capture multi-client remote visibility", async ({ browser, req
         rightHandVisible: boolean;
       }>;
     }>;
-  };
+  }>(request, room.roomId);
 
   expect(diagnostics.items.some((item) => item.remoteAvatarCount >= 1)).toBeTruthy();
   expect(diagnostics.items.some((item) => item.remoteTargets.length >= 1)).toBeTruthy();
@@ -1631,22 +2280,125 @@ test("diagnostics capture multi-client remote visibility", async ({ browser, req
 });
 
 test("control plane creates a room through the browser UI", async ({ page }) => {
+  const roomSlug = `control-plane-room-${Date.now()}`;
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
   await page.goto("/control-plane");
   await expect(page.locator("#template-detail")).not.toContainText("Select a template to inspect details");
   await page.fill("#admin-token-input", "test-admin-token");
   await page.fill("#room-name-input", "Control Plane Room");
+  await page.fill("#room-slug-input", roomSlug);
   await page.selectOption("#template-select", "showroom-basic");
   await expect(page.locator("#template-detail")).toContainText("showroom-basic");
+  await expect(page.locator("#room-preview")).toContainText(roomSlug);
+  await expect(page.locator("#room-preview")).toContainText("fallback scene");
   await page.click("#create-room");
   await expect(page.locator("#publish-status")).toContainText("published");
   await expect(page.locator("#room-link")).not.toHaveText("");
   const href = await page.locator("#room-link").getAttribute("href");
-  expect(href).toContain("/rooms/");
+  expect(href).toContain(`/rooms/${roomSlug}`);
+  await page.click("#copy-room-link");
+  await expect(page.locator("#publish-status")).toContainText("room-url-copied");
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toContain(`/rooms/${roomSlug}`);
   await expect(page.locator("#rooms-list li").first()).toContainText("Control Plane Room");
   await page.locator("#rooms-list button").first().click();
   await expect(page.locator("#room-detail")).toContainText("Control Plane Room");
   await expect(page.locator("#room-detail")).toContainText('"manifest"');
   await expect(page.locator("#room-detail")).toContainText('"diagnostics"');
+});
+
+test("control plane verifies admin session and toggles disabled room access", async ({ page, request }) => {
+  const roomSlug = `disabled-ui-room-${Date.now()}`;
+  await page.goto("/control-plane");
+
+  await expect(page.locator("#create-room")).toBeHidden();
+  await page.fill("#admin-token-input", "bad-token");
+  await page.click("#apply-admin-token");
+  await expect(page.locator("#dashboard-auth-status")).toContainText("not verified");
+  await expect(page.locator("#create-room")).toBeHidden();
+
+  await page.fill("#admin-token-input", e2eAdminToken);
+  await page.click("#apply-admin-token");
+  await expect(page.locator("#dashboard-auth-status")).toContainText("authorized");
+  await expect(page.locator("#create-room")).toBeVisible();
+
+  await page.fill("#room-name-input", "Disabled UI Room");
+  await page.fill("#room-slug-input", roomSlug);
+  await page.click("#create-room");
+  await expect(page.locator("#publish-status")).toContainText("published");
+  const roomHref = await page.locator("#room-link").getAttribute("href");
+  expect(roomHref).toBeTruthy();
+
+  await expect(page.locator("#disable-room")).toBeVisible();
+  await page.click("#disable-room");
+  await expect(page.locator("#publish-status")).toContainText("room-disabled");
+  await expect(page.locator("#enable-room")).toBeVisible();
+  await expect(page.locator("#rooms-list")).toContainText("Disabled UI Room");
+  await expect(page.locator("#rooms-list")).toContainText("status:disabled");
+  await expect(page.locator("#room-detail")).toContainText('"status": "disabled"');
+  await expect(page.locator("#room-detail")).toContainText('"disabled": true');
+
+  const disabledTokenResponse = await request.post("/api/tokens/state", {
+    data: { roomId: roomSlug, participantId: "disabled-ui-guest", displayName: "Disabled UI Guest" }
+  });
+  expect(disabledTokenResponse.status()).toBe(403);
+  expect((await disabledTokenResponse.json()).reason).toBe("room_disabled");
+
+  const disabledManifestResponse = await request.get(`/api/rooms/${roomSlug}/manifest`);
+  expect(disabledManifestResponse.status()).toBe(403);
+  expect((await disabledManifestResponse.json()).reason).toBe("room_disabled");
+
+  const runtimePage = await page.context().newPage();
+  try {
+    await runtimePage.goto(e2eRoomLink(String(roomHref)));
+    await expect(runtimePage.locator("#status-line")).toContainText("Access denied: room disabled");
+  } finally {
+    await runtimePage.close();
+  }
+
+  await page.click("#enable-room");
+  await expect(page.locator("#publish-status")).toContainText("room-enabled");
+  await expect(page.locator("#disable-room")).toBeVisible();
+  await expect(page.locator("#room-detail")).toContainText('"status": "active"');
+  await expect(page.locator("#room-detail")).toContainText('"disabled": false');
+
+  const enabledTokenResponse = await request.post("/api/tokens/state", {
+    data: { roomId: roomSlug, participantId: "enabled-ui-guest", displayName: "Enabled UI Guest" }
+  });
+  expect(enabledTokenResponse.ok()).toBeTruthy();
+});
+
+test("control plane shows duplicate room slug validation", async ({ page }) => {
+  const roomSlug = `duplicate-room-${Date.now()}`;
+  await page.goto("/control-plane");
+  await page.fill("#admin-token-input", "test-admin-token");
+  await page.fill("#room-name-input", "Duplicate Room One");
+  await page.fill("#room-slug-input", roomSlug);
+  await page.click("#create-room");
+  await expect(page.locator("#publish-status")).toContainText("published");
+
+  await page.fill("#room-name-input", "Duplicate Room Two");
+  await page.fill("#room-slug-input", roomSlug);
+  await expect(page.locator("#room-validation-message")).toContainText("already exists");
+  await page.click("#create-room");
+  await expect(page.locator("#publish-status")).toContainText("failed:room_slug_conflict");
+});
+
+test("control plane creates a private room and auto-generates an invite", async ({ page }) => {
+  const roomSlug = `private-ui-room-${Date.now()}`;
+  await page.goto("/control-plane");
+  await page.fill("#admin-token-input", "test-admin-token");
+  await page.fill("#room-name-input", "Private UI Room");
+  await page.fill("#room-slug-input", roomSlug);
+  await page.selectOption("#room-visibility-select", "private");
+  await expect(page.locator("#room-preview")).toContainText('"visibility": "private"');
+  await page.click("#create-room");
+  await expect(page.locator("#publish-status")).toContainText("published-invite-created");
+  await expect(page.locator("#invite-link")).toContainText(`/rooms/${roomSlug}?invite=`);
+  const inviteHref = await page.locator("#invite-link").getAttribute("href");
+  expect(inviteHref).toBeTruthy();
+  await page.goto(e2eRoomLink(String(inviteHref)));
+  await completeGuestOnboarding(page, "Private UI Guest");
+  await expect(page.locator("#status-line")).toContainText("Joined as Private UI Guest", { timeout: 30000 });
 });
 
 test("control plane remembers admin token locally", async ({ page }) => {
@@ -1716,6 +2468,57 @@ test("control plane uploads asset metadata through the browser UI", async ({ pag
   await expect(page.locator("#assets-list")).toContainText("https://example.com/test-logo.glb");
   await expect(page.locator("#assets-list")).toContainText("https://cdn.example.com/test-logo.glb");
   await expect(page.locator("#assets-list")).toContainText("validated");
+});
+
+test("control plane uploads and creates a room with selected scene bundle through the browser UI", async ({ page }, testInfo) => {
+  const bundleId = `ui-upload-${Date.now()}`;
+  const roomSlug = `uploaded-room-${Date.now()}`;
+  const version = "v1";
+  const glb = await readFile(join(process.cwd(), "apps/runtime-web/public/assets/scenes/livadia-nicholas-office-v1/scene.glb"));
+  const zipPath = testInfo.outputPath("uploaded-scene-bundle.zip");
+  await writeFile(zipPath, createStoredZip({
+    "scene.json": `${JSON.stringify({
+      schemaVersion: 1,
+      sceneId: bundleId,
+      label: "UI Uploaded Scene",
+      source: "runtime-e2e",
+      glbPath: "scene.glb",
+      spawnPoints: [{ id: "main", position: { x: 0, y: 1.6, z: 4 } }],
+      bounds: { width: 20, height: 8, depth: 20 },
+      preview: "preview.webp",
+      renderMode: "clean"
+    }, null, 2)}\n`,
+    "scene.glb": glb,
+    "preview.webp": Buffer.from("webp")
+  }));
+
+  await page.goto("/control-plane");
+  await page.fill("#admin-token-input", "test-admin-token");
+  await page.fill("#scene-bundle-id-input", bundleId);
+  await page.fill("#scene-bundle-version-input", version);
+  await page.setInputFiles("#scene-bundle-file-input", zipPath);
+  await page.click("#create-scene-bundle-version");
+  await expect(page.locator("#publish-status")).toContainText("scene-bundle-uploaded");
+  await expect(page.locator("#scene-bundles-list")).toContainText(bundleId);
+  await expect(page.locator("#scene-bundles-list")).toContainText("scene.glb");
+
+  await page.fill("#room-name-input", "Uploaded Scene Bundle Room");
+  await page.fill("#room-slug-input", roomSlug);
+  await expect(page.locator("#room-preview")).toContainText(bundleId);
+  await page.click("#create-room");
+  await expect(page.locator("#publish-status")).toContainText("published");
+
+  const href = await page.locator("#room-link").getAttribute("href");
+  expect(href).toBeTruthy();
+  const roomUrl = new URL(e2eRoomLink(String(href)));
+  roomUrl.searchParams.set("debug", "1");
+  await page.goto(roomUrl.toString());
+  const loadedDebug = await page.waitForFunction(() => {
+    const debug = (window as Window & { __VRATA_DEBUG__?: { sceneBundleState?: string; sceneBundleUrl?: string } }).__VRATA_DEBUG__;
+    return debug?.sceneBundleState === "loaded" ? debug : null;
+  }, null, { timeout: 30000 });
+  const debug = await loadedDebug.jsonValue() as { sceneBundleState?: string; sceneBundleUrl?: string };
+  expect(debug.sceneBundleUrl).toContain(`/assets/uploaded-scene-bundles/scenes/${bundleId}/${version}/scene.json`);
 });
 
 test("control plane can update and delete asset without room dependencies", async ({ page }) => {
@@ -1947,8 +2750,7 @@ test("mock screen share updates UI and diagnostics", async ({ page, request }) =
   const debug = await page.evaluate(() => (window as Window & { __VRATA_DEBUG__?: { screenShareState: string } }).__VRATA_DEBUG__);
   expect(debug?.screenShareState).toBe("sharing");
 
-  const diagnosticsResponse = await request.get("/api/rooms/demo-room/diagnostics");
-  const diagnostics = (await diagnosticsResponse.json()) as { items: Array<{ note?: string; screenShareState?: string }> };
+  const diagnostics = await readDiagnostics<{ items: Array<{ note?: string; screenShareState?: string }> }>(request, "demo-room");
   expect(diagnostics.items.some((item) => item.note === "screenshare_mock_started")).toBeTruthy();
 
   await page.click("#stop-share");
@@ -1966,15 +2768,31 @@ test("fault-injected mic denied keeps room usable without audio", async ({ page,
   await expect(page.locator("#status-line")).toContainText("Microphone blocked");
 
   const debug = await page.evaluate(() => (window as Window & {
-    __VRATA_DEBUG__?: { issueCode?: string | null; degradedMode?: string; audioState?: string };
+    __VRATA_DEBUG__?: { issueCode?: string | null; degradedMode?: string; audioState?: string; lastReportId?: string | null; lastReportRequestId?: string | null };
   }).__VRATA_DEBUG__);
   expect(debug?.issueCode).toBe("mic_denied");
   expect(debug?.degradedMode).toBe("audio_unavailable");
   expect(debug?.audioState).toBe("degraded");
 
-  const diagnosticsResponse = await request.get("/api/rooms/demo-room/diagnostics");
-  const diagnostics = (await diagnosticsResponse.json()) as { items: Array<{ note?: string; issueCode?: string }> };
-  expect(diagnostics.items.some((item) => item.note === "mic_denied" && item.issueCode === "mic_denied")).toBeTruthy();
+  await expect(page.locator("#report-line")).toContainText(/Report ID: rpt_/);
+  await expect.poll(async () => {
+    const reportDebug = await page.evaluate(() => (window as Window & {
+      __VRATA_DEBUG__?: { lastReportId?: string | null; lastReportRequestId?: string | null };
+    }).__VRATA_DEBUG__);
+    return {
+      reportIdReady: typeof reportDebug?.lastReportId === "string" && reportDebug.lastReportId.startsWith("rpt_"),
+      requestIdReady: typeof reportDebug?.lastReportRequestId === "string" && reportDebug.lastReportRequestId.length > 0
+    };
+  }, {
+    timeout: 10000,
+    intervals: [500, 1000, 2000]
+  }).toEqual({
+    reportIdReady: true,
+    requestIdReady: true
+  });
+
+  const diagnostics = await readDiagnostics<{ items: Array<{ note?: string; issueCode?: string; reportId?: string; requestId?: string }> }>(request, "demo-room");
+  expect(diagnostics.items.some((item) => item.note === "mic_denied" && item.issueCode === "mic_denied" && item.reportId?.startsWith("rpt_") && item.requestId)).toBeTruthy();
 });
 
 test("fault-injected media network block explains WebRTC can fail while scene loads", async ({ page, request }) => {
@@ -1992,8 +2810,7 @@ test("fault-injected media network block explains WebRTC can fail while scene lo
   expect(debug?.screenShareState).toBe("media_network_blocked");
   expect(debug?.statusLine).toContain("scene can load");
 
-  const diagnosticsResponse = await request.get("/api/rooms/demo-room/diagnostics");
-  const diagnostics = (await diagnosticsResponse.json()) as { items: Array<{ note?: string; issueCode?: string }> };
+  const diagnostics = await readDiagnostics<{ items: Array<{ note?: string; issueCode?: string }> }>(request, "demo-room");
   expect(diagnostics.items.some((item) => item.note === "media_network_blocked" && item.issueCode === "media_network_blocked")).toBeTruthy();
 });
 
@@ -2013,4 +2830,106 @@ test("fault-injected room-state failure falls back to API mode", async ({ page, 
   const presenceResponse = await request.get("/api/rooms/demo-room/presence");
   const presence = (await presenceResponse.json()) as { items: Array<{ participantId: string }> };
   expect(presence.items.length).toBeGreaterThan(0);
+  await expect(page.locator("#diagnostics-link")).toHaveAttribute("href", /\/diagnostics\?roomId=demo-room/);
+});
+
+test("public diagnostics page creates a redacted success report without media prompts", async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText: async (text: string) => {
+          (window as Window & { __VRATA_COPIED_DIAGNOSTICS__?: string }).__VRATA_COPIED_DIAGNOSTICS__ = text;
+        }
+      }
+    });
+  });
+  await page.goto("/diagnostics?roomId=demo-room&autorun=1&skipMic=1&skipMedia=1&timeoutMs=3000");
+
+  await expect.poll(async () => {
+    return await page.evaluate(() => (window as Window & {
+      __VRATA_CONNECTIVITY_DIAGNOSTICS__?: { summary?: { failed: number }; checks?: Array<{ code: string; status: string }> };
+    }).__VRATA_CONNECTIVITY_DIAGNOSTICS__);
+  }, {
+    timeout: 12000,
+    intervals: [500, 1000, 2000]
+  }).toMatchObject({ summary: { failed: 0 } });
+
+  const reportText = await page.locator("#diagnostics-json").inputValue();
+  expect(reportText).toContain('"api_ok"');
+  expect(reportText).toContain('"admin_details_protected"');
+  expect(reportText).toContain('"room_state_ws_ok"');
+  expect(reportText).toContain('"microphone_skipped"');
+  expect(reportText).toContain('"media_skipped"');
+  expect(reportText).toContain("accessToken=[redacted]");
+  expect(reportText).not.toMatch(/Bearer\s+[A-Za-z0-9._-]+/);
+
+  await expect(page.locator("#diagnostics-copy-status")).toContainText("ready");
+  await page.locator("#diagnostics-copy").click();
+  await expect(page.locator("#diagnostics-copy-status")).toContainText("copied");
+  const copiedText = await page.evaluate(() => (window as Window & { __VRATA_COPIED_DIAGNOSTICS__?: string }).__VRATA_COPIED_DIAGNOSTICS__ ?? "");
+  expect(copiedText).toContain('"api_ok"');
+  expect(copiedText).toContain("accessToken=[redacted]");
+  expect(copiedText).not.toMatch(/Bearer\s+[A-Za-z0-9._-]+/);
+});
+
+test("public diagnostics page reports unreachable API with stable code", async ({ page }) => {
+  await page.goto("/diagnostics?roomId=demo-room&autorun=1&skipMic=1&skipMedia=1&apiBaseUrl=http://127.0.0.1:9&timeoutMs=1000");
+
+  await expect.poll(async () => {
+    return await page.evaluate(() => {
+      const report = (window as Window & {
+        __VRATA_CONNECTIVITY_DIAGNOSTICS__?: { checks?: Array<{ code: string; status: string; name: string }> };
+      }).__VRATA_CONNECTIVITY_DIAGNOSTICS__;
+      return report?.checks?.find((check) => check.name === "api") ?? null;
+    });
+  }, {
+    timeout: 12000,
+    intervals: [500, 1000, 2000]
+  }).toMatchObject({ status: "failed", code: "api_unreachable" });
+});
+
+test("public diagnostics page reports denied microphone permission", async ({ page }) => {
+  await page.addInitScript(() => {
+    const mediaDevices = navigator.mediaDevices;
+    Object.defineProperty(navigator, "mediaDevices", {
+      configurable: true,
+      value: {
+        enumerateDevices: mediaDevices?.enumerateDevices?.bind(mediaDevices) ?? (async () => []),
+        getDisplayMedia: mediaDevices?.getDisplayMedia?.bind(mediaDevices),
+        getUserMedia: async () => {
+          throw new DOMException("Microphone blocked by test", "NotAllowedError");
+        }
+      }
+    });
+  });
+  await page.goto("/diagnostics?roomId=demo-room&autorun=1&skipMedia=1&timeoutMs=3000");
+
+  await expect.poll(async () => {
+    return await page.evaluate(() => {
+      const report = (window as Window & {
+        __VRATA_CONNECTIVITY_DIAGNOSTICS__?: { checks?: Array<{ code: string; status: string; name: string }> };
+      }).__VRATA_CONNECTIVITY_DIAGNOSTICS__;
+      return report?.checks?.find((check) => check.name === "microphone") ?? null;
+    });
+  }, {
+    timeout: 12000,
+    intervals: [500, 1000, 2000]
+  }).toMatchObject({ status: "failed", code: "microphone_permission_denied" });
+});
+
+test("public diagnostics page reports blocked room-state WebSocket", async ({ page }) => {
+  await page.goto("/diagnostics?roomId=demo-room&autorun=1&skipMic=1&skipMedia=1&failwss=1&timeoutMs=1500");
+
+  await expect.poll(async () => {
+    return await page.evaluate(() => {
+      const report = (window as Window & {
+        __VRATA_CONNECTIVITY_DIAGNOSTICS__?: { checks?: Array<{ code: string; status: string; name: string }> };
+      }).__VRATA_CONNECTIVITY_DIAGNOSTICS__;
+      return report?.checks?.find((check) => check.name === "roomStateWebSocket") ?? null;
+    });
+  }, {
+    timeout: 12000,
+    intervals: [500, 1000, 2000]
+  }).toMatchObject({ status: "failed", code: "room_state_ws_failed" });
 });

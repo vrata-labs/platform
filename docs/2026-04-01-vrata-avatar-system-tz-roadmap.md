@@ -1732,44 +1732,44 @@ apps/runtime-web/src/avatar/
 
 Ниже — не “источник истины для продукта”, а набор внешних технических ориентиров для инженерной команды.
 
-- Meta Avatars SDK Overview
+- Meta Avatars SDK Overview  
   https://developers.meta.com/horizon/documentation/unity/meta-avatars-overview/
 
-- Meta Avatars SDK Networking
+- Meta Avatars SDK Networking  
   https://developers.meta.com/horizon/documentation/unity/meta-avatars-networking/
 
-- Meta Avatars SDK announcement / supported platforms context
+- Meta Avatars SDK announcement / supported platforms context  
   https://developers.meta.com/horizon/blog/meta-avatars-sdk-now-available/
 
-- LiveKit data packets (reliable vs lossy)
+- LiveKit data packets (reliable vs lossy)  
   https://docs.livekit.io/transport/data/packets/
 
-- MDN `AnalyserNode`
+- MDN `AnalyserNode`  
   https://developer.mozilla.org/en-US/docs/Web/API/AnalyserNode
 
-- MDN `XRInputSource.hand`
+- MDN `XRInputSource.hand`  
   https://developer.mozilla.org/en-US/docs/Web/API/XRInputSource/hand
 
-- MDN `XRInputSource.gamepad`
+- MDN `XRInputSource.gamepad`  
   https://developer.mozilla.org/en-US/docs/Web/API/XRInputSource/gamepad
 
-- MDN `XRFrame.getJointPose()`
+- MDN `XRFrame.getJointPose()`  
   https://developer.mozilla.org/en-US/docs/Web/API/XRFrame/getJointPose
 
-- three.js `WebXRManager`
+- three.js `WebXRManager`  
   https://threejs.org/docs/pages/WebXRManager.html
 
-- three.js `GLTFLoader`
+- three.js `GLTFLoader`  
   https://threejs.org/docs/pages/GLTFLoader.html
 
-- three.js `KTX2Loader`
+- three.js `KTX2Loader`  
   https://threejs.org/docs/pages/KTX2Loader.html
 
-- Khronos `KHR_texture_basisu`
+- Khronos `KHR_texture_basisu`  
   https://github.com/KhronosGroup/glTF/blob/main/extensions/2.0/Khronos/KHR_texture_basisu/README.md
 
-- Khronos `EXT_meshopt_compression`
+- Khronos `EXT_meshopt_compression`  
   https://github.com/KhronosGroup/glTF/blob/main/extensions/2.0/Vendor/EXT_meshopt_compression/README.md
 
-- Khronos `KHR_draco_mesh_compression`
+- Khronos `KHR_draco_mesh_compression`  
   https://github.com/KhronosGroup/glTF/blob/main/extensions/2.0/Khronos/KHR_draco_mesh_compression/README.md
