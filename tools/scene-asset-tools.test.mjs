@@ -69,6 +69,13 @@ test("desiredSceneBundleUrl writes version into the scene asset path", () => {
   );
 });
 
+test("desiredSceneBundleUrl falls back to canonical platform repository", () => {
+  assert.equal(
+    desiredSceneBundleUrl("sense-hall2-v1", { version: fullSha }),
+    `https://raw.githubusercontent.com/vrata-labs/platform/main/apps/runtime-web/public/assets/scenes/sense-hall2-v1/${fullSha}/scene.json`
+  );
+});
+
 test("preflightSceneBundle verifies manifest and relative assets", async () => {
   await withServer((request, response) => {
     if (request.url === `/${fullSha}/scene.json`) {

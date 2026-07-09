@@ -19,7 +19,7 @@ export const defaultRooms = [
 
 const defaultBaseUrl = "https://158.160.10.234.sslip.io";
 const defaultAdminToken = "vrata-stage-admin";
-const defaultBranch = "deploy/scene-bundles-stage-20260328";
+const defaultBranch = "main";
 
 function trimTrailingSlash(value) {
   return value.replace(/\/+$/, "");
@@ -71,8 +71,8 @@ export function desiredSceneBundleUrl(sceneId, input) {
   }
   const branch = input.branch ?? defaultBranch;
   return input.version
-    ? `https://raw.githubusercontent.com/psilon2000/vrata/${branch}/apps/runtime-web/public/assets/scenes/${sceneId}/${input.version}/scene.json`
-    : `https://raw.githubusercontent.com/psilon2000/vrata/${branch}/apps/runtime-web/public/assets/scenes/${sceneId}/scene.json`;
+    ? `https://raw.githubusercontent.com/vrata-labs/platform/${branch}/apps/runtime-web/public/assets/scenes/${sceneId}/${input.version}/scene.json`
+    : `https://raw.githubusercontent.com/vrata-labs/platform/${branch}/apps/runtime-web/public/assets/scenes/${sceneId}/scene.json`;
 }
 
 function isFetchableUrl(url) {

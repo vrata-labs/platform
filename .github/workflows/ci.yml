@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-      - deploy/scene-bundles-stage-20260328
   pull_request:
 
 jobs:
