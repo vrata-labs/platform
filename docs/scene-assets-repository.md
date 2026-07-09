@@ -4,9 +4,9 @@ Vrata platform development and proprietary scene development must be separated.
 
 ## Decision
 
-- The public platform repository owns runtime code, APIs, self-host infrastructure, scene bundle contracts, validators, and metadata-only public assets.
+- The public platform repository owns runtime code, APIs, self-host infrastructure, scene bundle contracts, validators, and cleared sample assets.
 - Private or customer-specific scene bundles live outside the public platform repository.
-- Current `sense-*` scene bundles are not cleared for public redistribution and live outside the public repository.
+- Current `sense-*` scene bundles are not cleared for public redistribution and live in the private `psilon2000/noah-scene-assets-private` repository after migration snapshot `ea04324`.
 
 ## Why
 
@@ -17,10 +17,10 @@ Vrata platform development and proprietary scene development must be separated.
 
 ## Target Repository
 
-Private repository layout:
+Private repository:
 
 ```text
-<your-private-scene-assets-repo>
+psilon2000/noah-scene-assets-private
 ```
 
 Recommended layout:
@@ -52,7 +52,7 @@ The private repository should document:
 Use the non-destructive export tool from the platform repo:
 
 ```bash
-node tools/export-private-scene-assets.mjs /path/to/vrata-scene-assets-private/assets/scenes
+node tools/export-private-scene-assets.mjs /path/to/noah-scene-assets-private/assets/scenes
 ```
 
 The tool copies current `apps/runtime-web/public/assets/scenes/sense-*` directories and writes `manifest.json` next to the target `scenes` directory.
@@ -64,30 +64,31 @@ It does not delete anything from the platform repository. Deletion from the plat
 After the private scene-assets repository exists, a platform checkout can sync private scenes into the runtime public asset directory before internal staging build/deploy:
 
 ```bash
-node tools/sync-private-scene-assets.mjs /path/to/vrata-scene-assets-private/assets
+node tools/sync-private-scene-assets.mjs /path/to/noah-scene-assets-private/assets
 ```
 
-The sync tool reads `/path/to/vrata-scene-assets-private/assets/manifest.json` and copies listed `sense-*` scene bundles into `apps/runtime-web/public/assets/scenes`.
+The sync tool reads `/path/to/noah-scene-assets-private/assets/manifest.json` and copies listed `sense-*` scene bundles into `apps/runtime-web/public/assets/scenes`.
 
 It does not delete existing platform assets. Public release workflows must not run this sync step.
 
-Maintainer staging can use a read-only deploy key to checkout a private scene-assets repository, upload its `assets/` directory to the staging host, and run the sync tool before scene snapshots are created.
+Internal staging uses the GitHub Actions secret `PRIVATE_SCENE_ASSETS_DEPLOY_KEY` to checkout `psilon2000/noah-scene-assets-private`, uploads its `assets/` directory to `/opt/noah-private-scene-assets/assets` on the staging host, and runs the sync tool before staging scene snapshots are created.
 
 ## Staging Flow After Migration
 
-- Platform CI builds and tests against inline fixtures only; public releases must not bundle scene asset directories.
+- Platform CI builds and tests against cleared fixtures and public sample scenes only.
 - Platform CI excludes Playwright tests tagged `@private-assets`.
 - Private scene asset validation can run `pnpm test:e2e:private-assets` after mounting or syncing private scene bundles into the runtime public assets directory.
 - Private scene-assets CI validates proprietary scene bundles separately.
-- Maintainer staging can fetch private scene assets through a read-only deploy key.
+- Internal staging deploy fetches private scene assets through the read-only deploy key stored in `PRIVATE_SCENE_ASSETS_DEPLOY_KEY`.
 - Staging room manifests continue to bind through versioned `sceneBundleUrl` values.
 - Public release workflows must not fetch private scene assets.
 
 ## Public Release Rules
 
-- The public platform repo must not include bundled scene asset directories for `v0.1.0`.
-- Private/customer scene bundles, including `sense-*`, `livadia-nicholas-office-v1`, `the-hall-v1`, and `the-office-v1`, must stay in private repositories or customer storage unless redistribution rights and release policy explicitly change.
-- `tools/check-public-assets.mjs` blocks public GHCR release images if any scene bundle directories are present in `apps/runtime-web/public/assets/scenes`.
+- The public platform repo may include `livadia-nicholas-office-v1` and other cleared/generated sample scenes.
+- The public platform repo must not include `sense-*` scene bundles unless redistribution rights are explicitly confirmed.
+- The public platform repo must not include `research/exports*` Unity/SenseTower-derived export artifacts unless redistribution rights are explicitly confirmed.
+- `tools/check-public-assets.mjs` blocks public GHCR release images if non-cleared scene bundle directories are present in `apps/runtime-web/public/assets/scenes`.
 - Removing private assets from HEAD is not enough to make the current repository public if old git history still contains proprietary blobs.
 
 ## Migration Phases
@@ -97,6 +98,6 @@ Maintainer staging can use a read-only deploy key to checkout a private scene-as
 3. [x] Commit exported assets and provenance notes in the private repository.
 4. [ ] Add private asset validation/publish workflow.
 5. [x] Update internal staging deploy to fetch the private repository and run `tools/sync-private-scene-assets.mjs` before snapshot/build/publish.
-6. [x] Remove scene bundles from the public platform repository HEAD.
+6. [x] Remove `sense-*` bundles from the public platform repository HEAD.
 7. [x] Resolve public repository git-history exposure with a clean public import.
-8. [ ] Verify platform CI, self-host compose, public release guard, and internal staging gate.
+8. [x] Verify platform CI, self-host compose, public release guard, and internal staging gate.

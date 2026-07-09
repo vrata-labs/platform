@@ -16,7 +16,9 @@ export interface M05RemoteParticipant {
   updateHz: number;
   interpolationDelayMs: number;
   maxObservedJumpM: number;
+  audioJoined: boolean;
   muted: boolean;
+  speaking: boolean;
   activeAudio: boolean;
   hasVisualEntity: boolean;
   hasAudioNode: boolean;
@@ -38,7 +40,9 @@ export interface M05DebugState {
   remoteParticipants?: M05RemoteParticipant[];
   media?: {
     audioState: "not_joined" | "joining" | "joined" | "muted" | "degraded" | "failed";
+    audioJoined: boolean;
     muted: boolean;
+    speaking: boolean;
     publishedAudio: boolean;
     audioSource?: "none" | "microphone" | "mock";
     subscribedAudioCount: number;
@@ -48,14 +52,47 @@ export interface M05DebugState {
   spatialAudio?: {
     enabled: boolean;
     fallback: boolean;
+    mode?: "disabled" | "idle" | "spatial" | "fallback";
+    fallbackReason?: string | null;
     listener: M05PosePoint & { yaw: number };
     remoteSources: Array<M05PosePoint & {
       participantId: string;
       attachedTo: "head" | "body" | "root";
       hasAudioNode?: boolean;
       pannerActive?: boolean;
+      fallbackReason?: string | null;
       audioLevel?: number;
     }>;
+  };
+  clientCompatibility?: {
+    resolvedJoinMode: "desktop" | "mobile" | "vr";
+    modeSource: "user_agent" | "xr_mock" | "xr_session";
+    entryBlocked: boolean;
+    degradedMode: string;
+    warnings: string[];
+    touchControls: {
+      supported: boolean;
+      required: boolean;
+    };
+    xr: {
+      available: boolean;
+      canEnterVr: boolean;
+      enterVrVisible: boolean;
+      mocked: boolean;
+    };
+  };
+  xrSession?: {
+    rendererXrEnabled: boolean;
+    animationLoop: "xr_compatible" | "disabled";
+    cameraRig: "local_pose_controller";
+    pointer: "controller_or_gaze";
+    transformSync: "room_state_presence";
+    sessionState: "disabled" | "unsupported" | "idle" | "entering" | "active" | "exiting" | "failed";
+    featureEnabled: boolean;
+    enterVrVisible: boolean;
+    active: boolean;
+    lastErrorCode: string | null;
+    transformSyncCount: number;
   };
   botMode?: string;
   issueCode?: string | null;

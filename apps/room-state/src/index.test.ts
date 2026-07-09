@@ -1,5 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { WebSocket } from "ws";
+
+import { getRoomPermissions } from "@vrata/shared-types";
+import { signRoomSessionToken } from "@vrata/shared-types/session-token";
 
 import {
   applyAvatarReliableState,
@@ -14,7 +18,8 @@ import {
   connectParticipant,
   createRoomStateServer,
   disconnectParticipant,
-  relayAvatarPoseFrame
+  relayAvatarPoseFrame,
+  startRoomStateService
 } from "./index.js";
 
 function createSocket() {
@@ -28,6 +33,79 @@ function createSocket() {
     }
   };
 }
+
+test("room-state readiness endpoint reports ready", async () => {
+  process.env.VRATA_DISABLE_AUTOSTART = "1";
+  const server = startRoomStateService(4031);
+
+  try {
+    const response = await fetch("http://127.0.0.1:4031/health/ready", {
+      headers: { "x-request-id": "room-state-request-id" }
+    });
+    assert.equal(response.ok, true);
+    assert.equal(response.headers.get("x-request-id"), "room-state-request-id");
+    const payload = (await response.json()) as { status?: string; service?: string };
+    assert.equal(payload.status, "ready");
+    assert.equal(payload.service, "room-state");
+
+    const liveResponse = await fetch("http://127.0.0.1:4031/health/live");
+    assert.equal(liveResponse.ok, true);
+    const livePayload = (await liveResponse.json()) as { status?: string; service?: string };
+    assert.equal(livePayload.status, "live");
+    assert.equal(livePayload.service, "room-state");
+
+    const metricsResponse = await fetch("http://127.0.0.1:4031/metrics");
+    assert.equal(metricsResponse.ok, true);
+    const metricsText = await metricsResponse.text();
+    assert.match(metricsText, /vrata_room_state_active_rooms \d+/);
+    assert.match(metricsText, /vrata_room_state_active_participants \d+/);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    delete process.env.VRATA_DISABLE_AUTOSTART;
+  }
+});
+
+test("room-state websocket requires valid signed room session token in production", async () => {
+  process.env.VRATA_DISABLE_AUTOSTART = "1";
+  process.env.NODE_ENV = "production";
+  process.env.STATE_TOKEN_SECRET = "room-state-session-secret";
+  const server = startRoomStateService(4034);
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  const token = signRoomSessionToken({
+    tenantId: "demo-tenant",
+    roomId: "demo-room",
+    participantId: "p-session",
+    displayName: "Session Participant",
+    role: "host",
+    permissions: getRoomPermissions("host"),
+    sessionId: "session-1",
+    iat: nowSeconds,
+    exp: nowSeconds + 60,
+    jti: "jti-1"
+  }, "room-state-session-secret");
+
+  try {
+    const allowed = new WebSocket(`ws://127.0.0.1:4034?roomId=demo-room&participantId=p-session&accessToken=${token}`);
+    await new Promise<void>((resolve, reject) => {
+      allowed.once("open", resolve);
+      allowed.once("error", reject);
+    });
+    allowed.close();
+
+    const denied = new WebSocket(`ws://127.0.0.1:4034?roomId=demo-room&participantId=p-session&accessToken=${token.slice(0, -1)}x`);
+    const close = await new Promise<{ code: number; reason: string }>((resolve, reject) => {
+      denied.once("close", (code, reason) => resolve({ code, reason: reason.toString("utf8") }));
+      denied.once("error", reject);
+    });
+    assert.equal(close.code, 1008);
+    assert.equal(close.reason, "invalid_session_token");
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    delete process.env.VRATA_DISABLE_AUTOSTART;
+    delete process.env.NODE_ENV;
+    delete process.env.STATE_TOKEN_SECRET;
+  }
+});
 
 test("connectParticipant replays stored reliable avatar state to late joiner", () => {
   const server = createRoomStateServer();
@@ -253,6 +331,74 @@ test("whiteboard commands append and clear strokes through authoritative room st
   const payload = JSON.parse(memberSocket.sent[memberSocket.sent.length - 1]!);
   assert.equal(payload.type, "room_state");
   assert.equal(payload.room.mediaObjects.objects[created.objectId ?? ""].state.strokes.length, 0);
+});
+
+test("markdown board commands sync sticky note create move and delete", () => {
+  const server = createRoomStateServer();
+  const memberSocket = createSocket();
+  connectParticipant(server, "demo-room", "host", createSocket() as never, { role: "host" });
+  connectParticipant(server, "demo-room", "member", memberSocket as never, { role: "member" });
+  connectParticipant(server, "demo-room", "guest", createSocket() as never, { role: "guest" });
+
+  const created = applyMediaObjectCreateCommand(server, "demo-room", "host", {
+    commandId: "cmd-create-markdown-board",
+    surfaceId: "debug-main",
+    objectType: "markdown-board"
+  });
+  assert.equal(created.accepted, true);
+  assert.equal(created.objectType, "markdown-board");
+
+  const added = applyMediaObjectPatchCommand(server, "demo-room", "member", {
+    commandId: "cmd-add-note",
+    surfaceId: "debug-main",
+    objectId: created.objectId ?? "",
+    expectedRevision: 0,
+    patch: {
+      type: "create-note",
+      inputEventId: "member:note:create:1",
+      noteId: "note-1",
+      text: "# Hello\n<script>alert(1)</script>",
+      x: 0.2,
+      y: 0.3
+    }
+  });
+  assert.equal(added.accepted, true);
+  assert.equal(added.permission, "markdown-board.edit");
+  assert.equal((server.rooms.get("demo-room")?.mediaObjects.objects[created.objectId ?? ""]?.state as { notes?: unknown[] } | undefined)?.notes?.length, 1);
+
+  const denied = applyMediaObjectPatchCommand(server, "demo-room", "guest", {
+    commandId: "cmd-guest-note",
+    surfaceId: "debug-main",
+    objectId: created.objectId ?? "",
+    expectedRevision: 1,
+    patch: { type: "move-note", inputEventId: "guest:note:move:1", noteId: "note-1", x: 0.5, y: 0.5 }
+  });
+  assert.equal(denied.accepted, false);
+  assert.equal(denied.permission, "markdown-board.edit");
+
+  const moved = applyMediaObjectPatchCommand(server, "demo-room", "member", {
+    commandId: "cmd-move-note",
+    surfaceId: "debug-main",
+    objectId: created.objectId ?? "",
+    expectedRevision: 1,
+    patch: { type: "move-note", inputEventId: "member:note:move:1", noteId: "note-1", x: 0.6, y: 0.4 }
+  });
+  assert.equal(moved.accepted, true);
+  assert.equal(moved.revision, 2);
+
+  const deleted = applyMediaObjectPatchCommand(server, "demo-room", "member", {
+    commandId: "cmd-delete-note",
+    surfaceId: "debug-main",
+    objectId: created.objectId ?? "",
+    expectedRevision: 2,
+    patch: { type: "delete-note", inputEventId: "member:note:delete:1", noteId: "note-1" }
+  });
+  assert.equal(deleted.accepted, true);
+  assert.equal((server.rooms.get("demo-room")?.mediaObjects.objects[created.objectId ?? ""]?.state as { notes?: unknown[] } | undefined)?.notes?.length, 0);
+
+  const payload = JSON.parse(memberSocket.sent[memberSocket.sent.length - 1]!);
+  assert.equal(payload.type, "room_state");
+  assert.equal(payload.room.mediaObjects.objects[created.objectId ?? ""].state.notes.length, 0);
 });
 
 test("surface media audio command is admin-only and broadcasts accepted changes", () => {

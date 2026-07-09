@@ -5,6 +5,7 @@
   "license": "Apache-2.0",
   "packageManager": "pnpm@10.0.0",
   "devDependencies": {
+    "@vrata/asset-pipeline": "workspace:*",
     "@playwright/test": "^1.58.2",
     "@types/node": "^22.13.10",
     "playwright": "^1.58.2",
@@ -21,7 +22,17 @@
     "validate:avatars": "pnpm --filter @vrata/asset-pipeline build && pnpm --filter @vrata/asset-pipeline validate:avatars",
     "test:e2e": "playwright test --grep-invert \"@staging|@private-assets\"",
     "test:e2e:private-assets": "playwright test --grep @private-assets --grep-invert @staging",
-    "test:e2e:staging": "BASE_URL=\"${BASE_URL:?BASE_URL is required for staging e2e}\" PLAYWRIGHT_NO_WEB_SERVER=1 playwright test --grep @staging",
-    "test:e2e:rutube": "BASE_URL=\"${BASE_URL:?BASE_URL is required for Rutube e2e}\" PLAYWRIGHT_NO_WEB_SERVER=1 playwright test --grep @rutube --workers=1"
+    "test:e2e:staging": "node tools/run-staging-e2e.mjs",
+    "staging:e2e:pull-env": "node tools/pull-staging-e2e-env.mjs",
+    "test:e2e:rutube": "BASE_URL=\"${BASE_URL:-https://158.160.10.234.sslip.io}\" PLAYWRIGHT_NO_WEB_SERVER=1 playwright test --grep @rutube --workers=1",
+    "validate:production-config": "node tools/validate-production-config.mjs",
+    "backup:compose": "node tools/backup-restore.mjs backup",
+    "backup:validate": "node tools/backup-restore.mjs validate",
+    "restore:compose": "node tools/backup-restore.mjs restore",
+    "rollback:compose": "node tools/backup-restore.mjs rollback",
+    "smoke:compose": "node tools/backup-restore.mjs smoke",
+    "backup:prune": "node tools/backup-restore.mjs prune",
+    "xr:telemetry": "node tools/xr-telemetry.mjs",
+    "xr:telemetry:blueoffice": "XR_ROOM_ID=\"${XR_ROOM_ID:-0b537d34-7b92-4b51-854a-8c64cfb4c114}\" node tools/xr-telemetry.mjs"
   }
 }

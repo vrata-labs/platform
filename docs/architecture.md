@@ -75,6 +75,12 @@ packages/
   shared-types/
   templates/
   asset-pipeline/
+research/
+  webrtc-lab/
+  webxr-lab/
+  webgl-lab/
+  audio-lab/
 infra/
   docker/
+  yandex/
 ```

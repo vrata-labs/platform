@@ -63,6 +63,7 @@ export interface RemoteBrowserObjectRuntimeOptions {
   apiBaseUrl: string;
   roomId: string;
   participantId: string;
+  getSessionToken?: () => string;
   surfaceId: string;
   widthPx: number;
   heightPx: number;
@@ -419,7 +420,10 @@ export class RemoteBrowserObjectRuntime {
     try {
       const tokenResponse = await fetch(new URL("/api/tokens/remote-browser-frame", this.options.apiBaseUrl), {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: {
+          "content-type": "application/json",
+          ...(this.options.getSessionToken ? { "authorization": `Bearer ${this.options.getSessionToken()}` } : {})
+        },
         body: JSON.stringify({
           roomId: object.roomId,
           objectId: object.objectId,

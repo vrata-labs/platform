@@ -1,12 +1,11 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 
 import { WebSocketServer, type WebSocket } from "ws";
 import {
   REMOTE_BROWSER_OBJECT_TYPE,
   getRoomPermissions,
   hasRoomPermission,
-  isRoomRole,
   parseRoomRole,
   type MediaObjectCommandResult,
   type RemoteBrowserObjectState,
@@ -14,6 +13,7 @@ import {
   type RoomPermission,
   type RoomRole
 } from "@vrata/shared-types";
+import { verifyRoomSessionToken } from "@vrata/shared-types/session-token";
 
 import type { PresenceState } from "./schema.js";
 import {
@@ -64,16 +64,13 @@ export interface RoomStateServer {
   pendingDisconnects: Map<string, Map<string, ReturnType<typeof setTimeout>>>;
 }
 
-interface RoomAccessTokenPayload {
-  roomId: string;
-  participantId: string;
-  displayName: string;
-  role: RoomRole;
-  permissions: RoomPermission[];
-  exp: number;
-}
-
 const DISCONNECT_GRACE_MS = 1500;
+const requestIds = new WeakMap<IncomingMessage, string>();
+const metrics = {
+  requestsTotal: 0,
+  requestFailuresTotal: 0,
+  socketDisconnectsTotal: 0
+};
 
 export interface SeatClaimResultPayload {
   seatId: string;
@@ -109,6 +106,64 @@ function json(response: ServerResponse, statusCode: number, body: unknown): void
     "x-content-type-options": "nosniff"
   });
   response.end(JSON.stringify(body));
+}
+
+function text(response: ServerResponse, statusCode: number, body: string, contentType = "text/plain; charset=utf-8"): void {
+  response.writeHead(statusCode, {
+    "content-type": contentType,
+    "cache-control": "no-store",
+    "x-content-type-options": "nosniff"
+  });
+  response.end(body);
+}
+
+function getHeaderString(request: IncomingMessage, name: string): string | null {
+  const value = request.headers[name.toLowerCase()];
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) return value[0] ?? null;
+  return null;
+}
+
+function requestId(request: IncomingMessage): string {
+  const existing = requestIds.get(request);
+  if (existing) {
+    return existing;
+  }
+  const id = getHeaderString(request, "x-request-id")?.trim() || randomUUID();
+  requestIds.set(request, id);
+  return id;
+}
+
+function formatMetricLine(name: string, value: number, labels?: Record<string, string>): string {
+  const labelEntries = Object.entries(labels ?? {});
+  const labelText = labelEntries.length === 0
+    ? ""
+    : `{${labelEntries.map(([key, labelValue]) => `${key}="${labelValue.replace(/\\/g, "\\\\").replace(/"/g, "\\\"")}"`).join(",")}}`;
+  return `${name}${labelText} ${value}`;
+}
+
+function roomStateMetricsText(authority: RoomStateServer): string {
+  let clientCount = 0;
+  for (const clients of authority.clients.values()) {
+    clientCount += clients.size;
+  }
+  return `${[
+    "# HELP vrata_room_state_requests_total Total room-state HTTP requests handled by this process.",
+    "# TYPE vrata_room_state_requests_total counter",
+    formatMetricLine("vrata_room_state_requests_total", metrics.requestsTotal),
+    "# HELP vrata_room_state_request_failures_total Total unhandled room-state HTTP request failures.",
+    "# TYPE vrata_room_state_request_failures_total counter",
+    formatMetricLine("vrata_room_state_request_failures_total", metrics.requestFailuresTotal),
+    "# HELP vrata_room_state_active_rooms Rooms currently held by room-state.",
+    "# TYPE vrata_room_state_active_rooms gauge",
+    formatMetricLine("vrata_room_state_active_rooms", authority.rooms.size),
+    "# HELP vrata_room_state_active_participants Active websocket participant connections.",
+    "# TYPE vrata_room_state_active_participants gauge",
+    formatMetricLine("vrata_room_state_active_participants", clientCount),
+    "# HELP vrata_room_state_disconnects_total Websocket disconnects observed by room-state.",
+    "# TYPE vrata_room_state_disconnects_total counter",
+    formatMetricLine("vrata_room_state_disconnects_total", metrics.socketDisconnectsTotal)
+  ].join("\n")}\n`;
 }
 
 function parseBody<T>(request: IncomingMessage): Promise<T | null> {
@@ -190,69 +245,28 @@ function defaultAccess(role: RoomRole = "guest"): ParticipantAccessState {
   };
 }
 
-function signAccessTokenBody(body: string, env: NodeJS.ProcessEnv = process.env): string {
-  const secret = env.STATE_TOKEN_SECRET ?? "dev-state-secret";
-  return createHmac("sha256", secret).update(body).digest("base64url");
-}
-
 function safeEqual(left: string, right: string): boolean {
   const leftBuffer = Buffer.from(left);
   const rightBuffer = Buffer.from(right);
   return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer);
 }
 
-function parseAccessTokenPayload(input: unknown): RoomAccessTokenPayload | null {
-  if (!isObjectRecord(input)) {
-    return null;
-  }
-  const permissions = Array.isArray(input.permissions) ? input.permissions : [];
-  if (typeof input.roomId !== "string"
-    || typeof input.participantId !== "string"
-    || typeof input.displayName !== "string"
-    || !isRoomRole(input.role)
-    || typeof input.exp !== "number"
-    || !permissions.every((permission) => typeof permission === "string")) {
-    return null;
-  }
-  return {
-    roomId: input.roomId,
-    participantId: input.participantId,
-    displayName: input.displayName,
-    role: input.role,
-    permissions: getRoomPermissions(input.role),
-    exp: input.exp
-  };
+function getStateTokenSecret(env: NodeJS.ProcessEnv = process.env): string {
+  return env.STATE_TOKEN_SECRET ?? "dev-state-secret";
 }
 
-function decodeAccessToken(token: string | null, env: NodeJS.ProcessEnv = process.env): RoomAccessTokenPayload | null {
-  if (!token) {
-    return null;
+function resolveConnectionAccess(url: URL, roomId: string, participantId: string, env: NodeJS.ProcessEnv = process.env): ParticipantAccessState | null {
+  const tokenResult = verifyRoomSessionToken(url.searchParams.get("accessToken"), getStateTokenSecret(env), {
+    roomId,
+    participantId
+  });
+  if (tokenResult.ok) {
+    return defaultAccess(tokenResult.payload.role);
   }
-  const [body, signature] = token.split(".");
-  if (!body || !signature || !safeEqual(signAccessTokenBody(body, env), signature)) {
-    return null;
-  }
-  try {
-    const payload = JSON.parse(Buffer.from(body, "base64url").toString("utf8"));
-    const parsed = parseAccessTokenPayload(payload);
-    if (!parsed || parsed.exp < Math.floor(Date.now() / 1000)) {
-      return null;
-    }
-    return parsed;
-  } catch {
-    return null;
-  }
-}
-
-function resolveConnectionAccess(url: URL, roomId: string, participantId: string, env: NodeJS.ProcessEnv = process.env): ParticipantAccessState {
-  const tokenAccess = decodeAccessToken(url.searchParams.get("accessToken"), env);
-  if (tokenAccess?.roomId === roomId && tokenAccess.participantId === participantId) {
-    return defaultAccess(tokenAccess.role);
-  }
-  if (isDevRoleQueryAllowed(env)) {
+  if (tokenResult.code === "missing_token" && isDevRoleQueryAllowed(env)) {
     return defaultAccess(parseRoomRole(url.searchParams.get("role"), "guest"));
   }
-  return defaultAccess("guest");
+  return null;
 }
 
 export function createRoomStateServer(): RoomStateServer {
@@ -729,7 +743,34 @@ export function startRoomStateService(port = Number.parseInt(process.env.ROOM_ST
   const authority = createRoomStateServer();
   const httpServer = createServer((request, response) => {
     void (async () => {
+      const id = requestId(request);
+      response.setHeader("x-request-id", id);
+      metrics.requestsTotal += 1;
       const url = new URL(request.url ?? "/", `http://${request.headers.host ?? `localhost:${port}`}`);
+      if (request.method === "GET" && url.pathname === "/health/live") {
+        json(response, 200, {
+          status: "live",
+          service: "room-state",
+          env: process.env.NODE_ENV ?? "development",
+          port,
+          timestamp: new Date().toISOString()
+        });
+        return;
+      }
+      if (request.method === "GET" && url.pathname === "/health/ready") {
+        json(response, 200, {
+          status: "ready",
+          service: "room-state",
+          env: process.env.NODE_ENV ?? "development",
+          port,
+          timestamp: new Date().toISOString(),
+          dependencies: {
+            websocketServer: true
+          }
+        });
+        return;
+      }
+
       if (request.method === "GET" && url.pathname === "/health") {
         json(response, 200, {
           status: "ok",
@@ -744,6 +785,10 @@ export function startRoomStateService(port = Number.parseInt(process.env.ROOM_ST
             realtimeEnabled: process.env.FEATURE_ROOM_STATE_REALTIME !== "false"
           }
         });
+        return;
+      }
+      if (request.method === "GET" && url.pathname === "/metrics") {
+        text(response, 200, roomStateMetricsText(authority));
         return;
       }
       const remoteBrowserSessionMatch = url.pathname.match(/^\/api\/internal\/remote-browser\/sessions\/([^/]+)$/);
@@ -766,6 +811,18 @@ export function startRoomStateService(port = Number.parseInt(process.env.ROOM_ST
       }
       json(response, 404, { error: "not_found" });
     })().catch((error: unknown) => {
+      metrics.requestFailuresTotal += 1;
+      logEvent({
+        service: "room-state",
+        event: "request_failed",
+        env: process.env.NODE_ENV ?? "development",
+        requestId: requestId(request),
+        errorCode: "room_state_error",
+        path: request.url ?? "",
+        method: request.method ?? "GET",
+        message: error instanceof Error ? error.message : "unknown",
+        timestamp: new Date().toISOString()
+      });
       json(response, 500, { error: "room_state_error", message: error instanceof Error ? error.message : "unknown" });
     });
   });
@@ -774,8 +831,12 @@ export function startRoomStateService(port = Number.parseInt(process.env.ROOM_ST
   wss.on("connection", (socket, request) => {
     const url = new URL(request.url ?? "/", `http://${request.headers.host ?? `localhost:${port}`}`);
     const roomId = url.searchParams.get("roomId") ?? "demo-room";
-    const participantId = url.searchParams.get("participantId") ?? crypto.randomUUID();
+    const participantId = url.searchParams.get("participantId") ?? randomUUID();
     const access = resolveConnectionAccess(url, roomId, participantId);
+    if (!access) {
+      socket.close(1008, "invalid_session_token");
+      return;
+    }
 
     connectParticipant(authority, roomId, participantId, socket, access);
 
@@ -892,6 +953,7 @@ export function startRoomStateService(port = Number.parseInt(process.env.ROOM_ST
     });
 
     socket.on("close", () => {
+      metrics.socketDisconnectsTotal += 1;
       disconnectParticipant(authority, roomId, participantId, socket);
     });
 
@@ -909,7 +971,7 @@ export function startRoomStateService(port = Number.parseInt(process.env.ROOM_ST
   });
 
   return httpServer.listen(port, () => {
-    process.stdout.write(`room-state listening on ${port}\n`);
+    logEvent({ service: "room-state", event: "listening", env: process.env.NODE_ENV ?? "development", port, timestamp: new Date().toISOString() });
   });
 }
 

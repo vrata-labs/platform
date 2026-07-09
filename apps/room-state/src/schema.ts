@@ -20,7 +20,9 @@ export interface PresenceState {
   rootTransform: TransformState;
   bodyTransform?: TransformState;
   headTransform?: TransformState;
+  audioJoined?: boolean;
   muted: boolean;
+  speaking?: boolean;
   activeMedia: {
     audio: boolean;
     screenShare: boolean;

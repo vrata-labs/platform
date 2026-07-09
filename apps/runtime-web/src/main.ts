@@ -1,11 +1,11 @@
 import * as THREE from "three";
-import { VRButton } from "three/examples/jsm/webxr/VRButton.js";
 import { Room, RoomEvent, Track } from "livekit-client";
 import {
   DEFAULT_MEDIA_SURFACE_ID,
   DISABLED_EXTENSION_CARD_TYPE,
   EXTENSION_TEST_CARD_TYPE,
   LAPTOP_MEDIA_SURFACE_ID,
+  MARKDOWN_BOARD_OBJECT_TYPE,
   MISSING_CAPABILITY_EXTENSION_CARD_TYPE,
   REMOTE_BROWSER_OBJECT_TYPE,
   SCREEN_SHARE_OBJECT_TYPE,
@@ -18,6 +18,8 @@ import {
   hasRoomPermission,
   isMediaObjectTypeAvailable,
   type MediaObjectInstance,
+  type MarkdownBoardPatch,
+  type MarkdownBoardState,
   type RemoteBrowserErrorCode,
   type RemoteBrowserExecutorInputState,
   type RemoteBrowserObjectState,
@@ -36,7 +38,9 @@ import {
 } from "@vrata/shared-types";
 
 import { appendBrandingSuffix, applyRoomShellBootState, renderSceneAttributions } from "./boot-session.js";
-import { bootRuntime, fetchRuntimeSpaces, listPresence, planVoiceSession, removePresence, resolveCurrentSpace, upsertPresence, type PresenceState, type RuntimeSpaceOption } from "./index.js";
+import { RuntimeAccessError, bootRuntime, deleteRoomDocument, downloadRoomDocument, fetchRoomNote, fetchRoomSessionControl, fetchRuntimeSpaces, listPresence, listRoomDocuments, openPersonalRoom, planVoiceSession, removePresence, removeRoomParticipant, resolveCurrentSpace, resolveJoinMode, runRoomSessionControlAction, savePersonalRoomState, saveRoomNote, selectRoomDocumentSurface, transferRoomHost, uploadRoomDocument, upsertPresence, type PresenceState, type RuntimeDocumentRecord, type RuntimeNoteScope, type RuntimePersonalState, type RuntimeSessionControlResponse, type RuntimeSpaceOption } from "./index.js";
+import { formatClientCompatibilityStatus, resolveClientCompatibility, type ClientCompatibilitySummary } from "./client-capabilities.js";
+import { formatGuestCompatibilityWarnings, formatGuestControlsHint, shouldShowGuestOnboarding, validateGuestDisplayName } from "./guest-onboarding.js";
 import { createMotionTrack, pushMotionSample, sampleMotion, type MotionTrack } from "./motion-state.js";
 import { mergePresenceSources } from "./presence-sources.js";
 import {
@@ -51,13 +55,16 @@ import {
 import { classifyMediaError, classifyRoomStateError, classifyScreenShareError, createFaultError, getRuntimeIssue, shouldRetryConnection, type RuntimeIssue } from "./runtime-errors.js";
 import { canRetry, createReconnectPolicy, getReconnectDelayMs } from "./reconnect.js";
 import { applyRuntimeIssueState, clearRuntimeIssueState, createRuntimeUiState } from "./runtime-state.js";
+import { nextNotesSaveState, parseSafeMarkdown, type NotesSaveState } from "./notes.js";
 import { applyPassiveMediaRecovery, applyPostBootControls, shouldStartPassiveMedia } from "./runtime-startup.js";
 import { describeMediaCapabilityReason, detectBrowserMediaCapabilities, formatUnsupportedMediaCapabilities } from "./media-capabilities.js";
+import { collectWebRtcDiagnostics, createUnavailableWebRtcDiagnostics, type WebRtcStatsTransport, type WebRtcTransportRole } from "./webrtc-diagnostics.js";
 import { isScreenShareAudioSource, shouldPublishMediaSurfaceAudio } from "./media-surface-audio.js";
 import { createMediaSurfaceCommandClient } from "./media/media-surface-commands.js";
 import {
   activeMediaObjectForSurface as selectActiveMediaObjectForSurface,
   activeMediaObjectIdForSurface as selectActiveMediaObjectIdForSurface,
+  activeMarkdownBoardObjectForSurface as selectActiveMarkdownBoardObjectForSurface,
   activeRemoteBrowserObjectForSurface as selectActiveRemoteBrowserObjectForSurface,
   activeScreenShareObjectForSurface as selectActiveScreenShareObjectForSurface,
   activeWhiteboardObjectForSurface as selectActiveWhiteboardObjectForSurface,
@@ -67,6 +74,7 @@ import {
   screenShareObjectForMediaTrack
 } from "./media/media-object-state.js";
 import { routeMediaObjectSurfaceInput } from "./media/media-object-router.js";
+import { createMarkdownBoardObjectRuntime } from "./media/markdown-board-object.js";
 import { createRemoteBrowserObjectRuntime } from "./media/remote-browser-object.js";
 import {
   createRemoteBrowserVrKeyboardView,
@@ -83,11 +91,23 @@ import {
 import { planRemoteBrowserXrPointer } from "./media/remote-browser-xr-input.js";
 import { getScreenShareErrorCode } from "./media/screen-share-object.js";
 import { createWhiteboardObjectRuntime } from "./media/whiteboard-object.js";
-import { applySpatialSettings, createSpatialAudioSettings } from "./spatial-audio.js";
+import { applySpatialSettings, createSpatialAudioSettings, resolveSpatialAudioMode } from "./spatial-audio.js";
 import { captureCanvasDiagnostics, createEmptySceneDiagnostics, inspectSceneObject } from "./scene-debug.js";
 import { loadSceneBundle } from "./scene-loader.js";
 import { startSceneBundleSession } from "./scene-session.js";
-import { detectXrSupport, getEnterVrVisibility } from "./xr.js";
+import {
+  createXrRendererWiringDebug,
+  detectXrSupport,
+  getEnterVrVisibility,
+  markXrSessionEnded,
+  markXrSessionEntering,
+  markXrSessionFailed,
+  markXrSessionStarted,
+  recordXrTransformSync,
+  shouldSyncXrTransform,
+  type XrRendererWiringDebug,
+  type XrSessionLifecycleState
+} from "./xr.js";
 import { createAvatarLoadingDiagnostics, createEmptyAvatarDiagnostics } from "./avatar/avatar-debug.js";
 import { createAvatarLipsyncDriver, sampleAvatarLipsyncLevel, updateAvatarLipsyncDriver, type AvatarLipsyncDriver, type AvatarLipsyncSourceState } from "./avatar/avatar-lipsync.js";
 import { createAvatarOutboundPublisher, type AvatarOutboundPayload } from "./avatar/avatar-publish.js";
@@ -158,11 +178,23 @@ function getStoredValue(storage: Storage, key: string, legacyKey: string): strin
 function getParticipantId(): string {
   const stored = getStoredValue(sessionStorage, "vrata.participantId", "noah.participantId");
   if (stored) {
+    sessionStorage.setItem("vrata.participantId", stored);
     return stored;
   }
 
   const generated = typeof globalThis.crypto?.randomUUID === "function" ? globalThis.crypto.randomUUID() : fallbackUuid();
   sessionStorage.setItem("vrata.participantId", generated);
+  return generated;
+}
+
+function getPersonalOwnerId(): string {
+  const stored = getStoredValue(localStorage, "vrata.personalOwnerId", "noah.personalOwnerId");
+  if (stored) {
+    return stored;
+  }
+
+  const generated = typeof globalThis.crypto?.randomUUID === "function" ? globalThis.crypto.randomUUID() : fallbackUuid();
+  localStorage.setItem("vrata.personalOwnerId", generated);
   return generated;
 }
 
@@ -201,7 +233,7 @@ const presenceXrMockEnabled = debugEnabled && query.get("xrmock") === "1";
 const botMode = query.get("bot") ?? "off";
 const botSpeed = Math.max(0.1, Number.parseFloat(query.get("botSpeed") ?? "1") || 1);
 const botStart = parseBotStart(query.get("botStart"));
-const spatialAudioRequested = query.get("spatial") !== "0";
+const spatialAudioQueryEnabled = query.get("spatial") !== "0";
 const shareMockEnabled = query.get("sharemock") === "1";
 const audioMockEnabled = debugEnabled && query.get("audiomock") === "1";
 const failSpaces = query.get("failspaces") === "1";
@@ -212,27 +244,66 @@ const faultConfig = {
   roomState: roomStateFaultMode === "1" || roomStateFaultMode === "temporary",
   xrUnavailable: query.get("failxr") === "1"
 };
+type RuntimeNavigatorXr = {
+  isSessionSupported?: (mode: "immersive-vr") => Promise<boolean>;
+  requestSession?: (mode: "immersive-vr", options?: XRSessionInit) => Promise<XRSession>;
+};
+const XR_SESSION_OPTIONS: XRSessionInit = {
+  optionalFeatures: ["local-floor", "bounded-floor", "layers"]
+};
 const participantId = getParticipantId();
-const displayNameFromQuery = query.get("name");
-const displayName = displayNameFromQuery ?? getStoredValue(localStorage, "vrata.displayName", "noah.displayName") ?? `Guest-${participantId.slice(0, 4)}`;
-if (!displayNameFromQuery) {
-  localStorage.setItem("vrata.displayName", displayName);
+const personalOwnerId = getPersonalOwnerId();
+const displayNameFromQuery = query.get("name")?.trim() || null;
+const storedDisplayName = getStoredValue(localStorage, "vrata.displayName", "noah.displayName")?.trim() || null;
+let displayName = displayNameFromQuery ?? storedDisplayName ?? `Guest-${participantId.slice(0, 4)}`;
+if (displayNameFromQuery) {
+  localStorage.setItem("vrata.displayName", displayNameFromQuery);
 }
 const browserMediaCapabilities = detectBrowserMediaCapabilities({
   isSecureContext: window.isSecureContext,
   mediaDevices: navigator.mediaDevices,
   rtcPeerConnection: globalThis.RTCPeerConnection
 });
+const browserWebGlAvailable = Boolean(globalThis.WebGLRenderingContext || globalThis.WebGL2RenderingContext);
+const browserWebSocketAvailable = typeof globalThis.WebSocket === "function";
+const browserTouchInputAvailable = navigator.maxTouchPoints > 0 || "ontouchstart" in window;
 
 const roomNameEl = mustElement<HTMLDivElement>("#room-name");
 const statusLineEl = mustElement<HTMLDivElement>("#status-line");
 const brandingLineEl = mustElement<HTMLDivElement>("#branding-line");
 const roomStateLineEl = mustElement<HTMLDivElement>("#room-state-line");
+const reportLineEl = mustElement<HTMLDivElement>("#report-line");
+const diagnosticsLink = mustElement<HTMLAnchorElement>("#diagnostics-link");
 const guestAccessLineEl = mustElement<HTMLDivElement>("#guest-access-line");
+const compatibilityStatusEl = mustElement<HTMLDivElement>("#compatibility-status");
+const guestOnboardingEl = mustElement<HTMLElement>("#guest-onboarding");
+const guestNameInput = mustElement<HTMLInputElement>("#guest-name-input");
+const guestJoinMutedCheckbox = mustElement<HTMLInputElement>("#guest-join-muted");
+const guestCheckMicrophoneButton = mustElement<HTMLButtonElement>("#guest-check-microphone");
+const guestEnterWithoutAudioButton = mustElement<HTMLButtonElement>("#guest-enter-without-audio");
+const guestEnterRoomButton = mustElement<HTMLButtonElement>("#guest-enter-room");
+const guestCompatibilityWarningEl = mustElement<HTMLDivElement>("#guest-compatibility-warning");
+const guestControlsHintEl = mustElement<HTMLDivElement>("#guest-controls-hint");
+const guestOnboardingStatusEl = mustElement<HTMLDivElement>("#guest-onboarding-status");
 const sceneAttributionsPanelEl = mustElement<HTMLDivElement>("#scene-attributions");
 const sceneAttributionsListEl = mustElement<HTMLUListElement>("#scene-attributions-list");
 const spaceSelect = mustElement<HTMLSelectElement>("#space-select");
+const openPersonalRoomButton = mustElement<HTMLButtonElement>("#open-personal-room");
 const spaceSelectStatusEl = mustElement<HTMLDivElement>("#space-select-status");
+const notesPanelEl = mustElement<HTMLDivElement>("#notes-panel");
+const notesScopeSelect = mustElement<HTMLSelectElement>("#notes-scope-select");
+const notesEditor = mustElement<HTMLTextAreaElement>("#notes-editor");
+const notesRetrySaveButton = mustElement<HTMLButtonElement>("#notes-retry-save");
+const notesStatusEl = mustElement<HTMLDivElement>("#notes-status");
+const notesPreviewEl = mustElement<HTMLDivElement>("#notes-preview");
+const documentsPanelEl = mustElement<HTMLDivElement>("#documents-panel");
+const documentUploadInput = mustElement<HTMLInputElement>("#document-upload-input");
+const documentUploadButton = mustElement<HTMLButtonElement>("#document-upload-button");
+const documentSelect = mustElement<HTMLSelectElement>("#document-select");
+const documentDownloadButton = mustElement<HTMLButtonElement>("#document-download-button");
+const documentSurfaceButton = mustElement<HTMLButtonElement>("#document-surface-button");
+const documentDeleteButton = mustElement<HTMLButtonElement>("#document-delete-button");
+const documentStatusEl = mustElement<HTMLDivElement>("#document-status");
 const sceneHost = mustElement<HTMLDivElement>("#scene");
 const mediaSurfaceSelect = mustElement<HTMLSelectElement>("#media-surface-select");
 const joinAudioButton = mustElement<HTMLButtonElement>("#join-audio");
@@ -241,8 +312,25 @@ const startWhiteboardButton = mustElement<HTMLButtonElement>("#start-whiteboard"
 const drawWhiteboardButton = mustElement<HTMLButtonElement>("#draw-whiteboard");
 const clearWhiteboardButton = mustElement<HTMLButtonElement>("#clear-whiteboard");
 const stopWhiteboardButton = mustElement<HTMLButtonElement>("#stop-whiteboard");
+const startMarkdownBoardButton = mustElement<HTMLButtonElement>("#start-markdown-board");
+const markdownBoardControlEl = mustElement<HTMLDivElement>("#markdown-board-control");
+const markdownBoardNoteText = mustElement<HTMLTextAreaElement>("#markdown-board-note-text");
+const addStickyNoteButton = mustElement<HTMLButtonElement>("#add-sticky-note");
+const updateStickyNoteButton = mustElement<HTMLButtonElement>("#update-sticky-note");
+const moveStickyNoteButton = mustElement<HTMLButtonElement>("#move-sticky-note");
+const deleteStickyNoteButton = mustElement<HTMLButtonElement>("#delete-sticky-note");
+const stopMarkdownBoardButton = mustElement<HTMLButtonElement>("#stop-markdown-board");
+const markdownBoardStatusEl = mustElement<HTMLDivElement>("#markdown-board-status");
 const startShareButton = mustElement<HTMLButtonElement>("#start-share");
 const stopShareButton = mustElement<HTMLButtonElement>("#stop-share");
+const hostControlsEl = mustElement<HTMLDivElement>("#host-controls");
+const hostControlsStatusEl = mustElement<HTMLDivElement>("#host-controls-status");
+const lockRoomButton = mustElement<HTMLButtonElement>("#lock-room");
+const unlockRoomButton = mustElement<HTMLButtonElement>("#unlock-room");
+const endSessionButton = mustElement<HTMLButtonElement>("#end-session");
+const hostParticipantSelect = mustElement<HTMLSelectElement>("#host-participant-select");
+const removeParticipantButton = mustElement<HTMLButtonElement>("#remove-participant");
+const transferHostButton = mustElement<HTMLButtonElement>("#transfer-host");
 const remoteBrowserControlEl = mustElement<HTMLDivElement>("#remote-browser-control");
 const remoteBrowserUrlInput = mustElement<HTMLInputElement>("#remote-browser-url");
 const openRemoteBrowserButton = mustElement<HTMLButtonElement>("#open-remote-browser");
@@ -252,9 +340,11 @@ const stopRemoteBrowserButton = mustElement<HTMLButtonElement>("#stop-remote-bro
 const remoteBrowserStatusEl = mustElement<HTMLDivElement>("#remote-browser-status");
 const micSelect = mustElement<HTMLSelectElement>("#mic-select");
 const speakerSelect = mustElement<HTMLSelectElement>("#speaker-select");
+const joinMutedCheckbox = mustElement<HTMLInputElement>("#join-muted");
 const micLevelFill = mustElement<HTMLDivElement>("#mic-level-fill");
 const speakerLevelFill = mustElement<HTMLDivElement>("#speaker-level-fill");
 const audioDeviceStatusEl = mustElement<HTMLDivElement>("#audio-device-status");
+const remoteMicStatusEl = mustElement<HTMLDivElement>("#remote-mic-status");
 const surfaceAudioControlEl = mustElement<HTMLDivElement>("#surface-audio-control");
 const surfaceAudioCheckbox = mustElement<HTMLInputElement>("#surface-audio-enabled");
 const surfaceAudioStatusEl = mustElement<HTMLDivElement>("#surface-audio-status");
@@ -264,6 +354,10 @@ const avatarSandboxPanel = mustElement<HTMLDivElement>("#avatar-sandbox-panel");
 const avatarPresetSelect = mustElement<HTMLSelectElement>("#avatar-preset-select");
 const avatarSandboxStatusEl = mustElement<HTMLDivElement>("#avatar-sandbox-status");
 const avatarPresetLabel = mustElement<HTMLLabelElement>('label[for="avatar-preset-select"]');
+
+const diagnosticsUrl = new URL("/diagnostics", apiBaseUrl);
+diagnosticsUrl.searchParams.set("roomId", roomId);
+diagnosticsLink.href = diagnosticsUrl.toString();
 
 if (debugEnabled) {
   debugPanel.hidden = false;
@@ -555,6 +649,7 @@ const bodyGeometry = new THREE.CapsuleGeometry(0.24, 0.8, 6, 12);
 const headGeometry = new THREE.SphereGeometry(0.18, 20, 20);
 const API_PRESENCE_SYNC_INTERVAL_MS = 1000;
 const API_PRESENCE_REFRESH_INTERVAL_MS = 1000;
+const SESSION_CONTROL_REFRESH_INTERVAL_MS = 1000;
 const XR_REMOTE_BROWSER_SCROLL_AXIS_THRESHOLD = 0.22;
 const XR_REMOTE_BROWSER_SCROLL_INTERVAL_MS = 80;
 const XR_REMOTE_BROWSER_SCROLL_DELTA_PX = 360;
@@ -581,6 +676,7 @@ let pointerDownAtMs = 0;
 let pointerDownClientX = 0;
 let pointerDownClientY = 0;
 let livekitRoom: Room | null = null;
+let audioSessionJoined = false;
 let microphoneEnabled = false;
 let xrTurnCooldown = 0;
 let xrTurnArmed = true;
@@ -594,7 +690,7 @@ let mobileTouchLastClientX = 0;
 let mobileTouchLastClientY = 0;
 const mobileTouchVector = { x: 0, z: 0 };
 let diagnosticsAccumulator = 0;
-let latestMode: PresenceState["mode"] = presenceXrMockEnabled ? "vr" : /android|iphone|ipad/i.test(navigator.userAgent) ? "mobile" : "desktop";
+let latestMode: PresenceState["mode"] = presenceXrMockEnabled ? "vr" : resolveJoinMode(navigator.userAgent);
 
 type ScreenShareRuntimeEntry = {
   objectId: string;
@@ -627,7 +723,10 @@ type RemoteBrowserVideoEntry = {
 const remoteBrowserVideoByObjectId = new Map<string, RemoteBrowserVideoEntry>();
 let lastScreenShareStoppedAtMs = 0;
 let mediaRoomReady = false;
+let mediaDiagnosticsTransports: WebRtcStatsTransport[] = [];
+const mediaTransportDiagnosticsRooms = new WeakSet<Room>();
 let remoteBrowserMediaRoomPromise: Promise<void> | null = null;
+let mediaRoomIdleDisconnectTimer: number | null = null;
 let roomStateClient: RoomStateClient | null = null;
 let roomStateAccessToken = "";
 let roomStateConnected = false;
@@ -649,6 +748,9 @@ let xrRayVisibleLatched = false;
 let lastXrTelemetryReportAt = 0;
 let lastXrTelemetryKinds: string[] = [];
 let audioContext: AudioContext | null = null;
+let spatialAudioServerEnabled = true;
+let spatialAudioRoomEnabled = true;
+let spatialAudioFallbackReason: string | null = null;
 let syntheticXrState: {
   rightController: { x: number; y: number; z: number };
   rightGrip: { x: number; y: number; z: number } | null;
@@ -684,6 +786,7 @@ const mediaSurfaceCommands = createMediaSurfaceCommandClient({
   createConnectionError: () => createFaultError("ConnectionError", "room_state_failed")
 });
 const whiteboardRuntimes = new Map<string, ReturnType<typeof createWhiteboardObjectRuntime>>();
+const markdownBoardRuntimes = new Map<string, ReturnType<typeof createMarkdownBoardObjectRuntime>>();
 const remoteBrowserRuntimes = new Map<string, ReturnType<typeof createRemoteBrowserObjectRuntime>>();
 
 function runtimeMediaSurfaceDefinitionFromScene(surface: SceneBundleMediaSurface): RuntimeMediaSurfaceDefinition {
@@ -723,6 +826,7 @@ function getFallbackMediaSurfaceView(): RuntimeMediaSurfaceView {
 function closeMediaSurfaceRuntimes(surfaceId: string): void {
   whiteboardRuntimes.get(surfaceId)?.clearPreview();
   whiteboardRuntimes.delete(surfaceId);
+  markdownBoardRuntimes.delete(surfaceId);
   remoteBrowserRuntimes.get(surfaceId)?.close();
   remoteBrowserRuntimes.delete(surfaceId);
 }
@@ -798,6 +902,29 @@ function currentWhiteboardObject(): MediaObjectInstance<WhiteboardState> | null 
   return activeWhiteboardObjectForSurface(selectedMediaSurfaceId) ?? findActiveWhiteboardObject();
 }
 
+function getMarkdownBoardRuntime(surfaceId: string): ReturnType<typeof createMarkdownBoardObjectRuntime> {
+  const existing = markdownBoardRuntimes.get(surfaceId);
+  if (existing) {
+    return existing;
+  }
+  const surface = getMediaSurfaceView(surfaceId);
+  const runtime = createMarkdownBoardObjectRuntime({
+    participantId,
+    surfaceId,
+    widthPx: surface.widthPx,
+    heightPx: surface.heightPx,
+    getPermissions: () => debugState.access.permissions,
+    applyTexture: (texture) => applySurfaceTexture(surfaceId, texture)
+  });
+  markdownBoardRuntimes.set(surfaceId, runtime);
+  retainedDisplayTextures.add(runtime.texture);
+  return runtime;
+}
+
+function currentMarkdownBoardObject(): MediaObjectInstance<MarkdownBoardState> | null {
+  return activeMarkdownBoardObjectForSurface(selectedMediaSurfaceId) ?? findActiveMarkdownBoardObject();
+}
+
 function getRemoteBrowserRuntime(surfaceId: string): ReturnType<typeof createRemoteBrowserObjectRuntime> {
   const existing = remoteBrowserRuntimes.get(surfaceId);
   if (existing) {
@@ -808,6 +935,7 @@ function getRemoteBrowserRuntime(surfaceId: string): ReturnType<typeof createRem
     apiBaseUrl,
     roomId,
     participantId,
+    getSessionToken: () => roomStateAccessToken,
     surfaceId,
     widthPx: surface.widthPx,
     heightPx: surface.heightPx,
@@ -860,6 +988,40 @@ function syncWhiteboardSurfaceTextures(): void {
       if (material instanceof THREE.MeshBasicMaterial && runtime.ownsTexture(material.map)) {
         applySurfaceTexture(surfaceId, null);
       }
+    }
+  }
+}
+
+function activeMarkdownBoardObjects(): Array<MediaObjectInstance<MarkdownBoardState>> {
+  if (!roomMediaObjects) {
+    return [];
+  }
+  const objects: Array<MediaObjectInstance<MarkdownBoardState>> = [];
+  for (const surfaceId of Object.keys(roomMediaObjects.surfaces)) {
+    const object = activeMarkdownBoardObjectForSurface(surfaceId);
+    if (object) {
+      objects.push(object);
+    }
+  }
+  return objects;
+}
+
+function syncMarkdownBoardSurfaceTextures(): void {
+  const activeSurfaceIds = new Set<string>();
+  for (const object of activeMarkdownBoardObjects()) {
+    if (!mediaSurfaceViews.has(object.surfaceId)) {
+      continue;
+    }
+    activeSurfaceIds.add(object.surfaceId);
+    getMarkdownBoardRuntime(object.surfaceId).render(object.state);
+  }
+  for (const [surfaceId, runtime] of markdownBoardRuntimes) {
+    if (activeSurfaceIds.has(surfaceId)) {
+      continue;
+    }
+    const material = getMediaSurfaceView(surfaceId).object.material;
+    if (material instanceof THREE.MeshBasicMaterial && runtime.ownsTexture(material.map)) {
+      applySurfaceTexture(surfaceId, null);
     }
   }
 }
@@ -917,12 +1079,37 @@ let lastAvatarXrInputProfile: string | null = null;
 let lastAvatarPoseSentAtMs = 0;
 let preferredMicDeviceId = getStoredValue(localStorage, "vrata.audioinput", "noah.audioinput") ?? "default";
 let preferredSpeakerDeviceId = getStoredValue(localStorage, "vrata.audiooutput", "noah.audiooutput") ?? "default";
+let joinMutedPreference = getStoredValue(localStorage, "vrata.audio.joinMuted", "noah.audio.joinMuted") === "true";
+let activeNotesScope: RuntimeNoteScope = getStoredValue(localStorage, "vrata.notes.scope", "noah.notes.scope") === "private" ? "private" : "shared";
+let notesSaveState: NotesSaveState = "idle";
+let notesLastSavedContent = "";
+let notesLastUpdatedAt: string | null = null;
+let notesLoadSeq = 0;
+let notesSaveSeq = 0;
+let notesAutosaveTimer: number | null = null;
+let roomDocuments: RuntimeDocumentRecord[] = [];
+let selectedDocumentId = getStoredValue(localStorage, `vrata.documents.selected.${roomId}`, `noah.documents.selected.${roomId}`) ?? "";
+let documentsLoading = false;
+let documentUploadInFlight = false;
+joinMutedCheckbox.checked = joinMutedPreference;
+guestJoinMutedCheckbox.checked = joinMutedPreference || !getStoredValue(localStorage, "vrata.audio.joinMuted", "noah.audio.joinMuted");
+notesScopeSelect.value = activeNotesScope;
+notesEditor.disabled = true;
+notesScopeSelect.disabled = true;
+documentUploadInput.disabled = true;
+documentUploadButton.disabled = true;
+documentSelect.disabled = true;
+documentDownloadButton.disabled = true;
+documentSurfaceButton.disabled = true;
+documentDeleteButton.disabled = true;
+let audioActionInFlight = false;
 let audioInputDevices: MediaDeviceInfo[] = [];
 let audioOutputDevices: MediaDeviceInfo[] = [];
 let localMicLevel = 0;
 let speakerOutputLevel = 0;
 const avatarPoseSendTimestamps: number[] = [];
 const recentFrameBudgetMs: number[] = [];
+const localAudioTrackEndHandlers = new WeakSet<MediaStreamTrack>();
 const roomStateReconnectPolicy = createReconnectPolicy({
   maxRetries: Number.parseInt(query.get("roomstateretries") ?? "3", 10),
   baseDelayMs: Number.parseInt(query.get("roomstatedelay") ?? "1000", 10),
@@ -934,13 +1121,14 @@ const botInitialPosition = { x: initialLocalPosition.x, z: initialLocalPosition.
 interface RemoteAudioNode {
   participantId: string;
   element: HTMLMediaElement;
-  source: MediaElementAudioSourceNode;
-  gain: GainNode;
-  analyser: AnalyserNode;
+  source: MediaElementAudioSourceNode | null;
+  gain: GainNode | null;
+  analyser: AnalyserNode | null;
   panner: PannerNode | null;
-  sampleBuffer: Uint8Array;
+  sampleBuffer: Uint8Array | null;
   lipsync: AvatarLipsyncDriver;
   trackId: string;
+  fallbackReason: string | null;
 }
 
 interface MediaSurfaceAudioNode {
@@ -980,11 +1168,48 @@ let runtimeFlags = {
   roomStateRealtime: true,
   remoteDiagnostics: true,
   sceneBundles: true,
+  spatialAudio: true,
+  hostControlsEnabled: true,
+  documentsEnabled: true,
+  notesEnabled: true,
+  personalRoomsEnabled: true,
   ...createInitialAvatarRuntimeFlags(),
   avatarFallbackCapsulesEnabled: true
 };
+let xrSupport = detectXrSupport({
+  navigatorXr: faultConfig.xrUnavailable ? undefined : (navigator as Navigator & { xr?: unknown }).xr,
+  immersiveVrSupported: !faultConfig.xrUnavailable
+});
+let currentXrSession: XRSession | null = null;
+let vrButton: HTMLButtonElement | null = null;
+function buildClientCompatibility(): ClientCompatibilitySummary {
+  return resolveClientCompatibility({
+    resolvedJoinMode: latestMode,
+    media: browserMediaCapabilities,
+    xr: xrSupport,
+    enterVrFeatureEnabled: runtimeFlags.enterVr,
+    webGlAvailable: browserWebGlAvailable,
+    webSocketAvailable: browserWebSocketAvailable,
+    touchInputAvailable: browserTouchInputAvailable,
+    xrMockEnabled: presenceXrMockEnabled,
+    xrSessionActive: renderer.xr.isPresenting
+  });
+}
+let clientCompatibility = buildClientCompatibility();
+let xrSessionDebug = createXrRendererWiringDebug({
+  featureEnabled: runtimeFlags.enterVr,
+  support: xrSupport,
+  rendererXrEnabled: renderer.xr.enabled,
+  animationLoopConfigured: true,
+  presenting: renderer.xr.isPresenting
+});
 let effectiveCleanSceneMode = requestedCleanSceneMode;
 let availableSpaces: RuntimeSpaceOption[] = [];
+let latestSessionControl: RuntimeSessionControlResponse["state"] | null = null;
+let hostControlActionInFlight = false;
+let sessionControlRefreshInFlight = false;
+let lastSessionControlRefreshAtMs = 0;
+let sessionControlBlocked = false;
 const remoteAvatarRuntime = createRemoteAvatarRuntime({
   scene,
   bodyGeometry,
@@ -1006,7 +1231,7 @@ function applyCleanSceneMode(enabled: boolean): void {
   grid.visible = !enabled;
   roomBox.visible = !enabled;
   for (const surface of mediaSurfaceViews.values()) {
-    surface.object.visible = surface.visible;
+    surface.object.visible = true;
   }
 }
 
@@ -1056,13 +1281,16 @@ function deriveMediaDebugAudioState(): "not_joined" | "joining" | "joined" | "mu
   if (debugState.audioState === "joining") {
     return "joining";
   }
+  if (debugState.audioState === "not_joined") {
+    return "not_joined";
+  }
   if (debugState.issueCode === "mic_denied" || debugState.issueCode === "no_audio_device") {
     return "degraded";
   }
   if (debugState.issueCode === "audio_unsupported" || debugState.issueCode === "livekit_failed" || debugState.issueCode === "media_network_blocked" || debugState.audioState === "disabled") {
     return "failed";
   }
-  if (!livekitRoom) {
+  if (!livekitRoom || !audioSessionJoined) {
     return "not_joined";
   }
   if (!microphoneEnabled) {
@@ -1074,10 +1302,13 @@ function deriveMediaDebugAudioState(): "not_joined" | "joining" | "joined" | "mu
 function updateMediaDiagnostics(): void {
   debugState.media = {
     audioState: deriveMediaDebugAudioState(),
+    audioJoined: audioSessionJoined,
     muted: !microphoneEnabled,
+    speaking: Boolean(microphoneEnabled && (localAvatarController?.diagnostics.speakingActive || localMicLevel >= 0.04)),
     publishedAudio: Boolean(livekitRoom && microphoneEnabled),
     audioSource: livekitRoom && microphoneEnabled ? audioMockEnabled ? "mock" : "microphone" : "none",
-    subscribedAudioCount: remoteAudioNodes.size
+    subscribedAudioCount: remoteAudioNodes.size,
+    webrtc: debugState.media.webrtc
   };
   const activeRemoteBrowser = currentRemoteBrowserObject();
   const remoteBrowserRuntime = getRemoteBrowserRuntime(activeRemoteBrowser?.surfaceId ?? selectedMediaSurfaceId);
@@ -1091,12 +1322,18 @@ function updateMediaDiagnostics(): void {
   };
 }
 
+async function refreshWebRtcDiagnostics(): Promise<void> {
+  debugState.media.webrtc = await collectWebRtcDiagnostics(mediaDiagnosticsTransports);
+}
+
 function syncRemoteAudioDiagnostics(): void {
+  reconcileRemoteAudioTracksWithPresence();
   debugState.remoteParticipants = debugState.remoteParticipants.map((participant) => ({
     ...participant,
     hasAudioNode: remoteAudioNodes.has(participant.participantId),
     activeAudio: participant.activeAudio || remoteAudioNodes.has(participant.participantId)
   }));
+  syncRemoteMicStatus();
 }
 
 function getCurrentSeatId(): string | null {
@@ -1161,6 +1398,165 @@ function applySnapshotParticipants(people: PresenceState[]): void {
 
 function applyMergedPresenceParticipants(): void {
   applySnapshotParticipants(mergePresenceSources(latestRealtimeParticipants, latestFallbackParticipants));
+  renderHostControls();
+}
+
+function canManageHostControls(): boolean {
+  return runtimeFlags.hostControlsEnabled && debugState.access.canManageRoomSession === true;
+}
+
+function currentVisibleParticipants(): PresenceState[] {
+  return mergePresenceSources(latestRealtimeParticipants, latestFallbackParticipants)
+    .sort((left, right) => (left.displayName || left.participantId).localeCompare(right.displayName || right.participantId));
+}
+
+function renderHostControls(statusMessage?: string): void {
+  const visible = canManageHostControls() && latestSessionControl?.endedAt == null;
+  hostControlsEl.hidden = !visible;
+  debugState.hostControls.enabled = runtimeFlags.hostControlsEnabled;
+  debugState.hostControls.visible = visible;
+  debugState.hostControls.locked = Boolean(latestSessionControl?.lockedAt);
+  debugState.hostControls.ended = Boolean(latestSessionControl?.endedAt);
+  debugState.hostControls.hostParticipantId = latestSessionControl?.hostParticipantId ?? null;
+  if (statusMessage) {
+    hostControlsStatusEl.textContent = statusMessage;
+    debugState.hostControls.status = statusMessage;
+  } else if (visible) {
+    const state = latestSessionControl?.lockedAt ? "locked" : "open";
+    hostControlsStatusEl.textContent = `Room ${state}${latestSessionControl?.hostParticipantId ? `; host ${latestSessionControl.hostParticipantId}` : ""}`;
+    debugState.hostControls.status = hostControlsStatusEl.textContent;
+  }
+
+  const previousSelection = hostParticipantSelect.value;
+  hostParticipantSelect.replaceChildren();
+  const participants = currentVisibleParticipants();
+  for (const participant of participants) {
+    const option = document.createElement("option");
+    option.value = participant.participantId;
+    option.textContent = `${participant.displayName || participant.participantId} (${participant.role ?? "guest"})`;
+    option.selected = participant.participantId === previousSelection;
+    hostParticipantSelect.appendChild(option);
+  }
+  if (participants.length === 0) {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = "No participants";
+    hostParticipantSelect.appendChild(option);
+  }
+  const selected = hostParticipantSelect.value || participants[0]?.participantId || "";
+  if (selected) {
+    hostParticipantSelect.value = selected;
+  }
+  debugState.hostControls.selectedParticipantId = selected || null;
+
+  hostParticipantSelect.disabled = !visible || participants.length === 0 || hostControlActionInFlight;
+  lockRoomButton.disabled = !visible || Boolean(latestSessionControl?.lockedAt) || hostControlActionInFlight;
+  unlockRoomButton.disabled = !visible || !latestSessionControl?.lockedAt || hostControlActionInFlight;
+  endSessionButton.disabled = !visible || hostControlActionInFlight;
+  removeParticipantButton.disabled = !visible || !selected || selected === participantId || hostControlActionInFlight;
+  transferHostButton.disabled = !visible || !selected || selected === latestSessionControl?.hostParticipantId || hostControlActionInFlight;
+}
+
+function applyAccessDebug(access: NonNullable<RuntimeSessionControlResponse["access"]>, token: string, expiresInSeconds?: number): void {
+  const previousRole = debugState.access.role;
+  const previousLastDeniedPermission = debugState.access.lastDeniedPermission;
+  const previousLastSurfaceCommandAccepted = debugState.access.lastSurfaceCommandAccepted;
+  roomStateAccessToken = token;
+  debugState.access = {
+    ...access,
+    token: token ? "[redacted]" : "",
+    expiresInSeconds: expiresInSeconds ?? debugState.access.expiresInSeconds,
+    roleQueryAllowed: debugState.access.roleQueryAllowed,
+    lastDeniedPermission: previousLastDeniedPermission,
+    lastSurfaceCommandAccepted: previousLastSurfaceCommandAccepted
+  };
+  if (previousRole !== access.role && debugState.roomStateUrl) {
+    roomStateClient?.close();
+    roomStateClient = null;
+    connectRoomStateWithRetry(debugState.roomStateUrl);
+  }
+  startShareButton.disabled = !canUseScreenShareControl();
+  stopShareButton.disabled = !canStopLocalScreenShare();
+  syncWhiteboardControls();
+  syncMarkdownBoardControls();
+  syncRemoteBrowserControls();
+  syncSurfaceAudioControl();
+  syncNotesAccessUi();
+  renderDocumentsUi();
+  renderHostControls();
+  if (canViewNotes() && notesSaveState === "idle") {
+    void loadActiveNote();
+  }
+  if (canViewDocuments()) {
+    void loadRoomDocuments();
+  }
+}
+
+function disableRuntimeForSessionBlock(reason: string): void {
+  const message = describeSessionControlReason(reason);
+  sessionControlBlocked = true;
+  setStatus(message);
+  guestAccessLineEl.textContent = message;
+  debugState.issueCode = "room_access_denied";
+  debugState.issueSeverity = "warn";
+  debugState.degradedMode = "access_denied";
+  debugState.lastRecoveryAction = reason;
+  debugState.hostControls.lastReason = reason;
+  runtimeBootReady = false;
+  roomStateClient?.close();
+  roomStateClient = null;
+  void livekitRoom?.disconnect();
+  joinAudioButton.disabled = true;
+  muteButton.disabled = true;
+  startShareButton.disabled = true;
+  stopShareButton.disabled = true;
+  syncWhiteboardControls();
+  renderHostControls(message);
+}
+
+function applySessionControlResponse(payload: RuntimeSessionControlResponse, statusMessage?: string): void {
+  latestSessionControl = payload.state;
+  if (payload.participant?.status === "blocked" && payload.participant.reason) {
+    disableRuntimeForSessionBlock(payload.participant.reason);
+    return;
+  }
+  if (payload.access && payload.token) {
+    applyAccessDebug(payload.access, payload.token, payload.expiresInSeconds);
+  }
+  renderHostControls(statusMessage);
+}
+
+async function refreshSessionControl(force = false): Promise<void> {
+  const nowMs = Date.now();
+  if (!runtimeFlags.hostControlsEnabled || !roomStateAccessToken || sessionControlRefreshInFlight || (!force && nowMs - lastSessionControlRefreshAtMs < SESSION_CONTROL_REFRESH_INTERVAL_MS)) {
+    return;
+  }
+  sessionControlRefreshInFlight = true;
+  lastSessionControlRefreshAtMs = nowMs;
+  try {
+    applySessionControlResponse(await fetchRoomSessionControl(apiBaseUrl, roomId, roomStateAccessToken));
+  } catch (error) {
+    console.warn("session_control_refresh_failed", error);
+  } finally {
+    sessionControlRefreshInFlight = false;
+  }
+}
+
+async function runHostControlAction(action: () => Promise<RuntimeSessionControlResponse>, statusMessage: string): Promise<void> {
+  if (hostControlActionInFlight) {
+    return;
+  }
+  hostControlActionInFlight = true;
+  renderHostControls("Applying host action...");
+  try {
+    applySessionControlResponse(await action(), statusMessage);
+  } catch (error) {
+    console.error(error);
+    renderHostControls("Host action failed");
+  } finally {
+    hostControlActionInFlight = false;
+    renderHostControls();
+  }
 }
 
 function clearInteractionVisuals(): void {
@@ -1254,6 +1650,10 @@ function activeWhiteboardObjectForSurface(surfaceId: string): MediaObjectInstanc
   return selectActiveWhiteboardObjectForSurface(roomMediaObjects, surfaceId);
 }
 
+function activeMarkdownBoardObjectForSurface(surfaceId: string): MediaObjectInstance<MarkdownBoardState> | null {
+  return selectActiveMarkdownBoardObjectForSurface(roomMediaObjects, surfaceId);
+}
+
 function activeRemoteBrowserObjectForSurface(surfaceId: string): MediaObjectInstance<RemoteBrowserObjectState> | null {
   return selectActiveRemoteBrowserObjectForSurface(roomMediaObjects, surfaceId);
 }
@@ -1294,6 +1694,10 @@ function findLocalActiveScreenShareObject(surfaceId?: string): MediaObjectInstan
 
 function findActiveWhiteboardObject(): MediaObjectInstance<WhiteboardState> | null {
   return findActiveObjectByType<WhiteboardState>(WHITEBOARD_OBJECT_TYPE);
+}
+
+function findActiveMarkdownBoardObject(): MediaObjectInstance<MarkdownBoardState> | null {
+  return findActiveObjectByType<MarkdownBoardState>(MARKDOWN_BOARD_OBJECT_TYPE);
 }
 
 function findActiveRemoteBrowserObject(): MediaObjectInstance<RemoteBrowserObjectState> | null {
@@ -1482,6 +1886,10 @@ function syncMediaObjectsDebugState(): void {
     xrPencilVisible: whiteboardPencils.some((pencil) => pencil.visible)
   };
   syncWhiteboardSurfaceTextures();
+  const activeMarkdownBoard = currentMarkdownBoardObject();
+  const activeMarkdownBoardRuntime = getMarkdownBoardRuntime(activeMarkdownBoard?.surfaceId ?? selectedMediaSurfaceId);
+  debugState.markdownBoard = activeMarkdownBoardRuntime.createDebugSnapshot(activeMarkdownBoard);
+  syncMarkdownBoardSurfaceTextures();
   syncRemoteBrowserSurfaceTextures();
   syncScreenShareRuntimeWithObjects();
   const activeScreenShare = activeScreenShareObjectForSurface(selectedMediaSurfaceId) ?? findActiveScreenShareObject();
@@ -1512,6 +1920,7 @@ function syncMediaObjectsDebugState(): void {
   startShareButton.disabled = !canUseScreenShareControl();
   stopShareButton.disabled = !canStopLocalScreenShare();
   syncWhiteboardControls();
+  syncMarkdownBoardControls();
   syncRemoteBrowserControls();
   syncSurfaceAudioControl();
   syncMediaSurfaceObjectIds();
@@ -1899,6 +2308,53 @@ function canUseWhiteboardDrawTool(): boolean {
   return hasRoomPermission(debugState.access.permissions, "whiteboard.draw")
     && roomStateConnected
     && Boolean(currentWhiteboardObject());
+}
+
+function canUseMarkdownBoardControl(): boolean {
+  const activeObject = activeMediaObjectForSurface(selectedMediaSurfaceId);
+  return debugState.access.canCreateMarkdownBoard
+    && roomStateConnected
+    && !activeObject
+    && surfaceAllowsObject(selectedMediaSurfaceId, MARKDOWN_BOARD_OBJECT_TYPE);
+}
+
+function canEditMarkdownBoardControl(): boolean {
+  return hasRoomPermission(debugState.access.permissions, "markdown-board.edit")
+    && roomStateConnected
+    && Boolean(currentMarkdownBoardObject());
+}
+
+function canStopMarkdownBoardControl(): boolean {
+  return hasRoomPermission(debugState.access.permissions, "surface.stop-object")
+    && roomStateConnected
+    && Boolean(activeMarkdownBoardObjectForSurface(selectedMediaSurfaceId));
+}
+
+function latestStickyNoteId(object: MediaObjectInstance<MarkdownBoardState> | null = currentMarkdownBoardObject()): string | null {
+  return object?.state.notes[object.state.notes.length - 1]?.noteId ?? null;
+}
+
+function syncMarkdownBoardControls(): void {
+  const canView = hasRoomPermission(debugState.access.permissions, "markdown-board.view");
+  const canEdit = canEditMarkdownBoardControl();
+  const board = currentMarkdownBoardObject();
+  startMarkdownBoardButton.hidden = !debugState.access.canCreateMarkdownBoard;
+  startMarkdownBoardButton.disabled = !canUseMarkdownBoardControl();
+  markdownBoardControlEl.hidden = !canView && !debugState.access.canCreateMarkdownBoard;
+  markdownBoardNoteText.disabled = !canEdit;
+  addStickyNoteButton.disabled = !canEdit;
+  updateStickyNoteButton.disabled = !canEdit || !latestStickyNoteId(board);
+  moveStickyNoteButton.disabled = !canEdit || !latestStickyNoteId(board);
+  deleteStickyNoteButton.disabled = !canEdit || !latestStickyNoteId(board);
+  stopMarkdownBoardButton.hidden = !hasRoomPermission(debugState.access.permissions, "surface.stop-object");
+  stopMarkdownBoardButton.disabled = !canStopMarkdownBoardControl();
+  if (!board) {
+    markdownBoardStatusEl.textContent = canView ? "Sticky board idle" : "View permission required";
+  } else if (debugState.markdownBoard.errorCode) {
+    markdownBoardStatusEl.textContent = `Sticky board issue: ${debugState.markdownBoard.errorCode}`;
+  } else {
+    markdownBoardStatusEl.textContent = `Sticky board active: ${board.state.notes.length} note${board.state.notes.length === 1 ? "" : "s"}`;
+  }
 }
 
 function syncWhiteboardControls(): void {
@@ -2495,6 +2951,54 @@ function updateAudioDeviceStatus(message: string): void {
   audioDeviceStatusEl.textContent = message;
 }
 
+function syncAudioControls(): void {
+  const audioUnsupported = runtimeFlags.audioJoin && !audioMockEnabled && !browserMediaCapabilities.audioInput.supported;
+  if (!runtimeFlags.audioJoin) {
+    joinAudioButton.disabled = true;
+    joinAudioButton.textContent = "Audio Disabled";
+    joinAudioButton.title = "Audio is disabled for this runtime";
+    muteButton.disabled = true;
+    muteButton.textContent = "Mute";
+    joinMutedCheckbox.disabled = true;
+    return;
+  }
+  if (audioUnsupported) {
+    joinAudioButton.disabled = true;
+    joinAudioButton.textContent = "Audio Unsupported";
+    joinAudioButton.title = `Microphone unsupported: ${describeMediaCapabilityReason(browserMediaCapabilities.audioInput.reason)}`;
+    muteButton.disabled = true;
+    muteButton.textContent = "Mute";
+    joinMutedCheckbox.disabled = true;
+    return;
+  }
+  joinAudioButton.disabled = audioActionInFlight;
+  joinAudioButton.textContent = audioSessionJoined ? "Leave Audio" : "Join Audio";
+  joinAudioButton.title = audioSessionJoined ? "Stop publishing your microphone" : "Publish your microphone";
+  muteButton.disabled = audioActionInFlight || !audioSessionJoined || !livekitRoom;
+  muteButton.textContent = microphoneEnabled ? "Mute" : "Unmute";
+  muteButton.title = microphoneEnabled ? "Mute your microphone" : "Unmute your microphone";
+  joinMutedCheckbox.disabled = audioActionInFlight || audioSessionJoined;
+}
+
+function syncRemoteMicStatus(): void {
+  if (debugState.remoteParticipants.length === 0) {
+    remoteMicStatusEl.textContent = "Remote microphones idle";
+    return;
+  }
+  const status = debugState.remoteParticipants.map((participant) => {
+    const label = participant.participantId.slice(0, 8);
+    const state = !participant.audioJoined
+      ? "not joined"
+      : participant.muted
+        ? "muted"
+        : participant.speaking
+          ? "speaking"
+          : "live";
+    return `${label}: ${state}`;
+  }).join(" · ");
+  remoteMicStatusEl.textContent = `Remote microphones: ${status}`;
+}
+
 function applySurfaceTexture(surfaceId: string, texture: THREE.Texture | null): void {
   const material = getMediaSurfaceView(surfaceId).object.material;
   if (!(material instanceof THREE.MeshBasicMaterial)) {
@@ -2616,6 +3120,16 @@ function ensureAudioContext(): AudioContext {
   return audioContext;
 }
 
+function tryEnsureAudioContext(fallbackReason: string): AudioContext | null {
+  try {
+    return ensureAudioContext();
+  } catch (error) {
+    spatialAudioFallbackReason = fallbackReason;
+    console.warn("AudioContext unavailable; remote audio will use plain element playback", error);
+    return null;
+  }
+}
+
 async function refreshAudioDevices(requestPermissions = false): Promise<void> {
   if (!navigator.mediaDevices?.enumerateDevices) {
     audioInputDevices = [];
@@ -2660,6 +3174,7 @@ function syncMediaCapabilityControls(): void {
   startShareButton.hidden = !debugState.access.canStartScreenShare;
   stopShareButton.hidden = !debugState.access.canStartScreenShare;
   startWhiteboardButton.hidden = !debugState.access.canCreateWhiteboard;
+  startMarkdownBoardButton.hidden = !debugState.access.canCreateMarkdownBoard;
   clearWhiteboardButton.hidden = !hasRoomPermission(debugState.access.permissions, "whiteboard.clear");
   stopWhiteboardButton.hidden = !hasRoomPermission(debugState.access.permissions, "surface.stop-object");
   remoteBrowserControlEl.hidden = !debugState.access.canCreateRemoteBrowser && !activeRemoteBrowserObjectForSurface(selectedMediaSurfaceId) && !findActiveRemoteBrowserObject();
@@ -2672,16 +3187,15 @@ function syncMediaCapabilityControls(): void {
     startWhiteboardButton.disabled = true;
     startWhiteboardButton.title = "Host role required";
   }
+  if (!debugState.access.canCreateMarkdownBoard) {
+    startMarkdownBoardButton.disabled = true;
+    startMarkdownBoardButton.title = "Host role required";
+  }
   if (!hasRoomPermission(debugState.access.permissions, "surface.stop-object")) {
     stopWhiteboardButton.disabled = true;
   }
 
-  if (runtimeFlags.audioJoin && !audioMockEnabled && !browserMediaCapabilities.audioInput.supported) {
-    joinAudioButton.disabled = true;
-    joinAudioButton.textContent = "Audio Unsupported";
-    joinAudioButton.title = `Microphone unsupported: ${describeMediaCapabilityReason(browserMediaCapabilities.audioInput.reason)}`;
-    muteButton.disabled = true;
-  }
+  syncAudioControls();
 
   if (debugState.access.canStartScreenShare && runtimeFlags.screenShare && !shareMockEnabled && !browserMediaCapabilities.screenShare.supported) {
     startShareButton.disabled = true;
@@ -2692,6 +3206,7 @@ function syncMediaCapabilityControls(): void {
   }
   syncSurfaceAudioControl();
   syncWhiteboardControls();
+  syncMarkdownBoardControls();
   syncRemoteBrowserControls();
 }
 
@@ -2776,6 +3291,29 @@ function disconnectLocalAudioTrack(): void {
   localAudioNode = null;
 }
 
+function bindLocalAudioTrackEnded(track: MediaStreamTrack): void {
+  if (localAudioTrackEndHandlers.has(track)) {
+    return;
+  }
+  localAudioTrackEndHandlers.add(track);
+  track.addEventListener("ended", () => {
+    if (!audioSessionJoined || !microphoneEnabled) {
+      return;
+    }
+    microphoneEnabled = false;
+    disconnectLocalAudioTrack();
+    syncAudioControls();
+    void syncPresence(latestMode, false);
+    const issue = getRuntimeIssue("no_audio_device");
+    applyIssue(issue, {
+      degradedMode: "audio_unavailable",
+      audioState: "degraded",
+      lastRecoveryAction: "microphone_track_ended"
+    });
+    void reportDiagnostics("microphone_track_ended");
+  }, { once: true });
+}
+
 function getLocalMicrophoneMediaTrack(room: Room): MediaStreamTrack | null {
   const publication = Array.from(room.localParticipant.trackPublications.values()).find((item) => item.source === Track.Source.Microphone);
   if (!publication) {
@@ -2788,11 +3326,32 @@ function getLocalMicrophoneMediaTrack(room: Room): MediaStreamTrack | null {
   return track ?? null;
 }
 
+async function unpublishLocalMicrophoneTrack(room: Room): Promise<void> {
+  const publication = Array.from(room.localParticipant.trackPublications.values()).find((item) => item.source === Track.Source.Microphone);
+  if (!publication) {
+    return;
+  }
+  const localTrack = (publication as {
+    track?: unknown;
+    audioTrack?: unknown;
+  }).audioTrack ?? (publication as { track?: unknown }).track;
+  const trackToUnpublish = localTrack ?? getLocalMicrophoneMediaTrack(room);
+  const localParticipant = room.localParticipant as {
+    unpublishTrack?: (track: unknown, stopOnUnpublish?: boolean) => Promise<unknown> | unknown;
+  };
+  if (trackToUnpublish && localParticipant.unpublishTrack) {
+    await Promise.resolve(localParticipant.unpublishTrack(trackToUnpublish, true));
+  }
+}
+
 async function publishMockMicrophoneTrack(room: Room): Promise<void> {
   const source = getMockAudioSource();
   const existingTrack = getLocalMicrophoneMediaTrack(room);
   if (existingTrack?.id === source.track.id) {
     return;
+  }
+  if (existingTrack) {
+    await unpublishLocalMicrophoneTrack(room);
   }
   const localParticipant = room.localParticipant as {
     publishTrack?: (track: MediaStreamTrack, options?: { name?: string; source?: Track.Source }) => Promise<unknown> | unknown;
@@ -2818,6 +3377,7 @@ function connectLocalAudioTrack(room: Room): void {
   disconnectLocalAudioTrack();
   const context = ensureAudioContext();
   void resumeAudioContext();
+  bindLocalAudioTrackEnded(track);
   const analyserSetup = createAudioAnalyser(context);
   const source = context.createMediaStreamSource(new MediaStream([track]));
   source.connect(analyserSetup.analyser);
@@ -2839,41 +3399,82 @@ function connectRemoteAudioTrack(track: Track, participantId: string): void {
   if (existing) {
     disconnectRemoteAudioElement(participantId);
   }
-  const context = ensureAudioContext();
-  void resumeAudioContext();
-  const analyserSetup = createAudioAnalyser(context);
   const element = track.attach() as HTMLMediaElement & { playsInline?: boolean };
   element.autoplay = true;
   element.playsInline = true;
   element.style.display = "none";
   document.body.appendChild(element);
   void element.play().catch(() => undefined);
-  const source = context.createMediaElementSource(element);
-  const gain = context.createGain();
-  const panner = spatialAudioRequested ? context.createPanner() : null;
-  if (panner) {
-    applySpatialSettings(panner, createSpatialAudioSettings());
-  }
-  source.connect(gain);
-  gain.connect(analyserSetup.analyser);
-  if (panner) {
-    analyserSetup.analyser.connect(panner);
-    panner.connect(context.destination);
-  } else {
-    analyserSetup.analyser.connect(context.destination);
+  const context = tryEnsureAudioContext("audio_context_unavailable");
+  let source: MediaElementAudioSourceNode | null = null;
+  let gain: GainNode | null = null;
+  let analyser: AnalyserNode | null = null;
+  let panner: PannerNode | null = null;
+  let sampleBuffer: Uint8Array | null = null;
+  let lipsync = createAvatarLipsyncDriver();
+  let fallbackReason: string | null = context ? null : "audio_context_unavailable";
+  if (context) {
+    try {
+      if (context.state === "suspended") {
+        void context.resume().catch(() => undefined);
+      }
+      const analyserSetup = createAudioAnalyser(context);
+      analyser = analyserSetup.analyser;
+      sampleBuffer = analyserSetup.sampleBuffer;
+      lipsync = analyserSetup.lipsync;
+      gain = context.createGain();
+      source = context.createMediaElementSource(element);
+      source.connect(gain);
+      gain.connect(analyser);
+      if (runtimeFlags.spatialAudio) {
+        try {
+          panner = context.createPanner();
+          applySpatialSettings(panner, createSpatialAudioSettings());
+          analyser.connect(panner);
+          panner.connect(context.destination);
+        } catch (error) {
+          panner?.disconnect();
+          panner = null;
+          fallbackReason = "panner_node_unavailable";
+          spatialAudioFallbackReason = fallbackReason;
+          analyser.connect(context.destination);
+          console.warn("Spatial panner unavailable; remote audio will use non-spatial Web Audio playback", error);
+        }
+      } else {
+        analyser.connect(context.destination);
+      }
+      if (!fallbackReason) {
+        spatialAudioFallbackReason = null;
+      }
+    } catch (error) {
+      source?.disconnect();
+      gain?.disconnect();
+      analyser?.disconnect();
+      panner?.disconnect();
+      source = null;
+      gain = null;
+      analyser = null;
+      panner = null;
+      sampleBuffer = null;
+      lipsync = createAvatarLipsyncDriver();
+      fallbackReason = "web_audio_graph_failed";
+      spatialAudioFallbackReason = fallbackReason;
+      console.warn("Web Audio graph unavailable; remote audio will use plain element playback", error);
+    }
   }
   remoteAudioNodes.set(participantId, {
     participantId,
     element,
     source,
     gain,
-    analyser: analyserSetup.analyser,
+    analyser,
     panner,
-    sampleBuffer: analyserSetup.sampleBuffer,
-    lipsync: analyserSetup.lipsync,
-    trackId: mediaStreamTrack?.id ?? participantId
+    sampleBuffer,
+    lipsync,
+    trackId: mediaStreamTrack?.id ?? participantId,
+    fallbackReason
   });
-  debugState.spatialAudioState = panner ? "active" : "fallback";
+  debugState.spatialAudioState = panner ? "active" : fallbackReason ? "fallback" : "idle";
 }
 
 function getTrackNodeId(track: Track, fallback: string): string {
@@ -2898,6 +3499,15 @@ function hasLocalScreenSharePublishing(): boolean {
 
 function remoteScreenShareTrackCount(): number {
   return screenShareEntries().filter((entry) => entry.remote && (entry.track || entry.element)).length;
+}
+
+function hasActiveMediaRoomSurfaceConsumer(): boolean {
+  return hasLocalScreenSharePublishing()
+    || remoteScreenShareTrackCount() > 0
+    || Boolean(findActiveScreenShareObject())
+    || remoteBrowserVideoByObjectId.size > 0
+    || Boolean(findRemoteBrowserObjectNeedingLiveKitRoom())
+    || mediaSurfaceAudioNodes.size > 0;
 }
 
 function localScreenShareEntryForSurface(surfaceId: string): ScreenShareRuntimeEntry | null {
@@ -3393,9 +4003,9 @@ function disconnectRemoteAudioElement(participantId: string): void {
     return;
   }
   node.element.remove();
-  node.source.disconnect();
-  node.gain.disconnect();
-  node.analyser.disconnect();
+  node.source?.disconnect();
+  node.gain?.disconnect();
+  node.analyser?.disconnect();
   node.panner?.disconnect();
   remoteAvatarRuntime.setParticipantLipsync(participantId, {
     mouthAmount: 0,
@@ -3404,17 +4014,136 @@ function disconnectRemoteAudioElement(participantId: string): void {
   }, debugState);
   remoteAudioNodes.delete(participantId);
   if (remoteAudioNodes.size === 0) {
+    spatialAudioFallbackReason = null;
     debugState.spatialAudioState = "idle";
   }
+}
+
+function getRemoteParticipantMicrophoneTrack(participantId: string, publication: unknown): Track | null {
+  const track = (publication as { track?: Track | null }).track;
+  if (track?.kind !== Track.Kind.Audio) {
+    return null;
+  }
+  if (resolveRemoteBrowserObjectForTrack(participantId, publication, track, "audio")) {
+    return null;
+  }
+  if (isScreenShareAudioSource((publication as { source?: unknown }).source)) {
+    return null;
+  }
+  return track;
+}
+
+function isMicrophonePublication(publication: unknown): boolean {
+  return (publication as { source?: unknown }).source === Track.Source.Microphone;
+}
+
+function reconcileRemoteAudioTracksWithPresence(): void {
+  if (!livekitRoom) {
+    return;
+  }
+  const activeAudioParticipantIds = new Set(
+    debugState.remoteParticipants
+      .filter((participant) => participant.activeAudio)
+      .map((participant) => participant.participantId)
+  );
+  for (const participantId of Array.from(remoteAudioNodes.keys())) {
+    if (!activeAudioParticipantIds.has(participantId)) {
+      disconnectRemoteAudioElement(participantId);
+    }
+  }
+  for (const [participantId, participant] of livekitRoom.remoteParticipants.entries()) {
+    if (!activeAudioParticipantIds.has(participantId) || remoteAudioNodes.has(participantId)) {
+      continue;
+    }
+    for (const publication of participant.trackPublications.values()) {
+      const track = getRemoteParticipantMicrophoneTrack(participantId, publication);
+      if (track) {
+        connectRemoteAudioTrack(track, participantId);
+        break;
+      }
+    }
+  }
+}
+
+function detachMediaRoomRemoteAudioTracks(room: Room): void {
+  for (const participant of room.remoteParticipants.values()) {
+    for (const publication of participant.trackPublications.values()) {
+      const track = (publication as { track?: Track | null }).track;
+      if (track?.kind === Track.Kind.Audio) {
+        track.detach().forEach((element) => element.remove());
+      }
+    }
+  }
+}
+
+function clearMediaRoomReference(room: Room, diagnosticsReason: string): void {
+  if (livekitRoom !== room) {
+    return;
+  }
+  clearMediaRoomIdleDisconnect();
+  livekitRoom = null;
+  mediaRoomReady = false;
+  mediaDiagnosticsTransports = [];
+  debugState.media.webrtc = createUnavailableWebRtcDiagnostics(diagnosticsReason);
+  startShareButton.disabled = !canUseScreenShareControl();
+}
+
+function clearMediaRoomIdleDisconnect(): void {
+  if (mediaRoomIdleDisconnectTimer === null) {
+    return;
+  }
+  window.clearTimeout(mediaRoomIdleDisconnectTimer);
+  mediaRoomIdleDisconnectTimer = null;
+}
+
+function scheduleMediaRoomIdleDisconnect(room: Room, diagnosticsReason: string): void {
+  clearMediaRoomIdleDisconnect();
+  mediaRoomIdleDisconnectTimer = window.setTimeout(() => {
+    mediaRoomIdleDisconnectTimer = null;
+    if (livekitRoom !== room || audioSessionJoined || hasActiveMediaRoomSurfaceConsumer()) {
+      return;
+    }
+    void disconnectMediaRoom(room, diagnosticsReason).catch(() => undefined);
+  }, 10000);
+}
+
+async function disconnectMediaRoom(room: Room, diagnosticsReason: string): Promise<void> {
+  clearMediaRoomReference(room, diagnosticsReason);
+  detachMediaRoomRemoteAudioTracks(room);
+  for (const participantId of Array.from(remoteAudioNodes.keys())) {
+    disconnectRemoteAudioElement(participantId);
+  }
+  await room.disconnect();
+}
+
+function getSpatialAudioFallbackReason(): string | null {
+  for (const node of remoteAudioNodes.values()) {
+    if (node.fallbackReason) {
+      return node.fallbackReason;
+    }
+  }
+  return spatialAudioFallbackReason;
 }
 
 function updateSpatialAudio(): void {
   const listenerPosition = new THREE.Vector3();
   camera.getWorldPosition(listenerPosition);
   const listenerYaw = getCameraWorldYaw();
+  const pannerNodeCount = Array.from(remoteAudioNodes.values()).filter((node) => node.panner).length;
+  const modeState = resolveSpatialAudioMode({
+    queryEnabled: spatialAudioQueryEnabled,
+    featureEnabled: spatialAudioServerEnabled,
+    roomEnabled: spatialAudioRoomEnabled,
+    audioContextAvailable: Boolean(audioContext),
+    pannerNodeCount,
+    fallbackReason: getSpatialAudioFallbackReason()
+  });
+  debugState.spatialAudioState = modeState.mode === "spatial" ? "active" : modeState.mode;
   debugState.spatialAudio = {
-    enabled: spatialAudioRequested,
-    fallback: !spatialAudioRequested || !audioContext,
+    enabled: modeState.enabled,
+    fallback: modeState.fallback,
+    mode: modeState.mode,
+    fallbackReason: modeState.fallbackReason,
     listener: {
       x: roundDebugNumber(listenerPosition.x),
       y: roundDebugNumber(listenerPosition.y),
@@ -3433,12 +4162,13 @@ function updateSpatialAudio(): void {
         attachedTo: "head" as const,
         hasAudioNode: Boolean(audioNode),
         pannerActive: Boolean(audioNode?.panner),
+        fallbackReason: audioNode?.fallbackReason ?? null,
         audioLevel: roundDebugNumber(remoteParticipant?.audioLevel ?? 0)
       };
     })
   };
 
-  if (!audioContext || !spatialAudioRequested) {
+  if (!audioContext || !runtimeFlags.spatialAudio) {
     return;
   }
   const listener = audioContext.listener;
@@ -3531,6 +4261,8 @@ const debugState = {
   remoteAvatarReliableCount: 0,
   remoteAvatarPoseCount: 0,
   statusLine: "Connecting...",
+  lastReportId: null as string | null,
+  lastReportRequestId: null as string | null,
   locomotionMode: "desktop",
   roomStateConnected: false,
   roomStateUrl: "",
@@ -3540,10 +4272,13 @@ const debugState = {
   speakerOutputLevel: 0,
   media: {
     audioState: "not_joined" as "not_joined" | "joining" | "joined" | "muted" | "degraded" | "failed",
+    audioJoined: false,
     muted: true,
+    speaking: false,
     publishedAudio: false,
     audioSource: "none" as "none" | "microphone" | "mock",
-    subscribedAudioCount: 0
+    subscribedAudioCount: 0,
+    webrtc: createUnavailableWebRtcDiagnostics()
   },
   access: {
     ...createRoomAccessDebugState("guest"),
@@ -3552,6 +4287,53 @@ const debugState = {
     roleQueryAllowed: false,
     lastDeniedPermission: null as string | null,
     lastSurfaceCommandAccepted: null as boolean | null
+  },
+  guestOnboarding: {
+    required: false,
+    completed: false,
+    displayNameProvided: Boolean(displayNameFromQuery),
+    joinMuted: joinMutedPreference,
+    audioMode: "not_checked" as "not_checked" | "microphone_ok" | "microphone_denied" | "without_audio",
+    controlsHint: "",
+    warnings: [] as string[]
+  },
+  hostControls: {
+    enabled: false,
+    visible: false,
+    locked: false,
+    ended: false,
+    hostParticipantId: null as string | null,
+    selectedParticipantId: null as string | null,
+    status: "idle" as string,
+    lastReason: null as string | null
+  },
+  personalRoom: {
+    enabled: true,
+    roomType: "standard" as "standard" | "personal",
+    ownerParticipantId: null as string | null,
+    isOwner: false,
+    openState: "idle" as "idle" | "opening" | "failed",
+    lastPoseRestored: false,
+    lastPoseSavedAt: null as string | null,
+    errorCode: null as string | null
+  },
+  notes: {
+    enabled: true,
+    scope: activeNotesScope,
+    saveState: notesSaveState as NotesSaveState,
+    canEdit: false,
+    contentLength: 0,
+    updatedAt: null as string | null,
+    errorCode: null as string | null
+  },
+  documents: {
+    enabled: true,
+    count: 0,
+    selectedDocumentId,
+    selectedFilename: null as string | null,
+    selectedSurfaceId: null as string | null,
+    lastStatus: "idle" as string,
+    errorCode: null as string | null
   },
   screenShareState: "idle",
   screenShare: {
@@ -3642,11 +4424,25 @@ const debugState = {
     lastPoint: null as null | { u: number; v: number },
     errorCode: null as string | null
   },
+  markdownBoard: {
+    objectId: null as string | null,
+    surfaceId: DEBUG_SURFACE_ID,
+    active: false,
+    noteCount: 0,
+    revision: 0,
+    localCanEdit: false,
+    lastInputEventId: null as string | null,
+    errorCode: null as string | null,
+    notes: [] as Array<{ noteId: string; text: string; x: number; y: number; width: number; height: number }>
+  },
   mediaCapabilities: browserMediaCapabilities,
+  clientCompatibility,
   spatialAudioState: "idle",
   spatialAudio: {
-    enabled: spatialAudioRequested,
-    fallback: !spatialAudioRequested,
+    enabled: spatialAudioQueryEnabled,
+    fallback: !spatialAudioQueryEnabled,
+    mode: spatialAudioQueryEnabled ? "idle" : "disabled",
+    fallbackReason: spatialAudioQueryEnabled ? null as string | null : "query_disabled",
     listener: { x: 0, y: 1.6, z: 6, yaw: 0 },
     remoteSources: [] as Array<{
       participantId: string;
@@ -3656,6 +4452,7 @@ const debugState = {
       attachedTo: "head" | "body" | "root";
       hasAudioNode: boolean;
       pannerActive: boolean;
+      fallbackReason: string | null;
       audioLevel: number;
     }>
   },
@@ -3664,6 +4461,7 @@ const debugState = {
     root: { x: initialLocalPosition.x, y: initialLocalPosition.y, z: initialLocalPosition.z, yaw: 0 },
     head: { x: initialLocalPosition.x, y: initialLocalPosition.y + 1.6, z: initialLocalPosition.z, yaw: 0, pitch: 0 }
   },
+  xrSession: xrSessionDebug,
   xrAxes: { moveX: 0, moveY: 0, turnX: 0, turnY: 0 },
   botMode,
   issueCode: null as RuntimeIssue["code"] | null,
@@ -3687,7 +4485,9 @@ const debugState = {
     updateHz: number;
     interpolationDelayMs: number;
     maxObservedJumpM: number;
+    audioJoined: boolean;
     muted: boolean;
+    speaking: boolean;
     activeAudio: boolean;
     hasVisualEntity: boolean;
     hasAudioNode: boolean;
@@ -3796,6 +4596,608 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
 
 (window as Window & { __VRATA_DEBUG__?: typeof debugState }).__VRATA_DEBUG__ = debugState;
 (window as Window & { __NOAH_DEBUG__?: typeof debugState }).__NOAH_DEBUG__ = debugState;
+
+function canViewNotes(): boolean {
+  return runtimeFlags.notesEnabled && hasRoomPermission(debugState.access.permissions, "notes.view");
+}
+
+function canEditNotes(): boolean {
+  if (!canViewNotes()) return false;
+  return activeNotesScope === "private" || hasRoomPermission(debugState.access.permissions, "notes.edit");
+}
+
+function setNotesSaveState(event: Parameters<typeof nextNotesSaveState>[1], message?: string, errorCode: string | null = null): void {
+  notesSaveState = nextNotesSaveState(notesSaveState, event);
+  notesStatusEl.textContent = message ?? notesStatusEl.textContent;
+  notesRetrySaveButton.hidden = notesSaveState !== "failed";
+  debugState.notes = {
+    enabled: runtimeFlags.notesEnabled,
+    scope: activeNotesScope,
+    saveState: notesSaveState,
+    canEdit: canEditNotes(),
+    contentLength: notesEditor.value.length,
+    updatedAt: notesLastUpdatedAt,
+    errorCode
+  };
+}
+
+function renderNotesPreview(): void {
+  const blocks = parseSafeMarkdown(notesEditor.value);
+  const children: Node[] = [];
+  let list: HTMLUListElement | null = null;
+
+  const flushList = (): void => {
+    if (list) {
+      children.push(list);
+      list = null;
+    }
+  };
+
+  for (const block of blocks) {
+    if (block.type !== "listItem") flushList();
+    if (block.type === "heading") {
+      const heading = document.createElement(`h${block.level}`);
+      heading.textContent = block.text;
+      children.push(heading);
+    } else if (block.type === "paragraph") {
+      const paragraph = document.createElement("p");
+      paragraph.textContent = block.text;
+      children.push(paragraph);
+    } else if (block.type === "listItem") {
+      list ??= document.createElement("ul");
+      const item = document.createElement("li");
+      item.textContent = block.text;
+      list.append(item);
+    } else {
+      const code = document.createElement("pre");
+      code.textContent = block.text;
+      children.push(code);
+    }
+  }
+  flushList();
+
+  if (children.length === 0) {
+    const placeholder = document.createElement("p");
+    placeholder.textContent = "No notes yet.";
+    children.push(placeholder);
+  }
+  notesPreviewEl.replaceChildren(...children);
+  debugState.notes.contentLength = notesEditor.value.length;
+}
+
+function syncNotesAccessUi(): void {
+  const visible = runtimeFlags.notesEnabled && canViewNotes();
+  notesPanelEl.hidden = !visible;
+  notesEditor.disabled = !visible || !canEditNotes() || notesSaveState === "loading";
+  notesScopeSelect.disabled = !visible || notesSaveState === "loading";
+  if (!visible) {
+    notesStatusEl.textContent = runtimeFlags.notesEnabled ? "Notes permission required" : "Notes disabled";
+  } else if (!canEditNotes()) {
+    notesStatusEl.textContent = "Notes read-only";
+  }
+  debugState.notes.enabled = runtimeFlags.notesEnabled;
+  debugState.notes.canEdit = canEditNotes();
+}
+
+function notesErrorCode(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.split(":").slice(0, 3).join(":") || "notes_error";
+}
+
+async function loadActiveNote(): Promise<void> {
+  if (!runtimeFlags.notesEnabled || !canViewNotes()) {
+    syncNotesAccessUi();
+    return;
+  }
+  const loadSeq = ++notesLoadSeq;
+  setNotesSaveState("load", "Notes loading...");
+  syncNotesAccessUi();
+  try {
+    const note = await fetchRoomNote(apiBaseUrl, roomId, activeNotesScope, roomStateAccessToken);
+    if (loadSeq !== notesLoadSeq) return;
+    notesEditor.value = note.content;
+    notesLastSavedContent = note.content;
+    notesLastUpdatedAt = note.updatedAt;
+    setNotesSaveState("load_ok", note.updatedAt ? "Notes saved" : "Notes ready");
+    renderNotesPreview();
+    syncNotesAccessUi();
+  } catch (error) {
+    if (loadSeq !== notesLoadSeq) return;
+    const code = notesErrorCode(error);
+    console.warn("notes_load_failed", error);
+    setNotesSaveState("save_failed", "Notes unavailable", code);
+    syncNotesAccessUi();
+  }
+}
+
+function scheduleNotesAutosave(delayMs = 650): void {
+  if (!runtimeFlags.notesEnabled || !canEditNotes()) {
+    syncNotesAccessUi();
+    return;
+  }
+  if (notesAutosaveTimer !== null) {
+    window.clearTimeout(notesAutosaveTimer);
+  }
+  setNotesSaveState("edit", "Notes pending save");
+  renderNotesPreview();
+  notesAutosaveTimer = window.setTimeout(() => {
+    notesAutosaveTimer = null;
+    void saveActiveNote();
+  }, delayMs);
+}
+
+async function saveActiveNote(): Promise<void> {
+  if (!runtimeFlags.notesEnabled || !canEditNotes()) {
+    syncNotesAccessUi();
+    return;
+  }
+  const content = notesEditor.value;
+  if (content === notesLastSavedContent) {
+    setNotesSaveState("save_ok", notesLastUpdatedAt ? "Notes saved" : "Notes ready");
+    return;
+  }
+  const saveSeq = ++notesSaveSeq;
+  setNotesSaveState("save_start", "Saving notes...");
+  try {
+    const note = await saveRoomNote(apiBaseUrl, roomId, activeNotesScope, roomStateAccessToken, content);
+    if (saveSeq !== notesSaveSeq) return;
+    notesLastSavedContent = content;
+    notesLastUpdatedAt = note.updatedAt;
+    setNotesSaveState("save_ok", "Notes saved");
+    if (notesEditor.value !== content) {
+      scheduleNotesAutosave();
+    }
+  } catch (error) {
+    if (saveSeq !== notesSaveSeq) return;
+    const code = notesErrorCode(error);
+    console.warn("notes_save_failed", error);
+    setNotesSaveState("save_failed", "Notes save failed; retry available", code);
+  }
+}
+
+function canViewDocuments(): boolean {
+  return runtimeFlags.documentsEnabled && hasRoomPermission(debugState.access.permissions, "document.view");
+}
+
+function canUploadDocuments(): boolean {
+  return canViewDocuments() && hasRoomPermission(debugState.access.permissions, "document.upload");
+}
+
+function canDownloadDocuments(): boolean {
+  return canViewDocuments() && hasRoomPermission(debugState.access.permissions, "document.download");
+}
+
+function canDeleteDocuments(): boolean {
+  return canViewDocuments() && hasRoomPermission(debugState.access.permissions, "document.delete");
+}
+
+function selectedDocument(): RuntimeDocumentRecord | null {
+  return roomDocuments.find((document) => document.documentId === selectedDocumentId) ?? roomDocuments[0] ?? null;
+}
+
+function documentErrorCode(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.split(":").slice(0, 3).join(":") || "document_error";
+}
+
+function setDocumentStatus(message: string, errorCode: string | null = null): void {
+  documentStatusEl.textContent = message;
+  const selected = selectedDocument();
+  debugState.documents = {
+    enabled: runtimeFlags.documentsEnabled,
+    count: roomDocuments.length,
+    selectedDocumentId: selected?.documentId ?? "",
+    selectedFilename: selected?.filename ?? null,
+    selectedSurfaceId: selected?.linkedSurfaceId ?? null,
+    lastStatus: message,
+    errorCode
+  };
+}
+
+function renderDocumentsUi(message?: string): void {
+  const visible = canViewDocuments();
+  documentsPanelEl.hidden = !visible;
+  if (!visible) {
+    documentUploadInput.disabled = true;
+    documentUploadButton.disabled = true;
+    documentSelect.disabled = true;
+    documentDownloadButton.disabled = true;
+    documentSurfaceButton.disabled = true;
+    documentDeleteButton.disabled = true;
+    setDocumentStatus(runtimeFlags.documentsEnabled ? "Documents permission required" : "Documents disabled");
+    return;
+  }
+
+  const selected = selectedDocument();
+  if (selected && selected.documentId !== selectedDocumentId) {
+    selectedDocumentId = selected.documentId;
+    localStorage.setItem(`vrata.documents.selected.${roomId}`, selectedDocumentId);
+  }
+  documentSelect.replaceChildren(
+    ...(roomDocuments.length > 0
+      ? roomDocuments.map((doc) => {
+        const option = document.createElement("option");
+        option.value = doc.documentId;
+        option.textContent = `${doc.filename} (${Math.ceil(doc.sizeBytes / 1024)} KB)`;
+        option.selected = doc.documentId === selectedDocumentId;
+        return option;
+      })
+      : [new Option("No documents", "")])
+  );
+  documentUploadInput.disabled = !canUploadDocuments() || documentsLoading || documentUploadInFlight;
+  documentUploadButton.disabled = !canUploadDocuments() || documentsLoading || documentUploadInFlight;
+  documentSelect.disabled = documentsLoading || roomDocuments.length === 0;
+  documentDownloadButton.disabled = !selected || !canDownloadDocuments() || documentsLoading;
+  documentSurfaceButton.disabled = !selected || !canUploadDocuments() || documentsLoading;
+  documentDeleteButton.disabled = !selected || !canDeleteDocuments() || documentsLoading;
+  setDocumentStatus(message ?? (roomDocuments.length > 0 ? `Documents ready: ${roomDocuments.length}` : "No room documents yet"));
+}
+
+async function loadRoomDocuments(): Promise<void> {
+  if (!runtimeFlags.documentsEnabled || !canViewDocuments()) {
+    renderDocumentsUi();
+    return;
+  }
+  documentsLoading = true;
+  renderDocumentsUi("Documents loading...");
+  try {
+    roomDocuments = await listRoomDocuments(apiBaseUrl, roomId, roomStateAccessToken);
+    if (selectedDocumentId && !roomDocuments.some((document) => document.documentId === selectedDocumentId)) {
+      selectedDocumentId = "";
+      localStorage.removeItem(`vrata.documents.selected.${roomId}`);
+    }
+    renderDocumentsUi();
+  } catch (error) {
+    console.warn("documents_load_failed", error);
+    setDocumentStatus("Documents unavailable", documentErrorCode(error));
+  } finally {
+    documentsLoading = false;
+    renderDocumentsUi(documentStatusEl.textContent || undefined);
+  }
+}
+
+async function uploadSelectedDocument(): Promise<void> {
+  const file = documentUploadInput.files?.[0];
+  if (!file) {
+    setDocumentStatus("Choose a document first");
+    return;
+  }
+  if (!canUploadDocuments()) {
+    renderDocumentsUi("Document upload permission required");
+    return;
+  }
+  documentUploadInFlight = true;
+  renderDocumentsUi("Uploading document...");
+  try {
+    const uploadedDocument = await uploadRoomDocument(apiBaseUrl, roomId, roomStateAccessToken, file);
+    roomDocuments = [uploadedDocument, ...roomDocuments.filter((item) => item.documentId !== uploadedDocument.documentId)];
+    selectedDocumentId = uploadedDocument.documentId;
+    localStorage.setItem(`vrata.documents.selected.${roomId}`, selectedDocumentId);
+    documentUploadInput.value = "";
+    renderDocumentsUi(`Document uploaded: ${uploadedDocument.filename}`);
+  } catch (error) {
+    console.warn("document_upload_failed", error);
+    setDocumentStatus(`Document upload failed: ${documentErrorCode(error)}`, documentErrorCode(error));
+  } finally {
+    documentUploadInFlight = false;
+    renderDocumentsUi(documentStatusEl.textContent || undefined);
+  }
+}
+
+async function downloadSelectedDocument(): Promise<void> {
+  const selected = selectedDocument();
+  if (!selected) return;
+  try {
+    setDocumentStatus("Downloading document...");
+    const download = await downloadRoomDocument(apiBaseUrl, selected, roomStateAccessToken);
+    const objectUrl = URL.createObjectURL(download.blob);
+    const link = document.createElement("a");
+    link.href = objectUrl;
+    link.download = download.filename;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+    setDocumentStatus(`Document downloaded: ${download.filename}`);
+  } catch (error) {
+    console.warn("document_download_failed", error);
+    setDocumentStatus(`Document download failed: ${documentErrorCode(error)}`, documentErrorCode(error));
+  }
+}
+
+async function deleteSelectedDocument(): Promise<void> {
+  const selected = selectedDocument();
+  if (!selected) return;
+  try {
+    setDocumentStatus("Deleting document...");
+    await deleteRoomDocument(apiBaseUrl, roomId, selected.documentId, roomStateAccessToken);
+    roomDocuments = roomDocuments.filter((item) => item.documentId !== selected.documentId);
+    selectedDocumentId = roomDocuments[0]?.documentId ?? "";
+    if (selectedDocumentId) {
+      localStorage.setItem(`vrata.documents.selected.${roomId}`, selectedDocumentId);
+    } else {
+      localStorage.removeItem(`vrata.documents.selected.${roomId}`);
+    }
+    renderDocumentsUi(`Document deleted: ${selected.filename}`);
+  } catch (error) {
+    console.warn("document_delete_failed", error);
+    setDocumentStatus(`Document delete failed: ${documentErrorCode(error)}`, documentErrorCode(error));
+  }
+}
+
+async function selectDocumentForSurface(): Promise<void> {
+  const selected = selectedDocument();
+  if (!selected) return;
+  try {
+    setDocumentStatus("Selecting document for surface...");
+    const updated = await selectRoomDocumentSurface(apiBaseUrl, roomId, selected.documentId, selectedMediaSurfaceId, roomStateAccessToken);
+    roomDocuments = roomDocuments.map((item) => item.documentId === updated.documentId ? updated : item);
+    renderDocumentsUi(`Document selected for surface: ${updated.filename}`);
+  } catch (error) {
+    console.warn("document_surface_select_failed", error);
+    setDocumentStatus(`Document surface selection failed: ${documentErrorCode(error)}`, documentErrorCode(error));
+  }
+}
+
+function refreshClientCompatibility(): void {
+  clientCompatibility = buildClientCompatibility();
+  debugState.clientCompatibility = clientCompatibility;
+  compatibilityStatusEl.textContent = formatClientCompatibilityStatus(clientCompatibility);
+}
+
+function resolveGuestOnboardingMode(): "desktop" | "mobile" | "vr" {
+  return presenceXrMockEnabled ? "vr" : resolveJoinMode(navigator.userAgent);
+}
+
+function renderGuestOnboarding(): void {
+  const mode = resolveGuestOnboardingMode();
+  const warnings = formatGuestCompatibilityWarnings({
+    webGlAvailable: browserWebGlAvailable,
+    webSocketAvailable: browserWebSocketAvailable,
+    audioInputSupported: audioMockEnabled || browserMediaCapabilities.audioInput.supported,
+    screenShareSupported: shareMockEnabled || browserMediaCapabilities.screenShare.supported
+  });
+  guestNameInput.value = storedDisplayName ?? displayName;
+  guestControlsHintEl.textContent = formatGuestControlsHint(mode);
+  guestCompatibilityWarningEl.textContent = warnings.length > 0
+    ? `Compatibility warning: ${warnings.join(" ")}`
+    : "Compatibility: this browser can enter the room.";
+  debugState.guestOnboarding.required = true;
+  debugState.guestOnboarding.controlsHint = guestControlsHintEl.textContent;
+  debugState.guestOnboarding.warnings = warnings;
+  debugState.guestOnboarding.joinMuted = guestJoinMutedCheckbox.checked;
+}
+
+async function checkGuestMicrophone(): Promise<boolean> {
+  guestCheckMicrophoneButton.disabled = true;
+  guestOnboardingStatusEl.textContent = "Checking microphone permission...";
+  try {
+    if (audioMockEnabled) {
+      guestOnboardingStatusEl.textContent = "Microphone check passed in mock mode.";
+      debugState.guestOnboarding.audioMode = "microphone_ok";
+      return true;
+    }
+    if (faultConfig.audio === "mic_denied") {
+      throw createFaultError("NotAllowedError", "mic_denied");
+    }
+    if (!navigator.mediaDevices?.getUserMedia) {
+      throw createFaultError("NotSupportedError", "audio_unsupported:mediaDevices_missing");
+    }
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    stream.getTracks().forEach((track) => track.stop());
+    await refreshAudioDevices(false);
+    guestOnboardingStatusEl.textContent = "Microphone permission granted. You can still join muted.";
+    debugState.guestOnboarding.audioMode = "microphone_ok";
+    return true;
+  } catch (error) {
+    console.warn("guest_microphone_check_failed", error);
+    guestOnboardingStatusEl.textContent = "Microphone permission denied or unavailable. You can enter without audio.";
+    debugState.guestOnboarding.audioMode = "microphone_denied";
+    return false;
+  } finally {
+    guestCheckMicrophoneButton.disabled = false;
+  }
+}
+
+function completeGuestOnboarding(options: { withoutAudio: boolean; resolve: () => void }): void {
+  const validation = validateGuestDisplayName(guestNameInput.value);
+  if (!validation.accepted) {
+    guestOnboardingStatusEl.textContent = validation.error ?? "Enter a display name.";
+    guestNameInput.focus();
+    return;
+  }
+  displayName = validation.displayName;
+  joinMutedPreference = options.withoutAudio ? true : guestJoinMutedCheckbox.checked;
+  joinMutedCheckbox.checked = joinMutedPreference;
+  guestJoinMutedCheckbox.checked = joinMutedPreference;
+  localStorage.setItem("vrata.displayName", displayName);
+  localStorage.setItem("vrata.audio.joinMuted", String(joinMutedPreference));
+  debugState.guestOnboarding.completed = true;
+  debugState.guestOnboarding.displayNameProvided = true;
+  debugState.guestOnboarding.joinMuted = joinMutedPreference;
+  debugState.guestOnboarding.audioMode = options.withoutAudio ? "without_audio" : debugState.guestOnboarding.audioMode;
+  guestOnboardingEl.hidden = true;
+  options.resolve();
+}
+
+async function waitForGuestOnboardingIfNeeded(): Promise<void> {
+  const required = shouldShowGuestOnboarding({
+    hasInviteToken: Boolean(query.get("invite")),
+    hasExplicitDisplayName: Boolean(displayNameFromQuery),
+    forced: query.get("onboard") === "1",
+    disabled: query.get("onboard") === "0" || query.get("prejoin") === "0",
+    avatarSandboxEnabled,
+    botMode
+  });
+  debugState.guestOnboarding.required = required;
+  if (!required) {
+    guestOnboardingEl.hidden = true;
+    localStorage.setItem("vrata.displayName", displayName);
+    return;
+  }
+
+  renderGuestOnboarding();
+  guestOnboardingEl.hidden = false;
+  setStatus("Pre-join ready");
+  await new Promise<void>((resolve) => {
+    guestCheckMicrophoneButton.onclick = () => {
+      void checkGuestMicrophone();
+    };
+    guestEnterRoomButton.onclick = () => completeGuestOnboarding({ withoutAudio: false, resolve });
+    guestEnterWithoutAudioButton.onclick = () => completeGuestOnboarding({ withoutAudio: true, resolve });
+    guestNameInput.onkeydown = (event) => {
+      if (event.key === "Enter") {
+        completeGuestOnboarding({ withoutAudio: false, resolve });
+      }
+    };
+  });
+}
+
+function refreshXrSessionDebug(sessionState?: XrSessionLifecycleState): void {
+  xrSessionDebug = createXrRendererWiringDebug({
+    featureEnabled: runtimeFlags.enterVr,
+    support: xrSupport,
+    rendererXrEnabled: renderer.xr.enabled,
+    animationLoopConfigured: true,
+    presenting: renderer.xr.isPresenting,
+    previous: debugState.xrSession,
+    sessionState
+  });
+  debugState.xrSession = xrSessionDebug;
+}
+
+function setXrSessionDebug(next: XrRendererWiringDebug): void {
+  xrSessionDebug = next;
+  debugState.xrSession = next;
+}
+
+function updateVrButtonState(): void {
+  if (!vrButton) {
+    return;
+  }
+
+  if (!runtimeFlags.enterVr) {
+    vrButton.hidden = true;
+    return;
+  }
+
+  vrButton.hidden = false;
+  if (!getEnterVrVisibility(xrSupport, runtimeFlags.enterVr)) {
+    vrButton.disabled = true;
+    vrButton.textContent = "VR unavailable";
+    return;
+  }
+
+  vrButton.disabled = debugState.xrSession.sessionState === "entering" || debugState.xrSession.sessionState === "exiting";
+  if (debugState.xrSession.sessionState === "entering") {
+    vrButton.textContent = "Starting VR";
+  } else if (debugState.xrSession.sessionState === "exiting") {
+    vrButton.textContent = "Exiting VR";
+  } else if (currentXrSession || renderer.xr.isPresenting) {
+    vrButton.textContent = "Exit VR";
+  } else if (debugState.xrSession.sessionState === "failed") {
+    vrButton.textContent = "Retry VR";
+  } else {
+    vrButton.textContent = "Enter VR";
+  }
+}
+
+function getRuntimeNavigatorXr(): RuntimeNavigatorXr | null {
+  if (faultConfig.xrUnavailable) {
+    return null;
+  }
+  return ((navigator as Navigator & { xr?: RuntimeNavigatorXr }).xr ?? null);
+}
+
+async function resolveRuntimeXrSupport(): Promise<void> {
+  const navigatorXr = getRuntimeNavigatorXr();
+  if (!navigatorXr) {
+    xrSupport = detectXrSupport({ navigatorXr: undefined, immersiveVrSupported: false });
+    refreshClientCompatibility();
+    refreshXrSessionDebug();
+    return;
+  }
+
+  try {
+    const immersiveVrSupported = typeof navigatorXr.isSessionSupported === "function"
+      ? await navigatorXr.isSessionSupported("immersive-vr")
+      : true;
+    xrSupport = detectXrSupport({ navigatorXr, immersiveVrSupported });
+  } catch (error) {
+    console.warn("xr_support_check_failed", error);
+    xrSupport = detectXrSupport({ navigatorXr, immersiveVrSupported: false });
+    setXrSessionDebug(markXrSessionFailed(debugState.xrSession, error, performance.now()));
+  }
+  refreshClientCompatibility();
+  refreshXrSessionDebug(debugState.xrSession.sessionState === "failed" ? "failed" : undefined);
+}
+
+function handleXrEnterFailure(error: unknown): void {
+  console.error(error);
+  currentXrSession = null;
+  latestMode = presenceXrMockEnabled ? "vr" : resolveJoinMode(navigator.userAgent);
+  setXrSessionDebug(markXrSessionFailed(debugState.xrSession, error, performance.now()));
+  refreshClientCompatibility();
+  updateVrButtonState();
+  const issue = getRuntimeIssue("xr_enter_failed");
+  applyIssue(issue, {
+    degradedMode: debugState.degradedMode === "none" ? "xr_disabled" : debugState.degradedMode,
+    lastRecoveryAction: "xr_enter_failed",
+    updateStatus: false
+  });
+  void syncPresence(latestMode, Boolean(livekitRoom && microphoneEnabled));
+  void reportDiagnostics(issue.diagnosticsNote);
+}
+
+async function toggleXrSession(): Promise<void> {
+  if (!runtimeFlags.enterVr || !getEnterVrVisibility(xrSupport, runtimeFlags.enterVr)) {
+    return;
+  }
+
+  if (currentXrSession) {
+    setXrSessionDebug({ ...debugState.xrSession, sessionState: "exiting" });
+    updateVrButtonState();
+    try {
+      await currentXrSession.end();
+    } catch (error) {
+      handleXrEnterFailure(error);
+    }
+    return;
+  }
+
+  const navigatorXr = getRuntimeNavigatorXr();
+  if (!navigatorXr || typeof navigatorXr.requestSession !== "function") {
+    handleXrEnterFailure(new Error("xr_request_session_unavailable"));
+    return;
+  }
+
+  setXrSessionDebug(markXrSessionEntering(debugState.xrSession, performance.now()));
+  updateVrButtonState();
+  try {
+    const session = await navigatorXr.requestSession("immersive-vr", XR_SESSION_OPTIONS);
+    currentXrSession = session;
+    await renderer.xr.setSession(session);
+  } catch (error) {
+    await currentXrSession?.end().catch(() => undefined);
+    handleXrEnterFailure(error);
+  }
+}
+
+function createControlledVrButton(): HTMLButtonElement {
+  const button = document.createElement("button");
+  button.id = "VRButton";
+  button.type = "button";
+  button.classList.add("vr-button");
+  button.style.position = "static";
+  button.style.marginTop = "10px";
+  button.addEventListener("click", () => {
+    void toggleXrSession();
+  });
+  return button;
+}
+
+refreshClientCompatibility();
+refreshXrSessionDebug();
 (window as Window & {
   __VRATA_TEST__?: {
     forceRoomStateReconnect: () => void;
@@ -3811,6 +5213,11 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
     createDisabledExtensionObject: (surfaceId?: string) => boolean;
     createScreenShareObject: (surfaceId?: string) => boolean;
     createWhiteboardObject: (surfaceId?: string) => boolean;
+    createMarkdownBoardObject: (surfaceId?: string) => boolean;
+    createStickyNote: (input?: { text?: string; x?: number; y?: number; surfaceId?: string }) => boolean;
+    updateStickyNote: (noteId?: string, text?: string, surfaceId?: string) => boolean;
+    moveStickyNote: (noteId?: string, x?: number, y?: number, surfaceId?: string) => boolean;
+    deleteStickyNote: (noteId?: string, surfaceId?: string) => boolean;
     createRemoteBrowserObject: (surfaceId?: string) => boolean;
     selectMediaSurface: (surfaceId: string) => boolean;
     openRemoteBrowser: (url?: string) => boolean;
@@ -3821,6 +5228,8 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
     sendStaleSurfaceTestCardPatch: () => boolean;
     sendStaleScreenSharePatch: () => boolean;
     sendStaleWhiteboardPatch: () => boolean;
+    sendStaleMarkdownBoardPatch: () => boolean;
+    sendDuplicateMarkdownBoardPatch: () => boolean;
     sendDuplicateWhiteboardPatch: () => boolean;
     clearWhiteboardObject: () => boolean;
     setDebugSurfaceMediaAudioEnabled: (enabled: boolean, surfaceId?: string) => boolean;
@@ -3955,6 +5364,69 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
       probeOnly: false
     });
   },
+  createMarkdownBoardObject: (surfaceId = selectedMediaSurfaceId) => {
+    return mediaSurfaceCommands.sendCreateObject({
+      commandId: mediaSurfaceCommands.createCommandId("markdown-board-create-test"),
+      surfaceId,
+      objectType: MARKDOWN_BOARD_OBJECT_TYPE,
+      probeOnly: false
+    });
+  },
+  createStickyNote: (input = {}) => {
+    const object = activeMarkdownBoardObjectForSurface(input.surfaceId ?? selectedMediaSurfaceId) ?? findActiveMarkdownBoardObject();
+    if (!object || !hasRoomPermission(debugState.access.permissions, "markdown-board.edit")) {
+      return false;
+    }
+    return mediaSurfaceCommands.sendPatchObjectState("markdown-board-create-note-test", {
+      surfaceId: object.surfaceId,
+      objectId: object.objectId,
+      expectedRevision: object.revision,
+      patch: getMarkdownBoardRuntime(object.surfaceId).createNotePatch({
+        text: input.text ?? "# Sticky note\n- synced",
+        x: input.x ?? 0.12,
+        y: input.y ?? 0.18
+      })
+    });
+  },
+  updateStickyNote: (noteId, text = "## Updated\nSafe Markdown", surfaceId = selectedMediaSurfaceId) => {
+    const object = activeMarkdownBoardObjectForSurface(surfaceId) ?? findActiveMarkdownBoardObject();
+    const targetNoteId = noteId ?? latestStickyNoteId(object);
+    if (!object || !targetNoteId || !hasRoomPermission(debugState.access.permissions, "markdown-board.edit")) {
+      return false;
+    }
+    return mediaSurfaceCommands.sendPatchObjectState("markdown-board-update-note-test", {
+      surfaceId: object.surfaceId,
+      objectId: object.objectId,
+      expectedRevision: object.revision,
+      patch: getMarkdownBoardRuntime(object.surfaceId).createUpdateNotePatch(targetNoteId, text)
+    });
+  },
+  moveStickyNote: (noteId, x = 0.54, y = 0.42, surfaceId = selectedMediaSurfaceId) => {
+    const object = activeMarkdownBoardObjectForSurface(surfaceId) ?? findActiveMarkdownBoardObject();
+    const targetNoteId = noteId ?? latestStickyNoteId(object);
+    if (!object || !targetNoteId || !hasRoomPermission(debugState.access.permissions, "markdown-board.edit")) {
+      return false;
+    }
+    return mediaSurfaceCommands.sendPatchObjectState("markdown-board-move-note-test", {
+      surfaceId: object.surfaceId,
+      objectId: object.objectId,
+      expectedRevision: object.revision,
+      patch: getMarkdownBoardRuntime(object.surfaceId).createMoveNotePatch(targetNoteId, x, y)
+    });
+  },
+  deleteStickyNote: (noteId, surfaceId = selectedMediaSurfaceId) => {
+    const object = activeMarkdownBoardObjectForSurface(surfaceId) ?? findActiveMarkdownBoardObject();
+    const targetNoteId = noteId ?? latestStickyNoteId(object);
+    if (!object || !targetNoteId || !hasRoomPermission(debugState.access.permissions, "markdown-board.edit")) {
+      return false;
+    }
+    return mediaSurfaceCommands.sendPatchObjectState("markdown-board-delete-note-test", {
+      surfaceId: object.surfaceId,
+      objectId: object.objectId,
+      expectedRevision: object.revision,
+      patch: getMarkdownBoardRuntime(object.surfaceId).createDeleteNotePatch(targetNoteId)
+    });
+  },
   createRemoteBrowserObject: (surfaceId = selectedMediaSurfaceId) => {
     return mediaSurfaceCommands.sendCreateObject({
       commandId: mediaSurfaceCommands.createCommandId("remote-browser-create-test"),
@@ -4066,6 +5538,41 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
       }
     });
   },
+  sendStaleMarkdownBoardPatch: () => {
+    const object = activeMarkdownBoardObjectForSurface(selectedMediaSurfaceId) ?? findActiveMarkdownBoardObject();
+    if (!object) {
+      return false;
+    }
+    return mediaSurfaceCommands.sendPatchObjectState("stale-markdown-board-patch", {
+      surfaceId: object.surfaceId,
+      objectId: object.objectId,
+      expectedRevision: object.revision + 1,
+      patch: getMarkdownBoardRuntime(object.surfaceId).createNotePatch({
+        text: "# Stale note",
+        x: 0.2,
+        y: 0.2
+      })
+    });
+  },
+  sendDuplicateMarkdownBoardPatch: () => {
+    const object = activeMarkdownBoardObjectForSurface(selectedMediaSurfaceId) ?? findActiveMarkdownBoardObject();
+    if (!object || !object.state.lastInputEventId) {
+      return false;
+    }
+    return mediaSurfaceCommands.sendPatchObjectState("duplicate-markdown-board-patch", {
+      surfaceId: object.surfaceId,
+      objectId: object.objectId,
+      expectedRevision: object.revision,
+      patch: {
+        type: "create-note",
+        inputEventId: object.state.lastInputEventId,
+        noteId: `${participantId}:duplicate-note`,
+        text: "Duplicate",
+        x: 0.24,
+        y: 0.24
+      }
+    });
+  },
   sendDuplicateWhiteboardPatch: () => {
     const object = activeWhiteboardObjectForSurface(selectedMediaSurfaceId);
     if (!object || !object.state.lastInputEventId) {
@@ -4159,11 +5666,10 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
     if (!Number.isFinite(u) || !Number.isFinite(v)) {
       return null;
     }
-    const surface = getMediaSurfaceView(DEBUG_SURFACE_ID);
-    surface.object.updateMatrixWorld(true);
-    const position = surface.object.localToWorld(new THREE.Vector3(
-      (Math.max(0, Math.min(1, u)) - 0.5) * surface.widthM,
-      (Math.max(0, Math.min(1, v)) - 0.5) * surface.heightM,
+    displaySurface.updateMatrixWorld(true);
+    const position = displaySurface.localToWorld(new THREE.Vector3(
+      (Math.max(0, Math.min(1, u)) - 0.5) * DEBUG_SURFACE_WIDTH_M,
+      (Math.max(0, Math.min(1, v)) - 0.5) * DEBUG_SURFACE_HEIGHT_M,
       0
     ));
     return {
@@ -4176,12 +5682,11 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
     if (!Number.isFinite(u) || !Number.isFinite(v)) {
       return null;
     }
-    const surface = getMediaSurfaceView(DEBUG_SURFACE_ID);
-    surface.object.updateMatrixWorld(true);
+    displaySurface.updateMatrixWorld(true);
     camera.updateMatrixWorld(true);
-    const ndc = surface.object.localToWorld(new THREE.Vector3(
-      (Math.max(0, Math.min(1, u)) - 0.5) * surface.widthM,
-      (Math.max(0, Math.min(1, v)) - 0.5) * surface.heightM,
+    const ndc = displaySurface.localToWorld(new THREE.Vector3(
+      (Math.max(0, Math.min(1, u)) - 0.5) * DEBUG_SURFACE_WIDTH_M,
+      (Math.max(0, Math.min(1, v)) - 0.5) * DEBUG_SURFACE_HEIGHT_M,
       0
     )).project(camera);
     return {
@@ -4292,6 +5797,20 @@ function setStatus(message: string): void {
   debugState.statusLine = message;
 }
 
+function createClientReportId(): string {
+  return `rpt_${crypto.randomUUID()}`;
+}
+
+function showReportId(reportId: string | null): void {
+  debugState.lastReportId = reportId;
+  reportLineEl.hidden = !reportId;
+  reportLineEl.textContent = reportId ? `Report ID: ${reportId}` : "";
+}
+
+function setReportRequestId(requestId: string | null): void {
+  debugState.lastReportRequestId = requestId;
+}
+
 function setRoomStateStatus(message: string): void {
   roomStateLineEl.textContent = message;
 }
@@ -4359,6 +5878,68 @@ async function loadAvailableSpaces(currentRoomId: string): Promise<void> {
     availableSpaces = [];
     renderSpaceSelector("unavailable", [], currentRoomId);
   }
+}
+
+function currentPersonalPoseState(): RuntimePersonalState {
+  const pose = localPoseController.getPose();
+  return {
+    lastPose: {
+      position: {
+        x: Number(pose.position.x.toFixed(3)),
+        y: Number(pose.position.y.toFixed(3)),
+        z: Number(pose.position.z.toFixed(3))
+      },
+      yaw: Number(pose.yaw.toFixed(4)),
+      pitch: Number(pose.pitch.toFixed(4))
+    }
+  };
+}
+
+function personalPoseSignature(state: RuntimePersonalState): string {
+  const pose = state.lastPose;
+  if (!pose) return "none";
+  return [pose.position.x, pose.position.y, pose.position.z, pose.yaw, pose.pitch].map((value) => value.toFixed(3)).join(":");
+}
+
+function restorePersonalPose(state: RuntimePersonalState): void {
+  const pose = state.lastPose;
+  if (!pose) return;
+  localPoseController.setPose({
+    position: pose.position,
+    yaw: pose.yaw,
+    pitch: pose.pitch
+  }, "personal_state_restore");
+  debugState.personalRoom.lastPoseRestored = true;
+  updateLocalPositionDebug();
+}
+
+function startPersonalStatePersistence(input: { roomId: string; sessionToken: string; isOwner: boolean; enabled: boolean }): void {
+  if (!input.enabled || !input.isOwner || !input.sessionToken) {
+    return;
+  }
+  let lastSavedSignature = personalPoseSignature(debugState.personalRoom.lastPoseRestored ? currentPersonalPoseState() : {});
+  const save = async (force = false): Promise<void> => {
+    const state = currentPersonalPoseState();
+    const signature = personalPoseSignature(state);
+    if (!force && signature === lastSavedSignature) {
+      return;
+    }
+    try {
+      const saved = await savePersonalRoomState(apiBaseUrl, input.roomId, input.sessionToken, state);
+      lastSavedSignature = signature;
+      debugState.personalRoom.lastPoseSavedAt = saved.lastPose?.updatedAt ?? new Date().toISOString();
+      debugState.personalRoom.errorCode = null;
+    } catch (error: unknown) {
+      console.error(error);
+      debugState.personalRoom.errorCode = error instanceof Error ? error.message : "personal_state_save_failed";
+    }
+  };
+  window.setInterval(() => {
+    void save();
+  }, 1500);
+  window.addEventListener("pagehide", () => {
+    void save(true);
+  });
 }
 
 function commitRuntimeUiState(nextState: ReturnType<typeof createRuntimeUiState>, updateStatus = true): void {
@@ -4539,6 +6120,9 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
       mediaSurfaceCommands.settle(result);
     },
     onError: (error: unknown) => {
+      if (sessionControlBlocked) {
+        return;
+      }
       console.error(error);
       const issue = classifyRoomStateError(error);
       roomStateConnected = false;
@@ -4554,6 +6138,9 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
       void reportDiagnostics(issue.diagnosticsNote);
     },
     onClose: () => {
+      if (sessionControlBlocked) {
+        return;
+      }
       const issue = getRuntimeIssue("room_state_failed");
       roomStateConnected = false;
       debugState.roomStateConnected = false;
@@ -4594,6 +6181,7 @@ function renderDebugPanel(): void {
   const ray = debugState.interactionRay;
   const axes = debugState.xrAxes;
   xrDebugPanelEl.textContent = [
+    `XR session: ${debugState.xrSession.sessionState} visible=${debugState.xrSession.enterVrVisible}`,
     `XR profile: ${xrAvatarDebug?.profile ?? "none"}`,
     `XR axes: turn=(${axes.turnX?.toFixed?.(2) ?? axes.turnX ?? 0}, ${axes.turnY?.toFixed?.(2) ?? axes.turnY ?? 0}) move=(${axes.moveX?.toFixed?.(2) ?? axes.moveX ?? 0}, ${axes.moveY?.toFixed?.(2) ?? axes.moveY ?? 0})`,
     `Ray active: ${ray.active} mode=${ray.mode} target=${ray.targetKind} seat=${ray.seatId ?? "-"}`,
@@ -4635,10 +6223,11 @@ function deriveBodyTransform(root: { x: number; z: number }, head: { x: number; 
   };
 }
 
-async function reportDiagnostics(note?: string): Promise<void> {
+async function reportDiagnostics(note?: string, options: { reportId?: string } = {}): Promise<void> {
   if (!runtimeFlags.remoteDiagnostics) {
     return;
   }
+  await refreshWebRtcDiagnostics();
   if (activeSceneBundleRoot) {
     debugState.sceneDebug = inspectSceneObject({
       root: activeSceneBundleRoot,
@@ -4646,18 +6235,20 @@ async function reportDiagnostics(note?: string): Promise<void> {
       previous: debugState.sceneDebug
     });
   }
-  const includeImage = debugEnabled;
+  const includeImage = false;
   const screenshot = captureCanvasDiagnostics({
     canvas: renderer.domElement,
     includeImage
   });
   debugState.sceneDebug.screenshot = screenshot;
-  await fetch(new URL(`/api/rooms/${roomId}/diagnostics`, apiBaseUrl), {
+  const response = await fetch(new URL(`/api/rooms/${roomId}/diagnostics`, apiBaseUrl), {
     method: "POST",
     headers: {
-      "content-type": "application/json"
+      "content-type": "application/json",
+      "authorization": `Bearer ${roomStateAccessToken}`
     },
     body: JSON.stringify({
+      reportId: options.reportId,
       participantId,
       displayName,
       mode: debugState.mode,
@@ -4675,10 +6266,12 @@ async function reportDiagnostics(note?: string): Promise<void> {
       surfaceInput: debugState.surfaceInput,
       screenShareState: debugState.screenShareState,
       mediaCapabilities: debugState.mediaCapabilities,
+      clientCompatibility: debugState.clientCompatibility,
       localPose: debugState.localPose,
       localPosition: debugState.localPosition,
       spatialAudioState: debugState.spatialAudioState,
       spatialAudio: debugState.spatialAudio,
+      xrSession: debugState.xrSession,
       xrAxes: debugState.xrAxes,
       remoteAvatarCount: debugState.remoteAvatarCount,
       remoteTargets: debugState.remoteTargets,
@@ -4709,7 +6302,39 @@ async function reportDiagnostics(note?: string): Promise<void> {
       createdAt: new Date().toISOString()
     })
   });
+  const responseRequestId = response.headers.get("x-request-id");
+  if (responseRequestId) {
+    setReportRequestId(responseRequestId);
+  }
+  if (response.ok) {
+    const payload = await response.json().catch(() => null) as { reportId?: string; requestId?: string } | null;
+    if (payload?.requestId) {
+      setReportRequestId(payload.requestId);
+    }
+    if (payload?.reportId) {
+      showReportId(payload.reportId);
+    }
+  }
 }
+
+function reportUnhandledRuntimeError(error: unknown, note: string): void {
+  const reportId = createClientReportId();
+  const message = error instanceof Error ? error.message : String(error ?? "unknown");
+  showReportId(reportId);
+  setStatus(`Runtime error. Report ID: ${reportId}`);
+  debugState.issueCode = "runtime_unhandled_error";
+  debugState.issueSeverity = "error";
+  debugState.lastRecoveryAction = "report_runtime_error";
+  void reportDiagnostics(`${note}:${message.slice(0, 160)}`, { reportId }).catch(() => undefined);
+}
+
+window.addEventListener("error", (event) => {
+  reportUnhandledRuntimeError(event.error ?? event.message, "runtime_error");
+});
+
+window.addEventListener("unhandledrejection", (event) => {
+  reportUnhandledRuntimeError(event.reason, "runtime_unhandled_rejection");
+});
 
 function reportXrTelemetry(frameContext: RuntimeFrameContext): void {
   if (!renderer.xr.isPresenting && !(avatarVrMockEnabled && syntheticXrState)) {
@@ -4788,7 +6413,8 @@ function reportXrTelemetry(frameContext: RuntimeFrameContext): void {
   void fetch(new URL(`/api/rooms/${roomId}/xr-telemetry/${participantId}`, apiBaseUrl), {
     method: "PUT",
     headers: {
-      "content-type": "application/json"
+      "content-type": "application/json",
+      "authorization": `Bearer ${roomStateAccessToken}`
     },
     body: JSON.stringify(payload)
   }).catch(() => undefined);
@@ -5020,6 +6646,60 @@ function detachRemoteBrowserVideoTrack(track?: Track): void {
   Object.assign(debugState.remoteBrowser, createRemoteBrowserExternalVideoDebugSnapshot(currentRemoteBrowserObject()));
 }
 
+type LiveKitTransportCandidate = {
+  getStats?: () => Promise<RTCStatsReport>;
+  getConnectionState?: () => RTCPeerConnectionState | null | undefined;
+  getICEConnectionState?: () => RTCIceConnectionState | null | undefined;
+  getSignallingState?: () => RTCSignalingState | null | undefined;
+  getSignalingState?: () => RTCSignalingState | null | undefined;
+};
+
+type LiveKitEngineDiagnosticsSource = {
+  on?: (eventName: "transportsCreated", callback: (publisher: unknown, subscriber?: unknown) => void) => unknown;
+  pcManager?: {
+    publisher?: unknown;
+    subscriber?: unknown;
+  };
+};
+
+function createWebRtcStatsTransport(role: WebRtcTransportRole, source: unknown): WebRtcStatsTransport | null {
+  const candidate = source as LiveKitTransportCandidate | null | undefined;
+  if (!candidate || typeof candidate.getStats !== "function") {
+    return null;
+  }
+  return {
+    role,
+    getStats: () => candidate.getStats!(),
+    getConnectionState: () => candidate.getConnectionState?.() ?? null,
+    getIceConnectionState: () => candidate.getICEConnectionState?.() ?? null,
+    getSignalingState: () => candidate.getSignalingState?.() ?? candidate.getSignallingState?.() ?? null
+  };
+}
+
+function setMediaDiagnosticsTransports(publisher: unknown, subscriber?: unknown): void {
+  mediaDiagnosticsTransports = [
+    createWebRtcStatsTransport("publisher", publisher),
+    createWebRtcStatsTransport("subscriber", subscriber)
+  ].filter((transport): transport is WebRtcStatsTransport => Boolean(transport));
+  void refreshWebRtcDiagnostics().catch(() => undefined);
+}
+
+function setupMediaTransportDiagnostics(room: Room): void {
+  const engine = (room as { engine?: LiveKitEngineDiagnosticsSource }).engine;
+  if (!engine) {
+    return;
+  }
+  if (!mediaTransportDiagnosticsRooms.has(room)) {
+    mediaTransportDiagnosticsRooms.add(room);
+    engine.on?.("transportsCreated", (publisher, subscriber) => {
+      setMediaDiagnosticsTransports(publisher, subscriber);
+    });
+  }
+  if (engine.pcManager?.publisher || engine.pcManager?.subscriber) {
+    setMediaDiagnosticsTransports(engine.pcManager.publisher, engine.pcManager.subscriber);
+  }
+}
+
 async function ensureMediaRoom(): Promise<Room> {
   if (livekitRoom) {
     return livekitRoom;
@@ -5032,13 +6712,22 @@ async function ensureMediaRoom(): Promise<Room> {
     throw createFaultError("ConnectionError", "media_network_blocked");
   }
 
-  const voicePlan = await planVoiceSession(apiBaseUrl, roomId, participantId);
+  const voicePlan = await planVoiceSession(apiBaseUrl, roomId, participantId, roomStateAccessToken);
   const room = new Room();
   setupAudio(room);
-  await room.connect(voicePlan.livekitUrl, voicePlan.token);
+  setupMediaTransportDiagnostics(room);
+  try {
+    await room.connect(voicePlan.livekitUrl, voicePlan.token);
+  } catch (error) {
+    mediaDiagnosticsTransports = [];
+    debugState.media.webrtc = createUnavailableWebRtcDiagnostics("livekit_connect_failed");
+    throw error;
+  }
+  setupMediaTransportDiagnostics(room);
   await applyPreferredAudioDevices(room);
   livekitRoom = room;
   mediaRoomReady = true;
+  await refreshWebRtcDiagnostics();
   startShareButton.disabled = !canUseScreenShareControl();
   return room;
 }
@@ -5247,9 +6936,7 @@ function updateLocalAvatar(delta: number, frameContext: RuntimeFrameContext): vo
       : null;
   const inputMode = xrPresenting
     ? "vr-controller"
-    : /android|iphone|ipad/i.test(navigator.userAgent)
-      ? "mobile"
-      : "desktop";
+    : resolveJoinMode(navigator.userAgent);
   const viewProfile = resolveAvatarViewProfile({
     inputMode,
     xrPresenting
@@ -5595,7 +7282,9 @@ async function syncPresence(mode: PresenceState["mode"], audioActive: boolean): 
       yaw: headYaw,
       pitch: headPitch
     },
+    audioJoined: audioSessionJoined,
     muted: !microphoneEnabled,
+    speaking: Boolean(microphoneEnabled && audioActive && (localAvatarController?.diagnostics.speakingActive || localMicLevel >= 0.04)),
     activeMedia: {
       audio: audioActive,
       screenShare: hasLocalScreenSharePublishing()
@@ -5620,7 +7309,7 @@ async function syncPresence(mode: PresenceState["mode"], audioActive: boolean): 
     apiPresenceSyncInFlight = true;
     lastApiPresenceSyncAtMs = nowMs;
     try {
-      await upsertPresence(apiBaseUrl, roomId, presencePayload);
+      await upsertPresence(apiBaseUrl, roomId, presencePayload, roomStateAccessToken);
       sentFallbackPresence = true;
     } catch (error) {
       console.error(error);
@@ -5669,6 +7358,10 @@ async function refreshPresence(): Promise<void> {
 }
 
 function setupAudio(room: Room): void {
+  room.on(RoomEvent.Disconnected, () => {
+    clearMediaRoomReference(room, "livekit_disconnected");
+  });
+
   room.on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
     if (track.kind === Track.Kind.Video) {
       const remoteBrowser = resolveRemoteBrowserObjectForTrack(participant?.identity, publication, track, "video");
@@ -5731,6 +7424,45 @@ function setupAudio(room: Room): void {
       disconnectRemoteAudioElement(participant.identity);
     }
     track.detach().forEach((element) => element.remove());
+  });
+
+  room.on(RoomEvent.TrackMuted, (publication, participant) => {
+    if (!isMicrophonePublication(publication)) {
+      return;
+    }
+    if (participant?.identity === participantId) {
+      microphoneEnabled = false;
+      disconnectLocalAudioTrack();
+      syncAudioControls();
+      syncLocalAudioPresence();
+      return;
+    }
+    if (participant?.identity) {
+      disconnectRemoteAudioElement(participant.identity);
+      syncRemoteAudioDiagnostics();
+    }
+  });
+
+  room.on(RoomEvent.TrackUnmuted, (publication, participant) => {
+    if (!isMicrophonePublication(publication)) {
+      return;
+    }
+    if (participant?.identity === participantId) {
+      microphoneEnabled = audioSessionJoined;
+      if (microphoneEnabled) {
+        connectLocalAudioTrack(room);
+      }
+      syncAudioControls();
+      syncLocalAudioPresence();
+      return;
+    }
+    if (participant?.identity) {
+      const track = getRemoteParticipantMicrophoneTrack(participant.identity, publication);
+      if (track) {
+        connectRemoteAudioTrack(track, participant.identity);
+        syncRemoteAudioDiagnostics();
+      }
+    }
   });
 }
 
@@ -5903,6 +7635,105 @@ async function stopWhiteboard(): Promise<void> {
   syncWhiteboardControls();
 }
 
+async function startMarkdownBoard(): Promise<void> {
+  if (!debugState.access.canCreateMarkdownBoard) {
+    debugState.access.lastDeniedPermission = "surface.create-object";
+    throw createFaultError("NotAllowedError", "markdown_board_forbidden");
+  }
+  if (startMarkdownBoardButton.disabled) {
+    return;
+  }
+  const result = await mediaSurfaceCommands.createMarkdownBoardObjectOnSurface(selectedMediaSurfaceId);
+  if (!result.accepted) {
+    debugState.mediaObjects.blockedReason = result.blockedReason ?? null;
+    throw new Error(`markdown_board_create_rejected:${result.blockedReason ?? "unknown"}`);
+  }
+  getMarkdownBoardRuntime(result.surfaceId ?? selectedMediaSurfaceId).clearError();
+  setStatus("Sticky board started. Add Markdown notes from the control panel.");
+  syncMarkdownBoardControls();
+}
+
+async function patchMarkdownBoard(patchFactory: (object: MediaObjectInstance<MarkdownBoardState>) => MarkdownBoardPatch, status: string): Promise<void> {
+  const object = currentMarkdownBoardObject();
+  if (!object) {
+    return;
+  }
+  if (!hasRoomPermission(debugState.access.permissions, "markdown-board.edit")) {
+    debugState.access.lastDeniedPermission = "markdown-board.edit";
+    throw createFaultError("NotAllowedError", "markdown_board_edit_forbidden");
+  }
+  const runtime = getMarkdownBoardRuntime(object.surfaceId);
+  const result = await mediaSurfaceCommands.patchMarkdownBoardObject(object.objectId, object.surfaceId, object.revision, patchFactory(object));
+  if (!result.accepted) {
+    debugState.mediaObjects.blockedReason = result.blockedReason ?? null;
+    throw new Error(`markdown_board_patch_rejected:${result.blockedReason ?? "unknown"}`);
+  }
+  runtime.clearError();
+  setStatus(status);
+  syncMarkdownBoardControls();
+}
+
+function stickyNoteTextValue(): string {
+  return markdownBoardNoteText.value.trim() || "# Note\n- Write Markdown here";
+}
+
+async function addStickyNote(): Promise<void> {
+  await patchMarkdownBoard((object) => getMarkdownBoardRuntime(object.surfaceId).createNotePatch({
+    text: stickyNoteTextValue(),
+    x: 0.08 + Math.min(0.48, object.state.notes.length * 0.06),
+    y: 0.16 + Math.min(0.34, object.state.notes.length * 0.04)
+  }), "Sticky note added");
+}
+
+async function updateLatestStickyNote(): Promise<void> {
+  await patchMarkdownBoard((object) => {
+    const noteId = latestStickyNoteId(object);
+    if (!noteId) {
+      throw new Error("markdown_board_note_missing");
+    }
+    return getMarkdownBoardRuntime(object.surfaceId).createUpdateNotePatch(noteId, stickyNoteTextValue());
+  }, "Sticky note updated");
+}
+
+async function moveLatestStickyNote(): Promise<void> {
+  await patchMarkdownBoard((object) => {
+    const note = object.state.notes[object.state.notes.length - 1];
+    if (!note) {
+      throw new Error("markdown_board_note_missing");
+    }
+    return getMarkdownBoardRuntime(object.surfaceId).createMoveNotePatch(note.noteId, Math.min(0.72, note.x + 0.12), Math.min(0.72, note.y + 0.1));
+  }, "Sticky note moved");
+}
+
+async function deleteLatestStickyNote(): Promise<void> {
+  await patchMarkdownBoard((object) => {
+    const noteId = latestStickyNoteId(object);
+    if (!noteId) {
+      throw new Error("markdown_board_note_missing");
+    }
+    return getMarkdownBoardRuntime(object.surfaceId).createDeleteNotePatch(noteId);
+  }, "Sticky note deleted");
+}
+
+async function stopMarkdownBoard(): Promise<void> {
+  const object = activeMarkdownBoardObjectForSurface(selectedMediaSurfaceId);
+  if (!object) {
+    return;
+  }
+  if (!hasRoomPermission(debugState.access.permissions, "surface.stop-object")) {
+    debugState.access.lastDeniedPermission = "surface.stop-object";
+    throw createFaultError("NotAllowedError", "markdown_board_stop_forbidden");
+  }
+  const result = await mediaSurfaceCommands.stopMarkdownBoardObject(object.objectId, object.surfaceId);
+  if (!result.accepted) {
+    debugState.mediaObjects.blockedReason = result.blockedReason ?? null;
+    throw new Error(`markdown_board_stop_rejected:${result.blockedReason ?? "unknown"}`);
+  }
+  getMarkdownBoardRuntime(object.surfaceId).clearError();
+  setStatus("Sticky board stopped");
+  syncMarkdownBoardControls();
+}
+
 async function openRemoteBrowser(rawUrl: string): Promise<void> {
   if (!hasRoomPermission(debugState.access.permissions, "remote-browser.open-url")) {
     debugState.access.lastDeniedPermission = "remote-browser.open-url";
@@ -6019,6 +7850,69 @@ async function stopScreenShare(): Promise<void> {
   void reportDiagnostics(shareMockEnabled ? "screenshare_mock_stopped" : "screenshare_stopped");
 }
 
+async function setLocalMicrophoneEnabled(room: Room, enabled: boolean): Promise<void> {
+  if (enabled) {
+    if (audioMockEnabled) {
+      await publishMockMicrophoneTrack(room);
+    } else {
+      await room.localParticipant.setMicrophoneEnabled(true);
+    }
+    microphoneEnabled = true;
+    await resumeAudioContext();
+    connectLocalAudioTrack(room);
+    return;
+  }
+
+  microphoneEnabled = false;
+  if (audioMockEnabled) {
+    const track = mockAudioSource?.track;
+    if (track) {
+      track.enabled = false;
+    }
+  } else {
+    await room.localParticipant.setMicrophoneEnabled(false);
+  }
+  disconnectLocalAudioTrack();
+}
+
+function syncLocalAudioPresence(): void {
+  void syncPresence(latestMode, Boolean(livekitRoom && microphoneEnabled));
+}
+
+async function performAudioAction(action: () => Promise<void>): Promise<void> {
+  if (audioActionInFlight) {
+    return;
+  }
+  audioActionInFlight = true;
+  syncAudioControls();
+  try {
+    await action();
+  } finally {
+    audioActionInFlight = false;
+    syncAudioControls();
+  }
+}
+
+function handleAudioActionError(error: unknown, lastRecoveryAction: string): void {
+  console.error(error);
+  const issue = classifyMediaError(error);
+  muteButton.disabled = true;
+  if (issue.code === "audio_unsupported") {
+    joinAudioButton.disabled = true;
+    joinAudioButton.textContent = "Audio Unsupported";
+    joinAudioButton.title = `Microphone unsupported: ${describeMediaCapabilityReason(browserMediaCapabilities.audioInput.reason)}`;
+  } else {
+    syncAudioControls();
+  }
+  applyIssue(issue, {
+    degradedMode: "audio_unavailable",
+    audioState: issue.code === "audio_unsupported" ? "unsupported" : "degraded",
+    lastRecoveryAction
+  });
+  syncLocalAudioPresence();
+  void reportDiagnostics(issue.diagnosticsNote);
+}
+
 async function joinAudio(): Promise<void> {
   if (!runtimeFlags.audioJoin) {
     const issue = getRuntimeIssue("livekit_failed");
@@ -6042,70 +7936,82 @@ async function joinAudio(): Promise<void> {
     throw createFaultError("NotFoundError", "no_audio_device");
   }
 
-  if (livekitRoom) {
-    if (!microphoneEnabled) {
-      if (audioMockEnabled) {
-        await publishMockMicrophoneTrack(livekitRoom);
-      } else {
-        await livekitRoom.localParticipant.setMicrophoneEnabled(true);
-      }
-      microphoneEnabled = true;
-      await resumeAudioContext();
-      connectLocalAudioTrack(livekitRoom);
-      await refreshAudioDevices(!audioMockEnabled);
-      muteButton.disabled = false;
-      joinAudioButton.disabled = true;
-      clearAudioIssue("Audio connected");
-      debugState.audioState = "connected";
-      void reportDiagnostics("audio_connected");
-    }
-    return;
-  }
-
+  clearMediaRoomIdleDisconnect();
+  const startMuted = joinMutedPreference;
   setStatus("Joining audio...");
   debugState.audioState = "joining";
+
   const room = await ensureMediaRoom();
-  if (audioMockEnabled) {
-    await publishMockMicrophoneTrack(room);
-  } else {
-    await room.localParticipant.setMicrophoneEnabled(true);
-  }
-  microphoneEnabled = true;
-  await resumeAudioContext();
-  connectLocalAudioTrack(room);
-  await refreshAudioDevices(!audioMockEnabled);
-  muteButton.disabled = false;
-  joinAudioButton.disabled = true;
+  audioSessionJoined = true;
+  await setLocalMicrophoneEnabled(room, !startMuted);
+  await refreshAudioDevices(!audioMockEnabled && !startMuted);
   startShareButton.disabled = !canUseScreenShareControl();
   syncWhiteboardControls();
-  clearAudioIssue("Audio connected");
-  debugState.audioState = "connected";
-  void reportDiagnostics("audio_connected");
+  syncLocalAudioPresence();
+  syncAudioControls();
+  clearAudioIssue(startMuted ? "Joined muted" : "Audio connected");
+  debugState.audioState = startMuted ? "muted" : "connected";
+  void reportDiagnostics(startMuted ? "audio_joined_muted" : "audio_connected");
 }
 
-muteButton.addEventListener("click", async () => {
-  if (!livekitRoom) {
+async function leaveAudio(): Promise<void> {
+  if (!livekitRoom || !audioSessionJoined) {
     return;
   }
-  microphoneEnabled = !microphoneEnabled;
+
+  const room = livekitRoom;
+  audioSessionJoined = false;
+  microphoneEnabled = false;
+  disconnectLocalAudioTrack();
+
+  let cleanupFailed = false;
+  const runCleanup = async (label: string, action: () => Promise<unknown> | unknown): Promise<void> => {
+    try {
+      await action();
+    } catch (error) {
+      cleanupFailed = true;
+      console.warn(`audio_leave_${label}_failed`, error);
+    }
+  };
+
   if (audioMockEnabled) {
-    const track = mockAudioSource?.track;
-    if (track) {
-      track.enabled = microphoneEnabled;
-    }
+    await runCleanup("unpublish", () => unpublishLocalMicrophoneTrack(room));
+    await runCleanup("mock_stop", () => stopMockAudioSource());
   } else {
-    await livekitRoom.localParticipant.setMicrophoneEnabled(microphoneEnabled);
+    await runCleanup("mute", () => room.localParticipant.setMicrophoneEnabled(false));
+    await runCleanup("unpublish", () => unpublishLocalMicrophoneTrack(room));
   }
-  if (microphoneEnabled) {
-    if (audioMockEnabled) {
-      await publishMockMicrophoneTrack(livekitRoom);
-    }
-    await resumeAudioContext();
-    connectLocalAudioTrack(livekitRoom);
+  muteButton.disabled = true;
+  muteButton.textContent = "Mute";
+  joinAudioButton.textContent = "Join Audio";
+  joinAudioButton.title = "Publish your microphone";
+  clearAudioIssue("Audio left");
+  debugState.audioState = "not_joined";
+  if (!hasActiveMediaRoomSurfaceConsumer()) {
+    scheduleMediaRoomIdleDisconnect(room, "audio_left_idle");
   }
-  muteButton.textContent = microphoneEnabled ? "Mute" : "Unmute";
+  syncLocalAudioPresence();
+  void refreshWebRtcDiagnostics().catch(() => undefined);
+  void reportDiagnostics(cleanupFailed ? "audio_left_cleanup_failed" : "audio_left");
+}
+
+async function toggleLocalMute(): Promise<void> {
+  if (!livekitRoom || !audioSessionJoined) {
+    return;
+  }
+  const nextEnabled = !microphoneEnabled;
+  await setLocalMicrophoneEnabled(livekitRoom, nextEnabled);
+  syncLocalAudioPresence();
+  syncAudioControls();
   setStatus(microphoneEnabled ? "Audio live" : "Muted");
   debugState.audioState = microphoneEnabled ? "live" : "muted";
+  void reportDiagnostics(microphoneEnabled ? "audio_unmuted" : "audio_muted");
+}
+
+muteButton.addEventListener("click", () => {
+  void performAudioAction(toggleLocalMute).catch((error: unknown) => {
+    handleAudioActionError(error, "audio_mute_toggle_failed");
+  });
 });
 
 micSelect.addEventListener("change", () => {
@@ -6149,6 +8055,67 @@ spaceSelect.addEventListener("change", () => {
   window.location.assign(targetRoomLink);
 });
 
+openPersonalRoomButton.addEventListener("click", () => {
+  openPersonalRoomButton.disabled = true;
+  openPersonalRoomButton.textContent = "Opening...";
+  debugState.personalRoom.openState = "opening";
+  void openPersonalRoom(apiBaseUrl, { participantId: personalOwnerId, displayName }).then((result) => {
+    debugState.personalRoom.openState = "idle";
+    sessionStorage.setItem("vrata.participantId", result.room.ownerParticipantId ?? personalOwnerId);
+    window.location.assign(result.roomLink);
+  }).catch((error: unknown) => {
+    console.error(error);
+    debugState.personalRoom.openState = "failed";
+    debugState.personalRoom.errorCode = error instanceof Error ? error.message : "personal_room_open_failed";
+    openPersonalRoomButton.disabled = false;
+    openPersonalRoomButton.textContent = "Open my room";
+    spaceSelectStatusEl.textContent = "Personal room unavailable";
+  });
+});
+
+notesScopeSelect.addEventListener("change", () => {
+  activeNotesScope = notesScopeSelect.value === "private" ? "private" : "shared";
+  localStorage.setItem("vrata.notes.scope", activeNotesScope);
+  notesLastSavedContent = "";
+  notesLastUpdatedAt = null;
+  notesSaveState = "idle";
+  void loadActiveNote();
+});
+
+notesEditor.addEventListener("input", () => {
+  scheduleNotesAutosave();
+});
+
+notesRetrySaveButton.addEventListener("click", () => {
+  void saveActiveNote();
+});
+
+documentSelect.addEventListener("change", () => {
+  selectedDocumentId = documentSelect.value;
+  if (selectedDocumentId) {
+    localStorage.setItem(`vrata.documents.selected.${roomId}`, selectedDocumentId);
+  } else {
+    localStorage.removeItem(`vrata.documents.selected.${roomId}`);
+  }
+  renderDocumentsUi();
+});
+
+documentUploadButton.addEventListener("click", () => {
+  void uploadSelectedDocument();
+});
+
+documentDownloadButton.addEventListener("click", () => {
+  void downloadSelectedDocument();
+});
+
+documentSurfaceButton.addEventListener("click", () => {
+  void selectDocumentForSurface();
+});
+
+documentDeleteButton.addEventListener("click", () => {
+  void deleteSelectedDocument();
+});
+
 mediaSurfaceSelect.addEventListener("change", () => {
   selectMediaSurface(mediaSurfaceSelect.value);
 });
@@ -6174,25 +8141,64 @@ surfaceAudioCheckbox.addEventListener("change", () => {
   });
 });
 
+lockRoomButton.addEventListener("click", () => {
+  void runHostControlAction(
+    () => runRoomSessionControlAction(apiBaseUrl, roomId, roomStateAccessToken, "lock"),
+    "Room locked"
+  );
+});
+
+unlockRoomButton.addEventListener("click", () => {
+  void runHostControlAction(
+    () => runRoomSessionControlAction(apiBaseUrl, roomId, roomStateAccessToken, "unlock"),
+    "Room unlocked"
+  );
+});
+
+endSessionButton.addEventListener("click", () => {
+  void runHostControlAction(
+    () => runRoomSessionControlAction(apiBaseUrl, roomId, roomStateAccessToken, "end"),
+    "Session ended"
+  );
+});
+
+hostParticipantSelect.addEventListener("change", () => {
+  debugState.hostControls.selectedParticipantId = hostParticipantSelect.value || null;
+  renderHostControls();
+});
+
+removeParticipantButton.addEventListener("click", () => {
+  const targetParticipantId = hostParticipantSelect.value;
+  if (!targetParticipantId) {
+    return;
+  }
+  void runHostControlAction(
+    () => removeRoomParticipant(apiBaseUrl, roomId, roomStateAccessToken, targetParticipantId),
+    `Removed ${targetParticipantId}`
+  );
+});
+
+transferHostButton.addEventListener("click", () => {
+  const targetParticipantId = hostParticipantSelect.value;
+  if (!targetParticipantId) {
+    return;
+  }
+  void runHostControlAction(
+    () => transferRoomHost(apiBaseUrl, roomId, roomStateAccessToken, targetParticipantId),
+    `Transferred host to ${targetParticipantId}`
+  );
+});
+
 joinAudioButton.addEventListener("click", () => {
-  void joinAudio().catch((error: unknown) => {
-    console.error(error);
-    const issue = classifyMediaError(error);
-    muteButton.disabled = true;
-    if (issue.code === "audio_unsupported") {
-      joinAudioButton.disabled = true;
-      joinAudioButton.textContent = "Audio Unsupported";
-      joinAudioButton.title = `Microphone unsupported: ${describeMediaCapabilityReason(browserMediaCapabilities.audioInput.reason)}`;
-    } else {
-      joinAudioButton.disabled = false;
-    }
-    applyIssue(issue, {
-      degradedMode: "audio_unavailable",
-      audioState: issue.code === "audio_unsupported" ? "unsupported" : "degraded",
-      lastRecoveryAction: "audio_join_failed"
-    });
-    void reportDiagnostics(issue.diagnosticsNote);
+  void performAudioAction(() => audioSessionJoined ? leaveAudio() : joinAudio()).catch((error: unknown) => {
+    handleAudioActionError(error, audioSessionJoined ? "audio_leave_failed" : "audio_join_failed");
   });
+});
+
+joinMutedCheckbox.addEventListener("change", () => {
+  joinMutedPreference = joinMutedCheckbox.checked;
+  localStorage.setItem("vrata.audio.joinMuted", String(joinMutedPreference));
+  updateAudioDeviceStatus(joinMutedPreference ? "Join muted enabled" : "Join muted disabled");
 });
 
 startShareButton.addEventListener("click", () => {
@@ -6272,6 +8278,52 @@ stopWhiteboardButton.addEventListener("click", () => {
     runtime.setError(error instanceof Error ? error.message : "stop_failed");
     debugState.whiteboard.errorCode = runtime.createDebugSnapshot(object).errorCode;
     syncWhiteboardControls();
+  });
+});
+
+startMarkdownBoardButton.addEventListener("click", () => {
+  void startMarkdownBoard().catch((error: unknown) => {
+    console.error(error);
+    setStatus("Sticky board start failed");
+    const object = currentMarkdownBoardObject();
+    const runtime = getMarkdownBoardRuntime(object?.surfaceId ?? selectedMediaSurfaceId);
+    runtime.setError(error instanceof Error ? error.message : "start_failed");
+    debugState.markdownBoard.errorCode = runtime.createDebugSnapshot(object).errorCode;
+  });
+});
+
+addStickyNoteButton.addEventListener("click", () => {
+  void addStickyNote().catch((error: unknown) => {
+    console.error(error);
+    setStatus("Sticky note add failed");
+  });
+});
+
+updateStickyNoteButton.addEventListener("click", () => {
+  void updateLatestStickyNote().catch((error: unknown) => {
+    console.error(error);
+    setStatus("Sticky note update failed");
+  });
+});
+
+moveStickyNoteButton.addEventListener("click", () => {
+  void moveLatestStickyNote().catch((error: unknown) => {
+    console.error(error);
+    setStatus("Sticky note move failed");
+  });
+});
+
+deleteStickyNoteButton.addEventListener("click", () => {
+  void deleteLatestStickyNote().catch((error: unknown) => {
+    console.error(error);
+    setStatus("Sticky note delete failed");
+  });
+});
+
+stopMarkdownBoardButton.addEventListener("click", () => {
+  void stopMarkdownBoard().catch((error: unknown) => {
+    console.error(error);
+    setStatus("Sticky board stop failed");
   });
 });
 
@@ -6560,7 +8612,7 @@ window.addEventListener("resize", () => {
 });
 
 window.addEventListener("beforeunload", () => {
-  void removePresence(apiBaseUrl, roomId, participantId);
+  void removePresence(apiBaseUrl, roomId, participantId, roomStateAccessToken);
   detachVideoTrack();
   for (const entry of Array.from(remoteBrowserVideoByObjectId.values())) {
     detachRemoteBrowserVideoEntry(entry);
@@ -6624,11 +8676,26 @@ renderer.setAnimationLoop(() => {
   if (runtimeBootReady) {
     if (syncAccumulator >= 0.08) {
       syncAccumulator = 0;
-      latestMode = presenceXrMockEnabled ? "vr" : renderer.xr.isPresenting ? "vr" : /android|iphone|ipad/i.test(navigator.userAgent) ? "mobile" : "desktop";
-      void syncPresence(latestMode, Boolean(livekitRoom && microphoneEnabled));
+      latestMode = presenceXrMockEnabled ? "vr" : renderer.xr.isPresenting ? "vr" : resolveJoinMode(navigator.userAgent);
+      if (debugState.clientCompatibility.resolvedJoinMode !== latestMode || debugState.clientCompatibility.xr.enterVrVisible !== getEnterVrVisibility(xrSupport, runtimeFlags.enterVr)) {
+        refreshClientCompatibility();
+      }
+      const shouldSyncPresence = latestMode !== "vr" || shouldSyncXrTransform({
+        presenting: renderer.xr.isPresenting || presenceXrMockEnabled,
+        nowMs,
+        lastSyncAtMs: debugState.xrSession.lastTransformSyncAtMs,
+        minIntervalMs: debugState.xrSession.transformThrottleMs
+      });
+      if (shouldSyncPresence) {
+        if (latestMode === "vr") {
+          setXrSessionDebug(recordXrTransformSync(debugState.xrSession, nowMs));
+        }
+        void syncPresence(latestMode, Boolean(livekitRoom && microphoneEnabled));
+      }
     }
 
     syncAvatarPoseRealtime(nowMs);
+    void refreshSessionControl().catch(() => undefined);
 
     if (presenceAccumulator >= 0.12) {
       presenceAccumulator = 0;
@@ -6658,11 +8725,15 @@ renderer.setAnimationLoop(() => {
 });
 
 async function main(): Promise<void> {
+  await waitForGuestOnboardingIfNeeded();
   const boot = await bootRuntime(apiBaseUrl, roomId, navigator.userAgent, {
     participantId,
     displayName,
-    requestedRole: query.get("role")
+    requestedRole: query.get("role"),
+    inviteToken: query.get("invite")
   });
+  spatialAudioServerEnabled = boot.envFlags.spatialAudio;
+  spatialAudioRoomEnabled = boot.spatialAudioEnabled;
   runtimeFlags = {
     enterVr: boot.envFlags.enterVr,
     audioJoin: boot.envFlags.audioJoin && boot.voiceEnabled,
@@ -6670,12 +8741,22 @@ async function main(): Promise<void> {
     roomStateRealtime: boot.envFlags.roomStateRealtime,
     remoteDiagnostics: boot.envFlags.remoteDiagnostics,
     sceneBundles: boot.envFlags.sceneBundles,
+    hostControlsEnabled: boot.envFlags.hostControlsEnabled,
+    documentsEnabled: boot.envFlags.documentsEnabled,
+    notesEnabled: boot.envFlags.notesEnabled,
+    personalRoomsEnabled: boot.envFlags.personalRoomsEnabled,
+    spatialAudio: spatialAudioServerEnabled && spatialAudioRoomEnabled && spatialAudioQueryEnabled,
     ...resolveAvatarRuntimeFlags(boot)
   };
   if (avatarLegIkQueryOverrideEnabled) {
     runtimeFlags.avatarLegIkEnabled = true;
   }
   debugState.featureFlags = runtimeFlags;
+  debugState.personalRoom.enabled = runtimeFlags.personalRoomsEnabled;
+  debugState.personalRoom.roomType = boot.roomType;
+  debugState.personalRoom.ownerParticipantId = boot.ownerParticipantId ?? null;
+  debugState.personalRoom.isOwner = boot.roomType === "personal" && boot.ownerParticipantId === participantId;
+  openPersonalRoomButton.hidden = !runtimeFlags.personalRoomsEnabled;
   roomStateAccessToken = boot.access.token;
   debugState.access = {
     ...boot.access,
@@ -6699,8 +8780,14 @@ async function main(): Promise<void> {
     setRoomStateStatus
   });
   latestMode = presenceXrMockEnabled ? "vr" : boot.joinMode;
+  refreshClientCompatibility();
   await syncPresence(boot.joinMode, false);
+  await refreshSessionControl(true);
   await loadAvailableSpaces(boot.roomId);
+  syncNotesAccessUi();
+  void loadActiveNote();
+  renderDocumentsUi();
+  void loadRoomDocuments();
   const avatarCatalogUrl = resolveAvatarCatalogUrl(boot);
   const avatarElements = {
     panelEl: avatarSandboxPanel,
@@ -6724,7 +8811,6 @@ async function main(): Promise<void> {
   debugState.avatarSnapshot = null;
   debugState.avatarTransportPreview = null;
   setSceneSeatAnchors([], 0);
-  configureRuntimeMediaSurfaces();
   sceneAnchorsReady = !boot.sceneBundleUrl;
   roomSeatOccupancy = {};
   releaseCurrentSeatLocally();
@@ -6827,6 +8913,16 @@ async function main(): Promise<void> {
     syncSeatStateFromOccupancy();
   }
 
+  if (boot.roomType === "personal" && debugState.personalRoom.isOwner) {
+    restorePersonalPose(boot.personalState);
+    startPersonalStatePersistence({
+      roomId: boot.roomId,
+      sessionToken: boot.access.token,
+      isOwner: debugState.personalRoom.isOwner,
+      enabled: runtimeFlags.personalRoomsEnabled
+    });
+  }
+
   applyPostBootControls({
     displayName,
     runtimeFlags: {
@@ -6848,21 +8944,23 @@ async function main(): Promise<void> {
   syncMediaCapabilityControls();
   startShareButton.disabled = !canUseScreenShareControl();
   syncWhiteboardControls();
+  syncMarkdownBoardControls();
   stopShareButton.disabled = !canStopLocalScreenShare();
 
   if (browserMediaCapabilities.rtcPeerConnection && shouldStartPassiveMedia({
     audioJoin: runtimeFlags.audioJoin,
     screenShare: runtimeFlags.screenShare,
+    joinMuted: joinMutedPreference,
     audioFault: faultConfig.audio ?? undefined
   })) {
     void ensureMediaRoom().then(() => {
-      clearIssue(`Joined as ${displayName}`);
+      clearAudioIssue(`Joined as ${displayName}`);
       debugState.audioState = "connected-passive";
       void reportDiagnostics("media_connected_passive");
     }).catch((error: unknown) => {
       console.error(error);
       const issue = classifyMediaError(error);
-      if (runtimeUiState.issueCode === "room_state_failed") {
+      if (runtimeUiState.issueCode === "room_state_failed" || runtimeUiState.issueCode === "xr_enter_failed" || runtimeUiState.roomStateMode === "api_fallback") {
         runtimeUiState = applyPassiveMediaRecovery({ runtimeUiState, issue });
         debugState.audioState = runtimeUiState.audioState;
         debugState.lastRecoveryAction = runtimeUiState.lastRecoveryAction;
@@ -6879,16 +8977,11 @@ async function main(): Promise<void> {
     });
   }
 
-  const xrSupport = detectXrSupport({
-    navigatorXr: faultConfig.xrUnavailable ? undefined : (navigator as Navigator & { xr?: unknown }).xr,
-    immersiveVrSupported: !faultConfig.xrUnavailable
-  });
+  await resolveRuntimeXrSupport();
 
-  const vrButton = VRButton.createButton(renderer);
-  vrButton.classList.add("vr-button");
-  vrButton.style.position = "static";
-  vrButton.style.marginTop = "10px";
+  vrButton = createControlledVrButton();
   renderer.xr.addEventListener("sessionstart", () => {
+    currentXrSession = renderer.xr.getSession();
     pointerActive = false;
     mobileTouchActive = false;
     mobileTouchVector.x = 0;
@@ -6899,22 +8992,38 @@ async function main(): Promise<void> {
       localPoseController.alignFloorY(sceneTeleportFloorY, "xr_session_start");
     }
     clearInteractionVisuals();
+    latestMode = "vr";
+    setXrSessionDebug(markXrSessionStarted(debugState.xrSession, performance.now()));
+    refreshClientCompatibility();
+    updateVrButtonState();
+    void syncPresence(latestMode, Boolean(livekitRoom && microphoneEnabled));
+    void reportDiagnostics("xr_session_started");
   });
   renderer.xr.addEventListener("sessionend", () => {
+    currentXrSession = null;
     pointerActive = false;
     clearInteractionVisuals();
+    latestMode = presenceXrMockEnabled ? "vr" : resolveJoinMode(navigator.userAgent);
+    setXrSessionDebug(markXrSessionEnded(debugState.xrSession, performance.now()));
+    refreshClientCompatibility();
+    updateVrButtonState();
+    void syncPresence(latestMode, Boolean(livekitRoom && microphoneEnabled));
+    void reportDiagnostics("xr_session_ended");
   });
-  if (!getEnterVrVisibility(xrSupport, runtimeFlags.enterVr)) {
-    vrButton.setAttribute("disabled", "true");
-    vrButton.textContent = "VR unavailable";
-    const issue = getRuntimeIssue("xr_unavailable");
-    applyIssue(issue, {
-      degradedMode: debugState.degradedMode === "none" ? "xr_disabled" : debugState.degradedMode,
-      lastRecoveryAction: "xr_path_disabled",
-      updateStatus: false
-    });
+  updateVrButtonState();
+  if (runtimeFlags.enterVr) {
+    document.querySelector(".controls")?.appendChild(vrButton);
   }
-  document.querySelector(".controls")?.appendChild(vrButton);
+  if (runtimeFlags.enterVr && !getEnterVrVisibility(xrSupport, runtimeFlags.enterVr)) {
+    const issue = getRuntimeIssue("xr_unavailable");
+    if (!runtimeUiState.issueCode) {
+      applyIssue(issue, {
+        degradedMode: debugState.degradedMode === "none" ? "xr_disabled" : debugState.degradedMode,
+        lastRecoveryAction: "xr_path_disabled",
+        updateStatus: false
+      });
+    }
+  }
 
   localBodyMesh = new THREE.Mesh(
     bodyGeometry,
@@ -6939,8 +9048,58 @@ async function main(): Promise<void> {
   runtimeBootReady = true;
 }
 
+function describeRoomAccessError(error: RuntimeAccessError): string {
+  switch (error.reason) {
+    case "invite_expired":
+      return "Access denied: invite link expired";
+    case "invite_revoked":
+      return "Access denied: invite link revoked";
+    case "room_disabled":
+      return "Access denied: room disabled";
+    case "waiting_room_pending":
+      return "Waiting for host approval";
+    case "waiting_room_rejected":
+      return "Access denied: host rejected the request";
+    case "invite_required":
+      return "Access denied: private invite required";
+    case "room_locked":
+      return "Access denied: room is locked";
+    case "participant_removed":
+      return "Access denied: removed by host";
+    case "session_ended":
+      return "Session ended by host";
+    default:
+      return "Access denied";
+  }
+}
+
+function describeSessionControlReason(reason: string): string {
+  switch (reason) {
+    case "room_locked":
+      return "Access denied: room is locked";
+    case "participant_removed":
+      return "Access denied: removed by host";
+    case "session_ended":
+      return "Session ended by host";
+    default:
+      return "Access denied";
+  }
+}
+
 void main().catch((error: unknown) => {
   console.error(error);
+  if (error instanceof RuntimeAccessError) {
+    const message = describeRoomAccessError(error);
+    setStatus(message);
+    guestAccessLineEl.textContent = error.accessRequestId
+      ? `${message}. Request: ${error.accessRequestId}`
+      : message;
+    debugState.issueCode = "room_access_denied";
+    debugState.issueSeverity = error.status === 202 ? "warn" : "error";
+    debugState.degradedMode = "access_denied";
+    debugState.lastRecoveryAction = error.requestId ? `access_request:${error.requestId}` : "access_denied";
+    return;
+  }
   setStatus("Runtime failed to boot");
   void reportDiagnostics("runtime_boot_failed");
 });

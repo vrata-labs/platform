@@ -14,9 +14,13 @@ export interface TenantRecord {
 }
 
 export interface RoomCreateInput {
+  roomId?: string;
   tenantId: string;
   templateId: string;
   name: string;
+  roomType?: "standard" | "personal";
+  ownerParticipantId?: string | null;
+  visibility?: "public" | "unlisted" | "private";
   sceneBundleUrl?: string;
   assetIds?: string[];
   guestAllowed?: boolean;
@@ -40,6 +44,18 @@ export interface RoomCreateInput {
 
 export interface ControlPlaneAuth {
   adminToken?: string;
+  sessionToken?: string;
+}
+
+export interface ControlPlaneSession {
+  actor: {
+    actorType: "admin-token" | "room-session";
+    actorId: string;
+    role: string;
+    tenantId?: string;
+    roomId?: string;
+  };
+  permissions: string[];
 }
 
 export interface RoomRecord {
@@ -47,6 +63,12 @@ export interface RoomRecord {
   tenantId: string;
   templateId: string;
   name: string;
+  roomType?: "standard" | "personal";
+  ownerParticipantId?: string | null;
+  status?: "active" | "disabled";
+  disabledAt?: string | null;
+  disabledBy?: string | null;
+  visibility?: "public" | "unlisted" | "private";
   sceneBundleUrl?: string;
   assetIds?: string[];
   guestAllowed?: boolean;
@@ -73,6 +95,8 @@ export interface RoomManifestRecord {
   schemaVersion: number;
   tenantId: string;
   roomId: string;
+  roomType?: "standard" | "personal";
+  ownerParticipantId?: string | null;
   template: string;
   sceneBundle?: {
     url: string;
@@ -105,7 +129,34 @@ export interface RoomManifestRecord {
   access: {
     joinMode: "link";
     guestAllowed: boolean;
+    visibility?: "public" | "unlisted" | "private";
+    disabled?: boolean;
   };
+}
+
+export interface RoomInviteRecord {
+  inviteId: string;
+  roomId: string;
+  role: "guest" | "member" | "host" | "admin";
+  waitingRoomEnabled: boolean;
+  createdAt: string;
+  expiresAt: string;
+  revokedAt?: string | null;
+  createdBy?: string | null;
+  revokedBy?: string | null;
+  inviteLink?: string;
+}
+
+export interface WaitingRoomRequestRecord {
+  requestId: string;
+  roomId: string;
+  inviteId: string;
+  participantId: string;
+  displayName: string;
+  status: "pending" | "approved" | "rejected";
+  createdAt: string;
+  decidedAt?: string | null;
+  decidedBy?: string | null;
 }
 
 export interface RuntimeDiagnosticRecord {
@@ -141,6 +192,10 @@ export interface SceneBundleRecord {
   publicUrl: string;
   checksum?: string;
   sizeBytes?: number;
+  schemaVersion?: number;
+  entryScene?: string;
+  previewUrl?: string;
+  createdBy?: string;
   contentType: string;
   provider: "minio-default" | "s3-compatible";
   version: string;
@@ -157,6 +212,12 @@ export interface SceneBundleVersionInput {
   contentType?: string;
   provider?: "minio-default" | "s3-compatible";
   version: string;
+}
+
+export interface SceneBundleUploadInput {
+  bundleId?: string;
+  version?: string;
+  file: File;
 }
 
 export async function fetchTemplates(apiBaseUrl: string): Promise<TemplateRecord[]> {
@@ -216,7 +277,21 @@ export async function deleteTenant(apiBaseUrl: string, tenantId: string, auth?: 
 }
 
 function authHeaders(auth?: ControlPlaneAuth): Record<string, string> {
-  return auth?.adminToken ? { "x-vrata-admin-token": auth.adminToken } : {};
+  return {
+    ...(auth?.adminToken ? { "x-vrata-admin-token": auth.adminToken } : {}),
+    ...(auth?.sessionToken ? { "authorization": `Bearer ${auth.sessionToken}` } : {})
+  };
+}
+
+export async function fetchControlPlaneSession(apiBaseUrl: string, auth?: ControlPlaneAuth): Promise<ControlPlaneSession> {
+  const response = await fetch(new URL("/api/control-plane/session", apiBaseUrl), {
+    headers: { ...authHeaders(auth) }
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({ reason: `failed_to_fetch_control_plane_session:${response.status}` }));
+    throw new Error(payload.reason ?? `failed_to_fetch_control_plane_session:${response.status}`);
+  }
+  return (await response.json()) as ControlPlaneSession;
 }
 
 export async function createRoom(apiBaseUrl: string, input: RoomCreateInput, auth?: ControlPlaneAuth): Promise<RoomRecord> {
@@ -260,8 +335,24 @@ export async function deleteRoom(apiBaseUrl: string, roomId: string, auth?: Cont
   }
 }
 
-export async function listRooms(apiBaseUrl: string): Promise<RoomRecord[]> {
-  const response = await fetch(new URL("/api/rooms", apiBaseUrl));
+export async function setRoomDisabled(apiBaseUrl: string, roomId: string, disabled: boolean, auth?: ControlPlaneAuth): Promise<RoomRecord> {
+  const response = await fetch(new URL(`/api/rooms/${roomId}/${disabled ? "disable" : "enable"}`, apiBaseUrl), {
+    method: "POST",
+    headers: { ...authHeaders(auth) }
+  });
+
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({ error: `failed_to_${disabled ? "disable" : "enable"}_room:${response.status}` }));
+    throw new Error(payload.error ?? `failed_to_${disabled ? "disable" : "enable"}_room:${response.status}`);
+  }
+
+  return (await response.json()) as RoomRecord;
+}
+
+export async function listRooms(apiBaseUrl: string, auth?: ControlPlaneAuth): Promise<RoomRecord[]> {
+  const response = await fetch(new URL("/api/rooms", apiBaseUrl), {
+    headers: { ...authHeaders(auth) }
+  });
 
   if (!response.ok) {
     throw new Error(`failed_to_list_rooms:${response.status}`);
@@ -271,8 +362,10 @@ export async function listRooms(apiBaseUrl: string): Promise<RoomRecord[]> {
   return payload.items;
 }
 
-export async function fetchRoomManifest(apiBaseUrl: string, roomId: string): Promise<RoomManifestRecord> {
-  const response = await fetch(new URL(`/api/rooms/${roomId}/manifest`, apiBaseUrl));
+export async function fetchRoomManifest(apiBaseUrl: string, roomId: string, auth?: ControlPlaneAuth): Promise<RoomManifestRecord> {
+  const response = await fetch(new URL(`/api/rooms/${roomId}/manifest`, apiBaseUrl), {
+    headers: { ...authHeaders(auth) }
+  });
 
   if (!response.ok) {
     throw new Error(`failed_to_fetch_room_manifest:${response.status}`);
@@ -281,8 +374,69 @@ export async function fetchRoomManifest(apiBaseUrl: string, roomId: string): Pro
   return (await response.json()) as RoomManifestRecord;
 }
 
-export async function fetchRoomDiagnostics(apiBaseUrl: string, roomId: string): Promise<RuntimeDiagnosticRecord[]> {
-  const response = await fetch(new URL(`/api/rooms/${roomId}/diagnostics`, apiBaseUrl));
+export async function listRoomInvites(apiBaseUrl: string, roomId: string, auth?: ControlPlaneAuth): Promise<RoomInviteRecord[]> {
+  const response = await fetch(new URL(`/api/rooms/${roomId}/invites`, apiBaseUrl), {
+    headers: { ...authHeaders(auth) }
+  });
+  if (!response.ok) {
+    throw new Error(`failed_to_list_room_invites:${response.status}`);
+  }
+  const payload = (await response.json()) as { items: RoomInviteRecord[] };
+  return payload.items;
+}
+
+export async function createRoomInvite(apiBaseUrl: string, roomId: string, input: { expiresInSeconds?: number; waitingRoomEnabled?: boolean }, auth?: ControlPlaneAuth): Promise<RoomInviteRecord> {
+  const response = await fetch(new URL(`/api/rooms/${roomId}/invites`, apiBaseUrl), {
+    method: "POST",
+    headers: { "content-type": "application/json", ...authHeaders(auth) },
+    body: JSON.stringify(input)
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({ error: `failed_to_create_room_invite:${response.status}` }));
+    throw new Error(payload.error ?? `failed_to_create_room_invite:${response.status}`);
+  }
+  return (await response.json()) as RoomInviteRecord;
+}
+
+export async function revokeRoomInvite(apiBaseUrl: string, roomId: string, inviteId: string, auth?: ControlPlaneAuth): Promise<RoomInviteRecord> {
+  const response = await fetch(new URL(`/api/rooms/${roomId}/invites/${inviteId}/revoke`, apiBaseUrl), {
+    method: "POST",
+    headers: { ...authHeaders(auth) }
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({ error: `failed_to_revoke_room_invite:${response.status}` }));
+    throw new Error(payload.error ?? `failed_to_revoke_room_invite:${response.status}`);
+  }
+  return (await response.json()) as RoomInviteRecord;
+}
+
+export async function listWaitingRoomRequests(apiBaseUrl: string, roomId: string, auth?: ControlPlaneAuth): Promise<WaitingRoomRequestRecord[]> {
+  const response = await fetch(new URL(`/api/rooms/${roomId}/waiting-room`, apiBaseUrl), {
+    headers: { ...authHeaders(auth) }
+  });
+  if (!response.ok) {
+    throw new Error(`failed_to_list_waiting_room:${response.status}`);
+  }
+  const payload = (await response.json()) as { items: WaitingRoomRequestRecord[] };
+  return payload.items;
+}
+
+export async function decideWaitingRoomRequest(apiBaseUrl: string, roomId: string, requestId: string, decision: "approve" | "reject", auth?: ControlPlaneAuth): Promise<WaitingRoomRequestRecord> {
+  const response = await fetch(new URL(`/api/rooms/${roomId}/waiting-room/${requestId}/${decision}`, apiBaseUrl), {
+    method: "POST",
+    headers: { ...authHeaders(auth) }
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({ error: `failed_to_decide_waiting_room:${response.status}` }));
+    throw new Error(payload.error ?? `failed_to_decide_waiting_room:${response.status}`);
+  }
+  return (await response.json()) as WaitingRoomRequestRecord;
+}
+
+export async function fetchRoomDiagnostics(apiBaseUrl: string, roomId: string, auth?: ControlPlaneAuth): Promise<RuntimeDiagnosticRecord[]> {
+  const response = await fetch(new URL(`/api/rooms/${roomId}/diagnostics`, apiBaseUrl), {
+    headers: { ...authHeaders(auth) }
+  });
 
   if (!response.ok) {
     throw new Error(`failed_to_fetch_room_diagnostics:${response.status}`);
@@ -334,6 +488,24 @@ export async function createSceneBundleVersion(apiBaseUrl: string, bundleId: str
   if (!response.ok) {
     const payload = await response.json().catch(() => ({ error: `failed_to_create_scene_bundle_version:${response.status}` }));
     throw new Error(payload.error ?? `failed_to_create_scene_bundle_version:${response.status}`);
+  }
+  return (await response.json()) as SceneBundleRecord;
+}
+
+export async function uploadSceneBundleZip(apiBaseUrl: string, input: SceneBundleUploadInput, auth?: ControlPlaneAuth): Promise<SceneBundleRecord> {
+  const form = new FormData();
+  if (input.bundleId) form.set("bundleId", input.bundleId);
+  if (input.version) form.set("version", input.version);
+  form.set("bundle", input.file);
+  const response = await fetch(new URL("/api/scene-bundles/uploads", apiBaseUrl), {
+    method: "POST",
+    headers: { ...authHeaders(auth) },
+    body: form
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({ error: `failed_to_upload_scene_bundle:${response.status}` }));
+    const issueCodes = Array.isArray(payload.issues) ? payload.issues.map((issue: { code?: string }) => issue.code).filter(Boolean).join(",") : "";
+    throw new Error(issueCodes ? `${payload.error}:${issueCodes}` : (payload.error ?? `failed_to_upload_scene_bundle:${response.status}`));
   }
   return (await response.json()) as SceneBundleRecord;
 }
@@ -427,11 +599,15 @@ export interface ControlPlanePageState {
   sceneBundles: SceneBundleRecord[];
   sceneBundleVersions: SceneBundleRecord[];
   assets: AssetRecord[];
+  controlPlaneSession?: ControlPlaneSession;
+  adminAuthorized: boolean;
   selectedAsset?: AssetRecord;
   selectedRoom?: RoomRecord;
   selectedSceneBundle?: SceneBundleRecord;
   selectedRoomManifest?: RoomManifestRecord;
   selectedRoomDiagnostics: RuntimeDiagnosticRecord[];
+  selectedRoomInvites: RoomInviteRecord[];
+  selectedWaitingRoomRequests: WaitingRoomRequestRecord[];
   roomLink?: string;
   publishStatus: "idle" | "publishing" | "published" | "failed";
   statusMessage?: string;
@@ -446,7 +622,10 @@ export function createControlPlanePageState(): ControlPlanePageState {
     sceneBundles: [],
     sceneBundleVersions: [],
     assets: [],
+    adminAuthorized: false,
     selectedRoomDiagnostics: [],
+    selectedRoomInvites: [],
+    selectedWaitingRoomRequests: [],
     publishStatus: "idle",
     statusMessage: "idle"
   };

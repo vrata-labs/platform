@@ -7,17 +7,19 @@ import { pathToFileURL } from "node:url";
 export const defaultRooms = [
   {
     name: "Hall",
-    roomId: process.env.STAGING_HALL_ROOM_ID ?? "",
+    roomId: process.env.STAGING_HALL_ROOM_ID ?? "42db8225-f671-4e46-9c28-9381d66a948c",
     sceneId: "sense-hall2-v1"
   },
   {
     name: "BlueOffice",
-    roomId: process.env.STAGING_BLUEOFFICE_ROOM_ID ?? "",
+    roomId: process.env.STAGING_BLUEOFFICE_ROOM_ID ?? "0b537d34-7b92-4b51-854a-8c64cfb4c114",
     sceneId: "sense-blueoffice-glb-v4"
   }
 ];
 
-const defaultBranch = "main";
+const defaultBaseUrl = "https://158.160.10.234.sslip.io";
+const defaultAdminToken = "vrata-stage-admin";
+const defaultBranch = "deploy/scene-bundles-stage-20260328";
 
 function trimTrailingSlash(value) {
   return value.replace(/\/+$/, "");
@@ -69,8 +71,8 @@ export function desiredSceneBundleUrl(sceneId, input) {
   }
   const branch = input.branch ?? defaultBranch;
   return input.version
-    ? `https://raw.githubusercontent.com/vrata-labs/platform/${branch}/apps/runtime-web/public/assets/scenes/${sceneId}/${input.version}/scene.json`
-    : `https://raw.githubusercontent.com/vrata-labs/platform/${branch}/apps/runtime-web/public/assets/scenes/${sceneId}/scene.json`;
+    ? `https://raw.githubusercontent.com/psilon2000/vrata/${branch}/apps/runtime-web/public/assets/scenes/${sceneId}/${input.version}/scene.json`
+    : `https://raw.githubusercontent.com/psilon2000/vrata/${branch}/apps/runtime-web/public/assets/scenes/${sceneId}/scene.json`;
 }
 
 function isFetchableUrl(url) {
@@ -253,15 +255,9 @@ function parseRestoreReportArg(argv) {
 }
 
 async function main() {
-  const baseUrl = process.env.BASE_URL;
-  const adminToken = process.env.STAGING_ADMIN_TOKEN ?? process.env.VRATA_ADMIN_TOKEN;
+  const baseUrl = process.env.BASE_URL ?? defaultBaseUrl;
+  const adminToken = process.env.STAGING_ADMIN_TOKEN ?? process.env.VRATA_ADMIN_TOKEN ?? defaultAdminToken;
   const restoreReportPath = parseRestoreReportArg(process.argv.slice(2));
-  if (!baseUrl) {
-    throw new Error("missing_base_url");
-  }
-  if (!adminToken) {
-    throw new Error("missing_admin_token");
-  }
 
   if (restoreReportPath) {
     const rooms = await restoreRoomsFromReport({ baseUrl, adminToken, reportPath: restoreReportPath });
@@ -274,17 +270,13 @@ async function main() {
   const version = resolveSceneBundleVersion(process.env, resolveGitHeadVersion());
   const preflightAttempts = Number.parseInt(process.env.STAGING_SCENE_BUNDLE_PREFLIGHT_ATTEMPTS ?? "12", 10);
   const preflightDelayMs = Number.parseInt(process.env.STAGING_SCENE_BUNDLE_PREFLIGHT_DELAY_MS ?? "5000", 10);
-  const roomsToPatch = defaultRooms.filter((room) => room.roomId);
-  if (roomsToPatch.length === 0) {
-    throw new Error("missing_staging_room_ids");
-  }
   const rooms = await patchRooms({
     baseUrl,
     adminToken,
     branch,
     assetBaseUrl,
     version,
-    rooms: roomsToPatch,
+    rooms: defaultRooms,
     preflightAttempts,
     preflightDelayMs
   });

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { DISABLED_EXTENSION_CARD_TYPE, EXTENSION_TEST_CARD_TYPE, MISSING_CAPABILITY_EXTENSION_CARD_TYPE } from "@vrata/shared-types";
+import { DISABLED_EXTENSION_CARD_TYPE, EXTENSION_TEST_CARD_TYPE, MARKDOWN_BOARD_OBJECT_TYPE, MISSING_CAPABILITY_EXTENSION_CARD_TYPE } from "@vrata/shared-types";
 
 import {
   claimSeat,
@@ -70,6 +70,29 @@ test("mergeParticipantState preserves existing head and body transforms on parti
   assert.equal(merged.rootTransform.x, 3);
   assert.equal(merged.activeMedia.audio, true);
   assert.equal(merged.updatedAt, "2026-03-28T10:00:00.000Z");
+});
+
+test("mergeParticipantState preserves joined muted speaking media state", () => {
+  const current = createParticipantState("p1");
+  const joinedMuted = mergeParticipantState(current, {
+    audioJoined: true,
+    muted: true,
+    speaking: false,
+    activeMedia: { audio: false, screenShare: false }
+  });
+  const speaking = mergeParticipantState(joinedMuted, {
+    muted: false,
+    speaking: true,
+    activeMedia: { audio: true, screenShare: false }
+  });
+
+  assert.equal(joinedMuted.audioJoined, true);
+  assert.equal(joinedMuted.muted, true);
+  assert.equal(joinedMuted.activeMedia.audio, false);
+  assert.equal(speaking.audioJoined, true);
+  assert.equal(speaking.muted, false);
+  assert.equal(speaking.speaking, true);
+  assert.equal(speaking.activeMedia.audio, true);
 });
 
 test("mergeParticipantState defaults missing orientation to zero and preserves new orientation", () => {
@@ -153,15 +176,18 @@ test("createRoomState includes default media surface", () => {
   assert.equal(room.mediaObjects.surfaces["debug-main"]?.allowedObjectTypes.includes("surface-test-card"), true);
   assert.equal(room.mediaObjects.surfaces["debug-main"]?.allowedObjectTypes.includes("screen-share"), true);
   assert.equal(room.mediaObjects.surfaces["debug-main"]?.allowedObjectTypes.includes("whiteboard"), true);
+  assert.equal(room.mediaObjects.surfaces["debug-main"]?.allowedObjectTypes.includes(MARKDOWN_BOARD_OBJECT_TYPE), true);
   assert.equal(room.mediaObjects.surfaces["debug-main"]?.allowedObjectTypes.includes("remote-browser"), true);
   assert.equal(room.mediaObjects.surfaces["debug-main"]?.mediaAudioEnabled, false);
   assert.equal(room.mediaObjects.surfaces["whiteboard-wall"]?.label, "Whiteboard wall");
   assert.equal(room.mediaObjects.surfaces["whiteboard-wall"]?.allowedObjectTypes.includes("screen-share"), true);
   assert.equal(room.mediaObjects.surfaces["whiteboard-wall"]?.allowedObjectTypes.includes("whiteboard"), true);
+  assert.equal(room.mediaObjects.surfaces["whiteboard-wall"]?.allowedObjectTypes.includes(MARKDOWN_BOARD_OBJECT_TYPE), true);
   assert.equal(room.mediaObjects.surfaces["whiteboard-wall"]?.allowedObjectTypes.includes("remote-browser"), true);
   assert.equal(room.mediaObjects.surfaces["laptop-screen"]?.label, "Laptop screen");
   assert.equal(room.mediaObjects.surfaces["laptop-screen"]?.allowedObjectTypes.includes("screen-share"), true);
   assert.equal(room.mediaObjects.surfaces["laptop-screen"]?.allowedObjectTypes.includes("whiteboard"), true);
+  assert.equal(room.mediaObjects.surfaces["laptop-screen"]?.allowedObjectTypes.includes(MARKDOWN_BOARD_OBJECT_TYPE), true);
   assert.equal(room.mediaObjects.surfaces["laptop-screen"]?.allowedObjectTypes.includes("remote-browser"), true);
 });
 
@@ -535,6 +561,94 @@ test("whiteboard object appends strokes and enforces draw and clear permissions"
   assert.equal(cleared.result.accepted, true);
   assert.equal(cleared.result.permission, "whiteboard.clear");
   assert.deepEqual((cleared.room.mediaObjects.objects["board-1"]?.state as { strokes?: unknown[] } | undefined)?.strokes, []);
+});
+
+test("markdown board object persists sticky notes and enforces edit permissions", () => {
+  const hostRoom = joinRoom(createRoomState("demo"), "host", { role: "host" });
+  const created = createMediaObject(hostRoom, "host", {
+    commandId: "cmd-create-markdown-board",
+    surfaceId: "debug-main",
+    objectType: MARKDOWN_BOARD_OBJECT_TYPE,
+    objectId: "sticky-board-1",
+    nowMs: 1
+  });
+  assert.equal(created.result.accepted, true);
+
+  const memberRoom = joinRoom(created.room, "member", { role: "member" });
+  const added = patchMediaObjectState(memberRoom, "member", {
+    commandId: "cmd-create-note",
+    surfaceId: "debug-main",
+    objectId: "sticky-board-1",
+    expectedRevision: 0,
+    patch: {
+      type: "create-note",
+      inputEventId: "member:note:create:1",
+      noteId: "note-1",
+      text: "# Decision\n<script>alert(1)</script>",
+      x: 0.2,
+      y: 0.3,
+      width: 0.3,
+      height: 0.22,
+      color: "#bfdbfe"
+    },
+    nowMs: 2
+  });
+  assert.equal(added.result.accepted, true);
+  assert.equal(added.result.permission, "markdown-board.edit");
+  assert.equal(added.result.revision, 1);
+  const addedState = added.room.mediaObjects.objects["sticky-board-1"]?.state as { notes?: Array<{ noteId?: string; authorParticipantId?: string; text?: string; x?: number; y?: number }>; lastInputEventId?: string } | undefined;
+  assert.equal(addedState?.notes?.length, 1);
+  assert.equal(addedState?.notes?.[0]?.authorParticipantId, "member");
+  assert.equal(addedState?.notes?.[0]?.text, "# Decision\n<script>alert(1)</script>");
+  assert.equal(addedState?.lastInputEventId, "member:note:create:1");
+
+  const moved = patchMediaObjectState(added.room, "member", {
+    commandId: "cmd-move-note",
+    surfaceId: "debug-main",
+    objectId: "sticky-board-1",
+    expectedRevision: 1,
+    patch: { type: "move-note", inputEventId: "member:note:move:1", noteId: "note-1", x: 0.6, y: 0.4 },
+    nowMs: 3
+  });
+  assert.equal(moved.result.accepted, true);
+  const movedState = moved.room.mediaObjects.objects["sticky-board-1"]?.state as { notes?: Array<{ x?: number; y?: number }> } | undefined;
+  assert.equal(movedState?.notes?.[0]?.x, 0.6);
+  assert.equal(movedState?.notes?.[0]?.y, 0.4);
+
+  const stale = patchMediaObjectState(moved.room, "member", {
+    commandId: "cmd-stale-note",
+    surfaceId: "debug-main",
+    objectId: "sticky-board-1",
+    expectedRevision: 1,
+    patch: { type: "update-note", inputEventId: "member:note:update:1", noteId: "note-1", text: "stale" },
+    nowMs: 4
+  });
+  assert.equal(stale.result.accepted, false);
+  assert.equal(stale.result.blockedReason, "revision-mismatch");
+
+  const guestRoom = joinRoom(moved.room, "guest");
+  const guestEdit = patchMediaObjectState(guestRoom, "guest", {
+    commandId: "cmd-guest-note",
+    surfaceId: "debug-main",
+    objectId: "sticky-board-1",
+    expectedRevision: 2,
+    patch: { type: "update-note", inputEventId: "guest:note:update:1", noteId: "note-1", text: "guest edit" },
+    nowMs: 5
+  });
+  assert.equal(guestEdit.result.accepted, false);
+  assert.equal(guestEdit.result.permission, "markdown-board.edit");
+  assert.equal(guestEdit.result.blockedReason, "missing-permission");
+
+  const deleted = patchMediaObjectState(moved.room, "member", {
+    commandId: "cmd-delete-note",
+    surfaceId: "debug-main",
+    objectId: "sticky-board-1",
+    expectedRevision: 2,
+    patch: { type: "delete-note", inputEventId: "member:note:delete:1", noteId: "note-1" },
+    nowMs: 6
+  });
+  assert.equal(deleted.result.accepted, true);
+  assert.equal((deleted.room.mediaObjects.objects["sticky-board-1"]?.state as { notes?: unknown[] } | undefined)?.notes?.length, 0);
 });
 
 test("screen-share object state updates through host-only revisioned reducer", () => {

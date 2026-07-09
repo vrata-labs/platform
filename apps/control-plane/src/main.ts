@@ -4,15 +4,21 @@ import {
   createTenant,
   createControlPlanePageState,
   createRoom,
+  createRoomUrl,
+  createRoomInvite,
+  decideWaitingRoomRequest,
   deleteAsset,
   deleteTenant,
   deleteRoom,
   fetchRoomDiagnostics,
+  fetchControlPlaneSession,
   fetchRoomManifest,
   fetchTemplates,
   listAssets,
+  listRoomInvites,
   listSceneBundleVersions,
   listSceneBundles,
+  listWaitingRoomRequests,
   setCurrentSceneBundleVersion,
   listRooms,
   listTenants,
@@ -20,7 +26,10 @@ import {
   updateAsset,
   updateTenant,
   updateRoom,
-  uploadAsset
+  uploadAsset,
+  uploadSceneBundleZip,
+  revokeRoomInvite,
+  setRoomDisabled
 } from "./index.js";
 
 function mustElement<T extends Element>(selector: string): T {
@@ -38,9 +47,14 @@ const storedAdminToken = localStorage.getItem("vrata.controlPlaneAdminToken") ??
 const form = mustElement<HTMLFormElement>("#room-form");
 const assetForm = mustElement<HTMLFormElement>("#asset-form");
 const tenantForm = mustElement<HTMLFormElement>("#tenant-form");
+const createRoomButton = mustElement<HTMLButtonElement>("#create-room");
 const adminTokenInput = mustElement<HTMLInputElement>("#admin-token-input");
+const applyAdminTokenButton = mustElement<HTMLButtonElement>("#apply-admin-token");
+const dashboardAuthStatus = mustElement<HTMLDivElement>("#dashboard-auth-status");
+const dashboardContent = mustElement<HTMLElement>("#dashboard-content");
 const tenantSelect = mustElement<HTMLSelectElement>("#tenant-select");
 const tenantNameInput = mustElement<HTMLInputElement>("#tenant-name-input");
+const createTenantButton = mustElement<HTMLButtonElement>("#create-tenant");
 const updateTenantButton = mustElement<HTMLButtonElement>("#update-tenant");
 const deleteTenantButton = mustElement<HTMLButtonElement>("#delete-tenant");
 const roomNameInput = mustElement<HTMLInputElement>("#room-name-input");
@@ -48,31 +62,48 @@ const assetKindInput = mustElement<HTMLInputElement>("#asset-kind-input");
 const assetUrlInput = mustElement<HTMLInputElement>("#asset-url-input");
 const assetProcessedUrlInput = mustElement<HTMLInputElement>("#asset-processed-url-input");
 const assetStatusSelect = mustElement<HTMLSelectElement>("#asset-status-select");
+const createAssetButton = mustElement<HTMLButtonElement>("#create-asset");
 const updateAssetButton = mustElement<HTMLButtonElement>("#update-asset");
 const deleteAssetButton = mustElement<HTMLButtonElement>("#delete-asset");
 const templateSelect = mustElement<HTMLSelectElement>("#template-select");
+const roomSlugInput = mustElement<HTMLInputElement>("#room-slug-input");
+const roomValidationMessage = mustElement<HTMLDivElement>("#room-validation-message");
 const assetSelect = mustElement<HTMLSelectElement>("#asset-select");
 const sceneBundleSelect = mustElement<HTMLSelectElement>("#scene-bundle-select");
 const sceneBundleVersionSelect = mustElement<HTMLSelectElement>("#scene-bundle-version-select");
 const sceneBundleForm = mustElement<HTMLFormElement>("#scene-bundle-form");
+const createSceneBundleVersionButton = mustElement<HTMLButtonElement>("#create-scene-bundle-version");
 const sceneBundleIdInput = mustElement<HTMLInputElement>("#scene-bundle-id-input");
 const sceneBundleVersionInput = mustElement<HTMLInputElement>("#scene-bundle-version-input");
 const sceneBundleStorageKeyInput = mustElement<HTMLInputElement>("#scene-bundle-storage-key-input");
+const sceneBundleFileInput = mustElement<HTMLInputElement>("#scene-bundle-file-input");
 const primaryColorInput = mustElement<HTMLInputElement>("#primary-color-input");
 const accentColorInput = mustElement<HTMLInputElement>("#accent-color-input");
 const featureVoiceInput = mustElement<HTMLInputElement>("#feature-voice-input");
 const featureSpatialInput = mustElement<HTMLInputElement>("#feature-spatial-input");
 const featureShareInput = mustElement<HTMLInputElement>("#feature-share-input");
+const roomVisibilitySelect = mustElement<HTMLSelectElement>("#room-visibility-select");
 const guestAccessInput = mustElement<HTMLInputElement>("#guest-access-input");
+const inviteTtlInput = mustElement<HTMLInputElement>("#invite-ttl-input");
+const inviteWaitingRoomInput = mustElement<HTMLInputElement>("#invite-waiting-room-input");
+const createInviteButton = mustElement<HTMLButtonElement>("#create-invite");
+const inviteSelect = mustElement<HTMLSelectElement>("#invite-select");
+const revokeInviteButton = mustElement<HTMLButtonElement>("#revoke-invite");
+const inviteLink = mustElement<HTMLAnchorElement>("#invite-link");
+const waitingRoomList = mustElement<HTMLUListElement>("#waiting-room-list");
 const avatarEnabledInput = mustElement<HTMLInputElement>("#avatar-enabled-input");
 const avatarCatalogUrlInput = mustElement<HTMLInputElement>("#avatar-catalog-url-input");
 const avatarQualitySelect = mustElement<HTMLSelectElement>("#avatar-quality-select");
 const avatarFallbackInput = mustElement<HTMLInputElement>("#avatar-fallback-input");
 const avatarSeatsInput = mustElement<HTMLInputElement>("#avatar-seats-input");
 const updateRoomButton = mustElement<HTMLButtonElement>("#update-room");
+const disableRoomButton = mustElement<HTMLButtonElement>("#disable-room");
+const enableRoomButton = mustElement<HTMLButtonElement>("#enable-room");
 const deleteRoomButton = mustElement<HTMLButtonElement>("#delete-room");
 const publishStatus = mustElement<HTMLDivElement>("#publish-status");
 const roomLink = mustElement<HTMLAnchorElement>("#room-link");
+const roomPreview = mustElement<HTMLPreElement>("#room-preview");
+const copyRoomLinkButton = mustElement<HTMLButtonElement>("#copy-room-link");
 const refreshRoomDetailButton = mustElement<HTMLButtonElement>("#refresh-room-detail");
 const bindSceneBundleButton = mustElement<HTMLButtonElement>("#bind-scene-bundle");
 const setCurrentSceneBundleButton = mustElement<HTMLButtonElement>("#set-current-scene-bundle");
@@ -83,11 +114,106 @@ const roomsList = mustElement<HTMLUListElement>("#rooms-list");
 const roomDetail = mustElement<HTMLPreElement>("#room-detail");
 const tenantsList = mustElement<HTMLUListElement>("#tenants-list");
 const assetsList = mustElement<HTMLUListElement>("#assets-list");
+const sceneBundlesList = mustElement<HTMLUListElement>("#scene-bundles-list");
 let selectedRoomPoll: number | undefined;
+let roomSlugTouched = false;
+let authVerificationSeq = 0;
 
 adminTokenInput.value = storedAdminToken;
 
+function slugifyRoomName(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 64) || "new-room";
+}
+
+function selectedSceneBundlePublicUrl(): string | undefined {
+  if (!sceneBundleSelect.value) return undefined;
+  const selectedVersion = sceneBundleVersionSelect.value
+    ? state.sceneBundleVersions.find((bundle) => bundle.version === sceneBundleVersionSelect.value)
+    : undefined;
+  const currentVersion = state.sceneBundleVersions.find((bundle) => bundle.isCurrent);
+  return selectedVersion?.publicUrl ?? currentVersion?.publicUrl ?? state.selectedSceneBundle?.publicUrl;
+}
+
+function roomSceneBundleLabel(room: typeof state.rooms[number]): string {
+  if (!room.sceneBundleUrl) return "bundle:fallback";
+  const bundle = state.sceneBundles.find((item) => item.publicUrl === room.sceneBundleUrl);
+  if (bundle) return `bundle:${bundle.bundleId}@${bundle.version}`;
+  return `bundle:${room.sceneBundleUrl.split("/").slice(-3).join("/")}`;
+}
+
+function roomStatusLabel(room: typeof state.rooms[number]): string {
+  return room.status === "disabled" || room.disabledAt ? "disabled" : "active";
+}
+
+function renderAuthorizationState(): void {
+  dashboardContent.dataset.authorized = state.adminAuthorized ? "true" : "false";
+  dashboardAuthStatus.textContent = state.adminAuthorized
+    ? `Admin dashboard authorized as ${state.controlPlaneSession?.actor.actorId ?? "admin"}.`
+    : adminTokenInput.value.trim()
+      ? "Admin token not verified. Actions will be denied until a valid token is applied."
+      : "Admin token required for dashboard actions.";
+  const actionButtons = [
+    createRoomButton,
+    updateRoomButton,
+    disableRoomButton,
+    enableRoomButton,
+    deleteRoomButton,
+    bindSceneBundleButton,
+    setCurrentSceneBundleButton,
+    markSceneBundleObsoleteButton,
+    createInviteButton,
+    revokeInviteButton,
+    createSceneBundleVersionButton,
+    createAssetButton,
+    updateAssetButton,
+    deleteAssetButton,
+    createTenantButton,
+    updateTenantButton,
+    deleteTenantButton
+  ];
+  actionButtons.forEach((button) => {
+    button.hidden = !state.adminAuthorized;
+  });
+}
+
+function roomSlugValidationError(): string | null {
+  const slug = roomSlugInput.value.trim();
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug) || slug.length < 3 || slug.length > 64) {
+    return "invalid_room_slug";
+  }
+  if (state.rooms.some((room) => room.roomId === slug)) {
+    return "room_slug_conflict";
+  }
+  return null;
+}
+
+function renderRoomPreview(): void {
+  const validationError = roomSlugValidationError();
+  roomValidationMessage.textContent = validationError === "room_slug_conflict"
+    ? "Room slug already exists."
+    : validationError === "invalid_room_slug"
+      ? "Use 3-64 lowercase letters, numbers, and single hyphens."
+      : "";
+  const roomUrl = roomSlugInput.value.trim() ? createRoomUrl(apiBaseUrl, roomSlugInput.value.trim()) : "";
+  roomPreview.textContent = JSON.stringify({
+    slug: roomSlugInput.value.trim(),
+    name: roomNameInput.value.trim(),
+    tenantId: tenantSelect.value,
+    templateId: templateSelect.value,
+    visibility: roomVisibilitySelect.value,
+    guestAllowed: guestAccessInput.checked,
+    sceneBundleUrl: selectedSceneBundlePublicUrl() ?? "fallback scene",
+    roomUrl
+  }, null, 2);
+}
+
 function render(): void {
+  renderAuthorizationState();
   publishStatus.textContent = state.statusMessage ?? state.publishStatus;
   roomLink.href = state.roomLink ?? "#";
   roomLink.textContent = state.roomLink ?? "";
@@ -102,7 +228,7 @@ function render(): void {
       const item = document.createElement("li");
       const inspect = document.createElement("button");
       inspect.type = "button";
-      inspect.textContent = `${room.name} (${room.templateId})${room.assetIds?.length ? ` assets:${room.assetIds.length}` : ""}${room.theme ? ` theme:${room.theme.primaryColor}` : ""}`;
+      inspect.textContent = `${room.name} (${room.templateId}) type:${room.roomType ?? "standard"} [${room.visibility ?? "public"}] status:${roomStatusLabel(room)} ${roomSceneBundleLabel(room)}${room.assetIds?.length ? ` assets:${room.assetIds.length}` : ""}${room.theme ? ` theme:${room.theme.primaryColor}` : ""}`;
       inspect.addEventListener("click", () => {
         void selectRoom(room);
       });
@@ -122,9 +248,52 @@ function render(): void {
         room: state.selectedRoom,
         selectedSceneBundle: state.selectedSceneBundle,
         manifest: state.selectedRoomManifest,
+        invites: state.selectedRoomInvites,
+        waitingRoom: state.selectedWaitingRoomRequests,
         diagnostics: state.selectedRoomDiagnostics.slice(-5)
       }, null, 2)
     : "Select a room to inspect details";
+  inviteSelect.replaceChildren(
+    ...state.selectedRoomInvites.map((invite) => {
+      const option = document.createElement("option");
+      option.value = invite.inviteId;
+      option.textContent = `${invite.inviteId.slice(0, 8)} expires:${invite.expiresAt}${invite.revokedAt ? " [revoked]" : ""}${invite.waitingRoomEnabled ? " [waiting]" : ""}`;
+      return option;
+    })
+  );
+  const selectedInvite = state.selectedRoomInvites.find((invite) => invite.inviteId === inviteSelect.value) ?? state.selectedRoomInvites[0];
+  inviteLink.href = selectedInvite?.inviteLink ?? "#";
+  inviteLink.textContent = selectedInvite?.inviteLink ?? "";
+  const selectedRoomDisabled = state.selectedRoom ? roomStatusLabel(state.selectedRoom) === "disabled" : false;
+  disableRoomButton.hidden = !state.adminAuthorized || selectedRoomDisabled;
+  enableRoomButton.hidden = !state.adminAuthorized || !selectedRoomDisabled;
+  waitingRoomList.replaceChildren(
+    ...state.selectedWaitingRoomRequests.map((request) => {
+      const item = document.createElement("li");
+      const label = document.createElement("span");
+      label.textContent = `${request.displayName} (${request.participantId}) ${request.status}`;
+      item.appendChild(label);
+      if (request.status === "pending" && state.selectedRoom) {
+        const approve = document.createElement("button");
+        approve.type = "button";
+        approve.textContent = "approve";
+        approve.addEventListener("click", () => {
+          void decideSelectedWaitingRequest(request.requestId, "approve");
+        });
+        const reject = document.createElement("button");
+        reject.type = "button";
+        reject.textContent = "reject";
+        reject.addEventListener("click", () => {
+          void decideSelectedWaitingRequest(request.requestId, "reject");
+        });
+        item.appendChild(document.createTextNode(" "));
+        item.appendChild(approve);
+        item.appendChild(document.createTextNode(" "));
+        item.appendChild(reject);
+      }
+      return item;
+    })
+  );
   tenantsList.replaceChildren(
     ...state.tenants.map((tenant) => {
       const item = document.createElement("li");
@@ -159,6 +328,33 @@ function render(): void {
       return item;
     })
   );
+  sceneBundlesList.replaceChildren(
+    ...state.sceneBundles.map((bundle) => {
+      const item = document.createElement("li");
+      const selectButton = document.createElement("button");
+      selectButton.type = "button";
+      selectButton.textContent = `${bundle.bundleId} ${bundle.version}${bundle.isCurrent ? " [current]" : ""} ${bundle.entryScene ?? bundle.storageKey} ${bundle.sizeBytes ? `${Math.round(bundle.sizeBytes / 1024)} KiB` : ""}`;
+      selectButton.addEventListener("click", () => {
+        state.selectedSceneBundle = bundle;
+        sceneBundleSelect.value = bundle.bundleId;
+        sceneBundleIdInput.value = bundle.bundleId;
+        sceneBundleVersionInput.value = bundle.version;
+        sceneBundleStorageKeyInput.value = bundle.storageKey;
+        render();
+      });
+      item.appendChild(selectButton);
+      if (bundle.previewUrl) {
+        const preview = document.createElement("img");
+        preview.src = bundle.previewUrl;
+        preview.alt = `${bundle.bundleId} preview`;
+        preview.className = "scene-bundle-preview";
+        item.appendChild(document.createTextNode(" "));
+        item.appendChild(preview);
+      }
+      return item;
+    })
+  );
+  renderRoomPreview();
 }
 
 async function selectRoom(room: typeof state.selectedRoom): Promise<void> {
@@ -166,17 +362,22 @@ async function selectRoom(room: typeof state.selectedRoom): Promise<void> {
     return;
   }
   state.selectedRoom = room;
-  state.selectedRoomManifest = await fetchRoomManifest(apiBaseUrl, room.roomId);
-  state.selectedRoomDiagnostics = await fetchRoomDiagnostics(apiBaseUrl, room.roomId);
+  state.selectedRoomManifest = await fetchRoomManifest(apiBaseUrl, room.roomId, currentAuth());
+  state.selectedRoomDiagnostics = await fetchRoomDiagnostics(apiBaseUrl, room.roomId, currentAuth());
+  state.selectedRoomInvites = await listRoomInvites(apiBaseUrl, room.roomId, currentAuth()).catch(() => []);
+  state.selectedWaitingRoomRequests = await listWaitingRoomRequests(apiBaseUrl, room.roomId, currentAuth()).catch(() => []);
   state.selectedSceneBundle = state.sceneBundles.find((bundle) => bundle.publicUrl === state.selectedRoomManifest?.sceneBundle?.url);
   state.sceneBundleVersions = state.selectedSceneBundle ? await listSceneBundleVersions(apiBaseUrl, state.selectedSceneBundle.bundleId).catch(() => []) : [];
   roomNameInput.value = room.name;
+  roomSlugInput.value = room.roomId;
+  roomSlugTouched = true;
   templateSelect.value = room.templateId;
   primaryColorInput.value = room.theme?.primaryColor ?? "#5fc8ff";
   accentColorInput.value = room.theme?.accentColor ?? "#163354";
   featureVoiceInput.checked = room.features?.voice ?? true;
   featureSpatialInput.checked = room.features?.spatialAudio ?? true;
   featureShareInput.checked = room.features?.screenShare ?? true;
+  roomVisibilitySelect.value = room.visibility ?? state.selectedRoomManifest?.access.visibility ?? "public";
   guestAccessInput.checked = room.guestAllowed ?? state.selectedRoomManifest?.access.guestAllowed ?? true;
   avatarEnabledInput.checked = room.avatarConfig?.avatarsEnabled ?? state.selectedRoomManifest?.avatars?.avatarsEnabled ?? false;
   avatarCatalogUrlInput.value = room.avatarConfig?.avatarCatalogUrl ?? state.selectedRoomManifest?.avatars?.avatarCatalogUrl ?? "/assets/avatars/catalog.v1.json";
@@ -218,10 +419,72 @@ function startSelectedRoomPolling(): void {
   }, 5000);
 }
 
+async function refreshSelectedRoomAccessState(): Promise<void> {
+  if (!state.selectedRoom) {
+    return;
+  }
+  state.selectedRoomInvites = await listRoomInvites(apiBaseUrl, state.selectedRoom.roomId, currentAuth()).catch(() => []);
+  state.selectedWaitingRoomRequests = await listWaitingRoomRequests(apiBaseUrl, state.selectedRoom.roomId, currentAuth()).catch(() => []);
+  render();
+}
+
+async function decideSelectedWaitingRequest(requestId: string, decision: "approve" | "reject"): Promise<void> {
+  if (!state.selectedRoom) {
+    return;
+  }
+  state.publishStatus = "publishing";
+  state.statusMessage = `waiting-room-${decision}`;
+  render();
+  try {
+    await decideWaitingRoomRequest(apiBaseUrl, state.selectedRoom.roomId, requestId, decision, currentAuth());
+    state.publishStatus = "published";
+    state.statusMessage = `waiting-room-${decision}ed`;
+    await refreshSelectedRoomAccessState();
+  } catch (error) {
+    state.publishStatus = "failed";
+    state.statusMessage = error instanceof Error ? `failed:${error.message}` : "failed";
+    render();
+  }
+}
+
 function currentAuth(): { adminToken?: string } {
   const token = adminTokenInput.value.trim();
   localStorage.setItem("vrata.controlPlaneAdminToken", token);
   return token ? { adminToken: token } : {};
+}
+
+async function verifyControlPlaneSession(options: { optimistic?: boolean } = {}): Promise<void> {
+  const verificationSeq = ++authVerificationSeq;
+  const token = adminTokenInput.value.trim();
+  localStorage.setItem("vrata.controlPlaneAdminToken", token);
+  if (!token) {
+    state.adminAuthorized = false;
+    state.controlPlaneSession = undefined;
+    render();
+    return;
+  }
+  if (options.optimistic) {
+    state.adminAuthorized = false;
+    state.controlPlaneSession = undefined;
+    state.statusMessage = "admin-token-pending";
+    render();
+  }
+  try {
+    const session = await fetchControlPlaneSession(apiBaseUrl, currentAuth());
+    if (verificationSeq !== authVerificationSeq) return;
+    state.controlPlaneSession = session;
+    state.adminAuthorized = true;
+    const rooms = await listRooms(apiBaseUrl, currentAuth());
+    if (verificationSeq !== authVerificationSeq) return;
+    state.rooms = rooms;
+    state.statusMessage = "admin-dashboard-authorized";
+  } catch (error) {
+    if (verificationSeq !== authVerificationSeq) return;
+    state.adminAuthorized = false;
+    state.controlPlaneSession = undefined;
+    state.statusMessage = error instanceof Error ? `failed:${error.message}` : "failed:admin_dashboard_auth";
+  }
+  render();
 }
 
 function collectAvatarConfig(): {
@@ -265,10 +528,30 @@ function renderTenantOptions(): void {
   );
 }
 
+function renderSceneBundleOptions(): void {
+  sceneBundleSelect.replaceChildren(
+    (() => {
+      const option = document.createElement("option");
+      option.value = "";
+      option.textContent = "No registered bundle";
+      return option;
+    })(),
+    ...state.sceneBundles.map((bundle) => {
+      const option = document.createElement("option");
+      option.value = bundle.bundleId;
+      option.textContent = `${bundle.bundleId} (${bundle.version})${bundle.isCurrent ? " [current]" : ""}`;
+      return option;
+    })
+  );
+  if (state.selectedSceneBundle) {
+    sceneBundleSelect.value = state.selectedSceneBundle.bundleId;
+  }
+}
+
 async function bootstrap(): Promise<void> {
   state.templates = await fetchTemplates(apiBaseUrl);
   state.tenants = await listTenants(apiBaseUrl);
-  state.rooms = await listRooms(apiBaseUrl);
+  state.rooms = await listRooms(apiBaseUrl, currentAuth());
   state.sceneBundles = await listSceneBundles(apiBaseUrl).catch(() => []);
   state.assets = await listAssets(apiBaseUrl);
   renderTenantOptions();
@@ -292,26 +575,24 @@ async function bootstrap(): Promise<void> {
       return option;
     })
   );
-  sceneBundleSelect.replaceChildren(
-    (() => {
-      const option = document.createElement("option");
-      option.value = "";
-      option.textContent = "No registered bundle";
-      return option;
-    })(),
-    ...state.sceneBundles.map((bundle) => {
-      const option = document.createElement("option");
-      option.value = bundle.bundleId;
-      option.textContent = `${bundle.bundleId} (${bundle.version})`;
-      return option;
-    })
-  );
+  renderSceneBundleOptions();
   if (state.sceneBundles[0]) {
     sceneBundleIdInput.value = state.sceneBundles[0].bundleId;
   }
   render();
+  if (adminTokenInput.value.trim()) {
+    await verifyControlPlaneSession();
+  }
   startSelectedRoomPolling();
 }
+
+applyAdminTokenButton.addEventListener("click", () => {
+  void verifyControlPlaneSession({ optimistic: true });
+});
+
+adminTokenInput.addEventListener("input", () => {
+  void verifyControlPlaneSession({ optimistic: true });
+});
 
 sceneBundleSelect.addEventListener("change", () => {
   const selected = state.sceneBundles.find((bundle) => bundle.bundleId === sceneBundleSelect.value);
@@ -349,6 +630,35 @@ templateSelect.addEventListener("change", () => {
   render();
 });
 
+roomNameInput.addEventListener("input", () => {
+  if (!roomSlugTouched) {
+    roomSlugInput.value = slugifyRoomName(roomNameInput.value);
+  }
+  renderRoomPreview();
+});
+
+roomSlugInput.addEventListener("input", () => {
+  roomSlugTouched = true;
+  roomSlugInput.value = roomSlugInput.value.toLowerCase().replace(/[^a-z0-9-]/g, "-");
+  renderRoomPreview();
+});
+
+tenantSelect.addEventListener("change", () => {
+  renderRoomPreview();
+});
+
+roomVisibilitySelect.addEventListener("change", () => {
+  renderRoomPreview();
+});
+
+guestAccessInput.addEventListener("change", () => {
+  renderRoomPreview();
+});
+
+sceneBundleVersionSelect.addEventListener("change", () => {
+  renderRoomPreview();
+});
+
 roomFilterTenant.addEventListener("change", () => {
   state.roomFilterTenantId = roomFilterTenant.value || undefined;
   render();
@@ -356,14 +666,24 @@ roomFilterTenant.addEventListener("change", () => {
 
 form.addEventListener("submit", (event) => {
   event.preventDefault();
+  const validationError = roomSlugValidationError();
+  if (validationError) {
+    state.publishStatus = "failed";
+    state.statusMessage = `failed:${validationError}`;
+    render();
+    return;
+  }
   state.publishStatus = "publishing";
   state.statusMessage = "publishing";
   render();
   void createRoom(apiBaseUrl, {
+    roomId: roomSlugInput.value.trim(),
     tenantId: tenantSelect.value,
     templateId: templateSelect.value,
     name: roomNameInput.value,
+    sceneBundleUrl: selectedSceneBundlePublicUrl(),
     assetIds: Array.from(assetSelect.selectedOptions).map((option) => option.value),
+    visibility: roomVisibilitySelect.value as "public" | "unlisted" | "private",
     guestAllowed: guestAccessInput.checked,
     avatarConfig: collectAvatarConfig(),
     theme: {
@@ -376,18 +696,60 @@ form.addEventListener("submit", (event) => {
       screenShare: featureShareInput.checked
     }
   }, currentAuth())
-    .then((room) => {
+    .then(async (room) => {
       state.publishStatus = "published";
       state.statusMessage = "published";
       state.roomLink = room.roomLink;
       state.rooms = [room, ...state.rooms];
-      void selectRoom(room);
+      await selectRoom(room);
+      if (room.visibility === "private") {
+        const invite = await createRoomInvite(apiBaseUrl, room.roomId, {
+          expiresInSeconds: Number.parseInt(inviteTtlInput.value, 10) || 3600,
+          waitingRoomEnabled: inviteWaitingRoomInput.checked
+        }, currentAuth());
+        state.selectedRoomInvites = [invite, ...state.selectedRoomInvites];
+        inviteSelect.value = invite.inviteId;
+        state.statusMessage = "published-invite-created";
+        render();
+      }
     })
     .catch((error: unknown) => {
       state.publishStatus = "failed";
       state.statusMessage = error instanceof Error ? `failed:${error.message}` : "failed";
       render();
     });
+});
+
+copyRoomLinkButton.addEventListener("click", () => {
+  const url = state.roomLink || (state.selectedRoom ? createRoomUrl(apiBaseUrl, state.selectedRoom.roomId) : "");
+  if (!url) {
+    state.publishStatus = "failed";
+    state.statusMessage = "failed:missing_room_url";
+    render();
+    return;
+  }
+  void (async () => {
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(url);
+      } else {
+        const textarea = document.createElement("textarea");
+        textarea.value = url;
+        textarea.style.position = "fixed";
+        textarea.style.left = "-9999px";
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand("copy");
+        textarea.remove();
+      }
+      state.publishStatus = "published";
+      state.statusMessage = "room-url-copied";
+    } catch (error) {
+      state.publishStatus = "failed";
+      state.statusMessage = error instanceof Error ? `failed:${error.message}` : "failed:copy_room_url";
+    }
+    render();
+  })();
 });
 
 assetForm.addEventListener("submit", (event) => {
@@ -570,6 +932,52 @@ refreshRoomDetailButton.addEventListener("click", () => {
   void selectRoom(state.selectedRoom);
 });
 
+createInviteButton.addEventListener("click", () => {
+  if (!state.selectedRoom) {
+    return;
+  }
+  state.publishStatus = "publishing";
+  state.statusMessage = "creating-invite";
+  render();
+  void createRoomInvite(apiBaseUrl, state.selectedRoom.roomId, {
+    expiresInSeconds: Number.parseInt(inviteTtlInput.value, 10) || 3600,
+    waitingRoomEnabled: inviteWaitingRoomInput.checked
+  }, currentAuth())
+    .then(async (invite) => {
+      state.publishStatus = "published";
+      state.statusMessage = "invite-created";
+      state.selectedRoomInvites = [invite, ...state.selectedRoomInvites.filter((item) => item.inviteId !== invite.inviteId)];
+      inviteLink.href = invite.inviteLink ?? "#";
+      inviteLink.textContent = invite.inviteLink ?? "";
+      render();
+    })
+    .catch((error: unknown) => {
+      state.publishStatus = "failed";
+      state.statusMessage = error instanceof Error ? `failed:${error.message}` : "failed";
+      render();
+    });
+});
+
+revokeInviteButton.addEventListener("click", () => {
+  if (!state.selectedRoom || !inviteSelect.value) {
+    return;
+  }
+  state.publishStatus = "publishing";
+  state.statusMessage = "revoking-invite";
+  render();
+  void revokeRoomInvite(apiBaseUrl, state.selectedRoom.roomId, inviteSelect.value, currentAuth())
+    .then(async () => {
+      state.publishStatus = "published";
+      state.statusMessage = "invite-revoked";
+      await refreshSelectedRoomAccessState();
+    })
+    .catch((error: unknown) => {
+      state.publishStatus = "failed";
+      state.statusMessage = error instanceof Error ? `failed:${error.message}` : "failed";
+      render();
+    });
+});
+
 bindSceneBundleButton.addEventListener("click", () => {
   if (!state.selectedRoom || !sceneBundleSelect.value) {
     return;
@@ -594,16 +1002,31 @@ bindSceneBundleButton.addEventListener("click", () => {
 sceneBundleForm.addEventListener("submit", (event) => {
   event.preventDefault();
   state.publishStatus = "publishing";
-  state.statusMessage = "publishing-scene-bundle-version";
+  const selectedFile = sceneBundleFileInput.files?.[0];
+  state.statusMessage = selectedFile ? "uploading-scene-bundle" : "publishing-scene-bundle-version";
   render();
-  void createSceneBundleVersion(apiBaseUrl, sceneBundleIdInput.value.trim(), {
-    version: sceneBundleVersionInput.value.trim(),
-    storageKey: sceneBundleStorageKeyInput.value.trim()
-  }, currentAuth())
-    .then(async () => {
+  const operation = selectedFile
+    ? uploadSceneBundleZip(apiBaseUrl, {
+      bundleId: sceneBundleIdInput.value.trim() || undefined,
+      version: sceneBundleVersionInput.value.trim() || undefined,
+      file: selectedFile
+    }, currentAuth())
+    : createSceneBundleVersion(apiBaseUrl, sceneBundleIdInput.value.trim(), {
+      version: sceneBundleVersionInput.value.trim(),
+      storageKey: sceneBundleStorageKeyInput.value.trim()
+    }, currentAuth());
+
+  void operation
+    .then(async (bundle) => {
       state.publishStatus = "published";
-      state.statusMessage = "scene-bundle-version-created";
+      state.statusMessage = selectedFile ? "scene-bundle-uploaded" : "scene-bundle-version-created";
       state.sceneBundles = await listSceneBundles(apiBaseUrl);
+      state.selectedSceneBundle = state.sceneBundles.find((item) => item.bundleId === bundle.bundleId) ?? bundle;
+      sceneBundleIdInput.value = bundle.bundleId;
+      sceneBundleVersionInput.value = bundle.version;
+      sceneBundleStorageKeyInput.value = bundle.storageKey;
+      sceneBundleFileInput.value = "";
+      renderSceneBundleOptions();
       render();
     })
     .catch((error: unknown) => {
@@ -624,6 +1047,7 @@ setCurrentSceneBundleButton.addEventListener("click", () => {
       state.statusMessage = "scene-bundle-current-updated";
       state.sceneBundles = await listSceneBundles(apiBaseUrl);
       state.sceneBundleVersions = await listSceneBundleVersions(apiBaseUrl, sceneBundleSelect.value);
+      renderSceneBundleOptions();
       render();
     })
     .catch((error: unknown) => {
@@ -643,6 +1067,8 @@ markSceneBundleObsoleteButton.addEventListener("click", () => {
       state.publishStatus = "published";
       state.statusMessage = "scene-bundle-version-obsolete";
       state.sceneBundleVersions = await listSceneBundleVersions(apiBaseUrl, sceneBundleSelect.value);
+      state.sceneBundles = await listSceneBundles(apiBaseUrl);
+      renderSceneBundleOptions();
       render();
     })
     .catch((error: unknown) => {
@@ -650,6 +1076,37 @@ markSceneBundleObsoleteButton.addEventListener("click", () => {
       state.statusMessage = error instanceof Error ? `failed:${error.message}` : "failed";
       render();
     });
+});
+
+function setSelectedRoomDisabled(disabled: boolean): void {
+  if (!state.selectedRoom) {
+    return;
+  }
+  const roomId = state.selectedRoom.roomId;
+  state.publishStatus = "publishing";
+  state.statusMessage = disabled ? "disabling-room" : "enabling-room";
+  render();
+  void setRoomDisabled(apiBaseUrl, roomId, disabled, currentAuth())
+    .then(async (room) => {
+      state.publishStatus = "published";
+      state.statusMessage = disabled ? "room-disabled" : "room-enabled";
+      state.roomLink = room.roomLink;
+      state.rooms = state.rooms.map((item) => item.roomId === room.roomId ? room : item);
+      await selectRoom(room);
+    })
+    .catch((error: unknown) => {
+      state.publishStatus = "failed";
+      state.statusMessage = error instanceof Error ? `failed:${error.message}` : "failed";
+      render();
+    });
+}
+
+disableRoomButton.addEventListener("click", () => {
+  setSelectedRoomDisabled(true);
+});
+
+enableRoomButton.addEventListener("click", () => {
+  setSelectedRoomDisabled(false);
 });
 
 deleteRoomButton.addEventListener("click", () => {
@@ -669,6 +1126,8 @@ deleteRoomButton.addEventListener("click", () => {
       state.selectedRoom = undefined;
       state.selectedRoomManifest = undefined;
       state.selectedRoomDiagnostics = [];
+      state.selectedRoomInvites = [];
+      state.selectedWaitingRoomRequests = [];
       render();
     })
     .catch(() => {
@@ -689,6 +1148,7 @@ updateRoomButton.addEventListener("click", () => {
     name: roomNameInput.value,
     templateId: templateSelect.value,
     assetIds: Array.from(assetSelect.selectedOptions).map((option) => option.value),
+    visibility: roomVisibilitySelect.value as "public" | "unlisted" | "private",
     guestAllowed: guestAccessInput.checked,
     avatarConfig: collectAvatarConfig(),
     theme: {

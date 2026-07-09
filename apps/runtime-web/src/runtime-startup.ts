@@ -31,9 +31,11 @@ export function applyPostBootControls(input: {
 export function shouldStartPassiveMedia(input: {
   audioJoin: boolean;
   screenShare: boolean;
+  joinMuted: boolean;
   audioFault?: string;
 }): boolean {
   return (input.audioJoin || input.screenShare)
+    && !input.joinMuted
     && input.audioFault !== "mic_denied"
     && input.audioFault !== "no_audio_device";
 }

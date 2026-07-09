@@ -40,7 +40,9 @@ export interface RemoteAvatarDebugState {
     updateHz: number;
     interpolationDelayMs: number;
     maxObservedJumpM: number;
+    audioJoined: boolean;
     muted: boolean;
+    speaking: boolean;
     activeAudio: boolean;
     hasVisualEntity: boolean;
     hasAudioNode: boolean;
@@ -451,7 +453,9 @@ export function createRemoteAvatarRuntime(input: {
           updateHz: roundNumber(computeUpdateHz(participant.presenceUpdateTimesMs, nowMs), 2),
           interpolationDelayMs: playbackDelayMs,
           maxObservedJumpM: roundNumber(computeMaxObservedJumpM(participant.observedJumpSamples, nowMs)),
+          audioJoined: presence?.audioJoined ?? presence?.activeMedia.audio ?? participant.reliableState?.audioActive ?? false,
           muted: presence?.muted ?? participant.reliableState?.audioActive === false,
+          speaking: presence?.speaking ?? false,
           activeAudio: presence?.activeMedia.audio ?? participant.reliableState?.audioActive ?? false,
           hasVisualEntity: Boolean(entity),
           hasAudioNode: false,

@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { inlineSceneBundleUrl } from "../scene-bundle-fixtures";
+import { inlineSceneBundleUrl } from "../scene-bundle-fixtures.js";
 
 type MultiSurfaceDebug = {
   roomStateConnected?: boolean;
@@ -408,9 +408,8 @@ test("M1.8 remote browsers run independently on any default surface", async ({ p
 
 test("M1.8 media surfaces remain visible after a scene bundle loads", async ({ page, request }) => {
   const sceneBundleUrl = inlineSceneBundleUrl({
-    sceneId: "inline-media-surfaces-v1",
-    label: "Inline Media Surfaces Fixture",
-    color: [0.6, 0.6, 1]
+    sceneId: "m1-8-surface-fixture",
+    label: "M1.8 Surface Fixture"
   });
   const roomResponse = await request.post("/api/rooms", {
     headers: {

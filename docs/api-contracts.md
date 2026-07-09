@@ -51,7 +51,7 @@ Response shape:
 
 ### `POST /api/tokens/state`
 
-Returns a state-plane join token payload for `apps/room-state`.
+Returns a short-lived signed room session token used by runtime, `apps/room-state`, and media token issuing.
 
 Request:
 
@@ -59,7 +59,8 @@ Request:
 {
   "roomId": "demo-room",
   "participantId": "p1",
-  "role": "guest"
+  "displayName": "Guest",
+  "requestedRole": "guest"
 }
 ```
 
@@ -67,14 +68,21 @@ Response:
 
 ```json
 {
-  "token": "base64url-encoded-payload",
-  "expiresInSeconds": 900
+  "token": "base64url-payload.hmac-signature",
+  "expiresInSeconds": 900,
+  "sessionId": "session-id",
+  "role": "guest",
+  "permissions": ["room.join", "audio.join", "surface.view"]
 }
 ```
+
+Signed payload claims are `tenantId`, `roomId`, `participantId`, `displayName`, `role`, optional `roleSource`, `permissions`, `sessionId`, `iat`, `exp`, and `jti`. The server normalizes permissions from the signed role when validating the token.
 
 ### `POST /api/tokens/media`
 
 Returns a media-plane join token payload for `LiveKit`.
+
+Requires `Authorization: Bearer <room-session-token>`. The session token must match the requested room and participant. The API derives publish grants from signed room permissions instead of trusting caller-provided role claims.
 
 Request:
 
@@ -87,6 +95,14 @@ Request:
 }
 ```
 
+Runtime-mutating endpoints also require the same session token:
+
+- `PUT /api/rooms/:roomId/presence/:participantId`
+- `DELETE /api/rooms/:roomId/presence/:participantId`
+- `POST /api/rooms/:roomId/diagnostics`
+- `PUT /api/rooms/:roomId/xr-telemetry/:participantId`
+- `POST /api/tokens/remote-browser-frame`
+
 Response:
 
 ```json
@@ -97,8 +113,31 @@ Response:
 }
 ```
 
+### Control-plane AuthN/AuthZ
+
+Control-plane protected actions are deny-by-default. They require either `x-vrata-admin-token: <CONTROL_PLANE_ADMIN_TOKEN>` or `Authorization: Bearer <room-session-token>`.
+
+Only the `CONTROL_PLANE_ADMIN_TOKEN` header is an operator/admin identity. Signed room-session tokens can authorize only explicitly allowed room-scoped actions; a room-session role named `admin` is not treated as a control-plane admin.
+
+Host-owned control-plane actions require a trusted room-session role source. Tokens minted through dev-role query mode are valid runtime tokens but are denied for control-plane host-owned actions.
+
+Missing identity returns `401` with `reason: "missing_identity"`. A valid identity without the declared permission returns `403` with `reason: "permission_denied"`.
+
+The current permission matrix is documented in [`docs/security/permissions.md`](./security/permissions.md). The protected endpoint groups are:
+
+- tenant writes
+- room create/update/delete
+- host-own-room scene-bundle binding
+- asset writes
+- scene-bundle writes
+- XR telemetry admin/host-own-room reads
+- control-plane audit reads
+
+Every protected authorization decision writes a control-plane audit entry with `requestId`, `actor`, `action`, `object`, `permission`, and `result`. Operators can inspect the bounded in-memory log with `GET /api/audit/control-plane` using an admin identity.
+
 ## Notes
 
-- Current token implementation is a dev-safe placeholder, not signed production auth.
+- Room session tokens are signed with `STATE_TOKEN_SECRET` and expire through the `exp` claim.
+- Dev role escalation through `requestedRole` is allowed only when the dev-role query mode is enabled; production-safe configs disable it.
 - `schemaVersion` must remain explicit in every manifest.
 - Runtime should degrade gracefully if media or XR features are unavailable.

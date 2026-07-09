@@ -1,7 +1,9 @@
 import {
   REMOTE_BROWSER_OBJECT_TYPE,
   SCREEN_SHARE_OBJECT_TYPE,
+  MARKDOWN_BOARD_OBJECT_TYPE,
   WHITEBOARD_OBJECT_TYPE,
+  type MarkdownBoardPatch,
   type RemoteBrowserPatch,
   type ScreenSharePatch,
   type WhiteboardPatch
@@ -195,6 +197,18 @@ export class MediaSurfaceCommandClient {
 
   stopWhiteboardObject(objectId: string, surfaceId: string): Promise<SurfaceCommandResult> {
     return this.stopObject(objectId, surfaceId, "whiteboard-stop");
+  }
+
+  createMarkdownBoardObjectOnSurface(surfaceId: string): Promise<SurfaceCommandResult> {
+    return this.createObjectOnSurface(surfaceId, MARKDOWN_BOARD_OBJECT_TYPE, "markdown-board-create");
+  }
+
+  patchMarkdownBoardObject(objectId: string, surfaceId: string, expectedRevision: number, patch: MarkdownBoardPatch): Promise<SurfaceCommandResult> {
+    return this.patchObjectState(objectId, surfaceId, expectedRevision, patch, `markdown-board-${patch.type}`);
+  }
+
+  stopMarkdownBoardObject(objectId: string, surfaceId: string): Promise<SurfaceCommandResult> {
+    return this.stopObject(objectId, surfaceId, "markdown-board-stop");
   }
 
   createRemoteBrowserObjectOnSurface(surfaceId: string): Promise<SurfaceCommandResult> {

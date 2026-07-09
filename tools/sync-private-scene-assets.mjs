@@ -3,6 +3,15 @@ import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 const DEFAULT_TARGET_SCENE_ROOT = "apps/runtime-web/public/assets/scenes";
+const PRIVATE_SCENE_DIR_ALLOWLIST = new Set([
+  "livadia-nicholas-office-v1",
+  "the-hall-v1",
+  "the-office-v1"
+]);
+
+function isAllowedPrivateSceneDir(sceneDir) {
+  return sceneDir.startsWith("sense-") || PRIVATE_SCENE_DIR_ALLOWLIST.has(sceneDir);
+}
 
 export async function readPrivateSceneManifest(privateAssetsRoot) {
   const manifestPath = resolve(privateAssetsRoot, "manifest.json");
@@ -28,7 +37,7 @@ export async function syncPrivateSceneAssets({
 
   for (const scene of manifest.scenes) {
     const sceneDir = scene.sceneDir ?? scene.sceneId;
-    if (typeof sceneDir !== "string" || !sceneDir.startsWith("sense-")) {
+    if (typeof sceneDir !== "string" || !isAllowedPrivateSceneDir(sceneDir)) {
       throw new Error(`invalid_private_scene_dir:${String(sceneDir)}`);
     }
     await cp(resolve(resolvedPrivateAssetsRoot, manifest.scenesRoot, sceneDir), resolve(resolvedTargetSceneRoot, sceneDir), {

@@ -22,7 +22,8 @@ test("describeManifest returns room and template", () => {
       access: {
         joinMode: "link",
         guestAllowed: true,
-        roleQueryAllowed: true
+        roleQueryAllowed: true,
+        visibility: "public"
       },
       assets: [],
       features: { voice: true, spatialAudio: true, screenShare: false },
@@ -52,6 +53,7 @@ test("bootRuntime maps reserved avatar feature flags from health payload", async
           xrEnabled: true,
           voiceEnabled: true,
           screenShareEnabled: true,
+          spatialAudioEnabled: false,
           roomStateRealtimeEnabled: true,
           remoteDiagnosticsEnabled: true,
           sceneBundlesEnabled: true,
@@ -77,6 +79,8 @@ test("bootRuntime maps reserved avatar feature flags from health payload", async
           permissions: ["room.join", "audio.join", "surface.view"],
           canStartScreenShare: false,
           canCreateWhiteboard: false,
+          canCreateMarkdownBoard: false,
+          canEditMarkdownBoard: false,
           canControlSurface: false
         }
       }), { status: 200, headers: { "content-type": "application/json" } });
@@ -100,13 +104,15 @@ test("bootRuntime maps reserved avatar feature flags from health payload", async
         avatarSeatsEnabled: false,
         avatarCustomizationEnabled: false
       },
-      access: { joinMode: "link", guestAllowed: true, roleQueryAllowed: true }
+      access: { joinMode: "link", guestAllowed: true, roleQueryAllowed: true, visibility: "public" }
     }), { status: 200, headers: { "content-type": "application/json" } });
   };
 
   try {
     const { bootRuntime } = await import("./index.js");
     const boot = await bootRuntime("http://127.0.0.1:4000", "demo-room", "Mozilla/5.0");
+    assert.equal(boot.spatialAudioEnabled, true);
+    assert.equal(boot.envFlags.spatialAudio, false);
     assert.equal(boot.envFlags.avatarPoseBinaryEnabled, true);
     assert.equal(boot.envFlags.avatarLegIkEnabled, true);
     assert.equal(boot.envFlags.avatarCustomizationEnabled, true);
