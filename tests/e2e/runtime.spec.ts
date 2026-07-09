@@ -1,6 +1,7 @@
 import { expect, test, type APIRequestContext, type Page, type Route } from "@playwright/test";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { inlineSceneBundleUrl } from "./scene-bundle-fixtures.js";
 
 test.describe.configure({ mode: "serial" });
 
@@ -1828,6 +1829,18 @@ test("runtime keeps current room usable when space selector is unavailable", asy
 });
 
 test("two rooms load two different scene bundles", async ({ browser, request }) => {
+  const hallSceneBundleUrl = inlineSceneBundleUrl({
+    sceneId: "the-hall-v1",
+    label: "The Hall V1",
+    color: [0.1, 0.45, 0.9],
+    spawn: { x: 1.5, y: 0, z: 5 }
+  });
+  const officeSceneBundleUrl = inlineSceneBundleUrl({
+    sceneId: "the-office-v1",
+    label: "The Office V1",
+    color: [0.9, 0.45, 0.1],
+    spawn: { x: -1.5, y: 0, z: 4 }
+  });
   const hallRoomResponse = await request.post("/api/rooms", {
     headers: {
       "x-vrata-admin-token": "test-admin-token"
@@ -1836,7 +1849,7 @@ test("two rooms load two different scene bundles", async ({ browser, request }) 
       tenantId: "demo-tenant",
       templateId: "meeting-room-basic",
       name: "Hall Scene Room",
-      sceneBundleUrl: "/assets/scenes/the-hall-v1/scene.json"
+      sceneBundleUrl: hallSceneBundleUrl
     }
   });
   expect(hallRoomResponse.ok()).toBeTruthy();
@@ -1850,7 +1863,7 @@ test("two rooms load two different scene bundles", async ({ browser, request }) 
       tenantId: "demo-tenant",
       templateId: "meeting-room-basic",
       name: "Office Scene Room",
-      sceneBundleUrl: "/assets/scenes/the-office-v1/scene.json"
+      sceneBundleUrl: officeSceneBundleUrl
     }
   });
   expect(officeRoomResponse.ok()).toBeTruthy();
@@ -1872,8 +1885,8 @@ test("two rooms load two different scene bundles", async ({ browser, request }) 
 
   expect(hallDebug?.sceneBundleState).toBe("loaded");
   expect(officeDebug?.sceneBundleState).toBe("loaded");
-  expect(hallDebug?.sceneBundleUrl).toContain("/assets/scenes/the-hall-v1/scene.json");
-  expect(officeDebug?.sceneBundleUrl).toContain("/assets/scenes/the-office-v1/scene.json");
+  expect(hallDebug?.sceneBundleUrl).toBe(hallSceneBundleUrl);
+  expect(officeDebug?.sceneBundleUrl).toBe(officeSceneBundleUrl);
 
   await hallPage.close();
   await officePage.close();
