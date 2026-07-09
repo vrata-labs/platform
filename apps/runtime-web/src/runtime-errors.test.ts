@@ -47,9 +47,11 @@ test("shouldRetryConnection only retries transport issues", () => {
   assert.equal(shouldRetryConnection("audio_unsupported"), false);
   assert.equal(shouldRetryConnection("screen_share_unsupported"), false);
   assert.equal(shouldRetryConnection("xr_unavailable"), false);
+  assert.equal(shouldRetryConnection("xr_enter_failed"), false);
 });
 
 test("runtime issue catalog exposes user-facing copy", () => {
   const issue = getRuntimeIssue("xr_unavailable");
   assert.match(issue.userMessage, /VR unavailable/);
+  assert.match(getRuntimeIssue("xr_enter_failed").userMessage, /VR session could not start/);
 });

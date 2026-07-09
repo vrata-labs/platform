@@ -2,6 +2,15 @@
 
 Entry point for the immersive client runtime.
 
+## Guest onboarding
+
+External invite links without an explicit `?name=` show a pre-join screen before the runtime requests a room session token. The same screen can be forced with `?onboard=1` and disabled for technical links with `?prejoin=0`.
+
+- Guests enter a display name that is stored in `localStorage` as `vrata.displayName`.
+- `Join muted` is available in pre-join and mirrors the HUD `#join-muted` preference.
+- `Check microphone` is a user-gesture permission check; denial still allows `Enter without audio`.
+- The screen shows browser/media compatibility warnings and desktop/mobile/XR controls hints.
+
 ## Local pose, locomotion, and interaction architecture
 
 The local user transform is owned by the runtime locomotion/local-pose pipeline. The `player` rig, yaw, and pitch are not free mutable globals for feature code.

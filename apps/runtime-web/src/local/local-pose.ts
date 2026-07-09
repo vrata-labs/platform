@@ -16,6 +16,7 @@ export interface LocalPose {
 
 export type LocalPoseMutationReason =
   | "spawn"
+  | "personal_state_restore"
   | "debug_fit"
   | "desktop_move"
   | "xr_move"

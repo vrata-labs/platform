@@ -152,7 +152,7 @@ export function inspectSceneObject(input: {
         continue;
       }
       materialKeys.add(material.uuid);
-      const maybeTextured = material as THREE.MeshStandardMaterial & { map?: THREE.Texture | null; normalMap?: THREE.Texture | null; emissiveMap?: THREE.Texture | null; alphaMap?: THREE.Texture | null; aoMap?: THREE.Texture | null; roughnessMap?: THREE.Texture | null; metalnessMap?: THREE.Texture | null; specularMap?: THREE.Texture | null; };
+      const maybeTextured = material as THREE.MeshStandardMaterial & { map?: THREE.Texture | null; normalMap?: THREE.Texture | null; emissiveMap?: THREE.Texture | null; alphaMap?: THREE.Texture | null; aoMap?: THREE.Texture | null; roughnessMap?: THREE.Texture | null; metalnessMap?: THREE.Texture | null; specularMap?: THREE.Texture | null; }; 
       const textures = [maybeTextured.map, maybeTextured.normalMap, maybeTextured.emissiveMap, maybeTextured.alphaMap, maybeTextured.aoMap, maybeTextured.roughnessMap, maybeTextured.metalnessMap, maybeTextured.specularMap].filter(Boolean) as THREE.Texture[];
       if (textures.length > 0) {
         texturedMaterialCount += 1;

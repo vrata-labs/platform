@@ -7,7 +7,10 @@ export type RuntimeIssueCode =
   | "screen_share_denied"
   | "screen_share_unsupported"
   | "room_state_failed"
-  | "xr_unavailable";
+  | "room_access_denied"
+  | "xr_unavailable"
+  | "xr_enter_failed"
+  | "runtime_unhandled_error";
 
 export type RuntimeIssueSeverity = "info" | "warn" | "error";
 
@@ -95,6 +98,15 @@ function createRuntimeIssueMap(): Record<RuntimeIssueCode, RuntimeIssue> {
       diagnosticsNote: "room_state_failed",
       suggestedAction: "Keep room open while realtime reconnects"
     },
+    room_access_denied: {
+      code: "room_access_denied",
+      recoverable: false,
+      retryable: false,
+      severity: "warn",
+      userMessage: "Room access denied",
+      diagnosticsNote: "room_access_denied",
+      suggestedAction: "Use a valid invite link or ask the host for approval"
+    },
     xr_unavailable: {
       code: "xr_unavailable",
       recoverable: true,
@@ -103,6 +115,24 @@ function createRuntimeIssueMap(): Record<RuntimeIssueCode, RuntimeIssue> {
       userMessage: "VR unavailable on this device or disabled for this environment",
       diagnosticsNote: "xr_unavailable",
       suggestedAction: "Continue on desktop or mobile"
+    },
+    xr_enter_failed: {
+      code: "xr_enter_failed",
+      recoverable: true,
+      retryable: false,
+      severity: "warn",
+      userMessage: "VR session could not start; room continues in desktop mode",
+      diagnosticsNote: "xr_enter_failed",
+      suggestedAction: "Retry Enter VR or continue on desktop"
+    },
+    runtime_unhandled_error: {
+      code: "runtime_unhandled_error",
+      recoverable: false,
+      retryable: false,
+      severity: "error",
+      userMessage: "Runtime error; include the report ID when contacting support",
+      diagnosticsNote: "runtime_unhandled_error",
+      suggestedAction: "Reload the room and share the report ID if the issue repeats"
     }
   };
 }

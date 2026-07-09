@@ -1,8 +1,10 @@
 import {
   REMOTE_BROWSER_OBJECT_TYPE,
   SCREEN_SHARE_OBJECT_TYPE,
+  MARKDOWN_BOARD_OBJECT_TYPE,
   WHITEBOARD_OBJECT_TYPE,
   type MediaObjectInstance,
+  type MarkdownBoardState,
   type RemoteBrowserObjectState,
   type RoomMediaObjectsState,
   type ScreenShareObjectState,
@@ -49,6 +51,22 @@ export function activeWhiteboardObjectForSurface(mediaObjects: RoomMediaObjectsS
     return null;
   }
   return object as MediaObjectInstance<WhiteboardState>;
+}
+
+export function isMarkdownBoardState(state: unknown): state is MarkdownBoardState {
+  return Boolean(state)
+    && typeof state === "object"
+    && (state as { status?: unknown }).status === "active"
+    && Array.isArray((state as { notes?: unknown }).notes)
+    && typeof (state as { revision?: unknown }).revision === "number";
+}
+
+export function activeMarkdownBoardObjectForSurface(mediaObjects: RoomMediaObjectsState | null, surfaceId: string): MediaObjectInstance<MarkdownBoardState> | null {
+  const object = activeMediaObjectForSurface(mediaObjects, surfaceId);
+  if (!object || object.type !== MARKDOWN_BOARD_OBJECT_TYPE || !isMarkdownBoardState(object.state)) {
+    return null;
+  }
+  return object as MediaObjectInstance<MarkdownBoardState>;
 }
 
 export function isRemoteBrowserState(state: unknown): state is RemoteBrowserObjectState {

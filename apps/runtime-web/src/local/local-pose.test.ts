@@ -35,6 +35,18 @@ test("local pose controller applies spawn pose to player rig", () => {
   assert.equal(pitch.rotation.x, -0.2);
 });
 
+test("local pose controller restores persisted personal pose", () => {
+  const { player, pitch, pose } = createRig();
+
+  pose.setPose({ position: { x: 2.5, y: 0, z: 3.25 }, yaw: 0.4, pitch: -0.1 }, "personal_state_restore");
+
+  assert.equal(player.position.x, 2.5);
+  assert.equal(player.position.z, 3.25);
+  assert.equal(player.rotation.y, 0.4);
+  assert.equal(pitch.rotation.x, -0.1);
+  assert.equal(pose.getLastMutationReason(), "personal_state_restore");
+});
+
 test("local pose controller preserves headset world xz during xr snap turn", () => {
   const { camera, pose } = createRig();
   const before = new THREE.Vector3();

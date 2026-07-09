@@ -8,6 +8,27 @@
   </head>
   <body>
     <div id="app">
+      <section id="guest-onboarding" class="guest-onboarding" hidden aria-labelledby="guest-onboarding-title">
+        <div class="guest-onboarding-card">
+          <div class="brand">Vrata</div>
+          <h1 id="guest-onboarding-title">Join this room</h1>
+          <p class="guest-onboarding-copy">Set your display name, review device status, then enter. You can join without microphone access.</p>
+          <label for="guest-name-input">Display name</label>
+          <input id="guest-name-input" type="text" autocomplete="name" maxlength="40" placeholder="Your name" />
+          <label class="surface-audio-toggle" for="guest-join-muted">
+            <input id="guest-join-muted" type="checkbox" checked />
+            Join muted
+          </label>
+          <div id="guest-compatibility-warning" class="guest-onboarding-status"></div>
+          <div id="guest-controls-hint" class="guest-onboarding-hint"></div>
+          <div class="guest-onboarding-actions">
+            <button id="guest-check-microphone" type="button">Check microphone</button>
+            <button id="guest-enter-without-audio" type="button">Enter without audio</button>
+            <button id="guest-enter-room" type="button">Enter room</button>
+          </div>
+          <div id="guest-onboarding-status" class="guest-onboarding-status" role="status" aria-live="polite">Ready to join.</div>
+        </div>
+      </section>
       <details class="hud" open>
         <summary class="hud-summary">
           <span class="brand">Vrata</span>
@@ -18,7 +39,10 @@
             <div id="status-line">Connecting...</div>
             <div id="branding-line"></div>
             <div id="room-state-line"></div>
+            <div id="report-line" hidden></div>
+            <a id="diagnostics-link" class="diagnostics-link" href="/diagnostics?roomId=demo-room" target="_blank" rel="noreferrer">Connectivity diagnostics</a>
             <div id="guest-access-line"></div>
+            <div id="compatibility-status" class="audio-device-status">Checking compatibility...</div>
           </div>
           <div id="scene-attributions" class="attributions-panel" hidden>
             <div class="attributions-title">Scene credits</div>
@@ -29,7 +53,39 @@
             <select id="space-select" disabled>
               <option>Loading spaces...</option>
             </select>
+            <button id="open-personal-room" type="button">Open my room</button>
             <div id="space-select-status" class="space-select-status">Loading spaces...</div>
+          </div>
+          <div id="notes-panel" class="notes-panel">
+            <div class="notes-title">Notes</div>
+            <label for="notes-scope-select">Scope</label>
+            <select id="notes-scope-select">
+              <option value="shared">Shared room note</option>
+              <option value="private">My private note</option>
+            </select>
+            <textarea id="notes-editor" rows="7" maxlength="20000" placeholder="Write Markdown or plain text notes..."></textarea>
+            <div class="notes-actions">
+              <button id="notes-retry-save" type="button" hidden>Retry save</button>
+              <div id="notes-status" class="audio-device-status" role="status" aria-live="polite">Notes loading...</div>
+            </div>
+            <div class="notes-preview-title">Preview</div>
+            <div id="notes-preview" class="notes-preview" aria-live="polite"></div>
+          </div>
+          <div id="documents-panel" class="documents-panel" hidden>
+            <div class="documents-title">Documents</div>
+            <label for="document-upload-input">Upload PDF/image/text</label>
+            <input id="document-upload-input" type="file" accept="application/pdf,image/png,image/jpeg,image/webp,text/plain,.pdf,.png,.jpg,.jpeg,.webp,.txt" />
+            <button id="document-upload-button" type="button">Upload document</button>
+            <label for="document-select">Room library</label>
+            <select id="document-select" disabled>
+              <option value="">No documents</option>
+            </select>
+            <div class="documents-actions">
+              <button id="document-download-button" type="button" disabled>Download selected</button>
+              <button id="document-surface-button" type="button" disabled>Select for surface</button>
+              <button id="document-delete-button" type="button" disabled>Delete selected</button>
+            </div>
+            <div id="document-status" class="audio-device-status" role="status" aria-live="polite">Documents loading...</div>
           </div>
           <div class="controls">
             <label class="surface-picker" for="media-surface-select">Surface
@@ -43,8 +99,38 @@
             <button id="draw-whiteboard" disabled aria-pressed="false">Draw: Off</button>
             <button id="clear-whiteboard" disabled>Clear Board</button>
             <button id="stop-whiteboard" disabled>Stop Board</button>
+            <button id="start-markdown-board" disabled>Start Sticky Board</button>
             <button id="start-share" disabled>Start Share</button>
             <button id="stop-share" disabled>Stop Share</button>
+          </div>
+          <div id="markdown-board-control" class="markdown-board-panel" hidden>
+            <label for="markdown-board-note-text">Sticky note Markdown</label>
+            <textarea id="markdown-board-note-text" rows="3" maxlength="2000" placeholder="# Decision\n- next step"></textarea>
+            <div class="controls compact-controls">
+              <button id="add-sticky-note" type="button" disabled>Add Note</button>
+              <button id="update-sticky-note" type="button" disabled>Update Last</button>
+              <button id="move-sticky-note" type="button" disabled>Move Last</button>
+              <button id="delete-sticky-note" type="button" disabled>Delete Last</button>
+              <button id="stop-markdown-board" type="button" disabled>Stop Sticky Board</button>
+            </div>
+            <div id="markdown-board-status" class="audio-device-status" role="status" aria-live="polite">Sticky board idle</div>
+          </div>
+          <div id="host-controls" class="host-controls-panel" hidden>
+            <div class="host-controls-title">Host Controls</div>
+            <div id="host-controls-status" class="audio-device-status">Host controls idle</div>
+            <div class="controls compact-controls">
+              <button id="lock-room" disabled>Lock Room</button>
+              <button id="unlock-room" disabled>Unlock Room</button>
+              <button id="end-session" disabled>End Session</button>
+            </div>
+            <label for="host-participant-select">Participant</label>
+            <select id="host-participant-select" disabled>
+              <option value="">No participants</option>
+            </select>
+            <div class="controls compact-controls">
+              <button id="remove-participant" disabled>Remove</button>
+              <button id="transfer-host" disabled>Transfer Host</button>
+            </div>
           </div>
           <div id="remote-browser-control" class="remote-browser-panel" hidden>
             <label for="remote-browser-url">Remote Browser URL</label>
@@ -71,6 +157,10 @@
             <select id="mic-select">
               <option value="default">System default microphone</option>
             </select>
+            <label class="surface-audio-toggle" for="join-muted">
+              <input id="join-muted" type="checkbox" />
+              Join muted
+            </label>
             <div class="audio-meter-row">
               <span>Mic level</span>
               <div class="audio-meter"><div id="mic-level-fill" class="audio-meter-fill"></div></div>
@@ -84,6 +174,7 @@
               <div class="audio-meter"><div id="speaker-level-fill" class="audio-meter-fill"></div></div>
             </div>
             <div id="audio-device-status" class="audio-device-status">Audio devices idle</div>
+            <div id="remote-mic-status" class="audio-device-status">Remote microphones idle</div>
           </div>
           <div id="avatar-sandbox-panel" class="avatar-sandbox" hidden>
             <label for="avatar-preset-select">Avatar Sandbox</label>

@@ -2,6 +2,8 @@ import { createRoomAccessDebugState, type RoomAccessDebugState, type RoomPermiss
 
 interface RoomManifest {
   roomId: string;
+  roomType?: "standard" | "personal";
+  ownerParticipantId?: string | null;
   template: string;
   sceneBundle?: {
     url: string;
@@ -40,6 +42,7 @@ interface RoomManifest {
     joinMode: "link";
     guestAllowed: boolean;
     roleQueryAllowed: boolean;
+    visibility: "public" | "unlisted" | "private";
   };
 }
 
@@ -62,6 +65,7 @@ interface RuntimeHealthResponse {
     xrEnabled?: boolean;
     voiceEnabled?: boolean;
     screenShareEnabled?: boolean;
+    spatialAudioEnabled?: boolean;
     roomStateRealtimeEnabled?: boolean;
     remoteDiagnosticsEnabled?: boolean;
     sceneBundlesEnabled?: boolean;
@@ -72,7 +76,50 @@ interface RuntimeHealthResponse {
     avatarSeatingEnabled?: boolean;
     avatarCustomizationEnabled?: boolean;
     avatarFallbackCapsulesEnabled?: boolean;
+    roomAccessPolicyEnabled?: boolean;
+    hostControlsEnabled?: boolean;
+    documentsEnabled?: boolean;
+    notesEnabled?: boolean;
+    personalRoomsEnabled?: boolean;
   };
+}
+
+export type RuntimeNoteScope = "shared" | "private";
+
+export interface RuntimeNoteRecord {
+  noteId: string;
+  roomId: string;
+  scope: RuntimeNoteScope;
+  ownerParticipantId?: string | null;
+  content: string;
+  updatedAt: string | null;
+  updatedBy?: string | null;
+}
+
+export interface RuntimeDocumentRecord {
+  documentId: string;
+  roomId: string;
+  tenantId: string;
+  filename: string;
+  contentType: string;
+  sizeBytes: number;
+  checksum: string;
+  uploadedBy?: string | null;
+  uploadedAt: string;
+  linkedSurfaceId?: string | null;
+  downloadUrl: string;
+}
+
+export interface RuntimePersonalPoseState {
+  position: { x: number; y: number; z: number };
+  yaw: number;
+  pitch: number;
+  updatedAt?: string;
+  updatedBy?: string | null;
+}
+
+export interface RuntimePersonalState {
+  lastPose?: RuntimePersonalPoseState | null;
 }
 
 export interface PresenceState {
@@ -105,7 +152,9 @@ export interface PresenceState {
     pitch?: number;
     roll?: number;
   };
+  audioJoined?: boolean;
   muted: boolean;
+  speaking?: boolean;
   activeMedia: {
     audio: boolean;
     screenShare: boolean;
@@ -126,6 +175,19 @@ export interface RuntimeSpaceRecord {
 
 export interface RuntimeSpaceOption extends RuntimeSpaceRecord {
   label: string;
+}
+
+export interface RuntimePersonalRoomResponse {
+  created: boolean;
+  room: {
+    roomId: string;
+    tenantId: string;
+    name: string;
+    templateId: string;
+    roomType?: "standard" | "personal";
+    ownerParticipantId?: string | null;
+  };
+  roomLink: string;
 }
 
 export function resolveJoinMode(userAgent: string): "desktop" | "mobile" {
@@ -154,8 +216,10 @@ export function resolveCurrentSpace(spaces: RuntimeSpaceRecord[], roomId: string
   return spaces.find((space) => space.roomId === roomId) ?? null;
 }
 
-export async function fetchRoomManifest(apiBaseUrl: string, roomId: string): Promise<RoomManifest> {
-  const response = await fetch(new URL(`/api/rooms/${roomId}/manifest`, apiBaseUrl));
+export async function fetchRoomManifest(apiBaseUrl: string, roomId: string, sessionToken?: string): Promise<RoomManifest> {
+  const response = await fetch(new URL(`/api/rooms/${roomId}/manifest`, apiBaseUrl), {
+    headers: sessionToken ? { "authorization": `Bearer ${sessionToken}` } : undefined
+  });
 
   if (!response.ok) {
     throw new Error(`failed_to_load_manifest:${response.status}`);
@@ -174,9 +238,17 @@ export async function fetchStateToken(apiBaseUrl: string, roomId: string, access
       roomId,
       participantId: accessRequest.participantId,
       displayName: accessRequest.displayName,
-      requestedRole: accessRequest.requestedRole
+      requestedRole: accessRequest.requestedRole,
+      inviteToken: accessRequest.inviteToken
     })
   });
+
+  if (response.status === 202 || response.status === 403 || response.status === 401) {
+    const payload = await response.json().catch(() => ({})) as { reason?: string; accessRequestId?: string; requestId?: string };
+    if (payload.reason) {
+      throw new RuntimeAccessError(response.status, payload.reason, payload.accessRequestId, payload.requestId);
+    }
+  }
 
   if (!response.ok) {
     throw new Error(`failed_to_load_state_token:${response.status}`);
@@ -198,8 +270,55 @@ export async function fetchRuntimeSpaces(apiBaseUrl: string, roomId: string, sea
   return formatSpaceOptions(payload.items);
 }
 
+export async function openPersonalRoom(apiBaseUrl: string, input: { participantId: string; displayName: string }): Promise<RuntimePersonalRoomResponse> {
+  const response = await fetch(new URL("/api/personal-room", apiBaseUrl), {
+    method: "POST",
+    headers: {
+      "content-type": "application/json"
+    },
+    body: JSON.stringify(input)
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({})) as { reason?: string; error?: string };
+    throw new Error(`failed_to_open_personal_room:${response.status}:${payload.reason ?? payload.error ?? "unknown"}`);
+  }
+  return (await response.json()) as RuntimePersonalRoomResponse;
+}
+
+export async function fetchPersonalRoomState(apiBaseUrl: string, roomId: string, sessionToken: string): Promise<RuntimePersonalState> {
+  const response = await fetch(new URL(`/api/rooms/${roomId}/personal-state`, apiBaseUrl), {
+    headers: {
+      "authorization": `Bearer ${sessionToken}`
+    },
+    cache: "no-store"
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({})) as { reason?: string; error?: string };
+    throw new Error(`failed_to_load_personal_state:${response.status}:${payload.reason ?? payload.error ?? "unknown"}`);
+  }
+  return ((await response.json()) as { state: RuntimePersonalState }).state;
+}
+
+export async function savePersonalRoomState(apiBaseUrl: string, roomId: string, sessionToken: string, state: RuntimePersonalState): Promise<RuntimePersonalState> {
+  const response = await fetch(new URL(`/api/rooms/${roomId}/personal-state`, apiBaseUrl), {
+    method: "PUT",
+    headers: {
+      "content-type": "application/json",
+      "authorization": `Bearer ${sessionToken}`
+    },
+    body: JSON.stringify(state)
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({})) as { reason?: string; error?: string };
+    throw new Error(`failed_to_save_personal_state:${response.status}:${payload.reason ?? payload.error ?? "unknown"}`);
+  }
+  return ((await response.json()) as { state: RuntimePersonalState }).state;
+}
+
 export interface RuntimeBootResult {
   roomId: string;
+  roomType: "standard" | "personal";
+  ownerParticipantId?: string | null;
   template: string;
   sceneBundleUrl?: string;
   roomStateUrl: string;
@@ -225,10 +344,12 @@ export interface RuntimeBootResult {
     roleQueryAllowed: boolean;
   };
   avatarConfig: RoomManifest["avatars"];
+  personalState: RuntimePersonalState;
   envFlags: {
     enterVr: boolean;
     audioJoin: boolean;
     screenShare: boolean;
+    spatialAudio: boolean;
     roomStateRealtime: boolean;
     remoteDiagnostics: boolean;
     sceneBundles: boolean;
@@ -239,6 +360,10 @@ export interface RuntimeBootResult {
     avatarSeatingEnabled: boolean;
     avatarCustomizationEnabled: boolean;
     avatarFallbackCapsulesEnabled: boolean;
+    hostControlsEnabled: boolean;
+    documentsEnabled: boolean;
+    notesEnabled: boolean;
+    personalRoomsEnabled: boolean;
   };
 }
 
@@ -246,6 +371,48 @@ export interface RuntimeAccessRequest {
   participantId: string;
   displayName: string;
   requestedRole?: string | null;
+  inviteToken?: string | null;
+}
+
+export class RuntimeAccessError extends Error {
+  readonly status: number;
+  readonly reason: string;
+  readonly accessRequestId?: string;
+  readonly requestId?: string;
+
+  constructor(status: number, reason: string, accessRequestId?: string, requestId?: string) {
+    super(`room_access_denied:${reason}:${status}`);
+    this.name = "RuntimeAccessError";
+    this.status = status;
+    this.reason = reason;
+    this.accessRequestId = accessRequestId;
+    this.requestId = requestId;
+  }
+}
+
+export interface RuntimeSessionControlState {
+  hostParticipantId?: string | null;
+  lockedAt?: string | null;
+  lockedBy?: string | null;
+  endedAt?: string | null;
+  endedBy?: string | null;
+  removedParticipants?: Record<string, { removedAt: string; removedBy?: string | null; reason?: string | null }>;
+}
+
+export interface RuntimeSessionControlResponse {
+  state: RuntimeSessionControlState;
+  participant?: {
+    participantId: string;
+    role: RoomRole;
+    permissions: RoomPermission[];
+    status: "active" | "blocked";
+    reason?: string | null;
+  } | null;
+  token?: string;
+  expiresInSeconds?: number;
+  access?: RoomAccessDebugState;
+  role?: RoomRole;
+  permissions?: RoomPermission[];
 }
 
 export interface VoiceSessionPlan {
@@ -272,14 +439,19 @@ export async function bootRuntime(
   userAgent: string,
   accessRequest?: RuntimeAccessRequest
 ): Promise<RuntimeBootResult> {
-  const manifest = await fetchRoomManifest(apiBaseUrl, roomId);
   const health = await fetchRuntimeHealth(apiBaseUrl);
   const healthFeatures = health.features ?? {};
   const accessResponse = accessRequest ? await fetchStateToken(apiBaseUrl, roomId, accessRequest) : null;
   const accessDebug = accessResponse?.access ?? createRoomAccessDebugState("guest");
+  const manifest = await fetchRoomManifest(apiBaseUrl, roomId, accessResponse?.token);
+  const personalState = manifest.roomType === "personal" && accessResponse?.token
+    ? await fetchPersonalRoomState(apiBaseUrl, roomId, accessResponse.token).catch(() => ({}))
+    : {};
 
   return {
     roomId: manifest.roomId,
+    roomType: manifest.roomType ?? "standard",
+    ownerParticipantId: manifest.ownerParticipantId ?? null,
     template: manifest.template,
     sceneBundleUrl: manifest.sceneBundle?.url,
     roomStateUrl: manifest.realtime.roomStateUrl,
@@ -297,10 +469,12 @@ export async function bootRuntime(
       roleQueryAllowed: manifest.access.roleQueryAllowed ?? false
     },
     avatarConfig: manifest.avatars,
+    personalState,
     envFlags: {
       enterVr: healthFeatures.xrEnabled ?? true,
       audioJoin: healthFeatures.voiceEnabled ?? true,
       screenShare: healthFeatures.screenShareEnabled ?? true,
+      spatialAudio: healthFeatures.spatialAudioEnabled ?? true,
       roomStateRealtime: healthFeatures.roomStateRealtimeEnabled ?? true,
       remoteDiagnostics: healthFeatures.remoteDiagnosticsEnabled ?? true,
       sceneBundles: healthFeatures.sceneBundlesEnabled ?? true,
@@ -310,20 +484,189 @@ export async function bootRuntime(
       avatarLegIkEnabled: healthFeatures.avatarLegIkEnabled ?? false,
       avatarSeatingEnabled: healthFeatures.avatarSeatingEnabled ?? false,
       avatarCustomizationEnabled: healthFeatures.avatarCustomizationEnabled ?? false,
-      avatarFallbackCapsulesEnabled: healthFeatures.avatarFallbackCapsulesEnabled ?? true
+      avatarFallbackCapsulesEnabled: healthFeatures.avatarFallbackCapsulesEnabled ?? true,
+      hostControlsEnabled: healthFeatures.hostControlsEnabled ?? true,
+      documentsEnabled: healthFeatures.documentsEnabled ?? true,
+      notesEnabled: healthFeatures.notesEnabled ?? true,
+      personalRoomsEnabled: healthFeatures.personalRoomsEnabled ?? true
     }
   };
+}
+
+export async function listRoomDocuments(apiBaseUrl: string, roomId: string, sessionToken: string): Promise<RuntimeDocumentRecord[]> {
+  const response = await fetch(new URL(`/api/rooms/${roomId}/documents`, apiBaseUrl), {
+    headers: {
+      "authorization": `Bearer ${sessionToken}`
+    },
+    cache: "no-store"
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({})) as { reason?: string; error?: string };
+    throw new Error(`failed_to_list_documents:${response.status}:${payload.reason ?? payload.error ?? "unknown"}`);
+  }
+  return ((await response.json()) as { items: RuntimeDocumentRecord[] }).items;
+}
+
+export async function uploadRoomDocument(apiBaseUrl: string, roomId: string, sessionToken: string, file: File): Promise<RuntimeDocumentRecord> {
+  const form = new FormData();
+  form.set("document", file);
+  const response = await fetch(new URL(`/api/rooms/${roomId}/documents`, apiBaseUrl), {
+    method: "POST",
+    headers: {
+      "authorization": `Bearer ${sessionToken}`
+    },
+    body: form
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({})) as { reason?: string; error?: string };
+    throw new Error(`failed_to_upload_document:${response.status}:${payload.reason ?? payload.error ?? "unknown"}`);
+  }
+  return ((await response.json()) as { document: RuntimeDocumentRecord }).document;
+}
+
+export async function downloadRoomDocument(apiBaseUrl: string, document: RuntimeDocumentRecord, sessionToken: string): Promise<{ blob: Blob; filename: string }> {
+  const response = await fetch(new URL(document.downloadUrl, apiBaseUrl), {
+    headers: {
+      "authorization": `Bearer ${sessionToken}`
+    }
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({})) as { reason?: string; error?: string };
+    throw new Error(`failed_to_download_document:${response.status}:${payload.reason ?? payload.error ?? "unknown"}`);
+  }
+  const disposition = response.headers.get("content-disposition") ?? "";
+  const filename = disposition.match(/filename="([^"]+)"/)?.[1] ?? document.filename;
+  return { blob: await response.blob(), filename };
+}
+
+export async function deleteRoomDocument(apiBaseUrl: string, roomId: string, documentId: string, sessionToken: string): Promise<RuntimeDocumentRecord> {
+  const response = await fetch(new URL(`/api/rooms/${roomId}/documents/${documentId}`, apiBaseUrl), {
+    method: "DELETE",
+    headers: {
+      "authorization": `Bearer ${sessionToken}`
+    }
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({})) as { reason?: string; error?: string };
+    throw new Error(`failed_to_delete_document:${response.status}:${payload.reason ?? payload.error ?? "unknown"}`);
+  }
+  return ((await response.json()) as { document: RuntimeDocumentRecord }).document;
+}
+
+export async function selectRoomDocumentSurface(apiBaseUrl: string, roomId: string, documentId: string, surfaceId: string | null, sessionToken: string): Promise<RuntimeDocumentRecord> {
+  const response = await fetch(new URL(`/api/rooms/${roomId}/documents/${documentId}/surface`, apiBaseUrl), {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "authorization": `Bearer ${sessionToken}`
+    },
+    body: JSON.stringify({ surfaceId })
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({})) as { reason?: string; error?: string };
+    throw new Error(`failed_to_select_document_surface:${response.status}:${payload.reason ?? payload.error ?? "unknown"}`);
+  }
+  return ((await response.json()) as { document: RuntimeDocumentRecord }).document;
+}
+
+export async function fetchRoomNote(apiBaseUrl: string, roomId: string, scope: RuntimeNoteScope, sessionToken: string): Promise<RuntimeNoteRecord> {
+  const response = await fetch(new URL(`/api/rooms/${roomId}/notes/${scope}`, apiBaseUrl), {
+    headers: {
+      "authorization": `Bearer ${sessionToken}`
+    },
+    cache: "no-store"
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({})) as { reason?: string; error?: string };
+    throw new Error(`failed_to_load_note:${response.status}:${payload.reason ?? payload.error ?? "unknown"}`);
+  }
+  return ((await response.json()) as { note: RuntimeNoteRecord }).note;
+}
+
+export async function saveRoomNote(apiBaseUrl: string, roomId: string, scope: RuntimeNoteScope, sessionToken: string, content: string): Promise<RuntimeNoteRecord> {
+  const response = await fetch(new URL(`/api/rooms/${roomId}/notes/${scope}`, apiBaseUrl), {
+    method: "PUT",
+    headers: {
+      "content-type": "application/json",
+      "authorization": `Bearer ${sessionToken}`
+    },
+    body: JSON.stringify({ content })
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({})) as { reason?: string; error?: string };
+    throw new Error(`failed_to_save_note:${response.status}:${payload.reason ?? payload.error ?? "unknown"}`);
+  }
+  return ((await response.json()) as { note: RuntimeNoteRecord }).note;
+}
+
+export async function fetchRoomSessionControl(apiBaseUrl: string, roomId: string, sessionToken: string): Promise<RuntimeSessionControlResponse> {
+  const response = await fetch(new URL(`/api/rooms/${roomId}/session-control`, apiBaseUrl), {
+    headers: {
+      "authorization": `Bearer ${sessionToken}`
+    },
+    cache: "no-store"
+  });
+  if (!response.ok) {
+    throw new Error(`failed_to_load_session_control:${response.status}`);
+  }
+  return (await response.json()) as RuntimeSessionControlResponse;
+}
+
+export async function runRoomSessionControlAction(apiBaseUrl: string, roomId: string, sessionToken: string, action: "lock" | "unlock" | "end"): Promise<RuntimeSessionControlResponse> {
+  const response = await fetch(new URL(`/api/rooms/${roomId}/session-control/${action}`, apiBaseUrl), {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "authorization": `Bearer ${sessionToken}`
+    }
+  });
+  if (!response.ok) {
+    throw new Error(`failed_to_run_session_control:${action}:${response.status}`);
+  }
+  return (await response.json()) as RuntimeSessionControlResponse;
+}
+
+export async function removeRoomParticipant(apiBaseUrl: string, roomId: string, sessionToken: string, participantId: string): Promise<RuntimeSessionControlResponse> {
+  const response = await fetch(new URL(`/api/rooms/${roomId}/participants/${encodeURIComponent(participantId)}/remove`, apiBaseUrl), {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "authorization": `Bearer ${sessionToken}`
+    },
+    body: JSON.stringify({ reason: "host_removed" })
+  });
+  if (!response.ok) {
+    throw new Error(`failed_to_remove_participant:${response.status}`);
+  }
+  return (await response.json()) as RuntimeSessionControlResponse;
+}
+
+export async function transferRoomHost(apiBaseUrl: string, roomId: string, sessionToken: string, participantId: string): Promise<RuntimeSessionControlResponse> {
+  const response = await fetch(new URL(`/api/rooms/${roomId}/host/transfer`, apiBaseUrl), {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "authorization": `Bearer ${sessionToken}`
+    },
+    body: JSON.stringify({ participantId })
+  });
+  if (!response.ok) {
+    throw new Error(`failed_to_transfer_host:${response.status}`);
+  }
+  return (await response.json()) as RuntimeSessionControlResponse;
 }
 
 export async function fetchMediaToken(
   apiBaseUrl: string,
   roomId: string,
-  participantId: string
+  participantId: string,
+  sessionToken: string
 ): Promise<MediaTokenResponse> {
   const response = await fetch(new URL("/api/tokens/media", apiBaseUrl), {
     method: "POST",
     headers: {
-      "content-type": "application/json"
+      "content-type": "application/json",
+      "authorization": `Bearer ${sessionToken}`
     },
     body: JSON.stringify({
       roomId,
@@ -343,17 +686,20 @@ export async function fetchMediaToken(
 export async function planVoiceSession(
   apiBaseUrl: string,
   roomId: string,
-  participantId: string
+  participantId: string,
+  sessionToken: string
 ): Promise<VoiceSessionPlan> {
-  const manifest = await fetchRoomManifest(apiBaseUrl, roomId);
-  const media = await fetchMediaToken(apiBaseUrl, roomId, participantId);
+  const manifest = await fetchRoomManifest(apiBaseUrl, roomId, sessionToken);
+  const health = await fetchRuntimeHealth(apiBaseUrl);
+  const healthFeatures = health.features ?? {};
+  const media = await fetchMediaToken(apiBaseUrl, roomId, participantId, sessionToken);
 
   return {
     roomId,
     participantId,
     livekitUrl: media.livekitUrl,
     token: media.token,
-    spatialAudioEnabled: manifest.features.spatialAudio
+    spatialAudioEnabled: manifest.features.spatialAudio && (healthFeatures.spatialAudioEnabled ?? true)
   };
 }
 
@@ -371,12 +717,14 @@ export async function listPresence(apiBaseUrl: string, roomId: string): Promise<
 export async function upsertPresence(
   apiBaseUrl: string,
   roomId: string,
-  presence: PresenceState
+  presence: PresenceState,
+  sessionToken: string
 ): Promise<void> {
   const response = await fetch(new URL(`/api/rooms/${roomId}/presence/${presence.participantId}`, apiBaseUrl), {
     method: "PUT",
     headers: {
-      "content-type": "application/json"
+      "content-type": "application/json",
+      "authorization": `Bearer ${sessionToken}`
     },
     body: JSON.stringify(presence)
   });
@@ -386,8 +734,11 @@ export async function upsertPresence(
   }
 }
 
-export async function removePresence(apiBaseUrl: string, roomId: string, participantId: string): Promise<void> {
+export async function removePresence(apiBaseUrl: string, roomId: string, participantId: string, sessionToken: string): Promise<void> {
   await fetch(new URL(`/api/rooms/${roomId}/presence/${participantId}`, apiBaseUrl), {
-    method: "DELETE"
+    method: "DELETE",
+    headers: {
+      "authorization": `Bearer ${sessionToken}`
+    }
   });
 }
