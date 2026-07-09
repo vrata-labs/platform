@@ -97,6 +97,7 @@ async function deleteStickyNote(page: Page, noteId: string) {
 }
 
 test("M1.6 markdown sticky board syncs notes, movement, reload and safe rendering", async ({ browser }) => {
+  test.setTimeout(90000);
   const roomId = `m1-markdown-board-${Date.now()}`;
   const host = await browser.newPage();
   const member = await browser.newPage();

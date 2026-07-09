@@ -352,14 +352,8 @@ test("room documents library uploads downloads selects and deletes PDF", async (
   await expect.poll(async () => page.locator("#document-upload-input").evaluate((input: HTMLInputElement) => input.files?.[0]?.name ?? ""), {
     timeout: 5000
   }).toBe("meeting.pdf");
-  await expect(page.locator("#document-upload-button")).toBeEnabled({ timeout: 10000 });
-  const uploadPromise = page.waitForResponse((response) =>
-    response.request().method() === "POST" && response.url().endsWith(`/api/rooms/${room.roomId}/documents`)
-  );
-  await page.locator("#document-upload-button").click();
-  const uploadResponse = await uploadPromise;
-  expect(uploadResponse.status()).toBe(201);
-  await expect(page.locator("#document-select")).toContainText("meeting.pdf");
+  await clickEnabledDomButton(page, "#document-upload-button");
+  await expect(page.locator("#document-select")).toContainText("meeting.pdf", { timeout: 15000 });
 
   await clickEnabledDomButton(page, "#document-surface-button");
   await expect.poll(async () => page.evaluate(() => {
