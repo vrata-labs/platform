@@ -1,0 +1,174 @@
+#cloud-config
+package_update: true
+package_upgrade: false
+
+packages:
+  - git
+  - curl
+  - ca-certificates
+
+write_files:
+  - path: /usr/local/bin/vrata-write-domains.sh
+    permissions: "0755"
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      VRATA_IP="$(curl -fsH 'Metadata-Flavor: Google' http://169.254.169.254/computeMetadata/v1/instance/network-interfaces/0/access-configs/0/external-ip)"
+      VRATA_APP_DOMAIN="${VRATA_IP}.sslip.io"
+      VRATA_LIVEKIT_DOMAIN="livekit.${VRATA_IP}.sslip.io"
+      VRATA_TURN_DOMAIN="turn.${VRATA_IP}.sslip.io"
+      VRATA_STATE_DOMAIN="state.${VRATA_IP}.sslip.io"
+      VRATA_BROWSER_DOMAIN="browser.${VRATA_IP}.sslip.io"
+
+      mkdir -p /opt/vrata/infra/docker
+      export VRATA_IP VRATA_APP_DOMAIN VRATA_STATE_DOMAIN VRATA_LIVEKIT_DOMAIN VRATA_TURN_DOMAIN VRATA_BROWSER_DOMAIN
+      python3 - <<'PY'
+      import os
+      import secrets
+      import urllib.error
+      import urllib.request
+      from pathlib import Path
+
+      def metadata_value(name):
+          env_name = name.upper().replace('-', '_')
+          if os.environ.get(env_name):
+              return os.environ[env_name]
+          request = urllib.request.Request(
+              f"http://169.254.169.254/computeMetadata/v1/instance/attributes/{name}",
+              headers={"Metadata-Flavor": "Google"}
+          )
+          try:
+              with urllib.request.urlopen(request, timeout=2) as response:
+                  value = response.read().decode().strip()
+                  return value or None
+          except (urllib.error.URLError, TimeoutError):
+              return None
+
+      def secret_value(name, bytes_count=32):
+          return metadata_value(name) or secrets.token_urlsafe(bytes_count)
+
+      ip = os.environ["VRATA_IP"]
+      app_domain = os.environ["VRATA_APP_DOMAIN"]
+      state_domain = os.environ["VRATA_STATE_DOMAIN"]
+      livekit_domain = os.environ["VRATA_LIVEKIT_DOMAIN"]
+      turn_domain = os.environ["VRATA_TURN_DOMAIN"]
+      browser_domain = os.environ["VRATA_BROWSER_DOMAIN"]
+      control_plane_admin_token = secret_value("vrata-control-plane-admin-token")
+      livekit_api_key = metadata_value("vrata-livekit-api-key") or "vrata-stage"
+      livekit_api_secret = secret_value("vrata-livekit-api-secret")
+      state_token_secret = secret_value("vrata-state-token-secret")
+      internal_service_token = secret_value("vrata-internal-service-token")
+      remote_browser_token_secret = secret_value("vrata-remote-browser-token-secret")
+      postgres_password = secret_value("vrata-postgres-password", 24)
+      minio_root_user = metadata_value("vrata-minio-root-user") or "vrataminio"
+      minio_root_password = secret_value("vrata-minio-root-password", 24)
+      lines = [
+          "COMPOSE_PROJECT_NAME=vrata",
+          "API_IMAGE_REPO=cr.yandex/crp9cm29k6p76hqo8lti/vrata-api",
+          "ROOM_STATE_IMAGE_REPO=cr.yandex/crp9cm29k6p76hqo8lti/vrata-room-state",
+          "REMOTE_BROWSER_IMAGE_REPO=cr.yandex/crp9cm29k6p76hqo8lti/vrata-remote-browser",
+          "IMAGE_TAG=staging",
+          f"VRATA_APP_BASE_URL=https://{app_domain}",
+          f"VRATA_APP_DOMAIN={app_domain}",
+          f"VRATA_STATE_DOMAIN={state_domain}",
+          f"VRATA_LIVEKIT_DOMAIN={livekit_domain}",
+          f"VRATA_BROWSER_DOMAIN={browser_domain}",
+          f"LIVEKIT_NODE_IP={ip}",
+          f"ROOM_STATE_PUBLIC_URL=wss://{state_domain}",
+          f"LIVEKIT_URL=wss://{livekit_domain}",
+          f"REMOTE_BROWSER_PUBLIC_URL=https://{browser_domain}",
+          f"REMOTE_BROWSER_ALLOWED_ORIGINS=https://{app_domain},http://{ip}:4000,http://127.0.0.1:4000,http://localhost:4000,https://rutube.ru,https://*.rutube.ru,https://*.rtbcdn.ru",
+          "REMOTE_BROWSER_ALLOW_PRIVATE_ALLOWED_ORIGINS=true",
+          "REMOTE_BROWSER_FRAME_INTERVAL_MS=250",
+          "VRATA_HTTP_PORT=80",
+          "VRATA_HTTPS_PORT=443",
+          "VRATA_API_DIRECT_PORT=4000",
+          "VRATA_ROOM_STATE_PORT=2567",
+          "VRATA_LIVEKIT_PORT=7880",
+          "VRATA_LIVEKIT_TCP_PORT=7881",
+          "VRATA_LIVEKIT_UDP_PORT=7881",
+          "LIVEKIT_TURN_ENABLED=true",
+          f"LIVEKIT_TURN_DOMAIN={turn_domain}",
+          "LIVEKIT_TURN_TLS_PORT=5349",
+          "LIVEKIT_TURN_UDP_PORT=3478",
+          "LIVEKIT_TURN_RELAY_RANGE_START=50000",
+          "LIVEKIT_TURN_RELAY_RANGE_END=50100",
+          "LIVEKIT_TURN_EXTERNAL_TLS=true",
+          "MINIO_API_PORT=9000",
+          "MINIO_CONSOLE_PORT=9001",
+          "API_PORT=4000",
+          "API_CORS_ORIGIN=*",
+          f"CONTROL_PLANE_ADMIN_TOKEN={control_plane_admin_token}",
+          f"LIVEKIT_API_KEY={livekit_api_key}",
+          f"LIVEKIT_API_SECRET={livekit_api_secret}",
+          "LIVEKIT_ROOM_PREFIX=vrata-",
+          "STATE_TOKEN_TTL_SECONDS=900",
+          f"STATE_TOKEN_SECRET={state_token_secret}",
+          f"VRATA_INTERNAL_SERVICE_TOKEN={internal_service_token}",
+          f"REMOTE_BROWSER_TOKEN_SECRET={remote_browser_token_secret}",
+          "REMOTE_BROWSER_TOKEN_TTL_SECONDS=300",
+          "MEDIA_TOKEN_TTL_SECONDS=900",
+          "VRATA_ALLOW_INSECURE_PRODUCTION_URLS=false",
+          "POSTGRES_DB=vrata",
+          "POSTGRES_USER=postgres",
+          f"POSTGRES_PASSWORD={postgres_password}",
+          "POSTGRES_PORT=5432",
+          f"POSTGRES_URL=postgres://postgres:{postgres_password}@postgres:5432/vrata",
+          f"MINIO_ROOT_USER={minio_root_user}",
+          f"MINIO_ROOT_PASSWORD={minio_root_password}",
+          "MINIO_BUCKET=vrata-scene-bundles",
+          f"MINIO_PUBLIC_BASE_URL=http://{ip}:9000",
+          "MINIO_SCENE_PREFIX=scenes/",
+          "SCENE_BUNDLE_PROVIDER=minio-default",
+          "SCENE_BUNDLE_S3_ENDPOINT=",
+          "SCENE_BUNDLE_S3_REGION=",
+          "SCENE_BUNDLE_S3_BUCKET=",
+          "SCENE_BUNDLE_S3_PUBLIC_BASE_URL=",
+          "CADDY_CONFIG_FILE=./Caddyfile.staging"
+      ]
+      content = "\n".join(lines) + "\n"
+      Path("/opt/vrata/infra/docker/.env.staging").write_text(content)
+      PY
+  - path: /usr/local/bin/vrata-install-metadata-ssh.sh
+    permissions: "0755"
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      SSH_KEYS="$(curl -fsH 'Metadata-Flavor: Google' http://169.254.169.254/computeMetadata/v1/instance/attributes/ssh-keys || true)"
+      [ -n "$SSH_KEYS" ] || exit 0
+
+      while IFS= read -r entry; do
+        [ -n "$entry" ] || continue
+        user_name="${entry%%:*}"
+        public_key="${entry#*:}"
+        if ! id "$user_name" >/dev/null 2>&1; then
+          useradd -m -s /bin/bash "$user_name"
+        fi
+        install -d -m 700 -o "$user_name" -g "$user_name" "/home/$user_name/.ssh"
+        printf '%s\n' "$public_key" > "/home/$user_name/.ssh/authorized_keys"
+        chown "$user_name:$user_name" "/home/$user_name/.ssh/authorized_keys"
+        chmod 600 "/home/$user_name/.ssh/authorized_keys"
+      done <<< "$SSH_KEYS"
+
+runcmd:
+  - /usr/local/bin/vrata-install-metadata-ssh.sh
+  - curl -fsSL https://get.docker.com | sh
+  - systemctl enable docker
+  - systemctl restart docker
+  - ufw allow 80/tcp
+  - ufw allow 443/tcp
+  - ufw allow 443/udp
+  - ufw allow 7880/tcp
+  - ufw allow 7881/tcp
+  - ufw allow 7881/udp
+  - ufw allow 5349/tcp
+  - ufw allow 3478/udp
+  - ufw allow 50000:50100/udp
+  - ufw allow 2567/tcp
+  - ufw allow 9000/tcp
+  - ufw allow 9001/tcp
+  - rm -rf /opt/vrata
+  - git clone --branch deploy/scene-bundles-stage-20260328 --single-branch https://github.com/psilon2000/vrata.git /opt/vrata
+  - /usr/local/bin/vrata-write-domains.sh
+  - bash -lc 'cd /opt/vrata && docker compose --env-file infra/docker/.env.staging -f infra/docker/compose.staging.yml build'
+  - bash -lc 'cd /opt/vrata && docker compose --env-file infra/docker/.env.staging -f infra/docker/compose.staging.yml up -d'

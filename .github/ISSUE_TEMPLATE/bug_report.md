@@ -13,9 +13,9 @@ labels: bug
 
 ## Reproduction Steps
 
-1.
-2.
-3.
+1. 
+2. 
+3. 
 
 ## Environment
 
@@ -28,3 +28,4 @@ labels: bug
 
 
 ## Impact
+
