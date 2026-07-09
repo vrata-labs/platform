@@ -21,17 +21,21 @@ export interface RoomManifest {
     joinMode: "link";
     guestAllowed: boolean;
     roleQueryAllowed: boolean;
+    visibility: "public" | "unlisted" | "private";
   };
 }
 
 export interface StateTokenPayload {
-  tenantId?: string;
+  tenantId: string;
   roomId: string;
   participantId: string;
   displayName: string;
   role: import("./access.js").RoomRole;
   permissions: import("./access.js").RoomPermission[];
+  sessionId: string;
+  iat: number;
   exp: number;
+  jti: string;
 }
 
 export interface MediaTokenPayload {

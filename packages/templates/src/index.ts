@@ -19,6 +19,11 @@ export const templates: TemplateDefinition[] = [
     id: "event-demo-basic",
     label: "Event Demo Basic",
     assetSlots: ["logo", "media-placeholder"]
+  },
+  {
+    id: "personal-workspace-basic",
+    label: "Personal Workspace Basic",
+    assetSlots: ["logo", "personal-surface"]
   }
 ];
 

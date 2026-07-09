@@ -27,6 +27,20 @@ form {
   gap: 12px;
 }
 
+.dashboard-content[data-authorized="false"] {
+  opacity: 0.72;
+}
+
+.auth-panel {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 16px;
+  padding: 12px;
+  border: 1px solid rgba(10, 36, 64, 0.08);
+  border-radius: 14px;
+  background: rgba(14, 91, 215, 0.05);
+}
+
 label {
   display: grid;
   gap: 6px;
@@ -54,6 +68,12 @@ button {
   display: block;
 }
 
+.validation-message {
+  min-height: 20px;
+  color: #9a3412;
+  font-size: 0.9rem;
+}
+
 #rooms-list {
   margin-top: 18px;
   padding-left: 18px;
@@ -68,15 +88,30 @@ button {
   padding-left: 18px;
 }
 
+#scene-bundles-list {
+  margin-top: 18px;
+  padding-left: 18px;
+}
+
 #tenants-list {
   margin-top: 18px;
   padding-left: 18px;
 }
 
 #tenants-list li,
-#assets-list li {
+#assets-list li,
+#scene-bundles-list li {
   margin-top: 8px;
   word-break: break-all;
+}
+
+.scene-bundle-preview {
+  width: 64px;
+  height: 40px;
+  object-fit: cover;
+  vertical-align: middle;
+  border-radius: 8px;
+  border: 1px solid rgba(10, 36, 64, 0.15);
 }
 
 #room-detail {
@@ -85,6 +120,15 @@ button {
   border-radius: 12px;
   background: rgba(10, 36, 64, 0.06);
   border: 1px solid rgba(10, 36, 64, 0.08);
+  white-space: pre-wrap;
+}
+
+#room-preview {
+  margin-top: 16px;
+  padding: 12px;
+  border-radius: 12px;
+  background: rgba(14, 91, 215, 0.06);
+  border: 1px solid rgba(14, 91, 215, 0.16);
   white-space: pre-wrap;
 }
 

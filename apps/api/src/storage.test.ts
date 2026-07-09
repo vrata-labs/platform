@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { MemoryStorage, initPostgresStorageWithRetry } from "./storage.js";
+import { MemoryStorage, PostgresStorage, initPostgresStorageWithRetry } from "./storage.js";
 
 test("MemoryStorage keeps xr telemetry events in insertion order", async () => {
   const storage = new MemoryStorage();
@@ -48,6 +48,21 @@ test("MemoryStorage enables screen share for new rooms by default", async () => 
 
   assert.equal(defaultRoom.features.screenShare, true);
   assert.equal(disabledRoom.features.screenShare, false);
+});
+
+test("MemoryStorage defaults personal rooms to private owner state", async () => {
+  const storage = new MemoryStorage();
+
+  const room = await storage.createRoom({
+    name: "Owner Personal Room",
+    roomType: "personal",
+    ownerParticipantId: "owner-personal"
+  });
+
+  assert.equal(room.templateId, "personal-workspace-basic");
+  assert.equal(room.visibility, "private");
+  assert.equal(room.guestAllowed, false);
+  assert.equal(room.personalState?.lastPose, undefined);
 });
 
 test("Postgres storage init retries transient connection failures", async () => {
@@ -101,4 +116,29 @@ test("Postgres storage init fails fast on non-connection errors", async () => {
 
   assert.equal(attempts, 1);
   assert.equal(rejected, syntaxError);
+});
+
+test("Postgres storage init adds session control column before altering its default", async () => {
+  let sessionControlColumnExists = false;
+  const queries: string[] = [];
+  const pool = {
+    async query(sql: string) {
+      queries.push(sql);
+      if (sql.includes("add column if not exists session_control")) {
+        sessionControlColumnExists = true;
+      }
+      if (sql.includes("alter column session_control set default") && !sessionControlColumnExists) {
+        throw new Error("session_control_altered_before_add_column");
+      }
+      return { rows: [] };
+    }
+  };
+
+  await new PostgresStorage(pool as unknown as ConstructorParameters<typeof PostgresStorage>[0]).init();
+
+  const addColumnIndex = queries.findIndex((sql) => sql.includes("add column if not exists session_control"));
+  const alterDefaultIndex = queries.findIndex((sql) => sql.includes("alter column session_control set default"));
+  assert.notEqual(addColumnIndex, -1);
+  assert.notEqual(alterDefaultIndex, -1);
+  assert.ok(addColumnIndex < alterDefaultIndex);
 });

@@ -36,7 +36,91 @@ export interface RoomAvatarConfig {
   avatarSeatsEnabled?: boolean;
 }
 
+export type RoomVisibility = "public" | "unlisted" | "private";
+export type RoomStatus = "active" | "disabled";
+export type RoomType = "standard" | "personal";
+
+export interface RoomPersonalPoseState {
+  position: { x: number; y: number; z: number };
+  yaw: number;
+  pitch: number;
+  updatedAt: string;
+  updatedBy?: string | null;
+}
+
+export interface RoomPersonalState {
+  lastPose?: RoomPersonalPoseState | null;
+}
+
+export interface RoomInviteRecord {
+  inviteId: string;
+  roomId: string;
+  tokenHash: string;
+  role: "guest" | "member" | "host" | "admin";
+  waitingRoomEnabled: boolean;
+  createdAt: string;
+  expiresAt: string;
+  revokedAt?: string | null;
+  createdBy?: string | null;
+  revokedBy?: string | null;
+}
+
+export interface WaitingRoomRequestRecord {
+  requestId: string;
+  roomId: string;
+  inviteId: string;
+  participantId: string;
+  displayName: string;
+  status: "pending" | "approved" | "rejected";
+  createdAt: string;
+  decidedAt?: string | null;
+  decidedBy?: string | null;
+}
+
+export type RoomNoteScope = "shared" | "private";
+
+export interface RoomNoteRecord {
+  noteId: string;
+  roomId: string;
+  scope: RoomNoteScope;
+  ownerParticipantId?: string | null;
+  content: string;
+  updatedAt: string | null;
+  updatedBy?: string | null;
+}
+
+export interface RoomDocumentRecord {
+  documentId: string;
+  roomId: string;
+  tenantId: string;
+  filename: string;
+  contentType: string;
+  sizeBytes: number;
+  storageKey: string;
+  checksum: string;
+  uploadedBy?: string | null;
+  uploadedAt: string;
+  deletedAt?: string | null;
+  deletedBy?: string | null;
+  linkedSurfaceId?: string | null;
+}
+
+export interface RoomSessionControlState {
+  hostParticipantId?: string | null;
+  lockedAt?: string | null;
+  lockedBy?: string | null;
+  endedAt?: string | null;
+  endedBy?: string | null;
+  removedParticipants?: Record<string, {
+    removedAt: string;
+    removedBy?: string | null;
+    reason?: string | null;
+  }>;
+}
+
 const DEFAULT_AVATAR_CONFIG_JSON = '{"avatarsEnabled":true,"avatarCatalogUrl":"/assets/avatars/catalog.v1.json","avatarQualityProfile":"desktop-standard","avatarFallbackCapsulesEnabled":true,"avatarSeatsEnabled":true}' as const;
+const DEFAULT_SESSION_CONTROL_JSON = '{"hostParticipantId":null,"lockedAt":null,"lockedBy":null,"endedAt":null,"endedBy":null,"removedParticipants":{}}' as const;
+const DEFAULT_PERSONAL_STATE_JSON = '{}' as const;
 const POSTGRES_INIT_MAX_ATTEMPTS = 12;
 const POSTGRES_INIT_RETRY_DELAY_MS = 1000;
 const RETRYABLE_POSTGRES_INIT_ERROR_CODES = new Set(["ECONNREFUSED", "ECONNRESET", "ETIMEDOUT", "EAI_AGAIN", "ENOTFOUND"]);
@@ -46,6 +130,12 @@ export interface RoomRecord {
   tenantId: string;
   templateId: string;
   name: string;
+  roomType?: RoomType;
+  ownerParticipantId?: string | null;
+  status?: RoomStatus;
+  disabledAt?: string | null;
+  disabledBy?: string | null;
+  visibility?: RoomVisibility;
   sceneBundleUrl?: string;
   features: RoomFeatures;
   assetIds: string[];
@@ -55,6 +145,8 @@ export interface RoomRecord {
   };
   guestAllowed?: boolean;
   avatarConfig?: RoomAvatarConfig;
+  sessionControl?: RoomSessionControlState;
+  personalState?: RoomPersonalState;
 }
 
 type InitializableStorage = { init(): Promise<void> };
@@ -116,7 +208,209 @@ function defaultAvatarConfig(input?: Partial<RoomAvatarConfig>): RoomAvatarConfi
   };
 }
 
+function defaultRoomType(input?: RoomType): RoomType {
+  return input === "personal" ? "personal" : "standard";
+}
+
+function defaultRoomVisibility(input?: RoomVisibility, roomType?: RoomType): RoomVisibility {
+  return input === "private" || input === "unlisted" ? input : roomType === "personal" ? "private" : "public";
+}
+
+function defaultGuestAllowed(input: boolean | undefined, roomType?: RoomType): boolean {
+  return input ?? roomType !== "personal";
+}
+
+function defaultRoomStatus(input?: RoomStatus): RoomStatus {
+  return input === "disabled" ? "disabled" : "active";
+}
+
+function defaultSessionControl(input?: Partial<RoomSessionControlState> | null): RoomSessionControlState {
+  return {
+    hostParticipantId: input?.hostParticipantId ?? null,
+    lockedAt: input?.lockedAt ?? null,
+    lockedBy: input?.lockedBy ?? null,
+    endedAt: input?.endedAt ?? null,
+    endedBy: input?.endedBy ?? null,
+    removedParticipants: input?.removedParticipants ?? {}
+  };
+}
+
+function defaultPersonalState(input?: Partial<RoomPersonalState> | null): RoomPersonalState {
+  if (!input?.lastPose) {
+    return {};
+  }
+  return {
+    lastPose: {
+      position: {
+        x: input.lastPose.position.x,
+        y: input.lastPose.position.y,
+        z: input.lastPose.position.z
+      },
+      yaw: input.lastPose.yaw,
+      pitch: input.lastPose.pitch,
+      updatedAt: input.lastPose.updatedAt,
+      updatedBy: input.lastPose.updatedBy ?? null
+    }
+  };
+}
+
+function isoString(value: string | Date | null | undefined): string | null {
+  if (!value) return null;
+  return value instanceof Date ? value.toISOString() : value;
+}
+
+function mapRoomInviteRow(row: {
+  invite_id: string;
+  room_id: string;
+  token_hash: string;
+  role: RoomInviteRecord["role"];
+  waiting_room_enabled: boolean;
+  created_at: string | Date;
+  expires_at: string | Date;
+  revoked_at?: string | Date | null;
+  created_by?: string | null;
+  revoked_by?: string | null;
+}): RoomInviteRecord {
+  return {
+    inviteId: row.invite_id,
+    roomId: row.room_id,
+    tokenHash: row.token_hash,
+    role: row.role,
+    waitingRoomEnabled: row.waiting_room_enabled,
+    createdAt: isoString(row.created_at) ?? new Date().toISOString(),
+    expiresAt: isoString(row.expires_at) ?? new Date().toISOString(),
+    revokedAt: isoString(row.revoked_at),
+    createdBy: row.created_by ?? null,
+    revokedBy: row.revoked_by ?? null
+  };
+}
+
+function mapWaitingRoomRequestRow(row: {
+  request_id: string;
+  room_id: string;
+  invite_id: string;
+  participant_id: string;
+  display_name: string;
+  status: WaitingRoomRequestRecord["status"];
+  created_at: string | Date;
+  decided_at?: string | Date | null;
+  decided_by?: string | null;
+}): WaitingRoomRequestRecord {
+  return {
+    requestId: row.request_id,
+    roomId: row.room_id,
+    inviteId: row.invite_id,
+    participantId: row.participant_id,
+    displayName: row.display_name,
+    status: row.status,
+    createdAt: isoString(row.created_at) ?? new Date().toISOString(),
+    decidedAt: isoString(row.decided_at),
+    decidedBy: row.decided_by ?? null
+  };
+}
+
+function mapRoomNoteRow(row: {
+  note_id: string;
+  room_id: string;
+  scope: RoomNoteScope;
+  owner_participant_id?: string | null;
+  content: string;
+  updated_at: string | Date;
+  updated_by?: string | null;
+}): RoomNoteRecord {
+  return {
+    noteId: row.note_id,
+    roomId: row.room_id,
+    scope: row.scope,
+    ownerParticipantId: row.owner_participant_id ?? null,
+    content: row.content,
+    updatedAt: isoString(row.updated_at) ?? new Date().toISOString(),
+    updatedBy: row.updated_by ?? null
+  };
+}
+
+function roomNoteId(roomId: string, scope: RoomNoteScope, ownerParticipantId?: string | null): string {
+  return scope === "shared" ? `${roomId}:shared` : `${roomId}:private:${ownerParticipantId ?? ""}`;
+}
+
+function mapRoomDocumentRow(row: {
+  document_id: string;
+  room_id: string;
+  tenant_id: string;
+  filename: string;
+  content_type: string;
+  size_bytes: string | number;
+  storage_key: string;
+  checksum: string;
+  uploaded_by?: string | null;
+  uploaded_at: string | Date;
+  deleted_at?: string | Date | null;
+  deleted_by?: string | null;
+  linked_surface_id?: string | null;
+}): RoomDocumentRecord {
+  return {
+    documentId: row.document_id,
+    roomId: row.room_id,
+    tenantId: row.tenant_id,
+    filename: row.filename,
+    contentType: row.content_type,
+    sizeBytes: Number(row.size_bytes),
+    storageKey: row.storage_key,
+    checksum: row.checksum,
+    uploadedBy: row.uploaded_by ?? null,
+    uploadedAt: isoString(row.uploaded_at) ?? new Date().toISOString(),
+    deletedAt: isoString(row.deleted_at),
+    deletedBy: row.deleted_by ?? null,
+    linkedSurfaceId: row.linked_surface_id ?? null
+  };
+}
+
+function mapRoomRow(row: {
+  room_id: string;
+  tenant_id: string;
+  template_id: string;
+  name: string;
+  room_type?: RoomType;
+  owner_participant_id?: string | null;
+  status?: RoomStatus;
+  disabled_at?: string | Date | null;
+  disabled_by?: string | null;
+  visibility?: RoomVisibility;
+  scene_bundle_url: string | null;
+  features: RoomFeatures;
+  asset_ids: string[];
+  theme: { primaryColor: string; accentColor: string };
+  guest_allowed: boolean;
+  avatar_config: Partial<RoomAvatarConfig>;
+  session_control: Partial<RoomSessionControlState> | null;
+  personal_state?: Partial<RoomPersonalState> | null;
+}): RoomRecord {
+  const roomType = defaultRoomType(row.room_type);
+  return {
+    roomId: row.room_id,
+    tenantId: row.tenant_id,
+    templateId: row.template_id,
+    name: row.name,
+    roomType,
+    ownerParticipantId: row.owner_participant_id ?? null,
+    status: defaultRoomStatus(row.status),
+    disabledAt: isoString(row.disabled_at),
+    disabledBy: row.disabled_by ?? null,
+    visibility: defaultRoomVisibility(row.visibility, roomType),
+    sceneBundleUrl: row.scene_bundle_url ?? undefined,
+    features: row.features,
+    assetIds: row.asset_ids,
+    theme: row.theme,
+    guestAllowed: defaultGuestAllowed(row.guest_allowed, roomType),
+    avatarConfig: defaultAvatarConfig(row.avatar_config),
+    sessionControl: defaultSessionControl(row.session_control),
+    personalState: defaultPersonalState(row.personal_state)
+  };
+}
+
 export interface RuntimeDiagnosticRecord {
+  reportId?: string;
+  requestId?: string;
   participantId: string;
   displayName: string;
   mode: "desktop" | "mobile" | "vr";
@@ -224,6 +518,23 @@ export interface Storage {
   createRoom(input: Partial<RoomRecord>): Promise<RoomRecord>;
   updateRoom(roomId: string, input: Partial<RoomRecord>): Promise<RoomRecord | null>;
   deleteRoom(roomId: string): Promise<boolean>;
+  createRoomInvite(input: Omit<RoomInviteRecord, "inviteId" | "createdAt" | "revokedAt" | "revokedBy"> & { inviteId?: string; createdAt?: string }): Promise<RoomInviteRecord>;
+  listRoomInvites(roomId: string): Promise<RoomInviteRecord[]>;
+  getRoomInvite(inviteId: string): Promise<RoomInviteRecord | null>;
+  getRoomInviteByTokenHash(tokenHash: string): Promise<RoomInviteRecord | null>;
+  revokeRoomInvite(roomId: string, inviteId: string, revokedAt: string, revokedBy?: string | null): Promise<RoomInviteRecord | null>;
+  createWaitingRoomRequest(input: Omit<WaitingRoomRequestRecord, "requestId" | "createdAt" | "status" | "decidedAt" | "decidedBy"> & { requestId?: string; createdAt?: string; status?: WaitingRoomRequestRecord["status"] }): Promise<WaitingRoomRequestRecord>;
+  listWaitingRoomRequests(roomId: string): Promise<WaitingRoomRequestRecord[]>;
+  getWaitingRoomRequest(requestId: string): Promise<WaitingRoomRequestRecord | null>;
+  getWaitingRoomRequestForInviteParticipant(inviteId: string, participantId: string): Promise<WaitingRoomRequestRecord | null>;
+  updateWaitingRoomRequest(roomId: string, requestId: string, input: Partial<Pick<WaitingRoomRequestRecord, "status" | "decidedAt" | "decidedBy">>): Promise<WaitingRoomRequestRecord | null>;
+  getRoomNote(roomId: string, scope: RoomNoteScope, ownerParticipantId?: string | null): Promise<RoomNoteRecord | null>;
+  upsertRoomNote(input: Pick<RoomNoteRecord, "roomId" | "scope" | "content"> & { ownerParticipantId?: string | null; updatedBy?: string | null }): Promise<RoomNoteRecord>;
+  listRoomDocuments(roomId: string, includeDeleted?: boolean): Promise<RoomDocumentRecord[]>;
+  getRoomDocument(roomId: string, documentId: string): Promise<RoomDocumentRecord | null>;
+  createRoomDocument(input: Omit<RoomDocumentRecord, "uploadedAt" | "deletedAt" | "deletedBy" | "linkedSurfaceId"> & { uploadedAt?: string; linkedSurfaceId?: string | null }): Promise<RoomDocumentRecord>;
+  markRoomDocumentDeleted(roomId: string, documentId: string, deletedAt: string, deletedBy?: string | null): Promise<RoomDocumentRecord | null>;
+  updateRoomDocumentSurface(roomId: string, documentId: string, linkedSurfaceId: string | null): Promise<RoomDocumentRecord | null>;
   createAsset(input: Partial<AssetRecord>): Promise<AssetRecord>;
   updateAsset(assetId: string, input: Partial<AssetRecord>): Promise<AssetRecord | null>;
   deleteAsset(assetId: string): Promise<boolean>;
@@ -234,21 +545,30 @@ export interface Storage {
   listSceneBundles(): Promise<SceneBundleRecord[]>;
   getSceneBundle(bundleId: string): Promise<SceneBundleRecord | null>;
   createSceneBundle(input: SceneBundleCreateInput & { publicUrl: string; provider: SceneBundleRecord["provider"] }): Promise<SceneBundleRecord>;
-  updateSceneBundle(bundleId: string, input: Partial<SceneBundleCreateInput> & { publicUrl?: string; provider?: SceneBundleRecord["provider"] }): Promise<SceneBundleRecord | null>;
+  updateSceneBundle(bundleId: string, input: SceneBundleUpdateInput): Promise<SceneBundleRecord | null>;
   listSceneBundleVersions(bundleId: string): Promise<SceneBundleRecord[]>;
   setCurrentSceneBundleVersion(bundleId: string, version: string): Promise<SceneBundleRecord | null>;
 }
 
+export type SceneBundleUpdateInput = Partial<SceneBundleCreateInput> & {
+  publicUrl?: string;
+  provider?: SceneBundleRecord["provider"];
+  status?: SceneBundleRecord["status"];
+  isCurrent?: boolean;
+};
+
 const defaultTemplates: TemplateRecord[] = [
   { templateId: "meeting-room-basic", label: "Meeting Room Basic", assetSlots: ["logo", "hero-screen"] },
   { templateId: "showroom-basic", label: "Showroom Basic", assetSlots: ["logo", "wall-graphic"] },
-  { templateId: "event-demo-basic", label: "Event Demo Basic", assetSlots: ["logo", "media-placeholder"] }
+  { templateId: "event-demo-basic", label: "Event Demo Basic", assetSlots: ["logo", "media-placeholder"] },
+  { templateId: "personal-workspace-basic", label: "Personal Workspace Basic", assetSlots: ["logo", "personal-surface"] }
 ];
 
 export class MemoryStorage implements Storage {
   private tenants = new Map<string, TenantRecord>([["demo-tenant", { tenantId: "demo-tenant", name: "Demo Tenant" }]]);
   private templates = new Map<string, TemplateRecord>(defaultTemplates.map((item) => [item.templateId, item]));
   private assets = new Map<string, AssetRecord>();
+  private roomDocuments = new Map<string, RoomDocumentRecord>();
   private rooms = new Map<string, RoomRecord>([
     [
       "demo-room",
@@ -257,6 +577,12 @@ export class MemoryStorage implements Storage {
         tenantId: "demo-tenant",
         templateId: "meeting-room-basic",
         name: "Demo Room",
+        roomType: "standard",
+        ownerParticipantId: null,
+        status: "active",
+        disabledAt: null,
+        disabledBy: null,
+        visibility: "public",
         sceneBundleUrl: undefined,
         features: { voice: true, spatialAudio: true, screenShare: true },
         assetIds: [],
@@ -265,13 +591,18 @@ export class MemoryStorage implements Storage {
           accentColor: "#163354"
         },
         guestAllowed: true,
-        avatarConfig: defaultAvatarConfig()
+        avatarConfig: defaultAvatarConfig(),
+        sessionControl: defaultSessionControl(),
+        personalState: defaultPersonalState()
       }
     ]
   ]);
   private diagnostics = new Map<string, RuntimeDiagnosticRecord[]>();
   private xrTelemetry = new Map<string, XrTelemetryEventRecord[]>();
   private sceneBundles = new Map<string, SceneBundleRecord>();
+  private roomInvites = new Map<string, RoomInviteRecord>();
+  private waitingRoomRequests = new Map<string, WaitingRoomRequestRecord>();
+  private roomNotes = new Map<string, RoomNoteRecord>();
 
   private sceneBundleKey(bundleId: string, version: string): string {
     return `${bundleId}::${version}`;
@@ -304,11 +635,18 @@ export class MemoryStorage implements Storage {
   async listRooms(): Promise<RoomRecord[]> { return Array.from(this.rooms.values()); }
   async getRoom(roomId: string): Promise<RoomRecord | null> { return this.rooms.get(roomId) ?? null; }
   async createRoom(input: Partial<RoomRecord>): Promise<RoomRecord> {
+    const roomType = defaultRoomType(input.roomType);
     const room: RoomRecord = {
       roomId: input.roomId ?? crypto.randomUUID(),
       tenantId: input.tenantId ?? "demo-tenant",
-      templateId: input.templateId ?? "meeting-room-basic",
+      templateId: input.templateId ?? (roomType === "personal" ? "personal-workspace-basic" : "meeting-room-basic"),
       name: input.name ?? "New Room",
+      roomType,
+      ownerParticipantId: input.ownerParticipantId ?? null,
+      status: defaultRoomStatus(input.status),
+      disabledAt: input.disabledAt ?? null,
+      disabledBy: input.disabledBy ?? null,
+      visibility: defaultRoomVisibility(input.visibility, roomType),
       sceneBundleUrl: input.sceneBundleUrl,
       features: {
         voice: input.features?.voice ?? true,
@@ -320,8 +658,10 @@ export class MemoryStorage implements Storage {
         primaryColor: "#5fc8ff",
         accentColor: "#163354"
       },
-      guestAllowed: input.guestAllowed ?? true,
-      avatarConfig: defaultAvatarConfig(input.avatarConfig)
+      guestAllowed: defaultGuestAllowed(input.guestAllowed, roomType),
+      avatarConfig: defaultAvatarConfig(input.avatarConfig),
+      sessionControl: defaultSessionControl(input.sessionControl),
+      personalState: defaultPersonalState(input.personalState)
     };
     this.rooms.set(room.roomId, room);
     return room;
@@ -331,9 +671,14 @@ export class MemoryStorage implements Storage {
     if (!existing) {
       return null;
     }
-      const updated: RoomRecord = {
-        ...existing,
-        ...input,
+    const updated: RoomRecord = {
+      ...existing,
+      ...input,
+      roomType: defaultRoomType(input.roomType ?? existing.roomType),
+      ownerParticipantId: input.ownerParticipantId !== undefined ? input.ownerParticipantId : existing.ownerParticipantId ?? null,
+      status: defaultRoomStatus(input.status ?? existing.status),
+      disabledAt: input.disabledAt !== undefined ? input.disabledAt : existing.disabledAt ?? null,
+      disabledBy: input.disabledBy !== undefined ? input.disabledBy : existing.disabledBy ?? null,
       features: {
         ...existing.features,
         ...input.features
@@ -343,17 +688,134 @@ export class MemoryStorage implements Storage {
         accentColor: input.theme?.accentColor ?? existing.theme?.accentColor ?? "#163354"
       },
       assetIds: input.assetIds ?? existing.assetIds,
-      guestAllowed: input.guestAllowed ?? existing.guestAllowed ?? true,
+      visibility: defaultRoomVisibility(input.visibility ?? existing.visibility, input.roomType ?? existing.roomType),
+      guestAllowed: defaultGuestAllowed(input.guestAllowed ?? existing.guestAllowed, input.roomType ?? existing.roomType),
       avatarConfig: defaultAvatarConfig({
         ...existing.avatarConfig,
         ...input.avatarConfig
-      })
+      }),
+      sessionControl: defaultSessionControl(input.sessionControl ?? existing.sessionControl),
+      personalState: defaultPersonalState(input.personalState ?? existing.personalState)
     };
     this.rooms.set(roomId, updated);
     return updated;
   }
   async deleteRoom(roomId: string): Promise<boolean> {
     return this.rooms.delete(roomId);
+  }
+  async createRoomInvite(input: Omit<RoomInviteRecord, "inviteId" | "createdAt" | "revokedAt" | "revokedBy"> & { inviteId?: string; createdAt?: string }): Promise<RoomInviteRecord> {
+    const invite: RoomInviteRecord = {
+      inviteId: input.inviteId ?? crypto.randomUUID(),
+      roomId: input.roomId,
+      tokenHash: input.tokenHash,
+      role: input.role,
+      waitingRoomEnabled: input.waitingRoomEnabled,
+      createdAt: input.createdAt ?? new Date().toISOString(),
+      expiresAt: input.expiresAt,
+      revokedAt: null,
+      createdBy: input.createdBy ?? null,
+      revokedBy: null
+    };
+    this.roomInvites.set(invite.inviteId, invite);
+    return invite;
+  }
+  async listRoomInvites(roomId: string): Promise<RoomInviteRecord[]> {
+    return Array.from(this.roomInvites.values()).filter((invite) => invite.roomId === roomId);
+  }
+  async getRoomInvite(inviteId: string): Promise<RoomInviteRecord | null> {
+    return this.roomInvites.get(inviteId) ?? null;
+  }
+  async getRoomInviteByTokenHash(tokenHash: string): Promise<RoomInviteRecord | null> {
+    return Array.from(this.roomInvites.values()).find((invite) => invite.tokenHash === tokenHash) ?? null;
+  }
+  async revokeRoomInvite(roomId: string, inviteId: string, revokedAt: string, revokedBy?: string | null): Promise<RoomInviteRecord | null> {
+    const invite = this.roomInvites.get(inviteId);
+    if (!invite || invite.roomId !== roomId) return null;
+    const updated = { ...invite, revokedAt, revokedBy: revokedBy ?? null };
+    this.roomInvites.set(inviteId, updated);
+    return updated;
+  }
+  async createWaitingRoomRequest(input: Omit<WaitingRoomRequestRecord, "requestId" | "createdAt" | "status" | "decidedAt" | "decidedBy"> & { requestId?: string; createdAt?: string; status?: WaitingRoomRequestRecord["status"] }): Promise<WaitingRoomRequestRecord> {
+    const request: WaitingRoomRequestRecord = {
+      requestId: input.requestId ?? crypto.randomUUID(),
+      roomId: input.roomId,
+      inviteId: input.inviteId,
+      participantId: input.participantId,
+      displayName: input.displayName,
+      status: input.status ?? "pending",
+      createdAt: input.createdAt ?? new Date().toISOString(),
+      decidedAt: null,
+      decidedBy: null
+    };
+    this.waitingRoomRequests.set(request.requestId, request);
+    return request;
+  }
+  async listWaitingRoomRequests(roomId: string): Promise<WaitingRoomRequestRecord[]> {
+    return Array.from(this.waitingRoomRequests.values()).filter((request) => request.roomId === roomId);
+  }
+  async getWaitingRoomRequest(requestId: string): Promise<WaitingRoomRequestRecord | null> {
+    return this.waitingRoomRequests.get(requestId) ?? null;
+  }
+  async getWaitingRoomRequestForInviteParticipant(inviteId: string, participantId: string): Promise<WaitingRoomRequestRecord | null> {
+    return Array.from(this.waitingRoomRequests.values()).find((request) => request.inviteId === inviteId && request.participantId === participantId) ?? null;
+  }
+  async updateWaitingRoomRequest(roomId: string, requestId: string, input: Partial<Pick<WaitingRoomRequestRecord, "status" | "decidedAt" | "decidedBy">>): Promise<WaitingRoomRequestRecord | null> {
+    const existing = this.waitingRoomRequests.get(requestId);
+    if (!existing || existing.roomId !== roomId) return null;
+    const updated = { ...existing, ...input };
+    this.waitingRoomRequests.set(requestId, updated);
+    return updated;
+  }
+  async getRoomNote(roomId: string, scope: RoomNoteScope, ownerParticipantId?: string | null): Promise<RoomNoteRecord | null> {
+    return this.roomNotes.get(roomNoteId(roomId, scope, ownerParticipantId)) ?? null;
+  }
+  async upsertRoomNote(input: Pick<RoomNoteRecord, "roomId" | "scope" | "content"> & { ownerParticipantId?: string | null; updatedBy?: string | null }): Promise<RoomNoteRecord> {
+    const note: RoomNoteRecord = {
+      noteId: roomNoteId(input.roomId, input.scope, input.ownerParticipantId),
+      roomId: input.roomId,
+      scope: input.scope,
+      ownerParticipantId: input.scope === "private" ? input.ownerParticipantId ?? null : null,
+      content: input.content,
+      updatedAt: new Date().toISOString(),
+      updatedBy: input.updatedBy ?? null
+    };
+    this.roomNotes.set(note.noteId, note);
+    return structuredClone(note);
+  }
+  async listRoomDocuments(roomId: string, includeDeleted = false): Promise<RoomDocumentRecord[]> {
+    return Array.from(this.roomDocuments.values())
+      .filter((document) => document.roomId === roomId && (includeDeleted || !document.deletedAt))
+      .sort((left, right) => right.uploadedAt.localeCompare(left.uploadedAt))
+      .map((document) => structuredClone(document));
+  }
+  async getRoomDocument(roomId: string, documentId: string): Promise<RoomDocumentRecord | null> {
+    const document = this.roomDocuments.get(documentId);
+    return document && document.roomId === roomId ? structuredClone(document) : null;
+  }
+  async createRoomDocument(input: Omit<RoomDocumentRecord, "uploadedAt" | "deletedAt" | "deletedBy" | "linkedSurfaceId"> & { uploadedAt?: string; linkedSurfaceId?: string | null }): Promise<RoomDocumentRecord> {
+    const document: RoomDocumentRecord = {
+      ...input,
+      uploadedAt: input.uploadedAt ?? new Date().toISOString(),
+      deletedAt: null,
+      deletedBy: null,
+      linkedSurfaceId: input.linkedSurfaceId ?? null
+    };
+    this.roomDocuments.set(document.documentId, document);
+    return structuredClone(document);
+  }
+  async markRoomDocumentDeleted(roomId: string, documentId: string, deletedAt: string, deletedBy?: string | null): Promise<RoomDocumentRecord | null> {
+    const existing = this.roomDocuments.get(documentId);
+    if (!existing || existing.roomId !== roomId) return null;
+    const updated = { ...existing, deletedAt, deletedBy: deletedBy ?? null };
+    this.roomDocuments.set(documentId, updated);
+    return structuredClone(updated);
+  }
+  async updateRoomDocumentSurface(roomId: string, documentId: string, linkedSurfaceId: string | null): Promise<RoomDocumentRecord | null> {
+    const existing = this.roomDocuments.get(documentId);
+    if (!existing || existing.roomId !== roomId || existing.deletedAt) return null;
+    const updated = { ...existing, linkedSurfaceId };
+    this.roomDocuments.set(documentId, updated);
+    return structuredClone(updated);
   }
   async createAsset(input: Partial<AssetRecord>): Promise<AssetRecord> {
     const asset = {
@@ -431,6 +893,10 @@ export class MemoryStorage implements Storage {
       publicUrl: input.publicUrl,
       checksum: input.checksum,
       sizeBytes: input.sizeBytes,
+      schemaVersion: input.schemaVersion,
+      entryScene: input.entryScene,
+      previewUrl: input.previewUrl,
+      createdBy: input.createdBy,
       contentType: input.contentType ?? "application/json",
       provider: input.provider,
       version,
@@ -444,7 +910,7 @@ export class MemoryStorage implements Storage {
     this.sceneBundles.set(this.sceneBundleKey(record.bundleId, record.version), record);
     return record;
   }
-  async updateSceneBundle(bundleId: string, input: Partial<SceneBundleCreateInput> & { publicUrl?: string; provider?: SceneBundleRecord["provider"] }): Promise<SceneBundleRecord | null> {
+  async updateSceneBundle(bundleId: string, input: SceneBundleUpdateInput): Promise<SceneBundleRecord | null> {
     const existing = (await this.listSceneBundleVersions(bundleId)).find((item) => item.version === input.version) ?? await this.getSceneBundle(bundleId);
     if (!existing) return null;
     const updated: SceneBundleRecord = {
@@ -453,12 +919,23 @@ export class MemoryStorage implements Storage {
       publicUrl: input.publicUrl ?? existing.publicUrl,
       checksum: input.checksum ?? existing.checksum,
       sizeBytes: input.sizeBytes ?? existing.sizeBytes,
+      schemaVersion: input.schemaVersion ?? existing.schemaVersion,
+      entryScene: input.entryScene ?? existing.entryScene,
+      previewUrl: input.previewUrl ?? existing.previewUrl,
+      createdBy: input.createdBy ?? existing.createdBy,
       contentType: input.contentType ?? existing.contentType,
       provider: input.provider ?? existing.provider,
       version: input.version ?? existing.version,
-      status: existing.status ?? "active",
-      isCurrent: existing.isCurrent ?? true
+      status: input.status ?? existing.status ?? "active",
+      isCurrent: input.isCurrent ?? existing.isCurrent ?? true
     };
+    if (updated.isCurrent) {
+      for (const item of this.sceneBundles.values()) {
+        if (item.bundleId === bundleId && item.version !== updated.version) {
+          item.isCurrent = false;
+        }
+      }
+    }
     this.sceneBundles.set(this.sceneBundleKey(bundleId, updated.version), updated);
     return updated;
   }
@@ -491,12 +968,20 @@ export class PostgresStorage implements Storage {
         tenant_id text not null references tenants(tenant_id),
         template_id text not null references templates(template_id),
       name text not null,
+      room_type text not null default 'standard',
+      owner_participant_id text,
+      status text not null default 'active',
+      disabled_at timestamptz,
+      disabled_by text,
+      visibility text not null default 'public',
       scene_bundle_url text,
       features jsonb not null,
       asset_ids jsonb not null default '[]'::jsonb,
       theme jsonb not null default '{"primaryColor":"#5fc8ff","accentColor":"#163354"}'::jsonb,
       guest_allowed boolean not null default true,
-        avatar_config jsonb not null default '{"avatarsEnabled":true,"avatarCatalogUrl":"/assets/avatars/catalog.v1.json","avatarQualityProfile":"desktop-standard","avatarFallbackCapsulesEnabled":true,"avatarSeatsEnabled":true}'::jsonb
+        avatar_config jsonb not null default '{"avatarsEnabled":true,"avatarCatalogUrl":"/assets/avatars/catalog.v1.json","avatarQualityProfile":"desktop-standard","avatarFallbackCapsulesEnabled":true,"avatarSeatsEnabled":true}'::jsonb,
+        session_control jsonb not null default '{"hostParticipantId":null,"lockedAt":null,"lockedBy":null,"endedAt":null,"endedBy":null,"removedParticipants":{}}'::jsonb,
+        personal_state jsonb not null default '{}'::jsonb
        );
       alter table rooms alter column avatar_config set default '{"avatarsEnabled":true,"avatarCatalogUrl":"/assets/avatars/catalog.v1.json","avatarQualityProfile":"desktop-standard","avatarFallbackCapsulesEnabled":true,"avatarSeatsEnabled":true}'::jsonb;
       create table if not exists assets (
@@ -526,6 +1011,10 @@ export class PostgresStorage implements Storage {
         public_url text not null,
         checksum text,
         size_bytes bigint,
+        schema_version integer,
+        entry_scene text,
+        preview_url text,
+        created_by text,
         content_type text not null,
         provider text not null,
         version text not null,
@@ -534,14 +1023,84 @@ export class PostgresStorage implements Storage {
         created_at timestamptz not null default now(),
         primary key (bundle_id, version)
       );
+      create table if not exists room_invites (
+        invite_id text primary key,
+        room_id text not null references rooms(room_id) on delete cascade,
+        token_hash text not null unique,
+        role text not null default 'guest',
+        waiting_room_enabled boolean not null default false,
+        created_at timestamptz not null default now(),
+        expires_at timestamptz not null,
+        revoked_at timestamptz,
+        created_by text,
+        revoked_by text
+      );
+      create table if not exists room_waiting_requests (
+        request_id text primary key,
+        room_id text not null references rooms(room_id) on delete cascade,
+        invite_id text not null references room_invites(invite_id) on delete cascade,
+        participant_id text not null,
+        display_name text not null,
+        status text not null default 'pending',
+        created_at timestamptz not null default now(),
+        decided_at timestamptz,
+        decided_by text,
+        unique (invite_id, participant_id)
+      );
+      create table if not exists room_notes (
+        note_id text primary key,
+        room_id text not null references rooms(room_id) on delete cascade,
+        scope text not null,
+        owner_participant_id text,
+        content text not null,
+        updated_at timestamptz not null default now(),
+        updated_by text
+      );
+      create table if not exists room_documents (
+        document_id text primary key,
+        room_id text not null references rooms(room_id) on delete cascade,
+        tenant_id text not null references tenants(tenant_id),
+        filename text not null,
+        content_type text not null,
+        size_bytes bigint not null,
+        storage_key text not null,
+        checksum text not null,
+        uploaded_by text,
+        uploaded_at timestamptz not null default now(),
+        deleted_at timestamptz,
+        deleted_by text,
+        linked_surface_id text
+      );
     `);
     await this.pool.query(`create index if not exists xr_telemetry_room_id_id_idx on xr_telemetry (room_id, id)`);
+    await this.pool.query(`create unique index if not exists room_notes_room_scope_owner_idx on room_notes (room_id, scope, coalesce(owner_participant_id, ''))`);
+    await this.pool.query(`create index if not exists room_documents_room_uploaded_idx on room_documents (room_id, uploaded_at desc)`);
     await this.pool.query(`alter table rooms add column if not exists scene_bundle_url text`);
+    await this.pool.query(`alter table rooms add column if not exists status text not null default 'active'`);
+    await this.pool.query(`alter table rooms add column if not exists disabled_at timestamptz`);
+    await this.pool.query(`alter table rooms add column if not exists disabled_by text`);
+    await this.pool.query(`alter table rooms add column if not exists visibility text not null default 'public'`);
+    await this.pool.query(`alter table rooms add column if not exists room_type text not null default 'standard'`);
+    await this.pool.query(`alter table rooms add column if not exists owner_participant_id text`);
+    await this.pool.query(`alter table rooms add column if not exists personal_state jsonb not null default '${DEFAULT_PERSONAL_STATE_JSON}'::jsonb`);
+    await this.pool.query(`alter table rooms alter column personal_state set default '${DEFAULT_PERSONAL_STATE_JSON}'::jsonb`);
+    await this.pool.query(`update rooms set room_type = 'standard' where room_type is null`);
+    await this.pool.query(`update rooms set personal_state = '${DEFAULT_PERSONAL_STATE_JSON}'::jsonb where personal_state is null`);
+    await this.pool.query(`update rooms set status = 'disabled' where disabled_at is not null and (status is null or status = 'active')`);
+    await this.pool.query(`update rooms set visibility = 'private' where guest_allowed = false and (visibility is null or visibility = 'public')`);
     await this.pool.query(`alter table rooms add column if not exists avatar_config jsonb not null default '${DEFAULT_AVATAR_CONFIG_JSON}'::jsonb`);
     await this.pool.query(`update rooms set avatar_config = '${DEFAULT_AVATAR_CONFIG_JSON}'::jsonb where avatar_config is null`);
     await this.pool.query(`update rooms set avatar_config = '${DEFAULT_AVATAR_CONFIG_JSON}'::jsonb || avatar_config`);
+    await this.pool.query(`alter table rooms add column if not exists session_control jsonb not null default '${DEFAULT_SESSION_CONTROL_JSON}'::jsonb`);
+    await this.pool.query(`alter table rooms alter column session_control set default '${DEFAULT_SESSION_CONTROL_JSON}'::jsonb`);
+    await this.pool.query(`update rooms set session_control = '${DEFAULT_SESSION_CONTROL_JSON}'::jsonb where session_control is null`);
+    await this.pool.query(`update rooms set session_control = '${DEFAULT_SESSION_CONTROL_JSON}'::jsonb || session_control`);
     await this.pool.query(`alter table scene_bundles add column if not exists status text not null default 'active'`);
     await this.pool.query(`alter table scene_bundles add column if not exists is_current boolean not null default true`);
+    await this.pool.query(`alter table scene_bundles add column if not exists schema_version integer`);
+    await this.pool.query(`alter table scene_bundles add column if not exists entry_scene text`);
+    await this.pool.query(`alter table scene_bundles add column if not exists preview_url text`);
+    await this.pool.query(`alter table scene_bundles add column if not exists created_by text`);
     await this.pool.query(`do $$ begin alter table scene_bundles drop constraint if exists scene_bundles_pkey; alter table scene_bundles add primary key (bundle_id, version); exception when duplicate_object then null; end $$;`);
     await this.seed();
   }
@@ -555,10 +1114,10 @@ export class PostgresStorage implements Storage {
       );
     }
     await this.pool.query(
-       `insert into rooms (room_id, tenant_id, template_id, name, scene_bundle_url, features, asset_ids, theme, guest_allowed, avatar_config)
-       values ('demo-room','demo-tenant','meeting-room-basic','Demo Room',null,$1::jsonb,'[]'::jsonb,'{"primaryColor":"#5fc8ff","accentColor":"#163354"}'::jsonb,true,$2::jsonb)
+      `insert into rooms (room_id, tenant_id, template_id, name, room_type, owner_participant_id, status, disabled_at, disabled_by, visibility, scene_bundle_url, features, asset_ids, theme, guest_allowed, avatar_config, session_control, personal_state)
+       values ('demo-room','demo-tenant','meeting-room-basic','Demo Room','standard',null,'active',null,null,'public',null,$1::jsonb,'[]'::jsonb,'{"primaryColor":"#5fc8ff","accentColor":"#163354"}'::jsonb,true,$2::jsonb,$3::jsonb,$4::jsonb)
        on conflict do nothing`,
-       [JSON.stringify({ voice: true, spatialAudio: true, screenShare: true }), JSON.stringify(defaultAvatarConfig())]
+      [JSON.stringify({ voice: true, spatialAudio: true, screenShare: true }), JSON.stringify(defaultAvatarConfig()), DEFAULT_SESSION_CONTROL_JSON, DEFAULT_PERSONAL_STATE_JSON]
     );
   }
 
@@ -601,20 +1160,27 @@ export class PostgresStorage implements Storage {
     }));
   }
   async listRooms(): Promise<RoomRecord[]> {
-    const result = await this.pool.query(`select room_id, tenant_id, template_id, name, scene_bundle_url, features, asset_ids, theme, guest_allowed, avatar_config from rooms order by room_id`);
-    return result.rows.map((row: { room_id: string; tenant_id: string; template_id: string; name: string; scene_bundle_url: string | null; features: RoomFeatures; asset_ids: string[]; theme: { primaryColor: string; accentColor: string }; guest_allowed: boolean; avatar_config: Partial<RoomAvatarConfig> }) => ({ roomId: row.room_id, tenantId: row.tenant_id, templateId: row.template_id, name: row.name, sceneBundleUrl: row.scene_bundle_url ?? undefined, features: row.features, assetIds: row.asset_ids, theme: row.theme, guestAllowed: row.guest_allowed, avatarConfig: defaultAvatarConfig(row.avatar_config) }));
+    const result = await this.pool.query(`select room_id, tenant_id, template_id, name, room_type, owner_participant_id, status, disabled_at, disabled_by, visibility, scene_bundle_url, features, asset_ids, theme, guest_allowed, avatar_config, session_control, personal_state from rooms order by room_id`);
+    return result.rows.map(mapRoomRow);
   }
   async getRoom(roomId: string): Promise<RoomRecord | null> {
-    const result = await this.pool.query(`select room_id, tenant_id, template_id, name, scene_bundle_url, features, asset_ids, theme, guest_allowed, avatar_config from rooms where room_id = $1`, [roomId]);
+    const result = await this.pool.query(`select room_id, tenant_id, template_id, name, room_type, owner_participant_id, status, disabled_at, disabled_by, visibility, scene_bundle_url, features, asset_ids, theme, guest_allowed, avatar_config, session_control, personal_state from rooms where room_id = $1`, [roomId]);
     const row = result.rows[0];
-    return row ? { roomId: row.room_id, tenantId: row.tenant_id, templateId: row.template_id, name: row.name, sceneBundleUrl: row.scene_bundle_url ?? undefined, features: row.features, assetIds: row.asset_ids, theme: row.theme, guestAllowed: row.guest_allowed, avatarConfig: defaultAvatarConfig(row.avatar_config) } : null;
+    return row ? mapRoomRow(row) : null;
   }
   async createRoom(input: Partial<RoomRecord>): Promise<RoomRecord> {
+    const roomType = defaultRoomType(input.roomType);
     const room: RoomRecord = {
       roomId: input.roomId ?? crypto.randomUUID(),
       tenantId: input.tenantId ?? "demo-tenant",
-      templateId: input.templateId ?? "meeting-room-basic",
+      templateId: input.templateId ?? (roomType === "personal" ? "personal-workspace-basic" : "meeting-room-basic"),
       name: input.name ?? "New Room",
+      roomType,
+      ownerParticipantId: input.ownerParticipantId ?? null,
+      status: defaultRoomStatus(input.status),
+      disabledAt: input.disabledAt ?? null,
+      disabledBy: input.disabledBy ?? null,
+      visibility: defaultRoomVisibility(input.visibility, roomType),
       sceneBundleUrl: input.sceneBundleUrl,
       features: {
         voice: input.features?.voice ?? true,
@@ -626,12 +1192,14 @@ export class PostgresStorage implements Storage {
         primaryColor: "#5fc8ff",
         accentColor: "#163354"
       },
-      guestAllowed: input.guestAllowed ?? true,
-      avatarConfig: defaultAvatarConfig(input.avatarConfig)
+      guestAllowed: defaultGuestAllowed(input.guestAllowed, roomType),
+      avatarConfig: defaultAvatarConfig(input.avatarConfig),
+      sessionControl: defaultSessionControl(input.sessionControl),
+      personalState: defaultPersonalState(input.personalState)
     };
     await this.pool.query(
-      `insert into rooms (room_id, tenant_id, template_id, name, scene_bundle_url, features, asset_ids, theme, guest_allowed, avatar_config) values ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8::jsonb,$9,$10::jsonb)`,
-      [room.roomId, room.tenantId, room.templateId, room.name, room.sceneBundleUrl ?? null, JSON.stringify(room.features), JSON.stringify(room.assetIds), JSON.stringify(room.theme), room.guestAllowed, JSON.stringify(room.avatarConfig)]
+      `insert into rooms (room_id, tenant_id, template_id, name, room_type, owner_participant_id, status, disabled_at, disabled_by, visibility, scene_bundle_url, features, asset_ids, theme, guest_allowed, avatar_config, session_control, personal_state) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13::jsonb,$14::jsonb,$15,$16::jsonb,$17::jsonb,$18::jsonb)`,
+      [room.roomId, room.tenantId, room.templateId, room.name, room.roomType, room.ownerParticipantId ?? null, room.status, room.disabledAt ?? null, room.disabledBy ?? null, room.visibility, room.sceneBundleUrl ?? null, JSON.stringify(room.features), JSON.stringify(room.assetIds), JSON.stringify(room.theme), room.guestAllowed, JSON.stringify(room.avatarConfig), JSON.stringify(room.sessionControl), JSON.stringify(room.personalState)]
     );
     return room;
   }
@@ -643,6 +1211,11 @@ export class PostgresStorage implements Storage {
     const updated: RoomRecord = {
       ...existing,
       ...input,
+      roomType: defaultRoomType(input.roomType ?? existing.roomType),
+      ownerParticipantId: input.ownerParticipantId !== undefined ? input.ownerParticipantId : existing.ownerParticipantId ?? null,
+      status: defaultRoomStatus(input.status ?? existing.status),
+      disabledAt: input.disabledAt !== undefined ? input.disabledAt : existing.disabledAt ?? null,
+      disabledBy: input.disabledBy !== undefined ? input.disabledBy : existing.disabledBy ?? null,
       features: {
         ...existing.features,
         ...input.features
@@ -652,21 +1225,156 @@ export class PostgresStorage implements Storage {
         accentColor: input.theme?.accentColor ?? existing.theme?.accentColor ?? "#163354"
       },
       assetIds: input.assetIds ?? existing.assetIds,
-      guestAllowed: input.guestAllowed ?? existing.guestAllowed ?? true,
+      visibility: defaultRoomVisibility(input.visibility ?? existing.visibility, input.roomType ?? existing.roomType),
+      guestAllowed: defaultGuestAllowed(input.guestAllowed ?? existing.guestAllowed, input.roomType ?? existing.roomType),
       avatarConfig: defaultAvatarConfig({
         ...existing.avatarConfig,
         ...input.avatarConfig
-      })
+      }),
+      sessionControl: defaultSessionControl(input.sessionControl ?? existing.sessionControl),
+      personalState: defaultPersonalState(input.personalState ?? existing.personalState)
     };
     await this.pool.query(
-      `update rooms set template_id = $2, name = $3, scene_bundle_url = $4, features = $5::jsonb, asset_ids = $6::jsonb, theme = $7::jsonb, guest_allowed = $8, avatar_config = $9::jsonb where room_id = $1`,
-      [roomId, updated.templateId, updated.name, updated.sceneBundleUrl ?? null, JSON.stringify(updated.features), JSON.stringify(updated.assetIds), JSON.stringify(updated.theme), updated.guestAllowed, JSON.stringify(updated.avatarConfig)]
+      `update rooms set template_id = $2, name = $3, room_type = $4, owner_participant_id = $5, status = $6, disabled_at = $7, disabled_by = $8, visibility = $9, scene_bundle_url = $10, features = $11::jsonb, asset_ids = $12::jsonb, theme = $13::jsonb, guest_allowed = $14, avatar_config = $15::jsonb, session_control = $16::jsonb, personal_state = $17::jsonb where room_id = $1`,
+      [roomId, updated.templateId, updated.name, updated.roomType, updated.ownerParticipantId ?? null, updated.status, updated.disabledAt ?? null, updated.disabledBy ?? null, updated.visibility, updated.sceneBundleUrl ?? null, JSON.stringify(updated.features), JSON.stringify(updated.assetIds), JSON.stringify(updated.theme), updated.guestAllowed, JSON.stringify(updated.avatarConfig), JSON.stringify(updated.sessionControl), JSON.stringify(updated.personalState)]
     );
     return updated;
   }
   async deleteRoom(roomId: string): Promise<boolean> {
     const result = await this.pool.query(`delete from rooms where room_id = $1`, [roomId]);
     return (result.rowCount ?? 0) > 0;
+  }
+  async createRoomInvite(input: Omit<RoomInviteRecord, "inviteId" | "createdAt" | "revokedAt" | "revokedBy"> & { inviteId?: string; createdAt?: string }): Promise<RoomInviteRecord> {
+    const invite: RoomInviteRecord = {
+      inviteId: input.inviteId ?? crypto.randomUUID(),
+      roomId: input.roomId,
+      tokenHash: input.tokenHash,
+      role: input.role,
+      waitingRoomEnabled: input.waitingRoomEnabled,
+      createdAt: input.createdAt ?? new Date().toISOString(),
+      expiresAt: input.expiresAt,
+      revokedAt: null,
+      createdBy: input.createdBy ?? null,
+      revokedBy: null
+    };
+    await this.pool.query(
+      `insert into room_invites (invite_id, room_id, token_hash, role, waiting_room_enabled, created_at, expires_at, created_by) values ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      [invite.inviteId, invite.roomId, invite.tokenHash, invite.role, invite.waitingRoomEnabled, invite.createdAt, invite.expiresAt, invite.createdBy]
+    );
+    return invite;
+  }
+  async listRoomInvites(roomId: string): Promise<RoomInviteRecord[]> {
+    const result = await this.pool.query(`select invite_id, room_id, token_hash, role, waiting_room_enabled, created_at, expires_at, revoked_at, created_by, revoked_by from room_invites where room_id = $1 order by created_at desc`, [roomId]);
+    return result.rows.map(mapRoomInviteRow);
+  }
+  async getRoomInvite(inviteId: string): Promise<RoomInviteRecord | null> {
+    const result = await this.pool.query(`select invite_id, room_id, token_hash, role, waiting_room_enabled, created_at, expires_at, revoked_at, created_by, revoked_by from room_invites where invite_id = $1`, [inviteId]);
+    return result.rows[0] ? mapRoomInviteRow(result.rows[0]) : null;
+  }
+  async getRoomInviteByTokenHash(tokenHash: string): Promise<RoomInviteRecord | null> {
+    const result = await this.pool.query(`select invite_id, room_id, token_hash, role, waiting_room_enabled, created_at, expires_at, revoked_at, created_by, revoked_by from room_invites where token_hash = $1`, [tokenHash]);
+    return result.rows[0] ? mapRoomInviteRow(result.rows[0]) : null;
+  }
+  async revokeRoomInvite(roomId: string, inviteId: string, revokedAt: string, revokedBy?: string | null): Promise<RoomInviteRecord | null> {
+    const result = await this.pool.query(
+      `update room_invites set revoked_at = $3, revoked_by = $4 where room_id = $1 and invite_id = $2 returning invite_id, room_id, token_hash, role, waiting_room_enabled, created_at, expires_at, revoked_at, created_by, revoked_by`,
+      [roomId, inviteId, revokedAt, revokedBy ?? null]
+    );
+    return result.rows[0] ? mapRoomInviteRow(result.rows[0]) : null;
+  }
+  async createWaitingRoomRequest(input: Omit<WaitingRoomRequestRecord, "requestId" | "createdAt" | "status" | "decidedAt" | "decidedBy"> & { requestId?: string; createdAt?: string; status?: WaitingRoomRequestRecord["status"] }): Promise<WaitingRoomRequestRecord> {
+    const waitingRequest: WaitingRoomRequestRecord = {
+      requestId: input.requestId ?? crypto.randomUUID(),
+      roomId: input.roomId,
+      inviteId: input.inviteId,
+      participantId: input.participantId,
+      displayName: input.displayName,
+      status: input.status ?? "pending",
+      createdAt: input.createdAt ?? new Date().toISOString(),
+      decidedAt: null,
+      decidedBy: null
+    };
+    const result = await this.pool.query(
+      `insert into room_waiting_requests (request_id, room_id, invite_id, participant_id, display_name, status, created_at) values ($1,$2,$3,$4,$5,$6,$7)
+       on conflict (invite_id, participant_id) do update set display_name = excluded.display_name
+       returning request_id, room_id, invite_id, participant_id, display_name, status, created_at, decided_at, decided_by`,
+      [waitingRequest.requestId, waitingRequest.roomId, waitingRequest.inviteId, waitingRequest.participantId, waitingRequest.displayName, waitingRequest.status, waitingRequest.createdAt]
+    );
+    return mapWaitingRoomRequestRow(result.rows[0]);
+  }
+  async listWaitingRoomRequests(roomId: string): Promise<WaitingRoomRequestRecord[]> {
+    const result = await this.pool.query(`select request_id, room_id, invite_id, participant_id, display_name, status, created_at, decided_at, decided_by from room_waiting_requests where room_id = $1 order by created_at desc`, [roomId]);
+    return result.rows.map(mapWaitingRoomRequestRow);
+  }
+  async getWaitingRoomRequest(requestId: string): Promise<WaitingRoomRequestRecord | null> {
+    const result = await this.pool.query(`select request_id, room_id, invite_id, participant_id, display_name, status, created_at, decided_at, decided_by from room_waiting_requests where request_id = $1`, [requestId]);
+    return result.rows[0] ? mapWaitingRoomRequestRow(result.rows[0]) : null;
+  }
+  async getWaitingRoomRequestForInviteParticipant(inviteId: string, participantId: string): Promise<WaitingRoomRequestRecord | null> {
+    const result = await this.pool.query(`select request_id, room_id, invite_id, participant_id, display_name, status, created_at, decided_at, decided_by from room_waiting_requests where invite_id = $1 and participant_id = $2`, [inviteId, participantId]);
+    return result.rows[0] ? mapWaitingRoomRequestRow(result.rows[0]) : null;
+  }
+  async updateWaitingRoomRequest(roomId: string, requestId: string, input: Partial<Pick<WaitingRoomRequestRecord, "status" | "decidedAt" | "decidedBy">>): Promise<WaitingRoomRequestRecord | null> {
+    const result = await this.pool.query(
+      `update room_waiting_requests set status = coalesce($3, status), decided_at = coalesce($4, decided_at), decided_by = coalesce($5, decided_by) where room_id = $1 and request_id = $2 returning request_id, room_id, invite_id, participant_id, display_name, status, created_at, decided_at, decided_by`,
+      [roomId, requestId, input.status ?? null, input.decidedAt ?? null, input.decidedBy ?? null]
+    );
+    return result.rows[0] ? mapWaitingRoomRequestRow(result.rows[0]) : null;
+  }
+  async getRoomNote(roomId: string, scope: RoomNoteScope, ownerParticipantId?: string | null): Promise<RoomNoteRecord | null> {
+    const result = await this.pool.query(
+      `select note_id, room_id, scope, owner_participant_id, content, updated_at, updated_by from room_notes where room_id = $1 and scope = $2 and coalesce(owner_participant_id, '') = coalesce($3, '') limit 1`,
+      [roomId, scope, scope === "private" ? ownerParticipantId ?? "" : ""]
+    );
+    return result.rows[0] ? mapRoomNoteRow(result.rows[0]) : null;
+  }
+  async upsertRoomNote(input: Pick<RoomNoteRecord, "roomId" | "scope" | "content"> & { ownerParticipantId?: string | null; updatedBy?: string | null }): Promise<RoomNoteRecord> {
+    const noteId = roomNoteId(input.roomId, input.scope, input.ownerParticipantId);
+    const result = await this.pool.query(
+      `insert into room_notes (note_id, room_id, scope, owner_participant_id, content, updated_at, updated_by)
+       values ($1,$2,$3,$4,$5,now(),$6)
+       on conflict (note_id) do update set content = excluded.content, updated_at = now(), updated_by = excluded.updated_by
+       returning note_id, room_id, scope, owner_participant_id, content, updated_at, updated_by`,
+      [noteId, input.roomId, input.scope, input.scope === "private" ? input.ownerParticipantId ?? null : null, input.content, input.updatedBy ?? null]
+    );
+    return mapRoomNoteRow(result.rows[0]);
+  }
+  async listRoomDocuments(roomId: string, includeDeleted = false): Promise<RoomDocumentRecord[]> {
+    const result = await this.pool.query(
+      `select document_id, room_id, tenant_id, filename, content_type, size_bytes, storage_key, checksum, uploaded_by, uploaded_at, deleted_at, deleted_by, linked_surface_id from room_documents where room_id = $1 and ($2 = true or deleted_at is null) order by uploaded_at desc`,
+      [roomId, includeDeleted]
+    );
+    return result.rows.map(mapRoomDocumentRow);
+  }
+  async getRoomDocument(roomId: string, documentId: string): Promise<RoomDocumentRecord | null> {
+    const result = await this.pool.query(
+      `select document_id, room_id, tenant_id, filename, content_type, size_bytes, storage_key, checksum, uploaded_by, uploaded_at, deleted_at, deleted_by, linked_surface_id from room_documents where room_id = $1 and document_id = $2 limit 1`,
+      [roomId, documentId]
+    );
+    return result.rows[0] ? mapRoomDocumentRow(result.rows[0]) : null;
+  }
+  async createRoomDocument(input: Omit<RoomDocumentRecord, "uploadedAt" | "deletedAt" | "deletedBy" | "linkedSurfaceId"> & { uploadedAt?: string; linkedSurfaceId?: string | null }): Promise<RoomDocumentRecord> {
+    const result = await this.pool.query(
+      `insert into room_documents (document_id, room_id, tenant_id, filename, content_type, size_bytes, storage_key, checksum, uploaded_by, uploaded_at, linked_surface_id)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,coalesce($10::timestamptz, now()),$11)
+       returning document_id, room_id, tenant_id, filename, content_type, size_bytes, storage_key, checksum, uploaded_by, uploaded_at, deleted_at, deleted_by, linked_surface_id`,
+      [input.documentId, input.roomId, input.tenantId, input.filename, input.contentType, input.sizeBytes, input.storageKey, input.checksum, input.uploadedBy ?? null, input.uploadedAt ?? null, input.linkedSurfaceId ?? null]
+    );
+    return mapRoomDocumentRow(result.rows[0]);
+  }
+  async markRoomDocumentDeleted(roomId: string, documentId: string, deletedAt: string, deletedBy?: string | null): Promise<RoomDocumentRecord | null> {
+    const result = await this.pool.query(
+      `update room_documents set deleted_at = $3, deleted_by = $4 where room_id = $1 and document_id = $2 and deleted_at is null returning document_id, room_id, tenant_id, filename, content_type, size_bytes, storage_key, checksum, uploaded_by, uploaded_at, deleted_at, deleted_by, linked_surface_id`,
+      [roomId, documentId, deletedAt, deletedBy ?? null]
+    );
+    return result.rows[0] ? mapRoomDocumentRow(result.rows[0]) : null;
+  }
+  async updateRoomDocumentSurface(roomId: string, documentId: string, linkedSurfaceId: string | null): Promise<RoomDocumentRecord | null> {
+    const result = await this.pool.query(
+      `update room_documents set linked_surface_id = $3 where room_id = $1 and document_id = $2 and deleted_at is null returning document_id, room_id, tenant_id, filename, content_type, size_bytes, storage_key, checksum, uploaded_by, uploaded_at, deleted_at, deleted_by, linked_surface_id`,
+      [roomId, documentId, linkedSurfaceId]
+    );
+    return result.rows[0] ? mapRoomDocumentRow(result.rows[0]) : null;
   }
   async createAsset(input: Partial<AssetRecord>): Promise<AssetRecord> {
     const asset = {
@@ -722,13 +1430,17 @@ export class PostgresStorage implements Storage {
     }));
   }
   async listSceneBundles(): Promise<SceneBundleRecord[]> {
-    const result = await this.pool.query(`select distinct on (bundle_id) bundle_id, storage_key, public_url, checksum, size_bytes, content_type, provider, version, status, is_current, created_at from scene_bundles order by bundle_id, is_current desc, created_at desc`);
-    return result.rows.map((row: { bundle_id: string; storage_key: string; public_url: string; checksum: string | null; size_bytes: string | number | null; content_type: string; provider: SceneBundleRecord["provider"]; version: string; status: SceneBundleRecord["status"]; is_current: boolean; created_at: string }) => ({
+    const result = await this.pool.query(`select distinct on (bundle_id) bundle_id, storage_key, public_url, checksum, size_bytes, schema_version, entry_scene, preview_url, created_by, content_type, provider, version, status, is_current, created_at from scene_bundles order by bundle_id, is_current desc, created_at desc`);
+    return result.rows.map((row: { bundle_id: string; storage_key: string; public_url: string; checksum: string | null; size_bytes: string | number | null; schema_version: number | null; entry_scene: string | null; preview_url: string | null; created_by: string | null; content_type: string; provider: SceneBundleRecord["provider"]; version: string; status: SceneBundleRecord["status"]; is_current: boolean; created_at: string }) => ({
       bundleId: row.bundle_id,
       storageKey: row.storage_key,
       publicUrl: row.public_url,
       checksum: row.checksum ?? undefined,
       sizeBytes: row.size_bytes == null ? undefined : Number(row.size_bytes),
+      schemaVersion: row.schema_version ?? undefined,
+      entryScene: row.entry_scene ?? undefined,
+      previewUrl: row.preview_url ?? undefined,
+      createdBy: row.created_by ?? undefined,
       contentType: row.content_type,
       provider: row.provider,
       version: row.version,
@@ -738,7 +1450,7 @@ export class PostgresStorage implements Storage {
     }));
   }
   async getSceneBundle(bundleId: string): Promise<SceneBundleRecord | null> {
-    const result = await this.pool.query(`select bundle_id, storage_key, public_url, checksum, size_bytes, content_type, provider, version, status, is_current, created_at from scene_bundles where bundle_id = $1 order by is_current desc, created_at desc limit 1`, [bundleId]);
+    const result = await this.pool.query(`select bundle_id, storage_key, public_url, checksum, size_bytes, schema_version, entry_scene, preview_url, created_by, content_type, provider, version, status, is_current, created_at from scene_bundles where bundle_id = $1 order by is_current desc, created_at desc limit 1`, [bundleId]);
     const row = result.rows[0];
     return row ? {
       bundleId: row.bundle_id,
@@ -746,6 +1458,10 @@ export class PostgresStorage implements Storage {
       publicUrl: row.public_url,
       checksum: row.checksum ?? undefined,
       sizeBytes: row.size_bytes == null ? undefined : Number(row.size_bytes),
+      schemaVersion: row.schema_version ?? undefined,
+      entryScene: row.entry_scene ?? undefined,
+      previewUrl: row.preview_url ?? undefined,
+      createdBy: row.created_by ?? undefined,
       contentType: row.content_type,
       provider: row.provider,
       version: row.version,
@@ -765,6 +1481,10 @@ export class PostgresStorage implements Storage {
       publicUrl: input.publicUrl,
       checksum: input.checksum,
       sizeBytes: input.sizeBytes,
+      schemaVersion: input.schemaVersion,
+      entryScene: input.entryScene,
+      previewUrl: input.previewUrl,
+      createdBy: input.createdBy,
       contentType: input.contentType ?? "application/json",
       provider: input.provider,
       version: input.version ?? "v1",
@@ -774,13 +1494,15 @@ export class PostgresStorage implements Storage {
     };
     await this.pool.query(`update scene_bundles set is_current = false where bundle_id = $1`, [record.bundleId]);
     await this.pool.query(
-      `insert into scene_bundles (bundle_id, storage_key, public_url, checksum, size_bytes, content_type, provider, version, status, is_current, created_at) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)` ,
-      [record.bundleId, record.storageKey, record.publicUrl, record.checksum ?? null, record.sizeBytes ?? null, record.contentType, record.provider, record.version, record.status, record.isCurrent, record.createdAt]
+      `insert into scene_bundles (bundle_id, storage_key, public_url, checksum, size_bytes, schema_version, entry_scene, preview_url, created_by, content_type, provider, version, status, is_current, created_at) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)` ,
+      [record.bundleId, record.storageKey, record.publicUrl, record.checksum ?? null, record.sizeBytes ?? null, record.schemaVersion ?? null, record.entryScene ?? null, record.previewUrl ?? null, record.createdBy ?? null, record.contentType, record.provider, record.version, record.status, record.isCurrent, record.createdAt]
     );
     return record;
   }
-  async updateSceneBundle(bundleId: string, input: Partial<SceneBundleCreateInput> & { publicUrl?: string; provider?: SceneBundleRecord["provider"] }): Promise<SceneBundleRecord | null> {
-    const existing = await this.getSceneBundle(bundleId);
+  async updateSceneBundle(bundleId: string, input: SceneBundleUpdateInput): Promise<SceneBundleRecord | null> {
+    const existing = input.version
+      ? (await this.listSceneBundleVersions(bundleId)).find((item) => item.version === input.version) ?? null
+      : await this.getSceneBundle(bundleId);
     if (!existing) return null;
     const updated: SceneBundleRecord = {
       ...existing,
@@ -788,26 +1510,37 @@ export class PostgresStorage implements Storage {
       publicUrl: input.publicUrl ?? existing.publicUrl,
       checksum: input.checksum ?? existing.checksum,
       sizeBytes: input.sizeBytes ?? existing.sizeBytes,
+      schemaVersion: input.schemaVersion ?? existing.schemaVersion,
+      entryScene: input.entryScene ?? existing.entryScene,
+      previewUrl: input.previewUrl ?? existing.previewUrl,
+      createdBy: input.createdBy ?? existing.createdBy,
       contentType: input.contentType ?? existing.contentType,
       provider: input.provider ?? existing.provider,
       version: input.version ?? existing.version,
-      status: existing.status ?? "active",
-      isCurrent: existing.isCurrent ?? true
+      status: input.status ?? existing.status ?? "active",
+      isCurrent: input.isCurrent ?? existing.isCurrent ?? true
     };
+    if (updated.isCurrent) {
+      await this.pool.query(`update scene_bundles set is_current = false where bundle_id = $1 and version <> $2`, [bundleId, existing.version]);
+    }
     await this.pool.query(
-      `update scene_bundles set storage_key = $3, public_url = $4, checksum = $5, size_bytes = $6, content_type = $7, provider = $8, status = $9, is_current = $10 where bundle_id = $1 and version = $2`,
-      [bundleId, existing.version, updated.storageKey, updated.publicUrl, updated.checksum ?? null, updated.sizeBytes ?? null, updated.contentType, updated.provider, updated.status ?? "active", updated.isCurrent ?? true]
+      `update scene_bundles set storage_key = $3, public_url = $4, checksum = $5, size_bytes = $6, schema_version = $7, entry_scene = $8, preview_url = $9, created_by = $10, content_type = $11, provider = $12, status = $13, is_current = $14 where bundle_id = $1 and version = $2`,
+      [bundleId, existing.version, updated.storageKey, updated.publicUrl, updated.checksum ?? null, updated.sizeBytes ?? null, updated.schemaVersion ?? null, updated.entryScene ?? null, updated.previewUrl ?? null, updated.createdBy ?? null, updated.contentType, updated.provider, updated.status ?? "active", updated.isCurrent ?? true]
     );
     return updated;
   }
   async listSceneBundleVersions(bundleId: string): Promise<SceneBundleRecord[]> {
-    const result = await this.pool.query(`select bundle_id, storage_key, public_url, checksum, size_bytes, content_type, provider, version, status, is_current, created_at from scene_bundles where bundle_id = $1 order by created_at desc`, [bundleId]);
-    return result.rows.map((row: { bundle_id: string; storage_key: string; public_url: string; checksum: string | null; size_bytes: string | number | null; content_type: string; provider: SceneBundleRecord["provider"]; version: string; status: SceneBundleRecord["status"]; is_current: boolean; created_at: string }) => ({
+    const result = await this.pool.query(`select bundle_id, storage_key, public_url, checksum, size_bytes, schema_version, entry_scene, preview_url, created_by, content_type, provider, version, status, is_current, created_at from scene_bundles where bundle_id = $1 order by created_at desc`, [bundleId]);
+    return result.rows.map((row: { bundle_id: string; storage_key: string; public_url: string; checksum: string | null; size_bytes: string | number | null; schema_version: number | null; entry_scene: string | null; preview_url: string | null; created_by: string | null; content_type: string; provider: SceneBundleRecord["provider"]; version: string; status: SceneBundleRecord["status"]; is_current: boolean; created_at: string }) => ({
       bundleId: row.bundle_id,
       storageKey: row.storage_key,
       publicUrl: row.public_url,
       checksum: row.checksum ?? undefined,
       sizeBytes: row.size_bytes == null ? undefined : Number(row.size_bytes),
+      schemaVersion: row.schema_version ?? undefined,
+      entryScene: row.entry_scene ?? undefined,
+      previewUrl: row.preview_url ?? undefined,
+      createdBy: row.created_by ?? undefined,
       contentType: row.content_type,
       provider: row.provider,
       version: row.version,

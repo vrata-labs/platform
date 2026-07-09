@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { timingSafeEqual } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { createRequire } from "node:module";
@@ -330,6 +330,12 @@ export const remoteBrowserInitScript = (styleContent: string) => {
 let browserPromise: Promise<Browser> | null = null;
 const sessions = new Map<string, RemoteBrowserSession>();
 const urlPolicy = createRemoteBrowserUrlPolicy();
+const requestIds = new WeakMap<IncomingMessage, string>();
+const metrics = {
+  requestsTotal: 0,
+  requestFailuresTotal: 0,
+  socketDisconnectsTotal: 0
+};
 
 export function remoteBrowserViewportPublisherHtml(): string {
   return `<!doctype html><html><head><meta charset="utf-8"><title>${remoteBrowserViewportPublisherTitle}</title></head><body><button id="${remoteBrowserViewportPublisherButtonId}" type="button" style="position:fixed;left:0;top:0;width:2px;height:2px;opacity:0.01;z-index:2147483647;">Start capture</button></body></html>`;
@@ -432,6 +438,69 @@ function json(response: ServerResponse, statusCode: number, body: unknown): void
     "x-content-type-options": "nosniff"
   });
   response.end(JSON.stringify(body));
+}
+
+function text(response: ServerResponse, statusCode: number, body: string, contentType = "text/plain; charset=utf-8"): void {
+  response.writeHead(statusCode, {
+    "content-type": contentType,
+    "cache-control": "no-store",
+    "x-content-type-options": "nosniff"
+  });
+  response.end(body);
+}
+
+function logEvent(event: Record<string, unknown>): void {
+  process.stdout.write(`${JSON.stringify(event)}\n`);
+}
+
+function getHeaderString(request: IncomingMessage, name: string): string | null {
+  const value = request.headers[name.toLowerCase()];
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) return value[0] ?? null;
+  return null;
+}
+
+function requestId(request: IncomingMessage): string {
+  const existing = requestIds.get(request);
+  if (existing) {
+    return existing;
+  }
+  const id = getHeaderString(request, "x-request-id")?.trim() || randomUUID();
+  requestIds.set(request, id);
+  return id;
+}
+
+function formatMetricLine(name: string, value: number): string {
+  return `${name} ${value}`;
+}
+
+function remoteBrowserMetricsText(): string {
+  let frameClients = 0;
+  let mediaClients = 0;
+  for (const session of sessions.values()) {
+    frameClients += session.clients.size;
+    mediaClients += session.mediaClients.size;
+  }
+  return `${[
+    "# HELP vrata_remote_browser_requests_total Total remote-browser HTTP requests handled by this process.",
+    "# TYPE vrata_remote_browser_requests_total counter",
+    formatMetricLine("vrata_remote_browser_requests_total", metrics.requestsTotal),
+    "# HELP vrata_remote_browser_request_failures_total Total unhandled remote-browser HTTP request failures.",
+    "# TYPE vrata_remote_browser_request_failures_total counter",
+    formatMetricLine("vrata_remote_browser_request_failures_total", metrics.requestFailuresTotal),
+    "# HELP vrata_remote_browser_sessions Active remote-browser sessions.",
+    "# TYPE vrata_remote_browser_sessions gauge",
+    formatMetricLine("vrata_remote_browser_sessions", sessions.size),
+    "# HELP vrata_remote_browser_frame_clients Connected frame websocket clients.",
+    "# TYPE vrata_remote_browser_frame_clients gauge",
+    formatMetricLine("vrata_remote_browser_frame_clients", frameClients),
+    "# HELP vrata_remote_browser_media_clients Connected media websocket clients.",
+    "# TYPE vrata_remote_browser_media_clients gauge",
+    formatMetricLine("vrata_remote_browser_media_clients", mediaClients),
+    "# HELP vrata_remote_browser_disconnects_total Remote-browser websocket disconnects.",
+    "# TYPE vrata_remote_browser_disconnects_total counter",
+    formatMetricLine("vrata_remote_browser_disconnects_total", metrics.socketDisconnectsTotal)
+  ].join("\n")}\n`;
 }
 
 function html(response: ServerResponse, statusCode: number, body: string): void {
@@ -1515,9 +1584,24 @@ function requestInputFrameCapture(session: RemoteBrowserSession): void {
 }
 
 async function handleRequest(request: IncomingMessage, response: ServerResponse): Promise<void> {
+  const id = requestId(request);
+  response.setHeader("x-request-id", id);
+  metrics.requestsTotal += 1;
   const url = new URL(request.url ?? "/", `http://${request.headers.host ?? `localhost:${port}`}`);
+  if (request.method === "GET" && url.pathname === "/health/live") {
+    json(response, 200, { status: "live", service: "remote-browser", timestamp: new Date().toISOString() });
+    return;
+  }
+  if (request.method === "GET" && url.pathname === "/health/ready") {
+    json(response, 200, { status: "ready", service: "remote-browser", sessions: sessions.size, timestamp: new Date().toISOString() });
+    return;
+  }
   if (request.method === "GET" && url.pathname === "/health") {
     json(response, 200, { status: "ok", service: "remote-browser", sessions: sessions.size, timestamp: new Date().toISOString() });
+    return;
+  }
+  if (request.method === "GET" && url.pathname === "/metrics") {
+    text(response, 200, remoteBrowserMetricsText());
     return;
   }
   if (request.method === "GET" && url.pathname === "/internal/viewport-publisher") {
@@ -1594,6 +1678,20 @@ export function startRemoteBrowserService(listenPort = port) {
   activeListenPort = listenPort;
   const server = createServer((request, response) => {
     handleRequest(request, response).catch((error: unknown) => {
+      metrics.requestFailuresTotal += 1;
+      const id = requestId(request);
+      response.setHeader("x-request-id", id);
+      logEvent({
+        service: "remote-browser",
+        event: "request_failed",
+        env: process.env.NODE_ENV ?? "development",
+        requestId: id,
+        errorCode: "remote_browser_error",
+        path: request.url ?? "",
+        method: request.method ?? "GET",
+        message: error instanceof Error ? error.message : "unknown",
+        timestamp: new Date().toISOString()
+      });
       json(response, 500, { error: "remote_browser_error", message: error instanceof Error ? error.message : "unknown" });
     });
   });
@@ -1618,6 +1716,7 @@ export function startRemoteBrowserService(listenPort = port) {
         });
       });
       ws.on("close", () => {
+        metrics.socketDisconnectsTotal += 1;
         session.clients.delete(ws);
         session.mediaClients.delete(ws);
       });
@@ -1629,7 +1728,7 @@ export function startRemoteBrowserService(listenPort = port) {
     if (typeof address === "object" && address?.port) {
       activeListenPort = address.port;
     }
-    process.stdout.write(`remote-browser listening on ${listenPort}\n`);
+    logEvent({ service: "remote-browser", event: "listening", env: process.env.NODE_ENV ?? "development", port: listenPort, timestamp: new Date().toISOString() });
   });
 }
 

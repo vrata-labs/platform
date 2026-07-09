@@ -2,18 +2,14 @@ import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-export const DEFAULT_PUBLIC_SCENE_ALLOWLIST = [];
+export const DEFAULT_PUBLIC_SCENE_ALLOWLIST = [
+  "livadia-nicholas-office-v1",
+  "the-hall-v1",
+  "the-office-v1"
+];
 
 export async function listSceneBundleDirs(rootDir) {
-  let entries;
-  try {
-    entries = await readdir(rootDir, { withFileTypes: true });
-  } catch (error) {
-    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
-      return [];
-    }
-    throw error;
-  }
+  const entries = await readdir(rootDir, { withFileTypes: true });
   return entries
     .filter((entry) => entry.isDirectory())
     .map((entry) => entry.name)

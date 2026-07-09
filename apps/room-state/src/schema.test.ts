@@ -21,7 +21,9 @@ test("PresenceState carries sequence timing metadata", () => {
     mode: "desktop",
     rootTransform: { x: 0, y: 0, z: 0, yaw: 1 },
     headTransform: { x: 0, y: 1.6, z: 0, yaw: 1, pitch: 0.2 },
+    audioJoined: true,
     muted: true,
+    speaking: false,
     activeMedia: { audio: false, screenShare: false },
     seq: 3,
     clientTimeMs: 100,
@@ -30,6 +32,8 @@ test("PresenceState carries sequence timing metadata", () => {
   };
 
   assert.equal(state.seq, 3);
+  assert.equal(state.audioJoined, true);
+  assert.equal(state.speaking, false);
   assert.equal(state.clientTimeMs, 100);
   assert.equal(state.serverTimeMs, 120);
 });

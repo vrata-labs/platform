@@ -8,6 +8,11 @@
       "types": "./src/index.ts",
       "import": "./dist/index.js",
       "default": "./dist/index.js"
+    },
+    "./session-token": {
+      "types": "./src/session-token.ts",
+      "import": "./dist/session-token.js",
+      "default": "./dist/session-token.js"
     }
   },
   "types": "./src/index.ts",
