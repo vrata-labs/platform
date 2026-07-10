@@ -39,6 +39,16 @@ test("room session token preserves trusted role source", () => {
   assert.equal(result.ok ? result.payload.roleSource : null, "trusted");
 });
 
+test("room session token accepts presenter role", () => {
+  const token = signRoomSessionToken({ ...payload, role: "presenter", permissions: getRoomPermissions("presenter") }, "test-secret");
+  const result = verifyRoomSessionToken(token, "test-secret", { nowSeconds: 150 });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.ok ? result.payload.role : null, "presenter");
+  assert.equal(result.ok ? result.payload.permissions.includes("screen-share.start") : false, true);
+  assert.equal(result.ok ? result.payload.permissions.includes("room.session-control") : true, false);
+});
+
 test("room session token preserves signed extra known permissions", () => {
   const token = signRoomSessionToken({
     ...payload,

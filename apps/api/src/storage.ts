@@ -56,7 +56,7 @@ export interface RoomInviteRecord {
   inviteId: string;
   roomId: string;
   tokenHash: string;
-  role: "guest" | "member" | "host" | "admin";
+  role: "guest" | "member" | "presenter" | "host" | "admin";
   waitingRoomEnabled: boolean;
   createdAt: string;
   expiresAt: string;
@@ -124,6 +124,11 @@ export interface RoomDocumentRecord {
 
 export interface RoomSessionControlState {
   hostParticipantId?: string | null;
+  presenterParticipantId?: string | null;
+  presenterGrantedAt?: string | null;
+  presenterGrantedBy?: string | null;
+  presenterRevokedAt?: string | null;
+  presenterRevokedBy?: string | null;
   lockedAt?: string | null;
   lockedBy?: string | null;
   endedAt?: string | null;
@@ -136,7 +141,7 @@ export interface RoomSessionControlState {
 }
 
 const DEFAULT_AVATAR_CONFIG_JSON = '{"avatarsEnabled":true,"avatarCatalogUrl":"/assets/avatars/catalog.v1.json","avatarQualityProfile":"desktop-standard","avatarFallbackCapsulesEnabled":true,"avatarSeatsEnabled":true}' as const;
-const DEFAULT_SESSION_CONTROL_JSON = '{"hostParticipantId":null,"lockedAt":null,"lockedBy":null,"endedAt":null,"endedBy":null,"removedParticipants":{}}' as const;
+const DEFAULT_SESSION_CONTROL_JSON = '{"hostParticipantId":null,"presenterParticipantId":null,"presenterGrantedAt":null,"presenterGrantedBy":null,"presenterRevokedAt":null,"presenterRevokedBy":null,"lockedAt":null,"lockedBy":null,"endedAt":null,"endedBy":null,"removedParticipants":{}}' as const;
 const DEFAULT_PERSONAL_STATE_JSON = '{}' as const;
 const POSTGRES_INIT_MAX_ATTEMPTS = 12;
 const POSTGRES_INIT_RETRY_DELAY_MS = 1000;
@@ -244,6 +249,11 @@ function defaultRoomStatus(input?: RoomStatus): RoomStatus {
 function defaultSessionControl(input?: Partial<RoomSessionControlState> | null): RoomSessionControlState {
   return {
     hostParticipantId: input?.hostParticipantId ?? null,
+    presenterParticipantId: input?.presenterParticipantId ?? null,
+    presenterGrantedAt: input?.presenterGrantedAt ?? null,
+    presenterGrantedBy: input?.presenterGrantedBy ?? null,
+    presenterRevokedAt: input?.presenterRevokedAt ?? null,
+    presenterRevokedBy: input?.presenterRevokedBy ?? null,
     lockedAt: input?.lockedAt ?? null,
     lockedBy: input?.lockedBy ?? null,
     endedAt: input?.endedAt ?? null,
@@ -1097,7 +1107,7 @@ export class PostgresStorage implements Storage {
       theme jsonb not null default '{"primaryColor":"#5fc8ff","accentColor":"#163354"}'::jsonb,
       guest_allowed boolean not null default true,
         avatar_config jsonb not null default '{"avatarsEnabled":true,"avatarCatalogUrl":"/assets/avatars/catalog.v1.json","avatarQualityProfile":"desktop-standard","avatarFallbackCapsulesEnabled":true,"avatarSeatsEnabled":true}'::jsonb,
-        session_control jsonb not null default '{"hostParticipantId":null,"lockedAt":null,"lockedBy":null,"endedAt":null,"endedBy":null,"removedParticipants":{}}'::jsonb,
+        session_control jsonb not null default '${DEFAULT_SESSION_CONTROL_JSON}'::jsonb,
         personal_state jsonb not null default '{}'::jsonb
        );
       alter table rooms alter column avatar_config set default '{"avatarsEnabled":true,"avatarCatalogUrl":"/assets/avatars/catalog.v1.json","avatarQualityProfile":"desktop-standard","avatarFallbackCapsulesEnabled":true,"avatarSeatsEnabled":true}'::jsonb;

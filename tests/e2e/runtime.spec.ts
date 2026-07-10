@@ -120,7 +120,7 @@ async function createPrivateRoom(request: APIRequestContext, name: string): Prom
   return (await createRoomResponse.json()) as { roomId: string; roomLink: string };
 }
 
-async function createRoomInvite(request: APIRequestContext, roomId: string, waitingRoomEnabled = false, role: "guest" | "member" | "host" | "admin" = "guest"): Promise<{ inviteLink: string }> {
+async function createRoomInvite(request: APIRequestContext, roomId: string, waitingRoomEnabled = false, role: "guest" | "member" | "presenter" | "host" | "admin" = "guest"): Promise<{ inviteLink: string }> {
   const inviteResponse = await request.post(`/api/rooms/${roomId}/invites`, {
     headers: {
       "x-vrata-admin-token": e2eAdminToken
@@ -696,6 +696,56 @@ test("host controls lock room and remove guest", async ({ page, browser, request
   } finally {
     await lockedContext.close();
     await guestContext.close();
+  }
+});
+
+test("host controls grant and revoke presenter role", async ({ page, browser, request }) => {
+  const room = await createPrivateRoom(request, `Presenter Controls E2E ${Date.now()}`);
+  const hostInvite = await createRoomInvite(request, room.roomId, false, "host");
+  const memberInvite = await createRoomInvite(request, room.roomId, false, "member");
+
+  await page.goto(`${e2eRoomLink(hostInvite.inviteLink)}&name=Host&sharemock=1&debug=1`);
+  await expect(page.locator("#status-line")).toContainText("Joined as", { timeout: 10000 });
+  await expect(page.locator("#host-controls")).toBeVisible({ timeout: 10000 });
+  await expect(page.locator("#presenter-line")).toContainText("Presenter: none");
+
+  const memberContext = await browser.newContext();
+  try {
+    const memberPage = await memberContext.newPage();
+    await memberPage.goto(`${e2eRoomLink(memberInvite.inviteLink)}&name=Member&sharemock=1&debug=1`);
+    await expect(memberPage.locator("#status-line")).toContainText("Joined as", { timeout: 10000 });
+    await expect(memberPage.locator("#host-controls")).toBeHidden();
+    await expect(memberPage.locator("#start-share")).toBeHidden();
+    const memberParticipantId = await memberPage.evaluate(() => (window as Window & { __VRATA_DEBUG__?: { participantId?: string } }).__VRATA_DEBUG__?.participantId ?? "");
+    expect(memberParticipantId).not.toBe("");
+
+    await expect.poll(async () => page.locator("#host-participant-select").evaluate((select) => Array.from((select as HTMLSelectElement).options).map((option) => option.value)), {
+      timeout: 10000,
+      intervals: [500, 1000]
+    }).toContain(memberParticipantId);
+    await page.locator("#host-participant-select").selectOption(memberParticipantId);
+    await expect(page.locator("#grant-presenter")).toBeEnabled();
+    await page.locator("#grant-presenter").click();
+    await expect(page.locator("#presenter-line")).toContainText("Member", { timeout: 10000 });
+    await expect(memberPage.locator("#presenter-line")).toContainText("Member", { timeout: 10000 });
+    await expect.poll(async () => memberPage.evaluate(() => (window as Window & { __VRATA_DEBUG__?: { access?: { role?: string; canManageRoomSession?: boolean; canStartScreenShare?: boolean } } }).__VRATA_DEBUG__?.access), {
+      timeout: 10000,
+      intervals: [500, 1000]
+    }).toMatchObject({ role: "presenter", canManageRoomSession: false, canStartScreenShare: true });
+    await expect(memberPage.locator("#host-controls")).toBeHidden();
+    await expect(memberPage.locator("#start-share")).toBeVisible({ timeout: 10000 });
+    await expect(memberPage.locator("#start-share")).toBeEnabled();
+
+    await expect(page.locator("#revoke-presenter")).toBeEnabled();
+    await page.locator("#revoke-presenter").click();
+    await expect(memberPage.locator("#presenter-line")).toContainText("Presenter: none", { timeout: 10000 });
+    await expect.poll(async () => memberPage.evaluate(() => (window as Window & { __VRATA_DEBUG__?: { access?: { role?: string; canStartScreenShare?: boolean } } }).__VRATA_DEBUG__?.access), {
+      timeout: 10000,
+      intervals: [500, 1000]
+    }).toMatchObject({ role: "member", canStartScreenShare: false });
+    await expect(memberPage.locator("#start-share")).toBeHidden({ timeout: 10000 });
+  } finally {
+    await memberContext.close();
   }
 });
 
