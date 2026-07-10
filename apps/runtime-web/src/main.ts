@@ -38,7 +38,7 @@ import {
 } from "@vrata/shared-types";
 
 import { appendBrandingSuffix, applyRoomShellBootState, renderSceneAttributions } from "./boot-session.js";
-import { RuntimeAccessError, bootRuntime, deleteRoomDocument, downloadRoomDocument, fetchRoomNote, fetchRoomSessionControl, fetchRuntimeSpaces, listPresence, listRoomDocuments, openPersonalRoom, planVoiceSession, removePresence, removeRoomParticipant, resolveCurrentSpace, resolveJoinMode, runRoomSessionControlAction, savePersonalRoomState, saveRoomNote, selectRoomDocumentSurface, transferRoomHost, uploadRoomDocument, upsertPresence, type PresenceState, type RuntimeDocumentRecord, type RuntimeNoteScope, type RuntimePersonalState, type RuntimeSessionControlResponse, type RuntimeSpaceOption } from "./index.js";
+import { RuntimeAccessError, bootRuntime, deleteRoomDocument, downloadRoomDocument, exportRoomNote, exportRoomNotesArchive, fetchRoomNote, fetchRoomSessionControl, fetchRuntimeSpaces, listPresence, listRoomDocuments, listRoomNoteVersions, openPersonalRoom, planVoiceSession, removePresence, removeRoomParticipant, resolveCurrentSpace, resolveJoinMode, restoreRoomNoteVersion, runRoomSessionControlAction, savePersonalRoomState, saveRoomNote, selectRoomDocumentSurface, transferRoomHost, uploadRoomDocument, upsertPresence, type PresenceState, type RuntimeDocumentRecord, type RuntimeNoteScope, type RuntimeNoteVersionRecord, type RuntimePersonalState, type RuntimeSessionControlResponse, type RuntimeSpaceOption } from "./index.js";
 import { formatClientCompatibilityStatus, resolveClientCompatibility, type ClientCompatibilitySummary } from "./client-capabilities.js";
 import { formatGuestCompatibilityWarnings, formatGuestControlsHint, shouldShowGuestOnboarding, validateGuestDisplayName } from "./guest-onboarding.js";
 import { createMotionTrack, pushMotionSample, sampleMotion, type MotionTrack } from "./motion-state.js";
@@ -296,6 +296,11 @@ const notesEditor = mustElement<HTMLTextAreaElement>("#notes-editor");
 const notesRetrySaveButton = mustElement<HTMLButtonElement>("#notes-retry-save");
 const notesStatusEl = mustElement<HTMLDivElement>("#notes-status");
 const notesPreviewEl = mustElement<HTMLDivElement>("#notes-preview");
+const notesVersionSelect = mustElement<HTMLSelectElement>("#notes-version-select");
+const notesRestoreVersionButton = mustElement<HTMLButtonElement>("#notes-restore-version");
+const notesExportMarkdownButton = mustElement<HTMLButtonElement>("#notes-export-markdown");
+const notesExportJsonButton = mustElement<HTMLButtonElement>("#notes-export-json");
+const notesExportRoomJsonButton = mustElement<HTMLButtonElement>("#notes-export-room-json");
 const documentsPanelEl = mustElement<HTMLDivElement>("#documents-panel");
 const documentUploadInput = mustElement<HTMLInputElement>("#document-upload-input");
 const documentUploadButton = mustElement<HTMLButtonElement>("#document-upload-button");
@@ -1087,6 +1092,9 @@ let notesLastUpdatedAt: string | null = null;
 let notesLoadSeq = 0;
 let notesSaveSeq = 0;
 let notesAutosaveTimer: number | null = null;
+let notesVersions: RuntimeNoteVersionRecord[] = [];
+let notesHistoryLoading = false;
+let notesExportInFlight = false;
 let roomDocuments: RuntimeDocumentRecord[] = [];
 let selectedDocumentId = getStoredValue(localStorage, `vrata.documents.selected.${roomId}`, `noah.documents.selected.${roomId}`) ?? "";
 let documentsLoading = false;
@@ -1096,6 +1104,11 @@ guestJoinMutedCheckbox.checked = joinMutedPreference || !getStoredValue(localSto
 notesScopeSelect.value = activeNotesScope;
 notesEditor.disabled = true;
 notesScopeSelect.disabled = true;
+notesVersionSelect.disabled = true;
+notesRestoreVersionButton.disabled = true;
+notesExportMarkdownButton.disabled = true;
+notesExportJsonButton.disabled = true;
+notesExportRoomJsonButton.disabled = true;
 documentUploadInput.disabled = true;
 documentUploadButton.disabled = true;
 documentSelect.disabled = true;
@@ -4323,6 +4336,8 @@ const debugState = {
     saveState: notesSaveState as NotesSaveState,
     canEdit: false,
     contentLength: 0,
+    versionCount: 0,
+    exportInFlight: false,
     updatedAt: null as string | null,
     errorCode: null as string | null
   },
@@ -4616,9 +4631,22 @@ function setNotesSaveState(event: Parameters<typeof nextNotesSaveState>[1], mess
     saveState: notesSaveState,
     canEdit: canEditNotes(),
     contentLength: notesEditor.value.length,
+    versionCount: notesVersions.length,
+    exportInFlight: notesExportInFlight,
     updatedAt: notesLastUpdatedAt,
     errorCode
   };
+}
+
+function downloadBlob(blob: Blob, filename: string): void {
+  const objectUrl = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = objectUrl;
+  link.download = filename;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
 }
 
 function renderNotesPreview(): void {
@@ -4665,6 +4693,32 @@ function renderNotesPreview(): void {
   debugState.notes.contentLength = notesEditor.value.length;
 }
 
+function renderNotesHistoryUi(): void {
+  const visible = runtimeFlags.notesEnabled && canViewNotes();
+  const selectedVersionId = notesVersionSelect.value;
+  notesVersionSelect.replaceChildren(
+    ...(notesVersions.length > 0
+      ? notesVersions.map((version, index) => {
+        const option = document.createElement("option");
+        option.value = version.versionId;
+        option.textContent = `${index === 0 ? "Current" : `Version ${notesVersions.length - index}`} - ${version.action} - ${new Date(version.createdAt).toLocaleString()}`;
+        option.selected = version.versionId === selectedVersionId;
+        return option;
+      })
+      : [new Option("No versions", "")])
+  );
+  if (selectedVersionId && notesVersions.some((version) => version.versionId === selectedVersionId)) {
+    notesVersionSelect.value = selectedVersionId;
+  }
+  notesVersionSelect.disabled = !visible || notesHistoryLoading || notesVersions.length === 0;
+  notesRestoreVersionButton.disabled = !visible || !canEditNotes() || notesHistoryLoading || notesVersions.length === 0;
+  notesExportMarkdownButton.disabled = !visible || notesExportInFlight;
+  notesExportJsonButton.disabled = !visible || notesExportInFlight;
+  notesExportRoomJsonButton.disabled = !visible || notesExportInFlight;
+  debugState.notes.versionCount = notesVersions.length;
+  debugState.notes.exportInFlight = notesExportInFlight;
+}
+
 function syncNotesAccessUi(): void {
   const visible = runtimeFlags.notesEnabled && canViewNotes();
   notesPanelEl.hidden = !visible;
@@ -4677,6 +4731,7 @@ function syncNotesAccessUi(): void {
   }
   debugState.notes.enabled = runtimeFlags.notesEnabled;
   debugState.notes.canEdit = canEditNotes();
+  renderNotesHistoryUi();
 }
 
 function notesErrorCode(error: unknown): string {
@@ -4700,6 +4755,7 @@ async function loadActiveNote(): Promise<void> {
     notesLastUpdatedAt = note.updatedAt;
     setNotesSaveState("load_ok", note.updatedAt ? "Notes saved" : "Notes ready");
     renderNotesPreview();
+    await loadActiveNoteVersions();
     syncNotesAccessUi();
   } catch (error) {
     if (loadSeq !== notesLoadSeq) return;
@@ -4707,6 +4763,25 @@ async function loadActiveNote(): Promise<void> {
     console.warn("notes_load_failed", error);
     setNotesSaveState("save_failed", "Notes unavailable", code);
     syncNotesAccessUi();
+  }
+}
+
+async function loadActiveNoteVersions(): Promise<void> {
+  if (!runtimeFlags.notesEnabled || !canViewNotes()) {
+    notesVersions = [];
+    renderNotesHistoryUi();
+    return;
+  }
+  notesHistoryLoading = true;
+  renderNotesHistoryUi();
+  try {
+    notesVersions = await listRoomNoteVersions(apiBaseUrl, roomId, activeNotesScope, roomStateAccessToken);
+  } catch (error) {
+    console.warn("notes_versions_load_failed", error);
+    notesVersions = [];
+  } finally {
+    notesHistoryLoading = false;
+    renderNotesHistoryUi();
   }
 }
 
@@ -4744,6 +4819,7 @@ async function saveActiveNote(): Promise<void> {
     notesLastSavedContent = content;
     notesLastUpdatedAt = note.updatedAt;
     setNotesSaveState("save_ok", "Notes saved");
+    void loadActiveNoteVersions();
     if (notesEditor.value !== content) {
       scheduleNotesAutosave();
     }
@@ -4752,6 +4828,63 @@ async function saveActiveNote(): Promise<void> {
     const code = notesErrorCode(error);
     console.warn("notes_save_failed", error);
     setNotesSaveState("save_failed", "Notes save failed; retry available", code);
+  }
+}
+
+async function restoreSelectedNoteVersion(): Promise<void> {
+  const versionId = notesVersionSelect.value;
+  if (!versionId || !canEditNotes()) return;
+  const selected = notesVersions.find((version) => version.versionId === versionId);
+  if (!selected) return;
+  if (!window.confirm(`Restore notes version from ${new Date(selected.createdAt).toLocaleString()}?`)) return;
+  try {
+    setNotesSaveState("save_start", "Restoring notes version...");
+    const note = await restoreRoomNoteVersion(apiBaseUrl, roomId, activeNotesScope, roomStateAccessToken, versionId);
+    notesEditor.value = note.content;
+    notesLastSavedContent = note.content;
+    notesLastUpdatedAt = note.updatedAt;
+    renderNotesPreview();
+    setNotesSaveState("save_ok", "Notes version restored");
+    await loadActiveNoteVersions();
+  } catch (error) {
+    console.warn("notes_restore_failed", error);
+    setNotesSaveState("save_failed", "Notes restore failed", notesErrorCode(error));
+  }
+}
+
+async function exportActiveNote(format: "markdown" | "json"): Promise<void> {
+  if (!canViewNotes()) return;
+  notesExportInFlight = true;
+  renderNotesHistoryUi();
+  try {
+    notesStatusEl.textContent = `Exporting notes ${format}...`;
+    const download = await exportRoomNote(apiBaseUrl, roomId, activeNotesScope, roomStateAccessToken, format);
+    downloadBlob(download.blob, download.filename);
+    notesStatusEl.textContent = `Notes exported: ${download.filename}`;
+  } catch (error) {
+    console.warn("notes_export_failed", error);
+    setNotesSaveState("save_failed", "Notes export failed", notesErrorCode(error));
+  } finally {
+    notesExportInFlight = false;
+    renderNotesHistoryUi();
+  }
+}
+
+async function exportRoomNotesJson(): Promise<void> {
+  if (!canViewNotes()) return;
+  notesExportInFlight = true;
+  renderNotesHistoryUi();
+  try {
+    notesStatusEl.textContent = "Exporting room notes JSON...";
+    const download = await exportRoomNotesArchive(apiBaseUrl, roomId, roomStateAccessToken, "json");
+    downloadBlob(download.blob, download.filename);
+    notesStatusEl.textContent = `Room notes exported: ${download.filename}`;
+  } catch (error) {
+    console.warn("room_notes_export_failed", error);
+    setNotesSaveState("save_failed", "Room notes export failed", notesErrorCode(error));
+  } finally {
+    notesExportInFlight = false;
+    renderNotesHistoryUi();
   }
 }
 
@@ -8078,6 +8211,7 @@ notesScopeSelect.addEventListener("change", () => {
   localStorage.setItem("vrata.notes.scope", activeNotesScope);
   notesLastSavedContent = "";
   notesLastUpdatedAt = null;
+  notesVersions = [];
   notesSaveState = "idle";
   void loadActiveNote();
 });
@@ -8088,6 +8222,22 @@ notesEditor.addEventListener("input", () => {
 
 notesRetrySaveButton.addEventListener("click", () => {
   void saveActiveNote();
+});
+
+notesRestoreVersionButton.addEventListener("click", () => {
+  void restoreSelectedNoteVersion();
+});
+
+notesExportMarkdownButton.addEventListener("click", () => {
+  void exportActiveNote("markdown");
+});
+
+notesExportJsonButton.addEventListener("click", () => {
+  void exportActiveNote("json");
+});
+
+notesExportRoomJsonButton.addEventListener("click", () => {
+  void exportRoomNotesJson();
 });
 
 documentSelect.addEventListener("change", () => {

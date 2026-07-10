@@ -94,6 +94,21 @@ export interface RuntimeNoteRecord {
   content: string;
   updatedAt: string | null;
   updatedBy?: string | null;
+  deletedAt?: string | null;
+  deletedBy?: string | null;
+}
+
+export interface RuntimeNoteVersionRecord {
+  versionId: string;
+  noteId: string;
+  roomId: string;
+  scope: RuntimeNoteScope;
+  ownerParticipantId?: string | null;
+  content: string;
+  action: "save" | "restore" | "delete";
+  restoredFromVersionId?: string | null;
+  createdAt: string;
+  createdBy?: string | null;
 }
 
 export interface RuntimeDocumentRecord {
@@ -597,6 +612,68 @@ export async function saveRoomNote(apiBaseUrl: string, roomId: string, scope: Ru
     throw new Error(`failed_to_save_note:${response.status}:${payload.reason ?? payload.error ?? "unknown"}`);
   }
   return ((await response.json()) as { note: RuntimeNoteRecord }).note;
+}
+
+export async function listRoomNoteVersions(apiBaseUrl: string, roomId: string, scope: RuntimeNoteScope, sessionToken: string): Promise<RuntimeNoteVersionRecord[]> {
+  const response = await fetch(new URL(`/api/rooms/${roomId}/notes/${scope}/versions`, apiBaseUrl), {
+    headers: {
+      "authorization": `Bearer ${sessionToken}`
+    },
+    cache: "no-store"
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({})) as { reason?: string; error?: string };
+    throw new Error(`failed_to_load_note_versions:${response.status}:${payload.reason ?? payload.error ?? "unknown"}`);
+  }
+  return ((await response.json()) as { items: RuntimeNoteVersionRecord[] }).items;
+}
+
+export async function restoreRoomNoteVersion(apiBaseUrl: string, roomId: string, scope: RuntimeNoteScope, sessionToken: string, versionId: string): Promise<RuntimeNoteRecord> {
+  const response = await fetch(new URL(`/api/rooms/${roomId}/notes/${scope}/restore`, apiBaseUrl), {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "authorization": `Bearer ${sessionToken}`
+    },
+    body: JSON.stringify({ versionId })
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({})) as { reason?: string; error?: string };
+    throw new Error(`failed_to_restore_note:${response.status}:${payload.reason ?? payload.error ?? "unknown"}`);
+  }
+  return ((await response.json()) as { note: RuntimeNoteRecord }).note;
+}
+
+export async function exportRoomNote(apiBaseUrl: string, roomId: string, scope: RuntimeNoteScope, sessionToken: string, format: "markdown" | "json"): Promise<{ blob: Blob; filename: string }> {
+  const response = await fetch(new URL(`/api/rooms/${roomId}/notes/${scope}/export?format=${format}`, apiBaseUrl), {
+    headers: {
+      "authorization": `Bearer ${sessionToken}`
+    },
+    cache: "no-store"
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({})) as { reason?: string; error?: string };
+    throw new Error(`failed_to_export_note:${response.status}:${payload.reason ?? payload.error ?? "unknown"}`);
+  }
+  const disposition = response.headers.get("content-disposition") ?? "";
+  const filename = disposition.match(/filename="([^"]+)"/)?.[1] ?? `vrata-${roomId}-${scope}-notes.${format === "json" ? "json" : "md"}`;
+  return { blob: await response.blob(), filename };
+}
+
+export async function exportRoomNotesArchive(apiBaseUrl: string, roomId: string, sessionToken: string, format: "json" | "zip"): Promise<{ blob: Blob; filename: string }> {
+  const response = await fetch(new URL(`/api/rooms/${roomId}/notes/export?format=${format}`, apiBaseUrl), {
+    headers: {
+      "authorization": `Bearer ${sessionToken}`
+    },
+    cache: "no-store"
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({})) as { reason?: string; error?: string };
+    throw new Error(`failed_to_export_room_notes:${response.status}:${payload.reason ?? payload.error ?? "unknown"}`);
+  }
+  const disposition = response.headers.get("content-disposition") ?? "";
+  const filename = disposition.match(/filename="([^"]+)"/)?.[1] ?? `vrata-${roomId}-room-notes.${format}`;
+  return { blob: await response.blob(), filename };
 }
 
 export async function fetchRoomSessionControl(apiBaseUrl: string, roomId: string, sessionToken: string): Promise<RuntimeSessionControlResponse> {

@@ -279,6 +279,15 @@ canvas {
   flex-wrap: wrap;
 }
 
+.notes-history {
+  display: grid;
+  gap: 6px;
+}
+
+#notes-version-select {
+  min-width: 0;
+}
+
 .notes-preview {
   display: grid;
   gap: 6px;
