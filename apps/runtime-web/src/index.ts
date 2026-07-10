@@ -407,6 +407,11 @@ export class RuntimeAccessError extends Error {
 
 export interface RuntimeSessionControlState {
   hostParticipantId?: string | null;
+  presenterParticipantId?: string | null;
+  presenterGrantedAt?: string | null;
+  presenterGrantedBy?: string | null;
+  presenterRevokedAt?: string | null;
+  presenterRevokedBy?: string | null;
   lockedAt?: string | null;
   lockedBy?: string | null;
   endedAt?: string | null;
@@ -729,6 +734,34 @@ export async function transferRoomHost(apiBaseUrl: string, roomId: string, sessi
   });
   if (!response.ok) {
     throw new Error(`failed_to_transfer_host:${response.status}`);
+  }
+  return (await response.json()) as RuntimeSessionControlResponse;
+}
+
+export async function grantRoomPresenter(apiBaseUrl: string, roomId: string, sessionToken: string, participantId: string): Promise<RuntimeSessionControlResponse> {
+  const response = await fetch(new URL(`/api/rooms/${roomId}/presenters/${encodeURIComponent(participantId)}/grant`, apiBaseUrl), {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "authorization": `Bearer ${sessionToken}`
+    }
+  });
+  if (!response.ok) {
+    throw new Error(`failed_to_grant_presenter:${response.status}`);
+  }
+  return (await response.json()) as RuntimeSessionControlResponse;
+}
+
+export async function revokeRoomPresenter(apiBaseUrl: string, roomId: string, sessionToken: string, participantId: string): Promise<RuntimeSessionControlResponse> {
+  const response = await fetch(new URL(`/api/rooms/${roomId}/presenters/${encodeURIComponent(participantId)}/revoke`, apiBaseUrl), {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "authorization": `Bearer ${sessionToken}`
+    }
+  });
+  if (!response.ok) {
+    throw new Error(`failed_to_revoke_presenter:${response.status}`);
   }
   return (await response.json()) as RuntimeSessionControlResponse;
 }

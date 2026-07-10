@@ -30,6 +30,28 @@ test("joinRoom assigns access role and permissions", () => {
   assert.equal(room.participants[0]?.permissions.includes("screen-share.start"), true);
 });
 
+test("presenter can create media objects without admin-only surface audio", () => {
+  const room = joinRoom(createRoomState("demo"), "presenter-1", { role: "presenter" });
+  const share = createMediaObject(room, "presenter-1", {
+    commandId: "cmd-presenter-share",
+    surfaceId: "debug-main",
+    objectType: "screen-share",
+    objectId: "share-1",
+    nowMs: 1
+  });
+
+  assert.equal(share.result.accepted, true);
+  assert.equal(share.result.role, "presenter");
+
+  const audioPolicy = setSurfaceMediaAudioEnabled(share.room, "presenter-1", {
+    commandId: "cmd-presenter-audio",
+    surfaceId: "debug-main",
+    enabled: true
+  });
+  assert.equal(audioPolicy.result.accepted, false);
+  assert.equal(audioPolicy.result.permission, "surface.configure-audio");
+});
+
 test("updateParticipantState does not allow client-side role escalation", () => {
   const joined = joinRoom(createRoomState("demo"), "p1");
   const updated = updateParticipantState(joined, {

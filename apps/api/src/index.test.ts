@@ -2174,7 +2174,7 @@ test("host controls enforce lock remove transfer end and audit", async () => {
       body: JSON.stringify({ roomId, participantId, displayName: participantId, inviteToken })
     });
     assert.equal(response.status, 200);
-    return (await response.json()) as { token: string; role: RoomRole; access: { canManageRoomSession?: boolean } };
+    return (await response.json()) as { token: string; role: RoomRole; access: { canManageRoomSession?: boolean; canStartScreenShare?: boolean; canCreateRemoteBrowser?: boolean } };
   };
   const putPresence = async (roomId: string, participantId: string, token: string, role: RoomRole) => {
     const response = await fetch(`${baseUrl}/api/rooms/${roomId}/presence/${participantId}`, {
@@ -2219,6 +2219,66 @@ test("host controls enforce lock remove transfer end and audit", async () => {
     });
     assert.equal(memberRemoveHost.status, 403);
 
+    const memberGrantSelf = await fetch(`${baseUrl}/api/rooms/${room.roomId}/presenters/member-1/grant`, {
+      method: "POST",
+      headers: { ...jsonHeaders, "authorization": `Bearer ${member.token}` }
+    });
+    assert.equal(memberGrantSelf.status, 403);
+
+    const grantPresenter = await fetch(`${baseUrl}/api/rooms/${room.roomId}/presenters/member-1/grant`, {
+      method: "POST",
+      headers: { ...jsonHeaders, "authorization": `Bearer ${host.token}` }
+    });
+    assert.equal(grantPresenter.status, 200);
+    assert.equal(((await grantPresenter.json()) as { presenterParticipantId?: string }).presenterParticipantId, "member-1");
+
+    const presenterStatus = await fetch(`${baseUrl}/api/rooms/${room.roomId}/session-control`, {
+      headers: { "authorization": `Bearer ${member.token}` }
+    });
+    assert.equal(presenterStatus.status, 200);
+    const presenterPayload = (await presenterStatus.json()) as { role?: RoomRole; token?: string; access?: { canManageRoomSession?: boolean; canStartScreenShare?: boolean; canCreateRemoteBrowser?: boolean }; state?: { presenterParticipantId?: string | null } };
+    assert.equal(presenterPayload.role, "presenter");
+    assert.equal(presenterPayload.state?.presenterParticipantId, "member-1");
+    assert.equal(presenterPayload.access?.canStartScreenShare, true);
+    assert.equal(presenterPayload.access?.canCreateRemoteBrowser, true);
+    assert.equal(presenterPayload.access?.canManageRoomSession, false);
+    assert.equal(typeof presenterPayload.token, "string");
+
+    const presenterLock = await fetch(`${baseUrl}/api/rooms/${room.roomId}/session-control/lock`, {
+      method: "POST",
+      headers: { ...jsonHeaders, "authorization": `Bearer ${presenterPayload.token}` }
+    });
+    assert.equal(presenterLock.status, 403);
+
+    const presenterMetrics = await fetch(`${baseUrl}/metrics`);
+    assert.equal(presenterMetrics.status, 200);
+    const presenterMetricsText = await presenterMetrics.text();
+    assert.match(presenterMetricsText, /vrata_presenter_changes_total\{action="grant",result="denied"\} 1/);
+    assert.match(presenterMetricsText, /vrata_presenter_changes_total\{action="grant",result="allowed"\} 1/);
+    assert.match(presenterMetricsText, /vrata_active_presenter_sessions 1/);
+
+    const revokePresenter = await fetch(`${baseUrl}/api/rooms/${room.roomId}/presenters/member-1/revoke`, {
+      method: "POST",
+      headers: { ...jsonHeaders, "authorization": `Bearer ${host.token}` }
+    });
+    assert.equal(revokePresenter.status, 200);
+    assert.equal(((await revokePresenter.json()) as { presenterParticipantId?: string | null }).presenterParticipantId, null);
+
+    const revokedStatus = await fetch(`${baseUrl}/api/rooms/${room.roomId}/session-control`, {
+      headers: { "authorization": `Bearer ${presenterPayload.token}` }
+    });
+    assert.equal(revokedStatus.status, 200);
+    const revokedPayload = (await revokedStatus.json()) as { role?: RoomRole; access?: { canStartScreenShare?: boolean }; state?: { presenterParticipantId?: string | null } };
+    assert.equal(revokedPayload.role, "member");
+    assert.equal(revokedPayload.access?.canStartScreenShare, false);
+    assert.equal(revokedPayload.state?.presenterParticipantId, null);
+
+    const revokedMetrics = await fetch(`${baseUrl}/metrics`);
+    assert.equal(revokedMetrics.status, 200);
+    const revokedMetricsText = await revokedMetrics.text();
+    assert.match(revokedMetricsText, /vrata_presenter_changes_total\{action="revoke",result="allowed"\} 1/);
+    assert.match(revokedMetricsText, /vrata_active_presenter_sessions 0/);
+
     const removeGuest = await fetch(`${baseUrl}/api/rooms/${room.roomId}/participants/guest-1/remove`, {
       method: "POST",
       headers: { ...jsonHeaders, "authorization": `Bearer ${host.token}` }
@@ -2256,13 +2316,24 @@ test("host controls enforce lock remove transfer end and audit", async () => {
 
     const nextHostBase = await issueToken(room.roomId, "guest-2", "guest");
     await putPresence(room.roomId, "guest-2", nextHostBase.token, "guest");
+    const grantNextHostPresenter = await fetch(`${baseUrl}/api/rooms/${room.roomId}/presenters/guest-2/grant`, {
+      method: "POST",
+      headers: { ...jsonHeaders, "authorization": `Bearer ${host.token}` }
+    });
+    assert.equal(grantNextHostPresenter.status, 200);
     const transferResponse = await fetch(`${baseUrl}/api/rooms/${room.roomId}/host/transfer`, {
       method: "POST",
       headers: { ...jsonHeaders, "authorization": `Bearer ${host.token}` },
       body: JSON.stringify({ participantId: "guest-2" })
     });
     assert.equal(transferResponse.status, 200);
-    assert.equal(((await transferResponse.json()) as { hostParticipantId?: string }).hostParticipantId, "guest-2");
+    const transferPayload = (await transferResponse.json()) as { hostParticipantId?: string; state?: { presenterParticipantId?: string | null } };
+    assert.equal(transferPayload.hostParticipantId, "guest-2");
+    assert.equal(transferPayload.state?.presenterParticipantId, null);
+
+    const transferMetrics = await fetch(`${baseUrl}/metrics`);
+    assert.equal(transferMetrics.status, 200);
+    assert.match(await transferMetrics.text(), /vrata_active_presenter_sessions 0/);
 
     const promotedStatus = await fetch(`${baseUrl}/api/rooms/${room.roomId}/session-control`, {
       headers: { "authorization": `Bearer ${nextHostBase.token}` }
@@ -2301,8 +2372,11 @@ test("host controls enforce lock remove transfer end and audit", async () => {
     const auditPayload = (await auditResponse.json()) as { items: Array<{ action?: string; result?: string; reason?: string }> };
     assert.equal(auditPayload.items.some((item) => item.action === "room.session-control.participant.remove" && item.result === "allowed"), true);
     assert.equal(auditPayload.items.some((item) => item.action === "room.session-control.lock" && item.result === "allowed"), true);
+    assert.equal(auditPayload.items.some((item) => item.action === "room.session-control.presenter.grant" && item.result === "allowed"), true);
+    assert.equal(auditPayload.items.some((item) => item.action === "room.session-control.presenter.revoke" && item.result === "allowed"), true);
     assert.equal(auditPayload.items.some((item) => item.action === "room.session-control.host.transfer" && item.result === "allowed"), true);
     assert.equal(auditPayload.items.some((item) => item.action === "room.session-control.end" && item.result === "allowed"), true);
+    assert.equal(auditPayload.items.some((item) => item.action === "room.session-control.presenter.grant" && item.result === "denied"), true);
     assert.equal(auditPayload.items.some((item) => item.action === "room.session-control.participant.remove" && item.result === "denied"), true);
     assert.equal(auditPayload.items.some((item) => item.action === "invite.use" && item.result === "denied" && item.reason === "room_locked"), true);
   } finally {

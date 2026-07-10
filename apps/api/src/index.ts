@@ -321,6 +321,7 @@ const metrics = {
   mediaJoinFailuresTotal: new Map<string, number>(),
   roomAccessDeniedTotal: new Map<string, number>(),
   hostActionsTotal: new Map<string, number>(),
+  presenterChangesTotal: new Map<string, number>(),
   roomLockedTotal: 0,
   participantsRemovedTotal: 0,
   sessionsEndedTotal: 0,
@@ -1248,9 +1249,20 @@ async function apiMetricsText(storage: Awaited<typeof storagePromise>): Promise<
     lines.push(formatMetricLine("vrata_host_actions_total", count, { action, result }));
   }
   lines.push(
+    "# HELP vrata_presenter_changes_total Presenter grant or revoke decisions by action and result.",
+    "# TYPE vrata_presenter_changes_total counter"
+  );
+  for (const [label, count] of metrics.presenterChangesTotal.entries()) {
+    const [action = "unknown", result = "unknown"] = label.split(":");
+    lines.push(formatMetricLine("vrata_presenter_changes_total", count, { action, result }));
+  }
+  lines.push(
     "# HELP vrata_room_locked_total Room lock actions accepted by API.",
     "# TYPE vrata_room_locked_total counter",
     formatMetricLine("vrata_room_locked_total", metrics.roomLockedTotal),
+    "# HELP vrata_active_presenter_sessions Rooms with an active presenter assignment.",
+    "# TYPE vrata_active_presenter_sessions gauge",
+    formatMetricLine("vrata_active_presenter_sessions", rooms.filter((room) => Boolean(defaultSessionControlState(room.sessionControl).presenterParticipantId)).length),
     "# HELP vrata_participants_removed_total Participant removals accepted by API.",
     "# TYPE vrata_participants_removed_total counter",
     formatMetricLine("vrata_participants_removed_total", metrics.participantsRemovedTotal),
@@ -2068,6 +2080,11 @@ function sanitizeWaitingRoomRequest(request: WaitingRoomRequestRecord): WaitingR
 function defaultSessionControlState(input?: RoomSessionControlState | null): Required<RoomSessionControlState> {
   return {
     hostParticipantId: input?.hostParticipantId ?? null,
+    presenterParticipantId: input?.presenterParticipantId ?? null,
+    presenterGrantedAt: input?.presenterGrantedAt ?? null,
+    presenterGrantedBy: input?.presenterGrantedBy ?? null,
+    presenterRevokedAt: input?.presenterRevokedAt ?? null,
+    presenterRevokedBy: input?.presenterRevokedBy ?? null,
     lockedAt: input?.lockedAt ?? null,
     lockedBy: input?.lockedBy ?? null,
     endedAt: input?.endedAt ?? null,
@@ -2092,14 +2109,23 @@ function getRemovedParticipant(room: RoomRecord, participantId: string | null | 
 }
 
 function resolveEffectiveRoomRole(room: RoomRecord | null, participantId: string, role: RoomRole): RoomRole {
-  const hostParticipantId = room ? defaultSessionControlState(room.sessionControl).hostParticipantId : null;
-  if (!hostParticipantId) {
-    return role;
+  const control = room ? defaultSessionControlState(room.sessionControl) : null;
+  if (role === "admin") {
+    return "admin";
   }
-  if (participantId === hostParticipantId) {
+  if (!control?.hostParticipantId) {
+    if (participantId === control?.presenterParticipantId) {
+      return "presenter";
+    }
+    return role === "presenter" ? "member" : role;
+  }
+  if (participantId === control?.hostParticipantId) {
     return "host";
   }
-  return role === "host" ? "member" : role;
+  if (participantId === control?.presenterParticipantId) {
+    return "presenter";
+  }
+  return role === "host" || role === "presenter" ? "member" : role;
 }
 
 function canJoinLockedRoom(role: RoomRole): boolean {
@@ -2142,6 +2168,10 @@ async function updateRoomSessionControl(
 
 function incrementHostActionMetric(action: string, result: "allowed" | "denied"): void {
   incrementCounter(metrics.hostActionsTotal, `${action}:${result}`);
+}
+
+function incrementPresenterChangeMetric(action: "grant" | "revoke", result: "allowed" | "denied"): void {
+  incrementCounter(metrics.presenterChangesTotal, `${action}:${result}`);
 }
 
 function createRoomAccessTokenResponse(input: {
@@ -4008,7 +4038,14 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       ? { ...current, lockedAt: now, lockedBy: actor.actorId }
       : action === "unlock"
         ? { ...current, lockedAt: null, lockedBy: null }
-        : { ...current, endedAt: now, endedBy: actor.actorId };
+        : {
+          ...current,
+          endedAt: now,
+          endedBy: actor.actorId,
+          presenterParticipantId: null,
+          presenterRevokedAt: now,
+          presenterRevokedBy: actor.actorId
+        };
     const updated = await updateRoomSessionControl(storage, room, next);
     if (action === "lock") metrics.roomLockedTotal += 1;
     if (action === "end") {
@@ -4055,6 +4092,9 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     const now = new Date().toISOString();
     const updated = await updateRoomSessionControl(storage, room, {
       ...current,
+      presenterParticipantId: current.presenterParticipantId === targetParticipantId ? null : current.presenterParticipantId,
+      presenterRevokedAt: current.presenterParticipantId === targetParticipantId ? now : current.presenterRevokedAt,
+      presenterRevokedBy: current.presenterParticipantId === targetParticipantId ? actor.actorId : current.presenterRevokedBy,
       removedParticipants: {
         ...current.removedParticipants,
         [targetParticipantId]: {
@@ -4068,6 +4108,62 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     metrics.participantsRemovedTotal += 1;
     incrementHostActionMetric("remove", "allowed");
     json(response, 200, { state: sanitizeSessionControlState(updated.sessionControl), removedParticipantId: targetParticipantId });
+    return;
+  }
+
+  const presenterActionMatch = url.pathname.match(/^\/api\/rooms\/([^/]+)\/presenters\/([^/]+)\/(grant|revoke)$/);
+  if (method === "POST" && presenterActionMatch) {
+    const roomId = decodeURIComponent(presenterActionMatch[1]);
+    const targetParticipantId = decodeURIComponent(presenterActionMatch[2]);
+    const action = presenterActionMatch[3] as "grant" | "revoke";
+    if (!isHostControlsEnabled()) return json(response, 404, { error: "host_controls_disabled" });
+    const room = await storage.getRoom(roomId);
+    if (!room) return json(response, 404, { error: "room_not_found" });
+    const actor = await requireControlPlanePermission(request, response, {
+      permission: "room.session-control",
+      action: `room.session-control.presenter.${action}`,
+      objectType: "participant",
+      objectId: targetParticipantId,
+      targetRoomId: roomId,
+      allowHostOwnRoom: true,
+      currentHostParticipantId: defaultSessionControlState(room.sessionControl).hostParticipantId
+    });
+    if (!actor) {
+      incrementPresenterChangeMetric(action, "denied");
+      return;
+    }
+    const current = defaultSessionControlState(room.sessionControl);
+    if (getRemovedParticipant(room, targetParticipantId)) {
+      incrementPresenterChangeMetric(action, "denied");
+      return json(response, 404, { error: "participant_not_found" });
+    }
+    const participant = getPresence(roomId).find((item) => item.participantId === targetParticipantId);
+    if (action === "grant" && !participant) {
+      incrementPresenterChangeMetric(action, "denied");
+      return json(response, 404, { error: "participant_not_found" });
+    }
+    if (action === "revoke" && current.presenterParticipantId !== targetParticipantId) {
+      incrementPresenterChangeMetric(action, "denied");
+      return json(response, 404, { error: "presenter_not_found" });
+    }
+    const now = new Date().toISOString();
+    const updated = await updateRoomSessionControl(storage, room, action === "grant"
+      ? {
+        ...current,
+        presenterParticipantId: targetParticipantId,
+        presenterGrantedAt: now,
+        presenterGrantedBy: actor.actorId,
+        presenterRevokedAt: null,
+        presenterRevokedBy: null
+      }
+      : {
+        ...current,
+        presenterParticipantId: null,
+        presenterRevokedAt: now,
+        presenterRevokedBy: actor.actorId
+      });
+    incrementPresenterChangeMetric(action, "allowed");
+    json(response, 200, { state: sanitizeSessionControlState(updated.sessionControl), presenterParticipantId: action === "grant" ? targetParticipantId : null });
     return;
   }
 
@@ -4101,8 +4197,12 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       incrementHostActionMetric("transfer_host", "denied");
       return json(response, 404, { error: "participant_not_found" });
     }
+    const current = defaultSessionControlState(room.sessionControl);
     const updated = await updateRoomSessionControl(storage, room, {
-      ...defaultSessionControlState(room.sessionControl),
+      ...current,
+      presenterParticipantId: current.presenterParticipantId === targetParticipantId ? null : current.presenterParticipantId,
+      presenterRevokedAt: current.presenterParticipantId === targetParticipantId ? new Date().toISOString() : current.presenterRevokedAt,
+      presenterRevokedBy: current.presenterParticipantId === targetParticipantId ? actor.actorId : current.presenterRevokedBy,
       hostParticipantId: targetParticipantId
     });
     incrementHostActionMetric("transfer_host", "allowed");

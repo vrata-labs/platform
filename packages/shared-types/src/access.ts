@@ -1,4 +1,4 @@
-export type RoomRole = "guest" | "member" | "host" | "admin";
+export type RoomRole = "guest" | "member" | "presenter" | "host" | "admin";
 
 export type RoomPermission =
   | "room.join"
@@ -41,11 +41,34 @@ export interface RoomAccessDebugState {
   canManageRoomSession: boolean;
 }
 
-const roomRoles = new Set<RoomRole>(["guest", "member", "host", "admin"]);
+const roomRoles = new Set<RoomRole>(["guest", "member", "presenter", "host", "admin"]);
 
 const rolePermissions: Record<RoomRole, readonly RoomPermission[]> = {
   guest: ["room.join", "audio.join", "surface.view", "markdown-board.view", "notes.view"],
   member: ["room.join", "audio.join", "surface.view", "surface.input", "whiteboard.draw", "markdown-board.view", "markdown-board.edit", "document.view", "document.download", "notes.view", "notes.edit"],
+  presenter: [
+    "room.join",
+    "audio.join",
+    "surface.view",
+    "surface.select",
+    "surface.create-object",
+    "surface.stop-object",
+    "surface.input",
+    "screen-share.start",
+    "screen-share.stop",
+    "whiteboard.draw",
+    "whiteboard.clear",
+    "remote-browser.open-url",
+    "remote-browser.input",
+    "remote-browser.stop",
+    "markdown-board.view",
+    "markdown-board.edit",
+    "document.view",
+    "document.download",
+    "document.upload",
+    "notes.view",
+    "notes.edit"
+  ],
   host: [
     "room.join",
     "audio.join",

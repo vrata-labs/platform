@@ -38,7 +38,7 @@ import {
 } from "@vrata/shared-types";
 
 import { appendBrandingSuffix, applyRoomShellBootState, renderSceneAttributions } from "./boot-session.js";
-import { RuntimeAccessError, bootRuntime, deleteRoomDocument, downloadRoomDocument, exportRoomNote, exportRoomNotesArchive, fetchRoomNote, fetchRoomSessionControl, fetchRuntimeSpaces, listPresence, listRoomDocuments, listRoomNoteVersions, openPersonalRoom, planVoiceSession, removePresence, removeRoomParticipant, resolveCurrentSpace, resolveJoinMode, restoreRoomNoteVersion, runRoomSessionControlAction, savePersonalRoomState, saveRoomNote, selectRoomDocumentSurface, transferRoomHost, uploadRoomDocument, upsertPresence, type PresenceState, type RuntimeDocumentRecord, type RuntimeNoteScope, type RuntimeNoteVersionRecord, type RuntimePersonalState, type RuntimeSessionControlResponse, type RuntimeSpaceOption } from "./index.js";
+import { RuntimeAccessError, bootRuntime, deleteRoomDocument, downloadRoomDocument, exportRoomNote, exportRoomNotesArchive, fetchRoomNote, fetchRoomSessionControl, fetchRuntimeSpaces, grantRoomPresenter, listPresence, listRoomDocuments, listRoomNoteVersions, openPersonalRoom, planVoiceSession, removePresence, removeRoomParticipant, resolveCurrentSpace, resolveJoinMode, restoreRoomNoteVersion, revokeRoomPresenter, runRoomSessionControlAction, savePersonalRoomState, saveRoomNote, selectRoomDocumentSurface, transferRoomHost, uploadRoomDocument, upsertPresence, type PresenceState, type RuntimeDocumentRecord, type RuntimeNoteScope, type RuntimeNoteVersionRecord, type RuntimePersonalState, type RuntimeSessionControlResponse, type RuntimeSpaceOption } from "./index.js";
 import { formatClientCompatibilityStatus, resolveClientCompatibility, type ClientCompatibilitySummary } from "./client-capabilities.js";
 import { formatGuestCompatibilityWarnings, formatGuestControlsHint, shouldShowGuestOnboarding, validateGuestDisplayName } from "./guest-onboarding.js";
 import { createMotionTrack, pushMotionSample, sampleMotion, type MotionTrack } from "./motion-state.js";
@@ -275,6 +275,7 @@ const roomStateLineEl = mustElement<HTMLDivElement>("#room-state-line");
 const reportLineEl = mustElement<HTMLDivElement>("#report-line");
 const diagnosticsLink = mustElement<HTMLAnchorElement>("#diagnostics-link");
 const guestAccessLineEl = mustElement<HTMLDivElement>("#guest-access-line");
+const presenterLineEl = mustElement<HTMLDivElement>("#presenter-line");
 const compatibilityStatusEl = mustElement<HTMLDivElement>("#compatibility-status");
 const guestOnboardingEl = mustElement<HTMLElement>("#guest-onboarding");
 const guestNameInput = mustElement<HTMLInputElement>("#guest-name-input");
@@ -336,6 +337,8 @@ const endSessionButton = mustElement<HTMLButtonElement>("#end-session");
 const hostParticipantSelect = mustElement<HTMLSelectElement>("#host-participant-select");
 const removeParticipantButton = mustElement<HTMLButtonElement>("#remove-participant");
 const transferHostButton = mustElement<HTMLButtonElement>("#transfer-host");
+const grantPresenterButton = mustElement<HTMLButtonElement>("#grant-presenter");
+const revokePresenterButton = mustElement<HTMLButtonElement>("#revoke-presenter");
 const remoteBrowserControlEl = mustElement<HTMLDivElement>("#remote-browser-control");
 const remoteBrowserUrlInput = mustElement<HTMLInputElement>("#remote-browser-url");
 const openRemoteBrowserButton = mustElement<HTMLButtonElement>("#open-remote-browser");
@@ -1431,12 +1434,18 @@ function renderHostControls(statusMessage?: string): void {
   debugState.hostControls.locked = Boolean(latestSessionControl?.lockedAt);
   debugState.hostControls.ended = Boolean(latestSessionControl?.endedAt);
   debugState.hostControls.hostParticipantId = latestSessionControl?.hostParticipantId ?? null;
+  debugState.hostControls.presenterParticipantId = latestSessionControl?.presenterParticipantId ?? null;
+  const presenterParticipantId = latestSessionControl?.presenterParticipantId ?? null;
+  const presenterParticipant = presenterParticipantId ? currentVisibleParticipants().find((item) => item.participantId === presenterParticipantId) : null;
+  presenterLineEl.textContent = presenterParticipantId
+    ? `Presenter: ${presenterParticipant?.displayName || presenterParticipantId}`
+    : "Presenter: none";
   if (statusMessage) {
     hostControlsStatusEl.textContent = statusMessage;
     debugState.hostControls.status = statusMessage;
   } else if (visible) {
     const state = latestSessionControl?.lockedAt ? "locked" : "open";
-    hostControlsStatusEl.textContent = `Room ${state}${latestSessionControl?.hostParticipantId ? `; host ${latestSessionControl.hostParticipantId}` : ""}`;
+    hostControlsStatusEl.textContent = `Room ${state}${latestSessionControl?.hostParticipantId ? `; host ${latestSessionControl.hostParticipantId}` : ""}${presenterParticipantId ? `; presenter ${presenterParticipantId}` : ""}`;
     debugState.hostControls.status = hostControlsStatusEl.textContent;
   }
 
@@ -1450,7 +1459,14 @@ function renderHostControls(statusMessage?: string): void {
     option.selected = participant.participantId === previousSelection;
     hostParticipantSelect.appendChild(option);
   }
-  if (participants.length === 0) {
+  if (presenterParticipantId && !participants.some((participant) => participant.participantId === presenterParticipantId)) {
+    const option = document.createElement("option");
+    option.value = presenterParticipantId;
+    option.textContent = `${presenterParticipantId} (presenter offline)`;
+    option.selected = presenterParticipantId === previousSelection;
+    hostParticipantSelect.appendChild(option);
+  }
+  if (participants.length === 0 && !presenterParticipantId) {
     const option = document.createElement("option");
     option.value = "";
     option.textContent = "No participants";
@@ -1461,13 +1477,16 @@ function renderHostControls(statusMessage?: string): void {
     hostParticipantSelect.value = selected;
   }
   debugState.hostControls.selectedParticipantId = selected || null;
+  const selectedIsPresent = participants.some((participant) => participant.participantId === selected);
 
-  hostParticipantSelect.disabled = !visible || participants.length === 0 || hostControlActionInFlight;
+  hostParticipantSelect.disabled = !visible || (!participants.length && !presenterParticipantId) || hostControlActionInFlight;
   lockRoomButton.disabled = !visible || Boolean(latestSessionControl?.lockedAt) || hostControlActionInFlight;
   unlockRoomButton.disabled = !visible || !latestSessionControl?.lockedAt || hostControlActionInFlight;
   endSessionButton.disabled = !visible || hostControlActionInFlight;
-  removeParticipantButton.disabled = !visible || !selected || selected === participantId || hostControlActionInFlight;
-  transferHostButton.disabled = !visible || !selected || selected === latestSessionControl?.hostParticipantId || hostControlActionInFlight;
+  removeParticipantButton.disabled = !visible || !selected || !selectedIsPresent || selected === participantId || hostControlActionInFlight;
+  transferHostButton.disabled = !visible || !selected || !selectedIsPresent || selected === latestSessionControl?.hostParticipantId || hostControlActionInFlight;
+  grantPresenterButton.disabled = !visible || !selected || !selectedIsPresent || selected === presenterParticipantId || hostControlActionInFlight;
+  revokePresenterButton.disabled = !visible || !selected || selected !== presenterParticipantId || hostControlActionInFlight;
 }
 
 function applyAccessDebug(access: NonNullable<RuntimeSessionControlResponse["access"]>, token: string, expiresInSeconds?: number): void {
@@ -1488,12 +1507,7 @@ function applyAccessDebug(access: NonNullable<RuntimeSessionControlResponse["acc
     roomStateClient = null;
     connectRoomStateWithRetry(debugState.roomStateUrl);
   }
-  startShareButton.disabled = !canUseScreenShareControl();
-  stopShareButton.disabled = !canStopLocalScreenShare();
-  syncWhiteboardControls();
-  syncMarkdownBoardControls();
-  syncRemoteBrowserControls();
-  syncSurfaceAudioControl();
+  syncMediaCapabilityControls();
   syncNotesAccessUi();
   renderDocumentsUi();
   renderHostControls();
@@ -3193,16 +3207,16 @@ function syncMediaCapabilityControls(): void {
   remoteBrowserControlEl.hidden = !debugState.access.canCreateRemoteBrowser && !activeRemoteBrowserObjectForSurface(selectedMediaSurfaceId) && !findActiveRemoteBrowserObject();
   if (!debugState.access.canStartScreenShare) {
     startShareButton.disabled = true;
-    startShareButton.title = "Host role required";
+    startShareButton.title = "Presenter or host role required";
     stopShareButton.disabled = true;
   }
   if (!debugState.access.canCreateWhiteboard) {
     startWhiteboardButton.disabled = true;
-    startWhiteboardButton.title = "Host role required";
+    startWhiteboardButton.title = "Presenter or host role required";
   }
   if (!debugState.access.canCreateMarkdownBoard) {
     startMarkdownBoardButton.disabled = true;
-    startMarkdownBoardButton.title = "Host role required";
+    startMarkdownBoardButton.title = "Presenter or host role required";
   }
   if (!hasRoomPermission(debugState.access.permissions, "surface.stop-object")) {
     stopWhiteboardButton.disabled = true;
@@ -4316,6 +4330,7 @@ const debugState = {
     locked: false,
     ended: false,
     hostParticipantId: null as string | null,
+    presenterParticipantId: null as string | null,
     selectedParticipantId: null as string | null,
     status: "idle" as string,
     lastReason: null as string | null
@@ -8336,6 +8351,28 @@ transferHostButton.addEventListener("click", () => {
   void runHostControlAction(
     () => transferRoomHost(apiBaseUrl, roomId, roomStateAccessToken, targetParticipantId),
     `Transferred host to ${targetParticipantId}`
+  );
+});
+
+grantPresenterButton.addEventListener("click", () => {
+  const targetParticipantId = hostParticipantSelect.value;
+  if (!targetParticipantId) {
+    return;
+  }
+  void runHostControlAction(
+    () => grantRoomPresenter(apiBaseUrl, roomId, roomStateAccessToken, targetParticipantId),
+    `Granted presenter to ${targetParticipantId}`
+  );
+});
+
+revokePresenterButton.addEventListener("click", () => {
+  const targetParticipantId = hostParticipantSelect.value;
+  if (!targetParticipantId) {
+    return;
+  }
+  void runHostControlAction(
+    () => revokeRoomPresenter(apiBaseUrl, roomId, roomStateAccessToken, targetParticipantId),
+    `Revoked presenter from ${targetParticipantId}`
   );
 });
 

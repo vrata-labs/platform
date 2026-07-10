@@ -22,8 +22,11 @@ test("shared role and mode types compile in tests", () => {
   assert.equal(`${role}:${mode}`, "guest:desktop");
 });
 
-test("room access policy grants screen share to host only", () => {
+test("room access policy grants presenter media controls without session control", () => {
   assert.equal(createRoomAccessDebugState("guest").canStartScreenShare, false);
+  assert.equal(createRoomAccessDebugState("presenter").canStartScreenShare, true);
+  assert.equal(createRoomAccessDebugState("presenter").canCreateRemoteBrowser, true);
+  assert.equal(createRoomAccessDebugState("presenter").canManageRoomSession, false);
   assert.equal(createRoomAccessDebugState("host").canStartScreenShare, true);
   assert.equal(createRoomAccessDebugState("host").canConfigureSurfaceAudio, false);
   assert.equal(createRoomAccessDebugState("admin").canConfigureSurfaceAudio, true);
