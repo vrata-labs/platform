@@ -68,6 +68,18 @@
               <button id="notes-retry-save" type="button" hidden>Retry save</button>
               <div id="notes-status" class="audio-device-status" role="status" aria-live="polite">Notes loading...</div>
             </div>
+            <div class="notes-history">
+              <label for="notes-version-select">History</label>
+              <select id="notes-version-select" disabled>
+                <option value="">No versions</option>
+              </select>
+              <div class="notes-actions compact-controls">
+                <button id="notes-restore-version" type="button" disabled>Restore version</button>
+                <button id="notes-export-markdown" type="button" disabled>Export Markdown</button>
+                <button id="notes-export-json" type="button" disabled>Export JSON</button>
+                <button id="notes-export-room-json" type="button" disabled>Export room JSON</button>
+              </div>
+            </div>
             <div class="notes-preview-title">Preview</div>
             <div id="notes-preview" class="notes-preview" aria-live="polite"></div>
           </div>

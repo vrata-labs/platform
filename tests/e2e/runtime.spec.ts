@@ -311,12 +311,37 @@ test("persistent notes panel autosaves markdown and reloads safely", async ({ pa
   await page.click("#notes-retry-save");
   await expect(page.locator("#notes-status")).toContainText("Notes saved", { timeout: 10000 });
 
+  const finalNote = `${retriedNote}\n- history final version`;
+  await page.fill("#notes-editor", finalNote);
+  await expect(page.locator("#notes-status")).toContainText("Notes saved", { timeout: 10000 });
+  await expect.poll(async () => page.evaluate(() => (window as Window & { __VRATA_DEBUG__?: { notes?: { versionCount?: number } } }).__VRATA_DEBUG__?.notes?.versionCount ?? 0), {
+    timeout: 10000
+  }).toBeGreaterThanOrEqual(3);
+
+  const oldestVersionId = await page.locator("#notes-version-select option").nth(2).getAttribute("value");
+  expect(oldestVersionId).toBeTruthy();
+  await page.selectOption("#notes-version-select", oldestVersionId!);
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.click("#notes-restore-version");
+  await expect(page.locator("#notes-status")).toContainText("Notes version restored", { timeout: 10000 });
+  await expect(page.locator("#notes-editor")).toHaveValue(note, { timeout: 10000 });
+
+  const markdownDownloadPromise = page.waitForEvent("download");
+  await page.click("#notes-export-markdown");
+  const markdownDownload = await markdownDownloadPromise;
+  expect(markdownDownload.suggestedFilename()).toMatch(/private-notes\.md$/);
+
+  const jsonDownloadPromise = page.waitForEvent("download");
+  await page.click("#notes-export-room-json");
+  const jsonDownload = await jsonDownloadPromise;
+  expect(jsonDownload.suggestedFilename()).toMatch(/room-notes\.json$/);
+
   await page.reload();
   await completeGuestOnboarding(page, "Notes Member", true);
-  await expect(page.locator("#notes-editor")).toHaveValue(retriedNote, { timeout: 10000 });
+  await expect(page.locator("#notes-editor")).toHaveValue(note, { timeout: 10000 });
   await expect.poll(async () => page.evaluate(() => (window as Window & { __VRATA_DEBUG__?: { notes?: { contentLength?: number } } }).__VRATA_DEBUG__?.notes?.contentLength ?? 0), {
     timeout: 10000
-  }).toBe(retriedNote.length);
+  }).toBe(note.length);
   await expect.poll(async () => page.evaluate(() => (window as Window & { __VRATA_DEBUG__?: { notes?: { saveState?: string } } }).__VRATA_DEBUG__?.notes?.saveState ?? ""), {
     timeout: 10000
   }).toMatch(/ready|saved/);

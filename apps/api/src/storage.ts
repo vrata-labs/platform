@@ -87,6 +87,23 @@ export interface RoomNoteRecord {
   content: string;
   updatedAt: string | null;
   updatedBy?: string | null;
+  deletedAt?: string | null;
+  deletedBy?: string | null;
+}
+
+export type RoomNoteVersionAction = "save" | "restore" | "delete";
+
+export interface RoomNoteVersionRecord {
+  versionId: string;
+  noteId: string;
+  roomId: string;
+  scope: RoomNoteScope;
+  ownerParticipantId?: string | null;
+  content: string;
+  action: RoomNoteVersionAction;
+  restoredFromVersionId?: string | null;
+  createdAt: string;
+  createdBy?: string | null;
 }
 
 export interface RoomDocumentRecord {
@@ -317,6 +334,8 @@ function mapRoomNoteRow(row: {
   content: string;
   updated_at: string | Date;
   updated_by?: string | null;
+  deleted_at?: string | Date | null;
+  deleted_by?: string | null;
 }): RoomNoteRecord {
   return {
     noteId: row.note_id,
@@ -325,7 +344,35 @@ function mapRoomNoteRow(row: {
     ownerParticipantId: row.owner_participant_id ?? null,
     content: row.content,
     updatedAt: isoString(row.updated_at) ?? new Date().toISOString(),
-    updatedBy: row.updated_by ?? null
+    updatedBy: row.updated_by ?? null,
+    deletedAt: isoString(row.deleted_at),
+    deletedBy: row.deleted_by ?? null
+  };
+}
+
+function mapRoomNoteVersionRow(row: {
+  version_id: string;
+  note_id: string;
+  room_id: string;
+  scope: RoomNoteScope;
+  owner_participant_id?: string | null;
+  content: string;
+  action: RoomNoteVersionAction;
+  restored_from_version_id?: string | null;
+  created_at: string | Date;
+  created_by?: string | null;
+}): RoomNoteVersionRecord {
+  return {
+    versionId: row.version_id,
+    noteId: row.note_id,
+    roomId: row.room_id,
+    scope: row.scope,
+    ownerParticipantId: row.owner_participant_id ?? null,
+    content: row.content,
+    action: row.action,
+    restoredFromVersionId: row.restored_from_version_id ?? null,
+    createdAt: isoString(row.created_at) ?? new Date().toISOString(),
+    createdBy: row.created_by ?? null
   };
 }
 
@@ -530,6 +577,10 @@ export interface Storage {
   updateWaitingRoomRequest(roomId: string, requestId: string, input: Partial<Pick<WaitingRoomRequestRecord, "status" | "decidedAt" | "decidedBy">>): Promise<WaitingRoomRequestRecord | null>;
   getRoomNote(roomId: string, scope: RoomNoteScope, ownerParticipantId?: string | null): Promise<RoomNoteRecord | null>;
   upsertRoomNote(input: Pick<RoomNoteRecord, "roomId" | "scope" | "content"> & { ownerParticipantId?: string | null; updatedBy?: string | null }): Promise<RoomNoteRecord>;
+  deleteRoomNote(roomId: string, scope: RoomNoteScope, ownerParticipantId?: string | null, deletedBy?: string | null): Promise<RoomNoteRecord | null>;
+  listRoomNotes(roomId: string, includeDeleted?: boolean): Promise<RoomNoteRecord[]>;
+  listRoomNoteVersions(roomId: string, scope: RoomNoteScope, ownerParticipantId?: string | null, limit?: number): Promise<RoomNoteVersionRecord[]>;
+  restoreRoomNoteVersion(roomId: string, scope: RoomNoteScope, ownerParticipantId: string | null | undefined, versionId: string, updatedBy?: string | null): Promise<{ note: RoomNoteRecord; version: RoomNoteVersionRecord } | null>;
   listRoomDocuments(roomId: string, includeDeleted?: boolean): Promise<RoomDocumentRecord[]>;
   getRoomDocument(roomId: string, documentId: string): Promise<RoomDocumentRecord | null>;
   createRoomDocument(input: Omit<RoomDocumentRecord, "uploadedAt" | "deletedAt" | "deletedBy" | "linkedSurfaceId"> & { uploadedAt?: string; linkedSurfaceId?: string | null }): Promise<RoomDocumentRecord>;
@@ -603,6 +654,7 @@ export class MemoryStorage implements Storage {
   private roomInvites = new Map<string, RoomInviteRecord>();
   private waitingRoomRequests = new Map<string, WaitingRoomRequestRecord>();
   private roomNotes = new Map<string, RoomNoteRecord>();
+  private roomNoteVersions = new Map<string, RoomNoteVersionRecord[]>();
 
   private sceneBundleKey(bundleId: string, version: string): string {
     return `${bundleId}::${version}`;
@@ -767,7 +819,8 @@ export class MemoryStorage implements Storage {
     return updated;
   }
   async getRoomNote(roomId: string, scope: RoomNoteScope, ownerParticipantId?: string | null): Promise<RoomNoteRecord | null> {
-    return this.roomNotes.get(roomNoteId(roomId, scope, ownerParticipantId)) ?? null;
+    const note = this.roomNotes.get(roomNoteId(roomId, scope, ownerParticipantId));
+    return note ? structuredClone(note) : null;
   }
   async upsertRoomNote(input: Pick<RoomNoteRecord, "roomId" | "scope" | "content"> & { ownerParticipantId?: string | null; updatedBy?: string | null }): Promise<RoomNoteRecord> {
     const note: RoomNoteRecord = {
@@ -777,10 +830,74 @@ export class MemoryStorage implements Storage {
       ownerParticipantId: input.scope === "private" ? input.ownerParticipantId ?? null : null,
       content: input.content,
       updatedAt: new Date().toISOString(),
-      updatedBy: input.updatedBy ?? null
+      updatedBy: input.updatedBy ?? null,
+      deletedAt: null,
+      deletedBy: null
     };
     this.roomNotes.set(note.noteId, note);
+    this.appendRoomNoteVersion(note, "save", input.updatedBy ?? null);
     return structuredClone(note);
+  }
+  async deleteRoomNote(roomId: string, scope: RoomNoteScope, ownerParticipantId?: string | null, deletedBy?: string | null): Promise<RoomNoteRecord | null> {
+    const existing = this.roomNotes.get(roomNoteId(roomId, scope, ownerParticipantId));
+    if (!existing || existing.deletedAt) return null;
+    const deleted: RoomNoteRecord = {
+      ...existing,
+      updatedAt: new Date().toISOString(),
+      updatedBy: deletedBy ?? null,
+      deletedAt: new Date().toISOString(),
+      deletedBy: deletedBy ?? null
+    };
+    this.roomNotes.set(deleted.noteId, deleted);
+    this.appendRoomNoteVersion(deleted, "delete", deletedBy ?? null);
+    return structuredClone(deleted);
+  }
+  async listRoomNotes(roomId: string, includeDeleted = false): Promise<RoomNoteRecord[]> {
+    return Array.from(this.roomNotes.values())
+      .filter((note) => note.roomId === roomId && (includeDeleted || !note.deletedAt))
+      .sort((left, right) => (right.updatedAt ?? "").localeCompare(left.updatedAt ?? ""))
+      .map((note) => structuredClone(note));
+  }
+  async listRoomNoteVersions(roomId: string, scope: RoomNoteScope, ownerParticipantId?: string | null, limit = 20): Promise<RoomNoteVersionRecord[]> {
+    const noteId = roomNoteId(roomId, scope, ownerParticipantId);
+    return (this.roomNoteVersions.get(noteId) ?? [])
+      .slice(0, Math.max(1, Math.min(100, Math.floor(limit))))
+      .map((version) => structuredClone(version));
+  }
+  async restoreRoomNoteVersion(roomId: string, scope: RoomNoteScope, ownerParticipantId: string | null | undefined, versionId: string, updatedBy?: string | null): Promise<{ note: RoomNoteRecord; version: RoomNoteVersionRecord } | null> {
+    const noteId = roomNoteId(roomId, scope, ownerParticipantId);
+    const source = (this.roomNoteVersions.get(noteId) ?? []).find((version) => version.versionId === versionId);
+    if (!source) return null;
+    const note: RoomNoteRecord = {
+      noteId,
+      roomId,
+      scope,
+      ownerParticipantId: scope === "private" ? ownerParticipantId ?? null : null,
+      content: source.content,
+      updatedAt: new Date().toISOString(),
+      updatedBy: updatedBy ?? null,
+      deletedAt: null,
+      deletedBy: null
+    };
+    this.roomNotes.set(noteId, note);
+    const version = this.appendRoomNoteVersion(note, "restore", updatedBy ?? null, source.versionId);
+    return { note: structuredClone(note), version: structuredClone(version) };
+  }
+  private appendRoomNoteVersion(note: RoomNoteRecord, action: RoomNoteVersionAction, createdBy?: string | null, restoredFromVersionId?: string | null): RoomNoteVersionRecord {
+    const version: RoomNoteVersionRecord = {
+      versionId: crypto.randomUUID(),
+      noteId: note.noteId,
+      roomId: note.roomId,
+      scope: note.scope,
+      ownerParticipantId: note.ownerParticipantId ?? null,
+      content: note.content,
+      action,
+      restoredFromVersionId: restoredFromVersionId ?? null,
+      createdAt: new Date().toISOString(),
+      createdBy: createdBy ?? null
+    };
+    this.roomNoteVersions.set(note.noteId, [version, ...(this.roomNoteVersions.get(note.noteId) ?? [])]);
+    return version;
   }
   async listRoomDocuments(roomId: string, includeDeleted = false): Promise<RoomDocumentRecord[]> {
     return Array.from(this.roomDocuments.values())
@@ -1054,7 +1171,21 @@ export class PostgresStorage implements Storage {
         owner_participant_id text,
         content text not null,
         updated_at timestamptz not null default now(),
-        updated_by text
+        updated_by text,
+        deleted_at timestamptz,
+        deleted_by text
+      );
+      create table if not exists room_note_versions (
+        version_id text primary key,
+        note_id text not null,
+        room_id text not null references rooms(room_id) on delete cascade,
+        scope text not null,
+        owner_participant_id text,
+        content text not null,
+        action text not null default 'save',
+        restored_from_version_id text,
+        created_at timestamptz not null default now(),
+        created_by text
       );
       create table if not exists room_documents (
         document_id text primary key,
@@ -1074,7 +1205,11 @@ export class PostgresStorage implements Storage {
     `);
     await this.pool.query(`create index if not exists xr_telemetry_room_id_id_idx on xr_telemetry (room_id, id)`);
     await this.pool.query(`create unique index if not exists room_notes_room_scope_owner_idx on room_notes (room_id, scope, coalesce(owner_participant_id, ''))`);
+    await this.pool.query(`create index if not exists room_note_versions_note_created_idx on room_note_versions (note_id, created_at desc)`);
+    await this.pool.query(`create index if not exists room_note_versions_room_scope_owner_idx on room_note_versions (room_id, scope, coalesce(owner_participant_id, ''), created_at desc)`);
     await this.pool.query(`create index if not exists room_documents_room_uploaded_idx on room_documents (room_id, uploaded_at desc)`);
+    await this.pool.query(`alter table room_notes add column if not exists deleted_at timestamptz`);
+    await this.pool.query(`alter table room_notes add column if not exists deleted_by text`);
     await this.pool.query(`alter table rooms add column if not exists scene_bundle_url text`);
     await this.pool.query(`alter table rooms add column if not exists status text not null default 'active'`);
     await this.pool.query(`alter table rooms add column if not exists disabled_at timestamptz`);
@@ -1323,21 +1458,130 @@ export class PostgresStorage implements Storage {
   }
   async getRoomNote(roomId: string, scope: RoomNoteScope, ownerParticipantId?: string | null): Promise<RoomNoteRecord | null> {
     const result = await this.pool.query(
-      `select note_id, room_id, scope, owner_participant_id, content, updated_at, updated_by from room_notes where room_id = $1 and scope = $2 and coalesce(owner_participant_id, '') = coalesce($3, '') limit 1`,
+      `select note_id, room_id, scope, owner_participant_id, content, updated_at, updated_by, deleted_at, deleted_by from room_notes where room_id = $1 and scope = $2 and coalesce(owner_participant_id, '') = coalesce($3, '') limit 1`,
       [roomId, scope, scope === "private" ? ownerParticipantId ?? "" : ""]
     );
     return result.rows[0] ? mapRoomNoteRow(result.rows[0]) : null;
   }
   async upsertRoomNote(input: Pick<RoomNoteRecord, "roomId" | "scope" | "content"> & { ownerParticipantId?: string | null; updatedBy?: string | null }): Promise<RoomNoteRecord> {
     const noteId = roomNoteId(input.roomId, input.scope, input.ownerParticipantId);
+    const versionId = crypto.randomUUID();
+    const client = await this.pool.connect();
+    try {
+      await client.query("begin");
+      const result = await client.query(
+        `insert into room_notes (note_id, room_id, scope, owner_participant_id, content, updated_at, updated_by, deleted_at, deleted_by)
+         values ($1,$2,$3,$4,$5,now(),$6,null,null)
+         on conflict (note_id) do update set content = excluded.content, updated_at = now(), updated_by = excluded.updated_by, deleted_at = null, deleted_by = null
+         returning note_id, room_id, scope, owner_participant_id, content, updated_at, updated_by, deleted_at, deleted_by`,
+        [noteId, input.roomId, input.scope, input.scope === "private" ? input.ownerParticipantId ?? null : null, input.content, input.updatedBy ?? null]
+      );
+      await client.query(
+        `insert into room_note_versions (version_id, note_id, room_id, scope, owner_participant_id, content, action, restored_from_version_id, created_at, created_by)
+         values ($1,$2,$3,$4,$5,$6,'save',null,now(),$7)`,
+        [versionId, noteId, input.roomId, input.scope, input.scope === "private" ? input.ownerParticipantId ?? null : null, input.content, input.updatedBy ?? null]
+      );
+      await client.query("commit");
+      return mapRoomNoteRow(result.rows[0]);
+    } catch (error) {
+      await client.query("rollback").catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+  async deleteRoomNote(roomId: string, scope: RoomNoteScope, ownerParticipantId?: string | null, deletedBy?: string | null): Promise<RoomNoteRecord | null> {
+    const noteId = roomNoteId(roomId, scope, ownerParticipantId);
+    const versionId = crypto.randomUUID();
+    const client = await this.pool.connect();
+    try {
+      await client.query("begin");
+      const result = await client.query(
+        `update room_notes set updated_at = now(), updated_by = $4, deleted_at = now(), deleted_by = $4
+         where note_id = $1 and room_id = $2 and scope = $3 and deleted_at is null
+         returning note_id, room_id, scope, owner_participant_id, content, updated_at, updated_by, deleted_at, deleted_by`,
+        [noteId, roomId, scope, deletedBy ?? null]
+      );
+      if (!result.rows[0]) {
+        await client.query("rollback");
+        return null;
+      }
+      const note = mapRoomNoteRow(result.rows[0]);
+      await client.query(
+        `insert into room_note_versions (version_id, note_id, room_id, scope, owner_participant_id, content, action, restored_from_version_id, created_at, created_by)
+         values ($1,$2,$3,$4,$5,$6,'delete',null,now(),$7)`,
+        [versionId, note.noteId, note.roomId, note.scope, note.ownerParticipantId ?? null, note.content, deletedBy ?? null]
+      );
+      await client.query("commit");
+      return note;
+    } catch (error) {
+      await client.query("rollback").catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+  async listRoomNotes(roomId: string, includeDeleted = false): Promise<RoomNoteRecord[]> {
     const result = await this.pool.query(
-      `insert into room_notes (note_id, room_id, scope, owner_participant_id, content, updated_at, updated_by)
-       values ($1,$2,$3,$4,$5,now(),$6)
-       on conflict (note_id) do update set content = excluded.content, updated_at = now(), updated_by = excluded.updated_by
-       returning note_id, room_id, scope, owner_participant_id, content, updated_at, updated_by`,
-      [noteId, input.roomId, input.scope, input.scope === "private" ? input.ownerParticipantId ?? null : null, input.content, input.updatedBy ?? null]
+      `select note_id, room_id, scope, owner_participant_id, content, updated_at, updated_by, deleted_at, deleted_by
+       from room_notes
+       where room_id = $1 and ($2 = true or deleted_at is null)
+       order by updated_at desc`,
+      [roomId, includeDeleted]
     );
-    return mapRoomNoteRow(result.rows[0]);
+    return result.rows.map(mapRoomNoteRow);
+  }
+  async listRoomNoteVersions(roomId: string, scope: RoomNoteScope, ownerParticipantId?: string | null, limit = 20): Promise<RoomNoteVersionRecord[]> {
+    const safeLimit = Math.max(1, Math.min(100, Math.floor(limit)));
+    const result = await this.pool.query(
+      `select version_id, note_id, room_id, scope, owner_participant_id, content, action, restored_from_version_id, created_at, created_by
+       from room_note_versions
+       where room_id = $1 and scope = $2 and coalesce(owner_participant_id, '') = coalesce($3, '')
+       order by created_at desc
+       limit $4`,
+      [roomId, scope, scope === "private" ? ownerParticipantId ?? "" : "", safeLimit]
+    );
+    return result.rows.map(mapRoomNoteVersionRow);
+  }
+  async restoreRoomNoteVersion(roomId: string, scope: RoomNoteScope, ownerParticipantId: string | null | undefined, versionId: string, updatedBy?: string | null): Promise<{ note: RoomNoteRecord; version: RoomNoteVersionRecord } | null> {
+    const noteId = roomNoteId(roomId, scope, ownerParticipantId);
+    const restoreVersionId = crypto.randomUUID();
+    const client = await this.pool.connect();
+    try {
+      await client.query("begin");
+      const versionResult = await client.query(
+        `select version_id, note_id, room_id, scope, owner_participant_id, content, action, restored_from_version_id, created_at, created_by
+         from room_note_versions
+         where version_id = $1 and room_id = $2 and scope = $3 and coalesce(owner_participant_id, '') = coalesce($4, '')
+         limit 1`,
+        [versionId, roomId, scope, scope === "private" ? ownerParticipantId ?? "" : ""]
+      );
+      const source = versionResult.rows[0] ? mapRoomNoteVersionRow(versionResult.rows[0]) : null;
+      if (!source) {
+        await client.query("rollback");
+        return null;
+      }
+      const noteResult = await client.query(
+        `insert into room_notes (note_id, room_id, scope, owner_participant_id, content, updated_at, updated_by, deleted_at, deleted_by)
+         values ($1,$2,$3,$4,$5,now(),$6,null,null)
+         on conflict (note_id) do update set content = excluded.content, updated_at = now(), updated_by = excluded.updated_by, deleted_at = null, deleted_by = null
+         returning note_id, room_id, scope, owner_participant_id, content, updated_at, updated_by, deleted_at, deleted_by`,
+        [noteId, roomId, scope, scope === "private" ? ownerParticipantId ?? null : null, source.content, updatedBy ?? null]
+      );
+      const restoreResult = await client.query(
+        `insert into room_note_versions (version_id, note_id, room_id, scope, owner_participant_id, content, action, restored_from_version_id, created_at, created_by)
+         values ($1,$2,$3,$4,$5,$6,'restore',$7,now(),$8)
+         returning version_id, note_id, room_id, scope, owner_participant_id, content, action, restored_from_version_id, created_at, created_by`,
+        [restoreVersionId, noteId, roomId, scope, scope === "private" ? ownerParticipantId ?? null : null, source.content, source.versionId, updatedBy ?? null]
+      );
+      await client.query("commit");
+      return { note: mapRoomNoteRow(noteResult.rows[0]), version: mapRoomNoteVersionRow(restoreResult.rows[0]) };
+    } catch (error) {
+      await client.query("rollback").catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
   }
   async listRoomDocuments(roomId: string, includeDeleted = false): Promise<RoomDocumentRecord[]> {
     const result = await this.pool.query(

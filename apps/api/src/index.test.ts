@@ -812,6 +812,45 @@ test("room notes API persists shared and private notes with permissions", async 
     });
     assert.equal(guestEditorSave.status, 200);
 
+    const thirdSharedSave = await fetch(`${baseUrl}/api/rooms/notes-room/notes/shared`, {
+      method: "PUT",
+      headers: { ...jsonHeaders, "authorization": `Bearer ${hostToken}` },
+      body: JSON.stringify({ content: "third shared version" })
+    });
+    assert.equal(thirdSharedSave.status, 200);
+
+    const versionsResponse = await fetch(`${baseUrl}/api/rooms/notes-room/notes/shared/versions`, {
+      headers: { "authorization": `Bearer ${hostToken}` }
+    });
+    assert.equal(versionsResponse.status, 200);
+    const versionsPayload = (await versionsResponse.json()) as { items: Array<{ versionId: string; content: string; action: string }> };
+    assert.equal(versionsPayload.items.length, 3);
+    assert.equal(versionsPayload.items[0].content, "third shared version");
+    assert.equal(versionsPayload.items[2].content, "# Shared\nhello");
+
+    const restoreResponse = await fetch(`${baseUrl}/api/rooms/notes-room/notes/shared/restore`, {
+      method: "POST",
+      headers: { ...jsonHeaders, "authorization": `Bearer ${hostToken}` },
+      body: JSON.stringify({ versionId: versionsPayload.items[2].versionId })
+    });
+    assert.equal(restoreResponse.status, 200);
+    assert.equal(((await restoreResponse.json()) as { note: { content: string }; version: { action: string } }).note.content, "# Shared\nhello");
+
+    const exportMarkdown = await fetch(`${baseUrl}/api/rooms/notes-room/notes/shared/export?format=markdown`, {
+      headers: { "authorization": `Bearer ${hostToken}` }
+    });
+    assert.equal(exportMarkdown.status, 200);
+    assert.equal(exportMarkdown.headers.get("content-type")?.startsWith("text/markdown"), true);
+    assert.match(await exportMarkdown.text(), /# Shared\nhello/);
+
+    const exportJson = await fetch(`${baseUrl}/api/rooms/notes-room/notes/shared/export?format=json`, {
+      headers: { "authorization": `Bearer ${hostToken}` }
+    });
+    assert.equal(exportJson.status, 200);
+    const exportJsonPayload = (await exportJson.json()) as { note: { content: string }; versions: unknown[] };
+    assert.equal(exportJsonPayload.note.content, "# Shared\nhello");
+    assert.equal(exportJsonPayload.versions.length, 4);
+
     const savePrivate = await fetch(`${baseUrl}/api/rooms/notes-room/notes/private`, {
       method: "PUT",
       headers: { ...jsonHeaders, "authorization": `Bearer ${hostToken}` },
@@ -819,11 +858,35 @@ test("room notes API persists shared and private notes with permissions", async 
     });
     assert.equal(savePrivate.status, 201);
 
+    const roomExportJson = await fetch(`${baseUrl}/api/rooms/notes-room/notes/export?format=json`, {
+      headers: { "authorization": `Bearer ${hostToken}` }
+    });
+    assert.equal(roomExportJson.status, 200);
+    const roomExportPayload = (await roomExportJson.json()) as { notes: Array<{ note: { scope: string; content: string; ownerParticipantId?: string | null } }> };
+    assert.equal(roomExportPayload.notes.some((item) => item.note.scope === "shared" && item.note.content === "# Shared\nhello"), true);
+    assert.equal(roomExportPayload.notes.some((item) => item.note.scope === "private" && item.note.ownerParticipantId === "notes-host" && item.note.content === "private host note"), true);
+
+    const roomExportZip = await fetch(`${baseUrl}/api/rooms/notes-room/notes/export?format=zip`, {
+      headers: { "authorization": `Bearer ${hostToken}` }
+    });
+    assert.equal(roomExportZip.status, 200);
+    assert.equal(roomExportZip.headers.get("content-type"), "application/zip");
+    const zipBytes = Buffer.from(await roomExportZip.arrayBuffer());
+    assert.equal(zipBytes.byteLength > 100, true);
+    assert.equal(zipBytes.readUInt32LE(0), 0x04034b50);
+    assert.equal(zipBytes.includes(Buffer.from("room-notes.json")), true);
+    assert.equal(zipBytes.includes(Buffer.from("board.json")), true);
+
     const guestPrivateDenied = await fetch(`${baseUrl}/api/rooms/notes-room/notes/private?participantId=notes-host`, {
       headers: { "authorization": `Bearer ${guestToken}` }
     });
     assert.equal(guestPrivateDenied.status, 403);
     assert.equal(((await guestPrivateDenied.json()) as { reason?: string }).reason, "note_owner_mismatch");
+
+    const guestPrivateExportDenied = await fetch(`${baseUrl}/api/rooms/notes-room/notes/private/export?participantId=notes-host`, {
+      headers: { "authorization": `Bearer ${guestToken}` }
+    });
+    assert.equal(guestPrivateExportDenied.status, 403);
 
     const guestOwnPrivate = await fetch(`${baseUrl}/api/rooms/notes-room/notes/private`, {
       headers: { "authorization": `Bearer ${guestToken}` }
@@ -831,12 +894,36 @@ test("room notes API persists shared and private notes with permissions", async 
     assert.equal(guestOwnPrivate.status, 200);
     assert.equal(((await guestOwnPrivate.json()) as { note: { content: string } }).note.content, "");
 
+    const deleteShared = await fetch(`${baseUrl}/api/rooms/notes-room/notes/shared`, {
+      method: "DELETE",
+      headers: { "authorization": `Bearer ${hostToken}` }
+    });
+    assert.equal(deleteShared.status, 200);
+    assert.equal(((await deleteShared.json()) as { note: { deletedAt?: string | null } }).note.deletedAt !== null, true);
+
+    const readDeletedShared = await fetch(`${baseUrl}/api/rooms/notes-room/notes/shared`, {
+      headers: { "authorization": `Bearer ${hostToken}` }
+    });
+    assert.equal(readDeletedShared.status, 200);
+    assert.equal(((await readDeletedShared.json()) as { note: { content: string } }).note.content, "");
+
+    const restoreAfterDelete = await fetch(`${baseUrl}/api/rooms/notes-room/notes/shared/restore`, {
+      method: "POST",
+      headers: { ...jsonHeaders, "authorization": `Bearer ${hostToken}` },
+      body: JSON.stringify({ versionId: versionsPayload.items[0].versionId })
+    });
+    assert.equal(restoreAfterDelete.status, 200);
+    assert.equal(((await restoreAfterDelete.json()) as { note: { content: string } }).note.content, "third shared version");
+
     const metricsResponse = await fetch(`${baseUrl}/metrics`);
     assert.equal(metricsResponse.status, 200);
     const metricsText = await metricsResponse.text();
     assert.match(metricsText, /vrata_notes_created_total\{scope="shared"\} 1/);
     assert.match(metricsText, /vrata_notes_created_total\{scope="private"\} 1/);
-    assert.match(metricsText, /vrata_notes_permission_denied_total 2/);
+    assert.match(metricsText, /vrata_notes_permission_denied_total 3/);
+    assert.match(metricsText, /vrata_note_versions_created_total 7/);
+    assert.match(metricsText, /vrata_note_exports_total\{format="json",result="saved"\} 2/);
+    assert.match(metricsText, /vrata_note_export_denied_total 1/);
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     delete process.env.VRATA_DISABLE_AUTOSTART;
