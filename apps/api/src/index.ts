@@ -350,7 +350,11 @@ const metrics = {
   personalRoomsCreatedTotal: 0,
   personalRoomOpensTotal: new Map<string, number>(),
   personalRoomAccessDeniedTotal: new Map<string, number>(),
-  personalStateSaveFailuresTotal: new Map<string, number>()
+  personalStateSaveFailuresTotal: new Map<string, number>(),
+  screenShareStartedTotal: new Map<string, number>(),
+  screenShareFailuresTotal: new Map<string, number>(),
+  screenSharePermissionDeniedTotal: 0,
+  screenShareActiveSessions: new Set<string>()
 };
 
 function isEnabledEnvValue(value: string | undefined): boolean | null {
@@ -1153,6 +1157,41 @@ function createDiagnosticRecord(roomId: string, payload: RuntimeDiagnosticRecord
   return sanitized;
 }
 
+function screenShareSessionKey(roomId: string, diagnostic: RuntimeDiagnosticRecord): string | null {
+  const participantId = typeof diagnostic.participantId === "string" ? diagnostic.participantId.trim() : "";
+  return participantId ? `${roomId}:${participantId}` : null;
+}
+
+function observeScreenShareDiagnostic(roomId: string, diagnostic: RuntimeDiagnosticRecord): void {
+  const note = typeof diagnostic.note === "string" ? diagnostic.note.trim().toLowerCase().split(":")[0] : "";
+  if (!note) return;
+  const sessionKey = screenShareSessionKey(roomId, diagnostic);
+  if (note === "screenshare_started" || note === "screenshare_mock_started") {
+    incrementCounter(metrics.screenShareStartedTotal, "success");
+    if (sessionKey) metrics.screenShareActiveSessions.add(sessionKey);
+    return;
+  }
+  if (note === "screenshare_stopped" || note === "screenshare_mock_stopped" || note === "screenshare_track_ended") {
+    if (sessionKey) metrics.screenShareActiveSessions.delete(sessionKey);
+    return;
+  }
+  const failureReason = note === "screen_share_denied"
+    ? "denied"
+    : note === "screen_share_unsupported"
+      ? "unsupported"
+      : note === "media_network_blocked"
+        ? "media_network_blocked"
+        : note === "screenshare_stop_failed"
+          ? "stop_failed"
+          : note === "screenshare_failed"
+            ? "failed"
+            : null;
+  if (!failureReason) return;
+  incrementCounter(metrics.screenShareFailuresTotal, failureReason);
+  if (failureReason === "denied") metrics.screenSharePermissionDeniedTotal += 1;
+  if (sessionKey) metrics.screenShareActiveSessions.delete(sessionKey);
+}
+
 async function apiMetricsText(storage: Awaited<typeof storagePromise>): Promise<string> {
   cleanupAllPresence();
   const rooms = await storage.listRooms();
@@ -1175,6 +1214,18 @@ async function apiMetricsText(storage: Awaited<typeof storagePromise>): Promise<
     "# HELP vrata_diagnostic_reports_created_total Runtime diagnostic reports accepted by API.",
     "# TYPE vrata_diagnostic_reports_created_total counter",
     formatMetricLine("vrata_diagnostic_reports_created_total", metrics.diagnosticsReportsCreatedTotal),
+    "# HELP vrata_screen_share_started_total Screen share start diagnostics by result.",
+    "# TYPE vrata_screen_share_started_total counter",
+    ...Array.from(metrics.screenShareStartedTotal.entries()).map(([result, count]) => formatMetricLine("vrata_screen_share_started_total", count, { result })),
+    "# HELP vrata_screen_share_active_sessions Active screen share sessions observed by diagnostics.",
+    "# TYPE vrata_screen_share_active_sessions gauge",
+    formatMetricLine("vrata_screen_share_active_sessions", metrics.screenShareActiveSessions.size),
+    "# HELP vrata_screen_share_failures_total Screen share failure diagnostics by reason.",
+    "# TYPE vrata_screen_share_failures_total counter",
+    ...Array.from(metrics.screenShareFailuresTotal.entries()).map(([reason, count]) => formatMetricLine("vrata_screen_share_failures_total", count, { reason })),
+    "# HELP vrata_screen_share_permission_denied_total Screen share permission denials observed by diagnostics.",
+    "# TYPE vrata_screen_share_permission_denied_total counter",
+    formatMetricLine("vrata_screen_share_permission_denied_total", metrics.screenSharePermissionDeniedTotal),
     "# HELP vrata_room_join_failures_total Runtime join or room failures reported by clients.",
     "# TYPE vrata_room_join_failures_total counter"
   ];
@@ -4165,6 +4216,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     if (!session.ok) return writeSessionTokenError(response, session);
     const diagnostic = createDiagnosticRecord(roomId, payload, request);
     metrics.diagnosticsReportsCreatedTotal += 1;
+    observeScreenShareDiagnostic(roomId, diagnostic);
     if (diagnostic.issueCode) {
       incrementCounter(metrics.roomJoinFailuresTotal, diagnostic.issueCode);
     }

@@ -323,27 +323,34 @@ test("api diagnostics attach report id, redact secrets, and update metrics", asy
     assert.equal(stateResponse.ok, true);
     const statePayload = (await stateResponse.json()) as { token?: string };
     assert.equal(typeof statePayload.token, "string");
+    const diagnosticHeaders = {
+      "content-type": "application/json",
+      "authorization": `Bearer ${statePayload.token}`
+    };
+    const baseDiagnosticPayload = {
+      participantId: "p-diagnostics",
+      displayName: "Diagnostics",
+      mode: "desktop",
+      userAgent: "test",
+      locomotionMode: "desktop",
+      audioState: "failed",
+      localPosition: { x: 0, z: 0 },
+      xrAxes: { moveX: 0, moveY: 0, turnX: 0 },
+      remoteAvatarCount: 0,
+      remoteTargets: [],
+      lastPresenceSyncAt: 0,
+      lastPresenceRefreshAt: 0,
+      createdAt: new Date(0).toISOString()
+    };
 
     const reportResponse = await fetch(`${baseUrl}/api/rooms/demo-room/diagnostics`, {
       method: "POST",
       headers: {
-        "content-type": "application/json",
-        "authorization": `Bearer ${statePayload.token}`,
+        ...diagnosticHeaders,
         "x-request-id": "diagnostics-request-id"
       },
       body: JSON.stringify({
-        participantId: "p-diagnostics",
-        displayName: "Diagnostics",
-        mode: "desktop",
-        userAgent: "test",
-        locomotionMode: "desktop",
-        audioState: "failed",
-        localPosition: { x: 0, z: 0 },
-        xrAxes: { moveX: 0, moveY: 0, turnX: 0 },
-        remoteAvatarCount: 0,
-        remoteTargets: [],
-        lastPresenceSyncAt: 0,
-        lastPresenceRefreshAt: 0,
+        ...baseDiagnosticPayload,
         issueCode: "media_network_blocked",
         access: {
           token: "secret-token-value",
@@ -359,8 +366,7 @@ test("api diagnostics attach report id, redact secrets, and update metrics", asy
             pixelSamples: [],
             dataUrl: "data:image/jpeg;base64,secret"
           }
-        },
-        createdAt: new Date(0).toISOString()
+        }
       })
     });
     assert.equal(reportResponse.status, 201);
@@ -384,11 +390,38 @@ test("api diagnostics attach report id, redact secrets, and update metrics", asy
     assert.match(item?.access?.frameStreamUrl ?? "", /token=/);
     assert.equal(item?.sceneDebug?.screenshot?.dataUrl, undefined);
 
+    const screenShareDeniedResponse = await fetch(`${baseUrl}/api/rooms/demo-room/diagnostics`, {
+      method: "POST",
+      headers: diagnosticHeaders,
+      body: JSON.stringify({ ...baseDiagnosticPayload, note: "screen_share_denied" })
+    });
+    assert.equal(screenShareDeniedResponse.status, 201);
+    const screenShareStartedResponse = await fetch(`${baseUrl}/api/rooms/demo-room/diagnostics`, {
+      method: "POST",
+      headers: diagnosticHeaders,
+      body: JSON.stringify({ ...baseDiagnosticPayload, note: "screenshare_started" })
+    });
+    assert.equal(screenShareStartedResponse.status, 201);
+
     const metricsResponse = await fetch(`${baseUrl}/metrics`);
     assert.equal(metricsResponse.ok, true);
     const metricsText = await metricsResponse.text();
     assert.match(metricsText, /vrata_diagnostic_reports_created_total \d+/);
     assert.match(metricsText, /vrata_room_join_failures_total\{reason="media_network_blocked"\} \d+/);
+    assert.match(metricsText, /vrata_screen_share_started_total\{result="success"\} 1/);
+    assert.match(metricsText, /vrata_screen_share_active_sessions 1/);
+    assert.match(metricsText, /vrata_screen_share_failures_total\{reason="denied"\} 1/);
+    assert.match(metricsText, /vrata_screen_share_permission_denied_total 1/);
+
+    const screenShareStoppedResponse = await fetch(`${baseUrl}/api/rooms/demo-room/diagnostics`, {
+      method: "POST",
+      headers: diagnosticHeaders,
+      body: JSON.stringify({ ...baseDiagnosticPayload, note: "screenshare_stopped" })
+    });
+    assert.equal(screenShareStoppedResponse.status, 201);
+    const stoppedMetricsResponse = await fetch(`${baseUrl}/metrics`);
+    assert.equal(stoppedMetricsResponse.ok, true);
+    assert.match(await stoppedMetricsResponse.text(), /vrata_screen_share_active_sessions 0/);
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     delete process.env.VRATA_DISABLE_AUTOSTART;
