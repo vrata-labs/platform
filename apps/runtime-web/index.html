@@ -99,6 +99,18 @@
               <button id="document-delete-button" type="button" disabled>Delete selected</button>
             </div>
             <div id="document-status" class="audio-device-status" role="status" aria-live="polite">Documents loading...</div>
+            <div id="presentation-controls" class="presentation-controls" hidden>
+              <div class="presentation-controls-title">PDF presentation</div>
+              <div class="documents-actions">
+                <button id="presentation-prev" type="button" disabled>Previous</button>
+                <span id="presentation-page-label">Page 1 / 1</span>
+                <button id="presentation-next" type="button" disabled>Next</button>
+                <button id="presentation-large" type="button" disabled aria-pressed="false">Large mode</button>
+                <button id="presentation-stop" type="button" disabled>Stop presentation</button>
+              </div>
+              <div id="presentation-thumbnails" class="presentation-thumbnails" aria-label="Slide thumbnails"></div>
+              <div id="presentation-status" class="audio-device-status" role="status" aria-live="polite">Presentation idle</div>
+            </div>
           </div>
           <div class="controls">
             <label class="surface-picker" for="media-surface-select">Surface

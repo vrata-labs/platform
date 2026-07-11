@@ -6,6 +6,7 @@
   "dependencies": {
     "@vrata/shared-types": "workspace:*",
     "livekit-client": "^2.15.6",
+    "pdfjs-dist": "^6.1.200",
     "three": "^0.176.0"
   },
   "devDependencies": {

@@ -1,4 +1,5 @@
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
+import { PDFDocument, rgb } from "pdf-lib";
 
 const stagingRoomId = process.env.STAGING_ROOM_ID ?? "demo-room";
 const stagingAdminToken = process.env.STAGING_ADMIN_TOKEN ?? "vrata-stage-admin";
@@ -361,6 +362,61 @@ test.describe("@staging runtime HUD space selector", () => {
     await expect(page.locator("#audio-device-status")).toBeVisible();
     await expect(page.locator("#mic-level-fill").locator("..")).toBeVisible();
     await expect(page.locator("#speaker-level-fill").locator("..")).toBeVisible();
+  });
+
+  test("PDF presentation renders, changes page, and restores current page for late join", async ({ page, request, baseURL }) => {
+    test.setTimeout(180000);
+    const createRoomResponse = await request.post("/api/rooms", {
+      headers: { "x-vrata-admin-token": stagingAdminToken },
+      data: {
+        tenantId: "demo-tenant",
+        templateId: "meeting-room-basic",
+        name: `Staging PDF ${Date.now()}`
+      }
+    });
+    expect(createRoomResponse.ok()).toBeTruthy();
+    const room = await createRoomResponse.json() as { roomId: string; roomLink: string };
+    const roomUrl = new URL(room.roomLink, baseURL).toString();
+
+    const pdf = await PDFDocument.create();
+    const pageOne = pdf.addPage([640, 360]);
+    pageOne.drawRectangle({ x: 0, y: 0, width: 640, height: 360, color: rgb(0.9, 0.08, 0.08) });
+    const pageTwo = pdf.addPage([640, 360]);
+    pageTwo.drawRectangle({ x: 0, y: 0, width: 640, height: 360, color: rgb(0.08, 0.18, 0.9) });
+
+    await page.goto(`${roomUrl}?role=host&name=StagingPdfHost&debug=1`);
+    await expect(page.locator("#document-upload-button")).toBeEnabled({ timeout: 15000 });
+    await page.setInputFiles("#document-upload-input", {
+      name: "staging-slides.pdf",
+      mimeType: "application/pdf",
+      buffer: Buffer.from(await pdf.save())
+    });
+    await page.locator("#document-upload-button").click();
+    await expect(page.locator("#document-select")).toContainText("staging-slides.pdf", { timeout: 20000 });
+    await expect(page.locator("#document-surface-button")).toBeEnabled();
+    await page.locator("#document-surface-button").click();
+    await expect(page.locator("#presentation-page-label")).toHaveText("Page 1 / 2", { timeout: 30000 });
+    await expect.poll(async () => page.evaluate(() => (window as Window & { __VRATA_DEBUG__?: { pdfPresentation?: { renderState?: string } } }).__VRATA_DEBUG__?.pdfPresentation?.renderState ?? ""), {
+      timeout: 30000
+    }).toBe("ready");
+    await page.locator("#presentation-next").click();
+    await expect(page.locator("#presentation-page-label")).toHaveText("Page 2 / 2", { timeout: 15000 });
+
+    const latePage = await page.context().newPage();
+    try {
+      await latePage.goto(`${roomUrl}?role=member&name=StagingPdfLate&debug=1`);
+      await expect(latePage.locator("#presentation-page-label")).toHaveText("Page 2 / 2", { timeout: 30000 });
+      await expect.poll(async () => latePage.evaluate(() => {
+        const debug = (window as Window & { __VRATA_DEBUG__?: { pdfPresentation?: { renderState?: string; page?: number } } }).__VRATA_DEBUG__;
+        return `${debug?.pdfPresentation?.renderState}:${debug?.pdfPresentation?.page}`;
+      }), { timeout: 30000 }).toBe("ready:2");
+      await expect(latePage.locator("#presentation-prev")).toBeDisabled();
+    } finally {
+      await latePage.close();
+    }
+
+    await page.locator("#document-delete-button").click();
+    await expect(page.locator("#presentation-controls")).toBeHidden({ timeout: 15000 });
   });
 
   test("public diagnostics page validates staging media connectivity", async ({ page }) => {

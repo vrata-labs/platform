@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { DISABLED_EXTENSION_CARD_TYPE, EXTENSION_TEST_CARD_TYPE, MARKDOWN_BOARD_OBJECT_TYPE, MISSING_CAPABILITY_EXTENSION_CARD_TYPE } from "@vrata/shared-types";
+import { DISABLED_EXTENSION_CARD_TYPE, EXTENSION_TEST_CARD_TYPE, MARKDOWN_BOARD_OBJECT_TYPE, MISSING_CAPABILITY_EXTENSION_CARD_TYPE, PDF_PRESENTATION_OBJECT_TYPE } from "@vrata/shared-types";
 
 import {
   claimSeat,
@@ -13,6 +13,7 @@ import {
   patchMediaObjectState,
   patchRemoteBrowserExecutorState,
   releaseSeat,
+  removePdfPresentationDocument,
   setSurfaceMediaAudioEnabled,
   stopMediaObject,
   updateParticipantState
@@ -470,6 +471,94 @@ test("createMediaObject rejects occupied surface and stop clears active object",
   assert.equal(stopped.result.accepted, true);
   assert.equal(stopped.room.mediaObjects.surfaces["debug-main"]?.activeObjectId, null);
   assert.equal(stopped.room.mediaObjects.objects["obj-1"], undefined);
+});
+
+test("PDF presentation syncs page and mode with presenter-only revisioned patches", () => {
+  const presenterRoom = joinRoom(createRoomState("demo"), "presenter", { role: "presenter" });
+  const created = createMediaObject(presenterRoom, "presenter", {
+    commandId: "pdf-create",
+    surfaceId: "debug-main",
+    objectType: PDF_PRESENTATION_OBJECT_TYPE,
+    objectId: "pdf-object",
+    nowMs: 1
+  });
+  assert.equal(created.result.accepted, true);
+
+  const selected = patchMediaObjectState(created.room, "presenter", {
+    commandId: "pdf-select",
+    surfaceId: "debug-main",
+    objectId: "pdf-object",
+    expectedRevision: 0,
+    patch: {
+      type: "select-document",
+      documentId: "document-1",
+      filename: "slides.pdf",
+      checksum: `sha256:${"a".repeat(64)}`,
+      pageCount: 3,
+      inputEventId: "pdf-select-1"
+    },
+    nowMs: 2
+  });
+  assert.equal(selected.result.accepted, true);
+  assert.deepEqual(selected.room.mediaObjects.objects["pdf-object"]?.state, {
+    status: "active",
+    documentId: "document-1",
+    filename: "slides.pdf",
+    checksum: `sha256:${"a".repeat(64)}`,
+    pageCount: 3,
+    currentPage: 1,
+    displayMode: "normal",
+    lastInputEventId: "pdf-select-1"
+  });
+
+  const memberRoom = joinRoom(selected.room, "member", { role: "member" });
+  const denied = patchMediaObjectState(memberRoom, "member", {
+    commandId: "pdf-member-page",
+    surfaceId: "debug-main",
+    objectId: "pdf-object",
+    expectedRevision: 1,
+    patch: { type: "go-to-page", page: 2, inputEventId: "member-page-2" },
+    nowMs: 3
+  });
+  assert.equal(denied.result.accepted, false);
+  assert.equal(denied.result.permission, "document.present");
+
+  const pageTwo = patchMediaObjectState(memberRoom, "presenter", {
+    commandId: "pdf-page-2",
+    surfaceId: "debug-main",
+    objectId: "pdf-object",
+    expectedRevision: 1,
+    patch: { type: "go-to-page", page: 2, inputEventId: "presenter-page-2" },
+    nowMs: 4
+  });
+  assert.equal(pageTwo.result.accepted, true);
+  assert.equal((pageTwo.room.mediaObjects.objects["pdf-object"]?.state as { currentPage?: number }).currentPage, 2);
+
+  const invalidPage = patchMediaObjectState(pageTwo.room, "presenter", {
+    commandId: "pdf-page-invalid",
+    surfaceId: "debug-main",
+    objectId: "pdf-object",
+    expectedRevision: 2,
+    patch: { type: "go-to-page", page: 4, inputEventId: "presenter-page-4" },
+    nowMs: 5
+  });
+  assert.equal(invalidPage.result.blockedReason, "invalid-patch");
+
+  const large = patchMediaObjectState(pageTwo.room, "presenter", {
+    commandId: "pdf-large",
+    surfaceId: "debug-main",
+    objectId: "pdf-object",
+    expectedRevision: 2,
+    patch: { type: "set-display-mode", displayMode: "large", inputEventId: "presenter-large" },
+    nowMs: 6
+  });
+  assert.equal((large.room.mediaObjects.objects["pdf-object"]?.state as { displayMode?: string }).displayMode, "large");
+
+  const disconnected = leaveRoom(large.room, "presenter");
+  assert.ok(disconnected.mediaObjects.objects["pdf-object"]);
+  const cleanup = removePdfPresentationDocument(disconnected, "document-1");
+  assert.equal(cleanup.removedCount, 1);
+  assert.equal(cleanup.room.mediaObjects.surfaces["debug-main"]?.activeObjectId, null);
 });
 
 test("whiteboard object appends strokes and enforces draw and clear permissions", () => {

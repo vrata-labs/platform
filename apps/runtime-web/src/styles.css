@@ -354,6 +354,55 @@ canvas {
   flex-wrap: wrap;
 }
 
+.presentation-controls {
+  display: grid;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(95, 200, 255, 0.16);
+}
+
+.presentation-controls[hidden] {
+  display: none;
+}
+
+.presentation-controls-title {
+  color: var(--accent);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.presentation-thumbnails {
+  display: flex;
+  gap: 7px;
+  max-width: 100%;
+  overflow-x: auto;
+  padding: 3px 1px 7px;
+}
+
+.presentation-thumbnail {
+  display: grid;
+  flex: 0 0 auto;
+  gap: 3px;
+  min-width: 72px;
+  padding: 4px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 8px;
+  background: rgba(2, 6, 23, 0.52);
+  color: inherit;
+}
+
+.presentation-thumbnail[aria-current="page"] {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px rgba(95, 200, 255, 0.35);
+}
+
+.presentation-thumbnail canvas {
+  width: 64px;
+  height: 48px;
+  object-fit: contain;
+  background: #111827;
+}
+
 .avatar-sandbox {
   margin-top: 14px;
   display: grid;

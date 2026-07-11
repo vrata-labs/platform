@@ -119,10 +119,19 @@ export interface RuntimeDocumentRecord {
   contentType: string;
   sizeBytes: number;
   checksum: string;
+  metadata?: {
+    kind?: "pdf";
+    pageCount?: number;
+    title?: string | null;
+    author?: string | null;
+    firstPageWidthPt?: number;
+    firstPageHeightPt?: number;
+  };
   uploadedBy?: string | null;
   uploadedAt: string;
   linkedSurfaceId?: string | null;
   downloadUrl: string;
+  presentationUrl?: string | null;
 }
 
 export interface RuntimePersonalPoseState {
@@ -557,6 +566,20 @@ export async function downloadRoomDocument(apiBaseUrl: string, document: Runtime
   const disposition = response.headers.get("content-disposition") ?? "";
   const filename = disposition.match(/filename="([^"]+)"/)?.[1] ?? document.filename;
   return { blob: await response.blob(), filename };
+}
+
+export async function fetchRoomDocumentPresentation(apiBaseUrl: string, roomId: string, documentId: string, sessionToken: string): Promise<ArrayBuffer> {
+  const response = await fetch(new URL(`/api/rooms/${roomId}/documents/${documentId}/presentation`, apiBaseUrl), {
+    headers: {
+      "authorization": `Bearer ${sessionToken}`
+    },
+    cache: "no-store"
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({})) as { reason?: string; error?: string };
+    throw new Error(`failed_to_fetch_presentation:${response.status}:${payload.reason ?? payload.error ?? "unknown"}`);
+  }
+  return response.arrayBuffer();
 }
 
 export async function deleteRoomDocument(apiBaseUrl: string, roomId: string, documentId: string, sessionToken: string): Promise<RuntimeDocumentRecord> {

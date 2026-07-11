@@ -19,6 +19,12 @@
 - WebSocket message out:
   - `room_state`
 
+Media surfaces are included in each full snapshot. The built-in `pdf-presentation` object stores document identity, page count, current page, and display mode. Mutations use the existing revisioned `surface_patch_object_state` command and require `document.present`; viewers receive the same state without control permission.
+
+Document deletion calls `DELETE /api/internal/rooms/:roomId/documents/:documentId/presentation` with the internal service token. The room-state service removes matching objects, frees their surfaces, and broadcasts the updated snapshot.
+
+Room state is currently process-memory state. Late join is supported while the service remains alive, but active presentation/page state is not restored after a room-state process restart.
+
 ## Next step
 
 - Wire runtime to consume this room-state service as the primary realtime channel.

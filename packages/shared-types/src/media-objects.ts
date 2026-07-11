@@ -9,6 +9,7 @@ export const SCREEN_SHARE_OBJECT_TYPE = "screen-share";
 export const WHITEBOARD_OBJECT_TYPE = "whiteboard";
 export const MARKDOWN_BOARD_OBJECT_TYPE = "markdown-board";
 export const REMOTE_BROWSER_OBJECT_TYPE = "remote-browser";
+export const PDF_PRESENTATION_OBJECT_TYPE = "pdf-presentation";
 export const EXTENSION_TEST_CARD_TYPE = "extension-test-card";
 export const MISSING_CAPABILITY_EXTENSION_CARD_TYPE = "missing-capability-extension-card";
 export const DISABLED_EXTENSION_CARD_TYPE = "disabled-extension-card";
@@ -32,7 +33,7 @@ export type MediaExtensionCapability =
   | "media.subscribe"
   | "remote.executor";
 
-export type MediaObjectStateKind = "surface-test-card" | "screen-share" | "whiteboard" | "markdown-board" | "remote-browser";
+export type MediaObjectStateKind = "surface-test-card" | "screen-share" | "whiteboard" | "markdown-board" | "remote-browser" | "pdf-presentation";
 
 export interface MediaObjectDefinition {
   objectType: MediaObjectType;
@@ -176,6 +177,23 @@ export const BUILTIN_MEDIA_EXTENSION_MANIFESTS: VrataMediaExtensionManifest[] = 
       stateKind: "remote-browser",
       requiredCapabilities: ["surface.render", "surface.input.pointer", "surface.input.keyboard", "room.state.read", "room.state.write", "media.subscribe", "remote.executor"],
       requiredPermissions: ["remote-browser.open-url", "remote-browser.input", "remote-browser.stop"],
+      supportedSurfaceKinds: ["wall", "table", "laptop", "floating", "custom"]
+    }]
+  },
+  {
+    id: "vrata.pdf-presentation",
+    version: "0.1.0",
+    displayName: "PDF Presentation",
+    requiredCapabilities: ["surface.render", "room.state.read", "room.state.write"],
+    requiredPermissions: ["document.present"],
+    compatibility: VRATA_RUNTIME_EXTENSION_COMPATIBILITY,
+    entry: "internal:pdf-presentation",
+    objectTypes: [{
+      objectType: PDF_PRESENTATION_OBJECT_TYPE,
+      displayName: "PDF Presentation",
+      stateKind: "pdf-presentation",
+      requiredCapabilities: ["surface.render", "room.state.read", "room.state.write"],
+      requiredPermissions: ["document.present"],
       supportedSurfaceKinds: ["wall", "table", "laptop", "floating", "custom"]
     }]
   },
@@ -546,6 +564,20 @@ export interface RemoteBrowserMediaSourceRect {
   viewportHeight: number;
 }
 
+export type PdfPresentationStatus = "idle" | "active";
+export type PdfPresentationDisplayMode = "normal" | "large";
+
+export interface PdfPresentationState {
+  status: PdfPresentationStatus;
+  documentId: string | null;
+  filename: string | null;
+  checksum: string | null;
+  pageCount: number;
+  currentPage: number;
+  displayMode: PdfPresentationDisplayMode;
+  lastInputEventId: string | null;
+}
+
 export type SurfaceTestCardPatch = {
   type: "increment-click-count";
   inputEventId: string;
@@ -581,6 +613,11 @@ export type RemoteBrowserPatch =
   | { type: "take-control"; inputEventId: string }
   | { type: "release-control"; inputEventId: string }
   | { type: "mark-failed"; errorCode: RemoteBrowserErrorCode; errorDetail?: string; inputEventId: string };
+
+export type PdfPresentationPatch =
+  | { type: "select-document"; documentId: string; filename: string; checksum: string; pageCount: number; inputEventId: string }
+  | { type: "go-to-page"; page: number; inputEventId: string }
+  | { type: "set-display-mode"; displayMode: PdfPresentationDisplayMode; inputEventId: string };
 
 export type MediaObjectCommandBlockedReason =
   | "missing-permission"

@@ -115,11 +115,21 @@ export interface RoomDocumentRecord {
   sizeBytes: number;
   storageKey: string;
   checksum: string;
+  metadata?: RoomDocumentMetadata;
   uploadedBy?: string | null;
   uploadedAt: string;
   deletedAt?: string | null;
   deletedBy?: string | null;
   linkedSurfaceId?: string | null;
+}
+
+export interface RoomDocumentMetadata {
+  kind?: "pdf";
+  pageCount?: number;
+  title?: string | null;
+  author?: string | null;
+  firstPageWidthPt?: number;
+  firstPageHeightPt?: number;
 }
 
 export interface RoomSessionControlState {
@@ -404,6 +414,7 @@ function mapRoomDocumentRow(row: {
   deleted_at?: string | Date | null;
   deleted_by?: string | null;
   linked_surface_id?: string | null;
+  metadata?: RoomDocumentMetadata | null;
 }): RoomDocumentRecord {
   return {
     documentId: row.document_id,
@@ -414,6 +425,7 @@ function mapRoomDocumentRow(row: {
     sizeBytes: Number(row.size_bytes),
     storageKey: row.storage_key,
     checksum: row.checksum,
+    metadata: row.metadata ?? {},
     uploadedBy: row.uploaded_by ?? null,
     uploadedAt: isoString(row.uploaded_at) ?? new Date().toISOString(),
     deletedAt: isoString(row.deleted_at),
@@ -925,7 +937,8 @@ export class MemoryStorage implements Storage {
       uploadedAt: input.uploadedAt ?? new Date().toISOString(),
       deletedAt: null,
       deletedBy: null,
-      linkedSurfaceId: input.linkedSurfaceId ?? null
+      linkedSurfaceId: input.linkedSurfaceId ?? null,
+      metadata: structuredClone(input.metadata ?? {})
     };
     this.roomDocuments.set(document.documentId, document);
     return structuredClone(document);
@@ -933,13 +946,20 @@ export class MemoryStorage implements Storage {
   async markRoomDocumentDeleted(roomId: string, documentId: string, deletedAt: string, deletedBy?: string | null): Promise<RoomDocumentRecord | null> {
     const existing = this.roomDocuments.get(documentId);
     if (!existing || existing.roomId !== roomId) return null;
-    const updated = { ...existing, deletedAt, deletedBy: deletedBy ?? null };
+    const updated = { ...existing, deletedAt, deletedBy: deletedBy ?? null, linkedSurfaceId: null };
     this.roomDocuments.set(documentId, updated);
     return structuredClone(updated);
   }
   async updateRoomDocumentSurface(roomId: string, documentId: string, linkedSurfaceId: string | null): Promise<RoomDocumentRecord | null> {
     const existing = this.roomDocuments.get(documentId);
     if (!existing || existing.roomId !== roomId || existing.deletedAt) return null;
+    if (linkedSurfaceId) {
+      for (const [otherDocumentId, document] of this.roomDocuments.entries()) {
+        if (otherDocumentId !== documentId && document.roomId === roomId && !document.deletedAt && document.linkedSurfaceId === linkedSurfaceId) {
+          this.roomDocuments.set(otherDocumentId, { ...document, linkedSurfaceId: null });
+        }
+      }
+    }
     const updated = { ...existing, linkedSurfaceId };
     this.roomDocuments.set(documentId, updated);
     return structuredClone(updated);
@@ -1210,7 +1230,8 @@ export class PostgresStorage implements Storage {
         uploaded_at timestamptz not null default now(),
         deleted_at timestamptz,
         deleted_by text,
-        linked_surface_id text
+        linked_surface_id text,
+        metadata jsonb not null default '{}'::jsonb
       );
     `);
     await this.pool.query(`create index if not exists xr_telemetry_room_id_id_idx on xr_telemetry (room_id, id)`);
@@ -1218,6 +1239,7 @@ export class PostgresStorage implements Storage {
     await this.pool.query(`create index if not exists room_note_versions_note_created_idx on room_note_versions (note_id, created_at desc)`);
     await this.pool.query(`create index if not exists room_note_versions_room_scope_owner_idx on room_note_versions (room_id, scope, coalesce(owner_participant_id, ''), created_at desc)`);
     await this.pool.query(`create index if not exists room_documents_room_uploaded_idx on room_documents (room_id, uploaded_at desc)`);
+    await this.pool.query(`alter table room_documents add column if not exists metadata jsonb not null default '{}'::jsonb`);
     await this.pool.query(`alter table room_notes add column if not exists deleted_at timestamptz`);
     await this.pool.query(`alter table room_notes add column if not exists deleted_by text`);
     await this.pool.query(`alter table rooms add column if not exists scene_bundle_url text`);
@@ -1595,37 +1617,40 @@ export class PostgresStorage implements Storage {
   }
   async listRoomDocuments(roomId: string, includeDeleted = false): Promise<RoomDocumentRecord[]> {
     const result = await this.pool.query(
-      `select document_id, room_id, tenant_id, filename, content_type, size_bytes, storage_key, checksum, uploaded_by, uploaded_at, deleted_at, deleted_by, linked_surface_id from room_documents where room_id = $1 and ($2 = true or deleted_at is null) order by uploaded_at desc`,
+      `select document_id, room_id, tenant_id, filename, content_type, size_bytes, storage_key, checksum, uploaded_by, uploaded_at, deleted_at, deleted_by, linked_surface_id, metadata from room_documents where room_id = $1 and ($2 = true or deleted_at is null) order by uploaded_at desc`,
       [roomId, includeDeleted]
     );
     return result.rows.map(mapRoomDocumentRow);
   }
   async getRoomDocument(roomId: string, documentId: string): Promise<RoomDocumentRecord | null> {
     const result = await this.pool.query(
-      `select document_id, room_id, tenant_id, filename, content_type, size_bytes, storage_key, checksum, uploaded_by, uploaded_at, deleted_at, deleted_by, linked_surface_id from room_documents where room_id = $1 and document_id = $2 limit 1`,
+      `select document_id, room_id, tenant_id, filename, content_type, size_bytes, storage_key, checksum, uploaded_by, uploaded_at, deleted_at, deleted_by, linked_surface_id, metadata from room_documents where room_id = $1 and document_id = $2 limit 1`,
       [roomId, documentId]
     );
     return result.rows[0] ? mapRoomDocumentRow(result.rows[0]) : null;
   }
   async createRoomDocument(input: Omit<RoomDocumentRecord, "uploadedAt" | "deletedAt" | "deletedBy" | "linkedSurfaceId"> & { uploadedAt?: string; linkedSurfaceId?: string | null }): Promise<RoomDocumentRecord> {
     const result = await this.pool.query(
-      `insert into room_documents (document_id, room_id, tenant_id, filename, content_type, size_bytes, storage_key, checksum, uploaded_by, uploaded_at, linked_surface_id)
-       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,coalesce($10::timestamptz, now()),$11)
-       returning document_id, room_id, tenant_id, filename, content_type, size_bytes, storage_key, checksum, uploaded_by, uploaded_at, deleted_at, deleted_by, linked_surface_id`,
-      [input.documentId, input.roomId, input.tenantId, input.filename, input.contentType, input.sizeBytes, input.storageKey, input.checksum, input.uploadedBy ?? null, input.uploadedAt ?? null, input.linkedSurfaceId ?? null]
+      `insert into room_documents (document_id, room_id, tenant_id, filename, content_type, size_bytes, storage_key, checksum, uploaded_by, uploaded_at, linked_surface_id, metadata)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,coalesce($10::timestamptz, now()),$11,$12)
+       returning document_id, room_id, tenant_id, filename, content_type, size_bytes, storage_key, checksum, uploaded_by, uploaded_at, deleted_at, deleted_by, linked_surface_id, metadata`,
+      [input.documentId, input.roomId, input.tenantId, input.filename, input.contentType, input.sizeBytes, input.storageKey, input.checksum, input.uploadedBy ?? null, input.uploadedAt ?? null, input.linkedSurfaceId ?? null, input.metadata ?? {}]
     );
     return mapRoomDocumentRow(result.rows[0]);
   }
   async markRoomDocumentDeleted(roomId: string, documentId: string, deletedAt: string, deletedBy?: string | null): Promise<RoomDocumentRecord | null> {
     const result = await this.pool.query(
-      `update room_documents set deleted_at = $3, deleted_by = $4 where room_id = $1 and document_id = $2 and deleted_at is null returning document_id, room_id, tenant_id, filename, content_type, size_bytes, storage_key, checksum, uploaded_by, uploaded_at, deleted_at, deleted_by, linked_surface_id`,
+      `update room_documents set deleted_at = $3, deleted_by = $4, linked_surface_id = null where room_id = $1 and document_id = $2 and deleted_at is null returning document_id, room_id, tenant_id, filename, content_type, size_bytes, storage_key, checksum, uploaded_by, uploaded_at, deleted_at, deleted_by, linked_surface_id, metadata`,
       [roomId, documentId, deletedAt, deletedBy ?? null]
     );
     return result.rows[0] ? mapRoomDocumentRow(result.rows[0]) : null;
   }
   async updateRoomDocumentSurface(roomId: string, documentId: string, linkedSurfaceId: string | null): Promise<RoomDocumentRecord | null> {
     const result = await this.pool.query(
-      `update room_documents set linked_surface_id = $3 where room_id = $1 and document_id = $2 and deleted_at is null returning document_id, room_id, tenant_id, filename, content_type, size_bytes, storage_key, checksum, uploaded_by, uploaded_at, deleted_at, deleted_by, linked_surface_id`,
+      `with cleared as (
+         update room_documents set linked_surface_id = null where room_id = $1 and document_id <> $2 and linked_surface_id = $3 and $3 is not null
+       )
+       update room_documents set linked_surface_id = $3 where room_id = $1 and document_id = $2 and deleted_at is null returning document_id, room_id, tenant_id, filename, content_type, size_bytes, storage_key, checksum, uploaded_by, uploaded_at, deleted_at, deleted_by, linked_surface_id, metadata`,
       [roomId, documentId, linkedSurfaceId]
     );
     return result.rows[0] ? mapRoomDocumentRow(result.rows[0]) : null;

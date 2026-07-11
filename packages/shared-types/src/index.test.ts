@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { DEFAULT_MEDIA_SURFACE_ID, DISABLED_EXTENSION_CARD_TYPE, EXTENSION_TEST_CARD_TYPE, MISSING_CAPABILITY_EXTENSION_CARD_TYPE, SCREEN_SHARE_OBJECT_TYPE, SURFACE_TEST_CARD_TYPE, WHITEBOARD_OBJECT_TYPE, createDefaultRoomMediaObjectsState, createRoomAccessDebugState, getMediaExtensionDebugSnapshot, getMediaObjectDefinition, isMediaObjectTypeAvailable, listAvailableMediaObjectTypes } from "./index.js";
+import { DEFAULT_MEDIA_SURFACE_ID, DISABLED_EXTENSION_CARD_TYPE, EXTENSION_TEST_CARD_TYPE, MISSING_CAPABILITY_EXTENSION_CARD_TYPE, PDF_PRESENTATION_OBJECT_TYPE, SCREEN_SHARE_OBJECT_TYPE, SURFACE_TEST_CARD_TYPE, WHITEBOARD_OBJECT_TYPE, createDefaultRoomMediaObjectsState, createRoomAccessDebugState, getMediaExtensionDebugSnapshot, getMediaObjectDefinition, getRoomPermissions, isMediaObjectTypeAvailable, listAvailableMediaObjectTypes } from "./index.js";
 import type {
   AvatarCatalogV1,
   AvatarRecipeCatalogV1,
@@ -26,11 +26,21 @@ test("room access policy grants presenter media controls without session control
   assert.equal(createRoomAccessDebugState("guest").canStartScreenShare, false);
   assert.equal(createRoomAccessDebugState("presenter").canStartScreenShare, true);
   assert.equal(createRoomAccessDebugState("presenter").canCreateRemoteBrowser, true);
+  assert.equal(createRoomAccessDebugState("presenter").canPresentDocuments, true);
   assert.equal(createRoomAccessDebugState("presenter").canManageRoomSession, false);
   assert.equal(createRoomAccessDebugState("host").canStartScreenShare, true);
   assert.equal(createRoomAccessDebugState("host").canConfigureSurfaceAudio, false);
   assert.equal(createRoomAccessDebugState("admin").canConfigureSurfaceAudio, true);
   assert.equal(createRoomAccessDebugState("admin").permissions.includes("room.admin"), true);
+});
+
+test("PDF presentation extension requires document presentation permission", () => {
+  const definition = getMediaObjectDefinition(PDF_PRESENTATION_OBJECT_TYPE);
+  assert.equal(definition?.stateKind, "pdf-presentation");
+  assert.deepEqual(definition?.requiredPermissions, ["document.present"]);
+  assert.equal(isMediaObjectTypeAvailable(PDF_PRESENTATION_OBJECT_TYPE), true);
+  assert.equal(getRoomPermissions("member").includes("document.present"), false);
+  assert.equal(getRoomPermissions("host").includes("document.present"), true);
 });
 
 test("surface input shared contracts compile in tests", () => {

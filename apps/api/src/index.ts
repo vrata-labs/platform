@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
 import { AccessToken } from "livekit-server-sdk";
+import { PDFDocument } from "pdf-lib";
 import { extractSceneBundleZipToTemp, normalizeSceneBundleRelativePath, validateSceneBundlePath, validateSceneBundleReference } from "@vrata/asset-pipeline";
 import { createRoomAccessDebugState, getRoomPermissions, hasRoomPermission, parseRoomRole, type RoomPermission, type RoomRole } from "@vrata/shared-types";
 import { signRoomSessionToken, verifyRoomSessionToken, type RoomSessionRoleSource, type RoomSessionTokenPayload, type RoomSessionTokenVerificationResult } from "@vrata/shared-types/session-token";
@@ -22,6 +23,7 @@ import {
   createStorage,
   type AssetRecord,
   type RoomDocumentRecord,
+  type RoomDocumentMetadata,
   type RoomNoteRecord,
   type RoomNoteVersionRecord,
   type RoomNoteScope,
@@ -348,6 +350,9 @@ const metrics = {
   documentPermissionDeniedTotal: 0,
   documentDeletesTotal: 0,
   documentSurfaceSelectionsTotal: 0,
+  pdfValidationFailuresTotal: new Map<string, number>(),
+  documentPresentationContentTotal: new Map<string, number>(),
+  documentBlobDeletesTotal: new Map<string, number>(),
   personalRoomsCreatedTotal: 0,
   personalRoomOpensTotal: new Map<string, number>(),
   personalRoomAccessDeniedTotal: new Map<string, number>(),
@@ -965,7 +970,7 @@ function deletePresence(roomId: string, participantId: string): void {
 function contentType(filePath: string): string {
   const extension = extname(filePath).toLowerCase();
   if (extension === ".html") return "text/html; charset=utf-8";
-  if (extension === ".js") return "application/javascript; charset=utf-8";
+  if (extension === ".js" || extension === ".mjs") return "application/javascript; charset=utf-8";
   if (extension === ".css") return "text/css; charset=utf-8";
   if (extension === ".json") return "application/json; charset=utf-8";
   if (extension === ".svg") return "image/svg+xml";
@@ -1323,6 +1328,15 @@ async function apiMetricsText(storage: Awaited<typeof storagePromise>): Promise<
     "# HELP vrata_document_surface_selections_total Document surface selection actions accepted by API.",
     "# TYPE vrata_document_surface_selections_total counter",
     formatMetricLine("vrata_document_surface_selections_total", metrics.documentSurfaceSelectionsTotal),
+    "# HELP vrata_pdf_validation_failures_total Rejected PDF uploads by stable reason.",
+    "# TYPE vrata_pdf_validation_failures_total counter",
+    ...Array.from(metrics.pdfValidationFailuresTotal.entries()).map(([reason, count]) => formatMetricLine("vrata_pdf_validation_failures_total", count, { reason })),
+    "# HELP vrata_document_presentation_content_total Presentation content requests by result.",
+    "# TYPE vrata_document_presentation_content_total counter",
+    ...Array.from(metrics.documentPresentationContentTotal.entries()).map(([result, count]) => formatMetricLine("vrata_document_presentation_content_total", count, { result })),
+    "# HELP vrata_document_blob_deletes_total Document blob delete attempts by result.",
+    "# TYPE vrata_document_blob_deletes_total counter",
+    ...Array.from(metrics.documentBlobDeletesTotal.entries()).map(([result, count]) => formatMetricLine("vrata_document_blob_deletes_total", count, { result })),
     "# HELP vrata_notes_created_total Notes first created through the API by scope.",
     "# TYPE vrata_notes_created_total counter",
     ...Array.from(metrics.notesCreatedTotal.entries()).map(([scope, count]) => formatMetricLine("vrata_notes_created_total", count, { scope })),
@@ -1414,6 +1428,14 @@ function safeEqual(left: string, right: string): boolean {
 function getInternalServiceToken(env: NodeJS.ProcessEnv = process.env): string | null {
   const token = env.VRATA_INTERNAL_SERVICE_TOKEN?.trim() || env.NOAH_INTERNAL_SERVICE_TOKEN?.trim() || env.REMOTE_BROWSER_INTERNAL_TOKEN?.trim() || "";
   return token || null;
+}
+
+function getInternalServiceHeaders(env: NodeJS.ProcessEnv = process.env): Record<string, string> {
+  const token = getInternalServiceToken(env);
+  return {
+    "content-type": "application/json",
+    ...(token ? { "x-vrata-internal-token": token } : {})
+  };
 }
 
 function isAuthorizedInternalRequest(request: IncomingMessage, env: NodeJS.ProcessEnv = process.env): boolean {
@@ -1935,7 +1957,7 @@ const allowedDocumentContentTypes = new Set([
 
 function writeRoomDocumentsAudit(input: {
   request: IncomingMessage;
-  action: "documents.list" | "documents.upload" | "documents.download" | "documents.delete" | "documents.select-surface";
+  action: "documents.list" | "documents.upload" | "documents.download" | "documents.presentation" | "documents.delete" | "documents.select-surface";
   roomId: string;
   documentId?: string;
   result: "allowed" | "denied";
@@ -1967,7 +1989,7 @@ function writeRoomDocumentsAudit(input: {
 function resolveRoomDocumentsActor(
   request: IncomingMessage,
   response: ServerResponse,
-  input: { room: RoomRecord; permission: "document.view" | "document.download" | "document.upload" | "document.delete"; action: Parameters<typeof writeRoomDocumentsAudit>[0]["action"]; documentId?: string }
+  input: { room: RoomRecord; permission: "surface.view" | "document.view" | "document.download" | "document.upload" | "document.present" | "document.delete"; action: Parameters<typeof writeRoomDocumentsAudit>[0]["action"]; documentId?: string }
 ): ControlPlaneActor | null {
   const actorResult = resolveControlPlaneActor(request);
   if (!actorResult.ok) {
@@ -1991,7 +2013,10 @@ function resolveRoomDocumentsActor(
   if (isRoomDisabled(input.room) && actor.actorType !== "admin-token") {
     return deny("room_disabled");
   }
-  if (!hasRoomPermission(actor.permissions ?? getRoomPermissions(actor.role), input.permission)) {
+  const effectiveRole = actor.actorType === "room-session"
+    ? resolveEffectiveRoomRole(input.room, actor.participantId ?? actor.actorId, actor.role)
+    : actor.role;
+  if (!hasRoomPermission(getRoomPermissions(effectiveRole), input.permission)) {
     return deny("permission_denied");
   }
 
@@ -2014,8 +2039,46 @@ function inferDocumentContentType(filename: string): string | null {
 function normalizeDocumentContentType(part: MultipartPart, filename: string): string | null {
   const raw = part.contentType?.split(";")[0]?.trim().toLowerCase() || "";
   const inferred = inferDocumentContentType(filename);
+  if (raw && raw !== "application/octet-stream" && inferred && raw !== inferred) {
+    return null;
+  }
   const contentType = raw && raw !== "application/octet-stream" ? raw : inferred;
   return contentType && allowedDocumentContentTypes.has(contentType) ? contentType : null;
+}
+
+async function inspectPdfDocument(data: Buffer): Promise<RoomDocumentMetadata> {
+  if (!data.subarray(0, 1024).includes(Buffer.from("%PDF-"))) {
+    throw new Error("corrupt_pdf");
+  }
+  try {
+    const pdf = await PDFDocument.load(new Uint8Array(data), { ignoreEncryption: true, updateMetadata: false });
+    if (pdf.isEncrypted) {
+      throw new Error("encrypted_pdf_unsupported");
+    }
+    const pageCount = pdf.getPageCount();
+    const maxPages = Number.parseInt(process.env.PDF_PRESENTATION_MAX_PAGES ?? "250", 10);
+    if (pageCount < 1) {
+      throw new Error("corrupt_pdf");
+    }
+    if (pageCount > maxPages) {
+      throw new Error("pdf_page_limit_exceeded");
+    }
+    const firstPage = pdf.getPage(0).getSize();
+    return {
+      kind: "pdf",
+      pageCount,
+      title: pdf.getTitle()?.slice(0, 300) ?? null,
+      author: pdf.getAuthor()?.slice(0, 300) ?? null,
+      firstPageWidthPt: Number(firstPage.width.toFixed(2)),
+      firstPageHeightPt: Number(firstPage.height.toFixed(2))
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "corrupt_pdf";
+    if (message === "encrypted_pdf_unsupported" || message === "pdf_page_limit_exceeded" || message === "corrupt_pdf") {
+      throw error;
+    }
+    throw new Error("corrupt_pdf");
+  }
 }
 
 function normalizeDocumentFilename(input: string | undefined): string | null {
@@ -2039,10 +2102,14 @@ function serializeRoomDocument(request: IncomingMessage, document: RoomDocumentR
     contentType: document.contentType,
     sizeBytes: document.sizeBytes,
     checksum: document.checksum,
+    metadata: document.metadata ?? {},
     uploadedBy: document.uploadedBy ?? null,
     uploadedAt: document.uploadedAt,
     linkedSurfaceId: document.linkedSurfaceId ?? null,
-    downloadUrl: `/api/rooms/${encodeURIComponent(document.roomId)}/documents/${encodeURIComponent(document.documentId)}/download`
+    downloadUrl: `/api/rooms/${encodeURIComponent(document.roomId)}/documents/${encodeURIComponent(document.documentId)}/download`,
+    presentationUrl: document.metadata?.kind === "pdf"
+      ? `/api/rooms/${encodeURIComponent(document.roomId)}/documents/${encodeURIComponent(document.documentId)}/presentation`
+      : null
   };
 }
 
@@ -2676,6 +2743,60 @@ async function writeDocumentObject(storage: DocumentUploadStorage, storageKey: s
     return;
   }
   await putS3Object(storage, storageKey, body, contentType, "document_object_upload_failed");
+}
+
+async function deleteS3Object(storage: Extract<DocumentUploadStorage, { type: "s3" }>, key: string): Promise<void> {
+  const endpoint = storage.endpoint.endsWith("/") ? storage.endpoint : `${storage.endpoint}/`;
+  const url = new URL(`${trimSlashes(storage.bucket)}/${key.split("/").map(encodeURIComponent).join("/")}`, endpoint);
+  const payloadHash = sha256Hex("");
+  const { amzDate, dateStamp } = formatAmzDate(new Date());
+  const headers = new Map<string, string>([
+    ["host", url.host],
+    ["x-amz-content-sha256", payloadHash],
+    ["x-amz-date", amzDate]
+  ]);
+  const signedHeaders = Array.from(headers.keys()).sort().join(";");
+  const canonicalHeaders = Array.from(headers.entries()).sort(([left], [right]) => left.localeCompare(right)).map(([name, value]) => `${name}:${value.trim()}\n`).join("");
+  const canonicalRequest = ["DELETE", url.pathname, "", canonicalHeaders, signedHeaders, payloadHash].join("\n");
+  const credentialScope = `${dateStamp}/${storage.region}/s3/aws4_request`;
+  const stringToSign = ["AWS4-HMAC-SHA256", amzDate, credentialScope, sha256Hex(canonicalRequest)].join("\n");
+  const signingKey = hmac(hmac(hmac(hmac(`AWS4${storage.secretAccessKey}`, dateStamp), storage.region), "s3"), "aws4_request");
+  const signature = createHmac("sha256", signingKey).update(stringToSign).digest("hex");
+  const response = await fetch(url, {
+    method: "DELETE",
+    headers: {
+      "authorization": `AWS4-HMAC-SHA256 Credential=${storage.accessKeyId}/${credentialScope}, SignedHeaders=${signedHeaders}, Signature=${signature}`,
+      "x-amz-content-sha256": payloadHash,
+      "x-amz-date": amzDate
+    }
+  });
+  if (!response.ok && response.status !== 404) {
+    throw new Error(`document_object_delete_failed:${response.status}`);
+  }
+}
+
+async function deleteDocumentObject(storage: DocumentUploadStorage, storageKey: string): Promise<void> {
+  if (storage.type === "local") {
+    const target = join(storage.root, storageKey);
+    if (!target.startsWith(`${storage.root}${sep}`)) throw new Error("unsafe_document_storage_key");
+    await rm(target, { force: true });
+    return;
+  }
+  await deleteS3Object(storage, storageKey);
+}
+
+async function cleanupPdfPresentation(roomId: string, documentId: string): Promise<void> {
+  const baseUrl = process.env.ROOM_STATE_INTERNAL_URL?.trim();
+  if (!baseUrl) {
+    return;
+  }
+  const response = await fetch(new URL(`/api/internal/rooms/${encodeURIComponent(roomId)}/documents/${encodeURIComponent(documentId)}/presentation`, baseUrl), {
+    method: "DELETE",
+    headers: getInternalServiceHeaders()
+  });
+  if (!response.ok) {
+    throw new Error(`presentation_cleanup_failed:${response.status}`);
+  }
 }
 
 function resolveUploadedDocumentPublicUrl(storage: DocumentUploadStorage, storageKey: string): string {
@@ -3560,6 +3681,18 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       return json(response, 413, { error: "document_too_large" });
     }
 
+    let documentMetadata: RoomDocumentMetadata = {};
+    if (contentType === "application/pdf") {
+      try {
+        documentMetadata = await inspectPdfDocument(documentFile.data);
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : "corrupt_pdf";
+        incrementCounter(metrics.pdfValidationFailuresTotal, reason);
+        incrementCounter(metrics.documentsUploadedTotal, `${contentType}:rejected`);
+        return json(response, 422, { error: reason, requestId });
+      }
+    }
+
     try {
       const documentId = randomUUID();
       const uploadStorage = getDocumentUploadStorage(request);
@@ -3574,7 +3707,8 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
         sizeBytes: documentFile.data.byteLength,
         storageKey,
         checksum: `sha256:${sha256Hex(documentFile.data)}`,
-        uploadedBy: actor.actorId
+        uploadedBy: actor.actorId,
+        metadata: documentMetadata
       });
       incrementCounter(metrics.documentsUploadedTotal, `${contentType}:success`);
       incrementCounter(metrics.documentStorageBytesTotal, room.tenantId, document.sizeBytes);
@@ -3587,7 +3721,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     return;
   }
 
-  const roomDocumentItemMatch = url.pathname.match(/^\/api\/rooms\/([^/]+)\/documents\/([^/]+)(?:\/(download|surface))?$/);
+  const roomDocumentItemMatch = url.pathname.match(/^\/api\/rooms\/([^/]+)\/documents\/([^/]+)(?:\/(download|presentation|surface))?$/);
   if ((method === "GET" || method === "DELETE" || method === "POST") && roomDocumentItemMatch) {
     if (!isDocumentsFeatureEnabled()) return json(response, 404, { error: "documents_disabled" });
     const roomId = decodeURIComponent(roomDocumentItemMatch[1]);
@@ -3595,8 +3729,8 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     const actionPath = roomDocumentItemMatch[3] ?? "item";
     const room = await storage.getRoom(roomId);
     if (!room) return json(response, 404, { error: "room_not_found" });
-    const permission = actionPath === "download" ? "document.download" : method === "DELETE" ? "document.delete" : "document.upload";
-    const action = actionPath === "download" ? "documents.download" : method === "DELETE" ? "documents.delete" : "documents.select-surface";
+    const permission = actionPath === "download" ? "document.download" : actionPath === "presentation" ? "surface.view" : method === "DELETE" ? "document.delete" : "document.present";
+    const action = actionPath === "download" ? "documents.download" : actionPath === "presentation" ? "documents.presentation" : method === "DELETE" ? "documents.delete" : "documents.select-surface";
     const actor = resolveRoomDocumentsActor(request, response, { room, permission, action, documentId });
     if (!actor) return;
     const document = await storage.getRoomDocument(roomId, documentId);
@@ -3620,7 +3754,43 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       return;
     }
 
+    if (method === "GET" && actionPath === "presentation") {
+      if (document.metadata?.kind !== "pdf" || !document.linkedSurfaceId) {
+        incrementCounter(metrics.documentPresentationContentTotal, "not_active");
+        return json(response, 404, { error: "presentation_not_active" });
+      }
+      try {
+        const bytes = await readDocumentObject(getDocumentUploadStorage(request), document.storageKey);
+        incrementCounter(metrics.documentPresentationContentTotal, "success");
+        response.writeHead(200, {
+          "content-type": "application/pdf",
+          "content-length": String(bytes.byteLength),
+          "content-disposition": `inline; filename="${safeHeaderFilename(document.filename)}"`,
+          "cache-control": "private, no-store",
+          "x-request-id": requestId
+        });
+        response.end(bytes);
+      } catch (error) {
+        incrementCounter(metrics.documentPresentationContentTotal, "failed");
+        const message = error instanceof Error ? error.message : "presentation_content_failed";
+        json(response, 503, { error: message, requestId });
+      }
+      return;
+    }
+
     if (method === "DELETE" && actionPath === "item") {
+      try {
+        await cleanupPdfPresentation(roomId, documentId);
+      } catch (error) {
+        return json(response, 503, { error: error instanceof Error ? error.message : "presentation_cleanup_failed", requestId });
+      }
+      try {
+        await deleteDocumentObject(getDocumentUploadStorage(request), document.storageKey);
+        incrementCounter(metrics.documentBlobDeletesTotal, "success");
+      } catch (error) {
+        incrementCounter(metrics.documentBlobDeletesTotal, "failed");
+        return json(response, 503, { error: error instanceof Error ? error.message : "document_object_delete_failed", requestId });
+      }
       const deleted = await storage.markRoomDocumentDeleted(roomId, documentId, new Date().toISOString(), actor.actorId);
       if (!deleted) return json(response, 404, { error: "document_not_found" });
       metrics.documentDeletesTotal += 1;
@@ -3629,6 +3799,9 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     }
 
     if (method === "POST" && actionPath === "surface") {
+      if (document.metadata?.kind !== "pdf" || !document.metadata.pageCount) {
+        return json(response, 422, { error: "document_not_presentable" });
+      }
       const payload = (await parseBody<{ surfaceId?: unknown }>(request)) ?? {};
       const surfaceId = normalizeDocumentSurfaceId(payload.surfaceId);
       if (surfaceId === undefined) return json(response, 400, { error: "invalid_document_surface_id" });
