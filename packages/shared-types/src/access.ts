@@ -22,6 +22,7 @@ export type RoomPermission =
   | "document.view"
   | "document.download"
   | "document.upload"
+  | "document.present"
   | "document.delete"
   | "notes.view"
   | "notes.edit"
@@ -36,6 +37,7 @@ export interface RoomAccessDebugState {
   canCreateMarkdownBoard: boolean;
   canEditMarkdownBoard: boolean;
   canCreateRemoteBrowser: boolean;
+  canPresentDocuments: boolean;
   canControlSurface: boolean;
   canConfigureSurfaceAudio: boolean;
   canManageRoomSession: boolean;
@@ -66,6 +68,7 @@ const rolePermissions: Record<RoomRole, readonly RoomPermission[]> = {
     "document.view",
     "document.download",
     "document.upload",
+    "document.present",
     "notes.view",
     "notes.edit"
   ],
@@ -90,6 +93,7 @@ const rolePermissions: Record<RoomRole, readonly RoomPermission[]> = {
     "document.view",
     "document.download",
     "document.upload",
+    "document.present",
     "document.delete",
     "notes.view",
     "notes.edit",
@@ -117,6 +121,7 @@ const rolePermissions: Record<RoomRole, readonly RoomPermission[]> = {
     "document.view",
     "document.download",
     "document.upload",
+    "document.present",
     "document.delete",
     "notes.view",
     "notes.edit",
@@ -157,6 +162,7 @@ export function createRoomAccessDebugState(role: RoomRole): RoomAccessDebugState
     canCreateMarkdownBoard: hasRoomPermission(permissions, "surface.create-object") && hasRoomPermission(permissions, "markdown-board.edit"),
     canEditMarkdownBoard: hasRoomPermission(permissions, "markdown-board.edit"),
     canCreateRemoteBrowser: hasRoomPermission(permissions, "surface.create-object") && hasRoomPermission(permissions, "remote-browser.open-url"),
+    canPresentDocuments: hasRoomPermission(permissions, "surface.create-object") && hasRoomPermission(permissions, "document.present"),
     canControlSurface: hasRoomPermission(permissions, "surface.lock") || hasRoomPermission(permissions, "surface.stop-object"),
     canConfigureSurfaceAudio: hasRoomPermission(permissions, "surface.configure-audio"),
     canManageRoomSession: hasRoomPermission(permissions, "room.session-control")

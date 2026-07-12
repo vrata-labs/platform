@@ -1,9 +1,11 @@
 import {
   REMOTE_BROWSER_OBJECT_TYPE,
+  PDF_PRESENTATION_OBJECT_TYPE,
   SCREEN_SHARE_OBJECT_TYPE,
   MARKDOWN_BOARD_OBJECT_TYPE,
   WHITEBOARD_OBJECT_TYPE,
   type MarkdownBoardPatch,
+  type PdfPresentationPatch,
   type RemoteBrowserPatch,
   type ScreenSharePatch,
   type WhiteboardPatch
@@ -221,6 +223,18 @@ export class MediaSurfaceCommandClient {
 
   stopRemoteBrowserObject(objectId: string, surfaceId: string): Promise<SurfaceCommandResult> {
     return this.stopObject(objectId, surfaceId, "remote-browser-stop");
+  }
+
+  createPdfPresentationObjectOnSurface(surfaceId: string): Promise<SurfaceCommandResult> {
+    return this.createObjectOnSurface(surfaceId, PDF_PRESENTATION_OBJECT_TYPE, "pdf-presentation-create");
+  }
+
+  patchPdfPresentationObject(objectId: string, surfaceId: string, expectedRevision: number, patch: PdfPresentationPatch): Promise<SurfaceCommandResult> {
+    return this.patchObjectState(objectId, surfaceId, expectedRevision, patch, `pdf-presentation-${patch.type}`);
+  }
+
+  stopPdfPresentationObject(objectId: string, surfaceId: string): Promise<SurfaceCommandResult> {
+    return this.stopObject(objectId, surfaceId, "pdf-presentation-stop");
   }
 
   setMediaSurfaceAudioEnabled(surfaceId: string, enabled: boolean): Promise<SurfaceCommandResult> {

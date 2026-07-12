@@ -7,6 +7,7 @@ import {
   LAPTOP_MEDIA_SURFACE_ID,
   MARKDOWN_BOARD_OBJECT_TYPE,
   MISSING_CAPABILITY_EXTENSION_CARD_TYPE,
+  PDF_PRESENTATION_OBJECT_TYPE,
   REMOTE_BROWSER_OBJECT_TYPE,
   SCREEN_SHARE_OBJECT_TYPE,
   SURFACE_TEST_CARD_TYPE,
@@ -20,6 +21,8 @@ import {
   type MediaObjectInstance,
   type MarkdownBoardPatch,
   type MarkdownBoardState,
+  type PdfPresentationPatch,
+  type PdfPresentationState,
   type RemoteBrowserErrorCode,
   type RemoteBrowserExecutorInputState,
   type RemoteBrowserObjectState,
@@ -38,7 +41,7 @@ import {
 } from "@vrata/shared-types";
 
 import { appendBrandingSuffix, applyRoomShellBootState, renderSceneAttributions } from "./boot-session.js";
-import { RuntimeAccessError, bootRuntime, deleteRoomDocument, downloadRoomDocument, exportRoomNote, exportRoomNotesArchive, fetchRoomNote, fetchRoomSessionControl, fetchRuntimeSpaces, grantRoomPresenter, listPresence, listRoomDocuments, listRoomNoteVersions, openPersonalRoom, planVoiceSession, removePresence, removeRoomParticipant, resolveCurrentSpace, resolveJoinMode, restoreRoomNoteVersion, revokeRoomPresenter, runRoomSessionControlAction, savePersonalRoomState, saveRoomNote, selectRoomDocumentSurface, transferRoomHost, uploadRoomDocument, upsertPresence, type PresenceState, type RuntimeDocumentRecord, type RuntimeNoteScope, type RuntimeNoteVersionRecord, type RuntimePersonalState, type RuntimeSessionControlResponse, type RuntimeSpaceOption } from "./index.js";
+import { RuntimeAccessError, bootRuntime, deleteRoomDocument, downloadRoomDocument, exportRoomNote, exportRoomNotesArchive, fetchRoomDocumentPresentation, fetchRoomNote, fetchRoomSessionControl, fetchRuntimeSpaces, grantRoomPresenter, listPresence, listRoomDocuments, listRoomNoteVersions, openPersonalRoom, planVoiceSession, removePresence, removeRoomParticipant, resolveCurrentSpace, resolveJoinMode, restoreRoomNoteVersion, revokeRoomPresenter, runRoomSessionControlAction, savePersonalRoomState, saveRoomNote, selectRoomDocumentSurface, transferRoomHost, uploadRoomDocument, upsertPresence, type PresenceState, type RuntimeDocumentRecord, type RuntimeNoteScope, type RuntimeNoteVersionRecord, type RuntimePersonalState, type RuntimeSessionControlResponse, type RuntimeSpaceOption } from "./index.js";
 import { formatClientCompatibilityStatus, resolveClientCompatibility, type ClientCompatibilitySummary } from "./client-capabilities.js";
 import { formatGuestCompatibilityWarnings, formatGuestControlsHint, shouldShowGuestOnboarding, validateGuestDisplayName } from "./guest-onboarding.js";
 import { createMotionTrack, pushMotionSample, sampleMotion, type MotionTrack } from "./motion-state.js";
@@ -65,6 +68,7 @@ import {
   activeMediaObjectForSurface as selectActiveMediaObjectForSurface,
   activeMediaObjectIdForSurface as selectActiveMediaObjectIdForSurface,
   activeMarkdownBoardObjectForSurface as selectActiveMarkdownBoardObjectForSurface,
+  activePdfPresentationObjectForSurface as selectActivePdfPresentationObjectForSurface,
   activeRemoteBrowserObjectForSurface as selectActiveRemoteBrowserObjectForSurface,
   activeScreenShareObjectForSurface as selectActiveScreenShareObjectForSurface,
   activeWhiteboardObjectForSurface as selectActiveWhiteboardObjectForSurface,
@@ -75,6 +79,7 @@ import {
 } from "./media/media-object-state.js";
 import { routeMediaObjectSurfaceInput } from "./media/media-object-router.js";
 import { createMarkdownBoardObjectRuntime } from "./media/markdown-board-object.js";
+import { createPdfPresentationObjectRuntime } from "./media/pdf-presentation-object.js";
 import { createRemoteBrowserObjectRuntime } from "./media/remote-browser-object.js";
 import {
   createRemoteBrowserVrKeyboardView,
@@ -310,6 +315,14 @@ const documentDownloadButton = mustElement<HTMLButtonElement>("#document-downloa
 const documentSurfaceButton = mustElement<HTMLButtonElement>("#document-surface-button");
 const documentDeleteButton = mustElement<HTMLButtonElement>("#document-delete-button");
 const documentStatusEl = mustElement<HTMLDivElement>("#document-status");
+const presentationControlsEl = mustElement<HTMLDivElement>("#presentation-controls");
+const presentationPrevButton = mustElement<HTMLButtonElement>("#presentation-prev");
+const presentationNextButton = mustElement<HTMLButtonElement>("#presentation-next");
+const presentationPageLabel = mustElement<HTMLSpanElement>("#presentation-page-label");
+const presentationLargeButton = mustElement<HTMLButtonElement>("#presentation-large");
+const presentationStopButton = mustElement<HTMLButtonElement>("#presentation-stop");
+const presentationThumbnailsEl = mustElement<HTMLDivElement>("#presentation-thumbnails");
+const presentationStatusEl = mustElement<HTMLDivElement>("#presentation-status");
 const sceneHost = mustElement<HTMLDivElement>("#scene");
 const mediaSurfaceSelect = mustElement<HTMLSelectElement>("#media-surface-select");
 const joinAudioButton = mustElement<HTMLButtonElement>("#join-audio");
@@ -738,6 +751,7 @@ let mediaRoomIdleDisconnectTimer: number | null = null;
 let roomStateClient: RoomStateClient | null = null;
 let roomStateAccessToken = "";
 let roomStateConnected = false;
+let roomStateConnectionGeneration = 0;
 let latestRealtimeParticipants: PresenceState[] = [];
 let latestFallbackParticipants: PresenceState[] = [];
 const retainedDisplayTextures = new Set<THREE.Texture>();
@@ -796,6 +810,7 @@ const mediaSurfaceCommands = createMediaSurfaceCommandClient({
 const whiteboardRuntimes = new Map<string, ReturnType<typeof createWhiteboardObjectRuntime>>();
 const markdownBoardRuntimes = new Map<string, ReturnType<typeof createMarkdownBoardObjectRuntime>>();
 const remoteBrowserRuntimes = new Map<string, ReturnType<typeof createRemoteBrowserObjectRuntime>>();
+const pdfPresentationRuntimes = new Map<string, ReturnType<typeof createPdfPresentationObjectRuntime>>();
 
 function runtimeMediaSurfaceDefinitionFromScene(surface: SceneBundleMediaSurface): RuntimeMediaSurfaceDefinition {
   const fallback = DEFAULT_RUNTIME_MEDIA_SURFACES.find((definition) => definition.surfaceId === surface.surfaceId);
@@ -837,6 +852,8 @@ function closeMediaSurfaceRuntimes(surfaceId: string): void {
   markdownBoardRuntimes.delete(surfaceId);
   remoteBrowserRuntimes.get(surfaceId)?.close();
   remoteBrowserRuntimes.delete(surfaceId);
+  void pdfPresentationRuntimes.get(surfaceId)?.close();
+  pdfPresentationRuntimes.delete(surfaceId);
 }
 
 function configureRuntimeMediaSurfaces(sceneSurfaces?: SceneBundleMediaSurface[]): void {
@@ -966,6 +983,33 @@ function currentRemoteBrowserObject(): MediaObjectInstance<RemoteBrowserObjectSt
   return activeRemoteBrowserObjectForSurface(selectedMediaSurfaceId) ?? findActiveRemoteBrowserObject();
 }
 
+function getPdfPresentationRuntime(surfaceId: string): ReturnType<typeof createPdfPresentationObjectRuntime> {
+  const existing = pdfPresentationRuntimes.get(surfaceId);
+  if (existing) {
+    return existing;
+  }
+  const surface = getMediaSurfaceView(surfaceId);
+  const runtime = createPdfPresentationObjectRuntime({
+    surfaceId,
+    widthPx: surface.widthPx,
+    heightPx: surface.heightPx,
+    loadDocumentBytes: (documentId) => fetchRoomDocumentPresentation(apiBaseUrl, roomId, documentId, roomStateAccessToken),
+    applyTexture: (texture) => applySurfaceTexture(surfaceId, texture),
+    applyDisplayMode: (mode) => surface.object.scale.set(mode === "large" ? 1.28 : 1, mode === "large" ? 1.28 : 1, 1),
+    onStatus: (message, nextErrorCode) => {
+      presentationStatusEl.textContent = message;
+      debugState.pdfPresentation.errorCode = nextErrorCode;
+    }
+  });
+  pdfPresentationRuntimes.set(surfaceId, runtime);
+  retainedDisplayTextures.add(runtime.texture);
+  return runtime;
+}
+
+function currentPdfPresentationObject(): MediaObjectInstance<PdfPresentationState> | null {
+  return activePdfPresentationObjectForSurface(selectedMediaSurfaceId) ?? findActivePdfPresentationObject();
+}
+
 function activeWhiteboardObjects(): Array<MediaObjectInstance<WhiteboardState>> {
   if (!roomMediaObjects) {
     return [];
@@ -1070,6 +1114,35 @@ function syncRemoteBrowserSurfaceTextures(): void {
   }
 }
 
+function activePdfPresentationObjects(): Array<MediaObjectInstance<PdfPresentationState>> {
+  if (!roomMediaObjects) {
+    return [];
+  }
+  const objects: Array<MediaObjectInstance<PdfPresentationState>> = [];
+  for (const surfaceId of Object.keys(roomMediaObjects.surfaces)) {
+    const object = activePdfPresentationObjectForSurface(surfaceId);
+    if (object) objects.push(object);
+  }
+  return objects;
+}
+
+function syncPdfPresentationSurfaceTextures(): void {
+  const activeSurfaceIds = new Set<string>();
+  for (const object of activePdfPresentationObjects()) {
+    if (!mediaSurfaceViews.has(object.surfaceId)) continue;
+    activeSurfaceIds.add(object.surfaceId);
+    getPdfPresentationRuntime(object.surfaceId).sync(object);
+  }
+  for (const [surfaceId, runtime] of pdfPresentationRuntimes) {
+    if (activeSurfaceIds.has(surfaceId)) continue;
+    runtime.clear();
+    const material = getMediaSurfaceView(surfaceId).object.material;
+    if (material instanceof THREE.MeshBasicMaterial && runtime.ownsTexture(material.map)) {
+      applySurfaceTexture(surfaceId, null);
+    }
+  }
+}
+
 let surfaceAudioCommandPending = false;
 let surfaceAudioPendingEnabled: boolean | null = null;
 const pointerNdc = new THREE.Vector2(0, 0);
@@ -1102,6 +1175,8 @@ let roomDocuments: RuntimeDocumentRecord[] = [];
 let selectedDocumentId = getStoredValue(localStorage, `vrata.documents.selected.${roomId}`, `noah.documents.selected.${roomId}`) ?? "";
 let documentsLoading = false;
 let documentUploadInFlight = false;
+let presentationActionInFlight = false;
+let presentationThumbnailSignature = "";
 joinMutedCheckbox.checked = joinMutedPreference;
 guestJoinMutedCheckbox.checked = joinMutedPreference || !getStoredValue(localStorage, "vrata.audio.joinMuted", "noah.audio.joinMuted");
 notesScopeSelect.value = activeNotesScope;
@@ -1118,6 +1193,10 @@ documentSelect.disabled = true;
 documentDownloadButton.disabled = true;
 documentSurfaceButton.disabled = true;
 documentDeleteButton.disabled = true;
+presentationPrevButton.disabled = true;
+presentationNextButton.disabled = true;
+presentationLargeButton.disabled = true;
+presentationStopButton.disabled = true;
 let audioActionInFlight = false;
 let audioInputDevices: MediaDeviceInfo[] = [];
 let audioOutputDevices: MediaDeviceInfo[] = [];
@@ -1503,6 +1582,9 @@ function applyAccessDebug(access: NonNullable<RuntimeSessionControlResponse["acc
     lastSurfaceCommandAccepted: previousLastSurfaceCommandAccepted
   };
   if (previousRole !== access.role && debugState.roomStateUrl) {
+    roomStateConnected = false;
+    debugState.roomStateConnected = false;
+    mediaSurfaceCommands.rejectAll("room_state_reconnecting");
     roomStateClient?.close();
     roomStateClient = null;
     connectRoomStateWithRetry(debugState.roomStateUrl);
@@ -1685,6 +1767,10 @@ function activeRemoteBrowserObjectForSurface(surfaceId: string): MediaObjectInst
   return selectActiveRemoteBrowserObjectForSurface(roomMediaObjects, surfaceId);
 }
 
+function activePdfPresentationObjectForSurface(surfaceId: string): MediaObjectInstance<PdfPresentationState> | null {
+  return selectActivePdfPresentationObjectForSurface(roomMediaObjects, surfaceId);
+}
+
 function findActiveObjectByType<State>(type: string): MediaObjectInstance<State> | null {
   if (!roomMediaObjects) {
     return null;
@@ -1729,6 +1815,10 @@ function findActiveMarkdownBoardObject(): MediaObjectInstance<MarkdownBoardState
 
 function findActiveRemoteBrowserObject(): MediaObjectInstance<RemoteBrowserObjectState> | null {
   return findActiveObjectByType<RemoteBrowserObjectState>(REMOTE_BROWSER_OBJECT_TYPE);
+}
+
+function findActivePdfPresentationObject(): MediaObjectInstance<PdfPresentationState> | null {
+  return findActiveObjectByType<PdfPresentationState>(PDF_PRESENTATION_OBJECT_TYPE);
 }
 
 function findRemoteBrowserObjectNeedingLiveKitRoom(): MediaObjectInstance<RemoteBrowserObjectState> | null {
@@ -1918,6 +2008,8 @@ function syncMediaObjectsDebugState(): void {
   debugState.markdownBoard = activeMarkdownBoardRuntime.createDebugSnapshot(activeMarkdownBoard);
   syncMarkdownBoardSurfaceTextures();
   syncRemoteBrowserSurfaceTextures();
+  syncPdfPresentationSurfaceTextures();
+  renderPresentationControls();
   syncScreenShareRuntimeWithObjects();
   const activeScreenShare = activeScreenShareObjectForSurface(selectedMediaSurfaceId) ?? findActiveScreenShareObject();
   const screenShareState = activeScreenShare?.state ?? null;
@@ -4365,6 +4457,20 @@ const debugState = {
     lastStatus: "idle" as string,
     errorCode: null as string | null
   },
+  pdfPresentation: {
+    surfaceId: DEBUG_SURFACE_ID,
+    objectId: null as string | null,
+    documentId: null as string | null,
+    page: 1,
+    pageCount: 0,
+    displayMode: "normal" as PdfPresentationState["displayMode"],
+    loadState: "idle" as string,
+    renderState: "idle" as string,
+    lastRenderMs: null as number | null,
+    renderedThumbnailCount: 0,
+    errorCode: null as string | null,
+    errorDetail: null as string | null
+  },
   screenShareState: "idle",
   screenShare: {
     supported: shareMockEnabled || browserMediaCapabilities.screenShare.supported,
@@ -4919,6 +5025,10 @@ function canDeleteDocuments(): boolean {
   return canViewDocuments() && hasRoomPermission(debugState.access.permissions, "document.delete");
 }
 
+function canPresentDocuments(): boolean {
+  return canViewDocuments() && roomStateConnected && hasRoomPermission(debugState.access.permissions, "document.present");
+}
+
 function selectedDocument(): RuntimeDocumentRecord | null {
   return roomDocuments.find((document) => document.documentId === selectedDocumentId) ?? roomDocuments[0] ?? null;
 }
@@ -4940,6 +5050,82 @@ function setDocumentStatus(message: string, errorCode: string | null = null): vo
     lastStatus: message,
     errorCode
   };
+}
+
+function presentationInputEventId(kind: string): string {
+  return `${participantId}:pdf-presentation:${kind}:${Date.now()}:${Math.random().toString(16).slice(2)}`;
+}
+
+function renderPresentationThumbnails(object: MediaObjectInstance<PdfPresentationState>): void {
+  const signature = `${object.objectId}:${object.state.documentId}:${object.state.pageCount}`;
+  if (signature !== presentationThumbnailSignature) {
+    presentationThumbnailSignature = signature;
+    presentationThumbnailsEl.replaceChildren();
+    const thumbnailCount = Math.min(object.state.pageCount, 50);
+    const runtime = getPdfPresentationRuntime(object.surfaceId);
+    for (let page = 1; page <= thumbnailCount; page += 1) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "presentation-thumbnail";
+      button.dataset.page = String(page);
+      button.disabled = !canPresentDocuments();
+      button.setAttribute("aria-label", `Show page ${page}`);
+      const canvas = document.createElement("canvas");
+      canvas.width = 64;
+      canvas.height = 48;
+      const label = document.createElement("span");
+      label.textContent = String(page);
+      button.append(canvas, label);
+      button.addEventListener("click", () => void goToPresentationPage(page));
+      presentationThumbnailsEl.append(button);
+      void runtime.renderThumbnail(page, canvas);
+    }
+  }
+  for (const button of Array.from(presentationThumbnailsEl.querySelectorAll<HTMLButtonElement>(".presentation-thumbnail"))) {
+    button.disabled = !canPresentDocuments() || presentationActionInFlight;
+    if (Number(button.dataset.page) === object.state.currentPage) button.setAttribute("aria-current", "page");
+    else button.removeAttribute("aria-current");
+  }
+}
+
+function renderPresentationControls(): void {
+  const object = currentPdfPresentationObject();
+  const active = Boolean(object?.state.status === "active" && object.state.documentId);
+  presentationControlsEl.hidden = !active;
+  if (!object || !active) {
+    presentationThumbnailSignature = "";
+    presentationThumbnailsEl.replaceChildren();
+    presentationStatusEl.textContent = "Presentation idle";
+    debugState.pdfPresentation = {
+      surfaceId: selectedMediaSurfaceId,
+      objectId: null,
+      documentId: null,
+      page: 1,
+      pageCount: 0,
+      displayMode: "normal",
+      loadState: "idle",
+      renderState: "idle",
+      lastRenderMs: null,
+      renderedThumbnailCount: 0,
+      errorCode: null,
+      errorDetail: null
+    };
+    return;
+  }
+  const canPresent = canPresentDocuments() && !presentationActionInFlight;
+  presentationPageLabel.textContent = `Page ${object.state.currentPage} / ${object.state.pageCount}`;
+  presentationPrevButton.disabled = !canPresent || object.state.currentPage <= 1;
+  presentationNextButton.disabled = !canPresent || object.state.currentPage >= object.state.pageCount;
+  presentationLargeButton.disabled = !canPresent;
+  presentationLargeButton.setAttribute("aria-pressed", String(object.state.displayMode === "large"));
+  presentationLargeButton.textContent = object.state.displayMode === "large" ? "Normal mode" : "Large mode";
+  presentationStopButton.disabled = !canPresent;
+  renderPresentationThumbnails(object);
+  const runtimeDebug = getPdfPresentationRuntime(object.surfaceId).createDebugSnapshot();
+  debugState.pdfPresentation = runtimeDebug;
+  if (runtimeDebug.renderState === "ready") {
+    presentationStatusEl.textContent = `Presenting ${object.state.filename ?? "PDF"}, page ${object.state.currentPage} of ${object.state.pageCount}`;
+  }
 }
 
 function renderDocumentsUi(message?: string): void {
@@ -4966,7 +5152,7 @@ function renderDocumentsUi(message?: string): void {
       ? roomDocuments.map((doc) => {
         const option = document.createElement("option");
         option.value = doc.documentId;
-        option.textContent = `${doc.filename} (${Math.ceil(doc.sizeBytes / 1024)} KB)`;
+        option.textContent = `${doc.filename}${doc.metadata?.pageCount ? ` · ${doc.metadata.pageCount} pages` : ""} (${Math.ceil(doc.sizeBytes / 1024)} KB)`;
         option.selected = doc.documentId === selectedDocumentId;
         return option;
       })
@@ -4976,9 +5162,10 @@ function renderDocumentsUi(message?: string): void {
   documentUploadButton.disabled = !canUploadDocuments() || documentsLoading || documentUploadInFlight;
   documentSelect.disabled = documentsLoading || roomDocuments.length === 0;
   documentDownloadButton.disabled = !selected || !canDownloadDocuments() || documentsLoading;
-  documentSurfaceButton.disabled = !selected || !canUploadDocuments() || documentsLoading;
+  documentSurfaceButton.disabled = !selected || selected.metadata?.kind !== "pdf" || !canPresentDocuments() || documentsLoading || presentationActionInFlight;
   documentDeleteButton.disabled = !selected || !canDeleteDocuments() || documentsLoading;
   setDocumentStatus(message ?? (roomDocuments.length > 0 ? `Documents ready: ${roomDocuments.length}` : "No room documents yet"));
+  renderPresentationControls();
 }
 
 async function loadRoomDocuments(): Promise<void> {
@@ -5076,14 +5263,129 @@ async function deleteSelectedDocument(): Promise<void> {
 async function selectDocumentForSurface(): Promise<void> {
   const selected = selectedDocument();
   if (!selected) return;
+  if (!canPresentDocuments() || selected.metadata?.kind !== "pdf" || !selected.metadata.pageCount) {
+    setDocumentStatus("Validated PDF and presenter role required", "document_not_presentable");
+    return;
+  }
+  presentationActionInFlight = true;
+  let createdObject: { objectId: string; surfaceId: string } | null = null;
+  let metadataLinked = false;
+  let previousDocumentId: string | null = null;
   try {
     setDocumentStatus("Selecting document for surface...");
+    const occupied = activeMediaObjectForSurface(selectedMediaSurfaceId);
+    let presentation = activePdfPresentationObjectForSurface(selectedMediaSurfaceId);
+    if (occupied && !presentation) {
+      throw new Error("surface-occupied");
+    }
+    if (!presentation) {
+      const createResult = await mediaSurfaceCommands.createPdfPresentationObjectOnSurface(selectedMediaSurfaceId);
+      if (!createResult.accepted || !createResult.objectId) {
+        throw new Error(createResult.blockedReason ?? "presentation_create_rejected");
+      }
+      createdObject = { objectId: createResult.objectId, surfaceId: selectedMediaSurfaceId };
+      presentation = {
+        objectId: createResult.objectId,
+        type: PDF_PRESENTATION_OBJECT_TYPE,
+        roomId,
+        surfaceId: selectedMediaSurfaceId,
+        ownerParticipantId: participantId,
+        state: { status: "idle", documentId: null, filename: null, checksum: null, pageCount: 0, currentPage: 1, displayMode: "normal", lastInputEventId: null },
+        status: "active",
+        revision: createResult.revision ?? 0,
+        createdAtMs: Date.now(),
+        updatedAtMs: Date.now()
+      };
+    } else {
+      previousDocumentId = presentation.state.documentId;
+    }
     const updated = await selectRoomDocumentSurface(apiBaseUrl, roomId, selected.documentId, selectedMediaSurfaceId, roomStateAccessToken);
-    roomDocuments = roomDocuments.map((item) => item.documentId === updated.documentId ? updated : item);
+    metadataLinked = true;
+    roomDocuments = roomDocuments.map((item) => item.documentId === updated.documentId
+      ? updated
+      : item.linkedSurfaceId === selectedMediaSurfaceId ? { ...item, linkedSurfaceId: null } : item);
+    const patchResult = await mediaSurfaceCommands.patchPdfPresentationObject(presentation.objectId, presentation.surfaceId, presentation.revision, {
+      type: "select-document",
+      documentId: updated.documentId,
+      filename: updated.filename,
+      checksum: updated.checksum,
+      pageCount: updated.metadata?.pageCount ?? selected.metadata.pageCount,
+      inputEventId: presentationInputEventId("select-document")
+    });
+    if (!patchResult.accepted) {
+      throw new Error(patchResult.blockedReason ?? "presentation_select_rejected");
+    }
     renderDocumentsUi(`Document selected for surface: ${updated.filename}`);
   } catch (error) {
+    if (createdObject) {
+      await mediaSurfaceCommands.stopPdfPresentationObject(createdObject.objectId, createdObject.surfaceId).catch(() => undefined);
+    }
+    if (metadataLinked) {
+      await selectRoomDocumentSurface(apiBaseUrl, roomId, selected.documentId, null, roomStateAccessToken).catch(() => undefined);
+      roomDocuments = roomDocuments.map((item) => item.documentId === selected.documentId ? { ...item, linkedSurfaceId: null } : item);
+      if (previousDocumentId && previousDocumentId !== selected.documentId) {
+        const restored = await selectRoomDocumentSurface(apiBaseUrl, roomId, previousDocumentId, selectedMediaSurfaceId, roomStateAccessToken).catch(() => null);
+        if (restored) {
+          roomDocuments = roomDocuments.map((item) => item.documentId === restored.documentId ? restored : item);
+        }
+      }
+    }
     console.warn("document_surface_select_failed", error);
     setDocumentStatus(`Document surface selection failed: ${documentErrorCode(error)}`, documentErrorCode(error));
+  } finally {
+    presentationActionInFlight = false;
+    renderDocumentsUi(documentStatusEl.textContent || undefined);
+  }
+}
+
+async function patchCurrentPresentation(patch: PdfPresentationPatch): Promise<void> {
+  const object = currentPdfPresentationObject();
+  if (!object || !canPresentDocuments() || presentationActionInFlight) return;
+  presentationActionInFlight = true;
+  renderPresentationControls();
+  try {
+    const result = await mediaSurfaceCommands.patchPdfPresentationObject(object.objectId, object.surfaceId, object.revision, patch);
+    if (!result.accepted) throw new Error(result.blockedReason ?? "presentation_patch_rejected");
+  } catch (error) {
+    presentationStatusEl.textContent = `Presentation control failed: ${documentErrorCode(error)}`;
+    debugState.pdfPresentation.errorCode = documentErrorCode(error);
+  } finally {
+    presentationActionInFlight = false;
+    renderPresentationControls();
+  }
+}
+
+async function goToPresentationPage(page: number): Promise<void> {
+  await patchCurrentPresentation({ type: "go-to-page", page, inputEventId: presentationInputEventId("page") });
+}
+
+async function togglePresentationDisplayMode(): Promise<void> {
+  const object = currentPdfPresentationObject();
+  if (!object) return;
+  await patchCurrentPresentation({
+    type: "set-display-mode",
+    displayMode: object.state.displayMode === "large" ? "normal" : "large",
+    inputEventId: presentationInputEventId("display-mode")
+  });
+}
+
+async function stopCurrentPresentation(): Promise<void> {
+  const object = currentPdfPresentationObject();
+  if (!object || !canPresentDocuments() || presentationActionInFlight) return;
+  presentationActionInFlight = true;
+  try {
+    const result = await mediaSurfaceCommands.stopPdfPresentationObject(object.objectId, object.surfaceId);
+    if (!result.accepted) throw new Error(result.blockedReason ?? "presentation_stop_rejected");
+    if (object.state.documentId) {
+      const updated = await selectRoomDocumentSurface(apiBaseUrl, roomId, object.state.documentId, null, roomStateAccessToken);
+      roomDocuments = roomDocuments.map((item) => item.documentId === updated.documentId ? updated : item);
+    }
+    setDocumentStatus("Presentation stopped");
+  } catch (error) {
+    setDocumentStatus(`Presentation stop failed: ${documentErrorCode(error)}`, documentErrorCode(error));
+  } finally {
+    presentationActionInFlight = false;
+    renderDocumentsUi(documentStatusEl.textContent || undefined);
   }
 }
 
@@ -6176,8 +6478,11 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
     return;
   }
 
+  const connectionGeneration = ++roomStateConnectionGeneration;
+  const isCurrentConnection = () => connectionGeneration === roomStateConnectionGeneration;
   roomStateClient = connectRoomState(roomStateUrl, roomId, participantId, {
     onOpen: () => {
+      if (!isCurrentConnection()) return;
       const reopened = debugState.avatarPoseTransport.lastPoseSentAtMs > 0;
       roomStateConnected = true;
       debugState.roomStateConnected = true;
@@ -6218,12 +6523,14 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
       void syncPresence(latestMode, Boolean(livekitRoom && microphoneEnabled));
     },
     onRoomState: (snapshot: RoomStateSnapshot) => {
+      if (!isCurrentConnection()) return;
       roomStateConnected = true;
       debugState.roomStateConnected = true;
       debugState.roomStateMode = "colyseus";
       handleRoomSnapshot(snapshot);
     },
     onAvatarReliableState: (state) => {
+      if (!isCurrentConnection()) return;
       remoteAvatarRuntime.ingestReliableState({
         participantId: state.participantId,
         avatarId: state.avatarId,
@@ -6235,9 +6542,11 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
       }, debugState);
     },
     onAvatarPoseFrame: (remoteParticipantId, frame) => {
+      if (!isCurrentConnection()) return;
       remoteAvatarRuntime.ingestPoseFrame(remoteParticipantId, frame, debugState);
     },
     onSeatClaimResult: (result) => {
+      if (!isCurrentConnection()) return;
       if (result.accepted) {
         roomSeatOccupancy = applyAcceptedSeatClaimToOccupancy(roomSeatOccupancy, { result, participantId });
         clearSeatReclaimRetry();
@@ -6251,6 +6560,7 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
       setStatus(result.occupantId ? `Seat occupied by ${result.occupantId}` : "Seat unavailable");
     },
     onAccessDenied: (result) => {
+      if (!isCurrentConnection()) return;
       debugState.access.lastDeniedPermission = result.permission;
       debugState.access.lastSurfaceCommandAccepted = false;
       debugState.mediaObjects.lastCommand = result as SurfaceCommandResult;
@@ -6261,6 +6571,7 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
       }
     },
     onSurfaceCommandResult: (result) => {
+      if (!isCurrentConnection()) return;
       debugState.access.lastDeniedPermission = null;
       debugState.access.lastSurfaceCommandAccepted = result.accepted;
       debugState.mediaObjects.lastCommand = result;
@@ -6268,6 +6579,7 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
       mediaSurfaceCommands.settle(result);
     },
     onError: (error: unknown) => {
+      if (!isCurrentConnection()) return;
       if (sessionControlBlocked) {
         return;
       }
@@ -6286,6 +6598,7 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
       void reportDiagnostics(issue.diagnosticsNote);
     },
     onClose: () => {
+      if (!isCurrentConnection()) return;
       if (sessionControlBlocked) {
         return;
       }
@@ -8281,6 +8594,24 @@ documentDeleteButton.addEventListener("click", () => {
   void deleteSelectedDocument();
 });
 
+presentationPrevButton.addEventListener("click", () => {
+  const object = currentPdfPresentationObject();
+  if (object) void goToPresentationPage(object.state.currentPage - 1);
+});
+
+presentationNextButton.addEventListener("click", () => {
+  const object = currentPdfPresentationObject();
+  if (object) void goToPresentationPage(object.state.currentPage + 1);
+});
+
+presentationLargeButton.addEventListener("click", () => {
+  void togglePresentationDisplayMode();
+});
+
+presentationStopButton.addEventListener("click", () => {
+  void stopCurrentPresentation();
+});
+
 mediaSurfaceSelect.addEventListener("change", () => {
   selectMediaSurface(mediaSurfaceSelect.value);
 });
@@ -8806,6 +9137,9 @@ window.addEventListener("beforeunload", () => {
   }
   for (const runtime of remoteBrowserRuntimes.values()) {
     runtime.close();
+  }
+  for (const runtime of pdfPresentationRuntimes.values()) {
+    void runtime.close();
   }
   disconnectLocalAudioTrack();
   localAvatarController?.dispose();

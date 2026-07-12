@@ -1,5 +1,6 @@
 import { expect, test, type APIRequestContext, type Page, type Route } from "@playwright/test";
 import { writeFile } from "node:fs/promises";
+import { PDFDocument, rgb } from "pdf-lib";
 import { inlineSceneBundleUrl } from "./scene-bundle-fixtures.js";
 
 test.describe.configure({ mode: "serial" });
@@ -369,10 +370,17 @@ test("room documents library uploads downloads selects and deletes PDF", async (
   await expect(page.locator("#document-upload-button")).toBeEnabled({ timeout: 10000 });
   await expect(page.locator("#document-status")).toContainText(/No room documents yet|Documents ready/, { timeout: 10000 });
 
+  const pdf = await PDFDocument.create();
+  pdf.setTitle("E2E presentation");
+  const firstPage = pdf.addPage([640, 360]);
+  firstPage.drawRectangle({ x: 0, y: 0, width: 640, height: 360, color: rgb(0.9, 0.08, 0.08) });
+  const secondPage = pdf.addPage([640, 360]);
+  secondPage.drawRectangle({ x: 0, y: 0, width: 640, height: 360, color: rgb(0.08, 0.18, 0.9) });
+  const pdfBytes = Buffer.from(await pdf.save());
   await page.setInputFiles("#document-upload-input", {
     name: "meeting.pdf",
     mimeType: "application/pdf",
-    buffer: Buffer.from("%PDF-1.4\n1 0 obj\n<<>>\nendobj\n%%EOF\n")
+    buffer: pdfBytes
   });
   await expect.poll(async () => page.locator("#document-upload-input").evaluate((input: HTMLInputElement) => input.files?.[0]?.name ?? ""), {
     timeout: 5000
@@ -381,6 +389,21 @@ test("room documents library uploads downloads selects and deletes PDF", async (
   await expect(page.locator("#document-select")).toContainText("meeting.pdf", { timeout: 15000 });
 
   await clickEnabledDomButton(page, "#document-surface-button");
+  await expect(page.locator("#presentation-controls")).toBeVisible({ timeout: 15000 });
+  await expect(page.locator("#presentation-page-label")).toHaveText("Page 1 / 2", { timeout: 15000 });
+  await expect(page.locator(".presentation-thumbnail")).toHaveCount(2);
+  await expect.poll(async () => page.evaluate(async () => {
+    const debug = (window as Window & { __VRATA_DEBUG__?: { pdfPresentation?: { renderState?: string; page?: number; errorDetail?: string | null } } }).__VRATA_DEBUG__;
+    if (debug?.pdfPresentation?.renderState === "failed") {
+      return `failed:${debug.pdfPresentation.page}:${debug.pdfPresentation.errorDetail}`;
+    }
+    return `${debug?.pdfPresentation?.renderState}:${debug?.pdfPresentation?.page}`;
+  }), { timeout: 30000 }).toBe("ready:1");
+  await clickEnabledDomButton(page, "#presentation-large");
+  await expect(page.locator("#presentation-large")).toHaveAttribute("aria-pressed", "true", { timeout: 10000 });
+  await expect.poll(async () => page.evaluate(() => (window as Window & { __VRATA_DEBUG__?: { pdfPresentation?: { displayMode?: string } } }).__VRATA_DEBUG__?.pdfPresentation?.displayMode ?? ""), {
+    timeout: 10000
+  }).toBe("large");
   await expect.poll(async () => page.evaluate(() => {
     const debug = (window as Window & { __VRATA_DEBUG__?: { documents?: { selectedSurfaceId?: string | null } } }).__VRATA_DEBUG__;
     return debug?.documents?.selectedSurfaceId ?? null;
@@ -392,6 +415,7 @@ test("room documents library uploads downloads selects and deletes PDF", async (
     await completeGuestOnboarding(memberPage, "Documents Member", true);
     await expect(memberPage.locator("#documents-panel")).toBeVisible();
     await expect(memberPage.locator("#document-select")).toContainText("meeting.pdf", { timeout: 10000 });
+    await expect(memberPage.locator("#presentation-next")).toBeDisabled({ timeout: 10000 });
     await memberPage.evaluate(() => {
       const state = window as Window & {
         __VRATA_DOCUMENT_DOWNLOADS__?: Array<{ filename: string; href: string }>;
@@ -416,6 +440,25 @@ test("room documents library uploads downloads selects and deletes PDF", async (
     const downloads = await memberPage.evaluate(() => (window as Window & { __VRATA_DOCUMENT_DOWNLOADS__?: Array<{ filename: string; href: string }> }).__VRATA_DOCUMENT_DOWNLOADS__ ?? []);
     expect(downloads[0]?.filename).toBe("meeting.pdf");
     expect(downloads[0]?.href).toContain("blob:");
+
+    const memberParticipantId = await memberPage.evaluate(() => (window as Window & { __VRATA_DEBUG__?: { participantId?: string } }).__VRATA_DEBUG__?.participantId ?? "");
+    expect(memberParticipantId).not.toBe("");
+    await expect.poll(async () => page.locator("#host-participant-select").evaluate((select) => Array.from((select as HTMLSelectElement).options).map((option) => option.value)), {
+      timeout: 10000
+    }).toContain(memberParticipantId);
+    await page.locator("#host-participant-select").selectOption(memberParticipantId);
+    await clickEnabledDomButton(page, "#grant-presenter");
+    await expect(memberPage.locator("#presentation-next")).toBeEnabled({ timeout: 10000 });
+    await clickEnabledDomButton(memberPage, "#presentation-next");
+    await expect(memberPage.locator("#presentation-page-label")).toHaveText("Page 2 / 2", { timeout: 10000 });
+    await expect(page.locator("#presentation-page-label")).toHaveText("Page 2 / 2", { timeout: 10000 });
+    await expect.poll(async () => page.evaluate(() => {
+      const debug = (window as Window & { __VRATA_DEBUG__?: { pdfPresentation?: { renderState?: string; page?: number } } }).__VRATA_DEBUG__;
+      return `${debug?.pdfPresentation?.renderState}:${debug?.pdfPresentation?.page}`;
+    }), { timeout: 30000 }).toBe("ready:2");
+    await expect(memberPage.locator("#presentation-prev")).toBeEnabled();
+    await clickEnabledDomButton(page, "#revoke-presenter");
+    await expect(memberPage.locator("#presentation-prev")).toBeDisabled({ timeout: 10000 });
   } finally {
     await memberPage.close();
   }
@@ -425,12 +468,27 @@ test("room documents library uploads downloads selects and deletes PDF", async (
     await guestPage.goto(e2eRoomLink(guestInvite.inviteLink));
     await completeGuestOnboarding(guestPage, "Documents Guest", true);
     await expect(guestPage.locator("#documents-panel")).toBeHidden();
+    await expect.poll(async () => guestPage.evaluate(() => {
+      const debug = (window as Window & { __VRATA_DEBUG__?: { pdfPresentation?: { renderState?: string; page?: number; pageCount?: number; displayMode?: string } } }).__VRATA_DEBUG__;
+      return `${debug?.pdfPresentation?.renderState}:${debug?.pdfPresentation?.page}:${debug?.pdfPresentation?.pageCount}:${debug?.pdfPresentation?.displayMode}`;
+    }), { timeout: 30000 }).toBe("ready:2:2:large");
   } finally {
     await guestPage.close();
   }
 
   await clickEnabledDomButton(page, "#document-delete-button");
   await expect(page.locator("#document-select")).toContainText("No documents");
+  await expect(page.locator("#presentation-controls")).toBeHidden({ timeout: 10000 });
+  await expect.poll(async () => page.evaluate(() => {
+    const debug = (window as Window & { __VRATA_DEBUG__?: { pdfPresentation?: { documentId?: string | null } } }).__VRATA_DEBUG__;
+    return debug?.pdfPresentation?.documentId ?? null;
+  }), { timeout: 10000 }).toBeNull();
+  await clickEnabledDomButton(page, "#start-whiteboard");
+  await expect.poll(async () => page.evaluate(() => {
+    const debug = (window as Window & { __VRATA_DEBUG__?: { mediaObjects?: { surfaces?: Array<{ surfaceId?: string; activeObjectType?: string | null }> }; whiteboard?: { active?: boolean } } }).__VRATA_DEBUG__;
+    const surface = debug?.mediaObjects?.surfaces?.find((item) => item.surfaceId === "debug-main");
+    return `${surface?.activeObjectType}:${debug?.whiteboard?.active}`;
+  }), { timeout: 10000 }).toBe("whiteboard:true");
 });
 
 test("personal room mode opens owner room, restores pose, and allows invite guest", async ({ page, request, browser }) => {

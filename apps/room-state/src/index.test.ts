@@ -11,6 +11,7 @@ import {
   applyMediaObjectPatchCommand,
   applyRemoteBrowserExecutorPatchCommand,
   applyMediaObjectStopCommand,
+  applyPdfPresentationDocumentCleanup,
   applyPrivilegedRoomCommand,
   applySeatClaim,
   applySeatRelease,
@@ -270,6 +271,40 @@ test("screen-share commands mutate authoritative room state", () => {
   assert.equal(active.accepted, true);
   assert.equal(active.revision, 1);
   assert.equal((server.rooms.get("demo-room")?.mediaObjects.objects[created.objectId ?? ""]?.state as { mediaTrackSid?: string } | undefined)?.mediaTrackSid, "track-1");
+});
+
+test("PDF presentation page is retained for late join and internal document cleanup", () => {
+  const server = createRoomStateServer();
+  const presenterSocket = createSocket();
+  connectParticipant(server, "pdf-room", "presenter", presenterSocket as never, { role: "presenter" });
+  const created = applyMediaObjectCreateCommand(server, "pdf-room", "presenter", {
+    commandId: "pdf-create",
+    surfaceId: "debug-main",
+    objectType: "pdf-presentation"
+  });
+  const selected = applyMediaObjectPatchCommand(server, "pdf-room", "presenter", {
+    commandId: "pdf-select",
+    surfaceId: "debug-main",
+    objectId: created.objectId ?? "",
+    expectedRevision: 0,
+    patch: { type: "select-document", documentId: "doc-1", filename: "slides.pdf", checksum: `sha256:${"b".repeat(64)}`, pageCount: 2, inputEventId: "select-1" }
+  });
+  const pageTwo = applyMediaObjectPatchCommand(server, "pdf-room", "presenter", {
+    commandId: "pdf-page",
+    surfaceId: "debug-main",
+    objectId: created.objectId ?? "",
+    expectedRevision: selected.revision ?? 1,
+    patch: { type: "go-to-page", page: 2, inputEventId: "page-2" }
+  });
+  assert.equal(pageTwo.accepted, true);
+
+  const lateSocket = createSocket();
+  connectParticipant(server, "pdf-room", "late", lateSocket as never, { role: "guest" });
+  const lateSnapshot = [...lateSocket.sent].reverse().map((payload) => JSON.parse(payload) as { type?: string; room?: { mediaObjects?: { objects?: Record<string, { state?: { currentPage?: number } }> } } }).find((payload) => payload.type === "room_state");
+  assert.equal(lateSnapshot?.room?.mediaObjects?.objects?.[created.objectId ?? ""]?.state?.currentPage, 2);
+
+  assert.equal(applyPdfPresentationDocumentCleanup(server, "pdf-room", "doc-1"), 1);
+  assert.equal(server.rooms.get("pdf-room")?.mediaObjects.surfaces["debug-main"]?.activeObjectId, null);
 });
 
 test("whiteboard commands append and clear strokes through authoritative room state", () => {

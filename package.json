@@ -5,9 +5,10 @@
   "license": "Apache-2.0",
   "packageManager": "pnpm@10.0.0",
   "devDependencies": {
-    "@vrata/asset-pipeline": "workspace:*",
     "@playwright/test": "^1.58.2",
     "@types/node": "^22.13.10",
+    "@vrata/asset-pipeline": "workspace:*",
+    "pdf-lib": "^1.17.1",
     "playwright": "^1.58.2",
     "typescript": "^5.8.2"
   },

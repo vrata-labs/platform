@@ -1,5 +1,6 @@
 import {
   REMOTE_BROWSER_OBJECT_TYPE,
+  PDF_PRESENTATION_OBJECT_TYPE,
   SCREEN_SHARE_OBJECT_TYPE,
   MARKDOWN_BOARD_ALLOWED_COLORS,
   MARKDOWN_BOARD_MAX_NOTES,
@@ -22,6 +23,8 @@ import {
   type MarkdownBoardPatch,
   type MarkdownBoardState,
   type MarkdownBoardStickyNote,
+  type PdfPresentationPatch,
+  type PdfPresentationState,
   type RemoteBrowserErrorCode,
   type RemoteBrowserExecutorInputState,
   type RemoteBrowserMediaSourceRect,
@@ -280,7 +283,20 @@ function createRemoteBrowserState(ownerParticipantId: string, surfaceId: string)
   };
 }
 
-function createInitialMediaObjectState(stateKind: MediaObjectStateKind, ownerParticipantId: string, surfaceId: string): SurfaceTestCardState | ScreenShareObjectState | WhiteboardState | MarkdownBoardState | RemoteBrowserObjectState {
+function createPdfPresentationState(): PdfPresentationState {
+  return {
+    status: "idle",
+    documentId: null,
+    filename: null,
+    checksum: null,
+    pageCount: 0,
+    currentPage: 1,
+    displayMode: "normal",
+    lastInputEventId: null
+  };
+}
+
+function createInitialMediaObjectState(stateKind: MediaObjectStateKind, ownerParticipantId: string, surfaceId: string): SurfaceTestCardState | ScreenShareObjectState | WhiteboardState | MarkdownBoardState | RemoteBrowserObjectState | PdfPresentationState {
   if (stateKind === "screen-share") {
     return createScreenShareState(ownerParticipantId, surfaceId);
   }
@@ -292,6 +308,9 @@ function createInitialMediaObjectState(stateKind: MediaObjectStateKind, ownerPar
   }
   if (stateKind === "remote-browser") {
     return createRemoteBrowserState(ownerParticipantId, surfaceId);
+  }
+  if (stateKind === "pdf-presentation") {
+    return createPdfPresentationState();
   }
   return createSurfaceTestCardState();
 }
@@ -638,6 +657,51 @@ function getRemoteBrowserPatchPermission(input: unknown): RoomPermission | null 
     return "remote-browser.stop";
   }
   return null;
+}
+
+function isPdfPresentationPatch(input: unknown): input is PdfPresentationPatch {
+  if (!input || typeof input !== "object") {
+    return false;
+  }
+  const patch = input as Partial<PdfPresentationPatch>;
+  if (typeof patch.inputEventId !== "string" || patch.inputEventId.trim().length === 0) {
+    return false;
+  }
+  if (patch.type === "select-document") {
+    return typeof patch.documentId === "string" && patch.documentId.trim().length > 0
+      && typeof patch.filename === "string" && patch.filename.trim().length > 0 && patch.filename.length <= 160
+      && typeof patch.checksum === "string" && /^sha256:[a-f0-9]{64}$/.test(patch.checksum)
+      && Number.isInteger(patch.pageCount) && Number(patch.pageCount) > 0 && Number(patch.pageCount) <= 250;
+  }
+  if (patch.type === "go-to-page") {
+    return Number.isInteger(patch.page);
+  }
+  return patch.type === "set-display-mode" && (patch.displayMode === "normal" || patch.displayMode === "large");
+}
+
+function reducePdfPresentationState(state: PdfPresentationState, patch: PdfPresentationPatch): PdfPresentationState | null {
+  if (patch.type === "select-document") {
+    return {
+      status: "active",
+      documentId: patch.documentId.trim(),
+      filename: patch.filename.trim(),
+      checksum: patch.checksum,
+      pageCount: patch.pageCount,
+      currentPage: 1,
+      displayMode: state.displayMode,
+      lastInputEventId: patch.inputEventId
+    };
+  }
+  if (state.status !== "active" || !state.documentId) {
+    return null;
+  }
+  if (patch.type === "go-to-page") {
+    if (patch.page < 1 || patch.page > state.pageCount) {
+      return null;
+    }
+    return { ...state, currentPage: patch.page, lastInputEventId: patch.inputEventId };
+  }
+  return { ...state, displayMode: patch.displayMode, lastInputEventId: patch.inputEventId };
 }
 
 function reduceWhiteboardState(state: WhiteboardState, patch: WhiteboardPatch, participantId: string): WhiteboardState | null {
@@ -1070,7 +1134,7 @@ export function createMediaObject(state: RoomState, participantId: string, input
   }
 
   const objectState = createInitialMediaObjectState(definition.stateKind, participantId, input.surfaceId);
-  const object: MediaObjectInstance<SurfaceTestCardState | ScreenShareObjectState | WhiteboardState | MarkdownBoardState | RemoteBrowserObjectState> = {
+  const object: MediaObjectInstance<SurfaceTestCardState | ScreenShareObjectState | WhiteboardState | MarkdownBoardState | RemoteBrowserObjectState | PdfPresentationState> = {
     objectId: input.objectId,
     type: input.objectType,
     roomId: state.roomId,
@@ -1361,6 +1425,50 @@ export function patchMediaObjectState(state: RoomState, participantId: string, i
       })
     };
   }
+  if (stateKind === "pdf-presentation") {
+    permission = "document.present";
+    if (!hasRoomPermission(access.permissions, permission)) {
+      return rejectMediaObjectCommand(state, { commandId: input.commandId, role: access.role, permission, blockedReason: "missing-permission", surfaceId: input.surfaceId, objectId: input.objectId, objectType: object.type, revision: object.revision });
+    }
+    if (!isPdfPresentationPatch(input.patch)) {
+      return rejectMediaObjectCommand(state, { commandId: input.commandId, role: access.role, permission, blockedReason: "invalid-patch", surfaceId: input.surfaceId, objectId: input.objectId, objectType: object.type, revision: object.revision });
+    }
+    const currentState = object.state as PdfPresentationState;
+    if (currentState.lastInputEventId === input.patch.inputEventId) {
+      return rejectMediaObjectCommand(state, { commandId: input.commandId, role: access.role, permission, blockedReason: "duplicate-input-event", surfaceId: input.surfaceId, objectId: input.objectId, objectType: object.type, revision: object.revision });
+    }
+    const nextState = reducePdfPresentationState(currentState, input.patch);
+    if (!nextState) {
+      return rejectMediaObjectCommand(state, { commandId: input.commandId, role: access.role, permission, blockedReason: "invalid-patch", surfaceId: input.surfaceId, objectId: input.objectId, objectType: object.type, revision: object.revision });
+    }
+    const nextObject: MediaObjectInstance<PdfPresentationState> = {
+      ...object,
+      state: nextState,
+      status: "active",
+      revision: object.revision + 1,
+      updatedAtMs: input.nowMs
+    };
+    return {
+      room: {
+        ...state,
+        mediaObjects: {
+          surfaces: mediaObjects.surfaces,
+          objects: { ...mediaObjects.objects, [input.objectId]: nextObject }
+        }
+      },
+      result: createMediaObjectCommandResult({
+        accepted: true,
+        commandId: input.commandId,
+        role: access.role,
+        permission,
+        blockedReason: null,
+        surfaceId: input.surfaceId,
+        objectId: input.objectId,
+        objectType: object.type,
+        revision: nextObject.revision
+      })
+    };
+  }
   permission = "surface.input";
   if (!hasRoomPermission(access.permissions, permission)) {
     return rejectMediaObjectCommand(state, { commandId: input.commandId, role: access.role, permission, blockedReason: "missing-permission", surfaceId: input.surfaceId, objectId: input.objectId, objectType: object.type, revision: object.revision });
@@ -1556,6 +1664,28 @@ export function leaveRoom(state: RoomState, participantId: string): RoomState {
     participants: state.participants.filter((item) => item.participantId !== participantId),
     seatOccupancy: nextSeatOccupancy,
     mediaObjects: mediaObjectsChanged ? { surfaces: nextSurfaces, objects: nextObjects } : state.mediaObjects
+  };
+}
+
+export function removePdfPresentationDocument(state: RoomState, documentId: string): { room: RoomState; removedCount: number } {
+  const mediaObjects = ensureMediaObjectsState(state);
+  const nextObjects = { ...mediaObjects.objects };
+  const nextSurfaces = { ...mediaObjects.surfaces };
+  let removedCount = 0;
+  for (const [objectId, object] of Object.entries(mediaObjects.objects)) {
+    if (object.type !== PDF_PRESENTATION_OBJECT_TYPE || (object.state as PdfPresentationState).documentId !== documentId) {
+      continue;
+    }
+    delete nextObjects[objectId];
+    const surface = nextSurfaces[object.surfaceId];
+    if (surface?.activeObjectId === objectId) {
+      nextSurfaces[object.surfaceId] = { ...surface, activeObjectId: null };
+    }
+    removedCount += 1;
+  }
+  return {
+    room: removedCount > 0 ? { ...state, mediaObjects: { surfaces: nextSurfaces, objects: nextObjects } } : state,
+    removedCount
   };
 }
 

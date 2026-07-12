@@ -1,10 +1,12 @@
 import {
   REMOTE_BROWSER_OBJECT_TYPE,
+  PDF_PRESENTATION_OBJECT_TYPE,
   SCREEN_SHARE_OBJECT_TYPE,
   MARKDOWN_BOARD_OBJECT_TYPE,
   WHITEBOARD_OBJECT_TYPE,
   type MediaObjectInstance,
   type MarkdownBoardState,
+  type PdfPresentationState,
   type RemoteBrowserObjectState,
   type RoomMediaObjectsState,
   type ScreenShareObjectState,
@@ -83,6 +85,23 @@ export function activeRemoteBrowserObjectForSurface(mediaObjects: RoomMediaObjec
     return null;
   }
   return object as MediaObjectInstance<RemoteBrowserObjectState>;
+}
+
+export function isPdfPresentationState(state: unknown): state is PdfPresentationState {
+  return Boolean(state)
+    && typeof state === "object"
+    && ((state as { status?: unknown }).status === "idle" || (state as { status?: unknown }).status === "active")
+    && typeof (state as { pageCount?: unknown }).pageCount === "number"
+    && typeof (state as { currentPage?: unknown }).currentPage === "number"
+    && ((state as { displayMode?: unknown }).displayMode === "normal" || (state as { displayMode?: unknown }).displayMode === "large");
+}
+
+export function activePdfPresentationObjectForSurface(mediaObjects: RoomMediaObjectsState | null, surfaceId: string): MediaObjectInstance<PdfPresentationState> | null {
+  const object = activeMediaObjectForSurface(mediaObjects, surfaceId);
+  if (!object || object.type !== PDF_PRESENTATION_OBJECT_TYPE || !isPdfPresentationState(object.state)) {
+    return null;
+  }
+  return object as MediaObjectInstance<PdfPresentationState>;
 }
 
 function isMockRemoteBrowserTrackSid(trackSid: string): boolean {

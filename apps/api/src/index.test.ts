@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { PDFDocument } from "pdf-lib";
 
 import { getRoomPermissions, type RoomRole } from "@vrata/shared-types";
 import { signRoomSessionToken, verifyRoomSessionToken } from "@vrata/shared-types/session-token";
@@ -1011,7 +1012,20 @@ test("room documents API uploads lists downloads selects and soft-deletes with p
     assert.equal(unsupportedResponse.status, 400);
     assert.equal(((await unsupportedResponse.json()) as { error?: string }).error, "unsupported_document_mime");
 
-    const pdfBytes = Buffer.from("%PDF-1.4\n1 0 obj\n<<>>\nendobj\n%%EOF\n");
+    const corruptBody = await createMultipartDocumentBody({ filename: "corrupt.pdf", contentType: "application/pdf", body: Buffer.from("%PDF-1.4\nnot-a-page-tree") });
+    const corruptResponse = await fetch(`${baseUrl}/api/rooms/documents-room/documents`, {
+      method: "POST",
+      headers: { "content-type": corruptBody.contentType, "authorization": `Bearer ${hostToken}` },
+      body: new Uint8Array(corruptBody.body)
+    });
+    assert.equal(corruptResponse.status, 422);
+    assert.equal(((await corruptResponse.json()) as { error?: string }).error, "corrupt_pdf");
+
+    const pdf = await PDFDocument.create();
+    pdf.setTitle("Meeting slides");
+    pdf.addPage([640, 360]);
+    pdf.addPage([640, 360]);
+    const pdfBytes = Buffer.from(await pdf.save());
     const uploadBody = await createMultipartDocumentBody({ filename: "meeting.pdf", contentType: "application/pdf", body: pdfBytes });
     const uploadResponse = await fetch(`${baseUrl}/api/rooms/documents-room/documents`, {
       method: "POST",
@@ -1019,10 +1033,23 @@ test("room documents API uploads lists downloads selects and soft-deletes with p
       body: new Uint8Array(uploadBody.body)
     });
     assert.equal(uploadResponse.status, 201);
-    const uploaded = (await uploadResponse.json()) as { document: { documentId: string; filename: string; contentType: string; sizeBytes: number; downloadUrl: string } };
+    const uploaded = (await uploadResponse.json()) as { document: { documentId: string; filename: string; contentType: string; sizeBytes: number; downloadUrl: string; presentationUrl: string; metadata?: { kind?: string; pageCount?: number; title?: string | null } } };
     assert.equal(uploaded.document.filename, "meeting.pdf");
     assert.equal(uploaded.document.contentType, "application/pdf");
     assert.equal(uploaded.document.sizeBytes, pdfBytes.byteLength);
+    assert.deepEqual(uploaded.document.metadata, {
+      kind: "pdf",
+      pageCount: 2,
+      title: "Meeting slides",
+      author: null,
+      firstPageWidthPt: 640,
+      firstPageHeightPt: 360
+    });
+
+    const presentationBeforeSelection = await fetch(`${baseUrl}${uploaded.document.presentationUrl}`, {
+      headers: { "authorization": `Bearer ${guestToken}` }
+    });
+    assert.equal(presentationBeforeSelection.status, 404);
 
     const listResponse = await fetch(`${baseUrl}/api/rooms/documents-room/documents`, {
       headers: { "authorization": `Bearer ${memberToken}` }
@@ -1044,6 +1071,14 @@ test("room documents API uploads lists downloads selects and soft-deletes with p
     assert.equal(memberDownload.status, 200);
     assert.equal(Buffer.from(await memberDownload.arrayBuffer()).toString("utf8"), pdfBytes.toString("utf8"));
 
+    const memberSurfaceDenied = await fetch(`${baseUrl}/api/rooms/documents-room/documents/${uploaded.document.documentId}/surface`, {
+      method: "POST",
+      headers: { ...jsonHeaders, "authorization": `Bearer ${memberToken}` },
+      body: JSON.stringify({ surfaceId: "debug-main" })
+    });
+    assert.equal(memberSurfaceDenied.status, 403);
+    assert.equal(((await memberSurfaceDenied.json()) as { permission?: string }).permission, "document.present");
+
     const surfaceResponse = await fetch(`${baseUrl}/api/rooms/documents-room/documents/${uploaded.document.documentId}/surface`, {
       method: "POST",
       headers: { ...jsonHeaders, "authorization": `Bearer ${hostToken}` },
@@ -1051,6 +1086,13 @@ test("room documents API uploads lists downloads selects and soft-deletes with p
     });
     assert.equal(surfaceResponse.status, 200);
     assert.equal(((await surfaceResponse.json()) as { document: { linkedSurfaceId?: string | null } }).document.linkedSurfaceId, "debug-main");
+
+    const guestPresentation = await fetch(`${baseUrl}${uploaded.document.presentationUrl}`, {
+      headers: { "authorization": `Bearer ${guestToken}` }
+    });
+    assert.equal(guestPresentation.status, 200);
+    assert.equal(guestPresentation.headers.get("content-disposition")?.startsWith("inline;"), true);
+    assert.equal(Buffer.compare(Buffer.from(await guestPresentation.arrayBuffer()), pdfBytes), 0);
 
     const deleteDenied = await fetch(`${baseUrl}/api/rooms/documents-room/documents/${uploaded.document.documentId}`, {
       method: "DELETE",
@@ -1063,6 +1105,7 @@ test("room documents API uploads lists downloads selects and soft-deletes with p
       headers: { "authorization": `Bearer ${hostToken}` }
     });
     assert.equal(deleteResponse.status, 200);
+    await assert.rejects(readFile(join(process.env.DOCUMENT_LOCAL_UPLOAD_ROOT!, "documents", "demo-tenant", "documents-room", uploaded.document.documentId, "meeting.pdf")));
 
     const listAfterDelete = await fetch(`${baseUrl}/api/rooms/documents-room/documents`, {
       headers: { "authorization": `Bearer ${memberToken}` }
@@ -1075,7 +1118,10 @@ test("room documents API uploads lists downloads selects and soft-deletes with p
     const metricsText = await metricsResponse.text();
     assert.match(metricsText, /vrata_documents_uploaded_total\{mime="application\/pdf",result="success"\} 1/);
     assert.match(metricsText, /vrata_document_downloads_total 1/);
-    assert.match(metricsText, /vrata_document_permission_denied_total 2/);
+    assert.match(metricsText, /vrata_document_permission_denied_total 3/);
+    assert.match(metricsText, /vrata_pdf_validation_failures_total\{reason="corrupt_pdf"\} 1/);
+    assert.match(metricsText, /vrata_document_presentation_content_total\{result="success"\} 1/);
+    assert.match(metricsText, /vrata_document_blob_deletes_total\{result="success"\} 1/);
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     await rm(process.env.DOCUMENT_LOCAL_UPLOAD_ROOT!, { recursive: true, force: true });

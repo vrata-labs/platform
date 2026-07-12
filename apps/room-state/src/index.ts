@@ -4,6 +4,7 @@ import { randomUUID, timingSafeEqual } from "node:crypto";
 import { WebSocketServer, type WebSocket } from "ws";
 import {
   REMOTE_BROWSER_OBJECT_TYPE,
+  PDF_PRESENTATION_OBJECT_TYPE,
   getRoomPermissions,
   hasRoomPermission,
   parseRoomRole,
@@ -25,6 +26,7 @@ import {
   patchMediaObjectState,
   patchRemoteBrowserExecutorState,
   releaseSeat,
+  removePdfPresentationDocument,
   serializeRoomState,
   setSurfaceMediaAudioEnabled,
   stopMediaObject,
@@ -69,7 +71,10 @@ const requestIds = new WeakMap<IncomingMessage, string>();
 const metrics = {
   requestsTotal: 0,
   requestFailuresTotal: 0,
-  socketDisconnectsTotal: 0
+  socketDisconnectsTotal: 0,
+  presentationsStartedTotal: 0,
+  presentationPageChangesTotal: 0,
+  presentationPermissionDeniedTotal: 0
 };
 
 export interface SeatClaimResultPayload {
@@ -93,6 +98,11 @@ interface RemoteBrowserExecutorPatchRequest {
   objectId?: string;
   commandId?: string;
   patch?: unknown;
+}
+
+interface PdfPresentationCleanupRequest {
+  roomId?: string;
+  documentId?: string;
 }
 
 function logEvent(event: Record<string, unknown>): void {
@@ -144,8 +154,12 @@ function formatMetricLine(name: string, value: number, labels?: Record<string, s
 
 function roomStateMetricsText(authority: RoomStateServer): string {
   let clientCount = 0;
+  let activePresentations = 0;
   for (const clients of authority.clients.values()) {
     clientCount += clients.size;
+  }
+  for (const room of authority.rooms.values()) {
+    activePresentations += Object.values(room.mediaObjects.objects).filter((object) => object.type === PDF_PRESENTATION_OBJECT_TYPE).length;
   }
   return `${[
     "# HELP vrata_room_state_requests_total Total room-state HTTP requests handled by this process.",
@@ -162,7 +176,19 @@ function roomStateMetricsText(authority: RoomStateServer): string {
     formatMetricLine("vrata_room_state_active_participants", clientCount),
     "# HELP vrata_room_state_disconnects_total Websocket disconnects observed by room-state.",
     "# TYPE vrata_room_state_disconnects_total counter",
-    formatMetricLine("vrata_room_state_disconnects_total", metrics.socketDisconnectsTotal)
+    formatMetricLine("vrata_room_state_disconnects_total", metrics.socketDisconnectsTotal),
+    "# HELP vrata_presentations_started_total Accepted PDF presentation object creations.",
+    "# TYPE vrata_presentations_started_total counter",
+    formatMetricLine("vrata_presentations_started_total", metrics.presentationsStartedTotal),
+    "# HELP vrata_presentation_page_changes_total Accepted PDF presentation page changes.",
+    "# TYPE vrata_presentation_page_changes_total counter",
+    formatMetricLine("vrata_presentation_page_changes_total", metrics.presentationPageChangesTotal),
+    "# HELP vrata_presentation_permission_denied_total PDF presentation commands denied by permissions.",
+    "# TYPE vrata_presentation_permission_denied_total counter",
+    formatMetricLine("vrata_presentation_permission_denied_total", metrics.presentationPermissionDeniedTotal),
+    "# HELP vrata_pdf_presentations_active Active PDF presentation objects.",
+    "# TYPE vrata_pdf_presentations_active gauge",
+    formatMetricLine("vrata_pdf_presentations_active", activePresentations)
   ].join("\n")}\n`;
 }
 
@@ -491,6 +517,10 @@ export function applyMediaObjectCreateCommand(server: RoomStateServer, roomId: s
     nowMs: Date.now()
   });
   server.rooms.set(roomId, result.room);
+  if (input.objectType === PDF_PRESENTATION_OBJECT_TYPE) {
+    if (result.result.accepted) metrics.presentationsStartedTotal += 1;
+    if (result.result.blockedReason === "missing-permission") metrics.presentationPermissionDeniedTotal += 1;
+  }
   if (result.result.accepted) {
     broadcastRoom(server, roomId);
   }
@@ -528,6 +558,7 @@ export function applyMediaObjectPatchCommand(server: RoomStateServer, roomId: st
   patch?: unknown;
 }): MediaObjectCommandResultPayload {
   const room = ensureRoom(server, roomId);
+  const objectType = room.mediaObjects.objects[input.objectId?.trim() || ""]?.type;
   const result = patchMediaObjectState(room, participantId, {
     commandId: input.commandId?.trim() || randomUUID(),
     surfaceId: input.surfaceId?.trim() || "debug-main",
@@ -537,6 +568,10 @@ export function applyMediaObjectPatchCommand(server: RoomStateServer, roomId: st
     nowMs: Date.now()
   });
   server.rooms.set(roomId, result.room);
+  if (objectType === PDF_PRESENTATION_OBJECT_TYPE) {
+    if (result.result.accepted && (input.patch as { type?: unknown } | undefined)?.type === "go-to-page") metrics.presentationPageChangesTotal += 1;
+    if (result.result.blockedReason === "missing-permission") metrics.presentationPermissionDeniedTotal += 1;
+  }
   if (result.result.accepted) {
     if (result.result.objectType === REMOTE_BROWSER_OBJECT_TYPE) {
       forwardRemoteBrowserPatch(server, roomId, result.result.objectId, input.patch);
@@ -544,6 +579,19 @@ export function applyMediaObjectPatchCommand(server: RoomStateServer, roomId: st
     broadcastRoom(server, roomId);
   }
   return result.result;
+}
+
+export function applyPdfPresentationDocumentCleanup(server: RoomStateServer, roomId: string, documentId: string): number {
+  const room = server.rooms.get(roomId);
+  if (!room) {
+    return 0;
+  }
+  const result = removePdfPresentationDocument(room, documentId);
+  server.rooms.set(roomId, result.room);
+  if (result.removedCount > 0) {
+    broadcastRoom(server, roomId);
+  }
+  return result.removedCount;
 }
 
 export function applyRemoteBrowserExecutorPatchCommand(server: RoomStateServer, input: {
@@ -789,6 +837,23 @@ export function startRoomStateService(port = Number.parseInt(process.env.ROOM_ST
       }
       if (request.method === "GET" && url.pathname === "/metrics") {
         text(response, 200, roomStateMetricsText(authority));
+        return;
+      }
+      const pdfPresentationCleanupMatch = url.pathname.match(/^\/api\/internal\/rooms\/([^/]+)\/documents\/([^/]+)\/presentation$/);
+      if (request.method === "DELETE" && pdfPresentationCleanupMatch) {
+        if (!isAuthorizedInternalRequest(request)) {
+          json(response, 403, { error: "forbidden" });
+          return;
+        }
+        const payload = await parseBody<PdfPresentationCleanupRequest>(request);
+        const roomId = decodeURIComponent(pdfPresentationCleanupMatch[1] ?? payload?.roomId ?? "");
+        const documentId = decodeURIComponent(pdfPresentationCleanupMatch[2] ?? payload?.documentId ?? "");
+        if (!roomId || !documentId) {
+          json(response, 400, { error: "invalid_pdf_presentation_cleanup" });
+          return;
+        }
+        const removedCount = applyPdfPresentationDocumentCleanup(authority, roomId, documentId);
+        json(response, 200, { removedCount });
         return;
       }
       const remoteBrowserSessionMatch = url.pathname.match(/^\/api\/internal\/remote-browser\/sessions\/([^/]+)$/);
