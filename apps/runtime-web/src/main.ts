@@ -751,6 +751,7 @@ let mediaRoomIdleDisconnectTimer: number | null = null;
 let roomStateClient: RoomStateClient | null = null;
 let roomStateAccessToken = "";
 let roomStateConnected = false;
+let roomStateConnectionGeneration = 0;
 let latestRealtimeParticipants: PresenceState[] = [];
 let latestFallbackParticipants: PresenceState[] = [];
 const retainedDisplayTextures = new Set<THREE.Texture>();
@@ -1581,6 +1582,9 @@ function applyAccessDebug(access: NonNullable<RuntimeSessionControlResponse["acc
     lastSurfaceCommandAccepted: previousLastSurfaceCommandAccepted
   };
   if (previousRole !== access.role && debugState.roomStateUrl) {
+    roomStateConnected = false;
+    debugState.roomStateConnected = false;
+    mediaSurfaceCommands.rejectAll("room_state_reconnecting");
     roomStateClient?.close();
     roomStateClient = null;
     connectRoomStateWithRetry(debugState.roomStateUrl);
@@ -5022,7 +5026,7 @@ function canDeleteDocuments(): boolean {
 }
 
 function canPresentDocuments(): boolean {
-  return canViewDocuments() && hasRoomPermission(debugState.access.permissions, "document.present");
+  return canViewDocuments() && roomStateConnected && hasRoomPermission(debugState.access.permissions, "document.present");
 }
 
 function selectedDocument(): RuntimeDocumentRecord | null {
@@ -6474,8 +6478,11 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
     return;
   }
 
+  const connectionGeneration = ++roomStateConnectionGeneration;
+  const isCurrentConnection = () => connectionGeneration === roomStateConnectionGeneration;
   roomStateClient = connectRoomState(roomStateUrl, roomId, participantId, {
     onOpen: () => {
+      if (!isCurrentConnection()) return;
       const reopened = debugState.avatarPoseTransport.lastPoseSentAtMs > 0;
       roomStateConnected = true;
       debugState.roomStateConnected = true;
@@ -6516,12 +6523,14 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
       void syncPresence(latestMode, Boolean(livekitRoom && microphoneEnabled));
     },
     onRoomState: (snapshot: RoomStateSnapshot) => {
+      if (!isCurrentConnection()) return;
       roomStateConnected = true;
       debugState.roomStateConnected = true;
       debugState.roomStateMode = "colyseus";
       handleRoomSnapshot(snapshot);
     },
     onAvatarReliableState: (state) => {
+      if (!isCurrentConnection()) return;
       remoteAvatarRuntime.ingestReliableState({
         participantId: state.participantId,
         avatarId: state.avatarId,
@@ -6533,9 +6542,11 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
       }, debugState);
     },
     onAvatarPoseFrame: (remoteParticipantId, frame) => {
+      if (!isCurrentConnection()) return;
       remoteAvatarRuntime.ingestPoseFrame(remoteParticipantId, frame, debugState);
     },
     onSeatClaimResult: (result) => {
+      if (!isCurrentConnection()) return;
       if (result.accepted) {
         roomSeatOccupancy = applyAcceptedSeatClaimToOccupancy(roomSeatOccupancy, { result, participantId });
         clearSeatReclaimRetry();
@@ -6549,6 +6560,7 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
       setStatus(result.occupantId ? `Seat occupied by ${result.occupantId}` : "Seat unavailable");
     },
     onAccessDenied: (result) => {
+      if (!isCurrentConnection()) return;
       debugState.access.lastDeniedPermission = result.permission;
       debugState.access.lastSurfaceCommandAccepted = false;
       debugState.mediaObjects.lastCommand = result as SurfaceCommandResult;
@@ -6559,6 +6571,7 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
       }
     },
     onSurfaceCommandResult: (result) => {
+      if (!isCurrentConnection()) return;
       debugState.access.lastDeniedPermission = null;
       debugState.access.lastSurfaceCommandAccepted = result.accepted;
       debugState.mediaObjects.lastCommand = result;
@@ -6566,6 +6579,7 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
       mediaSurfaceCommands.settle(result);
     },
     onError: (error: unknown) => {
+      if (!isCurrentConnection()) return;
       if (sessionControlBlocked) {
         return;
       }
@@ -6584,6 +6598,7 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
       void reportDiagnostics(issue.diagnosticsNote);
     },
     onClose: () => {
+      if (!isCurrentConnection()) return;
       if (sessionControlBlocked) {
         return;
       }
