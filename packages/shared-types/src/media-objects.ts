@@ -10,6 +10,8 @@ export const WHITEBOARD_OBJECT_TYPE = "whiteboard";
 export const MARKDOWN_BOARD_OBJECT_TYPE = "markdown-board";
 export const REMOTE_BROWSER_OBJECT_TYPE = "remote-browser";
 export const PDF_PRESENTATION_OBJECT_TYPE = "pdf-presentation";
+export const IMAGE_VIEWER_OBJECT_TYPE = "image-viewer";
+export const VIDEO_PLAYER_OBJECT_TYPE = "video-player";
 export const EXTENSION_TEST_CARD_TYPE = "extension-test-card";
 export const MISSING_CAPABILITY_EXTENSION_CARD_TYPE = "missing-capability-extension-card";
 export const DISABLED_EXTENSION_CARD_TYPE = "disabled-extension-card";
@@ -33,7 +35,7 @@ export type MediaExtensionCapability =
   | "media.subscribe"
   | "remote.executor";
 
-export type MediaObjectStateKind = "surface-test-card" | "screen-share" | "whiteboard" | "markdown-board" | "remote-browser" | "pdf-presentation";
+export type MediaObjectStateKind = "surface-test-card" | "screen-share" | "whiteboard" | "markdown-board" | "remote-browser" | "pdf-presentation" | "image-viewer" | "video-player";
 
 export interface MediaObjectDefinition {
   objectType: MediaObjectType;
@@ -192,6 +194,40 @@ export const BUILTIN_MEDIA_EXTENSION_MANIFESTS: VrataMediaExtensionManifest[] = 
       objectType: PDF_PRESENTATION_OBJECT_TYPE,
       displayName: "PDF Presentation",
       stateKind: "pdf-presentation",
+      requiredCapabilities: ["surface.render", "room.state.read", "room.state.write"],
+      requiredPermissions: ["document.present"],
+      supportedSurfaceKinds: ["wall", "table", "laptop", "floating", "custom"]
+    }]
+  },
+  {
+    id: "vrata.image-viewer",
+    version: "0.1.0",
+    displayName: "Image Viewer",
+    requiredCapabilities: ["surface.render", "room.state.read", "room.state.write"],
+    requiredPermissions: ["document.present"],
+    compatibility: VRATA_RUNTIME_EXTENSION_COMPATIBILITY,
+    entry: "internal:image-viewer",
+    objectTypes: [{
+      objectType: IMAGE_VIEWER_OBJECT_TYPE,
+      displayName: "Image Viewer",
+      stateKind: "image-viewer",
+      requiredCapabilities: ["surface.render", "room.state.read", "room.state.write"],
+      requiredPermissions: ["document.present"],
+      supportedSurfaceKinds: ["wall", "table", "laptop", "floating", "custom"]
+    }]
+  },
+  {
+    id: "vrata.video-player",
+    version: "0.1.0",
+    displayName: "Video Player",
+    requiredCapabilities: ["surface.render", "room.state.read", "room.state.write"],
+    requiredPermissions: ["document.present"],
+    compatibility: VRATA_RUNTIME_EXTENSION_COMPATIBILITY,
+    entry: "internal:video-player",
+    objectTypes: [{
+      objectType: VIDEO_PLAYER_OBJECT_TYPE,
+      displayName: "Video Player",
+      stateKind: "video-player",
       requiredCapabilities: ["surface.render", "room.state.read", "room.state.write"],
       requiredPermissions: ["document.present"],
       supportedSurfaceKinds: ["wall", "table", "laptop", "floating", "custom"]
@@ -578,6 +614,37 @@ export interface PdfPresentationState {
   lastInputEventId: string | null;
 }
 
+export type MediaFitMode = "contain" | "cover";
+
+export interface ImageViewerState {
+  status: "idle" | "active";
+  documentId: string | null;
+  filename: string | null;
+  checksum: string | null;
+  contentType: "image/png" | "image/jpeg" | "image/webp" | null;
+  widthPx: number;
+  heightPx: number;
+  fitMode: MediaFitMode;
+  lastInputEventId: string | null;
+}
+
+export interface VideoPlayerState {
+  status: "idle" | "active";
+  documentId: string | null;
+  filename: string | null;
+  checksum: string | null;
+  contentType: "video/mp4" | "video/webm" | null;
+  widthPx: number;
+  heightPx: number;
+  durationMs: number;
+  playbackState: "paused" | "playing";
+  positionMs: number;
+  anchorServerTimeMs: number | null;
+  loop: boolean;
+  fitMode: MediaFitMode;
+  lastInputEventId: string | null;
+}
+
 export type SurfaceTestCardPatch = {
   type: "increment-click-count";
   inputEventId: string;
@@ -618,6 +685,18 @@ export type PdfPresentationPatch =
   | { type: "select-document"; documentId: string; filename: string; checksum: string; pageCount: number; inputEventId: string }
   | { type: "go-to-page"; page: number; inputEventId: string }
   | { type: "set-display-mode"; displayMode: PdfPresentationDisplayMode; inputEventId: string };
+
+export type ImageViewerPatch =
+  | { type: "select-image"; documentId: string; filename: string; checksum: string; contentType: "image/png" | "image/jpeg" | "image/webp"; widthPx: number; heightPx: number; inputEventId: string }
+  | { type: "set-fit-mode"; fitMode: MediaFitMode; inputEventId: string };
+
+export type VideoPlayerPatch =
+  | { type: "select-video"; documentId: string; filename: string; checksum: string; contentType: "video/mp4" | "video/webm"; widthPx: number; heightPx: number; durationMs: number; inputEventId: string }
+  | { type: "play"; inputEventId: string }
+  | { type: "pause"; inputEventId: string }
+  | { type: "seek"; positionMs: number; inputEventId: string }
+  | { type: "set-loop"; loop: boolean; inputEventId: string }
+  | { type: "set-fit-mode"; fitMode: MediaFitMode; inputEventId: string };
 
 export type MediaObjectCommandBlockedReason =
   | "missing-permission"

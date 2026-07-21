@@ -124,12 +124,17 @@ export interface RoomDocumentRecord {
 }
 
 export interface RoomDocumentMetadata {
-  kind?: "pdf";
+  kind?: "pdf" | "image" | "video";
   pageCount?: number;
   title?: string | null;
   author?: string | null;
   firstPageWidthPt?: number;
   firstPageHeightPt?: number;
+  widthPx?: number;
+  heightPx?: number;
+  durationMs?: number;
+  container?: "mp4" | "webm";
+  metadataSource?: "server" | "browser";
 }
 
 export interface RoomSessionControlState {

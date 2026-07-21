@@ -8,6 +8,8 @@ import {
   MARKDOWN_BOARD_OBJECT_TYPE,
   MISSING_CAPABILITY_EXTENSION_CARD_TYPE,
   PDF_PRESENTATION_OBJECT_TYPE,
+  IMAGE_VIEWER_OBJECT_TYPE,
+  VIDEO_PLAYER_OBJECT_TYPE,
   REMOTE_BROWSER_OBJECT_TYPE,
   SCREEN_SHARE_OBJECT_TYPE,
   SURFACE_TEST_CARD_TYPE,
@@ -23,6 +25,10 @@ import {
   type MarkdownBoardState,
   type PdfPresentationPatch,
   type PdfPresentationState,
+  type ImageViewerPatch,
+  type ImageViewerState,
+  type VideoPlayerPatch,
+  type VideoPlayerState,
   type RemoteBrowserErrorCode,
   type RemoteBrowserExecutorInputState,
   type RemoteBrowserObjectState,
@@ -41,7 +47,8 @@ import {
 } from "@vrata/shared-types";
 
 import { appendBrandingSuffix, applyRoomShellBootState, renderSceneAttributions } from "./boot-session.js";
-import { RuntimeAccessError, bootRuntime, deleteRoomDocument, downloadRoomDocument, exportRoomNote, exportRoomNotesArchive, fetchRoomDocumentPresentation, fetchRoomNote, fetchRoomSessionControl, fetchRuntimeSpaces, grantRoomPresenter, listPresence, listRoomDocuments, listRoomNoteVersions, openPersonalRoom, planVoiceSession, removePresence, removeRoomParticipant, resolveCurrentSpace, resolveJoinMode, restoreRoomNoteVersion, revokeRoomPresenter, runRoomSessionControlAction, savePersonalRoomState, saveRoomNote, selectRoomDocumentSurface, transferRoomHost, uploadRoomDocument, upsertPresence, type PresenceState, type RuntimeDocumentRecord, type RuntimeNoteScope, type RuntimeNoteVersionRecord, type RuntimePersonalState, type RuntimeSessionControlResponse, type RuntimeSpaceOption } from "./index.js";
+import { RuntimeAccessError, bootRuntime, deleteRoomDocument, downloadRoomDocument, exportRoomNote, exportRoomNotesArchive, fetchRoomDocumentMediaContent, fetchRoomDocumentPresentation, fetchRoomNote, fetchRoomSessionControl, fetchRuntimeSpaces, grantRoomPresenter, listPresence, listRoomDocuments, listRoomNoteVersions, openPersonalRoom, planVoiceSession, removePresence, removeRoomParticipant, resolveCurrentSpace, resolveJoinMode, restoreRoomNoteVersion, revokeRoomPresenter, runRoomSessionControlAction, savePersonalRoomState, saveRoomNote, selectRoomDocumentSurface, transferRoomHost, uploadRoomDocument, upsertPresence, type PresenceState, type RuntimeDocumentRecord, type RuntimeNoteScope, type RuntimeNoteVersionRecord, type RuntimePersonalState, type RuntimeSessionControlResponse, type RuntimeSpaceOption } from "./index.js";
+import { probeDocumentMedia } from "./document-media-probe.js";
 import { formatClientCompatibilityStatus, resolveClientCompatibility, type ClientCompatibilitySummary } from "./client-capabilities.js";
 import { formatGuestCompatibilityWarnings, formatGuestControlsHint, shouldShowGuestOnboarding, validateGuestDisplayName } from "./guest-onboarding.js";
 import { createMotionTrack, pushMotionSample, sampleMotion, type MotionTrack } from "./motion-state.js";
@@ -69,6 +76,8 @@ import {
   activeMediaObjectIdForSurface as selectActiveMediaObjectIdForSurface,
   activeMarkdownBoardObjectForSurface as selectActiveMarkdownBoardObjectForSurface,
   activePdfPresentationObjectForSurface as selectActivePdfPresentationObjectForSurface,
+  activeImageViewerObjectForSurface as selectActiveImageViewerObjectForSurface,
+  activeVideoPlayerObjectForSurface as selectActiveVideoPlayerObjectForSurface,
   activeRemoteBrowserObjectForSurface as selectActiveRemoteBrowserObjectForSurface,
   activeScreenShareObjectForSurface as selectActiveScreenShareObjectForSurface,
   activeWhiteboardObjectForSurface as selectActiveWhiteboardObjectForSurface,
@@ -80,6 +89,8 @@ import {
 import { routeMediaObjectSurfaceInput } from "./media/media-object-router.js";
 import { createMarkdownBoardObjectRuntime } from "./media/markdown-board-object.js";
 import { createPdfPresentationObjectRuntime } from "./media/pdf-presentation-object.js";
+import { createImageViewerObjectRuntime } from "./media/image-viewer-object.js";
+import { createVideoPlayerObjectRuntime } from "./media/video-player-object.js";
 import { createRemoteBrowserObjectRuntime } from "./media/remote-browser-object.js";
 import {
   createRemoteBrowserVrKeyboardView,
@@ -323,6 +334,16 @@ const presentationLargeButton = mustElement<HTMLButtonElement>("#presentation-la
 const presentationStopButton = mustElement<HTMLButtonElement>("#presentation-stop");
 const presentationThumbnailsEl = mustElement<HTMLDivElement>("#presentation-thumbnails");
 const presentationStatusEl = mustElement<HTMLDivElement>("#presentation-status");
+const documentMediaControlsEl = mustElement<HTMLDivElement>("#document-media-controls");
+const documentMediaTitleEl = mustElement<HTMLDivElement>("#document-media-title");
+const documentMediaPlayButton = mustElement<HTMLButtonElement>("#document-media-play");
+const documentMediaFitButton = mustElement<HTMLButtonElement>("#document-media-fit");
+const documentMediaLoopLabel = mustElement<HTMLLabelElement>("#document-media-loop-label");
+const documentMediaLoopInput = mustElement<HTMLInputElement>("#document-media-loop");
+const documentMediaStopButton = mustElement<HTMLButtonElement>("#document-media-stop");
+const documentMediaSeekInput = mustElement<HTMLInputElement>("#document-media-seek");
+const documentMediaTimeEl = mustElement<HTMLDivElement>("#document-media-time");
+const documentMediaStatusEl = mustElement<HTMLDivElement>("#document-media-status");
 const sceneHost = mustElement<HTMLDivElement>("#scene");
 const mediaSurfaceSelect = mustElement<HTMLSelectElement>("#media-surface-select");
 const joinAudioButton = mustElement<HTMLButtonElement>("#join-audio");
@@ -811,6 +832,9 @@ const whiteboardRuntimes = new Map<string, ReturnType<typeof createWhiteboardObj
 const markdownBoardRuntimes = new Map<string, ReturnType<typeof createMarkdownBoardObjectRuntime>>();
 const remoteBrowserRuntimes = new Map<string, ReturnType<typeof createRemoteBrowserObjectRuntime>>();
 const pdfPresentationRuntimes = new Map<string, ReturnType<typeof createPdfPresentationObjectRuntime>>();
+const imageViewerRuntimes = new Map<string, ReturnType<typeof createImageViewerObjectRuntime>>();
+const videoPlayerRuntimes = new Map<string, ReturnType<typeof createVideoPlayerObjectRuntime>>();
+let roomStateServerOffsetMs = 0;
 
 function runtimeMediaSurfaceDefinitionFromScene(surface: SceneBundleMediaSurface): RuntimeMediaSurfaceDefinition {
   const fallback = DEFAULT_RUNTIME_MEDIA_SURFACES.find((definition) => definition.surfaceId === surface.surfaceId);
@@ -854,6 +878,10 @@ function closeMediaSurfaceRuntimes(surfaceId: string): void {
   remoteBrowserRuntimes.delete(surfaceId);
   void pdfPresentationRuntimes.get(surfaceId)?.close();
   pdfPresentationRuntimes.delete(surfaceId);
+  imageViewerRuntimes.get(surfaceId)?.close();
+  imageViewerRuntimes.delete(surfaceId);
+  videoPlayerRuntimes.get(surfaceId)?.close();
+  videoPlayerRuntimes.delete(surfaceId);
 }
 
 function configureRuntimeMediaSurfaces(sceneSurfaces?: SceneBundleMediaSurface[]): void {
@@ -1010,6 +1038,49 @@ function currentPdfPresentationObject(): MediaObjectInstance<PdfPresentationStat
   return activePdfPresentationObjectForSurface(selectedMediaSurfaceId) ?? findActivePdfPresentationObject();
 }
 
+function getImageViewerRuntime(surfaceId: string): ReturnType<typeof createImageViewerObjectRuntime> {
+  const existing = imageViewerRuntimes.get(surfaceId);
+  if (existing) return existing;
+  const surface = getMediaSurfaceView(surfaceId);
+  const runtime = createImageViewerObjectRuntime({
+    surfaceId,
+    widthPx: surface.widthPx,
+    heightPx: surface.heightPx,
+    loadContent: (documentId) => fetchRoomDocumentMediaContent(apiBaseUrl, roomId, documentId, roomStateAccessToken),
+    applyTexture: (texture) => applySurfaceTexture(surfaceId, texture),
+    onStatus: (message) => { documentMediaStatusEl.textContent = message; }
+  });
+  imageViewerRuntimes.set(surfaceId, runtime);
+  retainedDisplayTextures.add(runtime.texture);
+  return runtime;
+}
+
+function getVideoPlayerRuntime(surfaceId: string): ReturnType<typeof createVideoPlayerObjectRuntime> {
+  const existing = videoPlayerRuntimes.get(surfaceId);
+  if (existing) return existing;
+  const surface = getMediaSurfaceView(surfaceId);
+  const runtime = createVideoPlayerObjectRuntime({
+    surfaceId,
+    widthPx: surface.widthPx,
+    heightPx: surface.heightPx,
+    loadContent: (documentId) => fetchRoomDocumentMediaContent(apiBaseUrl, roomId, documentId, roomStateAccessToken),
+    getAudioEnabled: () => roomMediaObjects?.surfaces[surfaceId]?.mediaAudioEnabled ?? false,
+    applyTexture: (texture) => applySurfaceTexture(surfaceId, texture),
+    onStatus: (message) => { documentMediaStatusEl.textContent = message; }
+  });
+  videoPlayerRuntimes.set(surfaceId, runtime);
+  retainedDisplayTextures.add(runtime.texture);
+  return runtime;
+}
+
+function currentImageViewerObject(): MediaObjectInstance<ImageViewerState> | null {
+  return activeImageViewerObjectForSurface(selectedMediaSurfaceId) ?? findActiveImageViewerObject();
+}
+
+function currentVideoPlayerObject(): MediaObjectInstance<VideoPlayerState> | null {
+  return activeVideoPlayerObjectForSurface(selectedMediaSurfaceId) ?? findActiveVideoPlayerObject();
+}
+
 function activeWhiteboardObjects(): Array<MediaObjectInstance<WhiteboardState>> {
   if (!roomMediaObjects) {
     return [];
@@ -1143,6 +1214,59 @@ function syncPdfPresentationSurfaceTextures(): void {
   }
 }
 
+function syncDocumentMediaSurfaceTextures(): void {
+  const activeImageSurfaces = new Set<string>();
+  const activeVideoSurfaces = new Set<string>();
+  if (roomMediaObjects) {
+    for (const surfaceId of Object.keys(roomMediaObjects.surfaces)) {
+      const image = activeImageViewerObjectForSurface(surfaceId);
+      if (image && mediaSurfaceViews.has(surfaceId)) {
+        activeImageSurfaces.add(surfaceId);
+        getImageViewerRuntime(surfaceId).sync(image);
+      }
+      const video = activeVideoPlayerObjectForSurface(surfaceId);
+      if (video && mediaSurfaceViews.has(surfaceId)) {
+        activeVideoSurfaces.add(surfaceId);
+        getVideoPlayerRuntime(surfaceId).sync(video);
+      }
+    }
+  }
+  for (const [surfaceId, runtime] of imageViewerRuntimes) {
+    if (activeImageSurfaces.has(surfaceId)) continue;
+    runtime.clear();
+    const material = getMediaSurfaceView(surfaceId).object.material;
+    if (material instanceof THREE.MeshBasicMaterial && runtime.ownsTexture(material.map)) applySurfaceTexture(surfaceId, null);
+  }
+  for (const [surfaceId, runtime] of videoPlayerRuntimes) {
+    if (activeVideoSurfaces.has(surfaceId)) continue;
+    runtime.clear();
+    const material = getMediaSurfaceView(surfaceId).object.material;
+    if (material instanceof THREE.MeshBasicMaterial && runtime.ownsTexture(material.map)) applySurfaceTexture(surfaceId, null);
+  }
+  const activeVideo = currentVideoPlayerObject();
+  const activeImage = activeVideo ? null : currentImageViewerObject();
+  const videoDebug = activeVideo ? getVideoPlayerRuntime(activeVideo.surfaceId).createDebugSnapshot() : null;
+  const imageDebug = activeImage ? getImageViewerRuntime(activeImage.surfaceId).createDebugSnapshot() : null;
+  debugState.documentMedia = {
+    kind: activeVideo ? "video" : activeImage ? "image" : null,
+    surfaceId: videoDebug?.surfaceId ?? imageDebug?.surfaceId ?? selectedMediaSurfaceId,
+    objectId: videoDebug?.objectId ?? imageDebug?.objectId ?? null,
+    documentId: videoDebug?.documentId ?? imageDebug?.documentId ?? null,
+    renderState: imageDebug?.renderState ?? (activeVideo ? "ready" : "idle"),
+    playbackState: videoDebug?.playbackState ?? "paused",
+    actualPositionMs: videoDebug?.actualPositionMs ?? 0,
+    driftMs: videoDebug?.driftMs ?? 0,
+    correctionMode: videoDebug?.correctionMode ?? "none",
+    muted: videoDebug?.muted ?? true,
+    errorCode: videoDebug?.errorCode ?? imageDebug?.errorCode ?? null
+  };
+}
+
+function updateVideoPlayerSurfaces(): void {
+  const serverNowMs = Date.now() + roomStateServerOffsetMs;
+  for (const runtime of videoPlayerRuntimes.values()) runtime.update(serverNowMs);
+}
+
 let surfaceAudioCommandPending = false;
 let surfaceAudioPendingEnabled: boolean | null = null;
 const pointerNdc = new THREE.Vector2(0, 0);
@@ -1197,6 +1321,11 @@ presentationPrevButton.disabled = true;
 presentationNextButton.disabled = true;
 presentationLargeButton.disabled = true;
 presentationStopButton.disabled = true;
+documentMediaPlayButton.disabled = true;
+documentMediaFitButton.disabled = true;
+documentMediaLoopInput.disabled = true;
+documentMediaStopButton.disabled = true;
+documentMediaSeekInput.disabled = true;
 let audioActionInFlight = false;
 let audioInputDevices: MediaDeviceInfo[] = [];
 let audioOutputDevices: MediaDeviceInfo[] = [];
@@ -1771,6 +1900,14 @@ function activePdfPresentationObjectForSurface(surfaceId: string): MediaObjectIn
   return selectActivePdfPresentationObjectForSurface(roomMediaObjects, surfaceId);
 }
 
+function activeImageViewerObjectForSurface(surfaceId: string): MediaObjectInstance<ImageViewerState> | null {
+  return selectActiveImageViewerObjectForSurface(roomMediaObjects, surfaceId);
+}
+
+function activeVideoPlayerObjectForSurface(surfaceId: string): MediaObjectInstance<VideoPlayerState> | null {
+  return selectActiveVideoPlayerObjectForSurface(roomMediaObjects, surfaceId);
+}
+
 function findActiveObjectByType<State>(type: string): MediaObjectInstance<State> | null {
   if (!roomMediaObjects) {
     return null;
@@ -1819,6 +1956,14 @@ function findActiveRemoteBrowserObject(): MediaObjectInstance<RemoteBrowserObjec
 
 function findActivePdfPresentationObject(): MediaObjectInstance<PdfPresentationState> | null {
   return findActiveObjectByType<PdfPresentationState>(PDF_PRESENTATION_OBJECT_TYPE);
+}
+
+function findActiveImageViewerObject(): MediaObjectInstance<ImageViewerState> | null {
+  return findActiveObjectByType<ImageViewerState>(IMAGE_VIEWER_OBJECT_TYPE);
+}
+
+function findActiveVideoPlayerObject(): MediaObjectInstance<VideoPlayerState> | null {
+  return findActiveObjectByType<VideoPlayerState>(VIDEO_PLAYER_OBJECT_TYPE);
 }
 
 function findRemoteBrowserObjectNeedingLiveKitRoom(): MediaObjectInstance<RemoteBrowserObjectState> | null {
@@ -2009,7 +2154,9 @@ function syncMediaObjectsDebugState(): void {
   syncMarkdownBoardSurfaceTextures();
   syncRemoteBrowserSurfaceTextures();
   syncPdfPresentationSurfaceTextures();
+  syncDocumentMediaSurfaceTextures();
   renderPresentationControls();
+  renderDocumentMediaControls();
   syncScreenShareRuntimeWithObjects();
   const activeScreenShare = activeScreenShareObjectForSurface(selectedMediaSurfaceId) ?? findActiveScreenShareObject();
   const screenShareState = activeScreenShare?.state ?? null;
@@ -2068,6 +2215,7 @@ function routeSurfaceInputToMediaObject(event: SurfaceInputEvent): boolean {
 }
 
 function handleRoomSnapshot(snapshot: RoomStateSnapshot): void {
+  roomStateServerOffsetMs = snapshot.serverTimeMs - Date.now();
   roomSeatOccupancy = { ...(snapshot.seatOccupancy ?? {}) };
   roomMediaObjects = snapshot.mediaObjects;
   syncSeatStateFromOccupancy();
@@ -4471,6 +4619,19 @@ const debugState = {
     errorCode: null as string | null,
     errorDetail: null as string | null
   },
+  documentMedia: {
+    kind: null as "image" | "video" | null,
+    surfaceId: DEBUG_SURFACE_ID,
+    objectId: null as string | null,
+    documentId: null as string | null,
+    renderState: "idle" as string,
+    playbackState: "paused" as string,
+    actualPositionMs: 0,
+    driftMs: 0,
+    correctionMode: "none" as string,
+    muted: true,
+    errorCode: null as string | null
+  },
   screenShareState: "idle",
   screenShare: {
     supported: shareMockEnabled || browserMediaCapabilities.screenShare.supported,
@@ -5056,6 +5217,56 @@ function presentationInputEventId(kind: string): string {
   return `${participantId}:pdf-presentation:${kind}:${Date.now()}:${Math.random().toString(16).slice(2)}`;
 }
 
+function documentMediaInputEventId(kind: string): string {
+  return `${participantId}:document-media:${kind}:${Date.now()}:${Math.random().toString(16).slice(2)}`;
+}
+
+function formatMediaTime(milliseconds: number): string {
+  const seconds = Math.max(0, Math.round(milliseconds / 1000));
+  return `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
+}
+
+function currentVideoPositionMs(state: VideoPlayerState): number {
+  const elapsed = state.playbackState === "playing" && state.anchorServerTimeMs !== null
+    ? Math.max(0, Date.now() + roomStateServerOffsetMs - state.anchorServerTimeMs)
+    : 0;
+  const position = state.positionMs + elapsed;
+  return state.loop && state.durationMs > 0 ? position % state.durationMs : Math.min(position, state.durationMs);
+}
+
+function renderDocumentMediaControls(): void {
+  const image = currentImageViewerObject();
+  const video = currentVideoPlayerObject();
+  const object = video ?? image;
+  const active = Boolean(object?.state.status === "active" && object.state.documentId);
+  documentMediaControlsEl.hidden = !active;
+  if (!object || !active) {
+    documentMediaStatusEl.textContent = "Media idle";
+    return;
+  }
+  const canPresent = canPresentDocuments() && !presentationActionInFlight;
+  const state = object.state;
+  documentMediaTitleEl.textContent = `${video ? "Video" : "Image"}: ${state.filename ?? "media"}`;
+  documentMediaFitButton.disabled = !canPresent;
+  documentMediaFitButton.textContent = state.fitMode === "contain" ? "Cover" : "Contain";
+  documentMediaStopButton.disabled = !canPresent;
+  documentMediaPlayButton.hidden = !video;
+  documentMediaLoopLabel.hidden = !video;
+  documentMediaSeekInput.hidden = !video;
+  documentMediaTimeEl.hidden = !video;
+  documentMediaPlayButton.disabled = !canPresent || !video;
+  documentMediaLoopInput.disabled = !canPresent || !video;
+  documentMediaSeekInput.disabled = !canPresent || !video;
+  if (video) {
+    const positionMs = currentVideoPositionMs(video.state);
+    documentMediaPlayButton.textContent = video.state.playbackState === "playing" ? "Pause" : "Play";
+    documentMediaLoopInput.checked = video.state.loop;
+    documentMediaSeekInput.max = String(video.state.durationMs);
+    documentMediaSeekInput.value = String(Math.round(positionMs));
+    documentMediaTimeEl.textContent = `${formatMediaTime(positionMs)} / ${formatMediaTime(video.state.durationMs)}`;
+  }
+}
+
 function renderPresentationThumbnails(object: MediaObjectInstance<PdfPresentationState>): void {
   const signature = `${object.objectId}:${object.state.documentId}:${object.state.pageCount}`;
   if (signature !== presentationThumbnailSignature) {
@@ -5152,7 +5363,10 @@ function renderDocumentsUi(message?: string): void {
       ? roomDocuments.map((doc) => {
         const option = document.createElement("option");
         option.value = doc.documentId;
-        option.textContent = `${doc.filename}${doc.metadata?.pageCount ? ` · ${doc.metadata.pageCount} pages` : ""} (${Math.ceil(doc.sizeBytes / 1024)} KB)`;
+        const detail = doc.metadata?.pageCount
+          ? ` · ${doc.metadata.pageCount} pages`
+          : doc.metadata?.widthPx && doc.metadata?.heightPx ? ` · ${doc.metadata.widthPx}×${doc.metadata.heightPx}` : "";
+        option.textContent = `${doc.filename}${detail} (${Math.ceil(doc.sizeBytes / 1024)} KB)`;
         option.selected = doc.documentId === selectedDocumentId;
         return option;
       })
@@ -5162,10 +5376,11 @@ function renderDocumentsUi(message?: string): void {
   documentUploadButton.disabled = !canUploadDocuments() || documentsLoading || documentUploadInFlight;
   documentSelect.disabled = documentsLoading || roomDocuments.length === 0;
   documentDownloadButton.disabled = !selected || !canDownloadDocuments() || documentsLoading;
-  documentSurfaceButton.disabled = !selected || selected.metadata?.kind !== "pdf" || !canPresentDocuments() || documentsLoading || presentationActionInFlight;
+  documentSurfaceButton.disabled = !selected || !["pdf", "image", "video"].includes(selected.metadata?.kind ?? "") || !canPresentDocuments() || documentsLoading || presentationActionInFlight;
   documentDeleteButton.disabled = !selected || !canDeleteDocuments() || documentsLoading;
   setDocumentStatus(message ?? (roomDocuments.length > 0 ? `Documents ready: ${roomDocuments.length}` : "No room documents yet"));
   renderPresentationControls();
+  renderDocumentMediaControls();
 }
 
 async function loadRoomDocuments(): Promise<void> {
@@ -5204,7 +5419,12 @@ async function uploadSelectedDocument(): Promise<void> {
   documentUploadInFlight = true;
   renderDocumentsUi("Uploading document...");
   try {
-    const uploadedDocument = await uploadRoomDocument(apiBaseUrl, roomId, roomStateAccessToken, file);
+    const mediaProbe = await probeDocumentMedia(file);
+    const uploadedDocument = await uploadRoomDocument(apiBaseUrl, roomId, roomStateAccessToken, file, mediaProbe ? {
+      widthPx: mediaProbe.widthPx,
+      heightPx: mediaProbe.heightPx,
+      durationMs: mediaProbe.durationMs
+    } : undefined);
     roomDocuments = [uploadedDocument, ...roomDocuments.filter((item) => item.documentId !== uploadedDocument.documentId)];
     selectedDocumentId = uploadedDocument.documentId;
     localStorage.setItem(`vrata.documents.selected.${roomId}`, selectedDocumentId);
@@ -5263,62 +5483,101 @@ async function deleteSelectedDocument(): Promise<void> {
 async function selectDocumentForSurface(): Promise<void> {
   const selected = selectedDocument();
   if (!selected) return;
-  if (!canPresentDocuments() || selected.metadata?.kind !== "pdf" || !selected.metadata.pageCount) {
-    setDocumentStatus("Validated PDF and presenter role required", "document_not_presentable");
+  const kind = selected.metadata?.kind;
+  if (!canPresentDocuments() || !kind || !["pdf", "image", "video"].includes(kind)) {
+    setDocumentStatus("Presentable document and presenter role required", "document_not_presentable");
     return;
   }
   presentationActionInFlight = true;
-  let createdObject: { objectId: string; surfaceId: string } | null = null;
+  let createdObject: { objectId: string; surfaceId: string; kind: "pdf" | "image" | "video" } | null = null;
   let metadataLinked = false;
   let previousDocumentId: string | null = null;
   try {
     setDocumentStatus("Selecting document for surface...");
     const occupied = activeMediaObjectForSurface(selectedMediaSurfaceId);
-    let presentation = activePdfPresentationObjectForSurface(selectedMediaSurfaceId);
-    if (occupied && !presentation) {
+    let mediaObject: MediaObjectInstance<PdfPresentationState | ImageViewerState | VideoPlayerState> | null = kind === "pdf"
+      ? activePdfPresentationObjectForSurface(selectedMediaSurfaceId)
+      : kind === "image" ? activeImageViewerObjectForSurface(selectedMediaSurfaceId) : activeVideoPlayerObjectForSurface(selectedMediaSurfaceId);
+    if (occupied && !mediaObject) {
       throw new Error("surface-occupied");
     }
-    if (!presentation) {
-      const createResult = await mediaSurfaceCommands.createPdfPresentationObjectOnSurface(selectedMediaSurfaceId);
+    if (!mediaObject) {
+      const createResult = kind === "pdf"
+        ? await mediaSurfaceCommands.createPdfPresentationObjectOnSurface(selectedMediaSurfaceId)
+        : kind === "image" ? await mediaSurfaceCommands.createImageViewerObjectOnSurface(selectedMediaSurfaceId) : await mediaSurfaceCommands.createVideoPlayerObjectOnSurface(selectedMediaSurfaceId);
       if (!createResult.accepted || !createResult.objectId) {
-        throw new Error(createResult.blockedReason ?? "presentation_create_rejected");
+        throw new Error(createResult.blockedReason ?? "document_media_create_rejected");
       }
-      createdObject = { objectId: createResult.objectId, surfaceId: selectedMediaSurfaceId };
-      presentation = {
+      createdObject = { objectId: createResult.objectId, surfaceId: selectedMediaSurfaceId, kind };
+      const idleState: PdfPresentationState | ImageViewerState | VideoPlayerState = kind === "pdf"
+        ? { status: "idle" as const, documentId: null, filename: null, checksum: null, pageCount: 0, currentPage: 1, displayMode: "normal" as const, lastInputEventId: null }
+        : kind === "image"
+          ? { status: "idle" as const, documentId: null, filename: null, checksum: null, contentType: null, widthPx: 0, heightPx: 0, fitMode: "contain" as const, lastInputEventId: null }
+          : { status: "idle" as const, documentId: null, filename: null, checksum: null, contentType: null, widthPx: 0, heightPx: 0, durationMs: 0, playbackState: "paused" as const, positionMs: 0, anchorServerTimeMs: null, loop: false, fitMode: "contain" as const, lastInputEventId: null };
+      mediaObject = {
         objectId: createResult.objectId,
-        type: PDF_PRESENTATION_OBJECT_TYPE,
+        type: kind === "pdf" ? PDF_PRESENTATION_OBJECT_TYPE : kind === "image" ? IMAGE_VIEWER_OBJECT_TYPE : VIDEO_PLAYER_OBJECT_TYPE,
         roomId,
         surfaceId: selectedMediaSurfaceId,
         ownerParticipantId: participantId,
-        state: { status: "idle", documentId: null, filename: null, checksum: null, pageCount: 0, currentPage: 1, displayMode: "normal", lastInputEventId: null },
+        state: idleState,
         status: "active",
         revision: createResult.revision ?? 0,
         createdAtMs: Date.now(),
         updatedAtMs: Date.now()
       };
     } else {
-      previousDocumentId = presentation.state.documentId;
+      previousDocumentId = mediaObject.state.documentId;
     }
+    if (!mediaObject) throw new Error("document_media_object_missing");
     const updated = await selectRoomDocumentSurface(apiBaseUrl, roomId, selected.documentId, selectedMediaSurfaceId, roomStateAccessToken);
     metadataLinked = true;
     roomDocuments = roomDocuments.map((item) => item.documentId === updated.documentId
       ? updated
       : item.linkedSurfaceId === selectedMediaSurfaceId ? { ...item, linkedSurfaceId: null } : item);
-    const patchResult = await mediaSurfaceCommands.patchPdfPresentationObject(presentation.objectId, presentation.surfaceId, presentation.revision, {
-      type: "select-document",
-      documentId: updated.documentId,
-      filename: updated.filename,
-      checksum: updated.checksum,
-      pageCount: updated.metadata?.pageCount ?? selected.metadata.pageCount,
-      inputEventId: presentationInputEventId("select-document")
-    });
+    const patchResult = kind === "pdf"
+      ? await mediaSurfaceCommands.patchPdfPresentationObject(mediaObject.objectId, mediaObject.surfaceId, mediaObject.revision, {
+        type: "select-document",
+        documentId: updated.documentId,
+        filename: updated.filename,
+        checksum: updated.checksum,
+        pageCount: updated.metadata?.pageCount ?? selected.metadata?.pageCount ?? 0,
+        inputEventId: presentationInputEventId("select-document")
+      })
+      : kind === "image"
+        ? await mediaSurfaceCommands.patchImageViewerObject(mediaObject.objectId, mediaObject.surfaceId, mediaObject.revision, {
+          type: "select-image",
+          documentId: updated.documentId,
+          filename: updated.filename,
+          checksum: updated.checksum,
+          contentType: updated.contentType as "image/png" | "image/jpeg" | "image/webp",
+          widthPx: updated.metadata?.widthPx ?? 0,
+          heightPx: updated.metadata?.heightPx ?? 0,
+          inputEventId: documentMediaInputEventId("select-image")
+        })
+        : await mediaSurfaceCommands.patchVideoPlayerObject(mediaObject.objectId, mediaObject.surfaceId, mediaObject.revision, {
+          type: "select-video",
+          documentId: updated.documentId,
+          filename: updated.filename,
+          checksum: updated.checksum,
+          contentType: updated.contentType as "video/mp4" | "video/webm",
+          widthPx: updated.metadata?.widthPx ?? 0,
+          heightPx: updated.metadata?.heightPx ?? 0,
+          durationMs: updated.metadata?.durationMs ?? 0,
+          inputEventId: documentMediaInputEventId("select-video")
+        });
     if (!patchResult.accepted) {
       throw new Error(patchResult.blockedReason ?? "presentation_select_rejected");
     }
     renderDocumentsUi(`Document selected for surface: ${updated.filename}`);
   } catch (error) {
     if (createdObject) {
-      await mediaSurfaceCommands.stopPdfPresentationObject(createdObject.objectId, createdObject.surfaceId).catch(() => undefined);
+      const stopPromise = createdObject.kind === "pdf"
+        ? mediaSurfaceCommands.stopPdfPresentationObject(createdObject.objectId, createdObject.surfaceId)
+        : createdObject.kind === "image"
+          ? mediaSurfaceCommands.stopImageViewerObject(createdObject.objectId, createdObject.surfaceId)
+          : mediaSurfaceCommands.stopVideoPlayerObject(createdObject.objectId, createdObject.surfaceId);
+      await stopPromise.catch(() => undefined);
     }
     if (metadataLinked) {
       await selectRoomDocumentSurface(apiBaseUrl, roomId, selected.documentId, null, roomStateAccessToken).catch(() => undefined);
@@ -5383,6 +5642,69 @@ async function stopCurrentPresentation(): Promise<void> {
     setDocumentStatus("Presentation stopped");
   } catch (error) {
     setDocumentStatus(`Presentation stop failed: ${documentErrorCode(error)}`, documentErrorCode(error));
+  } finally {
+    presentationActionInFlight = false;
+    renderDocumentsUi(documentStatusEl.textContent || undefined);
+  }
+}
+
+async function patchCurrentDocumentMedia(patch: ImageViewerPatch | VideoPlayerPatch): Promise<void> {
+  const video = currentVideoPlayerObject();
+  const image = video ? null : currentImageViewerObject();
+  const object = video ?? image;
+  if (!object || !canPresentDocuments() || presentationActionInFlight) return;
+  presentationActionInFlight = true;
+  renderDocumentMediaControls();
+  try {
+    const result = video
+      ? await mediaSurfaceCommands.patchVideoPlayerObject(video.objectId, video.surfaceId, video.revision, patch as VideoPlayerPatch)
+      : await mediaSurfaceCommands.patchImageViewerObject(image!.objectId, image!.surfaceId, image!.revision, patch as ImageViewerPatch);
+    if (!result.accepted) throw new Error(result.blockedReason ?? "document_media_patch_rejected");
+  } catch (error) {
+    documentMediaStatusEl.textContent = `Media control failed: ${documentErrorCode(error)}`;
+  } finally {
+    presentationActionInFlight = false;
+    renderDocumentMediaControls();
+  }
+}
+
+async function toggleDocumentMediaPlayback(): Promise<void> {
+  const video = currentVideoPlayerObject();
+  if (!video) return;
+  await patchCurrentDocumentMedia({
+    type: video.state.playbackState === "playing" ? "pause" : "play",
+    inputEventId: documentMediaInputEventId("playback")
+  });
+}
+
+async function toggleDocumentMediaFit(): Promise<void> {
+  const object = currentVideoPlayerObject() ?? currentImageViewerObject();
+  if (!object) return;
+  await patchCurrentDocumentMedia({
+    type: "set-fit-mode",
+    fitMode: object.state.fitMode === "contain" ? "cover" : "contain",
+    inputEventId: documentMediaInputEventId("fit")
+  });
+}
+
+async function stopCurrentDocumentMedia(): Promise<void> {
+  const video = currentVideoPlayerObject();
+  const image = video ? null : currentImageViewerObject();
+  const object = video ?? image;
+  if (!object || !canPresentDocuments() || presentationActionInFlight) return;
+  presentationActionInFlight = true;
+  try {
+    const result = video
+      ? await mediaSurfaceCommands.stopVideoPlayerObject(video.objectId, video.surfaceId)
+      : await mediaSurfaceCommands.stopImageViewerObject(image!.objectId, image!.surfaceId);
+    if (!result.accepted) throw new Error(result.blockedReason ?? "document_media_stop_rejected");
+    if (object.state.documentId) {
+      const updated = await selectRoomDocumentSurface(apiBaseUrl, roomId, object.state.documentId, null, roomStateAccessToken);
+      roomDocuments = roomDocuments.map((item) => item.documentId === updated.documentId ? updated : item);
+    }
+    setDocumentStatus("Media stopped");
+  } catch (error) {
+    setDocumentStatus(`Media stop failed: ${documentErrorCode(error)}`, documentErrorCode(error));
   } finally {
     presentationActionInFlight = false;
     renderDocumentsUi(documentStatusEl.textContent || undefined);
@@ -8612,6 +8934,26 @@ presentationStopButton.addEventListener("click", () => {
   void stopCurrentPresentation();
 });
 
+documentMediaPlayButton.addEventListener("click", () => {
+  void toggleDocumentMediaPlayback();
+});
+
+documentMediaFitButton.addEventListener("click", () => {
+  void toggleDocumentMediaFit();
+});
+
+documentMediaLoopInput.addEventListener("change", () => {
+  void patchCurrentDocumentMedia({ type: "set-loop", loop: documentMediaLoopInput.checked, inputEventId: documentMediaInputEventId("loop") });
+});
+
+documentMediaSeekInput.addEventListener("change", () => {
+  void patchCurrentDocumentMedia({ type: "seek", positionMs: Number(documentMediaSeekInput.value), inputEventId: documentMediaInputEventId("seek") });
+});
+
+documentMediaStopButton.addEventListener("click", () => {
+  void stopCurrentDocumentMedia();
+});
+
 mediaSurfaceSelect.addEventListener("change", () => {
   selectMediaSurface(mediaSurfaceSelect.value);
 });
@@ -9141,6 +9483,8 @@ window.addEventListener("beforeunload", () => {
   for (const runtime of pdfPresentationRuntimes.values()) {
     void runtime.close();
   }
+  for (const runtime of imageViewerRuntimes.values()) runtime.close();
+  for (const runtime of videoPlayerRuntimes.values()) runtime.close();
   disconnectLocalAudioTrack();
   localAvatarController?.dispose();
   clearRoomStateReconnect();
@@ -9158,6 +9502,7 @@ window.addEventListener("beforeunload", () => {
 const clock = new THREE.Clock();
 let syncAccumulator = 0;
 let presenceAccumulator = 0;
+let documentMediaUiAccumulator = 0;
 let runtimeBootReady = false;
 let presenceSeq = 0;
 
@@ -9188,11 +9533,17 @@ renderer.setAnimationLoop(() => {
     ? Math.max(...debugState.remoteAvatarParticipants.map((participant) => participant.playbackDelayMs))
     : 100;
   updateSpatialAudio();
+  updateVideoPlayerSurfaces();
   syncRemoteAudioDiagnostics();
   renderDebugPanel();
 
   syncAccumulator += delta;
   presenceAccumulator += delta;
+  documentMediaUiAccumulator += delta;
+  if (documentMediaUiAccumulator >= 0.25) {
+    documentMediaUiAccumulator = 0;
+    renderDocumentMediaControls();
+  }
 
   if (runtimeBootReady) {
     if (syncAccumulator >= 0.08) {

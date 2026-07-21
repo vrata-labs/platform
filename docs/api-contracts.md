@@ -135,16 +135,17 @@ The current permission matrix is documented in [`docs/security/permissions.md`](
 
 Every protected authorization decision writes a control-plane audit entry with `requestId`, `actor`, `action`, `object`, `permission`, and `result`. Operators can inspect the bounded in-memory log with `GET /api/audit/control-plane` using an admin identity.
 
-### Room documents and PDF presentation
+### Room documents and presentation media
 
 - `GET /api/rooms/:roomId/documents` requires `document.view`.
-- `POST /api/rooms/:roomId/documents` requires `document.upload`. PDF uploads are parsed before storage and return `422` with `corrupt_pdf`, `encrypted_pdf_unsupported`, or `pdf_page_limit_exceeded` when rejected.
+- `POST /api/rooms/:roomId/documents` requires `document.upload`. PDF, PNG, JPEG, WebP, MP4, and WebM uploads are validated before storage. Images use server-read dimensions; video containers are sniffed and browser-read dimensions/duration are bounded by the server.
 - `GET /api/rooms/:roomId/documents/:documentId/download` requires `document.download` and returns an attachment.
-- `POST /api/rooms/:roomId/documents/:documentId/surface` requires `document.present`; only validated PDFs can be bound.
+- `POST /api/rooms/:roomId/documents/:documentId/surface` requires `document.present`; only validated PDF, image, and video documents can be bound.
 - `GET /api/rooms/:roomId/documents/:documentId/presentation` requires `surface.view`, returns an inline PDF only while the document is bound, and is used by in-room viewers including guests.
-- `DELETE /api/rooms/:roomId/documents/:documentId` requires `document.delete`, removes active presentation objects through the internal room-state API, deletes the blob, and soft-deletes metadata.
+- `GET /api/rooms/:roomId/documents/:documentId/content` requires `surface.view` and returns bounded image/video bytes only while the document is bound.
+- `DELETE /api/rooms/:roomId/documents/:documentId` requires `document.delete`, removes matching active PDF/image/video objects through the internal room-state API, deletes the blob, and soft-deletes metadata.
 
-The `presenter`, `host`, and operator `admin` roles have `document.present`. Members and guests remain view-only for presentation state. Configure upload size with `DOCUMENT_UPLOAD_MAX_BYTES` and page count with `PDF_PRESENTATION_MAX_PAGES`.
+The `presenter`, `host`, and operator `admin` roles have `document.present`. Members and guests remain view-only for presentation state. Images are limited to 16,384 pixels per dimension and 67 million pixels; videos are limited to four hours. Configure the shared PDF/image/video upload size with `DOCUMENT_UPLOAD_MAX_BYTES` and page count with `PDF_PRESENTATION_MAX_PAGES`. Video delivery intentionally uses the bounded upload blob; adaptive streaming and transcoding are not provided.
 
 ## Notes
 

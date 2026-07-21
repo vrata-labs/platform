@@ -120,18 +120,24 @@ export interface RuntimeDocumentRecord {
   sizeBytes: number;
   checksum: string;
   metadata?: {
-    kind?: "pdf";
+    kind?: "pdf" | "image" | "video";
     pageCount?: number;
     title?: string | null;
     author?: string | null;
     firstPageWidthPt?: number;
     firstPageHeightPt?: number;
+    widthPx?: number;
+    heightPx?: number;
+    durationMs?: number;
+    container?: "mp4" | "webm";
+    metadataSource?: "server" | "browser";
   };
   uploadedBy?: string | null;
   uploadedAt: string;
   linkedSurfaceId?: string | null;
   downloadUrl: string;
   presentationUrl?: string | null;
+  contentUrl?: string | null;
 }
 
 export interface RuntimePersonalPoseState {
@@ -536,9 +542,14 @@ export async function listRoomDocuments(apiBaseUrl: string, roomId: string, sess
   return ((await response.json()) as { items: RuntimeDocumentRecord[] }).items;
 }
 
-export async function uploadRoomDocument(apiBaseUrl: string, roomId: string, sessionToken: string, file: File): Promise<RuntimeDocumentRecord> {
+export async function uploadRoomDocument(apiBaseUrl: string, roomId: string, sessionToken: string, file: File, mediaMetadata?: { widthPx: number; heightPx: number; durationMs?: number }): Promise<RuntimeDocumentRecord> {
   const form = new FormData();
   form.set("document", file);
+  if (mediaMetadata) {
+    form.set("mediaWidthPx", String(mediaMetadata.widthPx));
+    form.set("mediaHeightPx", String(mediaMetadata.heightPx));
+    if (mediaMetadata.durationMs !== undefined) form.set("mediaDurationMs", String(mediaMetadata.durationMs));
+  }
   const response = await fetch(new URL(`/api/rooms/${roomId}/documents`, apiBaseUrl), {
     method: "POST",
     headers: {
@@ -580,6 +591,18 @@ export async function fetchRoomDocumentPresentation(apiBaseUrl: string, roomId: 
     throw new Error(`failed_to_fetch_presentation:${response.status}:${payload.reason ?? payload.error ?? "unknown"}`);
   }
   return response.arrayBuffer();
+}
+
+export async function fetchRoomDocumentMediaContent(apiBaseUrl: string, roomId: string, documentId: string, sessionToken: string): Promise<Blob> {
+  const response = await fetch(new URL(`/api/rooms/${roomId}/documents/${documentId}/content`, apiBaseUrl), {
+    headers: { "authorization": `Bearer ${sessionToken}` },
+    cache: "no-store"
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({})) as { reason?: string; error?: string };
+    throw new Error(`failed_to_fetch_media_content:${response.status}:${payload.reason ?? payload.error ?? "unknown"}`);
+  }
+  return response.blob();
 }
 
 export async function deleteRoomDocument(apiBaseUrl: string, roomId: string, documentId: string, sessionToken: string): Promise<RuntimeDocumentRecord> {

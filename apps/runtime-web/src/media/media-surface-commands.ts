@@ -1,11 +1,15 @@
 import {
   REMOTE_BROWSER_OBJECT_TYPE,
   PDF_PRESENTATION_OBJECT_TYPE,
+  IMAGE_VIEWER_OBJECT_TYPE,
+  VIDEO_PLAYER_OBJECT_TYPE,
   SCREEN_SHARE_OBJECT_TYPE,
   MARKDOWN_BOARD_OBJECT_TYPE,
   WHITEBOARD_OBJECT_TYPE,
   type MarkdownBoardPatch,
   type PdfPresentationPatch,
+  type ImageViewerPatch,
+  type VideoPlayerPatch,
   type RemoteBrowserPatch,
   type ScreenSharePatch,
   type WhiteboardPatch
@@ -235,6 +239,30 @@ export class MediaSurfaceCommandClient {
 
   stopPdfPresentationObject(objectId: string, surfaceId: string): Promise<SurfaceCommandResult> {
     return this.stopObject(objectId, surfaceId, "pdf-presentation-stop");
+  }
+
+  createImageViewerObjectOnSurface(surfaceId: string): Promise<SurfaceCommandResult> {
+    return this.createObjectOnSurface(surfaceId, IMAGE_VIEWER_OBJECT_TYPE, "image-viewer-create");
+  }
+
+  patchImageViewerObject(objectId: string, surfaceId: string, expectedRevision: number, patch: ImageViewerPatch): Promise<SurfaceCommandResult> {
+    return this.patchObjectState(objectId, surfaceId, expectedRevision, patch, `image-viewer-${patch.type}`);
+  }
+
+  stopImageViewerObject(objectId: string, surfaceId: string): Promise<SurfaceCommandResult> {
+    return this.stopObject(objectId, surfaceId, "image-viewer-stop");
+  }
+
+  createVideoPlayerObjectOnSurface(surfaceId: string): Promise<SurfaceCommandResult> {
+    return this.createObjectOnSurface(surfaceId, VIDEO_PLAYER_OBJECT_TYPE, "video-player-create");
+  }
+
+  patchVideoPlayerObject(objectId: string, surfaceId: string, expectedRevision: number, patch: VideoPlayerPatch): Promise<SurfaceCommandResult> {
+    return this.patchObjectState(objectId, surfaceId, expectedRevision, patch, `video-player-${patch.type}`);
+  }
+
+  stopVideoPlayerObject(objectId: string, surfaceId: string): Promise<SurfaceCommandResult> {
+    return this.stopObject(objectId, surfaceId, "video-player-stop");
   }
 
   setMediaSurfaceAudioEnabled(surfaceId: string, enabled: boolean): Promise<SurfaceCommandResult> {

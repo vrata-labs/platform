@@ -1,7 +1,9 @@
 import {
+  IMAGE_VIEWER_OBJECT_TYPE,
   REMOTE_BROWSER_OBJECT_TYPE,
   PDF_PRESENTATION_OBJECT_TYPE,
   SCREEN_SHARE_OBJECT_TYPE,
+  VIDEO_PLAYER_OBJECT_TYPE,
   MARKDOWN_BOARD_ALLOWED_COLORS,
   MARKDOWN_BOARD_MAX_NOTES,
   MARKDOWN_BOARD_MAX_TEXT_LENGTH,
@@ -20,6 +22,8 @@ import {
   type MediaObjectCommandResult,
   type MediaObjectInstance,
   type MediaObjectStateKind,
+  type ImageViewerPatch,
+  type ImageViewerState,
   type MarkdownBoardPatch,
   type MarkdownBoardState,
   type MarkdownBoardStickyNote,
@@ -39,6 +43,8 @@ import {
   type SurfaceTestCardPatch,
   type SurfaceTestCardState,
   type SurfaceInputEvent,
+  type VideoPlayerPatch,
+  type VideoPlayerState,
   type WhiteboardPatch,
   type WhiteboardPoint,
   type WhiteboardState,
@@ -296,7 +302,40 @@ function createPdfPresentationState(): PdfPresentationState {
   };
 }
 
-function createInitialMediaObjectState(stateKind: MediaObjectStateKind, ownerParticipantId: string, surfaceId: string): SurfaceTestCardState | ScreenShareObjectState | WhiteboardState | MarkdownBoardState | RemoteBrowserObjectState | PdfPresentationState {
+function createImageViewerState(): ImageViewerState {
+  return {
+    status: "idle",
+    documentId: null,
+    filename: null,
+    checksum: null,
+    contentType: null,
+    widthPx: 0,
+    heightPx: 0,
+    fitMode: "contain",
+    lastInputEventId: null
+  };
+}
+
+function createVideoPlayerState(): VideoPlayerState {
+  return {
+    status: "idle",
+    documentId: null,
+    filename: null,
+    checksum: null,
+    contentType: null,
+    widthPx: 0,
+    heightPx: 0,
+    durationMs: 0,
+    playbackState: "paused",
+    positionMs: 0,
+    anchorServerTimeMs: null,
+    loop: false,
+    fitMode: "contain",
+    lastInputEventId: null
+  };
+}
+
+function createInitialMediaObjectState(stateKind: MediaObjectStateKind, ownerParticipantId: string, surfaceId: string): SurfaceTestCardState | ScreenShareObjectState | WhiteboardState | MarkdownBoardState | RemoteBrowserObjectState | PdfPresentationState | ImageViewerState | VideoPlayerState {
   if (stateKind === "screen-share") {
     return createScreenShareState(ownerParticipantId, surfaceId);
   }
@@ -311,6 +350,12 @@ function createInitialMediaObjectState(stateKind: MediaObjectStateKind, ownerPar
   }
   if (stateKind === "pdf-presentation") {
     return createPdfPresentationState();
+  }
+  if (stateKind === "image-viewer") {
+    return createImageViewerState();
+  }
+  if (stateKind === "video-player") {
+    return createVideoPlayerState();
   }
   return createSurfaceTestCardState();
 }
@@ -702,6 +747,171 @@ function reducePdfPresentationState(state: PdfPresentationState, patch: PdfPrese
     return { ...state, currentPage: patch.page, lastInputEventId: patch.inputEventId };
   }
   return { ...state, displayMode: patch.displayMode, lastInputEventId: patch.inputEventId };
+}
+
+const MAX_MEDIA_DIMENSION_PX = 16_384;
+const MAX_MEDIA_PIXELS = 67_000_000;
+const MAX_VIDEO_DURATION_MS = 4 * 60 * 60 * 1000;
+const DOCUMENT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+const DOCUMENT_CHECKSUM_PATTERN = /^sha256:[a-f0-9]{64}$/;
+
+function isDocumentMediaIdentity(documentId: unknown, filename: unknown, checksum: unknown): boolean {
+  return typeof documentId === "string" && DOCUMENT_ID_PATTERN.test(documentId)
+    && typeof filename === "string" && filename.trim().length > 0 && filename.length <= 160
+    && typeof checksum === "string" && DOCUMENT_CHECKSUM_PATTERN.test(checksum);
+}
+
+function isValidMediaDimensions(widthPx: unknown, heightPx: unknown): boolean {
+  return Number.isInteger(widthPx) && Number(widthPx) > 0 && Number(widthPx) <= MAX_MEDIA_DIMENSION_PX
+    && Number.isInteger(heightPx) && Number(heightPx) > 0 && Number(heightPx) <= MAX_MEDIA_DIMENSION_PX
+    && Number(widthPx) * Number(heightPx) <= MAX_MEDIA_PIXELS;
+}
+
+function isMediaFitMode(input: unknown): input is ImageViewerState["fitMode"] {
+  return input === "contain" || input === "cover";
+}
+
+function hasInputEventId(input: { inputEventId?: unknown }): boolean {
+  return typeof input.inputEventId === "string" && input.inputEventId.trim().length > 0;
+}
+
+function isImageViewerPatch(input: unknown): input is ImageViewerPatch {
+  if (!input || typeof input !== "object") {
+    return false;
+  }
+  const patch = input as Partial<ImageViewerPatch>;
+  if (!hasInputEventId(patch)) {
+    return false;
+  }
+  if (patch.type === "select-image") {
+    return isDocumentMediaIdentity(patch.documentId, patch.filename, patch.checksum)
+      && (patch.contentType === "image/png" || patch.contentType === "image/jpeg" || patch.contentType === "image/webp")
+      && isValidMediaDimensions(patch.widthPx, patch.heightPx);
+  }
+  return patch.type === "set-fit-mode" && isMediaFitMode(patch.fitMode);
+}
+
+function reduceImageViewerState(state: ImageViewerState, patch: ImageViewerPatch): ImageViewerState | null {
+  if (patch.type === "select-image") {
+    return {
+      status: "active",
+      documentId: patch.documentId,
+      filename: patch.filename.trim(),
+      checksum: patch.checksum,
+      contentType: patch.contentType,
+      widthPx: patch.widthPx,
+      heightPx: patch.heightPx,
+      fitMode: state.fitMode,
+      lastInputEventId: patch.inputEventId
+    };
+  }
+  if (state.status !== "active" || !state.documentId) {
+    return null;
+  }
+  return { ...state, fitMode: patch.fitMode, lastInputEventId: patch.inputEventId };
+}
+
+function isVideoPlayerPatch(input: unknown): input is VideoPlayerPatch {
+  if (!input || typeof input !== "object") {
+    return false;
+  }
+  const patch = input as Partial<VideoPlayerPatch> & { anchorServerTimeMs?: unknown; serverTimeMs?: unknown };
+  if (!hasInputEventId(patch) || "anchorServerTimeMs" in patch || "serverTimeMs" in patch) {
+    return false;
+  }
+  if (patch.type === "select-video") {
+    return isDocumentMediaIdentity(patch.documentId, patch.filename, patch.checksum)
+      && (patch.contentType === "video/mp4" || patch.contentType === "video/webm")
+      && isValidMediaDimensions(patch.widthPx, patch.heightPx)
+      && Number.isInteger(patch.durationMs) && Number(patch.durationMs) > 0 && Number(patch.durationMs) <= MAX_VIDEO_DURATION_MS;
+  }
+  if (patch.type === "play" || patch.type === "pause") {
+    return true;
+  }
+  if (patch.type === "seek") {
+    return Number.isInteger(patch.positionMs) && Number(patch.positionMs) >= 0;
+  }
+  if (patch.type === "set-loop") {
+    return typeof patch.loop === "boolean";
+  }
+  return patch.type === "set-fit-mode" && isMediaFitMode(patch.fitMode);
+}
+
+export function resolveVideoPlaybackPositionMs(state: Pick<VideoPlayerState, "playbackState" | "positionMs" | "anchorServerTimeMs" | "durationMs" | "loop">, nowMs: number): number {
+  const durationMs = Math.max(0, state.durationMs);
+  if (durationMs === 0) {
+    return 0;
+  }
+  const elapsedMs = state.playbackState === "playing" && state.anchorServerTimeMs !== null
+    ? Math.max(0, nowMs - state.anchorServerTimeMs)
+    : 0;
+  const positionMs = Math.max(0, state.positionMs + elapsedMs);
+  return state.loop ? positionMs % durationMs : Math.min(positionMs, durationMs);
+}
+
+function reduceVideoPlayerState(state: VideoPlayerState, patch: VideoPlayerPatch, nowMs: number): VideoPlayerState | null {
+  if (patch.type === "select-video") {
+    return {
+      status: "active",
+      documentId: patch.documentId,
+      filename: patch.filename.trim(),
+      checksum: patch.checksum,
+      contentType: patch.contentType,
+      widthPx: patch.widthPx,
+      heightPx: patch.heightPx,
+      durationMs: patch.durationMs,
+      playbackState: "paused",
+      positionMs: 0,
+      anchorServerTimeMs: null,
+      loop: false,
+      fitMode: state.fitMode,
+      lastInputEventId: patch.inputEventId
+    };
+  }
+  if (state.status !== "active" || !state.documentId) {
+    return null;
+  }
+  if (patch.type === "play") {
+    const resolvedPositionMs = resolveVideoPlaybackPositionMs(state, nowMs);
+    return {
+      ...state,
+      playbackState: "playing",
+      positionMs: !state.loop && resolvedPositionMs >= state.durationMs ? 0 : resolvedPositionMs,
+      anchorServerTimeMs: nowMs,
+      lastInputEventId: patch.inputEventId
+    };
+  }
+  if (patch.type === "pause") {
+    return {
+      ...state,
+      playbackState: "paused",
+      positionMs: resolveVideoPlaybackPositionMs(state, nowMs),
+      anchorServerTimeMs: null,
+      lastInputEventId: patch.inputEventId
+    };
+  }
+  if (patch.type === "seek") {
+    if (patch.positionMs > state.durationMs) {
+      return null;
+    }
+    return {
+      ...state,
+      positionMs: patch.positionMs,
+      anchorServerTimeMs: state.playbackState === "playing" ? nowMs : null,
+      lastInputEventId: patch.inputEventId
+    };
+  }
+  if (patch.type === "set-loop") {
+    const positionMs = resolveVideoPlaybackPositionMs(state, nowMs);
+    return {
+      ...state,
+      loop: patch.loop,
+      positionMs,
+      anchorServerTimeMs: state.playbackState === "playing" ? nowMs : null,
+      lastInputEventId: patch.inputEventId
+    };
+  }
+  return { ...state, fitMode: patch.fitMode, lastInputEventId: patch.inputEventId };
 }
 
 function reduceWhiteboardState(state: WhiteboardState, patch: WhiteboardPatch, participantId: string): WhiteboardState | null {
@@ -1134,7 +1344,7 @@ export function createMediaObject(state: RoomState, participantId: string, input
   }
 
   const objectState = createInitialMediaObjectState(definition.stateKind, participantId, input.surfaceId);
-  const object: MediaObjectInstance<SurfaceTestCardState | ScreenShareObjectState | WhiteboardState | MarkdownBoardState | RemoteBrowserObjectState | PdfPresentationState> = {
+  const object: MediaObjectInstance<SurfaceTestCardState | ScreenShareObjectState | WhiteboardState | MarkdownBoardState | RemoteBrowserObjectState | PdfPresentationState | ImageViewerState | VideoPlayerState> = {
     objectId: input.objectId,
     type: input.objectType,
     roomId: state.roomId,
@@ -1469,6 +1679,50 @@ export function patchMediaObjectState(state: RoomState, participantId: string, i
       })
     };
   }
+  if (stateKind === "image-viewer" || stateKind === "video-player") {
+    permission = "document.present";
+    if (!hasRoomPermission(access.permissions, permission)) {
+      return rejectMediaObjectCommand(state, { commandId: input.commandId, role: access.role, permission, blockedReason: "missing-permission", surfaceId: input.surfaceId, objectId: input.objectId, objectType: object.type, revision: object.revision });
+    }
+    const currentState = object.state as ImageViewerState | VideoPlayerState;
+    const inputEventId = (input.patch as { inputEventId?: unknown } | null)?.inputEventId;
+    if (currentState.lastInputEventId === inputEventId) {
+      return rejectMediaObjectCommand(state, { commandId: input.commandId, role: access.role, permission, blockedReason: "duplicate-input-event", surfaceId: input.surfaceId, objectId: input.objectId, objectType: object.type, revision: object.revision });
+    }
+    const nextState = stateKind === "image-viewer"
+      ? isImageViewerPatch(input.patch) ? reduceImageViewerState(currentState as ImageViewerState, input.patch) : null
+      : isVideoPlayerPatch(input.patch) ? reduceVideoPlayerState(currentState as VideoPlayerState, input.patch, input.nowMs) : null;
+    if (!nextState) {
+      return rejectMediaObjectCommand(state, { commandId: input.commandId, role: access.role, permission, blockedReason: "invalid-patch", surfaceId: input.surfaceId, objectId: input.objectId, objectType: object.type, revision: object.revision });
+    }
+    const nextObject: MediaObjectInstance<ImageViewerState | VideoPlayerState> = {
+      ...object,
+      state: nextState,
+      status: "active",
+      revision: object.revision + 1,
+      updatedAtMs: input.nowMs
+    };
+    return {
+      room: {
+        ...state,
+        mediaObjects: {
+          surfaces: mediaObjects.surfaces,
+          objects: { ...mediaObjects.objects, [input.objectId]: nextObject }
+        }
+      },
+      result: createMediaObjectCommandResult({
+        accepted: true,
+        commandId: input.commandId,
+        role: access.role,
+        permission,
+        blockedReason: null,
+        surfaceId: input.surfaceId,
+        objectId: input.objectId,
+        objectType: object.type,
+        revision: nextObject.revision
+      })
+    };
+  }
   permission = "surface.input";
   if (!hasRoomPermission(access.permissions, permission)) {
     return rejectMediaObjectCommand(state, { commandId: input.commandId, role: access.role, permission, blockedReason: "missing-permission", surfaceId: input.surfaceId, objectId: input.objectId, objectType: object.type, revision: object.revision });
@@ -1667,13 +1921,14 @@ export function leaveRoom(state: RoomState, participantId: string): RoomState {
   };
 }
 
-export function removePdfPresentationDocument(state: RoomState, documentId: string): { room: RoomState; removedCount: number } {
+export function removeDocumentMediaObjects(state: RoomState, documentId: string): { room: RoomState; removedCount: number } {
   const mediaObjects = ensureMediaObjectsState(state);
   const nextObjects = { ...mediaObjects.objects };
   const nextSurfaces = { ...mediaObjects.surfaces };
   let removedCount = 0;
   for (const [objectId, object] of Object.entries(mediaObjects.objects)) {
-    if (object.type !== PDF_PRESENTATION_OBJECT_TYPE || (object.state as PdfPresentationState).documentId !== documentId) {
+    if ((object.type !== PDF_PRESENTATION_OBJECT_TYPE && object.type !== IMAGE_VIEWER_OBJECT_TYPE && object.type !== VIDEO_PLAYER_OBJECT_TYPE)
+      || (object.state as { documentId?: string | null }).documentId !== documentId) {
       continue;
     }
     delete nextObjects[objectId];
@@ -1688,6 +1943,8 @@ export function removePdfPresentationDocument(state: RoomState, documentId: stri
     removedCount
   };
 }
+
+export const removePdfPresentationDocument = removeDocumentMediaObjects;
 
 export function findParticipantSeatId(state: RoomState, participantId: string): string | null {
   for (const [seatId, occupantId] of Object.entries(state.seatOccupancy)) {

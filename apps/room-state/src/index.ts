@@ -3,8 +3,10 @@ import { randomUUID, timingSafeEqual } from "node:crypto";
 
 import { WebSocketServer, type WebSocket } from "ws";
 import {
+  IMAGE_VIEWER_OBJECT_TYPE,
   REMOTE_BROWSER_OBJECT_TYPE,
   PDF_PRESENTATION_OBJECT_TYPE,
+  VIDEO_PLAYER_OBJECT_TYPE,
   getRoomPermissions,
   hasRoomPermission,
   parseRoomRole,
@@ -26,7 +28,7 @@ import {
   patchMediaObjectState,
   patchRemoteBrowserExecutorState,
   releaseSeat,
-  removePdfPresentationDocument,
+  removeDocumentMediaObjects,
   serializeRoomState,
   setSurfaceMediaAudioEnabled,
   stopMediaObject,
@@ -74,7 +76,11 @@ const metrics = {
   socketDisconnectsTotal: 0,
   presentationsStartedTotal: 0,
   presentationPageChangesTotal: 0,
-  presentationPermissionDeniedTotal: 0
+  presentationPermissionDeniedTotal: 0,
+  imageViewersStartedTotal: 0,
+  videoPlayersStartedTotal: 0,
+  documentMediaPermissionDeniedTotal: new Map<string, number>(),
+  videoPlaybackCommandsTotal: new Map<string, number>()
 };
 
 export interface SeatClaimResultPayload {
@@ -100,7 +106,7 @@ interface RemoteBrowserExecutorPatchRequest {
   patch?: unknown;
 }
 
-interface PdfPresentationCleanupRequest {
+interface DocumentMediaCleanupRequest {
   roomId?: string;
   documentId?: string;
 }
@@ -155,11 +161,15 @@ function formatMetricLine(name: string, value: number, labels?: Record<string, s
 function roomStateMetricsText(authority: RoomStateServer): string {
   let clientCount = 0;
   let activePresentations = 0;
+  let activeImageViewers = 0;
+  let activeVideoPlayers = 0;
   for (const clients of authority.clients.values()) {
     clientCount += clients.size;
   }
   for (const room of authority.rooms.values()) {
     activePresentations += Object.values(room.mediaObjects.objects).filter((object) => object.type === PDF_PRESENTATION_OBJECT_TYPE).length;
+    activeImageViewers += Object.values(room.mediaObjects.objects).filter((object) => object.type === IMAGE_VIEWER_OBJECT_TYPE).length;
+    activeVideoPlayers += Object.values(room.mediaObjects.objects).filter((object) => object.type === VIDEO_PLAYER_OBJECT_TYPE).length;
   }
   return `${[
     "# HELP vrata_room_state_requests_total Total room-state HTTP requests handled by this process.",
@@ -188,7 +198,25 @@ function roomStateMetricsText(authority: RoomStateServer): string {
     formatMetricLine("vrata_presentation_permission_denied_total", metrics.presentationPermissionDeniedTotal),
     "# HELP vrata_pdf_presentations_active Active PDF presentation objects.",
     "# TYPE vrata_pdf_presentations_active gauge",
-    formatMetricLine("vrata_pdf_presentations_active", activePresentations)
+    formatMetricLine("vrata_pdf_presentations_active", activePresentations),
+    "# HELP vrata_image_viewers_started_total Accepted image viewer object creations.",
+    "# TYPE vrata_image_viewers_started_total counter",
+    formatMetricLine("vrata_image_viewers_started_total", metrics.imageViewersStartedTotal),
+    "# HELP vrata_video_players_started_total Accepted video player object creations.",
+    "# TYPE vrata_video_players_started_total counter",
+    formatMetricLine("vrata_video_players_started_total", metrics.videoPlayersStartedTotal),
+    "# HELP vrata_video_playback_commands_total Accepted video player commands by bounded command type.",
+    "# TYPE vrata_video_playback_commands_total counter",
+    ...["select-video", "play", "pause", "seek", "set-loop", "set-fit-mode"].map((command) => formatMetricLine("vrata_video_playback_commands_total", metrics.videoPlaybackCommandsTotal.get(command) ?? 0, { command })),
+    "# HELP vrata_document_media_permission_denied_total Image and video commands denied by permissions.",
+    "# TYPE vrata_document_media_permission_denied_total counter",
+    ...[IMAGE_VIEWER_OBJECT_TYPE, VIDEO_PLAYER_OBJECT_TYPE].map((objectType) => formatMetricLine("vrata_document_media_permission_denied_total", metrics.documentMediaPermissionDeniedTotal.get(objectType) ?? 0, { object_type: objectType })),
+    "# HELP vrata_image_viewers_active Active image viewer objects.",
+    "# TYPE vrata_image_viewers_active gauge",
+    formatMetricLine("vrata_image_viewers_active", activeImageViewers),
+    "# HELP vrata_video_players_active Active video player objects.",
+    "# TYPE vrata_video_players_active gauge",
+    formatMetricLine("vrata_video_players_active", activeVideoPlayers)
   ].join("\n")}\n`;
 }
 
@@ -424,7 +452,7 @@ function ensureRoom(server: RoomStateServer, roomId: string): RoomState {
 
 function broadcastRoom(server: RoomStateServer, roomId: string): void {
   const room = server.rooms.get(roomId);
-  const payload = JSON.stringify({ type: "room_state", room: room ? serializeRoomState(room) : null });
+  const payload = JSON.stringify({ type: "room_state", serverTimeMs: Date.now(), room: room ? serializeRoomState(room) : null });
   for (const client of server.clients.get(roomId) ?? []) {
     if (client.readyState === client.OPEN) {
       client.send(payload);
@@ -521,6 +549,13 @@ export function applyMediaObjectCreateCommand(server: RoomStateServer, roomId: s
     if (result.result.accepted) metrics.presentationsStartedTotal += 1;
     if (result.result.blockedReason === "missing-permission") metrics.presentationPermissionDeniedTotal += 1;
   }
+  if (input.objectType === IMAGE_VIEWER_OBJECT_TYPE || input.objectType === VIDEO_PLAYER_OBJECT_TYPE) {
+    if (result.result.accepted && input.objectType === IMAGE_VIEWER_OBJECT_TYPE) metrics.imageViewersStartedTotal += 1;
+    if (result.result.accepted && input.objectType === VIDEO_PLAYER_OBJECT_TYPE) metrics.videoPlayersStartedTotal += 1;
+    if (result.result.blockedReason === "missing-permission") {
+      metrics.documentMediaPermissionDeniedTotal.set(input.objectType, (metrics.documentMediaPermissionDeniedTotal.get(input.objectType) ?? 0) + 1);
+    }
+  }
   if (result.result.accepted) {
     broadcastRoom(server, roomId);
   }
@@ -572,6 +607,16 @@ export function applyMediaObjectPatchCommand(server: RoomStateServer, roomId: st
     if (result.result.accepted && (input.patch as { type?: unknown } | undefined)?.type === "go-to-page") metrics.presentationPageChangesTotal += 1;
     if (result.result.blockedReason === "missing-permission") metrics.presentationPermissionDeniedTotal += 1;
   }
+  if (objectType === IMAGE_VIEWER_OBJECT_TYPE || objectType === VIDEO_PLAYER_OBJECT_TYPE) {
+    if (result.result.blockedReason === "missing-permission") {
+      metrics.documentMediaPermissionDeniedTotal.set(objectType, (metrics.documentMediaPermissionDeniedTotal.get(objectType) ?? 0) + 1);
+    }
+    const command = (input.patch as { type?: unknown } | undefined)?.type;
+    if (result.result.accepted && objectType === VIDEO_PLAYER_OBJECT_TYPE && typeof command === "string"
+      && ["select-video", "play", "pause", "seek", "set-loop", "set-fit-mode"].includes(command)) {
+      metrics.videoPlaybackCommandsTotal.set(command, (metrics.videoPlaybackCommandsTotal.get(command) ?? 0) + 1);
+    }
+  }
   if (result.result.accepted) {
     if (result.result.objectType === REMOTE_BROWSER_OBJECT_TYPE) {
       forwardRemoteBrowserPatch(server, roomId, result.result.objectId, input.patch);
@@ -581,18 +626,20 @@ export function applyMediaObjectPatchCommand(server: RoomStateServer, roomId: st
   return result.result;
 }
 
-export function applyPdfPresentationDocumentCleanup(server: RoomStateServer, roomId: string, documentId: string): number {
+export function applyDocumentMediaObjectsCleanup(server: RoomStateServer, roomId: string, documentId: string): number {
   const room = server.rooms.get(roomId);
   if (!room) {
     return 0;
   }
-  const result = removePdfPresentationDocument(room, documentId);
+  const result = removeDocumentMediaObjects(room, documentId);
   server.rooms.set(roomId, result.room);
   if (result.removedCount > 0) {
     broadcastRoom(server, roomId);
   }
   return result.removedCount;
 }
+
+export const applyPdfPresentationDocumentCleanup = applyDocumentMediaObjectsCleanup;
 
 export function applyRemoteBrowserExecutorPatchCommand(server: RoomStateServer, input: {
   roomId?: string;
@@ -839,20 +886,20 @@ export function startRoomStateService(port = Number.parseInt(process.env.ROOM_ST
         text(response, 200, roomStateMetricsText(authority));
         return;
       }
-      const pdfPresentationCleanupMatch = url.pathname.match(/^\/api\/internal\/rooms\/([^/]+)\/documents\/([^/]+)\/presentation$/);
-      if (request.method === "DELETE" && pdfPresentationCleanupMatch) {
+      const documentMediaCleanupMatch = url.pathname.match(/^\/api\/internal\/rooms\/([^/]+)\/documents\/([^/]+)\/(media-objects|presentation)$/);
+      if (request.method === "DELETE" && documentMediaCleanupMatch) {
         if (!isAuthorizedInternalRequest(request)) {
           json(response, 403, { error: "forbidden" });
           return;
         }
-        const payload = await parseBody<PdfPresentationCleanupRequest>(request);
-        const roomId = decodeURIComponent(pdfPresentationCleanupMatch[1] ?? payload?.roomId ?? "");
-        const documentId = decodeURIComponent(pdfPresentationCleanupMatch[2] ?? payload?.documentId ?? "");
+        const payload = await parseBody<DocumentMediaCleanupRequest>(request);
+        const roomId = decodeURIComponent(documentMediaCleanupMatch[1] ?? payload?.roomId ?? "");
+        const documentId = decodeURIComponent(documentMediaCleanupMatch[2] ?? payload?.documentId ?? "");
         if (!roomId || !documentId) {
-          json(response, 400, { error: "invalid_pdf_presentation_cleanup" });
+          json(response, 400, { error: "invalid_document_media_cleanup" });
           return;
         }
-        const removedCount = applyPdfPresentationDocumentCleanup(authority, roomId, documentId);
+        const removedCount = applyDocumentMediaObjectsCleanup(authority, roomId, documentId);
         json(response, 200, { removedCount });
         return;
       }
