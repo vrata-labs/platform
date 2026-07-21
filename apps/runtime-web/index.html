@@ -86,8 +86,8 @@
           </div>
           <div id="documents-panel" class="documents-panel" hidden>
             <div class="documents-title">Documents</div>
-            <label for="document-upload-input">Upload PDF/image/text</label>
-            <input id="document-upload-input" type="file" accept="application/pdf,image/png,image/jpeg,image/webp,text/plain,.pdf,.png,.jpg,.jpeg,.webp,.txt" />
+            <label for="document-upload-input">Upload PDF, image, video, or text</label>
+            <input id="document-upload-input" type="file" accept="application/pdf,image/png,image/jpeg,image/webp,video/mp4,video/webm,text/plain,.pdf,.png,.jpg,.jpeg,.webp,.mp4,.webm,.txt" />
             <button id="document-upload-button" type="button">Upload document</button>
             <label for="document-select">Room library</label>
             <select id="document-select" disabled>
@@ -110,6 +110,18 @@
               </div>
               <div id="presentation-thumbnails" class="presentation-thumbnails" aria-label="Slide thumbnails"></div>
               <div id="presentation-status" class="audio-device-status" role="status" aria-live="polite">Presentation idle</div>
+            </div>
+            <div id="document-media-controls" class="presentation-controls" hidden>
+              <div id="document-media-title" class="presentation-controls-title">Media surface</div>
+              <div class="documents-actions">
+                <button id="document-media-play" type="button" disabled>Play</button>
+                <button id="document-media-fit" type="button" disabled>Cover</button>
+                <label id="document-media-loop-label"><input id="document-media-loop" type="checkbox" disabled /> Loop</label>
+                <button id="document-media-stop" type="button" disabled>Stop media</button>
+              </div>
+              <input id="document-media-seek" type="range" min="0" max="1000" value="0" disabled aria-label="Video position" />
+              <div id="document-media-time" class="audio-device-status">00:00 / 00:00</div>
+              <div id="document-media-status" class="audio-device-status" role="status" aria-live="polite">Media idle</div>
             </div>
           </div>
           <div class="controls">

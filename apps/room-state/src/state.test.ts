@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { DISABLED_EXTENSION_CARD_TYPE, EXTENSION_TEST_CARD_TYPE, MARKDOWN_BOARD_OBJECT_TYPE, MISSING_CAPABILITY_EXTENSION_CARD_TYPE, PDF_PRESENTATION_OBJECT_TYPE } from "@vrata/shared-types";
+import { DISABLED_EXTENSION_CARD_TYPE, EXTENSION_TEST_CARD_TYPE, IMAGE_VIEWER_OBJECT_TYPE, MARKDOWN_BOARD_OBJECT_TYPE, MISSING_CAPABILITY_EXTENSION_CARD_TYPE, PDF_PRESENTATION_OBJECT_TYPE, VIDEO_PLAYER_OBJECT_TYPE, type VideoPlayerState } from "@vrata/shared-types";
 
 import {
   claimSeat,
@@ -13,7 +13,9 @@ import {
   patchMediaObjectState,
   patchRemoteBrowserExecutorState,
   releaseSeat,
+  removeDocumentMediaObjects,
   removePdfPresentationDocument,
+  resolveVideoPlaybackPositionMs,
   setSurfaceMediaAudioEnabled,
   stopMediaObject,
   updateParticipantState
@@ -559,6 +561,220 @@ test("PDF presentation syncs page and mode with presenter-only revisioned patche
   const cleanup = removePdfPresentationDocument(disconnected, "document-1");
   assert.equal(cleanup.removedCount, 1);
   assert.equal(cleanup.room.mediaObjects.surfaces["debug-main"]?.activeObjectId, null);
+});
+
+test("image viewer validates selection and synchronizes presenter-only fit", () => {
+  const presenterRoom = joinRoom(createRoomState("demo"), "presenter", { role: "presenter" });
+  const created = createMediaObject(presenterRoom, "presenter", {
+    commandId: "image-create",
+    surfaceId: "debug-main",
+    objectType: IMAGE_VIEWER_OBJECT_TYPE,
+    objectId: "image-object",
+    nowMs: 1
+  });
+  assert.equal(created.result.accepted, true);
+  assert.deepEqual(created.room.mediaObjects.objects["image-object"]?.state, {
+    status: "idle",
+    documentId: null,
+    filename: null,
+    checksum: null,
+    contentType: null,
+    widthPx: 0,
+    heightPx: 0,
+    fitMode: "contain",
+    lastInputEventId: null
+  });
+
+  const selected = patchMediaObjectState(created.room, "presenter", {
+    commandId: "image-select",
+    surfaceId: "debug-main",
+    objectId: "image-object",
+    expectedRevision: 0,
+    patch: {
+      type: "select-image",
+      documentId: "image-1",
+      filename: "photo.webp",
+      checksum: `sha256:${"c".repeat(64)}`,
+      contentType: "image/webp",
+      widthPx: 4096,
+      heightPx: 2160,
+      inputEventId: "image-select-1"
+    },
+    nowMs: 2
+  });
+  assert.equal(selected.result.accepted, true);
+
+  const memberRoom = joinRoom(selected.room, "member", { role: "member" });
+  const denied = patchMediaObjectState(memberRoom, "member", {
+    commandId: "image-member-fit",
+    surfaceId: "debug-main",
+    objectId: "image-object",
+    expectedRevision: 1,
+    patch: { type: "set-fit-mode", fitMode: "cover", inputEventId: "member-fit-1" },
+    nowMs: 3
+  });
+  assert.equal(denied.result.blockedReason, "missing-permission");
+  assert.equal(denied.result.permission, "document.present");
+
+  const fitted = patchMediaObjectState(memberRoom, "presenter", {
+    commandId: "image-presenter-fit",
+    surfaceId: "debug-main",
+    objectId: "image-object",
+    expectedRevision: 1,
+    patch: { type: "set-fit-mode", fitMode: "cover", inputEventId: "presenter-fit-1" },
+    nowMs: 4
+  });
+  assert.equal(fitted.result.revision, 2);
+  assert.equal((fitted.room.mediaObjects.objects["image-object"]?.state as { fitMode?: string }).fitMode, "cover");
+
+  const invalidDimensions = patchMediaObjectState(fitted.room, "presenter", {
+    commandId: "image-too-large",
+    surfaceId: "debug-main",
+    objectId: "image-object",
+    expectedRevision: 2,
+    patch: {
+      type: "select-image",
+      documentId: "image-2",
+      filename: "large.png",
+      checksum: `sha256:${"d".repeat(64)}`,
+      contentType: "image/png",
+      widthPx: 16384,
+      heightPx: 16384,
+      inputEventId: "image-select-large"
+    },
+    nowMs: 5
+  });
+  assert.equal(invalidDimensions.result.blockedReason, "invalid-patch");
+
+  const disconnected = leaveRoom(fitted.room, "presenter");
+  assert.ok(disconnected.mediaObjects.objects["image-object"]);
+  const cleanup = removeDocumentMediaObjects(disconnected, "image-1");
+  assert.equal(cleanup.removedCount, 1);
+});
+
+test("video player uses server time for revisioned playback commands", () => {
+  const presenterRoom = joinRoom(createRoomState("demo"), "presenter", { role: "presenter" });
+  const created = createMediaObject(presenterRoom, "presenter", {
+    commandId: "video-create",
+    surfaceId: "laptop-screen",
+    objectType: VIDEO_PLAYER_OBJECT_TYPE,
+    objectId: "video-object",
+    nowMs: 100
+  });
+  const selected = patchMediaObjectState(created.room, "presenter", {
+    commandId: "video-select",
+    surfaceId: "laptop-screen",
+    objectId: "video-object",
+    expectedRevision: 0,
+    patch: {
+      type: "select-video",
+      documentId: "video-1",
+      filename: "clip.mp4",
+      checksum: `sha256:${"e".repeat(64)}`,
+      contentType: "video/mp4",
+      widthPx: 1920,
+      heightPx: 1080,
+      durationMs: 1000,
+      inputEventId: "video-select-1"
+    },
+    nowMs: 150
+  });
+  assert.equal(selected.result.accepted, true);
+
+  const playing = patchMediaObjectState(selected.room, "presenter", {
+    commandId: "video-play",
+    surfaceId: "laptop-screen",
+    objectId: "video-object",
+    expectedRevision: 1,
+    patch: { type: "play", inputEventId: "video-play-1" },
+    nowMs: 200
+  });
+  const playingState = playing.room.mediaObjects.objects["video-object"]?.state as VideoPlayerState;
+  assert.equal(playingState.anchorServerTimeMs, 200);
+  assert.equal(resolveVideoPlaybackPositionMs(playingState, 450), 250);
+  assert.equal(resolveVideoPlaybackPositionMs(playingState, 1300), 1000);
+
+  const paused = patchMediaObjectState(playing.room, "presenter", {
+    commandId: "video-pause",
+    surfaceId: "laptop-screen",
+    objectId: "video-object",
+    expectedRevision: 2,
+    patch: { type: "pause", inputEventId: "video-pause-1" },
+    nowMs: 500
+  });
+  const pausedState = paused.room.mediaObjects.objects["video-object"]?.state as VideoPlayerState;
+  assert.equal(pausedState.positionMs, 300);
+  assert.equal(pausedState.anchorServerTimeMs, null);
+  assert.equal(resolveVideoPlaybackPositionMs(pausedState, 900), 300);
+
+  const sought = patchMediaObjectState(paused.room, "presenter", {
+    commandId: "video-seek",
+    surfaceId: "laptop-screen",
+    objectId: "video-object",
+    expectedRevision: 3,
+    patch: { type: "seek", positionMs: 800, inputEventId: "video-seek-1" },
+    nowMs: 600
+  });
+  const looped = patchMediaObjectState(sought.room, "presenter", {
+    commandId: "video-loop",
+    surfaceId: "laptop-screen",
+    objectId: "video-object",
+    expectedRevision: 4,
+    patch: { type: "set-loop", loop: true, inputEventId: "video-loop-1" },
+    nowMs: 700
+  });
+  const replayed = patchMediaObjectState(looped.room, "presenter", {
+    commandId: "video-replay",
+    surfaceId: "laptop-screen",
+    objectId: "video-object",
+    expectedRevision: 5,
+    patch: { type: "play", inputEventId: "video-play-2" },
+    nowMs: 800
+  });
+  const loopState = replayed.room.mediaObjects.objects["video-object"]?.state as VideoPlayerState;
+  assert.equal(resolveVideoPlaybackPositionMs(loopState, 1100), 100);
+
+  const fitted = patchMediaObjectState(replayed.room, "presenter", {
+    commandId: "video-fit",
+    surfaceId: "laptop-screen",
+    objectId: "video-object",
+    expectedRevision: 6,
+    patch: { type: "set-fit-mode", fitMode: "cover", inputEventId: "video-fit-1" },
+    nowMs: 900
+  });
+  assert.equal(fitted.result.revision, 7);
+
+  const duplicate = patchMediaObjectState(fitted.room, "presenter", {
+    commandId: "video-duplicate",
+    surfaceId: "laptop-screen",
+    objectId: "video-object",
+    expectedRevision: 7,
+    patch: { type: "set-fit-mode", fitMode: "contain", inputEventId: "video-fit-1" },
+    nowMs: 1000
+  });
+  assert.equal(duplicate.result.blockedReason, "duplicate-input-event");
+  const stale = patchMediaObjectState(fitted.room, "presenter", {
+    commandId: "video-stale",
+    surfaceId: "laptop-screen",
+    objectId: "video-object",
+    expectedRevision: 6,
+    patch: { type: "pause", inputEventId: "video-pause-stale" },
+    nowMs: 1000
+  });
+  assert.equal(stale.result.blockedReason, "revision-mismatch");
+  const clientTimestamp = patchMediaObjectState(fitted.room, "presenter", {
+    commandId: "video-client-time",
+    surfaceId: "laptop-screen",
+    objectId: "video-object",
+    expectedRevision: 7,
+    patch: { type: "pause", inputEventId: "video-pause-time", anchorServerTimeMs: 1 },
+    nowMs: 1000
+  });
+  assert.equal(clientTimestamp.result.blockedReason, "invalid-patch");
+
+  const disconnected = leaveRoom(fitted.room, "presenter");
+  assert.ok(disconnected.mediaObjects.objects["video-object"]);
+  assert.equal(removeDocumentMediaObjects(disconnected, "video-1").removedCount, 1);
 });
 
 test("whiteboard object appends strokes and enforces draw and clear permissions", () => {

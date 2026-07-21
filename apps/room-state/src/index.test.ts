@@ -11,6 +11,7 @@ import {
   applyMediaObjectPatchCommand,
   applyRemoteBrowserExecutorPatchCommand,
   applyMediaObjectStopCommand,
+  applyDocumentMediaObjectsCleanup,
   applyPdfPresentationDocumentCleanup,
   applyPrivilegedRoomCommand,
   applySeatClaim,
@@ -60,6 +61,12 @@ test("room-state readiness endpoint reports ready", async () => {
     const metricsText = await metricsResponse.text();
     assert.match(metricsText, /vrata_room_state_active_rooms \d+/);
     assert.match(metricsText, /vrata_room_state_active_participants \d+/);
+    assert.match(metricsText, /vrata_image_viewers_started_total \d+/);
+    assert.match(metricsText, /vrata_video_playback_commands_total\{command="play"\} \d+/);
+
+    const cleanupResponse = await fetch("http://127.0.0.1:4031/api/internal/rooms/empty/documents/document-1/media-objects", { method: "DELETE" });
+    assert.equal(cleanupResponse.ok, true);
+    assert.deepEqual(await cleanupResponse.json(), { removedCount: 0 });
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     delete process.env.VRATA_DISABLE_AUTOSTART;
@@ -300,11 +307,61 @@ test("PDF presentation page is retained for late join and internal document clea
 
   const lateSocket = createSocket();
   connectParticipant(server, "pdf-room", "late", lateSocket as never, { role: "guest" });
-  const lateSnapshot = [...lateSocket.sent].reverse().map((payload) => JSON.parse(payload) as { type?: string; room?: { mediaObjects?: { objects?: Record<string, { state?: { currentPage?: number } }> } } }).find((payload) => payload.type === "room_state");
+  const lateSnapshot = [...lateSocket.sent].reverse().map((payload) => JSON.parse(payload) as { type?: string; serverTimeMs?: number; room?: { mediaObjects?: { objects?: Record<string, { state?: { currentPage?: number } }> } } }).find((payload) => payload.type === "room_state");
   assert.equal(lateSnapshot?.room?.mediaObjects?.objects?.[created.objectId ?? ""]?.state?.currentPage, 2);
+  assert.equal(typeof lateSnapshot?.serverTimeMs, "number");
 
   assert.equal(applyPdfPresentationDocumentCleanup(server, "pdf-room", "doc-1"), 1);
   assert.equal(server.rooms.get("pdf-room")?.mediaObjects.surfaces["debug-main"]?.activeObjectId, null);
+});
+
+test("video state and server clock are retained for late join and generic cleanup", () => {
+  const server = createRoomStateServer();
+  connectParticipant(server, "video-room", "presenter", createSocket() as never, { role: "presenter" });
+  const created = applyMediaObjectCreateCommand(server, "video-room", "presenter", {
+    commandId: "video-create",
+    surfaceId: "debug-main",
+    objectType: "video-player"
+  });
+  const selected = applyMediaObjectPatchCommand(server, "video-room", "presenter", {
+    commandId: "video-select",
+    surfaceId: "debug-main",
+    objectId: created.objectId ?? "",
+    expectedRevision: 0,
+    patch: {
+      type: "select-video",
+      documentId: "video-1",
+      filename: "clip.webm",
+      checksum: `sha256:${"f".repeat(64)}`,
+      contentType: "video/webm",
+      widthPx: 1280,
+      heightPx: 720,
+      durationMs: 2000,
+      inputEventId: "video-select-1"
+    }
+  });
+  const playing = applyMediaObjectPatchCommand(server, "video-room", "presenter", {
+    commandId: "video-play",
+    surfaceId: "debug-main",
+    objectId: created.objectId ?? "",
+    expectedRevision: selected.revision ?? 1,
+    patch: { type: "play", inputEventId: "video-play-1" }
+  });
+  assert.equal(playing.accepted, true);
+
+  const lateSocket = createSocket();
+  connectParticipant(server, "video-room", "late", lateSocket as never, { role: "guest" });
+  const snapshot = [...lateSocket.sent].reverse().map((payload) => JSON.parse(payload) as {
+    type?: string;
+    serverTimeMs?: number;
+    room?: { mediaObjects?: { objects?: Record<string, { state?: { playbackState?: string; anchorServerTimeMs?: number } }> } };
+  }).find((payload) => payload.type === "room_state");
+  assert.equal(typeof snapshot?.serverTimeMs, "number");
+  assert.equal(snapshot?.room?.mediaObjects?.objects?.[created.objectId ?? ""]?.state?.playbackState, "playing");
+  assert.equal(typeof snapshot?.room?.mediaObjects?.objects?.[created.objectId ?? ""]?.state?.anchorServerTimeMs, "number");
+
+  assert.equal(applyDocumentMediaObjectsCleanup(server, "video-room", "video-1"), 1);
+  assert.equal(server.rooms.get("video-room")?.mediaObjects.surfaces["debug-main"]?.activeObjectId, null);
 });
 
 test("whiteboard commands append and clear strokes through authoritative room state", () => {

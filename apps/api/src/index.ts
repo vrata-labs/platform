@@ -353,6 +353,8 @@ const metrics = {
   pdfValidationFailuresTotal: new Map<string, number>(),
   documentPresentationContentTotal: new Map<string, number>(),
   documentBlobDeletesTotal: new Map<string, number>(),
+  documentMediaValidationFailuresTotal: new Map<string, number>(),
+  documentMediaContentTotal: new Map<string, number>(),
   personalRoomsCreatedTotal: 0,
   personalRoomOpensTotal: new Map<string, number>(),
   personalRoomAccessDeniedTotal: new Map<string, number>(),
@@ -1337,6 +1339,18 @@ async function apiMetricsText(storage: Awaited<typeof storagePromise>): Promise<
     "# HELP vrata_document_blob_deletes_total Document blob delete attempts by result.",
     "# TYPE vrata_document_blob_deletes_total counter",
     ...Array.from(metrics.documentBlobDeletesTotal.entries()).map(([result, count]) => formatMetricLine("vrata_document_blob_deletes_total", count, { result })),
+    "# HELP vrata_document_media_validation_failures_total Rejected image and video uploads by bounded reason.",
+    "# TYPE vrata_document_media_validation_failures_total counter",
+    ...Array.from(metrics.documentMediaValidationFailuresTotal.entries()).map(([key, count]) => {
+      const [kind, reason] = key.split(":");
+      return formatMetricLine("vrata_document_media_validation_failures_total", count, { kind, reason });
+    }),
+    "# HELP vrata_document_media_content_total Authenticated image and video content requests by result.",
+    "# TYPE vrata_document_media_content_total counter",
+    ...Array.from(metrics.documentMediaContentTotal.entries()).map(([key, count]) => {
+      const [kind, result] = key.split(":");
+      return formatMetricLine("vrata_document_media_content_total", count, { kind, result });
+    }),
     "# HELP vrata_notes_created_total Notes first created through the API by scope.",
     "# TYPE vrata_notes_created_total counter",
     ...Array.from(metrics.notesCreatedTotal.entries()).map(([scope, count]) => formatMetricLine("vrata_notes_created_total", count, { scope })),
@@ -1952,6 +1966,8 @@ const allowedDocumentContentTypes = new Set([
   "image/png",
   "image/jpeg",
   "image/webp",
+  "video/mp4",
+  "video/webm",
   "text/plain"
 ]);
 
@@ -2031,6 +2047,8 @@ function inferDocumentContentType(filename: string): string | null {
     case ".jpg":
     case ".jpeg": return "image/jpeg";
     case ".webp": return "image/webp";
+    case ".mp4": return "video/mp4";
+    case ".webm": return "video/webm";
     case ".txt": return "text/plain";
     default: return null;
   }
@@ -2081,6 +2099,92 @@ async function inspectPdfDocument(data: Buffer): Promise<RoomDocumentMetadata> {
   }
 }
 
+function validateMediaDimensions(widthPx: number, heightPx: number): void {
+  if (!Number.isInteger(widthPx) || !Number.isInteger(heightPx) || widthPx < 1 || heightPx < 1
+    || widthPx > 16_384 || heightPx > 16_384 || widthPx * heightPx > 67_000_000) {
+    throw new Error("invalid_media_dimensions");
+  }
+}
+
+function inspectJpegDimensions(data: Buffer): { widthPx: number; heightPx: number } {
+  if (data.length < 4 || data[0] !== 0xff || data[1] !== 0xd8) throw new Error("invalid_image_signature");
+  let offset = 2;
+  while (offset + 8 < data.length) {
+    if (data[offset] !== 0xff) { offset += 1; continue; }
+    const marker = data[offset + 1];
+    if (marker === 0xd9 || marker === 0xda) break;
+    const segmentLength = data.readUInt16BE(offset + 2);
+    if (segmentLength < 2 || offset + 2 + segmentLength > data.length) break;
+    if ((marker >= 0xc0 && marker <= 0xc3) || (marker >= 0xc5 && marker <= 0xc7)
+      || (marker >= 0xc9 && marker <= 0xcb) || (marker >= 0xcd && marker <= 0xcf)) {
+      return { heightPx: data.readUInt16BE(offset + 5), widthPx: data.readUInt16BE(offset + 7) };
+    }
+    offset += 2 + segmentLength;
+  }
+  throw new Error("invalid_image_signature");
+}
+
+function inspectWebpDimensions(data: Buffer): { widthPx: number; heightPx: number } {
+  if (data.length < 30 || data.toString("ascii", 0, 4) !== "RIFF" || data.toString("ascii", 8, 12) !== "WEBP") throw new Error("invalid_image_signature");
+  const chunk = data.toString("ascii", 12, 16);
+  if (chunk === "VP8X") {
+    return { widthPx: 1 + data.readUIntLE(24, 3), heightPx: 1 + data.readUIntLE(27, 3) };
+  }
+  if (chunk === "VP8L" && data[20] === 0x2f) {
+    const bits = data.readUInt32LE(21);
+    return { widthPx: (bits & 0x3fff) + 1, heightPx: ((bits >> 14) & 0x3fff) + 1 };
+  }
+  if (chunk === "VP8 " && data[23] === 0x9d && data[24] === 0x01 && data[25] === 0x2a) {
+    return { widthPx: data.readUInt16LE(26) & 0x3fff, heightPx: data.readUInt16LE(28) & 0x3fff };
+  }
+  throw new Error("invalid_image_signature");
+}
+
+function inspectImageDocument(data: Buffer, contentType: string): RoomDocumentMetadata {
+  let dimensions: { widthPx: number; heightPx: number };
+  if (contentType === "image/png") {
+    if (data.length < 24 || !data.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) || data.toString("ascii", 12, 16) !== "IHDR") {
+      throw new Error("invalid_image_signature");
+    }
+    dimensions = { widthPx: data.readUInt32BE(16), heightPx: data.readUInt32BE(20) };
+  } else if (contentType === "image/jpeg") {
+    dimensions = inspectJpegDimensions(data);
+  } else if (contentType === "image/webp") {
+    dimensions = inspectWebpDimensions(data);
+  } else {
+    throw new Error("unsupported_document_mime");
+  }
+  validateMediaDimensions(dimensions.widthPx, dimensions.heightPx);
+  return { kind: "image", ...dimensions, metadataSource: "server" };
+}
+
+function multipartNumber(parts: MultipartPart[], name: string): number | null {
+  const raw = parts.find((part) => part.name === name)?.data.toString("utf8").trim();
+  if (!raw) return null;
+  const value = Number(raw);
+  return Number.isFinite(value) ? value : null;
+}
+
+function inspectVideoDocument(data: Buffer, contentType: string, parts: MultipartPart[]): RoomDocumentMetadata {
+  let container: "mp4" | "webm";
+  if (contentType === "video/mp4") {
+    if (data.length < 16 || data.toString("ascii", 4, 8) !== "ftyp") throw new Error("invalid_video_container");
+    container = "mp4";
+  } else if (contentType === "video/webm") {
+    if (data.length < 8 || data.readUInt32BE(0) !== 0x1a45dfa3) throw new Error("invalid_video_container");
+    container = "webm";
+  } else {
+    throw new Error("unsupported_document_mime");
+  }
+  const widthPx = multipartNumber(parts, "mediaWidthPx");
+  const heightPx = multipartNumber(parts, "mediaHeightPx");
+  const durationMs = multipartNumber(parts, "mediaDurationMs");
+  if (widthPx === null || heightPx === null || durationMs === null) throw new Error("video_metadata_missing");
+  validateMediaDimensions(widthPx, heightPx);
+  if (!Number.isInteger(durationMs) || durationMs < 1 || durationMs > 4 * 60 * 60 * 1000) throw new Error("video_duration_invalid");
+  return { kind: "video", widthPx, heightPx, durationMs, container, metadataSource: "browser" };
+}
+
 function normalizeDocumentFilename(input: string | undefined): string | null {
   const raw = input?.trim() ?? "";
   if (!raw || raw.length > 160 || /[\\/\0]/.test(raw)) return null;
@@ -2109,6 +2213,9 @@ function serializeRoomDocument(request: IncomingMessage, document: RoomDocumentR
     downloadUrl: `/api/rooms/${encodeURIComponent(document.roomId)}/documents/${encodeURIComponent(document.documentId)}/download`,
     presentationUrl: document.metadata?.kind === "pdf"
       ? `/api/rooms/${encodeURIComponent(document.roomId)}/documents/${encodeURIComponent(document.documentId)}/presentation`
+      : null,
+    contentUrl: document.metadata?.kind === "image" || document.metadata?.kind === "video"
+      ? `/api/rooms/${encodeURIComponent(document.roomId)}/documents/${encodeURIComponent(document.documentId)}/content`
       : null
   };
 }
@@ -2785,12 +2892,12 @@ async function deleteDocumentObject(storage: DocumentUploadStorage, storageKey: 
   await deleteS3Object(storage, storageKey);
 }
 
-async function cleanupPdfPresentation(roomId: string, documentId: string): Promise<void> {
+async function cleanupDocumentMediaObjects(roomId: string, documentId: string): Promise<void> {
   const baseUrl = process.env.ROOM_STATE_INTERNAL_URL?.trim();
   if (!baseUrl) {
     return;
   }
-  const response = await fetch(new URL(`/api/internal/rooms/${encodeURIComponent(roomId)}/documents/${encodeURIComponent(documentId)}/presentation`, baseUrl), {
+  const response = await fetch(new URL(`/api/internal/rooms/${encodeURIComponent(roomId)}/documents/${encodeURIComponent(documentId)}/media-objects`, baseUrl), {
     method: "DELETE",
     headers: getInternalServiceHeaders()
   });
@@ -3691,6 +3798,18 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
         incrementCounter(metrics.documentsUploadedTotal, `${contentType}:rejected`);
         return json(response, 422, { error: reason, requestId });
       }
+    } else if (contentType.startsWith("image/") || contentType.startsWith("video/")) {
+      const kind = contentType.startsWith("image/") ? "image" : "video";
+      try {
+        documentMetadata = kind === "image"
+          ? inspectImageDocument(documentFile.data, contentType)
+          : inspectVideoDocument(documentFile.data, contentType, parts);
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : `invalid_${kind}`;
+        incrementCounter(metrics.documentMediaValidationFailuresTotal, `${kind}:${reason}`);
+        incrementCounter(metrics.documentsUploadedTotal, `${contentType}:rejected`);
+        return json(response, 422, { error: reason, requestId });
+      }
     }
 
     try {
@@ -3721,7 +3840,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     return;
   }
 
-  const roomDocumentItemMatch = url.pathname.match(/^\/api\/rooms\/([^/]+)\/documents\/([^/]+)(?:\/(download|presentation|surface))?$/);
+  const roomDocumentItemMatch = url.pathname.match(/^\/api\/rooms\/([^/]+)\/documents\/([^/]+)(?:\/(download|presentation|content|surface))?$/);
   if ((method === "GET" || method === "DELETE" || method === "POST") && roomDocumentItemMatch) {
     if (!isDocumentsFeatureEnabled()) return json(response, 404, { error: "documents_disabled" });
     const roomId = decodeURIComponent(roomDocumentItemMatch[1]);
@@ -3729,8 +3848,8 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     const actionPath = roomDocumentItemMatch[3] ?? "item";
     const room = await storage.getRoom(roomId);
     if (!room) return json(response, 404, { error: "room_not_found" });
-    const permission = actionPath === "download" ? "document.download" : actionPath === "presentation" ? "surface.view" : method === "DELETE" ? "document.delete" : "document.present";
-    const action = actionPath === "download" ? "documents.download" : actionPath === "presentation" ? "documents.presentation" : method === "DELETE" ? "documents.delete" : "documents.select-surface";
+    const permission = actionPath === "download" ? "document.download" : actionPath === "presentation" || actionPath === "content" ? "surface.view" : method === "DELETE" ? "document.delete" : "document.present";
+    const action = actionPath === "download" ? "documents.download" : actionPath === "presentation" || actionPath === "content" ? "documents.presentation" : method === "DELETE" ? "documents.delete" : "documents.select-surface";
     const actor = resolveRoomDocumentsActor(request, response, { room, permission, action, documentId });
     if (!actor) return;
     const document = await storage.getRoomDocument(roomId, documentId);
@@ -3778,9 +3897,34 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       return;
     }
 
+    if (method === "GET" && actionPath === "content") {
+      const kind = document.metadata?.kind;
+      if ((kind !== "image" && kind !== "video") || !document.linkedSurfaceId) {
+        incrementCounter(metrics.documentMediaContentTotal, `${kind === "video" ? "video" : "image"}:not_active`);
+        return json(response, 404, { error: "media_content_not_active" });
+      }
+      try {
+        const bytes = await readDocumentObject(getDocumentUploadStorage(request), document.storageKey);
+        incrementCounter(metrics.documentMediaContentTotal, `${kind}:success`);
+        response.writeHead(200, {
+          "content-type": document.contentType,
+          "content-length": String(bytes.byteLength),
+          "content-disposition": `inline; filename="${safeHeaderFilename(document.filename)}"`,
+          "cache-control": "private, no-store",
+          "x-content-type-options": "nosniff",
+          "x-request-id": requestId
+        });
+        response.end(bytes);
+      } catch (error) {
+        incrementCounter(metrics.documentMediaContentTotal, `${kind}:failed`);
+        json(response, 503, { error: error instanceof Error ? error.message : "media_content_failed", requestId });
+      }
+      return;
+    }
+
     if (method === "DELETE" && actionPath === "item") {
       try {
-        await cleanupPdfPresentation(roomId, documentId);
+        await cleanupDocumentMediaObjects(roomId, documentId);
       } catch (error) {
         return json(response, 503, { error: error instanceof Error ? error.message : "presentation_cleanup_failed", requestId });
       }
@@ -3799,7 +3943,9 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     }
 
     if (method === "POST" && actionPath === "surface") {
-      if (document.metadata?.kind !== "pdf" || !document.metadata.pageCount) {
+      if (!document.metadata?.kind || !["pdf", "image", "video"].includes(document.metadata.kind)
+        || (document.metadata.kind === "pdf" && !document.metadata.pageCount)
+        || ((document.metadata.kind === "image" || document.metadata.kind === "video") && (!document.metadata.widthPx || !document.metadata.heightPx))) {
         return json(response, 422, { error: "document_not_presentable" });
       }
       const payload = (await parseBody<{ surfaceId?: unknown }>(request)) ?? {};

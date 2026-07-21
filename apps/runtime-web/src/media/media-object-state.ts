@@ -1,12 +1,16 @@
 import {
   REMOTE_BROWSER_OBJECT_TYPE,
   PDF_PRESENTATION_OBJECT_TYPE,
+  IMAGE_VIEWER_OBJECT_TYPE,
+  VIDEO_PLAYER_OBJECT_TYPE,
   SCREEN_SHARE_OBJECT_TYPE,
   MARKDOWN_BOARD_OBJECT_TYPE,
   WHITEBOARD_OBJECT_TYPE,
   type MediaObjectInstance,
   type MarkdownBoardState,
   type PdfPresentationState,
+  type ImageViewerState,
+  type VideoPlayerState,
   type RemoteBrowserObjectState,
   type RoomMediaObjectsState,
   type ScreenShareObjectState,
@@ -102,6 +106,22 @@ export function activePdfPresentationObjectForSurface(mediaObjects: RoomMediaObj
     return null;
   }
   return object as MediaObjectInstance<PdfPresentationState>;
+}
+
+export function activeImageViewerObjectForSurface(mediaObjects: RoomMediaObjectsState | null, surfaceId: string): MediaObjectInstance<ImageViewerState> | null {
+  const object = activeMediaObjectForSurface(mediaObjects, surfaceId);
+  const state = object?.state as Partial<ImageViewerState> | undefined;
+  return object?.type === IMAGE_VIEWER_OBJECT_TYPE && (state?.status === "idle" || state?.status === "active")
+    ? object as MediaObjectInstance<ImageViewerState>
+    : null;
+}
+
+export function activeVideoPlayerObjectForSurface(mediaObjects: RoomMediaObjectsState | null, surfaceId: string): MediaObjectInstance<VideoPlayerState> | null {
+  const object = activeMediaObjectForSurface(mediaObjects, surfaceId);
+  const state = object?.state as Partial<VideoPlayerState> | undefined;
+  return object?.type === VIDEO_PLAYER_OBJECT_TYPE && (state?.status === "idle" || state?.status === "active")
+    ? object as MediaObjectInstance<VideoPlayerState>
+    : null;
 }
 
 function isMockRemoteBrowserTrackSid(trackSid: string): boolean {

@@ -19,9 +19,9 @@
 - WebSocket message out:
   - `room_state`
 
-Media surfaces are included in each full snapshot. The built-in `pdf-presentation` object stores document identity, page count, current page, and display mode. Mutations use the existing revisioned `surface_patch_object_state` command and require `document.present`; viewers receive the same state without control permission.
+Media surfaces are included in each full snapshot, together with `serverTimeMs`. The built-in `pdf-presentation`, `image-viewer`, and `video-player` objects store authoritative presentation state. Video state stores a playback position plus a server-time anchor rather than trusting client timestamps. Mutations use the existing revisioned `surface_patch_object_state` command and require `document.present`; viewers receive the same state without control permission.
 
-Document deletion calls `DELETE /api/internal/rooms/:roomId/documents/:documentId/presentation` with the internal service token. The room-state service removes matching objects, frees their surfaces, and broadcasts the updated snapshot.
+Document deletion calls `DELETE /api/internal/rooms/:roomId/documents/:documentId/media-objects` with the internal service token. The room-state service removes matching PDF/image/video objects, frees their surfaces, and broadcasts the updated snapshot. The legacy `/presentation` cleanup alias remains accepted during the API/room-state rollout boundary.
 
 Room state is currently process-memory state. Late join is supported while the service remains alive, but active presentation/page state is not restored after a room-state process restart.
 

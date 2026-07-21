@@ -93,9 +93,12 @@ async function createMultipartSceneBundleBody(input: { bundleId?: string; versio
   return { body: Buffer.concat(parts), contentType: `multipart/form-data; boundary=${boundary}` };
 }
 
-async function createMultipartDocumentBody(input: { filename: string; contentType: string; body: Buffer }): Promise<{ body: Buffer; contentType: string }> {
+async function createMultipartDocumentBody(input: { filename: string; contentType: string; body: Buffer; fields?: Record<string, string> }): Promise<{ body: Buffer; contentType: string }> {
   const boundary = `----vrata-doc-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const parts: Buffer[] = [];
+  for (const [name, value] of Object.entries(input.fields ?? {})) {
+    parts.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${name}"\r\n\r\n${value}\r\n`));
+  }
   parts.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="document"; filename="${input.filename}"\r\nContent-Type: ${input.contentType}\r\n\r\n`));
   parts.push(input.body);
   parts.push(Buffer.from(`\r\n--${boundary}--\r\n`));
@@ -1107,6 +1110,69 @@ test("room documents API uploads lists downloads selects and soft-deletes with p
     assert.equal(deleteResponse.status, 200);
     await assert.rejects(readFile(join(process.env.DOCUMENT_LOCAL_UPLOAD_ROOT!, "documents", "demo-tenant", "documents-room", uploaded.document.documentId, "meeting.pdf")));
 
+    const pngBytes = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAYAAAD0In+KAAAAD0lEQVR4AWISW+z1H4QBAAAA///iIMP1AAAABklEQVQDAA/LBAeJ81I+AAAAAElFTkSuQmCC", "base64");
+    const imageBody = await createMultipartDocumentBody({ filename: "pixel.png", contentType: "image/png", body: pngBytes });
+    const imageUploadResponse = await fetch(`${baseUrl}/api/rooms/documents-room/documents`, {
+      method: "POST",
+      headers: { "content-type": imageBody.contentType, "authorization": `Bearer ${hostToken}` },
+      body: new Uint8Array(imageBody.body)
+    });
+    assert.equal(imageUploadResponse.status, 201);
+    const imageUpload = (await imageUploadResponse.json()) as { document: { documentId: string; contentUrl: string; metadata: { kind: string; widthPx: number; heightPx: number; metadataSource: string } } };
+    assert.deepEqual(imageUpload.document.metadata, { kind: "image", widthPx: 2, heightPx: 1, metadataSource: "server" });
+    const imageBeforeSelection = await fetch(`${baseUrl}${imageUpload.document.contentUrl}`, { headers: { "authorization": `Bearer ${guestToken}` } });
+    assert.equal(imageBeforeSelection.status, 404);
+    const imageSurfaceResponse = await fetch(`${baseUrl}/api/rooms/documents-room/documents/${imageUpload.document.documentId}/surface`, {
+      method: "POST",
+      headers: { ...jsonHeaders, "authorization": `Bearer ${hostToken}` },
+      body: JSON.stringify({ surfaceId: "debug-main" })
+    });
+    assert.equal(imageSurfaceResponse.status, 200);
+    const imageContentResponse = await fetch(`${baseUrl}${imageUpload.document.contentUrl}`, { headers: { "authorization": `Bearer ${guestToken}` } });
+    assert.equal(imageContentResponse.status, 200);
+    assert.equal(Buffer.compare(Buffer.from(await imageContentResponse.arrayBuffer()), pngBytes), 0);
+
+    const mp4Bytes = Buffer.concat([Buffer.alloc(4), Buffer.from("ftypisom"), Buffer.alloc(12)]);
+    const invalidVideoBody = await createMultipartDocumentBody({ filename: "clip.mp4", contentType: "video/mp4", body: mp4Bytes });
+    const invalidVideoResponse = await fetch(`${baseUrl}/api/rooms/documents-room/documents`, {
+      method: "POST",
+      headers: { "content-type": invalidVideoBody.contentType, "authorization": `Bearer ${hostToken}` },
+      body: new Uint8Array(invalidVideoBody.body)
+    });
+    assert.equal(invalidVideoResponse.status, 422);
+    assert.equal(((await invalidVideoResponse.json()) as { error: string }).error, "video_metadata_missing");
+    const videoBody = await createMultipartDocumentBody({
+      filename: "clip.mp4",
+      contentType: "video/mp4",
+      body: mp4Bytes,
+      fields: { mediaWidthPx: "640", mediaHeightPx: "360", mediaDurationMs: "5000" }
+    });
+    const videoUploadResponse = await fetch(`${baseUrl}/api/rooms/documents-room/documents`, {
+      method: "POST",
+      headers: { "content-type": videoBody.contentType, "authorization": `Bearer ${hostToken}` },
+      body: new Uint8Array(videoBody.body)
+    });
+    assert.equal(videoUploadResponse.status, 201);
+    const videoUpload = (await videoUploadResponse.json()) as { document: { documentId: string; contentUrl: string; metadata: { kind: string; widthPx: number; heightPx: number; durationMs: number; container: string; metadataSource: string } } };
+    assert.deepEqual(videoUpload.document.metadata, { kind: "video", widthPx: 640, heightPx: 360, durationMs: 5000, container: "mp4", metadataSource: "browser" });
+    const videoSurfaceResponse = await fetch(`${baseUrl}/api/rooms/documents-room/documents/${videoUpload.document.documentId}/surface`, {
+      method: "POST",
+      headers: { ...jsonHeaders, "authorization": `Bearer ${hostToken}` },
+      body: JSON.stringify({ surfaceId: "debug-main" })
+    });
+    assert.equal(videoSurfaceResponse.status, 200);
+    const videoContentResponse = await fetch(`${baseUrl}${videoUpload.document.contentUrl}`, { headers: { "authorization": `Bearer ${guestToken}` } });
+    assert.equal(videoContentResponse.status, 200);
+    assert.equal(Buffer.compare(Buffer.from(await videoContentResponse.arrayBuffer()), mp4Bytes), 0);
+
+    for (const documentId of [imageUpload.document.documentId, videoUpload.document.documentId]) {
+      const response = await fetch(`${baseUrl}/api/rooms/documents-room/documents/${documentId}`, {
+        method: "DELETE",
+        headers: { "authorization": `Bearer ${hostToken}` }
+      });
+      assert.equal(response.status, 200);
+    }
+
     const listAfterDelete = await fetch(`${baseUrl}/api/rooms/documents-room/documents`, {
       headers: { "authorization": `Bearer ${memberToken}` }
     });
@@ -1121,7 +1187,12 @@ test("room documents API uploads lists downloads selects and soft-deletes with p
     assert.match(metricsText, /vrata_document_permission_denied_total 3/);
     assert.match(metricsText, /vrata_pdf_validation_failures_total\{reason="corrupt_pdf"\} 1/);
     assert.match(metricsText, /vrata_document_presentation_content_total\{result="success"\} 1/);
-    assert.match(metricsText, /vrata_document_blob_deletes_total\{result="success"\} 1/);
+    assert.match(metricsText, /vrata_documents_uploaded_total\{mime="image\/png",result="success"\} 1/);
+    assert.match(metricsText, /vrata_documents_uploaded_total\{mime="video\/mp4",result="success"\} 1/);
+    assert.match(metricsText, /vrata_document_media_validation_failures_total\{kind="video",reason="video_metadata_missing"\} 1/);
+    assert.match(metricsText, /vrata_document_media_content_total\{kind="image",result="success"\} 1/);
+    assert.match(metricsText, /vrata_document_media_content_total\{kind="video",result="success"\} 1/);
+    assert.match(metricsText, /vrata_document_blob_deletes_total\{result="success"\} 3/);
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     await rm(process.env.DOCUMENT_LOCAL_UPLOAD_ROOT!, { recursive: true, force: true });

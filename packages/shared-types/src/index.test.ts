@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { DEFAULT_MEDIA_SURFACE_ID, DISABLED_EXTENSION_CARD_TYPE, EXTENSION_TEST_CARD_TYPE, MISSING_CAPABILITY_EXTENSION_CARD_TYPE, PDF_PRESENTATION_OBJECT_TYPE, SCREEN_SHARE_OBJECT_TYPE, SURFACE_TEST_CARD_TYPE, WHITEBOARD_OBJECT_TYPE, createDefaultRoomMediaObjectsState, createRoomAccessDebugState, getMediaExtensionDebugSnapshot, getMediaObjectDefinition, getRoomPermissions, isMediaObjectTypeAvailable, listAvailableMediaObjectTypes } from "./index.js";
+import { DEFAULT_MEDIA_SURFACE_ID, DISABLED_EXTENSION_CARD_TYPE, EXTENSION_TEST_CARD_TYPE, IMAGE_VIEWER_OBJECT_TYPE, MISSING_CAPABILITY_EXTENSION_CARD_TYPE, PDF_PRESENTATION_OBJECT_TYPE, SCREEN_SHARE_OBJECT_TYPE, SURFACE_TEST_CARD_TYPE, VIDEO_PLAYER_OBJECT_TYPE, WHITEBOARD_OBJECT_TYPE, createDefaultRoomMediaObjectsState, createRoomAccessDebugState, getMediaExtensionDebugSnapshot, getMediaObjectDefinition, getRoomPermissions, isMediaObjectTypeAvailable, listAvailableMediaObjectTypes } from "./index.js";
 import type {
   AvatarCatalogV1,
   AvatarRecipeCatalogV1,
@@ -9,10 +9,14 @@ import type {
   ClientMode,
   CompactPoseFrame,
   MediaObjectCommandResult,
+  ImageViewerPatch,
+  ImageViewerState,
   SurfaceInputEvent,
   SurfaceInputDebugState,
   ScreenShareObjectState,
   SurfaceTestCardState,
+  VideoPlayerPatch,
+  VideoPlayerState,
   UserRole
 } from "./index.js";
 
@@ -41,6 +45,56 @@ test("PDF presentation extension requires document presentation permission", () 
   assert.equal(isMediaObjectTypeAvailable(PDF_PRESENTATION_OBJECT_TYPE), true);
   assert.equal(getRoomPermissions("member").includes("document.present"), false);
   assert.equal(getRoomPermissions("host").includes("document.present"), true);
+});
+
+test("image and video extensions expose document media contracts on default surfaces", () => {
+  const mediaObjects = createDefaultRoomMediaObjectsState("room-1");
+  const imageDefinition = getMediaObjectDefinition(IMAGE_VIEWER_OBJECT_TYPE);
+  const videoDefinition = getMediaObjectDefinition(VIDEO_PLAYER_OBJECT_TYPE);
+  const imageState: ImageViewerState = {
+    status: "active",
+    documentId: "image-1",
+    filename: "image.webp",
+    checksum: `sha256:${"a".repeat(64)}`,
+    contentType: "image/webp",
+    widthPx: 1920,
+    heightPx: 1080,
+    fitMode: "cover",
+    lastInputEventId: "image:1"
+  };
+  const videoState: VideoPlayerState = {
+    status: "active",
+    documentId: "video-1",
+    filename: "video.mp4",
+    checksum: `sha256:${"b".repeat(64)}`,
+    contentType: "video/mp4",
+    widthPx: 1920,
+    heightPx: 1080,
+    durationMs: 1000,
+    playbackState: "paused",
+    positionMs: 0,
+    anchorServerTimeMs: null,
+    loop: false,
+    fitMode: "contain",
+    lastInputEventId: "video:1"
+  };
+  const imagePatch: ImageViewerPatch = { type: "set-fit-mode", fitMode: "contain", inputEventId: "image:2" };
+  const videoPatch: VideoPlayerPatch = { type: "play", inputEventId: "video:2" };
+
+  assert.equal(imageDefinition?.stateKind, "image-viewer");
+  assert.equal(videoDefinition?.stateKind, "video-player");
+  assert.deepEqual(imageDefinition?.requiredCapabilities, ["surface.render", "room.state.read", "room.state.write"]);
+  assert.deepEqual(videoDefinition?.requiredPermissions, ["document.present"]);
+  assert.equal(isMediaObjectTypeAvailable(IMAGE_VIEWER_OBJECT_TYPE), true);
+  assert.equal(isMediaObjectTypeAvailable(VIDEO_PLAYER_OBJECT_TYPE), true);
+  for (const surface of Object.values(mediaObjects.surfaces)) {
+    assert.equal(surface.allowedObjectTypes.includes(IMAGE_VIEWER_OBJECT_TYPE), true);
+    assert.equal(surface.allowedObjectTypes.includes(VIDEO_PLAYER_OBJECT_TYPE), true);
+  }
+  assert.equal(imageState.fitMode, "cover");
+  assert.equal(imagePatch.fitMode, "contain");
+  assert.equal(videoState.playbackState, "paused");
+  assert.equal(videoPatch.type, "play");
 });
 
 test("surface input shared contracts compile in tests", () => {

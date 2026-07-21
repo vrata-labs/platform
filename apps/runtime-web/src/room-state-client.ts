@@ -6,6 +6,7 @@ import { parseCompactPoseFrame } from "./avatar/avatar-pose-frame.js";
 import { parseAvatarReliableState } from "./avatar/avatar-reliable-state.js";
 
 export interface RoomStateSnapshot {
+  serverTimeMs: number;
   roomId: string;
   participants: PresenceState[];
   seatOccupancy: Record<string, string>;
@@ -74,7 +75,8 @@ export function connectRoomState(
     try {
       const payload = JSON.parse(String(event.data)) as {
         type?: string;
-        room?: RoomStateSnapshot;
+        serverTimeMs?: unknown;
+        room?: Omit<RoomStateSnapshot, "serverTimeMs">;
         reliableState?: unknown;
         poseFrame?: unknown;
         participantId?: unknown;
@@ -98,6 +100,7 @@ export function connectRoomState(
       };
       if (payload.type === "room_state" && payload.room) {
         handlers.onRoomState({
+          serverTimeMs: typeof payload.serverTimeMs === "number" ? payload.serverTimeMs : Date.now(),
           roomId: payload.room.roomId,
           participants: payload.room.participants,
           seatOccupancy: payload.room.seatOccupancy ?? {},

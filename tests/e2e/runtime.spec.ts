@@ -491,6 +491,112 @@ test("room documents library uploads downloads selects and deletes PDF", async (
   }), { timeout: 10000 }).toBe("whiteboard:true");
 });
 
+test("image and video documents render and synchronize playback", async ({ page, request }) => {
+  test.setTimeout(120000);
+  const roomResponse = await request.post("/api/rooms", {
+    headers: { "x-vrata-admin-token": e2eAdminToken },
+    data: { tenantId: "demo-tenant", templateId: "meeting-room-basic", name: `Document media E2E ${Date.now()}` }
+  });
+  expect(roomResponse.ok()).toBeTruthy();
+  const room = (await roomResponse.json()) as { roomId: string };
+  const hostInvite = await createRoomInvite(request, room.roomId, false, "host");
+  const memberInvite = await createRoomInvite(request, room.roomId, false, "member");
+
+  await page.goto(e2eRoomLink(hostInvite.inviteLink));
+  await completeGuestOnboarding(page, "Media Host", true);
+  await expect(page.locator("#document-upload-button")).toBeEnabled({ timeout: 10000 });
+
+  const pngBase64 = await page.evaluate(() => {
+    const canvas = document.createElement("canvas");
+    canvas.width = 64;
+    canvas.height = 32;
+    const context = canvas.getContext("2d")!;
+    context.fillStyle = "#16a34a";
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL("image/png").split(",")[1]!;
+  });
+  const pngBytes = Buffer.from(pngBase64, "base64");
+  await page.setInputFiles("#document-upload-input", { name: "pixel.png", mimeType: "image/png", buffer: pngBytes });
+  await clickEnabledDomButton(page, "#document-upload-button");
+  await expect(page.locator("#document-select")).toContainText("pixel.png", { timeout: 15000 });
+  await clickEnabledDomButton(page, "#document-surface-button");
+  await expect(page.locator("#document-media-controls")).toBeVisible({ timeout: 15000 });
+  await expect(page.locator("#document-media-title")).toContainText("Image: pixel.png");
+  await expect.poll(async () => page.evaluate(() => {
+    const media = (window as Window & { __VRATA_DEBUG__?: { documentMedia?: { kind?: string | null; renderState?: string; errorCode?: string | null } } }).__VRATA_DEBUG__?.documentMedia;
+    return `${media?.kind}:${media?.renderState}:${media?.errorCode}`;
+  }), { timeout: 15000 }).toBe("image:ready:null");
+  await clickEnabledDomButton(page, "#document-media-fit");
+  await expect(page.locator("#document-media-fit")).toHaveText("Contain", { timeout: 10000 });
+  await clickEnabledDomButton(page, "#document-media-stop");
+  await expect(page.locator("#document-media-controls")).toBeHidden({ timeout: 10000 });
+
+  const webmBase64 = await page.evaluate(async () => {
+    const canvas = document.createElement("canvas");
+    canvas.width = 64;
+    canvas.height = 64;
+    const context = canvas.getContext("2d")!;
+    const stream = canvas.captureStream(15);
+    const mimeType = MediaRecorder.isTypeSupported("video/webm;codecs=vp8") ? "video/webm;codecs=vp8" : "video/webm";
+    const recorder = new MediaRecorder(stream, { mimeType });
+    const chunks: BlobPart[] = [];
+    recorder.ondataavailable = (event) => { if (event.data.size > 0) chunks.push(event.data); };
+    const stopped = new Promise<void>((resolve) => { recorder.onstop = () => resolve(); });
+    recorder.start(100);
+    for (let frame = 0; frame < 18; frame += 1) {
+      context.fillStyle = frame % 2 === 0 ? "#ef4444" : "#2563eb";
+      context.fillRect(0, 0, 64, 64);
+      await new Promise((resolve) => window.setTimeout(resolve, 60));
+    }
+    recorder.stop();
+    await stopped;
+    stream.getTracks().forEach((track) => track.stop());
+    const bytes = new Uint8Array(await new Blob(chunks, { type: "video/webm" }).arrayBuffer());
+    let binary = "";
+    for (let offset = 0; offset < bytes.length; offset += 0x8000) binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+    return btoa(binary);
+  });
+  await page.setInputFiles("#document-upload-input", { name: "clip.webm", mimeType: "video/webm", buffer: Buffer.from(webmBase64, "base64") });
+  await clickEnabledDomButton(page, "#document-upload-button");
+  await expect(page.locator("#document-select")).toContainText("clip.webm", { timeout: 20000 });
+  await clickEnabledDomButton(page, "#document-surface-button");
+  await expect(page.locator("#document-media-title")).toContainText("Video: clip.webm", { timeout: 15000 });
+  await clickEnabledDomButton(page, "#document-media-play");
+  await expect(page.locator("#document-media-play")).toHaveText("Pause", { timeout: 10000 });
+  await expect.poll(async () => page.evaluate(() => (window as Window & { __VRATA_DEBUG__?: { documentMedia?: { actualPositionMs?: number } } }).__VRATA_DEBUG__?.documentMedia?.actualPositionMs ?? 0), {
+    timeout: 15000
+  }).toBeGreaterThan(150);
+  await page.locator("#document-media-seek").evaluate((input: HTMLInputElement) => {
+    input.value = String(Math.min(500, Number(input.max)));
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  await page.check("#document-media-loop");
+  await expect(page.locator("#document-media-loop")).toBeChecked({ timeout: 10000 });
+
+  const memberPage = await page.context().newPage();
+  try {
+    await memberPage.goto(e2eRoomLink(memberInvite.inviteLink));
+    await completeGuestOnboarding(memberPage, "Media Member", true);
+    await expect.poll(async () => memberPage.evaluate(() => {
+      const media = (window as Window & { __VRATA_DEBUG__?: { documentMedia?: { kind?: string | null; playbackState?: string; actualPositionMs?: number; errorCode?: string | null } } }).__VRATA_DEBUG__?.documentMedia;
+      return { kind: media?.kind ?? null, playbackState: media?.playbackState ?? null, ready: (media?.actualPositionMs ?? 0) > 0, errorCode: media?.errorCode ?? null };
+    }), { timeout: 20000 }).toEqual({ kind: "video", playbackState: "playing", ready: true, errorCode: null });
+    await expect(memberPage.locator("#document-media-play")).toBeDisabled();
+    await clickEnabledDomButton(page, "#document-media-play");
+    await expect.poll(async () => memberPage.evaluate(() => (window as Window & { __VRATA_DEBUG__?: { documentMedia?: { playbackState?: string } } }).__VRATA_DEBUG__?.documentMedia?.playbackState ?? ""), {
+      timeout: 10000
+    }).toBe("paused");
+  } finally {
+    await memberPage.close();
+  }
+
+  await clickEnabledDomButton(page, "#document-delete-button");
+  await expect(page.locator("#document-media-controls")).toBeHidden({ timeout: 10000 });
+  await expect.poll(async () => page.evaluate(() => (window as Window & { __VRATA_DEBUG__?: { documentMedia?: { documentId?: string | null } } }).__VRATA_DEBUG__?.documentMedia?.documentId ?? null), {
+    timeout: 10000
+  }).toBeNull();
+});
+
 test("personal room mode opens owner room, restores pose, and allows invite guest", async ({ page, request, browser }) => {
   const ownerId = `owner-e2e-${Date.now()}`;
   await page.addInitScript((id) => {

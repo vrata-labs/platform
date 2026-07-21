@@ -419,6 +419,89 @@ test.describe("@staging runtime HUD space selector", () => {
     await expect(page.locator("#presentation-controls")).toBeHidden({ timeout: 15000 });
   });
 
+  test("image and video surfaces render and restore synchronized playback", async ({ page, request, baseURL }) => {
+    test.setTimeout(180000);
+    const createRoomResponse = await request.post("/api/rooms", {
+      headers: { "x-vrata-admin-token": stagingAdminToken },
+      data: { tenantId: "demo-tenant", templateId: "meeting-room-basic", name: `Staging document media ${Date.now()}` }
+    });
+    expect(createRoomResponse.ok()).toBeTruthy();
+    const room = await createRoomResponse.json() as { roomLink: string };
+    const roomUrl = new URL(room.roomLink, baseURL).toString();
+    await page.goto(`${roomUrl}?role=host&name=StagingMediaHost&debug=1`);
+    await expect(page.locator("#document-upload-button")).toBeEnabled({ timeout: 15000 });
+
+    const pngBase64 = await page.evaluate(() => {
+      const canvas = document.createElement("canvas");
+      canvas.width = 64;
+      canvas.height = 32;
+      const context = canvas.getContext("2d")!;
+      context.fillStyle = "#16a34a";
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      return canvas.toDataURL("image/png").split(",")[1]!;
+    });
+    await page.setInputFiles("#document-upload-input", { name: "staging-image.png", mimeType: "image/png", buffer: Buffer.from(pngBase64, "base64") });
+    await page.locator("#document-upload-button").click();
+    await expect(page.locator("#document-select")).toContainText("staging-image.png", { timeout: 20000 });
+    await page.locator("#document-surface-button").click();
+    await expect.poll(async () => page.evaluate(() => {
+      const media = (window as Window & { __VRATA_DEBUG__?: { documentMedia?: { kind?: string | null; renderState?: string; errorCode?: string | null } } }).__VRATA_DEBUG__?.documentMedia;
+      return `${media?.kind}:${media?.renderState}:${media?.errorCode}`;
+    }), { timeout: 30000 }).toBe("image:ready:null");
+    await page.locator("#document-media-stop").click();
+    await expect(page.locator("#document-media-controls")).toBeHidden({ timeout: 15000 });
+
+    const webmBase64 = await page.evaluate(async () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = 64;
+      canvas.height = 64;
+      const context = canvas.getContext("2d")!;
+      const stream = canvas.captureStream(15);
+      const mimeType = MediaRecorder.isTypeSupported("video/webm;codecs=vp8") ? "video/webm;codecs=vp8" : "video/webm";
+      const recorder = new MediaRecorder(stream, { mimeType });
+      const chunks: BlobPart[] = [];
+      recorder.ondataavailable = (event) => { if (event.data.size > 0) chunks.push(event.data); };
+      const stopped = new Promise<void>((resolve) => { recorder.onstop = () => resolve(); });
+      recorder.start(100);
+      for (let frame = 0; frame < 18; frame += 1) {
+        context.fillStyle = frame % 2 === 0 ? "#ef4444" : "#2563eb";
+        context.fillRect(0, 0, 64, 64);
+        await new Promise((resolve) => window.setTimeout(resolve, 60));
+      }
+      recorder.stop();
+      await stopped;
+      stream.getTracks().forEach((track) => track.stop());
+      const bytes = new Uint8Array(await new Blob(chunks, { type: "video/webm" }).arrayBuffer());
+      let binary = "";
+      for (let offset = 0; offset < bytes.length; offset += 0x8000) binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+      return btoa(binary);
+    });
+    await page.setInputFiles("#document-upload-input", { name: "staging-video.webm", mimeType: "video/webm", buffer: Buffer.from(webmBase64, "base64") });
+    await page.locator("#document-upload-button").click();
+    await expect(page.locator("#document-select")).toContainText("staging-video.webm", { timeout: 30000 });
+    await page.locator("#document-surface-button").click();
+    await expect(page.locator("#document-media-play")).toBeEnabled({ timeout: 30000 });
+    await page.locator("#document-media-play").click();
+    await expect.poll(async () => page.evaluate(() => (window as Window & { __VRATA_DEBUG__?: { documentMedia?: { actualPositionMs?: number } } }).__VRATA_DEBUG__?.documentMedia?.actualPositionMs ?? 0), {
+      timeout: 30000
+    }).toBeGreaterThan(150);
+
+    const latePage = await page.context().newPage();
+    try {
+      await latePage.goto(`${roomUrl}?role=member&name=StagingMediaLate&debug=1`);
+      await expect.poll(async () => latePage.evaluate(() => {
+        const media = (window as Window & { __VRATA_DEBUG__?: { documentMedia?: { kind?: string | null; playbackState?: string; actualPositionMs?: number; errorCode?: string | null } } }).__VRATA_DEBUG__?.documentMedia;
+        return { kind: media?.kind ?? null, playbackState: media?.playbackState ?? null, ready: (media?.actualPositionMs ?? 0) > 0, errorCode: media?.errorCode ?? null };
+      }), { timeout: 30000 }).toEqual({ kind: "video", playbackState: "playing", ready: true, errorCode: null });
+      await expect(latePage.locator("#document-media-play")).toBeDisabled();
+    } finally {
+      await latePage.close();
+    }
+
+    await page.locator("#document-delete-button").click();
+    await expect(page.locator("#document-media-controls")).toBeHidden({ timeout: 15000 });
+  });
+
   test("public diagnostics page validates staging media connectivity", async ({ page }) => {
     test.setTimeout(90000);
     await page.goto(`/diagnostics?roomId=${encodeURIComponent(stagingRoomId)}&autorun=1&skipMic=1&timeoutMs=12000`, { waitUntil: "domcontentloaded" });
