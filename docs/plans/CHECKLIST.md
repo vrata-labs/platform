@@ -37,11 +37,11 @@
 - [x] **VRATA-FEAT-020** — [Persistent notes panel](./020-persistent-notes-panel/README.md) — зависит от: 002, 014
 - [x] **VRATA-FEAT-021** — [Markdown board / sticky notes surface](./021-markdown-board-sticky-notes-surface/README.md) — зависит от: 020, 007
 - [x] **VRATA-FEAT-022** — [Documents library for room](./022-documents-library-for-room/README.md) — зависит от: 002, 014
-- [ ] **VRATA-FEAT-023** — [Notes history and export](./023-notes-history-and-export/README.md) — зависит от: 020, 021
-- [ ] **VRATA-FEAT-024** — [Screen share as in-room media surface](./024-screen-share-as-in-room-media-surface/README.md) — зависит от: 004, 026
-- [ ] **VRATA-FEAT-025** — [PDF/slides presentation surface](./025-pdf-slides-presentation-surface/README.md) — зависит от: 022, 026
-- [ ] **VRATA-FEAT-026** — [Presenter role and presentation permissions](./026-presenter-role-and-presentation-permissions/README.md) — зависит от: 002, 015
-- [ ] **VRATA-FEAT-027** — [Image/video media surfaces](./027-image-video-media-surfaces/README.md) — зависит от: 022, 026
+- [x] **VRATA-FEAT-023** — [Notes history and export](./023-notes-history-and-export/README.md) — зависит от: 020, 021
+- [x] **VRATA-FEAT-024** — [Screen share as in-room media surface](./024-screen-share-as-in-room-media-surface/README.md) — зависит от: 004, 026
+- [x] **VRATA-FEAT-025** — [PDF/slides presentation surface](./025-pdf-slides-presentation-surface/README.md) — зависит от: 022, 026
+- [x] **VRATA-FEAT-026** — [Presenter role and presentation permissions](./026-presenter-role-and-presentation-permissions/README.md) — зависит от: 002, 015
+- [x] **VRATA-FEAT-027** — [Image/video media surfaces](./027-image-video-media-surfaces/README.md) — зависит от: 022, 026
 - [ ] **VRATA-FEAT-028** — [Remote browser hardening or explicit experimental flag](./028-remote-browser-hardening-or-explicit-experimental-flag/README.md) — зависит от: 001, 002
 
 ## P2
@@ -93,13 +93,13 @@
 - [x] VRATA-FEAT-020
 - [x] VRATA-FEAT-021
 - [x] VRATA-FEAT-022
-- [ ] VRATA-FEAT-023
+- [x] VRATA-FEAT-023
 
 ### Спринт 5 — презентации
-- [ ] VRATA-FEAT-024
-- [ ] VRATA-FEAT-025
-- [ ] VRATA-FEAT-026
-- [ ] VRATA-FEAT-027
+- [x] VRATA-FEAT-024
+- [x] VRATA-FEAT-025
+- [x] VRATA-FEAT-026
+- [x] VRATA-FEAT-027
 - [ ] VRATA-FEAT-028
 
 ### Спринт 6 — зрелость и публичное доверие
