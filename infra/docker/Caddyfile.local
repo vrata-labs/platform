@@ -1,3 +1,7 @@
 :80 {
+  handle /frames {
+    reverse_proxy remote-browser:4010
+  }
+
   reverse_proxy api:4000
 }

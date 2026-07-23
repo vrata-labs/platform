@@ -81,6 +81,8 @@ interface RuntimeHealthResponse {
     documentsEnabled?: boolean;
     notesEnabled?: boolean;
     personalRoomsEnabled?: boolean;
+    remoteBrowserEnabled?: boolean;
+    remoteBrowserExperimental?: boolean;
   };
 }
 
@@ -394,6 +396,8 @@ export interface RuntimeBootResult {
     documentsEnabled: boolean;
     notesEnabled: boolean;
     personalRoomsEnabled: boolean;
+    remoteBrowserEnabled: boolean;
+    remoteBrowserExperimental: boolean;
   };
 }
 
@@ -523,7 +527,9 @@ export async function bootRuntime(
       hostControlsEnabled: healthFeatures.hostControlsEnabled ?? true,
       documentsEnabled: healthFeatures.documentsEnabled ?? true,
       notesEnabled: healthFeatures.notesEnabled ?? true,
-      personalRoomsEnabled: healthFeatures.personalRoomsEnabled ?? true
+      personalRoomsEnabled: healthFeatures.personalRoomsEnabled ?? true,
+      remoteBrowserEnabled: healthFeatures.remoteBrowserEnabled ?? false,
+      remoteBrowserExperimental: healthFeatures.remoteBrowserExperimental ?? true
     }
   };
 }

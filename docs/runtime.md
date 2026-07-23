@@ -30,3 +30,11 @@
 - Video clients compare local playback with the authoritative server anchor. Small drift is corrected with a bounded playback-rate adjustment, while seeks and large drift use a direct seek. Late joiners restore the current position from `serverTimeMs` in the room snapshot.
 - Video sound follows the existing per-surface media-audio policy and is muted by default. Adaptive streaming, transcoding, and editing are out of scope; keep `DOCUMENT_UPLOAD_MAX_BYTES` appropriate for bounded Blob playback.
 - Native PowerPoint editing, slide animations, and persistence across a room-state service restart are not included.
+
+## Experimental remote browser
+
+- Remote browser controls are shown only when API health reports `remoteBrowserEnabled=true`; enabled controls carry an `Experimental` badge.
+- API token issuance, room-state object creation/input, executor HTTP sessions, and frame WebSockets independently enforce the same disabled state.
+- Hosts can open only allowlisted origins. Existing permission and controller-lock rules still govern URL changes and input.
+- Executor sessions expire after `REMOTE_BROWSER_SESSION_TTL_SECONDS` and are closed on stop, replacement, process shutdown, or owner cleanup. The executor rejects starts beyond `REMOTE_BROWSER_MAX_SESSIONS`.
+- Runtime diagnostics expose enabled/experimental state and stable executor errors such as `remote_browser_disabled`, `session_limit_exceeded`, and `session_expired` without including tokens.

@@ -110,6 +110,7 @@ export interface PatchRemoteBrowserExecutorInput {
   surfaceId: string;
   objectId: string;
   executorSessionId: string;
+  executorInstanceId: string;
   patch: unknown;
   nowMs: number;
 }
@@ -409,7 +410,12 @@ function isScreenSharePatch(input: unknown): input is ScreenSharePatch {
 }
 
 function isRemoteBrowserErrorCode(input: unknown): input is RemoteBrowserErrorCode {
-  return input === "url_not_allowed"
+  return input === "remote_browser_disabled"
+    || input === "invalid_session_binding"
+    || input === "session_limit_exceeded"
+    || input === "session_start_in_progress"
+    || input === "session_expired"
+    || input === "url_not_allowed"
     || input === "url_resolution_blocked"
     || input === "redirect_not_allowed"
     || input === "executor_unavailable"
@@ -1141,6 +1147,7 @@ function reduceRemoteBrowserState(current: RemoteBrowserObjectState, patch: Remo
       status: "loading",
       controllerParticipantId: current.controllerParticipantId ?? participantId,
       executorSessionId,
+      executorInstanceId: `${executorSessionId}:instance:${patch.inputEventId}`,
       mediaParticipantId,
       mediaTrackSid: undefined,
       audioTrackSid: undefined,
@@ -1784,7 +1791,7 @@ export function patchRemoteBrowserExecutorState(state: RoomState, input: PatchRe
   }
 
   const currentState = object.state as RemoteBrowserObjectState;
-  if (currentState.executorSessionId !== input.executorSessionId) {
+  if (currentState.executorSessionId !== input.executorSessionId || currentState.executorInstanceId !== input.executorInstanceId) {
     return rejectMediaObjectCommand(state, { commandId: input.commandId, role: "admin", permission, blockedReason: "invalid-patch", surfaceId: input.surfaceId, objectId: input.objectId, objectType: object.type, revision: object.revision });
   }
   if (!isRemoteBrowserExecutorPatch(input.patch)) {

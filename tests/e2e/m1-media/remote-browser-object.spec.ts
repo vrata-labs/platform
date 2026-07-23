@@ -140,6 +140,7 @@ test("M1.7 host opens remote browser and routes input through room-state", async
   await waitForKernel(page);
 
   await expect(page.locator("#remote-browser-control")).toBeVisible();
+  await expect(page.locator("#remote-browser-experimental-badge")).toHaveText("Experimental");
   await expect(page.locator("#open-remote-browser")).toBeEnabled();
   await page.fill("#remote-browser-url", "/remote-browser-demo.html");
   await page.click("#open-remote-browser");

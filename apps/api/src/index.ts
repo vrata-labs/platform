@@ -116,6 +116,7 @@ interface RemoteBrowserMediaTokenRequest {
   roomId?: string;
   objectId?: string;
   executorSessionId?: string;
+  executorInstanceId?: string;
   mediaParticipantId?: string;
   preferPublicLivekitUrl?: boolean;
 }
@@ -124,6 +125,7 @@ interface RemoteBrowserFrameTokenRequest {
   roomId?: string;
   objectId?: string;
   executorSessionId?: string;
+  executorInstanceId?: string;
   frameStreamId?: string;
   sessionToken?: string;
 }
@@ -423,6 +425,11 @@ export function isPersonalRoomsFeatureEnabled(env: NodeJS.ProcessEnv = process.e
   return isEnabledEnvValue(env.FEATURE_PERSONAL_ROOMS) ?? true;
 }
 
+export function isRemoteBrowserFeatureEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  const configured = isEnabledEnvValue(env.REMOTE_BROWSER_ENABLED);
+  return configured ?? env.NODE_ENV !== "production";
+}
+
 function isSceneBundleUploadEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   if (env.FEATURE_SCENE_BUNDLES === "false") return false;
   return isEnabledEnvValue(env.FEATURE_SCENE_BUNDLE_UPLOAD) ?? true;
@@ -494,11 +501,33 @@ const controlPlanePermissions: ControlPlanePermission[] = [
   "room.join"
 ];
 
+function getRemoteBrowserFrameTokenSecret(env: NodeJS.ProcessEnv = process.env): string | null {
+  const secret = env.REMOTE_BROWSER_TOKEN_SECRET?.trim();
+  if (secret) return secret;
+  return env.NODE_ENV === "production" ? null : "dev-remote-browser-secret";
+}
+
+export function resolveRemoteBrowserTokenTtlSeconds(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env.REMOTE_BROWSER_TOKEN_TTL_SECONDS?.trim() ?? "300";
+  const parsed = /^\d+$/.test(raw) ? Number.parseInt(raw, 10) : 300;
+  return Math.max(30, Math.min(600, Number.isFinite(parsed) ? parsed : 300));
+}
+
 function encodeRemoteBrowserFrameToken(payload: { roomId: string; objectId: string; executorSessionId: string; frameStreamId: string; exp: number }, env: NodeJS.ProcessEnv = process.env): string {
   const body = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
-  const secret = env.REMOTE_BROWSER_TOKEN_SECRET ?? "dev-remote-browser-secret";
+  const secret = getRemoteBrowserFrameTokenSecret(env);
+  if (!secret) throw new Error("remote_browser_token_config_invalid");
   const signature = createHmac("sha256", secret).update(body).digest("base64url");
   return `${body}.${signature}`;
+}
+
+export function isRemoteBrowserIdentityBinding(input: { objectId: string; executorSessionId: string; executorInstanceId: string; mediaParticipantId?: string; frameStreamId?: string }): boolean {
+  const expectedSessionId = `remote-browser:${input.objectId}`;
+  return input.executorSessionId === expectedSessionId
+    && input.executorInstanceId.startsWith(`${expectedSessionId}:instance:`)
+    && input.executorInstanceId.length > `${expectedSessionId}:instance:`.length
+    && (input.mediaParticipantId === undefined || input.mediaParticipantId === expectedSessionId)
+    && (input.frameStreamId === undefined || input.frameStreamId === `${expectedSessionId}:frames`);
 }
 
 export function getMissingRequiredApiEnvVars(env: NodeJS.ProcessEnv = process.env): string[] {
@@ -512,6 +541,14 @@ export function validateProductionApiEnv(env: NodeJS.ProcessEnv = process.env): 
   const missing = getMissingRequiredApiEnvVars(env);
   if (missing.length > 0) {
     throw new Error(`missing_required_api_env:${missing.join(",")}`);
+  }
+  if (isRemoteBrowserFeatureEnabled(env)) {
+    if (!getRemoteBrowserFrameTokenSecret(env)) {
+      throw new Error("invalid_remote_browser_config:remote_browser_token_secret_required");
+    }
+    if (!env.REMOTE_BROWSER_INTERNAL_TOKEN?.trim()) {
+      throw new Error("invalid_remote_browser_config:remote_browser_internal_token_required");
+    }
   }
   const livekitConfigError = getMediaTokenConfigError(env);
   if (livekitConfigError) {
@@ -1455,10 +1492,34 @@ function getInternalServiceHeaders(env: NodeJS.ProcessEnv = process.env): Record
 function isAuthorizedInternalRequest(request: IncomingMessage, env: NodeJS.ProcessEnv = process.env): boolean {
   const token = getInternalServiceToken(env);
   if (!token) {
-    return true;
+    return env.NODE_ENV !== "production";
   }
   const provided = request.headers["x-vrata-internal-token"] ?? request.headers["x-noah-internal-token"];
   return typeof provided === "string" && safeEqual(provided, token);
+}
+
+function isAuthorizedRemoteBrowserRequest(request: IncomingMessage, env: NodeJS.ProcessEnv = process.env): boolean {
+  const scopedToken = env.REMOTE_BROWSER_INTERNAL_TOKEN?.trim();
+  const token = scopedToken || (env.NODE_ENV === "production" ? "" : getInternalServiceToken(env) ?? "");
+  if (!token) return false;
+  const provided = request.headers["x-vrata-internal-token"] ?? request.headers["x-noah-internal-token"];
+  return typeof provided === "string" && safeEqual(provided, token);
+}
+
+async function verifyRemoteBrowserAuthority(input: { roomId: string; objectId: string; executorSessionId: string; executorInstanceId: string; mediaParticipantId?: string; frameStreamId?: string }, env: NodeJS.ProcessEnv = process.env): Promise<boolean> {
+  const baseUrl = env.ROOM_STATE_INTERNAL_URL?.trim();
+  if (!baseUrl) return env.NODE_ENV !== "production";
+  try {
+    const response = await fetch(new URL("/api/internal/remote-browser/bindings/verify", baseUrl), {
+      method: "POST",
+      headers: getInternalServiceHeaders(env),
+      signal: AbortSignal.timeout(5000),
+      body: JSON.stringify(input)
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
 }
 
 function getBearerToken(request: IncomingMessage): string | null {
@@ -3304,6 +3365,8 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
         documentsEnabled: isDocumentsFeatureEnabled(),
         notesEnabled: isNotesFeatureEnabled(),
         personalRoomsEnabled: isPersonalRoomsFeatureEnabled(),
+        remoteBrowserEnabled: isRemoteBrowserFeatureEnabled(),
+        remoteBrowserExperimental: true,
         postgresEnabled: Boolean(process.env.POSTGRES_URL),
         controlPlaneAuthEnabled: Boolean(getControlPlaneAdminToken())
       },
@@ -4771,14 +4834,23 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   }
 
   if (method === "POST" && url.pathname === "/api/tokens/remote-browser-media") {
-    if (!isAuthorizedInternalRequest(request)) {
+    if (!isAuthorizedRemoteBrowserRequest(request)) {
       json(response, 403, { error: "forbidden" });
       return;
     }
+    if (!isRemoteBrowserFeatureEnabled()) {
+      return json(response, 503, { error: "remote_browser_disabled" });
+    }
     const payload = (await parseBody<RemoteBrowserMediaTokenRequest>(request)) ?? {};
-    if (!payload.roomId || !payload.objectId || !payload.executorSessionId || !payload.mediaParticipantId) {
+    if (!payload.roomId || !payload.objectId || !payload.executorSessionId || !payload.executorInstanceId || !payload.mediaParticipantId) {
       json(response, 400, { error: "remote_browser_media_token_payload_required" });
       return;
+    }
+    if (!isRemoteBrowserIdentityBinding({ objectId: payload.objectId, executorSessionId: payload.executorSessionId, executorInstanceId: payload.executorInstanceId, mediaParticipantId: payload.mediaParticipantId })) {
+      return json(response, 400, { error: "invalid_session_binding" });
+    }
+    if (!await verifyRemoteBrowserAuthority({ roomId: payload.roomId, objectId: payload.objectId, executorSessionId: payload.executorSessionId, executorInstanceId: payload.executorInstanceId, mediaParticipantId: payload.mediaParticipantId })) {
+      return json(response, 409, { error: "remote_browser_session_not_authoritative" });
     }
     const configError = getMediaTokenConfigError();
     if (configError) {
@@ -4808,10 +4880,16 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   }
 
   if (method === "POST" && url.pathname === "/api/tokens/remote-browser-frame") {
+    if (!isRemoteBrowserFeatureEnabled()) {
+      return json(response, 503, { error: "remote_browser_disabled" });
+    }
     const payload = await parseBody<RemoteBrowserFrameTokenRequest>(request);
-    if (!payload?.roomId || !payload.objectId || !payload.executorSessionId || !payload.frameStreamId) {
+    if (!payload?.roomId || !payload.objectId || !payload.executorSessionId || !payload.executorInstanceId || !payload.frameStreamId) {
       json(response, 400, { error: "remote_browser_frame_token_payload_required" });
       return;
+    }
+    if (!isRemoteBrowserIdentityBinding({ objectId: payload.objectId, executorSessionId: payload.executorSessionId, executorInstanceId: payload.executorInstanceId, frameStreamId: payload.frameStreamId })) {
+      return json(response, 400, { error: "invalid_session_binding" });
     }
     const session = await verifyRoomSessionRequest(request, {
       roomId: payload.roomId,
@@ -4821,7 +4899,13 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     if (!hasRoomPermission(session.payload.permissions, "surface.view")) {
       return json(response, 403, { error: "forbidden", reason: "remote_browser_frame_not_allowed" });
     }
-    const ttlSeconds = Number.parseInt(process.env.REMOTE_BROWSER_TOKEN_TTL_SECONDS ?? "300", 10);
+    if (!await verifyRemoteBrowserAuthority({ roomId: payload.roomId, objectId: payload.objectId, executorSessionId: payload.executorSessionId, executorInstanceId: payload.executorInstanceId, frameStreamId: payload.frameStreamId })) {
+      return json(response, 409, { error: "remote_browser_session_not_authoritative" });
+    }
+    if (!getRemoteBrowserFrameTokenSecret()) {
+      return json(response, 503, { error: "remote_browser_token_config_invalid" });
+    }
+    const ttlSeconds = resolveRemoteBrowserTokenTtlSeconds();
     const token = encodeRemoteBrowserFrameToken({
       roomId: payload.roomId,
       objectId: payload.objectId,

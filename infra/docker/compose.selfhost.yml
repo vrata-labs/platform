@@ -15,6 +15,7 @@ services:
 
   livekit:
     image: livekit/livekit-server:latest
+    networks: [default, remote-browser-internal]
     command: --dev --bind 0.0.0.0
     environment:
       UDP_PORT: 7881
@@ -25,6 +26,7 @@ services:
 
   room-state:
     image: ${ROOM_STATE_IMAGE_REPO}:${IMAGE_TAG}
+    networks: [default, remote-browser-internal]
     build:
       context: ../..
       dockerfile: apps/room-state/Dockerfile
@@ -33,28 +35,36 @@ services:
       ROOM_STATE_PORT: 2567
       STATE_TOKEN_SECRET: ${STATE_TOKEN_SECRET}
       VRATA_INTERNAL_SERVICE_TOKEN: ${VRATA_INTERNAL_SERVICE_TOKEN}
+      REMOTE_BROWSER_INTERNAL_TOKEN: ${REMOTE_BROWSER_INTERNAL_TOKEN}
       VRATA_DEV_ROLE_QUERY: ${VRATA_DEV_ROLE_QUERY:-false}
+      REMOTE_BROWSER_ENABLED: ${REMOTE_BROWSER_ENABLED:-false}
       REMOTE_BROWSER_INTERNAL_URL: http://remote-browser:4010
     ports:
       - "${VRATA_ROOM_STATE_PORT}:2567"
 
   remote-browser:
     image: ${REMOTE_BROWSER_IMAGE_REPO}:${IMAGE_TAG}
+    networks: [remote-browser-internal]
     build:
       context: ../..
       dockerfile: apps/remote-browser/Dockerfile
+    cpus: ${REMOTE_BROWSER_CPU_LIMIT:-2.0}
+    mem_limit: ${REMOTE_BROWSER_MEMORY_LIMIT:-2g}
+    pids_limit: ${REMOTE_BROWSER_PIDS_LIMIT:-512}
     environment:
       NODE_ENV: production
+      REMOTE_BROWSER_ENABLED: ${REMOTE_BROWSER_ENABLED:-false}
       REMOTE_BROWSER_PORT: 4010
       REMOTE_BROWSER_TOKEN_SECRET: ${REMOTE_BROWSER_TOKEN_SECRET}
       VRATA_INTERNAL_SERVICE_TOKEN: ${VRATA_INTERNAL_SERVICE_TOKEN}
+      REMOTE_BROWSER_INTERNAL_TOKEN: ${REMOTE_BROWSER_INTERNAL_TOKEN}
       API_INTERNAL_URL: http://api:4000
       ROOM_STATE_INTERNAL_URL: http://room-state:2567
       REMOTE_BROWSER_ALLOWED_ORIGINS: ${REMOTE_BROWSER_ALLOWED_ORIGINS}
       REMOTE_BROWSER_ALLOW_PRIVATE_ALLOWED_ORIGINS: ${REMOTE_BROWSER_ALLOW_PRIVATE_ALLOWED_ORIGINS:-false}
       REMOTE_BROWSER_FRAME_INTERVAL_MS: ${REMOTE_BROWSER_FRAME_INTERVAL_MS:-250}
-    ports:
-      - "${VRATA_REMOTE_BROWSER_PORT}:4010"
+      REMOTE_BROWSER_MAX_SESSIONS: ${REMOTE_BROWSER_MAX_SESSIONS:-2}
+      REMOTE_BROWSER_SESSION_TTL_SECONDS: ${REMOTE_BROWSER_SESSION_TTL_SECONDS:-900}
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4010/health').then((r) => { if (!r.ok) process.exit(1); }).catch(() => process.exit(1))"]
       interval: 10s
@@ -91,6 +101,7 @@ services:
 
   api:
     image: ${API_IMAGE_REPO}:${IMAGE_TAG}
+    networks: [default, remote-browser-internal]
     build:
       context: ../..
       dockerfile: apps/api/Dockerfile
@@ -123,8 +134,10 @@ services:
       STATE_TOKEN_SECRET: ${STATE_TOKEN_SECRET}
       REMOTE_BROWSER_TOKEN_SECRET: ${REMOTE_BROWSER_TOKEN_SECRET}
       VRATA_INTERNAL_SERVICE_TOKEN: ${VRATA_INTERNAL_SERVICE_TOKEN}
+      REMOTE_BROWSER_INTERNAL_TOKEN: ${REMOTE_BROWSER_INTERNAL_TOKEN}
       REMOTE_BROWSER_TOKEN_TTL_SECONDS: ${REMOTE_BROWSER_TOKEN_TTL_SECONDS:-300}
       REMOTE_BROWSER_PUBLIC_URL: ${REMOTE_BROWSER_PUBLIC_URL}
+      REMOTE_BROWSER_ENABLED: ${REMOTE_BROWSER_ENABLED:-false}
       MEDIA_TOKEN_TTL_SECONDS: ${MEDIA_TOKEN_TTL_SECONDS}
       VRATA_DEV_ROLE_QUERY: ${VRATA_DEV_ROLE_QUERY:-false}
       POSTGRES_URL: ${POSTGRES_URL}
@@ -149,6 +162,7 @@ services:
 
   caddy:
     image: caddy:2-alpine
+    networks: [default, remote-browser-internal]
     depends_on:
       api:
         condition: service_healthy
@@ -165,3 +179,6 @@ volumes:
   minio-data:
   caddy-data:
   caddy-config:
+
+networks:
+  remote-browser-internal:

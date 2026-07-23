@@ -1,4 +1,8 @@
 :80 {
+  handle /frames {
+    reverse_proxy remote-browser:4010
+  }
+
   handle /assets/scenes/* {
     root * /srv/runtime-public
     header Access-Control-Allow-Origin *

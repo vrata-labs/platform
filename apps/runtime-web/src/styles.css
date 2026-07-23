@@ -458,6 +458,20 @@ canvas {
   gap: 8px;
 }
 
+.experimental-badge {
+  display: inline-flex;
+  margin-left: 6px;
+  padding: 2px 7px;
+  border: 1px solid rgba(251, 191, 36, 0.55);
+  border-radius: 999px;
+  color: #fde68a;
+  background: rgba(120, 53, 15, 0.45);
+  font-size: 0.64rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
 .compact-controls {
   margin-top: 0;
 }

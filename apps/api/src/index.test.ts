@@ -113,6 +113,48 @@ test("api module exports server starter", async () => {
   delete process.env.VRATA_DISABLE_AUTOSTART;
 });
 
+test("api remote browser flag defaults off in production", async () => {
+  process.env.VRATA_DISABLE_AUTOSTART = "1";
+  const module = await import("./index.js");
+  assert.equal(module.isRemoteBrowserFeatureEnabled({ NODE_ENV: "production" }), false);
+  assert.equal(module.isRemoteBrowserFeatureEnabled({ NODE_ENV: "production", REMOTE_BROWSER_ENABLED: "true" }), true);
+  assert.equal(module.isRemoteBrowserFeatureEnabled({ NODE_ENV: "development" }), true);
+  assert.equal(module.isRemoteBrowserIdentityBinding({ objectId: "object-1", executorSessionId: "remote-browser:object-1", executorInstanceId: "remote-browser:object-1:instance:generation-1", mediaParticipantId: "remote-browser:object-1" }), true);
+  assert.equal(module.isRemoteBrowserIdentityBinding({ objectId: "object-1", executorSessionId: "remote-browser:other", executorInstanceId: "remote-browser:object-1:instance:generation-1", mediaParticipantId: "remote-browser:object-1" }), false);
+  assert.equal(module.resolveRemoteBrowserTokenTtlSeconds({ REMOTE_BROWSER_TOKEN_TTL_SECONDS: "1" }), 30);
+  assert.equal(module.resolveRemoteBrowserTokenTtlSeconds({ REMOTE_BROWSER_TOKEN_TTL_SECONDS: "9999" }), 600);
+  assert.equal(module.resolveRemoteBrowserTokenTtlSeconds({ REMOTE_BROWSER_TOKEN_TTL_SECONDS: "invalid" }), 300);
+  assert.equal(module.resolveRemoteBrowserTokenTtlSeconds({ REMOTE_BROWSER_TOKEN_TTL_SECONDS: "30seconds" }), 300);
+  delete process.env.VRATA_DISABLE_AUTOSTART;
+});
+
+test("api disables remote browser health and token issuance with one flag", async () => {
+  process.env.VRATA_DISABLE_AUTOSTART = "1";
+  process.env.REMOTE_BROWSER_ENABLED = "false";
+  process.env.VRATA_INTERNAL_SERVICE_TOKEN = "remote-disabled-internal-token";
+  const module = await import("./index.js");
+  const server = module.startApiServer(4060);
+  try {
+    const health = await (await fetch("http://127.0.0.1:4060/health")).json() as { features?: { remoteBrowserEnabled?: boolean; remoteBrowserExperimental?: boolean } };
+    assert.equal(health.features?.remoteBrowserEnabled, false);
+    assert.equal(health.features?.remoteBrowserExperimental, true);
+    const frameResponse = await fetch("http://127.0.0.1:4060/api/tokens/remote-browser-frame", { method: "POST" });
+    assert.equal(frameResponse.status, 503);
+    assert.equal(((await frameResponse.json()) as { error?: string }).error, "remote_browser_disabled");
+    const mediaResponse = await fetch("http://127.0.0.1:4060/api/tokens/remote-browser-media", {
+      method: "POST",
+      headers: { "x-vrata-internal-token": "remote-disabled-internal-token" }
+    });
+    assert.equal(mediaResponse.status, 503);
+    assert.equal(((await mediaResponse.json()) as { error?: string }).error, "remote_browser_disabled");
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    delete process.env.VRATA_DISABLE_AUTOSTART;
+    delete process.env.REMOTE_BROWSER_ENABLED;
+    delete process.env.VRATA_INTERNAL_SERVICE_TOKEN;
+  }
+});
+
 test("api production env validator reports missing required vars", async () => {
   process.env.VRATA_DISABLE_AUTOSTART = "1";
   const module = await import("./index.js");
@@ -1355,6 +1397,7 @@ test("remote browser frame token endpoint returns websocket URL and short-lived 
         roomId: "room-1",
         objectId: "object-1",
         executorSessionId: "remote-browser:object-1",
+        executorInstanceId: "remote-browser:object-1:instance:generation-1",
         frameStreamId: "remote-browser:object-1:frames"
       })
     });
@@ -1772,6 +1815,7 @@ test("remote browser media token requires internal auth and scoped publisher ide
         roomId: "demo-room",
         objectId: "browser-1",
         executorSessionId: "remote-browser:browser-1",
+        executorInstanceId: "remote-browser:browser-1:instance:generation-1",
         mediaParticipantId: "remote-browser:browser-1"
       })
     });
@@ -1789,6 +1833,7 @@ test("remote browser media token requires internal auth and scoped publisher ide
         roomId: "demo-room",
         objectId: "browser-1",
         executorSessionId: "remote-browser:browser-1",
+        executorInstanceId: "remote-browser:browser-1:instance:generation-1",
         mediaParticipantId: "remote-browser:browser-1"
       })
     });
@@ -1823,6 +1868,7 @@ test("remote browser media token can prefer public livekit url for secure captur
       roomId: "demo-room",
       objectId: "browser-1",
       executorSessionId: "remote-browser:browser-1",
+      executorInstanceId: "remote-browser:browser-1:instance:generation-1",
       mediaParticipantId: "remote-browser:browser-1"
     };
     const internalResponse = await fetch("http://127.0.0.1:4028/api/tokens/remote-browser-media", {
