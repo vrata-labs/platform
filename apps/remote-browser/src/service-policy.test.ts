@@ -45,7 +45,8 @@ test("remote browser capacity permits replacement but rejects excess sessions", 
 test("remote browser expiry scheduler runs cleanup callback", async () => {
   let expired = false;
   await new Promise<void>((resolve) => {
-    scheduleRemoteBrowserSessionExpiry(5, () => { expired = true; resolve(); });
+    const timer = scheduleRemoteBrowserSessionExpiry(5, () => { expired = true; resolve(); });
+    timer.ref?.();
   });
   assert.equal(expired, true);
 });
