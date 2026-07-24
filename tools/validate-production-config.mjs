@@ -27,6 +27,7 @@ const SECRET_RULES = [
   { name: "LIVEKIT_API_SECRET", minLength: 32 },
   { name: "STATE_TOKEN_SECRET", minLength: 32 },
   { name: "REMOTE_BROWSER_TOKEN_SECRET", minLength: 32 },
+  { name: "REMOTE_BROWSER_INTERNAL_TOKEN", minLength: 32 },
   { name: "VRATA_INTERNAL_SERVICE_TOKEN", minLength: 32 },
   { name: "POSTGRES_PASSWORD", minLength: 16 },
   { name: "MINIO_ROOT_PASSWORD", minLength: 16 }
@@ -132,6 +133,15 @@ function validatePort(issues, env, name) {
     return null;
   }
   return port;
+}
+
+function validateIntegerRange(issues, env, name, minimum, maximum) {
+  const value = trimmed(env[name]);
+  if (!value) return;
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isInteger(parsed) || String(parsed) !== value || parsed < minimum || parsed > maximum) {
+    addIssue(issues, "invalid_integer_range", name, `expected_${minimum}_to_${maximum}`);
+  }
 }
 
 function isPrivateOrReservedIpv4(value) {
@@ -288,7 +298,7 @@ function validateRemoteBrowserConfig(issues, env) {
     addIssue(issues, "experimental_service_requires_override", "REMOTE_BROWSER_ENABLED", "set_VRATA_ALLOW_EXPERIMENTAL_SERVICES_true");
   }
 
-  for (const name of ["REMOTE_BROWSER_PUBLIC_URL", "REMOTE_BROWSER_ALLOWED_ORIGINS", "REMOTE_BROWSER_TOKEN_SECRET"]) {
+  for (const name of ["REMOTE_BROWSER_PUBLIC_URL", "REMOTE_BROWSER_ALLOWED_ORIGINS", "REMOTE_BROWSER_TOKEN_SECRET", "REMOTE_BROWSER_INTERNAL_TOKEN"]) {
     if (!trimmed(env[name])) {
       addIssue(issues, "missing_required_env", name);
     }
@@ -296,6 +306,10 @@ function validateRemoteBrowserConfig(issues, env) {
 
   validateUrl(issues, env, { name: "REMOTE_BROWSER_PUBLIC_URL", protocols: ["wss:"] });
   validateNamedSecret(issues, env, { name: "REMOTE_BROWSER_TOKEN_SECRET", minLength: 32 });
+  validateNamedSecret(issues, env, { name: "REMOTE_BROWSER_INTERNAL_TOKEN", minLength: 32 });
+  validateIntegerRange(issues, env, "REMOTE_BROWSER_TOKEN_TTL_SECONDS", 30, 600);
+  validateIntegerRange(issues, env, "REMOTE_BROWSER_SESSION_TTL_SECONDS", 30, 3600);
+  validateIntegerRange(issues, env, "REMOTE_BROWSER_MAX_SESSIONS", 1, 16);
 }
 
 function validateLiveKitConfig(issues, env) {

@@ -113,3 +113,13 @@ Short dotted action names such as `scene-bundle.version.create` are not treated 
 3. Use `requestId` from the same event to correlate HTTP logs or reverse proxy logs.
 4. Check `/metrics` for the related failure counter, for example `vrata_room_join_failures_total{reason="room_state_failed"}`.
 5. Check `/health/ready` for API, room-state, and remote-browser before investigating browser-only issues.
+
+Remote-browser `/health` also reports `enabled`, `experimental`, active sessions, TTL, concurrency, and viewport limits. Relevant metrics are:
+
+- `vrata_remote_browser_sessions_active`
+- `vrata_remote_browser_sessions_started_total{result}`
+- `vrata_remote_browser_sessions_stopped_total{reason}`
+- `vrata_remote_browser_denied_total{reason}`
+- `vrata_remote_browser_ttl_expired_total`
+
+Do not log captured URLs, page content, cookies, frame tokens, or LiveKit tokens while investigating these metrics.

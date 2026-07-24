@@ -20,8 +20,10 @@ import {
   connectParticipant,
   createRoomStateServer,
   disconnectParticipant,
+  isRemoteBrowserFeatureEnabled,
   relayAvatarPoseFrame,
-  startRoomStateService
+  startRoomStateService,
+  verifyRemoteBrowserBinding
 } from "./index.js";
 
 function createSocket() {
@@ -254,6 +256,41 @@ test("media object commands mutate authoritative room state", () => {
 
   assert.equal(stopped.accepted, true);
   assert.equal(server.rooms.get("demo-room")?.mediaObjects.surfaces["debug-main"]?.activeObjectId, null);
+});
+
+test("remote browser commands fail closed when the production feature is disabled", () => {
+  assert.equal(isRemoteBrowserFeatureEnabled({ NODE_ENV: "production" }), false);
+  assert.equal(isRemoteBrowserFeatureEnabled({ NODE_ENV: "production", REMOTE_BROWSER_ENABLED: "true" }), true);
+  const server = createRoomStateServer();
+  connectParticipant(server, "demo-room", "host", createSocket() as never, { role: "host" });
+  const disabledCreate = applyMediaObjectCreateCommand(server, "demo-room", "host", {
+    commandId: "remote-disabled-create",
+    surfaceId: "debug-main",
+    objectType: " remote-browser "
+  }, { NODE_ENV: "production", REMOTE_BROWSER_ENABLED: "false" });
+  assert.equal(disabledCreate.accepted, false);
+  assert.equal(disabledCreate.blockedReason, "feature-disabled");
+
+  const created = applyMediaObjectCreateCommand(server, "demo-room", "host", {
+    commandId: "remote-enabled-create",
+    surfaceId: "debug-main",
+    objectType: "remote-browser"
+  }, { NODE_ENV: "production", REMOTE_BROWSER_ENABLED: "true" });
+  assert.equal(created.accepted, true);
+  const disabledPatch = applyMediaObjectPatchCommand(server, "demo-room", "host", {
+    commandId: "remote-disabled-open",
+    surfaceId: "debug-main",
+    objectId: created.objectId ?? "",
+    expectedRevision: 0,
+    patch: { type: "open-url", url: "https://example.com", inputEventId: "remote-disabled-input" }
+  }, { NODE_ENV: "production", REMOTE_BROWSER_ENABLED: "false" });
+  assert.equal(disabledPatch.accepted, false);
+  assert.equal(disabledPatch.blockedReason, "feature-disabled");
+  assert.equal(applyMediaObjectStopCommand(server, "demo-room", "host", {
+    commandId: "remote-disabled-stop",
+    surfaceId: "debug-main",
+    objectId: created.objectId ?? ""
+  }).accepted, true);
 });
 
 test("screen-share commands mutate authoritative room state", () => {
@@ -543,12 +580,26 @@ test("remote browser executor callback activates LiveKit media tracks", () => {
     patch: { type: "open-url", url: "https://example.com", inputEventId: "host:open:1" }
   });
   assert.equal(opened.accepted, true);
+  assert.equal(verifyRemoteBrowserBinding(server, {
+    roomId: "demo-room",
+    objectId,
+    executorSessionId: `remote-browser:${objectId}`,
+    executorInstanceId: `remote-browser:${objectId}:instance:host:open:1`,
+    mediaParticipantId: `remote-browser:${objectId}`
+  }), true);
+  assert.equal(verifyRemoteBrowserBinding(server, {
+    roomId: "demo-room",
+    objectId,
+    executorSessionId: `remote-browser:${objectId}`,
+    executorInstanceId: `remote-browser:${objectId}:instance:stale`
+  }), false);
 
   const active = applyRemoteBrowserExecutorPatchCommand(server, {
     roomId: "demo-room",
     surfaceId: "debug-main",
     objectId,
     executorSessionId: `remote-browser:${objectId}`,
+    executorInstanceId: `remote-browser:${objectId}:instance:host:open:1`,
     patch: {
       type: "mark-active",
       mediaParticipantId: `remote-browser:${objectId}`,

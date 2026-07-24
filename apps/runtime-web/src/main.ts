@@ -1397,6 +1397,8 @@ let runtimeFlags = {
   documentsEnabled: true,
   notesEnabled: true,
   personalRoomsEnabled: true,
+  remoteBrowserEnabled: false,
+  remoteBrowserExperimental: true,
   ...createInitialAvatarRuntimeFlags(),
   avatarFallbackCapsulesEnabled: true
 };
@@ -2069,7 +2071,8 @@ function normalizeRemoteBrowserUrlInput(value: string): string {
 }
 
 function canUseRemoteBrowserOpenControl(): boolean {
-  return roomStateConnected
+  return runtimeFlags.remoteBrowserEnabled
+    && roomStateConnected
     && hasRoomPermission(debugState.access.permissions, "remote-browser.open-url")
     && surfaceAllowsObject(selectedMediaSurfaceId, REMOTE_BROWSER_OBJECT_TYPE);
 }
@@ -2084,13 +2087,17 @@ function syncRemoteBrowserControls(): void {
   const canInput = hasRoomPermission(debugState.access.permissions, "remote-browser.input");
   const hasOtherObject = Boolean(activeObject && activeObject.type !== REMOTE_BROWSER_OBJECT_TYPE);
   const hasControl = snapshot.localHasControl;
-  remoteBrowserControlEl.hidden = !debugState.access.canCreateRemoteBrowser && !remoteBrowser;
+  debugState.remoteBrowser.enabled = runtimeFlags.remoteBrowserEnabled;
+  debugState.remoteBrowser.experimental = runtimeFlags.remoteBrowserExperimental;
+  remoteBrowserControlEl.hidden = (!runtimeFlags.remoteBrowserEnabled && !remoteBrowser) || (!debugState.access.canCreateRemoteBrowser && !remoteBrowser);
   remoteBrowserUrlInput.disabled = !canOpen || hasOtherObject;
   openRemoteBrowserButton.disabled = !canOpen || hasOtherObject;
   takeRemoteBrowserControlButton.disabled = !remoteBrowser || !canInput || !roomStateConnected || !hasControl || remoteBrowser.state.controllerParticipantId === participantId;
   releaseRemoteBrowserControlButton.disabled = !remoteBrowser || !canInput || !roomStateConnected || remoteBrowser.state.controllerParticipantId !== participantId;
   stopRemoteBrowserButton.disabled = !remoteBrowser || !hasRoomPermission(debugState.access.permissions, "remote-browser.stop") || !roomStateConnected;
-  if (hasOtherObject) {
+  if (!runtimeFlags.remoteBrowserEnabled) {
+    remoteBrowserStatusEl.textContent = "Remote browser disabled by operator";
+  } else if (hasOtherObject) {
     remoteBrowserStatusEl.textContent = `Surface occupied by ${activeObject?.type ?? "object"}`;
   } else if (!remoteBrowser) {
     remoteBrowserStatusEl.textContent = canOpen ? "Remote browser idle" : "Host role required";
@@ -4644,6 +4651,8 @@ const debugState = {
     errorCode: null as ScreenShareErrorCode | null
   },
   remoteBrowser: {
+    enabled: false,
+    experimental: true,
     objectId: null as string | null,
     surfaceId: DEBUG_SURFACE_ID,
     active: false,
@@ -9617,6 +9626,8 @@ async function main(): Promise<void> {
     documentsEnabled: boot.envFlags.documentsEnabled,
     notesEnabled: boot.envFlags.notesEnabled,
     personalRoomsEnabled: boot.envFlags.personalRoomsEnabled,
+    remoteBrowserEnabled: boot.envFlags.remoteBrowserEnabled,
+    remoteBrowserExperimental: boot.envFlags.remoteBrowserExperimental,
     spatialAudio: spatialAudioServerEnabled && spatialAudioRoomEnabled && spatialAudioQueryEnabled,
     ...resolveAvatarRuntimeFlags(boot)
   };

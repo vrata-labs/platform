@@ -1081,6 +1081,7 @@ test("remote-browser object opens URL, streams input, and enforces controller lo
     status?: string;
     controllerParticipantId?: string;
     executorSessionId?: string;
+    executorInstanceId?: string;
     frameStreamId?: string;
     mediaParticipantId?: string;
     mediaTrackSid?: string;
@@ -1090,17 +1091,31 @@ test("remote-browser object opens URL, streams input, and enforces controller lo
   assert.equal(openedState?.status, "loading");
   assert.equal(openedState?.controllerParticipantId, "host");
   assert.equal(openedState?.executorSessionId, "remote-browser:browser-1");
+  assert.equal(openedState?.executorInstanceId, "remote-browser:browser-1:instance:host:open:1");
   assert.equal(openedState?.frameStreamId, undefined);
   assert.equal(openedState?.mediaParticipantId, "remote-browser:browser-1");
   assert.equal(openedState?.mediaTrackSid, undefined);
   assert.equal(openedState?.audioTrackSid, undefined);
   assert.equal(openedState?.currentUrl, "https://example.com/remote-browser-demo.html");
 
+  const staleGeneration = patchRemoteBrowserExecutorState(opened.room, {
+    commandId: "cmd-stale-generation",
+    surfaceId: "debug-main",
+    objectId: "browser-1",
+    executorSessionId: "remote-browser:browser-1",
+    executorInstanceId: "remote-browser:browser-1:instance:stale",
+    patch: { type: "mark-publishing", mediaParticipantId: "remote-browser:browser-1", inputEventId: "executor:stale:1" },
+    nowMs: 3
+  });
+  assert.equal(staleGeneration.result.accepted, false);
+  assert.equal(staleGeneration.result.blockedReason, "invalid-patch");
+
   const publishing = patchRemoteBrowserExecutorState(opened.room, {
     commandId: "cmd-publishing",
     surfaceId: "debug-main",
     objectId: "browser-1",
     executorSessionId: "remote-browser:browser-1",
+    executorInstanceId: "remote-browser:browser-1:instance:host:open:1",
     patch: {
       type: "mark-publishing",
       mediaParticipantId: "remote-browser:browser-1",
@@ -1117,6 +1132,7 @@ test("remote-browser object opens URL, streams input, and enforces controller lo
     surfaceId: "debug-main",
     objectId: "browser-1",
     executorSessionId: "remote-browser:browser-1",
+    executorInstanceId: "remote-browser:browser-1:instance:host:open:1",
     patch: {
       type: "mark-active",
       mediaParticipantId: "remote-browser:browser-1",
@@ -1176,6 +1192,7 @@ test("remote-browser object opens URL, streams input, and enforces controller lo
     surfaceId: "debug-main",
     objectId: "browser-1",
     executorSessionId: "remote-browser:browser-1",
+    executorInstanceId: "remote-browser:browser-1:instance:host:open:1",
     patch: {
       type: "mark-input-applied",
       input: {
@@ -1270,6 +1287,7 @@ test("remote-browser executor failure stores sanitized diagnostic detail", () =>
     surfaceId: "debug-main",
     objectId: "browser-failed",
     executorSessionId: "remote-browser:browser-failed",
+    executorInstanceId: "remote-browser:browser-failed:instance:host:open-failed:1",
     patch: {
       type: "mark-failed",
       errorCode: "viewport_capture_failed",

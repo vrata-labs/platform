@@ -69,9 +69,13 @@ test("remote browser health and metrics endpoints expose observability baseline"
     });
     assert.equal(readyResponse.ok, true);
     assert.equal(readyResponse.headers.get("x-request-id"), "remote-browser-request-id");
-    const readyPayload = (await readyResponse.json()) as { status?: string; service?: string };
+    const readyPayload = (await readyResponse.json()) as { status?: string; service?: string; enabled?: boolean; experimental?: boolean; limits?: { maxSessions?: number; sessionTtlMs?: number } };
     assert.equal(readyPayload.status, "ready");
     assert.equal(readyPayload.service, "remote-browser");
+    assert.equal(readyPayload.enabled, true);
+    assert.equal(readyPayload.experimental, true);
+    assert.equal(readyPayload.limits?.maxSessions, 4);
+    assert.equal(readyPayload.limits?.sessionTtlMs, 900_000);
 
     const liveResponse = await fetch("http://127.0.0.1:4041/health/live");
     assert.equal(liveResponse.ok, true);
@@ -84,9 +88,59 @@ test("remote browser health and metrics endpoints expose observability baseline"
     const metricsText = await metricsResponse.text();
     assert.match(metricsText, /vrata_remote_browser_sessions \d+/);
     assert.match(metricsText, /vrata_remote_browser_frame_clients \d+/);
+    assert.match(metricsText, /vrata_remote_browser_sessions_active \d+/);
+    assert.match(metricsText, /vrata_remote_browser_ttl_expired_total \d+/);
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     delete process.env.VRATA_DISABLE_AUTOSTART;
+  }
+});
+
+test("remote browser production service fails closed when disabled", async () => {
+  const server = startRemoteBrowserService(4042, {
+    NODE_ENV: "production",
+    REMOTE_BROWSER_ENABLED: "false",
+    REMOTE_BROWSER_INTERNAL_TOKEN: "internal-test-token"
+  });
+  try {
+    const response = await fetch("http://127.0.0.1:4042/api/sessions", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-vrata-internal-token": "internal-test-token" },
+      body: JSON.stringify({ sessionId: "remote-browser:object-1", executorInstanceId: "remote-browser:object-1:instance:generation-1", mediaParticipantId: "remote-browser:object-1", roomId: "room-1", objectId: "object-1", url: "https://example.com" })
+    });
+    assert.equal(response.status, 503);
+    assert.equal(((await response.json()) as { error?: string }).error, "remote_browser_disabled");
+    const health = await (await fetch("http://127.0.0.1:4042/health")).json() as { enabled?: boolean };
+    assert.equal(health.enabled, false);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
+});
+
+test("remote browser production service requires auth and bound session identity", async () => {
+  const server = startRemoteBrowserService(4043, {
+    NODE_ENV: "production",
+    REMOTE_BROWSER_ENABLED: "true",
+    REMOTE_BROWSER_INTERNAL_TOKEN: "internal-test-token"
+  });
+  try {
+    const notReady = await fetch("http://127.0.0.1:4043/health/ready");
+    assert.equal(notReady.status, 503);
+    assert.equal(((await notReady.json()) as { configured?: boolean }).configured, false);
+    const unauthorized = await fetch("http://127.0.0.1:4043/api/sessions", { method: "POST" });
+    assert.equal(unauthorized.status, 403);
+    const invalidBinding = await fetch("http://127.0.0.1:4043/api/sessions", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-vrata-internal-token": "internal-test-token" },
+      body: JSON.stringify({ sessionId: "remote-browser:other", executorInstanceId: "remote-browser:object-1:instance:generation-1", mediaParticipantId: "remote-browser:object-1", roomId: "room-1", objectId: "object-1", url: "https://example.com" })
+    });
+    assert.equal(invalidBinding.status, 400);
+    assert.equal(((await invalidBinding.json()) as { error?: string }).error, "invalid_session_binding");
+    const metricsText = await (await fetch("http://127.0.0.1:4043/metrics")).text();
+    assert.match(metricsText, /vrata_remote_browser_denied_total\{reason="forbidden"\} 1/);
+    assert.match(metricsText, /vrata_remote_browser_denied_total\{reason="invalid_binding"\} 1/);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   }
 });
 

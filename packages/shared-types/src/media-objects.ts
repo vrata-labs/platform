@@ -532,6 +532,11 @@ export interface MarkdownBoardState {
 export type RemoteBrowserStatus = "idle" | "starting" | "loading" | "publishing" | "active" | "stopping" | "stopped" | "failed";
 
 export type RemoteBrowserErrorCode =
+  | "remote_browser_disabled"
+  | "invalid_session_binding"
+  | "session_limit_exceeded"
+  | "session_start_in_progress"
+  | "session_expired"
   | "url_not_allowed"
   | "url_resolution_blocked"
   | "redirect_not_allowed"
@@ -556,6 +561,7 @@ export interface RemoteBrowserObjectState {
   surfaceId: string;
   controllerParticipantId?: string;
   executorSessionId?: string;
+  executorInstanceId?: string;
   frameStreamId?: string;
   mediaParticipantId?: string;
   mediaTrackSid?: string;
@@ -700,6 +706,7 @@ export type VideoPlayerPatch =
 
 export type MediaObjectCommandBlockedReason =
   | "missing-permission"
+  | "feature-disabled"
   | "missing-extension-capability"
   | "extension-disabled"
   | "missing-surface"

@@ -118,6 +118,7 @@ async function waitForBlueOfficeKernel(page: Page): Promise<void> {
 
 async function openRemoteBrowserUrl(page: Page, url: string): Promise<void> {
   await expect(page.locator("#open-remote-browser")).toBeEnabled();
+  await expect(page.locator("#remote-browser-experimental-badge")).toHaveText("Experimental");
   await page.locator("#remote-browser-url").fill(url);
   await page.locator("#open-remote-browser").click();
 }

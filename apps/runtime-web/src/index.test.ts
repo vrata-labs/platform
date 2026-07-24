@@ -63,7 +63,9 @@ test("bootRuntime maps reserved avatar feature flags from health payload", async
           avatarLegIkEnabled: true,
           avatarSeatingEnabled: false,
           avatarCustomizationEnabled: true,
-          avatarFallbackCapsulesEnabled: true
+          avatarFallbackCapsulesEnabled: true,
+          remoteBrowserEnabled: true,
+          remoteBrowserExperimental: true
         }
       }), { status: 200, headers: { "content-type": "application/json" } });
     }
@@ -116,6 +118,8 @@ test("bootRuntime maps reserved avatar feature flags from health payload", async
     assert.equal(boot.envFlags.avatarPoseBinaryEnabled, true);
     assert.equal(boot.envFlags.avatarLegIkEnabled, true);
     assert.equal(boot.envFlags.avatarCustomizationEnabled, true);
+    assert.equal(boot.envFlags.remoteBrowserEnabled, true);
+    assert.equal(boot.envFlags.remoteBrowserExperimental, true);
     assert.equal(boot.avatarConfig.avatarQualityProfile, "xr");
   } finally {
     globalThis.fetch = originalFetch;

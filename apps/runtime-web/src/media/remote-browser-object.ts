@@ -428,6 +428,7 @@ export class RemoteBrowserObjectRuntime {
           roomId: object.roomId,
           objectId: object.objectId,
           executorSessionId: object.state.executorSessionId,
+          executorInstanceId: object.state.executorInstanceId,
           frameStreamId: object.state.frameStreamId
         })
       });

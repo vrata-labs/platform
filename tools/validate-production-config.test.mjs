@@ -182,11 +182,31 @@ test("production config validator requires explicit remote browser override", ()
     REMOTE_BROWSER_ENABLED: "true",
     REMOTE_BROWSER_PUBLIC_URL: "wss://browser.vrata-prod.com",
     REMOTE_BROWSER_ALLOWED_ORIGINS: "https://app.vrata-prod.com",
-    REMOTE_BROWSER_TOKEN_SECRET: "remote_browser_0123456789abcdef0123456789abcdef"
+    REMOTE_BROWSER_TOKEN_SECRET: "remote_browser_0123456789abcdef0123456789abcdef",
+    REMOTE_BROWSER_INTERNAL_TOKEN: "remote_internal_0123456789abcdef0123456789abcdef",
+    REMOTE_BROWSER_TOKEN_TTL_SECONDS: "300",
+    REMOTE_BROWSER_SESSION_TTL_SECONDS: "900",
+    REMOTE_BROWSER_MAX_SESSIONS: "2"
   }));
 
   assert.equal(result.ok, false);
   assert.equal(issueCodes(result).includes("experimental_service_requires_override"), true);
+});
+
+test("production config validator bounds remote browser lifetimes and capacity", () => {
+  const result = validateProductionConfig(validProductionEnv({
+    REMOTE_BROWSER_ENABLED: "true",
+    VRATA_ALLOW_EXPERIMENTAL_SERVICES: "true",
+    REMOTE_BROWSER_PUBLIC_URL: "wss://browser.vrata-prod.com",
+    REMOTE_BROWSER_ALLOWED_ORIGINS: "https://app.vrata-prod.com",
+    REMOTE_BROWSER_TOKEN_SECRET: "remote_browser_0123456789abcdef0123456789abcdef",
+    REMOTE_BROWSER_INTERNAL_TOKEN: "remote_internal_0123456789abcdef0123456789abcdef",
+    REMOTE_BROWSER_TOKEN_TTL_SECONDS: "9999",
+    REMOTE_BROWSER_SESSION_TTL_SECONDS: "10",
+    REMOTE_BROWSER_MAX_SESSIONS: "100"
+  }));
+  assert.equal(result.ok, false);
+  assert.equal(result.issues.filter((issue) => issue.code === "invalid_integer_range").length, 3);
 });
 
 test("production config validator rejects example domains", () => {

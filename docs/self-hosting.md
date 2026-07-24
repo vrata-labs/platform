@@ -8,7 +8,7 @@ Until `v0.1.0` is released, public GHCR images may not exist. From a source chec
 
 - Docker with Compose v2.
 - A Linux host or local Docker environment.
-- Ports for app, room-state, LiveKit, remote-browser, and MinIO.
+- Ports for app, room-state, LiveKit, and MinIO. The remote-browser executor remains private to the compose network; Caddy exposes only its token-protected `/frames` WebSocket.
 - For public HTTPS deployment: domains or test hostnames for app/state/livekit/browser endpoints.
 
 ## Source-Build Quickstart
@@ -63,6 +63,7 @@ docker compose --env-file infra/docker/.env.selfhost -f infra/docker/compose.sel
 - `STATE_TOKEN_SECRET`: replace with a strong secret.
 - `REMOTE_BROWSER_TOKEN_SECRET`: replace with a strong secret.
 - `VRATA_INTERNAL_SERVICE_TOKEN`: replace with a strong secret.
+- `REMOTE_BROWSER_INTERNAL_TOKEN`: use a separate strong secret for the experimental executor boundary.
 - `POSTGRES_PASSWORD`: replace with a strong password.
 - `MINIO_ROOT_USER` and `MINIO_ROOT_PASSWORD`: replace with production values.
 - `VRATA_APP_BASE_URL`, `ROOM_STATE_PUBLIC_URL`, `LIVEKIT_URL`, and `REMOTE_BROWSER_PUBLIC_URL`: set to the URLs that browsers can reach.
@@ -70,6 +71,8 @@ docker compose --env-file infra/docker/.env.selfhost -f infra/docker/compose.sel
 - `VRATA_LIVEKIT_TCP_PORT` and `VRATA_LIVEKIT_UDP_PORT`: open these directly on the host for LiveKit WebRTC ICE/TCP fallback and UDP media traffic.
 
 The bundled compose file runs LiveKit in `--dev` mode for the `0.1` beta quickstart, so the local defaults are `LIVEKIT_API_KEY=devkey` and `LIVEKIT_API_SECRET=secret`. Replace this with a hardened LiveKit configuration before exposing a deployment beyond evaluation use.
+
+Remote browser is experimental and defaults to `REMOTE_BROWSER_ENABLED=false`. To opt in, set a narrow `REMOTE_BROWSER_ALLOWED_ORIGINS` list and review `REMOTE_BROWSER_MAX_SESSIONS`, `REMOTE_BROWSER_SESSION_TTL_SECONDS`, `REMOTE_BROWSER_CPU_LIMIT`, `REMOTE_BROWSER_MEMORY_LIMIT`, and `REMOTE_BROWSER_PIDS_LIMIT`. Do not expose the executor port directly to untrusted networks.
 
 ## Persistent Data
 
