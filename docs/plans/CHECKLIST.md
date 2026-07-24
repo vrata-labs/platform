@@ -42,7 +42,7 @@
 - [x] **VRATA-FEAT-025** — [PDF/slides presentation surface](./025-pdf-slides-presentation-surface/README.md) — зависит от: 022, 026
 - [x] **VRATA-FEAT-026** — [Presenter role and presentation permissions](./026-presenter-role-and-presentation-permissions/README.md) — зависит от: 002, 015
 - [x] **VRATA-FEAT-027** — [Image/video media surfaces](./027-image-video-media-surfaces/README.md) — зависит от: 022, 026
-- [ ] **VRATA-FEAT-028** — [Remote browser hardening or explicit experimental flag](./028-remote-browser-hardening-or-explicit-experimental-flag/README.md) — зависит от: 001, 002
+- [x] **VRATA-FEAT-028** — [Remote browser hardening or explicit experimental flag](./028-remote-browser-hardening-or-explicit-experimental-flag/README.md) — зависит от: 001, 002
 
 ## P2
 
@@ -100,7 +100,7 @@
 - [x] VRATA-FEAT-025
 - [x] VRATA-FEAT-026
 - [x] VRATA-FEAT-027
-- [ ] VRATA-FEAT-028
+- [x] VRATA-FEAT-028
 
 ### Спринт 6 — зрелость и публичное доверие
 - [ ] VRATA-FEAT-029
