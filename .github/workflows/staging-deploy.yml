@@ -28,6 +28,9 @@ jobs:
   deploy:
     if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main')
     runs-on: ubuntu-latest
+    outputs:
+      deploy_sha: ${{ steps.deploy.outputs.deploy_sha }}
+      rutube_blocking: ${{ steps.remote_browser_impact.outputs.rutube_blocking }}
     env:
       STAGING_SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
       STAGING_SSH_USER: ${{ secrets.STAGING_SSH_USER }}
@@ -134,6 +137,47 @@ jobs:
             echo "- previous successful sha: \`$PREVIOUS_SHA\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Detect remote browser changes
+        id: remote_browser_impact
+        env:
+          DEPLOY_SHA: ${{ steps.deploy.outputs.deploy_sha }}
+          PREVIOUS_SHA: ${{ steps.previous.outputs.previous_sha }}
+        run: |
+          git fetch --no-tags --depth=1 origin "$PREVIOUS_SHA"
+          RUTUBE_PATHS=(
+            .github/workflows/staging-deploy.yml
+            .github/workflows/rutube-canary.yml
+            apps/api/src/index.ts
+            apps/remote-browser
+            apps/room-state/src/index.ts
+            apps/room-state/src/state.ts
+            apps/runtime-web/public/remote-browser-demo.html
+            apps/runtime-web/public/remote-browser-media-demo.html
+            apps/runtime-web/src/main.ts
+            apps/runtime-web/src/media
+            apps/shared-types
+            infra/docker
+            package.json
+            playwright.config.ts
+            pnpm-lock.yaml
+            tests/e2e/m1-media/remote-browser-object.spec.ts
+            tests/e2e/m1-media/remote-browser-rutube.spec.ts
+            tools/run-staging-e2e.mjs
+          )
+          if git diff --quiet "$PREVIOUS_SHA" "$DEPLOY_SHA" -- "${RUTUBE_PATHS[@]}"; then
+            RUTUBE_BLOCKING=false
+          else
+            RUTUBE_BLOCKING=true
+          fi
+          echo "rutube_blocking=$RUTUBE_BLOCKING" >> "$GITHUB_OUTPUT"
+          {
+            echo "- blocking Rutube verification: $RUTUBE_BLOCKING"
+            if [ "$RUTUBE_BLOCKING" = "true" ]; then
+              echo "- remote browser paths changed:"
+              git diff --name-only "$PREVIOUS_SHA" "$DEPLOY_SHA" -- "${RUTUBE_PATHS[@]}" | sed 's/^/  - /'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Upload private scene assets to staging host
         run: |
           test -f private-scene-assets/assets/manifest.json
@@ -146,6 +190,7 @@ jobs:
           DEPLOY_SHA: ${{ steps.deploy.outputs.deploy_sha }}
         run: |
           YCR_PASSWORD_B64="$(printf '%s' "$YCR_PASSWORD" | base64 -w0)"
+          # shellcheck disable=SC2087
           ssh -o StrictHostKeyChecking=no "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo bash -s" <<EOF
           set -euo pipefail
           cd "$STAGING_APP_DIR"
@@ -194,9 +239,10 @@ jobs:
           STAGING_CINEMAMODELER_ROOM_ID: c28e17b5-7b26-408b-926e-aa93fef9915e
           STAGING_ADMIN_TOKEN: ${{ env.STAGING_ADMIN_TOKEN }}
           STAGING_SCENE_BUNDLE_VERSION: ${{ steps.deploy.outputs.deploy_sha }}
+          RUTUBE_BLOCKING: ${{ steps.remote_browser_impact.outputs.rutube_blocking }}
           PLAYWRIGHT_REPORT_NAME: staging-gate
         run: |
-          for attempt in $(seq 1 30); do
+          for _ in $(seq 1 30); do
             if curl --fail --silent "$STAGING_BASE_URL/health" >/tmp/vrata-staging-health.json; then
               break
             fi
@@ -219,6 +265,9 @@ jobs:
             exit 1
           fi
           pnpm test:e2e:staging
+          if [ "$RUTUBE_BLOCKING" = "true" ]; then
+            PLAYWRIGHT_REPORT_NAME=staging-rutube-blocking pnpm test:e2e:rutube
+          fi
 
       - name: Upload staging Playwright artifacts
         if: always() && steps.rollout.outcome == 'success'
@@ -249,6 +298,7 @@ jobs:
           ROLLBACK_SHA: ${{ steps.previous.outputs.previous_sha }}
         run: |
           YCR_PASSWORD_B64="$(printf '%s' "$YCR_PASSWORD" | base64 -w0)"
+          # shellcheck disable=SC2087
           ssh -o StrictHostKeyChecking=no "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo bash -s" <<EOF
           set -euo pipefail
           cd "$STAGING_APP_DIR"
@@ -278,3 +328,64 @@ jobs:
       - name: Fail after rollback
         if: steps.rollout.outcome == 'failure' || steps.gate.outcome == 'failure'
         run: exit 1
+
+  rutube-canary:
+    name: Rutube canary (no rollback)
+    needs: deploy
+    if: needs.deploy.result == 'success' && needs.deploy.outputs.rutube_blocking != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      BASE_URL: ${{ secrets.STAGING_BASE_URL }}
+      PLAYWRIGHT_NO_WEB_SERVER: "1"
+      PLAYWRIGHT_REPORT_NAME: staging-rutube-canary
+      STAGING_ADMIN_TOKEN: ${{ secrets.STAGING_ADMIN_TOKEN }}
+      STAGING_BLUEOFFICE_ROOM_ID: 0b537d34-7b92-4b51-854a-8c64cfb4c114
+    steps:
+      - name: Checkout deployed SHA
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.deploy.outputs.deploy_sha }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Wait for staging health
+        run: |
+          test -n "$BASE_URL"
+          test -n "$STAGING_ADMIN_TOKEN"
+          for _ in $(seq 1 30); do
+            if curl --fail --silent "$BASE_URL/health" >/dev/null; then
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "staging_health_timeout" >&2
+          exit 1
+
+      - name: Install Playwright browser
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Run Rutube canary
+        run: pnpm test:e2e:rutube:canary
+
+      - name: Upload Rutube canary artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-rutube-canary-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: ignore
+          path: |
+            playwright-report/staging-rutube-canary/
+            test-results/staging-rutube-canary/
+            test-results/staging-rutube-canary.json

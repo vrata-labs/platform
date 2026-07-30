@@ -1,0 +1,70 @@
+name: Rutube Canary
+
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rutube-canary
+  cancel-in-progress: true
+
+jobs:
+  canary:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      BASE_URL: ${{ secrets.STAGING_BASE_URL }}
+      PLAYWRIGHT_NO_WEB_SERVER: "1"
+      PLAYWRIGHT_REPORT_NAME: scheduled-rutube-canary
+      STAGING_ADMIN_TOKEN: ${{ secrets.STAGING_ADMIN_TOKEN }}
+      STAGING_BLUEOFFICE_ROOM_ID: 0b537d34-7b92-4b51-854a-8c64cfb4c114
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Wait for staging health
+        run: |
+          test -n "$BASE_URL"
+          test -n "$STAGING_ADMIN_TOKEN"
+          for _ in $(seq 1 12); do
+            if curl --fail --silent "$BASE_URL/health" >/dev/null; then
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "staging_health_timeout" >&2
+          exit 1
+
+      - name: Install Playwright browser
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Run Rutube canary
+        run: pnpm test:e2e:rutube:canary
+
+      - name: Upload Rutube canary artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-scheduled-rutube-canary-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: ignore
+          path: |
+            playwright-report/scheduled-rutube-canary/
+            test-results/scheduled-rutube-canary/
+            test-results/scheduled-rutube-canary.json

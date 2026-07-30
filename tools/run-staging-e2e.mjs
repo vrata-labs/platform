@@ -109,7 +109,7 @@ function ensureStagingEnv() {
 
 function runPlaywright(playwrightArgs) {
   const command = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
-  const args = ["exec", "playwright", "test", "--grep", "@staging", ...playwrightArgs];
+  const args = ["exec", "playwright", "test", "--grep", "@staging", "--grep-invert", "@rutube", ...playwrightArgs];
   const hasWorkerOverride = playwrightArgs.some((arg) => arg === "--workers" || arg.startsWith("--workers="));
   if (process.env.GITHUB_ACTIONS !== "true" && !hasWorkerOverride) {
     args.push("--workers=1");
