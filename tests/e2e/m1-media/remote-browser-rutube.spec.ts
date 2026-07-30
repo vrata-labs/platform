@@ -62,7 +62,7 @@ async function readDebug(page: Page): Promise<RemoteBrowserDebug | undefined> {
 }
 
 async function createTemporaryBlueOfficeRoom(request: APIRequestContext): Promise<string> {
-  const manifestResponse = await request.get(`/api/rooms/${blueOfficeRoomId}/manifest`);
+  const manifestResponse = await request.get(`/api/rooms/${blueOfficeRoomId}/manifest`, { timeout: 15000 });
   expect(manifestResponse.ok()).toBeTruthy();
   const manifest = await manifestResponse.json() as { sceneBundle?: { url?: string } };
   expect(manifest.sceneBundle?.url).toBeTruthy();
@@ -78,7 +78,8 @@ async function createTemporaryBlueOfficeRoom(request: APIRequestContext): Promis
       guestAllowed: true,
       sceneBundleUrl: manifest.sceneBundle!.url,
       features: { voice: true, spatialAudio: true, screenShare: true }
-    }
+    },
+    timeout: 15000
   });
   expect(createRoomResponse.ok()).toBeTruthy();
   const room = await createRoomResponse.json() as { roomId: string };
@@ -89,12 +90,13 @@ async function deleteTemporaryRoom(request: APIRequestContext, roomId: string): 
   const deleteResponse = await request.delete(`/api/rooms/${roomId}`, {
     headers: {
       "x-vrata-admin-token": stagingAdminToken
-    }
+    },
+    timeout: 15000
   });
   expect(deleteResponse.ok()).toBeTruthy();
 }
 
-async function waitForBlueOfficeKernel(page: Page): Promise<void> {
+async function waitForBlueOfficeKernel(page: Page, timeoutMs = 60000): Promise<void> {
   await expect.poll(async () => {
     const debug = await readDebug(page);
     return {
@@ -105,7 +107,7 @@ async function waitForBlueOfficeKernel(page: Page): Promise<void> {
       hasSurface: debug?.mediaObjects?.surfaces?.some((surface) => surface.surfaceId === "debug-main") ?? false
     };
   }, {
-    timeout: 60000,
+    timeout: timeoutMs,
     intervals: [500, 1000, 2000, 3000]
   }).toEqual({
     connected: true,
@@ -131,7 +133,7 @@ async function openDefaultRemoteBrowserUrl(page: Page): Promise<string> {
   return expectedUrl;
 }
 
-async function waitForRemoteBrowserViewportState(page: Page, expectedUrl: string): Promise<void> {
+async function waitForRemoteBrowserViewportState(page: Page, expectedUrl: string, timeoutMs = 60000): Promise<void> {
   await expect.poll(async () => {
     const debug = await readDebug(page);
     return {
@@ -146,7 +148,7 @@ async function waitForRemoteBrowserViewportState(page: Page, expectedUrl: string
       errorDetail: debug?.remoteBrowser?.errorDetail ?? null
     };
   }, {
-    timeout: 60000,
+    timeout: timeoutMs,
     intervals: [500, 1000, 2000, 3000]
   }).toEqual({
     activeObjectType: "remote-browser",
@@ -161,7 +163,7 @@ async function waitForRemoteBrowserViewportState(page: Page, expectedUrl: string
   });
 }
 
-async function waitForRutubeMedia(page: Page): Promise<void> {
+async function waitForRutubeMedia(page: Page, timeoutMs = 90000): Promise<void> {
   await expect.poll(async () => {
     const debug = await readDebug(page);
     const rect = debug?.remoteBrowser?.mediaSourceRect ?? null;
@@ -183,7 +185,7 @@ async function waitForRutubeMedia(page: Page): Promise<void> {
       )
     };
   }, {
-    timeout: 90000,
+    timeout: timeoutMs,
     intervals: [1000, 2000, 3000]
   }).toEqual({
     mediaState: "connected",
@@ -553,7 +555,28 @@ async function expectNoFrameBacklog(page: Page, sampleSeconds: number[]): Promis
   expect(Math.max(...inputLatencies)).toBeLessThan(2500);
 }
 
-test("@staging @private-assets @rutube real Rutube remote browser keeps hover UI, video transport, and switching responsive", async ({ page, request }) => {
+test("@staging @private-assets @rutube-canary real Rutube remote browser connects media and keeps frames flowing", async ({ page, request }) => {
+  test.setTimeout(210000);
+  let roomId: string | null = null;
+
+  try {
+    roomId = await createTemporaryBlueOfficeRoom(request);
+    await page.goto(`/rooms/${roomId}?role=host&debug=1&scenefit=0`, { waitUntil: "domcontentloaded" });
+    await waitForBlueOfficeKernel(page, 45000);
+
+    await openRemoteBrowserUrl(page, rutubePrimaryUrl);
+    await waitForRemoteBrowserViewportState(page, rutubePrimaryUrl, 45000);
+    await waitForRutubeMedia(page, 75000);
+    const previousFrameAt = (await readDebug(page))?.remoteBrowser?.lastFrameAtMs ?? 0;
+    await waitForFreshFrame(page, previousFrameAt);
+  } finally {
+    if (roomId) {
+      await deleteTemporaryRoom(request, roomId);
+    }
+  }
+});
+
+test("@staging @private-assets @rutube-full real Rutube remote browser keeps hover UI, video transport, and switching responsive", async ({ page, request }) => {
   test.setTimeout(420000);
   let roomId: string | null = null;
 
