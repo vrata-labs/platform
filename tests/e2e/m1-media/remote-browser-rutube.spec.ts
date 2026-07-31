@@ -23,6 +23,13 @@ type RemoteBrowserDebug = {
     mediaErrorCode?: string | null;
     mediaSourceRect?: { x: number; y: number; width: number; height: number; viewportWidth: number; viewportHeight: number } | null;
     mediaCompositeHoldActive?: boolean;
+    externalVideoAttached?: boolean;
+    externalVideoReadyState?: number | null;
+    externalVideoWidth?: number;
+    externalVideoHeight?: number;
+    externalVideoPlayError?: string | null;
+    externalVideoFrameCount?: number;
+    externalVideoLastFrameAtMs?: number;
     lastExecutorInput?: {
       inputEventId: string;
       inputType: "pointer" | "scroll" | "keyboard";
@@ -296,12 +303,12 @@ async function moveMouseToSurface(page: Page, u: number, v: number): Promise<num
   return sendSurfaceInput(page, { kind: "pointer-move", u, v });
 }
 
-async function waitForFreshFrame(page: Page, previousFrameAt: number): Promise<number> {
+async function waitForFreshExternalVideoFrame(page: Page, previousFrameCount: number): Promise<number> {
   const startedAt = Date.now();
-  await expect.poll(async () => (await readDebug(page))?.remoteBrowser?.lastFrameAtMs ?? 0, {
-    timeout: 10000,
+  await expect.poll(async () => (await readDebug(page))?.remoteBrowser?.externalVideoFrameCount ?? 0, {
+    timeout: 15000,
     intervals: [250, 500, 1000]
-  }).toBeGreaterThan(previousFrameAt);
+  }).toBeGreaterThan(previousFrameCount);
   return Date.now() - startedAt;
 }
 
@@ -566,8 +573,8 @@ test("@staging @private-assets @rutube-canary real Rutube remote browser connect
     await openRemoteBrowserUrl(page, rutubePrimaryUrl);
     await waitForRemoteBrowserViewportState(page, rutubePrimaryUrl, 45000);
     await waitForRutubeMedia(page, 75000);
-    const previousFrameAt = (await readDebug(page))?.remoteBrowser?.lastFrameAtMs ?? 0;
-    await waitForFreshFrame(page, previousFrameAt);
+    const previousFrameCount = (await readDebug(page))?.remoteBrowser?.externalVideoFrameCount ?? 0;
+    await waitForFreshExternalVideoFrame(page, previousFrameCount);
   } finally {
     if (roomId) {
       await deleteTemporaryRoom(request, roomId);
