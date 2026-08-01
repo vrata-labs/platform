@@ -7,41 +7,111 @@ on:
       - deploy/scene-bundles-stage-20260328
   pull_request:
 
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  checks:
+  changes:
     runs-on: ubuntu-latest
+    outputs:
+      heavy: ${{ steps.filter.outputs.heavy }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 20
+
+      - name: Classify changed files
+        id: filter
+        uses: dorny/paths-filter@d1c1ffe0248fe513906c8e24db8ea791d46f8590
+        with:
+          base: ${{ github.ref }}
+          initial-fetch-depth: 20
+          predicate-quantifier: every
+          filters: |
+            heavy:
+              - '**'
+              - '!docs/**'
+              - '!*.md'
+              - '!.opencode/**'
+              - '!opencode.json'
+              - '!opencode.jsonc'
+
+  checks:
+    needs: changes
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate change classification
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          HEAVY: ${{ needs.changes.outputs.heavy }}
+        run: |
+          if [ "$CHANGES_RESULT" != "success" ]; then
+            echo "change classifier finished with $CHANGES_RESULT" >&2
+            exit 1
+          fi
+          if [ "$HEAVY" != "true" ] && [ "$HEAVY" != "false" ]; then
+            echo "change classifier returned invalid heavy output: $HEAVY" >&2
+            exit 1
+          fi
+
+      - name: Skip heavy CI for docs-only changes
+        if: needs.changes.result == 'success' && needs.changes.outputs.heavy == 'false'
+        run: |
+          echo "No build or runtime files changed; heavy CI was skipped."
+          {
+            echo "### CI mode"
+            echo
+            echo "Docs-only change detected. Lint, typecheck, build, tests, and E2E were skipped."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Checkout
+        if: needs.changes.result == 'success' && needs.changes.outputs.heavy == 'true'
+        uses: actions/checkout@v4
 
       - name: Setup pnpm
+        if: needs.changes.result == 'success' && needs.changes.outputs.heavy == 'true'
         uses: pnpm/action-setup@v4
 
       - name: Setup Node.js
+        if: needs.changes.result == 'success' && needs.changes.outputs.heavy == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: pnpm
 
       - name: Install dependencies
+        if: needs.changes.result == 'success' && needs.changes.outputs.heavy == 'true'
         run: pnpm install --frozen-lockfile
 
       - name: Lint
+        if: needs.changes.result == 'success' && needs.changes.outputs.heavy == 'true'
         run: pnpm lint
 
       - name: Typecheck
+        if: needs.changes.result == 'success' && needs.changes.outputs.heavy == 'true'
         run: pnpm typecheck
 
       - name: Build
+        if: needs.changes.result == 'success' && needs.changes.outputs.heavy == 'true'
         run: pnpm build
 
       - name: Self-host compose config
+        if: needs.changes.result == 'success' && needs.changes.outputs.heavy == 'true'
         run: docker compose --env-file infra/docker/.env.selfhost.example -f infra/docker/compose.selfhost.yml config
 
       - name: Production compose config
+        if: needs.changes.result == 'success' && needs.changes.outputs.heavy == 'true'
         run: docker compose --env-file infra/docker/.env.production.example -f infra/docker/compose.production.yml config
 
       - name: Production preflight rejects example secrets
+        if: needs.changes.result == 'success' && needs.changes.outputs.heavy == 'true'
         run: |
           set +e
           node tools/validate-production-config.mjs --env-file infra/docker/.env.production.example > /tmp/vrata-production-preflight.out 2>&1
@@ -58,18 +128,21 @@ jobs:
           fi
 
       - name: Test
+        if: needs.changes.result == 'success' && needs.changes.outputs.heavy == 'true'
         run: pnpm test
 
       - name: Install Playwright browser
+        if: needs.changes.result == 'success' && needs.changes.outputs.heavy == 'true'
         run: pnpm exec playwright install --with-deps chromium
 
       - name: E2E
+        if: needs.changes.result == 'success' && needs.changes.outputs.heavy == 'true'
         env:
           PLAYWRIGHT_REPORT_NAME: local-e2e
         run: pnpm test:e2e
 
       - name: Upload Playwright artifacts
-        if: always()
+        if: always() && needs.changes.result == 'success' && needs.changes.outputs.heavy == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: playwright-local-${{ github.run_id }}-${{ github.run_attempt }}
@@ -80,28 +153,61 @@ jobs:
             test-results/
 
   asset-validation:
+    needs: changes
+    if: always()
     runs-on: ubuntu-latest
     steps:
+      - name: Validate change classification
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          HEAVY: ${{ needs.changes.outputs.heavy }}
+        run: |
+          if [ "$CHANGES_RESULT" != "success" ]; then
+            echo "change classifier finished with $CHANGES_RESULT" >&2
+            exit 1
+          fi
+          if [ "$HEAVY" != "true" ] && [ "$HEAVY" != "false" ]; then
+            echo "change classifier returned invalid heavy output: $HEAVY" >&2
+            exit 1
+          fi
+
+      - name: Skip asset validation for docs-only changes
+        if: needs.changes.result == 'success' && needs.changes.outputs.heavy == 'false'
+        run: |
+          echo "No build or runtime files changed; asset validation was skipped."
+          {
+            echo "### Asset validation mode"
+            echo
+            echo "Docs-only change detected. Asset build, tests, and sample validation were skipped."
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Checkout
+        if: needs.changes.result == 'success' && needs.changes.outputs.heavy == 'true'
         uses: actions/checkout@v4
 
       - name: Setup pnpm
+        if: needs.changes.result == 'success' && needs.changes.outputs.heavy == 'true'
         uses: pnpm/action-setup@v4
 
       - name: Setup Node.js
+        if: needs.changes.result == 'success' && needs.changes.outputs.heavy == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: pnpm
 
       - name: Install dependencies
+        if: needs.changes.result == 'success' && needs.changes.outputs.heavy == 'true'
         run: pnpm install --frozen-lockfile
 
       - name: Build asset pipeline
+        if: needs.changes.result == 'success' && needs.changes.outputs.heavy == 'true'
         run: pnpm --filter @vrata/asset-pipeline build
 
       - name: Asset pipeline tests
+        if: needs.changes.result == 'success' && needs.changes.outputs.heavy == 'true'
         run: pnpm --filter @vrata/asset-pipeline test
 
       - name: Asset validator sample run
+        if: needs.changes.result == 'success' && needs.changes.outputs.heavy == 'true'
         run: pnpm --filter @vrata/asset-pipeline validate:sample

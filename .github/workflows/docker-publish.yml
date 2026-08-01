@@ -5,10 +5,26 @@ on:
     branches:
       - main
       - deploy/scene-bundles-stage-20260328
+    paths:
+      - .github/workflows/docker-publish.yml
+      - .dockerignore
+      - apps/**
+      - packages/**
+      - infra/docker/**
+      - package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - tsconfig*.json
+      - .npmrc
+      - patches/**
   workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: docker-publish-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   REGISTRY: cr.yandex
@@ -38,11 +54,13 @@ jobs:
           API_IMAGE="${REGISTRY}/${YCR_REGISTRY_ID}/${API_IMAGE_NAME}"
           ROOM_STATE_IMAGE="${REGISTRY}/${YCR_REGISTRY_ID}/${ROOM_STATE_IMAGE_NAME}"
           REMOTE_BROWSER_IMAGE="${REGISTRY}/${YCR_REGISTRY_ID}/${REMOTE_BROWSER_IMAGE_NAME}"
-          echo "sha_tag=${SHA_TAG}" >> "$GITHUB_OUTPUT"
-          echo "branch_slug=${BRANCH_SLUG}" >> "$GITHUB_OUTPUT"
-          echo "api_image=${API_IMAGE}" >> "$GITHUB_OUTPUT"
-          echo "room_state_image=${ROOM_STATE_IMAGE}" >> "$GITHUB_OUTPUT"
-          echo "remote_browser_image=${REMOTE_BROWSER_IMAGE}" >> "$GITHUB_OUTPUT"
+          {
+            echo "sha_tag=${SHA_TAG}"
+            echo "branch_slug=${BRANCH_SLUG}"
+            echo "api_image=${API_IMAGE}"
+            echo "room_state_image=${ROOM_STATE_IMAGE}"
+            echo "remote_browser_image=${REMOTE_BROWSER_IMAGE}"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Login to Yandex Container Registry
         uses: docker/login-action@v3
