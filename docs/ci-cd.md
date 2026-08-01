@@ -21,6 +21,13 @@ Vrata keeps test and deployment automation in the repository and executes it in 
 - `Staging Smoke`: manual staging verification utility.
 - `Docker Release`: public GHCR image publishing for SemVer tags and release candidates.
 
+## Change Filtering And Concurrency
+
+- `CI` always creates the required `checks` and `asset-validation` jobs. Changes limited to `docs/**`, root Markdown files, `.opencode/**`, `opencode.json`, or `opencode.jsonc` complete those jobs as successful no-ops; any other changed path runs the full checks.
+- `Docker Publish` runs on pushes only when an application, workspace package, Docker configuration, lockfile, or root build configuration can affect an image. Manual `workflow_dispatch` runs are not path-filtered.
+- A newer push to the same PR or Git ref cancels an unfinished `CI` or `Docker Publish` run. `Staging Deploy` remains serialized and is never cancelled in progress.
+- A `workflow_run` uses the downstream workflow definition from the default branch. Branch-only edits to `Staging Deploy` conditions do not change automatic rollout eligibility until they reach the default branch.
+
 ## Where Results Are Stored
 
 - Workflow logs and summaries are stored in GitHub Actions runs.
