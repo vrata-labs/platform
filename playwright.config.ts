@@ -41,6 +41,7 @@ export default defineConfig({
     command: "node tools/start-e2e-services.mjs",
     url: new URL("/health", baseURL).toString(),
     reuseExistingServer: process.env.E2E_REUSE_EXISTING_SERVER === "1",
+    gracefulShutdown: { signal: "SIGTERM", timeout: 10000 },
     timeout: 120000,
     env: {
       VRATA_DISABLE_AUTOSTART: "0",
