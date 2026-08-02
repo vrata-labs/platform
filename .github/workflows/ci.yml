@@ -103,6 +103,12 @@ jobs:
     if: needs.changes.result == 'success' && needs.changes.outputs.heavy == 'true' && needs.core_checks.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      E2E_RUN_ID: ci-${{ github.run_id }}-${{ matrix.shard }}
+      E2E_RUN_DIR: /tmp/vrata-e2e-${{ matrix.shard }}
+      E2E_LOG_DIR: /tmp/vrata-e2e-${{ matrix.shard }}/logs
+      E2E_STARTUP_STATUS_PATH: /tmp/vrata-e2e-${{ matrix.shard }}/startup-status.json
+      E2E_PID_MANIFEST_PATH: /tmp/vrata-e2e-${{ matrix.shard }}/pids.json
     strategy:
       fail-fast: false
       matrix:
@@ -141,6 +147,10 @@ jobs:
             E2E_EXCLUDE_RUNTIME_SPEC=1 pnpm exec playwright test --grep-invert "@staging|@private-assets"
           fi
 
+      - name: Assert E2E cleanup
+        if: always()
+        run: node tools/start-e2e-services.mjs --assert-clean
+
       - name: Upload Playwright artifacts
         if: always()
         uses: actions/upload-artifact@v4
@@ -152,6 +162,7 @@ jobs:
             playwright-report/local-e2e-${{ matrix.shard }}/
             test-results/local-e2e-${{ matrix.shard }}/
             test-results/local-e2e-${{ matrix.shard }}.json
+            /tmp/vrata-e2e-${{ matrix.shard }}/logs/
 
   checks:
     needs:

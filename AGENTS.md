@@ -129,7 +129,7 @@ Frame locomotion maintenance rules:
 - User preference: unless explicitly requested otherwise, implement user-facing/runtime functionality in the main platform path everywhere it applies, not only behind flags, in sandboxes, or in narrow fallback-only paths.
 - User preference: do not default to feature-flag-only, sandbox-only, or fallback-only delivery when the request is for a real product feature; those paths are acceptable only when explicitly requested or when they are strictly required as temporary plumbing for the main path.
 - After finishing code changes, default flow is not just local verification: publish the current changes to staging through the normal git-based pipeline and verify them there as well.
-- Default verification after changes should include the full local e2e suite (`pnpm test:e2e`), then staging verification on the current staging host.
+- Final verification for code changes should include the full local e2e suite (`pnpm test:e2e`) once against the final working tree, then staging verification on the current staging host. Do not run the full local e2e suite after every intermediate edit.
 - Do not run `pnpm test:e2e:staging` as validation of a new local runtime change before that exact commit is pushed and deployed. Before push/deploy, only local verification is meaningful; any pre-push staging check is infrastructure/smoke information only and must not be presented as verification of the new change.
 - Staging verification should include at least the staging smoke suite (`pnpm test:e2e:staging`), and for meaningful runtime changes it should also cover the key public flows on staging: room load, selector/navigation if relevant, and important scene rooms such as Hall/BlueOffice when scene behavior could be affected.
 - Staging e2e now runs against the public HTTPS app URL and covers the full restored scene catalog; Hall, BlueOffice, and ArtGallery are the current baseline scenes that must also reach `sceneDebug.state=loaded`.
@@ -178,7 +178,11 @@ Frame locomotion maintenance rules:
 ## Testing policy
 
 - New runtime/product features should be covered by automatic e2e whenever reasonably possible, not only by local unit/integration checks.
-- Default expectation for user-facing feature work is two-level e2e verification: local `pnpm test:e2e` first, then verification against the published staging environment.
+- During implementation, use the narrowest meaningful feedback loop: build and test the affected package, then run a focused Playwright spec or `--grep` selection when behavior changes. Do not repeatedly run `pnpm test:e2e` after intermediate patches.
+- Package checks compile before testing because package tests execute built files. Use `pnpm --filter @vrata/runtime-web build && pnpm --filter @vrata/runtime-web test`, `pnpm --filter @vrata/api build && pnpm --filter @vrata/api test`, `pnpm --filter @vrata/room-state build && pnpm --filter @vrata/room-state test`, or `pnpm --filter @vrata/control-plane build && pnpm --filter @vrata/control-plane test` as applicable.
+- Run focused local browser coverage through the isolated wrapper, for example `pnpm test:e2e -- tests/e2e/runtime.spec.ts` or `pnpm test:e2e -- tests/e2e/runtime.spec.ts --grep "seat"`; choose the spec and grep for the behavior being changed. Do not bypass the wrapper with direct local `pnpm exec playwright test` unless intentionally using an externally managed server.
+- Default expectation for user-facing feature work remains two-level e2e verification: once the local code is final, run `pnpm test:e2e` once, then verify the published commit against staging. A code change after the successful full local e2e invalidates that result and requires the final suite to be run again before publish.
+- Documentation, notes, and project-local OpenCode configuration changes do not require package or e2e checks unless they also modify executable test, build, runtime, deployment, or staging configuration.
 - Prefer adding or extending staging-facing automated scenarios instead of relying only on manual checks or indirect diagnostics.
 - Manual staging checks are still valuable for XR/visual behavior, but they should complement automated e2e on published staging, not replace it.
 

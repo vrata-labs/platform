@@ -111,7 +111,19 @@ It runs after the internal Docker publish workflow succeeds and then:
 
 ## Test Artifacts
 
-Playwright writes reports to stable paths:
+Local webServer-backed Playwright commands (`test:e2e`, `test:m0.5`, `test:m1-media`, and `test:e2e:private-assets`) run through `tools/run-local-e2e.mjs`. Each run receives isolated API, room-state, and remote-browser ports plus private document/scene upload roots. Successful runs remove their temporary service logs and reports; failed or interrupted runs print the preserved diagnostic directory.
+
+The local wrapper defaults to two Playwright workers to keep multi-client room-state scenarios stable. Pass `--workers=<n>` or set `E2E_LOCAL_WORKERS` for an intentional override.
+
+Use the wrapper for focused local coverage:
+
+```bash
+pnpm test:e2e -- tests/e2e/runtime.spec.ts --grep "seat"
+```
+
+To test against an explicitly managed local stack, set both `E2E_REUSE_EXISTING_SERVER=1` and `BASE_URL`. Reuse mode verifies `/health`, does not launch local services, and does not own their lifecycle.
+
+CI and staging Playwright runs write reports to stable paths:
 
 - HTML report: `playwright-report/<report-name>/`;
 - JSON report: `test-results/<report-name>.json`;
