@@ -12,11 +12,13 @@ const remoteBrowserUrl = `ws://127.0.0.1:${remoteBrowserPort}`;
 const allowedOrigins = `${baseUrlOrigin},http://localhost:${apiPort},http://127.0.0.1:${apiPort}`;
 const useWebServer = process.env.PLAYWRIGHT_NO_WEB_SERVER !== "1";
 const reportName = process.env.PLAYWRIGHT_REPORT_NAME ?? "e2e";
+const excludeRuntimeSpec = process.env.E2E_EXCLUDE_RUNTIME_SPEC === "1";
 
 process.env.E2E_ROOM_STATE_PUBLIC_URL ??= roomStateUrl;
 
 export default defineConfig({
   testDir: "./tests/e2e",
+  testIgnore: excludeRuntimeSpec ? ["**/runtime.spec.ts"] : [],
   timeout: 45000,
   outputDir: `test-results/${reportName}`,
   reporter: [
