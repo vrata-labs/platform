@@ -96,6 +96,23 @@ jobs:
       - name: Test
         run: pnpm test
 
+  compatibility:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Test compatibility validator
+        run: node --test tools/validate-compatibility-matrix.test.mjs
+
+      - name: Validate compatibility matrix
+        run: node tools/validate-compatibility-matrix.mjs
+
   e2e:
     needs:
       - changes
@@ -167,6 +184,7 @@ jobs:
   checks:
     needs:
       - changes
+      - compatibility
       - core_checks
       - e2e
     if: always()
@@ -175,12 +193,17 @@ jobs:
       - name: Validate CI result
         env:
           CHANGES_RESULT: ${{ needs.changes.result }}
+          COMPATIBILITY_RESULT: ${{ needs.compatibility.result }}
           HEAVY: ${{ needs.changes.outputs.heavy }}
           CORE_RESULT: ${{ needs.core_checks.result }}
           E2E_RESULT: ${{ needs.e2e.result }}
         run: |
           if [ "$CHANGES_RESULT" != "success" ]; then
             echo "change classifier finished with $CHANGES_RESULT" >&2
+            exit 1
+          fi
+          if [ "$COMPATIBILITY_RESULT" != "success" ]; then
+            echo "compatibility validation finished with $COMPATIBILITY_RESULT" >&2
             exit 1
           fi
           if [ "$HEAVY" != "true" ] && [ "$HEAVY" != "false" ]; then

@@ -1,0 +1,253 @@
+{
+  "schemaVersion": 1,
+  "title": "Vrata client compatibility",
+  "reviewOwner": "Vrata release maintainer",
+  "assumptions": [
+    "Statuses describe the named client profile with the relevant Vrata feature enabled on a correctly configured HTTPS self-host.",
+    "Chromium mobile emulation and synthetic WebXR validate fallback behavior only; they do not qualify a physical mobile or headset profile as supported.",
+    "A capability remains untested until qualifying evidence exists for the exact profile."
+  ],
+  "statusDefinitions": {
+    "supported": "The measurable capability scenario passed on the exact profile and revision without a known blocking defect.",
+    "degraded": "The primary scenario passed, but a verified limitation affects expected behavior and is documented below.",
+    "unsupported": "The scenario reproducibly failed on the exact profile or is excluded by a documented platform decision.",
+    "untested": "No qualifying evidence exists for the exact profile."
+  },
+  "capabilities": [
+    {
+      "id": "join",
+      "label": "Join",
+      "passCriteria": "The client completes access and room join, then appears in presence without a crash."
+    },
+    {
+      "id": "movement",
+      "label": "Movement",
+      "passCriteria": "Local input changes pose and another client receives the current position without a stale participant."
+    },
+    {
+      "id": "voice",
+      "label": "Voice",
+      "passCriteria": "The client publishes and receives LiveKit audio, and mute state remains synchronized."
+    },
+    {
+      "id": "spatialAudio",
+      "label": "Spatial audio",
+      "passCriteria": "Remote audio follows participant pose or uses an explicitly documented degraded fallback."
+    },
+    {
+      "id": "screenShare",
+      "label": "Screen share",
+      "passCriteria": "The client publishes a display track, another participant sees the in-room surface, and stop clears the state."
+    },
+    {
+      "id": "presentation",
+      "label": "Presentation",
+      "passCriteria": "An authorized presenter opens content and changes presentation state that an observer can see."
+    },
+    {
+      "id": "webXr",
+      "label": "WebXR",
+      "passCriteria": "The client enters immersive VR, publishes XR pose, and exits without disconnecting room or audio."
+    }
+  ],
+  "profiles": [
+    {
+      "id": "desktop-chromium-linux-ci",
+      "category": "desktop",
+      "label": "Desktop Chromium on Linux CI",
+      "device": "GitHub-hosted runner",
+      "deviceVersion": "ubuntu-24.04 image 20260720.247",
+      "os": "Ubuntu",
+      "osVersion": "24.04",
+      "browser": "Chromium",
+      "browserVersion": "145.0.7632.6 via Playwright 1.58.2",
+      "lastReviewed": "2026-08-03",
+      "lastTested": "2026-08-02",
+      "testedRevision": "973bc161b75d178a6a3b1252e6a5d00b4733ff2c",
+      "notes": "Results apply to the recorded Linux CI/staging profile and do not automatically cover Windows or macOS.",
+      "capabilities": {
+        "join": {
+          "status": "supported",
+          "evidenceIds": [
+            "ci-30763163576"
+          ],
+          "knownIssueIds": []
+        },
+        "movement": {
+          "status": "supported",
+          "evidenceIds": [
+            "ci-30763163576"
+          ],
+          "knownIssueIds": []
+        },
+        "voice": {
+          "status": "supported",
+          "evidenceIds": [
+            "staging-30763610266"
+          ],
+          "knownIssueIds": []
+        },
+        "spatialAudio": {
+          "status": "supported",
+          "evidenceIds": [
+            "staging-30763610266"
+          ],
+          "knownIssueIds": []
+        },
+        "screenShare": {
+          "status": "untested",
+          "evidenceIds": [],
+          "knownIssueIds": []
+        },
+        "presentation": {
+          "status": "untested",
+          "evidenceIds": [],
+          "knownIssueIds": []
+        },
+        "webXr": {
+          "status": "untested",
+          "evidenceIds": [],
+          "knownIssueIds": []
+        }
+      }
+    },
+    {
+      "id": "android-chrome",
+      "category": "mobile",
+      "label": "Android Chrome",
+      "device": "Android phone",
+      "deviceVersion": null,
+      "os": "Android",
+      "osVersion": null,
+      "browser": "Chrome",
+      "browserVersion": null,
+      "lastReviewed": "2026-08-03",
+      "lastTested": null,
+      "testedRevision": null,
+      "notes": "Chromium touch emulation is covered by CI, but no current physical Android run is recorded.",
+      "capabilities": {
+        "join": { "status": "untested", "evidenceIds": [], "knownIssueIds": [] },
+        "movement": { "status": "untested", "evidenceIds": [], "knownIssueIds": [] },
+        "voice": { "status": "untested", "evidenceIds": [], "knownIssueIds": [] },
+        "spatialAudio": { "status": "untested", "evidenceIds": [], "knownIssueIds": [] },
+        "screenShare": { "status": "untested", "evidenceIds": [], "knownIssueIds": [] },
+        "presentation": { "status": "untested", "evidenceIds": [], "knownIssueIds": [] },
+        "webXr": { "status": "untested", "evidenceIds": [], "knownIssueIds": [] }
+      }
+    },
+    {
+      "id": "ios-safari",
+      "category": "mobile",
+      "label": "iOS Safari",
+      "device": "iPhone or iPad",
+      "deviceVersion": null,
+      "os": "iOS or iPadOS",
+      "osVersion": null,
+      "browser": "Safari",
+      "browserVersion": null,
+      "lastReviewed": "2026-08-03",
+      "lastTested": null,
+      "testedRevision": null,
+      "notes": "Safari user-agent emulation in Chromium is not evidence for a physical Apple device.",
+      "capabilities": {
+        "join": { "status": "untested", "evidenceIds": [], "knownIssueIds": [] },
+        "movement": { "status": "untested", "evidenceIds": [], "knownIssueIds": [] },
+        "voice": { "status": "untested", "evidenceIds": [], "knownIssueIds": [] },
+        "spatialAudio": { "status": "untested", "evidenceIds": [], "knownIssueIds": [] },
+        "screenShare": { "status": "untested", "evidenceIds": [], "knownIssueIds": [] },
+        "presentation": { "status": "untested", "evidenceIds": [], "knownIssueIds": [] },
+        "webXr": { "status": "untested", "evidenceIds": [], "knownIssueIds": [] }
+      }
+    },
+    {
+      "id": "meta-quest-browser",
+      "category": "vr",
+      "label": "Meta Quest Browser",
+      "device": "Meta Quest headset",
+      "deviceVersion": null,
+      "os": "Meta Horizon OS",
+      "osVersion": null,
+      "browser": "Meta Quest Browser",
+      "browserVersion": null,
+      "lastReviewed": "2026-08-03",
+      "lastTested": null,
+      "testedRevision": null,
+      "notes": "Historical headset checks exist, but their exact current device and browser versions were not recorded, so they do not qualify this profile.",
+      "capabilities": {
+        "join": { "status": "untested", "evidenceIds": [], "knownIssueIds": [] },
+        "movement": {
+          "status": "untested",
+          "evidenceIds": [],
+          "knownIssueIds": [
+            "quest-motion-smoothness-history"
+          ]
+        },
+        "voice": { "status": "untested", "evidenceIds": [], "knownIssueIds": [] },
+        "spatialAudio": { "status": "untested", "evidenceIds": [], "knownIssueIds": [] },
+        "screenShare": { "status": "untested", "evidenceIds": [], "knownIssueIds": [] },
+        "presentation": { "status": "untested", "evidenceIds": [], "knownIssueIds": [] },
+        "webXr": { "status": "untested", "evidenceIds": [], "knownIssueIds": [] }
+      }
+    }
+  ],
+  "evidence": [
+    {
+      "id": "ci-30763163576",
+      "type": "automated",
+      "outcome": "passed",
+      "label": "CI Chromium room and cross-device scenarios",
+      "date": "2026-08-02",
+      "revision": "973bc161b75d178a6a3b1252e6a5d00b4733ff2c",
+      "profileIds": [
+        "desktop-chromium-linux-ci"
+      ],
+      "capabilityIds": [
+        "join",
+        "movement"
+      ],
+      "url": "https://github.com/vrata-labs/platform/actions/runs/30763163576",
+      "sourcePaths": [
+        "tests/e2e/runtime.spec.ts",
+        "tests/e2e/m0.5/cross-device-join-flow.spec.ts",
+        "tests/e2e/m0.5/reliable-room-scenario.spec.ts"
+      ],
+      "notes": "The runtime and cross-device Playwright shards passed with the bundled Chromium browser. Mobile emulation in the same run is not used as physical-device evidence."
+    },
+    {
+      "id": "staging-30763610266",
+      "type": "automated",
+      "outcome": "passed",
+      "label": "Staging voice and spatial-audio gate",
+      "date": "2026-08-02",
+      "revision": "973bc161b75d178a6a3b1252e6a5d00b4733ff2c",
+      "profileIds": [
+        "desktop-chromium-linux-ci"
+      ],
+      "capabilityIds": [
+        "voice",
+        "spatialAudio"
+      ],
+      "url": "https://github.com/vrata-labs/platform/actions/runs/30763610266",
+      "sourcePaths": [
+        "tests/e2e/runtime-staging.spec.ts"
+      ],
+      "notes": "The public HTTPS staging gate validated LiveKit media and spatial source attachment on the deployed revision."
+    }
+  ],
+  "knownIssues": [
+    {
+      "id": "quest-motion-smoothness-history",
+      "summary": "Historical Quest checks reported improved but not perfectly smooth remote motion; the current headset/browser profile has not been revalidated.",
+      "profileIds": [
+        "meta-quest-browser"
+      ],
+      "capabilityIds": [
+        "movement"
+      ],
+      "workaround": "No known workaround. Keep the capability untested until a fresh headset run records exact versions and current behavior.",
+      "sourcePaths": [
+        "docs/status.md"
+      ]
+    }
+  ]
+}

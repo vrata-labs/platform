@@ -283,6 +283,7 @@ const guestCheckMicrophoneButton = mustElement<HTMLButtonElement>("#guest-check-
 const guestEnterWithoutAudioButton = mustElement<HTMLButtonElement>("#guest-enter-without-audio");
 const guestEnterRoomButton = mustElement<HTMLButtonElement>("#guest-enter-room");
 const guestCompatibilityWarningEl = mustElement<HTMLDivElement>("#guest-compatibility-warning");
+const guestCompatibilityLink = mustElement<HTMLAnchorElement>("#guest-compatibility-link");
 const guestControlsHintEl = mustElement<HTMLDivElement>("#guest-controls-hint");
 const guestOnboardingStatusEl = mustElement<HTMLDivElement>("#guest-onboarding-status");
 const sceneAttributionsPanelEl = mustElement<HTMLDivElement>("#scene-attributions");
@@ -4791,6 +4792,7 @@ function renderGuestOnboarding(): void {
   guestCompatibilityWarningEl.textContent = warnings.length > 0
     ? `Compatibility warning: ${warnings.join(" ")}`
     : "Compatibility: this browser can enter the room.";
+  guestCompatibilityLink.hidden = warnings.length === 0;
   debugState.guestOnboarding.required = true;
   debugState.guestOnboarding.controlsHint = guestControlsHintEl.textContent;
   debugState.guestOnboarding.warnings = warnings;

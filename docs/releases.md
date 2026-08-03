@@ -35,6 +35,8 @@ The workflow also runs `tools/check-public-assets.mjs`; it fails if non-cleared 
 - [ ] `CHANGELOG.md` is updated.
 - [ ] CI is green on `main`.
 - [ ] Internal staging gate is green for the release commit.
+- [ ] A release maintainer reviewed `docs/compatibility.md`; each profile is marked updated or reviewed unchanged with a current `lastReviewed` date.
+- [ ] `pnpm validate:compatibility` passes and supported/degraded/unsupported claims link to qualifying evidence.
 - [ ] Self-host compose config check passes.
 - [ ] Self-host smoke passes from a clean clone or clean Docker environment.
 - [ ] GHCR images are published with SemVer and SHA tags.

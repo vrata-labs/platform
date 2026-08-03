@@ -348,6 +348,23 @@ test.describe("@staging runtime HUD space selector", () => {
     }).toBeGreaterThanOrEqual(2);
   });
 
+  test("public compatibility matrix and runtime links are deployed", async ({ page, request }) => {
+    const htmlResponse = await request.get("/compatibility.html");
+    expect(htmlResponse.ok()).toBeTruthy();
+    expect(htmlResponse.headers()["content-type"]).toContain("text/html");
+
+    await page.goto("/compatibility");
+    await expect(page.getByRole("heading", { name: "Client compatibility", level: 1 })).toBeVisible();
+    await expect(page.locator("#compatibility-matrix-body tr")).toHaveCount(4);
+    await expect(page.locator("[data-evidence-id]").first()).toBeVisible();
+
+    await page.goto(`/rooms/${stagingRoomId}`);
+    await expect(page.locator("#compatibility-link")).toHaveAttribute("href", "/compatibility");
+
+    await page.goto(`/diagnostics?roomId=${encodeURIComponent(stagingRoomId)}`);
+    await expect(page.locator("#diagnostics-compatibility-link")).toHaveAttribute("href", "/compatibility");
+  });
+
   test("audio device controls are visible for the configured staging room", async ({ page }) => {
     await page.goto(`/rooms/${stagingRoomId}`);
     await expect.poll(async () => {

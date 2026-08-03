@@ -26,6 +26,7 @@
     "staging:e2e:pull-env": "node tools/pull-staging-e2e-env.mjs",
     "test:e2e:rutube": "BASE_URL=\"${BASE_URL:-https://158.160.10.234.sslip.io}\" PLAYWRIGHT_NO_WEB_SERVER=1 playwright test --grep @rutube-full --workers=1",
     "test:e2e:rutube:canary": "BASE_URL=\"${BASE_URL:-https://158.160.10.234.sslip.io}\" PLAYWRIGHT_NO_WEB_SERVER=1 playwright test --grep @rutube-canary --workers=1 --retries=1",
+    "validate:compatibility": "node tools/validate-compatibility-matrix.mjs",
     "validate:production-config": "node tools/validate-production-config.mjs",
     "backup:compose": "node tools/backup-restore.mjs backup",
     "backup:validate": "node tools/backup-restore.mjs validate",

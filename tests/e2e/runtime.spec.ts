@@ -599,6 +599,8 @@ test("guest onboarding shows unsupported media warning without blocking entry", 
 
   await page.goto("/rooms/demo-room?onboard=1");
   await expect(page.locator("#guest-compatibility-warning")).toContainText("Microphone unsupported");
+  await expect(page.locator("#guest-compatibility-link")).toBeVisible();
+  await expect(page.locator("#guest-compatibility-link")).toHaveAttribute("href", "/compatibility");
   await completeGuestOnboarding(page, "Unsupported Media Guest", true);
   await expect(page.locator("#status-line")).toContainText("Joined as Unsupported Media Guest", { timeout: 10000 });
 });
@@ -2831,6 +2833,42 @@ test("fault-injected room-state failure falls back to API mode", async ({ page, 
   const presence = (await presenceResponse.json()) as { items: Array<{ participantId: string }> };
   expect(presence.items.length).toBeGreaterThan(0);
   await expect(page.locator("#diagnostics-link")).toHaveAttribute("href", /\/diagnostics\?roomId=demo-room/);
+  await expect(page.locator("#compatibility-link")).toHaveAttribute("href", "/compatibility");
+});
+
+test("public compatibility matrix exposes profiles, evidence, and mobile-safe layout", async ({ page, request }) => {
+  const htmlResponse = await request.get("/compatibility.html");
+  expect(htmlResponse.ok()).toBeTruthy();
+  expect(htmlResponse.headers()["content-type"]).toContain("text/html");
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/compatibility");
+
+  await expect(page.getByRole("heading", { name: "Client compatibility", level: 1 })).toBeVisible();
+  await expect(page.locator("#compatibility-matrix-body tr")).toHaveCount(4);
+  await expect(page.locator("#compatibility-matrix-head th")).toHaveCount(11);
+  await expect(page.locator('#compatibility-matrix-body [data-profile-id="desktop-chromium-linux-ci"]')).toContainText("supported");
+  await expect(page.locator('#compatibility-matrix-body [data-profile-id="ios-safari"]')).toContainText("Not tested");
+  await expect(page.locator("[data-evidence-id]").first()).toBeVisible();
+  await expect(page.locator("[data-issue-id]").first()).toBeVisible();
+  const recordTarget = await page.locator("#compatibility-matrix-body .compatibility-record-link").first().getAttribute("href");
+  expect(recordTarget).toMatch(/^#(?:evidence|issue)-/);
+  await expect(page.locator(recordTarget!)).toBeVisible();
+
+  const layout = await page.evaluate(() => ({
+    documentWidth: document.documentElement.scrollWidth,
+    bodyWidth: document.body.scrollWidth,
+    viewportWidth: window.innerWidth,
+    heroRight: document.querySelector<HTMLElement>(".compatibility-hero")?.getBoundingClientRect().right ?? 0,
+    tableClientWidth: document.querySelector<HTMLElement>(".compatibility-table-shell")?.clientWidth ?? 0,
+    tableScrollWidth: document.querySelector<HTMLElement>(".compatibility-table-shell")?.scrollWidth ?? 0,
+    profiles: (window as Window & { __VRATA_COMPATIBILITY__?: { profiles?: unknown[] } }).__VRATA_COMPATIBILITY__?.profiles?.length ?? 0
+  }));
+  expect(layout.documentWidth).toBeLessThanOrEqual(layout.viewportWidth + 1);
+  expect(layout.bodyWidth).toBeLessThanOrEqual(layout.viewportWidth + 1);
+  expect(layout.heroRight).toBeLessThanOrEqual(layout.viewportWidth + 1);
+  expect(layout.tableScrollWidth).toBeGreaterThan(layout.tableClientWidth);
+  expect(layout.profiles).toBe(4);
 });
 
 test("public diagnostics page creates a redacted success report without media prompts", async ({ page }) => {
@@ -2845,6 +2883,7 @@ test("public diagnostics page creates a redacted success report without media pr
     });
   });
   await page.goto("/diagnostics?roomId=demo-room&autorun=1&skipMic=1&skipMedia=1&timeoutMs=3000");
+  await expect(page.locator("#diagnostics-compatibility-link")).toHaveAttribute("href", "/compatibility");
 
   await expect.poll(async () => {
     return await page.evaluate(() => (window as Window & {

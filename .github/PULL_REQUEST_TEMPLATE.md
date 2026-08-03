@@ -17,6 +17,7 @@
 - [ ] Public images
 - [ ] Database schema or migrations
 - [ ] Scene bundle compatibility
+- [ ] Client compatibility matrix updated or reviewed unchanged
 - [ ] Room/API contracts
 - [ ] Staging deployment
 - [ ] Upgrade or rollback behavior

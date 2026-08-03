@@ -15,6 +15,7 @@ Vrata uses SemVer: `MAJOR.MINOR.PATCH`. Until `1.0.0`, breaking changes can happ
 - Deny-by-default control-plane AuthN/AuthZ with explicit permissions and structured audit logging.
 - Observability baseline with request IDs, live/ready health endpoints, metrics endpoints, runtime report IDs, and diagnostics redaction.
 - Public connectivity diagnostics page with stable API/WSS/microphone/LiveKit/storage codes and a redacted JSON report for GitHub issues.
+- Public self-hosted client compatibility matrix with explicit capability statuses, test dates, evidence, known issues, runtime links, and release validation.
 - Compose backup/restore/rollback automation with checksum manifests, restore smoke checks, and retention pruning.
 - Private room access mode with public/unlisted/private visibility, expiring/revokable invite links, waiting-room approvals, access-denied UX, metrics, and audit entries for invite create/revoke/use.
 - Host controls for small meetings with trusted host/admin lock, unlock, participant removal, host transfer, session end, runtime HUD states, metrics, and audit entries.

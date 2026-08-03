@@ -6,7 +6,8 @@ export default defineConfig({
     rollupOptions: {
       input: {
         main: resolve(__dirname, "index.html"),
-        diagnostics: resolve(__dirname, "diagnostics.html")
+        diagnostics: resolve(__dirname, "diagnostics.html"),
+        compatibility: resolve(__dirname, "compatibility.html")
       }
     }
   }

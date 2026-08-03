@@ -59,15 +59,18 @@ The host controls gate is covered by `apps/api/src/index.test.ts` and `tests/e2e
 
 ## Cross-Device Compatibility Matrix
 
-Use this matrix for manual compatibility checks when real devices are available. Automated CI covers Chrome desktop, mobile emulation, no-WebXR fallback, and VR mock presence; hardware Quest checks remain manual until a real device lab is available.
+The canonical generated matrix is `docs/compatibility.md` and the deployed self-host page is `/compatibility`. Its source of truth is `apps/runtime-web/src/compatibility-matrix.json`.
 
-| Client | Expected mode | Expected controls | Expected VR button | Required result |
-| --- | --- | --- | --- | --- |
-| Chrome desktop | `desktop` | keyboard and mouse | active only when WebXR is supported | room joins, diagnostics show `clientCompatibility.resolvedJoinMode=desktop` |
-| Mobile Chrome/Safari | `mobile` | left-drag move, right-drag look | disabled/hidden when WebXR is unavailable | room joins without XR crash, diagnostics show touch controls supported |
-| Quest Browser | `desktop` before session, `vr` after user gesture | Enter VR then XR controllers | active when WebXR immersive VR is supported | room joins before VR, then publishes `mode=vr` after Enter VR |
-| Browser without microphone | desktop or mobile | normal navigation controls | unchanged by audio capability | room joins with audio disabled/degraded, diagnostics include `audio_input_unavailable` |
-| Browser without WebXR | desktop or mobile | normal non-XR controls | disabled with VR unavailable messaging | room joins without XR crash, diagnostics include `xr_unavailable` |
+Automated CI covers Desktop Chromium, mobile emulation, no-WebXR fallback, and VR mock presence. Emulation and synthetic XR are fallback evidence only; they must not promote Android Chrome, iOS Safari, or Meta Quest Browser to `supported`.
+
+For a real-device result, record device model, OS version, browser version, date, tested revision, all seven capability outcomes, known issues, and workarounds. Store a durable report under `docs/compatibility-results/` when one exists, update the JSON evidence record, then run:
+
+```bash
+pnpm validate:compatibility -- --write-docs
+pnpm validate:compatibility
+```
+
+Only `untested` may have no qualifying evidence. A release maintainer must update each profile's `lastReviewed` or explicitly record it as reviewed unchanged.
 
 ## Manual WebXR Checklist
 

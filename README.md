@@ -52,6 +52,7 @@ docker compose --env-file infra/docker/.env.selfhost.example -f infra/docker/com
 - `docs/upgrades.md` - backup, upgrade, smoke, and rollback flow.
 - `docs/releases.md` - SemVer and release process.
 - `docs/testing-checklist.md` - where tests live, run, and store artifacts.
+- `docs/compatibility.md` - generated client/browser capability matrix with test dates and evidence.
 - `docs/ci-cd.md` - GitHub Actions and staging/release operations.
 - `docs/product-scope.md` - product hypothesis and MVP scope.
 - `docs/architecture.md` - layer map.

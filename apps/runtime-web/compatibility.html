@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en" class="compatibility-document">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Vrata Client Compatibility</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body class="compatibility-body">
+    <main id="compatibility-app" class="compatibility-page">
+      <header class="compatibility-hero">
+        <div>
+          <div class="brand">Vrata public support record</div>
+          <h1>Client compatibility</h1>
+          <p>Verified browser and device capabilities, with dates and evidence. Untested means exactly that: no qualifying result exists for the named profile.</p>
+        </div>
+        <nav class="compatibility-actions" aria-label="Compatibility page links">
+          <a href="/">Open Vrata</a>
+          <a href="/diagnostics">Connectivity diagnostics</a>
+        </nav>
+      </header>
+
+      <section class="compatibility-section" aria-labelledby="compatibility-statuses-title">
+        <div class="compatibility-section-heading">
+          <div>
+            <div class="compatibility-kicker">Reading the record</div>
+            <h2 id="compatibility-statuses-title">Status definitions</h2>
+          </div>
+          <p id="compatibility-review-summary"></p>
+        </div>
+        <div id="compatibility-legend" class="compatibility-legend"></div>
+      </section>
+
+      <section class="compatibility-section" aria-labelledby="compatibility-matrix-title">
+        <div class="compatibility-section-heading">
+          <div>
+            <div class="compatibility-kicker">Exact profiles</div>
+            <h2 id="compatibility-matrix-title">Capability matrix</h2>
+          </div>
+          <p>Each cell links to its evidence or known issue when one is recorded.</p>
+        </div>
+        <div class="compatibility-table-shell" tabindex="0" aria-label="Scrollable client compatibility matrix">
+          <table id="compatibility-matrix">
+            <caption>Vrata client profiles and verified capability status</caption>
+            <thead id="compatibility-matrix-head"></thead>
+            <tbody id="compatibility-matrix-body"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="compatibility-section" aria-labelledby="compatibility-criteria-title">
+        <div class="compatibility-section-heading">
+          <div>
+            <div class="compatibility-kicker">What passing means</div>
+            <h2 id="compatibility-criteria-title">Capability criteria</h2>
+          </div>
+        </div>
+        <div id="compatibility-criteria" class="compatibility-card-grid"></div>
+      </section>
+
+      <section class="compatibility-section" aria-labelledby="compatibility-profiles-title">
+        <div class="compatibility-section-heading">
+          <div>
+            <div class="compatibility-kicker">Scope notes</div>
+            <h2 id="compatibility-profiles-title">Profiles and assumptions</h2>
+          </div>
+        </div>
+        <ul id="compatibility-assumptions" class="compatibility-assumptions"></ul>
+        <div id="compatibility-profiles" class="compatibility-card-grid"></div>
+      </section>
+
+      <section class="compatibility-section" aria-labelledby="compatibility-evidence-title">
+        <div class="compatibility-section-heading">
+          <div>
+            <div class="compatibility-kicker">Reproducible checks</div>
+            <h2 id="compatibility-evidence-title">Evidence</h2>
+          </div>
+        </div>
+        <div id="compatibility-evidence" class="compatibility-record-list"></div>
+      </section>
+
+      <section class="compatibility-section" aria-labelledby="compatibility-issues-title">
+        <div class="compatibility-section-heading">
+          <div>
+            <div class="compatibility-kicker">Published limitations</div>
+            <h2 id="compatibility-issues-title">Known issues</h2>
+          </div>
+        </div>
+        <div id="compatibility-known-issues" class="compatibility-record-list"></div>
+      </section>
+    </main>
+    <script type="module" src="/src/compatibility-page.ts"></script>
+  </body>
+</html>
