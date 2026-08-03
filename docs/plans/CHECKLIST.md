@@ -46,7 +46,7 @@
 
 ## P2
 
-- [ ] **VRATA-FEAT-029** — [Compatibility matrix page](./029-compatibility-matrix-page/README.md) — зависит от: 008, 009, 034
+- [x] **VRATA-FEAT-029** — [Compatibility matrix page](./029-compatibility-matrix-page/README.md) — зависит от: 008, 009, 034
 - [x] **VRATA-FEAT-030** — [Guest onboarding and permissions UX](./030-guest-onboarding-and-permissions-ux/README.md) — зависит от: 014, 008, 004
 - [x] **VRATA-FEAT-031** — [Admin dashboard for tenant rooms/assets/users](./031-admin-dashboard-for-tenant-rooms-assets-users/README.md) — зависит от: 002, 016, 017
 - [ ] **VRATA-FEAT-032** — [Standard room templates: personal, meeting, presentation](./032-standard-room-templates-personal-meeting-presentation/README.md) — зависит от: 016, 019, 024, 025
@@ -103,7 +103,7 @@
 - [x] VRATA-FEAT-028
 
 ### Спринт 6 — зрелость и публичное доверие
-- [ ] VRATA-FEAT-029
+- [x] VRATA-FEAT-029
 - [ ] VRATA-FEAT-032
 - [ ] VRATA-FEAT-033
 - [ ] VRATA-FEAT-034
