@@ -9,8 +9,9 @@ import { fileURLToPath } from "node:url";
 import { AccessToken } from "livekit-server-sdk";
 import { PDFDocument } from "pdf-lib";
 import { extractSceneBundleZipToTemp, normalizeSceneBundleRelativePath, validateSceneBundlePath, validateSceneBundleReference } from "@vrata/asset-pipeline";
-import { createRoomAccessDebugState, getRoomPermissions, hasRoomPermission, parseRoomRole, type RoomPermission, type RoomRole } from "@vrata/shared-types";
+import { createRoomAccessDebugState, getRoomPermissions, hasRoomPermission, parseRoomRole, type RoomPermission, type RoomRole, type RoomTemplateSnapshotV1, type RoomTemplateVersionSnapshotV1 } from "@vrata/shared-types";
 import { signRoomSessionToken, verifyRoomSessionToken, type RoomSessionRoleSource, type RoomSessionTokenPayload, type RoomSessionTokenVerificationResult } from "@vrata/shared-types/session-token";
+import { getCurrentTemplateVersion } from "@vrata/templates";
 
 import {
   resolveSceneBundlePublicUrl,
@@ -45,6 +46,8 @@ interface RoomManifest {
   roomType: RoomType;
   ownerParticipantId?: string | null;
   template: string;
+  templateVersion: string;
+  templateSnapshot: RoomTemplateSnapshotV1;
   sceneBundle?: {
     url: string;
   };
@@ -691,7 +694,9 @@ function logEvent(event: Record<string, unknown>): void {
   process.stdout.write(`${JSON.stringify(redactSecrets(event))}\n`);
 }
 
-function defaultManifest(roomId: string, request?: IncomingMessage): RoomManifest {
+function defaultManifest(roomId: string, request?: IncomingMessage, resolvedTemplateVersion?: RoomTemplateVersionSnapshotV1): RoomManifest {
+  const templateVersion = resolvedTemplateVersion ?? getCurrentTemplateVersion("meeting-room-basic");
+  if (!templateVersion) throw new Error("missing_seed_template_version:meeting-room-basic@0.1.0");
   return {
     schemaVersion: 1,
     tenantId: "demo-tenant",
@@ -699,6 +704,25 @@ function defaultManifest(roomId: string, request?: IncomingMessage): RoomManifes
     roomType: "standard",
     ownerParticipantId: null,
     template: "meeting-room-basic",
+    templateVersion: templateVersion.version,
+    templateSnapshot: {
+      ...templateVersion,
+      roomConfig: {
+        roomType: "standard",
+        visibility: "public",
+        guestAllowed: true,
+        sceneBundleUrl: null,
+        features: { voice: true, spatialAudio: true, screenShare: true },
+        theme: { primaryColor: "#5fc8ff", accentColor: "#163354" },
+        avatarConfig: {
+          avatarsEnabled: true,
+          avatarCatalogUrl: "/assets/avatars/catalog.v1.json",
+          avatarQualityProfile: "desktop-standard",
+          avatarFallbackCapsulesEnabled: true,
+          avatarSeatsEnabled: true
+        }
+      }
+    },
     sceneBundle: undefined,
     realtime: {
       roomStateUrl: getDefaultRoomStateUrl(request)
@@ -1031,7 +1055,11 @@ async function serveStatic(response: ServerResponse, filePath: string): Promise<
 async function buildManifest(roomId: string, request?: IncomingMessage): Promise<RoomManifest> {
   const storage = await storagePromise;
   const room = await storage.getRoom(roomId);
-  if (!room) return defaultManifest(roomId, request);
+  if (!room) {
+    const templateVersion = await storage.getTemplateVersion("meeting-room-basic");
+    if (!templateVersion) throw new Error("template_version_not_found:meeting-room-basic");
+    return defaultManifest(roomId, request, templateVersion);
+  }
   const roomAssets = (await storage.listAssets()).filter((asset) => room.assetIds.includes(asset.assetId));
   return {
     schemaVersion: 1,
@@ -1040,6 +1068,8 @@ async function buildManifest(roomId: string, request?: IncomingMessage): Promise
     roomType: room.roomType ?? "standard",
     ownerParticipantId: room.ownerParticipantId ?? null,
     template: room.templateId,
+    templateVersion: room.templateVersion,
+    templateSnapshot: room.templateSnapshot,
     sceneBundle: room.sceneBundleUrl ? { url: room.sceneBundleUrl } : undefined,
     realtime: {
       roomStateUrl: getDefaultRoomStateUrl(request)
@@ -3160,13 +3190,15 @@ function validateRoomInput(input: Partial<RoomRecord>, templateIds: Set<string>,
   return null;
 }
 
-function normalizeRoomPayload(input: Partial<RoomRecord> & {
+type RoomPayloadInput = Partial<RoomRecord> & {
   avatarsEnabled?: boolean;
   avatarCatalogUrl?: string;
   avatarQualityProfile?: "mobile-lite" | "desktop-standard" | "xr";
   avatarFallbackCapsulesEnabled?: boolean;
   avatarSeatsEnabled?: boolean;
-}): Partial<RoomRecord> {
+};
+
+function normalizeRoomPayload(input: RoomPayloadInput, mode: "create" | "patch"): Partial<RoomRecord> {
   const legacyAvatarConfig: Partial<NonNullable<RoomRecord["avatarConfig"]>> = {
     avatarsEnabled: input.avatarsEnabled,
     avatarCatalogUrl: input.avatarCatalogUrl,
@@ -3177,7 +3209,14 @@ function normalizeRoomPayload(input: Partial<RoomRecord> & {
 
   const hasLegacyAvatarField = Object.values(legacyAvatarConfig).some((value) => value !== undefined);
 
-  const normalized = { ...input } as Partial<RoomRecord>;
+  const normalized: RoomPayloadInput = { ...input };
+  delete normalized.templateVersion;
+  delete normalized.templateSnapshot;
+  delete normalized.avatarsEnabled;
+  delete normalized.avatarCatalogUrl;
+  delete normalized.avatarQualityProfile;
+  delete normalized.avatarFallbackCapsulesEnabled;
+  delete normalized.avatarSeatsEnabled;
   if (typeof input.roomId === "string") {
     normalized.roomId = input.roomId.trim() || undefined;
   }
@@ -3192,9 +3231,17 @@ function normalizeRoomPayload(input: Partial<RoomRecord> & {
     normalized.guestAllowed = false;
     normalized.templateId = input.templateId ?? "personal-workspace-basic";
   }
-  normalized.visibility = input.visibility === undefined || isRoomVisibility(input.visibility)
-    ? sanitizeRoomVisibility(normalized.visibility ?? input.visibility, input.guestAllowed === false || input.roomType === "personal" ? "private" : "public")
-    : input.visibility;
+  const shouldMaterializeVisibility = mode === "create"
+    || input.visibility !== undefined
+    || input.roomType !== undefined
+    || input.guestAllowed !== undefined;
+  if (shouldMaterializeVisibility) {
+    normalized.visibility = input.visibility === undefined || isRoomVisibility(input.visibility)
+      ? sanitizeRoomVisibility(normalized.visibility ?? input.visibility, input.guestAllowed === false || input.roomType === "personal" ? "private" : "public")
+      : input.visibility;
+  } else {
+    delete normalized.visibility;
+  }
 
   return normalized;
 }
@@ -3202,14 +3249,15 @@ function normalizeRoomPayload(input: Partial<RoomRecord> & {
 async function validateRoomAssetIds(
   storage: Awaited<typeof storagePromise>,
   assetIds: string[] | undefined,
-  templateId?: string
+  templateId?: string,
+  templateVersion?: string
 ): Promise<string | null> {
   if (!assetIds || assetIds.length === 0) {
     return null;
   }
   const assets = await storage.listAssets();
   const byId = new Map(assets.map((asset) => [asset.assetId, asset]));
-  const template = (await storage.listTemplates()).find((item) => item.templateId === templateId);
+  const template = templateId ? await storage.getTemplateVersion(templateId, templateVersion) : null;
   for (const assetId of assetIds) {
     const asset = byId.get(assetId);
     if (!asset) {
@@ -3676,13 +3724,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   if (method === "POST" && url.pathname === "/api/rooms") {
     const actor = await requireControlPlanePermission(request, response, { permission: "room.create", action: "room.create", objectType: "room" });
     if (!actor) return;
-    const payload = normalizeRoomPayload((await parseBody<Partial<RoomRecord> & {
-      avatarsEnabled?: boolean;
-      avatarCatalogUrl?: string;
-      avatarQualityProfile?: "mobile-lite" | "desktop-standard" | "xr";
-      avatarFallbackCapsulesEnabled?: boolean;
-      avatarSeatsEnabled?: boolean;
-    }>(request)) ?? {});
+    const payload = normalizeRoomPayload((await parseBody<RoomPayloadInput>(request)) ?? {}, "create");
     const tenantIds = new Set((await storage.listTenants()).map((tenant) => tenant.tenantId));
     const templateIds = new Set((await storage.listTemplates()).map((template) => template.templateId));
     const validationError = validateRoomInput(payload, templateIds, tenantIds);
@@ -4207,21 +4249,42 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     const roomId = decodeURIComponent(roomItemMatch[1]);
     const actor = await requireControlPlanePermission(request, response, { permission: "room.update", action: "room.update", objectType: "room", objectId: roomId });
     if (!actor) return;
-    const payload = normalizeRoomPayload((await parseBody<Partial<RoomRecord> & {
-      avatarsEnabled?: boolean;
-      avatarCatalogUrl?: string;
-      avatarQualityProfile?: "mobile-lite" | "desktop-standard" | "xr";
-      avatarFallbackCapsulesEnabled?: boolean;
-      avatarSeatsEnabled?: boolean;
-    }>(request)) ?? {});
+    const payload = normalizeRoomPayload((await parseBody<RoomPayloadInput>(request)) ?? {}, "patch");
     const existingRoom = await storage.getRoom(roomId);
     if (!existingRoom) return json(response, 404, { error: "room_not_found" });
     if (payload.visibility !== undefined && !isRoomVisibility(payload.visibility)) return json(response, 400, { error: "invalid_room_visibility" });
-    if (payload.assetIds) {
-      const assetValidationError = await validateRoomAssetIds(storage, payload.assetIds, payload.templateId ?? existingRoom.templateId);
+    if (payload.roomType !== undefined && payload.roomType !== "standard" && payload.roomType !== "personal") return json(response, 400, { error: "invalid_room_type" });
+    if (payload.templateId !== undefined) {
+      const templateIds = new Set((await storage.listTemplates()).map((template) => template.templateId));
+      if (!templateIds.has(payload.templateId)) return json(response, 400, { error: "invalid_template" });
+    }
+    if (payload.assetIds || payload.templateId !== undefined) {
+      const effectiveTemplateId = payload.templateId ?? existingRoom.templateId;
+      const templateChanged = effectiveTemplateId !== existingRoom.templateId;
+      const assetValidationError = await validateRoomAssetIds(
+        storage,
+        payload.assetIds ?? existingRoom.assetIds,
+        effectiveTemplateId,
+        templateChanged ? undefined : existingRoom.templateVersion
+      );
       if (assetValidationError) return json(response, 400, { error: assetValidationError });
     }
-    const updated = await storage.updateRoom(roomId, payload);
+    if (Object.keys(payload).length === 0) {
+      json(response, 200, { ...existingRoom, roomLink: createRoomLink(existingRoom.roomId, request), manifest: await buildManifest(existingRoom.roomId, request) });
+      return;
+    }
+    let updated: RoomRecord | null;
+    try {
+      updated = await storage.updateRoom(roomId, payload, {
+        templateId: existingRoom.templateId,
+        templateVersion: existingRoom.templateVersion
+      });
+    } catch (error) {
+      if (error instanceof Error && error.message === "room_template_binding_changed") {
+        return json(response, 409, { error: "room_template_binding_changed" });
+      }
+      throw error;
+    }
     if (!updated) return json(response, 404, { error: "room_not_found" });
     json(response, 200, { ...updated, roomLink: createRoomLink(updated.roomId, request), manifest: await buildManifest(updated.roomId, request) });
     return;

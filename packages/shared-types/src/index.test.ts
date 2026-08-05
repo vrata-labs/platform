@@ -14,6 +14,8 @@ import type {
   SurfaceInputEvent,
   SurfaceInputDebugState,
   ScreenShareObjectState,
+  RoomTemplateCatalogRecord,
+  RoomTemplateSnapshotV1,
   SurfaceTestCardState,
   VideoPlayerPatch,
   VideoPlayerState,
@@ -24,6 +26,41 @@ test("shared role and mode types compile in tests", () => {
   const role: UserRole = "guest";
   const mode: ClientMode = "desktop";
   assert.equal(`${role}:${mode}`, "guest:desktop");
+});
+
+test("room template metadata contracts compile in tests", () => {
+  const catalogRecord: RoomTemplateCatalogRecord = {
+    templateId: "meeting-room-basic",
+    label: "Meeting Room Basic",
+    assetSlots: ["logo", "hero-screen"],
+    currentVersion: "0.1.0",
+    status: "active"
+  };
+  const snapshot: RoomTemplateSnapshotV1 = {
+    schemaVersion: 1,
+    templateId: catalogRecord.templateId,
+    version: catalogRecord.currentVersion,
+    label: catalogRecord.label,
+    assetSlots: catalogRecord.assetSlots,
+    roomConfig: {
+      roomType: "standard",
+      visibility: "public",
+      guestAllowed: true,
+      sceneBundleUrl: null,
+      features: { voice: true, spatialAudio: true, screenShare: true },
+      theme: { primaryColor: "#5fc8ff", accentColor: "#163354" },
+      avatarConfig: {
+        avatarsEnabled: true,
+        avatarCatalogUrl: "/assets/avatars/catalog.v1.json",
+        avatarQualityProfile: "desktop-standard",
+        avatarFallbackCapsulesEnabled: true,
+        avatarSeatsEnabled: true
+      }
+    }
+  };
+
+  assert.equal(snapshot.version, "0.1.0");
+  assert.equal(snapshot.roomConfig.sceneBundleUrl, null);
 });
 
 test("room access policy grants presenter media controls without session control", () => {

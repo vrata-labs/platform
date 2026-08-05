@@ -1,4 +1,8 @@
-import { Pool } from "pg";
+import { createHash } from "node:crypto";
+
+import { Pool, type PoolClient } from "pg";
+import { getTemplateVersion as getSeedTemplateVersion, listTemplateDefinitions } from "@vrata/templates";
+import type { RoomTemplateCatalogRecord, RoomTemplateSnapshotV1, RoomTemplateStatus, RoomTemplateVersionSnapshotV1 } from "@vrata/shared-types";
 
 import type { SceneBundleCreateInput, SceneBundleRecord } from "./scene-bundle-storage.js";
 
@@ -7,11 +11,7 @@ export interface TenantRecord {
   name: string;
 }
 
-export interface TemplateRecord {
-  templateId: string;
-  label: string;
-  assetSlots: string[];
-}
+export interface TemplateRecord extends RoomTemplateCatalogRecord {}
 
 export interface AssetRecord {
   assetId: string;
@@ -161,11 +161,20 @@ const DEFAULT_PERSONAL_STATE_JSON = '{}' as const;
 const POSTGRES_INIT_MAX_ATTEMPTS = 12;
 const POSTGRES_INIT_RETRY_DELAY_MS = 1000;
 const RETRYABLE_POSTGRES_INIT_ERROR_CODES = new Set(["ECONNREFUSED", "ECONNRESET", "ETIMEDOUT", "EAI_AGAIN", "ENOTFOUND"]);
+const POSTGRES_INIT_ADVISORY_LOCK_SQL = "select pg_advisory_lock(hashtextextended('vrata:postgres-storage-init:v1', 0))";
+const POSTGRES_INIT_ADVISORY_UNLOCK_SQL = "select pg_advisory_unlock(hashtextextended('vrata:postgres-storage-init:v1', 0)) as unlocked";
+const TEMPLATE_VERSION_MUTATION_FUNCTION_NAME = "vrata_reject_template_version_mutation";
+const TEMPLATE_VERSION_MUTATION_FUNCTION_SOURCE = `begin
+  raise exception 'template_versions_are_immutable' using errcode = '55000';
+  return null;
+end`;
 
 export interface RoomRecord {
   roomId: string;
   tenantId: string;
   templateId: string;
+  templateVersion: string;
+  templateSnapshot: RoomTemplateSnapshotV1;
   name: string;
   roomType?: RoomType;
   ownerParticipantId?: string | null;
@@ -185,6 +194,8 @@ export interface RoomRecord {
   sessionControl?: RoomSessionControlState;
   personalState?: RoomPersonalState;
 }
+
+type RoomRecordWithoutTemplateMetadata = Omit<RoomRecord, "templateVersion" | "templateSnapshot">;
 
 type InitializableStorage = { init(): Promise<void> };
 
@@ -293,6 +304,117 @@ function defaultPersonalState(input?: Partial<RoomPersonalState> | null): RoomPe
       updatedAt: input.lastPose.updatedAt,
       updatedBy: input.lastPose.updatedBy ?? null
     }
+  };
+}
+
+function stableJson(value: unknown): string {
+  if (value === null || typeof value !== "object") {
+    const serialized = JSON.stringify(value);
+    if (serialized === undefined) throw new Error("template_snapshot_not_json_serializable");
+    return serialized;
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map(stableJson).join(",")}]`;
+  }
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(([, entryValue]) => entryValue !== undefined)
+    .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0);
+  return `{${entries.map(([key, entryValue]) => `${JSON.stringify(key)}:${stableJson(entryValue)}`).join(",")}}`;
+}
+
+function normalizePostgresDefinition(value: string): string {
+  return value.replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function normalizePostgresConstraintDefinition(value: string): string {
+  return normalizePostgresDefinition(value).replace(/ not valid$/, "");
+}
+
+function isExpectedTemplateVersionTriggerDefinition(value: string): boolean {
+  const normalized = normalizePostgresDefinition(value).replaceAll('"', "");
+  return /^create trigger template_versions_immutable before delete or update on (?:[a-z_][a-z0-9_]*\.)?template_versions for each row execute function (?:[a-z_][a-z0-9_]*\.)?vrata_reject_template_version_mutation\(\);?$/.test(normalized);
+}
+
+function quotePostgresIdentifier(value: string): string {
+  return `"${value.replaceAll('"', '""')}"`;
+}
+
+function templateVersionContentHash(snapshot: RoomTemplateVersionSnapshotV1): string {
+  return createHash("sha256").update(stableJson(snapshot)).digest("hex");
+}
+
+interface StoredTemplateVersionRow {
+  template_id: string;
+  version: string;
+  snapshot: unknown;
+  content_hash: string;
+}
+
+function parseStoredTemplateVersion(row: StoredTemplateVersionRow): RoomTemplateVersionSnapshotV1 {
+  let value = row.snapshot;
+  if (typeof value === "string") {
+    try {
+      value = JSON.parse(value) as unknown;
+    } catch {
+      throw new Error(`invalid_template_version_snapshot:${row.template_id}@${row.version}`);
+    }
+  }
+
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`invalid_template_version_snapshot:${row.template_id}@${row.version}`);
+  }
+  const snapshot = value as Partial<RoomTemplateVersionSnapshotV1>;
+  if (
+    snapshot.schemaVersion !== 1
+    || typeof snapshot.templateId !== "string"
+    || typeof snapshot.version !== "string"
+    || typeof snapshot.label !== "string"
+    || !Array.isArray(snapshot.assetSlots)
+    || snapshot.assetSlots.some((slot) => typeof slot !== "string")
+  ) {
+    throw new Error(`invalid_template_version_snapshot:${row.template_id}@${row.version}`);
+  }
+  if (snapshot.templateId !== row.template_id || snapshot.version !== row.version) {
+    throw new Error(`template_version_identity_mismatch:${row.template_id}@${row.version}`);
+  }
+
+  const typedSnapshot = snapshot as RoomTemplateVersionSnapshotV1;
+  if (templateVersionContentHash(typedSnapshot) !== row.content_hash) {
+    throw new Error(`template_version_content_hash_mismatch:${row.template_id}@${row.version}`);
+  }
+  return structuredClone(typedSnapshot);
+}
+
+function createRoomTemplateSnapshot(
+  room: RoomRecordWithoutTemplateMetadata,
+  versionSnapshot: RoomTemplateVersionSnapshotV1
+): RoomTemplateSnapshotV1 {
+  const avatarConfig = defaultAvatarConfig(room.avatarConfig);
+  return {
+    ...structuredClone(versionSnapshot),
+    roomConfig: {
+      roomType: defaultRoomType(room.roomType),
+      visibility: defaultRoomVisibility(room.visibility, room.roomType),
+      guestAllowed: defaultGuestAllowed(room.guestAllowed, room.roomType),
+      sceneBundleUrl: room.sceneBundleUrl ?? null,
+      features: { ...room.features },
+      theme: {
+        primaryColor: room.theme?.primaryColor ?? "#5fc8ff",
+        accentColor: room.theme?.accentColor ?? "#163354"
+      },
+      avatarConfig
+    }
+  };
+}
+
+function bindRoomTemplateMetadata(
+  room: RoomRecordWithoutTemplateMetadata,
+  versionSnapshot: RoomTemplateVersionSnapshotV1
+): RoomRecord {
+  return {
+    ...room,
+    templateVersion: versionSnapshot.version,
+    templateSnapshot: createRoomTemplateSnapshot(room, versionSnapshot)
   };
 }
 
@@ -443,6 +565,12 @@ function mapRoomRow(row: {
   room_id: string;
   tenant_id: string;
   template_id: string;
+  template_version?: string | null;
+  template_snapshot?: RoomTemplateSnapshotV1 | null;
+  template_version_template_id?: string | null;
+  template_version_resolved?: string | null;
+  template_version_snapshot?: unknown;
+  template_version_content_hash?: string | null;
   name: string;
   room_type?: RoomType;
   owner_participant_id?: string | null;
@@ -460,7 +588,7 @@ function mapRoomRow(row: {
   personal_state?: Partial<RoomPersonalState> | null;
 }): RoomRecord {
   const roomType = defaultRoomType(row.room_type);
-  return {
+  const room: RoomRecordWithoutTemplateMetadata = {
     roomId: row.room_id,
     tenantId: row.tenant_id,
     templateId: row.template_id,
@@ -480,6 +608,22 @@ function mapRoomRow(row: {
     sessionControl: defaultSessionControl(row.session_control),
     personalState: defaultPersonalState(row.personal_state)
   };
+  if (
+    !row.template_version_template_id
+    || !row.template_version_resolved
+    || row.template_version_snapshot === undefined
+    || row.template_version_snapshot === null
+    || !row.template_version_content_hash
+  ) {
+    throw new Error(`template_version_not_found:${row.template_id}`);
+  }
+  const versionSnapshot = parseStoredTemplateVersion({
+    template_id: row.template_version_template_id,
+    version: row.template_version_resolved,
+    snapshot: row.template_version_snapshot,
+    content_hash: row.template_version_content_hash
+  });
+  return bindRoomTemplateMetadata(room, versionSnapshot);
 }
 
 export interface RuntimeDiagnosticRecord {
@@ -586,11 +730,12 @@ export interface Storage {
   updateTenant(tenantId: string, input: Partial<TenantRecord>): Promise<TenantRecord | null>;
   deleteTenant(tenantId: string): Promise<boolean>;
   listTemplates(): Promise<TemplateRecord[]>;
+  getTemplateVersion(templateId: string, version?: string): Promise<RoomTemplateVersionSnapshotV1 | null>;
   listAssets(): Promise<AssetRecord[]>;
   listRooms(): Promise<RoomRecord[]>;
   getRoom(roomId: string): Promise<RoomRecord | null>;
   createRoom(input: Partial<RoomRecord>): Promise<RoomRecord>;
-  updateRoom(roomId: string, input: Partial<RoomRecord>): Promise<RoomRecord | null>;
+  updateRoom(roomId: string, input: Partial<RoomRecord>, expectedTemplateBinding?: ExpectedRoomTemplateBinding): Promise<RoomRecord | null>;
   deleteRoom(roomId: string): Promise<boolean>;
   createRoomInvite(input: Omit<RoomInviteRecord, "inviteId" | "createdAt" | "revokedAt" | "revokedBy"> & { inviteId?: string; createdAt?: string }): Promise<RoomInviteRecord>;
   listRoomInvites(roomId: string): Promise<RoomInviteRecord[]>;
@@ -628,6 +773,11 @@ export interface Storage {
   setCurrentSceneBundleVersion(bundleId: string, version: string): Promise<SceneBundleRecord | null>;
 }
 
+export interface ExpectedRoomTemplateBinding {
+  templateId: string;
+  templateVersion: string;
+}
+
 export type SceneBundleUpdateInput = Partial<SceneBundleCreateInput> & {
   publicUrl?: string;
   provider?: SceneBundleRecord["provider"];
@@ -635,45 +785,76 @@ export type SceneBundleUpdateInput = Partial<SceneBundleCreateInput> & {
   isCurrent?: boolean;
 };
 
-const defaultTemplates: TemplateRecord[] = [
-  { templateId: "meeting-room-basic", label: "Meeting Room Basic", assetSlots: ["logo", "hero-screen"] },
-  { templateId: "showroom-basic", label: "Showroom Basic", assetSlots: ["logo", "wall-graphic"] },
-  { templateId: "event-demo-basic", label: "Event Demo Basic", assetSlots: ["logo", "media-placeholder"] },
-  { templateId: "personal-workspace-basic", label: "Personal Workspace Basic", assetSlots: ["logo", "personal-surface"] }
-];
+const seedTemplateDefinitions = listTemplateDefinitions();
+const defaultTemplates: TemplateRecord[] = seedTemplateDefinitions.map((definition) => ({
+  templateId: definition.id,
+  label: definition.label,
+  assetSlots: [...definition.assetSlots],
+  currentVersion: definition.version,
+  status: definition.status
+}));
+const defaultTemplateVersions = seedTemplateDefinitions.map((definition) => {
+  const snapshot = getSeedTemplateVersion(definition.id, definition.version);
+  if (!snapshot) throw new Error(`missing_seed_template_version:${definition.id}@${definition.version}`);
+  return snapshot;
+});
+const seedTemplateOrder = new Map(seedTemplateDefinitions.map((definition, index) => [definition.id, index]));
+
+function sortTemplateRecords<T extends { templateId: string }>(records: T[]): T[] {
+  return records.sort((left, right) => {
+    const leftIndex = seedTemplateOrder.get(left.templateId) ?? Number.MAX_SAFE_INTEGER;
+    const rightIndex = seedTemplateOrder.get(right.templateId) ?? Number.MAX_SAFE_INTEGER;
+    if (leftIndex !== rightIndex) return leftIndex - rightIndex;
+    return left.templateId < right.templateId ? -1 : left.templateId > right.templateId ? 1 : 0;
+  });
+}
+
+function normalizeStoredTemplateStatus(templateId: string, status: string | null): RoomTemplateStatus {
+  if (status === null || status === "active") return "active";
+  if (status === "deprecated") return "deprecated";
+  throw new Error(`unsupported_template_status:${templateId}:${status}`);
+}
+
+function templateVersionKey(templateId: string, version: string): string {
+  return `${templateId}::${version}`;
+}
+
+function createDefaultDemoRoom(): RoomRecord {
+  const versionSnapshot = defaultTemplateVersions.find((snapshot) => snapshot.templateId === "meeting-room-basic");
+  if (!versionSnapshot) throw new Error("missing_seed_template_version:meeting-room-basic@0.1.0");
+  return bindRoomTemplateMetadata({
+    roomId: "demo-room",
+    tenantId: "demo-tenant",
+    templateId: "meeting-room-basic",
+    name: "Demo Room",
+    roomType: "standard",
+    ownerParticipantId: null,
+    status: "active",
+    disabledAt: null,
+    disabledBy: null,
+    visibility: "public",
+    sceneBundleUrl: undefined,
+    features: { voice: true, spatialAudio: true, screenShare: true },
+    assetIds: [],
+    theme: {
+      primaryColor: "#5fc8ff",
+      accentColor: "#163354"
+    },
+    guestAllowed: true,
+    avatarConfig: defaultAvatarConfig(),
+    sessionControl: defaultSessionControl(),
+    personalState: defaultPersonalState()
+  }, versionSnapshot);
+}
 
 export class MemoryStorage implements Storage {
   private tenants = new Map<string, TenantRecord>([["demo-tenant", { tenantId: "demo-tenant", name: "Demo Tenant" }]]);
-  private templates = new Map<string, TemplateRecord>(defaultTemplates.map((item) => [item.templateId, item]));
+  private templates = new Map<string, TemplateRecord>(defaultTemplates.map((item) => [item.templateId, structuredClone(item)]));
+  private templateVersions = new Map<string, RoomTemplateVersionSnapshotV1>(defaultTemplateVersions.map((item) => [templateVersionKey(item.templateId, item.version), structuredClone(item)]));
   private assets = new Map<string, AssetRecord>();
   private roomDocuments = new Map<string, RoomDocumentRecord>();
   private rooms = new Map<string, RoomRecord>([
-    [
-      "demo-room",
-      {
-        roomId: "demo-room",
-        tenantId: "demo-tenant",
-        templateId: "meeting-room-basic",
-        name: "Demo Room",
-        roomType: "standard",
-        ownerParticipantId: null,
-        status: "active",
-        disabledAt: null,
-        disabledBy: null,
-        visibility: "public",
-        sceneBundleUrl: undefined,
-        features: { voice: true, spatialAudio: true, screenShare: true },
-        assetIds: [],
-        theme: {
-          primaryColor: "#5fc8ff",
-          accentColor: "#163354"
-        },
-        guestAllowed: true,
-        avatarConfig: defaultAvatarConfig(),
-        sessionControl: defaultSessionControl(),
-        personalState: defaultPersonalState()
-      }
-    ]
+    ["demo-room", createDefaultDemoRoom()]
   ]);
   private diagnostics = new Map<string, RuntimeDiagnosticRecord[]>();
   private xrTelemetry = new Map<string, XrTelemetryEventRecord[]>();
@@ -685,6 +866,14 @@ export class MemoryStorage implements Storage {
 
   private sceneBundleKey(bundleId: string, version: string): string {
     return `${bundleId}::${version}`;
+  }
+
+  private requireTemplateVersion(templateId: string, version?: string): RoomTemplateVersionSnapshotV1 {
+    const template = this.templates.get(templateId);
+    const resolvedVersion = version ?? template?.currentVersion;
+    const snapshot = resolvedVersion ? this.templateVersions.get(templateVersionKey(templateId, resolvedVersion)) : undefined;
+    if (!snapshot) throw new Error(`template_version_not_found:${templateId}`);
+    return structuredClone(snapshot);
   }
 
   async listTenants(): Promise<TenantRecord[]> { return Array.from(this.tenants.values()); }
@@ -709,13 +898,31 @@ export class MemoryStorage implements Storage {
     }
     return this.tenants.delete(tenantId);
   }
-  async listTemplates(): Promise<TemplateRecord[]> { return Array.from(this.templates.values()); }
+  async listTemplates(): Promise<TemplateRecord[]> {
+    return sortTemplateRecords(Array.from(this.templates.values(), (template) => {
+      const snapshot = this.requireTemplateVersion(template.templateId, template.currentVersion);
+      return {
+        ...structuredClone(template),
+        label: snapshot.label,
+        assetSlots: [...snapshot.assetSlots]
+      };
+    }));
+  }
+  async getTemplateVersion(templateId: string, version?: string): Promise<RoomTemplateVersionSnapshotV1 | null> {
+    const resolvedVersion = version ?? this.templates.get(templateId)?.currentVersion;
+    if (!resolvedVersion) return null;
+    const snapshot = this.templateVersions.get(templateVersionKey(templateId, resolvedVersion));
+    return snapshot ? structuredClone(snapshot) : null;
+  }
   async listAssets(): Promise<AssetRecord[]> { return Array.from(this.assets.values()); }
-  async listRooms(): Promise<RoomRecord[]> { return Array.from(this.rooms.values()); }
-  async getRoom(roomId: string): Promise<RoomRecord | null> { return this.rooms.get(roomId) ?? null; }
+  async listRooms(): Promise<RoomRecord[]> { return Array.from(this.rooms.values(), (room) => structuredClone(room)); }
+  async getRoom(roomId: string): Promise<RoomRecord | null> {
+    const room = this.rooms.get(roomId);
+    return room ? structuredClone(room) : null;
+  }
   async createRoom(input: Partial<RoomRecord>): Promise<RoomRecord> {
     const roomType = defaultRoomType(input.roomType);
-    const room: RoomRecord = {
+    const roomWithoutTemplateMetadata: RoomRecordWithoutTemplateMetadata = {
       roomId: input.roomId ?? crypto.randomUUID(),
       tenantId: input.tenantId ?? "demo-tenant",
       templateId: input.templateId ?? (roomType === "personal" ? "personal-workspace-basic" : "meeting-room-basic"),
@@ -742,17 +949,26 @@ export class MemoryStorage implements Storage {
       sessionControl: defaultSessionControl(input.sessionControl),
       personalState: defaultPersonalState(input.personalState)
     };
-    this.rooms.set(room.roomId, room);
-    return room;
+    const room = bindRoomTemplateMetadata(roomWithoutTemplateMetadata, this.requireTemplateVersion(roomWithoutTemplateMetadata.templateId));
+    this.rooms.set(room.roomId, structuredClone(room));
+    return structuredClone(room);
   }
-  async updateRoom(roomId: string, input: Partial<RoomRecord>): Promise<RoomRecord | null> {
+  async updateRoom(roomId: string, input: Partial<RoomRecord>, expectedTemplateBinding?: ExpectedRoomTemplateBinding): Promise<RoomRecord | null> {
     const existing = this.rooms.get(roomId);
     if (!existing) {
       return null;
     }
-    const updated: RoomRecord = {
-      ...existing,
-      ...input,
+    if (
+      expectedTemplateBinding
+      && (existing.templateId !== expectedTemplateBinding.templateId || existing.templateVersion !== expectedTemplateBinding.templateVersion)
+    ) {
+      throw new Error("room_template_binding_changed");
+    }
+    const { templateVersion: _inputTemplateVersion, templateSnapshot: _inputTemplateSnapshot, ...safeInput } = input;
+    const { templateVersion: _existingTemplateVersion, templateSnapshot: _existingTemplateSnapshot, ...existingWithoutTemplateMetadata } = existing;
+    const updatedWithoutTemplateMetadata: RoomRecordWithoutTemplateMetadata = {
+      ...existingWithoutTemplateMetadata,
+      ...safeInput,
       roomType: defaultRoomType(input.roomType ?? existing.roomType),
       ownerParticipantId: input.ownerParticipantId !== undefined ? input.ownerParticipantId : existing.ownerParticipantId ?? null,
       status: defaultRoomStatus(input.status ?? existing.status),
@@ -776,8 +992,13 @@ export class MemoryStorage implements Storage {
       sessionControl: defaultSessionControl(input.sessionControl ?? existing.sessionControl),
       personalState: defaultPersonalState(input.personalState ?? existing.personalState)
     };
-    this.rooms.set(roomId, updated);
-    return updated;
+    const preservedVersion = updatedWithoutTemplateMetadata.templateId === existing.templateId ? existing.templateVersion : undefined;
+    const updated = bindRoomTemplateMetadata(
+      updatedWithoutTemplateMetadata,
+      this.requireTemplateVersion(updatedWithoutTemplateMetadata.templateId, preservedVersion)
+    );
+    this.rooms.set(roomId, structuredClone(updated));
+    return structuredClone(updated);
   }
   async deleteRoom(roomId: string): Promise<boolean> {
     return this.rooms.delete(roomId);
@@ -1112,13 +1333,61 @@ export class PostgresStorage implements Storage {
   constructor(private readonly pool: Pool) {}
 
   async init(): Promise<void> {
-    await this.pool.query(`
+    const client = await this.pool.connect();
+    let lockAcquired = false;
+    let transactionStarted = false;
+    try {
+      await client.query(POSTGRES_INIT_ADVISORY_LOCK_SQL);
+      lockAcquired = true;
+      await client.query("begin");
+      transactionStarted = true;
+      await this.initWithClient(client);
+      await client.query("commit");
+      transactionStarted = false;
+    } catch (error) {
+      if (transactionStarted) {
+        await client.query("rollback");
+      }
+      throw error;
+    } finally {
+      try {
+        if (lockAcquired) {
+          const result = await client.query(POSTGRES_INIT_ADVISORY_UNLOCK_SQL);
+          if (result.rows[0]?.unlocked !== true) {
+            throw new Error("postgres_init_advisory_unlock_failed");
+          }
+        }
+      } finally {
+        client.release();
+      }
+    }
+  }
+
+  private async initWithClient(client: PoolClient): Promise<void> {
+    await client.query(`
       create table if not exists tenants (tenant_id text primary key, name text not null);
-      create table if not exists templates (template_id text primary key, label text not null, asset_slots jsonb not null);
+      create table if not exists templates (
+        template_id text primary key,
+        label text not null,
+        asset_slots jsonb not null,
+        current_version text,
+        status text
+      );
+      create table if not exists template_versions (
+        template_id text not null,
+        version text not null,
+        snapshot jsonb not null,
+        content_hash text not null,
+        created_at timestamptz not null default now(),
+        constraint template_versions_pkey primary key (template_id, version),
+        constraint template_versions_template_id_fkey foreign key (template_id) references templates(template_id)
+      );
       create table if not exists rooms (
         room_id text primary key,
         tenant_id text not null references tenants(tenant_id),
         template_id text not null references templates(template_id),
+      template_version text,
+      template_snapshot jsonb,
       name text not null,
       room_type text not null default 'standard',
       owner_participant_id text,
@@ -1239,58 +1508,454 @@ export class PostgresStorage implements Storage {
         metadata jsonb not null default '{}'::jsonb
       );
     `);
-    await this.pool.query(`create index if not exists xr_telemetry_room_id_id_idx on xr_telemetry (room_id, id)`);
-    await this.pool.query(`create unique index if not exists room_notes_room_scope_owner_idx on room_notes (room_id, scope, coalesce(owner_participant_id, ''))`);
-    await this.pool.query(`create index if not exists room_note_versions_note_created_idx on room_note_versions (note_id, created_at desc)`);
-    await this.pool.query(`create index if not exists room_note_versions_room_scope_owner_idx on room_note_versions (room_id, scope, coalesce(owner_participant_id, ''), created_at desc)`);
-    await this.pool.query(`create index if not exists room_documents_room_uploaded_idx on room_documents (room_id, uploaded_at desc)`);
-    await this.pool.query(`alter table room_documents add column if not exists metadata jsonb not null default '{}'::jsonb`);
-    await this.pool.query(`alter table room_notes add column if not exists deleted_at timestamptz`);
-    await this.pool.query(`alter table room_notes add column if not exists deleted_by text`);
-    await this.pool.query(`alter table rooms add column if not exists scene_bundle_url text`);
-    await this.pool.query(`alter table rooms add column if not exists status text not null default 'active'`);
-    await this.pool.query(`alter table rooms add column if not exists disabled_at timestamptz`);
-    await this.pool.query(`alter table rooms add column if not exists disabled_by text`);
-    await this.pool.query(`alter table rooms add column if not exists visibility text not null default 'public'`);
-    await this.pool.query(`alter table rooms add column if not exists room_type text not null default 'standard'`);
-    await this.pool.query(`alter table rooms add column if not exists owner_participant_id text`);
-    await this.pool.query(`alter table rooms add column if not exists personal_state jsonb not null default '${DEFAULT_PERSONAL_STATE_JSON}'::jsonb`);
-    await this.pool.query(`alter table rooms alter column personal_state set default '${DEFAULT_PERSONAL_STATE_JSON}'::jsonb`);
-    await this.pool.query(`update rooms set room_type = 'standard' where room_type is null`);
-    await this.pool.query(`update rooms set personal_state = '${DEFAULT_PERSONAL_STATE_JSON}'::jsonb where personal_state is null`);
-    await this.pool.query(`update rooms set status = 'disabled' where disabled_at is not null and (status is null or status = 'active')`);
-    await this.pool.query(`update rooms set visibility = 'private' where guest_allowed = false and (visibility is null or visibility = 'public')`);
-    await this.pool.query(`alter table rooms add column if not exists avatar_config jsonb not null default '${DEFAULT_AVATAR_CONFIG_JSON}'::jsonb`);
-    await this.pool.query(`update rooms set avatar_config = '${DEFAULT_AVATAR_CONFIG_JSON}'::jsonb where avatar_config is null`);
-    await this.pool.query(`update rooms set avatar_config = '${DEFAULT_AVATAR_CONFIG_JSON}'::jsonb || avatar_config`);
-    await this.pool.query(`alter table rooms add column if not exists session_control jsonb not null default '${DEFAULT_SESSION_CONTROL_JSON}'::jsonb`);
-    await this.pool.query(`alter table rooms alter column session_control set default '${DEFAULT_SESSION_CONTROL_JSON}'::jsonb`);
-    await this.pool.query(`update rooms set session_control = '${DEFAULT_SESSION_CONTROL_JSON}'::jsonb where session_control is null`);
-    await this.pool.query(`update rooms set session_control = '${DEFAULT_SESSION_CONTROL_JSON}'::jsonb || session_control`);
-    await this.pool.query(`alter table scene_bundles add column if not exists status text not null default 'active'`);
-    await this.pool.query(`alter table scene_bundles add column if not exists is_current boolean not null default true`);
-    await this.pool.query(`alter table scene_bundles add column if not exists schema_version integer`);
-    await this.pool.query(`alter table scene_bundles add column if not exists entry_scene text`);
-    await this.pool.query(`alter table scene_bundles add column if not exists preview_url text`);
-    await this.pool.query(`alter table scene_bundles add column if not exists created_by text`);
-    await this.pool.query(`do $$ begin alter table scene_bundles drop constraint if exists scene_bundles_pkey; alter table scene_bundles add primary key (bundle_id, version); exception when duplicate_object then null; end $$;`);
-    await this.seed();
+    await client.query(`create index if not exists xr_telemetry_room_id_id_idx on xr_telemetry (room_id, id)`);
+    await client.query(`create unique index if not exists room_notes_room_scope_owner_idx on room_notes (room_id, scope, coalesce(owner_participant_id, ''))`);
+    await client.query(`create index if not exists room_note_versions_note_created_idx on room_note_versions (note_id, created_at desc)`);
+    await client.query(`create index if not exists room_note_versions_room_scope_owner_idx on room_note_versions (room_id, scope, coalesce(owner_participant_id, ''), created_at desc)`);
+    await client.query(`create index if not exists room_documents_room_uploaded_idx on room_documents (room_id, uploaded_at desc)`);
+    await client.query(`alter table room_documents add column if not exists metadata jsonb not null default '{}'::jsonb`);
+    await client.query(`alter table room_notes add column if not exists deleted_at timestamptz`);
+    await client.query(`alter table room_notes add column if not exists deleted_by text`);
+    await client.query(`alter table templates add column if not exists current_version text`);
+    await client.query(`alter table templates add column if not exists status text`);
+    await client.query(`alter table rooms add column if not exists template_version text`);
+    await client.query(`alter table rooms add column if not exists template_snapshot jsonb`);
+    await client.query(`
+      create table if not exists template_versions (
+        template_id text not null,
+        version text not null,
+        snapshot jsonb not null,
+        content_hash text not null,
+        created_at timestamptz not null default now(),
+        constraint template_versions_pkey primary key (template_id, version),
+        constraint template_versions_template_id_fkey foreign key (template_id) references templates(template_id)
+      )
+    `);
+    await client.query(`alter table rooms add column if not exists scene_bundle_url text`);
+    await client.query(`alter table rooms add column if not exists status text not null default 'active'`);
+    await client.query(`alter table rooms add column if not exists disabled_at timestamptz`);
+    await client.query(`alter table rooms add column if not exists disabled_by text`);
+    await client.query(`alter table rooms add column if not exists visibility text not null default 'public'`);
+    await client.query(`alter table rooms add column if not exists room_type text not null default 'standard'`);
+    await client.query(`alter table rooms add column if not exists owner_participant_id text`);
+    await client.query(`alter table rooms add column if not exists personal_state jsonb not null default '${DEFAULT_PERSONAL_STATE_JSON}'::jsonb`);
+    await client.query(`alter table rooms alter column personal_state set default '${DEFAULT_PERSONAL_STATE_JSON}'::jsonb`);
+    await client.query(`update rooms set room_type = 'standard' where room_type is null`);
+    await client.query(`update rooms set personal_state = '${DEFAULT_PERSONAL_STATE_JSON}'::jsonb where personal_state is null`);
+    await client.query(`update rooms set status = 'disabled' where disabled_at is not null and (status is null or status = 'active')`);
+    await client.query(`update rooms set visibility = 'private' where guest_allowed = false and (visibility is null or visibility = 'public')`);
+    await client.query(`alter table rooms add column if not exists avatar_config jsonb not null default '${DEFAULT_AVATAR_CONFIG_JSON}'::jsonb`);
+    await client.query(`update rooms set avatar_config = '${DEFAULT_AVATAR_CONFIG_JSON}'::jsonb where avatar_config is null`);
+    await client.query(`update rooms set avatar_config = '${DEFAULT_AVATAR_CONFIG_JSON}'::jsonb || avatar_config`);
+    await client.query(`alter table rooms add column if not exists session_control jsonb not null default '${DEFAULT_SESSION_CONTROL_JSON}'::jsonb`);
+    await client.query(`alter table rooms alter column session_control set default '${DEFAULT_SESSION_CONTROL_JSON}'::jsonb`);
+    await client.query(`update rooms set session_control = '${DEFAULT_SESSION_CONTROL_JSON}'::jsonb where session_control is null`);
+    await client.query(`update rooms set session_control = '${DEFAULT_SESSION_CONTROL_JSON}'::jsonb || session_control`);
+    await client.query(`alter table scene_bundles add column if not exists status text not null default 'active'`);
+    await client.query(`alter table scene_bundles add column if not exists is_current boolean not null default true`);
+    await client.query(`alter table scene_bundles add column if not exists schema_version integer`);
+    await client.query(`alter table scene_bundles add column if not exists entry_scene text`);
+    await client.query(`alter table scene_bundles add column if not exists preview_url text`);
+    await client.query(`alter table scene_bundles add column if not exists created_by text`);
+    await client.query(`do $$ begin alter table scene_bundles drop constraint if exists scene_bundles_pkey; alter table scene_bundles add primary key (bundle_id, version); exception when duplicate_object then null; end $$;`);
+    await this.ensureTemplateVersionBaseConstraints(client);
+    await this.seed(client);
+    await this.validateStoredTemplateVersions(client);
+    await this.synchronizeTemplateCatalog(client);
+    await this.repairRoomTemplateMetadata(client);
+    await this.addTemplateVersionConstraints(client);
+    await this.installTemplateVersionImmutabilityTrigger(client);
   }
 
-  private async seed(): Promise<void> {
-    await this.pool.query(`insert into tenants (tenant_id, name) values ('demo-tenant','Demo Tenant') on conflict do nothing`);
+  private async seed(client: PoolClient): Promise<void> {
+    await client.query(`insert into tenants (tenant_id, name) values ('demo-tenant','Demo Tenant') on conflict do nothing`);
     for (const template of defaultTemplates) {
-      await this.pool.query(
+      await client.query(
         `insert into templates (template_id, label, asset_slots) values ($1,$2,$3::jsonb) on conflict do nothing`,
         [template.templateId, template.label, JSON.stringify(template.assetSlots)]
       );
     }
-    await this.pool.query(
+    const templateRows = await client.query(`select template_id, label, asset_slots, current_version, status from templates order by template_id`);
+    const seedVersionsByTemplateId = new Map(defaultTemplateVersions.map((snapshot) => [snapshot.templateId, snapshot]));
+    for (const row of templateRows.rows as Array<{ template_id: string; label: string; asset_slots: string[]; current_version: string | null; status: string | null }>) {
+      normalizeStoredTemplateStatus(row.template_id, row.status);
+      const seedVersion = seedVersionsByTemplateId.get(row.template_id);
+      const storedLegacyVersion = seedVersion ? null : await this.readStoredTemplateVersion(client, row.template_id, "0.1.0");
+      if (!seedVersion && !storedLegacyVersion && row.current_version && row.current_version !== "0.1.0") {
+        throw new Error(`missing_legacy_template_version:${row.template_id}@0.1.0`);
+      }
+      const versionSnapshot: RoomTemplateVersionSnapshotV1 = seedVersion ?? storedLegacyVersion ?? {
+          schemaVersion: 1,
+          templateId: row.template_id,
+          version: "0.1.0",
+          label: row.label,
+          assetSlots: [...row.asset_slots]
+        };
+      await this.ensureTemplateVersion(client, versionSnapshot);
+      await client.query(
+        `update templates set current_version = coalesce(current_version, $2), status = coalesce(status, $3) where template_id = $1`,
+        [row.template_id, versionSnapshot.version, "active"]
+      );
+    }
+    await client.query(
       `insert into rooms (room_id, tenant_id, template_id, name, room_type, owner_participant_id, status, disabled_at, disabled_by, visibility, scene_bundle_url, features, asset_ids, theme, guest_allowed, avatar_config, session_control, personal_state)
        values ('demo-room','demo-tenant','meeting-room-basic','Demo Room','standard',null,'active',null,null,'public',null,$1::jsonb,'[]'::jsonb,'{"primaryColor":"#5fc8ff","accentColor":"#163354"}'::jsonb,true,$2::jsonb,$3::jsonb,$4::jsonb)
        on conflict do nothing`,
       [JSON.stringify({ voice: true, spatialAudio: true, screenShare: true }), JSON.stringify(defaultAvatarConfig()), DEFAULT_SESSION_CONTROL_JSON, DEFAULT_PERSONAL_STATE_JSON]
     );
+  }
+
+  private async readStoredTemplateVersion(client: PoolClient, templateId: string, version: string): Promise<RoomTemplateVersionSnapshotV1 | null> {
+    const result = await client.query(
+      `select template_id, version, snapshot, content_hash from template_versions where template_id = $1 and version = $2`,
+      [templateId, version]
+    );
+    const row = result.rows[0] as StoredTemplateVersionRow | undefined;
+    return row ? parseStoredTemplateVersion(row) : null;
+  }
+
+  private async validateStoredTemplateVersions(client: PoolClient): Promise<void> {
+    const result = await client.query(
+      `select template_id, version, snapshot, content_hash from template_versions order by template_id, version`
+    );
+    for (const row of result.rows as StoredTemplateVersionRow[]) {
+      parseStoredTemplateVersion(row);
+    }
+  }
+
+  private async ensureTemplateVersion(client: PoolClient, snapshot: RoomTemplateVersionSnapshotV1): Promise<void> {
+    const contentHash = templateVersionContentHash(snapshot);
+    await client.query(
+      `insert into template_versions (template_id, version, snapshot, content_hash)
+       values ($1,$2,$3::jsonb,$4)
+       on conflict (template_id, version) do nothing`,
+      [snapshot.templateId, snapshot.version, JSON.stringify(snapshot), contentHash]
+    );
+    let existingSnapshot: RoomTemplateVersionSnapshotV1 | undefined;
+    try {
+      existingSnapshot = await this.readStoredTemplateVersion(client, snapshot.templateId, snapshot.version) ?? undefined;
+    } catch (error) {
+      if (
+        error instanceof Error
+        && /^(invalid_template_version_snapshot|template_version_identity_mismatch|template_version_content_hash_mismatch):/.test(error.message)
+      ) {
+        throw new Error(`template_version_seed_conflict:${snapshot.templateId}@${snapshot.version}`);
+      }
+      throw error;
+    }
+    if (!existingSnapshot || stableJson(existingSnapshot) !== stableJson(snapshot)) {
+      throw new Error(`template_version_seed_conflict:${snapshot.templateId}@${snapshot.version}`);
+    }
+  }
+
+  private async synchronizeTemplateCatalog(client: PoolClient): Promise<void> {
+    const result = await client.query(`
+      select t.template_id, t.current_version, t.status,
+             tv.template_id as version_template_id, tv.version, tv.snapshot, tv.content_hash
+      from templates t
+      left join template_versions tv
+        on tv.template_id = t.template_id and tv.version = t.current_version
+      order by t.template_id
+    `);
+    for (const row of result.rows as Array<{
+      template_id: string;
+      current_version: string | null;
+      status: string | null;
+      version_template_id: string | null;
+      version: string | null;
+      snapshot: unknown;
+      content_hash: string | null;
+    }>) {
+      normalizeStoredTemplateStatus(row.template_id, row.status);
+      if (!row.current_version || !row.version_template_id || !row.version || !row.content_hash) {
+        throw new Error(`template_version_not_found:${row.template_id}`);
+      }
+      const snapshot = parseStoredTemplateVersion({
+        template_id: row.version_template_id,
+        version: row.version,
+        snapshot: row.snapshot,
+        content_hash: row.content_hash
+      });
+      await client.query(
+        `update templates set label = $2, asset_slots = $3::jsonb where template_id = $1`,
+        [row.template_id, snapshot.label, JSON.stringify(snapshot.assetSlots)]
+      );
+    }
+  }
+
+  private async repairRoomTemplateMetadata(client: PoolClient): Promise<void> {
+    await client.query(`
+      with desired as (
+        select
+          r.room_id,
+          coalesce(r.template_version, t.current_version) as template_version,
+          tv.snapshot || jsonb_build_object(
+            'roomConfig', jsonb_build_object(
+              'roomType', r.room_type,
+              'visibility', r.visibility,
+              'guestAllowed', r.guest_allowed,
+              'sceneBundleUrl', r.scene_bundle_url,
+              'features', r.features,
+              'theme', r.theme,
+              'avatarConfig', r.avatar_config
+            )
+          ) as template_snapshot
+        from rooms r
+        join templates t on t.template_id = r.template_id
+        join template_versions tv
+          on tv.template_id = r.template_id
+         and tv.version = coalesce(r.template_version, t.current_version)
+        where coalesce(r.template_version, t.current_version) is not null
+      )
+      update rooms r
+      set template_version = coalesce(r.template_version, desired.template_version),
+          template_snapshot = desired.template_snapshot
+      from desired
+      where r.room_id = desired.room_id
+        and (
+          r.template_version is distinct from desired.template_version
+          or r.template_snapshot is distinct from desired.template_snapshot
+        )
+    `);
+  }
+
+  private async ensureTemplateVersionBaseConstraints(client: PoolClient): Promise<void> {
+    await this.ensureNamedForeignKey(client, {
+      tableRegclass: "template_versions",
+      tableSql: "template_versions",
+      constraintName: "template_versions_template_id_fkey",
+      columns: ["template_id"],
+      referencedTableRegclass: "templates",
+      referencedColumns: ["template_id"],
+      expectedDefinition: "foreign key (template_id) references templates(template_id)",
+      createSql: `alter table template_versions
+        add constraint template_versions_template_id_fkey
+        foreign key (template_id) references templates(template_id) not valid`
+    });
+    await this.ensureNamedForeignKey(client, {
+      tableRegclass: "rooms",
+      tableSql: "rooms",
+      constraintName: "rooms_template_id_fkey",
+      columns: ["template_id"],
+      referencedTableRegclass: "templates",
+      referencedColumns: ["template_id"],
+      expectedDefinition: "foreign key (template_id) references templates(template_id)",
+      createSql: `alter table rooms
+        add constraint rooms_template_id_fkey
+        foreign key (template_id) references templates(template_id) not valid`
+    });
+  }
+
+  private async addTemplateVersionConstraints(client: PoolClient): Promise<void> {
+    await this.ensureNamedForeignKey(client, {
+      tableRegclass: "templates",
+      tableSql: "templates",
+      constraintName: "templates_current_version_fkey",
+      columns: ["template_id", "current_version"],
+      referencedTableRegclass: "template_versions",
+      referencedColumns: ["template_id", "version"],
+      expectedDefinition: "foreign key (template_id, current_version) references template_versions(template_id, version)",
+      createSql: `alter table templates
+        add constraint templates_current_version_fkey
+        foreign key (template_id, current_version)
+        references template_versions(template_id, version) not valid`
+    });
+    await this.ensureNamedForeignKey(client, {
+      tableRegclass: "rooms",
+      tableSql: "rooms",
+      constraintName: "rooms_template_version_fkey",
+      columns: ["template_id", "template_version"],
+      referencedTableRegclass: "template_versions",
+      referencedColumns: ["template_id", "version"],
+      expectedDefinition: "foreign key (template_id, template_version) references template_versions(template_id, version)",
+      createSql: `alter table rooms
+        add constraint rooms_template_version_fkey
+        foreign key (template_id, template_version)
+        references template_versions(template_id, version) not valid`
+    });
+  }
+
+  private async ensureNamedForeignKey(client: PoolClient, input: {
+    tableRegclass: string;
+    tableSql: string;
+    constraintName: string;
+    columns: string[];
+    referencedTableRegclass: string;
+    referencedColumns: string[];
+    expectedDefinition: string;
+    createSql: string;
+  }): Promise<void> {
+    const result = await client.query(
+      `select
+         c.contype,
+         c.convalidated,
+         c.condeferrable,
+         c.condeferred,
+         c.confmatchtype,
+         c.confupdtype,
+         c.confdeltype,
+         c.confrelid = $3::regclass as referenced_table_matches,
+         pg_get_constraintdef(c.oid, true) as definition,
+         (select array_agg(a.attname::text order by key.ordinality)
+            from unnest(c.conkey) with ordinality as key(attnum, ordinality)
+            join pg_attribute a on a.attrelid = c.conrelid and a.attnum = key.attnum) as columns,
+         (select array_agg(a.attname::text order by key.ordinality)
+            from unnest(c.confkey) with ordinality as key(attnum, ordinality)
+            join pg_attribute a on a.attrelid = c.confrelid and a.attnum = key.attnum) as referenced_columns
+       from pg_constraint c
+       where c.conrelid = $1::regclass and c.conname = $2`,
+      [input.tableRegclass, input.constraintName, input.referencedTableRegclass]
+    );
+    const row = result.rows[0] as {
+      contype: string;
+      convalidated: boolean;
+      condeferrable: boolean;
+      condeferred: boolean;
+      confmatchtype: string;
+      confupdtype: string;
+      confdeltype: string;
+      referenced_table_matches: boolean;
+      definition: string;
+      columns: string[];
+      referenced_columns: string[];
+    } | undefined;
+    if (row && (
+      row.contype !== "f"
+      || row.condeferrable
+      || row.condeferred
+      || row.confmatchtype !== "s"
+      || row.confupdtype !== "a"
+      || row.confdeltype !== "a"
+      || !row.referenced_table_matches
+      || stableJson(row.columns) !== stableJson(input.columns)
+      || stableJson(row.referenced_columns) !== stableJson(input.referencedColumns)
+      || normalizePostgresConstraintDefinition(row.definition) !== normalizePostgresConstraintDefinition(input.expectedDefinition)
+    )) {
+      throw new Error(`postgres_constraint_definition_mismatch:${input.tableRegclass}.${input.constraintName}:${stableJson(row)}`);
+    }
+    if (!row) {
+      await client.query(input.createSql);
+    }
+    if (!row?.convalidated) {
+      await client.query(`alter table ${input.tableSql} validate constraint ${input.constraintName}`);
+    }
+  }
+
+  private async installTemplateVersionImmutabilityTrigger(client: PoolClient): Promise<void> {
+    const schemaResult = await client.query(`
+      select n.nspname as table_schema
+      from pg_class c
+      join pg_namespace n on n.oid = c.relnamespace
+      where c.oid = 'template_versions'::regclass
+    `);
+    const tableSchema = schemaResult.rows[0]?.table_schema as string | undefined;
+    if (!tableSchema) throw new Error("postgres_table_schema_not_found:template_versions");
+    const quotedTableSchema = quotePostgresIdentifier(tableSchema);
+    const functionResult = await client.query(
+      `select
+         p.prorettype::regtype::text as return_type,
+         l.lanname as language,
+         p.prosrc as source,
+         p.prosecdef as security_definer,
+         p.provolatile as volatility,
+         p.proleakproof as leakproof,
+         p.proparallel as parallel_safety,
+         p.proisstrict as strict,
+         p.proconfig as runtime_config,
+         pg_get_functiondef(p.oid) as definition
+       from pg_proc p
+       join pg_namespace n on n.oid = p.pronamespace
+       join pg_language l on l.oid = p.prolang
+       where n.nspname = $2
+          and p.proname = $1
+          and p.pronargs = 0`,
+      [TEMPLATE_VERSION_MUTATION_FUNCTION_NAME, tableSchema]
+    );
+    const functionRow = functionResult.rows[0] as {
+      return_type: string;
+      language: string;
+      source: string;
+      security_definer: boolean;
+      volatility: string;
+      leakproof: boolean;
+      parallel_safety: string;
+      strict: boolean;
+      runtime_config: string[] | null;
+      definition: string;
+    } | undefined;
+    if (functionRow && (
+      functionRow.return_type !== "trigger"
+      || functionRow.language !== "plpgsql"
+      || functionRow.security_definer
+      || functionRow.volatility !== "v"
+      || functionRow.leakproof
+      || functionRow.parallel_safety !== "u"
+      || functionRow.strict
+      || functionRow.runtime_config !== null
+      || normalizePostgresDefinition(functionRow.source) !== normalizePostgresDefinition(TEMPLATE_VERSION_MUTATION_FUNCTION_SOURCE)
+    )) {
+      throw new Error(`postgres_function_definition_mismatch:${tableSchema}.${TEMPLATE_VERSION_MUTATION_FUNCTION_NAME}:${functionRow.definition}`);
+    }
+    if (!functionRow) {
+      await client.query(`
+        create function ${quotedTableSchema}.vrata_reject_template_version_mutation()
+        returns trigger
+        language plpgsql
+        as $vrata_function$
+        begin
+          raise exception 'template_versions_are_immutable' using errcode = '55000';
+          return null;
+        end
+        $vrata_function$
+      `);
+    }
+
+    const triggerResult = await client.query(
+      `select
+         t.tgtype::integer as trigger_type,
+         t.tgenabled,
+         t.tgqual is null as has_no_when,
+         t.tgattr::text = '' as all_columns,
+         fn.proname as function_name,
+         fn.pronargs as function_arg_count,
+         fn_ns.nspname as function_schema,
+         pg_get_triggerdef(t.oid, true) as definition
+       from pg_trigger t
+       join pg_proc fn on fn.oid = t.tgfoid
+       join pg_namespace fn_ns on fn_ns.oid = fn.pronamespace
+       where t.tgrelid = 'template_versions'::regclass
+         and t.tgname = 'template_versions_immutable'
+         and not t.tgisinternal`
+    );
+    const triggerRow = triggerResult.rows[0] as {
+      trigger_type: number;
+      tgenabled: string;
+      has_no_when: boolean;
+      all_columns: boolean;
+      function_name: string;
+      function_arg_count: number;
+      function_schema: string;
+      definition: string;
+    } | undefined;
+    if (triggerRow && (
+      triggerRow.trigger_type !== 27
+      || triggerRow.tgenabled !== "O"
+      || !triggerRow.has_no_when
+      || !triggerRow.all_columns
+      || triggerRow.function_schema !== tableSchema
+      || triggerRow.function_name !== TEMPLATE_VERSION_MUTATION_FUNCTION_NAME
+      || triggerRow.function_arg_count !== 0
+      || !isExpectedTemplateVersionTriggerDefinition(triggerRow.definition)
+    )) {
+      throw new Error(`postgres_trigger_definition_mismatch:template_versions.template_versions_immutable:${triggerRow.definition}`);
+    }
+    if (!triggerRow) {
+      await client.query(`
+        create trigger template_versions_immutable
+          before update or delete on template_versions
+          for each row execute function ${quotedTableSchema}.vrata_reject_template_version_mutation()
+      `);
+    }
   }
 
   async listTenants(): Promise<TenantRecord[]> {
@@ -1317,8 +1982,50 @@ export class PostgresStorage implements Storage {
     return (result.rowCount ?? 0) > 0;
   }
   async listTemplates(): Promise<TemplateRecord[]> {
-    const result = await this.pool.query(`select template_id, label, asset_slots from templates order by template_id`);
-    return result.rows.map((row: { template_id: string; label: string; asset_slots: string[] }) => ({ templateId: row.template_id, label: row.label, assetSlots: row.asset_slots }));
+    const result = await this.pool.query(`
+      select t.template_id, t.current_version, t.status,
+             tv.template_id as version_template_id, tv.version, tv.snapshot, tv.content_hash
+      from templates t
+      left join template_versions tv
+        on tv.template_id = t.template_id and tv.version = t.current_version
+    `);
+    return sortTemplateRecords(result.rows.map((row: {
+      template_id: string;
+      current_version: string | null;
+      status: string | null;
+      version_template_id: string | null;
+      version: string | null;
+      snapshot: unknown;
+      content_hash: string | null;
+    }) => {
+      if (!row.current_version || !row.version_template_id || !row.version || !row.content_hash) {
+        throw new Error(`template_version_not_found:${row.template_id}`);
+      }
+      const snapshot = parseStoredTemplateVersion({
+        template_id: row.version_template_id,
+        version: row.version,
+        snapshot: row.snapshot,
+        content_hash: row.content_hash
+      });
+      return {
+        templateId: row.template_id,
+        label: snapshot.label,
+        assetSlots: [...snapshot.assetSlots],
+        currentVersion: row.current_version,
+        status: normalizeStoredTemplateStatus(row.template_id, row.status)
+      };
+    }));
+  }
+  async getTemplateVersion(templateId: string, version?: string): Promise<RoomTemplateVersionSnapshotV1 | null> {
+    const result = await this.pool.query(
+      `select tv.template_id, tv.version, tv.snapshot, tv.content_hash
+       from templates t
+       join template_versions tv on tv.template_id = t.template_id and tv.version = coalesce($2, t.current_version)
+       where t.template_id = $1`,
+      [templateId, version ?? null]
+    );
+    const row = result.rows[0] as StoredTemplateVersionRow | undefined;
+    return row ? parseStoredTemplateVersion(row) : null;
   }
   async listAssets(): Promise<AssetRecord[]> {
     const result = await this.pool.query(`select asset_id, tenant_id, kind, url, validation_status, processed_url from assets order by asset_id desc`);
@@ -1332,17 +2039,39 @@ export class PostgresStorage implements Storage {
     }));
   }
   async listRooms(): Promise<RoomRecord[]> {
-    const result = await this.pool.query(`select room_id, tenant_id, template_id, name, room_type, owner_participant_id, status, disabled_at, disabled_by, visibility, scene_bundle_url, features, asset_ids, theme, guest_allowed, avatar_config, session_control, personal_state from rooms order by room_id`);
+    const result = await this.pool.query(`
+      select r.room_id, r.tenant_id, r.template_id, r.template_version, r.template_snapshot,
+             tv.template_id as template_version_template_id, tv.version as template_version_resolved,
+             tv.snapshot as template_version_snapshot, tv.content_hash as template_version_content_hash,
+             r.name, r.room_type, r.owner_participant_id,
+             r.status, r.disabled_at, r.disabled_by, r.visibility, r.scene_bundle_url, r.features,
+             r.asset_ids, r.theme, r.guest_allowed, r.avatar_config, r.session_control, r.personal_state
+      from rooms r
+      left join templates t on t.template_id = r.template_id
+      left join template_versions tv on tv.template_id = r.template_id and tv.version = coalesce(r.template_version, t.current_version)
+      order by r.room_id
+    `);
     return result.rows.map(mapRoomRow);
   }
   async getRoom(roomId: string): Promise<RoomRecord | null> {
-    const result = await this.pool.query(`select room_id, tenant_id, template_id, name, room_type, owner_participant_id, status, disabled_at, disabled_by, visibility, scene_bundle_url, features, asset_ids, theme, guest_allowed, avatar_config, session_control, personal_state from rooms where room_id = $1`, [roomId]);
+    const result = await this.pool.query(`
+      select r.room_id, r.tenant_id, r.template_id, r.template_version, r.template_snapshot,
+             tv.template_id as template_version_template_id, tv.version as template_version_resolved,
+             tv.snapshot as template_version_snapshot, tv.content_hash as template_version_content_hash,
+             r.name, r.room_type, r.owner_participant_id,
+             r.status, r.disabled_at, r.disabled_by, r.visibility, r.scene_bundle_url, r.features,
+             r.asset_ids, r.theme, r.guest_allowed, r.avatar_config, r.session_control, r.personal_state
+      from rooms r
+      left join templates t on t.template_id = r.template_id
+      left join template_versions tv on tv.template_id = r.template_id and tv.version = coalesce(r.template_version, t.current_version)
+      where r.room_id = $1
+    `, [roomId]);
     const row = result.rows[0];
     return row ? mapRoomRow(row) : null;
   }
   async createRoom(input: Partial<RoomRecord>): Promise<RoomRecord> {
     const roomType = defaultRoomType(input.roomType);
-    const room: RoomRecord = {
+    const roomWithoutTemplateMetadata: RoomRecordWithoutTemplateMetadata = {
       roomId: input.roomId ?? crypto.randomUUID(),
       tenantId: input.tenantId ?? "demo-tenant",
       templateId: input.templateId ?? (roomType === "personal" ? "personal-workspace-basic" : "meeting-room-basic"),
@@ -1369,20 +2098,31 @@ export class PostgresStorage implements Storage {
       sessionControl: defaultSessionControl(input.sessionControl),
       personalState: defaultPersonalState(input.personalState)
     };
+    const versionSnapshot = await this.getTemplateVersion(roomWithoutTemplateMetadata.templateId);
+    if (!versionSnapshot) throw new Error(`template_version_not_found:${roomWithoutTemplateMetadata.templateId}`);
+    const room = bindRoomTemplateMetadata(roomWithoutTemplateMetadata, versionSnapshot);
     await this.pool.query(
-      `insert into rooms (room_id, tenant_id, template_id, name, room_type, owner_participant_id, status, disabled_at, disabled_by, visibility, scene_bundle_url, features, asset_ids, theme, guest_allowed, avatar_config, session_control, personal_state) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13::jsonb,$14::jsonb,$15,$16::jsonb,$17::jsonb,$18::jsonb)`,
-      [room.roomId, room.tenantId, room.templateId, room.name, room.roomType, room.ownerParticipantId ?? null, room.status, room.disabledAt ?? null, room.disabledBy ?? null, room.visibility, room.sceneBundleUrl ?? null, JSON.stringify(room.features), JSON.stringify(room.assetIds), JSON.stringify(room.theme), room.guestAllowed, JSON.stringify(room.avatarConfig), JSON.stringify(room.sessionControl), JSON.stringify(room.personalState)]
+      `insert into rooms (room_id, tenant_id, template_id, name, room_type, owner_participant_id, status, disabled_at, disabled_by, visibility, scene_bundle_url, features, asset_ids, theme, guest_allowed, avatar_config, session_control, personal_state, template_version, template_snapshot) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13::jsonb,$14::jsonb,$15,$16::jsonb,$17::jsonb,$18::jsonb,$19,$20::jsonb)`,
+      [room.roomId, room.tenantId, room.templateId, room.name, room.roomType, room.ownerParticipantId ?? null, room.status, room.disabledAt ?? null, room.disabledBy ?? null, room.visibility, room.sceneBundleUrl ?? null, JSON.stringify(room.features), JSON.stringify(room.assetIds), JSON.stringify(room.theme), room.guestAllowed, JSON.stringify(room.avatarConfig), JSON.stringify(room.sessionControl), JSON.stringify(room.personalState), room.templateVersion, JSON.stringify(room.templateSnapshot)]
     );
     return room;
   }
-  async updateRoom(roomId: string, input: Partial<RoomRecord>): Promise<RoomRecord | null> {
+  async updateRoom(roomId: string, input: Partial<RoomRecord>, expectedTemplateBinding?: ExpectedRoomTemplateBinding): Promise<RoomRecord | null> {
     const existing = await this.getRoom(roomId);
     if (!existing) {
       return null;
     }
-    const updated: RoomRecord = {
-      ...existing,
-      ...input,
+    if (
+      expectedTemplateBinding
+      && (existing.templateId !== expectedTemplateBinding.templateId || existing.templateVersion !== expectedTemplateBinding.templateVersion)
+    ) {
+      throw new Error("room_template_binding_changed");
+    }
+    const { templateVersion: _inputTemplateVersion, templateSnapshot: _inputTemplateSnapshot, ...safeInput } = input;
+    const { templateVersion: _existingTemplateVersion, templateSnapshot: _existingTemplateSnapshot, ...existingWithoutTemplateMetadata } = existing;
+    const updatedWithoutTemplateMetadata: RoomRecordWithoutTemplateMetadata = {
+      ...existingWithoutTemplateMetadata,
+      ...safeInput,
       roomType: defaultRoomType(input.roomType ?? existing.roomType),
       ownerParticipantId: input.ownerParticipantId !== undefined ? input.ownerParticipantId : existing.ownerParticipantId ?? null,
       status: defaultRoomStatus(input.status ?? existing.status),
@@ -1406,10 +2146,18 @@ export class PostgresStorage implements Storage {
       sessionControl: defaultSessionControl(input.sessionControl ?? existing.sessionControl),
       personalState: defaultPersonalState(input.personalState ?? existing.personalState)
     };
-    await this.pool.query(
-      `update rooms set template_id = $2, name = $3, room_type = $4, owner_participant_id = $5, status = $6, disabled_at = $7, disabled_by = $8, visibility = $9, scene_bundle_url = $10, features = $11::jsonb, asset_ids = $12::jsonb, theme = $13::jsonb, guest_allowed = $14, avatar_config = $15::jsonb, session_control = $16::jsonb, personal_state = $17::jsonb where room_id = $1`,
-      [roomId, updated.templateId, updated.name, updated.roomType, updated.ownerParticipantId ?? null, updated.status, updated.disabledAt ?? null, updated.disabledBy ?? null, updated.visibility, updated.sceneBundleUrl ?? null, JSON.stringify(updated.features), JSON.stringify(updated.assetIds), JSON.stringify(updated.theme), updated.guestAllowed, JSON.stringify(updated.avatarConfig), JSON.stringify(updated.sessionControl), JSON.stringify(updated.personalState)]
+    const preservedVersion = updatedWithoutTemplateMetadata.templateId === existing.templateId ? existing.templateVersion : undefined;
+    const versionSnapshot = await this.getTemplateVersion(updatedWithoutTemplateMetadata.templateId, preservedVersion);
+    if (!versionSnapshot) throw new Error(`template_version_not_found:${updatedWithoutTemplateMetadata.templateId}`);
+    const updated = bindRoomTemplateMetadata(updatedWithoutTemplateMetadata, versionSnapshot);
+    const result = await this.pool.query(
+      `update rooms set template_id = $2, name = $3, room_type = $4, owner_participant_id = $5, status = $6, disabled_at = $7, disabled_by = $8, visibility = $9, scene_bundle_url = $10, features = $11::jsonb, asset_ids = $12::jsonb, theme = $13::jsonb, guest_allowed = $14, avatar_config = $15::jsonb, session_control = $16::jsonb, personal_state = $17::jsonb, template_version = $18, template_snapshot = $19::jsonb where room_id = $1 and ($20::text is null or (template_id = $20 and coalesce(template_version, (select t.current_version from templates t where t.template_id = rooms.template_id)) = $21))`,
+      [roomId, updated.templateId, updated.name, updated.roomType, updated.ownerParticipantId ?? null, updated.status, updated.disabledAt ?? null, updated.disabledBy ?? null, updated.visibility, updated.sceneBundleUrl ?? null, JSON.stringify(updated.features), JSON.stringify(updated.assetIds), JSON.stringify(updated.theme), updated.guestAllowed, JSON.stringify(updated.avatarConfig), JSON.stringify(updated.sessionControl), JSON.stringify(updated.personalState), updated.templateVersion, JSON.stringify(updated.templateSnapshot), expectedTemplateBinding?.templateId ?? null, expectedTemplateBinding?.templateVersion ?? null]
     );
+    if ((result.rowCount ?? 0) === 0) {
+      if (expectedTemplateBinding) throw new Error("room_template_binding_changed");
+      return null;
+    }
     return updated;
   }
   async deleteRoom(roomId: string): Promise<boolean> {

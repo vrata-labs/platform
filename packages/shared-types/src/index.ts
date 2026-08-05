@@ -7,6 +7,8 @@ export interface RoomManifest {
   tenantId: string;
   roomId: string;
   template: string;
+  templateVersion?: string;
+  templateSnapshot?: import("./room-template.js").RoomTemplateSnapshotV1;
   features: {
     voice: boolean;
     spatialAudio: boolean;
@@ -51,3 +53,4 @@ export * from "./avatar-transport.js";
 export * from "./access.js";
 export * from "./surface-input.js";
 export * from "./media-objects.js";
+export * from "./room-template.js";

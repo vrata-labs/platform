@@ -43,7 +43,7 @@ test("describeManifest returns room and template", () => {
   );
 });
 
-test("bootRuntime maps reserved avatar feature flags from health payload", async () => {
+test("bootRuntime maps reserved avatar flags and accepts additive template metadata", async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (input) => {
     const url = String(input);
@@ -91,6 +91,27 @@ test("bootRuntime maps reserved avatar feature flags from health payload", async
     return new Response(JSON.stringify({
       roomId: "demo-room",
       template: "meeting-room-basic",
+      templateVersion: "0.1.0",
+      templateSnapshot: {
+        schemaVersion: 1,
+        templateId: "meeting-room-basic",
+        version: "0.1.0",
+        label: "Meeting Room Basic",
+        assetSlots: ["logo", "hero-screen"],
+        roomConfig: {
+          roomType: "standard",
+          visibility: "public",
+          guestAllowed: true,
+          sceneBundleUrl: null,
+          features: { voice: true, spatialAudio: true, screenShare: false },
+          theme: { primaryColor: "#5fc8ff", accentColor: "#163354" },
+          avatarConfig: {
+            avatarsEnabled: true,
+            avatarQualityProfile: "xr",
+            avatarFallbackCapsulesEnabled: true
+          }
+        }
+      },
       realtime: { roomStateUrl: "ws://127.0.0.1:2567" },
       theme: { primaryColor: "#5fc8ff", accentColor: "#163354" },
       assets: [],
@@ -113,6 +134,7 @@ test("bootRuntime maps reserved avatar feature flags from health payload", async
   try {
     const { bootRuntime } = await import("./index.js");
     const boot = await bootRuntime("http://127.0.0.1:4000", "demo-room", "Mozilla/5.0");
+    assert.equal(boot.template, "meeting-room-basic");
     assert.equal(boot.spatialAudioEnabled, true);
     assert.equal(boot.envFlags.spatialAudio, false);
     assert.equal(boot.envFlags.avatarPoseBinaryEnabled, true);

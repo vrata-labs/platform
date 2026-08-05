@@ -1,7 +1,175 @@
+import { createHash } from "node:crypto";
 import test from "node:test";
 import assert from "node:assert/strict";
 
 import { MemoryStorage, PostgresStorage, initPostgresStorageWithRetry } from "./storage.js";
+
+interface FakeTemplateRow {
+  template_id: string;
+  label: string;
+  asset_slots: string[];
+  current_version: string | null;
+  status: string | null;
+}
+
+function stableTestJson(value: unknown): string {
+  if (value === null || typeof value !== "object") {
+    const serialized = JSON.stringify(value);
+    if (serialized === undefined) throw new Error("value_not_json_serializable");
+    return serialized;
+  }
+  if (Array.isArray(value)) return `[${value.map(stableTestJson).join(",")}]`;
+  return `{${Object.entries(value as Record<string, unknown>)
+    .filter(([, entryValue]) => entryValue !== undefined)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, entryValue]) => `${JSON.stringify(key)}:${stableTestJson(entryValue)}`)
+    .join(",")}}`;
+}
+
+function templateVersionHash(snapshot: unknown): string {
+  return createHash("sha256").update(stableTestJson(snapshot)).digest("hex");
+}
+
+function createPostgresInitPool(options: {
+  extraTemplates?: FakeTemplateRow[];
+  versions?: Array<{ templateId: string; version: string; snapshot: unknown; contentHash: string }>;
+  constraintDefinition?: Record<string, unknown>;
+  functionDefinition?: Record<string, unknown>;
+  triggerDefinition?: Record<string, unknown>;
+  tableSchema?: string;
+  versionReadErrorOnce?: Error;
+} = {}) {
+  const queries: Array<{ sql: string; values: unknown[] }> = [];
+  let releaseCount = 0;
+  let directPoolQueryCount = 0;
+  let versionReadError = options.versionReadErrorOnce;
+  const templates = new Map<string, FakeTemplateRow>((options.extraTemplates ?? []).map((template) => [template.template_id, structuredClone(template)]));
+  const versions = new Map<string, { snapshot: unknown; content_hash: string }>(
+    (options.versions ?? []).map((version) => [`${version.templateId}::${version.version}`, { snapshot: structuredClone(version.snapshot), content_hash: version.contentHash }])
+  );
+  const client = {
+    async query(sql: string, values: unknown[] = []) {
+      queries.push({ sql, values });
+      const normalized = sql.replace(/\s+/g, " ").trim().toLowerCase();
+      if (normalized.includes("pg_advisory_lock")) {
+        return { rows: [{ pg_advisory_lock: null }] };
+      } else if (normalized.includes("pg_advisory_unlock")) {
+        return { rows: [{ unlocked: true }] };
+      } else if (normalized.includes("from pg_constraint c")) {
+        return { rows: options.constraintDefinition ? [structuredClone(options.constraintDefinition)] : [] };
+      } else if (normalized.includes("from pg_class c") && normalized.includes("table_schema")) {
+        return { rows: [{ table_schema: options.tableSchema ?? "public" }] };
+      } else if (normalized.includes("from pg_proc p")) {
+        return { rows: options.functionDefinition ? [structuredClone(options.functionDefinition)] : [] };
+      } else if (normalized.includes("from pg_trigger t")) {
+        return { rows: options.triggerDefinition ? [structuredClone(options.triggerDefinition)] : [] };
+      } else if (normalized.startsWith("insert into templates (template_id, label, asset_slots)")) {
+        const [templateId, label, assetSlotsJson] = values as [string, string, string];
+        if (!templates.has(templateId)) {
+          templates.set(templateId, {
+            template_id: templateId,
+            label,
+            asset_slots: JSON.parse(assetSlotsJson) as string[],
+            current_version: null,
+            status: null
+          });
+        }
+      } else if (normalized.startsWith("select template_id, label, asset_slots, current_version, status from templates")) {
+        return { rows: Array.from(templates.values(), (template) => structuredClone(template)) };
+      } else if (normalized.startsWith("select t.template_id, t.current_version, t.status,")) {
+        return {
+          rows: Array.from(templates.values(), (template) => {
+            const storedVersion = template.current_version
+              ? versions.get(`${template.template_id}::${template.current_version}`)
+              : undefined;
+            return {
+              template_id: template.template_id,
+              current_version: template.current_version,
+              status: template.status,
+              version_template_id: storedVersion ? template.template_id : null,
+              version: storedVersion ? template.current_version : null,
+              snapshot: storedVersion?.snapshot ?? null,
+              content_hash: storedVersion?.content_hash ?? null
+            };
+          })
+        };
+      } else if (normalized.startsWith("insert into template_versions")) {
+        const [templateId, version, snapshotJson, contentHash] = values as [string, string, string, string];
+        const key = `${templateId}::${version}`;
+        if (!versions.has(key)) {
+          versions.set(key, { snapshot: JSON.parse(snapshotJson) as unknown, content_hash: contentHash });
+        }
+      } else if (normalized.startsWith("select template_id, version, snapshot, content_hash from template_versions")) {
+        if (!normalized.includes("where template_id")) {
+          return {
+            rows: Array.from(versions.entries(), ([key, row]) => {
+              const separator = key.lastIndexOf("::");
+              return {
+                template_id: key.slice(0, separator),
+                version: key.slice(separator + 2),
+                ...structuredClone(row)
+              };
+            })
+          };
+        }
+        if (versionReadError) {
+          const error = versionReadError;
+          versionReadError = undefined;
+          throw error;
+        }
+        const row = versions.get(`${String(values[0])}::${String(values[1])}`);
+        return {
+          rows: row ? [{
+            template_id: String(values[0]),
+            version: String(values[1]),
+            ...structuredClone(row)
+          }] : []
+        };
+      } else if (normalized.startsWith("update templates set label =")) {
+        const [templateId, label, assetSlotsJson] = values as [string, string, string];
+        const existing = templates.get(templateId);
+        if (existing) {
+          templates.set(templateId, {
+            ...existing,
+            label,
+            asset_slots: JSON.parse(assetSlotsJson) as string[]
+          });
+        }
+      } else if (normalized.startsWith("update templates set current_version = coalesce")) {
+        const [templateId, currentVersion, status] = values as [string, string, "active"];
+        const existing = templates.get(templateId);
+        if (existing) {
+          templates.set(templateId, {
+            ...existing,
+            current_version: existing.current_version ?? currentVersion,
+            status: existing.status ?? status
+          });
+        }
+      }
+      return { rows: [], rowCount: 0 };
+    },
+    release() {
+      releaseCount += 1;
+    }
+  };
+  const pool = {
+    async connect() {
+      return client;
+    },
+    async query() {
+      directPoolQueryCount += 1;
+      throw new Error("init_used_pool_query");
+    }
+  };
+  return {
+    pool,
+    queries,
+    templates,
+    versions,
+    get releaseCount() { return releaseCount; },
+    get directPoolQueryCount() { return directPoolQueryCount; }
+  };
+}
 
 test("MemoryStorage keeps xr telemetry events in insertion order", async () => {
   const storage = new MemoryStorage();
@@ -65,6 +233,146 @@ test("MemoryStorage defaults personal rooms to private owner state", async () =>
   assert.equal(room.personalState?.lastPose, undefined);
 });
 
+test("MemoryStorage exposes versioned template catalog and clone-safe lookup", async () => {
+  const storage = new MemoryStorage();
+
+  const templates = await storage.listTemplates();
+  assert.deepEqual(templates.map(({ templateId, currentVersion, status }) => ({ templateId, currentVersion, status })), [
+    { templateId: "meeting-room-basic", currentVersion: "0.1.0", status: "active" },
+    { templateId: "showroom-basic", currentVersion: "0.1.0", status: "active" },
+    { templateId: "event-demo-basic", currentVersion: "0.1.0", status: "active" },
+    { templateId: "personal-workspace-basic", currentVersion: "0.1.0", status: "active" }
+  ]);
+
+  const first = await storage.getTemplateVersion("meeting-room-basic", "0.1.0");
+  assert.ok(first);
+  first.assetSlots.push("spoofed-slot");
+  assert.deepEqual((await storage.getTemplateVersion("meeting-room-basic"))?.assetSlots, ["logo", "hero-screen"]);
+});
+
+test("MemoryStorage snapshots resolved room config and ignores spoofed metadata", async () => {
+  const storage = new MemoryStorage();
+  const spoofedSnapshot = {
+    schemaVersion: 1 as const,
+    templateId: "meeting-room-basic",
+    version: "9.9.9",
+    label: "Spoofed",
+    assetSlots: ["spoofed"],
+    roomConfig: {
+      roomType: "personal" as const,
+      visibility: "private" as const,
+      guestAllowed: false,
+      sceneBundleUrl: "https://attacker.invalid/scene.json",
+      features: { voice: false, spatialAudio: false, screenShare: false },
+      theme: { primaryColor: "#000000", accentColor: "#000000" },
+      avatarConfig: {
+        avatarsEnabled: false,
+        avatarQualityProfile: "mobile-lite" as const,
+        avatarFallbackCapsulesEnabled: false
+      }
+    }
+  };
+
+  const created = await storage.createRoom({
+    roomId: "snapshot-room",
+    templateId: "meeting-room-basic",
+    name: "Snapshot Room",
+    visibility: "unlisted",
+    sceneBundleUrl: "/assets/scenes/actual/scene.json",
+    features: { voice: true, spatialAudio: false, screenShare: true },
+    theme: { primaryColor: "#112233", accentColor: "#445566" },
+    avatarConfig: {
+      avatarsEnabled: true,
+      avatarCatalogUrl: "/assets/avatars/actual.json",
+      avatarQualityProfile: "xr",
+      avatarFallbackCapsulesEnabled: true,
+      avatarSeatsEnabled: false
+    },
+    templateVersion: "9.9.9",
+    templateSnapshot: spoofedSnapshot
+  });
+
+  assert.equal(created.templateVersion, "0.1.0");
+  assert.equal(created.templateSnapshot.version, "0.1.0");
+  assert.equal(created.templateSnapshot.label, "Meeting Room Basic");
+  assert.deepEqual(created.templateSnapshot.roomConfig, {
+    roomType: "standard",
+    visibility: "unlisted",
+    guestAllowed: true,
+    sceneBundleUrl: "/assets/scenes/actual/scene.json",
+    features: { voice: true, spatialAudio: false, screenShare: true },
+    theme: { primaryColor: "#112233", accentColor: "#445566" },
+    avatarConfig: {
+      avatarsEnabled: true,
+      avatarCatalogUrl: "/assets/avatars/actual.json",
+      avatarQualityProfile: "xr",
+      avatarFallbackCapsulesEnabled: true,
+      avatarSeatsEnabled: false
+    }
+  });
+  assert.deepEqual(Object.keys(created.templateSnapshot).sort(), ["assetSlots", "label", "roomConfig", "schemaVersion", "templateId", "version"].sort());
+
+  const updated = await storage.updateRoom(created.roomId, {
+    visibility: "private",
+    guestAllowed: false,
+    sceneBundleUrl: undefined,
+    features: { voice: false, spatialAudio: true, screenShare: false },
+    templateVersion: "9.9.9",
+    templateSnapshot: spoofedSnapshot
+  });
+  assert.ok(updated);
+  assert.equal(updated.templateVersion, "0.1.0");
+  assert.equal(updated.templateSnapshot.roomConfig.visibility, "private");
+  assert.equal(updated.templateSnapshot.roomConfig.guestAllowed, false);
+  assert.equal(updated.templateSnapshot.roomConfig.sceneBundleUrl, null);
+  assert.deepEqual(updated.templateSnapshot.roomConfig.features, { voice: false, spatialAudio: true, screenShare: false });
+});
+
+test("MemoryStorage keeps a room pinned when its template current version advances", async () => {
+  const storage = new MemoryStorage();
+  const pinned = await storage.createRoom({
+    roomId: "memory-pinned-room",
+    templateId: "meeting-room-basic",
+    name: "Memory Pinned Room"
+  });
+  const internals = storage as unknown as {
+    templates: Map<string, { templateId: string; label: string; assetSlots: string[]; currentVersion: string; status: "active" | "deprecated" }>;
+    templateVersions: Map<string, { schemaVersion: 1; templateId: string; version: string; label: string; assetSlots: string[] }>;
+  };
+  internals.templateVersions.set("meeting-room-basic::0.2.0", {
+    schemaVersion: 1,
+    templateId: "meeting-room-basic",
+    version: "0.2.0",
+    label: "Meeting Room Basic 0.2",
+    assetSlots: ["logo", "presentation-screen"]
+  });
+  const template = internals.templates.get("meeting-room-basic");
+  assert.ok(template);
+  internals.templates.set("meeting-room-basic", { ...template, currentVersion: "0.2.0" });
+  assert.deepEqual((await storage.listTemplates())[0], {
+    ...template,
+    label: "Meeting Room Basic 0.2",
+    assetSlots: ["logo", "presentation-screen"],
+    currentVersion: "0.2.0"
+  });
+
+  const updated = await storage.updateRoom(pinned.roomId, {
+    templateId: "meeting-room-basic",
+    visibility: "private"
+  });
+  assert.ok(updated);
+  assert.equal(updated.templateVersion, "0.1.0");
+  assert.equal(updated.templateSnapshot.version, "0.1.0");
+  assert.equal(updated.templateSnapshot.roomConfig.visibility, "private");
+
+  const createdAfterAdvance = await storage.createRoom({
+    roomId: "memory-current-room",
+    templateId: "meeting-room-basic",
+    name: "Memory Current Room"
+  });
+  assert.equal(createdAfterAdvance.templateVersion, "0.2.0");
+});
+
 test("Postgres storage init retries transient connection failures", async () => {
   let attempts = 0;
   const waits: number[] = [];
@@ -118,27 +426,249 @@ test("Postgres storage init fails fast on non-connection errors", async () => {
   assert.equal(rejected, syntaxError);
 });
 
-test("Postgres storage init adds session control column before altering its default", async () => {
-  let sessionControlColumnExists = false;
-  const queries: string[] = [];
-  const pool = {
-    async query(sql: string) {
-      queries.push(sql);
-      if (sql.includes("add column if not exists session_control")) {
-        sessionControlColumnExists = true;
-      }
-      if (sql.includes("alter column session_control set default") && !sessionControlColumnExists) {
-        throw new Error("session_control_altered_before_add_column");
-      }
-      return { rows: [] };
+test("Postgres storage init preserves retryable seed read errors", async () => {
+  const transientError = Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" });
+  const fake = createPostgresInitPool({ versionReadErrorOnce: transientError });
+  const retries: number[] = [];
+
+  await initPostgresStorageWithRetry(
+    new PostgresStorage(fake.pool as unknown as ConstructorParameters<typeof PostgresStorage>[0]),
+    {
+      maxAttempts: 2,
+      retryDelayMs: 0,
+      onRetry: (_error, attempt) => retries.push(attempt),
+      wait: async () => undefined
     }
-  };
+  );
 
-  await new PostgresStorage(pool as unknown as ConstructorParameters<typeof PostgresStorage>[0]).init();
+  assert.deepEqual(retries, [1]);
+  assert.equal(fake.queries.filter(({ sql }) => /pg_advisory_lock/.test(sql)).length, 2);
+});
 
-  const addColumnIndex = queries.findIndex((sql) => sql.includes("add column if not exists session_control"));
-  const alterDefaultIndex = queries.findIndex((sql) => sql.includes("alter column session_control set default"));
+test("Postgres storage init adds session control column before altering its default", async () => {
+  const fake = createPostgresInitPool();
+
+  await new PostgresStorage(fake.pool as unknown as ConstructorParameters<typeof PostgresStorage>[0]).init();
+
+  const addColumnIndex = fake.queries.findIndex(({ sql }) => sql.includes("add column if not exists session_control"));
+  const alterDefaultIndex = fake.queries.findIndex(({ sql }) => sql.includes("alter column session_control set default"));
+  const lockIndex = fake.queries.findIndex(({ sql }) => /pg_advisory_lock/.test(sql));
+  const beginIndex = fake.queries.findIndex(({ sql }) => sql.trim().toLowerCase() === "begin");
+  const firstDdlIndex = fake.queries.findIndex(({ sql }) => /create table if not exists tenants/.test(sql));
+  const commitIndex = fake.queries.findIndex(({ sql }) => sql.trim().toLowerCase() === "commit");
+  const unlockIndex = fake.queries.findIndex(({ sql }) => /pg_advisory_unlock/.test(sql));
+  assert.equal(lockIndex, 0);
+  assert.ok(lockIndex < beginIndex && beginIndex < firstDdlIndex && firstDdlIndex < commitIndex && commitIndex < unlockIndex);
   assert.notEqual(addColumnIndex, -1);
   assert.notEqual(alterDefaultIndex, -1);
   assert.ok(addColumnIndex < alterDefaultIndex);
+  assert.equal(fake.directPoolQueryCount, 0);
+  assert.equal(fake.releaseCount, 1);
+  assert.match(fake.queries.at(-1)?.sql ?? "", /pg_advisory_unlock/);
+});
+
+test("Postgres storage init builds the nullable append-only template bridge", async () => {
+  const fake = createPostgresInitPool({
+    extraTemplates: [{
+      template_id: "database-only-template",
+      label: "Database Only Template",
+      asset_slots: ["logo"],
+      current_version: null,
+      status: null
+    }]
+  });
+
+  await new PostgresStorage(fake.pool as unknown as ConstructorParameters<typeof PostgresStorage>[0]).init();
+
+  assert.equal(fake.versions.size, 5);
+  assert.deepEqual(fake.versions.get("database-only-template::0.1.0")?.snapshot, {
+    schemaVersion: 1,
+    templateId: "database-only-template",
+    version: "0.1.0",
+    label: "Database Only Template",
+    assetSlots: ["logo"]
+  });
+  assert.match(fake.versions.get("database-only-template::0.1.0")?.content_hash ?? "", /^[a-f0-9]{64}$/);
+  assert.equal(fake.templates.get("database-only-template")?.current_version, "0.1.0");
+  assert.equal(fake.templates.get("database-only-template")?.status, "active");
+  assert.deepEqual(Array.from(fake.templates.keys()).sort(), [
+    "database-only-template",
+    "event-demo-basic",
+    "meeting-room-basic",
+    "personal-workspace-basic",
+    "showroom-basic"
+  ]);
+
+  const sql = fake.queries.map((query) => query.sql).join("\n");
+  assert.match(sql, /alter table templates add column if not exists current_version text/);
+  assert.match(sql, /alter table templates add column if not exists status text/);
+  assert.match(sql, /alter table rooms add column if not exists template_version text/);
+  assert.match(sql, /alter table rooms add column if not exists template_snapshot jsonb/);
+  assert.match(sql, /constraint templates_current_version_fkey/);
+  assert.match(sql, /constraint rooms_template_version_fkey/);
+  assert.match(sql, /create trigger template_versions_immutable/);
+  assert.match(sql, /before update or delete on template_versions/);
+
+  const legacyInsert = fake.queries.find(({ sql: querySql }) => querySql.includes("insert into rooms (room_id, tenant_id, template_id, name"));
+  assert.ok(legacyInsert);
+  assert.doesNotMatch(legacyInsert.sql, /template_version|template_snapshot/);
+  const repairIndex = fake.queries.findIndex(({ sql: querySql }) => querySql.includes("with desired as") && querySql.includes("update rooms"));
+  const triggerIndex = fake.queries.findIndex(({ sql: querySql }) => querySql.includes("create trigger template_versions_immutable"));
+  assert.ok(repairIndex >= 0 && triggerIndex > repairIndex);
+});
+
+test("Postgres storage creates the immutable trigger function beside its table", async () => {
+  const fake = createPostgresInitPool({ tableSchema: "vrata_app" });
+
+  await new PostgresStorage(fake.pool as unknown as ConstructorParameters<typeof PostgresStorage>[0]).init();
+
+  const sql = fake.queries.map((query) => query.sql).join("\n");
+  assert.match(sql, /create function "vrata_app"\.vrata_reject_template_version_mutation\(\)/);
+  assert.match(sql, /execute function "vrata_app"\.vrata_reject_template_version_mutation\(\)/);
+  assert.doesNotMatch(sql, /create function public\.vrata_reject_template_version_mutation\(\)/);
+});
+
+test("Postgres template listing rejects unsupported non-null status", async () => {
+  const snapshot = {
+    schemaVersion: 1,
+    templateId: "database-only-template",
+    version: "0.1.0",
+    label: "Database Only Template",
+    assetSlots: ["logo"]
+  };
+  const createPool = (status: string | null) => ({
+    async query() {
+      return {
+        rows: [{
+          template_id: "database-only-template",
+          current_version: "0.1.0",
+          status,
+          version_template_id: "database-only-template",
+          version: "0.1.0",
+          snapshot,
+          content_hash: templateVersionHash(snapshot)
+        }]
+      };
+    }
+  });
+
+  const nullStatusStorage = new PostgresStorage(createPool(null) as unknown as ConstructorParameters<typeof PostgresStorage>[0]);
+  assert.equal((await nullStatusStorage.listTemplates())[0]?.status, "active");
+
+  const unsupportedStatusStorage = new PostgresStorage(createPool("retired") as unknown as ConstructorParameters<typeof PostgresStorage>[0]);
+  await assert.rejects(
+    unsupportedStatusStorage.listTemplates(),
+    /unsupported_template_status:database-only-template:retired/
+  );
+
+  const invalidInit = createPostgresInitPool({
+    extraTemplates: [{
+      template_id: "database-only-template",
+      label: "Database Only Template",
+      asset_slots: ["logo"],
+      current_version: "0.1.0",
+      status: "retired"
+    }]
+  });
+  await assert.rejects(
+    new PostgresStorage(invalidInit.pool as unknown as ConstructorParameters<typeof PostgresStorage>[0]).init(),
+    /unsupported_template_status:database-only-template:retired/
+  );
+});
+
+test("Postgres storage init rejects a conflicting immutable seed snapshot", async () => {
+  const fake = createPostgresInitPool({
+    versions: [{
+      templateId: "meeting-room-basic",
+      version: "0.1.0",
+      snapshot: { schemaVersion: 1, templateId: "meeting-room-basic", version: "0.1.0", label: "Changed", assetSlots: [] },
+      contentHash: "bad-hash"
+    }]
+  });
+
+  await assert.rejects(
+    new PostgresStorage(fake.pool as unknown as ConstructorParameters<typeof PostgresStorage>[0]).init(),
+    /template_version_seed_conflict:meeting-room-basic@0\.1\.0/
+  );
+  const rollbackIndex = fake.queries.findIndex(({ sql }) => sql.trim().toLowerCase() === "rollback");
+  const unlockIndex = fake.queries.findIndex(({ sql }) => /pg_advisory_unlock/.test(sql));
+  assert.notEqual(rollbackIndex, -1);
+  assert.equal(fake.queries.some(({ sql }) => sql.trim().toLowerCase() === "commit"), false);
+  assert.ok(rollbackIndex < unlockIndex);
+  assert.equal(fake.releaseCount, 1);
+  assert.match(fake.queries.at(-1)?.sql ?? "", /pg_advisory_unlock/);
+});
+
+test("Postgres storage init fails fast on a mismatched named foreign key", async () => {
+  const fake = createPostgresInitPool({
+    constraintDefinition: {
+      contype: "f",
+      convalidated: true,
+      condeferrable: false,
+      condeferred: false,
+      confmatchtype: "s",
+      confupdtype: "a",
+      confdeltype: "a",
+      referenced_table_matches: false,
+      definition: "FOREIGN KEY (template_id) REFERENCES tenants(tenant_id)",
+      columns: ["template_id"],
+      referenced_columns: ["tenant_id"]
+    }
+  });
+
+  await assert.rejects(
+    new PostgresStorage(fake.pool as unknown as ConstructorParameters<typeof PostgresStorage>[0]).init(),
+    /postgres_constraint_definition_mismatch/
+  );
+  assert.equal(fake.releaseCount, 1);
+});
+
+test("Postgres storage init does not overwrite a mismatched schema-qualified function", async () => {
+  const fake = createPostgresInitPool({
+    functionDefinition: {
+      return_type: "trigger",
+      language: "plpgsql",
+      source: "begin return old; end",
+      security_definer: false,
+      definition: "CREATE FUNCTION public.vrata_reject_template_version_mutation()"
+    }
+  });
+
+  await assert.rejects(
+    new PostgresStorage(fake.pool as unknown as ConstructorParameters<typeof PostgresStorage>[0]).init(),
+    /postgres_function_definition_mismatch/
+  );
+  assert.equal(fake.queries.some(({ sql }) => /create function public\.vrata_reject_template_version_mutation/.test(sql)), false);
+});
+
+test("Postgres storage init fails fast on a mismatched immutable trigger", async () => {
+  const fake = createPostgresInitPool({
+    functionDefinition: {
+      return_type: "trigger",
+      language: "plpgsql",
+      source: "begin raise exception 'template_versions_are_immutable' using errcode = '55000'; return null; end",
+      security_definer: false,
+      volatility: "v",
+      leakproof: false,
+      parallel_safety: "u",
+      strict: false,
+      runtime_config: null,
+      definition: "CREATE FUNCTION public.vrata_reject_template_version_mutation()"
+    },
+    triggerDefinition: {
+      trigger_type: 19,
+      tgenabled: "O",
+      has_no_when: true,
+      all_columns: true,
+      function_name: "vrata_reject_template_version_mutation",
+      function_arg_count: 0,
+      function_schema: "public",
+      definition: "CREATE TRIGGER template_versions_immutable BEFORE UPDATE ON template_versions"
+    }
+  });
+
+  await assert.rejects(
+    new PostgresStorage(fake.pool as unknown as ConstructorParameters<typeof PostgresStorage>[0]).init(),
+    /postgres_trigger_definition_mismatch/
+  );
 });

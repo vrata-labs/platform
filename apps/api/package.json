@@ -6,6 +6,7 @@
   "dependencies": {
     "@vrata/asset-pipeline": "workspace:*",
     "@vrata/shared-types": "workspace:*",
+    "@vrata/templates": "workspace:*",
     "livekit-server-sdk": "^2.13.1",
     "pdf-lib": "^1.17.1",
     "pg": "^8.16.3"
