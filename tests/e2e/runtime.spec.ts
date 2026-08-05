@@ -2293,30 +2293,43 @@ test("scene bundle diagnostics include render and geometry debug info", async ({
   const room = (await roomResponse.json()) as { roomId: string; roomLink: string };
 
   await page.goto(`${room.roomLink}?debug=1`);
-  await page.waitForTimeout(5000);
 
-  const diagnostics = await readDiagnostics<{
-    items: Array<{
-      note?: string;
-      sceneDebug?: {
-        state?: string;
-        meshCount?: number;
-        geometryCount?: number;
-        screenshot?: {
-          width?: number;
-          pixelSamples?: Array<unknown>;
-          dataUrl?: string;
+  await expect.poll(async () => {
+    const diagnostics = await readDiagnostics<{
+      items: Array<{
+        note?: string;
+        sceneDebug?: {
+          state?: string;
+          meshCount?: number;
+          geometryCount?: number;
+          screenshot?: {
+            width?: number;
+            pixelSamples?: Array<unknown>;
+            dataUrl?: string;
+          };
         };
-      };
-    }>;
-  }>(request, room.roomId);
-  const loaded = [...diagnostics.items].reverse().find((item) => item.note === "scene_bundle_loaded");
-  expect(loaded?.sceneDebug?.state).toBe("loaded");
-  expect(loaded?.sceneDebug?.meshCount ?? 0).toBeGreaterThan(0);
-  expect(loaded?.sceneDebug?.geometryCount ?? 0).toBeGreaterThan(0);
-  expect(loaded?.sceneDebug?.screenshot?.width ?? 0).toBeGreaterThan(0);
-  expect(loaded?.sceneDebug?.screenshot?.pixelSamples?.length ?? 0).toBeGreaterThan(0);
-  expect(loaded?.sceneDebug?.screenshot?.dataUrl).toBeUndefined();
+      }>;
+    }>(request, room.roomId);
+    const loaded = [...diagnostics.items].reverse().find((item) => item.note === "scene_bundle_loaded");
+    return {
+      state: loaded?.sceneDebug?.state ?? null,
+      hasMeshes: (loaded?.sceneDebug?.meshCount ?? 0) > 0,
+      hasGeometry: (loaded?.sceneDebug?.geometryCount ?? 0) > 0,
+      hasScreenshot: (loaded?.sceneDebug?.screenshot?.width ?? 0) > 0,
+      hasPixelSamples: (loaded?.sceneDebug?.screenshot?.pixelSamples?.length ?? 0) > 0,
+      excludesDataUrl: loaded ? loaded.sceneDebug?.screenshot?.dataUrl === undefined : false
+    };
+  }, {
+    timeout: 30000,
+    intervals: [500, 1000, 2000]
+  }).toEqual({
+    state: "loaded",
+    hasMeshes: true,
+    hasGeometry: true,
+    hasScreenshot: true,
+    hasPixelSamples: true,
+    excludesDataUrl: true
+  });
 });
 
 test("@private-assets avatar-enabled hall room supports interaction ray teleport, sit, switch and teleport exit", async ({ page, request }) => {

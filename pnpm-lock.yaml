@@ -35,6 +35,9 @@ importers:
       '@vrata/shared-types':
         specifier: workspace:*
         version: link:../../packages/shared-types
+      '@vrata/templates':
+        specifier: workspace:*
+        version: link:../../packages/templates
       livekit-server-sdk:
         specifier: ^2.13.1
         version: 2.15.0
@@ -115,7 +118,11 @@ importers:
 
   packages/shared-types: {}
 
-  packages/templates: {}
+  packages/templates:
+    dependencies:
+      '@vrata/shared-types':
+        specifier: workspace:*
+        version: link:../shared-types
 
 packages:
 

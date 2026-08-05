@@ -1473,6 +1473,243 @@ test("room manifest exposes optional scene bundle url", async () => {
   }
 });
 
+test("template and room APIs add server-owned version metadata without changing legacy fields", async () => {
+  process.env.VRATA_DISABLE_AUTOSTART = "1";
+  process.env.API_PORT = "4061";
+  process.env.CONTROL_PLANE_ADMIN_TOKEN = "template-metadata-admin-token";
+  const module = await import("./index.js");
+  const server = module.startApiServer(4061);
+
+  try {
+    const templatesResponse = await fetch("http://127.0.0.1:4061/api/templates");
+    assert.equal(templatesResponse.ok, true);
+    const templatesPayload = await templatesResponse.json() as {
+      items: Array<{ templateId: string; label: string; assetSlots: string[]; currentVersion: string; status: string }>;
+    };
+    assert.deepEqual(templatesPayload.items, [
+      { templateId: "meeting-room-basic", label: "Meeting Room Basic", assetSlots: ["logo", "hero-screen"], currentVersion: "0.1.0", status: "active" },
+      { templateId: "showroom-basic", label: "Showroom Basic", assetSlots: ["logo", "wall-graphic"], currentVersion: "0.1.0", status: "active" },
+      { templateId: "event-demo-basic", label: "Event Demo Basic", assetSlots: ["logo", "media-placeholder"], currentVersion: "0.1.0", status: "active" },
+      { templateId: "personal-workspace-basic", label: "Personal Workspace Basic", assetSlots: ["logo", "personal-surface"], currentVersion: "0.1.0", status: "active" }
+    ]);
+
+    const defaultVisibilityResponse = await fetch("http://127.0.0.1:4061/api/rooms", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-vrata-admin-token": "template-metadata-admin-token"
+      },
+      body: JSON.stringify({
+        roomId: "default-visibility-room",
+        tenantId: "demo-tenant",
+        templateId: "meeting-room-basic",
+        name: "Default Visibility Room"
+      })
+    });
+    assert.equal(defaultVisibilityResponse.status, 201);
+    const defaultVisibilityRoom = await defaultVisibilityResponse.json() as {
+      visibility: string;
+      templateSnapshot: { roomConfig: { visibility: string } };
+    };
+    assert.equal(defaultVisibilityRoom.visibility, "public");
+    assert.equal(defaultVisibilityRoom.templateSnapshot.roomConfig.visibility, "public");
+
+    const createResponse = await fetch("http://127.0.0.1:4061/api/rooms", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-vrata-admin-token": "template-metadata-admin-token"
+      },
+      body: JSON.stringify({
+        roomId: "template-metadata-room",
+        tenantId: "demo-tenant",
+        templateId: "meeting-room-basic",
+        templateVersion: "9.9.9",
+        templateSnapshot: { schemaVersion: 1, templateId: "spoofed", version: "9.9.9" },
+        name: "Template Metadata Room",
+        visibility: "unlisted",
+        guestAllowed: false,
+        sceneBundleUrl: "/assets/scenes/template-metadata/scene.json",
+        features: { voice: true, spatialAudio: false, screenShare: true },
+        theme: { primaryColor: "#123456", accentColor: "#654321" },
+        avatarConfig: {
+          avatarsEnabled: true,
+          avatarCatalogUrl: "/assets/avatars/catalog.v1.json",
+          avatarQualityProfile: "desktop-standard",
+          avatarFallbackCapsulesEnabled: true,
+          avatarSeatsEnabled: false
+        }
+      })
+    });
+    assert.equal(createResponse.status, 201);
+    const created = await createResponse.json() as {
+      roomId: string;
+      templateId: string;
+      templateVersion: string;
+      templateSnapshot: { templateId: string; version: string; roomConfig: Record<string, unknown> };
+      name: string;
+      visibility: string;
+      guestAllowed: boolean;
+      sceneBundleUrl: string;
+      features: { voice: boolean; spatialAudio: boolean; screenShare: boolean };
+      manifest: {
+        template: string;
+        templateVersion: string;
+        templateSnapshot: { version: string; roomConfig: Record<string, unknown> };
+        sceneBundle?: { url?: string };
+        features: { voice: boolean; spatialAudio: boolean; screenShare: boolean };
+      };
+    };
+    assert.equal(created.templateId, "meeting-room-basic");
+    assert.equal(created.name, "Template Metadata Room");
+    assert.equal(created.visibility, "unlisted");
+    assert.equal(created.guestAllowed, false);
+    assert.equal(created.sceneBundleUrl, "/assets/scenes/template-metadata/scene.json");
+    assert.deepEqual(created.features, { voice: true, spatialAudio: false, screenShare: true });
+    assert.equal(created.templateVersion, "0.1.0");
+    assert.equal(created.templateSnapshot.templateId, "meeting-room-basic");
+    assert.equal(created.templateSnapshot.version, "0.1.0");
+    assert.equal(created.templateSnapshot.roomConfig.visibility, "unlisted");
+    assert.equal(created.templateSnapshot.roomConfig.guestAllowed, false);
+    assert.equal(created.manifest.template, "meeting-room-basic");
+    assert.equal(created.manifest.templateVersion, "0.1.0");
+    assert.equal(created.manifest.templateSnapshot.version, "0.1.0");
+    assert.equal(created.manifest.sceneBundle?.url, "/assets/scenes/template-metadata/scene.json");
+    assert.deepEqual(created.manifest.features, created.features);
+
+    const updateResponse = await fetch(`http://127.0.0.1:4061/api/rooms/${created.roomId}`, {
+      method: "PATCH",
+      headers: {
+        "content-type": "application/json",
+        "x-vrata-admin-token": "template-metadata-admin-token"
+      },
+      body: JSON.stringify({
+        templateVersion: "9.9.9",
+        templateSnapshot: { schemaVersion: 1, templateId: "spoofed", version: "9.9.9" },
+        visibility: "private",
+        features: { voice: false, spatialAudio: true, screenShare: false }
+      })
+    });
+    assert.equal(updateResponse.ok, true);
+    const updated = await updateResponse.json() as {
+      templateVersion: string;
+      templateSnapshot: { templateId: string; version: string; roomConfig: { visibility: string; features: unknown } };
+      features: unknown;
+      manifest: { template: string; templateVersion: string; features: unknown };
+    };
+    assert.equal(updated.templateVersion, "0.1.0");
+    assert.equal(updated.templateSnapshot.templateId, "meeting-room-basic");
+    assert.equal(updated.templateSnapshot.version, "0.1.0");
+    assert.equal(updated.templateSnapshot.roomConfig.visibility, "private");
+    assert.deepEqual(updated.templateSnapshot.roomConfig.features, { voice: false, spatialAudio: true, screenShare: false });
+    assert.deepEqual(updated.features, { voice: false, spatialAudio: true, screenShare: false });
+    assert.equal(updated.manifest.template, "meeting-room-basic");
+    assert.equal(updated.manifest.templateVersion, "0.1.0");
+    assert.deepEqual(updated.manifest.features, updated.features);
+
+    const spoofOnlyResponse = await fetch(`http://127.0.0.1:4061/api/rooms/${created.roomId}`, {
+      method: "PATCH",
+      headers: {
+        "content-type": "application/json",
+        "x-vrata-admin-token": "template-metadata-admin-token"
+      },
+      body: JSON.stringify({
+        templateVersion: "8.8.8",
+        templateSnapshot: { schemaVersion: 1, templateId: "spoofed-again", version: "8.8.8" }
+      })
+    });
+    assert.equal(spoofOnlyResponse.status, 200);
+    const spoofOnly = await spoofOnlyResponse.json() as {
+      visibility: string;
+      features: unknown;
+      templateVersion: string;
+      templateSnapshot: { version: string; roomConfig: { visibility: string } };
+      manifest: {
+        templateVersion: string;
+        templateSnapshot: { version: string; roomConfig: { visibility: string } };
+        access: { visibility: string };
+      };
+    };
+    assert.equal(spoofOnly.visibility, "private");
+    assert.deepEqual(spoofOnly.features, updated.features);
+    assert.equal(spoofOnly.templateVersion, "0.1.0");
+    assert.equal(spoofOnly.templateSnapshot.version, "0.1.0");
+    assert.equal(spoofOnly.templateSnapshot.roomConfig.visibility, "private");
+    assert.equal(spoofOnly.manifest.templateVersion, "0.1.0");
+    assert.equal(spoofOnly.manifest.templateSnapshot.version, "0.1.0");
+    assert.equal(spoofOnly.manifest.templateSnapshot.roomConfig.visibility, "private");
+    assert.equal(spoofOnly.manifest.access.visibility, "private");
+
+    const nameOnlyResponse = await fetch(`http://127.0.0.1:4061/api/rooms/${created.roomId}`, {
+      method: "PATCH",
+      headers: {
+        "content-type": "application/json",
+        "x-vrata-admin-token": "template-metadata-admin-token"
+      },
+      body: JSON.stringify({ name: "Private Room Renamed" })
+    });
+    assert.equal(nameOnlyResponse.status, 200);
+    const nameOnly = await nameOnlyResponse.json() as {
+      name: string;
+      visibility: string;
+      templateSnapshot: { roomConfig: { visibility: string } };
+      manifest: { templateSnapshot: { roomConfig: { visibility: string } }; access: { visibility: string } };
+    };
+    assert.equal(nameOnly.name, "Private Room Renamed");
+    assert.equal(nameOnly.visibility, "private");
+    assert.equal(nameOnly.templateSnapshot.roomConfig.visibility, "private");
+    assert.equal(nameOnly.manifest.templateSnapshot.roomConfig.visibility, "private");
+    assert.equal(nameOnly.manifest.access.visibility, "private");
+
+    const assetResponse = await fetch("http://127.0.0.1:4061/api/assets", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-vrata-admin-token": "template-metadata-admin-token"
+      },
+      body: JSON.stringify({ tenantId: "demo-tenant", kind: "hero-screen", url: "template-version-screen.glb" })
+    });
+    assert.equal(assetResponse.status, 201);
+    const asset = await assetResponse.json() as { assetId: string };
+    const attachAssetResponse = await fetch(`http://127.0.0.1:4061/api/rooms/${created.roomId}`, {
+      method: "PATCH",
+      headers: {
+        "content-type": "application/json",
+        "x-vrata-admin-token": "template-metadata-admin-token"
+      },
+      body: JSON.stringify({ assetIds: [asset.assetId] })
+    });
+    assert.equal(attachAssetResponse.status, 200);
+
+    const incompatibleTemplateResponse = await fetch(`http://127.0.0.1:4061/api/rooms/${created.roomId}`, {
+      method: "PATCH",
+      headers: {
+        "content-type": "application/json",
+        "x-vrata-admin-token": "template-metadata-admin-token"
+      },
+      body: JSON.stringify({ templateId: "showroom-basic" })
+    });
+    assert.equal(incompatibleTemplateResponse.status, 400);
+    assert.deepEqual(await incompatibleTemplateResponse.json(), { error: "asset_kind_not_supported_by_template" });
+
+    const unknownTemplateResponse = await fetch(`http://127.0.0.1:4061/api/rooms/${created.roomId}`, {
+      method: "PATCH",
+      headers: {
+        "content-type": "application/json",
+        "x-vrata-admin-token": "template-metadata-admin-token"
+      },
+      body: JSON.stringify({ templateId: "unknown-template" })
+    });
+    assert.equal(unknownTemplateResponse.status, 400);
+    assert.deepEqual(await unknownTemplateResponse.json(), { error: "invalid_template" });
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    delete process.env.VRATA_DISABLE_AUTOSTART;
+    delete process.env.API_PORT;
+    delete process.env.CONTROL_PLANE_ADMIN_TOKEN;
+  }
+});
+
 test("room manifest exposes avatar config when enabled", async () => {
   process.env.VRATA_DISABLE_AUTOSTART = "1";
   process.env.API_PORT = "4017";
