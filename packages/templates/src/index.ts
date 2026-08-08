@@ -4,4 +4,7 @@ export type { TemplateDefinition, VersionedTemplateDefinition } from "./definiti
 
 export const templates: TemplateDefinition[] = createLegacyTemplateDefinitions();
 
+export * from "./asset-lock.js";
 export * from "./registry.js";
+export * from "./standard-room-contracts.js";
+export * from "./version-contract.js";

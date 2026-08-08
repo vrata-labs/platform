@@ -112,7 +112,11 @@ importers:
         specifier: ^6.3.5
         version: 6.4.1(@types/node@22.19.15)
 
-  packages/asset-pipeline: {}
+  packages/asset-pipeline:
+    dependencies:
+      '@vrata/shared-types':
+        specifier: workspace:*
+        version: link:../shared-types
 
   packages/runtime-core: {}
 

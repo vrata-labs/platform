@@ -14,6 +14,8 @@ import type {
   SurfaceInputEvent,
   SurfaceInputDebugState,
   ScreenShareObjectState,
+  RoomTemplateAssetLock,
+  RoomTemplateVersionContractV1,
   RoomTemplateCatalogRecord,
   RoomTemplateSnapshotV1,
   SurfaceTestCardState,
@@ -61,6 +63,73 @@ test("room template metadata contracts compile in tests", () => {
 
   assert.equal(snapshot.version, "0.1.0");
   assert.equal(snapshot.roomConfig.sceneBundleUrl, null);
+});
+
+test("room template asset locks require exact immutable release files", () => {
+  const checksum = "a".repeat(64);
+  const assetLock: RoomTemplateAssetLock = {
+    repository: "vrata-labs/scene-assets",
+    commitSha: "b".repeat(40),
+    sceneReleaseId: "meeting-room-v1@1.0.0",
+    releaseManifest: { path: "manifest.json", sha256: checksum, sizeBytes: 100 },
+    sceneManifest: { path: "assets/scenes/meeting-room-v1/1.0.0/scene.json", sha256: checksum, sizeBytes: 200 },
+    sceneAsset: { path: "assets/scenes/meeting-room-v1/1.0.0/scene.glb", sha256: checksum, sizeBytes: 300 },
+    preview: { path: "assets/scenes/meeting-room-v1/1.0.0/preview.webp", sha256: checksum, sizeBytes: 400 }
+  };
+  const contract: RoomTemplateVersionContractV1 = {
+    schemaVersion: 1,
+    templateId: "meeting-room-basic",
+    version: "1.0.0",
+    label: "Meeting Room",
+    description: "Small-group meeting room",
+    assetSlots: ["logo", "hero-screen"],
+    defaults: {
+      roomType: "standard",
+      visibility: "public",
+      guestAllowed: true,
+      features: { voice: true, spatialAudio: true, screenShare: true },
+      theme: { primaryColor: "#5fc8ff", accentColor: "#163354" },
+      avatarConfig: {
+        avatarsEnabled: true,
+        avatarCatalogUrl: "/assets/avatars/catalog.v1.json",
+        avatarQualityProfile: "desktop-standard",
+        avatarFallbackCapsulesEnabled: true,
+        avatarSeatsEnabled: true
+      },
+      surfaces: [{
+        surfaceId: "debug-main",
+        label: "Meeting display",
+        purpose: "collaboration",
+        allowedObjectTypes: ["screen-share"],
+        aspectRatio: { width: 16, height: 9, maxRelativeError: 0.02 }
+      }],
+      settings: {
+        layout: "meeting",
+        notes: { enabled: true, defaultScope: "shared" },
+        audio: { enabled: true, spatial: true, joinMutedByDefault: true, participantLayout: "round-table" },
+        presentation: { enabled: true, surfaceId: "debug-main" }
+      }
+    },
+    scene: {
+      schemaVersion: 1,
+      templateId: "meeting-room-basic",
+      templateVersion: "1.0.0",
+      sceneId: "meeting-room-v1",
+      sceneVersion: "1.0.0",
+      surfaces: [{
+        surfaceId: "debug-main",
+        label: "Meeting display",
+        purpose: "collaboration",
+        allowedObjectTypes: ["screen-share"],
+        aspectRatio: { width: 16, height: 9, maxRelativeError: 0.02 }
+      }],
+      seats: { minimum: 4, maximum: 4 }
+    },
+    assetLock
+  };
+
+  assert.equal(contract.assetLock.commitSha.length, 40);
+  assert.equal(contract.scene.sceneId, "meeting-room-v1");
 });
 
 test("room access policy grants presenter media controls without session control", () => {

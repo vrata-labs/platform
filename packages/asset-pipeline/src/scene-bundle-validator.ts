@@ -3,6 +3,8 @@ import { access, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "
 import { tmpdir } from "node:os";
 import { basename, dirname, extname, join, relative, resolve, sep } from "node:path";
 import { inflateRawSync } from "node:zlib";
+import type { RoomTemplateSceneContract } from "@vrata/shared-types";
+import { validateTemplateScenePair } from "./template-scene-validator.js";
 
 export type SceneBundleValidationSeverity = "error" | "warning";
 export type SceneBundleInputType = "directory" | "manifest-file" | "zip";
@@ -17,6 +19,8 @@ export interface SceneBundleValidationIssue {
 export interface SceneBundleValidationOptions {
   maxMainAssetBytes?: number;
   maxBundleBytes?: number;
+  templateContract?: RoomTemplateSceneContract;
+  sceneVersion?: string;
 }
 
 export interface SceneBundleValidationStats {
@@ -44,6 +48,9 @@ const defaultMaxMainAssetBytes = 40 * 1024 * 1024;
 const defaultMaxBundleBytes = 50 * 1024 * 1024;
 const supportedSceneAssetExtensions = new Set([".glb", ".gltf", ".fbx"]);
 const supportedPreviewExtensions = new Set([".jpg", ".jpeg", ".png", ".webp"]);
+const supportedMediaSurfaceKinds = new Set(["wall", "table", "laptop", "floating", "custom"]);
+const maxMediaSurfaceDimensionPx = 16_384;
+const maxMediaSurfacePixels = 67_000_000;
 
 function issue(severity: SceneBundleValidationSeverity, path: string, code: string, message: string): SceneBundleValidationIssue {
   return { severity, path, code, message };
@@ -363,6 +370,7 @@ function validateManifestShape(input: unknown, issues: SceneBundleValidationIssu
         if (!Array.isArray(input.anchors.seatAnchors)) {
           issues.push(issue("error", "scene.json#/anchors/seatAnchors", "invalid_scene_bundle_seat_anchors", "seatAnchors must be an array when provided."));
         } else {
+          const seatIds = new Set<string>();
           input.anchors.seatAnchors.forEach((seatAnchor, index) => {
             const path = `scene.json#/anchors/seatAnchors/${index}`;
             if (!isRecord(seatAnchor)) {
@@ -371,6 +379,10 @@ function validateManifestShape(input: unknown, issues: SceneBundleValidationIssu
             }
             if (!isNonEmptyString(seatAnchor.id)) {
               issues.push(issue("error", `${path}/id`, "invalid_scene_bundle_seat_anchor_id", "seat anchor id must be a non-empty string."));
+            } else if (seatIds.has(seatAnchor.id)) {
+              issues.push(issue("error", `${path}/id`, "duplicate_scene_bundle_seat_anchor_id", `seat anchor id=${seatAnchor.id} must be unique.`));
+            } else {
+              seatIds.add(seatAnchor.id);
             }
             validatePosition(issues, seatAnchor.position, `${path}/position`);
             if (!isFiniteNumber(seatAnchor.yaw)) {
@@ -385,6 +397,83 @@ function validateManifestShape(input: unknown, issues: SceneBundleValidationIssu
           });
         }
       }
+    }
+  }
+
+  if (input.mediaSurfaces !== undefined) {
+    if (!Array.isArray(input.mediaSurfaces)) {
+      issues.push(issue("error", "scene.json#/mediaSurfaces", "invalid_scene_bundle_media_surfaces", "mediaSurfaces must be an array when provided."));
+    } else if (input.mediaSurfaces.length === 0) {
+      issues.push(issue("error", "scene.json#/mediaSurfaces", "invalid_scene_bundle_media_surfaces_empty", "mediaSurfaces must not be empty when provided."));
+    } else {
+      const surfaceIds = new Set<string>();
+      input.mediaSurfaces.forEach((surface, index) => {
+        const path = `scene.json#/mediaSurfaces/${index}`;
+        if (!isRecord(surface)) {
+          issues.push(issue("error", path, "invalid_scene_bundle_media_surface", "media surface must be an object."));
+          return;
+        }
+        if (!isNonEmptyString(surface.surfaceId)) {
+          issues.push(issue("error", `${path}/surfaceId`, "invalid_scene_bundle_media_surface_id", "surfaceId must be a non-empty string."));
+        } else if (surfaceIds.has(surface.surfaceId)) {
+          issues.push(issue("error", `${path}/surfaceId`, "duplicate_scene_bundle_media_surface_id", `surfaceId=${surface.surfaceId} must be unique.`));
+        } else {
+          surfaceIds.add(surface.surfaceId);
+        }
+        if (surface.label !== undefined && !isNonEmptyString(surface.label)) {
+          issues.push(issue("error", `${path}/label`, "invalid_scene_bundle_media_surface_label", "label must be a non-empty string."));
+        }
+        if (surface.kind !== undefined && (typeof surface.kind !== "string" || !supportedMediaSurfaceKinds.has(surface.kind))) {
+          issues.push(issue("error", `${path}/kind`, "invalid_scene_bundle_media_surface_kind", "kind must be wall, table, laptop, floating, or custom."));
+        }
+        for (const dimension of ["widthM", "heightM"]) {
+          if (!isFiniteNumber(surface[dimension]) || surface[dimension] <= 0) {
+            issues.push(issue("error", `${path}/${dimension}`, "invalid_scene_bundle_media_surface_dimensions", `${dimension} must be a positive finite number.`));
+          }
+        }
+        const hasWidthPx = surface.widthPx !== undefined;
+        const hasHeightPx = surface.heightPx !== undefined;
+        if (hasWidthPx !== hasHeightPx) {
+          issues.push(issue("error", path, "invalid_scene_bundle_media_surface_pixel_dimensions", "widthPx and heightPx must be provided together."));
+        } else if (hasWidthPx && hasHeightPx
+          && (!Number.isSafeInteger(surface.widthPx)
+            || !Number.isSafeInteger(surface.heightPx)
+            || Number(surface.widthPx) <= 0
+            || Number(surface.heightPx) <= 0
+            || Number(surface.widthPx) > maxMediaSurfaceDimensionPx
+            || Number(surface.heightPx) > maxMediaSurfaceDimensionPx
+            || Number(surface.widthPx) * Number(surface.heightPx) > maxMediaSurfacePixels)) {
+          issues.push(issue("error", path, "invalid_scene_bundle_media_surface_pixel_dimensions", `widthPx and heightPx must be positive safe integers up to ${maxMediaSurfaceDimensionPx}, with at most ${maxMediaSurfacePixels} total pixels.`));
+        }
+        if (!isRecord(surface.transform)) {
+          issues.push(issue("error", `${path}/transform`, "invalid_scene_bundle_media_surface_transform", "transform must contain finite x, y, z, and yaw numbers."));
+        } else {
+          for (const axis of ["x", "y", "z"]) {
+            if (!isFiniteNumber(surface.transform[axis])) {
+              issues.push(issue("error", `${path}/transform/${axis}`, "invalid_scene_bundle_media_surface_transform", `${axis} must be a finite number.`));
+            }
+          }
+          for (const axis of ["yaw", "pitch", "roll"]) {
+            if (surface.transform[axis] !== undefined && !isFiniteNumber(surface.transform[axis])) {
+              issues.push(issue("error", `${path}/transform/${axis}`, "invalid_scene_bundle_media_surface_transform", `${axis} must be a finite number when provided.`));
+            }
+          }
+        }
+        if (surface.visible !== undefined && typeof surface.visible !== "boolean") {
+          issues.push(issue("error", `${path}/visible`, "invalid_scene_bundle_media_surface_visibility", "visible must be a boolean when provided."));
+        }
+        if (surface.allowedObjectTypes !== undefined) {
+          if (!Array.isArray(surface.allowedObjectTypes)) {
+            issues.push(issue("error", `${path}/allowedObjectTypes`, "invalid_scene_bundle_media_surface_allowed_object_types", "allowedObjectTypes must be an array when provided."));
+          } else {
+            surface.allowedObjectTypes.forEach((objectType, objectTypeIndex) => {
+              if (!isNonEmptyString(objectType)) {
+                issues.push(issue("error", `${path}/allowedObjectTypes/${objectTypeIndex}`, "invalid_scene_bundle_media_surface_allowed_object_type", "allowedObjectTypes entries must be non-empty strings."));
+              }
+            });
+          }
+        }
+      });
     }
   }
 
@@ -491,6 +580,14 @@ export async function validateSceneBundlePath(inputPath: string, options: SceneB
   }
 
   const references = validateManifestShape(manifest, issues);
+  if (options.templateContract) {
+    const inferredSceneVersion = options.sceneVersion ?? (/^\d+\.\d+\.\d+$/.test(basename(bundleRoot)) ? basename(bundleRoot) : null);
+    if (!inferredSceneVersion) {
+      issues.push(issue("error", "scene.json", "template_scene_version_required", "Template pair validation requires sceneVersion or a semantic-version bundle directory."));
+    } else {
+      issues.push(...validateTemplateScenePair(manifest, options.templateContract, inferredSceneVersion));
+    }
+  }
   const pathsToCheck = [
     references.glbPath ? { path: references.glbPath, code: "missing_scene_asset", message: "glbPath points to a missing scene asset." } : null,
     references.preview ? { path: references.preview, code: "missing_scene_preview", message: "preview points to a missing file." } : null,

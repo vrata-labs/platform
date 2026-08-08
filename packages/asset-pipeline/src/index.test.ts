@@ -8,7 +8,9 @@ import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 
 import { validateSceneBundlePath, validateSceneBundleReference } from "./scene-bundle-validator.js";
+import { validateTemplateScenePair } from "./template-scene-validator.js";
 import { validateAsset, validateAvatarPack } from "./validator.js";
+import type { RoomTemplateSceneContract } from "@vrata/shared-types";
 
 const execFileAsync = promisify(execFile);
 
@@ -41,6 +43,46 @@ function validSceneJson(overrides: Record<string, unknown> = {}): Record<string,
     ...overrides
   };
 }
+
+function validMediaSurface(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    surfaceId: "debug-main",
+    label: "Main screen",
+    kind: "wall",
+    widthM: 3.2,
+    heightM: 1.8,
+    widthPx: 1920,
+    heightPx: 1080,
+    transform: { x: 0, y: 2, z: -5, yaw: 0 },
+    visible: true,
+    ...overrides
+  };
+}
+
+const meetingSceneContract: RoomTemplateSceneContract = {
+  schemaVersion: 1,
+  templateId: "meeting-room-basic",
+  templateVersion: "1.0.0",
+  sceneId: "meeting-room-v1",
+  sceneVersion: "1.0.0",
+  surfaces: [
+    {
+      surfaceId: "debug-main",
+      label: "Meeting display",
+      purpose: "collaboration",
+      allowedObjectTypes: ["screen-share"],
+      aspectRatio: { width: 16, height: 9, maxRelativeError: 0.02 }
+    },
+    {
+      surfaceId: "whiteboard-wall",
+      label: "Collaboration wall",
+      purpose: "collaboration",
+      allowedObjectTypes: ["whiteboard"],
+      aspectRatio: { width: 48, height: 25, maxRelativeError: 0.02 }
+    }
+  ],
+  seats: { minimum: 4, maximum: 4 }
+};
 
 function createStoredZip(files: Record<string, string | Buffer>): Buffer {
   const localParts: Buffer[] = [];
@@ -220,6 +262,180 @@ test("validateSceneBundlePath rejects an invalid spawn point", async () => {
     const result = await validateSceneBundlePath(root);
     assert.equal(result.ok, false);
     assert.equal(result.issues.some((issue) => issue.code === "invalid_scene_bundle_position" && issue.path === "scene.json#/spawnPoints/0/position/y"), true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("validateSceneBundlePath validates visual media surface geometry", async () => {
+  const root = await createSceneBundle({
+    sceneJson: validSceneJson({
+      mediaSurfaces: [
+        validMediaSurface({ widthM: 5.7, heightM: 2.75, heightPx: undefined }),
+        validMediaSurface({
+          transform: { x: 0, y: 2, z: -5, pitch: "bad" },
+          allowedObjectTypes: ["screen-share", ""]
+        })
+      ]
+    }),
+    files: { "scene.glb": Buffer.from("glb"), "preview.webp": Buffer.from("webp") }
+  });
+  try {
+    const result = await validateSceneBundlePath(root);
+    assert.equal(result.ok, false);
+    assert.equal(result.issues.some((entry) => entry.code === "invalid_scene_bundle_media_surface_pixel_dimensions"), true);
+    assert.equal(result.issues.some((entry) => entry.code === "duplicate_scene_bundle_media_surface_id"), true);
+    assert.equal(result.issues.some((entry) => entry.code === "invalid_scene_bundle_media_surface_transform"), true);
+    assert.equal(result.issues.some((entry) => entry.code === "invalid_scene_bundle_media_surface_allowed_object_type"), true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("validateSceneBundlePath preserves runtime optional media surface fields", async () => {
+  const root = await createSceneBundle({
+    sceneJson: validSceneJson({
+      mediaSurfaces: [{
+        surfaceId: "debug-main",
+        widthM: 3.2,
+        heightM: 1.8,
+        transform: { x: 0, y: 2, z: -5 }
+      }]
+    }),
+    files: { "scene.glb": Buffer.from("glb"), "preview.webp": Buffer.from("webp") }
+  });
+  try {
+    const result = await validateSceneBundlePath(root);
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.issues, []);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("validateSceneBundlePath preserves independent legacy physical and pixel aspect ratios", async () => {
+  const root = await createSceneBundle({
+    sceneJson: validSceneJson({
+      mediaSurfaces: [validMediaSurface({ widthM: 3.2, heightM: 2, widthPx: 1920, heightPx: 1080 })]
+    }),
+    files: { "scene.glb": Buffer.from("glb"), "preview.webp": Buffer.from("webp") }
+  });
+  try {
+    const result = await validateSceneBundlePath(root);
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.issues, []);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("validateSceneBundlePath rejects unsafe media surface pixel dimensions", async () => {
+  const root = await createSceneBundle({
+    sceneJson: validSceneJson({
+      mediaSurfaces: [
+        validMediaSurface({ surfaceId: "missing-height", heightPx: undefined }),
+        validMediaSurface({ surfaceId: "fractional", widthPx: 1920.5 }),
+        validMediaSurface({ surfaceId: "too-many-pixels", widthPx: 16384, heightPx: 4096 })
+      ]
+    }),
+    files: { "scene.glb": Buffer.from("glb"), "preview.webp": Buffer.from("webp") }
+  });
+  try {
+    const result = await validateSceneBundlePath(root);
+    assert.equal(result.ok, false);
+    assert.equal(result.issues.filter((entry) => entry.code === "invalid_scene_bundle_media_surface_pixel_dimensions").length, 3);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("validateSceneBundlePath rejects an explicitly empty media surface layout", async () => {
+  const root = await createSceneBundle({
+    sceneJson: validSceneJson({ mediaSurfaces: [] }),
+    files: { "scene.glb": Buffer.from("glb"), "preview.webp": Buffer.from("webp") }
+  });
+  try {
+    const result = await validateSceneBundlePath(root);
+    assert.equal(result.ok, false);
+    assert.equal(result.issues.some((entry) => entry.code === "invalid_scene_bundle_media_surfaces_empty"), true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("validateTemplateScenePair accepts matching surfaces and seat policy", () => {
+  const issues = validateTemplateScenePair(validSceneJson({
+    sceneId: "meeting-room-v1",
+    mediaSurfaces: [
+      validMediaSurface({ widthPx: undefined, heightPx: undefined }),
+      validMediaSurface({
+        surfaceId: "whiteboard-wall",
+        label: "Collaboration wall",
+        widthM: 4.8,
+        heightM: 2.5,
+        widthPx: 1920,
+        heightPx: 1000
+      })
+    ],
+    anchors: {
+      seatAnchors: Array.from({ length: 4 }, (_, index) => ({
+        id: `seat-${index}`,
+        position: { x: index, y: 0.48, z: 0 },
+        yaw: 0,
+        seatHeight: 0.06,
+        radius: 0.5
+      }))
+    }
+  }), meetingSceneContract, "1.0.0");
+  assert.deepEqual(issues, []);
+});
+
+test("validateTemplateScenePair rejects incomplete pixel dimensions", () => {
+  const issues = validateTemplateScenePair(validSceneJson({
+    sceneId: "meeting-room-v1",
+    mediaSurfaces: [
+      validMediaSurface({ heightPx: undefined }),
+      validMediaSurface({
+        surfaceId: "whiteboard-wall",
+        label: "Collaboration wall",
+        widthM: 4.8,
+        heightM: 2.5,
+        widthPx: 1920,
+        heightPx: 1000
+      })
+    ],
+    anchors: {
+      seatAnchors: Array.from({ length: 4 }, (_, index) => ({
+        id: `seat-${index}`,
+        position: { x: index, y: 0.48, z: 0 },
+        yaw: 0,
+        seatHeight: 0.06
+      }))
+    }
+  }), meetingSceneContract, "1.0.0");
+  assert.equal(issues.some((entry) => entry.code === "template_surface_pixel_dimensions_required"), true);
+});
+
+test("validateSceneBundlePath applies template scene pair requirements", async () => {
+  const root = await createSceneBundle({
+    sceneJson: validSceneJson({
+      schemaVersion: 99,
+      sceneId: "wrong-scene-v1",
+      mediaSurfaces: [validMediaSurface({ widthM: 2, heightM: 1, allowedObjectTypes: ["whiteboard"] })],
+      anchors: { seatAnchors: [] }
+    }),
+    files: { "scene.glb": Buffer.from("glb"), "preview.webp": Buffer.from("webp") }
+  });
+  try {
+    const result = await validateSceneBundlePath(root, { templateContract: meetingSceneContract, sceneVersion: "0.9.0" });
+    assert.equal(result.ok, false);
+    assert.equal(result.issues.some((entry) => entry.code === "template_scene_id_mismatch"), true);
+    assert.equal(result.issues.some((entry) => entry.code === "template_scene_schema_mismatch"), true);
+    assert.equal(result.issues.some((entry) => entry.code === "template_scene_version_mismatch"), true);
+    assert.equal(result.issues.some((entry) => entry.code === "missing_template_surface"), true);
+    assert.equal(result.issues.some((entry) => entry.code === "template_surface_aspect_ratio_mismatch"), true);
+    assert.equal(result.issues.some((entry) => entry.code === "template_surface_object_type_mismatch"), true);
+    assert.equal(result.issues.some((entry) => entry.code === "template_seat_count_mismatch"), true);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
