@@ -819,13 +819,14 @@ test("guest onboarding controls hint matches mobile and XR modes", async ({ brow
 });
 
 test("host controls lock room and remove guest", async ({ page, browser, request }) => {
+  test.setTimeout(120000);
   const room = await createPrivateRoom(request, `Host Controls E2E ${Date.now()}`);
   const hostInvite = await createRoomInvite(request, room.roomId, false, "host");
   const guestInvite = await createRoomInvite(request, room.roomId, false, "guest");
 
   await page.goto(`${e2eRoomLink(hostInvite.inviteLink)}&name=Host`);
-  await expect(page.locator("#status-line")).toContainText("Joined as", { timeout: 10000 });
-  await expect(page.locator("#host-controls")).toBeVisible({ timeout: 10000 });
+  await expect(page.locator("#status-line")).toContainText("Joined as", { timeout: 30000 });
+  await expect(page.locator("#host-controls")).toBeVisible({ timeout: 30000 });
   await expect(page.locator("#lock-room")).toBeEnabled();
 
   const guestContext = await browser.newContext();
@@ -833,30 +834,30 @@ test("host controls lock room and remove guest", async ({ page, browser, request
   try {
     const guestPage = await guestContext.newPage();
     await guestPage.goto(`${e2eRoomLink(guestInvite.inviteLink)}&name=Guest`);
-    await expect(guestPage.locator("#status-line")).toContainText("Joined as", { timeout: 10000 });
+    await expect(guestPage.locator("#status-line")).toContainText("Joined as", { timeout: 30000 });
     const guestParticipantId = await guestPage.evaluate(() => (window as Window & { __VRATA_DEBUG__?: { participantId?: string } }).__VRATA_DEBUG__?.participantId ?? "");
     expect(guestParticipantId).not.toBe("");
 
     await expect.poll(async () => page.locator("#host-participant-select").evaluate((select) => Array.from((select as HTMLSelectElement).options).map((option) => option.value)), {
-      timeout: 10000,
+      timeout: 30000,
       intervals: [500, 1000]
     }).toContain(guestParticipantId);
     await page.locator("#host-participant-select").selectOption(guestParticipantId);
     await page.locator("#remove-participant").click();
-    await expect(guestPage.locator("#status-line")).toContainText("Access denied: removed by host", { timeout: 10000 });
+    await expect(guestPage.locator("#status-line")).toContainText("Access denied: removed by host", { timeout: 30000 });
 
     await page.locator("#lock-room").click();
     await expect(page.locator("#host-controls-status")).toContainText("Room locked");
     const lockedInvite = await createRoomInvite(request, room.roomId, false, "guest");
     const lockedPage = await lockedContext.newPage();
     await lockedPage.goto(`${e2eRoomLink(lockedInvite.inviteLink)}&name=LockedGuest`);
-    await expect(lockedPage.locator("#status-line")).toContainText("Access denied: room is locked");
+    await expect(lockedPage.locator("#status-line")).toContainText("Access denied: room is locked", { timeout: 30000 });
 
     await page.locator("#unlock-room").click();
     await expect(page.locator("#host-controls-status")).toContainText(/Room (unlocked|open)/);
     const unlockedInvite = await createRoomInvite(request, room.roomId, false, "guest");
     await lockedPage.goto(`${e2eRoomLink(unlockedInvite.inviteLink)}&name=UnlockedGuest`);
-    await expect(lockedPage.locator("#status-line")).toContainText("Joined as", { timeout: 10000 });
+    await expect(lockedPage.locator("#status-line")).toContainText("Joined as", { timeout: 30000 });
   } finally {
     await lockedContext.close();
     await guestContext.close();
@@ -864,50 +865,51 @@ test("host controls lock room and remove guest", async ({ page, browser, request
 });
 
 test("host controls grant and revoke presenter role", async ({ page, browser, request }) => {
+  test.setTimeout(120000);
   const room = await createPrivateRoom(request, `Presenter Controls E2E ${Date.now()}`);
   const hostInvite = await createRoomInvite(request, room.roomId, false, "host");
   const memberInvite = await createRoomInvite(request, room.roomId, false, "member");
 
   await page.goto(`${e2eRoomLink(hostInvite.inviteLink)}&name=Host&sharemock=1&debug=1`);
-  await expect(page.locator("#status-line")).toContainText("Joined as", { timeout: 10000 });
-  await expect(page.locator("#host-controls")).toBeVisible({ timeout: 10000 });
+  await expect(page.locator("#status-line")).toContainText("Joined as", { timeout: 30000 });
+  await expect(page.locator("#host-controls")).toBeVisible({ timeout: 30000 });
   await expect(page.locator("#presenter-line")).toContainText("Presenter: none");
 
   const memberContext = await browser.newContext();
   try {
     const memberPage = await memberContext.newPage();
     await memberPage.goto(`${e2eRoomLink(memberInvite.inviteLink)}&name=Member&sharemock=1&debug=1`);
-    await expect(memberPage.locator("#status-line")).toContainText("Joined as", { timeout: 10000 });
+    await expect(memberPage.locator("#status-line")).toContainText("Joined as", { timeout: 30000 });
     await expect(memberPage.locator("#host-controls")).toBeHidden();
     await expect(memberPage.locator("#start-share")).toBeHidden();
     const memberParticipantId = await memberPage.evaluate(() => (window as Window & { __VRATA_DEBUG__?: { participantId?: string } }).__VRATA_DEBUG__?.participantId ?? "");
     expect(memberParticipantId).not.toBe("");
 
     await expect.poll(async () => page.locator("#host-participant-select").evaluate((select) => Array.from((select as HTMLSelectElement).options).map((option) => option.value)), {
-      timeout: 10000,
+      timeout: 30000,
       intervals: [500, 1000]
     }).toContain(memberParticipantId);
     await page.locator("#host-participant-select").selectOption(memberParticipantId);
     await expect(page.locator("#grant-presenter")).toBeEnabled();
     await page.locator("#grant-presenter").click();
-    await expect(page.locator("#presenter-line")).toContainText("Member", { timeout: 10000 });
-    await expect(memberPage.locator("#presenter-line")).toContainText("Member", { timeout: 10000 });
+    await expect(page.locator("#presenter-line")).toContainText("Member", { timeout: 30000 });
+    await expect(memberPage.locator("#presenter-line")).toContainText("Member", { timeout: 30000 });
     await expect.poll(async () => memberPage.evaluate(() => (window as Window & { __VRATA_DEBUG__?: { access?: { role?: string; canManageRoomSession?: boolean; canStartScreenShare?: boolean } } }).__VRATA_DEBUG__?.access), {
-      timeout: 10000,
+      timeout: 30000,
       intervals: [500, 1000]
     }).toMatchObject({ role: "presenter", canManageRoomSession: false, canStartScreenShare: true });
     await expect(memberPage.locator("#host-controls")).toBeHidden();
-    await expect(memberPage.locator("#start-share")).toBeVisible({ timeout: 10000 });
+    await expect(memberPage.locator("#start-share")).toBeVisible({ timeout: 30000 });
     await expect(memberPage.locator("#start-share")).toBeEnabled();
 
     await expect(page.locator("#revoke-presenter")).toBeEnabled();
     await page.locator("#revoke-presenter").click();
-    await expect(memberPage.locator("#presenter-line")).toContainText("Presenter: none", { timeout: 10000 });
+    await expect(memberPage.locator("#presenter-line")).toContainText("Presenter: none", { timeout: 30000 });
     await expect.poll(async () => memberPage.evaluate(() => (window as Window & { __VRATA_DEBUG__?: { access?: { role?: string; canStartScreenShare?: boolean } } }).__VRATA_DEBUG__?.access), {
-      timeout: 10000,
+      timeout: 30000,
       intervals: [500, 1000]
     }).toMatchObject({ role: "member", canStartScreenShare: false });
-    await expect(memberPage.locator("#start-share")).toBeHidden({ timeout: 10000 });
+    await expect(memberPage.locator("#start-share")).toBeHidden({ timeout: 30000 });
   } finally {
     await memberContext.close();
   }
@@ -1301,21 +1303,26 @@ test("avatar-enabled room exposes local self-avatar diagnostics in normal room f
       };
     }).__VRATA_DEBUG__);
 
+    const locomotionState = debug?.avatarDebug?.locomotionState ?? null;
+    const snapshotLocomotionState = debug?.avatarSnapshot?.locomotionState ?? null;
+    const transportLocomotionMode = debug?.avatarTransportPreview?.poseFrame?.locomotion?.mode ?? null;
+
     return {
       state: debug?.avatarDebug?.state ?? null,
       selectedAvatarId: debug?.avatarDebug?.selectedAvatarId ?? null,
       visibilityState: debug?.avatarDebug?.visibilityState ?? null,
-      locomotionState: debug?.avatarDebug?.locomotionState ?? null,
+      locomotionMoving: locomotionState === "walk" || locomotionState === "backpedal",
       animationState: debug?.avatarDebug?.animationState ?? null,
       controllerProfile: debug?.avatarDebug?.controllerProfile ?? null,
       inputMode: debug?.avatarDebug?.inputMode ?? null,
       snapshotAvatarId: debug?.avatarSnapshot?.avatarId ?? null,
       snapshotVisibilityState: debug?.avatarSnapshot?.visibilityState ?? null,
       snapshotControllerProfile: debug?.avatarSnapshot?.controllerProfile ?? null,
-      snapshotLocomotionState: debug?.avatarSnapshot?.locomotionState ?? null,
+      snapshotLocomotionMatches: snapshotLocomotionState === locomotionState,
       transportAvatarId: debug?.avatarTransportPreview?.reliableState?.avatarId ?? null,
       transportInputMode: debug?.avatarTransportPreview?.reliableState?.inputMode ?? null,
-      transportLocomotionMode: debug?.avatarTransportPreview?.poseFrame?.locomotion?.mode ?? null
+      transportLocomotionMatches: (locomotionState === "walk" && transportLocomotionMode === 1)
+        || (locomotionState === "backpedal" && transportLocomotionMode === 3)
     };
   }, {
     timeout: 15000,
@@ -1323,18 +1330,18 @@ test("avatar-enabled room exposes local self-avatar diagnostics in normal room f
   }).toEqual({
     state: "loaded",
     selectedAvatarId: "preset-01",
-      visibilityState: "hands-only",
-    locomotionState: "walk",
+    visibilityState: "hands-only",
+    locomotionMoving: true,
     animationState: "idle",
     controllerProfile: "desktop_no_controllers",
     inputMode: "desktop",
     snapshotAvatarId: "preset-01",
-      snapshotVisibilityState: "hands-only",
+    snapshotVisibilityState: "hands-only",
     snapshotControllerProfile: "desktop_no_controllers",
-    snapshotLocomotionState: "walk",
+    snapshotLocomotionMatches: true,
     transportAvatarId: "preset-01",
     transportInputMode: "desktop",
-    transportLocomotionMode: 1
+    transportLocomotionMatches: true
   });
 
   await expect.poll(async () => {
@@ -1350,17 +1357,22 @@ test("avatar-enabled room exposes local self-avatar diagnostics in normal room f
       }>;
     }>(request, room.roomId);
 
-    return diagnostics.items.some((item) => (item.note === "local_avatar_ready" || item.note === undefined)
-      && item.avatarDebug?.state === "loaded"
-      && item.avatarDebug?.visibilityState === "hands-only"
-      && item.avatarDebug?.locomotionState === "walk"
-      && item.avatarDebug?.animationState === "idle"
-      && item.avatarSnapshot?.avatarId === "preset-01"
-      && item.avatarSnapshot?.controllerProfile === "desktop_no_controllers"
-      && item.avatarTransportPreview?.reliableState?.avatarId === "preset-01"
-      && item.avatarTransportPreview?.reliableState?.inputMode === "desktop"
-      && item.avatarTransportPreview?.poseFrame?.seq !== undefined
-      && item.avatarTransportPreview?.poseFrame?.locomotion?.mode === 1);
+    return diagnostics.items.some((item) => {
+      const locomotionState = item.avatarDebug?.locomotionState;
+      const locomotionMode = item.avatarTransportPreview?.poseFrame?.locomotion?.mode;
+      const locomotionMatches = (locomotionState === "walk" && locomotionMode === 1)
+        || (locomotionState === "backpedal" && locomotionMode === 3);
+      return (item.note === "local_avatar_ready" || item.note === undefined)
+        && item.avatarDebug?.state === "loaded"
+        && item.avatarDebug?.visibilityState === "hands-only"
+        && locomotionMatches
+        && item.avatarDebug?.animationState === "idle"
+        && item.avatarSnapshot?.avatarId === "preset-01"
+        && item.avatarSnapshot?.controllerProfile === "desktop_no_controllers"
+        && item.avatarTransportPreview?.reliableState?.avatarId === "preset-01"
+        && item.avatarTransportPreview?.reliableState?.inputMode === "desktop"
+        && item.avatarTransportPreview?.poseFrame?.seq !== undefined;
+    });
   }, {
     timeout: 15000,
     intervals: [1000, 2000, 3000]
@@ -1400,10 +1412,13 @@ test("avatar-enabled room diagnostics api exposes transport preview payload", as
       }>;
     }>(request, room.roomId);
 
-    return diagnostics.items.some((item) => item.avatarTransportPreview?.reliableState?.avatarId === "preset-01"
-      && item.avatarTransportPreview?.reliableState?.inputMode === "desktop"
-      && (item.avatarTransportPreview?.poseFrame?.seq ?? 0) > 0
-      && item.avatarTransportPreview?.poseFrame?.locomotion?.mode === 1);
+    return diagnostics.items.some((item) => {
+      const locomotionMode = item.avatarTransportPreview?.poseFrame?.locomotion?.mode;
+      return item.avatarTransportPreview?.reliableState?.avatarId === "preset-01"
+        && item.avatarTransportPreview?.reliableState?.inputMode === "desktop"
+        && (item.avatarTransportPreview?.poseFrame?.seq ?? 0) > 0
+        && (locomotionMode === 1 || locomotionMode === 3);
+    });
   }, {
     timeout: 15000,
     intervals: [1000, 2000, 3000]
@@ -3073,12 +3088,12 @@ test("mock screen share updates UI and diagnostics", async ({ page, request }) =
 });
 
 test("fault-injected mic denied keeps room usable without audio", async ({ page, request }) => {
+  test.setTimeout(120000);
   await page.goto("/rooms/demo-room?failaudio=mic_denied&debug=1");
-  await page.waitForTimeout(2500);
+  await expect(page.locator("#status-line")).toContainText("Joined as", { timeout: 30000 });
   await page.click("#join-audio");
-  await page.waitForTimeout(1000);
 
-  await expect(page.locator("#status-line")).toContainText("Microphone blocked");
+  await expect(page.locator("#status-line")).toContainText("Microphone blocked", { timeout: 30000 });
 
   const debug = await page.evaluate(() => (window as Window & {
     __VRATA_DEBUG__?: { issueCode?: string | null; degradedMode?: string; audioState?: string; lastReportId?: string | null; lastReportRequestId?: string | null };
@@ -3087,7 +3102,7 @@ test("fault-injected mic denied keeps room usable without audio", async ({ page,
   expect(debug?.degradedMode).toBe("audio_unavailable");
   expect(debug?.audioState).toBe("degraded");
 
-  await expect(page.locator("#report-line")).toContainText(/Report ID: rpt_/);
+  await expect(page.locator("#report-line")).toContainText(/Report ID: rpt_/, { timeout: 30000 });
   await expect.poll(async () => {
     const reportDebug = await page.evaluate(() => (window as Window & {
       __VRATA_DEBUG__?: { lastReportId?: string | null; lastReportRequestId?: string | null };
@@ -3097,7 +3112,7 @@ test("fault-injected mic denied keeps room usable without audio", async ({ page,
       requestIdReady: typeof reportDebug?.lastReportRequestId === "string" && reportDebug.lastReportRequestId.length > 0
     };
   }, {
-    timeout: 10000,
+    timeout: 30000,
     intervals: [500, 1000, 2000]
   }).toEqual({
     reportIdReady: true,

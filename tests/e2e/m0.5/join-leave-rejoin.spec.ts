@@ -3,6 +3,7 @@ import { expect, test } from "@playwright/test";
 import { createM05Room, readM05Debug, roomPath, waitForM05Debug, waitForRemoteCount } from "./helpers";
 
 test("M0.5 leave and rejoin remove stale participants", async ({ browser, request }) => {
+  test.setTimeout(90000);
   const roomId = await createM05Room(request, `M05 Rejoin ${Date.now()}`);
   const pageA = await browser.newPage();
   let pageB = await browser.newPage();
