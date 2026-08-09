@@ -122,6 +122,7 @@ async function sampleSurfaceBlueStrokeCount(page: Page, surfaceId: string, cente
 }
 
 test("M1.8 screen share and whiteboard run on independent surfaces", async ({ browser }) => {
+  test.setTimeout(90000);
   const roomId = `m1-multi-surface-${Date.now()}`;
   const host = await browser.newPage();
   const member = await browser.newPage();

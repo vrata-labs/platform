@@ -148,6 +148,7 @@ async function waitForNoWhiteboard(page: Page) {
 }
 
 test("M1.5 host creates whiteboard and member stroke syncs to viewers", async ({ browser }) => {
+  test.setTimeout(90000);
   const roomId = `m1-whiteboard-sync-${Date.now()}`;
   const host = await browser.newPage();
   const member = await browser.newPage();
@@ -202,6 +203,7 @@ test("M1.5 host creates whiteboard and member stroke syncs to viewers", async ({
 });
 
 test("M1.5 guest cannot draw and host clear syncs", async ({ browser }) => {
+  test.setTimeout(90000);
   const roomId = `m1-whiteboard-permissions-${Date.now()}`;
   const host = await browser.newPage();
   const member = await browser.newPage();

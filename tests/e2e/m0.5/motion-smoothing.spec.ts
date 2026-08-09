@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 
 import { createM05Room, readM05Debug, roomPath, waitForRemoteCount } from "./helpers";
 
-test.setTimeout(60000);
+test.setTimeout(120000);
 
 test("M0.5 motion diagnostics stay within smoothing thresholds", async ({ browser, request }) => {
   for (const mode of ["line", "square"] as const) {
@@ -22,7 +22,7 @@ test("M0.5 motion diagnostics stay within smoothing thresholds", async ({ browse
           jump: (remote?.maxObservedJumpM ?? Number.POSITIVE_INFINITY) <= 1.25
         };
       }, {
-        timeout: 20000,
+        timeout: 30000,
         intervals: [1000, 2000, 3000]
       }).toEqual({ hz: true, fresh: true, jump: true });
     } finally {

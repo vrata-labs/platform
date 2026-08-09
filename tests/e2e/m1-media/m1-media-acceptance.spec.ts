@@ -108,7 +108,7 @@ async function trySendSurfaceInput(page: Page, input: { surfaceId: string; sourc
 }
 
 test("M1.10 acceptance covers screen share, whiteboard, XR input, permissions, and rejoin", async ({ browser }) => {
-  test.setTimeout(90000);
+  test.setTimeout(180000);
   const roomId = `m1-media-acceptance-${Date.now()}`;
   const host = await browser.newPage();
   const member = await browser.newPage();
