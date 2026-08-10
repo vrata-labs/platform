@@ -105,6 +105,24 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Read scene assets lock
+        id: scene-assets-ref
+        shell: bash
+        run: |
+          sha="$(tr -d '\r\n' < scene-assets.lock)"
+          if [[ ! "$sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "invalid_scene_assets_lock" >&2
+            exit 1
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout locked scene assets
+        uses: actions/checkout@v4
+        with:
+          repository: vrata-labs/scene-assets
+          ref: ${{ steps.scene-assets-ref.outputs.sha }}
+          path: .scene-assets
+
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
 
@@ -117,11 +135,14 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build asset pipeline
-        run: pnpm --filter @vrata/asset-pipeline build
+      - name: Build asset and template contracts
+        run: pnpm --filter @vrata/shared-types --filter @vrata/templates --filter @vrata/asset-pipeline build
 
       - name: Asset pipeline tests
         run: pnpm --filter @vrata/asset-pipeline test
 
       - name: Asset validator sample run
         run: pnpm --filter @vrata/asset-pipeline validate:sample
+
+      - name: Validate locked reference template assets
+        run: pnpm validate:reference-template-assets

@@ -2,7 +2,18 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { isMediaObjectTypeAvailable } from "@vrata/shared-types";
 
-import { getStandardRoomTemplateSceneContract, listStandardRoomTemplateSceneContracts, resolveRoomTemplateAssetUrl, templates, validateRoomTemplateAssetLock, validateRoomTemplateVersionContract, type TemplateDefinition } from "./index.js";
+import {
+  STANDARD_ROOM_ASSETS_COMMIT_SHA,
+  getStandardRoomTemplateSceneContract,
+  getStandardRoomTemplateVersionContract,
+  listStandardRoomTemplateSceneContracts,
+  listStandardRoomTemplateVersionContracts,
+  resolveRoomTemplateAssetUrl,
+  templates,
+  validateRoomTemplateAssetLock,
+  validateRoomTemplateVersionContract,
+  type TemplateDefinition
+} from "./index.js";
 import type { RoomTemplateAssetLock, RoomTemplateVersionContractV1 } from "@vrata/shared-types";
 import { createSpaceManifest, getCurrentTemplateVersion, getTemplateDefinition, getTemplateVersion, listTemplateDefinitions } from "./registry.js";
 
@@ -96,6 +107,207 @@ test("standard room scene contract lookups return defensive clones", () => {
   assert.equal(fresh?.surfaces[0]?.allowedObjectTypes.includes("spoofed-object"), false);
   assert.equal(getStandardRoomTemplateSceneContract("personal-room-basic", "0.1.0"), undefined);
   assert.equal(getStandardRoomTemplateSceneContract("unknown-template", "1.0.0"), undefined);
+});
+
+test("standard room version definitions pin final defaults and exact asset releases", () => {
+  const definitions = listStandardRoomTemplateVersionContracts();
+  assert.equal(STANDARD_ROOM_ASSETS_COMMIT_SHA, "908331faf0eedb345d60eb1966b89994f5a8fb4b");
+  assert.deepEqual(
+    definitions.map(({ templateId, version, scene, assetLock }) => ({
+      templateId,
+      version,
+      sceneReleaseId: assetLock.sceneReleaseId,
+      sceneId: scene.sceneId,
+      commitSha: assetLock.commitSha
+    })),
+    [
+      {
+        templateId: "personal-room-basic",
+        version: "1.0.0",
+        sceneReleaseId: "personal-workspace-v1@1.0.0",
+        sceneId: "personal-workspace-v1",
+        commitSha: STANDARD_ROOM_ASSETS_COMMIT_SHA
+      },
+      {
+        templateId: "meeting-room-basic",
+        version: "1.0.0",
+        sceneReleaseId: "meeting-room-v1@1.0.0",
+        sceneId: "meeting-room-v1",
+        commitSha: STANDARD_ROOM_ASSETS_COMMIT_SHA
+      },
+      {
+        templateId: "presentation-room-basic",
+        version: "1.0.0",
+        sceneReleaseId: "presentation-room-v1@1.0.0",
+        sceneId: "presentation-room-v1",
+        commitSha: STANDARD_ROOM_ASSETS_COMMIT_SHA
+      }
+    ]
+  );
+  assert.deepEqual(definitions.map(({ defaults }) => defaults.settings.audio.joinMutedByDefault), [false, false, true]);
+  assert.deepEqual(definitions.map(({ templateId, label, description, assetSlots, defaults }) => ({
+    templateId,
+    label,
+    description,
+    assetSlots,
+    roomType: defaults.roomType,
+    visibility: defaults.visibility,
+    guestAllowed: defaults.guestAllowed,
+    features: defaults.features,
+    theme: defaults.theme,
+    avatarConfig: defaults.avatarConfig,
+    settings: defaults.settings
+  })), [
+    {
+      templateId: "personal-room-basic",
+      label: "Personal Workspace",
+      description: "A private addressable workspace with personal notes and a focused workspace surface.",
+      assetSlots: ["logo", "personal-surface"],
+      roomType: "personal",
+      visibility: "private",
+      guestAllowed: false,
+      features: { voice: true, spatialAudio: true, screenShare: false },
+      theme: { primaryColor: "#7dd3fc", accentColor: "#312e81" },
+      avatarConfig: {
+        avatarsEnabled: true,
+        avatarCatalogUrl: "/assets/avatars/catalog.v1.json",
+        avatarQualityProfile: "desktop-standard",
+        avatarFallbackCapsulesEnabled: true,
+        avatarSeatsEnabled: true
+      },
+      settings: {
+        layout: "personal-workspace",
+        notes: { enabled: true, defaultScope: "private" },
+        audio: { enabled: true, spatial: true, joinMutedByDefault: false, participantLayout: "owner-focused" },
+        presentation: { enabled: false }
+      }
+    },
+    {
+      templateId: "meeting-room-basic",
+      label: "Meeting Room",
+      description: "A small-group room with spatial audio, four participant seats, a shared display, and a collaboration wall.",
+      assetSlots: ["logo", "hero-screen"],
+      roomType: "standard",
+      visibility: "public",
+      guestAllowed: true,
+      features: { voice: true, spatialAudio: true, screenShare: true },
+      theme: { primaryColor: "#5fc8ff", accentColor: "#163354" },
+      avatarConfig: {
+        avatarsEnabled: true,
+        avatarCatalogUrl: "/assets/avatars/catalog.v1.json",
+        avatarQualityProfile: "desktop-standard",
+        avatarFallbackCapsulesEnabled: true,
+        avatarSeatsEnabled: true
+      },
+      settings: {
+        layout: "meeting",
+        notes: { enabled: true, defaultScope: "shared" },
+        audio: { enabled: true, spatial: true, joinMutedByDefault: false, participantLayout: "round-table" },
+        presentation: { enabled: true, surfaceId: "debug-main" }
+      }
+    },
+    {
+      templateId: "presentation-room-basic",
+      label: "Presentation Room",
+      description: "An audience-oriented room with a dedicated presentation surface and presenter media controls.",
+      assetSlots: ["logo", "hero-screen", "media-placeholder"],
+      roomType: "standard",
+      visibility: "public",
+      guestAllowed: true,
+      features: { voice: true, spatialAudio: true, screenShare: true },
+      theme: { primaryColor: "#f59e0b", accentColor: "#1e293b" },
+      avatarConfig: {
+        avatarsEnabled: true,
+        avatarCatalogUrl: "/assets/avatars/catalog.v1.json",
+        avatarQualityProfile: "desktop-standard",
+        avatarFallbackCapsulesEnabled: true,
+        avatarSeatsEnabled: true
+      },
+      settings: {
+        layout: "presentation",
+        notes: { enabled: true, defaultScope: "shared" },
+        audio: { enabled: true, spatial: true, joinMutedByDefault: true, participantLayout: "audience" },
+        presentation: { enabled: true, surfaceId: "debug-main" }
+      }
+    }
+  ]);
+  assert.deepEqual(definitions.map(({ scene }) => scene.seats), [
+    { minimum: 2, maximum: 2 },
+    { minimum: 4, maximum: 4 },
+    { minimum: 6, maximum: 24 }
+  ]);
+  assert.deepEqual(definitions.map(({ defaults }) => defaults.surfaces), [
+    [{
+      surfaceId: "debug-main",
+      label: "Personal workspace",
+      purpose: "workspace",
+      allowedObjectTypes: ["markdown-board", "image-viewer", "video-player"],
+      aspectRatio: { width: 2, height: 1, maxRelativeError: 0.02 }
+    }],
+    [
+      {
+        surfaceId: "debug-main",
+        label: "Meeting display",
+        purpose: "collaboration",
+        allowedObjectTypes: ["screen-share", "pdf-presentation", "image-viewer", "video-player", "remote-browser"],
+        aspectRatio: { width: 16, height: 9, maxRelativeError: 0.02 }
+      },
+      {
+        surfaceId: "whiteboard-wall",
+        label: "Collaboration wall",
+        purpose: "collaboration",
+        allowedObjectTypes: ["whiteboard", "markdown-board"],
+        aspectRatio: { width: 48, height: 25, maxRelativeError: 0.02 }
+      }
+    ],
+    [{
+      surfaceId: "debug-main",
+      label: "Presentation screen",
+      purpose: "presentation",
+      allowedObjectTypes: ["pdf-presentation", "screen-share", "image-viewer", "video-player", "remote-browser"],
+      aspectRatio: { width: 16, height: 9, maxRelativeError: 0.02 }
+    }]
+  ]);
+  assert.deepEqual(definitions.map(({ assetLock }) => assetLock.releaseManifest), [
+    { path: "manifest.json", sha256: "1be3bd12c5ddb6935c11227e64c8175a76d38022d9ebf7e9f598dab059611ce0", sizeBytes: 17865 },
+    { path: "manifest.json", sha256: "1be3bd12c5ddb6935c11227e64c8175a76d38022d9ebf7e9f598dab059611ce0", sizeBytes: 17865 },
+    { path: "manifest.json", sha256: "1be3bd12c5ddb6935c11227e64c8175a76d38022d9ebf7e9f598dab059611ce0", sizeBytes: 17865 }
+  ]);
+  for (const definition of definitions) {
+    assert.deepEqual(validateRoomTemplateVersionContract(definition), []);
+  }
+
+  const personal = definitions[0]!;
+  assert.deepEqual({
+    roomType: personal.defaults.roomType,
+    visibility: personal.defaults.visibility,
+    guestAllowed: personal.defaults.guestAllowed,
+    screenShare: personal.defaults.features.screenShare,
+    noteScope: personal.defaults.settings.notes.defaultScope,
+    surfaces: personal.defaults.surfaces.map(({ surfaceId }) => surfaceId)
+  }, {
+    roomType: "personal",
+    visibility: "private",
+    guestAllowed: false,
+    screenShare: false,
+    noteScope: "private",
+    surfaces: ["debug-main"]
+  });
+});
+
+test("standard room version lookups return deep defensive copies", () => {
+  const first = getStandardRoomTemplateVersionContract("meeting-room-basic", "1.0.0");
+  assert.ok(first);
+  first.defaults.theme.primaryColor = "#000000";
+  first.defaults.surfaces[0]!.allowedObjectTypes.push("spoofed-object");
+  first.assetLock.sceneManifest.path = "spoofed/scene.json";
+
+  const fresh = getStandardRoomTemplateVersionContract("meeting-room-basic", "1.0.0");
+  assert.equal(fresh?.defaults.theme.primaryColor, "#5fc8ff");
+  assert.equal(fresh?.defaults.surfaces[0]?.allowedObjectTypes.includes("spoofed-object"), false);
+  assert.equal(fresh?.assetLock.sceneManifest.path, "assets/scenes/meeting-room-v1/1.0.0/scene.json");
+  assert.equal(getStandardRoomTemplateVersionContract("meeting-room-basic", "0.1.0"), undefined);
+  assert.equal(getStandardRoomTemplateVersionContract("unknown-template", "1.0.0"), undefined);
 });
 
 test("asset lock validation and URL resolution require immutable safe inputs", () => {

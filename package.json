@@ -21,6 +21,7 @@
     "test:m0.5": "pnpm run lint && pnpm run typecheck && pnpm run build && pnpm run test && pnpm exec playwright test tests/e2e/m0.5 --workers=1",
     "test:m1-media": "pnpm run lint && pnpm run typecheck && pnpm run build && pnpm run test && pnpm exec playwright test tests/e2e/m1-media --grep-invert \"@staging|@private-assets\"",
     "validate:avatars": "pnpm --filter @vrata/asset-pipeline build && pnpm --filter @vrata/asset-pipeline validate:avatars",
+    "validate:reference-template-assets": "node tools/validate-reference-template-assets.mjs",
     "test:e2e": "playwright test --grep-invert \"@staging|@private-assets\"",
     "test:e2e:private-assets": "playwright test --grep @private-assets --grep-invert @staging",
     "test:e2e:staging": "node tools/run-staging-e2e.mjs",
