@@ -375,6 +375,7 @@ test("room documents library uploads downloads selects and deletes PDF", async (
   await expect(page.locator("#documents-panel")).toBeVisible();
   await expect(page.locator("#document-upload-button")).toBeEnabled({ timeout: 10000 });
   await expect(page.locator("#document-status")).toContainText(/No room documents yet|Documents ready/, { timeout: 10000 });
+  await page.waitForTimeout(2200);
   backgroundDocumentListRequests = 0;
   await page.waitForTimeout(2200);
   expect(backgroundDocumentListRequests).toBe(0);
