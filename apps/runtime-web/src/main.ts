@@ -1701,6 +1701,7 @@ function renderHostControls(statusMessage?: string): void {
 
 function applyAccessDebug(access: NonNullable<RuntimeSessionControlResponse["access"]>, token: string, expiresInSeconds?: number): void {
   const previousRole = debugState.access.role;
+  const previouslyCouldViewDocuments = canViewDocuments();
   const previousLastDeniedPermission = debugState.access.lastDeniedPermission;
   const previousLastSurfaceCommandAccepted = debugState.access.lastSurfaceCommandAccepted;
   roomStateAccessToken = token;
@@ -1727,7 +1728,7 @@ function applyAccessDebug(access: NonNullable<RuntimeSessionControlResponse["acc
   if (canViewNotes() && notesSaveState === "idle") {
     void loadActiveNote();
   }
-  if (canViewDocuments()) {
+  if (!previouslyCouldViewDocuments && canViewDocuments()) {
     void loadRoomDocuments();
   }
 }

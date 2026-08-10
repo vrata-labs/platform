@@ -360,6 +360,12 @@ test("room documents library uploads downloads selects and deletes PDF", async (
   });
   expect(roomResponse.ok()).toBeTruthy();
   const room = (await roomResponse.json()) as { roomId: string; roomLink: string };
+  let backgroundDocumentListRequests = 0;
+  page.on("request", (request) => {
+    if (request.method() === "GET" && new URL(request.url()).pathname === `/api/rooms/${room.roomId}/documents`) {
+      backgroundDocumentListRequests += 1;
+    }
+  });
   const hostInvite = await createRoomInvite(request, room.roomId, false, "host");
   const memberInvite = await createRoomInvite(request, room.roomId, false, "member");
   const guestInvite = await createRoomInvite(request, room.roomId, false, "guest");
@@ -369,6 +375,10 @@ test("room documents library uploads downloads selects and deletes PDF", async (
   await expect(page.locator("#documents-panel")).toBeVisible();
   await expect(page.locator("#document-upload-button")).toBeEnabled({ timeout: 10000 });
   await expect(page.locator("#document-status")).toContainText(/No room documents yet|Documents ready/, { timeout: 10000 });
+  await page.waitForTimeout(2200);
+  backgroundDocumentListRequests = 0;
+  await page.waitForTimeout(2200);
+  expect(backgroundDocumentListRequests).toBe(0);
 
   const pdf = await PDFDocument.create();
   pdf.setTitle("E2E presentation");
