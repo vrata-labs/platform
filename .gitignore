@@ -4,6 +4,7 @@ dist/
 build/
 .turbo/
 .cache/
+.scene-assets/
 .DS_Store
 .env
 .env.local
