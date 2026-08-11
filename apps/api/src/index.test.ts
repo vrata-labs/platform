@@ -1689,8 +1689,8 @@ test("template and room APIs add server-owned version metadata without changing 
       },
       body: JSON.stringify({ templateId: "showroom-basic" })
     });
-    assert.equal(incompatibleTemplateResponse.status, 400);
-    assert.deepEqual(await incompatibleTemplateResponse.json(), { error: "asset_kind_not_supported_by_template" });
+    assert.equal(incompatibleTemplateResponse.status, 409);
+    assert.deepEqual(await incompatibleTemplateResponse.json(), { error: "room_template_binding_changed" });
 
     const unknownTemplateResponse = await fetch(`http://127.0.0.1:4061/api/rooms/${created.roomId}`, {
       method: "PATCH",

@@ -3746,7 +3746,11 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       room = await storage.createRoom(payload);
     } catch (error) {
       const message = error instanceof Error ? error.message : "room_create_failed";
-      const reason = /duplicate key|unique constraint|already exists/i.test(message) ? "room_slug_conflict" : "room_create_failed";
+      const reason = /duplicate key|unique constraint|already exists/i.test(message)
+        ? "room_slug_conflict"
+        : /^(template_deprecated|template_version_not_found):/.test(message)
+          ? "invalid_template"
+          : "room_create_failed";
       incrementCounter(metrics.roomCreationFailuresTotal, reason);
       return json(response, reason === "room_slug_conflict" ? 409 : 400, { error: reason });
     }
@@ -3786,19 +3790,28 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       incrementCounter(metrics.personalRoomOpensTotal, "slug_conflict");
       return json(response, 409, { error: "room_slug_conflict" });
     }
-    const room = await storage.createRoom({
-      roomId,
-      tenantId,
-      templateId: "personal-workspace-basic",
-      name: personalRoomName(displayName),
-      roomType: "personal",
-      ownerParticipantId: participantId,
-      visibility: "private",
-      guestAllowed: false,
-      features: { voice: true, spatialAudio: true, screenShare: true },
-      theme: { primaryColor: "#7dd3fc", accentColor: "#312e81" },
-      sessionControl: { hostParticipantId: participantId }
-    });
+    let room: RoomRecord;
+    try {
+      room = await storage.createRoom({
+        roomId,
+        tenantId,
+        templateId: "personal-workspace-basic",
+        name: personalRoomName(displayName),
+        roomType: "personal",
+        ownerParticipantId: participantId,
+        visibility: "private",
+        guestAllowed: false,
+        features: { voice: true, spatialAudio: true, screenShare: true },
+        theme: { primaryColor: "#7dd3fc", accentColor: "#312e81" },
+        sessionControl: { hostParticipantId: participantId }
+      });
+    } catch (error) {
+      if (error instanceof Error && /^(template_deprecated|template_version_not_found):/.test(error.message)) {
+        incrementCounter(metrics.personalRoomOpensTotal, "template_unavailable");
+        return json(response, 503, { error: "personal_room_template_unavailable" });
+      }
+      throw error;
+    }
     metrics.personalRoomsCreatedTotal += 1;
     incrementCounter(metrics.roomsCreatedTotal, "self-service:private");
     incrementCounter(metrics.personalRoomOpensTotal, "created");
@@ -4255,8 +4268,11 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     if (payload.visibility !== undefined && !isRoomVisibility(payload.visibility)) return json(response, 400, { error: "invalid_room_visibility" });
     if (payload.roomType !== undefined && payload.roomType !== "standard" && payload.roomType !== "personal") return json(response, 400, { error: "invalid_room_type" });
     if (payload.templateId !== undefined) {
-      const templateIds = new Set((await storage.listTemplates()).map((template) => template.templateId));
-      if (!templateIds.has(payload.templateId)) return json(response, 400, { error: "invalid_template" });
+      if (payload.templateId !== existingRoom.templateId) {
+        const templateIds = new Set((await storage.listTemplates()).map((template) => template.templateId));
+        if (!templateIds.has(payload.templateId)) return json(response, 400, { error: "invalid_template" });
+        return json(response, 409, { error: "room_template_binding_changed" });
+      }
     }
     if (payload.assetIds || payload.templateId !== undefined) {
       const effectiveTemplateId = payload.templateId ?? existingRoom.templateId;

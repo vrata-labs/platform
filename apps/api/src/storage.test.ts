@@ -250,6 +250,33 @@ test("MemoryStorage exposes versioned template catalog and clone-safe lookup", a
   assert.deepEqual((await storage.getTemplateVersion("meeting-room-basic"))?.assetSlots, ["logo", "hero-screen"]);
 });
 
+test("MemoryStorage hides deprecated templates while preserving existing rooms", async () => {
+  const storage = new MemoryStorage();
+  const existingRoom = await storage.createRoom({
+    roomId: "memory-deprecated-template-room",
+    templateId: "showroom-basic",
+    name: "Deprecated Template Room"
+  });
+  const internals = storage as unknown as {
+    templates: Map<string, { templateId: string; label: string; assetSlots: string[]; currentVersion: string; status: "active" | "deprecated" }>;
+  };
+  const template = internals.templates.get("showroom-basic");
+  assert.ok(template);
+  internals.templates.set("showroom-basic", { ...template, status: "deprecated" });
+
+  assert.equal((await storage.listTemplates()).some(({ templateId }) => templateId === "showroom-basic"), false);
+  assert.equal((await storage.getTemplateVersion("showroom-basic", "0.1.0"))?.version, "0.1.0");
+  await assert.rejects(
+    storage.createRoom({ templateId: "showroom-basic", name: "Rejected Deprecated Room" }),
+    /template_deprecated:showroom-basic/
+  );
+
+  const updated = await storage.updateRoom(existingRoom.roomId, { name: "Still Editable" });
+  assert.equal(updated?.name, "Still Editable");
+  assert.equal(updated?.templateId, "showroom-basic");
+  assert.equal(updated?.templateVersion, "0.1.0");
+});
+
 test("MemoryStorage snapshots resolved room config and ignores spoofed metadata", async () => {
   const storage = new MemoryStorage();
   const spoofedSnapshot = {
@@ -365,6 +392,14 @@ test("MemoryStorage keeps a room pinned when its template current version advanc
   assert.equal(updated.templateSnapshot.version, "0.1.0");
   assert.equal(updated.templateSnapshot.roomConfig.visibility, "private");
 
+  await assert.rejects(
+    storage.updateRoom(pinned.roomId, { templateId: "showroom-basic" }),
+    /room_template_binding_changed/
+  );
+  const afterRejectedSwitch = await storage.getRoom(pinned.roomId);
+  assert.equal(afterRejectedSwitch?.templateId, "meeting-room-basic");
+  assert.equal(afterRejectedSwitch?.templateVersion, "0.1.0");
+
   const createdAfterAdvance = await storage.createRoom({
     roomId: "memory-current-room",
     templateId: "meeting-room-basic",
@@ -468,19 +503,41 @@ test("Postgres storage init adds session control column before altering its defa
 });
 
 test("Postgres storage init builds the nullable append-only template bridge", async () => {
+  const wave2Snapshot = {
+    schemaVersion: 1 as const,
+    templateId: "wave2-database-only-template",
+    version: "1.0.0",
+    label: "Wave 2 Database Only Template",
+    assetSlots: ["presentation-screen"]
+  };
   const fake = createPostgresInitPool({
-    extraTemplates: [{
-      template_id: "database-only-template",
-      label: "Database Only Template",
-      asset_slots: ["logo"],
-      current_version: null,
-      status: null
+    extraTemplates: [
+      {
+        template_id: "database-only-template",
+        label: "Database Only Template",
+        asset_slots: ["logo"],
+        current_version: null,
+        status: null
+      },
+      {
+        template_id: wave2Snapshot.templateId,
+        label: wave2Snapshot.label,
+        asset_slots: [...wave2Snapshot.assetSlots],
+        current_version: wave2Snapshot.version,
+        status: "deprecated"
+      }
+    ],
+    versions: [{
+      templateId: wave2Snapshot.templateId,
+      version: wave2Snapshot.version,
+      snapshot: wave2Snapshot,
+      contentHash: templateVersionHash(wave2Snapshot)
     }]
   });
 
   await new PostgresStorage(fake.pool as unknown as ConstructorParameters<typeof PostgresStorage>[0]).init();
 
-  assert.equal(fake.versions.size, 5);
+  assert.equal(fake.versions.size, 6);
   assert.deepEqual(fake.versions.get("database-only-template::0.1.0")?.snapshot, {
     schemaVersion: 1,
     templateId: "database-only-template",
@@ -491,12 +548,17 @@ test("Postgres storage init builds the nullable append-only template bridge", as
   assert.match(fake.versions.get("database-only-template::0.1.0")?.content_hash ?? "", /^[a-f0-9]{64}$/);
   assert.equal(fake.templates.get("database-only-template")?.current_version, "0.1.0");
   assert.equal(fake.templates.get("database-only-template")?.status, "active");
+  assert.deepEqual(fake.versions.get(`${wave2Snapshot.templateId}::${wave2Snapshot.version}`)?.snapshot, wave2Snapshot);
+  assert.equal(fake.versions.has(`${wave2Snapshot.templateId}::0.1.0`), false);
+  assert.equal(fake.templates.get(wave2Snapshot.templateId)?.current_version, "1.0.0");
+  assert.equal(fake.templates.get(wave2Snapshot.templateId)?.status, "deprecated");
   assert.deepEqual(Array.from(fake.templates.keys()).sort(), [
     "database-only-template",
     "event-demo-basic",
     "meeting-room-basic",
     "personal-workspace-basic",
-    "showroom-basic"
+    "showroom-basic",
+    "wave2-database-only-template"
   ]);
 
   const sql = fake.queries.map((query) => query.sql).join("\n");
@@ -511,10 +573,33 @@ test("Postgres storage init builds the nullable append-only template bridge", as
 
   const legacyInsert = fake.queries.find(({ sql: querySql }) => querySql.includes("insert into rooms (room_id, tenant_id, template_id, name"));
   assert.ok(legacyInsert);
-  assert.doesNotMatch(legacyInsert.sql, /template_version|template_snapshot/);
+  assert.match(legacyInsert.sql, /template_version, template_snapshot/);
+  assert.equal(legacyInsert.values[4], "0.1.0");
+  const demoSnapshot = JSON.parse(String(legacyInsert.values[5])) as { templateId: string; version: string; roomConfig?: unknown };
+  assert.equal(demoSnapshot.templateId, "meeting-room-basic");
+  assert.equal(demoSnapshot.version, "0.1.0");
+  assert.ok(demoSnapshot.roomConfig);
   const repairIndex = fake.queries.findIndex(({ sql: querySql }) => querySql.includes("with desired as") && querySql.includes("update rooms"));
   const triggerIndex = fake.queries.findIndex(({ sql: querySql }) => querySql.includes("create trigger template_versions_immutable"));
   assert.ok(repairIndex >= 0 && triggerIndex > repairIndex);
+});
+
+test("Postgres storage init rejects a dangling database-only current version", async () => {
+  const fake = createPostgresInitPool({
+    extraTemplates: [{
+      template_id: "dangling-database-only-template",
+      label: "Dangling Database Only Template",
+      asset_slots: ["logo"],
+      current_version: "1.0.0",
+      status: "deprecated"
+    }]
+  });
+
+  await assert.rejects(
+    new PostgresStorage(fake.pool as unknown as ConstructorParameters<typeof PostgresStorage>[0]).init(),
+    /template_version_not_found:dangling-database-only-template@1\.0\.0/
+  );
+  assert.equal(fake.versions.has("dangling-database-only-template::0.1.0"), false);
 });
 
 test("Postgres storage creates the immutable trigger function beside its table", async () => {
@@ -554,6 +639,9 @@ test("Postgres template listing rejects unsupported non-null status", async () =
 
   const nullStatusStorage = new PostgresStorage(createPool(null) as unknown as ConstructorParameters<typeof PostgresStorage>[0]);
   assert.equal((await nullStatusStorage.listTemplates())[0]?.status, "active");
+
+  const deprecatedStorage = new PostgresStorage(createPool("deprecated") as unknown as ConstructorParameters<typeof PostgresStorage>[0]);
+  assert.deepEqual(await deprecatedStorage.listTemplates(), []);
 
   const unsupportedStatusStorage = new PostgresStorage(createPool("retired") as unknown as ConstructorParameters<typeof PostgresStorage>[0]);
   await assert.rejects(

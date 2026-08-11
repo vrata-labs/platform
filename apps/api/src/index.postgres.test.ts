@@ -145,6 +145,77 @@ test("API serves server-owned template metadata through PostgreSQL storage", {
       template_version: "0.1.0",
       snapshot_template_id: "meeting-room-basic"
     });
+
+    await adminPool.query(
+      `update "${schema}".templates set status = 'deprecated' where template_id = 'meeting-room-basic'`
+    );
+    const activeTemplatesResponse = await fetch(`${baseUrl}/api/templates`);
+    assert.equal(activeTemplatesResponse.status, 200);
+    const activeTemplates = await activeTemplatesResponse.json() as { items: Array<{ templateId: string }> };
+    assert.equal(activeTemplates.items.some(({ templateId }) => templateId === "meeting-room-basic"), false);
+
+    const deprecatedCreateResponse = await fetch(`${baseUrl}/api/rooms`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-vrata-admin-token": "postgres-api-test-admin"
+      },
+      body: JSON.stringify({
+        roomId: "postgres-deprecated-template-room",
+        tenantId: "demo-tenant",
+        templateId: "meeting-room-basic",
+        name: "Rejected Deprecated Template Room"
+      })
+    });
+    assert.equal(deprecatedCreateResponse.status, 400);
+    assert.deepEqual(await deprecatedCreateResponse.json(), { error: "invalid_template" });
+
+    const existingDeprecatedUpdateResponse = await fetch(`${baseUrl}/api/rooms/postgres-template-room`, {
+      method: "PATCH",
+      headers: {
+        "content-type": "application/json",
+        "x-vrata-admin-token": "postgres-api-test-admin"
+      },
+      body: JSON.stringify({ name: "Existing Deprecated Room Updated", templateId: "meeting-room-basic" })
+    });
+    assert.equal(existingDeprecatedUpdateResponse.status, 200, logs);
+    const existingDeprecatedUpdated = await existingDeprecatedUpdateResponse.json() as { name: string; templateId: string; templateVersion: string };
+    assert.equal(existingDeprecatedUpdated.name, "Existing Deprecated Room Updated");
+    assert.equal(existingDeprecatedUpdated.templateId, "meeting-room-basic");
+    assert.equal(existingDeprecatedUpdated.templateVersion, "0.1.0");
+
+    const rebindResponse = await fetch(`${baseUrl}/api/rooms/postgres-template-room`, {
+      method: "PATCH",
+      headers: {
+        "content-type": "application/json",
+        "x-vrata-admin-token": "postgres-api-test-admin"
+      },
+      body: JSON.stringify({ templateId: "event-demo-basic" })
+    });
+    assert.equal(rebindResponse.status, 409);
+    assert.deepEqual(await rebindResponse.json(), { error: "room_template_binding_changed" });
+    const bindingAfterRejectedRebind = await adminPool.query(
+      `select template_id, template_version from "${schema}".rooms where room_id = 'postgres-template-room'`
+    );
+    assert.deepEqual(bindingAfterRejectedRebind.rows[0], {
+      template_id: "meeting-room-basic",
+      template_version: "0.1.0"
+    });
+
+    await adminPool.query(
+      `update "${schema}".templates set status = 'deprecated' where template_id = 'personal-workspace-basic'`
+    );
+    const unavailablePersonalTemplateResponse = await fetch(`${baseUrl}/api/personal-room`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ participantId: "postgres-personal-template-unavailable" })
+    });
+    assert.equal(unavailablePersonalTemplateResponse.status, 503);
+    assert.deepEqual(await unavailablePersonalTemplateResponse.json(), { error: "personal_room_template_unavailable" });
+    const unavailablePersonalRoomCount = await adminPool.query(
+      `select count(*)::integer as count from "${schema}".rooms where owner_participant_id = 'postgres-personal-template-unavailable'`
+    );
+    assert.equal(unavailablePersonalRoomCount.rows[0]?.count, 0);
   } finally {
     if (child) await stopChild(child);
     await adminPool.query(`drop schema if exists "${schema}" cascade`);

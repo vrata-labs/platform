@@ -1141,12 +1141,13 @@ updateRoomButton.addEventListener("click", () => {
   if (!state.selectedRoom) {
     return;
   }
+  const selectedRoomTemplateIsActive = state.templates.some((template) => template.templateId === state.selectedRoom?.templateId);
   state.publishStatus = "publishing";
   state.statusMessage = "publishing";
   render();
   void updateRoom(apiBaseUrl, state.selectedRoom.roomId, {
     name: roomNameInput.value,
-    templateId: templateSelect.value,
+    ...(selectedRoomTemplateIsActive ? { templateId: templateSelect.value } : {}),
     assetIds: Array.from(assetSelect.selectedOptions).map((option) => option.value),
     visibility: roomVisibilitySelect.value as "public" | "unlisted" | "private",
     guestAllowed: guestAccessInput.checked,

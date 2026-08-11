@@ -102,6 +102,31 @@ test("PostgresStorage upgrades legacy schema and preserves pinned template versi
     assert.deepEqual(postgresTemplateIds, memoryTemplateIds);
     assert.equal((await storages[0].getRoom("legacy-pinned-room"))?.templateVersion, "0.1.0");
 
+    let templateDeprecatedBeforeInsert = false;
+    const createRacePool = {
+      async query(sql: string, values?: unknown[]) {
+        if (!templateDeprecatedBeforeInsert && /^\s*insert into rooms/.test(sql)) {
+          templateDeprecatedBeforeInsert = true;
+          await pools[1].query(`update templates set status = 'deprecated' where template_id = 'meeting-room-basic'`);
+        }
+        return pools[0].query(sql, values);
+      }
+    };
+    const createRaceStorage = new PostgresStorage(createRacePool as unknown as Pool);
+    await assert.rejects(
+      createRaceStorage.createRoom({
+        roomId: "concurrent-deprecated-create",
+        tenantId: "legacy-tenant",
+        templateId: "meeting-room-basic",
+        name: "Concurrent Deprecated Create"
+      }),
+      /template_deprecated:meeting-room-basic/
+    );
+    assert.equal(templateDeprecatedBeforeInsert, true);
+    const rejectedConcurrentCreate = await pools[0].query(`select 1 from rooms where room_id = 'concurrent-deprecated-create'`);
+    assert.equal(rejectedConcurrentCreate.rowCount, 0);
+    await pools[0].query(`update templates set status = 'active' where template_id = 'meeting-room-basic'`);
+
     await pools[0].query(`
       insert into templates (template_id, label, asset_slots)
       values ('legacy-database-only', 'Legacy Database Only', '["logo"]'::jsonb);
@@ -128,14 +153,19 @@ test("PostgresStorage upgrades legacy schema and preserves pinned template versi
     assert.equal((await storages[0].getRoom("legacy-database-only-room"))?.templateVersion, "0.1.0");
 
     await pools[0].query(`update templates set status = 'deprecated' where template_id = 'legacy-database-only'`);
-    assert.equal((await storages[0].listTemplates()).find((template) => template.templateId === "legacy-database-only")?.status, "deprecated");
-    const deprecatedTemplateRoom = await storages[0].createRoom({
-      roomId: "deprecated-database-only-room",
-      tenantId: "legacy-tenant",
-      templateId: "legacy-database-only",
-      name: "Deprecated Database Only Room"
-    });
-    assert.equal(deprecatedTemplateRoom.templateVersion, "0.1.0");
+    assert.equal((await storages[0].listTemplates()).some((template) => template.templateId === "legacy-database-only"), false);
+    await assert.rejects(
+      storages[0].createRoom({
+        roomId: "deprecated-database-only-room",
+        tenantId: "legacy-tenant",
+        templateId: "legacy-database-only",
+        name: "Deprecated Database Only Room"
+      }),
+      /template_deprecated:legacy-database-only/
+    );
+    const updatedDeprecatedRoom = await storages[0].updateRoom("legacy-database-only-room", { name: "Deprecated Room Still Editable" });
+    assert.equal(updatedDeprecatedRoom?.name, "Deprecated Room Still Editable");
+    assert.equal(updatedDeprecatedRoom?.templateVersion, "0.1.0");
     await pools[0].query(`update templates set status = 'retired' where template_id = 'legacy-database-only'`);
     await assert.rejects(
       storages[0].listTemplates(),
@@ -227,6 +257,35 @@ test("PostgresStorage upgrades legacy schema and preserves pinned template versi
       snapshot_template_id: "meeting-room-basic"
     });
 
+    const concurrentBindingRoom = await storages[0].createRoom({
+      roomId: "concurrent-binding-room",
+      tenantId: "legacy-tenant",
+      templateId: "meeting-room-basic",
+      name: "Concurrent Binding Room"
+    });
+    let bindingChangedBeforeGuardedUpdate = false;
+    const racingPool = {
+      async query(sql: string, values?: unknown[]) {
+        if (!bindingChangedBeforeGuardedUpdate && /^\s*update rooms set name\s*=/.test(sql)) {
+          bindingChangedBeforeGuardedUpdate = true;
+          await pools[1].query(
+            `update rooms set template_id = 'showroom-basic' where room_id = $1`,
+            [concurrentBindingRoom.roomId]
+          );
+        }
+        return pools[0].query(sql, values);
+      }
+    };
+    const racingStorage = new PostgresStorage(racingPool as unknown as Pool);
+    await assert.rejects(
+      racingStorage.updateRoom(concurrentBindingRoom.roomId, { name: "Must Not Cross Binding" }),
+      /room_template_binding_changed/
+    );
+    assert.equal(bindingChangedBeforeGuardedUpdate, true);
+    const concurrentBindingAfterRejectedUpdate = await storages[0].getRoom(concurrentBindingRoom.roomId);
+    assert.equal(concurrentBindingAfterRejectedUpdate?.templateId, "showroom-basic");
+    assert.equal(concurrentBindingAfterRejectedUpdate?.name, "Concurrent Binding Room");
+
     const rollbackBeforeNewVersion = await pools[0].query(
       `select exists(select 1 from template_versions where version <> '0.1.0') as forbidden`
     );
@@ -310,6 +369,46 @@ test("PostgresStorage upgrades legacy schema and preserves pinned template versi
     });
     assert.equal((await storages[0].getRoom("legacy-database-only-room"))?.templateVersion, "0.1.0");
 
+    const wave2OnlyVersion = {
+      schemaVersion: 1,
+      templateId: "wave2-only-template",
+      version: "1.0.0",
+      label: "Wave 2 Only Template",
+      assetSlots: ["presentation-screen"]
+    };
+    await pools[0].query(
+      `insert into templates (template_id, label, asset_slots, current_version, status)
+       values ($1,$2,$3::jsonb,null,'deprecated')`,
+      [wave2OnlyVersion.templateId, wave2OnlyVersion.label, JSON.stringify(wave2OnlyVersion.assetSlots)]
+    );
+    await pools[0].query(
+      `insert into template_versions (template_id, version, snapshot, content_hash)
+       values ($1,$2,$3::jsonb,$4)`,
+      [
+        wave2OnlyVersion.templateId,
+        wave2OnlyVersion.version,
+        JSON.stringify(wave2OnlyVersion),
+        createHash("sha256").update(stableJson(wave2OnlyVersion)).digest("hex")
+      ]
+    );
+    await pools[0].query(
+      `update templates set current_version = $2 where template_id = $1`,
+      [wave2OnlyVersion.templateId, wave2OnlyVersion.version]
+    );
+    await storages[0].init();
+    assert.equal((await storages[0].getTemplateVersion(wave2OnlyVersion.templateId))?.version, "1.0.0");
+    assert.equal((await storages[0].listTemplates()).some((template) => template.templateId === wave2OnlyVersion.templateId), false);
+    const wave2OnlyCatalog = await pools[0].query(
+      `select current_version, status from templates where template_id = $1`,
+      [wave2OnlyVersion.templateId]
+    );
+    assert.deepEqual(wave2OnlyCatalog.rows[0], { current_version: "1.0.0", status: "deprecated" });
+    const inventedLegacyVersion = await pools[0].query(
+      `select exists(select 1 from template_versions where template_id = $1 and version = '0.1.0') as exists`,
+      [wave2OnlyVersion.templateId]
+    );
+    assert.equal(inventedLegacyVersion.rows[0]?.exists, false);
+
     const pinnedAfterUpdate = await storages[0].updateRoom("legacy-pinned-room", {
       templateId: "meeting-room-basic",
       visibility: "unlisted"
@@ -331,17 +430,23 @@ test("PostgresStorage upgrades legacy schema and preserves pinned template versi
       templateId: "meeting-room-basic",
       name: "Binding Guard Room"
     });
-    await storages[0].updateRoom(bindingGuardRoom.roomId, { templateId: "showroom-basic" }, {
-      templateId: "meeting-room-basic",
-      templateVersion: "0.2.0"
-    });
     await assert.rejects(
-      storages[0].updateRoom(bindingGuardRoom.roomId, { name: "Stale Update" }, {
+      storages[0].updateRoom(bindingGuardRoom.roomId, { templateId: "showroom-basic" }, {
         templateId: "meeting-room-basic",
         templateVersion: "0.2.0"
       }),
       /room_template_binding_changed/
     );
+    const bindingAfterRejectedSwitch = await storages[0].getRoom(bindingGuardRoom.roomId);
+    assert.equal(bindingAfterRejectedSwitch?.templateId, "meeting-room-basic");
+    assert.equal(bindingAfterRejectedSwitch?.templateVersion, "0.2.0");
+    const bindingAfterNormalUpdate = await storages[0].updateRoom(bindingGuardRoom.roomId, { name: "Binding Preserved" }, {
+      templateId: "meeting-room-basic",
+      templateVersion: "0.2.0"
+    });
+    assert.equal(bindingAfterNormalUpdate?.name, "Binding Preserved");
+    assert.equal(bindingAfterNormalUpdate?.templateId, "meeting-room-basic");
+    assert.equal(bindingAfterNormalUpdate?.templateVersion, "0.2.0");
     await assert.rejects(
       pools[0].query(`update rooms set template_id = 'showroom-basic' where room_id = 'current-version-room'`),
       (error: unknown) => errorCode(error) === "23503"
@@ -350,6 +455,22 @@ test("PostgresStorage upgrades legacy schema and preserves pinned template versi
       `select exists(select 1 from template_versions where version <> '0.1.0') as forbidden`
     );
     assert.equal(rollbackAfterNewVersion.rows[0]?.forbidden, true);
+
+    const nullableMetadata = await pools[0].query(
+      `select count(*)::integer as count from rooms where template_version is null or template_snapshot is null`
+    );
+    assert.equal(nullableMetadata.rows[0]?.count, 0);
+    await pools[0].query(`alter table rooms alter column template_version set not null`);
+    await pools[0].query(`alter table rooms alter column template_snapshot set not null`);
+    await storages[3].init();
+    const demoMetadataAfterRollbackBoot = await pools[0].query(
+      `select template_version, template_snapshot->>'templateId' as snapshot_template_id
+       from rooms where room_id = 'demo-room'`
+    );
+    assert.deepEqual(demoMetadataAfterRollbackBoot.rows[0], {
+      template_version: "0.1.0",
+      snapshot_template_id: "meeting-room-basic"
+    });
 
     const invalidHashVersion = {
       schemaVersion: 1,
