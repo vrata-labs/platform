@@ -2,7 +2,7 @@
 
 Дата: 2026-08-12.
 
-Статус: дизайн подхода согласован, реализация Stage 0 начата 2026-08-12.
+Статус: Stage 0 infrastructure выполнена, Definition of Ready частично открыт, Stage 1 preparation выполнена; art-direction gate и AI probe launch остаются заблокированы на 2026-08-14.
 
 Этот документ дополняет `docs/plans/2026-08-04-standard-room-templates.md` и заменяет только подход к созданию и визуальной приёмке новых room assets. Platform contracts, immutable template binding, Wave 2/3 activation, runtime ownership rules и Scene Bundle v1 остаются без изменений.
 
@@ -119,20 +119,20 @@ Cross-repo integration выполняется только по полным com
 
 ### Текущая готовность
 
-| Зависимость | Состояние на 2026-08-12 | Следующее действие |
+| Зависимость | Состояние на 2026-08-14 | Следующее действие |
 |---|---|---|
 | Existing multi-scene repository | `vrata-labs/scene-assets`, main SHA `9ea73bc1a1ed0e86d5d959738d0383ccf89ad464` | Использовать только как historical reference; pilot artifacts не добавлять |
-| Experiment / Scene Factory repository | `vrata-labs/warm-modern-meeting-room-scene-factory`, initial SHA `8ce3ddfb9b0ddf90d9960d168961af2eb3b37569`, CI `31635983923` green, `main` protected | Продолжать через PR после platform docs sync |
+| Experiment / Scene Factory repository | `vrata-labs/warm-modern-meeting-room-scene-factory`, Stage 1 readiness merge `0bd22d029bafcf94fd183de111070fb4aabe7235`, CI `31782726925` green, `main` protected | Продолжать только через protected PR |
 | Candidate 01 repository | `vrata-labs/warm-modern-meeting-room-candidate-01`, initial SHA `1805c148866e8aeb8d21cb827bc93968bd61769c`, CI `31635584774` green, `main` protected | Не добавлять assets до rights/reference gates |
 | Candidate 02 repository | `vrata-labs/warm-modern-meeting-room-candidate-02`, initial SHA `6a8ec35fca968522e8041c1034f66bca6032aa9e`, CI `31635604223` green, `main` protected | Не добавлять assets до rights/reference gates |
 | Platform validator | Pinned SHA `4ae8951961fce72a16f87b9d15890aee7d7eef2d` | Подтвердить, что lock не устарел перед implementation |
 | Blender | Linux `4.5.12 LTS`, archive SHA-256 `95e3a2dfedba3bd32ca54fc355eac6b15a11986954ccb02815a07535d0120a25`, binary SHA-256 `33ac108ebce3c271f5357e5c664d0488717263bcf2145c80300edd0b12c31880`, build `84afd5f785f7` | Использовать exact verified build |
 | Local GPU | GTX 1060 6 GB, недостаточно для TRELLIS | Выбрать disposable 16+ GB GPU |
-| GPU provider/budget | Не выбраны | Назначить billing/teardown owner и cap до Stage 2 |
-| Human rights owner | Не назначен | Назначить до model/provider review |
+| GPU provider/budget | Yandex Cloud Compute; proposed preemptible `standard-v3-t4i`, 24 GB, `ru-central1-d`, 32.86192 RUB/hour all-in floor, 120-minute first-run maximum 65.72384 RUB, proposed campaign cap 1,000 RUB; billing/teardown owner role assigned | Получить явное budget/launch approval, quota и independent provider-side janitor; VM не создавать раньше всех gates |
+| Human rights owner | Public role `experiment-sponsor` назначен; dated verdict сохраняет `BLOCK`: stock TRELLIS запрещён, pruned mesh path conditional | Собрать immutable patched runtime/dependency lock и получить human signoff |
 | Reviewers | Не назначены | Найти трёх non-author reviewers либо зафиксировать qualitative single-reviewer mode |
 | Physical devices | Доступность не подтверждена для нового пилота | Назначить Android/iOS/Quest owners до shipping pass |
-| Experiment storage | Не выбрано | Утвердить quota/retention/deletion policy до Stage 1 и до скачивания/copy raw references |
+| Experiment storage | Private Yandex Object Storage, 10 GiB hard quota, anonymous/static-key access disabled, dedicated AES-256 SSE-KMS, lifecycle 30 days для temporary/rejected и 1 day для incomplete multipart; private identifiers остаются вне public Git | Использовать только по classification/prefix policy; model inputs по-прежнему запрещены |
 | Staging review access | 2026-08-12 green: `/health`, demo room, control plane и authenticated control-plane session | Не создавать review rooms до появления published candidates |
 
 Public `scene-assets` repository уже существует, но новый isolation contract запрещает использовать его как container для новых сцен. В Stage 0 родительская документация должна быть скорректирована: factual prerequisite создания общего repository закрыта исторически, а все новые original scenes получают отдельные repositories. Platform contracts, immutable bindings и activation state не меняются.
@@ -446,7 +446,7 @@ Blind art review выбирает только art direction. Вывод о prod
 - [x] [1ч] Создать neutral experiment IDs и зарезервировать opaque labels `Alpha`/`Beta`; mapping не назначен до freeze обоих art candidates.
 - [x] [1-2ч] Зафиксировать exact functional contract: room envelope, 8 seat anchors, spawn, surfaces, clearance и four review viewpoints.
 - [x] [1-2ч] Создать anchored visual scorecard, fairness protocol и time/yield report templates до начала art work.
-- [ ] [1ч] Записать compute budget/cap и teardown rule для disposable GPU.
+- [x] [1ч] Записать compute budget/cap и teardown rule для disposable GPU; launch остаётся отдельно заблокирован до approval, quota и independent provider-side janitor.
 
 Условие перехода: brief, scorecard, A/B rules и compute cap committed; reference handling/storage boundary green; нет незакрытых вопросов о том, что сравнивается.
 
@@ -460,26 +460,27 @@ Stage 0 evidence на 2026-08-12:
 - full-SHA jsDelivr fixture подтвердил CORS `*`, JSON/GLB content types, immutable one-year cache и exact checksums; full-SHA URLs всех трёх новых repositories доступны;
 - staging access повторно проверен: health, demo room, control plane и authenticated control-plane session доступны;
 - подтверждён отложенный platform integration gap: текущий FEAT-032 checkout/validator использует один `scene-assets.lock`, а URL resolver принимает один base URL и relative path; A/B review rooms не блокируются, потому что используют direct immutable `sceneBundleUrl`, но product adaptation обязана перейти на per-scene repository/SHA locks и cross-repo validation до Wave 3;
-- переход к Stage 1/2 заблокирован до назначения restricted storage, human AI rights owner, GPU provider/budget/billing/teardown owners; Stage 0 в целом остаётся открытым из-за этих DoR полей и compute cap.
+- Stage 1 reference work открыт после merge `0bd22d029bafcf94fd183de111070fb4aabe7235`: private storage approved, human rights/billing/teardown role назначен, GPU shape и cost boundary записаны;
+- Stage 0 DoR остаётся частично открытым из-за reviewers/device owners, а probe execution отдельно заблокирован до style approval, final AI rights approval, GPU quota, explicit budget/launch approval и independent provider-side teardown guard.
 
 ### Этап 1. Style bible и references
 
 Stage 1 не начинается, пока утверждены reference handling policy и storage boundary. Public Git может хранить только URLs, metadata и cleared redistributable evidence. Raw human-only references хранятся только в утверждённом restricted storage. Model-input classification фиксируется до скачивания или копирования файла.
 
-- [ ] [2-3ч] Найти 12-20 warm-modern room references и записать source/usage classification.
-- [ ] [1-2ч] Отфильтровать branded/distinctive interiors и references с неприемлемыми rights для AI conditioning.
-- [ ] [2-3ч] Собрать moodboard по отдельным категориям: architecture, windows/doors, ceiling, materials, furniture, lighting, exterior и lived-in detail.
-- [ ] [1-2ч] Сформировать `style-bible.json` с palette, dimensions, profiles, roughness и anti-patterns.
-- [ ] [1-2ч] Сделать human-readable style sheet с примерами допустимых и запрещённых решений.
+- [x] [2-3ч] Найти 12-20 warm-modern room references и записать source/usage classification: 16 metadata records, 12 human-only selections, 4 rejected.
+- [x] [1-2ч] Отфильтровать branded/distinctive interiors и references с неприемлемыми rights для AI conditioning; approved model-input count остаётся zero.
+- [x] [2-3ч] Собрать metadata-only moodboard по отдельным категориям: architecture, windows/doors, ceiling, materials, furniture, lighting, exterior и lived-in detail.
+- [x] [1-2ч] Сформировать `style-bible.json` с palette, dimensions, profiles, roughness и anti-patterns.
+- [x] [1-2ч] Сделать human-readable style sheet с примерами допустимых и запрещённых решений.
 - [ ] [1ч] Провести art-direction gate до моделирования.
 
 Условие перехода: пользователь утверждает один style bible; последующие изменения записываются как decision, а не вносятся молча в одну ветку.
 
 ### Этап 2. AI rights и feasibility spike
 
-- [ ] [2-3ч] Назначенному rights owner проверить code, weights, dependencies, provider ToS, output rights, input retention/training, territories и redistribution в extractable GLB.
-- [ ] [1ч] Сохранить dated rights verdict и запретить generation при любом unresolved hard-failure field.
-- [ ] [1-2ч] Утвердить storage quota/retention/deletion policy и разделение public/private artifacts.
+- [x] [2-3ч] Назначенному rights owner проверить code, weights, dependencies, provider ToS, output rights, input retention/training, territories и redistribution в extractable GLB; initial audit завершён verdict `BLOCK` для stock TRELLIS и conditional для pruned raw-mesh path.
+- [x] [1ч] Сохранить dated rights verdict и запретить generation при любом unresolved hard-failure field.
+- [x] [1-2ч] Утвердить storage quota/retention/deletion policy и разделение public/private artifacts.
 - [ ] [1-2ч] Выбрать disposable 16+ GB GPU path, зафиксировать provider/region/image/container/CUDA/cost cap и teardown procedure; не создавать постоянную инфраструктуру.
 - [ ] [2-3ч] Self-host pinned FLUX.1-schnell concept generation и сохранить exact code/weights/dependency/license evidence.
 - [ ] [2-3ч] Self-host pinned TRELLIS image-to-3D export на одном simple fixture и сохранить exact code/weights/dependency/license evidence.
@@ -495,6 +496,16 @@ Stage 1 не начинается, пока утверждены reference handl
 - [ ] [1ч] Зафиксировать counted production work и одинаково исключённые validation/publication tasks. При достижении cap track немедленно freeze; extension после просмотра другого track запрещён, incomplete track даёт `AB_ART_STOP`.
 - [ ] [1ч] Проверить, что accepted probe outputs/evidence перенесены в durable storage, checksums совпадают с ledger и teardown не удалит данные gate/stop report.
 - [ ] [1ч] Выполнить teardown instances, volumes, snapshots, temporary buckets и credentials; подтвердить прекращение billing.
+
+Stage 1/2 preparation evidence на 2026-08-14:
+
+- Scene Factory PR `#3`, merge `0bd22d029bafcf94fd183de111070fb4aabe7235`, CI `31782726925` green; local `pnpm validate`, `pnpm test` и `git diff --check` green;
+- public readiness не раскрывает bucket, KMS, IAM, cloud или folder identifiers; live bucket verification подтвердила private ACL, 10 GiB quota, disabled static-key auth, AES-256 SSE-KMS, deletion protection и lifecycle rules;
+- reference ledger хранит только URLs/metadata: 16 records, 12 selected human-only, 4 rejected, 0 retrieved files и 0 approved model inputs; style bible и style sheet остаются draft до пользовательского art-direction gate;
+- stock TRELLIS path запрещён из-за eager import code с non-commercial file-level terms и standard `to_glb`/`nvdiffrast`; generation остаётся запрещённой до exact pruned source hash, patched PyTorch/dependency lock, DINO artifact hash, OCI digest, SBOM/security report и human signoff;
+- primary compute proposal: preemptible T4i 24 GB, 100 GB auto-delete SSD и dynamic IPv4, 32.86192 RUB/hour, 120-minute maximum 65.72384 RUB, proposed campaign cap 1,000 RUB; fallback A100 требует отдельного approval;
+- все account GPU quotas равны zero; API quota request не создан, потому что cloud не имеет alpha flag `QUOTA_MANAGER_USE_QUOTA_REQUEST_SERVICE_VIA_API`, а console path остановлен provider CAPTCHA;
+- experiment GPU VM/disk/snapshot/image/IP не создавались; launch запрещён до folder-scoped provider-side janitor, потому что local wrapper и guest shutdown сами не гарантируют deletion при падении operator process.
 
 AI feasibility gate:
 
