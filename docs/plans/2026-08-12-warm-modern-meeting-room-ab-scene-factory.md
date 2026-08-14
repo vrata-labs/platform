@@ -2,7 +2,7 @@
 
 Дата: 2026-08-12.
 
-Статус: Stage 0 infrastructure выполнена, Definition of Ready частично открыт, Stage 1 preparation выполнена; art-direction gate и AI probe launch остаются заблокированы на 2026-08-14.
+Статус: Stage 0 infrastructure и Stage 1 art-direction gate выполнены, Definition of Ready частично открыт; AI probe launch остаётся заблокирован на 2026-08-14.
 
 Этот документ дополняет `docs/plans/2026-08-04-standard-room-templates.md` и заменяет только подход к созданию и визуальной приёмке новых room assets. Platform contracts, immutable template binding, Wave 2/3 activation, runtime ownership rules и Scene Bundle v1 остаются без изменений.
 
@@ -122,9 +122,9 @@ Cross-repo integration выполняется только по полным com
 | Зависимость | Состояние на 2026-08-14 | Следующее действие |
 |---|---|---|
 | Existing multi-scene repository | `vrata-labs/scene-assets`, main SHA `9ea73bc1a1ed0e86d5d959738d0383ccf89ad464` | Использовать только как historical reference; pilot artifacts не добавлять |
-| Experiment / Scene Factory repository | `vrata-labs/warm-modern-meeting-room-scene-factory`, janitor merge `ba09f828def0f1c44ac3c68dde2a621fe9d30b82`, CI `31789796918` green, `main` protected | Продолжать только через protected PR |
-| Candidate 01 repository | `vrata-labs/warm-modern-meeting-room-candidate-01`, initial SHA `1805c148866e8aeb8d21cb827bc93968bd61769c`, CI `31635584774` green, `main` protected | Не добавлять assets до rights/reference gates |
-| Candidate 02 repository | `vrata-labs/warm-modern-meeting-room-candidate-02`, initial SHA `6a8ec35fca968522e8041c1034f66bca6032aa9e`, CI `31635604223` green, `main` protected | Не добавлять assets до rights/reference gates |
+| Experiment / Scene Factory repository | `vrata-labs/warm-modern-meeting-room-scene-factory`, art-direction merge `654e578de9bbd558c620b79118bd5d02d77764d8`, post-merge CI `31833516744` green, `main` protected | Продолжать только через protected PR |
+| Candidate 01 repository | `vrata-labs/warm-modern-meeting-room-candidate-01`, initial SHA `1805c148866e8aeb8d21cb827bc93968bd61769c`, CI `31635584774` green, `main` protected | Не добавлять assets до применимого rights/provenance gate |
+| Candidate 02 repository | `vrata-labs/warm-modern-meeting-room-candidate-02`, initial SHA `6a8ec35fca968522e8041c1034f66bca6032aa9e`, CI `31635604223` green, `main` protected | Не добавлять assets до применимого rights/provenance gate |
 | Platform validator | Pinned SHA `4ae8951961fce72a16f87b9d15890aee7d7eef2d` | Подтвердить, что lock не устарел перед implementation |
 | Blender | Linux `4.5.12 LTS`, archive SHA-256 `95e3a2dfedba3bd32ca54fc355eac6b15a11986954ccb02815a07535d0120a25`, binary SHA-256 `33ac108ebce3c271f5357e5c664d0488717263bcf2145c80300edd0b12c31880`, build `84afd5f785f7` | Использовать exact verified build |
 | Local GPU | GTX 1060 6 GB, недостаточно для TRELLIS | Выбрать disposable 16+ GB GPU |
@@ -133,6 +133,7 @@ Cross-repo integration выполняется только по полным com
 | Reviewers | Не назначены | Найти трёх non-author reviewers либо зафиксировать qualitative single-reviewer mode |
 | Physical devices | Доступность не подтверждена для нового пилота | Назначить Android/iOS/Quest owners до shipping pass |
 | Experiment storage | Private Yandex Object Storage, 10 GiB hard quota, anonymous/static-key access disabled, dedicated AES-256 SSE-KMS, lifecycle 30 days для temporary/rejected и 1 day для incomplete multipart; private identifiers остаются вне public Git | Использовать только по classification/prefix policy; model inputs по-прежнему запрещены |
+| Art direction | Warm-modern style bible approved 2026-08-14: warm oak, light mineral plaster, matte graphite, sand/grey-green textiles, daylight plus 2700-3000 K and functional detailing | Approval покрывает только principles/measurable rules; reference licensing, model inputs и generation остаются отдельными gates |
 | Staging review access | 2026-08-12 green: `/health`, demo room, control plane и authenticated control-plane session | Не создавать review rooms до появления published candidates |
 
 Public `scene-assets` repository уже существует, но новый isolation contract запрещает использовать его как container для новых сцен. В Stage 0 родительская документация должна быть скорректирована: factual prerequisite создания общего repository закрыта исторически, а все новые original scenes получают отдельные repositories. Platform contracts, immutable bindings и activation state не меняются.
@@ -461,7 +462,7 @@ Stage 0 evidence на 2026-08-12:
 - staging access повторно проверен: health, demo room, control plane и authenticated control-plane session доступны;
 - подтверждён отложенный platform integration gap: текущий FEAT-032 checkout/validator использует один `scene-assets.lock`, а URL resolver принимает один base URL и relative path; A/B review rooms не блокируются, потому что используют direct immutable `sceneBundleUrl`, но product adaptation обязана перейти на per-scene repository/SHA locks и cross-repo validation до Wave 3;
 - Stage 1 reference work открыт после merge `0bd22d029bafcf94fd183de111070fb4aabe7235`: private storage approved, human rights/billing/teardown role назначен, GPU shape и cost boundary записаны;
-- Stage 0 DoR остаётся частично открытым из-за reviewers/device owners, а probe execution отдельно заблокирован до style approval, final AI rights approval, GPU quota, explicit budget/launch approval и independent provider-side teardown guard.
+- Stage 0 DoR остаётся частично открытым из-за reviewers/device owners; style approval закрыт, а probe execution отдельно заблокирован до final AI rights approval, GPU quota, explicit budget/launch approval и independent provider-side teardown guard.
 
 ### Этап 1. Style bible и references
 
@@ -472,7 +473,7 @@ Stage 1 не начинается, пока утверждены reference handl
 - [x] [2-3ч] Собрать metadata-only moodboard по отдельным категориям: architecture, windows/doors, ceiling, materials, furniture, lighting, exterior и lived-in detail.
 - [x] [1-2ч] Сформировать `style-bible.json` с palette, dimensions, profiles, roughness и anti-patterns.
 - [x] [1-2ч] Сделать human-readable style sheet с примерами допустимых и запрещённых решений.
-- [ ] [1ч] Провести art-direction gate до моделирования.
+- [x] [1ч] Провести art-direction gate до моделирования; пользователь утвердил текущие principles и measurable rules 2026-08-14 без лицензирования references, approval model inputs или разрешения generation.
 
 Условие перехода: пользователь утверждает один style bible; последующие изменения записываются как decision, а не вносятся молча в одну ветку.
 
@@ -499,13 +500,13 @@ Stage 1 не начинается, пока утверждены reference handl
 
 Stage 1/2 preparation evidence на 2026-08-14:
 
-- Scene Factory readiness PR `#3`, merge `0bd22d029bafcf94fd183de111070fb4aabe7235`, CI `31782726925` green; janitor PR `#4`, merge `ba09f828def0f1c44ac3c68dde2a621fe9d30b82`, CI `31789796918` green; final local `pnpm validate`, `pnpm test` (23 tests) и `git diff --check` green;
+- Scene Factory readiness PR `#3`, merge `0bd22d029bafcf94fd183de111070fb4aabe7235`, CI `31782726925` green; janitor PR `#4`, merge `ba09f828def0f1c44ac3c68dde2a621fe9d30b82`, CI `31789796918` green; hardening PR `#5`, merge `0aa3734159e1887603e22886fdfc6ceecf770dd7`, post-merge CI `31831146106` green; art-direction PR `#6`, merge `654e578de9bbd558c620b79118bd5d02d77764d8`, post-merge CI `31833516744` green; final local `pnpm validate`, `pnpm test` (26 tests) и `git diff --check` green;
 - public readiness не раскрывает bucket, KMS, IAM, cloud или folder identifiers; live bucket verification подтвердила private ACL, 10 GiB quota, disabled static-key auth, AES-256 SSE-KMS, deletion protection и lifecycle rules;
-- reference ledger хранит только URLs/metadata: 16 records, 12 selected human-only, 4 rejected, 0 retrieved files и 0 approved model inputs; style bible и style sheet остаются draft до пользовательского art-direction gate;
+- reference ledger хранит только URLs/metadata: 16 records, 12 selected human-only, 4 rejected, 0 retrieved files и 0 approved model inputs; style bible и style sheet утверждены 2026-08-14 только как principles/measurable rules, без reference licensing, model-input approval или разрешения generation;
 - stock TRELLIS path запрещён из-за eager import code с non-commercial file-level terms и standard `to_glb`/`nvdiffrast`; generation остаётся запрещённой до exact pruned source hash, patched PyTorch/dependency lock, DINO artifact hash, OCI digest, SBOM/security report и human signoff;
 - primary compute proposal: preemptible T4i 24 GB, 100 GB auto-delete SSD и dynamic IPv4, 32.86192 RUB/hour, 120-minute maximum 65.72384 RUB, proposed campaign cap 1,000 RUB; fallback A100 требует отдельного approval;
 - все account GPU quotas равны zero; API quota request не создан, потому что cloud не имеет alpha flag `QUOTA_MANAGER_USE_QUOTA_REQUEST_SERVICE_VIA_API`, а console path остановлен provider CAPTCHA;
-- fail-closed janitor implementation проверяет exact folder guard, probe ID, общий immutable expiry и complete inventory до mutation, ждёт завершения async delete operations и не имеет API/IAM для self-delete; destructive-safety review не оставил medium+ findings;
+- fail-closed janitor implementation проверяет exact folder guard, resource folder membership, probe ID, общий immutable expiry, reciprocal VM/disk dependencies и filesystems до mutation, отклоняет malformed provider responses, ждёт terminal async delete/rollback state и не имеет API/IAM для self-delete; destructive-safety review не оставил medium+ findings;
 - experiment GPU VM/disk/snapshot/image/IP, Cloud Function, trigger, janitor service accounts и fixture resources не создавались; launch запрещён до keyless janitor deploy и реального CPU fixture, потому что local tests не доказывают provider IAM/timer/deletion behavior.
 
 AI feasibility gate:
