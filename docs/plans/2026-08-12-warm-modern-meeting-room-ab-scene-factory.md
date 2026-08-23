@@ -2,7 +2,7 @@
 
 Дата: 2026-08-12.
 
-Статус: Stage 0 infrastructure, Stage 1 art-direction gate и Stage 2 runtime qualification выполнены; internal pruned TRELLIS chair и window/trim component probes прошли на Tesla T4 с project-authored inputs, measured VRAM, content-addressed outputs и полным teardown. Требуемые 2 из 3 component probes успешны, AI feasibility gate green и Stage 3 разблокирован; production publication по-прежнему требует DINO/model rights, OCI/SBOM/notices, provider snapshot и отдельный publication signoff.
+Статус: Stage 0 infrastructure, Stage 1 art-direction gate и Stage 2 runtime qualification выполнены; internal pruned TRELLIS chair и window/trim component probes прошли на Tesla T4 с project-authored inputs, measured VRAM, content-addressed outputs и полным teardown. Требуемые 2 из 3 component probes успешны, AI feasibility gate green; Stage 3 exact contracts, synthetic fixtures и fail-closed diagnostics выполнены, Blender compiler и export reproducibility остаются открытыми. Production publication по-прежнему требует DINO/model rights, OCI/SBOM/notices, provider snapshot и отдельный publication signoff.
 
 Этот документ дополняет `docs/plans/2026-08-04-standard-room-templates.md` и заменяет только подход к созданию и визуальной приёмке новых room assets. Platform contracts, immutable template binding, Wave 2/3 activation, runtime ownership rules и Scene Bundle v1 остаются без изменений.
 
@@ -122,7 +122,7 @@ Cross-repo integration выполняется только по полным com
 | Зависимость | Состояние на 2026-08-23 | Следующее действие |
 |---|---|---|
 | Existing multi-scene repository | `vrata-labs/scene-assets`, main SHA `9ea73bc1a1ed0e86d5d959738d0383ccf89ad464` | Использовать только как historical reference; pilot artifacts не добавлять |
-| Experiment / Scene Factory repository | `vrata-labs/warm-modern-meeting-room-scene-factory`, chair probe merge `ee626ef08bc23d3e3d990a30b444490138992ada`, feasibility correction `e28d8b620e60f1dceb767a69b778c5f3d7ce395e`, window/trim probe merge `c14028818a07fc1b293809e90470563e8b75d910`, CI `32662939668` green, `main` protected | Stage 3 разрешён; продолжать только через protected PR |
+| Experiment / Scene Factory repository | `vrata-labs/warm-modern-meeting-room-scene-factory`, chair probe merge `ee626ef08bc23d3e3d990a30b444490138992ada`, feasibility correction `e28d8b620e60f1dceb767a69b778c5f3d7ce395e`, window/trim probe merge `c14028818a07fc1b293809e90470563e8b75d910`, Stage 3 contract merge `26ff261de8b786564fd172d2367a13fec4b60dab`, post-merge CI `32670482771` green, `main` protected | Продолжить Stage 3 Blender compiler и reproducibility slices только через protected PR |
 | Candidate 01 repository | `vrata-labs/warm-modern-meeting-room-candidate-01`, initial SHA `1805c148866e8aeb8d21cb827bc93968bd61769c`, CI `31635584774` green, `main` protected | Не добавлять assets до применимого rights/provenance gate |
 | Candidate 02 repository | `vrata-labs/warm-modern-meeting-room-candidate-02`, initial SHA `6a8ec35fca968522e8041c1034f66bca6032aa9e`, CI `31635604223` green, `main` protected | Не добавлять assets до применимого rights/provenance gate |
 | Platform validator | Pinned SHA `4ae8951961fce72a16f87b9d15890aee7d7eef2d` | Подтвердить, что lock не устарел перед implementation |
@@ -548,15 +548,24 @@ AI feasibility gate:
 
 ### Этап 3. Pilot-specific scene-lab scaffold
 
-- [ ] [1-2ч] Создать минимальный Scene Factory layout в dedicated repository без отдельного сервиса, database или generic registry.
-- [ ] [2-3ч] Добавить exact pilot schema/validator для `scene-spec.json` и asset/generation ledger.
-- [ ] [1-2ч] Добавить negative fixtures: invalid dimensions/openings, missing license, unknown component, invalid anchor и non-finite transform.
-- [ ] [1-2ч] Реализовать parsing approved pilot specification и stable diagnostics.
+- [x] [1-2ч] Создать минимальный Scene Factory layout в dedicated repository без отдельного сервиса, database или generic registry.
+- [x] [2-3ч] Добавить exact pilot schema/validator для `scene-spec.json` и asset/generation ledger.
+- [x] [1-2ч] Добавить negative fixtures: invalid dimensions/openings, missing license, unknown component, invalid anchor и non-finite transform.
+- [x] [1-2ч] Реализовать strict parsing synthetic pilot specification и stable fail-closed diagnostics; approved candidate specification остаётся отдельным открытым результатом art/concept gate.
 - [ ] [2-3ч] Реализовать room-specific Blender shell: floor, ceiling и walls с thickness/joins.
 - [ ] [2-3ч] Реализовать openings: door/window cuts, frames, reveals и sills.
 - [ ] [2-3ч] Реализовать trims/profile placement и meter-scale UV/material zones без decorative auto-design logic.
 - [ ] [1-2ч] Добавить compiler tests и reproducibility report: specification hash, accepted input hashes, Blender/container revisions и output hash/stats.
 - [ ] [1-2ч] Проверить два consecutive exports из одних accepted inputs; final GLB должен быть byte-identical до publication.
+
+Stage 3 contract/diagnostics evidence на 2026-08-23:
+
+- Scene Factory PR `#18`, merge `26ff261de8b786564fd172d2367a13fec4b60dab`, PR CI `32670431037` и post-merge CI `32670482771` green;
+- Draft 2020-12 schemas и Ajv `8.17.1`/ajv-formats `3.0.1` validator фиксируют room/openings/profiles/materials/components, asset rights/provenance, component-bound generation records, seats, media surfaces, review views и десять clearance routes;
+- strict parser отклоняет malformed/duplicate JSON, non-finite/cyclic/deep values, unsafe source paths/URLs, rights/provenance drift, invalid geometry и route corridor crossing вне входного проёма; diagnostics сортируются и проверяются stable codes;
+- synthetic valid fixture hashes: scene `189556b9da4ecf9f318049d0ad8e5ac67b1216057221aa5e49ecb3d88dc59cc5`, asset ledger `bc8dc412b38eb85c7a46cb96a5292f806e430fcfa2956f188d39a07fcd9f6d85`, generation ledger `39ef74d47488966b8e9b4df9541ba039085260a2a8fb75d9add3804558491c51`; fixture не является approved candidate design;
+- generated assets в этом slice разрешены только как component sources с accepted exact output binding; generated material/exterior roles явно отклоняются до расширения generation ledger;
+- final local `pnpm validate`, `pnpm test` (495 tests), `pnpm verify:runtime-gates` и `git diff --check` green; contract slice не заявляет реализованный Blender compiler или byte-identical exports.
 
 Условие перехода: exact pilot specification воспроизводит byte-identical GLB и проходит existing validators. Если pinned Blender/exporter даёт разные bytes, publication блокируется до локализации nondeterminism или добавления deterministic canonicalization step с отдельными tests; неопределённая `structural equivalence` не принимается. Повтор stochastic AI generation не требуется и измеряется отдельно.
 
