@@ -2,7 +2,7 @@
 
 Дата: 2026-08-12.
 
-Статус: Stage 0 infrastructure, Stage 1 art-direction gate и Stage 2 runtime qualification выполнены; internal pruned TRELLIS chair и window/trim component probes прошли на Tesla T4 с project-authored inputs, measured VRAM, content-addressed outputs и полным teardown. Требуемые 2 из 3 component probes успешны, AI feasibility gate green; Stage 3 exact contracts, synthetic fixtures и fail-closed diagnostics выполнены, Blender compiler и export reproducibility остаются открытыми. Production publication по-прежнему требует DINO/model rights, OCI/SBOM/notices, provider snapshot и отдельный publication signoff.
+Статус: Stage 0 infrastructure, Stage 1 art-direction gate и Stage 2 runtime qualification выполнены; internal pruned TRELLIS chair и window/trim component probes прошли на Tesla T4 с project-authored inputs, measured VRAM, content-addressed outputs и полным teardown. Требуемые 2 из 3 component probes успешны, AI feasibility gate green; Stage 3 exact contracts, synthetic fixtures, fail-closed diagnostics и exact-Blender synthetic room shell compiler выполнены. Openings, profiles/material zones, approved candidate specification и export reproducibility остаются открытыми. Production publication по-прежнему требует DINO/model rights, OCI/SBOM/notices, provider snapshot и отдельный publication signoff.
 
 Этот документ дополняет `docs/plans/2026-08-04-standard-room-templates.md` и заменяет только подход к созданию и визуальной приёмке новых room assets. Platform contracts, immutable template binding, Wave 2/3 activation, runtime ownership rules и Scene Bundle v1 остаются без изменений.
 
@@ -119,10 +119,10 @@ Cross-repo integration выполняется только по полным com
 
 ### Текущая готовность
 
-| Зависимость | Состояние на 2026-08-23 | Следующее действие |
+| Зависимость | Состояние на 2026-08-24 | Следующее действие |
 |---|---|---|
 | Existing multi-scene repository | `vrata-labs/scene-assets`, main SHA `9ea73bc1a1ed0e86d5d959738d0383ccf89ad464` | Использовать только как historical reference; pilot artifacts не добавлять |
-| Experiment / Scene Factory repository | `vrata-labs/warm-modern-meeting-room-scene-factory`, chair probe merge `ee626ef08bc23d3e3d990a30b444490138992ada`, feasibility correction `e28d8b620e60f1dceb767a69b778c5f3d7ce395e`, window/trim probe merge `c14028818a07fc1b293809e90470563e8b75d910`, Stage 3 contract merge `26ff261de8b786564fd172d2367a13fec4b60dab`, post-merge CI `32670482771` green, `main` protected | Продолжить Stage 3 Blender compiler и reproducibility slices только через protected PR |
+| Experiment / Scene Factory repository | `vrata-labs/warm-modern-meeting-room-scene-factory`, chair probe merge `ee626ef08bc23d3e3d990a30b444490138992ada`, feasibility correction `e28d8b620e60f1dceb767a69b778c5f3d7ce395e`, window/trim probe merge `c14028818a07fc1b293809e90470563e8b75d910`, Stage 3 contract merge `26ff261de8b786564fd172d2367a13fec4b60dab`, room shell merge `d0c2e9e9920721220dc0e6729b71db146b40f183`, post-merge CI `32716797723` green, `main` protected | Продолжить openings, profiles/material zones и reproducibility slices только через protected PR |
 | Candidate 01 repository | `vrata-labs/warm-modern-meeting-room-candidate-01`, initial SHA `1805c148866e8aeb8d21cb827bc93968bd61769c`, CI `31635584774` green, `main` protected | Не добавлять assets до применимого rights/provenance gate |
 | Candidate 02 repository | `vrata-labs/warm-modern-meeting-room-candidate-02`, initial SHA `6a8ec35fca968522e8041c1034f66bca6032aa9e`, CI `31635604223` green, `main` protected | Не добавлять assets до применимого rights/provenance gate |
 | Platform validator | Pinned SHA `4ae8951961fce72a16f87b9d15890aee7d7eef2d` | Подтвердить, что lock не устарел перед implementation |
@@ -552,7 +552,7 @@ AI feasibility gate:
 - [x] [2-3ч] Добавить exact pilot schema/validator для `scene-spec.json` и asset/generation ledger.
 - [x] [1-2ч] Добавить negative fixtures: invalid dimensions/openings, missing license, unknown component, invalid anchor и non-finite transform.
 - [x] [1-2ч] Реализовать strict parsing synthetic pilot specification и stable fail-closed diagnostics; approved candidate specification остаётся отдельным открытым результатом art/concept gate.
-- [ ] [2-3ч] Реализовать room-specific Blender shell: floor, ceiling и walls с thickness/joins.
+- [x] [2-3ч] Реализовать synthetic-fixture-only room-specific Blender shell: closed floor/ceiling boxes и welded rectangular wall ring с exact thickness/joins; approved candidate compilation остаётся открытым.
 - [ ] [2-3ч] Реализовать openings: door/window cuts, frames, reveals и sills.
 - [ ] [2-3ч] Реализовать trims/profile placement и meter-scale UV/material zones без decorative auto-design logic.
 - [ ] [1-2ч] Добавить compiler tests и reproducibility report: specification hash, accepted input hashes, Blender/container revisions и output hash/stats.
@@ -566,6 +566,15 @@ Stage 3 contract/diagnostics evidence на 2026-08-23:
 - synthetic valid fixture hashes: scene `189556b9da4ecf9f318049d0ad8e5ac67b1216057221aa5e49ecb3d88dc59cc5`, asset ledger `bc8dc412b38eb85c7a46cb96a5292f806e430fcfa2956f188d39a07fcd9f6d85`, generation ledger `39ef74d47488966b8e9b4df9541ba039085260a2a8fb75d9add3804558491c51`; fixture не является approved candidate design;
 - generated assets в этом slice разрешены только как component sources с accepted exact output binding; generated material/exterior roles явно отклоняются до расширения generation ledger;
 - final local `pnpm validate`, `pnpm test` (495 tests), `pnpm verify:runtime-gates` и `git diff --check` green; contract slice не заявляет реализованный Blender compiler или byte-identical exports.
+
+Stage 3 room shell evidence на 2026-08-24:
+
+- Scene Factory PR `#19`, merge `d0c2e9e9920721220dc0e6729b71db146b40f183`, PR CI `32716692265` и post-merge CI `32716797723` green;
+- Node entrypoint повторно применяет exact scene/provenance contract, принимает только три checked-in synthetic fixtures и проверяет Blender binary SHA-256 `33ac108ebce3c271f5357e5c664d0488717263bcf2145c80300edd0b12c31880`;
+- Blender adapter жёстко привязан к fixture raw SHA-256 `903c363326056fade3e6a55da35404912e5c40dfd021b9e261deb158bce8eee4`, specification SHA-256 `189556b9da4ecf9f318049d0ad8e5ac67b1216057221aa5e49ecb3d88dc59cc5`, version `4.5.12 LTS` и build `84afd5f785f7`;
+- shell содержит closed floor и ceiling boxes плюс один welded rectangular wall-ring mesh: 3 objects/meshes, 32 vertices и 28 quad faces; wall ring имеет 16 vertices/16 faces и manifold edge incidence 2;
+- `.blend` и reports создаются только вне repository, после save файл повторно открывается exact Blender и проверяется на exact object/topology inventory, zero materials/cameras/lights и отсутствие extra objects;
+- final local `pnpm validate`, `pnpm test` с exact Blender (499 tests), `pnpm verify:runtime-gates` и `git diff --check` green; openings/materials/components, approved candidate specification и byte-identical exports остаются false/open.
 
 Условие перехода: exact pilot specification воспроизводит byte-identical GLB и проходит existing validators. Если pinned Blender/exporter даёт разные bytes, publication блокируется до локализации nondeterminism или добавления deterministic canonicalization step с отдельными tests; неопределённая `structural equivalence` не принимается. Повтор stochastic AI generation не требуется и измеряется отдельно.
 
