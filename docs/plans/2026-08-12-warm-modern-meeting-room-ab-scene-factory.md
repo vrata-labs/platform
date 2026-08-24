@@ -2,7 +2,7 @@
 
 Дата: 2026-08-12.
 
-Статус: Stage 0 infrastructure, Stage 1 art-direction gate и Stage 2 runtime qualification выполнены; internal pruned TRELLIS chair и window/trim component probes прошли на Tesla T4 с project-authored inputs, measured VRAM, content-addressed outputs и полным teardown. Требуемые 2 из 3 component probes успешны, AI feasibility gate green; Stage 3 exact contracts, synthetic fixtures, fail-closed diagnostics, room shell и deterministic door/window openings выполнены на exact Blender. Profiles/material zones, approved candidate specification и export reproducibility остаются открытыми. Production publication по-прежнему требует DINO/model rights, OCI/SBOM/notices, provider snapshot и отдельный publication signoff.
+Статус: Stage 0 infrastructure, Stage 1 art-direction gate и Stage 2 runtime qualification выполнены; internal pruned TRELLIS chair и window/trim component probes прошли на Tesla T4 с project-authored inputs, measured VRAM, content-addressed outputs и полным teardown. Требуемые 2 из 3 component probes успешны, AI feasibility gate green; Stage 3 exact contracts, synthetic fixtures, fail-closed diagnostics, room shell, deterministic openings, profiles и scalar PBR material zones выполнены на exact Blender. Approved candidate specification и export reproducibility остаются открытыми. Production publication по-прежнему требует DINO/model rights, OCI/SBOM/notices, provider snapshot и отдельный publication signoff.
 
 Этот документ дополняет `docs/plans/2026-08-04-standard-room-templates.md` и заменяет только подход к созданию и визуальной приёмке новых room assets. Platform contracts, immutable template binding, Wave 2/3 activation, runtime ownership rules и Scene Bundle v1 остаются без изменений.
 
@@ -122,7 +122,7 @@ Cross-repo integration выполняется только по полным com
 | Зависимость | Состояние на 2026-08-24 | Следующее действие |
 |---|---|---|
 | Existing multi-scene repository | `vrata-labs/scene-assets`, main SHA `9ea73bc1a1ed0e86d5d959738d0383ccf89ad464` | Использовать только как historical reference; pilot artifacts не добавлять |
-| Experiment / Scene Factory repository | `vrata-labs/warm-modern-meeting-room-scene-factory`, chair probe merge `ee626ef08bc23d3e3d990a30b444490138992ada`, feasibility correction `e28d8b620e60f1dceb767a69b778c5f3d7ce395e`, window/trim probe merge `c14028818a07fc1b293809e90470563e8b75d910`, Stage 3 contract merge `26ff261de8b786564fd172d2367a13fec4b60dab`, room shell merge `d0c2e9e9920721220dc0e6729b71db146b40f183`, openings merge `f87580da8f7815468400552e6fe2e7cb9fcfa13f`, post-merge CI `32722485352` green, `main` protected | Продолжить profiles/material zones и reproducibility slices только через protected PR |
+| Experiment / Scene Factory repository | `vrata-labs/warm-modern-meeting-room-scene-factory`, chair probe merge `ee626ef08bc23d3e3d990a30b444490138992ada`, feasibility correction `e28d8b620e60f1dceb767a69b778c5f3d7ce395e`, window/trim probe merge `c14028818a07fc1b293809e90470563e8b75d910`, Stage 3 contract merge `26ff261de8b786564fd172d2367a13fec4b60dab`, room shell merge `d0c2e9e9920721220dc0e6729b71db146b40f183`, openings merge `f87580da8f7815468400552e6fe2e7cb9fcfa13f`, material zones merge `f467aa431ff06a298355401ef6ea18aa84cb16fc`, post-merge CI `32726884200` green, `main` protected | Продолжить reproducibility report и byte-identical export slices только через protected PR |
 | Candidate 01 repository | `vrata-labs/warm-modern-meeting-room-candidate-01`, initial SHA `1805c148866e8aeb8d21cb827bc93968bd61769c`, CI `31635584774` green, `main` protected | Не добавлять assets до применимого rights/provenance gate |
 | Candidate 02 repository | `vrata-labs/warm-modern-meeting-room-candidate-02`, initial SHA `6a8ec35fca968522e8041c1034f66bca6032aa9e`, CI `31635604223` green, `main` protected | Не добавлять assets до применимого rights/provenance gate |
 | Platform validator | Pinned SHA `4ae8951961fce72a16f87b9d15890aee7d7eef2d` | Подтвердить, что lock не устарел перед implementation |
@@ -554,7 +554,7 @@ AI feasibility gate:
 - [x] [1-2ч] Реализовать strict parsing synthetic pilot specification и stable fail-closed diagnostics; approved candidate specification остаётся отдельным открытым результатом art/concept gate.
 - [x] [2-3ч] Реализовать synthetic-fixture-only room-specific Blender shell: closed floor/ceiling boxes и welded rectangular wall ring с exact thickness/joins; approved candidate compilation остаётся открытым.
 - [x] [2-3ч] Реализовать synthetic-fixture-only openings: exact door/window cuts, butt-jointed frames, room-side window reveals и sill без overlapping detail volumes.
-- [ ] [2-3ч] Реализовать trims/profile placement и meter-scale UV/material zones без decorative auto-design logic.
+- [x] [2-3ч] Реализовать deterministic baseboard/profile placement и meter-scale UV/scalar PBR material zones без textures или decorative auto-design logic.
 - [ ] [1-2ч] Добавить compiler tests и reproducibility report: specification hash, accepted input hashes, Blender/container revisions и output hash/stats.
 - [ ] [1-2ч] Проверить два consecutive exports из одних accepted inputs; final GLB должен быть byte-identical до publication.
 
@@ -584,6 +584,15 @@ Stage 3 openings evidence на 2026-08-24:
 - framed clear apertures проверены как door `0.94 x 2.12 m` и window `3.24 x 1.64 m`; nominal и final boundaries проверяются ray probes с обеих lateral сторон, сверху и снизу для window;
 - saved `.blend` повторно открывается exact Blender и проходит full assembly inventory/topology/aperture inspection; generated binaries/reports остаются вне repository и удаляются тестами;
 - final local `pnpm validate`, `pnpm test` с exact Blender (499 tests), `pnpm verify:runtime-gates` и `git diff --check` green; materials/components, approved candidate specification и byte-identical exports остаются false/open.
+
+Stage 3 profiles/material zones evidence на 2026-08-24:
+
+- Scene Factory PR `#21`, merge `f467aa431ff06a298355401ef6ea18aa84cb16fc`, PR CI `32726762284` и post-merge CI `32726884200` green;
+- четыре baseboard details компилируются в пять non-overlapping room-side objects; south profile детерминированно разделён nominal door aperture, corner joints имеют zero volume overlap;
+- final assembly содержит 19 objects/meshes, 176 vertices и 134 faces; 3 consumed recipes компилируются в Principled PBR materials с exact sRGB-to-linear color, roughness и metalness;
+- 22 zones назначены 19 geometry objects через face-domain zone indices; wall mesh покрывает east/north/south/west zones, floor и ceiling сохраняют отдельные zones;
+- каждый UV loop повторно вычисляется при reopen как world-space meters / recipe textureScaleM; 0 images, 0 texture datablocks и 0 image-texture nodes, Principled BSDF связан с Material Output;
+- final local `pnpm validate`, `pnpm test` с exact Blender (499 tests), `pnpm verify:runtime-gates` и `git diff --check` green; components, approved candidate specification и byte-identical exports остаются false/open.
 
 Условие перехода: exact pilot specification воспроизводит byte-identical GLB и проходит existing validators. Если pinned Blender/exporter даёт разные bytes, publication блокируется до локализации nondeterminism или добавления deterministic canonicalization step с отдельными tests; неопределённая `structural equivalence` не принимается. Повтор stochastic AI generation не требуется и измеряется отдельно.
 
