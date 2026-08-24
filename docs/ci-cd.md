@@ -17,6 +17,7 @@ Vrata keeps test and deployment automation in the repository and executes it in 
 
 - `CI`: required PR/push verification.
 - `Docker Publish`: internal YCR image publishing for staging.
+- YCR staging builds explicitly disable embedded provenance/SBOM attestations because YCR rejects the resulting OCI manifest list. Source and revision remain bound through OCI labels; public GHCR release attestations are a separate release concern.
 - `Staging Deploy`: internal staging deploy and verification gate with rollback.
 - `Staging Smoke`: manual staging verification utility.
 - `Docker Release`: public GHCR image publishing for SemVer tags and release candidates.
@@ -45,4 +46,5 @@ Vrata keeps test and deployment automation in the repository and executes it in 
 - Do not make public CI depend on private `sense-*` scene assets; use `pnpm test:e2e:private-assets` in private asset/staging contexts only.
 - Do not add private scene assets back to public release images; staging-only sync must stay outside public release workflows.
 - Keep artifacts short-lived and avoid writing secrets to browser-visible output.
+- Keep `provenance: false` and `sbom: false` explicit on every YCR build step, and read every SHA/branch/staging tag back with `docker buildx imagetools inspect` before reporting publish success.
 - Run `pnpm backup:compose` before self-host minor upgrades, validate the manifest, and use `pnpm rollback:compose` instead of `docker compose down -v` when reverting image tags.
