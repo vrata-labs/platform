@@ -2,7 +2,7 @@
 
 Дата: 2026-08-12.
 
-Статус: Stage 0 infrastructure, Stage 1 art-direction gate и Stage 2 runtime qualification выполнены; internal pruned TRELLIS chair и window/trim component probes прошли на Tesla T4 с project-authored inputs, measured VRAM, content-addressed outputs и полным teardown. Требуемые 2 из 3 component probes успешны, AI feasibility gate green; Stage 3 synthetic compiler scaffold, GLB exporter, structural validation и two-run byte-identical reproducibility report выполнены на exact Blender. Approved candidate specification и final candidate export reproducibility остаются открытыми. Production publication по-прежнему требует DINO/model rights, OCI/SBOM/notices, provider snapshot и отдельный publication signoff.
+Статус: Stage 0 infrastructure, Stage 1 art-direction gate и Stage 2 runtime qualification выполнены; internal pruned TRELLIS chair и window/trim component probes прошли на Tesla T4 с project-authored inputs, measured VRAM, content-addressed outputs и полным teardown. Требуемые 2 из 3 component probes успешны, AI feasibility gate green; Stage 3 synthetic compiler scaffold, GLB exporter, structural validation и two-run byte-identical reproducibility report выполнены на exact Blender. Neutral low-fidelity concept gate выбрал corrected Concept 03 и зафиксировал layout intent в Candidate 01 без публичного production-track mapping. Exact candidate specification и final candidate export reproducibility остаются открытыми. Production publication по-прежнему требует DINO/model rights, OCI/SBOM/notices, provider snapshot и отдельный publication signoff.
 
 Этот документ дополняет `docs/plans/2026-08-04-standard-room-templates.md` и заменяет только подход к созданию и визуальной приёмке новых room assets. Platform contracts, immutable template binding, Wave 2/3 activation, runtime ownership rules и Scene Bundle v1 остаются без изменений.
 
@@ -122,8 +122,8 @@ Cross-repo integration выполняется только по полным com
 | Зависимость | Состояние на 2026-08-24 | Следующее действие |
 |---|---|---|
 | Existing multi-scene repository | `vrata-labs/scene-assets`, main SHA `9ea73bc1a1ed0e86d5d959738d0383ccf89ad464` | Использовать только как historical reference; pilot artifacts не добавлять |
-| Experiment / Scene Factory repository | `vrata-labs/warm-modern-meeting-room-scene-factory`, chair probe merge `ee626ef08bc23d3e3d990a30b444490138992ada`, feasibility correction `e28d8b620e60f1dceb767a69b778c5f3d7ce395e`, window/trim probe merge `c14028818a07fc1b293809e90470563e8b75d910`, Stage 3 contract merge `26ff261de8b786564fd172d2367a13fec4b60dab`, room shell merge `d0c2e9e9920721220dc0e6729b71db146b40f183`, openings merge `f87580da8f7815468400552e6fe2e7cb9fcfa13f`, material zones merge `f467aa431ff06a298355401ef6ea18aa84cb16fc`, synthetic reproducibility merge `c395ce81f778d23691e37fb7a9c3f107dea8c057`, post-merge CI `32732477327` green, `main` protected | Получить approved candidate specification и повторить byte-identical gate на final candidate GLB |
-| Candidate 01 repository | `vrata-labs/warm-modern-meeting-room-candidate-01`, initial SHA `1805c148866e8aeb8d21cb827bc93968bd61769c`, CI `31635584774` green, `main` protected | Не добавлять assets до применимого rights/provenance gate |
+| Experiment / Scene Factory repository | `vrata-labs/warm-modern-meeting-room-scene-factory`, chair probe merge `ee626ef08bc23d3e3d990a30b444490138992ada`, feasibility correction `e28d8b620e60f1dceb767a69b778c5f3d7ce395e`, window/trim probe merge `c14028818a07fc1b293809e90470563e8b75d910`, Stage 3 contract merge `26ff261de8b786564fd172d2367a13fec4b60dab`, room shell merge `d0c2e9e9920721220dc0e6729b71db146b40f183`, openings merge `f87580da8f7815468400552e6fe2e7cb9fcfa13f`, material zones merge `f467aa431ff06a298355401ef6ea18aa84cb16fc`, synthetic reproducibility merge `c395ce81f778d23691e37fb7a9c3f107dea8c057`, neutral concept gate merge `cf61a7263fea76bf7fa5812021342c22cd83f008`, post-merge CI `32745578940` green, `main` protected | Пересчитать exact scene-spec, routes и anchors из approved neutral layout intent |
+| Candidate 01 repository | `vrata-labs/warm-modern-meeting-room-candidate-01`, approved concept record merge `cddd258682cfe082a6b207799a38eb7a93014947`, CI `32744371761` green, `main` protected | Не добавлять assets до применимого rights/provenance gate; exact scene specification ещё не создана |
 | Candidate 02 repository | `vrata-labs/warm-modern-meeting-room-candidate-02`, initial SHA `6a8ec35fca968522e8041c1034f66bca6032aa9e`, CI `31635604223` green, `main` protected | Не добавлять assets до применимого rights/provenance gate |
 | Platform validator | Pinned SHA `4ae8951961fce72a16f87b9d15890aee7d7eef2d` | Подтвердить, что lock не устарел перед implementation |
 | Blender | Linux `4.5.12 LTS`, archive SHA-256 `95e3a2dfedba3bd32ca54fc355eac6b15a11986954ccb02815a07535d0120a25`, binary SHA-256 `33ac108ebce3c271f5357e5c664d0488717263bcf2145c80300edd0b12c31880`, build `84afd5f785f7` | Использовать exact verified build |
@@ -603,6 +603,12 @@ Stage 3 synthetic GLB reproducibility evidence на 2026-08-24:
 - final local `pnpm validate`, `pnpm test` с exact Blender (502 tests), `pnpm verify:runtime-gates` и `git diff --check` green; `syntheticFixtureGlbByteIdentical=true`, но approved candidate, final candidate GLB и publication readiness остаются false.
 
 Условие перехода: exact pilot specification воспроизводит byte-identical GLB и проходит existing validators. Если pinned Blender/exporter даёт разные bytes, publication блокируется до локализации nondeterminism или добавления deterministic canonicalization step с отдельными tests; неопределённая `structural equivalence` не принимается. Повтор stochastic AI generation не требуется и измеряется отдельно.
+
+Neutral concept-gate evidence на 2026-08-24:
+
+- Candidate 01 PR `#1`, merge `cddd258682cfe082a6b207799a38eb7a93014947`, post-merge CI `32744371761` green; private corrected preview SHA-256 `f52b3722e71dd231ebe80424f0411e9771670fa37aff01eebbce42ff7d4c0a21` связан с layout intent без включения preview bytes;
+- Scene Factory PR `#23`, merge `cf61a7263fea76bf7fa5812021342c22cd83f008`, post-merge CI `32745578940` green; gate содержит ровно три anonymous concepts, а исправленная ориентация кресел оформлена revision Concept 03;
+- production-track mapping не публикуется; candidate identity остаётся neutral, а exact specification, asset rights, release artifacts и publication readiness остаются false/open.
 
 ### Этап 4A. Curated CC0 room
 
