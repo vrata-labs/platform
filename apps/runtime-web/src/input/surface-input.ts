@@ -116,6 +116,9 @@ export function resolveSurfaceHitFromRay(input: {
   input.raycaster.ray.copy(input.ray);
 
   for (const surface of input.surfaces) {
+    if (!surface.inputEnabled || !surface.object.visible) {
+      continue;
+    }
     const intersections = input.raycaster.intersectObject(surface.object, false);
     const hit = intersections[0];
     if (!hit?.uv || hit.distance >= bestDistance) {
@@ -149,8 +152,14 @@ export function resolveSurfaceHitFromPlanePoint(input: {
   let bestDistance = Number.POSITIVE_INFINITY;
 
   for (const surface of input.surfaces) {
+    if (!surface.inputEnabled || !surface.object.visible) {
+      continue;
+    }
     const localPoint = surface.object.worldToLocal(input.point.clone());
-    const distance = Math.abs(localPoint.z);
+    if (localPoint.z < 0) {
+      continue;
+    }
+    const distance = localPoint.z;
     if (distance > surface.maxDistanceM || distance >= bestDistance) {
       continue;
     }

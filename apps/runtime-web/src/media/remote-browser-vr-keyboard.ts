@@ -258,6 +258,12 @@ export function createRemoteBrowserVrKeyboardView(input: {
   return view;
 }
 
+export function mountRemoteBrowserVrKeyboard(view: RemoteBrowserVrKeyboardView, surface: THREE.Object3D): void {
+  if (view.root.parent !== surface) {
+    surface.add(view.root);
+  }
+}
+
 export function setRemoteBrowserVrKeyboardActive(view: RemoteBrowserVrKeyboardView, active: boolean): void {
   view.active = active;
   view.root.visible = active;

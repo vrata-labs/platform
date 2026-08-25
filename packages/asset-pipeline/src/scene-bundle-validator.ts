@@ -49,8 +49,8 @@ const defaultMaxBundleBytes = 50 * 1024 * 1024;
 const supportedSceneAssetExtensions = new Set([".glb", ".gltf", ".fbx"]);
 const supportedPreviewExtensions = new Set([".jpg", ".jpeg", ".png", ".webp"]);
 const supportedMediaSurfaceKinds = new Set(["wall", "table", "laptop", "floating", "custom"]);
-const maxMediaSurfaceDimensionPx = 16_384;
-const maxMediaSurfacePixels = 67_000_000;
+const mediaSurfaceMaxPixelSide = 8192;
+const mediaSurfaceMaxTotalPixels = 33_554_432;
 
 function issue(severity: SceneBundleValidationSeverity, path: string, code: string, message: string): SceneBundleValidationIssue {
   return { severity, path, code, message };
@@ -66,6 +66,10 @@ function isFiniteNumber(value: unknown): value is number {
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
+}
+
+function isValidMediaSurfacePixelDimension(value: unknown): value is number {
+  return Number.isSafeInteger(value) && Number(value) > 0 && Number(value) <= mediaSurfaceMaxPixelSide;
 }
 
 export function normalizeSceneBundleRelativePath(value: string): string | null {
@@ -407,6 +411,9 @@ function validateManifestShape(input: unknown, issues: SceneBundleValidationIssu
       issues.push(issue("error", "scene.json#/mediaSurfaces", "invalid_scene_bundle_media_surfaces_empty", "mediaSurfaces must not be empty when provided."));
     } else {
       const surfaceIds = new Set<string>();
+      let debugMainCount = 0;
+      let f3SurfaceCount = 0;
+      let legacySurfaceCount = 0;
       input.mediaSurfaces.forEach((surface, index) => {
         const path = `scene.json#/mediaSurfaces/${index}`;
         if (!isRecord(surface)) {
@@ -420,60 +427,118 @@ function validateManifestShape(input: unknown, issues: SceneBundleValidationIssu
         } else {
           surfaceIds.add(surface.surfaceId);
         }
-        if (surface.label !== undefined && !isNonEmptyString(surface.label)) {
-          issues.push(issue("error", `${path}/label`, "invalid_scene_bundle_media_surface_label", "label must be a non-empty string."));
-        }
-        if (surface.kind !== undefined && (typeof surface.kind !== "string" || !supportedMediaSurfaceKinds.has(surface.kind))) {
-          issues.push(issue("error", `${path}/kind`, "invalid_scene_bundle_media_surface_kind", "kind must be wall, table, laptop, floating, or custom."));
+        if (surface.surfaceId === "debug-main") {
+          debugMainCount += 1;
         }
         for (const dimension of ["widthM", "heightM"]) {
           if (!isFiniteNumber(surface[dimension]) || surface[dimension] <= 0) {
             issues.push(issue("error", `${path}/${dimension}`, "invalid_scene_bundle_media_surface_dimensions", `${dimension} must be a positive finite number.`));
           }
         }
-        const hasWidthPx = surface.widthPx !== undefined;
-        const hasHeightPx = surface.heightPx !== undefined;
-        if (hasWidthPx !== hasHeightPx) {
-          issues.push(issue("error", path, "invalid_scene_bundle_media_surface_pixel_dimensions", "widthPx and heightPx must be provided together."));
-        } else if (hasWidthPx && hasHeightPx
-          && (!Number.isSafeInteger(surface.widthPx)
-            || !Number.isSafeInteger(surface.heightPx)
-            || Number(surface.widthPx) <= 0
-            || Number(surface.heightPx) <= 0
-            || Number(surface.widthPx) > maxMediaSurfaceDimensionPx
-            || Number(surface.heightPx) > maxMediaSurfaceDimensionPx
-            || Number(surface.widthPx) * Number(surface.heightPx) > maxMediaSurfacePixels)) {
-          issues.push(issue("error", path, "invalid_scene_bundle_media_surface_pixel_dimensions", `widthPx and heightPx must be positive safe integers up to ${maxMediaSurfaceDimensionPx}, with at most ${maxMediaSurfacePixels} total pixels.`));
-        }
-        if (!isRecord(surface.transform)) {
-          issues.push(issue("error", `${path}/transform`, "invalid_scene_bundle_media_surface_transform", "transform must contain finite x, y, z, and yaw numbers."));
-        } else {
-          for (const axis of ["x", "y", "z"]) {
-            if (!isFiniteNumber(surface.transform[axis])) {
-              issues.push(issue("error", `${path}/transform/${axis}`, "invalid_scene_bundle_media_surface_transform", `${axis} must be a finite number.`));
-            }
+        const isF3 = surface.representation !== undefined
+          || surface.position !== undefined
+          || surface.pixelDimensions !== undefined
+          || surface.frontFace !== undefined
+          || surface.input !== undefined;
+        if (isF3) {
+          f3SurfaceCount += 1;
+          if (surface.representation !== "platform-runtime-plane") {
+            issues.push(issue("error", `${path}/representation`, "invalid_scene_bundle_media_surface_representation", "representation must equal platform-runtime-plane."));
           }
-          for (const axis of ["yaw", "pitch", "roll"]) {
-            if (surface.transform[axis] !== undefined && !isFiniteNumber(surface.transform[axis])) {
-              issues.push(issue("error", `${path}/transform/${axis}`, "invalid_scene_bundle_media_surface_transform", `${axis} must be a finite number when provided.`));
-            }
-          }
-        }
-        if (surface.visible !== undefined && typeof surface.visible !== "boolean") {
-          issues.push(issue("error", `${path}/visible`, "invalid_scene_bundle_media_surface_visibility", "visible must be a boolean when provided."));
-        }
-        if (surface.allowedObjectTypes !== undefined) {
-          if (!Array.isArray(surface.allowedObjectTypes)) {
-            issues.push(issue("error", `${path}/allowedObjectTypes`, "invalid_scene_bundle_media_surface_allowed_object_types", "allowedObjectTypes must be an array when provided."));
+          if (!isRecord(surface.position)) {
+            issues.push(issue("error", `${path}/position`, "invalid_scene_bundle_media_surface_position", "position must be an object with finite x, y, and z numbers."));
           } else {
-            surface.allowedObjectTypes.forEach((objectType, objectTypeIndex) => {
-              if (!isNonEmptyString(objectType)) {
-                issues.push(issue("error", `${path}/allowedObjectTypes/${objectTypeIndex}`, "invalid_scene_bundle_media_surface_allowed_object_type", "allowedObjectTypes entries must be non-empty strings."));
+            for (const axis of ["x", "y", "z"]) {
+              if (!isFiniteNumber(surface.position[axis])) {
+                issues.push(issue("error", `${path}/position/${axis}`, "invalid_scene_bundle_media_surface_position", `${axis} must be a finite number.`));
               }
-            });
+            }
+          }
+          if (!isFiniteNumber(surface.yaw)) {
+            issues.push(issue("error", `${path}/yaw`, "invalid_scene_bundle_media_surface_yaw", "yaw must be a finite number."));
+          }
+          if (!isRecord(surface.pixelDimensions)) {
+            issues.push(issue("error", `${path}/pixelDimensions`, "invalid_scene_bundle_media_surface_pixel_dimensions", `pixelDimensions must contain positive safe integers no greater than ${mediaSurfaceMaxPixelSide}.`));
+          } else {
+            for (const dimension of ["width", "height"]) {
+              if (!isValidMediaSurfacePixelDimension(surface.pixelDimensions[dimension])) {
+                issues.push(issue("error", `${path}/pixelDimensions/${dimension}`, "invalid_scene_bundle_media_surface_pixel_dimensions", `${dimension} must be a positive safe integer no greater than ${mediaSurfaceMaxPixelSide}.`));
+              }
+            }
+            if (isValidMediaSurfacePixelDimension(surface.pixelDimensions.width)
+              && isValidMediaSurfacePixelDimension(surface.pixelDimensions.height)
+              && surface.pixelDimensions.width * surface.pixelDimensions.height > mediaSurfaceMaxTotalPixels) {
+              issues.push(issue("error", `${path}/pixelDimensions`, "invalid_scene_bundle_media_surface_pixel_dimensions", `pixel dimensions must not exceed ${mediaSurfaceMaxTotalPixels} total pixels.`));
+            }
+          }
+          if (surface.frontFace !== "local-positive-z") {
+            issues.push(issue("error", `${path}/frontFace`, "invalid_scene_bundle_media_surface_front_face", "frontFace must equal local-positive-z."));
+          }
+          if (!isRecord(surface.input)) {
+            issues.push(issue("error", `${path}/input`, "invalid_scene_bundle_media_surface_input", "input must contain enabled and maxDistanceM."));
+          } else {
+            if (typeof surface.input.enabled !== "boolean") {
+              issues.push(issue("error", `${path}/input/enabled`, "invalid_scene_bundle_media_surface_input_enabled", "enabled must be a boolean."));
+            }
+            if (!isFiniteNumber(surface.input.maxDistanceM) || surface.input.maxDistanceM <= 0) {
+              issues.push(issue("error", `${path}/input/maxDistanceM`, "invalid_scene_bundle_media_surface_input_max_distance_m", "maxDistanceM must be a positive finite number."));
+            }
+          }
+        } else {
+          legacySurfaceCount += 1;
+          if (surface.label !== undefined && !isNonEmptyString(surface.label)) {
+            issues.push(issue("error", `${path}/label`, "invalid_scene_bundle_media_surface_label", "label must be a non-empty string."));
+          }
+          if (surface.kind !== undefined && (typeof surface.kind !== "string" || !supportedMediaSurfaceKinds.has(surface.kind))) {
+            issues.push(issue("error", `${path}/kind`, "invalid_scene_bundle_media_surface_kind", "kind must be wall, table, laptop, floating, or custom."));
+          }
+          const validWidthPx = surface.widthPx === undefined || isValidMediaSurfacePixelDimension(surface.widthPx);
+          const validHeightPx = surface.heightPx === undefined || isValidMediaSurfacePixelDimension(surface.heightPx);
+          if (!validWidthPx) {
+            issues.push(issue("error", `${path}/widthPx`, "invalid_scene_bundle_media_surface_pixel_dimensions", `widthPx must be a positive safe integer no greater than ${mediaSurfaceMaxPixelSide}.`));
+          }
+          if (!validHeightPx) {
+            issues.push(issue("error", `${path}/heightPx`, "invalid_scene_bundle_media_surface_pixel_dimensions", `heightPx must be a positive safe integer no greater than ${mediaSurfaceMaxPixelSide}.`));
+          }
+          if (validWidthPx && validHeightPx && typeof surface.widthPx === "number" && typeof surface.heightPx === "number"
+            && surface.widthPx * surface.heightPx > mediaSurfaceMaxTotalPixels) {
+            issues.push(issue("error", path, "invalid_scene_bundle_media_surface_pixel_dimensions", `pixel dimensions must not exceed ${mediaSurfaceMaxTotalPixels} total pixels.`));
+          }
+          if (!isRecord(surface.transform)) {
+            issues.push(issue("error", `${path}/transform`, "invalid_scene_bundle_media_surface_transform", "transform must contain finite x, y, and z numbers."));
+          } else {
+            for (const axis of ["x", "y", "z"]) {
+              if (!isFiniteNumber(surface.transform[axis])) {
+                issues.push(issue("error", `${path}/transform/${axis}`, "invalid_scene_bundle_media_surface_transform", `${axis} must be a finite number.`));
+              }
+            }
+            for (const axis of ["yaw", "pitch", "roll"]) {
+              if (surface.transform[axis] !== undefined && !isFiniteNumber(surface.transform[axis])) {
+                issues.push(issue("error", `${path}/transform/${axis}`, "invalid_scene_bundle_media_surface_transform", `${axis} must be a finite number when provided.`));
+              }
+            }
+          }
+          if (surface.visible !== undefined && typeof surface.visible !== "boolean") {
+            issues.push(issue("error", `${path}/visible`, "invalid_scene_bundle_media_surface_visibility", "visible must be a boolean when provided."));
+          }
+          if (surface.allowedObjectTypes !== undefined) {
+            if (!Array.isArray(surface.allowedObjectTypes)) {
+              issues.push(issue("error", `${path}/allowedObjectTypes`, "invalid_scene_bundle_media_surface_allowed_object_types", "allowedObjectTypes must be an array when provided."));
+            } else {
+              surface.allowedObjectTypes.forEach((objectType, objectTypeIndex) => {
+                if (!isNonEmptyString(objectType)) {
+                  issues.push(issue("error", `${path}/allowedObjectTypes/${objectTypeIndex}`, "invalid_scene_bundle_media_surface_allowed_object_type", "allowedObjectTypes entries must be non-empty strings."));
+                }
+              });
+            }
           }
         }
       });
+      if (f3SurfaceCount > 0 && legacySurfaceCount > 0) {
+        issues.push(issue("error", "scene.json#/mediaSurfaces", "invalid_scene_bundle_media_surfaces_mixed_formats", "mediaSurfaces must use either the F3 form or the deprecated legacy v1 form, not both."));
+      } else if (f3SurfaceCount > 0 && debugMainCount !== 1) {
+        issues.push(issue("error", "scene.json#/mediaSurfaces", "invalid_scene_bundle_media_surfaces_debug_main_count", `mediaSurfaces must contain exactly one surfaceId=debug-main; received ${debugMainCount}.`));
+      }
     }
   }
 

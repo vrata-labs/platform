@@ -2149,6 +2149,348 @@ test("two rooms load two different scene bundles", async ({ browser, request }) 
   await officePage.close();
 });
 
+test("real uploaded scene bundles drive manifest media surfaces and fallback defaults", async ({ page, request }) => {
+  const bundleId = `media-surfaces-${Date.now()}`;
+  const version = "v1";
+  const gltf = {
+    asset: { version: "2.0" },
+    scene: 0,
+    scenes: [{ nodes: [0] }],
+    nodes: [{ mesh: 0 }],
+    meshes: [{
+      primitives: [{
+        attributes: { POSITION: 0 },
+        indices: 1
+      }]
+    }],
+    buffers: [{
+      uri: "data:application/octet-stream;base64,AACAvwAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAAEAAAAAAAAABAAIAAAA=",
+      byteLength: 44
+    }],
+    bufferViews: [{
+      buffer: 0,
+      byteOffset: 0,
+      byteLength: 36,
+      target: 34962
+    }, {
+      buffer: 0,
+      byteOffset: 36,
+      byteLength: 6,
+      target: 34963
+    }],
+    accessors: [{
+      bufferView: 0,
+      componentType: 5126,
+      count: 3,
+      type: "VEC3",
+      min: [-1, 0, 0],
+      max: [1, 2, 0]
+    }, {
+      bufferView: 1,
+      componentType: 5123,
+      count: 3,
+      type: "SCALAR",
+      min: [0],
+      max: [2]
+    }]
+  };
+  const injectedSurfaces = [{
+    surfaceId: "debug-main",
+    representation: "platform-runtime-plane",
+    position: { x: -3.4, y: 1.55, z: 0.15 },
+    yaw: Math.PI / 2,
+    widthM: 3.2,
+    heightM: 1.8,
+    pixelDimensions: { width: 1920, height: 1080 },
+    frontFace: "local-positive-z",
+    input: { enabled: true, maxDistanceM: 0.05 }
+  }, {
+    surfaceId: "whiteboard-wall",
+    representation: "platform-runtime-plane",
+    position: { x: 3.4, y: 1.5, z: 0.5 },
+    yaw: -Math.PI / 2,
+    widthM: 2.4,
+    heightM: 1.25,
+    pixelDimensions: { width: 1920, height: 1000 },
+    frontFace: "local-positive-z",
+    input: { enabled: true, maxDistanceM: 0.05 }
+  }];
+  const uploadBundle = async (targetBundleId: string, manifest: Record<string, unknown>): Promise<string> => {
+    const uploadResponse = await request.post("/api/scene-bundles/uploads", {
+      headers: { "x-vrata-admin-token": e2eAdminToken },
+      multipart: {
+        bundleId: targetBundleId,
+        version,
+        bundle: {
+          name: `${targetBundleId}.zip`,
+          mimeType: "application/zip",
+          buffer: createStoredZip({
+            "scene.json": `${JSON.stringify(manifest, null, 2)}\n`,
+            "scene.gltf": `${JSON.stringify(gltf)}\n`
+          })
+        }
+      }
+    });
+    expect(uploadResponse.status()).toBe(201);
+    const uploaded = await uploadResponse.json() as {
+      publicUrl: string;
+      validation?: { issues?: Array<{ severity: string }> };
+    };
+    expect(uploaded.validation?.issues?.filter((issue) => issue.severity === "error") ?? []).toEqual([]);
+    return e2eRoomLink(uploaded.publicUrl);
+  };
+  const baseManifest = {
+    schemaVersion: 1,
+    source: "runtime-e2e",
+    glbPath: "scene.gltf",
+    spawnPoints: [{ id: "main", position: { x: 0, y: 0, z: 4 } }]
+  };
+  const fallbackBundleId = `${bundleId}-fallback`;
+  const sceneBundleUrl = await uploadBundle(bundleId, {
+    ...baseManifest,
+    sceneId: bundleId,
+    label: "Media Surface Fixture",
+    mediaSurfaces: injectedSurfaces
+  });
+  const fallbackSceneBundleUrl = await uploadBundle(fallbackBundleId, {
+    ...baseManifest,
+    sceneId: fallbackBundleId,
+    label: "Fallback Media Surface Fixture"
+  });
+  const injectedRoom = await createAvatarRoom(request, "Manifest Media Surface Room", sceneBundleUrl);
+  const fallbackRoom = await createAvatarRoom(request, "Default Media Surface Room", fallbackSceneBundleUrl);
+
+  await page.goto(`${e2eRoomLink(injectedRoom.roomLink)}?debug=1&role=host`, { waitUntil: "domcontentloaded" });
+
+  type SurfaceSnapshot = {
+    surfaceId: string;
+    widthM: number;
+    heightM: number;
+    widthPx: number;
+    heightPx: number;
+    inputEnabled: boolean;
+    maxDistanceM: number;
+    position: { x: number; y: number; z: number };
+    yaw: number;
+    manifestPosition: { x: number; y: number; z: number } | null;
+    manifestYaw: number | null;
+    worldPosition: { x: number; y: number; z: number };
+    worldYaw: number;
+  };
+  await expect.poll(async () => page.evaluate(() => {
+    const debug = (window as Window & {
+      __VRATA_DEBUG__?: {
+        sceneBundleState?: string;
+        mediaObjects?: {
+          surfaces?: SurfaceSnapshot[];
+          physicalSurfaceIdsWithoutLogicalState?: string[];
+          logicalSurfaceIdsWithoutPhysicalView?: string[];
+          unrenderedObjectIds?: string[];
+          lastRuntimeResetSurfaceIds?: string[];
+          lastRuntimeResetSurfaceIdsWithCachedRuntimes?: string[];
+        };
+      };
+    }).__VRATA_DEBUG__;
+    return {
+      state: debug?.sceneBundleState ?? null,
+      physicalWithoutLogical: debug?.mediaObjects?.physicalSurfaceIdsWithoutLogicalState ?? [],
+      logicalWithoutPhysical: debug?.mediaObjects?.logicalSurfaceIdsWithoutPhysicalView ?? [],
+      unrenderedObjectIds: debug?.mediaObjects?.unrenderedObjectIds ?? [],
+      resetSurfaceIds: debug?.mediaObjects?.lastRuntimeResetSurfaceIds ?? [],
+      cachedRuntimeResetSurfaceIds: debug?.mediaObjects?.lastRuntimeResetSurfaceIdsWithCachedRuntimes ?? [],
+      surfaces: (debug?.mediaObjects?.surfaces ?? []).map((surface) => ({
+        surfaceId: surface.surfaceId,
+        widthM: surface.widthM,
+        heightM: surface.heightM,
+        widthPx: surface.widthPx,
+        heightPx: surface.heightPx,
+        inputEnabled: surface.inputEnabled,
+        maxDistanceM: surface.maxDistanceM,
+        position: surface.position,
+        yaw: surface.yaw,
+        manifestPosition: surface.manifestPosition,
+        manifestYaw: surface.manifestYaw,
+        worldPosition: surface.worldPosition,
+        worldYaw: surface.worldYaw
+      }))
+    };
+  }), {
+    timeout: 20000,
+    intervals: [250, 500, 1000]
+  }).toEqual({
+    state: "loaded",
+    physicalWithoutLogical: [],
+    logicalWithoutPhysical: ["laptop-screen"],
+    unrenderedObjectIds: [],
+    resetSurfaceIds: ["laptop-screen", "debug-main", "whiteboard-wall"],
+    cachedRuntimeResetSurfaceIds: [],
+    surfaces: [{
+      surfaceId: "debug-main",
+      widthM: 3.2,
+      heightM: 1.8,
+      widthPx: 1920,
+      heightPx: 1080,
+      inputEnabled: true,
+      maxDistanceM: 0.05,
+      position: { x: -3.4, y: 1.55, z: 0.15 },
+      yaw: Math.PI / 2,
+      manifestPosition: { x: -3.4, y: 1.55, z: 0.15 },
+      manifestYaw: Math.PI / 2,
+      worldPosition: { x: -3.4, y: 1.55, z: 0.15 },
+      worldYaw: Number((Math.PI / 2).toFixed(3))
+    }, {
+      surfaceId: "whiteboard-wall",
+      widthM: 2.4,
+      heightM: 1.25,
+      widthPx: 1920,
+      heightPx: 1000,
+      inputEnabled: true,
+      maxDistanceM: 0.05,
+      position: { x: 3.4, y: 1.5, z: 0.5 },
+      yaw: -Math.PI / 2,
+      manifestPosition: { x: 3.4, y: 1.5, z: 0.5 },
+      manifestYaw: -Math.PI / 2,
+      worldPosition: { x: 3.4, y: 1.5, z: 0.5 },
+      worldYaw: Number((-Math.PI / 2).toFixed(3))
+    }]
+  });
+
+  const physicalResults = await page.evaluate(() => {
+    const api = (window as Window & {
+      __VRATA_TEST__?: {
+        selectMediaSurface(surfaceId: string): boolean;
+        getMediaSurfaceWorldPosition(surfaceId: string, u: number, v: number): { x: number; y: number; z: number } | null;
+        resolveMediaSurfaceRayHit(origin: { x: number; y: number; z: number }, direction: { x: number; y: number; z: number }): { surfaceId: string; distanceM: number | null } | null;
+      };
+    }).__VRATA_TEST__;
+    return {
+      westCenter: api?.getMediaSurfaceWorldPosition("debug-main", 0.5, 0.5) ?? null,
+      eastCenter: api?.getMediaSurfaceWorldPosition("whiteboard-wall", 0.5, 0.5) ?? null,
+      laptopCenter: api?.getMediaSurfaceWorldPosition("laptop-screen", 0.5, 0.5) ?? null,
+      laptopSelected: api?.selectMediaSurface("laptop-screen") ?? false,
+      remoteRayHit: api?.resolveMediaSurfaceRayHit(
+        { x: 0, y: 1.55, z: 0.15 },
+        { x: -1, y: 0, z: 0 }
+      ) ?? null
+    };
+  });
+  expect(physicalResults).toEqual({
+    westCenter: { x: -3.4, y: 1.55, z: 0.15 },
+    eastCenter: { x: 3.4, y: 1.5, z: 0.5 },
+    laptopCenter: null,
+    laptopSelected: false,
+    remoteRayHit: { surfaceId: "debug-main", distanceM: 3.4 }
+  });
+
+  expect(await page.evaluate(() => {
+    const api = (window as Window & {
+      __VRATA_TEST__?: { getMediaCanvasRuntimeKinds(surfaceId: string): string[] };
+    }).__VRATA_TEST__;
+    return {
+      debugMain: api?.getMediaCanvasRuntimeKinds("debug-main") ?? [],
+      whiteboardWall: api?.getMediaCanvasRuntimeKinds("whiteboard-wall") ?? []
+    };
+  })).toEqual({ debugMain: [], whiteboardWall: [] });
+
+  expect(await page.evaluate(() => (window as Window & {
+    __VRATA_TEST__?: { selectMediaSurface(surfaceId: string): boolean };
+  }).__VRATA_TEST__?.selectMediaSurface("whiteboard-wall") ?? false)).toBe(true);
+  await expect(page.locator("#start-whiteboard")).toBeEnabled();
+  await page.click("#start-whiteboard");
+  await expect.poll(async () => page.evaluate(() => (window as Window & {
+    __VRATA_TEST__?: { getMediaSurfaceRuntimePixelDimensions(surfaceId: string): { width: number; height: number } | null };
+  }).__VRATA_TEST__?.getMediaSurfaceRuntimePixelDimensions("whiteboard-wall") ?? null), {
+    timeout: 10000,
+    intervals: [250, 500, 1000]
+  }).toEqual({ width: 1920, height: 1000 });
+  expect(await page.evaluate(() => (window as Window & {
+    __VRATA_TEST__?: { getMediaCanvasRuntimeKinds(surfaceId: string): string[] };
+  }).__VRATA_TEST__?.getMediaCanvasRuntimeKinds("whiteboard-wall") ?? [])).toEqual(["whiteboard"]);
+
+  await page.goto(`${e2eRoomLink(fallbackRoom.roomLink)}?debug=1&role=host`);
+  await expect.poll(async () => page.evaluate(() => {
+    const debug = (window as Window & {
+      __VRATA_DEBUG__?: {
+        sceneBundleState?: string;
+        mediaObjects?: {
+          physicalSurfaceIdsWithoutLogicalState?: string[];
+          logicalSurfaceIdsWithoutPhysicalView?: string[];
+          surfaces?: Array<{
+            surfaceId: string;
+            widthM: number;
+            heightM: number;
+            widthPx: number;
+            heightPx: number;
+            inputEnabled: boolean;
+            maxDistanceM: number;
+            position: { x: number; y: number; z: number };
+            yaw: number;
+            manifestFormat: string;
+          }>;
+        };
+      };
+    }).__VRATA_DEBUG__;
+    return {
+      state: debug?.sceneBundleState ?? null,
+      physicalWithoutLogical: debug?.mediaObjects?.physicalSurfaceIdsWithoutLogicalState ?? [],
+      logicalWithoutPhysical: debug?.mediaObjects?.logicalSurfaceIdsWithoutPhysicalView ?? [],
+      surfaces: debug?.mediaObjects?.surfaces?.map((surface) => ({
+        surfaceId: surface.surfaceId,
+        widthM: surface.widthM,
+        heightM: surface.heightM,
+        widthPx: surface.widthPx,
+        heightPx: surface.heightPx,
+        inputEnabled: surface.inputEnabled,
+        maxDistanceM: surface.maxDistanceM,
+        position: surface.position,
+        yaw: surface.yaw,
+        manifestFormat: surface.manifestFormat
+      })) ?? []
+    };
+  }), {
+    timeout: 20000,
+    intervals: [250, 500, 1000]
+  }).toEqual({
+    state: "loaded",
+    physicalWithoutLogical: [],
+    logicalWithoutPhysical: [],
+    surfaces: [{
+      surfaceId: "debug-main",
+      widthM: 5.8,
+      heightM: 3.3,
+      widthPx: 1920,
+      heightPx: 1080,
+      inputEnabled: true,
+      maxDistanceM: 0.06,
+      position: { x: 0, y: 2.2, z: -6.6 },
+      yaw: 0,
+      manifestFormat: "default"
+    }, {
+      surfaceId: "whiteboard-wall",
+      widthM: 3.2,
+      heightM: 2,
+      widthPx: 1920,
+      heightPx: 1080,
+      inputEnabled: true,
+      maxDistanceM: 0.06,
+      position: { x: -4.6, y: 2, z: -5.8 },
+      yaw: 0.18,
+      manifestFormat: "default"
+    }, {
+      surfaceId: "laptop-screen",
+      widthM: 1.9,
+      heightM: 1.1,
+      widthPx: 1280,
+      heightPx: 720,
+      inputEnabled: true,
+      maxDistanceM: 0.06,
+      position: { x: 3.7, y: 1.45, z: -4.2 },
+      yaw: -0.28,
+      manifestFormat: "default"
+    }]
+  });
+});
+
 test("@private-assets two rooms load two different real SenseTower scene assets", async ({ browser, request }) => {
   const hallRoomResponse = await request.post("/api/rooms", {
     headers: {

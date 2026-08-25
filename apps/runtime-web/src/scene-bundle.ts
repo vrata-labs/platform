@@ -21,24 +21,37 @@ export interface SceneBundleSeatAnchor {
 }
 
 export interface SceneBundleMediaSurface {
+  manifestFormat: "f3" | "legacy";
   surfaceId: string;
-  label?: string;
-  kind?: "wall" | "table" | "laptop" | "floating" | "custom";
-  widthM: number;
-  heightM: number;
-  widthPx?: number;
-  heightPx?: number;
-  transform: {
+  representation: "platform-runtime-plane";
+  position: {
     x: number;
     y: number;
     z: number;
-    yaw?: number;
-    pitch?: number;
-    roll?: number;
   };
-  visible?: boolean;
-  allowedObjectTypes?: string[];
+  yaw: number;
+  pitch: number;
+  roll: number;
+  widthM: number;
+  heightM: number;
+  pixelDimensions: {
+    width?: number;
+    height?: number;
+  };
+  frontFace: "local-positive-z";
+  input: {
+    enabled: boolean;
+    maxDistanceM: number;
+  };
+  visible: boolean;
+  label?: string;
+  kind?: "wall" | "table" | "laptop" | "floating" | "custom";
+  legacyAllowedObjectTypes?: string[];
 }
+
+export const MEDIA_SURFACE_MAX_PIXEL_SIDE = 8192;
+export const MEDIA_SURFACE_MAX_TOTAL_PIXELS = 33_554_432;
+export const LEGACY_MEDIA_SURFACE_NEAR_CONTACT_DISTANCE_M = 0.06;
 
 export interface SceneBundleAttribution {
   title: string;
@@ -166,6 +179,13 @@ function parseSeatAnchor(input: unknown, index: number): SceneBundleSeatAnchor {
   };
 }
 
+function parsePositiveNumber(value: unknown, errorCode: string): number {
+  if (!isFiniteNumber(value) || value <= 0) {
+    throw new Error(errorCode);
+  }
+  return value;
+}
+
 function parseOptionalBoolean(value: unknown, errorCode: string): boolean | undefined {
   if (value === undefined) {
     return undefined;
@@ -176,28 +196,106 @@ function parseOptionalBoolean(value: unknown, errorCode: string): boolean | unde
   return value;
 }
 
-function parsePositiveNumber(value: unknown, errorCode: string): number {
-  if (!isFiniteNumber(value) || value <= 0) {
+function parsePixelDimension(value: unknown, errorCode: string): number {
+  if (!Number.isSafeInteger(value) || Number(value) <= 0 || Number(value) > MEDIA_SURFACE_MAX_PIXEL_SIDE) {
     throw new Error(errorCode);
   }
-  return value;
+  return value as number;
 }
 
-function parseMediaSurface(input: unknown, index: number): SceneBundleMediaSurface {
-  const payload = assertObject(input, `invalid_scene_bundle_media_surface:${index}`);
+function assertPixelBudget(width: number | undefined, height: number | undefined, errorCode: string): void {
+  if (width !== undefined && height !== undefined && width * height > MEDIA_SURFACE_MAX_TOTAL_PIXELS) {
+    throw new Error(errorCode);
+  }
+}
+
+function parseF3MediaSurface(payload: Record<string, unknown>, index: number): SceneBundleMediaSurface {
+  if (payload.representation !== "platform-runtime-plane") {
+    throw new Error(`invalid_scene_bundle_media_surface_representation:${index}`);
+  }
+  const position = assertObject(payload.position, `invalid_scene_bundle_media_surface_position:${index}`);
+  if (!isFiniteNumber(position.x) || !isFiniteNumber(position.y) || !isFiniteNumber(position.z)) {
+    throw new Error(`invalid_scene_bundle_media_surface_position:${index}`);
+  }
+  if (!isFiniteNumber(payload.yaw)) {
+    throw new Error(`invalid_scene_bundle_media_surface_yaw:${index}`);
+  }
+  const pixelDimensions = assertObject(payload.pixelDimensions, `invalid_scene_bundle_media_surface_pixel_dimensions:${index}`);
+  const widthPx = parsePixelDimension(pixelDimensions.width, `invalid_scene_bundle_media_surface_pixel_dimensions:${index}`);
+  const heightPx = parsePixelDimension(pixelDimensions.height, `invalid_scene_bundle_media_surface_pixel_dimensions:${index}`);
+  assertPixelBudget(widthPx, heightPx, `invalid_scene_bundle_media_surface_pixel_dimensions:${index}`);
+  if (payload.frontFace !== "local-positive-z") {
+    throw new Error(`invalid_scene_bundle_media_surface_front_face:${index}`);
+  }
+  const surfaceInput = assertObject(payload.input, `invalid_scene_bundle_media_surface_input:${index}`);
+  if (typeof surfaceInput.enabled !== "boolean") {
+    throw new Error(`invalid_scene_bundle_media_surface_input_enabled:${index}`);
+  }
+  if (!isFiniteNumber(surfaceInput.maxDistanceM) || surfaceInput.maxDistanceM <= 0) {
+    throw new Error(`invalid_scene_bundle_media_surface_input_max_distance_m:${index}`);
+  }
+
+  return {
+    manifestFormat: "f3",
+    surfaceId: assertString(payload.surfaceId, `invalid_scene_bundle_media_surface_id:${index}`),
+    representation: "platform-runtime-plane",
+    position: {
+      x: position.x,
+      y: position.y,
+      z: position.z
+    },
+    yaw: payload.yaw,
+    pitch: 0,
+    roll: 0,
+    widthM: parsePositiveNumber(payload.widthM, `invalid_scene_bundle_media_surface_width_m:${index}`),
+    heightM: parsePositiveNumber(payload.heightM, `invalid_scene_bundle_media_surface_height_m:${index}`),
+    pixelDimensions: {
+      width: widthPx,
+      height: heightPx
+    },
+    frontFace: "local-positive-z",
+    input: {
+      enabled: surfaceInput.enabled,
+      maxDistanceM: surfaceInput.maxDistanceM
+    },
+    visible: true
+  };
+}
+
+function parseLegacyMediaSurface(payload: Record<string, unknown>, index: number): SceneBundleMediaSurface {
   const transform = assertObject(payload.transform, `invalid_scene_bundle_media_surface_transform:${index}`);
   if (!isFiniteNumber(transform.x) || !isFiniteNumber(transform.y) || !isFiniteNumber(transform.z)) {
     throw new Error(`invalid_scene_bundle_media_surface_transform:${index}`);
   }
+  const yaw = transform.yaw === undefined ? 0 : transform.yaw;
+  const pitch = transform.pitch === undefined ? 0 : transform.pitch;
+  const roll = transform.roll === undefined ? 0 : transform.roll;
+  if (!isFiniteNumber(yaw)) throw new Error(`invalid_scene_bundle_media_surface_yaw:${index}`);
+  if (!isFiniteNumber(pitch)) throw new Error(`invalid_scene_bundle_media_surface_pitch:${index}`);
+  if (!isFiniteNumber(roll)) throw new Error(`invalid_scene_bundle_media_surface_roll:${index}`);
+
+  const widthPx = payload.widthPx === undefined
+    ? undefined
+    : parsePixelDimension(payload.widthPx, `invalid_scene_bundle_media_surface_width_px:${index}`);
+  const heightPx = payload.heightPx === undefined
+    ? undefined
+    : parsePixelDimension(payload.heightPx, `invalid_scene_bundle_media_surface_height_px:${index}`);
+  assertPixelBudget(widthPx, heightPx, `invalid_scene_bundle_media_surface_pixel_dimensions:${index}`);
+
   const parsed: SceneBundleMediaSurface = {
+    manifestFormat: "legacy",
     surfaceId: assertString(payload.surfaceId, `invalid_scene_bundle_media_surface_id:${index}`),
+    representation: "platform-runtime-plane",
+    position: { x: transform.x, y: transform.y, z: transform.z },
+    yaw,
+    pitch,
+    roll,
     widthM: parsePositiveNumber(payload.widthM, `invalid_scene_bundle_media_surface_width_m:${index}`),
     heightM: parsePositiveNumber(payload.heightM, `invalid_scene_bundle_media_surface_height_m:${index}`),
-    transform: {
-      x: transform.x,
-      y: transform.y,
-      z: transform.z
-    }
+    pixelDimensions: { width: widthPx, height: heightPx },
+    frontFace: "local-positive-z",
+    input: { enabled: true, maxDistanceM: LEGACY_MEDIA_SURFACE_NEAR_CONTACT_DISTANCE_M },
+    visible: parseOptionalBoolean(payload.visible, `invalid_scene_bundle_media_surface_visible:${index}`) ?? true
   };
 
   if (payload.label !== undefined) {
@@ -209,35 +307,25 @@ function parseMediaSurface(input: unknown, index: number): SceneBundleMediaSurfa
     }
     parsed.kind = payload.kind;
   }
-  if (payload.widthPx !== undefined) {
-    parsed.widthPx = parsePositiveNumber(payload.widthPx, `invalid_scene_bundle_media_surface_width_px:${index}`);
-  }
-  if (payload.heightPx !== undefined) {
-    parsed.heightPx = parsePositiveNumber(payload.heightPx, `invalid_scene_bundle_media_surface_height_px:${index}`);
-  }
-  if (transform.yaw !== undefined) {
-    if (!isFiniteNumber(transform.yaw)) throw new Error(`invalid_scene_bundle_media_surface_yaw:${index}`);
-    parsed.transform.yaw = transform.yaw;
-  }
-  if (transform.pitch !== undefined) {
-    if (!isFiniteNumber(transform.pitch)) throw new Error(`invalid_scene_bundle_media_surface_pitch:${index}`);
-    parsed.transform.pitch = transform.pitch;
-  }
-  if (transform.roll !== undefined) {
-    if (!isFiniteNumber(transform.roll)) throw new Error(`invalid_scene_bundle_media_surface_roll:${index}`);
-    parsed.transform.roll = transform.roll;
-  }
-
-  parsed.visible = parseOptionalBoolean(payload.visible, `invalid_scene_bundle_media_surface_visible:${index}`);
-
   if (payload.allowedObjectTypes !== undefined) {
     if (!Array.isArray(payload.allowedObjectTypes)) {
       throw new Error(`invalid_scene_bundle_media_surface_allowed_object_types:${index}`);
     }
-    parsed.allowedObjectTypes = payload.allowedObjectTypes.map((entry, typeIndex) => assertString(entry, `invalid_scene_bundle_media_surface_allowed_object_type:${index}:${typeIndex}`));
+    parsed.legacyAllowedObjectTypes = payload.allowedObjectTypes.map((entry, typeIndex) => (
+      assertString(entry, `invalid_scene_bundle_media_surface_allowed_object_type:${index}:${typeIndex}`)
+    ));
   }
-
   return parsed;
+}
+
+function parseMediaSurface(input: unknown, index: number): SceneBundleMediaSurface {
+  const payload = assertObject(input, `invalid_scene_bundle_media_surface:${index}`);
+  const isF3 = payload.representation !== undefined
+    || payload.position !== undefined
+    || payload.pixelDimensions !== undefined
+    || payload.frontFace !== undefined
+    || payload.input !== undefined;
+  return isF3 ? parseF3MediaSurface(payload, index) : parseLegacyMediaSurface(payload, index);
 }
 
 function parseAttribution(input: unknown, index: number): SceneBundleAttribution {
@@ -314,7 +402,26 @@ export function parseSceneBundleManifest(input: unknown): SceneBundleManifest {
     if (payload.mediaSurfaces.length === 0) {
       throw new Error("invalid_scene_bundle_media_surfaces_empty");
     }
-    manifest.mediaSurfaces = payload.mediaSurfaces.map((entry, index) => parseMediaSurface(entry, index));
+    const mediaSurfaces = payload.mediaSurfaces.map((entry, index) => parseMediaSurface(entry, index));
+    const surfaceIds = new Set<string>();
+    for (let index = 0; index < mediaSurfaces.length; index += 1) {
+      const surfaceId = mediaSurfaces[index]!.surfaceId;
+      if (surfaceIds.has(surfaceId)) {
+        throw new Error(`duplicate_scene_bundle_media_surface_id:${index}`);
+      }
+      surfaceIds.add(surfaceId);
+    }
+    const manifestFormats = new Set(mediaSurfaces.map((surface) => surface.manifestFormat));
+    if (manifestFormats.size > 1) {
+      throw new Error("invalid_scene_bundle_media_surfaces_mixed_formats");
+    }
+    if (manifestFormats.has("f3")) {
+      const debugMainCount = mediaSurfaces.filter((surface) => surface.surfaceId === "debug-main").length;
+      if (debugMainCount !== 1) {
+        throw new Error(`invalid_scene_bundle_media_surfaces_debug_main_count:${debugMainCount}`);
+      }
+    }
+    manifest.mediaSurfaces = mediaSurfaces;
   }
 
   if (payload.bounds !== undefined) {

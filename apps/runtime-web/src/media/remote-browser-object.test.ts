@@ -44,6 +44,42 @@ function installFakeCanvasDocument(): () => void {
   };
 }
 
+function installDelayedImage(): { images: Array<HTMLImageElement>; restore: () => void } {
+  const previousImage = globalThis.Image;
+  const images: Array<HTMLImageElement> = [];
+  class DelayedImage {
+    onload: (() => void) | null = null;
+    width = 1280;
+    height = 720;
+    set src(_value: string) {
+      images.push(this as unknown as HTMLImageElement);
+    }
+  }
+  Object.defineProperty(globalThis, "Image", { configurable: true, value: DelayedImage });
+  return {
+    images,
+    restore: () => {
+      if (previousImage) {
+        Object.defineProperty(globalThis, "Image", { configurable: true, value: previousImage });
+      } else {
+        Reflect.deleteProperty(globalThis, "Image");
+      }
+    }
+  };
+}
+
+function deliverFrame(runtime: ReturnType<typeof createRemoteBrowserObjectRuntime>, capturedAtMs: number): void {
+  (runtime as unknown as {
+    handleFrameMessage(payload: { type: string; dataUrl: string; width: number; height: number; capturedAtMs: number }): void;
+  }).handleFrameMessage({
+    type: "frame",
+    dataUrl: `data:image/png;base64,frame-${capturedAtMs}`,
+    width: 1280,
+    height: 720,
+    capturedAtMs
+  });
+}
+
 function createRuntimeObject(state: Partial<RemoteBrowserObjectState> = {}): MediaObjectInstance<RemoteBrowserObjectState> {
   return {
     objectId: "remote-browser-1",
@@ -106,6 +142,47 @@ test("remote browser runtime publishes its texture when a browser object is acti
 
     assert(appliedTextures.includes(runtime.texture));
   } finally {
+    restoreDocument();
+  }
+});
+
+test("remote browser runtime ignores delayed frame decode after dispose", () => {
+  const restoreDocument = installFakeCanvasDocument();
+  const delayedImage = installDelayedImage();
+  try {
+    const appliedTextures: unknown[] = [];
+    const runtime = createTestRuntime(appliedTextures);
+    deliverFrame(runtime, 1000);
+    assert.equal(delayedImage.images.length, 1);
+
+    runtime.dispose();
+    const appliedAfterDispose = appliedTextures.length;
+    delayedImage.images[0]!.onload?.call(delayedImage.images[0]!, new Event("load"));
+
+    assert.equal(appliedTextures.length, appliedAfterDispose);
+    assert.equal(appliedTextures.includes(runtime.texture), false);
+  } finally {
+    delayedImage.restore();
+    restoreDocument();
+  }
+});
+
+test("remote browser runtime applies a current-generation decoded frame", () => {
+  const restoreDocument = installFakeCanvasDocument();
+  const delayedImage = installDelayedImage();
+  try {
+    const appliedTextures: unknown[] = [];
+    const runtime = createTestRuntime(appliedTextures);
+    deliverFrame(runtime, 2000);
+    assert.equal(delayedImage.images.length, 1);
+
+    delayedImage.images[0]!.onload?.call(delayedImage.images[0]!, new Event("load"));
+
+    assert.deepEqual(appliedTextures, [runtime.texture]);
+    assert.equal(runtime.createDebugSnapshot(createRuntimeObject()).lastFrameAtMs, 2000);
+    runtime.dispose();
+  } finally {
+    delayedImage.restore();
     restoreDocument();
   }
 });

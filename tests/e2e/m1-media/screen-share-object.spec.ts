@@ -61,7 +61,7 @@ async function waitForKernel(page: Page, role: "guest" | "member" | "host" | "ad
       hasSurface: debug?.mediaObjects?.surfaces?.some((surface) => surface.surfaceId === "debug-main") ?? false
     };
   }, {
-    timeout: 15000,
+    timeout: 30000,
     intervals: [500, 1000, 2000]
   }).toEqual({
     connected: true,

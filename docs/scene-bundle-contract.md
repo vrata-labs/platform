@@ -79,7 +79,7 @@ Optional fields:
 
 - `bounds`: `{ width, height, depth }`
 - `renderMode`: `"default"` or `"clean"`; `clean` hides fallback debug geometry and uses the brighter scene lighting path
-- `mediaSurfaces`: runtime media surface layout for scene-specific screens, whiteboards, or remote browser targets
+- `mediaSurfaces`: physical runtime plane geometry for scene-specific media surfaces
 - `preview`: relative preview asset path
 - `attributions`: optional source credit records displayed in the runtime HUD
 - `notes`: free-form export notes
@@ -100,20 +100,33 @@ Each entry describes one credited source work:
 
 ### `mediaSurfaces`
 
-Scene bundles can override the built-in fallback media surface meshes without rebuilding the runtime image. This lets private scenes place screens and whiteboards where the GLB has frames, walls, or furniture.
+Scene bundles can override the built-in fallback media surface meshes without rebuilding the runtime image. The scene owns only physical visual surfaces: plane identity, placement, size, pixel projection, front face, and physical input reachability. Room/template state owns logical purpose, labels, visibility policy, active objects, and allowed object types.
 
 Each entry describes one runtime-visible surface:
 
-- `surfaceId`: media surface id. For v1 rooms, use ids known by the room media state, such as `debug-main`, `whiteboard-wall`, or `laptop-screen`.
-- `label`: optional display label for runtime debug controls when the room state does not provide one.
-- `kind`: optional semantic kind: `wall`, `table`, `laptop`, `floating`, or `custom`.
+- `surfaceId`: non-empty media surface id, unique within the manifest.
+- `representation`: exactly `"platform-runtime-plane"`.
+- `position`: finite `{ x, y, z }` world position in meters.
+- `yaw`: finite rotation around the local Y axis in radians.
 - `widthM`, `heightM`: physical plane size in meters.
-- `widthPx`, `heightPx`: optional backing texture resolution; defaults to `1920 x 1080` or the matching built-in surface resolution.
-- `transform`: `{ x, y, z, yaw, pitch, roll }` in meters/radians. `yaw`, `pitch`, and `roll` default to `0`.
-- `visible`: optional runtime visibility, defaults to `true`.
-- `allowedObjectTypes`: optional list of media object types this surface accepts when room state does not define the surface.
+- `pixelDimensions`: positive safe integer `{ width, height }` backing texture dimensions. Each side is at most `8192`, and total pixels are at most `33,554,432`.
+- `frontFace`: exactly `"local-positive-z"`; `THREE.PlaneGeometry` local +Z is the interactive/rendered front face.
+- `input`: `{ enabled, maxDistanceM }`, where `enabled` is boolean and `maxDistanceM` is a positive finite near-contact distance used by XR pencil/plane-point input. It does not limit controller or pointer ray reach.
 
-If `mediaSurfaces` is omitted, the runtime keeps the built-in fallback layout with the main wall screen, whiteboard wall, and laptop screen. If `mediaSurfaces` is present, only those scene-declared surface meshes are runtime-visible.
+All numeric values must be finite. Physical and pixel dimensions must be positive. A new F3 `mediaSurfaces` array must be non-empty and contain exactly one surface with `surfaceId: "debug-main"` for current runtime compatibility. Duplicate ids are invalid in every format.
+
+If `mediaSurfaces` is omitted, scene loading fails, or scene bundles are disabled, the runtime keeps the built-in fallback layout with the main wall screen, whiteboard wall, and laptop screen. If `mediaSurfaces` is present, only those scene-declared physical meshes are selectable, visible in media-surface diagnostics, and eligible for surface input. A logical room-state surface without corresponding scene geometry does not alias to `debug-main`.
+
+#### Deprecated legacy v1 form
+
+Runtime and asset validation continue to accept the visual `mediaSurfaces` form shipped in Scene Bundle v1 before the F3 projection. Existing bundles can use `surfaceId`, `widthM`, `heightM`, optional `widthPx`/`heightPx`, `label`, `kind`, `visible`, `allowedObjectTypes`, and `transform: { x, y, z, yaw?, pitch?, roll? }`.
+
+- Legacy `widthPx` and `heightPx`, when present, use the same safe-integer, `8192`-per-side, and `33,554,432`-total-pixel budgets as F3.
+- Legacy `pitch`, `roll`, `visible`, and `label` remain effective at runtime.
+- Legacy `allowedObjectTypes` is validated for compatibility and template-pair checks, but runtime object authorization comes only from logical room/template state.
+- Legacy surfaces use the historical `0.06 m` XR near-contact distance and do not limit ray reach.
+- An all-legacy array remains valid without `debug-main`. Mixing F3 and legacy entries in one array is rejected explicitly.
+- New and republished scene bundles should use the F3 `platform-runtime-plane` form above.
 
 Example:
 
@@ -134,14 +147,25 @@ Example:
   "mediaSurfaces": [
     {
       "surfaceId": "debug-main",
-      "label": "Right wall screen",
-      "kind": "wall",
-      "widthM": 5.8,
-      "heightM": 3.3,
-      "widthPx": 1920,
-      "heightPx": 1080,
-      "transform": { "x": 3.83, "y": 2.35, "z": -0.05, "yaw": -1.5707963267948966 },
-      "allowedObjectTypes": ["screen-share", "whiteboard", "remote-browser"]
+      "representation": "platform-runtime-plane",
+      "position": { "x": -3.4, "y": 1.55, "z": 0.15 },
+      "yaw": 1.5707963267948966,
+      "widthM": 3.2,
+      "heightM": 1.8,
+      "pixelDimensions": { "width": 1920, "height": 1080 },
+      "frontFace": "local-positive-z",
+      "input": { "enabled": true, "maxDistanceM": 0.05 }
+    },
+    {
+      "surfaceId": "whiteboard-wall",
+      "representation": "platform-runtime-plane",
+      "position": { "x": 3.4, "y": 1.5, "z": 0.5 },
+      "yaw": -1.5707963267948966,
+      "widthM": 2.4,
+      "heightM": 1.25,
+      "pixelDimensions": { "width": 1920, "height": 1000 },
+      "frontFace": "local-positive-z",
+      "input": { "enabled": true, "maxDistanceM": 0.05 }
     }
   ],
   "bounds": { "width": 24, "height": 8, "depth": 24 },
@@ -167,5 +191,5 @@ Example:
 - If `scene.json` fails validation or has an unknown `schemaVersion`, runtime uses the fallback room.
 - If `scene.glb` fails to load, runtime uses the fallback room.
 - Successful scene bundle load hides the fallback meshes and applies the first spawn point to the player root.
-- Successful scene bundle load applies `mediaSurfaces` when present; this replaces source-code-only screen placement for Docker image deployments.
+- Successful scene bundle load applies `mediaSurfaces` when present; the runtime creates, updates, or removes physical plane meshes to match the manifest exactly.
 - Successful scene bundle load shows `attributions` in the HUD when present.

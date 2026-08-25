@@ -101,11 +101,22 @@ export function validateTemplateScenePair(manifest: unknown, contract: RoomTempl
     }
 
     const expectedAspect = requiredSurface.aspectRatio;
-    if ((sceneSurface.widthPx === undefined) !== (sceneSurface.heightPx === undefined)) {
+    const isF3 = sceneSurface.representation !== undefined
+      || sceneSurface.position !== undefined
+      || sceneSurface.pixelDimensions !== undefined
+      || sceneSurface.frontFace !== undefined
+      || sceneSurface.input !== undefined;
+    const pixelDimensions = isF3 && isRecord(sceneSurface.pixelDimensions) ? sceneSurface.pixelDimensions : null;
+    const pixelWidth = isF3 ? pixelDimensions?.width : sceneSurface.widthPx;
+    const pixelHeight = isF3 ? pixelDimensions?.height : sceneSurface.heightPx;
+    const pixelDimensionsRequired = isF3 || (pixelWidth === undefined) !== (pixelHeight === undefined);
+    const pixelDimensionsInvalid = pixelDimensionsRequired
+      && (!Number.isSafeInteger(pixelWidth) || Number(pixelWidth) <= 0 || !Number.isSafeInteger(pixelHeight) || Number(pixelHeight) <= 0);
+    if (pixelDimensionsInvalid) {
       issues.push(error(
-        `scene.json#/mediaSurfaces/${requiredSurface.surfaceId}`,
+        `scene.json#/mediaSurfaces/${requiredSurface.surfaceId}${isF3 ? "/pixelDimensions" : ""}`,
         "template_surface_pixel_dimensions_required",
-        `Surface ${requiredSurface.surfaceId} must declare widthPx and heightPx together when either is provided.`
+        `Surface ${requiredSurface.surfaceId} must declare positive safe integer pixel dimensions together.`
       ));
     }
     if (!isFinitePositiveNumber(sceneSurface.widthM) || !isFinitePositiveNumber(sceneSurface.heightM)) {
@@ -115,19 +126,21 @@ export function validateTemplateScenePair(manifest: unknown, contract: RoomTempl
         `Surface ${requiredSurface.surfaceId} must declare positive widthM and heightM.`
       ));
     }
-    const transform = isRecord(sceneSurface.transform) ? sceneSurface.transform : null;
-    if (!transform || ![transform.x, transform.y, transform.z].every((entry) => typeof entry === "number" && Number.isFinite(entry))) {
+    const position = isRecord(isF3 ? sceneSurface.position : sceneSurface.transform)
+      ? (isF3 ? sceneSurface.position : sceneSurface.transform) as Record<string, unknown>
+      : null;
+    if (!position || ![position.x, position.y, position.z].every((entry) => typeof entry === "number" && Number.isFinite(entry))) {
       issues.push(error(
-        `scene.json#/mediaSurfaces/${requiredSurface.surfaceId}/transform`,
-        "template_surface_transform_required",
-        `Surface ${requiredSurface.surfaceId} must declare a finite x/y/z transform.`
+        `scene.json#/mediaSurfaces/${requiredSurface.surfaceId}/${isF3 ? "position" : "transform"}`,
+        isF3 ? "template_surface_position_required" : "template_surface_transform_required",
+        `Surface ${requiredSurface.surfaceId} must declare a finite x/y/z ${isF3 ? "position" : "transform"}.`
       ));
     }
     if (expectedAspect && isFinitePositiveNumber(sceneSurface.widthM) && isFinitePositiveNumber(sceneSurface.heightM)) {
       const expected = expectedAspect.width / expectedAspect.height;
       const physicalAspect = sceneSurface.widthM / sceneSurface.heightM;
-      const pixelAspect = isFinitePositiveNumber(sceneSurface.widthPx) && isFinitePositiveNumber(sceneSurface.heightPx)
-        ? sceneSurface.widthPx / sceneSurface.heightPx
+      const pixelAspect = isFinitePositiveNumber(pixelWidth) && isFinitePositiveNumber(pixelHeight)
+        ? pixelWidth / pixelHeight
         : null;
       if (Math.abs(physicalAspect - expected) / expected > expectedAspect.maxRelativeError
         || (pixelAspect !== null && Math.abs(pixelAspect - expected) / expected > expectedAspect.maxRelativeError)) {
@@ -138,13 +151,13 @@ export function validateTemplateScenePair(manifest: unknown, contract: RoomTempl
         ));
       }
     }
-    if (Array.isArray(sceneSurface.allowedObjectTypes)) {
+    if (!isF3 && Array.isArray(sceneSurface.allowedObjectTypes)) {
       const unexpectedObjectType = sceneSurface.allowedObjectTypes.find((objectType) => typeof objectType === "string" && !requiredSurface.allowedObjectTypes.includes(objectType));
       if (unexpectedObjectType) {
         issues.push(error(
           `scene.json#/mediaSurfaces/${requiredSurface.surfaceId}/allowedObjectTypes`,
           "template_surface_object_type_mismatch",
-          `Surface ${requiredSurface.surfaceId} declares objectType=${unexpectedObjectType}, which is not allowed by the template contract.`
+          `Legacy surface ${requiredSurface.surfaceId} declares objectType=${unexpectedObjectType}, which is not allowed by the template contract.`
         ));
       }
     }
