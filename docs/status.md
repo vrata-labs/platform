@@ -4,6 +4,7 @@
 
 - Active phase: `M1-MEDIA complete`
 - Overall state: `m1_media_complete`
+- Yandex Container Registry manifest compatibility восстановлена 2026-08-25. Root cause: Buildx начал добавлять provenance attestation manifest и OCI manifest list, который YCR отклонял после успешной загрузки layers. PR `#46`, deployed commit `21a4c476e15f411b4c7bc3d69418aecc1f123006`; branch proof run `32777309250`, main Docker Publish `32781986649`, CI `32781986613`, staging gate и Rutube canary `32782262641` прошли. Internal YCR builds явно отключают embedded provenance/SBOM, проверяют чтение всех SHA/branch/staging tags; public GHCR release workflow не изменён.
 
 ## Phase checklist
 
