@@ -227,6 +227,32 @@ test("remoteBrowserMediaDrawRegion scales bounds across canvas sizes", () => {
   });
 });
 
+test("remoteBrowserMediaDrawRegion clips a partially offscreen Rutube source", () => {
+  const region = remoteBrowserMediaDrawRegion({
+    sourceRect: { x: 44, y: -116, width: 761, height: 428.06, viewportWidth: 1280, viewportHeight: 720 },
+    canvasWidth: 1280,
+    canvasHeight: 720,
+    mediaWidth: 1920,
+    mediaHeight: 1080
+  });
+
+  assert(region);
+  assert.deepEqual({
+    ...region,
+    sy: Math.round(region.sy * 1000) / 1000,
+    sh: Math.round(region.sh * 1000) / 1000
+  }, {
+    sx: 0,
+    sy: 292.669,
+    sw: 1920,
+    sh: 787.331,
+    dx: 44,
+    dy: 0,
+    dw: 761,
+    dh: 312.06
+  });
+});
+
 test("remoteBrowserMediaDrawRegion ignores invalid or offscreen bounds", () => {
   assert.equal(remoteBrowserMediaDrawRegion({
     sourceRect: { x: 0, y: 0, width: 0, height: 360, viewportWidth: 1280, viewportHeight: 720 },

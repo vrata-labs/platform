@@ -50,16 +50,32 @@ async function waitForAccess(page: Page, role: "guest" | "member" | "host") {
   });
 }
 
-async function clickViewportCenter(page: Page) {
-  const viewport = page.viewportSize() ?? { width: 1280, height: 720 };
-  await page.mouse.click(Math.round(viewport.width / 2), Math.round(viewport.height / 2));
+async function clickDebugSurfaceCenter(page: Page) {
+  const readSurfaceCenter = () => page.evaluate(() => (window as Window & {
+    __VRATA_TEST__?: {
+      getDebugSurfaceClientPosition: (u: number, v: number) => { x: number; y: number } | null;
+    };
+  }).__VRATA_TEST__?.getDebugSurfaceClientPosition(0.5, 0.5) ?? null);
+  await expect.poll(async () => {
+    const position = await readSurfaceCenter();
+    const viewport = page.viewportSize();
+    return Boolean(position && viewport
+      && position.x >= 0 && position.x <= viewport.width
+      && position.y >= 0 && position.y <= viewport.height);
+  }, {
+    timeout: 10000,
+    intervals: [250, 500, 1000]
+  }).toBe(true);
+  const position = await readSurfaceCenter();
+  expect(position).toBeTruthy();
+  await page.mouse.click(position!.x, position!.y);
 }
 
 test("M1.2 guest can hit debug surface but cannot create input event", async ({ page }) => {
   await page.goto("/rooms/demo-room?debug=1");
   await waitForAccess(page, "guest");
 
-  await clickViewportCenter(page);
+  await clickDebugSurfaceCenter(page);
 
   await expect.poll(async () => {
     const debug = await readDebug(page);
@@ -88,7 +104,7 @@ test("M1.2 member mouse click creates normalized surface input event", async ({ 
   await page.goto("/rooms/demo-room?role=member&debug=1");
   await waitForAccess(page, "member");
 
-  await clickViewportCenter(page);
+  await clickDebugSurfaceCenter(page);
 
   await expect.poll(async () => {
     const debug = await readDebug(page);

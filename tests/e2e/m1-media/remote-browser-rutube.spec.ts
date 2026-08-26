@@ -174,6 +174,13 @@ async function waitForRutubeMedia(page: Page, timeoutMs = 90000): Promise<void> 
   await expect.poll(async () => {
     const debug = await readDebug(page);
     const rect = debug?.remoteBrowser?.mediaSourceRect ?? null;
+    // Provider layouts can center a player partly outside the page viewport.
+    const visibleWidth = rect
+      ? Math.min(rect.viewportWidth, rect.x + rect.width) - Math.max(0, rect.x)
+      : 0;
+    const visibleHeight = rect
+      ? Math.min(rect.viewportHeight, rect.y + rect.height) - Math.max(0, rect.y)
+      : 0;
     return {
       mediaState: debug?.remoteBrowser?.mediaState ?? null,
       mediaConnected: debug?.remoteBrowser?.mediaConnected ?? false,
@@ -182,13 +189,12 @@ async function waitForRutubeMedia(page: Page, timeoutMs = 90000): Promise<void> 
       mediaErrorCode: debug?.remoteBrowser?.mediaErrorCode ?? null,
       hasVideoTrackState: Boolean(debug?.remoteBrowser?.mediaTrackSid),
       hasAudioTrackState: Boolean(debug?.remoteBrowser?.audioTrackSid),
-      sourceBounded: Boolean(
+      sourceVisible: Boolean(
         rect
         && rect.width > 100
         && rect.height > 100
-        && rect.width < rect.viewportWidth
-        && rect.x >= 0
-        && rect.y >= 0
+        && visibleWidth > 100
+        && visibleHeight > 100
       )
     };
   }, {
@@ -202,7 +208,7 @@ async function waitForRutubeMedia(page: Page, timeoutMs = 90000): Promise<void> 
     mediaErrorCode: null,
     hasVideoTrackState: true,
     hasAudioTrackState: true,
-    sourceBounded: true
+    sourceVisible: true
   });
 }
 
