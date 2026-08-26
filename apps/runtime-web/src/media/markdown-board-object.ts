@@ -31,6 +31,24 @@ export interface MarkdownBoardDebugSnapshot {
   notes: Array<Pick<MarkdownBoardStickyNote, "noteId" | "text" | "x" | "y" | "width" | "height">>;
 }
 
+export function createInactiveMarkdownBoardDebugSnapshot(input: {
+  surfaceId: string;
+  permissions: readonly RoomPermission[];
+  errorCode?: string | null;
+}): MarkdownBoardDebugSnapshot {
+  return {
+    objectId: null,
+    surfaceId: input.surfaceId,
+    active: false,
+    noteCount: 0,
+    revision: 0,
+    localCanEdit: input.permissions.includes("markdown-board.edit"),
+    lastInputEventId: null,
+    errorCode: input.errorCode ?? null,
+    notes: []
+  };
+}
+
 export class MarkdownBoardObjectRuntime {
   readonly texture: THREE.CanvasTexture;
 
@@ -97,6 +115,10 @@ export class MarkdownBoardObjectRuntime {
 
   clearError(): void {
     this.errorCode = null;
+  }
+
+  close(): void {
+    this.texture.dispose();
   }
 
   setError(errorCode: string | null): void {

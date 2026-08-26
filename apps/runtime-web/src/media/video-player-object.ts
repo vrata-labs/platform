@@ -55,6 +55,7 @@ export function createVideoPlayerObjectRuntime(options: {
         video.onloadedmetadata = () => finish();
         video.onerror = () => finish(new Error("video_decode_failed"));
       });
+      if (generation !== currentGeneration) return;
       options.applyTexture(texture);
     })();
     try { await loadPromise; } finally { if (generation === currentGeneration) loadPromise = null; }

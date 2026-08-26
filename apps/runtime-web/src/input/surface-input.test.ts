@@ -30,13 +30,72 @@ test("resolveSurfaceHitFromRay maps plane hit to stable uv and pixels", () => {
   assert.deepEqual(hit!.pixel, { x: 100, y: 50 });
 });
 
+test("F3 near-contact distance does not limit remote ray reach", () => {
+  const surface = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.MeshBasicMaterial());
+  surface.position.set(0, 0, -2);
+  surface.updateMatrixWorld(true);
+  const definition = {
+    surfaceId: "debug-main",
+    object: surface,
+    widthPx: 200,
+    heightPx: 100,
+    widthM: 2,
+    heightM: 2,
+    maxDistanceM: 0.05,
+    inputEnabled: true
+  };
+
+  const rayHit = resolveSurfaceHitFromRay({
+    ray: new THREE.Ray(new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, -1)),
+    surfaces: [definition],
+    raycaster: new THREE.Raycaster(),
+    source: "mouse"
+  });
+  const nearContactHit = resolveSurfaceHitFromPlanePoint({
+    point: new THREE.Vector3(0, 0, -1.949),
+    surfaces: [definition],
+    source: "xr-controller"
+  });
+
+  assert.ok(rayHit);
+  assert.equal(rayHit.distanceM, 2);
+  assert.equal(nearContactHit, null);
+});
+
+test("ray targeting skips hidden and input-disabled surfaces in front of an enabled surface", () => {
+  const disabledSurface = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.MeshBasicMaterial());
+  disabledSurface.position.set(0, 0, -1);
+  disabledSurface.updateMatrixWorld(true);
+  const hiddenSurface = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.MeshBasicMaterial());
+  hiddenSurface.position.set(0, 0, -1.5);
+  hiddenSurface.visible = false;
+  hiddenSurface.updateMatrixWorld(true);
+  const enabledSurface = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.MeshBasicMaterial());
+  enabledSurface.position.set(0, 0, -2);
+  enabledSurface.updateMatrixWorld(true);
+
+  const hit = resolveSurfaceHitFromRay({
+    ray: new THREE.Ray(new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, -1)),
+    surfaces: [
+      { surfaceId: "disabled", object: disabledSurface, widthPx: 200, heightPx: 100, inputEnabled: false },
+      { surfaceId: "hidden", object: hiddenSurface, widthPx: 200, heightPx: 100, inputEnabled: true },
+      { surfaceId: "enabled", object: enabledSurface, widthPx: 200, heightPx: 100, inputEnabled: true }
+    ],
+    raycaster: new THREE.Raycaster(),
+    source: "mouse"
+  });
+
+  assert.equal(hit?.surfaceId, "enabled");
+  assert.equal(hit?.distanceM, 2);
+});
+
 test("resolveSurfaceHitFromPlanePoint maps a nearby pencil tip to surface uv", () => {
   const surface = new THREE.Mesh(new THREE.PlaneGeometry(2, 1), new THREE.MeshBasicMaterial());
   surface.position.set(0, 0, -2);
   surface.updateMatrixWorld(true);
 
   const hit = resolveSurfaceHitFromPlanePoint({
-    point: new THREE.Vector3(0.5, 0.25, -2.02),
+    point: new THREE.Vector3(0.5, 0.25, -1.98),
     surfaces: [{ surfaceId: "debug-main", object: surface, widthPx: 200, heightPx: 100, widthM: 2, heightM: 1, maxDistanceM: 0.05, inputEnabled: true }],
     source: "xr-controller"
   });
@@ -47,14 +106,44 @@ test("resolveSurfaceHitFromPlanePoint maps a nearby pencil tip to surface uv", (
   assert.equal(hit!.distanceM, 0.02);
 });
 
+test("resolveSurfaceHitFromPlanePoint accepts local positive-z contact and rejects the back face", () => {
+  const surface = new THREE.Mesh(new THREE.PlaneGeometry(2, 1), new THREE.MeshBasicMaterial());
+  surface.position.set(0, 0, -2);
+  surface.updateMatrixWorld(true);
+  const surfaces = [{ surfaceId: "debug-main", object: surface, widthPx: 200, heightPx: 100, widthM: 2, heightM: 1, maxDistanceM: 0.05, inputEnabled: true }];
+
+  assert.ok(resolveSurfaceHitFromPlanePoint({ point: new THREE.Vector3(0, 0, -1.98), surfaces, source: "xr-controller" }));
+  assert.equal(resolveSurfaceHitFromPlanePoint({ point: new THREE.Vector3(0, 0, -2.02), surfaces, source: "xr-controller" }), null);
+});
+
 test("resolveSurfaceHitFromPlanePoint rejects distant or out-of-bounds tips", () => {
   const surface = new THREE.Mesh(new THREE.PlaneGeometry(2, 1), new THREE.MeshBasicMaterial());
   surface.position.set(0, 0, -2);
   surface.updateMatrixWorld(true);
   const surfaces = [{ surfaceId: "debug-main", object: surface, widthPx: 200, heightPx: 100, widthM: 2, heightM: 1, maxDistanceM: 0.05, inputEnabled: true }];
 
-  assert.equal(resolveSurfaceHitFromPlanePoint({ point: new THREE.Vector3(0, 0, -2.1), surfaces, source: "xr-controller" }), null);
-  assert.equal(resolveSurfaceHitFromPlanePoint({ point: new THREE.Vector3(1.2, 0, -2.01), surfaces, source: "xr-controller" }), null);
+  assert.equal(resolveSurfaceHitFromPlanePoint({ point: new THREE.Vector3(0, 0, -1.9), surfaces, source: "xr-controller" }), null);
+  assert.equal(resolveSurfaceHitFromPlanePoint({ point: new THREE.Vector3(1.2, 0, -1.99), surfaces, source: "xr-controller" }), null);
+});
+
+test("near-contact targeting ignores hidden and input-disabled surfaces", () => {
+  const disabledSurface = new THREE.Mesh(new THREE.PlaneGeometry(2, 1), new THREE.MeshBasicMaterial());
+  const hiddenSurface = new THREE.Mesh(new THREE.PlaneGeometry(2, 1), new THREE.MeshBasicMaterial());
+  hiddenSurface.visible = false;
+  disabledSurface.updateMatrixWorld(true);
+  hiddenSurface.updateMatrixWorld(true);
+  const definition = { widthPx: 200, heightPx: 100, widthM: 2, heightM: 1, maxDistanceM: 0.05 };
+
+  assert.equal(resolveSurfaceHitFromPlanePoint({
+    point: new THREE.Vector3(0, 0, 0.01),
+    surfaces: [{ ...definition, surfaceId: "disabled", object: disabledSurface, inputEnabled: false }],
+    source: "xr-controller"
+  }), null);
+  assert.equal(resolveSurfaceHitFromPlanePoint({
+    point: new THREE.Vector3(0, 0, 0.01),
+    surfaces: [{ ...definition, surfaceId: "hidden", object: hiddenSurface, inputEnabled: true }],
+    source: "xr-controller"
+  }), null);
 });
 
 test("resolveSurfaceInputEvent accepts member surface input", () => {

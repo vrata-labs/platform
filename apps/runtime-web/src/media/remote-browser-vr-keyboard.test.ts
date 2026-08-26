@@ -4,6 +4,7 @@ import * as THREE from "three";
 
 import {
   REMOTE_BROWSER_VR_KEYBOARD_LAYOUTS,
+  mountRemoteBrowserVrKeyboard,
   planRemoteBrowserVrKeyboardInput,
   type RemoteBrowserVrKeyboardHit,
   type RemoteBrowserVrKeyboardKey,
@@ -124,4 +125,17 @@ test("remote browser VR keyboard stays idle without active confirm target", () =
     confirmInteraction: true,
     hit: null
   }), { keyId: null });
+});
+
+test("remote browser VR keyboard follows the active physical surface", () => {
+  const firstSurface = new THREE.Group();
+  const secondSurface = new THREE.Group();
+  const root = new THREE.Group();
+  const view = { root } as Parameters<typeof mountRemoteBrowserVrKeyboard>[0];
+
+  mountRemoteBrowserVrKeyboard(view, firstSurface);
+  assert.equal(root.parent, firstSurface);
+  mountRemoteBrowserVrKeyboard(view, secondSurface);
+  assert.equal(root.parent, secondSurface);
+  assert.equal(firstSurface.children.includes(root), false);
 });

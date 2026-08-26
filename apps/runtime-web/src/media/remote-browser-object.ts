@@ -110,10 +110,59 @@ export interface RemoteBrowserDebugSnapshot {
   mediaCompositeHoldActive: boolean;
 }
 
+export function createInactiveRemoteBrowserDebugSnapshot(input: {
+  surfaceId: string;
+  permissions: readonly RoomPermission[];
+  errorCode?: string | null;
+}): RemoteBrowserDebugSnapshot {
+  return {
+    objectId: null,
+    surfaceId: input.surfaceId,
+    active: false,
+    status: "idle",
+    currentUrl: null,
+    controllerParticipantId: null,
+    executorSessionId: null,
+    frameStreamId: null,
+    mediaParticipantId: null,
+    mediaTrackSid: null,
+    audioTrackSid: null,
+    streamStartedAtMs: null,
+    streamUpdatedAtMs: null,
+    frameConnected: false,
+    frameStreamUrl: null,
+    lastFrameAtMs: 0,
+    frameSize: null,
+    localCanOpen: input.permissions.includes("remote-browser.open-url"),
+    localCanInput: input.permissions.includes("remote-browser.input"),
+    localHasControl: true,
+    lastInputSeq: 0,
+    lastExecutorInput: null,
+    errorCode: input.errorCode ?? null,
+    errorDetail: null,
+    mediaState: "idle",
+    mediaConnected: false,
+    mediaHasVideo: false,
+    mediaHasAudio: false,
+    mediaPeerConnectionState: null,
+    mediaErrorCode: null,
+    mediaSourceRect: null,
+    mediaCompositeHoldActive: false
+  };
+}
+
 const REMOTE_BROWSER_MEDIA_COMPOSITE_HOLD_MS = 3000;
 
 function remoteBrowserInputEventId(participantId: string, kind: string): string {
   return `${participantId}:remote-browser:${kind}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
+}
+
+export function createRemoteBrowserOpenUrlPatch(participantId: string, url: string): RemoteBrowserPatch {
+  return {
+    type: "open-url",
+    url,
+    inputEventId: remoteBrowserInputEventId(participantId, "open-url")
+  };
 }
 
 function isKeyboardKind(kind: SurfaceInputKind): boolean {
@@ -204,6 +253,8 @@ export class RemoteBrowserObjectRuntime {
   private firstVisibleFrame = false;
   private skippedBlankFrameCount = 0;
   private mediaCompositeHoldUntilMs = 0;
+  private frameDecodeGeneration = 0;
+  private disposed = false;
 
   constructor(private readonly options: RemoteBrowserObjectRuntimeOptions) {
     this.canvas = document.createElement("canvas");
@@ -227,11 +278,7 @@ export class RemoteBrowserObjectRuntime {
   }
 
   createOpenUrlPatch(url: string): RemoteBrowserPatch {
-    return {
-      type: "open-url",
-      url,
-      inputEventId: remoteBrowserInputEventId(this.options.participantId, "open-url")
-    };
+    return createRemoteBrowserOpenUrlPatch(this.options.participantId, url);
   }
 
   createTakeControlPatch(): RemoteBrowserPatch {
@@ -260,7 +307,19 @@ export class RemoteBrowserObjectRuntime {
     this.closeFrameStream();
   }
 
+  dispose(): void {
+    if (this.disposed) {
+      return;
+    }
+    this.disposed = true;
+    this.closeFrameStream();
+    this.texture.dispose();
+  }
+
   sync(object: MediaObjectInstance<RemoteBrowserObjectState> | null): void {
+    if (this.disposed) {
+      return;
+    }
     if (!object) {
       this.closeFrameStream();
       return;
@@ -460,6 +519,7 @@ export class RemoteBrowserObjectRuntime {
       });
       socket.addEventListener("close", () => {
         if (this.frameSocket === socket) {
+          this.invalidatePendingFrameDecode();
           this.frameConnected = false;
           this.frameSocket = null;
           this.frameStreamKey = null;
@@ -482,6 +542,9 @@ export class RemoteBrowserObjectRuntime {
   }
 
   private handleFrameSocketMessage(message: string): void {
+    if (this.disposed) {
+      return;
+    }
     let payload: RemoteBrowserFrameMessage | RemoteBrowserMediaAnswerMessage;
     try {
       payload = JSON.parse(message) as RemoteBrowserFrameMessage | RemoteBrowserMediaAnswerMessage;
@@ -503,12 +566,13 @@ export class RemoteBrowserObjectRuntime {
   }
 
   private handleFrameMessage(payload: RemoteBrowserFrameMessage): void {
-    if (payload.type !== "frame" || !payload.dataUrl) {
+    if (this.disposed || payload.type !== "frame" || !payload.dataUrl) {
       return;
     }
+    const generation = this.frameDecodeGeneration;
     const image = new Image();
     image.onload = () => {
-      if (!this.context) {
+      if (this.disposed || generation !== this.frameDecodeGeneration || !this.context) {
         return;
       }
       if (this.shouldSkipInitialFrame(image)) {
@@ -531,7 +595,7 @@ export class RemoteBrowserObjectRuntime {
       };
       this.firstVisibleFrame = true;
       this.renderedPlaceholder = "";
-      this.options.applyTexture(this.texture);
+      this.applyActiveTexture();
     };
     image.src = payload.dataUrl;
   }
@@ -718,13 +782,13 @@ export class RemoteBrowserObjectRuntime {
   }
 
   private activateMediaVisual(element: HTMLVideoElement): void {
-    if (this.mediaElement !== element || this.mediaVisualActive) {
+    if (this.disposed || this.mediaElement !== element || this.mediaVisualActive) {
       return;
     }
     this.mediaVisualActive = true;
     this.mediaState = "connected";
     this.mediaErrorCode = null;
-    this.options.applyTexture(this.texture);
+    this.applyActiveTexture();
     if (this.shouldCompositeMediaFrame()) {
       this.drawMediaFrame(element);
     }
@@ -829,10 +893,17 @@ export class RemoteBrowserObjectRuntime {
   }
 
   private applyActiveTexture(): void {
-    this.options.applyTexture(this.texture);
+    if (!this.disposed) {
+      this.options.applyTexture(this.texture);
+    }
+  }
+
+  private invalidatePendingFrameDecode(): void {
+    this.frameDecodeGeneration += 1;
   }
 
   private closeFrameStream(): void {
+    this.invalidatePendingFrameDecode();
     const socket = this.frameSocket;
     this.closeMediaTransport(true);
     this.frameSocket = null;
@@ -847,10 +918,13 @@ export class RemoteBrowserObjectRuntime {
   }
 
   private renderPlaceholder(title: string, subtitle: string, publishTexture = true): void {
+    if (this.disposed) {
+      return;
+    }
     const signature = `${title}:${subtitle}`;
     if (signature === this.renderedPlaceholder || !this.context) {
       if (publishTexture) {
-        this.options.applyTexture(this.texture);
+        this.applyActiveTexture();
       }
       return;
     }
@@ -869,7 +943,7 @@ export class RemoteBrowserObjectRuntime {
     this.texture.needsUpdate = true;
     this.renderedPlaceholder = signature;
     if (publishTexture) {
-      this.options.applyTexture(this.texture);
+      this.applyActiveTexture();
     }
   }
 

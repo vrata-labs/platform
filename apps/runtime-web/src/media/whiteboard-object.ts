@@ -40,6 +40,26 @@ export interface WhiteboardDebugSnapshot {
   errorCode: string | null;
 }
 
+export function createInactiveWhiteboardDebugSnapshot(input: {
+  surfaceId: string;
+  permissions: readonly RoomPermission[];
+  errorCode?: string | null;
+}): WhiteboardDebugSnapshot {
+  return {
+    objectId: null,
+    surfaceId: input.surfaceId,
+    active: false,
+    strokeCount: 0,
+    revision: 0,
+    localCanDraw: input.permissions.includes("whiteboard.draw"),
+    localCanClear: input.permissions.includes("whiteboard.clear"),
+    localPreviewPointCount: 0,
+    lastInputSource: null,
+    lastPoint: null,
+    errorCode: input.errorCode ?? null
+  };
+}
+
 export function whiteboardPointFromSurfaceInput(event: SurfaceInputEvent): WhiteboardPoint | null {
   if (!event.uv) {
     return null;
@@ -133,6 +153,11 @@ export class WhiteboardObjectRuntime {
       this.localPreview = null;
       this.options.applyPreview(null);
     }
+  }
+
+  close(): void {
+    this.clearPreview();
+    this.texture.dispose();
   }
 
   clearError(): void {

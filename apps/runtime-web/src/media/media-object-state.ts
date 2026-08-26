@@ -144,6 +144,7 @@ export function remoteBrowserObjectForMediaTrack(mediaObjects: RoomMediaObjectsS
     return null;
   }
   let participantScopedMatch: MediaObjectInstance<RemoteBrowserObjectState> | null = null;
+  let hasAuthoritativeTrackSid = false;
   for (const object of Object.values(mediaObjects.objects)) {
     if (object.type !== REMOTE_BROWSER_OBJECT_TYPE || !isRemoteBrowserState(object.state)) {
       continue;
@@ -153,50 +154,109 @@ export function remoteBrowserObjectForMediaTrack(mediaObjects: RoomMediaObjectsS
       continue;
     }
     const expectedTrackSid = kind === "video" ? state.mediaTrackSid : state.audioTrackSid;
-    if (!expectedTrackSid || (trackSid && expectedTrackSid !== trackSid)) {
-      if (expectedTrackSid && trackSid && expectedTrackSid !== trackSid) {
-        participantScopedMatch ??= object as MediaObjectInstance<RemoteBrowserObjectState>;
-      }
+    if (!expectedTrackSid) {
+      participantScopedMatch ??= object as MediaObjectInstance<RemoteBrowserObjectState>;
       continue;
     }
-    return object as MediaObjectInstance<RemoteBrowserObjectState>;
-  }
-  return participantScopedMatch;
-}
-
-export function resolveScreenShareSurfaceForOwner(mediaObjects: RoomMediaObjectsState | null, ownerParticipantId: string | null | undefined, fallbackSurfaceId: string): string {
-  if (!ownerParticipantId || !mediaObjects) {
-    return fallbackSurfaceId;
-  }
-  const object = Object.values(mediaObjects.objects).find((item) => {
-    if (item.type !== SCREEN_SHARE_OBJECT_TYPE || !isScreenShareState(item.state)) {
-      return false;
+    hasAuthoritativeTrackSid = true;
+    if (trackSid === expectedTrackSid) {
+      return object as MediaObjectInstance<RemoteBrowserObjectState>;
     }
-    return item.state.ownerParticipantId === ownerParticipantId && item.state.status === "active";
-  });
-  return object?.surfaceId ?? fallbackSurfaceId;
+  }
+  return hasAuthoritativeTrackSid ? null : participantScopedMatch;
 }
 
-export function screenShareObjectForMediaTrack(mediaObjects: RoomMediaObjectsState | null, ownerParticipantId: string | null | undefined, trackSid: string | null | undefined): MediaObjectInstance<ScreenShareObjectState> | null {
+type PhysicalMediaSurfaceLookup = Pick<ReadonlySet<string>, "has">;
+
+export function physicalRemoteBrowserObjectForMediaTrack(
+  mediaObjects: RoomMediaObjectsState | null,
+  physicalSurfaceIds: PhysicalMediaSurfaceLookup,
+  participantId: string | null | undefined,
+  trackSid: string | null | undefined,
+  kind: "audio" | "video"
+): MediaObjectInstance<RemoteBrowserObjectState> | null {
+  const object = remoteBrowserObjectForMediaTrack(mediaObjects, participantId, trackSid, kind);
+  return object && physicalSurfaceIds.has(object.surfaceId) ? object : null;
+}
+
+export function findPhysicalRemoteBrowserObjectNeedingLiveKitRoom(
+  mediaObjects: RoomMediaObjectsState | null,
+  physicalSurfaceIds: PhysicalMediaSurfaceLookup
+): MediaObjectInstance<RemoteBrowserObjectState> | null {
+  if (!mediaObjects) {
+    return null;
+  }
+  for (const [surfaceId, surface] of Object.entries(mediaObjects.surfaces)) {
+    if (!physicalSurfaceIds.has(surfaceId) || !surface.activeObjectId) {
+      continue;
+    }
+    const object = mediaObjects.objects[surface.activeObjectId] as MediaObjectInstance<RemoteBrowserObjectState> | undefined;
+    if (object?.surfaceId === surfaceId && remoteBrowserObjectNeedsLiveKitRoom(object)) {
+      return object;
+    }
+  }
+  return null;
+}
+
+function isActiveScreenShareObject(mediaObjects: RoomMediaObjectsState, object: MediaObjectInstance): object is MediaObjectInstance<ScreenShareObjectState> {
+  return object.type === SCREEN_SHARE_OBJECT_TYPE
+    && isScreenShareState(object.state)
+    && object.status === "active"
+    && object.state.status === "active"
+    && mediaObjects.surfaces[object.surfaceId]?.activeObjectId === object.objectId;
+}
+
+export function screenShareObjectForMediaTrack(
+  mediaObjects: RoomMediaObjectsState | null,
+  ownerParticipantId: string | null | undefined,
+  trackSid: string | null | undefined,
+  kind: "audio" | "video",
+  publicationName?: string | null
+): MediaObjectInstance<ScreenShareObjectState> | null {
   if (!mediaObjects || !ownerParticipantId) {
     return null;
   }
-  let ownerScopedMatch: MediaObjectInstance<ScreenShareObjectState> | null = null;
-  for (const object of Object.values(mediaObjects.objects)) {
-    if (object.type !== SCREEN_SHARE_OBJECT_TYPE || !isScreenShareState(object.state)) {
-      continue;
+
+  const namedMatch = /^screen-share:([^:]+):(audio|video)$/.exec(publicationName ?? "");
+  if (namedMatch) {
+    if (namedMatch[2] !== kind) {
+      return null;
     }
-    const state = object.state as ScreenShareObjectState;
-    if (state.ownerParticipantId !== ownerParticipantId || state.status !== "active") {
-      continue;
+    const object = mediaObjects.objects[namedMatch[1]!];
+    if (!object || !isActiveScreenShareObject(mediaObjects, object) || object.state.ownerParticipantId !== ownerParticipantId) {
+      return null;
     }
-    if (!state.mediaTrackSid || (trackSid && state.mediaTrackSid !== trackSid)) {
-      if (!ownerScopedMatch) {
-        ownerScopedMatch = object as MediaObjectInstance<ScreenShareObjectState>;
-      }
-      continue;
+    if (kind === "video" && object.state.mediaTrackSid && object.state.mediaTrackSid !== trackSid) {
+      return null;
     }
-    return object as MediaObjectInstance<ScreenShareObjectState>;
+    return object;
   }
-  return ownerScopedMatch;
+
+  const ownerMatches = Object.values(mediaObjects.objects).filter((object): object is MediaObjectInstance<ScreenShareObjectState> => {
+    return isActiveScreenShareObject(mediaObjects, object) && object.state.ownerParticipantId === ownerParticipantId;
+  });
+  if (kind === "audio") {
+    return ownerMatches.length === 1 ? ownerMatches[0]! : null;
+  }
+
+  const exactMatch = ownerMatches.find((object) => object.state.mediaTrackSid === trackSid);
+  if (exactMatch) {
+    return exactMatch;
+  }
+  if (ownerMatches.some((object) => Boolean(object.state.mediaTrackSid))) {
+    return null;
+  }
+  return ownerMatches.length === 1 ? ownerMatches[0]! : null;
+}
+
+export function physicalScreenShareObjectForMediaTrack(
+  mediaObjects: RoomMediaObjectsState | null,
+  physicalSurfaceIds: PhysicalMediaSurfaceLookup,
+  ownerParticipantId: string | null | undefined,
+  trackSid: string | null | undefined,
+  kind: "audio" | "video",
+  publicationName?: string | null
+): MediaObjectInstance<ScreenShareObjectState> | null {
+  const object = screenShareObjectForMediaTrack(mediaObjects, ownerParticipantId, trackSid, kind, publicationName);
+  return object && physicalSurfaceIds.has(object.surfaceId) ? object : null;
 }
