@@ -119,6 +119,12 @@ Frame locomotion maintenance rules:
 
 ## Practical guidance for future work
 
+- For new project-authored scenes, use the accepted agentic deterministic authoring workflow in `docs/arch/2026-08-29-agentic-deterministic-scene-authoring.md`: LLM planning and visual iteration may be stochastic, but accepted Blend/scripts/provenance and release builds must be fixed and reproducible without another model call.
+- Never leave accepted scene source only in chat, `/tmp`, model output, or local cache. Store the accepted DCC source, scene-specific authoring/export scripts, semantic review views, toolchain lock, rights verdict, checksums, and immutable bundle in the scene package.
+- OpenCode is the current scene-authoring orchestrator, not a permanent runtime or service dependency. Keep the workflow model-agnostic and do not productize a generic authoring service until meeting, personal, and presentation room types have repeated the full source/reproducibility/rights/runtime gates.
+- Promote an operation from scene-specific art code into reusable authoring core only after it recurs in at least two different room types; do not force the first scenes into a premature universal DSL.
+- Scene manifests must express runtime coordinates after DCC/export transforms. For the accepted Blender Y-up path, semantic `(x, y, z)` becomes runtime `(x, y, -z)`; apply one tested adapter to spawn, seat anchors, and media surfaces instead of copying authoring coordinates.
+- Verify the real scene spawn with `?debug=1&scenefit=0`; debug mode without `scenefit=0` applies auto-fit and cannot prove that the manifest spawn is usable.
 - For SenseTower scene migration, prefer existing exported GLB/GLTF assets over raw FBX whenever possible.
 - When something looks black or wrong, first inspect `sceneDebug` diagnostics before tweaking spawn/materials by hand.
 - If a scene already worked in another web project, copy its rendering assumptions first and only then adapt to `vrata`.
