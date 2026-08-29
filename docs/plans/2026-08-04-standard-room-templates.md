@@ -74,6 +74,16 @@ Definition of Ready для assets/device этапов:
 
 ## Подход
 
+### 0. Authoring decision
+
+Новые project-authored template scenes создаются по `docs/arch/2026-08-29-agentic-deterministic-scene-authoring.md`. LLM/agent orchestrator выполняет planning, scene-specific Blender authoring и visual correction, но accepted Blend, scripts, review views, provenance и immutable release являются source of truth и собираются без повторного вызова LLM.
+
+OpenCode является текущим orchestrator, а не обязательной production dependency. Meeting, personal и presentation scenes должны доказать повторяемость подхода до проектирования отдельного authoring service или generic DSL. FEAT-032 по-прежнему не включает marketplace, tenant-authored constructor или публичный scene-generation SaaS.
+
+Первый accepted specimen этого workflow — `warm-modern-meeting-room-candidate-01@0.1.1`, release commit `e9891721220bbcda8099d8bbad52e08b3b59427c`, publication evidence merge `863ef6ad4200c5e78002363c502ad98445bd62b7`. Он доказывает source/reproducibility/rights/runtime gates, но остаётся восьмиместным review asset и не считается одной из трёх FEAT-032 product scenes.
+
+Authoring pipeline обязан явно преобразовывать semantic coordinates в runtime coordinates. Для принятого Blender Y-up path используется `(x, y, z) -> (x, y, -z)`; один adapter применяется к spawn, seats и media surfaces и проверяется против release manifest. Staging spawn evidence снимается только с `?debug=1&scenefit=0`, чтобы debug auto-fit не подменял manifest spawn.
+
 ### 1. Восстановить и сократить прототип
 
 Создать чистую implementation branch от актуального `origin/main`, экспортировать незакоммиченный FEAT-032 diff как patch и переносить изменения небольшими логическими срезами. Сначала сохранить тесты и pure domain code, затем заново обосновать изменения storage, session tokens, reconnect и deploy scripts. Build artifacts, test reports, временные screenshots и не относящиеся к фиче infra-правки не переносить.
@@ -259,6 +269,7 @@ Cross-repo handoff выполняется без плавающих ссылок
 - [ ] [1ч на scene] Создать отдельный public scene repository с security policy, branch protection и CODEOWNERS; общий `scene-assets` не использовать для новых releases.
 - [ ] [1-2ч на scene] Добавить source/generated/release directory contract, automated one-scene boundary и закрепить DCC/Blender version.
 - [ ] [1-2ч] Добавить deterministic export command для одной fixture scene и проверить повторяемость stats/checksums.
+- [ ] [1-2ч] Добавить explicit authoring-to-runtime coordinate adapter и regression tests для spawn, seat anchors и media surfaces; не копировать DCC coordinates напрямую в `scene.json`.
 - [ ] [1-2ч на scene] Добавить `platform-validator.lock` и checkout platform по полному SHA в CI.
 - [ ] [2-3ч на scene] Добавить root `manifest.json` schema и validator tests для единственного scene ID, paths, versions, SHA-256, sizes, stats и release status.
 - [ ] [2-3ч на scene] Подключить Khronos glTF Validator, glTF Transform inspect и собранный platform scene validator.

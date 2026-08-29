@@ -2,6 +2,8 @@
 
 This document defines the target requirements for new Vrata scenes. It is based on the current Scene Bundle v1 runtime contract and on diagnostics from the legacy exported staging scenes. The legacy scenes are useful only as technical probes. New scenes must be original or properly licensed and must not copy their meshes, textures, layouts, names, trade dress, or distinctive visual composition.
 
+The default project-authored workflow is defined by `docs/arch/2026-08-29-agentic-deterministic-scene-authoring.md`. These requirements validate the resulting scene and remain independent of the LLM, agent orchestrator, DCC, or repository topology used during authoring.
+
 ## Goals
 
 - Make scene requirements understandable to a human scene author: what a good room should feel like, where users spawn, what must be visible, and what must not be copied.
@@ -131,6 +133,7 @@ Recommended rights block:
 - Indoor product scenes should normally fit within `4m <= width/depth <= 80m` and `2.4m <= height <= 20m`.
 - Runtime computed bounding boxes must be finite and must not exceed `200m` on any axis for normal indoor scenes.
 - Runtime computed bounds should be within `1.5x` of manifest `bounds` on each axis. A larger ratio is a warning; a ratio above `3x` is a failure unless the scene declares and documents a special world scale profile.
+- `scene.json` positions must use runtime coordinates after all DCC/export axis transforms. For the standard Blender Y-up authoring path, semantic `(x, y, z)` maps to runtime `(x, y, -z)`; validators must compare spawn, seats, and media surfaces through one explicit adapter.
 - Remove or exclude helper objects, collider meshes, cameras, rig controls, hidden export planes, test cubes, and giant background geometry from the runtime GLB.
 - Node transforms with extreme scale, position, or rotation should be rejected unless they are intentionally documented and do not affect bounds or interaction.
 
@@ -148,6 +151,8 @@ The first spawn point is the runtime entry point today.
 | Open radius | fail | At least `0.75m` free radius around the player root. |
 | First view readability | fail | Runtime screenshot from spawn must pass the visual thresholds below. |
 | Future yaw | warn | Add `yaw` when schema/runtime support lands; until then author the room so default yaw is usable. |
+
+Spawn staging checks must use `?debug=1&scenefit=0`. Debug auto-fit is enabled by default with `?debug=1` and replaces the manifest spawn, so a screenshot or pose captured without `scenefit=0` is not spawn evidence.
 
 ## Seating And Interaction Anchors
 

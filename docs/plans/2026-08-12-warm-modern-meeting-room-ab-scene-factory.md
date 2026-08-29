@@ -2,14 +2,22 @@
 
 Дата: 2026-08-12.
 
-Статус: Stage 0 infrastructure, Stage 1 art-direction gate и Stage 2 runtime qualification выполнены; internal pruned TRELLIS chair и window/trim component probes прошли на Tesla T4 с project-authored inputs, measured VRAM, content-addressed outputs и полным teardown. Требуемые 2 из 3 component probes успешны, AI feasibility gate green; Stage 3 synthetic compiler scaffold, GLB exporter, structural validation и two-run byte-identical reproducibility report выполнены на exact Blender. Neutral low-fidelity concept gate выбрал functional correction Concept 03 и зафиксировал exact validated specification в Candidate 01 без публичного production-track mapping. Approved architecture-only GLB скомпилирован из locked Git blobs и прошёл exact-Blender reopen, binary geometry validation и two-run byte-identical gate. Component construction, final candidate compilation и final export reproducibility остаются открытыми. Production publication по-прежнему требует DINO/model rights, OCI/SBOM/notices, provider snapshot и отдельный publication signoff.
+Статус: закрыт pivot-решением 2026-08-29 без A/B verdict. Controlled comparison не завершён; Candidate 01 независимо доведён до active publication-ready release `0.1.1` через agentic deterministic scene authoring, exact-source reproducibility, human visual/rights gates и staging runtime verification. Оставшиеся A/B stages ниже являются историческим планом и не исполняются без отдельного решения возобновить experiment.
+
+## Решение пилота 2026-08-29
+
+Controlled A/B не завершён: curated room не была собрана, а финальный accepted Candidate 01 не использует TRELLIS, FLUX или другой generative 3D output. Поэтому visual winner и pipeline-superiority claim не объявляются.
+
+Вместо продолжения исходного A/B принят рабочий подход **agentic deterministic scene authoring**: model-agnostic LLM планирует и выполняет scene-specific Blender/Python art pass, а human-accepted Blend, scripts, provenance и immutable release становятся воспроизводимым source of truth. Candidate 01 получил visual acceptance и отдельный human rights approval 2026-08-29; его active release `0.1.1` на commit `e9891721220bbcda8099d8bbad52e08b3b59427c` является первым specimen нового подхода. Immutable `0.1.0` сохранён как superseded после staging-обнаружения authoring/runtime `z` mismatch.
+
+Оставшиеся A/B stages в этом документе считаются историческим планом и не исполняются без отдельного решения возобновить controlled comparison. Новые personal и presentation scenes используют решение из `docs/arch/2026-08-29-agentic-deterministic-scene-authoring.md`. Productized service не входит в текущий scope и рассматривается только после повторения подхода на нескольких room types.
 
 Этот документ дополняет `docs/plans/2026-08-04-standard-room-templates.md` и заменяет только подход к созданию и визуальной приёмке новых room assets. Platform contracts, immutable template binding, Wave 2/3 activation, runtime ownership rules и Scene Bundle v1 остаются без изменений.
 
 ## Совместимость с FEAT-032
 
 - Пилот на 8 человек является review-only experiment и не является прямым asset для `meeting-room-basic@1.0.0`.
-- Родительский FEAT-032 contract остаётся рассчитанным на 2-4 participants и четыре обязательных места. Адаптация выбранного art direction к этому contract выполняется отдельным candidate/version после A/B.
+- Родительский FEAT-032 contract остаётся рассчитанным на 2-4 participants и четыре обязательных места. Адаптация выбранного art direction к этому contract выполняется отдельным candidate/version по новому authoring ADR.
 - Для обеих review rooms обязательны surfaces `debug-main` и `whiteboard-wall`; формулировка «при необходимости» не применяется.
 - Один успешный meeting-room pilot не разрешает Wave 3 activation. До activation по-прежнему нужны утверждённые personal, meeting и presentation scenes и все gates родительского плана.
 - Если product decision изменит `meeting-room-basic@1.0.0` на 8-seat contract, сначала отдельным review обновляется родительский план и template contract. Asset authoring не меняет platform contract молча.
@@ -22,13 +30,13 @@
 | Не продолжать косметически улучшать процедурные сцены из примитивов | Принято |
 | Первым новым пилотом сделать meeting room на 8 человек | Принято |
 | Визуальное направление: тёплый современный офис с деревом, дневным светом и функциональной детализацией | Принято |
-| Сравнить две полноценные независимо спроектированные комнаты: A, curated CC0; B, AI Scene Factory | Принято |
+| Сравнить две полноценные независимо спроектированные комнаты: A, curated CC0; B, AI Scene Factory | Закрыто pivot-решением 2026-08-29 без A/B verdict |
 | Общими для A/B оставить функциональный brief и технические ограничения, но не архитектуру, материалы или furniture layout | Принято |
 | AI Scene Factory проектирует всю комнату, а не только отдельные props | Принято |
 | Комнату собирать структурированными слоями, не генерировать одним монолитным mesh | Принято |
 | До слепого сравнения не смешивать A/B; гибрид C собирать только после раскрытия результатов | Принято |
 | Фабрику и исследование вести в отдельном pilot repository, не смешивая с platform или другими asset projects | Принято |
-| Каждую сцену вести в отдельном repository; общий multi-scene assets repository для новых candidates не использовать | Принято |
+| Каждую pilot candidate scene вести в отдельном repository; topology будущего массового catalog определяется отдельно | Принято для пилота |
 
 ## Repository isolation contract
 
@@ -119,22 +127,22 @@ Cross-repo integration выполняется только по полным com
 
 ### Текущая готовность
 
-| Зависимость | Состояние на 2026-08-24 | Следующее действие |
+| Зависимость | Состояние на 2026-08-29 | Следующее действие |
 |---|---|---|
 | Existing multi-scene repository | `vrata-labs/scene-assets`, main SHA `9ea73bc1a1ed0e86d5d959738d0383ccf89ad464` | Использовать только как historical reference; pilot artifacts не добавлять |
 | Experiment / Scene Factory repository | `vrata-labs/warm-modern-meeting-room-scene-factory`, chair probe merge `ee626ef08bc23d3e3d990a30b444490138992ada`, feasibility correction `e28d8b620e60f1dceb767a69b778c5f3d7ce395e`, window/trim probe merge `c14028818a07fc1b293809e90470563e8b75d910`, Stage 3 contract merge `26ff261de8b786564fd172d2367a13fec4b60dab`, room shell merge `d0c2e9e9920721220dc0e6729b71db146b40f183`, openings merge `f87580da8f7815468400552e6fe2e7cb9fcfa13f`, material zones merge `f467aa431ff06a298355401ef6ea18aa84cb16fc`, synthetic reproducibility merge `c395ce81f778d23691e37fb7a9c3f107dea8c057`, neutral concept gate merge `cf61a7263fea76bf7fa5812021342c22cd83f008`, interior-clearance validator merge `fa9767913fc3cc2b1d06fc00c44ed6a26369b219`, exact candidate lock merge `748b09032b49122221354fb4de34997ac92b9a02`, approved architecture merge `a043dd23aa8698937de6875402b076606adc5f89`, post-merge CI `32789722870` green, `main` protected | Зафиксировать exact component construction/material assignments до final candidate compile; не подменять отсутствующие recipes произвольными proxies |
-| Candidate 01 repository | `vrata-labs/warm-modern-meeting-room-candidate-01`, approved exact specification merge `df564befcd65cb51a345fa9d315e40cadef6e563`, post-merge CI `32765586313` green, `main` protected; semantic contract SHA-256 `29d76ca0feaefd4bf9cac9ebd25113c601e358c939778c4a0f43f3f94b58e0dd` | Не добавлять release assets до применимого rights/provenance gate; использовать exact specification как следующий compiler input |
+| Candidate 01 repository | `vrata-labs/warm-modern-meeting-room-candidate-01`; active release `0.1.1`, release commit `e9891721220bbcda8099d8bbad52e08b3b59427c`, publication evidence merge `863ef6ad4200c5e78002363c502ad98445bd62b7`, GLB SHA-256 `bc987fd7c5931eeccc23cf260011364299c636091e9b82932af2df30db7d95f5`, post-merge CI `33220217676` green | Использовать как accepted specimen нового authoring contract; не считать прямым FEAT-032 meeting asset |
 | Candidate 02 repository | `vrata-labs/warm-modern-meeting-room-candidate-02`, initial SHA `6a8ec35fca968522e8041c1034f66bca6032aa9e`, CI `31635604223` green, `main` protected | Не добавлять assets до применимого rights/provenance gate |
 | Platform validator | Pinned SHA `4ae8951961fce72a16f87b9d15890aee7d7eef2d` | Подтвердить, что lock не устарел перед implementation |
 | Blender | Linux `4.5.12 LTS`, archive SHA-256 `95e3a2dfedba3bd32ca54fc355eac6b15a11986954ccb02815a07535d0120a25`, binary SHA-256 `33ac108ebce3c271f5357e5c664d0488717263bcf2145c80300edd0b12c31880`, build `84afd5f785f7` | Использовать exact verified build |
 | Local GPU | GTX 1060 6 GB, недостаточно для TRELLIS | Использовать только для local Blender/review; generation выполнять на disposable 16+ GB GPU |
 | GPU provider/budget | Yandex Cloud Compute; quota `compute.instanceT4Gpus.count=1`, два successful preemptible `standard-v3-t4` component probes в `ru-central1-a`, reported GPU memory 15655829504 bytes, guest watchdog 45 minutes; four disposable VM attempts, zero probe resources after teardown | Сверить фактическое provider billing и ротировать exposed operator credential до следующего paid run; заново явно arm deletion guard |
-| Human rights owner | Public role `experiment-sponsor` назначен; verdict `allow-pruned-probe` разрешает internal generation только для exact mesh-only boundary и project-authored inputs; stock TRELLIS и public/production publication остаются запрещены | До публикации закрыть DINO/model rights, OCI/SBOM/notices, provider snapshot и production signoff |
-| Reviewers | Не назначены | Найти трёх non-author reviewers либо зафиксировать qualitative single-reviewer mode |
+| Human rights owner | Candidate 01 final release отдельно approved для staging, production, web runtime, screenshots, optimization и redistribution; TRELLIS probe verdict остаётся internal-only и не распространяется на publication model outputs | Повторять отдельный human rights gate для каждого нового accepted release |
+| Reviewers | Controlled A/B review не проводился и закрыт pivot-решением без verdict | Назначать blind reviewers только если experiment будет явно возобновлён |
 | Physical devices | Доступность не подтверждена для нового пилота | Назначить Android/iOS/Quest owners до shipping pass |
 | Experiment storage | Private Yandex Object Storage, 10 GiB hard quota, anonymous/static-key access disabled, dedicated AES-256 SSE-KMS и lifecycle controls; model payloads и evidence обоих probes прошли point-in-time full readback by SHA-256, включая второй project-authored input, code bundle, raw mesh, report, optimized GLB, preview, validator report и operator record; private identifiers остаются вне public Git | Сохранять accepted raw outputs по content address; временные локальные model copies второго probe удалены |
 | Art direction | Warm-modern style bible approved 2026-08-14: warm oak, light mineral plaster, matte graphite, sand/grey-green textiles, daylight plus 2700-3000 K and functional detailing | Approval покрывает principles/measurable rules; internal project-authored component probes разрешены отдельным verdict, внешние references не являются model inputs |
-| Staging review access | 2026-08-12 green: `/health`, demo room, control plane и authenticated control-plane session | Не создавать review rooms до появления published candidates |
+| Staging review access | Candidate 01 `0.1.1` проверен в public room с exact full-SHA bundle: report `rpt_ad6e7ec9-5dfe-4f9c-a229-6fc57e08f417`, `sceneDebug.state=loaded`, corrected spawn/surfaces, zero missing assets | Повторять exact-SHA runtime gate для следующих scene releases |
 
 Public `scene-assets` repository уже существует, но новый isolation contract запрещает использовать его как container для новых сцен. В Stage 0 родительская документация должна быть скорректирована: factual prerequisite создания общего repository закрыта исторически, а все новые original scenes получают отдельные repositories. Platform contracts, immutable bindings и activation state не меняются.
 
@@ -148,7 +156,7 @@ Public `scene-assets` repository уже существует, но новый is
 - Не делать универсальный архитектурный CAD/BIM editor.
 - Не генерировать всю комнату одним неструктурированным mesh, NeRF или Gaussian Splat и не использовать такой output как collision/navigation geometry.
 - Не маскировать неудачу AI-ветки полноценным ручным художественным перемоделированием.
-- Не начинать personal и presentation room art pass до решения по meeting-room A/B.
+- Personal и presentation room art pass выполнять по новому ADR, не возобновляя старые A/B tracks без отдельного решения.
 - Не объявлять Scene Factory reusable platform после одной комнаты. Productization рассматривается только после повторного применения минимум ко второй room type.
 
 ## Утверждённый creative brief
