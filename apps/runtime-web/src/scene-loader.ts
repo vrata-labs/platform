@@ -12,6 +12,7 @@ export interface LoadedSceneBundle {
   group: THREE.Group;
   spawnPointApplied: boolean;
   spawnPointId: string | null;
+  spawnPoint: SceneBundleSpawnPoint | null;
   assetUrl: string;
   assetType: string;
   loadMs: number;
@@ -97,9 +98,7 @@ async function applyMaterialOverrides(input: {
 }
 
 export async function loadSceneBundle(input: {
-  scene: THREE.Scene;
   bundleUrl: string;
-  applySpawnPoint?: (spawnPoint: SceneBundleSpawnPoint) => void;
   onLoadStage?: (stage: string) => void;
   onAssetProgress?: (loaded: number, expected: number | null) => void;
 }): Promise<LoadedSceneBundle> {
@@ -158,20 +157,15 @@ export async function loadSceneBundle(input: {
     bundleUrl: response.url
   });
   input.onLoadStage?.("material_overrides_applied");
-  input.scene.add(group);
-  input.onLoadStage?.("scene_added");
 
   const spawnPoint = pickSceneSpawnPoint(manifest);
-  if (spawnPoint) {
-    input.applySpawnPoint?.(spawnPoint);
-  }
-  input.onLoadStage?.("spawn_applied");
 
   return {
     manifest,
     group,
-    spawnPointApplied: Boolean(spawnPoint),
+    spawnPointApplied: false,
     spawnPointId: spawnPoint?.id ?? null,
+    spawnPoint,
     assetUrl: sceneAssetUrl,
     assetType: sceneAssetUrl.split(".").pop()?.toLowerCase() ?? "unknown",
     loadMs: Math.round(performance.now() - startedAt),

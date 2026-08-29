@@ -1,7 +1,8 @@
 import * as THREE from "three";
 
 import { inspectSceneObject, type SceneDiagnosticsSnapshot } from "./scene-debug.js";
-import type { SceneBundleManifest, SceneBundleSpawnPoint } from "./scene-bundle.js";
+import type { SceneBundleManifest, SceneBundleRenderProfile, SceneBundleSpawnPoint } from "./scene-bundle.js";
+import { disposeSceneObject } from "./scene-dispose.js";
 import { loadSceneBundle } from "./scene-loader.js";
 
 export interface SceneSessionResult {
@@ -29,16 +30,17 @@ export async function startSceneBundleSession(input: {
   sceneFitEnabled: boolean;
   previousSceneDebug: SceneDiagnosticsSnapshot;
   applySceneMaterialDebugMode(root: THREE.Object3D): void;
+  applySceneRenderProfile(profile: SceneBundleRenderProfile | undefined, root: THREE.Object3D | null): void;
   applyCleanSceneMode(enabled: boolean): void;
   applySceneDebugFit(boundingBox: NonNullable<SceneDiagnosticsSnapshot["boundingBox"]>): void;
   applySpawnPoint?(spawnPoint: SceneBundleSpawnPoint): void;
   setFallbackEnvironmentVisible(visible: boolean): void;
+  loadSceneBundleImpl?: typeof loadSceneBundle;
 }): Promise<SceneSessionResult> {
+  let candidateSceneRoot: THREE.Group | null = null;
   try {
-    const loadedScene = await loadSceneBundle({
-      scene: input.scene,
+    const loadedScene = await (input.loadSceneBundleImpl ?? loadSceneBundle)({
       bundleUrl: input.bundleUrl,
-      applySpawnPoint: input.applySpawnPoint,
       onLoadStage(stage) {
         input.previousSceneDebug.loadStage = stage;
       },
@@ -47,12 +49,25 @@ export async function startSceneBundleSession(input: {
         input.previousSceneDebug.assetBytesExpected = expected;
       }
     });
+    candidateSceneRoot = loadedScene.group;
     const effectiveCleanSceneMode = input.requestedCleanSceneMode || loadedScene.manifest.renderMode === "clean";
     input.applySceneMaterialDebugMode(loadedScene.group);
-    input.setFallbackEnvironmentVisible(false);
+    const renderProfileStartedAt = performance.now();
+    input.applySceneRenderProfile(loadedScene.manifest.renderProfile, loadedScene.group);
+    const renderProfileApplyMs = loadedScene.manifest.renderProfile
+      ? Math.round(performance.now() - renderProfileStartedAt)
+      : null;
     if (effectiveCleanSceneMode) {
       input.applyCleanSceneMode(true);
     }
+    input.scene.add(loadedScene.group);
+    input.previousSceneDebug.loadStage = "scene_added";
+    input.setFallbackEnvironmentVisible(false);
+    if (loadedScene.spawnPoint && input.applySpawnPoint) {
+      input.applySpawnPoint(loadedScene.spawnPoint);
+      loadedScene.spawnPointApplied = true;
+    }
+    input.previousSceneDebug.loadStage = "spawn_applied";
     let sceneDebug = inspectSceneObject({
       root: loadedScene.group,
       camera: input.camera,
@@ -66,11 +81,14 @@ export async function startSceneBundleSession(input: {
         assetBytesExpected: input.previousSceneDebug.assetBytesExpected,
         label: loadedScene.manifest.label,
         source: loadedScene.manifest.source,
+        renderProfile: loadedScene.manifest.renderProfile ?? null,
         assetUrl: loadedScene.assetUrl,
         assetType: loadedScene.assetType,
         spawnPointId: loadedScene.spawnPointId,
+        spawnYaw: loadedScene.spawnPoint?.yaw ?? null,
         spawnApplied: loadedScene.spawnPointApplied,
         loadMs: loadedScene.loadMs,
+        renderProfileApplyMs,
         missingAssets: loadedScene.missingAssets
       }
     });
@@ -92,6 +110,11 @@ export async function startSceneBundleSession(input: {
       note: "scene_bundle_loaded"
     };
   } catch (error) {
+    if (candidateSceneRoot) {
+      disposeSceneObject(candidateSceneRoot);
+    }
+    input.applySceneRenderProfile(undefined, null);
+    input.applyCleanSceneMode(input.requestedCleanSceneMode);
     input.setFallbackEnvironmentVisible(true);
     return {
       activeSceneBundleRoot: null,
@@ -107,7 +130,8 @@ export async function startSceneBundleSession(input: {
         assetBytesLoaded: input.previousSceneDebug.assetBytesLoaded,
         assetBytesExpected: input.previousSceneDebug.assetBytesExpected,
         missingAssets: [],
-        loadMs: null
+        loadMs: null,
+        renderProfileApplyMs: null
       },
       brandingSuffix: "Scene bundle fallback active",
       note: "scene_bundle_failed"

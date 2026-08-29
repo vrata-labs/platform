@@ -2643,7 +2643,9 @@ test("scene bundle diagnostics include render and geometry debug info", async ({
   const sceneBundleUrl = inlineSceneBundleUrl({
     sceneId: "debug-scene-fixture",
     label: "Debug Scene Fixture",
-    color: [0.25, 0.6, 0.95]
+    color: [0.25, 0.6, 0.95],
+    spawnYaw: Math.PI / 2,
+    renderProfile: "neutral-pbr"
   });
   const roomResponse = await request.post("/api/rooms", {
     headers: {
@@ -2659,7 +2661,7 @@ test("scene bundle diagnostics include render and geometry debug info", async ({
   expect(roomResponse.ok()).toBeTruthy();
   const room = (await roomResponse.json()) as { roomId: string; roomLink: string };
 
-  await page.goto(`${room.roomLink}?debug=1`);
+  await page.goto(`${room.roomLink}?debug=1&scenefit=0`);
 
   await expect.poll(async () => {
     const diagnostics = await readDiagnostics<{
@@ -2667,6 +2669,9 @@ test("scene bundle diagnostics include render and geometry debug info", async ({
         note?: string;
         sceneDebug?: {
           state?: string;
+          renderProfile?: string | null;
+          spawnYaw?: number | null;
+          renderProfileApplyMs?: number | null;
           meshCount?: number;
           geometryCount?: number;
           screenshot?: {
@@ -2680,6 +2685,9 @@ test("scene bundle diagnostics include render and geometry debug info", async ({
     const loaded = [...diagnostics.items].reverse().find((item) => item.note === "scene_bundle_loaded");
     return {
       state: loaded?.sceneDebug?.state ?? null,
+      renderProfile: loaded?.sceneDebug?.renderProfile ?? null,
+      spawnYaw: loaded?.sceneDebug?.spawnYaw ?? null,
+      renderProfileApplyMeasured: (loaded?.sceneDebug?.renderProfileApplyMs ?? -1) >= 0,
       hasMeshes: (loaded?.sceneDebug?.meshCount ?? 0) > 0,
       hasGeometry: (loaded?.sceneDebug?.geometryCount ?? 0) > 0,
       hasScreenshot: (loaded?.sceneDebug?.screenshot?.width ?? 0) > 0,
@@ -2691,12 +2699,20 @@ test("scene bundle diagnostics include render and geometry debug info", async ({
     intervals: [500, 1000, 2000]
   }).toEqual({
     state: "loaded",
+    renderProfile: "neutral-pbr",
+    spawnYaw: Math.PI / 2,
+    renderProfileApplyMeasured: true,
     hasMeshes: true,
     hasGeometry: true,
     hasScreenshot: true,
     hasPixelSamples: true,
     excludesDataUrl: true
   });
+
+  const localYaw = await page.evaluate(() => (window as Window & {
+    __VRATA_DEBUG__?: { localPose?: { root?: { yaw?: number } } };
+  }).__VRATA_DEBUG__?.localPose?.root?.yaw ?? null);
+  expect(localYaw).toBeCloseTo(Math.PI / 2, 3);
 });
 
 test("@private-assets avatar-enabled hall room supports interaction ray teleport, sit, switch and teleport exit", async ({ page, request }) => {

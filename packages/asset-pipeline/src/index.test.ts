@@ -37,7 +37,8 @@ function validSceneJson(overrides: Record<string, unknown> = {}): Record<string,
     label: "Test Scene",
     source: "vrata-test-fixture",
     glbPath: "scene.glb",
-    spawnPoints: [{ id: "main", position: { x: 0, y: 0, z: 4 } }],
+    renderProfile: "neutral-pbr",
+    spawnPoints: [{ id: "main", position: { x: 0, y: 0, z: 4 }, yaw: Math.PI }],
     bounds: { width: 10, height: 4, depth: 10 },
     preview: "preview.webp",
     ...overrides
@@ -278,6 +279,34 @@ test("validateSceneBundlePath rejects an invalid spawn point", async () => {
     const result = await validateSceneBundlePath(root);
     assert.equal(result.ok, false);
     assert.equal(result.issues.some((issue) => issue.code === "invalid_scene_bundle_position" && issue.path === "scene.json#/spawnPoints/0/position/y"), true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("validateSceneBundlePath rejects an invalid spawn yaw", async () => {
+  const root = await createSceneBundle({
+    sceneJson: validSceneJson({ spawnPoints: [{ id: "main", position: { x: 0, y: 0, z: 4 }, yaw: "bad" }] }),
+    files: { "scene.glb": Buffer.from("glb"), "preview.webp": Buffer.from("webp") }
+  });
+  try {
+    const result = await validateSceneBundlePath(root);
+    assert.equal(result.ok, false);
+    assert.equal(result.issues.some((issue) => issue.code === "invalid_scene_bundle_spawn_yaw" && issue.path === "scene.json#/spawnPoints/0/yaw"), true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("validateSceneBundlePath rejects an unknown render profile", async () => {
+  const root = await createSceneBundle({
+    sceneJson: validSceneJson({ renderProfile: "cinematic" }),
+    files: { "scene.glb": Buffer.from("glb"), "preview.webp": Buffer.from("webp") }
+  });
+  try {
+    const result = await validateSceneBundlePath(root);
+    assert.equal(result.ok, false);
+    assert.equal(result.issues.some((issue) => issue.code === "invalid_scene_bundle_render_profile" && issue.path === "scene.json#/renderProfile"), true);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

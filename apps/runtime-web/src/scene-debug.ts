@@ -9,11 +9,14 @@ export interface SceneDiagnosticsSnapshot {
   assetBytesExpected: number | null;
   label: string | null;
   source: string | null;
+  renderProfile: "neutral-pbr" | null;
   assetUrl: string | null;
   assetType: string | null;
   spawnPointId: string | null;
+  spawnYaw: number | null;
   spawnApplied: boolean;
   loadMs: number | null;
+  renderProfileApplyMs: number | null;
   objectCount: number;
   meshCount: number;
   materialCount: number;
@@ -90,11 +93,14 @@ export function createEmptySceneDiagnostics(): SceneDiagnosticsSnapshot {
     assetBytesExpected: null,
     label: null,
     source: null,
+    renderProfile: null,
     assetUrl: null,
     assetType: null,
     spawnPointId: null,
+    spawnYaw: null,
     spawnApplied: false,
     loadMs: null,
+    renderProfileApplyMs: null,
     objectCount: 0,
     meshCount: 0,
     materialCount: 0,

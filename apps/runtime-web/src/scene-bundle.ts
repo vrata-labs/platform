@@ -5,7 +5,10 @@ export interface SceneBundleSpawnPoint {
     y: number;
     z: number;
   };
+  yaw?: number;
 }
+
+export type SceneBundleRenderProfile = "neutral-pbr";
 
 export interface SceneBundleSeatAnchor {
   id: string;
@@ -70,6 +73,7 @@ export interface SceneBundleManifest {
   source: string;
   glbPath: string;
   renderMode?: "default" | "clean";
+  renderProfile?: SceneBundleRenderProfile;
   spawnPoints: SceneBundleSpawnPoint[];
   anchors?: {
     teleportFloorY?: number;
@@ -133,6 +137,9 @@ function parseSpawnPoint(input: unknown, index: number): SceneBundleSpawnPoint {
   if (!isFiniteNumber(position.x) || !isFiniteNumber(position.y) || !isFiniteNumber(position.z)) {
     throw new Error(`invalid_scene_bundle_spawn_position:${index}`);
   }
+  if (payload.yaw !== undefined && !isFiniteNumber(payload.yaw)) {
+    throw new Error(`invalid_scene_bundle_spawn_yaw:${index}`);
+  }
 
   return {
     id: assertString(payload.id, `invalid_scene_bundle_spawn_id:${index}`),
@@ -140,7 +147,8 @@ function parseSpawnPoint(input: unknown, index: number): SceneBundleSpawnPoint {
       x: position.x,
       y: position.y,
       z: position.z
-    }
+    },
+    yaw: payload.yaw
   };
 }
 
@@ -375,6 +383,12 @@ export function parseSceneBundleManifest(input: unknown): SceneBundleManifest {
       throw new Error("invalid_scene_bundle_render_mode");
     }
     manifest.renderMode = payload.renderMode;
+  }
+  if (payload.renderProfile !== undefined) {
+    if (payload.renderProfile !== "neutral-pbr") {
+      throw new Error("invalid_scene_bundle_render_profile");
+    }
+    manifest.renderProfile = payload.renderProfile;
   }
 
   if (payload.anchors !== undefined) {

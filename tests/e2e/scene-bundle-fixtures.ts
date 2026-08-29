@@ -3,6 +3,8 @@ type InlineSceneBundleInput = {
   label: string;
   color?: [number, number, number];
   spawn?: { x: number; y: number; z: number };
+  spawnYaw?: number;
+  renderProfile?: "neutral-pbr";
 };
 
 function dataUrl(contentType: string, value: unknown): string {
@@ -69,9 +71,11 @@ export function inlineSceneBundleUrl(input: InlineSceneBundleInput): string {
     label: input.label,
     source: "vrata-inline-test-fixture",
     glbPath: dataUrl("model/gltf+json", gltf),
+    renderProfile: input.renderProfile,
     spawnPoints: [{
       id: "main",
-      position: input.spawn ?? { x: 0, y: 0, z: 4 }
+      position: input.spawn ?? { x: 0, y: 0, z: 4 },
+      yaw: input.spawnYaw
     }],
     bounds: { width: 20, height: 8, depth: 20 },
     notes: "Inline e2e fixture; public releases do not bundle scene asset files."
