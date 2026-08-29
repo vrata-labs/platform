@@ -145,9 +145,12 @@ import { createAvatarRegistry } from "./avatar/avatar-registry.js";
 import {
   LEGACY_MEDIA_SURFACE_NEAR_CONTACT_DISTANCE_M,
   type SceneBundleMediaSurface,
+  type SceneBundleRenderProfile,
   type SceneBundleSeatAnchor
 } from "./scene-bundle.js";
 import { createLocalPoseController, type Vector3Like } from "./local/local-pose.js";
+import { applySceneSpawnPoint } from "./local/scene-spawn.js";
+import { resolveSceneRenderSettings } from "./scene-render-profile.js";
 import { resolveDesktopTouchInputIntents, resolveTouchControlZone, resolveTouchDragMoveVector, resolveXrConfirmInteractionIntent, resolveXrInputIntents, type TouchControlZone } from "./input/input-intents.js";
 import type { RuntimeFrameContext } from "./input/runtime-frame-context.js";
 import {
@@ -431,7 +434,7 @@ if (navigator.mediaDevices?.addEventListener) {
 
 const scene = new THREE.Scene();
 scene.fog = new THREE.Fog(0x08111f, 12, 50);
-const defaultSceneFog = scene.fog;
+let defaultSceneFog = scene.fog;
 
 const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 200);
 camera.position.set(0, 1.6, 0);
@@ -508,7 +511,8 @@ for (const controller of xrControllers) {
   });
 }
 
-scene.add(new THREE.HemisphereLight(0xcbe9ff, 0x152033, 1.4));
+const hemisphereLight = new THREE.HemisphereLight(0xcbe9ff, 0x152033, 1.4);
+scene.add(hemisphereLight);
 const directional = new THREE.DirectionalLight(0xffffff, 1.4);
 directional.position.set(5, 9, 3);
 scene.add(directional);
@@ -1593,6 +1597,7 @@ let xrSessionDebug = createXrRendererWiringDebug({
   presenting: renderer.xr.isPresenting
 });
 let effectiveCleanSceneMode = requestedCleanSceneMode;
+let activeSceneRenderProfile: SceneBundleRenderProfile | undefined;
 let availableSpaces: RuntimeSpaceOption[] = [];
 let latestSessionControl: RuntimeSessionControlResponse["state"] | null = null;
 let hostControlActionInFlight = false;
@@ -1612,9 +1617,38 @@ function setFallbackEnvironmentVisible(visible: boolean): void {
   }
 }
 
+function markSceneMaterialsForRenderUpdate(root: THREE.Object3D): void {
+  root.traverse((object) => {
+    if (!(object instanceof THREE.Mesh)) {
+      return;
+    }
+    const materials = Array.isArray(object.material) ? object.material : [object.material];
+    for (const material of materials) {
+      material.needsUpdate = true;
+    }
+  });
+}
+
+function applySceneRenderProfile(profile: SceneBundleRenderProfile | undefined, root: THREE.Object3D | null): void {
+  activeSceneRenderProfile = profile;
+  const settings = resolveSceneRenderSettings(profile, effectiveCleanSceneMode);
+  scene.environment = null;
+  renderer.toneMapping = settings.toneMapping === "agx" ? THREE.AgXToneMapping : THREE.NoToneMapping;
+  renderer.toneMappingExposure = settings.toneMappingExposure;
+  markSceneMaterialsForRenderUpdate(root ?? scene);
+  applySceneLighting();
+}
+
+function applySceneLighting(): void {
+  const settings = resolveSceneRenderSettings(activeSceneRenderProfile, effectiveCleanSceneMode);
+  ambientLight.visible = settings.ambientVisible;
+  hemisphereLight.visible = settings.hemisphereVisible;
+  directional.visible = settings.directionalVisible;
+}
+
 function applyCleanSceneMode(enabled: boolean): void {
-  ambientLight.visible = enabled;
-  directional.visible = !enabled;
+  effectiveCleanSceneMode = enabled;
+  applySceneLighting();
   scene.fog = enabled ? null : defaultSceneFog;
   floor.visible = !enabled;
   grid.visible = !enabled;
@@ -10203,7 +10237,8 @@ async function main(): Promise<void> {
   releaseCurrentSeatLocally();
   resetAvatarPoseTransportStats();
   if (!effectiveCleanSceneMode) {
-    scene.fog = new THREE.Fog(new THREE.Color(boot.theme.accentColor).getHex(), 12, 50);
+    defaultSceneFog = new THREE.Fog(new THREE.Color(boot.theme.accentColor).getHex(), 12, 50);
+    scene.fog = defaultSceneFog;
   } else {
     applyCleanSceneMode(true);
   }
@@ -10268,13 +10303,11 @@ async function main(): Promise<void> {
       applySceneMaterialDebugMode(root) {
         applySceneMaterialDebugMode(root, sceneMaterialDebugMode);
       },
+      applySceneRenderProfile,
       applyCleanSceneMode,
       applySceneDebugFit,
       applySpawnPoint(spawnPoint) {
-        localPoseController.setPose({
-          ...localPoseController.getPose(),
-          position: spawnPoint.position
-        }, "spawn");
+        applySceneSpawnPoint(localPoseController, spawnPoint);
         updateLocalPositionDebug();
       },
       setFallbackEnvironmentVisible

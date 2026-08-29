@@ -296,6 +296,9 @@ function validateManifestShape(input: unknown, issues: SceneBundleValidationIssu
         issues.push(issue("error", `${path}/id`, "invalid_scene_bundle_spawn_id", "spawn point id must be a non-empty string."));
       }
       validatePosition(issues, spawnPoint.position, `${path}/position`);
+      if (spawnPoint.yaw !== undefined && !isFiniteNumber(spawnPoint.yaw)) {
+        issues.push(issue("error", `${path}/yaw`, "invalid_scene_bundle_spawn_yaw", "spawn point yaw must be a finite number when provided."));
+      }
     });
     const firstSpawn = input.spawnPoints[0];
     if (isRecord(firstSpawn) && firstSpawn.id !== "main") {
@@ -305,6 +308,9 @@ function validateManifestShape(input: unknown, issues: SceneBundleValidationIssu
 
   if (input.renderMode !== undefined && input.renderMode !== "default" && input.renderMode !== "clean") {
     issues.push(issue("error", "scene.json#/renderMode", "invalid_scene_bundle_render_mode", "renderMode must be default or clean."));
+  }
+  if (input.renderProfile !== undefined && input.renderProfile !== "neutral-pbr") {
+    issues.push(issue("error", "scene.json#/renderProfile", "invalid_scene_bundle_render_profile", "renderProfile must be neutral-pbr when provided."));
   }
 
   if (input.bounds !== undefined) {

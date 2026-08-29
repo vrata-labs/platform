@@ -11,6 +11,7 @@ test("parseSceneBundleManifest accepts valid v1 manifest", () => {
     source: "sensetower",
     glbPath: "scene.glb",
     renderMode: "clean",
+    renderProfile: "neutral-pbr",
     materialOverrides: [
       {
         match: "chairs*",
@@ -21,7 +22,8 @@ test("parseSceneBundleManifest accepts valid v1 manifest", () => {
     spawnPoints: [
       {
         id: "main",
-        position: { x: 1, y: 0, z: -2 }
+        position: { x: 1, y: 0, z: -2 },
+        yaw: Math.PI / 2
       }
     ],
     anchors: {
@@ -67,6 +69,8 @@ test("parseSceneBundleManifest accepts valid v1 manifest", () => {
 
   assert.equal(manifest.sceneId, "sense-hall");
   assert.equal(manifest.renderMode, "clean");
+  assert.equal(manifest.renderProfile, "neutral-pbr");
+  assert.equal(manifest.spawnPoints[0]?.yaw, Math.PI / 2);
   assert.equal(manifest.materialOverrides?.[0]?.match, "chairs*");
   assert.equal(manifest.anchors?.teleportFloorY, 0);
   assert.equal(manifest.anchors?.seatAnchors[0]?.id, "seat-a");
@@ -113,6 +117,35 @@ test("parseSceneBundleManifest rejects invalid spawn point payload", () => {
       spawnPoints: [{ id: "main", position: { x: 1, y: "bad", z: 0 } }]
     }),
     /invalid_scene_bundle_spawn_position/
+  );
+});
+
+test("parseSceneBundleManifest rejects invalid spawn yaw", () => {
+  assert.throws(
+    () => parseSceneBundleManifest({
+      schemaVersion: 1,
+      sceneId: "sense-hall",
+      label: "Sense Hall",
+      source: "sensetower",
+      glbPath: "scene.glb",
+      spawnPoints: [{ id: "main", position: { x: 1, y: 0, z: 0 }, yaw: "bad" }]
+    }),
+    /invalid_scene_bundle_spawn_yaw/
+  );
+});
+
+test("parseSceneBundleManifest rejects unknown render profile", () => {
+  assert.throws(
+    () => parseSceneBundleManifest({
+      schemaVersion: 1,
+      sceneId: "sense-hall",
+      label: "Sense Hall",
+      source: "sensetower",
+      glbPath: "scene.glb",
+      renderProfile: "cinematic",
+      spawnPoints: [{ id: "main", position: { x: 1, y: 0, z: 0 } }]
+    }),
+    /invalid_scene_bundle_render_profile/
   );
 });
 

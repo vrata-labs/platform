@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import * as THREE from "three";
 
 import { createLocalPoseController } from "./local-pose.js";
+import { applySceneSpawnPoint } from "./scene-spawn.js";
 
 function createRig() {
   const player = new THREE.Group();
@@ -33,6 +34,26 @@ test("local pose controller applies spawn pose to player rig", () => {
   assert.equal(player.position.z, -2);
   assert.equal(player.rotation.y, 0.5);
   assert.equal(pitch.rotation.x, -0.2);
+});
+
+test("scene spawn applies authored yaw and preserves current yaw when omitted", () => {
+  const { pose } = createRig();
+  pose.setYaw(0.7, "desktop_move");
+
+  const preserved = applySceneSpawnPoint(pose, {
+    id: "legacy-spawn",
+    position: { x: 1, y: 0, z: 2 }
+  });
+  assert.equal(preserved.yaw, 0.7);
+
+  const authored = applySceneSpawnPoint(pose, {
+    id: "authored-spawn",
+    position: { x: -1, y: 0.25, z: -2 },
+    yaw: Math.PI / 2
+  });
+  assert.deepEqual(authored.position, { x: -1, y: 0.25, z: -2 });
+  assert.equal(authored.yaw, Math.PI / 2);
+  assert.equal(pose.getLastMutationReason(), "spawn");
 });
 
 test("local pose controller restores persisted personal pose", () => {
