@@ -9,7 +9,7 @@ export interface SceneDiagnosticsSnapshot {
   assetBytesExpected: number | null;
   label: string | null;
   source: string | null;
-  renderProfile: "neutral-pbr" | null;
+  renderProfile: "neutral-pbr" | "baked-pbr-v1" | null;
   assetUrl: string | null;
   assetType: string | null;
   spawnPointId: string | null;
@@ -21,6 +21,7 @@ export interface SceneDiagnosticsSnapshot {
   meshCount: number;
   materialCount: number;
   texturedMaterialCount: number;
+  lightMappedMaterialCount: number;
   geometryCount: number;
   triangleEstimate: number;
   textureCount: number;
@@ -31,6 +32,9 @@ export interface SceneDiagnosticsSnapshot {
     hasMap: boolean;
     hasNormalMap: boolean;
     hasAoMap: boolean;
+    hasLightMap: boolean;
+    roughness?: number | null;
+    metalness?: number | null;
     color?: { r: number; g: number; b: number } | null;
     mapSource?: string | null;
   }>;
@@ -105,6 +109,7 @@ export function createEmptySceneDiagnostics(): SceneDiagnosticsSnapshot {
     meshCount: 0,
     materialCount: 0,
     texturedMaterialCount: 0,
+    lightMappedMaterialCount: 0,
     geometryCount: 0,
     triangleEstimate: 0,
     textureCount: 0,
@@ -122,6 +127,7 @@ export function inspectSceneObject(input: {
   previous: SceneDiagnosticsSnapshot;
 }): SceneDiagnosticsSnapshot {
   const materialKeys = new Set<string>();
+  const lightMappedMaterialKeys = new Set<string>();
   const geometryKeys = new Set<string>();
   const textureKeys = new Set<string>();
   const materialSamples = new Map<string, {
@@ -130,6 +136,9 @@ export function inspectSceneObject(input: {
     hasMap: boolean;
     hasNormalMap: boolean;
     hasAoMap: boolean;
+    hasLightMap: boolean;
+    roughness?: number | null;
+    metalness?: number | null;
     color?: { r: number; g: number; b: number } | null;
     mapSource?: string | null;
   }>();
@@ -158,8 +167,8 @@ export function inspectSceneObject(input: {
         continue;
       }
       materialKeys.add(material.uuid);
-      const maybeTextured = material as THREE.MeshStandardMaterial & { map?: THREE.Texture | null; normalMap?: THREE.Texture | null; emissiveMap?: THREE.Texture | null; alphaMap?: THREE.Texture | null; aoMap?: THREE.Texture | null; roughnessMap?: THREE.Texture | null; metalnessMap?: THREE.Texture | null; specularMap?: THREE.Texture | null; }; 
-      const textures = [maybeTextured.map, maybeTextured.normalMap, maybeTextured.emissiveMap, maybeTextured.alphaMap, maybeTextured.aoMap, maybeTextured.roughnessMap, maybeTextured.metalnessMap, maybeTextured.specularMap].filter(Boolean) as THREE.Texture[];
+      const maybeTextured = material as THREE.MeshStandardMaterial & { map?: THREE.Texture | null; normalMap?: THREE.Texture | null; emissiveMap?: THREE.Texture | null; alphaMap?: THREE.Texture | null; aoMap?: THREE.Texture | null; lightMap?: THREE.Texture | null; roughnessMap?: THREE.Texture | null; metalnessMap?: THREE.Texture | null; specularMap?: THREE.Texture | null; };
+      const textures = [maybeTextured.map, maybeTextured.normalMap, maybeTextured.emissiveMap, maybeTextured.alphaMap, maybeTextured.aoMap, maybeTextured.lightMap, maybeTextured.roughnessMap, maybeTextured.metalnessMap, maybeTextured.specularMap].filter(Boolean) as THREE.Texture[];
       if (textures.length > 0) {
         texturedMaterialCount += 1;
       }
@@ -173,6 +182,9 @@ export function inspectSceneObject(input: {
         hasMap: false,
         hasNormalMap: false,
         hasAoMap: false,
+        hasLightMap: false,
+        roughness: null,
+        metalness: null,
         color: null,
         mapSource: null
       };
@@ -180,6 +192,12 @@ export function inspectSceneObject(input: {
       existing.hasMap = existing.hasMap || Boolean(maybeTextured.map);
       existing.hasNormalMap = existing.hasNormalMap || Boolean(maybeTextured.normalMap);
       existing.hasAoMap = existing.hasAoMap || Boolean(maybeTextured.aoMap);
+      existing.hasLightMap = existing.hasLightMap || Boolean(maybeTextured.lightMap);
+      if (maybeTextured.lightMap) lightMappedMaterialKeys.add(material.uuid);
+      if (material instanceof THREE.MeshStandardMaterial) {
+        existing.roughness = round(material.roughness);
+        existing.metalness = round(material.metalness);
+      }
       if ("color" in maybeTextured && maybeTextured.color instanceof THREE.Color) {
         existing.color = {
           r: round(maybeTextured.color.r),
@@ -224,6 +242,7 @@ export function inspectSceneObject(input: {
     meshCount,
     materialCount: materialKeys.size,
     texturedMaterialCount,
+    lightMappedMaterialCount: lightMappedMaterialKeys.size,
     geometryCount: geometryKeys.size,
     triangleEstimate,
     textureCount: textureKeys.size,

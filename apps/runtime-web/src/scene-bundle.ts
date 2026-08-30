@@ -8,7 +8,7 @@ export interface SceneBundleSpawnPoint {
   yaw?: number;
 }
 
-export type SceneBundleRenderProfile = "neutral-pbr";
+export type SceneBundleRenderProfile = "neutral-pbr" | "baked-pbr-v1";
 
 export interface SceneBundleSeatAnchor {
   id: string;
@@ -385,7 +385,7 @@ export function parseSceneBundleManifest(input: unknown): SceneBundleManifest {
     manifest.renderMode = payload.renderMode;
   }
   if (payload.renderProfile !== undefined) {
-    if (payload.renderProfile !== "neutral-pbr") {
+    if (payload.renderProfile !== "neutral-pbr" && payload.renderProfile !== "baked-pbr-v1") {
       throw new Error("invalid_scene_bundle_render_profile");
     }
     manifest.renderProfile = payload.renderProfile;

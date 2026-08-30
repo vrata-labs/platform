@@ -151,6 +151,7 @@ import {
 import { createLocalPoseController, type Vector3Like } from "./local/local-pose.js";
 import { applySceneSpawnPoint } from "./local/scene-spawn.js";
 import { resolveSceneRenderSettings } from "./scene-render-profile.js";
+import { createPbrRoomEnvironment, type PbrRoomEnvironment } from "./scene-environment.js";
 import { resolveDesktopTouchInputIntents, resolveTouchControlZone, resolveTouchDragMoveVector, resolveXrConfirmInteractionIntent, resolveXrInputIntents, type TouchControlZone } from "./input/input-intents.js";
 import type { RuntimeFrameContext } from "./input/runtime-frame-context.js";
 import {
@@ -1598,6 +1599,7 @@ let xrSessionDebug = createXrRendererWiringDebug({
 });
 let effectiveCleanSceneMode = requestedCleanSceneMode;
 let activeSceneRenderProfile: SceneBundleRenderProfile | undefined;
+let pbrRoomEnvironment: PbrRoomEnvironment | null = null;
 let availableSpaces: RuntimeSpaceOption[] = [];
 let latestSessionControl: RuntimeSessionControlResponse["state"] | null = null;
 let hostControlActionInFlight = false;
@@ -1632,7 +1634,11 @@ function markSceneMaterialsForRenderUpdate(root: THREE.Object3D): void {
 function applySceneRenderProfile(profile: SceneBundleRenderProfile | undefined, root: THREE.Object3D | null): void {
   activeSceneRenderProfile = profile;
   const settings = resolveSceneRenderSettings(profile, effectiveCleanSceneMode);
-  scene.environment = null;
+  if (settings.environment === "room" && !pbrRoomEnvironment) {
+    pbrRoomEnvironment = createPbrRoomEnvironment(renderer);
+  }
+  scene.environment = settings.environment === "room" ? pbrRoomEnvironment?.texture ?? null : null;
+  scene.environmentIntensity = settings.environmentIntensity;
   renderer.toneMapping = settings.toneMapping === "agx" ? THREE.AgXToneMapping : THREE.NoToneMapping;
   renderer.toneMappingExposure = settings.toneMappingExposure;
   markSceneMaterialsForRenderUpdate(root ?? scene);
@@ -1642,8 +1648,11 @@ function applySceneRenderProfile(profile: SceneBundleRenderProfile | undefined, 
 function applySceneLighting(): void {
   const settings = resolveSceneRenderSettings(activeSceneRenderProfile, effectiveCleanSceneMode);
   ambientLight.visible = settings.ambientVisible;
+  ambientLight.intensity = settings.ambientIntensity;
   hemisphereLight.visible = settings.hemisphereVisible;
+  hemisphereLight.intensity = settings.hemisphereIntensity;
   directional.visible = settings.directionalVisible;
+  directional.intensity = settings.directionalIntensity;
 }
 
 function applyCleanSceneMode(enabled: boolean): void {
@@ -6438,6 +6447,16 @@ refreshXrSessionDebug();
     getRemoteBrowserVrKeyboardKeyWorldPosition: (keyId: string) => { x: number; y: number; z: number } | null;
     teleportToFloor: (x: number, z: number) => boolean;
     forceXrInteractionAtSeat: (seatId: string) => boolean;
+    setSceneReviewPose: (pose: {
+      position: { x: number; y: number; z: number };
+      yaw: number;
+      pitch: number;
+      fovDegrees: number;
+    }) => boolean;
+    setSceneReviewRendering: (settings: {
+      environmentIntensity: number;
+      exposure: number;
+    }) => boolean;
     setSyntheticXrState: (state: {
       rightController: { x: number; y: number; z: number };
       rightGrip?: { x: number; y: number; z: number } | null;
@@ -6994,6 +7013,38 @@ refreshXrSessionDebug();
       seatAnchor.position.y + seatAnchor.seatHeight,
       seatAnchor.position.z
     ));
+  },
+  setSceneReviewPose: (pose) => {
+    const values = [
+      pose.position.x,
+      pose.position.y,
+      pose.position.z,
+      pose.yaw,
+      pose.pitch,
+      pose.fovDegrees
+    ];
+    if (!values.every(Number.isFinite) || pose.fovDegrees <= 0 || pose.fovDegrees >= 180) {
+      return false;
+    }
+    localPoseController.setPose({
+      position: pose.position,
+      yaw: pose.yaw,
+      pitch: pose.pitch
+    }, "spawn");
+    camera.fov = pose.fovDegrees;
+    camera.updateProjectionMatrix();
+    updateLocalPositionDebug();
+    return true;
+  },
+  setSceneReviewRendering: (settings) => {
+    if (![settings.environmentIntensity, settings.exposure].every(Number.isFinite)
+      || settings.environmentIntensity < 0
+      || settings.exposure <= 0) {
+      return false;
+    }
+    scene.environmentIntensity = settings.environmentIntensity;
+    renderer.toneMappingExposure = settings.exposure;
+    return true;
   },
   setSyntheticXrState: (state) => {
     syntheticXrState = state ? {
@@ -10043,6 +10094,8 @@ window.addEventListener("beforeunload", () => {
     disconnectMediaSurfaceAudioTrack(surfaceId);
   }
   stopMockAudioSource();
+  pbrRoomEnvironment?.dispose();
+  pbrRoomEnvironment = null;
   void livekitRoom?.disconnect();
 });
 
@@ -10296,6 +10349,7 @@ async function main(): Promise<void> {
     const sceneResult = await startSceneBundleSession({
       scene,
       camera,
+      renderer,
       bundleUrl: boot.sceneBundleUrl,
       requestedCleanSceneMode,
       sceneFitEnabled,

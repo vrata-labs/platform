@@ -72,3 +72,24 @@ test("inspectSceneObject excludes panorama sphere from bounds", () => {
   assert.equal(diagnostics.boundingBox?.size.y, 3);
   assert.equal(diagnostics.boundingBox?.size.z, 4);
 });
+
+test("inspectSceneObject reports baked lightmaps", () => {
+  const material = new THREE.MeshStandardMaterial({ color: 0xffffff });
+  material.name = "baked-material";
+  material.lightMap = new THREE.Texture();
+  const root = new THREE.Group();
+  root.add(new THREE.Mesh(new THREE.BoxGeometry(), material));
+
+  const diagnostics = inspectSceneObject({
+    root,
+    camera: new THREE.PerspectiveCamera(),
+    previous: createEmptySceneDiagnostics()
+  });
+
+  assert.equal(diagnostics.textureCount, 1);
+  assert.equal(diagnostics.lightMappedMaterialCount, 1);
+  assert.equal(diagnostics.materialSamples[0]?.name, "baked-material");
+  assert.equal(diagnostics.materialSamples[0]?.hasLightMap, true);
+  assert.equal(diagnostics.materialSamples[0]?.roughness, 1);
+  assert.equal(diagnostics.materialSamples[0]?.metalness, 0);
+});

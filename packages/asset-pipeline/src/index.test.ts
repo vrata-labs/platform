@@ -45,6 +45,81 @@ function validSceneJson(overrides: Record<string, unknown> = {}): Record<string,
   };
 }
 
+function createBakedGlbFixture(options: {
+  bakedMetadata?: boolean;
+  lightmapTexCoord?: number;
+  includeLightmapUv?: boolean;
+  lightmapAccessorIndex?: number;
+  lightmapTextureIndex?: number;
+  transformedTexCoord?: number;
+  unlit?: boolean;
+  includeUnusedBakedMesh?: boolean;
+} = {}): Buffer {
+  const bakedMetadata = options.bakedMetadata ?? true;
+  const lightmapTexCoord = options.lightmapTexCoord ?? 1;
+  const includeLightmapUv = options.includeLightmapUv ?? true;
+  const emissiveTexture = {
+    index: options.lightmapTextureIndex ?? 0,
+    texCoord: lightmapTexCoord,
+    ...(options.transformedTexCoord === undefined ? {} : {
+      extensions: { KHR_texture_transform: { texCoord: options.transformedTexCoord } }
+    })
+  };
+  const material = {
+    emissiveTexture,
+    ...(bakedMetadata ? { extras: { vrataLightMap: true } } : {}),
+    ...(options.unlit ? { extensions: { KHR_materials_unlit: {} } } : {})
+  };
+  const primitive = {
+    attributes: {
+      POSITION: 0,
+      ...(includeLightmapUv ? { TEXCOORD_1: options.lightmapAccessorIndex ?? 1 } : {})
+    },
+    material: 0
+  };
+  const binary = Buffer.alloc(60);
+  const gltf = {
+    asset: { version: "2.0" },
+    scene: 0,
+    scenes: [{ nodes: [0] }],
+    nodes: [{ mesh: 0 }],
+    meshes: [
+      { primitives: [primitive] },
+      ...(options.includeUnusedBakedMesh ? [{ primitives: [{ ...primitive, material: 1 }] }] : [])
+    ],
+    materials: [
+      material,
+      ...(options.includeUnusedBakedMesh ? [{ emissiveTexture, extras: { vrataLightMap: true } }] : [])
+    ],
+    textures: [{ source: 0 }],
+    images: [{ uri: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=" }],
+    buffers: [{ byteLength: binary.byteLength }],
+    bufferViews: [
+      { buffer: 0, byteOffset: 0, byteLength: 36 },
+      { buffer: 0, byteOffset: 36, byteLength: 24 }
+    ],
+    accessors: [
+      { bufferView: 0, componentType: 5126, count: 3, type: "VEC3", min: [0, 0, 0], max: [1, 1, 0] },
+      { bufferView: 1, componentType: 5126, count: 3, type: "VEC2" }
+    ]
+  };
+  const jsonBytes = Buffer.from(JSON.stringify(gltf));
+  const jsonPadding = Buffer.alloc((4 - (jsonBytes.byteLength % 4)) % 4, 0x20);
+  const jsonChunk = Buffer.concat([jsonBytes, jsonPadding]);
+  const output = Buffer.alloc(12 + 8 + jsonChunk.byteLength + 8 + binary.byteLength);
+  output.writeUInt32LE(0x46546c67, 0);
+  output.writeUInt32LE(2, 4);
+  output.writeUInt32LE(output.byteLength, 8);
+  output.writeUInt32LE(jsonChunk.byteLength, 12);
+  output.writeUInt32LE(0x4e4f534a, 16);
+  jsonChunk.copy(output, 20);
+  const binaryHeader = 20 + jsonChunk.byteLength;
+  output.writeUInt32LE(binary.byteLength, binaryHeader);
+  output.writeUInt32LE(0x004e4942, binaryHeader + 4);
+  binary.copy(output, binaryHeader + 8);
+  return output;
+}
+
 function validMediaSurface(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     surfaceId: "debug-main",
@@ -224,6 +299,141 @@ test("validateSceneBundlePath accepts a valid scene directory", async () => {
     assert.deepEqual(result.issues, []);
     assert.equal(result.stats.fileCount, 3);
     assert.equal(result.stats.mainAssetBytes, 3);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("validateSceneBundlePath accepts the baked PBR render profile", async () => {
+  const root = await createSceneBundle({
+    sceneJson: validSceneJson({ renderProfile: "baked-pbr-v1" }),
+    files: {
+      "scene.glb": createBakedGlbFixture(),
+      "preview.webp": Buffer.from("webp")
+    }
+  });
+  try {
+    const result = await validateSceneBundlePath(root);
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.issues, []);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("validateSceneBundlePath rejects baked PBR assets without baked metadata", async () => {
+  const root = await createSceneBundle({
+    sceneJson: validSceneJson({ renderProfile: "baked-pbr-v1" }),
+    files: { "scene.glb": createBakedGlbFixture({ bakedMetadata: false }) }
+  });
+  try {
+    const result = await validateSceneBundlePath(root);
+    assert.equal(result.ok, false);
+    assert.equal(result.issues.some(({ code }) => code === "missing_baked_lightmaps"), true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("validateSceneBundlePath rejects baked materials without texCoord one", async () => {
+  const root = await createSceneBundle({
+    sceneJson: validSceneJson({ renderProfile: "baked-pbr-v1" }),
+    files: { "scene.glb": createBakedGlbFixture({ lightmapTexCoord: 0 }) }
+  });
+  try {
+    const result = await validateSceneBundlePath(root);
+    assert.equal(result.ok, false);
+    assert.equal(result.issues.some(({ code }) => code === "invalid_baked_lightmap_material"), true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("validateSceneBundlePath rejects baked primitives without TEXCOORD_1", async () => {
+  const root = await createSceneBundle({
+    sceneJson: validSceneJson({ renderProfile: "baked-pbr-v1" }),
+    files: { "scene.glb": createBakedGlbFixture({ includeLightmapUv: false }) }
+  });
+  try {
+    const result = await validateSceneBundlePath(root);
+    assert.equal(result.ok, false);
+    assert.equal(result.issues.some(({ code }) => code === "missing_baked_lightmap_uv"), true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("validateSceneBundlePath rejects FBX for baked PBR", async () => {
+  const root = await createSceneBundle({
+    sceneJson: validSceneJson({ glbPath: "scene.fbx", renderProfile: "baked-pbr-v1" }),
+    files: { "scene.fbx": Buffer.from("fbx") }
+  });
+  try {
+    const result = await validateSceneBundlePath(root);
+    assert.equal(result.ok, false);
+    assert.equal(result.issues.some(({ code }) => code === "unsupported_baked_pbr_asset"), true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("validateSceneBundlePath ignores baked metadata outside the active scene", async () => {
+  const root = await createSceneBundle({
+    sceneJson: validSceneJson({ renderProfile: "baked-pbr-v1" }),
+    files: { "scene.glb": createBakedGlbFixture({ bakedMetadata: false, includeUnusedBakedMesh: true }) }
+  });
+  try {
+    const result = await validateSceneBundlePath(root);
+    assert.equal(result.ok, false);
+    assert.equal(result.issues.some(({ code }) => code === "missing_baked_lightmaps"), true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("validateSceneBundlePath rejects dangling baked texture and UV references", async () => {
+  const root = await createSceneBundle({
+    sceneJson: validSceneJson({ renderProfile: "baked-pbr-v1" }),
+    files: {
+      "scene.glb": createBakedGlbFixture({ lightmapTextureIndex: 99, lightmapAccessorIndex: 99 })
+    }
+  });
+  try {
+    const result = await validateSceneBundlePath(root);
+    assert.equal(result.ok, false);
+    assert.equal(result.issues.some(({ code }) => code === "invalid_baked_lightmap_material"), true);
+    assert.equal(result.issues.some(({ code }) => code === "missing_baked_lightmap_uv"), true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("validateSceneBundlePath rejects unlit baked materials", async () => {
+  const root = await createSceneBundle({
+    sceneJson: validSceneJson({ renderProfile: "baked-pbr-v1" }),
+    files: { "scene.glb": createBakedGlbFixture({ unlit: true }) }
+  });
+  try {
+    const result = await validateSceneBundlePath(root);
+    assert.equal(result.ok, false);
+    assert.equal(result.issues.some(({ code }) => code === "invalid_baked_lightmap_material"), true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("validateSceneBundlePath honors KHR_texture_transform texCoord", async () => {
+  const root = await createSceneBundle({
+    sceneJson: validSceneJson({ renderProfile: "baked-pbr-v1" }),
+    files: {
+      "scene.glb": createBakedGlbFixture({ lightmapTexCoord: 0, transformedTexCoord: 1 }),
+      "preview.webp": Buffer.from("webp")
+    }
+  });
+  try {
+    const result = await validateSceneBundlePath(root);
+    assert.equal(result.ok, true, JSON.stringify(result.issues));
+    assert.equal(result.issues.some(({ severity }) => severity === "error"), false);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

@@ -25,6 +25,7 @@ function getFailureReason(error: unknown): string {
 export async function startSceneBundleSession(input: {
   scene: THREE.Scene;
   camera: THREE.Camera;
+  renderer?: THREE.WebGLRenderer;
   bundleUrl: string;
   requestedCleanSceneMode: boolean;
   sceneFitEnabled: boolean;
@@ -41,6 +42,7 @@ export async function startSceneBundleSession(input: {
   try {
     const loadedScene = await (input.loadSceneBundleImpl ?? loadSceneBundle)({
       bundleUrl: input.bundleUrl,
+      renderer: input.renderer,
       onLoadStage(stage) {
         input.previousSceneDebug.loadStage = stage;
       },

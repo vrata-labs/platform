@@ -204,6 +204,176 @@ function readZipEntry(buffer: Buffer, entry: ZipEntry): Buffer {
   throw new Error(`unsupported_zip_compression:${entry.compressionMethod}`);
 }
 
+function parseGlbJson(buffer: Buffer): unknown {
+  if (buffer.byteLength < 20
+    || buffer.readUInt32LE(0) !== 0x46546c67
+    || buffer.readUInt32LE(4) !== 2
+    || buffer.readUInt32LE(8) !== buffer.byteLength) {
+    throw new Error("invalid_glb_header");
+  }
+  let offset = 12;
+  while (offset + 8 <= buffer.byteLength) {
+    const chunkLength = buffer.readUInt32LE(offset);
+    const chunkType = buffer.readUInt32LE(offset + 4);
+    const chunkStart = offset + 8;
+    const chunkEnd = chunkStart + chunkLength;
+    if (chunkEnd > buffer.byteLength) throw new Error("invalid_glb_chunk");
+    if (chunkType === 0x4e4f534a) {
+      return JSON.parse(buffer.subarray(chunkStart, chunkEnd).toString("utf8").replace(/[\0 ]+$/, ""));
+    }
+    offset = chunkEnd;
+  }
+  throw new Error("missing_glb_json_chunk");
+}
+
+async function validateBakedPbrAsset(path: string, repositoryPath: string): Promise<SceneBundleValidationIssue[]> {
+  const issues: SceneBundleValidationIssue[] = [];
+  const extension = extname(repositoryPath).toLowerCase();
+  if (extension === ".fbx") {
+    return [issue("error", repositoryPath, "unsupported_baked_pbr_asset", "baked-pbr-v1 requires a .glb or .gltf asset.")];
+  }
+
+  let gltf: unknown;
+  try {
+    const bytes = await readFile(path);
+    gltf = extension === ".glb" ? parseGlbJson(bytes) : JSON.parse(bytes.toString("utf8"));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "invalid glTF asset";
+    return [issue("error", repositoryPath, "invalid_baked_pbr_scene_asset", `baked-pbr-v1 asset could not be inspected: ${message}`)];
+  }
+  if (!isRecord(gltf)) {
+    return [issue("error", repositoryPath, "invalid_baked_pbr_scene_asset", "baked-pbr-v1 asset must contain a glTF JSON object.")];
+  }
+
+  const scenes = Array.isArray(gltf.scenes) ? gltf.scenes : [];
+  const nodes = Array.isArray(gltf.nodes) ? gltf.nodes : [];
+  const meshes = Array.isArray(gltf.meshes) ? gltf.meshes : [];
+  const materials = Array.isArray(gltf.materials) ? gltf.materials : [];
+  const textures = Array.isArray(gltf.textures) ? gltf.textures : [];
+  const images = Array.isArray(gltf.images) ? gltf.images : [];
+  const accessors = Array.isArray(gltf.accessors) ? gltf.accessors : [];
+  const bufferViews = Array.isArray(gltf.bufferViews) ? gltf.bufferViews : [];
+  const sceneIndex = Number.isSafeInteger(gltf.scene) ? Number(gltf.scene) : 0;
+  const activeScene = sceneIndex >= 0 && sceneIndex < scenes.length ? scenes[sceneIndex] : null;
+  if (!isRecord(activeScene) || !Array.isArray(activeScene.nodes)) {
+    return [issue("error", repositoryPath, "invalid_baked_pbr_scene_asset", "baked-pbr-v1 asset must define a valid active scene.")];
+  }
+
+  const reachableMeshes = new Set<number>();
+  const visitedNodes = new Set<number>();
+  const pendingNodes = [...activeScene.nodes];
+  while (pendingNodes.length > 0) {
+    const nodeIndex = pendingNodes.pop();
+    if (!Number.isSafeInteger(nodeIndex) || Number(nodeIndex) < 0 || Number(nodeIndex) >= nodes.length) {
+      issues.push(issue("error", repositoryPath, "invalid_baked_pbr_scene_asset", "The active scene contains an invalid node reference."));
+      continue;
+    }
+    const index = Number(nodeIndex);
+    if (visitedNodes.has(index)) continue;
+    visitedNodes.add(index);
+    const node = nodes[index];
+    if (!isRecord(node)) {
+      issues.push(issue("error", `${repositoryPath}#/nodes/${index}`, "invalid_baked_pbr_scene_asset", "The active scene contains an invalid node."));
+      continue;
+    }
+    if (node.mesh !== undefined) {
+      if (!Number.isSafeInteger(node.mesh) || Number(node.mesh) < 0 || Number(node.mesh) >= meshes.length) {
+        issues.push(issue("error", `${repositoryPath}#/nodes/${index}/mesh`, "invalid_baked_pbr_scene_asset", "The active scene contains an invalid mesh reference."));
+      } else {
+        reachableMeshes.add(Number(node.mesh));
+      }
+    }
+    if (Array.isArray(node.children)) pendingNodes.push(...node.children);
+  }
+
+  let bakedPrimitiveCount = 0;
+  const externalLightmapUris = new Set<string>();
+  for (const meshIndex of reachableMeshes) {
+    const mesh = meshes[meshIndex];
+    if (!isRecord(mesh) || !Array.isArray(mesh.primitives)) {
+      issues.push(issue("error", `${repositoryPath}#/meshes/${meshIndex}`, "invalid_baked_pbr_scene_asset", "The active scene contains an invalid mesh."));
+      continue;
+    }
+    mesh.primitives.forEach((primitive, primitiveIndex) => {
+      if (!isRecord(primitive)) {
+        issues.push(issue("error", `${repositoryPath}#/meshes/${meshIndex}/primitives/${primitiveIndex}`, "invalid_baked_pbr_scene_asset", "The active scene contains an invalid primitive."));
+        return;
+      }
+      if (primitive.material === undefined) return;
+      if (!Number.isSafeInteger(primitive.material)
+        || Number(primitive.material) < 0
+        || Number(primitive.material) >= materials.length) {
+        issues.push(issue("error", `${repositoryPath}#/meshes/${meshIndex}/primitives/${primitiveIndex}/material`, "invalid_baked_pbr_scene_asset", "The active scene contains an invalid material reference."));
+        return;
+      }
+      const material = materials[Number(primitive.material)];
+      if (!isRecord(material) || !isRecord(material.extras) || material.extras.vrataLightMap !== true) return;
+      bakedPrimitiveCount += 1;
+      const materialPath = `${repositoryPath}#/materials/${primitive.material}`;
+      if (isRecord(material.extensions) && material.extensions.KHR_materials_unlit !== undefined) {
+        issues.push(issue("error", materialPath, "invalid_baked_lightmap_material", "Baked materials must use a PBR material, not KHR_materials_unlit."));
+      }
+      const emissiveTexture = material.emissiveTexture;
+      const transform = isRecord(emissiveTexture) && isRecord(emissiveTexture.extensions)
+        && isRecord(emissiveTexture.extensions.KHR_texture_transform)
+        ? emissiveTexture.extensions.KHR_texture_transform
+        : null;
+      const texCoord = transform?.texCoord ?? (isRecord(emissiveTexture) ? emissiveTexture.texCoord ?? 0 : 0);
+      const textureIndex = isRecord(emissiveTexture) ? emissiveTexture.index : null;
+      if (!Number.isSafeInteger(textureIndex)
+        || Number(textureIndex) < 0
+        || Number(textureIndex) >= textures.length
+        || texCoord !== 1) {
+        issues.push(issue("error", materialPath, "invalid_baked_lightmap_material", "Baked materials must provide emissiveTexture with texCoord=1."));
+      }
+      const accessorIndex = isRecord(primitive.attributes) ? primitive.attributes.TEXCOORD_1 : null;
+      const accessor = Number.isSafeInteger(accessorIndex) && Number(accessorIndex) >= 0 && Number(accessorIndex) < accessors.length
+        ? accessors[Number(accessorIndex)]
+        : null;
+      if (!isRecord(accessor)
+        || accessor.type !== "VEC2"
+        || ![5121, 5123, 5126].includes(Number(accessor.componentType))
+        || !Number.isSafeInteger(accessor.bufferView)
+        || Number(accessor.bufferView) < 0
+        || Number(accessor.bufferView) >= bufferViews.length) {
+        issues.push(issue("error", `${repositoryPath}#/meshes/${meshIndex}/primitives/${primitiveIndex}`, "missing_baked_lightmap_uv", "Every primitive using a baked material must provide TEXCOORD_1."));
+      }
+
+      if (Number.isSafeInteger(textureIndex) && Number(textureIndex) >= 0 && Number(textureIndex) < textures.length) {
+        const texture = textures[Number(textureIndex)];
+        const basisu = isRecord(texture) && isRecord(texture.extensions) && isRecord(texture.extensions.KHR_texture_basisu)
+          ? texture.extensions.KHR_texture_basisu
+          : null;
+        const imageIndex = basisu?.source ?? (isRecord(texture) ? texture.source : null);
+        const image = Number.isSafeInteger(imageIndex) && Number(imageIndex) >= 0 && Number(imageIndex) < images.length
+          ? images[Number(imageIndex)]
+          : null;
+        const embedded = isRecord(image)
+          && Number.isSafeInteger(image.bufferView)
+          && Number(image.bufferView) >= 0
+          && Number(image.bufferView) < bufferViews.length;
+        const dataUri = isRecord(image) && typeof image.uri === "string" && image.uri.startsWith("data:");
+        const externalUri = isRecord(image) && typeof image.uri === "string" && !dataUri
+          ? normalizeSceneBundleRelativePath(image.uri)
+          : null;
+        if (externalUri) externalLightmapUris.add(externalUri);
+        if (!embedded && !dataUri && !externalUri) {
+          issues.push(issue("error", materialPath, "invalid_baked_lightmap_material", "The baked emissive texture must reference an embedded or safe relative image."));
+        }
+      }
+    });
+  }
+  for (const uri of externalLightmapUris) {
+    if (!await exists(resolve(dirname(path), uri))) {
+      issues.push(issue("error", `${repositoryPath}:${uri}`, "missing_baked_lightmap_image", "The baked emissive texture references a missing image."));
+    }
+  }
+  if (bakedPrimitiveCount === 0) {
+    issues.push(issue("error", repositoryPath, "missing_baked_lightmaps", "baked-pbr-v1 requires at least one primitive using a material with extras.vrataLightMap=true."));
+  }
+  return issues;
+}
+
 export async function extractSceneBundleZipToTemp(zipPath: string): Promise<{ root: string; files: string[] }> {
   const buffer = await readFile(zipPath);
   const entries = parseZipEntries(buffer);
@@ -309,8 +479,8 @@ function validateManifestShape(input: unknown, issues: SceneBundleValidationIssu
   if (input.renderMode !== undefined && input.renderMode !== "default" && input.renderMode !== "clean") {
     issues.push(issue("error", "scene.json#/renderMode", "invalid_scene_bundle_render_mode", "renderMode must be default or clean."));
   }
-  if (input.renderProfile !== undefined && input.renderProfile !== "neutral-pbr") {
-    issues.push(issue("error", "scene.json#/renderProfile", "invalid_scene_bundle_render_profile", "renderProfile must be neutral-pbr when provided."));
+  if (input.renderProfile !== undefined && input.renderProfile !== "neutral-pbr" && input.renderProfile !== "baked-pbr-v1") {
+    issues.push(issue("error", "scene.json#/renderProfile", "invalid_scene_bundle_render_profile", "renderProfile must be neutral-pbr or baked-pbr-v1 when provided."));
   }
 
   if (input.bounds !== undefined) {
@@ -685,6 +855,13 @@ export async function validateSceneBundlePath(inputPath: string, options: SceneB
       }
     } catch {
       issues.push(issue("error", reference.path, reference.code, reference.message));
+    }
+  }
+
+  if (isRecord(manifest) && manifest.renderProfile === "baked-pbr-v1" && references.glbPath) {
+    const assetPath = join(bundleRoot, references.glbPath);
+    if (await exists(assetPath)) {
+      issues.push(...await validateBakedPbrAsset(assetPath, references.glbPath));
     }
   }
 
