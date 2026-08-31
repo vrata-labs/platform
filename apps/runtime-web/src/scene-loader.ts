@@ -6,6 +6,8 @@ import { DRACOLoader } from "three/examples/jsm/loaders/DRACOLoader.js";
 import { MeshoptDecoder } from "three/examples/jsm/libs/meshopt_decoder.module.js";
 
 import { parseSceneBundleManifest, pickSceneSpawnPoint, resolveSceneAssetUrl, type SceneBundleManifest, type SceneBundleSpawnPoint } from "./scene-bundle.js";
+import { disposeSceneObject } from "./scene-dispose.js";
+import { applyBakedLightMaps } from "./scene-lightmaps.js";
 
 export interface LoadedSceneBundle {
   manifest: SceneBundleManifest;
@@ -99,6 +101,7 @@ async function applyMaterialOverrides(input: {
 
 export async function loadSceneBundle(input: {
   bundleUrl: string;
+  renderer?: THREE.WebGLRenderer;
   onLoadStage?: (stage: string) => void;
   onAssetProgress?: (loaded: number, expected: number | null) => void;
 }): Promise<LoadedSceneBundle> {
@@ -117,6 +120,9 @@ export async function loadSceneBundle(input: {
   const missingAssets = new Set<string>();
   input.onLoadStage?.("asset_load_started");
   if (/[.]fbx$/i.test(sceneAssetUrl)) {
+    if (manifest.renderProfile === "baked-pbr-v1") {
+      throw new Error("unsupported_baked_pbr_asset:fbx");
+    }
     const manager = new THREE.LoadingManager();
     manager.onError = (url) => {
       missingAssets.add(url);
@@ -129,7 +135,7 @@ export async function loadSceneBundle(input: {
     manager.onError = (url) => {
       missingAssets.add(url);
     };
-    const loader = configureGltfLoader(new GLTFLoader(manager));
+    const loader = configureGltfLoader(new GLTFLoader(manager), { renderer: input.renderer });
     let gltf;
     if (/[.]glb$/i.test(sceneAssetUrl)) {
       input.onLoadStage?.("asset_response_requested");
@@ -148,7 +154,18 @@ export async function loadSceneBundle(input: {
     } else {
       gltf = await loader.loadAsync(sceneAssetUrl);
     }
-    group.add(gltf.scene);
+    try {
+      if (manifest.renderProfile === "baked-pbr-v1") {
+        const lightMappedMaterialCount = applyBakedLightMaps(gltf.scene);
+        if (lightMappedMaterialCount === 0) {
+          throw new Error("missing_baked_lightmaps");
+        }
+      }
+      group.add(gltf.scene);
+    } catch (error) {
+      disposeSceneObject(gltf.scene);
+      throw error;
+    }
   }
   input.onLoadStage?.("asset_loaded");
   await applyMaterialOverrides({

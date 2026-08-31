@@ -92,6 +92,20 @@ test("resolveSceneAssetUrl supports non-gltf scene assets too", () => {
   );
 });
 
+test("parseSceneBundleManifest accepts the baked PBR render profile", () => {
+  const manifest = parseSceneBundleManifest({
+    schemaVersion: 1,
+    sceneId: "baked-room",
+    label: "Baked Room",
+    source: "runtime-test",
+    glbPath: "scene.glb",
+    renderProfile: "baked-pbr-v1",
+    spawnPoints: []
+  });
+
+  assert.equal(manifest.renderProfile, "baked-pbr-v1");
+});
+
 test("parseSceneBundleManifest rejects unknown schema version", () => {
   assert.throws(
     () => parseSceneBundleManifest({
