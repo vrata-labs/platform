@@ -81,12 +81,15 @@ jobs:
       - name: E2E
         env:
           PLAYWRIGHT_REPORT_NAME: local-e2e
+          PLAYWRIGHT_TRACE: "1"
         run: pnpm test:e2e
 
       - name: M0.5 acceptance
         env:
           PLAYWRIGHT_REPORT_NAME: local-m0-5
-        run: pnpm run test:m0.5
+          PLAYWRIGHT_TRACE: "1"
+        # Lint, typecheck, build and unit tests have already passed above.
+        run: pnpm exec playwright test tests/e2e/m0.5 --workers=1
 
       - name: Upload Playwright artifacts
         if: always()

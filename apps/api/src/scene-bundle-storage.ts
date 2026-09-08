@@ -47,7 +47,10 @@ function trimLeadingSlash(value: string): string {
 }
 
 export function getSceneBundleProviderConfig(env: NodeJS.ProcessEnv = process.env, provider?: SceneBundleProvider): ProviderConfig {
-  const resolvedProvider = provider ?? ((env.SCENE_BUNDLE_PROVIDER as SceneBundleProvider | undefined) ?? "minio-default");
+  const resolvedProvider = provider ?? env.SCENE_BUNDLE_PROVIDER ?? "minio-default";
+  if (resolvedProvider !== "minio-default" && resolvedProvider !== "s3-compatible") {
+    throw new Error("invalid_scene_bundle_provider");
+  }
 
   if (resolvedProvider === "minio-default") {
     const publicBaseUrl = env.MINIO_PUBLIC_BASE_URL;
