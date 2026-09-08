@@ -17,6 +17,7 @@ process.env.E2E_ROOM_STATE_PUBLIC_URL ??= roomStateUrl;
 
 export default defineConfig({
   testDir: "./tests/e2e",
+  forbidOnly: !!process.env.CI,
   timeout: 45000,
   outputDir: `test-results/${reportName}`,
   reporter: [
@@ -33,7 +34,7 @@ export default defineConfig({
   webServer: useWebServer ? {
     command: "bash -lc 'node apps/remote-browser/dist/index.js >/tmp/vrata-remote-browser.log 2>&1 & node apps/room-state/dist/index.js >/tmp/vrata-room-state.log 2>&1 & node apps/api/dist/index.js'",
     url: new URL("/health", baseURL).toString(),
-    reuseExistingServer: true,
+    reuseExistingServer: !process.env.CI,
     env: {
       VRATA_DISABLE_AUTOSTART: "0",
       API_PORT: apiPort,
