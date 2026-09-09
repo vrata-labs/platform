@@ -1,0 +1,108 @@
+name: Prepare API stored ZIP extraction
+on:
+  push:
+    branches: [preparation/api-stored-zip-20260909]
+permissions:
+  contents: write
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Extract from pinned main and verify locally tested hashes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git show "$GITHUB_SHA:apps/api/src/stored-zip.test.ts" > /tmp/stored-zip.test.ts
+          git fetch --no-tags --depth=1 origin a14bafb7d29aeb13dbaa9fdd15276ac48e90164b
+          git checkout --detach FETCH_HEAD
+          test "$(git rev-parse HEAD:apps/api/src/index.ts)" = d8f8930d206b29dbbeaa9c9b6b882b6142bf35ee
+          test ! -e apps/api/src/stored-zip.ts
+          cp /tmp/stored-zip.test.ts apps/api/src/stored-zip.test.ts
+          mkdir -p /tmp/stored-zip-evidence
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib,json
+          p=Path('apps/api/src/index.ts')
+          before=p.read_text()
+          start=before.index('let crc32Table: number[] | null = null;')
+          end=before.index('const allowedDocumentContentTypes',start)
+          block=before[start:end]
+          module=block.replace('function createStoredZip(', 'export function createStoredZip(',1).rstrip()+'\n'
+          anchor='import { redactSecrets } from "./diagnostics-redaction.js";\n'
+          assert before.count(anchor)==1
+          after=(before[:start]+before[end:]).replace(anchor,anchor+'\nimport { createStoredZip } from "./stored-zip.js";\n',1)
+          assert after.replace(anchor+'\nimport { createStoredZip } from "./stored-zip.js";\n',anchor).replace('const allowedDocumentContentTypes',block+'const allowedDocumentContentTypes',1)==before
+          p.write_text(after)
+          Path('apps/api/src/stored-zip.ts').write_text(module)
+          hashes={}
+          for name,expected in [('index.ts','c4a7dcd7dfa8e487ae88986f799c858fe868bff7'),('stored-zip.ts','925e540db8aeaae33a8f8fbbac053d8bbbf028c4'),('stored-zip.test.ts','f50fbe47252ee7c31321b12c3eb29b3259f06bb3')]:
+            data=Path('apps/api/src',name).read_bytes()
+            actual=hashlib.sha1(b'blob '+str(len(data)).encode()+b'\0'+data).hexdigest()
+            assert actual==expected,(name,actual)
+            hashes[name]=actual
+          out=Path('/tmp/stored-zip-evidence')
+          (out/'index.before.ts').write_text(before)
+          (out/'index.after.ts').write_text(after)
+          (out/'stored-zip.ts').write_text(module)
+          (out/'stored-zip.test.ts').write_bytes(Path('apps/api/src/stored-zip.test.ts').read_bytes())
+          (out/'extraction.json').write_text(json.dumps({'beforeLines':len(before.splitlines()),'afterLines':len(after.splitlines()),'hashes':hashes,'reconstruction':'byte-exact'},indent=2))
+          PY
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Verify types and build workspace
+        run: |
+          pnpm lint
+          pnpm typecheck
+          pnpm build
+      - name: Run workspace tests
+        run: pnpm test
+      - name: Verify extracted modules and unchanged API exports
+        run: |
+          node --test apps/api/dist/feature-flags.test.js apps/api/dist/diagnostics-redaction.test.js apps/api/dist/public-endpoints.test.js apps/api/dist/multipart-form-data.test.js apps/api/dist/livekit-config.test.js apps/api/dist/stored-zip.test.js
+          node --input-type=module - <<'JS'
+          import ts from 'typescript';
+          import fs from 'node:fs';
+          import assert from 'node:assert/strict';
+          function exportsIn(text) {
+            const ast=ts.createSourceFile('index.ts',text,ts.ScriptTarget.Latest,true);
+            return ast.statements.filter(n=>ts.isExportDeclaration(n)||n.modifiers?.some(m=>m.kind===ts.SyntaxKind.ExportKeyword)).map(n=>ts.isExportDeclaration(n)?n.getText(ast):n.name?.getText(ast));
+          }
+          const before=exportsIn(fs.readFileSync('/tmp/stored-zip-evidence/index.before.ts','utf8'));
+          const after=exportsIn(fs.readFileSync('apps/api/src/index.ts','utf8'));
+          assert.deepEqual(after,before);
+          fs.writeFileSync('/tmp/stored-zip-evidence/exports.json',JSON.stringify(after,null,2));
+          JS
+      - name: Publish only the three-file refactor branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin main
+          test "$(git rev-parse FETCH_HEAD)" = a14bafb7d29aeb13dbaa9fdd15276ac48e90164b
+          git switch -c refactor/api-stored-zip-20260909
+          git add apps/api/src/index.ts apps/api/src/stored-zip.ts apps/api/src/stored-zip.test.ts
+          git diff --cached --check
+          python3 - <<'PY'
+          import subprocess
+          actual=subprocess.check_output(['git','diff','--cached','--name-only'],text=True).splitlines()
+          assert actual==['apps/api/src/index.ts','apps/api/src/stored-zip.test.ts','apps/api/src/stored-zip.ts'],actual
+          PY
+          git diff --cached > /tmp/stored-zip-evidence/change.patch
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'refactor(api): extract stored ZIP writer'
+          git push origin HEAD:refs/heads/refactor/api-stored-zip-20260909
+          git rev-parse HEAD > /tmp/stored-zip-evidence/commit-sha.txt
+      - name: Save preparation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-stored-zip-preparation
+          path: /tmp/stored-zip-evidence/
+          retention-days: 7
