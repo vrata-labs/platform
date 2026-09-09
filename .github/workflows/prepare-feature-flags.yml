@@ -1,0 +1,142 @@
+name: Prepare API feature flag extraction
+
+on:
+  push:
+    branches:
+      - preparation/api-feature-flags-20260909
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    if: github.ref == 'refs/heads/preparation/api-feature-flags-20260909'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Extract only the approved block from the pinned baseline
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/vrata-preparation"
+          cp apps/api/src/feature-flags{,.test}.ts "$RUNNER_TEMP/vrata-preparation/"
+          git checkout --detach 840acf79784f25666c5751da3b75f9838d595345
+          cp "$RUNNER_TEMP/vrata-preparation/"*.ts apps/api/src/
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib, os, re
+          p = Path('apps/api/src/index.ts')
+          original = p.read_bytes()
+          assert hashlib.sha1(b'blob ' + str(len(original)).encode() + b'\0' + original).hexdigest() == '0ad94d7b97fd00b6673f17b22581aa60430c0f55'
+          source = original.decode()
+          start = source.index('function isEnabledEnvValue(')
+          end = source.index('function resolveAccessRole(', start)
+          block = source[start:end]
+          names = re.findall(r'^(?:export )?function (\w+)\(', block, re.M)
+          exports = re.findall(r'^export function (\w+)\(', block, re.M)
+          assert len(names) == 11 and len(exports) == 8
+          module = re.sub(r'^function ', 'export function ', block, flags=re.M).rstrip() + '\n'
+          assert Path('apps/api/src/feature-flags.ts').read_text() == module
+          header = 'import {\n' + ',\n'.join('  ' + name for name in names) + '\n} from "./feature-flags.js";\n\n'
+          header += 'export {\n' + ',\n'.join('  ' + name for name in exports) + '\n} from "./feature-flags.js";\n\n'
+          marker = 'interface RoomManifest {'
+          assert source.count(marker) == 1
+          result = (source[:start] + source[end:]).replace(marker, header + marker, 1)
+          assert result.replace(header, '', 1).replace('function resolveAccessRole(', block + 'function resolveAccessRole(', 1) == source
+          p.write_text(result)
+          evidence = Path(os.environ['RUNNER_TEMP']) / 'vrata-preparation'
+          (evidence / 'index.before.ts').write_bytes(original)
+          (evidence / 'feature-flags.before.ts').write_text(block + 'export { ' + ', '.join(name for name in names if name not in exports) + ' };\n')
+          print('Verified byte-preserving extraction of 11 functions; original eight public exports retained.')
+          PY
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint && pnpm typecheck && pnpm build
+      - run: node --test apps/api/dist/feature-flags.test.js
+
+      - name: Compare baseline and extracted behavior
+        run: |
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import fs from 'node:fs';
+          import vm from 'node:vm';
+          import ts from 'typescript';
+          const root = process.env.RUNNER_TEMP + '/vrata-preparation';
+          function load(path) {
+            const source = fs.readFileSync(path, 'utf8');
+            const code = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
+            const context = { exports: {}, process: { env: {} } };
+            vm.runInNewContext(code, context);
+            return context.exports;
+          }
+          const before = load(root + '/feature-flags.before.ts');
+          const after = load('apps/api/src/feature-flags.ts');
+          const values = [undefined, '', ' ', 'true', 'false', '1', '0', 'yes', 'no', 'on', 'off', ' TRUE ', ' OFF ', 'invalid', '2'];
+          let comparisons = 0;
+          function check(name, env) {
+            assert.equal(after[name](env), before[name](env), name + ':' + JSON.stringify(env));
+            comparisons++;
+          }
+          for (const value of values) check('isEnabledEnvValue', value);
+          const pairs = [
+            ['isSpatialAudioFeatureEnabled', 'SPATIAL_AUDIO_ENABLED', 'FEATURE_SPATIAL_AUDIO'],
+            ['isXrFeatureEnabled', 'XR_ENABLED', 'FEATURE_XR'],
+            ['isRoomAccessPolicyEnabled', 'ROOM_ACCESS_POLICY_ENABLED', 'FEATURE_ROOM_ACCESS_POLICY'],
+            ['isHostControlsEnabled', 'HOST_CONTROLS_ENABLED', 'FEATURE_HOST_CONTROLS']
+          ];
+          for (const NODE_ENV of [undefined, 'development', 'production', 'Production']) {
+            for (const [fn, primary, fallback] of pairs) for (const a of values) for (const b of values) check(fn, { NODE_ENV, [primary]: a, [fallback]: b });
+            for (const a of values) for (const b of values) for (const c of values) check('isDevRoleQueryAllowed', { NODE_ENV, VRATA_DEV_ROLE_QUERY: a, NOAH_DEV_ROLE_QUERY: b, FEATURE_DEV_ROLE_QUERY: c });
+            for (const [fn, key] of [['isNotesFeatureEnabled','FEATURE_NOTES'],['isDocumentsFeatureEnabled','FEATURE_DOCUMENTS'],['isPersonalRoomsFeatureEnabled','FEATURE_PERSONAL_ROOMS'],['isRemoteBrowserFeatureEnabled','REMOTE_BROWSER_ENABLED']]) for (const value of values) check(fn, { NODE_ENV, [key]: value });
+            for (const a of values) for (const b of values) check('isSceneBundleUploadEnabled', { NODE_ENV, FEATURE_SCENE_BUNDLES: a, FEATURE_SCENE_BUNDLE_UPLOAD: b });
+          }
+          const baseline = ts.createSourceFile('before.ts', fs.readFileSync(root + '/index.before.ts', 'utf8'), ts.ScriptTarget.Latest, true);
+          const updated = ts.createSourceFile('after.ts', fs.readFileSync('apps/api/src/index.ts', 'utf8'), ts.ScriptTarget.Latest, true);
+          function exportedNames(file) {
+            return file.statements.flatMap(s => {
+              if (ts.isExportDeclaration(s) && s.exportClause && ts.isNamedExports(s.exportClause)) return s.exportClause.elements.map(e => e.name.text);
+              if (s.modifiers?.some(m => m.kind === ts.SyntaxKind.ExportKeyword)) {
+                if (s.name) return [s.name.text];
+                if (ts.isVariableStatement(s)) return s.declarationList.declarations.map(d => d.name.getText(file));
+              }
+              return [];
+            }).sort();
+          }
+          assert.deepEqual(exportedNames(updated), exportedNames(baseline));
+          const report = { comparisons, result: 'success', indexExportsUnchanged: true, baseline: '840acf79784f25666c5751da3b75f9838d595345' };
+          fs.writeFileSync(root + '/verification.json', JSON.stringify(report, null, 2));
+          console.log(report);
+          JS
+
+      - name: Create only the isolated feature branch
+        run: |
+          set -euo pipefail
+          test -z "$(git ls-remote --heads origin refs/heads/refactor/api-feature-flags-20260909)"
+          git add apps/api/src/index.ts apps/api/src/feature-flags.ts apps/api/src/feature-flags.test.ts
+          test "$(git diff --cached --name-only | wc -l)" -eq 3
+          git diff --cached --check
+          git diff --cached > "$RUNNER_TEMP/vrata-preparation/change.patch"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'refactor(api): extract feature flag policies'
+          git rev-parse HEAD | tee "$RUNNER_TEMP/vrata-preparation/commit-sha.txt"
+          git push origin HEAD:refs/heads/refactor/api-feature-flags-20260909
+          cp apps/api/src/index.ts "$RUNNER_TEMP/vrata-preparation/index.after.ts"
+
+      - name: Save preparation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-feature-flags-preparation
+          path: ${{ runner.temp }}/vrata-preparation/
+          retention-days: 7
