@@ -1,0 +1,121 @@
+name: Prepare API LiveKit config extraction
+
+on:
+  push:
+    branches:
+      - preparation/api-livekit-config-20260909
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Extract only LiveKit configuration from pinned main
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/vrata-livekit-config"
+          cp apps/api/src/livekit-config.test.ts "$RUNNER_TEMP/vrata-livekit-config/"
+          git checkout --detach 765f8805409bacfa36182e7f8301ffc11849204d
+          cp "$RUNNER_TEMP/vrata-livekit-config/livekit-config.test.ts" apps/api/src/
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib, json, os
+          root = Path('apps/api/src')
+          evidence = Path(os.environ['RUNNER_TEMP']) / 'vrata-livekit-config'
+          original = (root / 'index.ts').read_text()
+          def blob(text):
+              data = text.encode()
+              return hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
+          assert blob(original) == '2adcac62bacaf62eabb4de29f6719a610eb4e2f7'
+          start, end = 'function parseBooleanEnv(', 'function logEvent('
+          block = original[original.index(start):original.index(end)]
+          names = ['getLivekitCredentials', 'getMediaTokenConfigError', 'getLivekitDeploymentDiagnostics']
+          module = 'import { isEnabledEnvValue } from "./feature-flags.js";\n\n' + block.rstrip() + '\n'
+          for name in names:
+              assert module.count('function ' + name + '(') == 1
+              module = module.replace('function ' + name + '(', 'export function ' + name + '(', 1)
+          header = 'import { ' + ', '.join(names) + ' } from "./livekit-config.js";\n\n'
+          marker = 'import { redactSecrets } from "./diagnostics-redaction.js";'
+          removed = '  isEnabledEnvValue,\n'
+          assert original.count(removed) == 1 and original.count(marker) == 1
+          updated = original.replace(removed, '', 1).replace(marker, header + marker, 1).replace(block, '', 1)
+          restored = updated.replace(header, '', 1).replace('  isDevRoleQueryAllowed,', removed + '  isDevRoleQueryAllowed,', 1).replace(end, block + end, 1)
+          assert restored == original
+          assert blob(updated) == 'd8f8930d206b29dbbeaa9c9b6b882b6142bf35ee'
+          assert blob(module) == '4b85bb6e249e70bb9d2666068e2a1f13093f0126'
+          assert blob((root / 'livekit-config.test.ts').read_text()) == '690b43e55d6b66a32384c318bea7c78758679a56'
+          (root / 'index.ts').write_text(updated)
+          (root / 'livekit-config.ts').write_text(module)
+          (evidence / 'index.before.ts').write_text(original)
+          (evidence / 'index.after.ts').write_text(updated)
+          (evidence / 'livekit-config.ts').write_text(module)
+          (evidence / 'livekit-config.before.ts').write_text('import { isEnabledEnvValue } from "./feature-flags.js";\n\n' + block + 'export { ' + ', '.join(names) + ' };\n')
+          report = {'beforeLines': len(original.splitlines()), 'afterLines': len(updated.splitlines()), 'moduleLines': len(module.splitlines()), 'byteExactRestoration': True, 'localHashesMatched': True}
+          (evidence / 'extraction.json').write_text(json.dumps(report, indent=2))
+          print(report)
+          PY
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Verify types and build the whole workspace
+        run: pnpm lint && pnpm typecheck && pnpm build
+      - name: Test all five extracted API modules
+        run: node --test apps/api/dist/feature-flags.test.js apps/api/dist/diagnostics-redaction.test.js apps/api/dist/public-endpoints.test.js apps/api/dist/multipart-form-data.test.js apps/api/dist/livekit-config.test.js
+      - name: Verify unchanged API exports
+        run: |
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';
+          import assert from 'node:assert/strict';
+          import ts from 'typescript';
+          const root = process.env.RUNNER_TEMP + '/vrata-livekit-config/';
+          function exportsOf(path) {
+            const source = ts.createSourceFile(path, fs.readFileSync(root + path, 'utf8'), ts.ScriptTarget.Latest, true);
+            return source.statements.flatMap(s => {
+              if (ts.isExportDeclaration(s) && s.exportClause && ts.isNamedExports(s.exportClause)) return s.exportClause.elements.map(e => e.name.text);
+              if (s.modifiers?.some(m => m.kind === ts.SyntaxKind.ExportKeyword)) {
+                if (s.name) return [s.name.text];
+                if (ts.isVariableStatement(s)) return s.declarationList.declarations.map(d => d.name.getText(source));
+              }
+              return [];
+            }).sort();
+          }
+          assert.deepEqual(exportsOf('index.before.ts'), exportsOf('index.after.ts'));
+          fs.writeFileSync(root + 'exports.json', JSON.stringify({ indexExportsUnchanged: true, exports: exportsOf('index.after.ts') }, null, 2));
+          JS
+      - name: Publish only the three-file refactor branch
+        run: |
+          set -euo pipefail
+          test -z "$(git ls-remote --heads origin refs/heads/refactor/api-livekit-config-20260909)"
+          # pnpm bin linking changes only this tracked file's executable bit.
+          test "$(git hash-object packages/asset-pipeline/bin/vrata.mjs)" = "$(git rev-parse HEAD:packages/asset-pipeline/bin/vrata.mjs)"
+          test "$(git ls-files --stage packages/asset-pipeline/bin/vrata.mjs | cut -d ' ' -f1)" = 100644
+          chmod 644 packages/asset-pipeline/bin/vrata.mjs
+          git diff --exit-code -- . ':!apps/api/src/index.ts'
+          git add apps/api/src/index.ts apps/api/src/livekit-config.ts apps/api/src/livekit-config.test.ts
+          test "$(git diff --cached --name-only | wc -l)" -eq 3
+          git diff --cached --check
+          git diff --cached > "$RUNNER_TEMP/vrata-livekit-config/change.patch"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'refactor(api): extract LiveKit configuration'
+          git rev-parse HEAD | tee "$RUNNER_TEMP/vrata-livekit-config/commit-sha.txt"
+          git push origin HEAD:refs/heads/refactor/api-livekit-config-20260909
+      - name: Save verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-livekit-config-preparation
+          path: ${{ runner.temp }}/vrata-livekit-config/
+          retention-days: 7
