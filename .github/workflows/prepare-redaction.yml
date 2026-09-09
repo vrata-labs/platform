@@ -19,11 +19,12 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 2
-      - name: Extract from the verified feature-flag baseline
+      - name: Extract from the feature-flag baseline
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/vrata-redaction"
           cp apps/api/src/diagnostics-redaction{,.test}.ts "$RUNNER_TEMP/vrata-redaction/"
+          git fetch --no-tags --depth=1 origin 013ca4e99472cd4af3003ccb7cca4780e2b1564a
           git checkout --detach 013ca4e99472cd4af3003ccb7cca4780e2b1564a
           cp "$RUNNER_TEMP/vrata-redaction/"*.ts apps/api/src/
           python3 - <<'PY'
@@ -114,6 +115,10 @@ jobs:
         run: |
           set -euo pipefail
           test -z "$(git ls-remote --heads origin refs/heads/refactor/api-diagnostics-redaction-20260909)"
+          # pnpm makes the workspace CLI executable while linking its bin.
+          # Check that its bytes are unchanged before restoring its tracked mode.
+          test "$(git hash-object packages/asset-pipeline/bin/vrata.mjs)" = "$(git rev-parse HEAD:packages/asset-pipeline/bin/vrata.mjs)"
+          chmod 644 packages/asset-pipeline/bin/vrata.mjs
           git diff --exit-code -- . ':!apps/api/src/index.ts'
           git add apps/api/src/index.ts apps/api/src/diagnostics-redaction.ts apps/api/src/diagnostics-redaction.test.ts
           test "$(git diff --cached --name-only | wc -l)" -eq 3
