@@ -1,0 +1,138 @@
+name: Prepare API public endpoint extraction
+
+on:
+  push:
+    branches:
+      - preparation/api-public-endpoints-20260909
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Extract only the selected functions from pinned main
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/vrata-endpoints"
+          cp apps/api/src/public-endpoints.test.ts "$RUNNER_TEMP/vrata-endpoints/"
+          git checkout --detach 84cf5de8d53b93ee1a59f1d868ed19284d4ad7cc
+          cp "$RUNNER_TEMP/vrata-endpoints/public-endpoints.test.ts" apps/api/src/
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib, json, os
+          root=Path('apps/api/src')
+          original=(root/'index.ts').read_text()
+          assert hashlib.sha1(b'blob '+str(len(original.encode())).encode()+b'\0'+original.encode()).hexdigest()=='73d95ed616568198d41034c1380053d5fed356e3'
+          sections=[('function getRequestHost(', 'function getRemoteBrowserLivekitUrl('),('function getDefaultRemoteBrowserFrameStreamUrl(', 'function createRoomLink(')]
+          names=['getRequestHost','getRequestProto','getDefaultRoomStateUrl','getDefaultLivekitUrl','getConfiguredPublicLivekitUrl','getDefaultRemoteBrowserFrameStreamUrl']
+          blocks=[original[original.index(a):original.index(b)] for a,b in sections]
+          module='import type { IncomingMessage } from "node:http";\n\n'+''.join(blocks).rstrip()+'\n'
+          for name in names:
+           assert module.count('function '+name+'(')==1
+           module=module.replace('function '+name+'(', 'export function '+name+'(',1)
+          header='import {\n'+''.join('  '+n+(',' if i<len(names)-1 else '')+'\n' for i,n in enumerate(names))+'} from "./public-endpoints.js";\n\n'
+          marker='export {\n  isSpatialAudioFeatureEnabled,'
+          assert original.count(marker)==1
+          updated=original.replace(marker,header+marker,1)
+          for block in blocks: updated=updated.replace(block,'',1)
+          restored=updated.replace(header,'',1)
+          for block, (_,end) in zip(blocks,sections): restored=restored.replace(end,block+end,1)
+          assert restored==original
+          (root/'public-endpoints.ts').write_text(module)
+          (root/'index.ts').write_text(updated)
+          (Path(os.environ['RUNNER_TEMP'])/'vrata-endpoints'/'public-endpoints.before.ts').write_text('import type { IncomingMessage } from "node:http";\n\n'+''.join(blocks)+'export { '+', '.join(names)+' };\n')
+          print(json.dumps({'beforeLines':len(original.splitlines()),'afterLines':len(updated.splitlines()),'moduleLines':len(module.splitlines()),'movedLines':sum(len(x.splitlines()) for x in blocks),'byteExactRestoration':True}))
+          evidence=Path(os.environ['RUNNER_TEMP'])/'vrata-endpoints'
+          (evidence/'index.before.ts').write_text(original)
+          (evidence/'index.after.ts').write_text(updated)
+          PY
+          cp apps/api/src/public-endpoints.ts "$RUNNER_TEMP/vrata-endpoints/"
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Verify types and build the whole workspace
+        run: pnpm lint && pnpm typecheck && pnpm build
+      - name: Test the three extracted API modules
+        run: node --test apps/api/dist/feature-flags.test.js apps/api/dist/diagnostics-redaction.test.js apps/api/dist/public-endpoints.test.js
+      - name: Compare behavior and API exports with the baseline
+        run: |
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';
+          import vm from 'node:vm';
+          import assert from 'node:assert/strict';
+          import ts from 'typescript';
+          const root = process.env.RUNNER_TEMP + '/vrata-endpoints/';
+          const names = ['getRequestHost', 'getRequestProto', 'getDefaultRoomStateUrl', 'getDefaultLivekitUrl', 'getConfiguredPublicLivekitUrl', 'getDefaultRemoteBrowserFrameStreamUrl'];
+          function load(file) {
+            const context = { exports: {}, URL, process: { env: {} } };
+            vm.runInNewContext(ts.transpileModule(fs.readFileSync(file === 'public-endpoints.ts' ? 'apps/api/src/public-endpoints.ts' : root + file, 'utf8'), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText, context);
+            return context;
+          }
+          const before = load('public-endpoints.before.ts');
+          const after = load('public-endpoints.ts');
+          const hosts = [undefined, '', ' ', 'localhost:4000', '127.0.0.1:4000', '203.0.113.10.sslip.io:443', 'app.example:443', 'APP.EXAMPLE', '[::1]:4000', ', proxy.example', 'app.example, proxy.example'];
+          const protocols = [undefined, '', 'http', 'https', ' HTTPS ', 'https, http', 'http, https', 'wss', ['https']];
+          const values = [undefined, '', ' ', 'ws://internal:4010/custom', 'wss://secure.example/custom?mode=1#part', 'https://public.example/base', 'http://public.example/base', 'media.example', 'https://[invalid', 'WS://upper.example', 'custom:opaque'];
+          const keys = ['ROOM_STATE_PUBLIC_URL', 'LIVEKIT_URL', 'LIVEKIT_PUBLIC_URL', 'VRATA_LIVEKIT_DOMAIN', 'NOAH_LIVEKIT_DOMAIN', 'REMOTE_BROWSER_PUBLIC_URL'];
+          let seed = 56, comparisons = 0;
+          const rand = () => (seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0);
+          function outcome(fn, request) { try { return { result: fn(request) }; } catch(error) { return { error: error.name, code: error.code, message: error.message }; } }
+          for (let i = 0; i < 4000; i++) {
+            const env = Object.fromEntries(keys.map(k => [k, values[rand() % values.length]]));
+            before.process.env = Object.freeze({ ...env }); after.process.env = Object.freeze({ ...env });
+            const request = i % 13 === 0 ? undefined : { headers: Object.freeze({ host: hosts[rand() % hosts.length], 'x-forwarded-host': hosts[rand() % hosts.length], 'x-forwarded-proto': protocols[rand() % protocols.length] }) };
+            for (const name of names) { assert.deepEqual(outcome(after.exports[name], request), outcome(before.exports[name], request), name); comparisons++; }
+          }
+          function exportsOf(path) {
+            const source = ts.createSourceFile(path, fs.readFileSync(root + path,'utf8'), ts.ScriptTarget.Latest,true);
+            return source.statements.flatMap(s => {
+              if (ts.isExportDeclaration(s) && s.exportClause && ts.isNamedExports(s.exportClause)) return s.exportClause.elements.map(e => e.name.text);
+              if (s.modifiers?.some(m => m.kind===ts.SyntaxKind.ExportKeyword)) {
+                if (s.name) return [s.name.text];
+                if (ts.isVariableStatement(s)) return s.declarationList.declarations.map(d => d.name.getText(source));
+              }
+              return [];
+            }).sort();
+          }
+          assert.deepEqual(exportsOf('index.before.ts'),exportsOf('index.after.ts'));
+          const report = { comparisons, equalOutcomes: true, indexExportsUnchanged: true, baseline: '84cf5de8d53b93ee1a59f1d868ed19284d4ad7cc' };
+          fs.writeFileSync(root + 'verification.json', JSON.stringify(report, null, 2));
+          console.log(report);
+          JS
+      - name: Publish only the three-file refactor branch
+        run: |
+          set -euo pipefail
+          test -z "$(git ls-remote --heads origin refs/heads/refactor/api-public-endpoints-20260909)"
+          # pnpm bin linking changes only this tracked file's executable bit.
+          test "$(git hash-object packages/asset-pipeline/bin/vrata.mjs)" = "$(git rev-parse HEAD:packages/asset-pipeline/bin/vrata.mjs)"
+          test "$(git ls-files --stage packages/asset-pipeline/bin/vrata.mjs | cut -d ' ' -f1)" = 100644
+          chmod 644 packages/asset-pipeline/bin/vrata.mjs
+          git diff --exit-code -- . ':!apps/api/src/index.ts'
+          git add apps/api/src/index.ts apps/api/src/public-endpoints.ts apps/api/src/public-endpoints.test.ts
+          test "$(git diff --cached --name-only | wc -l)" -eq 3
+          git diff --cached --check
+          git diff --cached > "$RUNNER_TEMP/vrata-endpoints/change.patch"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'refactor(api): extract public endpoint resolution'
+          git rev-parse HEAD | tee "$RUNNER_TEMP/vrata-endpoints/commit-sha.txt"
+          git push origin HEAD:refs/heads/refactor/api-public-endpoints-20260909
+      - name: Save verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-public-endpoints-preparation
+          path: ${{ runner.temp }}/vrata-endpoints/
+          retention-days: 7
