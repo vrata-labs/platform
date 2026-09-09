@@ -1,0 +1,124 @@
+name: Prepare API multipart extraction
+
+on:
+  push:
+    branches:
+      - preparation/api-multipart-20260909
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Extract only multipart parsing from pinned main
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/vrata-multipart"
+          cp apps/api/src/multipart-form-data.test.ts "$RUNNER_TEMP/vrata-multipart/"
+          git checkout --detach f381cd4669a2e90b42ddb48a1fa35142614ea87e
+          cp "$RUNNER_TEMP/vrata-multipart/multipart-form-data.test.ts" apps/api/src/
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib, json, os, re
+          root = Path('apps/api/src')
+          evidence = Path(os.environ['RUNNER_TEMP']) / 'vrata-multipart'
+          original = (root / 'index.ts').read_text()
+          def blob(text):
+              data = text.encode()
+              return hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
+          assert blob(original) == '6a119a660285fbc16cedb2da6c2658100e027b08'
+          type_start = original.index('interface MultipartPart {\n')
+          type_end = original.index('interface SceneBundleManifestMetadata {\n', type_start)
+          start = original.index('function parseMultipartBoundary(')
+          end = original.index('function sanitizeSceneBundleId(', start)
+          part_type = original[type_start:type_end]
+          functions = original[start:end]
+          assert len(re.findall(r'^function ', functions, re.M)) == 5
+          exported = re.sub(r'^function (parseMultipartBoundary|parseMultipartFormData|textPart|filePart)\(', r'export function \1(', functions, flags=re.M)
+          module = 'export ' + part_type + exported.rstrip() + '\n'
+          anchor = 'import { redactSecrets } from "./diagnostics-redaction.js";\n'
+          imported = '\nimport { parseMultipartBoundary, parseMultipartFormData, textPart, filePart, type MultipartPart } from "./multipart-form-data.js";\n'
+          assert original.count(anchor) == 1
+          updated = original.replace(functions, '', 1).replace(part_type, '', 1).replace(anchor, anchor + imported, 1)
+          restored = updated.replace(imported, '', 1).replace('interface SceneBundleManifestMetadata {\n', part_type + 'interface SceneBundleManifestMetadata {\n', 1).replace('function sanitizeSceneBundleId(', functions + 'function sanitizeSceneBundleId(', 1)
+          assert restored == original
+          assert blob(updated) == '2adcac62bacaf62eabb4de29f6719a610eb4e2f7'
+          assert blob(module) == '3bd51ee79f3f73694e4e2262dc41ce09d5d677dc'
+          assert blob((root / 'multipart-form-data.test.ts').read_text()) == 'ab97943f54196b3037a9a2d8baaa209e66196b25'
+          (root / 'index.ts').write_text(updated)
+          (root / 'multipart-form-data.ts').write_text(module)
+          (evidence / 'index.before.ts').write_text(original)
+          (evidence / 'index.after.ts').write_text(updated)
+          (evidence / 'multipart-form-data.ts').write_text(module)
+          report = {'baseline': 'f381cd4669a2e90b42ddb48a1fa35142614ea87e', 'byteExactRestoration': True, 'matchesLocallyTestedBlobs': True, 'beforeLines': len(original.splitlines()), 'afterLines': len(updated.splitlines())}
+          (evidence / 'extraction.json').write_text(json.dumps(report, indent=2))
+          print(report)
+          PY
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Verify types and build the whole workspace
+        run: pnpm lint && pnpm typecheck && pnpm build
+      - name: Test all four extracted API modules
+        run: node --test apps/api/dist/feature-flags.test.js apps/api/dist/diagnostics-redaction.test.js apps/api/dist/public-endpoints.test.js apps/api/dist/multipart-form-data.test.js
+      - name: Verify unchanged API exports
+        run: |
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';
+          import assert from 'node:assert/strict';
+          import ts from 'typescript';
+          const root = process.env.RUNNER_TEMP + '/vrata-multipart/';
+          function exportsOf(file) {
+            const source = ts.createSourceFile(file, fs.readFileSync(root + file, 'utf8'), ts.ScriptTarget.Latest, true);
+            return source.statements.flatMap(s => {
+              if (ts.isExportDeclaration(s) && s.exportClause && ts.isNamedExports(s.exportClause)) return s.exportClause.elements.map(e => e.name.text);
+              if (s.modifiers?.some(m => m.kind === ts.SyntaxKind.ExportKeyword)) {
+                if (s.name) return [s.name.text];
+                if (ts.isVariableStatement(s)) return s.declarationList.declarations.map(d => d.name.getText(source));
+              }
+              return [];
+            }).sort();
+          }
+          assert.deepEqual(exportsOf('index.before.ts'), exportsOf('index.after.ts'));
+          fs.writeFileSync(root + 'exports.json', JSON.stringify({ indexExportsUnchanged: true }));
+          console.log('indexExportsUnchanged:true');
+          JS
+      - name: Publish only the three-file refactor branch
+        run: |
+          set -euo pipefail
+          test "$(git ls-remote --heads origin refs/heads/main | cut -f1)" = f381cd4669a2e90b42ddb48a1fa35142614ea87e
+          test -z "$(git ls-remote --heads origin refs/heads/refactor/api-multipart-20260909)"
+          test "$(git rev-parse HEAD)" = f381cd4669a2e90b42ddb48a1fa35142614ea87e
+          # pnpm bin linking changes only this tracked file's executable bit.
+          test "$(git hash-object packages/asset-pipeline/bin/vrata.mjs)" = "$(git rev-parse HEAD:packages/asset-pipeline/bin/vrata.mjs)"
+          test "$(git ls-files --stage packages/asset-pipeline/bin/vrata.mjs | cut -d ' ' -f1)" = 100644
+          chmod 644 packages/asset-pipeline/bin/vrata.mjs
+          git diff --exit-code -- . ':!apps/api/src/index.ts'
+          git add apps/api/src/index.ts apps/api/src/multipart-form-data.ts apps/api/src/multipart-form-data.test.ts
+          test "$(git diff --cached --name-only | wc -l)" -eq 3
+          git diff --cached --check
+          git diff --cached > "$RUNNER_TEMP/vrata-multipart/change.patch"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'refactor(api): extract multipart form-data parsing'
+          git rev-parse HEAD | tee "$RUNNER_TEMP/vrata-multipart/commit-sha.txt"
+          git push origin HEAD:refs/heads/refactor/api-multipart-20260909
+      - name: Save verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-multipart-preparation
+          path: ${{ runner.temp }}/vrata-multipart/
+          retention-days: 7
