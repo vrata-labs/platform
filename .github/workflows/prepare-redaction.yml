@@ -1,0 +1,133 @@
+name: Prepare API diagnostics redaction extraction
+
+on:
+  push:
+    branches:
+      - preparation/api-diagnostics-redaction-20260909
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    if: github.ref == 'refs/heads/preparation/api-diagnostics-redaction-20260909'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Extract from the verified feature-flag baseline
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/vrata-redaction"
+          cp apps/api/src/diagnostics-redaction{,.test}.ts "$RUNNER_TEMP/vrata-redaction/"
+          git checkout --detach 013ca4e99472cd4af3003ccb7cca4780e2b1564a
+          cp "$RUNNER_TEMP/vrata-redaction/"*.ts apps/api/src/
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib, os
+          p = Path('apps/api/src/index.ts')
+          original = p.read_bytes()
+          assert hashlib.sha1(b'blob ' + str(len(original)).encode() + b'\0' + original).hexdigest() == 'f448f6827f253b09f5620ac48f3ba1156f74092a'
+          source = original.decode()
+          constants = source[source.index('const sensitiveKeyPattern = '):source.index('const metrics = ')]
+          functions = source[source.index('function redactString('):source.index('function logEvent(')]
+          assert len(constants.splitlines()) == 2
+          expected = constants + '\n' + functions.replace('function redactSecrets(', 'export function redactSecrets(', 1).rstrip() + '\n'
+          assert Path('apps/api/src/diagnostics-redaction.ts').read_text() == expected
+          header = 'import { redactSecrets } from "./diagnostics-redaction.js";\n\n'
+          marker = 'export {\n  isSpatialAudioFeatureEnabled,'
+          assert source.count(marker) == 1
+          updated = source.replace(constants, '', 1).replace(functions, '', 1).replace(marker, header + marker, 1)
+          restored = updated.replace(header, '', 1).replace('const metrics = ', constants + 'const metrics = ', 1).replace('function logEvent(', functions + 'function logEvent(', 1)
+          assert restored == source
+          assert 'sensitiveKeyPattern' not in updated and 'REDACTED_VALUE' not in updated and 'redactString' not in updated
+          p.write_text(updated)
+          evidence = Path(os.environ['RUNNER_TEMP']) / 'vrata-redaction'
+          (evidence / 'index.before.ts').write_bytes(original)
+          (evidence / 'index.after.ts').write_text(updated)
+          (evidence / 'diagnostics-redaction.before.ts').write_text(constants + functions + 'export { redactSecrets };\n')
+          print('Verified unchanged helper bodies, constants, log writer and diagnostic-record construction.')
+          PY
+          cp AGENTS.md "$RUNNER_TEMP/vrata-redaction/AGENTS.md"
+          cp apps/api/src/index.test.ts "$RUNNER_TEMP/vrata-redaction/api-index.test.ts"
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint && pnpm typecheck && pnpm build
+      - run: node --test apps/api/dist/feature-flags.test.js apps/api/dist/diagnostics-redaction.test.js
+      - name: Verify output equivalence and the API export surface
+        run: |
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';
+          import assert from 'node:assert/strict';
+          import vm from 'node:vm';
+          import ts from 'typescript';
+          const root = process.env.RUNNER_TEMP + '/vrata-redaction';
+          function load(path) {
+            const context = { exports: {}, URL };
+            const source = fs.readFileSync(path, 'utf8');
+            vm.runInNewContext(ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText, context);
+            return context.exports.redactSecrets;
+          }
+          const before = load(root + '/diagnostics-redaction.before.ts');
+          const after = load('apps/api/src/diagnostics-redaction.ts');
+          const values = [null, true, false, 0, 42, 'ordinary', 'https://example.test/?token=opaque&safe=yes', '/room?password=opaque&room=one', 'https://[invalid?invite=opaque', `${'a'.repeat(39)}.${'b'.repeat(39)}.c`, 'https://example.test/?access_token=opaque', 'https://example.test/?cookie=opaque', 'https://example.test/?TOKEN=opaque&access_token=second'];
+          const keys = ['safe', 'token', 'roomId', 'nested', 'cookie', 'ACCESS_TOKEN', 'request', 'password', 'secretValue', 'inviteData', 'data'];
+          let seed = 55, comparisons = 0;
+          function rand() { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed; }
+          function value(depth) {
+            if (depth === 0 || rand() % 3 === 0) return values[rand() % values.length];
+            if (rand() % 2 === 0) return [value(depth - 1), value(depth - 1)];
+            return { [keys[rand() % keys.length]]: value(depth - 1), [keys[rand() % keys.length]]: value(depth - 1) };
+          }
+          for (let i = 0; i < 10000; i++) {
+            const input = value(3);
+            for (const key of ['', keys[rand() % keys.length]]) {
+              assert.equal(JSON.stringify(after(input, key)), JSON.stringify(before(input, key)));
+              comparisons++;
+            }
+          }
+          function exportedNames(path) {
+            const file = ts.createSourceFile(path, fs.readFileSync(path, 'utf8'), ts.ScriptTarget.Latest, true);
+            return file.statements.flatMap(s => {
+              if (ts.isExportDeclaration(s) && s.exportClause && ts.isNamedExports(s.exportClause)) return s.exportClause.elements.map(e => e.name.text);
+              if (s.modifiers?.some(m => m.kind === ts.SyntaxKind.ExportKeyword)) {
+                if (s.name) return [s.name.text];
+                if (ts.isVariableStatement(s)) return s.declarationList.declarations.map(d => d.name.getText(file));
+              }
+              return [];
+            }).sort();
+          }
+          assert.deepEqual(exportedNames(root + '/index.before.ts'), exportedNames('apps/api/src/index.ts'));
+          const report = { result: 'success', comparisons, byteExactBodies: true, indexExportsUnchanged: true, baseline: '013ca4e99472cd4af3003ccb7cca4780e2b1564a' };
+          fs.writeFileSync(root + '/verification.json', JSON.stringify(report, null, 2));
+          console.log(report);
+          JS
+      - name: Publish only the three-file refactor branch
+        run: |
+          set -euo pipefail
+          test -z "$(git ls-remote --heads origin refs/heads/refactor/api-diagnostics-redaction-20260909)"
+          git diff --exit-code -- . ':!apps/api/src/index.ts'
+          git add apps/api/src/index.ts apps/api/src/diagnostics-redaction.ts apps/api/src/diagnostics-redaction.test.ts
+          test "$(git diff --cached --name-only | wc -l)" -eq 3
+          git diff --cached --check
+          git diff --cached > "$RUNNER_TEMP/vrata-redaction/change.patch"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'refactor(api): extract diagnostics redaction'
+          git rev-parse HEAD | tee "$RUNNER_TEMP/vrata-redaction/commit-sha.txt"
+          git push origin HEAD:refs/heads/refactor/api-diagnostics-redaction-20260909
+      - name: Save preparation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-diagnostics-redaction-preparation
+          path: ${{ runner.temp }}/vrata-redaction/
+          retention-days: 7
