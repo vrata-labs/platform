@@ -53,6 +53,8 @@ import {
   isHostControlsEnabled
 } from "./feature-flags.js";
 
+import { redactSecrets } from "./diagnostics-redaction.js";
+
 export {
   isSpatialAudioFeatureEnabled,
   isXrFeatureEnabled,
@@ -343,8 +345,6 @@ const controlPlaneAuditLog: ControlPlaneAuditLogEntry[] = [];
 const CONTROL_PLANE_AUDIT_LIMIT = 1000;
 const xrTelemetryHistoryLimit = 80;
 const requestIds = new WeakMap<IncomingMessage, string>();
-const sensitiveKeyPattern = /(authorization|cookie|password|secret|token|invite)/i;
-const REDACTED_VALUE = "[redacted]";
 const metrics = {
   requestsTotal: 0,
   requestFailuresTotal: 0,
@@ -601,42 +601,6 @@ function getLivekitDeploymentDiagnostics(env: NodeJS.ProcessEnv = process.env) {
         : null
     }
   };
-}
-
-function redactString(value: string): string {
-  if (value.length > 80 && /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(value)) {
-    return REDACTED_VALUE;
-  }
-  if (!/[?&](authorization|password|secret|token|invite)=/i.test(value)) {
-    return value;
-  }
-  try {
-    const url = new URL(value);
-    for (const key of Array.from(url.searchParams.keys())) {
-      if (sensitiveKeyPattern.test(key)) {
-        url.searchParams.set(key, REDACTED_VALUE);
-      }
-    }
-    return url.toString();
-  } catch (_error) {
-    return value.replace(/([?&][^=]*(?:authorization|password|secret|token|invite)[^=]*=)[^&]+/gi, `$1${REDACTED_VALUE}`);
-  }
-}
-
-function redactSecrets(value: unknown, key = ""): unknown {
-  if (sensitiveKeyPattern.test(key)) {
-    return REDACTED_VALUE;
-  }
-  if (typeof value === "string") {
-    return redactString(value);
-  }
-  if (Array.isArray(value)) {
-    return value.map((item) => redactSecrets(item));
-  }
-  if (value && typeof value === "object") {
-    return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([entryKey, entryValue]) => [entryKey, redactSecrets(entryValue, entryKey)]));
-  }
-  return value;
 }
 
 function logEvent(event: Record<string, unknown>): void {
