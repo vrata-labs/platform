@@ -26,7 +26,6 @@ import {
   type RoomDocumentRecord,
   type RoomDocumentMetadata,
   type RoomNoteRecord,
-  type RoomNoteVersionRecord,
   type RoomNoteScope,
   type RoomInviteRecord,
   type RoomRecord,
@@ -57,6 +56,8 @@ import { getLivekitCredentials, getMediaTokenConfigError, getLivekitDeploymentDi
 import { redactSecrets } from "./diagnostics-redaction.js";
 
 import { createStoredZip } from "./stored-zip.js";
+
+import { noteExportFilename, noteExportJson, formatNoteMarkdown, formatRoomNotesMarkdown } from "./notes-export.js";
 
 import { parseMultipartBoundary, parseMultipartFormData, textPart, filePart, type MultipartPart } from "./multipart-form-data.js";
 
@@ -1621,62 +1622,10 @@ function resolveAuthorizedRoomNoteOwner(request: IncomingMessage, response: Serv
   return ownerParticipantId;
 }
 
-function noteExportFilename(roomId: string, scope: string, extension: string): string {
-  return `vrata-${roomId}-${scope}-notes.${extension}`.replace(/[^A-Za-z0-9._-]+/g, "-");
-}
-
-function noteExportJson(note: RoomNoteRecord, versions: RoomNoteVersionRecord[]): Record<string, unknown> {
-  return {
-    schemaVersion: 1,
-    exportedAt: new Date().toISOString(),
-    note,
-    versions
-  };
-}
-
-function formatNoteMarkdown(note: RoomNoteRecord, versions: RoomNoteVersionRecord[]): string {
-  const lines = [
-    "# Vrata notes export",
-    "",
-    `Room: ${note.roomId}`,
-    `Scope: ${note.scope}`,
-    ...(note.ownerParticipantId ? [`Owner participant: ${note.ownerParticipantId}`] : []),
-    `Updated: ${note.updatedAt ?? "never"}`,
-    ...(note.deletedAt ? [`Deleted: ${note.deletedAt}`] : []),
-    "",
-    "## Current content",
-    "",
-    note.deletedAt ? "_This note is currently deleted._" : note.content || "_Empty note._",
-    "",
-    "## History",
-    "",
-    ...versions.map((version) => `- ${version.createdAt} ${version.action}${version.restoredFromVersionId ? ` from ${version.restoredFromVersionId}` : ""} by ${version.createdBy ?? "unknown"}`)
-  ];
-  return `${lines.join("\n")}\n`;
-}
-
 function roomNoteVisibleToActor(note: RoomNoteRecord, actor: ControlPlaneActor): boolean {
   if (note.scope === "shared") return true;
   if (actor.actorType === "admin-token") return true;
   return note.ownerParticipantId === actor.participantId;
-}
-
-function formatRoomNotesMarkdown(roomId: string, items: Array<{ note: RoomNoteRecord; versions: RoomNoteVersionRecord[] }>): string {
-  return `${[
-    "# Vrata room notes export",
-    "",
-    `Room: ${roomId}`,
-    `Exported: ${new Date().toISOString()}`,
-    "",
-    ...items.flatMap(({ note, versions }) => [
-      `## ${note.scope}${note.ownerParticipantId ? ` / ${note.ownerParticipantId}` : ""}`,
-      "",
-      note.deletedAt ? "_This note is currently deleted._" : note.content || "_Empty note._",
-      "",
-      `Versions: ${versions.length}`,
-      ""
-    ])
-  ].join("\n")}\n`;
 }
 
 const allowedDocumentContentTypes = new Set([
