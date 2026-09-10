@@ -1,0 +1,134 @@
+name: Prepare API notes export extraction
+on:
+  push:
+    branches: [preparation/api-notes-export-20260910]
+permissions:
+  contents: write
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: vrata_test
+        ports: [5432:5432]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d vrata_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      BASE_SHA: 47cd2b1b4fe99f6f5b7ea6e84b1a37d00a9d6c6e
+      TARGET_BRANCH: refactor/api-notes-export-20260910
+      VRATA_TEST_POSTGRES_URL: postgres://postgres:postgres@127.0.0.1:5432/vrata_test
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Extract pinned functions and verify locally tested bytes
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/notes-export-evidence
+          cp apps/api/src/notes-export.test.ts /tmp/notes-export-evidence/notes-export.test.ts
+          git checkout -b "$TARGET_BRANCH" "$BASE_SHA"
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib, json, re, os
+          out = Path('/tmp/notes-export-evidence')
+          path = Path('apps/api/src/index.ts')
+          before = path.read_text()
+          def blob(text):
+              data = text.encode()
+              return hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
+          assert blob(before) == 'c4a7dcd7dfa8e487ae88986f799c858fe868bff7'
+          first = before[before.index('function noteExportFilename('):before.index('function roomNoteVisibleToActor(')]
+          second = before[before.index('function formatRoomNotesMarkdown('):before.index('const allowedDocumentContentTypes')]
+          module = 'import type { RoomNoteRecord, RoomNoteVersionRecord } from "./storage.js";\n\n' + re.sub(r'^function ', 'export function ', first + second, flags=re.M).rstrip() + '\n'
+          anchor = 'import { createStoredZip } from "./stored-zip.js";\n\n'
+          added = 'import { noteExportFilename, noteExportJson, formatNoteMarkdown, formatRoomNotesMarkdown } from "./notes-export.js";\n\n'
+          assert before.count(first) == before.count(second) == before.count(anchor) == 1
+          after = before.replace(first, '').replace(second, '').replace(anchor, anchor + added).replace('  type RoomNoteVersionRecord,\n', '')
+          restored = after.replace(added, '').replace('  type RoomNoteRecord,\n', '  type RoomNoteRecord,\n  type RoomNoteVersionRecord,\n').replace('function roomNoteVisibleToActor(', first + 'function roomNoteVisibleToActor(').replace('const allowedDocumentContentTypes', second + 'const allowedDocumentContentTypes')
+          assert restored == before
+          assert blob(after) == '76f6a31170834ab6de2fd961e51ce93bfa49391d'
+          assert blob(module) == '52c223df026049c7d7e218835bd74bc0daf9acd6'
+          tests = (out / 'notes-export.test.ts').read_text()
+          assert blob(tests) == 'a5eb5393919050bb94dd8bd43e859bef491c5965'
+          storage = Path('apps/api/src/storage.ts').read_text()
+          declarations = storage[storage.index('export type RoomNoteScope'):storage.index('export interface RoomDocumentRecord')].rstrip() + '\n'
+          assert blob(declarations) == 'b9ace6b393bef331ac223a98befcf55463ebf9cb'
+          path.write_text(after)
+          Path('apps/api/src/notes-export.ts').write_text(module)
+          Path('apps/api/src/notes-export.test.ts').write_text(tests)
+          (out / 'index.before.ts').write_text(before)
+          (out / 'index.after.ts').write_text(after)
+          (out / 'notes-export.ts').write_text(module)
+          (out / 'extraction.json').write_text(json.dumps({'base': os.environ['BASE_SHA'], 'before': blob(before), 'after': blob(after), 'module': blob(module), 'test': blob(tests), 'typeDeclarations': blob(declarations), 'beforeLines': len(before.splitlines()), 'afterLines': len(after.splitlines()), 'byteExactReconstruction': True}, indent=2) + '\n')
+          PY
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Lint, typecheck and build workspace
+        run: |
+          pnpm lint
+          pnpm typecheck
+          pnpm build
+      - name: Test workspace including PostgreSQL
+        run: pnpm test
+      - name: Verify isolated modules and unchanged exports
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --test apps/api/dist/{feature-flags,diagnostics-redaction,public-endpoints,multipart-form-data,livekit-config,stored-zip,notes-export}.test.js > /tmp/notes-export-evidence/module-tests.tap
+          cat /tmp/notes-export-evidence/module-tests.tap
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';
+          import assert from 'node:assert/strict';
+          import ts from 'typescript';
+          const before = ts.createSourceFile('before.ts', fs.readFileSync('/tmp/notes-export-evidence/index.before.ts', 'utf8'), ts.ScriptTarget.Latest, true);
+          const after = ts.createSourceFile('after.ts', fs.readFileSync('apps/api/src/index.ts', 'utf8'), ts.ScriptTarget.Latest, true);
+          const exportsOf = (sf) => sf.statements.filter(s => ts.isExportDeclaration(s) || s.modifiers?.some(m => m.kind === ts.SyntaxKind.ExportKeyword)).map(s => ts.isFunctionDeclaration(s) ? s.name.text : s.getText(sf));
+          assert.deepEqual(exportsOf(after), exportsOf(before));
+          const mod = ts.createSourceFile('notes-export.ts', fs.readFileSync('apps/api/src/notes-export.ts', 'utf8'), ts.ScriptTarget.Latest, true);
+          const names = ['noteExportFilename', 'noteExportJson', 'formatNoteMarkdown', 'formatRoomNotesMarkdown'];
+          const moved = mod.statements.filter(ts.isFunctionDeclaration);
+          assert.deepEqual(moved.map(n => n.name.text), names);
+          for (const n of moved) {
+            const original = before.statements.find(s => ts.isFunctionDeclaration(s) && s.name.text === n.name.text);
+            assert.equal(n.getText(mod).replace(/^export /, ''), original.getText(before));
+          }
+          const emitted = ts.createSourceFile('notes-export.js', fs.readFileSync('apps/api/dist/notes-export.js', 'utf8'), ts.ScriptTarget.Latest, true);
+          assert.equal(emitted.statements.filter(ts.isImportDeclaration).length, 0);
+          fs.writeFileSync('/tmp/notes-export-evidence/exports.json', JSON.stringify({api: exportsOf(after), module: names, identicalFunctionBodies: true, runtimeImports: 0}, null, 2));
+          JS
+      - name: Publish only the three-file refactor branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          current_main="$(git ls-remote origin refs/heads/main | cut -f1)"
+          test "$current_main" = "$BASE_SHA"
+          git add apps/api/src/index.ts apps/api/src/notes-export.ts apps/api/src/notes-export.test.ts
+          test "$(git diff --cached --name-only | wc -l)" -eq 3
+          git diff --cached --check
+          git diff --cached > /tmp/notes-export-evidence/change.patch
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'refactor(api): extract notes export formatting'
+          git push origin "HEAD:refs/heads/$TARGET_BRANCH"
+          git rev-parse HEAD > /tmp/notes-export-evidence/commit-sha.txt
+      - name: Save preparation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-notes-export-preparation
+          path: /tmp/notes-export-evidence/
+          retention-days: 7
