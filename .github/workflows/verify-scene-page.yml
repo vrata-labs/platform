@@ -1,0 +1,123 @@
+name: Verify current-page scene acceptance
+on:
+  push:
+    branches: [preparation/scene-page-20260911]
+permissions:
+  contents: write
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: vrata_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres -d vrata_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Apply exact bounded wiring
+        run: |
+          mkdir -p preparation-output
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib
+          p=Path('tests/e2e/runtime-staging.spec.ts'); s=p.read_text()
+          assert hashlib.sha1(f'blob {len(s.encode())}\0'.encode()+s.encode()).hexdigest()=='be4234e0578178dccb25b373003e049d3c138fb7'
+          block=s[s.index('type DiagnosticsPayload ='):s.index('async function readVrataDebug')]
+          match=s[s.index('function bundleUrlMatches'):s.index('const hallSceneBundleUrl')]
+          s=s.replace('type ExpectedBundleUrl = string | RegExp;\n\n','').replace(match,'').replace(block,'')
+          s=s.replace('import { PDFDocument, rgb } from "pdf-lib";','import { PDFDocument, rgb } from "pdf-lib";\nimport { expectSceneRoomReady, type ExpectedBundleUrl } from "./scene-room-acceptance";')
+          s=s.replace('    test(`scene room smoke: ${sceneRoom.name}`, async ({ page, request }) => {','    const check = sceneRoom.requireLoadedState ? "loaded in current page" : "manifest and diagnostics only";\n    test(`scene room ${check}: ${sceneRoom.name}`, async ({ page, request }) => {')
+          start=s.index('      await expectSceneRoomLoaded('); end=s.index('      );',start)+len('      );')
+          s=s[:start]+'      await expectSceneRoomReady(page, request, sceneRoom, stagingAdminToken);'+s[end:]
+          p.write_text(s)
+          hashes={'tests/e2e/runtime-staging.spec.ts':'ebcb7e25fc7696356a6a7a57184365e65ad179cf','tests/e2e/scene-room-acceptance.ts':'7a5599b6b134982e07dae5109c2036903401d970','tests/e2e/scene-room-acceptance.spec.ts':'5903d1796d2575c5bf3861e279517e5dd1bdfbae'}
+          for path,expected in hashes.items():
+            b=Path(path).read_bytes(); actual=hashlib.sha1(f'blob {len(b)}\0'.encode()+b).hexdigest(); assert actual==expected,(path,actual); print(path,actual)
+          PY
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint && pnpm typecheck && pnpm build
+      - run: pnpm test
+        env:
+          VRATA_TEST_POSTGRES_URL: postgres://postgres:postgres@127.0.0.1:5432/vrata_test
+      - name: Strict typecheck of acceptance and browser contracts
+        run: pnpm exec tsc --noEmit --strict --allowJs --checkJs false --target ES2022 --module ESNext --moduleResolution bundler --skipLibCheck --esModuleInterop tests/e2e/scene-room-acceptance.ts tests/e2e/scene-room-acceptance.spec.ts
+      - run: pnpm exec playwright install --with-deps chromium
+      - name: Real Chromium regression contracts
+        run: pnpm exec playwright test tests/e2e/scene-room-acceptance.spec.ts tests/e2e/scene-network-diagnostics.spec.ts --workers=1 --retries=0
+        env:
+          PLAYWRIGHT_NO_WEB_SERVER: '1'
+          PLAYWRIGHT_REPORT_NAME: preparation-scene-page
+      - name: Prove the stale-history regression detects the old acceptance defect
+        env:
+          PLAYWRIGHT_NO_WEB_SERVER: '1'
+          PLAYWRIGHT_REPORT_NAME: preparation-scene-page-mutant
+        run: |
+          cp tests/e2e/scene-room-acceptance.ts "$RUNNER_TEMP/scene-room-acceptance.ts"
+          trap 'cp "$RUNNER_TEMP/scene-room-acceptance.ts" tests/e2e/scene-room-acceptance.ts' EXIT
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('tests/e2e/scene-room-acceptance.ts'); s=p.read_text(); assert s.count('      ...currentPage,')==1
+          p.write_text(s.replace('      ...currentPage,','      currentPageLoaded: true, currentBundleMatches: true,'))
+          PY
+          set +e
+          pnpm exec playwright test tests/e2e/scene-room-acceptance.spec.ts --grep 'stale history does not' --workers=1 --retries=0
+          status=$?
+          set -e
+          cp "$RUNNER_TEMP/scene-room-acceptance.ts" tests/e2e/scene-room-acceptance.ts
+          test "$status" -eq 1
+          node - <<'JS'
+          const r=require('./test-results/preparation-scene-page-mutant.json');
+          if(r.stats.unexpected!==1 || r.stats.skipped!==0 || r.stats.flaky!==0 || r.errors.length)throw Error('mutation_verification_failed');
+          console.log('stale_history_mutation_detected');
+          JS
+      - name: Save a three-file candidate with the verified main as its only parent
+        run: |
+          BASE=8364339520fba8f98ad32f227c290079c3268107
+          git fetch --no-tags --depth=1 origin "$BASE"
+          export GIT_INDEX_FILE="$RUNNER_TEMP/scene-page-index"
+          git read-tree "$BASE"
+          git add tests/e2e/runtime-staging.spec.ts tests/e2e/scene-room-acceptance.ts tests/e2e/scene-room-acceptance.spec.ts
+          TREE=$(git write-tree)
+          git diff --stat "$BASE" "$TREE"
+          test "$(git diff --name-only "$BASE" "$TREE" | wc -l)" -eq 3
+          git config user.name 'Dmitry Serkov'
+          git config user.email 'psilon2000@mail.ru'
+          SHA=$(printf '%s\n' 'test(staging): require scene loading in the current browser page' | git commit-tree "$TREE" -p "$BASE")
+          git push origin "$SHA:refs/heads/verification/scene-page-20260911"
+          printf '{"commit":"%s","tree":"%s"}\n' "$SHA" "$TREE" > preparation-output/candidate.json
+          git diff "$BASE" "$SHA" > preparation-output/change.diff
+          git archive "$SHA" tests/e2e/runtime-staging.spec.ts tests/e2e/scene-room-acceptance.ts tests/e2e/scene-room-acceptance.spec.ts > preparation-output/candidate.tar
+      - name: Export only installed public browser-test packages for offline local verification
+        run: |
+          node - <<'JS'
+          const fs=require('node:fs'),path=require('node:path');
+          const dirs={};
+          for(const name of ['@playwright/test','playwright','playwright-core','@types/node','undici-types']) {
+            const resolved=require.resolve(name+'/package.json',{paths:[process.cwd(),...Object.values(dirs)]});
+            dirs[name]=path.dirname(resolved);
+            const dest=path.join('preparation-output/public-test-tools/node_modules',name);
+            fs.mkdirSync(path.dirname(dest),{recursive:true}); fs.cpSync(dirs[name],dest,{recursive:true,dereference:true});
+          }
+          JS
+          tar -C preparation-output/public-test-tools -czf preparation-output/public-test-tools.tar.gz node_modules
+          rm -rf preparation-output/public-test-tools
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: scene-page-verification
+          retention-days: 7
+          path: |
+            preparation-output/
+            test-results/preparation-scene-page*.json
