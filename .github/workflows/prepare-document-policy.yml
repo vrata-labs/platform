@@ -1,0 +1,130 @@
+name: Prepare document file policy extraction
+on:
+  push:
+    branches: [preparation/api-document-file-policy-20260911]
+permissions:
+  contents: write
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: vrata_test
+        ports: [5432:5432]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d vrata_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Reproduce exact locally tested extraction
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import hashlib, json
+          def blob(text):
+              b = text.encode()
+              return hashlib.sha1(b'blob ' + str(len(b)).encode() + b'\0' + b).hexdigest()
+          out = Path('verification')
+          out.mkdir()
+          p = Path('apps/api/src/index.ts')
+          before = p.read_text()
+          assert blob(before) == 'd833276cbda5cfca136739a86ef12a6ef006e59f'
+          module = Path('apps/api/src/document-file-policy.ts').read_text()
+          assert blob(module) == '32418322f764f75fb0f3de90218daf09d41fb69f'
+          assert blob(Path('apps/api/src/document-file-policy.test.ts').read_text()) == 'c6b1ccc28bb45bb20b9e692f946ab109d510703b'
+          assert blob(Path('apps/api/src/multipart-form-data.ts').read_text()) == '3bd51ee79f3f73694e4e2262dc41ce09d5d677dc'
+          after = before
+          removed = []
+          for block in module.split('\n\n')[2:]:
+              original = block.removeprefix('export ').rstrip('\n') + '\n\n'
+              assert after.count(original) == 1
+              removed.append((before.index(original), original))
+              after = after.replace(original, '', 1)
+          assert len(removed) == 5
+          anchor = 'import { inspectImageDocument, inspectVideoDocument } from "./document-media-metadata.js";\n\n'
+          added = 'import { normalizeDocumentContentType, normalizeDocumentFilename, safeHeaderFilename } from "./document-file-policy.js";\n\n'
+          old_import = 'import { parseMultipartBoundary, parseMultipartFormData, textPart, filePart, type MultipartPart } from "./multipart-form-data.js";'
+          new_import = old_import.replace(', type MultipartPart', '')
+          assert after.count(anchor) == 1 and after.count(old_import) == 1
+          after = after.replace(anchor, anchor + added, 1).replace(old_import, new_import, 1)
+          assert blob(after) == '15eeecbed189c159b2cc0c27f99bcf78d0c8ac94'
+          restored = after.replace(added, '', 1).replace(new_import, old_import, 1)
+          for offset, original in sorted(removed):
+              restored = restored[:offset] + original + restored[offset:]
+          assert restored == before
+          p.write_text(after)
+          (out / 'index.before.ts').write_text(before)
+          (out / 'extraction.json').write_text(json.dumps({'before': blob(before), 'after': blob(after), 'beforeLines': before.count('\n'), 'afterLines': after.count('\n'), 'exactReconstruction': True}, indent=2))
+          PY
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Verify unchanged public exports
+        run: |
+          node --input-type=module - <<'JS'
+          import ts from 'typescript';
+          import fs from 'node:fs';
+          import assert from 'node:assert/strict';
+          function exportsOf(filename) {
+            const sf = ts.createSourceFile(filename, fs.readFileSync(filename, 'utf8'), ts.ScriptTarget.Latest, true);
+            return sf.statements.filter(n => ts.isExportDeclaration(n) || n.modifiers?.some(m => m.kind === ts.SyntaxKind.ExportKeyword)).map(n => n.getText(sf));
+          }
+          assert.deepEqual(exportsOf('apps/api/src/index.ts'), exportsOf('verification/index.before.ts'));
+          console.log('public_exports_unchanged');
+          JS
+      - name: Full workspace verification
+        env:
+          VRATA_TEST_POSTGRES_URL: postgres://postgres:postgres@127.0.0.1:5432/vrata_test
+        run: |
+          set -euo pipefail
+          pnpm lint 2>&1 | tee verification/lint.log
+          pnpm typecheck 2>&1 | tee verification/typecheck.log
+          pnpm build 2>&1 | tee verification/build.log
+          pnpm test 2>&1 | tee verification/test.log
+      - name: Focused compiled tests and module boundary
+        run: |
+          set -euo pipefail
+          node --test apps/api/dist/document-file-policy.test.js apps/api/dist/multipart-form-data.test.js | tee verification/focused-tests.tap
+          node --input-type=module - <<'JS'
+          import fs from 'node:fs';
+          import assert from 'node:assert/strict';
+          const code = fs.readFileSync('apps/api/dist/document-file-policy.js', 'utf8');
+          assert.ok(!code.includes('multipart-form-data') && !code.includes('storage.js') && !code.includes('index.js'));
+          const module = await import('./apps/api/dist/document-file-policy.js');
+          assert.deepEqual(Object.keys(module).sort(), ['normalizeDocumentContentType', 'normalizeDocumentFilename', 'safeHeaderFilename']);
+          console.log('module_boundary_verified');
+          JS
+      - name: Store verified index blob without changing any branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import json
+          Path('/tmp/document-policy-blob.json').write_text(json.dumps({'content': Path('apps/api/src/index.ts').read_text(), 'encoding': 'utf-8'}))
+          PY
+          sha="$(gh api --method POST "repos/$GITHUB_REPOSITORY/git/blobs" --input /tmp/document-policy-blob.json --jq .sha)"
+          test "$sha" = '15eeecbed189c159b2cc0c27f99bcf78d0c8ac94'
+          printf '%s\n' "$sha" > verification/verified-index-blob.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: document-policy-preparation-${{ github.run_id }}
+          retention-days: 14
+          path: |
+            verification/
+            apps/api/src/index.ts
+            apps/api/src/document-file-policy.ts
+            apps/api/src/document-file-policy.test.ts
