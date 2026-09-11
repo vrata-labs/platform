@@ -1,0 +1,52 @@
+name: Diagnose scene delivery
+on:
+  push:
+    branches: [diagnostics/scene-delivery-20260911]
+permissions:
+  contents: read
+concurrency:
+  group: staging-deploy
+  cancel-in-progress: false
+jobs:
+  measure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Check diagnostic script syntax
+        run: |
+          mkdir -p diagnostic-results
+          python3 -m py_compile tools/diagnostics/scene-delivery-probe.py
+          node --check tools/diagnostics/scene-browser-probe.mjs
+      - uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.STAGING_SSH_KEY }}
+          log-public-key: false
+      - name: Measure local origin without changing the server
+        env:
+          STAGING_SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
+          STAGING_SSH_USER: ${{ secrets.STAGING_SSH_USER }}
+        run: |
+          ssh -o StrictHostKeyChecking=accept-new "$STAGING_SSH_USER@$STAGING_SSH_HOST" 'python3 - origin' < tools/diagnostics/scene-delivery-probe.py | tee diagnostic-results/origin.jsonl
+          ssh -o StrictHostKeyChecking=yes "$STAGING_SSH_USER@$STAGING_SSH_HOST" 'uptime; free -m; sudo docker stats --no-stream --format "{{.Name}} {{.CPUPerc}} {{.MemUsage}}"' > diagnostic-results/origin-resources.txt
+      - name: Measure GitHub runner delivery
+        run: python3 tools/diagnostics/scene-delivery-probe.py runner | tee diagnostic-results/runner.jsonl
+      - name: Install locked browser tooling
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm exec playwright install --with-deps chromium
+      - name: Compare real delivery and local asset control in browser
+        run: node tools/diagnostics/scene-browser-probe.mjs | tee diagnostic-results/browser.jsonl
+      - name: Upload timing data only, never scene bytes or credentials
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scene-delivery-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: diagnostic-results/
+          retention-days: 14
+          if-no-files-found: error
