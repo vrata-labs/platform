@@ -1,0 +1,112 @@
+name: Prepare document media extraction
+on:
+  push:
+    branches: [preparation/api-document-media-20260911]
+permissions:
+  contents: write
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: vrata_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres -d vrata_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Apply exact locally verified extraction
+        run: |
+          cp apps/api/src/index.ts index.before.ts
+          node .preparation/extract.cjs "$PWD"
+          test "$(git hash-object apps/api/src/index.ts)" = d833276cbda5cfca136739a86ef12a6ef006e59f
+          test "$(git hash-object apps/api/src/document-media-metadata.ts)" = 2b94d8535ea3454e9f55f578b739dc0e1cca41b3
+          test "$(git hash-object apps/api/src/document-media-metadata.test.ts)" = cd3676594e5d2a50241b4b772fab6b728137a12c
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Check real type declarations and public exports
+        run: |
+          node <<'JS'
+          const fs = require('node:fs');
+          const assert = require('node:assert/strict');
+          const { createHash } = require('node:crypto');
+          const ts = require('typescript');
+          const parse = file => ts.createSourceFile(file, fs.readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true);
+          const hash = s => createHash('sha1').update(`blob ${Buffer.byteLength(s)}\0`).update(s).digest('hex');
+          for (const [file, name, expected] of [
+            ['storage.ts','RoomDocumentMetadata','ce0dd718f086fa54fc582b41780818cc02f38845'],
+            ['multipart-form-data.ts','MultipartPart','c767e3799723acf62360d0a85204fd3ce464cc6b']
+          ]) {
+            const ast = parse('apps/api/src/' + file);
+            const node = ast.statements.find(n => ts.isInterfaceDeclaration(n) && n.name.text === name);
+            assert.equal(hash(node.getText(ast)), expected);
+          }
+          const before = parse('index.before.ts');
+          const after = parse('apps/api/src/index.ts');
+          const exportsOf = ast => ast.statements.filter(n => ts.isExportDeclaration(n) || n.modifiers?.some(m => m.kind === ts.SyntaxKind.ExportKeyword)).map(n => n.getText(ast));
+          assert.deepEqual(exportsOf(before), exportsOf(after));
+          const moduleAst = parse('apps/api/src/document-media-metadata.ts');
+          const functions = moduleAst.statements.filter(ts.isFunctionDeclaration);
+          assert.equal(functions.length, 6);
+          for (const node of functions) {
+            const original = before.statements.find(n => ts.isFunctionDeclaration(n) && n.name.text === node.name.text);
+            assert.equal(node.getText(moduleAst).replace(/^export /, ''), original.getText(before));
+          }
+          console.log('type_declarations_and_unchanged_exports_verified');
+          JS
+      - name: Full workspace verification
+        env:
+          VRATA_TEST_POSTGRES_URL: postgres://postgres:postgres@127.0.0.1:5432/vrata_test
+        run: |
+          pnpm lint
+          pnpm typecheck
+          pnpm build
+          pnpm test
+      - name: Verify compiled module and focused tests
+        run: |
+          node --test apps/api/dist/document-media-metadata.test.js > module-tests.tap
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import { readFile } from 'node:fs/promises';
+          import * as module from './apps/api/dist/document-media-metadata.js';
+          assert.deepEqual(Object.keys(module), ['inspectImageDocument', 'inspectVideoDocument']);
+          assert.ok(!/^import /m.test(await readFile('apps/api/dist/document-media-metadata.js', 'utf8')));
+          JS
+      - name: Store verified Git blobs without changing any branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for file in apps/api/src/index.ts apps/api/src/document-media-metadata.ts; do
+            node - "$file" <<'JS' > /tmp/vrata-verified-blob.json
+          const fs = require('node:fs');
+          process.stdout.write(JSON.stringify({content: fs.readFileSync(process.argv[2], 'utf8'), encoding: 'utf-8'}));
+          JS
+            actual="$(gh api --method POST repos/vrata-labs/platform/git/blobs --input /tmp/vrata-verified-blob.json --jq .sha)"
+            expected="$(git hash-object "$file")"
+            test "$actual" = "$expected"
+            echo "$file $actual" | tee -a verified-blobs.txt
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: document-media-preparation-${{ github.run_id }}
+          retention-days: 14
+          path: |
+            extraction.json
+            verified-blobs.txt
+            module-tests.tap
+            index.before.ts
+            apps/api/src/index.ts
+            apps/api/src/document-media-metadata.ts
+            apps/api/src/document-media-metadata.test.ts
