@@ -1,0 +1,25 @@
+name: Prepare scene network diagnostics
+on:
+  push:
+    branches: [preparation/scene-network-20260911]
+permissions:
+  contents: read
+jobs:
+  sources:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 2a29d1e1e9ce4bea08cbfa5720df4b1a312834f2
+          persist-credentials: false
+      - name: Export public verification sources only
+        run: |
+          mkdir -p preparation-output
+          git archive HEAD AGENTS.md CONTRIBUTING.md SECURITY.md tests tools .github package.json pnpm-lock.yaml pnpm-workspace.yaml playwright.config.ts tsconfig.base.json > preparation-output/sources.tar
+          git rev-parse HEAD > preparation-output/base-sha.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: scene-network-sources
+          path: preparation-output/
+          retention-days: 7
