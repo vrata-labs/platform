@@ -1,0 +1,70 @@
+name: Prepare scene snapshot fix
+
+on:
+  push:
+    branches: [preparation/staging-scene-snapshot-20260911]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: vrata_test
+        ports: [5432:5432]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d vrata_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Verify source hashes
+        run: |
+          mkdir -p verification
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { execFileSync } from 'node:child_process';
+          import { writeFileSync } from 'node:fs';
+          const expected = {
+            '.github/workflows/staging-deploy.yml': '4ad60ebca052de707676af42574889508d4fb031',
+            'tools/staging-scene-snapshot.mjs': 'c3959d421138918466a54735895bcf254aff38ae',
+            'tools/staging-scene-snapshot.test.mjs': '24c288e4feea36947cb5de80707f42f31cafc9c7',
+            'tools/patch-staging-scene-bundles.mjs': 'cb23408d83f04652f3c76383dafadd85adb9a2ca'
+          };
+          for (const [path, sha] of Object.entries(expected)) {
+            assert.equal(execFileSync('git', ['hash-object', path], { encoding: 'utf8' }).trim(), sha);
+          }
+          writeFileSync('verification/source-hashes.json', JSON.stringify(expected, null, 2));
+          NODE
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Full workspace verification
+        env:
+          VRATA_TEST_POSTGRES_URL: postgres://postgres:postgres@127.0.0.1:5432/vrata_test
+        run: |
+          pnpm lint
+          pnpm typecheck
+          pnpm build
+          pnpm test
+      - name: Snapshot and workflow regression tests
+        run: |
+          node --check tools/staging-scene-snapshot.mjs
+          node --test tools/staging-scene-snapshot.test.mjs > verification/snapshot-tests.tap
+          cp tools/staging-scene-snapshot.mjs tools/staging-scene-snapshot.test.mjs .github/workflows/staging-deploy.yml verification/
+          git rev-parse HEAD > verification/preparation-sha.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: scene-snapshot-preparation-${{ github.run_id }}
+          path: verification/
+          retention-days: 14
