@@ -1,0 +1,74 @@
+name: Prepare request body extraction
+on:
+  push:
+    branches:
+      - preparation/api-request-body-20260911
+permissions:
+  contents: write
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: vrata_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d vrata_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Apply exact locally verified extraction
+        run: node tools/prepare-request-body.cjs
+      - name: Full workspace verification
+        env:
+          VRATA_TEST_POSTGRES_URL: postgres://postgres:postgres@127.0.0.1:5432/vrata_test
+        run: |
+          set -euo pipefail
+          pnpm lint 2>&1 | tee verification/lint.log
+          pnpm typecheck 2>&1 | tee verification/typecheck.log
+          pnpm build 2>&1 | tee verification/build.log
+          pnpm test 2>&1 | tee verification/test.log
+      - name: Verify compiled module boundary and focused tests
+        run: |
+          set -euo pipefail
+          node --test apps/api/dist/request-body.test.js 2>&1 | tee verification/focused-tests.tap
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { readFileSync } from 'node:fs';
+          import * as helpers from './apps/api/dist/request-body.js';
+          assert.deepEqual(Object.keys(helpers).sort(), ['parseBody', 'readRequestBuffer']);
+          assert.doesNotMatch(readFileSync('apps/api/dist/request-body.js', 'utf8'), /\bimport\s/);
+          NODE
+      - name: Store verified index blob without changing any branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          sha="$(gh api --method POST repos/vrata-labs/platform/git/blobs -f encoding=utf-8 -F content=@apps/api/src/index.ts --jq .sha)"
+          test "$sha" = "2d15c45f0a40ad6bc6844a6c28d1c174854fd6b8"
+          printf '%s\n' "$sha" > verification/verified-index-blob.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: request-body-preparation-${{ github.run_id }}
+          retention-days: 14
+          path: |
+            verification/
+            apps/api/src/index.ts
+            apps/api/src/request-body.ts
+            apps/api/src/request-body.test.ts
