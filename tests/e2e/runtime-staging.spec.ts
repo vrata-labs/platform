@@ -1,4 +1,4 @@
-import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
+import { expect, test, observeScenePage, type APIRequestContext, type Page } from "./scene-network-fixture";
 import { PDFDocument, rgb } from "pdf-lib";
 
 const stagingRoomId = process.env.STAGING_ROOM_ID ?? "demo-room";
@@ -402,7 +402,7 @@ test.describe("@staging runtime HUD space selector", () => {
     await page.locator("#presentation-next").click();
     await expect(page.locator("#presentation-page-label")).toHaveText("Page 2 / 2", { timeout: 15000 });
 
-    const latePage = await page.context().newPage();
+    const latePage = await observeScenePage(page.context().newPage());
     try {
       await latePage.goto(`${roomUrl}?role=member&name=StagingPdfLate&debug=1`);
       await expect(latePage.locator("#presentation-page-label")).toHaveText("Page 2 / 2", { timeout: 30000 });
@@ -486,7 +486,7 @@ test.describe("@staging runtime HUD space selector", () => {
       timeout: 30000
     }).toBeGreaterThan(150);
 
-    const latePage = await page.context().newPage();
+    const latePage = await observeScenePage(page.context().newPage());
     try {
       await latePage.goto(`${roomUrl}?role=member&name=StagingMediaLate&debug=1`);
       await expect.poll(async () => latePage.evaluate(() => {
@@ -569,8 +569,8 @@ test.describe("@staging runtime HUD space selector", () => {
       const room = await createRoomResponse.json() as { roomId: string };
       roomId = room.roomId;
 
-      const listener = await browser.newPage();
-      const source = await browser.newPage();
+      const listener = await observeScenePage(browser.newPage());
+      const source = await observeScenePage(browser.newPage());
       try {
         await listener.goto(`/rooms/${room.roomId}?debug=1&audiomock=1&name=VoiceListener`, { waitUntil: "domcontentloaded" });
         await source.goto(`/rooms/${room.roomId}?debug=1&audiomock=1&bot=line&name=VoiceSource&botSpeed=1`, { waitUntil: "domcontentloaded" });
@@ -960,8 +960,8 @@ test.describe("@staging runtime HUD space selector", () => {
       const room = await createRoomResponse.json() as { roomId: string; roomLink: string };
       roomId = room.roomId;
 
-      const pageA = await browser.newPage();
-      const pageB = await browser.newPage();
+      const pageA = await observeScenePage(browser.newPage());
+      const pageB = await observeScenePage(browser.newPage());
       try {
         await pageA.goto(`/rooms/${room.roomId}?debug=1&bot=line`);
         await pageB.goto(`/rooms/${room.roomId}?debug=1&bot=line`);
@@ -1014,8 +1014,8 @@ test.describe("@staging runtime HUD space selector", () => {
   });
 
   test("demo-room keeps avatar sync working between two clients on staging", async ({ browser }) => {
-    const pageA = await browser.newPage();
-    const pageB = await browser.newPage();
+    const pageA = await observeScenePage(browser.newPage());
+    const pageB = await observeScenePage(browser.newPage());
     try {
       await pageA.goto(`/rooms/${stagingRoomId}?debug=1&bot=line`, { waitUntil: "domcontentloaded" });
       await pageB.goto(`/rooms/${stagingRoomId}?debug=1&bot=line`, { waitUntil: "domcontentloaded" });
@@ -1086,8 +1086,8 @@ test.describe("@staging runtime HUD space selector", () => {
       const room = await createRoomResponse.json() as { roomId: string };
       roomId = room.roomId;
 
-      const realtimePage = await browser.newPage();
-      const fallbackPage = await browser.newPage();
+      const realtimePage = await observeScenePage(browser.newPage());
+      const fallbackPage = await observeScenePage(browser.newPage());
       try {
         await realtimePage.goto(`/rooms/${room.roomId}?debug=1&bot=line`, { waitUntil: "domcontentloaded" });
         await fallbackPage.goto(`/rooms/${room.roomId}?debug=1&failroomstate=1&bot=line`, { waitUntil: "domcontentloaded" });
@@ -1651,8 +1651,8 @@ test.describe("@staging runtime HUD space selector", () => {
       const room = await createRoomResponse.json() as { roomId: string };
       roomId = room.roomId;
 
-      const vrPage = await browser.newPage();
-      const webPage = await browser.newPage();
+      const vrPage = await observeScenePage(browser.newPage());
+      const webPage = await observeScenePage(browser.newPage());
       try {
         await vrPage.goto(`/rooms/${room.roomId}?debug=1&avatarvrmock=1`, { waitUntil: "domcontentloaded" });
         await webPage.goto(`/rooms/${room.roomId}?debug=1`, { waitUntil: "domcontentloaded" });
@@ -1849,8 +1849,8 @@ test.describe("@staging runtime HUD space selector", () => {
   test("hall keeps avatar sync working between two web clients on staging", async ({ browser }) => {
     test.setTimeout(120000);
     const hallRoomId = stagingSceneRooms[0]!.roomId;
-    const pageA = await browser.newPage();
-    const pageB = await browser.newPage();
+    const pageA = await observeScenePage(browser.newPage());
+    const pageB = await observeScenePage(browser.newPage());
     try {
       await pageA.goto(`/rooms/${hallRoomId}?debug=1&bot=line`);
       await pageB.goto(`/rooms/${hallRoomId}?debug=1&bot=line`);
@@ -1886,8 +1886,8 @@ test.describe("@staging runtime HUD space selector", () => {
   test("hall keeps avatar hands visible between two web clients on staging", async ({ browser }) => {
     test.setTimeout(120000);
     const hallRoomId = stagingSceneRooms[0]!.roomId;
-    const pageA = await browser.newPage();
-    const pageB = await browser.newPage();
+    const pageA = await observeScenePage(browser.newPage());
+    const pageB = await observeScenePage(browser.newPage());
     try {
       await pageA.goto(`/rooms/${hallRoomId}?debug=1&bot=line`);
       await pageB.goto(`/rooms/${hallRoomId}?debug=1&bot=line`);
