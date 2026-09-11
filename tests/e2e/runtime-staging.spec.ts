@@ -1,13 +1,12 @@
 import { expect, test, observeScenePage, type APIRequestContext, type Page } from "./scene-network-fixture";
 import { PDFDocument, rgb } from "pdf-lib";
+import { expectSceneRoomReady, type ExpectedBundleUrl } from "./scene-room-acceptance";
 
 const stagingRoomId = process.env.STAGING_ROOM_ID ?? "demo-room";
 const stagingAdminToken = process.env.STAGING_ADMIN_TOKEN ?? "vrata-stage-admin";
 const stagingBaseUrl = process.env.BASE_URL ?? "https://158.160.10.234.sslip.io";
 const stagingAssetBaseUrl = process.env.STAGING_ASSET_BASE_URL ?? `${new URL(stagingBaseUrl).protocol}//state.${new URL(stagingBaseUrl).host}`;
 const stagingSceneBundleVersion = process.env.STAGING_SCENE_BUNDLE_VERSION;
-
-type ExpectedBundleUrl = string | RegExp;
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -24,11 +23,6 @@ function expectedVersionedOrLegacySceneBundleUrl(sceneId: string): ExpectedBundl
     return versionedSceneBundleUrl(sceneId);
   }
   return new RegExp(`^${escapeRegExp(`${stagingAssetBaseUrl}/assets/scenes/${sceneId}/`)}(?:[0-9a-fA-F]{40}/)?scene\\.json$`);
-}
-
-function bundleUrlMatches(actual: string | undefined, expected: ExpectedBundleUrl): boolean {
-  if (!actual) return false;
-  return typeof expected === "string" ? actual === expected : expected.test(actual);
 }
 
 const hallSceneBundleUrl = versionedSceneBundleUrl("sense-hall2-v1");
@@ -127,84 +121,6 @@ const stagingSceneRooms = [
     requireLoadedState: false
   }
 ] as const;
-
-type DiagnosticsPayload = {
-  items: Array<{
-    note?: string;
-    sceneDebug?: {
-      state?: string;
-      bundleUrl?: string;
-    };
-  }>;
-};
-
-async function getJsonWithRetry<T>(request: APIRequestContext, path: string, timeoutMs: number, headers?: Record<string, string>): Promise<T> {
-  const startedAt = Date.now();
-  let lastError: unknown;
-
-  while (Date.now() - startedAt < timeoutMs) {
-    try {
-      const response = await request.get(path, headers ? { headers } : undefined);
-      if (!response.ok()) {
-        throw new Error(`http_${response.status()}`);
-      }
-      return await response.json() as T;
-    } catch (error) {
-      lastError = error;
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-    }
-  }
-
-  throw lastError instanceof Error ? lastError : new Error("staging_request_failed");
-}
-
-async function getDiagnosticsWithRetry(request: APIRequestContext, roomId: string, timeoutMs: number): Promise<DiagnosticsPayload> {
-  return getJsonWithRetry<DiagnosticsPayload>(request, `/api/rooms/${roomId}/diagnostics`, timeoutMs, {
-    "x-vrata-admin-token": stagingAdminToken
-  });
-}
-
-async function expectSceneRoomLoaded(
-  page: Page,
-  request: APIRequestContext,
-  roomId: string,
-  timeoutMs: number,
-  expectedBundleUrl: ExpectedBundleUrl,
-  requireLoadedState: boolean
-): Promise<void> {
-  await page.goto(`/rooms/${roomId}`);
-  await expect(page.locator("#room-name")).not.toContainText("Loading room", { timeout: timeoutMs });
-
-  const manifest = await getJsonWithRetry<{ sceneBundle?: { url?: string } }>(request, `/api/rooms/${roomId}/manifest`, timeoutMs);
-  expect(bundleUrlMatches(manifest.sceneBundle?.url, expectedBundleUrl)).toBeTruthy();
-  const loadedBundleUrl = manifest.sceneBundle?.url;
-  expect(loadedBundleUrl).toBeTruthy();
-
-  if (!requireLoadedState) {
-    const diagnostics = await getDiagnosticsWithRetry(request, roomId, timeoutMs);
-    expect(Array.isArray(diagnostics.items)).toBeTruthy();
-    return;
-  }
-
-  await expect.poll(async () => {
-    const diagnostics = await getDiagnosticsWithRetry(request, roomId, timeoutMs);
-    const loadedItem = diagnostics.items.find((item) =>
-      item.sceneDebug?.bundleUrl === loadedBundleUrl && item.sceneDebug?.state === "loaded"
-    );
-    return {
-      loaded: loadedItem !== undefined,
-      state: loadedItem?.sceneDebug?.state ?? null,
-      bundleUrl: loadedItem?.sceneDebug?.bundleUrl ?? null
-    };
-  }, {
-    timeout: timeoutMs,
-    intervals: [1000, 2000, 3000, 5000]
-  }).toEqual({
-    loaded: true,
-    state: "loaded",
-    bundleUrl: loadedBundleUrl
-  });
-}
 
 async function readVrataDebug(page: Page): Promise<{
   roomStateConnected?: boolean;
@@ -920,16 +836,10 @@ test.describe("@staging runtime HUD space selector", () => {
   });
 
   for (const sceneRoom of stagingSceneRooms) {
-    test(`scene room smoke: ${sceneRoom.name}`, async ({ page, request }) => {
+    const check = sceneRoom.requireLoadedState ? "loaded in current page" : "manifest and diagnostics only";
+    test(`scene room ${check}: ${sceneRoom.name}`, async ({ page, request }) => {
       test.setTimeout(sceneRoom.timeoutMs + 45000);
-      await expectSceneRoomLoaded(
-        page,
-        request,
-        sceneRoom.roomId,
-        sceneRoom.timeoutMs,
-        sceneRoom.expectedBundleUrl,
-        sceneRoom.requireLoadedState
-      );
+      await expectSceneRoomReady(page, request, sceneRoom, stagingAdminToken);
     });
   }
 
