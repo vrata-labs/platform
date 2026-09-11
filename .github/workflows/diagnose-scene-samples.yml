@@ -1,0 +1,55 @@
+name: Diagnose scene transfer samples
+on:
+  push:
+    branches: [diagnostics/scene-delivery-samples-20260911]
+permissions:
+  contents: read
+concurrency:
+  group: staging-deploy
+  cancel-in-progress: false
+jobs:
+  measure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Check diagnostic syntax and install locked browser
+        run: |
+          mkdir -p diagnostic-samples
+          python3 -m py_compile tools/diagnostics/scene-tcp-counters.py
+          node --check tools/diagnostics/scene-browser-samples.mjs
+          pnpm install --frozen-lockfile
+          pnpm exec playwright install --with-deps chromium
+      - uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.STAGING_SSH_KEY }}
+          log-public-key: false
+      - name: Read initial TCP counters without changing server configuration
+        env:
+          STAGING_SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
+          STAGING_SSH_USER: ${{ secrets.STAGING_SSH_USER }}
+        run: ssh -o StrictHostKeyChecking=accept-new "$STAGING_SSH_USER@$STAGING_SSH_HOST" 'sudo python3 -' < tools/diagnostics/scene-tcp-counters.py > diagnostic-samples/tcp-before.json
+      - name: Eight network and two control browser loads with byte progress
+        run: node tools/diagnostics/scene-browser-samples.mjs | tee diagnostic-samples/browser-samples.jsonl
+      - name: Read final TCP counters without changing server configuration
+        if: always()
+        env:
+          STAGING_SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
+          STAGING_SSH_USER: ${{ secrets.STAGING_SSH_USER }}
+        run: ssh -o StrictHostKeyChecking=yes "$STAGING_SSH_USER@$STAGING_SSH_HOST" 'sudo python3 -' < tools/diagnostics/scene-tcp-counters.py > diagnostic-samples/tcp-after.json
+      - name: Upload measurements only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scene-delivery-samples-${{ github.run_id }}-${{ github.run_attempt }}
+          path: diagnostic-samples/
+          retention-days: 14
+          if-no-files-found: error
