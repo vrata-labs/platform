@@ -1,0 +1,163 @@
+name: Prepare API XR telemetry refactor
+
+on:
+  push:
+    branches: [automation/prepare-api-xr-telemetry-20260912]
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: write
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: vrata_test
+        ports: [5432:5432]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d vrata_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      BASE_SHA: a5e0d4725ddf71d28ec3b2a1b1c417a38caf320b
+      TARGET_BRANCH: refactor/api-xr-telemetry-buffer-20260912
+    steps:
+      - name: Checkout preparation branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Mechanically extract and verify unchanged implementation
+        shell: python
+        run: |
+          import os
+          from pathlib import Path
+          import subprocess
+
+          base = os.environ["BASE_SHA"]
+          source = subprocess.check_output(["git", "show", f"{base}:apps/api/src/index.ts"], text=True)
+          path = Path("apps/api/src/index.ts")
+          assert path.read_text() == source, "preparation must start from the pinned index.ts"
+          assert subprocess.check_output(["git", "rev-parse", f"{base}:apps/api/src/index.ts"], text=True).strip() == "2d15c45f0a40ad6bc6844a6c28d1c174854fd6b8"
+
+          def block(start, end):
+              assert source.count(start) == 1
+              first = source.index(start)
+              return source[first:source.index(end, first)]
+
+          types = block("interface XrTelemetryRecord {", "const apiPort = ")
+          helpers = block("function shouldStoreXrTelemetryHistory(", "async function upsertXrTelemetry(")
+          limit = "const xrTelemetryHistoryLimit = 80;\n"
+          assert source.count(limit) == 1
+          exported_types = types.replace("interface XrTelemetryRecord", "export interface XrTelemetryRecord", 1).replace("interface XrTelemetryParticipantBuffer", "export interface XrTelemetryParticipantBuffer", 1)
+          exported_helpers = helpers
+          for name in ("createXrTelemetryRecord", "appendXrTelemetryRecord", "cloneXrTelemetryBuffer", "mergeXrTelemetryBuffers"):
+              assert helpers.count(f"function {name}(") == 1
+              exported_helpers = exported_helpers.replace(f"function {name}(", f"export function {name}(", 1)
+          expected_module = (exported_types + limit + "\n" + exported_helpers).rstrip() + "\n"
+          module_path = Path("apps/api/src/xr-telemetry-buffer.ts")
+          assert module_path.read_text() == expected_module, "reviewed module differs from the original declarations"
+          assert subprocess.check_output(["git", "hash-object", str(module_path)], text=True).strip() == "b3a580e40c7f70d0e088a5d16b21a90059715a5d"
+          assert subprocess.check_output(["git", "hash-object", "apps/api/src/xr-telemetry-buffer.test.ts"], text=True).strip() == "179e7c7ee27a9f8c2e88c8a81fa2d10dbd418857"
+          anchor = 'import { parseBody, readRequestBuffer } from "./request-body.js";\n'
+          imports = '''
+          import {
+            appendXrTelemetryRecord,
+            cloneXrTelemetryBuffer,
+            createXrTelemetryRecord,
+            mergeXrTelemetryBuffers,
+            type XrTelemetryParticipantBuffer,
+            type XrTelemetryRecord
+          } from "./xr-telemetry-buffer.js";
+          '''
+          assert source.count(anchor) == 1
+          candidate = source.replace(types, "", 1).replace(limit, "", 1).replace(helpers, "", 1).replace(anchor, anchor + imports, 1)
+          restored = candidate.replace(anchor + imports, anchor, 1).replace("const apiPort = ", types + "const apiPort = ", 1).replace("const requestIds = ", limit + "const requestIds = ", 1).replace("async function upsertXrTelemetry(", helpers + "async function upsertXrTelemetry(", 1)
+          assert restored == source, "reverse extraction did not restore index.ts byte-for-byte"
+          path.write_text(candidate)
+          print("Exact extraction and byte-for-byte reverse reconstruction: PASS")
+          print(f"index.ts lines: {len(source.splitlines())} -> {len(candidate.splitlines())}")
+          print(f"index.ts bytes: {len(source.encode())} -> {len(candidate.encode())}")
+          print(f"new module lines: {len(expected_module.splitlines())}")
+
+          baseline = Path("/tmp/vrata-xr-baseline")
+          baseline.mkdir(exist_ok=True)
+          (baseline / "package.json").write_text('{"type":"module"}\n')
+          (baseline / "xr-telemetry-buffer.ts").write_text(expected_module)
+          (baseline / "xr-telemetry-buffer.test.ts").write_text(Path("apps/api/src/xr-telemetry-buffer.test.ts").read_text())
+
+          sizes = []
+          for filename in subprocess.check_output(["git", "ls-tree", "-r", "--name-only", base, "apps"], text=True).splitlines():
+              if filename.endswith((".ts", ".tsx", ".js", ".mjs")) and not filename.endswith((".test.ts", ".test.mjs", ".d.ts")):
+                  file = Path(filename)
+                  if file.is_file():
+                      sizes.append((len(file.read_text().splitlines()), filename))
+          print("Largest application source files after extraction:")
+          for count, filename in sorted(sizes, reverse=True)[:12]:
+              print(f"{count:6d} {filename}")
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Strict contract tests against extracted original implementation
+        run: |
+          pnpm exec tsc --module NodeNext --moduleResolution NodeNext --target ES2022 --strict --noUncheckedIndexedAccess --esModuleInterop --skipLibCheck --typeRoots "$PWD/node_modules/@types" --outDir /tmp/vrata-xr-baseline/dist /tmp/vrata-xr-baseline/xr-telemetry-buffer.ts /tmp/vrata-xr-baseline/xr-telemetry-buffer.test.ts
+          node --test /tmp/vrata-xr-baseline/dist/xr-telemetry-buffer.test.js
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Build
+        run: pnpm build
+
+      - name: Test including PostgreSQL integration
+        env:
+          VRATA_TEST_POSTGRES_URL: postgres://postgres:postgres@127.0.0.1:5432/vrata_test
+        run: pnpm test
+
+      - name: Publish only the three reviewed code files on a clean branch
+        run: |
+          set -euo pipefail
+          test "$(git ls-remote origin refs/heads/main | cut -f1)" = "$BASE_SHA"
+          test -z "$(git ls-remote origin "refs/heads/$TARGET_BRANCH")"
+          export GIT_INDEX_FILE="$(mktemp)"
+          rm "$GIT_INDEX_FILE"
+          trap 'rm -f "$GIT_INDEX_FILE"' EXIT
+          git read-tree "$BASE_SHA"
+          git add -- apps/api/src/index.ts apps/api/src/xr-telemetry-buffer.ts apps/api/src/xr-telemetry-buffer.test.ts
+          tree="$(git write-tree)"
+          git diff --check "$BASE_SHA" "$tree"
+          expected=$(printf '%s\n' apps/api/src/index.ts apps/api/src/xr-telemetry-buffer.test.ts apps/api/src/xr-telemetry-buffer.ts)
+          test "$(git diff --name-only "$BASE_SHA" "$tree")" = "$expected"
+          git diff --stat "$BASE_SHA" "$tree"
+          commit="$(git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit-tree "$tree" -p "$BASE_SHA" -m 'refactor(api): extract XR telemetry buffer helpers' -m 'Mechanically extract telemetry types and buffer operations without behavior changes. Preserve all HTTP handlers, persistence, limits, reference behavior and lexical/JSON comparisons. Add 33 focused contract checks. Preparation workflow is not part of this commit.')"
+          git push origin "$commit:refs/heads/$TARGET_BRANCH"
+          echo "CANDIDATE_SHA=$commit"
+          {
+            echo "## Verified refactoring candidate"
+            echo "- Commit: $commit"
+            echo "- Base: $BASE_SHA"
+            echo "- Branch: $TARGET_BRANCH"
+            echo "- Only index.ts, xr-telemetry-buffer.ts and xr-telemetry-buffer.test.ts changed."
+            echo "- Full PR CI and deployed-commit staging verification remain required."
+          } >> "$GITHUB_STEP_SUMMARY"
