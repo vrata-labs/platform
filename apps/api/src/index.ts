@@ -9,9 +9,8 @@ import { fileURLToPath } from "node:url";
 import { AccessToken } from "livekit-server-sdk";
 import { PDFDocument } from "pdf-lib";
 import { extractSceneBundleZipToTemp, normalizeSceneBundleRelativePath, validateSceneBundlePath, validateSceneBundleReference } from "@vrata/asset-pipeline";
-import { createRoomAccessDebugState, getRoomPermissions, hasRoomPermission, parseRoomRole, type RoomPermission, type RoomRole, type RoomTemplateSnapshotV1, type RoomTemplateVersionSnapshotV1 } from "@vrata/shared-types";
+import { createRoomAccessDebugState, getRoomPermissions, hasRoomPermission, parseRoomRole, type RoomPermission, type RoomRole } from "@vrata/shared-types";
 import { signRoomSessionToken, verifyRoomSessionToken, type RoomSessionRoleSource, type RoomSessionTokenPayload, type RoomSessionTokenVerificationResult } from "@vrata/shared-types/session-token";
-import { getCurrentTemplateVersion } from "@vrata/templates";
 
 import {
   resolveSceneBundlePublicUrl,
@@ -31,7 +30,6 @@ import {
   type RoomRecord,
   type RoomPersonalState,
   type RoomSessionControlState,
-  type RoomType,
   type RoomVisibility,
   type RuntimeDiagnosticRecord,
   type TenantRecord,
@@ -67,6 +65,8 @@ import { parseMultipartBoundary, parseMultipartFormData, textPart, filePart } fr
 
 import { parseBody, readRequestBuffer } from "./request-body.js";
 
+import { defaultManifest, type RoomManifest } from "./default-room-manifest.js";
+
 import {
   appendXrTelemetryRecord,
   cloneXrTelemetryBuffer,
@@ -95,62 +95,6 @@ export {
   isRemoteBrowserFeatureEnabled,
   isHostControlsEnabled
 } from "./feature-flags.js";
-
-interface RoomManifest {
-  schemaVersion: number;
-  tenantId: string;
-  roomId: string;
-  roomType: RoomType;
-  ownerParticipantId?: string | null;
-  template: string;
-  templateVersion: string;
-  templateSnapshot: RoomTemplateSnapshotV1;
-  sceneBundle?: {
-    url: string;
-  };
-  realtime: {
-    roomStateUrl: string;
-  };
-  theme: {
-    primaryColor: string;
-    accentColor: string;
-  };
-  assets: Array<{
-    assetId: string;
-    kind: string;
-    url: string;
-    processedUrl?: string;
-    validationStatus?: "pending" | "validated" | "rejected";
-  }>;
-  features: {
-    voice: boolean;
-    spatialAudio: boolean;
-    screenShare: boolean;
-  };
-  avatars: {
-    avatarsEnabled: boolean;
-    avatarCatalogUrl?: string;
-    avatarQualityProfile: "desktop-standard" | "mobile-lite" | "xr";
-    avatarPoseBinaryEnabled: boolean;
-    avatarLipsyncEnabled: boolean;
-    avatarLegIkEnabled: boolean;
-    avatarFallbackCapsulesEnabled: boolean;
-    avatarSeatsEnabled: boolean;
-    avatarCustomizationEnabled: boolean;
-  };
-  quality: {
-    default: "desktop-standard" | "mobile-lite" | "xr";
-    mobile: "mobile-lite";
-    xr: "xr";
-  };
-  access: {
-    joinMode: "link";
-    guestAllowed: boolean;
-    roleQueryAllowed: boolean;
-    visibility: RoomVisibility;
-    disabled?: boolean;
-  };
-}
 
 type RoomAccessTokenPayload = RoomSessionTokenPayload;
 
@@ -474,61 +418,6 @@ export function validateProductionApiEnv(env: NodeJS.ProcessEnv = process.env): 
 
 function logEvent(event: Record<string, unknown>): void {
   process.stdout.write(`${JSON.stringify(redactSecrets(event))}\n`);
-}
-
-function defaultManifest(roomId: string, request?: IncomingMessage, resolvedTemplateVersion?: RoomTemplateVersionSnapshotV1): RoomManifest {
-  const templateVersion = resolvedTemplateVersion ?? getCurrentTemplateVersion("meeting-room-basic");
-  if (!templateVersion) throw new Error("missing_seed_template_version:meeting-room-basic@0.1.0");
-  return {
-    schemaVersion: 1,
-    tenantId: "demo-tenant",
-    roomId,
-    roomType: "standard",
-    ownerParticipantId: null,
-    template: "meeting-room-basic",
-    templateVersion: templateVersion.version,
-    templateSnapshot: {
-      ...templateVersion,
-      roomConfig: {
-        roomType: "standard",
-        visibility: "public",
-        guestAllowed: true,
-        sceneBundleUrl: null,
-        features: { voice: true, spatialAudio: true, screenShare: true },
-        theme: { primaryColor: "#5fc8ff", accentColor: "#163354" },
-        avatarConfig: {
-          avatarsEnabled: true,
-          avatarCatalogUrl: "/assets/avatars/catalog.v1.json",
-          avatarQualityProfile: "desktop-standard",
-          avatarFallbackCapsulesEnabled: true,
-          avatarSeatsEnabled: true
-        }
-      }
-    },
-    sceneBundle: undefined,
-    realtime: {
-      roomStateUrl: getDefaultRoomStateUrl(request)
-    },
-    theme: {
-      primaryColor: "#5fc8ff",
-      accentColor: "#163354"
-    },
-    assets: [],
-    features: { voice: true, spatialAudio: true, screenShare: true },
-    avatars: {
-      avatarsEnabled: true,
-      avatarCatalogUrl: "/assets/avatars/catalog.v1.json",
-      avatarQualityProfile: "desktop-standard",
-      avatarPoseBinaryEnabled: true,
-      avatarLipsyncEnabled: false,
-      avatarLegIkEnabled: false,
-      avatarFallbackCapsulesEnabled: true,
-      avatarSeatsEnabled: true,
-      avatarCustomizationEnabled: false
-    },
-    quality: { default: "desktop-standard", mobile: "mobile-lite", xr: "xr" },
-    access: { joinMode: "link", guestAllowed: true, roleQueryAllowed: isDevRoleQueryAllowed(), visibility: "public", disabled: false }
-  };
 }
 
 function getRemoteBrowserLivekitUrl(request: IncomingMessage, payload: RemoteBrowserMediaTokenRequest): string {
