@@ -1,0 +1,105 @@
+name: Prepare default room manifest extraction
+on:
+  push:
+    branches: [preparation/default-room-manifest-20260912]
+permissions:
+  contents: write
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      BASE_SHA: fadc9a14322725ce826b4da6590f753b668cc44b
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: vrata_test
+        ports: [5432:5432]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d vrata_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 2
+      - name: Extract unchanged implementation and verify exact local file hashes
+        run: |
+          python3 - <<'PY'
+          import hashlib
+          from pathlib import Path
+          def blob(text):
+              data = text.encode()
+              return hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
+          path = Path('apps/api/src/index.ts')
+          original = path.read_text()
+          assert blob(original) == '92c81ae979a1839876713885b0e1e549caddda69'
+          assert blob(Path('AGENTS.md').read_text()) == '444218fb39af0ca11327fef9638b3373a5787dab'
+          assert blob(Path('apps/api/src/default-room-manifest.test.ts').read_text()) == '0ff4e748a17a4b3b4f1cb7d0754fb78375c17dc3'
+          declarations = original[original.index('interface RoomManifest {'):original.index('type RoomAccessTokenPayload =')]
+          function = original[original.index('function defaultManifest('):original.index('function getRemoteBrowserLivekitUrl(')]
+          imports = '\n'.join([
+              'import type { IncomingMessage } from "node:http";',
+              'import type { RoomTemplateSnapshotV1, RoomTemplateVersionSnapshotV1 } from "@vrata/shared-types";',
+              'import { getCurrentTemplateVersion } from "@vrata/templates";',
+              '',
+              'import type { RoomType, RoomVisibility } from "./storage.js";',
+              'import { isDevRoleQueryAllowed } from "./feature-flags.js";',
+              'import { getDefaultRoomStateUrl } from "./public-endpoints.js";',
+              '', ''
+          ])
+          module = imports + 'export ' + declarations + 'export ' + function.rstrip() + '\n'
+          updated = original.replace(declarations, '').replace(function, '').replace(', type RoomTemplateSnapshotV1, type RoomTemplateVersionSnapshotV1', '').replace('import { getCurrentTemplateVersion } from "@vrata/templates";\n', '').replace('  type RoomType,\n', '')
+          anchor = 'import { parseBody, readRequestBuffer } from "./request-body.js";\n'
+          updated = updated.replace(anchor, anchor + '\nimport { defaultManifest, type RoomManifest } from "./default-room-manifest.js";\n')
+          assert blob(module) == '9192ebef40494c6334cb2a017353db18023e68eb'
+          assert blob(updated) == '71b7f493c59783d48256298e0e3de8d1d966959a'
+          reverse = updated.replace('import { defaultManifest, type RoomManifest } from "./default-room-manifest.js";\n\n', '').replace('type RoomAccessTokenPayload =', declarations + 'type RoomAccessTokenPayload =').replace('function getRemoteBrowserLivekitUrl(', function + 'function getRemoteBrowserLivekitUrl(')
+          reverse = reverse.replace('type RoomRole }', 'type RoomRole, type RoomTemplateSnapshotV1, type RoomTemplateVersionSnapshotV1 }').replace('import { signRoomSessionToken, verifyRoomSessionToken, type RoomSessionRoleSource, type RoomSessionTokenPayload, type RoomSessionTokenVerificationResult } from "@vrata/shared-types/session-token";\n', 'import { signRoomSessionToken, verifyRoomSessionToken, type RoomSessionRoleSource, type RoomSessionTokenPayload, type RoomSessionTokenVerificationResult } from "@vrata/shared-types/session-token";\nimport { getCurrentTemplateVersion } from "@vrata/templates";\n').replace('  type RoomVisibility,', '  type RoomType,\n  type RoomVisibility,')
+          assert reverse == original
+          path.write_text(updated)
+          Path('apps/api/src/default-room-manifest.ts').write_text(module)
+          print('Exact reviewed hashes and byte-for-byte reverse reconstruction: PASS')
+          print('index.ts: 4258 -> 4147 lines; module: 118 lines; tests: 180 lines')
+          PY
+          find . -name AGENTS.md -not -path './.git/*' -print
+          git diff --check
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Lint
+        run: pnpm lint
+      - name: Typecheck
+        run: pnpm typecheck
+      - name: Build
+        run: pnpm build
+      - name: Full tests including PostgreSQL
+        env:
+          VRATA_TEST_POSTGRES_URL: postgres://postgres:postgres@127.0.0.1:5432/vrata_test
+        run: pnpm test
+      - name: Publish only the three reviewed code files
+        run: |
+          set -euo pipefail
+          test "$(git ls-remote origin refs/heads/main | cut -f1)" = "$BASE_SHA"
+          SAVE_DIR="$RUNNER_TEMP/default-manifest-files"
+          mkdir -p "$SAVE_DIR"
+          cp apps/api/src/index.ts apps/api/src/default-room-manifest.ts apps/api/src/default-room-manifest.test.ts "$SAVE_DIR/"
+          git restore -- apps/api/src/index.ts
+          git switch -c refactor/api-default-room-manifest-20260912 "$BASE_SHA"
+          cp "$SAVE_DIR/"*.ts apps/api/src/
+          git add apps/api/src/index.ts apps/api/src/default-room-manifest.ts apps/api/src/default-room-manifest.test.ts
+          git diff --cached --check
+          printf '%s\n' apps/api/src/default-room-manifest.test.ts apps/api/src/default-room-manifest.ts apps/api/src/index.ts > "$RUNNER_TEMP/expected-files"
+          git diff --cached --name-only > "$RUNNER_TEMP/actual-files"
+          diff -u "$RUNNER_TEMP/expected-files" "$RUNNER_TEMP/actual-files"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'refactor(api): extract default room manifest' -m 'Move the unchanged default manifest builder and interface into a focused module. Preserve seed precedence, shallow-copy semantics, JSON shape, environment timing and endpoint resolution. Add 21 contract tests. Preparation workflow excluded.'
+          git push origin HEAD:refs/heads/refactor/api-default-room-manifest-20260912
+          git log -1 --format='candidate:%H tree:%T'
