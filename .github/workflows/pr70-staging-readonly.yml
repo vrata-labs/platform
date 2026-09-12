@@ -1,0 +1,46 @@
+name: PR70 staging read-only verification
+
+on:
+  push:
+    branches:
+      - diagnostics/pr70-staging-readonly-20260912
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    env:
+      BASE_URL: ${{ secrets.STAGING_BASE_URL }}
+      STAGING_SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
+      STAGING_SSH_USER: ${{ secrets.STAGING_SSH_USER }}
+    steps:
+      - name: Set up existing staging SSH identity
+        uses: webfactory/ssh-agent@dc588b651fe13675774614f8e6a936a468676387
+        with:
+          ssh-private-key: ${{ secrets.STAGING_SSH_KEY }}
+          log-public-key: false
+
+      - name: Read running container image tags
+        run: |
+          set -euo pipefail
+          echo 'Diagnostic only; does not replace the deployed-commit staging gate.'
+          echo 'refactor_sha:b5b2331ba1c4ef340ab7da1a74c4d7e9995c4e6a'
+          date -u '+inspection_time:%Y-%m-%dT%H:%M:%SZ'
+          ssh -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new "$STAGING_SSH_USER@$STAGING_SSH_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          sudo -n docker ps --format 'container:{{.Names}} image:{{.Image}} status:{{.Status}}'
+          REMOTE
+
+      - name: Check public HTTP endpoints without reading response bodies
+        if: always()
+        run: |
+          set -euo pipefail
+          test -n "$BASE_URL"
+          for path in /health /rooms/demo-room /control-plane; do
+            code="$(curl --silent --show-error --fail --connect-timeout 10 --max-time 30 --output /dev/null --write-out '%{http_code}' "${BASE_URL%/}$path")"
+            echo "http_check:$path:status=$code"
+            test "$code" = 200
+          done
