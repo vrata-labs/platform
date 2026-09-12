@@ -1,0 +1,140 @@
+name: Prepare staging MinIO registry repair
+on:
+  push:
+    branches: [preparation/staging-minio-registry-20260912]
+permissions:
+  contents: write
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: vrata_test
+        ports: [5432:5432]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d vrata_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 2
+      - name: Apply exact locally reviewed patch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          test "$(git rev-parse HEAD^)" = b5b2331ba1c4ef340ab7da1a74c4d7e9995c4e6a
+          gh api repos/vrata-labs/platform/git/blobs/a8514ba81dc74f02bedbe927656a09e2c1eafdd4 --jq .content | base64 -d | gzip -dc > "$RUNNER_TEMP/repair.patch"
+          echo "1768b899fbb0a7d28b452e4661cffd66163acd4d7d8547022fab888fba44f4cf  $RUNNER_TEMP/repair.patch" | sha256sum -c -
+          git apply --check "$RUNNER_TEMP/repair.patch"
+          git apply "$RUNNER_TEMP/repair.patch"
+          python3 -m py_compile tools/staging-minio-rollout.py
+          node --test tools/staging-minio-rollout.test.mjs tools/staging-scene-snapshot.test.mjs tools/docker-publish-workflow.test.mjs
+      - name: Cold-pull storage images and verify bootstrap and legacy rollback compatibility
+        run: |
+          set -euo pipefail
+          export MINIO_TEST_PROJECT="vrata-minio-${GITHUB_RUN_ID}"
+          export MINIO_TEST_ENV="$PWD/infra/docker/.env.staging.example"
+          export MINIO_TEST_DIR="$RUNNER_TEMP/minio-integration"
+          export MINIO_TEST_HELPER="$PWD/tools/staging-minio-rollout.py"
+          mkdir -p "$MINIO_TEST_DIR"
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          import shutil
+          root = Path('.')
+          target = Path(os.environ['MINIO_TEST_DIR'])
+          source = (root / 'infra/docker/compose.staging.yml').read_text()
+          storage = '  minio:\n' + source.split('  minio:\n', 1)[1].split('  api:\n', 1)[0]
+          ports = '    ports:\n      - "${MINIO_API_PORT}:9000"\n      - "${MINIO_CONSOLE_PORT}:9001"\n'
+          assert storage.count(ports) == 1
+          storage = storage.replace(ports, '    ports:\n      - "127.0.0.1::9000"\n')
+          (target / 'compose.staging.yml').write_text('services:\n' + storage + '\nvolumes:\n  minio-data:\n')
+          for name in ['minio-bootstrap.sh', 'minio-scene-smoke.json']:
+              shutil.copyfile(root / 'infra/docker' / name, target / name)
+          PY
+          dc() { docker compose -p "$MINIO_TEST_PROJECT" --env-file "$MINIO_TEST_ENV" -f "$MINIO_TEST_DIR/compose.staging.yml" "$@"; }
+          trap 'dc down --volumes --remove-orphans' EXIT
+          dc config --quiet
+          dc pull
+          dc up -d minio
+          dc run --rm --no-deps minio-bootstrap
+          dc run --rm --no-deps --entrypoint /bin/sh minio-bootstrap -ec '
+            mc alias set vrata http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null
+            printf registry-compat-check | mc pipe "vrata/$MINIO_BUCKET/registry-sentinel" >/dev/null
+            test "$(mc cat "vrata/$MINIO_BUCKET/registry-sentinel")" = registry-compat-check
+          '
+          port="$(dc port minio 9000)"
+          curl --fail --silent "http://$port/vrata-scene-bundles/scenes/compose-smoke/scene.json" > "$RUNNER_TEMP/seed.json"
+          cmp infra/docker/minio-scene-smoke.json "$RUNNER_TEMP/seed.json"
+          dc up -d --force-recreate minio
+          dc run --rm --no-deps minio-bootstrap
+          dc run --rm --no-deps --entrypoint /bin/sh minio-bootstrap -ec '
+            mc alias set vrata http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null
+            test "$(mc cat "vrata/$MINIO_BUCKET/registry-sentinel")" = registry-compat-check
+          '
+          python3 - <<'PY'
+          import importlib.util
+          import os
+          from pathlib import Path
+          spec = importlib.util.spec_from_file_location('compat', os.environ['MINIO_TEST_HELPER'])
+          mod = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(mod)
+          p = Path(os.environ['MINIO_TEST_DIR']) / 'compose.staging.yml'
+          data = p.read_text()
+          for legacy, pinned in mod.IMAGES.items():
+              assert pinned in data
+              data = data.replace(pinned, legacy)
+          p.write_text(data)
+          PY
+          cp "$MINIO_TEST_DIR/compose.staging.yml" "$RUNNER_TEMP/legacy-compose.yml"
+          cat > "$MINIO_TEST_DIR/rollout-staging-images.sh" <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          test "$1" = b5b2331ba1c4ef340ab7da1a74c4d7e9995c4e6a
+          dc() { docker compose -p "$MINIO_TEST_PROJECT" --env-file "$MINIO_TEST_ENV" -f "$MINIO_TEST_DIR/compose.staging.yml" "$@"; }
+          dc pull
+          dc up -d --force-recreate minio
+          dc run --rm --no-deps minio-bootstrap
+          dc run --rm --no-deps --entrypoint /bin/sh minio-bootstrap -ec '
+            mc alias set vrata http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null
+            test "$(mc cat "vrata/$MINIO_BUCKET/registry-sentinel")" = registry-compat-check
+          '
+          SH
+          python3 "$MINIO_TEST_HELPER" "$MINIO_TEST_DIR/rollout-staging-images.sh" b5b2331ba1c4ef340ab7da1a74c4d7e9995c4e6a
+          cmp "$RUNNER_TEMP/legacy-compose.yml" "$MINIO_TEST_DIR/compose.staging.yml"
+          echo storage_cold_pull_bootstrap_recreation_legacy_restore_verified
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Lint typecheck build and full unit integration tests
+        env:
+          VRATA_TEST_POSTGRES_URL: postgres://postgres:postgres@127.0.0.1:5432/vrata_test
+        run: |
+          pnpm lint
+          pnpm typecheck
+          pnpm build
+          pnpm test
+          docker compose --env-file infra/docker/.env.staging.example -f infra/docker/compose.staging.yml config --quiet
+          git diff --check
+      - name: Publish only the exact five reviewed files
+        run: |
+          git switch --detach b5b2331ba1c4ef340ab7da1a74c4d7e9995c4e6a
+          git switch -c fix/staging-minio-registry-20260912
+          git add .github/workflows/staging-deploy.yml infra/docker/compose.staging.yml tools/staging-minio-rollout.py tools/staging-minio-rollout.test.mjs docs/ops/staging-minio-registry.md
+          test "$(git write-tree)" = e0a740ba3b0751b6f90d912c88f4e351f94cdb0d
+          test "$(git diff --cached --name-only | wc -l)" = 5
+          git diff --cached --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix(staging): restore pinned MinIO pulls and older-commit rollback' -m 'Keep existing storage releases and data. Use official Quay manifests, preserve old-commit rollout through a narrowly scoped temporary image-reference adapter, and retain all staging gates. Preparation workflow is excluded.'
+          git push origin HEAD:refs/heads/fix/staging-minio-registry-20260912
+          git log -1 --format='candidate_sha:%H tree:%T'
