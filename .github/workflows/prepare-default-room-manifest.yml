@@ -87,6 +87,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git ls-remote origin refs/heads/main | cut -f1)" = "$BASE_SHA"
+          git fetch --no-tags --depth=1 origin "$BASE_SHA"
           SAVE_DIR="$RUNNER_TEMP/default-manifest-files"
           mkdir -p "$SAVE_DIR"
           cp apps/api/src/index.ts apps/api/src/default-room-manifest.ts apps/api/src/default-room-manifest.test.ts "$SAVE_DIR/"
