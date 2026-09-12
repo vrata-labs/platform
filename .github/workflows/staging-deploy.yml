@@ -81,6 +81,7 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/vrata-scene-rollback"
           cp tools/staging-scene-snapshot.mjs tools/patch-staging-scene-bundles.mjs "$RUNNER_TEMP/vrata-scene-rollback/"
+          cp tools/staging-minio-rollout.py "$RUNNER_TEMP/vrata-scene-rollback/"
 
       - name: Sync workspace to deploy SHA
         env:
@@ -204,6 +205,7 @@ jobs:
           DEPLOY_SHA: ${{ steps.deploy.outputs.deploy_sha }}
         run: |
           YCR_PASSWORD_B64="$(printf '%s' "$YCR_PASSWORD" | base64 -w0)"
+          ROLLOUT_HELPER_B64="$(base64 -w0 "$RUNNER_TEMP/vrata-scene-rollback/staging-minio-rollout.py")"
           # shellcheck disable=SC2087
           ssh -o StrictHostKeyChecking=no "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo bash -s" <<EOF
           set -euo pipefail
@@ -211,7 +213,10 @@ jobs:
           git -c safe.directory="$STAGING_APP_DIR" fetch origin
           git -c safe.directory="$STAGING_APP_DIR" checkout "$DEPLOY_SHA"
           printf '%s' '${YCR_PASSWORD_B64}' | base64 -d | docker login cr.yandex --username '${YCR_USERNAME}' --password-stdin
-          VRATA_PRIVATE_SCENE_ASSETS_ROOT="$PRIVATE_SCENE_ASSETS_HOST_DIR/assets" bash ./infra/docker/rollout-staging-images.sh "$DEPLOY_SHA"
+          ROLLOUT_HELPER="\$(mktemp)"
+          trap 'rm -f "\$ROLLOUT_HELPER"' EXIT
+          printf '%s' '$ROLLOUT_HELPER_B64' | base64 -d > "\$ROLLOUT_HELPER"
+          VRATA_PRIVATE_SCENE_ASSETS_ROOT="$PRIVATE_SCENE_ASSETS_HOST_DIR/assets" python3 "\$ROLLOUT_HELPER" ./infra/docker/rollout-staging-images.sh "$DEPLOY_SHA"
           EOF
 
       - name: Install Playwright browser
@@ -314,13 +319,17 @@ jobs:
           ROLLBACK_SHA: ${{ steps.previous.outputs.previous_sha }}
         run: |
           YCR_PASSWORD_B64="$(printf '%s' "$YCR_PASSWORD" | base64 -w0)"
+          ROLLOUT_HELPER_B64="$(base64 -w0 "$RUNNER_TEMP/vrata-scene-rollback/staging-minio-rollout.py")"
           # shellcheck disable=SC2087
           ssh -o StrictHostKeyChecking=no "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo bash -s" <<EOF
           set -euo pipefail
           cd "$STAGING_APP_DIR"
           git -c safe.directory="$STAGING_APP_DIR" checkout "$ROLLBACK_SHA"
           printf '%s' '${YCR_PASSWORD_B64}' | base64 -d | docker login cr.yandex --username '${YCR_USERNAME}' --password-stdin
-          VRATA_PRIVATE_SCENE_ASSETS_ROOT="$PRIVATE_SCENE_ASSETS_HOST_DIR/assets" bash ./infra/docker/rollout-staging-images.sh "$ROLLBACK_SHA"
+          ROLLOUT_HELPER="\$(mktemp)"
+          trap 'rm -f "\$ROLLOUT_HELPER"' EXIT
+          printf '%s' '$ROLLOUT_HELPER_B64' | base64 -d > "\$ROLLOUT_HELPER"
+          VRATA_PRIVATE_SCENE_ASSETS_ROOT="$PRIVATE_SCENE_ASSETS_HOST_DIR/assets" python3 "\$ROLLOUT_HELPER" ./infra/docker/rollout-staging-images.sh "$ROLLBACK_SHA"
           EOF
           node "$RUNNER_TEMP/vrata-scene-rollback/staging-scene-snapshot.mjs" restore "$RUNNER_TEMP/vrata-scene-bundle-snapshot.json"
           curl --fail --silent "$STAGING_BASE_URL/health" >/dev/null
