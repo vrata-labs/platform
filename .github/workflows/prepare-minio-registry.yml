@@ -27,7 +27,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          test "$(git rev-parse HEAD^)" = b5b2331ba1c4ef340ab7da1a74c4d7e9995c4e6a
+          git fetch --no-tags --depth=1 origin b5b2331ba1c4ef340ab7da1a74c4d7e9995c4e6a
+          test "$(git rev-parse b5b2331ba1c4ef340ab7da1a74c4d7e9995c4e6a^{tree})" = 032d97ed9ce9ace703f84041681e05fd0960a18f
+          git diff --exit-code b5b2331ba1c4ef340ab7da1a74c4d7e9995c4e6a HEAD -- . ':(exclude).github/workflows/prepare-minio-registry.yml'
           gh api repos/vrata-labs/platform/git/blobs/a8514ba81dc74f02bedbe927656a09e2c1eafdd4 --jq .content | base64 -d | gzip -dc > "$RUNNER_TEMP/repair.patch"
           echo "1768b899fbb0a7d28b452e4661cffd66163acd4d7d8547022fab888fba44f4cf  $RUNNER_TEMP/repair.patch" | sha256sum -c -
           git apply --check "$RUNNER_TEMP/repair.patch"
@@ -44,22 +46,33 @@ jobs:
           mkdir -p "$MINIO_TEST_DIR"
           python3 - <<'PY'
           import os
+          import re
           from pathlib import Path
           import shutil
           root = Path('.')
           target = Path(os.environ['MINIO_TEST_DIR'])
           source = (root / 'infra/docker/compose.staging.yml').read_text()
-          storage = '  minio:\n' + source.split('  minio:\n', 1)[1].split('  api:\n', 1)[0]
+          blocks = []
+          for name in ['minio', 'minio-bootstrap']:
+              matches = re.findall(r'(?ms)^  ' + re.escape(name) + r':\n.*?(?=^  [a-zA-Z][a-zA-Z0-9_-]*:|^[a-zA-Z]|\Z)', source)
+              assert len(matches) == 1, (name, len(matches))
+              blocks.append(matches[0])
+          storage = ''.join(blocks)
           ports = '    ports:\n      - "${MINIO_API_PORT}:9000"\n      - "${MINIO_CONSOLE_PORT}:9001"\n'
           assert storage.count(ports) == 1
           storage = storage.replace(ports, '    ports:\n      - "127.0.0.1::9000"\n')
-          (target / 'compose.staging.yml').write_text('services:\n' + storage + '\nvolumes:\n  minio-data:\n')
+          assert re.findall(r'(?m)^  ([a-zA-Z][a-zA-Z0-9_-]*):', storage) == ['minio', 'minio-bootstrap']
+          fixture = 'services:\n' + storage + '\nvolumes:\n  minio-data:\n'
+          (target / 'compose.staging.yml').write_text(fixture)
+          print('isolated_storage_compose:')
+          print(fixture)
           for name in ['minio-bootstrap.sh', 'minio-scene-smoke.json']:
               shutil.copyfile(root / 'infra/docker' / name, target / name)
           PY
           dc() { docker compose -p "$MINIO_TEST_PROJECT" --env-file "$MINIO_TEST_ENV" -f "$MINIO_TEST_DIR/compose.staging.yml" "$@"; }
-          trap 'dc down --volumes --remove-orphans' EXIT
           dc config --quiet
+          test "$(dc config --services | sort | tr '\n' ' ')" = 'minio minio-bootstrap '
+          trap 'dc down --volumes --remove-orphans' EXIT
           dc pull
           dc up -d minio
           dc run --rm --no-deps minio-bootstrap
