@@ -94,7 +94,7 @@ services:
       retries: 10
 
   minio:
-    image: minio/minio:RELEASE.2025-02-28T09-55-16Z
+    image: quay.io/minio/minio:RELEASE.2025-02-28T09-55-16Z@sha256:a929054ae025fa7997857cd0e2a2e3029238e31ad89877326dc032f4c1a14259
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER}
@@ -106,7 +106,7 @@ services:
       - minio-data:/data
 
   minio-bootstrap:
-    image: minio/mc:RELEASE.2025-03-12T17-29-24Z
+    image: quay.io/minio/mc:RELEASE.2025-03-12T17-29-24Z@sha256:470f5546b596e16c7816b9c3fa7a78ce4076bb73c2c73f7faeec0c8043923123
     depends_on:
       minio:
         condition: service_started
