@@ -1,0 +1,134 @@
+name: Prepare HTTP response helper extraction
+on:
+  push:
+    branches: [preparation/api-http-responses-20260913]
+permissions:
+  contents: write
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: vrata_test
+        ports: [5432:5432]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d vrata_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      BASE_SHA: 473572b68931675308b508ff08f4401659b670e7
+      TARGET_BRANCH: refactor/api-http-responses-20260913
+      EXPECTED_TREE: 29f938e1814fb8ca488b47d7a6ad8cb3ad67541f
+    steps:
+      - name: Checkout preparation with full history
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+      - name: Apply exact extraction and preserve reviewed source bytes
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/verified"
+          cp apps/api/src/http-responses.test.ts "$RUNNER_TEMP/verified/"
+          git checkout --detach "$BASE_SHA"
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib, os
+          p = Path('apps/api/src/index.ts')
+          original = p.read_text()
+          def blob(s):
+              b = s.encode()
+              return hashlib.sha1(b'blob ' + str(len(b)).encode() + b'\0' + b).hexdigest()
+          assert blob(original) == '7cd47def7d04b15d752a4036abde36d2da74f823'
+          blocks = []
+          for start, end in [('function contentType(', 'async function buildManifest('), ('function json(', 'function getHeaderString(')]:
+              a = original.index(start)
+              b = original.index(end, a)
+              blocks.append(original[a:b])
+          header = 'import { existsSync } from "node:fs";\nimport { readFile, stat } from "node:fs/promises";\nimport type { ServerResponse } from "node:http";\nimport { extname, normalize } from "node:path";\n\n'
+          body = ''.join(blocks).rstrip() + '\n'
+          for f in ['json', 'text', 'attachment']:
+              body = body.replace('function ' + f + '(', 'export function ' + f + '(')
+          body = body.replace('async function serveStatic(', 'export async function serveStatic(')
+          module = header + body
+          new = original
+          for block in blocks:
+              new = new.replace(block, '', 1)
+          oldimports = 'import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";\nimport { existsSync } from "node:fs";\n'
+          newimports = 'import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";\n'
+          assert oldimports in new
+          new = new.replace(oldimports, newimports, 1)
+          anchor = 'import { parseBody, readRequestBuffer } from "./request-body.js";\n'
+          imp = '\nimport { serveStatic, json, text, attachment } from "./http-responses.js";\n'
+          new = new.replace(anchor, anchor + imp, 1)
+          reverse = new.replace(imp, '', 1).replace(newimports, oldimports, 1)
+          reverse = reverse.replace('async function buildManifest(', blocks[0] + 'async function buildManifest(', 1)
+          reverse = reverse.replace('function getHeaderString(', blocks[1] + 'function getHeaderString(', 1)
+          assert reverse == original
+          tests = (Path(os.environ['RUNNER_TEMP']) / 'verified/http-responses.test.ts').read_text()
+          assert blob(new) == 'da8426c2083be0711c8724a73618b201d09baff8'
+          assert blob(module) == '6721d0d1dbae219c9a2237d03833f98cc15fe77d'
+          assert blob(tests) == 'a2223e76dac71752f3d9238f1da6dfcf30e6aa52'
+          p.write_text(new)
+          p.with_name('http-responses.ts').write_text(module)
+          p.with_name('http-responses.test.ts').write_text(tests)
+          print('exact_extraction_and_reverse_reconstruction:passed')
+          print('index_lines:3928->3872; module_lines:61; test_lines:331')
+          PY
+          git add apps/api/src/index.ts apps/api/src/http-responses.ts apps/api/src/http-responses.test.ts
+          test "$(git write-tree)" = "$EXPECTED_TREE"
+          git diff --cached --check
+          cp apps/api/src/index.ts apps/api/src/http-responses.ts "$RUNNER_TEMP/verified/"
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Lint
+        run: pnpm lint
+      - name: Typecheck
+        run: pnpm typecheck
+      - name: Build
+        run: pnpm build
+      - name: Contract tests including real HTTP and filesystem operations
+        run: node --test apps/api/dist/http-responses.test.js
+      - name: Workspace tests including PostgreSQL
+        env:
+          VRATA_TEST_POSTGRES_URL: postgres://postgres:postgres@127.0.0.1:5432/vrata_test
+        run: pnpm test
+      - name: Verify tested source stayed unchanged
+        run: |
+          for file in index.ts http-responses.ts http-responses.test.ts; do
+            cmp "apps/api/src/$file" "$RUNNER_TEMP/verified/$file"
+          done
+      - name: Checkout clean publication base independently of tests
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ env.BASE_SHA }}
+          path: publication
+          fetch-depth: 1
+      - name: Publish only the three reviewed code files
+        working-directory: publication
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git ls-remote origin refs/heads/main | cut -f1)" = "$BASE_SHA"
+          test -z "$(git ls-remote origin "refs/heads/$TARGET_BRANCH")"
+          cp "$RUNNER_TEMP/verified/"*.ts apps/api/src/
+          git add apps/api/src/index.ts apps/api/src/http-responses.ts apps/api/src/http-responses.test.ts
+          test "$(git write-tree)" = "$EXPECTED_TREE"
+          test "$(git diff --cached --name-only | wc -l)" -eq 3
+          git diff --cached --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'refactor(api): extract HTTP response helpers' -m 'Mechanically move five existing functions. Preserve exact headers, call-time CORS, serialization and response error ordering, static bytes and missing-file fallback. Add 32 contract tests with real HTTP and filesystem operations. Only three code files; preparation workflow excluded.'
+          test "$(git rev-parse HEAD^{tree})" = "$EXPECTED_TREE"
+          git push origin "HEAD:refs/heads/$TARGET_BRANCH"
+          echo "candidate_sha:$(git rev-parse HEAD)"
+          echo "candidate_tree:$(git rev-parse HEAD^{tree})"
