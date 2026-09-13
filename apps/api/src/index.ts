@@ -92,6 +92,8 @@ import {
   normalizePersonalState
 } from "./personal-room-rules.js";
 
+import { createRoomPresence, type PresenceRecord } from "./room-presence.js";
+
 import {
   appendXrTelemetryRecord,
   cloneXrTelemetryBuffer,
@@ -214,25 +216,6 @@ interface ControlPlaneAuthorizationOptions {
   currentHostParticipantId?: string | null;
 }
 
-interface PresenceRecord {
-  participantId: string;
-  displayName: string;
-  role?: RoomRole;
-  permissions?: RoomPermission[];
-  mode: "desktop" | "mobile" | "vr";
-  rootTransform: { x: number; y: number; z: number; yaw?: number; pitch?: number; roll?: number };
-  headTransform?: { x: number; y: number; z: number; yaw?: number; pitch?: number; roll?: number };
-  bodyTransform?: { x: number; y: number; z: number; yaw?: number; pitch?: number; roll?: number };
-  audioJoined?: boolean;
-  muted: boolean;
-  speaking?: boolean;
-  activeMedia: { audio: boolean; screenShare: boolean };
-  seq?: number;
-  clientTimeMs?: number;
-  serverTimeMs?: number;
-  updatedAt: string;
-}
-
 interface RuntimeSpaceRecord {
   roomId: string;
   tenantId: string;
@@ -274,6 +257,7 @@ const storagePromise = createStorage();
 const requiredProductionApiEnvVars = ["CONTROL_PLANE_ADMIN_TOKEN", "ROOM_STATE_PUBLIC_URL", "RUNTIME_BASE_URL", "STATE_TOKEN_SECRET", "LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET"] as const;
 
 const presenceByRoom = new Map<string, Map<string, PresenceRecord>>();
+const { getPresence, upsertPresence, deletePresence, cleanupAllPresence, activeParticipantCount } = createRoomPresence(presenceByRoom, presenceTtlMs);
 const xrTelemetryByRoom = new Map<string, Map<string, XrTelemetryParticipantBuffer>>();
 const controlPlaneAuditLog: ControlPlaneAuditLogEntry[] = [];
 const CONTROL_PLANE_AUDIT_LIMIT = 1000;
@@ -458,16 +442,6 @@ function createInviteLink(roomId: string, inviteToken: string, request?: Incomin
   return url.toString();
 }
 
-function cleanupPresence(roomId: string): void {
-  const roomPresence = presenceByRoom.get(roomId);
-  if (!roomPresence) return;
-  const now = Date.now();
-  for (const [participantId, state] of roomPresence.entries()) {
-    if (now - Date.parse(state.updatedAt) > presenceTtlMs) roomPresence.delete(participantId);
-  }
-  if (roomPresence.size === 0) presenceByRoom.delete(roomId);
-}
-
 async function upsertXrTelemetry(roomId: string, participantId: string, payload: XrTelemetryRecord): Promise<void> {
   const roomTelemetry = xrTelemetryByRoom.get(roomId) ?? new Map<string, XrTelemetryParticipantBuffer>();
   const nextRecord = createXrTelemetryRecord(roomId, participantId, payload);
@@ -512,22 +486,6 @@ async function listXrTelemetry(roomId: string): Promise<Array<XrTelemetryRecord 
     })
     .filter((entry): entry is XrTelemetryRecord & { history: XrTelemetryRecord[] } => entry !== null)
     .sort((left, right) => left.participantId.localeCompare(right.participantId));
-}
-
-function getPresence(roomId: string): PresenceRecord[] {
-  cleanupPresence(roomId);
-  return Array.from(presenceByRoom.get(roomId)?.values() ?? []);
-}
-
-function upsertPresence(roomId: string, participantId: string, payload: PresenceRecord): void {
-  cleanupPresence(roomId);
-  const roomPresence = presenceByRoom.get(roomId) ?? new Map<string, PresenceRecord>();
-  roomPresence.set(participantId, payload);
-  presenceByRoom.set(roomId, roomPresence);
-}
-
-function deletePresence(roomId: string, participantId: string): void {
-  presenceByRoom.get(roomId)?.delete(participantId);
 }
 
 async function buildManifest(roomId: string, request?: IncomingMessage): Promise<RoomManifest> {
@@ -610,21 +568,6 @@ function attachRequestId(request: IncomingMessage, response: ServerResponse): st
 function incrementCounter(counter: Map<string, number>, reason: string | undefined, amount = 1): void {
   const label = reason && reason.trim().length > 0 ? reason : "unknown";
   counter.set(label, (counter.get(label) ?? 0) + amount);
-}
-
-function cleanupAllPresence(): void {
-  for (const roomId of Array.from(presenceByRoom.keys())) {
-    cleanupPresence(roomId);
-  }
-}
-
-function activeParticipantCount(): number {
-  cleanupAllPresence();
-  let total = 0;
-  for (const roomPresence of presenceByRoom.values()) {
-    total += roomPresence.size;
-  }
-  return total;
 }
 
 function formatMetricLine(name: string, value: number, labels?: Record<string, string>): string {
