@@ -1,0 +1,134 @@
+name: Prepare room presence extraction
+on:
+  push:
+    branches: [preparation/api-room-presence-20260913]
+permissions:
+  contents: write
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: vrata_test
+        ports: [5432:5432]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d vrata_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      BASE_SHA: 3a9b29abd0adb4252e9e6837f356ab363d02cc7b
+      TARGET_BRANCH: refactor/api-room-presence-20260913
+    steps:
+      - name: Checkout preparation
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+      - name: Apply exact extraction and preserve reviewed source bytes
+        shell: bash
+        run: |
+          cp apps/api/src/room-presence.test.ts "$RUNNER_TEMP/room-presence.test.ts"
+          git checkout --detach "$BASE_SHA"
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib
+          import os
+          p = Path('apps/api/src/index.ts')
+          original = p.read_text()
+          def blob(s):
+              b = s.encode()
+              return hashlib.sha1(b'blob ' + str(len(b)).encode() + b'\0' + b).hexdigest()
+          assert blob(original) == 'da8426c2083be0711c8724a73618b201d09baff8'
+          ranges = [('interface PresenceRecord {', 'interface RuntimeSpaceRecord {'), ('function cleanupPresence(', 'async function upsertXrTelemetry('), ('function getPresence(', 'async function buildManifest('), ('function cleanupAllPresence(', 'function formatMetricLine(')]
+          blocks = [original[original.index(a):original.index(b)] for a, b in ranges]
+          functions = ''.join(blocks[1:]).rstrip() + '\n'
+          header = 'import type { RoomPermission, RoomRole } from "@vrata/shared-types";\n\n'
+          module = header + 'export ' + blocks[0] + 'export function createRoomPresence(presenceByRoom: Map<string, Map<string, PresenceRecord>>, presenceTtlMs: number) {\n' + ''.join(('  ' + line if line.strip() else line) for line in functions.splitlines(keepends=True)) + '\n  return { getPresence, upsertPresence, deletePresence, cleanupAllPresence, activeParticipantCount };\n}\n'
+          imp = 'import { createRoomPresence, type PresenceRecord } from "./room-presence.js";\n\n'
+          new = original.replace('import {\n  appendXrTelemetryRecord,', imp + 'import {\n  appendXrTelemetryRecord,', 1)
+          for block in blocks:
+              new = new.replace(block, '', 1)
+          anchor = 'const presenceByRoom = new Map<string, Map<string, PresenceRecord>>();\n'
+          init = 'const { getPresence, upsertPresence, deletePresence, cleanupAllPresence, activeParticipantCount } = createRoomPresence(presenceByRoom, presenceTtlMs);\n'
+          new = new.replace(anchor, anchor + init, 1)
+          reverse = new.replace(imp, '', 1).replace(init, '', 1)
+          for (_, end), block in zip(ranges, blocks):
+              reverse = reverse.replace(end, block + end, 1)
+          assert reverse == original
+          tests = (Path(os.environ['RUNNER_TEMP']) / 'room-presence.test.ts').read_text()
+          assert blob(new) == '231f0c090ec5bbe168693d2d2c1208aa929dd1aa'
+          assert blob(module) == 'b2c0bbee36b3d2dcb511d5c5c64172cc6b0db465'
+          assert blob(tests) == '34baf6834330be752e1c28d7f0f81bde6b2fec8a'
+          p.write_text(new)
+          p.with_name('room-presence.ts').write_text(module)
+          p.with_name('room-presence.test.ts').write_text(tests)
+          reviewed = Path(os.environ['RUNNER_TEMP']) / 'reviewed'
+          reviewed.mkdir()
+          for name in ['index.ts', 'room-presence.ts', 'room-presence.test.ts']:
+              (reviewed / name).write_bytes(p.with_name(name).read_bytes())
+          print('exact_extraction_and_inverse_reconstruction:passed')
+          print('index_lines:3872->3815; module_lines:65; tests_lines:229; tests:25')
+          PY
+          git add apps/api/src/index.ts apps/api/src/room-presence.ts apps/api/src/room-presence.test.ts
+          git diff --cached --check
+          git write-tree > "$RUNNER_TEMP/verified-tree.txt"
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Lint
+        run: pnpm lint
+      - name: Typecheck
+        run: pnpm typecheck
+      - name: Build
+        run: pnpm build
+      - name: Room presence contract tests
+        run: node --test apps/api/dist/room-presence.test.js
+      - name: Workspace tests including PostgreSQL
+        env:
+          VRATA_TEST_POSTGRES_URL: postgres://postgres:postgres@127.0.0.1:5432/vrata_test
+        run: pnpm test
+      - name: Verify tested source stayed unchanged
+        run: |
+          for name in index.ts room-presence.ts room-presence.test.ts; do
+            cmp "apps/api/src/$name" "$RUNNER_TEMP/reviewed/$name"
+          done
+      - name: Checkout clean publication base independently of tests
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ env.BASE_SHA }}
+          path: publication
+      - name: Publish only the three reviewed code files
+        working-directory: publication
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git ls-remote origin refs/heads/main | cut -f1)" = "$BASE_SHA"
+          test -z "$(git ls-remote origin "refs/heads/$TARGET_BRANCH")"
+          cp "$RUNNER_TEMP/reviewed/"*.ts apps/api/src/
+          git add apps/api/src/index.ts apps/api/src/room-presence.ts apps/api/src/room-presence.test.ts
+          git diff --cached --check
+          test "$(git diff --cached --name-only | wc -l)" -eq 3
+          test "$(git write-tree)" = "$(cat "$RUNNER_TEMP/verified-tree.txt")"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'refactor(api): extract room presence operations' -m 'Move the existing presence type and six functions into an injected-state module. Preserve map ownership, startup TTL parsing, reference semantics, expiry boundary, room-key snapshot and clock reads. Add 25 contract tests. Only three code files; preparation workflow excluded.'
+          git push origin "HEAD:refs/heads/$TARGET_BRANCH"
+          mkdir -p "$RUNNER_TEMP/source-evidence"
+          git rev-parse HEAD > "$RUNNER_TEMP/source-evidence/candidate-sha.txt"
+          git rev-parse HEAD^{tree} > "$RUNNER_TEMP/source-evidence/candidate-tree.txt"
+          git archive --format=tar.gz HEAD > "$RUNNER_TEMP/source-evidence/candidate-source.tgz"
+          echo "candidate_sha:$(git rev-parse HEAD)"
+          echo "candidate_tree:$(git rev-parse HEAD^{tree})"
+      - name: Preserve exact published source
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: room-presence-source-${{ github.run_id }}
+          path: ${{ runner.temp }}/source-evidence/
+          retention-days: 14
