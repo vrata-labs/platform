@@ -99,14 +99,8 @@ import {
 
 import { createRoomPresence, type PresenceRecord } from "./room-presence.js";
 
-import {
-  appendXrTelemetryRecord,
-  cloneXrTelemetryBuffer,
-  createXrTelemetryRecord,
-  mergeXrTelemetryBuffers,
-  type XrTelemetryParticipantBuffer,
-  type XrTelemetryRecord
-} from "./xr-telemetry-buffer.js";
+import { createXrTelemetryService } from "./xr-telemetry-service.js";
+import type { XrTelemetryRecord } from "./xr-telemetry-buffer.js";
 
 import {
   getRequestHost,
@@ -245,7 +239,7 @@ const requiredProductionApiEnvVars = ["CONTROL_PLANE_ADMIN_TOKEN", "ROOM_STATE_P
 
 const presenceByRoom = new Map<string, Map<string, PresenceRecord>>();
 const { getPresence, upsertPresence, deletePresence, cleanupAllPresence, activeParticipantCount } = createRoomPresence(presenceByRoom, presenceTtlMs);
-const xrTelemetryByRoom = new Map<string, Map<string, XrTelemetryParticipantBuffer>>();
+const { upsertXrTelemetry, listXrTelemetry } = createXrTelemetryService(storagePromise);
 const controlPlaneAuditLog: ControlPlaneAuditLogEntry[] = [];
 const CONTROL_PLANE_AUDIT_LIMIT = 1000;
 const requestIds = new WeakMap<IncomingMessage, string>();
@@ -379,52 +373,6 @@ function createInviteLink(roomId: string, inviteToken: string, request?: Incomin
   const url = new URL(createRoomLink(roomId, request));
   url.searchParams.set("invite", inviteToken);
   return url.toString();
-}
-
-async function upsertXrTelemetry(roomId: string, participantId: string, payload: XrTelemetryRecord): Promise<void> {
-  const roomTelemetry = xrTelemetryByRoom.get(roomId) ?? new Map<string, XrTelemetryParticipantBuffer>();
-  const nextRecord = createXrTelemetryRecord(roomId, participantId, payload);
-  const shouldPersist = appendXrTelemetryRecord(roomTelemetry, nextRecord);
-  xrTelemetryByRoom.set(roomId, roomTelemetry);
-  if (shouldPersist) {
-    const storage = await storagePromise;
-    await storage.addXrTelemetry(roomId, participantId, structuredClone(nextRecord) as unknown as Record<string, unknown>);
-  }
-}
-
-async function listXrTelemetry(roomId: string): Promise<Array<XrTelemetryRecord & { history: XrTelemetryRecord[] }>> {
-  const storage = await storagePromise;
-  const persistedTelemetry = new Map<string, XrTelemetryParticipantBuffer>();
-  for (const entry of await storage.getXrTelemetry(roomId)) {
-    appendXrTelemetryRecord(
-      persistedTelemetry,
-      createXrTelemetryRecord(roomId, entry.participantId, entry.payload as unknown as XrTelemetryRecord)
-    );
-  }
-
-  const liveTelemetry = xrTelemetryByRoom.get(roomId) ?? new Map<string, XrTelemetryParticipantBuffer>();
-  const participantIds = new Set<string>([...persistedTelemetry.keys(), ...liveTelemetry.keys()]);
-  return Array.from(participantIds)
-    .map((participantId) => {
-      const persisted = persistedTelemetry.get(participantId);
-      const live = liveTelemetry.get(participantId);
-      const merged = persisted && live
-        ? mergeXrTelemetryBuffers(persisted, live)
-        : persisted
-          ? cloneXrTelemetryBuffer(persisted)
-          : live
-            ? cloneXrTelemetryBuffer(live)
-            : null;
-      if (!merged) {
-        return null;
-      }
-      return {
-        ...merged.latest,
-        history: merged.history
-      };
-    })
-    .filter((entry): entry is XrTelemetryRecord & { history: XrTelemetryRecord[] } => entry !== null)
-    .sort((left, right) => left.participantId.localeCompare(right.participantId));
 }
 
 const buildManifest = createRoomManifestBuilder(storagePromise);
