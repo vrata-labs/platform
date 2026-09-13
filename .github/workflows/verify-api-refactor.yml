@@ -1,0 +1,102 @@
+name: Verify deployed API refactor
+on:
+  push:
+    branches: [verification/api-room-manifest-20260913]
+    paths: [.github/workflows/verify-api-refactor.yml]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      EXPECTED_SHA: 8290fb37ec0cf41cbe2793b4f1bfd2e4bf31601a
+      TARGET_TEST: upload-storage-config
+      BASE_URL: ${{ secrets.STAGING_BASE_URL }}
+      STAGING_SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
+      STAGING_SSH_USER: ${{ secrets.STAGING_SSH_USER }}
+      STAGING_APP_DIR: ${{ secrets.STAGING_APP_DIR }}
+    steps:
+      - name: Verify deployed SHA, health and isolated contract tests
+        env:
+          STAGING_SSH_KEY: ${{ secrets.STAGING_SSH_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$TARGET_TEST" =~ ^[a-z-]+$ ]]
+          key="$(mktemp "$RUNNER_TEMP/vrata-verify-key.XXXXXX")"
+          trap 'rm -f "$key"' EXIT
+          chmod 600 "$key"
+          printf '%s\n' "$STAGING_SSH_KEY" > "$key"
+          command="$(printf 'sudo -n bash -s -- %q %q %q' "$EXPECTED_SHA" "$STAGING_APP_DIR" "$TARGET_TEST")"
+          ssh -i "$key" -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new "$STAGING_SSH_USER@$STAGING_SSH_HOST" "$command" <<'REMOTE'
+          set -euo pipefail
+          EXPECTED_SHA="$1"
+          APP_DIR="$2"
+          TARGET_TEST="$3"
+          cd "$APP_DIR"
+          test "$(git -c safe.directory="$APP_DIR" rev-parse HEAD)" = "$EXPECTED_SHA"
+          test "$(cat infra/docker/.staging-successful-image-tag)" = "$EXPECTED_SHA"
+          echo "successful_staging_sha_verified:$EXPECTED_SHA"
+          for service in api room-state remote-browser; do
+            id="$(docker compose --env-file infra/docker/.env.staging -f infra/docker/compose.staging.yml ps -q "$service")"
+            test -n "$id"
+            image="$(docker inspect --format '{{.Config.Image}}' "$id")"
+            health="$(docker inspect --format '{{.State.Health.Status}}' "$id")"
+            case "$image" in *":$EXPECTED_SHA") ;; *) echo "wrong_image:$service"; exit 1;; esac
+            test "$health" = healthy
+            echo "running_image_verified:$service:$EXPECTED_SHA:$health"
+            if [ "$service" = api ]; then API_CONTAINER="$id"; fi
+          done
+          # Separate process; fixtures do not read or write the live database.
+          docker exec -w /app "$API_CONTAINER" node --test "apps/api/dist/$TARGET_TEST.test.js"
+          test "$(git -c safe.directory="$APP_DIR" rev-parse HEAD)" = "$EXPECTED_SHA"
+          test "$(cat infra/docker/.staging-successful-image-tag)" = "$EXPECTED_SHA"
+          REMOTE
+      - name: Verify public endpoints and room manifests without logging bodies
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          const base = process.env.BASE_URL.replace(/\/$/, '');
+          for (const path of ['/health', '/rooms/demo-room', '/control-plane']) {
+            const response = await fetch(base + path, { signal: AbortSignal.timeout(15000) });
+            assert.equal(response.status, 200, path);
+            await response.arrayBuffer();
+            console.log(`public_endpoint_verified:${path}:200`);
+          }
+          const rooms = [
+            ['demo', 'demo-room'],
+            ['Hall', '42db8225-f671-4e46-9c28-9381d66a948c'],
+            ['BlueOffice', '0b537d34-7b92-4b51-854a-8c64cfb4c114'],
+            ['ArtGallery', 'c17bcb81-fcd2-4432-94be-688f16a61037'],
+            ['missing', `manifest-check-${process.env.EXPECTED_SHA}`]
+          ];
+          for (const [name, id] of rooms) {
+            const requestId = `refactor-manifest-${name}`;
+            const response = await fetch(`${base}/api/rooms/${id}/manifest`, {
+              headers: { 'x-request-id': requestId }, signal: AbortSignal.timeout(15000)
+            });
+            assert.equal(response.status, 200, name);
+            assert.equal(response.headers.get('x-request-id'), requestId);
+            assert.equal(response.headers.get('content-type'), 'application/json; charset=utf-8');
+            const manifest = await response.json();
+            assert.equal(manifest.schemaVersion, 1);
+            assert.equal(manifest.roomId, id);
+            assert.equal(typeof manifest.templateVersion, 'string');
+            assert.ok(manifest.templateSnapshot && typeof manifest.templateSnapshot === 'object');
+            assert.ok(Array.isArray(manifest.assets));
+            assert.equal(typeof manifest.realtime.roomStateUrl, 'string');
+            if (name === 'missing') {
+              assert.equal(manifest.template, 'meeting-room-basic');
+              assert.equal(manifest.sceneBundle, undefined);
+              assert.deepEqual(manifest.assets, []);
+            } else if (name !== 'demo') {
+              assert.equal(typeof manifest.sceneBundle?.url, 'string');
+              assert.ok(manifest.sceneBundle.url.length > 0);
+            }
+            console.log(`public_manifest_verified:${name}:200:schema-1:request-id`);
+          }
+          NODE
