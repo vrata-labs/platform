@@ -93,11 +93,29 @@ jobs:
         env:
           VRATA_TEST_POSTGRES_URL: postgres://postgres:postgres@127.0.0.1:5432/vrata_test
         run: pnpm test
-      - name: Publish only the three reviewed code files
+      - name: Preserve the verified source bytes
         shell: bash
         run: |
+          test "$(git hash-object apps/api/src/index.ts)" = af3ac8410a1faa72e4a179c4c2a224e0ed5aef52
+          test "$(git hash-object apps/api/src/room-session-control.ts)" = c17bf9ab6450c673b9e3330b615c89acc92dfc00
+          test "$(git hash-object apps/api/src/room-session-control.test.ts)" = b95f2837f594648e320c6fe45591a599531b6570
+          mkdir "$RUNNER_TEMP/verified-source"
+          cp apps/api/src/index.ts apps/api/src/room-session-control.ts apps/api/src/room-session-control.test.ts "$RUNNER_TEMP/verified-source/"
+      - name: Checkout clean publication base independently of tests
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ env.BASE_SHA }}
+          fetch-depth: 0
+          path: publish-candidate
+      - name: Publish only the three reviewed code files
+        shell: bash
+        working-directory: publish-candidate
+        run: |
+          test "$(git rev-parse HEAD)" = "$BASE_SHA"
           test "$(git ls-remote origin refs/heads/main | cut -f1)" = "$BASE_SHA"
           test -z "$(git ls-remote origin "refs/heads/$TARGET_BRANCH")"
+          cp "$RUNNER_TEMP/verified-source/"*.ts apps/api/src/
+          git add apps/api/src/index.ts apps/api/src/room-session-control.ts apps/api/src/room-session-control.test.ts
           git diff --exit-code
           test "$(git write-tree)" = "$EXPECTED_TREE"
           test "$(git diff --cached --name-only | wc -l)" -eq 3
