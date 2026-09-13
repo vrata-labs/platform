@@ -1,0 +1,64 @@
+name: Diagnose PR79 staging transfer progress
+on:
+  push:
+    branches: [diagnostics/pr79-staging-transfer-20260913]
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    env:
+      BASE_URL: ${{ secrets.STAGING_BASE_URL }}
+      STAGING_SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
+      STAGING_SSH_USER: ${{ secrets.STAGING_SSH_USER }}
+      STAGING_APP_DIR: ${{ secrets.STAGING_APP_DIR }}
+      PRIVATE_SCENE_ASSETS_HOST_DIR: ${{ secrets.PRIVATE_SCENE_ASSETS_HOST_DIR }}
+    steps:
+      - name: Read deployment state and bounded transfer progress samples
+        env:
+          STAGING_SSH_KEY: ${{ secrets.STAGING_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          key="$(mktemp "$RUNNER_TEMP/vrata-inspect-key.XXXXXX")"
+          trap 'rm -f "$key"' EXIT
+          chmod 600 "$key"
+          printf '%s\n' "$STAGING_SSH_KEY" > "$key"
+          command="$(printf 'sudo -n bash -s -- %q %q' "$STAGING_APP_DIR" "$PRIVATE_SCENE_ASSETS_HOST_DIR")"
+          ssh -i "$key" -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new "$STAGING_SSH_USER@$STAGING_SSH_HOST" "$command" <<'REMOTE'
+          set -euo pipefail
+          APP_DIR="$1"
+          ASSETS_DIR="$2"
+          cd "$APP_DIR"
+          echo "checkout_sha:$(git -c safe.directory="$APP_DIR" rev-parse HEAD)"
+          echo "saved_successful_sha:$(cat infra/docker/.staging-successful-image-tag)"
+          df -P "$APP_DIR" | awk 'NR==2 {print "filesystem_available_kb:" $4 " used:" $5}'
+          df -Pi "$APP_DIR" | awk 'NR==2 {print "filesystem_free_inodes:" $4 " used:" $5}'
+          for service in api room-state remote-browser; do
+            id="$(docker compose --env-file infra/docker/.env.staging -f infra/docker/compose.staging.yml ps -q "$service")"
+            if [ -n "$id" ]; then
+              revision="$(docker inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$id")"
+              health="$(docker inspect --format '{{.State.Health.Status}}' "$id")"
+              echo "container_state:$service:$revision:$health"
+            else
+              echo "container_state:$service:missing"
+            fi
+          done
+          for sample in 1 2 3; do
+            size="$(du -sb "$ASSETS_DIR/assets" 2>/dev/null | cut -f1 || true)"
+            echo "asset_transfer_sample:$sample:$(date -u +%FT%TZ):bytes:${size:-unavailable}"
+            ps -eo comm= | awk '$1 ~ /^(sshd|tar|gzip|pigz)$/ {count[$1]++} END {for (name in count) print "transfer_process_count:" name ":" count[name]}'
+            if [ "$sample" -lt 3 ]; then sleep 10; fi
+          done
+          REMOTE
+      - name: Read public HTTPS status without logging response bodies
+        if: always()
+        run: |
+          set -euo pipefail
+          for path in /health /rooms/demo-room /control-plane; do
+            if code="$(curl --silent --show-error --connect-timeout 10 --max-time 20 --output /dev/null --write-out '%{http_code}' "${BASE_URL%/}$path")"; then
+              echo "public_http_status:$path:$code"
+            else
+              echo "public_http_probe_failed:$path"
+            fi
+          done
