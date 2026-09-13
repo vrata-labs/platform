@@ -1,0 +1,69 @@
+name: Verify deployed API metrics extraction
+on:
+  push:
+    branches: [verification/api-metrics-20260913]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      EXPECTED_SHA: 7dad714153f83b609d47313883130e79fca5ebaf
+      BASE_URL: ${{ secrets.STAGING_BASE_URL }}
+      STAGING_SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
+      STAGING_SSH_USER: ${{ secrets.STAGING_SSH_USER }}
+      STAGING_APP_DIR: ${{ secrets.STAGING_APP_DIR }}
+    steps:
+      - name: Verify exact images and isolated metrics contracts
+        env:
+          STAGING_SSH_KEY: ${{ secrets.STAGING_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          key="$(mktemp "$RUNNER_TEMP/vrata-verify-key.XXXXXX")"
+          trap 'rm -f "$key"' EXIT
+          chmod 600 "$key"
+          printf '%s\n' "$STAGING_SSH_KEY" > "$key"
+          command="$(printf 'sudo -n bash -s -- %q %q' "$EXPECTED_SHA" "$STAGING_APP_DIR")"
+          ssh -i "$key" -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new "$STAGING_SSH_USER@$STAGING_SSH_HOST" "$command" <<'REMOTE'
+          set -euo pipefail
+          EXPECTED_SHA="$1"
+          APP_DIR="$2"
+          cd "$APP_DIR"
+          test "$(git -c safe.directory="$APP_DIR" rev-parse HEAD)" = "$EXPECTED_SHA"
+          test "$(cat infra/docker/.staging-successful-image-tag)" = "$EXPECTED_SHA"
+          echo "successful_staging_sha_verified:$EXPECTED_SHA"
+          for service in api room-state remote-browser; do
+            id="$(docker compose --env-file infra/docker/.env.staging -f infra/docker/compose.staging.yml ps -q "$service")"
+            test -n "$id"
+            image="$(docker inspect --format '{{.Config.Image}}' "$id")"
+            health="$(docker inspect --format '{{.State.Health.Status}}' "$id")"
+            case "$image" in *":$EXPECTED_SHA") ;; *) echo "wrong_image:$service"; exit 1;; esac
+            test "$health" = healthy
+            echo "running_image_verified:$service:$EXPECTED_SHA:$health"
+            if [ "$service" = api ]; then API_CONTAINER="$id"; fi
+          done
+          docker exec -w /app "$API_CONTAINER" node --test apps/api/dist/api-metrics.test.js
+          docker exec -i -w /app "$API_CONTAINER" node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          const response = await fetch(`http://127.0.0.1:${process.env.API_PORT ?? '4000'}/metrics`, { signal: AbortSignal.timeout(15000) });
+          assert.equal(response.status, 200);
+          const body = await response.text();
+          assert.equal((body.match(/^# TYPE /gm) ?? []).length, 51);
+          for (const name of ['vrata_active_rooms', 'vrata_active_participants', 'vrata_rooms_total']) {
+            assert.ok(new RegExp(`^${name} [0-9]+$`, 'm').test(body));
+          }
+          console.log('running_metrics_verified:200:51-families');
+          NODE
+          test "$(git -c safe.directory="$APP_DIR" rev-parse HEAD)" = "$EXPECTED_SHA"
+          test "$(cat infra/docker/.staging-successful-image-tag)" = "$EXPECTED_SHA"
+          REMOTE
+      - name: Check public HTTPS endpoints without logging bodies
+        run: |
+          set -euo pipefail
+          for path in /health /rooms/demo-room /control-plane /metrics; do
+            code="$(curl --silent --show-error --fail --connect-timeout 10 --max-time 30 --output /dev/null --write-out '%{http_code}' "${BASE_URL%/}$path")"
+            test "$code" = 200
+            echo "http_check:$path:$code"
+          done
