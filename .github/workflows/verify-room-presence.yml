@@ -1,0 +1,80 @@
+name: Verify deployed room presence extraction
+on:
+  push:
+    branches: [verification/api-room-presence-20260913]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      EXPECTED_SHA: 93b4a0aa8d1a7e49b859b914cbc1d7bbfb620432
+      BASE_URL: ${{ secrets.STAGING_BASE_URL }}
+      STAGING_SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
+      STAGING_SSH_USER: ${{ secrets.STAGING_SSH_USER }}
+      STAGING_APP_DIR: ${{ secrets.STAGING_APP_DIR }}
+    steps:
+      - name: Verify running images and isolated presence contracts
+        env:
+          STAGING_SSH_KEY: ${{ secrets.STAGING_SSH_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          key="$(mktemp "$RUNNER_TEMP/vrata-verify-key.XXXXXX")"
+          trap 'rm -f "$key"' EXIT
+          chmod 600 "$key"
+          printf '%s\n' "$STAGING_SSH_KEY" > "$key"
+          command="$(printf 'sudo -n bash -s -- %q %q' "$EXPECTED_SHA" "$STAGING_APP_DIR")"
+          ssh -i "$key" -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new "$STAGING_SSH_USER@$STAGING_SSH_HOST" "$command" <<'REMOTE'
+          set -euo pipefail
+          EXPECTED_SHA="$1"
+          APP_DIR="$2"
+          cd "$APP_DIR"
+          test "$(git -c safe.directory="$APP_DIR" rev-parse HEAD)" = "$EXPECTED_SHA"
+          test "$(cat infra/docker/.staging-successful-image-tag)" = "$EXPECTED_SHA"
+          echo "successful_staging_sha_verified:$EXPECTED_SHA"
+          for service in api room-state remote-browser; do
+            id="$(docker compose --env-file infra/docker/.env.staging -f infra/docker/compose.staging.yml ps -q "$service")"
+            test -n "$id"
+            image="$(docker inspect --format '{{.Config.Image}}' "$id")"
+            health="$(docker inspect --format '{{.State.Health.Status}}' "$id")"
+            case "$image" in *":$EXPECTED_SHA") ;; *) echo "wrong_image:$service"; exit 1;; esac
+            test "$health" = healthy
+            echo "running_image_verified:$service:$EXPECTED_SHA:$health"
+            if [ "$service" = api ]; then API_CONTAINER="$id"; fi
+          done
+          # Separate process with isolated in-memory maps; no live room writes.
+          docker exec -w /app "$API_CONTAINER" node --test apps/api/dist/room-presence.test.js
+          docker exec -i -w /app "$API_CONTAINER" node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          const base = `http://127.0.0.1:${process.env.API_PORT ?? '4000'}`;
+          const presence = await fetch(`${base}/api/rooms/demo-room/presence`, {
+            headers: { 'x-request-id': 'pr77-presence-verification' }, signal: AbortSignal.timeout(15000)
+          });
+          assert.equal(presence.status, 200);
+          assert.equal(presence.headers.get('x-request-id'), 'pr77-presence-verification');
+          assert.ok(Array.isArray((await presence.json()).items));
+          console.log('running_presence_contract_verified:200:items-array:request-id');
+          const metrics = await fetch(`${base}/metrics`, { signal: AbortSignal.timeout(15000) });
+          assert.equal(metrics.status, 200);
+          const body = await metrics.text();
+          for (const name of ['vrata_active_rooms', 'vrata_active_participants']) {
+            const match = body.match(new RegExp(`^${name} ([0-9]+)$`, 'm'));
+            assert.ok(match, name);
+            console.log(`running_metric_verified:${name}:${match[1]}`);
+          }
+          NODE
+          test "$(git -c safe.directory="$APP_DIR" rev-parse HEAD)" = "$EXPECTED_SHA"
+          test "$(cat infra/docker/.staging-successful-image-tag)" = "$EXPECTED_SHA"
+          REMOTE
+      - name: Check public HTTPS endpoints without logging bodies
+        shell: bash
+        run: |
+          set -euo pipefail
+          for path in /health /rooms/demo-room /control-plane /api/rooms/demo-room/presence /metrics; do
+            code="$(curl --silent --show-error --fail --connect-timeout 10 --max-time 30 --output /dev/null --write-out '%{http_code}' "${BASE_URL%/}$path")"
+            test "$code" = 200
+            echo "http_check:$path:$code"
+          done
