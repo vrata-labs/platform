@@ -1,0 +1,157 @@
+name: Prepare API metrics extraction
+on:
+  push:
+    branches: [preparation/api-metrics-20260913]
+permissions:
+  contents: write
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      BASE_SHA: 93b4a0aa8d1a7e49b859b914cbc1d7bbfb620432
+      EXPECTED_TREE: 5baf386bddc095b9a0e9c81af424ba85f40844bc
+      TARGET_BRANCH: refactor/api-metrics-20260913
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: vrata_test
+        ports: [5432:5432]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d vrata_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - name: Checkout preparation
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Apply exact extraction and preserve reviewed bytes
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import os, re, subprocess, hashlib, shutil
+          root = Path.cwd()
+          path = root / 'apps/api/src/index.ts'
+          old = path.read_text()
+          def blob(text):
+              data = text.encode()
+              return hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
+          assert blob(old) == '231f0c090ec5bbe168693d2d2c1208aa929dd1aa'
+          assert blob((root / 'AGENTS.md').read_text()) == '444218fb39af0ca11327fef9638b3373a5787dab'
+          assert old == subprocess.check_output(['git', 'show', os.environ['BASE_SHA'] + ':apps/api/src/index.ts'], text=True)
+          def function(name):
+              match = re.search(r'^(?:async )?function ' + name + r'\(', old, re.M)
+              assert match
+              end = old.index('\n}\n', match.start()) + 3
+              return old[match.start():end]
+          state = old[old.index('const metrics = {'):old.index('\n};', old.index('const metrics = {')) + 3] + '\n'
+          blocks = {name: function(name) for name in ['incrementCounter', 'formatMetricLine', 'apiMetricsText']}
+          replacement = 'const { metrics, apiMetricsText } = createApiMetrics(presenceByRoom, cleanupAllPresence, activeParticipantCount);\n'
+          imports = 'import { createApiMetrics, incrementCounter } from "./api-metrics.js";\n\n'
+          new = old.replace(state, replacement)
+          for block in blocks.values():
+              assert new.count(block + '\n') == 1
+              new = new.replace(block + '\n', '')
+          anchor = 'import { serveStatic, json, text, attachment } from "./http-responses.js";\n\n'
+          assert new.count(anchor) == 1
+          new = new.replace(anchor, anchor + imports)
+          indent = lambda text: ''.join(('  ' + line if line.strip() else line) for line in text.splitlines(keepends=True))
+          module = ('import type { Storage } from "./storage.js";\n'
+                    'import { defaultSessionControlState } from "./room-session-control.js";\n\n'
+                    'export ' + blocks['incrementCounter'] + '\n' + blocks['formatMetricLine'] + '\n'
+                    'export function createApiMetrics(\n'
+                    '  presenceByRoom: ReadonlyMap<string, unknown>,\n'
+                    '  cleanupAllPresence: () => void,\n'
+                    '  activeParticipantCount: () => number\n'
+                    ') {\n' + indent(state) + '\n'
+                    + indent(blocks['apiMetricsText'].replace('Awaited<typeof storagePromise>', 'Pick<Storage, "listRooms">'))
+                    + '\n  return { metrics, apiMetricsText };\n}\n')
+          restored = new.replace(imports, '').replace(replacement, state)
+          for name, block in reversed(list(blocks.items())):
+              offset = old.index(block) + len(block) + 1
+              line = old[offset:old.index('\n', offset) + 1]
+              assert restored.count(line) == 1
+              restored = restored.replace(line, block + '\n' + line)
+          assert restored == old
+          tests = (root / 'tools/api-metrics.contract.ts').read_text()
+          expected = {
+              'index.ts': 'dd48cca4c199315715f1e92d43983bc49b61809e',
+              'api-metrics.ts': 'ae3b276864f6d11488ab249274ded8bdd55dc76d',
+              'api-metrics.test.ts': 'cfd514c47acefdadf9d877e79741a3aa956e2785'
+          }
+          saved = Path(os.environ['RUNNER_TEMP']) / 'metrics-candidate'
+          saved.mkdir()
+          for name, text in [('index.ts', new), ('api-metrics.ts', module), ('api-metrics.test.ts', tests)]:
+              assert blob(text) == expected[name], name
+              (path.parent / name).write_text(text)
+              (saved / name).write_text(text)
+              print(name, 'blob', blob(text), 'lines', len(text.splitlines()))
+          print('byte-exact inverse extraction verified')
+          PY
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Lint
+        run: pnpm lint
+      - name: Typecheck
+        run: pnpm typecheck
+      - name: Build
+        run: pnpm build
+      - name: Metrics contract tests
+        run: node --test apps/api/dist/api-metrics.test.js
+      - name: Workspace tests including PostgreSQL
+        env:
+          VRATA_TEST_POSTGRES_URL: postgres://postgres:postgres@127.0.0.1:5432/vrata_test
+        run: pnpm test
+      - name: Verify tested source stayed unchanged
+        run: |
+          set -euo pipefail
+          for file in index.ts api-metrics.ts api-metrics.test.ts; do
+            cmp "apps/api/src/$file" "$RUNNER_TEMP/metrics-candidate/$file"
+          done
+      - name: Checkout clean publication base independently of tests
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ env.BASE_SHA }}
+          path: publication
+          persist-credentials: true
+      - name: Publish only the three reviewed code files
+        working-directory: publication
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$BASE_SHA"
+          test "$(git ls-remote origin refs/heads/main | cut -f1)" = "$BASE_SHA"
+          for file in index.ts api-metrics.ts api-metrics.test.ts; do
+            cp "$RUNNER_TEMP/metrics-candidate/$file" "apps/api/src/$file"
+          done
+          git add apps/api/src/index.ts apps/api/src/api-metrics.ts apps/api/src/api-metrics.test.ts
+          git diff --cached --check
+          test "$(git diff --cached --name-only | wc -l)" -eq 3
+          test "$(git write-tree)" = "$EXPECTED_TREE"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'refactor(api): extract API metrics reporting' -m 'Move the existing metrics initializer, counter helper and reporter into an explicitly wired module. Preserve all 51 metric families, output bytes, counter references, cleanup timing, asynchronous reads and error behavior. Add 30 contract tests. Only three code files; preparation workflow excluded.'
+          git push origin "HEAD:refs/heads/$TARGET_BRANCH"
+          git rev-parse HEAD > "$RUNNER_TEMP/candidate-sha.txt"
+          git rev-parse HEAD^{tree} > "$RUNNER_TEMP/candidate-tree.txt"
+          git archive --format=tar.gz -o "$RUNNER_TEMP/candidate-source.tgz" HEAD
+      - name: Preserve exact published source
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: api-metrics-source-${{ github.run_id }}
+          retention-days: 14
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/candidate-source.tgz
+            ${{ runner.temp }}/candidate-sha.txt
+            ${{ runner.temp }}/candidate-tree.txt
