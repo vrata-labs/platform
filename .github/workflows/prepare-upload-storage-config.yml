@@ -1,0 +1,120 @@
+name: Prepare upload storage configuration extraction
+on:
+  push:
+    branches: [preparation/api-upload-storage-config-20260913]
+permissions:
+  contents: write
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      BASE_SHA: 7dad714153f83b609d47313883130e79fca5ebaf
+      TARGET_BRANCH: refactor/api-upload-storage-config-20260913
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: vrata_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres -d vrata_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - name: Checkout preparation
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Apply exact extraction and preserve reviewed source
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib, os, shutil
+          p = Path('apps/api/src/index.ts')
+          source = p.read_text()
+          def blob(text):
+              data = text.encode()
+              return hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
+          assert blob(source) == 'dd48cca4c199315715f1e92d43983bc49b61809e'
+          assert blob(Path('AGENTS.md').read_text()) == '444218fb39af0ca11327fef9638b3373a5787dab'
+          types = source[source.index('type SceneBundleUploadStorage = {'):source.index('const apiPort =')]
+          funcs = source[source.index('function getSceneBundleUploadStorage('):source.index('function sha256Hex(')]
+          module = 'import type { IncomingMessage } from "node:http";\nimport { join, resolve } from "node:path";\n\nimport type { SceneBundleProvider } from "./scene-bundle-storage.js";\n\n' + types.replace('type SceneBundleUploadStorage', 'export type SceneBundleUploadStorage').replace('type DocumentUploadStorage', 'export type DocumentUploadStorage')
+          module += 'export function createUploadStorageConfig(\n  runtimePublicRoot: string,\n  publicBaseUrlFromRequest: (request: IncomingMessage) => string\n) {\n'
+          module += '\n'.join('  ' + line if line else '' for line in funcs.rstrip().split('\n')) + '\n\n  return { getSceneBundleUploadStorage, getDocumentUploadStorage };\n}\n'
+          imp = 'import { createUploadStorageConfig, type SceneBundleUploadStorage, type DocumentUploadStorage } from "./upload-storage-config.js";\n\n'
+          anchor = 'import { createApiMetrics, incrementCounter } from "./api-metrics.js";\n\n'
+          init = 'const { getSceneBundleUploadStorage, getDocumentUploadStorage } = createUploadStorageConfig(runtimePublicRoot, publicBaseUrlFromRequest);\n\n'
+          assert source.count(anchor) == source.count(types) == source.count(funcs) == 1
+          new = source.replace(types, '').replace(funcs, init).replace(anchor, anchor + imp)
+          assert new.replace(imp, '').replace(init, funcs).replace('const apiPort =', types + 'const apiPort =') == source
+          p.write_text(new)
+          Path('apps/api/src/upload-storage-config.ts').write_text(module)
+          expected = {
+              'index.ts': '9a65445844203c9c0f3fa8f643e14fc800326b469badd0f99d4f456818805c0f',
+              'upload-storage-config.ts': '280a93f88ba4f9a1f960e2cec20471bf1b45e08bda0bd2ccff93bab0326f2874',
+              'upload-storage-config.test.ts': '2b2e60583f5a6c6ac397013b972b56da82e972e2abad1148ae46ccc597534885'
+          }
+          target = Path(os.environ['RUNNER_TEMP']) / 'reviewed-source'
+          target.mkdir()
+          checks = []
+          for name, digest in expected.items():
+              path = Path('apps/api/src') / name
+              assert hashlib.sha256(path.read_bytes()).hexdigest() == digest, name
+              shutil.copy2(path, target / name)
+              checks.append(digest + '  ' + str(path))
+          (target / 'checksums.txt').write_text('\n'.join(checks) + '\n')
+          print('Exact source hashes and byte-for-byte inverse extraction verified')
+          PY
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Lint
+        run: pnpm lint
+      - name: Typecheck
+        run: pnpm typecheck
+      - name: Build
+        run: pnpm build
+      - name: Upload configuration contract tests
+        run: node --test apps/api/dist/upload-storage-config.test.js
+      - name: Workspace tests including PostgreSQL
+        env:
+          VRATA_TEST_POSTGRES_URL: postgres://postgres:postgres@127.0.0.1:5432/vrata_test
+        run: pnpm test
+      - name: Verify tested source stayed unchanged
+        run: sha256sum --check "$RUNNER_TEMP/reviewed-source/checksums.txt"
+      - name: Checkout clean publication base independently of tests
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ env.BASE_SHA }}
+          path: .publication
+      - name: Publish only the three reviewed code files
+        working-directory: .publication
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$BASE_SHA"
+          test "$(git rev-parse HEAD^{tree})" = 5baf386bddc095b9a0e9c81af424ba85f40844bc
+          if git ls-remote --exit-code --heads origin "$TARGET_BRANCH"; then
+            echo 'Target branch already exists'; exit 1
+          else
+            test "$?" -eq 2
+          fi
+          git checkout -b "$TARGET_BRANCH"
+          for name in index.ts upload-storage-config.ts upload-storage-config.test.ts; do
+            cp "$RUNNER_TEMP/reviewed-source/$name" "apps/api/src/$name"
+          done
+          sha256sum --check "$RUNNER_TEMP/reviewed-source/checksums.txt"
+          git diff --check
+          git add apps/api/src/index.ts apps/api/src/upload-storage-config.ts apps/api/src/upload-storage-config.test.ts
+          test "$(git write-tree)" = dc09890d7597096e781c3d12ccf3e1be34fd4cbc
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'refactor(api): extract upload storage configuration' -m 'Move the two existing upload-storage selectors and their types behind explicit local-root and URL-resolver dependencies. Preserve provider precedence, call-time environment reads, fallback and production errors. Add 35 contract tests. Exactly three code files; preparation workflow excluded.'
+          git push origin "HEAD:refs/heads/$TARGET_BRANCH"
+          git rev-parse HEAD
+          git rev-parse HEAD^{tree}
