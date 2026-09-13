@@ -1,0 +1,90 @@
+name: Verify deployed HTTP response helpers
+on:
+  push:
+    branches: [verification/api-http-responses-20260913]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    env:
+      EXPECTED_SHA: 3a9b29abd0adb4252e9e6837f356ab363d02cc7b
+      BASE_URL: ${{ secrets.STAGING_BASE_URL }}
+      STAGING_SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
+      STAGING_SSH_USER: ${{ secrets.STAGING_SSH_USER }}
+      STAGING_APP_DIR: ${{ secrets.STAGING_APP_DIR }}
+    steps:
+      - name: Verify running SHA, container health and response contracts
+        env:
+          STAGING_SSH_KEY: ${{ secrets.STAGING_SSH_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          key="$(mktemp "$RUNNER_TEMP/vrata-verify-key.XXXXXX")"
+          trap 'rm -f "$key"' EXIT
+          chmod 600 "$key"
+          printf '%s\n' "$STAGING_SSH_KEY" > "$key"
+          command="$(printf 'sudo -n bash -s -- %q %q' "$EXPECTED_SHA" "$STAGING_APP_DIR")"
+          ssh -i "$key" -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new "$STAGING_SSH_USER@$STAGING_SSH_HOST" "$command" <<'REMOTE'
+          set -euo pipefail
+          EXPECTED_SHA="$1"
+          APP_DIR="$2"
+          cd "$APP_DIR"
+          test "$(git -c safe.directory="$APP_DIR" rev-parse HEAD)" = "$EXPECTED_SHA"
+          test "$(cat infra/docker/.staging-successful-image-tag)" = "$EXPECTED_SHA"
+          echo "successful_staging_sha_verified:$EXPECTED_SHA"
+          for service in api room-state remote-browser; do
+            id="$(docker compose --env-file infra/docker/.env.staging -f infra/docker/compose.staging.yml ps -q "$service")"
+            test -n "$id"
+            image="$(docker inspect --format '{{.Config.Image}}' "$id")"
+            health="$(docker inspect --format '{{.State.Health.Status}}' "$id")"
+            case "$image" in *":$EXPECTED_SHA") ;; *) echo "wrong_image:$service"; exit 1;; esac
+            test "$health" = healthy
+            echo "running_image_verified:$service:$EXPECTED_SHA:$health"
+            if [ "$service" = api ]; then API_CONTAINER="$id"; fi
+          done
+          # Separate process: temporary files/sockets only, no room/storage writes.
+          docker exec -w /app "$API_CONTAINER" node --test apps/api/dist/http-responses.test.js
+          docker exec -i -w /app "$API_CONTAINER" node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          const base = `http://127.0.0.1:${process.env.API_PORT ?? '4000'}`;
+          const checks = [
+            ['/health', 200, 'application/json'],
+            ['/metrics', 200, 'text/plain'],
+            ['/rooms/demo-room', 200, 'text/html'],
+            ['/control-plane', 200, 'text/html'],
+            ['/assets/pr76-http-response-verification-missing-20260913.txt', 404, 'application/json']
+          ];
+          for (const [path, status, type] of checks) {
+            const requestId = `pr76-${status}-${path.length}`;
+            const response = await fetch(`${base}${path}`, { headers: { 'x-request-id': requestId }, signal: AbortSignal.timeout(15000) });
+            assert.equal(response.status, status);
+            assert.equal(response.headers.get('x-request-id'), requestId);
+            assert.ok(response.headers.get('content-type')?.startsWith(type));
+            if (type === 'application/json' || type === 'text/plain') {
+              assert.equal(response.headers.get('cache-control'), 'no-store');
+              assert.equal(response.headers.get('x-content-type-options'), 'nosniff');
+            }
+            if (type === 'application/json') {
+              assert.equal(response.headers.get('x-frame-options'), 'DENY');
+              assert.equal(response.headers.get('referrer-policy'), 'no-referrer');
+              const body = await response.json();
+              if (status === 404) assert.equal(body.error, 'asset_not_found');
+            } else {
+              await response.arrayBuffer();
+            }
+            console.log(`running_http_contract_verified:${path}:${status}:${type}`);
+          }
+          NODE
+          REMOTE
+      - name: Check public HTTPS endpoints without logging bodies
+        shell: bash
+        run: |
+          set -euo pipefail
+          for path in /health /rooms/demo-room /control-plane /metrics; do
+            code="$(curl --silent --show-error --fail --connect-timeout 10 --max-time 30 --output /dev/null --write-out '%{http_code}' "${BASE_URL%/}$path")"
+            test "$code" = 200
+            echo "http_check:$path:$code"
+          done
