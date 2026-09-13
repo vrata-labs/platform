@@ -1,0 +1,28 @@
+name: Export exact refactor source
+on:
+  push:
+    branches: [preparation/api-decomposition-20260913b]
+    paths: [.github/workflows/export-refactor-source.yml]
+permissions:
+  contents: read
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: 8290fb37ec0cf41cbe2793b4f1bfd2e4bf31601a
+          persist-credentials: false
+      - name: Archive tracked public source at the exact base commit
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = 8290fb37ec0cf41cbe2793b4f1bfd2e4bf31601a
+          git archive --format=tar.gz --output="$RUNNER_TEMP/refactor-source.tgz" HEAD
+          git rev-parse HEAD HEAD^{tree}
+          git ls-files '*AGENTS.md'
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: refactor-source-8290fb3
+          path: ${{ runner.temp }}/refactor-source.tgz
+          retention-days: 7
