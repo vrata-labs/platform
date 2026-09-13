@@ -1,0 +1,85 @@
+name: Verify deployed upload storage configuration
+on:
+  push:
+    branches: [verification/api-upload-storage-config-20260913]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      EXPECTED_SHA: 8290fb37ec0cf41cbe2793b4f1bfd2e4bf31601a
+      BASE_URL: ${{ secrets.STAGING_BASE_URL }}
+      STAGING_SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
+      STAGING_SSH_USER: ${{ secrets.STAGING_SSH_USER }}
+      STAGING_APP_DIR: ${{ secrets.STAGING_APP_DIR }}
+    steps:
+      - name: Verify exact images and isolated upload configuration contracts
+        env:
+          STAGING_SSH_KEY: ${{ secrets.STAGING_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          key="$(mktemp "$RUNNER_TEMP/vrata-verify-key.XXXXXX")"
+          trap 'rm -f "$key"' EXIT
+          chmod 600 "$key"
+          printf '%s\n' "$STAGING_SSH_KEY" > "$key"
+          command="$(printf 'sudo -n bash -s -- %q %q' "$EXPECTED_SHA" "$STAGING_APP_DIR")"
+          ssh -i "$key" -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new "$STAGING_SSH_USER@$STAGING_SSH_HOST" "$command" <<'REMOTE'
+          set -euo pipefail
+          EXPECTED_SHA="$1"
+          APP_DIR="$2"
+          cd "$APP_DIR"
+          test "$(git -c safe.directory="$APP_DIR" rev-parse HEAD)" = "$EXPECTED_SHA"
+          test "$(cat infra/docker/.staging-successful-image-tag)" = "$EXPECTED_SHA"
+          echo "successful_staging_sha_verified:$EXPECTED_SHA"
+          for service in api room-state remote-browser; do
+            id="$(docker compose --env-file infra/docker/.env.staging -f infra/docker/compose.staging.yml ps -q "$service")"
+            test -n "$id"
+            image="$(docker inspect --format '{{.Config.Image}}' "$id")"
+            revision="$(docker inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$id")"
+            health="$(docker inspect --format '{{.State.Health.Status}}' "$id")"
+            case "$image" in *":$EXPECTED_SHA") ;; *) echo "wrong_image:$service"; exit 1;; esac
+            test "$revision" = "$EXPECTED_SHA"
+            test "$health" = healthy
+            echo "running_image_and_revision_verified:$service:$EXPECTED_SHA:$health"
+            if [ "$service" = api ]; then API_CONTAINER="$id"; fi
+          done
+          # Isolated child processes; no live object uploads, removals or storage writes.
+          docker exec -w /app "$API_CONTAINER" node --test apps/api/dist/upload-storage-config.test.js
+          docker exec -w /app "$API_CONTAINER" node --test apps/api/dist/api-metrics.test.js
+          docker exec -i -w /app "$API_CONTAINER" node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { resolve } from 'node:path';
+          import { createUploadStorageConfig } from './apps/api/dist/upload-storage-config.js';
+          const config = createUploadStorageConfig(resolve('apps/runtime-web/public'), () => {
+            throw new Error('unexpected_local_upload_fallback');
+          });
+          for (const method of ['getSceneBundleUploadStorage', 'getDocumentUploadStorage']) {
+            const value = config[method]({ headers: {} });
+            assert.ok(value.type === 's3', 'staging must retain remote upload storage');
+            assert.ok(value.provider === 'minio-default' || value.provider === 's3-compatible', 'unexpected upload provider');
+            for (const field of ['endpoint', 'region', 'bucket', 'accessKeyId', 'secretAccessKey']) {
+              assert.ok(typeof value[field] === 'string' && value[field].length > 0, 'missing configured upload field');
+            }
+            console.log(`running_storage_selector_verified:${method}:${value.type}:${value.provider}`);
+          }
+          const base = `http://127.0.0.1:${process.env.API_PORT ?? '4000'}`;
+          const response = await fetch(`${base}/metrics`, { signal: AbortSignal.timeout(15000) });
+          assert.equal(response.status, 200);
+          const body = await response.text();
+          assert.equal((body.match(/^# TYPE /gm) ?? []).length, 51);
+          console.log('running_metrics_verified:200:51-families');
+          NODE
+          test "$(git -c safe.directory="$APP_DIR" rev-parse HEAD)" = "$EXPECTED_SHA"
+          test "$(cat infra/docker/.staging-successful-image-tag)" = "$EXPECTED_SHA"
+          REMOTE
+      - name: Check public HTTPS endpoints without logging bodies
+        run: |
+          set -euo pipefail
+          for path in /health /rooms/demo-room /control-plane /metrics; do
+            code="$(curl --silent --show-error --fail --connect-timeout 10 --max-time 30 --output /dev/null --write-out '%{http_code}' "${BASE_URL%/}$path")"
+            test "$code" = 200
+            echo "http_check:$path:$code"
+          done
