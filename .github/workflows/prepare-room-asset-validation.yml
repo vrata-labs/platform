@@ -40,13 +40,114 @@ jobs:
           mkdir -p "$RUNNER_TEMP/room-asset-verification"
           pnpm build | tee "$RUNNER_TEMP/room-asset-verification/baseline-build.log"
           cp -R apps/api/dist "$RUNNER_TEMP/room-assets-before"
-      - name: Apply verified patch
+      - name: Apply verified extraction and tests
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api repos/vrata-labs/platform/git/blobs/6d97917788d87d0d7178de6fca711acb48b8889b --jq .content | base64 --decode > apps/api/src/room-asset-validation.test.ts
+          test "$(git hash-object apps/api/src/room-asset-validation.test.ts)" = 6d97917788d87d0d7178de6fca711acb48b8889b
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('apps/api/src/index.ts')
+          s = p.read_text()
+          start = s.index('async function validateRoomAssetIds(')
+          end = s.index('function validateSceneBundleInput(', start)
+          block = s[start:end]
+          assert block.count('function ') == 2
+          header = 'import type { AssetRecord, Storage } from "./storage-contracts.js";\n\n'
+          module = header + block.replace('async function validateRoomAssetIds(', 'export async function validateRoomAssetIds(', 1).replace('  storage: Awaited<typeof storagePromise>,', '  storage: Storage,', 1).replace('function validateAssetInput(', 'export function validateAssetInput(', 1)
+          new = s[:start] + s[end:]
+          anchor = 'import { createXrTelemetryService } from "./xr-telemetry-service.js";'
+          assert new.count(anchor) == 1
+          new = new.replace(anchor, 'import { validateRoomAssetIds, validateAssetInput } from "./room-asset-validation.js";\n\n' + anchor, 1)
+          p.write_text(new)
+          Path('apps/api/src/room-asset-validation.ts').write_text(module.rstrip() + '\n')
+          PY
+          git add -- apps/api/src/index.ts apps/api/src/room-asset-validation.ts apps/api/src/room-asset-validation.test.ts
+          test "$(git write-tree)" = 487e5b10ed737ebaffa9be2372656875cdf93af4
+          git diff --cached --check
+          git diff --cached --binary > "$RUNNER_TEMP/room-asset-verification/refactor.patch"
+      - name: Lint and typecheck
         shell: bash
         run: |
-          python3 - <<'PY'
-          import base64, gzip, hashlib, os, pathlib, subprocess
-          encoded = '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'
-          # The payload below is the complete locally verified patch.
-          encoded = encoded[:0] + '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'
-          raise RuntimeError('publication_payload_not_verified')
-          PY
+          set -euo pipefail
+          pnpm lint | tee "$RUNNER_TEMP/room-asset-verification/lint.log"
+          pnpm typecheck | tee "$RUNNER_TEMP/room-asset-verification/typecheck.log"
+      - name: Build candidate and compare executable declarations
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm build | tee "$RUNNER_TEMP/room-asset-verification/candidate-build.log"
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import fs from 'node:fs';
+          import path from 'node:path';
+          import ts from 'typescript';
+          const oldDir = path.join(process.env.RUNNER_TEMP, 'room-assets-before');
+          const out = path.join(process.env.RUNNER_TEMP, 'room-asset-verification');
+          const parse = text => ts.createSourceFile('file.js', text, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
+          const before = parse(fs.readFileSync(path.join(oldDir, 'index.js'), 'utf8'));
+          const after = parse(fs.readFileSync('apps/api/dist/index.js', 'utf8'));
+          const mod = parse(fs.readFileSync('apps/api/dist/room-asset-validation.js', 'utf8'));
+          const names = new Set(['validateRoomAssetIds', 'validateAssetInput']);
+          const moved = s => ts.isFunctionDeclaration(s) && names.has(s.name?.text);
+          const addedImport = s => ts.isImportDeclaration(s) && s.moduleSpecifier.text === './room-asset-validation.js';
+          const original = before.statements.filter(moved);
+          assert.equal(original.length, 2);
+          for (const fn of original) {
+            const extracted = mod.statements.find(s => moved(s) && s.name.text === fn.name.text);
+            assert.ok(extracted);
+            assert.equal(extracted.getText(mod).replace(/^export /, ''), fn.getText(before));
+          }
+          assert.deepEqual(after.statements.filter(s => !addedImport(s)).map(s => s.getText(after)), before.statements.filter(s => !moved(s)).map(s => s.getText(before)));
+          assert.equal(mod.statements.filter(ts.isImportDeclaration).length, 0);
+          const files = fs.readdirSync(oldDir, { recursive: true }).filter(name => name.endsWith('.js')).sort();
+          for (const name of files.filter(name => name !== 'index.js')) {
+            assert.deepEqual(fs.readFileSync(path.join(oldDir, name)), fs.readFileSync(path.join('apps/api/dist', name)), name);
+          }
+          assert.deepEqual(fs.readFileSync(path.join(oldDir, 'index.d.ts')), fs.readFileSync('apps/api/dist/index.d.ts'));
+          const report = { compiler: ts.version, existingJavaScriptFiles: files.length, byteIdenticalJavaScriptFiles: files.length - 1, movedFunctionsIdentical: true, remainingDeclarationsIdentical: true, publicIndexDeclarationIdentical: true, newModuleRuntimeImports: 0 };
+          fs.writeFileSync(path.join(out, 'compiled-equivalence.json'), JSON.stringify(report, null, 2));
+          console.log(report);
+          const checkDir = path.join(process.env.RUNNER_TEMP, 'room-assets-baseline-check');
+          fs.mkdirSync(checkDir, { recursive: true });
+          fs.writeFileSync(path.join(checkDir, 'package.json'), '{"type":"module"}');
+          fs.writeFileSync(path.join(checkDir, 'room-asset-validation.js'), original.map(fn => 'export ' + fn.getText(before)).join('\n\n'));
+          fs.copyFileSync('apps/api/dist/room-asset-validation.test.js', path.join(checkDir, 'room-asset-validation.test.js'));
+          JS
+          node --test "$RUNNER_TEMP/room-assets-baseline-check/room-asset-validation.test.js" | tee "$RUNNER_TEMP/room-asset-verification/baseline-tests.log"
+      - name: Test workspace with PostgreSQL
+        shell: bash
+        env:
+          VRATA_TEST_POSTGRES_URL: postgres://postgres:postgres@127.0.0.1:5432/vrata_test
+        run: |
+          set -euo pipefail
+          pnpm test | tee "$RUNNER_TEMP/room-asset-verification/workspace-tests.log"
+      - name: Commit and push only the verified source tree
+        shell: bash
+        env:
+          GIT_AUTHOR_NAME: github-actions[bot]
+          GIT_AUTHOR_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+          GIT_COMMITTER_NAME: github-actions[bot]
+          GIT_COMMITTER_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = f5f64ef9f4352923853d6be5b9b00e6f6a25b760
+          test "$(git ls-remote origin refs/heads/main | cut -f1)" = f5f64ef9f4352923853d6be5b9b00e6f6a25b760
+          test -z "$(git ls-remote origin refs/heads/refactor/room-asset-validation-20260914)"
+          test "$(git write-tree)" = 487e5b10ed737ebaffa9be2372656875cdf93af4
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'refactor(api): isolate room asset validation'
+          git push origin HEAD:refs/heads/refactor/room-asset-validation-20260914
+          git rev-parse HEAD > "$RUNNER_TEMP/room-asset-verification/candidate-sha.txt"
+          git rev-parse 'HEAD^{tree}' > "$RUNNER_TEMP/room-asset-verification/candidate-tree.txt"
+          git archive --format=tar.gz HEAD > "$RUNNER_TEMP/room-asset-verification/candidate-source.tgz"
+      - name: Upload verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: room-asset-validation-candidate
+          path: ${{ runner.temp }}/room-asset-verification
+          retention-days: 14
+          if-no-files-found: error
