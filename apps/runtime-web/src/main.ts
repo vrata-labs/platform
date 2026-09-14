@@ -1,10 +1,8 @@
 import * as THREE from "three";
 import { Room, RoomEvent, Track } from "livekit-client";
 import {
-  DEFAULT_MEDIA_SURFACE_ID,
   DISABLED_EXTENSION_CARD_TYPE,
   EXTENSION_TEST_CARD_TYPE,
-  LAPTOP_MEDIA_SURFACE_ID,
   MARKDOWN_BOARD_OBJECT_TYPE,
   MISSING_CAPABILITY_EXTENSION_CARD_TYPE,
   PDF_PRESENTATION_OBJECT_TYPE,
@@ -13,7 +11,6 @@ import {
   REMOTE_BROWSER_OBJECT_TYPE,
   SCREEN_SHARE_OBJECT_TYPE,
   SURFACE_TEST_CARD_TYPE,
-  WHITEBOARD_MEDIA_SURFACE_ID,
   WHITEBOARD_MAX_POINTS_PER_STROKE,
   WHITEBOARD_OBJECT_TYPE,
   createRoomAccessDebugState,
@@ -86,6 +83,19 @@ import {
   physicalScreenShareObjectForMediaTrack
 } from "./media/media-object-state.js";
 import { mediaSurfaceDimensionsChanged, planMediaSurfaceMismatches } from "./media/media-surface-layout.js";
+import {
+  DEBUG_SURFACE_ID,
+  DEBUG_SURFACE_WIDTH_M,
+  DEBUG_SURFACE_HEIGHT_M,
+  DEBUG_SURFACE_HEIGHT_PX,
+  DEFAULT_RUNTIME_MEDIA_SURFACES,
+  createMediaSurfaceMesh,
+  applyMediaSurfaceTransform,
+  createMediaSurfaceView,
+  updateMediaSurfaceView,
+  runtimeMediaSurfaceDefinitionFromScene,
+  type RuntimeMediaSurfaceView
+} from "./media/media-surface-view.js";
 import { cleanupMediaRoomConsumers, createDeferredMediaStopQueue, createMediaRoomIdleScheduler, hasMediaRoomSurfaceConsumer, planMediaRoomIdleAction, shouldHandleMediaRoomEvent, transitionPassiveMediaOwnership } from "./media/media-room-lifecycle.js";
 import { createCoalescedConnection } from "./media/coalesced-connection.js";
 import { allocatePlannedMediaCanvasRuntimes, planMediaCanvasRuntimeAllocations, releaseMediaCanvasRuntime, type MediaCanvasRuntimeAllocation } from "./media/media-canvas-runtime-plan.js";
@@ -143,7 +153,6 @@ import type { LocalAvatarController } from "./avatar/avatar-controller.js";
 import type { LocalAvatarSnapshotV1 } from "./avatar/avatar-types.js";
 import { createAvatarRegistry } from "./avatar/avatar-registry.js";
 import {
-  LEGACY_MEDIA_SURFACE_NEAR_CONTACT_DISTANCE_M,
   type SceneBundleMediaSurface,
   type SceneBundleRenderProfile,
   type SceneBundleSeatAnchor
@@ -462,7 +471,6 @@ const localPoseController = createLocalPoseController({
   }
 });
 const WHITEBOARD_PENCIL_TIP_LOCAL_Z = -0.32;
-const WHITEBOARD_PENCIL_CONTACT_DISTANCE_M = LEGACY_MEDIA_SURFACE_NEAR_CONTACT_DISTANCE_M;
 const WHITEBOARD_PENCIL_GRIP_ROTATION = new THREE.Quaternion().setFromEuler(new THREE.Euler(-Math.PI / 8, 0, 0, "XYZ"));
 const xrControllers = [renderer.xr.getController(0), renderer.xr.getController(1)];
 const xrControllerGrips = [renderer.xr.getControllerGrip(0), renderer.xr.getControllerGrip(1)];
@@ -542,108 +550,6 @@ const roomBox = new THREE.Mesh(new THREE.BoxGeometry(14, 5, 14), wallMaterial);
 roomBox.position.set(0, 2.5, 0);
 scene.add(roomBox);
 
-const DEBUG_SURFACE_ID = DEFAULT_MEDIA_SURFACE_ID;
-const DEBUG_SURFACE_WIDTH_M = 5.8;
-const DEBUG_SURFACE_HEIGHT_M = 3.3;
-const WHITEBOARD_SURFACE_WIDTH_M = 3.2;
-const WHITEBOARD_SURFACE_HEIGHT_M = 2.0;
-const LAPTOP_SURFACE_WIDTH_M = 1.9;
-const LAPTOP_SURFACE_HEIGHT_M = 1.1;
-const DEBUG_SURFACE_WIDTH_PX = 1920;
-const DEBUG_SURFACE_HEIGHT_PX = 1080;
-
-interface RuntimeMediaSurfaceDefinition {
-  surfaceId: string;
-  label?: string;
-  widthM: number;
-  heightM: number;
-  widthPx: number;
-  heightPx: number;
-  position: {
-    x: number;
-    y: number;
-    z: number;
-  };
-  yaw: number;
-  pitch: number;
-  roll: number;
-  visible: boolean;
-  inputEnabled: boolean;
-  maxDistanceM: number;
-  manifestDefined: boolean;
-  manifestFormat: "default" | "f3" | "legacy";
-  color: number;
-}
-
-const DEFAULT_RUNTIME_MEDIA_SURFACES: RuntimeMediaSurfaceDefinition[] = [
-  {
-    surfaceId: DEBUG_SURFACE_ID,
-    label: "Main screen",
-    widthM: DEBUG_SURFACE_WIDTH_M,
-    heightM: DEBUG_SURFACE_HEIGHT_M,
-    widthPx: DEBUG_SURFACE_WIDTH_PX,
-    heightPx: DEBUG_SURFACE_HEIGHT_PX,
-    position: { x: 0, y: 2.2, z: -6.6 },
-    yaw: 0,
-    pitch: 0,
-    roll: 0,
-    visible: true,
-    inputEnabled: true,
-    maxDistanceM: WHITEBOARD_PENCIL_CONTACT_DISTANCE_M,
-    manifestDefined: false,
-    manifestFormat: "default",
-    color: 0xffffff
-  },
-  {
-    surfaceId: WHITEBOARD_MEDIA_SURFACE_ID,
-    label: "Whiteboard wall",
-    widthM: WHITEBOARD_SURFACE_WIDTH_M,
-    heightM: WHITEBOARD_SURFACE_HEIGHT_M,
-    widthPx: DEBUG_SURFACE_WIDTH_PX,
-    heightPx: DEBUG_SURFACE_HEIGHT_PX,
-    position: { x: -4.6, y: 2.0, z: -5.8 },
-    yaw: 0.18,
-    pitch: 0,
-    roll: 0,
-    visible: true,
-    inputEnabled: true,
-    maxDistanceM: WHITEBOARD_PENCIL_CONTACT_DISTANCE_M,
-    manifestDefined: false,
-    manifestFormat: "default",
-    color: 0xf8fafc
-  },
-  {
-    surfaceId: LAPTOP_MEDIA_SURFACE_ID,
-    label: "Laptop screen",
-    widthM: LAPTOP_SURFACE_WIDTH_M,
-    heightM: LAPTOP_SURFACE_HEIGHT_M,
-    widthPx: 1280,
-    heightPx: 720,
-    position: { x: 3.7, y: 1.45, z: -4.2 },
-    yaw: -0.28,
-    pitch: 0,
-    roll: 0,
-    visible: true,
-    inputEnabled: true,
-    maxDistanceM: WHITEBOARD_PENCIL_CONTACT_DISTANCE_M,
-    manifestDefined: false,
-    manifestFormat: "default",
-    color: 0xf8fbff
-  }
-];
-
-function createMediaSurfaceMesh(widthM: number, heightM: number, color = 0xffffff): THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial> {
-  return new THREE.Mesh(
-    new THREE.PlaneGeometry(widthM, heightM),
-    new THREE.MeshBasicMaterial({ color, toneMapped: false })
-  );
-}
-
-function applyMediaSurfaceTransform(object: THREE.Object3D, definition: Pick<RuntimeMediaSurfaceDefinition, "position" | "yaw" | "pitch" | "roll">): void {
-  object.position.set(definition.position.x, definition.position.y, definition.position.z);
-  object.rotation.set(definition.pitch, definition.yaw, definition.roll);
-}
-
 const displaySurface = createMediaSurfaceMesh(DEBUG_SURFACE_WIDTH_M, DEBUG_SURFACE_HEIGHT_M);
 applyMediaSurfaceTransform(displaySurface, DEFAULT_RUNTIME_MEDIA_SURFACES[0]!);
 scene.add(displaySurface);
@@ -665,77 +571,6 @@ whiteboardPreviewLine.renderOrder = 40;
 whiteboardPreviewLine.frustumCulled = false;
 whiteboardPreviewLine.visible = false;
 displaySurface.add(whiteboardPreviewLine);
-
-interface RuntimeMediaSurfaceView {
-  surfaceId: string;
-  label?: string;
-  object: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
-  widthPx: number;
-  heightPx: number;
-  widthM: number;
-  heightM: number;
-  visible: boolean;
-  inputEnabled: boolean;
-  maxDistanceM: number;
-  position: { x: number; y: number; z: number };
-  yaw: number;
-  pitch: number;
-  roll: number;
-  manifestPosition: { x: number; y: number; z: number } | null;
-  manifestYaw: number | null;
-  manifestFormat: "default" | "f3" | "legacy";
-}
-
-function updateMediaSurfaceView(view: RuntimeMediaSurfaceView, definition: RuntimeMediaSurfaceDefinition): void {
-  if (view.widthM !== definition.widthM || view.heightM !== definition.heightM) {
-    view.object.geometry.dispose();
-    view.object.geometry = new THREE.PlaneGeometry(definition.widthM, definition.heightM);
-  }
-  view.surfaceId = definition.surfaceId;
-  view.label = definition.label;
-  view.widthPx = definition.widthPx;
-  view.heightPx = definition.heightPx;
-  view.widthM = definition.widthM;
-  view.heightM = definition.heightM;
-  view.visible = definition.visible;
-  view.inputEnabled = definition.inputEnabled;
-  view.maxDistanceM = definition.maxDistanceM;
-  view.position = { ...definition.position };
-  view.yaw = definition.yaw;
-  view.pitch = definition.pitch;
-  view.roll = definition.roll;
-  view.manifestPosition = definition.manifestDefined ? { ...definition.position } : null;
-  view.manifestYaw = definition.manifestDefined ? definition.yaw : null;
-  view.manifestFormat = definition.manifestFormat;
-  view.object.userData.surfaceId = definition.surfaceId;
-  view.object.visible = definition.visible;
-  view.object.material.color.setHex(definition.color);
-  applyMediaSurfaceTransform(view.object, definition);
-}
-
-function createMediaSurfaceView(definition: RuntimeMediaSurfaceDefinition, object = createMediaSurfaceMesh(definition.widthM, definition.heightM, definition.color)): RuntimeMediaSurfaceView {
-  const view: RuntimeMediaSurfaceView = {
-    surfaceId: definition.surfaceId,
-    label: definition.label,
-    object,
-    widthPx: definition.widthPx,
-    heightPx: definition.heightPx,
-    widthM: definition.widthM,
-    heightM: definition.heightM,
-    visible: definition.visible,
-    inputEnabled: definition.inputEnabled,
-    maxDistanceM: definition.maxDistanceM,
-    position: { ...definition.position },
-    yaw: definition.yaw,
-    pitch: definition.pitch,
-    roll: definition.roll,
-    manifestPosition: definition.manifestDefined ? { ...definition.position } : null,
-    manifestYaw: definition.manifestDefined ? definition.yaw : null,
-    manifestFormat: definition.manifestFormat
-  };
-  updateMediaSurfaceView(view, definition);
-  return view;
-}
 
 const mediaSurfaceViews = new Map<string, RuntimeMediaSurfaceView>();
 for (const definition of DEFAULT_RUNTIME_MEDIA_SURFACES) {
@@ -905,32 +740,6 @@ let mediaSurfaceRuntimeResetCount = 0;
 let lastMediaSurfaceRuntimeResetIds: string[] = [];
 let lastMediaSurfaceRuntimeResetIdsWithCachedRuntimes: string[] = [];
 let roomStateServerOffsetMs = 0;
-
-function runtimeMediaSurfaceDefinitionFromScene(surface: SceneBundleMediaSurface): RuntimeMediaSurfaceDefinition {
-  const fallback = DEFAULT_RUNTIME_MEDIA_SURFACES.find((definition) => definition.surfaceId === surface.surfaceId);
-  return {
-    surfaceId: surface.surfaceId,
-    label: surface.label ?? fallback?.label,
-    widthM: surface.widthM,
-    heightM: surface.heightM,
-    widthPx: surface.pixelDimensions.width ?? fallback?.widthPx ?? DEBUG_SURFACE_WIDTH_PX,
-    heightPx: surface.pixelDimensions.height ?? fallback?.heightPx ?? DEBUG_SURFACE_HEIGHT_PX,
-    position: {
-      x: surface.position.x,
-      y: surface.position.y,
-      z: surface.position.z
-    },
-    yaw: surface.yaw,
-    pitch: surface.pitch,
-    roll: surface.roll,
-    visible: surface.visible,
-    inputEnabled: surface.input.enabled,
-    maxDistanceM: surface.input.maxDistanceM,
-    manifestDefined: true,
-    manifestFormat: surface.manifestFormat,
-    color: fallback?.color ?? 0xffffff
-  };
-}
 
 function getFallbackMediaSurfaceView(): RuntimeMediaSurfaceView {
   const selected = mediaSurfaceViews.get(selectedMediaSurfaceId);
