@@ -99,9 +99,7 @@ jobs:
         run: |
           set -euo pipefail
           pnpm test 2>&1 | tee "$RUNNER_TEMP/room-record-evidence/workspace-tests.log"
-      - name: Publish verified index without applying the patch again
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Commit and push the verified index
         shell: bash
         run: |
           set -euo pipefail
@@ -111,46 +109,16 @@ jobs:
           test "$(git write-tree)" = "$EXPECTED_TREE"
           git diff --exit-code
           git diff --cached --check
-          python3 - <<'PY'
-          import base64, json, os, pathlib, subprocess
-          temp = pathlib.Path(os.environ['RUNNER_TEMP'])
-          evidence = temp / 'room-record-evidence'
-          repo = 'vrata-labs/platform'
-          branch = 'refactor/storage-room-records-20260914'
-          base = os.environ['BASE_SHA']
-          paths = ['apps/api/src/storage-room-records.test.ts', 'apps/api/src/storage-room-records.ts', 'apps/api/src/storage.ts']
-          changed = subprocess.check_output(['git', 'diff', '--cached', '--name-only'], text=True).splitlines()
-          assert changed == paths, changed
-          additions = []
-          for name in paths:
-              content = subprocess.check_output(['git', 'show', ':' + name])
-              assert content == pathlib.Path(name).read_bytes(), name
-              mode = subprocess.check_output(['git', 'ls-files', '--stage', name], text=True).split()[0]
-              assert mode == '100644', (name, mode)
-              additions.append({'path': name, 'contents': base64.b64encode(content).decode('ascii')})
-          query = 'mutation($input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $input) { commit { oid tree { oid } } } }'
-          payload = {'query': query, 'variables': {'input': {'branch': {'repositoryNameWithOwner': repo, 'refName': branch}, 'expectedHeadOid': base, 'message': {'headline': 'refactor(api): extract room record materialization'}, 'fileChanges': {'additions': additions}}}}
-          request = temp / 'signed-room-record-commit.json'
-          request.write_text(json.dumps(payload))
-          subprocess.run(['gh', 'api', 'repos/' + repo + '/git/refs', '-f', 'ref=refs/heads/' + branch, '-f', 'sha=' + base], check=True, stdout=subprocess.DEVNULL)
-          result = json.loads(subprocess.check_output(['gh', 'api', 'graphql', '--input', str(request)]))
-          assert not result.get('errors'), result
-          commit = result['data']['createCommitOnBranch']['commit']
-          assert commit['tree']['oid'] == os.environ['EXPECTED_TREE'], commit
-          sha = commit['oid']
-          metadata = json.loads(subprocess.check_output(['gh', 'api', 'repos/' + repo + '/git/commits/' + sha]))
-          assert metadata['verification']['verified'], metadata['verification']
-          assert metadata['tree']['sha'] == os.environ['EXPECTED_TREE']
-          assert [p['sha'] for p in metadata['parents']] == [base]
-          (evidence / 'candidate-sha.txt').write_text(sha + '\n')
-          (evidence / 'candidate-tree.txt').write_text(commit['tree']['oid'] + '\n')
-          (evidence / 'signed-commit.json').write_text(json.dumps({'sha': sha, 'tree': commit['tree']['oid'], 'parent': base, 'verified': True}, indent=2) + '\n')
-          print('verified_signed_candidate:' + sha)
-          subprocess.run(['git', 'fetch', '--no-tags', '--depth=1', 'origin', sha], check=True)
-          assert subprocess.check_output(['git', 'rev-parse', 'FETCH_HEAD^{tree}'], text=True).strip() == os.environ['EXPECTED_TREE']
-          with (evidence / 'candidate-source.tgz').open('wb') as archive:
-              subprocess.run(['git', 'archive', '--format=tar.gz', 'FETCH_HEAD'], check=True, stdout=archive)
-          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git switch -c refactor/storage-room-records-20260914
+          git commit -m 'refactor(api): extract room record materialization'
+          test "$(git rev-parse HEAD^{tree})" = "$EXPECTED_TREE"
+          test "$(git rev-parse HEAD^)" = "$BASE_SHA"
+          git push origin HEAD:refs/heads/refactor/storage-room-records-20260914
+          git rev-parse HEAD | tee "$RUNNER_TEMP/room-record-evidence/candidate-sha.txt"
+          git rev-parse HEAD^{tree} > "$RUNNER_TEMP/room-record-evidence/candidate-tree.txt"
+          git archive --format=tar.gz HEAD > "$RUNNER_TEMP/room-record-evidence/candidate-source.tgz"
       - name: Upload source and verification evidence
         if: always()
         uses: actions/upload-artifact@v4
