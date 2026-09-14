@@ -1,0 +1,105 @@
+name: Prepare runtime diagnostic state refactor
+on:
+  push:
+    branches: [preparation/runtime-debug-state-20260914]
+permissions:
+  contents: write
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: vrata_test
+        ports: [5432:5432]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d vrata_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      EVIDENCE: ${{ runner.temp }}/evidence
+      BASELINE: 7b69579a96744d1f2f13a8bc761d9d7f73c2441f
+      REVIEW_BRANCH: refactor/runtime-debug-state-20260914
+      VRATA_TEST_POSTGRES_URL: postgres://postgres:postgres@127.0.0.1:5432/vrata_test
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Unpack reviewed tooling and checkout exact baseline
+        run: |
+          mkdir -p "$RUNNER_TEMP/refactor-tools" "$EVIDENCE"
+          cat .refactor/tools-0.b64 .refactor/tools-1.b64 .refactor/tools-2.b64 | base64 -d > "$RUNNER_TEMP/refactor-tools.zip"
+          echo "f51980ddf94d339d936e48bf870154beed8df2c3e7af994eb8e89f7bd9d932c1  $RUNNER_TEMP/refactor-tools.zip" | sha256sum -c -
+          unzip -q "$RUNNER_TEMP/refactor-tools.zip" -d "$RUNNER_TEMP/refactor-tools"
+          git checkout --detach "$BASELINE"
+          test "$(git rev-parse HEAD^{tree})" = 06dae7043432727db16f9465ad88eaafd6da5a1e
+          cp apps/runtime-web/src/main.ts "$EVIDENCE/main-baseline.ts"
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install locked dependencies and build unchanged baseline
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build | tee "$EVIDENCE/baseline-build.log"
+          cp apps/runtime-web/dist/main.js apps/runtime-web/dist/main.d.ts "$EVIDENCE/"
+          mv "$EVIDENCE/main.js" "$EVIDENCE/main-baseline.js"
+          mv "$EVIDENCE/main.d.ts" "$EVIDENCE/main-baseline.d.ts"
+          cp -a apps/runtime-web/dist "$RUNNER_TEMP/baseline-runtime-dist"
+      - name: Apply reviewed source-only extraction
+        run: |
+          python "$RUNNER_TEMP/refactor-tools/apply.py" | tee "$EVIDENCE/extraction.json"
+          python "$RUNNER_TEMP/refactor-tools/add-tests.py"
+          git add apps/runtime-web/src/main.ts apps/runtime-web/src/runtime-debug-state.ts apps/runtime-web/src/runtime-debug-state.test.ts
+          test "$(git write-tree)" = f3a61443f7e0471c81deb6af323a4596fc2aea38
+          git diff --cached --check
+          git diff --cached > "$EVIDENCE/refactor.patch"
+      - name: Lint, typecheck, build and test candidate
+        run: |
+          pnpm lint | tee "$EVIDENCE/lint.log"
+          pnpm typecheck | tee "$EVIDENCE/typecheck.log"
+          pnpm build | tee "$EVIDENCE/candidate-build.log"
+          pnpm test | tee "$EVIDENCE/workspace-tests.log"
+      - name: Verify exact types, source and emitted initializer; run baseline characterization
+        run: |
+          REQUIRE_FULL_TYPES=1 node "$RUNNER_TEMP/refactor-tools/verify-types.cjs" "$EVIDENCE/main-baseline.ts" | tee "$EVIDENCE/type-equivalence.json"
+          node "$RUNNER_TEMP/refactor-tools/verify.cjs" | tee "$EVIDENCE/structural-verification.log"
+          node --test apps/runtime-web/dist/runtime-debug-state.baseline.test.js | tee "$EVIDENCE/baseline-characterization.log"
+          python - <<'PY'
+          from pathlib import Path
+          import os, json
+          old = Path(os.environ['RUNNER_TEMP']) / 'baseline-runtime-dist'
+          new = Path('apps/runtime-web/dist')
+          files = [p.relative_to(old) for p in old.rglob('*.js') if 'assets' not in p.relative_to(old).parts]
+          changed = [str(p) for p in files if not (new/p).exists() or (new/p).read_bytes() != (old/p).read_bytes()]
+          assert changed == ['main.js'], changed
+          Path(os.environ['EVIDENCE'], 'emitted-files.json').write_text(json.dumps({'existingFiles':len(files),'unchanged':len(files)-1,'changed':changed}, indent=2))
+          PY
+      - name: Publish only verified source on a separate review branch
+        run: |
+          test "$(git ls-remote origin refs/heads/main | cut -f1)" = "$BASELINE"
+          test -z "$(git ls-remote origin refs/heads/$REVIEW_BRANCH)"
+          test "$(git write-tree)" = f3a61443f7e0471c81deb6af323a4596fc2aea38
+          test "$(git diff --cached --name-only | wc -l)" -eq 3
+          git config user.name 'Dmitry Serkov'
+          git config user.email 'psilon2000@mail.ru'
+          git checkout -b "$REVIEW_BRANCH"
+          git commit -m 'refactor(runtime): extract initial diagnostic state from main'
+          git push origin "HEAD:refs/heads/$REVIEW_BRANCH"
+          git rev-parse HEAD > "$EVIDENCE/candidate-sha.txt"
+          git rev-parse HEAD^{tree} > "$EVIDENCE/candidate-tree.txt"
+          git archive HEAD | gzip > "$EVIDENCE/candidate-source.tgz"
+      - name: Upload verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-debug-state-refactor
+          path: ${{ runner.temp }}/evidence/
+          retention-days: 14
