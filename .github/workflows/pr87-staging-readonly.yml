@@ -1,0 +1,127 @@
+name: PR87 staging read-only verification
+
+on:
+  push:
+    branches: [diagnostic/pr87-staging-readonly-20260914]
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      STAGING_SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
+      STAGING_SSH_USER: ${{ secrets.STAGING_SSH_USER }}
+      STAGING_APP_DIR: ${{ secrets.STAGING_APP_DIR }}
+      EXPECTED_SHA: f5f64ef9f4352923853d6be5b9b00e6f6a25b760
+    steps:
+      - name: Setup SSH agent
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.STAGING_SSH_KEY }}
+      - name: Read running images and version markers without changing the host
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/pr87-readonly"
+          REMOTE_CMD="$(python3 -c 'import os, shlex; print("sudo python3 - " + shlex.quote(os.environ["STAGING_APP_DIR"]))')"
+          ssh -o StrictHostKeyChecking=no -o ConnectTimeout=15 "$STAGING_SSH_USER@$STAGING_SSH_HOST" "$REMOTE_CMD" > "$RUNNER_TEMP/pr87-readonly/host.json" <<'PY'
+          import datetime, json, pathlib, re, subprocess, sys
+          root = pathlib.Path(sys.argv[1])
+          report = {"observed_at": datetime.datetime.now(datetime.timezone.utc).isoformat(), "mode": "read-only", "containers": []}
+          try:
+              report["checkout_sha"] = subprocess.check_output(["git", "-c", "safe.directory=" + str(root), "-C", str(root), "rev-parse", "HEAD"], timeout=15, stderr=subprocess.DEVNULL, text=True).strip()
+              report["successful_sha"] = (root / "infra/docker/.staging-successful-image-tag").read_text().strip()
+              env = (root / "infra/docker/.env.staging").read_text()
+              tags = re.findall(r"(?m)^IMAGE_TAG=(.*)$", env)
+              report["configured_image_tag"] = tags[0].strip() if len(tags) == 1 else None
+              for name in ["noah-api-1", "noah-room-state-1", "noah-remote-browser-1", "noah-postgres-1", "noah-minio-1", "noah-livekit-1", "noah-caddy-1"]:
+                  item = json.loads(subprocess.check_output(["docker", "inspect", name], timeout=15, stderr=subprocess.DEVNULL, text=True))[0]
+                  state = item["State"]
+                  image = item["Config"]["Image"]
+                  report["containers"].append({"name": name, "image_tag": image.rsplit(":", 1)[-1], "image_id": item["Image"], "status": state["Status"], "health": state.get("Health", {}).get("Status"), "started_at": state["StartedAt"]})
+          except Exception as error:
+              report["error_type"] = type(error).__name__
+          print(json.dumps(report, indent=2))
+          PY
+      - name: Read public health and canonical scene versions
+        if: always()
+        shell: bash
+        env:
+          STAGING_BASE_URL: ${{ secrets.STAGING_BASE_URL }}
+          STAGING_ADMIN_TOKEN: ${{ secrets.STAGING_ADMIN_TOKEN }}
+        run: |
+          python3 - <<'PY'
+          import datetime, json, os, pathlib, re, urllib.error, urllib.parse, urllib.request
+          out = pathlib.Path(os.environ["RUNNER_TEMP"]) / "pr87-readonly"
+          out.mkdir(exist_ok=True)
+          base = os.environ["STAGING_BASE_URL"].rstrip("/")
+          expected = os.environ["EXPECTED_SHA"]
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, *args, **kwargs):
+                  return None
+          opener = urllib.request.build_opener(NoRedirect)
+          report = {"observed_at": datetime.datetime.now(datetime.timezone.utc).isoformat(), "mode": "GET-only", "http": [], "rooms": []}
+          for route in ["/health", "/rooms/demo-room", "/control-plane"]:
+              record = {"route": route}
+              try:
+                  request = urllib.request.Request(base + route, headers={"cache-control": "no-cache"}, method="GET")
+                  with opener.open(request, timeout=15) as response:
+                      record["status"] = response.status
+              except Exception as error:
+                  record["error_type"] = type(error).__name__
+                  record["status"] = getattr(error, "code", None)
+              report["http"].append(record)
+          for room_id in ["42db8225-f671-4e46-9c28-9381d66a948c", "0b537d34-7b92-4b51-854a-8c64cfb4c114"]:
+              record = {"room_id": room_id}
+              try:
+                  request = urllib.request.Request(base + "/api/rooms/" + room_id, headers={"cache-control": "no-cache", "x-vrata-admin-token": os.environ["STAGING_ADMIN_TOKEN"]}, method="GET")
+                  with opener.open(request, timeout=15) as response:
+                      record["status"] = response.status
+                      payload = json.load(response)
+                  assert payload["roomId"] == room_id
+                  url = payload.get("sceneBundleUrl") if "sceneBundleUrl" in payload else payload.get("manifest", {}).get("sceneBundle", {}).get("url")
+                  parsed = urllib.parse.urlsplit(url)
+                  assert parsed.scheme == "https" and not parsed.username and not parsed.password
+                  version = re.search(r"/([0-9a-f]{40})/scene\.json$", parsed.path)
+                  record["scene_version"] = version.group(1) if version else None
+                  record["expected_previous_version"] = record["scene_version"] == expected
+                  with opener.open(urllib.request.Request(url, headers={"cache-control": "no-cache"}, method="GET"), timeout=15) as response:
+                      record["scene_bundle_status"] = response.status
+                      json.load(response)
+              except Exception as error:
+                  record["error_type"] = type(error).__name__
+              report["rooms"].append(record)
+          (out / "public.json").write_text(json.dumps(report, indent=2) + "\n")
+          print(json.dumps(report, indent=2))
+          PY
+      - name: Verify previously successful version remains running
+        if: always()
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json, os, pathlib
+          out = pathlib.Path(os.environ["RUNNER_TEMP"]) / "pr87-readonly"
+          host = json.loads((out / "host.json").read_text())
+          public = json.loads((out / "public.json").read_text())
+          expected = os.environ["EXPECTED_SHA"]
+          assert "error_type" not in host
+          assert host["checkout_sha"] == host["successful_sha"] == host["configured_image_tag"] == expected
+          assert len(host["containers"]) == 7
+          assert all(item["status"] == "running" and item["health"] in [None, "healthy"] for item in host["containers"])
+          apps = {"noah-api-1", "noah-room-state-1", "noah-remote-browser-1"}
+          assert all(item["image_tag"] == expected and item["health"] == "healthy" for item in host["containers"] if item["name"] in apps)
+          assert len(public["http"]) == 3 and all(item.get("status") == 200 and "error_type" not in item for item in public["http"])
+          assert len(public["rooms"]) == 2 and all(item.get("expected_previous_version") and item.get("scene_bundle_status") == 200 and "error_type" not in item for item in public["rooms"])
+          print("previous_version_readonly_verified:" + expected)
+          PY
+      - name: Upload redacted read-only results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr87-staging-readonly
+          path: ${{ runner.temp }}/pr87-readonly
+          retention-days: 14
+          if-no-files-found: error
