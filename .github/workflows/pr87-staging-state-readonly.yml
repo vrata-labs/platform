@@ -1,0 +1,111 @@
+name: PR87 staging state read-only
+on:
+  push:
+    branches: [diagnostics/pr87-stage-readonly-20260914]
+    paths: [.github/workflows/pr87-staging-state-readonly.yml]
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      STAGING_SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
+      STAGING_SSH_USER: ${{ secrets.STAGING_SSH_USER }}
+      STAGING_APP_DIR: ${{ secrets.STAGING_APP_DIR }}
+      STAGING_BASE_URL: ${{ secrets.STAGING_BASE_URL }}
+    steps:
+      - name: Setup SSH agent
+        uses: webfactory/ssh-agent@dc588b651fe13675774614f8e6a936a468676387
+        with:
+          ssh-private-key: ${{ secrets.STAGING_SSH_KEY }}
+          log-public-key: false
+      - name: Inspect deployed state without changing it
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf -v remote_dir '%q' "$STAGING_APP_DIR"
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo python3 - $remote_dir" <<'PY'
+          import datetime
+          import json
+          from pathlib import Path
+          import re
+          import subprocess
+          import sys
+
+          root = Path(sys.argv[1])
+          baseline = 'f5f64ef9f4352923853d6be5b9b00e6f6a25b760'
+          candidate = 'aa109b6399dedc24b439c0e79269306de28bf785'
+
+          def run(args):
+              return subprocess.run(args, check=True, capture_output=True, text=True, timeout=30).stdout.strip()
+
+          def sha(value):
+              return value if re.fullmatch(r'[0-9a-f]{40}', value) else 'missing_or_invalid'
+
+          env_file = root / 'infra/docker/.env.staging'
+          configured = 'missing_or_invalid'
+          for line in env_file.read_text().splitlines():
+              if line.startswith('IMAGE_TAG='):
+                  configured = sha(line.partition('=')[2])
+          successful = root / 'infra/docker/.staging-successful-image-tag'
+          report = {
+              'observed_at_utc': datetime.datetime.now(datetime.timezone.utc).isoformat(),
+              'baseline': baseline,
+              'candidate': candidate,
+              'host_checkout': sha(run(['git', '-c', f'safe.directory={root}', '-C', str(root), 'rev-parse', 'HEAD'])),
+              'configured_image_tag': configured,
+              'persisted_successful_sha': sha(successful.read_text().strip()) if successful.exists() else 'missing_or_invalid',
+              'containers': [],
+              'registry_manifest_checks': []
+          }
+          compose = ['docker', 'compose', '--env-file', str(env_file), '-f', str(root / 'infra/docker/compose.staging.yml')]
+          for service in ('api', 'room-state', 'remote-browser'):
+              ids = run(compose + ['ps', '-q', service]).splitlines()
+              if len(ids) != 1:
+                  report['containers'].append({'service': service, 'container_count': len(ids), 'verified': False})
+                  continue
+              raw = json.loads(run(['docker', 'inspect', ids[0]]))[0]
+              image = raw['Config']['Image']
+              state = raw['State']
+              report['containers'].append({
+                  'service': service,
+                  'image_ref': image,
+                  'image_id': raw['Image'],
+                  'status': state['Status'],
+                  'health': state.get('Health', {}).get('Status', 'not_configured'),
+                  'started_at': state['StartedAt'],
+                  'restart_count': raw['RestartCount'],
+                  'baseline_image': image.endswith(':' + baseline),
+                  'candidate_image': image.endswith(':' + candidate)
+              })
+          print('DEPLOYED_STATE=' + json.dumps(report), flush=True)
+          for image in (
+              'quay.io/minio/minio@sha256:a929054ae025fa7997857cd0e2a2e3029238e31ad89877326dc032f4c1a14259',
+              'quay.io/minio/mc@sha256:470f5546b596e16c7816b9c3fa7a78ce4076bb73c2c73f7faeec0c8043923123'
+          ):
+              try:
+                  result = subprocess.run(['docker', 'manifest', 'inspect', image], capture_output=True, text=True, timeout=60)
+                  check = {'image': image, 'readable': result.returncode == 0, 'exit_code': result.returncode}
+                  if result.returncode:
+                      message = result.stderr.lower()
+                      check['failure_class'] = next((code for code in ('502', '504', '503', 'unauthorized', 'denied', 'timeout') if code in message), 'other_error')
+                  else:
+                      manifest = json.loads(result.stdout)
+                      check['schema_version'] = manifest.get('schemaVersion')
+              except subprocess.TimeoutExpired:
+                  check = {'image': image, 'readable': False, 'failure_class': 'timeout'}
+              report['registry_manifest_checks'].append(check)
+              print('REGISTRY_CHECK=' + json.dumps(check), flush=True)
+          print('READ_ONLY_DIAGNOSTIC=' + json.dumps(report), flush=True)
+          if not all(item.get('status') == 'running' and item.get('health') == 'healthy' for item in report['containers']):
+              raise SystemExit('application_container_not_healthy')
+          PY
+      - name: Verify public application endpoints
+        shell: bash
+        run: |
+          set -euo pipefail
+          for endpoint in /health /rooms/demo-room /control-plane; do
+            curl --fail --silent --show-error --connect-timeout 10 --max-time 30 "$STAGING_BASE_URL$endpoint" >/dev/null
+            printf 'public_endpoint_ok:%s\n' "$endpoint"
+          done
