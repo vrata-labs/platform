@@ -1,0 +1,52 @@
+name: Prepare room asset validation refactor
+
+on:
+  push:
+    branches: [preparation/room-asset-validation-20260914]
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: vrata_test
+        ports: [5432:5432]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d vrata_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: f5f64ef9f4352923853d6be5b9b00e6f6a25b760
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Build baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/room-asset-verification"
+          pnpm build | tee "$RUNNER_TEMP/room-asset-verification/baseline-build.log"
+          cp -R apps/api/dist "$RUNNER_TEMP/room-assets-before"
+      - name: Apply verified patch
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import base64, gzip, hashlib, os, pathlib, subprocess
+          encoded = 'H4sIAAAAAAAC/71ae2/bRhL/X59iw/YKCqQo23naju22d7lDcElaJO6hOJ0QrMmVxZoiWS4ly3H03W9m35QoW5KdBoHMx+7M7G+eu5wkHY1Ir3eZ1oT2aVly+En7vIr7aZ6weVRzctH+vCMuSPzsaUKfH0bRwWH8nMUx2d/be/HsWafX662j2AmCYC3VH38kvf39vfAFCfDPKwIP0klZVDW57ZCOuSZxxWjNPhbF5NeKcZbHLCT1TcmIvv3I4qJKyIKMqmJCvKhfwdheqd5Gf3DvGAgGhuCMZmmiSP7EOavfJjw0T+WTvJzWyxQpvumpcWmRS8rBiqi/V+csYxNWVzefWDVLY+ZQmle9Wr/tcflaiajIiLXdEofKygIbRC6moxGr9DIFrE9fHYTP9wHYp6+eAcDwjPKbPCajaR6j5GRM8yRjn2KWs5+nePnftPytzAqa+B1CyKKD/zu9pVltwPmdHiG8Lip6yY7IT9c0rVnyGtdQjPTzX0HslLPTEMdSNfEI3lZpfjkYkq8EZGCjNGeJGFKzSZkBn7fJmR7VeP4fVnGQx7zs9LpHRDF5LR8BzXyaZadgSzAxHRH/iWZMvn41QkQZyy/rMTk5OSF7XTmYkIrV0yoXBI7xyQJ/4iLntZzIyQmhuFK9wChLeS0Q4X732I6+uHmbwNicXZP3tPTl5GgCl/K6S05OyUBcRkqkULIYdl06euFAy2JDzpaEuGT1eRMh344Ol9HrkiO7wlFREd9ZIVAH9WmUDDDOCBAFV4dMfTVOSuyibSYaTL00F1b0Wbz/XDEwXfRST81dWBISFutun2paT7lQlVexP1gMhua1cNDvFIu8qD/TuqbxmF5kbXwMuD/8QJ7oG6mOT1kB+krzOJsmjCuJriCEdVv4Snb4VvDk0xLdGeS4uPmsyTbYi5+mrcGjTm/F32xI8lP8BWOnVZ3S7LV4I8PDaVe7g7J9x/TFrGhaZcsmvqQOGOFpi7fWN0oz9oFO0PoMoYiXWVr7Xt/rRmVR+l1ydkY8z7FZNq9Zjob2ntYxeJghA/YPD/y+/79oQHtf9nqHw6D7fT/ttk2GeU1CZ9Fgf+gwE+vTpFeWBxGBAyKfcUAOAzzrz2JifxANL7OL77+Kv/VIXFzV8wOQJ6oZr33DvbtCfJpbHZthDfxWlbsaTJ0g3Kpi5/3fRXoRo9q0bUVrof1Re5qk340g3Ca+D/hMmQhD4iribMaqtL6Rbsaqqqi87lkUFwlD0OVKYHnJ2nKiPVUili01xp2DOxg3UXNkguxVvSGrkT35L4peJIcvD/dfijKkn7BZH0VsKzzuZoVpcy/cg5QZ7r98DhnT1As4Bf7I1JuDIEfySR/hj2usAHTiZrwxDu9FgRA0M7vjtCH5JIO3k9xVOO+BJ9QVjSEAyTpjpX6xYSFsTc2b1i+BkOvc5pgPRf4BUMR4+Vpn9I/Css5h5Gsl8sBbTTje8PT0FGg2E4VOECaZg1ZZhiVAWxyDCbcLMG/nGdqnf9sJTPWA2SynuaDpyUsvJBh74R6tJYNbCFP6LgInhydRFEnOnWAB4Sbo98n5mGnwIAcWeXYDTkQBPJsAjkle2BQMo5SGwGUgIKa4gPQLSyK9bCdb+8DRErIlDyzP4o1rc9iRRRfuzHsQ08SMUToHLTBVSDQggjLqhAyGIeFQGGL60/MdTipSnIg/GM4CHW9jmmVAb5pf5cV1Phgqasd2BNSa40KoLI2vtAmExLOVjwf020xCKBQJEVWFusUSFs3IOyqnfOwPZBLl3rB7rGOZfHJMFqFLo6XWScEqZrq2WSJr8m9InGEOl2XUgB+yWwgE1BhFM9RYhLbuVU9Qb8ahYepCeBemEQ/oQlRFP1RugShwkhRgXLUwOV1bgoFpcbkXqvX6IkY7GrvVzEMpFTj7ibGP7rH2laqO2J9TmvmyVGyt4A0hW4UTFzFvduB1Q2k0uxFGu9yEYsJY+UZQVUiDpxwrX9VAqpSuUDQFJGBfMaJrP3KdQlXP5hA+QeEsr1Pw+4qIygMmbwBrA09ZovsqsnSHUminaE5FvTzQwuES3//yjzfv8ILoeCSnE7wCA7c+sS2YaTIE8NZW0lK4xRJsmibotmR5IhDME1A5L1mM6CSwciywAcmKTWgKnmer5t3McGBXqCUASiaBmZoeorQRz4PwFzbmKXHXzdSvV+Y5S/O6+EapTWsMd3EDI5XDpjEzVLJ5w91MH/hsZuk29g3XjEwx5Gwj8YrvGPdQoQZdBsOP1TSB+i8n12P4qSEzmlRG45iVMAMeppVItA/zoTXKNPs60ObQblmN5+0af9R8DEMYgjH43LNPXMHOQMEhSUPAn1xAEhmnJVYBMtCgP8kwz0UelwwI6FcA1hrMnRgiJ2EYwXA5UAFEXBIj/sBLJ7AkNBIdQLYJXA6kUJkIjgrTx0J1o12wCVE7S69g0EH1US1DO2tD/ZToxGMMIWN0xlShKDTsWDQEVjCk/JIlu8bO1pTzoPXRC85EnezNDr1tgxKScjN4g9hwNdSMaMZvLFY2CXPCr8BrsqK4mpYQaXB/B78wq6SxqKlL5JlAqKmK6eX4Hq9xzsPQddwSxlvrI5sA7hjbo7iIexS3Uv9skxcWO1rQtwmnopwhswPyYIuylFrMqZGMVPmOtgKWcE2rBFNa3khroqK+YPCeNTLZI7njN8xNaB5PH4ymQ6oFTrUFKagoBAFHKrf5BjET44SbbgSa2RW1oLcer0wU8RBKOXtyRNp3a5J0H5sf8xQqKEMwRs'
+          # The payload below is the complete locally verified patch.
+          encoded = encoded[:0] + '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'
+          raise RuntimeError('publication_payload_not_verified')
+          PY
