@@ -99,26 +99,27 @@ jobs:
         run: |
           set -euo pipefail
           pnpm test 2>&1 | tee "$RUNNER_TEMP/room-record-evidence/workspace-tests.log"
-      - name: Commit and push the verified index
+      - name: Commit and push exactly the verified tree
         shell: bash
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$BASE_SHA"
           test "$(git ls-remote origin refs/heads/main | cut -f1)" = "$BASE_SHA"
           test -z "$(git ls-remote origin refs/heads/refactor/storage-room-records-20260914)"
-          test "$(git write-tree)" = "$EXPECTED_TREE"
-          git diff --exit-code
+          TREE="$(git write-tree)"
+          test "$TREE" = "$EXPECTED_TREE"
+          git diff --exit-code -- apps/api/src/storage.ts apps/api/src/storage-room-records.ts apps/api/src/storage-room-records.test.ts
           git diff --cached --check
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git switch -c refactor/storage-room-records-20260914
-          git commit -m 'refactor(api): extract room record materialization'
-          test "$(git rev-parse HEAD^{tree})" = "$EXPECTED_TREE"
-          test "$(git rev-parse HEAD^)" = "$BASE_SHA"
-          git push origin HEAD:refs/heads/refactor/storage-room-records-20260914
-          git rev-parse HEAD | tee "$RUNNER_TEMP/room-record-evidence/candidate-sha.txt"
-          git rev-parse HEAD^{tree} > "$RUNNER_TEMP/room-record-evidence/candidate-tree.txt"
-          git archive --format=tar.gz HEAD > "$RUNNER_TEMP/room-record-evidence/candidate-source.tgz"
+          CANDIDATE="$(printf '%s\n' 'refactor(api): extract room record materialization' | git commit-tree "$TREE" -p "$BASE_SHA")"
+          test "$(git rev-parse "$CANDIDATE^{tree}")" = "$EXPECTED_TREE"
+          test "$(git rev-parse "$CANDIDATE^")" = "$BASE_SHA"
+          git diff --name-only "$BASE_SHA" "$CANDIDATE"
+          git push origin "$CANDIDATE:refs/heads/refactor/storage-room-records-20260914"
+          printf '%s\n' "$CANDIDATE" | tee "$RUNNER_TEMP/room-record-evidence/candidate-sha.txt"
+          printf '%s\n' "$TREE" > "$RUNNER_TEMP/room-record-evidence/candidate-tree.txt"
+          git archive --format=tar.gz "$CANDIDATE" > "$RUNNER_TEMP/room-record-evidence/candidate-source.tgz"
       - name: Upload source and verification evidence
         if: always()
         uses: actions/upload-artifact@v4
