@@ -17,10 +17,6 @@ jobs:
     runs-on: ubuntu-latest
     env:
       EVIDENCE: /tmp/uploaded-object-storage-evidence
-      GIT_AUTHOR_NAME: github-actions[bot]
-      GIT_AUTHOR_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
-      GIT_COMMITTER_NAME: github-actions[bot]
-      GIT_COMMITTER_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
     services:
       postgres:
         image: postgres:16
@@ -39,124 +35,87 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-      - name: Install frozen dependencies
-        run: pnpm install --frozen-lockfile
-      - name: Build baseline
-        run: |
-          mkdir -p "$EVIDENCE"
-          pnpm build 2>&1 | tee "$EVIDENCE/baseline-build.log"
-          cp -a apps/api/dist "$RUNNER_TEMP/baseline-api"
-          cp apps/api/src/index.ts "$RUNNER_TEMP/baseline-index.ts"
-      - name: Apply exact reviewed extraction
+      - name: Restore only the exact previously verified patch
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh api repos/vrata-labs/platform/git/blobs/4177ebeb12d9be4134b7e4842e3c4a780e6bec0d --jq .content | base64 -d > "$RUNNER_TEMP/tests-part-1.ts"
-          gh api repos/vrata-labs/platform/git/blobs/780f64155db65d9aa9550616a9e3ef1188cd1879 --jq .content | base64 -d > "$RUNNER_TEMP/tests-part-2.ts"
-          node <<'JS'
-          const assert = require('node:assert/strict');
-          const fs = require('node:fs');
-          const ts = require('typescript');
-          const p = 'apps/api/src/index.ts';
-          const source = fs.readFileSync(p, 'utf8');
-          const original = ts.createSourceFile(p, source, ts.ScriptTarget.Latest, true);
-          const names = ['trimSlashes', 'joinUrlPath', 'contentTypeForPath', 'listFilesRecursive', 'sha256Hex', 'hmac', 'formatAmzDate', 'putS3Object', 'writeDocumentObject', 'deleteS3Object', 'deleteDocumentObject', 'resolveUploadedDocumentPublicUrl', 'readDocumentObject', 'publishSceneBundleFiles', 'resolveUploadedSceneBundlePublicUrl'];
-          const exported = ['trimSlashes', 'sha256Hex', 'writeDocumentObject', 'deleteDocumentObject', 'resolveUploadedDocumentPublicUrl', 'readDocumentObject', 'publishSceneBundleFiles', 'resolveUploadedSceneBundlePublicUrl'];
-          const moved = original.statements.filter(n => ts.isFunctionDeclaration(n) && names.includes(n.name.text));
-          assert.deepEqual(moved.map(n => n.name.text), names);
-          const header = 'import { copyFile, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";\nimport { createHash, createHmac } from "node:crypto";\nimport { dirname, extname, join, relative, sep } from "node:path";\n\nimport { normalizeSceneBundleRelativePath } from "@vrata/asset-pipeline";\n\nimport { resolveSceneBundlePublicUrl } from "./scene-bundle-storage.js";\nimport type { SceneBundleUploadStorage, DocumentUploadStorage } from "./upload-storage-config.js";\n\n';
-          const moduleText = header + moved.map(n => (exported.includes(n.name.text) ? 'export ' : '') + n.getText(original)).join('\n\n') + '\n';
-          let remaining = source;
-          for (const n of [...moved].reverse()) {
-            assert.equal(source.slice(n.end, n.end + 2), '\n\n');
-            remaining = remaining.slice(0, n.getStart(original)) + remaining.slice(n.end + 2);
-          }
-          for (const [before, after] of [
-            ['import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile }', 'import { mkdtemp, readFile, rm, writeFile }'],
-            ['import { createHash, createHmac, randomUUID, timingSafeEqual }', 'import { createHmac, randomUUID, timingSafeEqual }'],
-            ['import { basename, dirname, extname, join, normalize, relative, resolve, sep }', 'import { basename, dirname, extname, join, normalize, resolve, sep }'],
-            ['import { createUploadStorageConfig, type SceneBundleUploadStorage, type DocumentUploadStorage }', 'import { createUploadStorageConfig }']
-          ]) {
-            assert.equal(remaining.split(before).length, 2);
-            remaining = remaining.replace(before, after);
-          }
-          const anchor = 'import { createUploadStorageConfig } from "./upload-storage-config.js";\n';
-          const imports = '\nimport {\n' + exported.map(n => '  ' + n).join(',\n') + '\n} from "./uploaded-object-storage.js";\n';
-          remaining = remaining.replace(anchor, anchor + imports);
-          const candidate = ts.createSourceFile(p, remaining, ts.ScriptTarget.Latest, true);
-          const body = (file, filter) => file.statements.filter(n => !ts.isImportDeclaration(n) && filter(n)).map(n => n.getText(file));
-          assert.deepEqual(body(original, n => !moved.includes(n)), body(candidate, () => true));
-          fs.writeFileSync(p, remaining);
-          fs.writeFileSync('apps/api/src/uploaded-object-storage.ts', moduleText);
-          let tests = fs.readFileSync(process.env.RUNNER_TEMP + '/tests-part-1.ts', 'utf8') + fs.readFileSync(process.env.RUNNER_TEMP + '/tests-part-2.ts', 'utf8');
-          tests = tests.replaceAll('e852eecc85801ca5bef83bca8663801e3eac55e8fe9bccbd4dcec49607094894', '0150a92bb1212cd00516b65fde0704614760000963874fcbb11eaa734ee87809');
-          fs.writeFileSync('apps/api/src/uploaded-object-storage.test.ts', tests);
-          fs.writeFileSync(process.env.EVIDENCE + '/source-equivalence.json', JSON.stringify({ movedFunctions: names.length, movedDeclarationsCopiedExactly: true, remainingDeclarationsIdentical: true }, null, 2));
-          JS
-          git add apps/api/src/index.ts apps/api/src/uploaded-object-storage.ts apps/api/src/uploaded-object-storage.test.ts
+          mkdir -p "$EVIDENCE"
+          gh api repos/vrata-labs/platform/actions/jobs/103996596191 > "$RUNNER_TEMP/prior-job.json"
+          gh api repos/vrata-labs/platform/actions/artifacts/10350161898/zip > "$RUNNER_TEMP/prior-artifact.zip"
+          python3 <<'PY'
+          import hashlib, json, os, pathlib, zipfile
+          root = pathlib.Path(os.environ['RUNNER_TEMP'])
+          job = json.loads((root/'prior-job.json').read_text())
+          assert job['run_id'] == 34850402471
+          assert job['head_sha'] == '50ef8410cd56fd41548256bd56dccd3cafc3104f'
+          for name in ['Install frozen dependencies', 'Build baseline', 'Apply exact reviewed extraction', 'Lint and typecheck', 'Build candidate', 'Compare compiled implementations and public declarations', 'Test including PostgreSQL']:
+              assert any(s['name'] == name and s['conclusion'] == 'success' for s in job['steps']), name
+          data = (root/'prior-artifact.zip').read_bytes()
+          assert hashlib.sha256(data).hexdigest() == '597361bcc257763a020e4b31bcb5ee8ee32e2a48dbcb2197f9c2adb7659cd0e7'
+          evidence = pathlib.Path(os.environ['EVIDENCE'])
+          with zipfile.ZipFile(root/'prior-artifact.zip') as archive:
+              patch = archive.read('refactor.patch')
+              assert hashlib.sha256(patch).hexdigest() == '9b35bd8ffe8d48692e67c2267fac149e6039c4bc954079d378a0908143d0a64b'
+              (evidence/'refactor.patch').write_bytes(patch)
+              for name in ['compiled-equivalence.json', 'source-equivalence.json']:
+                  (evidence/name).write_bytes(archive.read(name))
+          PY
+          git apply --index "$EVIDENCE/refactor.patch"
           test "$(git write-tree)" = 15503b4e1201d0b520a01f9073ef23c0748f4bb0
           git diff --cached --check
-          git diff --cached --binary > "$EVIDENCE/refactor.patch"
-      - name: Lint and typecheck
+          git diff --exit-code
+          test "$(git diff --cached --name-only | wc -l)" -eq 3
+      - name: Install frozen dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Verify candidate again including PostgreSQL
+        env:
+          VRATA_TEST_POSTGRES_URL: postgres://postgres:postgres@127.0.0.1:5432/vrata_test
         run: |
           pnpm lint
           pnpm typecheck
-      - name: Build candidate
-        run: pnpm build 2>&1 | tee "$EVIDENCE/candidate-build.log"
-      - name: Compare compiled implementations and public declarations
-        run: |
-          node <<'JS'
-          const assert = require('node:assert/strict');
-          const fs = require('node:fs');
-          const path = require('node:path');
-          const ts = require('typescript');
-          const baseline = path.join(process.env.RUNNER_TEMP, 'baseline-api');
-          const candidate = 'apps/api/dist';
-          const files = fs.readdirSync(baseline, { recursive: true }).filter(p => p.endsWith('.js'));
-          for (const file of files.filter(p => p !== 'index.js')) assert.deepEqual(fs.readFileSync(path.join(baseline, file)), fs.readFileSync(path.join(candidate, file)), file);
-          const parse = p => ts.createSourceFile(p, fs.readFileSync(p, 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
-          const before = parse(path.join(baseline, 'index.js'));
-          const after = parse(path.join(candidate, 'index.js'));
-          const module = parse(path.join(candidate, 'uploaded-object-storage.js'));
-          const functions = module.statements.filter(n => ts.isFunctionDeclaration(n));
-          assert.equal(functions.length, 15);
-          const names = new Set(functions.map(n => n.name.text));
-          for (const n of functions) {
-            const old = before.statements.find(p => ts.isFunctionDeclaration(p) && p.name.text === n.name.text);
-            assert.ok(old, n.name.text);
-            assert.equal(n.getText(module).replace(/^export /, ''), old.getText(before), n.name.text);
-          }
-          const body = (file, filter) => file.statements.filter(n => !ts.isImportDeclaration(n) && filter(n)).map(n => n.getText(file));
-          assert.deepEqual(body(before, n => !ts.isFunctionDeclaration(n) || !names.has(n.name.text)), body(after, () => true));
-          assert.deepEqual(fs.readFileSync(path.join(baseline, 'index.d.ts')), fs.readFileSync(path.join(candidate, 'index.d.ts')));
-          assert.ok(module.statements.every(n => ts.isFunctionDeclaration(n) || ts.isImportDeclaration(n)));
-          const result = { existingJavaScriptFiles: files.length, byteIdenticalJavaScriptFiles: files.length - 1, changedExistingJavaScript: ['index.js'], movedCompiledFunctionsIdentical: 15, remainingCompiledDeclarationsIdentical: true, publicIndexDeclarationsIdentical: true, noNewTopLevelExecutions: true };
-          fs.writeFileSync(process.env.EVIDENCE + '/compiled-equivalence.json', JSON.stringify(result, null, 2));
-          console.log(JSON.stringify(result));
-          JS
-      - name: Test including PostgreSQL
+          pnpm build
+          pnpm test 2>&1 | tee "$EVIDENCE/workspace-tests.log"
+      - name: Upload only the verified Git objects without advancing any branch
         env:
-          VRATA_TEST_POSTGRES_URL: postgres://postgres:postgres@127.0.0.1:5432/vrata_test
-        run: pnpm test 2>&1 | tee "$EVIDENCE/workspace-tests.log"
-      - name: Publish only the verified source tree
+          GH_TOKEN: ${{ github.token }}
         run: |
           test "$(git write-tree)" = 15503b4e1201d0b520a01f9073ef23c0748f4bb0
           git diff --exit-code
-          test "$(git diff --cached --name-only | wc -l)" -eq 3
           test "$(git ls-remote origin refs/heads/main | cut -f1)" = f801909eaa2e971f46c540a3727352e773f7363f
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          export GIT_AUTHOR_NAME='github-actions[bot]'
-          export GIT_AUTHOR_EMAIL='41898282+github-actions[bot]@users.noreply.github.com'
-          export GIT_COMMITTER_NAME="$GIT_AUTHOR_NAME"
-          export GIT_COMMITTER_EMAIL="$GIT_AUTHOR_EMAIL"
-          git switch -c refactor/uploaded-object-storage-20260914
-          git commit -m 'refactor(api): extract uploaded object storage I/O'
-          test "$(git rev-parse HEAD^{tree})" = 15503b4e1201d0b520a01f9073ef23c0748f4bb0
-          git push --set-upstream origin refactor/uploaded-object-storage-20260914
-          git rev-parse HEAD > "$EVIDENCE/candidate-sha.txt"
-          git rev-parse HEAD^{tree} > "$EVIDENCE/candidate-tree.txt"
-          git archive --format=tar.gz HEAD > "$EVIDENCE/candidate-source.tgz"
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import { readFileSync, writeFileSync } from 'node:fs';
+          import { createHash } from 'node:crypto';
+          const root = 'https://api.github.com/repos/vrata-labs/platform';
+          async function api(path, method, body) {
+            const response = await fetch(root + path, {
+              method,
+              headers: { Authorization: `Bearer ${process.env.GH_TOKEN}`, Accept: 'application/vnd.github+json', 'Content-Type': 'application/json', 'X-GitHub-Api-Version': '2022-11-28' },
+              body: body === undefined ? undefined : JSON.stringify(body)
+            });
+            assert.ok(response.ok, `${method} ${path}: HTTP ${response.status}`);
+            return response.json();
+          }
+          const files = [
+            ['apps/api/src/index.ts', 'c43da59ce5262c569a3b2a3723f998e0a64ff588'],
+            ['apps/api/src/uploaded-object-storage.ts', '3502aef3177111faa414a832cd79cdf55d0ca231'],
+            ['apps/api/src/uploaded-object-storage.test.ts', '67d6d401cf00bdd82bec9f38c290f123735b7654']
+          ];
+          const entries = [];
+          for (const [path, expected] of files) {
+            const data = readFileSync(path);
+            const hash = createHash('sha1').update(`blob ${data.length}\0`).update(data).digest('hex');
+            assert.equal(hash, expected, path);
+            const blob = await api('/git/blobs', 'POST', { content: data.toString('base64'), encoding: 'base64' });
+            assert.equal(blob.sha, expected, path);
+            entries.push({ path, mode: '100644', type: 'blob', sha: blob.sha });
+          }
+          const tree = await api('/git/trees', 'POST', { base_tree: '9a947f2254a6df94b0ff93d0b6a9b39280d4a50f', tree: entries });
+          assert.equal(tree.sha, '15503b4e1201d0b520a01f9073ef23c0748f4bb0');
+          writeFileSync(process.env.EVIDENCE + '/published-tree.json', JSON.stringify({ tree: tree.sha, files: entries, branchesUpdated: false }, null, 2));
+          console.log(`verified_tree_uploaded:${tree.sha}`);
+          JS
+          git archive --format=tar.gz 15503b4e1201d0b520a01f9073ef23c0748f4bb0 > "$EVIDENCE/candidate-source.tgz"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
