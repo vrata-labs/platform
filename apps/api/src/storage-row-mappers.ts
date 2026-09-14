@@ -7,7 +7,7 @@ import type {
   RoomNoteVersionAction,
   RoomNoteVersionRecord,
   WaitingRoomRequestRecord
-} from "./storage.js";
+} from "./storage-contracts.js";
 
 export function isoString(value: string | Date | null | undefined): string | null {
   if (!value) return null;
