@@ -37,6 +37,7 @@ jobs:
           cat .refactor/tools-0.b64 .refactor/tools-1.b64 .refactor/tools-2.b64 | base64 -d > "$RUNNER_TEMP/refactor-tools.zip"
           echo "f51980ddf94d339d936e48bf870154beed8df2c3e7af994eb8e89f7bd9d932c1  $RUNNER_TEMP/refactor-tools.zip" | sha256sum -c -
           unzip -q "$RUNNER_TEMP/refactor-tools.zip" -d "$RUNNER_TEMP/refactor-tools"
+          git fetch --no-tags --depth=1 origin "$BASELINE"
           git checkout --detach "$BASELINE"
           test "$(git rev-parse HEAD^{tree})" = 06dae7043432727db16f9465ad88eaafd6da5a1e
           cp apps/runtime-web/src/main.ts "$EVIDENCE/main-baseline.ts"
