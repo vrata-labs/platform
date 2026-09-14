@@ -8,11 +8,19 @@ permissions:
   contents: write
   actions: read
 
+defaults:
+  run:
+    shell: bash
+
 jobs:
   prepare:
     runs-on: ubuntu-latest
     env:
       EVIDENCE: /tmp/uploaded-object-storage-evidence
+      GIT_AUTHOR_NAME: github-actions[bot]
+      GIT_AUTHOR_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+      GIT_COMMITTER_NAME: github-actions[bot]
+      GIT_COMMITTER_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
     services:
       postgres:
         image: postgres:16
@@ -136,7 +144,9 @@ jobs:
           git diff --exit-code
           test "$(git diff --cached --name-only | wc -l)" -eq 3
           test "$(git ls-remote origin refs/heads/main | cut -f1)" = f801909eaa2e971f46c540a3727352e773f7363f
-          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'refactor(api): extract uploaded object storage I/O'
+          git var GIT_AUTHOR_IDENT
+          git var GIT_COMMITTER_IDENT
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit --author='github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>' -m 'refactor(api): extract uploaded object storage I/O'
           test "$(git rev-parse HEAD^{tree})" = 15503b4e1201d0b520a01f9073ef23c0748f4bb0
           git push origin HEAD:refs/heads/refactor/uploaded-object-storage-20260914
           git rev-parse HEAD > "$EVIDENCE/candidate-sha.txt"
