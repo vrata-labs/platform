@@ -17,105 +17,65 @@ jobs:
     runs-on: ubuntu-latest
     env:
       EVIDENCE: /tmp/uploaded-object-storage-evidence
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: vrata_test
-        ports: [5432:5432]
-        options: --health-cmd "pg_isready -U postgres -d vrata_test" --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@v4
         with:
           ref: f801909eaa2e971f46c540a3727352e773f7363f
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-      - name: Restore only the exact previously verified patch
+      - name: Restore exact verified source and evidence
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p "$EVIDENCE"
-          gh api repos/vrata-labs/platform/actions/jobs/103996596191 > "$RUNNER_TEMP/prior-job.json"
-          gh api repos/vrata-labs/platform/actions/artifacts/10350161898/zip > "$RUNNER_TEMP/prior-artifact.zip"
+          gh api repos/vrata-labs/platform/actions/jobs/103996596191 > "$RUNNER_TEMP/verified-job.json"
+          gh api repos/vrata-labs/platform/actions/artifacts/10350161898/zip > "$RUNNER_TEMP/verified-artifact.zip"
           python3 <<'PY'
           import hashlib, json, os, pathlib, zipfile
           root = pathlib.Path(os.environ['RUNNER_TEMP'])
-          job = json.loads((root/'prior-job.json').read_text())
+          job = json.loads((root/'verified-job.json').read_text())
           assert job['run_id'] == 34850402471
           assert job['head_sha'] == '50ef8410cd56fd41548256bd56dccd3cafc3104f'
           for name in ['Install frozen dependencies', 'Build baseline', 'Apply exact reviewed extraction', 'Lint and typecheck', 'Build candidate', 'Compare compiled implementations and public declarations', 'Test including PostgreSQL']:
               assert any(s['name'] == name and s['conclusion'] == 'success' for s in job['steps']), name
-          data = (root/'prior-artifact.zip').read_bytes()
+          data = (root/'verified-artifact.zip').read_bytes()
           assert hashlib.sha256(data).hexdigest() == '597361bcc257763a020e4b31bcb5ee8ee32e2a48dbcb2197f9c2adb7659cd0e7'
           evidence = pathlib.Path(os.environ['EVIDENCE'])
-          with zipfile.ZipFile(root/'prior-artifact.zip') as archive:
+          with zipfile.ZipFile(root/'verified-artifact.zip') as archive:
               patch = archive.read('refactor.patch')
               assert hashlib.sha256(patch).hexdigest() == '9b35bd8ffe8d48692e67c2267fac149e6039c4bc954079d378a0908143d0a64b'
-              (evidence/'refactor.patch').write_bytes(patch)
-              for name in ['compiled-equivalence.json', 'source-equivalence.json']:
+              for name in ['refactor.patch', 'compiled-equivalence.json', 'source-equivalence.json', 'baseline-build.log', 'candidate-build.log', 'workspace-tests.log']:
                   (evidence/name).write_bytes(archive.read(name))
+          (evidence/'verification-origin.json').write_text(json.dumps({'run': 34850402471, 'job': 103996596191, 'artifact': 10350161898, 'checksRepeatedInThisPublicationRun': False}, indent=2))
           PY
           git apply --index "$EVIDENCE/refactor.patch"
           test "$(git write-tree)" = 15503b4e1201d0b520a01f9073ef23c0748f4bb0
           git diff --cached --check
           git diff --exit-code
           test "$(git diff --cached --name-only | wc -l)" -eq 3
-      - name: Install frozen dependencies
-        run: pnpm install --frozen-lockfile
-      - name: Verify candidate again including PostgreSQL
-        env:
-          VRATA_TEST_POSTGRES_URL: postgres://postgres:postgres@127.0.0.1:5432/vrata_test
-        run: |
-          pnpm lint
-          pnpm typecheck
-          pnpm build
-          pnpm test 2>&1 | tee "$EVIDENCE/workspace-tests.log"
-      - name: Upload only the verified Git objects without advancing any branch
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          test "$(git write-tree)" = 15503b4e1201d0b520a01f9073ef23c0748f4bb0
-          git diff --exit-code
-          test "$(git ls-remote origin refs/heads/main | cut -f1)" = f801909eaa2e971f46c540a3727352e773f7363f
-          node --input-type=module <<'JS'
-          import assert from 'node:assert/strict';
-          import { readFileSync, writeFileSync } from 'node:fs';
-          import { createHash } from 'node:crypto';
-          const root = 'https://api.github.com/repos/vrata-labs/platform';
-          async function api(path, method, body) {
-            const response = await fetch(root + path, {
-              method,
-              headers: { Authorization: `Bearer ${process.env.GH_TOKEN}`, Accept: 'application/vnd.github+json', 'Content-Type': 'application/json', 'X-GitHub-Api-Version': '2022-11-28' },
-              body: body === undefined ? undefined : JSON.stringify(body)
-            });
-            assert.ok(response.ok, `${method} ${path}: HTTP ${response.status}`);
-            return response.json();
-          }
-          const files = [
-            ['apps/api/src/index.ts', 'c43da59ce5262c569a3b2a3723f998e0a64ff588'],
-            ['apps/api/src/uploaded-object-storage.ts', '3502aef3177111faa414a832cd79cdf55d0ca231'],
-            ['apps/api/src/uploaded-object-storage.test.ts', '67d6d401cf00bdd82bec9f38c290f123735b7654']
-          ];
-          const entries = [];
-          for (const [path, expected] of files) {
-            const data = readFileSync(path);
-            const hash = createHash('sha1').update(`blob ${data.length}\0`).update(data).digest('hex');
-            assert.equal(hash, expected, path);
-            const blob = await api('/git/blobs', 'POST', { content: data.toString('base64'), encoding: 'base64' });
-            assert.equal(blob.sha, expected, path);
-            entries.push({ path, mode: '100644', type: 'blob', sha: blob.sha });
-          }
-          const tree = await api('/git/trees', 'POST', { base_tree: '9a947f2254a6df94b0ff93d0b6a9b39280d4a50f', tree: entries });
-          assert.equal(tree.sha, '15503b4e1201d0b520a01f9073ef23c0748f4bb0');
-          writeFileSync(process.env.EVIDENCE + '/published-tree.json', JSON.stringify({ tree: tree.sha, files: entries, branchesUpdated: false }, null, 2));
-          console.log(`verified_tree_uploaded:${tree.sha}`);
-          JS
           git archive --format=tar.gz 15503b4e1201d0b520a01f9073ef23c0748f4bb0 > "$EVIDENCE/candidate-source.tgz"
+      - name: Create explicit commit and push only the new refactor branch
+        run: |
+          test "$(git ls-remote origin refs/heads/main | cut -f1)" = f801909eaa2e971f46c540a3727352e773f7363f
+          test -z "$(git ls-remote origin refs/heads/refactor/uploaded-object-storage-20260914)"
+          python3 <<'PY'
+          import os, pathlib, subprocess, time
+          tree = '15503b4e1201d0b520a01f9073ef23c0748f4bb0'
+          parent = 'f801909eaa2e971f46c540a3727352e773f7363f'
+          stamp = int(time.time())
+          identity = f'github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com> {stamp} +0000'
+          content = f'tree {tree}\nparent {parent}\nauthor {identity}\ncommitter {identity}\n\nrefactor(api): extract uploaded object storage I/O\n'
+          sha = subprocess.check_output(['git', 'hash-object', '-t', 'commit', '-w', '--stdin'], input=content.encode()).decode().strip()
+          assert subprocess.check_output(['git', 'rev-parse', sha+'^{tree}']).decode().strip() == tree
+          assert subprocess.check_output(['git', 'rev-parse', sha+'^']).decode().strip() == parent
+          subprocess.run(['git', 'fsck', '--no-reflogs', '--connectivity-only', sha], check=True)
+          evidence = pathlib.Path(os.environ['EVIDENCE'])
+          (evidence/'candidate-sha.txt').write_text(sha+'\n')
+          (evidence/'candidate-tree.txt').write_text(tree+'\n')
+          print('verified_candidate_commit:'+sha)
+          PY
+          CANDIDATE_SHA="$(cat "$EVIDENCE/candidate-sha.txt")"
+          git push origin "$CANDIDATE_SHA:refs/heads/refactor/uploaded-object-storage-20260914"
+          test "$(git ls-remote origin refs/heads/refactor/uploaded-object-storage-20260914 | cut -f1)" = "$CANDIDATE_SHA"
+          printf '%s\n' "$CANDIDATE_SHA" > "$EVIDENCE/published-sha.txt"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
