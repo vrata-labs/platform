@@ -99,12 +99,13 @@ jobs:
         run: |
           set -euo pipefail
           pnpm test 2>&1 | tee "$RUNNER_TEMP/room-record-evidence/workspace-tests.log"
-      - name: Publish only the three reviewed source files
+      - name: Publish verified index without applying the patch again
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$BASE_SHA"
           test "$(git ls-remote origin refs/heads/main | cut -f1)" = "$BASE_SHA"
           test -z "$(git ls-remote origin refs/heads/refactor/storage-room-records-20260914)"
           test "$(git write-tree)" = "$EXPECTED_TREE"
