@@ -1,3 +1,4 @@
+import { initPostgresStorageWithRetry } from "./storage-init-retry.js";
 import { Pool, type PoolClient } from "pg";
 import { getTemplateVersion as getSeedTemplateVersion, listTemplateDefinitions } from "@vrata/templates";
 import type { RoomTemplateStatus, RoomTemplateVersionSnapshotV1 } from "@vrata/shared-types";
@@ -46,6 +47,8 @@ import type {
   XrTelemetryEventRecord
 } from "./storage-contracts.js";
 
+export { initPostgresStorageWithRetry } from "./storage-init-retry.js";
+
 export type {
   AssetRecord,
   ExpectedRoomTemplateBinding,
@@ -77,9 +80,6 @@ export type {
 const DEFAULT_AVATAR_CONFIG_JSON = '{"avatarsEnabled":true,"avatarCatalogUrl":"/assets/avatars/catalog.v1.json","avatarQualityProfile":"desktop-standard","avatarFallbackCapsulesEnabled":true,"avatarSeatsEnabled":true}' as const;
 const DEFAULT_SESSION_CONTROL_JSON = '{"hostParticipantId":null,"presenterParticipantId":null,"presenterGrantedAt":null,"presenterGrantedBy":null,"presenterRevokedAt":null,"presenterRevokedBy":null,"lockedAt":null,"lockedBy":null,"endedAt":null,"endedBy":null,"removedParticipants":{}}' as const;
 const DEFAULT_PERSONAL_STATE_JSON = '{}' as const;
-const POSTGRES_INIT_MAX_ATTEMPTS = 12;
-const POSTGRES_INIT_RETRY_DELAY_MS = 1000;
-const RETRYABLE_POSTGRES_INIT_ERROR_CODES = new Set(["ECONNREFUSED", "ECONNRESET", "ETIMEDOUT", "EAI_AGAIN", "ENOTFOUND"]);
 const POSTGRES_INIT_ADVISORY_LOCK_SQL = "select pg_advisory_lock(hashtextextended('vrata:postgres-storage-init:v1', 0))";
 const POSTGRES_INIT_ADVISORY_UNLOCK_SQL = "select pg_advisory_unlock(hashtextextended('vrata:postgres-storage-init:v1', 0)) as unlocked";
 const TEMPLATE_VERSION_MUTATION_FUNCTION_NAME = "vrata_reject_template_version_mutation";
@@ -87,55 +87,6 @@ const TEMPLATE_VERSION_MUTATION_FUNCTION_SOURCE = `begin
   raise exception 'template_versions_are_immutable' using errcode = '55000';
   return null;
 end`;
-
-type InitializableStorage = { init(): Promise<void> };
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function getErrorCode(error: unknown): string | undefined {
-  if (!error || typeof error !== "object") return undefined;
-  const maybeCode = (error as { code?: unknown }).code;
-  if (typeof maybeCode === "string") return maybeCode;
-  const maybeCause = (error as { cause?: unknown }).cause;
-  if (!maybeCause || typeof maybeCause !== "object") return undefined;
-  const maybeCauseCode = (maybeCause as { code?: unknown }).code;
-  return typeof maybeCauseCode === "string" ? maybeCauseCode : undefined;
-}
-
-function isRetryablePostgresInitError(error: unknown): boolean {
-  const code = getErrorCode(error);
-  if (code && RETRYABLE_POSTGRES_INIT_ERROR_CODES.has(code)) return true;
-  return error instanceof Error && /connect (ECONNREFUSED|ECONNRESET|ETIMEDOUT|EAI_AGAIN|ENOTFOUND)/.test(error.message);
-}
-
-export async function initPostgresStorageWithRetry(
-  storage: InitializableStorage,
-  options: {
-    maxAttempts?: number;
-    retryDelayMs?: number;
-    onRetry?: (error: unknown, attempt: number, maxAttempts: number, retryDelayMs: number) => void;
-    wait?: (ms: number) => Promise<void>;
-  } = {}
-): Promise<void> {
-  const maxAttempts = Math.max(1, Math.floor(options.maxAttempts ?? POSTGRES_INIT_MAX_ATTEMPTS));
-  const retryDelayMs = Math.max(0, Math.floor(options.retryDelayMs ?? POSTGRES_INIT_RETRY_DELAY_MS));
-  const wait = options.wait ?? delay;
-
-  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-    try {
-      await storage.init();
-      return;
-    } catch (error) {
-      if (attempt >= maxAttempts || !isRetryablePostgresInitError(error)) {
-        throw error;
-      }
-      options.onRetry?.(error, attempt, maxAttempts, retryDelayMs);
-      await wait(retryDelayMs);
-    }
-  }
-}
 
 function normalizePostgresDefinition(value: string): string {
   return value.replace(/\s+/g, " ").trim().toLowerCase();
