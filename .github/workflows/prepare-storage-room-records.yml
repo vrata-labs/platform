@@ -1,0 +1,125 @@
+name: Prepare storage room record extraction
+
+on:
+  push:
+    branches:
+      - preparation/storage-room-records-20260914
+    paths:
+      - .github/workflows/prepare-storage-room-records.yml
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: vrata_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d vrata_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      BASE_SHA: 6d296e85785b5462b1faab327d2ea64e7920284a
+      EXPECTED_TREE: 5c823bb8f2a75609eb8ba065cb17c182faaa1ad3
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 6d296e85785b5462b1faab327d2ea64e7920284a
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install frozen dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Build and preserve baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$BASE_SHA"
+          mkdir -p "$RUNNER_TEMP/room-record-evidence"
+          pnpm build 2>&1 | tee "$RUNNER_TEMP/room-record-evidence/baseline-build.log"
+          cp -a apps/api/dist "$RUNNER_TEMP/baseline-api-dist"
+          cp apps/api/src/storage.ts "$RUNNER_TEMP/baseline-storage.ts"
+      - name: Apply exactly the reviewed patch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api repos/vrata-labs/platform/git/blobs/032f62ff39b1014d81e13d5045f732ddf05783d4 > "$RUNNER_TEMP/room-record-payload.json"
+          python3 - <<'PY'
+          import base64, gzip, hashlib, json, os, pathlib, subprocess
+          temp = pathlib.Path(os.environ['RUNNER_TEMP'])
+          evidence = temp / 'room-record-evidence'
+          blob = json.loads((temp / 'room-record-payload.json').read_text())
+          raw = base64.b64decode(blob['content'])
+          assert hashlib.sha256(raw).hexdigest() == 'b4c4efd21ab9536b859a2c30f313d40b2d3f4fd71c50c636d1cffe54e39f7687'
+          payload = json.loads(gzip.decompress(raw))
+          assert payload['base'] == os.environ['BASE_SHA']
+          assert payload['tree'] == os.environ['EXPECTED_TREE']
+          (evidence / 'refactor.patch').write_text(payload['patch'])
+          (temp / 'verify-room-record-source.cjs').write_text(payload['verifySource'])
+          (temp / 'compare-room-record-build.cjs').write_text(payload['compareBuild'])
+          subprocess.run(['git', 'apply', '--index', str(evidence / 'refactor.patch')], check=True)
+          actual = subprocess.check_output(['git', 'write-tree'], text=True).strip()
+          assert actual == payload['tree'], actual
+          changed = subprocess.check_output(['git', 'diff', '--cached', '--name-only'], text=True).splitlines()
+          assert changed == ['apps/api/src/storage-room-records.test.ts', 'apps/api/src/storage-room-records.ts', 'apps/api/src/storage.ts'], changed
+          PY
+          TYPESCRIPT_PATH="$PWD/node_modules/typescript" VRATA_ROOT="$PWD" BASELINE_SOURCE="$RUNNER_TEMP/baseline-storage.ts" node "$RUNNER_TEMP/verify-room-record-source.cjs" | tee "$RUNNER_TEMP/room-record-evidence/source-equivalence.json"
+      - name: Lint
+        run: pnpm lint
+      - name: Typecheck
+        run: pnpm typecheck
+      - name: Build candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm build 2>&1 | tee "$RUNNER_TEMP/room-record-evidence/candidate-build.log"
+      - name: Compare actual emitted JavaScript
+        shell: bash
+        run: |
+          set -euo pipefail
+          TYPESCRIPT_PATH="$PWD/node_modules/typescript" BASELINE_DIST="$RUNNER_TEMP/baseline-api-dist" node "$RUNNER_TEMP/compare-room-record-build.cjs" | tee "$RUNNER_TEMP/room-record-evidence/compiled-equivalence.json"
+      - name: Test including PostgreSQL
+        env:
+          VRATA_TEST_POSTGRES_URL: postgres://postgres:postgres@127.0.0.1:5432/vrata_test
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm test 2>&1 | tee "$RUNNER_TEMP/room-record-evidence/workspace-tests.log"
+      - name: Publish only the three reviewed source files
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git ls-remote origin refs/heads/main | cut -f1)" = "$BASE_SHA"
+          test "$(git write-tree)" = "$EXPECTED_TREE"
+          git diff --exit-code
+          git diff --cached --check
+          git switch -c refactor/storage-room-records-20260914
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'refactor(api): extract room record materialization'
+          test "$(git rev-parse HEAD^{tree})" = "$EXPECTED_TREE"
+          git push origin HEAD:refs/heads/refactor/storage-room-records-20260914
+          git rev-parse HEAD | tee "$RUNNER_TEMP/room-record-evidence/candidate-sha.txt"
+          git rev-parse HEAD^{tree} > "$RUNNER_TEMP/room-record-evidence/candidate-tree.txt"
+          git archive --format=tar.gz HEAD > "$RUNNER_TEMP/room-record-evidence/candidate-source.tgz"
+      - name: Upload source and verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: storage-room-records-candidate
+          path: ${{ runner.temp }}/room-record-evidence/
+          retention-days: 14
