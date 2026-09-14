@@ -110,6 +110,8 @@ import {
 
 import { createRoomPresence, type PresenceRecord } from "./room-presence.js";
 
+import { validateRoomAssetIds, validateAssetInput } from "./room-asset-validation.js";
+
 import { createXrTelemetryService } from "./xr-telemetry-service.js";
 import type { XrTelemetryRecord } from "./xr-telemetry-buffer.js";
 
@@ -1380,51 +1382,6 @@ async function handleSceneBundleZipUpload(
     if (extracted) await rm(extracted.root, { recursive: true, force: true });
     await rm(tempRoot, { recursive: true, force: true });
   }
-}
-
-async function validateRoomAssetIds(
-  storage: Awaited<typeof storagePromise>,
-  assetIds: string[] | undefined,
-  templateId?: string,
-  templateVersion?: string
-): Promise<string | null> {
-  if (!assetIds || assetIds.length === 0) {
-    return null;
-  }
-  const assets = await storage.listAssets();
-  const byId = new Map(assets.map((asset) => [asset.assetId, asset]));
-  const template = templateId ? await storage.getTemplateVersion(templateId, templateVersion) : null;
-  for (const assetId of assetIds) {
-    const asset = byId.get(assetId);
-    if (!asset) {
-      return "invalid_asset_reference";
-    }
-    if (asset.validationStatus === "rejected") {
-      return "rejected_asset_not_attachable";
-    }
-    if (template && !template.assetSlots.includes(asset.kind)) {
-      return "asset_kind_not_supported_by_template";
-    }
-  }
-  return null;
-}
-
-function validateAssetInput(input: Partial<AssetRecord>): string | null {
-  if (!input.url) {
-    return "invalid_asset_url";
-  }
-
-  const fileName = input.url.split("/").pop() ?? "";
-  const extensionMatch = fileName.match(/(\.[a-z0-9]+)$/i);
-  const extension = extensionMatch?.[1] ?? "";
-  if (!fileName) {
-    return "missing_filename";
-  }
-  if (!/[.]glb$|[.]gltf$|[.]ktx2$/i.test(extension)) {
-    return "unsupported_extension";
-  }
-
-  return null;
 }
 
 function validateSceneBundleInput(input: Partial<SceneBundleCreateInput>): string | null {
