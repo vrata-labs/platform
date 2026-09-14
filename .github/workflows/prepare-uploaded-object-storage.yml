@@ -1,0 +1,150 @@
+name: Prepare uploaded object storage extraction
+
+on:
+  push:
+    branches: [preparation/uploaded-object-storage-20260914]
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    env:
+      EVIDENCE: ${{ runner.temp }}/uploaded-object-storage-evidence
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: vrata_test
+        ports: [5432:5432]
+        options: --health-cmd "pg_isready -U postgres -d vrata_test" --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: f801909eaa2e971f46c540a3727352e773f7363f
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install frozen dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Build baseline
+        run: |
+          mkdir -p "$EVIDENCE"
+          pnpm build 2>&1 | tee "$EVIDENCE/baseline-build.log"
+          cp -a apps/api/dist "$RUNNER_TEMP/baseline-api"
+          cp apps/api/src/index.ts "$RUNNER_TEMP/baseline-index.ts"
+      - name: Apply exact reviewed extraction
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api repos/vrata-labs/platform/git/blobs/4177ebeb12d9be4134b7e4842e3c4a780e6bec0d --jq .content | base64 -d > "$RUNNER_TEMP/tests-part-1.ts"
+          gh api repos/vrata-labs/platform/git/blobs/780f64155db65d9aa9550616a9e3ef1188cd1879 --jq .content | base64 -d > "$RUNNER_TEMP/tests-part-2.ts"
+          node <<'JS'
+          const assert = require('node:assert/strict');
+          const fs = require('node:fs');
+          const ts = require('typescript');
+          const p = 'apps/api/src/index.ts';
+          const source = fs.readFileSync(p, 'utf8');
+          const original = ts.createSourceFile(p, source, ts.ScriptTarget.Latest, true);
+          const names = ['trimSlashes', 'joinUrlPath', 'contentTypeForPath', 'listFilesRecursive', 'sha256Hex', 'hmac', 'formatAmzDate', 'putS3Object', 'writeDocumentObject', 'deleteS3Object', 'deleteDocumentObject', 'resolveUploadedDocumentPublicUrl', 'readDocumentObject', 'publishSceneBundleFiles', 'resolveUploadedSceneBundlePublicUrl'];
+          const exported = ['trimSlashes', 'sha256Hex', 'writeDocumentObject', 'deleteDocumentObject', 'resolveUploadedDocumentPublicUrl', 'readDocumentObject', 'publishSceneBundleFiles', 'resolveUploadedSceneBundlePublicUrl'];
+          const moved = original.statements.filter(n => ts.isFunctionDeclaration(n) && names.includes(n.name.text));
+          assert.deepEqual(moved.map(n => n.name.text), names);
+          const header = 'import { copyFile, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";\nimport { createHash, createHmac } from "node:crypto";\nimport { dirname, extname, join, relative, sep } from "node:path";\n\nimport { normalizeSceneBundleRelativePath } from "@vrata/asset-pipeline";\n\nimport { resolveSceneBundlePublicUrl } from "./scene-bundle-storage.js";\nimport type { SceneBundleUploadStorage, DocumentUploadStorage } from "./upload-storage-config.js";\n\n';
+          const moduleText = header + moved.map(n => (exported.includes(n.name.text) ? 'export ' : '') + n.getText(original)).join('\n\n') + '\n';
+          let remaining = source;
+          for (const n of [...moved].reverse()) {
+            assert.equal(source.slice(n.end, n.end + 2), '\n\n');
+            remaining = remaining.slice(0, n.getStart(original)) + remaining.slice(n.end + 2);
+          }
+          for (const [before, after] of [
+            ['import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile }', 'import { mkdtemp, readFile, rm, writeFile }'],
+            ['import { createHash, createHmac, randomUUID, timingSafeEqual }', 'import { createHmac, randomUUID, timingSafeEqual }'],
+            ['import { basename, dirname, extname, join, normalize, relative, resolve, sep }', 'import { basename, dirname, extname, join, normalize, resolve, sep }'],
+            ['import { createUploadStorageConfig, type SceneBundleUploadStorage, type DocumentUploadStorage }', 'import { createUploadStorageConfig }']
+          ]) {
+            assert.equal(remaining.split(before).length, 2);
+            remaining = remaining.replace(before, after);
+          }
+          const anchor = 'import { createUploadStorageConfig } from "./upload-storage-config.js";\n';
+          const imports = '\nimport {\n' + exported.map(n => '  ' + n).join(',\n') + '\n} from "./uploaded-object-storage.js";\n';
+          remaining = remaining.replace(anchor, anchor + imports);
+          const candidate = ts.createSourceFile(p, remaining, ts.ScriptTarget.Latest, true);
+          const body = (file, filter) => file.statements.filter(n => !ts.isImportDeclaration(n) && filter(n)).map(n => n.getText(file));
+          assert.deepEqual(body(original, n => !moved.includes(n)), body(candidate, () => true));
+          fs.writeFileSync(p, remaining);
+          fs.writeFileSync('apps/api/src/uploaded-object-storage.ts', moduleText);
+          let tests = fs.readFileSync(process.env.RUNNER_TEMP + '/tests-part-1.ts', 'utf8') + fs.readFileSync(process.env.RUNNER_TEMP + '/tests-part-2.ts', 'utf8');
+          tests = tests.replaceAll('e852eecc85801ca5bef83bca8663801e3eac55e8fe9bccbd4dcec49607094894', '0150a92bb1212cd00516b65fde0704614760000963874fcbb11eaa734ee87809');
+          fs.writeFileSync('apps/api/src/uploaded-object-storage.test.ts', tests);
+          fs.writeFileSync(process.env.EVIDENCE + '/source-equivalence.json', JSON.stringify({ movedFunctions: names.length, movedDeclarationsCopiedExactly: true, remainingDeclarationsIdentical: true }, null, 2));
+          JS
+          git add apps/api/src/index.ts apps/api/src/uploaded-object-storage.ts apps/api/src/uploaded-object-storage.test.ts
+          test "$(git write-tree)" = 15503b4e1201d0b520a01f9073ef23c0748f4bb0
+          git diff --cached --check
+          git diff --cached --binary > "$EVIDENCE/refactor.patch"
+      - name: Lint and typecheck
+        run: |
+          pnpm lint
+          pnpm typecheck
+      - name: Build candidate
+        run: pnpm build 2>&1 | tee "$EVIDENCE/candidate-build.log"
+      - name: Compare compiled implementations and public declarations
+        run: |
+          node <<'JS'
+          const assert = require('node:assert/strict');
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const ts = require('typescript');
+          const baseline = path.join(process.env.RUNNER_TEMP, 'baseline-api');
+          const candidate = 'apps/api/dist';
+          const files = fs.readdirSync(baseline, { recursive: true }).filter(p => p.endsWith('.js'));
+          for (const file of files.filter(p => p !== 'index.js')) assert.deepEqual(fs.readFileSync(path.join(baseline, file)), fs.readFileSync(path.join(candidate, file)), file);
+          const parse = p => ts.createSourceFile(p, fs.readFileSync(p, 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
+          const before = parse(path.join(baseline, 'index.js'));
+          const after = parse(path.join(candidate, 'index.js'));
+          const module = parse(path.join(candidate, 'uploaded-object-storage.js'));
+          const functions = module.statements.filter(n => ts.isFunctionDeclaration(n));
+          assert.equal(functions.length, 15);
+          const names = new Set(functions.map(n => n.name.text));
+          for (const n of functions) {
+            const old = before.statements.find(p => ts.isFunctionDeclaration(p) && p.name.text === n.name.text);
+            assert.ok(old, n.name.text);
+            assert.equal(n.getText(module).replace(/^export /, ''), old.getText(before), n.name.text);
+          }
+          const body = (file, filter) => file.statements.filter(n => !ts.isImportDeclaration(n) && filter(n)).map(n => n.getText(file));
+          assert.deepEqual(body(before, n => !ts.isFunctionDeclaration(n) || !names.has(n.name.text)), body(after, () => true));
+          assert.deepEqual(fs.readFileSync(path.join(baseline, 'index.d.ts')), fs.readFileSync(path.join(candidate, 'index.d.ts')));
+          assert.ok(module.statements.every(n => ts.isFunctionDeclaration(n) || ts.isImportDeclaration(n)));
+          const result = { existingJavaScriptFiles: files.length, byteIdenticalJavaScriptFiles: files.length - 1, changedExistingJavaScript: ['index.js'], movedCompiledFunctionsIdentical: 15, remainingCompiledDeclarationsIdentical: true, publicIndexDeclarationsIdentical: true, noNewTopLevelExecutions: true };
+          fs.writeFileSync(process.env.EVIDENCE + '/compiled-equivalence.json', JSON.stringify(result, null, 2));
+          console.log(JSON.stringify(result));
+          JS
+      - name: Test including PostgreSQL
+        env:
+          VRATA_TEST_POSTGRES_URL: postgres://postgres:postgres@127.0.0.1:5432/vrata_test
+        run: pnpm test 2>&1 | tee "$EVIDENCE/workspace-tests.log"
+      - name: Publish only the verified source tree
+        run: |
+          test "$(git write-tree)" = 15503b4e1201d0b520a01f9073ef23c0748f4bb0
+          git diff --exit-code
+          test "$(git diff --cached --name-only | wc -l)" -eq 3
+          test "$(git ls-remote origin refs/heads/main | cut -f1)" = f801909eaa2e971f46c540a3727352e773f7363f
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'refactor(api): extract uploaded object storage I/O'
+          test "$(git rev-parse HEAD^{tree})" = 15503b4e1201d0b520a01f9073ef23c0748f4bb0
+          git push origin HEAD:refs/heads/refactor/uploaded-object-storage-20260914
+          git rev-parse HEAD > "$EVIDENCE/candidate-sha.txt"
+          git rev-parse HEAD^{tree} > "$EVIDENCE/candidate-tree.txt"
+          git archive --format=tar.gz HEAD > "$EVIDENCE/candidate-source.tgz"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: uploaded-object-storage-candidate
+          path: ${{ runner.temp }}/uploaded-object-storage-evidence/
+          retention-days: 14
