@@ -23,7 +23,7 @@ jobs:
           --health-cmd "pg_isready -U postgres -d vrata_test"
           --health-interval 5s --health-timeout 5s --health-retries 10
     env:
-      EVIDENCE: ${{ runner.temp }}/evidence
+      EVIDENCE: /tmp/vrata-runtime-debug-state-evidence
       BASELINE: 7b69579a96744d1f2f13a8bc761d9d7f73c2441f
       REVIEW_BRANCH: refactor/runtime-debug-state-20260914
       VRATA_TEST_POSTGRES_URL: postgres://postgres:postgres@127.0.0.1:5432/vrata_test
@@ -101,5 +101,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: runtime-debug-state-refactor
-          path: ${{ runner.temp }}/evidence/
+          path: /tmp/vrata-runtime-debug-state-evidence/
           retention-days: 14
