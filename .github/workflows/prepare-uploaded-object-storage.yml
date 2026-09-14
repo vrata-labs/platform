@@ -12,7 +12,7 @@ jobs:
   prepare:
     runs-on: ubuntu-latest
     env:
-      EVIDENCE: ${{ runner.temp }}/uploaded-object-storage-evidence
+      EVIDENCE: /tmp/uploaded-object-storage-evidence
     services:
       postgres:
         image: postgres:16
@@ -146,5 +146,5 @@ jobs:
         if: always()
         with:
           name: uploaded-object-storage-candidate
-          path: ${{ runner.temp }}/uploaded-object-storage-evidence/
+          path: /tmp/uploaded-object-storage-evidence/
           retention-days: 14
