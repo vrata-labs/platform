@@ -1,0 +1,119 @@
+name: Prepare storage row mapper refactor
+
+on:
+  push:
+    branches:
+      - preparation/storage-row-mappers-20260914
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: vrata_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d vrata_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: e50df5a5364916874571d9f0348017ed2c971745
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Apply reviewed mechanical extraction
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = e50df5a5364916874571d9f0348017ed2c971745
+          git switch -c refactor/storage-row-mappers-20260914
+          gh api repos/vrata-labs/platform/git/blobs/d78bbf0f103ae3965087a3b36e3c74878b2bdf54 --jq .content | base64 --decode > apps/api/src/storage-row-mappers.test.ts
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib, re
+          p = Path('apps/api/src/storage.ts')
+          source = p.read_text()
+          assert hashlib.sha256(p.read_bytes()).hexdigest() == '5d317e0654edba08164303566ebc983ca63509bff7adce61f812fefc57eafe69'
+          names = ['isoString', 'mapRoomInviteRow', 'mapWaitingRoomRequestRow', 'mapRoomNoteRow', 'mapRoomNoteVersionRow', 'mapRoomDocumentRow']
+          blocks = []
+          for name in names:
+              match = re.search(r'^function ' + name + r'\([\s\S]*?^}\n', source, re.M)
+              assert match, name
+              blocks.append(match.group())
+          imports = 'import {\n  isoString,\n  mapRoomDocumentRow,\n  mapRoomInviteRow,\n  mapRoomNoteRow,\n  mapRoomNoteVersionRow,\n  mapWaitingRoomRequestRow\n} from "./storage-row-mappers.js";\n'
+          module = 'import type {\n  RoomDocumentMetadata,\n  RoomDocumentRecord,\n  RoomInviteRecord,\n  RoomNoteRecord,\n  RoomNoteScope,\n  RoomNoteVersionAction,\n  RoomNoteVersionRecord,\n  WaitingRoomRequestRecord\n} from "./storage.js";\n\n' + '\n'.join('export ' + block for block in blocks)
+          for block in blocks:
+              assert source.count(block + '\n') == 1
+              source = source.replace(block + '\n', '', 1)
+          anchor = 'import type { SceneBundleCreateInput, SceneBundleRecord } from "./scene-bundle-storage.js";\n'
+          assert source.count(anchor) == 1
+          p.write_text(source.replace(anchor, anchor + imports))
+          Path('apps/api/src/storage-row-mappers.ts').write_text(module)
+          expected = {
+              'storage.ts': '7d1f1cb1d7d9ea29c5943c1695b5952f7b5325be4e25783ffedf0ac7ef847f38',
+              'storage-row-mappers.ts': 'fb5db06ab4717bcb8af95e6226c1d1f30256c0acbf0978806af29e3fd62acd41',
+              'storage-row-mappers.test.ts': 'ef024245c68a5029b85aab3499bea4f8a290c245ce5928970dd76780881ce494'
+          }
+          for name, digest in expected.items():
+              path = Path('apps/api/src') / name
+              assert hashlib.sha256(path.read_bytes()).hexdigest() == digest, name
+          PY
+          git diff --check
+          sha256sum apps/api/src/storage.ts apps/api/src/storage-row-mappers.ts apps/api/src/storage-row-mappers.test.ts > "$RUNNER_TEMP/reviewed.sha256"
+      - name: Install frozen dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Lint
+        run: pnpm lint
+      - name: Typecheck
+        run: pnpm typecheck
+      - name: Build
+        run: pnpm build
+      - name: Test including PostgreSQL
+        env:
+          VRATA_TEST_POSTGRES_URL: postgres://postgres:postgres@127.0.0.1:5432/vrata_test
+        run: pnpm test
+      - name: Capture mapper contract results
+        run: node --test apps/api/dist/storage-row-mappers.test.js | tee "$RUNNER_TEMP/storage-row-mapper-contracts.log"
+      - name: Commit only reviewed source files and publish isolated branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git ls-remote origin refs/heads/main | cut -f1)" = e50df5a5364916874571d9f0348017ed2c971745
+          sha256sum --check "$RUNNER_TEMP/reviewed.sha256"
+          git add apps/api/src/storage.ts apps/api/src/storage-row-mappers.ts apps/api/src/storage-row-mappers.test.ts
+          test "$(git diff --cached --name-only | wc -l)" = 3
+          git diff --cached --check
+          git config user.name 'Dmitry Serkov'
+          git config user.email 'psilon2000@mail.ru'
+          git commit -m 'refactor(api): extract storage row mappers'
+          git push origin HEAD:refs/heads/refactor/storage-row-mappers-20260914
+          git rev-parse HEAD > "$RUNNER_TEMP/candidate-sha.txt"
+          git rev-parse HEAD^{tree} > "$RUNNER_TEMP/candidate-tree.txt"
+          git archive HEAD | gzip > "$RUNNER_TEMP/candidate-source.tgz"
+      - name: Upload source and verification evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: storage-row-mapper-candidate
+          retention-days: 14
+          path: |
+            ${{ runner.temp }}/candidate-source.tgz
+            ${{ runner.temp }}/candidate-sha.txt
+            ${{ runner.temp }}/candidate-tree.txt
+            ${{ runner.temp }}/reviewed.sha256
+            ${{ runner.temp }}/storage-row-mapper-contracts.log
