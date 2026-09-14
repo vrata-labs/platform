@@ -1,0 +1,120 @@
+name: Prepare storage contract extraction
+
+on:
+  push:
+    branches: [preparation/storage-contracts-20260914]
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: vrata_test
+        ports: [5432:5432]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d vrata_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      BASE_SHA: 646355a340b6d12c816aa770cbfa83251baeb07c
+      CANDIDATE_TREE: 249790689b218dd663f45ed9f9b5ea3410e0ed5b
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 646355a340b6d12c816aa770cbfa83251baeb07c
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install frozen dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Build baseline and preserve emitted API JavaScript
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$BASE_SHA"
+          test "$(git rev-parse HEAD^{tree})" = "5f5992b9e3dd9081c9e91e83348097dc6cdd3054"
+          mkdir -p "$RUNNER_TEMP/storage-contracts-evidence"
+          pnpm build 2>&1 | tee "$RUNNER_TEMP/storage-contracts-evidence/baseline-build.log"
+          cp -a apps/api/dist "$RUNNER_TEMP/baseline-api-dist"
+      - name: Apply reviewed type-only extraction
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api repos/vrata-labs/platform/git/blobs/2483b2bb915d1a101c964484f7e2e8249e19e5db --jq .content | base64 --decode > "$RUNNER_TEMP/extract-storage-contracts.cjs"
+          test "$(git hash-object "$RUNNER_TEMP/extract-storage-contracts.cjs")" = "2483b2bb915d1a101c964484f7e2e8249e19e5db"
+          node "$RUNNER_TEMP/extract-storage-contracts.cjs"
+      - name: Check all 25 old and new type exports against baseline
+        run: |
+          set -euo pipefail
+          pnpm --filter @vrata/api typecheck 2>&1 | tee "$RUNNER_TEMP/storage-contracts-evidence/type-compatibility.log"
+          rm apps/api/src/__contracts_baseline__.ts apps/api/src/__contracts_compatibility__.ts
+      - name: Lint
+        run: pnpm lint
+      - name: Typecheck
+        run: pnpm typecheck
+      - name: Build candidate
+        run: |
+          set -euo pipefail
+          pnpm build 2>&1 | tee "$RUNNER_TEMP/storage-contracts-evidence/candidate-build.log"
+      - name: Compare actual compiled API JavaScript byte for byte
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          baseline = Path(os.environ['RUNNER_TEMP']) / 'baseline-api-dist'
+          candidate = Path('apps/api/dist')
+          before = {str(p.relative_to(baseline)): p.read_bytes() for p in baseline.rglob('*.js')}
+          after = {str(p.relative_to(candidate)): p.read_bytes() for p in candidate.rglob('*.js')}
+          assert set(after) - set(before) == {'storage-contracts.js'}
+          assert not (set(before) - set(after))
+          for name, content in before.items():
+              assert after[name] == content, f'changed_runtime_javascript:{name}'
+          assert after['storage-contracts.js'].decode().split('//# sourceMappingURL=')[0].strip() == 'export {};'
+          report = {'unchangedJavaScriptFiles': len(before), 'newJavaScriptFiles': ['storage-contracts.js'], 'newModuleHasNoRuntimeImportsOrBehavior': True, 'sha256': {name: hashlib.sha256(data).hexdigest() for name, data in sorted(before.items())}}
+          dest = Path(os.environ['RUNNER_TEMP']) / 'storage-contracts-evidence' / 'compiled-equivalence.json'
+          dest.write_text(json.dumps(report, indent=2) + '\n')
+          print(f'byte_identical_compiled_api_modules:{len(before)}')
+          PY
+      - name: Test including PostgreSQL
+        env:
+          VRATA_TEST_POSTGRES_URL: postgres://postgres:postgres@127.0.0.1:5432/vrata_test
+        run: |
+          set -euo pipefail
+          pnpm test 2>&1 | tee "$RUNNER_TEMP/storage-contracts-evidence/workspace-tests.log"
+      - name: Publish only the three reviewed source files
+        run: |
+          set -euo pipefail
+          test "$(git ls-remote origin refs/heads/main | cut -f1)" = "$BASE_SHA"
+          test -z "$(git ls-remote origin refs/heads/refactor/storage-contracts-20260914)"
+          git diff --check
+          git add apps/api/src/storage.ts apps/api/src/storage-contracts.ts apps/api/src/storage-row-mappers.ts
+          test "$(git write-tree)" = "$CANDIDATE_TREE"
+          git diff --cached --binary > "$RUNNER_TEMP/storage-contracts-evidence/refactor.patch"
+          git diff --cached --stat
+          git switch -c refactor/storage-contracts-20260914
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'refactor(api): separate storage contracts from implementations'
+          test "$(git rev-parse HEAD^{tree})" = "$CANDIDATE_TREE"
+          git push origin HEAD:refs/heads/refactor/storage-contracts-20260914
+          git rev-parse HEAD > "$RUNNER_TEMP/storage-contracts-evidence/candidate-sha.txt"
+          git rev-parse HEAD^{tree} > "$RUNNER_TEMP/storage-contracts-evidence/candidate-tree.txt"
+          git archive --format=tar.gz HEAD > "$RUNNER_TEMP/storage-contracts-evidence/candidate-source.tgz"
+      - name: Upload source and verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: storage-contracts-candidate
+          path: ${{ runner.temp }}/storage-contracts-evidence/
+          retention-days: 14
