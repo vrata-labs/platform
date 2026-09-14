@@ -1,0 +1,130 @@
+name: Prepare media surface view refactor
+
+on:
+  push:
+    branches:
+      - preparation/media-surface-view-20260914
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    if: github.ref_name == 'preparation/media-surface-view-20260914'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: vrata_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d vrata_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Preserve preparation tools and checkout exact baseline
+        run: |
+          mkdir -p "$RUNNER_TEMP/media-surface-tools" "$RUNNER_TEMP/media-surface-result"
+          cp .github/refactor-media-surface/* "$RUNNER_TEMP/media-surface-tools/"
+          test "$(git ls-remote origin refs/heads/main | cut -f1)" = aa109b6399dedc24b439c0e79269306de28bf785
+          git checkout --detach aa109b6399dedc24b439c0e79269306de28bf785
+          test "$(git rev-parse HEAD^{tree})" = 487e5b10ed737ebaffa9be2372656875cdf93af4
+          cp apps/runtime-web/src/main.ts "$RUNNER_TEMP/media-surface-result/main-baseline.ts"
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Build unchanged baseline
+        run: |
+          set -o pipefail
+          pnpm build 2>&1 | tee "$RUNNER_TEMP/media-surface-result/baseline-build.log"
+          cp apps/runtime-web/dist/main.js "$RUNNER_TEMP/media-surface-result/main-baseline.js"
+          cp apps/runtime-web/dist/main.d.ts "$RUNNER_TEMP/media-surface-result/main-baseline.d.ts"
+          tar -czf "$RUNNER_TEMP/media-surface-result/baseline-runtime-dist.tgz" -C apps/runtime-web dist
+      - name: Apply mechanically checked extraction
+        run: |
+          python "$RUNNER_TEMP/media-surface-tools/extract.py"
+          cp "$RUNNER_TEMP/media-surface-tools/media-surface-view.test.ts" apps/runtime-web/src/media/media-surface-view.test.ts
+          test "$(git hash-object apps/runtime-web/src/main.ts)" = 655a4a48ec1205a0cdcdf9deb3b3969acf1ee360
+          test "$(git hash-object apps/runtime-web/src/media/media-surface-view.ts)" = 20e76d997b79443cd188dd354395ac6e4367878d
+          test "$(git hash-object apps/runtime-web/src/media/media-surface-view.test.ts)" = 8066268ca106df4ec35664dd191d0209ff28f7f7
+          TYPESCRIPT_PATH="$GITHUB_WORKSPACE/node_modules/typescript" node "$RUNNER_TEMP/media-surface-tools/verify.cjs" "$RUNNER_TEMP/media-surface-result/main-baseline.ts" apps/runtime-web/src/main.ts apps/runtime-web/src/media/media-surface-view.ts "$RUNNER_TEMP/media-surface-result/source-equivalence.json"
+      - name: Lint, typecheck, build and test candidate
+        env:
+          VRATA_TEST_POSTGRES_URL: postgres://postgres:postgres@127.0.0.1:5432/vrata_test
+        run: |
+          set -o pipefail
+          pnpm lint 2>&1 | tee "$RUNNER_TEMP/media-surface-result/lint.log"
+          pnpm typecheck 2>&1 | tee "$RUNNER_TEMP/media-surface-result/typecheck.log"
+          pnpm build 2>&1 | tee "$RUNNER_TEMP/media-surface-result/candidate-build.log"
+          pnpm test 2>&1 | tee "$RUNNER_TEMP/media-surface-result/workspace-tests.log"
+      - name: Verify compiled declarations and run the new tests against the unchanged baseline
+        run: |
+          set -o pipefail
+          TYPESCRIPT_PATH="$GITHUB_WORKSPACE/node_modules/typescript" node "$RUNNER_TEMP/media-surface-tools/verify.cjs" "$RUNNER_TEMP/media-surface-result/main-baseline.js" apps/runtime-web/dist/main.js apps/runtime-web/dist/media/media-surface-view.js "$RUNNER_TEMP/media-surface-result/compiled-equivalence.json"
+          cmp "$RUNNER_TEMP/media-surface-result/main-baseline.d.ts" apps/runtime-web/dist/main.d.ts
+          cp apps/runtime-web/dist/media/media-surface-view.js "$RUNNER_TEMP/media-surface-result/media-surface-view-candidate.js"
+          node <<'JS'
+          const fs = require('node:fs');
+          const ts = require('typescript');
+          const path = require('node:path');
+          const baseline = ts.createSourceFile('main.js', fs.readFileSync(path.join(process.env.RUNNER_TEMP, 'media-surface-result/main-baseline.js'), 'utf8'), ts.ScriptTarget.Latest, true);
+          const target = 'apps/runtime-web/dist/media/media-surface-view.js';
+          const candidate = ts.createSourceFile('module.js', fs.readFileSync(target, 'utf8'), ts.ScriptTarget.Latest, true);
+          const name = s => s.name?.text || (ts.isVariableStatement(s) ? s.declarationList.declarations[0].name.getText() : null);
+          const statements = candidate.statements.map(s => {
+            if (ts.isImportDeclaration(s)) return s.getText();
+            const original = baseline.statements.find(b => name(b) === name(s));
+            if (!original) throw new Error('missing baseline declaration: ' + name(s));
+            const exported = s.modifiers?.some(m => m.kind === ts.SyntaxKind.ExportKeyword);
+            return (exported ? 'export ' : '') + original.getText();
+          });
+          fs.writeFileSync(target, statements.join('\n\n') + '\n');
+          JS
+          node --test apps/runtime-web/dist/media/media-surface-view.test.js 2>&1 | tee "$RUNNER_TEMP/media-surface-result/baseline-characterization-tests.log"
+          cp "$RUNNER_TEMP/media-surface-result/media-surface-view-candidate.js" apps/runtime-web/dist/media/media-surface-view.js
+      - name: Package source and actual verification dependencies
+        run: |
+          mkdir -p "$RUNNER_TEMP/media-surface-result/verification-deps/node_modules/@vrata" "$RUNNER_TEMP/media-surface-result/verification-deps/node_modules/@types"
+          cp -aL apps/runtime-web/node_modules/three "$RUNNER_TEMP/media-surface-result/verification-deps/node_modules/three"
+          cp -aL apps/runtime-web/node_modules/@types/three "$RUNNER_TEMP/media-surface-result/verification-deps/node_modules/@types/three"
+          cp -aL node_modules/@types/node "$RUNNER_TEMP/media-surface-result/verification-deps/node_modules/@types/node"
+          cp -aL node_modules/typescript "$RUNNER_TEMP/media-surface-result/verification-deps/node_modules/typescript"
+          cp -aL packages/shared-types "$RUNNER_TEMP/media-surface-result/verification-deps/node_modules/@vrata/shared-types"
+          tar -czf "$RUNNER_TEMP/media-surface-result/verification-deps.tgz" -C "$RUNNER_TEMP/media-surface-result/verification-deps" node_modules
+          rm -rf "$RUNNER_TEMP/media-surface-result/verification-deps"
+          tar -czf "$RUNNER_TEMP/media-surface-result/candidate-runtime-dist.tgz" -C apps/runtime-web dist
+          git diff --check
+          git add apps/runtime-web/src/main.ts apps/runtime-web/src/media/media-surface-view.ts apps/runtime-web/src/media/media-surface-view.test.ts
+          test "$(git diff --cached --name-only | wc -l)" -eq 3
+          git diff --cached > "$RUNNER_TEMP/media-surface-result/refactor.patch"
+          git write-tree > "$RUNNER_TEMP/media-surface-result/candidate-tree.txt"
+      - name: Publish only the three verified source files on a new review branch
+        run: |
+          test "$(git ls-remote origin refs/heads/main | cut -f1)" = aa109b6399dedc24b439c0e79269306de28bf785
+          test -z "$(git ls-remote origin refs/heads/refactor/runtime-media-surface-view-20260914)"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "refactor(runtime): extract media surface views from main"
+          git rev-parse HEAD > "$RUNNER_TEMP/media-surface-result/candidate-sha.txt"
+          git archive HEAD | gzip > "$RUNNER_TEMP/media-surface-result/candidate-source.tgz"
+          git push origin HEAD:refs/heads/refactor/runtime-media-surface-view-20260914
+      - name: Upload verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: media-surface-view-refactor
+          path: ${{ runner.temp }}/media-surface-result/
+          retention-days: 14
