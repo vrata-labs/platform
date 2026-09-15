@@ -50,6 +50,7 @@ jobs:
           tar -czf /tmp/texture-evidence/baseline-runtime-dist.tgz -C apps/runtime-web dist
       - name: Apply mechanically verified extraction
         run: |
+          set -o pipefail
           cp /tmp/media-surface-textures.test.ts apps/runtime-web/src/media/media-surface-textures.test.ts
           python /tmp/prepare-textures.py | tee /tmp/texture-evidence/extraction.json
           node /tmp/verify-textures.cjs /tmp/texture-evidence/main-baseline.ts apps/runtime-web/src/main.ts apps/runtime-web/src/media/media-surface-textures.ts | tee /tmp/texture-evidence/source-equivalence.json
@@ -74,7 +75,8 @@ jobs:
           base=tarfile.open('/tmp/texture-evidence/baseline-runtime-dist.tgz')
           same=[]
           for m in base.getmembers():
-              if not m.isfile() or not m.name.endswith('.js') or m.name == 'dist/main.js': continue
+              # Compare emitted TypeScript modules, not Vite's hashed browser bundles.
+              if not m.isfile() or not m.name.endswith('.js') or m.name == 'dist/main.js' or m.name.startswith('dist/assets/'): continue
               current=pathlib.Path('apps/runtime-web')/m.name
               assert base.extractfile(m).read()==current.read_bytes(), m.name
               same.append(m.name)
