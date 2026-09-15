@@ -1,0 +1,103 @@
+name: Prepare media surface texture refactor
+on:
+  push:
+    branches: [preparation/media-surface-textures-20260915]
+permissions:
+  contents: write
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: vrata_test
+        ports: [5432:5432]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d vrata_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      BASELINE_SHA: 1b79a0b541502c94a1ea0ce2623bb2a82a197498
+      VRATA_TEST_POSTGRES_URL: postgres://postgres:postgres@127.0.0.1:5432/vrata_test
+    steps:
+      - uses: actions/checkout@v4
+      - name: Preserve tools and checkout verified baseline
+        run: |
+          mkdir -p /tmp/texture-evidence
+          cp tools/prepare-media-surface-textures.py /tmp/prepare-textures.py
+          cp tools/verify-media-surface-textures.cjs /tmp/verify-textures.cjs
+          cp tools/media-surface-textures.test.ts /tmp/media-surface-textures.test.ts
+          git fetch --depth=1 origin "$BASELINE_SHA"
+          git checkout --detach "$BASELINE_SHA"
+          test "$(git rev-parse HEAD^{tree})" = f3a61443f7e0471c81deb6af323a4596fc2aea38
+          cp apps/runtime-web/src/main.ts /tmp/texture-evidence/main-baseline.ts
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Build unchanged baseline
+        run: |
+          set -o pipefail
+          pnpm build 2>&1 | tee /tmp/texture-evidence/baseline-build.log
+          cp apps/runtime-web/dist/main.js /tmp/texture-evidence/main-baseline.js
+          cp apps/runtime-web/dist/main.d.ts /tmp/texture-evidence/main-baseline.d.ts
+          tar -czf /tmp/texture-evidence/baseline-runtime-dist.tgz -C apps/runtime-web dist
+      - name: Apply mechanically verified extraction
+        run: |
+          cp /tmp/media-surface-textures.test.ts apps/runtime-web/src/media/media-surface-textures.test.ts
+          python /tmp/prepare-textures.py | tee /tmp/texture-evidence/extraction.json
+          node /tmp/verify-textures.cjs /tmp/texture-evidence/main-baseline.ts apps/runtime-web/src/main.ts apps/runtime-web/src/media/media-surface-textures.ts | tee /tmp/texture-evidence/source-equivalence.json
+      - name: Lint typecheck build and test
+        run: |
+          set -o pipefail
+          pnpm lint 2>&1 | tee /tmp/texture-evidence/lint.log
+          pnpm typecheck 2>&1 | tee /tmp/texture-evidence/typecheck.log
+          pnpm build 2>&1 | tee /tmp/texture-evidence/candidate-build.log
+          pnpm test 2>&1 | tee /tmp/texture-evidence/workspace-tests.log
+      - name: Verify actual emitted code and baseline characterization
+        run: |
+          set -o pipefail
+          DIST=apps/runtime-web/dist
+          node /tmp/verify-textures.cjs /tmp/texture-evidence/main-baseline.js "$DIST/main.js" "$DIST/media/media-surface-textures.js" "$DIST/media/media-surface-textures-baseline.js" | tee /tmp/texture-evidence/emitted-equivalence.json
+          sed 's|./media-surface-textures.js|./media-surface-textures-baseline.js|' "$DIST/media/media-surface-textures.test.js" > "$DIST/media/media-surface-textures-baseline.test.js"
+          node --test "$DIST/media/media-surface-textures-baseline.test.js" 2>&1 | tee /tmp/texture-evidence/baseline-characterization.log
+          rm "$DIST/media/media-surface-textures-baseline.js" "$DIST/media/media-surface-textures-baseline.test.js"
+          cmp /tmp/texture-evidence/main-baseline.d.ts "$DIST/main.d.ts"
+          python - <<'PY'
+          import tarfile, pathlib, json
+          base=tarfile.open('/tmp/texture-evidence/baseline-runtime-dist.tgz')
+          same=[]
+          for m in base.getmembers():
+              if not m.isfile() or not m.name.endswith('.js') or m.name == 'dist/main.js': continue
+              current=pathlib.Path('apps/runtime-web')/m.name
+              assert base.extractfile(m).read()==current.read_bytes(), m.name
+              same.append(m.name)
+          pathlib.Path('/tmp/texture-evidence/unchanged-js.json').write_text(json.dumps(same,indent=2))
+          print('Existing unchanged JavaScript files:',len(same))
+          PY
+          tar -czf /tmp/texture-evidence/candidate-runtime-dist.tgz -C apps/runtime-web dist
+      - name: Commit and publish only the three reviewed source files
+        run: |
+          test "$(git ls-remote origin refs/heads/main | cut -f1)" = "$BASELINE_SHA"
+          git add apps/runtime-web/src/main.ts apps/runtime-web/src/media/media-surface-textures.ts apps/runtime-web/src/media/media-surface-textures.test.ts
+          test "$(git diff --cached --name-only | wc -l)" -eq 3
+          git diff --cached --check
+          git diff --cached > /tmp/texture-evidence/refactor.patch
+          git -c user.name='Dmitry Serkov' -c user.email='psilon2000@mail.ru' commit -m 'refactor(runtime): isolate media surface texture operations'
+          git rev-parse HEAD > /tmp/texture-evidence/candidate-sha.txt
+          git rev-parse HEAD^{tree} > /tmp/texture-evidence/candidate-tree.txt
+          git archive HEAD | gzip > /tmp/texture-evidence/candidate-source.tgz
+          git push origin HEAD:refs/heads/refactor/runtime-media-surface-textures-20260915
+      - name: Upload verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: media-surface-textures-refactor
+          path: /tmp/texture-evidence/
+          retention-days: 14
