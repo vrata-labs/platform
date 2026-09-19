@@ -1,10 +1,8 @@
+import { createMediaObjectTestControls } from "./testing/media-object-test-controls.js";
 import * as THREE from "three";
 import { Room, RoomEvent, Track } from "livekit-client";
 import {
-  DISABLED_EXTENSION_CARD_TYPE,
-  EXTENSION_TEST_CARD_TYPE,
   MARKDOWN_BOARD_OBJECT_TYPE,
-  MISSING_CAPABILITY_EXTENSION_CARD_TYPE,
   PDF_PRESENTATION_OBJECT_TYPE,
   IMAGE_VIEWER_OBJECT_TYPE,
   VIDEO_PLAYER_OBJECT_TYPE,
@@ -5717,6 +5715,25 @@ function createControlledVrButton(): HTMLButtonElement {
 
 refreshClientCompatibility();
 refreshXrSessionDebug();
+const mediaObjectTestControls = createMediaObjectTestControls({
+  debugSurfaceId: DEBUG_SURFACE_ID,
+  get selectedMediaSurfaceId() { return selectedMediaSurfaceId; },
+  get permissions() { return debugState.access.permissions; },
+  participantId,
+  mediaSurfaceCommands,
+  activeMediaObjectForSurface,
+  activeScreenShareObjectForSurface,
+  findActiveScreenShareObject,
+  activeWhiteboardObjectForSurface,
+  getWhiteboardRuntime,
+  activeMarkdownBoardObjectForSurface,
+  findActiveMarkdownBoardObject,
+  getMarkdownBoardRuntime,
+  latestStickyNoteId,
+  activeRemoteBrowserObjectForSurface,
+  findActiveRemoteBrowserObject,
+  getRemoteBrowserRuntime
+});
 (window as Window & {
   __VRATA_TEST__?: {
     forceRoomStateReconnect: () => void;
@@ -5845,128 +5862,19 @@ refreshXrSessionDebug();
     ]);
     return true;
   },
-  sendPrivilegedSurfaceCreate: () => {
-    return mediaSurfaceCommands.sendCreateObject();
-  },
-  createSurfaceTestCard: () => {
-    return mediaSurfaceCommands.sendCreateObject({
-      commandId: mediaSurfaceCommands.createCommandId("create"),
-      surfaceId: DEBUG_SURFACE_ID,
-      objectType: SURFACE_TEST_CARD_TYPE,
-      probeOnly: false
-    });
-  },
-  createExtensionTestCard: (surfaceId = selectedMediaSurfaceId) => {
-    return mediaSurfaceCommands.sendCreateObject({
-      commandId: mediaSurfaceCommands.createCommandId("extension-test-card-create"),
-      surfaceId,
-      objectType: EXTENSION_TEST_CARD_TYPE,
-      probeOnly: false
-    });
-  },
-  createMissingCapabilityExtensionObject: (surfaceId = selectedMediaSurfaceId) => {
-    return mediaSurfaceCommands.sendCreateObject({
-      commandId: mediaSurfaceCommands.createCommandId("missing-capability-extension-create"),
-      surfaceId,
-      objectType: MISSING_CAPABILITY_EXTENSION_CARD_TYPE,
-      probeOnly: false
-    });
-  },
-  createDisabledExtensionObject: (surfaceId = selectedMediaSurfaceId) => {
-    return mediaSurfaceCommands.sendCreateObject({
-      commandId: mediaSurfaceCommands.createCommandId("disabled-extension-create"),
-      surfaceId,
-      objectType: DISABLED_EXTENSION_CARD_TYPE,
-      probeOnly: false
-    });
-  },
-  createScreenShareObject: (surfaceId = selectedMediaSurfaceId) => {
-    return mediaSurfaceCommands.sendCreateObject({
-      commandId: mediaSurfaceCommands.createCommandId("screen-share-create-test"),
-      surfaceId,
-      objectType: SCREEN_SHARE_OBJECT_TYPE,
-      probeOnly: false
-    });
-  },
-  createWhiteboardObject: (surfaceId = selectedMediaSurfaceId) => {
-    return mediaSurfaceCommands.sendCreateObject({
-      commandId: mediaSurfaceCommands.createCommandId("whiteboard-create-test"),
-      surfaceId,
-      objectType: WHITEBOARD_OBJECT_TYPE,
-      probeOnly: false
-    });
-  },
-  createMarkdownBoardObject: (surfaceId = selectedMediaSurfaceId) => {
-    return mediaSurfaceCommands.sendCreateObject({
-      commandId: mediaSurfaceCommands.createCommandId("markdown-board-create-test"),
-      surfaceId,
-      objectType: MARKDOWN_BOARD_OBJECT_TYPE,
-      probeOnly: false
-    });
-  },
-  createStickyNote: (input = {}) => {
-    const object = activeMarkdownBoardObjectForSurface(input.surfaceId ?? selectedMediaSurfaceId) ?? findActiveMarkdownBoardObject();
-    if (!object || !hasRoomPermission(debugState.access.permissions, "markdown-board.edit")) {
-      return false;
-    }
-    return mediaSurfaceCommands.sendPatchObjectState("markdown-board-create-note-test", {
-      surfaceId: object.surfaceId,
-      objectId: object.objectId,
-      expectedRevision: object.revision,
-      patch: getMarkdownBoardRuntime(object.surfaceId).createNotePatch({
-        text: input.text ?? "# Sticky note\n- synced",
-        x: input.x ?? 0.12,
-        y: input.y ?? 0.18
-      })
-    });
-  },
-  updateStickyNote: (noteId, text = "## Updated\nSafe Markdown", surfaceId = selectedMediaSurfaceId) => {
-    const object = activeMarkdownBoardObjectForSurface(surfaceId) ?? findActiveMarkdownBoardObject();
-    const targetNoteId = noteId ?? latestStickyNoteId(object);
-    if (!object || !targetNoteId || !hasRoomPermission(debugState.access.permissions, "markdown-board.edit")) {
-      return false;
-    }
-    return mediaSurfaceCommands.sendPatchObjectState("markdown-board-update-note-test", {
-      surfaceId: object.surfaceId,
-      objectId: object.objectId,
-      expectedRevision: object.revision,
-      patch: getMarkdownBoardRuntime(object.surfaceId).createUpdateNotePatch(targetNoteId, text)
-    });
-  },
-  moveStickyNote: (noteId, x = 0.54, y = 0.42, surfaceId = selectedMediaSurfaceId) => {
-    const object = activeMarkdownBoardObjectForSurface(surfaceId) ?? findActiveMarkdownBoardObject();
-    const targetNoteId = noteId ?? latestStickyNoteId(object);
-    if (!object || !targetNoteId || !hasRoomPermission(debugState.access.permissions, "markdown-board.edit")) {
-      return false;
-    }
-    return mediaSurfaceCommands.sendPatchObjectState("markdown-board-move-note-test", {
-      surfaceId: object.surfaceId,
-      objectId: object.objectId,
-      expectedRevision: object.revision,
-      patch: getMarkdownBoardRuntime(object.surfaceId).createMoveNotePatch(targetNoteId, x, y)
-    });
-  },
-  deleteStickyNote: (noteId, surfaceId = selectedMediaSurfaceId) => {
-    const object = activeMarkdownBoardObjectForSurface(surfaceId) ?? findActiveMarkdownBoardObject();
-    const targetNoteId = noteId ?? latestStickyNoteId(object);
-    if (!object || !targetNoteId || !hasRoomPermission(debugState.access.permissions, "markdown-board.edit")) {
-      return false;
-    }
-    return mediaSurfaceCommands.sendPatchObjectState("markdown-board-delete-note-test", {
-      surfaceId: object.surfaceId,
-      objectId: object.objectId,
-      expectedRevision: object.revision,
-      patch: getMarkdownBoardRuntime(object.surfaceId).createDeleteNotePatch(targetNoteId)
-    });
-  },
-  createRemoteBrowserObject: (surfaceId = selectedMediaSurfaceId) => {
-    return mediaSurfaceCommands.sendCreateObject({
-      commandId: mediaSurfaceCommands.createCommandId("remote-browser-create-test"),
-      surfaceId,
-      objectType: REMOTE_BROWSER_OBJECT_TYPE,
-      probeOnly: false
-    });
-  },
+  sendPrivilegedSurfaceCreate: mediaObjectTestControls.sendPrivilegedSurfaceCreate,
+  createSurfaceTestCard: mediaObjectTestControls.createSurfaceTestCard,
+  createExtensionTestCard: mediaObjectTestControls.createExtensionTestCard,
+  createMissingCapabilityExtensionObject: mediaObjectTestControls.createMissingCapabilityExtensionObject,
+  createDisabledExtensionObject: mediaObjectTestControls.createDisabledExtensionObject,
+  createScreenShareObject: mediaObjectTestControls.createScreenShareObject,
+  createWhiteboardObject: mediaObjectTestControls.createWhiteboardObject,
+  createMarkdownBoardObject: mediaObjectTestControls.createMarkdownBoardObject,
+  createStickyNote: mediaObjectTestControls.createStickyNote,
+  updateStickyNote: mediaObjectTestControls.updateStickyNote,
+  moveStickyNote: mediaObjectTestControls.moveStickyNote,
+  deleteStickyNote: mediaObjectTestControls.deleteStickyNote,
+  createRemoteBrowserObject: mediaObjectTestControls.createRemoteBrowserObject,
   selectMediaSurface: (surfaceId) => selectMediaSurface(surfaceId),
   getMediaSurfaceRuntimePixelDimensions: (surfaceId) => {
     const image = whiteboardRuntimes.get(surfaceId)?.texture.image as { width?: number; height?: number } | undefined;
@@ -6001,179 +5909,18 @@ refreshXrSessionDebug();
     });
     return true;
   },
-  takeRemoteBrowserControl: () => {
-    const object = activeRemoteBrowserObjectForSurface(selectedMediaSurfaceId) ?? findActiveRemoteBrowserObject();
-    if (!object) {
-      return false;
-    }
-    return mediaSurfaceCommands.sendPatchObjectState("remote-browser-take-control-test", {
-      surfaceId: object.surfaceId,
-      objectId: object.objectId,
-      expectedRevision: object.revision,
-      patch: getRemoteBrowserRuntime(object.surfaceId).createTakeControlPatch()
-    });
-  },
-  releaseRemoteBrowserControl: () => {
-    const object = activeRemoteBrowserObjectForSurface(selectedMediaSurfaceId) ?? findActiveRemoteBrowserObject();
-    if (!object) {
-      return false;
-    }
-    return mediaSurfaceCommands.sendPatchObjectState("remote-browser-release-control-test", {
-      surfaceId: object.surfaceId,
-      objectId: object.objectId,
-      expectedRevision: object.revision,
-      patch: getRemoteBrowserRuntime(object.surfaceId).createReleaseControlPatch()
-    });
-  },
-  createUnknownSurfaceObject: () => {
-    return mediaSurfaceCommands.sendCreateObject({
-      commandId: mediaSurfaceCommands.createCommandId("unknown"),
-      surfaceId: DEBUG_SURFACE_ID,
-      objectType: "unknown-object",
-      probeOnly: false
-    });
-  },
-  stopActiveSurfaceObject: (surfaceId = selectedMediaSurfaceId) => {
-    const object = activeMediaObjectForSurface(surfaceId);
-    if (!object) {
-      return false;
-    }
-    return mediaSurfaceCommands.sendStopObject({
-      commandId: mediaSurfaceCommands.createCommandId("stop"),
-      surfaceId,
-      objectId: object.objectId
-    });
-  },
-  sendStaleSurfaceTestCardPatch: () => {
-    const object = activeMediaObjectForSurface(selectedMediaSurfaceId);
-    if (!object) {
-      return false;
-    }
-    return mediaSurfaceCommands.sendPatchObjectState("stale-patch", {
-      surfaceId: selectedMediaSurfaceId,
-      objectId: object.objectId,
-      expectedRevision: object.revision + 1,
-      patch: {
-        type: "increment-click-count",
-        inputEventId: `${participantId}:stale:${Date.now()}`
-      }
-    });
-  },
-  sendStaleScreenSharePatch: () => {
-    const object = activeScreenShareObjectForSurface(selectedMediaSurfaceId) ?? findActiveScreenShareObject();
-    if (!object) {
-      return false;
-    }
-    return mediaSurfaceCommands.sendPatchObjectState("stale-screen-share-patch", {
-      surfaceId: object.surfaceId,
-      objectId: object.objectId,
-      expectedRevision: object.revision + 1,
-      patch: {
-        type: "mark-active",
-        mediaTrackSid: `stale:${participantId}:${Date.now()}`
-      }
-    });
-  },
-  sendStaleWhiteboardPatch: () => {
-    const object = activeWhiteboardObjectForSurface(selectedMediaSurfaceId);
-    if (!object) {
-      return false;
-    }
-    return mediaSurfaceCommands.sendPatchObjectState("stale-whiteboard-patch", {
-      surfaceId: object.surfaceId,
-      objectId: object.objectId,
-      expectedRevision: object.revision + 1,
-      patch: {
-        type: "append-stroke",
-        inputEventId: `${participantId}:stale-whiteboard:${Date.now()}`,
-        stroke: {
-          strokeId: `${participantId}:stale-stroke`,
-          participantId,
-          tool: "pen",
-          color: "#111827",
-          width: 2,
-          points: [{ u: 0.25, v: 0.25, t: Date.now() }]
-        }
-      }
-    });
-  },
-  sendStaleMarkdownBoardPatch: () => {
-    const object = activeMarkdownBoardObjectForSurface(selectedMediaSurfaceId) ?? findActiveMarkdownBoardObject();
-    if (!object) {
-      return false;
-    }
-    return mediaSurfaceCommands.sendPatchObjectState("stale-markdown-board-patch", {
-      surfaceId: object.surfaceId,
-      objectId: object.objectId,
-      expectedRevision: object.revision + 1,
-      patch: getMarkdownBoardRuntime(object.surfaceId).createNotePatch({
-        text: "# Stale note",
-        x: 0.2,
-        y: 0.2
-      })
-    });
-  },
-  sendDuplicateMarkdownBoardPatch: () => {
-    const object = activeMarkdownBoardObjectForSurface(selectedMediaSurfaceId) ?? findActiveMarkdownBoardObject();
-    if (!object || !object.state.lastInputEventId) {
-      return false;
-    }
-    return mediaSurfaceCommands.sendPatchObjectState("duplicate-markdown-board-patch", {
-      surfaceId: object.surfaceId,
-      objectId: object.objectId,
-      expectedRevision: object.revision,
-      patch: {
-        type: "create-note",
-        inputEventId: object.state.lastInputEventId,
-        noteId: `${participantId}:duplicate-note`,
-        text: "Duplicate",
-        x: 0.24,
-        y: 0.24
-      }
-    });
-  },
-  sendDuplicateWhiteboardPatch: () => {
-    const object = activeWhiteboardObjectForSurface(selectedMediaSurfaceId);
-    if (!object || !object.state.lastInputEventId) {
-      return false;
-    }
-    return mediaSurfaceCommands.sendPatchObjectState("duplicate-whiteboard-patch", {
-      surfaceId: object.surfaceId,
-      objectId: object.objectId,
-      expectedRevision: object.revision,
-      patch: {
-        type: "append-stroke",
-        inputEventId: object.state.lastInputEventId,
-        stroke: {
-          strokeId: `${participantId}:duplicate-stroke`,
-          participantId,
-          tool: "pen",
-          color: "#111827",
-          width: 2,
-          points: [{ u: 0.35, v: 0.35, t: Date.now() }]
-        }
-      }
-    });
-  },
-  clearWhiteboardObject: () => {
-    const object = activeWhiteboardObjectForSurface(selectedMediaSurfaceId);
-    if (!object) {
-      return false;
-    }
-    return mediaSurfaceCommands.sendPatchObjectState("whiteboard-clear-test", {
-      surfaceId: object.surfaceId,
-      objectId: object.objectId,
-      expectedRevision: object.revision,
-      patch: getWhiteboardRuntime(object.surfaceId).createClearPatch()
-    });
-  },
-  setDebugSurfaceMediaAudioEnabled: (enabled, surfaceId = selectedMediaSurfaceId) => {
-    return mediaSurfaceCommands.sendMediaAudio({
-      commandId: mediaSurfaceCommands.createCommandId("surface-audio-test"),
-      surfaceId,
-      enabled
-    });
-  },
+  takeRemoteBrowserControl: mediaObjectTestControls.takeRemoteBrowserControl,
+  releaseRemoteBrowserControl: mediaObjectTestControls.releaseRemoteBrowserControl,
+  createUnknownSurfaceObject: mediaObjectTestControls.createUnknownSurfaceObject,
+  stopActiveSurfaceObject: mediaObjectTestControls.stopActiveSurfaceObject,
+  sendStaleSurfaceTestCardPatch: mediaObjectTestControls.sendStaleSurfaceTestCardPatch,
+  sendStaleScreenSharePatch: mediaObjectTestControls.sendStaleScreenSharePatch,
+  sendStaleWhiteboardPatch: mediaObjectTestControls.sendStaleWhiteboardPatch,
+  sendStaleMarkdownBoardPatch: mediaObjectTestControls.sendStaleMarkdownBoardPatch,
+  sendDuplicateMarkdownBoardPatch: mediaObjectTestControls.sendDuplicateMarkdownBoardPatch,
+  sendDuplicateWhiteboardPatch: mediaObjectTestControls.sendDuplicateWhiteboardPatch,
+  clearWhiteboardObject: mediaObjectTestControls.clearWhiteboardObject,
+  setDebugSurfaceMediaAudioEnabled: mediaObjectTestControls.setDebugSurfaceMediaAudioEnabled,
   startScreenShare: () => {
     void startScreenShare().catch((error: unknown) => {
       console.error(error);
