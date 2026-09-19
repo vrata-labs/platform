@@ -1,0 +1,114 @@
+name: Prepare remote browser video runtime refactor
+on:
+  push:
+    branches: [preparation/remote-browser-video-runtime-20260919]
+permissions:
+  contents: write
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      BASELINE_SHA: 26c269b51eb9a27a3e4f779b1f1d6ca2fb0b3a52
+      EXPECTED_TREE: 6b6fad08223a513087f5bfde130c6a37e6da8b5c
+      TARGET_BRANCH: refactor/runtime-remote-browser-video-20260919
+      EVIDENCE: /tmp/remote-browser-video-evidence
+      TOOLS: /tmp/remote-browser-video-tools
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: vrata_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres -d vrata_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify tooling and check out exact baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .github/refactor-remote-browser-video/tools.part{0,1,2,3} | base64 -d > /tmp/remote-browser-video-tools.tgz
+          echo '62f66e5bba9d1294d961b1865994cecdab7e378d7c87d7ae8a35f7bd5a57695a  /tmp/remote-browser-video-tools.tgz' | sha256sum -c -
+          mkdir -p "$TOOLS" "$EVIDENCE"
+          tar -xzf /tmp/remote-browser-video-tools.tgz -C "$TOOLS"
+          git fetch --no-tags --depth=1 origin "$BASELINE_SHA"
+          git checkout --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "$BASELINE_SHA"
+          test "$(git rev-parse HEAD^{tree})" = ebc14770fe5b52c407bc07a27f12eb8a106fa299
+          cp apps/runtime-web/src/main.ts "$EVIDENCE/main-baseline.ts"
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install locked dependencies and build baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm install --frozen-lockfile
+          pnpm build 2>&1 | tee "$EVIDENCE/baseline-build.log"
+          cp -a apps/runtime-web/dist "$EVIDENCE/baseline-runtime-dist"
+          tar -C apps/runtime-web -czf "$EVIDENCE/baseline-runtime-dist.tgz" dist
+      - name: Apply and verify source-only extraction
+        shell: bash
+        run: |
+          set -euo pipefail
+          node "$TOOLS/extract.cjs" . | tee "$EVIDENCE/extraction-summary.log"
+          cp "$TOOLS/remote-browser-video-runtime.test.ts" apps/runtime-web/src/media/
+          node "$TOOLS/verify.cjs" . --source-only
+          git add apps/runtime-web/src/main.ts apps/runtime-web/src/media/remote-browser-video-runtime.ts apps/runtime-web/src/media/remote-browser-video-runtime.test.ts
+          test "$(git write-tree)" = "$EXPECTED_TREE"
+          git diff --cached --check
+          git diff --cached > "$EVIDENCE/refactor.patch"
+      - name: Lint typecheck build and test
+        shell: bash
+        env:
+          VRATA_TEST_POSTGRES_URL: postgres://postgres:postgres@127.0.0.1:5432/vrata_test
+        run: |
+          set -euo pipefail
+          pnpm lint 2>&1 | tee "$EVIDENCE/lint.log"
+          pnpm typecheck 2>&1 | tee "$EVIDENCE/typecheck.log"
+          pnpm build 2>&1 | tee "$EVIDENCE/candidate-build.log"
+          pnpm test 2>&1 | tee "$EVIDENCE/workspace-tests.log"
+      - name: Verify emitted code and original behavior
+        shell: bash
+        run: |
+          set -euo pipefail
+          node "$TOOLS/verify.cjs" . | tee "$EVIDENCE/verification.log"
+          tar -C apps/runtime-web -czf "$EVIDENCE/candidate-runtime-dist.tgz" dist
+      - name: Publish only the three reviewed source files
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git ls-remote origin refs/heads/main | cut -f1)" = "$BASELINE_SHA"
+          test "$(git write-tree)" = "$EXPECTED_TREE"
+          test "$(git diff --cached --name-only | wc -l)" -eq 3
+          git diff --quiet
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'refactor(runtime): extract remote browser video lifecycle'
+          test "$(git rev-parse HEAD^{tree})" = "$EXPECTED_TREE"
+          git rev-parse HEAD > "$EVIDENCE/candidate-sha.txt"
+          git rev-parse HEAD^{tree} > "$EVIDENCE/candidate-tree.txt"
+          git archive --format=tar.gz HEAD > "$EVIDENCE/candidate-source.tgz"
+          git push origin "HEAD:refs/heads/$TARGET_BRANCH"
+      - name: Upload verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: remote-browser-video-runtime-refactor
+          retention-days: 14
+          if-no-files-found: error
+          path: |
+            /tmp/remote-browser-video-evidence/*.log
+            /tmp/remote-browser-video-evidence/*.json
+            /tmp/remote-browser-video-evidence/*.txt
+            /tmp/remote-browser-video-evidence/*.tgz
+            /tmp/remote-browser-video-evidence/refactor.patch
+            /tmp/remote-browser-video-evidence/main-baseline.ts
