@@ -10,8 +10,8 @@ jobs:
     timeout-minutes: 15
     env:
       BASELINE_SHA: 763d102d4c2593ec667119a8f3c87f9cf7561350
-      EXPECTED_TREE: d7e777084f6004b5f103f112293b485c8bbe6fe8
-      TARGET_BRANCH: refactor/runtime-media-object-test-controls-20260919
+      EXPECTED_TREE: 023d71ae0dd126d6a1857978b48f6a9010b0fd88
+      TARGET_BRANCH: refactor/runtime-media-test-controls-20260919
       EVIDENCE: /tmp/media-object-test-controls-evidence
       TOOLS: /tmp/media-object-test-controls-tools
     services:
@@ -36,6 +36,7 @@ jobs:
           echo '4ade4f9d23484b1b1901dc89a338c6dc22e5af2e23a565769393a13fa54569d6  .github/refactor-media-object-test-controls/tools.tgz' | sha256sum -c -
           mkdir -p "$TOOLS" "$EVIDENCE"
           tar -xzf .github/refactor-media-object-test-controls/tools.tgz -C "$TOOLS"
+          cp .github/refactor-media-object-test-controls/finalize.mjs "$TOOLS/"
           git fetch --no-tags --depth=1 origin "$BASELINE_SHA"
           git checkout --detach FETCH_HEAD
           test "$(git rev-parse HEAD)" = "$BASELINE_SHA"
@@ -59,6 +60,7 @@ jobs:
         run: |
           set -euo pipefail
           node "$TOOLS/extract.mjs" . | tee "$EVIDENCE/extraction.json"
+          node "$TOOLS/finalize.mjs"
           cp "$TOOLS/media-object-test-controls.test.ts" apps/runtime-web/src/testing/
           node "$TOOLS/verify.mjs" --source-only
           git add apps/runtime-web/src/main.ts apps/runtime-web/src/testing/media-object-test-controls.ts apps/runtime-web/src/testing/media-object-test-controls.test.ts
