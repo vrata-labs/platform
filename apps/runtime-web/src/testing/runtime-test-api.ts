@@ -1,0 +1,81 @@
+import type { SurfaceInputKind, SurfaceInputScrollDelta, SurfaceInputSource } from "@vrata/shared-types";
+
+export interface RuntimeTestApi {
+  forceRoomStateReconnect: () => void;
+  aimInteractionAtSeat: (seatId: string) => boolean;
+  aimInteractionAtFloor: (x: number, z: number) => boolean;
+  confirmInteraction: () => void;
+  claimSeatById: (seatId: string) => boolean;
+  requestSeatClaimById: (seatId: string) => boolean;
+  sendPrivilegedSurfaceCreate: () => boolean;
+  createSurfaceTestCard: () => boolean;
+  createExtensionTestCard: (surfaceId?: string) => boolean;
+  createMissingCapabilityExtensionObject: (surfaceId?: string) => boolean;
+  createDisabledExtensionObject: (surfaceId?: string) => boolean;
+  createScreenShareObject: (surfaceId?: string) => boolean;
+  createWhiteboardObject: (surfaceId?: string) => boolean;
+  createMarkdownBoardObject: (surfaceId?: string) => boolean;
+  createStickyNote: (input?: { text?: string; x?: number; y?: number; surfaceId?: string }) => boolean;
+  updateStickyNote: (noteId?: string, text?: string, surfaceId?: string) => boolean;
+  moveStickyNote: (noteId?: string, x?: number, y?: number, surfaceId?: string) => boolean;
+  deleteStickyNote: (noteId?: string, surfaceId?: string) => boolean;
+  createRemoteBrowserObject: (surfaceId?: string) => boolean;
+  selectMediaSurface: (surfaceId: string) => boolean;
+  getMediaSurfaceRuntimePixelDimensions: (surfaceId: string) => { width: number; height: number } | null;
+  getMediaCanvasRuntimeKinds: (surfaceId: string) => Array<"whiteboard" | "markdown-board" | "remote-browser">;
+  resolveMediaSurfaceRayHit: (origin: { x: number; y: number; z: number }, direction: { x: number; y: number; z: number }) => { surfaceId: string; distanceM: number | null } | null;
+  openRemoteBrowser: (url?: string) => boolean;
+  takeRemoteBrowserControl: () => boolean;
+  releaseRemoteBrowserControl: () => boolean;
+  createUnknownSurfaceObject: () => boolean;
+  stopActiveSurfaceObject: (surfaceId?: string) => boolean;
+  sendStaleSurfaceTestCardPatch: () => boolean;
+  sendStaleScreenSharePatch: () => boolean;
+  sendStaleWhiteboardPatch: () => boolean;
+  sendStaleMarkdownBoardPatch: () => boolean;
+  sendDuplicateMarkdownBoardPatch: () => boolean;
+  sendDuplicateWhiteboardPatch: () => boolean;
+  clearWhiteboardObject: () => boolean;
+  setDebugSurfaceMediaAudioEnabled: (enabled: boolean, surfaceId?: string) => boolean;
+  startScreenShare: () => boolean;
+  sendDebugSurfaceInput: (input?: {
+    source?: SurfaceInputSource;
+    kind?: SurfaceInputKind;
+    u?: number;
+    v?: number;
+    key?: string;
+    text?: string;
+    scrollDelta?: SurfaceInputScrollDelta;
+    surfaceId?: string;
+  }) => boolean;
+  setDebugSurfaceInputEnabled: (enabled: boolean) => boolean;
+  focusDebugSurface: (surfaceId?: string) => boolean;
+  getDebugSurfaceWorldPosition: (u: number, v: number) => { x: number; y: number; z: number } | null;
+  getDebugSurfaceClientPosition: (u: number, v: number) => { x: number; y: number } | null;
+  getMediaSurfaceWorldPosition: (surfaceId: string, u: number, v: number) => { x: number; y: number; z: number } | null;
+  getMediaSurfaceClientPosition: (surfaceId: string, u: number, v: number) => { x: number; y: number } | null;
+  sampleDebugSurfaceTexture: (center: { u: number; v: number }, size?: { width: number; height: number }) => { clip: { sx: number; sy: number; sw: number; sh: number }; samples: Array<[number, number, number]> } | null;
+  sampleMediaSurfaceTexture: (surfaceId: string, center: { u: number; v: number }, size?: { width: number; height: number }) => { clip: { sx: number; sy: number; sw: number; sh: number }; samples: Array<[number, number, number]> } | null;
+  getRemoteBrowserVrKeyboardTargetWorldPosition: (targetId: string) => { x: number; y: number; z: number } | null;
+  getRemoteBrowserVrKeyboardKeyWorldPosition: (keyId: string) => { x: number; y: number; z: number } | null;
+  teleportToFloor: (x: number, z: number) => boolean;
+  forceXrInteractionAtSeat: (seatId: string) => boolean;
+  setSceneReviewPose: (pose: {
+    position: { x: number; y: number; z: number };
+    yaw: number;
+    pitch: number;
+    fovDegrees: number;
+  }) => boolean;
+  setSceneReviewRendering: (settings: {
+    environmentIntensity: number;
+    exposure: number;
+  }) => boolean;
+  setSyntheticXrState: (state: {
+    rightController: { x: number; y: number; z: number };
+    rightGrip?: { x: number; y: number; z: number } | null;
+    rayDirection: { x: number; y: number; z: number };
+    axes?: { moveX?: number; moveY?: number; turnX?: number; turnY?: number };
+    triggerPressed?: boolean;
+    rayVisible?: boolean;
+  } | null) => boolean;
+}
