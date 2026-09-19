@@ -13,7 +13,7 @@ const packages = new Map();
 const containers = new Set();
 function locate(from, name) {
   const require = createRequire(path.join(from, 'package.json'));
-  const found = require.resolve.paths(name)?.map((entry) => path.join(entry, name))
+  const found = require.resolve.paths(`${name}/package.json`)?.map((entry) => path.join(entry, name))
     .find((entry) => fs.existsSync(path.join(entry, 'package.json')));
   if (!found) throw new Error(`dependency_not_found:${name}:${from}`);
   return fs.realpathSync(found);
