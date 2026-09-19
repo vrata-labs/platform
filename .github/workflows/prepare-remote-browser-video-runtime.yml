@@ -96,6 +96,14 @@ jobs:
           test "$CURRENT_MAIN" = "$BASELINE_SHA"
           test "$CURRENT_TREE" = "$EXPECTED_TREE"
           test "$FILE_COUNT" -eq 3
+          BIN=packages/asset-pipeline/bin/vrata.mjs
+          git diff -- "$BIN" | tee "$EVIDENCE/publication-install-mode.log"
+          if ! git diff --quiet -- "$BIN"; then
+            test "$(git hash-object "$BIN")" = "$(git rev-parse "HEAD:$BIN")"
+            test "$(git ls-files --stage -- "$BIN" | cut -d' ' -f1)" = 100644
+            test "$(stat -c %a "$BIN")" = 755
+            chmod 0644 "$BIN"
+          fi
           git diff --quiet
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
