@@ -12,8 +12,8 @@ jobs:
       BASELINE_SHA: fffbd956755699998738f0878fa1c6ad64aeba63
       EXPECTED_TREE: a2a4927296010d4c827b1c06c18efb22f4f34e5f
       TARGET_BRANCH: refactor/runtime-screen-share-capture-20260919
-      EVIDENCE: ${{ runner.temp }}/screen-share-capture-evidence
-      TOOLS: ${{ runner.temp }}/screen-share-capture-tools
+      EVIDENCE: /tmp/screen-share-capture-evidence
+      TOOLS: /tmp/screen-share-capture-tools
     services:
       postgres:
         image: postgres:16
