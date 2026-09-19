@@ -1,0 +1,17 @@
+const fs = require('node:fs');
+const path = require('node:path');
+const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
+const file = 'apps/runtime-web/src/testing/media-surface-test-controls.ts';
+const sha = text => crypto.createHash('sha1').update(`blob ${Buffer.byteLength(text)}\0`).update(text).digest('hex');
+let source = fs.readFileSync(file, 'utf8');
+assert.equal(sha(source), '2b62312806bd113087bc9effbe772a0eec54009d');
+source = source.replace('import type { RuntimeMediaSurfaceView }', 'import type { createMediaSurfaceTextureController } from "../media/media-surface-textures.js";\nimport type { RuntimeMediaSurfaceView }');
+source = source.replace('sampleMediaSurfaceTexture: RuntimeTestApi["sampleMediaSurfaceTexture"];', 'sampleMediaSurfaceTexture: ReturnType<typeof createMediaSurfaceTextureController>["sampleMediaSurfaceTexture"];');
+assert.equal(sha(source), '5172d22d9c07eaa5e7242a70aed618cab30ebabf');
+fs.writeFileSync(file, source);
+const metadataPath = path.join(__dirname, 'metadata.json');
+const metadata = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
+metadata.candidateTree = '615ca711919f69201c5872719a89224787e1c500';
+metadata.files[file] = {blob: sha(source), sha256: crypto.createHash('sha256').update(source).digest('hex'), lines: source.split('\n').length - 1};
+fs.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2));

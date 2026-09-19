@@ -10,7 +10,7 @@ jobs:
     timeout-minutes: 15
     env:
       BASELINE_SHA: 86f5ae9e9167e2bfb66859328dd67bb79af36c73
-      EXPECTED_TREE: 9986f6f8cb9952087b9a8dd8f599d0c5ee131a69
+      EXPECTED_TREE: 615ca711919f69201c5872719a89224787e1c500
       TARGET_BRANCH: refactor/runtime-media-surface-test-controls-20260919
       EVIDENCE: /tmp/media-surface-test-controls-evidence
       TOOLS: /tmp/media-surface-test-controls-tools
@@ -37,6 +37,7 @@ jobs:
           cat .github/refactor-media-surface-test-controls/*.b64 | base64 --decode > "$TOOLS/tools.tgz"
           echo 'f81d45eb9bcbbe8b1fa39b8e570aa3cc413b6020e24be90603fad9ab3fb0caf1  /tmp/media-surface-test-controls-tools/tools.tgz' | sha256sum -c -
           tar -xzf "$TOOLS/tools.tgz" -C "$TOOLS"
+          cp .github/refactor-media-surface-test-controls/finalize.cjs "$TOOLS/"
           git fetch --no-tags --depth=1 origin "$BASELINE_SHA"
           git checkout --detach FETCH_HEAD
           test "$(git rev-parse HEAD)" = "$BASELINE_SHA"
@@ -61,6 +62,7 @@ jobs:
           set -euo pipefail
           git apply --check "$TOOLS/refactor.patch"
           git apply "$TOOLS/refactor.patch"
+          node "$TOOLS/finalize.cjs"
           WORKSPACE="$GITHUB_WORKSPACE" TYPESCRIPT_PATH="$GITHUB_WORKSPACE/node_modules/typescript" node "$TOOLS/verify.cjs" --source-only
           git add apps/runtime-web/src/main.ts apps/runtime-web/src/testing/media-surface-test-controls.ts apps/runtime-web/src/testing/runtime-test-api.ts apps/runtime-web/src/testing/media-surface-test-controls.test.ts
           test "$(git write-tree)" = "$EXPECTED_TREE"
