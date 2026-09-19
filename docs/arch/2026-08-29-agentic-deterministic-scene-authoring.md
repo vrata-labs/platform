@@ -4,6 +4,12 @@
 
 Статус: принято как рабочий подход для новых project-authored Vrata scenes
 
+Обязательное уточнение от 2026-09-19: для всех типов сцен действует
+[общий контракт качества](../scene-quality-contract.md) и
+[стартовый пакет задачи](../scene-authoring-task-template.md). Они закрепляют
+последующие требования пользователя к использованию предметов, сборке, физике,
+материалам и фотореалистичному окружению. Воспроизводимость не заменяет это качество.
+
 ## Контекст
 
 Vrata нужны разные оригинальные сцены, а не один вручную поддерживаемый demo bundle. Curated asset pipeline требует длительного поиска, проверки прав на redistribution внутри скачиваемого GLB и выравнивания разнородных моделей. Генерация готовых 3D assets отдельными image-to-3D моделями добавляет model/provider rights, stochastic source и cleanup cost.
@@ -17,17 +23,17 @@ Warm Modern Meeting Room Candidate 01 показал третий практич
 Для новых project-authored Vrata scenes по умолчанию используется следующий контур:
 
 ```text
-human brief
-  -> model-agnostic LLM planner / art director
-  -> canonical scene contract
-  -> scene-specific Blender authoring pass
-  -> accepted Blender source
-  -> deterministic export and review scripts
-  -> static validators and semantic review views
-  -> human visual acceptance
-  -> human rights approval
-  -> immutable scene bundle release
-  -> runtime and staging verification
+human brief + inherited requirements + accepted visual benchmark
+  -> task packet and requirement-to-evidence matrix
+  -> object registry, scenarios and construction/material plan
+  -> Blender authoring and early runtime export
+  -> User / Builder / Physics checks against actual geometry
+  -> multi-view source/browser visual criticism and correction loop
+  -> REWORK_REQUIRED or READY_FOR_USER_REVIEW
+  -> frozen source + deterministic export + technical/performance gates
+  -> authorized immutable review delivery + exact-SHA staging verification
+  -> explicit human visual/rights decisions
+  -> separately authorized promotion
 ```
 
 LLM отвечает за планирование, scene-specific artistic decisions, tool use и поиск визуальных дефектов. Blender является DCC, renderer и детерминированным build worker. Scene Bundle v1, runtime contracts и validators остаются независимыми от способа авторинга.
@@ -42,7 +48,7 @@ LLM-authoring не считается byte-deterministic. Повторный з�
 
 - canonical brief и scene contract;
 - scene-specific authoring source;
-- accepted Blend с packed project-authored textures;
+- accepted Blend с packed project-authored или отдельно cleared textures;
 - pinned Blender version, build hash и exporter revision;
 - deterministic export script;
 - semantic review render script и review views;
@@ -92,6 +98,12 @@ Runtime staging gate проверяет фактическую local pose и wor
 Отдельные repositories остаются правильным выбором для blind experiments, customer/private ownership boundaries или независимого release lifecycle. Repository topology для массового catalog не фиксируется этим ADR и должна выбираться отдельно по operational cost.
 
 ## Масштабирование на новые сцены
+
+Обязательны Q1-Q7 общего контракта, сценарии всех предметов и сравнение с принятым
+визуальным уровнем. Реализованные interactions отделены от потенциальной физической
+применимости. «Создать сферу» означает доставить правдоподобный вид в runtime,
+а не заменить фотопанораму рисунком. Неудачный render нельзя назначить target ради
+зелёной parity.
 
 Следующие personal и presentation scenes должны повторить весь контур, а не копировать meeting-room composition. Для каждой сцены измеряются:
 
@@ -163,6 +175,12 @@ Self-host runtime Vrata не должен зависеть от authoring SaaS. 
 ## Evidence
 
 Первый accepted specimen:
+
+Это историческая база 2026-08-29. Для переноса качества после замечаний
+2026-09-01--04 используется Candidate 01 `0.3.3` на
+`5580a7b080cf6195e28ebc77b654fd71111b0cd1`, включая фотографическую CC0-панораму.
+Отсутствие внешних assets в первом specimen не запрещает cleared PBR/HDRI inputs
+в следующих сценах.
 
 - repository: `vrata-labs/warm-modern-meeting-room-candidate-01`;
 - scene ID: `warm-modern-meeting-room-candidate-01`;
