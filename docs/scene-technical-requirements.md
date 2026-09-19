@@ -6,6 +6,11 @@ The default project-authored workflow is defined by `docs/arch/2026-08-29-agenti
 
 ## Goals
 
+Every scene also follows the [shared quality contract](scene-quality-contract.md)
+and [task packet](scene-authoring-task-template.md). Technical compatibility,
+reproducibility and image-regression thresholds cannot close its User/Builder/Physics
+or visual-quality gates. Inherit those requirements for every room type.
+
 - Make scene requirements understandable to a human scene author: what a good room should feel like, where users spawn, what must be visible, and what must not be copied.
 - Make scene requirements understandable to an agent or validator: exact fields, numeric budgets, severity levels, and runtime checks.
 - Separate technical compatibility from legal clearance. A scene can be technically valid and still be forbidden if rights are not cleared.
@@ -186,6 +191,10 @@ Seat anchors are domain metadata, not decorative mesh names.
 - Do not rely on Unity Shader Graph, custom Unity shaders, lightmap-only materials, post-processing, reflection probes, or camera effects that are not exported into web-compatible material data.
 - Material names should be stable and meaningful. Names like `Hidden/UnityGLTF/...`, `Tantular SDF Material`, `Material.024`, or unconverted shader placeholders should be warnings because they make targeted validation and debugging harder.
 - At least 60% of visible runtime materials should be textured or deliberately colored with validated non-black colors.
+- This percentage is only a technical floor. Material finish, detail scale,
+  orientation, lighting response and close-up appearance must pass the shared
+  quality contract; a uniformly colored toy-like scene can satisfy the count and
+  still require rework.
 - Broad wildcard material overrides are forbidden for product acceptance. Fix materials at export/source level.
 - Large black materials are allowed only when semantically black and when the scene still passes visual readability from spawn.
 

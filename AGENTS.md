@@ -10,6 +10,11 @@
 
 ## Scene bundles and runtime
 
+- For every scene-authoring or scene-quality task, read `docs/scene-quality-contract.md` and use `docs/scene-authoring-task-template.md` before authoring or resuming publication. This is shared across all room types and scene repositories.
+- Every visible object needs real meaning, plausible use, construction and support; apply User/Builder/Physics passes to final geometry. Passive/deferred props are valid without implemented runtime interaction.
+- Inspect actual source/browser images against the accepted visual benchmark. Realistic materials and photographic-quality distant surroundings are required unless the user explicitly requests another style. Hashes, mesh tags, self-calibrated PHASH/NCC and `loaded` do not close this quality gate.
+- A failed role/visual check or unresolved user rejection means `REWORK_REQUIRED`, even with green CI. Propagate general feedback to the shared contract and every in-scope scene before the next scene; do not ask the user to rediscover known defects.
+
 - `apps/api/src/index.ts` room manifest supports optional `sceneBundle.url`; runtime boot reads it through `apps/runtime-web/src/index.ts`.
 - Scene bundle parsing/loading lives in `apps/runtime-web/src/scene-bundle.ts` and `apps/runtime-web/src/scene-loader.ts`.
 - Runtime diagnostics for scene bundles are emitted from `apps/runtime-web/src/main.ts` and include `sceneDebug` payloads with screenshot stats, bounds, camera, mesh/material counts, missing assets, and material samples.

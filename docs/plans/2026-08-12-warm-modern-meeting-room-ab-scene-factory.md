@@ -6,6 +6,12 @@
 
 ## Решение пилота 2026-08-29
 
+Уточнение общего workflow от 2026-09-19: все новые и дорабатываемые сцены, включая
+personal/presentation после пилота, наследуют [контракт качества](../scene-quality-contract.md)
+и [стартовый пакет](../scene-authoring-task-template.md). Локальные compiler fixtures
+и review-policy эксперимента проверяют технические обязательства; они не заменяют
+User/Builder/Physics и визуальную проверку каждой новой сцены.
+
 Controlled A/B не завершён: curated room не была собрана, а финальный accepted Candidate 01 не использует TRELLIS, FLUX или другой generative 3D output. Поэтому visual winner и pipeline-superiority claim не объявляются.
 
 Вместо продолжения исходного A/B принят рабочий подход **agentic deterministic scene authoring**: model-agnostic LLM планирует и выполняет scene-specific Blender/Python art pass, а human-accepted Blend, scripts, provenance и immutable release становятся воспроизводимым source of truth. Candidate 01 получил visual acceptance и отдельный human rights approval 2026-08-29; его active release `0.1.1` на commit `e9891721220bbcda8099d8bbad52e08b3b59427c` является первым specimen нового подхода. Immutable `0.1.0` сохранён как superseded после staging-обнаружения authoring/runtime `z` mismatch.
