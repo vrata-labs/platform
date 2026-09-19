@@ -1,0 +1,117 @@
+name: Prepare screen share capture refactor
+on:
+  push:
+    branches: [preparation/screen-share-capture-20260919]
+permissions:
+  contents: write
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      BASELINE_SHA: fffbd956755699998738f0878fa1c6ad64aeba63
+      EXPECTED_TREE: a2a4927296010d4c827b1c06c18efb22f4f34e5f
+      TARGET_BRANCH: refactor/runtime-screen-share-capture-20260919
+      EVIDENCE: ${{ runner.temp }}/screen-share-capture-evidence
+      TOOLS: ${{ runner.temp }}/screen-share-capture-tools
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: vrata_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres -d vrata_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Preserve tooling and check out exact baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$TOOLS" "$EVIDENCE"
+          cp .github/refactor-screen-share-capture/* "$TOOLS/"
+          git fetch --no-tags --depth=1 origin "$BASELINE_SHA"
+          git checkout --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "$BASELINE_SHA"
+          test "$(git rev-parse HEAD^{tree})" = 2fd5456dec77c1f9511bcd7082588cea7e2b097f
+          cp apps/runtime-web/src/main.ts "$EVIDENCE/main-baseline.ts"
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install locked dependencies and preserve verification subset
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm install --frozen-lockfile
+          node "$TOOLS/collect-deps.mjs"
+          tar -C "$EVIDENCE/verification-deps" -czf "$EVIDENCE/verification-deps.tgz" node_modules
+      - name: Build unchanged baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm build 2>&1 | tee "$EVIDENCE/baseline-build.log"
+          cp -a apps/runtime-web/dist "$EVIDENCE/baseline-runtime-dist"
+          tar -C apps/runtime-web -czf "$EVIDENCE/baseline-runtime-dist.tgz" dist
+      - name: Apply mechanically verified extraction
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 "$TOOLS/extract.py" . | tee "$EVIDENCE/extraction.json"
+          cp "$TOOLS/screen-share-capture.test.ts" apps/runtime-web/src/media/
+          node "$TOOLS/verify.mjs" --source-only
+          git add apps/runtime-web/src/main.ts apps/runtime-web/src/media/screen-share-capture.ts apps/runtime-web/src/media/screen-share-capture.test.ts
+          test "$(git write-tree)" = "$EXPECTED_TREE"
+          git diff --cached --check
+          git diff --cached > "$EVIDENCE/refactor.patch"
+      - name: Lint typecheck build and test
+        shell: bash
+        env:
+          VRATA_TEST_POSTGRES_URL: postgres://postgres:postgres@127.0.0.1:5432/vrata_test
+        run: |
+          set -euo pipefail
+          pnpm lint 2>&1 | tee "$EVIDENCE/lint.log"
+          pnpm typecheck 2>&1 | tee "$EVIDENCE/typecheck.log"
+          pnpm build 2>&1 | tee "$EVIDENCE/candidate-build.log"
+          pnpm test 2>&1 | tee "$EVIDENCE/workspace-tests.log"
+      - name: Verify actual emitted code and original behavior
+        shell: bash
+        run: |
+          set -euo pipefail
+          node "$TOOLS/verify.mjs" | tee "$EVIDENCE/verification.log"
+          tar -C apps/runtime-web -czf "$EVIDENCE/candidate-runtime-dist.tgz" dist
+      - name: Publish only the three reviewed source files
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git ls-remote origin refs/heads/main | cut -f1)" = "$BASELINE_SHA"
+          test "$(git write-tree)" = "$EXPECTED_TREE"
+          test "$(git diff --cached --name-only | wc -l)" -eq 3
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'refactor(runtime): extract screen share capture'
+          test "$(git rev-parse HEAD^{tree})" = "$EXPECTED_TREE"
+          git rev-parse HEAD > "$EVIDENCE/candidate-sha.txt"
+          git rev-parse HEAD^{tree} > "$EVIDENCE/candidate-tree.txt"
+          git archive --format=tar.gz HEAD > "$EVIDENCE/candidate-source.tgz"
+          git push origin "HEAD:refs/heads/$TARGET_BRANCH"
+      - name: Upload verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screen-share-capture-refactor
+          retention-days: 14
+          if-no-files-found: error
+          path: |
+            ${{ env.EVIDENCE }}/*.log
+            ${{ env.EVIDENCE }}/*.json
+            ${{ env.EVIDENCE }}/*.txt
+            ${{ env.EVIDENCE }}/*.tgz
+            ${{ env.EVIDENCE }}/refactor.patch
+            ${{ env.EVIDENCE }}/main-baseline.ts
