@@ -65,16 +65,6 @@ import { collectWebRtcDiagnostics, createUnavailableWebRtcDiagnostics, type WebR
 import { isScreenShareAudioSource, shouldPublishMediaSurfaceAudio } from "./media-surface-audio.js";
 import { createMediaSurfaceCommandClient } from "./media/media-surface-commands.js";
 import {
-  activeMediaObjectForSurface as selectActiveMediaObjectForSurface,
-  activeMediaObjectIdForSurface as selectActiveMediaObjectIdForSurface,
-  activeMarkdownBoardObjectForSurface as selectActiveMarkdownBoardObjectForSurface,
-  activePdfPresentationObjectForSurface as selectActivePdfPresentationObjectForSurface,
-  activeImageViewerObjectForSurface as selectActiveImageViewerObjectForSurface,
-  activeVideoPlayerObjectForSurface as selectActiveVideoPlayerObjectForSurface,
-  activeRemoteBrowserObjectForSurface as selectActiveRemoteBrowserObjectForSurface,
-  activeScreenShareObjectForSurface as selectActiveScreenShareObjectForSurface,
-  activeWhiteboardObjectForSurface as selectActiveWhiteboardObjectForSurface,
-  findPhysicalRemoteBrowserObjectNeedingLiveKitRoom,
   physicalRemoteBrowserObjectForMediaTrack,
   physicalScreenShareObjectForMediaTrack
 } from "./media/media-object-state.js";
@@ -195,6 +185,7 @@ import { createSeatMarkerViewController } from "./interaction/seat-marker-view.j
 import { createMediaObjectTestControls } from "./testing/media-object-test-controls.js";
 import { createMediaSurfaceTestControls } from "./testing/media-surface-test-controls.js";
 import type { RuntimeTestApi } from "./testing/runtime-test-api.js";
+import { createMediaObjectQueries } from "./media/media-object-queries.js";
 
 function fallbackUuid(): string {
   return `guest-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
@@ -726,6 +717,41 @@ let sceneAnchorsReady = true;
 let roomSeatOccupancy: Record<string, string> = {};
 let roomMediaObjects: RoomMediaObjectsState | null = null;
 let selectedMediaSurfaceId = DEBUG_SURFACE_ID;
+const {
+  activeMediaObjectForSurface,
+  activeMediaObjectIdForSurface,
+  activeScreenShareObjectForSurface,
+  activeWhiteboardObjectForSurface,
+  activeMarkdownBoardObjectForSurface,
+  activeRemoteBrowserObjectForSurface,
+  activePdfPresentationObjectForSurface,
+  activeImageViewerObjectForSurface,
+  activeVideoPlayerObjectForSurface,
+  findActiveScreenShareObject,
+  findLocalActiveScreenShareObject,
+  findActiveWhiteboardObject,
+  findActiveMarkdownBoardObject,
+  findActiveRemoteBrowserObject,
+  findActivePdfPresentationObject,
+  findActiveImageViewerObject,
+  findActiveVideoPlayerObject,
+  findRemoteBrowserObjectNeedingLiveKitRoom,
+  currentWhiteboardObject,
+  currentMarkdownBoardObject,
+  currentRemoteBrowserObject,
+  currentPdfPresentationObject,
+  currentImageViewerObject,
+  currentVideoPlayerObject,
+  activeWhiteboardObjects,
+  activeMarkdownBoardObjects,
+  activeRemoteBrowserObjects,
+  activePdfPresentationObjects
+} = createMediaObjectQueries({
+  get roomMediaObjects() { return roomMediaObjects; },
+  get selectedMediaSurfaceId() { return selectedMediaSurfaceId; },
+  participantId,
+  mediaSurfaceViews
+});
 const mediaSurfaceCommands = createMediaSurfaceCommandClient({
   participantId,
   getClient: () => roomStateClient,
@@ -919,10 +945,6 @@ function getWhiteboardRuntime(surfaceId: string): ReturnType<typeof createWhiteb
   return runtime;
 }
 
-function currentWhiteboardObject(): MediaObjectInstance<WhiteboardState> | null {
-  return activeWhiteboardObjectForSurface(selectedMediaSurfaceId) ?? findActiveWhiteboardObject();
-}
-
 function getMarkdownBoardRuntime(surfaceId: string): ReturnType<typeof createMarkdownBoardObjectRuntime> {
   const existing = markdownBoardRuntimes.get(surfaceId);
   if (existing) {
@@ -940,10 +962,6 @@ function getMarkdownBoardRuntime(surfaceId: string): ReturnType<typeof createMar
   markdownBoardRuntimes.set(surfaceId, runtime);
   retainedDisplayTextures.add(runtime.texture);
   return runtime;
-}
-
-function currentMarkdownBoardObject(): MediaObjectInstance<MarkdownBoardState> | null {
-  return activeMarkdownBoardObjectForSurface(selectedMediaSurfaceId) ?? findActiveMarkdownBoardObject();
 }
 
 function getRemoteBrowserRuntime(surfaceId: string): ReturnType<typeof createRemoteBrowserObjectRuntime> {
@@ -975,10 +993,6 @@ function getRemoteBrowserRuntime(surfaceId: string): ReturnType<typeof createRem
   return runtime;
 }
 
-function currentRemoteBrowserObject(): MediaObjectInstance<RemoteBrowserObjectState> | null {
-  return activeRemoteBrowserObjectForSurface(selectedMediaSurfaceId) ?? findActiveRemoteBrowserObject();
-}
-
 function getPdfPresentationRuntime(surfaceId: string): ReturnType<typeof createPdfPresentationObjectRuntime> {
   const existing = pdfPresentationRuntimes.get(surfaceId);
   if (existing) {
@@ -1000,10 +1014,6 @@ function getPdfPresentationRuntime(surfaceId: string): ReturnType<typeof createP
   pdfPresentationRuntimes.set(surfaceId, runtime);
   retainedDisplayTextures.add(runtime.texture);
   return runtime;
-}
-
-function currentPdfPresentationObject(): MediaObjectInstance<PdfPresentationState> | null {
-  return activePdfPresentationObjectForSurface(selectedMediaSurfaceId) ?? findActivePdfPresentationObject();
 }
 
 function getImageViewerRuntime(surfaceId: string): ReturnType<typeof createImageViewerObjectRuntime> {
@@ -1041,14 +1051,6 @@ function getVideoPlayerRuntime(surfaceId: string): ReturnType<typeof createVideo
   return runtime;
 }
 
-function currentImageViewerObject(): MediaObjectInstance<ImageViewerState> | null {
-  return activeImageViewerObjectForSurface(selectedMediaSurfaceId) ?? findActiveImageViewerObject();
-}
-
-function currentVideoPlayerObject(): MediaObjectInstance<VideoPlayerState> | null {
-  return activeVideoPlayerObjectForSurface(selectedMediaSurfaceId) ?? findActiveVideoPlayerObject();
-}
-
 function planActiveMediaCanvasRuntimes(): MediaCanvasRuntimeAllocation[] {
   return planMediaCanvasRuntimeAllocations(Array.from(mediaSurfaceViews.values()).map((surface) => ({
     surfaceId: surface.surfaceId,
@@ -1064,20 +1066,6 @@ function allocateActiveMediaCanvasRuntimes(plan: readonly MediaCanvasRuntimeAllo
     "markdown-board": ({ surfaceId }) => { getMarkdownBoardRuntime(surfaceId); },
     "remote-browser": ({ surfaceId }) => { getRemoteBrowserRuntime(surfaceId); }
   });
-}
-
-function activeWhiteboardObjects(): Array<MediaObjectInstance<WhiteboardState>> {
-  if (!roomMediaObjects) {
-    return [];
-  }
-  const objects: Array<MediaObjectInstance<WhiteboardState>> = [];
-  for (const surfaceId of Object.keys(roomMediaObjects.surfaces)) {
-    const object = activeWhiteboardObjectForSurface(surfaceId);
-    if (object) {
-      objects.push(object);
-    }
-  }
-  return objects;
 }
 
 function syncWhiteboardSurfaceTextures(plan: readonly MediaCanvasRuntimeAllocation[]): void {
@@ -1096,20 +1084,6 @@ function syncWhiteboardSurfaceTextures(plan: readonly MediaCanvasRuntimeAllocati
       whiteboardRuntimes.delete(surfaceId);
     }
   }
-}
-
-function activeMarkdownBoardObjects(): Array<MediaObjectInstance<MarkdownBoardState>> {
-  if (!roomMediaObjects) {
-    return [];
-  }
-  const objects: Array<MediaObjectInstance<MarkdownBoardState>> = [];
-  for (const surfaceId of Object.keys(roomMediaObjects.surfaces)) {
-    const object = activeMarkdownBoardObjectForSurface(surfaceId);
-    if (object) {
-      objects.push(object);
-    }
-  }
-  return objects;
 }
 
 function syncMarkdownBoardSurfaceTextures(plan: readonly MediaCanvasRuntimeAllocation[]): void {
@@ -1131,20 +1105,6 @@ function syncMarkdownBoardSurfaceTextures(plan: readonly MediaCanvasRuntimeAlloc
   }
 }
 
-function activeRemoteBrowserObjects(): Array<MediaObjectInstance<RemoteBrowserObjectState>> {
-  if (!roomMediaObjects) {
-    return [];
-  }
-  const objects: Array<MediaObjectInstance<RemoteBrowserObjectState>> = [];
-  for (const surfaceId of Object.keys(roomMediaObjects.surfaces)) {
-    const object = activeRemoteBrowserObjectForSurface(surfaceId);
-    if (object) {
-      objects.push(object);
-    }
-  }
-  return objects;
-}
-
 function syncRemoteBrowserSurfaceTextures(plan: readonly MediaCanvasRuntimeAllocation[]): void {
   const plannedSurfaceIds = new Set(plan.filter((allocation) => allocation.kind === "remote-browser").map((allocation) => allocation.surfaceId));
   const activeSurfaceIds = new Set<string>();
@@ -1163,18 +1123,6 @@ function syncRemoteBrowserSurfaceTextures(plan: readonly MediaCanvasRuntimeAlloc
     releaseSurfaceCanvasRuntime(surfaceId, runtime, () => runtime.dispose());
     remoteBrowserRuntimes.delete(surfaceId);
   }
-}
-
-function activePdfPresentationObjects(): Array<MediaObjectInstance<PdfPresentationState>> {
-  if (!roomMediaObjects) {
-    return [];
-  }
-  const objects: Array<MediaObjectInstance<PdfPresentationState>> = [];
-  for (const surfaceId of Object.keys(roomMediaObjects.surfaces)) {
-    const object = activePdfPresentationObjectForSurface(surfaceId);
-    if (object) objects.push(object);
-  }
-  return objects;
 }
 
 function syncPdfPresentationSurfaceTextures(): void {
@@ -1913,109 +1861,6 @@ function syncSeatStateFromOccupancy(): void {
   if (commands.length > 0) {
     executeRuntimeCommandList(commands);
   }
-}
-
-function activeMediaObjectForSurface(surfaceId: string): MediaObjectInstance | null {
-  return selectActiveMediaObjectForSurface(roomMediaObjects, surfaceId);
-}
-
-function activeMediaObjectIdForSurface(surfaceId: string): string | undefined {
-  return selectActiveMediaObjectIdForSurface(roomMediaObjects, surfaceId);
-}
-
-function activeScreenShareObjectForSurface(surfaceId: string): MediaObjectInstance<ScreenShareObjectState> | null {
-  return selectActiveScreenShareObjectForSurface(roomMediaObjects, surfaceId);
-}
-
-function activeWhiteboardObjectForSurface(surfaceId: string): MediaObjectInstance<WhiteboardState> | null {
-  return selectActiveWhiteboardObjectForSurface(roomMediaObjects, surfaceId);
-}
-
-function activeMarkdownBoardObjectForSurface(surfaceId: string): MediaObjectInstance<MarkdownBoardState> | null {
-  return selectActiveMarkdownBoardObjectForSurface(roomMediaObjects, surfaceId);
-}
-
-function activeRemoteBrowserObjectForSurface(surfaceId: string): MediaObjectInstance<RemoteBrowserObjectState> | null {
-  return selectActiveRemoteBrowserObjectForSurface(roomMediaObjects, surfaceId);
-}
-
-function activePdfPresentationObjectForSurface(surfaceId: string): MediaObjectInstance<PdfPresentationState> | null {
-  return selectActivePdfPresentationObjectForSurface(roomMediaObjects, surfaceId);
-}
-
-function activeImageViewerObjectForSurface(surfaceId: string): MediaObjectInstance<ImageViewerState> | null {
-  return selectActiveImageViewerObjectForSurface(roomMediaObjects, surfaceId);
-}
-
-function activeVideoPlayerObjectForSurface(surfaceId: string): MediaObjectInstance<VideoPlayerState> | null {
-  return selectActiveVideoPlayerObjectForSurface(roomMediaObjects, surfaceId);
-}
-
-function findActiveObjectByType<State>(type: string): MediaObjectInstance<State> | null {
-  if (!roomMediaObjects) {
-    return null;
-  }
-  for (const object of Object.values(roomMediaObjects.objects)) {
-    if (mediaSurfaceViews.has(object.surfaceId)
-      && object.type === type
-      && roomMediaObjects.surfaces[object.surfaceId]?.activeObjectId === object.objectId) {
-      return object as MediaObjectInstance<State>;
-    }
-  }
-  return null;
-}
-
-function findActiveScreenShareObject(): MediaObjectInstance<ScreenShareObjectState> | null {
-  return findActiveObjectByType<ScreenShareObjectState>(SCREEN_SHARE_OBJECT_TYPE);
-}
-
-function findLocalActiveScreenShareObject(surfaceId?: string): MediaObjectInstance<ScreenShareObjectState> | null {
-  if (!roomMediaObjects) {
-    return null;
-  }
-  for (const object of Object.values(roomMediaObjects.objects)) {
-    if (object.type !== SCREEN_SHARE_OBJECT_TYPE || object.ownerParticipantId !== participantId) {
-      continue;
-    }
-    if (!mediaSurfaceViews.has(object.surfaceId)) {
-      continue;
-    }
-    if (surfaceId && object.surfaceId !== surfaceId) {
-      continue;
-    }
-    if (roomMediaObjects.surfaces[object.surfaceId]?.activeObjectId === object.objectId) {
-      return object as MediaObjectInstance<ScreenShareObjectState>;
-    }
-  }
-  return null;
-}
-
-function findActiveWhiteboardObject(): MediaObjectInstance<WhiteboardState> | null {
-  return findActiveObjectByType<WhiteboardState>(WHITEBOARD_OBJECT_TYPE);
-}
-
-function findActiveMarkdownBoardObject(): MediaObjectInstance<MarkdownBoardState> | null {
-  return findActiveObjectByType<MarkdownBoardState>(MARKDOWN_BOARD_OBJECT_TYPE);
-}
-
-function findActiveRemoteBrowserObject(): MediaObjectInstance<RemoteBrowserObjectState> | null {
-  return findActiveObjectByType<RemoteBrowserObjectState>(REMOTE_BROWSER_OBJECT_TYPE);
-}
-
-function findActivePdfPresentationObject(): MediaObjectInstance<PdfPresentationState> | null {
-  return findActiveObjectByType<PdfPresentationState>(PDF_PRESENTATION_OBJECT_TYPE);
-}
-
-function findActiveImageViewerObject(): MediaObjectInstance<ImageViewerState> | null {
-  return findActiveObjectByType<ImageViewerState>(IMAGE_VIEWER_OBJECT_TYPE);
-}
-
-function findActiveVideoPlayerObject(): MediaObjectInstance<VideoPlayerState> | null {
-  return findActiveObjectByType<VideoPlayerState>(VIDEO_PLAYER_OBJECT_TYPE);
-}
-
-function findRemoteBrowserObjectNeedingLiveKitRoom(): MediaObjectInstance<RemoteBrowserObjectState> | null {
-  return findPhysicalRemoteBrowserObjectNeedingLiveKitRoom(roomMediaObjects, mediaSurfaceViews);
 }
 
 function syncMediaSurfaceObjectIds(): void {
