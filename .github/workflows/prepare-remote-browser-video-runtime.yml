@@ -86,9 +86,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git ls-remote origin refs/heads/main | cut -f1)" = "$BASELINE_SHA"
-          test "$(git write-tree)" = "$EXPECTED_TREE"
-          test "$(git diff --cached --name-only | wc -l)" -eq 3
+          git status --short | tee "$EVIDENCE/publication-worktree.log"
+          git diff --name-status | tee "$EVIDENCE/publication-unstaged.log"
+          git diff --cached --name-only | tee "$EVIDENCE/publication-staged.log"
+          CURRENT_MAIN="$(git ls-remote origin refs/heads/main | cut -f1)"
+          CURRENT_TREE="$(git write-tree)"
+          FILE_COUNT="$(git diff --cached --name-only | wc -l)"
+          printf 'main=%s\ntree=%s\nfiles=%s\n' "$CURRENT_MAIN" "$CURRENT_TREE" "$FILE_COUNT" | tee "$EVIDENCE/publication-state.log"
+          test "$CURRENT_MAIN" = "$BASELINE_SHA"
+          test "$CURRENT_TREE" = "$EXPECTED_TREE"
+          test "$FILE_COUNT" -eq 3
           git diff --quiet
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
