@@ -193,6 +193,8 @@ import { clearInteractionRayView, createInteractionRayView, showInteractionRayPo
 import { createInteractionTargetPerformer } from "./interaction/interaction-perform.js";
 import { createSeatMarkerViewController } from "./interaction/seat-marker-view.js";
 import { createMediaObjectTestControls } from "./testing/media-object-test-controls.js";
+import { createMediaSurfaceTestControls } from "./testing/media-surface-test-controls.js";
+import type { RuntimeTestApi } from "./testing/runtime-test-api.js";
 
 function fallbackUuid(): string {
   return `guest-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
@@ -5734,86 +5736,27 @@ const mediaObjectTestControls = createMediaObjectTestControls({
   findActiveRemoteBrowserObject,
   getRemoteBrowserRuntime
 });
+const mediaSurfaceTestControls = createMediaSurfaceTestControls({
+  debugSurfaceId: DEBUG_SURFACE_ID,
+  get selectedMediaSurfaceId() { return selectedMediaSurfaceId; },
+  debugState,
+  camera,
+  displaySurface,
+  mediaSurfaceViews,
+  whiteboardRuntimes,
+  markdownBoardRuntimes,
+  remoteBrowserRuntimes,
+  remoteBrowserVrKeyboardView,
+  selectMediaSurface,
+  resolveDebugSurfaceHit,
+  activeMediaObjectIdForSurface,
+  isMediaSurfaceInputEnabled,
+  commitDebugSurfaceInput,
+  syncPhysicalMediaSurfaceDebugSnapshots,
+  sampleMediaSurfaceTexture
+});
 (window as Window & {
-  __VRATA_TEST__?: {
-    forceRoomStateReconnect: () => void;
-    aimInteractionAtSeat: (seatId: string) => boolean;
-    aimInteractionAtFloor: (x: number, z: number) => boolean;
-    confirmInteraction: () => void;
-    claimSeatById: (seatId: string) => boolean;
-    requestSeatClaimById: (seatId: string) => boolean;
-    sendPrivilegedSurfaceCreate: () => boolean;
-    createSurfaceTestCard: () => boolean;
-    createExtensionTestCard: (surfaceId?: string) => boolean;
-    createMissingCapabilityExtensionObject: (surfaceId?: string) => boolean;
-    createDisabledExtensionObject: (surfaceId?: string) => boolean;
-    createScreenShareObject: (surfaceId?: string) => boolean;
-    createWhiteboardObject: (surfaceId?: string) => boolean;
-    createMarkdownBoardObject: (surfaceId?: string) => boolean;
-    createStickyNote: (input?: { text?: string; x?: number; y?: number; surfaceId?: string }) => boolean;
-    updateStickyNote: (noteId?: string, text?: string, surfaceId?: string) => boolean;
-    moveStickyNote: (noteId?: string, x?: number, y?: number, surfaceId?: string) => boolean;
-    deleteStickyNote: (noteId?: string, surfaceId?: string) => boolean;
-    createRemoteBrowserObject: (surfaceId?: string) => boolean;
-    selectMediaSurface: (surfaceId: string) => boolean;
-    getMediaSurfaceRuntimePixelDimensions: (surfaceId: string) => { width: number; height: number } | null;
-    getMediaCanvasRuntimeKinds: (surfaceId: string) => Array<"whiteboard" | "markdown-board" | "remote-browser">;
-    resolveMediaSurfaceRayHit: (origin: { x: number; y: number; z: number }, direction: { x: number; y: number; z: number }) => { surfaceId: string; distanceM: number | null } | null;
-    openRemoteBrowser: (url?: string) => boolean;
-    takeRemoteBrowserControl: () => boolean;
-    releaseRemoteBrowserControl: () => boolean;
-    createUnknownSurfaceObject: () => boolean;
-    stopActiveSurfaceObject: (surfaceId?: string) => boolean;
-    sendStaleSurfaceTestCardPatch: () => boolean;
-    sendStaleScreenSharePatch: () => boolean;
-    sendStaleWhiteboardPatch: () => boolean;
-    sendStaleMarkdownBoardPatch: () => boolean;
-    sendDuplicateMarkdownBoardPatch: () => boolean;
-    sendDuplicateWhiteboardPatch: () => boolean;
-    clearWhiteboardObject: () => boolean;
-    setDebugSurfaceMediaAudioEnabled: (enabled: boolean, surfaceId?: string) => boolean;
-    startScreenShare: () => boolean;
-    sendDebugSurfaceInput: (input?: {
-      source?: SurfaceInputSource;
-      kind?: SurfaceInputKind;
-      u?: number;
-      v?: number;
-      key?: string;
-      text?: string;
-      scrollDelta?: SurfaceInputScrollDelta;
-      surfaceId?: string;
-    }) => boolean;
-    setDebugSurfaceInputEnabled: (enabled: boolean) => boolean;
-    focusDebugSurface: (surfaceId?: string) => boolean;
-    getDebugSurfaceWorldPosition: (u: number, v: number) => { x: number; y: number; z: number } | null;
-    getDebugSurfaceClientPosition: (u: number, v: number) => { x: number; y: number } | null;
-    getMediaSurfaceWorldPosition: (surfaceId: string, u: number, v: number) => { x: number; y: number; z: number } | null;
-    getMediaSurfaceClientPosition: (surfaceId: string, u: number, v: number) => { x: number; y: number } | null;
-    sampleDebugSurfaceTexture: (center: { u: number; v: number }, size?: { width: number; height: number }) => { clip: { sx: number; sy: number; sw: number; sh: number }; samples: Array<[number, number, number]> } | null;
-    sampleMediaSurfaceTexture: (surfaceId: string, center: { u: number; v: number }, size?: { width: number; height: number }) => { clip: { sx: number; sy: number; sw: number; sh: number }; samples: Array<[number, number, number]> } | null;
-    getRemoteBrowserVrKeyboardTargetWorldPosition: (targetId: string) => { x: number; y: number; z: number } | null;
-    getRemoteBrowserVrKeyboardKeyWorldPosition: (keyId: string) => { x: number; y: number; z: number } | null;
-    teleportToFloor: (x: number, z: number) => boolean;
-    forceXrInteractionAtSeat: (seatId: string) => boolean;
-    setSceneReviewPose: (pose: {
-      position: { x: number; y: number; z: number };
-      yaw: number;
-      pitch: number;
-      fovDegrees: number;
-    }) => boolean;
-    setSceneReviewRendering: (settings: {
-      environmentIntensity: number;
-      exposure: number;
-    }) => boolean;
-    setSyntheticXrState: (state: {
-      rightController: { x: number; y: number; z: number };
-      rightGrip?: { x: number; y: number; z: number } | null;
-      rayDirection: { x: number; y: number; z: number };
-      axes?: { moveX?: number; moveY?: number; turnX?: number; turnY?: number };
-      triggerPressed?: boolean;
-      rayVisible?: boolean;
-    } | null) => boolean;
-  };
+  __VRATA_TEST__?: RuntimeTestApi;
 }).__VRATA_TEST__ = {
   forceRoomStateReconnect: () => {
     roomStateClient?.close();
@@ -5875,34 +5818,10 @@ const mediaObjectTestControls = createMediaObjectTestControls({
   moveStickyNote: mediaObjectTestControls.moveStickyNote,
   deleteStickyNote: mediaObjectTestControls.deleteStickyNote,
   createRemoteBrowserObject: mediaObjectTestControls.createRemoteBrowserObject,
-  selectMediaSurface: (surfaceId) => selectMediaSurface(surfaceId),
-  getMediaSurfaceRuntimePixelDimensions: (surfaceId) => {
-    const image = whiteboardRuntimes.get(surfaceId)?.texture.image as { width?: number; height?: number } | undefined;
-    return typeof image?.width === "number" && typeof image.height === "number"
-      ? { width: image.width, height: image.height }
-      : null;
-  },
-  getMediaCanvasRuntimeKinds: (surfaceId) => {
-    const kinds: Array<"whiteboard" | "markdown-board" | "remote-browser"> = [];
-    if (whiteboardRuntimes.has(surfaceId)) kinds.push("whiteboard");
-    if (markdownBoardRuntimes.has(surfaceId)) kinds.push("markdown-board");
-    if (remoteBrowserRuntimes.has(surfaceId)) kinds.push("remote-browser");
-    return kinds;
-  },
-  resolveMediaSurfaceRayHit: (origin, direction) => {
-    if (![origin.x, origin.y, origin.z, direction.x, direction.y, direction.z].every(Number.isFinite)) {
-      return null;
-    }
-    const rayDirection = new THREE.Vector3(direction.x, direction.y, direction.z);
-    if (rayDirection.lengthSq() === 0) {
-      return null;
-    }
-    const hit = resolveDebugSurfaceHit(
-      new THREE.Ray(new THREE.Vector3(origin.x, origin.y, origin.z), rayDirection.normalize()),
-      "mouse"
-    );
-    return hit ? { surfaceId: hit.surfaceId, distanceM: hit.distanceM ?? null } : null;
-  },
+  selectMediaSurface: mediaSurfaceTestControls.selectMediaSurface,
+  getMediaSurfaceRuntimePixelDimensions: mediaSurfaceTestControls.getMediaSurfaceRuntimePixelDimensions,
+  getMediaCanvasRuntimeKinds: mediaSurfaceTestControls.getMediaCanvasRuntimeKinds,
+  resolveMediaSurfaceRayHit: mediaSurfaceTestControls.resolveMediaSurfaceRayHit,
   openRemoteBrowser: (url = "/remote-browser-demo.html") => {
     void openRemoteBrowser(url).catch((error: unknown) => {
       console.error(error);
@@ -5927,159 +5846,17 @@ const mediaObjectTestControls = createMediaObjectTestControls({
     });
     return true;
   },
-  sendDebugSurfaceInput: (input = {}) => {
-    const source = input.source ?? "mouse";
-    const surfaceId = input.surfaceId ?? selectedMediaSurfaceId;
-    const surface = mediaSurfaceViews.get(surfaceId);
-    if (!surface) {
-      return false;
-    }
-    const hit = createSyntheticSurfaceHit({
-      surfaceId,
-      objectId: activeMediaObjectIdForSurface(surfaceId),
-      source,
-      uv: { u: input.u ?? 0.5, v: input.v ?? 0.5 },
-      widthPx: surface.widthPx,
-      heightPx: surface.heightPx,
-      inputEnabled: isMediaSurfaceInputEnabled(surface)
-    });
-    return commitDebugSurfaceInput({
-      hit,
-      source,
-      kind: input.kind ?? "click",
-      key: input.key,
-      text: input.text,
-      scrollDelta: input.scrollDelta,
-      clientTimeMs: Date.now()
-    });
-  },
-  setDebugSurfaceInputEnabled: (enabled) => {
-    debugState.surfaceInput.enabled = enabled;
-    syncPhysicalMediaSurfaceDebugSnapshots();
-    return true;
-  },
-  focusDebugSurface: (surfaceId = selectedMediaSurfaceId) => {
-    const surface = mediaSurfaceViews.get(surfaceId);
-    if (!surface) {
-      return false;
-    }
-    const hit = createSyntheticSurfaceHit({
-      surfaceId,
-      objectId: activeMediaObjectIdForSurface(surfaceId),
-      source: "mouse",
-      uv: { u: 0.5, v: 0.5 },
-      widthPx: surface.widthPx,
-      heightPx: surface.heightPx,
-      inputEnabled: isMediaSurfaceInputEnabled(surface)
-    });
-    recordSurfaceInputHit(debugState.surfaceInput, hit);
-    return tryFocusSurface({ state: debugState.surfaceInput, permissions: debugState.access.permissions, hit }) === null;
-  },
-  getDebugSurfaceWorldPosition: (u, v) => {
-    if (!Number.isFinite(u) || !Number.isFinite(v)) {
-      return null;
-    }
-    const surface = mediaSurfaceViews.get(DEBUG_SURFACE_ID);
-    if (!surface) {
-      return null;
-    }
-    surface.object.updateMatrixWorld(true);
-    const position = surface.object.localToWorld(new THREE.Vector3(
-      (Math.max(0, Math.min(1, u)) - 0.5) * surface.widthM,
-      (Math.max(0, Math.min(1, v)) - 0.5) * surface.heightM,
-      0
-    ));
-    return {
-      x: position.x,
-      y: position.y,
-      z: position.z
-    };
-  },
-  getDebugSurfaceClientPosition: (u, v) => {
-    if (!Number.isFinite(u) || !Number.isFinite(v)) {
-      return null;
-    }
-    const surface = mediaSurfaceViews.get(DEBUG_SURFACE_ID);
-    if (!surface) {
-      return null;
-    }
-    surface.object.updateMatrixWorld(true);
-    camera.updateMatrixWorld(true);
-    const ndc = surface.object.localToWorld(new THREE.Vector3(
-      (Math.max(0, Math.min(1, u)) - 0.5) * surface.widthM,
-      (Math.max(0, Math.min(1, v)) - 0.5) * surface.heightM,
-      0
-    )).project(camera);
-    return {
-      x: (ndc.x + 1) * 0.5 * window.innerWidth,
-      y: (1 - ndc.y) * 0.5 * window.innerHeight
-    };
-  },
-  getMediaSurfaceWorldPosition: (surfaceId, u, v) => {
-    if (!Number.isFinite(u) || !Number.isFinite(v)) {
-      return null;
-    }
-    const surface = mediaSurfaceViews.get(surfaceId);
-    if (!surface) {
-      return null;
-    }
-    surface.object.updateMatrixWorld(true);
-    const position = surface.object.localToWorld(new THREE.Vector3(
-      (Math.max(0, Math.min(1, u)) - 0.5) * surface.widthM,
-      (Math.max(0, Math.min(1, v)) - 0.5) * surface.heightM,
-      0
-    ));
-    return {
-      x: position.x,
-      y: position.y,
-      z: position.z
-    };
-  },
-  getMediaSurfaceClientPosition: (surfaceId, u, v) => {
-    if (!Number.isFinite(u) || !Number.isFinite(v)) {
-      return null;
-    }
-    const surface = mediaSurfaceViews.get(surfaceId);
-    if (!surface) {
-      return null;
-    }
-    surface.object.updateMatrixWorld(true);
-    camera.updateMatrixWorld(true);
-    const ndc = surface.object.localToWorld(new THREE.Vector3(
-      (Math.max(0, Math.min(1, u)) - 0.5) * surface.widthM,
-      (Math.max(0, Math.min(1, v)) - 0.5) * surface.heightM,
-      0
-    )).project(camera);
-    return {
-      x: (ndc.x + 1) * 0.5 * window.innerWidth,
-      y: (1 - ndc.y) * 0.5 * window.innerHeight
-    };
-  },
-  sampleDebugSurfaceTexture: (center, size = { width: 0.18, height: 0.18 }) => {
-    return sampleMediaSurfaceTexture(DEBUG_SURFACE_ID, center, size);
-  },
-  sampleMediaSurfaceTexture: (surfaceId, center, size = { width: 0.18, height: 0.18 }) => {
-    return sampleMediaSurfaceTexture(surfaceId, center, size);
-  },
-  getRemoteBrowserVrKeyboardTargetWorldPosition: (targetId) => {
-    const mesh = targetId === "toggle" ? remoteBrowserVrKeyboardView.toggleMesh : remoteBrowserVrKeyboardView.meshById.get(targetId);
-    if (!mesh) {
-      return null;
-    }
-    displaySurface.updateMatrixWorld(true);
-    mesh.updateMatrixWorld(true);
-    const position = mesh.getWorldPosition(new THREE.Vector3());
-    return {
-      x: position.x,
-      y: position.y,
-      z: position.z
-    };
-  },
-  getRemoteBrowserVrKeyboardKeyWorldPosition: (keyId) => {
-    return (window as Window & {
-      __VRATA_TEST__?: { getRemoteBrowserVrKeyboardTargetWorldPosition: (targetId: string) => { x: number; y: number; z: number } | null };
-    }).__VRATA_TEST__?.getRemoteBrowserVrKeyboardTargetWorldPosition(keyId) ?? null;
-  },
+  sendDebugSurfaceInput: mediaSurfaceTestControls.sendDebugSurfaceInput,
+  setDebugSurfaceInputEnabled: mediaSurfaceTestControls.setDebugSurfaceInputEnabled,
+  focusDebugSurface: mediaSurfaceTestControls.focusDebugSurface,
+  getDebugSurfaceWorldPosition: mediaSurfaceTestControls.getDebugSurfaceWorldPosition,
+  getDebugSurfaceClientPosition: mediaSurfaceTestControls.getDebugSurfaceClientPosition,
+  getMediaSurfaceWorldPosition: mediaSurfaceTestControls.getMediaSurfaceWorldPosition,
+  getMediaSurfaceClientPosition: mediaSurfaceTestControls.getMediaSurfaceClientPosition,
+  sampleDebugSurfaceTexture: mediaSurfaceTestControls.sampleDebugSurfaceTexture,
+  sampleMediaSurfaceTexture: mediaSurfaceTestControls.sampleMediaSurfaceTexture,
+  getRemoteBrowserVrKeyboardTargetWorldPosition: mediaSurfaceTestControls.getRemoteBrowserVrKeyboardTargetWorldPosition,
+  getRemoteBrowserVrKeyboardKeyWorldPosition: mediaSurfaceTestControls.getRemoteBrowserVrKeyboardKeyWorldPosition,
   forceXrInteractionAtSeat: (seatId: string) => {
     const seatAnchor = sceneSeatAnchorMap.get(seatId);
     if (!seatAnchor) {
