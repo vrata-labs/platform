@@ -1,0 +1,112 @@
+name: Prepare media object queries refactor
+on:
+  push:
+    branches: [preparation/media-object-queries-20260919]
+permissions:
+  contents: write
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      BASELINE_SHA: c455e59e9a709735f7e98f491e28760956e5de70
+      EXPECTED_TREE: ebc14770fe5b52c407bc07a27f12eb8a106fa299
+      TARGET_BRANCH: refactor/runtime-media-object-queries-20260919
+      EVIDENCE: /tmp/media-object-queries-evidence
+      TOOLS: /tmp/media-object-queries-tools
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: vrata_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres -d vrata_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify tooling and check out exact baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo '838bc3b321035ae15962b6f41ac251542f8bf64757f87f48b6109611098db8e0  .github/refactor-media-object-queries/tools.tgz' | sha256sum -c -
+          mkdir -p "$TOOLS" "$EVIDENCE"
+          tar -xzf .github/refactor-media-object-queries/tools.tgz -C "$TOOLS"
+          git fetch --no-tags --depth=1 origin "$BASELINE_SHA"
+          git checkout --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "$BASELINE_SHA"
+          test "$(git rev-parse HEAD^{tree})" = 615ca711919f69201c5872719a89224787e1c500
+          cp apps/runtime-web/src/main.ts "$EVIDENCE/main-baseline.ts"
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install locked dependencies and build baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm install --frozen-lockfile
+          pnpm build 2>&1 | tee "$EVIDENCE/baseline-build.log"
+          cp -a apps/runtime-web/dist "$EVIDENCE/baseline-runtime-dist"
+          tar -C apps/runtime-web -czf "$EVIDENCE/baseline-runtime-dist.tgz" dist
+      - name: Apply and verify source-only extraction
+        shell: bash
+        run: |
+          set -euo pipefail
+          node "$TOOLS/extract.mjs" .
+          cp "$TOOLS/media-object-queries.test.ts" apps/runtime-web/src/media/
+          node "$TOOLS/verify.mjs" . --source-only
+          git add apps/runtime-web/src/main.ts apps/runtime-web/src/media/media-object-queries.ts apps/runtime-web/src/media/media-object-queries.test.ts
+          test "$(git write-tree)" = "$EXPECTED_TREE"
+          git diff --cached --check
+          git diff --cached > "$EVIDENCE/refactor.patch"
+      - name: Lint typecheck build and test
+        shell: bash
+        env:
+          VRATA_TEST_POSTGRES_URL: postgres://postgres:postgres@127.0.0.1:5432/vrata_test
+        run: |
+          set -euo pipefail
+          pnpm lint 2>&1 | tee "$EVIDENCE/lint.log"
+          pnpm typecheck 2>&1 | tee "$EVIDENCE/typecheck.log"
+          pnpm build 2>&1 | tee "$EVIDENCE/candidate-build.log"
+          pnpm test 2>&1 | tee "$EVIDENCE/workspace-tests.log"
+      - name: Verify actual emitted code and original behavior
+        shell: bash
+        run: |
+          set -euo pipefail
+          node "$TOOLS/verify.mjs" . | tee "$EVIDENCE/verification.log"
+          tar -C apps/runtime-web -czf "$EVIDENCE/candidate-runtime-dist.tgz" dist
+      - name: Publish only the three reviewed source files
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git ls-remote origin refs/heads/main | cut -f1)" = "$BASELINE_SHA"
+          test "$(git write-tree)" = "$EXPECTED_TREE"
+          test "$(git diff --cached --name-only | wc -l)" -eq 3
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'refactor(runtime): extract live media object queries'
+          test "$(git rev-parse HEAD^{tree})" = "$EXPECTED_TREE"
+          git rev-parse HEAD > "$EVIDENCE/candidate-sha.txt"
+          git rev-parse HEAD^{tree} > "$EVIDENCE/candidate-tree.txt"
+          git archive --format=tar.gz HEAD > "$EVIDENCE/candidate-source.tgz"
+          git push origin "HEAD:refs/heads/$TARGET_BRANCH"
+      - name: Upload verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: media-object-queries-refactor
+          retention-days: 14
+          if-no-files-found: error
+          path: |
+            /tmp/media-object-queries-evidence/*.log
+            /tmp/media-object-queries-evidence/*.json
+            /tmp/media-object-queries-evidence/*.txt
+            /tmp/media-object-queries-evidence/*.tgz
+            /tmp/media-object-queries-evidence/refactor.patch
+            /tmp/media-object-queries-evidence/main-baseline.ts
