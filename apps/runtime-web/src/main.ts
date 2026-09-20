@@ -187,6 +187,7 @@ import { createMediaSurfaceTestControls } from "./testing/media-surface-test-con
 import type { RuntimeTestApi } from "./testing/runtime-test-api.js";
 import { createMediaObjectQueries } from "./media/media-object-queries.js";
 import { createRemoteBrowserVideoRuntime, type RemoteBrowserVideoEntry } from "./media/remote-browser-video-runtime.js";
+import { createScreenShareRuntime, type ScreenShareRuntimeEntry } from "./media/screen-share-runtime.js";
 
 function fallbackUuid(): string {
   return `guest-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
@@ -622,20 +623,6 @@ let mobileTouchLastClientY = 0;
 const mobileTouchVector = { x: 0, z: 0 };
 let diagnosticsAccumulator = 0;
 let latestMode: PresenceState["mode"] = presenceXrMockEnabled ? "vr" : resolveJoinMode(navigator.userAgent);
-
-type ScreenShareRuntimeEntry = {
-  objectId: string;
-  surfaceId: string;
-  ownerParticipantId: string | null;
-  mediaTrackSid: string | null;
-  remote: boolean;
-  track: Track | null;
-  element: HTMLVideoElement | null;
-  texture: THREE.Texture | null;
-  stream: MediaStream | null;
-  publishedTracks: MediaStreamTrack[];
-  stopping: boolean;
-};
 
 const screenShareRuntimeByObjectId = new Map<string, ScreenShareRuntimeEntry>();
 const remoteBrowserVideoByObjectId = new Map<string, RemoteBrowserVideoEntry>();
@@ -3644,18 +3631,6 @@ function getPublicationTrackSid(publication: unknown, track: Track, fallback: st
     ?? getTrackNodeId(track, fallback);
 }
 
-function screenShareEntries(): ScreenShareRuntimeEntry[] {
-  return Array.from(screenShareRuntimeByObjectId.values());
-}
-
-function hasLocalScreenSharePublishing(): boolean {
-  return screenShareEntries().some((entry) => !entry.remote);
-}
-
-function remoteScreenShareTrackCount(): number {
-  return screenShareEntries().filter((entry) => entry.remote && (entry.track || entry.element)).length;
-}
-
 function hasActiveMediaRoomSurfaceConsumer(): boolean {
   return hasMediaRoomSurfaceConsumer({
     screenShare: hasLocalScreenSharePublishing()
@@ -3665,105 +3640,6 @@ function hasActiveMediaRoomSurfaceConsumer(): boolean {
       || Boolean(findRemoteBrowserObjectNeedingLiveKitRoom()),
     surfaceAudio: mediaSurfaceAudioNodes.size > 0
   });
-}
-
-function localScreenShareEntryForSurface(surfaceId: string): ScreenShareRuntimeEntry | null {
-  return screenShareEntries().find((entry) => !entry.remote && entry.surfaceId === surfaceId) ?? null;
-}
-
-function anyLocalScreenShareEntry(): ScreenShareRuntimeEntry | null {
-  return screenShareEntries().find((entry) => !entry.remote) ?? null;
-}
-
-function screenShareEntryForTrack(track: Track): ScreenShareRuntimeEntry | null {
-  return screenShareEntries().find((entry) => entry.track === track) ?? null;
-}
-
-function screenShareEntryForObject(objectId: string | null | undefined): ScreenShareRuntimeEntry | null {
-  return objectId ? screenShareRuntimeByObjectId.get(objectId) ?? null : null;
-}
-
-function createScreenShareVideoTexture(element: HTMLVideoElement): THREE.VideoTexture {
-  const texture = new THREE.VideoTexture(element);
-  texture.colorSpace = THREE.SRGBColorSpace;
-  return texture;
-}
-
-function clearScreenShareEntryTexture(entry: ScreenShareRuntimeEntry): void {
-  if (!entry.texture) {
-    return;
-  }
-  const material = getMediaSurfaceView(entry.surfaceId).object.material;
-  if (material instanceof THREE.MeshBasicMaterial && material.map === entry.texture) {
-    applySurfaceTexture(entry.surfaceId, null);
-  } else if (!retainedDisplayTextures.has(entry.texture)) {
-    entry.texture.dispose();
-  }
-  entry.texture = null;
-}
-
-function moveScreenShareEntryToSurface(entry: ScreenShareRuntimeEntry, surfaceId: string): void {
-  if (entry.surfaceId === surfaceId) {
-    return;
-  }
-  const texture = entry.texture;
-  if (texture) {
-    const material = getMediaSurfaceView(entry.surfaceId).object.material;
-    if (material instanceof THREE.MeshBasicMaterial && material.map === texture) {
-      retainedDisplayTextures.add(texture);
-      applySurfaceTexture(entry.surfaceId, null);
-      retainedDisplayTextures.delete(texture);
-    }
-    applySurfaceTexture(surfaceId, texture);
-  }
-  entry.surfaceId = surfaceId;
-}
-
-function registerScreenShareEntry(entry: ScreenShareRuntimeEntry): ScreenShareRuntimeEntry {
-  const existing = screenShareRuntimeByObjectId.get(entry.objectId);
-  if (existing && existing !== entry) {
-    detachScreenShareEntry(existing);
-  }
-  screenShareRuntimeByObjectId.set(entry.objectId, entry);
-  reconcileMediaRoomIdleDisconnect(livekitRoom, "screen_share_consumer_active");
-  return entry;
-}
-
-function detachScreenShareEntry(entry: ScreenShareRuntimeEntry): void {
-  entry.stopping = true;
-  if (entry.track) {
-    entry.track.detach().forEach((element) => element.remove());
-    entry.track = null;
-  }
-  if (entry.element) {
-    entry.element.remove();
-    entry.element = null;
-  }
-  clearScreenShareEntryTexture(entry);
-  entry.stream?.getTracks().forEach((track) => track.stop());
-  entry.stream = null;
-  entry.publishedTracks.forEach((track) => {
-    if (track.readyState !== "ended") {
-      track.stop();
-    }
-  });
-  entry.publishedTracks = [];
-  screenShareRuntimeByObjectId.delete(entry.objectId);
-  debugState.screenShare.remoteSubscribedTrackCount = remoteScreenShareTrackCount();
-  if (!hasLocalScreenSharePublishing() && remoteScreenShareTrackCount() === 0 && debugState.screenShareState !== "stopped") {
-    debugState.screenShareState = "idle";
-  }
-  reconcileMediaRoomIdleDisconnect(livekitRoom, "screen_share_consumer_detached_idle");
-}
-
-async function unpublishScreenShareEntry(entry: ScreenShareRuntimeEntry): Promise<void> {
-  const localParticipant = livekitRoom?.localParticipant as {
-    unpublishTrack?: (track: MediaStreamTrack, stopOnUnpublish?: boolean) => Promise<unknown> | unknown;
-  } | undefined;
-  if (!localParticipant?.unpublishTrack) {
-    return;
-  }
-  await Promise.all(entry.publishedTracks.map((track) => Promise.resolve(localParticipant.unpublishTrack!(track, true)).catch(() => undefined)));
 }
 
 function handleLocalScreenShareTrackEnded(objectId: string, surfaceId: string): void {
@@ -3789,47 +3665,6 @@ function handleLocalScreenShareTrackEnded(objectId: string, surfaceId: string): 
 function bindLocalScreenShareTrackEnd(objectId: string, surfaceId: string, tracks: MediaStreamTrack[]): void {
   for (const track of tracks) {
     track.addEventListener("ended", () => handleLocalScreenShareTrackEnded(objectId, surfaceId), { once: true });
-  }
-}
-
-function isActiveScreenShareObject(object: MediaObjectInstance<ScreenShareObjectState> | null | undefined): object is MediaObjectInstance<ScreenShareObjectState> {
-  return isCurrentScreenShareObject(object)
-    && object.state.status === "active";
-}
-
-function isCurrentScreenShareObject(object: MediaObjectInstance<ScreenShareObjectState> | null | undefined): object is MediaObjectInstance<ScreenShareObjectState> {
-  if (!object) {
-    return false;
-  }
-  return object.type === SCREEN_SHARE_OBJECT_TYPE
-    && object.state.status !== "stopped"
-    && object.state.status !== "failed"
-    && roomMediaObjects?.surfaces[object.surfaceId]?.activeObjectId === object.objectId;
-}
-
-function syncScreenShareRuntimeWithObjects(): void {
-  if (!roomMediaObjects) {
-    return;
-  }
-  for (const entry of screenShareEntries()) {
-    const currentObject = roomMediaObjects.objects[entry.objectId] as MediaObjectInstance<ScreenShareObjectState> | undefined;
-    const matchedObject = isCurrentScreenShareObject(currentObject)
-      && mediaSurfaceViews.has(currentObject.surfaceId)
-      && (!currentObject.state.mediaTrackSid || currentObject.state.mediaTrackSid === entry.mediaTrackSid)
-      ? currentObject
-      : physicalScreenShareObjectForMediaTrack(roomMediaObjects, mediaSurfaceViews, entry.ownerParticipantId, entry.mediaTrackSid, "video");
-    if (!isCurrentScreenShareObject(matchedObject)) {
-      detachScreenShareEntry(entry);
-      continue;
-    }
-    if (matchedObject.objectId !== entry.objectId) {
-      screenShareRuntimeByObjectId.delete(entry.objectId);
-      entry.objectId = matchedObject.objectId;
-      screenShareRuntimeByObjectId.set(entry.objectId, entry);
-    }
-    entry.ownerParticipantId = matchedObject.ownerParticipantId;
-    entry.mediaTrackSid = matchedObject.state.mediaTrackSid ?? entry.mediaTrackSid;
-    moveScreenShareEntryToSurface(entry, matchedObject.surfaceId);
   }
 }
 
@@ -4356,6 +4191,33 @@ const debugState = createRuntimeDebugState({
   botMode,
   runtimeFlags,
   faultConfig
+});
+
+const {
+  screenShareEntries,
+  hasLocalScreenSharePublishing,
+  remoteScreenShareTrackCount,
+  localScreenShareEntryForSurface,
+  anyLocalScreenShareEntry,
+  screenShareEntryForTrack,
+  screenShareEntryForObject,
+  createScreenShareVideoTexture,
+  moveScreenShareEntryToSurface,
+  registerScreenShareEntry,
+  detachScreenShareEntry,
+  unpublishScreenShareEntry,
+  isActiveScreenShareObject,
+  syncScreenShareRuntimeWithObjects
+} = createScreenShareRuntime({
+  screenShareRuntimeByObjectId,
+  retainedDisplayTextures,
+  mediaSurfaceViews,
+  debugState,
+  getMediaSurfaceView,
+  applySurfaceTexture,
+  reconcileMediaRoomIdleDisconnect,
+  get roomMediaObjects() { return roomMediaObjects; },
+  get livekitRoom() { return livekitRoom; }
 });
 
 const floorMaterial = floor.material as THREE.MeshStandardMaterial;
