@@ -1,0 +1,104 @@
+name: Prepare media surface audio refactor
+on:
+  push:
+    branches: [preparation/runtime-surface-audio-20260920]
+permissions:
+  contents: write
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: vrata_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres -d vrata_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      BASE_SHA: 0d93bf3461ddfc39373531c9d53b30a0270ecd09
+      SOURCE_BRANCH: refactor/runtime-media-surface-audio-20260920
+      VRATA_TEST_POSTGRES_URL: postgres://postgres:postgres@127.0.0.1:5432/vrata_test
+    steps:
+      - uses: actions/checkout@v4
+      - name: Preserve tools and check out exact baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp -R .refactor-surface-audio "$RUNNER_TEMP/surface-audio-tools"
+          mkdir -p "$RUNNER_TEMP/surface-audio-results"
+          git fetch --depth=1 origin "$BASE_SHA"
+          git checkout --detach "$BASE_SHA"
+          test "$(git rev-parse HEAD)" = "$BASE_SHA"
+          git archive HEAD | gzip > "$RUNNER_TEMP/surface-audio-results/baseline-source.tgz"
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install locked dependencies and build baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          OUT="$RUNNER_TEMP/surface-audio-results"
+          pnpm install --frozen-lockfile 2>&1 | tee "$OUT/install.log"
+          pnpm build 2>&1 | tee "$OUT/baseline-build.log"
+          cp apps/runtime-web/src/main.ts "$OUT/main-baseline.ts"
+          cp apps/runtime-web/dist/main.js "$OUT/main-baseline.js"
+          tar -czf "$OUT/baseline-runtime-dist.tgz" -C apps/runtime-web dist
+      - name: Apply verified extraction
+        shell: bash
+        run: |
+          set -euo pipefail
+          node "$RUNNER_TEMP/surface-audio-tools/extract.cjs" "$GITHUB_WORKSPACE"
+          mv extraction.json "$RUNNER_TEMP/surface-audio-results/"
+          cp "$RUNNER_TEMP/surface-audio-tools/media-surface-audio-runtime.test.ts" apps/runtime-web/src/media/
+          test "$(git hash-object apps/runtime-web/src/main.ts)" = 78139f23ba951f91d32df477b054bee8ac0a3693
+          test "$(git hash-object apps/runtime-web/src/media/media-surface-audio-runtime.ts)" = f4c2e32abc453ed872c9b7a4e0d95117cbac1b20
+          test "$(git hash-object apps/runtime-web/src/media/media-surface-audio-runtime.test.ts)" = d4660bd5f65c847cc8827b242d5edf3f83ce85b0
+      - name: Full workspace verification
+        shell: bash
+        run: |
+          set -euo pipefail
+          OUT="$RUNNER_TEMP/surface-audio-results"
+          pnpm lint 2>&1 | tee "$OUT/lint.log"
+          pnpm typecheck 2>&1 | tee "$OUT/typecheck.log"
+          pnpm build 2>&1 | tee "$OUT/candidate-build.log"
+          pnpm test 2>&1 | tee "$OUT/workspace-tests.log"
+          node "$RUNNER_TEMP/surface-audio-tools/verify.cjs" "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/apps/runtime-web/dist/media" "$OUT/main-baseline.js"
+          mv candidate-tests.log original-tests.log restored-tests.log characterization.json "$OUT/"
+          tar -czf "$OUT/candidate-runtime-dist.tgz" -C apps/runtime-web dist
+      - name: Publish only the three reviewed source files
+        shell: bash
+        run: |
+          set -euo pipefail
+          OUT="$RUNNER_TEMP/surface-audio-results"
+          bin=packages/asset-pipeline/bin/vrata.mjs
+          test "$(git hash-object "$bin")" = "$(git rev-parse "HEAD:$bin")"
+          test "$(git ls-files -s "$bin" | awk '{print $1}')" = 100644
+          mode="$(stat -c %a "$bin")"
+          if [ "$mode" = 755 ]; then chmod 644 "$bin"; else test "$mode" = 644; fi
+          test "$(git ls-remote origin refs/heads/main | cut -f1)" = "$BASE_SHA"
+          test -z "$(git ls-remote origin "refs/heads/$SOURCE_BRANCH")"
+          git switch -c "$SOURCE_BRANCH"
+          git add apps/runtime-web/src/main.ts apps/runtime-web/src/media/media-surface-audio-runtime.ts apps/runtime-web/src/media/media-surface-audio-runtime.test.ts
+          git diff --exit-code
+          test -z "$(git ls-files --others --exclude-standard)"
+          git diff --cached --check
+          printf '%s\n' apps/runtime-web/src/main.ts apps/runtime-web/src/media/media-surface-audio-runtime.test.ts apps/runtime-web/src/media/media-surface-audio-runtime.ts | diff - <(git diff --cached --name-only)
+          git diff --cached > "$OUT/refactor.patch"
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'refactor(runtime): isolate media surface audio lifecycle'
+          git rev-parse HEAD > "$OUT/candidate-sha.txt"
+          git rev-parse 'HEAD^{tree}' > "$OUT/candidate-tree.txt"
+          git archive HEAD | gzip > "$OUT/candidate-source.tgz"
+          git push origin "HEAD:refs/heads/$SOURCE_BRANCH"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: media-surface-audio-verification-${{ github.run_id }}
+          path: ${{ runner.temp }}/surface-audio-results/
+          retention-days: 14
