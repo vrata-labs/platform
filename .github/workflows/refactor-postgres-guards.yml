@@ -1,0 +1,130 @@
+name: Prepare PostgreSQL guard refactor
+on:
+  push:
+    branches: [preparation/storage-decomposition-20260920]
+    paths: [.github/workflows/refactor-postgres-guards.yml]
+permissions:
+  contents: write
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: vrata_test
+        ports: [5432:5432]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d vrata_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    defaults:
+      run:
+        shell: bash
+        working-directory: source
+    env:
+      BASE_SHA: dcd6bdd49280a57a819bc30ff0aac171644097ec
+      EXPECTED_TREE: ff39a3910f8daaaa912e610a949b160bd571ac62
+      TARGET_BRANCH: refactor/postgres-schema-guards-20260920
+      VRATA_TEST_POSTGRES_URL: postgres://postgres:postgres@127.0.0.1:5432/vrata_test
+      TYPESCRIPT_PATH: ${{ github.workspace }}/source/node_modules/typescript
+    steps:
+      - name: Checkout preparation tools
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          path: preparation
+          persist-credentials: false
+      - name: Checkout exact baseline
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: dcd6bdd49280a57a819bc30ff0aac171644097ec
+          path: source
+      - name: Setup pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
+        with:
+          package_json_file: source/package.json
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: source/pnpm-lock.yaml
+      - name: Install locked dependencies and build baseline
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$BASE_SHA"
+          mkdir -p "$RUNNER_TEMP/guards-evidence/baseline-source"
+          cp apps/api/src/storage.ts "$RUNNER_TEMP/guards-evidence/baseline-source/"
+          pnpm install --frozen-lockfile 2>&1 | tee "$RUNNER_TEMP/guards-evidence/install.log"
+          pnpm build 2>&1 | tee "$RUNNER_TEMP/guards-evidence/baseline-build.log"
+          cp -a apps/api/dist "$RUNNER_TEMP/guards-evidence/baseline-api-dist"
+          python3 - <<'PY'
+          import os, pathlib, subprocess
+          for record in subprocess.check_output(['git', 'ls-files', '-s', '-z']).split(b'\0'):
+              if not record:
+                  continue
+              metadata, name = record.split(b'\t', 1)
+              mode, expected, stage = metadata.split()
+              p = pathlib.Path(os.fsdecode(name))
+              actual = subprocess.check_output(['git', 'hash-object', str(p)]).strip()
+              if actual != expected:
+                  raise SystemExit('unexpected_tracked_content_change:' + str(p))
+              if mode in (b'100644', b'100755'):
+                  expected_mode = int(mode[-3:], 8)
+                  if p.stat().st_mode & 0o777 != expected_mode:
+                      print('restore_unchanged_tracked_mode:' + str(p))
+                      p.chmod(expected_mode)
+          PY
+          git diff --exit-code
+      - name: Extract and verify exact source tree
+        run: |
+          set -euo pipefail
+          node "$GITHUB_WORKSPACE/preparation/tools/refactor-guards-extract.cjs" "$PWD" | tee "$RUNNER_TEMP/guards-evidence/extraction.json"
+          cp "$GITHUB_WORKSPACE/preparation/tools/refactor-guards-tests.ts" apps/api/src/storage-postgres-guards.test.ts
+          node "$GITHUB_WORKSPACE/preparation/tools/refactor-guards-verify.cjs" "$RUNNER_TEMP/guards-evidence/baseline-source" apps/api/src source | tee "$RUNNER_TEMP/guards-evidence/source-equivalence.json"
+          git add apps/api/src/storage.ts apps/api/src/storage-postgres-guards.ts apps/api/src/storage-postgres-guards.test.ts
+          test "$(git write-tree)" = "$EXPECTED_TREE"
+          git diff --cached --check
+          git diff --cached > "$RUNNER_TEMP/guards-evidence/refactor.patch"
+      - name: Full checks with PostgreSQL
+        run: |
+          set -euo pipefail
+          pnpm lint 2>&1 | tee "$RUNNER_TEMP/guards-evidence/lint.log"
+          pnpm typecheck 2>&1 | tee "$RUNNER_TEMP/guards-evidence/typecheck.log"
+          pnpm build 2>&1 | tee "$RUNNER_TEMP/guards-evidence/candidate-build.log"
+          pnpm test 2>&1 | tee "$RUNNER_TEMP/guards-evidence/workspace-tests.log"
+          node "$GITHUB_WORKSPACE/preparation/tools/refactor-guards-verify.cjs" "$RUNNER_TEMP/guards-evidence/baseline-api-dist" apps/api/dist compiled | tee "$RUNNER_TEMP/guards-evidence/compiled-equivalence.json"
+          node --test "$RUNNER_TEMP/guards-evidence/baseline-api-dist/storage-postgres-guards.test.js" 2>&1 | tee "$RUNNER_TEMP/guards-evidence/original-tests.log"
+          node --test apps/api/dist/storage-postgres-guards.test.js 2>&1 | tee "$RUNNER_TEMP/guards-evidence/candidate-tests.log"
+      - name: Commit and normal push of verified source only
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$BASE_SHA"
+          test "$(git write-tree)" = "$EXPECTED_TREE"
+          git diff --exit-code
+          test "$(git diff --cached --name-only | wc -l)" -eq 3
+          if git ls-remote --exit-code --heads origin "$TARGET_BRANCH"; then
+            echo "target_branch_already_exists" >&2
+            exit 1
+          fi
+          GIT_AUTHOR_NAME='github-actions[bot]' GIT_AUTHOR_EMAIL='41898282+github-actions[bot]@users.noreply.github.com' GIT_COMMITTER_NAME='github-actions[bot]' GIT_COMMITTER_EMAIL='41898282+github-actions[bot]@users.noreply.github.com' git commit -m 'refactor(api): isolate PostgreSQL schema guards'
+          test "$(git rev-parse HEAD^{tree})" = "$EXPECTED_TREE"
+          test "$(git rev-parse HEAD^)" = "$BASE_SHA"
+          git push origin "HEAD:refs/heads/$TARGET_BRANCH"
+          git rev-parse HEAD > "$RUNNER_TEMP/guards-evidence/candidate-sha.txt"
+          git rev-parse HEAD^{tree} > "$RUNNER_TEMP/guards-evidence/candidate-tree.txt"
+          git archive --format=tar.gz HEAD > "$RUNNER_TEMP/guards-evidence/candidate-source.tgz"
+          tar -C apps/api -czf "$RUNNER_TEMP/guards-evidence/candidate-api-dist.tgz" dist
+          tar -C "$RUNNER_TEMP/guards-evidence/baseline-api-dist" -czf "$RUNNER_TEMP/guards-evidence/baseline-api-dist.tgz" .
+          rm -r "$RUNNER_TEMP/guards-evidence/baseline-api-dist"
+      - name: Preserve verification evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: postgres-guards-verification-${{ github.run_id }}
+          path: ${{ runner.temp }}/guards-evidence/
+          retention-days: 14
+          if-no-files-found: error
