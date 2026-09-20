@@ -85,6 +85,35 @@ Optional fields:
 - `attributions`: optional source credit records displayed in the runtime HUD
 - `notes`: free-form export notes
 
+### `baked-pbr-v1` material transport
+
+`renderProfile: "baked-pbr-v1"` combines baked diffuse lighting with standard glTF
+PBR materials and environment reflections. The GLB transports an sRGB lightmap as
+`emissiveTexture` using `texCoord: 1`; every affected mesh must have `TEXCOORD_1`.
+Material extras identify the conversion:
+
+- `vrataLightMap: true` moves that texture to the runtime lightMap slot.
+- `vrataLightMapIntensity` is the finite decode multiplier for the baked encoding.
+- `vrataOriginalEmissive` and `vrataOriginalEmissiveIntensity` restore genuine
+  emissive surfaces after removing the transport texture from the emissive slot.
+- `vrataLightMapIncludesEnvironment: true` declares that the atlas already contains
+  environment/indirect diffuse. The runtime then retains environment specular and
+  multiscattering but omits the additional IBL diffuse term for that material.
+  Omitted/false values retain the historical shading of existing bundles.
+
+The last field describes the atlas encoding, not a scene-specific visual override.
+It must be boolean when present. An incompatible Three.js physical shader is
+rejected during loading before materials are changed. If a separate custom
+material hook removes the physical shader include, the existing shader is retained
+and the material reports `fallback` instead of claiming the correction applied.
+
+`sceneDebug.materialSamples` reports `lightMapIntensity` and
+`bakedEnvironmentMode` (`legacy`, `pending-compile`, `specular-only`, `fallback`).
+New complete-irradiance candidates must demonstrate `specular-only` after their
+visible materials compile and must still pass actual source/browser image review.
+Preserve the atlas dynamic range and record its encoding/decoding convention;
+neither a large intensity nor this metadata repairs clipped lightmap pixels.
+
 ### `attributions`
 
 Scene bundles can declare visible credit records for source assets used by the scene. The runtime shows them in a separate HUD block after the scene bundle loads.

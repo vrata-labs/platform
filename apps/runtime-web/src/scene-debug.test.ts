@@ -90,6 +90,8 @@ test("inspectSceneObject reports baked lightmaps", () => {
   assert.equal(diagnostics.lightMappedMaterialCount, 1);
   assert.equal(diagnostics.materialSamples[0]?.name, "baked-material");
   assert.equal(diagnostics.materialSamples[0]?.hasLightMap, true);
+  assert.equal(diagnostics.materialSamples[0]?.lightMapIntensity, 1);
+  assert.equal(diagnostics.materialSamples[0]?.bakedEnvironmentMode, "legacy");
   assert.equal(diagnostics.materialSamples[0]?.roughness, 1);
   assert.equal(diagnostics.materialSamples[0]?.metalness, 0);
 });

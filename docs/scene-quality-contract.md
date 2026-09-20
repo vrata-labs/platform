@@ -114,6 +114,14 @@ crushed shadows, forced-color overrides or flattened shading to pass a screensho
 metric. Recheck quality after optimization; report a real budget conflict instead
 of silently lowering the target.
 
+Baked-lighting transfer must retain its measured dynamic range. Record linear
+maximum/percentiles, encoding scale and clipping fraction; reject broad clipping
+of walls/floors instead of raising a clipped map's intensity. Separate source
+diffuse radiance from runtime irradiance and test the actual decoded result.
+When an atlas includes environment diffuse, avoid adding environment diffuse a
+second time; keep view-dependent environment specular. Confirm that in actual
+browser images rather than using a lightmapped-material count as proof.
+
 ## 4. Windows and distant surroundings
 
 For each visible exterior define coherent location, eye elevation, horizon,
@@ -157,6 +165,13 @@ Source/browser pairs use the same cameras, FOV, exposure and artifact revision,
 with explicit aspect/coordinate conversion. Clean capture may remove HUD/debug
 overlays; it must not hide broken geometry, missing functional surfaces or
 production-only defects. Beauty cameras cannot replace real seated views.
+
+Record the measured runtime camera world position/direction for every paired
+view. A command applied to the player rig is not the camera position: camera
+offsets rotate with parent yaw/pitch. Convert the desired DCC eye pose through
+that hierarchy and assert the actual camera result. Separately record viewpoints
+and behavior reached through real seat interactions; a synthetic anatomical
+seated view does not establish the runtime's seated eye pose.
 
 For each failed view record object/region, visible symptom, suspected cause,
 correction and before/after evidence. Fix obvious toy forms, unreadable objects,

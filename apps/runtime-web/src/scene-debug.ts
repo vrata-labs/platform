@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { getBakedEnvironmentMode, type BakedEnvironmentMode } from "./scene-lightmaps.js";
 
 export interface SceneDiagnosticsSnapshot {
   bundleUrl: string | null;
@@ -33,6 +34,8 @@ export interface SceneDiagnosticsSnapshot {
     hasNormalMap: boolean;
     hasAoMap: boolean;
     hasLightMap: boolean;
+    lightMapIntensity?: number | null;
+    bakedEnvironmentMode?: BakedEnvironmentMode | null;
     roughness?: number | null;
     metalness?: number | null;
     color?: { r: number; g: number; b: number } | null;
@@ -137,6 +140,8 @@ export function inspectSceneObject(input: {
     hasNormalMap: boolean;
     hasAoMap: boolean;
     hasLightMap: boolean;
+    lightMapIntensity?: number | null;
+    bakedEnvironmentMode?: BakedEnvironmentMode | null;
     roughness?: number | null;
     metalness?: number | null;
     color?: { r: number; g: number; b: number } | null;
@@ -183,6 +188,8 @@ export function inspectSceneObject(input: {
         hasNormalMap: false,
         hasAoMap: false,
         hasLightMap: false,
+        lightMapIntensity: null,
+        bakedEnvironmentMode: null,
         roughness: null,
         metalness: null,
         color: null,
@@ -195,6 +202,8 @@ export function inspectSceneObject(input: {
       existing.hasLightMap = existing.hasLightMap || Boolean(maybeTextured.lightMap);
       if (maybeTextured.lightMap) lightMappedMaterialKeys.add(material.uuid);
       if (material instanceof THREE.MeshStandardMaterial) {
+        existing.lightMapIntensity = material.lightMap ? round(material.lightMapIntensity) : null;
+        existing.bakedEnvironmentMode = material.lightMap ? getBakedEnvironmentMode(material) : null;
         existing.roughness = round(material.roughness);
         existing.metalness = round(material.metalness);
       }
