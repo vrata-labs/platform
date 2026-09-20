@@ -89,6 +89,10 @@ ray/clearance results, artifact identity and object IDs. Anchor equality proves
 coordinate preservation, not usability. An AABB gap alone does not prove screen
 visibility; a declared support edge does not prove mesh contact. Justify numeric
 criteria for the real object/user instead of using an arbitrary universal tolerance.
+Do not relax a failed clearance/reach threshold separately for the failing object.
+Correct the layout, or independently justify a revised actor/posture model and
+rerun every affected check. Assembly-level contact discovery and joined-mesh
+connectivity do not replace intended per-part support or constituent-part coverage.
 
 Use geometric tests for measurable relationships and eye-level/contact views for
 what those tests miss. Hidden fasteners need not all be modeled; visible joints,
@@ -172,6 +176,11 @@ offsets rotate with parent yaw/pitch. Convert the desired DCC eye pose through
 that hierarchy and assert the actual camera result. Separately record viewpoints
 and behavior reached through real seat interactions; a synthetic anatomical
 seated view does not establish the runtime's seated eye pose.
+Normal-product checks must compare actual seated camera height with the cushion
+and intended eye position, observe authoritative claim/release from another client,
+and verify the post-release floor pose after frame processing. For each media
+surface, verify both physical and logical state and actual displayed content:
+a visible empty plane or an object with no media frames is insufficient.
 
 For each failed view record object/region, visible symptom, suspected cause,
 correction and before/after evidence. Fix obvious toy forms, unreadable objects,
@@ -228,3 +237,5 @@ and check for newer applicable user feedback. One accepted scene is a benchmark,
 not automatic acceptance of another scene made by similar scripts.
 
 See the [session flow audit](reviews/2026-09-19-scene-flow-quality-regression.md).
+The [0.4.0 normal-product investigation](reviews/2026-09-20-scene-040-normal-product-blockers.md)
+records concrete failures caught by these checks; none is waived by clean captures.

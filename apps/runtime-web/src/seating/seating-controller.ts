@@ -26,6 +26,9 @@ export function resolveLocalSeatId(seatOccupancy: Record<string, string>, partic
 
 export class SeatingController {
   private state: SeatingState = { kind: "standing", pendingSeatId: null };
+  // Room snapshots already in flight may still contain our old occupancy after
+  // local teleport. Suppress it until a server snapshot acknowledges the release.
+  private releasedSeatIds = new Set<string>();
 
   constructor(private readonly participantId: string) {}
 
@@ -46,11 +49,13 @@ export class SeatingController {
   }
 
   reset(): SeatingControllerSnapshot {
+    this.releasedSeatIds.clear();
     this.state = { kind: "standing", pendingSeatId: null };
     return this.getSnapshot();
   }
 
   requestSeatClaim(seatId: string): SeatingControllerSnapshot {
+    this.releasedSeatIds.delete(seatId);
     if (this.state.kind === "seated" && this.state.seatId === seatId) {
       return this.getSnapshot();
     }
@@ -71,8 +76,11 @@ export class SeatingController {
   }
 
   applyOccupancy(input: { seatOccupancy: Record<string, string>; forcedSeatId?: string | null }): SeatingControllerSnapshot {
+    for (const seatId of this.releasedSeatIds) {
+      if (input.seatOccupancy[seatId] !== this.participantId) this.releasedSeatIds.delete(seatId);
+    }
     const occupiedSeatId = input.forcedSeatId ?? resolveLocalSeatId(input.seatOccupancy, this.participantId);
-    if (occupiedSeatId) {
+    if (occupiedSeatId && !this.releasedSeatIds.has(occupiedSeatId)) {
       this.state = { kind: "seated", seatId: occupiedSeatId, pendingSeatId: null };
       return this.getSnapshot();
     }
@@ -83,6 +91,8 @@ export class SeatingController {
   }
 
   releaseLocal(): SeatingControllerSnapshot {
+    const seatId = this.getCurrentSeatId();
+    if (seatId) this.releasedSeatIds.add(seatId);
     this.state = { kind: "standing", pendingSeatId: null };
     return this.getSnapshot();
   }
@@ -93,7 +103,7 @@ export class SeatingController {
       return { snapshot: this.getSnapshot(), commands: [] };
     }
 
-    this.state = { kind: "standing", pendingSeatId: null };
+    this.releaseLocal();
     return {
       snapshot: this.getSnapshot(),
       commands: [{ type: "send_seat_release", seatId: currentSeatId }]

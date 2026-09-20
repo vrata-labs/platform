@@ -35,6 +35,7 @@ import {
   type RemoteBrowserObjectState,
   type RemoteBrowserPatch,
   type RoomMediaObjectsState,
+  type SceneMediaSurfaceDefinition,
   type RoomPermission,
   type RoomRole,
   type ScreenShareErrorCode,
@@ -80,6 +81,7 @@ export interface SeatReleaseResult {
 export interface ParticipantAccessState {
   role: RoomRole;
   permissions?: RoomPermission[];
+  sceneMediaSurfaces?: SceneMediaSurfaceDefinition[];
 }
 
 export interface CreateMediaObjectInput {

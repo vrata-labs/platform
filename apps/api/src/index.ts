@@ -90,6 +90,7 @@ import {
 
 import { defaultManifest } from "./default-room-manifest.js";
 import { createRoomManifestBuilder } from "./room-manifest.js";
+import { loadSceneMediaSurfaces } from "./scene-media-surfaces.js";
 
 import {
   isRoomDisabled,
@@ -1042,6 +1043,7 @@ function createRoomAccessTokenResponse(input: {
   sessionId?: string;
   ttlSeconds: number;
   nowSeconds?: number;
+  sceneMediaSurfaces?: RoomSessionTokenPayload["sceneMediaSurfaces"];
 }): {
   token: string;
   expiresInSeconds: number;
@@ -1053,6 +1055,7 @@ function createRoomAccessTokenResponse(input: {
   const nowSeconds = input.nowSeconds ?? Math.floor(Date.now() / 1000);
   const permissions = getRoomPermissions(input.role);
   const payload: RoomAccessTokenPayload = {
+    ...(input.sceneMediaSurfaces === undefined ? {} : { sceneMediaSurfaces: input.sceneMediaSurfaces }),
     tenantId: input.room?.tenantId ?? "demo-tenant",
     roomId: input.roomId,
     participantId: input.participantId,
@@ -2546,6 +2549,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       role: effectiveRole,
       roleSource: session.payload.roleSource ?? "trusted",
       sessionId: session.payload.sessionId,
+      sceneMediaSurfaces: session.payload.sceneMediaSurfaces,
       ttlSeconds
     }) : null;
     json(response, 200, {
@@ -2943,6 +2947,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       });
     }
     json(response, 200, createRoomAccessTokenResponse({
+      sceneMediaSurfaces: await loadSceneMediaSurfaces(tokenRoom?.sceneBundleUrl, `http://127.0.0.1:${request.socket.localPort ?? process.env.API_PORT ?? "4000"}`),
       room: tokenRoom,
       roomId,
       participantId,

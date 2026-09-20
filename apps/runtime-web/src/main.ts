@@ -131,7 +131,7 @@ import { createAvatarLipsyncDriver, sampleAvatarLipsyncLevel, updateAvatarLipsyn
 import { createAvatarOutboundPublisher, type AvatarOutboundPayload } from "./avatar/avatar-publish.js";
 import { createRemoteAvatarRuntime } from "./avatar/remote-avatar-runtime.js";
 import { createInitialAvatarRuntimeFlags, resolveAvatarCatalogUrl, resolveAvatarRuntimeFlags } from "./avatar/avatar-runtime.js";
-import { resolveSeatRootPosition } from "./avatar/avatar-seating.js";
+import { NON_XR_CAMERA_HEIGHT, resolveLocalSeatRootPosition } from "./local/seat-pose.js";
 import { resolveAvatarViewProfile } from "./avatar/avatar-visibility.js";
 import { createSyntheticLocalAvatarHandFrame, resolveLocalAvatarHandFrame, type LocalAvatarHandFrameResult } from "./avatar/avatar-xr-hands.js";
 import { resolveAvatarXrInput } from "./avatar/avatar-xr-input.js";
@@ -440,7 +440,7 @@ scene.fog = new THREE.Fog(0x08111f, 12, 50);
 let defaultSceneFog = scene.fog;
 
 const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 200);
-camera.position.set(0, 1.6, 0);
+camera.position.set(0, NON_XR_CAMERA_HEIGHT, 0);
 
 const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: debugEnabled });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -1437,7 +1437,7 @@ function roundDebugNumber(value: number, decimals = 3): number {
   return Math.round(value * scale) / scale;
 }
 
-function resolveNonXrHeadWorldPosition(pose: ReturnType<typeof localPoseController.getPose>, headHeight = 1.6): THREE.Vector3 {
+function resolveNonXrHeadWorldPosition(pose: ReturnType<typeof localPoseController.getPose>, headHeight = NON_XR_CAMERA_HEIGHT): THREE.Vector3 {
   return new THREE.Vector3(pose.position.x, pose.position.y + headHeight, pose.position.z);
 }
 
@@ -6920,7 +6920,7 @@ function createFrameLocomotionHandlers(frameContext: RuntimeFrameContext): Frame
     getCurrentSeatId,
     getSeatRootPosition: (seatId) => {
       const seatAnchor = sceneSeatAnchorMap.get(seatId);
-      return seatAnchor ? resolveSeatRootPosition(seatAnchor) : null;
+      return seatAnchor ? resolveLocalSeatRootPosition(seatAnchor, renderer.xr.isPresenting) : null;
     },
     getSeatYaw: (seatId) => sceneSeatAnchorMap.get(seatId)?.yaw,
     getLastAppliedSeatLockId: () => lastAppliedSeatLockId,

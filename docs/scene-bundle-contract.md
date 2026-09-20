@@ -114,6 +114,24 @@ visible materials compile and must still pass actual source/browser image review
 Preserve the atlas dynamic range and record its encoding/decoding convention;
 neither a large intensity nor this metadata repairs clipped lightmap pixels.
 
+### Logical state for scene-owned media surfaces
+
+When issuing a room session token, the API reads media surface identities from the
+room's stored scene bundle binding. It signs a bounded `sceneMediaSurfaces` claim
+containing IDs, labels and allowed object types. Join-request fields cannot supply
+this claim. Room-state verifies the token and registers missing logical surfaces
+before its first snapshot, so a custom ID such as `workspace-main` supports shared
+objects on the normal room path.
+
+Registration is additive: existing surfaces and active objects survive reconnects;
+historical default surfaces are retained. This does not change existing surface
+policy, delete old objects, or replace transforms from the client-side manifest.
+The normal command permission and object-type checks still apply to new surfaces.
+Both legacy `surfaceId` and F3 `id` definitions are supported. If a manifest cannot
+be read or its definitions are invalid, no new surfaces are granted and historical
+defaults remain available. The runtime's physical/logical mismatch diagnostics
+expose any resulting missing binding.
+
 ### `attributions`
 
 Scene bundles can declare visible credit records for source assets used by the scene. The runtime shows them in a separate HUD block after the scene bundle loads.

@@ -54,3 +54,4 @@ export * from "./access.js";
 export * from "./surface-input.js";
 export * from "./media-objects.js";
 export * from "./room-template.js";
+export * from "./scene-media-surfaces.js";
