@@ -10,6 +10,7 @@ import {
   getRoomPermissions,
   hasRoomPermission,
   parseRoomRole,
+  registerSceneMediaSurfaces,
   type MediaObjectCommandResult,
   type RemoteBrowserObjectState,
   type RemoteBrowserPatch,
@@ -347,7 +348,7 @@ function resolveConnectionAccess(url: URL, roomId: string, participantId: string
     participantId
   });
   if (tokenResult.ok) {
-    return defaultAccess(tokenResult.payload.role);
+    return { ...defaultAccess(tokenResult.payload.role), sceneMediaSurfaces: tokenResult.payload.sceneMediaSurfaces };
   }
   if (tokenResult.code === "missing_token" && isDevRoleQueryAllowed(env)) {
     return defaultAccess(parseRoomRole(url.searchParams.get("role"), "guest"));
@@ -517,7 +518,10 @@ function broadcastToRoom(server: RoomStateServer, roomId: string, payload: unkno
 export function connectParticipant(server: RoomStateServer, roomId: string, participantId: string, socket: WebSocket, access: ParticipantAccessState = defaultAccess()): void {
   cancelPendingDisconnect(server, roomId, participantId);
   const room = ensureRoom(server, roomId);
-  server.rooms.set(roomId, joinRoom(room, participantId, access));
+  const configured = access.sceneMediaSurfaces
+    ? { ...room, mediaObjects: registerSceneMediaSurfaces(room.mediaObjects, roomId, access.sceneMediaSurfaces) }
+    : room;
+  server.rooms.set(roomId, joinRoom(configured, participantId, access));
   const set = server.clients.get(roomId) ?? new Set<WebSocket>();
   set.add(socket);
   server.clients.set(roomId, set);

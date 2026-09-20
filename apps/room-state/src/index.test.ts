@@ -141,6 +141,22 @@ test("connectParticipant replays stored reliable avatar state to late joiner", (
   assert.equal(reliablePayload?.reliableState.avatarId, "preset-01");
 });
 
+test("server-issued scene surfaces support shared objects, restrictions and reconnect without reset", () => {
+  const server = createRoomStateServer();
+  const sceneMediaSurfaces = [{ surfaceId: "workspace-main", label: "Workspace", allowedObjectTypes: ["markdown-board"] }];
+  connectParticipant(server, "configured", "host", createSocket() as never, { role: "host", sceneMediaSurfaces });
+  const denied = applyMediaObjectCreateCommand(server, "configured", "host", { surfaceId: "workspace-main", objectType: "screen-share" });
+  assert.equal(denied.accepted, false);
+  const created = applyMediaObjectCreateCommand(server, "configured", "host", { surfaceId: "workspace-main", objectType: "markdown-board" });
+  assert.equal(created.accepted, true);
+  const observer = createSocket();
+  connectParticipant(server, "configured", "observer", observer as never, { role: "guest", sceneMediaSurfaces });
+  assert.equal(server.rooms.get("configured")?.mediaObjects.surfaces["workspace-main"]?.activeObjectId, created.objectId);
+  const snapshot = JSON.parse(observer.sent[0]!);
+  assert.equal(snapshot.room.mediaObjects.surfaces["workspace-main"].activeObjectId, created.objectId);
+  assert.equal(applyMediaObjectCreateCommand(server, "configured", "observer", { surfaceId: "workspace-main", objectType: "markdown-board" }).accepted, false);
+});
+
 test("applyAvatarReliableState overrides spoofed participant id and broadcasts", () => {
   const server = createRoomStateServer();
   const firstSocket = createSocket();

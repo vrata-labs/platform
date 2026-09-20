@@ -81,3 +81,17 @@ test("room session token rejects expired, tampered, and wrong-scope tokens", () 
     code: "tenant_mismatch"
   });
 });
+
+test("signed scene surface scope survives verification but cannot be injected or mutated", () => {
+  const definitions = [{ surfaceId: "workspace-main", label: "Workspace", allowedObjectTypes: ["markdown-board"] }];
+  const token = signRoomSessionToken({ ...payload, sceneMediaSurfaces: definitions }, "test-secret");
+  const result = verifyRoomSessionToken(token, "test-secret", { nowSeconds: 150 });
+  assert.ok(result.ok);
+  assert.deepEqual(result.payload.sceneMediaSurfaces, definitions);
+  const [body, signature] = token.split(".");
+  const changed = JSON.parse(Buffer.from(body!, "base64url").toString());
+  changed.sceneMediaSurfaces[0].surfaceId = "another-surface";
+  assert.deepEqual(verifyRoomSessionToken(`${Buffer.from(JSON.stringify(changed)).toString("base64url")}.${signature}`, "test-secret", { nowSeconds: 150 }), { ok: false, code: "invalid_signature" });
+  const invalid = signRoomSessionToken({ ...payload, sceneMediaSurfaces: [{ ...definitions[0]!, surfaceId: "__proto__" }] }, "test-secret");
+  assert.deepEqual(verifyRoomSessionToken(invalid, "test-secret", { nowSeconds: 150 }), { ok: false, code: "invalid_payload" });
+});
