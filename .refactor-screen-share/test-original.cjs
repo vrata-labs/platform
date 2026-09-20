@@ -1,0 +1,13 @@
+const fs=require('node:fs'), path=require('node:path'), assert=require('node:assert/strict'), cp=require('node:child_process');
+const ts=require(process.env.TYPESCRIPT_PATH || 'typescript');
+const [originalMain,distDir]=process.argv.slice(2);
+const source=fs.readFileSync(originalMain,'utf8');const parsed=ts.createSourceFile(originalMain,source,ts.ScriptTarget.Latest,true,ts.ScriptKind.JS);
+const names=['screenShareEntries','hasLocalScreenSharePublishing','remoteScreenShareTrackCount','localScreenShareEntryForSurface','anyLocalScreenShareEntry','screenShareEntryForTrack','screenShareEntryForObject','createScreenShareVideoTexture','clearScreenShareEntryTexture','moveScreenShareEntryToSurface','registerScreenShareEntry','detachScreenShareEntry','unpublishScreenShareEntry','isActiveScreenShareObject','isCurrentScreenShareObject','syncScreenShareRuntimeWithObjects'];
+const exposed=names.filter(n=>!['clearScreenShareEntryTexture','isCurrentScreenShareObject'].includes(n));
+const bodies=names.map(n=>{const nodes=parsed.statements.filter(s=>ts.isFunctionDeclaration(s)&&s.name.text===n);assert.equal(nodes.length,1,n);return nodes[0].getText(parsed);}).join('\n\n');
+const originalBody='"use strict";\n'+bodies+'\nreturn {'+exposed.join(',')+'};';
+const scopeBody='with (scope) { return (function () { '+originalBody+' })(); }';
+const code=`import * as THREE from "three";\nimport { SCREEN_SHARE_OBJECT_TYPE } from "@vrata/shared-types";\nimport { physicalScreenShareObjectForMediaTrack } from "./media-object-state.js";\nconst bindOriginal = new Function("scope", ${JSON.stringify(scopeBody)});\nexport function createScreenShareRuntime(context) {\n const scope={THREE,SCREEN_SHARE_OBJECT_TYPE,physicalScreenShareObjectForMediaTrack: physicalScreenShareObjectForMediaTrack.bind(undefined)};\n for(const name of ['screenShareRuntimeByObjectId','retainedDisplayTextures','mediaSurfaceViews','debugState']) scope[name]=context[name];\n for(const name of ['getMediaSurfaceView','applySurfaceTexture','reconcileMediaRoomIdleDisconnect']) scope[name]=context[name].bind(undefined);\n for(const name of ['roomMediaObjects','livekitRoom']) Object.defineProperty(scope,name,{get(){return context[name];}});\n return bindOriginal(scope);\n}\n`;
+const file=path.join(distDir,'media/screen-share-runtime.js');const backup=fs.readFileSync(file);
+try {fs.writeFileSync(file,code);const r=cp.spawnSync(process.execPath,['--test',path.join(distDir,'media/screen-share-runtime.test.js')],{encoding:'utf8',timeout:15000,killSignal:'SIGKILL'});process.stdout.write(r.stdout||'');process.stderr.write(r.stderr||'');if(r.status!==0)process.exitCode=r.status||1;}
+finally{fs.writeFileSync(file,backup);assert.equal(fs.readFileSync(file).equals(backup),true);}

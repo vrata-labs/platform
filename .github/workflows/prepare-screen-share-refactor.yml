@@ -1,0 +1,113 @@
+name: Prepare screen share runtime refactor
+on:
+  push:
+    branches: [preparation/screen-share-runtime-20260920]
+permissions:
+  contents: write
+jobs:
+  verify-and-publish-source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: vrata_test
+        ports: [5432:5432]
+        options: --health-cmd "pg_isready -U postgres -d vrata_test" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      BASELINE: 48c16895933f288f7de18a6a4ee344c89ac3666a
+      EXPECTED_TREE: cd8646b03308b34492a42b6888ee64ec51bdbef8
+      TARGET_BRANCH: refactor/runtime-screen-share-runtime-20260920
+      VRATA_TEST_POSTGRES_URL: postgres://postgres:postgres@127.0.0.1:5432/vrata_test
+    steps:
+      - uses: actions/checkout@v4
+      - name: Preserve temporary tools and check out exact baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/refactor-tools" "$RUNNER_TEMP/refactor-evidence"
+          cp .refactor-screen-share/* "$RUNNER_TEMP/refactor-tools/"
+          git fetch --no-tags --depth=1 origin "$BASELINE"
+          git checkout --detach "$BASELINE"
+          test "$(git rev-parse HEAD)" = "$BASELINE"
+          test "$(git ls-remote origin refs/heads/main | cut -f1)" = "$BASELINE"
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Build unchanged baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm build 2>&1 | tee "$RUNNER_TEMP/refactor-evidence/baseline-build.log"
+          tar -C apps/runtime-web -czf "$RUNNER_TEMP/refactor-evidence/baseline-runtime-dist.tgz" dist
+          mkdir -p "$RUNNER_TEMP/refactor-baseline"
+          cp -a apps/runtime-web/dist "$RUNNER_TEMP/refactor-baseline/dist"
+      - name: Apply exact reviewed extraction
+        shell: bash
+        run: |
+          set -euo pipefail
+          export TYPESCRIPT_PATH="$(realpath node_modules/typescript)"
+          node "$RUNNER_TEMP/refactor-tools/extract.cjs" "$GITHUB_WORKSPACE" | tee "$RUNNER_TEMP/refactor-evidence/extraction-summary.log"
+          cp "$RUNNER_TEMP/refactor-tools/screen-share-runtime.test.ts" apps/runtime-web/src/media/screen-share-runtime.test.ts
+          cp ../extraction.json ../main-baseline.ts "$RUNNER_TEMP/refactor-evidence/"
+      - name: Lint, typecheck, build and complete unit suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm lint 2>&1 | tee "$RUNNER_TEMP/refactor-evidence/lint.log"
+          pnpm typecheck 2>&1 | tee "$RUNNER_TEMP/refactor-evidence/typecheck.log"
+          pnpm build 2>&1 | tee "$RUNNER_TEMP/refactor-evidence/candidate-build.log"
+          pnpm test 2>&1 | tee "$RUNNER_TEMP/refactor-evidence/workspace-tests.log"
+      - name: Verify original compiled behavior and compiler output
+        shell: bash
+        run: |
+          set -euo pipefail
+          export TYPESCRIPT_PATH="$(realpath node_modules/typescript)"
+          node "$RUNNER_TEMP/refactor-tools/test-original.cjs" "$RUNNER_TEMP/refactor-baseline/dist/main.js" "$GITHUB_WORKSPACE/apps/runtime-web/dist" 2>&1 | tee "$RUNNER_TEMP/refactor-evidence/original-tests.log"
+          node --test apps/runtime-web/dist/media/screen-share-runtime.test.js 2>&1 | tee "$RUNNER_TEMP/refactor-evidence/candidate-tests.log"
+          node "$RUNNER_TEMP/refactor-tools/verify-compiled.cjs" "$RUNNER_TEMP/refactor-baseline/dist" "$GITHUB_WORKSPACE/apps/runtime-web/dist" "$RUNNER_TEMP/refactor-evidence/compiled-equivalence.json"
+          tar -C apps/runtime-web -czf "$RUNNER_TEMP/refactor-evidence/candidate-runtime-dist.tgz" dist
+      - name: Publish only the reviewed source tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          bin=packages/asset-pipeline/bin/vrata.mjs
+          if ! git diff --quiet -- "$bin"; then
+            test "$(git hash-object "$bin")" = "$(git rev-parse "HEAD:$bin")"
+            test "$(git ls-tree HEAD "$bin" | awk '{print $1}')" = 100644
+            test "$(stat -c '%a' "$bin")" = 755
+            chmod 644 "$bin"
+            echo 'restored unchanged pnpm bin executable mode' | tee "$RUNNER_TEMP/refactor-evidence/install-mode.log"
+          fi
+          git add apps/runtime-web/src/main.ts apps/runtime-web/src/media/screen-share-runtime.ts apps/runtime-web/src/media/screen-share-runtime.test.ts
+          git diff --exit-code
+          git diff --cached --check
+          test -z "$(git ls-files --others --exclude-standard)"
+          tree="$(git write-tree)"
+          test "$tree" = "$EXPECTED_TREE"
+          printf '%s\n' "$tree" > "$RUNNER_TEMP/refactor-evidence/candidate-tree.txt"
+          git diff --cached > "$RUNNER_TEMP/refactor-evidence/refactor.patch"
+          git ls-files -z | tar --null -T - -czf "$RUNNER_TEMP/refactor-evidence/candidate-source.tgz"
+          test "$(git ls-remote origin refs/heads/main | cut -f1)" = "$BASELINE"
+          test -z "$(git ls-remote origin "refs/heads/$TARGET_BRANCH")"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'refactor(runtime): isolate screen share runtime lifecycle'
+          test "$(git rev-parse HEAD^{tree})" = "$EXPECTED_TREE"
+          git rev-parse HEAD > "$RUNNER_TEMP/refactor-evidence/candidate-sha.txt"
+          git push origin "HEAD:refs/heads/$TARGET_BRANCH"
+      - name: Upload preparation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screen-share-runtime-verification-${{ github.run_id }}
+          path: ${{ runner.temp }}/refactor-evidence/
+          retention-days: 14
+          if-no-files-found: error
