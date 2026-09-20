@@ -1,7 +1,7 @@
 # Scene quality contract
 
 Status: required authoring workflow for **every Vrata scene**.
-Revision: 2026-09-19.
+Revision: 2026-09-20.
 
 This applies to meeting, personal, presentation and future room types, to new
 scenes and changes to existing scenes, regardless of authoring tool or repository.
@@ -27,6 +27,7 @@ procedural authoring do not grant that exception.
 | Q5 | Check sightlines from all relevant seats, usable routes, plant placement and actual window/frame contacts. | 2026-09-02 |
 | Q6 | Use a photographic-quality panorama for distant views; a procedurally drawn skyline is not equivalent. | 2026-09-04 |
 | Q7 | Apply the corrected process to other room types and preserve its successful quality level. | 2026-09-04 and 2026-09-19 |
+| Q8 | Make arrangements credible as the result of real use: inspect relationships, grouping, occupancy and mutual support against photographs of comparable real places. | 2026-09-20: isolated, evenly spaced books in Personal Workspace |
 
 The accepted visual benchmark is Warm Modern Meeting Room Candidate 01 **0.3.3**,
 release commit `5580a7b080cf6195e28ebc77b654fd71111b0cd1`, praised by the user on
@@ -97,6 +98,42 @@ connectivity do not replace intended per-part support or constituent-part covera
 Use geometric tests for measurable relationships and eye-level/contact views for
 what those tests miss. Hidden fasteners need not all be modeled; visible joints,
 thickness and load paths must read as constructible.
+
+### Context and arrangement pass (Q8)
+
+An individually recognizable, supported object can still be implausibly placed.
+Review each meaningful group as a whole: **who left these objects in this state,
+after what activity, and why are they arranged like this?** State whether the place
+is ready for use, currently in use, stored, displayed or being serviced. A tidy room
+is valid; arbitrary clutter, random rotations and artificial wear are not realism.
+
+Before detailing a repeated prop group, inspect photographs of comparable real
+use, not just asset previews, AI imagery or staged catalog compositions. Record the
+reference URLs, observed relationships and the intended differences. References
+guide reasoning; they are not permission to redistribute their images or textures.
+
+Check and record:
+
+- Grouping/density and orientation follow storage, reach, retrieval or a shared
+  activity; repeated spacing has an actual reason, not merely a loop increment.
+- Gravity and mutual support work at group level. Books normally form supported
+  runs, with contacting neighbours and a case side or bookend; oversized volumes
+  may lie in a supported stack. A sparse display is possible when its supports and
+  intended display use explain it. Do not mandate one universal shelf fill ratio.
+- Variation follows real causes (book formats/series, manufacturing, use), while
+  things meant to match still match. Do not independently randomize every object.
+- Retrieval and use remain plausible: tight storage is not interpenetration or
+  compression, end supports are credible, handles/cables and working spaces remain
+  usable. Removal of one object must not reveal an unexplained floating arrangement.
+- Inspect the final group at ordinary viewing distance and close-up in source and
+  browser. Measure relevant gaps/contacts/clearances, but also explain whether the
+  overall pattern resembles the references. Floor contact alone cannot pass Q8.
+
+Apply this beyond books: seating directed at a shared activity, papers on a work
+surface, nested/stacked dishes, equipment and cable routing. Record a justified N/A
+only for a specific group, not for the whole room because it contains no books.
+Unexplained regimented spacing or arbitrary scatter is REWORK_REQUIRED even when
+the object registry, support graph and technical tests pass.
 
 ## 3. Materials and lighting in the browser
 
@@ -207,7 +244,7 @@ Workflow outcomes are separate from legacy `scene.json.status` enums:
 - **REWORK_REQUIRED**: unexplained object, failed role check, obvious visual
   regression, illustrated exterior under a realistic brief, missing evidence or
   unresolved rejection. Technical success cannot override this outcome.
-- **READY_FOR_USER_REVIEW**: Q1-Q7 applicability resolved, role/visual passes have
+- **READY_FOR_USER_REVIEW**: Q1-Q8 applicability resolved, role/visual passes have
   concrete evidence, runtime checks pass, and no known quality blocker is being
   delegated back to the user. Human acceptance is still pending.
 - **VISUALLY_ACCEPTED**: explicit human verdict for the identified version/views.

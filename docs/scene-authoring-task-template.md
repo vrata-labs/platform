@@ -6,7 +6,7 @@ type and resumed task. Unfilled fields are unfinished work, not a pass.
 
 ## Start / handoff prompt
 
-> Design a credible real place. Inherit Q1-Q7 from the shared scene-quality
+> Design a credible real place. Inherit Q1-Q8 from the shared scene-quality
 > contract and the latest applicable user feedback. Identify every visible
 > object, who could use it, how, how a builder could assemble/install it, and
 > what physically supports it. Review those questions against actual geometry
@@ -16,6 +16,9 @@ type and resumed task. Unfilled fields are unfinished work, not a pass.
 > runtime images yourself, correct defects, and retain evidence. Technical validity,
 > repeatability and same-candidate image metrics do not establish visual quality.
 > Do not call the scene ready while a known shared requirement fails.
+> For each meaningful object group, explain who left it in that arrangement,
+> after what activity, and why. Compare real-use photographs; check grouping,
+> mutual support and retrieval rather than adding random disorder.
 
 ## 1. Identity and inherited target
 
@@ -39,6 +42,7 @@ Fill every row. Add scene-local requirements without removing shared rows.
 | Q5 All-seat visibility, routes and assembly contacts | | | | |
 | Q6 Photographic-quality exterior where visible | | | | |
 | Q7 Inherited quality floor and feedback propagation | | | | |
+| Q8 Context, grouping and plausible arrangement after real use | | | | |
 
 ## 3. Object and scenario coverage
 
@@ -46,6 +50,12 @@ Record each object/family's type, purpose, users, expected actions, dimensions,
 material/finish, parts, assembly/attachment/support, interaction status and scenario
 IDs. Enumerate repeated placements. Account for every recognizable item and
 exported visible part; explain mapping exceptions.
+
+For every meaningful arrangement record its state/use history, group members,
+real-photo references and observed relationships, density/spacing rationale,
+orientation, mutual support and retrieval clearance. Explain regularity/variation
+from use or construction. Include a group-level source/browser view and measurable
+contacts where relevant; per-object support alone does not cover arrangement.
 
 For each User/Builder/Physics scenario record:
 
