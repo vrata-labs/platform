@@ -188,6 +188,7 @@ import type { RuntimeTestApi } from "./testing/runtime-test-api.js";
 import { createMediaObjectQueries } from "./media/media-object-queries.js";
 import { createRemoteBrowserVideoRuntime, type RemoteBrowserVideoEntry } from "./media/remote-browser-video-runtime.js";
 import { createScreenShareRuntime, type ScreenShareRuntimeEntry } from "./media/screen-share-runtime.js";
+import { createMediaSurfaceAudioRuntime, type MediaSurfaceAudioNode } from "./media/media-surface-audio-runtime.js";
 
 function fallbackUuid(): string {
   return `guest-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
@@ -1279,15 +1280,6 @@ interface RemoteAudioNode {
   fallbackReason: string | null;
 }
 
-interface MediaSurfaceAudioNode {
-  surfaceId: string;
-  element: HTMLMediaElement;
-  source: MediaStreamAudioSourceNode | null;
-  analyser: AnalyserNode | null;
-  sampleBuffer: Uint8Array | null;
-  trackId: string;
-}
-
 interface LocalAudioNode {
   source: MediaStreamAudioSourceNode;
   analyser: AnalyserNode;
@@ -1305,6 +1297,22 @@ interface MockAudioSource {
 
 const remoteAudioNodes = new Map<string, RemoteAudioNode>();
 const mediaSurfaceAudioNodes = new Map<string, MediaSurfaceAudioNode>();
+const {
+  connectMediaSurfaceAudioTrack,
+  disconnectMediaSurfaceAudioTrack,
+  disconnectMediaSurfaceAudioTrackByTrack
+} = createMediaSurfaceAudioRuntime({
+  mediaSurfaceViews,
+  mediaSurfaceAudioNodes,
+  getTrackNodeId,
+  ensureAudioContext,
+  createAudioAnalyser,
+  resumeAudioContext,
+  reconcileMediaRoomIdleDisconnect,
+  syncSurfaceAudioControl,
+  get roomMediaObjects() { return roomMediaObjects; },
+  get livekitRoom() { return livekitRoom; }
+});
 let localAudioNode: LocalAudioNode | null = null;
 let mockAudioSource: MockAudioSource | null = null;
 const localAvatarLipsync = createAvatarLipsyncDriver();
@@ -3803,66 +3811,6 @@ function ensureRemoteBrowserLiveKitRoom(): void {
     .finally(() => {
       remoteBrowserMediaRoomPromise = null;
     });
-}
-
-function connectMediaSurfaceAudioTrack(track: Track, surfaceId: string): void {
-  if (!mediaSurfaceViews.has(surfaceId) || !roomMediaObjects?.surfaces[surfaceId]) {
-    return;
-  }
-  const trackId = getTrackNodeId(track, `${surfaceId}:screen-share-audio`);
-  const existing = mediaSurfaceAudioNodes.get(surfaceId);
-  if (existing?.trackId === trackId) {
-    return;
-  }
-  if (existing) {
-    disconnectMediaSurfaceAudioTrack(surfaceId);
-  }
-  const element = track.attach() as HTMLMediaElement & { playsInline?: boolean };
-  element.autoplay = true;
-  element.playsInline = true;
-  element.style.display = "none";
-  document.body.appendChild(element);
-  void element.play().catch(() => undefined);
-  const mediaStreamTrack = (track as { mediaStreamTrack?: MediaStreamTrack }).mediaStreamTrack;
-  const context = mediaStreamTrack ? ensureAudioContext() : null;
-  const analyserSetup = context ? createAudioAnalyser(context) : null;
-  const source = context && mediaStreamTrack ? context.createMediaStreamSource(new MediaStream([mediaStreamTrack])) : null;
-  if (source && analyserSetup) {
-    void resumeAudioContext();
-    source.connect(analyserSetup.analyser);
-  }
-  mediaSurfaceAudioNodes.set(surfaceId, {
-    surfaceId,
-    element,
-    source,
-    analyser: analyserSetup?.analyser ?? null,
-    sampleBuffer: analyserSetup?.sampleBuffer ?? null,
-    trackId
-  });
-  reconcileMediaRoomIdleDisconnect(livekitRoom, "media_surface_audio_consumer_active");
-  syncSurfaceAudioControl();
-}
-
-function disconnectMediaSurfaceAudioTrack(surfaceId: string): void {
-  const node = mediaSurfaceAudioNodes.get(surfaceId);
-  if (!node) {
-    return;
-  }
-  node.element.remove();
-  node.source?.disconnect();
-  node.analyser?.disconnect();
-  mediaSurfaceAudioNodes.delete(surfaceId);
-  syncSurfaceAudioControl();
-  reconcileMediaRoomIdleDisconnect(livekitRoom, "media_surface_audio_consumer_detached_idle");
-}
-
-function disconnectMediaSurfaceAudioTrackByTrack(track: Track): void {
-  const trackId = getTrackNodeId(track, "");
-  for (const [surfaceId, node] of mediaSurfaceAudioNodes.entries()) {
-    if (!trackId || node.trackId === trackId) {
-      disconnectMediaSurfaceAudioTrack(surfaceId);
-    }
-  }
 }
 
 function disconnectRemoteAudioElement(participantId: string): void {
