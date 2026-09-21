@@ -5719,12 +5719,15 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
       const activeClient = roomStateClient;
       const seatReclaim = planSeatReclaimOnReconnect({
         currentSeatId: getCurrentSeatId(),
+        pendingReleaseSeatIds: seatingController.getPendingReleaseSeatIds(),
         seatingEnabled: runtimeFlags.avatarSeatingEnabled,
         roomStateClientAvailable: Boolean(activeClient)
       });
       const reclaimSeatId = seatReclaim.seatId;
-      if (seatReclaim.commands.length > 0 && reclaimSeatId && seatReclaim.retryDelayMs !== null) {
+      if (seatReclaim.commands.length > 0) {
         executeRuntimeCommandList(seatReclaim.commands);
+      }
+      if (reclaimSeatId && seatReclaim.retryDelayMs !== null) {
         clearSeatReclaimRetry();
         seatReclaimRetryTimer = window.setTimeout(() => {
           if (!shouldRetrySeatReclaim({

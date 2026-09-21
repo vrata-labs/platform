@@ -1,7 +1,7 @@
 # Scene quality contract
 
 Status: required authoring workflow for **every Vrata scene**.
-Revision: 2026-09-20.
+Revision: 2026-09-21.
 
 This applies to meeting, personal, presentation and future room types, to new
 scenes and changes to existing scenes, regardless of authoring tool or repository.
@@ -218,6 +218,12 @@ and intended eye position, observe authoritative claim/release from another clie
 and verify the post-release floor pose after frame processing. For each media
 surface, verify both physical and logical state and actual displayed content:
 a visible empty plane or an object with no media frames is insufficient.
+
+Exercise seat release across room-state reconnect as well: a locally standing
+rig does not prove that other users can claim the chair. Unacknowledged releases
+must reach the server after reconnect, including when another socket retains the
+participant session. Capture reports must record explicit completion and the
+runner outcome; an empty error list inside a failing test's cleanup is not a pass.
 
 For each failed view record object/region, visible symptom, suspected cause,
 correction and before/after evidence. Fix obvious toy forms, unreadable objects,
