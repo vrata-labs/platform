@@ -4,6 +4,43 @@
 
 Срок не задан. План рассчитан на поэтапную поставку и закрывается только после публикации трёх самостоятельных public demo-сцен и проверки на desktop, физических mobile-устройствах и Meta Quest.
 
+## Возобновление после визуальной приёмки, 2026-09-22
+
+Этот раздел уточняет последующие исторические пункты плана; неизменяемые уже
+опубликованные template definitions не переписываются.
+
+- Пользователь выбрал **принятую восьмиместную Warm Modern Meeting Room** для
+  основного каталога вместо создания отдельной четырёхместной сцены. Для неё нужна
+  новая версия template contract с восемью местами, scene ID
+  `warm-modern-meeting-room-candidate-01` и обеими collaboration surfaces.
+  Historical `meeting-room-basic@1.0.0` с четырьмя местами сохраняется.
+- Personal Workspace 0.4.1 и Presentation Room 0.4.1 получили явную визуальную
+  приёмку. Записи: Personal PR #9, merge `322aa40562472b50d2de3bbc0aae660b6fed5918`;
+  Presentation PR #8, merge `22d6a0c5af22d794eb0fbd67d52b8fe46a6f40e2`.
+  Принятые bundles: Personal `e0042809cd05691b9e09e244820f95f334eb2bbf`, Presentation
+  `b6e0bcb1bb61136b5d7b4d6c05b4ea0032c7c787`. Personal имеет одно owner seat и
+  `workspace-main`; это тоже требует новой template version, а не правки старой
+  definition с двумя seats и `debug-main`.
+- Meeting baseline — 0.3.3 на `5580a7b080cf6195e28ebc77b654fd71111b0cd1`.
+  Его GLB имеет 20 320 032 bytes и пока превышает общий 15 MiB shipping budget.
+  Нужен отдельный оптимизированный immutable release с сохранением принятого
+  внешнего вида; наличие визуальной приёмки не отменяет этот бюджет.
+- Пользователь подтвердил, что лично выполнит проверки **Android Chrome,
+  iOS Safari и Meta Quest** после автоматического staging-прогона. Конкретные
+  model/OS/browser и результаты записываются при выполнении, не выводятся из
+  Chromium emulation или synthetic XR.
+- На проверенном staging пока четыре active legacy templates версии 0.1.0.
+  Основной путь reference templates, Wave 2/3, безопасный rollback и device QA
+  ещё не завершены. Существующие комнаты сохраняют pinned bindings; новые
+  templates вводятся через каталог и обычное создание комнат.
+- База продолжения — platform `a3a905ea3bcbe290e77fa4c7fc2dd92214097a4d`.
+  Первый совместимый срез заменяет единый checkout/lock scenes на per-repository
+  full-SHA inventory и resolver official/mirror URL. Он не активирует candidates.
+
+Порядок продолжения: multi-repository asset contract → shipping releases принятых
+сцен → новая versioned template integration и Wave 2 rehearsal → guarded staging
+activation и автоматические сценарии → физические проверки владельцем.
+
 ## Цель
 
 - Поставить три поддерживаемых reference template: `personal-room-basic`, `meeting-room-basic`, `presentation-room-basic`.
