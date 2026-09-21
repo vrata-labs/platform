@@ -27,7 +27,8 @@ export function resolveLocalSeatId(seatOccupancy: Record<string, string>, partic
 export class SeatingController {
   private state: SeatingState = { kind: "standing", pendingSeatId: null };
   // Room snapshots already in flight may still contain our old occupancy after
-  // local teleport. Suppress it until a server snapshot acknowledges the release.
+  // local teleport. Suppress it and retain the release for reconnect delivery
+  // until a server snapshot acknowledges that this participant no longer owns it.
   private releasedSeatIds = new Set<string>();
 
   constructor(private readonly participantId: string) {}
@@ -46,6 +47,10 @@ export class SeatingController {
 
   getPendingSeatId(): string | null {
     return this.state.kind === "claiming" ? this.state.pendingSeatId : null;
+  }
+
+  getPendingReleaseSeatIds(): string[] {
+    return [...this.releasedSeatIds];
   }
 
   reset(): SeatingControllerSnapshot {
@@ -71,6 +76,7 @@ export class SeatingController {
   }
 
   forceSeated(seatId: string): SeatingControllerSnapshot {
+    this.releasedSeatIds.delete(seatId);
     this.state = { kind: "seated", seatId, pendingSeatId: null };
     return this.getSnapshot();
   }
