@@ -11,7 +11,20 @@ templates.
 
 `RoomTemplateAssetLock` values are accepted only after
 `validateRoomTemplateAssetLock()` succeeds. Resolve locked relative paths with
-`resolveRoomTemplateAssetUrl()`; production origins must use HTTPS.
+`resolveLockedRoomTemplateAssetUrl()` to derive the official full-SHA jsDelivr URL
+from that definition's repository/revision. An optional mirror root uses the
+namespaced `<owner>/<repository>/<commitSha>/<relative-path>` layout; different
+repositories and revisions cannot overwrite each other's mirrored files. Production
+origins require HTTPS. `resolveRoomTemplateAssetUrl()` retains the explicit-base
+compatibility helper for historical callers.
+
+`scene-repositories.lock.json` lists all exact repository revisions consumed by
+the version definitions. CI checks out and validates each revision independently,
+checks complete definition coverage, and verifies actual manifest/GLB/preview and
+license bytes. Local checkouts use `.scene-assets/<owner>/<repository>/<commitSha>`;
+`VRATA_SCENE_REPOSITORIES_ROOT` can override the checkout root. A per-repository CI
+job supplies both `VRATA_SCENE_REPOSITORY` and `VRATA_SCENE_COMMIT_SHA` to validate
+its subset without weakening the complete lock-coverage check.
 
 Before persisting or activating a complete immutable template version, run
 `validateRoomTemplateVersionContract()` to verify outer identity, scene

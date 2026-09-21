@@ -102,29 +102,37 @@ jobs:
             playwright-report/
             test-results/
 
+  scene-repositories:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.lock.outputs.matrix }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Read exact scene repository revisions
+        id: lock
+        run: echo "matrix=$(node tools/scene-repositories.mjs)" >> "$GITHUB_OUTPUT"
+
   asset-validation:
+    needs: scene-repositories
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.scene-repositories.outputs.matrix) }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Read scene assets lock
-        id: scene-assets-ref
-        shell: bash
-        run: |
-          sha="$(tr -d '\r\n' < scene-assets.lock)"
-          if [[ ! "$sha" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "invalid_scene_assets_lock" >&2
-            exit 1
-          fi
-          echo "sha=$sha" >> "$GITHUB_OUTPUT"
-
       - name: Checkout locked scene assets
         uses: actions/checkout@v4
         with:
-          repository: vrata-labs/scene-assets
-          ref: ${{ steps.scene-assets-ref.outputs.sha }}
-          path: .scene-assets
+          repository: ${{ matrix.repository }}
+          ref: ${{ matrix.commitSha }}
+          path: ${{ matrix.path }}
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -148,4 +156,7 @@ jobs:
         run: pnpm --filter @vrata/asset-pipeline validate:sample
 
       - name: Validate locked reference template assets
+        env:
+          VRATA_SCENE_REPOSITORY: ${{ matrix.repository }}
+          VRATA_SCENE_COMMIT_SHA: ${{ matrix.commitSha }}
         run: pnpm validate:reference-template-assets

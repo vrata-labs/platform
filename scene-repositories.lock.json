@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "repositories": [
+    {
+      "repository": "vrata-labs/scene-assets",
+      "commitSha": "908331faf0eedb345d60eb1966b89994f5a8fb4b"
+    }
+  ]
+}

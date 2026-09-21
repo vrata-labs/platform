@@ -1,3 +1,5 @@
+import type { RoomTemplateAssetLock } from "@vrata/shared-types";
+
 export interface RoomTemplateAssetLockIssue {
   path: string;
   code: string;
@@ -115,4 +117,22 @@ export function resolveRoomTemplateAssetUrl(baseUrl: string, relativePath: strin
     throw new Error("invalid_template_asset_path");
   }
   return resolved.toString();
+}
+
+export function resolveLockedRoomTemplateAssetUrl(
+  lock: RoomTemplateAssetLock,
+  relativePath: string,
+  options: { mirrorBaseUrl?: string; allowLoopbackHttp?: boolean } = {}
+): string {
+  if (validateRoomTemplateAssetLock(lock).length) throw new Error("invalid_template_asset_lock");
+  const files = [lock.releaseManifest, lock.sceneManifest, lock.sceneAsset, lock.preview];
+  if (!files.some(file => file.path === relativePath)) throw new Error("unlocked_template_asset_path");
+  if (options.mirrorBaseUrl !== undefined) {
+    return resolveRoomTemplateAssetUrl(
+      options.mirrorBaseUrl,
+      `${lock.repository}/${lock.commitSha}/${relativePath}`,
+      { allowLoopbackHttp: options.allowLoopbackHttp }
+    );
+  }
+  return resolveRoomTemplateAssetUrl(`https://cdn.jsdelivr.net/gh/${lock.repository}@${lock.commitSha}/`, relativePath);
 }

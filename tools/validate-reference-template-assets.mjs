@@ -6,12 +6,11 @@ import { fileURLToPath } from "node:url";
 
 import { validateSceneBundlePath } from "../packages/asset-pipeline/dist/index.js";
 import {
-  STANDARD_ROOM_ASSETS_COMMIT_SHA,
   listStandardRoomTemplateVersionContracts
 } from "../packages/templates/dist/index.js";
+import { parseSceneRepositoriesLock, assertSceneRepositoryCoverage } from "./scene-repositories.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const assetsRoot = resolve(repoRoot, process.env.VRATA_SCENE_ASSETS_ROOT ?? ".scene-assets");
 
 function assert(condition, code) {
   if (!condition) throw new Error(code);
@@ -21,29 +20,42 @@ function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
-async function verifyFileLock(lock) {
+async function verifyFileLock(assetsRoot, lock) {
   const bytes = await readFile(join(assetsRoot, lock.path));
   assert(bytes.length === lock.sizeBytes, `reference_asset_size_mismatch:${lock.path}`);
   assert(sha256(bytes) === lock.sha256, `reference_asset_checksum_mismatch:${lock.path}`);
 }
 
-const pinnedCommit = (await readFile(join(repoRoot, "scene-assets.lock"), "utf8")).trim();
-assert(/^[a-f0-9]{40}$/.test(pinnedCommit), "invalid_scene_assets_lock");
-assert(pinnedCommit === STANDARD_ROOM_ASSETS_COMMIT_SHA, "scene_assets_definition_lock_mismatch");
-const checkoutCommit = execFileSync("git", ["-C", assetsRoot, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
-assert(checkoutCommit === pinnedCommit, "scene_assets_checkout_lock_mismatch");
-
-const releaseManifest = JSON.parse(await readFile(join(assetsRoot, "manifest.json"), "utf8"));
+const repositories = parseSceneRepositoriesLock(JSON.parse(await readFile(join(repoRoot, "scene-repositories.lock.json"), "utf8")));
 const definitions = listStandardRoomTemplateVersionContracts();
+assertSceneRepositoryCoverage(repositories, definitions);
+const selectedRepository = process.env.VRATA_SCENE_REPOSITORY;
+const selectedCommit = process.env.VRATA_SCENE_COMMIT_SHA;
+assert(Boolean(selectedRepository) === Boolean(selectedCommit), "incomplete_scene_repository_selection");
+const selected = selectedRepository ? repositories.filter(item => item.repository === selectedRepository && item.commitSha === selectedCommit) : repositories;
+assert(selected.length > 0, "unknown_scene_repository_selection");
+const checkouts = new Map();
+for (const item of selected) {
+  const assetsRoot = process.env.VRATA_SCENE_REPOSITORIES_ROOT
+    ? resolve(process.env.VRATA_SCENE_REPOSITORIES_ROOT, item.repository, item.commitSha)
+    : resolve(repoRoot, item.path);
+  const checkoutCommit = execFileSync("git", ["-C", assetsRoot, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+  assert(checkoutCommit === item.commitSha, "scene_assets_checkout_lock_mismatch");
+  checkouts.set(`${item.repository}@${item.commitSha}`, {
+    assetsRoot,
+    releaseManifest: JSON.parse(await readFile(join(assetsRoot, "manifest.json"), "utf8"))
+  });
+}
 for (const definition of definitions) {
   const lock = definition.assetLock;
-  assert(lock.repository === "vrata-labs/scene-assets", `reference_asset_repository_mismatch:${definition.templateId}`);
-  assert(lock.commitSha === pinnedCommit, `reference_asset_commit_mismatch:${definition.templateId}`);
+  const checkout = checkouts.get(`${lock.repository}@${lock.commitSha}`);
+  if (!checkout) continue;
+  const { assetsRoot, releaseManifest } = checkout;
   await Promise.all([
-    verifyFileLock(lock.releaseManifest),
-    verifyFileLock(lock.sceneManifest),
-    verifyFileLock(lock.sceneAsset),
-    verifyFileLock(lock.preview)
+    verifyFileLock(assetsRoot, lock.releaseManifest),
+    verifyFileLock(assetsRoot, lock.sceneManifest),
+    verifyFileLock(assetsRoot, lock.sceneAsset),
+    verifyFileLock(assetsRoot, lock.preview)
   ]);
 
   const release = releaseManifest.releases?.find((candidate) => candidate.sceneId === definition.scene.sceneId
@@ -85,5 +97,5 @@ for (const definition of definitions) {
     }
     throw new Error(`reference_asset_template_validation_failed:${lock.sceneReleaseId}`);
   }
-  process.stdout.write(`${definition.templateId}@${definition.version} verified against ${lock.sceneReleaseId} at ${pinnedCommit}.\n`);
+  process.stdout.write(`${definition.templateId}@${definition.version} verified against ${lock.sceneReleaseId} at ${lock.repository}@${lock.commitSha}.\n`);
 }
