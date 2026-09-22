@@ -80,6 +80,10 @@ jobs:
       - name: Build template rollback base
         run: |
           pnpm --dir .template-rollback install --frozen-lockfile
+          # pnpm marks workspace bin entries executable; restore the historical
+          # Git mode before asserting an otherwise byte-identical rollback tree.
+          chmod 644 .template-rollback/packages/asset-pipeline/bin/vrata.mjs
+          git -C .template-rollback diff --exit-code HEAD
           pnpm --dir .template-rollback --filter @vrata/shared-types --filter @vrata/templates --filter @vrata/asset-pipeline --filter @vrata/api build
 
       - name: Test
