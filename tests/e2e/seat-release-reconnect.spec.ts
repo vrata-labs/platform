@@ -2,6 +2,7 @@ import { expect, test, type APIRequestContext, type Page } from "@playwright/tes
 import { inlineSceneBundleUrl } from "./scene-bundle-fixtures.js";
 import type { RuntimeTestApi } from "../../apps/runtime-web/src/testing/runtime-test-api.js";
 import { createLegacyStagingRoom, releaseLegacyStagingRoom } from "./staging-legacy-room";
+import { completeGuestEntry } from "./guest-entry";
 
 async function seatState(page: Page) {
   return page.evaluate(() => {
@@ -53,16 +54,10 @@ async function verifyReleaseOnReconnect(page: Page, request: APIRequestContext, 
     const link = new URL((await invite.json()).inviteLink);
     link.searchParams.set("debug", "1"); link.searchParams.set("scenefit", "0"); link.searchParams.set("roomstatedelay", "50");
     await page.goto(`${link.pathname}${link.search}`);
-    if (await page.locator("#guest-onboarding").isVisible()) {
-      await page.locator("#guest-name-input").fill("Reconnect host");
-      await page.locator("#guest-enter-without-audio").click();
-    }
+    await completeGuestEntry(page, "Reconnect host");
     await observer.addInitScript(() => sessionStorage.setItem("vrata.participantId", `observer-${crypto.randomUUID()}`));
     await observer.goto(`/rooms/${roomId}?debug=1&scenefit=0`);
-    if (await observer.locator("#guest-onboarding").isVisible()) {
-      await observer.locator("#guest-name-input").fill("Reconnect observer");
-      await observer.locator("#guest-enter-without-audio").click();
-    }
+    await completeGuestEntry(observer, "Reconnect observer");
     await expect.poll(async () => (await seatState(page)).connected).toBe(true);
     await expect.poll(async () => (await seatState(observer)).connected).toBe(true);
     await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__.sceneDebug?.state)).toBe("loaded");
