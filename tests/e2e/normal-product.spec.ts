@@ -1,6 +1,7 @@
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
 import { inlineSceneBundleUrl } from "./scene-bundle-fixtures.js";
 import type { RuntimeTestApi } from "../../apps/runtime-web/src/testing/runtime-test-api.js";
+import { createLegacyStagingRoom, releaseLegacyStagingRoom } from "./staging-legacy-room";
 
 type Debug = {
   participantId: string;
@@ -33,7 +34,7 @@ async function verifyNormalProduct({ page, request }: { page: Page; request: API
   const token = process.env.STAGING_ADMIN_TOKEN ?? (staging ? "" : "test-admin-token");
   expect(token, "admin token required for isolated regression room").not.toBe("");
   const headers = { "x-vrata-admin-token": token };
-  const created = await request.post("/api/rooms", { headers, data: { tenantId: "demo-tenant", templateId: "personal-workspace-basic", name: "Normal product regression", guestAllowed: true, sceneBundleUrl: fixtureBundle(), avatarConfig: { avatarsEnabled: true, avatarSeatsEnabled: true, avatarFallbackCapsulesEnabled: false } } });
+  const created = await createLegacyStagingRoom(request, "normal-product", { headers, data: { tenantId: "demo-tenant", templateId: "personal-workspace-basic", name: "Normal product regression", guestAllowed: true, sceneBundleUrl: fixtureBundle(), avatarConfig: { avatarsEnabled: true, avatarSeatsEnabled: true, avatarFallbackCapsulesEnabled: false } } });
   expect(created.ok()).toBe(true);
   const { roomId } = await created.json();
   const observer = await page.context().newPage();
@@ -77,6 +78,8 @@ async function verifyNormalProduct({ page, request }: { page: Page; request: API
     }
     expect((await readDebug(page)).mediaObjects.physicalSurfaceIdsWithoutLogicalState).toEqual([]);
     for (const surfaceId of ["workspace-main", "desk-aux"]) {
+      await page.evaluate(id => (window as Window & { __VRATA_TEST__: RuntimeTestApi }).__VRATA_TEST__.stopActiveSurfaceObject(id), surfaceId);
+      await expect.poll(async () => (await readDebug(observer)).mediaObjects.surfaces.find(s => s.surfaceId === surfaceId)?.activeObjectType ?? null).toBe(null);
       expect(await page.evaluate(id => (window as Window & { __VRATA_TEST__: RuntimeTestApi }).__VRATA_TEST__.createMarkdownBoardObject(id), surfaceId)).toBe(true);
       // Both clients must observe the new board before the sender patches it.
       // A receiver broadcast can arrive before the sender's own room snapshot.
@@ -93,7 +96,7 @@ async function verifyNormalProduct({ page, request }: { page: Page; request: API
   } finally {
     await observer.close();
     await page.goto("about:blank");
-    expect((await request.delete(`/api/rooms/${roomId}`, { headers })).ok()).toBe(true);
+    expect((await releaseLegacyStagingRoom(request, roomId, { headers })).ok()).toBe(true);
   }
 }
 

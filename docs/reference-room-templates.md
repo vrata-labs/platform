@@ -102,6 +102,17 @@ implementation plan remains open until those gates have real reports. Existing
 legacy staging fixture tests must retain coverage when their create templates
 become deprecated; the production create restriction must not be bypassed for QA.
 
+The `Staging Template Catalog` workflow performs this staging-only transition for
+an exact verified `expected_image_sha`. It seeds disabled legacy regression rooms
+before activation, runs the complete public suite against the active catalog and
+restores Wave 2 plus dispatches normal image rollback on failure. It shares the
+deployment concurrency group. The follow-up deploy begins after this workflow
+releases that group; its result is a separate required check. Ordinary subsequent
+staging gates detect the active catalog and include the product scenarios.
+
+The [acceptance record](reviews/2026-09-22-reference-template-acceptance.md) contains
+the physical-device checklist and must be completed with actual device results.
+
 ## Local verification
 
 Build before package tests. Use a disposable PostgreSQL database via

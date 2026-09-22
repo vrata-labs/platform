@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 
 test("catalog rollout rejects incompatible images and preserves the verified baseline", () => {
   const output = execFileSync("python3", ["-B", "-c", `
-import importlib.util, json, tempfile
+import importlib.util, json, sys, tempfile
 from pathlib import Path
 spec = importlib.util.spec_from_file_location("catalog", ${JSON.stringify(fileURLToPath(new URL("./staging-template-catalog.py", import.meta.url)))})
 m = importlib.util.module_from_spec(spec)
@@ -25,6 +25,8 @@ rejects(lambda: m.assert_target_allowed(baseline, None, None, current), "below_w
 m.assert_target_allowed(baseline, {"state":"active", "referenceRoomCount":3}, contract, current)
 with tempfile.TemporaryDirectory() as directory:
     host = m.CatalogHost(directory)
+    assert host.run([sys.executable, "-c", "import sys; print(sys.stdin.read() or 'closed')"]) == "closed"
+    assert sys.stdin.read() == "remaining deployment commands", "child must not consume the SSH script stream"
     host.marker_path.parent.mkdir(parents=True)
     calls = []
     status = {"state":"wave2", "imageSha":baseline, "referenceRoomCount":0}
@@ -55,6 +57,6 @@ with tempfile.TemporaryDirectory() as directory:
     host.marker_path.write_text("invalid")
     rejects(host.marker, "invalid_sha")
 print("catalog rollout assertions passed")
-`], { encoding: "utf8" });
+`], { encoding: "utf8", input: "remaining deployment commands" });
   assert.match(output, /assertions passed/);
 });
