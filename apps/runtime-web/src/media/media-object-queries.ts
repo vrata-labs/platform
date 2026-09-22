@@ -132,6 +132,17 @@ export function createMediaObjectQueries(context: MediaObjectQueriesContext) {
     return findPhysicalRemoteBrowserObjectNeedingLiveKitRoom(context.roomMediaObjects, mediaSurfaceViews);
   }
 
+  function findScreenShareObjectNeedingLiveKitRoom(): MediaObjectInstance<ScreenShareObjectState> | null {
+    for (const surfaceId of Object.keys(context.roomMediaObjects?.surfaces ?? {})) {
+      if (!mediaSurfaceViews.has(surfaceId)) continue;
+      const object = activeScreenShareObjectForSurface(surfaceId);
+      const trackSid = object?.state.mediaTrackSid;
+      if (object && object.ownerParticipantId !== participantId && object.state.status === "active"
+        && typeof trackSid === "string" && trackSid.length > 0 && !trackSid.startsWith("mock-screen-share:")) return object;
+    }
+    return null;
+  }
+
   function currentWhiteboardObject(): MediaObjectInstance<WhiteboardState> | null {
     return activeWhiteboardObjectForSurface(context.selectedMediaSurfaceId) ?? findActiveWhiteboardObject();
   }
@@ -229,6 +240,7 @@ export function createMediaObjectQueries(context: MediaObjectQueriesContext) {
     findActiveImageViewerObject,
     findActiveVideoPlayerObject,
     findRemoteBrowserObjectNeedingLiveKitRoom,
+    findScreenShareObjectNeedingLiveKitRoom,
     currentWhiteboardObject,
     currentMarkdownBoardObject,
     currentRemoteBrowserObject,

@@ -632,7 +632,7 @@ let lastScreenShareStoppedAtMs = 0;
 let mediaRoomReady = false;
 let mediaDiagnosticsTransports: WebRtcStatsTransport[] = [];
 const mediaTransportDiagnosticsRooms = new WeakSet<Room>();
-let remoteBrowserMediaRoomPromise: Promise<void> | null = null;
+let surfaceMediaRoomPromise: Promise<void> | null = null;
 const mediaRoomIdleDisconnectScheduler = createMediaRoomIdleScheduler<Room, number>({
   delayMs: 10000,
   setTimer: (callback, delayMs) => window.setTimeout(callback, delayMs),
@@ -713,6 +713,7 @@ const {
   findActiveImageViewerObject,
   findActiveVideoPlayerObject,
   findRemoteBrowserObjectNeedingLiveKitRoom,
+  findScreenShareObjectNeedingLiveKitRoom,
   currentWhiteboardObject,
   currentMarkdownBoardObject,
   currentRemoteBrowserObject,
@@ -912,6 +913,7 @@ function configureRuntimeMediaSurfaces(sceneSurfaces?: SceneBundleMediaSurface[]
   lastMediaSurfaceRuntimeResetIds = resetSurfaceIds;
   lastMediaSurfaceRuntimeResetIdsWithCachedRuntimes = resetSurfaceIdsWithCachedRuntimes;
   syncMediaObjectsDebugState();
+  ensureSurfaceLiveKitRoom();
   syncRemoteBrowserLiveKitTracks();
   syncScreenShareLiveKitTracks();
   reconcileMediaRoomIdleDisconnect(livekitRoom, "media_surfaces_reconciled_idle");
@@ -2204,7 +2206,7 @@ function handleRoomSnapshot(snapshot: RoomStateSnapshot): void {
   roomMediaObjects = snapshot.mediaObjects;
   syncSeatStateFromOccupancy();
   syncMediaObjectsDebugState();
-  ensureRemoteBrowserLiveKitRoom();
+  ensureSurfaceLiveKitRoom();
   syncRemoteBrowserLiveKitTracks();
   syncScreenShareLiveKitTracks();
   reconcileMediaRoomIdleDisconnect(livekitRoom, "room_media_objects_reconciled_idle");
@@ -3786,35 +3788,39 @@ function syncScreenShareLiveKitTracks(): void {
   }
 }
 
-function ensureRemoteBrowserLiveKitRoom(): void {
+function ensureSurfaceLiveKitRoom(): void {
   const remoteBrowser = findRemoteBrowserObjectNeedingLiveKitRoom();
-  if (!remoteBrowser) {
+  const screenShare = findScreenShareObjectNeedingLiveKitRoom();
+  if (!remoteBrowser && !screenShare) {
     return;
   }
   if (livekitRoom) {
     syncRemoteBrowserLiveKitTracks();
-    reconcileMediaRoomIdleDisconnect(livekitRoom, "remote_browser_consumer_active");
+    syncScreenShareLiveKitTracks();
+    reconcileMediaRoomIdleDisconnect(livekitRoom, "surface_consumer_active");
     return;
   }
-  if (remoteBrowserMediaRoomPromise) {
+  if (surfaceMediaRoomPromise) {
     return;
   }
-  remoteBrowserMediaRoomPromise = ensureMediaRoom()
+  surfaceMediaRoomPromise = ensureMediaRoom()
     .then((room) => {
       syncRemoteBrowserLiveKitTracks();
-      reconcileMediaRoomIdleDisconnect(room, "remote_browser_pending_resolved_idle");
+      syncScreenShareLiveKitTracks();
+      reconcileMediaRoomIdleDisconnect(room, "surface_pending_resolved_idle");
     })
     .catch((error: unknown) => {
       console.error(error);
       const object = currentRemoteBrowserObject();
       const errorCode = error instanceof Error ? error.message : "remote_browser_livekit_connect_failed";
-      if (object) {
+      if (remoteBrowser && object) {
         remoteBrowserRuntimes.get(object.surfaceId)?.setError(errorCode);
       }
-      debugState.remoteBrowser.errorCode = errorCode;
+      if (remoteBrowser) debugState.remoteBrowser.errorCode = errorCode;
+      if (screenShare) debugState.screenShare.errorCode = getScreenShareErrorCode(error);
     })
     .finally(() => {
-      remoteBrowserMediaRoomPromise = null;
+      surfaceMediaRoomPromise = null;
     });
 }
 
