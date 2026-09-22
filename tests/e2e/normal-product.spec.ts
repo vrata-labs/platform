@@ -2,6 +2,7 @@ import { test, expect, type APIRequestContext, type Page } from "@playwright/tes
 import { inlineSceneBundleUrl } from "./scene-bundle-fixtures.js";
 import type { RuntimeTestApi } from "../../apps/runtime-web/src/testing/runtime-test-api.js";
 import { createLegacyStagingRoom, releaseLegacyStagingRoom } from "./staging-legacy-room";
+import { completeGuestEntry } from "./guest-entry";
 
 type Debug = {
   participantId: string;
@@ -37,6 +38,10 @@ async function verifyNormalProduct({ page, request }: { page: Page; request: API
   const created = await createLegacyStagingRoom(request, "normal-product", { headers, data: { tenantId: "demo-tenant", templateId: "personal-workspace-basic", name: "Normal product regression", guestAllowed: true, sceneBundleUrl: fixtureBundle(), avatarConfig: { avatarsEnabled: true, avatarSeatsEnabled: true, avatarFallbackCapsulesEnabled: false } } });
   expect(created.ok()).toBe(true);
   const { roomId } = await created.json();
+  if (!staging) await page.route(`**/api/rooms/${roomId}/manifest`, async route => {
+    await new Promise(resolve => setTimeout(resolve, 500));
+    await route.continue();
+  }, { times: 1 });
   const observer = await page.context().newPage();
   try {
     const invite = await request.post(`/api/rooms/${roomId}/invites`, { headers, data: { role: "host", expiresInSeconds: 600 } });
@@ -44,19 +49,13 @@ async function verifyNormalProduct({ page, request }: { page: Page; request: API
     const link = new URL((await invite.json()).inviteLink);
     link.searchParams.set("debug", "1"); link.searchParams.set("scenefit", "0");
     await page.goto(`${link.pathname}${link.search}`);
-    if (await page.locator("#guest-onboarding").isVisible()) {
-      await page.locator("#guest-name-input").fill("Regression host");
-      await page.locator("#guest-enter-without-audio").click();
-    }
+    await completeGuestEntry(page, "Regression host");
     await expect.poll(async () => (await readDebug(page)).sceneDebug?.state, { timeout: 30_000 }).toBe("loaded");
     await expect.poll(async () => (await readDebug(page)).roomStateConnected, { timeout: 20_000 }).toBe(true);
     const participantId = (await readDebug(page)).participantId;
     await observer.addInitScript(() => sessionStorage.setItem("vrata.participantId", `observer-${crypto.randomUUID()}`));
     await observer.goto(`/rooms/${roomId}?debug=1&scenefit=0`);
-    if (await observer.locator("#guest-onboarding").isVisible()) {
-      await observer.locator("#guest-name-input").fill("Regression observer");
-      await observer.locator("#guest-enter-without-audio").click();
-    }
+    await completeGuestEntry(observer, "Regression observer");
     await expect.poll(async () => (await readDebug(observer)).roomStateConnected, { timeout: 20_000 }).toBe(true);
     expect((await readDebug(observer)).participantId).not.toBe(participantId);
     for (let i = 0; i < 3; i++) {
