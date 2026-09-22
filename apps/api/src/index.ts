@@ -91,6 +91,8 @@ import {
 import { defaultManifest } from "./default-room-manifest.js";
 import { createRoomManifestBuilder } from "./room-manifest.js";
 import { loadSceneMediaSurfaces } from "./scene-media-surfaces.js";
+import { normalizeRoomAvatarOverrides } from "./room-input.js";
+import { assertRoomTemplatePatch, listRoomTemplateMetadata, resolveRoomTemplateCreate, roomTemplateSessionContext, templateInputError } from "./room-template-policy.js";
 
 import {
   isRoomDisabled,
@@ -1054,8 +1056,10 @@ function createRoomAccessTokenResponse(input: {
 } {
   const nowSeconds = input.nowSeconds ?? Math.floor(Date.now() / 1000);
   const permissions = getRoomPermissions(input.role);
+  const roomTemplate = roomTemplateSessionContext(input.room);
   const payload: RoomAccessTokenPayload = {
     ...(input.sceneMediaSurfaces === undefined ? {} : { sceneMediaSurfaces: input.sceneMediaSurfaces }),
+    ...(roomTemplate ? { roomTemplate } : {}),
     tenantId: input.room?.tenantId ?? "demo-tenant",
     roomId: input.roomId,
     participantId: input.participantId,
@@ -1572,7 +1576,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   }
 
   if (method === "GET" && url.pathname === "/api/templates") {
-    json(response, 200, { items: await storage.listTemplates() });
+    json(response, 200, { items: await listRoomTemplateMetadata(storage) });
     return;
   }
 
@@ -1820,7 +1824,17 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   if (method === "POST" && url.pathname === "/api/rooms") {
     const actor = await requireControlPlanePermission(request, response, { permission: "room.create", action: "room.create", objectType: "room" });
     if (!actor) return;
-    const payload = normalizeRoomPayload((await parseBody<RoomPayloadInput>(request)) ?? {}, "create");
+    const rawPayload = normalizeRoomAvatarOverrides((await parseBody<RoomPayloadInput>(request)) ?? {});
+    let payload: Partial<RoomRecord>;
+    try {
+      const resolved = await resolveRoomTemplateCreate(storage, rawPayload);
+      payload = { ...normalizeRoomPayload(resolved.input, "create"), templateVersion: resolved.version.version };
+    } catch (error) {
+      const failure = templateInputError(error);
+      if (!failure) throw error;
+      incrementCounter(metrics.roomCreationFailuresTotal, failure.code);
+      return json(response, failure.status, { error: failure.code });
+    }
     const tenantIds = new Set((await storage.listTenants()).map((tenant) => tenant.tenantId));
     const templateIds = new Set((await storage.listTemplates()).map((template) => template.templateId));
     const validationError = validateRoomInput(payload, templateIds, tenantIds);
@@ -1841,6 +1855,11 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     try {
       room = await storage.createRoom(payload);
     } catch (error) {
+      const templateFailure = templateInputError(error);
+      if (templateFailure) {
+        incrementCounter(metrics.roomCreationFailuresTotal, templateFailure.code);
+        return json(response, templateFailure.status, { error: templateFailure.code });
+      }
       const message = error instanceof Error ? error.message : "room_create_failed";
       const reason = /duplicate key|unique constraint|already exists/i.test(message)
         ? "room_slug_conflict"
@@ -1888,21 +1907,23 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     }
     let room: RoomRecord;
     try {
-      room = await storage.createRoom({
+      const activeTemplates = await storage.listTemplates();
+      const templateId = activeTemplates.some(template => template.templateId === "personal-room-basic") ? "personal-room-basic" : "personal-workspace-basic";
+      const resolved = await resolveRoomTemplateCreate(storage, {
         roomId,
         tenantId,
-        templateId: "personal-workspace-basic",
+        templateId,
         name: personalRoomName(displayName),
         roomType: "personal",
         ownerParticipantId: participantId,
         visibility: "private",
         guestAllowed: false,
-        features: { voice: true, spatialAudio: true, screenShare: true },
-        theme: { primaryColor: "#7dd3fc", accentColor: "#312e81" },
+        ...(templateId === "personal-workspace-basic" ? { features: { voice: true, spatialAudio: true, screenShare: true }, theme: { primaryColor: "#7dd3fc", accentColor: "#312e81" } } : {}),
         sessionControl: { hostParticipantId: participantId }
       });
+      room = await storage.createRoom(resolved.input);
     } catch (error) {
-      if (error instanceof Error && /^(template_deprecated|template_version_not_found):/.test(error.message)) {
+      if (error instanceof Error && (/^(template_deprecated|template_version_not_found):/.test(error.message) || error.message === "deprecated_template")) {
         incrementCounter(metrics.personalRoomOpensTotal, "template_unavailable");
         return json(response, 503, { error: "personal_room_template_unavailable" });
       }
@@ -2358,9 +2379,15 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     const roomId = decodeURIComponent(roomItemMatch[1]);
     const actor = await requireControlPlanePermission(request, response, { permission: "room.update", action: "room.update", objectType: "room", objectId: roomId });
     if (!actor) return;
-    const payload = normalizeRoomPayload((await parseBody<RoomPayloadInput>(request)) ?? {}, "patch");
+    const rawPayload = (await parseBody<RoomPayloadInput>(request)) ?? {};
     const existingRoom = await storage.getRoom(roomId);
     if (!existingRoom) return json(response, 404, { error: "room_not_found" });
+    try { assertRoomTemplatePatch(existingRoom, rawPayload); } catch (error) {
+      const failure = templateInputError(error);
+      if (!failure) throw error;
+      return json(response, failure.status, { error: failure.code });
+    }
+    const payload = normalizeRoomPayload(rawPayload, "patch");
     if (payload.visibility !== undefined && !isRoomVisibility(payload.visibility)) return json(response, 400, { error: "invalid_room_visibility" });
     if (payload.roomType !== undefined && payload.roomType !== "standard" && payload.roomType !== "personal") return json(response, 400, { error: "invalid_room_type" });
     if (payload.templateId !== undefined) {
@@ -2392,6 +2419,8 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
         templateVersion: existingRoom.templateVersion
       });
     } catch (error) {
+      const templateFailure = templateInputError(error);
+      if (templateFailure) return json(response, templateFailure.status, { error: templateFailure.code });
       if (error instanceof Error && error.message === "room_template_binding_changed") {
         return json(response, 409, { error: "room_template_binding_changed" });
       }
@@ -2786,7 +2815,12 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       ? (await storage.listSceneBundleVersions(payload.bundleId)).find((item) => item.version === payload.version) ?? null
       : await storage.getSceneBundle(payload.bundleId);
     if (!bundle) return json(response, 404, { error: "scene_bundle_not_found" });
-    const room = await storage.updateRoom(roomId, { sceneBundleUrl: bundle.publicUrl });
+    let room: RoomRecord | null;
+    try { room = await storage.updateRoom(roomId, { sceneBundleUrl: bundle.publicUrl }); } catch (error) {
+      const failure = templateInputError(error);
+      if (!failure) throw error;
+      return json(response, failure.status, { error: failure.code });
+    }
     if (!room) return json(response, 404, { error: "room_not_found" });
     json(response, 200, { ...room, roomLink: createRoomLink(room.roomId, request), sceneBundle: bundle, currentVersion: getCurrentSceneBundleVersion(bundle) });
     return;
@@ -2947,7 +2981,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       });
     }
     json(response, 200, createRoomAccessTokenResponse({
-      sceneMediaSurfaces: await loadSceneMediaSurfaces(tokenRoom?.sceneBundleUrl, `http://127.0.0.1:${request.socket.localPort ?? process.env.API_PORT ?? "4000"}`),
+      sceneMediaSurfaces: roomTemplateSessionContext(tokenRoom)?.surfaces ?? await loadSceneMediaSurfaces(tokenRoom?.sceneBundleUrl, `http://127.0.0.1:${request.socket.localPort ?? process.env.API_PORT ?? "4000"}`),
       room: tokenRoom,
       roomId,
       participantId,

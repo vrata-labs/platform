@@ -31,6 +31,7 @@ import {
   revokeRoomInvite,
   setRoomDisabled
 } from "./index.js";
+import { renderTemplateCards, templateCreationFields, templateDefaultsSummary } from "./template-picker.js";
 
 function mustElement<T extends Element>(selector: string): T {
   const element = document.querySelector<T>(selector);
@@ -66,6 +67,12 @@ const createAssetButton = mustElement<HTMLButtonElement>("#create-asset");
 const updateAssetButton = mustElement<HTMLButtonElement>("#update-asset");
 const deleteAssetButton = mustElement<HTMLButtonElement>("#delete-asset");
 const templateSelect = mustElement<HTMLSelectElement>("#template-select");
+const templateGallery = mustElement<HTMLFieldSetElement>("#template-gallery");
+const templateCards = mustElement<HTMLDivElement>("#template-cards");
+const templateSummary = mustElement<HTMLDivElement>("#template-summary");
+const roomOwnerField = mustElement<HTMLLabelElement>("#room-owner-field");
+const roomOwnerInput = mustElement<HTMLInputElement>("#room-owner-input");
+const newRoomButton = mustElement<HTMLButtonElement>("#new-room");
 const roomSlugInput = mustElement<HTMLInputElement>("#room-slug-input");
 const roomValidationMessage = mustElement<HTMLDivElement>("#room-validation-message");
 const assetSelect = mustElement<HTMLSelectElement>("#asset-select");
@@ -118,6 +125,74 @@ const sceneBundlesList = mustElement<HTMLUListElement>("#scene-bundles-list");
 let selectedRoomPoll: number | undefined;
 let roomSlugTouched = false;
 let authVerificationSeq = 0;
+let templateDefaultsDirty = false;
+
+function renderTemplateOptions(): void {
+  templateSelect.replaceChildren(...state.templates.map(template => {
+    const option = document.createElement("option"); option.value = template.templateId;
+    option.textContent = `${template.label}${template.currentVersion ? ` v${template.currentVersion}` : ""}`;
+    return option;
+  }));
+  renderTemplateCards(templateCards, state.templates, id => {
+    templateSelect.value = id;
+    templateSelect.dispatchEvent(new Event("change"));
+  });
+}
+
+function applySelectedTemplateDefaults(): void {
+  const defaults = state.selectedTemplate?.defaults;
+  if (!defaults) return;
+  primaryColorInput.value = defaults.theme.primaryColor;
+  accentColorInput.value = defaults.theme.accentColor;
+  featureVoiceInput.checked = defaults.features.voice;
+  featureSpatialInput.checked = defaults.features.spatialAudio;
+  featureShareInput.checked = defaults.features.screenShare;
+  roomVisibilitySelect.value = defaults.visibility;
+  guestAccessInput.checked = defaults.guestAllowed;
+  avatarEnabledInput.checked = defaults.avatarConfig.avatarsEnabled;
+  avatarCatalogUrlInput.value = defaults.avatarConfig.avatarCatalogUrl;
+  avatarQualitySelect.value = defaults.avatarConfig.avatarQualityProfile;
+  avatarFallbackInput.checked = defaults.avatarConfig.avatarFallbackCapsulesEnabled;
+  avatarSeatsInput.checked = defaults.avatarConfig.avatarSeatsEnabled;
+  sceneBundleSelect.value = "";
+  state.selectedSceneBundle = undefined;
+  state.sceneBundleVersions = [];
+  sceneBundleVersionSelect.replaceChildren();
+  templateDefaultsDirty = false;
+}
+
+function syncTemplateForm(): void {
+  const reference = Boolean(state.selectedTemplate?.defaults);
+  const personal = state.selectedRoom ? state.selectedRoom.roomType === "personal" : state.selectedTemplate?.defaults?.roomType === "personal";
+  templateGallery.hidden = Boolean(state.selectedRoom) || !state.templates.some(template => template.defaults);
+  templateGallery.disabled = Boolean(state.selectedRoom);
+  templateSelect.disabled = Boolean(state.selectedRoom);
+  createRoomButton.disabled = Boolean(state.selectedRoom) || !state.selectedTemplate;
+  updateRoomButton.disabled = !state.selectedRoom;
+  roomSlugInput.readOnly = Boolean(state.selectedRoom);
+  roomOwnerField.hidden = !personal;
+  roomOwnerInput.required = Boolean(personal && !state.selectedRoom);
+  roomOwnerInput.readOnly = Boolean(state.selectedRoom);
+  roomVisibilitySelect.disabled = Boolean(personal);
+  guestAccessInput.disabled = Boolean(personal);
+  sceneBundleSelect.disabled = reference;
+  sceneBundleVersionSelect.disabled = reference;
+  bindSceneBundleButton.disabled = reference || !state.selectedRoom;
+  templateSummary.textContent = state.selectedTemplate ? `${templateDefaultsSummary(state.selectedTemplate)}${state.selectedRoom ? " · saved template binding" : ""}${reference ? " · scene locked to this version" : ""}` : "";
+  for (const radio of Array.from(templateCards.querySelectorAll<HTMLInputElement>("input[type=radio]"))) radio.checked = radio.value === state.selectedTemplate?.templateId;
+}
+
+function beginRoomDraft(): void {
+  state.selectedRoom = undefined; state.selectedRoomManifest = undefined;
+  state.selectedRoomDiagnostics = []; state.selectedRoomInvites = []; state.selectedWaitingRoomRequests = [];
+  renderTemplateOptions();
+  state.selectedTemplate = state.templates[0];
+  templateSelect.value = state.selectedTemplate?.templateId ?? "";
+  roomNameInput.value = "New room"; roomSlugInput.value = "new-room"; roomSlugTouched = false;
+  roomOwnerInput.value = "";
+  applySelectedTemplateDefaults();
+  render();
+}
 
 adminTokenInput.value = storedAdminToken;
 
@@ -182,6 +257,7 @@ function renderAuthorizationState(): void {
 }
 
 function roomSlugValidationError(): string | null {
+  if (state.selectedRoom) return null;
   const slug = roomSlugInput.value.trim();
   if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug) || slug.length < 3 || slug.length > 64) {
     return "invalid_room_slug";
@@ -189,6 +265,7 @@ function roomSlugValidationError(): string | null {
   if (state.rooms.some((room) => room.roomId === slug)) {
     return "room_slug_conflict";
   }
+  if (state.selectedTemplate?.defaults?.roomType === "personal" && !/^[A-Za-z0-9._:-]{3,128}$/.test(roomOwnerInput.value.trim())) return "missing_personal_room_owner";
   return null;
 }
 
@@ -198,6 +275,7 @@ function renderRoomPreview(): void {
     ? "Room slug already exists."
     : validationError === "invalid_room_slug"
       ? "Use 3-64 lowercase letters, numbers, and single hyphens."
+      : validationError === "missing_personal_room_owner" ? "Enter the owner participant ID for this private workspace."
       : "";
   const roomUrl = roomSlugInput.value.trim() ? createRoomUrl(apiBaseUrl, roomSlugInput.value.trim()) : "";
   roomPreview.textContent = JSON.stringify({
@@ -205,15 +283,17 @@ function renderRoomPreview(): void {
     name: roomNameInput.value.trim(),
     tenantId: tenantSelect.value,
     templateId: templateSelect.value,
+    templateVersion: state.selectedTemplate?.currentVersion,
     visibility: roomVisibilitySelect.value,
     guestAllowed: guestAccessInput.checked,
-    sceneBundleUrl: selectedSceneBundlePublicUrl() ?? "fallback scene",
+    sceneBundleUrl: state.selectedRoom?.sceneBundleUrl ?? selectedSceneBundlePublicUrl() ?? (state.selectedTemplate?.defaults ? "Locked reference scene" : "fallback scene"),
     roomUrl
   }, null, 2);
 }
 
 function render(): void {
   renderAuthorizationState();
+  syncTemplateForm();
   publishStatus.textContent = state.statusMessage ?? state.publishStatus;
   roomLink.href = state.roomLink ?? "#";
   roomLink.textContent = state.roomLink ?? "";
@@ -357,7 +437,7 @@ function render(): void {
   renderRoomPreview();
 }
 
-async function selectRoom(room: typeof state.selectedRoom): Promise<void> {
+async function selectRoom(room: typeof state.selectedRoom, preserveDraft = false): Promise<void> {
   if (!room) {
     return;
   }
@@ -368,10 +448,18 @@ async function selectRoom(room: typeof state.selectedRoom): Promise<void> {
   state.selectedWaitingRoomRequests = await listWaitingRoomRequests(apiBaseUrl, room.roomId, currentAuth()).catch(() => []);
   state.selectedSceneBundle = state.sceneBundles.find((bundle) => bundle.publicUrl === state.selectedRoomManifest?.sceneBundle?.url);
   state.sceneBundleVersions = state.selectedSceneBundle ? await listSceneBundleVersions(apiBaseUrl, state.selectedSceneBundle.bundleId).catch(() => []) : [];
+  if (preserveDraft) { render(); return; }
+  const snapshot = room.templateSnapshot ?? state.selectedRoomManifest.templateSnapshot;
+  state.selectedTemplate = snapshot ? { templateId: room.templateId, label: snapshot.label, assetSlots: snapshot.assetSlots, currentVersion: room.templateVersion ?? snapshot.version, description: snapshot.description, defaults: snapshot.defaults }
+    : state.templates.find(template => template.templateId === room.templateId);
+  const pinned = document.createElement("option"); pinned.value = room.templateId;
+  pinned.textContent = `${state.selectedTemplate?.label ?? room.templateId} v${room.templateVersion ?? "0.1.0"} (saved)`;
+  templateSelect.replaceChildren(pinned);
   roomNameInput.value = room.name;
   roomSlugInput.value = room.roomId;
   roomSlugTouched = true;
   templateSelect.value = room.templateId;
+  roomOwnerInput.value = room.ownerParticipantId ?? "";
   primaryColorInput.value = room.theme?.primaryColor ?? "#5fc8ff";
   accentColorInput.value = room.theme?.accentColor ?? "#163354";
   featureVoiceInput.checked = room.features?.voice ?? true;
@@ -415,7 +503,7 @@ function startSelectedRoomPolling(): void {
     if (!state.selectedRoom) {
       return;
     }
-    void selectRoom(state.selectedRoom);
+    void selectRoom(state.selectedRoom, true);
   }, 5000);
 }
 
@@ -555,14 +643,7 @@ async function bootstrap(): Promise<void> {
   state.sceneBundles = await listSceneBundles(apiBaseUrl).catch(() => []);
   state.assets = await listAssets(apiBaseUrl);
   renderTenantOptions();
-  templateSelect.replaceChildren(
-    ...state.templates.map((template) => {
-      const option = document.createElement("option");
-      option.value = template.templateId;
-      option.textContent = template.label;
-      return option;
-    })
-  );
+  renderTemplateOptions();
   state.selectedTemplate = state.templates[0];
   if (state.selectedTemplate) {
     templateSelect.value = state.selectedTemplate.templateId;
@@ -579,6 +660,7 @@ async function bootstrap(): Promise<void> {
   if (state.sceneBundles[0]) {
     sceneBundleIdInput.value = state.sceneBundles[0].bundleId;
   }
+  applySelectedTemplateDefaults();
   render();
   if (adminTokenInput.value.trim()) {
     await verifyControlPlaneSession();
@@ -626,9 +708,22 @@ sceneBundleSelect.addEventListener("change", () => {
 });
 
 templateSelect.addEventListener("change", () => {
+  if (state.selectedRoom) return;
+  const next = state.templates.find(template => template.templateId === templateSelect.value);
+  if (next?.defaults && templateDefaultsDirty && !window.confirm("Changing the template resets the edited default settings. Continue?")) {
+    templateSelect.value = state.selectedTemplate?.templateId ?? ""; syncTemplateForm(); return;
+  }
   state.selectedTemplate = state.templates.find((template) => template.templateId === templateSelect.value);
+  applySelectedTemplateDefaults();
   render();
 });
+
+newRoomButton.addEventListener("click", beginRoomDraft);
+roomOwnerInput.addEventListener("input", renderRoomPreview);
+for (const control of [primaryColorInput, accentColorInput, featureVoiceInput, featureSpatialInput, featureShareInput, roomVisibilitySelect, guestAccessInput, avatarEnabledInput, avatarCatalogUrlInput, avatarQualitySelect, avatarFallbackInput, avatarSeatsInput]) {
+  control.addEventListener("input", () => { templateDefaultsDirty = true; });
+  control.addEventListener("change", () => { templateDefaultsDirty = true; });
+}
 
 roomNameInput.addEventListener("input", () => {
   if (!roomSlugTouched) {
@@ -666,6 +761,7 @@ roomFilterTenant.addEventListener("change", () => {
 
 form.addEventListener("submit", (event) => {
   event.preventDefault();
+  if (state.selectedRoom) return;
   const validationError = roomSlugValidationError();
   if (validationError) {
     state.publishStatus = "failed";
@@ -680,8 +776,9 @@ form.addEventListener("submit", (event) => {
     roomId: roomSlugInput.value.trim(),
     tenantId: tenantSelect.value,
     templateId: templateSelect.value,
+    ...templateCreationFields(state.selectedTemplate, roomOwnerInput.value),
     name: roomNameInput.value,
-    sceneBundleUrl: selectedSceneBundlePublicUrl(),
+    ...(!state.selectedTemplate?.defaults ? { sceneBundleUrl: selectedSceneBundlePublicUrl() } : {}),
     assetIds: Array.from(assetSelect.selectedOptions).map((option) => option.value),
     visibility: roomVisibilitySelect.value as "public" | "unlisted" | "private",
     guestAllowed: guestAccessInput.checked,
@@ -1128,7 +1225,7 @@ deleteRoomButton.addEventListener("click", () => {
       state.selectedRoomDiagnostics = [];
       state.selectedRoomInvites = [];
       state.selectedWaitingRoomRequests = [];
-      render();
+      beginRoomDraft();
     })
     .catch(() => {
       state.publishStatus = "failed";
@@ -1141,13 +1238,11 @@ updateRoomButton.addEventListener("click", () => {
   if (!state.selectedRoom) {
     return;
   }
-  const selectedRoomTemplateIsActive = state.templates.some((template) => template.templateId === state.selectedRoom?.templateId);
   state.publishStatus = "publishing";
   state.statusMessage = "publishing";
   render();
   void updateRoom(apiBaseUrl, state.selectedRoom.roomId, {
     name: roomNameInput.value,
-    ...(selectedRoomTemplateIsActive ? { templateId: templateSelect.value } : {}),
     assetIds: Array.from(assetSelect.selectedOptions).map((option) => option.value),
     visibility: roomVisibilitySelect.value as "public" | "unlisted" | "private",
     guestAllowed: guestAccessInput.checked,

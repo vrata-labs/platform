@@ -106,6 +106,9 @@ export interface RoomTemplateCatalogRecord {
   assetSlots: string[];
   currentVersion: string;
   status: RoomTemplateStatus;
+  description?: string;
+  previewUrl?: string;
+  defaults?: RoomTemplateDefaults;
 }
 
 export interface RoomTemplateVersionSnapshotV1 {
@@ -114,6 +117,22 @@ export interface RoomTemplateVersionSnapshotV1 {
   version: string;
   label: string;
   assetSlots: string[];
+  description?: string;
+  defaults?: RoomTemplateDefaults;
+  scene?: RoomTemplateSceneContract;
+  assetLock?: RoomTemplateAssetLock;
+}
+
+export interface RoomTemplateSessionContext {
+  templateId: string;
+  templateVersion: string;
+  contentHash: string;
+  surfaces: Array<Pick<RoomTemplateSurface, "surfaceId" | "label" | "allowedObjectTypes">>;
+}
+
+export interface SceneBundleIntegrity {
+  manifestSha256: string;
+  assetSha256: string;
 }
 
 export interface RoomTemplateSnapshotV1 extends RoomTemplateVersionSnapshotV1 {

@@ -35,6 +35,7 @@ import {
   type RemoteBrowserObjectState,
   type RemoteBrowserPatch,
   type RoomMediaObjectsState,
+  type RoomTemplateSessionContext,
   type SceneMediaSurfaceDefinition,
   type RoomPermission,
   type RoomRole,
@@ -63,6 +64,7 @@ export interface RoomState {
   participants: ParticipantState[];
   seatOccupancy: SeatOccupancyState;
   mediaObjects: RoomMediaObjectsState;
+  roomTemplate?: RoomTemplateSessionContext;
 }
 
 export interface SeatClaimResult {
@@ -82,6 +84,7 @@ export interface ParticipantAccessState {
   role: RoomRole;
   permissions?: RoomPermission[];
   sceneMediaSurfaces?: SceneMediaSurfaceDefinition[];
+  roomTemplate?: RoomTemplateSessionContext;
 }
 
 export interface CreateMediaObjectInput {
@@ -234,6 +237,10 @@ function cloneMediaObjectsState(mediaObjects: RoomMediaObjectsState): RoomMediaO
 }
 
 function ensureMediaObjectsState(state: RoomState): RoomMediaObjectsState {
+  if (state.roomTemplate) {
+    if (!state.mediaObjects) throw new Error("missing_template_media_state");
+    return cloneMediaObjectsState(state.mediaObjects);
+  }
   const current = state.mediaObjects ?? createDefaultRoomMediaObjectsState(state.roomId);
   const defaults = createDefaultRoomMediaObjectsState(state.roomId);
   const mergedSurfaces = { ...defaults.surfaces, ...current.surfaces };

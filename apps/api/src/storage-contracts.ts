@@ -1,5 +1,6 @@
 import type { RoomTemplateCatalogRecord, RoomTemplateSnapshotV1, RoomTemplateVersionSnapshotV1 } from "@vrata/shared-types";
 import type { SceneBundleCreateInput, SceneBundleRecord } from "./scene-bundle-storage.js";
+import type { ReferenceCatalogState, TemplateCatalogPointer } from "@vrata/templates";
 
 export interface TenantRecord {
   tenantId: string;
@@ -280,6 +281,7 @@ export interface Storage {
   updateTenant(tenantId: string, input: Partial<TenantRecord>): Promise<TenantRecord | null>;
   deleteTenant(tenantId: string): Promise<boolean>;
   listTemplates(): Promise<TemplateRecord[]>;
+  transitionReferenceTemplateCatalog(target: ReferenceCatalogState): Promise<TemplateCatalogPointer[]>;
   getTemplateVersion(templateId: string, version?: string): Promise<RoomTemplateVersionSnapshotV1 | null>;
   listAssets(): Promise<AssetRecord[]>;
   listRooms(): Promise<RoomRecord[]>;

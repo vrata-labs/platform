@@ -9,3 +9,6 @@ export * from "./registry.js";
 export * from "./standard-room-contracts.js";
 export * from "./standard-room-definitions.js";
 export * from "./version-contract.js";
+export * from "./materialization.js";
+export * from "./product-room-definitions.js";
+export * from "./catalog-transition.js";

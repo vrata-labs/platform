@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 
 import { validateSceneBundlePath } from "../packages/asset-pipeline/dist/index.js";
 import {
-  listStandardRoomTemplateVersionContracts
+  listReferenceTemplateVersionContracts
 } from "../packages/templates/dist/index.js";
 import { parseSceneRepositoriesLock, assertSceneRepositoryCoverage } from "./scene-repositories.mjs";
 
@@ -27,7 +27,7 @@ async function verifyFileLock(assetsRoot, lock) {
 }
 
 const repositories = parseSceneRepositoriesLock(JSON.parse(await readFile(join(repoRoot, "scene-repositories.lock.json"), "utf8")));
-const definitions = listStandardRoomTemplateVersionContracts();
+const definitions = listReferenceTemplateVersionContracts();
 assertSceneRepositoryCoverage(repositories, definitions);
 const selectedRepository = process.env.VRATA_SCENE_REPOSITORY;
 const selectedCommit = process.env.VRATA_SCENE_COMMIT_SHA;

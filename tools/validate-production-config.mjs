@@ -214,6 +214,16 @@ function validateUrl(issues, env, rule) {
   addIssue(issues, "insecure_public_url", rule.name, `expected_${rule.protocols.join("_or_").replaceAll(":", "")}`);
 }
 
+function validateTemplateMirror(issues, env) {
+  const value = env.ROOM_TEMPLATE_ASSET_BASE_URL;
+  if (value === undefined || value === "") return;
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash
+      || /[\u0000-\u0020\u007f\\%]/.test(value) || /\/(?:\.{1,2})(?:\/|$|[?#])/.test(value) || url.pathname.includes("%")) throw new Error();
+  } catch { addIssue(issues, "invalid_template_asset_base_url", "ROOM_TEMPLATE_ASSET_BASE_URL", "expected_https_mirror_root_without_credentials_query_or_traversal"); }
+}
+
 function isBlockedValue(value) {
   const normalized = value.trim().toLowerCase();
   return EXACT_BLOCKED_VALUES.has(normalized) || PLACEHOLDER_PATTERN.test(value);
@@ -391,6 +401,7 @@ export function validateProductionConfig(env = process.env) {
     validateDomain(issues, env, name);
   }
   validateStorageConfig(issues, env);
+  validateTemplateMirror(issues, env);
   validateLiveKitConfig(issues, env);
 
   for (const rule of SECRET_RULES) {

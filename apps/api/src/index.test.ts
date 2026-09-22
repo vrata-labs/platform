@@ -1524,8 +1524,7 @@ test("template and room APIs add server-owned version metadata without changing 
         roomId: "template-metadata-room",
         tenantId: "demo-tenant",
         templateId: "meeting-room-basic",
-        templateVersion: "9.9.9",
-        templateSnapshot: { schemaVersion: 1, templateId: "spoofed", version: "9.9.9" },
+        templateVersion: "0.1.0",
         name: "Template Metadata Room",
         visibility: "unlisted",
         guestAllowed: false,
@@ -1584,8 +1583,6 @@ test("template and room APIs add server-owned version metadata without changing 
         "x-vrata-admin-token": "template-metadata-admin-token"
       },
       body: JSON.stringify({
-        templateVersion: "9.9.9",
-        templateSnapshot: { schemaVersion: 1, templateId: "spoofed", version: "9.9.9" },
         visibility: "private",
         features: { voice: false, spatialAudio: true, screenShare: false }
       })
@@ -1618,8 +1615,11 @@ test("template and room APIs add server-owned version metadata without changing 
         templateSnapshot: { schemaVersion: 1, templateId: "spoofed-again", version: "8.8.8" }
       })
     });
-    assert.equal(spoofOnlyResponse.status, 200);
-    const spoofOnly = await spoofOnlyResponse.json() as {
+    assert.equal(spoofOnlyResponse.status, 400);
+    assert.deepEqual(await spoofOnlyResponse.json(), { error: "server_owned_template_snapshot" });
+    const afterSpoof = await fetch(`http://127.0.0.1:4061/api/rooms/${created.roomId}`, { headers: { "x-vrata-admin-token": "template-metadata-admin-token" } });
+    assert.equal(afterSpoof.status, 200);
+    const spoofOnly = await afterSpoof.json() as {
       visibility: string;
       features: unknown;
       templateVersion: string;
@@ -1690,7 +1690,7 @@ test("template and room APIs add server-owned version metadata without changing 
       body: JSON.stringify({ templateId: "showroom-basic" })
     });
     assert.equal(incompatibleTemplateResponse.status, 409);
-    assert.deepEqual(await incompatibleTemplateResponse.json(), { error: "room_template_binding_changed" });
+    assert.deepEqual(await incompatibleTemplateResponse.json(), { error: "template_change_not_supported" });
 
     const unknownTemplateResponse = await fetch(`http://127.0.0.1:4061/api/rooms/${created.roomId}`, {
       method: "PATCH",
@@ -1700,8 +1700,8 @@ test("template and room APIs add server-owned version metadata without changing 
       },
       body: JSON.stringify({ templateId: "unknown-template" })
     });
-    assert.equal(unknownTemplateResponse.status, 400);
-    assert.deepEqual(await unknownTemplateResponse.json(), { error: "invalid_template" });
+    assert.equal(unknownTemplateResponse.status, 409);
+    assert.deepEqual(await unknownTemplateResponse.json(), { error: "template_change_not_supported" });
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     delete process.env.VRATA_DISABLE_AUTOSTART;

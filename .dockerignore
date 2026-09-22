@@ -8,6 +8,10 @@ dist
 **/dist
 test-results
 playwright-report
+.scene-assets
+.reference-scene-assets
+.template-rollback
+infra/docker/.template-wave2-rollback-sha
 .turbo
 .next
 coverage

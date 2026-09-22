@@ -4,6 +4,18 @@
     {
       "repository": "vrata-labs/scene-assets",
       "commitSha": "908331faf0eedb345d60eb1966b89994f5a8fb4b"
+    },
+    {
+      "repository": "vrata-labs/personal-workspace-v1",
+      "commitSha": "a5cfb79c478492632e639fd6704eee02f2306fbd"
+    },
+    {
+      "repository": "vrata-labs/presentation-room-v1",
+      "commitSha": "f6661970535bb316642fcfc3c2c5df21b963ce30"
+    },
+    {
+      "repository": "vrata-labs/warm-modern-meeting-room-candidate-01",
+      "commitSha": "a237ab799acbee3932846147c9f48bf1d1b4aaa8"
     }
   ]
 }

@@ -1,12 +1,15 @@
-import { createRoomAccessDebugState, type RoomAccessDebugState, type RoomPermission, type RoomRole } from "@vrata/shared-types";
+import { createRoomAccessDebugState, type RoomAccessDebugState, type RoomPermission, type RoomRole, type RoomTemplateSettings, type RoomTemplateSnapshotV1, type RoomTemplateSurface, type SceneBundleIntegrity } from "@vrata/shared-types";
 
 interface RoomManifest {
   roomId: string;
   roomType?: "standard" | "personal";
   ownerParticipantId?: string | null;
   template: string;
+  templateVersion?: string;
+  templateSnapshot?: RoomTemplateSnapshotV1;
   sceneBundle?: {
     url: string;
+    integrity?: SceneBundleIntegrity;
   };
   realtime: {
     roomStateUrl: string;
@@ -352,6 +355,12 @@ export interface RuntimeBootResult {
   roomType: "standard" | "personal";
   ownerParticipantId?: string | null;
   template: string;
+  templateVersion?: string;
+  templateLabel?: string;
+  templateSettings?: RoomTemplateSettings;
+  templateSurfaces?: RoomTemplateSurface[];
+  sceneReleaseId?: string;
+  sceneIntegrity?: SceneBundleIntegrity;
   sceneBundleUrl?: string;
   roomStateUrl: string;
   theme: {
@@ -483,6 +492,15 @@ export async function bootRuntime(
   const accessResponse = accessRequest ? await fetchStateToken(apiBaseUrl, roomId, accessRequest) : null;
   const accessDebug = accessResponse?.access ?? createRoomAccessDebugState("guest");
   const manifest = await fetchRoomManifest(apiBaseUrl, roomId, accessResponse?.token);
+  if (manifest.templateSnapshot?.defaults) {
+    const lock = manifest.templateSnapshot.assetLock;
+    const integrity = manifest.sceneBundle?.integrity;
+    if (!lock || !manifest.sceneBundle?.url || !integrity
+      || integrity.manifestSha256 !== lock.sceneManifest.sha256 || integrity.assetSha256 !== lock.sceneAsset.sha256
+      || manifest.templateSnapshot.templateId !== manifest.template || manifest.templateSnapshot.version !== manifest.templateVersion) {
+      throw new Error("invalid_reference_room_manifest");
+    }
+  }
   const personalState = manifest.roomType === "personal" && accessResponse?.token
     ? await fetchPersonalRoomState(apiBaseUrl, roomId, accessResponse.token).catch(() => ({}))
     : {};
@@ -492,6 +510,14 @@ export async function bootRuntime(
     roomType: manifest.roomType ?? "standard",
     ownerParticipantId: manifest.ownerParticipantId ?? null,
     template: manifest.template,
+    ...(manifest.templateVersion ? { templateVersion: manifest.templateVersion } : {}),
+    ...(manifest.templateSnapshot?.defaults ? {
+      templateLabel: manifest.templateSnapshot.label,
+      templateSettings: manifest.templateSnapshot.defaults.settings,
+      templateSurfaces: manifest.templateSnapshot.defaults.surfaces,
+      sceneReleaseId: manifest.templateSnapshot.assetLock?.sceneReleaseId
+    } : {}),
+    ...(manifest.sceneBundle?.integrity ? { sceneIntegrity: manifest.sceneBundle.integrity } : {}),
     sceneBundleUrl: manifest.sceneBundle?.url,
     roomStateUrl: manifest.realtime.roomStateUrl,
     theme: manifest.theme,

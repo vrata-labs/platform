@@ -82,6 +82,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/vrata-scene-rollback"
           cp tools/staging-scene-snapshot.mjs tools/patch-staging-scene-bundles.mjs "$RUNNER_TEMP/vrata-scene-rollback/"
           cp tools/staging-minio-rollout.py "$RUNNER_TEMP/vrata-scene-rollback/"
+          cp tools/staging-template-catalog.py "$RUNNER_TEMP/vrata-scene-rollback/"
 
       - name: Sync workspace to deploy SHA
         env:
@@ -206,11 +207,16 @@ jobs:
         run: |
           YCR_PASSWORD_B64="$(printf '%s' "$YCR_PASSWORD" | base64 -w0)"
           ROLLOUT_HELPER_B64="$(base64 -w0 "$RUNNER_TEMP/vrata-scene-rollback/staging-minio-rollout.py")"
+          TEMPLATE_HELPER_B64="$(base64 -w0 "$RUNNER_TEMP/vrata-scene-rollback/staging-template-catalog.py")"
           # shellcheck disable=SC2087
           ssh -o StrictHostKeyChecking=no "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo bash -s" <<EOF
           set -euo pipefail
           cd "$STAGING_APP_DIR"
           git -c safe.directory="$STAGING_APP_DIR" fetch origin
+          TEMPLATE_HELPER="\$(mktemp)"
+          printf '%s' '$TEMPLATE_HELPER_B64' | base64 -d > "\$TEMPLATE_HELPER"
+          python3 "\$TEMPLATE_HELPER" prepare --root "$STAGING_APP_DIR" --sha "$DEPLOY_SHA"
+          rm -f "\$TEMPLATE_HELPER"
           git -c safe.directory="$STAGING_APP_DIR" checkout "$DEPLOY_SHA"
           printf '%s' '${YCR_PASSWORD_B64}' | base64 -d | docker login cr.yandex --username '${YCR_USERNAME}' --password-stdin
           ROLLOUT_HELPER="\$(mktemp)"
@@ -306,6 +312,15 @@ jobs:
         run: |
           SUCCESSFUL_SHA_FILE="$STAGING_APP_DIR/infra/docker/.staging-successful-image-tag"
           ssh -o StrictHostKeyChecking=no "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo bash -lc 'printf %s \"$DEPLOY_SHA\" > \"$SUCCESSFUL_SHA_FILE\"'"
+          TEMPLATE_HELPER_B64="$(base64 -w0 "$RUNNER_TEMP/vrata-scene-rollback/staging-template-catalog.py")"
+          # shellcheck disable=SC2087
+          ssh -o StrictHostKeyChecking=no "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo bash -s" <<EOF
+          set -euo pipefail
+          TEMPLATE_HELPER="\$(mktemp)"
+          trap 'rm -f "\$TEMPLATE_HELPER"' EXIT
+          printf '%s' '$TEMPLATE_HELPER_B64' | base64 -d > "\$TEMPLATE_HELPER"
+          python3 "\$TEMPLATE_HELPER" record-wave2 --root "$STAGING_APP_DIR" --sha "$DEPLOY_SHA"
+          EOF
           {
             echo "- verification gate: success"
             echo "- persisted successful sha: \`$DEPLOY_SHA\`"
@@ -320,10 +335,15 @@ jobs:
         run: |
           YCR_PASSWORD_B64="$(printf '%s' "$YCR_PASSWORD" | base64 -w0)"
           ROLLOUT_HELPER_B64="$(base64 -w0 "$RUNNER_TEMP/vrata-scene-rollback/staging-minio-rollout.py")"
+          TEMPLATE_HELPER_B64="$(base64 -w0 "$RUNNER_TEMP/vrata-scene-rollback/staging-template-catalog.py")"
           # shellcheck disable=SC2087
           ssh -o StrictHostKeyChecking=no "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo bash -s" <<EOF
           set -euo pipefail
           cd "$STAGING_APP_DIR"
+          TEMPLATE_HELPER="\$(mktemp)"
+          printf '%s' '$TEMPLATE_HELPER_B64' | base64 -d > "\$TEMPLATE_HELPER"
+          python3 "\$TEMPLATE_HELPER" prepare --root "$STAGING_APP_DIR" --sha "$ROLLBACK_SHA"
+          rm -f "\$TEMPLATE_HELPER"
           git -c safe.directory="$STAGING_APP_DIR" checkout "$ROLLBACK_SHA"
           printf '%s' '${YCR_PASSWORD_B64}' | base64 -d | docker login cr.yandex --username '${YCR_USERNAME}' --password-stdin
           ROLLOUT_HELPER="\$(mktemp)"

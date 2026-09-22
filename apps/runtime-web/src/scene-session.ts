@@ -4,6 +4,8 @@ import { inspectSceneObject, type SceneDiagnosticsSnapshot } from "./scene-debug
 import type { SceneBundleManifest, SceneBundleRenderProfile, SceneBundleSpawnPoint } from "./scene-bundle.js";
 import { disposeSceneObject } from "./scene-dispose.js";
 import { loadSceneBundle } from "./scene-loader.js";
+import type { RoomTemplateSurface, SceneBundleIntegrity } from "@vrata/shared-types";
+import { assertTemplateSceneSurfaces } from "./template-layout.js";
 
 export interface SceneSessionResult {
   activeSceneBundleRoot: THREE.Object3D | null;
@@ -27,6 +29,8 @@ export async function startSceneBundleSession(input: {
   camera: THREE.Camera;
   renderer?: THREE.WebGLRenderer;
   bundleUrl: string;
+  integrity?: SceneBundleIntegrity;
+  requiredSurfaces?: RoomTemplateSurface[];
   requestedCleanSceneMode: boolean;
   sceneFitEnabled: boolean;
   previousSceneDebug: SceneDiagnosticsSnapshot;
@@ -42,6 +46,7 @@ export async function startSceneBundleSession(input: {
   try {
     const loadedScene = await (input.loadSceneBundleImpl ?? loadSceneBundle)({
       bundleUrl: input.bundleUrl,
+      ...(input.integrity ? { integrity: input.integrity } : {}),
       renderer: input.renderer,
       onLoadStage(stage) {
         input.previousSceneDebug.loadStage = stage;
@@ -52,6 +57,7 @@ export async function startSceneBundleSession(input: {
       }
     });
     candidateSceneRoot = loadedScene.group;
+    if (input.requiredSurfaces) assertTemplateSceneSurfaces(input.requiredSurfaces, loadedScene.manifest.mediaSurfaces);
     const effectiveCleanSceneMode = input.requestedCleanSceneMode || loadedScene.manifest.renderMode === "clean";
     input.applySceneMaterialDebugMode(loadedScene.group);
     const renderProfileStartedAt = performance.now();
@@ -112,6 +118,7 @@ export async function startSceneBundleSession(input: {
       note: "scene_bundle_loaded"
     };
   } catch (error) {
+    const reason = getFailureReason(error);
     if (candidateSceneRoot) {
       disposeSceneObject(candidateSceneRoot);
     }
@@ -127,7 +134,7 @@ export async function startSceneBundleSession(input: {
         ...input.previousSceneDebug,
         bundleUrl: input.bundleUrl,
         state: "failed",
-        failureReason: getFailureReason(error),
+        failureReason: reason,
         loadStage: input.previousSceneDebug.loadStage,
         assetBytesLoaded: input.previousSceneDebug.assetBytesLoaded,
         assetBytesExpected: input.previousSceneDebug.assetBytesExpected,
@@ -135,7 +142,9 @@ export async function startSceneBundleSession(input: {
         loadMs: null,
         renderProfileApplyMs: null
       },
-      brandingSuffix: "Scene bundle fallback active",
+      brandingSuffix: /checksum_mismatch|verified_scene|invalid_scene_integrity/.test(reason)
+        ? "Scene verification failed; fallback active"
+        : /template_surface|required_surface/.test(reason) ? "Template surface contract failed; fallback active" : "Scene bundle fallback active",
       note: "scene_bundle_failed"
     };
   }

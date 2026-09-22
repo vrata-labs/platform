@@ -2864,7 +2864,7 @@ test("room creation API rejects invalid template even with admin token", async (
   });
   expect(response.status()).toBe(400);
   const payload = await response.json();
-  expect(payload.error).toBe("invalid_template");
+  expect(payload.error).toBe("unknown_template");
 });
 
 test("diagnostics capture multi-client remote visibility", async ({ browser, request }) => {
@@ -3022,6 +3022,7 @@ test("control plane shows duplicate room slug validation", async ({ page }) => {
   await page.click("#create-room");
   await expect(page.locator("#publish-status")).toContainText("published");
 
+  await page.click("#new-room");
   await page.fill("#room-name-input", "Duplicate Room Two");
   await page.fill("#room-slug-input", roomSlug);
   await expect(page.locator("#room-validation-message")).toContainText("already exists");

@@ -54,6 +54,17 @@ test("production config validator accepts a complete production env", () => {
   assert.deepEqual(result, { ok: true, issues: [] });
 });
 
+test("optional reference mirror requires a safe HTTPS root without leaking values", () => {
+  assert.equal(validateProductionConfig(validProductionEnv({ ROOM_TEMPLATE_ASSET_BASE_URL: "https://assets.vrata-prod.com/mirror" })).ok, true);
+  assert.equal(validateProductionConfig(validProductionEnv({ ROOM_TEMPLATE_ASSET_BASE_URL: "" })).ok, true);
+  for (const value of ["http://assets.vrata-prod.com", "https://user:password@assets.vrata-prod.com", "https://assets.vrata-prod.com/a/../b", "https://assets.vrata-prod.com/?key=private", " https://assets.vrata-prod.com"]) {
+    const result = validateProductionConfig(validProductionEnv({ ROOM_TEMPLATE_ASSET_BASE_URL: value }));
+    assert.equal(result.ok, false);
+    assert(issueCodes(result).includes("invalid_template_asset_base_url"));
+    assert.equal(formatProductionConfigIssues(result.issues).join("\n").includes(value), false);
+  }
+});
+
 test("production config validator accepts TURN/TLS config with external TLS termination", () => {
   const result = validateProductionConfig(validProductionEnv({
     LIVEKIT_TURN_ENABLED: "true",

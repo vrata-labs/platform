@@ -70,6 +70,7 @@ export function createRuntimeDebugState<FeatureFlags extends Record<string, bool
 }: RuntimeDebugStateInput<FeatureFlags>) {
   return {
     participantId,
+    template: { id: null as string | null, version: null as string | null, sceneReleaseId: null as string | null, integrityRequired: false },
     mode: latestMode,
     remoteAvatarCount: 0,
     remoteAvatarReliableCount: 0,

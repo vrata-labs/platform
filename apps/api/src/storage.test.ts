@@ -63,7 +63,7 @@ function createPostgresInitPool(options: {
         return { rows: options.functionDefinition ? [structuredClone(options.functionDefinition)] : [] };
       } else if (normalized.includes("from pg_trigger t")) {
         return { rows: options.triggerDefinition ? [structuredClone(options.triggerDefinition)] : [] };
-      } else if (normalized.startsWith("insert into templates (template_id, label, asset_slots)")) {
+      } else if (normalized.startsWith("insert into templates (template_id, label, asset_slots")) {
         const [templateId, label, assetSlotsJson] = values as [string, string, string];
         if (!templates.has(templateId)) {
           templates.set(templateId, {
@@ -71,7 +71,7 @@ function createPostgresInitPool(options: {
             label,
             asset_slots: JSON.parse(assetSlotsJson) as string[],
             current_version: null,
-            status: null
+            status: normalized.includes("'deprecated'") ? "deprecated" : null
           });
         }
       } else if (normalized.startsWith("select template_id, label, asset_slots, current_version, status from templates")) {
@@ -277,7 +277,7 @@ test("MemoryStorage hides deprecated templates while preserving existing rooms",
   assert.equal(updated?.templateVersion, "0.1.0");
 });
 
-test("MemoryStorage snapshots resolved room config and ignores spoofed metadata", async () => {
+test("MemoryStorage snapshots resolved room config and rejects spoofed metadata", async () => {
   const storage = new MemoryStorage();
   const spoofedSnapshot = {
     schemaVersion: 1 as const,
@@ -300,6 +300,8 @@ test("MemoryStorage snapshots resolved room config and ignores spoofed metadata"
     }
   };
 
+  await assert.rejects(storage.createRoom({ templateId: "meeting-room-basic", templateSnapshot: spoofedSnapshot }), /server_owned_template_snapshot/);
+  await assert.rejects(storage.createRoom({ templateId: "meeting-room-basic", templateVersion: "9.9.9" }), /template_version_not_current/);
   const created = await storage.createRoom({
     roomId: "snapshot-room",
     templateId: "meeting-room-basic",
@@ -315,8 +317,7 @@ test("MemoryStorage snapshots resolved room config and ignores spoofed metadata"
       avatarFallbackCapsulesEnabled: true,
       avatarSeatsEnabled: false
     },
-    templateVersion: "9.9.9",
-    templateSnapshot: spoofedSnapshot
+    templateVersion: "0.1.0"
   });
 
   assert.equal(created.templateVersion, "0.1.0");
@@ -339,13 +340,13 @@ test("MemoryStorage snapshots resolved room config and ignores spoofed metadata"
   });
   assert.deepEqual(Object.keys(created.templateSnapshot).sort(), ["assetSlots", "label", "roomConfig", "schemaVersion", "templateId", "version"].sort());
 
+  await assert.rejects(storage.updateRoom(created.roomId, { templateSnapshot: spoofedSnapshot }), /server_owned_template_snapshot/);
+  await assert.rejects(storage.updateRoom(created.roomId, { templateVersion: "9.9.9" }), /template_change_not_supported/);
   const updated = await storage.updateRoom(created.roomId, {
     visibility: "private",
     guestAllowed: false,
     sceneBundleUrl: undefined,
-    features: { voice: false, spatialAudio: true, screenShare: false },
-    templateVersion: "9.9.9",
-    templateSnapshot: spoofedSnapshot
+    features: { voice: false, spatialAudio: true, screenShare: false }
   });
   assert.ok(updated);
   assert.equal(updated.templateVersion, "0.1.0");
@@ -394,7 +395,7 @@ test("MemoryStorage keeps a room pinned when its template current version advanc
 
   await assert.rejects(
     storage.updateRoom(pinned.roomId, { templateId: "showroom-basic" }),
-    /room_template_binding_changed/
+    /template_change_not_supported/
   );
   const afterRejectedSwitch = await storage.getRoom(pinned.roomId);
   assert.equal(afterRejectedSwitch?.templateId, "meeting-room-basic");
@@ -502,7 +503,7 @@ test("Postgres storage init adds session control column before altering its defa
   assert.match(fake.queries.at(-1)?.sql ?? "", /pg_advisory_unlock/);
 });
 
-test("Postgres storage init builds the nullable append-only template bridge", async () => {
+test("Postgres storage seeds inactive references and completes the append-only template bridge", async () => {
   const wave2Snapshot = {
     schemaVersion: 1 as const,
     templateId: "wave2-database-only-template",
@@ -537,7 +538,10 @@ test("Postgres storage init builds the nullable append-only template bridge", as
 
   await new PostgresStorage(fake.pool as unknown as ConstructorParameters<typeof PostgresStorage>[0]).init();
 
-  assert.equal(fake.versions.size, 6);
+  assert.equal(fake.versions.size, 12);
+  assert.equal(fake.templates.get("personal-room-basic")?.status, "deprecated");
+  assert.equal(fake.templates.get("presentation-room-basic")?.status, "deprecated");
+  assert.equal(fake.templates.get("personal-room-basic")?.current_version, "2.0.0");
   assert.deepEqual(fake.versions.get("database-only-template::0.1.0")?.snapshot, {
     schemaVersion: 1,
     templateId: "database-only-template",
@@ -556,7 +560,9 @@ test("Postgres storage init builds the nullable append-only template bridge", as
     "database-only-template",
     "event-demo-basic",
     "meeting-room-basic",
+    "personal-room-basic",
     "personal-workspace-basic",
+    "presentation-room-basic",
     "showroom-basic",
     "wave2-database-only-template"
   ]);
@@ -570,6 +576,7 @@ test("Postgres storage init builds the nullable append-only template bridge", as
   assert.match(sql, /constraint rooms_template_version_fkey/);
   assert.match(sql, /create trigger template_versions_immutable/);
   assert.match(sql, /before update or delete on template_versions/);
+  assert.match(sql, /alter table rooms alter column template_version set not null, alter column template_snapshot set not null/);
 
   const legacyInsert = fake.queries.find(({ sql: querySql }) => querySql.includes("insert into rooms (room_id, tenant_id, template_id, name"));
   assert.ok(legacyInsert);

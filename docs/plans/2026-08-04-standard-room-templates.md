@@ -41,6 +41,27 @@
 сцен → новая versioned template integration и Wave 2 rehearsal → guarded staging
 activation и автоматические сценарии → физические проверки владельцем.
 
+### Поставленные assets и интеграция Wave 2
+
+- Multi-repository contract опубликован platform PR #105,
+  `33c7485ffa1773105c496b43542ea53bf4c5ae9a`.
+- Personal `0.4.2` — `a5cfb79c478492632e639fd6704eee02f2306fbd`, Presentation
+  `0.4.2` — `f6661970535bb316642fcfc3c2c5df21b963ce30`: metadata-only releases с
+  разрешением пользователя от 2026-09-22 на основной выпуск, production и публичное
+  распространение. Принятые GLB/preview `0.4.1` побайтно сохранены.
+- Meeting shipping `0.3.4` — `a237ab799acbee3932846147c9f48bf1d1b4aaa8`,
+  11 576 640 bytes; 17 browser pairs совпали с принятой `0.3.3`. Геометрия,
+  восемь мест и обе поверхности сохранены; это не снижение decoded GPU memory.
+- Новые контракты имеют версию **2.0.0** для всех трёх templates. Таблицы `1.0.0`
+  ниже описывают исторический план, а не разрешение переписать старую definition.
+- [Контракт API, mirror и rollout](../reference-room-templates.md) описывает
+  реализуемую Wave 2 интеграцию. Состояние каталога переключается отдельно от
+  deployment; один и тот же проверенный image может быть Wave 2 baseline и image
+  внутренней staging-активации. При этом rollback возвращает его каталог в Wave 2.
+- Автоматический staging gate, активация основного каталога и physical-device
+  acceptance фиксируются отдельно после исполнения. Scene publication-ready и
+  product release не выводятся из одних лишь локальных проверок.
+
 ## Цель
 
 - Поставить три поддерживаемых reference template: `personal-room-basic`, `meeting-room-basic`, `presentation-room-basic`.

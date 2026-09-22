@@ -130,16 +130,9 @@ test("PostgresStorage upgrades legacy schema and preserves pinned template versi
     await pools[0].query(`
       insert into templates (template_id, label, asset_slots)
       values ('legacy-database-only', 'Legacy Database Only', '["logo"]'::jsonb);
-      insert into rooms (room_id, tenant_id, template_id, name, features)
-      values (
-        'legacy-database-only-room',
-        'legacy-tenant',
-        'legacy-database-only',
-        'Legacy Database Only Room',
-        '{"voice":true,"spatialAudio":false,"screenShare":false}'::jsonb
-      );
     `);
     await storages[0].init();
+    await storages[0].createRoom({ roomId: "legacy-database-only-room", tenantId: "legacy-tenant", templateId: "legacy-database-only", name: "Legacy Database Only Room", features: { voice: true, spatialAudio: false, screenShare: false } });
     const catalogWithLegacyRow = await storages[0].listTemplates();
     assert.deepEqual(catalogWithLegacyRow.map((template) => template.templateId), [...memoryTemplateIds, "legacy-database-only"]);
     assert.deepEqual(catalogWithLegacyRow.find((template) => template.templateId === "legacy-database-only"), {
@@ -207,11 +200,12 @@ test("PostgresStorage upgrades legacy schema and preserves pinned template versi
     assert.equal(triggerDefinition.rows[0]?.function_schema, schema);
     assert.match(triggerDefinition.rows[0]?.definition ?? "", /vrata_reject_template_version_mutation\(\)/);
 
-    await pools[0].query(
+    await assert.rejects(pools[0].query(
       `insert into rooms (room_id, tenant_id, template_id, name, features)
-       values ('old-shape-switch-room', 'legacy-tenant', 'meeting-room-basic', 'Old Shape Switch Room', $1::jsonb)`,
+       values ('pre-wave1-shape', 'legacy-tenant', 'meeting-room-basic', 'Unsupported Old Shape', $1::jsonb)`,
       [JSON.stringify({ voice: true, spatialAudio: false, screenShare: true })]
-    );
+    ), error => errorCode(error) === "23502");
+    await storages[0].createRoom({ roomId: "old-shape-switch-room", tenantId: "legacy-tenant", templateId: "meeting-room-basic", name: "Bridge Compatible Room", features: { voice: true, spatialAudio: false, screenShare: true } });
     await storages[0].init();
     for (const templateId of ["showroom-basic", "event-demo-basic", "personal-workspace-basic", "meeting-room-basic"]) {
       await pools[0].query(
@@ -236,11 +230,7 @@ test("PostgresStorage upgrades legacy schema and preserves pinned template versi
     assert.equal(switchedRoom?.templateSnapshot.templateId, "event-demo-basic");
     assert.deepEqual(switchedRoom?.templateSnapshot.roomConfig.features, { voice: false, spatialAudio: true, screenShare: false });
 
-    await pools[0].query(
-      `insert into rooms (room_id, tenant_id, template_id, name, features)
-       values ('old-shape-during-rollout', 'legacy-tenant', 'meeting-room-basic', 'Old Shape During Rollout', $1::jsonb)`,
-      [JSON.stringify({ voice: true, spatialAudio: true, screenShare: true })]
-    );
+    await storages[0].createRoom({ roomId: "old-shape-during-rollout", tenantId: "legacy-tenant", templateId: "meeting-room-basic", name: "Bridge During Rollout", features: { voice: true, spatialAudio: true, screenShare: true } });
     const rolloutRoom = await storages[0].getRoom("old-shape-during-rollout");
     assert.equal(rolloutRoom?.templateVersion, "0.1.0");
     const healedDuringPatch = await storages[0].updateRoom("old-shape-during-rollout", { name: "Healed During Patch" }, {
@@ -289,7 +279,7 @@ test("PostgresStorage upgrades legacy schema and preserves pinned template versi
     const rollbackBeforeNewVersion = await pools[0].query(
       `select exists(select 1 from template_versions where version <> '0.1.0') as forbidden`
     );
-    assert.equal(rollbackBeforeNewVersion.rows[0]?.forbidden, false);
+    assert.equal(rollbackBeforeNewVersion.rows[0]?.forbidden, true);
 
     const version020 = {
       schemaVersion: 1,
@@ -435,7 +425,7 @@ test("PostgresStorage upgrades legacy schema and preserves pinned template versi
         templateId: "meeting-room-basic",
         templateVersion: "0.2.0"
       }),
-      /room_template_binding_changed/
+      /template_change_not_supported/
     );
     const bindingAfterRejectedSwitch = await storages[0].getRoom(bindingGuardRoom.roomId);
     assert.equal(bindingAfterRejectedSwitch?.templateId, "meeting-room-basic");

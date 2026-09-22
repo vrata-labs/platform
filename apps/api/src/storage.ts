@@ -1,6 +1,6 @@
 import { initPostgresStorageWithRetry } from "./storage-init-retry.js";
 import { Pool, type PoolClient } from "pg";
-import { getTemplateVersion as getSeedTemplateVersion, listTemplateDefinitions } from "@vrata/templates";
+import { expectedReferenceCatalog, getTemplateVersion as getSeedTemplateVersion, listReferenceTemplateVersionContracts, listTemplateDefinitions, planReferenceCatalogTransition, PRODUCT_ROOM_TEMPLATE_IDS, PRODUCT_ROOM_TEMPLATE_VERSION, type ReferenceCatalogState, type TemplateCatalogPointer } from "@vrata/templates";
 import type { RoomTemplateStatus, RoomTemplateVersionSnapshotV1 } from "@vrata/shared-types";
 
 import type { SceneBundleCreateInput, SceneBundleRecord } from "./scene-bundle-storage.js";
@@ -48,6 +48,8 @@ import type {
 } from "./storage-contracts.js";
 
 import { ensureNamedForeignKey, installTemplateVersionImmutabilityTrigger } from "./storage-postgres-guards.js";
+import { assertRoomTemplatePatch, materializeStoredRoomInput } from "./room-template-policy.js";
+import { transitionPostgresReferenceCatalog } from "./storage-template-catalog.js";
 
 export { initPostgresStorageWithRetry } from "./storage-init-retry.js";
 
@@ -103,7 +105,10 @@ const defaultTemplateVersions = seedTemplateDefinitions.map((definition) => {
   if (!snapshot) throw new Error(`missing_seed_template_version:${definition.id}@${definition.version}`);
   return snapshot;
 });
-const seedTemplateOrder = new Map(seedTemplateDefinitions.map((definition, index) => [definition.id, index]));
+const referenceTemplateVersions = listReferenceTemplateVersionContracts();
+const referenceParents = referenceTemplateVersions.filter(version => version.version === PRODUCT_ROOM_TEMPLATE_VERSION && !defaultTemplates.some(template => template.templateId === version.templateId))
+  .map(version => ({ templateId: version.templateId, label: version.label, assetSlots: [...version.assetSlots], currentVersion: version.version, status: "deprecated" as const }));
+const seedTemplateOrder = new Map([...PRODUCT_ROOM_TEMPLATE_IDS, ...seedTemplateDefinitions.map(definition => definition.id).filter(id => !PRODUCT_ROOM_TEMPLATE_IDS.includes(id as typeof PRODUCT_ROOM_TEMPLATE_IDS[number]))].map((id, index) => [id, index]));
 
 function sortTemplateRecords<T extends { templateId: string }>(records: T[]): T[] {
   return records.sort((left, right) => {
@@ -154,8 +159,8 @@ function createDefaultDemoRoom(): RoomRecord {
 
 export class MemoryStorage implements Storage {
   private tenants = new Map<string, TenantRecord>([["demo-tenant", { tenantId: "demo-tenant", name: "Demo Tenant" }]]);
-  private templates = new Map<string, TemplateRecord>(defaultTemplates.map((item) => [item.templateId, structuredClone(item)]));
-  private templateVersions = new Map<string, RoomTemplateVersionSnapshotV1>(defaultTemplateVersions.map((item) => [templateVersionKey(item.templateId, item.version), structuredClone(item)]));
+  private templates = new Map<string, TemplateRecord>([...defaultTemplates, ...referenceParents].map((item) => [item.templateId, structuredClone(item)]));
+  private templateVersions = new Map<string, RoomTemplateVersionSnapshotV1>([...defaultTemplateVersions, ...referenceTemplateVersions].map((item) => [templateVersionKey(item.templateId, item.version), structuredClone(item)]));
   private assets = new Map<string, AssetRecord>();
   private roomDocuments = new Map<string, RoomDocumentRecord>();
   private rooms = new Map<string, RoomRecord>([
@@ -225,6 +230,17 @@ export class MemoryStorage implements Storage {
     const snapshot = this.templateVersions.get(templateVersionKey(templateId, resolvedVersion));
     return snapshot ? structuredClone(snapshot) : null;
   }
+  async transitionReferenceTemplateCatalog(target: ReferenceCatalogState): Promise<TemplateCatalogPointer[]> {
+    const catalog = [...this.templates.values()].map(({ templateId, currentVersion, status }) => ({ templateId, currentVersion, status }));
+    const changes = planReferenceCatalogTransition(catalog, target);
+    for (const pointer of expectedReferenceCatalog(target)) {
+      const expected = pointer.currentVersion === "0.1.0" ? getSeedTemplateVersion(pointer.templateId, pointer.currentVersion)
+        : referenceTemplateVersions.find(version => version.templateId === pointer.templateId && version.version === pointer.currentVersion);
+      if (!expected || stableJson(this.requireTemplateVersion(pointer.templateId, pointer.currentVersion)) !== stableJson(expected)) throw new Error("template_catalog_definition_mismatch");
+    }
+    for (const pointer of changes) this.templates.set(pointer.templateId, { ...this.templates.get(pointer.templateId)!, ...pointer });
+    return [...this.templates.values()].map(({ templateId, currentVersion, status }) => ({ templateId, currentVersion, status }));
+  }
   async listAssets(): Promise<AssetRecord[]> { return Array.from(this.assets.values()); }
   async listRooms(): Promise<RoomRecord[]> { return Array.from(this.rooms.values(), (room) => structuredClone(room)); }
   async getRoom(roomId: string): Promise<RoomRecord | null> {
@@ -232,6 +248,9 @@ export class MemoryStorage implements Storage {
     return room ? structuredClone(room) : null;
   }
   async createRoom(input: Partial<RoomRecord>): Promise<RoomRecord> {
+    const templateId = input.templateId ?? (input.roomType === "personal" ? "personal-workspace-basic" : "meeting-room-basic");
+    const versionSnapshot = this.requireActiveTemplateVersion(templateId);
+    input = materializeStoredRoomInput(versionSnapshot, input);
     const roomType = defaultRoomType(input.roomType);
     const roomWithoutTemplateMetadata: RoomRecordWithoutTemplateMetadata = {
       roomId: input.roomId ?? crypto.randomUUID(),
@@ -260,7 +279,7 @@ export class MemoryStorage implements Storage {
       sessionControl: defaultSessionControl(input.sessionControl),
       personalState: defaultPersonalState(input.personalState)
     };
-    const room = bindRoomTemplateMetadata(roomWithoutTemplateMetadata, this.requireActiveTemplateVersion(roomWithoutTemplateMetadata.templateId));
+    const room = bindRoomTemplateMetadata(roomWithoutTemplateMetadata, versionSnapshot);
     this.rooms.set(room.roomId, structuredClone(room));
     return structuredClone(room);
   }
@@ -269,6 +288,7 @@ export class MemoryStorage implements Storage {
     if (!existing) {
       return null;
     }
+    assertRoomTemplatePatch(existing, input);
     if (
       expectedTemplateBinding
       && (existing.templateId !== expectedTemplateBinding.templateId || existing.templateVersion !== expectedTemplateBinding.templateVersion)
@@ -877,6 +897,9 @@ export class PostgresStorage implements Storage {
     await this.synchronizeTemplateCatalog(client);
     await this.repairRoomTemplateMetadata(client);
     await this.addTemplateVersionConstraints(client);
+    const incomplete = await client.query("select 1 from rooms where template_version is null or template_snapshot is null limit 1");
+    if (incomplete.rows.length > 0) throw new Error("incomplete_room_template_backfill");
+    await client.query("alter table rooms alter column template_version set not null, alter column template_snapshot set not null");
     await installTemplateVersionImmutabilityTrigger(client);
   }
 
@@ -888,6 +911,11 @@ export class PostgresStorage implements Storage {
         [template.templateId, template.label, JSON.stringify(template.assetSlots)]
       );
     }
+    for (const template of referenceParents) {
+      await client.query("insert into templates (template_id, label, asset_slots, status) values ($1,$2,$3::jsonb,'deprecated') on conflict do nothing", [template.templateId, template.label, JSON.stringify(template.assetSlots)]);
+    }
+    for (const version of referenceTemplateVersions) await this.ensureTemplateVersion(client, version);
+    for (const template of referenceParents) await client.query("update templates set current_version = coalesce(current_version, $2) where template_id = $1", [template.templateId, template.currentVersion]);
     const templateRows = await client.query(`select template_id, label, asset_slots, current_version, status from templates order by template_id`);
     const seedVersionsByTemplateId = new Map(defaultTemplateVersions.map((snapshot) => [snapshot.templateId, snapshot]));
     for (const row of templateRows.rows as Array<{ template_id: string; label: string; asset_slots: string[]; current_version: string | null; status: string | null }>) {
@@ -1181,6 +1209,9 @@ export class PostgresStorage implements Storage {
     }
     return parseStoredTemplateVersion(row);
   }
+  async transitionReferenceTemplateCatalog(target: ReferenceCatalogState): Promise<TemplateCatalogPointer[]> {
+    return transitionPostgresReferenceCatalog(this.pool, target);
+  }
   async listAssets(): Promise<AssetRecord[]> {
     const result = await this.pool.query(`select asset_id, tenant_id, kind, url, validation_status, processed_url from assets order by asset_id desc`);
     return result.rows.map((row: { asset_id: string; tenant_id: string; kind: string; url: string; validation_status: "pending" | "validated" | "rejected"; processed_url: string | null }) => ({
@@ -1224,6 +1255,9 @@ export class PostgresStorage implements Storage {
     return row ? mapRoomRow(row) : null;
   }
   async createRoom(input: Partial<RoomRecord>): Promise<RoomRecord> {
+    const templateId = input.templateId ?? (input.roomType === "personal" ? "personal-workspace-basic" : "meeting-room-basic");
+    const versionSnapshot = await this.requireActiveTemplateVersion(templateId);
+    input = materializeStoredRoomInput(versionSnapshot, input);
     const roomType = defaultRoomType(input.roomType);
     const roomWithoutTemplateMetadata: RoomRecordWithoutTemplateMetadata = {
       roomId: input.roomId ?? crypto.randomUUID(),
@@ -1252,14 +1286,14 @@ export class PostgresStorage implements Storage {
       sessionControl: defaultSessionControl(input.sessionControl),
       personalState: defaultPersonalState(input.personalState)
     };
-    const versionSnapshot = await this.requireActiveTemplateVersion(roomWithoutTemplateMetadata.templateId);
     const room = bindRoomTemplateMetadata(roomWithoutTemplateMetadata, versionSnapshot);
     const result = await this.pool.query(
       `insert into rooms (room_id, tenant_id, template_id, name, room_type, owner_participant_id, status, disabled_at, disabled_by, visibility, scene_bundle_url, features, asset_ids, theme, guest_allowed, avatar_config, session_control, personal_state, template_version, template_snapshot)
        select $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13::jsonb,$14::jsonb,$15,$16::jsonb,$17::jsonb,$18::jsonb,$19,$20::jsonb
        where exists (
          select 1 from templates t
-         where t.template_id = $3 and coalesce(t.status, 'active') = 'active' and t.current_version = $19
+          where t.template_id = $3 and coalesce(t.status, 'active') = 'active' and t.current_version = $19
+          for share
        )`,
       [room.roomId, room.tenantId, room.templateId, room.name, room.roomType, room.ownerParticipantId ?? null, room.status, room.disabledAt ?? null, room.disabledBy ?? null, room.visibility, room.sceneBundleUrl ?? null, JSON.stringify(room.features), JSON.stringify(room.assetIds), JSON.stringify(room.theme), room.guestAllowed, JSON.stringify(room.avatarConfig), JSON.stringify(room.sessionControl), JSON.stringify(room.personalState), room.templateVersion, JSON.stringify(room.templateSnapshot)]
     );
@@ -1271,6 +1305,7 @@ export class PostgresStorage implements Storage {
     if (!existing) {
       return null;
     }
+    assertRoomTemplatePatch(existing, input);
     if (
       expectedTemplateBinding
       && (existing.templateId !== expectedTemplateBinding.templateId || existing.templateVersion !== expectedTemplateBinding.templateVersion)

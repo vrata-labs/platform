@@ -5,6 +5,9 @@ build/
 .turbo/
 .cache/
 .scene-assets/
+.reference-scene-assets/
+.template-rollback/
+infra/docker/.template-wave2-rollback-sha
 .DS_Store
 .env
 .env.local

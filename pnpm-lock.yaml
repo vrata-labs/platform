@@ -53,6 +53,10 @@ importers:
         version: 8.20.0
 
   apps/control-plane:
+    dependencies:
+      '@vrata/shared-types':
+        specifier: workspace:*
+        version: link:../../packages/shared-types
     devDependencies:
       vite:
         specifier: ^6.4.1

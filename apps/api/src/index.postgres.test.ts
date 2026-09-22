@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 
 import { Pool } from "pg";
+import { PostgresStorage } from "./storage.js";
 
 const postgresUrl = process.env.VRATA_TEST_POSTGRES_URL;
 const postgresSkipReason = "VRATA_TEST_POSTGRES_URL is not set; skipping PostgreSQL API integration test";
@@ -105,6 +106,13 @@ test("API serves server-owned template metadata through PostgreSQL storage", {
       { templateId: "personal-workspace-basic", currentVersion: "0.1.0", status: "active" }
     ]);
 
+    const headers = { "content-type": "application/json", "x-vrata-admin-token": "postgres-api-test-admin" };
+    const spoofed = await fetch(`${baseUrl}/api/rooms`, {
+      method: "POST", headers,
+      body: JSON.stringify({ tenantId: "demo-tenant", templateId: "meeting-room-basic", name: "Spoofed room", templateSnapshot: { version: "9.9.9" } })
+    });
+    assert.equal(spoofed.status, 400);
+    assert.deepEqual(await spoofed.json(), { error: "server_owned_template_snapshot" });
     const createResponse = await fetch(`${baseUrl}/api/rooms`, {
       method: "POST",
       headers: {
@@ -115,8 +123,7 @@ test("API serves server-owned template metadata through PostgreSQL storage", {
         roomId: "postgres-template-room",
         tenantId: "demo-tenant",
         templateId: "meeting-room-basic",
-        templateVersion: "9.9.9",
-        templateSnapshot: { templateId: "spoofed", version: "9.9.9" },
+        templateVersion: "0.1.0",
         name: "PostgreSQL Template Room",
         visibility: "unlisted"
       })
@@ -167,8 +174,8 @@ test("API serves server-owned template metadata through PostgreSQL storage", {
         name: "Rejected Deprecated Template Room"
       })
     });
-    assert.equal(deprecatedCreateResponse.status, 400);
-    assert.deepEqual(await deprecatedCreateResponse.json(), { error: "invalid_template" });
+    assert.equal(deprecatedCreateResponse.status, 409);
+    assert.deepEqual(await deprecatedCreateResponse.json(), { error: "deprecated_template" });
 
     const existingDeprecatedUpdateResponse = await fetch(`${baseUrl}/api/rooms/postgres-template-room`, {
       method: "PATCH",
@@ -193,7 +200,7 @@ test("API serves server-owned template metadata through PostgreSQL storage", {
       body: JSON.stringify({ templateId: "event-demo-basic" })
     });
     assert.equal(rebindResponse.status, 409);
-    assert.deepEqual(await rebindResponse.json(), { error: "room_template_binding_changed" });
+    assert.deepEqual(await rebindResponse.json(), { error: "template_change_not_supported" });
     const bindingAfterRejectedRebind = await adminPool.query(
       `select template_id, template_version from "${schema}".rooms where room_id = 'postgres-template-room'`
     );
@@ -216,6 +223,40 @@ test("API serves server-owned template metadata through PostgreSQL storage", {
       `select count(*)::integer as count from "${schema}".rooms where owner_participant_id = 'postgres-personal-template-unavailable'`
     );
     assert.equal(unavailablePersonalRoomCount.rows[0]?.count, 0);
+
+    await adminPool.query(`update "${schema}".templates set status = 'active' where template_id in ('meeting-room-basic', 'personal-workspace-basic')`);
+    const referencePool = new Pool({ connectionString: connectionUrl.toString() });
+    try {
+      const storage = new PostgresStorage(referencePool);
+      await storage.transitionReferenceTemplateCatalog("active");
+      const catalog = await (await fetch(`${baseUrl}/api/templates`)).json() as { items: Array<{ templateId: string; currentVersion: string; previewUrl: string }> };
+      assert.deepEqual(catalog.items.map(row => row.templateId), ["personal-room-basic", "meeting-room-basic", "presentation-room-basic"]);
+      assert(catalog.items.every(row => row.currentVersion === "2.0.0" && row.previewUrl.startsWith("https://cdn.jsdelivr.net/gh/")));
+      for (const [extra, code, status] of [
+        [{ templateVersion: "broken" }, "invalid_template_version", 400],
+        [{ templateVersion: "9.9.9" }, "unknown_template_version", 400],
+        [{ templateVersion: "0.1.0" }, "template_version_not_current", 409],
+        [{ sceneBundleUrl: null }, "reference_scene_override_not_allowed", 409],
+        [{ templateId: "personal-room-basic", ownerParticipantId: "owner-ref", visibility: "public" }, "personal_room_must_be_private", 400],
+        [{ templateId: "personal-room-basic", ownerParticipantId: "owner-ref", guestAllowed: true }, "personal_room_guest_access_forbidden", 400]
+      ] as const) {
+        const response = await fetch(`${baseUrl}/api/rooms`, { method: "POST", headers, body: JSON.stringify({ tenantId: "demo-tenant", templateId: "meeting-room-basic", name: "Reference input", ...extra }) });
+        assert.equal(response.status, status);
+        assert.deepEqual(await response.json(), { error: code });
+      }
+      const personalResponse = await fetch(`${baseUrl}/api/personal-room`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ participantId: "postgres-reference-owner" }) });
+      assert.equal(personalResponse.status, 201);
+      const personal = await personalResponse.json() as { room: { roomId: string; templateVersion: string; visibility: string; guestAllowed: boolean } };
+      assert.equal(personal.room.templateVersion, "2.0.0");
+      assert.equal(personal.room.visibility, "private");
+      assert.equal(personal.room.guestAllowed, false);
+      for (const body of [{ ownerParticipantId: "other-owner" }, { templateVersion: "0.1.0" }, { sceneBundleUrl: null }]) {
+        const response = await fetch(`${baseUrl}/api/rooms/${personal.room.roomId}`, { method: "PATCH", headers, body: JSON.stringify(body) });
+        assert.equal(response.status, 409);
+      }
+      await storage.transitionReferenceTemplateCatalog("wave2");
+      assert.equal((await storage.getRoom(personal.room.roomId))?.templateVersion, "2.0.0");
+    } finally { await referencePool.end(); }
   } finally {
     if (child) await stopChild(child);
     await adminPool.query(`drop schema if exists "${schema}" cascade`);

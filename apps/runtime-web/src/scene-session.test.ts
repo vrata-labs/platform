@@ -112,3 +112,37 @@ test("startSceneBundleSession rolls back attached scene resources and render sta
   assert.deepEqual(renderProfiles, ["neutral-pbr", undefined]);
   assert.deepEqual(cleanModes, [true, false]);
 });
+
+test("a reference surface mismatch disposes its candidate before mount or spawn", async () => {
+  const scene = new THREE.Scene();
+  const group = new THREE.Group();
+  const geometry = new THREE.BoxGeometry();
+  const material = new THREE.MeshStandardMaterial();
+  let disposed = 0;
+  geometry.addEventListener("dispose", () => disposed++);
+  material.addEventListener("dispose", () => disposed++);
+  group.add(new THREE.Mesh(geometry, material));
+  let fallback = false;
+  const result = await startSceneBundleSession({
+    scene, camera: new THREE.PerspectiveCamera(), bundleUrl: "https://example.com/scene.json",
+    requiredSurfaces: [{ surfaceId: "workspace-main", label: "Workspace", purpose: "workspace", allowedObjectTypes: ["markdown-board"] }],
+    requestedCleanSceneMode: false, sceneFitEnabled: false, previousSceneDebug: createEmptySceneDiagnostics(),
+    applySceneMaterialDebugMode() { assert.fail("must not apply materials"); },
+    applySceneRenderProfile(profile, root) { assert.equal(profile, undefined); assert.equal(root, null); },
+    applyCleanSceneMode() {}, applySceneDebugFit() {},
+    applySpawnPoint() { assert.fail("must not move the player"); },
+    setFallbackEnvironmentVisible(visible) { fallback = visible; },
+    async loadSceneBundleImpl() {
+      return {
+        manifest: { schemaVersion: 1, sceneId: "fixture", label: "Fixture", source: "test", glbPath: "scene.glb", spawnPoints: [] },
+        group, spawnPointApplied: false, spawnPointId: null, spawnPoint: null,
+        assetUrl: "https://example.com/scene.glb", assetType: "glb", loadMs: 1, missingAssets: []
+      };
+    }
+  });
+  assert.equal(result.sceneBundleState, "failed");
+  assert.match(result.sceneDebug.failureReason!, /missing_template_surface/);
+  assert.equal(disposed, 2);
+  assert.equal(scene.children.length, 0);
+  assert.equal(fallback, true);
+});
