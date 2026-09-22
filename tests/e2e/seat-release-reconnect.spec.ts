@@ -1,6 +1,7 @@
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 import { inlineSceneBundleUrl } from "./scene-bundle-fixtures.js";
 import type { RuntimeTestApi } from "../../apps/runtime-web/src/testing/runtime-test-api.js";
+import { createLegacyStagingRoom, releaseLegacyStagingRoom } from "./staging-legacy-room";
 
 async function seatState(page: Page) {
   return page.evaluate(() => {
@@ -17,7 +18,7 @@ async function verifyReleaseOnReconnect(page: Page, request: APIRequestContext, 
   const source = inlineSceneBundleUrl({ sceneId: "seat-release-reconnect", label: "Seat reconnect regression" });
   const manifest = JSON.parse(decodeURIComponent(source.slice(source.indexOf(",") + 1)));
   manifest.anchors = { teleportFloorY: 0, seatAnchors: [{ id: "seat-a", position: { x: 0, y: 0, z: 1 }, seatHeight: .48, yaw: 0, radius: .35 }] };
-  const created = await request.post("/api/rooms", { headers, data: {
+  const created = await createLegacyStagingRoom(request, "seat-reconnect", { headers, data: {
     tenantId: "demo-tenant", templateId: "personal-workspace-basic", name: "Seat reconnect regression", guestAllowed: true,
     sceneBundleUrl: `data:application/json,${encodeURIComponent(JSON.stringify(manifest))}`,
     avatarConfig: { avatarsEnabled: true, avatarSeatsEnabled: true, avatarFallbackCapsulesEnabled: false }
@@ -84,7 +85,7 @@ async function verifyReleaseOnReconnect(page: Page, request: APIRequestContext, 
   } finally {
     await observer.close();
     await page.goto("about:blank");
-    expect((await request.delete(`/api/rooms/${roomId}`, { headers })).ok()).toBe(true);
+    expect((await releaseLegacyStagingRoom(request, roomId, { headers })).ok()).toBe(true);
   }
 }
 

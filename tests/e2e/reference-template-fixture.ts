@@ -63,7 +63,6 @@ export async function startReferenceTemplateFixture(postgresUrl: string) {
   try {
     await admin.query(`create schema "${schema}"`);
     storage = new PostgresStorage(pool); await storage.init();
-    await storage.transitionReferenceTemplateCatalog("active");
     start("apps/room-state/dist/index.js"); start("apps/api/dist/index.js");
     const ready = async (url: string) => {
       for (let attempt = 0; attempt < 100; attempt++) {
@@ -74,6 +73,9 @@ export async function startReferenceTemplateFixture(postgresUrl: string) {
       throw new Error(`reference_fixture_not_ready:${log}`);
     };
     await ready(`${origin}/health`); await ready(`${stateOrigin}/health`);
+    const { seedStagingTemplateFixtures } = await import(pathToFileURL(resolve("tools/seed-staging-template-fixtures.mjs")).href);
+    await seedStagingTemplateFixtures(origin, "test-admin-token");
+    await storage.transitionReferenceTemplateCatalog("active");
   } catch (error) {
     await Promise.all(children.map(stop)); await pool.end();
     await admin.query(`drop schema if exists "${schema}" cascade`); await admin.end();

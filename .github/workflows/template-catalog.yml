@@ -1,0 +1,116 @@
+name: Staging Template Catalog
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: "Activate three reference templates or restore the verified Wave 2 catalog"
+        type: choice
+        options: [activate, rollback]
+        required: true
+      expected_image_sha:
+        description: "Exact currently deployed and verified image SHA"
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: staging-deploy
+  cancel-in-progress: false
+
+jobs:
+  catalog:
+    runs-on: ubuntu-latest
+    env:
+      EXPECTED_SHA: ${{ inputs.expected_image_sha }}
+      OPERATION: ${{ inputs.operation }}
+      STAGING_SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
+      STAGING_SSH_USER: ${{ secrets.STAGING_SSH_USER }}
+      STAGING_APP_DIR: ${{ secrets.STAGING_APP_DIR }}
+      BASE_URL: ${{ secrets.STAGING_BASE_URL }}
+      STAGING_ADMIN_TOKEN: ${{ secrets.STAGING_ADMIN_TOKEN }}
+      STAGING_SCENE_BUNDLE_VERSION: ${{ inputs.expected_image_sha }}
+      PLAYWRIGHT_NO_WEB_SERVER: "1"
+      PLAYWRIGHT_REPORT_NAME: reference-catalog-staging
+    steps:
+      - name: Validate immutable target
+        run: |
+          [[ "$EXPECTED_SHA" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$OPERATION" == activate || "$OPERATION" == rollback ]]
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.expected_image_sha }}
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.STAGING_SSH_KEY }}
+
+      - name: Install dependencies and browser
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm exec playwright install --with-deps chromium
+
+      - name: Retain pre-activation legacy regression fixtures
+        if: inputs.operation == 'activate'
+        run: node tools/seed-staging-template-fixtures.mjs
+
+      - name: Guarded catalog transition
+        id: transition
+        run: |
+          HELPER_B64="$(base64 -w0 tools/staging-template-catalog.py)"
+          # shellcheck disable=SC2087
+          ssh -o StrictHostKeyChecking=no "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo bash -s" <<EOF
+          set -euo pipefail
+          HELPER="\$(mktemp)"
+          trap 'rm -f "\$HELPER"' EXIT
+          printf '%s' '$HELPER_B64' | base64 -d > "\$HELPER"
+          python3 "\$HELPER" "$OPERATION" --root "$STAGING_APP_DIR" --sha "$EXPECTED_SHA"
+          EOF
+
+      - name: Active catalog and full public staging gate
+        if: inputs.operation == 'activate'
+        env:
+          VRATA_REFERENCE_CATALOG_ACTIVE: "1"
+        run: pnpm test:e2e:staging -- --workers=1
+
+      - name: Restore Wave 2 on request or failed acceptance
+        id: rollback
+        if: ${{ !cancelled() && (steps.transition.outcome == 'failure' || (steps.transition.outcome == 'success' && (inputs.operation == 'rollback' || failure()))) }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          HELPER_B64="$(base64 -w0 tools/staging-template-catalog.py)"
+          # shellcheck disable=SC2087
+          ssh -o StrictHostKeyChecking=no "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo bash -s" <<EOF
+          set -euo pipefail
+          HELPER="\$(mktemp)"
+          trap 'rm -f "\$HELPER"' EXIT
+          printf '%s' '$HELPER_B64' | base64 -d > "\$HELPER"
+          python3 "\$HELPER" rollback --root "$STAGING_APP_DIR" --sha "$EXPECTED_SHA"
+          EOF
+          # Read only the immutable, non-secret marker from the host.
+          ROLLBACK_SHA="$(ssh -o StrictHostKeyChecking=no "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo cat '$STAGING_APP_DIR/infra/docker/.template-wave2-rollback-sha'")"
+          [[ "$ROLLBACK_SHA" =~ ^[a-f0-9]{40}$ ]]
+          curl --fail --silent "$BASE_URL/health" >/dev/null
+          echo "Catalog restored to Wave 2; image target: $ROLLBACK_SHA" >> "$GITHUB_STEP_SUMMARY"
+          # This deploy starts after the shared concurrency group is released.
+          gh workflow run staging-deploy.yml --ref main -f deploy_sha="$ROLLBACK_SHA"
+
+      - name: Upload acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reference-catalog-${{ github.run_id }}
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 14
+          if-no-files-found: ignore

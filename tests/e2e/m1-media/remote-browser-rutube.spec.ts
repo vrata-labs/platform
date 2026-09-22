@@ -74,7 +74,8 @@ async function createTemporaryBlueOfficeRoom(request: APIRequestContext): Promis
   const manifest = await manifestResponse.json() as { sceneBundle?: { url?: string } };
   expect(manifest.sceneBundle?.url).toBeTruthy();
 
-  const createRoomResponse = await request.post("/api/rooms", {
+  const key = test.info().title.includes("@rutube-canary") ? "rutube-canary" : test.info().title.includes("@rutube-full") ? "rutube-full" : "remote-browser-demo";
+  const createRoomResponse = await createLegacyStagingRoom(request, key, {
     headers: {
       "x-vrata-admin-token": stagingAdminToken
     },
@@ -94,7 +95,7 @@ async function createTemporaryBlueOfficeRoom(request: APIRequestContext): Promis
 }
 
 async function deleteTemporaryRoom(request: APIRequestContext, roomId: string): Promise<void> {
-  const deleteResponse = await request.delete(`/api/rooms/${roomId}`, {
+  const deleteResponse = await releaseLegacyStagingRoom(request, roomId, {
     headers: {
       "x-vrata-admin-token": stagingAdminToken
     },
@@ -648,3 +649,4 @@ test("@staging @private-assets remote browser default demo renders visible viewp
     }
   }
 });
+import { createLegacyStagingRoom, releaseLegacyStagingRoom } from "../staging-legacy-room";

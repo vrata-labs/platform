@@ -132,6 +132,13 @@ try {
   const { envFiles, playwrightArgs } = parseArgs(process.argv.slice(2));
   const loaded = loadEnvFiles(envFileCandidates(envFiles));
   ensureStagingEnv();
+  const catalogResponse = await fetch(new URL("/api/templates", process.env.BASE_URL), { signal: AbortSignal.timeout(15000) });
+  if (!catalogResponse.ok) throw new Error("staging_template_catalog_unavailable");
+  const catalog = await catalogResponse.json();
+  const active = ["personal-room-basic", "meeting-room-basic", "presentation-room-basic"];
+  const referenceActive = catalog.items?.length === 3 && active.every(id => catalog.items.some(row => row.templateId === id && row.currentVersion === "2.0.0"));
+  if (process.env.VRATA_REFERENCE_CATALOG_ACTIVE === "1" && !referenceActive) throw new Error("staging_reference_catalog_not_active");
+  process.env.VRATA_REFERENCE_CATALOG_ACTIVE = referenceActive ? "1" : "0";
 
   if (loaded.length > 0) {
     console.log(`Loaded staging e2e env from: ${loaded.join(", ")}`);

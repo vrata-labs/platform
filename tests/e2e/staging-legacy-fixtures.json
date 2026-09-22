@@ -1,0 +1,16 @@
+{
+  "pdf": "meeting-room-basic",
+  "documents": "meeting-room-basic",
+  "voice": "meeting-room-basic",
+  "selector": "showroom-basic",
+  "avatar": "meeting-room-basic",
+  "presence": "meeting-room-basic",
+  "hall-seat": "meeting-room-basic",
+  "office-telemetry": "meeting-room-basic",
+  "vr-observer": "meeting-room-basic",
+  "normal-product": "personal-workspace-basic",
+  "seat-reconnect": "personal-workspace-basic",
+  "rutube-canary": "meeting-room-basic",
+  "rutube-full": "meeting-room-basic",
+  "remote-browser-demo": "meeting-room-basic"
+}

@@ -1,12 +1,14 @@
 import { expect, test, observeScenePage, type APIRequestContext, type Page } from "./scene-network-fixture";
 import { PDFDocument, rgb } from "pdf-lib";
 import { expectSceneRoomReady, type ExpectedBundleUrl } from "./scene-room-acceptance";
+import { createLegacyStagingRoom, releaseLegacyStagingRoom, disableRetainedStagingRooms } from "./staging-legacy-room";
 
 const stagingRoomId = process.env.STAGING_ROOM_ID ?? "demo-room";
 const stagingAdminToken = process.env.STAGING_ADMIN_TOKEN ?? "vrata-stage-admin";
 const stagingBaseUrl = process.env.BASE_URL ?? "https://158.160.10.234.sslip.io";
 const stagingAssetBaseUrl = process.env.STAGING_ASSET_BASE_URL ?? `${new URL(stagingBaseUrl).protocol}//state.${new URL(stagingBaseUrl).host}`;
 const stagingSceneBundleVersion = process.env.STAGING_SCENE_BUNDLE_VERSION;
+test.afterEach(async ({ request }) => disableRetainedStagingRooms(request, stagingAdminToken));
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -282,7 +284,7 @@ test.describe("@staging runtime HUD space selector", () => {
 
   test("PDF presentation renders, changes page, and restores current page for late join", async ({ page, request, baseURL }) => {
     test.setTimeout(180000);
-    const createRoomResponse = await request.post("/api/rooms", {
+    const createRoomResponse = await createLegacyStagingRoom(request, "pdf", {
       headers: { "x-vrata-admin-token": stagingAdminToken },
       data: {
         tenantId: "demo-tenant",
@@ -337,7 +339,7 @@ test.describe("@staging runtime HUD space selector", () => {
 
   test("image and video surfaces render and restore synchronized playback", async ({ page, request, baseURL }) => {
     test.setTimeout(180000);
-    const createRoomResponse = await request.post("/api/rooms", {
+    const createRoomResponse = await createLegacyStagingRoom(request, "documents", {
       headers: { "x-vrata-admin-token": stagingAdminToken },
       data: { tenantId: "demo-tenant", templateId: "meeting-room-basic", name: `Staging document media ${Date.now()}` }
     });
@@ -463,7 +465,7 @@ test.describe("@staging runtime HUD space selector", () => {
     let roomId: string | null = null;
 
     try {
-      const createRoomResponse = await request.post("/api/rooms", {
+      const createRoomResponse = await createLegacyStagingRoom(request, "voice", {
         headers: {
           "x-vrata-admin-token": stagingAdminToken
         },
@@ -691,7 +693,7 @@ test.describe("@staging runtime HUD space selector", () => {
       }
     } finally {
       if (roomId) {
-        const deleteResponse = await request.delete(`/api/rooms/${roomId}`, {
+        const deleteResponse = await releaseLegacyStagingRoom(request, roomId, {
           headers: {
             "x-vrata-admin-token": stagingAdminToken
           }
@@ -724,11 +726,11 @@ test.describe("@staging runtime HUD space selector", () => {
     expect(manifest.avatars?.avatarPoseBinaryEnabled).toBe(true);
   });
 
-  test("selector switches to a freshly created staging target room", async ({ page, baseURL, request }) => {
+  test("selector switches to an isolated staging target room", async ({ page, baseURL, request }) => {
     const targetName = `Staging Selector Target ${Date.now()}`;
     let targetRoomId: string | null = null;
     try {
-      const createRoomResponse = await request.post("/api/rooms", {
+      const createRoomResponse = await createLegacyStagingRoom(request, "selector", {
         headers: {
           "x-vrata-admin-token": stagingAdminToken
         },
@@ -783,7 +785,7 @@ test.describe("@staging runtime HUD space selector", () => {
     } finally {
       if (targetRoomId) {
         try {
-          const deleteResponse = await request.delete(`/api/rooms/${targetRoomId}`, {
+          const deleteResponse = await releaseLegacyStagingRoom(request, targetRoomId, {
             headers: {
               "x-vrata-admin-token": stagingAdminToken
             }
@@ -848,7 +850,7 @@ test.describe("@staging runtime HUD space selector", () => {
     let roomId: string | null = null;
 
     try {
-      const createRoomResponse = await request.post("/api/rooms", {
+      const createRoomResponse = await createLegacyStagingRoom(request, "avatar", {
         headers: {
           "x-vrata-admin-token": stagingAdminToken
         },
@@ -913,7 +915,7 @@ test.describe("@staging runtime HUD space selector", () => {
       }
     } finally {
       if (roomId) {
-        const deleteResponse = await request.delete(`/api/rooms/${roomId}`, {
+        const deleteResponse = await releaseLegacyStagingRoom(request, roomId, {
           headers: {
             "x-vrata-admin-token": stagingAdminToken
           }
@@ -974,7 +976,7 @@ test.describe("@staging runtime HUD space selector", () => {
     let roomId: string | null = null;
 
     try {
-      const createRoomResponse = await request.post("/api/rooms", {
+      const createRoomResponse = await createLegacyStagingRoom(request, "presence", {
         headers: {
           "x-vrata-admin-token": stagingAdminToken
         },
@@ -1038,7 +1040,7 @@ test.describe("@staging runtime HUD space selector", () => {
       }
     } finally {
       if (roomId) {
-        const deleteResponse = await request.delete(`/api/rooms/${roomId}`, {
+        const deleteResponse = await releaseLegacyStagingRoom(request, roomId, {
           headers: {
             "x-vrata-admin-token": stagingAdminToken
           }
@@ -1271,13 +1273,13 @@ test.describe("@staging runtime HUD space selector", () => {
     });
   });
 
-  test("staging fresh hall mock VR can target and claim a seat through XR interaction path", async ({ page, request }) => {
+  test("staging isolated Hall mock VR can target and claim a seat through XR interaction path", async ({ page, request }) => {
     test.setTimeout(150000);
 
     const targetName = `Staging Hall Mock VR Seat ${Date.now()}`;
     let roomId: string | null = null;
     try {
-      const createRoomResponse = await request.post("/api/rooms", {
+      const createRoomResponse = await createLegacyStagingRoom(request, "hall-seat", {
         headers: {
           "x-vrata-admin-token": stagingAdminToken
         },
@@ -1386,7 +1388,7 @@ test.describe("@staging runtime HUD space selector", () => {
       });
     } finally {
       if (roomId) {
-        const deleteResponse = await request.delete(`/api/rooms/${roomId}`, {
+        const deleteResponse = await releaseLegacyStagingRoom(request, roomId, {
           headers: {
             "x-vrata-admin-token": stagingAdminToken
           }
@@ -1396,13 +1398,13 @@ test.describe("@staging runtime HUD space selector", () => {
     }
   });
 
-  test("staging fresh BlueOffice mock VR writes XR telemetry history for ray and trigger actions", async ({ page, request }) => {
+  test("staging isolated BlueOffice mock VR writes XR telemetry history for ray and trigger actions", async ({ page, request }) => {
     test.setTimeout(90000);
 
     const targetName = `Staging BlueOffice Mock VR Telemetry ${Date.now()}`;
     let roomId: string | null = null;
     try {
-      const createRoomResponse = await request.post("/api/rooms", {
+      const createRoomResponse = await createLegacyStagingRoom(request, "office-telemetry", {
         headers: {
           "x-vrata-admin-token": stagingAdminToken
         },
@@ -1524,7 +1526,7 @@ test.describe("@staging runtime HUD space selector", () => {
       });
     } finally {
       if (roomId) {
-        const deleteResponse = await request.delete(`/api/rooms/${roomId}`, {
+        const deleteResponse = await releaseLegacyStagingRoom(request, roomId, {
           headers: {
             "x-vrata-admin-token": stagingAdminToken
           }
@@ -1539,7 +1541,7 @@ test.describe("@staging runtime HUD space selector", () => {
     let roomId: string | null = null;
 
     try {
-      const createRoomResponse = await request.post("/api/rooms", {
+      const createRoomResponse = await createLegacyStagingRoom(request, "vr-observer", {
         headers: {
           "x-vrata-admin-token": stagingAdminToken
         },
@@ -1648,7 +1650,7 @@ test.describe("@staging runtime HUD space selector", () => {
       }
     } finally {
       if (roomId) {
-        const deleteResponse = await request.delete(`/api/rooms/${roomId}`, {
+        const deleteResponse = await releaseLegacyStagingRoom(request, roomId, {
           headers: {
             "x-vrata-admin-token": stagingAdminToken
           }

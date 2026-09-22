@@ -45,7 +45,7 @@ class CatalogHost:
                         "-f", str(self.root / "infra/docker/compose.staging.yml")]
 
     def run(self, args, optional=False):
-        result = subprocess.run(args, cwd=self.root, text=True, capture_output=True, timeout=600)
+        result = subprocess.run(args, cwd=self.root, stdin=subprocess.DEVNULL, text=True, capture_output=True, timeout=600)
         if result.returncode:
             if optional:
                 return None
@@ -146,6 +146,8 @@ def main():
     host = CatalogHost(args.root)
     if args.command in ("status", "preflight"):
         result = host.cli([args.command])
+        if args.command == "status":
+            result["wave2Marker"] = host.marker()
     elif args.command == "record-wave2":
         result = host.record_wave2(sha(args.sha))
     elif args.command == "prepare":
