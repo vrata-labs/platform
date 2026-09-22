@@ -78,6 +78,9 @@ async function verifyNormalProduct({ page, request }: { page: Page; request: API
     expect((await readDebug(page)).mediaObjects.physicalSurfaceIdsWithoutLogicalState).toEqual([]);
     for (const surfaceId of ["workspace-main", "desk-aux"]) {
       expect(await page.evaluate(id => (window as Window & { __VRATA_TEST__: RuntimeTestApi }).__VRATA_TEST__.createMarkdownBoardObject(id), surfaceId)).toBe(true);
+      // Both clients must observe the new board before the sender patches it.
+      // A receiver broadcast can arrive before the sender's own room snapshot.
+      await expect.poll(async () => (await readDebug(page)).mediaObjects.surfaces.find(s => s.surfaceId === surfaceId)?.activeObjectType, { timeout: 15_000 }).toBe("markdown-board");
       await expect.poll(async () => (await readDebug(observer)).mediaObjects.surfaces.find(s => s.surfaceId === surfaceId)?.activeObjectType, { timeout: 15_000 }).toBe("markdown-board");
       expect(await page.evaluate(id => (window as Window & { __VRATA_TEST__: RuntimeTestApi }).__VRATA_TEST__.createStickyNote({ text: `Visible ${id}`, surfaceId: id, x: .25, y: .25 }), surfaceId)).toBe(true);
       expect(await observer.evaluate(id => (window as Window & { __VRATA_TEST__: RuntimeTestApi }).__VRATA_TEST__.selectMediaSurface(id), surfaceId)).toBe(true);

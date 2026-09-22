@@ -119,6 +119,9 @@ test("M1.6 markdown sticky board syncs notes, movement, reload and safe renderin
 
     const unsafeMarkdown = "# Launch plan\n- synced card\n<script>window.__markdownBoardXss = true</script>";
     await createStickyNote(member, unsafeMarkdown);
+    // The next command carries this sender's observed revision. Do not infer its
+    // acknowledgement from a different client's earlier broadcast.
+    await waitForMarkdownBoard(member, 1);
     await waitForMarkdownBoard(host, 1);
     await waitForMarkdownBoard(guest, 1);
 
@@ -131,18 +134,20 @@ test("M1.6 markdown sticky board syncs notes, movement, reload and safe renderin
 
     await moveStickyNote(member, stickyNoteId, 0.62, 0.44);
     await expect.poll(async () => {
-      const note = (await readDebug(host))?.markdownBoard?.notes?.[0];
-      return { x: note?.x ?? null, y: note?.y ?? null };
+      return Promise.all([host, member].map(async page => {
+        const note = (await readDebug(page))?.markdownBoard?.notes?.[0];
+        return { x: note?.x ?? null, y: note?.y ?? null };
+      }));
     }, {
       timeout: 10000,
       intervals: [500, 1000, 2000]
-    }).toEqual({ x: 0.62, y: 0.44 });
+    }).toEqual([{ x: 0.62, y: 0.44 }, { x: 0.62, y: 0.44 }]);
 
     await updateStickyNote(member, stickyNoteId, "## Updated\n- safe markdown");
-    await expect.poll(async () => (await readDebug(guest))?.markdownBoard?.notes?.[0]?.text ?? null, {
+    await expect.poll(async () => Promise.all([member, guest].map(async page => (await readDebug(page))?.markdownBoard?.notes?.[0]?.text ?? null)), {
       timeout: 10000,
       intervals: [500, 1000, 2000]
-    }).toBe("## Updated\n- safe markdown");
+    }).toEqual(["## Updated\n- safe markdown", "## Updated\n- safe markdown"]);
 
     await guest.reload();
     await waitForKernel(guest, "guest");
