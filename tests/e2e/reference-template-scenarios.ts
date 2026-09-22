@@ -50,6 +50,9 @@ async function hostLink(request: APIRequestContext, roomId: string) {
   const url = new URL((await invite.json()).inviteLink); url.searchParams.set("debug", "1"); url.searchParams.set("scenefit", "0"); return url.href;
 }
 async function openRoom(page: Page, url: string) {
+  // Bound software rendering work in multi-client functional checks. Scene
+  // sources, materials and device quality profiles keep their product settings.
+  await page.setViewportSize({ width: 640, height: 400 });
   try { await page.goto(url); }
   catch { throw new Error("reference_room_navigation_failed"); }
 }
@@ -102,6 +105,7 @@ test("reference UI shows three real previews and creates an owner-bound private 
   await page.goto(`${fixture.origin}/control-plane`);
   await page.locator("#admin-token-input").fill(token);
   await expect(page.locator(".template-card")).toHaveCount(3);
+  await page.locator("#template-gallery").scrollIntoViewIfNeeded();
   await expect.poll(() => page.locator(".template-card img").evaluateAll(images => images.every(image => (image as HTMLImageElement).complete && (image as HTMLImageElement).naturalWidth > 0))).toBe(true);
   await expect(page.locator("#template-select")).toHaveValue("personal-room-basic");
   await expect(page.locator("#room-visibility-select")).toHaveValue("private");
@@ -200,8 +204,9 @@ test("reference meeting synchronizes only declared surfaces across two participa
     await expect.poll(() => observer.evaluate(() => (window as any).__VRATA_DEBUG__?.mediaObjects?.surfaces.find((s: any) => s.surfaceId === "whiteboard-wall")?.activeObjectType), { timeout: 15000 }).toBe("whiteboard");
     const surfaces = await page.evaluate(() => (window as any).__VRATA_DEBUG__.mediaObjects.surfaces.map((s: any) => s.surfaceId).sort());
     expect(surfaces).toEqual(["debug-main", "whiteboard-wall"]);
-    for (let seat = 1; seat <= 8; seat++) await verifySeat(page, `seat-${String(seat).padStart(2, "0")}`, observer);
     if (staging) {
+      await page.locator("#join-muted").uncheck();
+      await observer.locator("#join-muted").uncheck();
       await page.locator("#join-audio").click();
       await observer.locator("#join-audio").click();
       await expect.poll(() => observer.evaluate(() => {
@@ -209,6 +214,7 @@ test("reference meeting synchronizes only declared surfaces across two participa
         return { subscribed: d?.media?.subscribedAudioCount, spatial: d?.spatialAudio?.remoteSources?.some((source: any) => source.hasAudioNode && source.pannerActive) };
       }), { timeout: 45000 }).toEqual({ subscribed: 1, spatial: true });
     }
+    for (let seat = 1; seat <= 8; seat++) await verifySeat(page, `seat-${String(seat).padStart(2, "0")}`, observer);
   } finally { await context.close(); }
 });
 
@@ -238,6 +244,8 @@ if (staging) test("reference presentation receives moving screen-share frames th
       return Boolean(state?.localPublishing && state.publishedTrackSid && !state.publishedTrackSid.startsWith("mock-"));
     }), { timeout: 45000 }).toBe(true);
     await expect.poll(() => observer.evaluate(() => (window as any).__VRATA_DEBUG__?.screenShare?.remoteSubscribedTrackCount ?? 0), { timeout: 45000 }).toBe(1);
+    expect(await observer.evaluate(() => (window as any).__VRATA_DEBUG__?.media?.publishedAudio)).toBe(false);
+    await expect(observer.locator("#join-muted")).toBeChecked();
     const colors = new Set<string>();
     await expect.poll(async () => {
       const sample = await observer.evaluate(() => (window as any).__VRATA_TEST__.sampleMediaSurfaceTexture("debug-main", { u: .5, v: .5 }, { width: 1, height: 1 }));

@@ -65,7 +65,7 @@ function harness(initial: RoomMediaObjectsState | null = null, selected = "missi
 test("construction performs no state or selection reads and preserves named callable queries", () => {
   const h = harness();
   assert.deepEqual(h.reads, { state: 0, selection: 0 });
-  assert.equal(Object.keys(h.queries).length, 28);
+  assert.equal(Object.keys(h.queries).length, 29);
   for (const [name, fn] of Object.entries(h.queries)) {
     assert.equal(fn.name, name);
     assert.equal(fn.length, name.endsWith("ForSurface") || name === "findLocalActiveScreenShareObject" ? 1 : 0);
@@ -78,6 +78,7 @@ test("empty room returns the original null, undefined and empty-list results", (
   assert.equal(queries.activeMediaObjectIdForSurface("none"), undefined);
   assert.equal(queries.findLocalActiveScreenShareObject(), null);
   assert.equal(queries.findRemoteBrowserObjectNeedingLiveKitRoom(), null);
+  assert.equal(queries.findScreenShareObjectNeedingLiveKitRoom(), null);
   for (const [, bySurface, find] of kinds) {
     assert.equal(queries[bySurface]("none"), null);
     assert.equal(queries[find](), null);
@@ -102,6 +103,30 @@ test("generic lookup follows the active ID without adding state, type or physica
   state.surfaces.alias.activeObjectId = "";
   state.objects[""] = first;
   assert.equal(h.queries.activeMediaObjectForSurface("alias"), null);
+});
+
+test("remote real screen shares request transport only while linked to a physical surface", () => {
+  const local = object(SCREEN_SHARE_OBJECT_TYPE, "local-share");
+  const remote = object(SCREEN_SHARE_OBJECT_TYPE, "remote-share", "screen", "publisher");
+  local.state = { ...(local.state as object), mediaTrackSid: "TR_local" };
+  remote.state = { ...(remote.state as object), mediaTrackSid: "TR_remote" };
+  const state = room(local, remote);
+  const h = harness(state);
+  const snapshot = structuredClone(state);
+  assert.equal(h.queries.findScreenShareObjectNeedingLiveKitRoom(), remote);
+  assert.deepEqual(state, snapshot);
+  h.physical.delete("screen");
+  assert.equal(h.queries.findScreenShareObjectNeedingLiveKitRoom(), null);
+  h.physical.add("screen");
+  state.surfaces.screen!.activeObjectId = null;
+  assert.equal(h.queries.findScreenShareObjectNeedingLiveKitRoom(), null);
+  state.surfaces.screen!.activeObjectId = remote.objectId;
+  for (const patch of [{ status: "publishing" }, { status: "stopped" }, { mediaTrackSid: null }, { mediaTrackSid: "mock-screen-share:publisher:track" }]) {
+    remote.state = { ...(snapshot.objects[remote.objectId]!.state as object), ...patch };
+    assert.equal(h.queries.findScreenShareObjectNeedingLiveKitRoom(), null);
+  }
+  h.setState(null);
+  assert.equal(h.queries.findScreenShareObjectNeedingLiveKitRoom(), null);
 });
 
 for (const [type, bySurface, find] of kinds) {
