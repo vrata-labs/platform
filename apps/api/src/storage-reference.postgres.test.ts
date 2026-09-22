@@ -86,7 +86,7 @@ test("create waits for a concurrent catalog change and rejects a now-deprecated 
 test("Wave 2 schema supports the exact Wave 1 rollback build with create/PATCH/manifest and return", { skip: url && rollbackModule ? false : "Postgres and the pinned rollback build are required" }, async () => {
   const root = resolve(dirname(rollbackModule!), "../../..");
   assert.equal(execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim(), rollbackSha);
-  execFileSync("git", ["diff", "--exit-code", "HEAD"], { cwd: root });
+  assert.equal(execFileSync("git", ["diff", "--name-status", "HEAD"], { cwd: root, encoding: "utf8" }), "", "rollback checkout must match the pinned revision");
   const old = await import(pathToFileURL(rollbackModule!).href) as { PostgresStorage: typeof PostgresStorage };
   const oldManifestModule = await import(pathToFileURL(resolve(dirname(rollbackModule!), "room-manifest.js")).href) as { createRoomManifestBuilder: typeof createRoomManifestBuilder };
   await database(async pools => {
