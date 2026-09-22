@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 
 import type { RoomTemplateSnapshotV1, RoomTemplateVersionSnapshotV1 } from "@vrata/shared-types";
+import { referenceTemplateContract } from "@vrata/templates";
 
 import type {
   RoomAvatarConfig,
@@ -142,6 +143,11 @@ function createRoomTemplateSnapshot(
   room: RoomRecordWithoutTemplateMetadata,
   versionSnapshot: RoomTemplateVersionSnapshotV1
 ): RoomTemplateSnapshotV1 {
+  const contract = referenceTemplateContract(versionSnapshot);
+  if (contract) {
+    if (!room.sceneBundleUrl || room.roomType !== contract.defaults.roomType) throw new Error("invalid_reference_room_configuration");
+    if (contract.defaults.roomType === "personal" && (!room.ownerParticipantId || room.visibility !== "private" || room.guestAllowed !== false)) throw new Error("invalid_reference_personal_configuration");
+  }
   const avatarConfig = defaultAvatarConfig(room.avatarConfig);
   return {
     ...structuredClone(versionSnapshot),

@@ -22,6 +22,14 @@
           <label>Room slug <input id="room-slug-input" value="showroom-demo" inputmode="latin" autocomplete="off" /></label>
           <div id="room-validation-message" class="validation-message" aria-live="polite"></div>
           <label>Template <select id="template-select"></select></label>
+          <fieldset id="template-gallery" class="template-gallery" hidden>
+            <legend>Room layouts</legend>
+            <div id="template-cards" class="template-cards"></div>
+          </fieldset>
+          <div id="template-summary" class="template-summary" aria-live="polite"></div>
+          <label id="room-owner-field" class="template-owner" hidden>Owner participant ID
+            <input id="room-owner-input" autocomplete="off" placeholder="Required for a personal workspace" />
+          </label>
           <label>Attach assets <select id="asset-select" multiple></select></label>
           <label>Registered scene bundle <select id="scene-bundle-select"></select></label>
           <label>Bundle version <select id="scene-bundle-version-select"></select></label>
@@ -46,6 +54,7 @@
           <label><input id="avatar-fallback-input" type="checkbox" checked /> Capsule fallback enabled</label>
           <label><input id="avatar-seats-input" type="checkbox" /> Avatar seats enabled</label>
           <button id="create-room" type="submit">Create room</button>
+          <button id="new-room" type="button">New room draft</button>
           <button id="copy-room-link" type="button">Copy room URL</button>
           <button id="update-room" type="button">Update selected room</button>
           <button id="bind-scene-bundle" type="button">Bind selected scene bundle</button>

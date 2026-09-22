@@ -105,7 +105,7 @@ test("missing rooms use the storage template version and do not list assets", as
   const version = { ...original, version: "stored-version" };
   storage.getTemplateVersion = async (id, requestedVersion) => {
     calls.push(`template:${id}`);
-    assert.equal(requestedVersion, undefined);
+    assert.equal(requestedVersion, "0.1.0");
     return version;
   };
   const request = { headers: { host: "example.test", "x-forwarded-proto": "https" } } as unknown as IncomingMessage;

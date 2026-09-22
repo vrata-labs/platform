@@ -49,7 +49,7 @@ export type RoomPayloadInput = Partial<RoomRecord> & {
   avatarSeatsEnabled?: boolean;
 };
 
-export function normalizeRoomPayload(input: RoomPayloadInput, mode: "create" | "patch"): Partial<RoomRecord> {
+export function normalizeRoomAvatarOverrides(input: RoomPayloadInput): RoomPayloadInput {
   const legacyAvatarConfig: Partial<NonNullable<RoomRecord["avatarConfig"]>> = {
     avatarsEnabled: input.avatarsEnabled,
     avatarCatalogUrl: input.avatarCatalogUrl,
@@ -61,8 +61,6 @@ export function normalizeRoomPayload(input: RoomPayloadInput, mode: "create" | "
   const hasLegacyAvatarField = Object.values(legacyAvatarConfig).some((value) => value !== undefined);
 
   const normalized: RoomPayloadInput = { ...input };
-  delete normalized.templateVersion;
-  delete normalized.templateSnapshot;
   delete normalized.avatarsEnabled;
   delete normalized.avatarCatalogUrl;
   delete normalized.avatarQualityProfile;
@@ -77,6 +75,13 @@ export function normalizeRoomPayload(input: RoomPayloadInput, mode: "create" | "
       ...input.avatarConfig
     } as RoomRecord["avatarConfig"];
   }
+  return normalized;
+}
+
+export function normalizeRoomPayload(input: RoomPayloadInput, mode: "create" | "patch"): Partial<RoomRecord> {
+  const normalized = normalizeRoomAvatarOverrides(input);
+  delete normalized.templateVersion;
+  delete normalized.templateSnapshot;
   if (input.roomType === "personal") {
     normalized.visibility = "private";
     normalized.guestAllowed = false;

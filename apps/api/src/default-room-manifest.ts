@@ -1,5 +1,5 @@
 import type { IncomingMessage } from "node:http";
-import type { RoomTemplateSnapshotV1, RoomTemplateVersionSnapshotV1 } from "@vrata/shared-types";
+import type { RoomTemplateSnapshotV1, RoomTemplateVersionSnapshotV1, SceneBundleIntegrity } from "@vrata/shared-types";
 import { getCurrentTemplateVersion } from "@vrata/templates";
 
 import type { RoomType, RoomVisibility } from "./storage.js";
@@ -17,6 +17,7 @@ export interface RoomManifest {
   templateSnapshot: RoomTemplateSnapshotV1;
   sceneBundle?: {
     url: string;
+    integrity?: SceneBundleIntegrity;
   };
   realtime: {
     roomStateUrl: string;

@@ -2,6 +2,8 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 
 import { getRoomPermissions, isRoomPermission, isRoomRole, type RoomPermission, type RoomRole } from "./access.js";
 import { parseSceneMediaSurfaceDefinitions, type SceneMediaSurfaceDefinition } from "./scene-media-surfaces.js";
+import { parseRoomTemplateSessionContext } from "./template-session-context.js";
+import type { RoomTemplateSessionContext } from "./room-template.js";
 
 export type RoomSessionRoleSource = "default" | "dev-query" | "trusted";
 
@@ -18,6 +20,7 @@ export interface RoomSessionTokenPayload {
   exp: number;
   jti: string;
   sceneMediaSurfaces?: SceneMediaSurfaceDefinition[];
+  roomTemplate?: RoomTemplateSessionContext;
 }
 
 export type RoomSessionTokenErrorCode =
@@ -90,13 +93,16 @@ export function parseRoomSessionTokenPayload(input: unknown): RoomSessionTokenPa
     return null;
   }
   let sceneMediaSurfaces: SceneMediaSurfaceDefinition[] | undefined;
+  let roomTemplate: RoomTemplateSessionContext | undefined;
   try {
     if (input.sceneMediaSurfaces !== undefined) sceneMediaSurfaces = parseSceneMediaSurfaceDefinitions(input.sceneMediaSurfaces);
+    if (input.roomTemplate !== undefined) roomTemplate = parseRoomTemplateSessionContext(input.roomTemplate);
   } catch {
     return null;
   }
   return {
     ...(sceneMediaSurfaces === undefined ? {} : { sceneMediaSurfaces }),
+    ...(roomTemplate === undefined ? {} : { roomTemplate }),
     tenantId: input.tenantId,
     roomId: input.roomId,
     participantId: input.participantId,

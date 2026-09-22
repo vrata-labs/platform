@@ -57,6 +57,16 @@ select[multiple] {
   min-height: 120px;
 }
 
+.template-gallery { border: 0; margin: 0; padding: 0; min-width: 0; }
+.template-gallery[hidden], .template-owner[hidden] { display: none; }
+.template-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+.template-card { border: 1px solid #8e9cad; border-radius: 12px; padding: 10px; cursor: pointer; align-content: start; }
+.template-card:has(input:checked) { outline: 2px solid #0e5bd7; background: #edf4ff; }
+.template-card:focus-within { outline: 3px solid #163354; }
+.template-card img { width: 100%; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 6px; }
+.template-card input { width: 20px; height: 20px; margin: 0; padding: 0; }
+.template-card small, .template-summary { font-size: .9rem; line-height: 1.4; }
+
 button {
   cursor: pointer;
   background: #0e5bd7;

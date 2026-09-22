@@ -1,3 +1,5 @@
+import type { RoomTemplateDefaults, RoomTemplateSnapshotV1 } from "@vrata/shared-types";
+
 export function createRoomUrl(baseUrl: string, roomId: string): string {
   return new URL(`/rooms/${roomId}`, baseUrl).toString();
 }
@@ -6,6 +8,11 @@ export interface TemplateRecord {
   templateId: string;
   label: string;
   assetSlots: string[];
+  currentVersion?: string;
+  status?: "active" | "deprecated";
+  description?: string;
+  previewUrl?: string;
+  defaults?: RoomTemplateDefaults;
 }
 
 export interface TenantRecord {
@@ -17,6 +24,7 @@ export interface RoomCreateInput {
   roomId?: string;
   tenantId: string;
   templateId: string;
+  templateVersion?: string;
   name: string;
   roomType?: "standard" | "personal";
   ownerParticipantId?: string | null;
@@ -62,6 +70,8 @@ export interface RoomRecord {
   roomId: string;
   tenantId: string;
   templateId: string;
+  templateVersion?: string;
+  templateSnapshot?: RoomTemplateSnapshotV1;
   name: string;
   roomType?: "standard" | "personal";
   ownerParticipantId?: string | null;
@@ -98,6 +108,8 @@ export interface RoomManifestRecord {
   roomType?: "standard" | "personal";
   ownerParticipantId?: string | null;
   template: string;
+  templateVersion?: string;
+  templateSnapshot?: RoomTemplateSnapshotV1;
   sceneBundle?: {
     url: string;
   };

@@ -70,18 +70,41 @@ jobs:
             exit 1
           fi
 
+      - name: Checkout proven template rollback base
+        uses: actions/checkout@v4
+        with:
+          repository: vrata-labs/platform
+          ref: 33c7485ffa1773105c496b43542ea53bf4c5ae9a
+          path: .template-rollback
+
+      - name: Build template rollback base
+        run: |
+          pnpm --dir .template-rollback install --frozen-lockfile
+          pnpm --dir .template-rollback --filter @vrata/shared-types --filter @vrata/templates --filter @vrata/asset-pipeline --filter @vrata/api build
+
       - name: Test
         env:
           VRATA_TEST_POSTGRES_URL: postgres://postgres:postgres@127.0.0.1:5432/vrata_test
+          VRATA_TEMPLATE_ROLLBACK_STORAGE_MODULE: ${{ github.workspace }}/.template-rollback/apps/api/dist/storage.js
         run: pnpm test
 
       - name: Install Playwright browser
         run: pnpm exec playwright install --with-deps chromium
 
+      - name: Cache pinned public reference assets
+        uses: actions/cache@v4
+        with:
+          path: .reference-scene-assets
+          key: reference-scenes-${{ hashFiles('packages/templates/src/product-room-definitions.ts') }}
+
+      - name: Verify pinned public assets for isolated template e2e
+        run: node tools/fetch-reference-template-fixtures.mjs
+
       - name: E2E
         env:
           PLAYWRIGHT_REPORT_NAME: local-e2e
           PLAYWRIGHT_TRACE: "1"
+          VRATA_TEST_POSTGRES_URL: postgres://postgres:postgres@127.0.0.1:5432/vrata_test
         run: pnpm test:e2e
 
       - name: M0.5 acceptance

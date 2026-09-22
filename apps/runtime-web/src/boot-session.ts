@@ -17,7 +17,8 @@ export function applyRoomShellBootState(input: {
   setRoomStateStatus(message: string): void;
 }): void {
   input.setRoomStateStatus("Room-state: connecting");
-  input.elements.roomNameEl.textContent = `${input.boot.template} - ${input.boot.roomId}`;
+  const templateLabel = input.boot.templateLabel ? `${input.boot.templateLabel} v${input.boot.templateVersion}` : input.boot.template;
+  input.elements.roomNameEl.textContent = `${templateLabel} - ${input.boot.roomId}`;
   input.elements.brandingLineEl.textContent = input.boot.assets.length > 0
     ? `Attached assets: ${input.boot.assets.map((asset) => `${asset.kind}${asset.validationStatus ? ` [${asset.validationStatus}]` : ""}`).join(", ")}`
     : "No branded assets attached";

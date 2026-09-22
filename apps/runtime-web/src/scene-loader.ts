@@ -8,6 +8,8 @@ import { MeshoptDecoder } from "three/examples/jsm/libs/meshopt_decoder.module.j
 import { parseSceneBundleManifest, pickSceneSpawnPoint, resolveSceneAssetUrl, type SceneBundleManifest, type SceneBundleSpawnPoint } from "./scene-bundle.js";
 import { disposeSceneObject } from "./scene-dispose.js";
 import { applyBakedLightMaps } from "./scene-lightmaps.js";
+import type { SceneBundleIntegrity } from "@vrata/shared-types";
+import { assertSelfContainedGlb, verifySceneBytes } from "./scene-integrity.js";
 
 export interface LoadedSceneBundle {
   manifest: SceneBundleManifest;
@@ -101,6 +103,7 @@ async function applyMaterialOverrides(input: {
 
 export async function loadSceneBundle(input: {
   bundleUrl: string;
+  integrity?: SceneBundleIntegrity;
   renderer?: THREE.WebGLRenderer;
   onLoadStage?: (stage: string) => void;
   onAssetProgress?: (loaded: number, expected: number | null) => void;
@@ -112,11 +115,20 @@ export async function loadSceneBundle(input: {
     throw new Error(`failed_to_load_scene_bundle_manifest:${response.status}`);
   }
 
-  const manifest = parseSceneBundleManifest(await response.json());
+  let manifestData: unknown;
+  if (input.integrity) {
+    const bytes = await response.arrayBuffer();
+    await verifySceneBytes(bytes, input.integrity.manifestSha256, "manifest");
+    manifestData = JSON.parse(new TextDecoder().decode(bytes));
+    input.onLoadStage?.("manifest_verified");
+  } else manifestData = await response.json();
+  const manifest = parseSceneBundleManifest(manifestData);
+  if (input.integrity && manifest.materialOverrides?.some(override => override.mapPath)) throw new Error("verified_scene_external_resource");
   input.onLoadStage?.("manifest_loaded");
   const group = new THREE.Group();
   group.name = `scene-bundle:${manifest.sceneId}`;
   const sceneAssetUrl = resolveSceneAssetUrl(response.url, manifest.glbPath);
+  if (input.integrity && !/[.]glb$/i.test(sceneAssetUrl)) throw new Error("verified_scene_requires_glb");
   const missingAssets = new Set<string>();
   input.onLoadStage?.("asset_load_started");
   if (/[.]fbx$/i.test(sceneAssetUrl)) {
@@ -149,6 +161,11 @@ export async function loadSceneBundle(input: {
       const assetBuffer = await assetResponse.arrayBuffer();
       input.onAssetProgress?.(assetBuffer.byteLength, expected);
       input.onLoadStage?.("asset_buffer_loaded");
+      if (input.integrity) {
+        await verifySceneBytes(assetBuffer, input.integrity.assetSha256, "asset");
+        assertSelfContainedGlb(assetBuffer);
+        input.onLoadStage?.("asset_verified");
+      }
       gltf = await loader.parseAsync(assetBuffer, new URL("./", sceneAssetUrl).toString());
       input.onLoadStage?.("asset_parsed");
     } else {

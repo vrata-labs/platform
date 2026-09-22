@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { createRoomTemplatePreferences, fetchPublicTemplateSettings } from "./template-preferences.js";
 import { Room, RoomEvent, Track } from "livekit-client";
 import {
   MARKDOWN_BOARD_OBJECT_TYPE,
@@ -1209,8 +1210,12 @@ let lastAvatarXrInputProfile: string | null = null;
 let lastAvatarPoseSentAtMs = 0;
 let preferredMicDeviceId = getStoredValue(localStorage, "vrata.audioinput", "noah.audioinput") ?? "default";
 let preferredSpeakerDeviceId = getStoredValue(localStorage, "vrata.audiooutput", "noah.audiooutput") ?? "default";
-let joinMutedPreference = getStoredValue(localStorage, "vrata.audio.joinMuted", "noah.audio.joinMuted") === "true";
-let activeNotesScope: RuntimeNoteScope = getStoredValue(localStorage, "vrata.notes.scope", "noah.notes.scope") === "private" ? "private" : "shared";
+const templatePreferences = createRoomTemplatePreferences(roomId, {
+  read: (key, legacyKey) => getStoredValue(localStorage, key, legacyKey),
+  write: (key, value) => localStorage.setItem(key, value)
+});
+let joinMutedPreference = templatePreferences.joinMuted();
+let activeNotesScope: RuntimeNoteScope = templatePreferences.notesScope();
 let notesSaveState: NotesSaveState = "idle";
 let notesLastSavedContent = "";
 let notesLastUpdatedAt: string | null = null;
@@ -1227,7 +1232,7 @@ let documentUploadInFlight = false;
 let presentationActionInFlight = false;
 let presentationThumbnailSignature = "";
 joinMutedCheckbox.checked = joinMutedPreference;
-guestJoinMutedCheckbox.checked = joinMutedPreference || !getStoredValue(localStorage, "vrata.audio.joinMuted", "noah.audio.joinMuted");
+guestJoinMutedCheckbox.checked = templatePreferences.joinMuted(true);
 notesScopeSelect.value = activeNotesScope;
 notesEditor.disabled = true;
 notesScopeSelect.disabled = true;
@@ -5062,7 +5067,7 @@ function completeGuestOnboarding(options: { withoutAudio: boolean; resolve: () =
   joinMutedCheckbox.checked = joinMutedPreference;
   guestJoinMutedCheckbox.checked = joinMutedPreference;
   localStorage.setItem("vrata.displayName", displayName);
-  localStorage.setItem("vrata.audio.joinMuted", String(joinMutedPreference));
+  templatePreferences.setJoinMuted(joinMutedPreference);
   debugState.guestOnboarding.completed = true;
   debugState.guestOnboarding.displayNameProvided = true;
   debugState.guestOnboarding.joinMuted = joinMutedPreference;
@@ -5978,6 +5983,7 @@ async function reportDiagnostics(note?: string, options: { reportId?: string } =
       xrAvatarDebug: debugState.xrAvatarDebug,
       sceneDebug: {
         ...debugState.sceneDebug,
+        template: debugState.template,
         missingAssetCount: debugState.sceneDebug.missingAssets.length,
         screenshot
       },
@@ -7749,7 +7755,7 @@ openPersonalRoomButton.addEventListener("click", () => {
 
 notesScopeSelect.addEventListener("change", () => {
   activeNotesScope = notesScopeSelect.value === "private" ? "private" : "shared";
-  localStorage.setItem("vrata.notes.scope", activeNotesScope);
+  templatePreferences.setNotesScope(activeNotesScope);
   notesLastSavedContent = "";
   notesLastUpdatedAt = null;
   notesVersions = [];
@@ -7948,7 +7954,7 @@ joinAudioButton.addEventListener("click", () => {
 
 joinMutedCheckbox.addEventListener("change", () => {
   joinMutedPreference = joinMutedCheckbox.checked;
-  localStorage.setItem("vrata.audio.joinMuted", String(joinMutedPreference));
+  templatePreferences.setJoinMuted(joinMutedPreference);
   updateAudioDeviceStatus(joinMutedPreference ? "Join muted enabled" : "Join muted disabled");
 });
 
@@ -8516,6 +8522,10 @@ renderer.setAnimationLoop(() => {
 });
 
 async function main(): Promise<void> {
+  templatePreferences.setTemplate(await fetchPublicTemplateSettings(apiBaseUrl, roomId));
+  joinMutedPreference = templatePreferences.joinMuted();
+  joinMutedCheckbox.checked = joinMutedPreference;
+  guestJoinMutedCheckbox.checked = templatePreferences.joinMuted(true);
   await waitForGuestOnboardingIfNeeded();
   const boot = await bootRuntime(apiBaseUrl, roomId, navigator.userAgent, {
     participantId,
@@ -8523,6 +8533,12 @@ async function main(): Promise<void> {
     requestedRole: query.get("role"),
     inviteToken: query.get("invite")
   });
+  templatePreferences.setTemplate(boot.templateSettings);
+  joinMutedPreference = templatePreferences.joinMuted();
+  joinMutedCheckbox.checked = joinMutedPreference;
+  activeNotesScope = templatePreferences.notesScope();
+  notesScopeSelect.value = activeNotesScope;
+  debugState.template = { id: boot.template, version: boot.templateVersion ?? null, sceneReleaseId: boot.sceneReleaseId ?? null, integrityRequired: Boolean(boot.sceneIntegrity) };
   spatialAudioServerEnabled = boot.envFlags.spatialAudio;
   spatialAudioRoomEnabled = boot.spatialAudioEnabled;
   runtimeFlags = {
@@ -8534,7 +8550,7 @@ async function main(): Promise<void> {
     sceneBundles: boot.envFlags.sceneBundles,
     hostControlsEnabled: boot.envFlags.hostControlsEnabled,
     documentsEnabled: boot.envFlags.documentsEnabled,
-    notesEnabled: boot.envFlags.notesEnabled,
+    notesEnabled: boot.envFlags.notesEnabled && (boot.templateSettings?.notes.enabled ?? true),
     personalRoomsEnabled: boot.envFlags.personalRoomsEnabled,
     remoteBrowserEnabled: boot.envFlags.remoteBrowserEnabled,
     remoteBrowserExperimental: boot.envFlags.remoteBrowserExperimental,
@@ -8670,6 +8686,8 @@ async function main(): Promise<void> {
       camera,
       renderer,
       bundleUrl: boot.sceneBundleUrl,
+      integrity: boot.sceneIntegrity,
+      requiredSurfaces: boot.templateSurfaces,
       requestedCleanSceneMode,
       sceneFitEnabled,
       previousSceneDebug: debugState.sceneDebug,
