@@ -28,6 +28,7 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/notes-prep/evidence"
           cp -a .github/refactor-notes "$RUNNER_TEMP/notes-prep/inputs"
+          git fetch --no-tags --depth=1 origin d5bb362a11791bf96e1651a76536930bb5099628
           git checkout --detach d5bb362a11791bf96e1651a76536930bb5099628
           mkdir -p "$RUNNER_TEMP/notes-prep/baseline/apps/runtime-web/src"
           cp apps/runtime-web/src/main.ts "$RUNNER_TEMP/notes-prep/baseline/apps/runtime-web/src/"
