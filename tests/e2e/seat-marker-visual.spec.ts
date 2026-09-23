@@ -63,20 +63,26 @@ test("seat marker component renders volume, forward chevron and state transition
   await testInfo.attach("component-renderer", { body: JSON.stringify(hovered, null, 2), contentType: "application/json" });
 });
 
-test.describe("seat markers in actual reference rooms", () => {
+for (const staging of [false, true]) test.describe(`${staging ? "@staging " : ""}seat markers in actual reference rooms`, () => {
   test.describe.configure({ mode: "serial" });
-  let fixture: Awaited<ReturnType<typeof startReferenceTemplateFixture>> | undefined;
+  let fixture: Pick<Awaited<ReturnType<typeof startReferenceTemplateFixture>>, "origin" | "close" | "fixtureFingerprint"> | undefined;
+  const token = staging ? process.env.STAGING_ADMIN_TOKEN : "test-admin-token";
   test.beforeAll(async () => {
     test.setTimeout(120000);
-    if (process.env.VRATA_TEST_POSTGRES_URL) fixture = await startReferenceTemplateFixture(process.env.VRATA_TEST_POSTGRES_URL);
+    if (staging) {
+      expect(token, "Staging checks need the existing authorized test credentials").toBeTruthy();
+      const origin = process.env.BASE_URL!;
+      expect(new URL(origin).protocol).toBe("https:");
+      fixture = { origin, close: async () => {}, fixtureFingerprint: "published-staging" };
+    } else if (process.env.VRATA_TEST_POSTGRES_URL) fixture = await startReferenceTemplateFixture(process.env.VRATA_TEST_POSTGRES_URL);
   });
   test.afterAll(async () => { test.setTimeout(120000); await fixture?.close(); });
 
   for (const templateId of ["meeting-room-basic", "presentation-room-basic"]) {
     test(`${templateId}: centre ray, authoritative occupancy, hidden marker and release`, async ({ page, request, browser }, testInfo) => {
-      test.skip(!fixture, "Requires VRATA_TEST_POSTGRES_URL (provided by CI)");
+      test.skip(!fixture, "Local reference checks require VRATA_TEST_POSTGRES_URL (provided by CI)");
       test.setTimeout(300000);
-      const headers = { "x-vrata-admin-token": "test-admin-token" };
+      const headers = { "x-vrata-admin-token": token! };
       const response = await request.post(`${fixture!.origin}/api/rooms`, {
         headers, data: { tenantId: "demo-tenant", templateId, name: "Volumetric marker review" }
       });
@@ -131,7 +137,7 @@ test.describe("seat markers in actual reference rooms", () => {
         await observer.mouse.move(0, 0);
         await waitFrames(observer);
         await capture(observer, testInfo, "room-released-same-view");
-        await testInfo.attach("room-review-settings", { body: JSON.stringify({ templateId, seat, reviewPose, initial, fixture: fixture!.fixtureFingerprint, errors }, null, 2), contentType: "application/json" });
+        await testInfo.attach("room-review-settings", { body: JSON.stringify({ staging, templateId, seat, reviewPose, initial, fixture: fixture!.fixtureFingerprint, errors }, null, 2), contentType: "application/json" });
         expect(errors).toEqual([]);
       } finally {
         await observerContext.close();
