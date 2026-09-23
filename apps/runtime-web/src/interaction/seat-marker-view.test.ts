@@ -30,8 +30,14 @@ test("seat marker is one assembled round volume at seat height, independent of i
   assert.equal(marker.top.geometry, controller.getMarker("b")!.top.geometry);
   assert.notEqual(marker.top.material, controller.getMarker("b")!.top.material);
   assert.equal("beacon" in marker || "orb" in marker, false);
-  const bounds = new THREE.Box3().setFromObject(marker.group);
-  near(bounds.getSize(new THREE.Vector3()).x, SEAT_MARKER_DIMENSIONS.diameter);
+  // The invisible picking envelope is deliberately larger than the artwork.
+  const bounds = new THREE.Box3();
+  for (const mesh of [marker.bottom, marker.side, marker.cap, marker.top, marker.lowerRim, marker.upperRim, marker.direction]) {
+    bounds.union(new THREE.Box3().setFromObject(mesh));
+  }
+  near(bounds.getSize(new THREE.Vector3()).x, 0.38);
+  near(bounds.getSize(new THREE.Vector3()).z, 0.38);
+  near(marker.top.position.y - marker.bottom.position.y, 0.12);
   near(bounds.min.y, 0.6 + SEAT_MARKER_DIMENSIONS.seatGap);
   near(bounds.max.y, 0.6 + SEAT_MARKER_DIMENSIONS.seatGap + SEAT_MARKER_DIMENSIONS.height + SEAT_MARKER_DIMENSIONS.arrowLift);
   const side = new THREE.Box3().setFromObject(marker.side);
@@ -39,7 +45,48 @@ test("seat marker is one assembled round volume at seat height, independent of i
   near(side.max.y, cap.min.y);
   near(cap.max.y, marker.top.getWorldPosition(new THREE.Vector3()).y);
   near(side.min.y, marker.bottom.getWorldPosition(new THREE.Vector3()).y);
-  assert.ok(side.getSize(new THREE.Vector3()).y > 0.12);
+  near(side.getSize(new THREE.Vector3()).y, 0.107);
+  near(cap.getSize(new THREE.Vector3()).y, 0.013);
+  controller.clear();
+});
+
+test("smaller artwork preserves the original invisible picking dimensions and height", () => {
+  const controller = createSeatMarkerViewController(); controller.rebuild([anchor()]);
+  const marker = controller.getMarker("seat")!;
+  const bounds = new THREE.Box3().setFromObject(marker.hit);
+  near(bounds.getSize(new THREE.Vector3()).x, 0.44);
+  near(bounds.getSize(new THREE.Vector3()).z, 0.44);
+  near(bounds.getSize(new THREE.Vector3()).y, 0.14);
+  near(bounds.min.y, 0.62);
+  near(bounds.max.y, 0.76);
+  near(marker.hit.position.y, 0.09);
+  near(marker.hit.position.z, 0);
+  for (const mesh of [marker.bottom, marker.side, marker.cap, marker.top, marker.lowerRim, marker.upperRim, marker.direction]) {
+    near(mesh.position.z, -0.03);
+  }
+  assert.equal(marker.hit.material.visible, false);
+  assert.deepEqual(marker.group.scale.toArray(), [1, 1, 1]);
+  controller.clear();
+});
+
+test("the 12 cm chevron scales every original vertex uniformly and stays symmetric", () => {
+  const controller = createSeatMarkerViewController(); controller.rebuild([anchor()]);
+  const marker = controller.getMarker("seat")!;
+  const positions = marker.direction.geometry.getAttribute("position");
+  const expected = ([
+    [-0.07, -0.015], [-0.053, -0.034], [0, 0.018],
+    [0.053, -0.034], [0.07, -0.015], [0, 0.052]
+  ] as const).map(([x, y]) => new THREE.Vector3(x * 6 / 7, 0, -y * 6 / 7));
+  const actual = Array.from({ length: positions.count }, (_, index) => new THREE.Vector3().fromBufferAttribute(positions, index));
+  for (const vertex of expected) assert.ok(actual.some(point => point.distanceTo(vertex) < 1e-6));
+  for (const vertex of actual) {
+    assert.ok(expected.some(point => point.distanceTo(vertex) < 1e-6));
+    assert.ok(actual.some(point => point.distanceTo(new THREE.Vector3(-vertex.x, vertex.y, vertex.z)) < 1e-6));
+  }
+  const bounds = new THREE.Box3().setFromObject(marker.direction);
+  near(bounds.getSize(new THREE.Vector3()).x, 0.12);
+  near(bounds.getSize(new THREE.Vector3()).z, 0.086 * 6 / 7);
+  near(marker.direction.position.y - marker.top.position.y, 0.0026);
   controller.clear();
 });
 
@@ -61,7 +108,13 @@ for (const yaw of [0, Math.PI / 2, -Math.PI / 2, Math.PI]) {
     player.add(pitch); pitch.add(camera);
     const pose = createLocalPoseController({ player, pitch });
     pose.lockToSeat(marker.group.position, "seat_enter", { yaw });
-    near(forward.dot(camera.getWorldDirection(new THREE.Vector3())), 1);
+    const seatedForward = camera.getWorldDirection(new THREE.Vector3());
+    near(forward.dot(seatedForward), 1);
+    const visualOffset = marker.top.getWorldPosition(new THREE.Vector3()).sub(marker.group.getWorldPosition(new THREE.Vector3()));
+    visualOffset.y = 0;
+    near(visualOffset.length(), 0.03);
+    near(visualOffset.clone().normalize().dot(seatedForward), 1);
+    near(marker.hit.position.z, 0);
     camera.position.set(3, 2, 1); camera.lookAt(-4, 1, -9);
     controller.update(state({ hoveredSeatId: "seat", timeSeconds: 2 }));
     assert.equal(marker.group.rotation.y, yaw);
