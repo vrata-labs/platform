@@ -124,8 +124,15 @@ test("authoritative occupied/current wins over hover and pending, and released/r
   near(marker.top.material.opacity, 0.19);
   controller.update(state({ pendingSeatId: "seat", timeSeconds: 3 }));
   controller.update(state({ timeSeconds: 4 }));
-  assert.equal(marker.top.material.color.getHex(), SEAT_MARKER_COLORS.free);
+  // Cancellation clears amber immediately; the remaining emphasis fades out in 150ms.
+  assert.notEqual(marker.top.material.color.getHex(), SEAT_MARKER_COLORS.pending);
+  assert.equal(marker.group.visible, true);
+  assert.equal(marker.hit.userData.seatMarkerBlocked, false);
+  const cancellingOpacity = marker.top.material.opacity;
+  controller.update(state({ timeSeconds: 4.075 }));
+  assert.ok(marker.top.material.opacity < cancellingOpacity && marker.top.material.opacity > 0.19);
   controller.update(state({ timeSeconds: 4.15 }));
+  assert.equal(marker.top.material.color.getHex(), SEAT_MARKER_COLORS.free);
   near(marker.top.material.opacity, 0.19);
   controller.clear();
 });
