@@ -8,6 +8,7 @@ export const SEAT_MARKER_DIMENSIONS = Object.freeze({
   hitDiameter: 0.44,
   hitHeight: 0.14,
   seatGap: 0.02,
+  forwardOffset: 0.03,
   capThickness: 0.013,
   rimThickness: 0.0035,
   arrowWidth: 0.12,
@@ -105,6 +106,8 @@ export function createSeatMarkerParts(geometry: SeatMarkerGeometries) {
   for (const [index, [name, mesh]] of Object.entries(parts).entries()) {
     mesh.name = `seat-marker-${name}`;
     mesh.renderOrder = index;
+    // Clear the backrest without moving the actual seat or its picking envelope.
+    if (mesh !== hit) mesh.position.z = -d.forwardOffset;
   }
   return parts;
 }

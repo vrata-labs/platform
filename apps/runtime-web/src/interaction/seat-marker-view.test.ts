@@ -60,6 +60,10 @@ test("smaller artwork preserves the original invisible picking dimensions and he
   near(bounds.min.y, 0.62);
   near(bounds.max.y, 0.76);
   near(marker.hit.position.y, 0.09);
+  near(marker.hit.position.z, 0);
+  for (const mesh of [marker.bottom, marker.side, marker.cap, marker.top, marker.lowerRim, marker.upperRim, marker.direction]) {
+    near(mesh.position.z, -0.03);
+  }
   assert.equal(marker.hit.material.visible, false);
   assert.deepEqual(marker.group.scale.toArray(), [1, 1, 1]);
   controller.clear();
@@ -104,7 +108,13 @@ for (const yaw of [0, Math.PI / 2, -Math.PI / 2, Math.PI]) {
     player.add(pitch); pitch.add(camera);
     const pose = createLocalPoseController({ player, pitch });
     pose.lockToSeat(marker.group.position, "seat_enter", { yaw });
-    near(forward.dot(camera.getWorldDirection(new THREE.Vector3())), 1);
+    const seatedForward = camera.getWorldDirection(new THREE.Vector3());
+    near(forward.dot(seatedForward), 1);
+    const visualOffset = marker.top.getWorldPosition(new THREE.Vector3()).sub(marker.group.getWorldPosition(new THREE.Vector3()));
+    visualOffset.y = 0;
+    near(visualOffset.length(), 0.03);
+    near(visualOffset.clone().normalize().dot(seatedForward), 1);
+    near(marker.hit.position.z, 0);
     camera.position.set(3, 2, 1); camera.lookAt(-4, 1, -9);
     controller.update(state({ hoveredSeatId: "seat", timeSeconds: 2 }));
     assert.equal(marker.group.rotation.y, yaw);
