@@ -1,0 +1,37 @@
+name: Refactor workspace preparation
+on:
+  push:
+    branches: ['preparation/runtime-diagnostics-20260924']
+permissions:
+  contents: read
+jobs:
+  baseline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: d5bb362a11791bf96e1651a76536930bb5099628
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Build unchanged baseline
+        run: pnpm build
+      - name: Archive public source and installed dependencies
+        run: |
+          mkdir -p "$RUNNER_TEMP/refactor-baseline"
+          git rev-parse HEAD > "$RUNNER_TEMP/refactor-baseline/commit.txt"
+          git ls-tree -r HEAD > "$RUNNER_TEMP/refactor-baseline/tree.txt"
+          git archive HEAD | gzip > "$RUNNER_TEMP/refactor-baseline/source.tar.gz"
+          tar -czf "$RUNNER_TEMP/refactor-baseline/workspace.tar.gz" --exclude=.git --exclude=.reference-scene-assets .
+          git ls-files '*AGENTS.md' '*instructions*' > "$RUNNER_TEMP/refactor-baseline/instructions.txt"
+          git ls-files '*.ts' '*.tsx' '*.js' '*.mjs' '*.py' | xargs wc -l | sort -nr | head -40 > "$RUNNER_TEMP/refactor-baseline/largest.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: refactor-baseline-d5bb362
+          path: ${{ runner.temp }}/refactor-baseline/
+          retention-days: 7
