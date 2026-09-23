@@ -12,11 +12,18 @@ export interface SeatMarkerTarget {
   seatAnchor: SceneBundleSeatAnchor;
 }
 
+// A visual snapshot marks the collider as blocked without removing it from the ray.
+// Reading this metadata is side-effect free and does not create a reservation system.
+export function isSeatMarkerBlocked(seatId: string, hitMeshes: readonly THREE.Object3D[]): boolean {
+  return hitMeshes.some((mesh) => mesh.userData.seatAnchorId === seatId && mesh.userData.seatMarkerBlocked === true);
+}
+
 export function resolveSeatMarkerTarget(input: {
   ray: THREE.Ray;
   seatMarkerHitMeshes: THREE.Object3D[];
   seatAnchorMap: ReadonlyMap<string, SceneBundleSeatAnchor>;
   raycaster: THREE.Raycaster;
+  maxDistance?: number;
 }): SeatMarkerTarget | null {
   if (input.seatMarkerHitMeshes.length === 0) {
     return null;
@@ -24,6 +31,7 @@ export function resolveSeatMarkerTarget(input: {
   input.raycaster.ray.copy(input.ray);
   const intersections = input.raycaster.intersectObjects(input.seatMarkerHitMeshes, false);
   for (const hit of intersections) {
+    if (hit.distance > (input.maxDistance ?? 20)) continue;
     const seatAnchorId = typeof hit.object.userData.seatAnchorId === "string" ? hit.object.userData.seatAnchorId : null;
     if (!seatAnchorId) {
       continue;
@@ -92,19 +100,24 @@ export function resolveInteractionTargetFromRay(input: {
   teleportFloorY: number;
   maxDistance?: number;
 }): InteractionTarget {
-  const seatMarkerTarget = resolveSeatMarkerTarget(input);
-  if (seatMarkerTarget) {
+  const marker = resolveSeatMarkerTarget(input);
+  const fallback = resolveInteractionTarget(input);
+  // Do not tunnel through an occupied seat's existing interaction envelope to
+  // either the floor or another marker. Free-seat marker priority is unchanged.
+  if (fallback.kind === "seat" && isSeatMarkerBlocked(fallback.seatId, input.seatMarkerHitMeshes)
+      && (!marker || fallback.point.distanceTo(input.ray.origin) <= marker.point.distanceTo(input.ray.origin))) {
+    return { kind: "none" };
+  }
+  if (marker) {
+    if (isSeatMarkerBlocked(marker.seatAnchor.id, input.seatMarkerHitMeshes)) return { kind: "none" };
     return {
       kind: "seat",
-      point: seatMarkerTarget.point,
-      seatId: seatMarkerTarget.seatAnchor.id,
-      seatAnchor: seatMarkerTarget.seatAnchor
+      point: marker.point,
+      seatId: marker.seatAnchor.id,
+      seatAnchor: marker.seatAnchor
     };
   }
-  return resolveInteractionTarget({
-    ray: input.ray,
-    seatAnchors: input.seatAnchors,
-    teleportFloorY: input.teleportFloorY,
-    maxDistance: input.maxDistance
-  });
+  return fallback.kind === "seat" && isSeatMarkerBlocked(fallback.seatId, input.seatMarkerHitMeshes)
+    ? { kind: "none" }
+    : fallback;
 }
