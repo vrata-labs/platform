@@ -2,13 +2,16 @@ import * as THREE from "three";
 
 // Design dimensions, in metres; anchor.radius is an interaction tolerance, not upholstery size.
 export const SEAT_MARKER_DIMENSIONS = Object.freeze({
-  diameter: 0.44,
-  height: 0.14,
+  diameter: 0.38,
+  height: 0.12,
+  // Keep the original picking envelope independent of the smaller artwork.
+  hitDiameter: 0.44,
+  hitHeight: 0.14,
   seatGap: 0.02,
-  capThickness: 0.015,
-  rimThickness: 0.004,
-  arrowWidth: 0.14,
-  arrowLift: 0.003
+  capThickness: 0.013,
+  rimThickness: 0.0035,
+  arrowWidth: 0.12,
+  arrowLift: 0.0026
 });
 export const SEAT_MARKER_COLORS = Object.freeze({ free: 0x64d7ff, hovered: 0xa1efff, pending: 0xffd166 });
 
@@ -17,13 +20,15 @@ export function createSeatMarkerGeometries() {
   const radius = (d.diameter - d.rimThickness) / 2;
   const arrow = new THREE.Shape();
   const halfWidth = d.arrowWidth / 2;
+  // Scale every chevron coordinate from its original 14 cm width, not just the span.
+  const arrowScale = d.arrowWidth / 0.14;
   // The symmetric chevron tip is local -Z, like the seated camera's forward axis.
-  arrow.moveTo(-halfWidth, -0.015);
-  arrow.lineTo(-halfWidth + 0.017, -0.034);
-  arrow.lineTo(0, 0.018);
-  arrow.lineTo(halfWidth - 0.017, -0.034);
-  arrow.lineTo(halfWidth, -0.015);
-  arrow.lineTo(0, 0.052);
+  arrow.moveTo(-halfWidth, -0.015 * arrowScale);
+  arrow.lineTo(-halfWidth + 0.017 * arrowScale, -0.034 * arrowScale);
+  arrow.lineTo(0, 0.018 * arrowScale);
+  arrow.lineTo(halfWidth - 0.017 * arrowScale, -0.034 * arrowScale);
+  arrow.lineTo(halfWidth, -0.015 * arrowScale);
+  arrow.lineTo(0, 0.052 * arrowScale);
   arrow.closePath();
   return {
     disk: new THREE.CircleGeometry(radius, 48).rotateX(-Math.PI / 2),
@@ -31,7 +36,7 @@ export function createSeatMarkerGeometries() {
     cap: new THREE.CylinderGeometry(radius, radius, d.capThickness, 48, 1, true),
     rim: new THREE.TorusGeometry(radius, d.rimThickness / 2, 6, 48).rotateX(Math.PI / 2),
     arrow: new THREE.ShapeGeometry(arrow).rotateX(-Math.PI / 2),
-    hit: new THREE.CylinderGeometry(d.diameter / 2, d.diameter / 2, d.height, 24)
+    hit: new THREE.CylinderGeometry(d.hitDiameter / 2, d.hitDiameter / 2, d.hitHeight, 24)
   };
 }
 export type SeatMarkerGeometries = ReturnType<typeof createSeatMarkerGeometries>;
@@ -94,7 +99,7 @@ export function createSeatMarkerParts(geometry: SeatMarkerGeometries) {
   lowerRim.position.y = d.seatGap + d.rimThickness / 2;
   upperRim.position.y = d.seatGap + d.height - d.rimThickness / 2;
   direction.position.y = top.position.y + d.arrowLift;
-  hit.position.y = d.seatGap + d.height / 2;
+  hit.position.y = d.seatGap + d.hitHeight / 2;
   const parts = { bottom, side, cap, top, lowerRim, upperRim, direction, hit };
   // Opaque furniture still occludes these surfaces; only their internal blending order is fixed.
   for (const [index, [name, mesh]] of Object.entries(parts).entries()) {

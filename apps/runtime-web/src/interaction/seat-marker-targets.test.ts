@@ -38,6 +38,35 @@ test("invisible picking volume accepts centre and oblique rays, not just rim or 
   view.clear();
 });
 
+test("rays outside the reduced artwork retain the original picking envelope and occupancy rules", () => {
+  const { view, input } = fixture();
+  const marker = view.getMarker("seat")!;
+  const visualMeshes = [marker.bottom, marker.side, marker.cap, marker.top, marker.lowerRim, marker.upperRim, marker.direction];
+  const rays = [
+    // Between the new 19 cm visual radius and the retained 22 cm picking radius.
+    new THREE.Ray(new THREE.Vector3(0.205, 1.6, -2), new THREE.Vector3(0, -1, 0)),
+    // Above the new top/chevron, but still inside the old 14 cm picking height.
+    new THREE.Ray(new THREE.Vector3(0, 0.65, 0), new THREE.Vector3(0, 0, -1))
+  ];
+  for (const ray of rays) {
+    input.ray.copy(ray);
+    input.raycaster.set(ray.origin, ray.direction);
+    assert.equal(input.raycaster.intersectObjects(visualMeshes, false).length, 0);
+    assert.equal(resolveSeatMarkerTarget(input)?.seatAnchor.id, "seat");
+    assert.equal(resolveInteractionTargetFromRay(input).kind, "seat");
+    for (const blocked of [state({ occupancy: { seat: "other" } }), state({ currentSeatId: "seat" })]) {
+      view.update(blocked);
+      assert.equal(resolveSeatMarkerTarget(input)?.seatAnchor.id, "seat");
+      assert.deepEqual(resolveInteractionTargetFromRay(input), { kind: "none" });
+    }
+    view.update(state());
+    assert.equal(resolveInteractionTargetFromRay(input).kind, "seat");
+  }
+  input.ray.set(new THREE.Vector3(0.225, 1.6, -2), new THREE.Vector3(0, -1, 0));
+  assert.equal(resolveSeatMarkerTarget(input), null);
+  view.clear();
+});
+
 test("occupied/current collider blocks floor fall-through and stale forced-seat hover", () => {
   const { view, input } = fixture();
   assert.equal(resolveInteractionTargetFromRay(input).kind, "seat");
