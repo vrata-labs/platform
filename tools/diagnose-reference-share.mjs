@@ -16,9 +16,22 @@ const redact = text => String(text).replace(/\b\w+:\/\/[^\s"']+/g, "[url]").repl
 const browser = await chromium.launch({ headless: true });
 const host = await browser.newPage({ viewport: { width: 640, height: 400 } });
 const peer = await browser.newPage({ viewport: { width: 640, height: 400 } });
+for (const client of [host, peer]) await client.addInitScript(() => {
+  const Native = RTCPeerConnection;
+  const connections = [];
+  window.RTCPeerConnection = class extends Native { constructor(...args) { super(...args); connections.push(this); } };
+  window.__probeRtp = async () => Promise.all(connections.map(async pc => {
+    const output = { connectionState: pc.connectionState, iceState: pc.iceConnectionState, video: [] };
+    for (const row of (await pc.getStats()).values()) {
+      if (!["inbound-rtp", "outbound-rtp"].includes(row.type) || (row.kind ?? row.mediaType) !== "video") continue;
+      output.video.push({ direction: row.type, bytesSent: row.bytesSent, bytesReceived: row.bytesReceived, framesEncoded: row.framesEncoded, framesDecoded: row.framesDecoded, framesReceived: row.framesReceived, framesSent: row.framesSent, frameWidth: row.frameWidth, frameHeight: row.frameHeight });
+    }
+    return output;
+  }));
+});
 const state = page => page.evaluate(() => {
   const d = window.__VRATA_DEBUG__;
-  return { scene: d?.sceneBundleState, status: d?.statusLine, issue: d?.issueCode, mediaState: d?.media?.audioState, publishedAudio: d?.media?.publishedAudio, rtcAvailable: d?.media?.webrtc?.available, transportCount: d?.media?.webrtc?.transports?.length, share: d?.screenShare, blockedReason: d?.mediaObjects?.blockedReason };
+  return { scene: d?.sceneBundleState, status: d?.statusLine, issue: d?.issueCode, mediaState: d?.media?.audioState, publishedAudio: d?.media?.publishedAudio, rtcAvailable: d?.media?.webrtc?.available, transportCount: d?.media?.webrtc?.transports?.length, share: d?.screenShare, blockedReason: d?.mediaObjects?.blockedReason, visibility: document.visibilityState, videos: [...document.querySelectorAll("video")].map(v=>({width:v.videoWidth,height:v.videoHeight,ready:v.readyState,paused:v.paused,muted:v.muted,time:v.currentTime,frames:v.getVideoPlaybackQuality().totalVideoFrames})), sample:window.__VRATA_TEST__?.sampleMediaSurfaceTexture("debug-main", {u:.5,v:.5},{width:.01,height:.01})?.samples?.[0] };
 });
 for (const [page, name] of [[host, "host"], [peer, "peer"]]) {
   page.on("console", message => { if (message.type() === "error") result.events.push({ name, error: redact(message.text()) }); });
@@ -50,6 +63,8 @@ try {
     const s = window.__VRATA_DEBUG__?.screenShare;
     return s?.localPublishing && s?.publishedTrackSid && !s.publishedTrackSid.startsWith("mock-");
   }, null, { timeout: 45000 });
+  await new Promise(resolve => setTimeout(resolve, 15000));
+  result.rtp = { host: await host.evaluate(() => window.__probeRtp()), peer: await peer.evaluate(() => window.__probeRtp()) };
 } catch (error) {
   result.failure = redact(error.message);
   process.exitCode = 1;

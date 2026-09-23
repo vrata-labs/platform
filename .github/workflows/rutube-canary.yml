@@ -3,6 +3,9 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+concurrency:
+  group: staging-deploy
+  cancel-in-progress: false
 jobs:
   probe:
     runs-on: ubuntu-latest
