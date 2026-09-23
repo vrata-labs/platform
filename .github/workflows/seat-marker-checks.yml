@@ -4,6 +4,9 @@ on:
   pull_request:
     paths:
       - 'apps/runtime-web/src/interaction/seat-marker*'
+      - 'apps/runtime-web/src/interaction/interaction-*'
+      - 'tests/e2e/seat-marker-visual.spec.ts'
+      - 'tests/e2e/fixtures/seat-marker-browser.mjs'
       - '.github/workflows/seat-marker-checks.yml'
 
 permissions:
@@ -12,6 +15,21 @@ permissions:
 jobs:
   seat-marker-unit:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: vrata_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d vrata_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -21,11 +39,36 @@ jobs:
           cache: pnpm
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
-      - name: Build runtime
-        run: |
-          pnpm --filter @vrata/shared-types build
-          pnpm --filter @vrata/runtime-web build
+      - name: Build application
+        run: pnpm build
       - name: Verify isolated marker materials
         run: node --test apps/runtime-web/dist/interaction/seat-marker-colors.test.js
       - name: Verify marker geometry and interaction
         run: node --test apps/runtime-web/dist/interaction/seat-marker-view.test.js apps/runtime-web/dist/interaction/seat-marker-targets.test.js
+      - name: Install Playwright browser
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Cache pinned reference scenes
+        uses: actions/cache@v4
+        with:
+          path: .reference-scene-assets
+          key: reference-scenes-${{ hashFiles('packages/templates/src/product-room-definitions.ts') }}
+      - name: Verify pinned reference scenes
+        run: node tools/fetch-reference-template-fixtures.mjs
+      - name: Verify marker in WebGL and actual rooms
+        env:
+          VRATA_TEST_POSTGRES_URL: postgres://postgres:postgres@127.0.0.1:5432/vrata_test
+          PLAYWRIGHT_NO_WEB_SERVER: "1"
+          PLAYWRIGHT_REPORT_NAME: seat-marker-local
+          PLAYWRIGHT_TRACE: "1"
+        run: pnpm exec playwright test tests/e2e/seat-marker-visual.spec.ts --grep-invert @staging --workers=1
+      - name: Upload marker browser evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: seat-marker-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: ignore
+          path: |
+            playwright-report/seat-marker-local/
+            test-results/seat-marker-local/
+            test-results/seat-marker-local.json
