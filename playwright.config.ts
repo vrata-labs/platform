@@ -18,6 +18,10 @@ process.env.E2E_ROOM_STATE_PUBLIC_URL ??= roomStateUrl;
 export default defineConfig({
   testDir: "./tests/e2e",
   forbidOnly: !!process.env.CI,
+  // Reference-room scenarios each render two live WebGL clients. Avoid running
+  // multiple such scenarios on the same software-rendered CI host; this does not
+  // serialize the participants inside a scenario or change its assertions/timeouts.
+  workers: process.env.CI ? 1 : undefined,
   timeout: 45000,
   outputDir: `test-results/${reportName}`,
   reporter: [

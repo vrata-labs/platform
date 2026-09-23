@@ -177,14 +177,37 @@ function seatReviewPose(seat: Seat) {
 }
 async function join(page: Page, url: string) {
   await page.goto(url);
-  await expect.poll(() => page.evaluate(() => {
-    const debug = (window as any).__VRATA_DEBUG__;
-    return {
-      state: debug?.sceneBundleState ?? null,
-      failure: debug?.sceneDebug?.failureReason ?? null,
-      missing: debug?.sceneDebug?.missingAssets ?? []
-    };
-  }), { timeout: 90000 }).toEqual({ state: "loaded", failure: null, missing: [] });
+  try {
+    await expect.poll(() => page.evaluate(() => {
+      const debug = (window as any).__VRATA_DEBUG__;
+      return {
+        state: debug?.sceneBundleState ?? null,
+        failure: debug?.sceneDebug?.failureReason ?? null,
+        missing: debug?.sceneDebug?.missingAssets ?? []
+      };
+    }), { timeout: 90000 }).toEqual({ state: "loaded", failure: null, missing: [] });
+  } catch (error) {
+    // Do not sample/read back the WebGL canvas while another client is loading.
+    // Preserve the original failure even if the page has already closed.
+    await page.evaluate(() => {
+      const debug = (window as any).__VRATA_DEBUG__;
+      const scene = debug?.sceneDebug;
+      return {
+        state: debug?.sceneBundleState ?? null,
+        loadStage: scene?.loadStage ?? null,
+        assetBytesLoaded: scene?.assetBytesLoaded ?? null,
+        assetBytesExpected: scene?.assetBytesExpected ?? null,
+        roomStateConnected: debug?.roomStateConnected ?? false,
+        documentReadyState: document.readyState,
+        visibilityState: document.visibilityState,
+        hardwareConcurrency: navigator.hardwareConcurrency,
+        resourceCount: performance.getEntriesByType("resource").length
+      };
+    }).then(snapshot => test.info().attach("marker-scene-load-timeout", {
+      body: JSON.stringify(snapshot, null, 2), contentType: "application/json"
+    })).catch(() => {});
+    throw error;
+  }
   await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__?.roomStateConnected), { timeout: 30000 }).toBe(true);
   expect(await page.evaluate(() => (window as any).__VRATA_DEBUG__.sceneDebug.missingAssets)).toEqual([]);
   await page.evaluate(() => {
