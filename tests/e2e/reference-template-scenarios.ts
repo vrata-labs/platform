@@ -218,12 +218,25 @@ test("reference meeting synchronizes only declared surfaces across two participa
   } finally { await context.close(); }
 });
 
-if (staging) test("reference presentation receives moving screen-share frames through the real media transport", async ({ page, request, browser }) => {
+if (staging) test("reference presentation receives moving screen-share frames through the real media transport", async ({ request, playwright }) => {
   const room = await create(request, "presentation-room-basic");
-  await join(page, await hostLink(request, room.roomId));
-  const context = await browser.newContext({ viewport: { width: 640, height: 400 } });
+  const browser = await playwright.chromium.launch({ headless: true });
+  const page = await browser.newPage({ viewport: { width: 640, height: 400 } });
+  const observer = await browser.newPage({ viewport: { width: 640, height: 400 } });
+  const events: Array<{ peer: string; category: string; status?: number }> = [];
+  for (const [client, peer] of [[page, "publisher"], [observer, "viewer"]] as const) {
+    client.on("response", response => {
+      if (new URL(response.url()).pathname === "/api/tokens/media") events.push({ peer, category: "media_token", status: response.status() });
+    });
+    client.on("console", message => {
+      if (message.type() !== "error") return;
+      const text = message.text().toLowerCase();
+      const category = text.includes("pc connection") ? "peer_connection" : text.includes("signal") ? "signaling" : text.includes("surface_command") ? "surface_command" : text.includes("permission") ? "permission" : "other_error";
+      events.push({ peer, category });
+    });
+  }
   try {
-    const observer = await context.newPage();
+    await join(page, await hostLink(request, room.roomId));
     await join(observer, `${room.roomLink}?debug=1&scenefit=0&onboard=0`);
     // Replace only the OS capture source. Publishing, subscription, decoding and
     // surface presentation use the ordinary product transport, without sharemock.
@@ -257,9 +270,16 @@ if (staging) test("reference presentation receives moving screen-share frames th
     await captureReferenceView(observer, "presentation-real-screen-share");
     await page.locator("#stop-share").click();
     await expect.poll(() => observer.evaluate(() => (window as any).__VRATA_DEBUG__?.screenShare?.remoteSubscribedTrackCount ?? 0)).toBe(0);
+  } catch (error) {
+    const states = await Promise.all([page, observer].map(client => client.evaluate(() => {
+      const d = (window as any).__VRATA_DEBUG__;
+      return { scene: d?.sceneBundleState, issue: d?.issueCode, audioState: d?.media?.audioState, publishedAudio: d?.media?.publishedAudio, rtcAvailable: d?.media?.webrtc?.available, transportCount: d?.media?.webrtc?.transports?.length, share: d?.screenShare };
+    }).catch(() => null)));
+    await test.info().attach("reference-media-state", { body: JSON.stringify({ events, states }), contentType: "application/json" });
+    throw error;
   } finally {
     await page.evaluate(() => (window as any).__stopReferenceCapture?.()).catch(() => undefined);
-    await context.close();
+    await browser.close();
   }
 });
 
