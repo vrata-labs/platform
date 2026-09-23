@@ -44,7 +44,7 @@ jobs:
       - name: Verify isolated marker materials
         run: node --test apps/runtime-web/dist/interaction/seat-marker-colors.test.js
       - name: Verify marker geometry and interaction
-        run: node --test apps/runtime-web/dist/interaction/seat-marker-view.test.js apps/runtime-web/dist/interaction/seat-marker-targets.test.js
+        run: node --test apps/runtime-web/dist/interaction/seat-marker-view.test.js apps/runtime-web/dist/interaction/seat-marker-targets.test.js apps/runtime-web/dist/interaction/seat-marker-ray-view.test.js
       - name: Install Playwright browser
         run: pnpm exec playwright install --with-deps chromium
       - name: Cache pinned reference scenes
