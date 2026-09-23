@@ -14,7 +14,7 @@ import {
   type InteractionRayDebugState,
   type InteractionRayView
 } from "./interaction-ray-view.js";
-import { resolveInteractionTargetFromRay, type InteractionTarget } from "./interaction-targets.js";
+import { isSeatMarkerBlocked, resolveInteractionTargetFromRay, type InteractionTarget } from "./interaction-targets.js";
 
 interface Vector3Like {
   x: number;
@@ -88,6 +88,7 @@ export function resolveRuntimeInteractionRay(input: RuntimeInteractionRayInput):
 export function resolveInteractionTargetForRay(input: RuntimeInteractionTargetInput): InteractionTarget {
   const forcedSeatAnchor = input.forcedSeatId ? input.seatAnchorMap.get(input.forcedSeatId) ?? null : null;
   if (forcedSeatAnchor) {
+    if (isSeatMarkerBlocked(forcedSeatAnchor.id, input.seatMarkerHitMeshes)) return { kind: "none" };
     return {
       kind: "seat",
       point: new THREE.Vector3(

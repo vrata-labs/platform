@@ -171,6 +171,8 @@ export function showInteractionRayView(input: {
     mode: input.mode,
     debug: input.debug,
     color,
+    // The seat marker already provides hover feedback; a sphere obscures its chevron.
+    showReticle: input.target.kind !== "seat",
     markTelemetry: input.markTelemetry
   });
   input.state.seatId = input.target.kind === "seat" ? input.target.seatAnchor.id : null;
