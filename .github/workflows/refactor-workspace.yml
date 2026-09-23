@@ -1,18 +1,36 @@
-name: Refactor workspace preparation
+name: Refactor notes preparation
 on:
   push:
     branches: ['preparation/runtime-diagnostics-20260924']
 permissions:
-  contents: read
+  contents: write
 jobs:
-  baseline:
+  verify-and-publish:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: vrata_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres -d vrata_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: d5bb362a11791bf96e1651a76536930bb5099628
-          persist-credentials: false
+      - name: Preserve preparation inputs and checkout pinned baseline
+        run: |
+          mkdir -p "$RUNNER_TEMP/notes-prep/evidence"
+          cp -a .github/refactor-notes "$RUNNER_TEMP/notes-prep/inputs"
+          git checkout --detach d5bb362a11791bf96e1651a76536930bb5099628
+          mkdir -p "$RUNNER_TEMP/notes-prep/baseline/apps/runtime-web/src"
+          cp apps/runtime-web/src/main.ts "$RUNNER_TEMP/notes-prep/baseline/apps/runtime-web/src/"
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
@@ -20,18 +38,78 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - name: Build unchanged baseline
-        run: pnpm build
-      - name: Archive public source and installed dependencies
         run: |
-          mkdir -p "$RUNNER_TEMP/refactor-baseline"
-          git rev-parse HEAD > "$RUNNER_TEMP/refactor-baseline/commit.txt"
-          git ls-tree -r HEAD > "$RUNNER_TEMP/refactor-baseline/tree.txt"
-          git archive HEAD | gzip > "$RUNNER_TEMP/refactor-baseline/source.tar.gz"
-          tar -czf "$RUNNER_TEMP/refactor-baseline/workspace.tar.gz" --exclude=.git --exclude=.reference-scene-assets .
-          git ls-files '*AGENTS.md' '*instructions*' > "$RUNNER_TEMP/refactor-baseline/instructions.txt"
-          git ls-files '*.ts' '*.tsx' '*.js' '*.mjs' '*.py' | xargs wc -l | sort -nr | head -40 > "$RUNNER_TEMP/refactor-baseline/largest.txt"
-      - uses: actions/upload-artifact@v4
+          pnpm build | tee "$RUNNER_TEMP/notes-prep/evidence/baseline-build.log"
+          cp apps/runtime-web/dist/main.js ../original-main.js
+          cp -a apps/runtime-web/dist "$RUNNER_TEMP/notes-prep/original-dist"
+      - name: Apply reviewed patch and verify original source reconstruction
+        run: |
+          cat "$RUNNER_TEMP/notes-prep/inputs/part-"* | gzip -dc > "$RUNNER_TEMP/notes-prep/notes.patch"
+          echo "b5173446fd08a4338dec10645f5961f3f2406d683f72bf67274fe07fcf8764ef  $RUNNER_TEMP/notes-prep/notes.patch" | sha256sum -c -
+          git apply --check "$RUNNER_TEMP/notes-prep/notes.patch"
+          git apply "$RUNNER_TEMP/notes-prep/notes.patch"
+          git diff --check
+          node "$RUNNER_TEMP/notes-prep/inputs/verify.cjs" "$PWD" "$RUNNER_TEMP/notes-prep/baseline" | tee "$RUNNER_TEMP/notes-prep/evidence/equivalence.log"
+      - name: Lint
+        run: pnpm lint | tee "$RUNNER_TEMP/notes-prep/evidence/lint.log"
+      - name: Typecheck
+        run: pnpm typecheck | tee "$RUNNER_TEMP/notes-prep/evidence/typecheck.log"
+      - name: Build candidate
+        run: pnpm build | tee "$RUNNER_TEMP/notes-prep/evidence/build.log"
+      - name: Checkout proven template rollback base
+        uses: actions/checkout@v4
         with:
-          name: refactor-baseline-d5bb362
-          path: ${{ runner.temp }}/refactor-baseline/
-          retention-days: 7
+          repository: vrata-labs/platform
+          ref: 33c7485ffa1773105c496b43542ea53bf4c5ae9a
+          path: .template-rollback
+          persist-credentials: false
+      - name: Build template rollback base
+        run: |
+          pnpm --dir .template-rollback install --frozen-lockfile
+          test "$(git -C .template-rollback hash-object packages/asset-pipeline/bin/vrata.mjs)" = "$(git -C .template-rollback rev-parse HEAD:packages/asset-pipeline/bin/vrata.mjs)"
+          chmod 644 .template-rollback/packages/asset-pipeline/bin/vrata.mjs
+          git -C .template-rollback diff --exit-code HEAD
+          pnpm --dir .template-rollback --filter @vrata/shared-types --filter @vrata/templates --filter @vrata/asset-pipeline --filter @vrata/api build
+      - name: Full workspace tests with PostgreSQL
+        env:
+          VRATA_TEST_POSTGRES_URL: postgres://postgres:postgres@127.0.0.1:5432/vrata_test
+          VRATA_TEMPLATE_ROLLBACK_STORAGE_MODULE: ${{ github.workspace }}/.template-rollback/apps/api/dist/storage.js
+        run: pnpm test | tee "$RUNNER_TEMP/notes-prep/evidence/test.log"
+      - name: Characterize independently extracted original operations
+        run: |
+          node "$RUNNER_TEMP/notes-prep/inputs/original-tests.cjs" "$PWD"
+          cp ../notes-original-tests.log "$RUNNER_TEMP/notes-prep/evidence/"
+          node --test apps/runtime-web/dist/notes-runtime.test.js apps/runtime-web/dist/notes-runtime-async.test.js | tee "$RUNNER_TEMP/notes-prep/evidence/restored-candidate-tests.log"
+      - name: Publish only the exact reviewed source tree
+        run: |
+          test "$(git hash-object packages/asset-pipeline/bin/vrata.mjs)" = 8fb12721835f67f48cd435eba5172ea085cd3b33
+          test "$(git ls-tree HEAD packages/asset-pipeline/bin/vrata.mjs | cut -d ' ' -f1)" = 100644
+          chmod 644 packages/asset-pipeline/bin/vrata.mjs
+          git add apps/runtime-web/src/main.ts apps/runtime-web/src/notes-runtime.ts apps/runtime-web/src/notes-runtime.test.ts apps/runtime-web/src/notes-runtime-async.test.ts apps/runtime-web/src/testing/notes-runtime-harness.ts
+          test "$(git write-tree)" = 7351cadedbe0c166234a30a4085b702de8132b95
+          git diff --exit-code
+          git diff --cached --check
+          test -z "$(git ls-files --others --exclude-standard)"
+          current="$(git ls-remote origin refs/heads/main)"
+          test "${current%%[[:space:]]*}" = d5bb362a11791bf96e1651a76536930bb5099628
+          existing="$(git ls-remote origin refs/heads/refactor/runtime-notes-20260924)"
+          test -z "$existing"
+          git diff --cached --stat > "$RUNNER_TEMP/notes-prep/evidence/diff-stat.txt"
+          git diff --cached > "$RUNNER_TEMP/notes-prep/evidence/reviewed.patch"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'refactor(runtime): isolate notes lifecycle and controls'
+          test "$(git rev-parse HEAD^)" = d5bb362a11791bf96e1651a76536930bb5099628
+          test "$(git rev-parse HEAD^{tree})" = 7351cadedbe0c166234a30a4085b702de8132b95
+          git rev-parse HEAD > "$RUNNER_TEMP/notes-prep/evidence/head.txt"
+          git ls-tree -r HEAD > "$RUNNER_TEMP/notes-prep/evidence/tree.txt"
+          git archive HEAD | gzip > "$RUNNER_TEMP/notes-prep/evidence/source.tar.gz"
+          tar -czf "$RUNNER_TEMP/notes-prep/evidence/runtime-dist.tar.gz" apps/runtime-web/dist
+          git push origin HEAD:refs/heads/refactor/runtime-notes-20260924
+      - name: Upload verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: notes-refactor-preparation-${{ github.run_id }}
+          retention-days: 14
+          path: ${{ runner.temp }}/notes-prep/evidence/
