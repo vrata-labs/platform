@@ -243,11 +243,13 @@ if (staging) test("reference presentation receives moving screen-share frames th
     await page.evaluate(() => {
       const canvas = document.createElement("canvas"); canvas.width = 160; canvas.height = 90;
       const paint = canvas.getContext("2d")!;
-      const frame = () => { paint.fillStyle = Math.floor(performance.now() / 650) % 2 ? "#e82020" : "#2040e8"; paint.fillRect(0, 0, 160, 90); };
+      let color = "#e82020";
+      const frame = () => { paint.fillStyle = color; paint.fillRect(0, 0, 160, 90); };
       frame();
       const timer = window.setInterval(frame, 100);
       const stream = canvas.captureStream(10);
       Object.defineProperty(navigator.mediaDevices, "getDisplayMedia", { configurable: true, value: async () => stream });
+      (window as any).__setReferenceCaptureColor = (next: string) => { color = next; frame(); };
       (window as any).__stopReferenceCapture = () => { window.clearInterval(timer); stream.getTracks().forEach(track => track.stop()); };
     });
     await expect(page.locator("#start-share")).toBeEnabled({ timeout: 30000 });
@@ -259,21 +261,23 @@ if (staging) test("reference presentation receives moving screen-share frames th
     await expect.poll(() => observer.evaluate(() => (window as any).__VRATA_DEBUG__?.screenShare?.remoteSubscribedTrackCount ?? 0), { timeout: 45000 }).toBe(1);
     expect(await observer.evaluate(() => (window as any).__VRATA_DEBUG__?.media?.publishedAudio)).toBe(false);
     await expect(observer.locator("#join-muted")).toBeChecked();
-    const colors = new Set<string>();
-    await expect.poll(async () => {
-      const sample = await observer.evaluate(() => (window as any).__VRATA_TEST__.sampleMediaSurfaceTexture("debug-main", { u: .5, v: .5 }, { width: 1, height: 1 }));
+    const receivedColor = () => observer.evaluate(() => {
+      const sample = (window as any).__VRATA_TEST__.sampleMediaSurfaceTexture("debug-main", { u: .5, v: .5 }, { width: .01, height: .01 });
       const pixel = sample?.samples?.[0];
-      if (pixel?.[0] > pixel?.[2] + 30) colors.add("red");
-      if (pixel?.[2] > pixel?.[0] + 30) colors.add("blue");
-      return colors.size;
-    }, { timeout: 30000, intervals: [200, 400, 700] }).toBe(2);
+      return pixel?.[0] > pixel?.[2] + 30 ? "red" : pixel?.[2] > pixel?.[0] + 30 ? "blue" : null;
+    });
+    await expect.poll(receivedColor, { timeout: 30000 }).toBe("red");
+    await page.evaluate(() => (window as any).__setReferenceCaptureColor("#2040e8"));
+    await expect.poll(receivedColor, { timeout: 30000 }).toBe("blue");
     await captureReferenceView(observer, "presentation-real-screen-share");
     await page.locator("#stop-share").click();
     await expect.poll(() => observer.evaluate(() => (window as any).__VRATA_DEBUG__?.screenShare?.remoteSubscribedTrackCount ?? 0)).toBe(0);
   } catch (error) {
     const states = await Promise.all([page, observer].map(client => client.evaluate(() => {
       const d = (window as any).__VRATA_DEBUG__;
-      return { scene: d?.sceneBundleState, issue: d?.issueCode, audioState: d?.media?.audioState, publishedAudio: d?.media?.publishedAudio, rtcAvailable: d?.media?.webrtc?.available, transportCount: d?.media?.webrtc?.transports?.length, share: d?.screenShare };
+      return { scene: d?.sceneBundleState, issue: d?.issueCode, audioState: d?.media?.audioState, publishedAudio: d?.media?.publishedAudio, rtcAvailable: d?.media?.webrtc?.available, transportCount: d?.media?.webrtc?.transports?.length, share: d?.screenShare,
+        videos: [...document.querySelectorAll("video")].map(video => ({ width: video.videoWidth, height: video.videoHeight, readyState: video.readyState, paused: video.paused, frames: video.getVideoPlaybackQuality().totalVideoFrames })),
+        pixel: (window as any).__VRATA_TEST__?.sampleMediaSurfaceTexture("debug-main", { u: .5, v: .5 }, { width: .01, height: .01 })?.samples?.[0] };
     }).catch(() => null)));
     await test.info().attach("reference-media-state", { body: JSON.stringify({ events, states }), contentType: "application/json" });
     throw error;

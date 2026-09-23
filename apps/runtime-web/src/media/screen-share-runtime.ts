@@ -32,6 +32,11 @@ export interface ScreenShareRuntimeContext {
   reconcileMediaRoomIdleDisconnect: (room: Room | null, diagnosticsReason: string) => void;
 }
 
+export function resolveScreenShareSubscriptionCount(actualCount: number, state: ScreenShareObjectState | null, participantId: string): number {
+  const remoteMock = state?.mediaTrackSid?.startsWith("mock-screen-share:") && state.ownerParticipantId !== participantId;
+  return remoteMock ? Math.max(actualCount, 1) : actualCount;
+}
+
 export function createScreenShareRuntime(context: ScreenShareRuntimeContext) {
   const {
     screenShareRuntimeByObjectId,
