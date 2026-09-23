@@ -1,0 +1,31 @@
+name: Seat marker checks
+
+on:
+  pull_request:
+    paths:
+      - 'apps/runtime-web/src/interaction/seat-marker*'
+      - '.github/workflows/seat-marker-checks.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  seat-marker-unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Build runtime
+        run: |
+          pnpm --filter @vrata/shared-types build
+          pnpm --filter @vrata/runtime-web build
+      - name: Verify isolated marker materials
+        run: node --test apps/runtime-web/dist/interaction/seat-marker-colors.test.js
+      - name: Verify marker geometry and interaction
+        run: node --test apps/runtime-web/dist/interaction/seat-marker-view.test.js apps/runtime-web/dist/interaction/seat-marker-targets.test.js
