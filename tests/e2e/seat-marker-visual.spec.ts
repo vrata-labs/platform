@@ -5,9 +5,21 @@ import { dirname, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { startReferenceTemplateFixture } from "./reference-template-fixture.js";
 
+// Explicit canvas captures below are the visual evidence. Automatic trace canvas
+// snapshots duplicate expensive software-WebGL readbacks for every API call.
+// Keep call/source diagnostics without changing runtime rendering or test assertions.
+test.use({ trace: process.env.PLAYWRIGHT_TRACE === "1"
+  ? { mode: "retain-on-failure", screenshots: false, snapshots: false, sources: true }
+  : "off" });
+
 async function capture(page: Page, testInfo: TestInfo, name: string, selector = "#scene > canvas") {
-  const bytes = await page.locator(selector).screenshot();
-  await testInfo.attach(name, { body: bytes, contentType: "image/png" });
+  const dataUrl = await page.evaluate(selector => {
+    const canvas = document.querySelector(selector);
+    if (!(canvas instanceof HTMLCanvasElement)) throw new Error("marker_capture_canvas_missing");
+    return canvas.toDataURL("image/png");
+  }, selector);
+  expect(dataUrl.startsWith("data:image/png;base64,")).toBe(true);
+  await testInfo.attach(name, { body: Buffer.from(dataUrl.split(",")[1]!, "base64"), contentType: "image/png" });
 }
 
 // The component pass checks actual compiled materials/shaders independently of room lighting.
@@ -141,8 +153,11 @@ for (const staging of [false, true]) test.describe(`${staging ? "@staging " : ""
         expect(errors).toEqual([]);
       } finally {
         await observerContext.close();
-        const deleted = await request.delete(`${fixture!.origin}/api/rooms/${room.roomId}`, { headers });
-        expect([200, 204, 404]).toContain(deleted.status());
+        // The per-test request fixture can already be closed after a test timeout.
+        const deleted = await fetch(new URL(`/api/rooms/${room.roomId}`, fixture!.origin), {
+          method: "DELETE", headers, signal: AbortSignal.timeout(15000)
+        });
+        expect([200, 204, 404]).toContain(deleted.status);
       }
     });
   }
@@ -166,8 +181,10 @@ async function join(page: Page, url: string) {
   await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__?.sceneBundleState), { timeout: 90000 }).toBe("loaded");
   await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__?.roomStateConnected), { timeout: 30000 }).toBe(true);
   expect(await page.evaluate(() => (window as any).__VRATA_DEBUG__.sceneDebug.missingAssets)).toEqual([]);
-  const hud = page.locator("details.hud");
-  if (await hud.evaluate(element => (element as HTMLDetailsElement).open)) await page.locator(".hud-summary").click();
+  await page.evaluate(() => {
+    const hud = document.querySelector("details.hud");
+    if (hud instanceof HTMLDetailsElement) hud.open = false;
+  });
 }
 async function waitFrames(page: Page) {
   await page.evaluate(() => new Promise<void>(done => requestAnimationFrame(() => requestAnimationFrame(() => done()))));
