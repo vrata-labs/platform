@@ -5,9 +5,19 @@ import type { Room, Track } from "livekit-client";
 import { SCREEN_SHARE_OBJECT_TYPE, type MediaObjectInstance, type RoomMediaObjectsState, type ScreenShareObjectState } from "@vrata/shared-types";
 
 import { createMediaSurfaceView, DEFAULT_RUNTIME_MEDIA_SURFACES } from "./media-surface-view.js";
-import { createScreenShareRuntime, type ScreenShareRuntimeContext, type ScreenShareRuntimeEntry } from "./screen-share-runtime.js";
+import { createScreenShareRuntime, resolveScreenShareSubscriptionCount, type ScreenShareRuntimeContext, type ScreenShareRuntimeEntry } from "./screen-share-runtime.js";
 
 type ShareObject = MediaObjectInstance<ScreenShareObjectState>;
+test("real share metadata cannot claim a subscription before a track is attached", () => {
+  const state = share().state;
+  assert.equal(resolveScreenShareSubscriptionCount(0, state, "viewer"), 0);
+  assert.equal(resolveScreenShareSubscriptionCount(2, state, "viewer"), 2);
+  assert.equal(resolveScreenShareSubscriptionCount(0, null, "viewer"), 0);
+  const mock = { ...state, mediaTrackSid: "mock-screen-share:owner:stream" };
+  assert.equal(resolveScreenShareSubscriptionCount(0, mock, "viewer"), 1);
+  assert.equal(resolveScreenShareSubscriptionCount(0, mock, "owner"), 0);
+});
+
 function share(objectId = "one", surfaceId = "first"): ShareObject {
   return { objectId, surfaceId, type: SCREEN_SHARE_OBJECT_TYPE, roomId: "room", ownerParticipantId: "owner",
     status: "active", revision: 1, createdAtMs: 0, updatedAtMs: 0,

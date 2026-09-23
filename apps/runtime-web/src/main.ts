@@ -188,7 +188,7 @@ import { createMediaSurfaceTestControls } from "./testing/media-surface-test-con
 import type { RuntimeTestApi } from "./testing/runtime-test-api.js";
 import { createMediaObjectQueries } from "./media/media-object-queries.js";
 import { createRemoteBrowserVideoRuntime, type RemoteBrowserVideoEntry } from "./media/remote-browser-video-runtime.js";
-import { createScreenShareRuntime, type ScreenShareRuntimeEntry } from "./media/screen-share-runtime.js";
+import { createScreenShareRuntime, resolveScreenShareSubscriptionCount, type ScreenShareRuntimeEntry } from "./media/screen-share-runtime.js";
 import { createMediaSurfaceAudioRuntime, type MediaSurfaceAudioNode } from "./media/media-surface-audio-runtime.js";
 
 function fallbackUuid(): string {
@@ -2154,9 +2154,7 @@ function syncMediaObjectsDebugState(): void {
     localPublishing,
     selectedSurfaceId: screenShareState?.surfaceId ?? null,
     publishedTrackSid: screenShareState?.mediaTrackSid ?? null,
-    remoteSubscribedTrackCount: screenShareState?.mediaTrackSid && screenShareState.ownerParticipantId !== participantId
-      ? Math.max(remoteSubscribedTrackCount, 1)
-      : remoteSubscribedTrackCount,
+    remoteSubscribedTrackCount: resolveScreenShareSubscriptionCount(remoteSubscribedTrackCount, screenShareState, participantId),
     mediaAudioEnabled: shouldPublishMediaSurfaceAudio(roomMediaObjects, activeScreenShare?.surfaceId ?? selectedMediaSurfaceId),
     errorCode: screenShareState?.errorCode ?? null
   };
