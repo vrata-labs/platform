@@ -39,6 +39,10 @@ jobs:
           cache: pnpm
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+      - name: Verify staging test imports without local build
+        env:
+          PLAYWRIGHT_NO_WEB_SERVER: "1"
+        run: pnpm exec playwright test tests/e2e/seat-marker-visual.spec.ts --grep @staging --list
       - name: Build application
         run: pnpm build
       - name: Verify isolated marker materials

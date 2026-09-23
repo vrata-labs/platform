@@ -2,7 +2,7 @@ import { expect, test, type Page, type TestInfo } from "@playwright/test";
 import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, resolve, sep } from "node:path";
-import { pathToFileURL } from "node:url";
+import { parseSceneBundleManifest } from "../../apps/runtime-web/src/scene-bundle.js";
 import { startReferenceTemplateFixture } from "./reference-template-fixture.js";
 
 // Explicit canvas captures below are the visual evidence. Automatic trace canvas
@@ -110,9 +110,8 @@ for (const staging of [false, true]) test.describe(`${staging ? "@staging " : ""
         await page.setViewportSize({ width: 640, height: 480 });
         const manifestResponse = page.waitForResponse(value => /\/scene\.json(?:[?#]|$)/.test(value.url()));
         await join(page, roomUrl);
-        const { parseSceneBundleManifest } = await import(pathToFileURL(resolve("apps/runtime-web/dist/scene-bundle.js")).href);
         const manifest = parseSceneBundleManifest(await (await manifestResponse).json());
-        const seat = manifest.anchors.seatAnchors[0] as Seat;
+        const seat = manifest.anchors!.seatAnchors[0] as Seat;
         expect(seat.id).toBeTruthy();
         await join(observer, roomUrl);
         const initial = await page.evaluate(() => {
@@ -178,7 +177,14 @@ function seatReviewPose(seat: Seat) {
 }
 async function join(page: Page, url: string) {
   await page.goto(url);
-  await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__?.sceneBundleState), { timeout: 90000 }).toBe("loaded");
+  await expect.poll(() => page.evaluate(() => {
+    const debug = (window as any).__VRATA_DEBUG__;
+    return {
+      state: debug?.sceneBundleState ?? null,
+      failure: debug?.sceneDebug?.failureReason ?? null,
+      missing: debug?.sceneDebug?.missingAssets ?? []
+    };
+  }), { timeout: 90000 }).toEqual({ state: "loaded", failure: null, missing: [] });
   await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__?.roomStateConnected), { timeout: 30000 }).toBe(true);
   expect(await page.evaluate(() => (window as any).__VRATA_DEBUG__.sceneDebug.missingAssets)).toEqual([]);
   await page.evaluate(() => {
