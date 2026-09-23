@@ -62,6 +62,20 @@ activation и автоматические сценарии → физическ
   acceptance фиксируются отдельно после исполнения. Scene publication-ready и
   product release не выводятся из одних лишь локальных проверок.
 
+## Автоматическая staging-приёмка, 2026-09-23
+
+Основной каталог на platform `8004b687c1e6e8eaf235e72fa3ebe8fbbe210b54` содержит
+ровно три active templates 2.0.0. Полный post-activation staging gate — 45/45,
+run `35818742548`; normal deployment — `35817770707`. Путь catalog rollback и
+image rollout проверен; immutable Wave 2 baseline —
+`a0238a515987c95e455c45b1e6c8017953314eef`.
+
+Подробности и ссылки для владельца:
+[acceptance record](../reviews/2026-09-22-reference-template-acceptance.md).
+Открытый этап — физические Android Chrome, iOS Safari и Meta Quest. Исторические
+пункты authoring ниже не означают, что требуется пересоздавать принятые сцены;
+production/publication-ready promotion ожидает physical-device результатов.
+
 ## Цель
 
 - Поставить три поддерживаемых reference template: `personal-room-basic`, `meeting-room-basic`, `presentation-room-basic`.

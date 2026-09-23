@@ -1,6 +1,60 @@
 # FEAT-032: приёмка основного каталога
 
-Статус: подготовка guarded staging activation. Physical-device checks не выполнены.
+Статус на 2026-09-23: **AUTOMATED_STAGING_ACCEPTED**. Три reference templates
+активированы в основном каталоге. Physical-device checks ожидают владельца;
+FEAT-032 и production/publication-ready promotion пока не закрыты.
+
+## Подтверждённый staging результат
+
+- Deployed platform commit: `8004b687c1e6e8eaf235e72fa3ebe8fbbe210b54`.
+- [CI 35815197550](https://github.com/vrata-labs/platform/actions/runs/35815197550) — success.
+- [Docker Publish 35815197571](https://github.com/vrata-labs/platform/actions/runs/35815197571) — success.
+- [Staging Deploy 35817770707](https://github.com/vrata-labs/platform/actions/runs/35817770707) — success:
+  40 baseline tests passed, пять product scenarios ещё не запускались до activation;
+  отдельный обязательный в этом deployment Rutube scenario прошёл.
+- [Staging Template Catalog 35818742548](https://github.com/vrata-labs/platform/actions/runs/35818742548) — success:
+  **45/45**, без skipped/flaky. Проверены active catalog, UI/API create, private
+  workspace/notes/access, восемь Meeting seats, spatial audio, PDF late join и
+  реальные декодированные screen-share кадры у muted viewer без публикации микрофона.
+- Local verification: runtime build и **765/765** package tests, lint/typecheck,
+  full local e2e **142/142**. Все шесть historical/product template–scene pairs
+  сверены с exact repository SHAs и asset hashes.
+- Публичный GET /api/templates после gate повторно подтвердил ровно три active
+  entries версии 2.0.0. Browser-снимки Personal, Meeting, Presentation/PDF и
+  Presentation/screen share просмотрены против опубликованных scene previews.
+
+## Откат и повторы
+
+Immutable Wave 2 rollback SHA — `a0238a515987c95e455c45b1e6c8017953314eef`.
+Проверен фактический путь active catalog → Wave 2 transaction → штатный image
+rollout baseline: [catalog rollback 35808601849](https://github.com/vrata-labs/platform/actions/runs/35808601849)
+и [последующий deployment 35809821224](https://github.com/vrata-labs/platform/actions/runs/35809821224).
+Существующая reference-комната сохранила binding 2.0.0 и оставалась читаемой после
+возврата каталога; диагностическая комната удалена после окончания расследования.
+
+Промежуточные gates останавливали rollout/activation и возвращали baseline.
+Исправлены stdin наследование в deployment helper, ожидание guest entry, ожидание
+sender snapshots, on-demand подключение muted screen-share viewers и ложный
+metadata-only subscription count. Main CI финального commit потребовал повтор
+после нестабильного checkbox interaction; повтор того же commit прошёл. Финальные
+deployment и activation runs, указанные выше, зелёные.
+
+## Ссылки для physical-device QA
+
+- [Создание комнат](https://158.160.10.234.sslip.io/control-plane) — три реальные
+  previews и обычный create flow.
+- [Meeting Room v2](https://158.160.10.234.sslip.io/rooms/reference-meeting-200-8004b68?role=host).
+- [Presentation Room v2](https://158.160.10.234.sslip.io/rooms/reference-presentation-200-8004b68?role=host).
+- Personal: в новой browser session открыть
+  [входную комнату](https://158.160.10.234.sslip.io/rooms/demo-room) и нажать
+  **Open my room**. В HUD должна появиться Personal Workspace v2.0.0 с private notes.
+
+Параметр role=host в ссылках Meeting/Presentation использует существующий staging
+dev-role доступ для проверки presenter controls. Для обычных приглашений доступ
+по ролям выдаётся через invite flow. Invite/access tokens в этот документ не входят.
+Обе постоянные QA-комнаты и self-service Personal дополнительно открыты в браузере
+на финальном deployment: loaded, missingAssets=[], integrityRequired=true;
+Meeting join-muted=false, Presentation join-muted=true, Personal notes scope=private.
 
 ## Integration checkpoint
 
@@ -47,8 +101,9 @@ shipping 0.3.4 прошла 17 побайтно одинаковых browser pai
 5. При неуспехе возвращает Wave 2 catalog и запускает обычный Staging Deploy на
    immutable rollback SHA. Отдельно дождаться результата этого deployment.
 
-Platform SHA, run URLs, фактические результаты и итоговые room URLs дописываются
-после исполнения. До этого staging acceptance здесь не заявлена.
+Фактические platform SHA, run URLs и room URLs приведены выше. Raw screenshots,
+runner reports и безопасные media diagnostics доступны во вложениях соответствующих
+workflow runs. Физические проверки ниже ещё не выполнены.
 
 ## Проверка владельцем на физических устройствах
 
