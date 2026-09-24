@@ -422,6 +422,9 @@ async function denyGuestPresentationControl(guest: DemoClient, roomId: string): 
 }
 
 type AudioSnapshot = {
+  issueCode: string | null;
+  recoveryAction: string | null;
+  unavailableReason: string | null;
   audioState: string | null;
   publishedAudio: boolean;
   audioSource: string | null;
@@ -453,6 +456,9 @@ async function readAudioSnapshot(listener: DemoClient, sourceParticipantId: stri
       || transport?.iceConnectionState === "connected"
       || transport?.iceConnectionState === "completed";
     return {
+      issueCode: debug?.issueCode ?? null,
+      recoveryAction: debug?.lastRecoveryAction ?? null,
+      unavailableReason: debug?.media?.webrtc?.unavailableReason ?? null,
       audioState: debug?.media?.audioState ?? null,
       publishedAudio: debug?.media?.publishedAudio ?? false,
       audioSource: debug?.media?.audioSource ?? null,
@@ -493,7 +499,11 @@ function audioReady(snapshot: AudioSnapshot): boolean {
 }
 
 async function runStrictStagingAudio(host: DemoClient, member: DemoClient): Promise<void> {
+  const mediaTokenStatuses: Array<{ role: DemoRole; status: number }> = [];
   for (const client of [host, member]) {
+    client.page.on("response", response => {
+      if (new URL(response.url()).pathname === "/api/tokens/media") mediaTokenStatuses.push({ role: client.role, status: response.status() });
+    });
     await client.page.locator("#join-muted").uncheck();
     await activateButton(client.page, "#join-audio");
   }
@@ -511,7 +521,7 @@ async function runStrictStagingAudio(host: DemoClient, member: DemoClient): Prom
       readAudioSnapshot(host, member.participantId),
       readAudioSnapshot(member, host.participantId)
     ]);
-    throw new Error(`public_demo_audio_not_ready:${JSON.stringify({ hostState, memberState })}`);
+    throw new Error(`public_demo_audio_not_ready:${JSON.stringify({ mediaTokenStatuses, hostState, memberState })}`);
   }
 
   const [hostBaseline, memberBaseline] = await Promise.all([
@@ -742,6 +752,17 @@ export async function runPublicDemoScenario(options: PublicDemoScenarioOptions):
     });
     clients.push(firstMember);
     console.log(`public-demo:${environment}:member-one-joined`);
+
+    if (options.staging) {
+      await waitForExactPresence([host, firstMember]);
+      setPhase("strict-livekit-audio");
+      await runStrictStagingAudio(host, firstMember);
+      for (const client of [host, firstMember]) await activateButton(client.page, "#join-audio");
+      await expect.poll(async () => Promise.all([host, firstMember].map(client => client.page.evaluate(() => (window as any).__VRATA_DEBUG__?.media?.audioState))), {
+        timeout: 45_000, intervals: corePollIntervals
+      }).toEqual(["not_joined", "not_joined"]);
+    }
+
     let secondMemberPage = await contexts[2]!.newPage();
     const secondMember = await joinClientPage({
       context: contexts[2]!, page: secondMemberPage, role: "member", inviteLink: memberInvites[1] as string,
@@ -831,11 +852,6 @@ export async function runPublicDemoScenario(options: PublicDemoScenarioOptions):
     setPhase("presentation-page-three");
     await activateButton(host.page, "#presentation-next");
     await waitForPresentation(clients, 3);
-
-    if (options.staging) {
-      setPhase("strict-livekit-audio");
-      await runStrictStagingAudio(host, firstMember);
-    }
 
     setPhase("host-lock-unlock-remove");
     await leaveClient(guest, options.origin, roomId);

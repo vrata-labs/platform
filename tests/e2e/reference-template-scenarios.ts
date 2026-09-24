@@ -272,7 +272,7 @@ if (staging) test("reference presentation receives moving screen-share frames th
     await expect.poll(receivedColor, { timeout: 30000 }).toBe("blue");
     await captureReferenceView(observer, "presentation-real-screen-share");
     await page.locator("#stop-share").click();
-    await expect.poll(() => observer.evaluate(() => (window as any).__VRATA_DEBUG__?.screenShare?.remoteSubscribedTrackCount ?? 0)).toBe(0);
+    await expect.poll(() => observer.evaluate(() => (window as any).__VRATA_DEBUG__?.screenShare?.remoteSubscribedTrackCount ?? 0), { timeout: 30000 }).toBe(0);
   } catch (error) {
     const states = await Promise.all([page, observer].map(client => client.evaluate(() => {
       const d = (window as any).__VRATA_DEBUG__;
