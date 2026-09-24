@@ -7,7 +7,7 @@ permissions:
 jobs:
   diagnose:
     runs-on: ubuntu-latest
-    timeout-minutes: 16
+    timeout-minutes: 20
     env:
       BASE_URL: ${{ secrets.STAGING_BASE_URL }}
       STAGING_ADMIN_TOKEN: ${{ secrets.STAGING_ADMIN_TOKEN }}
@@ -15,80 +15,59 @@ jobs:
       PLAYWRIGHT_NO_WEB_SERVER: '1'
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ac409291c10b5694a3cb98ee823f2e188b377219
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - name: Build exact candidate product sources
-        run: pnpm build
-      - name: Instrument pixel-density comparison without changing assertions
+      - name: Verify exact published test and build unchanged product
+        run: |
+          test "$(git rev-parse HEAD)" = ac409291c10b5694a3cb98ee823f2e188b377219
+          test "$(git hash-object tests/e2e/reference-template-scenarios.ts)" = 594918eeae9abac6b514715915e5249d498f9bef
+          git diff --exit-code HEAD -- apps
+          pnpm build
+          sha256sum apps/runtime-web/dist/assets/main-*.js
+      - name: Point only the two experiment browsers to the built client
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          p = Path('tests/e2e/pr116-media-probe.ts')
+          p = Path('tests/e2e/reference-template-scenarios.ts')
           s = p.read_text()
-          s = 'import { readFileSync, readdirSync } from "node:fs";\nimport { createHash } from "node:crypto";\n' + s
-          old = 'export async function instrumentMedia(page: Page): Promise<void> {'
-          assert s.count(old) == 1
-          s = s.replace(old, old + '''
+          s = 'import { readFileSync, readdirSync } from "node:fs";\n' + s
+          start = s.index('if (staging) test("reference presentation receives moving screen-share')
+          end = s.index('if (!staging) test(', start)
+          block = s[start:end]
+          old = '  const observer = await browser.newPage({ viewport, deviceScaleFactor });'
+          assert block.count(old) == 1
+          block = block.replace(old, old + '''
             const dir = "apps/runtime-web/dist/assets";
             const files = readdirSync(dir).filter(n => /^main-.*\\.js$/.test(n));
             if (files.length !== 1) throw new Error("ambiguous_main");
             const body = readFileSync(`${dir}/${files[0]}`);
-            console.log("candidate_asset", createHash("sha256").update(body).digest("hex"));
-            await page.route(/\\/assets\\/main-[^/]+\\.js$/, route => route.fulfill({ status: 200, contentType: "text/javascript", body }));
+            for (const client of [page, observer]) {
+              let hits = 0;
+              await client.route(/\\/assets\\/main-[^/]+\\.js$/, async route => {
+                if (++hits !== 1) throw new Error("unexpected_main_reload");
+                console.log("candidate_main_intercepted");
+                await route.fulfill({ status: 200, contentType: "text/javascript", body });
+              });
+            }
           ''')
-          old = '    (window as any).__mediaProbe = { captureCalls: 0 };'
-          assert s.count(old) == 1
-          s = s.replace(old, old + '''
-            const timing = { longTasks: 0, totalMs: 0, maxMs: 0, clickAt: 0 };
-            new PerformanceObserver(list => { for (const row of list.getEntries()) { timing.longTasks++; timing.totalMs += row.duration; timing.maxMs = Math.max(timing.maxMs, row.duration); } }).observe({ entryTypes: ["longtask"] });
-            document.addEventListener("click", e => { if ((e.target as HTMLElement)?.id === "start-share") timing.clickAt = performance.now(); });
-            (window as any).__mediaProbe.timing = timing;
-          ''')
-          s = s.replace('visibility: document.visibilityState,', 'frameBudgetMs: d?.avatarPoseTransport?.frameBudgetMs, now: performance.now(), viewport: { width: innerWidth, height: innerHeight, ratio: devicePixelRatio, bufferWidth: (document.querySelector("#scene canvas") as HTMLCanvasElement)?.width, bufferHeight: (document.querySelector("#scene canvas") as HTMLCanvasElement)?.height }, visibility: document.visibilityState,')
-          p.write_text(s)
-          p = Path('tests/e2e/reference-template-scenarios.ts')
-          s = p.read_text()
-          s = 'import { instrumentMedia } from "./pr116-media-probe.js";\n' + s
-          start = s.index('if (staging) test("reference presentation receives moving screen-share')
-          end = s.index('if (!staging) test(', start)
-          block = s[start:end]
-          old = '  const page = await browser.newPage({ viewport: { width: 640, height: 400 } });'
-          assert block.count(old) == 1
-          block = block.replace(old, '  const deviceScaleFactor = Number(process.env.MEDIA_TEST_DENSITY);\n  if (![0.75, 0.5].includes(deviceScaleFactor)) throw new Error("invalid_density");\n  const page = await browser.newPage({ viewport: { width: 640, height: 400 }, deviceScaleFactor });')
-          old = '  const observer = await browser.newPage({ viewport: { width: 640, height: 400 } });'
-          assert block.count(old) == 1
-          block = block.replace(old, '  const observer = await browser.newPage({ viewport: { width: 640, height: 400 }, deviceScaleFactor });')
-          old = '  const events: Array<{ peer: string; category: string; status?: number }> = [];'
-          assert block.count(old) == 1
-          block = block.replace(old, '  await instrumentMedia(page); await instrumentMedia(observer);\n' + old)
-          old = 'value: async () => stream'
-          assert block.count(old) == 1
-          block = block.replace(old, 'value: async () => { (window as any).__mediaProbe.captureCalls++; (window as any).__mediaProbe.captureAt = performance.now(); return stream; }')
-          old = 'const frame = () => { paint.fillStyle = color;'
-          assert block.count(old) == 1
-          block = block.replace(old, 'const frame = () => { (window as any).__mediaProbe.paintCount = ((window as any).__mediaProbe.paintCount ?? 0) + 1; paint.fillStyle = color;')
-          old = '    await page.evaluate(() => (window as any).__stopReferenceCapture?.()).catch(() => undefined);'
-          assert block.count(old) == 1
-          block = block.replace(old, '''    const probe = await Promise.all([page, observer].map(p => p.evaluate(() => (window as any).__readMediaProbe()).catch(() => null)));
-              await test.info().attach("media-probe", { body: JSON.stringify(probe), contentType: "application/json" });
-          ''' + old)
           p.write_text(s[:start] + block + s[end:])
           PY
       - run: pnpm exec playwright install --with-deps chromium
-      - name: Drawing-buffer density experiments (not staging delivery verification)
+      - name: Three independent checks, no retries or changed assertions (not deployment verification)
         run: |
           result=0
-          for density in 0.75 0.5; do
-            export MEDIA_TEST_DENSITY="$density"
-            export PLAYWRIGHT_REPORT_NAME="pr116-density-$density"
+          for n in 1 2 3; do
+            export PLAYWRIGHT_REPORT_NAME="pr118-repeat-$n"
             if pnpm exec playwright test tests/e2e/reference-templates-staging.spec.ts --grep 'reference presentation receives moving screen-share' --workers=1; then
-              echo "RESULT:$density:passed"
+              echo "RESULT:$n:passed"
             else
-              echo "RESULT:$density:failed"
+              echo "RESULT:$n:failed"
               result=1
             fi
           done
@@ -96,7 +75,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: pr116-render-density-${{ github.run_id }}
+          name: pr118-repeat-verification-${{ github.run_id }}
           path: |
             test-results/*.json
             playwright-report/
