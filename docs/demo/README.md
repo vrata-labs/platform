@@ -35,6 +35,8 @@ curl -fsS http://127.0.0.1:4000/health
 
 Env создаётся один раз без перезаписи, с правами `0600`, отдельными случайными секретами и образом с полным SHA; генератор требует чистое рабочее дерево. Не используйте example env с `devkey/secret` или `LIVEKIT_URL` публичного staging. `--check` анализирует **rendered** Compose model без вывода секретов: опубликованные порты только loopback, API в production mode, dev-role query выключен, LiveKit без `--dev`, с согласованными ключами и TCP/UDP 7881. Система использует собственные Compose project/volumes. Перед активацией учитывайте: она делает три reference templates активными **во всём этом одноразовом локальном каталоге**.
 
+MinIO и mc собираются в local overlay из официальных Linux release binaries с закреплёнными SHA-256 поверх pinned Alpine base: прежние публичные образы MinIO/mc в Quay/Docker Hub больше не доступны для нового pull. Оба внешних бинарника распространяются по GNU AGPLv3; репозиторий VRATA не включает их копии. Сборка ограничена `linux/amd64`; каталог и production/staging Compose остаются без изменений.
+
 ```bash
 docker compose --env-file infra/docker/.env.demo-local.local -f infra/docker/compose.selfhost.yml -f infra/docker/compose.demo-local.yml exec -T api node apps/api/dist/template-catalog-cli.js status
 docker compose --env-file infra/docker/.env.demo-local.local -f infra/docker/compose.selfhost.yml -f infra/docker/compose.demo-local.yml exec -T api node apps/api/dist/template-catalog-cli.js preflight

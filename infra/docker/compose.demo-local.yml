@@ -54,7 +54,11 @@ services:
   remote-browser: !reset null
 
   minio:
-    image: quay.io/minio/minio:RELEASE.2025-02-28T09-55-16Z@sha256:a929054ae025fa7997857cd0e2a2e3029238e31ad89877326dc032f4c1a14259
+    image: vrata-demo-minio:5cb1e6309f2bd70e7d0ca77f33782beac1745790deb4c1f94444f1e7dec5fcb6
+    pull_policy: build
+    build:
+      context: ../..
+      dockerfile: infra/docker/minio.demo-local.Dockerfile
     ports: !override
       - target: 9000
         published: "${MINIO_API_PORT}"
@@ -62,7 +66,11 @@ services:
         protocol: tcp
 
   minio-bootstrap:
-    image: quay.io/minio/mc:RELEASE.2025-03-12T17-29-24Z@sha256:470f5546b596e16c7816b9c3fa7a78ce4076bb73c2c73f7faeec0c8043923123
+    image: vrata-demo-mc:a92b5f1af200ca25d54d78432ef6b0c47fd4340abf9759ce5d10275cd57e3318
+    pull_policy: build
+    build:
+      context: ../..
+      dockerfile: infra/docker/mc.demo-local.Dockerfile
 
   api:
     networks: !override [default]

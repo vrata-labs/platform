@@ -79,6 +79,8 @@ function validComposeModel(env) {
       },
       minio: {
         image: PUBLIC_DEMO_LOCAL_IMAGES.minio,
+        pull_policy: "build",
+        build: { dockerfile: "infra/docker/minio.demo-local.Dockerfile" },
         environment: {
           MINIO_ROOT_USER: env.MINIO_ROOT_USER,
           MINIO_ROOT_PASSWORD: env.MINIO_ROOT_PASSWORD
@@ -87,6 +89,8 @@ function validComposeModel(env) {
       },
       "minio-bootstrap": {
         image: PUBLIC_DEMO_LOCAL_IMAGES.minioBootstrap,
+        pull_policy: "build",
+        build: { dockerfile: "infra/docker/mc.demo-local.Dockerfile" },
         environment: {
           MINIO_ROOT_USER: env.MINIO_ROOT_USER,
           MINIO_ROOT_PASSWORD: env.MINIO_ROOT_PASSWORD,
@@ -247,6 +251,13 @@ test("compose model assertion accepts only the isolated production-mode model", 
   assert.throws(
     () => assertPublicDemoLocalComposeModel(floatingImage, env),
     expectedError("public_demo_local_floating_image:api")
+  );
+
+  const unpinnedMinio = validComposeModel(env);
+  unpinnedMinio.services.minio.build.dockerfile = "infra/docker/mutable.Dockerfile";
+  assert.throws(
+    () => assertPublicDemoLocalComposeModel(unpinnedMinio, env),
+    expectedError("public_demo_local_pinned_build_invalid:minio")
   );
 
   const remoteBrowser = validComposeModel(env);
