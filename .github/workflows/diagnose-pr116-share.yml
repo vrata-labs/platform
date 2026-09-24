@@ -47,9 +47,9 @@ jobs:
           python3 tools/diagnostics/pr116-extract-bundles.py
       - name: Add bounded observation only to the existing test
         run: python3 tools/diagnostics/pr116-instrument.py
-      - name: Four matched client observations, baseline-candidate-baseline-candidate
+      - name: Direct-baseline, routed-baseline, routed-candidate, direct-baseline
         run: pnpm exec playwright test tests/e2e/reference-templates-staging.spec.ts --grep 'reference presentation receives moving screen-share frames through the real media transport' --repeat-each=4 --workers=1 --retries=0
-      - name: Require four observed client variants with no skips or retries
+      - name: Require direct controls and attested routed variants with no skips or retries
         if: always()
         run: |
           python3 - <<'PY'
@@ -71,8 +71,12 @@ jobs:
               timeline=json.loads(base64.b64decode(a['body']))
               assert all(timeline['bundleRequests'].get(p,0)>=1 for p in ['publisher','viewer']), 'client_variant_not_served'
               assert timeline['dropped']==0, 'timeline_truncated'
+              assert timeline['version']==3, 'timeline_version'
+              assert all(timeline['observedBundleHashes'].get(p)==timeline['bundleSha256'] for p in ['publisher','viewer']), 'actual_bundle_hash'
+              assert any(e['kind']=='publication-poll-start' for e in timeline['events']), 'poll_not_observed'
+              assert any(e['kind']=='host-resources' for e in timeline['events']), 'resources_not_observed'
               variants.append(timeline['variant'])
-          assert sorted(variants)==['baseline','baseline','candidate','candidate'], 'unbalanced_variants'
+          assert sorted(variants)==['baseline','candidate','direct-baseline','direct-baseline'], 'unbalanced_variants'
           print(json.dumps(d['stats']))
           PY
       - name: Verify staging stayed on the same baseline

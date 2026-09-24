@@ -1,4 +1,7 @@
-import { test, type Page } from "@playwright/test";
+import { test, type Page, type CDPSession } from "@playwright/test";
+import { readFileSync, readdirSync } from "node:fs";
+import { cpus, freemem, totalmem, loadavg } from "node:os";
+import { createHash } from "node:crypto";
 
 type Peer = "publisher" | "viewer";
 type RecordValue = Record<string, unknown>;
@@ -9,7 +12,19 @@ function code(value: unknown, allowed: string[]): string | null {
 }
 
 // Branch-only diagnosis. No tokens, URLs, SDP, raw IDs or screen pixels are retained.
-export function observeScreenShare(clients: ReadonlyArray<readonly [Page, Peer]>) {
+export async function observeScreenShare(clients: ReadonlyArray<readonly [Page, Peer]>) {
+  const variant = ["direct-baseline", "baseline", "candidate", "direct-baseline"][test.info().repeatEachIndex];
+  if (!variant) throw new Error("invalid_diagnostic_observation");
+  const bundleVariant = variant === "candidate" ? "candidate" : "baseline";
+  const bundle = readFileSync(`diagnostic-bundles/${bundleVariant}.js`);
+  const bundleSha256 = createHash("sha256").update(bundle).digest("hex");
+  const expectedHash = bundleVariant === "baseline" ? "6685a20d20277c5930b8e1c7e106ab6bb7f77454e559c64d265f85f5581e2615" : "596f0a89cf0b4dbc3b9676fed6f99798f7e27cf12f8797890fc1c5027d90a5db";
+  if (bundleSha256 !== expectedHash) throw new Error("diagnostic_bundle_hash_mismatch");
+  const clientSourceSha = bundleVariant === "baseline" ? "54e13fec4ee14134597c6520a3cfa9b0db291032" : "4ba3fc6d8e0d667bd69143e749d0dc94f0846997";
+  const served = new Map<Peer, number>();
+  const observedHashes = new Map<Peer, string>();
+  const bodyChecks: Promise<void>[] = [];
+  const cdpClients: Array<readonly [Peer, CDPSession]> = [];
   const started = performance.now();
   const events: RecordValue[] = [];
   const ids = new Map<string, number>();
@@ -57,6 +72,26 @@ export function observeScreenShare(clients: ReadonlyArray<readonly [Page, Peer]>
     }
   }
   for (const [page, peer] of clients) {
+    if (variant !== "direct-baseline") {
+      await page.route(url => url.pathname === "/assets/main-DX4Wj_52.js", async route => {
+        record(peer, "client-bundle-route", { variant, bundleSha256 });
+        await route.fulfill({ status: 200, contentType: "application/javascript", body: bundle, headers: { "cache-control": "no-store" } });
+      });
+    }
+    // The direct controls do not install a route or alter request/cache behavior.
+    page.on("response", response => {
+      if (new URL(response.url()).pathname !== "/assets/main-DX4Wj_52.js") return;
+      const check = response.body().then(bytes => {
+        const actual = createHash("sha256").update(bytes).digest("hex");
+        observedHashes.set(peer, actual);
+        served.set(peer, (served.get(peer) ?? 0) + 1);
+        record(peer, "client-bundle-observed", { matchesExpected: actual === expectedHash });
+      }).catch(() => { record(peer, "client-bundle-unavailable"); });
+      bodyChecks.push(check);
+    });
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send("Performance.enable");
+    cdpClients.push([peer, cdp]);
     page.on("websocket", socket => {
       record(peer, "websocket-open");
       socket.on("framesent", event => frame(peer, "sent", event.payload));
@@ -66,7 +101,35 @@ export function observeScreenShare(clients: ReadonlyArray<readonly [Page, Peer]>
     });
     page.on("pageerror", () => record(peer, "page-error"));
   }
+  function hostResources() {
+    try {
+      const cpu = readFileSync("/proc/stat", "utf8").split("\n")[0].trim().split(/\s+/).slice(1).map(Number);
+      let chromeProcesses = 0, summedRssKiB = 0, chromeCpuTicks = 0;
+      for (const pid of readdirSync("/proc")) {
+        if (!/^\d+$/.test(pid)) continue;
+        try {
+          const name = readFileSync(`/proc/${pid}/comm`, "utf8").trim();
+          if (!/^(chrome|chromium|headless_shell)/.test(name)) continue;
+          const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+          const fields = stat.slice(stat.lastIndexOf(")") + 2).trim().split(/\s+/);
+          const status = readFileSync(`/proc/${pid}/status`, "utf8");
+          chromeProcesses++;
+          chromeCpuTicks += Number(fields[11]) + Number(fields[12]);
+          summedRssKiB += Number(status.match(/^VmRSS:\s+(\d+) kB/m)?.[1] ?? 0);
+        } catch { /* A process may exit between observations. */ }
+      }
+      return { logicalCpus: cpus().length, freeMiB: Math.round(freemem()/1048576), totalMiB: Math.round(totalmem()/1048576), load: loadavg(), hostCpuTicks: cpu.slice(0, 8).reduce((a,b) => a+b, 0), hostIdleTicks: cpu[3]+cpu[4], chromeProcesses, summedRssKiB, chromeCpuTicks };
+    } catch { return { unavailable: true }; }
+  }
   async function sample() {
+    record("test", "host-resources", hostResources());
+    for (const [peer, cdp] of cdpClients) {
+      try {
+        const { metrics } = await cdp.send("Performance.getMetrics");
+        const allowed = new Set(["Timestamp", "TaskDuration", "ScriptDuration", "LayoutDuration", "RecalcStyleDuration", "JSHeapUsedSize", "JSHeapTotalSize", "Nodes", "Frames"]);
+        record(peer, "page-performance", Object.fromEntries(metrics.filter((m: {name:string;value:number}) => allowed.has(m.name) && Number.isFinite(m.value)).map((m: {name:string;value:number}) => [m.name, m.value])));
+      } catch { record(peer, "performance-unavailable"); }
+    }
     await Promise.all(clients.map(async ([page, peer]) => {
       if (page.isClosed()) return;
       try {
@@ -77,6 +140,8 @@ export function observeScreenShare(clients: ReadonlyArray<readonly [Page, Peer]>
           return {
             scene: safe(d.sceneBundleState, ["loaded", "loading", "fallback", "failed"]),
             connected: d.roomStateConnected === true,
+            visibility: safe(document.visibilityState, ["visible", "hidden"]),
+            pageClockMs: Math.round(performance.now()),
             phase: safe(d.screenShareState, ["idle", "starting", "sharing", "receiving", "stopped", "error", "unsupported"]),
             active: d.screenShare?.active === true, local: d.screenShare?.localPublishing === true,
             hasSid: Boolean(d.screenShare?.publishedTrackSid), hasError: Boolean(d.screenShare?.errorCode),
@@ -110,9 +175,10 @@ export function observeScreenShare(clients: ReadonlyArray<readonly [Page, Peer]>
     async stop() {
       clearInterval(timer);
       if (pending) await Promise.race([pending, new Promise<void>(resolve => setTimeout(resolve, 2000))]);
+      await Promise.race([Promise.all(bodyChecks), new Promise(resolve => setTimeout(resolve, 2000))]);
       active = false;
       await test.info().attach("share-phase-timeline", {
-        body: JSON.stringify({ version: 1, deployedSha: process.env.EXPECTED_STAGING_SHA, sourceSha: process.env.DIAGNOSTIC_SOURCE_SHA, dropped, events }),
+        body: JSON.stringify({ version: 3, observedBundleHashes: Object.fromEntries(observedHashes), variant, clientSourceSha, bundleSha256, bundleRequests: Object.fromEntries(served), deployedSha: process.env.EXPECTED_STAGING_SHA, sourceSha: process.env.DIAGNOSTIC_SOURCE_SHA, dropped, events }),
         contentType: "application/json"
       });
     }
