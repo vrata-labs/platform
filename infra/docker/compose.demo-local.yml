@@ -1,0 +1,131 @@
+# Requires Docker Compose 2.24.4+ for !override and !reset.
+services:
+  postgres:
+    image: postgres:16@sha256:a3b7f434b2dc57ce85a67e171163eb8ab1a1ebcb39d27484661f26b1dfbe30d6
+
+  livekit:
+    image: livekit/livekit-server:v1.13.7@sha256:6fd3b7088874c4d119160dd688798dfec852bc014786d392caad15f6f63912a3
+    networks: !override [default]
+    command: !override
+      - --bind
+      - 0.0.0.0
+    environment: !override
+      LIVEKIT_CONFIG: |
+        port: 7880
+        log_level: info
+        rtc:
+          tcp_port: 7881
+          udp_port: 7881
+          use_external_ip: false
+          node_ip: 127.0.0.1
+        keys:
+          "${LIVEKIT_API_KEY}": "${LIVEKIT_API_SECRET}"
+        turn:
+          enabled: false
+    ports: !override
+      - target: 7880
+        published: "${VRATA_LIVEKIT_PORT}"
+        host_ip: 127.0.0.1
+        protocol: tcp
+      - target: 7881
+        published: "${VRATA_LIVEKIT_TCP_PORT}"
+        host_ip: 127.0.0.1
+        protocol: tcp
+      - target: 7881
+        published: "${VRATA_LIVEKIT_UDP_PORT}"
+        host_ip: 127.0.0.1
+        protocol: udp
+
+  room-state:
+    networks: !override [default]
+    environment: !override
+      NODE_ENV: production
+      ROOM_STATE_PORT: 2567
+      STATE_TOKEN_SECRET: ${STATE_TOKEN_SECRET}
+      VRATA_INTERNAL_SERVICE_TOKEN: ${VRATA_INTERNAL_SERVICE_TOKEN}
+      VRATA_DEV_ROLE_QUERY: "false"
+      REMOTE_BROWSER_ENABLED: "false"
+    ports: !override
+      - target: 2567
+        published: "${VRATA_ROOM_STATE_PORT}"
+        host_ip: 127.0.0.1
+        protocol: tcp
+
+  remote-browser: !reset null
+
+  minio:
+    image: quay.io/minio/minio:RELEASE.2025-02-28T09-55-16Z@sha256:a929054ae025fa7997857cd0e2a2e3029238e31ad89877326dc032f4c1a14259
+    ports: !override
+      - target: 9000
+        published: "${MINIO_API_PORT}"
+        host_ip: 127.0.0.1
+        protocol: tcp
+
+  minio-bootstrap:
+    image: quay.io/minio/mc:RELEASE.2025-03-12T17-29-24Z@sha256:470f5546b596e16c7816b9c3fa7a78ce4076bb73c2c73f7faeec0c8043923123
+
+  api:
+    networks: !override [default]
+    depends_on: !override
+      postgres:
+        condition: service_healthy
+      room-state:
+        condition: service_started
+      livekit:
+        condition: service_started
+      minio-bootstrap:
+        condition: service_completed_successfully
+    environment: !override
+      NODE_ENV: production
+      API_PORT: ${API_PORT}
+      API_CORS_ORIGIN: ${API_CORS_ORIGIN}
+      API_PUBLIC_URL: ${VRATA_APP_BASE_URL}
+      RUNTIME_BASE_URL: ${VRATA_APP_BASE_URL}
+      ROOM_STATE_PUBLIC_URL: ${ROOM_STATE_PUBLIC_URL}
+      ROOM_STATE_INTERNAL_URL: http://room-state:2567
+      LIVEKIT_URL: ${LIVEKIT_URL}
+      VRATA_LIVEKIT_DOMAIN: ${VRATA_LIVEKIT_DOMAIN}
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET}
+      LIVEKIT_ROOM_PREFIX: ${LIVEKIT_ROOM_PREFIX}
+      LIVEKIT_TURN_ENABLED: "false"
+      CONTROL_PLANE_ADMIN_TOKEN: ${CONTROL_PLANE_ADMIN_TOKEN}
+      STATE_TOKEN_TTL_SECONDS: ${STATE_TOKEN_TTL_SECONDS}
+      STATE_TOKEN_SECRET: ${STATE_TOKEN_SECRET}
+      VRATA_INTERNAL_SERVICE_TOKEN: ${VRATA_INTERNAL_SERVICE_TOKEN}
+      MEDIA_TOKEN_TTL_SECONDS: ${MEDIA_TOKEN_TTL_SECONDS}
+      VRATA_DEV_ROLE_QUERY: "false"
+      REMOTE_BROWSER_ENABLED: "false"
+      VRATA_ALLOW_INSECURE_PRODUCTION_URLS: "true"
+      POSTGRES_URL: ${POSTGRES_URL}
+      ROOM_TEMPLATE_ASSET_BASE_URL: ${ROOM_TEMPLATE_ASSET_BASE_URL:-}
+      VRATA_DEPLOY_SHA: ${VRATA_DEPLOY_SHA}
+      SCENE_BUNDLE_PROVIDER: ${SCENE_BUNDLE_PROVIDER:-minio-default}
+      FEATURE_SCENE_BUNDLE_UPLOAD: ${FEATURE_SCENE_BUNDLE_UPLOAD:-true}
+      FEATURE_DOCUMENTS: ${FEATURE_DOCUMENTS:-true}
+      PDF_PRESENTATION_MAX_PAGES: ${PDF_PRESENTATION_MAX_PAGES:-250}
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT:-http://minio:9000}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      MINIO_BUCKET: ${MINIO_BUCKET}
+      MINIO_PUBLIC_BASE_URL: ${MINIO_PUBLIC_BASE_URL}
+      SCENE_BUNDLE_S3_ENDPOINT: ${SCENE_BUNDLE_S3_ENDPOINT:-}
+      SCENE_BUNDLE_S3_REGION: ${SCENE_BUNDLE_S3_REGION:-}
+      SCENE_BUNDLE_S3_BUCKET: ${SCENE_BUNDLE_S3_BUCKET:-}
+      SCENE_BUNDLE_S3_PUBLIC_BASE_URL: ${SCENE_BUNDLE_S3_PUBLIC_BASE_URL:-}
+      SCENE_BUNDLE_S3_ACCESS_KEY_ID: ${SCENE_BUNDLE_S3_ACCESS_KEY_ID:-}
+      SCENE_BUNDLE_S3_SECRET_ACCESS_KEY: ${SCENE_BUNDLE_S3_SECRET_ACCESS_KEY:-}
+      FEATURE_AVATAR_POSE_BINARY: ${FEATURE_AVATAR_POSE_BINARY:-true}
+    ports: !reset []
+
+  caddy:
+    image: caddy:2-alpine@sha256:6aeddd44c3078b0f9a35206472a11420648a79c184603ef95957d0a20044cb2b
+    networks: !override [default]
+    ports: !override
+      - target: 80
+        published: "${VRATA_HTTP_PORT}"
+        host_ip: 127.0.0.1
+        protocol: tcp
+
+networks:
+  remote-browser-internal: !reset null

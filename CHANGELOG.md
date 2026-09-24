@@ -8,6 +8,8 @@ Vrata uses SemVer: `MAJOR.MINOR.PATCH`. Until `1.0.0`, breaking changes can happ
 
 ### Added
 
+- Reproducible private four-person public demo tooling: exact-template seed/check/cleanup, deterministic PDF and agenda, isolated local LiveKit Compose overlay, and local/staging scenario documentation and tests. Human acceptance remains a separate gate.
+
 - Public open source readiness plan.
 - Initial public repository hygiene docs and self-hosting contract.
 - Apache-2.0 source code license.

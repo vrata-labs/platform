@@ -13,6 +13,8 @@ Until `v0.1.0` is released, public GHCR images may not exist. From a source chec
 
 ## Source-Build Quickstart
 
+For a disposable loopback-only four-person meeting with correctly configured local LiveKit, pinned reference template activation, PDF and notes, see [`docs/demo/README.md`](demo/README.md). It uses an overlay and generated credentials instead of the example `--dev` LiveKit stack below.
+
 From the repository root:
 
 ```bash

@@ -26,9 +26,15 @@ async function stop(child: ChildProcess): Promise<void> {
   });
 }
 
-export async function startReferenceTemplateFixture(postgresUrl: string) {
+type ReferenceTemplateFixtureOptions = {
+  devRoleQuery?: boolean;
+};
+
+export async function startReferenceTemplateFixture(postgresUrl: string, options: ReferenceTemplateFixtureOptions = {}) {
   const { loadReferenceTemplateFixtures } = await import(pathToFileURL(resolve("tools/fetch-reference-template-fixtures.mjs")).href);
   const schema = `template_e2e_${randomUUID().replaceAll("-", "")}`;
+  const adminToken = "test-admin-token";
+  const documentStorageRoot = resolve("test-results/reference-documents", schema);
   const admin = new Pool({ connectionString: postgresUrl });
   const pool = new Pool({ connectionString: postgresUrl, options: `-c search_path=${schema},public` });
   const { PostgresStorage } = await import(pathToFileURL(resolve("apps/api/dist/storage.js")).href);
@@ -44,56 +50,96 @@ export async function startReferenceTemplateFixture(postgresUrl: string) {
   const origin = `http://127.0.0.1:${apiPort}`;
   const stateOrigin = `http://127.0.0.1:${statePort}`;
   const connection = new URL(postgresUrl); connection.searchParams.set("options", `-c search_path=${schema},public`);
-  const children: ChildProcess[] = [];
   let storage: InstanceType<typeof PostgresStorage>;
+  let apiChild: ChildProcess | undefined;
+  let roomStateChild: ChildProcess | undefined;
+  let apiOperation = Promise.resolve();
+  let closing = false;
+  let closePromise: Promise<void> | undefined;
   let log = "";
-  const env = {
+  const env: NodeJS.ProcessEnv = {
     ...process.env, NODE_ENV: "development", VRATA_DISABLE_AUTOSTART: "0", POSTGRES_URL: connection.href,
-    API_PORT: String(apiPort), ROOM_STATE_PORT: String(statePort), CONTROL_PLANE_ADMIN_TOKEN: "test-admin-token",
+    API_PORT: String(apiPort), ROOM_STATE_PORT: String(statePort), CONTROL_PLANE_ADMIN_TOKEN: adminToken,
     ROOM_STATE_INTERNAL_URL: stateOrigin, ROOM_STATE_PUBLIC_URL: `ws://127.0.0.1:${statePort}`, API_INTERNAL_URL: origin,
     VRATA_INTERNAL_SERVICE_TOKEN: "test-internal-token", ROOM_TEMPLATE_ASSET_BASE_URL: assetsOrigin,
-    FEATURE_AVATAR_POSE_BINARY: "true",
-    DOCUMENT_LOCAL_UPLOAD_ROOT: resolve("test-results/reference-documents", schema)
+    FEATURE_AVATAR_POSE_BINARY: "true", VRATA_DEV_ROLE_QUERY: String(options.devRoleQuery ?? true),
+    LIVEKIT_URL: "ws://127.0.0.1:7880", LIVEKIT_API_KEY: "devkey", LIVEKIT_API_SECRET: "secret",
+    DOCUMENT_LOCAL_UPLOAD_ROOT: documentStorageRoot, MINIO_DOCUMENT_PREFIX: "documents"
   };
+  for (const key of [
+    "DOCUMENT_PROVIDER", "SCENE_BUNDLE_PROVIDER",
+    "MINIO_ENDPOINT", "MINIO_ROOT_USER", "MINIO_ROOT_PASSWORD", "MINIO_BUCKET", "MINIO_PUBLIC_BASE_URL",
+    "SCENE_BUNDLE_S3_ENDPOINT", "SCENE_BUNDLE_S3_REGION", "SCENE_BUNDLE_S3_BUCKET",
+    "SCENE_BUNDLE_S3_PUBLIC_BASE_URL", "SCENE_BUNDLE_S3_ACCESS_KEY_ID", "SCENE_BUNDLE_S3_SECRET_ACCESS_KEY",
+    "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"
+  ]) delete env[key];
   const start = (path: string) => {
     const child = spawn(process.execPath, [path], { cwd: process.cwd(), env, stdio: ["ignore", "pipe", "pipe"] });
     for (const stream of [child.stdout, child.stderr]) stream?.on("data", bytes => { log = (log+String(bytes)).slice(-16000); });
-    children.push(child); return child;
+    return child;
+  };
+  const ready = async (url: string, child: ChildProcess) => {
+    for (let attempt = 0; attempt < 100; attempt++) {
+      if (child.exitCode !== null || child.signalCode !== null) throw new Error(`reference_fixture_exited:${log}`);
+      if (await fetch(url).then(response => response.ok, () => false)) return;
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    throw new Error(`reference_fixture_not_ready:${log}`);
+  };
+  const restartApi = () => {
+    const operation = apiOperation.then(async () => {
+      if (closing) throw new Error("reference_fixture_closing");
+      const previous = apiChild;
+      apiChild = undefined;
+      if (previous) await stop(previous);
+      if (closing) throw new Error("reference_fixture_closing");
+      const next = start("apps/api/dist/index.js");
+      apiChild = next;
+      try {
+        await ready(`${origin}/health`, next);
+      } catch (error) {
+        if (apiChild === next) apiChild = undefined;
+        await stop(next);
+        throw error;
+      }
+    });
+    apiOperation = operation.catch(() => undefined);
+    return operation;
   };
   try {
     await admin.query(`create schema "${schema}"`);
     storage = new PostgresStorage(pool); await storage.init();
-    start("apps/room-state/dist/index.js"); start("apps/api/dist/index.js");
-    const ready = async (url: string) => {
-      for (let attempt = 0; attempt < 100; attempt++) {
-        if (children.some(child => child.exitCode !== null)) throw new Error(`reference_fixture_exited:${log}`);
-        if (await fetch(url).then(response => response.ok, () => false)) return;
-        await new Promise(resolve => setTimeout(resolve, 100));
-      }
-      throw new Error(`reference_fixture_not_ready:${log}`);
-    };
-    await ready(`${origin}/health`); await ready(`${stateOrigin}/health`);
+    roomStateChild = start("apps/room-state/dist/index.js");
+    apiChild = start("apps/api/dist/index.js");
+    await ready(`${origin}/health`, apiChild); await ready(`${stateOrigin}/health`, roomStateChild);
     const { seedStagingTemplateFixtures } = await import(pathToFileURL(resolve("tools/seed-staging-template-fixtures.mjs")).href);
-    await seedStagingTemplateFixtures(origin, "test-admin-token");
+    await seedStagingTemplateFixtures(origin, adminToken);
     await storage.transitionReferenceTemplateCatalog("active");
   } catch (error) {
-    await Promise.all(children.map(stop)); await pool.end();
+    closing = true;
+    await Promise.all([apiChild, roomStateChild].filter((child): child is ChildProcess => Boolean(child)).map(stop)); await pool.end();
     await admin.query(`drop schema if exists "${schema}" cascade`); await admin.end();
     await new Promise<void>(resolve => assetServer.close(() => resolve())); throw error;
   }
   return {
-    origin, assetsOrigin,
+    origin, assetsOrigin, schema, adminToken, documentStorageRoot, restartApi,
     async close() {
-      try {
-        await storage.transitionReferenceTemplateCatalog("wave2");
-        const response = await fetch(`${origin}/api/templates`); const catalog = await response.json();
-        assert.equal(catalog.items.length, 4);
-      } finally {
-        await Promise.all(children.map(stop));
-        await pool.end(); await admin.query(`drop schema "${schema}" cascade`); await admin.end();
-        await new Promise<void>(resolve => assetServer.close(() => resolve()));
-        await rm(env.DOCUMENT_LOCAL_UPLOAD_ROOT, { recursive: true, force: true });
-      }
+      if (closePromise) return closePromise;
+      closing = true;
+      closePromise = (async () => {
+        await apiOperation;
+        try {
+          await storage.transitionReferenceTemplateCatalog("wave2");
+          const response = await fetch(`${origin}/api/templates`); const catalog = await response.json();
+          assert.equal(catalog.items.length, 4);
+        } finally {
+          await Promise.all([apiChild, roomStateChild].filter((child): child is ChildProcess => Boolean(child)).map(stop));
+          await pool.end(); await admin.query(`drop schema "${schema}" cascade`); await admin.end();
+          await new Promise<void>(resolve => assetServer.close(() => resolve()));
+          await rm(documentStorageRoot, { recursive: true, force: true });
+        }
+      })();
+      return closePromise;
     },
     corruptAsset(path: string) {
       const file = files.get(path); assert(file);

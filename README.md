@@ -49,6 +49,7 @@ docker compose --env-file infra/docker/.env.selfhost.example -f infra/docker/com
 
 - `docs/platform.md` - public beta platform scope and stability policy.
 - `docs/self-hosting.md` - Docker Compose self-host setup.
+- `docs/demo/README.md` - four-person private public demo recipe and acceptance checklist.
 - `docs/upgrades.md` - backup, upgrade, smoke, and rollback flow.
 - `docs/releases.md` - SemVer and release process.
 - `docs/testing-checklist.md` - where tests live, run, and store artifacts.
