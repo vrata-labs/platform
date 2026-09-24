@@ -109,7 +109,27 @@ jobs:
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
 
+      - name: Inspect checksum-pinned dependency images
+        id: pinned_deps
+        env:
+          MINIO_IMAGE: ${{ steps.meta.outputs.minio_image }}
+          MC_IMAGE: ${{ steps.meta.outputs.mc_image }}
+        run: |
+          if docker buildx imagetools inspect "$MINIO_IMAGE:5cb1e6309f2bd70e7d0ca77f33782beac1745790deb4c1f94444f1e7dec5fcb6" >/dev/null 2>&1; then
+            test "$(docker buildx imagetools inspect "$MINIO_IMAGE:5cb1e6309f2bd70e7d0ca77f33782beac1745790deb4c1f94444f1e7dec5fcb6" --format '{{.Manifest.Digest}}')" = "sha256:c83dd50c5efe2e3a962711a7c9fc77acfc55c3dad229da2146489f604afba387"
+            echo "minio_exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "minio_exists=false" >> "$GITHUB_OUTPUT"
+          fi
+          if docker buildx imagetools inspect "$MC_IMAGE:a92b5f1af200ca25d54d78432ef6b0c47fd4340abf9759ce5d10275cd57e3318" >/dev/null 2>&1; then
+            test "$(docker buildx imagetools inspect "$MC_IMAGE:a92b5f1af200ca25d54d78432ef6b0c47fd4340abf9759ce5d10275cd57e3318" --format '{{.Manifest.Digest}}')" = "sha256:d535999f5c4eb01c9c06bd0c068d4bb8f7366a8469fe57e394907190f7feb550"
+            echo "mc_exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "mc_exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Build and push checksum-pinned MinIO image
+        if: steps.pinned_deps.outputs.minio_exists != 'true'
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -121,6 +141,7 @@ jobs:
           tags: ${{ steps.meta.outputs.minio_image }}:5cb1e6309f2bd70e7d0ca77f33782beac1745790deb4c1f94444f1e7dec5fcb6
 
       - name: Build and push checksum-pinned mc image
+        if: steps.pinned_deps.outputs.mc_exists != 'true'
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -148,6 +169,8 @@ jobs:
           done
           docker buildx imagetools inspect "$MINIO_IMAGE:5cb1e6309f2bd70e7d0ca77f33782beac1745790deb4c1f94444f1e7dec5fcb6" >/dev/null
           docker buildx imagetools inspect "$MC_IMAGE:a92b5f1af200ca25d54d78432ef6b0c47fd4340abf9759ce5d10275cd57e3318" >/dev/null
+          test "$(docker buildx imagetools inspect "$MINIO_IMAGE:5cb1e6309f2bd70e7d0ca77f33782beac1745790deb4c1f94444f1e7dec5fcb6" --format '{{.Manifest.Digest}}')" = "sha256:c83dd50c5efe2e3a962711a7c9fc77acfc55c3dad229da2146489f604afba387"
+          test "$(docker buildx imagetools inspect "$MC_IMAGE:a92b5f1af200ca25d54d78432ef6b0c47fd4340abf9759ce5d10275cd57e3318" --format '{{.Manifest.Digest}}')" = "sha256:d535999f5c4eb01c9c06bd0c068d4bb8f7366a8469fe57e394907190f7feb550"
 
       - name: Print published image refs
         run: |
