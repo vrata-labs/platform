@@ -4,11 +4,10 @@ on:
     branches: ['diagnostics/pr116-screen-share-20260924']
 permissions:
   contents: read
-  actions: read
 jobs:
   diagnose:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 16
     env:
       BASE_URL: ${{ secrets.STAGING_BASE_URL }}
       STAGING_ADMIN_TOKEN: ${{ secrets.STAGING_ADMIN_TOKEN }}
@@ -24,17 +23,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Build exact candidate product sources
         run: pnpm build
-      - name: Wait for preceding paired experiment to avoid shared service overlap
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          for n in $(seq 1 100); do
-            status="$(gh run view 35998550928 --json status --jq .status)"
-            if [ "$status" = completed ]; then exit 0; fi
-            sleep 10
-          done
-          exit 1
-      - name: Instrument normal-versus-debug comparison without changing assertions
+      - name: Instrument bounded-resolution comparison without changing assertions
         run: |
           python3 - <<'PY'
           from pathlib import Path
@@ -59,56 +48,41 @@ jobs:
             document.addEventListener("click", e => { if ((e.target as HTMLElement)?.id === "start-share") timing.clickAt = performance.now(); });
             (window as any).__mediaProbe.timing = timing;
           ''')
-          s = s.replace('visibility: document.visibilityState,', 'frameBudgetMs: d?.avatarPoseTransport?.frameBudgetMs, now: performance.now(), visibility: document.visibilityState,')
+          s = s.replace('visibility: document.visibilityState,', 'frameBudgetMs: d?.avatarPoseTransport?.frameBudgetMs, now: performance.now(), viewport: { width: innerWidth, height: innerHeight, ratio: devicePixelRatio }, visibility: document.visibilityState,')
           p.write_text(s)
           p = Path('tests/e2e/reference-template-scenarios.ts')
           s = p.read_text()
           s = 'import { instrumentMedia } from "./pr116-media-probe.js";\n' + s
+          old = '  await page.setViewportSize({ width: 640, height: 400 });'
+          assert s.count(old) == 1
+          s = s.replace(old, '  const width = Number(process.env.MEDIA_TEST_WIDTH);\n  if (![480, 400].includes(width)) throw new Error("invalid_experiment_width");\n  await page.setViewportSize({ width, height: width * 5 / 8 });')
           old = '  const events: Array<{ peer: string; category: string; status?: number }> = [];'
           assert s.count(old) == 1
-          s = s.replace(old, '  await instrumentMedia(page); await instrumentMedia(observer);\n  const profiler = await page.context().newCDPSession(page);\n  let profiling = false;\n' + old)
-          start = s.index('if (staging) test("reference presentation receives moving screen-share')
-          end = s.index('if (!staging) test(', start)
-          block = s[start:end]
-          old = '    await join(page, await hostLink(request, room.roomId));\n    await join(observer, `${room.roomLink}?debug=1&scenefit=0&onboard=0`);'
-          assert block.count(old) == 1
-          block = block.replace(old, '''    const normal = process.env.MEDIA_UI_MODE === "normal";
-              const publisherUrl = new URL(await hostLink(request, room.roomId));
-              const observerUrl = new URL(`${room.roomLink}?debug=1&scenefit=0&onboard=0`);
-              if (normal) { publisherUrl.searchParams.delete("debug"); observerUrl.searchParams.delete("debug"); }
-              await join(page, publisherUrl.href);
-              await join(observer, observerUrl.href);
-              if (normal) { await expect(page.locator("#debug-panel")).toBeHidden(); await expect(observer.locator("#debug-panel")).toBeHidden(); }
-              await profiler.send("Profiler.enable"); await profiler.send("Profiler.start"); profiling = true;''')
+          s = s.replace(old, '  await instrumentMedia(page); await instrumentMedia(observer);\n' + old)
           old = 'value: async () => stream'
-          assert block.count(old) == 1
-          block = block.replace(old, 'value: async () => { (window as any).__mediaProbe.captureCalls++; (window as any).__mediaProbe.captureAt = performance.now(); return stream; }')
+          assert s.count(old) == 1
+          s = s.replace(old, 'value: async () => { (window as any).__mediaProbe.captureCalls++; (window as any).__mediaProbe.captureAt = performance.now(); return stream; }')
           old = 'const frame = () => { paint.fillStyle = color;'
-          assert block.count(old) == 1
-          block = block.replace(old, 'const frame = () => { (window as any).__mediaProbe.paintCount = ((window as any).__mediaProbe.paintCount ?? 0) + 1; paint.fillStyle = color;')
+          assert s.count(old) == 1
+          s = s.replace(old, 'const frame = () => { (window as any).__mediaProbe.paintCount = ((window as any).__mediaProbe.paintCount ?? 0) + 1; paint.fillStyle = color;')
           old = '    await page.evaluate(() => (window as any).__stopReferenceCapture?.()).catch(() => undefined);'
-          assert block.count(old) == 1
-          block = block.replace(old, '''    const probe = await Promise.all([page, observer].map(p => p.evaluate(() => (window as any).__readMediaProbe()).catch(() => null)));
+          assert s.count(old) == 1
+          s = s.replace(old, '''    const probe = await Promise.all([page, observer].map(p => p.evaluate(() => (window as any).__readMediaProbe()).catch(() => null)));
               await test.info().attach("media-probe", { body: JSON.stringify(probe), contentType: "application/json" });
-              if (profiling) {
-                const { profile } = await profiler.send("Profiler.stop");
-                const summary = profile.nodes.map((n: any) => ({ name: n.callFrame.functionName, file: n.callFrame.url.split("?")[0].split("/").pop(), line: n.callFrame.lineNumber, column: n.callFrame.columnNumber, hits: n.hitCount ?? 0 })).sort((a: any, b: any) => b.hits-a.hits).slice(0, 35);
-                await test.info().attach("cpu-summary", { body: JSON.stringify(summary), contentType: "application/json" });
-              }
           ''' + old)
-          p.write_text(s[:start] + block + s[end:])
+          p.write_text(s)
           PY
       - run: pnpm exec playwright install --with-deps chromium
-      - name: Normal-versus-debug experiment (not staging delivery verification)
+      - name: Render-resolution experiments (not staging delivery verification)
         run: |
           result=0
-          for mode in debug normal; do
-            export MEDIA_UI_MODE="$mode"
-            export PLAYWRIGHT_REPORT_NAME="pr116-ui-$mode"
+          for width in 480 400; do
+            export MEDIA_TEST_WIDTH="$width"
+            export PLAYWRIGHT_REPORT_NAME="pr116-width-$width"
             if pnpm exec playwright test tests/e2e/reference-templates-staging.spec.ts --grep 'reference presentation receives moving screen-share' --workers=1; then
-              echo "RESULT:$mode:passed"
+              echo "RESULT:$width:passed"
             else
-              echo "RESULT:$mode:failed"
+              echo "RESULT:$width:failed"
               result=1
             fi
           done
@@ -116,7 +90,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: pr116-ui-mode-${{ github.run_id }}
+          name: pr116-render-resolution-${{ github.run_id }}
           path: |
             test-results/*.json
             playwright-report/
