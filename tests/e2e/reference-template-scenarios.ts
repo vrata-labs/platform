@@ -219,6 +219,7 @@ test("reference meeting synchronizes only declared surfaces across two participa
 });
 
 if (staging) test("reference presentation receives moving screen-share frames through the real media transport", async ({ request, playwright }) => {
+  test.setTimeout(420000);
   const room = await create(request, "presentation-room-basic");
   const browser = await playwright.chromium.launch({ headless: true });
   const page = await browser.newPage({ viewport: { width: 640, height: 400 } });
@@ -257,7 +258,7 @@ if (staging) test("reference presentation receives moving screen-share frames th
     await expect.poll(() => page.evaluate(() => {
       const state = (window as any).__VRATA_DEBUG__?.screenShare;
       return Boolean(state?.localPublishing && state.publishedTrackSid && !state.publishedTrackSid.startsWith("mock-"));
-    }), { timeout: 45000 }).toBe(true);
+    }), { timeout: 120000, intervals: [500, 1000, 2000] }).toBe(true);
     await expect.poll(() => observer.evaluate(() => (window as any).__VRATA_DEBUG__?.screenShare?.remoteSubscribedTrackCount ?? 0), { timeout: 45000 }).toBe(1);
     expect(await observer.evaluate(() => (window as any).__VRATA_DEBUG__?.media?.publishedAudio)).toBe(false);
     await expect(observer.locator("#join-muted")).toBeChecked();

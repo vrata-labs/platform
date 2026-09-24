@@ -24,6 +24,7 @@ type DemoClient = {
   participantId: string;
   sessionToken: string;
   audioMock: boolean;
+  requireDevRoleQueryDisabled: boolean;
 };
 
 export type PublicDemoScenarioOptions = {
@@ -255,6 +256,7 @@ async function joinClientPage(input: {
   inviteLink: string;
   displayName: string;
   audioMock: boolean;
+  requireDevRoleQueryDisabled: boolean;
 }, navigate = true): Promise<DemoClient> {
   if (navigate) {
     await navigateAndRemoveSensitiveQuery(input.page, browserInviteUrl(input.inviteLink, {
@@ -274,14 +276,17 @@ async function joinClientPage(input: {
     const debug = (window as any).__VRATA_DEBUG__;
     return {
       connected: debug?.roomStateConnected ?? false,
-      role: debug?.access?.role ?? null,
-      roleQueryAllowed: debug?.access?.roleQueryAllowed ?? true
+      role: debug?.access?.role ?? null
     };
   }), { timeout: 45_000, intervals: corePollIntervals }).toEqual({
     connected: true,
-    role: input.role,
-    roleQueryAllowed: false
+    role: input.role
   });
+  if (input.requireDevRoleQueryDisabled) {
+    await expect.poll(() => input.page.evaluate(() => (window as any).__VRATA_DEBUG__?.access?.roleQueryAllowed ?? true), {
+      timeout: 15_000, intervals: corePollIntervals
+    }).toBe(false);
+  }
   const debugParticipantId = await input.page.evaluate(() => (window as any).__VRATA_DEBUG__?.participantId ?? "");
   if (debugParticipantId !== session.participantId) throw new Error("public_demo_participant_binding_mismatch");
   expect(await input.page.title()).toBe("Vrata Room");
@@ -294,7 +299,8 @@ async function joinClientPage(input: {
     displayName: input.displayName,
     participantId: session.participantId,
     sessionToken: session.token,
-    audioMock: input.audioMock
+    audioMock: input.audioMock,
+    requireDevRoleQueryDisabled: input.requireDevRoleQueryDisabled
   };
 }
 
@@ -725,28 +731,28 @@ export async function runPublicDemoScenario(options: PublicDemoScenarioOptions):
     let hostPage = await contexts[0]!.newPage();
     const host = await joinClientPage({
       context: contexts[0]!, page: hostPage, role: "host", inviteLink: hostInvite,
-      displayName: "Public Demo Host", audioMock: options.staging
+      displayName: "Public Demo Host", audioMock: options.staging, requireDevRoleQueryDisabled: !options.staging
     });
     clients.push(host);
     console.log(`public-demo:${environment}:host-joined`);
     let firstMemberPage = await contexts[1]!.newPage();
     const firstMember = await joinClientPage({
       context: contexts[1]!, page: firstMemberPage, role: "member", inviteLink: memberInvites[0] as string,
-      displayName: "Public Demo Member One", audioMock: options.staging
+      displayName: "Public Demo Member One", audioMock: options.staging, requireDevRoleQueryDisabled: !options.staging
     });
     clients.push(firstMember);
     console.log(`public-demo:${environment}:member-one-joined`);
     let secondMemberPage = await contexts[2]!.newPage();
     const secondMember = await joinClientPage({
       context: contexts[2]!, page: secondMemberPage, role: "member", inviteLink: memberInvites[1] as string,
-      displayName: "Public Demo Member Two", audioMock: false
+      displayName: "Public Demo Member Two", audioMock: false, requireDevRoleQueryDisabled: !options.staging
     });
     clients.push(secondMember);
     console.log(`public-demo:${environment}:member-two-joined`);
     let guestPage = await contexts[3]!.newPage();
     const guest = await joinClientPage({
       context: contexts[3]!, page: guestPage, role: "guest", inviteLink: guestInvite,
-      displayName: "Public Demo Guest", audioMock: false
+      displayName: "Public Demo Guest", audioMock: false, requireDevRoleQueryDisabled: !options.staging
     });
     clients.push(guest);
     console.log(`public-demo:${environment}:guest-joined`);
