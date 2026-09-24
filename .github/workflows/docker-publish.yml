@@ -14,6 +14,8 @@ env:
   API_IMAGE_NAME: vrata-api
   ROOM_STATE_IMAGE_NAME: vrata-room-state
   REMOTE_BROWSER_IMAGE_NAME: vrata-remote-browser
+  MINIO_IMAGE_NAME: vrata-minio
+  MC_IMAGE_NAME: vrata-mc
 
 jobs:
   build-and-publish:
@@ -37,12 +39,16 @@ jobs:
           API_IMAGE="${REGISTRY}/${YCR_REGISTRY_ID}/${API_IMAGE_NAME}"
           ROOM_STATE_IMAGE="${REGISTRY}/${YCR_REGISTRY_ID}/${ROOM_STATE_IMAGE_NAME}"
           REMOTE_BROWSER_IMAGE="${REGISTRY}/${YCR_REGISTRY_ID}/${REMOTE_BROWSER_IMAGE_NAME}"
+          MINIO_IMAGE="${REGISTRY}/${YCR_REGISTRY_ID}/${MINIO_IMAGE_NAME}"
+          MC_IMAGE="${REGISTRY}/${YCR_REGISTRY_ID}/${MC_IMAGE_NAME}"
           {
             echo "sha_tag=${SHA_TAG}"
             echo "branch_slug=${BRANCH_SLUG}"
             echo "api_image=${API_IMAGE}"
             echo "room_state_image=${ROOM_STATE_IMAGE}"
             echo "remote_browser_image=${REMOTE_BROWSER_IMAGE}"
+            echo "minio_image=${MINIO_IMAGE}"
+            echo "mc_image=${MC_IMAGE}"
           } >> "$GITHUB_OUTPUT"
 
       - name: Login to Yandex Container Registry
@@ -103,6 +109,28 @@ jobs:
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
 
+      - name: Build and push checksum-pinned MinIO image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: infra/docker/minio.demo-local.Dockerfile
+          push: true
+          platforms: linux/amd64
+          provenance: false
+          sbom: false
+          tags: ${{ steps.meta.outputs.minio_image }}:5cb1e6309f2bd70e7d0ca77f33782beac1745790deb4c1f94444f1e7dec5fcb6
+
+      - name: Build and push checksum-pinned mc image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: infra/docker/mc.demo-local.Dockerfile
+          push: true
+          platforms: linux/amd64
+          provenance: false
+          sbom: false
+          tags: ${{ steps.meta.outputs.mc_image }}:a92b5f1af200ca25d54d78432ef6b0c47fd4340abf9759ce5d10275cd57e3318
+
       - name: Verify published YCR manifests
         env:
           API_IMAGE: ${{ steps.meta.outputs.api_image }}
@@ -110,12 +138,16 @@ jobs:
           REMOTE_BROWSER_IMAGE: ${{ steps.meta.outputs.remote_browser_image }}
           SHA_TAG: ${{ steps.meta.outputs.sha_tag }}
           BRANCH_SLUG: ${{ steps.meta.outputs.branch_slug }}
+          MINIO_IMAGE: ${{ steps.meta.outputs.minio_image }}
+          MC_IMAGE: ${{ steps.meta.outputs.mc_image }}
         run: |
           for image in "$API_IMAGE" "$ROOM_STATE_IMAGE" "$REMOTE_BROWSER_IMAGE"; do
             for tag in "$SHA_TAG" "$BRANCH_SLUG" staging; do
               docker buildx imagetools inspect "$image:$tag" >/dev/null
             done
           done
+          docker buildx imagetools inspect "$MINIO_IMAGE:5cb1e6309f2bd70e7d0ca77f33782beac1745790deb4c1f94444f1e7dec5fcb6" >/dev/null
+          docker buildx imagetools inspect "$MC_IMAGE:a92b5f1af200ca25d54d78432ef6b0c47fd4340abf9759ce5d10275cd57e3318" >/dev/null
 
       - name: Print published image refs
         run: |
@@ -128,3 +160,5 @@ jobs:
           echo "Remote-browser image SHA: ${{ steps.meta.outputs.remote_browser_image }}:${{ steps.meta.outputs.sha_tag }}"
           echo "Remote-browser image alias: ${{ steps.meta.outputs.remote_browser_image }}:${{ steps.meta.outputs.branch_slug }}"
           echo "Remote-browser image staging alias: ${{ steps.meta.outputs.remote_browser_image }}:staging"
+          echo "MinIO pinned release image: ${{ steps.meta.outputs.minio_image }}:5cb1e6309f2bd70e7d0ca77f33782beac1745790deb4c1f94444f1e7dec5fcb6"
+          echo "mc pinned release image: ${{ steps.meta.outputs.mc_image }}:a92b5f1af200ca25d54d78432ef6b0c47fd4340abf9759ce5d10275cd57e3318"
