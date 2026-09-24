@@ -21,9 +21,13 @@
 ```bash
 git clone https://github.com/vrata-labs/platform.git vrata-demo
 cd vrata-demo
-pnpm install --frozen-lockfile
 SHA="$(git rev-parse HEAD)"
 node tools/public-demo-local-env.mjs --source-sha "$SHA"
+pnpm install --frozen-lockfile
+# pnpm may change the tracked mode of this workspace bin; in a fresh clone restore that mode only.
+git diff --summary
+git restore -- packages/asset-pipeline/bin/vrata.mjs
+git diff --exit-code HEAD
 node tools/public-demo-local-env.mjs --check
 docker compose --env-file infra/docker/.env.demo-local.local -f infra/docker/compose.selfhost.yml -f infra/docker/compose.demo-local.yml up -d --build
 curl -fsS http://127.0.0.1:4000/health
