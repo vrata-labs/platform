@@ -37,6 +37,8 @@ Env создаётся один раз без перезаписи, с прав�
 
 MinIO и mc собираются в local overlay из официальных Linux release binaries с закреплёнными SHA-256 поверх pinned Alpine base: прежние публичные образы MinIO/mc в Quay/Docker Hub больше не доступны для нового pull. Оба внешних бинарника распространяются по GNU AGPLv3; репозиторий VRATA не включает их копии. Сборка ограничена `linux/amd64`; каталог и production/staging Compose остаются без изменений.
 
+В этом профиле `MINIO_PUBLIC_BASE_URL=http://minio:9000` — адрес **внутри** Compose для серверного чтения PDF. Браузеры получают документы через авторизованные маршруты API; прямые MinIO URL из метаданных не используются как публичные ссылки для демонстрации.
+
 ```bash
 docker compose --env-file infra/docker/.env.demo-local.local -f infra/docker/compose.selfhost.yml -f infra/docker/compose.demo-local.yml exec -T api node apps/api/dist/template-catalog-cli.js status
 docker compose --env-file infra/docker/.env.demo-local.local -f infra/docker/compose.selfhost.yml -f infra/docker/compose.demo-local.yml exec -T api node apps/api/dist/template-catalog-cli.js preflight

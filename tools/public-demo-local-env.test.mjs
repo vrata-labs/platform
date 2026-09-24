@@ -118,7 +118,8 @@ function validComposeModel(env) {
           POSTGRES_URL: env.POSTGRES_URL,
           MINIO_ROOT_USER: env.MINIO_ROOT_USER,
           MINIO_ROOT_PASSWORD: env.MINIO_ROOT_PASSWORD,
-          MINIO_BUCKET: env.MINIO_BUCKET
+          MINIO_BUCKET: env.MINIO_BUCKET,
+          MINIO_PUBLIC_BASE_URL: env.MINIO_PUBLIC_BASE_URL
         }
       },
       caddy: {
@@ -173,6 +174,9 @@ test("env assertion rejects noncanonical SHAs, dev credentials, and credential d
 
   const devCredentials = { ...generatedEnv(), LIVEKIT_API_KEY: "devkey" };
   assert.throws(() => assertPublicDemoLocalEnv(devCredentials), expectedError("public_demo_local_dev_credential_forbidden"));
+
+  const hostLoopbackStorage = { ...generatedEnv(), MINIO_PUBLIC_BASE_URL: "http://127.0.0.1:9000" };
+  assert.throws(() => assertPublicDemoLocalEnv(hostLoopbackStorage), expectedError("public_demo_local_env_value_invalid:MINIO_PUBLIC_BASE_URL"));
 
   const reusedSecret = generatedEnv();
   reusedSecret.STATE_TOKEN_SECRET = reusedSecret.LIVEKIT_API_SECRET;
