@@ -2,6 +2,8 @@
 
 Открытый сценарий VRATA-FEAT-033 рассчитан на 15–20 минут после подготовки окружения. Ведущий и три приглашённых встречаются в отдельной `standard/private` комнате шаблона `meeting-room-basic@2.0.0`. Четыре ссылки дают роли host, member, member, guest; они не являются одноразовыми. Встреча использует сохраняемые общие заметки, трёхстраничный PDF, голос и обычные средства управления комнатой. Материалы и их происхождение: [`tools/fixtures/public-demo/LICENSES.md`](../../tools/fixtures/public-demo/LICENSES.md). Сцена уже закреплена шаблоном: `warm-modern-meeting-room-candidate-01@0.3.4` из `vrata-labs/warm-modern-meeting-room-candidate-01`, commit `a237ab799acbee3932846147c9f48bf1d1b4aaa8`; 3D-файлы не копируются в этот репозиторий.
 
+Текущий redacted [отчёт о проверках](acceptance-2026-09-25.md) фиксирует опубликованный SHA и незакрытые ручные гейты.
+
 ## Контракт доступа
 
 | Действие | host | member | guest |
