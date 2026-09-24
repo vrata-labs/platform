@@ -4,6 +4,7 @@ on:
     branches: [diagnostics/pr116-share-publication-20260924]
 permissions:
   contents: read
+  actions: read
 concurrency:
   group: staging-deploy
   cancel-in-progress: false
@@ -38,11 +39,17 @@ jobs:
           ssh -o StrictHostKeyChecking=no "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo python3 - $app_dir $EXPECTED_STAGING_SHA" < tools/diagnostics/pr116-read-stage.py > diagnostic-before.json
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec playwright install --with-deps chromium
+      - name: Download and verify exact original and refactored client bundles
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api repos/vrata-labs/platform/actions/artifacts/10794965824/zip > diagnostic-preparation.zip
+          python3 tools/diagnostics/pr116-extract-bundles.py
       - name: Add bounded observation only to the existing test
         run: python3 tools/diagnostics/pr116-instrument.py
-      - name: Three explicit observations, no test retries
-        run: pnpm exec playwright test tests/e2e/reference-templates-staging.spec.ts --grep 'reference presentation receives moving screen-share frames through the real media transport' --repeat-each=3 --workers=1 --retries=0
-      - name: Require three actual observations with no skips or retries
+      - name: Four matched client observations, baseline-candidate-baseline-candidate
+        run: pnpm exec playwright test tests/e2e/reference-templates-staging.spec.ts --grep 'reference presentation receives moving screen-share frames through the real media transport' --repeat-each=4 --workers=1 --retries=0
+      - name: Require four observed client variants with no skips or retries
         if: always()
         run: |
           python3 - <<'PY'
@@ -53,12 +60,19 @@ jobs:
               for sp in s.get('specs',[]): tests.extend(sp.get('tests',[]))
               for child in s.get('suites',[]): visit(child)
           for s in d['suites']: visit(s)
-          assert len(tests)==3, 'diagnostic_test_count'
+          assert len(tests)==4, 'diagnostic_test_count'
           assert d['stats']['skipped']==0 and d['stats']['flaky']==0 and not d.get('errors'), 'diagnostic_incomplete'
+          variants=[]
           for t in tests:
               assert len(t['results'])==1 and t['results'][0]['retry']==0, 'diagnostic_retried'
               assert t['results'][0]['status'] in ('passed','failed','timedOut'), 'diagnostic_not_executed'
-              assert any(a['name']=='share-phase-timeline' for a in t['results'][0]['attachments']), 'diagnostic_missing_timeline'
+              import base64
+              a=next(a for a in t['results'][0]['attachments'] if a['name']=='share-phase-timeline')
+              timeline=json.loads(base64.b64decode(a['body']))
+              assert all(timeline['bundleRequests'].get(p,0)>=1 for p in ['publisher','viewer']), 'client_variant_not_served'
+              assert timeline['dropped']==0, 'timeline_truncated'
+              variants.append(timeline['variant'])
+          assert sorted(variants)==['baseline','baseline','candidate','candidate'], 'unbalanced_variants'
           print(json.dumps(d['stats']))
           PY
       - name: Verify staging stayed on the same baseline
