@@ -1,0 +1,78 @@
+name: Diagnose PR116 screen share
+on:
+  push:
+    branches: [diagnostics/pr116-share-publication-20260924]
+permissions:
+  contents: read
+concurrency:
+  group: staging-deploy
+  cancel-in-progress: false
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      STAGING_SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
+      STAGING_SSH_USER: ${{ secrets.STAGING_SSH_USER }}
+      STAGING_APP_DIR: ${{ secrets.STAGING_APP_DIR }}
+      BASE_URL: ${{ secrets.STAGING_BASE_URL }}
+      STAGING_ADMIN_TOKEN: ${{ secrets.STAGING_ADMIN_TOKEN }}
+      EXPECTED_STAGING_SHA: 54e13fec4ee14134597c6520a3cfa9b0db291032
+      DIAGNOSTIC_SOURCE_SHA: 4ba3fc6d8e0d667bd69143e749d0dc94f0846997
+      PLAYWRIGHT_NO_WEB_SERVER: "1"
+      VRATA_REFERENCE_CATALOG_ACTIVE: "1"
+      PLAYWRIGHT_REPORT_NAME: diagnostic-share
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.STAGING_SSH_KEY }}
+      - name: Check exact baseline containers without changing staging
+        run: |
+          printf -v app_dir '%q' "$STAGING_APP_DIR"
+          ssh -o StrictHostKeyChecking=no "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo python3 - $app_dir $EXPECTED_STAGING_SHA" < tools/diagnostics/pr116-read-stage.py > diagnostic-before.json
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install --with-deps chromium
+      - name: Add bounded observation only to the existing test
+        run: python3 tools/diagnostics/pr116-instrument.py
+      - name: Three explicit observations, no test retries
+        run: pnpm exec playwright test tests/e2e/reference-templates-staging.spec.ts --grep 'reference presentation receives moving screen-share frames through the real media transport' --repeat-each=3 --workers=1 --retries=0
+      - name: Require three actual observations with no skips or retries
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import json
+          d=json.load(open('test-results/diagnostic-share.json'))
+          tests=[]
+          def visit(s):
+              for sp in s.get('specs',[]): tests.extend(sp.get('tests',[]))
+              for child in s.get('suites',[]): visit(child)
+          for s in d['suites']: visit(s)
+          assert len(tests)==3, 'diagnostic_test_count'
+          assert d['stats']['skipped']==0 and d['stats']['flaky']==0 and not d.get('errors'), 'diagnostic_incomplete'
+          for t in tests:
+              assert len(t['results'])==1 and t['results'][0]['retry']==0, 'diagnostic_retried'
+              assert t['results'][0]['status'] in ('passed','failed','timedOut'), 'diagnostic_not_executed'
+              assert any(a['name']=='share-phase-timeline' for a in t['results'][0]['attachments']), 'diagnostic_missing_timeline'
+          print(json.dumps(d['stats']))
+          PY
+      - name: Verify staging stayed on the same baseline
+        if: always()
+        run: |
+          printf -v app_dir '%q' "$STAGING_APP_DIR"
+          ssh -o StrictHostKeyChecking=no "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo python3 - $app_dir $EXPECTED_STAGING_SHA" < tools/diagnostics/pr116-read-stage.py > diagnostic-after.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pr116-share-diagnosis-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: error
+          path: |
+            diagnostic-before.json
+            diagnostic-after.json
+            test-results/diagnostic-share.json
