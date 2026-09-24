@@ -7,13 +7,12 @@ permissions:
 jobs:
   diagnose:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 22
     env:
       BASE_URL: ${{ secrets.STAGING_BASE_URL }}
       STAGING_ADMIN_TOKEN: ${{ secrets.STAGING_ADMIN_TOKEN }}
       VRATA_REFERENCE_CATALOG_ACTIVE: '1'
       PLAYWRIGHT_NO_WEB_SERVER: '1'
-      PLAYWRIGHT_REPORT_NAME: pr116-candidate-probe
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -22,8 +21,16 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - name: Build unmodified candidate product sources
-        run: pnpm build
+      - name: Build both exact product versions with identical dependencies
+        run: |
+          pnpm build
+          cp apps/runtime-web/dist/assets/main-*.js /tmp/candidate-main.js
+          git fetch --no-tags --depth=1 origin 54e13fec4ee14134597c6520a3cfa9b0db291032
+          git show 54e13fec4ee14134597c6520a3cfa9b0db291032:apps/runtime-web/src/main.ts > apps/runtime-web/src/main.ts
+          pnpm --filter @vrata/runtime-web build
+          cp apps/runtime-web/dist/assets/main-*.js /tmp/baseline-main.js
+          git restore --source=HEAD -- apps/runtime-web/src/main.ts
+          sha256sum /tmp/baseline-main.js /tmp/candidate-main.js
       - uses: webfactory/ssh-agent@v0.9.0
         with:
           ssh-private-key: ${{ secrets.STAGING_SSH_KEY }}
@@ -34,29 +41,40 @@ jobs:
           STAGING_APP_DIR: ${{ secrets.STAGING_APP_DIR }}
         run: |
           ssh -o StrictHostKeyChecking=no "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo bash -lc 'cat \"$STAGING_APP_DIR/infra/docker/.staging-successful-image-tag\"; echo; grep -E \"^IMAGE_TAG=\" \"$STAGING_APP_DIR/infra/docker/.env.staging\"'"
-      - name: Instrument browser-only comparison without deploying
+      - name: Instrument controlled browser comparison without changing assertions
         run: |
           python3 - <<'PY'
           from pathlib import Path
           p = Path('tests/e2e/pr116-media-probe.ts')
           s = p.read_text()
-          s = 'import { readFileSync, readdirSync } from "node:fs";\nimport { createHash } from "node:crypto";\n' + s
+          s = 'import { readFileSync } from "node:fs";\nimport { createHash } from "node:crypto";\n' + s
           old = 'export async function instrumentMedia(page: Page): Promise<void> {'
           assert s.count(old) == 1
-          route = '''
-            const assetDir = "apps/runtime-web/dist/assets";
-            const assets = readdirSync(assetDir).filter(n => /^main-.*\\.js$/.test(n));
-            if (assets.length !== 1) throw new Error("ambiguous_candidate_main");
-            const body = readFileSync(`${assetDir}/${assets[0]}`);
-            console.log("browser_only_candidate_asset_sha256", createHash("sha256").update(body).digest("hex"));
+          s = s.replace(old, old + '''
+            const variant = process.env.MEDIA_VARIANT;
+            if (variant !== "baseline" && variant !== "candidate") throw new Error("invalid_variant");
+            const body = readFileSync(`/tmp/${variant}-main.js`);
+            console.log("browser_only_asset", variant, createHash("sha256").update(body).digest("hex"));
             let hits = 0;
             await page.route(/\\/assets\\/main-[^/]+\\.js$/, async route => {
               if (++hits !== 1) throw new Error("unexpected_main_reload");
-              console.log("candidate_main_intercepted");
+              console.log("main_intercepted", variant);
               await route.fulfill({ status: 200, contentType: "text/javascript", body });
             });
-          '''
-          s = s.replace(old, old + route)
+          ''')
+          old = '    (window as any).__mediaProbe = { captureCalls: 0 };'
+          assert s.count(old) == 1
+          s = s.replace(old, old + '''
+            const timing = { longTasks: 0, totalMs: 0, maxMs: 0, clickAt: 0 };
+            new PerformanceObserver(list => {
+              for (const item of list.getEntries()) { timing.longTasks++; timing.totalMs += item.duration; timing.maxMs = Math.max(timing.maxMs, item.duration); }
+            }).observe({ entryTypes: ["longtask"] });
+            document.addEventListener("click", e => { if ((e.target as HTMLElement)?.id === "start-share") timing.clickAt = performance.now(); });
+            (window as any).__mediaProbe.timing = timing;
+          ''')
+          old = 'visibility: document.visibilityState,'
+          assert s.count(old) == 1
+          s = s.replace(old, 'frameBudgetMs: d?.avatarPoseTransport?.frameBudgetMs, now: performance.now(), ' + old)
           p.write_text(s)
           p = Path('tests/e2e/reference-template-scenarios.ts')
           s = p.read_text()
@@ -66,23 +84,40 @@ jobs:
           s = s.replace(old, '  await instrumentMedia(page); await instrumentMedia(observer);\n' + old)
           old = 'value: async () => stream'
           assert s.count(old) == 1
-          s = s.replace(old, 'value: async () => { (window as any).__mediaProbe.captureCalls++; (window as any).__mediaProbe.track = { ready: stream.getVideoTracks()[0]?.readyState, width: stream.getVideoTracks()[0]?.getSettings().width, height: stream.getVideoTracks()[0]?.getSettings().height }; return stream; }')
+          s = s.replace(old, 'value: async () => { (window as any).__mediaProbe.captureCalls++; (window as any).__mediaProbe.captureAt = performance.now(); return stream; }')
           old = 'const frame = () => { paint.fillStyle = color;'
           assert s.count(old) == 1
           s = s.replace(old, 'const frame = () => { (window as any).__mediaProbe.paintCount = ((window as any).__mediaProbe.paintCount ?? 0) + 1; paint.fillStyle = color;')
-          old = '  } catch (error) {\n    const states = await Promise.all([page, observer]'
+          old = '    await page.evaluate(() => (window as any).__stopReferenceCapture?.()).catch(() => undefined);'
           assert s.count(old) == 1
-          s = s.replace(old, '  } catch (error) {\n    const probe = await Promise.all([page, observer].map(p => p.evaluate(() => (window as any).__readMediaProbe()).catch(() => null)));\n    await test.info().attach("media-probe", { body: JSON.stringify(probe), contentType: "application/json" });\n    const states = await Promise.all([page, observer]')
+          s = s.replace(old, '''    const probe = await Promise.all([page, observer].map(p => p.evaluate(() => (window as any).__readMediaProbe()).catch(() => null)));
+              await test.info().attach("media-probe", { body: JSON.stringify(probe), contentType: "application/json" });
+          ''' + old)
           p.write_text(s)
           PY
       - run: pnpm exec playwright install --with-deps chromium
-      - name: Candidate-only diagnostic experiment (not staging delivery verification)
-        run: pnpm exec playwright test tests/e2e/reference-templates-staging.spec.ts --grep 'reference presentation receives moving screen-share' --workers=1
+      - name: Paired experiments (not deployment verification)
+        run: |
+          result=0
+          i=0
+          for variant in baseline candidate candidate baseline; do
+            i=$((i+1))
+            export MEDIA_VARIANT="$variant"
+            export PLAYWRIGHT_REPORT_NAME="pr116-paired-$i-$variant"
+            echo "EXPERIMENT:$i:$variant"
+            if pnpm exec playwright test tests/e2e/reference-templates-staging.spec.ts --grep 'reference presentation receives moving screen-share' --workers=1; then
+              echo "RESULT:$i:$variant:passed"
+            else
+              echo "RESULT:$i:$variant:failed"
+              result=1
+            fi
+          done
+          exit "$result"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: pr116-media-diagnosis-${{ github.run_id }}
+          name: pr116-media-paired-${{ github.run_id }}
           path: |
-            test-results/pr116-candidate-probe.json
-            playwright-report/pr116-candidate-probe/
+            test-results/*.json
+            playwright-report/
           retention-days: 7
