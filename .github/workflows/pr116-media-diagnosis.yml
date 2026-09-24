@@ -1,0 +1,71 @@
+name: PR116 media diagnosis
+on:
+  push:
+    branches: ['diagnostics/pr116-screen-share-20260924']
+permissions:
+  contents: read
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      BASE_URL: ${{ secrets.STAGING_BASE_URL }}
+      STAGING_ADMIN_TOKEN: ${{ secrets.STAGING_ADMIN_TOKEN }}
+      VRATA_REFERENCE_CATALOG_ACTIVE: '1'
+      PLAYWRIGHT_NO_WEB_SERVER: '1'
+      PLAYWRIGHT_REPORT_NAME: pr116-diagnosis
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Save locked dependencies for independent checks
+        run: |
+          tar -czf /tmp/locked-dependencies.tgz node_modules apps/*/node_modules packages/*/node_modules
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pr116-locked-dependencies
+          path: /tmp/locked-dependencies.tgz
+          retention-days: 3
+      - uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.STAGING_SSH_KEY }}
+      - name: Record actual baseline without deploying
+        env:
+          STAGING_SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
+          STAGING_SSH_USER: ${{ secrets.STAGING_SSH_USER }}
+          STAGING_APP_DIR: ${{ secrets.STAGING_APP_DIR }}
+        run: |
+          ssh -o StrictHostKeyChecking=no "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo bash -lc 'cat \"$STAGING_APP_DIR/infra/docker/.staging-successful-image-tag\"; echo; grep -E \"^IMAGE_TAG=\" \"$STAGING_APP_DIR/infra/docker/.env.staging\"'"
+      - name: Instrument existing scenario without changing assertions
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('tests/e2e/reference-template-scenarios.ts')
+          s = p.read_text()
+          s = 'import { instrumentMedia } from "./pr116-media-probe.js";\n' + s
+          old = '  const events: Array<{ peer: string; category: string; status?: number }> = [];'
+          assert s.count(old) == 1
+          s = s.replace(old, '  await instrumentMedia(page); await instrumentMedia(observer);\n' + old)
+          old = 'value: async () => stream'
+          assert s.count(old) == 1
+          s = s.replace(old, 'value: async () => { (window as any).__mediaProbe.captureCalls++; return stream; }')
+          old = '  } catch (error) {\n    const states = await Promise.all([page, observer]'
+          assert s.count(old) == 1
+          s = s.replace(old, '  } catch (error) {\n    const probe = await Promise.all([page, observer].map(p => p.evaluate(() => (window as any).__readMediaProbe()).catch(() => null)));\n    await test.info().attach("media-probe", { body: JSON.stringify(probe), contentType: "application/json" });\n    const states = await Promise.all([page, observer]')
+          p.write_text(s)
+          PY
+      - run: pnpm exec playwright install --with-deps chromium
+      - name: Reproduce against deployed baseline
+        run: pnpm exec playwright test tests/e2e/reference-templates-staging.spec.ts --grep 'reference presentation receives moving screen-share' --workers=1
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pr116-media-diagnosis-${{ github.run_id }}
+          path: |
+            test-results/pr116-diagnosis.json
+            playwright-report/pr116-diagnosis/
+          retention-days: 7
