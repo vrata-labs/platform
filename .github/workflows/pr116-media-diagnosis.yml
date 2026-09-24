@@ -13,7 +13,7 @@ jobs:
       STAGING_ADMIN_TOKEN: ${{ secrets.STAGING_ADMIN_TOKEN }}
       VRATA_REFERENCE_CATALOG_ACTIVE: '1'
       PLAYWRIGHT_NO_WEB_SERVER: '1'
-      PLAYWRIGHT_REPORT_NAME: pr116-diagnosis
+      PLAYWRIGHT_REPORT_NAME: pr116-candidate-probe
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -22,14 +22,8 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - name: Save locked dependencies for independent checks
-        run: |
-          tar -czf /tmp/locked-dependencies.tgz node_modules apps/*/node_modules packages/*/node_modules
-      - uses: actions/upload-artifact@v4
-        with:
-          name: pr116-locked-dependencies
-          path: /tmp/locked-dependencies.tgz
-          retention-days: 3
+      - name: Build unmodified candidate product sources
+        run: pnpm build
       - uses: webfactory/ssh-agent@v0.9.0
         with:
           ssh-private-key: ${{ secrets.STAGING_SSH_KEY }}
@@ -40,10 +34,30 @@ jobs:
           STAGING_APP_DIR: ${{ secrets.STAGING_APP_DIR }}
         run: |
           ssh -o StrictHostKeyChecking=no "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo bash -lc 'cat \"$STAGING_APP_DIR/infra/docker/.staging-successful-image-tag\"; echo; grep -E \"^IMAGE_TAG=\" \"$STAGING_APP_DIR/infra/docker/.env.staging\"'"
-      - name: Instrument existing scenario without changing assertions
+      - name: Instrument browser-only comparison without deploying
         run: |
           python3 - <<'PY'
           from pathlib import Path
+          p = Path('tests/e2e/pr116-media-probe.ts')
+          s = p.read_text()
+          s = 'import { readFileSync, readdirSync } from "node:fs";\nimport { createHash } from "node:crypto";\n' + s
+          old = 'export async function instrumentMedia(page: Page): Promise<void> {'
+          assert s.count(old) == 1
+          route = '''
+            const assetDir = "apps/runtime-web/dist/assets";
+            const assets = readdirSync(assetDir).filter(n => /^main-.*\\.js$/.test(n));
+            if (assets.length !== 1) throw new Error("ambiguous_candidate_main");
+            const body = readFileSync(`${assetDir}/${assets[0]}`);
+            console.log("browser_only_candidate_asset_sha256", createHash("sha256").update(body).digest("hex"));
+            let hits = 0;
+            await page.route(/\\/assets\\/main-[^/]+\\.js$/, async route => {
+              if (++hits !== 1) throw new Error("unexpected_main_reload");
+              console.log("candidate_main_intercepted");
+              await route.fulfill({ status: 200, contentType: "text/javascript", body });
+            });
+          '''
+          s = s.replace(old, old + route)
+          p.write_text(s)
           p = Path('tests/e2e/reference-template-scenarios.ts')
           s = p.read_text()
           s = 'import { instrumentMedia } from "./pr116-media-probe.js";\n' + s
@@ -52,20 +66,23 @@ jobs:
           s = s.replace(old, '  await instrumentMedia(page); await instrumentMedia(observer);\n' + old)
           old = 'value: async () => stream'
           assert s.count(old) == 1
-          s = s.replace(old, 'value: async () => { (window as any).__mediaProbe.captureCalls++; return stream; }')
+          s = s.replace(old, 'value: async () => { (window as any).__mediaProbe.captureCalls++; (window as any).__mediaProbe.track = { ready: stream.getVideoTracks()[0]?.readyState, width: stream.getVideoTracks()[0]?.getSettings().width, height: stream.getVideoTracks()[0]?.getSettings().height }; return stream; }')
+          old = 'const frame = () => { paint.fillStyle = color;'
+          assert s.count(old) == 1
+          s = s.replace(old, 'const frame = () => { (window as any).__mediaProbe.paintCount = ((window as any).__mediaProbe.paintCount ?? 0) + 1; paint.fillStyle = color;')
           old = '  } catch (error) {\n    const states = await Promise.all([page, observer]'
           assert s.count(old) == 1
           s = s.replace(old, '  } catch (error) {\n    const probe = await Promise.all([page, observer].map(p => p.evaluate(() => (window as any).__readMediaProbe()).catch(() => null)));\n    await test.info().attach("media-probe", { body: JSON.stringify(probe), contentType: "application/json" });\n    const states = await Promise.all([page, observer]')
           p.write_text(s)
           PY
       - run: pnpm exec playwright install --with-deps chromium
-      - name: Reproduce against deployed baseline
+      - name: Candidate-only diagnostic experiment (not staging delivery verification)
         run: pnpm exec playwright test tests/e2e/reference-templates-staging.spec.ts --grep 'reference presentation receives moving screen-share' --workers=1
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: pr116-media-diagnosis-${{ github.run_id }}
           path: |
-            test-results/pr116-diagnosis.json
-            playwright-report/pr116-diagnosis/
+            test-results/pr116-candidate-probe.json
+            playwright-report/pr116-candidate-probe/
           retention-days: 7
