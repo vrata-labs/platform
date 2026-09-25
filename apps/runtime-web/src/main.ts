@@ -3228,8 +3228,12 @@ function syncAudioControls(): void {
     return;
   }
   joinAudioButton.disabled = audioActionInFlight;
-  joinAudioButton.textContent = audioSessionJoined ? "Leave Audio" : "Join Audio";
-  joinAudioButton.title = audioSessionJoined ? "Stop publishing your microphone" : "Publish your microphone";
+  joinAudioButton.textContent = audioSessionJoined ? "Leave Audio" : joinMutedPreference ? "Join Audio Muted" : "Join Audio";
+  joinAudioButton.title = audioSessionJoined
+    ? "Leave the audio session"
+    : joinMutedPreference
+      ? "Connect without publishing your microphone; press Unmute to speak"
+      : "Connect and publish your microphone";
   muteButton.disabled = audioActionInFlight || !audioSessionJoined || !livekitRoom;
   muteButton.textContent = microphoneEnabled ? "Mute" : "Unmute";
   muteButton.title = microphoneEnabled ? "Mute your microphone" : "Unmute your microphone";
@@ -7401,7 +7405,7 @@ async function joinAudio(): Promise<void> {
   syncWhiteboardControls();
   syncLocalAudioPresence();
   syncAudioControls();
-  clearAudioIssue(startMuted ? "Joined muted" : "Audio connected");
+  clearAudioIssue(startMuted ? "Joined muted — press Unmute to speak" : "Audio connected");
   debugState.audioState = startMuted ? "muted" : "connected";
   void reportDiagnostics(startMuted ? "audio_joined_muted" : "audio_connected");
 }
@@ -7726,6 +7730,7 @@ joinMutedCheckbox.addEventListener("change", () => {
   joinMutedPreference = joinMutedCheckbox.checked;
   templatePreferences.setJoinMuted(joinMutedPreference);
   updateAudioDeviceStatus(joinMutedPreference ? "Join muted enabled" : "Join muted disabled");
+  syncAudioControls();
 });
 
 startShareButton.addEventListener("click", () => {

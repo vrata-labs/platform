@@ -504,8 +504,15 @@ async function runStrictStagingAudio(host: DemoClient, member: DemoClient): Prom
     client.page.on("response", response => {
       if (new URL(response.url()).pathname === "/api/tokens/media") mediaTokenStatuses.push({ role: client.role, status: response.status() });
     });
-    await client.page.locator("#join-muted").uncheck();
+    await expect(client.page.locator("#join-muted")).toBeChecked();
+    await expect(client.page.locator("#join-audio")).toHaveText("Join Audio Muted");
     await activateButton(client.page, "#join-audio");
+    await expect.poll(() => client.page.evaluate(() => ({
+      joined: (window as any).__VRATA_DEBUG__?.media?.audioJoined ?? false,
+      published: (window as any).__VRATA_DEBUG__?.media?.publishedAudio ?? false
+    })), { timeout: 30_000, intervals: [500, 1_000, 2_000] }).toEqual({ joined: true, published: false });
+    await expect(client.page.locator("#toggle-mute")).toHaveText("Unmute");
+    await activateButton(client.page, "#toggle-mute");
   }
 
   try {
