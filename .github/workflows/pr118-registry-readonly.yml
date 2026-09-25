@@ -1,0 +1,91 @@
+name: Staging Readonly Diagnosis
+on:
+  push:
+    branches: [diagnostics/pr118-registry-health-20260925]
+permissions:
+  contents: read
+concurrency:
+  group: staging-deploy
+  cancel-in-progress: false
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      STAGING_SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
+      STAGING_SSH_USER: ${{ secrets.STAGING_SSH_USER }}
+      STAGING_APP_DIR: ${{ secrets.STAGING_APP_DIR }}
+      STAGING_BASE_URL: ${{ secrets.STAGING_BASE_URL }}
+    steps:
+      - name: Setup SSH agent
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.STAGING_SSH_KEY }}
+          log-public-key: false
+      - name: Inspect unchanged running services and registry access
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf -v escaped_root '%q' "$STAGING_APP_DIR"
+          ssh -o StrictHostKeyChecking=no -o ConnectTimeout=15 "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo bash -s -- $escaped_root" <<'REMOTE'
+          set -euo pipefail
+          cd "$1"
+          echo 'READ_ONLY_DIAGNOSIS: no checkout, pull, restart, rollout or cleanup'
+          printf 'checkout_sha='; git -c safe.directory="$1" rev-parse HEAD
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          success = Path('infra/docker/.staging-successful-image-tag').read_text().strip()
+          if not re.fullmatch(r'[0-9a-f]{40}', success):
+              raise SystemExit('invalid_successful_sha')
+          print('successful_sha=' + success)
+          for line in Path('infra/docker/.env.staging').read_text().splitlines():
+              if line.startswith('IMAGE_TAG='):
+                  tag = line.split('=', 1)[1].strip()
+                  if not re.fullmatch(r'[0-9a-f]{40}', tag):
+                      raise SystemExit('invalid_configured_sha')
+                  print('configured_sha=' + tag)
+          PY
+          for service in api room-state remote-browser minio postgres livekit caddy; do
+            ids="$(docker ps -aq --filter "label=com.docker.compose.service=$service")"
+            if [ -z "$ids" ]; then echo "service_missing:$service"; continue; fi
+            for id in $ids; do
+              docker inspect --format '{{.Name}} image={{.Config.Image}} status={{.State.Status}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}not-configured{{end}}' "$id"
+            done
+          done
+          work="$(mktemp -d /tmp/vrata-registry-readonly.XXXXXX)"
+          trap 'rm -rf -- "$work"' EXIT
+          mkdir "$work/anonymous"
+          for image in \
+            'quay.io/minio/minio:RELEASE.2025-02-28T09-55-16Z@sha256:a929054ae025fa7997857cd0e2a2e3029238e31ad89877326dc032f4c1a14259' \
+            'quay.io/minio/mc:RELEASE.2025-03-12T17-29-24Z@sha256:470f5546b596e16c7816b9c3fa7a78ce4076bb73c2c73f7faeec0c8043923123'; do
+            echo "inspect_local_image:$image"
+            docker image inspect --format 'id={{.Id}} repo_digests={{json .RepoDigests}}' "$image" || true
+            for mode in configured anonymous; do
+              if [ "$mode" = anonymous ]; then
+                cmd=(env "DOCKER_CONFIG=$work/anonymous" docker manifest inspect "$image")
+              else
+                cmd=(docker manifest inspect "$image")
+              fi
+              set +e
+              timeout 25 "${cmd[@]}" >"$work/manifest.json" 2>"$work/error.txt"
+              code=$?
+              set -e
+              echo "manifest_check:$mode:$image:exit=$code"
+              if [ "$code" = 0 ]; then
+                sha256sum "$work/manifest.json" | cut -d' ' -f1
+              else
+                sed -n '1,3p' "$work/error.txt"
+              fi
+            done
+          done
+          REMOTE
+      - name: Public endpoint smoke without mutation
+        shell: bash
+        run: |
+          set -euo pipefail
+          for path in /health /rooms/demo-room /control-plane; do
+            code="$(curl --silent --show-error --max-time 25 --output /dev/null --write-out '%{http_code}' "$STAGING_BASE_URL$path")"
+            echo "public_smoke:$path:$code"
+            test "$code" = 200
+          done
