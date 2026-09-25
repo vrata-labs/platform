@@ -88,7 +88,7 @@ pnpm demo:public check --state-file .local/public-demo/staging.json
 | Шаг | Что делает ведущий/участник | Ожидаемый результат | Если нет — проверить |
 |---|---|---|---|
 | D01 | Открыть room без invite; затем войти по четырём ссылкам через onboarding | Без invite отказ; четыре разных ID и у каждого ровно три remote | `invite_required`, private visibility, expiry/revoked, room-state connection, presence |
-| D02 | Host и member говорят по очереди, mute/unmute | Речь слышна в обе стороны, mute останавливает передачу, unmute восстанавливает | mic permission, `audioState`, LiveKit media token/transport, speaker selector |
+| D02 | Host и member снимают Join muted перед Join Audio либо после Join Audio Muted нажимают Unmute; говорят по очереди, mute/unmute | Mic level движется при речи, речь слышна в обе стороны, mute останавливает передачу, unmute восстанавливает | mic permission, `audioState`, `publishedAudio`, LiveKit media token/transport, speaker selector |
 | D03 | Member меняет shared note, дожидается `Notes saved`; другой member обновляет страницу | Новый текст восстановлен; guest читает, но не редактирует | `notes-status`, `notes.saveState`, 403 на guest PUT, Postgres |
 | D04 | Host выбирает загруженный PDF и нажимает Select for surface на `debug-main`, листает 1→2 | Страница 2 реально отрендерена у всех; guest не управляет | `renderState=ready`, page=2, surface texture, document checksum/linkedSurfaceId |
 | D05 | Member перезагружается; guest выходит, исчезает, входит вновь; host листает 2→3 | Страница 2 и заметки восстановлены; затем у всех видна 3; нет пятого ghost ID | room-state connection/presence, PDF reload, отсутствие прежнего guest ID |
