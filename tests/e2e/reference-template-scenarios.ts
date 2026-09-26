@@ -222,8 +222,12 @@ if (staging) test("reference presentation receives moving screen-share frames th
   test.setTimeout(420000);
   const room = await create(request, "presentation-room-basic");
   const browser = await playwright.chromium.launch({ headless: true });
-  const page = await browser.newPage({ viewport: { width: 640, height: 400 } });
-  const observer = await browser.newPage({ viewport: { width: 640, height: 400 } });
+  // Preserve the 640x400 onboarding/HUD layout while bounding the two software
+  // drawing buffers. Capture resolution and real media transport stay unchanged.
+  const viewport = { width: 640, height: 400 };
+  const deviceScaleFactor = 0.5;
+  const page = await browser.newPage({ viewport, deviceScaleFactor });
+  const observer = await browser.newPage({ viewport, deviceScaleFactor });
   const events: Array<{ peer: string; category: string; status?: number }> = [];
   for (const [client, peer] of [[page, "publisher"], [observer, "viewer"]] as const) {
     client.on("response", response => {
@@ -239,6 +243,12 @@ if (staging) test("reference presentation receives moving screen-share frames th
   try {
     await join(page, await hostLink(request, room.roomId));
     await join(observer, `${room.roomLink}?debug=1&scenefit=0&onboard=0`);
+    for (const client of [page, observer]) {
+      expect(await client.evaluate(() => {
+        const canvas = document.querySelector<HTMLCanvasElement>("#scene canvas");
+        return [innerWidth, innerHeight, devicePixelRatio, canvas?.width, canvas?.height];
+      })).toEqual([640, 400, 0.5, 320, 200]);
+    }
     // Replace only the OS capture source. Publishing, subscription, decoding and
     // surface presentation use the ordinary product transport, without sharemock.
     await page.evaluate(() => {
@@ -276,7 +286,9 @@ if (staging) test("reference presentation receives moving screen-share frames th
   } catch (error) {
     const states = await Promise.all([page, observer].map(client => client.evaluate(() => {
       const d = (window as any).__VRATA_DEBUG__;
-      return { scene: d?.sceneBundleState, issue: d?.issueCode, audioState: d?.media?.audioState, publishedAudio: d?.media?.publishedAudio, rtcAvailable: d?.media?.webrtc?.available, transportCount: d?.media?.webrtc?.transports?.length, share: d?.screenShare,
+      return { frameBudgetMs: d?.avatarPoseTransport?.frameBudgetMs,
+        viewport: { width: innerWidth, height: innerHeight, pixelRatio: devicePixelRatio },
+        scene: d?.sceneBundleState, issue: d?.issueCode, audioState: d?.media?.audioState, publishedAudio: d?.media?.publishedAudio, rtcAvailable: d?.media?.webrtc?.available, transportCount: d?.media?.webrtc?.transports?.length, share: d?.screenShare,
         videos: [...document.querySelectorAll("video")].map(video => ({ width: video.videoWidth, height: video.videoHeight, readyState: video.readyState, paused: video.paused, frames: video.getVideoPlaybackQuality().totalVideoFrames })),
         pixel: (window as any).__VRATA_TEST__?.sampleMediaSurfaceTexture("debug-main", { u: .5, v: .5 }, { width: .01, height: .01 })?.samples?.[0] };
     }).catch(() => null)));
