@@ -1,7 +1,7 @@
 # Рабочая встреча и room plugins: журнал реализации
 
 Исходный план: `2026-09-25-working-meeting-and-room-plugins.md`.
-Дата начала: 2026-09-26. Реализация идёт срезами; готовность всей встречи и внешних плагинов не заявляется.
+Дата начала: 2026-09-26; обновлено 2026-09-27. **Первый срез T01 + исправление upload feedback из T12 опубликован и проверен.** Реализация идёт срезами; готовность всей встречи и внешних плагинов не заявляется.
 
 ## T01 — объединённый baseline
 
@@ -48,4 +48,23 @@ T12 целиком остаётся открытой: этот срез закр
 
 Первый full local запуск использовал отдельные E2E ports без явного BASE_URL: один старый helper обращался к 4000 вместо 4500, из-за чего 54 serial tests не запустились. Повтор выполнен с BASE_URL и теми же отдельными портами; код для обхода ошибки не менялся. В этом checkout `test:e2e` вызывает Playwright напрямую; аргументы focused specs передавались без лишнего `--`.
 
-Итоговые SHA, CI/Docker/Staging runs и результаты staging/отката записываются после завершения gate.
+Отдельно выполнен первоначально пропущенный rollback contract test с PostgreSQL и точным build `33c7485ffa1773105c496b43542ea53bf4c5ae9a`: **1 passed**.
+
+| Этап | Результат |
+|---|---|
+| Опубликованный runtime SHA | `3912f70363ce4b83eab5a638059740eaead1a60a` |
+| [CI 36265587908](https://github.com/vrata-labs/platform/actions/runs/36265587908) | Success: lint/typecheck/build, package tests с PostgreSQL и rollback build, full local E2E, M0.5, pinned scene assets |
+| [Docker Publish 36265590185](https://github.com/vrata-labs/platform/actions/runs/36265590185) | Success: immutable API/room-state/remote-browser images и проверенные registry manifests |
+| [Staging Deploy 36267850481, attempt 2](https://github.com/vrata-labs/platform/actions/runs/36267850481/attempts/2) | Success: **48/48 staging E2E**, **1/1 blocking Rutube**, persisted successful SHA |
+
+На опубликованном SHA проверены public room load, selector/navigation, обычный Host invitation → собственный PDF upload → authenticated download → страницы 1→2→3 → reload/late join, сохранение ошибки неподдерживаемого формата, shared notes и host controls. Hall/BlueOffice/ArtGallery достигли `loaded` на текущих browser pages. После gate `/health`, `/rooms/demo-room`, `/control-plane`, `/api/templates` вернули HTTP 200.
+
+Артефакт [playwright-staging-gate-36267850481-2](https://github.com/vrata-labs/platform/actions/runs/36267850481/artifacts/10915922115) содержит `host-own-document-upload`: trusted-invite Host, PDF 1481 bytes / 3 pages, upload 201, download 200, байты совпали, negative DOCX 400. Cleanup record: обе тестовые PDF-записи удалены, invites revoked, session ended, room/tenant deleted, phase completed. Raw приглашения и credentials в запись не включены.
+
+### Повтор и откат
+
+Attempt 1: **47/48**; второй audio client остался в `joining` после Join Audio Muted и не достиг `audioJoined=true` за 30 s. Host был `joined`; оба клиента имели scene loaded и подключённый room-state. Сценарий остановился до Host upload. Штатный rollback вернул `7cf806deb277b3d9b4c4744c03bb7c32c69e53a3`, подтвердил image tag и восстановление scene URLs; smoke после отката — HTTP 200.
+
+Attempt 2 — один повтор **того же SHA**, без изменения кода, таймаутов и assertions: весь gate прошёл; rollback не запускался. Причина первого media join зависания не установлена. Успешный повтор не считается исправлением этой нестабильности: при её повторении нужны отдельные данные о стадиях token/connect/audio-device setup и bounded failure/recovery. Этот вопрос остаётся в проверках устойчивости встречи T17.
+
+Реальные Android/Quest и четыре человека с микрофонами в этом срезе не проверялись. Synthetic audio source с настоящим LiveKit transport не закрывает WM-11/WM-12 manual acceptance.
