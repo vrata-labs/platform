@@ -191,6 +191,8 @@ import { createRemoteBrowserVideoRuntime, type RemoteBrowserVideoEntry } from ".
 import { createScreenShareRuntime, resolveScreenShareSubscriptionCount, type ScreenShareRuntimeEntry } from "./media/screen-share-runtime.js";
 import { createMediaSurfaceAudioRuntime, type MediaSurfaceAudioNode } from "./media/media-surface-audio-runtime.js";
 import { createDocumentSurfaceActions } from "./document-surface-actions.js";
+import { createDocumentFeedback } from "./document-feedback.js";
+import { createDocumentLibraryActions } from "./document-library-actions.js";
 
 function fallbackUuid(): string {
   return `guest-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
@@ -1683,6 +1685,7 @@ function renderHostControls(statusMessage?: string): void {
 
 function applyAccessDebug(access: NonNullable<RuntimeSessionControlResponse["access"]>, token: string, expiresInSeconds?: number): void {
   const previousRole = debugState.access.role;
+  const previouslyCouldUploadDocuments = canUploadDocuments();
   const previouslyCouldViewDocuments = canViewDocuments();
   const previousLastDeniedPermission = debugState.access.lastDeniedPermission;
   const previousLastSurfaceCommandAccepted = debugState.access.lastSurfaceCommandAccepted;
@@ -1703,6 +1706,11 @@ function applyAccessDebug(access: NonNullable<RuntimeSessionControlResponse["acc
     roomStateClient = null;
     connectRoomStateWithRetry(debugState.roomStateUrl);
   }
+  if ((previouslyCouldUploadDocuments && !canUploadDocuments()) || (previouslyCouldViewDocuments && !canViewDocuments())) {
+    documentLibraryActions.invalidate();
+    documentFeedback.clear();
+    if (canViewDocuments()) void loadRoomDocuments();
+  }
   syncMediaCapabilityControls();
   syncNotesAccessUi();
   renderDocumentsUi();
@@ -1718,6 +1726,9 @@ function applyAccessDebug(access: NonNullable<RuntimeSessionControlResponse["acc
 function disableRuntimeForSessionBlock(reason: string): void {
   const message = describeSessionControlReason(reason);
   sessionControlBlocked = true;
+  documentLibraryActions.invalidate();
+  documentFeedback.clear();
+  renderDocumentsUi();
   setStatus(message);
   guestAccessLineEl.textContent = message;
   debugState.issueCode = "room_access_denied";
@@ -4230,7 +4241,7 @@ function downloadBlob(blob: Blob, filename: string): void {
 }
 
 function canViewDocuments(): boolean {
-  return runtimeFlags.documentsEnabled && hasRoomPermission(debugState.access.permissions, "document.view");
+  return !sessionControlBlocked && runtimeFlags.documentsEnabled && hasRoomPermission(debugState.access.permissions, "document.view");
 }
 
 function canUploadDocuments(): boolean {
@@ -4258,7 +4269,18 @@ function documentErrorCode(error: unknown): string {
   return message.split(":").slice(0, 3).join(":") || "document_error";
 }
 
+const documentFeedback = createDocumentFeedback();
+
 function setDocumentStatus(message: string, errorCode: string | null = null): void {
+  documentFeedback.set(message, errorCode);
+  renderDocumentStatus();
+}
+
+function renderDocumentStatus(): void {
+  const { message, errorCode } = documentFeedback.read({
+    visible: canViewDocuments(), enabled: runtimeFlags.documentsEnabled,
+    uploading: documentUploadInFlight, loading: documentsLoading, count: roomDocuments.length
+  });
   documentStatusEl.textContent = message;
   const selected = selectedDocument();
   debugState.documents = {
@@ -4399,6 +4421,7 @@ function renderPresentationControls(): void {
 }
 
 function renderDocumentsUi(message?: string): void {
+  if (message !== undefined) documentFeedback.keepOrSet(message);
   const visible = canViewDocuments();
   documentsPanelEl.hidden = !visible;
   if (!visible) {
@@ -4408,7 +4431,7 @@ function renderDocumentsUi(message?: string): void {
     documentDownloadButton.disabled = true;
     documentSurfaceButton.disabled = true;
     documentDeleteButton.disabled = true;
-    setDocumentStatus(runtimeFlags.documentsEnabled ? "Documents permission required" : "Documents disabled");
+    renderDocumentStatus();
     return;
   }
 
@@ -4437,66 +4460,32 @@ function renderDocumentsUi(message?: string): void {
   documentDownloadButton.disabled = !selected || !canDownloadDocuments() || documentsLoading;
   documentSurfaceButton.disabled = !selected || !["pdf", "image", "video"].includes(selected.metadata?.kind ?? "") || !canPresentDocuments() || documentsLoading || presentationActionInFlight;
   documentDeleteButton.disabled = !selected || !canDeleteDocuments() || documentsLoading;
-  setDocumentStatus(message ?? (roomDocuments.length > 0 ? `Documents ready: ${roomDocuments.length}` : "No room documents yet"));
+  renderDocumentStatus();
   renderPresentationControls();
   renderDocumentMediaControls();
 }
 
-async function loadRoomDocuments(): Promise<void> {
-  if (!runtimeFlags.documentsEnabled || !canViewDocuments()) {
-    renderDocumentsUi();
-    return;
-  }
-  documentsLoading = true;
-  renderDocumentsUi("Documents loading...");
-  try {
-    roomDocuments = await listRoomDocuments(apiBaseUrl, roomId, roomStateAccessToken);
-    if (selectedDocumentId && !roomDocuments.some((document) => document.documentId === selectedDocumentId)) {
-      selectedDocumentId = "";
-      localStorage.removeItem(`vrata.documents.selected.${roomId}`);
-    }
-    renderDocumentsUi();
-  } catch (error) {
-    console.warn("documents_load_failed", error);
-    setDocumentStatus("Documents unavailable", documentErrorCode(error));
-  } finally {
-    documentsLoading = false;
-    renderDocumentsUi(documentStatusEl.textContent || undefined);
-  }
-}
-
-async function uploadSelectedDocument(): Promise<void> {
-  const file = documentUploadInput.files?.[0];
-  if (!file) {
-    setDocumentStatus("Choose a document first");
-    return;
-  }
-  if (!canUploadDocuments()) {
-    renderDocumentsUi("Document upload permission required");
-    return;
-  }
-  documentUploadInFlight = true;
-  renderDocumentsUi("Uploading document...");
-  try {
-    const mediaProbe = await probeDocumentMedia(file);
-    const uploadedDocument = await uploadRoomDocument(apiBaseUrl, roomId, roomStateAccessToken, file, mediaProbe ? {
-      widthPx: mediaProbe.widthPx,
-      heightPx: mediaProbe.heightPx,
-      durationMs: mediaProbe.durationMs
-    } : undefined);
-    roomDocuments = [uploadedDocument, ...roomDocuments.filter((item) => item.documentId !== uploadedDocument.documentId)];
-    selectedDocumentId = uploadedDocument.documentId;
-    localStorage.setItem(`vrata.documents.selected.${roomId}`, selectedDocumentId);
-    documentUploadInput.value = "";
-    renderDocumentsUi(`Document uploaded: ${uploadedDocument.filename}`);
-  } catch (error) {
-    console.warn("document_upload_failed", error);
-    setDocumentStatus(`Document upload failed: ${documentErrorCode(error)}`, documentErrorCode(error));
-  } finally {
-    documentUploadInFlight = false;
-    renderDocumentsUi(documentStatusEl.textContent || undefined);
-  }
-}
+const documentLibraryActions = createDocumentLibraryActions({
+  apiBaseUrl, roomId, canViewDocuments, canUploadDocuments,
+  selectedFile: () => documentUploadInput.files?.[0],
+  clearFile: () => { documentUploadInput.value = ""; },
+  setDocumentStatus, renderDocumentsUi, listRoomDocuments, uploadRoomDocument, probeDocumentMedia,
+  get roomStateAccessToken() { return roomStateAccessToken; },
+  get roomDocuments() { return roomDocuments; },
+  set roomDocuments(value) { roomDocuments = value; },
+  get selectedDocumentId() { return selectedDocumentId; },
+  set selectedDocumentId(value) {
+    selectedDocumentId = value;
+    if (value) localStorage.setItem(`vrata.documents.selected.${roomId}`, value);
+    else localStorage.removeItem(`vrata.documents.selected.${roomId}`);
+  },
+  get documentsLoading() { return documentsLoading; },
+  set documentsLoading(value) { documentsLoading = value; },
+  get documentUploadInFlight() { return documentUploadInFlight; },
+  set documentUploadInFlight(value) { documentUploadInFlight = value; }
+});
+const { loadRoomDocuments, uploadSelectedDocument } = documentLibraryActions;
+window.addEventListener("pagehide", () => documentLibraryActions.invalidate());
 
 async function downloadSelectedDocument(): Promise<void> {
   const selected = selectedDocument();

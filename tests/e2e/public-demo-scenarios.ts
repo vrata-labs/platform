@@ -1,5 +1,6 @@
 import { expect, type Browser, type BrowserContext, type Page, type TestInfo } from "@playwright/test";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { PDFDocument, rgb } from "pdf-lib";
 import { access, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -345,15 +346,72 @@ async function waitForExactPresence(clients: DemoClient[]): Promise<void> {
   }
 }
 
-async function waitForPresentation(clients: DemoClient[], pageNumber: number): Promise<void> {
+async function uploadHostDocument(host: DemoClient, roomId: string, testInfo: TestInfo): Promise<string> {
+  const page = host.page;
+  const path = `/api/rooms/${roomId}/documents`;
+  const upload = async (file: { name: string; mimeType: string; buffer: Buffer }) => {
+    await page.setInputFiles("#document-upload-input", file);
+    const response = page.waitForResponse(response =>
+      response.request().method() === "POST" && new URL(response.url()).pathname === path);
+    void response.catch(() => undefined);
+    await page.locator("#document-upload-button").click();
+    return response;
+  };
+  await expect(page.locator("#document-upload-button")).toBeEnabled({ timeout: 30_000 });
+  const unsupported = await upload({ name: "unsupported.docx", mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", buffer: Buffer.from("unsupported office document") });
+  requireStatus(unsupported.status(), 400, "public_demo_host_unsupported_upload");
+  expect((await unsupported.json()).error).toBe("unsupported_document_mime");
+  await expect(page.locator("#document-status")).toContainText("Unsupported file format");
+  // Ordinary session-control polling used to erase both the message and code.
+  await page.waitForResponse(response => new URL(response.url()).pathname === `/api/rooms/${roomId}/session-control`);
+  // The next poll cannot start until the previous response was applied by UI.
+  await page.waitForRequest(request => new URL(request.url()).pathname === `/api/rooms/${roomId}/session-control`);
+  await expect(page.locator("#document-status")).toContainText("Unsupported file format");
+  expect(await page.evaluate(() => (window as any).__VRATA_DEBUG__?.documents?.errorCode)).toBe("unsupported_document_mime");
+
+  const pdf = await PDFDocument.create();
+  for (const [index, color] of [rgb(.85, .12, .12), rgb(.12, .65, .2), rgb(.12, .2, .85)].entries()) {
+    const slide = pdf.addPage([640, 360]);
+    slide.drawRectangle({ x: 0, y: 0, width: 640, height: 360, color });
+    slide.drawText(`Host's own document: page ${index + 1}`, { x: 40, y: 180, size: 24, color: rgb(1, 1, 1) });
+  }
+  const bytes = Buffer.from(await pdf.save());
+  const response = await upload({ name: "host-working-meeting.pdf", mimeType: "application/pdf", buffer: bytes });
+  requireStatus(response.status(), 201, "public_demo_host_own_upload");
+  const { document } = await response.json();
+  expect(document).toMatchObject({
+    filename: "host-working-meeting.pdf", contentType: "application/pdf", sizeBytes: bytes.length,
+    uploadedBy: host.participantId, metadata: { kind: "pdf", pageCount: 3 },
+    checksum: `sha256:${createHash("sha256").update(bytes).digest("hex")}`
+  });
+  await expect(page.locator("#document-select")).toHaveValue(document.documentId);
+  await expect(page.locator("#document-status")).toContainText("Document uploaded: host-working-meeting.pdf");
+  const origin = new URL(host.inviteLink).origin;
+  const download = await fetch(new URL(`${path}/${document.documentId}/download`, origin), {
+    headers: { authorization: `Bearer ${host.sessionToken}` }, signal: AbortSignal.timeout(requestTimeoutMs)
+  });
+  requireStatus(download.status, 200, "public_demo_host_own_download");
+  expect(Buffer.from(await download.arrayBuffer()).equals(bytes)).toBe(true);
+  await testInfo.attach("host-own-document-upload", {
+    body: JSON.stringify({ role: host.role, provenance: "trusted-invite", contentType: document.contentType,
+      sizeBytes: document.sizeBytes, uploadStatus: response.status(), downloadStatus: download.status,
+      downloadMatchesUpload: true, pageCount: 3, unsupportedFormatStatus: unsupported.status(),
+      unsupportedFormatError: "unsupported_document_mime", surfaceId: "debug-main" }),
+    contentType: "application/json"
+  });
+  return document.documentId;
+}
+
+async function waitForPresentation(clients: DemoClient[], pageNumber: number, documentId: string): Promise<void> {
   for (const client of clients) {
     await client.page.bringToFront();
-    const snapshot = async () => client.page.evaluate((expectedPage) => {
+    const snapshot = async () => client.page.evaluate(({ expectedPage, documentId }) => {
       const debug = (window as any).__VRATA_DEBUG__;
       const presentation = debug?.pdfPresentation;
       const surface = debug?.mediaObjects?.surfaces?.find((item: any) => item.surfaceId === "debug-main");
       const ready = Boolean(presentation?.renderState === "ready"
         && presentation?.page === expectedPage
+        && presentation?.documentId === documentId
         && presentation?.pageCount === 3
         && typeof presentation?.lastRenderMs === "number"
         && presentation?.errorCode === null
@@ -366,7 +424,7 @@ async function waitForPresentation(clients: DemoClient[], pageNumber: number): P
       return { ready, page: presentation?.page ?? null, renderState: presentation?.renderState ?? null,
         issue: presentation?.errorCode ?? null, scene: debug?.sceneBundleState ?? null,
         visible: texture?.samples?.length === 128 && texture.samples.some((pixel: number[]) => Math.max(...pixel) > 16) };
-    }, pageNumber);
+    }, { expectedPage: pageNumber, documentId });
     try {
       await expect.poll(async () => {
         const current = await snapshot();
@@ -787,10 +845,12 @@ export async function runPublicDemoScenario(options: PublicDemoScenarioOptions):
     if (new Set(clients.map((client) => client.participantId)).size !== 4) throw new Error("public_demo_participant_ids_not_unique");
     await waitForExactPresence(clients);
 
-    setPhase("presentation-page-one");
+    setPhase("host-own-document-upload");
     await expect(host.page.locator("#documents-panel")).toBeVisible();
     await expect(host.page.locator("#document-select")).toBeEnabled({ timeout: 30_000 });
     await expect(host.page.locator("#document-select")).toHaveValue(state.resources.document.documentId, { timeout: 30_000 });
+    const ownDocumentId = await uploadHostDocument(host, roomId, options.testInfo);
+    setPhase("presentation-page-one");
     await expect(host.page.locator("#media-surface-select")).toHaveValue("debug-main");
     await expect(host.page.locator("#document-surface-button")).toBeEnabled({ timeout: 30_000 });
     await activateButton(host.page, "#document-surface-button");
@@ -823,9 +883,9 @@ export async function runPublicDemoScenario(options: PublicDemoScenarioOptions):
     requireStatus(guestNoteWrite.status, 403, "public_demo_guest_note_write");
 
     setPhase("presentation-page-two");
-    await waitForPresentation([host], 1);
+    await waitForPresentation([host], 1, ownDocumentId);
     await activateButton(host.page, "#presentation-next");
-    await waitForPresentation(clients, 2);
+    await waitForPresentation(clients, 2, ownDocumentId);
 
     await leaveClient(guest, options.origin, roomId);
     await waitForExactPresence([host, firstMember, secondMember]);
@@ -839,7 +899,7 @@ export async function runPublicDemoScenario(options: PublicDemoScenarioOptions):
     guest.sessionToken = rejoinedGuest.sessionToken;
     if (new Set(clients.map((client) => client.participantId)).size !== 4) throw new Error("public_demo_rejoin_participant_ids_not_unique");
     await Promise.all([
-      waitForPresentation([firstMember, guest], 2),
+      waitForPresentation([firstMember, guest], 2, ownDocumentId),
       waitForExactPresence(clients)
     ]);
     await expect(firstMember.page.locator("#notes-editor")).toHaveValue(note, { timeout: 15_000 });
@@ -858,7 +918,7 @@ export async function runPublicDemoScenario(options: PublicDemoScenarioOptions):
 
     setPhase("presentation-page-three");
     await activateButton(host.page, "#presentation-next");
-    await waitForPresentation(clients, 3);
+    await waitForPresentation(clients, 3, ownDocumentId);
 
     setPhase("host-lock-unlock-remove");
     await leaveClient(guest, options.origin, roomId);

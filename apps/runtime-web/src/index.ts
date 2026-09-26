@@ -1,4 +1,5 @@
 import { createRoomAccessDebugState, type RoomAccessDebugState, type RoomPermission, type RoomRole, type RoomTemplateSettings, type RoomTemplateSnapshotV1, type RoomTemplateSurface, type SceneBundleIntegrity } from "@vrata/shared-types";
+import { DocumentUploadError } from "./document-feedback.js";
 
 interface RoomManifest {
   roomId: string;
@@ -574,7 +575,7 @@ export async function listRoomDocuments(apiBaseUrl: string, roomId: string, sess
   return ((await response.json()) as { items: RuntimeDocumentRecord[] }).items;
 }
 
-export async function uploadRoomDocument(apiBaseUrl: string, roomId: string, sessionToken: string, file: File, mediaMetadata?: { widthPx: number; heightPx: number; durationMs?: number }): Promise<RuntimeDocumentRecord> {
+export async function uploadRoomDocument(apiBaseUrl: string, roomId: string, sessionToken: string, file: File, mediaMetadata?: { widthPx: number; heightPx: number; durationMs?: number }, signal?: AbortSignal): Promise<RuntimeDocumentRecord> {
   const form = new FormData();
   form.set("document", file);
   if (mediaMetadata) {
@@ -587,11 +588,12 @@ export async function uploadRoomDocument(apiBaseUrl: string, roomId: string, ses
     headers: {
       "authorization": `Bearer ${sessionToken}`
     },
-    body: form
+    body: form,
+    signal
   });
   if (!response.ok) {
     const payload = await response.json().catch(() => ({})) as { reason?: string; error?: string };
-    throw new Error(`failed_to_upload_document:${response.status}:${payload.reason ?? payload.error ?? "unknown"}`);
+    throw new DocumentUploadError(response.status, payload.reason ?? payload.error);
   }
   return ((await response.json()) as { document: RuntimeDocumentRecord }).document;
 }
