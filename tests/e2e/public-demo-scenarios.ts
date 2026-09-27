@@ -37,6 +37,10 @@ export type PublicDemoScenarioOptions = {
 };
 
 const viewport = { width: 640, height: 400 };
+// Match the reference screen-share functional budget: preserve the CSS HUD
+// layout while limiting concurrent software-rendered drawing buffers. PDF
+// textures, capture source, real transport and audio deadlines are unchanged.
+const deviceScaleFactor = 0.5;
 const requestTimeoutMs = 15_000;
 const corePollIntervals = [250, 500, 1_000, 2_000];
 const expectedCatalog = [
@@ -290,6 +294,10 @@ async function joinClientPage(input: {
   }
   const debugParticipantId = await input.page.evaluate(() => (window as any).__VRATA_DEBUG__?.participantId ?? "");
   if (debugParticipantId !== session.participantId) throw new Error("public_demo_participant_binding_mismatch");
+  expect(await input.page.evaluate(() => {
+    const canvas = document.querySelector<HTMLCanvasElement>("#scene canvas");
+    return [innerWidth, innerHeight, devicePixelRatio, canvas?.width, canvas?.height];
+  })).toEqual([640, 400, 0.5, 320, 200]);
   expect(await input.page.title()).toBe("Vrata Room");
   if (new URL(input.page.url()).searchParams.has("invite")) throw new Error("public_demo_browser_invite_not_redacted");
   return {
@@ -314,7 +322,7 @@ async function reloadClientThroughInvite(client: DemoClient): Promise<void> {
 }
 
 async function createTrackedContext(browser: Browser): Promise<BrowserContext> {
-  const context = await browser.newContext({ viewport });
+  const context = await browser.newContext({ viewport, deviceScaleFactor });
   context.setDefaultTimeout(120_000);
   return context;
 }
@@ -480,6 +488,8 @@ async function denyGuestPresentationControl(guest: DemoClient, roomId: string): 
 }
 
 type AudioSnapshot = {
+  frameBudgetMs: number | null;
+  pixelRatio: number;
   issueCode: string | null;
   recoveryAction: string | null;
   unavailableReason: string | null;
@@ -514,6 +524,8 @@ async function readAudioSnapshot(listener: DemoClient, sourceParticipantId: stri
       || transport?.iceConnectionState === "connected"
       || transport?.iceConnectionState === "completed";
     return {
+      frameBudgetMs: debug?.avatarPoseTransport?.frameBudgetMs ?? null,
+      pixelRatio: devicePixelRatio,
       issueCode: debug?.issueCode ?? null,
       recoveryAction: debug?.lastRecoveryAction ?? null,
       unavailableReason: debug?.media?.webrtc?.unavailableReason ?? null,
@@ -565,10 +577,17 @@ async function runStrictStagingAudio(host: DemoClient, member: DemoClient): Prom
     await expect(client.page.locator("#join-muted")).toBeChecked();
     await expect(client.page.locator("#join-audio")).toHaveText("Join Audio Muted");
     await activateButton(client.page, "#join-audio");
-    await expect.poll(() => client.page.evaluate(() => ({
-      joined: (window as any).__VRATA_DEBUG__?.media?.audioJoined ?? false,
-      published: (window as any).__VRATA_DEBUG__?.media?.publishedAudio ?? false
-    })), { timeout: 30_000, intervals: [500, 1_000, 2_000] }).toEqual({ joined: true, published: false });
+    try {
+      await expect.poll(() => client.page.evaluate(() => ({
+        joined: (window as any).__VRATA_DEBUG__?.media?.audioJoined ?? false,
+        published: (window as any).__VRATA_DEBUG__?.media?.publishedAudio ?? false
+      })), { timeout: 30_000, intervals: [500, 1_000, 2_000] }).toEqual({ joined: true, published: false });
+    } catch {
+      const [hostState, memberState] = await Promise.all([
+        readAudioSnapshot(host, member.participantId), readAudioSnapshot(member, host.participantId)
+      ]);
+      throw new Error(`public_demo_muted_join_timeout:${JSON.stringify({ role: client.role, mediaTokenStatuses, hostState, memberState })}`);
+    }
     await expect(client.page.locator("#toggle-mute")).toHaveText("Unmute");
     await activateButton(client.page, "#toggle-mute");
   }
