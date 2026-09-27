@@ -10,8 +10,10 @@ const helper = new URL("./staging-minio-rollout.py", import.meta.url).pathname;
 const sha = "a".repeat(40);
 const minio = "minio/minio:RELEASE.2025-02-28T09-55-16Z";
 const mc = "minio/mc:RELEASE.2025-03-12T17-29-24Z";
-const pinnedMinio = `quay.io/${minio}@sha256:a929054ae025fa7997857cd0e2a2e3029238e31ad89877326dc032f4c1a14259`;
-const pinnedMc = `quay.io/${mc}@sha256:470f5546b596e16c7816b9c3fa7a78ce4076bb73c2c73f7faeec0c8043923123`;
+const retiredQuayMinio = `quay.io/${minio}@sha256:a929054ae025fa7997857cd0e2a2e3029238e31ad89877326dc032f4c1a14259`;
+const retiredQuayMc = `quay.io/${mc}@sha256:470f5546b596e16c7816b9c3fa7a78ce4076bb73c2c73f7faeec0c8043923123`;
+const pinnedMinio = "cr.yandex/crp9cm29k6p76hqo8lti/vrata-minio@sha256:c83dd50c5efe2e3a962711a7c9fc77acfc55c3dad229da2146489f604afba387";
+const pinnedMc = "cr.yandex/crp9cm29k6p76hqo8lti/vrata-mc@sha256:d535999f5c4eb01c9c06bd0c068d4bb8f7366a8469fe57e394907190f7feb550";
 const legacy = `services:\n  minio:\n    image: ${minio}\n    volumes: [minio-data:/data]\n  minio-bootstrap:\n    image: ${mc}\n  api:\n    image: \${API_IMAGE_REPO}:\${IMAGE_TAG}\n`;
 const translated = legacy.replace(`image: ${minio}`, `image: ${pinnedMinio}`).replace(`image: ${mc}`, `image: ${pinnedMc}`);
 
@@ -42,6 +44,15 @@ for (const exitCode of [0, 7]) {
     assert.match(result.stdout, /staging_minio_registry_compat:restored/);
   });
 }
+
+test("existing Quay-pinned staging source is translated during rollout and restored afterward", (t) => {
+  const content = legacy.replace(`image: ${minio}`, `image: ${retiredQuayMinio}`).replace(`image: ${mc}`, `image: ${retiredQuayMc}`);
+  const f = fixture(t, content);
+  const result = run(f);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(readFileSync(join(f.dir, "observed.yml"), "utf8"), translated);
+  assert.equal(readFileSync(f.compose, "utf8"), content);
+});
 
 test("already pinned checkouts are not rewritten", (t) => {
   const f = fixture(t, translated);
@@ -106,11 +117,17 @@ test("SIGTERM is forwarded and the old Compose source is restored", { timeout: 1
   assert.equal(readFileSync(f.compose, "utf8"), legacy);
 });
 
-test("staging Compose pins both official multi-platform manifests", () => {
+test("staging Compose retired Quay manifests are mapped to immutable YCR digests", (t) => {
   const compose = readFileSync(new URL("../infra/docker/compose.staging.yml", import.meta.url), "utf8");
-  assert.ok(compose.includes(`    image: ${pinnedMinio}\n`));
-  assert.ok(compose.includes(`    image: ${pinnedMc}\n`));
+  assert.ok(compose.includes(`    image: ${retiredQuayMinio}\n`));
+  assert.ok(compose.includes(`    image: ${retiredQuayMc}\n`));
   assert.doesNotMatch(compose, /image: minio\//);
+  const f = fixture(t, compose);
+  assert.equal(run(f).status, 0);
+  const used = readFileSync(join(f.dir, "observed.yml"), "utf8");
+  assert.ok(used.includes(`    image: ${pinnedMinio}\n`));
+  assert.ok(used.includes(`    image: ${pinnedMc}\n`));
+  assert.equal(readFileSync(f.compose, "utf8"), compose);
 });
 
 test("workflow snapshots compatibility helper before old checkout and uses it for deploy and rollback", () => {

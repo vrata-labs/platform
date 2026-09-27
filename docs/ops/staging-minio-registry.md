@@ -1,31 +1,36 @@
 # Staging MinIO registry recovery
 
 Staging uses the existing MinIO `RELEASE.2025-02-28T09-55-16Z` and mc
-`RELEASE.2025-03-12T17-29-24Z`, now fetched from MinIO's Quay repositories and
-pinned to their multi-platform manifest digests. This is a registry repair, not
-an upgrade, a new storage provider or a security update.
+`RELEASE.2025-03-12T17-29-24Z`. Both original Docker Hub and later Quay images
+stopped serving these releases. The source binaries are still available from
+upstream GitHub releases: the staging images are built on a digest-pinned Alpine
+base with `ADD --checksum` for each binary and published to YCR. This is a
+registry repair, not a change of MinIO release or storage provider.
 
-The 2026-09-12 diagnostic run `34701066761` found both Docker Hub repositories
-unavailable. Both Quay manifests were accessible from GitHub Actions and the
-staging host. The MinIO manifest digest matched the existing staging image's
-RepoDigest. The legacy mc image was no longer cached on staging.
+Docker Hub was unavailable by 2026-09-12; Quay now returns 401 for both pinned
+manifests. The previous staging rollout and rollback failed before verification
+in run `36030173287`. Source release checksums and published YCR manifest digests:
 
-- MinIO: `sha256:a929054ae025fa7997857cd0e2a2e3029238e31ad89877326dc032f4c1a14259`
-- mc: `sha256:470f5546b596e16c7816b9c3fa7a78ce4076bb73c2c73f7faeec0c8043923123`
+- MinIO binary: `5cb1e6309f2bd70e7d0ca77f33782beac1745790deb4c1f94444f1e7dec5fcb6`; image: `cr.yandex/crp9cm29k6p76hqo8lti/vrata-minio@sha256:c83dd50c5efe2e3a962711a7c9fc77acfc55c3dad229da2146489f604afba387`.
+- mc binary: `a92b5f1af200ca25d54d78432ef6b0c47fd4340abf9759ce5d10275cd57e3318`; image: `cr.yandex/crp9cm29k6p76hqo8lti/vrata-mc@sha256:d535999f5c4eb01c9c06bd0c068d4bb8f7366a8469fe57e394907190f7feb550`.
+
+The source images are built from `infra/docker/minio.demo-local.Dockerfile` and
+`infra/docker/mc.demo-local.Dockerfile` and verified by Docker Publish. The old
+Quay manifest digests remain only as exact-match inputs to the rollback helper.
 
 ## Older deployments and automatic rollback
 
 Changing only the current Compose file cannot fix rollback: older commits still
-point to Docker Hub. `staging-deploy.yml` therefore saves
+point to Docker Hub or Quay. `staging-deploy.yml` therefore saves
 `tools/staging-minio-rollout.py` before checking out the requested SHA, then sends
 that helper to a temporary file on the host for both deployment and rollback.
 The helper invokes the selected commit's original `rollout-staging-images.sh`.
 
-For the duration of that invocation, it translates only the two exact historical
-`image:` values in `infra/docker/compose.staging.yml` to the same pinned Quay
-releases. It restores the original file bytes and permissions on success,
-failure and handled termination signals. Current, already-pinned checkouts are
-not rewritten. Other releases, custom image references, application SHA tags,
+For the duration of that invocation, it translates only the four exact historical
+`image:` values in `infra/docker/compose.staging.yml` to the two pinned YCR
+manifest digests. It restores the original file bytes and permissions on success,
+failure and handled termination signals. Already-YCR-pinned checkouts are not
+rewritten. Other releases, custom image references, application SHA tags,
 volume definitions and credentials are not changed. Like any process cleanup,
 restoration cannot run after SIGKILL or host power loss; inspect `git diff` before
 retrying an interrupted deployment rather than discarding unrelated changes.

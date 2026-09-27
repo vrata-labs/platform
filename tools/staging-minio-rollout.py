@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Run the checked-out rollout with equivalent, pinned MinIO registry images.
+"""Run the checked-out rollout with checksum-pinned MinIO images from YCR.
 
 Copied outside the checkout by staging-deploy.yml so older image SHAs remain
-usable. Only the two retired Docker Hub references are translated. The original
-Compose file is restored even if rollout fails or receives SIGTERM/SIGINT.
+usable. Only the exact retired Docker Hub and Quay references are translated.
+The original Compose file is restored even if rollout fails or receives SIGTERM/SIGINT.
 """
 
 import os
@@ -16,11 +16,14 @@ import sys
 import tempfile
 
 
+PINNED_MINIO = "cr.yandex/crp9cm29k6p76hqo8lti/vrata-minio@sha256:c83dd50c5efe2e3a962711a7c9fc77acfc55c3dad229da2146489f604afba387"
+PINNED_MC = "cr.yandex/crp9cm29k6p76hqo8lti/vrata-mc@sha256:d535999f5c4eb01c9c06bd0c068d4bb8f7366a8469fe57e394907190f7feb550"
+
 IMAGES = {
-    "minio/minio:RELEASE.2025-02-28T09-55-16Z":
-        "quay.io/minio/minio:RELEASE.2025-02-28T09-55-16Z@sha256:a929054ae025fa7997857cd0e2a2e3029238e31ad89877326dc032f4c1a14259",
-    "minio/mc:RELEASE.2025-03-12T17-29-24Z":
-        "quay.io/minio/mc:RELEASE.2025-03-12T17-29-24Z@sha256:470f5546b596e16c7816b9c3fa7a78ce4076bb73c2c73f7faeec0c8043923123",
+    "minio/minio:RELEASE.2025-02-28T09-55-16Z": PINNED_MINIO,
+    "quay.io/minio/minio:RELEASE.2025-02-28T09-55-16Z@sha256:a929054ae025fa7997857cd0e2a2e3029238e31ad89877326dc032f4c1a14259": PINNED_MINIO,
+    "minio/mc:RELEASE.2025-03-12T17-29-24Z": PINNED_MC,
+    "quay.io/minio/mc:RELEASE.2025-03-12T17-29-24Z@sha256:470f5546b596e16c7816b9c3fa7a78ce4076bb73c2c73f7faeec0c8043923123": PINNED_MC,
 }
 
 
