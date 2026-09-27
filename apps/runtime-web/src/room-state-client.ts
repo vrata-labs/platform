@@ -4,6 +4,7 @@ import type { PresenceState } from "./index.js";
 import type { AvatarReliableState, CompactPoseFrame } from "./avatar/avatar-types.js";
 import { parseCompactPoseFrame } from "./avatar/avatar-pose-frame.js";
 import { parseAvatarReliableState } from "./avatar/avatar-reliable-state.js";
+import { identityRequirementFromClose, type IdentityRequirementReason } from "@vrata/shared-types";
 
 export interface RoomStateSnapshot {
   serverTimeMs: number;
@@ -34,6 +35,7 @@ export interface RoomStateClientHandlers {
   onError: (error: unknown) => void;
   onOpen?: () => void;
   onClose?: () => void;
+  onIdentityRequired?: (reason: IdentityRequirementReason) => void;
 }
 
 export interface SurfaceCommandResult {
@@ -161,7 +163,9 @@ export function connectRoomState(
   });
 
   socket.addEventListener("error", handlers.onError);
-  socket.addEventListener("close", () => {
+  socket.addEventListener("close", (event) => {
+    const reason = identityRequirementFromClose(event.code, event.reason);
+    if (reason) handlers.onIdentityRequired?.(reason);
     handlers.onClose?.();
   });
 

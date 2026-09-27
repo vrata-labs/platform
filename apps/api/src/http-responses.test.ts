@@ -217,7 +217,8 @@ for (const [extension, type] of [
       await writeFile(path, body);
       const { response, calls } = capture();
       assert.equal(await serveStatic(response, path), true);
-      assert.deepEqual(calls, [["writeHead", 200, { "content-type": type, "content-length": String(body.length) }], ["end", body]]);
+      assert.deepEqual(calls, [["writeHead", 200, { "content-type": type, "content-length": String(body.length),
+        ...(extension === ".HTML" ? { "cache-control": "no-cache" } : {}) }], ["end", body]]);
     });
   });
 }
@@ -314,7 +315,7 @@ test("real HTTP static GET and HEAD retain length, bytes and request ID", async 
       assert.equal(result.headers["content-length"], String(body.length));
       assert.equal(result.headers["content-type"], "text/html; charset=utf-8");
       assert.equal(result.headers["access-control-allow-origin"], undefined);
-      assert.equal(result.headers["cache-control"], undefined);
+      assert.equal(result.headers["cache-control"], "no-cache");
       assert.deepEqual(result.body, method === "HEAD" ? Buffer.alloc(0) : body);
     }
   });

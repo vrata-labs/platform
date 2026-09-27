@@ -8,6 +8,25 @@
   --accent: #5fc8ff;
 }
 
+#session-upgrade-dialog {
+  width: min(560px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  overflow: auto;
+  padding: 24px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--bg);
+  color: var(--text);
+}
+
+#session-upgrade-dialog::backdrop { background: rgba(0, 0, 0, 0.8); }
+#session-upgrade-dialog h1 { font-size: 1.4rem; }
+#session-upgrade-dialog p, #session-upgrade-drafts p { line-height: 1.5; }
+#session-upgrade-dialog button, #session-upgrade-drafts button { min-height: 44px; }
+#session-upgrade-draft-list { display: grid; gap: 8px; }
+#session-upgrade-draft-list textarea { width: 100%; resize: vertical; }
+#session-upgrade-drafts { margin-top: 16px; }
+
 * {
   box-sizing: border-box;
 }

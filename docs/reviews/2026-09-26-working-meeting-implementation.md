@@ -40,7 +40,15 @@ Focused public-demo на локальном PostgreSQL прошёл целико
 - T11–T14: инструменты встречи, оставшаяся проверка документов, серверный Presenter revoke, handoff, доска и screen share.
 - T15–T17: cleanup/backup/self-host, abuse/regression, exact-SHA CI/CD и ручная встреча.
 
-T12 целиком остаётся открытой: этот срез закрывает воспроизведённый дефект, но ещё не выводит реальный лимит API и не закрывает всю матрицу storage failure/revoke/Android. T01a и plugin track ещё не реализованы.
+T12 целиком остаётся открытой: первый срез закрывает воспроизведённый дефект, но ещё не выводит реальный лимит API и не закрывает всю матрицу storage failure/revoke/Android. Server-side identity v2 из T01a и plugin track ещё не реализованы.
+
+### T01a-S1 — предварительный клиент обновления сессии, 2026-09-27
+
+Реализован [контракт предварительной миграции](../arch/2026-09-27-room-identity-migration.md): точные REST/WS сигналы, терминальная блокировка старой сессии и reconnect, update/recovery dialog, сохранение черновиков в текущей вкладке и защита от повторного reload той же сборки. HTML требует revalidation. Добавлены одинаковые local/staging browser tests для будущего wire-контракта. Серверные identity v2 issuance/recovery/enforcement остаются следующим срезом; этот UI не закрывает T01a целиком.
+
+Выявленная при проверке гонка shared/private editor устранена в notes runtime: dirty текст сохраняется под исходным scope до переключения; отказ сохраняет правильную принадлежность черновика. Cleanup failure не скрывает migration dialog и не пропускает media disconnect.
+
+Локально S1: workspace lint/typecheck/build/tests с PostgreSQL и pinned rollback build прошли; после финальных правок runtime build/test — **920/920**, полный `pnpm test:e2e` — **151/151** без skip (33.0 min). Публикация и exact-SHA результаты S1 записываются после завершения gate.
 
 ## Публикация
 

@@ -114,6 +114,25 @@ test("room-state url includes access token when provided", () => {
   assert.equal(url, "ws://example.test/state?roomId=room-1&participantId=p-1&accessToken=token.123");
 });
 
+test("identity close is delivered before reconnect handling without exposing arbitrary server text", t => {
+  let close!: (event: { code: number; reason: string }) => void;
+  class FakeSocket {
+    addEventListener(type: string, listener: typeof close) { if (type === "close") close = listener; }
+  }
+  const original = globalThis.WebSocket;
+  globalThis.WebSocket = FakeSocket as unknown as typeof WebSocket;
+  t.after(() => { globalThis.WebSocket = original; });
+  const events: string[] = [];
+  connectRoomState("ws://room.test", "room", "self", {
+    onRoomState() {}, onError() {}, onIdentityRequired: reason => events.push(reason), onClose: () => events.push("close")
+  });
+  close({ code: 4406, reason: "identity_upgrade_required" });
+  assert.deepEqual(events, ["identity_upgrade_required", "close"]);
+  events.length = 0;
+  close({ code: 4409, reason: "sensitive arbitrary reason" });
+  assert.deepEqual(events, ["close"]);
+});
+
 test("surface create command sends privileged envelope", () => {
   const sent: string[] = [];
   sendSurfaceCreateObjectCommand(createClient(sent));

@@ -84,7 +84,7 @@ import {
   runtimeMediaSurfaceDefinitionFromScene,
   type RuntimeMediaSurfaceView
 } from "./media/media-surface-view.js";
-import { cleanupMediaRoomConsumers, createDeferredMediaStopQueue, createMediaRoomIdleScheduler, hasMediaRoomSurfaceConsumer, planMediaRoomIdleAction, shouldHandleMediaRoomEvent, transitionPassiveMediaOwnership } from "./media/media-room-lifecycle.js";
+import { cleanupMediaRoomConsumers, createDeferredMediaStopQueue, createMediaRoomIdleScheduler, disconnectMediaRoomWithCleanup, hasMediaRoomSurfaceConsumer, planMediaRoomIdleAction, shouldHandleMediaRoomEvent, transitionPassiveMediaOwnership } from "./media/media-room-lifecycle.js";
 import { createCoalescedConnection } from "./media/coalesced-connection.js";
 import { allocatePlannedMediaCanvasRuntimes, planMediaCanvasRuntimeAllocations, releaseMediaCanvasRuntime, type MediaCanvasRuntimeAllocation } from "./media/media-canvas-runtime-plan.js";
 import { routeMediaObjectSurfaceInput } from "./media/media-object-router.js";
@@ -193,6 +193,8 @@ import { createMediaSurfaceAudioRuntime, type MediaSurfaceAudioNode } from "./me
 import { createDocumentSurfaceActions } from "./document-surface-actions.js";
 import { createDocumentFeedback } from "./document-feedback.js";
 import { createDocumentLibraryActions } from "./document-library-actions.js";
+import { runtimeFetch as fetch, runtimeSessionGate, SessionUpgradeError, describeIdentityRequirement } from "./session-upgrade.js";
+import { mountSessionUpgradeUi } from "./session-upgrade-ui.js";
 
 function fallbackUuid(): string {
   return `guest-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
@@ -1684,6 +1686,7 @@ function renderHostControls(statusMessage?: string): void {
 }
 
 function applyAccessDebug(access: NonNullable<RuntimeSessionControlResponse["access"]>, token: string, expiresInSeconds?: number): void {
+  if (sessionControlBlocked) return;
   const previousRole = debugState.access.role;
   const previouslyCouldUploadDocuments = canUploadDocuments();
   const previouslyCouldViewDocuments = canViewDocuments();
@@ -1726,6 +1729,23 @@ function applyAccessDebug(access: NonNullable<RuntimeSessionControlResponse["acc
 function disableRuntimeForSessionBlock(reason: string): void {
   const message = describeSessionControlReason(reason);
   sessionControlBlocked = true;
+  clearRoomStateReconnect();
+  clearSeatReclaimRetry();
+  roomStateConnectionGeneration++;
+  roomStateConnected = false;
+  debugState.roomStateConnected = false;
+  roomStateAccessToken = "";
+  runtimeBootReady = false;
+  roomStateClient?.close();
+  roomStateClient = null;
+  mediaRoomConnection.invalidate();
+  deferredScreenShareStops.clear();
+  passiveMediaRequired = false;
+  audioSessionJoined = false;
+  if (livekitRoom) void disconnectMediaRoom(livekitRoom, "session_blocked").catch(() => undefined);
+  mediaSurfaceCommands.rejectAll("room_session_blocked");
+  cancelPendingNotes();
+  syncNotesAccessUi();
   documentLibraryActions.invalidate();
   documentFeedback.clear();
   renderDocumentsUi();
@@ -1736,18 +1756,8 @@ function disableRuntimeForSessionBlock(reason: string): void {
   debugState.degradedMode = "access_denied";
   debugState.lastRecoveryAction = reason;
   debugState.hostControls.lastReason = reason;
-  runtimeBootReady = false;
-  roomStateClient?.close();
-  roomStateClient = null;
-  mediaRoomConnection.invalidate();
-  deferredScreenShareStops.clear();
-  passiveMediaRequired = false;
-  audioSessionJoined = false;
   for (const surfaceId of Array.from(mediaSurfaceViews.keys())) {
     closeMediaSurfaceRuntimes(surfaceId);
-  }
-  if (livekitRoom) {
-    void disconnectMediaRoom(livekitRoom, "session_blocked").catch(() => undefined);
   }
   joinAudioButton.disabled = true;
   muteButton.disabled = true;
@@ -1758,6 +1768,7 @@ function disableRuntimeForSessionBlock(reason: string): void {
 }
 
 function applySessionControlResponse(payload: RuntimeSessionControlResponse, statusMessage?: string): void {
+  if (sessionControlBlocked) return;
   latestSessionControl = payload.state;
   if (payload.participant?.status === "blocked" && payload.participant.reason) {
     disableRuntimeForSessionBlock(payload.participant.reason);
@@ -1771,7 +1782,7 @@ function applySessionControlResponse(payload: RuntimeSessionControlResponse, sta
 
 async function refreshSessionControl(force = false): Promise<void> {
   const nowMs = Date.now();
-  if (!runtimeFlags.hostControlsEnabled || !roomStateAccessToken || sessionControlRefreshInFlight || (!force && nowMs - lastSessionControlRefreshAtMs < SESSION_CONTROL_REFRESH_INTERVAL_MS)) {
+  if (sessionControlBlocked || !runtimeFlags.hostControlsEnabled || !roomStateAccessToken || sessionControlRefreshInFlight || (!force && nowMs - lastSessionControlRefreshAtMs < SESSION_CONTROL_REFRESH_INTERVAL_MS)) {
     return;
   }
   sessionControlRefreshInFlight = true;
@@ -3995,8 +4006,7 @@ function reconcileMediaRoomIdleDisconnect(room: Room | null, diagnosticsReason: 
 }
 
 async function disconnectMediaRoom(room: Room, diagnosticsReason: string): Promise<void> {
-  clearMediaRoomReference(room, diagnosticsReason);
-  await room.disconnect();
+  await disconnectMediaRoomWithCleanup(() => clearMediaRoomReference(room, diagnosticsReason), () => room.disconnect());
 }
 
 function getSpatialAudioFallbackReason(): string | null {
@@ -4191,6 +4201,9 @@ const floorMaterial = floor.material as THREE.MeshStandardMaterial;
 
 const {
   canViewNotes,
+  cancelPendingNotes,
+  changeNotesScope,
+  getUnsavedNote,
   syncNotesAccessUi,
   loadActiveNote,
   scheduleNotesAutosave,
@@ -4206,6 +4219,8 @@ const {
   downloadBlob,
   get runtimeFlags() { return runtimeFlags; },
   get roomStateAccessToken() { return roomStateAccessToken; },
+  isSessionBlocked: () => sessionControlBlocked,
+  preserveDraft: draft => sessionUpgradeUi.preserveDraft(draft),
   elements: {
     notesPanelEl,
     notesScopeSelect,
@@ -5043,6 +5058,7 @@ const mediaSurfaceTestControls = createMediaSurfaceTestControls({
 (window as Window & { __NOAH_TEST__?: unknown }).__NOAH_TEST__ = (window as Window & { __VRATA_TEST__?: unknown }).__VRATA_TEST__;
 
 function setStatus(message: string): void {
+  if (runtimeSessionGate.reason) message = describeIdentityRequirement(runtimeSessionGate.reason);
   statusLineEl.textContent = message;
   debugState.statusLine = message;
 }
@@ -5169,6 +5185,7 @@ function startPersonalStatePersistence(input: { roomId: string; sessionToken: st
   }
   let lastSavedSignature = personalPoseSignature(debugState.personalRoom.lastPoseRestored ? currentPersonalPoseState() : {});
   const save = async (force = false): Promise<void> => {
+    if (sessionControlBlocked) return;
     const state = currentPersonalPoseState();
     const signature = personalPoseSignature(state);
     if (!force && signature === lastSavedSignature) {
@@ -5259,6 +5276,7 @@ function clearSeatReclaimRetry(): void {
 }
 
 function connectRoomStateWithRetry(roomStateUrl: string): void {
+  if (sessionControlBlocked) return;
   clearRoomStateReconnect();
   clearSeatReclaimRetry();
   debugState.roomStateMode = "disconnected";
@@ -5281,6 +5299,9 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
   const connectionGeneration = ++roomStateConnectionGeneration;
   const isCurrentConnection = () => connectionGeneration === roomStateConnectionGeneration;
   roomStateClient = connectRoomState(roomStateUrl, roomId, participantId, {
+    onIdentityRequired: (reason) => {
+      if (isCurrentConnection()) runtimeSessionGate.require(reason);
+    },
     onOpen: () => {
       if (!isCurrentConnection()) return;
       const reopened = debugState.avatarPoseTransport.lastPoseSentAtMs > 0;
@@ -5489,7 +5510,7 @@ function deriveBodyTransform(root: { x: number; z: number }, head: { x: number; 
 }
 
 async function reportDiagnostics(note?: string, options: { reportId?: string } = {}): Promise<void> {
-  if (!runtimeFlags.remoteDiagnostics) {
+  if (runtimeSessionGate.reason || !runtimeFlags.remoteDiagnostics) {
     return;
   }
   await refreshWebRtcDiagnostics();
@@ -5584,6 +5605,7 @@ async function reportDiagnostics(note?: string, options: { reportId?: string } =
 }
 
 function reportUnhandledRuntimeError(error: unknown, note: string): void {
+  if (error instanceof SessionUpgradeError || runtimeSessionGate.reason) return;
   const reportId = createClientReportId();
   const message = error instanceof Error ? error.message : String(error ?? "unknown");
   showReportId(reportId);
@@ -5603,6 +5625,7 @@ window.addEventListener("unhandledrejection", (event) => {
 });
 
 function reportXrTelemetry(frameContext: RuntimeFrameContext): void {
+  if (runtimeSessionGate.reason) return;
   if (!renderer.xr.isPresenting && !(avatarVrMockEnabled && syntheticXrState)) {
     return;
   }
@@ -5919,6 +5942,7 @@ const mediaRoomConnection = createCoalescedConnection<Room>({
     }
 
     const voicePlan = await planVoiceSession(apiBaseUrl, roomId, participantId, roomStateAccessToken);
+    runtimeSessionGate.assertActive();
     setupAudio(room);
     setupMediaTransportDiagnostics(room);
     try {
@@ -5928,6 +5952,7 @@ const mediaRoomConnection = createCoalescedConnection<Room>({
       debugState.media.webrtc = createUnavailableWebRtcDiagnostics("livekit_connect_failed");
       throw error;
     }
+    runtimeSessionGate.assertActive();
     setupMediaTransportDiagnostics(room);
     await applyPreferredAudioDevices(room);
   },
@@ -7331,13 +7356,9 @@ openPersonalRoomButton.addEventListener("click", () => {
 });
 
 notesScopeSelect.addEventListener("change", () => {
-  notesState.activeNotesScope = notesScopeSelect.value === "private" ? "private" : "shared";
-  templatePreferences.setNotesScope(notesState.activeNotesScope);
-  notesState.notesLastSavedContent = "";
-  notesState.notesLastUpdatedAt = null;
-  notesState.notesVersions = [];
-  notesState.notesSaveState = "idle";
-  void loadActiveNote();
+  void changeNotesScope(notesScopeSelect.value === "private" ? "private" : "shared").then(changed => {
+    if (changed) templatePreferences.setNotesScope(notesState.activeNotesScope);
+  }).catch(() => undefined);
 });
 
 notesEditor.addEventListener("input", () => {
@@ -7970,7 +7991,7 @@ window.addEventListener("resize", () => {
 });
 
 window.addEventListener("beforeunload", () => {
-  void removePresence(apiBaseUrl, roomId, participantId, roomStateAccessToken);
+  if (!sessionControlBlocked) void removePresence(apiBaseUrl, roomId, participantId, roomStateAccessToken).catch(() => undefined);
   detachVideoTrack();
   for (const surfaceId of Array.from(mediaSurfaceViews.keys())) {
     closeMediaSurfaceRuntimes(surfaceId);
@@ -8111,6 +8132,7 @@ async function main(): Promise<void> {
     requestedRole: query.get("role"),
     inviteToken: query.get("invite")
   });
+  runtimeSessionGate.assertActive();
   templatePreferences.setTemplate(boot.templateSettings);
   joinMutedPreference = templatePreferences.joinMuted();
   joinMutedCheckbox.checked = joinMutedPreference;
@@ -8170,6 +8192,7 @@ async function main(): Promise<void> {
   refreshClientCompatibility();
   await syncPresence(boot.joinMode, false);
   await refreshSessionControl(true);
+  if (sessionControlBlocked) return;
   await loadAvailableSpaces(boot.roomId);
   syncNotesAccessUi();
   void loadActiveNote();
@@ -8304,6 +8327,7 @@ async function main(): Promise<void> {
   }
 
   if (boot.roomType === "personal" && debugState.personalRoom.isOwner) {
+    if (sessionControlBlocked) return;
     restorePersonalPose(boot.personalState);
     startPersonalStatePersistence({
       roomId: boot.roomId,
@@ -8313,6 +8337,7 @@ async function main(): Promise<void> {
     });
   }
 
+  if (sessionControlBlocked) return;
   applyPostBootControls({
     displayName,
     runtimeFlags: {
@@ -8441,7 +8466,7 @@ async function main(): Promise<void> {
   syncAccumulator = 0;
   presenceAccumulator = 0;
   diagnosticsAccumulator = 0;
-  runtimeBootReady = true;
+  runtimeBootReady = !sessionControlBlocked;
 }
 
 function describeRoomAccessError(error: RuntimeAccessError): string {
@@ -8471,6 +8496,9 @@ function describeRoomAccessError(error: RuntimeAccessError): string {
 
 function describeSessionControlReason(reason: string): string {
   switch (reason) {
+    case "identity_upgrade_required":
+    case "identity_recovery_required":
+      return describeIdentityRequirement(reason);
     case "room_locked":
       return "Access denied: room is locked";
     case "participant_removed":
@@ -8482,7 +8510,22 @@ function describeSessionControlReason(reason: string): string {
   }
 }
 
+const sessionUpgradeUi = mountSessionUpgradeUi({
+  gate: runtimeSessionGate, roomId, buildId: new URL(import.meta.url).pathname,
+  document, storage: () => sessionStorage, reload: () => window.location.reload(), download: downloadBlob,
+  getUnsavedNote,
+  stopSession(reason) {
+    try { disableRuntimeForSessionBlock(reason); }
+    finally {
+      renderer.setAnimationLoop(null);
+      void renderer.xr.getSession()?.end().catch(() => undefined);
+    }
+  },
+  confirmDiscard: () => window.confirm("The browser could not retain your note draft. Copy or download it first. Update anyway?")
+});
+
 void main().catch((error: unknown) => {
+  if (error instanceof SessionUpgradeError || runtimeSessionGate.reason) return;
   console.error(error);
   if (error instanceof RuntimeAccessError) {
     const message = describeRoomAccessError(error);

@@ -19,7 +19,8 @@ export async function serveStatic(response: ServerResponse, filePath: string): P
   const [data, metadata] = await Promise.all([readFile(normalized), stat(normalized)]);
   response.writeHead(200, {
     "content-type": contentType(normalized),
-    "content-length": String(metadata.size)
+    "content-length": String(metadata.size),
+    ...(extname(normalized).toLowerCase() === ".html" ? { "cache-control": "no-cache" } : {})
   });
   response.end(data);
   return true;

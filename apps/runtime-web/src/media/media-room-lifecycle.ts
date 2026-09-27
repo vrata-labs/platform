@@ -1,6 +1,11 @@
 export type MediaRoomIdleAction = "schedule-disconnect" | "keep-room" | "ignore-stale-room";
 export type PassiveMediaOwnershipEvent = "startup-requested" | "startup-succeeded" | "startup-failed";
 
+export async function disconnectMediaRoomWithCleanup(cleanup: () => void, disconnect: () => Promise<void>): Promise<void> {
+  try { cleanup(); }
+  finally { await disconnect(); }
+}
+
 export interface MediaRoomIdleScheduler<Room> {
   clear(): void;
   reconcile(room: Room, action: MediaRoomIdleAction, onDeadline: () => void): void;

@@ -7,6 +7,11 @@
     <link rel="stylesheet" href="/src/styles.css" />
   </head>
   <body>
+    <dialog id="session-upgrade-dialog" aria-labelledby="session-upgrade-title" aria-describedby="session-upgrade-message">
+      <h1 id="session-upgrade-title" tabindex="-1">Update required to rejoin this room</h1>
+      <p id="session-upgrade-message"></p>
+      <button id="session-upgrade-reload" type="button">Update and rejoin</button>
+    </dialog>
     <div id="app">
       <section id="guest-onboarding" class="guest-onboarding" hidden aria-labelledby="guest-onboarding-title">
         <div class="guest-onboarding-card">
@@ -57,6 +62,12 @@
             <button id="open-personal-room" type="button">Open my room</button>
             <div id="space-select-status" class="space-select-status">Loading spaces...</div>
           </div>
+          <section id="session-upgrade-drafts" hidden aria-labelledby="session-upgrade-drafts-title">
+              <h2 id="session-upgrade-drafts-title">Local note drafts</h2>
+              <p id="session-upgrade-draft-status" role="status"></p>
+              <div id="session-upgrade-draft-list"></div>
+              <button id="session-upgrade-discard-drafts" type="button">Discard local drafts</button>
+          </section>
           <div id="notes-panel" class="notes-panel">
             <div class="notes-title">Notes</div>
             <label for="notes-scope-select">Scope</label>

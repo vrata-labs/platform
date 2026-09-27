@@ -59,6 +59,8 @@ export interface NotesRuntimeContext {
   apiBaseUrl: string;
   roomId: string;
   readonly roomStateAccessToken: string;
+  isSessionBlocked?: () => boolean;
+  preserveDraft?: (draft: { scope: RuntimeApi.RuntimeNoteScope; content: string }) => boolean;
   readonly runtimeFlags: { notesEnabled: boolean };
   debugState: {
     access: Pick<ReturnType<typeof createRuntimeDebugState>["access"], "permissions">;
@@ -91,13 +93,57 @@ export function createNotesRuntime(context: NotesRuntimeContext) {
     exportRoomNote,
     exportRoomNotesArchive
   } = context.api;
+  let generation = 0;
+  let editorScope: RuntimeApi.RuntimeNoteScope | null = null;
+  let changingScope = false;
+
+  function getUnsavedNote(): { scope: RuntimeApi.RuntimeNoteScope; content: string } | null {
+    return notesEditor.value !== state.notesLastSavedContent ? { scope: editorScope ?? state.activeNotesScope, content: notesEditor.value } : null;
+  }
+
+  async function changeNotesScope(scope: RuntimeApi.RuntimeNoteScope): Promise<boolean> {
+    if (changingScope || !canViewNotes()) return false;
+    changingScope = true;
+    notesScopeSelect.disabled = true;
+    const currentGeneration = generation;
+    try {
+      // Settle edits under the editor's original scope before loading another.
+      // A denied save leaves the original editor available for draft recovery.
+      if (state.notesAutosaveTimer !== null) window.clearTimeout(state.notesAutosaveTimer);
+      state.notesAutosaveTimer = null;
+      if (getUnsavedNote()) await saveActiveNote();
+      if (currentGeneration !== generation || !canViewNotes()) return false;
+      const unsaved = getUnsavedNote();
+      if (unsaved && !context.preserveDraft?.(unsaved)) {
+        setNotesSaveState("save_failed", "Cannot switch notes: copy unsaved changes or retry saving first.", "unsaved_scope_changes");
+        return false;
+      }
+      cancelPendingNotes();
+      state.activeNotesScope = scope;
+      state.notesVersions = [];
+      await loadActiveNote();
+      return editorScope === scope && state.activeNotesScope === scope;
+    } finally {
+      changingScope = false;
+      notesScopeSelect.value = state.activeNotesScope;
+      syncNotesAccessUi();
+    }
+  }
+
+  function cancelPendingNotes(): void {
+    generation++;
+    state.notesLoadSeq++;
+    state.notesSaveSeq++;
+    if (state.notesAutosaveTimer !== null) window.clearTimeout(state.notesAutosaveTimer);
+    state.notesAutosaveTimer = null;
+  }
 
   function canViewNotes(): boolean {
-    return context.runtimeFlags.notesEnabled && hasRoomPermission(debugState.access.permissions, "notes.view");
+    return !context.isSessionBlocked?.() && context.runtimeFlags.notesEnabled && hasRoomPermission(debugState.access.permissions, "notes.view");
   }
 
   function canEditNotes(): boolean {
-    if (!canViewNotes()) return false;
+    if (!canViewNotes() || (editorScope !== null && editorScope !== state.activeNotesScope)) return false;
     return state.activeNotesScope === "private" || hasRoomPermission(debugState.access.permissions, "notes.edit");
   }
 
@@ -192,7 +238,7 @@ export function createNotesRuntime(context: NotesRuntimeContext) {
     const visible = context.runtimeFlags.notesEnabled && canViewNotes();
     notesPanelEl.hidden = !visible;
     notesEditor.disabled = !visible || !canEditNotes() || state.notesSaveState === "loading";
-    notesScopeSelect.disabled = !visible || state.notesSaveState === "loading";
+    notesScopeSelect.disabled = changingScope || !visible || state.notesSaveState === "loading";
     if (!visible) {
       notesStatusEl.textContent = context.runtimeFlags.notesEnabled ? "Notes permission required" : "Notes disabled";
     } else if (!canEditNotes()) {
@@ -214,12 +260,14 @@ export function createNotesRuntime(context: NotesRuntimeContext) {
       return;
     }
     const loadSeq = ++state.notesLoadSeq;
+    const loadingScope = state.activeNotesScope;
     setNotesSaveState("load", "Notes loading...");
     syncNotesAccessUi();
     try {
       const note = await fetchRoomNote(apiBaseUrl, roomId, state.activeNotesScope, context.roomStateAccessToken);
       if (loadSeq !== state.notesLoadSeq) return;
       notesEditor.value = note.content;
+      editorScope = loadingScope;
       state.notesLastSavedContent = note.content;
       state.notesLastUpdatedAt = note.updatedAt;
       setNotesSaveState("load_ok", note.updatedAt ? "Notes saved" : "Notes ready");
@@ -236,6 +284,7 @@ export function createNotesRuntime(context: NotesRuntimeContext) {
   }
 
   async function loadActiveNoteVersions(): Promise<void> {
+    const currentGeneration = generation;
     if (!context.runtimeFlags.notesEnabled || !canViewNotes()) {
       state.notesVersions = [];
       renderNotesHistoryUi();
@@ -244,13 +293,18 @@ export function createNotesRuntime(context: NotesRuntimeContext) {
     state.notesHistoryLoading = true;
     renderNotesHistoryUi();
     try {
-      state.notesVersions = await listRoomNoteVersions(apiBaseUrl, roomId, state.activeNotesScope, context.roomStateAccessToken);
+      const versions = await listRoomNoteVersions(apiBaseUrl, roomId, state.activeNotesScope, context.roomStateAccessToken);
+      if (currentGeneration !== generation) return;
+      state.notesVersions = versions;
     } catch (error) {
+      if (currentGeneration !== generation) return;
       console.warn("notes_versions_load_failed", error);
       state.notesVersions = [];
     } finally {
-      state.notesHistoryLoading = false;
-      renderNotesHistoryUi();
+      if (currentGeneration === generation) {
+        state.notesHistoryLoading = false;
+        renderNotesHistoryUi();
+      }
     }
   }
 
@@ -276,6 +330,7 @@ export function createNotesRuntime(context: NotesRuntimeContext) {
       return;
     }
     const content = notesEditor.value;
+    const savingScope = editorScope ?? state.activeNotesScope;
     if (content === state.notesLastSavedContent) {
       setNotesSaveState("save_ok", state.notesLastUpdatedAt ? "Notes saved" : "Notes ready");
       return;
@@ -283,8 +338,9 @@ export function createNotesRuntime(context: NotesRuntimeContext) {
     const saveSeq = ++state.notesSaveSeq;
     setNotesSaveState("save_start", "Saving notes...");
     try {
-      const note = await saveRoomNote(apiBaseUrl, roomId, state.activeNotesScope, context.roomStateAccessToken, content);
+      const note = await saveRoomNote(apiBaseUrl, roomId, savingScope, context.roomStateAccessToken, content);
       if (saveSeq !== state.notesSaveSeq) return;
+      editorScope = savingScope;
       state.notesLastSavedContent = content;
       state.notesLastUpdatedAt = note.updatedAt;
       setNotesSaveState("save_ok", "Notes saved");
@@ -301,6 +357,7 @@ export function createNotesRuntime(context: NotesRuntimeContext) {
   }
 
   async function restoreSelectedNoteVersion(): Promise<void> {
+    const currentGeneration = generation;
     const versionId = notesVersionSelect.value;
     if (!versionId || !canEditNotes()) return;
     const selected = state.notesVersions.find((version) => version.versionId === versionId);
@@ -309,6 +366,7 @@ export function createNotesRuntime(context: NotesRuntimeContext) {
     try {
       setNotesSaveState("save_start", "Restoring notes version...");
       const note = await restoreRoomNoteVersion(apiBaseUrl, roomId, state.activeNotesScope, context.roomStateAccessToken, versionId);
+      if (currentGeneration !== generation) return;
       notesEditor.value = note.content;
       state.notesLastSavedContent = note.content;
       state.notesLastUpdatedAt = note.updatedAt;
@@ -316,6 +374,7 @@ export function createNotesRuntime(context: NotesRuntimeContext) {
       setNotesSaveState("save_ok", "Notes version restored");
       await loadActiveNoteVersions();
     } catch (error) {
+      if (currentGeneration !== generation) return;
       console.warn("notes_restore_failed", error);
       setNotesSaveState("save_failed", "Notes restore failed", notesErrorCode(error));
     }
@@ -359,6 +418,9 @@ export function createNotesRuntime(context: NotesRuntimeContext) {
 
   return {
     canViewNotes,
+    getUnsavedNote,
+    changeNotesScope,
+    cancelPendingNotes,
     syncNotesAccessUi,
     loadActiveNote,
     scheduleNotesAutosave,

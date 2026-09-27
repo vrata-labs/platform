@@ -1,7 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { cleanupMediaRoomConsumers, createDeferredMediaStopQueue, createMediaRoomIdleScheduler, hasMediaRoomSurfaceConsumer, planMediaRoomIdleAction, shouldHandleMediaRoomEvent, transitionPassiveMediaOwnership } from "./media-room-lifecycle.js";
+import { cleanupMediaRoomConsumers, createDeferredMediaStopQueue, createMediaRoomIdleScheduler, disconnectMediaRoomWithCleanup, hasMediaRoomSurfaceConsumer, planMediaRoomIdleAction, shouldHandleMediaRoomEvent, transitionPassiveMediaOwnership } from "./media-room-lifecycle.js";
+
+test("a failed surface cleanup cannot prevent media disconnection", async () => {
+  let disconnected = false;
+  const failure = new Error("surface dispose failure");
+  await assert.rejects(disconnectMediaRoomWithCleanup(() => { throw failure; }, async () => { disconnected = true; }), error => error === failure);
+  assert.equal(disconnected, true);
+});
 
 function createFakeTimers() {
   let nowMs = 0;

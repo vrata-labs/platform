@@ -956,3 +956,4 @@ export class RemoteBrowserObjectRuntime {
 export function createRemoteBrowserObjectRuntime(options: RemoteBrowserObjectRuntimeOptions): RemoteBrowserObjectRuntime {
   return new RemoteBrowserObjectRuntime(options);
 }
+import { runtimeFetch as fetch } from "../session-upgrade.js";

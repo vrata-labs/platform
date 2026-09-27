@@ -1,5 +1,6 @@
 import { createRoomAccessDebugState, type RoomAccessDebugState, type RoomPermission, type RoomRole, type RoomTemplateSettings, type RoomTemplateSnapshotV1, type RoomTemplateSurface, type SceneBundleIntegrity } from "@vrata/shared-types";
 import { DocumentUploadError } from "./document-feedback.js";
+import { runtimeFetch as fetch } from "./session-upgrade.js";
 
 interface RoomManifest {
   roomId: string;
