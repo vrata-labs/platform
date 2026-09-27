@@ -1,0 +1,143 @@
+name: PR119 isolated MinIO verification
+
+on:
+  push:
+    branches: [verify/pr119-minio-75ecee9c-20260927]
+    paths: [.github/workflows/pr119-minio-isolated.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact merged source
+        uses: actions/checkout@v4
+        with:
+          ref: 75ecee9cc3741d04921d105d8bbc89ca67964216
+          persist-credentials: false
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Verify source and focused tests
+        run: |
+          test "$(git rev-parse HEAD)" = 75ecee9cc3741d04921d105d8bbc89ca67964216
+          node --test tools/docker-publish-workflow.test.mjs tools/staging-minio-rollout.test.mjs tools/staging-minio-ycr.test.mjs
+      - name: Login for dependency pulls only
+        uses: docker/login-action@v3
+        with:
+          registry: cr.yandex
+          username: ${{ secrets.YCR_USERNAME }}
+          password: ${{ secrets.YCR_PASSWORD }}
+      - name: Cold pull, real bootstrap, persistence and legacy compatibility
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          MINIO='cr.yandex/crp9cm29k6p76hqo8lti/vrata-minio@sha256:c83dd50c5efe2e3a962711a7c9fc77acfc55c3dad229da2146489f604afba387'
+          MC='cr.yandex/crp9cm29k6p76hqo8lti/vrata-mc@sha256:d535999f5c4eb01c9c06bd0c068d4bb8f7366a8469fe57e394907190f7feb550'
+          work="$(mktemp -d)"
+          prefix="pr119-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          server="${prefix}-server"
+          network="${prefix}-network"
+          volume="${prefix}-data"
+          cleanup() {
+            docker rm -f "$server" >/dev/null 2>&1 || true
+            docker network rm "$network" >/dev/null 2>&1 || true
+            docker volume rm "$volume" >/dev/null 2>&1 || true
+            rm -rf -- "$work"
+          }
+          trap cleanup EXIT
+          for image in "$MINIO" "$MC"; do
+            if docker image inspect "$image" >/dev/null 2>&1; then
+              echo "cold_pull_precondition_failed:$image" >&2
+              exit 1
+            fi
+            docker pull --platform linux/amd64 "$image"
+            docker image inspect "$image" --format '{{range .RepoDigests}}{{println .}}{{end}}' | grep -Fx "$image"
+          done
+          docker run --rm --network none --entrypoint /bin/sh "$MINIO" -ec '
+            echo "5cb1e6309f2bd70e7d0ca77f33782beac1745790deb4c1f94444f1e7dec5fcb6  /usr/local/bin/minio" | sha256sum -c -
+            minio --version | tee /tmp/version
+            grep -F "RELEASE.2025-02-28T09-55-16Z" /tmp/version
+          '
+          docker run --rm --network none --entrypoint /bin/sh "$MC" -ec '
+            echo "a92b5f1af200ca25d54d78432ef6b0c47fd4340abf9759ce5d10275cd57e3318  /usr/local/bin/mc" | sha256sum -c -
+            mc --version | tee /tmp/version
+            grep -F "RELEASE.2025-03-12T17-29-24Z" /tmp/version
+          '
+          echo 'verified:cold_pull_manifest_binary_release'
+          docker network create --internal "$network"
+          docker volume create "$volume"
+          start_server() {
+            docker run -d --name "$server" --network "$network" --network-alias minio \
+              --mount "type=volume,src=$volume,dst=/data" \
+              -e MINIO_ROOT_USER=pr119check -e MINIO_ROOT_PASSWORD=pr119-isolated-test-password \
+              "$MINIO" server /data --console-address ':9001'
+          }
+          bootstrap() {
+            docker run --rm --network "$network" \
+              -e MINIO_ROOT_USER=pr119check -e MINIO_ROOT_PASSWORD=pr119-isolated-test-password \
+              -e MINIO_BUCKET=pr119-verification -e MINIO_SCENE_PREFIX=scenes/ \
+              --mount "type=bind,src=$GITHUB_WORKSPACE/infra/docker/minio-bootstrap.sh,dst=/bootstrap.sh,readonly" \
+              --mount "type=bind,src=$GITHUB_WORKSPACE/infra/docker/minio-scene-smoke.json,dst=/seed/scene.json,readonly" \
+              --entrypoint /bin/sh "$MC" /bootstrap.sh
+          }
+          client() {
+            docker run --rm --network "$network" \
+              --mount "type=bind,src=$work,dst=/work" \
+              -e MC_HOST_vrata=http://pr119check:pr119-isolated-test-password@minio:9000 \
+              --entrypoint /bin/sh "$MC" -ec "$1"
+          }
+          start_server
+          bootstrap
+          cp infra/docker/minio-scene-smoke.json "$work/expected-scene.json"
+          dd if=/dev/urandom of="$work/sentinel.bin" bs=4096 count=4 status=none
+          client 'mc cp /work/sentinel.bin vrata/pr119-verification/sentinel.bin; mc cat vrata/pr119-verification/sentinel.bin > /work/before.bin; cmp /work/sentinel.bin /work/before.bin; wget -qO /work/scene.json http://minio:9000/pr119-verification/scenes/compose-smoke/scene.json; cmp /work/expected-scene.json /work/scene.json'
+          docker stop "$server"
+          docker rm "$server"
+          start_server
+          bootstrap
+          client 'mc cat vrata/pr119-verification/sentinel.bin > /work/after.bin; cmp /work/sentinel.bin /work/after.bin; wget -qO /work/public-sentinel.bin http://minio:9000/pr119-verification/sentinel.bin; cmp /work/sentinel.bin /work/public-sentinel.bin'
+          echo 'verified:actual_bootstrap_public_scene_object_retention_after_recreate'
+          # Exercise the real helper against isolated legacy Compose fixtures, never staging.
+          export VERIFY_MINIO_IMAGE="$MINIO" VERIFY_MC_IMAGE="$MC" VERIFY_SOURCE_SHA
+          VERIFY_SOURCE_SHA="$(git rev-parse HEAD)"
+          for registry in hub quay; do
+            dir="$work/$registry"
+            mkdir -p "$dir"
+            old_minio='minio/minio:RELEASE.2025-02-28T09-55-16Z'
+            old_mc='minio/mc:RELEASE.2025-03-12T17-29-24Z'
+            if [ "$registry" = quay ]; then
+              old_minio="quay.io/$old_minio@sha256:a929054ae025fa7997857cd0e2a2e3029238e31ad89877326dc032f4c1a14259"
+              old_mc="quay.io/$old_mc@sha256:470f5546b596e16c7816b9c3fa7a78ce4076bb73c2c73f7faeec0c8043923123"
+            fi
+            printf 'services:\n  minio:\n    image: %s\n  minio-bootstrap:\n    image: %s\n' "$old_minio" "$old_mc" > "$dir/compose.staging.yml"
+            chmod 0640 "$dir/compose.staging.yml"
+            cp "$dir/compose.staging.yml" "$dir/expected.yml"
+            cat > "$dir/rollout-staging-images.sh" <<'FIXTURE'
+          #!/bin/bash
+          set -Eeuo pipefail
+          cd -- "$(dirname "$0")"
+          test "$1" = "$VERIFY_SOURCE_SHA"
+          docker compose -p pr119-legacy-verification -f compose.staging.yml config --images > observed-images
+          printf '%s\n%s\n' "$VERIFY_MINIO_IMAGE" "$VERIFY_MC_IMAGE" | sort > expected-images
+          sort observed-images > actual-images
+          cmp expected-images actual-images
+          docker compose -p pr119-legacy-verification -f compose.staging.yml pull
+          exit "${VERIFY_FAIL_CODE:-0}"
+          FIXTURE
+            python3 tools/staging-minio-rollout.py "$dir/rollout-staging-images.sh" "$VERIFY_SOURCE_SHA"
+            cmp "$dir/expected.yml" "$dir/compose.staging.yml"
+            test "$(stat -c %a "$dir/compose.staging.yml")" = 640
+            result=0
+            VERIFY_FAIL_CODE=19 python3 tools/staging-minio-rollout.py "$dir/rollout-staging-images.sh" "$VERIFY_SOURCE_SHA" || result=$?
+            test "$result" = 19
+            cmp "$dir/expected.yml" "$dir/compose.staging.yml"
+            test "$(stat -c %a "$dir/compose.staging.yml")" = 640
+            echo "verified:legacy_${registry}_real_compose_pull_success_failure_exact_restore"
+          done
+          git diff --exit-code
+          printf 'Verified immutable source: `%s`\n\nCold pull, manifest digests, binary checksums/releases, actual bootstrap, public seed, object retention after container recreation, and legacy Hub/Quay real Compose pull plus exact restoration on success/failure all passed. No staging access or registry writes.\n' "$VERIFY_SOURCE_SHA" >> "$GITHUB_STEP_SUMMARY"
