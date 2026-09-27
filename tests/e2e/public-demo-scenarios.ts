@@ -476,15 +476,12 @@ async function leaveClient(client: DemoClient, origin: string, roomId: string): 
   requireStatus(departure.status, 200, "public_demo_presence_departure");
 }
 
-async function denyGuestPresentationControl(guest: DemoClient, roomId: string): Promise<void> {
+async function denyGuestPresentationControl(guest: DemoClient, roomId: string, documentId: string): Promise<void> {
   await expect(guest.page.locator("#documents-panel")).toBeHidden();
   await expect(guest.page.locator("#presentation-next")).toBeDisabled();
   const denied = await sessionRequest(new URL(guest.inviteLink).origin, roomId, guest.sessionToken, "/documents", { method: "POST" }, "public_demo_guest_document_upload");
   requireStatus(denied.status, 403, "public_demo_guest_document_upload");
-  await expect.poll(() => guest.page.evaluate(() => (window as any).__VRATA_DEBUG__?.pdfPresentation?.page ?? null), {
-    timeout: 15_000,
-    intervals: corePollIntervals
-  }).toBe(2);
+  await waitForPresentation([guest], 2, documentId);
 }
 
 type AudioSnapshot = {
@@ -933,7 +930,7 @@ export async function runPublicDemoScenario(options: PublicDemoScenarioOptions):
       method: "POST"
     }, "public_demo_guest_session_control");
     requireStatus(guestSessionControl.status, 403, "public_demo_guest_session_control");
-    await denyGuestPresentationControl(guest, roomId);
+    await denyGuestPresentationControl(guest, roomId, ownDocumentId);
 
     setPhase("presentation-page-three");
     await activateButton(host.page, "#presentation-next");

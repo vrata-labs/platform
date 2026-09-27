@@ -27,3 +27,12 @@ Both runs followed manifest → health → media token → WebSocket → peer co
 `createTrackedContext` now uses the existing reference screen-share functional-test budget from PR #118: CSS viewport 640×400, DPR 0.5, drawing buffer 320×200. Each joined page asserts all five dimensions. This bounds software-rendering work for concurrent 3D clients while preserving the ordinary room UI, real transport and document texture assertions. The failed 30-second stage now also reports safe token HTTP statuses, audio snapshots, frame budget and DPR.
 
 This change does not establish acceptable rendering performance on real low-power devices. Real Android/Quest and microphone acceptance remain part of the working-meeting plan. A genuinely stuck media connection still needs explicit bounded failure/recovery; the rendering-budget adjustment does not claim to implement it.
+
+## Follow-up observation synchronization
+
+CI run 36311907099 initially reached 150/151 but exposed two independent observation races:
+
+- `normal-product` compared a local head pose immediately after accepting a camera diagnostic that could still belong to the previous chair. Camera diagnostics update around every two seconds, while local pose updates per frame. The test now waits, within the original 15 s bound, for both the current seat ID and its local seated head height before checking camera/published pose.
+- Attempts 2 and 3 timed out inside the guest PDF observation predicate after an already-confirmed HTTP 403. The final allowlisted snapshots showed the expected page 2, with the guest renderer still busy. The post-denial observation now reuses `waitForPresentation`, including exact document ID, ready state, page count and actual texture sampling. Its rendering allowance is the scenario's existing 120 s instead of this isolated 15 s predicate. The REST denial still uses its original 15 s request timeout and must return 403; audio's 30 s join assertion is unchanged.
+
+The rendering allowance change is explicit: it addresses asynchronous visual observation under multi-client software rendering and is not a product responsiveness acceptance threshold.

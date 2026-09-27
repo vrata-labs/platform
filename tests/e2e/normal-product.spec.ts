@@ -62,8 +62,13 @@ async function verifyNormalProduct({ page, request }: { page: Page; request: API
       const seatId = `seat-${i}`;
       expect(await page.evaluate(id => (window as Window & { __VRATA_TEST__: RuntimeTestApi }).__VRATA_TEST__.requestSeatClaimById(id), seatId)).toBe(true);
       await expect.poll(async () => (await readDebug(observer)).seatOccupancy[seatId], { timeout: 15_000 }).toBe(participantId);
+      // Camera diagnostics are sampled on a slower timer and can still describe
+      // the previous chair. Wait for this claim's local frame pose first.
+      await expect.poll(async () => {
+        const current = await readDebug(page);
+        return current.currentSeatId === seatId ? current.localPose.head.y : null;
+      }, { timeout: 15_000 }).toBeCloseTo(1.2, 2);
       await expect.poll(async () => (await readDebug(page)).sceneDebug.camera.world.y, { timeout: 15_000 }).toBeCloseTo(1.2, 2);
-      expect((await readDebug(page)).localPose.head.y).toBeCloseTo(1.2, 2);
       await expect.poll(async () => (await readDebug(page)).avatarTransportPreview?.poseFrame.head.y, { timeout: 15_000 }).toBeCloseTo(1.2, 2);
       const before = (await readDebug(page)).localPose.root;
       await page.keyboard.down("w"); await page.waitForTimeout(200); await page.keyboard.up("w");
