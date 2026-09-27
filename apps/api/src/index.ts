@@ -116,6 +116,7 @@ import { createRoomPresence, type PresenceRecord } from "./room-presence.js";
 import { validateRoomAssetIds, validateAssetInput } from "./room-asset-validation.js";
 
 import { createXrTelemetryService } from "./xr-telemetry-service.js";
+import { IDENTITY_LIFECYCLE_REQUIRES_V2 } from "./identity/lifecycle.js";
 import type { XrTelemetryRecord } from "./xr-telemetry-buffer.js";
 
 import {
@@ -3140,6 +3141,10 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
 export function startApiServer(port = apiPort) {
   const server = createServer((request, response) => {
     handleRequest(request, response).catch((error: unknown) => {
+      if (error instanceof Error && error.message === IDENTITY_LIFECYCLE_REQUIRES_V2) {
+        json(response, 409, { error: "identity_required", reason: "identity_upgrade_required" });
+        return;
+      }
       const requestId = attachRequestId(request, response);
       metrics.requestFailuresTotal += 1;
       logEvent({

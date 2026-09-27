@@ -64,6 +64,20 @@ T12 целиком остаётся открытой: первый срез за
 
 T01a-S2 — выдача server identity v2, безопасное восстановление и enforcement — **ещё не реализован**. Реальные устройства, включая выход из immersive XR при migration denial, в этой поставке не проверялись. Browser injection будущего denial DTO доказывает готовность UI, не серверную защиту от подмены identity.
 
+### T01a-S2a — серверные identity/recovery primitives, 2026-09-27
+
+Реализован [контракт хранения identity v2](../arch/2026-09-27-room-identity-storage.md): Node-only codec с HKDF-разделением ключей, identity без встроенных permissions, актуальная authority из storage, одноразовый room/role/expiry-bound recovery с хранением только хеша. При обновлении credential сохраняется identity ID; старый v1 JWT новый внутренний сервис не принимает.
+
+Добавлены одинаковые Memory/PostgreSQL операции, CAS передачи Host, проверка epoch внутри транзакции, защищённые неизменяемые поля и атомарное потребление recovery. Проверены восемь параллельных предъявлений одного секрета, конкурирующие transfer/recover/revoke, чужие scope, истечение срока, rollback при ошибке записи consumed marker и сохранение старых private notes при разрешённом администратором legacy recovery.
+
+После появления v2 authority старые записи owner/roomType/sessionControl/tenant отклоняются. Есть реальный SQL-тест ожидающего legacy UPDATE и проверка закреплённого старого build. Схема проверяет типы/NOT NULL, constraints, trigger source/metadata; сброс revision, consumed marker, epoch или удаление authority/tombstone при живой комнате запрещены. Первоначальная выдача Host ограничена revision 0; старый invite не позволяет занять освободившийся слот после передачи.
+
+Фокусные проверки codec/storage/API с настоящим PostgreSQL и rollback build: **33 passed**, без skip. Workspace lint/typecheck/build и package tests прошли: API **807**, shared-types **24**, runtime **920**. Финальный полный local E2E: **151/151** (45.3 min). Первый E2E запуск остановился на существующем 5 s ожидании ray в визуальном seat-marker test; повтор того же дерева прошёл без правок runtime или E2E assertions.
+
+API test files переведены на последовательный запуск: их fixtures делят database-wide migration advisory lock и при параллельном старте исчерпывали 120 s budget старого migration test. Явные конкурентные транзакции внутри тестов, включая восемь recovery attempts и гонку queued legacy UPDATE, сохранены.
+
+Этот срез пока не подключает новый сервис к issuance/refresh/WS и не объявляет public v2 capability; исходные anti-spoofing гарантии плана требуют единого S2b включения. Итоговые CI/staging результаты добавляются после gate.
+
 ## Публикация первого среза T01/T12
 
 Локально прошли workspace lint/typecheck/build/tests с PostgreSQL, затем runtime build и 905 runtime tests после финальных правок. Полный `pnpm test:e2e` на финальном исполняемом дереве: **148 passed**, без skip (41.6 min).

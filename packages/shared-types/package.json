@@ -13,6 +13,11 @@
       "types": "./src/session-token.ts",
       "import": "./dist/session-token.js",
       "default": "./dist/session-token.js"
+    },
+    "./identity-credential": {
+      "types": "./src/identity-credential.ts",
+      "import": "./dist/identity-credential.js",
+      "default": "./dist/identity-credential.js"
     }
   },
   "types": "./src/index.ts",

@@ -2,7 +2,7 @@
 
 ## Delivery boundary
 
-This is T01a-S1 of the working-meeting plan: deliver a usable update/rejoin path **before** enforcing identity v2. S1 adds no identity issuance, identity credential, publisher authority, plugin endpoint, or v2 capability advertisement. The legacy server still issues the existing sessions. Server-side identity security remains T01a-S2.
+This is T01a-S1 of the working-meeting plan: deliver a usable update/rejoin path **before** enforcing identity v2. S1 adds no identity issuance, identity credential, publisher authority, plugin endpoint, or v2 capability advertisement. The legacy server still issues the existing sessions. Server-side foundations are described in [T01a-S2a](2026-09-27-room-identity-storage.md); coordinated public activation remains S2b.
 
 The shared contract is in `packages/shared-types/src/identity-upgrade.ts`. Future server enforcement must use these exact signals so already-open S1 clients can stop gracefully.
 

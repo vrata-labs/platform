@@ -276,6 +276,7 @@ export interface XrTelemetryEventRecord {
 }
 
 export interface Storage {
+  readonly roomIdentities: import("./identity/contracts.js").RoomIdentityStorage;
   listTenants(): Promise<TenantRecord[]>;
   createTenant(input: Partial<TenantRecord>): Promise<TenantRecord>;
   updateTenant(tenantId: string, input: Partial<TenantRecord>): Promise<TenantRecord | null>;

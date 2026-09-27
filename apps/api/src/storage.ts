@@ -50,6 +50,10 @@ import type {
 import { ensureNamedForeignKey, installTemplateVersionImmutabilityTrigger } from "./storage-postgres-guards.js";
 import { assertRoomTemplatePatch, materializeStoredRoomInput } from "./room-template-policy.js";
 import { transitionPostgresReferenceCatalog } from "./storage-template-catalog.js";
+import { createMemoryRoomIdentities } from "./identity/memory.js";
+import { createPostgresRoomIdentities } from "./identity/postgres.js";
+import { installRoomIdentitySchema } from "./identity/postgres-schema.js";
+import { identityLifecycleChanged, IDENTITY_LIFECYCLE_REQUIRES_V2 } from "./identity/lifecycle.js";
 
 export { initPostgresStorageWithRetry } from "./storage-init-retry.js";
 
@@ -173,6 +177,12 @@ export class MemoryStorage implements Storage {
   private waitingRoomRequests = new Map<string, WaitingRoomRequestRecord>();
   private roomNotes = new Map<string, RoomNoteRecord>();
   private roomNoteVersions = new Map<string, RoomNoteVersionRecord[]>();
+  private readonly identityAdapter: ReturnType<typeof createMemoryRoomIdentities>;
+  readonly roomIdentities: Storage["roomIdentities"];
+  constructor(identityNow = Date.now) {
+    this.identityAdapter = createMemoryRoomIdentities(roomId => this.rooms.get(roomId), identityNow);
+    this.roomIdentities = this.identityAdapter.storage;
+  }
 
   private sceneBundleKey(bundleId: string, version: string): string {
     return `${bundleId}::${version}`;
@@ -280,6 +290,7 @@ export class MemoryStorage implements Storage {
       personalState: defaultPersonalState(input.personalState)
     };
     const room = bindRoomTemplateMetadata(roomWithoutTemplateMetadata, versionSnapshot);
+    if (this.identityAdapter.hasRoomBindings(room.roomId)) throw new Error(IDENTITY_LIFECYCLE_REQUIRES_V2);
     this.rooms.set(room.roomId, structuredClone(room));
     return structuredClone(room);
   }
@@ -330,10 +341,14 @@ export class MemoryStorage implements Storage {
       updatedWithoutTemplateMetadata,
       this.requireTemplateVersion(existing.templateId, existing.templateVersion)
     );
+    if (this.identityAdapter.hasRoomBindings(roomId) && identityLifecycleChanged(existing, updated)) {
+      throw new Error(IDENTITY_LIFECYCLE_REQUIRES_V2);
+    }
     this.rooms.set(roomId, structuredClone(updated));
     return structuredClone(updated);
   }
   async deleteRoom(roomId: string): Promise<boolean> {
+    this.identityAdapter.deleteRoom(roomId);
     return this.rooms.delete(roomId);
   }
   async createRoomInvite(input: Omit<RoomInviteRecord, "inviteId" | "createdAt" | "revokedAt" | "revokedBy"> & { inviteId?: string; createdAt?: string }): Promise<RoomInviteRecord> {
@@ -663,7 +678,8 @@ export class MemoryStorage implements Storage {
 }
 
 export class PostgresStorage implements Storage {
-  constructor(private readonly pool: Pool) {}
+  readonly roomIdentities: Storage["roomIdentities"];
+  constructor(private readonly pool: Pool, identityNow = Date.now) { this.roomIdentities = createPostgresRoomIdentities(pool, identityNow); }
 
   async init(): Promise<void> {
     const client = await this.pool.connect();
@@ -841,6 +857,7 @@ export class PostgresStorage implements Storage {
         metadata jsonb not null default '{}'::jsonb
       );
     `);
+    await installRoomIdentitySchema(client);
     await client.query(`create index if not exists xr_telemetry_room_id_id_idx on xr_telemetry (room_id, id)`);
     await client.query(`create unique index if not exists room_notes_room_scope_owner_idx on room_notes (room_id, scope, coalesce(owner_participant_id, ''))`);
     await client.query(`create index if not exists room_note_versions_note_created_idx on room_note_versions (note_id, created_at desc)`);
@@ -1304,6 +1321,10 @@ export class PostgresStorage implements Storage {
     const existing = await this.getRoom(roomId);
     if (!existing) {
       return null;
+    }
+    if (input.tenantId !== undefined && input.tenantId !== existing.tenantId) {
+      const bindings = await this.pool.query(`select 1 from room_identity_authority_v2 where tenant_id=$1 and room_id=$2`, [existing.tenantId, roomId]);
+      if (bindings.rowCount) throw new Error(IDENTITY_LIFECYCLE_REQUIRES_V2);
     }
     assertRoomTemplatePatch(existing, input);
     if (
