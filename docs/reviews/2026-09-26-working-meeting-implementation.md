@@ -1,7 +1,7 @@
 # Рабочая встреча и room plugins: журнал реализации
 
 Исходный план: `2026-09-25-working-meeting-and-room-plugins.md`.
-Дата начала: 2026-09-26; обновлено 2026-09-27. **Первый срез T01 + исправление upload feedback из T12 опубликован и проверен.** Реализация идёт срезами; готовность всей встречи и внешних плагинов не заявляется.
+Дата начала: 2026-09-26; обновлено 2026-09-27. **Опубликованы T01, исправление upload feedback из T12 и предварительный update/rejoin клиент T01a-S1.** Реализация идёт срезами; готовность всей встречи и внешних плагинов не заявляется.
 
 ## T01 — объединённый baseline
 
@@ -48,9 +48,23 @@ T12 целиком остаётся открытой: первый срез за
 
 Выявленная при проверке гонка shared/private editor устранена в notes runtime: dirty текст сохраняется под исходным scope до переключения; отказ сохраняет правильную принадлежность черновика. Cleanup failure не скрывает migration dialog и не пропускает media disconnect.
 
-Локально S1: workspace lint/typecheck/build/tests с PostgreSQL и pinned rollback build прошли; после финальных правок runtime build/test — **920/920**, полный `pnpm test:e2e` — **151/151** без skip (33.0 min). Публикация и exact-SHA результаты S1 записываются после завершения gate.
+Локально S1: workspace lint/typecheck/build/tests с PostgreSQL и pinned rollback build прошли; runtime build/test — **920/920**. После окончательных изменений тестов полный `pnpm test:e2e` — **151/151** без skip (24.1 min).
 
-## Публикация
+| Этап T01a-S1 | Результат |
+|---|---|
+| Feature commit | `331860ae924e2bd88815baa657f100bdf332078c` |
+| Итоговый опубликованный SHA | `22f38013d8242d13c752f03e29fc46d6265368b1` |
+| [CI 36317985145](https://github.com/vrata-labs/platform/actions/runs/36317985145) | Success, включая полный local E2E и pinned asset checks |
+| [Docker Publish 36317986588](https://github.com/vrata-labs/platform/actions/runs/36317986588) | Success, immutable images exact SHA |
+| [Staging Deploy 36319499448](https://github.com/vrata-labs/platform/actions/runs/36319499448) | Success с первой попытки: **51/51 staging E2E**, **1/1 blocking Rutube**, successful SHA сохранён |
+
+[Артефакт staging gate](https://github.com/vrata-labs/platform/actions/runs/36319499448/artifacts/10932750976) подтверждает все три migration UI сценария без retry, Host PDF upload/download, полный public-demo, Hall/BlueOffice/ArtGallery loaded и completed cleanup disposable demo room. Дополнительный public smoke: `/health`, `/rooms/demo-room`, `/control-plane`, `/api/templates` — 200. HTML комнаты и control plane возвращает `Cache-Control: no-cache`.
+
+Предварительные Staging Deploy 36305828734 attempts 1–2 завершились 50/51 на старом muted audio join assertion; оба rollback успешно вернули `3912f70`. Измеренное влияние software rendering и последующие исправления синхронизации наблюдений описаны в [разборе functional render budget](2026-09-27-public-demo-render-budget.md). CI 36311907099 выявил две ошибки наблюдения: snapshot предыдущего кресла и слишком короткое ожидание guest PDF после 403; они исправлены отдельными test commits. Последний CI и staging gate прошли без повторов; последний rollback не запускался.
+
+T01a-S2 — выдача server identity v2, безопасное восстановление и enforcement — **ещё не реализован**. Реальные устройства, включая выход из immersive XR при migration denial, в этой поставке не проверялись. Browser injection будущего denial DTO доказывает готовность UI, не серверную защиту от подмены identity.
+
+## Публикация первого среза T01/T12
 
 Локально прошли workspace lint/typecheck/build/tests с PostgreSQL, затем runtime build и 905 runtime tests после финальных правок. Полный `pnpm test:e2e` на финальном исполняемом дереве: **148 passed**, без skip (41.6 min).
 
