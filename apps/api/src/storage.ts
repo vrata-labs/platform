@@ -857,7 +857,6 @@ export class PostgresStorage implements Storage {
         metadata jsonb not null default '{}'::jsonb
       );
     `);
-    await installRoomIdentitySchema(client);
     await client.query(`create index if not exists xr_telemetry_room_id_id_idx on xr_telemetry (room_id, id)`);
     await client.query(`create unique index if not exists room_notes_room_scope_owner_idx on room_notes (room_id, scope, coalesce(owner_participant_id, ''))`);
     await client.query(`create index if not exists room_note_versions_note_created_idx on room_note_versions (note_id, created_at desc)`);
@@ -901,6 +900,7 @@ export class PostgresStorage implements Storage {
     await client.query(`alter table rooms alter column session_control set default '${DEFAULT_SESSION_CONTROL_JSON}'::jsonb`);
     await client.query(`update rooms set session_control = '${DEFAULT_SESSION_CONTROL_JSON}'::jsonb where session_control is null`);
     await client.query(`update rooms set session_control = '${DEFAULT_SESSION_CONTROL_JSON}'::jsonb || session_control`);
+    await installRoomIdentitySchema(client);
     await client.query(`alter table scene_bundles add column if not exists status text not null default 'active'`);
     await client.query(`alter table scene_bundles add column if not exists is_current boolean not null default true`);
     await client.query(`alter table scene_bundles add column if not exists schema_version integer`);
