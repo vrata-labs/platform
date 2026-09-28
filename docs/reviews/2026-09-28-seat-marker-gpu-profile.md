@@ -80,4 +80,8 @@ confirmed the free/hovered marker and its disappearance on authoritative
 occupancy in both rooms. API build and all 807 API tests, including PostgreSQL
 legacy migration and the pinned rollback build, passed; workspace lint and
 typecheck passed. Final full-suite and deployed-SHA results are recorded in the
-[implementation journal](2026-09-26-working-meeting-implementation.md).
+[implementation journal](2026-09-26-working-meeting-implementation.md): full local
+E2E 151/151 and published `954a976af3d7352fa54ce1454f63ecc1d082694d` staging gate
+51/51 plus Rutube canary 1/1. Both marker scenarios passed in each staging
+attempt. The first gate rolled back for a separate control-plane gallery timeout;
+the second attempt verified the same SHA without any source or deadline changes.

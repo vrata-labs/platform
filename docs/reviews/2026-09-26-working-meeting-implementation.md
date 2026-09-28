@@ -89,7 +89,24 @@ API test files переведены на последовательный зап
 
 Последующая проверка обнаружила порядок миграции для очень старой схемы: identity triggers должны устанавливаться после добавления и нормализации `rooms.session_control`. Regression fixture теперь действительно начинается без этой колонки. Повторяющиеся задержки прежнего visual E2E отдельно исследованы в [CPU/GPU-профиле](2026-09-28-seat-marker-gpu-profile.md).
 
-Локальная проверка этой корректировки и изоляции software-GPU очередей участников visual E2E: workspace lint/typecheck, API build и **807/807 API tests** с PostgreSQL/pinned rollback, **3/3 focused marker tests**, затем полный `pnpm test:e2e` — **151/151**, без skip/retry (24.9 min). Runtime, качество изображения, deadlines и assertions сценариев сохранены. Статус публикации корректировки фиксируется отдельно от уже принятого `d82052e`.
+Локальная проверка этой корректировки и изоляции software-GPU очередей участников visual E2E: workspace lint/typecheck, API build и **807/807 API tests** с PostgreSQL/pinned rollback, **3/3 focused marker tests**, затем полный `pnpm test:e2e` — **151/151**, без skip/retry (24.9 min). Runtime, качество изображения, deadlines и assertions сценариев сохранены.
+
+#### Публикация корректировки, 2026-09-28
+
+| Этап | Результат |
+|---|---|
+| Legacy migration commit | `04d28a2` |
+| Итоговый опубликованный SHA | `954a976af3d7352fa54ce1454f63ecc1d082694d` |
+| [CI 36445814337](https://github.com/vrata-labs/platform/actions/runs/36445814337) | Success с первой попытки, включая полный E2E, M0.5 и pinned asset checks |
+| [Docker Publish 36445815313](https://github.com/vrata-labs/platform/actions/runs/36445815313) | Success с первой попытки, immutable images exact SHA |
+| [Staging Deploy 36448517194, attempt 2](https://github.com/vrata-labs/platform/actions/runs/36448517194/attempts/2) | Success: **51/51 staging E2E**, без skip/retry (29.0 min); successful SHA сохранён; rollback skipped |
+| Rutube canary того же run | **1/1**, без skip/retry; отдельный non-blocking canary согласно пути изменений |
+
+[Артефакт gate](https://github.com/vrata-labs/platform/actions/runs/36448517194/artifacts/10985861541) подтверждает обе visual occupancy проверки, owner-bound workspace, public-demo с настоящим LiveKit, собственным Host PDF и completed cleanup (documents deleted, invites revoked, session ended, room/tenant deleted). Hall/BlueOffice/ArtGallery достигли loaded на текущих страницах. [Артефакт canary](https://github.com/vrata-labs/platform/actions/runs/36448517194/artifacts/10986356063). После gate `/health`, `/rooms/demo-room`, `/control-plane`, `/api/templates` — 200.
+
+**Первый attempt и откат:** 49 passed, 1 flaky, 1 failed. Обе проверки маркеров прошли. Reference UI test получил 0 `.template-card` вместо 3 за 5 s; snapshot показывал `admin-token-pending` и незаполненные каталоги. Отдельный прежний remote mock VR hands test исчерпал 45 s и прошёл свой предусмотренный retry. Штатный rollback вернул `d82052ed711eaf6eeb7fcea28bd4f0889a64f8b0`, подтвердил image tag, восстановил оба scene URL и прошёл smoke. После него публичные API/control-plane отвечали 200. Выполнен один полный повтор того же SHA, без изменений кода, deadlines и assertions; он прошёл целиком.
+
+Причина первого gallery bootstrap stall не установлена: network trace этого запроса отсутствует. Успешный повтор не считается исправлением галереи или flaky hands test. В проверках устойчивости T17 остаётся сбор network/bootstrap timing при повторении gallery stall и сохранение исходной ошибки при timeout/cleanup remote-hands сценария.
 
 ## Публикация первого среза T01/T12
 
