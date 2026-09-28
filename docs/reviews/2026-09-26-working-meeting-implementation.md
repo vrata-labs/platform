@@ -1,7 +1,7 @@
 # Рабочая встреча и room plugins: журнал реализации
 
 Исходный план: `2026-09-25-working-meeting-and-room-plugins.md`.
-Дата начала: 2026-09-26; обновлено 2026-09-27. **Опубликованы T01, исправление upload feedback из T12 и предварительный update/rejoin клиент T01a-S1.** Реализация идёт срезами; готовность всей встречи и внешних плагинов не заявляется.
+Дата начала: 2026-09-26; обновлено 2026-09-28. **Опубликованы T01, исправление upload feedback из T12, предварительный update/rejoin клиент T01a-S1 и server identity/recovery foundations T01a-S2a.** Реализация идёт срезами; готовность всей встречи и внешних плагинов не заявляется.
 
 ## T01 — объединённый baseline
 
@@ -76,7 +76,20 @@ T01a-S2 — выдача server identity v2, безопасное восстан
 
 API test files переведены на последовательный запуск: их fixtures делят database-wide migration advisory lock и при параллельном старте исчерпывали 120 s budget старого migration test. Явные конкурентные транзакции внутри тестов, включая восемь recovery attempts и гонку queued legacy UPDATE, сохранены.
 
-Этот срез пока не подключает новый сервис к issuance/refresh/WS и не объявляет public v2 capability; исходные anti-spoofing гарантии плана требуют единого S2b включения. Итоговые CI/staging результаты добавляются после gate.
+Этот срез пока не подключает новый сервис к issuance/refresh/WS и не объявляет public v2 capability; исходные anti-spoofing гарантии плана требуют единого S2b включения.
+
+| Этап T01a-S2a | Результат |
+|---|---|
+| Опубликованный SHA | `d82052ed711eaf6eeb7fcea28bd4f0889a64f8b0` |
+| [CI 36346434992](https://github.com/vrata-labs/platform/actions/runs/36346434992) | Success |
+| [Docker Publish 36346437663](https://github.com/vrata-labs/platform/actions/runs/36346437663) | Success, immutable images exact SHA |
+| [Staging Deploy 36348405958](https://github.com/vrata-labs/platform/actions/runs/36348405958) | Success с первой попытки: **51/51 staging E2E**, **1/1 blocking Rutube**, successful SHA сохранён, rollback skipped |
+
+[Артефакт staging gate](https://github.com/vrata-labs/platform/actions/runs/36348405958/artifacts/10942470804) подтверждает public-demo cleanup и Hall/BlueOffice/ArtGallery loaded. Дополнительный public smoke: `/health`, `/rooms/demo-room`, `/control-plane`, `/api/templates` — 200.
+
+Последующая проверка обнаружила порядок миграции для очень старой схемы: identity triggers должны устанавливаться после добавления и нормализации `rooms.session_control`. Regression fixture теперь действительно начинается без этой колонки. Повторяющиеся задержки прежнего visual E2E отдельно исследованы в [CPU/GPU-профиле](2026-09-28-seat-marker-gpu-profile.md).
+
+Локальная проверка этой корректировки и изоляции software-GPU очередей участников visual E2E: workspace lint/typecheck, API build и **807/807 API tests** с PostgreSQL/pinned rollback, **3/3 focused marker tests**, затем полный `pnpm test:e2e` — **151/151**, без skip/retry (24.9 min). Runtime, качество изображения, deadlines и assertions сценариев сохранены. Статус публикации корректировки фиксируется отдельно от уже принятого `d82052e`.
 
 ## Публикация первого среза T01/T12
 

@@ -1,4 +1,4 @@
-import { expect, test, type Page, type TestInfo } from "@playwright/test";
+import { expect, test, type Browser, type Page, type TestInfo } from "@playwright/test";
 import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, resolve, sep } from "node:path";
@@ -91,7 +91,7 @@ for (const staging of [false, true]) test.describe(`${staging ? "@staging " : ""
   test.afterAll(async () => { test.setTimeout(120000); await fixture?.close(); });
 
   for (const templateId of ["meeting-room-basic", "presentation-room-basic"]) {
-    test(`${templateId}: centre ray, authoritative occupancy, hidden marker and release`, async ({ page, request, browser }, testInfo) => {
+    test(`${templateId}: centre ray, authoritative occupancy, hidden marker and release`, async ({ page, request, browser, launchOptions, headless, channel }, testInfo) => {
       test.skip(!fixture, "Local reference checks require VRATA_TEST_POSTGRES_URL (provided by CI)");
       test.setTimeout(300000);
       const headers = { "x-vrata-admin-token": token! };
@@ -101,12 +101,16 @@ for (const staging of [false, true]) test.describe(`${staging ? "@staging " : ""
       expect(response.status()).toBe(201);
       const room = await response.json();
       const roomUrl = `${room.roomLink}?debug=1&scenefit=0&onboard=0`;
-      const observerContext = await browser.newContext({ viewport: { width: 640, height: 480 } });
-      const observer = await observerContext.newPage();
+      let observerBrowser: Browser | undefined;
       const errors: string[] = [];
       page.on("pageerror", error => errors.push(error.message));
-      observer.on("pageerror", error => errors.push(error.message));
       try {
+        // Isolate participants' software-GPU queues while both clients render.
+        // See docs/reviews/2026-09-28-seat-marker-gpu-profile.md for the measured
+        // shared-process stalls. Resolution, runtime and interaction deadlines stay intact.
+        observerBrowser = await browser.browserType().launch({ ...launchOptions, headless, channel });
+        const observer = await observerBrowser.newPage({ viewport: { width: 640, height: 480 } });
+        observer.on("pageerror", error => errors.push(error.message));
         await page.setViewportSize({ width: 640, height: 480 });
         const manifestResponse = page.waitForResponse(value => /\/scene\.json(?:[?#]|$)/.test(value.url()));
         await join(page, roomUrl);
@@ -151,7 +155,7 @@ for (const staging of [false, true]) test.describe(`${staging ? "@staging " : ""
         await testInfo.attach("room-review-settings", { body: JSON.stringify({ staging, templateId, seat, reviewPose, initial, fixture: fixture!.fixtureFingerprint, errors }, null, 2), contentType: "application/json" });
         expect(errors).toEqual([]);
       } finally {
-        await observerContext.close();
+        await observerBrowser?.close();
         // The per-test request fixture can already be closed after a test timeout.
         const deleted = await fetch(new URL(`/api/rooms/${room.roomId}`, fixture!.origin), {
           method: "DELETE", headers, signal: AbortSignal.timeout(15000)
