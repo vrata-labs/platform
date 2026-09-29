@@ -191,6 +191,9 @@ import { createRemoteBrowserVideoRuntime, type RemoteBrowserVideoEntry } from ".
 import { createScreenShareRuntime, resolveScreenShareSubscriptionCount, type ScreenShareRuntimeEntry } from "./media/screen-share-runtime.js";
 import { createMediaSurfaceAudioRuntime, type MediaSurfaceAudioNode } from "./media/media-surface-audio-runtime.js";
 import { createDocumentSurfaceActions } from "./document-surface-actions.js";
+import { createDocumentLibraryRuntime } from "./document-library-runtime.js";
+import { createDocumentSurfaceView } from "./document-surface-view.js";
+import { bindDocumentControls } from "./document-control-bindings.js";
 
 function fallbackUuid(): string {
   return `guest-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
@@ -1221,10 +1224,7 @@ let joinMutedPreference = templatePreferences.joinMuted();
 const notesState = createNotesRuntimeState(templatePreferences.notesScope());
 let roomDocuments: RuntimeDocumentRecord[] = [];
 let selectedDocumentId = getStoredValue(localStorage, `vrata.documents.selected.${roomId}`, `noah.documents.selected.${roomId}`) ?? "";
-let documentsLoading = false;
-let documentUploadInFlight = false;
 let presentationActionInFlight = false;
-let presentationThumbnailSignature = "";
 joinMutedCheckbox.checked = joinMutedPreference;
 guestJoinMutedCheckbox.checked = templatePreferences.joinMuted(true);
 notesScopeSelect.value = notesState.activeNotesScope;
@@ -4225,315 +4225,48 @@ function downloadBlob(blob: Blob, filename: string): void {
   window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
 }
 
-function canViewDocuments(): boolean {
-  return runtimeFlags.documentsEnabled && hasRoomPermission(debugState.access.permissions, "document.view");
-}
+const {
+  canViewDocuments, canPresentDocuments, selectedDocument, documentErrorCode, setDocumentStatus,
+  renderDocumentsUi, loadRoomDocuments, uploadSelectedDocument,
+  downloadSelectedDocument, deleteSelectedDocument
+} = createDocumentLibraryRuntime({
+  apiBaseUrl, roomId, debugState, documentsPanelEl, documentUploadInput,
+  documentUploadButton, documentSelect, documentDownloadButton,
+  documentSurfaceButton, documentDeleteButton, documentStatusEl,
+  // Surface views are composed next; resolve them only when rendering.
+  renderPresentationControls: () => renderPresentationControls(),
+  renderDocumentMediaControls: () => renderDocumentMediaControls(),
+  listRoomDocuments, uploadRoomDocument, downloadRoomDocument,
+  deleteRoomDocument, probeDocumentMedia,
+  get runtimeFlags() { return runtimeFlags; },
+  get roomStateConnected() { return roomStateConnected; },
+  get roomStateAccessToken() { return roomStateAccessToken; },
+  get presentationActionInFlight() { return presentationActionInFlight; },
+  get roomDocuments() { return roomDocuments; },
+  set roomDocuments(value) { roomDocuments = value; },
+  get selectedDocumentId() { return selectedDocumentId; },
+  set selectedDocumentId(value) { selectedDocumentId = value; }
+});
 
-function canUploadDocuments(): boolean {
-  return canViewDocuments() && hasRoomPermission(debugState.access.permissions, "document.upload");
-}
-
-function canDownloadDocuments(): boolean {
-  return canViewDocuments() && hasRoomPermission(debugState.access.permissions, "document.download");
-}
-
-function canDeleteDocuments(): boolean {
-  return canViewDocuments() && hasRoomPermission(debugState.access.permissions, "document.delete");
-}
-
-function canPresentDocuments(): boolean {
-  return canViewDocuments() && roomStateConnected && hasRoomPermission(debugState.access.permissions, "document.present");
-}
-
-function selectedDocument(): RuntimeDocumentRecord | null {
-  return roomDocuments.find((document) => document.documentId === selectedDocumentId) ?? roomDocuments[0] ?? null;
-}
-
-function documentErrorCode(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
-  return message.split(":").slice(0, 3).join(":") || "document_error";
-}
-
-function setDocumentStatus(message: string, errorCode: string | null = null): void {
-  documentStatusEl.textContent = message;
-  const selected = selectedDocument();
-  debugState.documents = {
-    enabled: runtimeFlags.documentsEnabled,
-    count: roomDocuments.length,
-    selectedDocumentId: selected?.documentId ?? "",
-    selectedFilename: selected?.filename ?? null,
-    selectedSurfaceId: selected?.linkedSurfaceId ?? null,
-    lastStatus: message,
-    errorCode
-  };
-}
-
-function presentationInputEventId(kind: string): string {
-  return `${participantId}:pdf-presentation:${kind}:${Date.now()}:${Math.random().toString(16).slice(2)}`;
-}
-
-function documentMediaInputEventId(kind: string): string {
-  return `${participantId}:document-media:${kind}:${Date.now()}:${Math.random().toString(16).slice(2)}`;
-}
-
-function formatMediaTime(milliseconds: number): string {
-  const seconds = Math.max(0, Math.round(milliseconds / 1000));
-  return `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
-}
-
-function currentVideoPositionMs(state: VideoPlayerState): number {
-  const elapsed = state.playbackState === "playing" && state.anchorServerTimeMs !== null
-    ? Math.max(0, Date.now() + roomStateServerOffsetMs - state.anchorServerTimeMs)
-    : 0;
-  const position = state.positionMs + elapsed;
-  return state.loop && state.durationMs > 0 ? position % state.durationMs : Math.min(position, state.durationMs);
-}
-
-function renderDocumentMediaControls(): void {
-  const image = currentImageViewerObject();
-  const video = currentVideoPlayerObject();
-  const object = video ?? image;
-  const active = Boolean(object?.state.status === "active" && object.state.documentId);
-  documentMediaControlsEl.hidden = !active;
-  if (!object || !active) {
-    documentMediaStatusEl.textContent = "Media idle";
-    return;
-  }
-  const canPresent = canPresentDocuments() && !presentationActionInFlight;
-  const state = object.state;
-  documentMediaTitleEl.textContent = `${video ? "Video" : "Image"}: ${state.filename ?? "media"}`;
-  documentMediaFitButton.disabled = !canPresent;
-  documentMediaFitButton.textContent = state.fitMode === "contain" ? "Cover" : "Contain";
-  documentMediaStopButton.disabled = !canPresent;
-  documentMediaPlayButton.hidden = !video;
-  documentMediaLoopLabel.hidden = !video;
-  documentMediaSeekInput.hidden = !video;
-  documentMediaTimeEl.hidden = !video;
-  documentMediaPlayButton.disabled = !canPresent || !video;
-  documentMediaLoopInput.disabled = !canPresent || !video;
-  documentMediaSeekInput.disabled = !canPresent || !video;
-  if (video) {
-    const positionMs = currentVideoPositionMs(video.state);
-    documentMediaPlayButton.textContent = video.state.playbackState === "playing" ? "Pause" : "Play";
-    documentMediaLoopInput.checked = video.state.loop;
-    documentMediaSeekInput.max = String(video.state.durationMs);
-    documentMediaSeekInput.value = String(Math.round(positionMs));
-    documentMediaTimeEl.textContent = `${formatMediaTime(positionMs)} / ${formatMediaTime(video.state.durationMs)}`;
-  }
-}
-
-function renderPresentationThumbnails(object: MediaObjectInstance<PdfPresentationState>): void {
-  const signature = `${object.objectId}:${object.state.documentId}:${object.state.pageCount}`;
-  if (signature !== presentationThumbnailSignature) {
-    presentationThumbnailSignature = signature;
-    presentationThumbnailsEl.replaceChildren();
-    const thumbnailCount = Math.min(object.state.pageCount, 50);
-    const runtime = getPdfPresentationRuntime(object.surfaceId);
-    for (let page = 1; page <= thumbnailCount; page += 1) {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "presentation-thumbnail";
-      button.dataset.page = String(page);
-      button.disabled = !canPresentDocuments();
-      button.setAttribute("aria-label", `Show page ${page}`);
-      const canvas = document.createElement("canvas");
-      canvas.width = 64;
-      canvas.height = 48;
-      const label = document.createElement("span");
-      label.textContent = String(page);
-      button.append(canvas, label);
-      button.addEventListener("click", () => void goToPresentationPage(page));
-      presentationThumbnailsEl.append(button);
-      void runtime.renderThumbnail(page, canvas);
-    }
-  }
-  for (const button of Array.from(presentationThumbnailsEl.querySelectorAll<HTMLButtonElement>(".presentation-thumbnail"))) {
-    button.disabled = !canPresentDocuments() || presentationActionInFlight;
-    if (Number(button.dataset.page) === object.state.currentPage) button.setAttribute("aria-current", "page");
-    else button.removeAttribute("aria-current");
-  }
-}
-
-function renderPresentationControls(): void {
-  const object = currentPdfPresentationObject();
-  const active = Boolean(object?.state.status === "active" && object.state.documentId);
-  presentationControlsEl.hidden = !active;
-  if (!object || !active) {
-    presentationThumbnailSignature = "";
-    presentationThumbnailsEl.replaceChildren();
-    presentationStatusEl.textContent = "Presentation idle";
-    debugState.pdfPresentation = {
-      surfaceId: selectedMediaSurfaceId,
-      objectId: null,
-      documentId: null,
-      page: 1,
-      pageCount: 0,
-      displayMode: "normal",
-      loadState: "idle",
-      renderState: "idle",
-      lastRenderMs: null,
-      renderedThumbnailCount: 0,
-      errorCode: null,
-      errorDetail: null
-    };
-    return;
-  }
-  const canPresent = canPresentDocuments() && !presentationActionInFlight;
-  presentationPageLabel.textContent = `Page ${object.state.currentPage} / ${object.state.pageCount}`;
-  presentationPrevButton.disabled = !canPresent || object.state.currentPage <= 1;
-  presentationNextButton.disabled = !canPresent || object.state.currentPage >= object.state.pageCount;
-  presentationLargeButton.disabled = !canPresent;
-  presentationLargeButton.setAttribute("aria-pressed", String(object.state.displayMode === "large"));
-  presentationLargeButton.textContent = object.state.displayMode === "large" ? "Normal mode" : "Large mode";
-  presentationStopButton.disabled = !canPresent;
-  renderPresentationThumbnails(object);
-  const runtimeDebug = getPdfPresentationRuntime(object.surfaceId).createDebugSnapshot();
-  debugState.pdfPresentation = runtimeDebug;
-  if (runtimeDebug.renderState === "ready") {
-    presentationStatusEl.textContent = `Presenting ${object.state.filename ?? "PDF"}, page ${object.state.currentPage} of ${object.state.pageCount}`;
-  }
-}
-
-function renderDocumentsUi(message?: string): void {
-  const visible = canViewDocuments();
-  documentsPanelEl.hidden = !visible;
-  if (!visible) {
-    documentUploadInput.disabled = true;
-    documentUploadButton.disabled = true;
-    documentSelect.disabled = true;
-    documentDownloadButton.disabled = true;
-    documentSurfaceButton.disabled = true;
-    documentDeleteButton.disabled = true;
-    setDocumentStatus(runtimeFlags.documentsEnabled ? "Documents permission required" : "Documents disabled");
-    return;
-  }
-
-  const selected = selectedDocument();
-  if (selected && selected.documentId !== selectedDocumentId) {
-    selectedDocumentId = selected.documentId;
-    localStorage.setItem(`vrata.documents.selected.${roomId}`, selectedDocumentId);
-  }
-  documentSelect.replaceChildren(
-    ...(roomDocuments.length > 0
-      ? roomDocuments.map((doc) => {
-        const option = document.createElement("option");
-        option.value = doc.documentId;
-        const detail = doc.metadata?.pageCount
-          ? ` · ${doc.metadata.pageCount} pages`
-          : doc.metadata?.widthPx && doc.metadata?.heightPx ? ` · ${doc.metadata.widthPx}×${doc.metadata.heightPx}` : "";
-        option.textContent = `${doc.filename}${detail} (${Math.ceil(doc.sizeBytes / 1024)} KB)`;
-        option.selected = doc.documentId === selectedDocumentId;
-        return option;
-      })
-      : [new Option("No documents", "")])
-  );
-  documentUploadInput.disabled = !canUploadDocuments() || documentsLoading || documentUploadInFlight;
-  documentUploadButton.disabled = !canUploadDocuments() || documentsLoading || documentUploadInFlight;
-  documentSelect.disabled = documentsLoading || roomDocuments.length === 0;
-  documentDownloadButton.disabled = !selected || !canDownloadDocuments() || documentsLoading;
-  documentSurfaceButton.disabled = !selected || !["pdf", "image", "video"].includes(selected.metadata?.kind ?? "") || !canPresentDocuments() || documentsLoading || presentationActionInFlight;
-  documentDeleteButton.disabled = !selected || !canDeleteDocuments() || documentsLoading;
-  setDocumentStatus(message ?? (roomDocuments.length > 0 ? `Documents ready: ${roomDocuments.length}` : "No room documents yet"));
-  renderPresentationControls();
-  renderDocumentMediaControls();
-}
-
-async function loadRoomDocuments(): Promise<void> {
-  if (!runtimeFlags.documentsEnabled || !canViewDocuments()) {
-    renderDocumentsUi();
-    return;
-  }
-  documentsLoading = true;
-  renderDocumentsUi("Documents loading...");
-  try {
-    roomDocuments = await listRoomDocuments(apiBaseUrl, roomId, roomStateAccessToken);
-    if (selectedDocumentId && !roomDocuments.some((document) => document.documentId === selectedDocumentId)) {
-      selectedDocumentId = "";
-      localStorage.removeItem(`vrata.documents.selected.${roomId}`);
-    }
-    renderDocumentsUi();
-  } catch (error) {
-    console.warn("documents_load_failed", error);
-    setDocumentStatus("Documents unavailable", documentErrorCode(error));
-  } finally {
-    documentsLoading = false;
-    renderDocumentsUi(documentStatusEl.textContent || undefined);
-  }
-}
-
-async function uploadSelectedDocument(): Promise<void> {
-  const file = documentUploadInput.files?.[0];
-  if (!file) {
-    setDocumentStatus("Choose a document first");
-    return;
-  }
-  if (!canUploadDocuments()) {
-    renderDocumentsUi("Document upload permission required");
-    return;
-  }
-  documentUploadInFlight = true;
-  renderDocumentsUi("Uploading document...");
-  try {
-    const mediaProbe = await probeDocumentMedia(file);
-    const uploadedDocument = await uploadRoomDocument(apiBaseUrl, roomId, roomStateAccessToken, file, mediaProbe ? {
-      widthPx: mediaProbe.widthPx,
-      heightPx: mediaProbe.heightPx,
-      durationMs: mediaProbe.durationMs
-    } : undefined);
-    roomDocuments = [uploadedDocument, ...roomDocuments.filter((item) => item.documentId !== uploadedDocument.documentId)];
-    selectedDocumentId = uploadedDocument.documentId;
-    localStorage.setItem(`vrata.documents.selected.${roomId}`, selectedDocumentId);
-    documentUploadInput.value = "";
-    renderDocumentsUi(`Document uploaded: ${uploadedDocument.filename}`);
-  } catch (error) {
-    console.warn("document_upload_failed", error);
-    setDocumentStatus(`Document upload failed: ${documentErrorCode(error)}`, documentErrorCode(error));
-  } finally {
-    documentUploadInFlight = false;
-    renderDocumentsUi(documentStatusEl.textContent || undefined);
-  }
-}
-
-async function downloadSelectedDocument(): Promise<void> {
-  const selected = selectedDocument();
-  if (!selected) return;
-  try {
-    setDocumentStatus("Downloading document...");
-    const download = await downloadRoomDocument(apiBaseUrl, selected, roomStateAccessToken);
-    const objectUrl = URL.createObjectURL(download.blob);
-    const link = document.createElement("a");
-    link.href = objectUrl;
-    link.download = download.filename;
-    document.body.append(link);
-    link.click();
-    link.remove();
-    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
-    setDocumentStatus(`Document downloaded: ${download.filename}`);
-  } catch (error) {
-    console.warn("document_download_failed", error);
-    setDocumentStatus(`Document download failed: ${documentErrorCode(error)}`, documentErrorCode(error));
-  }
-}
-
-async function deleteSelectedDocument(): Promise<void> {
-  const selected = selectedDocument();
-  if (!selected) return;
-  try {
-    setDocumentStatus("Deleting document...");
-    await deleteRoomDocument(apiBaseUrl, roomId, selected.documentId, roomStateAccessToken);
-    roomDocuments = roomDocuments.filter((item) => item.documentId !== selected.documentId);
-    selectedDocumentId = roomDocuments[0]?.documentId ?? "";
-    if (selectedDocumentId) {
-      localStorage.setItem(`vrata.documents.selected.${roomId}`, selectedDocumentId);
-    } else {
-      localStorage.removeItem(`vrata.documents.selected.${roomId}`);
-    }
-    renderDocumentsUi(`Document deleted: ${selected.filename}`);
-  } catch (error) {
-    console.warn("document_delete_failed", error);
-    setDocumentStatus(`Document delete failed: ${documentErrorCode(error)}`, documentErrorCode(error));
-  }
-}
+const {
+  presentationInputEventId, documentMediaInputEventId,
+  renderDocumentMediaControls, renderPresentationControls
+} = createDocumentSurfaceView({
+  participantId, currentPdfPresentationObject, currentImageViewerObject,
+  currentVideoPlayerObject, canPresentDocuments, getPdfPresentationRuntime,
+  // Surface actions are composed after the views, without eager callbacks.
+  goToPresentationPage: (page) => goToPresentationPage(page),
+  debugState, presentationControlsEl, presentationPrevButton,
+  presentationNextButton, presentationPageLabel, presentationLargeButton,
+  presentationStopButton, presentationThumbnailsEl, presentationStatusEl,
+  documentMediaControlsEl, documentMediaTitleEl, documentMediaPlayButton,
+  documentMediaFitButton, documentMediaLoopLabel, documentMediaLoopInput,
+  documentMediaStopButton, documentMediaSeekInput, documentMediaTimeEl,
+  documentMediaStatusEl,
+  get roomStateServerOffsetMs() { return roomStateServerOffsetMs; },
+  get selectedMediaSurfaceId() { return selectedMediaSurfaceId; },
+  get presentationActionInFlight() { return presentationActionInFlight; }
+});
 
 const {
   selectDocumentForSurface,
@@ -7371,68 +7104,19 @@ notesExportRoomJsonButton.addEventListener("click", () => {
   void exportRoomNotesJson();
 });
 
-documentSelect.addEventListener("change", () => {
-  selectedDocumentId = documentSelect.value;
-  if (selectedDocumentId) {
-    localStorage.setItem(`vrata.documents.selected.${roomId}`, selectedDocumentId);
-  } else {
-    localStorage.removeItem(`vrata.documents.selected.${roomId}`);
-  }
-  renderDocumentsUi();
-});
-
-documentUploadButton.addEventListener("click", () => {
-  void uploadSelectedDocument();
-});
-
-documentDownloadButton.addEventListener("click", () => {
-  void downloadSelectedDocument();
-});
-
-documentSurfaceButton.addEventListener("click", () => {
-  void selectDocumentForSurface();
-});
-
-documentDeleteButton.addEventListener("click", () => {
-  void deleteSelectedDocument();
-});
-
-presentationPrevButton.addEventListener("click", () => {
-  const object = currentPdfPresentationObject();
-  if (object) void goToPresentationPage(object.state.currentPage - 1);
-});
-
-presentationNextButton.addEventListener("click", () => {
-  const object = currentPdfPresentationObject();
-  if (object) void goToPresentationPage(object.state.currentPage + 1);
-});
-
-presentationLargeButton.addEventListener("click", () => {
-  void togglePresentationDisplayMode();
-});
-
-presentationStopButton.addEventListener("click", () => {
-  void stopCurrentPresentation();
-});
-
-documentMediaPlayButton.addEventListener("click", () => {
-  void toggleDocumentMediaPlayback();
-});
-
-documentMediaFitButton.addEventListener("click", () => {
-  void toggleDocumentMediaFit();
-});
-
-documentMediaLoopInput.addEventListener("change", () => {
-  void patchCurrentDocumentMedia({ type: "set-loop", loop: documentMediaLoopInput.checked, inputEventId: documentMediaInputEventId("loop") });
-});
-
-documentMediaSeekInput.addEventListener("change", () => {
-  void patchCurrentDocumentMedia({ type: "seek", positionMs: Number(documentMediaSeekInput.value), inputEventId: documentMediaInputEventId("seek") });
-});
-
-documentMediaStopButton.addEventListener("click", () => {
-  void stopCurrentDocumentMedia();
+bindDocumentControls({
+  roomId, documentSelect, documentUploadButton, documentDownloadButton,
+  documentSurfaceButton, documentDeleteButton, presentationPrevButton,
+  presentationNextButton, presentationLargeButton, presentationStopButton,
+  documentMediaPlayButton, documentMediaFitButton, documentMediaLoopInput,
+  documentMediaSeekInput, documentMediaStopButton, renderDocumentsUi,
+  uploadSelectedDocument, downloadSelectedDocument, selectDocumentForSurface,
+  deleteSelectedDocument, currentPdfPresentationObject, goToPresentationPage,
+  togglePresentationDisplayMode, stopCurrentPresentation,
+  toggleDocumentMediaPlayback, toggleDocumentMediaFit,
+  patchCurrentDocumentMedia, documentMediaInputEventId, stopCurrentDocumentMedia,
+  get selectedDocumentId() { return selectedDocumentId; },
+  set selectedDocumentId(value) { selectedDocumentId = value; }
 });
 
 mediaSurfaceSelect.addEventListener("change", () => {
