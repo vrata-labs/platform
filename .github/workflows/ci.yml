@@ -97,6 +97,9 @@ jobs:
       - name: Build identity rollback base
         run: |
           pnpm --dir .identity-rollback install --frozen-lockfile
+          # pnpm marks workspace bin entries executable; restore the pinned
+          # checkout's Git mode before asserting an otherwise unchanged tree.
+          chmod 644 .identity-rollback/packages/asset-pipeline/bin/vrata.mjs
           git -C .identity-rollback diff --exit-code HEAD
           pnpm --dir .identity-rollback --filter @vrata/shared-types --filter @vrata/templates --filter @vrata/asset-pipeline --filter @vrata/api build
 
