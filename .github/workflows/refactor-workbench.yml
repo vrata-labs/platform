@@ -1,0 +1,55 @@
+name: Refactor workbench
+
+on:
+  push:
+    branches:
+      - chore/refactor-runtime-workbench-20260929
+
+permissions:
+  contents: read
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout isolated workbench
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Collect tracked text source and size inventory
+        run: |
+          python3 - <<'PY'
+          import json, pathlib, subprocess, tarfile
+          paths = subprocess.check_output(['git', 'ls-files', '-z']).decode().split('\0')
+          code_extensions = {'.ts', '.tsx', '.js', '.mjs', '.cjs', '.py', '.sh'}
+          text_extensions = code_extensions | {'.json', '.yaml', '.yml', '.html', '.css', '.md'}
+          ranking = []
+          with tarfile.open('/tmp/refactor-source.tar.gz', 'w:gz') as archive:
+              for name in paths:
+                  if not name:
+                      continue
+                  path = pathlib.Path(name)
+                  if path.is_symlink() or not path.is_file():
+                      continue
+                  if path.suffix in code_extensions:
+                      data = path.read_bytes()
+                      ranking.append({'path': name, 'bytes': len(data), 'lines': len(data.splitlines())})
+                  if path.suffix in text_extensions and 'public/assets/' not in name and path.stat().st_size < 2_000_000:
+                      archive.add(path, arcname=name, recursive=False)
+          report = {
+              'commit': subprocess.check_output(['git', 'rev-parse', 'HEAD']).decode().strip(),
+              'instructions': [p for p in paths if p.endswith('AGENTS.md')],
+              'largest_code_files': sorted(ranking, key=lambda p: p['bytes'], reverse=True)[:40]
+          }
+          pathlib.Path('/tmp/refactor-inventory.json').write_text(json.dumps(report, indent=2) + '\n')
+          print(json.dumps(report, indent=2))
+          PY
+      - name: Upload source snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: refactor-source
+          retention-days: 3
+          path: |
+            /tmp/refactor-source.tar.gz
+            /tmp/refactor-inventory.json
