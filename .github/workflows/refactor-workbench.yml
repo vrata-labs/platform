@@ -6,50 +6,104 @@ on:
       - chore/refactor-runtime-workbench-20260929
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  snapshot:
+  verify-document-extraction:
+    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - name: Checkout isolated workbench
         uses: actions/checkout@v4
         with:
-          persist-credentials: false
-      - name: Collect tracked text source and size inventory
+          ref: chore/refactor-runtime-workbench-20260929
+      - name: Apply exact locally verified extraction
         run: |
           python3 - <<'PY'
-          import json, pathlib, subprocess, tarfile
-          paths = subprocess.check_output(['git', 'ls-files', '-z']).decode().split('\0')
-          code_extensions = {'.ts', '.tsx', '.js', '.mjs', '.cjs', '.py', '.sh'}
-          text_extensions = code_extensions | {'.json', '.yaml', '.yml', '.html', '.css', '.md'}
-          ranking = []
-          with tarfile.open('/tmp/refactor-source.tar.gz', 'w:gz') as archive:
-              for name in paths:
-                  if not name:
-                      continue
-                  path = pathlib.Path(name)
-                  if path.is_symlink() or not path.is_file():
-                      continue
-                  if path.suffix in code_extensions:
-                      data = path.read_bytes()
-                      ranking.append({'path': name, 'bytes': len(data), 'lines': len(data.splitlines())})
-                  if path.suffix in text_extensions and 'public/assets/' not in name and path.stat().st_size < 2_000_000:
-                      archive.add(path, arcname=name, recursive=False)
-          report = {
-              'commit': subprocess.check_output(['git', 'rev-parse', 'HEAD']).decode().strip(),
-              'instructions': [p for p in paths if p.endswith('AGENTS.md')],
-              'largest_code_files': sorted(ranking, key=lambda p: p['bytes'], reverse=True)[:40]
-          }
-          pathlib.Path('/tmp/refactor-inventory.json').write_text(json.dumps(report, indent=2) + '\n')
-          print(json.dumps(report, indent=2))
+          import gzip, hashlib, json, pathlib, subprocess
+          def blob(data):
+              return hashlib.sha1(f'blob {len(data)}\0'.encode() + data).hexdigest()
+          data = b''.join(pathlib.Path(f'.refactor-workbench/part-{i}').read_bytes() for i in range(5))
+          assert blob(data) == 'b65f642b3b8fe7766556c4e811b2a4fb1a0f384c'
+          payload = json.loads(gzip.decompress(data))
+          main = payload['main']
+          assert main['path'] == 'apps/runtime-web/src/main.ts'
+          path = pathlib.Path(main['path'])
+          source = path.read_text()
+          if blob(source.encode()) != main['after_git_sha']:
+              assert blob(source.encode()) == main['before_git_sha']
+              for edit in sorted(main['edits'], key=lambda x: x['start'], reverse=True):
+                  source = source[:edit['start']] + edit['text'] + source[edit['end']:]
+              assert blob(source.encode()) == main['after_git_sha']
+              path.write_text(source)
+          assert len(payload['files']) == 10
+          for name, content in payload['files'].items():
+              path = pathlib.Path(name)
+              assert name.startswith('apps/runtime-web/src/') and path.suffix == '.ts'
+              assert '..' not in path.parts
+              if path.exists():
+                  assert path.read_text() == content, name
+              path.parent.mkdir(parents=True, exist_ok=True)
+              path.write_text(content)
+          paths = sorted([main['path'], *payload['files']])
+          pathlib.Path('/tmp/refactor-files.json').write_text(json.dumps(paths, indent=2))
+          subprocess.run(['git', 'add', '--', *paths], check=True)
+          subprocess.run(['git', 'diff', '--cached', '--check'], check=True)
+          pathlib.Path('/tmp/refactor.patch').write_bytes(subprocess.check_output(['git', 'diff', '--cached', '--binary']))
+          print(json.dumps({name: blob(pathlib.Path(name).read_bytes()) for name in paths}, indent=2))
           PY
-      - name: Upload source snapshot
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Build shared contracts and runtime
+        run: pnpm --filter @vrata/shared-types --filter @vrata/runtime-web build 2>&1 | tee /tmp/refactor-build.log
+      - name: Runtime lint and typecheck
+        run: |
+          pnpm --filter @vrata/runtime-web lint
+          pnpm --filter @vrata/runtime-web typecheck
+      - name: Full runtime unit suite
+        run: pnpm --filter @vrata/runtime-web test 2>&1 | tee /tmp/refactor-tests.log
+      - name: Commit verified changes to isolated branch only
+        run: |
+          test "$GITHUB_REF_NAME" = 'chore/refactor-runtime-workbench-20260929'
+          python3 - <<'PY'
+          import json, pathlib, subprocess
+          expected = set(json.loads(pathlib.Path('/tmp/refactor-files.json').read_text()))
+          staged = set(subprocess.check_output(['git', 'diff', '--cached', '--name-only']).decode().splitlines())
+          assert staged <= expected, staged - expected
+          PY
+          git diff --cached --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          if ! git diff --cached --quiet; then
+            git commit -m 'refactor(runtime): extract document library views and controls'
+            git push origin HEAD:refs/heads/chore/refactor-runtime-workbench-20260929
+          fi
+          git rev-parse HEAD | tee /tmp/refactor-commit.txt
+      - name: Collect dependency snapshot for offline verification
+        if: always()
+        run: |
+          if test -d node_modules/.pnpm; then
+            tar -czf /tmp/refactor-dependencies.tar.gz node_modules apps/runtime-web/node_modules packages/shared-types/node_modules
+          fi
+      - name: Upload verification evidence
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: refactor-source
+          name: refactor-verification
           retention-days: 3
+          if-no-files-found: ignore
           path: |
-            /tmp/refactor-source.tar.gz
-            /tmp/refactor-inventory.json
+            /tmp/refactor-files.json
+            /tmp/refactor.patch
+            /tmp/refactor-build.log
+            /tmp/refactor-tests.log
+            /tmp/refactor-commit.txt
+            /tmp/refactor-dependencies.tar.gz
