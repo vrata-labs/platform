@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { getRoomPermissions } from "./access.js";
-import { signRoomSessionToken, verifyRoomSessionToken, type RoomSessionTokenPayload } from "./session-token.js";
+import { getRoomSessionTokenSecret, isRotatedDevelopmentSession, signRoomSessionToken, verifyRoomSessionToken, type RoomSessionTokenPayload } from "./session-token.js";
 
 const payload: RoomSessionTokenPayload = {
   tenantId: "tenant-a",
@@ -16,6 +16,24 @@ const payload: RoomSessionTokenPayload = {
   exp: 200,
   jti: "token-a"
 };
+
+test("API and room-state require a configured production signing secret", () => {
+  for (const secret of [undefined, "", "  ", "dev-state-secret", " dev-state-secret ", "REPLACE_WITH_STATE_TOKEN_SECRET"]) {
+    assert.throws(() => getRoomSessionTokenSecret({ NODE_ENV: "production", STATE_TOKEN_SECRET: secret }), /state_token_secret_required/);
+  }
+  assert.equal(getRoomSessionTokenSecret({ NODE_ENV: "production", STATE_TOKEN_SECRET: " configured-secret " }), " configured-secret ");
+  assert.equal(getRoomSessionTokenSecret({ NODE_ENV: "development" }), "dev-state-secret");
+});
+
+test("obsolete development-key sessions get an upgrade classification without becoming valid", () => {
+  const now = Math.floor(Date.now() / 1000);
+  const previous = signRoomSessionToken({ ...payload, iat: now, exp: now + 900 }, "dev-state-secret");
+  assert.equal(isRotatedDevelopmentSession(previous, "configured-key"), true);
+  assert.equal(verifyRoomSessionToken(previous, "configured-key").ok, false);
+  assert.equal(isRotatedDevelopmentSession(previous, "dev-state-secret"), false);
+  assert.equal(isRotatedDevelopmentSession("not-a-token", "configured-key"), false);
+  assert.equal(isRotatedDevelopmentSession(signRoomSessionToken({ ...payload, iat: now, exp: now + 900 }, "configured-key"), "configured-key"), false);
+});
 
 test("room session token verifies signed payload and normalizes permissions", () => {
   const token = signRoomSessionToken(payload, "test-secret");

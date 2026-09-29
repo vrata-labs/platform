@@ -28,6 +28,7 @@ async function stop(child: ChildProcess): Promise<void> {
 
 type ReferenceTemplateFixtureOptions = {
   devRoleQuery?: boolean;
+  stateTokenSecret?: string;
 };
 
 export async function startReferenceTemplateFixture(postgresUrl: string, options: ReferenceTemplateFixtureOptions = {}) {
@@ -57,12 +58,14 @@ export async function startReferenceTemplateFixture(postgresUrl: string, options
   let closing = false;
   let closePromise: Promise<void> | undefined;
   let log = "";
+  const identityBoundaryDenials: Array<Record<string, unknown>> = [];
   const env: NodeJS.ProcessEnv = {
     ...process.env, NODE_ENV: "development", VRATA_DISABLE_AUTOSTART: "0", POSTGRES_URL: connection.href,
     API_PORT: String(apiPort), ROOM_STATE_PORT: String(statePort), CONTROL_PLANE_ADMIN_TOKEN: adminToken,
     ROOM_STATE_INTERNAL_URL: stateOrigin, ROOM_STATE_PUBLIC_URL: `ws://127.0.0.1:${statePort}`, API_INTERNAL_URL: origin,
     VRATA_INTERNAL_SERVICE_TOKEN: "test-internal-token", ROOM_TEMPLATE_ASSET_BASE_URL: assetsOrigin,
     FEATURE_AVATAR_POSE_BINARY: "true", VRATA_DEV_ROLE_QUERY: String(options.devRoleQuery ?? true),
+    ...(options.stateTokenSecret ? { STATE_TOKEN_SECRET: options.stateTokenSecret } : {}),
     LIVEKIT_URL: "ws://127.0.0.1:7880", LIVEKIT_API_KEY: "devkey", LIVEKIT_API_SECRET: "secret",
     DOCUMENT_LOCAL_UPLOAD_ROOT: documentStorageRoot, MINIO_DOCUMENT_PREFIX: "documents"
   };
@@ -75,7 +78,24 @@ export async function startReferenceTemplateFixture(postgresUrl: string, options
   ]) delete env[key];
   const start = (path: string) => {
     const child = spawn(process.execPath, [path], { cwd: process.cwd(), env, stdio: ["ignore", "pipe", "pipe"] });
-    for (const stream of [child.stdout, child.stderr]) stream?.on("data", bytes => { log = (log+String(bytes)).slice(-16000); });
+    for (const stream of [child.stdout, child.stderr]) {
+      let pending = "";
+      stream?.on("data", bytes => {
+        const text = String(bytes);
+        log = (log+text).slice(-16000); pending += text;
+        const lines = pending.split("\n"); pending = lines.pop()!.slice(-16000);
+        for (const line of lines) {
+          try {
+            const event = JSON.parse(line);
+            if (event.event === "identity_boundary_denied") {
+              identityBoundaryDenials.push({ at: Date.now(), code: event.code, reason: event.reason, errorKind: event.errorKind,
+                queuedMessages: event.queuedMessages, queuedBytes: event.queuedBytes });
+              if (identityBoundaryDenials.length > 128) identityBoundaryDenials.shift();
+            }
+          } catch { /* Only structured boundary events enter diagnostics. */ }
+        }
+      });
+    }
     return child;
   };
   const ready = async (url: string, child: ChildProcess) => {
@@ -123,6 +143,7 @@ export async function startReferenceTemplateFixture(postgresUrl: string, options
   }
   return {
     origin, assetsOrigin, schema, adminToken, documentStorageRoot, restartApi,
+    identityBoundaryDenials: () => structuredClone(identityBoundaryDenials),
     async close() {
       if (closePromise) return closePromise;
       closing = true;

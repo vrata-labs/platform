@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+from urllib.parse import unquote, urlparse
 
 
 def sha(value):
@@ -25,8 +26,21 @@ def supports_references(contract):
             and contract.get("referenceTemplateVersions") == ["1.0.0", "2.0.0"])
 
 
-def assert_target_allowed(marker, status, target_contract, target_sha):
+def supports_identity_boundary(contract):
+    return (isinstance(contract, dict) and contract.get("schemaVersion") == 1
+            and type(contract.get("identityProtocolFloorGuard")) is int
+            and contract["identityProtocolFloorGuard"] == 1)
+
+
+def assert_target_allowed(marker, status, target_contract, target_sha, minimum_identity_protocol=1, identity_bound=False):
     sha(target_sha)
+    if type(minimum_identity_protocol) is not int or minimum_identity_protocol < 1:
+        raise ValueError("identity_rollout_invalid_protocol_floor")
+    if type(identity_bound) is not bool:
+        raise ValueError("identity_rollout_invalid_binding_state")
+    if minimum_identity_protocol >= 2 or identity_bound:
+        if not supports_identity_boundary(target_contract):
+            raise ValueError("identity_rollback_below_boundary_forbidden")
     if marker:
         sha(marker)
         if not supports_references(target_contract):
@@ -108,16 +122,75 @@ class CatalogHost:
     def prepare(self, target):
         marker = self.marker()
         contract = self.contract(target)
+        self.validate_identity_database()
         # This path must work even when a failed rollout has stopped the API.
         # Query PostgreSQL directly; only CLI mutations need a healthy API image.
         result = self.run(self.compose + ["exec", "-T", "postgres", "sh", "-c",
                          'psql -XAt -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "$1"', "sh",
                          "select json_build_object('state', case when exists (select 1 from templates where status = 'active' and current_version <> '0.1.0') then 'active' else 'wave2' end, 'referenceRoomCount', (select count(*) from rooms where template_version <> '0.1.0'))"])
         status = json.loads(result)
-        assert_target_allowed(marker, status, contract, target)
+        minimum_identity_protocol = self.minimum_identity_protocol()
+        identity_bound = self.identity_bound()
+        assert_target_allowed(marker, status, contract, target, minimum_identity_protocol, identity_bound)
+        if supports_identity_boundary(contract):
+            self.validate_identity_configuration()
         # Preparation never silently changes availability. A deliberate return to
         # Wave 2 uses rollback first; compatible routine deploys preserve catalog.
-        return {"targetSha": target, "wave2Marker": marker, "state": status["state"]}
+        return {"targetSha": target, "wave2Marker": marker, "state": status["state"],
+                "minimumIdentityProtocol": minimum_identity_protocol, "identityAuthorityBound": identity_bound}
+
+    def identity_bound(self):
+        command = self.compose + ["exec", "-T", "postgres", "sh", "-c",
+                                  'psql -XAt -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "$1"', "sh"]
+        exists = self.run(command + ["select to_regclass('room_identity_authority_v2') is not null"])
+        if exists == "f":
+            return False
+        if exists != "t":
+            raise ValueError("identity_rollout_invalid_binding_state")
+        value = self.run(command + ["select exists(select 1 from room_identity_authority_v2)"])
+        if value not in ("t", "f"):
+            raise ValueError("identity_rollout_invalid_binding_state")
+        return value == "t"
+
+    def validate_identity_configuration(self):
+        model = json.loads(self.run(self.compose + ["config", "--format", "json"]))
+        secrets = [model.get("services", {}).get(service, {}).get("environment", {}).get("STATE_TOKEN_SECRET")
+                   for service in ("api", "room-state")]
+        if any(not isinstance(value, str) or not value.strip() or value.strip() == "dev-state-secret" or value.strip().startswith("REPLACE_WITH_") for value in secrets):
+            raise ValueError("identity_rollout_state_secret_required")
+        if secrets[0] != secrets[1]:
+            raise ValueError("identity_rollout_state_secret_mismatch")
+
+    def validate_identity_database(self):
+        model = json.loads(self.run(self.compose + ["config", "--format", "json"]))
+        api = model.get("services", {}).get("api", {}).get("environment", {})
+        postgres = model.get("services", {}).get("postgres", {}).get("environment", {})
+        try:
+            url = urlparse(api.get("POSTGRES_URL", ""))
+            valid = (url.scheme in ("postgres", "postgresql") and url.hostname == "postgres"
+                     and url.port in (None, 5432) and not url.query and not api.get("PGOPTIONS")
+                     and unquote(url.username or "") == postgres.get("POSTGRES_USER")
+                     and unquote(url.path.removeprefix("/")) == postgres.get("POSTGRES_DB")
+                     and not any(postgres.get(key) for key in ("PGHOST", "PGHOSTADDR", "PGPORT", "PGOPTIONS", "PGSERVICE", "PGSERVICEFILE")))
+        except (TypeError, ValueError):
+            valid = False
+        if not valid:
+            raise ValueError("identity_rollout_requires_matching_bundled_database")
+
+    def minimum_identity_protocol(self):
+        # The API may be stopped or be the incompatible image being rolled back.
+        # Missing rows/errors are not a license to return to legacy authentication.
+        command = self.compose + ["exec", "-T", "postgres", "sh", "-c",
+                                  'psql -XAt -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "$1"', "sh"]
+        exists = self.run(command + ["select to_regclass('room_identity_protocol_policy') is not null"])
+        if exists == "f":
+            return 1  # A database that predates the boundary schema.
+        if exists != "t":
+            raise ValueError("identity_rollout_invalid_protocol_floor")
+        value = self.run(command + ["select minimum_protocol from room_identity_protocol_policy where singleton=true"])
+        if not re.fullmatch(r"[1-9][0-9]*", value):
+            raise ValueError("identity_rollout_invalid_protocol_floor")
+        return int(value)
 
     def mutate(self, command, expected):
         marker = self.marker()

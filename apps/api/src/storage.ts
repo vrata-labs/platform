@@ -54,6 +54,7 @@ import { createMemoryRoomIdentities } from "./identity/memory.js";
 import { createPostgresRoomIdentities } from "./identity/postgres.js";
 import { installRoomIdentitySchema } from "./identity/postgres-schema.js";
 import { identityLifecycleChanged, IDENTITY_LIFECYCLE_REQUIRES_V2 } from "./identity/lifecycle.js";
+import { createMemoryIdentityProtocol, createPostgresIdentityProtocol } from "./identity/protocol.js";
 
 export { initPostgresStorageWithRetry } from "./storage-init-retry.js";
 
@@ -178,11 +179,15 @@ export class MemoryStorage implements Storage {
   private roomNotes = new Map<string, RoomNoteRecord>();
   private roomNoteVersions = new Map<string, RoomNoteVersionRecord[]>();
   private readonly identityAdapter: ReturnType<typeof createMemoryRoomIdentities>;
+  private readonly identityPolicy = createMemoryIdentityProtocol();
+  readonly identityProtocol: Storage["identityProtocol"] = this.identityPolicy;
   readonly roomIdentities: Storage["roomIdentities"];
   constructor(identityNow = Date.now) {
     this.identityAdapter = createMemoryRoomIdentities(roomId => this.rooms.get(roomId), identityNow);
     this.roomIdentities = this.identityAdapter.storage;
   }
+
+  async hasRoomIdentityAuthority(roomId: string): Promise<boolean> { return this.identityAdapter.hasRoomBindings(roomId); }
 
   private sceneBundleKey(bundleId: string, version: string): string {
     return `${bundleId}::${version}`;
@@ -290,7 +295,7 @@ export class MemoryStorage implements Storage {
       personalState: defaultPersonalState(input.personalState)
     };
     const room = bindRoomTemplateMetadata(roomWithoutTemplateMetadata, versionSnapshot);
-    if (this.identityAdapter.hasRoomBindings(room.roomId)) throw new Error(IDENTITY_LIFECYCLE_REQUIRES_V2);
+    if (this.identityAdapter.hasRoomBindings(room.roomId) || (this.identityPolicy.current() >= 2 && this.rooms.has(room.roomId))) throw new Error(IDENTITY_LIFECYCLE_REQUIRES_V2);
     this.rooms.set(room.roomId, structuredClone(room));
     return structuredClone(room);
   }
@@ -341,7 +346,7 @@ export class MemoryStorage implements Storage {
       updatedWithoutTemplateMetadata,
       this.requireTemplateVersion(existing.templateId, existing.templateVersion)
     );
-    if (this.identityAdapter.hasRoomBindings(roomId) && identityLifecycleChanged(existing, updated)) {
+    if ((this.identityPolicy.current() >= 2 || this.identityAdapter.hasRoomBindings(roomId)) && identityLifecycleChanged(existing, updated)) {
       throw new Error(IDENTITY_LIFECYCLE_REQUIRES_V2);
     }
     this.rooms.set(roomId, structuredClone(updated));
@@ -679,7 +684,14 @@ export class MemoryStorage implements Storage {
 
 export class PostgresStorage implements Storage {
   readonly roomIdentities: Storage["roomIdentities"];
-  constructor(private readonly pool: Pool, identityNow = Date.now) { this.roomIdentities = createPostgresRoomIdentities(pool, identityNow); }
+  readonly identityProtocol: Storage["identityProtocol"];
+  constructor(private readonly pool: Pool, identityNow = Date.now) {
+    this.roomIdentities = createPostgresRoomIdentities(pool, identityNow);
+    this.identityProtocol = createPostgresIdentityProtocol(pool);
+  }
+  async hasRoomIdentityAuthority(roomId: string): Promise<boolean> {
+    return (await this.pool.query(`select exists(select 1 from rooms r join room_identity_authority_v2 a using (tenant_id,room_id) where r.room_id=$1) as bound`, [roomId])).rows[0].bound;
+  }
 
   async init(): Promise<void> {
     const client = await this.pool.connect();

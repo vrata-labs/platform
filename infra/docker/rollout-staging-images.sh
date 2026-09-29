@@ -459,7 +459,7 @@ configured_origins.extend(public_remote_browser_origins)
 values['REMOTE_BROWSER_ALLOWED_ORIGINS'] = ','.join(dict.fromkeys(configured_origins))
 values.setdefault('REMOTE_BROWSER_ALLOW_PRIVATE_ALLOWED_ORIGINS', 'false')
 values.setdefault('REMOTE_BROWSER_FRAME_INTERVAL_MS', '250')
-values.setdefault('REMOTE_BROWSER_TOKEN_SECRET', values.get('STATE_TOKEN_SECRET', 'dev-remote-browser-secret'))
+values.setdefault('REMOTE_BROWSER_TOKEN_SECRET', secrets.token_urlsafe(48))
 values.setdefault('REMOTE_BROWSER_TOKEN_TTL_SECONDS', '300')
 values['IMAGE_TAG'] = image_tag
 

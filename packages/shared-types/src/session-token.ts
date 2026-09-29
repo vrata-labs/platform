@@ -7,6 +7,12 @@ import type { RoomTemplateSessionContext } from "./room-template.js";
 
 export type RoomSessionRoleSource = "default" | "dev-query" | "trusted";
 
+export function getRoomSessionTokenSecret(env: { NODE_ENV?: string; STATE_TOKEN_SECRET?: string } = process.env): string {
+  const secret = env.STATE_TOKEN_SECRET;
+  if (env.NODE_ENV === "production" && (!secret?.trim() || secret.trim() === "dev-state-secret" || secret.trim().startsWith("REPLACE_WITH_"))) throw new Error("state_token_secret_required");
+  return secret ?? "dev-state-secret";
+}
+
 export interface RoomSessionTokenPayload {
   tenantId: string;
   roomId: string;
@@ -164,4 +170,9 @@ export function verifyRoomSessionToken(
     return { ok: false, code: "participant_mismatch" };
   }
   return { ok: true, payload };
+}
+
+/** Classifies an obsolete development-key token for denial only; never authorizes it. */
+export function isRotatedDevelopmentSession(token: string | null | undefined, currentSecret: string): boolean {
+  return currentSecret !== "dev-state-secret" && verifyRoomSessionToken(token, "dev-state-secret").ok;
 }

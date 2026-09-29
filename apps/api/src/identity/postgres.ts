@@ -31,8 +31,8 @@ async function load(client: PoolClient, scope: RoomIdentityScope, selection: Ide
   return {
     room: { tenantId: room.tenant_id, roomId: room.room_id, roomType: room.room_type, ownerParticipantId: room.owner_participant_id,
       status: room.status, disabledAt: nullableIso(room.disabled_at), sessionControl: room.session_control },
-    authority: authority ? { tenantId: authority.tenant_id, roomId: authority.room_id, revision: authority.revision,
-      hostIdentityId: authority.host_identity_id, ownerIdentityId: authority.owner_identity_id, presenterIdentityId: authority.presenter_identity_id } : emptyIdentityAuthority(scope),
+    authority: authority ? { tenantId: authority.tenant_id, roomId: authority.room_id, revision: authority.revision, lifecycle: authority.lifecycle,
+      hostIdentityId: authority.host_identity_id, ownerIdentityId: authority.owner_identity_id, presenterIdentityId: authority.presenter_identity_id } : emptyIdentityAuthority(scope, room.session_control),
     identities, recovery
   };
 }
@@ -51,10 +51,10 @@ async function save(client: PoolClient, state: IdentityTransaction): Promise<voi
       identity.participantId, identity.displayName, identity.baseRole, JSON.stringify(identity.provenance), identity.authEpoch, identity.createdAt, identity.revokedAt]);
   }
   const a = state.authority;
-  await client.query(`insert into room_identity_authority_v2 (tenant_id,room_id,revision,host_identity_id,owner_identity_id,presenter_identity_id)
-    values ($1,$2,$3,$4,$5,$6) on conflict (tenant_id,room_id) do update set revision=excluded.revision,
-    host_identity_id=excluded.host_identity_id,owner_identity_id=excluded.owner_identity_id,presenter_identity_id=excluded.presenter_identity_id`,
-  [a.tenantId, a.roomId, a.revision, a.hostIdentityId, a.ownerIdentityId, a.presenterIdentityId]);
+  await client.query(`insert into room_identity_authority_v2 (tenant_id,room_id,revision,host_identity_id,owner_identity_id,presenter_identity_id,lifecycle)
+    values ($1,$2,$3,$4,$5,$6,$7::jsonb) on conflict (tenant_id,room_id) do update set revision=excluded.revision,
+    host_identity_id=excluded.host_identity_id,owner_identity_id=excluded.owner_identity_id,presenter_identity_id=excluded.presenter_identity_id,lifecycle=excluded.lifecycle`,
+  [a.tenantId, a.roomId, a.revision, a.hostIdentityId, a.ownerIdentityId, a.presenterIdentityId, JSON.stringify(a.lifecycle)]);
   const r = state.recovery;
   if (r) await client.query(`insert into room_identity_recoveries_v2 (tenant_id,room_id,recovery_id,target_participant_id,target_identity_id,target_role,
     expected_auth_epoch,expected_authority_revision,secret_hash,issued_by,created_at,expires_at,consumed_at)

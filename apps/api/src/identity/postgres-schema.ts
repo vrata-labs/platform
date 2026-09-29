@@ -1,4 +1,8 @@
 import type { PoolClient } from "pg";
+import { identityLifecycle } from "./authority.js";
+import { activatedIdentityRoomGuard, legacyIdentityRoomGuard } from "./protocol-guard.js";
+
+const literal = (value: string) => `'${value.replaceAll("'", "''")}'`;
 
 const guards = [
   { table: "room_identities_v2", name: "vrata_identity_v2_immutable", body: `BEGIN
@@ -22,19 +26,43 @@ const guards = [
     THEN RAISE EXCEPTION 'nonmonotonic_identity_authority' USING ERRCODE = '23514'; END IF;
     RETURN NEW;
   END;` },
-  { table: "rooms", name: "vrata_identity_v2_room_boundary", body: `DECLARE bound boolean;
+  { table: "room_identity_authority_v2", name: "vrata_identity_lifecycle_v2_monotonic", body: `BEGIN
+    IF (NEW.lifecycle IS DISTINCT FROM OLD.lifecycle AND NEW.revision <= OLD.revision)
+      OR (OLD.lifecycle->>'endedAt' IS NOT NULL AND NEW.lifecycle->'endedAt' IS DISTINCT FROM OLD.lifecycle->'endedAt')
+      OR NOT coalesce((NEW.lifecycle->'removedParticipants') @> (OLD.lifecycle->'removedParticipants'), false)
+    THEN RAISE EXCEPTION 'nonmonotonic_identity_lifecycle' USING ERRCODE = '23514'; END IF;
+    RETURN NEW;
+  END;` },
+  { table: "rooms", name: "vrata_identity_v2_room_boundary", body: legacyIdentityRoomGuard },
+  { table: "rooms", name: "vrata_identity_protocol_room_boundary", body: `DECLARE minimum_protocol integer;
   BEGIN
     IF ROW(NEW.tenant_id, NEW.room_type, NEW.owner_participant_id, NEW.session_control)
       IS DISTINCT FROM ROW(OLD.tenant_id, OLD.room_type, OLD.owner_participant_id, OLD.session_control) THEN
-      EXECUTE format('select exists(select 1 from %I.room_identity_authority_v2 where tenant_id=$1 and room_id=$2)', TG_TABLE_SCHEMA)
-        INTO bound USING OLD.tenant_id, OLD.room_id;
-      IF bound THEN RAISE EXCEPTION 'room_identity_lifecycle_requires_v2' USING ERRCODE = '23514'; END IF;
+      EXECUTE format('select minimum_protocol from %I.room_identity_protocol_policy where singleton=true for share', TG_TABLE_SCHEMA)
+        INTO minimum_protocol;
+      IF minimum_protocol IS DISTINCT FROM 1 THEN RAISE EXCEPTION 'room_identity_lifecycle_requires_v2' USING ERRCODE = '23514'; END IF;
     END IF;
     RETURN NEW;
+  END;` },
+  { table: "room_identity_protocol_policy", name: "vrata_identity_protocol_monotonic", body: `BEGIN
+    IF TG_OP = 'DELETE' THEN RAISE EXCEPTION 'identity_protocol_downgrade_forbidden' USING ERRCODE = '23514'; END IF;
+    IF NEW.singleton IS DISTINCT FROM OLD.singleton OR NEW.minimum_protocol < OLD.minimum_protocol
+    THEN RAISE EXCEPTION 'identity_protocol_downgrade_forbidden' USING ERRCODE = '23514'; END IF;
+    IF NEW.minimum_protocol >= 2 AND NOT EXISTS (
+      SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+      WHERE n.nspname=TG_TABLE_SCHEMA AND p.proname='vrata_identity_v2_room_boundary' AND p.pronargs=0
+        AND p.prosrc=${literal(activatedIdentityRoomGuard)}
+    ) THEN RAISE EXCEPTION 'identity_protocol_boundary_not_installed' USING ERRCODE = '23514'; END IF;
+    RETURN NEW;
+  END;` },
+  { table: "room_identity_protocol_policy", name: "vrata_identity_protocol_no_truncate", body: `BEGIN
+    RAISE EXCEPTION 'identity_protocol_downgrade_forbidden' USING ERRCODE = '23514';
   END;` }
 ].map(guard => {
   const protectDelete = guard.table === "room_identities_v2" || guard.table === "room_identity_authority_v2";
-  return { ...guard, events: protectDelete ? "delete or update" : "update", triggerType: protectDelete ? 27 : 19,
+  const noTruncate = guard.name === "vrata_identity_protocol_no_truncate";
+  const withDelete = protectDelete || guard.name === "vrata_identity_protocol_monotonic";
+  return { ...guard, events: noTruncate ? "truncate" : withDelete ? "delete or update" : "update", triggerType: noTruncate ? 34 : withDelete ? 27 : 19,
     body: protectDelete ? `DECLARE parent_exists boolean;
     BEGIN
       IF TG_OP = 'DELETE' THEN
@@ -47,12 +75,14 @@ const guards = [
     END;` : guard.body };
 });
 
-const literal = (value: string) => `'${value.replaceAll("'", "''")}'`;
 const roomForeignKey = "FOREIGN KEY (tenant_id, room_id) REFERENCES rooms(tenant_id, room_id) ON DELETE CASCADE";
 const identityForeignKey = (column: string) => `FOREIGN KEY (tenant_id, room_id, ${column}) REFERENCES room_identities_v2(tenant_id, room_id, identity_id) DEFERRABLE INITIALLY DEFERRED`;
 // PostgreSQL 16 canonical definitions. Do not silently accept weaker constraints
 // left by a partial/older schema merely because CREATE IF NOT EXISTS succeeded.
 const constraints = [
+  ["room_identity_protocol_policy", "identity_protocol_pk", "PRIMARY KEY (singleton)"],
+  ["room_identity_protocol_policy", "identity_protocol_singleton", "CHECK (singleton)"],
+  ["room_identity_protocol_policy", "identity_protocol_minimum", "CHECK ((minimum_protocol >= 1))"],
   ["room_identities_v2", "identity_v2_pk", "PRIMARY KEY (tenant_id, room_id, identity_id)"],
   ["room_identities_v2", "identity_v2_participant", "UNIQUE (tenant_id, room_id, participant_id)"],
   ["room_identities_v2", "identity_v2_room", roomForeignKey],
@@ -63,6 +93,7 @@ const constraints = [
   ["room_identity_authority_v2", "authority_v2_pk", "PRIMARY KEY (tenant_id, room_id)"],
   ["room_identity_authority_v2", "authority_v2_room", roomForeignKey],
   ["room_identity_authority_v2", "authority_v2_revision", "CHECK ((revision >= 0))"],
+  ["room_identity_authority_v2", "authority_v2_lifecycle", "CHECK ((jsonb_typeof(lifecycle) = 'object'::text))"],
   ...["host", "owner", "presenter"].map(slot => ["room_identity_authority_v2", `authority_v2_${slot}`, identityForeignKey(`${slot}_identity_id`)]),
   ["room_identity_recoveries_v2", "recovery_v2_pk", "PRIMARY KEY (tenant_id, room_id, recovery_id)"],
   ["room_identity_recoveries_v2", "recovery_v2_room", roomForeignKey],
@@ -76,12 +107,15 @@ const constraints = [
 ];
 
 const columns = [
+  ["room_identity_protocol_policy", "singleton", "boolean", true],
+  ["room_identity_protocol_policy", "minimum_protocol", "integer", true],
   ...["tenant_id", "room_id", "identity_id", "participant_id", "display_name", "base_role"].map(name => ["room_identities_v2", name, "text", true]),
   ["room_identities_v2", "provenance", "jsonb", true], ["room_identities_v2", "auth_epoch", "integer", true],
   ["room_identities_v2", "created_at", "timestamp with time zone", true], ["room_identities_v2", "revoked_at", "timestamp with time zone", false],
   ...["tenant_id", "room_id"].map(name => ["room_identity_authority_v2", name, "text", true]),
   ...["host_identity_id", "owner_identity_id", "presenter_identity_id"].map(name => ["room_identity_authority_v2", name, "text", false]),
   ["room_identity_authority_v2", "revision", "integer", true],
+  ["room_identity_authority_v2", "lifecycle", "jsonb", true],
   ...["tenant_id", "room_id", "recovery_id", "target_participant_id", "target_role", "secret_hash", "issued_by"].map(name => ["room_identity_recoveries_v2", name, "text", true]),
   ["room_identity_recoveries_v2", "target_identity_id", "text", false],
   ["room_identity_recoveries_v2", "expected_auth_epoch", "integer", false],
@@ -92,6 +126,19 @@ const columns = [
 
 export async function installRoomIdentitySchema(client: PoolClient): Promise<void> {
   await client.query(`
+    do $policy$
+    begin
+      if to_regclass(format('%I.room_identity_protocol_policy', current_schema())) is null then
+        create table room_identity_protocol_policy (
+          singleton boolean not null constraint identity_protocol_pk primary key constraint identity_protocol_singleton check (singleton),
+          minimum_protocol integer not null constraint identity_protocol_minimum check (minimum_protocol >= 1)
+        );
+        insert into room_identity_protocol_policy values (true, 1);
+      end if;
+      if not exists (select 1 from room_identity_protocol_policy where singleton=true) then
+        raise exception 'identity_protocol_policy_missing';
+      end if;
+    end; $policy$;
     create unique index if not exists rooms_identity_scope_idx on rooms (tenant_id, room_id);
     create table if not exists room_identities_v2 (
       tenant_id text not null, room_id text not null, identity_id text not null,
@@ -127,6 +174,18 @@ export async function installRoomIdentitySchema(client: PoolClient): Promise<voi
       constraint recovery_v2_room foreign key (tenant_id, room_id) references rooms(tenant_id, room_id) on delete cascade,
       constraint recovery_v2_target foreign key (tenant_id, room_id, target_identity_id) references room_identities_v2(tenant_id, room_id, identity_id) deferrable initially deferred
     );
+    do $migration$
+    begin
+      if not exists (select 1 from pg_attribute where attrelid='room_identity_authority_v2'::regclass and attname='lifecycle' and not attisdropped) then
+        alter table room_identity_authority_v2 add column lifecycle jsonb;
+        update room_identity_authority_v2 a set lifecycle=jsonb_build_object(
+          ${Object.entries(identityLifecycle()).map(([key, value]) => `${literal(key)}, coalesce(nullif(r.session_control->${literal(key)}, 'null'::jsonb), ${literal(JSON.stringify(value))}::jsonb)`).join(",")}
+        ) from rooms r where a.tenant_id=r.tenant_id and a.room_id=r.room_id;
+        alter table room_identity_authority_v2 alter column lifecycle set not null;
+        alter table room_identity_authority_v2 alter column lifecycle set default ${literal(JSON.stringify(identityLifecycle()))}::jsonb;
+        alter table room_identity_authority_v2 add constraint authority_v2_lifecycle check (jsonb_typeof(lifecycle) = 'object');
+      end if;
+    end; $migration$;
     do $guard$
     declare guard record; function_oid oid; table_schema text;
     begin
@@ -149,6 +208,9 @@ export async function installRoomIdentitySchema(client: PoolClient): Promise<voi
         end if;
       end loop;
       for guard in select * from (values ${guards.map(guard => `(${literal(guard.table)},${literal(guard.name)},${literal(guard.body)},${literal(guard.events)},${guard.triggerType})`).join(",")}) as g(table_name,function_name,body,events,trigger_type) loop
+        if guard.function_name='vrata_identity_v2_room_boundary' and (select minimum_protocol from room_identity_protocol_policy where singleton=true) >= 2 then
+          guard.body := ${literal(activatedIdentityRoomGuard)};
+        end if;
         select n.nspname into table_schema from pg_class c join pg_namespace n on n.oid=c.relnamespace where c.oid=to_regclass(guard.table_name);
         select p.oid into function_oid from pg_proc p join pg_namespace n on n.oid=p.pronamespace
           where n.nspname=table_schema and p.proname=guard.function_name and p.pronargs=0;
@@ -161,7 +223,7 @@ export async function installRoomIdentitySchema(client: PoolClient): Promise<voi
           raise exception 'room_identity_guard_mismatch';
         end if;
         if not exists (select 1 from pg_trigger where tgrelid=to_regclass(guard.table_name) and tgname=guard.function_name) then
-          execute format('create trigger %I before %s on %I.%I for each row execute function %I.%I()', guard.function_name,guard.events,table_schema,guard.table_name,table_schema,guard.function_name);
+          execute format('create trigger %I before %s on %I.%I for each %s execute function %I.%I()', guard.function_name,guard.events,table_schema,guard.table_name,case when guard.events='truncate' then 'statement' else 'row' end,table_schema,guard.function_name);
         elsif not exists (select 1 from pg_trigger where tgrelid=to_regclass(guard.table_name) and tgname=guard.function_name
           and tgfoid=function_oid and tgtype=guard.trigger_type and tgenabled='O' and tgqual is null and tgattr=''::int2vector and tgnargs=0) then
           raise exception 'room_identity_guard_mismatch';

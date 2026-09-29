@@ -10,6 +10,7 @@ RUN pnpm --filter @vrata/shared-types build && pnpm --filter @vrata/templates bu
 RUN pnpm prune --prod --config.confirmModulesPurge=false --config.node-linker=hoisted
 
 FROM node:22-bookworm-slim AS runtime
+LABEL io.vrata.identity-protocol-floor-guard="1"
 
 ENV NODE_ENV=production
 WORKDIR /app

@@ -15,6 +15,11 @@ on:
         required: false
         default: false
         type: boolean
+      rotate_dev_state_secret:
+        description: "Replace a development state key on the host; invalidates existing state sessions and invite links"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   actions: read
@@ -83,6 +88,7 @@ jobs:
           cp tools/staging-scene-snapshot.mjs tools/patch-staging-scene-bundles.mjs "$RUNNER_TEMP/vrata-scene-rollback/"
           cp tools/staging-minio-rollout.py "$RUNNER_TEMP/vrata-scene-rollback/"
           cp tools/staging-template-catalog.py "$RUNNER_TEMP/vrata-scene-rollback/"
+          cp tools/staging-state-key.py "$RUNNER_TEMP/vrata-scene-rollback/"
 
       - name: Sync workspace to deploy SHA
         env:
@@ -198,6 +204,20 @@ jobs:
           STAGING_HALL_ROOM_ID: 42db8225-f671-4e46-9c28-9381d66a948c
           STAGING_BLUEOFFICE_ROOM_ID: 0b537d34-7b92-4b51-854a-8c64cfb4c114
         run: node "$RUNNER_TEMP/vrata-scene-rollback/staging-scene-snapshot.mjs" capture "$RUNNER_TEMP/vrata-scene-bundle-snapshot.json"
+
+      - name: Replace development state signing key
+        if: github.event_name == 'workflow_dispatch' && inputs.rotate_dev_state_secret
+        run: |
+          STATE_KEY_HELPER_B64="$(base64 -w0 "$RUNNER_TEMP/vrata-scene-rollback/staging-state-key.py")"
+          # The new key is generated on the host and never returned to the runner.
+          # shellcheck disable=SC2087
+          ssh -o StrictHostKeyChecking=no "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo bash -s" <<EOF
+          set -euo pipefail
+          STATE_KEY_HELPER="\$(mktemp)"
+          trap 'rm -f "\$STATE_KEY_HELPER"' EXIT
+          printf '%s' '$STATE_KEY_HELPER_B64' | base64 -d > "\$STATE_KEY_HELPER"
+          python3 "\$STATE_KEY_HELPER" --env-file "$STAGING_APP_DIR/infra/docker/.env.staging"
+          EOF
 
       - name: Roll out staging images
         id: rollout

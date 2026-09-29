@@ -12,7 +12,7 @@ export function createMemoryRoomIdentities(getRoom: (roomId: string) => Identity
     const recovery = selection.recoveryId ? recoveries.get(scope.roomId)?.get(selection.recoveryId) ?? null : null;
     const participantId = selection.participantId ?? recovery?.targetParticipantId;
     const selected = new Set([...(selection.identityIds ?? []), ...(recovery?.targetIdentityId ? [recovery.targetIdentityId] : [])]);
-    return structuredClone({ room, authority: authorities.get(scope.roomId) ?? emptyIdentityAuthority(scope), recovery,
+    return structuredClone({ room, authority: authorities.get(scope.roomId) ?? emptyIdentityAuthority(scope, room.sessionControl), recovery,
       identities: new Map([...(identities.get(scope.roomId) ?? new Map<string, RoomIdentityRecord>())].filter(([id, identity]) =>
         selected.has(id) || (participantId !== undefined && identity.participantId === participantId))) });
   };

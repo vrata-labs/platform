@@ -9,7 +9,7 @@ import { AccessToken } from "livekit-server-sdk";
 import { PDFDocument } from "pdf-lib";
 import { extractSceneBundleZipToTemp, normalizeSceneBundleRelativePath, validateSceneBundlePath, validateSceneBundleReference } from "@vrata/asset-pipeline";
 import { createRoomAccessDebugState, getRoomPermissions, hasRoomPermission, parseRoomRole, type RoomPermission, type RoomRole } from "@vrata/shared-types";
-import { signRoomSessionToken, verifyRoomSessionToken, type RoomSessionRoleSource, type RoomSessionTokenPayload, type RoomSessionTokenVerificationResult } from "@vrata/shared-types/session-token";
+import { getRoomSessionTokenSecret, isRotatedDevelopmentSession, signRoomSessionToken, verifyRoomSessionToken, type RoomSessionRoleSource, type RoomSessionTokenPayload, type RoomSessionTokenVerificationResult } from "@vrata/shared-types/session-token";
 
 import {
   resolveSceneBundlePublicUrl,
@@ -45,6 +45,7 @@ import {
   isSceneBundleUploadEnabled,
   isHostControlsEnabled
 } from "./feature-flags.js";
+import { createLegacyIdentityBoundary, IdentityBoundaryError, legacyBoundaryApplies, legacyBoundaryAllowsAdministrator } from "./identity/legacy-boundary.js";
 
 import { getLivekitCredentials, getMediaTokenConfigError, getLivekitDeploymentDiagnostics } from "./livekit-config.js";
 
@@ -252,6 +253,7 @@ const runtimePublicRoot = normalize(join(fileURLToPath(new URL("../../runtime-we
 const controlPlaneStaticRoot = normalize(join(fileURLToPath(new URL("../../control-plane/dist", import.meta.url))));
 const presenceTtlMs = Number.parseInt(process.env.PRESENCE_TTL_MS ?? "15000", 10);
 const storagePromise = createStorage();
+const legacyIdentityBoundary = createLegacyIdentityBoundary(storagePromise);
 const requiredProductionApiEnvVars = ["CONTROL_PLANE_ADMIN_TOKEN", "ROOM_STATE_PUBLIC_URL", "RUNTIME_BASE_URL", "STATE_TOKEN_SECRET", "LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET"] as const;
 
 const presenceByRoom = new Map<string, Map<string, PresenceRecord>>();
@@ -270,7 +272,7 @@ function resolveAccessRole(requestedRole: unknown, env: NodeJS.ProcessEnv = proc
 }
 
 function getStateTokenSecret(env: NodeJS.ProcessEnv = process.env): string {
-  return env.STATE_TOKEN_SECRET ?? "dev-state-secret";
+  return getRoomSessionTokenSecret(env);
 }
 
 function encodeAccessToken(payload: RoomAccessTokenPayload, env: NodeJS.ProcessEnv = process.env): string {
@@ -600,6 +602,7 @@ function resolveControlPlaneActor(request: IncomingMessage):
   if (bearerToken) {
     const session = verifyRoomSessionToken(bearerToken, getStateTokenSecret());
     if (!session.ok) {
+      if (isRotatedDevelopmentSession(bearerToken, getStateTokenSecret())) throw new IdentityBoundaryError(409, "identity_upgrade_required");
       return { ok: false, statusCode: 401, reason: session.code };
     }
     return {
@@ -705,12 +708,17 @@ async function verifyRoomSessionRequest(
   request: IncomingMessage,
   input: { roomId: string; participantId?: string; sessionToken?: string | null }
 ): Promise<RoomSessionTokenVerificationResult> {
+  await legacyIdentityBoundary.assertCompatible(input.roomId);
   const tenantId = await resolveRoomTenantId(input.roomId);
-  return verifyRoomSessionToken(input.sessionToken ?? getBearerToken(request), getStateTokenSecret(), {
+  const token = input.sessionToken ?? getBearerToken(request);
+  const secret = getStateTokenSecret();
+  const result = verifyRoomSessionToken(token, secret, {
     tenantId,
     roomId: input.roomId,
     participantId: input.participantId
   });
+  if (!result.ok && isRotatedDevelopmentSession(token, secret)) throw new IdentityBoundaryError(409, "identity_upgrade_required");
+  return result;
 }
 
 function isPrivateRoom(room: RoomRecord): boolean {
@@ -1442,6 +1450,17 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   const url = new URL(request.url ?? "/", `http://${request.headers.host ?? `localhost:${apiPort}`}`);
   const storage = await storagePromise;
 
+  if (legacyBoundaryApplies(method, url.pathname)) {
+    const actor = resolveControlPlaneActor(request);
+    const administrator = actor.ok && actor.actor.actorType === "admin-token";
+    if (!administrator || !legacyBoundaryAllowsAdministrator(url.pathname)) {
+      const scopedRoom = /^\/api\/rooms\/([^/]+)/.exec(url.pathname)?.[1];
+      const roomId = scopedRoom ? decodeURIComponent(scopedRoom)
+        : actor.ok && actor.actor.actorType === "room-session" ? actor.actor.roomId : undefined;
+      await legacyIdentityBoundary.assertCompatible(roomId);
+    }
+  }
+
   if (method === "OPTIONS") {
     response.writeHead(204, {
       "access-control-allow-origin": process.env.API_CORS_ORIGIN ?? "*",
@@ -1574,6 +1593,14 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     const served = await serveStatic(response, join(controlPlaneStaticRoot, url.pathname.replace(/^\/control-plane\//, "")));
     if (!served) json(response, 404, { error: "control_plane_asset_not_found" });
     return;
+  }
+
+  if (method === "GET" && url.pathname === "/api/internal/identity-policy") {
+    if (!isAuthorizedInternalRequest(request)) return json(response, 403, { error: "forbidden" });
+    const minimumProtocolVersion = await legacyIdentityBoundary.minimum();
+    const roomId = url.searchParams.get("roomId");
+    const roomRequiresV2 = roomId ? await storage.hasRoomIdentityAuthority(roomId) : false;
+    return json(response, 200, { minimumProtocolVersion, roomRequiresV2 });
   }
 
   if (method === "GET" && url.pathname === "/api/templates") {
@@ -1892,6 +1919,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
 
     const existing = (await storage.listRooms()).find((room) => room.roomType === "personal" && room.ownerParticipantId === participantId && room.tenantId === tenantId) ?? null;
     if (existing) {
+      await legacyIdentityBoundary.assertCompatible(existing.roomId);
       if (isRoomDisabled(existing)) {
         incrementCounter(metrics.personalRoomOpensTotal, "disabled");
         return json(response, 403, { error: "room_access_denied", reason: "room_disabled", roomId: existing.roomId });
@@ -2961,6 +2989,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     const ttlSeconds = Number.parseInt(process.env.STATE_TOKEN_TTL_SECONDS ?? "900", 10);
     const nowSeconds = Math.floor(Date.now() / 1000);
     const roomId = requestPayload?.roomId ?? "demo-room";
+    await legacyIdentityBoundary.assertCompatible(roomId);
     const room = await storage.getRoom(roomId);
     const requested = resolveAccessRole(requestPayload?.requestedRole ?? requestPayload?.role);
     const accessResult = await resolveStateTokenAccess(storage, request, room, requestPayload, requested);
@@ -3058,6 +3087,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       json(response, 400, { error: "remote_browser_media_token_payload_required" });
       return;
     }
+    await legacyIdentityBoundary.assertCompatible(payload.roomId);
     if (!isRemoteBrowserIdentityBinding({ objectId: payload.objectId, executorSessionId: payload.executorSessionId, executorInstanceId: payload.executorInstanceId, mediaParticipantId: payload.mediaParticipantId })) {
       return json(response, 400, { error: "invalid_session_binding" });
     }
@@ -3139,8 +3169,13 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
 }
 
 export function startApiServer(port = apiPort) {
+  getStateTokenSecret();
   const server = createServer((request, response) => {
     handleRequest(request, response).catch((error: unknown) => {
+      if (error instanceof IdentityBoundaryError) {
+        json(response, error.status, { error: error.status === 409 ? "identity_required" : "identity_authority_unavailable", reason: error.reason });
+        return;
+      }
       if (error instanceof Error && error.message === IDENTITY_LIFECYCLE_REQUIRES_V2) {
         json(response, 409, { error: "identity_required", reason: "identity_upgrade_required" });
         return;

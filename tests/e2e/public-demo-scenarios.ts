@@ -445,8 +445,14 @@ async function waitForPresentation(clients: DemoClient[], pageNumber: number, do
 }
 
 async function activateButton(page: Page, selector: string): Promise<void> {
-  await expect(page.locator(selector)).toBeEnabled({ timeout: 30_000 });
-  await page.locator(selector).evaluate((button: HTMLButtonElement) => button.click());
+  // Poll actionability and dispatch in one page task. A room-state refresh can
+  // disable/rebuild host controls between toBeEnabled() and a separate click(),
+  // in which case HTMLElement.click() silently does nothing.
+  await expect.poll(() => page.locator(selector).evaluate((button: HTMLButtonElement) => {
+    if (button.disabled) return false;
+    button.click();
+    return true;
+  }), { timeout: 30_000 }).toBe(true);
 }
 
 async function sessionRequest(

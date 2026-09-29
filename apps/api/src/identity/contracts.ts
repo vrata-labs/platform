@@ -1,6 +1,6 @@
 import type { RoomIdentityProof, RoomIdentityScope } from "@vrata/shared-types/identity-credential";
 import type { RoomPermission, RoomRole } from "@vrata/shared-types";
-import type { RoomRecord } from "../storage-contracts.js";
+import type { RoomRecord, RoomSessionControlState } from "../storage-contracts.js";
 
 export type { RoomIdentityScope, RoomIdentityProof };
 
@@ -24,7 +24,19 @@ export interface RoomIdentityAuthority extends RoomIdentityScope {
   ownerIdentityId: string | null;
   presenterIdentityId: string | null;
   revision: number;
+  lifecycle: RoomIdentityLifecycle;
 }
+
+export type RoomIdentityLifecycle = Required<Omit<RoomSessionControlState, "hostParticipantId" | "presenterParticipantId">>;
+
+export type RoomIdentityActor =
+  | { actorType: "room-session"; proof: RoomIdentityProof }
+  | { actorType: "admin-token"; actorId: string; role: "admin" };
+
+export type RoomIdentityCommand =
+  | { type: "lock" | "unlock" | "end" }
+  | { type: "grant-presenter" | "revoke-presenter" | "transfer-host" | "transfer-owner"; targetParticipantId: string }
+  | { type: "remove"; targetParticipantId: string; reason?: string };
 
 export interface RoomIdentityRecovery extends RoomIdentityScope {
   recoveryId: string;
@@ -56,6 +68,7 @@ export interface RoomIdentityStorage {
   claimHost(proof: RoomIdentityProof, expectedRevision: number): Promise<RoomIdentityAuthority>;
   transferHost(proof: RoomIdentityProof, toIdentityId: string, expectedRevision: number): Promise<RoomIdentityAuthority>;
   revoke(scope: RoomIdentityScope, identityId: string, expectedAuthEpoch: number): Promise<RoomIdentityRecord>;
+  transition(scope: RoomIdentityScope, actor: RoomIdentityActor, expectedRevision: number, command: RoomIdentityCommand): Promise<RoomIdentityAuthority>;
   issueRecovery(input: RoomIdentityScope & {
     recoveryId: string; secretHash: string; targetParticipantId: string; targetRole: "host" | "owner";
     expiresAt: string; issuer: { actorType: string; actorId: string; role: string };

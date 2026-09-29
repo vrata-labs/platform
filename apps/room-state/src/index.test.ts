@@ -79,7 +79,7 @@ test("room-state websocket requires valid signed room session token in productio
   process.env.VRATA_DISABLE_AUTOSTART = "1";
   process.env.NODE_ENV = "production";
   process.env.STATE_TOKEN_SECRET = "room-state-session-secret";
-  const server = startRoomStateService(4034);
+  const server = startRoomStateService(4034, { readIdentityPolicy: async () => ({ minimumProtocolVersion: 1, roomRequiresV2: false }) });
   const nowSeconds = Math.floor(Date.now() / 1000);
   const token = signRoomSessionToken({
     tenantId: "demo-tenant",

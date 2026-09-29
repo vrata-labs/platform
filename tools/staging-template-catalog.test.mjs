@@ -23,6 +23,15 @@ rejects(lambda: m.assert_target_allowed(None, {"state":"active", "referenceRoomC
 rejects(lambda: m.assert_target_allowed(None, {"state":"wave2", "referenceRoomCount":1}, None, baseline), "reference_capable")
 rejects(lambda: m.assert_target_allowed(baseline, None, None, current), "below_wave2")
 m.assert_target_allowed(baseline, {"state":"active", "referenceRoomCount":3}, contract, current)
+rejects(lambda: m.assert_target_allowed(baseline, None, contract, current, 2), "identity_rollback_below_boundary")
+boundary = dict(contract, identityProtocolFloorGuard=1)
+m.assert_target_allowed(baseline, {"state":"active", "referenceRoomCount":3}, boundary, current, 2)
+rejects(lambda: m.assert_target_allowed(baseline, None, contract, current, 1, True), "identity_rollback_below_boundary")
+m.assert_target_allowed(baseline, None, boundary, current, 1, True)
+for invalid in (None, True, "1", 0):
+    rejects(lambda: m.assert_target_allowed(None, None, dict(contract, identityProtocolFloorGuard=invalid), current, 2), "identity_rollback_below_boundary")
+for invalid in (0, True, None):
+    rejects(lambda: m.assert_target_allowed(None, None, boundary, current, invalid), "invalid_protocol_floor")
 with tempfile.TemporaryDirectory() as directory:
     host = m.CatalogHost(directory)
     assert host.run([sys.executable, "-c", "import sys; print(sys.stdin.read() or 'closed')"]) == "closed"
@@ -38,6 +47,9 @@ with tempfile.TemporaryDirectory() as directory:
     host.cli = cli
     host.run = lambda args: json.dumps(status)
     host.contract = lambda target: contract
+    host.minimum_identity_protocol = lambda: 1
+    host.identity_bound = lambda: False
+    host.validate_identity_database = lambda: None
     rejects(lambda: host.mutate("activate", baseline), "verified_wave2")
     rejects(lambda: host.record_wave2(baseline), "successful_gate")
     host.success_path.write_text(baseline)
@@ -59,4 +71,46 @@ with tempfile.TemporaryDirectory() as directory:
 print("catalog rollout assertions passed")
 `], { encoding: "utf8", input: "remaining deployment commands" });
   assert.match(output, /assertions passed/);
+});
+
+test("identity rollout reads the persistent floor while the API is down and rejects missing rows", () => {
+  execFileSync("python3", ["-B", "-c", `
+import importlib.util, tempfile
+spec = importlib.util.spec_from_file_location("catalog", ${JSON.stringify(fileURLToPath(new URL("./staging-template-catalog.py", import.meta.url)))})
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+with tempfile.TemporaryDirectory() as root:
+    host = m.CatalogHost(root)
+    answers = iter(["f"]); host.run = lambda args: next(answers)
+    assert host.minimum_identity_protocol() == 1
+    answers = iter(["t", "2"])
+    assert host.minimum_identity_protocol() == 2
+    for values in (["t", ""], ["t", "0"], ["t", "1\\n2"], ["unexpected"]):
+        answers = iter(values)
+        try: host.minimum_identity_protocol()
+        except ValueError as error: assert "invalid_protocol_floor" in str(error)
+        else: raise AssertionError("missing/corrupt floor must fail closed")
+    answers = iter(["t", "t"])
+    assert host.identity_bound() is True
+    answers = iter(["f"])
+    assert host.identity_bound() is False
+    import json
+    def model(api, state): return json.dumps({"services":{"api":{"environment":{"STATE_TOKEN_SECRET":api}},"room-state":{"environment":{"STATE_TOKEN_SECRET":state}}}})
+    for a, b in ((None,None),("dev-state-secret","dev-state-secret"),("configured-secret","different-secret")):
+        host.run = lambda args: model(a,b)
+        try: host.validate_identity_configuration()
+        except ValueError as error:
+            assert "identity_rollout_state_secret" in str(error)
+            assert "configured-secret" not in str(error) and "different-secret" not in str(error)
+        else: raise AssertionError("bad or drifting signing secret accepted")
+    host.run = lambda args: model("configured-secret","configured-secret")
+    host.validate_identity_configuration()
+    def database(url): return json.dumps({"services":{"api":{"environment":{"POSTGRES_URL":url}},"postgres":{"environment":{"POSTGRES_USER":"vrata","POSTGRES_DB":"vrata"}}}})
+    host.run = lambda args: database("postgres://vrata:test-only@postgres:5432/vrata")
+    host.validate_identity_database()
+    for url in ("postgres://vrata:test-only@external/vrata", "postgres://vrata:test-only@postgres/other", "postgres://vrata:test-only@postgres/vrata?options=custom"):
+        host.run = lambda args: database(url)
+        try: host.validate_identity_database()
+        except ValueError as error: assert str(error) == "identity_rollout_requires_matching_bundled_database"
+        else: raise AssertionError("probed an unrelated database")
+`], { encoding: "utf8" });
 });

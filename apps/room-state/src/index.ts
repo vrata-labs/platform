@@ -8,6 +8,7 @@ import {
   REMOTE_BROWSER_OBJECT_TYPE,
   PDF_PRESENTATION_OBJECT_TYPE,
   VIDEO_PLAYER_OBJECT_TYPE,
+  IDENTITY_UPGRADE_CLOSE_CODE,
   getRoomPermissions,
   hasRoomPermission,
   parseRoomRole,
@@ -18,7 +19,8 @@ import {
   type RoomPermission,
   type RoomRole
 } from "@vrata/shared-types";
-import { verifyRoomSessionToken } from "@vrata/shared-types/session-token";
+import { getRoomSessionTokenSecret, isRotatedDevelopmentSession, verifyRoomSessionToken } from "@vrata/shared-types/session-token";
+import { createIdentityProtocolReader, guardLegacySocket, type ReadIdentityProtocolPolicy } from "./identity-boundary.js";
 
 import type { PresenceState } from "./schema.js";
 import {
@@ -340,7 +342,7 @@ function safeEqual(left: string, right: string): boolean {
 }
 
 function getStateTokenSecret(env: NodeJS.ProcessEnv = process.env): string {
-  return env.STATE_TOKEN_SECRET ?? "dev-state-secret";
+  return getRoomSessionTokenSecret(env);
 }
 
 function resolveConnectionAccess(url: URL, roomId: string, participantId: string, env: NodeJS.ProcessEnv = process.env): ParticipantAccessState | null {
@@ -927,7 +929,13 @@ function stopRemoteBrowserSession(sessionId: string | null | undefined): void {
   });
 }
 
-export function startRoomStateService(port = Number.parseInt(process.env.ROOM_STATE_PORT ?? "2567", 10)) {
+export function startRoomStateService(port = Number.parseInt(process.env.ROOM_STATE_PORT ?? "2567", 10), dependencies: { readIdentityPolicy?: ReadIdentityProtocolPolicy } = {}) {
+  getStateTokenSecret();
+  if (!dependencies.readIdentityPolicy && process.env.NODE_ENV === "production"
+    && (!process.env.API_INTERNAL_URL?.trim() || !getInternalServiceToken())) throw new Error("identity_authority_configuration_required");
+  const readIdentityPolicy = dependencies.readIdentityPolicy ?? createIdentityProtocolReader({
+    baseUrl: process.env.API_INTERNAL_URL?.trim() || "http://127.0.0.1:4000", internalToken: getInternalServiceToken()
+  });
   const authority = createRoomStateServer();
   const httpServer = createServer((request, response) => {
     void (async () => {
@@ -1063,16 +1071,15 @@ export function startRoomStateService(port = Number.parseInt(process.env.ROOM_ST
     const participantId = url.searchParams.get("participantId") ?? randomUUID();
     const access = resolveConnectionAccess(url, roomId, participantId);
     if (!access) {
-      socket.close(1008, "invalid_session_token");
+      if (isRotatedDevelopmentSession(url.searchParams.get("accessToken"), getStateTokenSecret())) socket.close(IDENTITY_UPGRADE_CLOSE_CODE, "identity_upgrade_required");
+      else socket.close(1008, "invalid_session_token");
       return;
     }
 
-    try { connectParticipant(authority, roomId, participantId, socket, access); } catch {
-      socket.close(1008, "room_template_context_mismatch");
-      return;
-    }
-
-    socket.on("message", (raw) => {
+    guardLegacySocket({ socket, roomId, readPolicy: readIdentityPolicy,
+      onDenied: event => logEvent({ service: "room-state", event: "identity_boundary_denied", roomId, participantId, ...event }),
+      admit: () => connectParticipant(authority, roomId, participantId, socket, access),
+      dispatch: raw => {
       try {
         const payload = JSON.parse(String(raw)) as {
           type?: string;
@@ -1182,11 +1189,12 @@ export function startRoomStateService(port = Number.parseInt(process.env.ROOM_ST
           timestamp: new Date().toISOString()
         });
       }
+      }
     });
 
     socket.on("close", () => {
       metrics.socketDisconnectsTotal += 1;
-      disconnectParticipant(authority, roomId, participantId, socket);
+      if (authority.socketParticipants.has(socket)) disconnectParticipant(authority, roomId, participantId, socket);
     });
 
     socket.on("error", (error) => {

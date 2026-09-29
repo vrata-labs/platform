@@ -19,6 +19,7 @@ import { spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 
 import { parseEnvFile } from "./validate-production-config.mjs";
+import { assertIdentityRollbackTarget } from "./identity-rollback-guard.mjs";
 
 const BACKUP_SCHEMA_VERSION = 1;
 const DEFAULT_ENV_FILE = "infra/docker/.env.selfhost";
@@ -608,6 +609,8 @@ async function runRollback(options) {
   if (!smokeBaseUrl) {
     throw new Error("rollback_requires_smoke_base_url");
   }
+
+  assertIdentityRollbackTarget({ envFile: compose.envFile, composeFile: compose.composeFile, imageTag });
 
   const rollbackEnvDir = resolve(options["rollback-env-dir"] || join(DEFAULT_OUTPUT_DIR, "rollback-env"));
   mkdirSync(rollbackEnvDir, { recursive: true, mode: 0o700 });

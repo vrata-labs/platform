@@ -1,42 +1,21 @@
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import { getRoomPermissions } from "@vrata/shared-types";
+import type { RoomSessionControlState } from "../storage-contracts.js";
+import { activeIdentity, assertRoomActive, bumpAuthority, checkRevision, fail, identityLifecycle, identityWasRemoved, validCounter, validId } from "./authority.js";
+import { transitionIdentityAuthority } from "./transition.js";
 import {
   IdentityStorageError, type IdentityPersistence, type IdentityProvenance, type IdentityTransaction,
-  type RoomIdentityAuthority, type RoomIdentityProof, type RoomIdentityRecord, type RoomIdentityScope, type RoomIdentityStorage
+  type RoomIdentityAuthority, type RoomIdentityRecord, type RoomIdentityScope, type RoomIdentityStorage
 } from "./contracts.js";
 
-function fail(code: ConstructorParameters<typeof IdentityStorageError>[0]): never { throw new IdentityStorageError(code); }
-const validId = (value: unknown): value is string => typeof value === "string" && value.length > 0 && value.length <= 200 && !/[\u0000-\u001f]/.test(value);
-const validCounter = (value: unknown): value is number => Number.isInteger(value) && Number(value) >= 0 && Number(value) <= 2_147_483_647;
 const validHash = (value: unknown): value is string => typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
 
 export function assertIdentityScope(scope: RoomIdentityScope): void {
   if (!validId(scope.tenantId) || !validId(scope.roomId)) fail("invalid_identity_input");
 }
 
-export function emptyIdentityAuthority(scope: RoomIdentityScope): RoomIdentityAuthority {
-  return { tenantId: scope.tenantId, roomId: scope.roomId, hostIdentityId: null, ownerIdentityId: null, presenterIdentityId: null, revision: 0 };
-}
-
-function assertRoomActive(state: IdentityTransaction): void {
-  if (state.room.status === "disabled" || state.room.disabledAt || state.room.sessionControl?.endedAt) fail("room_blocked");
-}
-
-function activeIdentity(state: IdentityTransaction, proof: RoomIdentityProof): RoomIdentityRecord {
-  const identity = state.identities.get(proof.identityId);
-  if (!identity || identity.tenantId !== proof.tenantId || identity.roomId !== proof.roomId
-    || identity.participantId !== proof.participantId || identity.authEpoch !== proof.authEpoch || identity.revokedAt
-    || state.room.sessionControl?.removedParticipants?.[identity.participantId]) fail("identity_not_active");
-  return identity;
-}
-
-function checkRevision(state: IdentityTransaction, expected: number): void {
-  if (!validCounter(expected) || state.authority.revision !== expected) fail("authority_conflict");
-}
-
-function bumpAuthority(state: IdentityTransaction): void {
-  if (!validCounter(state.authority.revision) || state.authority.revision === 2_147_483_647) fail("authority_conflict");
-  state.authority.revision++;
+export function emptyIdentityAuthority(scope: RoomIdentityScope, legacy?: RoomSessionControlState): RoomIdentityAuthority {
+  return { tenantId: scope.tenantId, roomId: scope.roomId, hostIdentityId: null, ownerIdentityId: null, presenterIdentityId: null, revision: 0, lifecycle: identityLifecycle(legacy) };
 }
 
 function validateAdmission(provenance: IdentityProvenance, baseRole: "guest" | "member"): IdentityProvenance {
@@ -81,6 +60,8 @@ export function createRoomIdentityStorage(persistence: IdentityPersistence, now 
       const provenance = validateAdmission(input.provenance, input.baseRole);
       return persistence.transact(input, {}, state => {
         assertRoomActive(state);
+        if (state.authority.lifecycle.lockedAt && !((provenance.kind === "invite" || provenance.kind === "waiting-room")
+          && provenance.role === "host" && state.authority.hostIdentityId === null && state.authority.revision === 0)) fail("room_blocked");
         const record: RoomIdentityRecord = {
           tenantId: input.tenantId, roomId: input.roomId, identityId: randomUUID(), participantId: randomUUID(),
           authEpoch: 1, displayName: input.displayName, baseRole: input.baseRole, provenance,
@@ -142,7 +123,7 @@ export function createRoomIdentityStorage(persistence: IdentityPersistence, now 
         activeIdentity(state, proof);
         if (state.authority.hostIdentityId !== proof.identityId) fail("identity_forbidden");
         const target = state.identities.get(toIdentityId);
-        if (!target || target.revokedAt || state.room.sessionControl?.removedParticipants?.[target.participantId]) fail("identity_not_active");
+        if (!target || target.revokedAt || identityWasRemoved(state, target.participantId)) fail("identity_not_active");
         state.authority.hostIdentityId = toIdentityId;
         if (state.authority.presenterIdentityId === toIdentityId) state.authority.presenterIdentityId = null;
         bumpAuthority(state);
@@ -164,6 +145,16 @@ export function createRoomIdentityStorage(persistence: IdentityPersistence, now 
         return structuredClone(target);
       });
     },
+    async transition(scope, actor, expectedRevision, command) {
+      assertIdentityScope(scope);
+      return persistence.transact(scope, {
+        identityIds: actor?.actorType === "room-session" ? [actor.proof.identityId] : [],
+        participantId: command && "targetParticipantId" in command ? command.targetParticipantId : undefined
+      }, state => {
+        transitionIdentityAuthority(state, actor, expectedRevision, command, timestamp());
+        return structuredClone(state.authority);
+      });
+    },
     async issueRecovery(input) {
       assertIdentityScope(input);
       if (input.issuer?.actorType !== "admin-token" || input.issuer.role !== "admin" || !validId(input.issuer.actorId)) fail("identity_forbidden");
@@ -177,7 +168,7 @@ export function createRoomIdentityStorage(persistence: IdentityPersistence, now 
         if (state.recovery) fail("identity_conflict");
         const target = [...state.identities.values()].find(identity => identity.participantId === input.targetParticipantId);
         const binding = { targetParticipantId: input.targetParticipantId, targetIdentityId: target?.identityId ?? null, targetRole: input.targetRole };
-        if (!recoveryTargetIsCurrent(state, binding) || state.room.sessionControl?.removedParticipants?.[input.targetParticipantId]) fail("identity_forbidden");
+        if (!recoveryTargetIsCurrent(state, binding) || identityWasRemoved(state, input.targetParticipantId)) fail("identity_forbidden");
         state.recovery = {
           tenantId: input.tenantId, roomId: input.roomId, recoveryId: input.recoveryId, ...binding,
           expectedAuthEpoch: target?.authEpoch ?? null, expectedAuthorityRevision: state.authority.revision,
@@ -197,7 +188,7 @@ export function createRoomIdentityStorage(persistence: IdentityPersistence, now 
         if (!recovery || recovery.consumedAt || Date.parse(recovery.expiresAt) <= Date.parse(consumedAt)
           || !validHash(recovery.secretHash) || !timingSafeEqual(Buffer.from(secretHash, "hex"), Buffer.from(recovery.secretHash, "hex"))
           || state.authority.revision !== recovery.expectedAuthorityRevision || !recoveryTargetIsCurrent(state, recovery)
-          || state.room.sessionControl?.removedParticipants?.[recovery.targetParticipantId]) fail("recovery_invalid");
+          || identityWasRemoved(state, recovery.targetParticipantId)) fail("recovery_invalid");
         let target = recovery.targetIdentityId ? state.identities.get(recovery.targetIdentityId) : null;
         if (recovery.targetIdentityId) {
           if (!target || target.authEpoch !== recovery.expectedAuthEpoch || !validCounter(target.authEpoch) || target.authEpoch === 2_147_483_647) fail("recovery_invalid");

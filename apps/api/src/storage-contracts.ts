@@ -277,6 +277,8 @@ export interface XrTelemetryEventRecord {
 
 export interface Storage {
   readonly roomIdentities: import("./identity/contracts.js").RoomIdentityStorage;
+  readonly identityProtocol: import("./identity/protocol.js").IdentityProtocolPolicy;
+  hasRoomIdentityAuthority(roomId: string): Promise<boolean>;
   listTenants(): Promise<TenantRecord[]>;
   createTenant(input: Partial<TenantRecord>): Promise<TenantRecord>;
   updateTenant(tenantId: string, input: Partial<TenantRecord>): Promise<TenantRecord | null>;

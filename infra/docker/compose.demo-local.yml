@@ -41,6 +41,7 @@ services:
     environment: !override
       NODE_ENV: production
       ROOM_STATE_PORT: 2567
+      API_INTERNAL_URL: http://api:4000
       STATE_TOKEN_SECRET: ${STATE_TOKEN_SECRET}
       VRATA_INTERNAL_SERVICE_TOKEN: ${VRATA_INTERNAL_SERVICE_TOKEN}
       VRATA_DEV_ROLE_QUERY: "false"
