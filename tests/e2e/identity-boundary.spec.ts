@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { randomUUID } from "node:crypto";
 import { startReferenceTemplateFixture } from "./reference-template-fixture";
+import { signRoomSessionToken } from "../../packages/shared-types/src/session-token.js";
 
 // Raising the floor is irreversible. This case owns an isolated schema and is
 // intentionally never tagged for the shared staging database.
@@ -16,7 +17,6 @@ for (const staging of [false, true]) test(`${staging ? "@staging " : ""}obsolete
   const origin = fixture?.origin ?? process.env.BASE_URL!;
   const roomId = staging ? process.env.STAGING_ROOM_ID ?? "demo-room" : "demo-room";
   const participantId = `old-key-${randomUUID()}`;
-  const { signRoomSessionToken } = await import(pathToFileURL(resolve("packages/shared-types/dist/session-token.js")).href);
   const now = Math.floor(Date.now() / 1000);
   const token = signRoomSessionToken({ tenantId: "demo-tenant", roomId, participantId, displayName: "Old-key denial check",
     role: "guest", permissions: [], sessionId: randomUUID(), jti: randomUUID(), iat: now, exp: now + 600 }, "dev-state-secret");
