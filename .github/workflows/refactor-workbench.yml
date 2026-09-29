@@ -8,6 +8,10 @@ on:
 permissions:
   contents: write
 
+defaults:
+  run:
+    shell: bash
+
 jobs:
   verify-document-extraction:
     if: github.actor != 'github-actions[bot]'
@@ -27,6 +31,27 @@ jobs:
           data = b''.join(pathlib.Path(f'.refactor-workbench/part-{i}').read_bytes() for i in range(5))
           assert blob(data) == 'b65f642b3b8fe7766556c4e811b2a4fb1a0f384c'
           payload = json.loads(gzip.decompress(data))
+          fixes = {
+              'apps/runtime-web/src/testing/document-ui-dom.ts': [
+                  ('textContent: string | null = "";', 'textContent = "";')],
+              'apps/runtime-web/src/testing/document-library-harness.ts': [
+                  ('runtimeFlags: { documentsEnabled: true }, roomStateConnected: true,', 'runtimeFlags: { documentsEnabled: true as boolean }, roomStateConnected: true as boolean,'),
+                  ('presentationActionInFlight: false,', 'presentationActionInFlight: false as boolean,'),
+                  ('return hooks.deleteRoomDocument ? hooks.deleteRoomDocument(...args) : undefined;', 'return hooks.deleteRoomDocument ? hooks.deleteRoomDocument(...args) : makeDocument("pdf");')],
+              'apps/runtime-web/src/document-library-async.test.ts': [
+                  ('const result = deferred<void>(); h.hooks.deleteRoomDocument = () => result.promise;', 'const result = deferred<RuntimeDocumentRecord>(); h.hooks.deleteRoomDocument = () => result.promise;'),
+                  ('h.context.roomDocuments = [selected, latest]; result.resolve(); await pending;', 'h.context.roomDocuments = [selected, latest]; result.resolve(selected); await pending;')]
+          }
+          fixed_hashes = {
+              'apps/runtime-web/src/testing/document-ui-dom.ts': '55bb243648ee1a300e9bd58d27b9cb5058f94c92',
+              'apps/runtime-web/src/testing/document-library-harness.ts': 'c695af44fe19d51da6fe760de42181fe89b94256',
+              'apps/runtime-web/src/document-library-async.test.ts': 'b8690ff246c2833b6b73ced04243e4ddbcf43a32'
+          }
+          for name, edits in fixes.items():
+              for old, new in edits:
+                  assert payload['files'][name].count(old) == 1
+                  payload['files'][name] = payload['files'][name].replace(old, new)
+              assert blob(payload['files'][name].encode()) == fixed_hashes[name]
           main = payload['main']
           assert main['path'] == 'apps/runtime-web/src/main.ts'
           path = pathlib.Path(main['path'])
@@ -87,12 +112,6 @@ jobs:
             git push origin HEAD:refs/heads/chore/refactor-runtime-workbench-20260929
           fi
           git rev-parse HEAD | tee /tmp/refactor-commit.txt
-      - name: Collect dependency snapshot for offline verification
-        if: always()
-        run: |
-          if test -d node_modules/.pnpm; then
-            tar -czf /tmp/refactor-dependencies.tar.gz node_modules apps/runtime-web/node_modules packages/shared-types/node_modules
-          fi
       - name: Upload verification evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -106,4 +125,3 @@ jobs:
             /tmp/refactor-build.log
             /tmp/refactor-tests.log
             /tmp/refactor-commit.txt
-            /tmp/refactor-dependencies.tar.gz
