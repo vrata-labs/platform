@@ -63,3 +63,18 @@ test("recovery secrets use a different key domain and cannot cross room or token
   assert.equal(codec.verify(recovery.credential, scope), null);
   assert.equal(codec.parseRecovery(recovery.credential + "=", scope), null);
 });
+
+test("waiting proof is an opaque room-bound possession secret, not admission or recovery", () => {
+  const codec = createRoomIdentityCodec(secret);
+  const waiting = codec.createWaiting(scope);
+  const second = codec.createWaiting(scope);
+  assert.notEqual(waiting.credential, second.credential);
+  assert.deepEqual(codec.parseWaiting(waiting.credential, scope), { pendingId: waiting.pendingId, secretHash: waiting.secretHash });
+  assert.notEqual(codec.parseWaiting(waiting.credential, { ...scope, tenantId: "other" })?.secretHash, waiting.secretHash);
+  assert.notEqual(codec.parseWaiting(waiting.credential, { ...scope, roomId: "other" })?.secretHash, waiting.secretHash);
+  assert.equal(codec.verify(waiting.credential, scope), null);
+  assert.equal(codec.parseRecovery(waiting.credential, scope), null);
+  assert.equal(codec.parseWaiting(codec.createRecovery(scope).credential, scope), null);
+  assert.equal(codec.parseWaiting(waiting.credential + "=", scope), null);
+  assert.equal(codec.parseWaiting(`rw2.${waiting.pendingId}.${"A".repeat(43)}`, scope)?.secretHash === waiting.secretHash, false);
+});

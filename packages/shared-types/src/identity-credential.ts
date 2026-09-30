@@ -42,8 +42,11 @@ export function createRoomIdentityCodec(secret: string) {
   const derive = (purpose: string) => Buffer.from(hkdfSync("sha256", secret, "vrata.identity.v2", purpose, 32));
   const identityKey = derive("room-identity");
   const recoveryKey = derive("room-identity-recovery");
+  const waitingKey = derive("room-identity-waiting");
   const mac = (value: string) => createHmac("sha256", identityKey).update(value).digest();
   const recoveryHash = (scope: RoomIdentityScope, token: string) => createHmac("sha256", recoveryKey)
+    .update(JSON.stringify([scope.tenantId, scope.roomId, token])).digest("hex");
+  const waitingHash = (scope: RoomIdentityScope, token: string) => createHmac("sha256", waitingKey)
     .update(JSON.stringify([scope.tenantId, scope.roomId, token])).digest("hex");
 
   return {
@@ -86,6 +89,18 @@ export function createRoomIdentityCodec(secret: string) {
       const match = /^rr2\.([0-9a-f-]{36})\.([A-Za-z0-9_-]{43})$/.exec(token);
       if (!match || !uuid.test(match[1]) || Buffer.from(match[2], "base64url").toString("base64url") !== match[2]) return null;
       return { recoveryId: match[1], secretHash: recoveryHash(scope, token) };
+    },
+    createWaiting(scope: RoomIdentityScope): { pendingId: string; credential: string; secretHash: string } {
+      if (!identifier(scope.tenantId) || !identifier(scope.roomId)) throw new Error("invalid_identity_scope");
+      const pendingId = randomUUID();
+      const credential = `rw2.${pendingId}.${randomBytes(32).toString("base64url")}`;
+      return { pendingId, credential, secretHash: waitingHash(scope, credential) };
+    },
+    parseWaiting(token: unknown, scope: RoomIdentityScope): { pendingId: string; secretHash: string } | null {
+      if (!identifier(scope.tenantId) || !identifier(scope.roomId) || typeof token !== "string" || token.length > 128) return null;
+      const match = /^rw2\.([0-9a-f-]{36})\.([A-Za-z0-9_-]{43})$/.exec(token);
+      if (!match || !uuid.test(match[1]) || Buffer.from(match[2], "base64url").toString("base64url") !== match[2]) return null;
+      return { pendingId: match[1], secretHash: waitingHash(scope, token) };
     }
   };
 }

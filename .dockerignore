@@ -12,6 +12,7 @@ playwright-report
 .reference-scene-assets
 .template-rollback
 .identity-rollback
+.identity-boundary-rollback
 infra/docker/.template-wave2-rollback-sha
 .turbo
 .next

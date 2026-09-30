@@ -25,7 +25,7 @@ async function stop(child: ChildProcess) {
   const exited = once(child, "exit"); child.kill("SIGTERM"); await exited;
 }
 
-test("rollback boundary rejects v1 issuance, both refreshes, REST and live WS on a migrated PostgreSQL database", {
+test("activated boundary rejects legacy issuance and refreshes while requiring proof for v2", {
   skip: !process.env.VRATA_TEST_POSTGRES_URL && !process.env.CI, timeout: 120_000
 }, async () => {
   assert.ok(process.env.VRATA_TEST_POSTGRES_URL);
@@ -161,7 +161,7 @@ test("rollback boundary rejects v1 issuance, both refreshes, REST and live WS on
         ["/api/personal-room", { participantId }, "POST"]
       ] as const) {
         const response = await request(path, tokens[index], body, method);
-        assert.equal(response.status, 409, path);
+        assert.equal(response.status, path === "/api/tokens/state" ? 426 : 409, path);
         assert.deepEqual(await response.json(), { error: "identity_required", reason: "identity_upgrade_required" });
       }
       for (const token of [tokens[index], undefined]) {
@@ -172,9 +172,19 @@ test("rollback boundary rejects v1 issuance, both refreshes, REST and live WS on
       }
     }
     const credential = createRoomIdentityCodec(rootSecret).sign(bound);
-    assert.equal((await request("/api/tokens/state", undefined, { roomId: rooms[1].roomId, identityProtocolVersion: 2, identityCredential: credential })).status, 409);
+    const proven = await request("/api/tokens/state", undefined, { roomId: rooms[1].roomId, identityProtocolVersion: 2,
+      participantId: "legacy-owner", requestedRole: "host", identityCredential: credential });
+    assert.equal(proven.status, 200);
+    const adopted = await proven.json() as { identityProtocolVersion: number; participantId: string; role: string; token: string };
+    assert.equal(adopted.identityProtocolVersion, 2);
+    assert.equal(adopted.participantId, bound.participantId);
+    assert.equal(adopted.role, "guest");
+    assert.equal(adopted.token.startsWith("rs2."), true);
+    assert.equal((await request("/api/tokens/state", tokens[1], { roomId: rooms[1].roomId, identityProtocolVersion: 2,
+      identityCredential: credential })).status, 426, "legacy JWT must not accompany a v2 exchange");
     for (const path of ["/api/tokens/state", "/api/personal-room"]) {
-      assert.equal((await fetch(`${base}${path}`, { method: "POST", headers, body: "{}" })).status, 409, "admin cannot mint during a fail-closed rollback");
+      assert.equal((await fetch(`${base}${path}`, { method: "POST", headers, body: "{}" })).status,
+        path === "/api/tokens/state" ? 426 : 409, "administrator token never silently converts an old client");
     }
     assert.equal((await fetch(`${base}/api/control-plane/session`, { headers })).status, 200);
     assert.equal((await fetch(`${base}/health`)).status, 200);
@@ -197,7 +207,7 @@ test("rollback boundary rejects v1 issuance, both refreshes, REST and live WS on
       assert.equal(restarted.exitCode, null, logs.join(""));
       try { return (await fetch(`${base}/health`)).ok; } catch { return false; }
     }, 60_000);
-    assert.equal((await request("/api/tokens/state", undefined, { roomId: rooms[0].roomId })).status, 409, "restart preserves the database floor");
+    assert.equal((await request("/api/tokens/state", undefined, { roomId: rooms[0].roomId })).status, 426, "restart preserves the database floor");
   } finally {
     for (const socket of sockets) if (socket.readyState === WebSocket.OPEN) socket.close();
     await Promise.all(children.map(stop));

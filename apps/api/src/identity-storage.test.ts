@@ -3,6 +3,7 @@ import test, { type TestContext } from "node:test";
 import { randomUUID } from "node:crypto";
 import { Pool } from "pg";
 import { createRoomIdentityCodec } from "@vrata/shared-types/identity-credential";
+import { createRoomSessionV2Codec } from "@vrata/shared-types/room-session-v2";
 import { signRoomSessionToken } from "@vrata/shared-types/session-token";
 import { MemoryStorage, PostgresStorage, type Storage } from "./storage.js";
 import { createRoomIdentityService } from "./identity/service.js";
@@ -32,18 +33,21 @@ async function fixture(t: TestContext, backend: "memory" | "postgres") {
   } else storage = new MemoryStorage(now);
   const ids = storage.roomIdentities;
   const service = createRoomIdentityService(ids, secret, now);
-  const makeRoom = async (personal = false, legacyId?: string) => {
+  const makeRoom = async (personal = false, legacyId?: string, legacyHost = true) => {
     const roomId = randomUUID();
     const legacy = legacyId ?? `legacy-${randomUUID()}`;
     const room = await storage.createRoom({ roomId, tenantId: "demo-tenant", templateId: "meeting-room-basic", name: "Identity contracts",
       roomType: personal ? "personal" : "standard", ownerParticipantId: personal ? legacy : null,
-      sessionControl: { hostParticipantId: legacy } });
+      sessionControl: { hostParticipantId: legacyHost ? legacy : null } });
     return { scope: { roomId, tenantId: room.tenantId }, legacy };
   };
-  const create = (scope: RoomIdentityScope, role: "guest" | "member" | "host" = "member") => service.admitFromVerifiedAccess({
-    ...scope, displayName: "Identity fixture", baseRole: role === "guest" ? "guest" : "member",
-    provenance: role === "guest" ? { kind: "guest" } : { kind: "invite", inviteId: "server-validated-invite", role }
-  });
+  const create = async (scope: RoomIdentityScope, role: "guest" | "member" | "host" = "member") => {
+    // Internal fixture seeding only: public issuance uses the locked admit or
+    // one-time recovery paths and never accepts caller-supplied provenance.
+    const identity = await ids.create({ ...scope, displayName: "Identity fixture", baseRole: role === "guest" ? "guest" : "member",
+      provenance: role === "guest" ? { kind: "guest" } : { kind: "invite", inviteId: "server-validated-invite", role } });
+    return { identity, credential: createRoomIdentityCodec(secret).sign(identity, { nowSeconds: Math.floor(now() / 1000) }) };
+  };
   const issueRecovery = (scope: RoomIdentityScope, participantId: string, role: "host" | "owner" = "host") => service.issueRecovery({
     ...scope, issuer: admin, targetRole: role, targetParticipantId: participantId, expiresAt: new Date(now() + 60_000).toISOString()
   });
@@ -101,6 +105,214 @@ for (const backend of ["memory", "postgres"] as const) {
       await assert.rejects(f.ids.create({ ...scope, displayName: "Owner without proof", baseRole: "member", provenance: { kind: "personal-owner" } }), code("identity_forbidden"));
     });
 
+    await t.test("admission ignores public participant IDs and checks invite, role and initial Host atomically", async () => {
+      const f = await fixture(t, backend);
+      await assert.rejects(f.service.admit({ tenantId: "demo-tenant", roomId: "demo-room", displayName: "Too soon" }), code("identity_forbidden"));
+      await f.storage.identityProtocol.raise(2);
+      const { scope, legacy } = await f.makeRoom(false, undefined, false);
+      const invited = await f.storage.createRoomInvite({ roomId: scope.roomId, tokenHash: `invite-${randomUUID()}`,
+        role: "host", protocolVersion: 2, waitingRoomEnabled: false, expiresAt: new Date(f.now() + 60_000).toISOString() });
+      const forgedIdentityId = randomUUID();
+      const spoofed = { ...scope, displayName: "Untrusted", inviteTokenHash: invited.tokenHash, participantId: legacy,
+        identityId: forgedIdentityId, baseRole: "host", provenance: { kind: "personal-owner" } } as Parameters<typeof f.service.admit>[0];
+      const [one, two] = await Promise.all([f.service.admit(spoofed), f.service.admit(spoofed)]);
+      assert.notEqual(one.identity.participantId, legacy);
+      assert.notEqual(one.identity.identityId, forgedIdentityId);
+      assert.notEqual(one.identity.participantId, two.identity.participantId);
+      assert.deepEqual(one.identity.provenance, { kind: "invite", inviteId: invited.inviteId, role: "host" });
+      assert.deepEqual(two.identity.provenance, { kind: "invite", inviteId: invited.inviteId, role: "host" });
+      assert.equal((await f.ids.authority(scope))?.revision, 1);
+      const authority = await f.ids.authority(scope);
+      assert.equal([one, two].filter(item => item.identity.identityId === authority?.hostIdentityId).length, 1);
+      const currentHost = [one, two].find(item => item.identity.identityId === authority?.hostIdentityId)!;
+      const other = currentHost === one ? two : one;
+      assert.equal((await f.service.resolveCredential(currentHost.credential, scope))?.role, "host");
+      assert.equal((await f.service.resolveCredential(other.credential, scope))?.role, "member");
+      await f.ids.transition(scope, { actorType: "room-session", proof: currentHost.identity }, 1,
+        { type: "transfer-host", targetParticipantId: other.identity.participantId });
+      assert.equal((await f.service.resolveCredential(other.credential, scope))?.role, "host");
+      const late = await f.service.admit(spoofed);
+      assert.equal((await f.service.resolveCredential(late.credential, scope))?.role, "member");
+      assert.equal((await f.ids.authority(scope))?.revision, 2);
+    });
+
+    await t.test("admission fails for foreign, revoked, expired, waiting-room and admin invitations", async () => {
+      const f = await fixture(t, backend);
+      await assert.rejects(f.service.beginWaiting({ tenantId: "demo-tenant", roomId: "demo-room", inviteTokenHash: "unavailable", displayName: "Too soon",
+        expiresAt: new Date(f.now() + 60_000).toISOString() }), code("identity_forbidden"));
+      await f.storage.identityProtocol.raise(2);
+      const { scope } = await f.makeRoom();
+      const other = await f.makeRoom(true);
+      const old = await f.storage.createRoomInvite({ roomId: scope.roomId, tokenHash: `legacy-${randomUUID()}`,
+        role: "host", waitingRoomEnabled: false, expiresAt: new Date(f.now() + 60_000).toISOString() });
+      assert.equal(old.protocolVersion, 1);
+      old.protocolVersion = 2;
+      old.role = "guest";
+      assert.equal((await f.storage.getRoomInvite(old.inviteId))?.protocolVersion, 1);
+      await assert.rejects(f.service.admit({ ...scope, displayName: "Old Host invite", inviteTokenHash: old.tokenHash }), code("identity_forbidden"));
+      for (const [role, expiresIn, pending, revoked] of [
+        ["guest", 60_000, false, true], ["member", -1000, false, false],
+        ["host", 60_000, true, false], ["admin", 60_000, false, false]
+      ] as const) {
+        const invite = await f.storage.createRoomInvite({ roomId: scope.roomId, tokenHash: `invite-${randomUUID()}`,
+          role, protocolVersion: 2, waitingRoomEnabled: pending, expiresAt: new Date(f.now() + expiresIn).toISOString() });
+        if (revoked) await f.storage.revokeRoomInvite(scope.roomId, invite.inviteId, new Date(f.now()).toISOString());
+        await assert.rejects(f.service.admit({ ...scope, displayName: "No proof", inviteTokenHash: invite.tokenHash }),
+          code(pending ? "waiting_room_pending" : "identity_forbidden"));
+        await assert.rejects(f.service.admit({ ...other.scope, displayName: "Foreign", inviteTokenHash: invite.tokenHash }), code("identity_forbidden"));
+      }
+      await assert.rejects(f.service.admit({ ...other.scope, displayName: "Known legacy owner", participantId: other.legacy } as Parameters<typeof f.service.admit>[0]), code("identity_forbidden"));
+      const guest = await f.service.admit({ ...scope, displayName: "Public guest", participantId: "legacy-host" } as Parameters<typeof f.service.admit>[0]);
+      assert.notEqual(guest.identity.participantId, "legacy-host");
+      assert.equal((await f.service.resolveCredential(guest.credential, scope))?.role, "guest");
+      assert.equal((await f.ids.authority(scope))?.revision, 0);
+      const personalHostInvite = await f.storage.createRoomInvite({ roomId: other.scope.roomId, tokenHash: `personal-${randomUUID()}`,
+        role: "host", protocolVersion: 2, waitingRoomEnabled: false, expiresAt: new Date(f.now() + 60_000).toISOString() });
+      const personalMember = await f.service.admit({ ...other.scope, displayName: "Invited", inviteTokenHash: personalHostInvite.tokenHash });
+      assert.equal((await f.service.resolveCredential(personalMember.credential, other.scope))?.role, "member");
+      assert.equal((await f.ids.authority(other.scope))?.hostIdentityId, null);
+      const presentation = await f.storage.createRoomInvite({ roomId: scope.roomId, tokenHash: `presenter-${randomUUID()}`,
+        role: "presenter", protocolVersion: 2, waitingRoomEnabled: false, expiresAt: new Date(f.now() + 60_000).toISOString() });
+      const presenterCandidate = await f.service.admit({ ...scope, displayName: "Presenter candidate", inviteTokenHash: presentation.tokenHash });
+      assert.equal((await f.service.resolveCredential(presenterCandidate.credential, scope))?.role, "member", "presenter privileges require an explicit Host transition");
+      assert.equal((await f.ids.authority(scope))?.revision, 0);
+    });
+
+    await t.test("waiting proof creates only pending admission and exactly one approved redemption", async () => {
+      const f = await fixture(t, backend);
+      await f.storage.identityProtocol.raise(2);
+      const { scope } = await f.makeRoom(false, undefined, false);
+      const foreign = await f.makeRoom(false, undefined, false);
+      const invite = await f.storage.createRoomInvite({ roomId: scope.roomId, tokenHash: `waiting-${randomUUID()}`,
+        role: "host", protocolVersion: 2, waitingRoomEnabled: true, expiresAt: new Date(f.now() + 60_000).toISOString() });
+      const pending = await f.service.beginWaiting({ ...scope, inviteTokenHash: invite.tokenHash, displayName: "Waiting Host",
+        expiresAt: new Date(f.now() + 60_000).toISOString() });
+      assert.equal(await f.service.resolveCredential(pending.credential, scope), null);
+      assert.equal(await f.service.resolveSession(pending.credential, scope), null);
+      assert.equal((await f.ids.authority(scope))?.revision, 0);
+      const request = await f.storage.getWaitingRoomRequest(pending.requestId);
+      assert.equal(request?.status, "pending");
+      assert.equal(request?.roomId, scope.roomId);
+      assert.notEqual(request?.participantId, scope.roomId);
+      if (f.pool) await assert.rejects(f.pool.query("delete from room_identity_pending_v2 where pending_id=$1", [pending.credential.split(".")[1]]), /identity_namespace_requires_room_delete/);
+      request!.status = "approved";
+      await assert.rejects(f.service.redeemWaiting(pending.credential, scope), code("waiting_room_pending"), "a public request object is not approval");
+      await assert.rejects(f.service.redeemWaiting(pending.credential, foreign.scope), code("waiting_proof_invalid"));
+      await assert.rejects(f.service.redeemWaiting(pending.credential + "x", scope), code("waiting_proof_invalid"));
+      const approved = await f.storage.updateWaitingRoomRequest(scope.roomId, pending.requestId,
+        { status: "approved", decidedBy: "authorized-host", decidedAt: new Date(f.now()).toISOString() });
+      assert.equal(approved?.status, "approved");
+      const attempts = await Promise.allSettled(Array.from({ length: 8 }, () => f.service.redeemWaiting(pending.credential, scope)));
+      const winners = attempts.filter((item): item is PromiseFulfilledResult<Awaited<ReturnType<typeof f.service.redeemWaiting>>> => item.status === "fulfilled");
+      assert.equal(winners.length, 1);
+      const winner = winners[0].value;
+      assert.equal(winner.identity.participantId, request?.participantId);
+      assert.deepEqual(winner.identity.provenance, { kind: "waiting-room", inviteId: invite.inviteId, requestId: pending.requestId, role: "host" });
+      assert.equal((await f.service.resolveCredential(winner.credential, scope))?.role, "host");
+      assert.equal((await f.ids.authority(scope))?.revision, 1);
+      await assert.rejects(f.service.redeemWaiting(pending.credential, scope), code("waiting_proof_invalid"));
+      assert.equal((await f.ids.get(scope, winner.identity.identityId))?.authEpoch, 1);
+      if (f.pool) {
+        const record = (await f.pool.query("select activated_at,secret_hash from room_identity_pending_v2 where pending_id=$1", [pending.credential.split(".")[1]])).rows[0];
+        assert.ok(record.activated_at);
+        assert.notEqual(record.secret_hash, pending.credential);
+        await assert.rejects(f.pool.query("update room_identity_pending_v2 set activated_at=null where pending_id=$1", [pending.credential.split(".")[1]]), /immutable_identity_pending/);
+        assert.equal((await f.pool.query("delete from room_identity_pending_v2 where pending_id=$1", [pending.credential.split(".")[1]])).rowCount, 1);
+        assert.equal((await f.ids.resolve(winner.identity))?.role, "host", "pending cleanup does not revoke the admitted identity");
+        await assert.rejects(f.service.redeemWaiting(pending.credential, scope), code("waiting_proof_invalid"));
+        const foreignRoom = await f.makeRoom(false, undefined, false);
+        await assert.rejects(f.pool.query(`insert into room_identity_pending_v2
+          (tenant_id,room_id,pending_id,invite_id,request_id,participant_id,display_name,secret_hash,created_at,expires_at)
+          values ($1,$2,$3,$4,$5,$6,$7,$8,now(),now()+interval '1 minute')`,
+        [foreignRoom.scope.tenantId, foreignRoom.scope.roomId, randomUUID(), invite.inviteId, pending.requestId,
+          randomUUID(), "Cross-room", "a".repeat(64)]), /pending_v2_(invite|request)/);
+      }
+    });
+
+    await t.test("waiting proof is invalidated by expiry, rejection and invite revocation", async () => {
+      const f = await fixture(t, backend);
+      await f.storage.identityProtocol.raise(2);
+      const { scope } = await f.makeRoom(false, undefined, false);
+      for (const outcome of ["expired", "rejected", "revoked"] as const) {
+        const invite = await f.storage.createRoomInvite({ roomId: scope.roomId, tokenHash: `wait-${randomUUID()}`,
+          role: "member", protocolVersion: 2, waitingRoomEnabled: true, expiresAt: new Date(f.now() + 90_000).toISOString() });
+        const pending = await f.service.beginWaiting({ ...scope, inviteTokenHash: invite.tokenHash, displayName: outcome,
+          expiresAt: new Date(f.now() + 30_000).toISOString() });
+        await f.storage.updateWaitingRoomRequest(scope.roomId, pending.requestId,
+          { status: outcome === "rejected" ? "rejected" : "approved", decidedBy: "authorized-host", decidedAt: new Date(f.now()).toISOString() });
+        if (outcome === "expired") f.advance(31_000);
+        if (outcome === "revoked") await f.storage.revokeRoomInvite(scope.roomId, invite.inviteId, new Date(f.now()).toISOString());
+        await assert.rejects(f.service.redeemWaiting(pending.credential, scope), code(outcome === "rejected" ? "waiting_room_rejected" : "waiting_proof_invalid"));
+      }
+      assert.equal((await f.ids.authority(scope))?.revision, 0);
+    });
+
+    await t.test("pending waiting admissions are bounded per invite and expired slots can be reused", async () => {
+      const f = await fixture(t, backend);
+      await f.storage.identityProtocol.raise(2);
+      const { scope } = await f.makeRoom(false, undefined, false);
+      const invite = await f.storage.createRoomInvite({ roomId: scope.roomId, tokenHash: `bounded-${randomUUID()}`,
+        role: "member", protocolVersion: 2, waitingRoomEnabled: true, expiresAt: new Date(f.now() + 90_000).toISOString() });
+      const enter = () => f.service.beginWaiting({ ...scope, inviteTokenHash: invite.tokenHash, displayName: "One of eight",
+        expiresAt: new Date(f.now() + 30_000).toISOString() });
+      const attempts = await Promise.all(Array.from({ length: 8 }, enter));
+      assert.equal(new Set(attempts.map(item => item.requestId)).size, 8);
+      await assert.rejects(enter(), code("waiting_room_capacity_reached"));
+      assert.equal((await f.storage.listWaitingRoomRequests(scope.roomId)).length, 8);
+      f.advance(31_000);
+      const later = await enter();
+      assert.ok(later.requestId);
+      assert.equal((await f.storage.listWaitingRoomRequests(scope.roomId)).length, 9,
+        "request metadata remains available for cleanup and audit until a bounded maintenance pass");
+    });
+
+    await t.test("fresh personal owner and its Host slot are created in one server-owned operation", async () => {
+      const f = await fixture(t, backend);
+      const input = { tenantId: "demo-tenant", templateId: "meeting-room-basic", name: `Personal ${randomUUID()}`,
+        displayName: "Real Owner", ownerParticipantId: "forged-public-owner", roomType: "standard",
+        sessionControl: { hostParticipantId: "forged-host" }, guestAllowed: true, visibility: "public" } as Parameters<Storage["createPersonalOwnedRoom"]>[0];
+      await assert.rejects(f.storage.createPersonalOwnedRoom(input), /identity_upgrade_required/);
+      assert.equal((await f.storage.listRooms()).filter(room => room.name === input.name).length, 0);
+      await f.storage.identityProtocol.raise(2);
+      const { room, identity } = await f.storage.createPersonalOwnedRoom(input);
+      const scope = { tenantId: room.tenantId, roomId: room.roomId };
+      assert.notEqual(room.ownerParticipantId, "forged-public-owner");
+      assert.notEqual(room.ownerParticipantId, "forged-host");
+      assert.equal(room.ownerParticipantId, identity.participantId);
+      assert.equal(room.roomType, "personal");
+      assert.equal(room.visibility, "private");
+      assert.equal(room.guestAllowed, false);
+      assert.equal(room.sessionControl?.hostParticipantId, identity.participantId);
+      assert.deepEqual(identity.provenance, { kind: "personal-owner" });
+      assert.equal((await f.ids.resolve(identity))?.role, "host");
+      assert.equal((await f.ids.resolve(identity))?.isOwner, true);
+      const authority = await f.ids.authority(scope);
+      assert.equal(authority?.revision, 1);
+      assert.equal(authority?.ownerIdentityId, identity.identityId);
+      assert.equal(authority?.hostIdentityId, identity.identityId);
+      await assert.rejects(f.service.admit({ ...scope, displayName: "Owner ID is public", participantId: identity.participantId } as Parameters<typeof f.service.admit>[0]), code("identity_forbidden"));
+      const credential = createRoomIdentityCodec(secret).sign(identity, { nowSeconds: Math.floor(f.now() / 1000) });
+      assert.equal((await f.service.issueSession(credential, scope)).role, "host");
+      if (f.pool) {
+        const restarted = new PostgresStorage(f.pool, f.now);
+        await restarted.init();
+        assert.equal((await restarted.roomIdentities.resolve(identity))?.isOwner, true);
+      }
+    });
+
+    if (f.pool) await t.test("personal bootstrap rolls room and owner back together if authority cannot be written", async () => {
+      const f = await fixture(t, backend);
+      await f.storage.identityProtocol.raise(2);
+      const name = `Atomic owner ${randomUUID()}`;
+      await f.pool!.query("alter table room_identity_authority_v2 add constraint test_reject_personal_owner check (owner_identity_id is null)");
+      try {
+        await assert.rejects(f.storage.createPersonalOwnedRoom({ tenantId: "demo-tenant", templateId: "meeting-room-basic", name,
+          displayName: "Owner" }), /test_reject_personal_owner/);
+        assert.equal((await f.storage.listRooms()).filter(room => room.name === name).length, 0);
+        assert.equal((await f.pool!.query("select count(*)::integer as count from room_identities_v2 where provenance->>'kind'='personal-owner'")).rows[0].count, 0);
+      } finally { await f.pool!.query("alter table room_identity_authority_v2 drop constraint test_reject_personal_owner"); }
+    });
+
     await t.test("legacy trusted host JWT cannot renew, recover or mutate v2 authority", async () => {
       const { scope, legacy } = await f.makeRoom();
       const n = Math.floor(f.now() / 1000);
@@ -113,6 +325,44 @@ for (const backend of ["memory", "postgres"] as const) {
       await assert.rejects(f.service.issueRecovery({ ...scope, targetRole: "host", targetParticipantId: legacy,
         expiresAt: new Date(f.now() + 60_000).toISOString(), issuer: { actorType: "room-session", role: "admin", actorId: legacy } }), code("identity_forbidden"));
       assert.equal((await f.ids.authority(scope))?.hostIdentityId, null);
+    });
+
+    await t.test("v2 sessions resolve current authority and reject legacy laundering, replay and revoked epochs", async () => {
+      const { scope } = await f.makeRoom();
+      const host = await f.create(scope, "host");
+      const next = await f.create(scope);
+      await f.ids.claimHost(host.identity, 0);
+      const first = await f.service.issueSession(host.credential, scope);
+      assert.equal(first.role, "host");
+      assert.equal((await f.service.resolveSession(first.sessionToken, scope))?.role, "host");
+      assert.equal(await f.service.resolveSession(host.credential, scope), null);
+      assert.equal(await f.service.resolveCredential(first.sessionToken, scope), null);
+      const claims = createRoomSessionV2Codec(secret).verify(first.sessionToken, scope, Math.floor(f.now() / 1000));
+      assert.ok(claims);
+      assert.equal(Object.hasOwn(claims, "role"), false);
+      assert.equal(Object.hasOwn(claims, "permissions"), false);
+      assert.equal(await f.service.resolveSession(first.sessionToken, { ...scope, roomId: "other" }), null);
+      await f.ids.transferHost(host.identity, next.identity.identityId, 1);
+      assert.equal((await f.service.resolveSession(first.sessionToken, scope))?.role, "member");
+      await assert.rejects(f.service.renewSession(first.sessionToken, next.credential, scope), code("identity_not_active"));
+      await assert.rejects(f.service.renewSession(first.sessionToken, first.sessionToken, scope), code("identity_not_active"));
+      const renewed = await f.service.renewSession(first.sessionToken, host.credential, scope);
+      assert.equal(renewed.role, "member");
+      assert.notEqual(renewed.sessionToken, first.sessionToken);
+      const renewedClaims = createRoomSessionV2Codec(secret).verify(renewed.sessionToken, scope, Math.floor(f.now() / 1000));
+      assert.equal(renewedClaims?.sessionId, claims.sessionId);
+      await f.ids.revoke(scope, host.identity.identityId, 1);
+      assert.equal(await f.service.resolveSession(first.sessionToken, scope), null);
+      await assert.rejects(f.service.renewSession(renewed.sessionToken, host.credential, scope), code("identity_not_active"));
+      const timebound = createRoomIdentityService(f.ids, secret, f.now, { identityLifetimeSeconds: 86_400, sessionLifetimeSeconds: 60 });
+      const identity = await f.ids.create({ ...scope, displayName: "Guest", baseRole: "guest", provenance: { kind: "guest" } });
+      const longLived = { identity, credential: createRoomIdentityCodec(secret).sign(identity,
+        { nowSeconds: Math.floor(f.now() / 1000), lifetimeSeconds: 86_400 }) };
+      const session = await timebound.issueSession(longLived.credential, scope);
+      f.advance(61_000);
+      assert.equal(await timebound.resolveSession(session.sessionToken, scope), null);
+      assert.ok(await timebound.resolveCredential(longLived.credential, scope));
+      assert.ok((await timebound.issueSession(longLived.credential, scope)).sessionToken);
     });
 
     await t.test("concurrent host claims and transfers are CAS; role is not cached in credentials", async () => {
@@ -430,6 +680,71 @@ for (const backend of ["memory", "postgres"] as const) {
       }
     });
 
+    if (f.pool) await t.test("Postgres admission waits for invite revocation and cannot use a stale check", async () => {
+      const f = await fixture(t, backend);
+      await f.storage.identityProtocol.raise(2);
+      const { scope } = await f.makeRoom(false, undefined, false);
+      const invite = await f.storage.createRoomInvite({ roomId: scope.roomId, tokenHash: `invite-${randomUUID()}`,
+        role: "host", protocolVersion: 2, waitingRoomEnabled: false, expiresAt: new Date(f.now() + 60_000).toISOString() });
+      const holder = await f.pool!.connect();
+      let attempt: Promise<unknown> | undefined;
+      const wait = async (predicate: () => Promise<boolean>) => {
+        for (let i = 0; i < 100; i++) { if (await predicate()) return; await delay(25); }
+        assert.fail("expected invite row lock was not observed");
+      };
+      try {
+        await holder.query("begin");
+        await holder.query("select 1 from room_invites where invite_id=$1 for update", [invite.inviteId]);
+        const holderPid: number = (await holder.query("select pg_backend_pid() as pid")).rows[0].pid;
+        attempt = f.service.admit({ ...scope, displayName: "Too late", inviteTokenHash: invite.tokenHash });
+        void attempt.catch(() => undefined);
+        await wait(async () => (await f.pool!.query(`select exists(select 1 from pg_stat_activity where $1=any(pg_blocking_pids(pid))) as blocked`, [holderPid])).rows[0].blocked);
+        await holder.query("update room_invites set revoked_at=now() where invite_id=$1", [invite.inviteId]);
+        await holder.query("commit");
+        await assert.rejects(attempt, code("identity_forbidden"));
+        assert.equal((await f.ids.authority(scope))?.revision, 0);
+        assert.equal((await f.pool!.query("select count(*)::integer as count from room_identities_v2 where room_id=$1", [scope.roomId])).rows[0].count, 0);
+      } finally {
+        await holder.query("rollback");
+        if (attempt) await Promise.allSettled([attempt]);
+        holder.release();
+      }
+    });
+
+    if (f.pool) await t.test("Postgres waiting redemption reads committed approval after a blocked request", async () => {
+      const f = await fixture(t, backend);
+      await f.storage.identityProtocol.raise(2);
+      const { scope } = await f.makeRoom(false, undefined, false);
+      const invite = await f.storage.createRoomInvite({ roomId: scope.roomId, tokenHash: `pending-${randomUUID()}`,
+        role: "member", protocolVersion: 2, waitingRoomEnabled: true, expiresAt: new Date(f.now() + 60_000).toISOString() });
+      const pending = await f.service.beginWaiting({ ...scope, inviteTokenHash: invite.tokenHash, displayName: "Blocked member",
+        expiresAt: new Date(f.now() + 60_000).toISOString() });
+      const holder = await f.pool!.connect();
+      let redemption: ReturnType<typeof f.service.redeemWaiting> | undefined;
+      try {
+        await holder.query("begin");
+        await holder.query("select 1 from room_waiting_requests where request_id=$1 for update", [pending.requestId]);
+        const holderPid: number = (await holder.query("select pg_backend_pid() as pid")).rows[0].pid;
+        redemption = f.service.redeemWaiting(pending.credential, scope);
+        void redemption.catch(() => undefined);
+        for (let i = 0; i < 100; i++) {
+          const blocked = (await f.pool!.query(`select exists(select 1 from pg_stat_activity where $1=any(pg_blocking_pids(pid))) as blocked`, [holderPid])).rows[0].blocked;
+          if (blocked) break;
+          if (i === 99) assert.fail("expected waiting request lock was not observed");
+          await delay(25);
+        }
+        await holder.query("update room_waiting_requests set status='approved', decided_by='authorized-host', decided_at=now() where request_id=$1", [pending.requestId]);
+        await holder.query("commit");
+        const activated = await redemption;
+        assert.equal((await f.ids.resolve(activated.identity))?.role, "member");
+        assert.equal((await f.ids.authority(scope))?.revision, 0);
+      } finally {
+        await holder.query("rollback");
+        if (redemption) await Promise.allSettled([redemption]);
+        holder.release();
+      }
+    });
+
     if (f.pool) await t.test("Postgres init rejects weakened constraints and function metadata instead of repairing silently", async () => {
       const restart = new PostgresStorage(f.pool!, f.now);
       await f.pool!.query("alter table room_identity_recoveries_v2 drop constraint recovery_v2_lifetime");
@@ -499,4 +814,28 @@ test("Postgres upgrades pre-lifecycle authority rows without replacing their gua
   await assert.rejects(f.pool!.query(`update room_identity_authority_v2 set revision=revision+1,lifecycle=jsonb_set(lifecycle,'{endedAt}','null') where room_id=$1`, [scope.roomId]), /nonmonotonic_identity_lifecycle/);
   await upgraded.init();
   assert.ok((await upgraded.roomIdentities.authority(scope))?.lifecycle.endedAt);
+});
+
+test("accepted boundary image reopens v2 schema and bound owner after a failed activation rollout", {
+  skip: !process.env.VRATA_TEST_POSTGRES_URL && !process.env.CI, timeout: 120_000
+}, async t => {
+  const modulePath = process.env.VRATA_BOUNDARY_ROLLBACK_STORAGE_MODULE;
+  if (process.env.CI) assert.ok(modulePath, "CI requires the exact accepted B rollback image source");
+  if (!modulePath) return;
+  const f = await fixture(t, "postgres");
+  await f.storage.identityProtocol.raise(2);
+  const { room, identity } = await f.storage.createPersonalOwnedRoom({ tenantId: "demo-tenant", templateId: "meeting-room-basic",
+    name: "Rollback-compatible owner", displayName: "Owner" });
+  const { PostgresStorage: BoundaryStorage } = await import(pathToFileURL(modulePath).href);
+  const boundary = new BoundaryStorage(f.pool!);
+  await boundary.init();
+  assert.equal(await boundary.identityProtocol.minimum(), 2);
+  assert.equal((await boundary.roomIdentities.resolve(identity))?.role, "host");
+  assert.equal((await boundary.roomIdentities.resolve(identity))?.isOwner, true);
+  assert.equal((await boundary.updateRoom(room.roomId, { name: "Safe owner metadata during rollback" }))?.name, "Safe owner metadata during rollback");
+  await assert.rejects(boundary.updateRoom(room.roomId, { ownerParticipantId: "spoofed" }), /room_identity_lifecycle_requires_v2/);
+  assert.equal((await f.storage.getRoom(room.roomId))?.ownerParticipantId, identity.participantId);
+  await f.storage.deleteRoom(room.roomId);
+  await boundary.init();
+  assert.equal(await boundary.identityProtocol.minimum(), 2);
 });

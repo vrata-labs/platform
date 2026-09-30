@@ -32,7 +32,8 @@ export function createLegacyIdentityBoundary(storagePromise: Promise<Storage>) {
 
 export function legacyBoundaryApplies(method: string, pathname: string): boolean {
   if (method === "OPTIONS" || !pathname.startsWith("/api/")) return false;
-  return !(method === "GET" && ["/api/templates", "/api/assets", "/api/tenants", "/api/internal/identity-policy"].includes(pathname));
+  return !(method === "GET" && ["/api/templates", "/api/assets", "/api/tenants", "/api/internal/identity-policy"].includes(pathname))
+    && !(method === "POST" && ["/api/internal/identity-session/verify", "/api/tokens/state"].includes(pathname));
 }
 
 export function legacyBoundaryAllowsAdministrator(pathname: string): boolean {

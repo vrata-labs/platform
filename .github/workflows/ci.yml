@@ -103,11 +103,26 @@ jobs:
           git -C .identity-rollback diff --exit-code HEAD
           pnpm --dir .identity-rollback --filter @vrata/shared-types --filter @vrata/templates --filter @vrata/asset-pipeline --filter @vrata/api build
 
+      - name: Checkout accepted identity boundary
+        uses: actions/checkout@v4
+        with:
+          repository: vrata-labs/platform
+          ref: 033bd6e2b33e9149221464c934554977320ca36f
+          path: .identity-boundary-rollback
+
+      - name: Build accepted identity boundary
+        run: |
+          pnpm --dir .identity-boundary-rollback install --frozen-lockfile
+          chmod 644 .identity-boundary-rollback/packages/asset-pipeline/bin/vrata.mjs
+          git -C .identity-boundary-rollback diff --exit-code HEAD
+          pnpm --dir .identity-boundary-rollback --filter @vrata/shared-types --filter @vrata/templates --filter @vrata/asset-pipeline --filter @vrata/api build
+
       - name: Test
         env:
           VRATA_TEST_POSTGRES_URL: postgres://postgres:postgres@127.0.0.1:5432/vrata_test
           VRATA_TEMPLATE_ROLLBACK_STORAGE_MODULE: ${{ github.workspace }}/.template-rollback/apps/api/dist/storage.js
           VRATA_IDENTITY_ROLLBACK_API_ENTRY: ${{ github.workspace }}/.identity-rollback/apps/api/dist/index.js
+          VRATA_BOUNDARY_ROLLBACK_STORAGE_MODULE: ${{ github.workspace }}/.identity-boundary-rollback/apps/api/dist/storage.js
         run: pnpm test
 
       - name: Install Playwright browser

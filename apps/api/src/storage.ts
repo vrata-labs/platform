@@ -54,6 +54,7 @@ import { createMemoryRoomIdentities } from "./identity/memory.js";
 import { createPostgresRoomIdentities } from "./identity/postgres.js";
 import { installRoomIdentitySchema } from "./identity/postgres-schema.js";
 import { identityLifecycleChanged, IDENTITY_LIFECYCLE_REQUIRES_V2 } from "./identity/lifecycle.js";
+import { identityLifecycle } from "./identity/authority.js";
 import { createMemoryIdentityProtocol, createPostgresIdentityProtocol } from "./identity/protocol.js";
 
 export { initPostgresStorageWithRetry } from "./storage-init-retry.js";
@@ -183,7 +184,9 @@ export class MemoryStorage implements Storage {
   readonly identityProtocol: Storage["identityProtocol"] = this.identityPolicy;
   readonly roomIdentities: Storage["roomIdentities"];
   constructor(identityNow = Date.now) {
-    this.identityAdapter = createMemoryRoomIdentities(roomId => this.rooms.get(roomId), identityNow);
+    this.identityAdapter = createMemoryRoomIdentities(roomId => this.rooms.get(roomId), identityNow,
+      hash => [...this.roomInvites.values()].find(invite => invite.tokenHash === hash), () => this.identityPolicy.current(),
+      id => this.roomInvites.get(id), id => this.waitingRoomRequests.get(id), request => { this.waitingRoomRequests.set(request.requestId, request); });
     this.roomIdentities = this.identityAdapter.storage;
   }
 
@@ -262,7 +265,7 @@ export class MemoryStorage implements Storage {
     const room = this.rooms.get(roomId);
     return room ? structuredClone(room) : null;
   }
-  async createRoom(input: Partial<RoomRecord>): Promise<RoomRecord> {
+  private createRoomSync(input: Partial<RoomRecord>): RoomRecord {
     const templateId = input.templateId ?? (input.roomType === "personal" ? "personal-workspace-basic" : "meeting-room-basic");
     const versionSnapshot = this.requireActiveTemplateVersion(templateId);
     input = materializeStoredRoomInput(versionSnapshot, input);
@@ -298,6 +301,15 @@ export class MemoryStorage implements Storage {
     if (this.identityAdapter.hasRoomBindings(room.roomId) || (this.identityPolicy.current() >= 2 && this.rooms.has(room.roomId))) throw new Error(IDENTITY_LIFECYCLE_REQUIRES_V2);
     this.rooms.set(room.roomId, structuredClone(room));
     return structuredClone(room);
+  }
+  async createRoom(input: Partial<RoomRecord>): Promise<RoomRecord> { return this.createRoomSync(input); }
+  async createPersonalOwnedRoom(input: Parameters<Storage["createPersonalOwnedRoom"]>[0]) {
+    if (this.identityPolicy.current() < 2 || typeof input.displayName !== "string" || input.displayName.length > 80) throw new Error("identity_upgrade_required");
+    const participantId = crypto.randomUUID();
+    const room = this.createRoomSync({ ...input, roomId: crypto.randomUUID(), roomType: "personal",
+      ownerParticipantId: participantId, visibility: "private", guestAllowed: false, sessionControl: { hostParticipantId: participantId } });
+    try { return { room, identity: this.identityAdapter.bootstrapOwner(room, participantId, input.displayName) }; }
+    catch (error) { this.rooms.delete(room.roomId); throw error; }
   }
   async updateRoom(roomId: string, input: Partial<RoomRecord>, expectedTemplateBinding?: ExpectedRoomTemplateBinding): Promise<RoomRecord | null> {
     const existing = this.rooms.get(roomId);
@@ -357,11 +369,13 @@ export class MemoryStorage implements Storage {
     return this.rooms.delete(roomId);
   }
   async createRoomInvite(input: Omit<RoomInviteRecord, "inviteId" | "createdAt" | "revokedAt" | "revokedBy"> & { inviteId?: string; createdAt?: string }): Promise<RoomInviteRecord> {
+    if (input.protocolVersion === 2 && this.identityPolicy.current() < 2) throw new Error("identity_upgrade_required");
     const invite: RoomInviteRecord = {
       inviteId: input.inviteId ?? crypto.randomUUID(),
       roomId: input.roomId,
       tokenHash: input.tokenHash,
       role: input.role,
+      protocolVersion: input.protocolVersion ?? 1,
       waitingRoomEnabled: input.waitingRoomEnabled,
       createdAt: input.createdAt ?? new Date().toISOString(),
       expiresAt: input.expiresAt,
@@ -370,23 +384,25 @@ export class MemoryStorage implements Storage {
       revokedBy: null
     };
     this.roomInvites.set(invite.inviteId, invite);
-    return invite;
+    return structuredClone(invite);
   }
   async listRoomInvites(roomId: string): Promise<RoomInviteRecord[]> {
-    return Array.from(this.roomInvites.values()).filter((invite) => invite.roomId === roomId);
+    return Array.from(this.roomInvites.values()).filter((invite) => invite.roomId === roomId).map(invite => structuredClone(invite));
   }
   async getRoomInvite(inviteId: string): Promise<RoomInviteRecord | null> {
-    return this.roomInvites.get(inviteId) ?? null;
+    const invite = this.roomInvites.get(inviteId);
+    return invite ? structuredClone(invite) : null;
   }
   async getRoomInviteByTokenHash(tokenHash: string): Promise<RoomInviteRecord | null> {
-    return Array.from(this.roomInvites.values()).find((invite) => invite.tokenHash === tokenHash) ?? null;
+    const invite = Array.from(this.roomInvites.values()).find((item) => item.tokenHash === tokenHash);
+    return invite ? structuredClone(invite) : null;
   }
   async revokeRoomInvite(roomId: string, inviteId: string, revokedAt: string, revokedBy?: string | null): Promise<RoomInviteRecord | null> {
     const invite = this.roomInvites.get(inviteId);
     if (!invite || invite.roomId !== roomId) return null;
     const updated = { ...invite, revokedAt, revokedBy: revokedBy ?? null };
     this.roomInvites.set(inviteId, updated);
-    return updated;
+    return structuredClone(updated);
   }
   async createWaitingRoomRequest(input: Omit<WaitingRoomRequestRecord, "requestId" | "createdAt" | "status" | "decidedAt" | "decidedBy"> & { requestId?: string; createdAt?: string; status?: WaitingRoomRequestRecord["status"] }): Promise<WaitingRoomRequestRecord> {
     const request: WaitingRoomRequestRecord = {
@@ -401,23 +417,25 @@ export class MemoryStorage implements Storage {
       decidedBy: null
     };
     this.waitingRoomRequests.set(request.requestId, request);
-    return request;
+    return structuredClone(request);
   }
   async listWaitingRoomRequests(roomId: string): Promise<WaitingRoomRequestRecord[]> {
-    return Array.from(this.waitingRoomRequests.values()).filter((request) => request.roomId === roomId);
+    return Array.from(this.waitingRoomRequests.values()).filter((request) => request.roomId === roomId).map(request => structuredClone(request));
   }
   async getWaitingRoomRequest(requestId: string): Promise<WaitingRoomRequestRecord | null> {
-    return this.waitingRoomRequests.get(requestId) ?? null;
+    const request = this.waitingRoomRequests.get(requestId);
+    return request ? structuredClone(request) : null;
   }
   async getWaitingRoomRequestForInviteParticipant(inviteId: string, participantId: string): Promise<WaitingRoomRequestRecord | null> {
-    return Array.from(this.waitingRoomRequests.values()).find((request) => request.inviteId === inviteId && request.participantId === participantId) ?? null;
+    const request = Array.from(this.waitingRoomRequests.values()).find((item) => item.inviteId === inviteId && item.participantId === participantId);
+    return request ? structuredClone(request) : null;
   }
   async updateWaitingRoomRequest(roomId: string, requestId: string, input: Partial<Pick<WaitingRoomRequestRecord, "status" | "decidedAt" | "decidedBy">>): Promise<WaitingRoomRequestRecord | null> {
     const existing = this.waitingRoomRequests.get(requestId);
     if (!existing || existing.roomId !== roomId) return null;
     const updated = { ...existing, ...input };
     this.waitingRoomRequests.set(requestId, updated);
-    return updated;
+    return structuredClone(updated);
   }
   async getRoomNote(roomId: string, scope: RoomNoteScope, ownerParticipantId?: string | null): Promise<RoomNoteRecord | null> {
     const note = this.roomNotes.get(roomNoteId(roomId, scope, ownerParticipantId));
@@ -1283,7 +1301,7 @@ export class PostgresStorage implements Storage {
     const row = result.rows[0];
     return row ? mapRoomRow(row) : null;
   }
-  async createRoom(input: Partial<RoomRecord>): Promise<RoomRecord> {
+  private async insertRoom(input: Partial<RoomRecord>, executor: Pick<PoolClient, "query">): Promise<RoomRecord> {
     const templateId = input.templateId ?? (input.roomType === "personal" ? "personal-workspace-basic" : "meeting-room-basic");
     const versionSnapshot = await this.requireActiveTemplateVersion(templateId);
     input = materializeStoredRoomInput(versionSnapshot, input);
@@ -1316,7 +1334,7 @@ export class PostgresStorage implements Storage {
       personalState: defaultPersonalState(input.personalState)
     };
     const room = bindRoomTemplateMetadata(roomWithoutTemplateMetadata, versionSnapshot);
-    const result = await this.pool.query(
+    const result = await executor.query(
       `insert into rooms (room_id, tenant_id, template_id, name, room_type, owner_participant_id, status, disabled_at, disabled_by, visibility, scene_bundle_url, features, asset_ids, theme, guest_allowed, avatar_config, session_control, personal_state, template_version, template_snapshot)
        select $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13::jsonb,$14::jsonb,$15,$16::jsonb,$17::jsonb,$18::jsonb,$19,$20::jsonb
        where exists (
@@ -1328,6 +1346,35 @@ export class PostgresStorage implements Storage {
     );
     if ((result.rowCount ?? 0) === 0) throw new Error(`template_deprecated:${room.templateId}`);
     return room;
+  }
+  async createRoom(input: Partial<RoomRecord>): Promise<RoomRecord> { return this.insertRoom(input, this.pool); }
+  async createPersonalOwnedRoom(input: Parameters<Storage["createPersonalOwnedRoom"]>[0]) {
+    if (typeof input.displayName !== "string" || input.displayName.length > 80) throw new Error("invalid_identity_input");
+    const participantId = crypto.randomUUID();
+    const client = await this.pool.connect();
+    try {
+      await client.query("begin");
+      const protocol = (await client.query("select minimum_protocol from room_identity_protocol_policy where singleton=true for share")).rows[0];
+      if (!protocol || protocol.minimum_protocol < 2) throw new Error("identity_upgrade_required");
+      const room = await this.insertRoom({ ...input, roomId: crypto.randomUUID(), roomType: "personal",
+        ownerParticipantId: participantId, visibility: "private", guestAllowed: false, sessionControl: { hostParticipantId: participantId } }, client);
+      const identity: import("./identity/contracts.js").RoomIdentityRecord = {
+        tenantId: room.tenantId, roomId: room.roomId, identityId: crypto.randomUUID(), participantId,
+        displayName: input.displayName, baseRole: "member", provenance: { kind: "personal-owner" }, authEpoch: 1,
+        createdAt: new Date().toISOString(), revokedAt: null
+      };
+      await client.query(`insert into room_identities_v2
+        (tenant_id,room_id,identity_id,participant_id,display_name,base_role,provenance,auth_epoch,created_at)
+        values ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9)`, [identity.tenantId, identity.roomId, identity.identityId,
+        identity.participantId, identity.displayName, identity.baseRole, JSON.stringify(identity.provenance), identity.authEpoch, identity.createdAt]);
+      const lifecycle = identityLifecycle(room.sessionControl);
+      await client.query(`insert into room_identity_authority_v2
+        (tenant_id,room_id,revision,host_identity_id,owner_identity_id,presenter_identity_id,lifecycle)
+        values ($1,$2,1,$3,$3,null,$4::jsonb)`, [room.tenantId, room.roomId, identity.identityId, JSON.stringify(lifecycle)]);
+      await client.query("commit");
+      return { room, identity };
+    } catch (error) { await client.query("rollback"); throw error; }
+    finally { client.release(); }
   }
   async updateRoom(roomId: string, input: Partial<RoomRecord>, expectedTemplateBinding?: ExpectedRoomTemplateBinding): Promise<RoomRecord | null> {
     const existing = await this.getRoom(roomId);
@@ -1394,11 +1441,13 @@ export class PostgresStorage implements Storage {
     return (result.rowCount ?? 0) > 0;
   }
   async createRoomInvite(input: Omit<RoomInviteRecord, "inviteId" | "createdAt" | "revokedAt" | "revokedBy"> & { inviteId?: string; createdAt?: string }): Promise<RoomInviteRecord> {
+    if (input.protocolVersion === 2 && await this.identityProtocol.minimum() < 2) throw new Error("identity_upgrade_required");
     const invite: RoomInviteRecord = {
       inviteId: input.inviteId ?? crypto.randomUUID(),
       roomId: input.roomId,
       tokenHash: input.tokenHash,
       role: input.role,
+      protocolVersion: input.protocolVersion ?? 1,
       waitingRoomEnabled: input.waitingRoomEnabled,
       createdAt: input.createdAt ?? new Date().toISOString(),
       expiresAt: input.expiresAt,
@@ -1407,26 +1456,26 @@ export class PostgresStorage implements Storage {
       revokedBy: null
     };
     await this.pool.query(
-      `insert into room_invites (invite_id, room_id, token_hash, role, waiting_room_enabled, created_at, expires_at, created_by) values ($1,$2,$3,$4,$5,$6,$7,$8)`,
-      [invite.inviteId, invite.roomId, invite.tokenHash, invite.role, invite.waitingRoomEnabled, invite.createdAt, invite.expiresAt, invite.createdBy]
+      `insert into room_invites (invite_id, room_id, token_hash, role, protocol_version, waiting_room_enabled, created_at, expires_at, created_by) values ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+      [invite.inviteId, invite.roomId, invite.tokenHash, invite.role, invite.protocolVersion, invite.waitingRoomEnabled, invite.createdAt, invite.expiresAt, invite.createdBy]
     );
     return invite;
   }
   async listRoomInvites(roomId: string): Promise<RoomInviteRecord[]> {
-    const result = await this.pool.query(`select invite_id, room_id, token_hash, role, waiting_room_enabled, created_at, expires_at, revoked_at, created_by, revoked_by from room_invites where room_id = $1 order by created_at desc`, [roomId]);
+    const result = await this.pool.query(`select invite_id, room_id, token_hash, role, protocol_version, waiting_room_enabled, created_at, expires_at, revoked_at, created_by, revoked_by from room_invites where room_id = $1 order by created_at desc`, [roomId]);
     return result.rows.map(mapRoomInviteRow);
   }
   async getRoomInvite(inviteId: string): Promise<RoomInviteRecord | null> {
-    const result = await this.pool.query(`select invite_id, room_id, token_hash, role, waiting_room_enabled, created_at, expires_at, revoked_at, created_by, revoked_by from room_invites where invite_id = $1`, [inviteId]);
+    const result = await this.pool.query(`select invite_id, room_id, token_hash, role, protocol_version, waiting_room_enabled, created_at, expires_at, revoked_at, created_by, revoked_by from room_invites where invite_id = $1`, [inviteId]);
     return result.rows[0] ? mapRoomInviteRow(result.rows[0]) : null;
   }
   async getRoomInviteByTokenHash(tokenHash: string): Promise<RoomInviteRecord | null> {
-    const result = await this.pool.query(`select invite_id, room_id, token_hash, role, waiting_room_enabled, created_at, expires_at, revoked_at, created_by, revoked_by from room_invites where token_hash = $1`, [tokenHash]);
+    const result = await this.pool.query(`select invite_id, room_id, token_hash, role, protocol_version, waiting_room_enabled, created_at, expires_at, revoked_at, created_by, revoked_by from room_invites where token_hash = $1`, [tokenHash]);
     return result.rows[0] ? mapRoomInviteRow(result.rows[0]) : null;
   }
   async revokeRoomInvite(roomId: string, inviteId: string, revokedAt: string, revokedBy?: string | null): Promise<RoomInviteRecord | null> {
     const result = await this.pool.query(
-      `update room_invites set revoked_at = $3, revoked_by = $4 where room_id = $1 and invite_id = $2 returning invite_id, room_id, token_hash, role, waiting_room_enabled, created_at, expires_at, revoked_at, created_by, revoked_by`,
+      `update room_invites set revoked_at = $3, revoked_by = $4 where room_id = $1 and invite_id = $2 returning invite_id, room_id, token_hash, role, protocol_version, waiting_room_enabled, created_at, expires_at, revoked_at, created_by, revoked_by`,
       [roomId, inviteId, revokedAt, revokedBy ?? null]
     );
     return result.rows[0] ? mapRoomInviteRow(result.rows[0]) : null;

@@ -46,6 +46,8 @@ import {
   isHostControlsEnabled
 } from "./feature-flags.js";
 import { createLegacyIdentityBoundary, IdentityBoundaryError, legacyBoundaryApplies, legacyBoundaryAllowsAdministrator } from "./identity/legacy-boundary.js";
+import { createRoomIdentityService } from "./identity/service.js";
+import { admitV2RoomSession, type V2AdmissionRequest } from "./identity/http-admission.js";
 
 import { getLivekitCredentials, getMediaTokenConfigError, getLivekitDeploymentDiagnostics } from "./livekit-config.js";
 
@@ -1603,6 +1605,36 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     return json(response, 200, { minimumProtocolVersion, roomRequiresV2 });
   }
 
+  if (method === "POST" && url.pathname === "/api/internal/identity-session/verify") {
+    if (!isAuthorizedInternalRequest(request)) return json(response, 403, { error: "forbidden" });
+    const payload = await parseBody<{ roomId?: unknown; participantId?: unknown; sessionToken?: unknown; includeSceneContext?: unknown }>(request);
+    if (typeof payload?.roomId !== "string" || typeof payload?.participantId !== "string"
+      || typeof payload?.sessionToken !== "string" || payload.sessionToken.length > 4096) {
+      return json(response, 400, { error: "invalid_identity_session_request" });
+    }
+    if (await legacyIdentityBoundary.minimum() < 2) return json(response, 409, { error: "identity_required", reason: "identity_upgrade_required" });
+    const room = await storage.getRoom(payload.roomId);
+    if (!room) return json(response, 401, { error: "identity_required", reason: "identity_recovery_required" });
+    const service = createRoomIdentityService(storage.roomIdentities, getStateTokenSecret());
+    const session = await service.resolveSession(payload.sessionToken, { tenantId: room.tenantId, roomId: room.roomId });
+    if (!session || session.identity.participantId !== payload.participantId) {
+      return json(response, 401, { error: "identity_required", reason: "identity_recovery_required" });
+    }
+    const context = payload.includeSceneContext === true ? roomTemplateSessionContext(room) : null;
+    return json(response, 200, {
+      tenantId: room.tenantId, roomId: room.roomId, identityId: session.identity.identityId,
+      participantId: session.identity.participantId, displayName: session.identity.displayName,
+      authEpoch: session.identity.authEpoch, sessionId: session.sessionId,
+      expiresAtSeconds: session.expiresAtSeconds, authorityRevision: session.authority.revision,
+      role: session.role, permissions: session.permissions,
+      ...(payload.includeSceneContext === true ? {
+        sceneMediaSurfaces: context?.surfaces
+          ?? await loadSceneMediaSurfaces(room.sceneBundleUrl, `http://127.0.0.1:${request.socket.localPort ?? process.env.API_PORT ?? "4000"}`),
+        ...(context ? { roomTemplate: context } : {})
+      } : {})
+    });
+  }
+
   if (method === "GET" && url.pathname === "/api/templates") {
     json(response, 200, { items: await listRoomTemplateMetadata(storage) });
     return;
@@ -2986,6 +3018,13 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
 
   if (method === "POST" && url.pathname === "/api/tokens/state") {
     const requestPayload = await parseBody<StateTokenRequest>(request);
+    if (await legacyIdentityBoundary.minimum() >= 2) {
+      const roomId = requestPayload?.roomId ?? "demo-room";
+      const room = await storage.getRoom(roomId);
+      const result = await admitV2RoomSession({ storage, room, payload: requestPayload as V2AdmissionRequest | null,
+        bearer: getBearerToken(request), secret: getStateTokenSecret(), hashInvite: token => hashInviteToken(token) });
+      return json(response, result.status, result.body);
+    }
     const ttlSeconds = Number.parseInt(process.env.STATE_TOKEN_TTL_SECONDS ?? "900", 10);
     const nowSeconds = Math.floor(Date.now() / 1000);
     const roomId = requestPayload?.roomId ?? "demo-room";

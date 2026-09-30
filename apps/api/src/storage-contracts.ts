@@ -55,6 +55,7 @@ export interface RoomInviteRecord {
   roomId: string;
   tokenHash: string;
   role: "guest" | "member" | "presenter" | "host" | "admin";
+  protocolVersion?: 1 | 2;
   waitingRoomEnabled: boolean;
   createdAt: string;
   expiresAt: string;
@@ -290,6 +291,8 @@ export interface Storage {
   listRooms(): Promise<RoomRecord[]>;
   getRoom(roomId: string): Promise<RoomRecord | null>;
   createRoom(input: Partial<RoomRecord>): Promise<RoomRecord>;
+  createPersonalOwnedRoom(input: Omit<Partial<RoomRecord>, "ownerParticipantId" | "roomType" | "sessionControl"> & { displayName: string }):
+    Promise<{ room: RoomRecord; identity: import("./identity/contracts.js").RoomIdentityRecord }>;
   updateRoom(roomId: string, input: Partial<RoomRecord>, expectedTemplateBinding?: ExpectedRoomTemplateBinding): Promise<RoomRecord | null>;
   deleteRoom(roomId: string): Promise<boolean>;
   createRoomInvite(input: Omit<RoomInviteRecord, "inviteId" | "createdAt" | "revokedAt" | "revokedBy"> & { inviteId?: string; createdAt?: string }): Promise<RoomInviteRecord>;

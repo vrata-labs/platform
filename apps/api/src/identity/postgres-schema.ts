@@ -57,9 +57,21 @@ const guards = [
   END;` },
   { table: "room_identity_protocol_policy", name: "vrata_identity_protocol_no_truncate", body: `BEGIN
     RAISE EXCEPTION 'identity_protocol_downgrade_forbidden' USING ERRCODE = '23514';
+  END;` },
+  { table: "room_invites", name: "vrata_identity_invite_v2_immutable", body: `BEGIN
+    IF ROW(NEW.invite_id, NEW.room_id, NEW.token_hash, NEW.role, NEW.waiting_room_enabled, NEW.protocol_version, NEW.created_at, NEW.created_by)
+      IS DISTINCT FROM ROW(OLD.invite_id, OLD.room_id, OLD.token_hash, OLD.role, OLD.waiting_room_enabled, OLD.protocol_version, OLD.created_at, OLD.created_by)
+    THEN RAISE EXCEPTION 'immutable_room_invite' USING ERRCODE = '23514'; END IF;
+    RETURN NEW;
+  END;` },
+  { table: "room_identity_pending_v2", name: "vrata_identity_pending_v2_immutable", body: `BEGIN
+    IF (to_jsonb(NEW) - 'activated_at') IS DISTINCT FROM (to_jsonb(OLD) - 'activated_at')
+      OR (OLD.activated_at IS NOT NULL AND NEW.activated_at IS DISTINCT FROM OLD.activated_at)
+    THEN RAISE EXCEPTION 'immutable_identity_pending' USING ERRCODE = '23514'; END IF;
+    RETURN NEW;
   END;` }
 ].map(guard => {
-  const protectDelete = guard.table === "room_identities_v2" || guard.table === "room_identity_authority_v2";
+  const protectDelete = guard.table === "room_identities_v2" || guard.table === "room_identity_authority_v2" || guard.table === "room_identity_pending_v2";
   const noTruncate = guard.name === "vrata_identity_protocol_no_truncate";
   const withDelete = protectDelete || guard.name === "vrata_identity_protocol_monotonic";
   return { ...guard, events: noTruncate ? "truncate" : withDelete ? "delete or update" : "update", triggerType: noTruncate ? 34 : withDelete ? 27 : 19,
@@ -68,7 +80,9 @@ const guards = [
       IF TG_OP = 'DELETE' THEN
         EXECUTE format('select exists(select 1 from %I.rooms where tenant_id=$1 and room_id=$2)', TG_TABLE_SCHEMA)
           INTO parent_exists USING OLD.tenant_id, OLD.room_id;
-        IF parent_exists THEN RAISE EXCEPTION 'identity_namespace_requires_room_delete' USING ERRCODE = '23514'; END IF;
+        ${guard.table === "room_identity_pending_v2"
+    ? "IF parent_exists AND OLD.activated_at IS NULL AND OLD.expires_at > now() THEN RAISE EXCEPTION 'identity_namespace_requires_room_delete' USING ERRCODE = '23514'; END IF;"
+    : "IF parent_exists THEN RAISE EXCEPTION 'identity_namespace_requires_room_delete' USING ERRCODE = '23514'; END IF;"}
         RETURN OLD;
       END IF;
       ${guard.body}
@@ -80,6 +94,9 @@ const identityForeignKey = (column: string) => `FOREIGN KEY (tenant_id, room_id,
 // PostgreSQL 16 canonical definitions. Do not silently accept weaker constraints
 // left by a partial/older schema merely because CREATE IF NOT EXISTS succeeded.
 const constraints = [
+  ["room_invites", "invite_v2_protocol", "CHECK ((protocol_version = ANY (ARRAY[1, 2])))"],
+  ["room_invites", "invite_v2_room_id", "UNIQUE (room_id, invite_id)"],
+  ["room_waiting_requests", "waiting_v2_room_request", "UNIQUE (room_id, request_id)"],
   ["room_identity_protocol_policy", "identity_protocol_pk", "PRIMARY KEY (singleton)"],
   ["room_identity_protocol_policy", "identity_protocol_singleton", "CHECK (singleton)"],
   ["room_identity_protocol_policy", "identity_protocol_minimum", "CHECK ((minimum_protocol >= 1))"],
@@ -103,10 +120,22 @@ const constraints = [
   ["room_identity_recoveries_v2", "recovery_v2_revision", "CHECK ((expected_authority_revision >= 0))"],
   ["room_identity_recoveries_v2", "recovery_v2_hash", "CHECK ((secret_hash ~ '^[a-f0-9]{64}$'::text))"],
   ["room_identity_recoveries_v2", "recovery_v2_lifetime", "CHECK (((expires_at > created_at) AND (expires_at <= (created_at + '00:15:00'::interval))))"],
-  ["room_identity_recoveries_v2", "recovery_v2_target_epoch", "CHECK (((target_identity_id IS NULL) = (expected_auth_epoch IS NULL)))"]
+  ["room_identity_recoveries_v2", "recovery_v2_target_epoch", "CHECK (((target_identity_id IS NULL) = (expected_auth_epoch IS NULL)))"],
+  ["room_identity_pending_v2", "pending_v2_pk", "PRIMARY KEY (tenant_id, room_id, pending_id)"],
+  ["room_identity_pending_v2", "pending_v2_participant", "UNIQUE (tenant_id, room_id, participant_id)"],
+  ["room_identity_pending_v2", "pending_v2_request_unique", "UNIQUE (tenant_id, room_id, request_id)"],
+  ["room_identity_pending_v2", "pending_v2_room", roomForeignKey],
+  ["room_identity_pending_v2", "pending_v2_invite", "FOREIGN KEY (room_id, invite_id) REFERENCES room_invites(room_id, invite_id) ON DELETE CASCADE"],
+  ["room_identity_pending_v2", "pending_v2_request", "FOREIGN KEY (room_id, request_id) REFERENCES room_waiting_requests(room_id, request_id) ON DELETE CASCADE"],
+  ["room_identity_pending_v2", "pending_v2_hash", "CHECK ((secret_hash ~ '^[a-f0-9]{64}$'::text))"],
+  ["room_identity_pending_v2", "pending_v2_lifetime", "CHECK (((expires_at > created_at) AND (expires_at <= (created_at + '00:15:00'::interval))))"]
 ];
 
 const columns = [
+  ...["tenant_id", "room_id", "pending_id", "invite_id", "request_id", "participant_id", "display_name", "secret_hash"].map(name => ["room_identity_pending_v2", name, "text", true]),
+  ...["created_at", "expires_at"].map(name => ["room_identity_pending_v2", name, "timestamp with time zone", true]),
+  ["room_identity_pending_v2", "activated_at", "timestamp with time zone", false],
+  ["room_invites", "protocol_version", "integer", true],
   ["room_identity_protocol_policy", "singleton", "boolean", true],
   ["room_identity_protocol_policy", "minimum_protocol", "integer", true],
   ...["tenant_id", "room_id", "identity_id", "participant_id", "display_name", "base_role"].map(name => ["room_identities_v2", name, "text", true]),
@@ -126,6 +155,19 @@ const columns = [
 
 export async function installRoomIdentitySchema(client: PoolClient): Promise<void> {
   await client.query(`
+    alter table room_invites add column if not exists protocol_version integer not null default 1;
+    do $invite$
+    begin
+      if not exists (select 1 from pg_constraint where conrelid='room_invites'::regclass and conname='invite_v2_protocol') then
+        alter table room_invites add constraint invite_v2_protocol check (protocol_version in (1,2));
+      end if;
+      if not exists (select 1 from pg_constraint where conrelid='room_invites'::regclass and conname='invite_v2_room_id') then
+        alter table room_invites add constraint invite_v2_room_id unique (room_id, invite_id);
+      end if;
+      if not exists (select 1 from pg_constraint where conrelid='room_waiting_requests'::regclass and conname='waiting_v2_room_request') then
+        alter table room_waiting_requests add constraint waiting_v2_room_request unique (room_id, request_id);
+      end if;
+    end; $invite$;
     do $policy$
     begin
       if to_regclass(format('%I.room_identity_protocol_policy', current_schema())) is null then
@@ -173,6 +215,19 @@ export async function installRoomIdentitySchema(client: PoolClient): Promise<voi
       constraint recovery_v2_pk primary key (tenant_id, room_id, recovery_id),
       constraint recovery_v2_room foreign key (tenant_id, room_id) references rooms(tenant_id, room_id) on delete cascade,
       constraint recovery_v2_target foreign key (tenant_id, room_id, target_identity_id) references room_identities_v2(tenant_id, room_id, identity_id) deferrable initially deferred
+    );
+    create table if not exists room_identity_pending_v2 (
+      tenant_id text not null, room_id text not null, pending_id text not null,
+      invite_id text not null, request_id text not null, participant_id text not null,
+      display_name text not null, secret_hash text not null constraint pending_v2_hash check (secret_hash ~ '^[a-f0-9]{64}$'),
+      created_at timestamptz not null, expires_at timestamptz not null, activated_at timestamptz,
+      constraint pending_v2_lifetime check (expires_at > created_at and expires_at <= created_at + interval '15 minutes'),
+      constraint pending_v2_pk primary key (tenant_id, room_id, pending_id),
+      constraint pending_v2_participant unique (tenant_id, room_id, participant_id),
+      constraint pending_v2_request_unique unique (tenant_id, room_id, request_id),
+      constraint pending_v2_room foreign key (tenant_id, room_id) references rooms(tenant_id, room_id) on delete cascade,
+      constraint pending_v2_invite foreign key (room_id, invite_id) references room_invites(room_id, invite_id) on delete cascade,
+      constraint pending_v2_request foreign key (room_id, request_id) references room_waiting_requests(room_id, request_id) on delete cascade
     );
     do $migration$
     begin

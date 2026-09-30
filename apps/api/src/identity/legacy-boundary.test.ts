@@ -33,10 +33,14 @@ test("public static/catalog paths remain distinct from every room credential pat
   for (const path of ["/health", "/control-plane", "/rooms/demo-room", "/api/templates", "/api/assets", "/api/tenants", "/api/internal/identity-policy"]) {
     assert.equal(legacyBoundaryApplies("GET", path), false, path);
   }
-  for (const path of ["/api/tokens/state", "/api/tokens/media", "/api/tokens/remote-browser-frame", "/api/personal-room", "/api/rooms/x/notes", "/api/rooms/x/session-control", "/api/control-plane/session"]) {
+  for (const path of ["/api/tokens/media", "/api/tokens/remote-browser-frame", "/api/personal-room", "/api/rooms/x/notes", "/api/rooms/x/session-control", "/api/control-plane/session"]) {
     assert.equal(legacyBoundaryApplies("GET", path), true, path);
     assert.equal(legacyBoundaryApplies("POST", path), true, path);
   }
+  assert.equal(legacyBoundaryApplies("POST", "/api/tokens/state"), false, "the issuance route checks the floor and room binding itself");
+  assert.equal(legacyBoundaryApplies("GET", "/api/tokens/state"), true);
+  assert.equal(legacyBoundaryApplies("POST", "/api/internal/identity-session/verify"), false, "this internal route must authenticate its service token and current v2 session itself");
+  assert.equal(legacyBoundaryApplies("GET", "/api/internal/identity-session/verify"), true);
   for (const path of ["/api/tokens/state", "/api/tokens/media", "/api/tokens/remote-browser-media", "/api/personal-room"]) {
     assert.equal(legacyBoundaryAllowsAdministrator(path), false, "administrator metadata access cannot mint a legacy identity");
   }

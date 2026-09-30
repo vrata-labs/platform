@@ -5,6 +5,10 @@ export interface IdentityProtocolPolicy { minimumProtocolVersion: number; roomRe
 export type ReadIdentityProtocolPolicy = (roomId: string) => Promise<IdentityProtocolPolicy>;
 export interface IdentityBoundaryDenial { code: number; reason: string; queuedMessages: number; queuedBytes: number; errorKind?: string }
 
+export class SocketAuthorityError extends Error {
+  constructor(readonly closeCode: number, readonly closeReason: string) { super(closeReason); this.name = "SocketAuthorityError"; }
+}
+
 export function createIdentityProtocolReader(input: { baseUrl: string; internalToken?: string | null; fetch?: typeof fetch }): ReadIdentityProtocolPolicy {
   let minimum = 1;
   return async roomId => {
@@ -63,6 +67,10 @@ export function guardLegacySocket(input: {
       }
       return true;
     } catch (error) {
+      if (error instanceof SocketAuthorityError) {
+        if (open()) close(error.closeCode, error.closeReason);
+        return false;
+      }
       const name = error instanceof Error ? error.name : "unknown";
       if (open()) close(1013, "identity_authority_unavailable", ["AbortError", "TimeoutError", "TypeError", "Error"].includes(name) ? name : "unknown");
       return false;

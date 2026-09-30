@@ -3,6 +3,7 @@ import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { randomUUID } from "node:crypto";
+import { once } from "node:events";
 import { startReferenceTemplateFixture } from "./reference-template-fixture";
 import { signRoomSessionToken } from "../../packages/shared-types/src/session-token.js";
 
@@ -84,13 +85,86 @@ test("real protocol activation stops a live legacy client, protects its draft an
     const denied = fresh.waitForResponse(response => new URL(response.url()).pathname === "/api/tokens/state");
     await fresh.goto(`${fixture.origin}/rooms/demo-room?onboard=0`);
     const response = await denied;
-    expect(response.status()).toBe(409);
+    expect(response.status()).toBe(426);
     expect(await response.json()).toEqual({ error: "identity_required", reason: "identity_upgrade_required" });
     await expect(fresh.locator("#session-upgrade-dialog")).toBeVisible();
     expect(await storage.identityProtocol.minimum()).toBe(2);
   } finally {
     releaseWrite?.();
     await Promise.allSettled([page.goto("about:blank"), fresh.close()]);
+    await pool.end();
+    await fixture.close();
+  }
+});
+
+test("isolated live v2 room-state socket rechecks role and revocation before privileged effects", async () => {
+  test.skip(!process.env.VRATA_TEST_POSTGRES_URL, "Requires isolated PostgreSQL");
+  test.setTimeout(120_000);
+  const secret = "isolated-v2-websocket-session-secret-32-bytes";
+  const fixture = await startReferenceTemplateFixture(process.env.VRATA_TEST_POSTGRES_URL!, { stateTokenSecret: secret });
+  const requireApi = createRequire(resolve("apps/api/package.json"));
+  const requireState = createRequire(resolve("apps/room-state/package.json"));
+  const { Pool } = requireApi("pg");
+  const { WebSocket: NativeWebSocket } = requireState("ws");
+  const pool = new Pool({ connectionString: process.env.VRATA_TEST_POSTGRES_URL,
+    options: `-c search_path=${fixture.schema},public` });
+  const { PostgresStorage } = await import(pathToFileURL(resolve("apps/api/dist/storage.js")).href);
+  const { createRoomIdentityService } = await import(pathToFileURL(resolve("apps/api/dist/identity/service.js")).href);
+  const storage = new PostgresStorage(pool);
+  let roomId: string | undefined;
+  let socket: InstanceType<typeof NativeWebSocket> | undefined;
+  try {
+    expect(fixture.schema).toMatch(/^template_e2e_[0-9a-f]{32}$/);
+    const bound = await pool.query("select current_schema() as name");
+    expect(bound.rows[0].name).toBe(fixture.schema);
+    await storage.identityProtocol.raise(2);
+    const room = await storage.createRoom({ tenantId: "demo-tenant", templateId: "meeting-room-basic", name: "V2 socket authority" });
+    roomId = room.roomId;
+    const scope = { tenantId: room.tenantId, roomId };
+    const invite = await storage.createRoomInvite({ roomId, tokenHash: `host-${randomUUID()}`, role: "host",
+      protocolVersion: 2, waitingRoomEnabled: false, expiresAt: new Date(Date.now() + 60_000).toISOString() });
+    const service = createRoomIdentityService(storage.roomIdentities, secret, Date.now, { identityLifetimeSeconds: 86_400 });
+    const host = await service.admit({ ...scope, displayName: "Host", inviteTokenHash: invite.tokenHash });
+    const next = await service.admit({ ...scope, displayName: "Member" });
+    const { sessionToken } = await service.issueSession(host.credential, scope);
+    const address = new URL(fixture.stateOrigin.replace(/^http/, "ws"));
+    address.searchParams.set("roomId", roomId);
+    address.searchParams.set("participantId", host.identity.participantId);
+    address.searchParams.set("accessToken", sessionToken);
+    const spoofedAddress = new URL(address);
+    spoofedAddress.searchParams.set("participantId", next.identity.participantId);
+    const spoofed = new NativeWebSocket(spoofedAddress);
+    const [spoofCode] = await once(spoofed, "close");
+    expect(spoofCode).toBe(1008);
+    const legacyAddress = new URL(address);
+    const now = Math.floor(Date.now() / 1000);
+    legacyAddress.searchParams.set("accessToken", signRoomSessionToken({ ...scope,
+      participantId: host.identity.participantId, displayName: "Legacy impersonator", role: "host", permissions: [],
+      sessionId: randomUUID(), jti: randomUUID(), iat: now, exp: now + 900 }, secret));
+    const legacy = new NativeWebSocket(legacyAddress);
+    const [legacyCode] = await once(legacy, "close");
+    expect(legacyCode).toBe(4406);
+    socket = new NativeWebSocket(address);
+    const messages: Array<{ type?: string; result?: { accepted?: boolean; role?: string } }> = [];
+    socket.on("message", (raw: Buffer) => { messages.push(JSON.parse(String(raw))); });
+    await once(socket, "open");
+    await expect.poll(() => messages.some(value => value.type === "room_state")).toBe(true);
+    socket.send(JSON.stringify({ type: "surface_create_object", probeOnly: true }));
+    await expect.poll(() => messages.some(value => value.type === "surface_command_result" && value.result?.accepted === true)).toBe(true);
+    await storage.roomIdentities.transition(scope, { actorType: "room-session", proof: host.identity }, 1,
+      { type: "transfer-host", targetParticipantId: next.identity.participantId });
+    socket.send(JSON.stringify({ type: "surface_create_object", probeOnly: true }));
+    await expect.poll(() => messages.some(value => value.type === "access_denied" && value.result?.role === "member")).toBe(true);
+    expect(socket.readyState).toBe(NativeWebSocket.OPEN);
+    await storage.roomIdentities.revoke(scope, host.identity.identityId, 1);
+    const closed = once(socket, "close");
+    socket.send(JSON.stringify({ type: "surface_create_object", probeOnly: true }));
+    const [code] = await closed;
+    expect(code).toBe(1008);
+    expect(messages.filter(value => value.type === "surface_command_result").length).toBe(1);
+  } finally {
+    socket?.close();
+    if (roomId) await storage.deleteRoom(roomId);
     await pool.end();
     await fixture.close();
   }

@@ -1,18 +1,32 @@
-import { IdentityStorageError, type IdentityPersistence, type IdentityRoomBinding, type IdentitySelection, type IdentityTransaction, type RoomIdentityAuthority, type RoomIdentityRecord, type RoomIdentityRecovery, type RoomIdentityScope } from "./contracts.js";
+import { randomUUID } from "node:crypto";
+import { IdentityStorageError, type IdentityPersistence, type IdentityRoomBinding, type IdentitySelection, type IdentityTransaction, type RoomIdentityAuthority, type RoomIdentityPending, type RoomIdentityRecord, type RoomIdentityRecovery, type RoomIdentityScope } from "./contracts.js";
+import type { RoomInviteRecord, WaitingRoomRequestRecord } from "../storage-contracts.js";
 import { createRoomIdentityStorage, emptyIdentityAuthority } from "./store.js";
 
-export function createMemoryRoomIdentities(getRoom: (roomId: string) => IdentityRoomBinding | undefined, now = Date.now) {
+export function createMemoryRoomIdentities(getRoom: (roomId: string) => IdentityRoomBinding | undefined, now = Date.now,
+  getInviteByHash: (hash: string) => RoomInviteRecord | undefined = () => undefined, getMinimumProtocol = () => 1,
+  getInviteById: (id: string) => RoomInviteRecord | undefined = () => undefined,
+  getWaitingRequest: (id: string) => WaitingRoomRequestRecord | undefined = () => undefined,
+  saveWaitingRequest: (request: WaitingRoomRequestRecord) => void = () => undefined) {
   const identities = new Map<string, Map<string, RoomIdentityRecord>>();
   const authorities = new Map<string, RoomIdentityAuthority>();
   const recoveries = new Map<string, Map<string, RoomIdentityRecovery>>();
+  const pendingByRoom = new Map<string, Map<string, RoomIdentityPending>>();
   const snapshot = (scope: RoomIdentityScope, selection: IdentitySelection): IdentityTransaction | null => {
     const room = getRoom(scope.roomId);
     if (!room || room.tenantId !== scope.tenantId) return null;
     if (authorities.has(scope.roomId) && authorities.get(scope.roomId)!.tenantId !== scope.tenantId) return null;
     const recovery = selection.recoveryId ? recoveries.get(scope.roomId)?.get(selection.recoveryId) ?? null : null;
+    const pending = selection.pendingId ? pendingByRoom.get(scope.roomId)?.get(selection.pendingId) ?? null : null;
     const participantId = selection.participantId ?? recovery?.targetParticipantId;
     const selected = new Set([...(selection.identityIds ?? []), ...(recovery?.targetIdentityId ? [recovery.targetIdentityId] : [])]);
-    return structuredClone({ room, authority: authorities.get(scope.roomId) ?? emptyIdentityAuthority(scope, room.sessionControl), recovery,
+    const invite = selection.inviteTokenHash ? getInviteByHash(selection.inviteTokenHash) ?? null
+      : pending ? getInviteById(pending.inviteId) ?? null : null;
+    const waitingRequest = pending ? getWaitingRequest(pending.requestId) ?? null : null;
+    const open = invite && selection.inviteTokenHash
+      ? [...(pendingByRoom.get(scope.roomId)?.values() ?? [])].filter(value => !value.activatedAt && Date.parse(value.expiresAt) > now()) : null;
+    const pendingCapacity = open ? { room: open.length, invite: open.filter(value => value.inviteId === invite!.inviteId).length } : null;
+    return structuredClone({ room, minimumProtocol: getMinimumProtocol(), authority: authorities.get(scope.roomId) ?? emptyIdentityAuthority(scope, room.sessionControl), recovery, invite, pending, waitingRequest, waitingRequestNew: false, pendingCapacity,
       identities: new Map([...(identities.get(scope.roomId) ?? new Map<string, RoomIdentityRecord>())].filter(([id, identity]) =>
         selected.has(id) || (participantId !== undefined && identity.participantId === participantId))) });
   };
@@ -37,12 +51,33 @@ export function createMemoryRoomIdentities(getRoom: (roomId: string) => Identity
         roomRecoveries.set(state.recovery.recoveryId, structuredClone(state.recovery));
         recoveries.set(scope.roomId, roomRecoveries);
       }
+      if (state.waitingRequestNew && state.waitingRequest) saveWaitingRequest(structuredClone(state.waitingRequest));
+      if (state.pending) {
+        const pending = pendingByRoom.get(scope.roomId) ?? new Map<string, RoomIdentityPending>();
+        pending.set(state.pending.pendingId, structuredClone(state.pending));
+        pendingByRoom.set(scope.roomId, pending);
+      }
       return result;
     }
   };
   return {
     storage: createRoomIdentityStorage(persistence, now),
+    bootstrapOwner(room: IdentityRoomBinding, participantId: string, displayName: string): RoomIdentityRecord {
+      if (room.roomType !== "personal" || room.ownerParticipantId !== participantId || authorities.has(room.roomId)
+        || identities.has(room.roomId) || !Number.isSafeInteger(now()) || displayName.length > 80) {
+        throw new IdentityStorageError("identity_forbidden");
+      }
+      const identity: RoomIdentityRecord = {
+        tenantId: room.tenantId, roomId: room.roomId, identityId: randomUUID(), participantId,
+        displayName, authEpoch: 1, baseRole: "member", provenance: { kind: "personal-owner" },
+        createdAt: new Date(now()).toISOString(), revokedAt: null
+      };
+      identities.set(room.roomId, new Map([[identity.identityId, structuredClone(identity)]]));
+      authorities.set(room.roomId, { ...emptyIdentityAuthority(room, room.sessionControl), hostIdentityId: identity.identityId,
+        ownerIdentityId: identity.identityId, revision: 1 });
+      return structuredClone(identity);
+    },
     hasRoomBindings(roomId: string) { return authorities.has(roomId); },
-    deleteRoom(roomId: string) { identities.delete(roomId); authorities.delete(roomId); recoveries.delete(roomId); }
+    deleteRoom(roomId: string) { identities.delete(roomId); authorities.delete(roomId); recoveries.delete(roomId); pendingByRoom.delete(roomId); }
   };
 }

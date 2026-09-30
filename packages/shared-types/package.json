@@ -18,6 +18,11 @@
       "types": "./src/identity-credential.ts",
       "import": "./dist/identity-credential.js",
       "default": "./dist/identity-credential.js"
+    },
+    "./room-session-v2": {
+      "types": "./src/room-session-v2.ts",
+      "import": "./dist/room-session-v2.js",
+      "default": "./dist/room-session-v2.js"
     }
   },
   "types": "./src/index.ts",

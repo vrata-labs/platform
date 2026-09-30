@@ -139,6 +139,14 @@ API test files переведены на последовательный зап
 
 Активация V остаётся отдельным последующим шагом: proof-bound waiting room/owner bootstrap, v2 JWT/admission/refresh/recovery, свежая authority и принятие server ID до первого publish, изоляция старых media credentials. Успешная подготовка rollback границы не является закрытием T01a и не даёт прав автора внешнего плагина.
 
+### T01a-S2b-V foundations — в работе
+
+После приёмки B в отдельном непубличном срезе собраны v2 session codec (без роли/permissions), выдача свежего server ID по проверенному инвайту и одноразовому ожиданию, атомарное создание личной комнаты с доказанным владельцем. Старый инвайт маркирован протоколом 1 и не может получить v2 Host; Host из legacy-комнаты восстанавливается отдельно. Общий внутренний verifier на API и live room-state WS проверяет текущую authority перед эффектом, а поздний ответ со старой revision не повышает роль обратно. Негативные и race проверки Memory/PostgreSQL, клиентское подставление participantId, перенос Host → Member и отзыв сокета проверяются локально в отдельных схемах.
+
+На окончательном локальном дереве workspace lint/typecheck/build, package tests (API **841/841**, shared-types **30/30**, room-state **76/76**, runtime **920/920**) и полный E2E **154/154**, без skip/retry (22,6 минуты). Один промежуточный полный прогон дал 153/154: старый клиент после появления v2 issuance корректно получил HTTP 426 вместо прежнего 409; test expectation приведён к опубликованному upgrade DTO, остальные проверки не менялись. Отдельный локальный браузерный тест с реальными API, room-state и PostgreSQL показывает 4406 для v1, отказ подставленному participantId, live Host transfer → Member и закрытие после revoke. Восемь конкурентных предъявлений одного waiting proof дают ровно одного победителя. PG migration совместима с точной опубликованной rollback-версией B `033bd6e` при достигнутом minimum 2 — проверено на отдельной схеме.
+
+Публикация этого среза на staging сохраняет минимальную версию протокола 1 и прежние пользовательские маршруты: открытых авторских plugin routes или публичного v2 join пока нет. Для реальной активации остаются: проектирование retention/rate-limit identity, вся схема runtime adoption, private notes/owner semantics и остальные REST writes, admin recovery endpoints, строгая media namespace и полноценные E2E на итоговом SHA. До их готовности повышать минимум до 2 нельзя.
+
 ## Публикация первого среза T01/T12
 
 Локально прошли workspace lint/typecheck/build/tests с PostgreSQL, затем runtime build и 905 runtime tests после финальных правок. Полный `pnpm test:e2e` на финальном исполняемом дереве: **148 passed**, без skip (41.6 min).

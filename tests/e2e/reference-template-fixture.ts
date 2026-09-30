@@ -142,7 +142,7 @@ export async function startReferenceTemplateFixture(postgresUrl: string, options
     await new Promise<void>(resolve => assetServer.close(() => resolve())); throw error;
   }
   return {
-    origin, assetsOrigin, schema, adminToken, documentStorageRoot, restartApi,
+    origin, stateOrigin, assetsOrigin, schema, adminToken, documentStorageRoot, restartApi,
     identityBoundaryDenials: () => structuredClone(identityBoundaryDenials),
     async close() {
       if (closePromise) return closePromise;

@@ -1,7 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { randomUUID, timingSafeEqual } from "node:crypto";
 
-import { WebSocketServer, type WebSocket } from "ws";
+import { WebSocketServer, type RawData, type WebSocket } from "ws";
 import { applyRoomTemplateContext } from "./template-context.js";
 import {
   IMAGE_VIEWER_OBJECT_TYPE,
@@ -21,6 +21,7 @@ import {
 } from "@vrata/shared-types";
 import { getRoomSessionTokenSecret, isRotatedDevelopmentSession, verifyRoomSessionToken } from "@vrata/shared-types/session-token";
 import { createIdentityProtocolReader, guardLegacySocket, type ReadIdentityProtocolPolicy } from "./identity-boundary.js";
+import { createRoomSessionV2Verifier, latestVerifiedRoomSession, type VerifiedRoomSessionV2 } from "./identity-v2-session.js";
 
 import type { PresenceState } from "./schema.js";
 import {
@@ -936,6 +937,10 @@ export function startRoomStateService(port = Number.parseInt(process.env.ROOM_ST
   const readIdentityPolicy = dependencies.readIdentityPolicy ?? createIdentityProtocolReader({
     baseUrl: process.env.API_INTERNAL_URL?.trim() || "http://127.0.0.1:4000", internalToken: getInternalServiceToken()
   });
+  const verifyV2Session = createRoomSessionV2Verifier({
+    baseUrl: process.env.API_INTERNAL_URL?.trim() || "http://127.0.0.1:4000",
+    internalToken: getInternalServiceToken(), readPolicy: readIdentityPolicy
+  });
   const authority = createRoomStateServer();
   const httpServer = createServer((request, response) => {
     void (async () => {
@@ -1069,17 +1074,16 @@ export function startRoomStateService(port = Number.parseInt(process.env.ROOM_ST
     const url = new URL(request.url ?? "/", `http://${request.headers.host ?? `localhost:${port}`}`);
     const roomId = url.searchParams.get("roomId") ?? "demo-room";
     const participantId = url.searchParams.get("participantId") ?? randomUUID();
-    const access = resolveConnectionAccess(url, roomId, participantId);
-    if (!access) {
-      if (isRotatedDevelopmentSession(url.searchParams.get("accessToken"), getStateTokenSecret())) socket.close(IDENTITY_UPGRADE_CLOSE_CODE, "identity_upgrade_required");
+    const token = url.searchParams.get("accessToken");
+    const v2 = Boolean(token?.startsWith("rs2."));
+    const access = v2 ? null : resolveConnectionAccess(url, roomId, participantId);
+    if (!v2 && !access) {
+      if (isRotatedDevelopmentSession(token, getStateTokenSecret())) socket.close(IDENTITY_UPGRADE_CLOSE_CODE, "identity_upgrade_required");
       else socket.close(1008, "invalid_session_token");
       return;
     }
 
-    guardLegacySocket({ socket, roomId, readPolicy: readIdentityPolicy,
-      onDenied: event => logEvent({ service: "room-state", event: "identity_boundary_denied", roomId, participantId, ...event }),
-      admit: () => connectParticipant(authority, roomId, participantId, socket, access),
-      dispatch: raw => {
+    const dispatch = (raw: RawData) => {
       try {
         const payload = JSON.parse(String(raw)) as {
           type?: string;
@@ -1189,8 +1193,43 @@ export function startRoomStateService(port = Number.parseInt(process.env.ROOM_ST
           timestamp: new Date().toISOString()
         });
       }
-      }
-    });
+    };
+    const onDenied = (event: { code: number; reason: string; queuedMessages: number; queuedBytes: number; errorKind?: string }) =>
+      logEvent({ service: "room-state", event: "identity_boundary_denied", roomId, participantId, ...event });
+    if (v2) {
+      let verifiedAccess: ParticipantAccessState | null = null;
+      let lastVerified: VerifiedRoomSessionV2 | null = null;
+      guardLegacySocket({ socket, roomId, onDenied, dispatch,
+        // Reuse the bounded ordered socket bridge; v2 authorization is checked
+        // against the real floor AND fresh API authority before every effect.
+        readPolicy: async () => {
+          const current = latestVerifiedRoomSession(lastVerified, await verifyV2Session(roomId, participantId, token!,
+            !authority.socketParticipants.has(socket)));
+          lastVerified = current;
+          verifiedAccess = { role: current.role, permissions: current.permissions,
+            sceneMediaSurfaces: current.sceneMediaSurfaces ?? verifiedAccess?.sceneMediaSurfaces,
+            roomTemplate: current.roomTemplate ?? verifiedAccess?.roomTemplate };
+          const metadata = authority.socketParticipants.get(socket);
+          if (metadata) {
+            const previous = metadata.access;
+            metadata.access = verifiedAccess;
+            if (previous.role !== verifiedAccess.role || JSON.stringify(previous.permissions) !== JSON.stringify(verifiedAccess.permissions)) {
+              const room = authority.rooms.get(roomId);
+              if (room) {
+                authority.rooms.set(roomId, joinRoom(room, participantId, verifiedAccess));
+                broadcastRoom(authority, roomId);
+              }
+            }
+          }
+          return { minimumProtocolVersion: 1, roomRequiresV2: false };
+        },
+        admit: () => {
+          if (!verifiedAccess) throw new Error("identity_authority_unavailable");
+          connectParticipant(authority, roomId, participantId, socket, verifiedAccess);
+        }
+      });
+    } else guardLegacySocket({ socket, roomId, readPolicy: readIdentityPolicy, onDenied,
+      admit: () => connectParticipant(authority, roomId, participantId, socket, access!), dispatch });
 
     socket.on("close", () => {
       metrics.socketDisconnectsTotal += 1;

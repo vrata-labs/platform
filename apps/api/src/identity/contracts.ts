@@ -1,6 +1,6 @@
 import type { RoomIdentityProof, RoomIdentityScope } from "@vrata/shared-types/identity-credential";
 import type { RoomPermission, RoomRole } from "@vrata/shared-types";
-import type { RoomRecord, RoomSessionControlState } from "../storage-contracts.js";
+import type { RoomInviteRecord, RoomRecord, RoomSessionControlState, WaitingRoomRequestRecord } from "../storage-contracts.js";
 
 export type { RoomIdentityScope, RoomIdentityProof };
 
@@ -52,8 +52,20 @@ export interface RoomIdentityRecovery extends RoomIdentityScope {
   consumedAt: string | null;
 }
 
-export type IdentityRoomBinding = Pick<RoomRecord, "tenantId" | "roomId" | "roomType" | "ownerParticipantId" | "status" | "disabledAt" | "sessionControl">;
-export type IdentityStorageErrorCode = "room_not_found" | "room_blocked" | "invalid_identity_input" | "identity_conflict" | "identity_not_active" | "authority_conflict" | "identity_forbidden" | "recovery_invalid";
+export interface RoomIdentityPending extends RoomIdentityScope {
+  pendingId: string;
+  inviteId: string;
+  requestId: string;
+  participantId: string;
+  displayName: string;
+  secretHash: string;
+  createdAt: string;
+  expiresAt: string;
+  activatedAt: string | null;
+}
+
+export type IdentityRoomBinding = Pick<RoomRecord, "tenantId" | "roomId" | "roomType" | "ownerParticipantId" | "visibility" | "guestAllowed" | "status" | "disabledAt" | "sessionControl">;
+export type IdentityStorageErrorCode = "room_not_found" | "room_blocked" | "invalid_identity_input" | "identity_conflict" | "identity_not_active" | "authority_conflict" | "identity_forbidden" | "waiting_room_pending" | "waiting_room_capacity_reached" | "waiting_room_rejected" | "waiting_proof_invalid" | "recovery_invalid";
 export class IdentityStorageError extends Error {
   constructor(readonly code: IdentityStorageErrorCode) { super(code); this.name = "IdentityStorageError"; }
 }
@@ -62,6 +74,9 @@ export class IdentityStorageError extends Error {
 // come from validated server context, never a request body or legacy JWT claims.
 export interface RoomIdentityStorage {
   create(input: RoomIdentityScope & { displayName: string; baseRole: "guest" | "member"; provenance: IdentityProvenance }): Promise<RoomIdentityRecord>;
+  admit(input: RoomIdentityScope & { displayName: string; inviteTokenHash?: string }): Promise<RoomIdentityRecord>;
+  beginWaiting(input: RoomIdentityScope & { inviteTokenHash: string; displayName: string; pendingId: string; secretHash: string; expiresAt: string }): Promise<RoomIdentityPending>;
+  redeemWaiting(scope: RoomIdentityScope, pendingId: string, secretHash: string): Promise<RoomIdentityRecord>;
   get(scope: RoomIdentityScope, identityId: string): Promise<RoomIdentityRecord | null>;
   authority(scope: RoomIdentityScope): Promise<RoomIdentityAuthority | null>;
   resolve(proof: RoomIdentityProof): Promise<{ identity: RoomIdentityRecord; authority: RoomIdentityAuthority; role: RoomRole; permissions: RoomPermission[]; isOwner: boolean } | null>;
@@ -76,12 +91,18 @@ export interface RoomIdentityStorage {
   redeemRecovery(scope: RoomIdentityScope, recoveryId: string, secretHash: string): Promise<RoomIdentityRecord>;
 }
 
-export interface IdentitySelection { identityIds?: string[]; participantId?: string; recoveryId?: string }
+export interface IdentitySelection { identityIds?: string[]; participantId?: string; recoveryId?: string; inviteTokenHash?: string; pendingId?: string }
 export interface IdentityTransaction {
   room: IdentityRoomBinding;
+  minimumProtocol: number;
   authority: RoomIdentityAuthority;
   identities: Map<string, RoomIdentityRecord>;
   recovery: RoomIdentityRecovery | null;
+  invite: RoomInviteRecord | null;
+  pending: RoomIdentityPending | null;
+  waitingRequest: WaitingRoomRequestRecord | null;
+  waitingRequestNew: boolean;
+  pendingCapacity: { room: number; invite: number } | null;
 }
 
 export interface IdentityPersistence {

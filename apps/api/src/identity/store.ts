@@ -54,6 +54,115 @@ export function createRoomIdentityStorage(persistence: IdentityPersistence, now 
     return new Date(value).toISOString();
   };
   return {
+    async admit(input) {
+      assertIdentityScope(input);
+      if (typeof input.displayName !== "string" || input.displayName.length > 80
+        || (input.inviteTokenHash !== undefined && (!validId(input.inviteTokenHash) || input.inviteTokenHash.length > 200))) fail("invalid_identity_input");
+      return persistence.transact(input, { inviteTokenHash: input.inviteTokenHash }, state => {
+        if (state.minimumProtocol < 2) fail("identity_forbidden");
+        assertRoomActive(state);
+        const invitation = state.invite;
+        if (input.inviteTokenHash) {
+          if (!invitation || invitation.roomId !== state.room.roomId || invitation.tokenHash !== input.inviteTokenHash
+            || invitation.revokedAt || !Number.isFinite(Date.parse(invitation.expiresAt)) || Date.parse(invitation.expiresAt) <= Date.parse(timestamp())) {
+            fail("identity_forbidden");
+          }
+          if (invitation.protocolVersion !== 2) fail("identity_forbidden");
+          if (invitation.waitingRoomEnabled) fail("waiting_room_pending");
+          if (!["guest", "member", "host", "presenter"].includes(invitation.role)) fail("identity_forbidden");
+        } else if (state.room.roomType === "personal" || !["public", "unlisted"].includes(state.room.visibility ?? "") || state.room.guestAllowed !== true) {
+          fail("identity_forbidden");
+        }
+        const canClaimInitialHost = invitation?.role === "host" && state.room.roomType !== "personal"
+          && !state.room.sessionControl?.hostParticipantId && state.authority.hostIdentityId === null && state.authority.revision === 0;
+        if (state.authority.lifecycle.lockedAt && !canClaimInitialHost) fail("room_blocked");
+        const role = invitation?.role ?? "guest";
+        const provenance: IdentityProvenance = invitation
+          ? { kind: "invite", inviteId: invitation.inviteId, role: role as "guest" | "member" | "presenter" | "host" }
+          : { kind: "guest" };
+        const record: RoomIdentityRecord = {
+          tenantId: input.tenantId, roomId: input.roomId, identityId: randomUUID(), participantId: randomUUID(),
+          authEpoch: 1, displayName: input.displayName, baseRole: role === "guest" ? "guest" : "member", provenance,
+          createdAt: timestamp(), revokedAt: null
+        };
+        state.identities.set(record.identityId, record);
+        if (canClaimInitialHost) {
+          state.authority.hostIdentityId = record.identityId;
+          bumpAuthority(state);
+        }
+        return structuredClone(record);
+      });
+    },
+    async beginWaiting(input) {
+      assertIdentityScope(input);
+      if (!validId(input.inviteTokenHash) || !validId(input.pendingId) || !validHash(input.secretHash)
+        || typeof input.displayName !== "string" || input.displayName.length > 80) fail("invalid_identity_input");
+      return persistence.transact(input, { inviteTokenHash: input.inviteTokenHash }, state => {
+        if (state.minimumProtocol < 2) fail("identity_forbidden");
+        assertRoomActive(state);
+        const invite = state.invite;
+        const createdAt = timestamp();
+        const expiresAt = Date.parse(input.expiresAt);
+        if (!Number.isFinite(expiresAt) || expiresAt <= Date.parse(createdAt) || expiresAt > Date.parse(createdAt) + 900_000) fail("invalid_identity_input");
+        if (!invite || invite.roomId !== state.room.roomId || invite.tokenHash !== input.inviteTokenHash
+          || invite.protocolVersion !== 2 || !invite.waitingRoomEnabled || invite.revokedAt
+          || Date.parse(invite.expiresAt) <= Date.parse(createdAt) || !["guest", "member", "host", "presenter"].includes(invite.role)) {
+          fail("identity_forbidden");
+        }
+        if (state.authority.lifecycle.lockedAt) fail("room_blocked");
+        if (!state.pendingCapacity || state.pendingCapacity.room >= 64 || state.pendingCapacity.invite >= 8) fail("waiting_room_capacity_reached");
+        const participantId = randomUUID();
+        const requestId = randomUUID();
+        state.waitingRequest = {
+          requestId, roomId: input.roomId, inviteId: invite.inviteId, participantId,
+          displayName: input.displayName, status: "pending", createdAt, decidedAt: null, decidedBy: null
+        };
+        state.waitingRequestNew = true;
+        state.pending = {
+          tenantId: input.tenantId, roomId: input.roomId, pendingId: input.pendingId,
+          inviteId: invite.inviteId, requestId, participantId, displayName: input.displayName,
+          secretHash: input.secretHash, createdAt, expiresAt: new Date(expiresAt).toISOString(), activatedAt: null
+        };
+        return structuredClone(state.pending);
+      });
+    },
+    async redeemWaiting(scope, pendingId, secretHash) {
+      assertIdentityScope(scope);
+      if (!validId(pendingId) || !validHash(secretHash)) fail("waiting_proof_invalid");
+      return persistence.transact(scope, { pendingId }, state => {
+        if (state.minimumProtocol < 2) fail("waiting_proof_invalid");
+        assertRoomActive(state);
+        const pending = state.pending;
+        const nowAt = timestamp();
+        if (!pending || pending.activatedAt || Date.parse(pending.expiresAt) <= Date.parse(nowAt)
+          || !validHash(pending.secretHash) || !timingSafeEqual(Buffer.from(secretHash, "hex"), Buffer.from(pending.secretHash, "hex"))) fail("waiting_proof_invalid");
+        const invitation = state.invite;
+        const request = state.waitingRequest;
+        if (!invitation || invitation.inviteId !== pending.inviteId || invitation.roomId !== scope.roomId
+          || invitation.protocolVersion !== 2 || !invitation.waitingRoomEnabled || invitation.revokedAt
+          || Date.parse(invitation.expiresAt) <= Date.parse(nowAt) || !["guest", "member", "host", "presenter"].includes(invitation.role)
+          || !request || request.roomId !== scope.roomId || request.requestId !== pending.requestId
+          || request.inviteId !== invitation.inviteId || request.participantId !== pending.participantId) fail("waiting_proof_invalid");
+        if (request.status === "rejected") fail("waiting_room_rejected");
+        if (request.status !== "approved") fail("waiting_room_pending");
+        if (state.authority.lifecycle.lockedAt) fail("room_blocked");
+        const role = invitation.role;
+        const record: RoomIdentityRecord = {
+          tenantId: scope.tenantId, roomId: scope.roomId, identityId: randomUUID(), participantId: pending.participantId,
+          authEpoch: 1, displayName: pending.displayName, baseRole: role === "guest" ? "guest" : "member",
+          provenance: { kind: "waiting-room", inviteId: invitation.inviteId, requestId: pending.requestId,
+            role: role as "guest" | "member" | "presenter" | "host" }, createdAt: nowAt, revokedAt: null
+        };
+        state.identities.set(record.identityId, record);
+        if (role === "host" && state.room.roomType !== "personal" && !state.room.sessionControl?.hostParticipantId
+          && state.authority.hostIdentityId === null && state.authority.revision === 0) {
+          state.authority.hostIdentityId = record.identityId;
+          bumpAuthority(state);
+        }
+        pending.activatedAt = nowAt;
+        return structuredClone(record);
+      });
+    },
     async create(input) {
       assertIdentityScope(input);
       if (typeof input.displayName !== "string" || input.displayName.length > 80) fail("invalid_identity_input");

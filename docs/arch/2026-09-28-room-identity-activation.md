@@ -37,6 +37,53 @@ legacy JSON. Memory and PostgreSQL must implement the same rules.
   policy, must remain visibly untrusted and must never grant plugin-author rights
   or ownership. Production admission must not trust client role claims.
 
+### Internal V foundations (not activated in the published B image)
+
+The Node-only `rs2` session has an HKDF-separated signing key and carries only
+tenant/room/identity/participant/epoch, session ID and timestamps. It does not
+contain role or permissions. The matching `ri2` room-bound possession credential
+is intended to be renewed in the tab through an explicit proof, not inferred
+from a v1 JWT. Client-side renewal has not been wired yet.
+Currently the new HTTP admission branch is reachable **only** after the global
+protocol minimum reaches 2; it is not a claim that floor 2 can be raised yet.
+
+`admit` allocates fresh IDs while holding the parent room and invitation row. A
+pre-activation invitation is marked protocol 1 and cannot be upgraded to grant
+Host/Presenter. New invitations are marked protocol 2 only after activation.
+An old personal/legacy Host ID does not become a Host via an invitation, and a
+Presenter invitation starts as Member pending a Host transition. Generic
+provenance seeding remains private to storage tests and is not exposed by the
+identity service. An invalid supplied credential cannot fall back to a fresh
+guest identity, and a public participant ID never supplies continuity.
+
+The waiting-room `rw2` proof uses a third HKDF domain. Its raw secret is returned
+once to the requesting tab; only the room-bound hash is stored. Initial admission
+creates an otherwise unusable pending request. A verifier locks the parent room,
+invite and decided waiting request before single-use activation. Approval alone
+does not give a room session without the proof. Open waiting entries are capped
+at 8 per invitation / 64 per room; expired and consumed pending records may be
+deleted without clearing a live proof or active identity. Invites and requests
+are linked with room-scoped foreign keys. Admission and waiting proof cannot
+be used at minimum 1. Before production activation, guest-identity retention
+and per-origin rate limiting are still needed: each credential-less entry can
+create a durable identity tombstone, by design of the accepted B guard.
+
+A fresh personal owner gets a newly generated participant ID, room and
+owner+Host authority in one Memory operation or one PostgreSQL transaction.
+An error inserting authority rolls the entire room back. The old owner ID or
+`role=host` request body is never an ownership proof. This storage operation is
+not wired into the public personal-room route yet.
+
+The internal `/api/internal/identity-session/verify` checks its authenticated
+service caller, global minimum, current epoch/revocation and authority before
+returning the effective role and signed scene context. At floor 2, room-state
+can connect an `rs2` socket only after this call, verifies again before each
+privileged command, and never applies a delayed older authority revision over a
+newer one. The live role transfer/revoke path is tested with real API, room-state
+and PostgreSQL in an isolated schema. Runtime still uses its pre-boot local ID,
+and the other public REST routes still reject floor 2. Thus these internal V
+foundations do not activate v2 on the shared staging host.
+
 ### Waiting room
 
 An unauthenticated client must not poll somebody else's approved participant ID.
