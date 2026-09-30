@@ -147,6 +147,15 @@ API test files переведены на последовательный зап
 
 Публикация этого среза на staging сохраняет минимальную версию протокола 1 и прежние пользовательские маршруты: открытых авторских plugin routes или публичного v2 join пока нет. Для реальной активации остаются: проектирование retention/rate-limit identity, вся схема runtime adoption, private notes/owner semantics и остальные REST writes, admin recovery endpoints, строгая media namespace и полноценные E2E на итоговом SHA. До их готовности повышать минимум до 2 нельзя.
 
+| Этап T01a-S2b-V foundations | Результат |
+|---|---|
+| Итоговый опубликованный SHA | `dbc27c1fdd77e2a941f059c458ad42c21d3374c7` |
+| [CI 36666534506](https://github.com/vrata-labs/platform/actions/runs/36666534506) | Success с первой попытки: package tests, полный local E2E, M0.5 и закреплённые scene checks |
+| [Docker Publish 36666534723](https://github.com/vrata-labs/platform/actions/runs/36666534723) | Success с первой попытки: образы точного SHA |
+| [Staging Deploy 36669028596](https://github.com/vrata-labs/platform/actions/runs/36669028596) | Success с первой попытки: **52/52 staging E2E**, **1/1 blocking Rutube**, без flaky/skip, successful SHA сохранён, rollback skipped |
+
+[Артефакт gate](https://github.com/vrata-labs/platform/actions/runs/36669028596/artifacts/11078606345): старый dev-key credential отвергнут, четырёхсторонняя встреча с LiveKit и PDF проходит с cleanup, owner-bound workspace и visual seat marker tests зелёные. Hall, BlueOffice, ArtGallery loaded. После gate `/health`, `/rooms/demo-room`, `/control-plane`, `/api/templates` — 200. Ни floor 2, ни v2 credentials не выдавались на общем staging. Новая схема проверена против точного опубликованного rollback-образа B в отдельной PostgreSQL базе с floor 2; это не hot rollback на общем staging.
+
 ## Публикация первого среза T01/T12
 
 Локально прошли workspace lint/typecheck/build/tests с PostgreSQL, затем runtime build и 905 runtime tests после финальных правок. Полный `pnpm test:e2e` на финальном исполняемом дереве: **148 passed**, без skip (41.6 min).
