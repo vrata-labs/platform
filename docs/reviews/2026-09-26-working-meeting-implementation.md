@@ -166,6 +166,15 @@ API test files переведены на последовательный зап
 
 До координированной активации остаются admin recovery HTTP и owner hand-off, retention/rate-limit для анонимной выдачи durable identities, полная проверка приватных материалов и всех effect-bearing REST routes после отзыва прав, жизненный цикл legacy Host/Owner, media executor в production и тесты обоих refresh путей после истечения срока. Плагины, QuickJS/WASM sandbox и author routes по-прежнему не реализованы.
 
+| Этап подготовительного T01a-S2b-V | Результат |
+|---|---|
+| Проверенный и опубликованный SHA | `6144cccc6bb6a254c720e74d95fab85b47bbb98d` |
+| [CI 36686256127](https://github.com/vrata-labs/platform/actions/runs/36686256127) | Success: package tests, полный local E2E, M0.5 и закреплённые asset checks |
+| [Docker Publish 36686256167](https://github.com/vrata-labs/platform/actions/runs/36686256167) | Success: immutable API, room-state и remote-browser images точного SHA |
+| [Staging Deploy 36689309883](https://github.com/vrata-labs/platform/actions/runs/36689309883) | Success с первой попытки: **52/52 staging E2E**, **1/1 blocking Rutube**, successful SHA сохранён; rollback skipped |
+
+[Артефакт staging gate](https://github.com/vrata-labs/platform/actions/runs/36689309883/artifacts/11085983559): четыре участника, собственный PDF и notes, загрузка Hall/BlueOffice/ArtGallery на текущих страницах, XR seat/telemetry сценарии и полный cleanup. Дополнительный public smoke после gate: `/health`, `/rooms/demo-room`, `/control-plane`, `/api/templates` — 200. `/health.features` не содержит identityProtocolVersion: минимум общего staging по-прежнему 1, v2 здесь не проверялся и не активировался. В этом run откат не понадобился.
+
 ## Публикация первого среза T01/T12
 
 Локально прошли workspace lint/typecheck/build/tests с PostgreSQL, затем runtime build и 905 runtime tests после финальных правок. Полный `pnpm test:e2e` на финальном исполняемом дереве: **148 passed**, без skip (41.6 min).
