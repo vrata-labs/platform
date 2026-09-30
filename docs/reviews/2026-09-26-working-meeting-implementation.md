@@ -122,7 +122,22 @@ API test files переведены на последовательный зап
 
 В первом полном local E2E после этих изменений пройдено 152/153. Не завершилось ожидание Host remove в существующем public-demo; следующий отдельный прогон остановился на PDF Guest page 2. [Профиль четырёх клиентов](2026-09-28-four-client-gpu-diagnosis.md) показал длительное ожидание программного GPU при полученных HTTP-ответах. Изоляция четырёх браузеров и снижение DPR не помогли и отменены. Исправлена гонка между `toBeEnabled()` и DOM `click()` для кнопок Host; focused public-demo после правки прошёл целиком, без изменения пикселей, runtime и лимитов ожидания. Следующий полный E2E выявил ещё одну гонку: тест screen-share Guest принимал физическую debug-поверхность за готовый серверный snapshot. После ожидания логической allowlist весь focused screen-share spec прошёл (4/4). На окончательном исполняемом дереве полный local E2E — **153/153**, без skip/retry (22,6 минуты). Минимум 2 в общем staging не поднимался.
 
-Полный local E2E и результаты публикации B фиксируются после завершения соответствующих gates. Активация V остаётся отдельным последующим шагом: proof-bound waiting room/owner bootstrap, v2 JWT/admission/refresh/recovery, свежая authority и принятие server ID до первого publish, изоляция старых media credentials.
+Итоговая поставка B прошла полный локальный `pnpm test:e2e` на финальном исполняемом дереве: **153/153**, без retry/skip, 22,5 минуты. Локальная проверка нового исходного импорта: 2/2 focused identity E2E. Общий минимум протокола в staging остался 1; публичная v2 выдача ещё не объявляется.
+
+| Этап T01a-S2b-B | Результат |
+|---|---|
+| Основной срез | `5dfb530fe6d20e66e2e5d72af5b6ff055592047a` |
+| CI checkout mode fix | `8a3f8b916b0dd07bee6f9da2e0f3a60b39056905` |
+| Итоговый исполняемый и проверенный SHA | `033bd6e2b33e9149221464c934554977320ca36f` |
+| [CI 36647780130](https://github.com/vrata-labs/platform/actions/runs/36647780130) | Success с первой попытки данного SHA: package tests, полный local E2E, M0.5, pinned scene checks |
+| [Docker Publish 36647779978](https://github.com/vrata-labs/platform/actions/runs/36647779978) | Success с первой попытки: API, room-state, remote-browser images exact SHA |
+| [Staging Deploy 36650600289](https://github.com/vrata-labs/platform/actions/runs/36650600289) | Success с первой попытки данного SHA: **52/52 staging E2E**, **1/1 blocking Rutube** без flaky/skip; persisted successful SHA, rollback skipped |
+
+[Артефакт staging gate](https://github.com/vrata-labs/platform/actions/runs/36650600289/artifacts/11071596015): реальный API отклоняет старый dev-key credential, Host загружает и показывает собственный PDF для четырёх участников с настоящим LiveKit, сохранение notes и полная cleanup запись; owner-bound workspace и обе visual occupancy комнаты проходят. Hall/BlueOffice/ArtGallery достигли loaded на текущих страницах. После gate `/health`, `/rooms/demo-room`, `/control-plane`, `/api/templates` вернули 200. Гостевой token пробного входа имеет валидный ответ 200 и **не** подписан прежним ключом разработки; сам token и новый ключ не опубликованы.
+
+Промежуточные попытки: [CI 36636543721](https://github.com/vrata-labs/platform/actions/runs/36636543721) остановился до тестов на изменении mode закреплённого bin-файла после pnpm install; точный mode восстановлен, [CI 36639398975](https://github.com/vrata-labs/platform/actions/runs/36639398975) прошёл. [Staging Deploy 36642592194](https://github.com/vrata-labs/platform/actions/runs/36642592194) провёл разовую ротацию ключа, 51/52 staging tests прошли, но новый тест импортировал локальный dist-файл, которого нет у staging runner. Штатный rollback вернул предыдущий образ, не вернув общеизвестный ключ. Импорт заменён на исходный модуль; повтор B опубликован новым SHA через обычный pipeline. При повторе ротация осталась idempotent (`already_configured`). Старые state-токены и приглашения по согласованию требуют повторного входа/перевыпуска.
+
+Активация V остаётся отдельным последующим шагом: proof-bound waiting room/owner bootstrap, v2 JWT/admission/refresh/recovery, свежая authority и принятие server ID до первого publish, изоляция старых media credentials. Успешная подготовка rollback границы не является закрытием T01a и не даёт прав автора внешнего плагина.
 
 ## Публикация первого среза T01/T12
 
