@@ -183,6 +183,15 @@ API test files переведены на последовательный зап
 
 Локальная проверка: workspace lint/typecheck/build, API с PostgreSQL и pinned rollback storage **845/845**, runtime **928/928**, room-state **76/76**, shared-types **30/30**. Первый полный прогон с четырьмя workers обнаружил три задержки в GPU-нагруженных reference/аватарных сценариях; все три прошли отдельно без изменения исполняемого кода. Последующий serial E2E выявил настоящую гонку: кнопку «Open my room» можно было нажать до server-ID boot. Кнопка теперь недоступна до завершения boot, а сценарий ждёт её активного состояния. Финальный полный local `pnpm test:e2e --workers=1` на окончательном исполняемом дереве — **156/156**, без skip/retry (30,3 минуты). Это не проверка на общем staging до публикации exact SHA.
 
+| Этап recovery-подготовки | Результат |
+|---|---|
+| Проверенный и опубликованный SHA | `14f6a046574a166a02e1fa6a8774b4cd70b5aa14` |
+| [CI 36706837714](https://github.com/vrata-labs/platform/actions/runs/36706837714) | Success: package tests, полный E2E, M0.5 и закреплённые asset checks |
+| [Docker Publish 36706837710](https://github.com/vrata-labs/platform/actions/runs/36706837710) | Success: immutable API, room-state и remote-browser images точного SHA |
+| [Staging Deploy 36710133398](https://github.com/vrata-labs/platform/actions/runs/36710133398) | Success с первой попытки: **52/52 staging E2E**, **1/1 blocking Rutube**; successful SHA сохранён, rollback skipped |
+
+[Артефакт staging gate](https://github.com/vrata-labs/platform/actions/runs/36710133398/artifacts/11094848416) подтверждает встречу с собственным PDF, notes, полный cleanup и текущую загрузку Hall/BlueOffice/ArtGallery. После gate `/health`, `/rooms/demo-room`, `/control-plane`, `/api/templates` — 200. В `/health.features` нет identityProtocolVersion: публичная v2 выдача на общем staging не активировалась, так что изолированные recovery E2E не выдаются за staging-проверку floor 2. Откат этого run не потребовался.
+
 ## Публикация первого среза T01/T12
 
 Локально прошли workspace lint/typecheck/build/tests с PostgreSQL, затем runtime build и 905 runtime tests после финальных правок. Полный `pnpm test:e2e` на финальном исполняемом дереве: **148 passed**, без skip (41.6 min).
