@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { randomUUID } from "node:crypto";
+import { createHmac, randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { startReferenceTemplateFixture } from "./reference-template-fixture";
 import { signRoomSessionToken } from "../../packages/shared-types/src/session-token.js";
@@ -40,10 +40,12 @@ for (const staging of [false, true]) test(`${staging ? "@staging " : ""}obsolete
   } finally { await page.goto("about:blank").catch(() => {}); await fixture?.close(); }
 });
 
-test("real protocol activation stops a live legacy client, protects its draft and denies fresh entry after restart", async ({ page, request, browser }) => {
+test("real protocol activation stops a legacy client while a fresh tab joins with a stable server-issued identity", async ({ page, request, browser }) => {
   test.skip(!process.env.VRATA_TEST_POSTGRES_URL, "Requires an isolated PostgreSQL fixture");
   test.setTimeout(120_000);
-  const fixture = await startReferenceTemplateFixture(process.env.VRATA_TEST_POSTGRES_URL!);
+  const fixture = await startReferenceTemplateFixture(process.env.VRATA_TEST_POSTGRES_URL!, {
+    stateTokenSecret: "isolated-v2-browser-activation-secret-32-bytes"
+  });
   const requireApi = createRequire(resolve("apps/api/package.json"));
   const { Pool } = requireApi("pg");
   const pool = new Pool({ connectionString: process.env.VRATA_TEST_POSTGRES_URL, options: `-c search_path=${fixture.schema},public` });
@@ -82,16 +84,79 @@ test("real protocol activation stops a live legacy client, protects its draft an
     expect(persisted.status()).toBe(200);
     expect((await persisted.json()).note.content).toBe(before);
     await fixture.restartApi();
-    const denied = fresh.waitForResponse(response => new URL(response.url()).pathname === "/api/tokens/state");
-    await fresh.goto(`${fixture.origin}/rooms/demo-room?onboard=0`);
-    const response = await denied;
-    expect(response.status()).toBe(426);
-    expect(await response.json()).toEqual({ error: "identity_required", reason: "identity_upgrade_required" });
-    await expect(fresh.locator("#session-upgrade-dialog")).toBeVisible();
+    const untrustedId = `tab-${randomUUID()}`;
+    await fresh.addInitScript(id => sessionStorage.setItem("vrata.participantId", id), untrustedId);
+    const admission = fresh.waitForResponse(response => new URL(response.url()).pathname === "/api/tokens/state");
+    await fresh.goto(`${fixture.origin}/rooms/demo-room?onboard=0`, { waitUntil: "domcontentloaded", timeout: 20_000 });
+    const response = await admission;
+    expect(response.status()).toBe(200);
+    const joined = await response.json() as { participantId: string; identityCredential: string; role: string };
+    expect(joined.participantId).not.toBe(untrustedId);
+    expect(joined.role).toBe("guest");
+    expect(joined.identityCredential).toMatch(/^ri2\./);
+    await expect.poll(() => fresh.evaluate(() => (window as any).__VRATA_DEBUG__?.roomStateConnected)).toBe(true);
+    await expect(fresh.locator("#session-upgrade-dialog")).toBeHidden();
+    expect(await fresh.evaluate(() => (window as any).__VRATA_DEBUG__?.participantId)).toBe(joined.participantId);
+    const rejoin = fresh.waitForResponse(next => new URL(next.url()).pathname === "/api/tokens/state");
+    await fresh.reload();
+    expect((await rejoin).status()).toBe(200);
+    expect((await (await rejoin).json() as { participantId: string }).participantId).toBe(joined.participantId);
+    await expect.poll(() => fresh.evaluate(() => (window as any).__VRATA_DEBUG__?.roomStateConnected)).toBe(true);
     expect(await storage.identityProtocol.minimum()).toBe(2);
   } finally {
     releaseWrite?.();
     await Promise.allSettled([page.goto("about:blank"), fresh.close()]);
+    await pool.end();
+    await fixture.close();
+  }
+});
+
+test("v2 personal owner persists across reload and a copied public ID cannot reopen the room", async ({ page, browser }) => {
+  test.skip(!process.env.VRATA_TEST_POSTGRES_URL, "Requires an isolated PostgreSQL fixture");
+  test.setTimeout(90_000);
+  const fixture = await startReferenceTemplateFixture(process.env.VRATA_TEST_POSTGRES_URL!, {
+    stateTokenSecret: "isolated-v2-personal-owner-browser-secret-32-bytes"
+  });
+  const requireApi = createRequire(resolve("apps/api/package.json"));
+  const { Pool } = requireApi("pg");
+  const pool = new Pool({ connectionString: process.env.VRATA_TEST_POSTGRES_URL,
+    options: `-c search_path=${fixture.schema},public` });
+  const { PostgresStorage } = await import(pathToFileURL(resolve("apps/api/dist/storage.js")).href);
+  const untrusted = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  const deniedPaths: string[] = [];
+  page.on("response", response => {
+    if ([401, 409, 426].includes(response.status())) deniedPaths.push(`${response.status()} ${new URL(response.url()).pathname}`);
+  });
+  try {
+    await new PostgresStorage(pool).identityProtocol.raise(2);
+    await page.goto(`${fixture.origin}/rooms/demo-room?onboard=0`, { waitUntil: "domcontentloaded" });
+    await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__?.roomStateConnected)).toBe(true);
+    await page.locator("#open-personal-room").click({ timeout: 5000 }).catch(error => {
+      throw new Error(`personal_room_button_blocked:${deniedPaths.join(",")}`, { cause: error });
+    });
+    await expect.poll(() => new URL(page.url()).pathname).not.toBe("/rooms/demo-room");
+    await expect(page).toHaveURL(/\/rooms\/[^/?]+/);
+    const personalUrl = page.url();
+    expect(personalUrl).not.toContain("/rooms/demo-room");
+    await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__?.roomStateConnected)).toBe(true);
+    const ownerId = await page.evaluate(() => (window as any).__VRATA_DEBUG__?.participantId) as string;
+    expect(ownerId).toBeTruthy();
+    const reloadAdmission = page.waitForResponse(response => new URL(response.url()).pathname === "/api/tokens/state");
+    await page.reload({ waitUntil: "domcontentloaded" });
+    expect((await reloadAdmission).status()).toBe(200);
+    await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__?.participantId)).toBe(ownerId);
+    await page.goto(`${fixture.origin}/rooms/demo-room?onboard=0`, { waitUntil: "domcontentloaded" });
+    await expect(page.locator("#open-personal-room")).toBeVisible();
+    await page.locator("#open-personal-room").click();
+    await expect.poll(() => new URL(page.url()).pathname).toBe(new URL(personalUrl).pathname);
+    await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__?.participantId)).toBe(ownerId);
+    await untrusted.addInitScript(id => sessionStorage.setItem("vrata.participantId", id), ownerId);
+    const denied = untrusted.waitForResponse(response => new URL(response.url()).pathname === "/api/tokens/state");
+    await untrusted.goto(personalUrl, { waitUntil: "domcontentloaded" });
+    expect((await denied).status()).toBe(403);
+    await expect(untrusted.locator("#session-upgrade-dialog")).toBeHidden();
+  } finally {
+    await Promise.allSettled([page.goto("about:blank"), untrusted.close()]);
     await pool.end();
     await fixture.close();
   }
@@ -121,10 +186,16 @@ test("isolated live v2 room-state socket rechecks role and revocation before pri
     const room = await storage.createRoom({ tenantId: "demo-tenant", templateId: "meeting-room-basic", name: "V2 socket authority" });
     roomId = room.roomId;
     const scope = { tenantId: room.tenantId, roomId };
-    const invite = await storage.createRoomInvite({ roomId, tokenHash: `host-${randomUUID()}`, role: "host",
-      protocolVersion: 2, waitingRoomEnabled: false, expiresAt: new Date(Date.now() + 60_000).toISOString() });
+    const invitation = await fetch(`${fixture.origin}/api/rooms/${roomId}/invites`, { method: "POST",
+      headers: { "content-type": "application/json", "x-vrata-admin-token": fixture.adminToken },
+      body: JSON.stringify({ role: "host", expiresInSeconds: 60 }) });
+    expect(invitation.status).toBe(201);
+    const inviteLink = (await invitation.json() as { inviteLink: string }).inviteLink;
+    const rawInvite = new URL(inviteLink).searchParams.get("invite");
+    expect(rawInvite).toBeTruthy();
+    const inviteTokenHash = createHmac("sha256", secret).update(rawInvite!).digest("base64url");
     const service = createRoomIdentityService(storage.roomIdentities, secret, Date.now, { identityLifetimeSeconds: 86_400 });
-    const host = await service.admit({ ...scope, displayName: "Host", inviteTokenHash: invite.tokenHash });
+    const host = await service.admit({ ...scope, displayName: "Host", inviteTokenHash });
     const next = await service.admit({ ...scope, displayName: "Member" });
     const { sessionToken } = await service.issueSession(host.credential, scope);
     const address = new URL(fixture.stateOrigin.replace(/^http/, "ws"));
@@ -153,6 +224,13 @@ test("isolated live v2 room-state socket rechecks role and revocation before pri
     await expect.poll(() => messages.some(value => value.type === "surface_command_result" && value.result?.accepted === true)).toBe(true);
     await storage.roomIdentities.transition(scope, { actorType: "room-session", proof: host.identity }, 1,
       { type: "transfer-host", targetParticipantId: next.identity.participantId });
+    const inviteFrom = (bearer: string) => fetch(`${fixture.origin}/api/rooms/${roomId}/invites`, {
+      method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${bearer}` },
+      body: JSON.stringify({ role: "guest", expiresInSeconds: 60 })
+    });
+    expect((await inviteFrom(sessionToken)).status).toBe(403, "the former Host cannot issue a new v2 invitation");
+    const successor = await service.issueSession(next.credential, scope);
+    expect((await inviteFrom(successor.sessionToken)).status).toBe(201);
     socket.send(JSON.stringify({ type: "surface_create_object", probeOnly: true }));
     await expect.poll(() => messages.some(value => value.type === "access_denied" && value.result?.role === "member")).toBe(true);
     expect(socket.readyState).toBe(NativeWebSocket.OPEN);

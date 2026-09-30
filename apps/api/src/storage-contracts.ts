@@ -296,6 +296,9 @@ export interface Storage {
   updateRoom(roomId: string, input: Partial<RoomRecord>, expectedTemplateBinding?: ExpectedRoomTemplateBinding): Promise<RoomRecord | null>;
   deleteRoom(roomId: string): Promise<boolean>;
   createRoomInvite(input: Omit<RoomInviteRecord, "inviteId" | "createdAt" | "revokedAt" | "revokedBy"> & { inviteId?: string; createdAt?: string }): Promise<RoomInviteRecord>;
+  createRoomInviteV2(input: Omit<RoomInviteRecord, "inviteId" | "createdAt" | "revokedAt" | "revokedBy" | "protocolVersion"> & {
+    actor: import("./identity/contracts.js").RoomIdentityActor
+  }): Promise<RoomInviteRecord>;
   listRoomInvites(roomId: string): Promise<RoomInviteRecord[]>;
   getRoomInvite(inviteId: string): Promise<RoomInviteRecord | null>;
   getRoomInviteByTokenHash(tokenHash: string): Promise<RoomInviteRecord | null>;

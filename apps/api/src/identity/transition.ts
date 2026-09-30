@@ -10,7 +10,9 @@ export function transitionIdentityAuthority(state: IdentityTransaction, actor: R
   if (!admin && !identity) fail("identity_forbidden");
   if (!command || !["lock", "unlock", "end", "grant-presenter", "revoke-presenter", "transfer-host", "transfer-owner", "remove"].includes(command.type)) fail("invalid_identity_input");
   const slot = command.type === "transfer-owner" ? state.authority.ownerIdentityId : state.authority.hostIdentityId;
-  if (!admin && identity?.identityId !== slot) fail("identity_forbidden");
+  const personalOwner = state.room.roomType === "personal" && identity?.identityId === state.authority.ownerIdentityId;
+  if (!admin && identity?.identityId !== slot && !personalOwner) fail("identity_forbidden");
+  if (command.type === "end" && state.room.roomType === "personal" && !admin && !personalOwner) fail("identity_forbidden");
   const actorId = identity?.participantId ?? (actor as { actorId: string }).actorId;
   const control = state.authority.lifecycle;
   const revokePresenter = () => {
@@ -51,7 +53,7 @@ export function transitionIdentityAuthority(state: IdentityTransaction, actor: R
         state.authority.ownerIdentityId = target.identityId;
         break;
       case "remove":
-        if (target.identityId === identity?.identityId || (!admin && target.identityId === state.authority.ownerIdentityId)) fail("identity_forbidden");
+        if (target.identityId === identity?.identityId || target.identityId === state.authority.ownerIdentityId) fail("identity_forbidden");
         if (command.reason !== undefined && typeof command.reason !== "string") fail("invalid_identity_input");
         if (!validCounter(target.authEpoch) || target.authEpoch === 2_147_483_647) fail("identity_not_active");
         target.authEpoch++; target.revokedAt = now;

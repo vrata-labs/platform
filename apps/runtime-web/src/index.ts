@@ -57,6 +57,11 @@ interface StateTokenResponse {
   access: RoomAccessDebugState;
   role: RoomRole;
   permissions: RoomPermission[];
+  identityProtocolVersion?: 2;
+  participantId?: string;
+  identityCredential?: string;
+  waitingCredential?: string;
+  isOwner?: boolean;
 }
 
 interface MediaTokenResponse {
@@ -67,6 +72,7 @@ interface MediaTokenResponse {
 
 interface RuntimeHealthResponse {
   features?: {
+    identityProtocolVersion?: 2;
     xrEnabled?: boolean;
     voiceEnabled?: boolean;
     screenShareEnabled?: boolean;
@@ -216,6 +222,9 @@ export interface RuntimeSpaceOption extends RuntimeSpaceRecord {
 
 export interface RuntimePersonalRoomResponse {
   created: boolean;
+  identityProtocolVersion?: 2;
+  identityCredential?: string;
+  participantId?: string;
   room: {
     roomId: string;
     tenantId: string;
@@ -273,17 +282,20 @@ export async function fetchStateToken(apiBaseUrl: string, roomId: string, access
     },
     body: JSON.stringify({
       roomId,
-      participantId: accessRequest.participantId,
+      ...(accessRequest.identityProtocolVersion === 2
+        ? { identityProtocolVersion: 2,
+          ...(accessRequest.identityCredential != null ? { identityCredential: accessRequest.identityCredential } : {}),
+          ...(accessRequest.waitingCredential != null ? { waitingCredential: accessRequest.waitingCredential } : {}) }
+        : { participantId: accessRequest.participantId, requestedRole: accessRequest.requestedRole }),
       displayName: accessRequest.displayName,
-      requestedRole: accessRequest.requestedRole,
-      inviteToken: accessRequest.inviteToken
+      ...(accessRequest.inviteToken != null ? { inviteToken: accessRequest.inviteToken } : {})
     })
   });
 
-  if (response.status === 202 || response.status === 403 || response.status === 401) {
-    const payload = await response.json().catch(() => ({})) as { reason?: string; accessRequestId?: string; requestId?: string };
+  if ([202, 403, 401, 409, 426, 429].includes(response.status)) {
+    const payload = await response.json().catch(() => ({})) as { reason?: string; accessRequestId?: string; requestId?: string; waitingCredential?: string };
     if (payload.reason) {
-      throw new RuntimeAccessError(response.status, payload.reason, payload.accessRequestId, payload.requestId);
+      throw new RuntimeAccessError(response.status, payload.reason, payload.accessRequestId, payload.requestId, payload.waitingCredential);
     }
   }
 
@@ -294,9 +306,10 @@ export async function fetchStateToken(apiBaseUrl: string, roomId: string, access
   return (await response.json()) as StateTokenResponse;
 }
 
-export async function fetchRuntimeSpaces(apiBaseUrl: string, roomId: string, search = ""): Promise<RuntimeSpaceOption[]> {
+export async function fetchRuntimeSpaces(apiBaseUrl: string, roomId: string, search = "", sessionToken?: string): Promise<RuntimeSpaceOption[]> {
   const response = await fetch(new URL(`/api/rooms/${roomId}/spaces${search}`, apiBaseUrl), {
-    cache: "no-store"
+    cache: "no-store",
+    headers: sessionToken ? { authorization: `Bearer ${sessionToken}` } : undefined
   });
 
   if (!response.ok) {
@@ -307,7 +320,8 @@ export async function fetchRuntimeSpaces(apiBaseUrl: string, roomId: string, sea
   return formatSpaceOptions(payload.items);
 }
 
-export async function openPersonalRoom(apiBaseUrl: string, input: { participantId: string; displayName: string }): Promise<RuntimePersonalRoomResponse> {
+export async function openPersonalRoom(apiBaseUrl: string, input: { participantId: string; displayName: string }
+  | { identityProtocolVersion: 2; displayName: string; roomId?: string; identityCredential?: string }): Promise<RuntimePersonalRoomResponse> {
   const response = await fetch(new URL("/api/personal-room", apiBaseUrl), {
     method: "POST",
     headers: {
@@ -354,6 +368,10 @@ export async function savePersonalRoomState(apiBaseUrl: string, roomId: string, 
 
 export interface RuntimeBootResult {
   roomId: string;
+  identityProtocolVersion?: 2;
+  participantId?: string;
+  identityCredential?: string;
+  isOwner?: boolean;
   roomType: "standard" | "personal";
   ownerParticipantId?: string | null;
   template: string;
@@ -417,6 +435,9 @@ export interface RuntimeAccessRequest {
   displayName: string;
   requestedRole?: string | null;
   inviteToken?: string | null;
+  identityProtocolVersion?: 2;
+  identityCredential?: string | null;
+  waitingCredential?: string | null;
 }
 
 export class RuntimeAccessError extends Error {
@@ -424,14 +445,16 @@ export class RuntimeAccessError extends Error {
   readonly reason: string;
   readonly accessRequestId?: string;
   readonly requestId?: string;
+  readonly waitingCredential?: string;
 
-  constructor(status: number, reason: string, accessRequestId?: string, requestId?: string) {
+  constructor(status: number, reason: string, accessRequestId?: string, requestId?: string, waitingCredential?: string) {
     super(`room_access_denied:${reason}:${status}`);
     this.name = "RuntimeAccessError";
     this.status = status;
     this.reason = reason;
     this.accessRequestId = accessRequestId;
     this.requestId = requestId;
+    this.waitingCredential = waitingCredential;
   }
 }
 
@@ -491,7 +514,8 @@ export async function bootRuntime(
 ): Promise<RuntimeBootResult> {
   const health = await fetchRuntimeHealth(apiBaseUrl);
   const healthFeatures = health.features ?? {};
-  const accessResponse = accessRequest ? await fetchStateToken(apiBaseUrl, roomId, accessRequest) : null;
+  const accessResponse = accessRequest ? await fetchStateToken(apiBaseUrl, roomId,
+    { ...accessRequest, identityProtocolVersion: healthFeatures.identityProtocolVersion === 2 ? 2 : undefined }) : null;
   const accessDebug = accessResponse?.access ?? createRoomAccessDebugState("guest");
   const manifest = await fetchRoomManifest(apiBaseUrl, roomId, accessResponse?.token);
   if (manifest.templateSnapshot?.defaults) {
@@ -509,6 +533,12 @@ export async function bootRuntime(
 
   return {
     roomId: manifest.roomId,
+    ...(accessResponse?.identityProtocolVersion === 2 ? {
+      identityProtocolVersion: 2 as const,
+      participantId: accessResponse.participantId,
+      identityCredential: accessResponse.identityCredential,
+      isOwner: accessResponse.isOwner === true
+    } : {}),
     roomType: manifest.roomType ?? "standard",
     ownerParticipantId: manifest.ownerParticipantId ?? null,
     template: manifest.template,
@@ -894,8 +924,10 @@ export async function planVoiceSession(
   };
 }
 
-export async function listPresence(apiBaseUrl: string, roomId: string): Promise<PresenceState[]> {
-  const response = await fetch(new URL(`/api/rooms/${roomId}/presence`, apiBaseUrl));
+export async function listPresence(apiBaseUrl: string, roomId: string, sessionToken?: string): Promise<PresenceState[]> {
+  const response = await fetch(new URL(`/api/rooms/${roomId}/presence`, apiBaseUrl), {
+    headers: sessionToken ? { authorization: `Bearer ${sessionToken}` } : undefined
+  });
 
   if (!response.ok) {
     throw new Error(`failed_to_list_presence:${response.status}`);

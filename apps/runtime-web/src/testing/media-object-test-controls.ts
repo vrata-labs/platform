@@ -73,7 +73,6 @@ export interface MediaObjectTestControls {
 export function createMediaObjectTestControls(context: MediaObjectTestControlsContext): MediaObjectTestControls {
   const {
     debugSurfaceId: DEBUG_SURFACE_ID,
-    participantId,
     mediaSurfaceCommands,
     activeMediaObjectForSurface,
     activeScreenShareObjectForSurface,
@@ -266,7 +265,7 @@ export function createMediaObjectTestControls(context: MediaObjectTestControlsCo
         expectedRevision: object.revision + 1,
         patch: {
           type: "increment-click-count",
-          inputEventId: `${participantId}:stale:${Date.now()}`
+           inputEventId: `${context.participantId}:stale:${Date.now()}`
         }
       });
     },
@@ -281,7 +280,7 @@ export function createMediaObjectTestControls(context: MediaObjectTestControlsCo
         expectedRevision: object.revision + 1,
         patch: {
           type: "mark-active",
-          mediaTrackSid: `stale:${participantId}:${Date.now()}`
+           mediaTrackSid: `stale:${context.participantId}:${Date.now()}`
         }
       });
     },
@@ -296,10 +295,10 @@ export function createMediaObjectTestControls(context: MediaObjectTestControlsCo
         expectedRevision: object.revision + 1,
         patch: {
           type: "append-stroke",
-          inputEventId: `${participantId}:stale-whiteboard:${Date.now()}`,
-          stroke: {
-            strokeId: `${participantId}:stale-stroke`,
-            participantId,
+           inputEventId: `${context.participantId}:stale-whiteboard:${Date.now()}`,
+           stroke: {
+             strokeId: `${context.participantId}:stale-stroke`,
+             participantId: context.participantId,
             tool: "pen",
             color: "#111827",
             width: 2,
@@ -336,7 +335,7 @@ export function createMediaObjectTestControls(context: MediaObjectTestControlsCo
         patch: {
           type: "create-note",
           inputEventId: object.state.lastInputEventId,
-          noteId: `${participantId}:duplicate-note`,
+           noteId: `${context.participantId}:duplicate-note`,
           text: "Duplicate",
           x: 0.24,
           y: 0.24
@@ -356,8 +355,8 @@ export function createMediaObjectTestControls(context: MediaObjectTestControlsCo
           type: "append-stroke",
           inputEventId: object.state.lastInputEventId,
           stroke: {
-            strokeId: `${participantId}:duplicate-stroke`,
-            participantId,
+             strokeId: `${context.participantId}:duplicate-stroke`,
+             participantId: context.participantId,
             tool: "pen",
             color: "#111827",
             width: 2,

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { IdentityStorageError, type IdentityPersistence, type IdentityRoomBinding, type IdentitySelection, type IdentityTransaction, type RoomIdentityAuthority, type RoomIdentityPending, type RoomIdentityRecord, type RoomIdentityRecovery, type RoomIdentityScope } from "./contracts.js";
+import { IdentityStorageError, type IdentityPersistence, type IdentityRoomBinding, type IdentitySelection, type IdentityTransaction, type RoomIdentityActor, type RoomIdentityAuthority, type RoomIdentityPending, type RoomIdentityRecord, type RoomIdentityRecovery, type RoomIdentityScope } from "./contracts.js";
 import type { RoomInviteRecord, WaitingRoomRequestRecord } from "../storage-contracts.js";
 import { createRoomIdentityStorage, emptyIdentityAuthority } from "./store.js";
 
@@ -62,6 +62,20 @@ export function createMemoryRoomIdentities(getRoom: (roomId: string) => Identity
   };
   return {
     storage: createRoomIdentityStorage(persistence, now),
+    authorizeInvite(roomId: string, actor: RoomIdentityActor, create: () => RoomInviteRecord): RoomInviteRecord {
+      const room = getRoom(roomId);
+      if (!room || getMinimumProtocol() < 2 || room.status === "disabled" || room.disabledAt) throw new IdentityStorageError("room_blocked");
+      const state = snapshot(room, { identityIds: actor.actorType === "room-session" ? [actor.proof.identityId] : [] });
+      if (!state || state.authority.lifecycle.endedAt) throw new IdentityStorageError("room_blocked");
+      if (actor.actorType === "room-session") {
+        const proof = actor.proof;
+        const identity = state.identities.get(proof.identityId);
+        if (!identity || identity.revokedAt || identity.tenantId !== room.tenantId || identity.roomId !== roomId
+          || identity.participantId !== proof.participantId || identity.authEpoch !== proof.authEpoch
+          || ![state.authority.hostIdentityId, state.authority.ownerIdentityId].includes(identity.identityId)) throw new IdentityStorageError("identity_forbidden");
+      } else if (actor.role !== "admin" || !actor.actorId) throw new IdentityStorageError("identity_forbidden");
+      return create();
+    },
     bootstrapOwner(room: IdentityRoomBinding, participantId: string, displayName: string): RoomIdentityRecord {
       if (room.roomType !== "personal" || room.ownerParticipantId !== participantId || authorities.has(room.roomId)
         || identities.has(room.roomId) || !Number.isSafeInteger(now()) || displayName.length > 80) {

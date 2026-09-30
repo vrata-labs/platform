@@ -40,7 +40,8 @@ import {
 } from "@vrata/shared-types";
 
 import { appendBrandingSuffix, applyRoomShellBootState, renderSceneAttributions } from "./boot-session.js";
-import { RuntimeAccessError, bootRuntime, deleteRoomDocument, downloadRoomDocument, exportRoomNote, exportRoomNotesArchive, fetchRoomDocumentMediaContent, fetchRoomDocumentPresentation, fetchRoomNote, fetchRoomSessionControl, fetchRuntimeSpaces, grantRoomPresenter, listPresence, listRoomDocuments, listRoomNoteVersions, openPersonalRoom, planVoiceSession, removePresence, removeRoomParticipant, resolveCurrentSpace, resolveJoinMode, restoreRoomNoteVersion, revokeRoomPresenter, runRoomSessionControlAction, savePersonalRoomState, saveRoomNote, selectRoomDocumentSurface, transferRoomHost, uploadRoomDocument, upsertPresence, type PresenceState, type RuntimeDocumentRecord, type RuntimePersonalState, type RuntimeSessionControlResponse, type RuntimeSpaceOption } from "./index.js";
+import { RuntimeAccessError, bootRuntime, deleteRoomDocument, downloadRoomDocument, exportRoomNote, exportRoomNotesArchive, fetchRoomDocumentMediaContent, fetchRoomDocumentPresentation, fetchRoomNote, fetchRoomSessionControl, fetchRuntimeSpaces, fetchStateToken, grantRoomPresenter, listPresence, listRoomDocuments, listRoomNoteVersions, openPersonalRoom, planVoiceSession, removePresence, removeRoomParticipant, resolveCurrentSpace, resolveJoinMode, restoreRoomNoteVersion, revokeRoomPresenter, runRoomSessionControlAction, savePersonalRoomState, saveRoomNote, selectRoomDocumentSurface, transferRoomHost, uploadRoomDocument, upsertPresence, type PresenceState, type RuntimeDocumentRecord, type RuntimePersonalState, type RuntimeSessionControlResponse, type RuntimeSpaceOption } from "./index.js";
+import { createRoomIdentityTab } from "./identity-session-tab.js";
 import { probeDocumentMedia } from "./document-media-probe.js";
 import { createRuntimeDebugState } from "./runtime-debug-state.js";
 import { formatClientCompatibilityStatus, resolveClientCompatibility, type ClientCompatibilitySummary } from "./client-capabilities.js";
@@ -288,7 +289,9 @@ type RuntimeNavigatorXr = {
 const XR_SESSION_OPTIONS: XRSessionInit = {
   optionalFeatures: ["local-floor", "bounded-floor", "layers"]
 };
-const participantId = getParticipantId();
+let participantId = getParticipantId();
+const roomIdentityTab = createRoomIdentityTab(sessionStorage, roomId);
+let activeIdentityProtocolVersion: 2 | null = null;
 const personalOwnerId = getPersonalOwnerId();
 const displayNameFromQuery = query.get("name")?.trim() || null;
 const storedDisplayName = getStoredValue(localStorage, "vrata.displayName", "noah.displayName")?.trim() || null;
@@ -732,7 +735,7 @@ const {
 } = createMediaObjectQueries({
   get roomMediaObjects() { return roomMediaObjects; },
   get selectedMediaSurfaceId() { return selectedMediaSurfaceId; },
-  participantId,
+  get participantId() { return participantId; },
   mediaSurfaceViews
 });
 const {
@@ -757,7 +760,7 @@ const {
   get livekitRoom() { return livekitRoom; }
 });
 const mediaSurfaceCommands = createMediaSurfaceCommandClient({
-  participantId,
+  get participantId() { return participantId; },
   getClient: () => roomStateClient,
   isConnected: () => roomStateConnected,
   createConnectionError: () => createFaultError("ConnectionError", "room_state_failed")
@@ -1377,7 +1380,7 @@ const remoteAvatarRuntime = createRemoteAvatarRuntime({
   scene,
   bodyGeometry,
   headGeometry,
-  localParticipantId: participantId
+  get localParticipantId() { return participantId; }
 });
 
 function setFallbackEnvironmentVisible(visible: boolean): void {
@@ -1794,6 +1797,58 @@ async function refreshSessionControl(force = false): Promise<void> {
   } finally {
     sessionControlRefreshInFlight = false;
   }
+}
+
+function startIdentitySessionRenewal(expiresInSeconds: number): void {
+  if (activeIdentityProtocolVersion !== 2) return;
+  let nextAttemptAtMs = Date.now() + Math.max(30_000, Math.min(420_000, (expiresInSeconds - 120) * 1000));
+  let inFlight = false;
+  const timer = window.setInterval(() => {
+    if (sessionControlBlocked || runtimeSessionGate.reason) {
+      window.clearInterval(timer);
+      return;
+    }
+    if (inFlight || Date.now() < nextAttemptAtMs) return;
+    inFlight = true;
+    nextAttemptAtMs = Date.now() + 60_000;
+    void (async () => {
+      try {
+        const identityCredential = roomIdentityTab.identityCredential();
+        if (!identityCredential) {
+          runtimeSessionGate.require("identity_recovery_required");
+          return;
+        }
+        const renewed = await fetchStateToken(apiBaseUrl, roomId, {
+          identityProtocolVersion: 2, identityCredential, participantId, displayName
+        });
+        if (renewed.identityProtocolVersion !== 2 || renewed.participantId !== participantId
+          || !renewed.identityCredential || !renewed.token) {
+          runtimeSessionGate.require("identity_recovery_required");
+          return;
+        }
+        if (sessionControlBlocked || runtimeSessionGate.reason) return;
+        roomIdentityTab.rememberIdentity(renewed.identityCredential);
+        const previousRole = debugState.access.role;
+        applyAccessDebug(renewed.access, renewed.token, renewed.expiresInSeconds);
+        nextAttemptAtMs = Date.now() + Math.max(30_000, Math.min(420_000, (renewed.expiresInSeconds - 120) * 1000));
+        // Existing sockets still carry the old exp; reconnect with the new rs2.
+        if (previousRole === renewed.role && roomStateClient && debugState.roomStateUrl) {
+          roomStateConnected = false;
+          debugState.roomStateConnected = false;
+          mediaSurfaceCommands.rejectAll("room_state_reconnecting");
+          roomStateClient.close();
+          roomStateClient = null;
+          connectRoomStateWithRetry(debugState.roomStateUrl);
+        }
+      } catch (error) {
+        if (runtimeSessionGate.reason) return;
+        if (error instanceof RuntimeAccessError && error.status === 403) disableRuntimeForSessionBlock(error.reason);
+        else console.warn("identity_session_renewal_failed", error);
+      } finally {
+        inFlight = false;
+      }
+    })();
+  }, 60_000);
 }
 
 async function runHostControlAction(action: () => Promise<RuntimeSessionControlResponse>, statusMessage: string): Promise<void> {
@@ -4556,7 +4611,7 @@ const {
 } = createDocumentSurfaceActions({
   apiBaseUrl,
   roomId,
-  participantId,
+  get participantId() { return participantId; },
   selectedDocument,
   canPresentDocuments,
   setDocumentStatus,
@@ -4850,7 +4905,7 @@ const mediaObjectTestControls = createMediaObjectTestControls({
   debugSurfaceId: DEBUG_SURFACE_ID,
   get selectedMediaSurfaceId() { return selectedMediaSurfaceId; },
   get permissions() { return debugState.access.permissions; },
-  participantId,
+  get participantId() { return participantId; },
   mediaSurfaceCommands,
   activeMediaObjectForSurface,
   activeScreenShareObjectForSurface,
@@ -5131,7 +5186,7 @@ async function loadAvailableSpaces(currentRoomId: string): Promise<void> {
   renderSpaceSelector("loading", [], currentRoomId);
   try {
     const search = failSpaces ? "?fail=1" : "";
-    const spaces = await fetchRuntimeSpaces(apiBaseUrl, currentRoomId, search);
+    const spaces = await fetchRuntimeSpaces(apiBaseUrl, currentRoomId, search, roomStateAccessToken ?? undefined);
     availableSpaces = spaces;
     const currentSpace = resolveCurrentSpace(spaces, currentRoomId);
     if (!currentSpace && spaces.length > 0) {
@@ -6604,7 +6659,7 @@ async function refreshPresence(): Promise<void> {
   lastApiPresenceRefreshAtMs = nowMs;
   const apiFallbackRequired = !roomStateConnected;
   try {
-    latestFallbackParticipants = await listPresence(apiBaseUrl, roomId);
+    latestFallbackParticipants = await listPresence(apiBaseUrl, roomId, roomStateAccessToken);
     if (apiFallbackRequired) {
       latestRealtimeParticipants = [];
     }
@@ -7341,9 +7396,31 @@ openPersonalRoomButton.addEventListener("click", () => {
   openPersonalRoomButton.disabled = true;
   openPersonalRoomButton.textContent = "Opening...";
   debugState.personalRoom.openState = "opening";
-  void openPersonalRoom(apiBaseUrl, { participantId: personalOwnerId, displayName }).then((result) => {
+  void (async () => {
+    if (activeIdentityProtocolVersion !== 2) return openPersonalRoom(apiBaseUrl, { participantId: personalOwnerId, displayName });
+    // A room ID is a lookup hint; reopening requires the separate tab-local proof.
+    const existingRoomId = sessionStorage.getItem("vrata.personalRoomId.v2");
+    const credential = existingRoomId ? createRoomIdentityTab(sessionStorage, existingRoomId).identityCredential() : null;
+    if (existingRoomId && !credential) throw new Error("personal_room_identity_recovery_required");
+    if (!existingRoomId) {
+      sessionStorage.setItem("vrata.identity.v2.storage-check", "1");
+      sessionStorage.removeItem("vrata.identity.v2.storage-check");
+    }
+    const result = await openPersonalRoom(apiBaseUrl, { identityProtocolVersion: 2, displayName,
+      ...(existingRoomId && credential ? { roomId: existingRoomId, identityCredential: credential } : {}) });
+    if (result.identityProtocolVersion !== 2 || !result.identityCredential || !result.participantId) {
+      throw new Error("invalid_personal_room_identity_admission");
+    }
+    const tab = createRoomIdentityTab(sessionStorage, result.room.roomId);
+    tab.rememberIdentity(result.identityCredential);
+    if (sessionStorage.getItem(`vrata.identity.v2.${encodeURIComponent(result.room.roomId)}`) !== result.identityCredential) {
+      throw new Error("personal_room_identity_storage_unavailable");
+    }
+    sessionStorage.setItem("vrata.personalRoomId.v2", result.room.roomId);
+    return result;
+  })().then((result) => {
     debugState.personalRoom.openState = "idle";
-    sessionStorage.setItem("vrata.participantId", result.room.ownerParticipantId ?? personalOwnerId);
+    sessionStorage.setItem("vrata.participantId", result.participantId ?? result.room.ownerParticipantId ?? personalOwnerId);
     window.location.assign(result.roomLink);
   }).catch((error: unknown) => {
     console.error(error);
@@ -8130,9 +8207,21 @@ async function main(): Promise<void> {
     participantId,
     displayName,
     requestedRole: query.get("role"),
-    inviteToken: query.get("invite")
+    inviteToken: query.get("invite"),
+    identityCredential: roomIdentityTab.identityCredential(),
+    waitingCredential: roomIdentityTab.waitingCredential()
   });
   runtimeSessionGate.assertActive();
+  if (boot.identityProtocolVersion === 2) {
+    if (!boot.participantId || !boot.identityCredential) throw new Error("invalid_room_identity_admission");
+    participantId = boot.participantId;
+    seatingController.adoptParticipantId(participantId);
+    debugState.participantId = participantId;
+    roomIdentityTab.rememberIdentity(boot.identityCredential);
+    try { sessionStorage.setItem("vrata.participantId", participantId); } catch { /* tab storage may be disabled */ }
+  }
+  activeIdentityProtocolVersion = boot.identityProtocolVersion ?? null;
+  startIdentitySessionRenewal(boot.access.expiresInSeconds);
   templatePreferences.setTemplate(boot.templateSettings);
   joinMutedPreference = templatePreferences.joinMuted();
   joinMutedCheckbox.checked = joinMutedPreference;
@@ -8164,7 +8253,8 @@ async function main(): Promise<void> {
   debugState.personalRoom.enabled = runtimeFlags.personalRoomsEnabled;
   debugState.personalRoom.roomType = boot.roomType;
   debugState.personalRoom.ownerParticipantId = boot.ownerParticipantId ?? null;
-  debugState.personalRoom.isOwner = boot.roomType === "personal" && boot.ownerParticipantId === participantId;
+  debugState.personalRoom.isOwner = boot.roomType === "personal" && (boot.identityProtocolVersion === 2
+    ? boot.isOwner === true : boot.ownerParticipantId === participantId);
   openPersonalRoomButton.hidden = !runtimeFlags.personalRoomsEnabled;
   roomStateAccessToken = boot.access.token;
   debugState.access = {
@@ -8528,6 +8618,9 @@ void main().catch((error: unknown) => {
   if (error instanceof SessionUpgradeError || runtimeSessionGate.reason) return;
   console.error(error);
   if (error instanceof RuntimeAccessError) {
+    if (error.waitingCredential) {
+      try { roomIdentityTab.rememberWaiting(error.waitingCredential); } catch { /* invalid proof is never stored */ }
+    }
     const message = describeRoomAccessError(error);
     setStatus(message);
     guestAccessLineEl.textContent = error.accessRequestId

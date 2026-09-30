@@ -57,6 +57,7 @@ export function createRoomIdentityService(storage: RoomIdentityStorage, secret: 
       if (!current) throw new IdentityStorageError("identity_not_active");
       const sessionId = randomUUID();
       return { identity: current.identity, authority: current.authority, role: current.role, permissions: current.permissions,
+        isOwner: current.isOwner,
         sessionId, sessionToken: sessionCodec.sign(current.identity, { nowSeconds: seconds(), lifetimeSeconds: options.sessionLifetimeSeconds ?? 900, sessionId }) };
     },
     async resolveSession(sessionToken: unknown, scope: RoomIdentityScope) {

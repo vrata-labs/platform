@@ -47,7 +47,11 @@ import {
 } from "./feature-flags.js";
 import { createLegacyIdentityBoundary, IdentityBoundaryError, legacyBoundaryApplies, legacyBoundaryAllowsAdministrator } from "./identity/legacy-boundary.js";
 import { createRoomIdentityService } from "./identity/service.js";
+import { createRoomIdentityCodec } from "@vrata/shared-types/identity-credential";
 import { admitV2RoomSession, type V2AdmissionRequest } from "./identity/http-admission.js";
+import { currentSessionControlV2, resolveRoomRequestV2, type VerifiedRoomRequestV2 } from "./identity/http-authority.js";
+import { roomMediaGrantName } from "./identity/media-room.js";
+import { applyRoomLifecycleV2, lifecycleV2Error } from "./identity/http-lifecycle.js";
 
 import { getLivekitCredentials, getMediaTokenConfigError, getLivekitDeploymentDiagnostics } from "./livekit-config.js";
 
@@ -211,6 +215,10 @@ interface ControlPlaneActor {
   participantId?: string;
   sessionId?: string;
   permissions?: RoomPermission[];
+  identityProtocolVersion?: 2;
+  identityId?: string;
+  authEpoch?: number;
+  isOwner?: boolean;
 }
 
 interface ControlPlaneAuditLogEntry {
@@ -264,6 +272,7 @@ const { upsertXrTelemetry, listXrTelemetry } = createXrTelemetryService(storageP
 const controlPlaneAuditLog: ControlPlaneAuditLogEntry[] = [];
 const CONTROL_PLANE_AUDIT_LIMIT = 1000;
 const requestIds = new WeakMap<IncomingMessage, string>();
+const v2SessionsByRequest = new WeakMap<IncomingMessage, VerifiedRoomRequestV2>();
 const { metrics, apiMetricsText } = createApiMetrics(presenceByRoom, cleanupAllPresence, activeParticipantCount);
 
 function resolveAccessRole(requestedRole: unknown, env: NodeJS.ProcessEnv = process.env): { role: RoomRole; roleSource: RoomSessionRoleSource } {
@@ -602,6 +611,17 @@ function resolveControlPlaneActor(request: IncomingMessage):
 
   const bearerToken = getBearerToken(request);
   if (bearerToken) {
+    const verifiedV2 = v2SessionsByRequest.get(request);
+    if (verifiedV2) {
+      return { ok: true, actor: {
+        actorType: "room-session", actorId: verifiedV2.identity.participantId,
+        role: verifiedV2.role, roleSource: "trusted", tenantId: verifiedV2.room.tenantId,
+        roomId: verifiedV2.room.roomId, participantId: verifiedV2.identity.participantId,
+        sessionId: verifiedV2.sessionId, permissions: verifiedV2.permissions,
+        identityProtocolVersion: 2, identityId: verifiedV2.identity.identityId,
+        authEpoch: verifiedV2.identity.authEpoch, isOwner: verifiedV2.isOwner
+      } };
+    }
     const session = verifyRoomSessionToken(bearerToken, getStateTokenSecret());
     if (!session.ok) {
       if (isRotatedDevelopmentSession(bearerToken, getStateTokenSecret())) throw new IdentityBoundaryError(409, "identity_upgrade_required");
@@ -630,10 +650,12 @@ function isControlPlaneActorAllowed(actor: ControlPlaneActor, options: ControlPl
   if (actor.actorType === "admin-token") {
     return true;
   }
+  if (options.allowHostOwnRoom && actor.identityProtocolVersion === 2 && actor.isOwner === true
+    && actor.roleSource === "trusted" && actor.roomId === options.targetRoomId) return true;
   if (!options.allowHostOwnRoom || actor.role !== "host" || actor.roleSource !== "trusted" || !options.targetRoomId || actor.roomId !== options.targetRoomId) {
     return false;
   }
-  return !options.currentHostParticipantId || actor.participantId === options.currentHostParticipantId;
+  return actor.identityProtocolVersion === 2 || !options.currentHostParticipantId || actor.participantId === options.currentHostParticipantId;
 }
 
 async function requireControlPlanePermission(
@@ -710,6 +732,25 @@ async function verifyRoomSessionRequest(
   request: IncomingMessage,
   input: { roomId: string; participantId?: string; sessionToken?: string | null }
 ): Promise<RoomSessionTokenVerificationResult> {
+  if (await legacyIdentityBoundary.minimum() >= 2) {
+    const token = input.sessionToken ?? getBearerToken(request);
+    if (!token) throw new IdentityBoundaryError(426, "identity_upgrade_required");
+    if (!token.startsWith("rs2.")) throw new IdentityBoundaryError(409, "identity_upgrade_required");
+    const current = v2SessionsByRequest.get(request)?.room.roomId === input.roomId && token === getBearerToken(request)
+      ? v2SessionsByRequest.get(request)!
+      : await resolveRoomRequestV2({ storage: await storagePromise, secret: getStateTokenSecret(), token,
+        expectedRoomId: input.roomId, participantId: input.participantId });
+    if (!current || (input.participantId !== undefined && current.identity.participantId !== input.participantId)) {
+      throw new IdentityBoundaryError(409, "identity_recovery_required");
+    }
+    return { ok: true, payload: {
+      tenantId: current.room.tenantId, roomId: current.room.roomId, participantId: current.identity.participantId,
+      displayName: current.identity.displayName, role: current.role, roleSource: "trusted", permissions: current.permissions,
+      sessionId: current.sessionId, iat: 0, exp: current.expiresAtSeconds, jti: current.sessionId,
+      identityProtocolVersion: 2, identityId: current.identity.identityId,
+      authEpoch: current.identity.authEpoch, isOwner: current.isOwner
+    } };
+  }
   await legacyIdentityBoundary.assertCompatible(input.roomId);
   const tenantId = await resolveRoomTenantId(input.roomId);
   const token = input.sessionToken ?? getBearerToken(request);
@@ -928,7 +969,8 @@ function resolveRoomDocumentsActor(
     return deny("room_disabled");
   }
   const effectiveRole = actor.actorType === "room-session"
-    ? resolveEffectiveRoomRole(input.room, actor.participantId ?? actor.actorId, actor.role)
+    ? actor.identityProtocolVersion === 2 ? actor.role
+      : resolveEffectiveRoomRole(input.room, actor.participantId ?? actor.actorId, actor.role)
     : actor.role;
   if (!hasRoomPermission(getRoomPermissions(effectiveRole), input.permission)) {
     return deny("permission_denied");
@@ -1452,10 +1494,25 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   const url = new URL(request.url ?? "/", `http://${request.headers.host ?? `localhost:${apiPort}`}`);
   const storage = await storagePromise;
 
+  const bearer = getBearerToken(request);
+  if (bearer?.startsWith("rs2.")) {
+    if (await legacyIdentityBoundary.minimum() < 2) throw new IdentityBoundaryError(426, "identity_upgrade_required");
+    const verified = await resolveRoomRequestV2({ storage, secret: getStateTokenSecret(), token: bearer });
+    if (!verified) throw new IdentityBoundaryError(409, "identity_recovery_required");
+    const pathRoom = /^\/api\/rooms\/([^/]+)/.exec(url.pathname)?.[1];
+    if (pathRoom && decodeURIComponent(pathRoom) !== verified.room.roomId) {
+      return json(response, 403, { error: "forbidden", reason: "room_mismatch" });
+    }
+    v2SessionsByRequest.set(request, verified);
+  }
+
   if (legacyBoundaryApplies(method, url.pathname)) {
     const actor = resolveControlPlaneActor(request);
     const administrator = actor.ok && actor.actor.actorType === "admin-token";
-    if (!administrator || !legacyBoundaryAllowsAdministrator(url.pathname)) {
+    const verifiedV2 = v2SessionsByRequest.has(request);
+    const publicListing = method === "GET" && url.pathname === "/api/rooms";
+    const bodySessionRoute = !bearer && method === "POST" && ["/api/tokens/media", "/api/tokens/remote-browser-frame"].includes(url.pathname);
+    if (!publicListing && !bodySessionRoute && !verifiedV2 && (!administrator || !legacyBoundaryAllowsAdministrator(url.pathname))) {
       const scopedRoom = /^\/api\/rooms\/([^/]+)/.exec(url.pathname)?.[1];
       const roomId = scopedRoom ? decodeURIComponent(scopedRoom)
         : actor.ok && actor.actor.actorType === "room-session" ? actor.actor.roomId : undefined;
@@ -1508,6 +1565,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   }
 
   if (method === "GET" && url.pathname === "/health") {
+    const identityProtocolVersion = await legacyIdentityBoundary.minimum() >= 2 ? 2 : null;
     json(response, 200, {
       status: "ok",
       service: "api",
@@ -1515,6 +1573,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       port: apiPort,
       timestamp: new Date().toISOString(),
       features: {
+        ...(identityProtocolVersion ? { identityProtocolVersion } : {}),
         xrEnabled: isXrFeatureEnabled(),
         voiceEnabled: process.env.FEATURE_VOICE !== "false",
         screenShareEnabled: process.env.FEATURE_SCREEN_SHARE !== "false",
@@ -1936,6 +1995,46 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
 
   if (method === "POST" && url.pathname === "/api/personal-room") {
     if (!isPersonalRoomsFeatureEnabled()) return json(response, 404, { error: "personal_rooms_disabled" });
+    if (await legacyIdentityBoundary.minimum() >= 2) {
+      const personalBearer = getBearerToken(request);
+      if (personalBearer && !personalBearer.startsWith("rs2.")) throw new IdentityBoundaryError(409, "identity_upgrade_required");
+      const payload = (await parseBody<{ identityProtocolVersion?: unknown; participantId?: unknown; displayName?: unknown;
+        tenantId?: unknown; roomId?: unknown; identityCredential?: unknown }>(request)) ?? {};
+      if (payload.identityProtocolVersion !== 2) throw new IdentityBoundaryError(409, "identity_upgrade_required");
+      if (personalBearer) return json(response, 426, { error: "identity_required", reason: "identity_upgrade_required" });
+      const tenantId = typeof payload.tenantId === "string" && payload.tenantId.trim() ? payload.tenantId.trim() : "demo-tenant";
+      if (!(await storage.listTenants()).some(item => item.tenantId === tenantId)) return json(response, 400, { error: "invalid_tenant" });
+      const service = createRoomIdentityService(storage.roomIdentities, getStateTokenSecret(), Date.now, { identityLifetimeSeconds: 86_400 });
+      if (payload.identityCredential !== undefined) {
+        if (typeof payload.roomId !== "string") return json(response, 409, { error: "identity_required", reason: "identity_recovery_required" });
+        const existing = await storage.getRoom(payload.roomId);
+        if (!existing || existing.roomType !== "personal" || existing.tenantId !== tenantId) {
+          return json(response, 409, { error: "identity_required", reason: "identity_recovery_required" });
+        }
+        const scope = { tenantId, roomId: existing.roomId };
+        const current = await service.resolveCredential(payload.identityCredential, scope);
+        if (!current?.isOwner) return json(response, 409, { error: "identity_required", reason: "identity_recovery_required" });
+        const renewed = await service.renewCredential(payload.identityCredential, scope);
+        return json(response, 200, { created: false, room: existing, roomLink: createRoomLink(existing.roomId, request),
+          identityProtocolVersion: 2, participantId: current.identity.participantId, identityCredential: renewed.credential });
+      }
+      if (payload.roomId !== undefined) return json(response, 409, { error: "identity_required", reason: "identity_recovery_required" });
+      // A remembered public legacy ID is only a lookup hint. It cannot claim a
+      // former personal room or trigger a silent new-room replacement.
+      if (typeof payload.participantId === "string" && (await storage.listRooms()).some(room =>
+        room.tenantId === tenantId && room.roomType === "personal" && room.ownerParticipantId === payload.participantId)) {
+        return json(response, 409, { error: "identity_required", reason: "identity_recovery_required" });
+      }
+      const displayName = normalizeDisplayName(payload.displayName, "Owner");
+      const templates = await storage.listTemplates();
+      const templateId = templates.some(template => template.templateId === "personal-room-basic" && template.status === "active")
+        ? "personal-room-basic" : "personal-workspace-basic";
+      const { room, identity } = await storage.createPersonalOwnedRoom({ tenantId, templateId, displayName,
+        name: personalRoomName(displayName) });
+      const identityCredential = createRoomIdentityCodec(getStateTokenSecret()).sign(identity, { lifetimeSeconds: 86_400 });
+      return json(response, 201, { created: true, room, roomLink: createRoomLink(room.roomId, request),
+        identityProtocolVersion: 2, participantId: identity.participantId, identityCredential });
+    }
     const payload = (await parseBody<{ participantId?: unknown; displayName?: unknown; tenantId?: unknown }>(request)) ?? {};
     const participantId = normalizeParticipantId(payload.participantId);
     if (!participantId) {
@@ -2019,7 +2118,8 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       return json(response, actorResult.statusCode, { error: "unauthorized", reason: actorResult.reason, requestId });
     }
     const actor = actorResult.actor;
-    const canAccessPersonalState = actor.actorType === "admin-token" || (actor.actorType === "room-session" && actor.roomId === roomId && actor.participantId === room.ownerParticipantId);
+    const canAccessPersonalState = actor.actorType === "admin-token" || (actor.actorType === "room-session" && actor.roomId === roomId
+      && (actor.identityProtocolVersion === 2 ? actor.isOwner === true : actor.participantId === room.ownerParticipantId));
     if (!canAccessPersonalState) {
       if (method === "PUT") incrementCounter(metrics.personalStateSaveFailuresTotal, "owner_required");
       return json(response, 403, { error: "forbidden", reason: "owner_required", requestId });
@@ -2538,14 +2638,27 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       : nowMs + Math.max(1, Math.min(30 * 24 * 60 * 60, Math.floor(payload.expiresInSeconds ?? 3600))) * 1000;
     if (!Number.isFinite(expiresAtMs)) return json(response, 400, { error: "invalid_invite_expiry" });
     const token = createInviteToken();
-    const invite = await storage.createRoomInvite({
+    const inviteInput = {
       roomId,
       tokenHash: hashInviteToken(token),
       role: parseRoomRole(payload.role, "guest"),
       waitingRoomEnabled: payload.waitingRoomEnabled === true,
       expiresAt: new Date(expiresAtMs).toISOString(),
       createdBy: actor.actorId
-    });
+    };
+    let invite: RoomInviteRecord;
+    if (await legacyIdentityBoundary.minimum() >= 2) {
+      const identityActor = actor.actorType === "admin-token"
+        ? { actorType: "admin-token" as const, actorId: actor.actorId, role: "admin" as const }
+        : { actorType: "room-session" as const, proof: { tenantId: room.tenantId, roomId,
+          identityId: actor.identityId ?? "", participantId: actor.participantId ?? "", authEpoch: actor.authEpoch ?? 0 } };
+      try { invite = await storage.createRoomInviteV2({ ...inviteInput, actor: identityActor }); }
+      catch (error) {
+        const failure = lifecycleV2Error(error);
+        if (failure) return json(response, failure.status, { error: failure.error });
+        throw error;
+      }
+    } else invite = await storage.createRoomInvite(inviteInput);
     json(response, 201, sanitizeRoomInvite(invite, createInviteLink(roomId, token, request)));
     return;
   }
@@ -2600,11 +2713,19 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       allowHostOwnRoom: true
     });
     if (!actor) return;
-    const waitingRequest = await storage.updateWaitingRoomRequest(roomId, waitingRequestId, {
-      status: decision,
-      decidedAt: new Date().toISOString(),
-      decidedBy: actor.actorId
-    });
+    let waitingRequest: WaitingRoomRequestRecord | null;
+    try {
+      waitingRequest = await storage.updateWaitingRoomRequest(roomId, waitingRequestId, {
+        status: decision,
+        decidedAt: new Date().toISOString(),
+        decidedBy: actor.actorId
+      });
+    } catch (error) {
+      if (error instanceof Error && error.message === "waiting_decision_finalized") {
+        return json(response, 409, { error: "waiting_decision_finalized" });
+      }
+      throw error;
+    }
     if (!waitingRequest) return json(response, 404, { error: "waiting_room_request_not_found" });
     json(response, 200, sanitizeWaitingRoomRequest(waitingRequest));
     return;
@@ -2624,14 +2745,16 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     }
 
     const session = actorResult.actor.actorType === "room-session"
-      ? verifyRoomSessionToken(getBearerToken(request), getStateTokenSecret(), { roomId, participantId: actorResult.actor.participantId })
+      ? await verifyRoomSessionRequest(request, { roomId, participantId: actorResult.actor.participantId })
       : null;
+    const v2 = session?.ok && session.payload.identityProtocolVersion === 2;
     const participantIdForStatus = session?.ok ? session.payload.participantId : actorResult.actor.participantId;
     const currentRole = session?.ok ? session.payload.role : actorResult.actor.role;
-    const effectiveRole = participantIdForStatus ? resolveEffectiveRoomRole(room, participantIdForStatus, currentRole) : currentRole;
-    const statusReason = participantIdForStatus ? getSessionControlBlockReason(room, participantIdForStatus, effectiveRole, true) : null;
+    const effectiveRole = v2 ? currentRole
+      : participantIdForStatus ? resolveEffectiveRoomRole(room, participantIdForStatus, currentRole) : currentRole;
+    const statusReason = v2 ? null : participantIdForStatus ? getSessionControlBlockReason(room, participantIdForStatus, effectiveRole, true) : null;
     const ttlSeconds = Number.parseInt(process.env.STATE_TOKEN_TTL_SECONDS ?? "900", 10);
-    const tokenResponse = session?.ok && !statusReason ? createRoomAccessTokenResponse({
+    const tokenResponse = session?.ok && !statusReason && !v2 ? createRoomAccessTokenResponse({
       room,
       roomId,
       participantId: session.payload.participantId,
@@ -2643,7 +2766,8 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       ttlSeconds
     }) : null;
     json(response, 200, {
-      state: sanitizeSessionControlState(room.sessionControl),
+      state: sanitizeSessionControlState(await legacyIdentityBoundary.minimum() >= 2
+        ? await currentSessionControlV2(storage, room) : room.sessionControl),
       participant: participantIdForStatus ? {
         participantId: participantIdForStatus,
         role: effectiveRole,
@@ -2679,6 +2803,24 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     if (!actor) {
       incrementHostActionMetric(action, "denied");
       return;
+    }
+    if (await legacyIdentityBoundary.minimum() >= 2) {
+      const payload = (await parseBody<{ expectedRevision?: number }>(request)) ?? {};
+      try {
+        const updated = await applyRoomLifecycleV2({ storage, room, actor, command: { type: action }, expectedRevision: payload.expectedRevision });
+        if (action === "lock") metrics.roomLockedTotal += 1;
+        if (action === "end") {
+          metrics.sessionsEndedTotal += 1;
+          for (const participant of getPresence(roomId)) deletePresence(roomId, participant.participantId);
+        }
+        incrementHostActionMetric(action, "allowed");
+        return json(response, 200, updated);
+      } catch (error) {
+        incrementHostActionMetric(action, "denied");
+        const failure = lifecycleV2Error(error);
+        if (failure) return json(response, failure.status, { error: failure.error });
+        throw error;
+      }
     }
     const now = new Date().toISOString();
     const current = defaultSessionControlState(room.sessionControl);
@@ -2726,6 +2868,23 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     if (!actor) {
       incrementHostActionMetric("remove", "denied");
       return;
+    }
+    if (await legacyIdentityBoundary.minimum() >= 2) {
+      const payload = (await parseBody<{ reason?: string; expectedRevision?: number }>(request)) ?? {};
+      try {
+        const updated = await applyRoomLifecycleV2({ storage, room, actor,
+          command: { type: "remove", targetParticipantId,
+            ...(typeof payload.reason === "string" ? { reason: payload.reason } : {}) }, expectedRevision: payload.expectedRevision });
+        deletePresence(roomId, targetParticipantId);
+        metrics.participantsRemovedTotal += 1;
+        incrementHostActionMetric("remove", "allowed");
+        return json(response, 200, { ...updated, removedParticipantId: targetParticipantId });
+      } catch (error) {
+        incrementHostActionMetric("remove", "denied");
+        const failure = lifecycleV2Error(error);
+        if (failure) return json(response, failure.status, { error: failure.error });
+        throw error;
+      }
     }
     if (actor.participantId === targetParticipantId) {
       incrementHostActionMetric("remove", "denied");
@@ -2779,6 +2938,24 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     if (!actor) {
       incrementPresenterChangeMetric(action, "denied");
       return;
+    }
+    if (await legacyIdentityBoundary.minimum() >= 2) {
+      if (action === "grant" && !getPresence(roomId).some(item => item.participantId === targetParticipantId)) {
+        incrementPresenterChangeMetric(action, "denied");
+        return json(response, 404, { error: "participant_not_found" });
+      }
+      const payload = (await parseBody<{ expectedRevision?: number }>(request)) ?? {};
+      try {
+        const updated = await applyRoomLifecycleV2({ storage, room, actor,
+          command: { type: action === "grant" ? "grant-presenter" : "revoke-presenter", targetParticipantId }, expectedRevision: payload.expectedRevision });
+        incrementPresenterChangeMetric(action, "allowed");
+        return json(response, 200, { ...updated, presenterParticipantId: action === "grant" ? targetParticipantId : null });
+      } catch (error) {
+        incrementPresenterChangeMetric(action, "denied");
+        const failure = lifecycleV2Error(error);
+        if (failure) return json(response, failure.status, { error: failure.error });
+        throw error;
+      }
     }
     const current = defaultSessionControlState(room.sessionControl);
     if (getRemovedParticipant(room, targetParticipantId)) {
@@ -2834,11 +3011,28 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       incrementHostActionMetric("transfer_host", "denied");
       return;
     }
-    const payload = (await parseBody<{ participantId?: string }>(request)) ?? {};
+    const payload = (await parseBody<{ participantId?: string; expectedRevision?: number }>(request)) ?? {};
     const targetParticipantId = typeof payload.participantId === "string" ? payload.participantId.trim() : "";
     if (!targetParticipantId) {
       incrementHostActionMetric("transfer_host", "denied");
       return json(response, 400, { error: "missing_participant_id" });
+    }
+    if (await legacyIdentityBoundary.minimum() >= 2) {
+      if (!getPresence(roomId).some(item => item.participantId === targetParticipantId)) {
+        incrementHostActionMetric("transfer_host", "denied");
+        return json(response, 404, { error: "participant_not_found" });
+      }
+      try {
+        const updated = await applyRoomLifecycleV2({ storage, room, actor,
+          command: { type: "transfer-host", targetParticipantId }, expectedRevision: payload.expectedRevision });
+        incrementHostActionMetric("transfer_host", "allowed");
+        return json(response, 200, { ...updated, hostParticipantId: targetParticipantId });
+      } catch (error) {
+        incrementHostActionMetric("transfer_host", "denied");
+        const failure = lifecycleV2Error(error);
+        if (failure) return json(response, failure.status, { error: failure.error });
+        throw error;
+      }
     }
     const participant = getPresence(roomId).find((item) => item.participantId === targetParticipantId);
     if (!participant || getRemovedParticipant(room, targetParticipantId)) {
@@ -2922,7 +3116,8 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     const session = await verifyRoomSessionRequest(request, { roomId, participantId });
     if (!session.ok) return writeSessionTokenError(response, session);
     const room = await storage.getRoom(roomId);
-    const effectiveRole = resolveEffectiveRoomRole(room, session.payload.participantId, session.payload.role);
+    const effectiveRole = session.payload.identityProtocolVersion === 2 ? session.payload.role
+      : resolveEffectiveRoomRole(room, session.payload.participantId, session.payload.role);
     const blockReason = getSessionControlBlockReason(room, session.payload.participantId, effectiveRole, true);
     if (blockReason) {
       return json(response, 403, { error: "room_access_denied", reason: blockReason });
@@ -3075,7 +3270,8 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       return writeSessionTokenError(response, session);
     }
     const room = await storage.getRoom(payload.roomId);
-    const effectiveRole = resolveEffectiveRoomRole(room, session.payload.participantId, session.payload.role);
+    const effectiveRole = session.payload.identityProtocolVersion === 2 ? session.payload.role
+      : resolveEffectiveRoomRole(room, session.payload.participantId, session.payload.role);
     const blockReason = getSessionControlBlockReason(room, session.payload.participantId, effectiveRole, true);
     if (blockReason) {
       incrementCounter(metrics.mediaJoinFailuresTotal, blockReason);
@@ -3099,8 +3295,13 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       name: session.payload.displayName,
       ttl: `${Number.parseInt(process.env.MEDIA_TOKEN_TTL_SECONDS ?? "900", 10)}s`
     });
+    const mediaNamespace = session.payload.identityProtocolVersion === 2
+      ? await storage.identityProtocol.mediaNamespace() : null;
+    if (session.payload.identityProtocolVersion === 2 && !mediaNamespace) {
+      return json(response, 503, { error: "identity_authority_unavailable" });
+    }
     accessToken.addGrant({
-      room: `${process.env.LIVEKIT_ROOM_PREFIX ?? "vrata-"}${session.payload.roomId}`,
+      room: roomMediaGrantName(session.payload.roomId, process.env.LIVEKIT_ROOM_PREFIX ?? "vrata-", mediaNamespace),
       roomJoin: true,
       canPublish: canPublishAudio || canPublishVideo,
       canSubscribe: true
@@ -3126,7 +3327,9 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       json(response, 400, { error: "remote_browser_media_token_payload_required" });
       return;
     }
-    await legacyIdentityBoundary.assertCompatible(payload.roomId);
+    const v2Media = await legacyIdentityBoundary.minimum() >= 2;
+    if (!v2Media) await legacyIdentityBoundary.assertCompatible(payload.roomId);
+    else if (!await storage.getRoom(payload.roomId)) return json(response, 404, { error: "room_not_found" });
     if (!isRemoteBrowserIdentityBinding({ objectId: payload.objectId, executorSessionId: payload.executorSessionId, executorInstanceId: payload.executorInstanceId, mediaParticipantId: payload.mediaParticipantId })) {
       return json(response, 400, { error: "invalid_session_binding" });
     }
@@ -3140,13 +3343,15 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     }
     const ttlSeconds = Number.parseInt(process.env.MEDIA_TOKEN_TTL_SECONDS ?? "900", 10);
     const { apiKey, apiSecret } = getLivekitCredentials();
+    const mediaNamespace = v2Media ? await storage.identityProtocol.mediaNamespace() : null;
+    if (v2Media && !mediaNamespace) return json(response, 503, { error: "identity_authority_unavailable" });
     const accessToken = new AccessToken(apiKey, apiSecret, {
       identity: payload.mediaParticipantId,
       name: `Remote Browser ${payload.objectId}`,
       ttl: `${ttlSeconds}s`
     });
     accessToken.addGrant({
-      room: `${process.env.LIVEKIT_ROOM_PREFIX ?? "vrata-"}${payload.roomId}`,
+      room: roomMediaGrantName(payload.roomId, process.env.LIVEKIT_ROOM_PREFIX ?? "vrata-", mediaNamespace),
       roomJoin: true,
       canPublish: true,
       canSubscribe: false
@@ -3212,7 +3417,7 @@ export function startApiServer(port = apiPort) {
   const server = createServer((request, response) => {
     handleRequest(request, response).catch((error: unknown) => {
       if (error instanceof IdentityBoundaryError) {
-        json(response, error.status, { error: error.status === 409 ? "identity_required" : "identity_authority_unavailable", reason: error.reason });
+        json(response, error.status, { error: error.status === 503 ? "identity_authority_unavailable" : "identity_required", reason: error.reason });
         return;
       }
       if (error instanceof Error && error.message === IDENTITY_LIFECYCLE_REQUIRES_V2) {

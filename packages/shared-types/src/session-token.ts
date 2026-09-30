@@ -25,6 +25,12 @@ export interface RoomSessionTokenPayload {
   iat: number;
   exp: number;
   jti: string;
+  // Constructed only by the server's fresh v2 authority resolution. The v1
+  // parser below deliberately discards these even if a v1 token contains them.
+  identityProtocolVersion?: 2;
+  identityId?: string;
+  authEpoch?: number;
+  isOwner?: boolean;
   sceneMediaSurfaces?: SceneMediaSurfaceDefinition[];
   roomTemplate?: RoomTemplateSessionContext;
 }

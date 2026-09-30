@@ -64,7 +64,6 @@ export function createDocumentSurfaceActions(context: DocumentSurfaceActionsCont
   const {
     apiBaseUrl,
     roomId,
-    participantId,
     selectedDocument,
     canPresentDocuments,
     setDocumentStatus,
@@ -128,7 +127,7 @@ export function createDocumentSurfaceActions(context: DocumentSurfaceActionsCont
           type: kind === "pdf" ? PDF_PRESENTATION_OBJECT_TYPE : kind === "image" ? IMAGE_VIEWER_OBJECT_TYPE : VIDEO_PLAYER_OBJECT_TYPE,
           roomId,
           surfaceId: context.selectedMediaSurfaceId,
-          ownerParticipantId: participantId,
+          ownerParticipantId: context.participantId,
           state: idleState,
           status: "active",
           revision: createResult.revision ?? 0,

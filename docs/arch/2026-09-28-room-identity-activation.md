@@ -37,15 +37,16 @@ legacy JSON. Memory and PostgreSQL must implement the same rules.
   policy, must remain visibly untrusted and must never grant plugin-author rights
   or ownership. Production admission must not trust client role claims.
 
-### Internal V foundations (not activated in the published B image)
+### Internal V foundations and prepared client (not activated on shared staging)
 
 The Node-only `rs2` session has an HKDF-separated signing key and carries only
 tenant/room/identity/participant/epoch, session ID and timestamps. It does not
 contain role or permissions. The matching `ri2` room-bound possession credential
-is intended to be renewed in the tab through an explicit proof, not inferred
-from a v1 JWT. Client-side renewal has not been wired yet.
-Currently the new HTTP admission branch is reachable **only** after the global
-protocol minimum reaches 2; it is not a claim that floor 2 can be raised yet.
+is renewed in the tab through an explicit proof, not inferred from a v1 JWT.
+The prepared runtime refreshes its session before expiry and reconnects its
+room-state socket with the new token. The new HTTP admission branch is reachable
+**only** after the global protocol minimum reaches 2; this is not a claim that
+the shared staging floor can be raised yet.
 
 `admit` allocates fresh IDs while holding the parent room and invitation row. A
 pre-activation invitation is marked protocol 1 and cannot be upgraded to grant
@@ -71,8 +72,10 @@ create a durable identity tombstone, by design of the accepted B guard.
 A fresh personal owner gets a newly generated participant ID, room and
 owner+Host authority in one Memory operation or one PostgreSQL transaction.
 An error inserting authority rolls the entire room back. The old owner ID or
-`role=host` request body is never an ownership proof. This storage operation is
-not wired into the public personal-room route yet.
+`role=host` request body is never an ownership proof. The prepared personal-room
+route and button return and retain the room-bound owner proof in tab storage;
+the public ID alone cannot reopen the room. An explicit administrator recovery
+endpoint and cross-tab owner hand-off are still outstanding.
 
 The internal `/api/internal/identity-session/verify` checks its authenticated
 service caller, global minimum, current epoch/revocation and authority before
@@ -80,9 +83,13 @@ returning the effective role and signed scene context. At floor 2, room-state
 can connect an `rs2` socket only after this call, verifies again before each
 privileged command, and never applies a delayed older authority revision over a
 newer one. The live role transfer/revoke path is tested with real API, room-state
-and PostgreSQL in an isolated schema. Runtime still uses its pre-boot local ID,
-and the other public REST routes still reject floor 2. Thus these internal V
-foundations do not activate v2 on the shared staging host.
+and PostgreSQL in an isolated schema. The prepared runtime adopts the server ID
+before joining room-state, publishing presence or using identity-bound
+seating/avatar objects; a browser test covers fresh entry and reload. REST session verification,
+session-control commands and the LiveKit/browser-executor namespace have a
+prepared v2 branch. These pieces do not activate v2 on the shared staging host:
+private-owner lifecycle, recovery, abuse controls and complete REST/write
+enforcement remain part of the activation gate.
 
 ### Waiting room
 

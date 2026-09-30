@@ -59,8 +59,17 @@ function harness(initial: RoomMediaObjectsState | null = null, selected = "missi
   };
   const queries = createMediaObjectQueries(context);
   return { queries, physical, reads, setState(next: RoomMediaObjectsState | null) { state = next; },
-    select(next: string) { selection = next; } };
+    select(next: string) { selection = next; }, adoptParticipantId(next: string) { context.participantId = next; } };
 }
+
+test("local media lookup follows the server-issued identity after joining", () => {
+  const tabShare = object(SCREEN_SHARE_OBJECT_TYPE, "tab-share", "tab-surface", "local");
+  const serverShare = object(SCREEN_SHARE_OBJECT_TYPE, "server-share", "server-surface", "server-issued-id");
+  const h = harness(room(tabShare, serverShare));
+  assert.equal(h.queries.findLocalActiveScreenShareObject()?.objectId, "tab-share");
+  h.adoptParticipantId("server-issued-id");
+  assert.equal(h.queries.findLocalActiveScreenShareObject()?.objectId, "server-share");
+});
 
 test("construction performs no state or selection reads and preserves named callable queries", () => {
   const h = harness();

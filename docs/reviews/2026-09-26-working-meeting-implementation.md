@@ -1,7 +1,7 @@
 # Рабочая встреча и room plugins: журнал реализации
 
 Исходный план: `2026-09-25-working-meeting-and-room-plugins.md`.
-Дата начала: 2026-09-26; обновлено 2026-09-28. **Опубликованы T01, исправление upload feedback из T12, предварительный update/rejoin клиент T01a-S1 и server identity/recovery foundations T01a-S2a.** Реализация идёт срезами; готовность всей встречи и внешних плагинов не заявляется.
+Дата начала: 2026-09-26; обновлено 2026-09-30. **Опубликованы T01, исправление upload feedback из T12, предварительный update/rejoin клиент T01a-S1 и server identity/recovery foundations T01a-S2a.** Реализация идёт срезами; готовность всей встречи и внешних плагинов не заявляется.
 
 ## T01 — объединённый baseline
 
@@ -155,6 +155,16 @@ API test files переведены на последовательный зап
 | [Staging Deploy 36669028596](https://github.com/vrata-labs/platform/actions/runs/36669028596) | Success с первой попытки: **52/52 staging E2E**, **1/1 blocking Rutube**, без flaky/skip, successful SHA сохранён, rollback skipped |
 
 [Артефакт gate](https://github.com/vrata-labs/platform/actions/runs/36669028596/artifacts/11078606345): старый dev-key credential отвергнут, четырёхсторонняя встреча с LiveKit и PDF проходит с cleanup, owner-bound workspace и visual seat marker tests зелёные. Hall, BlueOffice, ArtGallery loaded. После gate `/health`, `/rooms/demo-room`, `/control-plane`, `/api/templates` — 200. Ни floor 2, ни v2 credentials не выдавались на общем staging. Новая схема проверена против точного опубликованного rollback-образа B в отдельной PostgreSQL базе с floor 2; это не hot rollback на общем staging.
+
+### T01a-S2b-V: подготовка HTTP и runtime к координированной активации
+
+На отдельной схеме PostgreSQL при minimum 2 теперь работают v2 HTTP admission и актуальная REST authority: одноразовый waiting proof, настоящие v2 invitations, session-control lifecycle, личная комната с доказанным владельцем и отдельный media namespace для браузера и remote-browser executor. Client boot принимает серверный participant ID до room-state/presence, хранит proof отдельно от публичного ID в текущей вкладке, обновляет сессию до истечения срока и повторно подключает WS. Посадка и media/аватарные фабрики не должны сохранять старый ID вкладки. Унаследованные body-only media credentials не допускают повышения роли из v1.
+
+Браузерная проверка в disposable PG схеме с minimum 2: старый live v1 получает отказ и сохраняет несохранённый черновик; новая вкладка присоединяется с server ID и сохраняет его после reload; личная комната повторно открывается из той же вкладки только по proof; скопированный публичный ID не даёт доступа; WS отзывает права после Host transfer/revoke. Два реальных дефекта нашлись именно здесь: JSON `null` для отсутствующих proof/invite полей превращался в отказ admission, а fallback presence не пересылал v2 session и запускал ложный upgrade dialog. Оба исправлены; focused identity E2E **4/4** без retry.
+
+Проверки подготовительного среза: workspace lint/typecheck/build; API с настоящим PostgreSQL и закреплёнными storage rollback builds **845/845** (старый pre-boundary API проверяется отдельным контрактом без подмены на совместимый B), runtime **926/926**, room-state **76/76**, shared-types **30/30**. Финальный полный local E2E на текущем исполняемом дереве: **155/155** без skip/retry (14,6 минуты), включая четыре клиента, LiveKit, PDF, notes, visual seat markers и новые v2 браузерные сценарии. Общий staging остаётся на minimum 1: в этом срезе запрещено поднимать floor 2 или объявлять готовность T01a.
+
+До координированной активации остаются admin recovery HTTP и owner hand-off, retention/rate-limit для анонимной выдачи durable identities, полная проверка приватных материалов и всех effect-bearing REST routes после отзыва прав, жизненный цикл legacy Host/Owner, media executor в production и тесты обоих refresh путей после истечения срока. Плагины, QuickJS/WASM sandbox и author routes по-прежнему не реализованы.
 
 ## Публикация первого среза T01/T12
 

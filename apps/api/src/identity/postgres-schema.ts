@@ -58,6 +58,11 @@ const guards = [
   { table: "room_identity_protocol_policy", name: "vrata_identity_protocol_no_truncate", body: `BEGIN
     RAISE EXCEPTION 'identity_protocol_downgrade_forbidden' USING ERRCODE = '23514';
   END;` },
+  { table: "room_identity_protocol_policy", name: "vrata_identity_protocol_namespace_immutable", body: `BEGIN
+    IF OLD.media_namespace IS NOT NULL AND NEW.media_namespace IS DISTINCT FROM OLD.media_namespace
+    THEN RAISE EXCEPTION 'identity_protocol_namespace_immutable' USING ERRCODE = '23514'; END IF;
+    RETURN NEW;
+  END;` },
   { table: "room_invites", name: "vrata_identity_invite_v2_immutable", body: `BEGIN
     IF ROW(NEW.invite_id, NEW.room_id, NEW.token_hash, NEW.role, NEW.waiting_room_enabled, NEW.protocol_version, NEW.created_at, NEW.created_by)
       IS DISTINCT FROM ROW(OLD.invite_id, OLD.room_id, OLD.token_hash, OLD.role, OLD.waiting_room_enabled, OLD.protocol_version, OLD.created_at, OLD.created_by)
@@ -100,6 +105,7 @@ const constraints = [
   ["room_identity_protocol_policy", "identity_protocol_pk", "PRIMARY KEY (singleton)"],
   ["room_identity_protocol_policy", "identity_protocol_singleton", "CHECK (singleton)"],
   ["room_identity_protocol_policy", "identity_protocol_minimum", "CHECK ((minimum_protocol >= 1))"],
+  ["room_identity_protocol_policy", "identity_protocol_namespace", "CHECK ((((minimum_protocol = 1) AND (media_namespace IS NULL)) OR ((minimum_protocol >= 2) AND (media_namespace ~ '^[a-f0-9]{32}$'::text))))"],
   ["room_identities_v2", "identity_v2_pk", "PRIMARY KEY (tenant_id, room_id, identity_id)"],
   ["room_identities_v2", "identity_v2_participant", "UNIQUE (tenant_id, room_id, participant_id)"],
   ["room_identities_v2", "identity_v2_room", roomForeignKey],
@@ -138,6 +144,7 @@ const columns = [
   ["room_invites", "protocol_version", "integer", true],
   ["room_identity_protocol_policy", "singleton", "boolean", true],
   ["room_identity_protocol_policy", "minimum_protocol", "integer", true],
+  ["room_identity_protocol_policy", "media_namespace", "text", false],
   ...["tenant_id", "room_id", "identity_id", "participant_id", "display_name", "base_role"].map(name => ["room_identities_v2", name, "text", true]),
   ["room_identities_v2", "provenance", "jsonb", true], ["room_identities_v2", "auth_epoch", "integer", true],
   ["room_identities_v2", "created_at", "timestamp with time zone", true], ["room_identities_v2", "revoked_at", "timestamp with time zone", false],
@@ -181,6 +188,14 @@ export async function installRoomIdentitySchema(client: PoolClient): Promise<voi
         raise exception 'identity_protocol_policy_missing';
       end if;
     end; $policy$;
+    alter table room_identity_protocol_policy add column if not exists media_namespace text;
+    do $namespace$
+    begin
+      if not exists (select 1 from pg_constraint where conrelid='room_identity_protocol_policy'::regclass and conname='identity_protocol_namespace') then
+        alter table room_identity_protocol_policy add constraint identity_protocol_namespace
+          check ((minimum_protocol=1 and media_namespace is null) or (minimum_protocol>=2 and media_namespace ~ '^[a-f0-9]{32}$'));
+      end if;
+    end; $namespace$;
     create unique index if not exists rooms_identity_scope_idx on rooms (tenant_id, room_id);
     create table if not exists room_identities_v2 (
       tenant_id text not null, room_id text not null, identity_id text not null,

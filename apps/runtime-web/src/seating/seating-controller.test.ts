@@ -54,3 +54,13 @@ test("release suppression does not prevent claiming another seat or an explicit 
   seating.requestSeatClaim("seat-b");
   assert.equal(seating.applyOccupancy({ seatOccupancy: { "seat-b": "p-1" } }).currentSeatId, "seat-b");
 });
+
+test("pre-join identity adoption retargets the same controller without inheriting public-ID occupancy", () => {
+  const seating = createSeatingController({ participantId: "untrusted-tab-id" });
+  const bridgeReference = seating;
+  seating.adoptParticipantId("server-issued-id");
+  assert.equal(seating, bridgeReference);
+  assert.equal(seating.applyOccupancy({ seatOccupancy: { chair: "untrusted-tab-id" } }).currentSeatId, null);
+  assert.equal(seating.applyOccupancy({ seatOccupancy: { chair: "server-issued-id" } }).currentSeatId, "chair");
+  assert.throws(() => seating.adoptParticipantId("another-id"), /seating_identity_transition_requires_standing/);
+});

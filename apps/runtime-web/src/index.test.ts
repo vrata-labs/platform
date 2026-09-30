@@ -1,7 +1,41 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { describeManifest, fetchRuntimeSpaces, formatSpaceOptions, resolveCurrentSpace, resolveJoinMode } from "./index.js";
+import { describeManifest, fetchRuntimeSpaces, fetchStateToken, formatSpaceOptions, listPresence, resolveCurrentSpace, resolveJoinMode } from "./index.js";
+
+test("v2 admission omits absent proofs but preserves an explicitly invalid proof for server rejection", async () => {
+  const previous = globalThis.fetch;
+  const requests: Record<string, unknown>[] = [];
+  globalThis.fetch = async (_url, init) => {
+    requests.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+    return new Response(JSON.stringify({ token: "session" }), { status: 200 });
+  };
+  try {
+    const access = { identityProtocolVersion: 2 as const, participantId: "untrusted", displayName: "Guest",
+      identityCredential: null, waitingCredential: null, inviteToken: null };
+    await fetchStateToken("http://127.0.0.1:4000", "demo-room", access);
+    await fetchStateToken("http://127.0.0.1:4000", "demo-room", { ...access, identityCredential: "" });
+    assert.deepEqual(requests[0], { roomId: "demo-room", identityProtocolVersion: 2, displayName: "Guest" });
+    assert.deepEqual(requests[1], { roomId: "demo-room", identityProtocolVersion: 2, identityCredential: "", displayName: "Guest" });
+  } finally { globalThis.fetch = previous; }
+});
+
+test("v2 room listings and fallback presence forward the admitted session", async () => {
+  const previous = globalThis.fetch;
+  const calls: Array<{ url: string; authorization: string | undefined }> = [];
+  globalThis.fetch = async (url, init) => {
+    calls.push({ url: String(url), authorization: new Headers(init?.headers).get("authorization") ?? undefined });
+    return new Response(JSON.stringify({ items: [] }), { status: 200 });
+  };
+  try {
+    await fetchRuntimeSpaces("http://127.0.0.1:4000", "demo-room", "", "session-v2");
+    await listPresence("http://127.0.0.1:4000", "demo-room", "session-v2");
+    assert.deepEqual(calls, [
+      { url: "http://127.0.0.1:4000/api/rooms/demo-room/spaces", authorization: "Bearer session-v2" },
+      { url: "http://127.0.0.1:4000/api/rooms/demo-room/presence", authorization: "Bearer session-v2" }
+    ]);
+  } finally { globalThis.fetch = previous; }
+});
 
 test("resolveJoinMode detects mobile agents", () => {
   assert.equal(resolveJoinMode("Mozilla/5.0 (iPhone)"), "mobile");

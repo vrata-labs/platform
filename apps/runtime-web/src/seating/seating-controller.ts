@@ -31,7 +31,14 @@ export class SeatingController {
   // until a server snapshot acknowledges that this participant no longer owns it.
   private releasedSeatIds = new Set<string>();
 
-  constructor(private readonly participantId: string) {}
+  constructor(private participantId: string) {}
+
+  adoptParticipantId(participantId: string): void {
+    if (!participantId || this.state.kind !== "standing" || this.releasedSeatIds.size !== 0) {
+      throw new Error("seating_identity_transition_requires_standing");
+    }
+    this.participantId = participantId;
+  }
 
   getSnapshot(): SeatingControllerSnapshot {
     return {

@@ -55,6 +55,8 @@ import { createPostgresRoomIdentities } from "./identity/postgres.js";
 import { installRoomIdentitySchema } from "./identity/postgres-schema.js";
 import { identityLifecycleChanged, IDENTITY_LIFECYCLE_REQUIRES_V2 } from "./identity/lifecycle.js";
 import { identityLifecycle } from "./identity/authority.js";
+import { assertV2InviteInput } from "./identity/invite-policy.js";
+import { IdentityStorageError } from "./identity/contracts.js";
 import { createMemoryIdentityProtocol, createPostgresIdentityProtocol } from "./identity/protocol.js";
 
 export { initPostgresStorageWithRetry } from "./storage-init-retry.js";
@@ -368,7 +370,7 @@ export class MemoryStorage implements Storage {
     this.identityAdapter.deleteRoom(roomId);
     return this.rooms.delete(roomId);
   }
-  async createRoomInvite(input: Omit<RoomInviteRecord, "inviteId" | "createdAt" | "revokedAt" | "revokedBy"> & { inviteId?: string; createdAt?: string }): Promise<RoomInviteRecord> {
+  private createRoomInviteSync(input: Parameters<Storage["createRoomInvite"]>[0]): RoomInviteRecord {
     if (input.protocolVersion === 2 && this.identityPolicy.current() < 2) throw new Error("identity_upgrade_required");
     const invite: RoomInviteRecord = {
       inviteId: input.inviteId ?? crypto.randomUUID(),
@@ -385,6 +387,17 @@ export class MemoryStorage implements Storage {
     };
     this.roomInvites.set(invite.inviteId, invite);
     return structuredClone(invite);
+  }
+  async createRoomInvite(input: Parameters<Storage["createRoomInvite"]>[0]): Promise<RoomInviteRecord> {
+    if (input.protocolVersion === 2) throw new IdentityStorageError("identity_forbidden");
+    return this.createRoomInviteSync(input);
+  }
+  async createRoomInviteV2(input: Parameters<Storage["createRoomInviteV2"]>[0]): Promise<RoomInviteRecord> {
+    assertV2InviteInput(input);
+    const { actor, ...invite } = input;
+    return this.identityAdapter.authorizeInvite(input.roomId, actor,
+      () => this.createRoomInviteSync({ ...invite, createdBy: actor.actorType === "admin-token" ? actor.actorId : actor.proof.participantId,
+        protocolVersion: 2 }));
   }
   async listRoomInvites(roomId: string): Promise<RoomInviteRecord[]> {
     return Array.from(this.roomInvites.values()).filter((invite) => invite.roomId === roomId).map(invite => structuredClone(invite));
@@ -433,6 +446,10 @@ export class MemoryStorage implements Storage {
   async updateWaitingRoomRequest(roomId: string, requestId: string, input: Partial<Pick<WaitingRoomRequestRecord, "status" | "decidedAt" | "decidedBy">>): Promise<WaitingRoomRequestRecord | null> {
     const existing = this.waitingRoomRequests.get(requestId);
     if (!existing || existing.roomId !== roomId) return null;
+    if (this.identityPolicy.current() >= 2 && existing.status !== "pending") {
+      if (input.status === existing.status) return structuredClone(existing);
+      throw new Error("waiting_decision_finalized");
+    }
     const updated = { ...existing, ...input };
     this.waitingRoomRequests.set(requestId, updated);
     return structuredClone(updated);
@@ -1441,7 +1458,7 @@ export class PostgresStorage implements Storage {
     return (result.rowCount ?? 0) > 0;
   }
   async createRoomInvite(input: Omit<RoomInviteRecord, "inviteId" | "createdAt" | "revokedAt" | "revokedBy"> & { inviteId?: string; createdAt?: string }): Promise<RoomInviteRecord> {
-    if (input.protocolVersion === 2 && await this.identityProtocol.minimum() < 2) throw new Error("identity_upgrade_required");
+    if (input.protocolVersion === 2) throw new IdentityStorageError("identity_forbidden");
     const invite: RoomInviteRecord = {
       inviteId: input.inviteId ?? crypto.randomUUID(),
       roomId: input.roomId,
@@ -1460,6 +1477,41 @@ export class PostgresStorage implements Storage {
       [invite.inviteId, invite.roomId, invite.tokenHash, invite.role, invite.protocolVersion, invite.waitingRoomEnabled, invite.createdAt, invite.expiresAt, invite.createdBy]
     );
     return invite;
+  }
+  async createRoomInviteV2(input: Parameters<Storage["createRoomInviteV2"]>[0]): Promise<RoomInviteRecord> {
+    assertV2InviteInput(input);
+    const client = await this.pool.connect();
+    try {
+      await client.query("begin");
+      const room = (await client.query(`select tenant_id,room_id,status,disabled_at from rooms where room_id=$1 for update`, [input.roomId])).rows[0];
+      if (!room || room.status === "disabled" || room.disabled_at) throw new Error("room_blocked");
+      const floor = (await client.query("select minimum_protocol from room_identity_protocol_policy where singleton=true for share")).rows[0];
+      if (!floor || floor.minimum_protocol < 2) throw new Error("identity_upgrade_required");
+      const authority = (await client.query(`select host_identity_id,owner_identity_id,lifecycle from room_identity_authority_v2
+        where tenant_id=$1 and room_id=$2`, [room.tenant_id, input.roomId])).rows[0];
+      if (authority?.lifecycle?.endedAt) throw new Error("room_blocked");
+      if (input.actor.actorType === "room-session") {
+        const proof = input.actor.proof;
+        const identity = (await client.query(`select identity_id,participant_id,auth_epoch,revoked_at from room_identities_v2
+          where tenant_id=$1 and room_id=$2 and identity_id=$3`, [room.tenant_id, input.roomId, proof.identityId])).rows[0];
+        if (proof.tenantId !== room.tenant_id || proof.roomId !== room.room_id || !identity || identity.revoked_at
+          || identity.participant_id !== proof.participantId || identity.auth_epoch !== proof.authEpoch
+          || ![authority?.host_identity_id, authority?.owner_identity_id].includes(proof.identityId)) throw new Error("identity_forbidden");
+      } else if (input.actor.role !== "admin" || !input.actor.actorId) throw new Error("identity_forbidden");
+      const invite: RoomInviteRecord = {
+        inviteId: crypto.randomUUID(), roomId: input.roomId, tokenHash: input.tokenHash, role: input.role,
+        protocolVersion: 2, waitingRoomEnabled: input.waitingRoomEnabled, expiresAt: input.expiresAt,
+        createdAt: new Date().toISOString(), createdBy: input.actor.actorType === "admin-token" ? input.actor.actorId : input.actor.proof.participantId,
+        revokedAt: null, revokedBy: null
+      };
+      await client.query(`insert into room_invites
+        (invite_id,room_id,token_hash,role,protocol_version,waiting_room_enabled,created_at,expires_at,created_by)
+        values ($1,$2,$3,$4,2,$5,$6,$7,$8)`, [invite.inviteId, invite.roomId, invite.tokenHash,
+        invite.role, invite.waitingRoomEnabled, invite.createdAt, invite.expiresAt, invite.createdBy]);
+      await client.query("commit");
+      return invite;
+    } catch (error) { await client.query("rollback"); throw error; }
+    finally { client.release(); }
   }
   async listRoomInvites(roomId: string): Promise<RoomInviteRecord[]> {
     const result = await this.pool.query(`select invite_id, room_id, token_hash, role, protocol_version, waiting_room_enabled, created_at, expires_at, revoked_at, created_by, revoked_by from room_invites where room_id = $1 order by created_at desc`, [roomId]);
@@ -1513,10 +1565,18 @@ export class PostgresStorage implements Storage {
     return result.rows[0] ? mapWaitingRoomRequestRow(result.rows[0]) : null;
   }
   async updateWaitingRoomRequest(roomId: string, requestId: string, input: Partial<Pick<WaitingRoomRequestRecord, "status" | "decidedAt" | "decidedBy">>): Promise<WaitingRoomRequestRecord | null> {
+    const v2 = await this.identityProtocol.minimum() >= 2;
     const result = await this.pool.query(
-      `update room_waiting_requests set status = coalesce($3, status), decided_at = coalesce($4, decided_at), decided_by = coalesce($5, decided_by) where room_id = $1 and request_id = $2 returning request_id, room_id, invite_id, participant_id, display_name, status, created_at, decided_at, decided_by`,
+      `update room_waiting_requests set status = coalesce($3, status), decided_at = coalesce($4, decided_at), decided_by = coalesce($5, decided_by) where room_id = $1 and request_id = $2 ${v2 ? "and status='pending'" : ""} returning request_id, room_id, invite_id, participant_id, display_name, status, created_at, decided_at, decided_by`,
       [roomId, requestId, input.status ?? null, input.decidedAt ?? null, input.decidedBy ?? null]
     );
+    if (v2 && !result.rows[0]) {
+      const current = await this.getWaitingRoomRequest(requestId);
+      if (current?.roomId === roomId && current.status !== "pending") {
+        if (input.status === current.status) return current;
+        throw new Error("waiting_decision_finalized");
+      }
+    }
     return result.rows[0] ? mapWaitingRoomRequestRow(result.rows[0]) : null;
   }
   async getRoomNote(roomId: string, scope: RoomNoteScope, ownerParticipantId?: string | null): Promise<RoomNoteRecord | null> {

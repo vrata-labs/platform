@@ -67,7 +67,8 @@ export async function admitV2RoomSession(input: {
     return { status: 200, body: {
       identityProtocolVersion: 2, participantId: issued.identity.participantId,
       identityCredential: issued.credential, token: session.sessionToken, sessionId: session.sessionId,
-      expiresInSeconds: 900, role: session.role, permissions: session.permissions, access: createRoomAccessDebugState(session.role)
+      expiresInSeconds: 900, role: session.role, isOwner: session.isOwner,
+      permissions: session.permissions, access: createRoomAccessDebugState(session.role)
     } };
   } catch (error) {
     if (!(error instanceof IdentityStorageError)) throw error;

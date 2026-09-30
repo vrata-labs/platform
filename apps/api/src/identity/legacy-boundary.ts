@@ -1,7 +1,7 @@
 import type { Storage } from "../storage-contracts.js";
 
 export class IdentityBoundaryError extends Error {
-  constructor(readonly status: 409 | 503, readonly reason: "identity_upgrade_required" | "identity_authority_unavailable") {
+  constructor(readonly status: 401 | 409 | 426 | 503, readonly reason: "identity_upgrade_required" | "identity_recovery_required" | "identity_authority_unavailable") {
     super(reason); this.name = "IdentityBoundaryError";
   }
 }
@@ -33,7 +33,7 @@ export function createLegacyIdentityBoundary(storagePromise: Promise<Storage>) {
 export function legacyBoundaryApplies(method: string, pathname: string): boolean {
   if (method === "OPTIONS" || !pathname.startsWith("/api/")) return false;
   return !(method === "GET" && ["/api/templates", "/api/assets", "/api/tenants", "/api/internal/identity-policy"].includes(pathname))
-    && !(method === "POST" && ["/api/internal/identity-session/verify", "/api/tokens/state"].includes(pathname));
+    && !(method === "POST" && ["/api/internal/identity-session/verify", "/api/tokens/state", "/api/tokens/remote-browser-media", "/api/personal-room"].includes(pathname));
 }
 
 export function legacyBoundaryAllowsAdministrator(pathname: string): boolean {
