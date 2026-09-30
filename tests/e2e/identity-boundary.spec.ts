@@ -223,6 +223,44 @@ test("v2 personal owner persists across reload and a copied public ID cannot reo
   }
 });
 
+test("anonymous v2 admission is bounded while an existing tab can renew its identity", async ({ page, browser }) => {
+  test.skip(!process.env.VRATA_TEST_POSTGRES_URL, "Requires an isolated PostgreSQL fixture");
+  test.setTimeout(90_000);
+  const fixture = await startReferenceTemplateFixture(process.env.VRATA_TEST_POSTGRES_URL!, {
+    stateTokenSecret: "isolated-v2-anonymous-admission-secret-32-bytes"
+  });
+  const requireApi = createRequire(resolve("apps/api/package.json"));
+  const { Pool } = requireApi("pg");
+  const pool = new Pool({ connectionString: process.env.VRATA_TEST_POSTGRES_URL,
+    options: `-c search_path=${fixture.schema},public` });
+  const { PostgresStorage } = await import(pathToFileURL(resolve("apps/api/dist/storage.js")).href);
+  const blockedTab = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  try {
+    await new PostgresStorage(pool).identityProtocol.raise(2);
+    await page.goto(`${fixture.origin}/rooms/demo-room?onboard=0`, { waitUntil: "domcontentloaded" });
+    await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__?.roomStateConnected)).toBe(true);
+    const participantId = await page.evaluate(() => (window as any).__VRATA_DEBUG__?.participantId) as string;
+    const peers = (await pool.query("select distinct origin_hash from room_identity_admission_buckets_v2 where kind='room'")).rows;
+    expect(peers).toHaveLength(1);
+    const start = Math.floor(Date.now() / 60_000) * 60_000;
+    await pool.query(`insert into room_identity_admission_buckets_v2 (origin_hash,kind,window_ms,window_start_ms,attempts)
+      values ($1,'room',60000,$2,180),($1,'room',60000,$3,180)
+      on conflict (origin_hash,kind,window_ms,window_start_ms) do update set attempts=180`, [peers[0].origin_hash, start, start + 60_000]);
+    const denied = blockedTab.waitForResponse(response => new URL(response.url()).pathname === "/api/tokens/state");
+    await blockedTab.goto(`${fixture.origin}/rooms/demo-room?onboard=0`, { waitUntil: "domcontentloaded" });
+    expect((await denied).status()).toBe(429);
+    await expect(blockedTab.locator("#guest-access-line")).toContainText("Too many new room entries");
+    const renewed = page.waitForResponse(response => new URL(response.url()).pathname === "/api/tokens/state");
+    await page.reload({ waitUntil: "domcontentloaded" });
+    expect((await renewed).status()).toBe(200);
+    await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__?.participantId).catch(() => null)).toBe(participantId);
+  } finally {
+    await Promise.allSettled([page.goto("about:blank"), blockedTab.close()]);
+    await pool.end();
+    await fixture.close();
+  }
+});
+
 test("isolated live v2 room-state socket rechecks role and revocation before privileged effects", async () => {
   test.skip(!process.env.VRATA_TEST_POSTGRES_URL, "Requires isolated PostgreSQL");
   test.setTimeout(120_000);

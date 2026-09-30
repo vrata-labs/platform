@@ -8,6 +8,7 @@ import { signRoomSessionToken } from "@vrata/shared-types/session-token";
 import { MemoryStorage, PostgresStorage, type Storage } from "./storage.js";
 import { createRoomIdentityService } from "./identity/service.js";
 import { IdentityStorageError, type RoomIdentityScope } from "./identity/contracts.js";
+import { MAX_ROOM_IDENTITIES } from "./identity/admission-limits.js";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 
@@ -64,6 +65,55 @@ async function fixture(t: TestContext, backend: "memory" | "postgres") {
 }
 
 for (const backend of ["memory", "postgres"] as const) {
+  test(`${backend}: identity admission budgets serialize concurrent peers and expire without touching credentials`, {
+    skip: backend === "postgres" && !process.env.VRATA_TEST_POSTGRES_URL && !process.env.CI, timeout: 120_000
+  }, async t => {
+    const f = await fixture(t, backend);
+    const input = { originHash: "a".repeat(64), kind: "room" as const };
+    for (let i = 0; i < 175; i++) assert.equal(await f.storage.reserveIdentityAdmission(input), true);
+    const contenders = await Promise.all(Array.from({ length: 16 }, () => f.storage.reserveIdentityAdmission(input)));
+    assert.equal(contenders.filter(Boolean).length, 5, "two replicas cannot exceed the same origin window");
+    assert.equal(await f.storage.reserveIdentityAdmission({ originHash: "b".repeat(64), kind: "room" }), true);
+    f.advance(60_000);
+    assert.equal(await f.storage.reserveIdentityAdmission(input), true);
+    if (f.pool) {
+      const otherReplica = new PostgresStorage(f.pool, f.now);
+      const result = await otherReplica.reserveIdentityAdmission(input);
+      assert.equal(result, true);
+      const buckets = (await f.pool.query("select origin_hash,attempts from room_identity_admission_buckets_v2 where origin_hash=$1", [input.originHash])).rows;
+      assert.equal(buckets.length, 3, "closed minute, fresh minute and daily bucket are persisted");
+      assert.equal(buckets.some((value: { attempts: number }) => value.attempts > 180 && value.attempts < 3000), true);
+      assert.equal(buckets.every((value: { origin_hash: string }) => value.origin_hash === input.originHash), true);
+    }
+    const nextDay = Math.floor(f.now() / 86_400_000) * 86_400_000 + 86_400_000 + 60_000;
+    f.advance(nextDay - f.now());
+    for (let hour = 0; hour < 5; hour++) {
+      for (let i = 0; i < 20; i++) assert.equal(await f.storage.reserveIdentityAdmission({ originHash: input.originHash, kind: "personal" }), true);
+      assert.equal(await f.storage.reserveIdentityAdmission({ originHash: input.originHash, kind: "personal" }), false);
+      f.advance(3_600_000);
+    }
+    assert.equal(await f.storage.reserveIdentityAdmission({ originHash: input.originHash, kind: "personal" }), false,
+      "a new hourly bucket cannot exceed the daily personal room allowance");
+    f.advance(86_400_000 - (f.now() % 86_400_000) + 60_000);
+    assert.equal(await f.storage.reserveIdentityAdmission({ originHash: input.originHash, kind: "personal" }), true);
+  });
+
+  if (backend === "postgres") test("postgres: room identity lifetime capacity blocks only new admissions", {
+    skip: !process.env.VRATA_TEST_POSTGRES_URL && !process.env.CI, timeout: 120_000
+  }, async t => {
+    const f = await fixture(t, "postgres");
+    const { scope } = await f.makeRoom(false, undefined, false);
+    await f.storage.identityProtocol.raise(2);
+    const first = await f.service.admit({ ...scope, displayName: "First" });
+    await f.pool!.query(`insert into room_identities_v2
+      (tenant_id,room_id,identity_id,participant_id,display_name,base_role,provenance,auth_epoch,created_at)
+      select $1,$2,'capacity-id-'||n,'capacity-participant-'||n,'Guest','guest','{"kind":"guest"}'::jsonb,1,now()
+      from generate_series(2,$3) as n`, [scope.tenantId, scope.roomId, MAX_ROOM_IDENTITIES]);
+    await assert.rejects(f.service.admit({ ...scope, displayName: "Overflow" }), code("identity_capacity_reached"));
+    const renewed = await f.service.renewCredential(first.credential, scope);
+    assert.equal(renewed.identity.participantId, first.identity.participantId);
+  });
+
   test(`${backend}: protocol floor is global, monotonic and freezes unbound legacy lifecycle`, {
     skip: backend === "postgres" && !process.env.VRATA_TEST_POSTGRES_URL && !process.env.CI, timeout: 120_000
   }, async t => {

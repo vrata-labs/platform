@@ -52,6 +52,7 @@ import { assertRoomTemplatePatch, materializeStoredRoomInput } from "./room-temp
 import { transitionPostgresReferenceCatalog } from "./storage-template-catalog.js";
 import { createMemoryRoomIdentities } from "./identity/memory.js";
 import { createPostgresRoomIdentities } from "./identity/postgres.js";
+import { createMemoryAdmissionBudget, createPostgresAdmissionBudget } from "./identity/admission-budget.js";
 import { installRoomIdentitySchema } from "./identity/postgres-schema.js";
 import { identityLifecycleChanged, IDENTITY_LIFECYCLE_REQUIRES_V2 } from "./identity/lifecycle.js";
 import { identityLifecycle } from "./identity/authority.js";
@@ -185,7 +186,9 @@ export class MemoryStorage implements Storage {
   private readonly identityPolicy = createMemoryIdentityProtocol();
   readonly identityProtocol: Storage["identityProtocol"] = this.identityPolicy;
   readonly roomIdentities: Storage["roomIdentities"];
+  readonly reserveIdentityAdmission: Storage["reserveIdentityAdmission"];
   constructor(identityNow = Date.now) {
+    this.reserveIdentityAdmission = createMemoryAdmissionBudget(identityNow);
     this.identityAdapter = createMemoryRoomIdentities(roomId => this.rooms.get(roomId), identityNow,
       hash => [...this.roomInvites.values()].find(invite => invite.tokenHash === hash), () => this.identityPolicy.current(),
       id => this.roomInvites.get(id), id => this.waitingRoomRequests.get(id), request => { this.waitingRoomRequests.set(request.requestId, request); });
@@ -720,7 +723,9 @@ export class MemoryStorage implements Storage {
 export class PostgresStorage implements Storage {
   readonly roomIdentities: Storage["roomIdentities"];
   readonly identityProtocol: Storage["identityProtocol"];
+  readonly reserveIdentityAdmission: Storage["reserveIdentityAdmission"];
   constructor(private readonly pool: Pool, identityNow = Date.now) {
+    this.reserveIdentityAdmission = createPostgresAdmissionBudget(pool, identityNow);
     this.roomIdentities = createPostgresRoomIdentities(pool, identityNow);
     this.identityProtocol = createPostgresIdentityProtocol(pool);
   }

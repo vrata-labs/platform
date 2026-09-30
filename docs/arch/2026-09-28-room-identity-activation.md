@@ -65,9 +65,24 @@ does not give a room session without the proof. Open waiting entries are capped
 at 8 per invitation / 64 per room; expired and consumed pending records may be
 deleted without clearing a live proof or active identity. Invites and requests
 are linked with room-scoped foreign keys. Admission and waiting proof cannot
-be used at minimum 1. Before production activation, guest-identity retention
-and per-origin rate limiting are still needed: each credential-less entry can
-create a durable identity tombstone, by design of the accepted B guard.
+be used at minimum 1. Every new v2 admission consumes a persistent,
+privacy-preserving origin budget shared by all API replicas: 180 new room
+entries/minute and 3,000/day, or 20 personal rooms/hour and 100/day. A valid
+identity proof, approved waiting proof and administrator recovery do not
+consume this new-identity budget. Caddy overwrites the client-IP and proxy
+authentication headers; the API trusts this address only with the matching
+internal-service token and otherwise hashes the direct transport peer. It never
+stores the raw address. A custom reverse proxy must provide the same verified
+peer boundary; without it, all clients behind that proxy share one budget.
+
+The B rollback contract prohibits deleting identity rows while their room
+exists. Thus v2 caps each room at 10,000 durable identities and 50,000 total
+waiting entries; renewing an existing proof works at capacity. Closed admission
+windows are pruned, while identity and waiting records remain until their room
+is deleted. Operators must replace or retire a room before its lifetime cap;
+silently purging an identity with a live possession proof would break continuity
+and rollback guarantees. Room/owner hand-off and a long-lived-room archival
+policy remain part of the full activation review.
 
 A fresh personal owner gets a newly generated participant ID, room and
 owner+Host authority in one Memory operation or one PostgreSQL transaction.

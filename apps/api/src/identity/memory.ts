@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { IdentityStorageError, type IdentityPersistence, type IdentityRoomBinding, type IdentitySelection, type IdentityTransaction, type RoomIdentityActor, type RoomIdentityAuthority, type RoomIdentityPending, type RoomIdentityRecord, type RoomIdentityRecovery, type RoomIdentityScope } from "./contracts.js";
 import type { RoomInviteRecord, WaitingRoomRequestRecord } from "../storage-contracts.js";
 import { createRoomIdentityStorage, emptyIdentityAuthority } from "./store.js";
+import { admissionWindows, assertAdmissionLimitInput, type AdmissionLimitInput } from "./admission-limits.js";
 
 export function createMemoryRoomIdentities(getRoom: (roomId: string) => IdentityRoomBinding | undefined, now = Date.now,
   getInviteByHash: (hash: string) => RoomInviteRecord | undefined = () => undefined, getMinimumProtocol = () => 1,
@@ -25,8 +26,10 @@ export function createMemoryRoomIdentities(getRoom: (roomId: string) => Identity
     const waitingRequest = pending ? getWaitingRequest(pending.requestId) ?? null : null;
     const open = invite && selection.inviteTokenHash
       ? [...(pendingByRoom.get(scope.roomId)?.values() ?? [])].filter(value => !value.activatedAt && Date.parse(value.expiresAt) > now()) : null;
-    const pendingCapacity = open ? { room: open.length, invite: open.filter(value => value.inviteId === invite!.inviteId).length } : null;
+    const pendingCapacity = open ? { room: open.length, invite: open.filter(value => value.inviteId === invite!.inviteId).length,
+      lifetimeRoom: pendingByRoom.get(scope.roomId)?.size ?? 0 } : null;
     return structuredClone({ room, minimumProtocol: getMinimumProtocol(), authority: authorities.get(scope.roomId) ?? emptyIdentityAuthority(scope, room.sessionControl), recovery, invite, pending, waitingRequest, waitingRequestNew: false, pendingCapacity,
+      identityCount: selection.admissionCount ? identities.get(scope.roomId)?.size ?? 0 : null,
       identities: new Map([...(identities.get(scope.roomId) ?? new Map<string, RoomIdentityRecord>())].filter(([id, identity]) =>
         selected.has(id) || (participantId !== undefined && identity.participantId === participantId))) });
   };

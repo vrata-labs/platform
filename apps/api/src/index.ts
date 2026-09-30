@@ -52,6 +52,7 @@ import { admitV2RoomSession, type V2AdmissionRequest } from "./identity/http-adm
 import { currentSessionControlV2, resolveRoomRequestV2, type VerifiedRoomRequestV2 } from "./identity/http-authority.js";
 import { roomMediaGrantName } from "./identity/media-room.js";
 import { applyRoomLifecycleV2, lifecycleV2Error } from "./identity/http-lifecycle.js";
+import { identityAdmissionOriginHash as hashAdmissionOrigin } from "./identity/admission-origin.js";
 
 import { getLivekitCredentials, getMediaTokenConfigError, getLivekitDeploymentDiagnostics } from "./livekit-config.js";
 
@@ -587,6 +588,14 @@ function getBearerToken(request: IncomingMessage): string | null {
     return null;
   }
   return token;
+}
+
+/** Caddy authenticates its client-IP override. Raw forwarded headers never
+ * override the transport peer on the publicly reachable direct API port. */
+function identityAdmissionOriginHash(request: IncomingMessage): string {
+  return hashAdmissionOrigin({ peerAddress: request.socket.remoteAddress,
+    proxyAddress: request.headers["x-vrata-client-ip"], proxyToken: request.headers["x-vrata-proxy-auth"],
+    internalToken: getInternalServiceToken(), signingSecret: getStateTokenSecret() });
 }
 
 function resolveControlPlaneActor(request: IncomingMessage):
@@ -2025,6 +2034,9 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
         room.tenantId === tenantId && room.roomType === "personal" && room.ownerParticipantId === payload.participantId)) {
         return json(response, 409, { error: "identity_required", reason: "identity_recovery_required" });
       }
+      if (!await storage.reserveIdentityAdmission({ originHash: identityAdmissionOriginHash(request), kind: "personal" })) {
+        return json(response, 429, { error: "room_access_denied", reason: "identity_rate_limited" });
+      }
       const displayName = normalizeDisplayName(payload.displayName, "Owner");
       const templates = await storage.listTemplates();
       const templateId = templates.some(template => template.templateId === "personal-room-basic" && template.status === "active")
@@ -3244,9 +3256,15 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   if (method === "POST" && url.pathname === "/api/tokens/state") {
     const requestPayload = await parseBody<StateTokenRequest>(request);
     if (await legacyIdentityBoundary.minimum() >= 2) {
+      const v2Payload = requestPayload as V2AdmissionRequest | null;
       const roomId = requestPayload?.roomId ?? "demo-room";
       const room = await storage.getRoom(roomId);
-      const result = await admitV2RoomSession({ storage, room, payload: requestPayload as V2AdmissionRequest | null,
+      if (room && v2Payload?.identityProtocolVersion === 2 && v2Payload.identityCredential === undefined
+        && v2Payload.waitingCredential === undefined && v2Payload.recoveryCredential === undefined
+        && !await storage.reserveIdentityAdmission({ originHash: identityAdmissionOriginHash(request), kind: "room" })) {
+        return json(response, 429, { error: "room_access_denied", reason: "identity_rate_limited" });
+      }
+      const result = await admitV2RoomSession({ storage, room, payload: v2Payload,
         bearer: getBearerToken(request), secret: getStateTokenSecret(), hashInvite: token => hashInviteToken(token) });
       return json(response, result.status, result.body);
     }

@@ -3,5 +3,8 @@
     reverse_proxy remote-browser:4010
   }
 
-  reverse_proxy api:4000
+  reverse_proxy api:4000 {
+    header_up X-Vrata-Client-IP {remote_host}
+    header_up X-Vrata-Proxy-Auth "{$VRATA_INTERNAL_SERVICE_TOKEN}"
+  }
 }

@@ -297,6 +297,7 @@ services:
       VRATA_STATE_DOMAIN: ${VRATA_STATE_DOMAIN}
       VRATA_LIVEKIT_DOMAIN: ${VRATA_LIVEKIT_DOMAIN}
       VRATA_STORAGE_DOMAIN: ${VRATA_STORAGE_DOMAIN}
+      VRATA_INTERNAL_SERVICE_TOKEN: ${VRATA_INTERNAL_SERVICE_TOKEN:?VRATA_INTERNAL_SERVICE_TOKEN is required}
     volumes:
       - ${CADDY_CONFIG_FILE}:/etc/caddy/Caddyfile:ro
       - ../../apps/runtime-web/public:/srv/runtime-public:ro

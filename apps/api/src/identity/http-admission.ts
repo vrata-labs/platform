@@ -75,6 +75,7 @@ export async function admitV2RoomSession(input: {
     if (error.code === "waiting_room_pending") return { status: 202, body: { error: "room_access_denied", reason: "waiting_room_pending" } };
     if (error.code === "waiting_room_rejected") return { status: 403, body: { error: "room_access_denied", reason: "waiting_room_rejected" } };
     if (error.code === "waiting_room_capacity_reached") return { status: 429, body: { error: "room_access_denied", reason: "waiting_room_full" } };
+    if (error.code === "identity_capacity_reached") return { status: 429, body: { error: "room_access_denied", reason: "room_identity_full" } };
     if (error.code === "room_blocked") return { status: 403, body: { error: "room_access_denied", reason: "room_locked" } };
     if (error.code === "room_not_found") return { status: 404, body: { error: "room_not_found" } };
     return deny(error.code === "identity_forbidden" ? 403 : 409,

@@ -80,6 +80,8 @@ test("internal room-state verifier trusts v2 possession and current authority, n
     };
     const oldMediaRoom = (await media(oldSession.token, "legacy-listener")).video.room;
     assert.equal(oldMediaRoom, `${process.env.LIVEKIT_ROOM_PREFIX ?? "vrata-"}${publicRoom.roomId}`);
+    assert.equal((await pool.query("select count(*)::integer as total from room_identity_admission_buckets_v2")).rows[0].total, 0,
+      "legacy issuance is not subject to the prepared v2 budget");
     await storage.identityProtocol.raise(2);
     const recover = (targetRoomId: string, participantId: string, role: "host" | "owner", authorized = true) =>
       fetch(`${baseUrl}/api/rooms/${targetRoomId}/identity-recovery`, { method: "POST", headers: {
@@ -283,6 +285,44 @@ test("internal room-state verifier trusts v2 possession and current authority, n
     assert.equal((await storage.roomIdentities.resolve({ ...publicScope,
       identityId: createRoomIdentityCodec(secret).verify(resumed.identityCredential, publicScope)!.identityId,
       participantId: resumed.participantId, authEpoch: 1 }))?.role, "member");
+    const peers = (await pool.query("select distinct origin_hash from room_identity_admission_buckets_v2 where kind='room'")).rows;
+    assert.equal(peers.length, 1);
+    const peerHash = peers[0].origin_hash as string;
+    let limited: Response | null = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const start = Math.floor(Date.now() / 60_000) * 60_000;
+      await pool.query(`insert into room_identity_admission_buckets_v2 (origin_hash,kind,window_ms,window_start_ms,attempts)
+        values ($1,'room',60000,$2,180) on conflict (origin_hash,kind,window_ms,window_start_ms)
+        do update set attempts=180`, [peerHash, start]);
+      limited = await issue({ displayName: "Budget blocked" });
+      if (limited.status === 429) break;
+    }
+    assert.equal(limited?.status, 429, "new v2 room admission is bounded across API requests");
+    assert.equal((await limited!.json() as { reason: string }).reason, "identity_rate_limited");
+    assert.equal((await issue({ identityCredential: created.identityCredential })).status, 200,
+      "a valid existing identity can still renew after anonymous capacity is reached");
+    const privilegedRecovery = await recover(legacyHostRoom.roomId, "legacy-host-id", "host");
+    assert.equal(privilegedRecovery.status, 201);
+    const reservedProof = (await privilegedRecovery.json() as { recoveryCredential: string }).recoveryCredential;
+    assert.equal((await redeem(legacyHostRoom.roomId, reservedProof)).status, 200,
+      "administrator-approved recovery is not an anonymous new-identity request");
+    const joinWithProxyHeaders = (proxyToken: string) => fetch(`${baseUrl}/api/tokens/state`, {
+      method: "POST", headers: { "content-type": "application/json", "x-vrata-proxy-auth": proxyToken,
+        "x-vrata-client-ip": "198.51.100.8" },
+      body: JSON.stringify({ roomId: publicRoom.roomId, identityProtocolVersion: 2, displayName: "New peer" })
+    });
+    assert.equal((await joinWithProxyHeaders("forged-proxy-proof")).status, 429,
+      "a direct caller cannot override the exhausted transport-peer budget");
+    assert.equal((await joinWithProxyHeaders(internalToken)).status, 200,
+      "the authenticated reverse proxy can rate-limit distinct clients independently");
+    assert.equal((await pool.query("select count(distinct origin_hash)::integer as total from room_identity_admission_buckets_v2 where kind='room'")).rows[0].total, 2);
+    const hourStart = Math.floor(Date.now() / 3_600_000) * 3_600_000;
+    await pool.query(`insert into room_identity_admission_buckets_v2 (origin_hash,kind,window_ms,window_start_ms,attempts)
+      values ($1,'personal',3600000,$2,20) on conflict (origin_hash,kind,window_ms,window_start_ms)
+      do update set attempts=20`, [peerHash, hourStart]);
+    assert.equal((await personal({ displayName: "Budget blocked" })).status, 429);
+    assert.equal((await personal({ roomId: owned.room.roomId, identityCredential: owned.identityCredential })).status, 200,
+      "personal owner proof remains usable after anonymous creation is throttled");
   } finally {
     if (child && child.exitCode === null && child.signalCode === null) { const stopped = once(child, "exit"); child.kill("SIGTERM"); await stopped; }
     await pool.end();

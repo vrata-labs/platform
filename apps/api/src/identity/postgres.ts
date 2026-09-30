@@ -28,9 +28,10 @@ async function load(client: PoolClient, scope: RoomIdentityScope, selection: Ide
   [scope.roomId, selection.inviteTokenHash ?? pending?.inviteId])).rows[0] : null;
   const rawWaiting = pending ? (await client.query(`select * from room_waiting_requests where room_id=$1 and request_id=$2 ${lock ? "for share" : ""}`,
     [scope.roomId, pending.requestId])).rows[0] : null;
-  const open = rawInvite && selection.inviteTokenHash ? (await client.query(`select count(*)::integer as room,
-    count(*) filter (where invite_id=$3)::integer as invite from room_identity_pending_v2
-    where tenant_id=$1 and room_id=$2 and activated_at is null and expires_at>$4`,
+  const open = rawInvite && selection.inviteTokenHash ? (await client.query(`select count(*) filter (where activated_at is null and expires_at>$4)::integer as room,
+    count(*) filter (where invite_id=$3 and activated_at is null and expires_at>$4)::integer as invite,
+    count(*)::integer as lifetime_room from room_identity_pending_v2
+    where tenant_id=$1 and room_id=$2`,
   [scope.tenantId, scope.roomId, rawInvite.invite_id, currentAt])).rows[0] : null;
   const authority = (await client.query(`select * from room_identity_authority_v2 where tenant_id=$1 and room_id=$2`, [scope.tenantId, scope.roomId])).rows[0];
   const raw = selection.recoveryId ? (await client.query(`select * from room_identity_recoveries_v2 where tenant_id=$1 and room_id=$2 and recovery_id=$3`, [scope.tenantId, scope.roomId, selection.recoveryId])).rows[0] : null;
@@ -49,6 +50,8 @@ async function load(client: PoolClient, scope: RoomIdentityScope, selection: Ide
     authEpoch: row.auth_epoch, baseRole: row.base_role, provenance: row.provenance, displayName: row.display_name,
     createdAt: iso(row.created_at), revokedAt: nullableIso(row.revoked_at)
   }]));
+  const identityCount = selection.admissionCount ? (await client.query(`select count(*)::integer as total from room_identities_v2
+    where tenant_id=$1 and room_id=$2`, [scope.tenantId, scope.roomId])).rows[0]?.total as number : null;
   return {
     minimumProtocol: protocol.minimum_protocol,
     room: { tenantId: room.tenant_id, roomId: room.room_id, roomType: room.room_type, ownerParticipantId: room.owner_participant_id,
@@ -56,9 +59,9 @@ async function load(client: PoolClient, scope: RoomIdentityScope, selection: Ide
       status: room.status, disabledAt: nullableIso(room.disabled_at), sessionControl: room.session_control },
     authority: authority ? { tenantId: authority.tenant_id, roomId: authority.room_id, revision: authority.revision, lifecycle: authority.lifecycle,
       hostIdentityId: authority.host_identity_id, ownerIdentityId: authority.owner_identity_id, presenterIdentityId: authority.presenter_identity_id } : emptyIdentityAuthority(scope, room.session_control),
-    identities, recovery, invite: rawInvite ? mapRoomInviteRow(rawInvite) : null,
+    identities, identityCount, recovery, invite: rawInvite ? mapRoomInviteRow(rawInvite) : null,
     pending, waitingRequest: rawWaiting ? mapWaitingRoomRequestRow(rawWaiting) : null, waitingRequestNew: false,
-    pendingCapacity: open ? { room: open.room, invite: open.invite } : null
+    pendingCapacity: open ? { room: open.room, invite: open.invite, lifetimeRoom: open.lifetime_room } : null
   };
 }
 

@@ -106,6 +106,10 @@ const constraints = [
   ["room_identity_protocol_policy", "identity_protocol_singleton", "CHECK (singleton)"],
   ["room_identity_protocol_policy", "identity_protocol_minimum", "CHECK ((minimum_protocol >= 1))"],
   ["room_identity_protocol_policy", "identity_protocol_namespace", "CHECK ((((minimum_protocol = 1) AND (media_namespace IS NULL)) OR ((minimum_protocol >= 2) AND (media_namespace ~ '^[a-f0-9]{32}$'::text))))"],
+  ["room_identity_admission_buckets_v2", "identity_admission_bucket_pk", "PRIMARY KEY (origin_hash, kind, window_ms, window_start_ms)"],
+  ["room_identity_admission_buckets_v2", "identity_admission_bucket_hash", "CHECK ((origin_hash ~ '^[a-f0-9]{64}$'::text))"],
+  ["room_identity_admission_buckets_v2", "identity_admission_bucket_kind", "CHECK ((kind = ANY (ARRAY['room'::text, 'personal'::text])))"],
+  ["room_identity_admission_buckets_v2", "identity_admission_bucket_attempts", "CHECK ((attempts > 0))"],
   ["room_identities_v2", "identity_v2_pk", "PRIMARY KEY (tenant_id, room_id, identity_id)"],
   ["room_identities_v2", "identity_v2_participant", "UNIQUE (tenant_id, room_id, participant_id)"],
   ["room_identities_v2", "identity_v2_room", roomForeignKey],
@@ -145,6 +149,11 @@ const columns = [
   ["room_identity_protocol_policy", "singleton", "boolean", true],
   ["room_identity_protocol_policy", "minimum_protocol", "integer", true],
   ["room_identity_protocol_policy", "media_namespace", "text", false],
+  ["room_identity_admission_buckets_v2", "origin_hash", "text", true],
+  ["room_identity_admission_buckets_v2", "kind", "text", true],
+  ["room_identity_admission_buckets_v2", "window_ms", "integer", true],
+  ["room_identity_admission_buckets_v2", "window_start_ms", "bigint", true],
+  ["room_identity_admission_buckets_v2", "attempts", "integer", true],
   ...["tenant_id", "room_id", "identity_id", "participant_id", "display_name", "base_role"].map(name => ["room_identities_v2", name, "text", true]),
   ["room_identities_v2", "provenance", "jsonb", true], ["room_identities_v2", "auth_epoch", "integer", true],
   ["room_identities_v2", "created_at", "timestamp with time zone", true], ["room_identities_v2", "revoked_at", "timestamp with time zone", false],
@@ -189,6 +198,14 @@ export async function installRoomIdentitySchema(client: PoolClient): Promise<voi
       end if;
     end; $policy$;
     alter table room_identity_protocol_policy add column if not exists media_namespace text;
+    create table if not exists room_identity_admission_buckets_v2 (
+      origin_hash text not null constraint identity_admission_bucket_hash check (origin_hash ~ '^[a-f0-9]{64}$'),
+      kind text not null constraint identity_admission_bucket_kind check (kind in ('room','personal')),
+      window_ms integer not null, window_start_ms bigint not null,
+      attempts integer not null constraint identity_admission_bucket_attempts check (attempts > 0),
+      constraint identity_admission_bucket_pk primary key (origin_hash,kind,window_ms,window_start_ms)
+    );
+    create index if not exists identity_admission_bucket_window_idx on room_identity_admission_buckets_v2(window_start_ms);
     do $namespace$
     begin
       if not exists (select 1 from pg_constraint where conrelid='room_identity_protocol_policy'::regclass and conname='identity_protocol_namespace') then

@@ -171,6 +171,8 @@ services:
         condition: service_healthy
     ports:
       - "${VRATA_HTTP_PORT}:80"
+    environment:
+      VRATA_INTERNAL_SERVICE_TOKEN: ${VRATA_INTERNAL_SERVICE_TOKEN:?VRATA_INTERNAL_SERVICE_TOKEN is required}
     volumes:
       - ${CADDY_CONFIG_FILE}:/etc/caddy/Caddyfile:ro
       - ../../apps/runtime-web/public:/srv/runtime-public:ro

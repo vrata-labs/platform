@@ -65,7 +65,7 @@ export interface RoomIdentityPending extends RoomIdentityScope {
 }
 
 export type IdentityRoomBinding = Pick<RoomRecord, "tenantId" | "roomId" | "roomType" | "ownerParticipantId" | "visibility" | "guestAllowed" | "status" | "disabledAt" | "sessionControl">;
-export type IdentityStorageErrorCode = "room_not_found" | "room_blocked" | "invalid_identity_input" | "identity_conflict" | "identity_not_active" | "authority_conflict" | "identity_forbidden" | "waiting_room_pending" | "waiting_room_capacity_reached" | "waiting_room_rejected" | "waiting_proof_invalid" | "recovery_invalid";
+export type IdentityStorageErrorCode = "room_not_found" | "room_blocked" | "invalid_identity_input" | "identity_conflict" | "identity_not_active" | "authority_conflict" | "identity_forbidden" | "identity_capacity_reached" | "waiting_room_pending" | "waiting_room_capacity_reached" | "waiting_room_rejected" | "waiting_proof_invalid" | "recovery_invalid";
 export class IdentityStorageError extends Error {
   constructor(readonly code: IdentityStorageErrorCode) { super(code); this.name = "IdentityStorageError"; }
 }
@@ -91,18 +91,19 @@ export interface RoomIdentityStorage {
   redeemRecovery(scope: RoomIdentityScope, recoveryId: string, secretHash: string): Promise<RoomIdentityRecord>;
 }
 
-export interface IdentitySelection { identityIds?: string[]; participantId?: string; recoveryId?: string; inviteTokenHash?: string; pendingId?: string }
+export interface IdentitySelection { identityIds?: string[]; participantId?: string; recoveryId?: string; inviteTokenHash?: string; pendingId?: string; admissionCount?: boolean }
 export interface IdentityTransaction {
   room: IdentityRoomBinding;
   minimumProtocol: number;
   authority: RoomIdentityAuthority;
   identities: Map<string, RoomIdentityRecord>;
+  identityCount: number | null;
   recovery: RoomIdentityRecovery | null;
   invite: RoomInviteRecord | null;
   pending: RoomIdentityPending | null;
   waitingRequest: WaitingRoomRequestRecord | null;
   waitingRequestNew: boolean;
-  pendingCapacity: { room: number; invite: number } | null;
+  pendingCapacity: { room: number; invite: number; lifetimeRoom: number } | null;
 }
 
 export interface IdentityPersistence {

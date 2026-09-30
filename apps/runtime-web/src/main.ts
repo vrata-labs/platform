@@ -8608,6 +8608,10 @@ function describeRoomAccessError(error: RuntimeAccessError): string {
       return "Access denied: removed by host";
     case "session_ended":
       return "Session ended by host";
+    case "identity_rate_limited":
+      return "Too many new room entries. Please try again later";
+    case "room_identity_full":
+      return "This room has reached its identity limit. Contact the administrator";
     default:
       return "Access denied";
   }

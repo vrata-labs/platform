@@ -3,6 +3,7 @@ import { getRoomPermissions } from "@vrata/shared-types";
 import type { RoomSessionControlState } from "../storage-contracts.js";
 import { activeIdentity, assertRoomActive, bumpAuthority, checkRevision, fail, identityLifecycle, identityWasRemoved, validCounter, validId } from "./authority.js";
 import { transitionIdentityAuthority } from "./transition.js";
+import { roomIdentityCapacityAvailable, waitingRequestCapacityAvailable } from "./admission-limits.js";
 import {
   IdentityStorageError, type IdentityPersistence, type IdentityProvenance, type IdentityTransaction,
   type RoomIdentityAuthority, type RoomIdentityRecord, type RoomIdentityScope, type RoomIdentityStorage
@@ -58,7 +59,7 @@ export function createRoomIdentityStorage(persistence: IdentityPersistence, now 
       assertIdentityScope(input);
       if (typeof input.displayName !== "string" || input.displayName.length > 80
         || (input.inviteTokenHash !== undefined && (!validId(input.inviteTokenHash) || input.inviteTokenHash.length > 200))) fail("invalid_identity_input");
-      return persistence.transact(input, { inviteTokenHash: input.inviteTokenHash }, state => {
+      return persistence.transact(input, { inviteTokenHash: input.inviteTokenHash, admissionCount: true }, state => {
         if (state.minimumProtocol < 2) fail("identity_forbidden");
         assertRoomActive(state);
         const invitation = state.invite;
@@ -76,6 +77,7 @@ export function createRoomIdentityStorage(persistence: IdentityPersistence, now 
         const canClaimInitialHost = invitation?.role === "host" && state.room.roomType !== "personal"
           && !state.room.sessionControl?.hostParticipantId && state.authority.hostIdentityId === null && state.authority.revision === 0;
         if (state.authority.lifecycle.lockedAt && !canClaimInitialHost) fail("room_blocked");
+        if (!roomIdentityCapacityAvailable(state.identityCount)) fail("identity_capacity_reached");
         const role = invitation?.role ?? "guest";
         const provenance: IdentityProvenance = invitation
           ? { kind: "invite", inviteId: invitation.inviteId, role: role as "guest" | "member" | "presenter" | "host" }
@@ -110,7 +112,8 @@ export function createRoomIdentityStorage(persistence: IdentityPersistence, now 
           fail("identity_forbidden");
         }
         if (state.authority.lifecycle.lockedAt) fail("room_blocked");
-        if (!state.pendingCapacity || state.pendingCapacity.room >= 64 || state.pendingCapacity.invite >= 8) fail("waiting_room_capacity_reached");
+        if (!state.pendingCapacity || state.pendingCapacity.room >= 64 || state.pendingCapacity.invite >= 8
+          || !waitingRequestCapacityAvailable(state.pendingCapacity.lifetimeRoom)) fail("waiting_room_capacity_reached");
         const participantId = randomUUID();
         const requestId = randomUUID();
         state.waitingRequest = {
