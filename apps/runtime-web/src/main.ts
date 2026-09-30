@@ -42,6 +42,7 @@ import {
 import { appendBrandingSuffix, applyRoomShellBootState, renderSceneAttributions } from "./boot-session.js";
 import { RuntimeAccessError, bootRuntime, deleteRoomDocument, downloadRoomDocument, exportRoomNote, exportRoomNotesArchive, fetchRoomDocumentMediaContent, fetchRoomDocumentPresentation, fetchRoomNote, fetchRoomSessionControl, fetchRuntimeSpaces, fetchStateToken, grantRoomPresenter, listPresence, listRoomDocuments, listRoomNoteVersions, openPersonalRoom, planVoiceSession, removePresence, removeRoomParticipant, resolveCurrentSpace, resolveJoinMode, restoreRoomNoteVersion, revokeRoomPresenter, runRoomSessionControlAction, savePersonalRoomState, saveRoomNote, selectRoomDocumentSurface, transferRoomHost, uploadRoomDocument, upsertPresence, type PresenceState, type RuntimeDocumentRecord, type RuntimePersonalState, type RuntimeSessionControlResponse, type RuntimeSpaceOption } from "./index.js";
 import { createRoomIdentityTab } from "./identity-session-tab.js";
+import { redeemRoomRecovery } from "./identity-recovery.js";
 import { probeDocumentMedia } from "./document-media-probe.js";
 import { createRuntimeDebugState } from "./runtime-debug-state.js";
 import { formatClientCompatibilityStatus, resolveClientCompatibility, type ClientCompatibilitySummary } from "./client-capabilities.js";
@@ -330,6 +331,9 @@ const sceneAttributionsPanelEl = mustElement<HTMLDivElement>("#scene-attribution
 const sceneAttributionsListEl = mustElement<HTMLUListElement>("#scene-attributions-list");
 const spaceSelect = mustElement<HTMLSelectElement>("#space-select");
 const openPersonalRoomButton = mustElement<HTMLButtonElement>("#open-personal-room");
+const roomRecoveryCredential = mustElement<HTMLInputElement>("#room-recovery-credential");
+const roomRecoverySubmit = mustElement<HTMLButtonElement>("#room-recovery-submit");
+const roomRecoveryStatus = mustElement<HTMLElement>("#room-recovery-status");
 const spaceSelectStatusEl = mustElement<HTMLDivElement>("#space-select-status");
 const notesPanelEl = mustElement<HTMLDivElement>("#notes-panel");
 const notesScopeSelect = mustElement<HTMLSelectElement>("#notes-scope-select");
@@ -7432,6 +7436,30 @@ openPersonalRoomButton.addEventListener("click", () => {
   });
 });
 
+roomRecoverySubmit.addEventListener("click", () => {
+  if (roomRecoverySubmit.disabled) return;
+  roomRecoverySubmit.disabled = true;
+  roomRecoveryStatus.textContent = "Verifying recovery code...";
+  void (async () => {
+    // Never redeem a single-use proof unless the new room identity can survive
+    // the required reload in this tab.
+    sessionStorage.setItem("vrata.identity.v2.storage-check", "1");
+    if (sessionStorage.getItem("vrata.identity.v2.storage-check") !== "1") throw new Error("storage_unavailable");
+    sessionStorage.removeItem("vrata.identity.v2.storage-check");
+    const restored = await redeemRoomRecovery({ apiBaseUrl, roomId, displayName, credential: roomRecoveryCredential.value });
+    roomIdentityTab.rememberIdentity(restored.identityCredential);
+    if (sessionStorage.getItem(`vrata.identity.v2.${encodeURIComponent(roomId)}`) !== restored.identityCredential) {
+      throw new Error("storage_unavailable");
+    }
+    sessionStorage.setItem("vrata.participantId", restored.participantId);
+    roomRecoveryCredential.value = "";
+    runtimeSessionGate.require("identity_recovery_required");
+    window.location.reload();
+  })().catch(() => {
+    roomRecoveryStatus.textContent = "Could not restore access. Ask the room administrator for a new code.";
+  }).finally(() => { roomRecoverySubmit.disabled = false; });
+});
+
 notesScopeSelect.addEventListener("change", () => {
   void changeNotesScope(notesScopeSelect.value === "private" ? "private" : "shared").then(changed => {
     if (changed) templatePreferences.setNotesScope(notesState.activeNotesScope);
@@ -8256,6 +8284,7 @@ async function main(): Promise<void> {
   debugState.personalRoom.isOwner = boot.roomType === "personal" && (boot.identityProtocolVersion === 2
     ? boot.isOwner === true : boot.ownerParticipantId === participantId);
   openPersonalRoomButton.hidden = !runtimeFlags.personalRoomsEnabled;
+  openPersonalRoomButton.disabled = !runtimeFlags.personalRoomsEnabled;
   roomStateAccessToken = boot.access.token;
   debugState.access = {
     ...boot.access,

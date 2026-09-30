@@ -74,8 +74,8 @@ owner+Host authority in one Memory operation or one PostgreSQL transaction.
 An error inserting authority rolls the entire room back. The old owner ID or
 `role=host` request body is never an ownership proof. The prepared personal-room
 route and button return and retain the room-bound owner proof in tab storage;
-the public ID alone cannot reopen the room. An explicit administrator recovery
-endpoint and cross-tab owner hand-off are still outstanding.
+the public ID alone cannot reopen the room. Cross-tab owner hand-off is still
+outstanding.
 
 The internal `/api/internal/identity-session/verify` checks its authenticated
 service caller, global minimum, current epoch/revocation and authority before
@@ -88,8 +88,8 @@ before joining room-state, publishing presence or using identity-bound
 seating/avatar objects; a browser test covers fresh entry and reload. REST session verification,
 session-control commands and the LiveKit/browser-executor namespace have a
 prepared v2 branch. These pieces do not activate v2 on the shared staging host:
-private-owner lifecycle, recovery, abuse controls and complete REST/write
-enforcement remain part of the activation gate.
+private-owner hand-off, abuse controls and complete REST/write enforcement
+remain part of the activation gate.
 
 ### Waiting room
 
@@ -114,6 +114,17 @@ Legacy owners/hosts use the existing admin-only, one-use `rr2` recovery. Recover
 retains the approved legacy participant ID for existing private notes, consumes
 the marker atomically and rotates the epoch. The HTTP recovery endpoint must
 verify the real admin actor for issuance and avoid logging raw credentials.
+
+The prepared route is `POST /api/rooms/:id/identity-recovery`, authenticated
+only by the control-plane administrator token. The administrator supplies the
+current legacy `participantId` and `role=host|owner`; storage checks the room,
+role binding and authority revision. A ten-minute `rr2` proof is returned once
+with `Cache-Control: no-store`, then delivered to the intended person outside
+the app. The person pastes it into **Recover room access**, which makes an
+explicit proof-only `POST /api/tokens/state` and reloads after saving the new
+room-keyed identity in tab storage. Never put the recovery code in a room URL,
+invite or diagnostic report. Replay, expiry, wrong-room redemption and a copied
+public participant ID are denied in the isolated PostgreSQL/browser checks.
 
 ## API and live room-state boundary
 

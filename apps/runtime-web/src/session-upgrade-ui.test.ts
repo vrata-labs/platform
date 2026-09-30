@@ -26,6 +26,7 @@ test("a throwing local teardown still shows the migration dialog and preserves i
     return elements.get(id)!;
   };
   element("session-upgrade-drafts").parentElement = new Element();
+  element("room-recovery-panel").parentElement = new Element();
   const values = new Map<string, string>();
   const gate = createSessionUpgradeGate();
   const ui = mountSessionUpgradeUi({
@@ -43,5 +44,7 @@ test("a throwing local teardown still shows the migration dialog and preserves i
   assert.match(element("session-upgrade-message").textContent, /Some local cleanup failed/);
   assert.ok(!element("session-upgrade-message").textContent.includes("private cleanup detail"));
   assert.ok([...values.values()].some(value => value.includes("unsaved text")));
+  gate.require("identity_recovery_required");
+  assert.equal(element("room-recovery-panel").open, true, "administrator recovery is available even when the old session is terminal");
   ui.dispose();
 });

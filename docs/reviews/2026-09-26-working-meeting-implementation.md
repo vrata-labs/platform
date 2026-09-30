@@ -175,6 +175,14 @@ API test files переведены на последовательный зап
 
 [Артефакт staging gate](https://github.com/vrata-labs/platform/actions/runs/36689309883/artifacts/11085983559): четыре участника, собственный PDF и notes, загрузка Hall/BlueOffice/ArtGallery на текущих страницах, XR seat/telemetry сценарии и полный cleanup. Дополнительный public smoke после gate: `/health`, `/rooms/demo-room`, `/control-plane`, `/api/templates` — 200. `/health.features` не содержит identityProtocolVersion: минимум общего staging по-прежнему 1, v2 здесь не проверялся и не активировался. В этом run откат не понадобился.
 
+### T01a-S2b-V: администраторское восстановление legacy Host/Owner
+
+Следующий подготовительный срез добавляет HTTP-маршрут выдачи одноразового room/role-bound recovery только для проверенного admin-token. Выдача не принимает legacy JWT или один лишь публичный participant ID за полномочие администратора; storage проверяет текущий legacy Host/Owner и revision. Proof действителен десять минут, возвращается только в ответе `no-store` и не попадает в URL/логи. Пользователь вводит код в **Recover room access** — в HUD или в диалоге уже заблокированной старой сессии. Отдельный proof-only обмен выдаёт server identity, сохраняет её в текущей вкладке и обновляет страницу; старые токены и ID в запрос не отправляются.
+
+Изолированные PostgreSQL проверки покрывают выдачу Host и Owner, сохранение прежнего личного ID/private state, отказ без admin-token, ошибочный target, wrong room, истечение срока и replay. Браузерные сценарии проверяют оба пути UI: private owner при отказе входа и legacy Host из терминального upgrade dialog после того, как новая v2-вкладка уже вошла в ту же комнату. Общий staging остаётся на minimum 1; активация всё ещё заблокирована отсутствием retention/rate-limit, owner hand-off и окончательного REST/media enforcement.
+
+Локальная проверка: workspace lint/typecheck/build, API с PostgreSQL и pinned rollback storage **845/845**, runtime **928/928**, room-state **76/76**, shared-types **30/30**. Первый полный прогон с четырьмя workers обнаружил три задержки в GPU-нагруженных reference/аватарных сценариях; все три прошли отдельно без изменения исполняемого кода. Последующий serial E2E выявил настоящую гонку: кнопку «Open my room» можно было нажать до server-ID boot. Кнопка теперь недоступна до завершения boot, а сценарий ждёт её активного состояния. Финальный полный local `pnpm test:e2e --workers=1` на окончательном исполняемом дереве — **156/156**, без skip/retry (30,3 минуты). Это не проверка на общем staging до публикации exact SHA.
+
 ## Публикация первого среза T01/T12
 
 Локально прошли workspace lint/typecheck/build/tests с PostgreSQL, затем runtime build и 905 runtime tests после финальных правок. Полный `pnpm test:e2e` на финальном исполняемом дереве: **148 passed**, без skip (41.6 min).

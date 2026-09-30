@@ -42,6 +42,8 @@ test("public static/catalog paths remain distinct from every room credential pat
   assert.equal(legacyBoundaryApplies("GET", "/api/tokens/state"), true);
   assert.equal(legacyBoundaryApplies("POST", "/api/personal-room"), false, "the personal owner bootstrap verifies the floor and creates proof itself");
   assert.equal(legacyBoundaryApplies("POST", "/api/tokens/remote-browser-media"), false, "executor grants validate an internal service secret and live room-state binding");
+  assert.equal(legacyBoundaryApplies("POST", "/api/rooms/room/identity-recovery"), false, "administrator recovery authenticates independently of legacy room sessions");
+  assert.equal(legacyBoundaryApplies("GET", "/api/rooms/room/identity-recovery"), true);
   assert.equal(legacyBoundaryApplies("POST", "/api/internal/identity-session/verify"), false, "this internal route must authenticate its service token and current v2 session itself");
   assert.equal(legacyBoundaryApplies("GET", "/api/internal/identity-session/verify"), true);
   for (const path of ["/api/tokens/state", "/api/tokens/media", "/api/tokens/remote-browser-media", "/api/personal-room"]) {

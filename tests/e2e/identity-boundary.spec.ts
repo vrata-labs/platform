@@ -62,6 +62,9 @@ test("real protocol activation stops a legacy client while a fresh tab joins wit
     await page.goto(`${fixture.origin}/rooms/demo-room?role=host&onboard=0`);
     await expect(page.locator("#notes-editor")).toBeEnabled({ timeout: 30_000 });
     await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__?.roomStateConnected)).toBe(true);
+    const legacyHostId = await page.evaluate(() => (window as any).__VRATA_DEBUG__?.participantId) as string;
+    const legacyRoom = await storage.getRoom("demo-room");
+    await storage.updateRoom("demo-room", { sessionControl: { ...legacyRoom!.sessionControl, hostParticipantId: legacyHostId } });
     const before = await page.locator("#notes-editor").inputValue();
     const scope = await page.locator("#notes-scope-select").inputValue();
     let sent!: () => void;
@@ -103,9 +106,67 @@ test("real protocol activation stops a legacy client while a fresh tab joins wit
     expect((await (await rejoin).json() as { participantId: string }).participantId).toBe(joined.participantId);
     await expect.poll(() => fresh.evaluate(() => (window as any).__VRATA_DEBUG__?.roomStateConnected)).toBe(true);
     expect(await storage.identityProtocol.minimum()).toBe(2);
+    const recovery = await request.post(`${fixture.origin}/api/rooms/demo-room/identity-recovery`, {
+      headers: { "x-vrata-admin-token": fixture.adminToken }, data: { participantId: legacyHostId, role: "host" }
+    });
+    expect(recovery.status()).toBe(201);
+    const proof = (await recovery.json() as { recoveryCredential: string }).recoveryCredential;
+    await expect(page.locator("#room-recovery-panel")).toBeVisible();
+    await page.locator("#room-recovery-panel summary").click();
+    await page.locator("#room-recovery-credential").fill(proof);
+    const recovered = page.waitForResponse(response => new URL(response.url()).pathname === "/api/tokens/state" && response.status() === 200);
+    await page.locator("#room-recovery-submit").click();
+    await recovered;
+    await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__?.participantId).catch(() => null)).toBe(legacyHostId);
+    await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__?.access?.role).catch(() => null)).toBe("host");
   } finally {
     releaseWrite?.();
     await Promise.allSettled([page.goto("about:blank"), fresh.close()]);
+    await pool.end();
+    await fixture.close();
+  }
+});
+
+test("legacy private owner recovers through an administrator-issued single-use code", async ({ page, request }) => {
+  test.skip(!process.env.VRATA_TEST_POSTGRES_URL, "Requires an isolated PostgreSQL fixture");
+  test.setTimeout(90_000);
+  const fixture = await startReferenceTemplateFixture(process.env.VRATA_TEST_POSTGRES_URL!, {
+    stateTokenSecret: "isolated-v2-legacy-owner-recovery-secret-32-bytes"
+  });
+  const requireApi = createRequire(resolve("apps/api/package.json"));
+  const { Pool } = requireApi("pg");
+  const pool = new Pool({ connectionString: process.env.VRATA_TEST_POSTGRES_URL,
+    options: `-c search_path=${fixture.schema},public` });
+  const { PostgresStorage } = await import(pathToFileURL(resolve("apps/api/dist/storage.js")).href);
+  try {
+    const storage = new PostgresStorage(pool);
+    const legacy = await storage.createRoom({ tenantId: "demo-tenant", templateId: "personal-room-basic",
+      name: "Recover legacy owner", roomType: "personal", ownerParticipantId: "legacy-owner",
+      visibility: "private", guestAllowed: false, sessionControl: { hostParticipantId: "legacy-owner" } });
+    await storage.identityProtocol.raise(2);
+    const denied = page.waitForResponse(response => new URL(response.url()).pathname === "/api/tokens/state");
+    await page.goto(`${fixture.origin}/rooms/${legacy.roomId}?onboard=0`, { waitUntil: "domcontentloaded" });
+    expect((await denied).status()).toBe(403);
+    const issued = await request.post(`${fixture.origin}/api/rooms/${legacy.roomId}/identity-recovery`, {
+      headers: { "x-vrata-admin-token": fixture.adminToken },
+      data: { participantId: "legacy-owner", role: "owner" }
+    });
+    expect(issued.status()).toBe(201);
+    const proof = (await issued.json() as { recoveryCredential: string }).recoveryCredential;
+    await page.locator("#room-recovery-panel summary").click();
+    await page.locator("#room-recovery-credential").fill(proof);
+    const recovered = page.waitForResponse(response => new URL(response.url()).pathname === "/api/tokens/state" && response.status() === 200);
+    await page.locator("#room-recovery-submit").click();
+    await recovered;
+    await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__?.participantId).catch(() => null)).toBe("legacy-owner");
+    await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__?.personalRoom?.isOwner).catch(() => null)).toBe(true);
+    await expect(page.locator("#notes-editor")).toBeEnabled();
+    const replay = await request.post(`${fixture.origin}/api/tokens/state`, {
+      data: { roomId: legacy.roomId, identityProtocolVersion: 2, recoveryCredential: proof }
+    });
+    expect(replay.status()).toBe(409);
+  } finally {
+    await page.goto("about:blank").catch(() => undefined);
     await pool.end();
     await fixture.close();
   }
@@ -146,7 +207,7 @@ test("v2 personal owner persists across reload and a copied public ID cannot reo
     expect((await reloadAdmission).status()).toBe(200);
     await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__?.participantId)).toBe(ownerId);
     await page.goto(`${fixture.origin}/rooms/demo-room?onboard=0`, { waitUntil: "domcontentloaded" });
-    await expect(page.locator("#open-personal-room")).toBeVisible();
+    await expect(page.locator("#open-personal-room")).toBeEnabled();
     await page.locator("#open-personal-room").click();
     await expect.poll(() => new URL(page.url()).pathname).toBe(new URL(personalUrl).pathname);
     await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__?.participantId)).toBe(ownerId);

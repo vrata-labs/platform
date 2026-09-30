@@ -59,9 +59,16 @@
             <select id="space-select" disabled>
               <option>Loading spaces...</option>
             </select>
-            <button id="open-personal-room" type="button">Open my room</button>
+            <button id="open-personal-room" type="button" disabled>Open my room</button>
             <div id="space-select-status" class="space-select-status">Loading spaces...</div>
           </div>
+          <details id="room-recovery-panel" class="room-recovery-panel">
+            <summary>Recover room access</summary>
+            <label for="room-recovery-credential">Administrator recovery code</label>
+            <input id="room-recovery-credential" type="password" autocomplete="off" spellcheck="false" />
+            <button id="room-recovery-submit" type="button">Restore access</button>
+            <p id="room-recovery-status" role="status"></p>
+          </details>
           <section id="session-upgrade-drafts" hidden aria-labelledby="session-upgrade-drafts-title">
               <h2 id="session-upgrade-drafts-title">Local note drafts</h2>
               <p id="session-upgrade-draft-status" role="status"></p>

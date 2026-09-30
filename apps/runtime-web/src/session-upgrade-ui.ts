@@ -20,6 +20,8 @@ export function mountSessionUpgradeUi(input: {
   const message = element("session-upgrade-message");
   const reloadButton = element<HTMLButtonElement>("session-upgrade-reload");
   const draftPanel = element("session-upgrade-drafts");
+  const recoveryPanel = input.document.getElementById("room-recovery-panel");
+  const recoveryHome = recoveryPanel?.parentElement;
   const draftList = element("session-upgrade-draft-list");
   const draftStatus = element("session-upgrade-draft-status");
   const discardButton = element<HTMLButtonElement>("session-upgrade-discard-drafts");
@@ -73,6 +75,10 @@ export function mountSessionUpgradeUi(input: {
     if (shutdownFailed) message.textContent += " Some local cleanup failed. Save your drafts and close this tab before rejoining.";
     reloadButton.hidden = recovery || repeated;
     dialog.append(draftPanel);
+    if (recoveryPanel) {
+      dialog.append(recoveryPanel);
+      (recoveryPanel as HTMLDetailsElement).open = reason === "identity_recovery_required";
+    }
     renderDrafts();
     if (!dialog.open) dialog.showModal();
     (reloadButton.hidden ? title : reloadButton).focus();
@@ -111,6 +117,7 @@ export function mountSessionUpgradeUi(input: {
     discardButton.onclick = null;
     if (dialog.open) dialog.close();
     draftHome.append(draftPanel);
+    if (recoveryPanel && recoveryHome) recoveryHome.append(recoveryPanel);
   }
   return { dispose, preserveDraft };
 }

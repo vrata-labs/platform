@@ -2105,6 +2105,36 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     return;
   }
 
+  const identityRecoveryMatch = url.pathname.match(/^\/api\/rooms\/([^/]+)\/identity-recovery$/);
+  if (method === "POST" && identityRecoveryMatch) {
+    const roomId = decodeURIComponent(identityRecoveryMatch[1]);
+    const actor = await requireControlPlanePermission(request, response, {
+      permission: "room.session-control", action: "identity.recovery.issue", objectType: "room", objectId: roomId
+    });
+    if (!actor) return;
+    if (actor.actorType !== "admin-token") return json(response, 403, { error: "forbidden" });
+    const room = await storage.getRoom(roomId);
+    if (!room) return json(response, 404, { error: "room_not_found" });
+    const payload = (await parseBody<{ participantId?: unknown; role?: unknown }>(request)) ?? {};
+    const participantId = normalizeParticipantId(payload.participantId);
+    if (!participantId || (payload.role !== "host" && payload.role !== "owner")) {
+      return json(response, 400, { error: "invalid_identity_recovery_target" });
+    }
+    try {
+      const service = createRoomIdentityService(storage.roomIdentities, getStateTokenSecret(), Date.now,
+        { identityLifetimeSeconds: 86_400 });
+      const issued = await service.issueRecovery({ tenantId: room.tenantId, roomId,
+        targetParticipantId: participantId, targetRole: payload.role,
+        expiresAt: new Date(Date.now() + 600_000).toISOString(),
+        issuer: { actorType: "admin-token", actorId: actor.actorId, role: "admin" } });
+      return json(response, 201, { recoveryCredential: issued.credential, expiresAt: issued.expiresAt });
+    } catch (error) {
+      const failure = lifecycleV2Error(error);
+      if (failure) return json(response, failure.status, { error: failure.error });
+      throw error;
+    }
+  }
+
   const roomPersonalStateMatch = url.pathname.match(/^\/api\/rooms\/([^/]+)\/personal-state$/);
   if ((method === "GET" || method === "PUT") && roomPersonalStateMatch) {
     if (!isPersonalRoomsFeatureEnabled()) return json(response, 404, { error: "personal_rooms_disabled" });

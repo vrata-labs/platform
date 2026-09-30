@@ -211,6 +211,18 @@ canvas {
   gap: 6px;
 }
 
+.room-recovery-panel {
+  margin-top: 14px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.room-recovery-panel[open] { display: grid; gap: 8px; }
+.room-recovery-panel summary { cursor: pointer; }
+.room-recovery-panel input { width: 100%; }
+.room-recovery-panel p { margin: 0; color: var(--muted); }
+
 .attributions-panel {
   margin-top: 14px;
   display: grid;

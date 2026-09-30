@@ -61,7 +61,7 @@ test("internal room-state verifier trusts v2 possession and current authority, n
         body: JSON.stringify({ roomId: scope.roomId, participantId, sessionToken: token }) });
     assert.equal((await verify(sessionToken, identity.participantId, {})).status, 403);
     assert.equal((await verify(sessionToken)).status, 409, "no v2 session is usable before activation");
-    await storage.createRoom({ tenantId: scope.tenantId, templateId: "meeting-room-basic", name: "Legacy personal materials",
+    const legacyPersonal = await storage.createRoom({ tenantId: scope.tenantId, templateId: "meeting-room-basic", name: "Legacy personal materials",
       roomType: "personal", ownerParticipantId: "legacy-personal-owner", visibility: "private" });
     const publicRoom = await storage.createRoom({ tenantId: scope.tenantId, templateId: "meeting-room-basic", name: "Server-issued IDs" });
     const legacyHostRoom = await storage.createRoom({ tenantId: scope.tenantId, templateId: "meeting-room-basic",
@@ -81,6 +81,57 @@ test("internal room-state verifier trusts v2 possession and current authority, n
     const oldMediaRoom = (await media(oldSession.token, "legacy-listener")).video.room;
     assert.equal(oldMediaRoom, `${process.env.LIVEKIT_ROOM_PREFIX ?? "vrata-"}${publicRoom.roomId}`);
     await storage.identityProtocol.raise(2);
+    const recover = (targetRoomId: string, participantId: string, role: "host" | "owner", authorized = true) =>
+      fetch(`${baseUrl}/api/rooms/${targetRoomId}/identity-recovery`, { method: "POST", headers: {
+        "content-type": "application/json", ...(authorized ? { "x-vrata-admin-token": "test-admin" } : {})
+      }, body: JSON.stringify({ participantId, role }) });
+    assert.equal((await recover(legacyHostRoom.roomId, "legacy-host-id", "host", false)).status, 401);
+    const oldHostJwt = signRoomSessionToken({ tenantId: legacyHostRoom.tenantId, roomId: legacyHostRoom.roomId,
+      participantId: "legacy-host-id", displayName: "Legacy Host", role: "host", roleSource: "trusted",
+      permissions: [], sessionId: randomUUID(), jti: randomUUID(), iat: Math.floor(Date.now() / 1000),
+      exp: Math.floor(Date.now() / 1000) + 600 }, secret);
+    assert.equal((await fetch(`${baseUrl}/api/rooms/${legacyHostRoom.roomId}/identity-recovery`, {
+      method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${oldHostJwt}` },
+      body: JSON.stringify({ participantId: "legacy-host-id", role: "host" })
+    })).status, 403, "an old trusted Host JWT cannot issue its own recovery secret");
+    assert.equal((await recover(legacyHostRoom.roomId, "spoofed-host", "host")).status, 403);
+    const hostRecovery = await recover(legacyHostRoom.roomId, "legacy-host-id", "host");
+    assert.equal(hostRecovery.status, 201);
+    assert.equal(hostRecovery.headers.get("cache-control"), "no-store");
+    const hostProof = (await hostRecovery.json() as { recoveryCredential: string }).recoveryCredential;
+    assert.ok(hostProof.startsWith("rr2."));
+    const redeem = (targetRoomId: string, recoveryCredential: string) => fetch(`${baseUrl}/api/tokens/state`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({
+        roomId: targetRoomId, identityProtocolVersion: 2, participantId: "spoofed-public-id", recoveryCredential
+      })
+    });
+    assert.equal((await redeem(publicRoom.roomId, hostProof)).status, 409, "recovery proof is room-bound");
+    const hostSession = await redeem(legacyHostRoom.roomId, hostProof);
+    assert.equal(hostSession.status, 200);
+    const restoredHost = await hostSession.json() as { participantId: string; role: string; identityCredential: string };
+    assert.equal(restoredHost.participantId, "legacy-host-id");
+    assert.equal(restoredHost.role, "host");
+    assert.ok(restoredHost.identityCredential.startsWith("ri2."));
+    assert.equal((await redeem(legacyHostRoom.roomId, hostProof)).status, 409, "recovery proof is single-use");
+    const expiring = await createRoomIdentityService(storage.roomIdentities, secret).issueRecovery({
+      tenantId: legacyHostRoom.tenantId, roomId: legacyHostRoom.roomId,
+      targetParticipantId: "legacy-host-id", targetRole: "host", expiresAt: new Date(Date.now() + 3000).toISOString(),
+      issuer: { actorType: "admin-token", actorId: "test-admin", role: "admin" }
+    });
+    await delay(3200);
+    assert.equal((await redeem(legacyHostRoom.roomId, expiring.credential)).status, 409, "expired recovery proof cannot be redeemed");
+    const ownerRecovery = await recover(legacyPersonal.roomId, "legacy-personal-owner", "owner");
+    assert.equal(ownerRecovery.status, 201);
+    const ownerProof = (await ownerRecovery.json() as { recoveryCredential: string }).recoveryCredential;
+    const ownerSession = await redeem(legacyPersonal.roomId, ownerProof);
+    assert.equal(ownerSession.status, 200);
+    const restoredOwner = await ownerSession.json() as { participantId: string; role: string; isOwner: boolean; token: string };
+    assert.equal(restoredOwner.participantId, "legacy-personal-owner");
+    assert.equal(restoredOwner.role, "host");
+    assert.equal(restoredOwner.isOwner, true);
+    assert.equal((await fetch(`${baseUrl}/api/rooms/${legacyPersonal.roomId}/personal-state`, {
+      headers: { authorization: `Bearer ${restoredOwner.token}` }
+    })).status, 200, "legacy owner recovers private state without changing participant ID");
     const legacyRoomV2Join = await fetch(`${baseUrl}/api/tokens/state`, { method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ roomId: legacyHostRoom.roomId, identityProtocolVersion: 2, participantId: "legacy-host-id", displayName: "New guest" }) });
     assert.equal(legacyRoomV2Join.status, 200, JSON.stringify(await legacyRoomV2Join.json()));
