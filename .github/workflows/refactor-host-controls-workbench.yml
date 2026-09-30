@@ -1,0 +1,104 @@
+name: Host control refactor workbench
+
+on:
+  push:
+    branches:
+      - chore/refactor-host-controls-workbench-20260930
+
+permissions:
+  contents: write
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  verify-host-controls:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout isolated workbench
+        uses: actions/checkout@v4
+      - name: Apply exact locally verified extraction
+        run: |
+          python3 - <<'PY'
+          import gzip, hashlib, json, pathlib, subprocess
+          def blob(data):
+              return hashlib.sha1(f'blob {len(data)}\0'.encode() + data).hexdigest()
+          data = b''.join(pathlib.Path(f'.refactor-workbench/host-part-{i}').read_bytes() for i in range(4))
+          assert blob(data) == '3f53ab5823162b81dac74a421d3d754856c9a6d5'
+          payload = json.loads(gzip.decompress(data))
+          main = payload['main']
+          assert main['path'] == 'apps/runtime-web/src/main.ts'
+          path = pathlib.Path(main['path'])
+          source = path.read_text()
+          assert blob(source.encode()) == main['before_git_sha'] == '3a8512c4c0c808e785fa49ae725a73e18de0c8f6'
+          for edit in sorted(main['edits'], key=lambda x: x['start'], reverse=True):
+              source = source[:edit['start']] + edit['text'] + source[edit['end']:]
+          assert blob(source.encode()) == main['after_git_sha'] == '2f3d3cf40d77e2d2dfbeece02fe57446b8a6adf2'
+          path.write_text(source)
+          expected = {
+              'apps/runtime-web/src/host-control-bindings.test.ts': '6eb775ffcc2e9452c9cfbe3f08e217976f054632',
+              'apps/runtime-web/src/host-control-bindings.ts': 'e55ec27f9b054aafbfb86362025259bd600d5808',
+              'apps/runtime-web/src/host-controls-async.test.ts': '9eefd57e86bdfefcbbcca9e6a7b728190e895af3',
+              'apps/runtime-web/src/host-controls-runtime.test.ts': '43e420b315559ba8836b4c000cbb58ba5ed378f6',
+              'apps/runtime-web/src/host-controls-runtime.ts': 'beee81e2369b75fdc7c0cd891a384881f98dfefd',
+              'apps/runtime-web/src/room-access-messages.test.ts': '8e9c46b8b28104e4e55ff8e97e9ad9865f55d33d',
+              'apps/runtime-web/src/room-access-messages.ts': 'ab3d1f1912c070a149f1e2148165c633c85df52c',
+              'apps/runtime-web/src/testing/host-controls-harness.ts': '2633535abc61577032cf6fe956a778ab7adbe311'
+          }
+          assert set(payload['files']) == set(expected)
+          for name, content in payload['files'].items():
+              path = pathlib.Path(name)
+              assert not path.exists(), name
+              assert blob(content.encode()) == expected[name], name
+              path.write_text(content)
+          paths = sorted([main['path'], *expected])
+          subprocess.run(['git', 'add', '--', *paths], check=True)
+          subprocess.run(['git', 'diff', '--cached', '--check'], check=True)
+          pathlib.Path('/tmp/host-refactor.patch').write_bytes(subprocess.check_output(['git', 'diff', '--cached', '--binary']))
+          pathlib.Path('/tmp/host-refactor-blobs.json').write_text(json.dumps({name: blob(pathlib.Path(name).read_bytes()) for name in paths}, indent=2))
+          print(pathlib.Path('/tmp/host-refactor-blobs.json').read_text())
+          PY
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install locked dependencies
+        run: |
+          pnpm install --frozen-lockfile
+          chmod 644 packages/asset-pipeline/bin/vrata.mjs
+      - name: Build shared contracts and runtime
+        run: pnpm --filter @vrata/shared-types --filter @vrata/runtime-web build 2>&1 | tee /tmp/host-refactor-build.log
+      - name: Runtime lint and typecheck
+        run: |
+          pnpm --filter @vrata/runtime-web lint
+          pnpm --filter @vrata/runtime-web typecheck
+      - name: Full runtime unit suite
+        run: pnpm --filter @vrata/runtime-web test 2>&1 | tee /tmp/host-refactor-tests.log
+      - name: Commit verified changes to isolated branch only
+        run: |
+          test "$GITHUB_REF_NAME" = 'chore/refactor-host-controls-workbench-20260930'
+          git diff --cached --check
+          git diff --exit-code
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'refactor(runtime): extract host controls and session polling'
+          git push origin HEAD:refs/heads/chore/refactor-host-controls-workbench-20260930
+          git rev-parse HEAD | tee /tmp/host-refactor-commit.txt
+      - name: Upload verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: host-refactor-verification
+          retention-days: 7
+          if-no-files-found: ignore
+          path: |
+            /tmp/host-refactor.patch
+            /tmp/host-refactor-blobs.json
+            /tmp/host-refactor-build.log
+            /tmp/host-refactor-tests.log
+            /tmp/host-refactor-commit.txt
