@@ -217,6 +217,19 @@ API test files переведены на последовательный зап
 
 В Memory/PostgreSQL проверены гонки CAS, чужой ID, отозванный и cross-room target, отсутствие автоматического наследования Host, отзыв recovery после передачи. Реальный API и браузер подтверждают admin-to-recipient и owner-to-recipient handoff, право нового владельца управлять комнатой даже в роли Member, live update и reload. На общем staging floor 2 не поднимается до окончания проверки всех effect-bearing REST/media действий и политики архивирования длительно живущих комнат.
 
+Локально прошли lint/typecheck/build, пакетные тесты с PostgreSQL и pinned rollback: API **854/854**, runtime **931/931**, room-state **76/76**, shared-types **30/30**, tools **125/125**; identity-browser spec **7/7**. Полный local E2E на окончательном дереве запускался дважды: под нагрузкой программного рендеринга первый дал 157/158 с отказом старого seat-marker сценария (он отдельно прошёл), второй — 146 успешных, 6 таймаутов в прежних сценах/media и 6 незапущенных. Полный E2E изолированного CI для exact SHA прошёл; локальный полный прогон зелёным не объявляется.
+
+| Этап передачи владельца | Результат |
+|---|---|
+| Проверенный и опубликованный SHA | `597d917212c78ec442d94df151151642aec0d164` |
+| [CI 36837708041](https://github.com/vrata-labs/platform/actions/runs/36837708041) | Success: пакетные тесты, полный E2E, M0.5 и pinned assets |
+| [Docker Publish 36837710736](https://github.com/vrata-labs/platform/actions/runs/36837710736) | Success: immutable images exact SHA |
+| [Staging Deploy 36864044918](https://github.com/vrata-labs/platform/actions/runs/36864044918) | Success: **52/52 staging E2E**, **1/1 blocking Rutube**, successful SHA сохранён; rollback skipped |
+
+Первые три gated запуска точного SHA — [36841653380](https://github.com/vrata-labs/platform/actions/runs/36841653380), [36849194733](https://github.com/vrata-labs/platform/actions/runs/36849194733), [36858902675](https://github.com/vrata-labs/platform/actions/runs/36858902675) — не прошли из-за разных таймаутов входа, сцен и media. Каждый штатно откатился на предшествующий successful SHA. В сетевых артефактах Hall GLB вернул HTTP 200, но за ~42 секунды была доставлена только часть 18,9 МБ; затем тот же asset отдавался целиком за ~3 секунды. Runtime/scene сроки и проверки не ослаблялись. Четвёртый запуск без изменения исполняемого кода прошёл полностью.
+
+[Артефакт успешного gate](https://github.com/vrata-labs/platform/actions/runs/36864044918/artifacts/11165215941): Hall, BlueOffice и ArtGallery загрузились на текущих страницах, встреча и cleanup завершились; последующий public smoke `/health`, `/rooms/demo-room`, `/control-plane`, `/api/templates` — 200. Общий staging по-прежнему на identity floor 1: end-to-end v2 handoff проверен локально и в CI-изолированных тестах, не заявлен активным на общем хосте.
+
 ## Публикация первого среза T01/T12
 
 Локально прошли workspace lint/typecheck/build/tests с PostgreSQL, затем runtime build и 905 runtime tests после финальных правок. Полный `pnpm test:e2e` на финальном исполняемом дереве: **148 passed**, без skip (41.6 min).
