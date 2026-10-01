@@ -70,9 +70,12 @@ privacy-preserving origin budget shared by all API replicas: 180 new room
 entries/minute and 3,000/day, or 20 personal rooms/hour and 100/day. A valid
 identity proof, approved waiting proof and administrator recovery do not
 consume this new-identity budget. Caddy overwrites the client-IP and proxy
-authentication headers; the API trusts this address only with the matching
-internal-service token and otherwise hashes the direct transport peer. It never
-stores the raw address. A custom reverse proxy must provide the same verified
+authentication headers; the API trusts this address only with a separate
+32+-character `VRATA_IDENTITY_PROXY_TOKEN` and otherwise hashes the direct
+transport peer. It never stores the raw address. Staging provisions this token
+idempotently on the host before rollout without publishing or rotating it on
+retry. It does not share the room-state service token or state JWT key. A custom
+reverse proxy must provide the same verified
 peer boundary; without it, all clients behind that proxy share one budget.
 
 The B rollback contract prohibits deleting identity rows while their room

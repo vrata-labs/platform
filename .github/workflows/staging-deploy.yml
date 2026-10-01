@@ -219,6 +219,19 @@ jobs:
           python3 "\$STATE_KEY_HELPER" --env-file "$STAGING_APP_DIR/infra/docker/.env.staging"
           EOF
 
+      - name: Provision identity proxy key
+        run: |
+          PROXY_KEY_HELPER_B64="$(base64 -w0 "$RUNNER_TEMP/vrata-scene-rollback/staging-state-key.py")"
+          # The new key is generated on the staging host; only a status leaves it.
+          # shellcheck disable=SC2087
+          ssh -o StrictHostKeyChecking=no "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo bash -s" <<EOF
+          set -euo pipefail
+          PROXY_KEY_HELPER="\$(mktemp)"
+          trap 'rm -f "\$PROXY_KEY_HELPER"' EXIT
+          printf '%s' '$PROXY_KEY_HELPER_B64' | base64 -d > "\$PROXY_KEY_HELPER"
+          python3 "\$PROXY_KEY_HELPER" --env-file "$STAGING_APP_DIR/infra/docker/.env.staging" --ensure-proxy-key
+          EOF
+
       - name: Roll out staging images
         id: rollout
         continue-on-error: true

@@ -5,6 +5,6 @@
 
   reverse_proxy api:4000 {
     header_up X-Vrata-Client-IP {remote_host}
-    header_up X-Vrata-Proxy-Auth "{$VRATA_INTERNAL_SERVICE_TOKEN}"
+    header_up X-Vrata-Proxy-Auth "{$VRATA_IDENTITY_PROXY_TOKEN}"
   }
 }

@@ -7,14 +7,14 @@ export function identityAdmissionOriginHash(input: {
   peerAddress: string | undefined;
   proxyAddress: unknown;
   proxyToken: unknown;
-  internalToken: string | null;
+  proxySecret: string | null;
   signingSecret: string;
 }): string {
   let peer = input.peerAddress || "unknown";
   if (typeof input.proxyAddress === "string" && isIP(input.proxyAddress) !== 0
-    && typeof input.proxyToken === "string" && input.internalToken) {
+    && typeof input.proxyToken === "string" && input.proxySecret && input.proxySecret.length >= 32) {
     const provided = Buffer.from(input.proxyToken);
-    const expected = Buffer.from(input.internalToken);
+    const expected = Buffer.from(input.proxySecret);
     if (provided.length === expected.length && timingSafeEqual(provided, expected)) peer = input.proxyAddress;
   }
   return createHmac("sha256", input.signingSecret).update(`room-identity-admission-v2:${peer.toLowerCase()}`).digest("hex");

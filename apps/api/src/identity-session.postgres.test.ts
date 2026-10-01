@@ -46,6 +46,7 @@ test("internal room-state verifier trusts v2 possession and current authority, n
     child = spawn(process.execPath, [fileURLToPath(new URL("./index.js", import.meta.url))], { env: {
       ...process.env, NODE_ENV: "development", POSTGRES_URL: connection.href,
       CONTROL_PLANE_ADMIN_TOKEN: "test-admin", VRATA_INTERNAL_SERVICE_TOKEN: internalToken,
+      VRATA_IDENTITY_PROXY_TOKEN: "identity-session-test-proxy-key-32-bytes",
       LIVEKIT_API_KEY: "media-test-key", LIVEKIT_API_SECRET: "media-test-secret", LIVEKIT_URL: "ws://127.0.0.1:7880",
       STATE_TOKEN_SECRET: secret, API_PORT: String(port), VRATA_DISABLE_AUTOSTART: "0", NOAH_DISABLE_AUTOSTART: "0"
     }, stdio: ["ignore", "pipe", "pipe"] });
@@ -313,7 +314,7 @@ test("internal room-state verifier trusts v2 possession and current authority, n
     });
     assert.equal((await joinWithProxyHeaders("forged-proxy-proof")).status, 429,
       "a direct caller cannot override the exhausted transport-peer budget");
-    assert.equal((await joinWithProxyHeaders(internalToken)).status, 200,
+    assert.equal((await joinWithProxyHeaders("identity-session-test-proxy-key-32-bytes")).status, 200,
       "the authenticated reverse proxy can rate-limit distinct clients independently");
     assert.equal((await pool.query("select count(distinct origin_hash)::integer as total from room_identity_admission_buckets_v2 where kind='room'")).rows[0].total, 2);
     const hourStart = Math.floor(Date.now() / 3_600_000) * 3_600_000;

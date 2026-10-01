@@ -54,6 +54,56 @@ test("signing key replacement is explicit and uses the preserved helper before r
   assert.match(workflow, /cp tools\/staging-state-key\.py "\$RUNNER_TEMP\/vrata-scene-rollback\/"/);
 });
 
+test("proxy proof is provisioned atomically, independently and only once on the host", () => {
+  const result = execFileSync("python3", ["-B", "-c", `
+import importlib.util, json, stat, tempfile
+from pathlib import Path
+spec = importlib.util.spec_from_file_location("state_key", ${JSON.stringify(fileURLToPath(new URL("./staging-state-key.py", import.meta.url)))})
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+generated = "test-only-proxy-" + "x"*48
+with tempfile.TemporaryDirectory() as root:
+    path = Path(root)/"staging.env"
+    for initial in (b'STATE_TOKEN_SECRET=unchanged\\n', b'VRATA_IDENTITY_PROXY_TOKEN=REPLACE_WITH_PROXY_TOKEN\\nOTHER=value\\n'):
+        path.write_bytes(initial)
+        status = m.ensure_proxy_key(path, lambda: generated)
+        assert status == {"identityProxyKey": "provisioned"}
+        assert generated not in json.dumps(status)
+        assert path.read_text().count(generated) == 1
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
+        assert b'OTHER=value' not in initial or b'OTHER=value' in path.read_bytes()
+        assert b'STATE_TOKEN_SECRET=' not in initial or b'STATE_TOKEN_SECRET=unchanged' in path.read_bytes()
+        before = path.read_bytes()
+        assert m.ensure_proxy_key(path, lambda: (_ for _ in ()).throw(AssertionError("must not rotate"))) == {"identityProxyKey": "already_configured"}
+        assert path.read_bytes() == before
+    path.write_text('VRATA_IDENTITY_PROXY_TOKEN=a\\n')
+    try: m.ensure_proxy_key(path)
+    except ValueError as error: assert str(error) == 'identity_proxy_key_invalid'
+    else: raise AssertionError('weak key accepted')
+    path.write_text('VRATA_IDENTITY_PROXY_TOKEN=a\\nVRATA_IDENTITY_PROXY_TOKEN=b\\n')
+    try: m.ensure_proxy_key(path)
+    except ValueError as error: assert str(error) == 'identity_proxy_key_duplicate'
+    else: raise AssertionError('duplicate key accepted')
+    path.write_text('OTHER=before\\n')
+    def changed():
+        path.write_text('OTHER=concurrent-update\\n')
+        return generated
+    try: m.ensure_proxy_key(path, changed)
+    except ValueError as error: assert str(error) == 'identity_proxy_key_env_changed'
+    else: raise AssertionError('overwrote concurrent update')
+    assert path.read_text() == 'OTHER=concurrent-update\\n'
+    assert list(Path(root).iterdir()) == [path]
+print('proxy_key_checks_passed')
+`], { encoding: "utf8" });
+  assert.equal(result.trim(), "proxy_key_checks_passed");
+});
+
+test("staging provisions its proxy proof before rollout without rotating the state key", () => {
+  const workflow = readFileSync(new URL("../.github/workflows/staging-deploy.yml", import.meta.url), "utf8");
+  assert(workflow.indexOf("- name: Provision identity proxy key") < workflow.indexOf("- name: Roll out staging images"));
+  assert.match(workflow, /--ensure-proxy-key/);
+  assert.match(workflow, /cp tools\/staging-state-key\.py "\$RUNNER_TEMP\/vrata-scene-rollback\/"/);
+});
+
 test("staging rollout generates an independent frame key and preserves an existing one", () => {
   const source = readFileSync(new URL("../infra/docker/rollout-staging-images.sh", import.meta.url), "utf8");
   const code = /python3 - "\$ENV_FILE" "\$IMAGE_TAG" <<'PY'\n([\s\S]*?)\nPY/.exec(source)?.[1];

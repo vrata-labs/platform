@@ -595,7 +595,7 @@ function getBearerToken(request: IncomingMessage): string | null {
 function identityAdmissionOriginHash(request: IncomingMessage): string {
   return hashAdmissionOrigin({ peerAddress: request.socket.remoteAddress,
     proxyAddress: request.headers["x-vrata-client-ip"], proxyToken: request.headers["x-vrata-proxy-auth"],
-    internalToken: getInternalServiceToken(), signingSecret: getStateTokenSecret() });
+    proxySecret: process.env.VRATA_IDENTITY_PROXY_TOKEN ?? null, signingSecret: getStateTokenSecret() });
 }
 
 function resolveControlPlaneActor(request: IncomingMessage):
