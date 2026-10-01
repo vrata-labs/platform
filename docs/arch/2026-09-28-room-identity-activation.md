@@ -84,16 +84,17 @@ waiting entries; renewing an existing proof works at capacity. Closed admission
 windows are pruned, while identity and waiting records remain until their room
 is deleted. Operators must replace or retire a room before its lifetime cap;
 silently purging an identity with a live possession proof would break continuity
-and rollback guarantees. Room/owner hand-off and a long-lived-room archival
-policy remain part of the full activation review.
+and rollback guarantees. A long-lived-room archival policy remains part of
+the full activation review.
 
 A fresh personal owner gets a newly generated participant ID, room and
 owner+Host authority in one Memory operation or one PostgreSQL transaction.
 An error inserting authority rolls the entire room back. The old owner ID or
 `role=host` request body is never an ownership proof. The prepared personal-room
 route and button return and retain the room-bound owner proof in tab storage;
-the public ID alone cannot reopen the room. Cross-tab owner hand-off is still
-outstanding.
+the public ID alone cannot reopen the room. A current owner or administrator
+can explicitly hand off ownership to another proof-bound identity already
+admitted to the same personal room.
 
 The internal `/api/internal/identity-session/verify` checks its authenticated
 service caller, global minimum, current epoch/revocation and authority before
@@ -106,7 +107,7 @@ before joining room-state, publishing presence or using identity-bound
 seating/avatar objects; a browser test covers fresh entry and reload. REST session verification,
 session-control commands and the LiveKit/browser-executor namespace have a
 prepared v2 branch. These pieces do not activate v2 on the shared staging host:
-private-owner hand-off, abuse controls and complete REST/write enforcement
+complete effect-bearing REST/media enforcement and room archival policy
 remain part of the activation gate.
 
 ### Waiting room
@@ -127,6 +128,18 @@ existing owner ID cannot reopen that room. The creation response delivers the
 owner's proof once to the authorized creator; subsequent entry presents proof.
 An administrator creating a room on another person's behalf needs an explicit
 owner hand-off rather than a public ID being treated as a login secret.
+At floor 2, the recipient first joins that private personal room via a v2
+invitation and receives its own room-bound proof. The administrator or current
+owner then submits `POST /api/rooms/:id/owner/transfer` with that recipient's
+server-issued participant ID and the current authority revision. The parent
+room lock and CAS recheck that both actor and recipient remain active and
+room-scoped. The owner slot changes atomically; the independent Host slot is
+not silently transferred. A Member who owns a personal room can use its room
+controls through current ownership authority, not a forged Host role. The
+former owner loses private owner access even if its old session is still valid.
+Missing/stale revision, unknown or cross-room IDs and an old owner's second
+transfer are rejected. An owner may be offline after accepting the invite;
+an administrator's authenticated hand-off does not require live presence.
 
 Legacy owners/hosts use the existing admin-only, one-use `rr2` recovery. Recovery
 retains the approved legacy participant ID for existing private notes, consumes

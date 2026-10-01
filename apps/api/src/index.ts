@@ -2789,7 +2789,14 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     const session = actorResult.actor.actorType === "room-session"
       ? await verifyRoomSessionRequest(request, { roomId, participantId: actorResult.actor.participantId })
       : null;
+    const atFloor2 = await legacyIdentityBoundary.minimum() >= 2;
     const v2 = session?.ok && session.payload.identityProtocolVersion === 2;
+    const scope = { tenantId: room.tenantId, roomId };
+    const currentAuthority = atFloor2 ? await storage.roomIdentities.authority(scope) : null;
+    if (atFloor2 && !currentAuthority) throw new Error("room_identity_authority_unavailable");
+    const currentOwner = currentAuthority?.ownerIdentityId
+      ? await storage.roomIdentities.get(scope, currentAuthority.ownerIdentityId) : null;
+    if (currentAuthority?.ownerIdentityId && !currentOwner) throw new Error("room_identity_authority_unavailable");
     const participantIdForStatus = session?.ok ? session.payload.participantId : actorResult.actor.participantId;
     const currentRole = session?.ok ? session.payload.role : actorResult.actor.role;
     const effectiveRole = v2 ? currentRole
@@ -2808,12 +2815,14 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       ttlSeconds
     }) : null;
     json(response, 200, {
-      state: sanitizeSessionControlState(await legacyIdentityBoundary.minimum() >= 2
+      state: sanitizeSessionControlState(atFloor2
         ? await currentSessionControlV2(storage, room) : room.sessionControl),
+      ...(atFloor2 ? { authorityRevision: currentAuthority!.revision, ownerParticipantId: currentOwner?.participantId ?? null } : {}),
       participant: participantIdForStatus ? {
         participantId: participantIdForStatus,
         role: effectiveRole,
         permissions: getRoomPermissions(effectiveRole),
+        ...(v2 ? { isOwner: session.payload.isOwner === true } : {}),
         status: statusReason ? "blocked" : "active",
         reason: statusReason
       } : null,
@@ -3032,6 +3041,38 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     incrementPresenterChangeMetric(action, "allowed");
     json(response, 200, { state: sanitizeSessionControlState(updated.sessionControl), presenterParticipantId: action === "grant" ? targetParticipantId : null });
     return;
+  }
+
+  const ownerTransferMatch = url.pathname.match(/^\/api\/rooms\/([^/]+)\/owner\/transfer$/);
+  if (method === "POST" && ownerTransferMatch) {
+    const roomId = decodeURIComponent(ownerTransferMatch[1]);
+    if (await legacyIdentityBoundary.minimum() < 2) return json(response, 409, { error: "identity_required", reason: "identity_upgrade_required" });
+    const room = await storage.getRoom(roomId);
+    if (!room) return json(response, 404, { error: "room_not_found" });
+    if (room.roomType !== "personal") return json(response, 400, { error: "personal_room_required" });
+    const actor = await requireControlPlanePermission(request, response, {
+      permission: "room.session-control", action: "room.owner.transfer", objectType: "room", objectId: roomId,
+      targetRoomId: roomId, allowHostOwnRoom: true,
+      currentHostParticipantId: defaultSessionControlState(room.sessionControl).hostParticipantId
+    });
+    if (!actor) return;
+    if (actor.actorType !== "admin-token" && (actor.identityProtocolVersion !== 2 || actor.isOwner !== true)) {
+      return json(response, 403, { error: "identity_forbidden" });
+    }
+    const payload = (await parseBody<{ participantId?: unknown; expectedRevision?: unknown }>(request)) ?? {};
+    const targetParticipantId = normalizeParticipantId(payload.participantId);
+    if (!targetParticipantId || !Number.isSafeInteger(payload.expectedRevision) || (payload.expectedRevision as number) < 0) {
+      return json(response, 400, { error: "invalid_owner_transfer" });
+    }
+    try {
+      const updated = await applyRoomLifecycleV2({ storage, room, actor,
+        command: { type: "transfer-owner", targetParticipantId }, expectedRevision: payload.expectedRevision as number });
+      return json(response, 200, { ...updated, ownerParticipantId: targetParticipantId });
+    } catch (error) {
+      const failure = lifecycleV2Error(error);
+      if (failure) return json(response, failure.status, { error: failure.error });
+      throw error;
+    }
   }
 
   const hostTransferMatch = url.pathname.match(/^\/api\/rooms\/([^/]+)\/host\/transfer$/);

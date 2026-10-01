@@ -528,6 +528,32 @@ for (const backend of ["memory", "postgres"] as const) {
       }
     });
 
+    await t.test("administrator handoff cannot bind an unadmitted public owner ID", async () => {
+      const handoff = await fixture(t, backend);
+      const { scope, legacy } = await handoff.makeRoom(true, undefined, false);
+      await handoff.storage.identityProtocol.raise(2);
+      const invite = await handoff.issueV2Invite(scope, "member");
+      const recipient = await handoff.service.admit({ ...scope, displayName: "Recipient", inviteTokenHash: invite.tokenHash });
+      await assert.rejects(handoff.ids.transition(scope, admin, 0,
+        { type: "transfer-owner", targetParticipantId: legacy }), code("identity_not_active"));
+      const next = await handoff.ids.transition(scope, admin, 0,
+        { type: "transfer-owner", targetParticipantId: recipient.identity.participantId });
+      assert.equal(next.revision, 1);
+      assert.equal(next.hostIdentityId, null, "Host and owner are distinct authority slots");
+      assert.equal((await handoff.ids.resolve(recipient.identity))?.isOwner, true);
+      assert.equal((await handoff.ids.resolve(recipient.identity))?.role, "member");
+      await assert.rejects(handoff.ids.transition(scope, admin, 0,
+        { type: "transfer-owner", targetParticipantId: legacy }), code("authority_conflict"));
+      await assert.rejects(handoff.issueRecovery(scope, legacy, "owner"), code("identity_forbidden"));
+      const revoked = await handoff.create(scope);
+      await handoff.ids.revoke(scope, revoked.identity.identityId, 1);
+      await assert.rejects(handoff.ids.transition(scope, admin, 1,
+        { type: "transfer-owner", targetParticipantId: revoked.identity.participantId }), code("identity_not_active"));
+      assert.equal((await handoff.ids.authority(scope))?.ownerIdentityId, recipient.identity.identityId);
+      const locked = await handoff.ids.transition(scope, { actorType: "room-session", proof: recipient.identity }, 1, { type: "lock" });
+      assert.ok(locked.lifecycle.lockedAt, "Member owner can control their personal room without becoming Host");
+    });
+
     await t.test("owner transfer invalidates outstanding recovery and does not overwrite the Host slot", async () => {
       const { scope, legacy } = await f.makeRoom(true);
       const recovery = await f.issueRecovery(scope, legacy, "owner");

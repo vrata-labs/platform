@@ -40,7 +40,8 @@ import {
 } from "@vrata/shared-types";
 
 import { appendBrandingSuffix, applyRoomShellBootState, renderSceneAttributions } from "./boot-session.js";
-import { RuntimeAccessError, bootRuntime, deleteRoomDocument, downloadRoomDocument, exportRoomNote, exportRoomNotesArchive, fetchRoomDocumentMediaContent, fetchRoomDocumentPresentation, fetchRoomNote, fetchRoomSessionControl, fetchRuntimeSpaces, fetchStateToken, grantRoomPresenter, listPresence, listRoomDocuments, listRoomNoteVersions, openPersonalRoom, planVoiceSession, removePresence, removeRoomParticipant, resolveCurrentSpace, resolveJoinMode, restoreRoomNoteVersion, revokeRoomPresenter, runRoomSessionControlAction, savePersonalRoomState, saveRoomNote, selectRoomDocumentSurface, transferRoomHost, uploadRoomDocument, upsertPresence, type PresenceState, type RuntimeDocumentRecord, type RuntimePersonalState, type RuntimeSessionControlResponse, type RuntimeSpaceOption } from "./index.js";
+import { RuntimeAccessError, bootRuntime, deleteRoomDocument, downloadRoomDocument, exportRoomNote, exportRoomNotesArchive, fetchRoomDocumentMediaContent, fetchRoomDocumentPresentation, fetchRoomNote, fetchRoomSessionControl, fetchRuntimeSpaces, fetchStateToken, grantRoomPresenter, listPresence, listRoomDocuments, listRoomNoteVersions, openPersonalRoom, planVoiceSession, removePresence, removeRoomParticipant, resolveCurrentSpace, resolveJoinMode, restoreRoomNoteVersion, revokeRoomPresenter, runRoomSessionControlAction, savePersonalRoomState, saveRoomNote, selectRoomDocumentSurface, transferRoomHost, transferRoomOwner, uploadRoomDocument, upsertPresence, type PresenceState, type RuntimeDocumentRecord, type RuntimePersonalState, type RuntimeSessionControlResponse, type RuntimeSpaceOption } from "./index.js";
+import { canManageRoomControls, canTransferRoomOwnership, staleAuthorityResponse } from "./room-owner-controls.js";
 import { createRoomIdentityTab } from "./identity-session-tab.js";
 import { redeemRoomRecovery } from "./identity-recovery.js";
 import { probeDocumentMedia } from "./document-media-probe.js";
@@ -399,6 +400,7 @@ const endSessionButton = mustElement<HTMLButtonElement>("#end-session");
 const hostParticipantSelect = mustElement<HTMLSelectElement>("#host-participant-select");
 const removeParticipantButton = mustElement<HTMLButtonElement>("#remove-participant");
 const transferHostButton = mustElement<HTMLButtonElement>("#transfer-host");
+const transferOwnerButton = mustElement<HTMLButtonElement>("#transfer-owner");
 const grantPresenterButton = mustElement<HTMLButtonElement>("#grant-presenter");
 const revokePresenterButton = mustElement<HTMLButtonElement>("#revoke-presenter");
 const remoteBrowserControlEl = mustElement<HTMLDivElement>("#remote-browser-control");
@@ -1376,6 +1378,7 @@ let activeSceneRenderProfile: SceneBundleRenderProfile | undefined;
 let pbrRoomEnvironment: PbrRoomEnvironment | null = null;
 let availableSpaces: RuntimeSpaceOption[] = [];
 let latestSessionControl: RuntimeSessionControlResponse["state"] | null = null;
+let latestIdentityAuthorityRevision: number | null = null;
 let hostControlActionInFlight = false;
 let sessionControlRefreshInFlight = false;
 let lastSessionControlRefreshAtMs = 0;
@@ -1621,7 +1624,10 @@ function applyMergedPresenceParticipants(): void {
 }
 
 function canManageHostControls(): boolean {
-  return runtimeFlags.hostControlsEnabled && debugState.access.canManageRoomSession === true;
+  return canManageRoomControls({ enabled: runtimeFlags.hostControlsEnabled,
+    canManageSession: debugState.access.canManageRoomSession === true,
+    identityProtocolVersion: activeIdentityProtocolVersion,
+    roomType: debugState.personalRoom.roomType, isOwner: debugState.personalRoom.isOwner });
 }
 
 function currentVisibleParticipants(): PresenceState[] {
@@ -1688,6 +1694,11 @@ function renderHostControls(statusMessage?: string): void {
   endSessionButton.disabled = !visible || hostControlActionInFlight;
   removeParticipantButton.disabled = !visible || !selected || !selectedIsPresent || selected === participantId || hostControlActionInFlight;
   transferHostButton.disabled = !visible || !selected || !selectedIsPresent || selected === latestSessionControl?.hostParticipantId || hostControlActionInFlight;
+  transferOwnerButton.hidden = !(activeIdentityProtocolVersion === 2 && debugState.personalRoom.roomType === "personal" && debugState.personalRoom.isOwner);
+  transferOwnerButton.disabled = !canTransferRoomOwnership({ controlsVisible: visible,
+    identityProtocolVersion: activeIdentityProtocolVersion, roomType: debugState.personalRoom.roomType,
+    isOwner: debugState.personalRoom.isOwner, selectedParticipantId: selected, localParticipantId: participantId,
+    selectedIsPresent, authorityRevision: latestIdentityAuthorityRevision, actionInFlight: hostControlActionInFlight });
   grantPresenterButton.disabled = !visible || !selected || !selectedIsPresent || selected === presenterParticipantId || hostControlActionInFlight;
   revokePresenterButton.disabled = !visible || !selected || selected !== presenterParticipantId || hostControlActionInFlight;
 }
@@ -1776,10 +1787,23 @@ function disableRuntimeForSessionBlock(reason: string): void {
 
 function applySessionControlResponse(payload: RuntimeSessionControlResponse, statusMessage?: string): void {
   if (sessionControlBlocked) return;
-  latestSessionControl = payload.state;
   if (payload.participant?.status === "blocked" && payload.participant.reason) {
     disableRuntimeForSessionBlock(payload.participant.reason);
     return;
+  }
+  const responseRevision = payload.authorityRevision ?? payload.revision;
+  if (staleAuthorityResponse(latestIdentityAuthorityRevision, responseRevision)) return;
+  if (responseRevision !== undefined && Number.isSafeInteger(responseRevision) && responseRevision >= 0) {
+    latestIdentityAuthorityRevision = responseRevision;
+  }
+  latestSessionControl = payload.state;
+  if (activeIdentityProtocolVersion === 2 && debugState.personalRoom.roomType === "personal") {
+    if ("ownerParticipantId" in payload) {
+      debugState.personalRoom.ownerParticipantId = payload.ownerParticipantId ?? null;
+      debugState.personalRoom.isOwner = payload.ownerParticipantId === participantId;
+    } else if (payload.participant?.isOwner !== undefined) {
+      debugState.personalRoom.isOwner = payload.participant.isOwner;
+    }
   }
   if (payload.access && payload.token) {
     applyAccessDebug(payload.access, payload.token, payload.expiresInSeconds);
@@ -7624,6 +7648,16 @@ transferHostButton.addEventListener("click", () => {
   void runHostControlAction(
     () => transferRoomHost(apiBaseUrl, roomId, roomStateAccessToken, targetParticipantId),
     `Transferred host to ${targetParticipantId}`
+  );
+});
+
+transferOwnerButton.addEventListener("click", () => {
+  const targetParticipantId = hostParticipantSelect.value;
+  const revision = latestIdentityAuthorityRevision;
+  if (!targetParticipantId || revision === null || !canManageHostControls() || !debugState.personalRoom.isOwner) return;
+  void runHostControlAction(
+    () => transferRoomOwner(apiBaseUrl, roomId, roomStateAccessToken, targetParticipantId, revision),
+    `Transferred ownership to ${targetParticipantId}`
   );
 });
 

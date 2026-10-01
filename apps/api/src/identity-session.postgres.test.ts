@@ -158,6 +158,73 @@ test("internal room-state verifier trusts v2 possession and current authority, n
     assert.notEqual(continuity.identityCredential, owned.identityCredential);
     assert.equal((await personal({ roomId: owned.room.roomId, identityCredential: "ri2.invalid", participantId: owned.participantId })).status, 409);
     assert.equal((await personal({ roomId: owned.room.roomId })).status, 409, "a known room without owner proof cannot create a replacement");
+    const behalf = await storage.createRoom({ tenantId: scope.tenantId, templateId: "meeting-room-basic",
+      roomType: "personal", ownerParticipantId: "admin-selected-public-id", name: "Ownership handoff",
+      visibility: "private", guestAllowed: false });
+    const memberInvite = async () => {
+      const token = `${randomUUID()}${randomUUID()}`.replaceAll("-", "");
+      await storage.createRoomInviteV2({ roomId: behalf.roomId, tokenHash: createHmac("sha256", secret).update(token).digest("base64url"),
+        role: "member", waitingRoomEnabled: false, expiresAt: new Date(Date.now() + 300_000).toISOString(),
+        actor: { actorType: "admin-token", actorId: "test-admin", role: "admin" } });
+      return token;
+    };
+    const recipientJoin = async (inviteToken: string) => fetch(`${baseUrl}/api/tokens/state`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ roomId: behalf.roomId, identityProtocolVersion: 2, inviteToken, displayName: "Recipient" })
+    });
+    const recipientEntry = await recipientJoin(await memberInvite());
+    assert.equal(recipientEntry.status, 200);
+    const recipient = await recipientEntry.json() as { participantId: string; token: string; identityCredential: string; role: string; isOwner: boolean };
+    assert.equal(recipient.role, "member");
+    assert.equal(recipient.isOwner, false);
+    const handoff = (participantId: string, expectedRevision: number | undefined, bearer?: string, admin = false) =>
+      fetch(`${baseUrl}/api/rooms/${behalf.roomId}/owner/transfer`, { method: "POST", headers: {
+        "content-type": "application/json", ...(bearer ? { authorization: `Bearer ${bearer}` } : {}),
+        ...(admin ? { "x-vrata-admin-token": "test-admin" } : {})
+      }, body: JSON.stringify({ participantId, expectedRevision }) });
+    assert.equal((await handoff(recipient.participantId, undefined, undefined, true)).status, 400,
+      "ownership transfer requires a compare-and-swap revision");
+    assert.equal((await handoff("admin-selected-public-id", 0, undefined, true)).status, 403,
+      "a chosen public ID is not an admitted target");
+    assert.equal((await handoff(identity.participantId, 0, undefined, true)).status, 403,
+      "an identity admitted to a different room cannot receive ownership");
+    const firstHandoff = await handoff(recipient.participantId, 0, undefined, true);
+    assert.equal(firstHandoff.status, 200);
+    assert.equal((await firstHandoff.json() as { revision: number; ownerParticipantId: string }).revision, 1);
+    assert.equal((await handoff(recipient.participantId, 0, undefined, true)).status, 409,
+      "repeating a stale handoff cannot override current authority");
+    const ownerProjection = await fetch(`${baseUrl}/api/rooms/${behalf.roomId}/session-control`, {
+      headers: { authorization: `Bearer ${recipient.token}` }
+    });
+    assert.equal(ownerProjection.status, 200);
+    const view = await ownerProjection.json() as { authorityRevision: number; ownerParticipantId: string;
+      participant: { role: string; isOwner: boolean; permissions: string[] } };
+    assert.equal(view.authorityRevision, 1);
+    assert.equal(view.ownerParticipantId, recipient.participantId);
+    assert.equal(view.participant.role, "member");
+    assert.equal(view.participant.isOwner, true);
+    assert.equal(view.participant.permissions.includes("room.session-control"), false,
+      "proof-bound ownership is independent from Host permissions");
+    assert.equal((await fetch(`${baseUrl}/api/rooms/${behalf.roomId}/personal-state`, {
+      headers: { authorization: `Bearer ${recipient.token}` }
+    })).status, 200);
+    const nextJoin = await recipientJoin(await memberInvite());
+    assert.equal(nextJoin.status, 200);
+    const nextOwner = await nextJoin.json() as typeof recipient;
+    assert.equal((await handoff(nextOwner.participantId, 1, recipient.token)).status, 200,
+      "the current owner may hand off to a second proof-bound identity");
+    assert.equal((await fetch(`${baseUrl}/api/rooms/${behalf.roomId}/personal-state`, {
+      headers: { authorization: `Bearer ${recipient.token}` }
+    })).status, 403, "previous owner loses private room access even though its proof remains valid");
+    const nextProjection = await fetch(`${baseUrl}/api/rooms/${behalf.roomId}/session-control`, {
+      headers: { authorization: `Bearer ${nextOwner.token}` }
+    });
+    assert.equal((await nextProjection.json() as { participant: { isOwner: boolean } }).participant.isOwner, true);
+    assert.equal((await fetch(`${baseUrl}/api/rooms/${behalf.roomId}/session-control/lock`, {
+      method: "POST", headers: { authorization: `Bearer ${nextOwner.token}` }
+    })).status, 200, "a proof-bound Member owner can control their room without taking the Host role");
+    assert.equal((await handoff(recipient.participantId, 2, recipient.token)).status, 403,
+      "former owner cannot retake ownership using its old room session");
     const first = await verify(sessionToken);
     assert.equal(first.status, 200);
     const manifest = await fetch(`${baseUrl}/api/rooms/${room.roomId}/manifest`, { headers: { authorization: `Bearer ${sessionToken}` } });

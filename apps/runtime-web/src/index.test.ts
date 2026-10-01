@@ -1,7 +1,25 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { describeManifest, fetchRuntimeSpaces, fetchStateToken, formatSpaceOptions, listPresence, resolveCurrentSpace, resolveJoinMode } from "./index.js";
+import { describeManifest, fetchRuntimeSpaces, fetchStateToken, formatSpaceOptions, listPresence, resolveCurrentSpace, resolveJoinMode, transferRoomOwner } from "./index.js";
+
+test("ownership handoff sends the admitted session and exact authority revision", async () => {
+  const previous = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async (url, init) => {
+    calls++;
+    assert.equal(String(url), "https://example.test/api/rooms/personal-room/owner/transfer");
+    assert.equal(init?.method, "POST");
+    assert.equal(new Headers(init?.headers).get("authorization"), "Bearer room-session");
+    assert.deepEqual(JSON.parse(String(init?.body)), { participantId: "recipient", expectedRevision: 7 });
+    return Response.json({ revision: 8, ownerParticipantId: "recipient", state: {} });
+  };
+  try {
+    const result = await transferRoomOwner("https://example.test", "personal-room", "room-session", "recipient", 7);
+    assert.equal(result.revision, 8);
+    assert.equal(calls, 1);
+  } finally { globalThis.fetch = previous; }
+});
 
 test("v2 admission omits absent proofs but preserves an explicitly invalid proof for server rejection", async () => {
   const previous = globalThis.fetch;

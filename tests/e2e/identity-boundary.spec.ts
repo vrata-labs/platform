@@ -223,6 +223,61 @@ test("v2 personal owner persists across reload and a copied public ID cannot reo
   }
 });
 
+test("personal owner hands off to an invited Member with proof and live controls", async ({ page, browser, request }) => {
+  test.skip(!process.env.VRATA_TEST_POSTGRES_URL, "Requires an isolated PostgreSQL fixture");
+  test.setTimeout(120_000);
+  const fixture = await startReferenceTemplateFixture(process.env.VRATA_TEST_POSTGRES_URL!, {
+    stateTokenSecret: "isolated-v2-owner-handoff-browser-secret-32-bytes"
+  });
+  const requireApi = createRequire(resolve("apps/api/package.json"));
+  const { Pool } = requireApi("pg");
+  const pool = new Pool({ connectionString: process.env.VRATA_TEST_POSTGRES_URL,
+    options: `-c search_path=${fixture.schema},public` });
+  const { PostgresStorage } = await import(pathToFileURL(resolve("apps/api/dist/storage.js")).href);
+  const recipientPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  try {
+    await new PostgresStorage(pool).identityProtocol.raise(2);
+    const opened = await request.post(`${fixture.origin}/api/personal-room`, {
+      data: { identityProtocolVersion: 2, displayName: "Original owner" }
+    });
+    expect(opened.status()).toBe(201);
+    const owner = await opened.json() as { room: { roomId: string }; identityCredential: string; participantId: string };
+    await page.addInitScript(input => sessionStorage.setItem(`vrata.identity.v2.${encodeURIComponent(input.roomId)}`, input.credential),
+      { roomId: owner.room.roomId, credential: owner.identityCredential });
+    const personalUrl = `${fixture.origin}/rooms/${owner.room.roomId}?onboard=0`;
+    await page.goto(personalUrl, { waitUntil: "domcontentloaded" });
+    await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__?.personalRoom?.isOwner)).toBe(true);
+    const invitation = await request.post(`${fixture.origin}/api/rooms/${owner.room.roomId}/invites`, {
+      headers: { "x-vrata-admin-token": fixture.adminToken }, data: { role: "member", expiresInSeconds: 120 }
+    });
+    expect(invitation.status()).toBe(201);
+    const inviteLink = (await invitation.json() as { inviteLink: string }).inviteLink;
+    await recipientPage.goto(`${inviteLink}&onboard=0`, { waitUntil: "domcontentloaded" });
+    await expect.poll(() => recipientPage.evaluate(() => (window as any).__VRATA_DEBUG__?.roomStateConnected)).toBe(true);
+    const recipientId = await recipientPage.evaluate(() => (window as any).__VRATA_DEBUG__?.participantId) as string;
+    await expect.poll(() => page.locator("#host-participant-select option").evaluateAll((options, target) =>
+      options.some(option => (option as HTMLOptionElement).value === target), recipientId), { timeout: 20_000 }).toBe(true);
+    await page.locator("#host-participant-select").selectOption(recipientId);
+    await expect(page.locator("#transfer-owner")).toBeEnabled({ timeout: 20_000 });
+    const transferred = page.waitForResponse(response => new URL(response.url()).pathname === `/api/rooms/${owner.room.roomId}/owner/transfer`);
+    await page.locator("#transfer-owner").click();
+    expect((await transferred).status()).toBe(200);
+    await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__?.personalRoom?.isOwner)).toBe(false);
+    await expect.poll(() => recipientPage.evaluate(() => (window as any).__VRATA_DEBUG__?.personalRoom?.isOwner),
+      { timeout: 20_000 }).toBe(true);
+    await expect(recipientPage.locator("#host-controls")).toBeVisible();
+    expect(await recipientPage.evaluate(() => (window as any).__VRATA_DEBUG__?.access?.role)).toBe("member");
+    const recipientAdmission = recipientPage.waitForResponse(response => new URL(response.url()).pathname === "/api/tokens/state");
+    await recipientPage.reload({ waitUntil: "domcontentloaded" });
+    expect((await recipientAdmission).status()).toBe(200);
+    await expect.poll(() => recipientPage.evaluate(() => (window as any).__VRATA_DEBUG__?.personalRoom?.isOwner).catch(() => null)).toBe(true);
+  } finally {
+    await Promise.allSettled([page.goto("about:blank"), recipientPage.close()]);
+    await pool.end();
+    await fixture.close();
+  }
+});
+
 test("anonymous v2 admission is bounded while an existing tab can renew its identity", async ({ page, browser }) => {
   test.skip(!process.env.VRATA_TEST_POSTGRES_URL, "Requires an isolated PostgreSQL fixture");
   test.setTimeout(90_000);

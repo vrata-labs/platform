@@ -211,6 +211,12 @@ API test files переведены на последовательный зап
 
 [Артефакт staging gate](https://github.com/vrata-labs/platform/actions/runs/36808559694/artifacts/11139657823): четырёхсторонняя встреча и cleanup, текущая загрузка Hall, BlueOffice и ArtGallery. Дополнительный public smoke после gate: `/health`, `/rooms/demo-room`, `/control-plane`, `/api/templates` — HTTP 200. Proxy key сохранён без повторной ротации (`already_configured`); общий staging остался на floor 1. Реальные v2 429/proof сценарии проверены на отдельной схеме PostgreSQL, не на общем staging.
 
+### T01a-S2b-V: явная передача владельца личной комнаты
+
+Подготовлен CAS-маршрут owner/transfer для room-bound v2 identity. Администратор может создать личную комнату от имени другого человека, выдать ему v2 invite и лишь после доказанного входа передать owner authority по server-issued participant ID и текущей revision. Одного ownerParticipantId из метаданных комнаты недостаточно. Текущий владелец может так же передать права из HUD приглашённому участнику; Host остаётся отдельным слотом по принятому контракту. Участник с ролью Member и актуальным isOwner видит управление своей личной комнатой, а бывший владелец теряет доступ к owner-only personal state. В старых session-control DTO новых полей нет; runtime принимает их только от v2-сессии и игнорирует ответы со старой authority revision.
+
+В Memory/PostgreSQL проверены гонки CAS, чужой ID, отозванный и cross-room target, отсутствие автоматического наследования Host, отзыв recovery после передачи. Реальный API и браузер подтверждают admin-to-recipient и owner-to-recipient handoff, право нового владельца управлять комнатой даже в роли Member, live update и reload. На общем staging floor 2 не поднимается до окончания проверки всех effect-bearing REST/media действий и политики архивирования длительно живущих комнат.
+
 ## Публикация первого среза T01/T12
 
 Локально прошли workspace lint/typecheck/build/tests с PostgreSQL, затем runtime build и 905 runtime tests после финальных правок. Полный `pnpm test:e2e` на финальном исполняемом дереве: **148 passed**, без skip (41.6 min).

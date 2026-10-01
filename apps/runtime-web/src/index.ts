@@ -474,10 +474,14 @@ export interface RuntimeSessionControlState {
 
 export interface RuntimeSessionControlResponse {
   state: RuntimeSessionControlState;
+  authorityRevision?: number;
+  revision?: number;
+  ownerParticipantId?: string | null;
   participant?: {
     participantId: string;
     role: RoomRole;
     permissions: RoomPermission[];
+    isOwner?: boolean;
     status: "active" | "blocked";
     reason?: string | null;
   } | null;
@@ -846,6 +850,17 @@ export async function transferRoomHost(apiBaseUrl: string, roomId: string, sessi
   if (!response.ok) {
     throw new Error(`failed_to_transfer_host:${response.status}`);
   }
+  return (await response.json()) as RuntimeSessionControlResponse;
+}
+
+export async function transferRoomOwner(apiBaseUrl: string, roomId: string, sessionToken: string,
+  participantId: string, expectedRevision: number): Promise<RuntimeSessionControlResponse> {
+  const response = await fetch(new URL(`/api/rooms/${roomId}/owner/transfer`, apiBaseUrl), {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${sessionToken}` },
+    body: JSON.stringify({ participantId, expectedRevision })
+  });
+  if (!response.ok) throw new Error(`failed_to_transfer_owner:${response.status}`);
   return (await response.json()) as RuntimeSessionControlResponse;
 }
 
