@@ -198,6 +198,19 @@ API test files переведены на последовательный зап
 
 Запрещённое контрактом отката удаление identity при живой комнате не заменяется принудительной очисткой. Вместо этого установлен lifetime cap 10 000 identity и 50 000 waiting records на комнату; по достижении лимита новая выдача получает 429, но действующие владельцы продолжают обновлять свои credentials. Ключи источников не сохраняются в явном виде. Проверки Memory/PostgreSQL охватывают границы и конкурентные выдачи; изолированный HTTP/browser сценарий проверяет 429 для новой вкладки и успешный reload вкладки с proof. Для длительно живущих комнат остаётся необходимым управляемое архивирование/замена, до которого общий staging не переводится на floor 2.
 
+Первая попытка [Staging Deploy 36786227651](https://github.com/vrata-labs/platform/actions/runs/36786227651) остановилась до запуска новой версии: прежний checkout потребовал отсутствующий в staging .env внутренний ключ даже для `docker compose config`. Шаг rollback завершился с той же ошибкой; публичные health, room и control-plane продолжили отвечать 200, но успешный откат этим run не подтверждён. Вторая попытка [36802220925](https://github.com/vrata-labs/platform/actions/runs/36802220925) успешно создала на хосте отдельный proxy key, однако read-only preflight предыдущего checkout всё ещё требовал старый ключ, поэтому и rollout, и rollback снова прервались до переключения сервисов. Причина устранена без подмены service/state keys: preflight допускает временное значение исключительно для чтения уже работающего PostgreSQL через старый Compose; значение не пишется в env и никогда не используется для запуска контейнера. При активированном floor 2 отсутствие настоящего внутреннего ключа по-прежнему запрещает переход.
+
+Генератор isolated public-demo env дополнен собственным независимым proxy key: CI [36795003781](https://github.com/vrata-labs/platform/actions/runs/36795003781) обнаружил забытый Compose overlay, исправленный в следующем SHA. На окончательном дереве workspace lint/typecheck/build и полный `pnpm test` с PostgreSQL/pinned rollback: API **852/852**, runtime **928/928**, room-state **76/76**, shared-types **30/30**, tools **125/125**. Локальный полный `pnpm test:e2e --workers=1` — **157/157** без skip/retry (25,3 минуты). Несколько промежуточных локальных прогонов под общей загрузкой завершались таймаутами в разных сценариях; source-quality assertions и runtime ради них не ослаблялись.
+
+| Этап ограничения выдачи v2 | Результат |
+|---|---|
+| Проверенный и опубликованный SHA | `fa13bd06e91d9f05f7a2a39ab8947262953e44a2` |
+| [CI 36805732528](https://github.com/vrata-labs/platform/actions/runs/36805732528) | Success: package tests, полный E2E, M0.5 и закреплённые asset checks |
+| [Docker Publish 36805732479](https://github.com/vrata-labs/platform/actions/runs/36805732479) | Success: immutable API, room-state и remote-browser images точного SHA |
+| [Staging Deploy 36808559694](https://github.com/vrata-labs/platform/actions/runs/36808559694) | Success: **52/52 staging E2E** и **1/1 blocking Rutube**; successful SHA сохранён; rollback skipped |
+
+[Артефакт staging gate](https://github.com/vrata-labs/platform/actions/runs/36808559694/artifacts/11139657823): четырёхсторонняя встреча и cleanup, текущая загрузка Hall, BlueOffice и ArtGallery. Дополнительный public smoke после gate: `/health`, `/rooms/demo-room`, `/control-plane`, `/api/templates` — HTTP 200. Proxy key сохранён без повторной ротации (`already_configured`); общий staging остался на floor 1. Реальные v2 429/proof сценарии проверены на отдельной схеме PostgreSQL, не на общем staging.
+
 ## Публикация первого среза T01/T12
 
 Локально прошли workspace lint/typecheck/build/tests с PostgreSQL, затем runtime build и 905 runtime tests после финальных правок. Полный `pnpm test:e2e` на финальном исполняемом дереве: **148 passed**, без skip (41.6 min).
