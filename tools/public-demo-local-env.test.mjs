@@ -111,6 +111,7 @@ function validComposeModel(env) {
           LIVEKIT_API_SECRET: env.LIVEKIT_API_SECRET,
           STATE_TOKEN_SECRET: env.STATE_TOKEN_SECRET,
           VRATA_INTERNAL_SERVICE_TOKEN: env.VRATA_INTERNAL_SERVICE_TOKEN,
+          VRATA_IDENTITY_PROXY_TOKEN: env.VRATA_IDENTITY_PROXY_TOKEN,
           VRATA_DEV_ROLE_QUERY: "false",
           REMOTE_BROWSER_ENABLED: "false",
           VRATA_ALLOW_INSECURE_PRODUCTION_URLS: "true",
@@ -124,6 +125,7 @@ function validComposeModel(env) {
       },
       caddy: {
         image: PUBLIC_DEMO_LOCAL_IMAGES.caddy,
+        environment: { VRATA_IDENTITY_PROXY_TOKEN: env.VRATA_IDENTITY_PROXY_TOKEN },
         ports: [port("127.0.0.1", 4000, 80)]
       }
     },
@@ -147,6 +149,7 @@ test("generator creates valid unique projects, credentials, and an exact source 
   assert.notEqual(first.COMPOSE_PROJECT_NAME, second.COMPOSE_PROJECT_NAME);
   assert.notEqual(first.LIVEKIT_API_KEY, second.LIVEKIT_API_KEY);
   assert.notEqual(first.LIVEKIT_API_SECRET, second.LIVEKIT_API_SECRET);
+  assert.notEqual(first.VRATA_IDENTITY_PROXY_TOKEN, first.VRATA_INTERNAL_SERVICE_TOKEN);
   assert.equal(Object.hasOwn(first, "VRATA_ALLOW_INSECURE_PRODUCTION_URLS"), false);
 });
 
@@ -181,6 +184,9 @@ test("env assertion rejects noncanonical SHAs, dev credentials, and credential d
   const reusedSecret = generatedEnv();
   reusedSecret.STATE_TOKEN_SECRET = reusedSecret.LIVEKIT_API_SECRET;
   assert.throws(() => assertPublicDemoLocalEnv(reusedSecret), expectedError("public_demo_local_credentials_not_unique"));
+  const reusedProxyKey = generatedEnv();
+  reusedProxyKey.VRATA_IDENTITY_PROXY_TOKEN = reusedProxyKey.VRATA_INTERNAL_SERVICE_TOKEN;
+  assert.throws(() => assertPublicDemoLocalEnv(reusedProxyKey), expectedError("public_demo_local_credentials_not_unique"));
 });
 
 test("writer creates a secret-safe exclusive mode-0600 env file for the exact clean checkout", () => {

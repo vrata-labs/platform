@@ -57,6 +57,7 @@ const SECRET_NAMES = [
   "REMOTE_BROWSER_TOKEN_SECRET",
   "REMOTE_BROWSER_INTERNAL_TOKEN",
   "VRATA_INTERNAL_SERVICE_TOKEN",
+  "VRATA_IDENTITY_PROXY_TOKEN",
   "POSTGRES_PASSWORD",
   "MINIO_ROOT_PASSWORD"
 ];
@@ -128,6 +129,7 @@ export function generatePublicDemoLocalEnv({ sourceSha, randomBytesFn = randomBy
     REMOTE_BROWSER_INTERNAL_TOKEN: `browser_internal_${randomHex(randomBytesFn, 32)}`,
     REMOTE_BROWSER_TOKEN_TTL_SECONDS: "300",
     VRATA_INTERNAL_SERVICE_TOKEN: `internal_${randomHex(randomBytesFn, 32)}`,
+    VRATA_IDENTITY_PROXY_TOKEN: `proxy_${randomHex(randomBytesFn, 32)}`,
     VRATA_DEV_ROLE_QUERY: "false",
     MEDIA_TOKEN_TTL_SECONDS: "900",
     REMOTE_BROWSER_ALLOWED_ORIGINS: "http://127.0.0.1:4000",
@@ -357,6 +359,7 @@ export function assertPublicDemoLocalComposeModel(model, env) {
   }
 
   const apiEnv = serviceEnvironment(api);
+  const caddyEnv = serviceEnvironment(services.caddy);
   const roomStateEnv = serviceEnvironment(roomState);
   if (apiEnv.NODE_ENV !== "production") {
     fail("public_demo_local_api_not_production");
@@ -400,7 +403,9 @@ export function assertPublicDemoLocalComposeModel(model, env) {
     [apiEnv.STATE_TOKEN_SECRET, env.STATE_TOKEN_SECRET],
     [roomStateEnv.STATE_TOKEN_SECRET, env.STATE_TOKEN_SECRET],
     [apiEnv.VRATA_INTERNAL_SERVICE_TOKEN, env.VRATA_INTERNAL_SERVICE_TOKEN],
-    [roomStateEnv.VRATA_INTERNAL_SERVICE_TOKEN, env.VRATA_INTERNAL_SERVICE_TOKEN]
+    [roomStateEnv.VRATA_INTERNAL_SERVICE_TOKEN, env.VRATA_INTERNAL_SERVICE_TOKEN],
+    [apiEnv.VRATA_IDENTITY_PROXY_TOKEN, env.VRATA_IDENTITY_PROXY_TOKEN],
+    [caddyEnv.VRATA_IDENTITY_PROXY_TOKEN, env.VRATA_IDENTITY_PROXY_TOKEN]
   ];
   if (matchingValues.some(([actual, expected]) => actual !== expected)) {
     fail("public_demo_local_service_credentials_mismatch");
