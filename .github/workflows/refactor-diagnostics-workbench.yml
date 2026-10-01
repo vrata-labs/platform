@@ -1,0 +1,109 @@
+name: Runtime diagnostics refactor workbench
+
+on:
+  push:
+    branches: [chore/refactor-diagnostics-workbench-20261002]
+
+permissions:
+  contents: write
+
+jobs:
+  verify-diagnostics:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout isolated verification branch
+        uses: actions/checkout@v4
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Apply exact locally verified source blobs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          : > /tmp/diagnostics-payload.gz
+          for SHA in ca61e9ccdbbe833a9ea931ba10c74f3a3444d19c d659b06491282538fdee997b25297b8f9b378b36 9247e47dceecbdd58e586ea8afaac3479941d8a0 bdbb6c76636e6c5aaf86c7eee73b61a27e9d92e1; do
+            gh api "repos/vrata-labs/platform/git/blobs/$SHA" --jq .content | base64 --decode >> /tmp/diagnostics-payload.gz
+          done
+          node <<'JS'
+          const fs = require('node:fs');
+          const zlib = require('node:zlib');
+          const crypto = require('node:crypto');
+          const assert = require('node:assert/strict');
+          const cp = require('node:child_process');
+          const blob = (bytes) => crypto.createHash('sha1').update(`blob ${bytes.length}\0`).update(bytes).digest('hex');
+          const compressed = fs.readFileSync('/tmp/diagnostics-payload.gz');
+          assert.equal(blob(compressed), 'a1fe5a51dc2e9db827e476fd400a5c454fcda5b7');
+          const payload = JSON.parse(zlib.gunzipSync(compressed));
+          const expected = {
+            'apps/runtime-web/src/main.ts': '3e637de7df82b82b8c9e0163096ce5dd454fccdd',
+            'apps/runtime-web/src/runtime-diagnostics-ui.test.ts': '19b38b4ee5b2d5d376de1e152e6ff86549bd09d3',
+            'apps/runtime-web/src/runtime-diagnostics.test.ts': '3f3795606a544882f3d5542c5440bec98940fc7b',
+            'apps/runtime-web/src/runtime-diagnostics.ts': 'ab73b07d561fa26ce5e6265a6734b64f084aec63',
+            'apps/runtime-web/src/testing/runtime-diagnostics-harness.ts': 'e564ac890056f0d3bad3454a733fd34135ef9ada',
+            'apps/runtime-web/src/xr-telemetry-reporter.test.ts': 'cff01d554bf7d376a77e04017991f6fde11e0c34',
+            'apps/runtime-web/src/xr-telemetry-reporter.ts': '508696d2669f440c084415401cf6e0c61f02e15c'
+          };
+          assert.deepEqual(payload.expected, expected);
+          assert.equal(payload.before, '2f3d3cf40d77e2d2dfbeece02fe57446b8a6adf2');
+          assert.equal(payload.after, expected['apps/runtime-web/src/main.ts']);
+          const mainPath = 'apps/runtime-web/src/main.ts';
+          let source = fs.readFileSync(mainPath, 'utf8');
+          assert.equal(blob(Buffer.from(source)), payload.before);
+          for (const edit of payload.edits.sort((a, b) => b.start - a.start)) {
+            source = source.slice(0, edit.start) + edit.text + source.slice(edit.end);
+          }
+          assert.equal(blob(Buffer.from(source)), payload.after);
+          assert.deepEqual(Object.keys(payload.files).sort(), Object.keys(expected).filter(p => p !== mainPath).sort());
+          fs.writeFileSync(mainPath, source);
+          for (const [path, content] of Object.entries(payload.files)) {
+            assert.equal(fs.existsSync(path), false, path);
+            assert.equal(blob(Buffer.from(content)), expected[path], path);
+            fs.writeFileSync(path, content);
+          }
+          for (const [path, sha] of Object.entries(expected)) assert.equal(blob(fs.readFileSync(path)), sha, path);
+          cp.execFileSync('git', ['add', '--', ...Object.keys(expected)]);
+          cp.execFileSync('git', ['diff', '--cached', '--check']);
+          fs.writeFileSync('/tmp/diagnostics-blobs.json', JSON.stringify(expected, null, 2));
+          fs.writeFileSync('/tmp/diagnostics-refactor.patch', cp.execFileSync('git', ['diff', '--cached', '--binary']));
+          console.log(JSON.stringify(expected, null, 2));
+          JS
+      - name: Install locked dependencies
+        run: |
+          pnpm install --frozen-lockfile
+          chmod 644 packages/asset-pipeline/bin/vrata.mjs
+      - name: Build shared contracts and runtime
+        run: pnpm --filter @vrata/shared-types --filter @vrata/runtime-web build 2>&1 | tee /tmp/diagnostics-build.log
+      - name: Runtime lint and typecheck
+        run: |
+          pnpm --filter @vrata/runtime-web lint
+          pnpm --filter @vrata/runtime-web typecheck
+      - name: Complete runtime test suite
+        run: pnpm --filter @vrata/runtime-web test 2>&1 | tee /tmp/diagnostics-tests.log
+      - name: Commit verified sources to isolated branch only
+        run: |
+          test "$GITHUB_REF_NAME" = 'chore/refactor-diagnostics-workbench-20261002'
+          git diff --cached --check
+          git diff --exit-code
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'refactor(runtime): extract diagnostic reporting and XR telemetry'
+          git push origin HEAD:refs/heads/chore/refactor-diagnostics-workbench-20261002
+          git rev-parse HEAD | tee /tmp/diagnostics-commit.txt
+      - name: Upload verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-diagnostics-refactor-verification
+          retention-days: 7
+          if-no-files-found: ignore
+          path: |
+            /tmp/diagnostics-refactor.patch
+            /tmp/diagnostics-blobs.json
+            /tmp/diagnostics-build.log
+            /tmp/diagnostics-tests.log
+            /tmp/diagnostics-commit.txt
