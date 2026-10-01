@@ -1,0 +1,134 @@
+name: API notes refactor workbench
+
+on:
+  push:
+    branches:
+      - chore/refactor-api-notes-workbench-20261002
+
+permissions:
+  contents: write
+
+jobs:
+  verify-api-notes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: vrata_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d vrata_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Checkout isolated verification branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install locked dependencies
+        run: |
+          pnpm install --frozen-lockfile
+          chmod 644 packages/asset-pipeline/bin/vrata.mjs
+
+      - name: Extract original bodies and verify exact source blobs
+        run: |
+          node .refactor-workbench/extract-room-notes.cjs | tee /tmp/api-notes-extraction.json
+          python3 - <<'PY'
+          import hashlib, json, pathlib, subprocess
+          expected = {
+            'apps/api/src/index.ts': '68b04b90e5ca2a02fe9a8529db0f53a0ca48d9ad',
+            'apps/api/src/control-plane-actor.ts': 'c2837a3f893258336271036aa7a7f42740e91401',
+            'apps/api/src/room-notes-access.ts': '2e8c93cbfbabac47cced54e6fdfe8c5f730e5845',
+            'apps/api/src/room-notes-routes.ts': '39f93487f1bc43225b4a5dba9408d863619c6cc4',
+            'apps/api/src/room-notes-access.test.ts': '84b74757e95b615e11caecad243984e3162f5dbc',
+            'apps/api/src/room-notes-async.test.ts': '4d3bb78c500617fce6bd60015e38fac8e7d1f018',
+            'apps/api/src/room-notes-exports.test.ts': '3df78646def86419073897a7cb9e947a6add3951',
+            'apps/api/src/room-notes-http.test.ts': '292be31e82f0669bdcdc773edc9085edf0b3d1fc',
+            'apps/api/src/room-notes-routes.test.ts': '7a1bbbceab7e4fb5366225eb42e86549de76c7be',
+            'apps/api/src/testing/room-notes-harness.ts': '77bd81f02681967c8139e969de40c2f2aa45a5c0'
+          }
+          for name, sha in expected.items():
+              data = pathlib.Path(name).read_bytes()
+              actual = hashlib.sha1(f'blob {len(data)}\0'.encode() + data).hexdigest()
+              assert actual == sha, (name, actual, sha)
+          pathlib.Path('/tmp/api-notes-blobs.json').write_text(json.dumps(expected, indent=2))
+          subprocess.run(['git', 'add', '--', *sorted(expected)], check=True)
+          subprocess.run(['git', 'diff', '--cached', '--check'], check=True)
+          print('All ten final source/test blobs match local verification.')
+          PY
+
+      - name: Build all workspace packages
+        run: pnpm build 2>&1 | tee /tmp/api-notes-build.log
+
+      - name: API lint and typecheck
+        run: |
+          pnpm --filter @vrata/api lint
+          pnpm --filter @vrata/api typecheck
+
+      - name: Checkout proven template rollback base
+        uses: actions/checkout@v4
+        with:
+          repository: vrata-labs/platform
+          ref: 33c7485ffa1773105c496b43542ea53bf4c5ae9a
+          path: .template-rollback
+
+      - name: Build exact template rollback base
+        run: |
+          pnpm --dir .template-rollback install --frozen-lockfile
+          chmod 644 .template-rollback/packages/asset-pipeline/bin/vrata.mjs
+          git -C .template-rollback diff --exit-code HEAD
+          pnpm --dir .template-rollback --filter @vrata/shared-types --filter @vrata/templates --filter @vrata/asset-pipeline --filter @vrata/api build
+
+      - name: Complete API test suite including PostgreSQL
+        env:
+          VRATA_TEST_POSTGRES_URL: postgres://postgres:postgres@127.0.0.1:5432/vrata_test
+          VRATA_TEMPLATE_ROLLBACK_STORAGE_MODULE: ${{ github.workspace }}/.template-rollback/apps/api/dist/storage.js
+        run: pnpm --filter @vrata/api test 2>&1 | tee /tmp/api-notes-tests.log
+
+      - name: Commit verified sources to isolated branch only
+        run: |
+          test "$GITHUB_REF_NAME" = 'chore/refactor-api-notes-workbench-20261002'
+          git diff --cached --check
+          git diff --exit-code
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'refactor(api): extract room notes access and routes'
+          git push origin HEAD:refs/heads/chore/refactor-api-notes-workbench-20261002
+          git rev-parse HEAD | tee /tmp/api-notes-commit.txt
+          python3 - <<'PY'
+          import json, pathlib, subprocess
+          paths = sorted(json.loads(pathlib.Path('/tmp/api-notes-blobs.json').read_text()))
+          patch = subprocess.check_output(['git', 'diff', '4734791267932326f053b4d32d5bb1d186ec4d66', 'HEAD', '--', *paths])
+          pathlib.Path('/tmp/api-notes.patch').write_bytes(patch)
+          PY
+
+      - name: Upload verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-notes-refactor-verification
+          retention-days: 7
+          if-no-files-found: ignore
+          path: |
+            /tmp/api-notes-extraction.json
+            /tmp/api-notes-blobs.json
+            /tmp/api-notes-build.log
+            /tmp/api-notes-tests.log
+            /tmp/api-notes-commit.txt
+            /tmp/api-notes.patch
