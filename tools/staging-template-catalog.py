@@ -58,8 +58,27 @@ class CatalogHost:
         self.compose = ["docker", "compose", "--env-file", str(self.root / "infra/docker/.env.staging"),
                         "-f", str(self.root / "infra/docker/compose.staging.yml")]
 
+    def read_only_compose_environment(self):
+        environment = os.environ.copy()
+        if environment.get("VRATA_INTERNAL_SERVICE_TOKEN"):
+            return environment
+        environment.pop("VRATA_INTERNAL_SERVICE_TOKEN", None)
+        env_file = self.root / "infra/docker/.env.staging"
+        configured = any(re.match(r"^\s*(?:export\s+)?VRATA_INTERNAL_SERVICE_TOKEN\s*=\s*\S+", line)
+                         for line in env_file.read_text().splitlines())
+        if not configured:
+            # An earlier failed checkout required a missing key for Caddy even
+            # to run `docker compose config/exec`. This value is used only for
+            # read-only inspection of the already-running database; it is never
+            # written to .env or used to start a container.
+            environment["VRATA_INTERNAL_SERVICE_TOKEN"] = "unconfigured-read-only-preflight"
+        return environment
+
     def run(self, args, optional=False):
-        result = subprocess.run(args, cwd=self.root, stdin=subprocess.DEVNULL, text=True, capture_output=True, timeout=600)
+        read_only_compose = args[:len(self.compose)] == self.compose and args[len(self.compose):len(self.compose) + 1] in (["config"], ["exec"], ["ps"])
+        environment = self.read_only_compose_environment() if read_only_compose else None
+        result = subprocess.run(args, cwd=self.root, env=environment, stdin=subprocess.DEVNULL,
+                                text=True, capture_output=True, timeout=600)
         if result.returncode:
             if optional:
                 return None
@@ -130,6 +149,8 @@ class CatalogHost:
                          "select json_build_object('state', case when exists (select 1 from templates where status = 'active' and current_version <> '0.1.0') then 'active' else 'wave2' end, 'referenceRoomCount', (select count(*) from rooms where template_version <> '0.1.0'))"])
         status = json.loads(result)
         minimum_identity_protocol = self.minimum_identity_protocol()
+        if minimum_identity_protocol >= 2 and self.read_only_compose_environment().get("VRATA_INTERNAL_SERVICE_TOKEN") == "unconfigured-read-only-preflight":
+            raise ValueError("identity_rollout_internal_service_token_required")
         identity_bound = self.identity_bound()
         assert_target_allowed(marker, status, contract, target, minimum_identity_protocol, identity_bound)
         if supports_identity_boundary(contract):

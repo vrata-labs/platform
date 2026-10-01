@@ -114,3 +114,40 @@ with tempfile.TemporaryDirectory() as root:
         else: raise AssertionError("probed an unrelated database")
 `], { encoding: "utf8" });
 });
+
+test("read-only preflight survives a failed checkout's missing Caddy key without starting services", () => {
+  execFileSync("python3", ["-B", "-c", `
+import importlib.util, os, subprocess, tempfile
+from pathlib import Path
+from unittest.mock import patch
+spec = importlib.util.spec_from_file_location("catalog", ${JSON.stringify(fileURLToPath(new URL("./staging-template-catalog.py", import.meta.url)))})
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+with tempfile.TemporaryDirectory() as root:
+    env_file = Path(root)/"infra/docker/.env.staging"
+    env_file.parent.mkdir(parents=True)
+    env_file.write_text("STATE_TOKEN_SECRET=configured-state-signing-key\\n")
+    host = m.CatalogHost(root)
+    seen = []
+    def run(args, **kwargs):
+        seen.append((args, kwargs))
+        return subprocess.CompletedProcess(args, 0, "read-only-ok", "")
+    with patch.dict(os.environ, {"VRATA_INTERNAL_SERVICE_TOKEN": ""}), patch.object(m.subprocess, "run", side_effect=run):
+        assert host.run(host.compose+["exec", "-T", "postgres", "true"]) == "read-only-ok"
+        assert seen[-1][1]["env"]["VRATA_INTERNAL_SERVICE_TOKEN"] == "unconfigured-read-only-preflight"
+        assert host.run(host.compose+["config"]) == "read-only-ok"
+        assert host.run(["git", "status"]) == "read-only-ok"
+        assert seen[-1][1]["env"] is None
+        env_file.write_text("VRATA_INTERNAL_SERVICE_TOKEN=configured-internal-key\\n")
+        assert "VRATA_INTERNAL_SERVICE_TOKEN" not in host.read_only_compose_environment()
+    env_file.write_text("STATE_TOKEN_SECRET=configured-state-signing-key\\n")
+    host.contract = lambda target: {"schemaVersion":1,"templateSchema":2,"identityProtocolFloorGuard":1}
+    host.validate_identity_database = lambda: None
+    host.run = lambda args: '{"state":"wave2","referenceRoomCount":0}'
+    host.minimum_identity_protocol = lambda: 2
+    host.identity_bound = lambda: False
+    with patch.dict(os.environ, {"VRATA_INTERNAL_SERVICE_TOKEN": ""}):
+        try: host.prepare("a"*40)
+        except ValueError as error: assert str(error) == "identity_rollout_internal_service_token_required"
+        else: raise AssertionError("floor two accepted an unconfigured service credential")
+`], { encoding: "utf8" });
+});
