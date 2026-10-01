@@ -198,6 +198,9 @@ import { createDocumentLibraryRuntime } from "./document-library-runtime.js";
 import { createDocumentSurfaceView } from "./document-surface-view.js";
 import { bindDocumentControls } from "./document-control-bindings.js";
 
+import { createRuntimeDiagnostics } from "./runtime-diagnostics.js";
+import { createXrTelemetryReporter } from "./xr-telemetry-reporter.js";
+
 function fallbackUuid(): string {
   return `guest-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
@@ -666,8 +669,13 @@ let xrSelectPressedLastFrame = false;
 let xrSelectEventPending = false;
 let xrSelectEventCount = 0;
 let xrRayVisibleLatched = false;
-let lastXrTelemetryReportAt = 0;
-let lastXrTelemetryKinds: string[] = [];
+const { markXrTelemetry, reportXrTelemetry } = createXrTelemetryReporter({
+  apiBaseUrl, roomId, participantId, renderer, avatarVrMockEnabled, localPoseController,
+  get roomStateAccessToken() { return roomStateAccessToken; },
+  get syntheticXrState() { return syntheticXrState; },
+  get xrSelectEventCount() { return xrSelectEventCount; },
+  get debugState() { return debugState; }
+});
 let audioContext: AudioContext | null = null;
 let spatialAudioServerEnabled = true;
 let spatialAudioRoomEnabled = true;
@@ -4680,19 +4688,16 @@ function setStatus(message: string): void {
   debugState.statusLine = message;
 }
 
-function createClientReportId(): string {
-  return `rpt_${crypto.randomUUID()}`;
-}
-
-function showReportId(reportId: string | null): void {
-  debugState.lastReportId = reportId;
-  reportLineEl.hidden = !reportId;
-  reportLineEl.textContent = reportId ? `Report ID: ${reportId}` : "";
-}
-
-function setReportRequestId(requestId: string | null): void {
-  debugState.lastReportRequestId = requestId;
-}
+const { renderDebugPanel, reportDiagnostics, reportUnhandledRuntimeError } = createRuntimeDiagnostics({
+  apiBaseUrl, roomId, participantId, debugEnabled, camera, renderer,
+  reportLineEl, debugPanel, xrDebugPanelEl, refreshWebRtcDiagnostics,
+  captureCanvasDiagnostics, inspectSceneObject, setStatus,
+  get displayName() { return displayName; },
+  get roomStateAccessToken() { return roomStateAccessToken; },
+  get runtimeFlags() { return runtimeFlags; },
+  get activeSceneBundleRoot() { return activeSceneBundleRoot; },
+  get debugState() { return debugState; }
+});
 
 function setRoomStateStatus(message: string): void {
   roomStateLineEl.textContent = message;
@@ -5069,38 +5074,6 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
   }, roomStateAccessToken);
 }
 
-function renderDebugPanel(): void {
-  if (!debugEnabled) {
-    return;
-  }
-
-  debugPanel.textContent = JSON.stringify(debugState, null, 2);
-  const xrAvatarDebug = debugState.xrAvatarDebug;
-  const ray = debugState.interactionRay;
-  const axes = debugState.xrAxes;
-  xrDebugPanelEl.textContent = [
-    `XR session: ${debugState.xrSession.sessionState} visible=${debugState.xrSession.enterVrVisible}`,
-    `XR profile: ${xrAvatarDebug?.profile ?? "none"}`,
-    `XR axes: turn=(${axes.turnX?.toFixed?.(2) ?? axes.turnX ?? 0}, ${axes.turnY?.toFixed?.(2) ?? axes.turnY ?? 0}) move=(${axes.moveX?.toFixed?.(2) ?? axes.moveX ?? 0}, ${axes.moveY?.toFixed?.(2) ?? axes.moveY ?? 0})`,
-    `Ray active: ${ray.active} mode=${ray.mode} target=${ray.targetKind} seat=${ray.seatId ?? "-"}`,
-    `Ray source: ${ray.source ? `${ray.source.handedness ?? "?"}#${ray.source.index}` : "-"}`,
-    `Ray origin: ${ray.origin ? `${ray.origin.x}, ${ray.origin.y}, ${ray.origin.z}` : "-"}`,
-    `Ray direction: ${ray.direction ? `${ray.direction.x}, ${ray.direction.y}, ${ray.direction.z}` : "-"}`,
-    `Right grip: ${xrAvatarDebug?.rightGrip ? `${xrAvatarDebug.rightGrip.x}, ${xrAvatarDebug.rightGrip.y}, ${xrAvatarDebug.rightGrip.z}` : "-"}`,
-    `Right controller: ${xrAvatarDebug?.rightController ? `${xrAvatarDebug.rightController.x}, ${xrAvatarDebug.rightController.y}, ${xrAvatarDebug.rightController.z}` : "-"}`,
-    `Right resolved: ${xrAvatarDebug?.rightResolved ? `${xrAvatarDebug.rightResolved.x}, ${xrAvatarDebug.rightResolved.y}, ${xrAvatarDebug.rightResolved.z}` : "-"}`,
-    `Right hand world: ${xrAvatarDebug?.rightHandWorld ? `${xrAvatarDebug.rightHandWorld.x}, ${xrAvatarDebug.rightHandWorld.y}, ${xrAvatarDebug.rightHandWorld.z}` : "-"}`,
-    `Status: ${debugState.statusLine ?? "-"}`
-  ].join("\n");
-}
-
-function markXrTelemetry(kind: string): void {
-  if (!lastXrTelemetryKinds.includes(kind)) {
-    lastXrTelemetryKinds.push(kind);
-  }
-  lastXrTelemetryReportAt = 0;
-}
-
 function deriveBodyTransform(root: { x: number; z: number }, head: { x: number; z: number }): { x: number; z: number } {
   const deltaX = head.x - root.x;
   const deltaZ = head.z - root.z;
@@ -5121,112 +5094,6 @@ function deriveBodyTransform(root: { x: number; z: number }, head: { x: number; 
   };
 }
 
-async function reportDiagnostics(note?: string, options: { reportId?: string } = {}): Promise<void> {
-  if (!runtimeFlags.remoteDiagnostics) {
-    return;
-  }
-  await refreshWebRtcDiagnostics();
-  if (activeSceneBundleRoot) {
-    debugState.sceneDebug = inspectSceneObject({
-      root: activeSceneBundleRoot,
-      camera,
-      previous: debugState.sceneDebug
-    });
-  }
-  const includeImage = false;
-  const screenshot = captureCanvasDiagnostics({
-    canvas: renderer.domElement,
-    includeImage
-  });
-  debugState.sceneDebug.screenshot = screenshot;
-  const response = await fetch(new URL(`/api/rooms/${roomId}/diagnostics`, apiBaseUrl), {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "authorization": `Bearer ${roomStateAccessToken}`
-    },
-    body: JSON.stringify({
-      reportId: options.reportId,
-      participantId,
-      displayName,
-      mode: debugState.mode,
-      userAgent: navigator.userAgent,
-      statusLine: debugState.statusLine,
-      locomotionMode: debugState.locomotionMode,
-      roomStateConnected: debugState.roomStateConnected,
-      roomStateUrl: debugState.roomStateUrl,
-      roomStateMode: debugState.roomStateMode,
-      audioState: debugState.audioState,
-      localMicLevel: debugState.localMicLevel,
-      speakerOutputLevel: debugState.speakerOutputLevel,
-      media: debugState.media,
-      access: debugState.access,
-      surfaceInput: debugState.surfaceInput,
-      screenShareState: debugState.screenShareState,
-      mediaCapabilities: debugState.mediaCapabilities,
-      clientCompatibility: debugState.clientCompatibility,
-      localPose: debugState.localPose,
-      localPosition: debugState.localPosition,
-      spatialAudioState: debugState.spatialAudioState,
-      spatialAudio: debugState.spatialAudio,
-      xrSession: debugState.xrSession,
-      xrAxes: debugState.xrAxes,
-      remoteAvatarCount: debugState.remoteAvatarCount,
-      remoteTargets: debugState.remoteTargets,
-      remoteParticipants: debugState.remoteParticipants,
-      remoteAvatarReliableStates: debugState.remoteAvatarReliableStates,
-      remoteAvatarPoseFrames: debugState.remoteAvatarPoseFrames,
-      remoteAvatarParticipants: debugState.remoteAvatarParticipants,
-      issueCode: debugState.issueCode,
-      issueSeverity: debugState.issueSeverity,
-      degradedMode: debugState.degradedMode,
-      retryCount: debugState.retryCount,
-      lastRecoveryAction: debugState.lastRecoveryAction,
-      lastPresenceSyncAt: debugState.lastPresenceSyncAt,
-      lastPresenceRefreshAt: debugState.lastPresenceRefreshAt,
-      featureFlags: debugState.featureFlags,
-      faultInjection: debugState.faultInjection,
-      avatarDebug: debugState.avatarDebug,
-      avatarSnapshot: debugState.avatarSnapshot,
-      avatarTransportPreview: debugState.avatarTransportPreview,
-      avatarPoseTransport: debugState.avatarPoseTransport,
-      xrAvatarDebug: debugState.xrAvatarDebug,
-      sceneDebug: {
-        ...debugState.sceneDebug,
-        template: debugState.template,
-        missingAssetCount: debugState.sceneDebug.missingAssets.length,
-        screenshot
-      },
-      note,
-      createdAt: new Date().toISOString()
-    })
-  });
-  const responseRequestId = response.headers.get("x-request-id");
-  if (responseRequestId) {
-    setReportRequestId(responseRequestId);
-  }
-  if (response.ok) {
-    const payload = await response.json().catch(() => null) as { reportId?: string; requestId?: string } | null;
-    if (payload?.requestId) {
-      setReportRequestId(payload.requestId);
-    }
-    if (payload?.reportId) {
-      showReportId(payload.reportId);
-    }
-  }
-}
-
-function reportUnhandledRuntimeError(error: unknown, note: string): void {
-  const reportId = createClientReportId();
-  const message = error instanceof Error ? error.message : String(error ?? "unknown");
-  showReportId(reportId);
-  setStatus(`Runtime error. Report ID: ${reportId}`);
-  debugState.issueCode = "runtime_unhandled_error";
-  debugState.issueSeverity = "error";
-  debugState.lastRecoveryAction = "report_runtime_error";
-  void reportDiagnostics(`${note}:${message.slice(0, 160)}`, { reportId }).catch(() => undefined);
-}
-
 window.addEventListener("error", (event) => {
   reportUnhandledRuntimeError(event.error ?? event.message, "runtime_error");
 });
@@ -5234,91 +5101,6 @@ window.addEventListener("error", (event) => {
 window.addEventListener("unhandledrejection", (event) => {
   reportUnhandledRuntimeError(event.reason, "runtime_unhandled_rejection");
 });
-
-function reportXrTelemetry(frameContext: RuntimeFrameContext): void {
-  if (!renderer.xr.isPresenting && !(avatarVrMockEnabled && syntheticXrState)) {
-    return;
-  }
-  const now = performance.now();
-  const inputSources = frameContext.xr?.inputSources ?? [];
-  const xrRawInputs = syntheticXrState
-    ? [{
-        index: 0,
-        handedness: "right",
-        targetRayMode: "tracked-pointer",
-        profiles: ["synthetic-right"],
-        button0Pressed: syntheticXrState.triggerPressed,
-        button1Pressed: false,
-        axes: [
-          syntheticXrState.axes.turnX,
-          syntheticXrState.axes.turnY,
-          syntheticXrState.axes.turnX,
-          syntheticXrState.axes.turnY
-        ]
-      }]
-    : inputSources.map((source, index) => ({
-        index,
-        handedness: source.handedness ?? null,
-        targetRayMode: source.targetRayMode ?? null,
-        profiles: Array.isArray(source.profiles) ? [...source.profiles] : [],
-        button0Pressed: Boolean(source.gamepad?.buttons?.[0]?.pressed),
-        button1Pressed: Boolean(source.gamepad?.buttons?.[1]?.pressed),
-        axes: Array.isArray(source.gamepad?.axes) ? source.gamepad.axes.map((value) => Number(value.toFixed(3))) : []
-      }));
-  const rawInputActive = xrRawInputs.some((input) => input.button0Pressed || input.button1Pressed || input.axes.some((value) => Math.abs(value) > 0.01));
-  const rayActive = Boolean(debugState.interactionRay.active);
-  const reportIntervalMs = rawInputActive || rayActive ? 16 : 300;
-  if (now - lastXrTelemetryReportAt < reportIntervalMs) {
-    return;
-  }
-  lastXrTelemetryReportAt = now;
-  const rightInputSource = inputSources.find((source) => source.handedness === "right")
-    ?? inputSources[0]
-    ?? null;
-  const rightAxes = syntheticXrState
-    ? [syntheticXrState.axes.turnX, syntheticXrState.axes.turnY, syntheticXrState.axes.turnX, syntheticXrState.axes.turnY]
-    : rightInputSource?.gamepad?.axes ?? [];
-  const payload = {
-    participantId,
-    roomId,
-    updatedAt: new Date().toISOString(),
-    kind: lastXrTelemetryKinds.at(-1) ?? null,
-    kinds: [...lastXrTelemetryKinds],
-    statusLine: debugState.statusLine ?? null,
-    currentSeatId: debugState.currentSeatId ?? null,
-    xrAxes: debugState.xrAxes,
-    interactionRay: debugState.interactionRay,
-    xrAvatarDebug: debugState.xrAvatarDebug ? {
-      profile: debugState.xrAvatarDebug.profile ?? null,
-      rightGrip: debugState.xrAvatarDebug.rightGrip ?? null,
-      rightController: debugState.xrAvatarDebug.rightController ?? null,
-      rightResolved: debugState.xrAvatarDebug.rightResolved ?? null,
-      rightHandWorld: debugState.xrAvatarDebug.rightHandWorld ?? null,
-      rightControllerWorld: debugState.xrAvatarDebug.rightControllerWorld ?? null
-    } : null,
-    xrRawInputs,
-    xrTurnCandidates: {
-      rightPrimaryX: typeof rightAxes[0] === "number" ? Number(rightAxes[0].toFixed(3)) : 0,
-      rightPrimaryY: typeof rightAxes[1] === "number" ? Number(rightAxes[1].toFixed(3)) : 0,
-      rightSecondaryX: typeof rightAxes[2] === "number" ? Number(rightAxes[2].toFixed(3)) : 0,
-      rightSecondaryY: typeof rightAxes[3] === "number" ? Number(rightAxes[3].toFixed(3)) : 0,
-      mappedTurnX: typeof debugState.xrAxes.turnX === "number" ? Number(debugState.xrAxes.turnX.toFixed(3)) : 0,
-      mappedTurnY: typeof debugState.xrAxes.turnY === "number" ? Number(debugState.xrAxes.turnY.toFixed(3)) : 0,
-      snapTurnFired: lastXrTelemetryKinds.includes("snap_turn"),
-      playerYaw: Number(localPoseController.getYaw().toFixed(3)),
-      selectEventCount: xrSelectEventCount
-    }
-  };
-  void fetch(new URL(`/api/rooms/${roomId}/xr-telemetry/${participantId}`, apiBaseUrl), {
-    method: "PUT",
-    headers: {
-      "content-type": "application/json",
-      "authorization": `Bearer ${roomStateAccessToken}`
-    },
-    body: JSON.stringify(payload)
-  }).catch(() => undefined);
-  lastXrTelemetryKinds = [];
-}
 
 function attachVideoTrack(track: Track, options: {
   remote: boolean;
