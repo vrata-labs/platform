@@ -376,7 +376,7 @@ test("isolated live v2 room-state socket rechecks role and revocation before pri
     await expect.poll(() => messages.some(value => value.type === "room_state")).toBe(true);
     socket.send(JSON.stringify({ type: "surface_create_object", probeOnly: true }));
     await expect.poll(() => messages.some(value => value.type === "surface_command_result" && value.result?.accepted === true)).toBe(true);
-    await storage.roomIdentities.transition(scope, { actorType: "room-session", proof: host.identity }, 1,
+    await storage.roomIdentities.transition(scope, { actorType: "room-session", proof: host.identity, expiresAtSeconds: Math.floor(Date.now() / 1000) + 600 }, 1,
       { type: "transfer-host", targetParticipantId: next.identity.participantId });
     const inviteFrom = (bearer: string) => fetch(`${fixture.origin}/api/rooms/${roomId}/invites`, {
       method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${bearer}` },

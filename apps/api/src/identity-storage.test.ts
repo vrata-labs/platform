@@ -195,7 +195,7 @@ for (const backend of ["memory", "postgres"] as const) {
       const other = currentHost === one ? two : one;
       assert.equal((await f.service.resolveCredential(currentHost.credential, scope))?.role, "host");
       assert.equal((await f.service.resolveCredential(other.credential, scope))?.role, "member");
-      await f.ids.transition(scope, { actorType: "room-session", proof: currentHost.identity }, 1,
+      await f.ids.transition(scope, { actorType: "room-session", proof: currentHost.identity, expiresAtSeconds: Math.floor(f.now() / 1000) + 600 }, 1,
         { type: "transfer-host", targetParticipantId: other.identity.participantId });
       assert.equal((await f.service.resolveCredential(other.credential, scope))?.role, "host");
       const late = await f.service.admit(spoofed);
@@ -476,8 +476,8 @@ for (const backend of ["memory", "postgres"] as const) {
       const host = await f.create(scope, "host");
       const member = await f.create(scope, "member");
       const guest = await f.create(scope, "guest");
-      const hostActor = { actorType: "room-session", proof: host.identity } as const;
-      const memberActor = { actorType: "room-session", proof: member.identity } as const;
+      const hostActor = { actorType: "room-session", proof: host.identity, expiresAtSeconds: Math.floor(f.now() / 1000) + 600 } as const;
+      const memberActor = { actorType: "room-session", proof: member.identity, expiresAtSeconds: Math.floor(f.now() / 1000) + 600 } as const;
       await f.ids.claimHost(host.identity, 0);
       const locked = await f.ids.transition(scope, hostActor, 1, { type: "lock" });
       assert.ok(locked.lifecycle.lockedAt);
@@ -550,7 +550,7 @@ for (const backend of ["memory", "postgres"] as const) {
       await assert.rejects(handoff.ids.transition(scope, admin, 1,
         { type: "transfer-owner", targetParticipantId: revoked.identity.participantId }), code("identity_not_active"));
       assert.equal((await handoff.ids.authority(scope))?.ownerIdentityId, recipient.identity.identityId);
-      const locked = await handoff.ids.transition(scope, { actorType: "room-session", proof: recipient.identity }, 1, { type: "lock" });
+      const locked = await handoff.ids.transition(scope, { actorType: "room-session", proof: recipient.identity, expiresAtSeconds: Math.floor(handoff.now() / 1000) + 600 }, 1, { type: "lock" });
       assert.ok(locked.lifecycle.lockedAt, "Member owner can control their personal room without becoming Host");
     });
 
@@ -560,7 +560,7 @@ for (const backend of ["memory", "postgres"] as const) {
       const owner = await f.service.redeemRecovery(recovery.credential, scope);
       const next = await f.create(scope);
       const oldRecovery = await f.issueRecovery(scope, legacy, "owner");
-      const updated = await f.ids.transition(scope, { actorType: "room-session", proof: owner.identity }, 1,
+      const updated = await f.ids.transition(scope, { actorType: "room-session", proof: owner.identity, expiresAtSeconds: Math.floor(f.now() / 1000) + 600 }, 1,
         { type: "transfer-owner", targetParticipantId: next.identity.participantId });
       assert.equal(updated.ownerIdentityId, next.identity.identityId);
       assert.equal(updated.hostIdentityId, owner.identity.identityId);
@@ -568,13 +568,13 @@ for (const backend of ["memory", "postgres"] as const) {
       assert.equal((await f.ids.resolve(next.identity))?.isOwner, true);
       await assert.rejects(f.service.redeemRecovery(oldRecovery.credential, scope), code("recovery_invalid"));
       await assert.rejects(f.issueRecovery(scope, legacy, "owner"), code("identity_forbidden"));
-      await assert.rejects(f.ids.transition(scope, { actorType: "room-session", proof: owner.identity }, 2,
+      await assert.rejects(f.ids.transition(scope, { actorType: "room-session", proof: owner.identity, expiresAtSeconds: Math.floor(f.now() / 1000) + 600 }, 2,
         { type: "remove", targetParticipantId: next.identity.participantId }), code("identity_forbidden"));
       await assert.rejects(f.ids.transition(scope, admin, 2,
         { type: "remove", targetParticipantId: next.identity.participantId }), code("identity_forbidden"));
-      await assert.rejects(f.ids.transition(scope, { actorType: "room-session", proof: owner.identity }, 2,
+      await assert.rejects(f.ids.transition(scope, { actorType: "room-session", proof: owner.identity, expiresAtSeconds: Math.floor(f.now() / 1000) + 600 }, 2,
         { type: "end" }), code("identity_forbidden"), "the Host cannot permanently end the owner's personal room");
-      const endedByOwner = await f.ids.transition(scope, { actorType: "room-session", proof: next.identity }, 2, { type: "end" });
+      const endedByOwner = await f.ids.transition(scope, { actorType: "room-session", proof: next.identity, expiresAtSeconds: Math.floor(f.now() / 1000) + 600 }, 2, { type: "end" });
       assert.ok(endedByOwner.lifecycle.endedAt);
     });
 
@@ -583,7 +583,7 @@ for (const backend of ["memory", "postgres"] as const) {
       const host = await f.create(scope, "host");
       const next = await f.create(scope);
       await f.ids.claimHost(host.identity, 0);
-      const actor = { actorType: "room-session", proof: host.identity } as const;
+      const actor = { actorType: "room-session", proof: host.identity, expiresAtSeconds: Math.floor(f.now() / 1000) + 600 } as const;
       await assert.rejects(f.ids.transition(scope, actor, 1, { type: "grant-presenter" } as Parameters<typeof f.ids.transition>[3]), code("invalid_identity_input"));
       await assert.rejects(f.ids.transition(scope, { ...actor, proof: { ...host.identity, tenantId: "foreign" } }, 1, { type: "lock" }), code("identity_not_active"));
       await assert.rejects(f.ids.transition(scope, actor, 1, { type: "remove", targetParticipantId: host.identity.participantId }), code("identity_forbidden"));
@@ -920,12 +920,12 @@ test("Postgres upgrades pre-lifecycle authority rows without replacing their gua
   assert.equal(authority?.lifecycle.lockedBy, "old-administrator");
   assert.equal(Object.hasOwn(authority!.lifecycle, "hostParticipantId"), false);
   assert.equal((await upgraded.roomIdentities.resolve(host.identity))?.role, "host");
-  await f.ids.transition(scope, { actorType: "room-session", proof: host.identity }, 1, { type: "unlock" });
+  await f.ids.transition(scope, { actorType: "room-session", proof: host.identity, expiresAtSeconds: Math.floor(f.now() / 1000) + 600 }, 1, { type: "unlock" });
   assert.equal((await f.ids.authority(scope))?.lifecycle.lockedAt, null);
   const raw = await f.pool!.query("select session_control from rooms where room_id=$1", [scope.roomId]);
   assert.equal(raw.rows[0].session_control.lockedAt, lockedAt, "legacy JSON is frozen evidence, not a second authority writer");
   await f.create(scope, "guest");
-  await f.ids.transition(scope, { actorType: "room-session", proof: host.identity }, 2, { type: "end" });
+  await f.ids.transition(scope, { actorType: "room-session", proof: host.identity, expiresAtSeconds: Math.floor(f.now() / 1000) + 600 }, 2, { type: "end" });
   await assert.rejects(f.pool!.query(`update room_identity_authority_v2 set revision=revision+1,lifecycle=jsonb_set(lifecycle,'{endedAt}','null') where room_id=$1`, [scope.roomId]), /nonmonotonic_identity_lifecycle/);
   await upgraded.init();
   assert.ok((await upgraded.roomIdentities.authority(scope))?.lifecycle.endedAt);

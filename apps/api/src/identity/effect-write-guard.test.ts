@@ -25,7 +25,7 @@ test("effect guard rejects revoked epochs, demotion, wrong scope and expired ses
   assert.throws(() => assertCurrentEffect(guard, current({ permission: false }), 99_000), (error: unknown) =>
     error instanceof IdentityStorageError && error.code === "identity_forbidden");
   assert.throws(() => assertCurrentEffect(guard, current(), 100_000), (error: unknown) =>
-    error instanceof IdentityStorageError && error.code === "identity_not_active");
+    error instanceof IdentityStorageError && error.code === "identity_session_expired");
   assert.throws(() => assertCurrentEffect({ ...guard, ownerOnly: true }, current(), 99_000), (error: unknown) =>
     error instanceof IdentityStorageError && error.code === "identity_forbidden");
   assert.doesNotThrow(() => assertCurrentEffect({ ...guard, ownerOnly: true }, current({ owner: true }), 99_000));

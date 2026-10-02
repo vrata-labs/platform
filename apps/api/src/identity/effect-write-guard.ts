@@ -1,5 +1,5 @@
 import { getRoomPermissions, hasRoomPermission, type RoomPermission, type RoomRole } from "@vrata/shared-types";
-import { activeIdentity, assertRoomActive } from "./authority.js";
+import { activeIdentity, assertActorSession, assertRoomActive } from "./authority.js";
 import { IdentityStorageError, type IdentityTransaction, type RoomIdentityProof } from "./contracts.js";
 
 export interface RoomEffectGuard extends RoomIdentityProof {
@@ -17,9 +17,10 @@ export function assertCurrentEffect(guard: RoomEffectGuard, current: RoomEffectA
   nowMs = Date.now()): RoomEffectActor {
   if (!current || current.identity.tenantId !== guard.tenantId || current.identity.roomId !== guard.roomId
     || current.identity.identityId !== guard.identityId || current.identity.participantId !== guard.participantId
-    || current.identity.authEpoch !== guard.authEpoch || nowMs >= guard.expiresAtSeconds * 1000) {
+    || current.identity.authEpoch !== guard.authEpoch) {
     throw new IdentityStorageError("identity_not_active");
   }
+  assertActorSession({ actorType: "room-session", proof: guard, expiresAtSeconds: guard.expiresAtSeconds }, nowMs);
   if (!hasRoomPermission(current.permissions, guard.permission) || guard.ownerOnly && !current.isOwner
     || guard.hostOrOwner && current.role !== "host" && !current.isOwner) {
     throw new IdentityStorageError("identity_forbidden");

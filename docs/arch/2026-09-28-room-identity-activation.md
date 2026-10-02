@@ -250,8 +250,37 @@ a performance SLA or a claim of cross-replica consistency.
 Invite/waiting lists, revocation and approval/rejection use the same fence and
 connection, including finalized-decision retry. Repeat revocation retains the
 original actor/time. Existing invite creation keeps its own atomic authority
-check; request/session expiry in that path and other lifecycle commands is a
-separate final activation obligation, not closed by these metadata fences.
+check.
+
+### Prepared session expiry at the mutation boundary
+
+Every room-session mutation actor carries a required server-derived
+`expiresAtSeconds`, distinct from the durable identity credential. Lifecycle
+and invite routes construct it from verified v2 HTTP context, never from body
+fields. Transition checks use the one reducer-time clock sample after loading
+under the parent-room lock; the load-time pending-capacity timestamp is not an
+authorization clock. Invite checks and createdAt use the injected clock sampled
+after all awaited authority reads. PostgreSQL permission/expiry failures use
+typed storage errors, matching Memory instead of turning an access denial into
+500. Exact expiry is denied; administrator actors have no room-session deadline.
+
+Late expiry yields `identity_session_expired` with HTTP 401, including fenced
+private responses. It does not revoke identity or consume recovery: an active
+RI2 proof can issue a new session. Error precedence keeps a blocked room blocked,
+and expiry precedes authority-revision conflict in a transition. The HTTP tests
+use otherwise-valid commands/live revisions and also send a forged future body
+deadline, proving that stalled body and lock waits cannot extend the session.
+Lifecycle/invite 401 responses use `error=identity_session_expired`; effect
+fences use `error=identity_required, reason=identity_session_expired`. Current
+clients do not interpret either as a recovery gate. Normalize these forms before
+introducing a shared client retry-on-expiry contract.
+
+The existing already-expired-at-entry classification still uses recovery refusal
+and must be normalized before activation. Legacy floor1 requests admitted before
+cutover also need a policy-row shared fence at write/release; entry checks alone
+do not close that in-flight race. Unwired RI2 claimHost/transferHost helpers need
+their own credential-expiry check before any route starts using them. These and
+the media gates remain explicit obligations; this slice does not raise floor 2.
 
 ## Runtime adoption
 

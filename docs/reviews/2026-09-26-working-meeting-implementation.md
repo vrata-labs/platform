@@ -287,6 +287,18 @@ Manifest/presence ответы выпускаются после authority-пр�
 
 [Артефакт успешного gate](https://github.com/vrata-labs/platform/actions/runs/37053365482/artifacts/11248629107): Hall/BlueOffice/ArtGallery loaded, private four-party meeting и cleanup завершены. Последующий public smoke `/health`, `/rooms/demo-room`, `/control-plane`, `/api/templates` — 200. Общий identity floor остался 1; фактические v2 fences проверены отдельными PostgreSQL/HTTP-тестами и не выдаются за активацию v2 на общем хосте.
 
+### T01a-S2b-V: expiry перед authority mutation и invite issuance
+
+Room-session mutation actor теперь требует server-derived deadline; HTTP lifecycle и invite-creation используют один проверенный конструктор без копирования сроков из body. Проверка в reducer выполняется после ожидания parent-row lock; invite авторизация и createdAt используют один пост-read sample внедряемых часов. PostgreSQL invite denial больше не падает обычным Error/500 — результаты типизированы и согласованы с Memory. Поздняя expiry возвращает отдельный 401, включая приватный response fence; identity при этом не отзывается и может обновить сессию через свой proof без recovery.
+
+Адресные проверки охватывают malformed/missing gateway deadlines, точную границу времени в Memory/PostgreSQL, очередь на parent lock с перемещением часов и действующий контрольный случай, admin без room-session expiry, seven stalled-body HTTP mutations с подставленным будущим сроком и приватный ответ после expiry. Команды используют актуальные revisions и подготовленные target states, поэтому expiry является реальной причиной отказа, а не маскируется прежним revision conflict. Отдельный stale-revision случай проверяет приоритет ошибок.
+
+Общий floor 2 не активируется. До cutover остаются policy-row fence для in-flight legacy requests, корректная классификация уже истёкшего входного rs2, expiry перед будущим wiring RI2 mutation helpers и media source/отзыв текущего показа.
+
+Полный реальный HTTP-сценарий также подтверждает именно PostgreSQL invite-denial после входной проверки: действующий Host ожидает parent-room lock, роль передаётся другому участнику в удерживающей транзакции, затем запрос получает **403 identity_forbidden**, не 500, и новое приглашение не сохраняется. Это отличается от отказа на входе запросу уже бывшего Host.
+
+Локальная проверка: lint/typecheck/build, полный `pnpm test` с PostgreSQL 16 и pinned rollback builds — API **866/866**, runtime **931/931**, remote-browser **39/39**, room-state **76/76**, shared-types **30/30**, tools **125/125**. Финальный полный local `pnpm test:e2e --workers=1` — **158/158**, с первого запуска, без skip/retry (25,4 минуты). Изолированный PostgreSQL на tmpfs удалён после проверки; исходный контейнер и соседние сессии не менялись. Неблокирующее различие двух форм 401 закреплено в activation contract как задача до общего client retry-on-expiry.
+
 ## Публикация первого среза T01/T12
 
 Локально прошли workspace lint/typecheck/build/tests с PostgreSQL, затем runtime build и 905 runtime tests после финальных правок. Полный `pnpm test:e2e` на финальном исполняемом дереве: **148 passed**, без skip (41.6 min).

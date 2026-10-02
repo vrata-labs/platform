@@ -1,9 +1,10 @@
-import { activeIdentity, assertRoomActive, bumpAuthority, checkRevision, fail, validCounter, validId } from "./authority.js";
+import { activeIdentity, assertActorSession, assertRoomActive, bumpAuthority, checkRevision, fail, validCounter, validId } from "./authority.js";
 import type { IdentityTransaction, RoomIdentityActor, RoomIdentityCommand } from "./contracts.js";
 
 /** Runs under the same parent-room lock as admission, recovery and revocation. */
 export function transitionIdentityAuthority(state: IdentityTransaction, actor: RoomIdentityActor, expectedRevision: number, command: RoomIdentityCommand, now: string): void {
   assertRoomActive(state);
+  assertActorSession(actor, Date.parse(now));
   checkRevision(state, expectedRevision);
   const admin = actor?.actorType === "admin-token" && actor.role === "admin" && validId(actor.actorId);
   const identity = actor?.actorType === "room-session" ? activeIdentity(state, actor.proof) : null;

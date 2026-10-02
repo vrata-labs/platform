@@ -51,7 +51,7 @@ import { createRoomIdentityCodec } from "@vrata/shared-types/identity-credential
 import { admitV2RoomSession, type V2AdmissionRequest } from "./identity/http-admission.js";
 import { currentSessionControlV2, resolveRoomRequestV2, type VerifiedRoomRequestV2 } from "./identity/http-authority.js";
 import { roomMediaGrantName } from "./identity/media-room.js";
-import { applyRoomLifecycleV2, lifecycleV2Error } from "./identity/http-lifecycle.js";
+import { applyRoomLifecycleV2, lifecycleV2Error, roomIdentityActorFromHttp } from "./identity/http-lifecycle.js";
 import { finalizeProofBoundToken } from "./identity/effect-fence.js";
 import { IdentityStorageError } from "./identity/contracts.js";
 import type { RoomEffectGuard, RoomEffectActor } from "./identity/effect-write-guard.js";
@@ -816,6 +816,7 @@ async function runGuardedRoomEffect<T>(storage: Storage, actor: ControlPlaneActo
     return await storage.withRoomIdentityEffect(guard, effect);
   } catch (error) {
     if (error instanceof IdentityStorageError) {
+      if (error.code === "identity_session_expired") throw new IdentityBoundaryError(401, "identity_session_expired");
       if (error.code === "identity_forbidden") throw new RoomEffectPermissionDenied("permission_denied");
       throw new IdentityBoundaryError(409, "identity_recovery_required");
     }
@@ -831,7 +832,7 @@ async function releaseRoomNotes(request: IncomingMessage, storage: Storage, acto
   } catch (error) {
     if (actor.identityProtocolVersion === 2 && (error instanceof RoomEffectPermissionDenied || error instanceof IdentityBoundaryError)) {
       writeRoomNotesAudit({ request, action, roomId: room.roomId, scope,
-        result: "denied", reason: error instanceof RoomEffectPermissionDenied ? "permission_denied" : "identity_recovery_required", actor });
+        result: "denied", reason: error instanceof RoomEffectPermissionDenied ? "permission_denied" : error.reason, actor });
     }
     throw error;
   }
@@ -2848,11 +2849,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     };
     let invite: RoomInviteRecord;
     if (await legacyIdentityBoundary.minimum() >= 2) {
-      const identityActor = actor.actorType === "admin-token"
-        ? { actorType: "admin-token" as const, actorId: actor.actorId, role: "admin" as const }
-        : { actorType: "room-session" as const, proof: { tenantId: room.tenantId, roomId,
-          identityId: actor.identityId ?? "", participantId: actor.participantId ?? "", authEpoch: actor.authEpoch ?? 0 } };
-      try { invite = await storage.createRoomInviteV2({ ...inviteInput, actor: identityActor }); }
+      try { invite = await storage.createRoomInviteV2({ ...inviteInput, actor: roomIdentityActorFromHttp(actor, room) }); }
       catch (error) {
         const failure = lifecycleV2Error(error);
         if (failure) return json(response, failure.status, { error: failure.error });

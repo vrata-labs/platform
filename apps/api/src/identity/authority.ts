@@ -1,5 +1,5 @@
 import type { RoomSessionControlState } from "../storage-contracts.js";
-import { IdentityStorageError, type IdentityTransaction, type RoomIdentityLifecycle, type RoomIdentityProof, type RoomIdentityRecord } from "./contracts.js";
+import { IdentityStorageError, type IdentityTransaction, type RoomIdentityActor, type RoomIdentityLifecycle, type RoomIdentityProof, type RoomIdentityRecord } from "./contracts.js";
 
 export function fail(code: ConstructorParameters<typeof IdentityStorageError>[0]): never { throw new IdentityStorageError(code); }
 export const validId = (value: unknown): value is string => typeof value === "string" && value.length > 0 && value.length <= 200 && !/[\u0000-\u001f]/.test(value);
@@ -23,6 +23,16 @@ export function identityWasRemoved(state: IdentityTransaction, participantId: st
 
 export function assertRoomActive(state: IdentityTransaction): void {
   if (state.room.status === "disabled" || state.room.disabledAt || state.authority.lifecycle.endedAt) fail("room_blocked");
+}
+
+/** The authenticated session deadline is separate from the durable identity.
+ * Sample after lock waits and before mutation; expiry is renewable, not revoke. */
+export function assertActorSession(actor: RoomIdentityActor, nowMs: number): void {
+  if (actor?.actorType !== "room-session") return;
+  if (!Number.isSafeInteger(actor.expiresAtSeconds) || actor.expiresAtSeconds <= 0
+    || !Number.isSafeInteger(nowMs) || nowMs < 0 || nowMs >= actor.expiresAtSeconds * 1000) {
+    fail("identity_session_expired");
+  }
 }
 
 export function activeIdentity(state: IdentityTransaction, proof: RoomIdentityProof): RoomIdentityRecord {

@@ -4,6 +4,7 @@ import type { RoomInviteRecord, WaitingRoomRequestRecord } from "../storage-cont
 import { createRoomIdentityStorage, emptyIdentityAuthority } from "./store.js";
 import { admissionWindows, assertAdmissionLimitInput, type AdmissionLimitInput } from "./admission-limits.js";
 import { assertMemoryEffect, type RoomEffectGuard } from "./effect-write-guard.js";
+import { assertActorSession } from "./authority.js";
 
 export function createMemoryRoomIdentities(getRoom: (roomId: string) => IdentityRoomBinding | undefined, now = Date.now,
   getInviteByHash: (hash: string) => RoomInviteRecord | undefined = () => undefined, getMinimumProtocol = () => 1,
@@ -72,11 +73,13 @@ export function createMemoryRoomIdentities(getRoom: (roomId: string) => Identity
       if (!state || state.minimumProtocol < 2) throw new IdentityStorageError("room_not_found");
       return assertMemoryEffect(state, guard, now());
     },
-    authorizeInvite(roomId: string, actor: RoomIdentityActor, create: () => RoomInviteRecord): RoomInviteRecord {
+    authorizeInvite(roomId: string, actor: RoomIdentityActor, create: (atMs: number) => RoomInviteRecord): RoomInviteRecord {
       const room = getRoom(roomId);
       if (!room || getMinimumProtocol() < 2 || room.status === "disabled" || room.disabledAt) throw new IdentityStorageError("room_blocked");
       const state = snapshot(room, { identityIds: actor.actorType === "room-session" ? [actor.proof.identityId] : [] });
       if (!state || state.authority.lifecycle.endedAt) throw new IdentityStorageError("room_blocked");
+      const at = now();
+      assertActorSession(actor, at);
       if (actor.actorType === "room-session") {
         const proof = actor.proof;
         const identity = state.identities.get(proof.identityId);
@@ -84,7 +87,7 @@ export function createMemoryRoomIdentities(getRoom: (roomId: string) => Identity
           || identity.participantId !== proof.participantId || identity.authEpoch !== proof.authEpoch
           || ![state.authority.hostIdentityId, state.authority.ownerIdentityId].includes(identity.identityId)) throw new IdentityStorageError("identity_forbidden");
       } else if (actor.role !== "admin" || !actor.actorId) throw new IdentityStorageError("identity_forbidden");
-      return create();
+      return create(at);
     },
     bootstrapOwner(room: IdentityRoomBinding, participantId: string, displayName: string): RoomIdentityRecord {
       if (room.roomType !== "personal" || room.ownerParticipantId !== participantId || authorities.has(room.roomId)
