@@ -238,6 +238,15 @@ API test files переведены на последовательный зап
 
 Локально прошли workspace lint/typecheck/build, полный `pnpm test` с PostgreSQL и pinned rollback: API **858/858**, remote-browser **39/39**, runtime **931/931**, room-state **76/76**, shared-types **30/30**, tools **125/125**. Первый full E2E дал 157/158 — прежний guest screen-share сценарий не дождался отказа за 10 секунд и затем отдельно прошёл без правок. Финальный полный local `pnpm test:e2e --workers=1` на том же исполняемом дереве — **158/158**, без skip/retry (33 минуты). Внешние media/JWT, полученные до revocation, не объявляются отозванными этим срезом.
 
+| Этап повторной проверки перед эффектом | Результат |
+|---|---|
+| Проверенный и опубликованный SHA | `2aa3f9e64547ffb6837cde88a1a8764cc14b85d6` |
+| [CI 36944286362](https://github.com/vrata-labs/platform/actions/runs/36944286362) | Success: пакетные тесты, полный E2E, M0.5 и pinned assets |
+| [Docker Publish 36944286292](https://github.com/vrata-labs/platform/actions/runs/36944286292) | Success: immutable API, room-state и обновлённый remote-browser exact SHA |
+| [Staging Deploy 36946624938](https://github.com/vrata-labs/platform/actions/runs/36946624938) | Success с первой попытки: **52/52 staging E2E**, **1/1 blocking Rutube**; successful SHA сохранён; rollback skipped |
+
+[Артефакт staging gate](https://github.com/vrata-labs/platform/actions/runs/36946624938/artifacts/11203496839): Hall/BlueOffice/ArtGallery loaded на текущих страницах, встреча с собственными материалами и cleanup завершились. После gate `/health`, `/rooms/demo-room`, `/control-plane`, `/api/templates` — 200. Общий identity floor остался 1, post-revoke v2 effects проверены на изолированных PostgreSQL/API тестах. Retry/rollback этой публикации не потребовались.
+
 ## Публикация первого среза T01/T12
 
 Локально прошли workspace lint/typecheck/build/tests с PostgreSQL, затем runtime build и 905 runtime tests после финальных правок. Полный `pnpm test:e2e` на финальном исполняемом дереве: **148 passed**, без skip (41.6 min).
