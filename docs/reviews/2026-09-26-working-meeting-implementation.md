@@ -276,6 +276,17 @@ Manifest/presence ответы выпускаются после authority-пр�
 
 Локально прошли workspace lint/typecheck/build и полный `pnpm test` с настоящим PostgreSQL 16 на отдельном tmpfs и pinned rollback builds: API **861/861**, runtime **931/931**, remote-browser **39/39**, room-state **76/76**, shared-types **30/30**, tools **125/125**. Финальный полный local `pnpm test:e2e --workers=1` — **158/158**, без skip/retry, с первого запуска (25,7 минуты). Временный контейнер удалён после проверки; исходный локальный PostgreSQL и соседние сессии не менялись.
 
+| Этап scene/presence/invitation metadata | Результат |
+|---|---|
+| Проверенный и опубликованный SHA | `747c21c2648f92068f9b7e924ee802b331be7750` |
+| [CI 37046187648](https://github.com/vrata-labs/platform/actions/runs/37046187648) | Success: пакетные тесты, полный E2E, M0.5 и pinned assets |
+| [Docker Publish 37046188664](https://github.com/vrata-labs/platform/actions/runs/37046188664) | Success: immutable API, room-state и remote-browser exact SHA |
+| [Staging Deploy 37053365482](https://github.com/vrata-labs/platform/actions/runs/37053365482) | Success: **52/52 staging E2E**, **1/1 blocking Rutube**; successful SHA сохранён; rollback skipped |
+
+Первая попытка [37049629955](https://github.com/vrata-labs/platform/actions/runs/37049629955) дала 51/52: strict LiveKit audio public-demo не выполнил двусторонний критерий за 45 секунд. Штатный rollback прошёл, `/health`, `demo-room` и control-plane после него отвечали 200. Причина audio-сбоя не объявляется установленной. Повтор полного gate того же SHA без изменения кода и таймаутов прошёл полностью.
+
+[Артефакт успешного gate](https://github.com/vrata-labs/platform/actions/runs/37053365482/artifacts/11248629107): Hall/BlueOffice/ArtGallery loaded, private four-party meeting и cleanup завершены. Последующий public smoke `/health`, `/rooms/demo-room`, `/control-plane`, `/api/templates` — 200. Общий identity floor остался 1; фактические v2 fences проверены отдельными PostgreSQL/HTTP-тестами и не выдаются за активацию v2 на общем хосте.
+
 ## Публикация первого среза T01/T12
 
 Локально прошли workspace lint/typecheck/build/tests с PostgreSQL, затем runtime build и 905 runtime tests после финальных правок. Полный `pnpm test:e2e` на финальном исполняемом дереве: **148 passed**, без skip (41.6 min).
