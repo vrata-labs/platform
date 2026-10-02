@@ -279,6 +279,8 @@ export interface XrTelemetryEventRecord {
 export interface Storage {
   readonly roomIdentities: import("./identity/contracts.js").RoomIdentityStorage;
   readonly identityProtocol: import("./identity/protocol.js").IdentityProtocolPolicy;
+  withRoomIdentityEffect<T>(guard: import("./identity/effect-write-guard.js").RoomEffectGuard,
+    effect: (scoped: RoomIdentityEffectStorage) => Promise<T>): Promise<T>;
   reserveIdentityAdmission(input: import("./identity/admission-limits.js").AdmissionLimitInput): Promise<boolean>;
   hasRoomIdentityAuthority(roomId: string): Promise<boolean>;
   listTenants(): Promise<TenantRecord[]>;
@@ -339,6 +341,10 @@ export interface ExpectedRoomTemplateBinding {
   templateId: string;
   templateVersion: string;
 }
+
+/** Only DB-only mutations and the tombstone read belong inside a room fence. */
+export type RoomIdentityEffectStorage = Pick<Storage, "upsertRoomNote" | "deleteRoomNote" | "restoreRoomNoteVersion"
+  | "createRoomDocument" | "markRoomDocumentDeleted" | "updateRoomDocumentSurface" | "getRoomDocument">;
 
 export type SceneBundleUpdateInput = Partial<SceneBundleCreateInput> & {
   publicUrl?: string;

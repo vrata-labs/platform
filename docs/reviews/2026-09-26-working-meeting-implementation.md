@@ -230,6 +230,14 @@ API test files переведены на последовательный зап
 
 [Артефакт успешного gate](https://github.com/vrata-labs/platform/actions/runs/36864044918/artifacts/11165215941): Hall, BlueOffice и ArtGallery загрузились на текущих страницах, встреча и cleanup завершились; последующий public smoke `/health`, `/rooms/demo-room`, `/control-plane`, `/api/templates` — 200. Общий staging по-прежнему на identity floor 1: end-to-end v2 handoff проверен локально и в CI-изолированных тестах, не заявлен активным на общем хосте.
 
+### T01a-S2b-V: повторная проверка перед эффектом
+
+Подготовлены post-sign authority checks для media/frame-токенов и проверка текущей комнаты/исполнителя remote-browser media. Записи заметок и публикация/привязка/удаление документов используют короткую DB-only границу с блокировкой родительской комнаты. Authority и изменение данных выполняются на одном соединении, в READ COMMITTED; S3 и room-state RPC остаются снаружи транзакции. После принятого удаления документ скрыт независимо от внешней очистки; сохранённый tombstone допускает авторизованный повтор DELETE. Уже открытый frame socket закрывается по сроку proof и не принимает новые сообщения после него.
+
+Регрессии проверяют запись против revocation в обоих порядках, пул размером один, конкурентные записи и rollback частичной записи. Реальный API проверяет задержанный body заметки/upload/surface, отзыв media/frame credentials во время запроса и повтор cleanup после сбоя с отказом прежнему Host. Новая граница не объявляется полным решением отзыва self-hosted LiveKit JWT: текущая документация подтверждает отсутствие server-side revocation и обновление токенов активных соединений. Активация общего floor 2 всё ещё запрещена до remaining REST/media gate.
+
+Локально прошли workspace lint/typecheck/build, полный `pnpm test` с PostgreSQL и pinned rollback: API **858/858**, remote-browser **39/39**, runtime **931/931**, room-state **76/76**, shared-types **30/30**, tools **125/125**. Первый full E2E дал 157/158 — прежний guest screen-share сценарий не дождался отказа за 10 секунд и затем отдельно прошёл без правок. Финальный полный local `pnpm test:e2e --workers=1` на том же исполняемом дереве — **158/158**, без skip/retry (33 минуты). Внешние media/JWT, полученные до revocation, не объявляются отозванными этим срезом.
+
 ## Публикация первого среза T01/T12
 
 Локально прошли workspace lint/typecheck/build/tests с PostgreSQL, затем runtime build и 905 runtime tests после финальных правок. Полный `pnpm test:e2e` на финальном исполняемом дереве: **148 passed**, без skip (41.6 min).

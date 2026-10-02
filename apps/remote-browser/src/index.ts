@@ -4,10 +4,11 @@ import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { createRequire } from "node:module";
 import { chromium, type Browser, type BrowserContext, type Frame, type Page } from "playwright-core";
-import { WebSocketServer, type WebSocket } from "ws";
+import { WebSocketServer, WebSocket } from "ws";
 import type { RemoteBrowserErrorCode, RemoteBrowserExecutorInputState, RemoteBrowserMediaSourceRect, RemoteBrowserPatch, SurfaceInputEvent } from "@vrata/shared-types";
 
 import { decodeRemoteBrowserFrameToken } from "./frame-token.js";
+import { attachFrameTokenLease } from "./frame-socket-lease.js";
 import { canStartRemoteBrowserSession, resolveRemoteBrowserFrameTokenSecret, resolveRemoteBrowserServicePolicy, scheduleRemoteBrowserSessionExpiry, validateRemoteBrowserSessionIdentity } from "./service-policy.js";
 import { createRemoteBrowserUrlPolicy, validateRemoteBrowserUrl, type RemoteBrowserUrlPolicy } from "./url-policy.js";
 
@@ -1850,10 +1851,13 @@ export function startRemoteBrowserService(listenPort = port, env: NodeJS.Process
       return;
     }
     wss.handleUpgrade(request, socket, head, (ws) => {
+      const lease = attachFrameTokenLease({ expiresAtSeconds: token.exp,
+        close: (code, reason) => ws.close(code, reason), onClose: callback => { ws.once("close", callback); } });
       session.clients.add(ws);
       ws.on("message", (raw) => {
+        if (lease.closeIfExpired()) return;
         void handleFrameSocketMessage(session, ws, raw).catch(() => {
-          ws.send(JSON.stringify({ type: "media-error", errorCode: "media_signal_failed" }));
+          if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "media-error", errorCode: "media_signal_failed" }));
         });
       });
       ws.on("close", () => {

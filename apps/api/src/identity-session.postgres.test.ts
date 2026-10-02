@@ -1,8 +1,12 @@
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHmac, randomUUID } from "node:crypto";
+import { request as httpRequest, createServer as createHttpServer } from "node:http";
 import { once } from "node:events";
+import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { createServer } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
@@ -27,6 +31,19 @@ test("internal room-state verifier trusts v2 possession and current authority, n
   const connection = new URL(process.env.VRATA_TEST_POSTGRES_URL);
   connection.searchParams.set("options", `-c search_path=${schema},public`);
   const pool = new Pool({ connectionString: connection.href });
+  const documentRoot = await mkdtemp(join(tmpdir(), "vrata-identity-effect-docs-"));
+  let failDocumentCleanup = false;
+  let documentCleanupCalls = 0;
+  const roomStateMock = createHttpServer((request, response) => {
+    if (request.method === "DELETE") {
+      documentCleanupCalls++;
+      response.writeHead(failDocumentCleanup ? 503 : 200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ removedCount: 0 }));
+    } else { response.writeHead(200); response.end("{}"); }
+  });
+  roomStateMock.listen(0, "127.0.0.1");
+  await once(roomStateMock, "listening");
+  const mockStatePort = (roomStateMock.address() as { port: number }).port;
   const port = await freePort();
   const baseUrl = `http://127.0.0.1:${port}`;
   const secret = "identity-session-test-signing-root-32-bytes";
@@ -46,6 +63,8 @@ test("internal room-state verifier trusts v2 possession and current authority, n
     child = spawn(process.execPath, [fileURLToPath(new URL("./index.js", import.meta.url))], { env: {
       ...process.env, NODE_ENV: "development", POSTGRES_URL: connection.href,
       CONTROL_PLANE_ADMIN_TOKEN: "test-admin", VRATA_INTERNAL_SERVICE_TOKEN: internalToken,
+      DOCUMENT_LOCAL_UPLOAD_ROOT: documentRoot,
+      ROOM_STATE_INTERNAL_URL: `http://127.0.0.1:${mockStatePort}`,
       VRATA_IDENTITY_PROXY_TOKEN: "identity-session-test-proxy-key-32-bytes",
       LIVEKIT_API_KEY: "media-test-key", LIVEKIT_API_SECRET: "media-test-secret", LIVEKIT_URL: "ws://127.0.0.1:7880",
       STATE_TOKEN_SECRET: secret, API_PORT: String(port), VRATA_DISABLE_AUTOSTART: "0", NOAH_DISABLE_AUTOSTART: "0"
@@ -60,6 +79,33 @@ test("internal room-state verifier trusts v2 possession and current authority, n
     const verify = (token: string, participantId = identity.participantId, headers: Record<string, string> = { "x-vrata-internal-token": internalToken }) =>
       fetch(`${baseUrl}/api/internal/identity-session/verify`, { method: "POST", headers: { "content-type": "application/json", ...headers },
         body: JSON.stringify({ roomId: scope.roomId, participantId, sessionToken: token }) });
+    const delayedBody = async (path: string, token: string, contentType: string, prefix: Buffer, suffix: Buffer,
+      duringBody: () => Promise<void>, method: "PUT" | "POST" = "POST"): Promise<{ status: number; body: string }> => {
+      let complete!: (value: { status: number; body: string }) => void;
+      let fail!: (error: Error) => void;
+      const received = new Promise<{ status: number; body: string }>((resolve, reject) => { complete = resolve; fail = reject; });
+      const outgoing = httpRequest(`${baseUrl}${path}`, { method, headers: {
+        "content-type": contentType, authorization: `Bearer ${token}`
+      } }, result => {
+        let body = "";
+        result.on("data", chunk => { body += String(chunk); });
+        result.on("end", () => complete({ status: result.statusCode ?? 0, body }));
+      });
+      outgoing.on("error", fail);
+      outgoing.write(prefix);
+      try {
+        await delay(100);
+        await duringBody();
+        outgoing.end(suffix);
+        return await received;
+      } catch (error) {
+        outgoing.destroy();
+        throw error;
+      }
+    };
+    const delayedJson = (path: string, token: string, prefix: string, suffix: string,
+      duringBody: () => Promise<void>, method: "PUT" | "POST" = "POST") =>
+      delayedBody(path, token, "application/json", Buffer.from(prefix), Buffer.from(suffix), duringBody, method);
     assert.equal((await verify(sessionToken, identity.participantId, {})).status, 403);
     assert.equal((await verify(sessionToken)).status, 409, "no v2 session is usable before activation");
     const legacyPersonal = await storage.createRoom({ tenantId: scope.tenantId, templateId: "meeting-room-basic", name: "Legacy personal materials",
@@ -303,6 +349,14 @@ test("internal room-state verifier trusts v2 possession and current authority, n
     assert.equal(executorMedia.status, 200, "a verified executor may publish in the v2 media namespace");
     const executorJwt = (await executorMedia.json() as { token: string }).token;
     assert.equal((JSON.parse(Buffer.from(executorJwt.split(".")[1]!, "base64url").toString("utf8")) as { video: { room: string } }).video.room, v2MediaRoom);
+    const endedExecutorRoom = await storage.createRoom({ tenantId: scope.tenantId, templateId: "meeting-room-basic", name: "Ended browser media" });
+    await storage.roomIdentities.transition({ tenantId: endedExecutorRoom.tenantId, roomId: endedExecutorRoom.roomId },
+      { actorType: "admin-token", actorId: "test-admin", role: "admin" }, 0, { type: "end" });
+    assert.equal((await fetch(`${baseUrl}/api/tokens/remote-browser-media`, { method: "POST", headers: {
+      "content-type": "application/json", "x-vrata-internal-token": internalToken
+    }, body: JSON.stringify({ roomId: endedExecutorRoom.roomId, objectId: "browser-1", executorSessionId: "remote-browser:browser-1",
+      executorInstanceId: "remote-browser:browser-1:instance:generation-1", mediaParticipantId: "remote-browser:browser-1" }) })).status, 409,
+    "an ended v2 room cannot issue new remote-browser publication grants");
     const spaces = await fetch(`${baseUrl}/api/rooms/${publicRoom.roomId}/spaces`, { headers: { authorization: `Bearer ${created.token}` } });
     assert.equal(spaces.status, 200, "the authenticated selector continues to work after activation");
     const repeated = await issue({ participantId: created.participantId, requestedRole: "host" });
@@ -353,6 +407,78 @@ test("internal room-state verifier trusts v2 possession and current authority, n
     assert.equal((await storage.roomIdentities.resolve({ ...publicScope,
       identityId: createRoomIdentityCodec(secret).verify(resumed.identityCredential, publicScope)!.identityId,
       participantId: resumed.participantId, authEpoch: 1 }))?.role, "member");
+    const notesRoom = await storage.createRoom({ tenantId: scope.tenantId, templateId: "meeting-room-basic", name: "Delayed notes authorization" });
+    const notesScope = { tenantId: notesRoom.tenantId, roomId: notesRoom.roomId };
+    const writerResponse = await fetch(`${baseUrl}/api/tokens/state`, { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ roomId: notesRoom.roomId, identityProtocolVersion: 2, displayName: "Temporary Presenter" }) });
+    assert.equal(writerResponse.status, 200);
+    const writer = await writerResponse.json() as { token: string; participantId: string };
+    const granted = await storage.roomIdentities.transition(notesScope, { actorType: "admin-token", actorId: "test-admin", role: "admin" }, 0,
+      { type: "grant-presenter", targetParticipantId: writer.participantId });
+    assert.equal((await fetch(`${baseUrl}/api/rooms/${notesRoom.roomId}/notes/shared`, { method: "PUT", headers: {
+      "content-type": "application/json", authorization: `Bearer ${writer.token}`
+    }, body: JSON.stringify({ content: "before demotion" }) })).status, 201);
+    const delayedNote = await delayedJson(`/api/rooms/${notesRoom.roomId}/notes/shared`, writer.token,
+      '{"content":"after ', 'demotion"}', async () => {
+        await storage.roomIdentities.transition(notesScope, { actorType: "admin-token", actorId: "test-admin", role: "admin" }, granted.revision,
+          { type: "revoke-presenter", targetParticipantId: writer.participantId });
+      }, "PUT");
+    assert.equal(delayedNote.status, 403, "a body delayed past presenter revocation cannot modify shared notes");
+    assert.equal((await storage.getRoomNote(notesRoom.roomId, "shared"))?.content, "before demotion");
+    assert.equal((await storage.listRoomNoteVersions(notesRoom.roomId, "shared")).length, 1);
+    const regranted = await storage.roomIdentities.transition(notesScope, { actorType: "admin-token", actorId: "test-admin", role: "admin" },
+      granted.revision + 1, { type: "grant-presenter", targetParticipantId: writer.participantId });
+    const boundary = `----vrata-${randomUUID()}`;
+    const image = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAYAAAD0In+KAAAAD0lEQVR4AWISW+z1H4QBAAAA///iIMP1AAAABklEQVQDAA/LBAeJ81I+AAAAAElFTkSuQmCC", "base64");
+    const multipartHeader = Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="document"; filename="pixel.png"\r\nContent-Type: image/png\r\n\r\n`);
+    const multipartFooter = Buffer.concat([image, Buffer.from(`\r\n--${boundary}--\r\n`)]);
+    const delayedUpload = await delayedBody(`/api/rooms/${notesRoom.roomId}/documents`, writer.token,
+      `multipart/form-data; boundary=${boundary}`, multipartHeader, multipartFooter, async () => {
+        await storage.roomIdentities.transition(notesScope, { actorType: "admin-token", actorId: "test-admin", role: "admin" },
+          regranted.revision, { type: "revoke-presenter", targetParticipantId: writer.participantId });
+      });
+    assert.equal(delayedUpload.status, 403, "a demoted presenter cannot persist an upload after the request body arrives");
+    assert.deepEqual(await storage.listRoomDocuments(notesRoom.roomId), []);
+    const afterUpload = await readdir(join(documentRoot, "documents", notesRoom.tenantId, notesRoom.roomId), { recursive: true })
+      .catch((error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return []; throw error; });
+    assert.equal(afterUpload.some(name => name.endsWith("pixel.png")), false, "a rejected upload must remove its unreferenced object");
+    const finalGrant = await storage.roomIdentities.transition(notesScope, { actorType: "admin-token", actorId: "test-admin", role: "admin" },
+      regranted.revision + 1, { type: "grant-presenter", targetParticipantId: writer.participantId });
+    const form = new FormData();
+    form.set("document", new Blob([new Uint8Array(image)], { type: "image/png" }), "pixel.png");
+    const storedImage = await fetch(`${baseUrl}/api/rooms/${notesRoom.roomId}/documents`, {
+      method: "POST", headers: { authorization: `Bearer ${writer.token}` }, body: form
+    });
+    assert.equal(storedImage.status, 201, "current Presenter can still publish an image");
+    const storedDocument = (await storedImage.json() as { document: { documentId: string } }).document;
+    const delayedSurface = await delayedJson(`/api/rooms/${notesRoom.roomId}/documents/${storedDocument.documentId}/surface`,
+      writer.token, '{"surfaceId":"debug-', 'main"}', async () => {
+        await storage.roomIdentities.transition(notesScope, { actorType: "admin-token", actorId: "test-admin", role: "admin" },
+          finalGrant.revision, { type: "revoke-presenter", targetParticipantId: writer.participantId });
+      });
+    assert.equal(delayedSurface.status, 403, "a demoted Presenter cannot change the active document surface");
+    assert.equal((await storage.getRoomDocument(notesRoom.roomId, storedDocument.documentId))?.linkedSurfaceId, null);
+    const documentHost = await storage.roomIdentities.transition(notesScope, { actorType: "admin-token", actorId: "test-admin", role: "admin" },
+      finalGrant.revision + 1, { type: "transfer-host", targetParticipantId: writer.participantId });
+    const documentUrl = `${baseUrl}/api/rooms/${notesRoom.roomId}/documents/${storedDocument.documentId}`;
+    failDocumentCleanup = true;
+    assert.equal((await fetch(documentUrl, { method: "DELETE", headers: { authorization: `Bearer ${writer.token}` } })).status, 503);
+    assert.ok((await storage.getRoomDocument(notesRoom.roomId, storedDocument.documentId))?.deletedAt,
+      "failed external cleanup must not leave live access to the deleted document");
+    assert.deepEqual(await storage.listRoomDocuments(notesRoom.roomId), []);
+    assert.equal((await fetch(`${documentUrl}/download`, { headers: { "x-vrata-admin-token": "test-admin" } })).status, 404);
+    const successor = await service.admit({ ...notesScope, displayName: "Next Host" });
+    await storage.roomIdentities.transition(notesScope, { actorType: "admin-token", actorId: "test-admin", role: "admin" },
+      documentHost.revision, { type: "transfer-host", targetParticipantId: successor.identity.participantId });
+    const callsBeforeDenied = documentCleanupCalls;
+    failDocumentCleanup = false;
+    assert.equal((await fetch(documentUrl, { method: "DELETE", headers: { authorization: `Bearer ${writer.token}` } })).status, 403,
+      "former Host cannot resume deletion after losing document.delete");
+    assert.equal(documentCleanupCalls, callsBeforeDenied);
+    assert.equal((await fetch(documentUrl, { method: "DELETE", headers: { "x-vrata-admin-token": "test-admin" } })).status, 200,
+      "an administrator can retry cleanup of a retained tombstone");
+    assert.equal((await fetch(documentUrl, { method: "DELETE", headers: { "x-vrata-admin-token": "test-admin" } })).status, 200,
+      "cleanup retry is idempotent");
     const peers = (await pool.query("select distinct origin_hash from room_identity_admission_buckets_v2 where kind='room'")).rows;
     assert.equal(peers.length, 1);
     const peerHash = peers[0].origin_hash as string;
@@ -391,10 +517,32 @@ test("internal room-state verifier trusts v2 possession and current authority, n
     assert.equal((await personal({ displayName: "Budget blocked" })).status, 429);
     assert.equal((await personal({ roomId: owned.room.roomId, identityCredential: owned.identityCredential })).status, 200,
       "personal owner proof remains usable after anonymous creation is throttled");
+    const victimProof = createRoomIdentityCodec(secret).verify(created.identityCredential, publicScope)!;
+    const staleMedia = await delayedJson("/api/tokens/media", created.token,
+      JSON.stringify({ roomId: publicRoom.roomId, participantId: created.participantId, canPublishAudio: true }).slice(0, -1) + ",",
+      '"canPublishVideo":false}', async () => { await storage.roomIdentities.revoke(publicScope, victimProof.identityId, victimProof.authEpoch); });
+    assert.equal(staleMedia.status, 409, "a stalled media request cannot release a token after its identity is revoked");
+    assert.equal(JSON.parse(staleMedia.body).token, undefined);
+    const framePayload = { roomId: publicRoom.roomId, objectId: "browser-1", executorSessionId: "remote-browser:browser-1",
+      executorInstanceId: "remote-browser:browser-1:instance:generation-1", frameStreamId: "remote-browser:browser-1:frames" };
+    assert.equal((await fetch(`${baseUrl}/api/tokens/remote-browser-frame`, {
+      method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${resumed.token}` },
+      body: JSON.stringify(framePayload)
+    })).status, 200, "a current Member can obtain a frame-viewer token");
+    const frameProof = createRoomIdentityCodec(secret).verify(resumed.identityCredential, publicScope)!;
+    const staleFrame = await delayedJson("/api/tokens/remote-browser-frame", resumed.token,
+      JSON.stringify(framePayload).slice(0, -1) + ",", '"ignored":true}', async () => {
+        await storage.roomIdentities.revoke(publicScope, frameProof.identityId, frameProof.authEpoch);
+      });
+    assert.equal(staleFrame.status, 409, "a stalled frame request cannot release a token after revocation");
+    assert.equal(JSON.parse(staleFrame.body).token, undefined);
   } finally {
     if (child && child.exitCode === null && child.signalCode === null) { const stopped = once(child, "exit"); child.kill("SIGTERM"); await stopped; }
     await pool.end();
     await admin.query(`drop schema if exists "${schema}" cascade`);
     await admin.end();
+    await rm(documentRoot, { recursive: true, force: true });
+    roomStateMock.closeAllConnections();
+    await new Promise<void>(resolve => roomStateMock.close(() => resolve()));
   }
 });

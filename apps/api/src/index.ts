@@ -52,6 +52,10 @@ import { admitV2RoomSession, type V2AdmissionRequest } from "./identity/http-adm
 import { currentSessionControlV2, resolveRoomRequestV2, type VerifiedRoomRequestV2 } from "./identity/http-authority.js";
 import { roomMediaGrantName } from "./identity/media-room.js";
 import { applyRoomLifecycleV2, lifecycleV2Error } from "./identity/http-lifecycle.js";
+import { finalizeProofBoundToken } from "./identity/effect-fence.js";
+import { IdentityStorageError } from "./identity/contracts.js";
+import type { RoomEffectGuard } from "./identity/effect-write-guard.js";
+import type { Storage, RoomIdentityEffectStorage } from "./storage-contracts.js";
 import { identityAdmissionOriginHash as hashAdmissionOrigin } from "./identity/admission-origin.js";
 
 import { getLivekitCredentials, getMediaTokenConfigError, getLivekitDeploymentDiagnostics } from "./livekit-config.js";
@@ -220,7 +224,10 @@ interface ControlPlaneActor {
   identityId?: string;
   authEpoch?: number;
   isOwner?: boolean;
+  expiresAtSeconds?: number;
 }
+
+class RoomEffectPermissionDenied extends Error {}
 
 interface ControlPlaneAuditLogEntry {
   timestamp: string;
@@ -628,7 +635,8 @@ function resolveControlPlaneActor(request: IncomingMessage):
         roomId: verifiedV2.room.roomId, participantId: verifiedV2.identity.participantId,
         sessionId: verifiedV2.sessionId, permissions: verifiedV2.permissions,
         identityProtocolVersion: 2, identityId: verifiedV2.identity.identityId,
-        authEpoch: verifiedV2.identity.authEpoch, isOwner: verifiedV2.isOwner
+        authEpoch: verifiedV2.identity.authEpoch, isOwner: verifiedV2.isOwner,
+        expiresAtSeconds: verifiedV2.expiresAtSeconds
       } };
     }
     const session = verifyRoomSessionToken(bearerToken, getStateTokenSecret());
@@ -771,6 +779,47 @@ async function verifyRoomSessionRequest(
   });
   if (!result.ok && isRotatedDevelopmentSession(token, secret)) throw new IdentityBoundaryError(409, "identity_upgrade_required");
   return result;
+}
+
+/** Local token signing can be slow or delayed by the client-controlled body.
+ * Ignore the entry-time cache and never release a prepared v2 token after its
+ * holder has lost its epoch, role, ownership or room admission. */
+async function finalizeRoomToken(request: IncomingMessage,
+  session: Extract<RoomSessionTokenVerificationResult, { ok: true }>,
+  sessionToken: string | null | undefined, prepare: () => Promise<string>): Promise<string> {
+  const proof = session.payload;
+  if (proof.identityProtocolVersion !== 2) return prepare();
+  if (!proof.identityId || typeof proof.authEpoch !== "number" || !Number.isSafeInteger(proof.authEpoch)
+    || proof.authEpoch < 1 || typeof proof.isOwner !== "boolean") {
+    throw new IdentityBoundaryError(409, "identity_recovery_required");
+  }
+  const prepared = await finalizeProofBoundToken({ before: {
+    tenantId: proof.tenantId, roomId: proof.roomId, identityId: proof.identityId,
+    participantId: proof.participantId, authEpoch: proof.authEpoch, role: proof.role, isOwner: proof.isOwner
+  }, prepare, readCurrent: async () => resolveRoomRequestV2({ storage: await storagePromise, secret: getStateTokenSecret(),
+    token: sessionToken ?? getBearerToken(request), expectedRoomId: proof.roomId, participantId: proof.participantId }) });
+  if (prepared === null) throw new IdentityBoundaryError(409, "identity_recovery_required");
+  return prepared;
+}
+
+async function runGuardedRoomEffect<T>(storage: Storage, actor: ControlPlaneActor, room: RoomRecord,
+  permission: RoomPermission, effect: (scoped: RoomIdentityEffectStorage) => Promise<T>, ownerOnly = false): Promise<T> {
+  if (actor.actorType === "admin-token" || actor.identityProtocolVersion !== 2) return effect(storage);
+  if (!actor.identityId || !actor.participantId || !actor.authEpoch || !actor.expiresAtSeconds) {
+    throw new IdentityBoundaryError(409, "identity_recovery_required");
+  }
+  const guard: RoomEffectGuard = { tenantId: room.tenantId, roomId: room.roomId,
+    identityId: actor.identityId, participantId: actor.participantId, authEpoch: actor.authEpoch,
+    expiresAtSeconds: actor.expiresAtSeconds, permission, ownerOnly };
+  try {
+    return await storage.withRoomIdentityEffect(guard, effect);
+  } catch (error) {
+    if (error instanceof IdentityStorageError) {
+      if (error.code === "identity_forbidden") throw new RoomEffectPermissionDenied("permission_denied");
+      throw new IdentityBoundaryError(409, "identity_recovery_required");
+    }
+    throw error;
+  }
 }
 
 function isPrivateRoom(room: RoomRecord): boolean {
@@ -2250,12 +2299,17 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       }
     }
 
+    let uploadedStorage: ReturnType<typeof getDocumentUploadStorage> | null = null;
+    let uploadedKey: string | null = null;
+    let documentPersisted = false;
     try {
       const documentId = randomUUID();
       const uploadStorage = getDocumentUploadStorage(request);
       const storageKey = documentStorageKey(room.tenantId, roomId, documentId, filename);
       await writeDocumentObject(uploadStorage, storageKey, documentFile.data, contentType);
-      const document = await storage.createRoomDocument({
+      uploadedStorage = uploadStorage;
+      uploadedKey = storageKey;
+      const document = await runGuardedRoomEffect(storage, actor, room, permission, scoped => scoped.createRoomDocument({
         documentId,
         roomId,
         tenantId: room.tenantId,
@@ -2266,11 +2320,18 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
         checksum: `sha256:${sha256Hex(documentFile.data)}`,
         uploadedBy: actor.actorId,
         metadata: documentMetadata
-      });
+      }));
+      documentPersisted = true;
       incrementCounter(metrics.documentsUploadedTotal, `${contentType}:success`);
       incrementCounter(metrics.documentStorageBytesTotal, room.tenantId, document.sizeBytes);
       json(response, 201, { document: serializeRoomDocument(request, document) });
     } catch (error) {
+      if (uploadedKey && uploadedStorage && !documentPersisted) {
+        await deleteDocumentObject(uploadedStorage, uploadedKey).catch(() => {
+          incrementCounter(metrics.documentBlobDeletesTotal, "failed");
+        });
+      }
+      if (error instanceof RoomEffectPermissionDenied || error instanceof IdentityBoundaryError) throw error;
       const message = error instanceof Error ? error.message : "document_upload_failed";
       incrementCounter(metrics.documentsUploadedTotal, `${contentType}:failed`);
       json(response, message.startsWith("misconfigured_document_upload_storage") ? 503 : 400, { error: message, requestId });
@@ -2291,7 +2352,8 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     const actor = resolveRoomDocumentsActor(request, response, { room, permission, action, documentId });
     if (!actor) return;
     const document = await storage.getRoomDocument(roomId, documentId);
-    if (!document || document.deletedAt) return json(response, 404, { error: "document_not_found" });
+    const v2Delete = method === "DELETE" && actionPath === "item" && await legacyIdentityBoundary.minimum() >= 2;
+    if (!document || (document.deletedAt && !v2Delete)) return json(response, 404, { error: "document_not_found" });
 
     if (method === "GET" && actionPath === "download") {
       try {
@@ -2361,6 +2423,31 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     }
 
     if (method === "DELETE" && actionPath === "item") {
+      if (v2Delete) {
+        // The effect is the tombstone: the room lock fences it against a
+        // concurrent revoke. External cleanup follows without a DB lock.
+        // A failed cleanup is retryable because the tombstoned row is retained.
+        const deleted = document.deletedAt
+          ? await runGuardedRoomEffect(storage, actor, room, permission, scoped => scoped.getRoomDocument(roomId, documentId))
+          : await runGuardedRoomEffect(storage, actor, room, permission,
+            scoped => scoped.markRoomDocumentDeleted(roomId, documentId, new Date().toISOString(), actor.actorId));
+        if (!deleted) return json(response, 404, { error: "document_not_found" });
+        if (!document.deletedAt) metrics.documentDeletesTotal += 1;
+        try {
+          await cleanupDocumentMediaObjects(roomId, documentId);
+        } catch (error) {
+          return json(response, 503, { error: error instanceof Error ? error.message : "presentation_cleanup_failed", requestId });
+        }
+        try {
+          await deleteDocumentObject(getDocumentUploadStorage(request), deleted.storageKey);
+          incrementCounter(metrics.documentBlobDeletesTotal, "success");
+        } catch (error) {
+          incrementCounter(metrics.documentBlobDeletesTotal, "failed");
+          return json(response, 503, { error: error instanceof Error ? error.message : "document_object_delete_failed", requestId });
+        }
+        json(response, 200, { document: serializeRoomDocument(request, deleted) });
+        return;
+      }
       try {
         await cleanupDocumentMediaObjects(roomId, documentId);
       } catch (error) {
@@ -2389,7 +2476,8 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       const payload = (await parseBody<{ surfaceId?: unknown }>(request)) ?? {};
       const surfaceId = normalizeDocumentSurfaceId(payload.surfaceId);
       if (surfaceId === undefined) return json(response, 400, { error: "invalid_document_surface_id" });
-      const updated = await storage.updateRoomDocumentSurface(roomId, documentId, surfaceId);
+      const updated = await runGuardedRoomEffect(storage, actor, room, permission,
+        scoped => scoped.updateRoomDocumentSurface(roomId, documentId, surfaceId));
       if (!updated) return json(response, 404, { error: "document_not_found" });
       metrics.documentSurfaceSelectionsTotal += 1;
       json(response, 200, { document: serializeRoomDocument(request, updated) });
@@ -2483,7 +2571,9 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       incrementCounter(metrics.notesRestoresTotal, `${scope}:failed`);
       return json(response, 400, { error: "invalid_note_version" });
     }
-    const restored = await storage.restoreRoomNoteVersion(roomId, scope, ownerParticipantId, payload.versionId.trim(), actor.actorId);
+    const versionId = payload.versionId.trim();
+    const restored = await runGuardedRoomEffect(storage, actor, room, permission,
+      scoped => scoped.restoreRoomNoteVersion(roomId, scope, ownerParticipantId, versionId, actor.actorId));
     if (!restored) {
       incrementCounter(metrics.notesRestoresTotal, `${scope}:failed`);
       return json(response, 404, { error: "note_version_not_found" });
@@ -2543,7 +2633,8 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     }
 
     if (method === "DELETE") {
-      const deleted = await storage.deleteRoomNote(roomId, scope, ownerParticipantId, actor.actorId);
+      const deleted = await runGuardedRoomEffect(storage, actor, room, permission,
+        scoped => scoped.deleteRoomNote(roomId, scope, ownerParticipantId, actor.actorId));
       if (!deleted) return json(response, 404, { error: "note_not_found" });
       metrics.notesVersionsCreatedTotal += 1;
       json(response, 200, { note: deleted });
@@ -2561,15 +2652,16 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       incrementCounter(metrics.notesSavedTotal, `${scope}:failed`);
       return json(response, 413, { error: "note_too_large" });
     }
+    const noteContent = payload.content;
 
     const existing = await storage.getRoomNote(roomId, scope, ownerParticipantId);
-    const note = await storage.upsertRoomNote({
+    const note = await runGuardedRoomEffect(storage, actor, room, permission, scoped => scoped.upsertRoomNote({
       roomId,
       scope,
       ownerParticipantId,
-      content: payload.content,
+      content: noteContent,
       updatedBy: actor.actorId
-    });
+    }));
     if (!existing) incrementCounter(metrics.notesCreatedTotal, scope);
     metrics.notesVersionsCreatedTotal += 1;
     incrementCounter(metrics.notesSavedTotal, `${scope}:saved`);
@@ -3395,8 +3487,9 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       canPublish: canPublishAudio || canPublishVideo,
       canSubscribe: true
     });
+    const mediaToken = await finalizeRoomToken(request, session, payload.sessionToken, () => accessToken.toJwt());
     json(response, 200, {
-      token: await accessToken.toJwt(),
+      token: mediaToken,
       expiresInSeconds: Number.parseInt(process.env.MEDIA_TOKEN_TTL_SECONDS ?? "900", 10),
       livekitUrl: getDefaultLivekitUrl(request)
     });
@@ -3445,8 +3538,20 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       canPublish: true,
       canSubscribe: false
     });
+    const executorToken = await accessToken.toJwt();
+    if (v2Media) {
+      const currentRoom = await storage.getRoom(payload.roomId);
+      if (!currentRoom || isRoomDisabled(currentRoom)) return json(response, 403, { error: "room_access_denied", reason: "room_disabled" });
+      const authority = await storage.roomIdentities.authority({ tenantId: currentRoom.tenantId, roomId: payload.roomId });
+      if (!authority || authority.lifecycle.endedAt) return json(response, 409, { error: "remote_browser_session_not_authoritative" });
+      if (!await verifyRemoteBrowserAuthority({ roomId: payload.roomId, objectId: payload.objectId,
+        executorSessionId: payload.executorSessionId, executorInstanceId: payload.executorInstanceId,
+        mediaParticipantId: payload.mediaParticipantId })) {
+        return json(response, 409, { error: "remote_browser_session_not_authoritative" });
+      }
+    }
     json(response, 200, {
-      token: await accessToken.toJwt(),
+      token: executorToken,
       expiresInSeconds: ttlSeconds,
       livekitUrl: getRemoteBrowserLivekitUrl(request, payload),
       participantId: payload.mediaParticipantId
@@ -3481,13 +3586,10 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       return json(response, 503, { error: "remote_browser_token_config_invalid" });
     }
     const ttlSeconds = resolveRemoteBrowserTokenTtlSeconds();
-    const token = encodeRemoteBrowserFrameToken({
-      roomId: payload.roomId,
-      objectId: payload.objectId,
-      executorSessionId: payload.executorSessionId,
-      frameStreamId: payload.frameStreamId,
-      exp: Math.floor(Date.now() / 1000) + ttlSeconds
-    });
+    const token = await finalizeRoomToken(request, session, payload.sessionToken, async () => encodeRemoteBrowserFrameToken({
+      roomId: payload.roomId!, objectId: payload.objectId!, executorSessionId: payload.executorSessionId!,
+      frameStreamId: payload.frameStreamId!, exp: Math.floor(Date.now() / 1000) + ttlSeconds
+    }));
     const frameStreamUrl = new URL(getDefaultRemoteBrowserFrameStreamUrl(request));
     frameStreamUrl.searchParams.set("token", token);
     json(response, 200, {
@@ -3507,6 +3609,10 @@ export function startApiServer(port = apiPort) {
     handleRequest(request, response).catch((error: unknown) => {
       if (error instanceof IdentityBoundaryError) {
         json(response, error.status, { error: error.status === 503 ? "identity_authority_unavailable" : "identity_required", reason: error.reason });
+        return;
+      }
+      if (error instanceof RoomEffectPermissionDenied) {
+        json(response, 403, { error: "forbidden", reason: "permission_denied" });
         return;
       }
       if (error instanceof Error && error.message === IDENTITY_LIFECYCLE_REQUIRES_V2) {

@@ -173,6 +173,36 @@ socket to rejoin, or unbounded message queues. Read-only avatar/pose delivery an
 privileged effects require separate rate/queue handling, not an unbounded HTTP
 request per incoming pose frame.
 
+### Prepared REST effect boundaries
+
+Request-entry authentication is not a commit fence: body parsing, document
+inspection, S3 and local JWT signing can outlive a role or epoch change. For
+v2 note save/delete/restore and document publication/surface binding/deletion,
+the prepared API rechecks current permission and session expiry under a short
+parent-room `FOR SHARE` transaction at READ COMMITTED. Identity writers take
+`FOR UPDATE` on that same room. Both the authority read and DB mutation use
+one connection and one transaction; no second pool connection is required.
+The callback exposes only the DB methods supported inside this fence. Memory
+uses a synchronous check followed by the synchronous in-memory mutation.
+
+Upload object I/O runs before the DB fence; denial rolls back publication and
+attempts removal of the unreferenced object. At floor 2, document deletion
+first commits a tombstone, then runs room-state/S3 cleanup outside the fence.
+A cleanup failure returns 503 but no longer exposes document content; an
+authorized Host or administrator can retry DELETE on the retained tombstone.
+This does not implement a background orphan collector.
+
+Media/frame tokens are signed privately, then re-resolved against fresh
+authority immediately before release. A revoked epoch or changed role/owner
+discards the prepared token. Executor media also rechecks room lifecycle and
+live executor binding. Open frame sockets close when their token expires,
+including early-timer rescheduling, and must obtain a newly authorized token.
+An already-issued self-hosted LiveKit JWT is **not** revoked by these checks:
+participant removal does not invalidate it, and LiveKit proactively refreshes
+connected participants' tokens. Current source grants, server-side participant
+eviction/rejoin enforcement, private response release, personal-state and
+remaining metadata/presence writes still require an explicit activation gate.
+
 ## Runtime adoption
 
 Adopt the admitted participant ID before initializing identity-bound seating,

@@ -3,6 +3,7 @@ import { IdentityStorageError, type IdentityPersistence, type IdentityRoomBindin
 import type { RoomInviteRecord, WaitingRoomRequestRecord } from "../storage-contracts.js";
 import { createRoomIdentityStorage, emptyIdentityAuthority } from "./store.js";
 import { admissionWindows, assertAdmissionLimitInput, type AdmissionLimitInput } from "./admission-limits.js";
+import { assertMemoryEffect, type RoomEffectGuard } from "./effect-write-guard.js";
 
 export function createMemoryRoomIdentities(getRoom: (roomId: string) => IdentityRoomBinding | undefined, now = Date.now,
   getInviteByHash: (hash: string) => RoomInviteRecord | undefined = () => undefined, getMinimumProtocol = () => 1,
@@ -65,6 +66,12 @@ export function createMemoryRoomIdentities(getRoom: (roomId: string) => Identity
   };
   return {
     storage: createRoomIdentityStorage(persistence, now),
+    assertCurrentEffect(guard: RoomEffectGuard) {
+      const room = getRoom(guard.roomId);
+      const state = room && snapshot(room, { identityIds: [guard.identityId] });
+      if (!state || state.minimumProtocol < 2) throw new IdentityStorageError("room_not_found");
+      assertMemoryEffect(state, guard, now());
+    },
     authorizeInvite(roomId: string, actor: RoomIdentityActor, create: () => RoomInviteRecord): RoomInviteRecord {
       const room = getRoom(roomId);
       if (!room || getMinimumProtocol() < 2 || room.status === "disabled" || room.disabledAt) throw new IdentityStorageError("room_blocked");

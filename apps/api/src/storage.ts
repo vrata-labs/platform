@@ -51,8 +51,10 @@ import { ensureNamedForeignKey, installTemplateVersionImmutabilityTrigger } from
 import { assertRoomTemplatePatch, materializeStoredRoomInput } from "./room-template-policy.js";
 import { transitionPostgresReferenceCatalog } from "./storage-template-catalog.js";
 import { createMemoryRoomIdentities } from "./identity/memory.js";
-import { createPostgresRoomIdentities } from "./identity/postgres.js";
+import { createPostgresRoomIdentities, assertPostgresEffect } from "./identity/postgres.js";
 import { createMemoryAdmissionBudget, createPostgresAdmissionBudget } from "./identity/admission-budget.js";
+import { type RoomEffectGuard } from "./identity/effect-write-guard.js";
+import type { RoomIdentityEffectStorage } from "./storage-contracts.js";
 import { installRoomIdentitySchema } from "./identity/postgres-schema.js";
 import { identityLifecycleChanged, IDENTITY_LIFECYCLE_REQUIRES_V2 } from "./identity/lifecycle.js";
 import { identityLifecycle } from "./identity/authority.js";
@@ -196,6 +198,10 @@ export class MemoryStorage implements Storage {
   }
 
   async hasRoomIdentityAuthority(roomId: string): Promise<boolean> { return this.identityAdapter.hasRoomBindings(roomId); }
+  async withRoomIdentityEffect<T>(guard: RoomEffectGuard, effect: (scoped: RoomIdentityEffectStorage) => Promise<T>): Promise<T> {
+    this.identityAdapter.assertCurrentEffect(guard);
+    return effect(this);
+  }
 
   private sceneBundleKey(bundleId: string, version: string): string {
     return `${bundleId}::${version}`;
@@ -562,7 +568,7 @@ export class MemoryStorage implements Storage {
   }
   async markRoomDocumentDeleted(roomId: string, documentId: string, deletedAt: string, deletedBy?: string | null): Promise<RoomDocumentRecord | null> {
     const existing = this.roomDocuments.get(documentId);
-    if (!existing || existing.roomId !== roomId) return null;
+    if (!existing || existing.roomId !== roomId || existing.deletedAt) return null;
     const updated = { ...existing, deletedAt, deletedBy: deletedBy ?? null, linkedSurfaceId: null };
     this.roomDocuments.set(documentId, updated);
     return structuredClone(updated);
@@ -724,10 +730,32 @@ export class PostgresStorage implements Storage {
   readonly roomIdentities: Storage["roomIdentities"];
   readonly identityProtocol: Storage["identityProtocol"];
   readonly reserveIdentityAdmission: Storage["reserveIdentityAdmission"];
-  constructor(private readonly pool: Pool, identityNow = Date.now) {
+  constructor(private readonly pool: Pool, identityNow = Date.now, private readonly effectClient?: PoolClient) {
     this.reserveIdentityAdmission = createPostgresAdmissionBudget(pool, identityNow);
     this.roomIdentities = createPostgresRoomIdentities(pool, identityNow);
     this.identityProtocol = createPostgresIdentityProtocol(pool);
+  }
+  private get effectDatabase(): Pool | PoolClient { return this.effectClient ?? this.pool; }
+  async withRoomIdentityEffect<T>(guard: RoomEffectGuard, effect: (scoped: RoomIdentityEffectStorage) => Promise<T>): Promise<T> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("begin isolation level read committed");
+      await client.query("set local lock_timeout='5s'");
+      // Every v2 transfer/revoke locks this parent room FOR UPDATE. Keep only
+      // the DB mutation (never S3 or a room-state RPC) behind this short fence.
+      const room = await client.query("select 1 from rooms where tenant_id=$1 and room_id=$2 for share",
+        [guard.tenantId, guard.roomId]);
+      if (!room.rowCount) throw new IdentityStorageError("room_not_found");
+      await assertPostgresEffect(client, guard);
+      const result = await effect(new PostgresStorage(this.pool, Date.now, client));
+      await client.query("commit");
+      return result;
+    } catch (error) {
+      await client.query("rollback").catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
   }
   async hasRoomIdentityAuthority(roomId: string): Promise<boolean> {
     return (await this.pool.query(`select exists(select 1 from rooms r join room_identity_authority_v2 a using (tenant_id,room_id) where r.room_id=$1) as bound`, [roomId])).rows[0].bound;
@@ -1594,9 +1622,9 @@ export class PostgresStorage implements Storage {
   async upsertRoomNote(input: Pick<RoomNoteRecord, "roomId" | "scope" | "content"> & { ownerParticipantId?: string | null; updatedBy?: string | null }): Promise<RoomNoteRecord> {
     const noteId = roomNoteId(input.roomId, input.scope, input.ownerParticipantId);
     const versionId = crypto.randomUUID();
-    const client = await this.pool.connect();
+    const client = this.effectClient ?? await this.pool.connect();
     try {
-      await client.query("begin");
+      if (!this.effectClient) await client.query("begin");
       const result = await client.query(
         `insert into room_notes (note_id, room_id, scope, owner_participant_id, content, updated_at, updated_by, deleted_at, deleted_by)
          values ($1,$2,$3,$4,$5,now(),$6,null,null)
@@ -1609,21 +1637,21 @@ export class PostgresStorage implements Storage {
          values ($1,$2,$3,$4,$5,$6,'save',null,now(),$7)`,
         [versionId, noteId, input.roomId, input.scope, input.scope === "private" ? input.ownerParticipantId ?? null : null, input.content, input.updatedBy ?? null]
       );
-      await client.query("commit");
+      if (!this.effectClient) await client.query("commit");
       return mapRoomNoteRow(result.rows[0]);
     } catch (error) {
-      await client.query("rollback").catch(() => undefined);
+      if (!this.effectClient) await client.query("rollback").catch(() => undefined);
       throw error;
     } finally {
-      client.release();
+      if (!this.effectClient) client.release();
     }
   }
   async deleteRoomNote(roomId: string, scope: RoomNoteScope, ownerParticipantId?: string | null, deletedBy?: string | null): Promise<RoomNoteRecord | null> {
     const noteId = roomNoteId(roomId, scope, ownerParticipantId);
     const versionId = crypto.randomUUID();
-    const client = await this.pool.connect();
+    const client = this.effectClient ?? await this.pool.connect();
     try {
-      await client.query("begin");
+      if (!this.effectClient) await client.query("begin");
       const result = await client.query(
         `update room_notes set updated_at = now(), updated_by = $4, deleted_at = now(), deleted_by = $4
          where note_id = $1 and room_id = $2 and scope = $3 and deleted_at is null
@@ -1631,7 +1659,7 @@ export class PostgresStorage implements Storage {
         [noteId, roomId, scope, deletedBy ?? null]
       );
       if (!result.rows[0]) {
-        await client.query("rollback");
+        if (!this.effectClient) await client.query("rollback");
         return null;
       }
       const note = mapRoomNoteRow(result.rows[0]);
@@ -1640,13 +1668,13 @@ export class PostgresStorage implements Storage {
          values ($1,$2,$3,$4,$5,$6,'delete',null,now(),$7)`,
         [versionId, note.noteId, note.roomId, note.scope, note.ownerParticipantId ?? null, note.content, deletedBy ?? null]
       );
-      await client.query("commit");
+      if (!this.effectClient) await client.query("commit");
       return note;
     } catch (error) {
-      await client.query("rollback").catch(() => undefined);
+      if (!this.effectClient) await client.query("rollback").catch(() => undefined);
       throw error;
     } finally {
-      client.release();
+      if (!this.effectClient) client.release();
     }
   }
   async listRoomNotes(roomId: string, includeDeleted = false): Promise<RoomNoteRecord[]> {
@@ -1674,9 +1702,9 @@ export class PostgresStorage implements Storage {
   async restoreRoomNoteVersion(roomId: string, scope: RoomNoteScope, ownerParticipantId: string | null | undefined, versionId: string, updatedBy?: string | null): Promise<{ note: RoomNoteRecord; version: RoomNoteVersionRecord } | null> {
     const noteId = roomNoteId(roomId, scope, ownerParticipantId);
     const restoreVersionId = crypto.randomUUID();
-    const client = await this.pool.connect();
+    const client = this.effectClient ?? await this.pool.connect();
     try {
-      await client.query("begin");
+      if (!this.effectClient) await client.query("begin");
       const versionResult = await client.query(
         `select version_id, note_id, room_id, scope, owner_participant_id, content, action, restored_from_version_id, created_at, created_by
          from room_note_versions
@@ -1686,7 +1714,7 @@ export class PostgresStorage implements Storage {
       );
       const source = versionResult.rows[0] ? mapRoomNoteVersionRow(versionResult.rows[0]) : null;
       if (!source) {
-        await client.query("rollback");
+        if (!this.effectClient) await client.query("rollback");
         return null;
       }
       const noteResult = await client.query(
@@ -1702,13 +1730,13 @@ export class PostgresStorage implements Storage {
          returning version_id, note_id, room_id, scope, owner_participant_id, content, action, restored_from_version_id, created_at, created_by`,
         [restoreVersionId, noteId, roomId, scope, scope === "private" ? ownerParticipantId ?? null : null, source.content, source.versionId, updatedBy ?? null]
       );
-      await client.query("commit");
+      if (!this.effectClient) await client.query("commit");
       return { note: mapRoomNoteRow(noteResult.rows[0]), version: mapRoomNoteVersionRow(restoreResult.rows[0]) };
     } catch (error) {
-      await client.query("rollback").catch(() => undefined);
+      if (!this.effectClient) await client.query("rollback").catch(() => undefined);
       throw error;
     } finally {
-      client.release();
+      if (!this.effectClient) client.release();
     }
   }
   async listRoomDocuments(roomId: string, includeDeleted = false): Promise<RoomDocumentRecord[]> {
@@ -1719,14 +1747,14 @@ export class PostgresStorage implements Storage {
     return result.rows.map(mapRoomDocumentRow);
   }
   async getRoomDocument(roomId: string, documentId: string): Promise<RoomDocumentRecord | null> {
-    const result = await this.pool.query(
+    const result = await this.effectDatabase.query(
       `select document_id, room_id, tenant_id, filename, content_type, size_bytes, storage_key, checksum, uploaded_by, uploaded_at, deleted_at, deleted_by, linked_surface_id, metadata from room_documents where room_id = $1 and document_id = $2 limit 1`,
       [roomId, documentId]
     );
     return result.rows[0] ? mapRoomDocumentRow(result.rows[0]) : null;
   }
   async createRoomDocument(input: Omit<RoomDocumentRecord, "uploadedAt" | "deletedAt" | "deletedBy" | "linkedSurfaceId"> & { uploadedAt?: string; linkedSurfaceId?: string | null }): Promise<RoomDocumentRecord> {
-    const result = await this.pool.query(
+    const result = await this.effectDatabase.query(
       `insert into room_documents (document_id, room_id, tenant_id, filename, content_type, size_bytes, storage_key, checksum, uploaded_by, uploaded_at, linked_surface_id, metadata)
        values ($1,$2,$3,$4,$5,$6,$7,$8,$9,coalesce($10::timestamptz, now()),$11,$12)
        returning document_id, room_id, tenant_id, filename, content_type, size_bytes, storage_key, checksum, uploaded_by, uploaded_at, deleted_at, deleted_by, linked_surface_id, metadata`,
@@ -1735,14 +1763,14 @@ export class PostgresStorage implements Storage {
     return mapRoomDocumentRow(result.rows[0]);
   }
   async markRoomDocumentDeleted(roomId: string, documentId: string, deletedAt: string, deletedBy?: string | null): Promise<RoomDocumentRecord | null> {
-    const result = await this.pool.query(
+    const result = await this.effectDatabase.query(
       `update room_documents set deleted_at = $3, deleted_by = $4, linked_surface_id = null where room_id = $1 and document_id = $2 and deleted_at is null returning document_id, room_id, tenant_id, filename, content_type, size_bytes, storage_key, checksum, uploaded_by, uploaded_at, deleted_at, deleted_by, linked_surface_id, metadata`,
       [roomId, documentId, deletedAt, deletedBy ?? null]
     );
     return result.rows[0] ? mapRoomDocumentRow(result.rows[0]) : null;
   }
   async updateRoomDocumentSurface(roomId: string, documentId: string, linkedSurfaceId: string | null): Promise<RoomDocumentRecord | null> {
-    const result = await this.pool.query(
+    const result = await this.effectDatabase.query(
       `with cleared as (
          update room_documents set linked_surface_id = null where room_id = $1 and document_id <> $2 and linked_surface_id = $3 and $3 is not null
        )
