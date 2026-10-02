@@ -803,14 +803,15 @@ async function finalizeRoomToken(request: IncomingMessage,
 }
 
 async function runGuardedRoomEffect<T>(storage: Storage, actor: ControlPlaneActor, room: RoomRecord,
-  permission: RoomPermission, effect: (scoped: RoomIdentityEffectStorage) => Promise<T>, ownerOnly = false): Promise<T> {
+  permission: RoomPermission, effect: (scoped: RoomIdentityEffectStorage) => Promise<T>,
+  options: { ownerOnly?: boolean; roomWrite?: boolean } = {}): Promise<T> {
   if (actor.actorType === "admin-token" || actor.identityProtocolVersion !== 2) return effect(storage);
   if (!actor.identityId || !actor.participantId || !actor.authEpoch || !actor.expiresAtSeconds) {
     throw new IdentityBoundaryError(409, "identity_recovery_required");
   }
   const guard: RoomEffectGuard = { tenantId: room.tenantId, roomId: room.roomId,
     identityId: actor.identityId, participantId: actor.participantId, authEpoch: actor.authEpoch,
-    expiresAtSeconds: actor.expiresAtSeconds, permission, ownerOnly };
+    expiresAtSeconds: actor.expiresAtSeconds, permission, ...options };
   try {
     return await storage.withRoomIdentityEffect(guard, effect);
   } catch (error) {
@@ -820,6 +821,34 @@ async function runGuardedRoomEffect<T>(storage: Storage, actor: ControlPlaneActo
     }
     throw error;
   }
+}
+
+async function releaseRoomNotes(request: IncomingMessage, storage: Storage, actor: ControlPlaneActor, room: RoomRecord,
+  scope: RoomNoteScope, action: "notes.read" | "notes.versions" | "notes.export", send: () => void): Promise<void> {
+  try {
+    await runGuardedRoomEffect(storage, actor, room, "notes.view", async () => { send(); });
+    if (actor.identityProtocolVersion === 2) writeRoomNotesAudit({ request, action, roomId: room.roomId, scope, result: "allowed", actor });
+  } catch (error) {
+    if (actor.identityProtocolVersion === 2 && (error instanceof RoomEffectPermissionDenied || error instanceof IdentityBoundaryError)) {
+      writeRoomNotesAudit({ request, action, roomId: room.roomId, scope,
+      result: "denied", reason: error instanceof RoomEffectPermissionDenied ? "permission_denied" : "identity_recovery_required", actor });
+    }
+    throw error;
+  }
+}
+
+async function releaseDocumentBytes(storage: Storage, actor: ControlPlaneActor, room: RoomRecord,
+  document: RoomDocumentRecord, permission: RoomPermission, activeSurfaceRequired: boolean, send: () => void): Promise<boolean> {
+  return runGuardedRoomEffect(storage, actor, room, permission, async scoped => {
+    if (actor.identityProtocolVersion === 2) {
+      const current = await scoped.getRoomDocument(room.roomId, document.documentId);
+      if (!current || current.deletedAt || current.storageKey !== document.storageKey
+        || activeSurfaceRequired && (!current.linkedSurfaceId || current.linkedSurfaceId !== document.linkedSurfaceId
+          || current.metadata?.kind !== document.metadata?.kind)) return false;
+    }
+    send();
+    return true;
+  });
 }
 
 function isPrivateRoom(room: RoomRecord): boolean {
@@ -940,7 +969,9 @@ function resolveRoomNotesActor(
     return deny("permission_denied");
   }
 
-  writeRoomNotesAudit({ request, action: input.action, roomId: input.room.roomId, scope: input.scope, result: "allowed", actor });
+  if (actor.identityProtocolVersion !== 2 || !["notes.read", "notes.versions", "notes.export"].includes(input.action)) {
+    writeRoomNotesAudit({ request, action: input.action, roomId: input.room.roomId, scope: input.scope, result: "allowed", actor });
+  }
   return actor;
 }
 
@@ -966,6 +997,15 @@ function roomNoteVisibleToActor(note: RoomNoteRecord, actor: ControlPlaneActor):
   if (note.scope === "shared") return true;
   if (actor.actorType === "admin-token") return true;
   return note.ownerParticipantId === actor.participantId;
+}
+
+/** Room metadata is visible to invitees; owner-only state has a separate
+ * authority-fenced endpoint and must never hitchhike in a generic room DTO. */
+function roomResponseRecord(request: IncomingMessage, room: RoomRecord): RoomRecord | Omit<RoomRecord, "personalState"> {
+  const actor = resolveControlPlaneActor(request);
+  if (actor.ok && actor.actor.actorType === "admin-token") return room;
+  const { personalState: _privateState, ...metadata } = room;
+  return metadata;
 }
 
 function writeRoomDocumentsAudit(input: {
@@ -1771,7 +1811,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     const actorResult = resolveControlPlaneActor(request);
     const canListPrivate = actorResult.ok && actorResult.actor.actorType === "admin-token";
     const rooms = (await storage.listRooms()).filter((room) => canListPrivate || (!isRoomDisabled(room) && (!isRoomAccessPolicyEnabled() || sanitizeRoomVisibility(room.visibility) === "public")));
-    json(response, 200, { items: rooms.map((room) => ({ ...room, roomLink: createRoomLink(room.roomId, request) })) });
+    json(response, 200, { items: rooms.map((room) => ({ ...roomResponseRecord(request, room), roomLink: createRoomLink(room.roomId, request) })) });
     return;
   }
 
@@ -2073,7 +2113,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
         const current = await service.resolveCredential(payload.identityCredential, scope);
         if (!current?.isOwner) return json(response, 409, { error: "identity_required", reason: "identity_recovery_required" });
         const renewed = await service.renewCredential(payload.identityCredential, scope);
-        return json(response, 200, { created: false, room: existing, roomLink: createRoomLink(existing.roomId, request),
+        return json(response, 200, { created: false, room: roomResponseRecord(request, existing), roomLink: createRoomLink(existing.roomId, request),
           identityProtocolVersion: 2, participantId: current.identity.participantId, identityCredential: renewed.credential });
       }
       if (payload.roomId !== undefined) return json(response, 409, { error: "identity_required", reason: "identity_recovery_required" });
@@ -2093,7 +2133,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       const { room, identity } = await storage.createPersonalOwnedRoom({ tenantId, templateId, displayName,
         name: personalRoomName(displayName) });
       const identityCredential = createRoomIdentityCodec(getStateTokenSecret()).sign(identity, { lifetimeSeconds: 86_400 });
-      return json(response, 201, { created: true, room, roomLink: createRoomLink(room.roomId, request),
+      return json(response, 201, { created: true, room: roomResponseRecord(request, room), roomLink: createRoomLink(room.roomId, request),
         identityProtocolVersion: 2, participantId: identity.participantId, identityCredential });
     }
     const payload = (await parseBody<{ participantId?: unknown; displayName?: unknown; tenantId?: unknown }>(request)) ?? {};
@@ -2117,7 +2157,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
         return json(response, 403, { error: "room_access_denied", reason: "room_disabled", roomId: existing.roomId });
       }
       incrementCounter(metrics.personalRoomOpensTotal, "existing");
-      return json(response, 200, { created: false, room: existing, roomLink: createRoomLink(existing.roomId, request), manifest: await buildManifest(existing.roomId, request) });
+      return json(response, 200, { created: false, room: roomResponseRecord(request, existing), roomLink: createRoomLink(existing.roomId, request), manifest: await buildManifest(existing.roomId, request) });
     }
 
     const displayName = normalizeDisplayName(payload.displayName, participantId);
@@ -2162,7 +2202,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       ownerParticipantId: participantId,
       timestamp: new Date().toISOString()
     });
-    json(response, 201, { created: true, room, roomLink: createRoomLink(room.roomId, request), manifest: await buildManifest(room.roomId, request) });
+    json(response, 201, { created: true, room: roomResponseRecord(request, room), roomLink: createRoomLink(room.roomId, request), manifest: await buildManifest(room.roomId, request) });
     return;
   }
 
@@ -2217,7 +2257,11 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     }
 
     if (method === "GET") {
-      json(response, 200, { state: room.personalState ?? {} });
+      await runGuardedRoomEffect(storage, actor, room, "room.join", async scoped => {
+        const state = await scoped.getPersonalRoomState(room.tenantId, roomId);
+        if (state === null) return json(response, 404, { error: "room_not_found" });
+        json(response, 200, { state });
+      }, { ownerOnly: true });
       return;
     }
 
@@ -2226,12 +2270,13 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       incrementCounter(metrics.personalStateSaveFailuresTotal, "invalid_personal_state");
       return json(response, 400, { error: "invalid_personal_state" });
     }
-    const updated = await storage.updateRoom(roomId, { personalState: state });
-    if (!updated) {
+    const updated = await runGuardedRoomEffect(storage, actor, room, "room.join",
+      scoped => scoped.updatePersonalRoomState(room.tenantId, roomId, state), { ownerOnly: true, roomWrite: true });
+    if (updated === null) {
       incrementCounter(metrics.personalStateSaveFailuresTotal, "room_not_found");
       return json(response, 404, { error: "room_not_found" });
     }
-    json(response, 200, { state: updated.personalState ?? state });
+    json(response, 200, { state: updated });
     return;
   }
 
@@ -2247,7 +2292,8 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
 
     if (method === "GET") {
       const documents = await storage.listRoomDocuments(roomId);
-      json(response, 200, { items: documents.map((document) => serializeRoomDocument(request, document)) });
+      const items = documents.map((document) => serializeRoomDocument(request, document));
+      await runGuardedRoomEffect(storage, actor, room, permission, async () => { json(response, 200, { items }); });
       return;
     }
 
@@ -2356,20 +2402,26 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     if (!document || (document.deletedAt && !v2Delete)) return json(response, 404, { error: "document_not_found" });
 
     if (method === "GET" && actionPath === "download") {
+      let bytes: Buffer;
       try {
-        const bytes = await readDocumentObject(getDocumentUploadStorage(request), document.storageKey);
+        bytes = await readDocumentObject(getDocumentUploadStorage(request), document.storageKey);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "document_download_failed";
+        json(response, 503, { error: message, requestId });
+        return;
+      }
+      const released = await releaseDocumentBytes(storage, actor, room, document, permission, false, () => {
         metrics.documentDownloadsTotal += 1;
         response.writeHead(200, {
           "content-type": document.contentType,
           "content-length": String(bytes.byteLength),
           "content-disposition": `attachment; filename="${safeHeaderFilename(document.filename)}"`,
+          "cache-control": "private, no-store",
           "x-request-id": requestId
         });
         response.end(bytes);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "document_download_failed";
-        json(response, 503, { error: message, requestId });
-      }
+      });
+      if (!released) json(response, 404, { error: "document_not_found" });
       return;
     }
 
@@ -2378,8 +2430,16 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
         incrementCounter(metrics.documentPresentationContentTotal, "not_active");
         return json(response, 404, { error: "presentation_not_active" });
       }
+      let bytes: Buffer;
       try {
-        const bytes = await readDocumentObject(getDocumentUploadStorage(request), document.storageKey);
+        bytes = await readDocumentObject(getDocumentUploadStorage(request), document.storageKey);
+      } catch (error) {
+        incrementCounter(metrics.documentPresentationContentTotal, "failed");
+        const message = error instanceof Error ? error.message : "presentation_content_failed";
+        json(response, 503, { error: message, requestId });
+        return;
+      }
+      const released = await releaseDocumentBytes(storage, actor, room, document, permission, true, () => {
         incrementCounter(metrics.documentPresentationContentTotal, "success");
         response.writeHead(200, {
           "content-type": "application/pdf",
@@ -2389,11 +2449,8 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
           "x-request-id": requestId
         });
         response.end(bytes);
-      } catch (error) {
-        incrementCounter(metrics.documentPresentationContentTotal, "failed");
-        const message = error instanceof Error ? error.message : "presentation_content_failed";
-        json(response, 503, { error: message, requestId });
-      }
+      });
+      if (!released) json(response, 404, { error: "presentation_not_active" });
       return;
     }
 
@@ -2403,8 +2460,15 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
         incrementCounter(metrics.documentMediaContentTotal, `${kind === "video" ? "video" : "image"}:not_active`);
         return json(response, 404, { error: "media_content_not_active" });
       }
+      let bytes: Buffer;
       try {
-        const bytes = await readDocumentObject(getDocumentUploadStorage(request), document.storageKey);
+        bytes = await readDocumentObject(getDocumentUploadStorage(request), document.storageKey);
+      } catch (error) {
+        incrementCounter(metrics.documentMediaContentTotal, `${kind}:failed`);
+        json(response, 503, { error: error instanceof Error ? error.message : "media_content_failed", requestId });
+        return;
+      }
+      const released = await releaseDocumentBytes(storage, actor, room, document, permission, true, () => {
         incrementCounter(metrics.documentMediaContentTotal, `${kind}:success`);
         response.writeHead(200, {
           "content-type": document.contentType,
@@ -2415,10 +2479,8 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
           "x-request-id": requestId
         });
         response.end(bytes);
-      } catch (error) {
-        incrementCounter(metrics.documentMediaContentTotal, `${kind}:failed`);
-        json(response, 503, { error: error instanceof Error ? error.message : "media_content_failed", requestId });
-      }
+      });
+      if (!released) json(response, 404, { error: "media_content_not_active" });
       return;
     }
 
@@ -2511,13 +2573,8 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     })));
     const exportedAt = new Date().toISOString();
     const payload = { schemaVersion: 1, exportedAt, roomId, notes: items };
-    incrementCounter(metrics.notesExportsTotal, `${format}:saved`);
-    writeRoomNotesAudit({ request, action: "notes.export", roomId, scope: "shared", result: "allowed", actor });
-    if (format === "markdown") {
-      return attachment(response, 200, formatRoomNotesMarkdown(roomId, items), noteExportFilename(roomId, "room", "md"), "text/markdown; charset=utf-8");
-    }
-    if (format === "zip") {
-      const zip = createStoredZip([
+    const body = format === "markdown" ? formatRoomNotesMarkdown(roomId, items) : format === "zip"
+      ? createStoredZip([
         { name: "room-notes.json", content: JSON.stringify(payload, null, 2) },
         { name: "room-notes.md", content: formatRoomNotesMarkdown(roomId, items) },
         { name: "board.json", content: JSON.stringify({ status: "not_included", reason: "board_state_is_realtime_only", followUp: "VRATA-FEAT-023-board-history" }, null, 2) },
@@ -2525,10 +2582,13 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
           name: `notes/${note.scope}${note.ownerParticipantId ? `-${note.ownerParticipantId}` : ""}.md`,
           content: formatNoteMarkdown(note, versions)
         }))
-      ]);
-      return attachment(response, 200, zip, noteExportFilename(roomId, "room", "zip"), "application/zip");
-    }
-    return attachment(response, 200, JSON.stringify(payload, null, 2), noteExportFilename(roomId, "room", "json"), "application/json; charset=utf-8");
+      ]) : JSON.stringify(payload, null, 2);
+    await releaseRoomNotes(request, storage, actor, room, "shared", "notes.export", () => {
+      attachment(response, 200, body, noteExportFilename(roomId, "room", format === "markdown" ? "md" : format),
+        format === "markdown" ? "text/markdown; charset=utf-8" : format === "zip" ? "application/zip" : "application/json; charset=utf-8");
+    });
+    incrementCounter(metrics.notesExportsTotal, `${format}:saved`);
+    return;
   }
 
   const roomNoteVersionsMatch = url.pathname.match(/^\/api\/rooms\/([^/]+)\/notes\/(shared|private)\/versions$/);
@@ -2544,7 +2604,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     if (ownerParticipantId === undefined) return;
     const limit = Number.parseInt(url.searchParams.get("limit") ?? "20", 10);
     const versions = await storage.listRoomNoteVersions(roomId, scope, ownerParticipantId, Number.isFinite(limit) ? limit : 20);
-    json(response, 200, { items: versions });
+    await releaseRoomNotes(request, storage, actor, room, scope, "notes.versions", () => { json(response, 200, { items: versions }); });
     return;
   }
 
@@ -2605,11 +2665,13 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     }
     const note = await storage.getRoomNote(roomId, scope, ownerParticipantId) ?? emptyRoomNote(roomId, scope, ownerParticipantId);
     const versions = await storage.listRoomNoteVersions(roomId, scope, ownerParticipantId, 100);
+    const body = format === "json" ? JSON.stringify(noteExportJson(note, versions), null, 2) : formatNoteMarkdown(note, versions);
+    await releaseRoomNotes(request, storage, actor, room, scope, "notes.export", () => {
+      attachment(response, 200, body, noteExportFilename(roomId, scope, format === "json" ? "json" : "md"),
+        format === "json" ? "application/json; charset=utf-8" : "text/markdown; charset=utf-8");
+    });
     incrementCounter(metrics.notesExportsTotal, `${format}:saved`);
-    if (format === "json") {
-      return attachment(response, 200, JSON.stringify(noteExportJson(note, versions), null, 2), noteExportFilename(roomId, scope, "json"), "application/json; charset=utf-8");
-    }
-    return attachment(response, 200, formatNoteMarkdown(note, versions), noteExportFilename(roomId, scope, "md"), "text/markdown; charset=utf-8");
+    return;
   }
 
   const roomNotesMatch = url.pathname.match(/^\/api\/rooms\/([^/]+)\/notes\/(shared|private)$/);
@@ -2628,7 +2690,8 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
 
     if (method === "GET") {
       const note = await storage.getRoomNote(roomId, scope, ownerParticipantId);
-      json(response, 200, { note: note && !note.deletedAt ? note : emptyRoomNote(roomId, scope, ownerParticipantId) });
+      const result = note && !note.deletedAt ? note : emptyRoomNote(roomId, scope, ownerParticipantId);
+      await releaseRoomNotes(request, storage, actor, room, scope, "notes.read", () => { json(response, 200, { note: result }); });
       return;
     }
 
@@ -3252,7 +3315,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       return json(response, failure.status, { error: failure.code });
     }
     if (!room) return json(response, 404, { error: "room_not_found" });
-    json(response, 200, { ...room, roomLink: createRoomLink(room.roomId, request), sceneBundle: bundle, currentVersion: getCurrentSceneBundleVersion(bundle) });
+    json(response, 200, { ...roomResponseRecord(request, room), roomLink: createRoomLink(room.roomId, request), sceneBundle: bundle, currentVersion: getCurrentSceneBundleVersion(bundle) });
     return;
   }
 
@@ -3382,7 +3445,11 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     if (!room) return json(response, 404, { error: "room_not_found" });
     if (isRoomDisabled(room) && !canManageDisabledRoom(request)) return json(response, 403, { error: "room_access_denied", reason: "room_disabled" });
     if (!(await canReadRoomDetails(request, room))) return json(response, 404, { error: "room_not_found" });
-    json(response, 200, { ...room, roomLink: createRoomLink(room.roomId, request), manifest: await buildManifest(room.roomId, request) });
+    const metadata = { ...roomResponseRecord(request, room), roomLink: createRoomLink(room.roomId, request), manifest: await buildManifest(room.roomId, request) };
+    const actorResult = resolveControlPlaneActor(request);
+    if (actorResult.ok && actorResult.actor.identityProtocolVersion === 2) {
+      await runGuardedRoomEffect(storage, actorResult.actor, room, "room.join", async () => { json(response, 200, metadata); });
+    } else json(response, 200, metadata);
     return;
   }
 
@@ -3605,8 +3672,15 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
 
 export function startApiServer(port = apiPort) {
   getStateTokenSecret();
-  const server = createServer((request, response) => {
+    const server = createServer((request, response) => {
     handleRequest(request, response).catch((error: unknown) => {
+      // A fenced response can already have queued its bytes when COMMIT fails.
+      // Do not attempt a second response or throw ERR_HTTP_HEADERS_SENT.
+      if (response.headersSent) {
+        metrics.requestFailuresTotal += 1;
+        response.destroy();
+        return;
+      }
       if (error instanceof IdentityBoundaryError) {
         json(response, error.status, { error: error.status === 503 ? "identity_authority_unavailable" : "identity_required", reason: error.reason });
         return;

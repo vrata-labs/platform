@@ -3,7 +3,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { createHmac, randomUUID } from "node:crypto";
 import { request as httpRequest, createServer as createHttpServer } from "node:http";
 import { once } from "node:events";
-import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdtemp, readdir, rm, unlink } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -106,6 +106,32 @@ test("internal room-state verifier trusts v2 possession and current authority, n
     const delayedJson = (path: string, token: string, prefix: string, suffix: string,
       duringBody: () => Promise<void>, method: "PUT" | "POST" = "POST") =>
       delayedBody(path, token, "application/json", Buffer.from(prefix), Buffer.from(suffix), duringBody, method);
+    const heldRoomRead = async (targetRoomId: string, path: string, token: string,
+      change: (holder: import("pg").PoolClient) => Promise<void>) => {
+      const holder = await pool.connect();
+      let pending: Promise<Response> | undefined;
+      try {
+        await holder.query("begin");
+        await holder.query("select room_id from rooms where room_id=$1 for update", [targetRoomId]);
+        const holderPid = (await holder.query("select pg_backend_pid() as pid")).rows[0].pid as number;
+        let settled = false;
+        pending = fetch(`${baseUrl}${path}`, { headers: { authorization: `Bearer ${token}` } }).then(value => { settled = true; return value; });
+        let blocked = false;
+        for (let attempt = 0; attempt < 100 && !settled; attempt++) {
+          blocked = (await pool.query("select exists(select 1 from pg_stat_activity where $1=any(pg_blocking_pids(pid))) as waiting", [holderPid])).rows[0].waiting;
+          if (blocked) break;
+          await delay(20);
+        }
+        assert.equal(blocked, true, `the prepared response must wait behind the room authority transaction: ${path}`);
+        await change(holder);
+        await holder.query("commit");
+        return await pending;
+      } finally {
+        await holder.query("rollback").catch(() => undefined);
+        holder.release();
+        if (pending) await pending.catch(() => undefined);
+      }
+    };
     assert.equal((await verify(sessionToken, identity.participantId, {})).status, 403);
     assert.equal((await verify(sessionToken)).status, 409, "no v2 session is usable before activation");
     const legacyPersonal = await storage.createRoom({ tenantId: scope.tenantId, templateId: "meeting-room-basic", name: "Legacy personal materials",
@@ -190,7 +216,7 @@ test("internal room-state verifier trusts v2 possession and current authority, n
     assert.equal((await personal({ participantId: "legacy-personal-owner", displayName: "Legacy Owner" })).status, 409);
     const opened = await personal({ participantId: "someone-else", displayName: "Owner" });
     assert.equal(opened.status, 201);
-    const owned = await opened.json() as { room: { roomId: string; ownerParticipantId: string }; participantId: string;
+    const owned = await opened.json() as { room: { roomId: string; tenantId: string; ownerParticipantId: string }; participantId: string;
       identityCredential: string; identityProtocolVersion: number };
     assert.equal(owned.identityProtocolVersion, 2);
     assert.equal(owned.room.ownerParticipantId, owned.participantId);
@@ -479,6 +505,116 @@ test("internal room-state verifier trusts v2 possession and current authority, n
       "an administrator can retry cleanup of a retained tombstone");
     assert.equal((await fetch(documentUrl, { method: "DELETE", headers: { "x-vrata-admin-token": "test-admin" } })).status, 200,
       "cleanup retry is idempotent");
+    const personalForRace = await personal({ displayName: "Transfer during personal-state body" });
+    assert.equal(personalForRace.status, 201);
+    const oldOwner = await personalForRace.json() as typeof owned;
+    const personalScope = { tenantId: oldOwner.room.tenantId, roomId: oldOwner.room.roomId };
+    const oldOwnerSession = await service.issueSession(oldOwner.identityCredential, personalScope);
+    const handoffInviteToken = `${randomUUID()}${randomUUID()}`.replaceAll("-", "");
+    const handoffInviteHash = createHmac("sha256", secret).update(handoffInviteToken).digest("base64url");
+    await storage.createRoomInviteV2({ roomId: oldOwner.room.roomId, tokenHash: handoffInviteHash, role: "member",
+      waitingRoomEnabled: false, expiresAt: new Date(Date.now() + 120_000).toISOString(),
+      actor: { actorType: "admin-token", actorId: "test-admin", role: "admin" } });
+    const receivingOwner = await service.admit({ ...personalScope, displayName: "New owner", inviteTokenHash: handoffInviteHash });
+    const receivingSession = await service.issueSession(receivingOwner.credential, personalScope);
+    const personalPath = `/api/rooms/${personalScope.roomId}/personal-state`;
+    const stalePersonal = await delayedJson(personalPath, oldOwnerSession.sessionToken,
+      '{"lastPose":{"position":{"x":', '77,"y":1,"z":2},"yaw":0,"pitch":0}}', async () => {
+        const revision = (await storage.roomIdentities.authority(personalScope))!.revision;
+        const transferred = await fetch(`${baseUrl}/api/rooms/${personalScope.roomId}/owner/transfer`, {
+          method: "POST", headers: { "content-type": "application/json", "x-vrata-admin-token": "test-admin" },
+          body: JSON.stringify({ participantId: receivingOwner.identity.participantId, expectedRevision: revision })
+        });
+        assert.equal(transferred.status, 200);
+      }, "PUT");
+    assert.equal(stalePersonal.status, 403, "a former owner cannot complete a personal-state body after handoff");
+    assert.deepEqual(await storage.getPersonalRoomState(personalScope.tenantId, personalScope.roomId), {});
+    const activeState = await fetch(`${baseUrl}${personalPath}`, { method: "PUT",
+      headers: { "content-type": "application/json", authorization: `Bearer ${receivingSession.sessionToken}` },
+      body: JSON.stringify({ lastPose: { position: { x: 12, y: 1, z: 2 }, yaw: 0, pitch: 0 } }) });
+    assert.equal(activeState.status, 200);
+    const oldIdentityId = createRoomIdentityCodec(secret).verify(oldOwner.identityCredential, personalScope)!.identityId;
+    const deniedOwnerRead = await heldRoomRead(personalScope.roomId, personalPath, receivingSession.sessionToken, async holder => {
+      await holder.query("update room_identity_authority_v2 set owner_identity_id=$2, revision=revision+1 where room_id=$1",
+        [personalScope.roomId, oldIdentityId]);
+    });
+    assert.equal(deniedOwnerRead.status, 403, "owner access must be rechecked before releasing prepared personal state");
+    assert.equal((await deniedOwnerRead.text()).includes('"x":12'), false);
+    const memberRoomDetails = await fetch(`${baseUrl}/api/rooms/${personalScope.roomId}`,
+      { headers: { authorization: `Bearer ${receivingSession.sessionToken}` } });
+    assert.equal(memberRoomDetails.status, 200);
+    assert.equal((await memberRoomDetails.json() as { personalState?: unknown }).personalState, undefined,
+      "generic room metadata cannot expose the current owner's personal state to invitees or former owners");
+    const administrativeRoomDetails = await fetch(`${baseUrl}/api/rooms/${personalScope.roomId}`,
+      { headers: { "x-vrata-admin-token": "test-admin" } });
+    assert.equal(administrativeRoomDetails.status, 200);
+    assert.equal((await administrativeRoomDetails.json() as { personalState: { lastPose: { position: { x: number } } } }).personalState.lastPose.position.x, 12);
+    const handoffAuthority = (await storage.roomIdentities.authority(personalScope))!;
+    await storage.roomIdentities.transition(personalScope, { actorType: "admin-token", actorId: "test-admin", role: "admin" },
+      handoffAuthority.revision, { type: "transfer-host", targetParticipantId: receivingOwner.identity.participantId });
+    const fixtureBundle = await storage.createSceneBundle({ bundleId: randomUUID(), storageKey: "fixture/scene.json",
+      publicUrl: "https://example.test/fixture/scene.json", contentType: "application/json", provider: "minio-default", version: "test-v1" });
+    const bindScene = await fetch(`${baseUrl}/api/rooms/${personalScope.roomId}/bind-scene-bundle`, { method: "POST", headers: {
+      "content-type": "application/json", authorization: `Bearer ${receivingSession.sessionToken}`
+    }, body: JSON.stringify({ bundleId: fixtureBundle.bundleId }) });
+    assert.equal(bindScene.status, 200);
+    assert.equal((await bindScene.json() as { personalState?: unknown }).personalState, undefined,
+      "a Host who is not the owner cannot obtain personal state through a room mutation response");
+    await storage.upsertRoomNote({ roomId: personalScope.roomId, scope: "private", ownerParticipantId: receivingOwner.identity.participantId,
+      content: "participant private note survives ownership handoff" });
+    const oldPrivateNotes = await fetch(`${baseUrl}/api/rooms/${personalScope.roomId}/notes/private`,
+      { headers: { authorization: `Bearer ${receivingSession.sessionToken}` } });
+    assert.equal(oldPrivateNotes.status, 200, "room ownership and participant-private notes are separate authority domains");
+
+    const protectedForm = new FormData();
+    protectedForm.set("document", new Blob([new Uint8Array(image)], { type: "image/png" }), "protected.png");
+    const protectedUpload = await fetch(`${baseUrl}/api/rooms/${notesRoom.roomId}/documents`, {
+      method: "POST", headers: { "x-vrata-admin-token": "test-admin" }, body: protectedForm
+    });
+    assert.equal(protectedUpload.status, 201);
+    const protectedDocument = (await protectedUpload.json() as { document: { documentId: string } }).document;
+    const readInviteHash = createHmac("sha256", secret).update(randomUUID()).digest("base64url");
+    await storage.createRoomInviteV2({ roomId: notesRoom.roomId, tokenHash: readInviteHash, role: "member",
+      waitingRoomEnabled: false, expiresAt: new Date(Date.now() + 120_000).toISOString(),
+      actor: { actorType: "admin-token", actorId: "test-admin", role: "admin" } });
+    for (const suffix of ["notes/private", "notes/private/versions", "notes/private/export?format=json",
+      "notes/export?format=zip", `documents/${protectedDocument.documentId}/download`, "documents", ""]) {
+      const reader = await service.admit({ ...notesScope, displayName: "Revoked reader", inviteTokenHash: readInviteHash });
+      const readerSession = await service.issueSession(reader.credential, notesScope);
+      await storage.upsertRoomNote({ roomId: notesRoom.roomId, scope: "private", ownerParticipantId: reader.identity.participantId,
+        content: "PRIVATE-RESPONSE-MUST-NOT-LEAK" });
+      const deniedRead = await heldRoomRead(notesRoom.roomId, `/api/rooms/${notesRoom.roomId}${suffix ? `/${suffix}` : ""}`, readerSession.sessionToken,
+        async holder => {
+          await holder.query("update room_identities_v2 set auth_epoch=auth_epoch+1, revoked_at=now() where room_id=$1 and identity_id=$2",
+            [notesRoom.roomId, reader.identity.identityId]);
+        });
+      assert.equal(deniedRead.status, 409, `prepared private response denied after revoke: ${suffix}`);
+      assert.equal(deniedRead.headers.get("content-disposition"), null);
+      assert.equal((await deniedRead.text()).includes("PRIVATE-RESPONSE-MUST-NOT-LEAK"), false);
+    }
+    const fileReader = await service.admit({ ...notesScope, displayName: "Active document reader", inviteTokenHash: readInviteHash });
+    const fileSession = await service.issueSession(fileReader.credential, notesScope);
+    const protectedDownload = `/api/rooms/${notesRoom.roomId}/documents/${protectedDocument.documentId}/download`;
+    const goneDocument = await heldRoomRead(notesRoom.roomId, protectedDownload, fileSession.sessionToken, async holder => {
+      await holder.query("update room_documents set deleted_at=now() where room_id=$1 and document_id=$2",
+        [notesRoom.roomId, protectedDocument.documentId]);
+    });
+    assert.equal(goneDocument.status, 404, "download must recheck a document tombstone after loading its bytes");
+    await pool.query("update room_documents set deleted_at=null where room_id=$1 and document_id=$2", [notesRoom.roomId, protectedDocument.documentId]);
+    await storage.updateRoomDocumentSurface(notesRoom.roomId, protectedDocument.documentId, "debug-main");
+    const unlinkedContent = await heldRoomRead(notesRoom.roomId,
+      `/api/rooms/${notesRoom.roomId}/documents/${protectedDocument.documentId}/content`, fileSession.sessionToken, async holder => {
+        await holder.query("update room_documents set linked_surface_id=null where room_id=$1 and document_id=$2",
+          [notesRoom.roomId, protectedDocument.documentId]);
+      });
+    assert.equal(unlinkedContent.status, 404, "a surface viewer cannot receive an image unlinked while its bytes were prepared");
+    assert.equal(unlinkedContent.headers.get("content-disposition"), null);
+    const storedRow = (await storage.getRoomDocument(notesRoom.roomId, protectedDocument.documentId))!;
+    const readWithoutBlob = await heldRoomRead(notesRoom.roomId, protectedDownload, fileSession.sessionToken, async () => {
+      await unlink(join(documentRoot, storedRow.storageKey));
+    });
+    assert.equal(readWithoutBlob.status, 200, "blob preparation must finish before acquiring the authority fence");
+    assert.equal(Buffer.compare(Buffer.from(await readWithoutBlob.arrayBuffer()), image), 0);
     const peers = (await pool.query("select distinct origin_hash from room_identity_admission_buckets_v2 where kind='room'")).rows;
     assert.equal(peers.length, 1);
     const peerHash = peers[0].origin_hash as string;
@@ -486,8 +622,8 @@ test("internal room-state verifier trusts v2 possession and current authority, n
     for (let attempt = 0; attempt < 3; attempt++) {
       const start = Math.floor(Date.now() / 60_000) * 60_000;
       await pool.query(`insert into room_identity_admission_buckets_v2 (origin_hash,kind,window_ms,window_start_ms,attempts)
-        values ($1,'room',60000,$2,180) on conflict (origin_hash,kind,window_ms,window_start_ms)
-        do update set attempts=180`, [peerHash, start]);
+        values ($1,'room',60000,$2,180),($1,'room',60000,$3,180) on conflict (origin_hash,kind,window_ms,window_start_ms)
+        do update set attempts=180`, [peerHash, start, start + 60_000]);
       limited = await issue({ displayName: "Budget blocked" });
       if (limited.status === 429) break;
     }

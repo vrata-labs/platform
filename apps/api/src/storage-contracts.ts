@@ -281,6 +281,8 @@ export interface Storage {
   readonly identityProtocol: import("./identity/protocol.js").IdentityProtocolPolicy;
   withRoomIdentityEffect<T>(guard: import("./identity/effect-write-guard.js").RoomEffectGuard,
     effect: (scoped: RoomIdentityEffectStorage) => Promise<T>): Promise<T>;
+  getPersonalRoomState(tenantId: string, roomId: string): Promise<RoomPersonalState | null>;
+  updatePersonalRoomState(tenantId: string, roomId: string, state: RoomPersonalState): Promise<RoomPersonalState | null>;
   reserveIdentityAdmission(input: import("./identity/admission-limits.js").AdmissionLimitInput): Promise<boolean>;
   hasRoomIdentityAuthority(roomId: string): Promise<boolean>;
   listTenants(): Promise<TenantRecord[]>;
@@ -344,7 +346,8 @@ export interface ExpectedRoomTemplateBinding {
 
 /** Only DB-only mutations and the tombstone read belong inside a room fence. */
 export type RoomIdentityEffectStorage = Pick<Storage, "upsertRoomNote" | "deleteRoomNote" | "restoreRoomNoteVersion"
-  | "createRoomDocument" | "markRoomDocumentDeleted" | "updateRoomDocumentSurface" | "getRoomDocument">;
+  | "createRoomDocument" | "markRoomDocumentDeleted" | "updateRoomDocumentSurface" | "getRoomDocument"
+  | "getPersonalRoomState" | "updatePersonalRoomState">;
 
 export type SceneBundleUpdateInput = Partial<SceneBundleCreateInput> & {
   publicUrl?: string;

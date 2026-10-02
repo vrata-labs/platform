@@ -37,6 +37,7 @@ import type {
   RoomNoteScope,
   RoomNoteVersionAction,
   RoomNoteVersionRecord,
+  RoomPersonalState,
   RoomRecord,
   RuntimeDiagnosticRecord,
   SceneBundleUpdateInput,
@@ -201,6 +202,17 @@ export class MemoryStorage implements Storage {
   async withRoomIdentityEffect<T>(guard: RoomEffectGuard, effect: (scoped: RoomIdentityEffectStorage) => Promise<T>): Promise<T> {
     this.identityAdapter.assertCurrentEffect(guard);
     return effect(this);
+  }
+  async getPersonalRoomState(tenantId: string, roomId: string): Promise<RoomPersonalState | null> {
+    const room = this.rooms.get(roomId);
+    return room?.tenantId === tenantId && room.roomType === "personal" ? structuredClone(room.personalState ?? {}) : null;
+  }
+  async updatePersonalRoomState(tenantId: string, roomId: string, state: RoomPersonalState): Promise<RoomPersonalState | null> {
+    const room = this.rooms.get(roomId);
+    if (!room || room.tenantId !== tenantId || room.roomType !== "personal") return null;
+    const value = structuredClone(state);
+    this.rooms.set(roomId, { ...room, personalState: value });
+    return structuredClone(value);
   }
 
   private sceneBundleKey(bundleId: string, version: string): string {
@@ -730,7 +742,8 @@ export class PostgresStorage implements Storage {
   readonly roomIdentities: Storage["roomIdentities"];
   readonly identityProtocol: Storage["identityProtocol"];
   readonly reserveIdentityAdmission: Storage["reserveIdentityAdmission"];
-  constructor(private readonly pool: Pool, identityNow = Date.now, private readonly effectClient?: PoolClient) {
+  constructor(private readonly pool: Pool, identityNow = Date.now, private readonly effectClient?: PoolClient,
+    private readonly effectRoomWrite = false) {
     this.reserveIdentityAdmission = createPostgresAdmissionBudget(pool, identityNow);
     this.roomIdentities = createPostgresRoomIdentities(pool, identityNow);
     this.identityProtocol = createPostgresIdentityProtocol(pool);
@@ -743,11 +756,13 @@ export class PostgresStorage implements Storage {
       await client.query("set local lock_timeout='5s'");
       // Every v2 transfer/revoke locks this parent room FOR UPDATE. Keep only
       // the DB mutation (never S3 or a room-state RPC) behind this short fence.
-      const room = await client.query("select 1 from rooms where tenant_id=$1 and room_id=$2 for share",
+      const room = await client.query(guard.roomWrite
+        ? "select 1 from rooms where tenant_id=$1 and room_id=$2 for no key update"
+        : "select 1 from rooms where tenant_id=$1 and room_id=$2 for share",
         [guard.tenantId, guard.roomId]);
       if (!room.rowCount) throw new IdentityStorageError("room_not_found");
       await assertPostgresEffect(client, guard);
-      const result = await effect(new PostgresStorage(this.pool, Date.now, client));
+      const result = await effect(new PostgresStorage(this.pool, Date.now, client, guard.roomWrite === true));
       await client.query("commit");
       return result;
     } catch (error) {
@@ -756,6 +771,17 @@ export class PostgresStorage implements Storage {
     } finally {
       client.release();
     }
+  }
+  async getPersonalRoomState(tenantId: string, roomId: string): Promise<RoomPersonalState | null> {
+    const result = await this.effectDatabase.query("select personal_state from rooms where tenant_id=$1 and room_id=$2 and room_type='personal'",
+      [tenantId, roomId]);
+    return result.rows[0] ? result.rows[0].personal_state ?? {} : null;
+  }
+  async updatePersonalRoomState(tenantId: string, roomId: string, state: RoomPersonalState): Promise<RoomPersonalState | null> {
+    if (this.effectClient && !this.effectRoomWrite) throw new Error("personal_state_requires_room_write_fence");
+    const result = await this.effectDatabase.query("update rooms set personal_state=$3::jsonb where tenant_id=$1 and room_id=$2 and room_type='personal' returning personal_state",
+      [tenantId, roomId, JSON.stringify(state)]);
+    return result.rows[0] ? result.rows[0].personal_state ?? {} : null;
   }
   async hasRoomIdentityAuthority(roomId: string): Promise<boolean> {
     return (await this.pool.query(`select exists(select 1 from rooms r join room_identity_authority_v2 a using (tenant_id,room_id) where r.room_id=$1) as bound`, [roomId])).rows[0].bound;
@@ -1477,13 +1503,14 @@ export class PostgresStorage implements Storage {
     if (!versionSnapshot) throw new Error(`template_version_not_found:${existing.templateId}`);
     const updated = bindRoomTemplateMetadata(updatedWithoutTemplateMetadata, versionSnapshot);
     const result = await this.pool.query(
-      `update rooms set name = $2, room_type = $3, owner_participant_id = $4, status = $5, disabled_at = $6, disabled_by = $7, visibility = $8, scene_bundle_url = $9, features = $10::jsonb, asset_ids = $11::jsonb, theme = $12::jsonb, guest_allowed = $13, avatar_config = $14::jsonb, session_control = $15::jsonb, personal_state = $16::jsonb, template_version = $17, template_snapshot = $18::jsonb where room_id = $1 and template_id = $19 and coalesce(template_version, (select t.current_version from templates t where t.template_id = rooms.template_id)) = $20`,
-      [roomId, updated.name, updated.roomType, updated.ownerParticipantId ?? null, updated.status, updated.disabledAt ?? null, updated.disabledBy ?? null, updated.visibility, updated.sceneBundleUrl ?? null, JSON.stringify(updated.features), JSON.stringify(updated.assetIds), JSON.stringify(updated.theme), updated.guestAllowed, JSON.stringify(updated.avatarConfig), JSON.stringify(updated.sessionControl), JSON.stringify(updated.personalState), updated.templateVersion, JSON.stringify(updated.templateSnapshot), existing.templateId, existing.templateVersion]
+      `update rooms set name = $2, room_type = $3, owner_participant_id = $4, status = $5, disabled_at = $6, disabled_by = $7, visibility = $8, scene_bundle_url = $9, features = $10::jsonb, asset_ids = $11::jsonb, theme = $12::jsonb, guest_allowed = $13, avatar_config = $14::jsonb, session_control = $15::jsonb, personal_state = case when $21::boolean then $16::jsonb else personal_state end, template_version = $17, template_snapshot = $18::jsonb where room_id = $1 and template_id = $19 and coalesce(template_version, (select t.current_version from templates t where t.template_id = rooms.template_id)) = $20 returning personal_state`,
+      [roomId, updated.name, updated.roomType, updated.ownerParticipantId ?? null, updated.status, updated.disabledAt ?? null, updated.disabledBy ?? null, updated.visibility, updated.sceneBundleUrl ?? null, JSON.stringify(updated.features), JSON.stringify(updated.assetIds), JSON.stringify(updated.theme), updated.guestAllowed, JSON.stringify(updated.avatarConfig), JSON.stringify(updated.sessionControl), JSON.stringify(updated.personalState), updated.templateVersion, JSON.stringify(updated.templateSnapshot), existing.templateId, existing.templateVersion, input.personalState != null]
     );
     if ((result.rowCount ?? 0) === 0) {
       if (await this.getRoom(roomId)) throw new Error("room_template_binding_changed");
       return null;
     }
+    updated.personalState = defaultPersonalState(result.rows[0]?.personal_state ?? updated.personalState);
     return updated;
   }
   async deleteRoom(roomId: string): Promise<boolean> {

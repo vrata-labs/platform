@@ -200,8 +200,32 @@ including early-timer rescheduling, and must obtain a newly authorized token.
 An already-issued self-hosted LiveKit JWT is **not** revoked by these checks:
 participant removal does not invalidate it, and LiveKit proactively refreshes
 connected participants' tokens. Current source grants, server-side participant
-eviction/rejoin enforcement, private response release, personal-state and
-remaining metadata/presence writes still require an explicit activation gate.
+eviction/rejoin enforcement and remaining metadata/presence writes still
+require an explicit activation gate.
+
+### Prepared personal-state and private response release
+
+Personal state follows the room's current owner authority. The dedicated GET
+and PUT recheck `ownerOnly` under the parent-room fence; PUT takes
+`FOR NO KEY UPDATE` before reading authority and updates only `personal_state`
+on that same connection. The scoped updater rejects invocation under a shared
+fence. Other room PATCH operations retain current personal state unless an
+explicit state patch was requested, avoiding lost owner writes from a stale
+metadata snapshot. Generic room metadata/open/reopen/bind responses exclude
+`personalState` for room sessions, including owners; verified administrators
+retain their administrative access. Owners use the dedicated endpoint.
+
+Notes and exports prepare data outside the fence, then recheck the live proof
+and `notes.view` immediately before synchronous response release. Private notes
+remain participant-bound, independent of personal-room ownership. Documents
+load object bytes outside the fence, then recheck permission, tombstone and,
+for surface content, the current surface/kind on the fenced connection. No
+transaction waits for S3 or network flush. Once bytes were queued while access
+was valid they cannot be recalled; a later revoke is ordered after that release.
+After-send commit failures cannot write a second response or be audited as an
+authority denial. The held-room HTTP tests wait for actual database blocking
+before changing owner/epoch/tombstone/surface, and check that denied responses
+contain neither the prepared private data nor attachment headers.
 
 ## Runtime adoption
 

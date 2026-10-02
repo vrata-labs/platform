@@ -6,6 +6,7 @@ export interface RoomEffectGuard extends RoomIdentityProof {
   permission: RoomPermission;
   expiresAtSeconds: number;
   ownerOnly?: boolean;
+  roomWrite?: boolean;
 }
 
 type CurrentEffectActor = { identity: RoomIdentityProof; permissions: RoomPermission[]; isOwner: boolean };

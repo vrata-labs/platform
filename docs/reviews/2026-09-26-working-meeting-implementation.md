@@ -247,6 +247,16 @@ API test files переведены на последовательный зап
 
 [Артефакт staging gate](https://github.com/vrata-labs/platform/actions/runs/36946624938/artifacts/11203496839): Hall/BlueOffice/ArtGallery loaded на текущих страницах, встреча с собственными материалами и cleanup завершились. После gate `/health`, `/rooms/demo-room`, `/control-plane`, `/api/templates` — 200. Общий identity floor остался 1, post-revoke v2 effects проверены на изолированных PostgreSQL/API тестах. Retry/rollback этой публикации не потребовались.
 
+### T01a-S2b-V: personal-state и выдача приватных ответов
+
+Personal-state GET/PUT повторно проверяют действующего владельца. PUT берёт правильную блокировку комнаты заранее, меняет только personal_state и выполняется на одном соединении. Общий room PATCH не перезаписывает новое состояние владельца старым снимком, если personalState не указан явно. Обычные room DTO, включая open/reopen и bind-scene-bundle, больше не отдают owner-only state участникам; административное чтение сохраняется. Личные заметки остаются привязаны к identity участника и не переходят новому владельцу комнаты.
+
+Для notes read/versions/export, списка документов, download/presentation/content и generic room GET подготовленные данные отправляются только после актуальной authority-проверки. Документ повторно проверяется на tombstone и активную surface binding. Чтение объекта и построение экспорта идут вне DB fence; после ответа COMMIT failure не приводит к повторной записи headers или ложному denied-аудиту. PostgreSQL/HTTP-тесты ждут реальной блокировки parent-room перед handoff/revoke/tombstone/unlink, проверяют отсутствие данных и attachment headers при отказе. Удаление blob после подготовки подтверждает отсутствие внешнего I/O внутри транзакции.
+
+Остаются отдельные activation gates для существующих self-hosted LiveKit JWT, source grants/eviction/rejoin, scene binding и других metadata/presence effects, а также архивирования долгоживущих комнат. Общий floor 2 этим срезом не активируется.
+
+Workspace lint/typecheck/build прошли. Несколько полных пакетных запусков на исходном локальном PostgreSQL завершились timeout прежнего identity-контракта и каскадом ошибок после teardown; эти запуски зелёными не объявляются. Тот же образ PostgreSQL 16 с обычными настройками транзакций запущен отдельно на tmpfs, без изменения исходного контейнера: полный `pnpm test` с PostgreSQL/pinned rollback прошёл — API **858/858**, runtime **931/931**, remote-browser **39/39**, room-state **76/76**, shared-types **30/30**, tools **125/125**. Финальный полный local `pnpm test:e2e --workers=1` — **158/158**, без skip/retry (27 минут). Предшествующий browser-прогон был прерван пользователем и не считается завершённой проверкой. Временный контейнер удалён после проверки; проверки и таймауты не ослаблялись.
+
 ## Публикация первого среза T01/T12
 
 Локально прошли workspace lint/typecheck/build/tests с PostgreSQL, затем runtime build и 905 runtime tests после финальных правок. Полный `pnpm test:e2e` на финальном исполняемом дереве: **148 passed**, без skip (41.6 min).

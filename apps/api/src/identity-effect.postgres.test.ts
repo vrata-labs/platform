@@ -28,12 +28,12 @@ test("guarded note writes and v2 revocation serialize on the same parent room", 
   await storage.identityProtocol.raise(2);
   const service = createRoomIdentityService(storage.roomIdentities, "identity-effect-proof-key-32-bytes-or-longer");
 
-  async function createHost() {
+  async function createHost(personal = false) {
     const legacyId = randomUUID();
     const room = await storage.createRoom({ tenantId: "demo-tenant", templateId: "meeting-room-basic", name: "Guarded notes",
-      sessionControl: { hostParticipantId: legacyId } });
+      sessionControl: { hostParticipantId: legacyId }, ...(personal ? { roomType: "personal" as const, ownerParticipantId: legacyId } : {}) });
     const scope = { tenantId: room.tenantId, roomId: room.roomId };
-    const recovery = await service.issueRecovery({ ...scope, targetParticipantId: legacyId, targetRole: "host",
+    const recovery = await service.issueRecovery({ ...scope, targetParticipantId: legacyId, targetRole: personal ? "owner" : "host",
       expiresAt: new Date(Date.now() + 120_000).toISOString(),
       issuer: { actorType: "admin-token", actorId: "test-admin", role: "admin" } });
     const host = await service.redeemRecovery(recovery.credential, scope);
@@ -117,4 +117,64 @@ test("guarded note writes and v2 revocation serialize on the same parent room", 
     assert.equal(writes.length, 6);
     assert.equal((await storage.listRoomNoteVersions(atomic.room.roomId, "shared")).length, 7);
   } finally { await concurrentPool.end(); }
+
+  const owner = await createHost(true);
+  const ownerGuard: RoomEffectGuard = { ...owner.guard, permission: "room.join", ownerOnly: true, roomWrite: true };
+  const one = new Pool({ connectionString: connection.href, max: 1, connectionTimeoutMillis: 1000 });
+  try {
+    const single = new PostgresStorage(one);
+    assert.deepEqual(await single.withRoomIdentityEffect({ ...ownerGuard, roomWrite: false },
+      scoped => scoped.getPersonalRoomState(owner.room.tenantId, owner.room.roomId)), {});
+    assert.deepEqual(await single.withRoomIdentityEffect(ownerGuard,
+      scoped => scoped.updatePersonalRoomState(owner.room.tenantId, owner.room.roomId, { lastPose: null })), { lastPose: null });
+    await assert.rejects(single.withRoomIdentityEffect({ ...ownerGuard, roomWrite: false },
+      scoped => scoped.updatePersonalRoomState(owner.room.tenantId, owner.room.roomId, {})), /personal_state_requires_room_write_fence/);
+  } finally { await one.end(); }
+  let releaseOwner!: () => void;
+  let firstEntered!: () => void;
+  const waitOwner = new Promise<void>(resolve => { releaseOwner = resolve; });
+  const ownerEntered = new Promise<void>(resolve => { firstEntered = resolve; });
+  const firstOwnerWrite = storage.withRoomIdentityEffect(ownerGuard, async scoped => {
+    firstEntered();
+    await waitOwner;
+    return scoped.updatePersonalRoomState(owner.room.tenantId, owner.room.roomId, {});
+  });
+  await ownerEntered;
+  let secondEntered = false;
+  const secondOwnerWrite = storage.withRoomIdentityEffect(ownerGuard, scoped => {
+    secondEntered = true;
+    return scoped.updatePersonalRoomState(owner.room.tenantId, owner.room.roomId, { lastPose: null });
+  });
+  await delay(40);
+  assert.equal(secondEntered, false, "owner writes take the correct lock up front instead of upgrading shared locks");
+  releaseOwner();
+  await firstOwnerWrite;
+  await secondOwnerWrite;
+  assert.deepEqual(await storage.getPersonalRoomState(owner.room.tenantId, owner.room.roomId), { lastPose: null });
+  assert.equal((await storage.getRoom(owner.room.roomId))?.ownerParticipantId, owner.room.ownerParticipantId);
+  let capturedPatch!: () => void;
+  let releasePatch!: () => void;
+  const patchRead = new Promise<void>(resolve => { capturedPatch = resolve; });
+  const patchMayContinue = new Promise<void>(resolve => { releasePatch = resolve; });
+  let pauseNextRead = true;
+  const oldSnapshotStorage = new class extends PostgresStorage {
+    override async getRoom(roomId: string) {
+      const room = await super.getRoom(roomId);
+      if (roomId === owner.room.roomId && pauseNextRead) {
+        pauseNextRead = false;
+        capturedPatch();
+        await patchMayContinue;
+      }
+      return room;
+    }
+  }(pool);
+  const patch = oldSnapshotStorage.updateRoom(owner.room.roomId, { name: "Concurrent admin edit" });
+  await patchRead;
+  const latestState = { lastPose: { position: { x: 28, y: 1, z: 2 }, yaw: 0, pitch: 0,
+    updatedAt: new Date().toISOString(), updatedBy: owner.host.identity.participantId } };
+  await storage.withRoomIdentityEffect(ownerGuard,
+    scoped => scoped.updatePersonalRoomState(owner.room.tenantId, owner.room.roomId, latestState));
+  releasePatch();
+  assert.deepEqual((await patch)?.personalState, latestState, "unrelated PATCH returns the current personal state rather than its stale copy");
+  assert.deepEqual(await storage.getPersonalRoomState(owner.room.tenantId, owner.room.roomId), latestState);
 });
