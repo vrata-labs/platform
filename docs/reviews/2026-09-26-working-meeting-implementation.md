@@ -257,6 +257,15 @@ Personal-state GET/PUT повторно проверяют действующе�
 
 Workspace lint/typecheck/build прошли. Несколько полных пакетных запусков на исходном локальном PostgreSQL завершились timeout прежнего identity-контракта и каскадом ошибок после teardown; эти запуски зелёными не объявляются. Тот же образ PostgreSQL 16 с обычными настройками транзакций запущен отдельно на tmpfs, без изменения исходного контейнера: полный `pnpm test` с PostgreSQL/pinned rollback прошёл — API **858/858**, runtime **931/931**, remote-browser **39/39**, room-state **76/76**, shared-types **30/30**, tools **125/125**. Финальный полный local `pnpm test:e2e --workers=1` — **158/158**, без skip/retry (27 минут). Предшествующий browser-прогон был прерван пользователем и не считается завершённой проверкой. Временный контейнер удалён после проверки; проверки и таймауты не ослаблялись.
 
+| Этап personal-state и приватных ответов | Результат |
+|---|---|
+| Проверенный и опубликованный SHA | `c1ddeb59cc6b4cc88f410547f88dc5977e4c07da` |
+| [CI 37016971346](https://github.com/vrata-labs/platform/actions/runs/37016971346) | Success: пакетные тесты, полный E2E, M0.5 и pinned assets |
+| [Docker Publish 37016971564](https://github.com/vrata-labs/platform/actions/runs/37016971564) | Success: immutable API, room-state и remote-browser images exact SHA |
+| [Staging Deploy 37020948633](https://github.com/vrata-labs/platform/actions/runs/37020948633) | Success с первой попытки: **52/52 staging E2E**, **1/1 blocking Rutube**; successful SHA сохранён; rollback skipped |
+
+[Артефакт staging gate](https://github.com/vrata-labs/platform/actions/runs/37020948633/artifacts/11234757275): текущая загрузка Hall/BlueOffice/ArtGallery, встреча с PDF/notes и cleanup прошли. После gate `/health`, `/rooms/demo-room`, `/control-plane`, `/api/templates` — HTTP 200. Общий identity floor остался 1; v2 owner/revoke races проверены в отдельных PostgreSQL/HTTP fixtures и не выдаются за активацию на общем staging. Retry/rollback этой публикации не потребовались.
+
 ## Публикация первого среза T01/T12
 
 Локально прошли workspace lint/typecheck/build/tests с PostgreSQL, затем runtime build и 905 runtime tests после финальных правок. Полный `pnpm test:e2e` на финальном исполняемом дереве: **148 passed**, без skip (41.6 min).
