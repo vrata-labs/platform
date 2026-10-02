@@ -1,0 +1,120 @@
+name: PostgreSQL initialization refactor workbench
+
+on:
+  push:
+    branches: [chore/refactor-postgres-init-workbench-20261002]
+    paths: [.github/workflows/refactor-postgres-init-workbench.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  verify-postgres-init:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: vrata_test
+        ports: [5432:5432]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d vrata_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - name: Checkout isolated verification branch
+        uses: actions/checkout@v4
+        with:
+          ref: chore/refactor-postgres-init-workbench-20261002
+          fetch-depth: 0
+      - name: Apply exact locally verified source patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git hash-object apps/api/src/storage.ts)" = "3b6719850bcc0fa64bedc573267501b1ef9dc5cd"
+          cat .refactor-postgres-transfer/chunk-{0,1,2,3} | base64 --decode > /tmp/postgres-refactor.patch.gz
+          test "$(git hash-object /tmp/postgres-refactor.patch.gz)" = "fabbbdc4b36a74bc4b72ebae6eabb4b9a74f2c7d"
+          gzip -dc /tmp/postgres-refactor.patch.gz > /tmp/postgres-refactor.patch
+          git apply --check /tmp/postgres-refactor.patch
+          git apply /tmp/postgres-refactor.patch
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import { execFileSync } from 'node:child_process';
+          import assert from 'node:assert/strict';
+          const expected = {
+            'apps/api/src/storage-postgres-init.postgres.test.ts': '62fd20616ef008cac4fb26aca51e30134dad9db9',
+            'apps/api/src/storage-postgres-init.test.ts': '5ad688d93c427981189b92b101a6b18ce426b55e',
+            'apps/api/src/storage-postgres-init.ts': '0773ab01d4cd43d6d6aee193a9c89371d9aeaa0c',
+            'apps/api/src/storage-postgres-schema.test.ts': '2f8a58c02b59fa3ff0da8e4f4cec310b639260cf',
+            'apps/api/src/storage-postgres-schema.ts': '11e5e246f37600ee23bf9be35b0762ed18811cba',
+            'apps/api/src/storage.ts': '91d3fd969892cd6859a27c7245c81b2791edc9de',
+            'apps/api/src/testing/storage-postgres-init-harness.ts': '397508d4de6d6109c49f39dfc3bf583a4e9b609c'
+          };
+          for (const [file, sha] of Object.entries(expected)) {
+            assert.equal(execFileSync('git', ['hash-object', file], { encoding: 'utf8' }).trim(), sha, file);
+          }
+          fs.writeFileSync('/tmp/postgres-refactor-blobs.json', JSON.stringify(expected, null, 2) + '\n');
+          NODE
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Build all workspace packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm build 2>&1 | tee /tmp/postgres-refactor-build.log
+      - name: API lint and typecheck
+        run: pnpm --filter @vrata/api lint && pnpm --filter @vrata/api typecheck
+      - name: Checkout proven template rollback base
+        uses: actions/checkout@v4
+        with:
+          repository: vrata-labs/platform
+          ref: 33c7485ffa1773105c496b43542ea53bf4c5ae9a
+          path: .template-rollback
+      - name: Build exact historical rollback module
+        run: |
+          pnpm --dir .template-rollback install --frozen-lockfile
+          chmod 644 .template-rollback/packages/asset-pipeline/bin/vrata.mjs
+          git -C .template-rollback diff --exit-code HEAD
+          pnpm --dir .template-rollback --filter @vrata/shared-types --filter @vrata/templates --filter @vrata/asset-pipeline --filter @vrata/api build
+      - name: Full API tests including real PostgreSQL rollback and reinitialization
+        env:
+          VRATA_TEST_POSTGRES_URL: postgres://postgres:postgres@127.0.0.1:5432/vrata_test
+          VRATA_TEMPLATE_ROLLBACK_STORAGE_MODULE: ${{ github.workspace }}/.template-rollback/apps/api/dist/storage.js
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm --filter @vrata/api test 2>&1 | tee /tmp/postgres-refactor-tests.log
+      - name: Commit verified sources to isolated branch only
+        shell: bash
+        run: |
+          set -euo pipefail
+          paths=(apps/api/src/storage.ts apps/api/src/storage-postgres-init.ts apps/api/src/storage-postgres-schema.ts apps/api/src/storage-postgres-init.test.ts apps/api/src/storage-postgres-init.postgres.test.ts apps/api/src/storage-postgres-schema.test.ts apps/api/src/testing/storage-postgres-init-harness.ts)
+          git add -- "${paths[@]}"
+          git diff --cached --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'refactor(api): extract PostgreSQL schema initialization'
+          git diff 4734791267932326f053b4d32d5bb1d186ec4d66 HEAD -- "${paths[@]}" > /tmp/postgres-refactor-verified.patch
+          git rev-parse HEAD > /tmp/postgres-refactor-commit.txt
+          git push origin HEAD:chore/refactor-postgres-init-workbench-20261002
+      - name: Upload verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: postgres-init-refactor-verification
+          retention-days: 7
+          path: |
+            /tmp/postgres-refactor-blobs.json
+            /tmp/postgres-refactor-build.log
+            /tmp/postgres-refactor-tests.log
+            /tmp/postgres-refactor-verified.patch
+            /tmp/postgres-refactor-commit.txt
