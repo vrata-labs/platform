@@ -299,6 +299,15 @@ Room-session mutation actor теперь требует server-derived deadline;
 
 Локальная проверка: lint/typecheck/build, полный `pnpm test` с PostgreSQL 16 и pinned rollback builds — API **866/866**, runtime **931/931**, remote-browser **39/39**, room-state **76/76**, shared-types **30/30**, tools **125/125**. Финальный полный local `pnpm test:e2e --workers=1` — **158/158**, с первого запуска, без skip/retry (25,4 минуты). Изолированный PostgreSQL на tmpfs удалён после проверки; исходный контейнер и соседние сессии не менялись. Неблокирующее различие двух форм 401 закреплено в activation contract как задача до общего client retry-on-expiry.
 
+| Этап mutation-time expiry | Результат |
+|---|---|
+| Проверенный и опубликованный SHA | `ef86045616cc789976ffe3736114eb08c33a45a8` |
+| [CI 37074548526](https://github.com/vrata-labs/platform/actions/runs/37074548526) | Success: пакетные тесты, полный E2E, M0.5 и pinned assets |
+| [Docker Publish 37074549321](https://github.com/vrata-labs/platform/actions/runs/37074549321) | Success: immutable API, room-state и remote-browser images exact SHA |
+| [Staging Deploy 37076602433](https://github.com/vrata-labs/platform/actions/runs/37076602433) | Success с первого запуска: **52/52 staging E2E**, **1/1 blocking Rutube**; successful SHA сохранён; rollback skipped |
+
+[Артефакт staging gate](https://github.com/vrata-labs/platform/actions/runs/37076602433/artifacts/11258127532): текущая загрузка Hall/BlueOffice/ArtGallery и сценарий private four-party meeting с cleanup прошли. Последующий public smoke `/health`, `/rooms/demo-room`, `/control-plane`, `/api/templates` — HTTP 200. Общий identity floor остался 1; реальная v2 expiry проверена в отдельной PostgreSQL/API схеме, не как публичная активация. Retry/rollback этой публикации не потребовались.
+
 ## Публикация первого среза T01/T12
 
 Локально прошли workspace lint/typecheck/build/tests с PostgreSQL, затем runtime build и 905 runtime tests после финальных правок. Полный `pnpm test:e2e` на финальном исполняемом дереве: **148 passed**, без skip (41.6 min).
