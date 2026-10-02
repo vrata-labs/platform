@@ -3,16 +3,16 @@ import { IdentityStorageError, type IdentityPersistence, type IdentitySelection,
 import { createRoomIdentityStorage, emptyIdentityAuthority } from "./store.js";
 import { defaultSessionControl } from "../storage-room-records.js";
 import { mapRoomInviteRow, mapWaitingRoomRequestRow } from "../storage-row-mappers.js";
-import { assertMemoryEffect, type RoomEffectGuard } from "./effect-write-guard.js";
+import { assertMemoryEffect, type RoomEffectGuard, type RoomEffectActor } from "./effect-write-guard.js";
 
 const iso = (date: Date | string) => new Date(date).toISOString();
 const nullableIso = (date: Date | string | null) => date === null ? null : iso(date);
 
 /** Caller already holds the room fence on this same connection. */
-export async function assertPostgresEffect(client: PoolClient, guard: RoomEffectGuard): Promise<void> {
+export async function assertPostgresEffect(client: PoolClient, guard: RoomEffectGuard): Promise<RoomEffectActor> {
   const state = await load(client, guard, { identityIds: [guard.identityId] }, false, new Date().toISOString());
   if (!state || state.minimumProtocol < 2) throw new IdentityStorageError("room_not_found");
-  assertMemoryEffect(state, guard);
+  return assertMemoryEffect(state, guard);
 }
 
 async function load(client: PoolClient, scope: RoomIdentityScope, selection: IdentitySelection, lock: boolean, currentAt: string): Promise<IdentityTransaction | null> {

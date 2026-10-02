@@ -54,7 +54,7 @@ import { transitionPostgresReferenceCatalog } from "./storage-template-catalog.j
 import { createMemoryRoomIdentities } from "./identity/memory.js";
 import { createPostgresRoomIdentities, assertPostgresEffect } from "./identity/postgres.js";
 import { createMemoryAdmissionBudget, createPostgresAdmissionBudget } from "./identity/admission-budget.js";
-import { type RoomEffectGuard } from "./identity/effect-write-guard.js";
+import { type RoomEffectGuard, type RoomEffectActor } from "./identity/effect-write-guard.js";
 import type { RoomIdentityEffectStorage } from "./storage-contracts.js";
 import { installRoomIdentitySchema } from "./identity/postgres-schema.js";
 import { identityLifecycleChanged, IDENTITY_LIFECYCLE_REQUIRES_V2 } from "./identity/lifecycle.js";
@@ -199,9 +199,9 @@ export class MemoryStorage implements Storage {
   }
 
   async hasRoomIdentityAuthority(roomId: string): Promise<boolean> { return this.identityAdapter.hasRoomBindings(roomId); }
-  async withRoomIdentityEffect<T>(guard: RoomEffectGuard, effect: (scoped: RoomIdentityEffectStorage) => Promise<T>): Promise<T> {
-    this.identityAdapter.assertCurrentEffect(guard);
-    return effect(this);
+  async withRoomIdentityEffect<T>(guard: RoomEffectGuard, effect: (scoped: RoomIdentityEffectStorage, current: RoomEffectActor) => Promise<T>): Promise<T> {
+    const current = this.identityAdapter.assertCurrentEffect(guard);
+    return effect(this, current);
   }
   async getPersonalRoomState(tenantId: string, roomId: string): Promise<RoomPersonalState | null> {
     const room = this.rooms.get(roomId);
@@ -213,6 +213,16 @@ export class MemoryStorage implements Storage {
     const value = structuredClone(state);
     this.rooms.set(roomId, { ...room, personalState: value });
     return structuredClone(value);
+  }
+  async setRoomSceneBundleUrl(tenantId: string, roomId: string, sceneBundleUrl: string): Promise<RoomRecord | null> {
+    const room = this.rooms.get(roomId);
+    if (!room || room.tenantId !== tenantId) return null;
+    assertRoomTemplatePatch(room, { sceneBundleUrl });
+    const updated = { ...room, sceneBundleUrl, templateSnapshot: {
+      ...room.templateSnapshot, roomConfig: { ...room.templateSnapshot.roomConfig, sceneBundleUrl }
+    } };
+    this.rooms.set(roomId, updated);
+    return updated;
   }
 
   private sceneBundleKey(bundleId: string, version: string): string {
@@ -434,6 +444,7 @@ export class MemoryStorage implements Storage {
   async revokeRoomInvite(roomId: string, inviteId: string, revokedAt: string, revokedBy?: string | null): Promise<RoomInviteRecord | null> {
     const invite = this.roomInvites.get(inviteId);
     if (!invite || invite.roomId !== roomId) return null;
+    if (invite.revokedAt) return structuredClone(invite);
     const updated = { ...invite, revokedAt, revokedBy: revokedBy ?? null };
     this.roomInvites.set(inviteId, updated);
     return structuredClone(updated);
@@ -749,7 +760,7 @@ export class PostgresStorage implements Storage {
     this.identityProtocol = createPostgresIdentityProtocol(pool);
   }
   private get effectDatabase(): Pool | PoolClient { return this.effectClient ?? this.pool; }
-  async withRoomIdentityEffect<T>(guard: RoomEffectGuard, effect: (scoped: RoomIdentityEffectStorage) => Promise<T>): Promise<T> {
+  async withRoomIdentityEffect<T>(guard: RoomEffectGuard, effect: (scoped: RoomIdentityEffectStorage, current: RoomEffectActor) => Promise<T>): Promise<T> {
     const client = await this.pool.connect();
     try {
       await client.query("begin isolation level read committed");
@@ -761,8 +772,8 @@ export class PostgresStorage implements Storage {
         : "select 1 from rooms where tenant_id=$1 and room_id=$2 for share",
         [guard.tenantId, guard.roomId]);
       if (!room.rowCount) throw new IdentityStorageError("room_not_found");
-      await assertPostgresEffect(client, guard);
-      const result = await effect(new PostgresStorage(this.pool, Date.now, client, guard.roomWrite === true));
+      const current = await assertPostgresEffect(client, guard);
+      const result = await effect(new PostgresStorage(this.pool, Date.now, client, guard.roomWrite === true), current);
       await client.query("commit");
       return result;
     } catch (error) {
@@ -782,6 +793,22 @@ export class PostgresStorage implements Storage {
     const result = await this.effectDatabase.query("update rooms set personal_state=$3::jsonb where tenant_id=$1 and room_id=$2 and room_type='personal' returning personal_state",
       [tenantId, roomId, JSON.stringify(state)]);
     return result.rows[0] ? result.rows[0].personal_state ?? {} : null;
+  }
+  async setRoomSceneBundleUrl(tenantId: string, roomId: string, sceneBundleUrl: string): Promise<RoomRecord | null> {
+    if (this.effectClient && !this.effectRoomWrite) throw new Error("scene_binding_requires_room_write_fence");
+    const room = await this.getRoom(roomId);
+    if (!room || room.tenantId !== tenantId) return null;
+    assertRoomTemplatePatch(room, { sceneBundleUrl });
+    const result = await this.effectDatabase.query(`update rooms set scene_bundle_url=$3,
+      template_snapshot=jsonb_set(coalesce(template_snapshot,$6::jsonb),'{roomConfig,sceneBundleUrl}',to_jsonb($3::text),true)
+      where tenant_id=$1 and room_id=$2 and template_id=$4
+        and coalesce(template_version,(select t.current_version from templates t where t.template_id=rooms.template_id))=$5
+      returning room_id`, [tenantId, roomId, sceneBundleUrl, room.templateId, room.templateVersion, JSON.stringify(room.templateSnapshot)]);
+    if (!result.rowCount) {
+      if (await this.getRoom(roomId)) throw new Error("room_template_binding_changed");
+      return null;
+    }
+    return this.getRoom(roomId);
   }
   async hasRoomIdentityAuthority(roomId: string): Promise<boolean> {
     return (await this.pool.query(`select exists(select 1 from rooms r join room_identity_authority_v2 a using (tenant_id,room_id) where r.room_id=$1) as bound`, [roomId])).rows[0].bound;
@@ -1362,7 +1389,7 @@ export class PostgresStorage implements Storage {
     return result.rows.map(mapRoomRow);
   }
   async getRoom(roomId: string): Promise<RoomRecord | null> {
-    const result = await this.pool.query(`
+    const result = await this.effectDatabase.query(`
       select r.room_id, r.tenant_id, r.template_id, r.template_version, r.template_snapshot,
              tv.template_id as template_version_template_id, tv.version as template_version_resolved,
              tv.snapshot as template_version_snapshot, tv.content_hash as template_version_content_hash,
@@ -1574,7 +1601,7 @@ export class PostgresStorage implements Storage {
     finally { client.release(); }
   }
   async listRoomInvites(roomId: string): Promise<RoomInviteRecord[]> {
-    const result = await this.pool.query(`select invite_id, room_id, token_hash, role, protocol_version, waiting_room_enabled, created_at, expires_at, revoked_at, created_by, revoked_by from room_invites where room_id = $1 order by created_at desc`, [roomId]);
+    const result = await this.effectDatabase.query(`select invite_id, room_id, token_hash, role, protocol_version, waiting_room_enabled, created_at, expires_at, revoked_at, created_by, revoked_by from room_invites where room_id = $1 order by created_at desc`, [roomId]);
     return result.rows.map(mapRoomInviteRow);
   }
   async getRoomInvite(inviteId: string): Promise<RoomInviteRecord | null> {
@@ -1586,8 +1613,9 @@ export class PostgresStorage implements Storage {
     return result.rows[0] ? mapRoomInviteRow(result.rows[0]) : null;
   }
   async revokeRoomInvite(roomId: string, inviteId: string, revokedAt: string, revokedBy?: string | null): Promise<RoomInviteRecord | null> {
-    const result = await this.pool.query(
-      `update room_invites set revoked_at = $3, revoked_by = $4 where room_id = $1 and invite_id = $2 returning invite_id, room_id, token_hash, role, protocol_version, waiting_room_enabled, created_at, expires_at, revoked_at, created_by, revoked_by`,
+    const result = await this.effectDatabase.query(
+      `update room_invites set revoked_by = case when revoked_at is null then $4 else revoked_by end,
+        revoked_at = coalesce(revoked_at,$3) where room_id = $1 and invite_id = $2 returning invite_id, room_id, token_hash, role, protocol_version, waiting_room_enabled, created_at, expires_at, revoked_at, created_by, revoked_by`,
       [roomId, inviteId, revokedAt, revokedBy ?? null]
     );
     return result.rows[0] ? mapRoomInviteRow(result.rows[0]) : null;
@@ -1613,11 +1641,11 @@ export class PostgresStorage implements Storage {
     return mapWaitingRoomRequestRow(result.rows[0]);
   }
   async listWaitingRoomRequests(roomId: string): Promise<WaitingRoomRequestRecord[]> {
-    const result = await this.pool.query(`select request_id, room_id, invite_id, participant_id, display_name, status, created_at, decided_at, decided_by from room_waiting_requests where room_id = $1 order by created_at desc`, [roomId]);
+    const result = await this.effectDatabase.query(`select request_id, room_id, invite_id, participant_id, display_name, status, created_at, decided_at, decided_by from room_waiting_requests where room_id = $1 order by created_at desc`, [roomId]);
     return result.rows.map(mapWaitingRoomRequestRow);
   }
   async getWaitingRoomRequest(requestId: string): Promise<WaitingRoomRequestRecord | null> {
-    const result = await this.pool.query(`select request_id, room_id, invite_id, participant_id, display_name, status, created_at, decided_at, decided_by from room_waiting_requests where request_id = $1`, [requestId]);
+    const result = await this.effectDatabase.query(`select request_id, room_id, invite_id, participant_id, display_name, status, created_at, decided_at, decided_by from room_waiting_requests where request_id = $1`, [requestId]);
     return result.rows[0] ? mapWaitingRoomRequestRow(result.rows[0]) : null;
   }
   async getWaitingRoomRequestForInviteParticipant(inviteId: string, participantId: string): Promise<WaitingRoomRequestRecord | null> {
@@ -1625,8 +1653,8 @@ export class PostgresStorage implements Storage {
     return result.rows[0] ? mapWaitingRoomRequestRow(result.rows[0]) : null;
   }
   async updateWaitingRoomRequest(roomId: string, requestId: string, input: Partial<Pick<WaitingRoomRequestRecord, "status" | "decidedAt" | "decidedBy">>): Promise<WaitingRoomRequestRecord | null> {
-    const v2 = await this.identityProtocol.minimum() >= 2;
-    const result = await this.pool.query(
+    const v2 = this.effectClient ? true : await this.identityProtocol.minimum() >= 2;
+    const result = await this.effectDatabase.query(
       `update room_waiting_requests set status = coalesce($3, status), decided_at = coalesce($4, decided_at), decided_by = coalesce($5, decided_by) where room_id = $1 and request_id = $2 ${v2 ? "and status='pending'" : ""} returning request_id, room_id, invite_id, participant_id, display_name, status, created_at, decided_at, decided_by`,
       [roomId, requestId, input.status ?? null, input.decidedAt ?? null, input.decidedBy ?? null]
     );

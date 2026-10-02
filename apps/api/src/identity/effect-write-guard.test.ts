@@ -8,10 +8,10 @@ import { createRoomIdentityService } from "./service.js";
 const guard: RoomEffectGuard = { tenantId: "tenant", roomId: "room", identityId: "identity", participantId: "participant",
   authEpoch: 1, expiresAtSeconds: 100, permission: "notes.edit" };
 
-function current(input: { epoch?: number; permission?: boolean; owner?: boolean } = {}): NonNullable<Parameters<typeof assertCurrentEffect>[1]> {
+function current(input: { epoch?: number; permission?: boolean; owner?: boolean; role?: "host" | "member" | "presenter" } = {}): NonNullable<Parameters<typeof assertCurrentEffect>[1]> {
   return { identity: { ...guard, authEpoch: input.epoch ?? 1 },
     permissions: input.permission === false ? ["notes.view"] : ["notes.view", "notes.edit"],
-    isOwner: input.owner ?? false
+    isOwner: input.owner ?? false, role: input.role ?? "presenter"
   } as NonNullable<Parameters<typeof assertCurrentEffect>[1]>;
 }
 
@@ -29,6 +29,18 @@ test("effect guard rejects revoked epochs, demotion, wrong scope and expired ses
   assert.throws(() => assertCurrentEffect({ ...guard, ownerOnly: true }, current(), 99_000), (error: unknown) =>
     error instanceof IdentityStorageError && error.code === "identity_forbidden");
   assert.doesNotThrow(() => assertCurrentEffect({ ...guard, ownerOnly: true }, current({ owner: true }), 99_000));
+});
+
+test("Host-or-Owner fence accepts a Member owner while rejecting an ordinary Member or Presenter", () => {
+  const controls = { ...guard, permission: "room.join" as const, hostOrOwner: true };
+  const actor = (role: "host" | "member" | "presenter", isOwner = false) => ({ ...current({ role, owner: isOwner }),
+    permissions: ["room.join" as const] });
+  assert.equal(assertCurrentEffect(controls, actor("member", true), 99_000).isOwner, true);
+  assert.equal(assertCurrentEffect(controls, actor("host"), 99_000).role, "host");
+  for (const role of ["member", "presenter"] as const) {
+    assert.throws(() => assertCurrentEffect(controls, actor(role), 99_000), (error: unknown) =>
+      error instanceof IdentityStorageError && error.code === "identity_forbidden");
+  }
 });
 
 test("in-memory guarded note writes never execute after a committed revocation", async () => {
@@ -53,4 +65,41 @@ test("in-memory guarded note writes never execute after a committed revocation",
     roomId: scope.roomId, scope: "shared", content: "after revoke"
   })), (error: unknown) => error instanceof IdentityStorageError && error.code === "identity_not_active");
   assert.equal((await storage.getRoomNote(scope.roomId, "shared"))?.content, "before revoke");
+});
+
+test("in-memory Member owner binds a scene narrowly and invitation revoke preserves the first actor", async () => {
+  const storage = new MemoryStorage();
+  const room = await storage.createRoom({ tenantId: "demo-tenant", templateId: "meeting-room-basic", name: "Owner scene binding",
+    roomType: "personal", ownerParticipantId: "owner", visibility: "private", sessionControl: { hostParticipantId: "owner" } });
+  const scope = { tenantId: room.tenantId, roomId: room.roomId };
+  await storage.identityProtocol.raise(2);
+  const admin = { actorType: "admin-token" as const, actorId: "test-admin", role: "admin" as const };
+  const service = createRoomIdentityService(storage.roomIdentities, "memory-metadata-proof-test-secret-32-bytes");
+  const recovery = await service.issueRecovery({ ...scope, targetParticipantId: "owner", targetRole: "owner",
+    expiresAt: new Date(Date.now() + 120_000).toISOString(), issuer: admin });
+  const owner = await service.redeemRecovery(recovery.credential, scope);
+  const invite = await storage.createRoomInviteV2({ roomId: room.roomId, tokenHash: "m".repeat(43), role: "member",
+    waitingRoomEnabled: false, expiresAt: new Date(Date.now() + 120_000).toISOString(), actor: admin });
+  const nextHost = await service.admit({ ...scope, displayName: "New Host", inviteTokenHash: invite.tokenHash });
+  await storage.roomIdentities.transition(scope, admin, (await storage.roomIdentities.authority(scope))!.revision,
+    { type: "transfer-host", targetParticipantId: nextHost.identity.participantId });
+  const guarded = { ...owner.identity, permission: "room.join" as const, hostOrOwner: true,
+    roomWrite: true, expiresAtSeconds: Math.floor(Date.now() / 1000) + 120 };
+  const bound = await storage.withRoomIdentityEffect(guarded, (scoped, current) => {
+    assert.equal(current.role, "member");
+    assert.equal(current.isOwner, true);
+    return scoped.setRoomSceneBundleUrl(scope.tenantId, scope.roomId, "https://example.test/new/scene.json");
+  });
+  assert.equal(bound!.visibility, "private");
+  assert.equal(bound!.name, room.name);
+  assert.deepEqual(bound!.templateSnapshot, { ...room.templateSnapshot,
+    roomConfig: { ...room.templateSnapshot.roomConfig, sceneBundleUrl: "https://example.test/new/scene.json" } });
+  assert.deepEqual(await storage.getTemplateVersion(room.templateId, room.templateVersion),
+    Object.fromEntries(Object.entries(room.templateSnapshot).filter(([key]) => key !== "roomConfig")));
+  const first = await storage.revokeRoomInvite(scope.roomId, invite.inviteId, "2026-10-02T00:00:00.000Z", "first-actor");
+  assert.deepEqual(await storage.revokeRoomInvite(scope.roomId, invite.inviteId, "2026-10-03T00:00:00.000Z", "second-actor"), first);
+  await storage.transitionReferenceTemplateCatalog("active");
+  const reference = await storage.createRoom({ tenantId: "demo-tenant", templateId: "meeting-room-basic", name: "Reference" });
+  await assert.rejects(storage.setRoomSceneBundleUrl(reference.tenantId, reference.roomId, "https://example.test/scene.json"), /reference_scene_override_not_allowed/);
+  assert.deepEqual(await storage.getRoom(reference.roomId), reference);
 });

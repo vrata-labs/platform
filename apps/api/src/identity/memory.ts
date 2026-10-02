@@ -70,7 +70,7 @@ export function createMemoryRoomIdentities(getRoom: (roomId: string) => Identity
       const room = getRoom(guard.roomId);
       const state = room && snapshot(room, { identityIds: [guard.identityId] });
       if (!state || state.minimumProtocol < 2) throw new IdentityStorageError("room_not_found");
-      assertMemoryEffect(state, guard, now());
+      return assertMemoryEffect(state, guard, now());
     },
     authorizeInvite(roomId: string, actor: RoomIdentityActor, create: () => RoomInviteRecord): RoomInviteRecord {
       const room = getRoom(roomId);

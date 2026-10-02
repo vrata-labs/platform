@@ -266,6 +266,16 @@ Workspace lint/typecheck/build прошли. Несколько полных п�
 
 [Артефакт staging gate](https://github.com/vrata-labs/platform/actions/runs/37020948633/artifacts/11234757275): текущая загрузка Hall/BlueOffice/ArtGallery, встреча с PDF/notes и cleanup прошли. После gate `/health`, `/rooms/demo-room`, `/control-plane`, `/api/templates` — HTTP 200. Общий identity floor остался 1; v2 owner/revoke races проверены в отдельных PostgreSQL/HTTP fixtures и не выдаются за активацию на общем staging. Retry/rollback этой публикации не потребовались.
 
+### T01a-S2b-V: scene binding, presence и пригласительные действия
+
+Подготовлен fresh Host-or-Owner fence для bind-scene-bundle, invite/waiting списков, revocation и approve/reject. Владелец personal room с ролью Member сохраняет управление; бывший Host не продолжает действие после передачи роли. Узкий scene setter не переписывает status/visibility из старого снимка, соблюдает immutable reference template/CAS и обновляет только URL и производный roomConfig URL. Callback не берёт дополнительные соединения пула и не выполняет внешнюю загрузку assets.
+
+Manifest/presence ответы выпускаются после authority-проверки. Presence PUT публикует данные внутри fence с актуальной серверной ролью, ID и timestamp; удалённый участник не возвращается поздним body, а обычный role handoff не заставляет восстанавливать identity. Повтор invite revoke сохраняет первоначальные actor/time. Memory/PostgreSQL и реальные HTTP-тесты покрывают потерю роли/epoch, конкурентный disable/visibility, owner-Member, ожидание/повтор решения, immutable reference rejection, пул размером один и прогресс восьми клиентов с lifecycle write. Это не гарантия распределённого presence и не проверка пикового performance SLA.
+
+Общий floor 2 не активируется. Остаются session expiry в других lifecycle/invite-creation путях, LiveKit source grants и снятие текущего показа, проверка повторного media-входа и политика длительно живущих комнат.
+
+Локально прошли workspace lint/typecheck/build и полный `pnpm test` с настоящим PostgreSQL 16 на отдельном tmpfs и pinned rollback builds: API **861/861**, runtime **931/931**, remote-browser **39/39**, room-state **76/76**, shared-types **30/30**, tools **125/125**. Финальный полный local `pnpm test:e2e --workers=1` — **158/158**, без skip/retry, с первого запуска (25,7 минуты). Временный контейнер удалён после проверки; исходный локальный PostgreSQL и соседние сессии не менялись.
+
 ## Публикация первого среза T01/T12
 
 Локально прошли workspace lint/typecheck/build/tests с PostgreSQL, затем runtime build и 905 runtime tests после финальных правок. Полный `pnpm test:e2e` на финальном исполняемом дереве: **148 passed**, без skip (41.6 min).

@@ -54,7 +54,7 @@ import { roomMediaGrantName } from "./identity/media-room.js";
 import { applyRoomLifecycleV2, lifecycleV2Error } from "./identity/http-lifecycle.js";
 import { finalizeProofBoundToken } from "./identity/effect-fence.js";
 import { IdentityStorageError } from "./identity/contracts.js";
-import type { RoomEffectGuard } from "./identity/effect-write-guard.js";
+import type { RoomEffectGuard, RoomEffectActor } from "./identity/effect-write-guard.js";
 import type { Storage, RoomIdentityEffectStorage } from "./storage-contracts.js";
 import { identityAdmissionOriginHash as hashAdmissionOrigin } from "./identity/admission-origin.js";
 
@@ -803,9 +803,9 @@ async function finalizeRoomToken(request: IncomingMessage,
 }
 
 async function runGuardedRoomEffect<T>(storage: Storage, actor: ControlPlaneActor, room: RoomRecord,
-  permission: RoomPermission, effect: (scoped: RoomIdentityEffectStorage) => Promise<T>,
-  options: { ownerOnly?: boolean; roomWrite?: boolean } = {}): Promise<T> {
-  if (actor.actorType === "admin-token" || actor.identityProtocolVersion !== 2) return effect(storage);
+  permission: RoomPermission, effect: (scoped: RoomIdentityEffectStorage, current: RoomEffectActor | null) => Promise<T>,
+  options: { ownerOnly?: boolean; hostOrOwner?: boolean; roomWrite?: boolean } = {}): Promise<T> {
+  if (actor.actorType === "admin-token" || actor.identityProtocolVersion !== 2) return effect(storage, null);
   if (!actor.identityId || !actor.participantId || !actor.authEpoch || !actor.expiresAtSeconds) {
     throw new IdentityBoundaryError(409, "identity_recovery_required");
   }
@@ -831,7 +831,7 @@ async function releaseRoomNotes(request: IncomingMessage, storage: Storage, acto
   } catch (error) {
     if (actor.identityProtocolVersion === 2 && (error instanceof RoomEffectPermissionDenied || error instanceof IdentityBoundaryError)) {
       writeRoomNotesAudit({ request, action, roomId: room.roomId, scope,
-      result: "denied", reason: error instanceof RoomEffectPermissionDenied ? "permission_denied" : "identity_recovery_required", actor });
+        result: "denied", reason: error instanceof RoomEffectPermissionDenied ? "permission_denied" : "identity_recovery_required", actor });
     }
     throw error;
   }
@@ -2824,7 +2824,10 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     const room = await storage.getRoom(roomId);
     if (!room) return json(response, 404, { error: "room_not_found" });
     if (method === "GET") {
-      json(response, 200, { items: (await storage.listRoomInvites(roomId)).map((invite) => sanitizeRoomInvite(invite)) });
+      await runGuardedRoomEffect(storage, actor, room, "room.join", async scoped => {
+        const items = (await scoped.listRoomInvites(roomId)).map((invite) => sanitizeRoomInvite(invite));
+        json(response, 200, { items });
+      }, { hostOrOwner: true });
       return;
     }
 
@@ -2873,7 +2876,10 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       allowHostOwnRoom: true
     });
     if (!actor) return;
-    const invite = await storage.revokeRoomInvite(roomId, inviteId, new Date().toISOString(), actor.actorId);
+    const room = await storage.getRoom(roomId);
+    if (!room) return json(response, 404, { error: "room_not_found" });
+    const invite = await runGuardedRoomEffect(storage, actor, room, "room.join",
+      scoped => scoped.revokeRoomInvite(roomId, inviteId, new Date().toISOString(), actor.actorId), { hostOrOwner: true });
     if (!invite) return json(response, 404, { error: "invite_not_found" });
     metrics.invitesRevokedTotal += 1;
     json(response, 200, sanitizeRoomInvite(invite));
@@ -2892,7 +2898,12 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       allowHostOwnRoom: true
     });
     if (!actor) return;
-    json(response, 200, { items: (await storage.listWaitingRoomRequests(roomId)).map(sanitizeWaitingRoomRequest) });
+    const room = await storage.getRoom(roomId);
+    if (!room) return json(response, 404, { error: "room_not_found" });
+    await runGuardedRoomEffect(storage, actor, room, "room.join", async scoped => {
+      const items = (await scoped.listWaitingRoomRequests(roomId)).map(sanitizeWaitingRoomRequest);
+      json(response, 200, { items });
+    }, { hostOrOwner: true });
     return;
   }
 
@@ -2910,13 +2921,15 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       allowHostOwnRoom: true
     });
     if (!actor) return;
+    const room = await storage.getRoom(roomId);
+    if (!room) return json(response, 404, { error: "room_not_found" });
     let waitingRequest: WaitingRoomRequestRecord | null;
     try {
-      waitingRequest = await storage.updateWaitingRoomRequest(roomId, waitingRequestId, {
+      waitingRequest = await runGuardedRoomEffect(storage, actor, room, "room.join", scoped => scoped.updateWaitingRoomRequest(roomId, waitingRequestId, {
         status: decision,
         decidedAt: new Date().toISOString(),
         decidedBy: actor.actorId
-      });
+      }), { hostOrOwner: true });
     } catch (error) {
       if (error instanceof Error && error.message === "waiting_decision_finalized") {
         return json(response, 409, { error: "waiting_decision_finalized" });
@@ -3302,6 +3315,8 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       allowHostOwnRoom: true
     });
     if (!actor) return;
+    const existingRoom = await storage.getRoom(roomId);
+    if (!existingRoom) return json(response, 404, { error: "room_not_found" });
     const payload = (await parseBody<{ bundleId?: string; version?: string }>(request)) ?? {};
     if (!payload.bundleId) return json(response, 400, { error: "missing_scene_bundle_id" });
     const bundle = payload.version
@@ -3309,7 +3324,8 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       : await storage.getSceneBundle(payload.bundleId);
     if (!bundle) return json(response, 404, { error: "scene_bundle_not_found" });
     let room: RoomRecord | null;
-    try { room = await storage.updateRoom(roomId, { sceneBundleUrl: bundle.publicUrl }); } catch (error) {
+    try { room = await runGuardedRoomEffect(storage, actor, existingRoom, "room.join",
+      scoped => scoped.setRoomSceneBundleUrl(existingRoom.tenantId, roomId, bundle.publicUrl), { hostOrOwner: true, roomWrite: true }); } catch (error) {
       const failure = templateInputError(error);
       if (!failure) throw error;
       return json(response, failure.status, { error: failure.code });
@@ -3335,13 +3351,23 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     const room = await storage.getRoom(roomId);
     if (room && isRoomDisabled(room) && !canManageDisabledRoom(request)) return json(response, 403, { error: "room_access_denied", reason: "room_disabled" });
     if (room && !(await canReadRoomDetails(request, room))) return json(response, 404, { error: "room_not_found" });
-    json(response, 200, await buildManifest(roomId, request));
+    const manifest = await buildManifest(roomId, request);
+    const actorResult = resolveControlPlaneActor(request);
+    if (room && actorResult.ok && actorResult.actor.identityProtocolVersion === 2) {
+      await runGuardedRoomEffect(storage, actorResult.actor, room, "room.join", async () => { json(response, 200, manifest); });
+    } else json(response, 200, manifest);
     return;
   }
 
   const presenceListMatch = url.pathname.match(/^\/api\/rooms\/([^/]+)\/presence$/);
   if (method === "GET" && presenceListMatch) {
-    json(response, 200, { items: getPresence(decodeURIComponent(presenceListMatch[1])) });
+    const roomId = decodeURIComponent(presenceListMatch[1]);
+    const actorResult = resolveControlPlaneActor(request);
+    if (actorResult.ok && actorResult.actor.identityProtocolVersion === 2) {
+      const room = await storage.getRoom(roomId);
+      if (!room) return json(response, 404, { error: "room_not_found" });
+      await runGuardedRoomEffect(storage, actorResult.actor, room, "room.join", async () => { json(response, 200, { items: getPresence(roomId) }); });
+    } else json(response, 200, { items: getPresence(roomId) });
     return;
   }
 
@@ -3360,12 +3386,24 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     if (blockReason) {
       return json(response, 403, { error: "room_access_denied", reason: blockReason });
     }
-    upsertPresence(roomId, participantId, {
-      ...payload,
-      role: effectiveRole,
-      permissions: getRoomPermissions(effectiveRole)
-    });
-    json(response, 200, { ok: true });
+    const publish = (current: RoomEffectActor | null) => {
+      upsertPresence(roomId, participantId, {
+        ...payload,
+        participantId,
+        updatedAt: new Date().toISOString(),
+        role: current?.role ?? effectiveRole,
+        permissions: current?.permissions ?? getRoomPermissions(effectiveRole)
+      });
+      json(response, 200, { ok: true });
+    };
+    if (session.payload.identityProtocolVersion === 2) {
+      if (!room) return json(response, 404, { error: "room_not_found" });
+      const actorResult = resolveControlPlaneActor(request);
+      if (!actorResult.ok) return json(response, 403, { error: "forbidden" });
+      // Publish before this callback resolves: remove/end must be ordered after
+      // the map write, not between a returned authority snapshot and the write.
+      await runGuardedRoomEffect(storage, actorResult.actor, room, "room.join", async (_scoped, current) => { publish(current); });
+    } else publish(null);
     return;
   }
 
@@ -3672,7 +3710,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
 
 export function startApiServer(port = apiPort) {
   getStateTokenSecret();
-    const server = createServer((request, response) => {
+  const server = createServer((request, response) => {
     handleRequest(request, response).catch((error: unknown) => {
       // A fenced response can already have queued its bytes when COMMIT fails.
       // Do not attempt a second response or throw ERR_HTTP_HEADERS_SENT.

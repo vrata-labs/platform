@@ -200,8 +200,8 @@ including early-timer rescheduling, and must obtain a newly authorized token.
 An already-issued self-hosted LiveKit JWT is **not** revoked by these checks:
 participant removal does not invalidate it, and LiveKit proactively refreshes
 connected participants' tokens. Current source grants, server-side participant
-eviction/rejoin enforcement and remaining metadata/presence writes still
-require an explicit activation gate.
+eviction/rejoin enforcement and expiry in the remaining lifecycle mutations
+still require an explicit activation gate.
 
 ### Prepared personal-state and private response release
 
@@ -226,6 +226,32 @@ After-send commit failures cannot write a second response or be audited as an
 authority denial. The held-room HTTP tests wait for actual database blocking
 before changing owner/epoch/tombstone/surface, and check that denied responses
 contain neither the prepared private data nor attachment headers.
+
+### Prepared scene, presence and invitation metadata fences
+
+Host-controlled metadata now uses a fresh Host-or-Owner predicate, independent
+of a cached HTTP role. A personal Owner admitted as Member can still bind a
+scene and manage invites/waiting requests; a former Host without ownership
+cannot. The scene setter changes only its URL and the derived roomConfig URL,
+not status/visibility or immutable template versions. It checks reference
+template restrictions and the current template CAS on the fenced connection.
+The persisted snapshot and Memory projection stay consistent. Parent-room
+writes take the no-key-update lock up front, with no S3 or asset fetch inside.
+
+Manifest and presence reads are revalidated at response release. Presence PUT
+updates the process-local map synchronously inside the fence using the fresh
+role/permissions and server-owned participant ID/time. A role demotion alone
+does not invalidate identity or force recovery. Remove/end cannot be followed
+by an old request resurrecting presence. Self-only DELETE stays a cleanup action.
+This is a single-API map; distributed presence and load under a larger topology
+need separate validation. The eight-participant HTTP burst checks progress, not
+a performance SLA or a claim of cross-replica consistency.
+
+Invite/waiting lists, revocation and approval/rejection use the same fence and
+connection, including finalized-decision retry. Repeat revocation retains the
+original actor/time. Existing invite creation keeps its own atomic authority
+check; request/session expiry in that path and other lifecycle commands is a
+separate final activation obligation, not closed by these metadata fences.
 
 ## Runtime adoption
 

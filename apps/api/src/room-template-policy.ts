@@ -62,7 +62,7 @@ export async function resolveRoomTemplateCreate(storage: Pick<Storage, "listTemp
 export function templateInputError(error: unknown): { code: string; status: number } | null {
   const message = error instanceof Error ? error.message : "";
   const code = message.split(":", 1)[0]!;
-  if (["template_version_not_current", "deprecated_template", "template_change_not_supported", "reference_scene_override_not_allowed", "personal_room_owner_immutable"].includes(code)) return { code, status: 409 };
+  if (["template_version_not_current", "deprecated_template", "template_change_not_supported", "room_template_binding_changed", "reference_scene_override_not_allowed", "personal_room_owner_immutable"].includes(code)) return { code, status: 409 };
   if (["invalid_template_version", "unknown_template", "unknown_template_version", "server_owned_template_snapshot", "missing_personal_room_owner", "personal_room_must_be_private", "personal_room_guest_access_forbidden", "template_room_type_conflict", "invalid_room_visibility", "invalid_guest_allowed", "invalid_room_feature", "invalid_room_theme", "invalid_avatar_config", "invalid_template_override"].includes(code)) return { code, status: 400 };
   if (code === "template_deprecated") return { code: "deprecated_template", status: 409 };
   return null;
