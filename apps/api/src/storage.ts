@@ -56,6 +56,10 @@ import { createPostgresRoomIdentities, assertPostgresEffect } from "./identity/p
 import { createMemoryAdmissionBudget, createPostgresAdmissionBudget } from "./identity/admission-budget.js";
 import { type RoomEffectGuard, type RoomEffectActor } from "./identity/effect-write-guard.js";
 import type { RoomIdentityEffectStorage } from "./storage-contracts.js";
+import type { LegacyRoomEffectOptions } from "./storage-contracts.js";
+import { createRoomEffectFacade } from "./identity/effect-facade.js";
+import { roomFenceTransaction, confirmedRoomWriteRejection, RoomFenceCommitUncertain } from "./identity/fence-transaction.js";
+import { IdentityBoundaryError } from "./identity/legacy-boundary.js";
 import { installRoomIdentitySchema } from "./identity/postgres-schema.js";
 import { identityLifecycleChanged, IDENTITY_LIFECYCLE_REQUIRES_V2 } from "./identity/lifecycle.js";
 import { identityLifecycle } from "./identity/authority.js";
@@ -201,8 +205,29 @@ export class MemoryStorage implements Storage {
 
   async hasRoomIdentityAuthority(roomId: string): Promise<boolean> { return this.identityAdapter.hasRoomBindings(roomId); }
   async withRoomIdentityEffect<T>(guard: RoomEffectGuard, effect: (scoped: RoomIdentityEffectStorage, current: RoomEffectActor) => Promise<T>): Promise<T> {
+    let active = true;
     const current = this.identityAdapter.assertCurrentEffect(guard);
-    return effect(this, current);
+    try {
+      return await effect(createRoomEffectFacade(this, { roomWrite: guard.roomWrite, check: () => {
+        if (!active) throw new Error("room_effect_scope_closed");
+        this.identityAdapter.assertCurrentEffect(guard);
+      } }), current);
+    } finally { active = false; }
+  }
+  async withLegacyRoomEffect<T>(scope: { tenantId: string; roomId: string }, options: LegacyRoomEffectOptions,
+    effect: (scoped: RoomIdentityEffectStorage) => Promise<T>): Promise<T> {
+    let active = true;
+    const check = () => {
+      if (!active) throw new Error("room_effect_scope_closed");
+      const room = this.rooms.get(scope.roomId);
+      if (!room || room.tenantId !== scope.tenantId) throw new IdentityStorageError("room_not_found");
+      if (this.identityPolicy.current() !== 1 || this.identityAdapter.hasRoomBindings(scope.roomId)) {
+        throw new IdentityBoundaryError(409, "identity_upgrade_required");
+      }
+    };
+    check();
+    try { return await effect(createRoomEffectFacade(this, { roomWrite: options.roomWrite, check })); }
+    finally { active = false; }
   }
   async getPersonalRoomState(tenantId: string, roomId: string): Promise<RoomPersonalState | null> {
     const room = this.rooms.get(roomId);
@@ -758,17 +783,14 @@ export class PostgresStorage implements Storage {
   readonly identityProtocol: Storage["identityProtocol"];
   readonly reserveIdentityAdmission: Storage["reserveIdentityAdmission"];
   constructor(private readonly pool: Pool, private readonly identityNow = Date.now, private readonly effectClient?: PoolClient,
-    private readonly effectRoomWrite = false) {
+    private readonly effectRoomWrite = false, private readonly effectMode: "v2" | "legacy" = "v2") {
     this.reserveIdentityAdmission = createPostgresAdmissionBudget(pool, identityNow);
     this.roomIdentities = createPostgresRoomIdentities(pool, identityNow);
     this.identityProtocol = createPostgresIdentityProtocol(pool);
   }
   private get effectDatabase(): Pool | PoolClient { return this.effectClient ?? this.pool; }
   async withRoomIdentityEffect<T>(guard: RoomEffectGuard, effect: (scoped: RoomIdentityEffectStorage, current: RoomEffectActor) => Promise<T>): Promise<T> {
-    const client = await this.pool.connect();
-    try {
-      await client.query("begin isolation level read committed");
-      await client.query("set local lock_timeout='5s'");
+    return roomFenceTransaction(this.pool, {}, async (client, checkAlive) => {
       // Every v2 transfer/revoke locks this parent room FOR UPDATE. Keep only
       // the DB mutation (never S3 or a room-state RPC) behind this short fence.
       const room = await client.query(guard.roomWrite
@@ -777,15 +799,27 @@ export class PostgresStorage implements Storage {
         [guard.tenantId, guard.roomId]);
       if (!room.rowCount) throw new IdentityStorageError("room_not_found");
       const current = await assertPostgresEffect(client, guard);
-      const result = await effect(new PostgresStorage(this.pool, Date.now, client, guard.roomWrite === true), current);
-      await client.query("commit");
-      return result;
-    } catch (error) {
-      await client.query("rollback").catch(() => undefined);
-      throw error;
-    } finally {
-      client.release();
-    }
+      return effect(createRoomEffectFacade(new PostgresStorage(this.pool, this.identityNow, client, guard.roomWrite === true),
+        { roomWrite: guard.roomWrite, check: checkAlive }), current);
+    });
+  }
+  async withLegacyRoomEffect<T>(scope: { tenantId: string; roomId: string }, options: LegacyRoomEffectOptions,
+    effect: (scoped: RoomIdentityEffectStorage) => Promise<T>): Promise<T> {
+    return roomFenceTransaction(this.pool, options, async (client, checkAlive) => {
+      const room = await client.query(options.roomWrite
+        ? "select 1 from rooms where tenant_id=$1 and room_id=$2 for no key update"
+        : "select 1 from rooms where tenant_id=$1 and room_id=$2 for share", [scope.tenantId, scope.roomId]);
+      if (!room.rowCount) throw new IdentityStorageError("room_not_found");
+      const policy = (await client.query("select minimum_protocol from room_identity_protocol_policy where singleton=true for share")).rows[0];
+      if (!policy || !Number.isSafeInteger(policy.minimum_protocol) || policy.minimum_protocol < 1) {
+        throw new IdentityBoundaryError(503, "identity_authority_unavailable");
+      }
+      const bound = (await client.query("select 1 from room_identity_authority_v2 where tenant_id=$1 and room_id=$2",
+        [scope.tenantId, scope.roomId])).rowCount;
+      if (policy.minimum_protocol !== 1 || bound) throw new IdentityBoundaryError(409, "identity_upgrade_required");
+      return effect(createRoomEffectFacade(new PostgresStorage(this.pool, this.identityNow, client, options.roomWrite === true, "legacy"),
+        { roomWrite: options.roomWrite, check: checkAlive }));
+    });
   }
   async getPersonalRoomState(tenantId: string, roomId: string): Promise<RoomPersonalState | null> {
     const result = await this.effectDatabase.query("select personal_state from rooms where tenant_id=$1 and room_id=$2 and room_type='personal'",
@@ -1663,7 +1697,7 @@ export class PostgresStorage implements Storage {
     return result.rows[0] ? mapWaitingRoomRequestRow(result.rows[0]) : null;
   }
   async updateWaitingRoomRequest(roomId: string, requestId: string, input: Partial<Pick<WaitingRoomRequestRecord, "status" | "decidedAt" | "decidedBy">>): Promise<WaitingRoomRequestRecord | null> {
-    const v2 = this.effectClient ? true : await this.identityProtocol.minimum() >= 2;
+    const v2 = this.effectClient ? this.effectMode === "v2" : await this.identityProtocol.minimum() >= 2;
     const result = await this.effectDatabase.query(
       `update room_waiting_requests set status = coalesce($3, status), decided_at = coalesce($4, decided_at), decided_by = coalesce($5, decided_by) where room_id = $1 and request_id = $2 ${v2 ? "and status='pending'" : ""} returning request_id, room_id, invite_id, participant_id, display_name, status, created_at, decided_at, decided_by`,
       [roomId, requestId, input.status ?? null, input.decidedAt ?? null, input.decidedBy ?? null]
@@ -1819,12 +1853,18 @@ export class PostgresStorage implements Storage {
     return result.rows[0] ? mapRoomDocumentRow(result.rows[0]) : null;
   }
   async createRoomDocument(input: Omit<RoomDocumentRecord, "uploadedAt" | "deletedAt" | "deletedBy" | "linkedSurfaceId"> & { uploadedAt?: string; linkedSurfaceId?: string | null }): Promise<RoomDocumentRecord> {
-    const result = await this.effectDatabase.query(
+    let result;
+    try { result = await this.effectDatabase.query(
       `insert into room_documents (document_id, room_id, tenant_id, filename, content_type, size_bytes, storage_key, checksum, uploaded_by, uploaded_at, linked_surface_id, metadata)
        values ($1,$2,$3,$4,$5,$6,$7,$8,$9,coalesce($10::timestamptz, now()),$11,$12)
        returning document_id, room_id, tenant_id, filename, content_type, size_bytes, storage_key, checksum, uploaded_by, uploaded_at, deleted_at, deleted_by, linked_surface_id, metadata`,
       [input.documentId, input.roomId, input.tenantId, input.filename, input.contentType, input.sizeBytes, input.storageKey, input.checksum, input.uploadedBy ?? null, input.uploadedAt ?? null, input.linkedSurfaceId ?? null, input.metadata ?? {}]
-    );
+    ); } catch (error) {
+      // Root/admin calls use implicit autocommit. An unknown write result may
+      // already have published the row, just like a lost explicit COMMIT ack.
+      if (!this.effectClient && !confirmedRoomWriteRejection(error)) throw new RoomFenceCommitUncertain(error);
+      throw error;
+    }
     return mapRoomDocumentRow(result.rows[0]);
   }
   async markRoomDocumentDeleted(roomId: string, documentId: string, deletedAt: string, deletedBy?: string | null): Promise<RoomDocumentRecord | null> {

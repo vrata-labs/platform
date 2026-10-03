@@ -67,6 +67,30 @@ test("factory does not read storage before a build and each build reloads the ro
   assert.deepEqual(calls, ["room:requested-a", "assets", "room:requested-b", "assets"]);
 });
 
+test("a checked missing-room snapshot cannot be replaced by a newly created private room", async () => {
+  const privateRoom = roomFixture({ visibility: "private", ownerParticipantId: "PRIVATE-NEW-OWNER",
+    sceneBundleUrl: "https://example.test/PRIVATE-SCENE.json", assetIds: ["private-asset"] });
+  const { storage, calls } = fixture(privateRoom, [{ assetId: "private-asset", tenantId: "tenant-a", kind: "model",
+    url: "https://example.test/PRIVATE-ASSET.glb", validationStatus: "validated" }]);
+  let reads = 0;
+  storage.getRoom = async id => { calls.push(`room:${id}`); return ++reads === 1 ? null : privateRoom; };
+  const checked = await storage.getRoom("room-a");
+  assert.equal(checked, null);
+  const manifest = await createRoomManifestBuilder(Promise.resolve(storage))("room-a", undefined, checked);
+  assert.deepEqual(calls, ["room:room-a", "template:meeting-room-basic"]);
+  assert.equal(reads, 1);
+  assert.equal(JSON.stringify(manifest).includes("PRIVATE-"), false);
+});
+
+test("manifest authorization and output share one existing-room snapshot", async () => {
+  const checked = roomFixture({ visibility: "public", sceneBundleUrl: "https://example.test/public.json" });
+  const { calls, build } = fixture(roomFixture({ visibility: "private", sceneBundleUrl: "https://example.test/PRIVATE.json" }));
+  const manifest = await build("room-a", undefined, checked);
+  assert.deepEqual(calls, ["assets"]);
+  assert.equal(manifest.sceneBundle!.url, checked.sceneBundleUrl);
+  assert.equal(manifest.access.visibility, "public");
+});
+
 test("storage readiness and room lookup are awaited before listing assets", async () => {
   const ready = deferred<ManifestStorage>();
   const room = deferred<RoomRecord | null>();

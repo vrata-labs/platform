@@ -281,6 +281,8 @@ export interface Storage {
   readonly identityProtocol: import("./identity/protocol.js").IdentityProtocolPolicy;
   withRoomIdentityEffect<T>(guard: import("./identity/effect-write-guard.js").RoomEffectGuard,
     effect: (scoped: RoomIdentityEffectStorage, current: import("./identity/effect-write-guard.js").RoomEffectActor) => Promise<T>): Promise<T>;
+  withLegacyRoomEffect<T>(scope: { tenantId: string; roomId: string }, options: LegacyRoomEffectOptions,
+    effect: (scoped: RoomIdentityEffectStorage) => Promise<T>): Promise<T>;
   setRoomSceneBundleUrl(tenantId: string, roomId: string, sceneBundleUrl: string): Promise<RoomRecord | null>;
   getPersonalRoomState(tenantId: string, roomId: string): Promise<RoomPersonalState | null>;
   updatePersonalRoomState(tenantId: string, roomId: string, state: RoomPersonalState): Promise<RoomPersonalState | null>;
@@ -346,10 +348,13 @@ export interface ExpectedRoomTemplateBinding {
 }
 
 /** Only DB-only mutations and the tombstone read belong inside a room fence. */
-export type RoomIdentityEffectStorage = Pick<Storage, "upsertRoomNote" | "deleteRoomNote" | "restoreRoomNoteVersion"
+export type RoomEffectDatabase = Pick<Storage, "upsertRoomNote" | "deleteRoomNote" | "restoreRoomNoteVersion"
   | "createRoomDocument" | "markRoomDocumentDeleted" | "updateRoomDocumentSurface" | "getRoomDocument"
   | "getPersonalRoomState" | "updatePersonalRoomState" | "setRoomSceneBundleUrl"
   | "listRoomInvites" | "revokeRoomInvite" | "listWaitingRoomRequests" | "updateWaitingRoomRequest">;
+
+export type RoomIdentityEffectStorage = RoomEffectDatabase & { releaseResponse(send: () => void): void };
+export interface LegacyRoomEffectOptions { roomWrite?: boolean; lockTimeoutMs?: number; idleTimeoutMs?: number }
 
 export type SceneBundleUpdateInput = Partial<SceneBundleCreateInput> & {
   publicUrl?: string;

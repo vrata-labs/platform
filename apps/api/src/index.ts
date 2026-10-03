@@ -56,6 +56,9 @@ import { finalizeProofBoundToken } from "./identity/effect-fence.js";
 import { IdentityStorageError } from "./identity/contracts.js";
 import type { RoomEffectGuard, RoomEffectActor } from "./identity/effect-write-guard.js";
 import type { Storage, RoomIdentityEffectStorage } from "./storage-contracts.js";
+import { createRoomEffectFacade } from "./identity/effect-facade.js";
+import { identityFenceUnavailable, uncertainRoomCommit } from "./identity/fence-transaction.js";
+import { releaseFencedResponse } from "./identity/response-release.js";
 import { identityAdmissionOriginHash as hashAdmissionOrigin } from "./identity/admission-origin.js";
 
 import { getLivekitCredentials, getMediaTokenConfigError, getLivekitDeploymentDiagnostics } from "./livekit-config.js";
@@ -228,6 +231,7 @@ interface ControlPlaneActor {
 }
 
 class RoomEffectPermissionDenied extends Error {}
+class RoomEffectNotFound extends Error {}
 
 interface ControlPlaneAuditLogEntry {
   timestamp: string;
@@ -805,7 +809,15 @@ async function finalizeRoomToken(request: IncomingMessage,
 async function runGuardedRoomEffect<T>(storage: Storage, actor: ControlPlaneActor, room: RoomRecord,
   permission: RoomPermission, effect: (scoped: RoomIdentityEffectStorage, current: RoomEffectActor | null) => Promise<T>,
   options: { ownerOnly?: boolean; hostOrOwner?: boolean; roomWrite?: boolean } = {}): Promise<T> {
-  if (actor.actorType === "admin-token" || actor.identityProtocolVersion !== 2) return effect(storage, null);
+  if (actor.actorType === "admin-token") {
+    let active = true;
+    const scoped = createRoomEffectFacade(storage, { roomWrite: true,
+      check: () => { if (!active) throw new Error("room_effect_scope_closed"); } });
+    try { return await effect(scoped, null); }
+    finally { active = false; }
+  }
+  if (actor.identityProtocolVersion !== 2) return runLegacyRoomEffect(storage, room, options,
+    scoped => effect(scoped, null));
   if (!actor.identityId || !actor.participantId || !actor.authEpoch || !actor.expiresAtSeconds) {
     throw new IdentityBoundaryError(409, "identity_recovery_required");
   }
@@ -815,6 +827,7 @@ async function runGuardedRoomEffect<T>(storage: Storage, actor: ControlPlaneActo
   try {
     return await storage.withRoomIdentityEffect(guard, effect);
   } catch (error) {
+    if (identityFenceUnavailable(error)) throw new IdentityBoundaryError(503, "identity_authority_unavailable", error);
     if (error instanceof IdentityStorageError) {
       if (error.code === "identity_session_expired") throw new IdentityBoundaryError(401, "identity_session_expired");
       if (error.code === "identity_forbidden") throw new RoomEffectPermissionDenied("permission_denied");
@@ -824,18 +837,42 @@ async function runGuardedRoomEffect<T>(storage: Storage, actor: ControlPlaneActo
   }
 }
 
-async function releaseRoomNotes(request: IncomingMessage, storage: Storage, actor: ControlPlaneActor, room: RoomRecord,
-  scope: RoomNoteScope, action: "notes.read" | "notes.versions" | "notes.export", send: () => void): Promise<void> {
+async function runLegacyRoomEffect<T>(storage: Storage, room: RoomRecord, options: { roomWrite?: boolean },
+  effect: (scoped: RoomIdentityEffectStorage) => Promise<T>): Promise<T> {
   try {
-    await runGuardedRoomEffect(storage, actor, room, "notes.view", async () => { send(); });
-    if (actor.identityProtocolVersion === 2) writeRoomNotesAudit({ request, action, roomId: room.roomId, scope, result: "allowed", actor });
+    return await storage.withLegacyRoomEffect({ tenantId: room.tenantId, roomId: room.roomId }, options, effect);
   } catch (error) {
-    if (actor.identityProtocolVersion === 2 && (error instanceof RoomEffectPermissionDenied || error instanceof IdentityBoundaryError)) {
-      writeRoomNotesAudit({ request, action, roomId: room.roomId, scope,
-        result: "denied", reason: error instanceof RoomEffectPermissionDenied ? "permission_denied" : error.reason, actor });
-    }
+    if (identityFenceUnavailable(error)) throw new IdentityBoundaryError(503, "identity_authority_unavailable", error);
+    if (error instanceof IdentityStorageError && error.code === "room_not_found") throw new RoomEffectNotFound("room_not_found");
     throw error;
   }
+}
+
+async function releaseRoomRead(request: IncomingMessage, storage: Storage, room: RoomRecord | null, send: () => void): Promise<void> {
+  const actor = resolveControlPlaneActor(request);
+  // A missing-room fallback contains no persisted room data or side effect.
+  if (!room) {
+    if (actor.ok && actor.actor.identityProtocolVersion === 2) throw new RoomEffectNotFound("room_not_found");
+    send(); return;
+  }
+  if (actor.ok) await runGuardedRoomEffect(storage, actor.actor, room, "room.join", async scoped => { scoped.releaseResponse(send); });
+  else await runLegacyRoomEffect(storage, room, {}, async scoped => { scoped.releaseResponse(send); });
+}
+
+async function releaseRoomNotes(request: IncomingMessage, storage: Storage, actor: ControlPlaneActor, room: RoomRecord,
+  scope: RoomNoteScope, action: "notes.read" | "notes.versions" | "notes.export", send: () => void): Promise<void> {
+  await releaseFencedResponse({ send,
+    run: release => runGuardedRoomEffect(storage, actor, room, "notes.view", async scoped => { scoped.releaseResponse(release); }),
+    onReleased: () => {
+      if (actor.identityProtocolVersion === 2) writeRoomNotesAudit({ request, action, roomId: room.roomId, scope, result: "allowed", actor });
+    },
+    onDenied: error => {
+      if (actor.identityProtocolVersion === 2 && (error instanceof RoomEffectPermissionDenied || error instanceof IdentityBoundaryError)) {
+        writeRoomNotesAudit({ request, action, roomId: room.roomId, scope,
+          result: "denied", reason: error instanceof RoomEffectPermissionDenied ? "permission_denied" : error.reason, actor });
+      }
+    }
+  });
 }
 
 async function releaseDocumentBytes(storage: Storage, actor: ControlPlaneActor, room: RoomRecord,
@@ -847,7 +884,7 @@ async function releaseDocumentBytes(storage: Storage, actor: ControlPlaneActor, 
         || activeSurfaceRequired && (!current.linkedSurfaceId || current.linkedSurfaceId !== document.linkedSurfaceId
           || current.metadata?.kind !== document.metadata?.kind)) return false;
     }
-    send();
+    scoped.releaseResponse(send);
     return true;
   });
 }
@@ -2088,7 +2125,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       return json(response, reason === "room_slug_conflict" ? 409 : 400, { error: reason });
     }
     incrementCounter(metrics.roomsCreatedTotal, `control-plane:${sanitizeRoomVisibility(room.visibility)}`);
-    json(response, 201, { ...room, roomLink: createRoomLink(room.roomId, request), manifest: await buildManifest(room.roomId, request) });
+    json(response, 201, { ...room, roomLink: createRoomLink(room.roomId, request), manifest: await buildManifest(room.roomId, request, room) });
     return;
   }
 
@@ -2158,7 +2195,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
         return json(response, 403, { error: "room_access_denied", reason: "room_disabled", roomId: existing.roomId });
       }
       incrementCounter(metrics.personalRoomOpensTotal, "existing");
-      return json(response, 200, { created: false, room: roomResponseRecord(request, existing), roomLink: createRoomLink(existing.roomId, request), manifest: await buildManifest(existing.roomId, request) });
+      return json(response, 200, { created: false, room: roomResponseRecord(request, existing), roomLink: createRoomLink(existing.roomId, request), manifest: await buildManifest(existing.roomId, request, existing) });
     }
 
     const displayName = normalizeDisplayName(payload.displayName, participantId);
@@ -2203,7 +2240,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       ownerParticipantId: participantId,
       timestamp: new Date().toISOString()
     });
-    json(response, 201, { created: true, room: roomResponseRecord(request, room), roomLink: createRoomLink(room.roomId, request), manifest: await buildManifest(room.roomId, request) });
+    json(response, 201, { created: true, room: roomResponseRecord(request, room), roomLink: createRoomLink(room.roomId, request), manifest: await buildManifest(room.roomId, request, room) });
     return;
   }
 
@@ -2260,8 +2297,8 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     if (method === "GET") {
       await runGuardedRoomEffect(storage, actor, room, "room.join", async scoped => {
         const state = await scoped.getPersonalRoomState(room.tenantId, roomId);
-        if (state === null) return json(response, 404, { error: "room_not_found" });
-        json(response, 200, { state });
+        if (state === null) return scoped.releaseResponse(() => { json(response, 404, { error: "room_not_found" }); });
+        scoped.releaseResponse(() => { json(response, 200, { state }); });
       }, { ownerOnly: true });
       return;
     }
@@ -2294,7 +2331,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     if (method === "GET") {
       const documents = await storage.listRoomDocuments(roomId);
       const items = documents.map((document) => serializeRoomDocument(request, document));
-      await runGuardedRoomEffect(storage, actor, room, permission, async () => { json(response, 200, { items }); });
+      await runGuardedRoomEffect(storage, actor, room, permission, async scoped => { scoped.releaseResponse(() => { json(response, 200, { items }); }); });
       return;
     }
 
@@ -2373,10 +2410,16 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       incrementCounter(metrics.documentStorageBytesTotal, room.tenantId, document.sizeBytes);
       json(response, 201, { document: serializeRoomDocument(request, document) });
     } catch (error) {
-      if (uploadedKey && uploadedStorage && !documentPersisted) {
+      // A lost COMMIT acknowledgement is not evidence that publication failed.
+      // Retain the blob for reconciliation rather than breaking a committed row.
+      if (uploadedKey && uploadedStorage && !documentPersisted && !uncertainRoomCommit(error)) {
         await deleteDocumentObject(uploadedStorage, uploadedKey).catch(() => {
           incrementCounter(metrics.documentBlobDeletesTotal, "failed");
         });
+      }
+      if (uncertainRoomCommit(error)) {
+        incrementCounter(metrics.documentsUploadedTotal, `${contentType}:uncertain`);
+        throw new IdentityBoundaryError(503, "identity_authority_unavailable", error);
       }
       if (error instanceof RoomEffectPermissionDenied || error instanceof IdentityBoundaryError) throw error;
       const message = error instanceof Error ? error.message : "document_upload_failed";
@@ -2768,7 +2811,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       if (assetValidationError) return json(response, 400, { error: assetValidationError });
     }
     if (Object.keys(payload).length === 0) {
-      json(response, 200, { ...existingRoom, roomLink: createRoomLink(existingRoom.roomId, request), manifest: await buildManifest(existingRoom.roomId, request) });
+      json(response, 200, { ...existingRoom, roomLink: createRoomLink(existingRoom.roomId, request), manifest: await buildManifest(existingRoom.roomId, request, existingRoom) });
       return;
     }
     let updated: RoomRecord | null;
@@ -2786,7 +2829,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       throw error;
     }
     if (!updated) return json(response, 404, { error: "room_not_found" });
-    json(response, 200, { ...updated, roomLink: createRoomLink(updated.roomId, request), manifest: await buildManifest(updated.roomId, request) });
+    json(response, 200, { ...updated, roomLink: createRoomLink(updated.roomId, request), manifest: await buildManifest(updated.roomId, request, updated) });
     return;
   }
 
@@ -2806,7 +2849,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       metrics.roomsDisabledTotal += 1;
       presenceByRoom.delete(roomId);
     }
-    json(response, 200, { ...updated, roomLink: createRoomLink(updated.roomId, request), manifest: await buildManifest(updated.roomId, request) });
+    json(response, 200, { ...updated, roomLink: createRoomLink(updated.roomId, request), manifest: await buildManifest(updated.roomId, request, updated) });
     return;
   }
 
@@ -2827,7 +2870,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     if (method === "GET") {
       await runGuardedRoomEffect(storage, actor, room, "room.join", async scoped => {
         const items = (await scoped.listRoomInvites(roomId)).map((invite) => sanitizeRoomInvite(invite));
-        json(response, 200, { items });
+        scoped.releaseResponse(() => { json(response, 200, { items }); });
       }, { hostOrOwner: true });
       return;
     }
@@ -2899,7 +2942,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     if (!room) return json(response, 404, { error: "room_not_found" });
     await runGuardedRoomEffect(storage, actor, room, "room.join", async scoped => {
       const items = (await scoped.listWaitingRoomRequests(roomId)).map(sanitizeWaitingRoomRequest);
-      json(response, 200, { items });
+      scoped.releaseResponse(() => { json(response, 200, { items }); });
     }, { hostOrOwner: true });
     return;
   }
@@ -3348,23 +3391,16 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     const room = await storage.getRoom(roomId);
     if (room && isRoomDisabled(room) && !canManageDisabledRoom(request)) return json(response, 403, { error: "room_access_denied", reason: "room_disabled" });
     if (room && !(await canReadRoomDetails(request, room))) return json(response, 404, { error: "room_not_found" });
-    const manifest = await buildManifest(roomId, request);
-    const actorResult = resolveControlPlaneActor(request);
-    if (room && actorResult.ok && actorResult.actor.identityProtocolVersion === 2) {
-      await runGuardedRoomEffect(storage, actorResult.actor, room, "room.join", async () => { json(response, 200, manifest); });
-    } else json(response, 200, manifest);
+    const manifest = await buildManifest(roomId, request, room);
+    await releaseRoomRead(request, storage, room, () => { json(response, 200, manifest); });
     return;
   }
 
   const presenceListMatch = url.pathname.match(/^\/api\/rooms\/([^/]+)\/presence$/);
   if (method === "GET" && presenceListMatch) {
     const roomId = decodeURIComponent(presenceListMatch[1]);
-    const actorResult = resolveControlPlaneActor(request);
-    if (actorResult.ok && actorResult.actor.identityProtocolVersion === 2) {
-      const room = await storage.getRoom(roomId);
-      if (!room) return json(response, 404, { error: "room_not_found" });
-      await runGuardedRoomEffect(storage, actorResult.actor, room, "room.join", async () => { json(response, 200, { items: getPresence(roomId) }); });
-    } else json(response, 200, { items: getPresence(roomId) });
+    const room = await storage.getRoom(roomId);
+    await releaseRoomRead(request, storage, room, () => { json(response, 200, { items: getPresence(roomId) }); });
     return;
   }
 
@@ -3399,8 +3435,11 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       if (!actorResult.ok) return json(response, 403, { error: "forbidden" });
       // Publish before this callback resolves: remove/end must be ordered after
       // the map write, not between a returned authority snapshot and the write.
-      await runGuardedRoomEffect(storage, actorResult.actor, room, "room.join", async (_scoped, current) => { publish(current); });
-    } else publish(null);
+      await runGuardedRoomEffect(storage, actorResult.actor, room, "room.join", async (scoped, current) => { scoped.releaseResponse(() => { publish(current); }); });
+    } else {
+      if (!room) { publish(null); return; }
+      await runLegacyRoomEffect(storage, room, {}, async scoped => { scoped.releaseResponse(() => { publish(null); }); });
+    }
     return;
   }
 
@@ -3480,11 +3519,8 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     if (!room) return json(response, 404, { error: "room_not_found" });
     if (isRoomDisabled(room) && !canManageDisabledRoom(request)) return json(response, 403, { error: "room_access_denied", reason: "room_disabled" });
     if (!(await canReadRoomDetails(request, room))) return json(response, 404, { error: "room_not_found" });
-    const metadata = { ...roomResponseRecord(request, room), roomLink: createRoomLink(room.roomId, request), manifest: await buildManifest(room.roomId, request) };
-    const actorResult = resolveControlPlaneActor(request);
-    if (actorResult.ok && actorResult.actor.identityProtocolVersion === 2) {
-      await runGuardedRoomEffect(storage, actorResult.actor, room, "room.join", async () => { json(response, 200, metadata); });
-    } else json(response, 200, metadata);
+    const metadata = { ...roomResponseRecord(request, room), roomLink: createRoomLink(room.roomId, request), manifest: await buildManifest(room.roomId, request, room) };
+    await releaseRoomRead(request, storage, room, () => { json(response, 200, metadata); });
     return;
   }
 
@@ -3722,6 +3758,10 @@ export function startApiServer(port = apiPort) {
       }
       if (error instanceof RoomEffectPermissionDenied) {
         json(response, 403, { error: "forbidden", reason: "permission_denied" });
+        return;
+      }
+      if (error instanceof RoomEffectNotFound) {
+        json(response, 404, { error: "room_not_found" });
         return;
       }
       if (error instanceof Error && error.message === IDENTITY_LIFECYCLE_REQUIRES_V2) {

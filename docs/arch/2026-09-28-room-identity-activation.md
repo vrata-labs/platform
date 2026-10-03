@@ -238,7 +238,9 @@ template restrictions and the current template CAS on the fenced connection.
 The persisted snapshot and Memory projection stay consistent. Parent-room
 writes take the no-key-update lock up front, with no S3 or asset fetch inside.
 
-Manifest and presence reads are revalidated at response release. Presence PUT
+Manifest and presence reads revalidate identity/protocol authority at response
+release; legacy visibility/disabled checks still use the earlier room snapshot.
+Presence PUT
 updates the process-local map synchronously inside the fence using the fresh
 role/permissions and server-owned participant ID/time. A role demotion alone
 does not invalidate identity or force recovery. Remove/end cannot be followed
@@ -277,10 +279,57 @@ introducing a shared client retry-on-expiry contract.
 
 The existing already-expired-at-entry classification still uses recovery refusal
 and must be normalized before activation. Legacy floor1 requests admitted before
-cutover also need a policy-row shared fence at write/release; entry checks alone
-do not close that in-flight race. Unwired RI2 claimHost/transferHost helpers need
+cutover use the prepared policy-row fence for the scoped callbacks below;
+entry checks alone do not close the remaining unscoped paths. Unwired RI2 claimHost/transferHost helpers need
 their own credential-expiry check before any route starts using them. These and
 the media gates remain explicit obligations; this slice does not raise floor 2.
+
+### Prepared legacy policy fence (bounded coverage)
+
+Non-administrator v1 room effects now lock the existing room first, then the
+protocol policy FOR SHARE at READ COMMITTED. The same connection checks floor 1
+and absence of identity-authority bindings before the DB-only callback. Raising
+the floor takes a bounded EXCLUSIVE policy-table lock before updating the row,
+so new readers queue behind activation rather than starving it. A reader that
+waits sees the committed v2 policy and fails with upgrade refusal. The operation
+never holds this fence during body parsing, S3 or room-state RPC.
+
+Only whitelisted DB methods and synchronous releaseResponse are exposed at
+runtime. Memory rechecks each operation/release after await gaps; PostgreSQL
+callbacks use the held connection and an explicit legacy waiting-decision mode.
+Facades expire after the callback and disallow operations after response release.
+Pool acquisition failures, recognized lock/connection errors and uncertain
+COMMIT outcomes are retryable 503, distinct from business conflicts; other
+pre-COMMIT transport errors are not claimed universally normalized.
+The idle backend timeout has a checked-out-client listener and destroys failed
+connections; a dead fence cannot send a response after observing that failure.
+
+Coverage is the existing notes/document publication/surface/private-state
+callbacks, invite/waiting lists and decisions, scene binding, and ordinary
+manifest/room/presence write/release branches (including anonymous readers of
+existing rooms). Anonymous bound-room reads were already rejected at entry;
+this also closes a request that became bound while in flight. A missing-room
+manifest is built from the same checked snapshot, including explicit null, and
+never substitutes a new private record via a second read. Virtual v1 fallback
+presence stays compatible but remains scope-less activation work; a cached v2
+request whose room disappeared returns 404 rather than that fallback. Response audit
+records successful release even if COMMIT subsequently fails; that operational
+failure is not a retroactive authority denial. Administrators retain their explicit
+bypass. Legacy owner/host TOCTOU within floor 1 is not identity-v2 security.
+
+Upload compensation must not equate a missing COMMIT acknowledgement with a
+confirmed rollback. After explicit COMMIT starts, unknown client/TLS/proxy/read
+timeout failures preserve the blob; only a real server rejection proves failure.
+Administrative autocommit document writes carry the same uncertainty marker.
+HTTP error mapping retains its cause, returns 503 and increments the uncertain
+upload metric. A possibly committed row must never point at a compensatingly
+deleted file. An unreferenced retained object needs later reconciliation; this
+does not add a background orphan collector or automatic retry/idempotency.
+
+Before activation, remaining gates are legacy document DELETE ordering, legacy
+personal-room create/open with scope-less fencing and correct bootstrap table
+lock order, virtual-room fallback effects, frame credentials/TTL, administrator-seeded legacy owner evidence,
+and the other expiry/media obligations above. The whole cutover is not ready.
 
 ## Runtime adoption
 

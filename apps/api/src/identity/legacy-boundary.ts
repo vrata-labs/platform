@@ -1,8 +1,8 @@
 import type { Storage } from "../storage-contracts.js";
 
 export class IdentityBoundaryError extends Error {
-  constructor(readonly status: 401 | 409 | 426 | 503, readonly reason: "identity_upgrade_required" | "identity_recovery_required" | "identity_authority_unavailable" | "identity_session_expired") {
-    super(reason); this.name = "IdentityBoundaryError";
+  constructor(readonly status: 401 | 409 | 426 | 503, readonly reason: "identity_upgrade_required" | "identity_recovery_required" | "identity_authority_unavailable" | "identity_session_expired", cause?: unknown) {
+    super(reason, { cause }); this.name = "IdentityBoundaryError";
   }
 }
 

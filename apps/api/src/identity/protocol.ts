@@ -49,6 +49,10 @@ export function createPostgresIdentityProtocol(pool: Pool): IdentityProtocolPoli
       try {
         await client.query("begin");
         await client.query("select pg_advisory_xact_lock(hashtextextended('vrata:postgres-storage-init:v1', 0))");
+        await client.query("set local lock_timeout='2s'");
+        // Queue new FOR SHARE readers behind activation, rather than letting a
+        // continuous stream of tuple-share lockers starve the floor update.
+        await client.query("lock table room_identity_protocol_policy in exclusive mode");
         const row = (await client.query("select minimum_protocol,media_namespace from room_identity_protocol_policy where singleton=true for update")).rows[0];
         if (!row) throw new Error("identity_protocol_policy_missing");
         if (value < row.minimum_protocol) throw new Error("identity_protocol_downgrade_forbidden");

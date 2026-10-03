@@ -1,5 +1,5 @@
 import type { IncomingMessage } from "node:http";
-import type { Storage } from "./storage.js";
+import type { RoomRecord, Storage } from "./storage.js";
 
 import { defaultManifest, type RoomManifest } from "./default-room-manifest.js";
 import { isDevRoleQueryAllowed } from "./feature-flags.js";
@@ -9,9 +9,11 @@ import { isRoomDisabled } from "./room-session-control.js";
 import { referenceTemplateContract } from "@vrata/templates";
 
 export function createRoomManifestBuilder(storagePromise: Promise<Pick<Storage, "getRoom" | "getTemplateVersion" | "listAssets">>) {
-  async function buildManifest(roomId: string, request?: IncomingMessage): Promise<RoomManifest> {
+  async function buildManifest(roomId: string, request?: IncomingMessage, checkedRoom?: RoomRecord | null): Promise<RoomManifest> {
     const storage = await storagePromise;
-    const room = await storage.getRoom(roomId);
+    // An explicit snapshot (including null) must be the same one whose access
+    // was checked; a second read could substitute a newly created private room.
+    const room = checkedRoom === undefined ? await storage.getRoom(roomId) : checkedRoom;
     if (!room) {
       const templateVersion = await storage.getTemplateVersion("meeting-room-basic", "0.1.0");
       if (!templateVersion) throw new Error("template_version_not_found:meeting-room-basic");
