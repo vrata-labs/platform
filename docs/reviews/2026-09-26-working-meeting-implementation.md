@@ -322,6 +322,17 @@ Manifest builder принимает тот же проверенный room snap
 
 Локально прошли lint/typecheck/build и полный `pnpm test` с изолированным PostgreSQL 16 и pinned rollback: API **881/881**, runtime **931/931**, remote-browser **39/39**, room-state **76/76**, shared-types **30/30**, tools **125/125**. Первый полный local E2E дал 157/158: прежний owner-handoff не дождался room-state connection за 5 секунд, затем отдельно прошёл без правок. Финальный полный `pnpm test:e2e --workers=1` на том же исполняемом дереве — **158/158**, без skip/retry (26,7 минуты). Проверки/таймауты не ослаблялись; временный PostgreSQL удалён, исходный контейнер и другие сессии не менялись.
 
+| Этап bounded legacy policy fence | Результат |
+|---|---|
+| Проверенный и опубликованный SHA | `40e22f86d026220cbe26b976bcaac51073c68495` |
+| [CI 37121442342](https://github.com/vrata-labs/platform/actions/runs/37121442342) | Success: пакетные тесты, полный E2E, M0.5 и pinned assets |
+| [Docker Publish 37121442747](https://github.com/vrata-labs/platform/actions/runs/37121442747) | Success: immutable API, room-state и remote-browser exact SHA |
+| [Staging Deploy 37124949357](https://github.com/vrata-labs/platform/actions/runs/37124949357) | Success: **52/52 staging E2E**, **1/1 blocking Rutube**; successful SHA сохранён; rollback skipped |
+
+Первая попытка [37123417002](https://github.com/vrata-labs/platform/actions/runs/37123417002) дала 51/52: strict LiveKit audio public-demo не выполнил двусторонний критерий за 45 секунд. Штатный rollback прошёл, health отвечал 200. Причина сбоя не объявляется установленной. Повтор полного gate того же SHA без правок кода/таймаутов завершился успешно.
+
+[Артефакт успешного gate](https://github.com/vrata-labs/platform/actions/runs/37124949357/artifacts/11274853982): текущие Hall/BlueOffice/ArtGallery loaded, private four-party meeting и cleanup прошли. После gate `/health`, `/rooms/demo-room`, `/control-plane`, `/api/templates` — HTTP 200. Общий identity minimum остался 1; реальные cutover/fence/неопределённый COMMIT проверены в отдельных схемах, не как активация общего v2.
+
 ## Публикация первого среза T01/T12
 
 Локально прошли workspace lint/typecheck/build/tests с PostgreSQL, затем runtime build и 905 runtime tests после финальных правок. Полный `pnpm test:e2e` на финальном исполняемом дереве: **148 passed**, без skip (41.6 min).
