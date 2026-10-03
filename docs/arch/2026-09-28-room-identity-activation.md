@@ -186,7 +186,7 @@ The callback exposes only the DB methods supported inside this fence. Memory
 uses a synchronous check followed by the synchronous in-memory mutation.
 
 Upload object I/O runs before the DB fence; denial rolls back publication and
-attempts removal of the unreferenced object. At floor 2, document deletion
+attempts removal of the unreferenced object. For both protocols, document deletion
 first commits a tombstone, then runs room-state/S3 cleanup outside the fence.
 A cleanup failure returns 503 but no longer exposes document content; an
 authorized Host or administrator can retry DELETE on the retained tombstone.
@@ -326,10 +326,35 @@ upload metric. A possibly committed row must never point at a compensatingly
 deleted file. An unreferenced retained object needs later reconciliation; this
 does not add a background orphan collector or automatic retry/idempotency.
 
-Before activation, remaining gates are legacy document DELETE ordering, legacy
-personal-room create/open with scope-less fencing and correct bootstrap table
-lock order, virtual-room fallback effects, frame credentials/TTL, administrator-seeded legacy owner evidence,
+Before activation, remaining gates are virtual-room fallback effects, frame
+credentials/TTL, administrator-seeded legacy owner evidence,
 and the other expiry/media obligations above. The whole cutover is not ready.
+
+### Prepared document deletion and personal bootstrap
+
+DELETE now commits one authorized tombstone intent for every protocol, then
+performs media/blob cleanup without a fence. A failed cleanup returns 503 but
+the document remains hidden; a later authorized retry reads the marker under
+the fence. Concurrent retries do not overwrite deletion provenance or count
+another transition. Once intent committed before cutover, its cleanup may finish
+after activation; a new legacy retry must still pass the new policy. Uncertain
+commit or authority denial never starts cleanup. Operators may retry hidden
+documents; no background cleanup job or purgedAt lifecycle is claimed.
+
+Legacy personal creation takes a rooms ROW EXCLUSIVE relation lock before
+policy FOR SHARE, requires floor 1 and performs current-template lookup/INSERT
+on that same connection. A competing deterministic ID reopens the same-owner
+room after a savepoint rollback; a different owner/tenant/type remains a conflict.
+Reopen and new-room replies prepare their manifest outside locks, then check
+current owner/type/tenant/disabled and policy/binding at synchronous release.
+Creation committed before raise can leave an ordinary unbound legacy room, but
+it cannot emit an old-owner reply after raise or create one after the v2 boundary.
+
+V2 owned bootstrap uses the same relation/policy order and single-client template
+path, then atomically inserts room/identity/authority. Lost commit returns 503
+without an identityCredential; possible orphan room and duplicate retry remain
+an idempotency/reconciliation obligation. Admin personal-room seeding and v2
+reopen ownership races remain separate gates until their own paths are closed.
 
 ## Runtime adoption
 

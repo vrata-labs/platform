@@ -20,6 +20,7 @@ export function createRoomEffectFacade(database: RoomEffectDatabase, options: {
     markRoomDocumentDeleted: (...args) => invoke(() => database.markRoomDocumentDeleted(...args)),
     updateRoomDocumentSurface: (...args) => invoke(() => database.updateRoomDocumentSurface(...args)),
     getRoomDocument: (...args) => invoke(() => database.getRoomDocument(...args)),
+    getRoom: (...args) => invoke(() => database.getRoom(...args)),
     getPersonalRoomState: (...args) => invoke(() => database.getPersonalRoomState(...args)),
     updatePersonalRoomState: (...args) => invoke(() => database.updatePersonalRoomState(...args), true, "personal_state_requires_room_write_fence"),
     setRoomSceneBundleUrl: (...args) => invoke(() => database.setRoomSceneBundleUrl(...args), true, "scene_binding_requires_room_write_fence"),

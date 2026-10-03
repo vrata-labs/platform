@@ -299,6 +299,8 @@ export interface Storage {
   listRooms(): Promise<RoomRecord[]>;
   getRoom(roomId: string): Promise<RoomRecord | null>;
   createRoom(input: Partial<RoomRecord>): Promise<RoomRecord>;
+  createLegacyPersonalRoom(input: Partial<RoomRecord> & { roomId: string; tenantId: string; ownerParticipantId: string }):
+    Promise<{ room: RoomRecord; created: boolean }>;
   createPersonalOwnedRoom(input: Omit<Partial<RoomRecord>, "ownerParticipantId" | "roomType" | "sessionControl"> & { displayName: string }):
     Promise<{ room: RoomRecord; identity: import("./identity/contracts.js").RoomIdentityRecord }>;
   updateRoom(roomId: string, input: Partial<RoomRecord>, expectedTemplateBinding?: ExpectedRoomTemplateBinding): Promise<RoomRecord | null>;
@@ -351,7 +353,7 @@ export interface ExpectedRoomTemplateBinding {
 export type RoomEffectDatabase = Pick<Storage, "upsertRoomNote" | "deleteRoomNote" | "restoreRoomNoteVersion"
   | "createRoomDocument" | "markRoomDocumentDeleted" | "updateRoomDocumentSurface" | "getRoomDocument"
   | "getPersonalRoomState" | "updatePersonalRoomState" | "setRoomSceneBundleUrl"
-  | "listRoomInvites" | "revokeRoomInvite" | "listWaitingRoomRequests" | "updateWaitingRoomRequest">;
+  | "listRoomInvites" | "revokeRoomInvite" | "listWaitingRoomRequests" | "updateWaitingRoomRequest" | "getRoom">;
 
 export type RoomIdentityEffectStorage = RoomEffectDatabase & { releaseResponse(send: () => void): void };
 export interface LegacyRoomEffectOptions { roomWrite?: boolean; lockTimeoutMs?: number; idleTimeoutMs?: number }

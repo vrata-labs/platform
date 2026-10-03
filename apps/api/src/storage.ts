@@ -362,6 +362,17 @@ export class MemoryStorage implements Storage {
     return structuredClone(room);
   }
   async createRoom(input: Partial<RoomRecord>): Promise<RoomRecord> { return this.createRoomSync(input); }
+  async createLegacyPersonalRoom(input: Parameters<Storage["createLegacyPersonalRoom"]>[0]) {
+    if (this.identityPolicy.current() !== 1) throw new IdentityBoundaryError(409, "identity_upgrade_required");
+    const existing = [...this.rooms.values()].find(room => room.tenantId === input.tenantId
+      && room.roomType === "personal" && room.ownerParticipantId === input.ownerParticipantId);
+    if (existing) {
+      if (this.identityAdapter.hasRoomBindings(existing.roomId)) throw new IdentityBoundaryError(409, "identity_upgrade_required");
+      return { room: structuredClone(existing), created: false };
+    }
+    if (this.rooms.has(input.roomId)) throw new Error("room_slug_conflict");
+    return { room: this.createRoomSync({ ...input, roomType: "personal" }), created: true };
+  }
   async createPersonalOwnedRoom(input: Parameters<Storage["createPersonalOwnedRoom"]>[0]) {
     if (this.identityPolicy.current() < 2 || typeof input.displayName !== "string" || input.displayName.length > 80) throw new Error("identity_upgrade_required");
     const participantId = crypto.randomUUID();
@@ -1379,8 +1390,8 @@ export class PostgresStorage implements Storage {
     const row = result.rows[0] as StoredTemplateVersionRow | undefined;
     return row ? parseStoredTemplateVersion(row) : null;
   }
-  private async requireActiveTemplateVersion(templateId: string): Promise<RoomTemplateVersionSnapshotV1> {
-    const result = await this.pool.query(
+  private async requireActiveTemplateVersion(templateId: string, executor: Pick<PoolClient, "query"> = this.pool): Promise<RoomTemplateVersionSnapshotV1> {
+    const result = await executor.query(
       `select t.status, t.current_version, tv.template_id, tv.version, tv.snapshot, tv.content_hash
        from templates t
        left join template_versions tv on tv.template_id = t.template_id and tv.version = t.current_version
@@ -1444,7 +1455,7 @@ export class PostgresStorage implements Storage {
   }
   private async insertRoom(input: Partial<RoomRecord>, executor: Pick<PoolClient, "query">): Promise<RoomRecord> {
     const templateId = input.templateId ?? (input.roomType === "personal" ? "personal-workspace-basic" : "meeting-room-basic");
-    const versionSnapshot = await this.requireActiveTemplateVersion(templateId);
+    const versionSnapshot = await this.requireActiveTemplateVersion(templateId, executor);
     input = materializeStoredRoomInput(versionSnapshot, input);
     const roomType = defaultRoomType(input.roomType);
     const roomWithoutTemplateMetadata: RoomRecordWithoutTemplateMetadata = {
@@ -1489,14 +1500,41 @@ export class PostgresStorage implements Storage {
     return room;
   }
   async createRoom(input: Partial<RoomRecord>): Promise<RoomRecord> { return this.insertRoom(input, this.pool); }
+  private async roomCreationTransaction<T>(version: "legacy" | "v2", effect: (client: PoolClient) => Promise<T>): Promise<T> {
+    return roomFenceTransaction(this.pool, {}, async client => {
+      await client.query("lock table rooms in row exclusive mode");
+      const policy = (await client.query("select minimum_protocol from room_identity_protocol_policy where singleton=true for share")).rows[0];
+      if (!policy || !Number.isSafeInteger(policy.minimum_protocol) || policy.minimum_protocol < 1) throw new IdentityBoundaryError(503, "identity_authority_unavailable");
+      if (version === "legacy" ? policy.minimum_protocol !== 1 : policy.minimum_protocol < 2) throw new IdentityBoundaryError(409, "identity_upgrade_required");
+      return effect(client);
+    });
+  }
+  async createLegacyPersonalRoom(input: Parameters<Storage["createLegacyPersonalRoom"]>[0]) {
+    return this.roomCreationTransaction("legacy", async client => {
+      const existing = (await client.query("select room_id from rooms where tenant_id=$1 and room_type='personal' and owner_participant_id=$2 order by room_id limit 1",
+        [input.tenantId, input.ownerParticipantId])).rows[0];
+      const scoped = new PostgresStorage(this.pool, this.identityNow, client, true, "legacy");
+      const reopen = async (roomId: string) => {
+        const room = await scoped.getRoom(roomId);
+        if (!room || room.tenantId !== input.tenantId || room.roomType !== "personal" || room.ownerParticipantId !== input.ownerParticipantId) throw new Error("room_slug_conflict");
+        const bound = await client.query("select 1 from room_identity_authority_v2 where tenant_id=$1 and room_id=$2", [input.tenantId, roomId]);
+        if (bound.rowCount) throw new IdentityBoundaryError(409, "identity_upgrade_required");
+        return { room, created: false };
+      };
+      if (existing) return reopen(existing.room_id);
+      await client.query("savepoint legacy_personal_insert");
+      try { return { room: await this.insertRoom({ ...input, roomType: "personal" }, client), created: true }; }
+      catch (error) {
+        if ((error as { code?: string }).code !== "23505") throw error;
+        await client.query("rollback to savepoint legacy_personal_insert");
+        return reopen(input.roomId);
+      }
+    });
+  }
   async createPersonalOwnedRoom(input: Parameters<Storage["createPersonalOwnedRoom"]>[0]) {
     if (typeof input.displayName !== "string" || input.displayName.length > 80) throw new Error("invalid_identity_input");
     const participantId = crypto.randomUUID();
-    const client = await this.pool.connect();
-    try {
-      await client.query("begin");
-      const protocol = (await client.query("select minimum_protocol from room_identity_protocol_policy where singleton=true for share")).rows[0];
-      if (!protocol || protocol.minimum_protocol < 2) throw new Error("identity_upgrade_required");
+    return this.roomCreationTransaction("v2", async client => {
       const room = await this.insertRoom({ ...input, roomId: crypto.randomUUID(), roomType: "personal",
         ownerParticipantId: participantId, visibility: "private", guestAllowed: false, sessionControl: { hostParticipantId: participantId } }, client);
       const identity: import("./identity/contracts.js").RoomIdentityRecord = {
@@ -1512,10 +1550,8 @@ export class PostgresStorage implements Storage {
       await client.query(`insert into room_identity_authority_v2
         (tenant_id,room_id,revision,host_identity_id,owner_identity_id,presenter_identity_id,lifecycle)
         values ($1,$2,1,$3,$3,null,$4::jsonb)`, [room.tenantId, room.roomId, identity.identityId, JSON.stringify(lifecycle)]);
-      await client.query("commit");
       return { room, identity };
-    } catch (error) { await client.query("rollback"); throw error; }
-    finally { client.release(); }
+    });
   }
   async updateRoom(roomId: string, input: Partial<RoomRecord>, expectedTemplateBinding?: ExpectedRoomTemplateBinding): Promise<RoomRecord | null> {
     const existing = await this.getRoom(roomId);

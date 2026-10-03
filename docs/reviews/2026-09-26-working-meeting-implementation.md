@@ -333,6 +333,20 @@ Manifest builder принимает тот же проверенный room snap
 
 [Артефакт успешного gate](https://github.com/vrata-labs/platform/actions/runs/37124949357/artifacts/11274853982): текущие Hall/BlueOffice/ArtGallery loaded, private four-party meeting и cleanup прошли. После gate `/health`, `/rooms/demo-room`, `/control-plane`, `/api/templates` — HTTP 200. Общий identity minimum остался 1; реальные cutover/fence/неопределённый COMMIT проверены в отдельных схемах, не как активация общего v2.
 
+### T01a-S2b-V: legacy DELETE intent и personal bootstrap/reopen
+
+Все протоколы используют единый DELETE intent: tombstone под актуальным fence, затем media/blob cleanup без блокировок. При cleanup failure документ скрыт и допускает авторизованный повтор; stale hint больше не определяет retry/метрику transition. После cutover может завершиться intent, подтверждённый раньше, но новая legacy retry запрещена. Неопределённый commit не начинает cleanup.
+
+Legacy personal creation/open защищены policy-row fence и проверкой текущего owner/type/tenant/binding перед ответом. Создание берёт rooms relation lock до policy, использует current-template lookup и INSERT на одном client, reopening после deterministic-ID collision через savepoint. API precheck, дававший ложный 409 concurrent same-owner requests, удалён. V2 bootstrap использует тот же порядок и single-client path — pool max 1 и два конкурентных bootstrap не требуют второго соединения.
+
+Адресные проверки включают committed tombstone до RPC и отсутствие fence при cleanup (NOWAIT room/policy probes), hidden state после failure, concurrent retries, raise во время cleanup, старую retry после cutover и admin convergence. Personal tests покрывают duplicate storage/HTTP create с одной строкой/одним 201, relation order, queued raise, delayed body и подготовленный reopen reply. План не объявляется завершённым: admin seed, v2 reopen-owner race, virtual/frame/media и idempotent/orphan reconciliation остаются отдельными гейтами.
+
+Гонки закреплены управляемыми сценариями: два первоначальных DELETE читают живой документ до fence, но учитывают один transition; два bootstrap ждут внутри INSERT после пустого поиска; второй HTTP owner lookup возвращает сохранённый пустой результат после завершения первого create. DELETE, ожидающий parent-room lock, после raise отказывается без tombstone, cleanup и изменения метрики. NOWAIT cleanup probes включаются только в одиночных сценариях. Ошибки fence преобразуются только около защищённых bootstrap-вызовов; обычные pool/template failures сохраняют request-failure accounting.
+
+Финально прошли workspace lint/typecheck/build и полный `pnpm test` с PostgreSQL и pinned rollback: API **884/884**, runtime **931/931**, remote-browser **39/39**, room-state **76/76**, shared-types **30/30**, tools **125/125**. Полный финальный `pnpm test:e2e --workers=1` — **158/158**, без skips/retries (26,6 минуты).
+
+Первый E2E запуск не передал PostgreSQL URL: 141 passed, 15 skipped, 2 fixture setup failures; это не принималось как итоговая проверка. Следующий полный запуск дал 157/158: owner-handoff не обновил client isOwner за 5 секунд после HTTP 200. Focused owner-handoff прошёл без правок сценария и таймаутов, затем полный финальный suite прошёл. Причина задержки не объявляется установленной; соседние процессы и контейнеры не изменялись.
+
 ## Публикация первого среза T01/T12
 
 Локально прошли workspace lint/typecheck/build/tests с PostgreSQL, затем runtime build и 905 runtime tests после финальных правок. Полный `pnpm test:e2e` на финальном исполняемом дереве: **148 passed**, без skip (41.6 min).

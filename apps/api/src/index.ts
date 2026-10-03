@@ -859,6 +859,30 @@ async function releaseRoomRead(request: IncomingMessage, storage: Storage, room:
   else await runLegacyRoomEffect(storage, room, {}, async scoped => { scoped.releaseResponse(send); });
 }
 
+async function releaseLegacyPersonalRoom(request: IncomingMessage, response: ServerResponse, storage: Storage,
+  room: RoomRecord, participantId: string, created: boolean): Promise<void> {
+  const prepared = { created, room: roomResponseRecord(request, room), roomLink: createRoomLink(room.roomId, request),
+    manifest: await buildManifest(room.roomId, request, room) };
+  await runLegacyRoomEffect(storage, room, {}, async scoped => {
+    const current = await scoped.getRoom(room.roomId);
+    if (!current || current.tenantId !== room.tenantId || current.roomType !== "personal" || current.ownerParticipantId !== participantId) {
+      scoped.releaseResponse(() => { json(response, 404, { error: "room_not_found" }); });
+      return;
+    }
+    if (isRoomDisabled(current)) {
+      scoped.releaseResponse(() => {
+        incrementCounter(metrics.personalRoomOpensTotal, "disabled");
+        json(response, 403, { error: "room_access_denied", reason: "room_disabled", roomId: room.roomId });
+      });
+      return;
+    }
+    scoped.releaseResponse(() => {
+      incrementCounter(metrics.personalRoomOpensTotal, created ? "created" : "existing");
+      json(response, created ? 201 : 200, prepared);
+    });
+  });
+}
+
 async function releaseRoomNotes(request: IncomingMessage, storage: Storage, actor: ControlPlaneActor, room: RoomRecord,
   scope: RoomNoteScope, action: "notes.read" | "notes.versions" | "notes.export", send: () => void): Promise<void> {
   await releaseFencedResponse({ send,
@@ -2168,8 +2192,14 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       const templates = await storage.listTemplates();
       const templateId = templates.some(template => template.templateId === "personal-room-basic" && template.status === "active")
         ? "personal-room-basic" : "personal-workspace-basic";
-      const { room, identity } = await storage.createPersonalOwnedRoom({ tenantId, templateId, displayName,
-        name: personalRoomName(displayName) });
+      let owned: Awaited<ReturnType<typeof storage.createPersonalOwnedRoom>>;
+      try {
+        owned = await storage.createPersonalOwnedRoom({ tenantId, templateId, displayName, name: personalRoomName(displayName) });
+      } catch (error) {
+        if (identityFenceUnavailable(error)) throw new IdentityBoundaryError(503, "identity_authority_unavailable", error);
+        throw error;
+      }
+      const { room, identity } = owned;
       const identityCredential = createRoomIdentityCodec(getStateTokenSecret()).sign(identity, { lifetimeSeconds: 86_400 });
       return json(response, 201, { created: true, room: roomResponseRecord(request, room), roomLink: createRoomLink(room.roomId, request),
         identityProtocolVersion: 2, participantId: identity.participantId, identityCredential });
@@ -2189,22 +2219,14 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
 
     const existing = (await storage.listRooms()).find((room) => room.roomType === "personal" && room.ownerParticipantId === participantId && room.tenantId === tenantId) ?? null;
     if (existing) {
-      await legacyIdentityBoundary.assertCompatible(existing.roomId);
-      if (isRoomDisabled(existing)) {
-        incrementCounter(metrics.personalRoomOpensTotal, "disabled");
-        return json(response, 403, { error: "room_access_denied", reason: "room_disabled", roomId: existing.roomId });
-      }
-      incrementCounter(metrics.personalRoomOpensTotal, "existing");
-      return json(response, 200, { created: false, room: roomResponseRecord(request, existing), roomLink: createRoomLink(existing.roomId, request), manifest: await buildManifest(existing.roomId, request, existing) });
+      await releaseLegacyPersonalRoom(request, response, storage, existing, participantId, false);
+      return;
     }
 
     const displayName = normalizeDisplayName(payload.displayName, participantId);
     const roomId = createPersonalRoomId(`${tenantId}:${participantId}`);
-    if (await storage.getRoom(roomId)) {
-      incrementCounter(metrics.personalRoomOpensTotal, "slug_conflict");
-      return json(response, 409, { error: "room_slug_conflict" });
-    }
     let room: RoomRecord;
+    let created = false;
     try {
       const activeTemplates = await storage.listTemplates();
       const templateId = activeTemplates.some(template => template.templateId === "personal-room-basic") ? "personal-room-basic" : "personal-workspace-basic";
@@ -2220,17 +2242,32 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
         ...(templateId === "personal-workspace-basic" ? { features: { voice: true, spatialAudio: true, screenShare: true }, theme: { primaryColor: "#7dd3fc", accentColor: "#312e81" } } : {}),
         sessionControl: { hostParticipantId: participantId }
       });
-      room = await storage.createRoom(resolved.input);
+      let result: Awaited<ReturnType<typeof storage.createLegacyPersonalRoom>>;
+      try {
+        result = await storage.createLegacyPersonalRoom({ ...resolved.input, roomId, tenantId, ownerParticipantId: participantId });
+      } catch (error) {
+        if (identityFenceUnavailable(error)) throw new IdentityBoundaryError(503, "identity_authority_unavailable", error);
+        throw error;
+      }
+      room = result.room;
+      created = result.created;
     } catch (error) {
+      if (error instanceof Error && error.message === "room_slug_conflict") {
+        incrementCounter(metrics.personalRoomOpensTotal, "slug_conflict");
+        return json(response, 409, { error: "room_slug_conflict" });
+      }
       if (error instanceof Error && (/^(template_deprecated|template_version_not_found):/.test(error.message) || error.message === "deprecated_template")) {
         incrementCounter(metrics.personalRoomOpensTotal, "template_unavailable");
         return json(response, 503, { error: "personal_room_template_unavailable" });
       }
       throw error;
     }
+    if (!created) {
+      await releaseLegacyPersonalRoom(request, response, storage, room, participantId, false);
+      return;
+    }
     metrics.personalRoomsCreatedTotal += 1;
     incrementCounter(metrics.roomsCreatedTotal, "self-service:private");
-    incrementCounter(metrics.personalRoomOpensTotal, "created");
     logEvent({
       service: "api",
       event: "personal_room_created",
@@ -2240,7 +2277,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       ownerParticipantId: participantId,
       timestamp: new Date().toISOString()
     });
-    json(response, 201, { created: true, room: roomResponseRecord(request, room), roomLink: createRoomLink(room.roomId, request), manifest: await buildManifest(room.roomId, request, room) });
+    await releaseLegacyPersonalRoom(request, response, storage, room, participantId, true);
     return;
   }
 
@@ -2442,8 +2479,8 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     const actor = resolveRoomDocumentsActor(request, response, { room, permission, action, documentId });
     if (!actor) return;
     const document = await storage.getRoomDocument(roomId, documentId);
-    const v2Delete = method === "DELETE" && actionPath === "item" && await legacyIdentityBoundary.minimum() >= 2;
-    if (!document || (document.deletedAt && !v2Delete)) return json(response, 404, { error: "document_not_found" });
+    const deleteItem = method === "DELETE" && actionPath === "item";
+    if (!document || (document.deletedAt && !deleteItem)) return json(response, 404, { error: "document_not_found" });
 
     if (method === "GET" && actionPath === "download") {
       let bytes: Buffer;
@@ -2529,47 +2566,29 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     }
 
     if (method === "DELETE" && actionPath === "item") {
-      if (v2Delete) {
-        // The effect is the tombstone: the room lock fences it against a
-        // concurrent revoke. External cleanup follows without a DB lock.
-        // A failed cleanup is retryable because the tombstoned row is retained.
-        const deleted = document.deletedAt
-          ? await runGuardedRoomEffect(storage, actor, room, permission, scoped => scoped.getRoomDocument(roomId, documentId))
-          : await runGuardedRoomEffect(storage, actor, room, permission,
-            scoped => scoped.markRoomDocumentDeleted(roomId, documentId, new Date().toISOString(), actor.actorId));
-        if (!deleted) return json(response, 404, { error: "document_not_found" });
-        if (!document.deletedAt) metrics.documentDeletesTotal += 1;
-        try {
-          await cleanupDocumentMediaObjects(roomId, documentId);
-        } catch (error) {
-          return json(response, 503, { error: error instanceof Error ? error.message : "presentation_cleanup_failed", requestId });
-        }
-        try {
-          await deleteDocumentObject(getDocumentUploadStorage(request), deleted.storageKey);
-          incrementCounter(metrics.documentBlobDeletesTotal, "success");
-        } catch (error) {
-          incrementCounter(metrics.documentBlobDeletesTotal, "failed");
-          return json(response, 503, { error: error instanceof Error ? error.message : "document_object_delete_failed", requestId });
-        }
-        json(response, 200, { document: serializeRoomDocument(request, deleted) });
-        return;
-      }
+      // A confirmed tombstone is the deletion intent for every protocol.
+      // Retry decisions are read under the fence, not from the pre-fence hint.
+      const result = await runGuardedRoomEffect(storage, actor, room, permission, async scoped => {
+        const marked = await scoped.markRoomDocumentDeleted(roomId, documentId, new Date().toISOString(), actor.actorId);
+        if (marked) return { document: marked, transitioned: true };
+        const current = await scoped.getRoomDocument(roomId, documentId);
+        return current?.deletedAt ? { document: current, transitioned: false } : null;
+      });
+      if (!result) return json(response, 404, { error: "document_not_found" });
+      if (result.transitioned) metrics.documentDeletesTotal += 1;
       try {
         await cleanupDocumentMediaObjects(roomId, documentId);
       } catch (error) {
         return json(response, 503, { error: error instanceof Error ? error.message : "presentation_cleanup_failed", requestId });
       }
       try {
-        await deleteDocumentObject(getDocumentUploadStorage(request), document.storageKey);
+        await deleteDocumentObject(getDocumentUploadStorage(request), result.document.storageKey);
         incrementCounter(metrics.documentBlobDeletesTotal, "success");
       } catch (error) {
         incrementCounter(metrics.documentBlobDeletesTotal, "failed");
         return json(response, 503, { error: error instanceof Error ? error.message : "document_object_delete_failed", requestId });
       }
-      const deleted = await storage.markRoomDocumentDeleted(roomId, documentId, new Date().toISOString(), actor.actorId);
-      if (!deleted) return json(response, 404, { error: "document_not_found" });
-      metrics.documentDeletesTotal += 1;
-      json(response, 200, { document: serializeRoomDocument(request, deleted) });
+      json(response, 200, { document: serializeRoomDocument(request, result.document) });
       return;
     }
 
