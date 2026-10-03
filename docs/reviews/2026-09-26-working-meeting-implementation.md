@@ -347,6 +347,17 @@ Legacy personal creation/open защищены policy-row fence и провер�
 
 Первый E2E запуск не передал PostgreSQL URL: 141 passed, 15 skipped, 2 fixture setup failures; это не принималось как итоговая проверка. Следующий полный запуск дал 157/158: owner-handoff не обновил client isOwner за 5 секунд после HTTP 200. Focused owner-handoff прошёл без правок сценария и таймаутов, затем полный финальный suite прошёл. Причина задержки не объявляется установленной; соседние процессы и контейнеры не изменялись.
 
+| Этап DELETE/personal bootstrap | Результат |
+|---|---|
+| Проверенный и опубликованный SHA | `e97e9eba9aa653402494f8a5ef83acc6486423a3` |
+| [CI 37156005963](https://github.com/vrata-labs/platform/actions/runs/37156005963) | Success: пакетные тесты, полный E2E, M0.5 и pinned assets |
+| [Docker Publish 37156008261](https://github.com/vrata-labs/platform/actions/runs/37156008261) | Success: immutable API, room-state и remote-browser exact SHA |
+| [Staging Deploy 37157990532](https://github.com/vrata-labs/platform/actions/runs/37157990532) | Success с первой попытки: **52/52 staging E2E**, **1/1 blocking Rutube**; successful SHA сохранён; rollback skipped |
+
+[Артефакт успешного gate](https://github.com/vrata-labs/platform/actions/runs/37157990532/artifacts/11286872189) подтверждает Hall/BlueOffice/ArtGallery loaded на текущих browser pages, strict real-LiveKit four-party meeting и cleanup. После gate `/health`, `/rooms/demo-room`, `/control-plane`, `/api/templates` — HTTP 200. Rollout preflight подтвердил minimumIdentityProtocol 1 и отсутствие общего authority binding; общий v2 не активировался. Временный локальный PostgreSQL удалён после финальных проверок.
+
+CI наблюдение дважды прерывалось сетевым unexpected EOF при обращении к GitHub API; возобновлено наблюдение тех же runs, сами workflows не перезапускались. Перед публикацией дождались завершения другого staging deployment, не отменяя его. Для этого SHA deploy/retry/rollback исключений не потребовалось.
+
 ## Публикация первого среза T01/T12
 
 Локально прошли workspace lint/typecheck/build/tests с PostgreSQL, затем runtime build и 905 runtime tests после финальных правок. Полный `pnpm test:e2e` на финальном исполняемом дереве: **148 passed**, без skip (41.6 min).
