@@ -372,6 +372,17 @@ V2 personal reopen подписывает renewal синхронно после 
 
 Первоначальный SHA `be8f8b5` не развёртывался: [CI 37196612236](https://github.com/vrata-labs/platform/actions/runs/37196612236) обнаружил отсутствие SDK dist types при clean-checkout lint; [Docker Publish 37196613992](https://github.com/vrata-labs/platform/actions/runs/37196613992) собрал application images, но остановился на сетевом timeout YCR проверки dependency image. Workspace теперь использует source types, а `publishConfig` и `pnpm pack` публикуют declarations. Реальный tarball и внешний строгий ES2022-потребитель без DOM/Node ambient types проверены; отдельный чистый checkout прошёл frozen install/lint/typecheck до любого SDK build.
 
+| Этап SDK/sandbox/reopen | Результат |
+|---|---|
+| Проверенный и опубликованный SHA | `c68f81704dae6bb8b909c49981df8c980180cd5f` |
+| [CI 37201946188](https://github.com/vrata-labs/platform/actions/runs/37201946188) | Success: пакетные тесты, полный E2E, M0.5 и pinned assets |
+| [Docker Publish 37201947969](https://github.com/vrata-labs/platform/actions/runs/37201947969) | Success: immutable application images и registry manifests exact SHA |
+| [Staging Deploy 37204163084](https://github.com/vrata-labs/platform/actions/runs/37204163084) | Success с первой попытки: **56/56 staging E2E**, **1/1 blocking Rutube**; successful SHA сохранён; rollback skipped |
+
+[Артефакт gate](https://github.com/vrata-labs/platform/actions/runs/37204163084/artifacts/11304593839) содержит четыре новых Worker/CSP sandbox проверки, stack/memory measurements, текущие Hall/BlueOffice/ArtGallery loaded, strict real-LiveKit four-party meeting и cleanup. Skipped/flaky/unexpected — 0. Public health, demo-room, control-plane, templates и `/plugin-sandbox-probe.html` после gate — HTTP 200. Running image tag подтверждён exact SHA; minimumIdentityProtocol остался 1. Временные локальные PostgreSQL и проверочные worktrees удалены; соседние процессы не менялись.
+
+Проверку реального Android/Quest можно выполнять на [опубликованном diagnostic probe](https://158.160.10.234.sslip.io/plugin-sandbox-probe.html). Это оставшийся device gate T03; открытая загрузка/установка плагинов, bindings, room broker и auto-seat пока не поставлены. Следующие реализации T04–T10 должны использовать этот SDK/Worker, без встраивания конкретного sample в основной runtime.
+
 ## Публикация первого среза T01/T12
 
 Локально прошли workspace lint/typecheck/build/tests с PostgreSQL, затем runtime build и 905 runtime tests после финальных правок. Полный `pnpm test:e2e` на финальном исполняемом дереве: **148 passed**, без skip (41.6 min).
