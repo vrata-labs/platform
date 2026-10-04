@@ -4,11 +4,19 @@
   "description": "Versioned data-only contracts and artifact validation for Vrata room plugins",
   "license": "Apache-2.0",
   "type": "module",
-  "types": "./dist/index.d.ts",
+  "types": "./src/index.ts",
   "exports": {
-    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js", "default": "./dist/index.js" },
-    "./artifact": { "types": "./dist/artifact.d.ts", "import": "./dist/artifact.js", "default": "./dist/artifact.js" },
+    ".": { "types": "./src/index.ts", "import": "./dist/index.js", "default": "./dist/index.js" },
+    "./artifact": { "types": "./src/artifact.ts", "import": "./dist/artifact.js", "default": "./dist/artifact.js" },
     "./package.json": "./package.json"
+  },
+  "publishConfig": {
+    "types": "./dist/index.d.ts",
+    "exports": {
+      ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js", "default": "./dist/index.js" },
+      "./artifact": { "types": "./dist/artifact.d.ts", "import": "./dist/artifact.js", "default": "./dist/artifact.js" },
+      "./package.json": "./package.json"
+    }
   },
   "files": ["dist", "!dist/tests", "src", "!src/tests", "tsconfig.json", "examples", "README.md", "LICENSE"],
   "engines": { "node": ">=22" },

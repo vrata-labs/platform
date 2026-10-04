@@ -2,7 +2,7 @@
 
 SDK API v1 and schema v1 for external, untrusted Vrata room-behavior plugins.
 Apache-2.0. This package has no workspace or runtime-web dependencies. Its TypeScript
-configuration is standalone; npm pack includes built JavaScript, declarations,
+configuration is standalone; pnpm pack includes built JavaScript, declarations,
 source, license and the welcome-status example.
 
 ## Public exports
@@ -18,6 +18,13 @@ source, license and the welcome-status example.
   `createRoomPluginArtifact`, `validateRoomPluginArtifact`,
   `validateRoomPluginManifest`, `validateRoomPluginModule`,
   `validateRoomPluginSha256` and `roomPluginSha256`.
+
+Workspace type exports point to `src/*.ts` so lint/typecheck work before a build.
+Published type exports point to `dist/*.d.ts` through `publishConfig`; external
+authors type-check declarations instead of compiling the SDK implementation
+with their own flags. The public declarations need only ES2022 types, not DOM
+or Node ambient types. The artifact implementation still requires Node >=22
+at runtime. Both workspace and published JavaScript exports point to `dist/*.js`.
 
 The future CLI and author API must both use `validateRoomPluginArtifact` with
 original bytes, rather than independently validating or reserializing an upload.
@@ -211,7 +218,16 @@ pnpm --filter @vrata/room-plugin-sdk build
 pnpm --filter @vrata/room-plugin-sdk test
 ```
 
-After building, pack this package into an existing output directory. Copy
+After building, use **pnpm pack** into an existing output directory:
+
+```sh
+pnpm --dir packages/room-plugin-sdk pack --pack-destination /absolute/existing/output-directory
+```
+
+pnpm applies the published declaration overrides. npm pack does not apply these
+overrides and is not the SDK release packaging command. The package tests inspect
+the real pnpm tarball's manifest and exported files to enforce this contract.
+Copy
 `examples/welcome-status` to a directory outside the monorepo and install the
 SDK tarball with `npm install --ignore-scripts /path/to/vrata-room-plugin-sdk-0.1.0.tgz`.
 Then `npm run build` writes and revalidates
