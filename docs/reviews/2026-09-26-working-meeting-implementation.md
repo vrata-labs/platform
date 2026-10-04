@@ -358,6 +358,18 @@ Legacy personal creation/open защищены policy-row fence и провер�
 
 CI наблюдение дважды прерывалось сетевым unexpected EOF при обращении к GitHub API; возобновлено наблюдение тех же runs, сами workflows не перезапускались. Перед публикацией дождались завершения другого staging deployment, не отменяя его. Для этого SHA deploy/retry/rollback исключений не потребовалось.
 
+### T02/T03: внешний SDK, bounded QuickJS Worker и personal reopen
+
+Добавлен `@vrata/room-plugin-sdk@0.1.0`: versioned artifact, SHA-256 точных байтов, ESM import validation через Acorn, flat typed config, capability/event/request/response DTO, bounded data validation. Standalone welcome-status собран из SDK tarball вне workspace. Это завершает контракт T02; публичная выдача SDK/CLI и второй внешний sample в T06 ещё впереди.
+
+QuickJS 0.32.0 release-sync исполняет lifecycle ESM в отдельном Worker с production CSP без browser globals и сети. VM serializer ограничивает данные до native copy; capabilities и rate limits независимо проверяются host. Handler/init 50 ms, supervisor 500 ms, trusted boot 3 s; heap 16 MiB, измеренный VM stack 32 KiB и WASM cap 48 MiB. Начальные 256 KiB привели к native stack failure в Chromium; 32 KiB проверены рекурсией, deep JSON и nested join. Heap probe 20 MiB с контрольным отключением только VM heap fence отличает heap limit от линейного WASM cap. DEBUG_SYNC handle checks не выдаются за acceptance production stack.
+
+Четыре compiled-browser сценария покрывают CSP/WASM boot, token canaries/network, native regex/healthy companion, hostile serialization/jobs/memory/stack и измерения. Они зарегистрированы также для опубликованного staging. Архитектура и незакрытый real Android/Quest gate описаны в `docs/arch/2026-10-04-room-plugin-sandbox.md`. Desktop spike позволяет продолжить T04–T10, но не объявляет author uploads и auto-seat готовыми.
+
+V2 personal reopen подписывает renewal синхронно после свежей owner/epoch/lifecycle/original-RI2-expiry проверки на одном fenced PostgreSQL client. Disabled/end — 403 без ошибочного recovery. RS2 expiry возвращает renewable 401 только после MAC/scope/participant/current-epoch проверки; Bearer и body token классифицируются одинаково. Повторная проверка после body wait исключает использование entry cache для expired/revoked diagnostics и XR requests. Полный auth/effect fence для telemetry, administrator owner seed и остальные media/virtual activation gates остаются отдельно; общий floor 2 не активируется.
+
+Локально прошли workspace lint/typecheck/build/tests, затем полный API suite **905/905**, runtime **989/989**, SDK **38/38**, tools **125/125** и финальный полный E2E **162/162** (25,0 минуты), без skips/retries. Чистая API Docker-сборка проверила новый SDK-before-runtime порядок. Промежуточный full API обнаружил legacy remote-browser-frame 400 вместо ожидаемого 409; entry boundary восстановлен, неизменённый тест и полный suite прошли. Финальный E2E повторён после последних API правок.
+
 ## Публикация первого среза T01/T12
 
 Локально прошли workspace lint/typecheck/build/tests с PostgreSQL, затем runtime build и 905 runtime tests после финальных правок. Полный `pnpm test:e2e` на финальном исполняемом дереве: **148 passed**, без skip (41.6 min).

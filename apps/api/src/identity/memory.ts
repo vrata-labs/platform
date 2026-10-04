@@ -5,6 +5,8 @@ import { createRoomIdentityStorage, emptyIdentityAuthority } from "./store.js";
 import { admissionWindows, assertAdmissionLimitInput, type AdmissionLimitInput } from "./admission-limits.js";
 import { assertMemoryEffect, type RoomEffectGuard } from "./effect-write-guard.js";
 import { assertActorSession } from "./authority.js";
+import { assertPersonalOwnerResponse } from "./personal-owner-response.js";
+import type { RoomIdentityCredential } from "@vrata/shared-types/identity-credential";
 
 export function createMemoryRoomIdentities(getRoom: (roomId: string) => IdentityRoomBinding | undefined, now = Date.now,
   getInviteByHash: (hash: string) => RoomInviteRecord | undefined = () => undefined, getMinimumProtocol = () => 1,
@@ -67,6 +69,9 @@ export function createMemoryRoomIdentities(getRoom: (roomId: string) => Identity
   };
   return {
     storage: createRoomIdentityStorage(persistence, now),
+    assertPersonalOwnerResponse(proof: RoomIdentityCredential) {
+      return assertPersonalOwnerResponse(snapshot(proof, { identityIds: [proof.identityId] }), proof, now());
+    },
     assertCurrentEffect(guard: RoomEffectGuard) {
       const room = getRoom(guard.roomId);
       const state = room && snapshot(room, { identityIds: [guard.identityId] });

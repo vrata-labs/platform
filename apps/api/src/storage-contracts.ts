@@ -279,6 +279,9 @@ export interface XrTelemetryEventRecord {
 export interface Storage {
   readonly roomIdentities: import("./identity/contracts.js").RoomIdentityStorage;
   readonly identityProtocol: import("./identity/protocol.js").IdentityProtocolPolicy;
+  /** Synchronous response release only: no arbitrary DB/network callback or retained facade. */
+  releasePersonalRoomOwnerResponse(proof: import("@vrata/shared-types/identity-credential").RoomIdentityCredential,
+    send: (room: RoomRecord, identity: import("./identity/contracts.js").RoomIdentityRecord) => undefined): Promise<void>;
   withRoomIdentityEffect<T>(guard: import("./identity/effect-write-guard.js").RoomEffectGuard,
     effect: (scoped: RoomIdentityEffectStorage, current: import("./identity/effect-write-guard.js").RoomEffectActor) => Promise<T>): Promise<T>;
   withLegacyRoomEffect<T>(scope: { tenantId: string; roomId: string }, options: LegacyRoomEffectOptions,

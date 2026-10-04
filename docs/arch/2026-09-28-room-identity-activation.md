@@ -272,13 +272,17 @@ RI2 proof can issue a new session. Error precedence keeps a blocked room blocked
 and expiry precedes authority-revision conflict in a transition. The HTTP tests
 use otherwise-valid commands/live revisions and also send a forged future body
 deadline, proving that stalled body and lock waits cannot extend the session.
-Lifecycle/invite 401 responses use `error=identity_session_expired`; effect
-fences use `error=identity_required, reason=identity_session_expired`. Current
-clients do not interpret either as a recovery gate. Normalize these forms before
-introducing a shared client retry-on-expiry contract.
+Entry, lifecycle/invite and effect-fence 401 responses now use
+`error=identity_session_expired`; entry/effect responses also include
+`reason=identity_session_expired`, while lifecycle/invite responses may omit it.
+A MAC-verified,
+correctly scoped expired RS2 is classified only after checking current identity
+epoch and room authority; it never becomes an authenticated request context.
+Bad MAC, wrong scope, removed identity and stale epoch retain recovery refusal.
+Current clients do not interpret renewable expiry as a recovery gate; a shared
+retry-on-expiry client policy remains separate work.
 
-The existing already-expired-at-entry classification still uses recovery refusal
-and must be normalized before activation. Legacy floor1 requests admitted before
+Legacy floor1 requests admitted before
 cutover use the prepared policy-row fence for the scoped callbacks below;
 entry checks alone do not close the remaining unscoped paths. Unwired RI2 claimHost/transferHost helpers need
 their own credential-expiry check before any route starts using them. These and
@@ -353,8 +357,17 @@ it cannot emit an old-owner reply after raise or create one after the v2 boundar
 V2 owned bootstrap uses the same relation/policy order and single-client template
 path, then atomically inserts room/identity/authority. Lost commit returns 503
 without an identityCredential; possible orphan room and duplicate retry remain
-an idempotency/reconciliation obligation. Admin personal-room seeding and v2
-reopen ownership races remain separate gates until their own paths are closed.
+an idempotency/reconciliation obligation. Administrator personal-room owner
+seeding remains a separate gate until its own path is closed.
+
+V2 personal reopen now verifies the original RI2 possession proof, then rechecks
+room type/tenant, lifecycle, current Owner and epoch under the parent-room shared
+fence. Renewal signing and response release are synchronous with that checked
+state, using the same PostgreSQL client. The original credential deadline is
+checked after lock waits; a prepared reply cannot extend an expired proof or
+return private metadata to a former Owner. Disabled/end return 403 without
+turning a still-valid credential into a recovery requirement. Administrators
+creating legacy-owner evidence remain separate activation work.
 
 ## Runtime adoption
 

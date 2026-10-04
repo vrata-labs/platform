@@ -52,7 +52,9 @@ import { ensureNamedForeignKey, installTemplateVersionImmutabilityTrigger } from
 import { assertRoomTemplatePatch, materializeStoredRoomInput } from "./room-template-policy.js";
 import { transitionPostgresReferenceCatalog } from "./storage-template-catalog.js";
 import { createMemoryRoomIdentities } from "./identity/memory.js";
-import { createPostgresRoomIdentities, assertPostgresEffect } from "./identity/postgres.js";
+import { createPostgresRoomIdentities, assertPostgresEffect, loadPostgresPersonalOwner } from "./identity/postgres.js";
+import { assertPersonalOwnerResponse } from "./identity/personal-owner-response.js";
+import type { RoomIdentityCredential } from "@vrata/shared-types/identity-credential";
 import { createMemoryAdmissionBudget, createPostgresAdmissionBudget } from "./identity/admission-budget.js";
 import { type RoomEffectGuard, type RoomEffectActor } from "./identity/effect-write-guard.js";
 import type { RoomIdentityEffectStorage } from "./storage-contracts.js";
@@ -65,7 +67,7 @@ import { identityLifecycleChanged, IDENTITY_LIFECYCLE_REQUIRES_V2 } from "./iden
 import { identityLifecycle } from "./identity/authority.js";
 import { assertV2InviteInput } from "./identity/invite-policy.js";
 import { assertActorSession } from "./identity/authority.js";
-import { IdentityStorageError } from "./identity/contracts.js";
+import { IdentityStorageError, type RoomIdentityRecord } from "./identity/contracts.js";
 import { createMemoryIdentityProtocol, createPostgresIdentityProtocol } from "./identity/protocol.js";
 
 export { initPostgresStorageWithRetry } from "./storage-init-retry.js";
@@ -204,6 +206,10 @@ export class MemoryStorage implements Storage {
   }
 
   async hasRoomIdentityAuthority(roomId: string): Promise<boolean> { return this.identityAdapter.hasRoomBindings(roomId); }
+  async releasePersonalRoomOwnerResponse(proof: RoomIdentityCredential, send: (room: RoomRecord, identity: RoomIdentityRecord) => undefined): Promise<void> {
+    const identity = this.identityAdapter.assertPersonalOwnerResponse(proof);
+    send({ ...structuredClone(this.rooms.get(proof.roomId)!), ownerParticipantId: identity.participantId }, identity);
+  }
   async withRoomIdentityEffect<T>(guard: RoomEffectGuard, effect: (scoped: RoomIdentityEffectStorage, current: RoomEffectActor) => Promise<T>): Promise<T> {
     let active = true;
     const current = this.identityAdapter.assertCurrentEffect(guard);
@@ -800,6 +806,18 @@ export class PostgresStorage implements Storage {
     this.identityProtocol = createPostgresIdentityProtocol(pool);
   }
   private get effectDatabase(): Pool | PoolClient { return this.effectClient ?? this.pool; }
+  async releasePersonalRoomOwnerResponse(proof: RoomIdentityCredential, send: (room: RoomRecord, identity: RoomIdentityRecord) => undefined): Promise<void> {
+    await roomFenceTransaction(this.pool, {}, async (client, checkAlive) => {
+      const held = await client.query("select 1 from rooms where tenant_id=$1 and room_id=$2 for share", [proof.tenantId, proof.roomId]);
+      if (!held.rowCount) throw new IdentityStorageError("room_not_found");
+      const room = await new PostgresStorage(this.pool, this.identityNow, client).getRoom(proof.roomId);
+      const state = await loadPostgresPersonalOwner(client, proof);
+      checkAlive();
+      const identity = assertPersonalOwnerResponse(state, proof, this.identityNow());
+      if (!room) throw new IdentityStorageError("room_not_found");
+      send({ ...room, ownerParticipantId: identity.participantId }, identity);
+    });
+  }
   async withRoomIdentityEffect<T>(guard: RoomEffectGuard, effect: (scoped: RoomIdentityEffectStorage, current: RoomEffectActor) => Promise<T>): Promise<T> {
     return roomFenceTransaction(this.pool, {}, async (client, checkAlive) => {
       // Every v2 transfer/revoke locks this parent room FOR UPDATE. Keep only

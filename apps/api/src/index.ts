@@ -49,11 +49,12 @@ import { createLegacyIdentityBoundary, IdentityBoundaryError, legacyBoundaryAppl
 import { createRoomIdentityService } from "./identity/service.js";
 import { createRoomIdentityCodec } from "@vrata/shared-types/identity-credential";
 import { admitV2RoomSession, type V2AdmissionRequest } from "./identity/http-admission.js";
-import { currentSessionControlV2, resolveRoomRequestV2, type VerifiedRoomRequestV2 } from "./identity/http-authority.js";
+import { currentSessionControlV2, resolveRoomRequestV2, untrustedSessionRoom, type VerifiedRoomRequestV2 } from "./identity/http-authority.js";
 import { roomMediaGrantName } from "./identity/media-room.js";
 import { applyRoomLifecycleV2, lifecycleV2Error, roomIdentityActorFromHttp } from "./identity/http-lifecycle.js";
 import { finalizeProofBoundToken } from "./identity/effect-fence.js";
 import { IdentityStorageError } from "./identity/contracts.js";
+import { PersonalOwnerRoomBlocked } from "./identity/personal-owner-response.js";
 import type { RoomEffectGuard, RoomEffectActor } from "./identity/effect-write-guard.js";
 import type { Storage, RoomIdentityEffectStorage } from "./storage-contracts.js";
 import { createRoomEffectFacade } from "./identity/effect-facade.js";
@@ -749,21 +750,27 @@ async function resolveRoomTenantId(roomId: string): Promise<string> {
   return room?.tenantId ?? "demo-tenant";
 }
 
+class InvalidSessionTokenInput extends Error {}
+
 async function verifyRoomSessionRequest(
   request: IncomingMessage,
-  input: { roomId: string; participantId?: string; sessionToken?: string | null }
+  input: { roomId: string; participantId?: string; sessionToken?: unknown }
 ): Promise<RoomSessionTokenVerificationResult> {
+  const suppliedToken = input.sessionToken ?? getBearerToken(request);
+  if (suppliedToken != null && typeof suppliedToken !== "string") throw new InvalidSessionTokenInput();
+  const token = typeof suppliedToken === "string" ? suppliedToken : null;
   if (await legacyIdentityBoundary.minimum() >= 2) {
-    const token = input.sessionToken ?? getBearerToken(request);
+    // Entry-time metadata may precede a client-controlled body wait. Drop it
+    // and resolve MAC, expiry, scope and current epoch/role again before use.
+    v2SessionsByRequest.delete(request);
     if (!token) throw new IdentityBoundaryError(426, "identity_upgrade_required");
     if (!token.startsWith("rs2.")) throw new IdentityBoundaryError(409, "identity_upgrade_required");
-    const current = v2SessionsByRequest.get(request)?.room.roomId === input.roomId && token === getBearerToken(request)
-      ? v2SessionsByRequest.get(request)!
-      : await resolveRoomRequestV2({ storage: await storagePromise, secret: getStateTokenSecret(), token,
-        expectedRoomId: input.roomId, participantId: input.participantId });
+    const current = await resolveRoomRequestV2({ storage: await storagePromise, secret: getStateTokenSecret(), token,
+      expectedRoomId: input.roomId, participantId: input.participantId });
     if (!current || (input.participantId !== undefined && current.identity.participantId !== input.participantId)) {
       throw new IdentityBoundaryError(409, "identity_recovery_required");
     }
+    if (token === getBearerToken(request)) v2SessionsByRequest.set(request, current);
     return { ok: true, payload: {
       tenantId: current.room.tenantId, roomId: current.room.roomId, participantId: current.identity.participantId,
       displayName: current.identity.displayName, role: current.role, roleSource: "trusted", permissions: current.permissions,
@@ -774,7 +781,6 @@ async function verifyRoomSessionRequest(
   }
   await legacyIdentityBoundary.assertCompatible(input.roomId);
   const tenantId = await resolveRoomTenantId(input.roomId);
-  const token = input.sessionToken ?? getBearerToken(request);
   const secret = getStateTokenSecret();
   const result = verifyRoomSessionToken(token, secret, {
     tenantId,
@@ -1654,16 +1660,42 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   const url = new URL(request.url ?? "/", `http://${request.headers.host ?? `localhost:${apiPort}`}`);
   const storage = await storagePromise;
 
+  // Only v2 Bearers defer classification to handlers with body-bound identity.
+  // Legacy Bearers still hit the activation boundary before payload validation.
+  const bodyTokenRoute = method === "POST" && ["/api/tokens/media", "/api/tokens/remote-browser-frame"].includes(url.pathname);
   const bearer = getBearerToken(request);
+  const diagnosticRoom = method === "POST" ? /^\/api\/rooms\/([^/]+)\/diagnostics$/.exec(url.pathname)?.[1] : undefined;
+  // For a foreign URL room, retain valid-session 403 / expired-session 409 at
+  // entry. This decoded lookup hint never supplies authentication metadata.
+  const deferV2Body = !!bearer?.startsWith("rs2.") && (bodyTokenRoute
+    || !!diagnosticRoom && decodeURIComponent(diagnosticRoom) === untrustedSessionRoom(bearer));
+  const bodySessionRoute = bodyTokenRoute && !bearer || deferV2Body;
   if (bearer?.startsWith("rs2.")) {
     if (await legacyIdentityBoundary.minimum() < 2) throw new IdentityBoundaryError(426, "identity_upgrade_required");
-    const verified = await resolveRoomRequestV2({ storage, secret: getStateTokenSecret(), token: bearer });
-    if (!verified) throw new IdentityBoundaryError(409, "identity_recovery_required");
-    const pathRoom = /^\/api\/rooms\/([^/]+)/.exec(url.pathname)?.[1];
-    if (pathRoom && decodeURIComponent(pathRoom) !== verified.room.roomId) {
-      return json(response, 403, { error: "forbidden", reason: "room_mismatch" });
+    if (!deferV2Body) {
+      const pathRoom = /^\/api\/rooms\/([^/]+)/.exec(url.pathname)?.[1];
+      const pathParticipant = method === "PUT"
+        ? /^\/api\/rooms\/[^/]+\/(?:presence|xr-telemetry)\/([^/]+)$/.exec(url.pathname)?.[1]
+        : method === "DELETE" ? /^\/api\/rooms\/[^/]+\/presence\/([^/]+)$/.exec(url.pathname)?.[1] : undefined;
+      const foreignRoom = !!pathRoom && decodeURIComponent(pathRoom) !== untrustedSessionRoom(bearer);
+      let verified: VerifiedRoomRequestV2 | null;
+      try {
+        verified = await resolveRoomRequestV2({ storage, secret: getStateTokenSecret(), token: bearer,
+          participantId: !foreignRoom && pathParticipant ? decodeURIComponent(pathParticipant) : undefined });
+      } catch (error) {
+        // The decoded room is only a denial hint. Preserve valid-session 403,
+        // but never suggest renewable expiry for a foreign-room request.
+        if (error instanceof IdentityBoundaryError && error.reason === "identity_session_expired" && foreignRoom) {
+          throw new IdentityBoundaryError(409, "identity_recovery_required");
+        }
+        throw error;
+      }
+      if (!verified) throw new IdentityBoundaryError(409, "identity_recovery_required");
+      if (pathRoom && decodeURIComponent(pathRoom) !== verified.room.roomId) {
+        return json(response, 403, { error: "forbidden", reason: "room_mismatch" });
+      }
+      v2SessionsByRequest.set(request, verified);
     }
-    v2SessionsByRequest.set(request, verified);
   }
 
   if (legacyBoundaryApplies(method, url.pathname)) {
@@ -1671,7 +1703,6 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     const administrator = actor.ok && actor.actor.actorType === "admin-token";
     const verifiedV2 = v2SessionsByRequest.has(request);
     const publicListing = method === "GET" && url.pathname === "/api/rooms";
-    const bodySessionRoute = !bearer && method === "POST" && ["/api/tokens/media", "/api/tokens/remote-browser-frame"].includes(url.pathname);
     if (!publicListing && !bodySessionRoute && !verifiedV2 && (!administrator || !legacyBoundaryAllowsAdministrator(url.pathname))) {
       const scopedRoom = /^\/api\/rooms\/([^/]+)/.exec(url.pathname)?.[1];
       const roomId = scopedRoom ? decodeURIComponent(scopedRoom)
@@ -1787,6 +1818,12 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     return;
   }
 
+  if (method === "GET" && url.pathname === "/plugin-sandbox-probe.html") {
+    const served = await serveStatic(response, join(runtimeStaticRoot, "plugin-sandbox-probe.html"));
+    if (!served) json(response, 503, { error: "plugin_sandbox_probe_build_missing" });
+    return;
+  }
+
   if (method === "GET" && url.pathname === "/remote-browser-demo.html") {
     const served = await serveStatic(response, join(runtimePublicRoot, "remote-browser-demo.html"));
     if (!served) json(response, 404, { error: "remote_browser_demo_missing" });
@@ -1834,8 +1871,8 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     if (await legacyIdentityBoundary.minimum() < 2) return json(response, 409, { error: "identity_required", reason: "identity_upgrade_required" });
     const room = await storage.getRoom(payload.roomId);
     if (!room) return json(response, 401, { error: "identity_required", reason: "identity_recovery_required" });
-    const service = createRoomIdentityService(storage.roomIdentities, getStateTokenSecret());
-    const session = await service.resolveSession(payload.sessionToken, { tenantId: room.tenantId, roomId: room.roomId });
+    const session = await resolveRoomRequestV2({ storage, secret: getStateTokenSecret(), token: payload.sessionToken,
+      expectedRoomId: payload.roomId, participantId: payload.participantId });
     if (!session || session.identity.participantId !== payload.participantId) {
       return json(response, 401, { error: "identity_required", reason: "identity_recovery_required" });
     }
@@ -2164,7 +2201,6 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       if (personalBearer) return json(response, 426, { error: "identity_required", reason: "identity_upgrade_required" });
       const tenantId = typeof payload.tenantId === "string" && payload.tenantId.trim() ? payload.tenantId.trim() : "demo-tenant";
       if (!(await storage.listTenants()).some(item => item.tenantId === tenantId)) return json(response, 400, { error: "invalid_tenant" });
-      const service = createRoomIdentityService(storage.roomIdentities, getStateTokenSecret(), Date.now, { identityLifetimeSeconds: 86_400 });
       if (payload.identityCredential !== undefined) {
         if (typeof payload.roomId !== "string") return json(response, 409, { error: "identity_required", reason: "identity_recovery_required" });
         const existing = await storage.getRoom(payload.roomId);
@@ -2172,11 +2208,27 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
           return json(response, 409, { error: "identity_required", reason: "identity_recovery_required" });
         }
         const scope = { tenantId, roomId: existing.roomId };
-        const current = await service.resolveCredential(payload.identityCredential, scope);
-        if (!current?.isOwner) return json(response, 409, { error: "identity_required", reason: "identity_recovery_required" });
-        const renewed = await service.renewCredential(payload.identityCredential, scope);
-        return json(response, 200, { created: false, room: roomResponseRecord(request, existing), roomLink: createRoomLink(existing.roomId, request),
-          identityProtocolVersion: 2, participantId: current.identity.participantId, identityCredential: renewed.credential });
+        // Prepare unsigned response metadata before locking. Only the original
+        // possession proof can authorize release; signing cannot widen its deadline.
+        const codec = createRoomIdentityCodec(getStateTokenSecret());
+        const proof = codec.verify(payload.identityCredential, scope);
+        if (!proof) throw new IdentityBoundaryError(409, "identity_recovery_required");
+        try {
+          const roomLink = createRoomLink(existing.roomId, request);
+          await storage.releasePersonalRoomOwnerResponse(proof, (room, identity) => {
+            const identityCredential = codec.sign(identity, { nowSeconds: Math.floor(Date.now() / 1000), lifetimeSeconds: 86_400 });
+            json(response, 200, { created: false, room: roomResponseRecord(request, room), roomLink,
+              identityProtocolVersion: 2, participantId: identity.participantId, identityCredential });
+          });
+          return;
+        } catch (error) {
+          if (identityFenceUnavailable(error)) throw new IdentityBoundaryError(503, "identity_authority_unavailable", error);
+          if (error instanceof PersonalOwnerRoomBlocked) return json(response, 403, { error: "room_access_denied", reason: error.reason });
+          if (error instanceof IdentityStorageError) {
+            throw new IdentityBoundaryError(409, "identity_recovery_required");
+          }
+          throw error;
+        }
       }
       if (payload.roomId !== undefined) return json(response, 409, { error: "identity_required", reason: "identity_recovery_required" });
       // A remembered public legacy ID is only a lookup hint. It cannot claim a
@@ -3771,8 +3823,13 @@ export function startApiServer(port = apiPort) {
         response.destroy();
         return;
       }
+      if (error instanceof InvalidSessionTokenInput) {
+        json(response, 400, { error: "invalid_session_token" });
+        return;
+      }
       if (error instanceof IdentityBoundaryError) {
-        json(response, error.status, { error: error.status === 503 ? "identity_authority_unavailable" : "identity_required", reason: error.reason });
+        json(response, error.status, { error: error.status === 503 ? "identity_authority_unavailable"
+          : error.reason === "identity_session_expired" ? "identity_session_expired" : "identity_required", reason: error.reason });
         return;
       }
       if (error instanceof RoomEffectPermissionDenied) {

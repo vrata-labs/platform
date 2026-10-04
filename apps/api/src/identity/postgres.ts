@@ -4,9 +4,15 @@ import { createRoomIdentityStorage, emptyIdentityAuthority } from "./store.js";
 import { defaultSessionControl } from "../storage-room-records.js";
 import { mapRoomInviteRow, mapWaitingRoomRequestRow } from "../storage-row-mappers.js";
 import { assertMemoryEffect, type RoomEffectGuard, type RoomEffectActor } from "./effect-write-guard.js";
+import type { RoomIdentityCredential } from "@vrata/shared-types/identity-credential";
 
 const iso = (date: Date | string) => new Date(date).toISOString();
 const nullableIso = (date: Date | string | null) => date === null ? null : iso(date);
+
+/** Caller holds the parent-room share lock. No second pool client is acquired. */
+export function loadPostgresPersonalOwner(client: PoolClient, proof: RoomIdentityCredential): Promise<IdentityTransaction | null> {
+  return load(client, proof, { identityIds: [proof.identityId] }, false, new Date().toISOString());
+}
 
 /** Caller already holds the room fence on this same connection. */
 export async function assertPostgresEffect(client: PoolClient, guard: RoomEffectGuard): Promise<RoomEffectActor> {

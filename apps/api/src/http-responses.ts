@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
 import type { ServerResponse } from "node:http";
-import { extname, normalize } from "node:path";
+import { basename, extname, normalize } from "node:path";
 
 function contentType(filePath: string): string {
   const extension = extname(filePath).toLowerCase();
@@ -10,6 +10,7 @@ function contentType(filePath: string): string {
   if (extension === ".css") return "text/css; charset=utf-8";
   if (extension === ".json") return "application/json; charset=utf-8";
   if (extension === ".svg") return "image/svg+xml";
+  if (extension === ".wasm") return "application/wasm";
   return "application/octet-stream";
 }
 
@@ -20,6 +21,11 @@ export async function serveStatic(response: ServerResponse, filePath: string): P
   response.writeHead(200, {
     "content-type": contentType(normalized),
     "content-length": String(metadata.size),
+    ...(/^(?:room-plugin-worker)-[A-Za-z0-9_-]{8,}\.js$/.test(basename(normalized)) ? {
+      "content-security-policy": "default-src 'none'; script-src 'wasm-unsafe-eval'; connect-src 'none'; worker-src 'none'; base-uri 'none'",
+      "cross-origin-resource-policy": "same-origin",
+      "x-content-type-options": "nosniff"
+    } : {}),
     ...(extname(normalized).toLowerCase() === ".html" ? { "cache-control": "no-cache" } : {})
   });
   response.end(data);

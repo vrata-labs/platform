@@ -1,0 +1,23 @@
+{
+  "name": "@vrata/room-plugin-sdk",
+  "version": "0.1.0",
+  "description": "Versioned data-only contracts and artifact validation for Vrata room plugins",
+  "license": "Apache-2.0",
+  "type": "module",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js", "default": "./dist/index.js" },
+    "./artifact": { "types": "./dist/artifact.d.ts", "import": "./dist/artifact.js", "default": "./dist/artifact.js" },
+    "./package.json": "./package.json"
+  },
+  "files": ["dist", "!dist/tests", "src", "!src/tests", "tsconfig.json", "examples", "README.md", "LICENSE"],
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test dist/tests/*.test.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": { "acorn": "8.18.0" },
+  "devDependencies": { "@types/node": "^22.13.10", "typescript": "^5.8.2" }
+}

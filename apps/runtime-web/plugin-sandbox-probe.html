@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Vrata — QuickJS sandbox diagnostic</title>
+  </head>
+  <body>
+    <h1>QuickJS WASM Worker: диагностическая проверка</h1>
+    <p>Платформенный probe с фиксированными сценариями. Проверка реального Android выполняется отдельно.</p>
+    <p>UI frames: <output id="heartbeat">0</output></p>
+    <button id="ui-button" type="button">Проверить отклик интерфейса</button>
+    <p>Clicks: <output id="clicks">0</output></p>
+    <label for="fixture">Фиксированный сценарий</label>
+    <select id="fixture"></select>
+    <button id="run" type="button">Запустить сценарий</button>
+    <p id="plugin-status" role="status"></p>
+    <p id="companion-status" role="status"></p>
+    <pre id="diagnostic" aria-label="Результат проверки"></pre>
+    <script type="module" src="/src/plugins/probe.ts"></script>
+  </body>
+</html>

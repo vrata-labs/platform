@@ -6,7 +6,7 @@ COPY . .
 
 RUN corepack enable
 RUN pnpm install --frozen-lockfile --config.node-linker=hoisted
-RUN pnpm --filter @vrata/shared-types build && pnpm --filter @vrata/templates build && pnpm --filter @vrata/asset-pipeline build && pnpm --filter @vrata/runtime-web build && pnpm --filter @vrata/control-plane build && pnpm --filter @vrata/api build
+RUN pnpm --filter @vrata/shared-types build && pnpm --filter @vrata/templates build && pnpm --filter @vrata/asset-pipeline build && pnpm --filter @vrata/room-plugin-sdk build && pnpm --filter @vrata/runtime-web build && pnpm --filter @vrata/control-plane build && pnpm --filter @vrata/api build
 RUN pnpm prune --prod --config.confirmModulesPurge=false --config.node-linker=hoisted
 
 FROM node:22-bookworm-slim AS runtime

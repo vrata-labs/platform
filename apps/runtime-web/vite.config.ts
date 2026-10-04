@@ -6,8 +6,13 @@ export default defineConfig({
     rollupOptions: {
       input: {
         main: resolve(__dirname, "index.html"),
-        diagnostics: resolve(__dirname, "diagnostics.html")
+        diagnostics: resolve(__dirname, "diagnostics.html"),
+        pluginSandboxProbe: resolve(__dirname, "plugin-sandbox-probe.html")
       }
     }
+  },
+  worker: {
+    format: "es",
+    rollupOptions: { output: { entryFileNames: "assets/room-plugin-worker-[hash].js", inlineDynamicImports: true } }
   }
 });

@@ -2,6 +2,8 @@ import type { RoomPermission, RoomRole } from "@vrata/shared-types";
 import type { RoomIdentityAuthority, RoomIdentityRecord } from "./contracts.js";
 import type { RoomRecord, RoomSessionControlState, Storage } from "../storage-contracts.js";
 import { createRoomIdentityService } from "./service.js";
+import { verifyExpiredSession } from "./session-expiry.js";
+import { IdentityBoundaryError } from "./legacy-boundary.js";
 
 export interface VerifiedRoomRequestV2 {
   room: RoomRecord;
@@ -29,15 +31,27 @@ export function untrustedSessionRoom(token: unknown): string | null {
 
 /** Every successful call resolves current role and epoch from the storage. */
 export async function resolveRoomRequestV2(input: {
-  storage: Storage; secret: string; token: unknown; expectedRoomId?: string; participantId?: string;
+  storage: Storage; secret: string; token: unknown; expectedRoomId?: string; participantId?: string; now?: () => number;
 }): Promise<VerifiedRoomRequestV2 | null> {
   const roomId = untrustedSessionRoom(input.token);
   if (!roomId || (input.expectedRoomId !== undefined && roomId !== input.expectedRoomId)) return null;
   const room = await input.storage.getRoom(roomId);
   if (!room) return null;
-  const current = await createRoomIdentityService(input.storage.roomIdentities, input.secret).resolveSession(input.token,
-    { tenantId: room.tenantId, roomId: room.roomId });
-  if (!current || (input.participantId !== undefined && current.identity.participantId !== input.participantId)) return null;
+  const now = input.now ?? Date.now;
+  const scope = { tenantId: room.tenantId, roomId: room.roomId };
+  const current = await createRoomIdentityService(input.storage.roomIdentities, input.secret, now).resolveSession(input.token, scope);
+  if (!current) {
+    const expired = verifyExpiredSession(input.token, input.secret, scope, Math.floor(now() / 1000));
+    if (expired && (input.participantId === undefined || expired.participantId === input.participantId)
+      && await input.storage.roomIdentities.resolve(expired)) {
+      throw new IdentityBoundaryError(401, "identity_session_expired");
+    }
+    return null;
+  }
+  if (input.participantId !== undefined && current.identity.participantId !== input.participantId) return null;
+  // Also cover expiry during the awaited authority read, without returning an
+  // expired context to callers or treating the underlying identity as revoked.
+  if (now() >= current.expiresAtSeconds * 1000) throw new IdentityBoundaryError(401, "identity_session_expired");
   return { room, identity: current.identity, authority: current.authority, role: current.role,
     permissions: current.permissions, isOwner: current.isOwner, sessionId: current.sessionId, expiresAtSeconds: current.expiresAtSeconds };
 }
