@@ -5,6 +5,9 @@ import type { ProbeFixture } from "../../apps/runtime-web/src/plugins/probe-fixt
 
 const workerPath = /\/assets\/room-plugin-worker-[\w-]+\.js(?:\?|$)/;
 const canary = "T03_FAKE_ROOM_ADMIN_MEDIA_TOKEN_CANARY";
+// A full run creates 37 bounded Worker instances; it is not a single handler.
+// Keep this wait within each full-suite test's existing 60-second deadline.
+const fullSuiteCompletionWaitMs = 45_000;
 
 async function openProbe(page: Page) {
   await page.goto("/plugin-sandbox-probe.html");
@@ -211,7 +214,7 @@ test("full suite requires a trusted visible DURING click and records concurrent 
   await page.getByRole("button", { name: "Проверить все сценарии" }).click();
   await expect(page.locator("html")).toHaveAttribute("data-suite-ready", "0");
   await page.getByRole("button", { name: "Проверить отклик интерфейса" }).click();
-  await expect(page.locator("html")).toHaveAttribute("data-suite-ready", "1");
+  await expect(page.locator("html")).toHaveAttribute("data-suite-ready", "1", { timeout: fullSuiteCompletionWaitMs });
   await expect(page.locator("#verdict")).toHaveText("PASS — ПОЛНЫЙ ПРОГОН");
   const report = await page.evaluate(() => window.pluginSandboxProbe.getReport());
   expect(report?.expectedScenarios).toBe(37); expect(report?.scenarios).toHaveLength(37);
@@ -247,7 +250,7 @@ test("Quest UA and after-suite/synthetic clicks cannot manufacture during respon
   await openProbe(page);
   await page.locator("#device-kind").selectOption("quest");
   await page.getByRole("button", { name: "Проверить все сценарии" }).click();
-  await expect(page.locator("html")).toHaveAttribute("data-suite-ready", "1");
+  await expect(page.locator("html")).toHaveAttribute("data-suite-ready", "1", { timeout: fullSuiteCompletionWaitMs });
   const before = await page.evaluate(() => window.pluginSandboxProbe.getReport());
   await page.evaluate(() => document.getElementById("ui-button")!.click());
   await trustedClickWithInvalidTimestamp(page);
@@ -269,7 +272,7 @@ test("simulated hidden document fails UI evidence even with a browser-trusted du
   await page.getByRole("button", { name: "Проверить все сценарии" }).click();
   await expect(page.locator("html")).toHaveAttribute("data-suite-ready", "0");
   await page.getByRole("button", { name: "Проверить отклик интерфейса" }).click();
-  await expect(page.locator("html")).toHaveAttribute("data-suite-ready", "1");
+  await expect(page.locator("html")).toHaveAttribute("data-suite-ready", "1", { timeout: fullSuiteCompletionWaitMs });
   const report = await page.evaluate(() => window.pluginSandboxProbe.getReport());
   expect(report?.ui.verdict).toBe("FAIL"); expect(report?.verdict).toBe("FAIL");
   expect(report?.ui.measurements.startedVisible).toBe(false);

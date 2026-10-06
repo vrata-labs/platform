@@ -399,6 +399,10 @@ SDK ships `vrata-room-plugin bundle/pack/validate`, pinned esbuild, canonical bo
 
 Промежуточные прогоны не принимались как финальная проверка: loader failure при mixed CJS/ESM, переиспользованный старый base server, startup/IO timeouts на Node26 под нагрузкой, общий лимит инструмента 1 h и отдельные owner-handoff/presence/reference timeouts. Harness теперь владеет тремя сервисами отдельно, использует process.execPath и private run logs, отказывает при занятом вспомогательном порте. Функциональный Meeting test сохраняет CSS 640×400, сцену/материалы, все восемь exact seat/root assertions и прежние 300/15 s бюджеты; software-rendering DPR 0.5 проверяет buffer 320×200. Сопоставимый контроль 257→158 s не объявляет изменение runtime/визуального benchmark. Соседние процессы и WSL не менялись; причины отдельных transient failures не объявлены установленными.
 
+Перед финальной staging-публикацией T04/T06 первый [gate 37410180464](https://github.com/vrata-labs/platform/actions/runs/37410180464) на `599c6ab0f8391225d9651240b794f8f58fb35e9a` подтвердил private-storage proof: signed PUT/byte-exact GET, direct/external unsigned 403, отсутствие publication/binding и cleanup собственной комнаты. Browser gate дал 58/61: три complete-report проверки прервали продолжающийся 37-сценарный run по default expect timeout 5 s. В логе видно продвижение loop → heap/oversize, а не отказ VM. Штатный rollback вернул `c68f81704dae6bb8b909c49981df8c980180cd5f` и восстановил scene URLs/smoke.
+
+Для этих трёх ожиданий завершения full-suite установлен bounded wait 45 s внутри прежнего test deadline 60 s. Старт, phase/code/verdict, DURING/hidden/capability и memory/CPU/watchdog assertions не изменены; это не увеличение guest budget. Final local E2E после правки — **167/167**, без skip/retry (**27,7 минуты**).
+
 ## Публикация первого среза T01/T12
 
 Локально прошли workspace lint/typecheck/build/tests с PostgreSQL, затем runtime build и 905 runtime tests после финальных правок. Полный `pnpm test:e2e` на финальном исполняемом дереве: **148 passed**, без skip (41.6 min).
