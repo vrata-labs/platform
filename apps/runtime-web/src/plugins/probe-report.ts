@@ -4,7 +4,7 @@ import type { ProbeFixture } from "./probe-fixtures.js";
 import { SANDBOX_LIMITS } from "./limits.js";
 
 export const COMPANION_STATUS = "Healthy companion still responsive";
-export type DeviceCategory = "unspecified" | "quest" | "windows" | "other";
+export type DeviceCategory = "unspecified" | "quest" | "windows" | "android" | "other";
 export interface ProbeDevice {
   category: DeviceCategory; userAgent: string; language: string;
   viewport: { width: number; height: number; pixelRatio: number };
@@ -134,7 +134,7 @@ export function buildProbeReport(input: ReportInput): ProbeReport {
   return {
     schemaVersion: 1, scope: input.scope, verdict, complete, deviceGate: "NOT_EVALUATED",
     device: {
-      category: ["unspecified", "quest", "windows", "other"].includes(input.device.category) ? input.device.category : "unspecified",
+      category: ["unspecified", "quest", "windows", "android", "other"].includes(input.device.category) ? input.device.category : "unspecified",
       userAgent: text(input.device.userAgent, 512), language: text(input.device.language, 48),
       viewport: { width: finite(input.device.viewport.width) ?? 0, height: finite(input.device.viewport.height) ?? 0, pixelRatio: finite(input.device.viewport.pixelRatio) ?? 0 }
     },

@@ -26,6 +26,7 @@ type DemoClient = {
   sessionToken: string;
   audioMock: boolean;
   requireDevRoleQueryDisabled: boolean;
+  pdfCapture?: PdfCommandCapture;
 };
 
 export type PublicDemoScenarioOptions = {
@@ -50,6 +51,348 @@ const expectedCatalog = [
 ];
 
 let demoModulePromise: Promise<PublicDemoModule> | undefined;
+
+type PdfOperation = "create" | "select-document" | "go-to-page" | "stop";
+type PdfCommandResultEvidence = {
+  type: "surface_command_result" | "access_denied";
+  accepted: boolean;
+  blockedReason: string | null;
+  objectId: string | null;
+  surfaceId: string | null;
+  revision: number | null;
+};
+type PdfCommandEvidence = {
+  commandId: string;
+  operation: PdfOperation;
+  type: string | null;
+  page: number | null;
+  expectedRevision: number | null;
+  objectId: string | null;
+  surfaceId: string | null;
+  sentSequence: number | null;
+  receivedSequence: number | null;
+  result: PdfCommandResultEvidence | null;
+};
+type PdfActionEvidence = {
+  operation: "select-document" | "go-to-page";
+  expectedPage: number;
+  fromSequence: number;
+  toSequence: number | null;
+  activation: ReturnType<typeof pdfActionSnapshot> | null;
+};
+type PdfCommandCapture = Awaited<ReturnType<typeof capturePdfCommands>>;
+
+function classifyPdfRuntimeError(error: JsonRecord = {}, fallback = "") {
+  const errorClass = ["Error", "TypeError", "ReferenceError", "RangeError", "SyntaxError", "DOMException", "Event", "ErrorEvent"]
+    .includes(error.className) ? error.className : "OtherError";
+  // Descriptions are used only for classification, never retained or returned.
+  const text = String(error.description ?? fallback).slice(0, 2_000).replace(/^(?:Uncaught(?: \(in promise\))? )?(?:\w*Error: )?/, "");
+  const fixed = ["invalid_avatar_pose_preview_participant", "invalid_seat_claim_result", "invalid_access_result", "missing_runtime_media_surface"]
+    .find(code => text === code || text.startsWith(`${code}\n`));
+  const category = fixed ?? (/^Cannot read properties of undefined/.test(text) ? "cannot-read-undefined"
+    : /^Cannot read properties of null/.test(text) ? "cannot-read-null"
+    : /^Cannot set properties of (?:undefined|null)/.test(text) ? "cannot-set-nullish"
+    : /^Cannot access .+ before initialization/.test(text) ? "before-initialization"
+    : /is not a function(?:\n|$)/.test(text) ? "not-a-function"
+    : /is not iterable(?:\n|$)/.test(text) ? "not-iterable"
+    : /is not defined(?:\n|$)/.test(text) ? "not-defined"
+    : errorClass === "SyntaxError" ? "syntax-error"
+    : ["Event", "ErrorEvent"].includes(errorClass) ? "native-event" : "other");
+  return { errorClass, category };
+}
+
+function observeNativeRoomStateSockets() {
+  const root = window as any;
+  const NativeWebSocket = window.WebSocket;
+  const listeners: Array<() => void> = [];
+  let socketCount = 0;
+  const WrappedWebSocket = new Proxy(NativeWebSocket, {
+    construct(target, args, newTarget) {
+      const socket = Reflect.construct(target, args, newTarget) as WebSocket;
+      let roomState = false;
+      try {
+        const url = new URL(socket.url);
+        roomState = url.searchParams.has("roomId") && url.searchParams.has("participantId");
+      } catch { /* No URL or exception data enters the observation. */ }
+      if (!roomState || socketCount >= 32) return socket;
+      const scope = ++socketCount;
+      const emit = (event: JsonRecord) => {
+        try { root.__publicDemoRoomStateObservation(JSON.stringify({ ...event, socket: scope })); } catch { /* Diagnostics never affect socket delivery. */ }
+      };
+      const onOpen = () => emit({ type: "native-open" });
+      const onError = () => emit({ type: "native-error" });
+      const onClose = (event: CloseEvent) => emit({ type: "native-close", code: event.code, wasClean: event.wasClean,
+        reason: ["identity_upgrade_required", "identity_recovery_required"].includes(event.reason) ? event.reason : event.reason ? "other" : "empty" });
+      socket.addEventListener("open", onOpen);
+      socket.addEventListener("error", onError);
+      socket.addEventListener("close", onClose);
+      listeners.push(() => {
+        socket.removeEventListener("open", onOpen);
+        socket.removeEventListener("error", onError);
+        socket.removeEventListener("close", onClose);
+      });
+      return socket;
+    }
+  });
+  window.WebSocket = WrappedWebSocket;
+  root.__publicDemoRoomStateObservationCleanup = () => {
+    for (const remove of listeners) remove();
+    if (window.WebSocket === WrappedWebSocket) window.WebSocket = NativeWebSocket;
+    delete root.__publicDemoRoomStateObservation;
+    delete root.__publicDemoRoomStateObservationCleanup;
+  };
+}
+
+async function capturePdfCommands(page: Page) {
+  const session = await page.context().newCDPSession(page);
+  const commands: PdfCommandEvidence[] = [];
+  const actions: PdfActionEvidence[] = [];
+  let sequence = 0;
+  let droppedCommands = 0;
+  let closed = false;
+  const startedAt = performance.now();
+  const observations: JsonRecord[] = [];
+  let droppedObservations = 0;
+  const sockets = new Map<string, number>();
+  let socketCount = 0;
+  let initScriptId: string | undefined;
+  const observe = (facts: JsonRecord) => {
+    observations.push({ sequence: ++sequence, atMs: Math.round(performance.now() - startedAt), ...facts });
+    // Preserve early evidence as well as the latest events if errors repeat.
+    if (observations.length > 32) { observations.splice(8, 1); droppedObservations++; }
+  };
+  const onSocketCreated = (event: { requestId: string; url: string }) => {
+    try {
+      const url = new URL(event.url);
+      if (!url.searchParams.has("roomId") || !url.searchParams.has("participantId")) return;
+      sockets.set(event.requestId, ++socketCount);
+      observe({ type: "cdp-websocket-created", socket: socketCount });
+      if (sockets.size > 32) sockets.delete(sockets.keys().next().value!);
+    } catch { /* Keep only opaque CDP request scope, never a URL. */ }
+  };
+  const onSocketClosed = (event: { requestId: string }) => {
+    const socket = sockets.get(event.requestId);
+    if (socket) observe({ type: "cdp-websocket-closed", socket });
+  };
+  const onFrameError = (event: { requestId: string }) => {
+    const socket = sockets.get(event.requestId);
+    if (socket) observe({ type: "cdp-websocket-frame-error", socket });
+  };
+  const onException = (event: { exceptionDetails: JsonRecord }) => {
+    observe({ type: "runtime-exception", ...classifyPdfRuntimeError(event.exceptionDetails.exception, event.exceptionDetails.text) });
+  };
+  const onConsole = (event: { type: string; args: JsonRecord[] }) => {
+    if (event.type !== "error") return;
+    const error = event.args.find(arg => arg.subtype === "error" || ["Event", "ErrorEvent"].includes(arg.className));
+    if (error) observe({ type: "console-error", ...classifyPdfRuntimeError(error) });
+  };
+  const onBinding = (event: { name: string; payload: string }) => {
+    if (event.name !== "__publicDemoRoomStateObservation" || event.payload.length > 512) return;
+    let facts: JsonRecord;
+    try { facts = JSON.parse(event.payload); } catch { return; }
+    if (!facts || !["native-open", "native-error", "native-close"].includes(facts.type)
+      || !Number.isInteger(facts.socket) || facts.socket < 1 || facts.socket > 32) return;
+    observe({ type: facts.type, socket: facts.socket,
+      ...(facts.type === "native-close" ? {
+        code: Number.isInteger(facts.code) && facts.code >= 0 && facts.code <= 4999 ? facts.code : null,
+        wasClean: typeof facts.wasClean === "boolean" ? facts.wasClean : null,
+        reason: ["identity_upgrade_required", "identity_recovery_required", "other", "empty"].includes(facts.reason) ? facts.reason : "other"
+      } : {}) });
+  };
+  const removeExtraObservers = async () => {
+    session.off("Network.webSocketCreated", onSocketCreated);
+    session.off("Network.webSocketClosed", onSocketClosed);
+    session.off("Network.webSocketFrameError", onFrameError);
+    session.off("Runtime.exceptionThrown", onException);
+    session.off("Runtime.consoleAPICalled", onConsole);
+    session.off("Runtime.bindingCalled", onBinding);
+    await session.send("Runtime.evaluate", { expression: "globalThis.__publicDemoRoomStateObservationCleanup?.()" }).catch(() => undefined);
+    if (initScriptId) await session.send("Page.removeScriptToEvaluateOnNewDocument", { identifier: initScriptId }).catch(() => undefined);
+    await session.send("Runtime.removeBinding", { name: "__publicDemoRoomStateObservation" }).catch(() => undefined);
+  };
+  const id = (value: unknown) => typeof value === "string" && /^[A-Za-z0-9._:-]{1,200}$/.test(value) ? value : null;
+  const integer = (value: unknown) => Number.isSafeInteger(value) && Number(value) >= 0 ? Number(value) : null;
+  const onFrame = (direction: "sent" | "received", event: { response: { opcode: number; payloadData: string } }) => {
+    // Read only text frames carrying a platform-generated PDF command ID. Never
+    // retain frame bodies, socket URLs, headers, document contents, or credentials.
+    const frame = event.response;
+    if (frame.opcode !== 1 || frame.payloadData.length > 32_768 || !frame.payloadData.includes(":pdf-presentation-")) return;
+    let payload: JsonRecord;
+    try { payload = JSON.parse(frame.payloadData); } catch { return; }
+    if (!payload || typeof payload !== "object") return;
+    const source = direction === "sent" ? payload : payload.result;
+    const match = typeof source?.commandId === "string"
+      ? source.commandId.match(/^[A-Za-z0-9._-]{1,128}:pdf-presentation-(create|select-document|go-to-page|stop):[0-9]{1,16}:[a-f0-9]{1,32}$/)
+      : null;
+    if (!match) return;
+    const operation = match[1] as PdfOperation;
+    if (direction === "sent") {
+      const expectedType = operation === "create" ? "surface_create_object" : operation === "stop" ? "surface_stop_object" : "surface_patch_object_state";
+      if (payload.type !== expectedType
+        || (operation === "create" && payload.objectType !== "pdf-presentation")
+        || (["select-document", "go-to-page"].includes(operation) && payload.patch?.type !== operation)) return;
+    } else if (!["surface_command_result", "access_denied"].includes(payload.type) || typeof source.accepted !== "boolean") return;
+    let command = commands.find(item => item.commandId === source.commandId);
+    if (!command) {
+      command = { commandId: source.commandId, operation, type: null, page: null, expectedRevision: null,
+        objectId: null, surfaceId: null, sentSequence: null, receivedSequence: null, result: null };
+      commands.push(command);
+      if (commands.length > 64) { commands.shift(); droppedCommands++; }
+    }
+    if (direction === "sent") {
+      command.type = payload.type;
+      command.page = operation === "go-to-page" ? integer(payload.patch.page) : null;
+      command.expectedRevision = integer(payload.expectedRevision);
+      command.objectId = id(payload.objectId);
+      command.surfaceId = id(payload.surfaceId);
+      command.sentSequence = ++sequence;
+    } else {
+      command.receivedSequence = ++sequence;
+      command.result = { type: payload.type, accepted: source.accepted,
+        blockedReason: typeof source.blockedReason === "string" ? (/^[a-z][a-z0-9-]{0,80}$/.test(source.blockedReason) ? source.blockedReason : "other") : null,
+        objectId: id(source.objectId), surfaceId: id(source.surfaceId), revision: integer(source.revision) };
+    }
+  };
+  const onSent = (event: Parameters<typeof onFrame>[1]) => onFrame("sent", event);
+  const onReceived = (event: Parameters<typeof onFrame>[1]) => onFrame("received", event);
+  const onClosed = () => { closed = true; };
+  session.on("Network.webSocketFrameSent", onSent);
+  session.on("Network.webSocketFrameReceived", onReceived);
+  session.on("Inspector.detached", onClosed);
+  session.on("Network.webSocketCreated", onSocketCreated);
+  session.on("Network.webSocketClosed", onSocketClosed);
+  session.on("Network.webSocketFrameError", onFrameError);
+  session.on("Runtime.exceptionThrown", onException);
+  session.on("Runtime.consoleAPICalled", onConsole);
+  session.on("Runtime.bindingCalled", onBinding);
+  page.on("close", onClosed);
+  try {
+    await session.send("Network.enable");
+    await session.send("Runtime.enable");
+    await session.send("Page.enable");
+    await session.send("Runtime.addBinding", { name: "__publicDemoRoomStateObservation" });
+    initScriptId = (await session.send("Page.addScriptToEvaluateOnNewDocument", {
+      source: `(${observeNativeRoomStateSockets.toString()})()`
+    })).identifier;
+  } catch {
+    await removeExtraObservers();
+    session.off("Network.webSocketFrameSent", onSent);
+    session.off("Network.webSocketFrameReceived", onReceived);
+    session.off("Inspector.detached", onClosed);
+    page.off("close", onClosed);
+    await session.detach().catch(() => undefined);
+    throw new Error("public_demo_pdf_capture_setup_failed");
+  }
+  return {
+    beginAction(operation: PdfActionEvidence["operation"], expectedPage: number) {
+      const previous = actions.at(-1);
+      if (previous) previous.toSequence = sequence;
+      const action: PdfActionEvidence = { operation, expectedPage, fromSequence: sequence, toSequence: null, activation: null };
+      actions.push(action);
+      if (actions.length > 8) actions.shift();
+      return action;
+    },
+    snapshot() {
+      return { captureClosed: closed, droppedCommands, droppedObservations, observations, commands, actions: actions.map(action => {
+        const correlated = commands.filter(command => command.sentSequence !== null
+          && command.sentSequence > action.fromSequence && command.sentSequence <= (action.toSequence ?? sequence));
+        const matching = correlated.filter(command => command.operation === action.operation
+          && (action.operation !== "go-to-page" || command.page === action.expectedPage)
+          && command.commandId !== action.activation?.before.lastCommand?.commandId);
+        return { ...action, observedCommandIds: correlated.map(command => command.commandId),
+          matchingActionCommandIds: matching.map(command => command.commandId) };
+      }) };
+    },
+    async close() {
+      closed = true;
+      await removeExtraObservers();
+      session.off("Network.webSocketFrameSent", onSent);
+      session.off("Network.webSocketFrameReceived", onReceived);
+      session.off("Inspector.detached", onClosed);
+      page.off("close", onClosed);
+      await session.detach().catch(() => undefined);
+    }
+  };
+}
+
+// This function is serialized into the page. The pre/post snapshots and the
+// single click share one browser task; status text is classified, never copied.
+function pdfActionSnapshot(input: { selector: string; documentId: string | null; activate: boolean }) {
+  const button = document.querySelector<HTMLButtonElement>(input.selector);
+  const id = (value: unknown) => typeof value === "string" && /^[A-Za-z0-9._:-]{1,200}$/.test(value) ? value : null;
+  const integer = (value: unknown) => Number.isSafeInteger(value) && Number(value) >= 0 ? Number(value) : null;
+  const code = (value: unknown) => {
+    if (value === null || value === undefined) return null;
+    const prefix = typeof value === "string" ? value.split(":")[0]! : "";
+    return /^(?:document_|presentation_|surface_command_|room_state_|failed_to_|pdf_|encrypted_pdf_|corrupt_pdf)[a-z_-]{0,80}$/.test(prefix) ? prefix : "other";
+  };
+  const status = (selector: string) => {
+    const text = document.querySelector(selector)?.textContent ?? "";
+    return ["Document surface selection failed", "Presentation control failed", "Presentation failed", "Selecting document for surface",
+      "Document selected for surface", "Document uploaded", "Documents ready", "Documents unavailable", "Presentable document and presenter role required",
+      "Loading presentation PDF", "Presenting", "Presentation idle"].find(prefix => text.startsWith(prefix)) ?? "other";
+  };
+  const read = () => {
+    const debug = (window as any).__VRATA_DEBUG__;
+    const presentation = debug?.pdfPresentation;
+    const surfaces = debug?.mediaObjects?.surfaces ?? [];
+    const selectedSurface = surfaces.find((item: any) => item.surfaceId === debug?.mediaObjects?.selectedSurfaceId);
+    const mainSurface = surfaces.find((item: any) => item.surfaceId === "debug-main");
+    const pdf = (debug?.mediaObjects?.objects ?? []).find((item: any) => item.type === "pdf-presentation"
+      && item.objectId === selectedSurface?.activeObjectId)
+      ?? (debug?.mediaObjects?.objects ?? []).find((item: any) => item.type === "pdf-presentation" && item.objectId === presentation?.objectId);
+    const last = debug?.mediaObjects?.lastCommand;
+    const commandId = typeof last?.commandId === "string"
+      && /^[A-Za-z0-9._-]{1,128}:pdf-presentation-(create|select-document|go-to-page|stop):[0-9]{1,16}:[a-f0-9]{1,32}$/.test(last.commandId) ? last.commandId : null;
+    return {
+      connected: debug?.roomStateConnected === true,
+      nativeSocketObservationInstalled: typeof (window as any).__publicDemoRoomStateObservationCleanup === "function",
+      roomStateMode: ["disconnected", "colyseus", "api_fallback"].includes(debug?.roomStateMode) ? debug.roomStateMode : null,
+      roomStateIssue: ["room_state_failed", "room_access_denied"].includes(debug?.issueCode) ? debug.issueCode : null,
+      retryCount: integer(debug?.retryCount),
+      roomStateRecovery: ["none", "fallback_api", "retry_room_state", "room_state_retry_exhausted", "presence_sync_failed", "presence_refresh_failed"]
+        .includes(debug?.lastRecoveryAction) ? debug.lastRecoveryAction : null,
+      sessionUpgradeVisible: document.querySelector<HTMLDialogElement>("#session-upgrade-dialog")?.open ?? null,
+      hasDocumentViewPermission: debug?.access?.permissions?.includes("document.view") === true,
+      hasDocumentPresentPermission: debug?.access?.permissions?.includes("document.present") === true,
+      documentsEnabled: debug?.featureFlags?.documentsEnabled === true,
+      accessRole: ["host", "member", "guest"].includes(debug?.access?.role) ? debug.access.role : null,
+      accessDenied: debug?.issueCode === "room_access_denied",
+      visibility: document.visibilityState, focused: document.hasFocus(),
+      buttonExists: Boolean(button), buttonDisabled: button?.disabled ?? null,
+      buttonEffectivelyDisabled: button?.matches(":disabled") ?? null,
+      presentationControlsHidden: document.querySelector("#presentation-controls")?.hasAttribute("hidden") ?? null,
+      selectedSurfaceId: id(debug?.mediaObjects?.selectedSurfaceId),
+      documentsCount: integer(debug?.documents?.count),
+      documentsPanelHidden: document.querySelector("#documents-panel")?.hasAttribute("hidden") ?? null,
+      documentSelectDisabled: document.querySelector<HTMLSelectElement>("#document-select")?.disabled ?? null,
+      documentUploadDisabled: document.querySelector<HTMLButtonElement>("#document-upload-button")?.disabled ?? null,
+      selectedDocumentMatches: input.documentId === null ? null : debug?.documents?.selectedDocumentId === input.documentId,
+      selectedDocumentControlMatches: input.documentId === null ? null : document.querySelector<HTMLSelectElement>("#document-select")?.value === input.documentId,
+      documentStatus: status("#document-status"), documentError: code(debug?.documents?.errorCode),
+      presentationStatus: status("#presentation-status"), presentationError: code(presentation?.errorCode),
+      currentPdf: pdf ? { objectId: id(pdf.objectId), surfaceId: id(pdf.surfaceId), revision: integer(pdf.revision),
+        active: pdf.state?.status === "active", page: integer(pdf.state?.currentPage), pageCount: integer(pdf.state?.pageCount),
+        documentMatches: input.documentId === null ? null : pdf.state?.documentId === input.documentId } : null,
+      presentation: { objectId: id(presentation?.objectId), surfaceId: id(presentation?.surfaceId),
+        documentMatches: input.documentId === null ? null : presentation?.documentId === input.documentId,
+        page: integer(presentation?.page), pageCount: integer(presentation?.pageCount),
+        loadState: ["idle", "loading", "ready", "failed"].includes(presentation?.loadState) ? presentation.loadState : null,
+        renderState: ["idle", "rendering", "ready", "failed"].includes(presentation?.renderState) ? presentation.renderState : null,
+        hasRenderTiming: typeof presentation?.lastRenderMs === "number", hasTexture: typeof mainSurface?.textureId === "number" },
+      lastCommand: commandId ? { commandId, accepted: typeof last.accepted === "boolean" ? last.accepted : null,
+        blockedReason: typeof last.blockedReason === "string" ? (/^[a-z][a-z0-9-]{0,80}$/.test(last.blockedReason) ? last.blockedReason : "other") : null,
+        objectId: id(last.objectId), surfaceId: id(last.surfaceId), revision: integer(last.revision) } : null
+    };
+  };
+  const before = read();
+  if (!input.activate || !button || button.disabled) return { before, postDispatch: null, didClick: false, clickEventObserved: false };
+  let clickEventObserved = false;
+  const onClick = () => { clickEventObserved = true; };
+  button.addEventListener("click", onClick, { once: true });
+  try { button.click(); } finally { button.removeEventListener("click", onClick); }
+  return { before, postDispatch: read(), didClick: true, clickEventObserved };
+}
 
 function loadPublicDemoModule(): Promise<PublicDemoModule> {
   demoModulePromise ??= import(pathToFileURL(resolve("tools/public-demo.mjs")).href) as Promise<PublicDemoModule>;
@@ -262,7 +605,13 @@ async function joinClientPage(input: {
   displayName: string;
   audioMock: boolean;
   requireDevRoleQueryDisabled: boolean;
+  pdfCaptures?: Map<Page, PdfCommandCapture>;
 }, navigate = true): Promise<DemoClient> {
+  let pdfCapture = input.pdfCaptures?.get(input.page);
+  if (input.pdfCaptures && !pdfCapture) {
+    pdfCapture = await capturePdfCommands(input.page);
+    input.pdfCaptures.set(input.page, pdfCapture);
+  }
   if (navigate) {
     await navigateAndRemoveSensitiveQuery(input.page, browserInviteUrl(input.inviteLink, {
       audioMock: input.audioMock
@@ -309,7 +658,8 @@ async function joinClientPage(input: {
     participantId: session.participantId,
     sessionToken: session.token,
     audioMock: input.audioMock,
-    requireDevRoleQueryDisabled: input.requireDevRoleQueryDisabled
+    requireDevRoleQueryDisabled: input.requireDevRoleQueryDisabled,
+    pdfCapture
   };
 }
 
@@ -439,20 +789,38 @@ async function waitForPresentation(clients: DemoClient[], pageNumber: number, do
         return current.ready && current.visible;
       }, { timeout: 120_000, intervals: [500, 1_000, 2_000] }).toBe(true);
     } catch {
-      throw new Error(`public_demo_pdf_page_${pageNumber}_${client.role}_not_rendered:${JSON.stringify(await snapshot())}`);
+      const state = await snapshot();
+      const preconditions = await client.page.evaluate(pdfActionSnapshot, {
+        selector: "#presentation-next", documentId, activate: false
+      }).then(value => value.before).catch(() => null);
+      throw new Error(`public_demo_pdf_page_${pageNumber}_${client.role}_not_rendered:${JSON.stringify({
+        ...state, preconditions, commandEvidence: client.pdfCapture?.snapshot() ?? null
+      })}`);
     }
   }
 }
 
-async function activateButton(page: Page, selector: string): Promise<void> {
+async function activateButton(page: Page, selector: string, diagnostic?: {
+  capture: PdfCommandCapture;
+  documentId: string;
+  operation: PdfActionEvidence["operation"];
+  expectedPage: number;
+}): Promise<void> {
   // Poll actionability and dispatch in one page task. A room-state refresh can
   // disable/rebuild host controls between toBeEnabled() and a separate click(),
   // in which case HTMLElement.click() silently does nothing.
-  await expect.poll(() => page.locator(selector).evaluate((button: HTMLButtonElement) => {
-    if (button.disabled) return false;
-    button.click();
-    return true;
-  }), { timeout: 30_000 }).toBe(true);
+  const action = diagnostic?.capture.beginAction(diagnostic.operation, diagnostic.expectedPage);
+  await expect.poll(async () => {
+    if (diagnostic && action) {
+      action.activation = await page.evaluate(pdfActionSnapshot, { selector, documentId: diagnostic.documentId, activate: true });
+      return action.activation.didClick;
+    }
+    return page.locator(selector).evaluate((button: HTMLButtonElement) => {
+      if (button.disabled) return false;
+      button.click();
+      return true;
+    });
+  }, { timeout: 30_000 }).toBe(true);
 }
 
 async function sessionRequest(
@@ -762,10 +1130,12 @@ export async function runPublicDemoScenario(options: PublicDemoScenarioOptions):
   const cleanupRecord = demo.publicDemoCleanupRecordPath(stateFile);
   const contexts: BrowserContext[] = [];
   const clients: DemoClient[] = [];
+  const pdfCaptures = new Map<Page, PdfCommandCapture>();
   const environment = options.staging ? "staging" : "local";
   let phase = "seed";
   let primaryError: unknown;
   let cleanupFailed = false;
+  let hostDocumentId: string | null = null;
   const setPhase = (next: string) => {
     phase = next;
     console.log(`public-demo:${environment}:${next}`);
@@ -828,7 +1198,8 @@ export async function runPublicDemoScenario(options: PublicDemoScenarioOptions):
     let hostPage = await contexts[0]!.newPage();
     const host = await joinClientPage({
       context: contexts[0]!, page: hostPage, role: "host", inviteLink: hostInvite,
-      displayName: "Public Demo Host", audioMock: options.staging, requireDevRoleQueryDisabled: !options.staging
+      displayName: "Public Demo Host", audioMock: options.staging, requireDevRoleQueryDisabled: !options.staging,
+      pdfCaptures
     });
     clients.push(host);
     console.log(`public-demo:${environment}:host-joined`);
@@ -872,10 +1243,13 @@ export async function runPublicDemoScenario(options: PublicDemoScenarioOptions):
     await expect(host.page.locator("#document-select")).toBeEnabled({ timeout: 30_000 });
     await expect(host.page.locator("#document-select")).toHaveValue(state.resources.document.documentId, { timeout: 30_000 });
     const ownDocumentId = await uploadHostDocument(host, roomId, options.testInfo);
+    hostDocumentId = ownDocumentId;
     setPhase("presentation-page-one");
     await expect(host.page.locator("#media-surface-select")).toHaveValue("debug-main");
     await expect(host.page.locator("#document-surface-button")).toBeEnabled({ timeout: 30_000 });
-    await activateButton(host.page, "#document-surface-button");
+    await activateButton(host.page, "#document-surface-button", {
+      capture: host.pdfCapture!, documentId: ownDocumentId, operation: "select-document", expectedPage: 1
+    });
 
     setPhase("shared-notes");
     const note = "# Public demo decision\n- Keep the production invite flow.";
@@ -906,7 +1280,9 @@ export async function runPublicDemoScenario(options: PublicDemoScenarioOptions):
 
     setPhase("presentation-page-two");
     await waitForPresentation([host], 1, ownDocumentId);
-    await activateButton(host.page, "#presentation-next");
+    await activateButton(host.page, "#presentation-next", {
+      capture: host.pdfCapture!, documentId: ownDocumentId, operation: "go-to-page", expectedPage: 2
+    });
     await waitForPresentation(clients, 2, ownDocumentId);
 
     await leaveClient(guest, options.origin, roomId);
@@ -939,7 +1315,9 @@ export async function runPublicDemoScenario(options: PublicDemoScenarioOptions):
     await denyGuestPresentationControl(guest, roomId, ownDocumentId);
 
     setPhase("presentation-page-three");
-    await activateButton(host.page, "#presentation-next");
+    await activateButton(host.page, "#presentation-next", {
+      capture: host.pdfCapture!, documentId: ownDocumentId, operation: "go-to-page", expectedPage: 3
+    });
     await waitForPresentation(clients, 3, ownDocumentId);
 
     setPhase("host-lock-unlock-remove");
@@ -998,6 +1376,20 @@ export async function runPublicDemoScenario(options: PublicDemoScenarioOptions):
     primaryError = error;
     await attachAllowlistedDiagnostics(options.testInfo, environment, phase, clients).catch(() => undefined);
   } finally {
+    try {
+      const captures = await Promise.all(Array.from(pdfCaptures, async ([page, capture]) => {
+        const finalPreconditions = page.isClosed() ? null : await page.evaluate(pdfActionSnapshot, {
+          selector: "#document-surface-button", documentId: hostDocumentId, activate: false
+        }).then(value => value.before).catch(() => null);
+        return { ...capture.snapshot(), finalPreconditions };
+      }));
+      if (pdfCaptures.size) await options.testInfo.attach("public-demo-pdf-command-evidence", {
+        body: JSON.stringify({ environment, phase, captures }, null, 2),
+        contentType: "application/json"
+      }).catch(() => undefined);
+    } finally {
+      await Promise.allSettled(Array.from(pdfCaptures.values(), capture => capture.close()));
+    }
     await Promise.allSettled(contexts.map((context) => context.close()));
     try {
       const cleanupInput = await pathExists(stateFile)

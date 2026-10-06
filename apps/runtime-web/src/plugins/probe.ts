@@ -7,6 +7,9 @@ import { buildProbeReport, portableProbeResult, serializeProbeReport, COMPANION_
   type ProbeReport, type ProbeDevice, type ReportInput, type ContinuityObservation, type UiObservation, type CompanionOperation } from "./probe-report.js";
 import type { PluginSupervisor, InstanceState } from "./supervisor.js";
 import type { RoomPluginEvent } from "@vrata/room-plugin-sdk";
+import { runResourceProbe } from "./resource-probe-runner.js";
+import { buildResourceProbeReport, serializeResourceProbeReport, resourceProbeSummary, type ResourceProbeReport } from "./resource-probe-report.js";
+import type { ResourceObservation, ResourcePhase, ResourceBrowserMemory } from "./resource-probe-contract.js";
 
 const ready: RoomPluginEvent = {
   sdkApiVersion: 1, type: "room.ready",
@@ -35,6 +38,10 @@ export interface PluginSandboxProbe {
   runSuite(): Promise<ProbeReport>;
   getReport(): ProbeReport | null;
   exportReport(): string | null;
+  runResources(): Promise<ResourceProbeReport>;
+  cancelResources(): void;
+  getResourceReport(): ResourceProbeReport | null;
+  exportResourceReport(): string | null;
 }
 declare global { interface Window { pluginSandboxProbe: PluginSandboxProbe } }
 
@@ -44,6 +51,11 @@ const status = element("plugin-status"), diagnostic = element("diagnostic"), hea
 const select = element<HTMLSelectElement>("fixture"), deviceSelect = element<HTMLSelectElement>("device-kind");
 const runButton = element<HTMLButtonElement>("run"), suiteButton = element<HTMLButtonElement>("run-suite"), downloadButton = element<HTMLButtonElement>("download-report");
 const progress = element<HTMLProgressElement>("suite-progress");
+const resourceButton = element<HTMLButtonElement>("run-resources"), resourceStopButton = element<HTMLButtonElement>("stop-resources"), resourceDownloadButton = element<HTMLButtonElement>("download-resources");
+const resourceProgress = element<HTMLProgressElement>("resource-progress");
+let resourceRunning = false, resourceController: AbortController | undefined, resourceReport: ResourceProbeReport | null = null;
+let resourceUi: UiObservation | null = null, resourceStartedAtMs = 0, resourceStartFrames = 0, resourceLastFrameAtMs = 0;
+const resourceInstances = new Set<PluginSupervisor>();
 let hostFrames = 0, clicks = 0, running = false, suiteRunning = false, companionStarting = false, stopped = false;
 let companion: PluginSupervisor | undefined, active: PluginSupervisor | undefined;
 let companionBoot: ProbeSnapshot["companionBoot"] = null;
@@ -63,6 +75,13 @@ function frame() {
   if (!stopped) {
     heartbeat.textContent = String(++hostFrames);
     if (suiteRunning && uiObservation) { recordFrameGap(performance.now()); uiObservation.frameSamples++; uiObservation.framesDuringSuite = hostFrames - suiteStartFrames; }
+    if (resourceRunning && resourceUi) {
+      const now = performance.now(), gap = now - resourceLastFrameAtMs;
+      if (Number.isFinite(gap) && gap >= 0) resourceUi.maxFrameGapMs = Math.max(resourceUi.maxFrameGapMs ?? 0, gap);
+      else resourceUi.invalidFrameSamples++;
+      resourceLastFrameAtMs = now;
+      resourceUi.frameSamples++; resourceUi.framesDuringSuite = hostFrames - resourceStartFrames;
+    }
     frameId = requestAnimationFrame(frame);
   }
 }
@@ -73,9 +92,11 @@ const device = (): ProbeDevice => ({
   viewport: { width: window.innerWidth, height: window.innerHeight, pixelRatio: window.devicePixelRatio }
 });
 function buttons() {
-  runButton.disabled = suiteButton.disabled = running || suiteRunning || companionStarting || stopped;
-  select.disabled = deviceSelect.disabled = suiteRunning;
-  downloadButton.disabled = !reportInput || suiteRunning || running;
+  runButton.disabled = suiteButton.disabled = resourceButton.disabled = running || suiteRunning || resourceRunning || companionStarting || stopped;
+  select.disabled = deviceSelect.disabled = suiteRunning || resourceRunning;
+  downloadButton.disabled = !reportInput || suiteRunning || running || resourceRunning;
+  resourceStopButton.disabled = !resourceRunning;
+  resourceDownloadButton.disabled = !resourceReport || resourceRunning;
 }
 function setVerdict(verdict: string, text: string, summary: string) {
   element("verdict").dataset.verdict = verdict; element("verdict").textContent = text; element("verdict-summary").textContent = summary;
@@ -207,10 +228,83 @@ async function stopCompanion() {
 }
 function isCurrentCompanion(instance: PluginSupervisor): boolean { return companion === instance; }
 
+const resourceLabels: Record<ResourcePhase, string> = {
+  wasm: "Загрузка доверенного WASM", companion: "Запуск контрольного экземпляра", cycles: "Циклы init → event → dispose",
+  sustained: "Минута обычной нагрузки", "budget-second": "CPU-бюджет 100 ms/s", "budget-minute": "CPU-бюджет 2 s/min",
+  cleanup: "Закрытие экземпляров", complete: "Прогон завершён"
+};
+const resourceCheckLabels = {
+  provenance: "Полнота и корректность наблюдений", lifecycle: "100 полных циклов", sustained: "60 секунд обычной нагрузки",
+  secondBudget: "Остановка по CPU-бюджету секунды", minuteBudget: "Остановка по CPU-бюджету минуты",
+  companion: "Отклик контрольного экземпляра", ui: "Видимый интерфейс и клик во время нагрузки", cleanup: "Закрытие собственных экземпляров"
+};
+function renderResourceReport(report: ResourceProbeReport) {
+  const verdict = element("resource-verdict"); verdict.dataset.verdict = report.verdict;
+  verdict.textContent = report.verdict === "PASS" ? "PASS — РЕСУРСНЫЙ ПРОГОН" : report.verdict === "FAIL" ? "FAIL — ТРЕБУЕТСЯ РАЗБОР" : "ОТЧЁТ НЕПОЛНЫЙ";
+  element("resource-summary").textContent = `Полных циклов: ${report.cycleSummary.completed}/${report.cycleSummary.requested}. Время: ${report.elapsedMs === null ? "не измерено" : `${(report.elapsedMs / 1000).toFixed(1)} s`}. ${resourceProbeSummary(report)}`;
+  const checks = element("resource-checks"); checks.replaceChildren();
+  for (const key of Object.keys(resourceCheckLabels) as (keyof typeof resourceCheckLabels)[]) {
+    const item = document.createElement("li"); item.dataset.verdict = report.checks[key].verdict;
+    item.textContent = `${resourceCheckLabels[key]}: ${report.checks[key].verdict}`; checks.append(item);
+  }
+  const buffers = report.cycleSummary.overlappingLinearBytes;
+  const mib = (bytes: number | null) => bytes === null ? "не измерено" : `${(bytes / 1048576).toFixed(1)} MiB`;
+  element("resource-memory").textContent = `Одновременно живые WASM buffer (максимум наблюдений): основной ${mib(buffers.primaryBytes.max)}, контрольный ${mib(buffers.companionBytes.max)}, сумма ${mib(buffers.combinedLinearBytes.max)}. Это не память всего браузера. Browser memory API: ${report.browserMemory.measurement === "NOT_MEASURED" ? "НЕ ИЗМЕРЕНО — API недоступен или измерение не завершилось" : report.browserMemory.measurement === "PARTIAL" ? "частичные измерения в JSON" : "измерения в JSON"}. Счётчики закрытия не доказывают физическое освобождение памяти.`;
+}
+async function readResourceBrowserMemory(phase: ResourceBrowserMemory["samples"][number]["phase"]): Promise<ResourceBrowserMemory["samples"][number]> {
+  const api = performance as Performance & { measureUserAgentSpecificMemory?: () => Promise<{ bytes: unknown }> };
+  if (!crossOriginIsolated || typeof api.measureUserAgentSpecificMemory !== "function") return { phase, status: "UNAVAILABLE", bytes: null };
+  try {
+    const measurement = await api.measureUserAgentSpecificMemory();
+    const bytes = measurement.bytes;
+    return typeof bytes === "number" && Number.isSafeInteger(bytes) && bytes > 0
+      ? { phase, status: "MEASURED", bytes } : { phase, status: "ERROR", bytes: null };
+  } catch { return { phase, status: "ERROR", bytes: null }; }
+}
+async function runResources(): Promise<ResourceProbeReport> {
+  if (companion || running || suiteRunning || resourceRunning || companionStarting || stopped) throw new SandboxError("invalid_input");
+  resourceRunning = true; clickCheckOpen = false; resourceReport = null;
+  resourceController = new AbortController(); resourceStartFrames = hostFrames;
+  resourceStartedAtMs = resourceLastFrameAtMs = performance.now();
+  resourceUi = { framesDuringSuite: 0, frameSamples: 0, maxFrameGapMs: null, invalidFrameSamples: 0,
+    startedVisible: document.visibilityState === "visible", endedVisible: false, hiddenTransitions: 0,
+    trustedClicks: 0, duringClicks: 0, afterClicks: 0, visibleDuringClicks: 0, maxInputDelayMs: null, invalidInputTimestamps: 0, clickPhase: null };
+  document.documentElement.dataset.resourceReady = "0";
+  element("resource-verdict").dataset.verdict = "PENDING"; element("resource-verdict").textContent = "РЕСУРСНАЯ ПРОВЕРКА ИДЁТ";
+  element("resource-summary").textContent = "Оставьте страницу видимой и нажмите кнопку отклика во время прогона.";
+  element("resource-checks").replaceChildren(); resourceProgress.value = 0; buttons();
+  let observation: ResourceObservation;
+  try {
+    observation = await runResourceProbe({
+      loadWasm: loadTrustedPluginWasm,
+      createInstance: () => { const instance = createPluginSupervisor([]); resourceInstances.add(instance); return instance; },
+      signal: resourceController.signal, crossOriginIsolated, readBrowserMemory: readResourceBrowserMemory,
+      onProgress: (phase, completed, total) => {
+        element("resource-status").textContent = `${resourceLabels[phase]}: ${phase === "sustained" ? `${(completed / 1000).toFixed(0)}/${total / 1000} s` : `${completed}/${total}`}`;
+        resourceProgress.value = total ? completed * 100 / total : 0;
+        document.documentElement.dataset.resourcePhase = phase;
+      }
+    }, { runId: crypto.randomUUID(), device: device(), startedAt: new Date().toISOString() });
+    const now = performance.now(), gap = now - resourceLastFrameAtMs;
+    if (Number.isFinite(gap) && gap >= 0) resourceUi.maxFrameGapMs = Math.max(resourceUi.maxFrameGapMs ?? 0, gap);
+    else resourceUi.invalidFrameSamples++;
+    resourceUi.endedVisible = document.visibilityState === "visible";
+    resourceUi.framesDuringSuite = hostFrames - resourceStartFrames;
+    observation.ui = resourceUi;
+    resourceReport = buildResourceProbeReport(observation);
+    renderResourceReport(resourceReport);
+    return resourceReport;
+  } finally {
+    for (const instance of resourceInstances) instance.terminate(); resourceInstances.clear();
+    resourceRunning = false; resourceController = undefined;
+    document.documentElement.dataset.resourceReady = "1"; buttons();
+  }
+}
+
 const harness: PluginSandboxProbe = {
   fixtures: PROBE_FIXTURE_ORDER, limits: SANDBOX_LIMITS,
   async run(fixture) {
-    if (!isProbeFixture(fixture) || running || suiteRunning || companionStarting || stopped) throw new SandboxError("invalid_input");
+    if (!isProbeFixture(fixture) || running || suiteRunning || resourceRunning || companionStarting || stopped) throw new SandboxError("invalid_input");
     clickCheckOpen = false;
     const startedAt = new Date().toISOString(), capturedDevice = device();
     select.value = fixture;
@@ -221,15 +315,15 @@ const harness: PluginSandboxProbe = {
     renderReport(); return result;
   },
   async startCompanion() {
-    if (companion || running || suiteRunning || companionStarting || stopped) throw new SandboxError("invalid_input");
+    if (companion || running || suiteRunning || resourceRunning || companionStarting || stopped) throw new SandboxError("invalid_input");
     await startCompanion();
   },
   async companionEvent() { if (!companion) throw new SandboxError("instance_closed"); await companion.event(ready); },
   stopCompanion,
-  snapshot() { return { hostFrames, clicks, activeInstances: Number(!!companion) + Number(!!active),
+  snapshot() { return { hostFrames, clicks, activeInstances: Number(!!companion) + Number(!!active) + [...resourceInstances].filter((instance) => instance.state !== "failed" && instance.state !== "disposed").length,
     companionState: companion?.state ?? null, companionStatuses: [...companionStatuses], companionBoot }; },
   async runSuite() {
-    if (companion || running || suiteRunning || companionStarting || stopped) throw new SandboxError("invalid_input");
+    if (companion || running || suiteRunning || resourceRunning || companionStarting || stopped) throw new SandboxError("invalid_input");
     suiteRunning = clickCheckOpen = true; suiteStartFrames = hostFrames; suiteStartedAtMs = lastFrameAtMs = performance.now();
     uiObservation = { framesDuringSuite: 0, frameSamples: 0, maxFrameGapMs: null, invalidFrameSamples: 0,
       startedVisible: document.visibilityState === "visible", endedVisible: false, hiddenTransitions: 0,
@@ -289,7 +383,11 @@ const harness: PluginSandboxProbe = {
     return currentReport()!;
   },
   getReport: currentReport,
-  exportReport() { const report = currentReport(); return report ? serializeProbeReport(report) : null; }
+  exportReport() { const report = currentReport(); return report ? serializeProbeReport(report) : null; },
+  runResources,
+  cancelResources() { resourceController?.abort("cancelled"); },
+  getResourceReport() { return resourceReport; },
+  exportResourceReport() { return resourceReport ? serializeResourceProbeReport(resourceReport) : null; }
 };
 window.pluginSandboxProbe = Object.freeze(harness);
 for (const fixture of harness.fixtures) {
@@ -297,8 +395,16 @@ for (const fixture of harness.fixtures) {
 }
 describe(select.value as ProbeFixture);
 select.addEventListener("change", () => { if (isProbeFixture(select.value)) describe(select.value); });
-element("ui-button").addEventListener("click", (event) => {
+function recordClick(event: MouseEvent) {
   clickCounter.textContent = String(++clicks);
+  if (event.isTrusted && resourceRunning && resourceUi) {
+    const now = performance.now(), delay = inputDelayMs(now, event.timeStamp, performance.timeOrigin);
+    resourceUi.trustedClicks++; resourceUi.duringClicks++; resourceUi.clickPhase = "during-suite";
+    if (delay === null) resourceUi.invalidInputTimestamps++;
+    else resourceUi.maxInputDelayMs = Math.max(resourceUi.maxInputDelayMs ?? 0, delay);
+    if (delay !== null && now - delay >= resourceStartedAtMs && document.visibilityState === "visible") resourceUi.visibleDuringClicks++;
+    element("resource-summary").textContent = "Настоящий клик во время ресурсной нагрузки записан. Дождитесь отчёта.";
+  }
   if (event.isTrusted && clickCheckOpen && reportInput?.scope === "full-suite" && uiObservation) {
     uiObservation.trustedClicks++;
     uiObservation.clickPhase ??= suiteRunning ? "during-suite" : "after-suite";
@@ -315,18 +421,32 @@ element("ui-button").addEventListener("click", (event) => {
       renderReport();
     }
   }
-});
+}
+element("ui-button").addEventListener("click", recordClick);
+element("resource-ui-button").addEventListener("click", recordClick);
 document.addEventListener("visibilitychange", () => {
   if (suiteRunning && uiObservation && document.visibilityState !== "visible") uiObservation.hiddenTransitions++;
+  if (resourceRunning && resourceUi && document.visibilityState !== "visible") resourceUi.hiddenTransitions++;
 });
 function showHarnessFailure(error: unknown) { setVerdict("FAIL", "FAIL — ЗАПУСК НЕ УДАЛСЯ", `Код: ${boundedCode(error)}. Это не ожидаемая остановка опасного сценария.`); buttons(); }
 runButton.addEventListener("click", () => { void harness.run(select.value as ProbeFixture).catch(showHarnessFailure); });
 suiteButton.addEventListener("click", () => { void harness.runSuite().catch(showHarnessFailure); });
+resourceButton.addEventListener("click", () => { void harness.runResources().catch((error: unknown) => {
+  element("resource-verdict").dataset.verdict = "FAIL"; element("resource-verdict").textContent = "FAIL — ЗАПУСК НЕ УДАЛСЯ";
+  element("resource-summary").textContent = `Код: ${boundedCode(error)}. Сохраните наблюдение; это не ожидаемая остановка опасного сценария.`;
+}); });
+resourceStopButton.addEventListener("click", () => harness.cancelResources());
+resourceDownloadButton.addEventListener("click", () => {
+  const json = harness.exportResourceReport(); if (!json) return;
+  const url = URL.createObjectURL(new Blob([json], { type: "application/json" }));
+  const link = document.createElement("a"); link.href = url; link.download = "vrata-sandbox-resource-report.json"; document.body.append(link); link.click(); link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+});
 downloadButton.addEventListener("click", () => {
   const json = harness.exportReport(); if (!json) return;
   const url = URL.createObjectURL(new Blob([json], { type: "application/json" }));
   const link = document.createElement("a"); link.href = url; link.download = "vrata-sandbox-device-report.json"; document.body.append(link); link.click(); link.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 });
-window.addEventListener("pagehide", () => { stopped = true; cancelAnimationFrame(frameId); active?.terminate(); companion?.terminate(); }, { once: true });
+window.addEventListener("pagehide", () => { stopped = true; resourceController?.abort("pagehide"); cancelAnimationFrame(frameId); active?.terminate(); companion?.terminate(); }, { once: true });
 document.documentElement.dataset.probeReady = "1";

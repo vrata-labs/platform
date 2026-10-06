@@ -39,13 +39,14 @@
     <h1>Проверка изоляции плагинов</h1>
     <p>Для опасных сценариев состояние плагина <strong>failed ожидаемо</strong>: он должен быть остановлен. Результат самой проверки показан отдельно — <strong>PASS</strong> или <strong>FAIL</strong>.</p>
     <section>
-      <h2>Ручная проверка на Quest или Windows</h2>
+      <h2>Ручная проверка на Quest, Android или Windows</h2>
       <p>Откройте эту страницу отдельно на каждом устройстве. Нажмите «Проверить все сценарии» и сразу нажмите кнопку отклика <strong>ПОКА ИДЁТ прогон</strong>. Не скрывайте страницу. Клик после завершения не подтверждает отклик во время нагрузки — в таком случае повторите прогон. Затем скачайте отчёт этого браузера.</p>
       <label for="device-kind">На каком устройстве открыт этот браузер?</label>
       <select id="device-kind">
         <option value="unspecified">Не указано</option>
         <option value="quest">Quest</option>
         <option value="windows">Windows</option>
+        <option value="android">Android Chrome</option>
         <option value="other">Другое устройство</option>
       </select>
       <div class="actions qa-actions">
@@ -56,6 +57,24 @@
       <label for="suite-progress">Ход полной проверки</label>
       <progress id="suite-progress" value="0" max="37"></progress>
       <p id="suite-status" role="status">Полная проверка ещё не запускалась.</p>
+    </section>
+    <section aria-labelledby="resource-title">
+      <h2 id="resource-title">Ресурсы: две VM и 100 циклов</h2>
+      <p>Дополнительный прогон занимает примерно 2–3 минуты, предел — 5 минут. Проверяются 100 запусков и завершений Worker, минута обычной нагрузки и остановка при накопительном CPU-бюджете. Контрольный плагин работает параллельно.</p>
+      <p>Оставьте страницу видимой и нажмите «Проверить отклик под нагрузкой» <strong>во время этого прогона</strong>. Скрытие страницы или нажатие «Остановить» оставляет неполный отчёт. Ошибка обычного экземпляра — FAIL.</p>
+      <div class="actions">
+        <button id="run-resources" class="primary" type="button">Проверить ресурсы (2–3 мин)</button>
+        <button id="resource-ui-button" type="button">Проверить отклик под нагрузкой</button>
+        <button id="stop-resources" type="button" disabled>Остановить ресурсный прогон</button>
+        <button id="download-resources" type="button" disabled>Скачать ресурсный JSON</button>
+      </div>
+      <progress id="resource-progress" aria-label="Ход ресурсного прогона" value="0" max="100"></progress>
+      <p id="resource-status" role="status">Ресурсный прогон ещё не запускался.</p>
+      <p id="resource-verdict" class="verdict" data-verdict="PENDING" aria-live="polite">НЕ ПРОВЕРЕНО</p>
+      <p id="resource-summary"></p>
+      <ul id="resource-checks"></ul>
+      <p id="resource-memory" class="note">Два WASM buffer измеряются отдельно от памяти браузера. Если браузер не предоставляет API измерения памяти, это будет явно указано; нулевое потребление не подставляется.</p>
+      <p class="note">Этот прогон дополняет 37 сценариев выше. Даже PASS не подтверждает физическое устройство и не закрывает T03 автоматически. Для проверки происхождения отчёта сохраните модель устройства, ОС, версию браузера, дату и опубликованный SHA отдельно.</p>
     </section>
     <section aria-labelledby="result-title">
       <h2 id="result-title">Результат проверки</h2>

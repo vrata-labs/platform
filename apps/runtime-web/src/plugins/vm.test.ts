@@ -293,6 +293,35 @@ test("fake-clock sustained real VM turns deterministically exhaust cumulative se
   } finally { vm.close(); module.assertNoMemoryAllocated(); }
 });
 
+test("real VM measures nonzero init independently from the cumulative event budget", () => {
+  for (const initCost of [0, 40]) {
+    let now = 0, turnCost = 0;
+    const observedModule = {
+      newContext() {
+        const context = module.newContext(), getString = context.getString.bind(context);
+        context.getString = (handle) => {
+          const result = getString(handle);
+          // Advance the injected clock at the real bounded collect/copy stage,
+          // not by manually charging a separate ExecutionBudget in the test.
+          if (result === "[]") now += turnCost;
+          return result;
+        };
+        return context;
+      },
+      getWasmMemory: () => module.getWasmMemory()
+    };
+    const vm = new PluginVm(observedModule, { approvedCapabilities: [], clock: () => now });
+    try {
+      vm.prepare(); turnCost = initCost;
+      assert.equal(vm.init("export function init() {} export function onEvent() {}").executionMs, initCost);
+      turnCost = 30;
+      for (let event = 0; event < 3; event++) assert.equal(vm.event(ready).executionMs, 30);
+      assert.throws(() => vm.event(ready), { code: "execution_budget_second" });
+      assert.throws(() => vm.event(ready), { code: "instance_closed" });
+    } finally { vm.close(); module.assertNoMemoryAllocated(); }
+  }
+});
+
 test("rolling budgets enforce 100ms/s and 2s/min, with deterministic expiry", () => {
   const second = new ExecutionBudget();
   for (let i = 0; i < 5; i++) assert.equal(second.charge(i * 100, 20), undefined);

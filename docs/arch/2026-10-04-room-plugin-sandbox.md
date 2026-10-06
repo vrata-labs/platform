@@ -80,6 +80,38 @@ debug execution needs a 64 KiB stack; this checks handle ownership, not acceptan
 of the production release stack. Browser timings and WASM buffer sizes are probe
 observations, not whole-renderer memory bounds or a performance SLA.
 
+### Fixed-source resource campaign
+
+The same diagnostic page offers a separate resource-benchmark report. It runs
+100 sequential production Worker init/event/dispose cycles while a second healthy
+instance remains alive, then 60 seconds of healthy event traffic. Two additional
+fixed programs consume about 30 ms/12 ms per event on real clocks to observe the
+existing second/minute cumulative stops. Events and companion pings are spaced
+at least 250 ms; successful guest turns still use the unchanged 50 ms budget.
+Only the matching cumulative code on EVENT is expected; ordinary initialization,
+wrong-phase, watchdog or handler failures cannot stand in for that observation.
+
+The campaign is bounded to five minutes and can be cancelled. Cancellation,
+page hiding or insufficient DURING input leaves it incomplete, not certified.
+Unexpected healthy/companion failures remain FAIL. Cleanup closes only owned
+supervisors and retains partial evidence; counters are not physical-GC proof.
+Normal full-scenario hidden-page semantics are unchanged.
+
+The whitelist JSON includes per-cycle parent round-trip and VM execution timing,
+count/min/median/nearest-rank-p95/max summaries, concurrent companion ACKs and
+simultaneously observed PRIMARY/companion linear-buffer sizes. Init round-trip
+includes Worker loading and trusted prepare. Rejected turn timing is unavailable
+and is never fabricated; parent ACK timestamps do not reconstruct the VM's
+rolling clock. Combined linear bytes are not heap usage or total browser memory.
+Browser memory is recorded only through measureUserAgentSpecificMemory when
+available; absent/error/timed-out measurements stay null/NOT_MEASURED. The page
+does not add cross-origin isolation headers to make that API available.
+
+The device selector includes Android Chrome, Quest and Windows as manual labels.
+Both report scopes always retain deviceGate=NOT_EVALUATED. Save model, OS,
+browser version, deployed SHA and physical-device provenance separately; the
+resource report complements the 37-scenario report and does not replace it.
+
 **T03 device gate remains open:** real Android/Quest latency, memory pressure and
 disposal must be checked before open author-code execution is activated. Browser
 device emulation cannot close that gate. Desktop results permit continuation of
