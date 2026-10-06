@@ -432,6 +432,19 @@ Node22 runtime build и **1064/1064** unit tests прошли. Focused compiled-
 
 Окончательно уже зарегистрированный native fault сохраняется до cancel/hidden/termination, включая primary во время memory checkpoint. Ожидаемые budget failures и собственный instance_closed не становятся ложной ошибкой кампании. FAIL в сводке всегда просит сохранить JSON, даже при неполном DURING наблюдении. Итог: **1094/1094 runtime tests**, **170/170 full local E2E**, без skips/retries (**28,9 минуты**, Node22 штатный режим). Реальное устройство этим не аттестуется.
 
+| Этап ресурсной диагностики T03 | Результат |
+|---|---|
+| Проверенный и опубликованный SHA | `9506de30b7f379e086c5db243dbbb398883693ae` |
+| [CI 37493548436](https://github.com/vrata-labs/platform/actions/runs/37493548436) | Success: clean checks, package tests с PostgreSQL и pinned rollback, полный E2E, M0.5 и locked assets |
+| [Docker Publish 37493548177](https://github.com/vrata-labs/platform/actions/runs/37493548177) | Success: immutable application images exact SHA |
+| [Staging Deploy 37498466477](https://github.com/vrata-labs/platform/actions/runs/37498466477) | Success с первой попытки: private-storage proof, **64/64 staging E2E**, successful SHA сохранён; rollback skipped |
+
+[Артефакт staging gate](https://github.com/vrata-labs/platform/actions/runs/37498466477/artifacts/11430677459) подтверждает resource PASS, 100/100 dual-instance cycles, 104 created/closed и active=0, healthy workload 60 308,5 ms, оба expected cumulative codes на EVENT и trusted DURING input. Companion: 547 ACK, максимум 1,5 ms; frame gap 19,1 ms, input delay 0,7 ms. Simultaneous linear buffers — 16+16 MiB, browser memory API — NOT_MEASURED. Это наблюдения browser runner, не физический Android/Quest или GC acceptance.
+
+Текущие Hall/BlueOffice/ArtGallery достигли loaded с полными ожидаемыми asset bytes. Strict real-LiveKit four-party scenario/cleanup прошёл; четыре PDF-команды accepted, revisions 0→3. Skipped/flaky/unexpected — 0. Non-blocking Rutube canary — **1/1**; blocking Rutube для этого impact scope не запускался. Private signed/read-exact и direct/external unsigned 403 proof, отсутствие package publication и собственный cleanup подтверждены. Running image tag exact SHA, minimumIdentityProtocol 1 и identityAuthorityBound=false проверены; глобальная активация v2 не выполнялась.
+
+После gate health/demo-room/control-plane/templates/device-probe вернули HTTP 200. [Публичная диагностика](https://158.160.10.234.sslip.io/plugin-sandbox-probe.html) содержит новый ресурсный прогон и оба downloadable report scopes. Собственный локальный PostgreSQL удалён после проверки ID/labels; disposable browser containers завершились, проверочные порты свободны. CI watch прерывался только лимитом локального ожидания; продолжено наблюдение того же успешного run без повторного CI/deploy.
+
 ## Публикация первого среза T01/T12
 
 Локально прошли workspace lint/typecheck/build/tests с PostgreSQL, затем runtime build и 905 runtime tests после финальных правок. Полный `pnpm test:e2e` на финальном исполняемом дереве: **148 passed**, без skip (41.6 min).
