@@ -59,8 +59,9 @@ rollback code from deleting a room containing plugin packages.
 
 T04 is an internal storage/service boundary. Fresh author/session authorization
 for its transitions belongs to T05 and must be checked at the mutation boundary.
-No public author upload route is opened by this slice; global identity floor 2
-and the device gate are not activated.
+No public author upload route or global identity floor 2 is activated by this
+storage slice. The current T03 decision is recorded separately in
+[the sandbox contract](2026-10-04-room-plugin-sandbox.md#verification-gate).
 
 ## External packaging (T06)
 

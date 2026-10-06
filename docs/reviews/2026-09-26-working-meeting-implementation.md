@@ -458,7 +458,7 @@ Node22 runtime build и **1064/1064** unit tests прошли. Focused compiled-
 
 Оба устройства выполнили healthy workload более 60 s, получили `execution_budget_second` / `execution_budget_minute` на EVENT и закрыли 104/104 экземпляра с active=0. Линейная память одновременно живых VM стабильна 16+16 MiB; browser memory API — NOT_MEASURED. Это не общее потребление памяти или физический GC. Android: resource 137,789 s, init wall p95 435,8 ms, event wall p95 2,7 ms, companion ACK максимум 16,1 ms, frame gap 33 ms. Quest: resource 124,375 s, init wall p95 207,7 ms, event wall p95 4,1 ms, ACK максимум 25,2 ms, frame gap 44,8 ms, input delay максимум 17,9 ms. Init wall включает trusted prepare; максимальное guest init в 100-цикловом прогоне — Android 1,5 ms / Quest 4,7 ms, не превышение handler budget.
 
-Quest diagnostic scopes принимаются как положительное пользовательское evidence. Android sandbox/resource evidence положительное, но UI-отзывчивость во время нагрузки остаётся неподтверждённой; повторять Quest не требуется. Для Android нужен повтор обоих scopes с одним настоящим нажатием своей кнопки отклика во время каждого прогона. Общий T03 gate остаётся PENDING; opening author code и глобальный floor 2 этим не активируются.
+При первоначальном рассмотрении Quest diagnostic scopes приняты как положительное пользовательское evidence. Android sandbox/resource evidence положительное, но инструментальное DURING-наблюдение отсутствует. Первоначальный статус T03 — PENDING до повторного клика или явной ручной приёмки; это решение далее заменено пользовательской приёмкой.
 
 | Исходный файл | Bytes | SHA-256 |
 |---|---:|---|
@@ -466,6 +466,14 @@ Quest diagnostic scopes принимаются как положительное
 | `vrata-sandbox-device-report (2).json` (Quest) | 52242 | `4db6fba53862dbbd1dca277a4adcd64d8a8b1d8f6bcc1f78562826fecab8d3e1` |
 | `vrata-sandbox-resource-report.json` (Android) | 269122 | `4aeca73373f6bad8690a3d8811df74ca054cdd31c93e76a68238c00524baef69` |
 | `vrata-sandbox-resource-report (2).json` (Quest) | 266869 | `6733d767398431a051375c4deaff32e22fc8e564317e0ac446830a9552d0cc51` |
+
+### T03: ручная приёмка и закрытие
+
+**Решение от 2026-10-06: GO, T03 закрыт.** После рассмотрения четырёх отчётов пользователь явно поручил: «закрывай, считай что все работает». Положительные sandbox/resource результаты Android и полный PASS Quest принимаются вместе с этим подтверждением работоспособности. Отсутствие Android DURING-клика принято как ручное исключение; повторные прогоны не являются условием закрытия.
+
+Это ручное решение о приёмке, а не изменение измерений: исходные Android JSON сохраняют INCOMPLETE, duringClicks=0 и input delay=null; deviceGate=NOT_EVALUATED в экспортируемых отчётах остаётся фактическим машинным результатом. Недоступное измерение общей browser memory и отсутствие физического GC measurement не переименовываются в PASS. Решение относится к sandbox spike T03 опубликованного `9506de30b7f379e086c5db243dbbb398883693ae` с указанными выше лимитами и evidence.
+
+T01a/identity activation остаётся самостоятельной зависимостью author API. Эта приёмка не повышает global identity floor 1, не создаёт authority binding и не объявляет ещё не реализованные author upload/runtime broker/auto-seat завершёнными.
 
 ## Публикация первого среза T01/T12
 

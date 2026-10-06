@@ -112,7 +112,19 @@ Both report scopes always retain deviceGate=NOT_EVALUATED. Save model, OS,
 browser version, deployed SHA and physical-device provenance separately; the
 resource report complements the 37-scenario report and does not replace it.
 
-**T03 device gate remains open:** real Android/Quest latency, memory pressure and
-disposal must be checked before open author-code execution is activated. Browser
-device emulation cannot close that gate. Desktop results permit continuation of
-T04–T10 implementation, not publication of author upload as completed functionality.
+**T03 decision: GO, accepted on 2026-10-06.** Real-device reports cover Quest 2 /
+OculusBrowser 149 and Android Chrome 154 against the published
+9506de30b7f379e086c5db243dbbb398883693ae. Both completed all 37 fixed scenarios,
+100 dual-instance lifecycle cycles, the healthy sustained workload and both
+cumulative CPU stops. Quest reports include trusted DURING input and PASS.
+Android technical checks passed; its missing DURING click was explicitly accepted
+by the user through manual acceptance after reviewing the four reports.
+
+The Android exports remain INCOMPLETE with zero DURING clicks and null input delay;
+report deviceGate remains NOT_EVALUATED. This manual decision does not manufacture
+an input measurement, total-browser memory measurement or physical-GC proof.
+Evidence, source checksums and the acceptance decision are recorded in
+[the implementation journal](../reviews/2026-09-26-working-meeting-implementation.md#t03-ручная-приёмка-и-закрытие).
+Browser device emulation alone is not acceptance. Open author-code execution
+still requires the independent T01a identity prerequisite and T05/T07 checks;
+closing T03 does not activate the global identity floor or implement those paths.
