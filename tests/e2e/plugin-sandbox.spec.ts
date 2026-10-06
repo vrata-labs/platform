@@ -1,4 +1,5 @@
 import { test, expect, type Page, type BrowserContext } from "playwright/test";
+import { readFile } from "node:fs/promises";
 import type { ProbeResult } from "../../apps/runtime-web/src/plugins/probe.js";
 import type { ProbeFixture } from "../../apps/runtime-web/src/plugins/probe-fixtures.js";
 
@@ -11,6 +12,22 @@ async function openProbe(page: Page) {
 }
 async function run(page: Page, fixture: ProbeFixture): Promise<ProbeResult> {
   return page.evaluate((name) => window.pluginSandboxProbe.run(name), fixture);
+}
+async function trustedClickWithInvalidTimestamp(page: Page): Promise<void> {
+  const previous = await page.evaluateHandle(() => {
+    const descriptor = Object.getOwnPropertyDescriptor(Event.prototype, "timeStamp");
+    Object.defineProperty(Event.prototype, "timeStamp", { configurable: true, get: () => Number.NaN });
+    return descriptor;
+  });
+  try { await page.getByRole("button", { name: "Проверить отклик интерфейса" }).click(); }
+  finally {
+    try {
+      await page.evaluate((descriptor) => {
+        if (descriptor) Object.defineProperty(Event.prototype, "timeStamp", descriptor);
+        else Reflect.deleteProperty(Event.prototype, "timeStamp");
+      }, previous);
+    } finally { await previous.dispose(); }
+  }
 }
 function watchNetwork(context: BrowserContext) {
   const exfil: string[] = [];
@@ -46,6 +63,7 @@ test("real Worker boots transferred WASM under restricted production CSP; VM can
   const globals = await run(page, "globals");
   expect(globals.failure, JSON.stringify(globals)).toBeNull();
   expect(globals.state).toBe("disposed");
+  expect(globals.phase).toBe("complete");
   expect(globals.statuses).toEqual(["VM globals and network unavailable"]);
   expect(globals.wasmMemoryBytes).toBeGreaterThan(0);
   expect(await page.evaluate(() => (window as unknown as { hostCanary: string }).hostCanary)).toBe(canary);
@@ -77,6 +95,7 @@ test("catastrophic regex/native call terminates only its Worker while companion 
   const result = await hostile;
   expect(["worker_timeout", "execution_timeout"]).toContain(result.failure);
   expect(result.state, JSON.stringify(result)).toBe("failed");
+  expect(result.phase).toBe("event");
   expect(result.statuses).toEqual([]);
   // Separate, measured WASM buffers. This is not a whole-browser memory bound.
   expect(result.wasmMemoryBytes).toBeGreaterThan(0);
@@ -108,9 +127,13 @@ test("real Worker contains distinct malicious payload/job/getter/import probes w
     ["staticImport", ["guest_exception"]], ["dynamicImport", ["guest_exception"]], ["generatedImport", ["guest_exception"]]
   ];
   for (const [fixture, failures] of cases) {
+    // Independent test expectation. Discovery must not execute app/SDK code:
+    // staging verifies published assets without building a local runtime.
+    const expectedPhase = fixture === "eventLoop" ? "event" : fixture === "disposeLoop" ? "dispose" : "init";
     const result = await run(page, fixture);
     expect(failures, JSON.stringify(result)).toContain(result.failure);
     expect(result.state).toBe("failed");
+    expect(result.phase, JSON.stringify(result)).toBe(expectedPhase);
     expect(result.statuses).toEqual([]);
     if (["stack", "nativeJsonStack", "nativeJoinStack"].includes(fixture)) expect(result.exceptionHint, JSON.stringify(result)).toBe("stack_exhausted");
     if (fixture === "heap" || fixture === "heapLimit") {
@@ -139,6 +162,7 @@ test("compiled Worker boot respects measured 32KiB VM stack and bounded 48MiB me
     expect(result.failure, JSON.stringify(result)).toBe("guest_exception");
     expect(result.exceptionHint, JSON.stringify(result)).toBe(fixture === "heap" || fixture === "heapLimit" ? "memory_exhausted" : "stack_exhausted");
     expect(result.state).toBe("failed");
+    expect(result.phase, JSON.stringify(result)).toBe("init");
     expect(result.wasmMemoryBytes).toBeGreaterThanOrEqual(16 * 1024 * 1024);
     expect(result.wasmMemoryBytes).toBeLessThanOrEqual(48 * 1024 * 1024);
   }
@@ -150,6 +174,107 @@ test("compiled Worker boot respects measured 32KiB VM stack and bounded 48MiB me
   await testInfo.attach("stack-and-memory-measurements.json", {
     body: JSON.stringify({ limits, measurements, healthy }, null, 2), contentType: "application/json"
   });
+});
+
+test("manual Russian UI separates hostile PASS from plugin failed and exports a readable single-scenario report", async ({ page }) => {
+  await page.addInitScript((token) => {
+    localStorage.setItem("roomToken", token); sessionStorage.setItem("adminToken", token);
+    (window as unknown as { hostCanary: string }).hostCanary = token;
+  }, canary);
+  await openProbe(page);
+  await page.locator("#fixture").selectOption("loop");
+  await expect(page.locator("#purpose")).toContainText("init");
+  await expect(page.locator("#expected")).toContainText("failed здесь ожидаемо");
+  await page.getByRole("button", { name: "Запустить сценарий" }).click();
+  await expect(page.locator("#verdict")).toHaveText("PASS — 1 СЦЕНАРИЙ");
+  await expect(page.locator("#actual-code")).toContainText("Состояние плагина: failed");
+  await expect(page.locator("#actual")).toContainText("Изоляция сработала");
+  await page.locator("#fixture").selectOption("healthy");
+  await page.getByRole("button", { name: "Запустить сценарий" }).click();
+  await expect(page.locator("#actual-code")).toContainText("Состояние плагина: disposed");
+  await expect(page.locator("#verdict")).toHaveText("PASS — 1 СЦЕНАРИЙ");
+  const downloading = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Скачать JSON-отчёт" }).click();
+  const download = await downloading;
+  expect(download.suggestedFilename()).toBe("vrata-sandbox-device-report.json");
+  const json = await readFile((await download.path())!, "utf8");
+  expect(json).not.toContain(canary);
+  const report = JSON.parse(json);
+  expect(report.scope).toBe("single-scenario"); expect(report.verdict).toBe("PASS");
+  expect(report.deviceGate).toBe("NOT_EVALUATED"); expect(report.scenarios[0].result.fixture).toBe("healthy");
+});
+
+test("full suite requires a trusted visible DURING click and records concurrent companion ACKs", async ({ page }) => {
+  test.setTimeout(60000);
+  await openProbe(page);
+  await page.locator("#device-kind").selectOption("quest");
+  await page.getByRole("button", { name: "Проверить все сценарии" }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-suite-ready", "0");
+  await page.getByRole("button", { name: "Проверить отклик интерфейса" }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-suite-ready", "1");
+  await expect(page.locator("#verdict")).toHaveText("PASS — ПОЛНЫЙ ПРОГОН");
+  const report = await page.evaluate(() => window.pluginSandboxProbe.getReport());
+  expect(report?.expectedScenarios).toBe(37); expect(report?.scenarios).toHaveLength(37);
+  expect(report?.failed, JSON.stringify(report)).toBe(0);
+  expect(report?.continuity.verdict, JSON.stringify(report)).toBe("PASS");
+  expect(report?.companionOperations).toHaveLength(33);
+  expect(report?.continuity.measurements.maxLatencyMs).toBeLessThanOrEqual(500);
+  expect(report?.complete).toBe(true); expect(report?.ui.verdict).toBe("PASS");
+  expect(report?.ui.measurements.clickPhase).toBe("during-suite");
+  expect(report?.ui.measurements.visibleDuringClicks).toBeGreaterThan(0);
+  expect(report?.ui.measurements.maxFrameGapMs).toBeGreaterThanOrEqual(0);
+  expect(report?.ui.measurements.maxInputDelayMs).toBeGreaterThanOrEqual(0);
+  expect(report?.deviceGate).toBe("NOT_EVALUATED");
+  expect(await page.evaluate(() => window.pluginSandboxProbe.snapshot().activeInstances)).toBe(0);
+  await expect(page.getByRole("button", { name: "Скачать JSON-отчёт" })).toBeEnabled();
+  // Real browser-trusted AFTER click, deliberately invalid timestamp. Completed
+  // DURING measurements/verdict/time must not be re-evaluated from this input.
+  await trustedClickWithInvalidTimestamp(page);
+  const after = await page.evaluate(() => window.pluginSandboxProbe.getReport());
+  const { trustedClicks, afterClicks, ...duringMeasurements } = report!.ui.measurements;
+  const { trustedClicks: trustedAfter, afterClicks: afterCount, ...preservedMeasurements } = after!.ui.measurements;
+  expect(preservedMeasurements).toEqual(duringMeasurements);
+  expect(trustedAfter).toBe(Number(trustedClicks) + 1);
+  expect(afterCount).toBe(Number(afterClicks) + 1);
+  expect(after?.completedAt).toBe(report?.completedAt);
+  expect(after?.ui.verdict).toBe(report?.ui.verdict);
+  expect(after?.verdict).toBe(report?.verdict);
+  expect(after?.complete).toBe(report?.complete);
+});
+
+test("Quest UA and after-suite/synthetic clicks cannot manufacture during responsiveness", async ({ page }) => {
+  test.setTimeout(60000);
+  await openProbe(page);
+  await page.locator("#device-kind").selectOption("quest");
+  await page.getByRole("button", { name: "Проверить все сценарии" }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-suite-ready", "1");
+  const before = await page.evaluate(() => window.pluginSandboxProbe.getReport());
+  await page.evaluate(() => document.getElementById("ui-button")!.click());
+  await trustedClickWithInvalidTimestamp(page);
+  const report = await page.evaluate(() => window.pluginSandboxProbe.getReport());
+  expect(report?.failed, JSON.stringify(report)).toBe(0);
+  expect(report?.ui.verdict).toBe("PENDING"); expect(report?.verdict).toBe("INCOMPLETE");
+  expect(report?.ui.measurements.duringClicks).toBe(0); expect(report?.ui.measurements.afterClicks).toBe(1);
+  expect(report?.ui.measurements.maxInputDelayMs).toBe(before?.ui.measurements.maxInputDelayMs);
+  expect(report?.ui.measurements.invalidInputTimestamps).toBe(before?.ui.measurements.invalidInputTimestamps);
+  expect(report?.completedAt).toBe(before?.completedAt);
+  expect(report?.deviceGate).toBe("NOT_EVALUATED");
+  await expect(page.locator("#verdict")).toHaveText("ОТЧЁТ НЕПОЛНЫЙ");
+});
+
+test("simulated hidden document fails UI evidence even with a browser-trusted during click", async ({ page }) => {
+  test.setTimeout(60000);
+  await page.addInitScript(() => Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "hidden" }));
+  await openProbe(page);
+  await page.getByRole("button", { name: "Проверить все сценарии" }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-suite-ready", "0");
+  await page.getByRole("button", { name: "Проверить отклик интерфейса" }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-suite-ready", "1");
+  const report = await page.evaluate(() => window.pluginSandboxProbe.getReport());
+  expect(report?.ui.verdict).toBe("FAIL"); expect(report?.verdict).toBe("FAIL");
+  expect(report?.ui.measurements.startedVisible).toBe(false);
+  expect(report?.deviceGate).toBe("NOT_EVALUATED");
+  await expect(page.locator("#verdict")).toHaveText("FAIL — ТРЕБУЕТСЯ РАЗБОР");
 });
 });
 }

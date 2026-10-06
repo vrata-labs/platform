@@ -27,6 +27,7 @@ async function command(message: WorkerCommand): Promise<void> {
       const approvedCapabilities = validateRoomPluginCapabilities(message.approvedCapabilities);
       prepared = true;
       const module = await createPluginQuickJS(message.wasm);
+      PluginVm.warmup(module);
       instance = new PluginVm(module, { approvedCapabilities });
       instance.prepare();
       scope.postMessage({ version: 1, type: "prepared", id, wasmMemoryBytes: module.getWasmMemory().buffer.byteLength });

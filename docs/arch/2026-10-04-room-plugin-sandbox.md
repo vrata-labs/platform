@@ -52,6 +52,29 @@ message floods, poisoned primordials, getters, large results and forbidden
 imports. A healthy companion and the page remain responsive during failure.
 The same four scenarios are registered for local and published staging runs.
 
+The manual probe now labels each fixed scenario in Russian, shows its purpose
+and expected outcome, and separates the PASS/FAIL verdict from the plugin's
+state. A hostile instance is expected to enter failed; healthy, globals and
+primordial-tamper instances must complete without a failure. Matching codes on
+the wrong init/event/dispose phase do not pass. Import observations do not by
+themselves prove the cause of denial or replace automatic network/CSP checks.
+
+One-button full runs cover all fixed fixtures and record concurrent companion
+ACKs, visible frame samples/gaps and browser-trusted input during the run.
+After-run clicks cannot close during-responsiveness or mutate its finished delay
+measurements. The downloadable whitelist JSON contains no room credentials,
+private context or arbitrary guest output. Manual device category/UA is
+provenance, not automatic proof of the full device gate. A slow healthy init is
+FAIL, not an expected hostile stop; the VM budget is not raised to hide it.
+
+Cold-first-use profiling exposed startup work entering the guest 50 ms budget.
+Trusted prepare now warms fixed ESM/FFI/Promise/status paths in a separate
+context/runtime under the existing 3 s prepare deadline, then fully destroys
+that realm. Guest callbacks, approvals, requests and execution counters are
+never reused. The guest heap/stack/linear-memory/50 ms/watchdog limits remain
+unchanged. Real Chromium profiling after the change observed 120 healthy/globals
+initializations without timeout; this observation is not a device guarantee.
+
 DEBUG_SYNC leak checks run 100 lifecycle cycles and hostile failures. Instrumented
 debug execution needs a 64 KiB stack; this checks handle ownership, not acceptance
 of the production release stack. Browser timings and WASM buffer sizes are probe

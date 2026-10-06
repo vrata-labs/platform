@@ -117,12 +117,29 @@ jobs:
           git -C .identity-boundary-rollback diff --exit-code HEAD
           pnpm --dir .identity-boundary-rollback --filter @vrata/shared-types --filter @vrata/templates --filter @vrata/asset-pipeline --filter @vrata/api build
 
+      - name: Checkout pinned plugin rollback base
+        uses: actions/checkout@v4
+        with:
+          repository: vrata-labs/platform
+          ref: 81c14b6ac8dbc537892f7b1f342ca8f718fdf0a6
+          path: .plugin-rollback
+
+      - name: Build plugin rollback base
+        run: |
+          pnpm --dir .plugin-rollback install --frozen-lockfile
+          chmod 644 .plugin-rollback/packages/asset-pipeline/bin/vrata.mjs
+          git -C .plugin-rollback diff --exit-code HEAD
+          # HTTP room entry also needs the pinned runtime's index.html and SDK build.
+          pnpm --dir .plugin-rollback --filter @vrata/shared-types --filter @vrata/templates --filter @vrata/asset-pipeline --filter @vrata/room-plugin-sdk --filter @vrata/runtime-web --filter @vrata/api build
+
       - name: Test
+        # Plugin rollback is checked out independently: the main checkout may be shallow.
         env:
           VRATA_TEST_POSTGRES_URL: postgres://postgres:postgres@127.0.0.1:5432/vrata_test
           VRATA_TEMPLATE_ROLLBACK_STORAGE_MODULE: ${{ github.workspace }}/.template-rollback/apps/api/dist/storage.js
           VRATA_IDENTITY_ROLLBACK_API_ENTRY: ${{ github.workspace }}/.identity-rollback/apps/api/dist/index.js
           VRATA_BOUNDARY_ROLLBACK_STORAGE_MODULE: ${{ github.workspace }}/.identity-boundary-rollback/apps/api/dist/storage.js
+          VRATA_PLUGIN_ROLLBACK_STORAGE_MODULE: ${{ github.workspace }}/.plugin-rollback/apps/api/dist/storage.js
         run: pnpm test
 
       - name: Install Playwright browser

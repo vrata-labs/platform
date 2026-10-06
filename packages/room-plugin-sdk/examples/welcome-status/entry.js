@@ -1,3 +1,4 @@
+/*! SPDX-License-Identifier: Apache-2.0; Copyright 2026 Vrata contributors. License: https://www.apache.org/licenses/LICENSE-2.0 */
 // @ts-check
 // This is already a single ES2020 module. JSDoc imports are erased, not runtime imports.
 
@@ -12,7 +13,7 @@ export function init(context) {
  */
 export function onEvent(event, context) {
   if (event.type === "room.ready") {
-    const greeting = typeof context.config.greeting === "string" ? context.config.greeting : "Welcome";
+    const greeting = typeof context.config["greeting"] === "string" ? context.config["greeting"] : "Welcome";
     return context.sdk.status.set(greeting);
   }
   if (event.type === "room.connection" && event.state !== "connected") {

@@ -21,6 +21,10 @@ export async function serveStatic(response: ServerResponse, filePath: string): P
   response.writeHead(200, {
     "content-type": contentType(normalized),
     "content-length": String(metadata.size),
+    ...(extname(normalized).toLowerCase() === ".tgz" ? {
+      "content-disposition": `attachment; filename="${basename(normalized).replace(/[^A-Za-z0-9._-]+/g, "-")}"`,
+      "x-content-type-options": "nosniff"
+    } : {}),
     ...(/^(?:room-plugin-worker)-[A-Za-z0-9_-]{8,}\.js$/.test(basename(normalized)) ? {
       "content-security-policy": "default-src 'none'; script-src 'wasm-unsafe-eval'; connect-src 'none'; worker-src 'none'; base-uri 'none'",
       "cross-origin-resource-policy": "same-origin",

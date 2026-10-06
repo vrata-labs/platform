@@ -83,6 +83,7 @@ import { serveStatic, json, text, attachment } from "./http-responses.js";
 import { createApiMetrics, incrementCounter } from "./api-metrics.js";
 
 import { createUploadStorageConfig } from "./upload-storage-config.js";
+import { configuredRoomPluginBlobStorage, deleteRoomWithPluginCleanup, roomPluginDeletionFailure, isRoomDeletionRequest } from "./plugins/index.js";
 
 import {
   trimSlashes,
@@ -3450,7 +3451,17 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     const roomId = decodeURIComponent(roomItemMatch[1]);
     const actor = await requireControlPlanePermission(request, response, { permission: "room.delete", action: "room.delete", objectType: "room", objectId: roomId });
     if (!actor) return;
-    const deleted = await storage.deleteRoom(roomId);
+    const room = await storage.getRoom(roomId);
+    if (!room) return json(response, 404, { error: "room_not_found" });
+    let deleted: boolean;
+    try {
+      deleted = await deleteRoomWithPluginCleanup(storage, { tenantId: room.tenantId, roomId },
+        () => configuredRoomPluginBlobStorage(runtimePublicRoot, request, publicBaseUrlFromRequest));
+    } catch (error) {
+      const failure = roomPluginDeletionFailure(error);
+      if (failure) return json(response, failure.status, { error: failure.code });
+      throw error;
+    }
     if (!deleted) return json(response, 404, { error: "room_not_found" });
     json(response, 200, { ok: true, roomId });
     return;
@@ -3845,6 +3856,7 @@ export function startApiServer(port = apiPort) {
         return;
       }
       const requestId = attachRequestId(request, response);
+      const roomDeletionFailure = isRoomDeletionRequest(request.method, request.url);
       metrics.requestFailuresTotal += 1;
       logEvent({
         service: "api",
@@ -3854,10 +3866,10 @@ export function startApiServer(port = apiPort) {
         errorCode: "internal_error",
         path: request.url ?? "",
         method: request.method ?? "GET",
-        message: error instanceof Error ? error.message : "unknown",
+        message: roomDeletionFailure ? "room_delete_failed" : error instanceof Error ? error.message : "unknown",
         timestamp: new Date().toISOString()
       });
-      json(response, 500, { error: "internal_error", message: error instanceof Error ? error.message : "unknown" });
+      json(response, 500, roomDeletionFailure ? { error: "internal_error" } : { error: "internal_error", message: error instanceof Error ? error.message : "unknown" });
     });
   });
   return server.listen(port, () => {

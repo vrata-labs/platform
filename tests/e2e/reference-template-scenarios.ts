@@ -190,16 +190,26 @@ test("reference presentation applies join-muted defaults and restores rendered P
   } finally { await context.close(); }
 });
 
-test("reference meeting synchronizes only declared surfaces across two participants", async ({ page, request, browser }) => {
+test("reference meeting synchronizes only declared surfaces across two participants", async ({ request, browser }) => {
   const room = await create(request, "meeting-room-basic");
   const hostUrl = new URL(await hostLink(request, room.roomId));
   if (staging) hostUrl.searchParams.set("audiomock", "1");
-  await join(page, hostUrl.href);
-  await captureReferenceView(page, "meeting-spawn");
-  const context = await browser.newContext({ viewport: { width: 640, height: 400 } });
+  // Keep the 640x400 UI while bounding both software-rendered drawing buffers.
+  // This functional capture is not the scene's visual-quality benchmark.
+  const viewport = { width: 640, height: 400 };
+  const deviceScaleFactor = 0.5;
+  const page = await browser.newPage({ viewport, deviceScaleFactor });
+  const observer = await browser.newPage({ viewport, deviceScaleFactor });
   try {
-    const observer = await context.newPage();
+    await join(page, hostUrl.href);
+    await captureReferenceView(page, "meeting-spawn");
     await join(observer, `${room.roomLink}?debug=1&scenefit=0&onboard=0${staging ? "&audiomock=1" : ""}`);
+    for (const client of [page, observer]) {
+      expect(await client.evaluate(() => {
+        const canvas = document.querySelector<HTMLCanvasElement>("#scene canvas");
+        return [innerWidth, innerHeight, devicePixelRatio, canvas?.width, canvas?.height];
+      })).toEqual([640, 400, 0.5, 320, 200]);
+    }
     expect(await page.evaluate(() => (window as any).__VRATA_TEST__.createWhiteboardObject("whiteboard-wall"))).toBe(true);
     await expect.poll(() => observer.evaluate(() => (window as any).__VRATA_DEBUG__?.mediaObjects?.surfaces.find((s: any) => s.surfaceId === "whiteboard-wall")?.activeObjectType), { timeout: 15000 }).toBe("whiteboard");
     const surfaces = await page.evaluate(() => (window as any).__VRATA_DEBUG__.mediaObjects.surfaces.map((s: any) => s.surfaceId).sort());
@@ -215,7 +225,7 @@ test("reference meeting synchronizes only declared surfaces across two participa
       }), { timeout: 45000 }).toEqual({ subscribed: 1, spatial: true });
     }
     for (let seat = 1; seat <= 8; seat++) await verifySeat(page, `seat-${String(seat).padStart(2, "0")}`, observer);
-  } finally { await context.close(); }
+  } finally { await Promise.all([page.close(), observer.close()]); }
 });
 
 if (staging) test("reference presentation receives moving screen-share frames through the real media transport", async ({ request, playwright }) => {

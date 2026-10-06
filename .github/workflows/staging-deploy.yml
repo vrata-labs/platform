@@ -322,6 +322,12 @@ jobs:
             echo "forced_gate_failure" >&2
             exit 1
           fi
+          # Source is checked out at deploy_sha: older supported rollback images
+          # have no plugin storage. For a target that implements it, a missing
+          # compiled verifier or failed private policy must fail this same gate.
+          if [ -f apps/api/src/plugins/verify-private-storage.ts ]; then
+            ssh -o StrictHostKeyChecking=no "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo bash -lc 'docker compose --env-file \"$STAGING_APP_DIR/infra/docker/.env.staging\" -f \"$STAGING_APP_DIR/infra/docker/compose.staging.yml\" exec -T -w /app api node apps/api/dist/plugins/verify-private-storage.js'"
+          fi
           pnpm test:e2e:staging
           if [ "$RUTUBE_BLOCKING" = "true" ]; then
             PLAYWRIGHT_REPORT_NAME=staging-rutube-blocking pnpm test:e2e:rutube

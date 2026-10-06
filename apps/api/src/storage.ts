@@ -69,6 +69,9 @@ import { assertV2InviteInput } from "./identity/invite-policy.js";
 import { assertActorSession } from "./identity/authority.js";
 import { IdentityStorageError, type RoomIdentityRecord } from "./identity/contracts.js";
 import { createMemoryIdentityProtocol, createPostgresIdentityProtocol } from "./identity/protocol.js";
+import { createMemoryRoomPlugins } from "./plugins/memory.js";
+import { createPostgresRoomPlugins, preparePostgresRoomPluginRemoval } from "./plugins/postgres.js";
+import { installRoomPluginSchema } from "./plugins/postgres-schema.js";
 
 export { initPostgresStorageWithRetry } from "./storage-init-retry.js";
 
@@ -197,6 +200,8 @@ export class MemoryStorage implements Storage {
   readonly identityProtocol: Storage["identityProtocol"] = this.identityPolicy;
   readonly roomIdentities: Storage["roomIdentities"];
   readonly reserveIdentityAdmission: Storage["reserveIdentityAdmission"];
+  private readonly pluginAdapter = createMemoryRoomPlugins(roomId => this.rooms.get(roomId));
+  readonly roomPlugins: Storage["roomPlugins"] = this.pluginAdapter.storage;
   constructor(private readonly identityNow = Date.now) {
     this.reserveIdentityAdmission = createMemoryAdmissionBudget(identityNow);
     this.identityAdapter = createMemoryRoomIdentities(roomId => this.rooms.get(roomId), identityNow,
@@ -440,7 +445,10 @@ export class MemoryStorage implements Storage {
     this.rooms.set(roomId, structuredClone(updated));
     return structuredClone(updated);
   }
-  async deleteRoom(roomId: string): Promise<boolean> {
+  async deleteRoom(roomId: string, pluginDeletion?: { tenantId: string; deletionId: string }): Promise<boolean> {
+    const room = this.rooms.get(roomId);
+    if (room && pluginDeletion && room.tenantId !== pluginDeletion.tenantId) return false;
+    if (room) this.pluginAdapter.assertRoomDeletable({ tenantId: room.tenantId, roomId }, pluginDeletion?.deletionId);
     this.identityAdapter.deleteRoom(roomId);
     return this.rooms.delete(roomId);
   }
@@ -796,6 +804,7 @@ export class MemoryStorage implements Storage {
 }
 
 export class PostgresStorage implements Storage {
+  readonly roomPlugins: Storage["roomPlugins"];
   readonly roomIdentities: Storage["roomIdentities"];
   readonly identityProtocol: Storage["identityProtocol"];
   readonly reserveIdentityAdmission: Storage["reserveIdentityAdmission"];
@@ -804,6 +813,7 @@ export class PostgresStorage implements Storage {
     this.reserveIdentityAdmission = createPostgresAdmissionBudget(pool, identityNow);
     this.roomIdentities = createPostgresRoomIdentities(pool, identityNow);
     this.identityProtocol = createPostgresIdentityProtocol(pool);
+    this.roomPlugins = createPostgresRoomPlugins(pool);
   }
   private get effectDatabase(): Pool | PoolClient { return this.effectClient ?? this.pool; }
   async releasePersonalRoomOwnerResponse(proof: RoomIdentityCredential, send: (room: RoomRecord, identity: RoomIdentityRecord) => undefined): Promise<void> {
@@ -1101,6 +1111,7 @@ export class PostgresStorage implements Storage {
     await client.query(`update rooms set session_control = '${DEFAULT_SESSION_CONTROL_JSON}'::jsonb where session_control is null`);
     await client.query(`update rooms set session_control = '${DEFAULT_SESSION_CONTROL_JSON}'::jsonb || session_control`);
     await installRoomIdentitySchema(client);
+    await installRoomPluginSchema(client);
     await client.query(`alter table scene_bundles add column if not exists status text not null default 'active'`);
     await client.query(`alter table scene_bundles add column if not exists is_current boolean not null default true`);
     await client.query(`alter table scene_bundles add column if not exists schema_version integer`);
@@ -1632,9 +1643,15 @@ export class PostgresStorage implements Storage {
     updated.personalState = defaultPersonalState(result.rows[0]?.personal_state ?? updated.personalState);
     return updated;
   }
-  async deleteRoom(roomId: string): Promise<boolean> {
-    const result = await this.pool.query(`delete from rooms where room_id = $1`, [roomId]);
-    return (result.rowCount ?? 0) > 0;
+  async deleteRoom(roomId: string, pluginDeletion?: { tenantId: string; deletionId: string }): Promise<boolean> {
+    return roomFenceTransaction(this.pool, {}, async client => {
+      const room = (await client.query("select tenant_id from rooms where room_id=$1 for update", [roomId])).rows[0];
+      if (!room) return false;
+      if (pluginDeletion && room.tenant_id !== pluginDeletion.tenantId) return false;
+      await preparePostgresRoomPluginRemoval(client, { tenantId: room.tenant_id, roomId }, pluginDeletion?.deletionId);
+      const result = await client.query("delete from rooms where room_id=$1", [roomId]);
+      return (result.rowCount ?? 0) > 0;
+    });
   }
   async createRoomInvite(input: Omit<RoomInviteRecord, "inviteId" | "createdAt" | "revokedAt" | "revokedBy"> & { inviteId?: string; createdAt?: string }): Promise<RoomInviteRecord> {
     if (input.protocolVersion === 2) throw new IdentityStorageError("identity_forbidden");

@@ -14,6 +14,17 @@ export interface VmTurn {
 }
 export interface VmOptions { clock?: () => number; approvedCapabilities: readonly RoomPluginCapability[] }
 
+// Fixed platform program, never supplied by an author or room. It exercises the
+// ESM/FFI, Promise-job and bounded status serializer paths in a disposable realm.
+const TRUSTED_PREPARE_MODULE = `
+  export function init(context) { return context.sdk.status.set("trusted prepare init"); }
+  export async function onEvent(event, context) {
+    await Promise.resolve();
+    await context.sdk.status.set("trusted prepare event");
+  }
+  export function dispose() {}
+`;
+
 /** One QuickJS runtime/context per instance. Only bounded strings produced by
  * retained trusted closures may cross the VM boundary; never unwrapResult/dump.
  */
@@ -32,6 +43,41 @@ export class PluginVm {
   private interrupted?: SandboxFailure;
   private bootstrapping = false;
   private readonly approvedCapabilities: readonly RoomPluginCapability[];
+
+  static warmup(module: Pick<QuickJSWASMModule, "newContext" | "getWasmMemory">): void {
+    const warm = new PluginVm(module, { approvedCapabilities: ["status.set"] });
+    try { warm.prepare(); warm.prepareNativePaths(); }
+    finally { warm.close(); }
+  }
+
+  private prepareNativePaths(): void {
+    // Keep prepare's original start/deadline: this is not another guest turn and
+    // cannot extend the existing trusted prepare budget. No guest callbacks or
+    // host effects are reused; static warmup destroys this whole context/runtime.
+    this.active = this.bootstrapping = true;
+    try {
+      this.guard();
+      this.withStrings(["{}"], ([json]) => this.call("configure", [json, this.vm.true]).dispose());
+      this.begin();
+      const namespace = this.result(this.vm.evalCode(TRUSTED_PREPARE_MODULE, "trusted-prepare.mjs", { type: "module" }));
+      try { this.settled(namespace, (exports) => this.call("bind", [exports]).dispose()); }
+      finally { namespace.dispose(); }
+      for (const name of ["init", "onEvent", "dispose"]) {
+        const result = this.invoke(name);
+        try { this.settled(result, (value) => this.call("validateReturn", [value]).dispose()); }
+        finally { result.dispose(); }
+        this.drain();
+        this.checkStickyFailure();
+        const collected = this.call("collect");
+        try {
+          // Trusted program + the same budgeted VM serializer, never guest dump.
+          const requests = JSON.parse(this.vm.getString(collected)) as string[];
+          for (const request of requests) parseRoomPluginRequest(request);
+        } finally { collected.dispose(); }
+        this.guard();
+      }
+    } finally { this.active = this.bootstrapping = false; }
+  }
 
   constructor(private readonly module: Pick<QuickJSWASMModule, "newContext" | "getWasmMemory">, options: VmOptions) {
     try { this.approvedCapabilities = validateRoomPluginCapabilities(options?.approvedCapabilities); }

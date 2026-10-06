@@ -24,7 +24,10 @@ Published type exports point to `dist/*.d.ts` through `publishConfig`; external
 authors type-check declarations instead of compiling the SDK implementation
 with their own flags. The public declarations need only ES2022 types, not DOM
 or Node ambient types. The artifact implementation still requires Node >=22
-at runtime. Both workspace and published JavaScript exports point to `dist/*.js`.
+at runtime. Workspace and published ESM/default exports point to `dist/*.js`;
+the explicit require condition uses the separate `dist/commonjs/*.js` graph.
+This prevents CJS transforms from being reused for ESM imports of the same file
+in mixed loaders such as Playwright. The package build generates both graphs.
 
 The future CLI and author API must both use `validateRoomPluginArtifact` with
 original bytes, rather than independently validating or reserializing an upload.
@@ -208,7 +211,84 @@ belong to authenticated storage/API, independently of validation.
 compatibility. Missing support means normal entry/manual seating, not permission
 to run unvalidated code. Existing media-extension contracts are independent.
 
-## Build, test and standalone example
+## External CLI
+
+Install the SDK tarball in an independent author project. Release metadata at
+`/assets/plugin-sdk/releases.json` provides `package`, `version`, `sha256` and
+`url`. The immutable download URL is identified by SDK version and archive
+content hash; `sha256` covers the downloaded tarball bytes. Verify that SHA-256
+before installing the file. This distribution needs no private workspace or npm publication
+credentials. Public registry dependencies are pinned: Acorn 8.18.0 and esbuild
+0.25.12, including esbuild's platform-specific executable.
+
+```sh
+npm install --ignore-scripts /absolute/path/to/vrata-room-plugin-sdk-0.1.0.tgz
+./node_modules/.bin/vrata-room-plugin bundle --entry src/entry.ts --out entry.bundle.mjs
+./node_modules/.bin/vrata-room-plugin pack --manifest manifest.json --entry entry.bundle.mjs --out example.vrata-plugin.json
+./node_modules/.bin/vrata-room-plugin validate example.vrata-plugin.json
+./node_modules/.bin/vrata-room-plugin --help
+```
+
+Bundle's default project boundary is the **realpath of the current working
+directory**, not the entry's directory. Run from the author project root so
+`src/entry.ts` can import sibling `node_modules`. From another directory, choose
+the boundary explicitly with `bundle --entry <file> --out <file> --root <project>`;
+file arguments remain relative to cwd. Entry and every loaded dependency must
+resolve inside that canonical root. Absolute/relative escapes, escaping symlinks,
+out-of-root package main targets and ancestor node_modules fallback are rejected
+before source inclusion. The resolver checks only named package candidates on
+the importer-to-root chain; it does not search the disk. A filesystem-root cwd
+requires explicit --root. Choose a narrow author directory; --root is the user's
+explicit filesystem access choice, not a VM authority grant.
+
+Use `manifest.json` with the artifact manifest fields **except entrySha256**;
+pack computes that checksum. Bundle accepts JS/TS entry files and statically
+resolvable local JS/TS/JSON dependencies, with fixed neutral ESM / ES2020 output.
+Conditional exports follow each import site's kind: import uses import and
+CommonJS require uses require. No custom module/browser/node conditions are enabled.
+For legacy dual packages without exports, ESM imports retain module selection;
+bare-root require prefers main. Main-only/module-only packages, scoped package
+subpaths and exports maps remain with esbuild's native resolution. Legacy metadata
+reads are bounded to 32 KiB and 128 packages and use the same canonical root guards.
+All executable dependencies are bundled; SDK type-only imports disappear. Author
+tsconfig/build plugins, package install/prepare scripts, remote imports, source
+maps, archives and assets are not build inputs supported by this CLI. Dynamic
+imports left in output fail the shared module validator. Node-only globals and
+computed require are not a supported VM API. Static validation is still not a
+sandbox guarantee; native execution of artifact code remains forbidden.
+
+The compiler never executes author JavaScript. Only the author-local `bundle`
+command loads esbuild. API `validateRoomPluginArtifact` neither runs this CLI nor
+installs dependencies, invokes build scripts or fetches anything. Pack and validate
+use the existing shared artifact validator, including exact-byte hashes.
+
+Input files must be regular local files: manifest <=32 KiB, entry/bundled module
+and artifact <=1 MiB; each loaded dependency <=1 MiB, total source <=8 MiB and
+<=128 source files. Reads check stat size before allocation and enforce the limit
+while reading; UTF-8 decoding is fatal. The entry uses its actual canonical file
+identity, so cyclic imports share live exports instead of creating a second
+virtual entry module. Canonical source bytes are cached; source-count quota is
+charged before a new load, and serialized reads check the remaining aggregate
+budget before allocation. Artifact/config/message limits remain
+the SDK contract's existing limits. Output directories must already exist.
+Only explicit --out files are written, by same-directory temporary file + atomic
+rename after validation. Existing regular outputs can be replaced; symlinks and
+directories are rejected. Identical source/dependency trees with the pinned
+compiler produce identical bundle/artifact bytes across project locations.
+
+Each invocation writes one JSON record to stdout. Success contains command,
+hashes and byte counts; failures contain only a stable error.code, without source,
+manifest props, filenames, exception text or stack traces. Exit codes:
+
+| Exit | Meaning | Example codes |
+| --- | --- | --- |
+| 0 | Success / --help | — |
+| 2 | Usage or nonlocal input path | cli_usage, local_path_required, explicit_root_required |
+| 3 | Rejected input/artifact | SDK validation codes, source_outside_root, dependency_not_local, manifest_too_large, package_manifest_too_large, entry_too_large, source_graph_too_large, unsupported_entry_type, unsupported_source_type |
+| 4 | File I/O | io_error, input_not_regular, output_not_regular, root_not_directory |
+| 5 | Compiler/tool failure | bundle_failed, bundler_version_mismatch, internal_error |
+
+## Build, test and standalone examples
 
 Workspace dependencies are installed through pnpm and the shared lockfile.
 Package checks compile before testing built files:
@@ -227,13 +307,42 @@ pnpm --dir packages/room-plugin-sdk pack --pack-destination /absolute/existing/o
 pnpm applies the published declaration overrides. npm pack does not apply these
 overrides and is not the SDK release packaging command. The package tests inspect
 the real pnpm tarball's manifest and exported files to enforce this contract.
-Copy
-`examples/welcome-status` to a directory outside the monorepo and install the
-SDK tarball with `npm install --ignore-scripts /path/to/vrata-room-plugin-sdk-0.1.0.tgz`.
-Then `npm run build` writes and revalidates
-`welcome-status.vrata-plugin.json`, printing its exact hash/size. A valid, deterministic
-artifact is also checked in beside the source and compared in the package tests. It needs only
-the public SDK; its JavaScript has no executable imports or platform-specific
-build scripts. Artifact reproducibility/validation can be tested independently
-of the eventual QuickJS runtime. Publication and live execution are integration
-tasks, not effects of building this example.
+
+Copy either `examples/welcome-status` or `examples/auto-seat` to a fresh directory
+outside the monorepo. Download/copy the verified SDK tarball into that project as
+`vrata-room-plugin-sdk-0.1.0.tgz` **before install**. Both manifests depend on
+`file:./vrata-room-plugin-sdk-0.1.0.tgz`, so a missing tarball fails locally instead
+of querying the registry for an unrelated SDK package. Then run from that project:
+
+```sh
+npm install --ignore-scripts
+npm run build
+```
+
+Each project's explicit author build invokes the public CLI bundle/pack/validate
+commands and produces `entry.bundle.mjs` and one `.vrata-plugin.json` file. It
+uses only the installed SDK, never runtime-web or private platform source. Both
+checked-in artifacts are reproduced by the CLI integration tests.
+
+- **welcome-status**: a multilingual configurable greeting through status.set.
+- **auto-seat scaffold**: starts only on room.ready with arrivalAllowed, preserves
+  an existing own seat, rotates a stable seat-ID ordering by a deterministic hash
+  of the binding-scoped own alias, tries at most 8 different candidates and a
+  5-second arrival window. Busy requires a newer seating snapshot before retry.
+  Disconnect/dispose invalidates pending callbacks and cancels only own pending
+  claims. It never emits pose, release-confirmed-seat, participantId or authority
+  commands. The broker must enforce authenticated readiness, real anchors,
+  generation/lease, manual veto and no arrival grant in XR. Unsupported/denied
+  seating produces no seating action and a plain status when status is available.
+
+The scaffold has no timer facade: it checks the deadline on each event/reply;
+the host broker/supervisor independently enforces expiry and response deadlines.
+This is author scaffolding for the T09/T10 adapter, not a claim that current
+seating execution is available. Dynamic VM execution, UI upload and concurrent
+seating acceptance remain the T08/T16 and T10 integration gates, as defined by
+the plan; artifact build/validation is the T06 gate.
+
+SDK and both sample sources/content are Apache-2.0. The SDK includes the full
+LICENSE; each sample includes its license notice, and generated entry code
+retains an SPDX/license comment. Authors bundling third-party code must retain
+that code's own license notices; the CLI preserves recognized inline legal comments.

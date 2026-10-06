@@ -1,4 +1,7 @@
 import { defineConfig } from "playwright/test";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const baseUrlPort = process.env.BASE_URL ? new URL(process.env.BASE_URL).port : "";
 const apiPort = (process.env.E2E_API_PORT ?? process.env.API_PORT ?? baseUrlPort) || "4000";
@@ -12,6 +15,30 @@ const remoteBrowserUrl = `ws://127.0.0.1:${remoteBrowserPort}`;
 const allowedOrigins = `${baseUrlOrigin},http://localhost:${apiPort},http://127.0.0.1:${apiPort}`;
 const useWebServer = process.env.PLAYWRIGHT_NO_WEB_SERVER !== "1";
 const reportName = process.env.PLAYWRIGHT_REPORT_NAME ?? "e2e";
+const shellQuote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+const serverNode = shellQuote(process.execPath);
+const serverLogRoot = useWebServer ? mkdtempSync(join(tmpdir(), "vrata-e2e-services-")) : "";
+const serviceLog = (name: string) => shellQuote(join(serverLogRoot, `${name}.log`));
+const localServerEnv = {
+  VRATA_DISABLE_AUTOSTART: "0",
+  API_PORT: apiPort,
+  ROOM_STATE_PORT: roomStatePort,
+  REMOTE_BROWSER_PORT: remoteBrowserPort,
+  CONTROL_PLANE_ADMIN_TOKEN: "test-admin-token",
+  FEATURE_AVATAR_POSE_BINARY: "true",
+  REMOTE_BROWSER_INTERNAL_URL: `http://127.0.0.1:${remoteBrowserPort}`,
+  REMOTE_BROWSER_PUBLIC_URL: remoteBrowserUrl,
+  VRATA_INTERNAL_SERVICE_TOKEN: "test-internal-token",
+  API_INTERNAL_URL: apiInternalUrl,
+  ROOM_STATE_INTERNAL_URL: `http://127.0.0.1:${roomStatePort}`,
+  ROOM_STATE_PUBLIC_URL: roomStateUrl,
+  DOCUMENT_LOCAL_UPLOAD_ROOT: process.env.DOCUMENT_LOCAL_UPLOAD_ROOT ?? "/tmp/vrata-e2e-documents",
+  SCENE_BUNDLE_LOCAL_UPLOAD_ROOT: process.env.SCENE_BUNDLE_LOCAL_UPLOAD_ROOT ?? "/tmp/vrata-e2e-scene-bundles",
+  REMOTE_BROWSER_VIEWPORT_MOCK: "1",
+  REMOTE_BROWSER_ALLOWED_ORIGINS: allowedOrigins,
+  REMOTE_BROWSER_ALLOW_PRIVATE_ALLOWED_ORIGINS: "true"
+};
+if (useWebServer) console.info(`[e2e] service logs: ${serverLogRoot}`);
 
 process.env.E2E_ROOM_STATE_PUBLIC_URL ??= roomStateUrl;
 
@@ -35,28 +62,15 @@ export default defineConfig({
     screenshot: "only-on-failure",
     trace: process.env.PLAYWRIGHT_TRACE === "1" ? "retain-on-failure" : "off"
   },
-  webServer: useWebServer ? {
-    command: "bash -lc 'node apps/remote-browser/dist/index.js >/tmp/vrata-remote-browser.log 2>&1 & node apps/room-state/dist/index.js >/tmp/vrata-room-state.log 2>&1 & node apps/api/dist/index.js'",
-    url: new URL("/health", baseURL).toString(),
-    reuseExistingServer: !process.env.CI,
-    env: {
-      VRATA_DISABLE_AUTOSTART: "0",
-      API_PORT: apiPort,
-      ROOM_STATE_PORT: roomStatePort,
-      REMOTE_BROWSER_PORT: remoteBrowserPort,
-      CONTROL_PLANE_ADMIN_TOKEN: "test-admin-token",
-      FEATURE_AVATAR_POSE_BINARY: "true",
-      REMOTE_BROWSER_INTERNAL_URL: `http://127.0.0.1:${remoteBrowserPort}`,
-      REMOTE_BROWSER_PUBLIC_URL: remoteBrowserUrl,
-      VRATA_INTERNAL_SERVICE_TOKEN: "test-internal-token",
-      API_INTERNAL_URL: apiInternalUrl,
-      ROOM_STATE_INTERNAL_URL: `http://127.0.0.1:${roomStatePort}`,
-      ROOM_STATE_PUBLIC_URL: roomStateUrl,
-      DOCUMENT_LOCAL_UPLOAD_ROOT: process.env.DOCUMENT_LOCAL_UPLOAD_ROOT ?? "/tmp/vrata-e2e-documents",
-      SCENE_BUNDLE_LOCAL_UPLOAD_ROOT: process.env.SCENE_BUNDLE_LOCAL_UPLOAD_ROOT ?? "/tmp/vrata-e2e-scene-bundles",
-      REMOTE_BROWSER_VIEWPORT_MOCK: "1",
-      REMOTE_BROWSER_ALLOWED_ORIGINS: allowedOrigins,
-      REMOTE_BROWSER_ALLOW_PRIVATE_ALLOWED_ORIGINS: "true"
-    }
-  } : undefined
+  webServer: useWebServer ? [
+    { name: "remote-browser", url: `http://127.0.0.1:${remoteBrowserPort}/health` },
+    { name: "room-state", url: `http://127.0.0.1:${roomStatePort}/health` },
+    { name: "api", url: new URL("/health", baseURL).toString() }
+  ].map(({ name, url }) => ({
+    name,
+    command: `bash -c ${shellQuote(`${serverNode} apps/${name}/dist/index.js >${serviceLog(name)} 2>&1`)}`,
+    url,
+    reuseExistingServer: false,
+    env: localServerEnv
+  })) : undefined
 });

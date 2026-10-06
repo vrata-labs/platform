@@ -5,5 +5,5 @@
   "license": "Apache-2.0",
   "type": "module",
   "scripts": { "build": "node build.mjs" },
-  "dependencies": { "@vrata/room-plugin-sdk": "0.1.0" }
+  "dependencies": { "@vrata/room-plugin-sdk": "file:./vrata-room-plugin-sdk-0.1.0.tgz" }
 }

@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "sdkApiVersion": 1,
+  "id": "auto-seat-scaffold",
+  "version": "1.0.0",
+  "displayName": "Arrival auto-seat scaffold",
+  "requestedCapabilities": ["seating.claimSelfOnEntry", "seating.cancelPendingOwnClaim", "status.set"],
+  "configSchema": {}
+}

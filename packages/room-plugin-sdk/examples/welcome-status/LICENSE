@@ -1,0 +1,14 @@
+SPDX-License-Identifier: Apache-2.0
+Copyright 2026 Vrata contributors
+
+This example's source and generated artifact are licensed under the Apache
+License, Version 2.0. The full license is included in the SDK's LICENSE file
+(also installed as node_modules/@vrata/room-plugin-sdk/LICENSE) and is available
+at https://www.apache.org/licenses/LICENSE-2.0.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+Unless required by applicable law or agreed to in writing, software distributed
+under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
+CONDITIONS OF ANY KIND, either express or implied. See the License for the
+specific language governing permissions and limitations under the License.

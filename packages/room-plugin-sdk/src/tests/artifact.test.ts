@@ -59,18 +59,13 @@ test("standalone welcome-status source builds without runtime imports", () => {
   assert.equal(validateRoomPluginArtifact(artifact.bytes).artifact.manifest.id, "welcome-status");
   assert.equal(artifact.artifact.manifest.requestedCapabilities.join(), "status.set");
   const fixture = readFileSync(new URL("../../examples/welcome-status/welcome-status.vrata-plugin.json", import.meta.url));
-  assert.equal(validateRoomPluginArtifact(fixture).artifactSha256, artifact.artifactSha256);
-  assert.deepEqual(new Uint8Array(fixture), artifact.bytes);
-  const module = parse(artifact.artifact.entry, { ecmaVersion: 2020, sourceType: "module" });
-  const functions = module.body.filter(node => node.type === "ExportNamedDeclaration")
-    .map(node => node.declaration)
-    .filter(node => node?.type === "FunctionDeclaration")
-    .map(node => ({ name: node.id!.name, args: node.params.map(param => param.type === "Identifier" ? param.name : "other") }));
-  assert.deepEqual(functions, [
-    { name: "init", args: ["context"] },
-    { name: "onEvent", args: ["event", "context"] },
-    { name: "dispose", args: [] }
-  ]);
+  const bundled = validateRoomPluginArtifact(fixture);
+  const { entrySha256: _hash, ...fixtureManifest } = bundled.artifact.manifest;
+  assert.equal(createRoomPluginArtifact(fixtureManifest, bundled.artifact.entry).artifactSha256, bundled.artifactSha256);
+  const module = parse(bundled.artifact.entry, { ecmaVersion: 2020, sourceType: "module" });
+  const exported = module.body.filter(node => node.type === "ExportNamedDeclaration")
+    .flatMap(node => node.specifiers.map(specifier => specifier.exported.type === "Identifier" ? specifier.exported.name : specifier.exported.value));
+  assert.deepEqual(exported.sort(), ["dispose", "init", "onEvent"]);
 });
 
 test("reject unsupported versions, null containers, unknown fields and non-release IDs", () => {

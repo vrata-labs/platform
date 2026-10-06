@@ -277,6 +277,7 @@ export interface XrTelemetryEventRecord {
 }
 
 export interface Storage {
+  readonly roomPlugins: import("./plugins/contracts.js").RoomPluginStorage;
   readonly roomIdentities: import("./identity/contracts.js").RoomIdentityStorage;
   readonly identityProtocol: import("./identity/protocol.js").IdentityProtocolPolicy;
   /** Synchronous response release only: no arbitrary DB/network callback or retained facade. */
@@ -307,7 +308,7 @@ export interface Storage {
   createPersonalOwnedRoom(input: Omit<Partial<RoomRecord>, "ownerParticipantId" | "roomType" | "sessionControl"> & { displayName: string }):
     Promise<{ room: RoomRecord; identity: import("./identity/contracts.js").RoomIdentityRecord }>;
   updateRoom(roomId: string, input: Partial<RoomRecord>, expectedTemplateBinding?: ExpectedRoomTemplateBinding): Promise<RoomRecord | null>;
-  deleteRoom(roomId: string): Promise<boolean>;
+  deleteRoom(roomId: string, pluginDeletion?: { tenantId: string; deletionId: string }): Promise<boolean>;
   createRoomInvite(input: Omit<RoomInviteRecord, "inviteId" | "createdAt" | "revokedAt" | "revokedBy"> & { inviteId?: string; createdAt?: string }): Promise<RoomInviteRecord>;
   createRoomInviteV2(input: Omit<RoomInviteRecord, "inviteId" | "createdAt" | "revokedAt" | "revokedBy" | "protocolVersion"> & {
     actor: import("./identity/contracts.js").RoomIdentityActor

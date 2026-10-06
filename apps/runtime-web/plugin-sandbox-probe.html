@@ -3,20 +3,105 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Vrata — QuickJS sandbox diagnostic</title>
+    <title>Vrata — проверка изоляции плагинов</title>
+    <style>
+      :root { color-scheme: light; font: 17px/1.5 system-ui, sans-serif; color: #17263b; background: #eef2f7; }
+      body { max-width: 960px; margin: auto; padding: 20px; }
+      h1 { font-size: clamp(1.5rem, 4vw, 2.1rem); line-height: 1.2; }
+      h2 { font-size: 1.2rem; margin-top: 0; }
+      section { background: white; border: 1px solid #c7d1df; border-radius: 12px; padding: 18px; margin: 16px 0; }
+      button, select { font: inherit; min-height: 48px; border: 1px solid #687b94; border-radius: 8px; padding: 10px 14px; max-width: 100%; }
+      button { background: #e7eef8; color: #17263b; cursor: pointer; }
+      button.primary { background: #164b8f; color: white; border-color: #164b8f; font-weight: 700; }
+      button:disabled { opacity: .5; cursor: default; }
+      button:focus-visible, select:focus-visible, summary:focus-visible { outline: 3px solid #ce7600; outline-offset: 3px; }
+      select { background: white; width: 100%; }
+      label { display: block; font-weight: 600; margin-bottom: 8px; }
+      .actions { display: flex; flex-wrap: wrap; gap: 12px; margin: 12px 0; }
+      .qa-actions { position: sticky; top: 0; z-index: 2; background: white; padding: 10px 0; }
+      .verdict { font-size: clamp(1.6rem, 5vw, 2.4rem); font-weight: 800; margin: 0; }
+      [data-verdict="PASS"] { color: #126139; }
+      [data-verdict="FAIL"] { color: #a52024; }
+      [data-verdict="INCOMPLETE"], [data-verdict="PENDING"] { color: #775300; }
+      progress { width: 100%; height: 24px; }
+      .note { color: #42546b; }
+      .counts { display: flex; gap: 24px; flex-wrap: wrap; }
+      ol { padding: 0; list-style: none; }
+      li { border-top: 1px solid #d7dfeb; padding: 12px 0; }
+      li strong { display: block; }
+      li p { margin: 5px 0; }
+      pre { font-size: .8rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+      summary { cursor: pointer; padding: 10px 0; }
+      @media (max-width: 540px) { body { padding: 12px; } section { padding: 14px; } .actions button { width: 100%; } }
+    </style>
   </head>
   <body>
-    <h1>QuickJS WASM Worker: диагностическая проверка</h1>
-    <p>Платформенный probe с фиксированными сценариями. Проверка реального Android выполняется отдельно.</p>
-    <p>UI frames: <output id="heartbeat">0</output></p>
-    <button id="ui-button" type="button">Проверить отклик интерфейса</button>
-    <p>Clicks: <output id="clicks">0</output></p>
-    <label for="fixture">Фиксированный сценарий</label>
-    <select id="fixture"></select>
-    <button id="run" type="button">Запустить сценарий</button>
-    <p id="plugin-status" role="status"></p>
-    <p id="companion-status" role="status"></p>
-    <pre id="diagnostic" aria-label="Результат проверки"></pre>
+    <h1>Проверка изоляции плагинов</h1>
+    <p>Для опасных сценариев состояние плагина <strong>failed ожидаемо</strong>: он должен быть остановлен. Результат самой проверки показан отдельно — <strong>PASS</strong> или <strong>FAIL</strong>.</p>
+    <section>
+      <h2>Ручная проверка на Quest или Windows</h2>
+      <p>Откройте эту страницу отдельно на каждом устройстве. Нажмите «Проверить все сценарии» и сразу нажмите кнопку отклика <strong>ПОКА ИДЁТ прогон</strong>. Не скрывайте страницу. Клик после завершения не подтверждает отклик во время нагрузки — в таком случае повторите прогон. Затем скачайте отчёт этого браузера.</p>
+      <label for="device-kind">На каком устройстве открыт этот браузер?</label>
+      <select id="device-kind">
+        <option value="unspecified">Не указано</option>
+        <option value="quest">Quest</option>
+        <option value="windows">Windows</option>
+        <option value="other">Другое устройство</option>
+      </select>
+      <div class="actions qa-actions">
+        <button id="run-suite" class="primary" type="button">Проверить все сценарии</button>
+        <button id="ui-button" type="button">Проверить отклик интерфейса</button>
+        <button id="download-report" type="button" disabled>Скачать JSON-отчёт</button>
+      </div>
+      <label for="suite-progress">Ход полной проверки</label>
+      <progress id="suite-progress" value="0" max="37"></progress>
+      <p id="suite-status" role="status">Полная проверка ещё не запускалась.</p>
+    </section>
+    <section aria-labelledby="result-title">
+      <h2 id="result-title">Результат проверки</h2>
+      <p id="verdict" class="verdict" data-verdict="PENDING" aria-live="polite">НЕ ПРОВЕРЕНО</p>
+      <p id="verdict-summary">Выберите один сценарий или запустите полную проверку. Название устройства само по себе не даёт PASS.</p>
+      <p class="note">Даже PASS полной диагностики не закрывает весь device gate. Здесь проверяется браузерная изоляция; полноценные комнатные и VR-функции требуют отдельной проверки.</p>
+    </section>
+    <section>
+      <h2>Отклик интерфейса и контрольный плагин</h2>
+      <div class="counts">
+        <p>Кадры интерфейса: <output id="heartbeat">0</output></p>
+        <p>Клики: <output id="clicks">0</output></p>
+      </div>
+      <p id="ui-check">Нужен настоящий клик ВО ВРЕМЯ видимого прогона. Синтетический клик и клик после завершения не подходят. Записываются интервалы RAF, изменения видимости и задержка ввода; отдельный FPS/250 ms SLA здесь не вводится.</p>
+      <p id="companion-check">Контрольный плагин пингуется параллельно каждой опасной операции с периодом не чаще 250 ms. Для операций от 500 ms нужен ACK до их завершения. Короткие операции запускают concurrent ping и дожидаются его ACK. Дополнительно проверяются ответы после каждого сценария.</p>
+      <p id="companion-status" role="status"></p>
+    </section>
+    <section>
+      <h2>Один сценарий</h2>
+      <label for="fixture">Что проверить?</label>
+      <select id="fixture"></select>
+      <p><strong>Цель:</strong> <span id="purpose"></span></p>
+      <p><strong>Ожидается:</strong> <span id="expected"></span></p>
+      <button id="run" type="button">Запустить сценарий</button>
+      <p id="actual"></p>
+      <p id="actual-code"></p>
+      <p id="metrics"></p>
+      <p id="plugin-status" role="status"></p>
+    </section>
+    <section id="results-section" hidden>
+      <h2>Результаты по сценариям</h2>
+      <ol id="scenario-results"></ol>
+    </section>
+    <section>
+      <h2>Как читать результат</h2>
+      <p><strong>PASS + failed</strong> у опасного сценария означает, что изоляция сработала. <strong>FAIL</strong> означает неожиданный код, незавершённый экземпляр, принятый опасный status или другое несовпадение ожиданий.</p>
+      <p>Для зависающего native-вызова регулярного выражения допустимы прерывание VM или уничтожение Worker watchdog. Ошибка загрузки WASM либо boot timeout не являются успешной проверкой опасного сценария.</p>
+      <p>Проверяется также фаза: init, event, dispose или complete. Например, отказ на init не означает, что пройден сценарий зависшего event. Незавершение import-программы не доказывает import_denied: сетевую/CSP-изоляцию подтверждает отдельный автоматический тест.</p>
+      <p>Quest/ARM и Windows могут отличаться скоростью запуска, реализацией браузера, планированием задач и текущей нагрузкой. Поэтому фиксируются User-Agent, фаза, время, RAF gaps и input delay. Неожиданный timeout обычного плагина — красный FAIL, а не допустимое поведение. Бюджет VM 50 ms сохраняется; сравнивайте прогоны без посторонней нагрузки, не скрывая ошибку предыдущего отчёта.</p>
+      <p>Размер WASM buffer — не вся память браузера. Подсказки memory_exhausted и stack_exhausted ограничены по размеру, но остаются недоверенными данными исключения.</p>
+      <p>В отчёте — только результаты фиксированных сценариев, выбранный тип устройства, User-Agent и размер окна. Он не содержит комнатного контекста, токенов, cookies или исходников плагинов.</p>
+      <details>
+        <summary>Технические данные (не обязательны для понимания результата)</summary>
+        <pre id="diagnostic" aria-label="Технические данные проверки"></pre>
+      </details>
+    </section>
     <script type="module" src="/src/plugins/probe.ts"></script>
   </body>
 </html>
