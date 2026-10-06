@@ -445,6 +445,28 @@ Node22 runtime build и **1064/1064** unit tests прошли. Focused compiled-
 
 После gate health/demo-room/control-plane/templates/device-probe вернули HTTP 200. [Публичная диагностика](https://158.160.10.234.sslip.io/plugin-sandbox-probe.html) содержит новый ресурсный прогон и оба downloadable report scopes. Собственный локальный PostgreSQL удалён после проверки ID/labels; disposable browser containers завершились, проверочные порты свободны. CI watch прерывался только лимитом локального ожидания; продолжено наблюдение того же успешного run без повторного CI/deploy.
 
+### T03: пользовательские отчёты Quest 2 и Android от 2026-10-06
+
+Пользователь передал четыре JSON после проверки опубликованной страницы и отдельно подтвердил отсутствие DURING-клика на Android. По категории и UA это Android Chrome 154 и Quest 2 / OculusBrowser 149; модель телефона и фактическая версия Android из сокращённого UA не устанавливаются. С опубликованным `9506de3` результаты связываются контекстом проверки и временем после staging gate, а не встроенным SHA: такого поля в JSON нет.
+
+Все 37 assessments, полные resource observations/100-cycle statistics, counters, timings, UI и companion checks повторно вычислены опубликованными валидаторами. Исходные verdict/complete, assessments, checks/statistics и resource limits совпали; проваленных сценариев или неожиданных healthy/companion failures нет. Ожидаемые остановки опасных экземпляров не считаются провалом проверки. Заголовок PASS сам по себе не использовался как подтверждение.
+
+| Устройство | 37 сценариев | Ресурсный прогон | Причина неполноты |
+|---|---|---|---|
+| Quest 2 | 37/37, PASS; 3 trusted visible DURING-клика | 100/100 циклов, PASS; 7 trusted visible DURING-кликов | Нет для этих двух diagnostic scopes |
+| Android Chrome | 37/37, INCOMPLETE; continuity PASS | 100/100 циклов, все технические checks PASS, общий INCOMPLETE | Только UI: duringClicks=0, input delay не измерен |
+
+Оба устройства выполнили healthy workload более 60 s, получили `execution_budget_second` / `execution_budget_minute` на EVENT и закрыли 104/104 экземпляра с active=0. Линейная память одновременно живых VM стабильна 16+16 MiB; browser memory API — NOT_MEASURED. Это не общее потребление памяти или физический GC. Android: resource 137,789 s, init wall p95 435,8 ms, event wall p95 2,7 ms, companion ACK максимум 16,1 ms, frame gap 33 ms. Quest: resource 124,375 s, init wall p95 207,7 ms, event wall p95 4,1 ms, ACK максимум 25,2 ms, frame gap 44,8 ms, input delay максимум 17,9 ms. Init wall включает trusted prepare; максимальное guest init в 100-цикловом прогоне — Android 1,5 ms / Quest 4,7 ms, не превышение handler budget.
+
+Quest diagnostic scopes принимаются как положительное пользовательское evidence. Android sandbox/resource evidence положительное, но UI-отзывчивость во время нагрузки остаётся неподтверждённой; повторять Quest не требуется. Для Android нужен повтор обоих scopes с одним настоящим нажатием своей кнопки отклика во время каждого прогона. Общий T03 gate остаётся PENDING; opening author code и глобальный floor 2 этим не активируются.
+
+| Исходный файл | Bytes | SHA-256 |
+|---|---:|---|
+| `vrata-sandbox-device-report.json` (Android) | 57498 | `d5bc277d31fd4008a5c96ae6ae2a3d6630913f6a939093dca89e6b33a7328a33` |
+| `vrata-sandbox-device-report (2).json` (Quest) | 52242 | `4db6fba53862dbbd1dca277a4adcd64d8a8b1d8f6bcc1f78562826fecab8d3e1` |
+| `vrata-sandbox-resource-report.json` (Android) | 269122 | `4aeca73373f6bad8690a3d8811df74ca054cdd31c93e76a68238c00524baef69` |
+| `vrata-sandbox-resource-report (2).json` (Quest) | 266869 | `6733d767398431a051375c4deaff32e22fc8e564317e0ac446830a9552d0cc51` |
+
 ## Публикация первого среза T01/T12
 
 Локально прошли workspace lint/typecheck/build/tests с PostgreSQL, затем runtime build и 905 runtime tests после финальных правок. Полный `pnpm test:e2e` на финальном исполняемом дереве: **148 passed**, без skip (41.6 min).
