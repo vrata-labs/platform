@@ -403,6 +403,17 @@ SDK ships `vrata-room-plugin bundle/pack/validate`, pinned esbuild, canonical bo
 
 Для этих трёх ожиданий завершения full-suite установлен bounded wait 45 s внутри прежнего test deadline 60 s. Старт, phase/code/verdict, DURING/hidden/capability и memory/CPU/watchdog assertions не изменены; это не увеличение guest budget. Final local E2E после правки — **167/167**, без skip/retry (**27,7 минуты**).
 
+| Этап T04/T06/device probe | Результат |
+|---|---|
+| Проверенный и опубликованный SHA | `2380a14bd1d154a5fe3ad99d1a0572298b163eb7` |
+| [CI 37416222195](https://github.com/vrata-labs/platform/actions/runs/37416222195) | Success: clean install, checks, package tests, full E2E, M0.5 и pinned assets |
+| [Docker Publish 37416224736](https://github.com/vrata-labs/platform/actions/runs/37416224736) | Success: immutable images и registry manifests exact SHA |
+| [Staging Deploy 37419271064](https://github.com/vrata-labs/platform/actions/runs/37419271064) | Success: private-storage proof, **61/61 staging E2E**, **1/1 blocking Rutube**, persisted successful SHA; rollback skipped |
+
+[Артефакт gate](https://github.com/vrata-labs/platform/actions/runs/37419271064/artifacts/11393442100) подтверждает полный 37-case report/DURING/hidden проверки, публичный SDK archive exact SHA, текущие Hall/BlueOffice/ArtGallery loaded, strict real-LiveKit four-party meeting и cleanup. Skipped/flaky/unexpected — 0. Private probe подтвердил signed byte-exact GET и direct/external unsigned 403, отсутствие publication/binding и удаление только своей fixture room. Running image tag проверен; minimumIdentityProtocol остался 1.
+
+После gate health, demo-room, control-plane, templates, [device probe](https://158.160.10.234.sslip.io/plugin-sandbox-probe.html) и [SDK releases](https://158.160.10.234.sslip.io/assets/plugin-sdk/releases.json) вернули HTTP 200. Самостоятельный CLI доступен в immutable SDK tarball `0.1.0/c301002fb1fdbd3eb1c4aad396adef4e0160d450051f1a3ee5e9ae84b66a7896/vrata-room-plugin-sdk-0.1.0.tgz`. Проверочные storage/backup projects удалены только после подтверждения принадлежности; native MinIO и последние PG fixtures остановлены. Устройство Quest по прежним кликам не объявляется прошедшим T03: теперь ручной результат может быть представлен понятным whitelist JSON.
+
 ## Публикация первого среза T01/T12
 
 Локально прошли workspace lint/typecheck/build/tests с PostgreSQL, затем runtime build и 905 runtime tests после финальных правок. Полный `pnpm test:e2e` на финальном исполняемом дереве: **148 passed**, без skip (41.6 min).
