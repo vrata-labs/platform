@@ -5,6 +5,26 @@ import { RoomPluginStorageError, type RoomPluginBindingInput, type RoomPluginRep
   type RoomPluginStorage, type RoomPluginTransaction, type RoomPluginPackage } from "./contracts.js";
 import { ROOM_PLUGIN_STORAGE_LIMITS } from "./policy.js";
 
+/** Server persistence boundary for already SDK-validated/copied JSON, not raw bodies or entry source.
+ * PostgreSQL JSONB cannot represent U+0000. Reject it identically in both adapters; never normalize text.
+ */
+export function assertRoomPluginPersistedText(validated: unknown): void {
+  let remaining = ROOM_PLUGIN_LIMITS.artifactBytes;
+  const invalid = () => { throw new RoomPluginStorageError("plugin_invalid_persisted_text"); };
+  const visit = (value: unknown, depth: number): void => {
+    if (--remaining < 0) invalid();
+    if (typeof value === "string") { if (value.includes("\0")) invalid(); return; }
+    if (value === null || typeof value !== "object") return;
+    if (depth > ROOM_PLUGIN_LIMITS.dataDepth) invalid();
+    // SDK validation has already removed accessors/functions/proxies and bounded strings and collection sizes.
+    for (const [key, child] of Object.entries(value)) {
+      if (key.includes("\0")) invalid();
+      visit(child, depth + 1);
+    }
+  };
+  visit(validated, 0);
+}
+
 export function roomPluginPrefix(scope: RoomPluginScope): string {
   // Encode all UTF-8 bytes, not URI dots/slashes: legacy room identifiers need not be path-safe.
   const segment = (value: string) => {
@@ -31,7 +51,7 @@ async function requirePackage(tx: RoomPluginTransaction, id: string): Promise<Ro
 }
 async function snapshot(tx: RoomPluginTransaction) { return { revision: tx.state.revision, bindings: await tx.listBindings() }; }
 
-export function createRoomPluginStorage(repository: RoomPluginRepository): RoomPluginStorage {
+export function createRoomPluginStorage(repository: RoomPluginRepository, options: { resumeSettledUploads?: boolean } = {}): RoomPluginStorage {
   const transact = <T>(scope: RoomPluginScope, operation: (tx: RoomPluginTransaction, owned: RoomPluginScope) => Promise<T>, readOnly = false) => {
     const owned = { tenantId: scope.tenantId, roomId: scope.roomId };
     roomPluginPrefix(owned);
@@ -42,13 +62,17 @@ export function createRoomPluginStorage(repository: RoomPluginRepository): RoomP
       const validated = validateRoomPluginArtifact(bytes);
       validateRoomPluginSha256(backendFingerprint);
       const manifest = validated.artifact.manifest;
+      assertRoomPluginPersistedText(manifest);
       return transact(scope, async (tx, owned) => {
         writable(tx);
         const existing = await tx.findVersion(manifest.id, manifest.version);
         if (existing) {
           if (existing.artifactSha256 !== validated.artifactSha256) throw new RoomPluginStorageError("plugin_version_conflict");
           if (existing.state === "ready") return { package: existing, created: false };
-          if (existing.state === "reserved") throw new RoomPluginStorageError("plugin_upload_pending");
+          if (existing.state === "reserved") {
+            if (options.resumeSettledUploads && existing.uploadSettled) return { package: existing, created: false };
+            throw new RoomPluginStorageError("plugin_upload_pending");
+          }
           // A deleted version remains an immutable tombstone; reinstall through a new release version.
           throw new RoomPluginStorageError("plugin_invalid_transition");
         }
@@ -110,6 +134,7 @@ export function createRoomPluginStorage(repository: RoomPluginRepository): RoomP
         if (value.pluginId !== pluginId || value.version !== input.version || value.artifactSha256 !== input.artifactSha256 ||
           capabilities.some(capability => !value.manifest.requestedCapabilities.includes(capability))) throw new RoomPluginStorageError("plugin_invalid_binding");
         const config = validateRoomPluginConfig(value.manifest.configSchema, input.config);
+        assertRoomPluginPersistedText(config);
         const previous = await tx.getBinding(pluginId);
         const gained = previous && capabilities.some(capability => !previous.approvedCapabilities.includes(capability));
         if (gained || input.capabilityApproval !== undefined) {
@@ -168,7 +193,11 @@ export function createRoomPluginStorage(repository: RoomPluginRepository): RoomP
       const packages: RoomPluginPackage[] = [];
       for (const id of tx.state.cleanupPackageIds) packages.push(await requirePackage(tx, id));
       for (const value of packages) {
-        if (value.state === "ready") { await tx.setPackageState(value.packageId, "cleanup-pending"); value.state = "cleanup-pending"; }
+        // A committed room deletion may retire a settled reservation whose publisher disappeared.
+        // An unsettled writer remains reserved: neither restart nor readable bytes prove termination.
+        if (value.state === "ready" || value.state === "reserved" && value.uploadSettled) {
+          await tx.setPackageState(value.packageId, "cleanup-pending"); value.state = "cleanup-pending";
+        }
       }
       return { deletionId: tx.state.deletionId!, packages };
     })

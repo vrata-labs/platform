@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test, { type TestContext } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
-import { Pool } from "pg";
+import { Pool, type PoolClient } from "pg";
 import { ROOM_PLUGIN_LIMITS, validateRoomPluginConfig, validateRoomPluginData, type RoomPluginCapability } from "@vrata/room-plugin-sdk";
 import { createRoomPluginArtifact, validateRoomPluginArtifact } from "@vrata/room-plugin-sdk/artifact";
 import { MemoryStorage, PostgresStorage } from "../storage.js";
@@ -155,6 +155,88 @@ for (const engine of ["Memory", "Postgres"] as const) {
       assert.equal((await f.storage.roomPlugins.getPackage(scope, saved.packageId))?.manifest.displayName, "welcome-status");
       objects.objects.set(saved.storageKey, artifact("another-plugin"));
       await assert.rejects(service.readPackage(scope, saved.packageId), { code: "artifact_checksum_mismatch" });
+    });
+
+    await t.test("SDK-valid NUL enum values fail before reservation, quota changes or blob IO", async () => {
+      const scope = await room(f), objects = blobs(f);
+      const service = createRoomPluginPackageService(f.storage.roomPlugins, objects.adapter);
+      // 'default' is a legal config field name. Its enum strings are persisted inside the manifest too.
+      for (const field of ["greeting", "default"]) {
+        const bytes = createRoomPluginArtifact({ schemaVersion: 1, sdkApiVersion: 1, id: "nul-enum", version: "1.0.0",
+          displayName: "NUL enum", requestedCapabilities: ["status.set"],
+          configSchema: { [field]: { type: "enum", required: true, values: ["normal", "invalid\0choice"] } }
+        }, "export function init() {}").bytes;
+        assert.equal(validateRoomPluginArtifact(bytes).artifact.manifest.configSchema[field].type, "enum");
+        await assert.rejects(service.savePackage(scope, bytes), code("plugin_invalid_persisted_text"));
+        assert.deepEqual(await f.storage.roomPlugins.listPackages(scope), []);
+        assert.deepEqual(await f.storage.roomPlugins.readBindings(scope), { revision: 0, bindings: [] });
+      }
+      assert.deepEqual(objects.calls, { put: 0, delete: 0 });
+      if (f.pool) {
+        assert.equal((await f.pool.query("select count(*) as n from room_plugin_state where room_id=$1", [scope.roomId])).rows[0].n, "0");
+        assert.equal((await f.pool.query("select count(*) as n,coalesce(sum(byte_length),0) as bytes from room_plugin_packages where room_id=$1", [scope.roomId])).rows[0].n, "0");
+      }
+      // A refused version has no tombstone or reservation: corrected bytes can claim that same release.
+      const corrected = createRoomPluginArtifact({ schemaVersion: 1, sdkApiVersion: 1, id: "nul-enum", version: "1.0.0",
+        displayName: "NUL enum", requestedCapabilities: ["status.set"],
+        configSchema: { greeting: { type: "enum", required: true, values: ["normal", "line\nbreak\u001f"] } }
+      }, "export function init() {}").bytes;
+      const saved = await service.savePackage(scope, corrected);
+      assert.equal(saved.state, "ready"); assert.equal(objects.calls.put, 1);
+      assert.deepEqual((saved.manifest.configSchema.greeting as { values: readonly string[] }).values, ["normal", "line\nbreak\u001f"]);
+    });
+
+    await t.test("config NUL denial leaves revision and package quota intact and issues no SQL writes", async st => {
+      const scope = await room(f), objects = blobs(f);
+      const saved = await createRoomPluginPackageService(f.storage.roomPlugins, objects.adapter).savePackage(scope, artifact("nul-config"));
+      const initial = await f.storage.roomPlugins.putBinding(scope, saved.pluginId, binding(saved), 0);
+      const packages = await f.storage.roomPlugins.listPackages(scope), writes: string[] = [];
+      const client = await f.pool?.connect(), query = client?.query.bind(client);
+      client?.release();
+      const intercepted = client && st.mock.method(client, "query", ((...args: unknown[]) => {
+        if (typeof args[0] === "string" && /^\s*(?:insert|update|delete)\b/i.test(args[0])) writes.push(args[0]);
+        return (query as (...args: unknown[]) => unknown)(...args);
+      }) as PoolClient["query"]);
+      try {
+        for (const greeting of ["\0", "before\0after", "suffix\0"]) {
+          const input = { ...binding(saved), config: { greeting } };
+          assert.deepEqual({ ...validateRoomPluginConfig(saved.manifest.configSchema, input.config) }, input.config);
+          await assert.rejects(f.storage.roomPlugins.putBinding(scope, saved.pluginId, input, initial.revision), code("plugin_invalid_persisted_text"));
+          assert.deepEqual(await f.storage.roomPlugins.readBindings(scope), initial);
+          assert.deepEqual(await f.storage.roomPlugins.listPackages(scope), packages);
+          assert.equal(input.config.greeting, greeting, "refused input is not normalized or mutated");
+        }
+        assert.deepEqual(writes, [], "validation denial must precede every SQL mutation, including state initialization");
+      } finally { intercepted?.mock.restore(); }
+      const greeting = "line 1\nline 2\t\r\u001f";
+      const updated = await f.storage.roomPlugins.putBinding(scope, saved.pluginId, { ...binding(saved), config: { greeting } }, initial.revision);
+      assert.equal(updated.revision, initial.revision + 1);
+      assert.deepEqual(updated.bindings[0].config, { greeting });
+      assert.deepEqual((await (await f.restart()).roomPlugins.readBindings(scope)).bindings[0].config, { greeting });
+      assert.deepEqual(await f.storage.roomPlugins.listPackages(scope), packages);
+    });
+
+    await t.test("entry source NUL and JS escapes are blob bytes, while unsupported schema defaults remain SDK errors", async () => {
+      const scope = await room(f), objects = blobs(f);
+      const service = createRoomPluginPackageService(f.storage.roomPlugins, objects.adapter);
+      const entry = 'export function init() { const literal = "before\0after"; const escaped = "\\u0000"; return escaped; }';
+      const bytes = createRoomPluginArtifact({ schemaVersion: 1, sdkApiVersion: 1, id: "entry-nul", version: "1.0.0",
+        displayName: "Entry bytes", requestedCapabilities: ["status.set"],
+        configSchema: { greeting: { type: "string", required: true, minLength: 1, maxLength: 40 } }
+      }, entry).bytes;
+      assert.equal(validateRoomPluginArtifact(bytes).artifact.entry, entry);
+      const saved = await service.savePackage(scope, bytes);
+      assert.deepEqual(await service.readPackage(scope, saved.packageId), bytes);
+      assert.equal(saved.artifactSha256, validateRoomPluginArtifact(bytes).artifactSha256);
+      const original = validateRoomPluginArtifact(bytes).artifact;
+      // SDK v1 intentionally has no defaults. Do not turn that existing rejection into new SDK semantics.
+      for (const value of ["plain default", "invalid\0default"]) {
+        const unsupported = Buffer.from(JSON.stringify({ ...original, manifest: { ...original.manifest, id: "unsupported-default",
+          configSchema: { greeting: { ...original.manifest.configSchema.greeting, default: value } } } }));
+        await assert.rejects(service.savePackage(scope, unsupported), { code: "unknown_field" });
+      }
+      assert.equal(objects.calls.put, 1);
+      assert.deepEqual(await f.storage.roomPlugins.listPackages(scope), [saved]);
     });
 
     await t.test("exact hash/version, config, explicit capability escalation and monotonic last-unbind revision", async () => {
@@ -410,6 +492,107 @@ for (const engine of ["Memory", "Postgres"] as const) {
       assert.equal(objects.calls.put, 1);
       assert.equal(objects.calls.delete, 0);
       assert.deepEqual(await createRoomPluginPackageService(restarted.roomPlugins, objects.adapter).readPackage(scope, value.packageId), artifact());
+    });
+
+    await t.test("room deletion recovers settled orphan reservations after reinit with a durable bounded cleanup intent", async () => {
+      const scope = await room(f), objects = blobs(f), history: RoomPluginPackage[] = [];
+      // Deleted history must remain durable but must not consume the ten-key active cleanup intent.
+      for (let index = 0; index < 100; index++) {
+        const value = (await f.storage.roomPlugins.reservePackage(scope, artifact("orphan-history", `0.0.${index}`), objects.adapter.backendFingerprint)).package;
+        await f.storage.roomPlugins.failPackageUpload(scope, value.packageId); // no PUT started: confirmed rejection
+        await f.storage.roomPlugins.confirmPackageDeletion(scope, value.packageId);
+        history.push(value);
+      }
+      const ready = await createRoomPluginPackageService(f.storage.roomPlugins, objects.adapter).savePackage(scope, artifact("current-ready"));
+      await f.storage.roomPlugins.putBinding(scope, ready.pluginId, binding(ready), 0);
+      let publisherCalls = 0;
+      const disappeared = { ...f.storage.roomPlugins, async publishPackage() {
+        publisherCalls++; throw new Error("publisher_disappeared_after_settlement");
+      } };
+      for (let index = 1; index < ROOM_PLUGIN_LIMITS.packagesPerRoom; index++) {
+        await assert.rejects(createRoomPluginPackageService(disappeared, objects.adapter).savePackage(scope, artifact(`settled-orphan-${index}`)), RoomPluginOperationPending);
+      }
+      const packages = await f.storage.roomPlugins.listPackages(scope);
+      assert.equal(packages.length, ROOM_PLUGIN_LIMITS.packagesPerRoom);
+      assert.ok(packages.every(value => value.uploadSettled));
+      assert.equal(packages.filter(value => value.state === "reserved").length, ROOM_PLUGIN_LIMITS.packagesPerRoom - 1);
+      await assert.rejects(f.storage.roomPlugins.reservePackage(scope, artifact("over-active-quota"), objects.adapter.backendFingerprint), code("plugin_quota_exceeded"));
+      const restarted = await f.restart();
+      assert.deepEqual(await restarted.roomPlugins.listPackages(scope), packages);
+      await assert.rejects(restarted.roomPlugins.beginPackageDeletion(scope, packages.find(value => value.state === "reserved")!.packageId), code("plugin_upload_pending"));
+      assert.equal((await restarted.roomPlugins.getPackage(scope, ready.packageId))?.state, "ready");
+      assert.equal((await restarted.roomPlugins.readBindings(scope)).bindings.length, 1);
+      const intent = await restarted.roomPlugins.beginRoomDeletion(scope);
+      assert.equal(intent.packages.length, ROOM_PLUGIN_LIMITS.packagesPerRoom);
+      assert.ok(intent.packages.every(value => value.state === "cleanup-pending" && value.uploadSettled));
+      assert.deepEqual(new Set(intent.packages.map(value => value.packageId)), new Set(packages.map(value => value.packageId)));
+      assert.equal(intent.packages.reduce((sum, value) => sum + value.byteLength, 0), packages.reduce((sum, value) => sum + value.byteLength, 0));
+      assert.deepEqual(await restarted.roomPlugins.readBindings(scope), { revision: 2, bindings: [] });
+      assert.equal((await restarted.roomPlugins.getPackage(scope, history[0].packageId))?.state, "deleted");
+      assert.equal((await restarted.roomPlugins.getPackage(scope, history[99].packageId))?.state, "deleted");
+      if (f.pool) {
+        assert.equal((await f.pool.query("select count(*) as n from room_plugin_packages where room_id=$1", [scope.roomId])).rows[0].n,
+          String(100 + ROOM_PLUGIN_LIMITS.packagesPerRoom));
+        assert.equal((await f.pool.query("select jsonb_array_length(cleanup_package_ids) as n from room_plugin_state where room_id=$1", [scope.roomId])).rows[0].n,
+          ROOM_PLUGIN_LIMITS.packagesPerRoom);
+      }
+      let deletionCalls = 0, reads = 0;
+      const failing: RoomPluginBlobStorage = { ...objects.adapter,
+        async read() { reads++; throw new Error("room_cleanup_must_not_guess_settlement_from_GET"); },
+        async delete(s, key) {
+          if (++deletionCalls === 2) throw new Error("settled_orphan_cleanup_retry");
+          await objects.adapter.delete(s, key);
+        }
+      };
+      await assert.rejects(deleteRoomWithPluginCleanup(restarted, scope, () => failing), /settled_orphan_cleanup_retry/);
+      assert.ok(await restarted.getRoom(scope.roomId));
+      const reinitialized = await f.restart(), retry = await reinitialized.roomPlugins.beginRoomDeletion(scope);
+      assert.equal(retry.deletionId, intent.deletionId);
+      assert.deepEqual(retry.packages.map(value => value.packageId), intent.packages.map(value => value.packageId));
+      assert.equal(retry.packages.length, ROOM_PLUGIN_LIMITS.packagesPerRoom);
+      assert.equal(retry.packages.filter(value => value.state === "deleted").length, 1);
+      assert.ok(retry.packages.every(value => value.uploadSettled && ["deleted", "cleanup-pending"].includes(value.state)));
+      assert.deepEqual(await reinitialized.roomPlugins.readBindings(scope), { revision: 2, bindings: [] });
+      await assert.rejects(reinitialized.roomPlugins.reservePackage(scope, artifact("after-intent"), objects.adapter.backendFingerprint), code("room_plugin_cleanup_pending"));
+      if (f.pool) assert.equal((await f.pool.query("select count(*) as n from room_plugin_packages where room_id=$1", [scope.roomId])).rows[0].n,
+        String(100 + ROOM_PLUGIN_LIMITS.packagesPerRoom));
+      assert.equal(await deleteRoomWithPluginCleanup(reinitialized, scope, () => failing), true);
+      assert.equal(await reinitialized.getRoom(scope.roomId), null);
+      assert.equal(objects.objects.size, 0); assert.equal(objects.calls.put, ROOM_PLUGIN_LIMITS.packagesPerRoom);
+      assert.equal(objects.calls.delete, ROOM_PLUGIN_LIMITS.packagesPerRoom); assert.equal(reads, 0);
+      assert.equal(publisherCalls, ROOM_PLUGIN_LIMITS.packagesPerRoom - 1, "recovery never invokes the disappeared publisher closure");
+    });
+
+    await t.test("reinitialized room cleanup retires settled siblings but never settles an unknown writer", async () => {
+      const scope = await room(f), objects = blobs(f);
+      const knownReservation = (await f.storage.roomPlugins.reservePackage(scope, artifact("known-orphan"), objects.adapter.backendFingerprint)).package;
+      await objects.adapter.put(scope, knownReservation.storageKey, artifact("known-orphan"));
+      await f.storage.roomPlugins.confirmPackageUpload(scope, knownReservation.packageId);
+      const known = (await f.storage.roomPlugins.getPackage(scope, knownReservation.packageId))!;
+      const unknownReservation = (await f.storage.roomPlugins.reservePackage(scope, artifact("unknown-writer"), objects.adapter.backendFingerprint)).package;
+      // Matching bytes may be visible while the original remote PUT is still executing.
+      await objects.adapter.put(scope, unknownReservation.storageKey, artifact("unknown-writer"));
+      const unknown = (await f.storage.roomPlugins.getPackage(scope, unknownReservation.packageId))!;
+      const restarted = await f.restart(), intent = await restarted.roomPlugins.beginRoomDeletion(scope);
+      assert.deepEqual(intent.packages.find(value => value.packageId === known.packageId), { ...known, state: "cleanup-pending", uploadSettled: true });
+      assert.deepEqual(intent.packages.find(value => value.packageId === unknown.packageId), unknown);
+      let reads = 0;
+      const noGuessing: RoomPluginBlobStorage = { ...objects.adapter, async read() {
+        reads++; throw new Error("readable_bytes_do_not_settle_a_writer");
+      } };
+      await assert.rejects(deleteRoomWithPluginCleanup(restarted, scope, () => noGuessing), code("plugin_upload_pending"));
+      assert.ok(await restarted.getRoom(scope.roomId));
+      assert.equal((await restarted.roomPlugins.getPackage(scope, known.packageId))?.state, "deleted");
+      assert.deepEqual(await restarted.roomPlugins.getPackage(scope, unknown.packageId), unknown);
+      const reinitialized = await f.restart(), retry = await reinitialized.roomPlugins.beginRoomDeletion(scope);
+      assert.equal(retry.deletionId, intent.deletionId);
+      assert.deepEqual(retry.packages.map(value => value.packageId), intent.packages.map(value => value.packageId));
+      await assert.rejects(deleteRoomWithPluginCleanup(reinitialized, scope, () => noGuessing), code("plugin_upload_pending"));
+      assert.deepEqual(await reinitialized.roomPlugins.getPackage(scope, unknown.packageId), unknown);
+      assert.equal(objects.objects.has(unknown.storageKey), true);
+      assert.equal(objects.objects.has(known.storageKey), false);
+      assert.equal(objects.calls.put, 2); assert.equal(objects.calls.delete, 1); assert.equal(reads, 0);
+      assert.ok(await reinitialized.getRoom(scope.roomId));
     });
 
     await t.test("matching GET never settles a lost-ACK writer or permits cleanup while it may still finish", async () => {

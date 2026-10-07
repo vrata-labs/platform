@@ -35,7 +35,7 @@ export interface RoomPluginBindingInput {
 export type RoomPluginStorageErrorCode = "room_not_found" | "room_plugin_cleanup_pending" | "plugin_package_not_found"
   | "plugin_version_conflict" | "plugin_upload_pending" | "plugin_package_not_ready" | "plugin_package_bound"
   | "plugin_quota_exceeded" | "plugin_revision_conflict" | "plugin_invalid_binding" | "plugin_capability_approval_required"
-  | "plugin_invalid_transition" | "plugin_revision_exhausted" | "plugin_history_quota_exceeded";
+  | "plugin_invalid_transition" | "plugin_revision_exhausted" | "plugin_history_quota_exceeded" | "plugin_invalid_persisted_text";
 export class RoomPluginStorageError extends Error {
   constructor(readonly code: RoomPluginStorageErrorCode) { super(code); this.name = "RoomPluginStorageError"; }
 }
@@ -67,6 +67,8 @@ export interface RoomPluginRoomState {
 }
 export interface RoomPluginTransaction {
   state: RoomPluginRoomState;
+  /** Synchronous check at mutation/release; adapters also check before committing. */
+  checkAccess?(): void;
   saveState(): Promise<void>;
   findVersion(pluginId: string, version: string): Promise<RoomPluginPackage | null>;
   getPackage(packageId: string): Promise<RoomPluginPackage | null>;
@@ -81,5 +83,10 @@ export interface RoomPluginTransaction {
   deleteBinding(pluginId?: string): Promise<void>;
 }
 export interface RoomPluginRepository {
-  transaction<T>(scope: RoomPluginScope, operation: (transaction: RoomPluginTransaction) => Promise<T>, options?: { readOnly?: boolean }): Promise<T>;
+  transaction<T>(scope: RoomPluginScope, operation: (transaction: RoomPluginTransaction) => Promise<T>, options?: RoomPluginTransactionOptions): Promise<T>;
+}
+export interface RoomPluginTransactionOptions {
+  readOnly?: boolean;
+  /** Internal server admission, never a caller/body-selected scope or role. */
+  access?: { actor?: import("./access-contracts.js").RoomPluginAuthorActor; author?: boolean };
 }

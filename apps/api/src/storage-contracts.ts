@@ -278,6 +278,7 @@ export interface XrTelemetryEventRecord {
 
 export interface Storage {
   readonly roomPlugins: import("./plugins/contracts.js").RoomPluginStorage;
+  readonly roomPluginAccess: import("./plugins/access-contracts.js").RoomPluginAccessFactory;
   readonly roomIdentities: import("./identity/contracts.js").RoomIdentityStorage;
   readonly identityProtocol: import("./identity/protocol.js").IdentityProtocolPolicy;
   /** Synchronous response release only: no arbitrary DB/network callback or retained facade. */

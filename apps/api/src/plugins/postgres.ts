@@ -1,8 +1,12 @@
 import type { Pool, PoolClient } from "pg";
 import { roomFenceTransaction } from "../identity/fence-transaction.js";
+import { assertPostgresEffect } from "../identity/postgres.js";
+import { IdentityStorageError } from "../identity/contracts.js";
 import { RoomPluginStorageError, type RoomPluginPackage, type RoomPluginPackageState, type RoomPluginScope,
-  type RoomPluginTransaction, type StoredRoomPluginBinding } from "./contracts.js";
+  type RoomPluginRepository, type RoomPluginTransaction, type StoredRoomPluginBinding } from "./contracts.js";
 import { createRoomPluginStorage } from "./storage.js";
+import { createRoomPluginAccess } from "./access.js";
+import { assertPluginAuthor, assertPluginClock, assertPluginIdentityFloor, pluginSessionGuard } from "./access-policy.js";
 
 function number(value: unknown): number {
   const parsed = Number(value);
@@ -24,25 +28,58 @@ function mapBinding(row: Record<string, unknown>): StoredRoomPluginBinding {
     config: row.config as StoredRoomPluginBinding["config"] };
 }
 
-export function createPostgresRoomPlugins(pool: Pool) {
-  return createRoomPluginStorage({
-    transaction: (scope, operation, options) => roomFenceTransaction(pool, {}, async client => {
+export function createPostgresRoomPlugins(pool: Pool, now = Date.now) {
+  return createPostgresRoomPluginAdapter(pool, now).storage;
+}
+
+export function createPostgresRoomPluginAdapter(pool: Pool, now = Date.now) {
+  const repository: RoomPluginRepository = {
+    transaction: (scope, operation, options) => roomFenceTransaction(pool, {}, async (client, checkAlive) => {
       // Admission, quotas, CAS, room deletion and authority transitions share the authoritative parent lock.
       const parent = await client.query(options?.readOnly
-        ? "select 1 from rooms where tenant_id=$1 and room_id=$2 for share"
-        : "select 1 from rooms where tenant_id=$1 and room_id=$2 for update", [scope.tenantId, scope.roomId]);
+        ? "select room_type,status,disabled_at,session_control from rooms where tenant_id=$1 and room_id=$2 for share"
+        : "select room_type,status,disabled_at,session_control from rooms where tenant_id=$1 and room_id=$2 for update", [scope.tenantId, scope.roomId]);
       if (!parent.rowCount) throw new RoomPluginStorageError("room_not_found");
-      if (!options?.readOnly) await client.query("insert into room_plugin_state(tenant_id,room_id) values($1,$2) on conflict do nothing", [scope.tenantId, scope.roomId]);
+      if (options?.access) {
+        // Schema init and identity transactions lock rooms before protocol policy. Keep that same order.
+        const policy = (await client.query("select minimum_protocol from room_identity_protocol_policy where singleton=true for share")).rows[0];
+        assertPluginIdentityFloor(policy?.minimum_protocol);
+      }
+      const actor = options?.access?.actor;
+      if (actor?.actorType === "room-session") {
+        const current = await assertPostgresEffect(client, pluginSessionGuard(actor));
+        if (options?.access?.author) assertPluginAuthor(current, parent.rows[0].room_type);
+      } else if (actor) {
+        if (actor.actorType !== "administrator" || !options?.access?.author || actor.scope.tenantId !== scope.tenantId || actor.scope.roomId !== scope.roomId) {
+          throw new IdentityStorageError("identity_forbidden");
+        }
+        const authority = (await client.query("select lifecycle from room_identity_authority_v2 where tenant_id=$1 and room_id=$2", [scope.tenantId, scope.roomId])).rows[0];
+        const room = parent.rows[0];
+        if (room.status === "disabled" || room.disabled_at || (authority?.lifecycle ?? room.session_control)?.endedAt) {
+          throw new IdentityStorageError("room_blocked");
+        }
+      }
+      const checkAccess = () => { checkAlive(); assertPluginClock(actor, now); };
+      checkAccess();
       const stored = (await client.query("select revision,deleting,deletion_id,cleanup_package_ids from room_plugin_state where tenant_id=$1 and room_id=$2", [scope.tenantId, scope.roomId])).rows[0];
       const state = stored ? { revision: number(stored.revision), deleting: stored.deleting as boolean, deletionId: stored.deletion_id as string | null,
         cleanupPackageIds: stored.cleanup_package_ids as string[] } : { revision: 0, deleting: false, deletionId: null, cleanupPackageIds: [] };
       const query = (sql: string, values: unknown[] = []) => client.query(sql, [scope.tenantId, scope.roomId, ...values]);
-      const write = (sql: string, values: unknown[] = []) => {
+      let initialized = Boolean(stored);
+      const write = async (sql: string, values: unknown[] = []) => {
+        checkAccess();
         if (options?.readOnly) throw new Error("plugin_read_only_transaction");
+        // Validate manifest/config before the first write, including metadata initialization.
+        if (!initialized) {
+          await client.query("insert into room_plugin_state(tenant_id,room_id) values($1,$2) on conflict do nothing", [scope.tenantId, scope.roomId]);
+          initialized = true;
+          checkAccess();
+        }
         return query(sql, values);
       };
       const tx: RoomPluginTransaction = {
         state,
+        checkAccess,
         async saveState() { await write("update room_plugin_state set revision=$3,deleting=$4,deletion_id=$5,cleanup_package_ids=$6::jsonb where tenant_id=$1 and room_id=$2",
           [state.revision, state.deleting, state.deletionId, JSON.stringify(state.cleanupPackageIds)]); },
         async findVersion(pluginId, version) { const row = (await query("select * from room_plugin_packages where tenant_id=$1 and room_id=$2 and plugin_id=$3 and version=$4", [pluginId, version])).rows[0]; return row ? mapPackage(row) : null; },
@@ -65,9 +102,12 @@ export function createPostgresRoomPlugins(pool: Pool) {
           [value.pluginId, value.packageId, value.version, value.artifactSha256, value.bindingId, value.generation, value.bindingRevision, value.enabled, JSON.stringify(value.approvedCapabilities), JSON.stringify(value.config)]); },
         async deleteBinding(id) { await write("delete from room_plugin_bindings where tenant_id=$1 and room_id=$2 and ($3::text is null or plugin_id=$3)", [id ?? null]); }
       };
-      return operation(tx);
+      const result = await operation(tx);
+      checkAccess();
+      return result;
     })
-  });
+  };
+  return { storage: createRoomPluginStorage(repository), access: createRoomPluginAccess(repository, now) };
 }
 
 /** Called inside the ordinary room-delete transaction, after locking that same parent row. */

@@ -70,8 +70,9 @@ import { assertActorSession } from "./identity/authority.js";
 import { IdentityStorageError, type RoomIdentityRecord } from "./identity/contracts.js";
 import { createMemoryIdentityProtocol, createPostgresIdentityProtocol } from "./identity/protocol.js";
 import { createMemoryRoomPlugins } from "./plugins/memory.js";
-import { createPostgresRoomPlugins, preparePostgresRoomPluginRemoval } from "./plugins/postgres.js";
+import { createPostgresRoomPluginAdapter, preparePostgresRoomPluginRemoval } from "./plugins/postgres.js";
 import { installRoomPluginSchema } from "./plugins/postgres-schema.js";
+import { assertPluginAuthor, pluginSessionGuard } from "./plugins/access-policy.js";
 
 export { initPostgresStorageWithRetry } from "./storage-init-retry.js";
 
@@ -200,14 +201,34 @@ export class MemoryStorage implements Storage {
   readonly identityProtocol: Storage["identityProtocol"] = this.identityPolicy;
   readonly roomIdentities: Storage["roomIdentities"];
   readonly reserveIdentityAdmission: Storage["reserveIdentityAdmission"];
-  private readonly pluginAdapter = createMemoryRoomPlugins(roomId => this.rooms.get(roomId));
-  readonly roomPlugins: Storage["roomPlugins"] = this.pluginAdapter.storage;
+  private readonly pluginAdapter: ReturnType<typeof createMemoryRoomPlugins>;
+  readonly roomPlugins: Storage["roomPlugins"];
+  readonly roomPluginAccess: Storage["roomPluginAccess"];
   constructor(private readonly identityNow = Date.now) {
     this.reserveIdentityAdmission = createMemoryAdmissionBudget(identityNow);
     this.identityAdapter = createMemoryRoomIdentities(roomId => this.rooms.get(roomId), identityNow,
       hash => [...this.roomInvites.values()].find(invite => invite.tokenHash === hash), () => this.identityPolicy.current(),
       id => this.roomInvites.get(id), id => this.waitingRoomRequests.get(id), request => { this.waitingRoomRequests.set(request.requestId, request); });
     this.roomIdentities = this.identityAdapter.storage;
+    this.pluginAdapter = createMemoryRoomPlugins(roomId => this.rooms.get(roomId), {
+      minimum: () => this.identityPolicy.current(), now: identityNow,
+      check: (actor, author) => {
+        const scope = actor.actorType === "room-session" ? actor.proof : actor.scope;
+        const room = this.rooms.get(scope.roomId);
+        if (!room || room.tenantId !== scope.tenantId) throw new IdentityStorageError("room_not_found");
+        if (actor.actorType === "room-session") {
+          const current = this.identityAdapter.assertCurrentEffect(pluginSessionGuard(actor));
+          if (author) assertPluginAuthor(current, room.roomType);
+        } else {
+          if (!author) throw new IdentityStorageError("identity_forbidden");
+          // Reuse the adapter's synchronous admin lifecycle admission, without creating an invite.
+          // It observes the canonical authority lifecycle, including end transitions during await.
+          this.identityAdapter.authorizeInvite(scope.roomId, { actorType: "admin-token", actorId: "plugin-administrator", role: "admin" }, () => null!);
+        }
+      }
+    });
+    this.roomPlugins = this.pluginAdapter.storage;
+    this.roomPluginAccess = this.pluginAdapter.access;
   }
 
   async hasRoomIdentityAuthority(roomId: string): Promise<boolean> { return this.identityAdapter.hasRoomBindings(roomId); }
@@ -805,6 +826,7 @@ export class MemoryStorage implements Storage {
 
 export class PostgresStorage implements Storage {
   readonly roomPlugins: Storage["roomPlugins"];
+  readonly roomPluginAccess: Storage["roomPluginAccess"];
   readonly roomIdentities: Storage["roomIdentities"];
   readonly identityProtocol: Storage["identityProtocol"];
   readonly reserveIdentityAdmission: Storage["reserveIdentityAdmission"];
@@ -813,7 +835,9 @@ export class PostgresStorage implements Storage {
     this.reserveIdentityAdmission = createPostgresAdmissionBudget(pool, identityNow);
     this.roomIdentities = createPostgresRoomIdentities(pool, identityNow);
     this.identityProtocol = createPostgresIdentityProtocol(pool);
-    this.roomPlugins = createPostgresRoomPlugins(pool);
+    const plugins = createPostgresRoomPluginAdapter(pool, identityNow);
+    this.roomPlugins = plugins.storage;
+    this.roomPluginAccess = plugins.access;
   }
   private get effectDatabase(): Pool | PoolClient { return this.effectClient ?? this.pool; }
   async releasePersonalRoomOwnerResponse(proof: RoomIdentityCredential, send: (room: RoomRecord, identity: RoomIdentityRecord) => undefined): Promise<void> {

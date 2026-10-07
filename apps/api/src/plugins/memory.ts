@@ -1,6 +1,9 @@
 import { RoomPluginStorageError, type RoomPluginPackage, type RoomPluginRoomState, type RoomPluginScope,
-  type RoomPluginTransaction, type StoredRoomPluginBinding } from "./contracts.js";
+  type RoomPluginRepository, type RoomPluginTransaction, type StoredRoomPluginBinding } from "./contracts.js";
 import { createRoomPluginStorage } from "./storage.js";
+import { createRoomPluginAccess } from "./access.js";
+import { assertPluginIdentityFloor } from "./access-policy.js";
+import type { RoomPluginAuthorActor } from "./access-contracts.js";
 
 interface MemoryRoomPlugins extends RoomPluginRoomState {
   packages: Map<string, RoomPluginPackage>;
@@ -8,11 +11,12 @@ interface MemoryRoomPlugins extends RoomPluginRoomState {
 }
 interface MemoryRoomLock { tail: Promise<void>; readers: Set<Promise<void>>; writers: number }
 
-export function createMemoryRoomPlugins(getRoom: (roomId: string) => { tenantId: string } | undefined) {
+export function createMemoryRoomPlugins(getRoom: (roomId: string) => { tenantId: string } | undefined,
+  access?: { minimum(): number; check(actor: RoomPluginAuthorActor, author: boolean): void; now(): number }) {
   const rooms = new Map<string, MemoryRoomPlugins>();
   const locks = new Map<string, MemoryRoomLock>();
   const key = (scope: RoomPluginScope) => JSON.stringify([scope.tenantId, scope.roomId]);
-  const storage = createRoomPluginStorage({
+  const repository: RoomPluginRepository = {
     async transaction(scope, operation, options) {
       const id = key(scope);
       const lock = locks.get(id) ?? { tail: Promise.resolve(), readers: new Set<Promise<void>>(), writers: 0 };
@@ -26,13 +30,23 @@ export function createMemoryRoomPlugins(getRoom: (roomId: string) => { tenantId:
       else { lock.writers++; lock.tail = previous.then(() => held); }
       await previous;
       try {
+        const checkAccess = () => {
+          if (!options?.access) return;
+          assertPluginIdentityFloor(access?.minimum() ?? 1);
+          if (options.access.actor) {
+            if (!access) throw new Error("plugin_access_not_configured");
+            access.check(options.access.actor, options.access.author === true);
+          }
+        };
+        checkAccess();
         if (getRoom(scope.roomId)?.tenantId !== scope.tenantId) throw new RoomPluginStorageError("room_not_found");
         // Work on a private copy so a validation/error rolls back all metadata, like Postgres.
         const data: MemoryRoomPlugins = structuredClone(rooms.get(id) ?? { revision: 0, deleting: false, deletionId: null,
           cleanupPackageIds: [], packages: new Map(), bindings: new Map() });
-        const writing = () => { if (options?.readOnly) throw new Error("plugin_read_only_transaction"); };
+        const writing = () => { checkAccess(); if (options?.readOnly) throw new Error("plugin_read_only_transaction"); };
         const tx: RoomPluginTransaction = {
           state: data,
+          checkAccess,
           async saveState() { writing(); },
           async findVersion(pluginId, version) { return [...data.packages.values()].find(value => value.pluginId === pluginId && value.version === version) ?? null; },
           async getPackage(packageId) { return data.packages.get(packageId) ?? null; },
@@ -48,6 +62,7 @@ export function createMemoryRoomPlugins(getRoom: (roomId: string) => { tenantId:
         };
         const result = await operation(tx);
         if (getRoom(scope.roomId)?.tenantId !== scope.tenantId) throw new RoomPluginStorageError("room_not_found");
+        checkAccess();
         if (!options?.readOnly) rooms.set(id, structuredClone(data));
         return structuredClone(result);
       } finally {
@@ -57,9 +72,10 @@ export function createMemoryRoomPlugins(getRoom: (roomId: string) => { tenantId:
         if (!lock.readers.size && !lock.writers) locks.delete(id);
       }
     }
-  });
+  };
   return {
-    storage,
+    storage: createRoomPluginStorage(repository),
+    access: createRoomPluginAccess(repository, access?.now),
     /** Synchronous room-delete guard; never yields between inspection and the caller's map deletion. */
     assertRoomDeletable(scope: RoomPluginScope, deletionId?: string) {
       const id = key(scope);

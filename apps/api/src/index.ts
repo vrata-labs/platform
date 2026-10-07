@@ -84,6 +84,9 @@ import { createApiMetrics, incrementCounter } from "./api-metrics.js";
 
 import { createUploadStorageConfig } from "./upload-storage-config.js";
 import { configuredRoomPluginBlobStorage, deleteRoomWithPluginCleanup, roomPluginDeletionFailure, isRoomDeletionRequest } from "./plugins/index.js";
+import { handleRoomPluginHttp } from "./plugins/http.js";
+import { RoomPluginHttpError } from "./plugins/http-errors.js";
+import type { RoomPluginAuthorActor } from "./plugins/access-contracts.js";
 
 import {
   trimSlashes,
@@ -733,6 +736,36 @@ function sessionTokenStatusCode(result: RoomSessionTokenVerificationResult): 401
     return 403;
   }
   return result.code.endsWith("_mismatch") ? 403 : 401;
+}
+
+/** Plugin HTTP grants originate only from the explicit administrator secret or
+ * MAC-verified RS2 possession. The repository resolves current authority again. */
+async function resolveRoomPluginActor(request: IncomingMessage, roomId: string): Promise<RoomPluginAuthorActor> {
+  const storage = await storagePromise;
+  const provided = getHeaderString(request, "x-vrata-admin-token");
+  if (provided !== null) {
+    const configured = getControlPlaneAdminToken();
+    if (!configured || !safeEqual(provided, configured)) throw new RoomPluginHttpError(401, "identity_required");
+    const room = await storage.getRoom(roomId);
+    if (!room) throw new RoomPluginHttpError(404, "room_not_found");
+    return { actorType: "administrator", scope: { tenantId: room.tenantId, roomId: room.roomId } };
+  }
+  const token = getBearerToken(request);
+  if (!token?.startsWith("rs2.")) throw new RoomPluginHttpError(401, "identity_required");
+  const foreignRoom = untrustedSessionRoom(token) !== roomId;
+  let verified: VerifiedRoomRequestV2 | null;
+  try { verified = await resolveRoomRequestV2({ storage, secret: getStateTokenSecret(), token }); }
+  catch (error) {
+    if (foreignRoom && error instanceof IdentityBoundaryError && error.reason === "identity_session_expired") {
+      throw new IdentityBoundaryError(409, "identity_recovery_required");
+    }
+    throw error;
+  }
+  if (!verified) throw new IdentityBoundaryError(409, "identity_recovery_required");
+  if (verified.room.roomId !== roomId) throw new RoomPluginHttpError(403, "room_mismatch");
+  const { identityId, participantId, authEpoch } = verified.identity;
+  return { actorType: "room-session", proof: { tenantId: verified.room.tenantId, roomId: verified.room.roomId,
+    identityId, participantId, authEpoch }, expiresAtSeconds: verified.expiresAtSeconds };
 }
 
 function writeSessionTokenError(response: ServerResponse, result: RoomSessionTokenVerificationResult): void {
@@ -1660,6 +1693,13 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   const method = request.method ?? "GET";
   const url = new URL(request.url ?? "/", `http://${request.headers.host ?? `localhost:${apiPort}`}`);
   const storage = await storagePromise;
+
+  // This optional protocol family owns its admission/response boundary. At
+  // floor 1 it denies before legacy actors, artifact buffering or blob IO.
+  if (method !== "OPTIONS" && await handleRoomPluginHttp(request, response, url, {
+    storage, getBlobs: () => configuredRoomPluginBlobStorage(runtimePublicRoot, request, publicBaseUrlFromRequest),
+    resolveActor: resolveRoomPluginActor
+  })) return;
 
   // Only v2 Bearers defer classification to handlers with body-bound identity.
   // Legacy Bearers still hit the activation boundary before payload validation.

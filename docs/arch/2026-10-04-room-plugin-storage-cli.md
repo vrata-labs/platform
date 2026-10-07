@@ -63,6 +63,61 @@ No public author upload route or global identity floor 2 is activated by this
 storage slice. The current T03 decision is recorded separately in
 [the sandbox contract](2026-10-04-room-plugin-sandbox.md#verification-gate).
 
+## Prepared author HTTP API (T05)
+
+The main API now contains room-scoped package upload/library/delete, binding
+PUT/unbind, runtime snapshot and authenticated bound-content handlers. The
+entire plugin HTTP family requires identity protocol minimum 2. At shared floor
+1 every route returns 409 `plugin_identity_not_active` before actor resolution,
+artifact buffering, metadata mutation or blob IO. This is preparatory protocol
+plumbing; public author activation still depends on the independent T01a gate.
+
+An author is the current proof-bound Host, the current personal-room Owner, or
+an explicit verified platform administrator. Historical invite role, a public
+participant ID, body/query claims and legacy trusted JWTs do not authorize an
+installation. Runtime code/config access requires a valid RS2 room session; an
+administrator header alone does not supply runtime access. Host installation is
+covered through real invitation/admission without an administrator header on
+any install request.
+
+Guarded metadata operations share the T04 repository's authoritative parent
+lock and one PostgreSQL client. The guard checks current identity/epoch,
+lifecycle and original session expiry after lock waits, before mutations and
+before synchronous response release. Memory rechecks after its queue and at
+private-copy commit. Blob PUT/GET/DELETE occurs outside those fences.
+
+Opaque admitted tickets permit terminal settlement and cleanup, not publication
+or new binding authority. Unsettled reservations never launch another PUT.
+Once the original PUT outcome is known, its idempotent settlement uses at most
+three metadata attempts with 100/250 ms backoff for transient fence failures.
+Exhaustion retains the indexed object; unknown PUT outcomes never enter this
+retry path. Publication and binding authority are not extended by settlement.
+Settled unpublished versions can resume with exact validated bytes and fresh
+author permission. A confirmed post-PUT denial cleans only an unpublished
+artifact; uncertain PUT/COMMIT outcomes retain the indexed object. Runtime
+content validates a private byte copy and rechecks its exact captured binding
+tuple and room revision before attachment headers/bytes are released.
+
+A confirmed room-delete intent between settlement and publication follows that
+same admitted cleanup path; it does not leave a settled reservation blocking
+room DELETE indefinitely. Stored manifest/config strings reject U+0000 with
+the same typed 400 in Memory and PostgreSQL before mutation. Other valid text
+and source entry bytes are preserved; source is not JSONB manifest data.
+
+Upload preserves the original envelope bytes and is bounded to 1 MiB. Binding
+DTOs/config, requested capability approval and optimistic revisions use the
+shared SDK/storage limits. Public metadata excludes storage keys and backend
+fingerprints. Bound-content uses octet-stream, attachment, nosniff and sandbox
+CSP, and exposes the artifact checksum. No API or native browser entry evaluation
+is part of upload, validation or authenticated download.
+
+The runtime snapshot includes only enabled ready bindings and a lease expiring
+within 5 seconds and the original session deadline. Broker polling, generation
+effects and `session-control.pluginBindingsRevision` integration belong to T07;
+this API slice does not implement VM installation, author UI or auto-seat.
+Positive API/CLI/browser tests use a dedicated verified v2 schema. Shared staging
+tests cover the floor-1 denial and ordinary room entry without raising that floor.
+
 ## External packaging (T06)
 
 The SDK now ships vrata-room-plugin with bundle, pack and validate commands.
