@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { access, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
@@ -58,7 +58,7 @@ export function assertPublicDto(value: unknown, privateValues: string[] = []): v
   expect(["rs2.", "ri2.", "room-plugins/", nativeMarker, ...privateValues].some(item => item.length > 0 && text.includes(item))).toBe(false);
 }
 
-export async function startIsolatedAuthorApi() {
+export async function startIsolatedAuthorApi(floor: 1 | 2 = 2) {
   if (!process.env.VRATA_TEST_POSTGRES_URL) throw new Error("plugin_author_requires_isolated_postgres_including_ci");
   const cleanups: Array<() => unknown> = [];
   // The compiled Node helper uses only t.after(). Register it explicitly rather than
@@ -75,11 +75,108 @@ export async function startIsolatedAuthorApi() {
     const helper: { startAuthorHttpFixture: typeof startAuthorHttpFixture } = await import(pathToFileURL(resolve("apps/api/dist/plugins/author-http.test-helper.js")).href);
     // Helper guards the policy relation's namespace before raising ONLY its own
     // fresh schema and checks the unchanged public floor during cleanup.
-    const fixture = await helper.startAuthorHttpFixture(adapter as TestContext, 2);
+    const fixture = await helper.startAuthorHttpFixture(adapter as TestContext, floor);
     return { ...fixture, close };
   } catch {
     await close();
-    throw new Error("plugin_author_owned_v2_fixture_setup_failed");
+    throw new Error("plugin_author_owned_fixture_setup_failed");
+  }
+}
+
+export async function runFloorOneAuthorDenial(origin: string, admin: Record<string, string>, page: Page): Promise<void> {
+  const tenantId = `plugin-author-denial-${randomUUID()}`;
+  let tenantCreated = false, roomId: string | undefined;
+  const inviteIds: string[] = [];
+  try {
+    expect((await privateHttp(origin, "/api/tenants", "POST", admin, { tenantId, name: "Plugin author floor-one denial" })).status).toBe(201);
+    tenantCreated = true;
+    const created = await privateHttp(origin, "/api/rooms", "POST", admin, {
+      tenantId, templateId: "meeting-room-basic", name: "Private plugin denial fixture", visibility: "private", guestAllowed: true,
+      features: { voice: false, screenShare: false, spatialAudio: false }
+    });
+    expect(created.status).toBe(201);
+    roomId = created.json<{ roomId: string }>().roomId;
+    const invitation = await privateHttp(origin, `/api/rooms/${roomId}/invites`, "POST", admin,
+      { role: "host", waitingRoomEnabled: false, expiresInSeconds: 600 });
+    expect(invitation.status).toBe(201);
+    const invite = invitation.json<{ inviteId: string; inviteLink: string }>();
+    inviteIds.push(invite.inviteId);
+    const inviteToken = inviteTokenFromLink(invite.inviteLink);
+    const participantId = `plugin-denial-${randomUUID()}`;
+    const admitted = await privateHttp(origin, "/api/tokens/state", "POST", {},
+      { roomId, participantId, displayName: "Legacy plugin Host", inviteToken });
+    expect(admitted.status).toBe(200);
+    const host = admitted.json<{ token: string; role: string }>();
+    expect(host.role === "host").toBe(true);
+    // Legacy is base64url(JSON).base64url(HMAC-SHA256), not a three-part JWT.
+    // Check the exact two-part family and 43-character MAC without echoing it.
+    expect(typeof host.token === "string" && /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]{43}$/.test(host.token)).toBe(true);
+    let claims: { role: string; roleSource: string; roomId: string; tenantId: string; participantId: string };
+    try { claims = JSON.parse(Buffer.from(host.token.split(".")[0], "base64url").toString("utf8")); }
+    catch { throw new Error("plugin_author_floor_one_legacy_claims_invalid"); }
+    expect(claims.role === "host" && claims.roleSource === "trusted" && claims.roomId === roomId &&
+      claims.tenantId === tenantId && claims.participantId === participantId).toBe(true);
+    // Format/decoded claims do not prove authority: the server verifies this
+    // Bearer's MAC and scope and resolves the active Host before plugin denial.
+    const control = await privateHttp(origin, `/api/rooms/${roomId}/session-control`, "GET", bearer(host.token));
+    expect(control.status).toBe(200);
+    const state = control.json<{ participant: { participantId: string; role: string; status: string }; state: { hostParticipantId: string } }>();
+    expect(state.participant.participantId === participantId && state.participant.role === "host" && state.participant.status === "active").toBe(true);
+    expect(state.state.hostParticipantId === participantId).toBe(true);
+
+    // Together, real v1 admission and plugin-family refusal prove floor=1.
+    // Never read the internal service secret or mutate the shared policy.
+    const packageId = randomUUID(), pluginId = "external.stage-denial";
+    const entry = `globalThis.${nativeMarker} = true; export function init() {}`;
+    const artifact = Buffer.from(JSON.stringify({ manifest: { schemaVersion: 1, sdkApiVersion: 1, id: pluginId,
+      version: "1.0.0", displayName: "Denial fixture", requestedCapabilities: ["status.set"],
+      configSchema: { greeting: { type: "string", required: true, minLength: 1, maxLength: 256 } },
+      entrySha256: createHash("sha256").update(entry, "utf8").digest("hex") }, entry }));
+    const binding = { expectedRevision: 0, packageId, version: "1.0.0", artifactSha256: sha256(artifact), enabled: true,
+      config: { greeting: "PRIVATE_STAGING_DENIAL_CONFIG" }, approvedCapabilities: ["status.set"] };
+    const routes = [["packages", "GET", undefined], ["packages", "POST", artifact], ["runtime", "GET", undefined],
+      [`packages/${packageId}/content`, "GET", undefined], [`packages/${packageId}`, "DELETE", undefined],
+      [`bindings/${pluginId}`, "PUT", binding], [`bindings/${pluginId}`, "DELETE", { expectedRevision: 0 }]] as const;
+    for (const headers of [bearer(host.token), admin, {}, { cookie: `sessionToken=${host.token}` }, bearer(inviteToken)]) {
+      for (const [suffix, method, body] of routes) {
+        assertDenied(await privateHttp(origin, pluginPath(roomId, suffix), method, headers, body), 409, "plugin_identity_not_active");
+      }
+    }
+    const navigation = await page.goto(`${origin}/rooms/${roomId}`, { waitUntil: "domcontentloaded" }).catch(() => {
+      throw new Error("plugin_author_floor_one_room_shell_navigation_failed");
+    });
+    expect(navigation?.status()).toBe(200);
+    // Browser byte transport also returns only the stable denial; no source eval.
+    const sourceDenial = await page.evaluate(async ({ path, token, marker }) => {
+      const response = await fetch(path, { credentials: "omit", headers: { authorization: `Bearer ${token}` } });
+      const body = await response.json();
+      return { status: response.status, denied: JSON.stringify(body) === JSON.stringify({ error: "plugin_identity_not_active" }),
+        attachment: response.headers.has("content-disposition"), checksum: response.headers.has("x-artifact-sha256"),
+        nativeExecuted: Reflect.has(globalThis, marker) };
+    }, { path: pluginPath(roomId, `packages/${packageId}/content`), token: host.token, marker: nativeMarker }).catch(() => {
+      throw new Error("plugin_author_floor_one_browser_denial_failed");
+    });
+    expect(sourceDenial.status).toBe(409); expect(sourceDenial.denied).toBe(true);
+    expect(sourceDenial.attachment || sourceDenial.checksum || sourceDenial.nativeExecuted).toBe(false);
+    expect((await privateHttp(origin, `/api/rooms/${roomId}/session-control`, "GET", bearer(host.token))).status).toBe(200);
+    // Deleting only the owned room exercises indexed cleanup; an HTTP denial
+    // alone is not evidence of DB/quota state or positive T01a author activation.
+  } finally {
+    await page.goto("about:blank").catch(() => undefined);
+    let failed = false;
+    for (const inviteId of inviteIds) {
+      try { expect((await privateHttp(origin, `/api/rooms/${roomId}/invites/${inviteId}/revoke`, "POST", admin)).status).toBe(200); }
+      catch { failed = true; }
+    }
+    if (roomId) {
+      try { expect((await privateHttp(origin, `/api/rooms/${roomId}`, "DELETE", admin)).status).toBe(200); }
+      catch { failed = true; }
+    }
+    if (tenantCreated) {
+      try { expect((await privateHttp(origin, `/api/tenants/${tenantId}`, "DELETE", admin)).status).toBe(200); }
+      catch { failed = true; }
+    }
+    if (failed) throw new Error("plugin_author_floor_one_owned_resources_cleanup_failed");
   }
 }
 

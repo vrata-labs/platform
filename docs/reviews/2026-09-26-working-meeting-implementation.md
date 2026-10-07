@@ -495,6 +495,10 @@ Known terminal PUT ACK/rejection settlement повторяется максим�
 
 Финальные local checks: workspace lint/typecheck/build, API build; полный API suite с PostgreSQL — **1109 passed / 1 optional live-MinIO skipped**, без fail. Окончательный полный `pnpm test:e2e --workers=1` — **171/171**, без skip/retries (**31,0 минуты**, Node22). External author case внутри него — **22,3 s**. Исполняемое дерево после этого прогона не менялось; staging evidence добавляется после проверки опубликованного SHA.
 
+Первый publish SHA `7551040afe3be832d8571cdae2b868ea7ec24713`: [CI 37555872594](https://github.com/vrata-labs/platform/actions/runs/37555872594) и [Docker 37555873285](https://github.com/vrata-labs/platform/actions/runs/37555873285) success. [Staging 37559057738](https://github.com/vrata-labs/platform/actions/runs/37559057738) дал **64/65**: новый denial spec ошибочно ожидал JWT из 3 сегментов у legacy room-session, который в платформе имеет формат `body.signature`. Ошибка произошла до проверки plugin family; остальные 64 checks и private-storage proof прошли. Штатный rollback восстановил `9506de30b7f379e086c5db243dbbb398883693ae`, running image tag и scene URLs; successful SHA не заменён.
+
+Проверка формата исправлена по действующему signer/parser без изменения API. Общий floor-1 scenario теперь выполняется и local/CI: реальная trusted Host invitation/admission, 2-сегментный token и server-verified active session-control, затем 7 plugin routes × 5 вариантов авторизации получают ровно 409. Приватные credentials в trace/screenshot/video не сохраняются. Focused local old/new protocol cases — **2/2** (32,3 s); общий floor не повышался. Окончательный полный local suite после test-only исправления — **172/172**, без skipped/retries (**39,6 минуты**, Node22).
+
 ## Публикация первого среза T01/T12
 
 Локально прошли workspace lint/typecheck/build/tests с PostgreSQL, затем runtime build и 905 runtime tests после финальных правок. Полный `pnpm test:e2e` на финальном исполняемом дереве: **148 passed**, без skip (41.6 min).
