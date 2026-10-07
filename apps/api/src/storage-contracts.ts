@@ -358,7 +358,8 @@ export interface ExpectedRoomTemplateBinding {
 export type RoomEffectDatabase = Pick<Storage, "upsertRoomNote" | "deleteRoomNote" | "restoreRoomNoteVersion"
   | "createRoomDocument" | "markRoomDocumentDeleted" | "updateRoomDocumentSurface" | "getRoomDocument"
   | "getPersonalRoomState" | "updatePersonalRoomState" | "setRoomSceneBundleUrl"
-  | "listRoomInvites" | "revokeRoomInvite" | "listWaitingRoomRequests" | "updateWaitingRoomRequest" | "getRoom">;
+  | "listRoomInvites" | "revokeRoomInvite" | "listWaitingRoomRequests" | "updateWaitingRoomRequest" | "getRoom"
+  | "addDiagnostic" | "addXrTelemetry">;
 
 export type RoomIdentityEffectStorage = RoomEffectDatabase & { releaseResponse(send: () => void): void };
 export interface LegacyRoomEffectOptions { roomWrite?: boolean; lockTimeoutMs?: number; idleTimeoutMs?: number }

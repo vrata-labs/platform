@@ -369,6 +369,64 @@ return private metadata to a former Owner. Disabled/end return 403 without
 turning a still-valid credential into a recovery requirement. Administrators
 creating legacy-owner evidence remain separate activation work.
 
+### Persisted diagnostics and XR telemetry
+
+For a persisted room, POST diagnostics and PUT XR telemetry carry the original
+verified session into the existing room effect fence. PostgreSQL INSERT and
+retention DELETE use the same borrowed client as the parent-room lock. Persisting
+callbacks select the upfront write-lock mode so concurrent writers cannot delete
+the same oldest snapshot row and exceed the retention cap; idle XR keeps shared
+mode. The lock pins role, epoch and lifecycle; the original session deadline is checked before
+each scoped operation and after an awaited write callback, before COMMIT. An
+authorized read that already synchronously released its response is not denied
+again after sending it. No network or blob operation is added inside this fence.
+
+Memory stages cloned diagnostics and XR records per callback, preserving write
+order and event creation time. Callback failure or a failed final original-authority
+check discards the stage. A successful stage appends synchronously onto the current
+arrays, applying the existing 200-diagnostic/1,000-XR retention without replacing
+another callback's committed records. This staging covers telemetry, not rollback
+of every other Memory effect.
+
+Diagnostic logs, counters and the screen-share session projection are published
+only after successful persistence. XR updates use a FIFO per room/participant;
+classification uses the last committed predecessor, and live/latest/history are
+updated only after a successful fence. Idle updates still authorize at queue head
+without persisting another event. Pending work, including the active call, is
+bounded to 32 per participant, 256 per room and 512 per API service; overflow returns HTTP 429
+`xr_telemetry_queue_full`. A failed call releases capacity and does not poison its
+successor. Payloads and commit callback records are separate private clones.
+
+Ready pair heads take one room turn and one of two API-service execution slots
+before the callback can borrow a database connection. A room runs one telemetry
+callback at a time; other participants' ready heads can run before that same
+participant's next queued sample. Waiting samples do not occupy database clients.
+The production API has one telemetry service per process, so at most two of its
+telemetry callbacks hold or wait for pool connections. Authority and the original
+deadline are still checked after this wait. Failure releases both scheduling
+levels. Runtime sampling is unchanged; bounded overload returns 429 and may drop
+telemetry samples rather than consuming the entire shared database pool.
+
+HTTP write success completes the already-authorized committed operation; it does
+not grant new access and does not acquire a second fence after COMMIT. A rejected
+or unconfirmed COMMIT returns failure without publishing in-process success
+projections. A genuinely lost acknowledgement may still leave durable rows;
+neither an error response nor the absence of a live projection proves rollback.
+
+GET XR history prepares its private snapshot outside the lock, then synchronously
+releases it under fresh current Host or personal Owner authority and the original
+deadline. Verified administrator access remains a separate bypass. Identical live
+and PostgreSQL jsonb copies deduplicate independently of object key order,
+including nested objects; distinct values, array order and same-time events remain
+significant. Existing 80-event history and latest-selection rules are preserved.
+
+These paths do not close virtual-room fallback effects or other activation gates.
+The shared staging minimum remains 1, with no new authority binding.
+Room deletion currently does not purge persisted diagnostics/XR rows or the live
+XR projection. Per-room write retention does not trim deleted random room IDs.
+Round-trip acceptance removes its room, tenant and invitation but retains one row
+in each telemetry table; room retirement needs a separate retention/cleanup policy.
+
 ## Runtime adoption
 
 Adopt the admitted participant ID before initializing identity-bound seating,

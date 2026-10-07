@@ -106,11 +106,18 @@ function compareXrTelemetryUpdatedAt(left: XrTelemetryRecord, right: XrTelemetry
   return left.updatedAt.localeCompare(right.updatedAt);
 }
 
+// PostgreSQL jsonb does not preserve object key order, so JSON DTO keys sort at every depth.
+// Array order is significant; JSON's undefined/missing equivalence and null values are preserved.
+function sortXrTelemetryJsonKeys(_key: string, value: unknown): unknown {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return value;
+  return Object.fromEntries(Object.entries(value).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0));
+}
+
 function mergeXrTelemetryHistories(...histories: XrTelemetryRecord[][]): XrTelemetryRecord[] {
   const merged = [...histories.flat()].sort(compareXrTelemetryUpdatedAt);
   const deduped = new Map<string, XrTelemetryRecord>();
   for (const record of merged) {
-    const key = JSON.stringify(record);
+    const key = JSON.stringify(record, sortXrTelemetryJsonKeys);
     if (!deduped.has(key)) {
       deduped.set(key, structuredClone(record));
     }

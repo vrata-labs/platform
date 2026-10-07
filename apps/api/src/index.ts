@@ -135,7 +135,7 @@ import { createRoomPresence, type PresenceRecord } from "./room-presence.js";
 
 import { validateRoomAssetIds, validateAssetInput } from "./room-asset-validation.js";
 
-import { createXrTelemetryService } from "./xr-telemetry-service.js";
+import { createXrTelemetryService, XrTelemetryQueueFull } from "./xr-telemetry-service.js";
 import { IDENTITY_LIFECYCLE_REQUIRES_V2 } from "./identity/lifecycle.js";
 import type { XrTelemetryRecord } from "./xr-telemetry-buffer.js";
 
@@ -285,7 +285,7 @@ const requiredProductionApiEnvVars = ["CONTROL_PLANE_ADMIN_TOKEN", "ROOM_STATE_P
 
 const presenceByRoom = new Map<string, Map<string, PresenceRecord>>();
 const { getPresence, upsertPresence, deletePresence, cleanupAllPresence, activeParticipantCount } = createRoomPresence(presenceByRoom, presenceTtlMs);
-const { upsertXrTelemetry, listXrTelemetry } = createXrTelemetryService(storagePromise);
+const { upsertXrTelemetry, upsertXrTelemetryWithFence, listXrTelemetry } = createXrTelemetryService(storagePromise);
 const controlPlaneAuditLog: ControlPlaneAuditLogEntry[] = [];
 const CONTROL_PLANE_AUDIT_LIMIT = 1000;
 const requestIds = new WeakMap<IncomingMessage, string>();
@@ -463,8 +463,7 @@ function normalizeReportId(value: unknown): string | null {
   return /^rpt_[A-Za-z0-9_-]{8,80}$/.test(trimmed) ? trimmed : null;
 }
 
-function createDiagnosticRecord(roomId: string, payload: RuntimeDiagnosticRecord, request: IncomingMessage): RuntimeDiagnosticRecord {
-  const requestId = getRequestId(request);
+function createDiagnosticRecord(payload: RuntimeDiagnosticRecord, requestId: string): RuntimeDiagnosticRecord {
   const reportId = normalizeReportId(payload.reportId) ?? createReportId();
   const sanitized = redactSecrets({
     ...payload,
@@ -477,18 +476,27 @@ function createDiagnosticRecord(roomId: string, payload: RuntimeDiagnosticRecord
     delete screenshot.dataUrl;
     sanitized.sceneDebug = { ...sanitized.sceneDebug, screenshot };
   }
+  return sanitized;
+}
+
+/** Post-commit only: metrics, screen-share map and log describe a persisted report. */
+function publishDiagnosticRecord(roomId: string, diagnostic: RuntimeDiagnosticRecord): void {
   logEvent({
     service: "api",
     event: "runtime_diagnostic_report",
     roomId,
-    participantId: sanitized.participantId,
-    reportId,
-    requestId,
-    issueCode: sanitized.issueCode ?? null,
-    note: sanitized.note ?? null,
-    timestamp: sanitized.createdAt
+    participantId: diagnostic.participantId,
+    reportId: diagnostic.reportId,
+    requestId: diagnostic.requestId,
+    issueCode: diagnostic.issueCode ?? null,
+    note: diagnostic.note ?? null,
+    timestamp: diagnostic.createdAt
   });
-  return sanitized;
+  metrics.diagnosticsReportsCreatedTotal += 1;
+  observeScreenShareDiagnostic(roomId, diagnostic);
+  if (diagnostic.issueCode) {
+    incrementCounter(metrics.roomJoinFailuresTotal, diagnostic.issueCode);
+  }
 }
 
 function screenShareSessionKey(roomId: string, diagnostic: RuntimeDiagnosticRecord): string | null {
@@ -3596,13 +3604,22 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     const participantId = typeof payload.participantId === "string" ? payload.participantId : undefined;
     const session = await verifyRoomSessionRequest(request, { roomId, participantId });
     if (!session.ok) return writeSessionTokenError(response, session);
-    const diagnostic = createDiagnosticRecord(roomId, payload, request);
-    metrics.diagnosticsReportsCreatedTotal += 1;
-    observeScreenShareDiagnostic(roomId, diagnostic);
-    if (diagnostic.issueCode) {
-      incrementCounter(metrics.roomJoinFailuresTotal, diagnostic.issueCode);
+    const diagnostic = createDiagnosticRecord(payload, getRequestId(request));
+    const room = await storage.getRoom(roomId);
+    if (session.payload.identityProtocolVersion === 2) {
+      if (!room) return json(response, 404, { error: "room_not_found" });
+      const actorResult = resolveControlPlaneActor(request);
+      if (!actorResult.ok || actorResult.actor.actorType !== "room-session"
+        || actorResult.actor.identityProtocolVersion !== 2) return json(response, 403, { error: "forbidden" });
+      // Serialize INSERT and retention across writers under the upfront room lock.
+      await runGuardedRoomEffect(storage, actorResult.actor, room, "room.join",
+        scoped => scoped.addDiagnostic(roomId, diagnostic), { roomWrite: true });
+    } else if (room) {
+      await runLegacyRoomEffect(storage, room, { roomWrite: true }, scoped => scoped.addDiagnostic(roomId, diagnostic));
+    } else {
+      await storage.addDiagnostic(roomId, diagnostic);
     }
-    await storage.addDiagnostic(roomId, diagnostic);
+    publishDiagnosticRecord(roomId, diagnostic);
     json(response, 201, { ok: true, reportId: diagnostic.reportId, requestId: diagnostic.requestId });
     return;
   }
@@ -3619,7 +3636,15 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       allowHostOwnRoom: true
     });
     if (!actor) return;
-    json(response, 200, { items: await listXrTelemetry(roomId) });
+    // Prepare outside the fence; release only under current room authority.
+    const items = await listXrTelemetry(roomId);
+    const room = await storage.getRoom(roomId);
+    const send = () => { json(response, 200, { items }); };
+    if (!room) {
+      if (actor.identityProtocolVersion === 2) return json(response, 404, { error: "room_not_found" });
+      send(); return;
+    }
+    await runGuardedRoomEffect(storage, actor, room, "room.join", async scoped => { scoped.releaseResponse(send); }, { hostOrOwner: true });
     return;
   }
 
@@ -3631,7 +3656,31 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     if (!payload) return json(response, 400, { error: "xr_telemetry_payload_required" });
     const session = await verifyRoomSessionRequest(request, { roomId, participantId });
     if (!session.ok) return writeSessionTokenError(response, session);
-    await upsertXrTelemetry(roomId, participantId, payload);
+    const room = await storage.getRoom(roomId);
+    // The fence writes only through scoped storage; idle still releases a no-op
+    // so Memory rechecks authority. The response waits for commit and map apply.
+    // Retention writers serialize up front; idle keeps the shared mode.
+    const effect = async (scoped: RoomIdentityEffectStorage, record: XrTelemetryRecord, persist: boolean) => {
+      if (persist) await scoped.addXrTelemetry(roomId, participantId, record as unknown as Record<string, unknown>);
+      else scoped.releaseResponse(() => {});
+    };
+    let commit: (record: XrTelemetryRecord, persist: boolean) => Promise<void>;
+    if (session.payload.identityProtocolVersion === 2) {
+      if (!room) return json(response, 404, { error: "room_not_found" });
+      const actorResult = resolveControlPlaneActor(request);
+      if (!actorResult.ok || actorResult.actor.actorType !== "room-session"
+        || actorResult.actor.identityProtocolVersion !== 2) return json(response, 403, { error: "forbidden" });
+      const actor = actorResult.actor;
+      commit = (record, persist) => runGuardedRoomEffect(storage, actor, room, "room.join",
+        scoped => effect(scoped, record, persist), { roomWrite: persist });
+    } else if (room) {
+      commit = (record, persist) => runLegacyRoomEffect(storage, room, { roomWrite: persist }, scoped => effect(scoped, record, persist));
+    } else {
+      await upsertXrTelemetry(roomId, participantId, payload);
+      json(response, 200, { ok: true });
+      return;
+    }
+    await upsertXrTelemetryWithFence(roomId, participantId, payload, commit);
     json(response, 200, { ok: true });
     return;
   }
@@ -3889,6 +3938,10 @@ export function startApiServer(port = apiPort) {
       }
       if (error instanceof RoomEffectNotFound) {
         json(response, 404, { error: "room_not_found" });
+        return;
+      }
+      if (error instanceof XrTelemetryQueueFull) {
+        json(response, 429, { error: "xr_telemetry_queue_full" });
         return;
       }
       if (error instanceof Error && error.message === IDENTITY_LIFECYCLE_REQUIRES_V2) {

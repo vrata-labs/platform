@@ -40,7 +40,8 @@ export interface AuthorHttpPackage {
   packageId: string; pluginId: string; version: string; artifactSha256: string;
   byteLength: number; manifest: RoomPluginManifest; state: string; uploadSettled: boolean;
 }
-type Phase = "body-admitted" | "body-end" | "put-written" | "upload-settled" | "private-read" | "plugin-room" | "settlement-timeout";
+type Phase = "body-admitted" | "body-end" | "put-written" | "upload-settled" | "private-read" | "plugin-room" | "settlement-timeout"
+  | "telemetry-effect" | "telemetry-written" | "telemetry-read";
 type Message = { event?: string; phase?: Phase; id?: string; command?: string; kind?: Phase; roomId?: string; offset?: number; operation?: string;
   skip?: number; sqlState?: "55P03"; lockTimeoutMs?: number };
 
@@ -83,10 +84,11 @@ export function assertAuthorHttpPublicDto(value: unknown, forbidden: string[] = 
 }
 
 /** All instrumentation is confined to this child. IPC messages contain phase IDs only, never HTTP values.
- * SQL pauses occur AFTER acknowledged COMMIT, or BEFORE a plugin parent lock, never while owning the fence.
+ * Plugin SQL pauses occur after acknowledged COMMIT or before the parent lock.
+ * telemetry-written deliberately pauses before COMMIT while holding the room fence.
  * The local reader currently uses FileHandle; readFile is also wrapped for the equivalent buffered path.
  */
-function childInstrumentation(indexUrl: string): string {
+function childInstrumentation(indexUrl: string, telemetryCheckpoints: boolean): string {
   return `
     import {IncomingMessage} from 'node:http';
     import {syncBuiltinESMExports} from 'node:module';
@@ -111,7 +113,7 @@ function childInstrumentation(indexUrl: string): string {
     const on=IncomingMessage.prototype.on;
     IncomingMessage.prototype.on=function(event,...args){
       const result=on.call(this,event,...args), id=this.headers?.['x-author-http-phase'];
-      if(id && event==='end' && this.url?.includes('/plugins/')){
+       if(id && event==='end' && (this.url?.includes('/plugins/') || (${telemetryCheckpoints} && (this.url?.includes('/diagnostics') || this.url?.includes('/xr-telemetry'))))){
         notify({event:'phase',phase:'body-admitted',id});
         on.call(this,'end',()=>notify({event:'phase',phase:'body-end',id}));
       }
@@ -173,11 +175,36 @@ function childInstrumentation(indexUrl: string): string {
       return remove.call(this,path,...args);
     };
     syncBuiltinESMExports();
+    if(${telemetryCheckpoints}){
+      // Relay only a validated correlation UUID; raw diagnostic logs stay unrecorded.
+      const write=process.stdout.write;
+      process.stdout.write=function(chunk,...args){
+        if(typeof chunk==='string') try{
+          const event=JSON.parse(chunk);
+          if(event.event==='runtime_diagnostic_report' && typeof event.requestId==='string'
+            && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(event.requestId)) notify({event:'diagnostic-published',id:event.requestId});
+        }catch{}
+        return write.call(this,chunk,...args);
+      };
+      const {PostgresStorage}=await import(${JSON.stringify(new URL("storage.js", indexUrl).href)});
+      const effect=PostgresStorage.prototype.withRoomIdentityEffect;
+      PostgresStorage.prototype.withRoomIdentityEffect=async function(guard,...args){
+        await pause('telemetry-effect',guard.roomId);return effect.call(this,guard,...args);
+      };
+      for(const method of ['addDiagnostic','addXrTelemetry','getXrTelemetry']){
+        const original=PostgresStorage.prototype[method];
+        PostgresStorage.prototype[method]=async function(roomId,...args){
+          if(method!=='getXrTelemetry' && !this.effectRoomWrite) throw new Error('telemetry_fixture_requires_upfront_write_mode');
+          const result=await original.call(this,roomId,...args);
+          await pause(method==='getXrTelemetry'?'telemetry-read':'telemetry-written',roomId);return result;
+        };
+      }
+    }
     await import(${JSON.stringify(indexUrl)});
   `;
 }
 
-export async function startAuthorHttpFixture(t: TestContext, floor: 1 | 2 = 2) {
+export async function startAuthorHttpFixture(t: TestContext, floor: 1 | 2 = 2, telemetryCheckpoints = false) {
   assert.ok(process.env.VRATA_TEST_POSTGRES_URL, "VRATA_TEST_POSTGRES_URL is required (including CI)");
   const schema = `plugin_author_http_${randomUUID().replaceAll("-", "")}`;
   const rootPool = new Pool({ connectionString: process.env.VRATA_TEST_POSTGRES_URL });
@@ -239,7 +266,7 @@ export async function startAuthorHttpFixture(t: TestContext, floor: 1 | 2 = 2) {
   const messages: Message[] = [];
   const io: string[] = [];
   function spawnOwnedApiChild() {
-    const owned = spawn(process.execPath, ["--input-type=module", "-e", childInstrumentation(new URL("../index.js", import.meta.url).href)], {
+    const owned = spawn(process.execPath, ["--input-type=module", "-e", childInstrumentation(new URL("../index.js", import.meta.url).href, telemetryCheckpoints)], {
       cwd: fileURLToPath(new URL("../../", import.meta.url)), env, stdio: ["ignore", "pipe", "pipe", "ipc"]
     });
     child = owned;
@@ -358,6 +385,11 @@ export async function startAuthorHttpFixture(t: TestContext, floor: 1 | 2 = 2) {
     return { state, packages, bindings, files: await files(), io: [...io] };
   }
   async function arm(kind: Phase, roomId: string, skip = 0) { return control("arm", { kind, roomId, skip }); }
+  async function diagnosticPublishedCount(requestId: string): Promise<number> {
+    assert.equal(typeof requestId === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(requestId), true, "fixture correlation UUID required");
+    await control("sync");
+    return messages.filter(message => message.event === "diagnostic-published" && message.id === requestId).length;
+  }
   function stalled(path: string, token: string, body: Uint8Array, method = "POST", declared = true) {
     const id = randomUUID();
     let pending!: ClientRequest;
@@ -393,7 +425,7 @@ export async function startAuthorHttpFixture(t: TestContext, floor: 1 | 2 = 2) {
   }
   return { schema, pool, storage, localRoot, base, io, adminHeaders, request, invite, admit, session, room, present, transition,
     upload, bind, files, snapshot, stalled, held, arm, restartApi, phase: (id: string, kind: Phase) => waitMessage("phase", id, kind),
-    resume: () => control("resume"), clock: (offset: number) => control("clock", { offset }) };
+    resume: () => control("resume"), clock: (offset: number) => control("clock", { offset }), diagnosticPublishedCount };
 }
 
 function capture(status: number, headers: Record<string, string>, bytes: Buffer): AuthorHttpResponse {

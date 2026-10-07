@@ -56,10 +56,11 @@ import { createPostgresRoomIdentities, assertPostgresEffect, loadPostgresPersona
 import { assertPersonalOwnerResponse } from "./identity/personal-owner-response.js";
 import type { RoomIdentityCredential } from "@vrata/shared-types/identity-credential";
 import { createMemoryAdmissionBudget, createPostgresAdmissionBudget } from "./identity/admission-budget.js";
-import { type RoomEffectGuard, type RoomEffectActor } from "./identity/effect-write-guard.js";
+import { assertCurrentEffect, type RoomEffectGuard, type RoomEffectActor } from "./identity/effect-write-guard.js";
 import type { RoomIdentityEffectStorage } from "./storage-contracts.js";
 import type { LegacyRoomEffectOptions } from "./storage-contracts.js";
 import { createRoomEffectFacade } from "./identity/effect-facade.js";
+import { createMemoryTelemetryStage, type MemoryTelemetrySink } from "./identity/memory-telemetry-stage.js";
 import { roomFenceTransaction, confirmedRoomWriteRejection, RoomFenceCommitUncertain } from "./identity/fence-transaction.js";
 import { IdentityBoundaryError } from "./identity/legacy-boundary.js";
 import { installRoomIdentitySchema } from "./identity/postgres-schema.js";
@@ -239,11 +240,15 @@ export class MemoryStorage implements Storage {
   async withRoomIdentityEffect<T>(guard: RoomEffectGuard, effect: (scoped: RoomIdentityEffectStorage, current: RoomEffectActor) => Promise<T>): Promise<T> {
     let active = true;
     const current = this.identityAdapter.assertCurrentEffect(guard);
+    const check = () => {
+      if (!active) throw new Error("room_effect_scope_closed");
+      this.identityAdapter.assertCurrentEffect(guard);
+    };
+    const stage = createMemoryTelemetryStage(guard.roomId);
     try {
-      return await effect(createRoomEffectFacade(this, { roomWrite: guard.roomWrite, check: () => {
-        if (!active) throw new Error("room_effect_scope_closed");
-        this.identityAdapter.assertCurrentEffect(guard);
-      } }), current);
+      const result = await effect(createRoomEffectFacade(this, { roomWrite: guard.roomWrite, check, telemetry: stage.database }), current);
+      stage.commit(check, this.telemetrySink);
+      return result;
     } finally { active = false; }
   }
   async withLegacyRoomEffect<T>(scope: { tenantId: string; roomId: string }, options: LegacyRoomEffectOptions,
@@ -258,8 +263,12 @@ export class MemoryStorage implements Storage {
       }
     };
     check();
-    try { return await effect(createRoomEffectFacade(this, { roomWrite: options.roomWrite, check })); }
-    finally { active = false; }
+    const stage = createMemoryTelemetryStage(scope.roomId);
+    try {
+      const result = await effect(createRoomEffectFacade(this, { roomWrite: options.roomWrite, check, telemetry: stage.database }));
+      stage.commit(check, this.telemetrySink);
+      return result;
+    } finally { active = false; }
   }
   async getPersonalRoomState(tenantId: string, roomId: string): Promise<RoomPersonalState | null> {
     const room = this.rooms.get(roomId);
@@ -716,22 +725,30 @@ export class MemoryStorage implements Storage {
     }
     return this.assets.delete(assetId);
   }
+  private readonly telemetrySink: MemoryTelemetrySink = {
+    appendDiagnostic: (roomId, payload) => {
+      const entries = this.diagnostics.get(roomId) ?? [];
+      entries.push(payload);
+      while (entries.length > 200) entries.shift();
+      this.diagnostics.set(roomId, entries);
+    },
+    appendXrTelemetry: (roomId, entry) => {
+      const entries = this.xrTelemetry.get(roomId) ?? [];
+      entries.push(entry);
+      while (entries.length > XR_TELEMETRY_EVENT_LIMIT) entries.shift();
+      this.xrTelemetry.set(roomId, entries);
+    }
+  };
   async addDiagnostic(roomId: string, payload: RuntimeDiagnosticRecord): Promise<void> {
-    const entries = this.diagnostics.get(roomId) ?? [];
-    entries.push(payload);
-    while (entries.length > 200) entries.shift();
-    this.diagnostics.set(roomId, entries);
+    this.telemetrySink.appendDiagnostic(roomId, payload);
   }
   async getDiagnostics(roomId: string): Promise<RuntimeDiagnosticRecord[]> { return this.diagnostics.get(roomId) ?? []; }
   async addXrTelemetry(roomId: string, participantId: string, payload: Record<string, unknown>): Promise<void> {
-    const entries = this.xrTelemetry.get(roomId) ?? [];
-    entries.push({
+    this.telemetrySink.appendXrTelemetry(roomId, {
       participantId,
       payload: structuredClone(payload),
       createdAt: new Date().toISOString()
     });
-    while (entries.length > XR_TELEMETRY_EVENT_LIMIT) entries.shift();
-    this.xrTelemetry.set(roomId, entries);
   }
   async getXrTelemetry(roomId: string): Promise<XrTelemetryEventRecord[]> {
     return (this.xrTelemetry.get(roomId) ?? []).map((entry) => structuredClone(entry));
@@ -862,8 +879,16 @@ export class PostgresStorage implements Storage {
         [guard.tenantId, guard.roomId]);
       if (!room.rowCount) throw new IdentityStorageError("room_not_found");
       const current = await assertPostgresEffect(client, guard);
-      return effect(createRoomEffectFacade(new PostgresStorage(this.pool, this.identityNow, client, guard.roomWrite === true),
-        { roomWrite: guard.roomWrite, check: checkAlive }), current);
+      // The parent lock pins role/epoch, but awaited SQL can outlive the original
+      // session deadline: recheck it before each operation and before COMMIT.
+      const check = () => { checkAlive(); assertCurrentEffect(guard, current, this.identityNow()); };
+      const scoped = createRoomEffectFacade(new PostgresStorage(this.pool, this.identityNow, client, guard.roomWrite === true),
+        { roomWrite: guard.roomWrite, check });
+      let released = false;
+      const result = await effect({ ...scoped, releaseResponse: send => scoped.releaseResponse(() => { released = true; send(); }) }, current);
+      // A released response was the final authorized operation; the facade rejects any later one.
+      if (!released) check();
+      return result;
     });
   }
   async withLegacyRoomEffect<T>(scope: { tenantId: string; roomId: string }, options: LegacyRoomEffectOptions,
@@ -2013,16 +2038,16 @@ export class PostgresStorage implements Storage {
     return (result.rowCount ?? 0) > 0;
   }
   async addDiagnostic(roomId: string, payload: RuntimeDiagnosticRecord): Promise<void> {
-    await this.pool.query(`insert into runtime_diagnostics (room_id, payload) values ($1,$2::jsonb)`, [roomId, JSON.stringify(payload)]);
-    await this.pool.query(`delete from runtime_diagnostics where id in (select id from runtime_diagnostics where room_id = $1 order by id desc offset 200)`, [roomId]);
+    await this.effectDatabase.query(`insert into runtime_diagnostics (room_id, payload) values ($1,$2::jsonb)`, [roomId, JSON.stringify(payload)]);
+    await this.effectDatabase.query(`delete from runtime_diagnostics where id in (select id from runtime_diagnostics where room_id = $1 order by id desc offset 200)`, [roomId]);
   }
   async getDiagnostics(roomId: string): Promise<RuntimeDiagnosticRecord[]> {
     const result = await this.pool.query(`select payload from runtime_diagnostics where room_id = $1 order by id asc`, [roomId]);
     return result.rows.map((row: { payload: RuntimeDiagnosticRecord }) => row.payload);
   }
   async addXrTelemetry(roomId: string, participantId: string, payload: Record<string, unknown>): Promise<void> {
-    await this.pool.query(`insert into xr_telemetry (room_id, participant_id, payload) values ($1,$2,$3::jsonb)`, [roomId, participantId, JSON.stringify(payload)]);
-    await this.pool.query(`delete from xr_telemetry where id in (select id from xr_telemetry where room_id = $1 order by id desc offset ${XR_TELEMETRY_EVENT_LIMIT})`, [roomId]);
+    await this.effectDatabase.query(`insert into xr_telemetry (room_id, participant_id, payload) values ($1,$2,$3::jsonb)`, [roomId, participantId, JSON.stringify(payload)]);
+    await this.effectDatabase.query(`delete from xr_telemetry where id in (select id from xr_telemetry where room_id = $1 order by id desc offset ${XR_TELEMETRY_EVENT_LIMIT})`, [roomId]);
   }
   async getXrTelemetry(roomId: string): Promise<XrTelemetryEventRecord[]> {
     const result = await this.pool.query(`select participant_id, payload, created_at from xr_telemetry where room_id = $1 order by id asc`, [roomId]);

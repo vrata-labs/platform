@@ -4,8 +4,11 @@ import type { RoomEffectDatabase, RoomIdentityEffectStorage } from "../storage-c
  * an await gap cannot preserve legacy authority across a protocol change. */
 export function createRoomEffectFacade(database: RoomEffectDatabase, options: {
   check?: () => void; roomWrite?: boolean;
+  /** Private per-call telemetry override (Memory staging); defaults to `database`. */
+  telemetry?: Pick<RoomEffectDatabase, "addDiagnostic" | "addXrTelemetry">;
 }): RoomIdentityEffectStorage {
   let released = false;
+  const telemetry = options.telemetry ?? database;
   const invoke = <T>(operation: () => T, roomWrite = false, required = "room_write_fence_required"): T => {
     options.check?.();
     if (released) throw new Error("room_effect_response_released");
@@ -28,6 +31,8 @@ export function createRoomEffectFacade(database: RoomEffectDatabase, options: {
     revokeRoomInvite: (...args) => invoke(() => database.revokeRoomInvite(...args)),
     listWaitingRoomRequests: (...args) => invoke(() => database.listWaitingRoomRequests(...args)),
     updateWaitingRoomRequest: (...args) => invoke(() => database.updateWaitingRoomRequest(...args)),
+    addDiagnostic: (...args) => invoke(() => telemetry.addDiagnostic(...args)),
+    addXrTelemetry: (...args) => invoke(() => telemetry.addXrTelemetry(...args)),
     releaseResponse: send => invoke(() => { released = true; send(); })
   };
 }

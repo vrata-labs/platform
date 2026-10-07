@@ -1,7 +1,7 @@
 # Рабочая встреча и room plugins: журнал реализации
 
 Исходный план: `2026-09-25-working-meeting-and-room-plugins.md`.
-Дата начала: 2026-09-26; обновлено 2026-09-30. **Опубликованы T01, исправление upload feedback из T12, предварительный update/rejoin клиент T01a-S1 и server identity/recovery foundations T01a-S2a.** Реализация идёт срезами; готовность всей встречи и внешних плагинов не заявляется.
+Дата начала: 2026-09-26; обновлено 2026-10-07. **Опубликованы T01, исправление upload feedback из T12, предварительный update/rejoin клиент T01a-S1 и server identity/recovery foundations T01a-S2a.** Реализация идёт срезами; готовность всей встречи и внешних плагинов не заявляется.
 
 ## T01 — объединённый baseline
 
@@ -509,6 +509,28 @@ Known terminal PUT ACK/rejection settlement повторяется максим�
 [Артефакт gate](https://github.com/vrata-labs/platform/actions/runs/37603558951/artifacts/11474878869) подтверждает floor-1 denial scenario с настоящим active trusted legacy Host, административным и другими callers; кода/config/attachment headers нет, owned resources очищены. Остальные room/scene/meeting/media checks прошли; skipped/unexpected/flaky — 0. Private signed PUT/read-exact/direct+external unsigned 403 proof и отсутствие публикации своего verifier package подтверждены.
 
 Running image exact SHA, minimumIdentityProtocol=1 и identityAuthorityBound=false проверены. Подготовленный API поставлен, positive author install доказан только isolated-v2 local/CI; global public activation T05 всё ещё требует T01a. Общий floor не поднимали. После успешного gate health/demo-room/control-plane вернули 200. Обе собственные локальные PG fixtures удалены после проверки ID/labels; родительские/соседние процессы не останавливались.
+
+### T01a-S2b-V: persisted diagnostics/XR telemetry
+
+Для существующих комнат POST diagnostics и PUT XR telemetry сохраняют исходный MAC-verified deadline/epoch в том же effect fence, что текущая authority. PG INSERT и retention DELETE выполняются одним scoped client; final original-deadline check после awaited SQL отменяет транзакцию, если срок закончился. Сохраняющие callback берут parent write mode сразу: параллельные writers не удаляют одну старую строку из разных снимков и не превышают cap 200 diagnostics / 1000 XR. Idle XR остаётся shared и проходит проверку без новой persisted event. Проверка после уже отправленного read response не создаёт второй ответ.
+
+Memory stages только telemetry текущего вызова: private clones, original createdAt и write order; callback throw либо final expiry/revoke/cutover discard не меняют массивы. Commit дописывает current arrays и не стирает другой successful callback. Это не общий rollback остальных Memory effects.
+
+Diagnostic log/counters/screen-share projection и HTTP write success появляются после успешного сохранения. XR live/latest/history публикуются после успешного COMMIT, FIFO по room/participant сохраняет significance transitions; bounded pending 32 на пару / 256 на room возвращает 429 при переполнении. Callback и original payload изолированы. Ошибка освобождает очередь для следующего запроса. GET private XR history готовит snapshot вне lock, затем проверяет current Host/personal Owner, epoch и исходный срок при synchronous release; admin остаётся отдельным bypass.
+
+Реальный PostgreSQL round trip выявил duplicate history от jsonb key order. Equality теперь order-independent для объектов на всех уровнях; array order, distinct values/same-time events и лимит 80 сохранены. Исходный legacy virtual/no-room fallback не выдаётся за fenced persisted path. Общий identity floor остаётся 1; administrator owner seed, virtual/frame/media и остальные activation gates не закрыты.
+
+Focused final API/state/HTTP suite: **111/111**, без skip/fail (Node22, собственная PG schema). Включены body/parent/SQL waits, final expiry, revoke serialization, prepared history после Host transfer/revoke/expiry, retention rollback и concurrent caps. Настоящий successful COMMIT с искусственно потерянным client ACK сохраняет durable row, но возвращает uncertain failure и не публикует live projection; следующий queued call проходит. Server-rejected и conservative uncertain COMMIT проверены отдельно. Автоматический real-clock retry или вывод «ошибка означает rollback» не добавлен.
+
+Общий local/staging-facing round-trip scenario проверяет genuine trusted Host admission, sanitized diagnostic, exact scoped XR identity, significant → idle latest без duplicate history, unauthenticated denial и cleanup собственной room/tenant/invite. Focused local scenario прошёл; опубликованный staging SHA для этого среза ещё не проверен. Полные local checks, CI/Docker и staging acceptance записываются после завершения соответствующих запусков.
+
+До публикации ограничено одновременное исполнение high-frequency XR callbacks: ready pair heads получают room turn (один на комнату) и один из двух process/service slots перед обращением к pool. Общая pending capacity — 512, сверх pair32/room256. Waiting samples не занимают database clients; истёкший proof проверяется при реальном исполнении, failure возвращает слот и очередь продолжает работу. При перегрузке возможна потеря telemetry samples через 429; частота runtime sampling и input/locomotion не менялись. Отдельная проверка с двумя настоящими PG parent-lock waits подтверждает, что обычная notes operation использует оставшееся соединение, а третий XR room ещё не вошёл в callback.
+
+Diagnostic log теперь наблюдается в HTTP-тестах только как событие с проверенным correlation UUID; сырой stdout и credentials не сохраняются. До COMMIT и после отказов публикации нет, после подтверждённой записи ровно одно событие. Plugin checkpoints вне fence и intentional telemetry-written checkpoint внутри fence описаны отдельно.
+
+Workspace lint/typecheck/build и package tests прошли; runtime — **1094/1094**. После последнего изменения scheduler/log assertions API build/lint/typecheck и полный API suite с реальным PostgreSQL/pinned rollback modules повторены: **1153 passed / 1 optional live-MinIO skipped**, без fail. Остальные исполняемые packages после workspace checks не менялись. Финальный полный local E2E — **173/173**, без skip/retry (**29,6 минуты**, Node22). После этого прогона исполняемое дерево не менялось; exact-SHA staging acceptance добавляется после публикации.
+
+Ограничение существующей политики хранения: room DELETE не очищает runtime_diagnostics/xr_telemetry и live XR map. Round-trip удаляет только собственные room/tenant/invite, но оставляет по одной persisted telemetry записи обеих таблиц. Это не заявляется как полный data cleanup или глобально ограниченное архивирование; отдельная retirement/telemetry-retention политика остаётся частью T01a activation gates.
 
 ## Публикация первого среза T01/T12
 

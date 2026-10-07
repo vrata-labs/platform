@@ -223,6 +223,17 @@ test("identical live and persisted events are deduplicated while distinct events
   assert.deepEqual((await service.listXrTelemetry("room"))[0].history.map((entry) => entry.kind), ["seat", "turn"]);
 });
 
+test("a live event and its jsonb-reordered persisted copy appear once in history", async () => {
+  const reverseKeys = (value: unknown): unknown => Array.isArray(value) ? value.map(reverseKeys)
+    : value === null || typeof value !== "object" ? value
+      : Object.fromEntries(Object.entries(value).reverse().map(([key, entry]) => [key, reverseKeys(entry)]));
+  const value = record({ kind: "input", xrRawInputs: [{ index: 0, handedness: "right", axes: [0.2, 0.4] }], interactionRay: { active: true, origin: { x: 1, z: 3 } } });
+  const stored = reverseKeys({ ...value, roomId: "room", participantId: "p" }) as XrTelemetryRecord;
+  const service = fixture([event("p", stored), event("p", record({ kind: "turn" }))]);
+  await service.upsertXrTelemetry("room", "p", value);
+  assert.deepEqual((await service.listXrTelemetry("room"))[0].history.map((entry) => entry.kind), ["input", "turn"]);
+});
+
 test("idle live updates replace latest without persisting or appending history", async () => {
   const service = fixture();
   await service.upsertXrTelemetry("room", "p", record({ kind: "seat" }));
