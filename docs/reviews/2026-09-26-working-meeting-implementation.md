@@ -499,6 +499,17 @@ Known terminal PUT ACK/rejection settlement повторяется максим�
 
 Проверка формата исправлена по действующему signer/parser без изменения API. Общий floor-1 scenario теперь выполняется и local/CI: реальная trusted Host invitation/admission, 2-сегментный token и server-verified active session-control, затем 7 plugin routes × 5 вариантов авторизации получают ровно 409. Приватные credentials в trace/screenshot/video не сохраняются. Focused local old/new protocol cases — **2/2** (32,3 s); общий floor не повышался. Окончательный полный local suite после test-only исправления — **172/172**, без skipped/retries (**39,6 минуты**, Node22).
 
+| Этап T05 prepared API | Результат |
+|---|---|
+| Проверенный и опубликованный SHA | `96b8c276e2ba6ef6675d0888fcb5197812100cf5` (API source из `7551040`, затем test-only legacy format fix) |
+| [CI 37600197890](https://github.com/vrata-labs/platform/actions/runs/37600197890) | Success: clean checks, package tests с PostgreSQL/pinned rollback, полный E2E, M0.5, locked assets |
+| [Docker Publish 37600198204](https://github.com/vrata-labs/platform/actions/runs/37600198204) | Success: immutable images exact SHA |
+| [Staging Deploy 37603558951](https://github.com/vrata-labs/platform/actions/runs/37603558951) | Success: **65/65 staging E2E**, **1/1 blocking Rutube**, successful SHA сохранён; rollback skipped |
+
+[Артефакт gate](https://github.com/vrata-labs/platform/actions/runs/37603558951/artifacts/11474878869) подтверждает floor-1 denial scenario с настоящим active trusted legacy Host, административным и другими callers; кода/config/attachment headers нет, owned resources очищены. Остальные room/scene/meeting/media checks прошли; skipped/unexpected/flaky — 0. Private signed PUT/read-exact/direct+external unsigned 403 proof и отсутствие публикации своего verifier package подтверждены.
+
+Running image exact SHA, minimumIdentityProtocol=1 и identityAuthorityBound=false проверены. Подготовленный API поставлен, positive author install доказан только isolated-v2 local/CI; global public activation T05 всё ещё требует T01a. Общий floor не поднимали. После успешного gate health/demo-room/control-plane вернули 200. Обе собственные локальные PG fixtures удалены после проверки ID/labels; родительские/соседние процессы не останавливались.
+
 ## Публикация первого среза T01/T12
 
 Локально прошли workspace lint/typecheck/build/tests с PostgreSQL, затем runtime build и 905 runtime tests после финальных правок. Полный `pnpm test:e2e` на финальном исполняемом дереве: **148 passed**, без skip (41.6 min).
