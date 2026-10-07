@@ -532,6 +532,23 @@ Workspace lint/typecheck/build и package tests прошли; runtime — **1094
 
 Ограничение существующей политики хранения: room DELETE не очищает runtime_diagnostics/xr_telemetry и live XR map. Round-trip удаляет только собственные room/tenant/invite, но оставляет по одной persisted telemetry записи обеих таблиц. Это не заявляется как полный data cleanup или глобально ограниченное архивирование; отдельная retirement/telemetry-retention политика остаётся частью T01a activation gates.
 
+#### Публикация telemetry-среза
+
+Коммит `5dd1ef21a76f1923d0db564871e7d4204425af2a` первоначально не был принят GitHub: четыре push через HTTPS/SSH вернули server Internal Server Error, хотя write permission присутствовала. Повторный обычный push успешно опубликовал тот же коммит; code/runtime и локальные проверки после этого не менялись.
+
+| Этап | Результат |
+|---|---|
+| Runtime/API SHA | `5dd1ef21a76f1923d0db564871e7d4204425af2a` |
+| [CI 37664767221](https://github.com/vrata-labs/platform/actions/runs/37664767221) | Success: workspace checks, package tests с PostgreSQL/pinned rollback, полный E2E, M0.5 и locked scene assets |
+| [Docker Publish 37664767427](https://github.com/vrata-labs/platform/actions/runs/37664767427) | Success: immutable images exact SHA |
+| [Staging Deploy 37669078259, attempt 2](https://github.com/vrata-labs/platform/actions/runs/37669078259/attempts/2) | Success: **66/66 staging E2E**, **1/1 blocking Rutube**, successful SHA сохранён; rollback skipped |
+
+Attempt 1 дал **66/66** для основного staging suite, включая новый telemetry round trip и private-storage proof. Блокирующий Rutube-тест остановился на sendSurfaceInput: lastInputSeq остался 15 вместо значения больше 15 за 10 секунд. Штатный rollback восстановил `96b8c276e2ba6ef6675d0888fcb5197812100cf5`, running image tag, scene URLs и smoke. Причина остановки input acknowledgement не установлена; успешный повтор не считается исправлением этой нестабильности.
+
+Attempt 2 — один повтор **того же SHA**, без изменения кода, таймаутов или assertions. [Артефакт gate](https://github.com/vrata-labs/platform/actions/runs/37669078259/artifacts/11508736936) подтверждает expected=66 / unexpected=0 / flaky=0 / skipped=0, а Rutube — expected=1 с теми же нулевыми отказами/повторами. Проверены current-page loaded Hall/BlueOffice/ArtGallery, Hall mock XR seating, BlueOffice ray/trigger telemetry и прежние room/meeting/media flows. Это operational scene evidence, не новая visual acceptance.
+
+Running image exact SHA, minimumIdentityProtocol=1 и identityAuthorityBound=false подтверждены при rollout. Private verifier выполнил signed PUT/read-exact, direct/public unsigned denial и собственный metadata/blob cleanup без package publication. После успешного gate `/health`, `/rooms/demo-room`, `/control-plane`, `/api/templates` вернули 200. Новая telemetry проверена на опубликованном staging, общая identity v2 и публичная T05 activation не включены. Локальная временная PG fixture удалена после проверки её ID/labels; остальные процессы не останавливались.
+
 ## Публикация первого среза T01/T12
 
 Локально прошли workspace lint/typecheck/build/tests с PostgreSQL, затем runtime build и 905 runtime tests после финальных правок. Полный `pnpm test:e2e` на финальном исполняемом дереве: **148 passed**, без skip (41.6 min).
