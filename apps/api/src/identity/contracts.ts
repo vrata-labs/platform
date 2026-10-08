@@ -4,6 +4,9 @@ import type { RoomInviteRecord, RoomRecord, RoomSessionControlState, WaitingRoom
 
 export type { RoomIdentityScope, RoomIdentityProof };
 
+/** Original MAC-verified RI2 deadline, checked after loading under the mutation lock. */
+export type RoomIdentityMutationProof = RoomIdentityProof & { readonly expiresAtSeconds: number };
+
 export type IdentityProvenance =
   | { kind: "guest" }
   | { kind: "invite"; inviteId: string; role: "guest" | "member" | "presenter" | "host" }
@@ -80,8 +83,8 @@ export interface RoomIdentityStorage {
   get(scope: RoomIdentityScope, identityId: string): Promise<RoomIdentityRecord | null>;
   authority(scope: RoomIdentityScope): Promise<RoomIdentityAuthority | null>;
   resolve(proof: RoomIdentityProof): Promise<{ identity: RoomIdentityRecord; authority: RoomIdentityAuthority; role: RoomRole; permissions: RoomPermission[]; isOwner: boolean } | null>;
-  claimHost(proof: RoomIdentityProof, expectedRevision: number): Promise<RoomIdentityAuthority>;
-  transferHost(proof: RoomIdentityProof, toIdentityId: string, expectedRevision: number): Promise<RoomIdentityAuthority>;
+  claimHost(proof: RoomIdentityMutationProof, expectedRevision: number): Promise<RoomIdentityAuthority>;
+  transferHost(proof: RoomIdentityMutationProof, toIdentityId: string, expectedRevision: number): Promise<RoomIdentityAuthority>;
   revoke(scope: RoomIdentityScope, identityId: string, expectedAuthEpoch: number): Promise<RoomIdentityRecord>;
   transition(scope: RoomIdentityScope, actor: RoomIdentityActor, expectedRevision: number, command: RoomIdentityCommand): Promise<RoomIdentityAuthority>;
   issueRecovery(input: RoomIdentityScope & {

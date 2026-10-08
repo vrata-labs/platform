@@ -324,7 +324,7 @@ test("internal room-state verifier trusts v2 possession and current authority, n
     const legacy = signRoomSessionToken({ ...scope, participantId: identity.participantId, displayName: "Legacy Host", role: "host",
       roleSource: "trusted", permissions: [], sessionId: randomUUID(), iat: now, exp: now + 900, jti: randomUUID() }, secret);
     assert.equal((await verify(legacy)).status, 401);
-    await storage.roomIdentities.claimHost(identity, 0);
+    await storage.roomIdentities.claimHost({ ...identity, expiresAtSeconds: now + 900 }, 0);
     const host = await verify(sessionToken);
     assert.equal(host.status, 200);
     const elevated = await host.json() as typeof before;

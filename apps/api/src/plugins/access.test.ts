@@ -52,12 +52,15 @@ async function fixture(engine: "Memory" | "Postgres", t: TestContext): Promise<F
 function actor(f: Fixture, proof: RoomIdentityRecord): RoomPluginSessionActor {
   return { actorType: "room-session", proof, expiresAtSeconds: Math.ceil((f.now() + 60_000) / 1000) };
 }
+function mutationProof(f: Fixture, proof: RoomIdentityRecord) {
+  return { ...proof, expiresAtSeconds: Math.floor(f.now() / 1000) + 900 };
+}
 async function room(f: Fixture) {
   const value = await f.storage.createRoom({ tenantId: "demo-tenant", name: "Guarded plugins" });
   const scope = { tenantId: value.tenantId, roomId: value.roomId };
   const host = await f.storage.roomIdentities.create({ ...scope, displayName: "Host", baseRole: "member",
     provenance: { kind: "invite", inviteId: randomUUID(), role: "host" } });
-  await f.storage.roomIdentities.claimHost(host, 0);
+  await f.storage.roomIdentities.claimHost(mutationProof(f, host), 0);
   const session = actor(f, host), author = f.storage.roomPluginAccess.author(session);
   return { scope, host, session, author };
 }
@@ -149,11 +152,11 @@ for (const engine of ["Memory", "Postgres"] as const) {
       const memberAuthor = f.storage.roomPluginAccess.author(actor(f, member)), guestAuthor = f.storage.roomPluginAccess.author(actor(f, guest));
       await assert.rejects(memberAuthor.authorize(), code("plugin_author_forbidden"));
       await assert.rejects(guestAuthor.reservePackage(artifact(), fingerprint), code("plugin_author_forbidden"));
-      await f.storage.roomIdentities.transferHost(r.host, member.identityId, 1);
+      await f.storage.roomIdentities.transferHost(mutationProof(f, r.host), member.identityId, 1);
       await assert.rejects(r.author.authorize(), code("plugin_author_forbidden"));
       await memberAuthor.authorize();
       await publish(f, memberAuthor);
-      await f.storage.roomIdentities.transferHost(member, guest.identityId, 2);
+      await f.storage.roomIdentities.transferHost(mutationProof(f, member), guest.identityId, 2);
       await assert.rejects(memberAuthor.authorize(), code("plugin_author_forbidden"));
       await guestAuthor.authorize();
       await publish(f, guestAuthor, artifact("transferred-guest"));
@@ -178,7 +181,7 @@ for (const engine of ["Memory", "Postgres"] as const) {
       const owned = await f.storage.createPersonalOwnedRoom({ tenantId: "demo-tenant", displayName: "Owner" });
       const scope = { tenantId: owned.room.tenantId, roomId: owned.room.roomId }, owner = owned.identity;
       const next = await participant(f, scope), ownerAuthor = f.storage.roomPluginAccess.author(actor(f, owner));
-      await f.storage.roomIdentities.transferHost(owner, next.identityId, 1);
+      await f.storage.roomIdentities.transferHost(mutationProof(f, owner), next.identityId, 1);
       assert.equal((await f.storage.roomIdentities.resolve(owner))?.role, "member");
       await publish(f, ownerAuthor);
       await f.storage.roomIdentities.transition(scope, actor(f, owner), 2, { type: "transfer-owner", targetParticipantId: next.participantId });
@@ -562,7 +565,7 @@ test("Memory transfer during awaited metadata prevents a private-copy commit", a
   const denied = assert.rejects(reserving, code("plugin_author_forbidden"));
   await admitted.promise;
   assert.equal(checks, 1, "the initial guard has passed and metadata is already operating on the private copy");
-  await f.storage.roomIdentities.transferHost(r.host, next.identityId, 1);
+  await f.storage.roomIdentities.transferHost(mutationProof(f, r.host), next.identityId, 1);
   await denied;
   assert.deepEqual(await f.storage.roomPlugins.listPackages(r.scope), []);
 });

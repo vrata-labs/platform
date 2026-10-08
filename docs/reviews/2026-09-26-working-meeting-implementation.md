@@ -1,7 +1,7 @@
 # Рабочая встреча и room plugins: журнал реализации
 
 Исходный план: `2026-09-25-working-meeting-and-room-plugins.md`.
-Дата начала: 2026-09-26; обновлено 2026-10-07. **Опубликованы T01, исправление upload feedback из T12, предварительный update/rejoin клиент T01a-S1 и server identity/recovery foundations T01a-S2a.** Реализация идёт срезами; готовность всей встречи и внешних плагинов не заявляется.
+Дата начала: 2026-09-26; обновлено 2026-10-08. **Опубликованы T01, исправление upload feedback из T12, предварительный update/rejoin клиент T01a-S1 и server identity/recovery foundations T01a-S2a.** Реализация идёт срезами; готовность всей встречи и внешних плагинов не заявляется.
 
 ## T01 — объединённый baseline
 
@@ -548,6 +548,20 @@ Attempt 1 дал **66/66** для основного staging suite, включа
 Attempt 2 — один повтор **того же SHA**, без изменения кода, таймаутов или assertions. [Артефакт gate](https://github.com/vrata-labs/platform/actions/runs/37669078259/artifacts/11508736936) подтверждает expected=66 / unexpected=0 / flaky=0 / skipped=0, а Rutube — expected=1 с теми же нулевыми отказами/повторами. Проверены current-page loaded Hall/BlueOffice/ArtGallery, Hall mock XR seating, BlueOffice ray/trigger telemetry и прежние room/meeting/media flows. Это operational scene evidence, не новая visual acceptance.
 
 Running image exact SHA, minimumIdentityProtocol=1 и identityAuthorityBound=false подтверждены при rollout. Private verifier выполнил signed PUT/read-exact, direct/public unsigned denial и собственный metadata/blob cleanup без package publication. После успешного gate `/health`, `/rooms/demo-room`, `/control-plane`, `/api/templates` вернули 200. Новая telemetry проверена на опубликованном staging, общая identity v2 и публичная T05 activation не включены. Локальная временная PG fixture удалена после проверки её ID/labels; остальные процессы не останавливались.
+
+### T01a-S2b-W: original RI2 deadline
+
+В реальном v2 HTTP-продлении обнаружен await gap: исходный RI2 проверялся перед storage.resolve, но после ожидания новый proof мог подписываться уже за первоначальным сроком. Сервис теперь сохраняет исходный срок до ожидания и проверяет его после чтения; signing использует ровно тот же финальный clock sample. То же правило закрывает прямой issueSession и обе исходные границы paired renewSession. Resolve-only helpers не возвращают истёкший authenticated snapshot; поздний RS2 по-прежнему классифицируется как renewable 401, истёкший RI2 — как 409 recovery. Это не epoch revoke.
+
+Внутренние claimHost/transferHost требуют deadline-bearing proof и копируют исходные примитивы до ожидания persistence.transact. Проверка проходит после parent-room lock/load, до CAS/authority mutation. Deadline equality отказывает, за 1 ms до него операция разрешена. Expiry не подменяет blocked-room отказ, но предшествует stale revision. Эти helpers остаются без новых публичных маршрутов; HTTP-использование требует собственного полного actor contract.
+
+Проверены genuine PostgreSQL parent-lock и max=1 pool waits, отсутствие изменений host/presenter/revision при отказе, сохранение sessionId и signing timestamp, попытка расширить переданный объект proof во время ожидания. Реальный HTTP SELECT остановлен отдельной relation lock только после MAC-проверки RI2: истечение даёт 409 без token/identityCredential, future deadline из body игнорируется; live proof проходит. Independently valid RI2 продолжает выдавать новый RS2 после истечения прежней session. Public shared floor остаётся 1.
+
+Административное legacy owner/host evidence выделено отдельно: проблема касается create и PATCH, а не только нового room INSERT. Обязательный следующий checkpoint — provisioning personal room без legacy owner evidence, затем v2 invite → явный owner transfer. Разрешение этого flow и блокировку переписывания frozen evidence пока не считать готовыми. Virtual fallback, frame/media, bootstrap uncertain-COMMIT reconciliation и retirement также остаются gates.
+
+Focused suite завершён: 128 passed / 1 pinned-template rollback skipped в первом локальном запуске из-за отсутствующего env path; общий прогон уже использует все существующие pinned rollback builds. Workspace lint/typecheck/build прошли. Финальные package checks: API **1166 passed / 1 optional live-MinIO skipped**, runtime **1094/1094**, tools **251 passed / 2 optional skipped**; остальные packages без fail. Полный local E2E на финальном исполняемом дереве: **173/173**, без skip/retry (**41,2 минуты**). После этого исполняемый код не менялся; exact-SHA staging acceptance добавляется после публикации.
+
+Первоначальные общие прогоны на собственном дисковом PG-стенде падали в старых plugin/schema suites по parent timeout и последующему закрытию pool. PostgreSQL checkpoint logs зафиксировали sync=218,188 s с отдельным fsync=19,280 s и sync=75,685 s; наблюдалось idle-in-transaction timeout. Перепроверка на отдельном PostgreSQL того же image ID с tmpfs PGDATA 3 GiB, fsync/synchronous_commit/full_page_writes=on и прежними deadline/assertions дала **45/45** для обоих проблемных specs, затем полный API и workspace suite прошли. Изменён только носитель временной локальной fixture, не код/таймауты и не настройки stage. Это проверка реальных PG locks/MVCC/COMMIT в живом сервере, не доказательство физической дисковой durability или power-loss recovery. Обычный PostgreSQL CI и staging gate остаются обязательны.
 
 ## Публикация первого среза T01/T12
 

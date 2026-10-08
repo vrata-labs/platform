@@ -7,7 +7,7 @@ import { createRoomSessionV2Codec } from "@vrata/shared-types/room-session-v2";
 import { signRoomSessionToken } from "@vrata/shared-types/session-token";
 import { MemoryStorage, PostgresStorage, type Storage } from "./storage.js";
 import { createRoomIdentityService } from "./identity/service.js";
-import { IdentityStorageError, type RoomIdentityScope } from "./identity/contracts.js";
+import { IdentityStorageError, type RoomIdentityScope, type RoomIdentityProof } from "./identity/contracts.js";
 import { MAX_ROOM_IDENTITIES } from "./identity/admission-limits.js";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
@@ -61,7 +61,8 @@ async function fixture(t: TestContext, backend: "memory" | "postgres") {
     waitingRoomEnabled: input.waitingRoomEnabled ?? false,
     expiresAt: new Date(now() + (input.expiresInMs ?? 60_000)).toISOString(), actor: admin
   });
-  return { storage, ids, service, pool, now, advance: (ms: number) => { time += ms; }, makeRoom, create, issueRecovery, issueV2Invite };
+  const mutationProof = (identity: RoomIdentityProof) => ({ ...identity, expiresAtSeconds: Math.floor(now() / 1000) + 900 });
+  return { storage, ids, service, pool, now, mutationProof, advance: (ms: number) => { time += ms; }, makeRoom, create, issueRecovery, issueV2Invite };
 }
 
 for (const backend of ["memory", "postgres"] as const) {
@@ -160,7 +161,7 @@ for (const backend of ["memory", "postgres"] as const) {
       assert.equal((await f.ids.resolve(identity))?.role, "guest");
       const read = await f.ids.get(scope, identity.identityId);
       read!.provenance = { kind: "invite", role: "host", inviteId: "forged" };
-      await assert.rejects(f.ids.claimHost(identity, 0), code("identity_forbidden"));
+      await assert.rejects(f.ids.claimHost(f.mutationProof(identity), 0), code("identity_forbidden"));
       assert.deepEqual((await f.ids.get(scope, identity.identityId))?.provenance, { kind: "guest" });
       assert.equal(await f.ids.get({ ...scope, tenantId: "other" }, identity.identityId), null);
       assert.equal(await f.ids.get({ ...scope, roomId: "missing" }, identity.identityId), null);
@@ -416,7 +417,7 @@ for (const backend of ["memory", "postgres"] as const) {
       const { scope } = await f.makeRoom();
       const host = await f.create(scope, "host");
       const next = await f.create(scope);
-      await f.ids.claimHost(host.identity, 0);
+      await f.ids.claimHost(f.mutationProof(host.identity), 0);
       const first = await f.service.issueSession(host.credential, scope);
       assert.equal(first.role, "host");
       assert.equal((await f.service.resolveSession(first.sessionToken, scope))?.role, "host");
@@ -427,7 +428,7 @@ for (const backend of ["memory", "postgres"] as const) {
       assert.equal(Object.hasOwn(claims, "role"), false);
       assert.equal(Object.hasOwn(claims, "permissions"), false);
       assert.equal(await f.service.resolveSession(first.sessionToken, { ...scope, roomId: "other" }), null);
-      await f.ids.transferHost(host.identity, next.identity.identityId, 1);
+      await f.ids.transferHost(f.mutationProof(host.identity), next.identity.identityId, 1);
       assert.equal((await f.service.resolveSession(first.sessionToken, scope))?.role, "member");
       await assert.rejects(f.service.renewSession(first.sessionToken, next.credential, scope), code("identity_not_active"));
       await assert.rejects(f.service.renewSession(first.sessionToken, first.sessionToken, scope), code("identity_not_active"));
@@ -478,7 +479,7 @@ for (const backend of ["memory", "postgres"] as const) {
       const guest = await f.create(scope, "guest");
       const hostActor = { actorType: "room-session", proof: host.identity, expiresAtSeconds: Math.floor(f.now() / 1000) + 600 } as const;
       const memberActor = { actorType: "room-session", proof: member.identity, expiresAtSeconds: Math.floor(f.now() / 1000) + 600 } as const;
-      await f.ids.claimHost(host.identity, 0);
+      await f.ids.claimHost(f.mutationProof(host.identity), 0);
       const locked = await f.ids.transition(scope, hostActor, 1, { type: "lock" });
       assert.ok(locked.lifecycle.lockedAt);
       assert.equal(locked.lifecycle.lockedBy, host.identity.participantId);
@@ -582,7 +583,7 @@ for (const backend of ["memory", "postgres"] as const) {
       const { scope } = await f.makeRoom();
       const host = await f.create(scope, "host");
       const next = await f.create(scope);
-      await f.ids.claimHost(host.identity, 0);
+      await f.ids.claimHost(f.mutationProof(host.identity), 0);
       const actor = { actorType: "room-session", proof: host.identity, expiresAtSeconds: Math.floor(f.now() / 1000) + 600 } as const;
       await assert.rejects(f.ids.transition(scope, actor, 1, { type: "grant-presenter" } as Parameters<typeof f.ids.transition>[3]), code("invalid_identity_input"));
       await assert.rejects(f.ids.transition(scope, { ...actor, proof: { ...host.identity, tenantId: "foreign" } }, 1, { type: "lock" }), code("identity_not_active"));
@@ -901,7 +902,7 @@ test("Postgres upgrades pre-lifecycle authority rows without replacing their gua
   const lockedAt = new Date(f.now()).toISOString();
   await f.storage.updateRoom(scope.roomId, { sessionControl: { lockedAt, lockedBy: "old-administrator" } });
   const host = await f.create(scope, "host");
-  await f.ids.claimHost(host.identity, 0);
+  await f.ids.claimHost(f.mutationProof(host.identity), 0);
   // Reconstruct the released S2a authority shape. Its existing guard functions
   // and identity/recovery records remain present throughout this migration.
   await f.pool!.query(`drop trigger vrata_identity_lifecycle_v2_monotonic on room_identity_authority_v2;

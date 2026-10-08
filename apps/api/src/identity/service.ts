@@ -15,8 +15,16 @@ export function createRoomIdentityService(storage: RoomIdentityStorage, secret: 
     if (!verified) throw new IdentityStorageError("identity_not_active");
     return verified;
   };
-  const issue = (identity: Awaited<ReturnType<RoomIdentityStorage["create"]>>) => ({
-    identity, credential: codec.sign(identity, { nowSeconds: seconds(), lifetimeSeconds: options.identityLifetimeSeconds ?? 900 })
+  // Capture one post-read clock sample while every original verified deadline
+  // holds; callers sign synchronously with that same sample.
+  const liveSampleMs = (...deadlinesSeconds: number[]) => {
+    const nowMs = now();
+    const live = Number.isSafeInteger(nowMs) && nowMs >= 0 && deadlinesSeconds.every(deadline =>
+      Number.isSafeInteger(deadline) && deadline > 0 && Number.isSafeInteger(deadline * 1000) && nowMs < deadline * 1000);
+    return live ? nowMs : null;
+  };
+  const issue = (identity: Awaited<ReturnType<RoomIdentityStorage["create"]>>, signAtSeconds = seconds()) => ({
+    identity, credential: codec.sign(identity, { nowSeconds: signAtSeconds, lifetimeSeconds: options.identityLifetimeSeconds ?? 900 })
   });
   const activeSession = async (sessionToken: unknown, identityCredential: unknown, scope: RoomIdentityScope) => {
     const verified = sessionCodec.verify(sessionToken, scope, seconds());
@@ -25,9 +33,12 @@ export function createRoomIdentityService(storage: RoomIdentityStorage, secret: 
       || verified.participantId !== possession.participantId || verified.authEpoch !== possession.authEpoch) {
       throw new IdentityStorageError("identity_not_active");
     }
+    const sessionId = verified.sessionId;
+    const sessionExpiresAtSeconds = verified.expiresAtSeconds;
+    const possessionExpiresAtSeconds = possession.expiresAtSeconds;
     const current = await storage.resolve(possession);
     if (!current) throw new IdentityStorageError("identity_not_active");
-    return { verified, current };
+    return { sessionId, sessionExpiresAtSeconds, possessionExpiresAtSeconds, current };
   };
   return {
     async admit(input: Parameters<RoomIdentityStorage["admit"]>[0]) {
@@ -45,34 +56,47 @@ export function createRoomIdentityService(storage: RoomIdentityStorage, secret: 
     },
     async resolveCredential(credential: unknown, scope: RoomIdentityScope) {
       const verified = codec.verify(credential, scope, seconds());
-      return verified ? storage.resolve(verified) : null;
+      if (!verified) return null;
+      const expiresAtSeconds = verified.expiresAtSeconds;
+      const current = await storage.resolve(verified);
+      return current && liveSampleMs(expiresAtSeconds) !== null ? current : null;
     },
     async renewCredential(credential: unknown, scope: RoomIdentityScope) {
-      const current = await storage.resolve(proof(credential, scope));
-      if (!current) throw new IdentityStorageError("identity_not_active");
-      return issue(current.identity);
+      const verified = proof(credential, scope);
+      const expiresAtSeconds = verified.expiresAtSeconds;
+      const current = await storage.resolve(verified);
+      const nowMs = liveSampleMs(expiresAtSeconds);
+      if (!current || nowMs === null) throw new IdentityStorageError("identity_not_active");
+      return issue(current.identity, Math.floor(nowMs / 1000));
     },
     async issueSession(credential: unknown, scope: RoomIdentityScope) {
-      const current = await storage.resolve(proof(credential, scope));
-      if (!current) throw new IdentityStorageError("identity_not_active");
+      const verified = proof(credential, scope);
+      const expiresAtSeconds = verified.expiresAtSeconds;
+      const current = await storage.resolve(verified);
+      const nowMs = liveSampleMs(expiresAtSeconds);
+      if (!current || nowMs === null) throw new IdentityStorageError("identity_not_active");
       const sessionId = randomUUID();
       return { identity: current.identity, authority: current.authority, role: current.role, permissions: current.permissions,
         isOwner: current.isOwner,
-        sessionId, sessionToken: sessionCodec.sign(current.identity, { nowSeconds: seconds(), lifetimeSeconds: options.sessionLifetimeSeconds ?? 900, sessionId }) };
+        sessionId, sessionToken: sessionCodec.sign(current.identity, { nowSeconds: Math.floor(nowMs / 1000), lifetimeSeconds: options.sessionLifetimeSeconds ?? 900, sessionId }) };
     },
     async resolveSession(sessionToken: unknown, scope: RoomIdentityScope) {
       const verified = sessionCodec.verify(sessionToken, scope, seconds());
       if (!verified) return null;
+      const { sessionId, expiresAtSeconds } = verified;
       const current = await storage.resolve(verified);
-      return current ? { ...current, sessionId: verified.sessionId, expiresAtSeconds: verified.expiresAtSeconds } : null;
+      return current && liveSampleMs(expiresAtSeconds) !== null ? { ...current, sessionId, expiresAtSeconds } : null;
     },
     async renewSession(sessionToken: unknown, identityCredential: unknown, scope: RoomIdentityScope) {
-      const { verified, current } = await activeSession(sessionToken, identityCredential, scope);
+      const { sessionId, sessionExpiresAtSeconds, possessionExpiresAtSeconds, current } =
+        await activeSession(sessionToken, identityCredential, scope);
+      const nowMs = liveSampleMs(sessionExpiresAtSeconds, possessionExpiresAtSeconds);
+      if (nowMs === null) throw new IdentityStorageError("identity_not_active");
       return {
         identity: current.identity, authority: current.authority, role: current.role, permissions: current.permissions,
-        sessionId: verified.sessionId,
+        sessionId,
         sessionToken: sessionCodec.sign(current.identity, {
-          nowSeconds: seconds(), lifetimeSeconds: options.sessionLifetimeSeconds ?? 900, sessionId: verified.sessionId
+          nowSeconds: Math.floor(nowMs / 1000), lifetimeSeconds: options.sessionLifetimeSeconds ?? 900, sessionId
         })
       };
     },

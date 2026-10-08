@@ -35,6 +35,14 @@ export function assertActorSession(actor: RoomIdentityActor, nowMs: number): voi
   }
 }
 
+/** Possession expiry is distinct from renewable RS2 session expiry. */
+export function assertIdentityProofDeadline(expiresAtSeconds: number, nowMs: number): void {
+  if (!Number.isSafeInteger(expiresAtSeconds) || expiresAtSeconds <= 0 || !Number.isSafeInteger(expiresAtSeconds * 1000)
+    || !Number.isSafeInteger(nowMs) || nowMs < 0 || nowMs >= expiresAtSeconds * 1000) {
+    fail("identity_not_active");
+  }
+}
+
 export function activeIdentity(state: IdentityTransaction, proof: RoomIdentityProof): RoomIdentityRecord {
   const identity = state.identities.get(proof.identityId);
   if (!identity || identity.tenantId !== proof.tenantId || identity.roomId !== proof.roomId

@@ -284,9 +284,38 @@ retry-on-expiry client policy remains separate work.
 
 Legacy floor1 requests admitted before
 cutover use the prepared policy-row fence for the scoped callbacks below;
-entry checks alone do not close the remaining unscoped paths. Unwired RI2 claimHost/transferHost helpers need
-their own credential-expiry check before any route starts using them. These and
-the media gates remain explicit obligations; this slice does not raise floor 2.
+entry checks alone do not close the remaining unscoped paths. RI2 claimHost/transferHost
+helpers now carry the original credential deadline into the locked reducer, but
+remain unwired; adding routes still requires their complete actor/admission contract.
+Media and other activation gates remain open; this slice does not raise floor 2.
+
+### Original possession deadlines across awaited reads and mutations
+
+RI2 renewal in the prepared `POST /api/tokens/state` path captures the original
+MAC-verified expiry before awaiting storage. If that deadline passes during pool
+acquisition or the authority read, renewal fails with `identity_not_active` and
+HTTP 409 `identity_recovery_required`, without issuing a fresh identity/session.
+It does not revoke the underlying identity or rotate its epoch. This differs from
+RS2 session expiry, which remains HTTP 401 and can be renewed with independently
+valid possession proof.
+
+`renewCredential`, `issueSession` and paired `renewSession` check their original
+deadline(s) after the awaited read, using one final clock sample for both validation
+and synchronous signing. Paired renewal preserves the session ID and requires both
+original RI2 and RS2 deadlines. Resolve-only helpers return null rather than an
+expired authenticated snapshot; HTTP session resolution retains its current-epoch
+expired-session classification. An altered storage argument cannot widen the
+original captured expiry.
+
+Host claim/transfer storage commands require a deadline-bearing proof. They copy
+the original proof primitives before waiting, then check possession expiry inside
+the synchronous reducer after the parent-room load/lock and before CAS or mutation.
+Exact expiry is refused; expiry takes precedence over a stale revision, while a
+blocked room retains its existing refusal. There is no post-COMMIT denial of an
+already-authorized mutation. Missing deadlines do not mean unlimited lifetime.
+
+These checks do not supply new HTTP endpoints, solve administrator legacy owner
+seeding/PATCH, change media credential expiry, or activate the shared floor 2.
 
 ### Prepared legacy policy fence (bounded coverage)
 

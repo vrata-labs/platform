@@ -1,15 +1,22 @@
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import { getRoomPermissions } from "@vrata/shared-types";
 import type { RoomSessionControlState } from "../storage-contracts.js";
-import { activeIdentity, assertRoomActive, bumpAuthority, checkRevision, fail, identityLifecycle, identityWasRemoved, validCounter, validId } from "./authority.js";
+import { activeIdentity, assertIdentityProofDeadline, assertRoomActive, bumpAuthority, checkRevision, fail, identityLifecycle, identityWasRemoved, validCounter, validId } from "./authority.js";
 import { transitionIdentityAuthority } from "./transition.js";
 import { roomIdentityCapacityAvailable, waitingRequestCapacityAvailable } from "./admission-limits.js";
 import {
   IdentityStorageError, type IdentityPersistence, type IdentityProvenance, type IdentityTransaction,
-  type RoomIdentityAuthority, type RoomIdentityRecord, type RoomIdentityScope, type RoomIdentityStorage
+  type RoomIdentityAuthority, type RoomIdentityMutationProof, type RoomIdentityProof, type RoomIdentityRecord, type RoomIdentityScope, type RoomIdentityStorage
 } from "./contracts.js";
 
 const validHash = (value: unknown): value is string => typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
+
+// Copy the verified primitives before any await so a queued caller cannot widen
+// the original deadline or re-scope its proof while persistence loads authority.
+function snapshotMutationProof(input: RoomIdentityMutationProof): { proof: RoomIdentityProof; expiresAtSeconds: number } {
+  const { tenantId, roomId, identityId, participantId, authEpoch, expiresAtSeconds } = input;
+  return { proof: { tenantId, roomId, identityId, participantId, authEpoch }, expiresAtSeconds };
+}
 
 export function assertIdentityScope(scope: RoomIdentityScope): void {
   if (!validId(scope.tenantId) || !validId(scope.roomId)) fail("invalid_identity_input");
@@ -208,10 +215,12 @@ export function createRoomIdentityStorage(persistence: IdentityPersistence, now 
         throw error;
       }
     },
-    async claimHost(proof, expectedRevision) {
+    async claimHost(input, expectedRevision) {
+      const { proof, expiresAtSeconds } = snapshotMutationProof(input);
       assertIdentityScope(proof);
       return persistence.transact(proof, { identityIds: [proof.identityId] }, state => {
         assertRoomActive(state);
+        assertIdentityProofDeadline(expiresAtSeconds, now());
         checkRevision(state, expectedRevision);
         const identity = activeIdentity(state, proof);
         const source = identity.provenance;
@@ -226,11 +235,13 @@ export function createRoomIdentityStorage(persistence: IdentityPersistence, now 
         return structuredClone(state.authority);
       });
     },
-    async transferHost(proof, toIdentityId, expectedRevision) {
+    async transferHost(input, toIdentityId, expectedRevision) {
+      const { proof, expiresAtSeconds } = snapshotMutationProof(input);
       assertIdentityScope(proof);
       if (!validId(toIdentityId) || toIdentityId === proof.identityId) fail("invalid_identity_input");
       return persistence.transact(proof, { identityIds: [proof.identityId, toIdentityId] }, state => {
         assertRoomActive(state);
+        assertIdentityProofDeadline(expiresAtSeconds, now());
         checkRevision(state, expectedRevision);
         activeIdentity(state, proof);
         if (state.authority.hostIdentityId !== proof.identityId) fail("identity_forbidden");
