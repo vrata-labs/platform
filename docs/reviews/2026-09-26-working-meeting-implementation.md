@@ -563,6 +563,19 @@ Focused suite завершён: 128 passed / 1 pinned-template rollback skipped 
 
 Первоначальные общие прогоны на собственном дисковом PG-стенде падали в старых plugin/schema suites по parent timeout и последующему закрытию pool. PostgreSQL checkpoint logs зафиксировали sync=218,188 s с отдельным fsync=19,280 s и sync=75,685 s; наблюдалось idle-in-transaction timeout. Перепроверка на отдельном PostgreSQL того же image ID с tmpfs PGDATA 3 GiB, fsync/synchronous_commit/full_page_writes=on и прежними deadline/assertions дала **45/45** для обоих проблемных specs, затем полный API и workspace suite прошли. Изменён только носитель временной локальной fixture, не код/таймауты и не настройки stage. Это проверка реальных PG locks/MVCC/COMMIT в живом сервере, не доказательство физической дисковой durability или power-loss recovery. Обычный PostgreSQL CI и staging gate остаются обязательны.
 
+#### RI2 checks и блокер публикации на staging
+
+| Этап | Результат |
+|---|---|
+| API/code SHA | `63ef11e8519bc8c118f4ba7b9ce89c75ff3bf3c6`, опубликован в рабочей ветке |
+| [CI 37760626631](https://github.com/vrata-labs/platform/actions/runs/37760626631) | Success: обычный PostgreSQL, полный E2E, M0.5, workspace checks и locked assets |
+| [Docker Publish 37760626779](https://github.com/vrata-labs/platform/actions/runs/37760626779) | Success: immutable images exact SHA |
+| [Staging Deploy 37764917412](https://github.com/vrata-labs/platform/actions/runs/37764917412) | Attempts 1 и 2 failed **до rollout**, SSH timeout на Determine previous successful SHA; новый код на stage не проверен |
+
+Обе попытки выполнялись на одном SHA без изменения кода/проверок. Rollout, verification и rollback не начинались. Прямые публичные HTTPS health/demo/control-plane и HTTP fallback :4000 также не отвечали. Cloud API показывал существующую VM noah-stage-compose-v11 (`epddi8grm68da8d66iae`) RUNNING с IP `158.160.10.234`, без назначенных security groups; serial diagnostic API вернул Unavailable. Причина недоступности не установлена. VM/сеть не перезапускались и не пересоздавались; восстановление доступа — конкретный блокер завершения этого среза. До этого последняя подтверждённая staging-поставка — `5dd1ef21a76f1923d0db564871e7d4204425af2a`.
+
+Параллельно закрыт подготовительный checkpoint следующего Owner-среза: на isolated-v2 API текущий public create с personal Owner=null возвращает 400 missing_personal_room_owner. После private fixture seeding без старого Owner существующие v2 member invite/admission и admin owner/transfer дают 200, получатель остаётся Member с isOwner=true, независимый Host slot остаётся null. Это доказывает нижний handoff flow; новый публичный create/PATCH contract ещё не реализован. Обе собственные локальные PG fixtures удалены после проверки ID/labels; соседние процессы не останавливались.
+
 ## Публикация первого среза T01/T12
 
 Локально прошли workspace lint/typecheck/build/tests с PostgreSQL, затем runtime build и 905 runtime tests после финальных правок. Полный `pnpm test:e2e` на финальном исполняемом дереве: **148 passed**, без skip (41.6 min).
