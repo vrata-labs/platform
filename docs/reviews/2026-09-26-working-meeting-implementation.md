@@ -618,6 +618,10 @@ Metadata-read ordering подавляет применение только ст
 
 После восстановления stage сначала требуется exact reader-baseline deploy и успешный gate, затем provisioning release/floor2 activation. Текущая публикация images не заменяет successful-SHA rollback marker. Общий stage остаётся на последнем подтверждённом `5dd1ef2`; новых staging/activation действий по текущему поручению не выполнялось.
 
+Provisioning опубликован кодом `754ab123028f3f94e7ba4606cfb8fac0e807e976`. [Docker 37946205548](https://github.com/vrata-labs/platform/actions/runs/37946205548) — Success. [CI 37946201148](https://github.com/vrata-labs/platform/actions/runs/37946201148) остановился на новом exact-reader rollback тесте: отдельный checkout9b1d43f собирал API, но не room-plugin-sdk, импортируемый pinned storage. Root workspace build локально эту зависимость уже собирал. Исправлена только CI build sequence нового fixture — добавлен SDK; pinned SHA, runtime-код, assertions и таймауты не изменены. Проверка исправленной сборки проводится с чистого отдельного checkout и новым CI commit.
+
+Исправленная build sequence воспроизведена на чистом checkout exact9b1d43f без предсобранного SDK: build и dynamic import pinned storage прошли; actual PG rollback suite — **2/2** с этим build. После CI-only исправления повторён full local E2E окончательного дерева: **186/186**, без retry/skip, **30,2 минуты**. Изменений runtime/source/tests после успешного workspace suite не было.
+
 ## Публикация первого среза T01/T12
 
 Локально прошли workspace lint/typecheck/build/tests с PostgreSQL, затем runtime build и 905 runtime tests после финальных правок. Полный `pnpm test:e2e` на финальном исполняемом дереве: **148 passed**, без skip (41.6 min).

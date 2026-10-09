@@ -129,7 +129,7 @@ jobs:
           pnpm --dir .room-record-reader-rollback install --frozen-lockfile
           chmod 644 .room-record-reader-rollback/packages/asset-pipeline/bin/vrata.mjs
           git -C .room-record-reader-rollback diff --exit-code HEAD
-          pnpm --dir .room-record-reader-rollback --filter @vrata/shared-types --filter @vrata/templates --filter @vrata/asset-pipeline --filter @vrata/api build
+          pnpm --dir .room-record-reader-rollback --filter @vrata/shared-types --filter @vrata/templates --filter @vrata/asset-pipeline --filter @vrata/room-plugin-sdk --filter @vrata/api build
 
       - name: Checkout pinned plugin rollback base
         uses: actions/checkout@v4
