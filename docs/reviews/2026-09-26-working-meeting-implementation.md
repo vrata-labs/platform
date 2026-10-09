@@ -622,6 +622,19 @@ Provisioning опубликован кодом `754ab123028f3f94e7ba4606cfb8fac0
 
 Исправленная build sequence воспроизведена на чистом checkout exact9b1d43f без предсобранного SDK: build и dynamic import pinned storage прошли; actual PG rollback suite — **2/2** с этим build. После CI-only исправления повторён full local E2E окончательного дерева: **186/186**, без retry/skip, **30,2 минуты**. Изменений runtime/source/tests после успешного workspace suite не было.
 
+#### Публикация административного provisioning
+
+| Этап | Результат |
+|---|---|
+| Final code/build SHA | `67d81063eb1980c18f576cacd2a24a4ec1d2610f`, опубликован в рабочей ветке; provisioning runtime из `754ab12`, исправлена CI-only зависимость |
+| [CI 37951405326](https://github.com/vrata-labs/platform/actions/runs/37951405326) | Success: обычный PostgreSQL, обязательный exact9b1d43f reader rollback build/test, full E2E, M0.5 и locked assets |
+| [Docker Publish 37951410421](https://github.com/vrata-labs/platform/actions/runs/37951410421) | Success: immutable images exact final SHA |
+| Staging | Не запускался по прямому поручению пользователя; новый код там не проверен, shared floor2 не активирован |
+
+Первый CI failed до E2E из-за отсутствующей сборки SDK в новом pinned fixture; исправление опубликовано отдельным commit, без изменения assertions/таймаутов/runtime и без повторного запуска старого SHA. Новый exact-SHA CI завершился успешно. Remote rollout/rollback не выполнялись. Локальный rollback остаётся source-build проверкой на реальном PG, не испытанием удалённого опубликованного контейнера и не заменой staging gate. Продолжение полной T01a activation требует оставшихся virtual/frame/media/bootstrap/retirement gates и восстановления normal staging acceptance.
+
+Собственный временный PostgreSQL-стенд удалён после завершения проверок и подтверждения его ID/labels; соседние процессы и staging-инфраструктура не изменялись.
+
 ## Публикация первого среза T01/T12
 
 Локально прошли workspace lint/typecheck/build/tests с PostgreSQL, затем runtime build и 905 runtime tests после финальных правок. Полный `pnpm test:e2e` на финальном исполняемом дереве: **148 passed**, без skip (41.6 min).
