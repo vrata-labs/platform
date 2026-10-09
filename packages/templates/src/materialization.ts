@@ -20,24 +20,31 @@ export interface TemplateRoomOverrides {
   avatarConfig?: Partial<RoomTemplateDefaults["avatarConfig"]>;
 }
 
+/** Server-decided allowance for a null/absent personal owner, never a malformed ID. */
+export interface PersonalRoomOwnerOptions {
+  allowUnownedPersonal?: boolean;
+}
+
 export function materializeReferenceTemplate(
   contract: RoomTemplateVersionContractV1,
   input: TemplateRoomOverrides,
-  options: { mirrorBaseUrl?: string; allowLoopbackHttp?: boolean } = {}
+  options: { mirrorBaseUrl?: string; allowLoopbackHttp?: boolean } & PersonalRoomOwnerOptions = {}
 ): Omit<RoomTemplateDefaults, "surfaces" | "settings"> & { sceneBundleUrl: string } {
+  const { allowUnownedPersonal, ...assetOptions } = options;
   for (const key of ["features", "theme", "avatarConfig"] as const) {
     const value = input[key];
     if (value !== undefined && (!value || typeof value !== "object" || Array.isArray(value))) throw new Error(`invalid_template_override:${key}`);
   }
   if (input.roomType !== undefined && input.roomType !== contract.defaults.roomType) throw new Error("template_room_type_conflict");
   if (contract.defaults.roomType === "personal") {
-    if (typeof input.ownerParticipantId !== "string" || !/^[A-Za-z0-9._:-]{3,128}$/.test(input.ownerParticipantId)) throw new Error("missing_personal_room_owner");
+    const unowned = allowUnownedPersonal === true && input.ownerParticipantId == null;
+    if (!unowned && (typeof input.ownerParticipantId !== "string" || !/^[A-Za-z0-9._:-]{3,128}$/.test(input.ownerParticipantId))) throw new Error("missing_personal_room_owner");
     if (input.visibility !== undefined && input.visibility !== "private") throw new Error("personal_room_must_be_private");
     if (input.guestAllowed !== undefined && input.guestAllowed !== false) throw new Error("personal_room_guest_access_forbidden");
   }
   if (input.visibility !== undefined && !["public", "unlisted", "private"].includes(input.visibility)) throw new Error("invalid_room_visibility");
   if (input.guestAllowed !== undefined && typeof input.guestAllowed !== "boolean") throw new Error("invalid_guest_allowed");
-  const sceneBundleUrl = resolveLockedRoomTemplateAssetUrl(contract.assetLock, contract.assetLock.sceneManifest.path, options);
+  const sceneBundleUrl = resolveLockedRoomTemplateAssetUrl(contract.assetLock, contract.assetLock.sceneManifest.path, assetOptions);
   if (input.sceneBundleUrl !== undefined && input.sceneBundleUrl !== sceneBundleUrl) throw new Error("reference_scene_override_not_allowed");
   const defaults = contract.defaults;
   const features = { ...defaults.features };

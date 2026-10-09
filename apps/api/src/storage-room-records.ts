@@ -146,7 +146,9 @@ function createRoomTemplateSnapshot(
   const contract = referenceTemplateContract(versionSnapshot);
   if (contract) {
     if (!room.sceneBundleUrl || room.roomType !== contract.defaults.roomType) throw new Error("invalid_reference_room_configuration");
-    if (contract.defaults.roomType === "personal" && (!room.ownerParticipantId || room.visibility !== "private" || room.guestAllowed !== false)) throw new Error("invalid_reference_personal_configuration");
+    // Ownership is separate authority state, not part of the immutable room configuration.
+    if (contract.defaults.roomType === "personal" && ((room.ownerParticipantId != null && !room.ownerParticipantId)
+      || room.visibility !== "private" || room.guestAllowed !== false)) throw new Error("invalid_reference_personal_configuration");
   }
   const avatarConfig = defaultAvatarConfig(room.avatarConfig);
   return {

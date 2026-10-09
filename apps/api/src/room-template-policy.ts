@@ -1,4 +1,4 @@
-import { materializeReferenceTemplate, referenceTemplateContract, resolveLockedRoomTemplateAssetUrl } from "@vrata/templates";
+import { materializeReferenceTemplate, referenceTemplateContract, resolveLockedRoomTemplateAssetUrl, type PersonalRoomOwnerOptions } from "@vrata/templates";
 import { parseRoomTemplateSessionContext, type RoomTemplateSessionContext, type RoomTemplateVersionSnapshotV1, type RoomTemplateCatalogRecord } from "@vrata/shared-types";
 import type { RoomRecord, Storage } from "./storage-contracts.js";
 import { templateVersionContentHash } from "./storage-room-records.js";
@@ -18,11 +18,11 @@ export function roomTemplateSessionContext(room?: RoomRecord | null): RoomTempla
   });
 }
 
-export function materializeStoredRoomInput(snapshot: RoomTemplateVersionSnapshotV1, input: Partial<RoomRecord>): Partial<RoomRecord> {
+export function materializeStoredRoomInput(snapshot: RoomTemplateVersionSnapshotV1, input: Partial<RoomRecord>, options: PersonalRoomOwnerOptions = {}): Partial<RoomRecord> {
   if (Object.hasOwn(input, "templateSnapshot")) throw new Error("server_owned_template_snapshot");
   if (input.templateVersion !== undefined && input.templateVersion !== snapshot.version) throw new Error("template_version_not_current");
   const contract = referenceTemplateContract(snapshot);
-  return contract ? { ...input, ...materializeReferenceTemplate(contract, input, templateAssetOptions()) } : input;
+  return contract ? { ...input, ...materializeReferenceTemplate(contract, input, { ...templateAssetOptions(), allowUnownedPersonal: options.allowUnownedPersonal === true }) } : input;
 }
 
 export function assertRoomTemplatePatch(room: RoomRecord, input: Partial<RoomRecord>): void {
@@ -38,10 +38,11 @@ export function assertRoomTemplatePatch(room: RoomRecord, input: Partial<RoomRec
     if (input.visibility !== undefined && input.visibility !== "private") throw new Error("personal_room_must_be_private");
     if (input.guestAllowed !== undefined && input.guestAllowed !== false) throw new Error("personal_room_guest_access_forbidden");
   }
-  materializeReferenceTemplate(contract, { ...input, ownerParticipantId: room.ownerParticipantId, sceneBundleUrl: undefined });
+  const allowUnownedPersonal = contract.defaults.roomType === "personal" && room.ownerParticipantId == null;
+  materializeReferenceTemplate(contract, { ...input, ownerParticipantId: room.ownerParticipantId, sceneBundleUrl: undefined }, { allowUnownedPersonal });
 }
 
-export async function resolveRoomTemplateCreate(storage: Pick<Storage, "listTemplates" | "getTemplateVersion">, input: Partial<RoomRecord>): Promise<{ input: Partial<RoomRecord>; version: RoomTemplateVersionSnapshotV1 }> {
+export async function resolveRoomTemplateCreate(storage: Pick<Storage, "listTemplates" | "getTemplateVersion">, input: Partial<RoomRecord>, options: PersonalRoomOwnerOptions = {}): Promise<{ input: Partial<RoomRecord>; version: RoomTemplateVersionSnapshotV1 }> {
   if (Object.hasOwn(input, "templateSnapshot")) throw new Error("server_owned_template_snapshot");
   if (input.templateVersion !== undefined && (typeof input.templateVersion !== "string" || !/^\d+\.\d+\.\d+$/.test(input.templateVersion))) throw new Error("invalid_template_version");
   const active = await storage.listTemplates();
@@ -56,7 +57,7 @@ export async function resolveRoomTemplateCreate(storage: Pick<Storage, "listTemp
   if (version.version !== catalog.currentVersion) throw new Error("template_version_not_current");
   const contract = referenceTemplateContract(version);
   if (contract && Object.hasOwn(input, "sceneBundleUrl")) throw new Error("reference_scene_override_not_allowed");
-  return { input: materializeStoredRoomInput(version, { ...input, templateId: id, templateVersion: version.version }), version };
+  return { input: materializeStoredRoomInput(version, { ...input, templateId: id, templateVersion: version.version }, options), version };
 }
 
 export function templateInputError(error: unknown): { code: string; status: number } | null {

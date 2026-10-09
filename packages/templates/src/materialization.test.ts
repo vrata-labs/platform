@@ -43,3 +43,20 @@ test("reference detection preserves historical snapshots but fails on incomplete
   const bound = { ...presentation, roomConfig: { visibility: "private", features: { voice: false } } };
   assert.equal(Object.hasOwn(referenceTemplateContract(bound)!, "roomConfig"), false);
 });
+
+test("server-only ownerless allowance preserves assets and permits only null/absent personal owners", () => {
+  const allow = { allowUnownedPersonal: true }, owned = materializeReferenceTemplate(personal, { ownerParticipantId: "owner-123" });
+  for (const input of [{}, { ownerParticipantId: null }, { ownerParticipantId: undefined }]) {
+    const before = structuredClone(input);
+    assert.deepEqual(materializeReferenceTemplate(personal, input, allow), owned); assert.deepEqual(input, before);
+  }
+  for (const value of ["", "ab", "bad/id", " owner-123 ", 7]) {
+    assert.throws(() => materializeReferenceTemplate(personal, { ownerParticipantId: value as string }, allow), /missing_personal_room_owner/);
+  }
+  for (const [input, reason] of [[{ visibility: "unlisted" }, "personal_room_must_be_private"], [{ guestAllowed: true }, "personal_room_guest_access_forbidden"],
+    [{ roomType: "standard" }, "template_room_type_conflict"], [{ sceneBundleUrl: "https://other.example/scene.json" }, "reference_scene_override_not_allowed"]] as const) {
+    assert.throws(() => materializeReferenceTemplate(personal, input, allow), new RegExp(reason));
+  }
+  const overrides = { features: { voice: false }, theme: { accentColor: "#123456" } };
+  assert.deepEqual(materializeReferenceTemplate(presentation, overrides, allow), materializeReferenceTemplate(presentation, overrides));
+});
