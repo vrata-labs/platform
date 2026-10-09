@@ -41,7 +41,8 @@ export interface AuthorHttpPackage {
   byteLength: number; manifest: RoomPluginManifest; state: string; uploadSettled: boolean;
 }
 type Phase = "body-admitted" | "body-end" | "put-written" | "upload-settled" | "private-read" | "plugin-room" | "settlement-timeout"
-  | "telemetry-effect" | "telemetry-written" | "telemetry-read";
+  | "telemetry-effect" | "telemetry-written" | "telemetry-read"
+  | "administrative-insert" | "administrative-receipt" | "administrative-ack-loss";
 type Message = { event?: string; phase?: Phase; id?: string; command?: string; kind?: Phase; roomId?: string; offset?: number; operation?: string;
   skip?: number; sqlState?: "55P03"; lockTimeoutMs?: number };
 
@@ -88,7 +89,7 @@ export function assertAuthorHttpPublicDto(value: unknown, forbidden: string[] = 
  * telemetry-written deliberately pauses before COMMIT while holding the room fence.
  * The local reader currently uses FileHandle; readFile is also wrapped for the equivalent buffered path.
  */
-function childInstrumentation(indexUrl: string, telemetryCheckpoints: boolean): string {
+function childInstrumentation(indexUrl: string, telemetryCheckpoints: boolean, administrativeCheckpoints: boolean): string {
   return `
     import {IncomingMessage} from 'node:http';
     import {syncBuiltinESMExports} from 'node:module';
@@ -113,7 +114,7 @@ function childInstrumentation(indexUrl: string, telemetryCheckpoints: boolean): 
     const on=IncomingMessage.prototype.on;
     IncomingMessage.prototype.on=function(event,...args){
       const result=on.call(this,event,...args), id=this.headers?.['x-author-http-phase'];
-       if(id && event==='end' && (this.url?.includes('/plugins/') || (${telemetryCheckpoints} && (this.url?.includes('/diagnostics') || this.url?.includes('/xr-telemetry'))))){
+        if(id && event==='end' && (this.url?.includes('/plugins/') || (${telemetryCheckpoints} && (this.url?.includes('/diagnostics') || this.url?.includes('/xr-telemetry'))) || (${administrativeCheckpoints} && this.url==='/api/rooms'))){
         notify({event:'phase',phase:'body-admitted',id});
         on.call(this,'end',()=>notify({event:'phase',phase:'body-end',id}));
       }
@@ -121,6 +122,7 @@ function childInstrumentation(indexUrl: string, telemetryCheckpoints: boolean): 
     };
     const query=pg.Client.prototype.query;
     const settlements=new WeakMap();
+    const creations=new WeakMap();
     const lockTimeouts=new WeakMap();
     pg.Client.prototype.query=async function(sql,...args){
       const text=typeof sql==='string'?sql:sql?.text;
@@ -140,11 +142,18 @@ function childInstrumentation(indexUrl: string, telemetryCheckpoints: boolean): 
       }
       if(text?.startsWith("select set_config('lock_timeout',")) lockTimeouts.set(this,Number.parseInt(values?.[0],10));
       if(/update room_plugin_packages set upload_settled=true/.test(text??'')) settlements.set(this,values?.[1]);
+      if(${administrativeCheckpoints} && text?.trimStart().startsWith('insert into rooms (')){
+        creations.set(this,values?.[0]);await pause('administrative-insert',values?.[0]);
+      }
+      if(/^commit$/i.test(text??'') && creations.has(this)){
+        const roomId=creations.get(this);creations.delete(this);
+        if(armed?.kind==='administrative-ack-loss' && armed.roomId===roomId){armed=undefined;throw new Error('fixture_create_commit_ack_lost');}
+      }
       if(/^commit$/i.test(text??'') && settlements.has(this)){
         const roomId=settlements.get(this);settlements.delete(this);
         await pause('upload-settled',roomId);
       }
-      if(/^rollback$/i.test(text??'')) settlements.delete(this);
+      if(/^rollback$/i.test(text??'')){settlements.delete(this);creations.delete(this);}
       return result;
     };
     const root=process.env.ROOM_PLUGIN_LOCAL_UPLOAD_ROOT;
@@ -175,6 +184,13 @@ function childInstrumentation(indexUrl: string, telemetryCheckpoints: boolean): 
       return remove.call(this,path,...args);
     };
     syncBuiltinESMExports();
+    if(${administrativeCheckpoints}){
+      const {PostgresStorage}=await import(${JSON.stringify(new URL("storage.js", indexUrl).href)});
+      const create=PostgresStorage.prototype.createAdministrativeRoom;
+      PostgresStorage.prototype.createAdministrativeRoom=async function(...args){
+        const room=await create.apply(this,args);await pause('administrative-receipt',room.roomId);return room;
+      };
+    }
     if(${telemetryCheckpoints}){
       // Relay only a validated correlation UUID; raw diagnostic logs stay unrecorded.
       const write=process.stdout.write;
@@ -204,7 +220,7 @@ function childInstrumentation(indexUrl: string, telemetryCheckpoints: boolean): 
   `;
 }
 
-export async function startAuthorHttpFixture(t: TestContext, floor: 1 | 2 = 2, telemetryCheckpoints = false) {
+export async function startAuthorHttpFixture(t: TestContext, floor: 1 | 2 = 2, telemetryCheckpoints = false, administrativeCheckpoints = false) {
   assert.ok(process.env.VRATA_TEST_POSTGRES_URL, "VRATA_TEST_POSTGRES_URL is required (including CI)");
   const schema = `plugin_author_http_${randomUUID().replaceAll("-", "")}`;
   const rootPool = new Pool({ connectionString: process.env.VRATA_TEST_POSTGRES_URL });
@@ -266,7 +282,7 @@ export async function startAuthorHttpFixture(t: TestContext, floor: 1 | 2 = 2, t
   const messages: Message[] = [];
   const io: string[] = [];
   function spawnOwnedApiChild() {
-    const owned = spawn(process.execPath, ["--input-type=module", "-e", childInstrumentation(new URL("../index.js", import.meta.url).href, telemetryCheckpoints)], {
+    const owned = spawn(process.execPath, ["--input-type=module", "-e", childInstrumentation(new URL("../index.js", import.meta.url).href, telemetryCheckpoints, administrativeCheckpoints)], {
       cwd: fileURLToPath(new URL("../../", import.meta.url)), env, stdio: ["ignore", "pipe", "pipe", "ipc"]
     });
     child = owned;
@@ -390,11 +406,11 @@ export async function startAuthorHttpFixture(t: TestContext, floor: 1 | 2 = 2, t
     await control("sync");
     return messages.filter(message => message.event === "diagnostic-published" && message.id === requestId).length;
   }
-  function stalled(path: string, token: string, body: Uint8Array, method = "POST", declared = true) {
+  function stalled(path: string, auth: string | Record<string, string>, body: Uint8Array, method = "POST", declared = true) {
     const id = randomUUID();
     let pending!: ClientRequest;
     const response = new Promise<AuthorHttpResponse>((resolve, reject) => {
-      pending = httpRequest(`${base}${path}`, { method, headers: { ...authorHttpBearer(token), "x-author-http-phase": id,
+      pending = httpRequest(`${base}${path}`, { method, headers: { ...(typeof auth === "string" ? authorHttpBearer(auth) : auth), "x-author-http-phase": id,
         "content-type": "application/octet-stream", ...(declared ? { "content-length": String(body.byteLength) } : {}) } }, response => {
         const chunks: Buffer[] = []; response.on("data", chunk => chunks.push(Buffer.from(chunk)));
         response.on("error", reject);

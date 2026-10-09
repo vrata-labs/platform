@@ -360,8 +360,9 @@ deleted file. An unreferenced retained object needs later reconciliation; this
 does not add a background orphan collector or automatic retry/idempotency.
 
 Before activation, remaining gates are virtual-room fallback effects, frame
-credentials/TTL, administrator-seeded legacy owner evidence,
-and the other expiry/media obligations above. The whole cutover is not ready.
+credentials/TTL, bootstrap reconciliation/retirement and the other media obligations
+above. Administrative legacy owner evidence is fenced by the creation contract
+below; the whole cutover is still not ready.
 
 ### Prepared document deletion and personal bootstrap
 
@@ -386,8 +387,8 @@ it cannot emit an old-owner reply after raise or create one after the v2 boundar
 V2 owned bootstrap uses the same relation/policy order and single-client template
 path, then atomically inserts room/identity/authority. Lost commit returns 503
 without an identityCredential; possible orphan room and duplicate retry remain
-an idempotency/reconciliation obligation. Administrator personal-room owner
-seeding remains a separate gate until its own path is closed.
+an idempotency/reconciliation obligation. Administrative provisioning follows the
+separate metadata-only creation and invited-recipient handoff contract below.
 
 V2 personal reopen now verifies the original RI2 possession proof, then rechecks
 room type/tenant, lifecycle, current Owner and epoch under the parent-room shared
@@ -395,8 +396,95 @@ fence. Renewal signing and response release are synchronous with that checked
 state, using the same PostgreSQL client. The original credential deadline is
 checked after lock waits; a prepared reply cannot extend an expired proof or
 return private metadata to a former Owner. Disabled/end return 403 without
-turning a still-valid credential into a recovery requirement. Administrators
-creating legacy-owner evidence remain separate activation work.
+turning a still-valid credential into a recovery requirement.
+
+### Administrative provisioning and frozen legacy evidence
+
+The authenticated control-plane create path uses `createAdministrativeRoom`.
+At floor 1 the existing owner/Host/Presenter metadata seed remains compatible;
+different room IDs with the same owner do not deduplicate, and an existing slug
+cannot be overwritten. At floor 2 non-null raw owner/Host/Presenter seeds fail
+with the existing 409 upgrade contract. Standard rooms and private personal rooms
+without an owner are permitted. This response is an administrative metadata receipt,
+not an identity grant: no identity, Owner or Host slot is automatically created.
+
+PostgreSQL takes the rooms relation ROW EXCLUSIVE lock before policy FOR SHARE,
+then current-template lookup and conditional INSERT use the same borrowed client.
+The policy read at this boundary is authoritative; a body/draft flag cannot relax
+it. Creation waiting behind activation sees the new floor and rejects legacy seeds.
+A creation committed before activation may return its admin metadata receipt later;
+manifest preparation is outside the fence. Unknown COMMIT returns 503 without a
+room/proof success body. A possibly committed row is retained and can be reconciled
+through admin GET; no automatic retry or false rollback is claimed.
+
+At floor 2 the intended recipient joins the ownerless private room through a v2
+Member invitation. The administrator explicitly transfers ownership to that
+server-issued, room-admitted participant using the current authority revision.
+The recipient remains Member with current ownership authority; the independent
+Host slot is unchanged. Public IDs are not login proofs, and `rr2` is not used to
+manufacture new legacy owner evidence after cutover.
+
+Template materialization has a separate server-only nullable-owner allowance;
+missing/null owners are accepted only on the permitted path, malformed non-null
+IDs remain invalid. An ownerless persisted personal reference remains editable
+before and after handoff without putting authority into immutable template hashes.
+Private visibility, guest denial, locked assets and template binding are preserved.
+
+Existing Memory and PostgreSQL PATCH guards already freeze persisted legacy tenant/type/
+owner/session-control changes at cutover; their published 409 contract is retained.
+Metadata-only PostgreSQL updates no longer rewrite frozen type/owner/control from
+a prior snapshot. Unrequested protected type/owner/session-control and personal-state
+columns retain the current stored values, including sparse legacy JSON, and the
+returned DTO uses those actual stored values. Other metadata retains its existing
+last-writer behavior. If the
+room type changed after reading the snapshot, an original-type CAS rejects the
+stale write with the existing 409 binding conflict; a fresh retry constructs
+consistent visibility, guest access and roomConfig. Explicit normal type changes
+compare against the original type rather than the requested final one.
+
+The existing control-plane form consumes an optional authenticated protocol hint,
+defaulting to floor 1 for an older API. In v2 it sends a null owner, displays the
+explicit handoff guidance and creates a Member invite. Automatic and manual/retry
+invitation paths share this recipient policy, including after a follow-up failure
+or invite expiry. The administrator item GET additionally supplies a read-only
+currentOwnerParticipantId from v2 authority (the raw frozen owner stays unchanged).
+Selection/polling and invitation actions refresh this context; once ownership is
+assigned, ordinary invitations return to the prior Guest default. Explicit admin
+Member invitations remain supported. The field is not added to public/session
+responses or the room list. A stale v1 draft refreshes
+the hint after server refusal without auto-resubmission. Follow-up failure after
+201 is reported as follow-up failure, not failed creation. The hint is not authority;
+the server creation fence remains mandatory. The ownership transfer API exists;
+this slice does not add an automatic ownership transfer or a new transfer panel.
+Already-issued invite links survive sanitized list refreshes only in page memory
+for the same live invitation in the same room; revocation/expiry/room change removes
+them. The server does not reissue secrets, and no browser-state persistence is added.
+An unavailable list read keeps current invitation metadata; rendering independently
+removes secret links whose known expiry has passed. Its old cached
+snapshot is not replayed as fresh data over a newer external revocation. A delayed
+create acknowledgement cannot undo revoked metadata already observed for that ID.
+Successful list reads also share a request sequence across polling/access refresh;
+an older success cannot overwrite a newer applied list from another-tab revocation.
+Room metadata presentation has the same successful-read ordering; delayed polls
+display Owner from the currently accepted room rather than their earlier local copy.
+Confirmed create/revoke advances a local invitation mutation revision; a list
+read before that revision is discarded and refreshed. Revoke immediately applies
+the returned revoked metadata and removes the secret link, so failed follow-up
+reads cannot undo the confirmed result. The chosen invitation is captured before
+rendering and stays selected. The readonly owner presentation is stripped from
+untrusted create/PATCH input and common room DTOs before the admin item projection.
+Update remains disabled until normal selection has initialized the editable form
+for that room/generation. A poll may update metadata but cannot enable a form that
+still contains the previous room's fields. The handler enforces the same readiness
+check, and a completed PATCH does not reselect a room the administrator left.
+
+Known separate metadata issue: PostgreSQL generic tenant PATCH can report a changed
+tenant in its DTO without moving the stored row when no authority is bound. This
+pre-existing false-success/parity defect is not fixed by provisioning; it is not a
+tenant migration feature and remains an activation/metadata obligation.
+Likewise, generic metadata PATCH and concurrent disable/enable can overwrite each
+other's unprotected metadata/status snapshot. This pre-existing concurrency issue
+is separate from the protected identity-column preservation described above.
 
 ### Persisted diagnostics and XR telemetry
 
@@ -537,6 +625,43 @@ Raw Docker commands that bypass the supplied preflight are not a supported v2
 rollback procedure. A database restore is a separate destructive operation: the
 T15 restore procedure must retain the protocol floor and compatible images and
 address restored credential epochs; image rollback does not lower the floor.
+
+### Nullable-owner reference reader baseline
+
+Personal reference provisioning stores a null legacy owner permanently, including
+after v2 ownership handoff. The older boundary image can authenticate safely but
+cannot map this record: getRoom/listRooms fail and administrative access is lost.
+The independent compatible-reader baseline is
+`9b1d43f0eb7efe2fc2f8684669eda7379635c01c`. It permits read/map and metadata-only
+PATCH of that shape while preserving private visibility, guest denial and immutable
+assets; its public creation path still requires the prior owner input.
+
+The API image advertises `io.vrata.room-record-reader=2`, and the target commit's
+rollout contract advertises integer `roomRecordReader: 2`. Production/self-host and
+staging preparation require reader 2 or higher at protocol floor 2 **or** if the
+database contains a null-owner personal reference. This reader capability is
+additional to the API/room-state identity-boundary capability. Binding alone at
+floor 1 still requires the latter. Unbound floor-1 data without the new shape keeps
+its earlier rollback behavior.
+
+The scalar data probe resolves the bound template version just like the API reader
+and uses reference snapshot markers, not a version-number heuristic. Missing or
+partial schema, invalid probe output and query failure are refused before changing
+env/services. At floor 2 the capability is required even when no such room exists:
+the running API could create one after the data probe. Operators must serialize
+protocol activation against deploy/rollback; concurrent cutover and image changes
+are unsupported. The floor cannot be lowered to bypass this reader requirement.
+
+CI builds the exact reader baseline independently and reopens the new rows through
+its init/getRoom/listRooms/metadata PATCH before and after genuine invited-member
+Owner handoff. The old pinned boundary is also tested to demonstrate its refusal;
+the older-shape boundary rollback test is retained.
+
+When staging access returns, deploy the compatible-reader baseline and complete its
+gate **before** the provisioning release or any floor-2 activation, so the automatic
+previous-successful-SHA rollback has a compatible target. GitHub/registry publication
+alone does not establish a successful staging rollback target. The current outage
+waiver covers development and CI/image publication, not v2 activation.
 
 ### Activation prerequisites for V
 

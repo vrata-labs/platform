@@ -1,3 +1,4 @@
+import type { PersonalRoomOwnerOptions } from "@vrata/templates";
 import type { RoomRecord, RoomVisibility } from "./storage.js";
 
 export function isRoomVisibility(input: unknown): input is RoomVisibility {
@@ -16,7 +17,7 @@ export function normalizeParticipantId(input: unknown): string | null {
   return /^[A-Za-z0-9._:-]{3,128}$/.test(value) ? value : null;
 }
 
-export function validateRoomInput(input: Partial<RoomRecord>, templateIds: Set<string>, tenantIds: Set<string>): string | null {
+export function validateRoomInput(input: Partial<RoomRecord>, templateIds: Set<string>, tenantIds: Set<string>, options: PersonalRoomOwnerOptions = {}): string | null {
   if (input.roomId !== undefined && (typeof input.roomId !== "string" || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(input.roomId) || input.roomId.length < 3 || input.roomId.length > 64)) {
     return "invalid_room_slug";
   }
@@ -35,7 +36,8 @@ export function validateRoomInput(input: Partial<RoomRecord>, templateIds: Set<s
   if (input.roomType !== undefined && input.roomType !== "standard" && input.roomType !== "personal") {
     return "invalid_room_type";
   }
-  if (input.roomType === "personal" && !normalizeParticipantId(input.ownerParticipantId)) {
+  if (input.roomType === "personal" && !normalizeParticipantId(input.ownerParticipantId)
+    && !(options.allowUnownedPersonal === true && input.ownerParticipantId == null)) {
     return "missing_personal_room_owner";
   }
   return null;
@@ -82,6 +84,7 @@ export function normalizeRoomPayload(input: RoomPayloadInput, mode: "create" | "
   const normalized = normalizeRoomAvatarOverrides(input);
   delete normalized.templateVersion;
   delete normalized.templateSnapshot;
+  Reflect.deleteProperty(normalized, "currentOwnerParticipantId");
   if (input.roomType === "personal") {
     normalized.visibility = "private";
     normalized.guestAllowed = false;

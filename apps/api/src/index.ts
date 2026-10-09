@@ -61,6 +61,7 @@ import { createRoomEffectFacade } from "./identity/effect-facade.js";
 import { identityFenceUnavailable, uncertainRoomCommit } from "./identity/fence-transaction.js";
 import { releaseFencedResponse } from "./identity/response-release.js";
 import { identityAdmissionOriginHash as hashAdmissionOrigin } from "./identity/admission-origin.js";
+import { adminCurrentOwnerParticipantId, currentRoomOwner } from "./identity/admin-room-projection.js";
 
 import { getLivekitCredentials, getMediaTokenConfigError, getLivekitDeploymentDiagnostics } from "./livekit-config.js";
 
@@ -1113,8 +1114,10 @@ function roomNoteVisibleToActor(note: RoomNoteRecord, actor: ControlPlaneActor):
  * authority-fenced endpoint and must never hitchhike in a generic room DTO. */
 function roomResponseRecord(request: IncomingMessage, room: RoomRecord): RoomRecord | Omit<RoomRecord, "personalState"> {
   const actor = resolveControlPlaneActor(request);
-  if (actor.ok && actor.actor.actorType === "admin-token") return room;
-  const { personalState: _privateState, ...metadata } = room;
+  const record = { ...room };
+  Reflect.deleteProperty(record, "currentOwnerParticipantId");
+  if (actor.ok && actor.actor.actorType === "admin-token") return record;
+  const { personalState: _privateState, ...metadata } = record;
   return metadata;
 }
 
@@ -1966,6 +1969,8 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   if (method === "GET" && url.pathname === "/api/control-plane/session") {
     const actor = await requireControlPlanePermission(request, response, { permission: "dashboard.read", action: "admin.dashboard.view", objectType: "dashboard", objectId: "control-plane" });
     if (!actor) return;
+    const minimumIdentityProtocol = await legacyIdentityBoundary.minimum();
+    if (minimumIdentityProtocol !== 1 && minimumIdentityProtocol !== 2) throw new IdentityBoundaryError(503, "identity_authority_unavailable");
     metrics.adminDashboardViewsTotal += 1;
     json(response, 200, {
       actor: {
@@ -1975,7 +1980,8 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
         tenantId: actor.tenantId,
         roomId: actor.roomId
       },
-      permissions: controlPlanePermissions
+      permissions: controlPlanePermissions,
+      minimumIdentityProtocol
     });
     return;
   }
@@ -2190,9 +2196,10 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     const actor = await requireControlPlanePermission(request, response, { permission: "room.create", action: "room.create", objectType: "room" });
     if (!actor) return;
     const rawPayload = normalizeRoomAvatarOverrides((await parseBody<RoomPayloadInput>(request)) ?? {});
+    const allowUnownedPersonal = await legacyIdentityBoundary.minimum() >= 2;
     let payload: Partial<RoomRecord>;
     try {
-      const resolved = await resolveRoomTemplateCreate(storage, rawPayload);
+      const resolved = await resolveRoomTemplateCreate(storage, rawPayload, { allowUnownedPersonal });
       payload = { ...normalizeRoomPayload(resolved.input, "create"), templateVersion: resolved.version.version };
     } catch (error) {
       const failure = templateInputError(error);
@@ -2202,7 +2209,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     }
     const tenantIds = new Set((await storage.listTenants()).map((tenant) => tenant.tenantId));
     const templateIds = new Set((await storage.listTemplates()).map((template) => template.templateId));
-    const validationError = validateRoomInput(payload, templateIds, tenantIds);
+    const validationError = validateRoomInput(payload, templateIds, tenantIds, { allowUnownedPersonal });
     if (validationError) {
       incrementCounter(metrics.roomCreationFailuresTotal, validationError);
       return json(response, 400, { error: validationError });
@@ -2218,15 +2225,17 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     }
     let room: RoomRecord;
     try {
-      room = await storage.createRoom(payload);
+      room = await storage.createAdministrativeRoom(payload);
     } catch (error) {
+      if (error instanceof IdentityBoundaryError) throw error;
+      if (identityFenceUnavailable(error)) throw new IdentityBoundaryError(503, "identity_authority_unavailable", error);
       const templateFailure = templateInputError(error);
       if (templateFailure) {
         incrementCounter(metrics.roomCreationFailuresTotal, templateFailure.code);
         return json(response, templateFailure.status, { error: templateFailure.code });
       }
       const message = error instanceof Error ? error.message : "room_create_failed";
-      const reason = /duplicate key|unique constraint|already exists/i.test(message)
+      const reason = message === "room_slug_conflict" || /duplicate key|unique constraint|already exists/i.test(message)
         ? "room_slug_conflict"
         : /^(template_deprecated|template_version_not_found):/.test(message)
           ? "invalid_template"
@@ -3119,12 +3128,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       : null;
     const atFloor2 = await legacyIdentityBoundary.minimum() >= 2;
     const v2 = session?.ok && session.payload.identityProtocolVersion === 2;
-    const scope = { tenantId: room.tenantId, roomId };
-    const currentAuthority = atFloor2 ? await storage.roomIdentities.authority(scope) : null;
-    if (atFloor2 && !currentAuthority) throw new Error("room_identity_authority_unavailable");
-    const currentOwner = currentAuthority?.ownerIdentityId
-      ? await storage.roomIdentities.get(scope, currentAuthority.ownerIdentityId) : null;
-    if (currentAuthority?.ownerIdentityId && !currentOwner) throw new Error("room_identity_authority_unavailable");
+    const current = atFloor2 ? await currentRoomOwner(storage, { tenantId: room.tenantId, roomId }) : null;
     const participantIdForStatus = session?.ok ? session.payload.participantId : actorResult.actor.participantId;
     const currentRole = session?.ok ? session.payload.role : actorResult.actor.role;
     const effectiveRole = v2 ? currentRole
@@ -3145,7 +3149,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     json(response, 200, {
       state: sanitizeSessionControlState(atFloor2
         ? await currentSessionControlV2(storage, room) : room.sessionControl),
-      ...(atFloor2 ? { authorityRevision: currentAuthority!.revision, ownerParticipantId: currentOwner?.participantId ?? null } : {}),
+      ...(current ? { authorityRevision: current.authority.revision, ownerParticipantId: current.ownerParticipantId } : {}),
       participant: participantIdForStatus ? {
         participantId: participantIdForStatus,
         role: effectiveRole,
@@ -3691,7 +3695,10 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     if (isRoomDisabled(room) && !canManageDisabledRoom(request)) return json(response, 403, { error: "room_access_denied", reason: "room_disabled" });
     if (!(await canReadRoomDetails(request, room))) return json(response, 404, { error: "room_not_found" });
     const metadata = { ...roomResponseRecord(request, room), roomLink: createRoomLink(room.roomId, request), manifest: await buildManifest(room.roomId, request, room) };
-    await releaseRoomRead(request, storage, room, () => { json(response, 200, metadata); });
+    const readActor = resolveControlPlaneActor(request);
+    const owner: { currentOwnerParticipantId?: string | null } = readActor.ok && readActor.actor.actorType === "admin-token"
+      ? { currentOwnerParticipantId: await adminCurrentOwnerParticipantId(storage, room, await legacyIdentityBoundary.minimum()) } : {};
+    await releaseRoomRead(request, storage, room, () => { json(response, 200, { ...metadata, ...owner }); });
     return;
   }
 

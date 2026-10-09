@@ -6,6 +6,7 @@ import {
   createRoom,
   createRoomUrl,
   createRoomInvite,
+  controlPlaneIdentityFloor,
   decideWaitingRoomRequest,
   deleteAsset,
   deleteTenant,
@@ -13,6 +14,7 @@ import {
   fetchRoomDiagnostics,
   fetchControlPlaneSession,
   fetchRoomManifest,
+  fetchRoomMetadata,
   fetchTemplates,
   listAssets,
   listRoomInvites,
@@ -29,9 +31,12 @@ import {
   uploadAsset,
   uploadSceneBundleZip,
   revokeRoomInvite,
+  type RoomInviteRecord,
+  type RoomRecord,
   setRoomDisabled
 } from "./index.js";
-import { renderTemplateCards, templateCreationFields, templateDefaultsSummary } from "./template-picker.js";
+import { mergeConfirmedInviteCreate, mergeKnownInviteLinks, withoutUnusableInviteLinks } from "./invite-list.js";
+import { displayOwnerParticipantId, personalOwnerHandoffHint, personalRoomInviteFields, renderTemplateCards, templateCreationFields, templateDefaultsSummary } from "./template-picker.js";
 
 function mustElement<T extends Element>(selector: string): T {
   const element = document.querySelector<T>(selector);
@@ -126,6 +131,18 @@ let selectedRoomPoll: number | undefined;
 let roomSlugTouched = false;
 let authVerificationSeq = 0;
 let templateDefaultsDirty = false;
+let roomSelectionGeneration = 0;
+let inviteListRevision = 0;
+let inviteReadSequence = 0;
+let appliedInviteReadSequence = 0;
+let roomMetadataReadSequence = 0;
+let appliedRoomMetadataReadSequence = 0;
+let selectedInviteId: string | undefined;
+let initializedForm: { generation: number; roomId: string } | undefined;
+
+function identityFloor(): 1 | 2 {
+  return controlPlaneIdentityFloor(state.controlPlaneSession);
+}
 
 function renderTemplateOptions(): void {
   templateSelect.replaceChildren(...state.templates.map(template => {
@@ -164,25 +181,31 @@ function applySelectedTemplateDefaults(): void {
 function syncTemplateForm(): void {
   const reference = Boolean(state.selectedTemplate?.defaults);
   const personal = state.selectedRoom ? state.selectedRoom.roomType === "personal" : state.selectedTemplate?.defaults?.roomType === "personal";
+  const v2PersonalDraft = Boolean(personal && !state.selectedRoom && identityFloor() === 2);
+  const unownedPersonal = v2PersonalDraft || Boolean(personal && state.selectedRoom && displayOwnerParticipantId(state.selectedRoom) == null);
   templateGallery.hidden = Boolean(state.selectedRoom) || !state.templates.some(template => template.defaults);
   templateGallery.disabled = Boolean(state.selectedRoom);
   templateSelect.disabled = Boolean(state.selectedRoom);
   createRoomButton.disabled = Boolean(state.selectedRoom) || !state.selectedTemplate;
-  updateRoomButton.disabled = !state.selectedRoom;
+  updateRoomButton.disabled = !selectedRoomFormReady();
   roomSlugInput.readOnly = Boolean(state.selectedRoom);
   roomOwnerField.hidden = !personal;
-  roomOwnerInput.required = Boolean(personal && !state.selectedRoom);
-  roomOwnerInput.readOnly = Boolean(state.selectedRoom);
+  roomOwnerInput.required = Boolean(personal && !state.selectedRoom && !v2PersonalDraft);
+  roomOwnerInput.readOnly = Boolean(state.selectedRoom) || v2PersonalDraft;
+  roomOwnerInput.placeholder = unownedPersonal ? personalOwnerHandoffHint : "Required for a personal workspace";
   roomVisibilitySelect.disabled = Boolean(personal);
   guestAccessInput.disabled = Boolean(personal);
   sceneBundleSelect.disabled = reference;
   sceneBundleVersionSelect.disabled = reference;
   bindSceneBundleButton.disabled = reference || !state.selectedRoom;
-  templateSummary.textContent = state.selectedTemplate ? `${templateDefaultsSummary(state.selectedTemplate)}${state.selectedRoom ? " · saved template binding" : ""}${reference ? " · scene locked to this version" : ""}` : "";
+  templateSummary.textContent = state.selectedTemplate ? `${templateDefaultsSummary(state.selectedTemplate)}${state.selectedRoom ? " · saved template binding" : ""}${reference ? " · scene locked to this version" : ""}${v2PersonalDraft ? ` · ${personalOwnerHandoffHint}` : ""}` : "";
   for (const radio of Array.from(templateCards.querySelectorAll<HTMLInputElement>("input[type=radio]"))) radio.checked = radio.value === state.selectedTemplate?.templateId;
 }
 
 function beginRoomDraft(): void {
+  roomSelectionGeneration++;
+  initializedForm = undefined;
+  selectedInviteId = undefined;
   state.selectedRoom = undefined; state.selectedRoomManifest = undefined;
   state.selectedRoomDiagnostics = []; state.selectedRoomInvites = []; state.selectedWaitingRoomRequests = [];
   renderTemplateOptions();
@@ -265,7 +288,7 @@ function roomSlugValidationError(): string | null {
   if (state.rooms.some((room) => room.roomId === slug)) {
     return "room_slug_conflict";
   }
-  if (state.selectedTemplate?.defaults?.roomType === "personal" && !/^[A-Za-z0-9._:-]{3,128}$/.test(roomOwnerInput.value.trim())) return "missing_personal_room_owner";
+  if (state.selectedTemplate?.defaults?.roomType === "personal" && identityFloor() === 1 && !/^[A-Za-z0-9._:-]{3,128}$/.test(roomOwnerInput.value.trim())) return "missing_personal_room_owner";
   return null;
 }
 
@@ -292,6 +315,7 @@ function renderRoomPreview(): void {
 }
 
 function render(): void {
+  if (state.selectedRoom) state.selectedRoomInvites = withoutUnusableInviteLinks(state.selectedRoomInvites, state.selectedRoom.roomId);
   renderAuthorizationState();
   syncTemplateForm();
   publishStatus.textContent = state.statusMessage ?? state.publishStatus;
@@ -333,6 +357,7 @@ function render(): void {
         diagnostics: state.selectedRoomDiagnostics.slice(-5)
       }, null, 2)
     : "Select a room to inspect details";
+  const keepInviteId = selectedInviteId;
   inviteSelect.replaceChildren(
     ...state.selectedRoomInvites.map((invite) => {
       const option = document.createElement("option");
@@ -341,7 +366,9 @@ function render(): void {
       return option;
     })
   );
-  const selectedInvite = state.selectedRoomInvites.find((invite) => invite.inviteId === inviteSelect.value) ?? state.selectedRoomInvites[0];
+  const selectedInvite = state.selectedRoomInvites.find(invite => invite.inviteId === keepInviteId) ?? state.selectedRoomInvites[0];
+  selectedInviteId = selectedInvite?.inviteId;
+  inviteSelect.value = selectedInviteId ?? "";
   inviteLink.href = selectedInvite?.inviteLink ?? "#";
   inviteLink.textContent = selectedInvite?.inviteLink ?? "";
   const selectedRoomDisabled = state.selectedRoom ? roomStatusLabel(state.selectedRoom) === "disabled" : false;
@@ -437,17 +464,50 @@ function render(): void {
   renderRoomPreview();
 }
 
+function selectionCurrent(generation: number, roomId: string): boolean {
+  return generation === roomSelectionGeneration && state.selectedRoom?.roomId === roomId;
+}
+
+/** Update is available only after normal selection initializes this room's editable fields. */
+function selectedRoomFormReady(): boolean {
+  return Boolean(initializedForm && selectionCurrent(initializedForm.generation, initializedForm.roomId));
+}
+
 async function selectRoom(room: typeof state.selectedRoom, preserveDraft = false): Promise<void> {
   if (!room) {
     return;
   }
+  const roomId = room.roomId, generation = preserveDraft ? roomSelectionGeneration : ++roomSelectionGeneration;
+  if (state.selectedRoom?.roomId !== roomId) {
+    state.selectedRoomInvites = []; state.selectedWaitingRoomRequests = []; selectedInviteId = undefined;
+    state.selectedRoomManifest = undefined; state.selectedRoomDiagnostics = [];
+  }
   state.selectedRoom = room;
-  state.selectedRoomManifest = await fetchRoomManifest(apiBaseUrl, room.roomId, currentAuth());
-  state.selectedRoomDiagnostics = await fetchRoomDiagnostics(apiBaseUrl, room.roomId, currentAuth());
-  state.selectedRoomInvites = await listRoomInvites(apiBaseUrl, room.roomId, currentAuth()).catch(() => []);
-  state.selectedWaitingRoomRequests = await listWaitingRoomRequests(apiBaseUrl, room.roomId, currentAuth()).catch(() => []);
-  state.selectedSceneBundle = state.sceneBundles.find((bundle) => bundle.publicUrl === state.selectedRoomManifest?.sceneBundle?.url);
-  state.sceneBundleVersions = state.selectedSceneBundle ? await listSceneBundleVersions(apiBaseUrl, state.selectedSceneBundle.bundleId).catch(() => []) : [];
+  if (!preserveDraft) render();
+  const metadataSequence = ++roomMetadataReadSequence;
+  const metadata = await fetchRoomMetadata(apiBaseUrl, roomId, currentAuth());
+  if (!selectionCurrent(generation, roomId)) return;
+  if (metadataSequence >= appliedRoomMetadataReadSequence) {
+    appliedRoomMetadataReadSequence = metadataSequence;
+    state.selectedRoom = metadata;
+  }
+  room = state.selectedRoom!;
+  const inviteRevision = inviteListRevision;
+  const inviteSequence = ++inviteReadSequence;
+  const [manifest, diagnostics, invites, requests] = await Promise.all([
+    fetchRoomManifest(apiBaseUrl, roomId, currentAuth()), fetchRoomDiagnostics(apiBaseUrl, roomId, currentAuth()),
+    listRoomInvites(apiBaseUrl, roomId, currentAuth()).catch(() => null),
+    listWaitingRoomRequests(apiBaseUrl, roomId, currentAuth()).catch(() => [])
+  ]);
+  if (!selectionCurrent(generation, roomId)) return;
+  const sceneBundle = state.sceneBundles.find(bundle => bundle.publicUrl === manifest.sceneBundle?.url);
+  const versions = sceneBundle ? await listSceneBundleVersions(apiBaseUrl, sceneBundle.bundleId).catch(() => []) : [];
+  if (!selectionCurrent(generation, roomId)) return;
+  room = state.selectedRoom!;
+  state.selectedRoomManifest = manifest; state.selectedRoomDiagnostics = diagnostics;
+  applyInviteListIfFresh(inviteRevision, inviteSequence, roomId, invites);
+  state.selectedWaitingRoomRequests = requests; state.selectedSceneBundle = sceneBundle; state.sceneBundleVersions = versions;
+  roomOwnerInput.value = displayOwnerParticipantId(state.selectedRoom) ?? "";
   if (preserveDraft) { render(); return; }
   const snapshot = room.templateSnapshot ?? state.selectedRoomManifest.templateSnapshot;
   state.selectedTemplate = snapshot ? { templateId: room.templateId, label: snapshot.label, assetSlots: snapshot.assetSlots, currentVersion: room.templateVersion ?? snapshot.version, description: snapshot.description, defaults: snapshot.defaults }
@@ -459,7 +519,6 @@ async function selectRoom(room: typeof state.selectedRoom, preserveDraft = false
   roomSlugInput.value = room.roomId;
   roomSlugTouched = true;
   templateSelect.value = room.templateId;
-  roomOwnerInput.value = room.ownerParticipantId ?? "";
   primaryColorInput.value = room.theme?.primaryColor ?? "#5fc8ff";
   accentColorInput.value = room.theme?.accentColor ?? "#163354";
   featureVoiceInput.checked = room.features?.voice ?? true;
@@ -492,6 +551,7 @@ async function selectRoom(room: typeof state.selectedRoom, preserveDraft = false
     })
   );
   sceneBundleVersionSelect.value = state.selectedSceneBundle?.version ?? "";
+  initializedForm = { generation, roomId };
   render();
 }
 
@@ -507,13 +567,40 @@ function startSelectedRoomPolling(): void {
   }, 5000);
 }
 
+function applyInviteListIfFresh(revision: number, sequence: number, roomId: string, invites: RoomInviteRecord[] | null): void {
+  if (invites === null) return;
+  if (sequence < appliedInviteReadSequence) return;
+  if (revision !== inviteListRevision) { void refreshSelectedRoomAccessState(); return; }
+  appliedInviteReadSequence = sequence;
+  state.selectedRoomInvites = mergeKnownInviteLinks(state.selectedRoomInvites, invites, roomId);
+}
+
 async function refreshSelectedRoomAccessState(): Promise<void> {
   if (!state.selectedRoom) {
     return;
   }
-  state.selectedRoomInvites = await listRoomInvites(apiBaseUrl, state.selectedRoom.roomId, currentAuth()).catch(() => []);
-  state.selectedWaitingRoomRequests = await listWaitingRoomRequests(apiBaseUrl, state.selectedRoom.roomId, currentAuth()).catch(() => []);
+  const roomId = state.selectedRoom.roomId, generation = roomSelectionGeneration, inviteRevision = inviteListRevision;
+  const inviteSequence = ++inviteReadSequence;
+  const [invites, requests] = await Promise.all([
+    listRoomInvites(apiBaseUrl, roomId, currentAuth()).catch(() => null),
+    listWaitingRoomRequests(apiBaseUrl, roomId, currentAuth()).catch(() => [])
+  ]);
+  if (selectionCurrent(generation, roomId)) {
+    applyInviteListIfFresh(inviteRevision, inviteSequence, roomId, invites);
+    state.selectedWaitingRoomRequests = requests;
+  }
   render();
+}
+
+async function refreshSelectedRoomForInvite(roomId: string): Promise<RoomRecord> {
+  const generation = roomSelectionGeneration;
+  const sequence = ++roomMetadataReadSequence;
+  const room = await fetchRoomMetadata(apiBaseUrl, roomId, currentAuth());
+  if (!selectionCurrent(generation, roomId)) throw new Error("room_selection_changed");
+  if (sequence < appliedRoomMetadataReadSequence) return state.selectedRoom!;
+  appliedRoomMetadataReadSequence = sequence;
+  state.selectedRoom = room; roomOwnerInput.value = displayOwnerParticipantId(room) ?? "";
+  return room;
 }
 
 async function decideSelectedWaitingRequest(requestId: string, decision: "approve" | "reject"): Promise<void> {
@@ -772,11 +859,12 @@ form.addEventListener("submit", (event) => {
   state.publishStatus = "publishing";
   state.statusMessage = "publishing";
   render();
+  const floor = identityFloor();
   void createRoom(apiBaseUrl, {
     roomId: roomSlugInput.value.trim(),
     tenantId: tenantSelect.value,
     templateId: templateSelect.value,
-    ...templateCreationFields(state.selectedTemplate, roomOwnerInput.value),
+    ...templateCreationFields(state.selectedTemplate, roomOwnerInput.value, floor),
     name: roomNameInput.value,
     ...(!state.selectedTemplate?.defaults ? { sceneBundleUrl: selectedSceneBundlePublicUrl() } : {}),
     assetIds: Array.from(assetSelect.selectedOptions).map((option) => option.value),
@@ -798,19 +886,37 @@ form.addEventListener("submit", (event) => {
       state.statusMessage = "published";
       state.roomLink = room.roomLink;
       state.rooms = [room, ...state.rooms];
-      await selectRoom(room);
-      if (room.visibility === "private") {
-        const invite = await createRoomInvite(apiBaseUrl, room.roomId, {
-          expiresInSeconds: Number.parseInt(inviteTtlInput.value, 10) || 3600,
-          waitingRoomEnabled: inviteWaitingRoomInput.checked
-        }, currentAuth());
-        state.selectedRoomInvites = [invite, ...state.selectedRoomInvites];
-        inviteSelect.value = invite.inviteId;
-        state.statusMessage = "published-invite-created";
+      try {
+        await selectRoom(room);
+        if (room.visibility === "private") {
+          const inviteFields = personalRoomInviteFields(await refreshSelectedRoomForInvite(room.roomId));
+          const invite = await createRoomInvite(apiBaseUrl, room.roomId, {
+            expiresInSeconds: Number.parseInt(inviteTtlInput.value, 10) || 3600,
+            waitingRoomEnabled: inviteWaitingRoomInput.checked,
+            ...inviteFields
+          }, currentAuth());
+          if (state.selectedRoom?.roomId === room.roomId && invite.roomId === room.roomId) {
+            state.selectedRoomInvites = mergeConfirmedInviteCreate(state.selectedRoomInvites, invite);
+            selectedInviteId = invite.inviteId;
+          }
+          inviteListRevision++;
+          state.statusMessage = inviteFields.role === "member" ? "published-member-invite-created" : "published-invite-created";
+          render();
+        }
+      } catch (error) {
+        state.statusMessage = error instanceof Error ? `published-followup-failed:${error.message}` : "published-followup-failed";
         render();
       }
-    })
-    .catch((error: unknown) => {
+    }, async (error: unknown) => {
+      if (error instanceof Error && error.message === "identity_upgrade_required" && floor === 1) {
+        await verifyControlPlaneSession();
+        state.publishStatus = "failed";
+        state.statusMessage = identityFloor() === 2
+          ? `failed:identity_upgrade_required · Identity v2 is now required. Draft kept; the owner ID will not be sent. Review and create again. ${personalOwnerHandoffHint}`
+          : "failed:identity_upgrade_required · The server requires an identity upgrade. Draft kept; ask an operator to complete the identity v2 handoff before creating this room.";
+        render();
+        return;
+      }
       state.publishStatus = "failed";
       state.statusMessage = error instanceof Error ? `failed:${error.message}` : "failed";
       render();
@@ -1033,19 +1139,23 @@ createInviteButton.addEventListener("click", () => {
   if (!state.selectedRoom) {
     return;
   }
+  const roomId = state.selectedRoom.roomId;
   state.publishStatus = "publishing";
   state.statusMessage = "creating-invite";
   render();
-  void createRoomInvite(apiBaseUrl, state.selectedRoom.roomId, {
+  void refreshSelectedRoomForInvite(roomId).then(room => createRoomInvite(apiBaseUrl, roomId, {
     expiresInSeconds: Number.parseInt(inviteTtlInput.value, 10) || 3600,
-    waitingRoomEnabled: inviteWaitingRoomInput.checked
-  }, currentAuth())
+    waitingRoomEnabled: inviteWaitingRoomInput.checked,
+    ...personalRoomInviteFields(room)
+  }, currentAuth()))
     .then(async (invite) => {
       state.publishStatus = "published";
       state.statusMessage = "invite-created";
-      state.selectedRoomInvites = [invite, ...state.selectedRoomInvites.filter((item) => item.inviteId !== invite.inviteId)];
-      inviteLink.href = invite.inviteLink ?? "#";
-      inviteLink.textContent = invite.inviteLink ?? "";
+      if (state.selectedRoom?.roomId === roomId && invite.roomId === roomId) {
+        state.selectedRoomInvites = mergeConfirmedInviteCreate(state.selectedRoomInvites, invite);
+        selectedInviteId = invite.inviteId;
+      }
+      inviteListRevision++;
       render();
     })
     .catch((error: unknown) => {
@@ -1056,16 +1166,23 @@ createInviteButton.addEventListener("click", () => {
 });
 
 revokeInviteButton.addEventListener("click", () => {
-  if (!state.selectedRoom || !inviteSelect.value) {
+  const roomId = state.selectedRoom?.roomId, inviteId = inviteSelect.value;
+  if (!roomId || !inviteId) {
     return;
   }
   state.publishStatus = "publishing";
   state.statusMessage = "revoking-invite";
   render();
-  void revokeRoomInvite(apiBaseUrl, state.selectedRoom.roomId, inviteSelect.value, currentAuth())
-    .then(async () => {
+  void revokeRoomInvite(apiBaseUrl, roomId, inviteId, currentAuth())
+    .then(async revoked => {
       state.publishStatus = "published";
       state.statusMessage = "invite-revoked";
+      if (state.selectedRoom?.roomId === roomId && revoked.roomId === roomId) {
+        const metadata: RoomInviteRecord = { ...revoked }; delete metadata.inviteLink;
+        state.selectedRoomInvites = state.selectedRoomInvites.map(item => item.inviteId === metadata.inviteId ? metadata : item);
+      }
+      inviteListRevision++;
+      render();
       await refreshSelectedRoomAccessState();
     })
     .catch((error: unknown) => {
@@ -1074,6 +1191,8 @@ revokeInviteButton.addEventListener("click", () => {
       render();
     });
 });
+
+inviteSelect.addEventListener("change", () => { selectedInviteId = inviteSelect.value; render(); });
 
 bindSceneBundleButton.addEventListener("click", () => {
   if (!state.selectedRoom || !sceneBundleSelect.value) {
@@ -1220,6 +1339,7 @@ deleteRoomButton.addEventListener("click", () => {
       state.statusMessage = "deleted";
       state.roomLink = undefined;
       state.rooms = state.rooms.filter((room) => room.roomId !== roomId);
+      roomSelectionGeneration++;
       state.selectedRoom = undefined;
       state.selectedRoomManifest = undefined;
       state.selectedRoomDiagnostics = [];
@@ -1235,13 +1355,14 @@ deleteRoomButton.addEventListener("click", () => {
 });
 
 updateRoomButton.addEventListener("click", () => {
-  if (!state.selectedRoom) {
+  if (!state.selectedRoom || !selectedRoomFormReady()) {
     return;
   }
+  const roomId = state.selectedRoom.roomId, generation = roomSelectionGeneration;
   state.publishStatus = "publishing";
   state.statusMessage = "publishing";
   render();
-  void updateRoom(apiBaseUrl, state.selectedRoom.roomId, {
+  void updateRoom(apiBaseUrl, roomId, {
     name: roomNameInput.value,
     assetIds: Array.from(assetSelect.selectedOptions).map((option) => option.value),
     visibility: roomVisibilitySelect.value as "public" | "unlisted" | "private",
@@ -1262,7 +1383,8 @@ updateRoomButton.addEventListener("click", () => {
       state.statusMessage = "updated";
       state.roomLink = room.roomLink;
       state.rooms = state.rooms.map((item) => item.roomId === room.roomId ? room : item);
-      await selectRoom(room);
+      if (selectionCurrent(generation, room.roomId)) await selectRoom(room);
+      else render();
     })
     .catch((error: unknown) => {
       state.publishStatus = "failed";

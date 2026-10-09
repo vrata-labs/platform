@@ -304,6 +304,8 @@ export interface Storage {
   listRooms(): Promise<RoomRecord[]>;
   getRoom(roomId: string): Promise<RoomRecord | null>;
   createRoom(input: Partial<RoomRecord>): Promise<RoomRecord>;
+  /** Administrative metadata receipt, not a grant; floor 2 rejects raw owner/host/presenter seeds. */
+  createAdministrativeRoom(input: Partial<RoomRecord>): Promise<RoomRecord>;
   createLegacyPersonalRoom(input: Partial<RoomRecord> & { roomId: string; tenantId: string; ownerParticipantId: string }):
     Promise<{ room: RoomRecord; created: boolean }>;
   createPersonalOwnedRoom(input: Omit<Partial<RoomRecord>, "ownerParticipantId" | "roomType" | "sessionControl"> & { displayName: string }):

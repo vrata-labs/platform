@@ -14,6 +14,21 @@ import subprocess
 from urllib.parse import unquote, urlparse
 
 
+# Match the API reader's version resolution and reference markers; return no room data.
+ROOM_RECORD_SCHEMA_SQL = (
+    "select count(*) = 9 from pg_attribute where not attisdropped and attnum > 0 and ("
+    "(attrelid = to_regclass('rooms') and attname in ('template_id', 'template_version', 'room_type', 'owner_participant_id'))"
+    " or (attrelid = to_regclass('templates') and attname in ('template_id', 'current_version'))"
+    " or (attrelid = to_regclass('template_versions') and (attname in ('template_id', 'version') or (attname = 'snapshot' and atttypid = 'jsonb'::regtype))))")
+OWNERLESS_REFERENCE_PERSONAL_SQL = (
+    "select exists(select 1 from rooms r"
+    " left join templates t on t.template_id = r.template_id"
+    " left join template_versions tv on tv.template_id = r.template_id and tv.version = coalesce(r.template_version, t.current_version)"
+    " cross join lateral (select case when jsonb_typeof(tv.snapshot) = 'string' then (tv.snapshot #>> '{}')::jsonb else tv.snapshot end as snapshot) s"
+    " where r.room_type = 'personal' and r.owner_participant_id is null"
+    " and (s.snapshot is null or jsonb_typeof(s.snapshot) <> 'object' or s.snapshot ?| array['defaults', 'scene', 'assetLock']))")
+
+
 def sha(value):
     if not isinstance(value, str) or not re.fullmatch(r"[a-f0-9]{40}", value):
         raise ValueError("template_rollout_invalid_sha")
@@ -32,15 +47,28 @@ def supports_identity_boundary(contract):
             and contract["identityProtocolFloorGuard"] == 1)
 
 
-def assert_target_allowed(marker, status, target_contract, target_sha, minimum_identity_protocol=1, identity_bound=False):
+def supports_room_record_reader(contract):
+    return (isinstance(contract, dict) and contract.get("schemaVersion") == 1
+            and type(contract.get("roomRecordReader")) is int
+            and contract["roomRecordReader"] >= 2)
+
+
+def assert_target_allowed(marker, status, target_contract, target_sha, minimum_identity_protocol=1, identity_bound=False,
+                          ownerless_reference_personal=False):
     sha(target_sha)
     if type(minimum_identity_protocol) is not int or minimum_identity_protocol < 1:
         raise ValueError("identity_rollout_invalid_protocol_floor")
     if type(identity_bound) is not bool:
         raise ValueError("identity_rollout_invalid_binding_state")
+    if type(ownerless_reference_personal) is not bool:
+        raise ValueError("room_record_rollout_invalid_reference_state")
     if minimum_identity_protocol >= 2 or identity_bound:
         if not supports_identity_boundary(target_contract):
             raise ValueError("identity_rollback_below_boundary_forbidden")
+    # Floor two permits concurrent ownerless creation after the data probe.
+    if minimum_identity_protocol >= 2 or ownerless_reference_personal:
+        if not supports_room_record_reader(target_contract):
+            raise ValueError("room_record_rollback_requires_reader2")
     if marker:
         sha(marker)
         if not supports_references(target_contract):
@@ -152,13 +180,16 @@ class CatalogHost:
         if minimum_identity_protocol >= 2 and self.read_only_compose_environment().get("VRATA_INTERNAL_SERVICE_TOKEN") == "unconfigured-read-only-preflight":
             raise ValueError("identity_rollout_internal_service_token_required")
         identity_bound = self.identity_bound()
-        assert_target_allowed(marker, status, contract, target, minimum_identity_protocol, identity_bound)
+        ownerless = self.ownerless_reference_personal()
+        assert_target_allowed(marker, status, contract, target, minimum_identity_protocol, identity_bound,
+                              ownerless_reference_personal=ownerless)
         if supports_identity_boundary(contract):
             self.validate_identity_configuration()
         # Preparation never silently changes availability. A deliberate return to
         # Wave 2 uses rollback first; compatible routine deploys preserve catalog.
         return {"targetSha": target, "wave2Marker": marker, "state": status["state"],
-                "minimumIdentityProtocol": minimum_identity_protocol, "identityAuthorityBound": identity_bound}
+                "minimumIdentityProtocol": minimum_identity_protocol, "identityAuthorityBound": identity_bound,
+                "ownerlessReferencePersonal": ownerless}
 
     def identity_bound(self):
         command = self.compose + ["exec", "-T", "postgres", "sh", "-c",
@@ -171,6 +202,23 @@ class CatalogHost:
         value = self.run(command + ["select exists(select 1 from room_identity_authority_v2)"])
         if value not in ("t", "f"):
             raise ValueError("identity_rollout_invalid_binding_state")
+        return value == "t"
+
+    def ownerless_reference_personal(self):
+        command = self.compose + ["exec", "-T", "postgres", "sh", "-c",
+                                  'psql -XAt -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "$1"', "sh"]
+        rooms = self.run(command + ["select to_regclass('rooms') is not null"])
+        if rooms == "f":
+            boundary = self.run(command + ["select to_regclass('room_identity_protocol_policy') is not null"
+                                           " or to_regclass('room_identity_authority_v2') is not null"])
+            if boundary == "f":
+                return False
+            raise ValueError("room_record_rollout_invalid_reference_state")
+        if rooms != "t" or self.run(command + [ROOM_RECORD_SCHEMA_SQL]) != "t":
+            raise ValueError("room_record_rollout_invalid_reference_state")
+        value = self.run(command + [OWNERLESS_REFERENCE_PERSONAL_SQL])
+        if value not in ("t", "f"):
+            raise ValueError("room_record_rollout_invalid_reference_state")
         return value == "t"
 
     def validate_identity_configuration(self):

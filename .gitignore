@@ -9,6 +9,7 @@ build/
 .template-rollback/
 .identity-rollback/
 .identity-boundary-rollback/
+.room-record-reader-rollback/
 .plugin-rollback/
 infra/docker/.template-wave2-rollback-sha
 .DS_Store

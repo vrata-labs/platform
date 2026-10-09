@@ -114,6 +114,14 @@ function roomNoteId(roomId: string, scope: RoomNoteScope, ownerParticipantId?: s
   return scope === "shared" ? `${roomId}:shared` : `${roomId}:private:${ownerParticipantId ?? ""}`;
 }
 
+function assertAdministrativeRoomSeed(minimumProtocol: unknown, input: Partial<RoomRecord>): 1 | 2 {
+  if (minimumProtocol !== 1 && minimumProtocol !== 2) throw new IdentityBoundaryError(503, "identity_authority_unavailable");
+  const control = input.sessionControl;
+  if (minimumProtocol === 2 && (input.ownerParticipantId != null || control?.hostParticipantId != null
+    || control?.presenterParticipantId != null)) throw new IdentityBoundaryError(409, "identity_upgrade_required");
+  return minimumProtocol;
+}
+
 const XR_TELEMETRY_EVENT_LIMIT = 1000;
 
 const seedTemplateDefinitions = listTemplateDefinitions();
@@ -365,10 +373,10 @@ export class MemoryStorage implements Storage {
     const room = this.rooms.get(roomId);
     return room ? structuredClone(room) : null;
   }
-  private createRoomSync(input: Partial<RoomRecord>): RoomRecord {
+  private createRoomSync(input: Partial<RoomRecord>, options?: { allowUnownedPersonal?: boolean }): RoomRecord {
     const templateId = input.templateId ?? (input.roomType === "personal" ? "personal-workspace-basic" : "meeting-room-basic");
     const versionSnapshot = this.requireActiveTemplateVersion(templateId);
-    input = materializeStoredRoomInput(versionSnapshot, input);
+    input = materializeStoredRoomInput(versionSnapshot, input, options);
     const roomType = defaultRoomType(input.roomType);
     const roomWithoutTemplateMetadata: RoomRecordWithoutTemplateMetadata = {
       roomId: input.roomId ?? crypto.randomUUID(),
@@ -403,6 +411,12 @@ export class MemoryStorage implements Storage {
     return structuredClone(room);
   }
   async createRoom(input: Partial<RoomRecord>): Promise<RoomRecord> { return this.createRoomSync(input); }
+  async createAdministrativeRoom(input: Partial<RoomRecord>): Promise<RoomRecord> {
+    input = structuredClone(input);
+    const floor = assertAdministrativeRoomSeed(this.identityPolicy.current(), input);
+    if (input.roomId != null && this.rooms.has(input.roomId)) throw new Error("room_slug_conflict");
+    return this.createRoomSync(input, { allowUnownedPersonal: floor >= 2 });
+  }
   async createLegacyPersonalRoom(input: Parameters<Storage["createLegacyPersonalRoom"]>[0]) {
     if (this.identityPolicy.current() !== 1) throw new IdentityBoundaryError(409, "identity_upgrade_required");
     const existing = [...this.rooms.values()].find(room => room.tenantId === input.tenantId
@@ -1531,10 +1545,10 @@ export class PostgresStorage implements Storage {
     const row = result.rows[0];
     return row ? mapRoomRow(row) : null;
   }
-  private async insertRoom(input: Partial<RoomRecord>, executor: Pick<PoolClient, "query">): Promise<RoomRecord> {
+  private async insertRoom(input: Partial<RoomRecord>, executor: Pick<PoolClient, "query">, options?: { allowUnownedPersonal?: boolean }): Promise<RoomRecord> {
     const templateId = input.templateId ?? (input.roomType === "personal" ? "personal-workspace-basic" : "meeting-room-basic");
     const versionSnapshot = await this.requireActiveTemplateVersion(templateId, executor);
-    input = materializeStoredRoomInput(versionSnapshot, input);
+    input = materializeStoredRoomInput(versionSnapshot, input, options);
     const roomType = defaultRoomType(input.roomType);
     const roomWithoutTemplateMetadata: RoomRecordWithoutTemplateMetadata = {
       roomId: input.roomId ?? crypto.randomUUID(),
@@ -1578,13 +1592,20 @@ export class PostgresStorage implements Storage {
     return room;
   }
   async createRoom(input: Partial<RoomRecord>): Promise<RoomRecord> { return this.insertRoom(input, this.pool); }
-  private async roomCreationTransaction<T>(version: "legacy" | "v2", effect: (client: PoolClient) => Promise<T>): Promise<T> {
+  async createAdministrativeRoom(input: Partial<RoomRecord>): Promise<RoomRecord> {
+    input = structuredClone(input);
+    return this.roomCreationTransaction("admin", async (client, minimumProtocol) => {
+      const floor = assertAdministrativeRoomSeed(minimumProtocol, input);
+      return this.insertRoom(input, client, { allowUnownedPersonal: floor >= 2 });
+    });
+  }
+  private async roomCreationTransaction<T>(version: "legacy" | "v2" | "admin", effect: (client: PoolClient, minimumProtocol: number) => Promise<T>): Promise<T> {
     return roomFenceTransaction(this.pool, {}, async client => {
       await client.query("lock table rooms in row exclusive mode");
       const policy = (await client.query("select minimum_protocol from room_identity_protocol_policy where singleton=true for share")).rows[0];
       if (!policy || !Number.isSafeInteger(policy.minimum_protocol) || policy.minimum_protocol < 1) throw new IdentityBoundaryError(503, "identity_authority_unavailable");
-      if (version === "legacy" ? policy.minimum_protocol !== 1 : policy.minimum_protocol < 2) throw new IdentityBoundaryError(409, "identity_upgrade_required");
-      return effect(client);
+      if (version !== "admin" && (version === "legacy" ? policy.minimum_protocol !== 1 : policy.minimum_protocol < 2)) throw new IdentityBoundaryError(409, "identity_upgrade_required");
+      return effect(client, policy.minimum_protocol);
     });
   }
   async createLegacyPersonalRoom(input: Parameters<Storage["createLegacyPersonalRoom"]>[0]) {
@@ -1682,14 +1703,18 @@ export class PostgresStorage implements Storage {
     if (!versionSnapshot) throw new Error(`template_version_not_found:${existing.templateId}`);
     const updated = bindRoomTemplateMetadata(updatedWithoutTemplateMetadata, versionSnapshot);
     const result = await this.pool.query(
-      `update rooms set name = $2, room_type = $3, owner_participant_id = $4, status = $5, disabled_at = $6, disabled_by = $7, visibility = $8, scene_bundle_url = $9, features = $10::jsonb, asset_ids = $11::jsonb, theme = $12::jsonb, guest_allowed = $13, avatar_config = $14::jsonb, session_control = $15::jsonb, personal_state = case when $21::boolean then $16::jsonb else personal_state end, template_version = $17, template_snapshot = $18::jsonb where room_id = $1 and template_id = $19 and coalesce(template_version, (select t.current_version from templates t where t.template_id = rooms.template_id)) = $20 returning personal_state`,
-      [roomId, updated.name, updated.roomType, updated.ownerParticipantId ?? null, updated.status, updated.disabledAt ?? null, updated.disabledBy ?? null, updated.visibility, updated.sceneBundleUrl ?? null, JSON.stringify(updated.features), JSON.stringify(updated.assetIds), JSON.stringify(updated.theme), updated.guestAllowed, JSON.stringify(updated.avatarConfig), JSON.stringify(updated.sessionControl), JSON.stringify(updated.personalState), updated.templateVersion, JSON.stringify(updated.templateSnapshot), existing.templateId, existing.templateVersion, input.personalState != null]
+      `update rooms set name = $2, room_type = case when $22::boolean then $3 else room_type end, owner_participant_id = case when $23::boolean then $4 else owner_participant_id end, status = $5, disabled_at = $6, disabled_by = $7, visibility = $8, scene_bundle_url = $9, features = $10::jsonb, asset_ids = $11::jsonb, theme = $12::jsonb, guest_allowed = $13, avatar_config = $14::jsonb, session_control = case when $24::boolean then $15::jsonb else session_control end, personal_state = case when $21::boolean then $16::jsonb else personal_state end, template_version = $17, template_snapshot = $18::jsonb where room_id = $1 and template_id = $19 and coalesce(template_version, (select t.current_version from templates t where t.template_id = rooms.template_id)) = $20 and (case when room_type = 'personal' then 'personal' else 'standard' end) = $25 returning room_type, owner_participant_id, session_control, personal_state`,
+      [roomId, updated.name, updated.roomType, updated.ownerParticipantId ?? null, updated.status, updated.disabledAt ?? null, updated.disabledBy ?? null, updated.visibility, updated.sceneBundleUrl ?? null, JSON.stringify(updated.features), JSON.stringify(updated.assetIds), JSON.stringify(updated.theme), updated.guestAllowed, JSON.stringify(updated.avatarConfig), JSON.stringify(updated.sessionControl), JSON.stringify(updated.personalState), updated.templateVersion, JSON.stringify(updated.templateSnapshot), existing.templateId, existing.templateVersion, input.personalState != null, input.roomType != null, input.ownerParticipantId !== undefined, input.sessionControl != null, defaultRoomType(existing.roomType)]
     );
     if ((result.rowCount ?? 0) === 0) {
       if (await this.getRoom(roomId)) throw new Error("room_template_binding_changed");
       return null;
     }
-    updated.personalState = defaultPersonalState(result.rows[0]?.personal_state ?? updated.personalState);
+    const row = result.rows[0];
+    updated.roomType = defaultRoomType(row.room_type ?? undefined);
+    updated.ownerParticipantId = row.owner_participant_id ?? null;
+    updated.sessionControl = defaultSessionControl(row.session_control);
+    updated.personalState = defaultPersonalState(row.personal_state ?? updated.personalState);
     return updated;
   }
   async deleteRoom(roomId: string, pluginDeletion?: { tenantId: string; deletionId: string }): Promise<boolean> {

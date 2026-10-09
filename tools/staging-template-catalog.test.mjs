@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { OWNERLESS_REFERENCE_PERSONAL_SQL, ROOM_RECORD_SCHEMA_SQL } from "./identity-rollback-guard.mjs";
 
 test("catalog rollout rejects incompatible images and preserves the verified baseline", () => {
   const output = execFileSync("python3", ["-B", "-c", `
@@ -25,7 +26,9 @@ rejects(lambda: m.assert_target_allowed(baseline, None, None, current), "below_w
 m.assert_target_allowed(baseline, {"state":"active", "referenceRoomCount":3}, contract, current)
 rejects(lambda: m.assert_target_allowed(baseline, None, contract, current, 2), "identity_rollback_below_boundary")
 boundary = dict(contract, identityProtocolFloorGuard=1)
-m.assert_target_allowed(baseline, {"state":"active", "referenceRoomCount":3}, boundary, current, 2)
+reader = dict(boundary, roomRecordReader=2)
+m.assert_target_allowed(baseline, {"state":"active", "referenceRoomCount":3}, reader, current, 2)
+rejects(lambda: m.assert_target_allowed(baseline, None, boundary, current, 2), "room_record_rollback_requires_reader2")
 rejects(lambda: m.assert_target_allowed(baseline, None, contract, current, 1, True), "identity_rollback_below_boundary")
 m.assert_target_allowed(baseline, None, boundary, current, 1, True)
 for invalid in (None, True, "1", 0):
@@ -49,6 +52,7 @@ with tempfile.TemporaryDirectory() as directory:
     host.contract = lambda target: contract
     host.minimum_identity_protocol = lambda: 1
     host.identity_bound = lambda: False
+    host.ownerless_reference_personal = lambda: False
     host.validate_identity_database = lambda: None
     rejects(lambda: host.mutate("activate", baseline), "verified_wave2")
     rejects(lambda: host.record_wave2(baseline), "successful_gate")
@@ -112,6 +116,74 @@ with tempfile.TemporaryDirectory() as root:
         try: host.validate_identity_database()
         except ValueError as error: assert str(error) == "identity_rollout_requires_matching_bundled_database"
         else: raise AssertionError("probed an unrelated database")
+`], { encoding: "utf8" });
+});
+
+test("room-record reader two is required at floor two or with ownerless personal references", () => {
+  execFileSync("python3", ["-B", "-c", `
+import importlib.util, tempfile
+spec = importlib.util.spec_from_file_location("catalog", ${JSON.stringify(fileURLToPath(new URL("./staging-template-catalog.py", import.meta.url)))})
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+assert m.ROOM_RECORD_SCHEMA_SQL == ${JSON.stringify(ROOM_RECORD_SCHEMA_SQL)}, "stage and production schema probes drifted"
+assert m.OWNERLESS_REFERENCE_PERSONAL_SQL == ${JSON.stringify(OWNERLESS_REFERENCE_PERSONAL_SQL)}, "stage and production predicates drifted"
+def rejects(fn, code):
+    try: fn()
+    except (ValueError, RuntimeError) as e: assert str(e) == code, str(e)
+    else: raise AssertionError("expected " + code)
+current = "a"*40
+boundary = {"schemaVersion":1, "templateSchema":2, "referenceTemplateVersions":["1.0.0", "2.0.0"], "identityProtocolFloorGuard":1}
+reader = dict(boundary, roomRecordReader=2)
+rejects(lambda: m.assert_target_allowed(None, None, boundary, current, 2), "room_record_rollback_requires_reader2")
+rejects(lambda: m.assert_target_allowed(None, None, boundary, current, 1, False, True), "room_record_rollback_requires_reader2")
+rejects(lambda: m.assert_target_allowed(None, None, None, current, 1, False, True), "room_record_rollback_requires_reader2")
+m.assert_target_allowed(None, None, None, current, 1, False, False)
+m.assert_target_allowed(None, None, boundary, current, 1, True, False)
+m.assert_target_allowed(None, None, {"schemaVersion":1, "roomRecordReader":2}, current, 1, False, True)
+m.assert_target_allowed(None, None, reader, current, 2, True, True)
+m.assert_target_allowed(None, None, dict(reader, roomRecordReader=3), current, 2)
+for invalid in (None, True, "2", 1, 0, -2, 2.0):
+    rejects(lambda: m.assert_target_allowed(None, None, dict(reader, roomRecordReader=invalid), current, 2), "room_record_rollback_requires_reader2")
+for invalid in (None, "t", 0, 1):
+    rejects(lambda: m.assert_target_allowed(None, None, reader, current, 1, False, invalid), "room_record_rollout_invalid_reference_state")
+with tempfile.TemporaryDirectory() as root:
+    host = m.CatalogHost(root)
+    seen = []
+    def answering(*values):
+        answers = iter(values)
+        def run(args):
+            seen.append(args)
+            return next(answers)
+        host.run = run
+    answering("f", "f"); assert host.ownerless_reference_personal() is False
+    answering("t", "t", "t"); assert host.ownerless_reference_personal() is True
+    assert seen[-1][-1] == m.OWNERLESS_REFERENCE_PERSONAL_SQL
+    answering("t", "t", "f"); assert host.ownerless_reference_personal() is False
+    for values in (("f", "t"), ("f", ""), ("t", "f"), ("t", ""), ("t", "t", ""), ("t", "t", "private-room-id"), ("unexpected",)):
+        answering(*values)
+        rejects(host.ownerless_reference_personal, "room_record_rollout_invalid_reference_state")
+    prefix = host.compose + ["exec", "-T", "postgres"]
+    assert all(args[:len(prefix)] == prefix for args in seen), "probes only query the bundled database"
+    def api_down(*args, **kwargs): raise AssertionError("prepare must not require a running API")
+    host.cli = api_down
+    host.run = lambda args: '{"state":"wave2","referenceRoomCount":0}'
+    host.validate_identity_database = lambda: None
+    host.validate_identity_configuration = lambda: None
+    host.minimum_identity_protocol = lambda: 1
+    host.identity_bound = lambda: False
+    passed, original = [], m.assert_target_allowed
+    def spy(*args, **kwargs):
+        passed.append(kwargs.get("ownerless_reference_personal"))
+        return original(*args, **kwargs)
+    m.assert_target_allowed = spy
+    host.contract = lambda target: boundary
+    host.ownerless_reference_personal = lambda: True
+    rejects(lambda: host.prepare(current), "room_record_rollback_requires_reader2")
+    host.ownerless_reference_personal = lambda: False
+    assert host.prepare(current)["ownerlessReferencePersonal"] is False
+    host.contract = lambda target: reader
+    host.ownerless_reference_personal = lambda: True
+    assert host.prepare(current)["ownerlessReferencePersonal"] is True
+    assert passed == [True, False, True]
 `], { encoding: "utf8" });
 });
 
