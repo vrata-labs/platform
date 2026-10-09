@@ -635,6 +635,26 @@ Provisioning опубликован кодом `754ab123028f3f94e7ba4606cfb8fac0
 
 Собственный временный PostgreSQL-стенд удалён после завершения проверок и подтверждения его ID/labels; соседние процессы и staging-инфраструктура не изменялись.
 
+### T01a-S2b-Y: virtual-room data effects
+
+По новому поручению пользователя повторно проверены публичные staging health/demo-room/control-plane: все три запроса завершились connect timeout. Разработка продолжается с публикацией в GitHub и normal CI/Docker, без staging deploy/проверки. Инфраструктура не перезапускалась; shared floor не повышается.
+
+Следующий подготовительный срез закрывает scope-less virtual data writes/read release. Новый storage primitive проверяет floor1, отсутствие roomId во всех tenants и отсутствие binding; копирует исходный MAC-verified v1 deadline. Narrow facade допускает только room-bound telemetry writes либо один terminal sync release, не оба режима сразу. Memory стадирует записи и перепроверяет состояние; PG write-mode берёт rooms SHARE → policy FOR SHARE → same-room advisory lock и пишет/trim на одном client. Non-write mode берёт rooms ACCESS SHARE → policy FOR SHARE, не блокирует ordinary room writes и выпускает только отдельный virtual live namespace. Scope закрывается после callback; незавершённый SQL дожидается окончания и отвергает effect.
+
+Virtual presence/XR live maps отделены от persisted paths. XR использует commit-first FIFO без прежней публикации до записи; обе live namespaces делят 32pair/256room/512service capacity и два execution slots, один executing callback/room. Presence DELETE в существующей комнате тоже проходит свежий fence. Public missing-room manifest/presence проходят final floor release; admin bypass сохранён. Stale trusted Host не получает XR-history удалённой комнаты через virtual fallback; администратор сохраняет доступ к диагностике.
+
+Focused storage/XR suite — **25/25**, HTTP + persisted-telemetry regressions — **42/42**. Реальные PG блокировки проверяют обе очередности room INSERT/virtual effect, policy cutover, pool/advisory waits и retention200/1000; original expiry и mutable options не обходят проверку. Actual HTTP проверяет cutover/body wait, expiry после SQL, server-rejected COMMIT и настоящий successful COMMIT с искусственно потерянным ACK. Это source/HTTP доказательство, не physical-disk recovery и не remote container acceptance. Первоначальный общий API прогон до добавления новых HTTP cases — **1195 passed / 1 optional live-MinIO skipped**; финальные workspace/full E2E и CI результаты добавляются после завершения.
+
+Virtual state-token issuance/final release, frame/media grants, bootstrap reconciliation и retirement остаются открыты. Live-buffer separation не удаляет уже записанные diagnostic/XR rows, которые могут сохраниться до создания/после удаления комнаты с тем же ID. Полная v2 activation не объявляется завершённой.
+
+Первый полный local E2E — **186/186**, но до публикации дополнительно исправлена обработка invalid virtual room IDs: limit201+/control characters/malformed URI теперь дают bare404 до session/boundary/DB lookup, не500 и не увеличение requestFailures. Exact200 сохраняет реальный v1 presence write/read/delete и manifest fallback. Focused suite после исправления — **34/34**, включая native HTTP matrix всех virtual-data path groups и unchanged failure/telemetry/presence counters/DB totals. Это source fix; окончательный full E2E выполняется повторно.
+
+Дополнительно исправлен read-mode lock order: ACCESS SHARE на rooms приобретается до policy, чтобы virtual read не держал policy, ожидая schema init с rooms ACCESS EXCLUSIVE. Регрессия использует настоящий concurrent init, наблюдает его фактический AX lock и оба режима ожидания без policy-lock, затем проверяет успешное завершение и сохранность floor/namespace/guard hash. Промежуточный full E2E после input-fix дал **185/186**: observer не увидел seat occupancy reference meeting за15s. Assertions/таймауты/runtime не менялись; этот отказ проверяется отдельным focused повтором, причина пока не установлена. Финальная проверка после lock-order fix выполняется заново.
+
+После lock-order исправления native PG/HTTP focused suite — **22/22**; standalone reference meeting повтор — **1/1** (**3,2 минуты**), без изменения runtime/scene/assertions/таймаутов. Успешный повтор не объявляет первоначальный seat-occupancy timeout исправленным. Для focused Playwright в этом checkout аргументы идут непосредственно после pnpm test:e2e, без дополнительного --, чтобы --grep действительно ограничивал сценарий.
+
+Окончательное дерево после всех source fixes: workspace lint/typecheck/build/test прошли; API **1219 passed / 1 optional live-MinIO skipped**, runtime **1094/1094**, control-plane **13/13**, templates **20/20**, tools **256 passed / 2 optional skipped**; остальные packages без fail. Full local E2E — **186/186**, без skip/retry, **40,7 минуты**, включая reference meeting. После этого исполняемый код не менялся. CI/Docker acceptance добавляется после публикации; staging по текущему поручению не запускается.
+
 ## Публикация первого среза T01/T12
 
 Локально прошли workspace lint/typecheck/build/tests с PostgreSQL, затем runtime build и 905 runtime tests после финальных правок. Полный `pnpm test:e2e` на финальном исполняемом дереве: **148 passed**, без skip (41.6 min).

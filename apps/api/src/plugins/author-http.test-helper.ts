@@ -41,7 +41,7 @@ export interface AuthorHttpPackage {
   byteLength: number; manifest: RoomPluginManifest; state: string; uploadSettled: boolean;
 }
 type Phase = "body-admitted" | "body-end" | "put-written" | "upload-settled" | "private-read" | "plugin-room" | "settlement-timeout"
-  | "telemetry-effect" | "telemetry-written" | "telemetry-read"
+  | "telemetry-effect" | "telemetry-written" | "telemetry-read" | "telemetry-ack-loss" | "room-read" | "room-loaded"
   | "administrative-insert" | "administrative-receipt" | "administrative-ack-loss";
 type Message = { event?: string; phase?: Phase; id?: string; command?: string; kind?: Phase; roomId?: string; offset?: number; operation?: string;
   skip?: number; sqlState?: "55P03"; lockTimeoutMs?: number };
@@ -87,6 +87,9 @@ export function assertAuthorHttpPublicDto(value: unknown, forbidden: string[] = 
 /** All instrumentation is confined to this child. IPC messages contain phase IDs only, never HTTP values.
  * Plugin SQL pauses occur after acknowledged COMMIT or before the parent lock.
  * telemetry-written deliberately pauses before COMMIT while holding the room fence.
+ * telemetry-effect also pauses legacy and virtual effects at entry; room-read/room-loaded bracket a room lookup.
+ * telemetry-ack-loss lets the mapped transaction's real COMMIT run, then drops only its acknowledgement.
+ * Held phases resume in FIFO order, so one case may hold several requests.
  * The local reader currently uses FileHandle; readFile is also wrapped for the equivalent buffered path.
  */
 function childInstrumentation(indexUrl: string, telemetryCheckpoints: boolean, administrativeCheckpoints: boolean): string {
@@ -95,7 +98,8 @@ function childInstrumentation(indexUrl: string, telemetryCheckpoints: boolean, a
     import {syncBuiltinESMExports} from 'node:module';
     import fs from 'node:fs/promises';
     import pg from 'pg';
-    let offset=0, armed, resume;
+    let offset=0, armed;
+    const resumes=[];
     const originalNow=Date.now;
     Date.now=()=>originalNow()+offset;
     const notify=value=>process.send?.(value);
@@ -103,11 +107,11 @@ function childInstrumentation(indexUrl: string, telemetryCheckpoints: boolean, a
       if(!armed || armed.kind!==kind || armed.roomId!==roomId) return;
       if(armed.skip>0){--armed.skip;return;}
       const id=armed.id;armed=undefined;
-      await new Promise(resolve=>{resume=resolve;notify({event:'phase',phase:kind,id,...details});});
+      await new Promise(resolve=>{resumes.push(resolve);notify({event:'phase',phase:kind,id,...details});});
     };
     process.on('message',message=>{
       if(message.command==='arm'){armed=message;notify({event:'ack',id:message.id});}
-      if(message.command==='resume'){resume?.();resume=undefined;notify({event:'ack',id:message.id});}
+      if(message.command==='resume'){resumes.shift()?.();notify({event:'ack',id:message.id});}
       if(message.command==='clock'){offset=message.offset;notify({event:'ack',id:message.id});}
       if(message.command==='sync'){notify({event:'ack',id:message.id});}
     });
@@ -124,6 +128,7 @@ function childInstrumentation(indexUrl: string, telemetryCheckpoints: boolean, a
     const settlements=new WeakMap();
     const creations=new WeakMap();
     const lockTimeouts=new WeakMap();
+    const ackLosses=new WeakSet();
     pg.Client.prototype.query=async function(sql,...args){
       const text=typeof sql==='string'?sql:sql?.text;
       const values=Array.isArray(args[0])?args[0]:sql?.values;
@@ -153,7 +158,8 @@ function childInstrumentation(indexUrl: string, telemetryCheckpoints: boolean, a
         const roomId=settlements.get(this);settlements.delete(this);
         await pause('upload-settled',roomId);
       }
-      if(/^rollback$/i.test(text??'')){settlements.delete(this);creations.delete(this);}
+      if(/^commit$/i.test(text??'') && ackLosses.has(this)){ackLosses.delete(this);throw new Error('fixture_telemetry_commit_ack_lost');}
+      if(/^rollback$/i.test(text??'')){settlements.delete(this);creations.delete(this);ackLosses.delete(this);}
       return result;
     };
     const root=process.env.ROOM_PLUGIN_LOCAL_UPLOAD_ROOT;
@@ -207,11 +213,22 @@ function childInstrumentation(indexUrl: string, telemetryCheckpoints: boolean, a
       PostgresStorage.prototype.withRoomIdentityEffect=async function(guard,...args){
         await pause('telemetry-effect',guard.roomId);return effect.call(this,guard,...args);
       };
+      for(const method of ['withLegacyRoomEffect','withLegacyVirtualRoomEffect']){
+        const original=PostgresStorage.prototype[method];
+        PostgresStorage.prototype[method]=async function(scope,...args){
+          await pause('telemetry-effect',typeof scope==='string'?scope:scope?.roomId);return original.call(this,scope,...args);
+        };
+      }
+      const loadRoom=PostgresStorage.prototype.getRoom;
+      PostgresStorage.prototype.getRoom=async function(roomId,...args){
+        await pause('room-read',roomId);const room=await loadRoom.call(this,roomId,...args);await pause('room-loaded',roomId);return room;
+      };
       for(const method of ['addDiagnostic','addXrTelemetry','getXrTelemetry']){
         const original=PostgresStorage.prototype[method];
         PostgresStorage.prototype[method]=async function(roomId,...args){
           if(method!=='getXrTelemetry' && !this.effectRoomWrite) throw new Error('telemetry_fixture_requires_upfront_write_mode');
           const result=await original.call(this,roomId,...args);
+          if(method!=='getXrTelemetry' && armed?.kind==='telemetry-ack-loss' && armed.roomId===roomId){armed=undefined;ackLosses.add(this.effectClient);}
           await pause(method==='getXrTelemetry'?'telemetry-read':'telemetry-written',roomId);return result;
         };
       }

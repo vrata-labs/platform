@@ -19,25 +19,42 @@ export class XrTelemetryQueueFull extends Error {
   constructor() { super("XR telemetry queue is full"); this.name = "XrTelemetryQueueFull"; }
 }
 
-interface XrTelemetryPairQueue { pending: number; tail: Promise<void> }
-interface XrTelemetryRoomQueue { pending: number; tail: Promise<void>; pairs: Map<string, XrTelemetryPairQueue> }
+export interface XrTelemetryPairQueue { pending: number; tail: Promise<void> }
+export interface XrTelemetryRoomQueue { pending: number; tail: Promise<void>; pairs: Map<string, XrTelemetryPairQueue> }
 
-export function createXrTelemetryService(storagePromise: Promise<Pick<Storage, "addXrTelemetry" | "getXrTelemetry">>) {
-  const xrTelemetryByRoom = new Map<string, Map<string, XrTelemetryParticipantBuffer>>();
-  const xrTelemetryQueuesByRoom = new Map<string, XrTelemetryRoomQueue>();
-  // Only ready pair heads compete for a room turn and then a service slot,
-  // before their callback can borrow a shared database pool client.
-  let servicePending = 0;
+// Trusted backend plumbing, never guest-facing: services sharing one scheduler
+// share pair/room/service limits, room turns and commit slots, keyed by the
+// bare room id, while each service keeps its own live buffers.
+export interface XrTelemetryScheduler {
+  readonly queuesByRoom: Map<string, XrTelemetryRoomQueue>;
+  pending: number;
+  acquireCommitSlot(): Promise<void>;
+  releaseCommitSlot(): void;
+}
+
+export function createXrTelemetryScheduler(): XrTelemetryScheduler {
   let activeCommits = 0;
   const commitSlotWaiters: Array<() => void> = [];
-  function acquireCommitSlot(): Promise<void> {
-    if (activeCommits < xrTelemetryCommitSlots) { activeCommits += 1; return Promise.resolve(); }
-    return new Promise(resolve => { commitSlotWaiters.push(resolve); });
-  }
-  function releaseCommitSlot(): void {
-    const next = commitSlotWaiters.shift();
-    if (next) next(); else activeCommits -= 1;
-  }
+  return {
+    queuesByRoom: new Map<string, XrTelemetryRoomQueue>(),
+    pending: 0,
+    acquireCommitSlot() {
+      if (activeCommits < xrTelemetryCommitSlots) { activeCommits += 1; return Promise.resolve(); }
+      return new Promise(resolve => { commitSlotWaiters.push(resolve); });
+    },
+    releaseCommitSlot() {
+      const next = commitSlotWaiters.shift();
+      if (next) next(); else activeCommits -= 1;
+    }
+  };
+}
+
+export function createXrTelemetryService(storagePromise: Promise<Pick<Storage, "addXrTelemetry" | "getXrTelemetry">>,
+  scheduler: XrTelemetryScheduler = createXrTelemetryScheduler()) {
+  const xrTelemetryByRoom = new Map<string, Map<string, XrTelemetryParticipantBuffer>>();
+  const xrTelemetryQueuesByRoom = scheduler.queuesByRoom;
+  // Only ready pair heads compete for a room turn and then a scheduler slot,
+  // before their callback can borrow a shared database pool client.
 
   async function upsertXrTelemetry(roomId: string, participantId: string, payload: XrTelemetryRecord): Promise<void> {
     const roomTelemetry = xrTelemetryByRoom.get(roomId) ?? new Map<string, XrTelemetryParticipantBuffer>();
@@ -56,13 +73,13 @@ export function createXrTelemetryService(storagePromise: Promise<Pick<Storage, "
       ?? { pending: 0, tail: Promise.resolve(), pairs: new Map<string, XrTelemetryPairQueue>() };
     const pairQueue = roomQueue.pairs.get(participantId) ?? { pending: 0, tail: Promise.resolve() };
     if (pairQueue.pending >= xrTelemetryPairQueueLimit || roomQueue.pending >= xrTelemetryRoomQueueLimit
-      || servicePending >= xrTelemetryServiceQueueLimit) {
+      || scheduler.pending >= xrTelemetryServiceQueueLimit) {
       return Promise.reject(new XrTelemetryQueueFull());
     }
     let admittedPayload: XrTelemetryRecord;
     try { admittedPayload = structuredClone(payload); }
     catch (error) { return Promise.reject(error); }
-    servicePending += 1;
+    scheduler.pending += 1;
     roomQueue.pending += 1;
     pairQueue.pending += 1;
     roomQueue.pairs.set(participantId, pairQueue);
@@ -75,7 +92,7 @@ export function createXrTelemetryService(storagePromise: Promise<Pick<Storage, "
       roomQueue.tail = previousTurn.then(() => turn);
       try {
         await previousTurn;
-        await acquireCommitSlot();
+        await scheduler.acquireCommitSlot();
         try {
           const record = createXrTelemetryRecord(roomId, participantId, admittedPayload);
           const current = xrTelemetryByRoom.get(roomId)?.get(participantId);
@@ -86,12 +103,12 @@ export function createXrTelemetryService(storagePromise: Promise<Pick<Storage, "
           const roomTelemetry = xrTelemetryByRoom.get(roomId) ?? new Map<string, XrTelemetryParticipantBuffer>();
           appendXrTelemetryRecord(roomTelemetry, record);
           xrTelemetryByRoom.set(roomId, roomTelemetry);
-        } finally { releaseCommitSlot(); }
+        } finally { scheduler.releaseCommitSlot(); }
       } finally { releaseTurn(); }
     });
     pairQueue.tail = run.then(() => undefined, () => undefined);
     return run.finally(() => {
-      servicePending -= 1;
+      scheduler.pending -= 1;
       pairQueue.pending -= 1;
       roomQueue.pending -= 1;
       if (pairQueue.pending === 0 && roomQueue.pairs.get(participantId) === pairQueue) roomQueue.pairs.delete(participantId);

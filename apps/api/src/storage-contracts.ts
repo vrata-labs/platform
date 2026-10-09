@@ -288,6 +288,9 @@ export interface Storage {
     effect: (scoped: RoomIdentityEffectStorage, current: import("./identity/effect-write-guard.js").RoomEffectActor) => Promise<T>): Promise<T>;
   withLegacyRoomEffect<T>(scope: { tenantId: string; roomId: string }, options: LegacyRoomEffectOptions,
     effect: (scoped: RoomIdentityEffectStorage) => Promise<T>): Promise<T>;
+  /** Absent in every tenant, floor 1, unbound; grants nothing on a persisted room. */
+  withLegacyVirtualRoomEffect<T>(roomId: string, options: VirtualRoomEffectOptions,
+    effect: (scoped: VirtualRoomEffectStorage) => Promise<T>): Promise<T>;
   setRoomSceneBundleUrl(tenantId: string, roomId: string, sceneBundleUrl: string): Promise<RoomRecord | null>;
   getPersonalRoomState(tenantId: string, roomId: string): Promise<RoomPersonalState | null>;
   updatePersonalRoomState(tenantId: string, roomId: string, state: RoomPersonalState): Promise<RoomPersonalState | null>;
@@ -365,6 +368,9 @@ export type RoomEffectDatabase = Pick<Storage, "upsertRoomNote" | "deleteRoomNot
 
 export type RoomIdentityEffectStorage = RoomEffectDatabase & { releaseResponse(send: () => void): void };
 export interface LegacyRoomEffectOptions { roomWrite?: boolean; lockTimeoutMs?: number; idleTimeoutMs?: number }
+/** Write mode admits telemetry only; read mode admits one synchronous release. Never both. */
+export type VirtualRoomEffectStorage = Pick<RoomEffectDatabase, "addDiagnostic" | "addXrTelemetry"> & { releaseResponse(send: () => void): void };
+export type VirtualRoomEffectOptions = LegacyRoomEffectOptions & { expiresAtSeconds?: number };
 
 export type SceneBundleUpdateInput = Partial<SceneBundleCreateInput> & {
   publicUrl?: string;

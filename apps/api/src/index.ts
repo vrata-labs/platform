@@ -46,6 +46,7 @@ import {
   isHostControlsEnabled
 } from "./feature-flags.js";
 import { createLegacyIdentityBoundary, IdentityBoundaryError, legacyBoundaryApplies, legacyBoundaryAllowsAdministrator } from "./identity/legacy-boundary.js";
+import { assertVirtualRoomId, InvalidVirtualRoomId } from "./identity/virtual-effect-facade.js";
 import { createRoomIdentityService } from "./identity/service.js";
 import { createRoomIdentityCodec } from "@vrata/shared-types/identity-credential";
 import { admitV2RoomSession, type V2AdmissionRequest } from "./identity/http-admission.js";
@@ -56,7 +57,7 @@ import { finalizeProofBoundToken } from "./identity/effect-fence.js";
 import { IdentityStorageError } from "./identity/contracts.js";
 import { PersonalOwnerRoomBlocked } from "./identity/personal-owner-response.js";
 import type { RoomEffectGuard, RoomEffectActor } from "./identity/effect-write-guard.js";
-import type { Storage, RoomIdentityEffectStorage } from "./storage-contracts.js";
+import type { Storage, RoomIdentityEffectStorage, VirtualRoomEffectStorage } from "./storage-contracts.js";
 import { createRoomEffectFacade } from "./identity/effect-facade.js";
 import { identityFenceUnavailable, uncertainRoomCommit } from "./identity/fence-transaction.js";
 import { releaseFencedResponse } from "./identity/response-release.js";
@@ -136,7 +137,7 @@ import { createRoomPresence, type PresenceRecord } from "./room-presence.js";
 
 import { validateRoomAssetIds, validateAssetInput } from "./room-asset-validation.js";
 
-import { createXrTelemetryService, XrTelemetryQueueFull } from "./xr-telemetry-service.js";
+import { createXrTelemetryScheduler, createXrTelemetryService, XrTelemetryQueueFull } from "./xr-telemetry-service.js";
 import { IDENTITY_LIFECYCLE_REQUIRES_V2 } from "./identity/lifecycle.js";
 import type { XrTelemetryRecord } from "./xr-telemetry-buffer.js";
 
@@ -286,12 +287,22 @@ const requiredProductionApiEnvVars = ["CONTROL_PLANE_ADMIN_TOKEN", "ROOM_STATE_P
 
 const presenceByRoom = new Map<string, Map<string, PresenceRecord>>();
 const { getPresence, upsertPresence, deletePresence, cleanupAllPresence, activeParticipantCount } = createRoomPresence(presenceByRoom, presenceTtlMs);
-const { upsertXrTelemetry, upsertXrTelemetryWithFence, listXrTelemetry } = createXrTelemetryService(storagePromise);
+// Missing-room (virtual) live state never shares a map with a persisted room's.
+const virtualPresenceByRoom = new Map<string, Map<string, PresenceRecord>>();
+const virtualPresence = createRoomPresence(virtualPresenceByRoom, presenceTtlMs);
+// One scheduler keeps the API-wide commit slots and pending budget across both namespaces.
+const xrTelemetryScheduler = createXrTelemetryScheduler();
+const { upsertXrTelemetryWithFence, listXrTelemetry } = createXrTelemetryService(storagePromise, xrTelemetryScheduler);
+const virtualXrTelemetry = createXrTelemetryService(storagePromise, xrTelemetryScheduler);
 const controlPlaneAuditLog: ControlPlaneAuditLogEntry[] = [];
 const CONTROL_PLANE_AUDIT_LIMIT = 1000;
 const requestIds = new WeakMap<IncomingMessage, string>();
 const v2SessionsByRequest = new WeakMap<IncomingMessage, VerifiedRoomRequestV2>();
-const { metrics, apiMetricsText } = createApiMetrics(presenceByRoom, cleanupAllPresence, activeParticipantCount);
+// Aggregate gauges still count missing-room presence, as the single map did.
+const activePresenceRooms = { get size() { return new Set([...presenceByRoom.keys(), ...virtualPresenceByRoom.keys()]).size; } };
+const { metrics, apiMetricsText } = createApiMetrics(activePresenceRooms,
+  () => { cleanupAllPresence(); virtualPresence.cleanupAllPresence(); },
+  () => activeParticipantCount() + virtualPresence.activeParticipantCount());
 
 function resolveAccessRole(requestedRole: unknown, env: NodeJS.ProcessEnv = process.env): { role: RoomRole; roleSource: RoomSessionRoleSource } {
   if (!isDevRoleQueryAllowed(env)) {
@@ -897,12 +908,42 @@ async function runLegacyRoomEffect<T>(storage: Storage, room: RoomRecord, option
   }
 }
 
-async function releaseRoomRead(request: IncomingMessage, storage: Storage, room: RoomRecord | null, send: () => void): Promise<void> {
+/** Floor-1 effect for a room id without a persisted row. Its scope offers only
+ * telemetry writes or one synchronous release of separate virtual live state. */
+async function runLegacyVirtualRoomEffect<T>(storage: Storage, roomId: string, options: { roomWrite?: boolean; expiresAtSeconds?: number },
+  effect: (scoped: VirtualRoomEffectStorage) => Promise<T>): Promise<T> {
+  try {
+    return await storage.withLegacyVirtualRoomEffect(roomId, options, effect);
+  } catch (error) {
+    if (identityFenceUnavailable(error)) throw new IdentityBoundaryError(503, "identity_authority_unavailable", error);
+    throw error;
+  }
+}
+
+/** The five virtual-data path groups fall back to a virtual room. Their segments are
+ * decoded and the room id bounded before any session, boundary or room lookup; an id
+ * that namespace can never hold is the same public 404 as an absent room. */
+const virtualDataPath = /^\/api\/rooms\/([^/]+)\/(?:manifest|diagnostics|(?:presence|xr-telemetry)(?:\/([^/]+))?)$/;
+function assertVirtualDataPath(pathname: string): void {
+  const match = virtualDataPath.exec(pathname);
+  if (!match) return;
+  let roomId: string;
+  try {
+    roomId = decodeURIComponent(match[1]);
+    if (match[2] !== undefined) decodeURIComponent(match[2]);
+  } catch { throw new InvalidVirtualRoomId(); }
+  assertVirtualRoomId(roomId);
+}
+
+async function releaseRoomRead(request: IncomingMessage, storage: Storage, roomId: string, room: RoomRecord | null, send: () => void): Promise<void> {
   const actor = resolveControlPlaneActor(request);
-  // A missing-room fallback contains no persisted room data or side effect.
+  // A missing-room fallback contains no persisted room data. Only the administrator bypasses its fence.
   if (!room) {
+    if (actor.ok && actor.actor.actorType === "admin-token") { send(); return; }
     if (actor.ok && actor.actor.identityProtocolVersion === 2) throw new RoomEffectNotFound("room_not_found");
-    send(); return;
+    // Floor 1 and absence are observed before the one synchronous release.
+    await runLegacyVirtualRoomEffect(storage, roomId, {}, async scoped => { scoped.releaseResponse(send); });
+    return;
   }
   if (actor.ok) await runGuardedRoomEffect(storage, actor.actor, room, "room.join", async scoped => { scoped.releaseResponse(send); });
   else await runLegacyRoomEffect(storage, room, {}, async scoped => { scoped.releaseResponse(send); });
@@ -1703,6 +1744,8 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   metrics.requestsTotal += 1;
   const method = request.method ?? "GET";
   const url = new URL(request.url ?? "/", `http://${request.headers.host ?? `localhost:${apiPort}`}`);
+  // Before storage, plugin, session, boundary or room lookups; preflight keeps its CORS response.
+  if (method !== "OPTIONS") assertVirtualDataPath(url.pathname);
   const storage = await storagePromise;
 
   // This optional protocol family owns its admission/response boundary. At
@@ -3526,7 +3569,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     if (room && isRoomDisabled(room) && !canManageDisabledRoom(request)) return json(response, 403, { error: "room_access_denied", reason: "room_disabled" });
     if (room && !(await canReadRoomDetails(request, room))) return json(response, 404, { error: "room_not_found" });
     const manifest = await buildManifest(roomId, request, room);
-    await releaseRoomRead(request, storage, room, () => { json(response, 200, manifest); });
+    await releaseRoomRead(request, storage, roomId, room, () => { json(response, 200, manifest); });
     return;
   }
 
@@ -3534,7 +3577,9 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   if (method === "GET" && presenceListMatch) {
     const roomId = decodeURIComponent(presenceListMatch[1]);
     const room = await storage.getRoom(roomId);
-    await releaseRoomRead(request, storage, room, () => { json(response, 200, { items: getPresence(roomId) }); });
+    // A missing room releases only the separate virtual map.
+    const readPresence = room ? getPresence : virtualPresence.getPresence;
+    await releaseRoomRead(request, storage, roomId, room, () => { json(response, 200, { items: readPresence(roomId) }); });
     return;
   }
 
@@ -3553,8 +3598,8 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     if (blockReason) {
       return json(response, 403, { error: "room_access_denied", reason: blockReason });
     }
-    const publish = (current: RoomEffectActor | null) => {
-      upsertPresence(roomId, participantId, {
+    const publish = (current: RoomEffectActor | null, upsert = upsertPresence) => {
+      upsert(roomId, participantId, {
         ...payload,
         participantId,
         updatedAt: new Date().toISOString(),
@@ -3571,7 +3616,12 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       // the map write, not between a returned authority snapshot and the write.
       await runGuardedRoomEffect(storage, actorResult.actor, room, "room.join", async (scoped, current) => { scoped.releaseResponse(() => { publish(current); }); });
     } else {
-      if (!room) { publish(null); return; }
+      if (!room) {
+        // The original session deadline is checked inside the fence; the virtual map write is its sync release.
+        await runLegacyVirtualRoomEffect(storage, roomId, { expiresAtSeconds: session.payload.exp },
+          async scoped => { scoped.releaseResponse(() => { publish(null, virtualPresence.upsertPresence); }); });
+        return;
+      }
       await runLegacyRoomEffect(storage, room, {}, async scoped => { scoped.releaseResponse(() => { publish(null); }); });
     }
     return;
@@ -3582,8 +3632,20 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     const participantId = decodeURIComponent(presenceItemMatch[2]);
     const session = await verifyRoomSessionRequest(request, { roomId, participantId });
     if (!session.ok) return writeSessionTokenError(response, session);
-    deletePresence(roomId, participantId);
-    json(response, 200, { ok: true });
+    const room = await storage.getRoom(roomId);
+    // Map removal happens only in the release of the fence matching the room's namespace.
+    const remove = (target = deletePresence) => { target(roomId, participantId); json(response, 200, { ok: true }); };
+    if (session.payload.identityProtocolVersion === 2) {
+      if (!room) return json(response, 404, { error: "room_not_found" });
+      const actorResult = resolveControlPlaneActor(request);
+      if (!actorResult.ok) return json(response, 403, { error: "forbidden" });
+      await runGuardedRoomEffect(storage, actorResult.actor, room, "room.join", async scoped => { scoped.releaseResponse(() => { remove(); }); });
+    } else if (room) {
+      await runLegacyRoomEffect(storage, room, {}, async scoped => { scoped.releaseResponse(() => { remove(); }); });
+    } else {
+      await runLegacyVirtualRoomEffect(storage, roomId, { expiresAtSeconds: session.payload.exp },
+        async scoped => { scoped.releaseResponse(() => { remove(virtualPresence.deletePresence); }); });
+    }
     return;
   }
 
@@ -3621,7 +3683,8 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     } else if (room) {
       await runLegacyRoomEffect(storage, room, { roomWrite: true }, scoped => scoped.addDiagnostic(roomId, diagnostic));
     } else {
-      await storage.addDiagnostic(roomId, diagnostic);
+      await runLegacyVirtualRoomEffect(storage, roomId, { roomWrite: true, expiresAtSeconds: session.payload.exp },
+        scoped => scoped.addDiagnostic(roomId, diagnostic));
     }
     publishDiagnosticRecord(roomId, diagnostic);
     json(response, 201, { ok: true, reportId: diagnostic.reportId, requestId: diagnostic.requestId });
@@ -3640,14 +3703,17 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       allowHostOwnRoom: true
     });
     if (!actor) return;
+    // Select the namespace before preparing items. A missing room's DB leftovers
+    // and virtual live state are released only to the verified administrator.
+    const room = await storage.getRoom(roomId);
+    if (!room) {
+      if (actor.actorType !== "admin-token") return json(response, 404, { error: "room_not_found" });
+      json(response, 200, { items: await virtualXrTelemetry.listXrTelemetry(roomId) });
+      return;
+    }
     // Prepare outside the fence; release only under current room authority.
     const items = await listXrTelemetry(roomId);
-    const room = await storage.getRoom(roomId);
     const send = () => { json(response, 200, { items }); };
-    if (!room) {
-      if (actor.identityProtocolVersion === 2) return json(response, 404, { error: "room_not_found" });
-      send(); return;
-    }
     await runGuardedRoomEffect(storage, actor, room, "room.join", async scoped => { scoped.releaseResponse(send); }, { hostOrOwner: true });
     return;
   }
@@ -3664,11 +3730,12 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     // The fence writes only through scoped storage; idle still releases a no-op
     // so Memory rechecks authority. The response waits for commit and map apply.
     // Retention writers serialize up front; idle keeps the shared mode.
-    const effect = async (scoped: RoomIdentityEffectStorage, record: XrTelemetryRecord, persist: boolean) => {
+    const effect = async (scoped: VirtualRoomEffectStorage, record: XrTelemetryRecord, persist: boolean) => {
       if (persist) await scoped.addXrTelemetry(roomId, participantId, record as unknown as Record<string, unknown>);
       else scoped.releaseResponse(() => {});
     };
     let commit: (record: XrTelemetryRecord, persist: boolean) => Promise<void>;
+    let upsert = upsertXrTelemetryWithFence;
     if (session.payload.identityProtocolVersion === 2) {
       if (!room) return json(response, 404, { error: "room_not_found" });
       const actorResult = resolveControlPlaneActor(request);
@@ -3680,11 +3747,13 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     } else if (room) {
       commit = (record, persist) => runLegacyRoomEffect(storage, room, { roomWrite: persist }, scoped => effect(scoped, record, persist));
     } else {
-      await upsertXrTelemetry(roomId, participantId, payload);
-      json(response, 200, { ok: true });
-      return;
+      // Same FIFO, caps and commit-first order; only the live namespace differs.
+      const expiresAtSeconds = session.payload.exp;
+      upsert = virtualXrTelemetry.upsertXrTelemetryWithFence;
+      commit = (record, persist) => runLegacyVirtualRoomEffect(storage, roomId, { roomWrite: persist, expiresAtSeconds },
+        scoped => effect(scoped, record, persist));
     }
-    await upsertXrTelemetryWithFence(roomId, participantId, payload, commit);
+    await upsert(roomId, participantId, payload, commit);
     json(response, 200, { ok: true });
     return;
   }
@@ -3698,7 +3767,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     const readActor = resolveControlPlaneActor(request);
     const owner: { currentOwnerParticipantId?: string | null } = readActor.ok && readActor.actor.actorType === "admin-token"
       ? { currentOwnerParticipantId: await adminCurrentOwnerParticipantId(storage, room, await legacyIdentityBoundary.minimum()) } : {};
-    await releaseRoomRead(request, storage, room, () => { json(response, 200, { ...metadata, ...owner }); });
+    await releaseRoomRead(request, storage, room.roomId, room, () => { json(response, 200, { ...metadata, ...owner }); });
     return;
   }
 
@@ -3936,14 +4005,15 @@ export function startApiServer(port = apiPort) {
       }
       if (error instanceof IdentityBoundaryError) {
         json(response, error.status, { error: error.status === 503 ? "identity_authority_unavailable"
-          : error.reason === "identity_session_expired" ? "identity_session_expired" : "identity_required", reason: error.reason });
+          : error.reason === "identity_session_expired" || error.reason === "room_state_changed" ? error.reason : "identity_required",
+          reason: error.reason });
         return;
       }
       if (error instanceof RoomEffectPermissionDenied) {
         json(response, 403, { error: "forbidden", reason: "permission_denied" });
         return;
       }
-      if (error instanceof RoomEffectNotFound) {
+      if (error instanceof RoomEffectNotFound || error instanceof InvalidVirtualRoomId) {
         json(response, 404, { error: "room_not_found" });
         return;
       }

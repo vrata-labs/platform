@@ -15,7 +15,7 @@ function formatMetricLine(name: string, value: number, labels?: Record<string, s
 }
 
 export function createApiMetrics(
-  presenceByRoom: ReadonlyMap<string, unknown>,
+  presenceByRoom: Pick<ReadonlyMap<string, unknown>, "size">,
   cleanupAllPresence: () => void,
   activeParticipantCount: () => number
 ) {

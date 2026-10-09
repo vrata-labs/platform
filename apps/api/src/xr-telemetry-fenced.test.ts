@@ -3,7 +3,9 @@ import assert from "node:assert/strict";
 
 import type { Storage } from "./storage.js";
 import type { XrTelemetryRecord } from "./xr-telemetry-buffer.js";
-import { createXrTelemetryService, XrTelemetryQueueFull } from "./xr-telemetry-service.js";
+import {
+  createXrTelemetryScheduler, createXrTelemetryService, XrTelemetryQueueFull, type XrTelemetryScheduler
+} from "./xr-telemetry-service.js";
 
 type Commit = (record: XrTelemetryRecord, persist: boolean) => Promise<void>;
 interface Deferred<T> { promise: Promise<T>; resolve: (value: T) => void; reject: (reason: unknown) => void }
@@ -24,12 +26,12 @@ function deferred<T>(): Deferred<T> {
 
 function flush(): Promise<void> { return new Promise((resolve) => setImmediate(resolve)); }
 
-function service() {
+function service(scheduler?: XrTelemetryScheduler) {
   const storage: Pick<Storage, "addXrTelemetry" | "getXrTelemetry"> = {
     async addXrTelemetry() { throw new Error("fenced telemetry must not use global storage"); },
     async getXrTelemetry() { return []; }
   };
-  return createXrTelemetryService(Promise.resolve(storage));
+  return createXrTelemetryService(Promise.resolve(storage), scheduler);
 }
 
 function gate() {
@@ -302,4 +304,83 @@ test("service capacity is exactly 512 across rooms and released after failure", 
   await fence.drain(); await Promise.all([...pending.slice(1), released]);
   assert.equal(fence.calls.length, 513);
   assert.equal((await telemetry.listXrTelemetry("fresh-room"))[0].statusLine, "released");
+});
+
+test("services sharing a scheduler share pair, room, service, slot and room-turn limits but not live state", async () => {
+  const scheduler = createXrTelemetryScheduler();
+  const persisted = service(scheduler), virtual = service(scheduler), fence = gate();
+  const admit = (telemetry: typeof persisted, roomId: string, participantId: string, statusLine: string) =>
+    telemetry.upsertXrTelemetryWithFence(roomId, participantId, record({ statusLine }), fence.commit);
+  const full = async (roomId: string, participantId: string) => {
+    for (const telemetry of [persisted, virtual]) {
+      await assert.rejects(admit(telemetry, roomId, participantId, "overflow"), XrTelemetryQueueFull);
+    }
+  };
+  const pending = Array.from({ length: 32 }, (_, index) =>
+    admit(index < 16 ? persisted : virtual, "room", "p", `${index < 16 ? "persisted" : "virtual"}-${index % 16}`));
+  await full("room", "p");
+  for (let index = 32; index < 256; index += 1) pending.push(admit(index % 2 ? virtual : persisted, "room", `p-${index % 8}`, `fill-${index}`));
+  await full("room", "fresh");
+  for (let index = 256; index < 512; index += 1) pending.push(admit(index % 2 ? virtual : persisted, `room-${index % 16}`, "p", `spill-${index}`));
+  await full("fresh-room", "p");
+  await flush();
+  assert.deepEqual(fence.calls.map(call => [call.record.roomId, call.record.statusLine]),
+    [["room", "persisted-0"], ["room-0", "spill-256"]]);
+  await fence.drain(); await Promise.all(pending);
+  assert.equal(fence.calls.length, 512);
+  for (const [telemetry, name, offset] of [[persisted, "persisted", 0], [virtual, "virtual", 1]] as const) {
+    const entries = await telemetry.listXrTelemetry("room");
+    assert.deepEqual(entries.map(entry => entry.participantId), ["p", ...[0, 2, 4, 6].map(index => `p-${index + offset}`)]);
+    assert.equal(entries[0].statusLine, `${name}-15`);
+  }
+  assert.deepEqual([scheduler.pending, scheduler.queuesByRoom.size], [0, 0]);
+});
+
+test("a rejected callback in one namespace releases shared capacity without poisoning the other", async () => {
+  const scheduler = createXrTelemetryScheduler();
+  const persisted = service(scheduler), virtual = service(scheduler), fence = gate();
+  const upsert = (telemetry: typeof persisted, roomId: string, statusLine: string) =>
+    telemetry.upsertXrTelemetryWithFence(roomId, "p", record({ statusLine }), fence.commit);
+  const failing = upsert(persisted, "room", "fail");
+  const queued = Array.from({ length: 31 }, (_, index) => upsert(virtual, "room", `virtual-${index}`));
+  const holder = upsert(virtual, "r2", "holder"), waiting = upsert(persisted, "r3", "waiting");
+  await assert.rejects(upsert(virtual, "room", "overflow"), XrTelemetryQueueFull);
+  await flush();
+  assert.deepEqual(fence.calls.map(call => call.record.statusLine), ["fail", "holder"]);
+  const failure = new Error("fence denied"); fence.calls[0].done.reject(failure);
+  await assert.rejects(failing, value => value === failure); await flush();
+  assert.deepEqual(fence.calls.map(call => call.record.statusLine), ["fail", "holder", "waiting"]);
+  const released = upsert(virtual, "room", "released");
+  await assert.rejects(upsert(persisted, "room", "overflow-again"), XrTelemetryQueueFull);
+  await fence.drain(); await Promise.all([holder, waiting, ...queued, released]);
+  assert.deepEqual(await persisted.listXrTelemetry("room"), []);
+  assert.equal((await virtual.listXrTelemetry("room"))[0].statusLine, "released");
+  assert.deepEqual([(await persisted.listXrTelemetry("r3")).length, (await virtual.listXrTelemetry("r3")).length], [1, 0]);
+  assert.deepEqual([scheduler.pending, scheduler.queuesByRoom.size], [0, 0]);
+});
+
+test("a late apply lands only in its own namespace and storage keys stay the bare room id", async () => {
+  const scheduler = createXrTelemetryScheduler(); const fence = gate(); const keys: string[] = [];
+  const storage: Pick<Storage, "addXrTelemetry" | "getXrTelemetry"> = {
+    async addXrTelemetry(roomId) { keys.push(`add:${roomId}`); },
+    async getXrTelemetry(roomId) { keys.push(`get:${roomId}`); return []; }
+  };
+  const persisted = createXrTelemetryService(Promise.resolve(storage), scheduler);
+  const virtual = createXrTelemetryService(Promise.resolve(storage), scheduler);
+  const seat = (statusLine: string) => record({ currentSeatId: "seat-a", statusLine });
+  const live = async (telemetry: typeof persisted) =>
+    (await telemetry.listXrTelemetry("room")).map(entry => [entry.participantId, entry.statusLine ?? entry.kind]);
+  const late = virtual.upsertXrTelemetryWithFence("room", "p", seat("virtual"), fence.commit);
+  const queued = persisted.upsertXrTelemetryWithFence("room", "p", seat("persisted"), fence.commit);
+  await persisted.upsertXrTelemetry("room", "q", record({ kind: "direct" }));
+  await flush();
+  assert.equal(fence.calls.length, 1);
+  assert.deepEqual([await live(persisted), await live(virtual)], [[["q", "direct"]], []]);
+  fence.calls[0].done.resolve(); await late; await flush();
+  assert.deepEqual([await live(persisted), await live(virtual)], [[["q", "direct"]], [["p", "virtual"]]]);
+  fence.calls[1].done.resolve(); await queued;
+  assert.deepEqual([await live(persisted), await live(virtual)], [[["p", "persisted"], ["q", "direct"]], [["p", "virtual"]]]);
+  // Each namespace classifies against its own predecessor, so both seat changes persist.
+  assert.deepEqual(fence.calls.map(call => [call.record.roomId, call.persist]), [["room", true], ["room", true]]);
+  assert.deepEqual(new Set(keys), new Set(["add:room", "get:room"]));
 });

@@ -58,9 +58,10 @@ import type { RoomIdentityCredential } from "@vrata/shared-types/identity-creden
 import { createMemoryAdmissionBudget, createPostgresAdmissionBudget } from "./identity/admission-budget.js";
 import { assertCurrentEffect, type RoomEffectGuard, type RoomEffectActor } from "./identity/effect-write-guard.js";
 import type { RoomIdentityEffectStorage } from "./storage-contracts.js";
-import type { LegacyRoomEffectOptions } from "./storage-contracts.js";
+import type { LegacyRoomEffectOptions, VirtualRoomEffectOptions, VirtualRoomEffectStorage } from "./storage-contracts.js";
 import { createRoomEffectFacade } from "./identity/effect-facade.js";
 import { createMemoryTelemetryStage, type MemoryTelemetrySink } from "./identity/memory-telemetry-stage.js";
+import { assertVirtualRoomDeadline, captureVirtualRoomGuard, runVirtualRoomEffect } from "./identity/virtual-effect-facade.js";
 import { roomFenceTransaction, confirmedRoomWriteRejection, RoomFenceCommitUncertain } from "./identity/fence-transaction.js";
 import { IdentityBoundaryError } from "./identity/legacy-boundary.js";
 import { installRoomIdentitySchema } from "./identity/postgres-schema.js";
@@ -274,6 +275,25 @@ export class MemoryStorage implements Storage {
     const stage = createMemoryTelemetryStage(scope.roomId);
     try {
       const result = await effect(createRoomEffectFacade(this, { roomWrite: options.roomWrite, check, telemetry: stage.database }));
+      stage.commit(check, this.telemetrySink);
+      return result;
+    } finally { active = false; }
+  }
+  async withLegacyVirtualRoomEffect<T>(roomId: string, options: VirtualRoomEffectOptions,
+    effect: (scoped: VirtualRoomEffectStorage) => Promise<T>): Promise<T> {
+    const guard = captureVirtualRoomGuard(roomId, options);
+    let active = true;
+    const check = () => {
+      if (!active) throw new Error("room_effect_scope_closed");
+      if (this.identityPolicy.current() !== 1) throw new IdentityBoundaryError(409, "identity_upgrade_required");
+      if (this.rooms.has(guard.roomId)) throw new IdentityBoundaryError(409, "room_state_changed");
+      if (this.identityAdapter.hasRoomBindings(guard.roomId)) throw new IdentityBoundaryError(409, "identity_upgrade_required");
+      assertVirtualRoomDeadline(guard, this.identityNow());
+    };
+    check();
+    const stage = createMemoryTelemetryStage(guard.roomId);
+    try {
+      const result = await runVirtualRoomEffect(stage.database, guard, check, effect);
       stage.commit(check, this.telemetrySink);
       return result;
     } finally { active = false; }
@@ -921,6 +941,41 @@ export class PostgresStorage implements Storage {
       if (policy.minimum_protocol !== 1 || bound) throw new IdentityBoundaryError(409, "identity_upgrade_required");
       return effect(createRoomEffectFacade(new PostgresStorage(this.pool, this.identityNow, client, options.roomWrite === true, "legacy"),
         { roomWrite: options.roomWrite, check: checkAlive }));
+    });
+  }
+  async withLegacyVirtualRoomEffect<T>(roomId: string, options: VirtualRoomEffectOptions,
+    effect: (scoped: VirtualRoomEffectStorage) => Promise<T>): Promise<T> {
+    const guard = captureVirtualRoomGuard(roomId, options);
+    assertVirtualRoomDeadline(guard, this.identityNow());
+    return roomFenceTransaction(this.pool, guard, async (client, checkAlive) => {
+      // Both modes acquire rooms before policy, matching schema init's lock order.
+      // SHARE pins absence against INSERTs; keep this broad write lock short.
+      // ACCESS SHARE admits ordinary writes and EXCLUSIVE but does not pin absence;
+      // read release may expose only separate virtual state. Policy pins the floor.
+      await client.query(guard.roomWrite ? "lock table rooms in share mode" : "lock table rooms in access share mode");
+      const policy = (await client.query("select minimum_protocol from room_identity_protocol_policy where singleton=true for share")).rows[0];
+      if (!policy || !Number.isSafeInteger(policy.minimum_protocol) || policy.minimum_protocol < 1) {
+        throw new IdentityBoundaryError(503, "identity_authority_unavailable");
+      }
+      if (policy.minimum_protocol !== 1) throw new IdentityBoundaryError(409, "identity_upgrade_required");
+      if ((await client.query("select 1 from rooms where room_id=$1", [guard.roomId])).rowCount) {
+        throw new IdentityBoundaryError(409, "room_state_changed");
+      }
+      if ((await client.query("select 1 from room_identity_authority_v2 where room_id=$1", [guard.roomId])).rowCount) {
+        throw new IdentityBoundaryError(409, "identity_upgrade_required");
+      }
+      const check = () => { checkAlive(); assertVirtualRoomDeadline(guard, this.identityNow()); };
+      check();
+      const scoped = new PostgresStorage(this.pool, this.identityNow, client, guard.roomWrite, "legacy");
+      let serialized: Promise<unknown> | undefined;
+      const serialize = async () => {
+        await (serialized ??= client.query("select pg_advisory_xact_lock(hashtextextended('vrata:virtual-room-telemetry:'||$1,0))", [guard.roomId]));
+        check();
+      };
+      return runVirtualRoomEffect({
+        addDiagnostic: async (target, payload) => { await serialize(); await scoped.addDiagnostic(target, payload); },
+        addXrTelemetry: async (target, participantId, payload) => { await serialize(); await scoped.addXrTelemetry(target, participantId, payload); }
+      }, guard, check, effect);
     });
   }
   async getPersonalRoomState(tenantId: string, roomId: string): Promise<RoomPersonalState | null> {

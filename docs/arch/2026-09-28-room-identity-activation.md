@@ -344,7 +344,7 @@ existing rooms). Anonymous bound-room reads were already rejected at entry;
 this also closes a request that became bound while in flight. A missing-room
 manifest is built from the same checked snapshot, including explicit null, and
 never substitutes a new private record via a second read. Virtual v1 fallback
-presence stays compatible but remains scope-less activation work; a cached v2
+presence now uses the separate virtual effect and live namespace described below; a cached v2
 request whose room disappeared returns 404 rather than that fallback. Response audit
 records successful release even if COMMIT subsequently fails; that operational
 failure is not a retroactive authority denial. Administrators retain their explicit
@@ -359,8 +359,8 @@ upload metric. A possibly committed row must never point at a compensatingly
 deleted file. An unreferenced retained object needs later reconciliation; this
 does not add a background orphan collector or automatic retry/idempotency.
 
-Before activation, remaining gates are virtual-room fallback effects, frame
-credentials/TTL, bootstrap reconciliation/retirement and the other media obligations
+Before activation, remaining gates are virtual state-token issuance/final release,
+frame credentials/TTL, bootstrap reconciliation/retirement and the other media obligations
 above. Administrative legacy owner evidence is fenced by the creation contract
 below; the whole cutover is still not ready.
 
@@ -537,12 +537,66 @@ and PostgreSQL jsonb copies deduplicate independently of object key order,
 including nested objects; distinct values, array order and same-time events remain
 significant. Existing 80-event history and latest-selection rules are preserved.
 
-These paths do not close virtual-room fallback effects or other activation gates.
+These persisted paths are complemented by the virtual data-effect boundary below;
+token issuance and other activation gates remain open.
 The shared staging minimum remains 1, with no new authority binding.
 Room deletion currently does not purge persisted diagnostics/XR rows or the live
 XR projection. Per-room write retention does not trim deleted random room IDs.
 Round-trip acceptance removes its room, tenant and invitation but retains one row
 in each telemetry table; room retirement needs a separate retention/cleanup policy.
+
+### Virtual-room data effects
+
+An absent room ID remains a supported floor-1 fallback, but it does not confer
+authority on a persisted room. `withLegacyVirtualRoomEffect` checks floor 1,
+absence in every tenant and absence of authority bindings. Its frozen narrow
+facade permits telemetry writes in write mode, or one synchronous terminal
+response/map release in read mode; it never creates a room. Arguments stay bound
+to the captured room ID. The original MAC-verified legacy session expiry is copied
+before waits and checked at effect entry, each operation and before write COMMIT.
+Malformed deadlines are not an unlimited lifetime. An appearing persisted room
+returns retryable 409 `room_state_changed`, expiry returns 401, and cutover returns
+the existing upgrade refusal. Unavailable fences/unknown COMMIT return 503.
+Virtual-data route room IDs are bounded to 1–200 characters without controls before
+session/boundary/database lookups. Invalid IDs or malformed path escapes return
+bare 404 `room_not_found`, not an internal failure or a response containing the input.
+
+PostgreSQL virtual writes take a short rooms relation SHARE lock before policy
+FOR SHARE, ordering against all room INSERT paths. Same-room telemetry uses a
+transaction advisory lock to serialize INSERT/retention, on that same borrowed
+client. The relation lock temporarily blocks other room writes; no body parsing,
+blob operation or network request belongs inside it. Non-writing presence/poll
+effects take rooms ACCESS SHARE before policy FOR SHARE, matching schema init's
+rooms-before-policy order without blocking ordinary room writes. They take one
+absence observation and do not pin
+absence against a later INSERT and may release only separate virtual state, not
+persisted-room data. Memory rechecks state around operations and stages telemetry
+until successful final validation. Unawaited SQL is drained and rejects the callback,
+so it cannot continue after transaction closure. A timely terminal read release is
+not denied retroactively after a later await or clock advance.
+
+Virtual presence and XR live buffers are separate from persisted-room buffers.
+Presence PUT/DELETE publishes or removes only inside the appropriate synchronous
+effect release. Persisted presence DELETE is now fenced as well. Virtual XR uses
+the same commit-first FIFO pipeline as persisted XR: no live/history projection
+is applied after rejected or unconfirmed COMMIT. Both namespaces share one backend
+scheduler, preserving the existing 32-per-pair, 256-per-room, 512-per-service limits,
+one executing callback per room and two execution slots across the API. Aggregate
+presence metrics include both live namespaces.
+
+Anonymous/legacy missing-room manifest and presence reads release under the virtual
+floor fence; verified administrators keep their explicit bypass. Missing-room XR
+history is not released to a formerly trusted Host whose room was deleted; after
+the ordinary permission check non-admin access returns 404. Admin history access
+retains DB/virtual diagnostics. A cached v2 session whose room disappears receives
+the existing fail-closed refusal rather than a v1 fallback.
+
+This is a data-effect boundary, not complete virtual-room activation. Legacy virtual
+state-token issuance, downstream frame/media credentials, bootstrap reconciliation
+and retirement remain gates. Diagnostic/XR rows written before a room is created,
+or retained after deletion, still use the same database room ID; later authorized
+admin/Host readers can observe them. Durable row cleanup/namespace retirement is
+not provided by live-buffer separation and must be resolved before full activation.
 
 ## Runtime adoption
 
