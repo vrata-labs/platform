@@ -655,6 +655,19 @@ Virtual state-token issuance/final release, frame/media grants, bootstrap reconc
 
 Окончательное дерево после всех source fixes: workspace lint/typecheck/build/test прошли; API **1219 passed / 1 optional live-MinIO skipped**, runtime **1094/1094**, control-plane **13/13**, templates **20/20**, tools **256 passed / 2 optional skipped**; остальные packages без fail. Full local E2E — **186/186**, без skip/retry, **40,7 минуты**, включая reference meeting. После этого исполняемый код не менялся. CI/Docker acceptance добавляется после публикации; staging по текущему поручению не запускается.
 
+#### Публикация virtual data-effect boundary
+
+| Этап | Результат |
+|---|---|
+| Code SHA | `b4df30c55d82d1bd49c721366623512dc86979b2`, опубликован в рабочей ветке |
+| [CI 37989017214](https://github.com/vrata-labs/platform/actions/runs/37989017214) | Success: обычный PostgreSQL, workspace checks, pinned rollback fixtures, full E2E, M0.5 и locked assets |
+| [Docker Publish 37989019875](https://github.com/vrata-labs/platform/actions/runs/37989019875) | Success: immutable images exact SHA |
+| Staging | По прямому поручению пользователя не запускался; перед разработкой публичные endpoints были недоступны |
+
+Remote rollout/rollback не выполнялись. CI принят с первой попытки на опубликованном SHA. Один промежуточный local E2E дал seat-occupancy timeout; focused повтор и окончательный full suite прошли без изменения runtime/scene/assertions/таймаутов. Причина первоначального отказа не установлена и не объявляется исправленной virtual data-effect boundary. Shared floor2 не активирован; выпуск virtual/state-token credentials, frame/media grants, bootstrap reconciliation и durable retirement остаются следующими gates.
+
+Собственный temporary PG fixture удалён после проверки ID/labels. Локальные E2E services завершены; соседние процессы/контейнеры не останавливались.
+
 ## Публикация первого среза T01/T12
 
 Локально прошли workspace lint/typecheck/build/tests с PostgreSQL, затем runtime build и 905 runtime tests после финальных правок. Полный `pnpm test:e2e` на финальном исполняемом дереве: **148 passed**, без skip (41.6 min).
