@@ -686,6 +686,19 @@ Workspace lint/typecheck/build/test после terminal-release исправле
 
 Финальный full local E2E на том же исполняемом дереве — **186/186**, без retry/skip (**36,9 минуты**). Control-plane **13/13**, templates **20/20**, tools **256 passed / 2 optional skipped**; остальные workspace checks также прошли. После full source не менялся. Окончательные CI/Docker результаты добавляются после публикации; staging deploy/verification по текущему поручению не выполняется.
 
+#### Публикация virtual state-token sign/release
+
+| Этап | Результат |
+|---|---|
+| Code SHA | `fc4b09104be7d944fb5ac574f3e35b73d5c3bc7d`, опубликован в рабочей ветке |
+| [CI 38011735302](https://github.com/vrata-labs/platform/actions/runs/38011735302) | Success: обычный PostgreSQL, workspace checks, pinned rollback fixtures, full E2E, M0.5 и locked assets |
+| [Docker Publish 38011737893](https://github.com/vrata-labs/platform/actions/runs/38011737893) | Success: immutable images exact SHA |
+| Staging | Deploy/verification не запускались по прямому поручению пользователя |
+
+CI/Docker завершились с первой попытки на опубликованном SHA. Remote rollout/rollback не выполнялись. Один промежуточный local E2E дал socket hang up на M0.5 presence GET; focused и полный повтор прошли без изменений source/assertions/таймаутов. Причина этого отказа не установлена и не объявляется исправлением данного среза. Общий floor2 не активирован. Следующие gates — persisted legacy issuance/renewal, frame/media grants, bootstrap reconciliation и durable retirement.
+
+Собственный временный PostgreSQL fixture удалён после подтверждения ID/labels. Локальные E2E services завершены; соседние процессы/контейнеры не останавливались.
+
 ## Публикация первого среза T01/T12
 
 Локально прошли workspace lint/typecheck/build/tests с PostgreSQL, затем runtime build и 905 runtime tests после финальных правок. Полный `pnpm test:e2e` на финальном исполняемом дереве: **148 passed**, без skip (41.6 min).
