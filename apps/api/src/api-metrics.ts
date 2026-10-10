@@ -66,7 +66,8 @@ export function createApiMetrics(
     screenShareStartedTotal: new Map<string, number>(),
     screenShareFailuresTotal: new Map<string, number>(),
     screenSharePermissionDeniedTotal: 0,
-    screenShareActiveSessions: new Set<string>()
+    screenShareActiveSessions: new Set<string>(),
+    virtualStateReleaseCompletionFailuresTotal: 0
   };
 
   async function apiMetricsText(storage: Pick<Storage, "listRooms">): Promise<string> {
@@ -79,6 +80,9 @@ export function createApiMetrics(
       "# HELP vrata_api_request_failures_total Total unhandled API request failures.",
       "# TYPE vrata_api_request_failures_total counter",
       formatMetricLine("vrata_api_request_failures_total", metrics.requestFailuresTotal),
+      "# HELP vrata_api_virtual_state_release_completion_failures_total Virtual state-token replies already released whose read-only fence then failed to complete.",
+      "# TYPE vrata_api_virtual_state_release_completion_failures_total counter",
+      formatMetricLine("vrata_api_virtual_state_release_completion_failures_total", metrics.virtualStateReleaseCompletionFailuresTotal),
       "# HELP vrata_rooms_total Rooms known to the API storage backend.",
       "# TYPE vrata_rooms_total gauge",
       formatMetricLine("vrata_rooms_total", rooms.length),

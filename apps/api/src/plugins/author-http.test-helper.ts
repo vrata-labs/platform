@@ -42,7 +42,7 @@ export interface AuthorHttpPackage {
 }
 type Phase = "body-admitted" | "body-end" | "put-written" | "upload-settled" | "private-read" | "plugin-room" | "settlement-timeout"
   | "telemetry-effect" | "telemetry-written" | "telemetry-read" | "telemetry-ack-loss" | "room-read" | "room-loaded"
-  | "administrative-insert" | "administrative-receipt" | "administrative-ack-loss";
+  | "administrative-insert" | "administrative-receipt" | "administrative-ack-loss" | "state-token-ack-loss";
 type Message = { event?: string; phase?: Phase; id?: string; command?: string; kind?: Phase; roomId?: string; offset?: number; operation?: string;
   skip?: number; sqlState?: "55P03"; lockTimeoutMs?: number };
 
@@ -89,17 +89,20 @@ export function assertAuthorHttpPublicDto(value: unknown, forbidden: string[] = 
  * telemetry-written deliberately pauses before COMMIT while holding the room fence.
  * telemetry-effect also pauses legacy and virtual effects at entry; room-read/room-loaded bracket a room lookup.
  * telemetry-ack-loss lets the mapped transaction's real COMMIT run, then drops only its acknowledgement.
+ * state-token-ack-loss does the same for the virtual scope that read the armed room's authority row.
+ * x-author-hold-state-reply queues only that state-token reply's end() until flush-state-replies.
  * Held phases resume in FIFO order, so one case may hold several requests.
  * The local reader currently uses FileHandle; readFile is also wrapped for the equivalent buffered path.
  */
 function childInstrumentation(indexUrl: string, telemetryCheckpoints: boolean, administrativeCheckpoints: boolean): string {
   return `
-    import {IncomingMessage} from 'node:http';
+    import {IncomingMessage,ServerResponse} from 'node:http';
     import {syncBuiltinESMExports} from 'node:module';
     import fs from 'node:fs/promises';
     import pg from 'pg';
     let offset=0, armed;
     const resumes=[];
+    const heldReplies=[];
     const originalNow=Date.now;
     Date.now=()=>originalNow()+offset;
     const notify=value=>process.send?.(value);
@@ -114,6 +117,11 @@ function childInstrumentation(indexUrl: string, telemetryCheckpoints: boolean, a
       if(message.command==='resume'){resumes.shift()?.();notify({event:'ack',id:message.id});}
       if(message.command==='clock'){offset=message.offset;notify({event:'ack',id:message.id});}
       if(message.command==='sync'){notify({event:'ack',id:message.id});}
+      if(message.command==='flush-state-replies'){
+        // A destroyed socket rejects the late end; the parent observes that through its own request.
+        for(const flush of heldReplies.splice(0)){try{flush();}catch{}}
+        notify({event:'ack',id:message.id});
+      }
     });
     const on=IncomingMessage.prototype.on;
     IncomingMessage.prototype.on=function(event,...args){
@@ -129,6 +137,7 @@ function childInstrumentation(indexUrl: string, telemetryCheckpoints: boolean, a
     const creations=new WeakMap();
     const lockTimeouts=new WeakMap();
     const ackLosses=new WeakSet();
+    const pinAckLosses=new WeakMap();
     pg.Client.prototype.query=async function(sql,...args){
       const text=typeof sql==='string'?sql:sql?.text;
       const values=Array.isArray(args[0])?args[0]:sql?.values;
@@ -147,6 +156,9 @@ function childInstrumentation(indexUrl: string, telemetryCheckpoints: boolean, a
       }
       if(text?.startsWith("select set_config('lock_timeout',")) lockTimeouts.set(this,Number.parseInt(values?.[0],10));
       if(/update room_plugin_packages set upload_settled=true/.test(text??'')) settlements.set(this,values?.[1]);
+      if(text==='select 1 from room_identity_authority_v2 where room_id=$1' && armed?.kind==='state-token-ack-loss' && armed.roomId===values?.[0]){
+        pinAckLosses.set(this,armed.id);armed=undefined;
+      }
       if(${administrativeCheckpoints} && text?.trimStart().startsWith('insert into rooms (')){
         creations.set(this,values?.[0]);await pause('administrative-insert',values?.[0]);
       }
@@ -159,7 +171,11 @@ function childInstrumentation(indexUrl: string, telemetryCheckpoints: boolean, a
         await pause('upload-settled',roomId);
       }
       if(/^commit$/i.test(text??'') && ackLosses.has(this)){ackLosses.delete(this);throw new Error('fixture_telemetry_commit_ack_lost');}
-      if(/^rollback$/i.test(text??'')){settlements.delete(this);creations.delete(this);ackLosses.delete(this);}
+      if(/^commit$/i.test(text??'') && pinAckLosses.has(this)){
+        const id=pinAckLosses.get(this);pinAckLosses.delete(this);
+        notify({event:'phase',phase:'state-token-ack-loss',id});throw new Error('fixture_state_token_commit_ack_lost');
+      }
+      if(/^rollback$/i.test(text??'')){settlements.delete(this);creations.delete(this);ackLosses.delete(this);pinAckLosses.delete(this);}
       return result;
     };
     const root=process.env.ROOM_PLUGIN_LOCAL_UPLOAD_ROOT;
@@ -198,6 +214,14 @@ function childInstrumentation(indexUrl: string, telemetryCheckpoints: boolean, a
       };
     }
     if(${telemetryCheckpoints}){
+      // Emulate a backpressured reply: queue only the marked state-token end() after writeHead.
+      const end=ServerResponse.prototype.end;
+      ServerResponse.prototype.end=function(...args){
+        const id=this.req?.headers?.['x-author-hold-state-reply'];
+        if(typeof id!=='string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)
+          || this.req.method!=='POST' || this.req.url!=='/api/tokens/state') return end.apply(this,args);
+        heldReplies.push(()=>end.apply(this,args));notify({event:'state-reply-buffered',id});return this;
+      };
       // Relay only a validated correlation UUID; raw diagnostic logs stay unrecorded.
       const write=process.stdout.write;
       process.stdout.write=function(chunk,...args){
@@ -458,7 +482,8 @@ export async function startAuthorHttpFixture(t: TestContext, floor: 1 | 2 = 2, t
   }
   return { schema, pool, storage, localRoot, base, io, adminHeaders, request, invite, admit, session, room, present, transition,
     upload, bind, files, snapshot, stalled, held, arm, restartApi, phase: (id: string, kind: Phase) => waitMessage("phase", id, kind),
-    resume: () => control("resume"), clock: (offset: number) => control("clock", { offset }), diagnosticPublishedCount };
+    resume: () => control("resume"), clock: (offset: number) => control("clock", { offset }), diagnosticPublishedCount,
+    stateReplyBuffered: (id: string) => waitMessage("state-reply-buffered", id), flushStateReplies: () => control("flush-state-replies") };
 }
 
 function capture(status: number, headers: Record<string, string>, bytes: Buffer): AuthorHttpResponse {

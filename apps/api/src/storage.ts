@@ -948,11 +948,12 @@ export class PostgresStorage implements Storage {
     const guard = captureVirtualRoomGuard(roomId, options);
     assertVirtualRoomDeadline(guard, this.identityNow());
     return roomFenceTransaction(this.pool, guard, async (client, checkAlive) => {
-      // Both modes acquire rooms before policy, matching schema init's lock order.
-      // SHARE pins absence against INSERTs; keep this broad write lock short.
-      // ACCESS SHARE admits ordinary writes and EXCLUSIVE but does not pin absence;
-      // read release may expose only separate virtual state. Policy pins the floor.
-      await client.query(guard.roomWrite ? "lock table rooms in share mode" : "lock table rooms in access share mode");
+      // Every mode acquires rooms before policy, matching schema init's order.
+      // Write and issuance-pin modes take SHARE, excluding INSERTs in every tenant
+      // until release/COMMIT; keep these broad locks short. Ordinary read takes
+      // ACCESS SHARE and may expose only separate virtual state: it admits writes
+      // and does not pin absence. Policy FOR SHARE pins the floor in every mode.
+      await client.query(guard.roomWrite || guard.pinAbsence ? "lock table rooms in share mode" : "lock table rooms in access share mode");
       const policy = (await client.query("select minimum_protocol from room_identity_protocol_policy where singleton=true for share")).rows[0];
       if (!policy || !Number.isSafeInteger(policy.minimum_protocol) || policy.minimum_protocol < 1) {
         throw new IdentityBoundaryError(503, "identity_authority_unavailable");

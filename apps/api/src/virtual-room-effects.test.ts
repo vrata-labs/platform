@@ -8,9 +8,10 @@ const NOW = Date.parse("2026-10-01T00:00:00.000Z");
 const EXPIRES = NOW / 1000 + 60;
 const ROOM = "virtual-meeting";
 const KNOWN = new Set(["callback_failed", "room_effect_room_mismatch", "room_effect_scope_closed", "room_effect_response_released",
-  "room_write_fence_required", "virtual_room_release_requires_read_fence"]);
+  "room_write_fence_required", "virtual_room_release_requires_read_fence", "virtual_room_release_required", "invalid_virtual_room_effect"]);
 const write = (): VirtualRoomEffectOptions => ({ roomWrite: true, expiresAtSeconds: EXPIRES });
 const read = (): VirtualRoomEffectOptions => ({ expiresAtSeconds: EXPIRES });
+const pin = (): VirtualRoomEffectOptions => ({ pinAbsence: true, expiresAtSeconds: EXPIRES });
 const diagnostic = (value: string) => ({ participantId: value }) as unknown as RuntimeDiagnosticRecord;
 
 // Assertion output carries only allow-listed reasons; unexpected errors are never printed.
@@ -80,14 +81,35 @@ for (const [name, change, expected] of discards) test(`${name} during an awaited
   assert.deepEqual(await f.stored(), { diagnostics: [], xr: [] });
 });
 
+const otherTenantRoom = async (f: Fixture) => {
+  await f.storage.createTenant({ tenantId: "other-tenant", name: "Other" });
+  await f.storage.createRoom({ roomId: ROOM, tenantId: "other-tenant", templateId: "meeting-room-basic", name: "Other tenant room" });
+};
+const refusals: typeof discards = [...discards.slice(1), ["another tenant's room appearing", otherTenantRoom, "409:room_state_changed"]];
+for (const [name, change, expected] of refusals) test(`${name} while a pin callback awaits refuses its release and sends nothing`, async () => {
+  const f = fixture();
+  const reached = deferred(), gate = deferred();
+  let sent = 0;
+  const pending = outcome(f.run(pin(), async scoped => {
+    reached.resolve();
+    await gate.promise;
+    scoped.releaseResponse(() => { sent += 1; });
+  }));
+  await reached.promise;
+  await change?.(f);
+  gate.resolve();
+  assert.deepEqual([await pending, sent], [expected, 0]);
+  assert.deepEqual(await f.stored(), { diagnostics: [], xr: [] });
+});
+
 test("an existing room in any tenant, floor 2 and malformed or elapsed original deadlines deny before the callback", async () => {
   const taken = fixture();
   await taken.storage.createTenant({ tenantId: "other-tenant", name: "Other" });
   await taken.storage.createRoom({ roomId: ROOM, tenantId: "other-tenant", templateId: "meeting-room-basic", name: "Other tenant room" });
-  for (const options of [write(), read()]) assert.equal(await outcome(taken.run(options, async () => undefined)), "409:room_state_changed");
+  for (const options of [write(), read(), pin()]) assert.equal(await outcome(taken.run(options, async () => undefined)), "409:room_state_changed");
   const raised = fixture();
   await raised.storage.identityProtocol.raise(2);
-  for (const options of [write(), read()]) assert.equal(await outcome(raised.run(options, async () => undefined)), "409:identity_upgrade_required");
+  for (const options of [write(), read(), pin()]) assert.equal(await outcome(raised.run(options, async () => undefined)), "409:identity_upgrade_required");
   const malformed = fixture();
   for (const expiresAtSeconds of [null, String(EXPIRES), EXPIRES + 0.5, Number.MAX_SAFE_INTEGER, NOW / 1000]) {
     const options = { roomWrite: true, expiresAtSeconds } as unknown as VirtualRoomEffectOptions;
@@ -158,4 +180,35 @@ test("a read release is terminal across later awaits and clock advance; an unrel
   f.clock.now = NOW;
   assert.equal(await outcome(f.run(read(), async () => { await gate.promise; f.clock.now = EXPIRES * 1000; })),
     "401:identity_session_expired");
+});
+
+test("pin mode needs exactly one release, admits no telemetry and keeps its captured flag; a timely release is not retro-denied", async () => {
+  const f = fixture();
+  let sent = 0;
+  const send = () => { sent += 1; };
+  assert.equal(await outcome(f.run({ ...pin(), roomWrite: true }, async () => undefined)), "invalid_virtual_room_effect");
+  assert.equal(f.entered(), 0, "a pinned write is an internal error before the callback");
+  const shape = await f.run(pin(), async scoped => [attempt(() => scoped.addDiagnostic(ROOM, diagnostic("pinned"))),
+    attempt(() => scoped.addXrTelemetry(ROOM, "virtual-participant", { label: "pinned" })),
+    attempt(() => scoped.releaseResponse(send)), attempt(() => scoped.releaseResponse(send))]).catch(label);
+  assert.deepEqual(shape, ["room_write_fence_required", "room_write_fence_required", "ok", "room_effect_response_released"]);
+  assert.equal(await outcome(f.run(pin(), async () => undefined)), "virtual_room_release_required");
+  assert.equal(await outcome(f.run(pin(), async scoped => { scoped.releaseResponse(send); throw new Error("callback_failed"); })),
+    "callback_failed");
+  const options = pin(), mutated = deferred();
+  let widened = "";
+  const downgraded = outcome(f.run(options, async scoped => {
+    await mutated.promise;
+    widened = attempt(() => scoped.addDiagnostic(ROOM, diagnostic("widened")));
+  }));
+  Object.assign(options, { pinAbsence: false, roomWrite: true });
+  mutated.resolve();
+  assert.deepEqual([await downgraded, widened], ["virtual_room_release_required", "room_write_fence_required"]);
+  const gate = deferred();
+  const timely = outcome(f.run(pin(), async scoped => { scoped.releaseResponse(send); await gate.promise; }));
+  f.clock.now = EXPIRES * 1000 + 1;
+  gate.resolve();
+  assert.equal(await timely, "ok");
+  assert.equal(sent, 3);
+  assert.deepEqual(await f.stored(), { diagnostics: [], xr: [] });
 });

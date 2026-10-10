@@ -359,7 +359,7 @@ upload metric. A possibly committed row must never point at a compensatingly
 deleted file. An unreferenced retained object needs later reconciliation; this
 does not add a background orphan collector or automatic retry/idempotency.
 
-Before activation, remaining gates are virtual state-token issuance/final release,
+Before activation, remaining gates are persisted legacy state-token issuance/renewal,
 frame credentials/TTL, bootstrap reconciliation/retirement and the other media obligations
 above. Administrative legacy owner evidence is fenced by the creation contract
 below; the whole cutover is still not ready.
@@ -591,12 +591,53 @@ the ordinary permission check non-admin access returns 404. Admin history access
 retains DB/virtual diagnostics. A cached v2 session whose room disappears receives
 the existing fail-closed refusal rather than a v1 fallback.
 
-This is a data-effect boundary, not complete virtual-room activation. Legacy virtual
-state-token issuance, downstream frame/media credentials, bootstrap reconciliation
+This data-effect boundary is complemented by the virtual state-token release below.
+Persisted legacy issuance/renewal, downstream frame/media credentials, bootstrap reconciliation
 and retirement remain gates. Diagnostic/XR rows written before a room is created,
 or retained after deletion, still use the same database room ID; later authorized
 admin/Host readers can observe them. Durable row cleanup/namespace retirement is
 not provided by live-buffer separation and must be resolved before full activation.
+
+### Virtual legacy state-token sign and release
+
+At floor 1 an absent-room `POST /api/tokens/state` now uses an explicit
+`pinAbsence` mode. It is a read-only credential release: no telemetry writes,
+exactly one synchronous release, and no successful callback result without release.
+The original mode flags are captured before pool/lock waits; `pinAbsence` cannot
+be combined with `roomWrite` or silently downgraded by mutating caller options.
+
+PostgreSQL issuance takes rooms SHARE before policy FOR SHARE, preserving schema
+init's lock order and excluding every room INSERT, in every tenant, until release
+and transaction completion. Ordinary virtual presence/poll reads still take ACCESS
+SHARE. Memory checks current floor, binding and any-tenant room absence immediately
+before the synchronous release. A room created while issuance waits causes 409
+`room_state_changed`; a floor increase causes the existing upgrade refusal.
+
+The handler validates floor-1 body/claims before room and binding lookups, preserving
+nullish room/participant/display defaults. Invalid room IDs receive bare 404, invalid
+participant/display values receive 400 `invalid_state_token_request`. The v2
+admission branch and its refusal classification are unchanged. Virtual issuance
+does not fetch scene surfaces, create a room, trust an Owner or mint a v2 identity.
+Default Guest and explicitly enabled dev-query provenance retain their prior meaning.
+Captured primitive claims are signed inside the one release using its current clock,
+so asynchronous admission waits do not consume the newly issued token's lifetime.
+
+The broad SHARE lock is limited to this short sign-and-release; body parsing and
+network preparation must remain outside it. The existing bounded lock timeout is
+retained. A response signed/released under the pin is not retroactively withdrawn
+when the read-only transaction's COMMIT acknowledgement fails afterwards.
+The virtual issuer marks completion only after its synchronous send returns. A
+subsequent fence-completion failure is counted by the fixed, unlabelled
+`vrata_api_virtual_state_release_completion_failures_total` counter; it neither
+destroys the queued reply nor increments request failures. Pre-send/sign/send errors
+still propagate normally. No arbitrary driver message, cause or credential is logged
+by this completion path, and database resource cleanup still finishes normally.
+
+This closes in-flight virtual mint/release races, not persisted legacy renewal.
+A virtual token issued before private-room creation can still encounter the older
+persisted-room legacy admission path. Its bearer/invite/Host/waiting-room final
+authority and publication boundaries remain a separate gate, along with frame/media,
+bootstrap reconciliation and durable retirement. The shared floor 2 is not activated.
 
 ## Runtime adoption
 

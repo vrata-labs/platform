@@ -47,6 +47,7 @@ import {
 } from "./feature-flags.js";
 import { createLegacyIdentityBoundary, IdentityBoundaryError, legacyBoundaryApplies, legacyBoundaryAllowsAdministrator } from "./identity/legacy-boundary.js";
 import { assertVirtualRoomId, InvalidVirtualRoomId } from "./identity/virtual-effect-facade.js";
+import { validId } from "./identity/authority.js";
 import { createRoomIdentityService } from "./identity/service.js";
 import { createRoomIdentityCodec } from "@vrata/shared-types/identity-credential";
 import { admitV2RoomSession, type V2AdmissionRequest } from "./identity/http-admission.js";
@@ -908,9 +909,9 @@ async function runLegacyRoomEffect<T>(storage: Storage, room: RoomRecord, option
   }
 }
 
-/** Floor-1 effect for a room id without a persisted row. Its scope offers only
- * telemetry writes or one synchronous release of separate virtual live state. */
-async function runLegacyVirtualRoomEffect<T>(storage: Storage, roomId: string, options: { roomWrite?: boolean; expiresAtSeconds?: number },
+/** Floor-1 effect for an unpersisted room id: telemetry writes or a synchronous
+ * release. Credential release additionally pins absence against room creation. */
+async function runLegacyVirtualRoomEffect<T>(storage: Storage, roomId: string, options: { roomWrite?: boolean; expiresAtSeconds?: number; pinAbsence?: boolean },
   effect: (scoped: VirtualRoomEffectStorage) => Promise<T>): Promise<T> {
   try {
     return await storage.withLegacyVirtualRoomEffect(roomId, options, effect);
@@ -947,6 +948,22 @@ async function releaseRoomRead(request: IncomingMessage, storage: Storage, roomI
   }
   if (actor.ok) await runGuardedRoomEffect(storage, actor.actor, room, "room.join", async scoped => { scoped.releaseResponse(send); });
   else await runLegacyRoomEffect(storage, room, {}, async scoped => { scoped.releaseResponse(send); });
+}
+
+/** Virtual issuance pins absence through the one synchronous sign-and-release.
+ * The pin is read-only, so a COMMIT or connection failure after a successful send
+ * cannot revoke the released token: count it and let the queued reply finish.
+ * Anything before or during send keeps its original error. */
+async function releaseVirtualStateToken(storage: Storage, roomId: string, send: () => void): Promise<void> {
+  let released = false;
+  try {
+    await runLegacyVirtualRoomEffect(storage, roomId, { pinAbsence: true }, async scoped => {
+      scoped.releaseResponse(() => { send(); released = true; });
+    });
+  } catch (error) {
+    if (!released) throw error;
+    metrics.virtualStateReleaseCompletionFailuresTotal += 1;
+  }
 }
 
 async function releaseLegacyPersonalRoom(request: IncomingMessage, response: ServerResponse, storage: Storage,
@@ -1421,6 +1438,22 @@ function writeInviteUseAudit(input: {
       }
       : undefined
   });
+}
+
+interface LegacyStateTokenClaims { roomId: string; participantId: string; displayName: string; requestedRole: unknown }
+
+/** Validate floor-1 input before room/binding lookups while retaining nullish defaults. */
+function parseLegacyStateTokenRequest(payload: unknown): LegacyStateTokenClaims | null {
+  const body = payload ?? {};
+  if (typeof body !== "object" || Array.isArray(body)) return null;
+  const input = body as StateTokenRequest;
+  const roomId = input.roomId ?? "demo-room";
+  assertVirtualRoomId(roomId);
+  const participantId = input.participantId ?? randomUUID();
+  if (!validId(participantId)) return null;
+  const displayName = input.displayName ?? participantId;
+  if (typeof displayName !== "string") return null;
+  return { roomId, participantId, displayName, requestedRole: input.requestedRole ?? input.role };
 }
 
 type StateTokenAccessResult =
@@ -3788,10 +3821,20 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     }
     const ttlSeconds = Number.parseInt(process.env.STATE_TOKEN_TTL_SECONDS ?? "900", 10);
     const nowSeconds = Math.floor(Date.now() / 1000);
-    const roomId = requestPayload?.roomId ?? "demo-room";
+    const legacyRequest = parseLegacyStateTokenRequest(requestPayload);
+    if (!legacyRequest) return json(response, 400, { error: "invalid_state_token_request" });
+    const { roomId, participantId, displayName } = legacyRequest;
     await legacyIdentityBoundary.assertCompatible(roomId);
     const room = await storage.getRoom(roomId);
-    const requested = resolveAccessRole(requestPayload?.requestedRole ?? requestPayload?.role);
+    const requested = resolveAccessRole(legacyRequest.requestedRole);
+    if (!room) {
+      const { role, roleSource } = requested;
+      await releaseVirtualStateToken(storage, roomId, () => {
+        json(response, 200, createRoomAccessTokenResponse({ room: null, roomId, participantId, displayName, role, roleSource,
+          ttlSeconds, nowSeconds: Math.floor(Date.now() / 1000) }));
+      });
+      return;
+    }
     const accessResult = await resolveStateTokenAccess(storage, request, room, requestPayload, requested);
     if (!accessResult.ok) {
       incrementCounter(metrics.roomAccessDeniedTotal, accessResult.reason);
@@ -3802,7 +3845,6 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
         requestId
       });
     }
-    const participantId = requestPayload?.participantId ?? randomUUID();
     let tokenRoom = room;
     if (room && accessResult.role === "host" && accessResult.roleSource === "trusted" && !defaultSessionControlState(room.sessionControl).hostParticipantId) {
       tokenRoom = await updateRoomSessionControl(storage, room, {
@@ -3815,7 +3857,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       room: tokenRoom,
       roomId,
       participantId,
-      displayName: requestPayload?.displayName ?? participantId,
+      displayName,
       role: accessResult.role,
       roleSource: accessResult.roleSource,
       ttlSeconds,

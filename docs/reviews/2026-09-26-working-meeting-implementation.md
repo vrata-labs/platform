@@ -668,6 +668,24 @@ Remote rollout/rollback не выполнялись. CI принят с перв
 
 Собственный temporary PG fixture удалён после проверки ID/labels. Локальные E2E services завершены; соседние процессы/контейнеры не останавливались.
 
+### T01a-S2b-Z: virtual legacy state-token sign/release
+
+Пользователь повторно поручил commit/push и продолжение плана **без staging deploy**. Предыдущий HEAD385321d уже опубликован, рабочее дерево было чистым. Следующий срез закрывает выдачу legacy state-token для отсутствующей комнаты после stale floor/room lookup, не меняя v2 admission и не активируя shared floor2.
+
+Для credential release добавлен отдельный pinAbsence режим: read-only, exactly-one sync release, no telemetry. PG rooms SHARE → policy FOR SHARE удерживает отсутствие ID во всех tenants до sign/release/COMMIT; обычные virtual polls остаются ACCESS SHARE. Memory перепроверяет состояние непосредственно перед release. Token claims фиксируются один раз, подпись и fresh iat/exp создаются внутри release, без scene/network loading в fence. Invalid floor-1 inputs дают bare404/typed400 до room/binding lookup; nullish defaults и обычный Guest/dev-query provenance сохранены. Возникшая комната возвращает409 room_state_changed, cutover — upgrade refusal без token/credentials/success fields.
+
+Focused native HTTP/storage/facade — **54/54**. Проверены actual rooms SHARE pin и RowExclusive INSERT wait, обе очередности создания комнаты/issuance, полная совместимость обычного read и вставки, pin-mode init lock ordering, mutable option flags, exactly-one release, fresh signing clock после +600s, public/private/other-tenant появление комнаты и cutover в двух held phases. Invalid body matrix выполняется при настоящих AX locks на rooms/authority, чтобы исключить позднюю валидацию после DB lookup; exact200/nullish defaults остаются работоспособными. Предыдущая bad-URL matrix сохранена с настоящим valid-room token и positive control, без поддельного MAC.
+
+Persisted legacy state-token issuance/renewal, в том числе обращение pre-creation virtual bearer к новой private комнате, остаётся отдельным gate. Frame/media, bootstrap reconciliation и durable retirement не объявляются закрытыми. Финальные workspace/full E2E и GitHub CI/Docker результаты добавляются после проверки и публикации.
+
+Первоначальный full local E2E — **186/186** (**33,3 минуты**). До публикации дополнительно закрыта post-release completion ошибка: успешный sync send отмечается отдельно, поздняя ошибка read-only COMMIT не доходит до глобального handler с response.destroy/requestFailures. Ошибки до/внутри send по-прежнему распространяются. Операционная ошибка считается отдельным fixed unlabelled virtual-state-release counter без raw driver cause/message/room labels. Остальные private-read release semantics не менялись.
+
+Focused проверка после этого исправления — **68/68**, включая actual PG COMMIT с искусственно потерянным ACK и test-only задержкой ServerResponse.end до обработки completion failure. Native HTTP получает полный единственный JSON200 с валидным MAC, request-failure counter не меняется, completion counter увеличивается один раз; транзакция/locks завершены, следующие issuance/creation успешны. Это инъекция ACK-loss и эмуляция queued body, не реальная потеря сети. Старые metric golden hashes сохранены для прежних строк отчёта, additive counter проверен отдельно; synthetic legacy values не перекалиброваны. Source изменён после первого full suite; окончательный full E2E повторяется.
+
+Workspace lint/typecheck/build/test после terminal-release исправления прошли: API **1241 passed / 1 optional live-MinIO skipped**, runtime **1094/1094**, остальные packages без fail. Первый full на этом дереве дал **185/186**: M0.5 four-participants GET presence завершился socket hang up после успешных checks всех четырёх browser participants. Focused повтор того же spec — **1/1** (**10,7 секунды**) без изменения кода/assertions/таймаутов. Причина этого отказа не установлена; успешный повтор не объявляется исправлением. Окончательный полный прогон повторяется на том же исполняемом дереве.
+
+Финальный full local E2E на том же исполняемом дереве — **186/186**, без retry/skip (**36,9 минуты**). Control-plane **13/13**, templates **20/20**, tools **256 passed / 2 optional skipped**; остальные workspace checks также прошли. После full source не менялся. Окончательные CI/Docker результаты добавляются после публикации; staging deploy/verification по текущему поручению не выполняется.
+
 ## Публикация первого среза T01/T12
 
 Локально прошли workspace lint/typecheck/build/tests с PostgreSQL, затем runtime build и 905 runtime tests после финальных правок. Полный `pnpm test:e2e` на финальном исполняемом дереве: **148 passed**, без skip (41.6 min).

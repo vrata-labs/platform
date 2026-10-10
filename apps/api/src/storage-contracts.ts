@@ -368,9 +368,11 @@ export type RoomEffectDatabase = Pick<Storage, "upsertRoomNote" | "deleteRoomNot
 
 export type RoomIdentityEffectStorage = RoomEffectDatabase & { releaseResponse(send: () => void): void };
 export interface LegacyRoomEffectOptions { roomWrite?: boolean; lockTimeoutMs?: number; idleTimeoutMs?: number }
-/** Write mode admits telemetry only; read mode admits one synchronous release. Never both. */
+/** Read mode admits at most one release; write mode admits telemetry only;
+ * pinAbsence requires exactly one release and excludes writes. */
 export type VirtualRoomEffectStorage = Pick<RoomEffectDatabase, "addDiagnostic" | "addXrTelemetry"> & { releaseResponse(send: () => void): void };
-export type VirtualRoomEffectOptions = LegacyRoomEffectOptions & { expiresAtSeconds?: number };
+/** pinAbsence holds absence through release/COMMIT for virtual state-token issuance. */
+export type VirtualRoomEffectOptions = LegacyRoomEffectOptions & { expiresAtSeconds?: number; pinAbsence?: boolean };
 
 export type SceneBundleUpdateInput = Partial<SceneBundleCreateInput> & {
   publicUrl?: string;

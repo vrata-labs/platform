@@ -204,8 +204,9 @@ test("floor-1 virtual rooms and their persisted neighbours are fenced end to end
       assert.equal(listed.status === 200 && v.has(listed, member.participantId), true, "exact-limit virtual presence read");
       assert.equal((await v.presence(member, "DELETE")).status, 200, "exact-limit virtual presence removal");
 
-      // A real token for the over-limit id: the refusal cannot depend on a missing or forged credential.
-      const holder = await v.issue("v".repeat(201));
+      // A real, valid token for a valid virtual room: path validation runs before session scope and
+      // authentication, so no refusal below can depend on a missing, forged or mismatched credential.
+      const holder = await v.issue();
       const bearer = authorHttpBearer(holder.token);
       const requestIds: string[] = [];
       type Probe = [route: string, path: string, method: string, headers: Record<string, string>, body?: unknown];
@@ -244,6 +245,12 @@ test("floor-1 virtual rooms and their persisted neighbours are fenced end to end
       assert.deepEqual([await v.requestFailures(), await v.telemetryMetrics(), await v.presenceMetrics(), await totals()], before,
         "no internal failure, telemetry metric, live presence or database row");
       for (const requestId of requestIds) assert.equal(await h.diagnosticPublishedCount(requestId), 0, "no diagnostic event is published");
+      // Control: the same bearer on its own valid room is served, so each 404 above came from the path.
+      // A default guest's session XR history is a permission or namespace refusal, not a control.
+      for (const [route, path, method, headers, body] of probes(holder.roomId).filter(([route]) => route !== "session XR history")) {
+        const response = await h.request(path, method, headers, body);
+        assert.equal(response.status >= 200 && response.status < 300, true, `valid-room control ${route}: received HTTP ${response.status}`);
+      }
     });
 
     await c.test("activation while a public virtual read, a persisted presence DELETE and a native body wait are held denies all three", async () => {

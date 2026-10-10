@@ -6,6 +6,7 @@ import { IdentityBoundaryError } from "./legacy-boundary.js";
 export interface VirtualRoomEffectGuard {
   readonly roomId: string;
   readonly roomWrite: boolean;
+  readonly pinAbsence: boolean;
   readonly expiresAtMs: number | null;
   readonly lockTimeoutMs?: number;
   readonly idleTimeoutMs?: number;
@@ -23,12 +24,15 @@ export function assertVirtualRoomId(roomId: unknown): asserts roomId is string {
 export function captureVirtualRoomGuard(roomId: unknown, options: unknown): VirtualRoomEffectGuard {
   assertVirtualRoomId(roomId);
   if (typeof options !== "object" || options === null) throw new Error("invalid_virtual_room_effect");
-  const { roomWrite, expiresAtSeconds, lockTimeoutMs, idleTimeoutMs } = options as VirtualRoomEffectOptions;
+  const { roomWrite, pinAbsence, expiresAtSeconds, lockTimeoutMs, idleTimeoutMs } = options as VirtualRoomEffectOptions;
+  const write = roomWrite === true;
+  const pin = pinAbsence === true;
+  if (write && pin) throw new Error("invalid_virtual_room_effect");
   if (expiresAtSeconds !== undefined && (typeof expiresAtSeconds !== "number" || !Number.isSafeInteger(expiresAtSeconds)
     || expiresAtSeconds < 1 || !Number.isSafeInteger(expiresAtSeconds * 1000))) {
     throw new IdentityBoundaryError(401, "identity_session_expired");
   }
-  return Object.freeze({ roomId, roomWrite: roomWrite === true, lockTimeoutMs, idleTimeoutMs,
+  return Object.freeze({ roomId, roomWrite: write, pinAbsence: pin, lockTimeoutMs, idleTimeoutMs,
     expiresAtMs: expiresAtSeconds === undefined ? null : expiresAtSeconds * 1000 });
 }
 
@@ -39,8 +43,9 @@ export function assertVirtualRoomDeadline(guard: VirtualRoomEffectGuard, nowMs: 
 }
 
 /** Writes require a final check before commit and cannot release a response.
- * Read mode has one synchronous terminal release. Unawaited SQL is drained and
- * rejects the call so it cannot run after the transaction has ended. */
+ * Read mode has at most one release; pin mode must release exactly once and
+ * admits no telemetry. Unawaited SQL is drained and rejects the call so it
+ * cannot run after the transaction has ended. */
 export async function runVirtualRoomEffect<T>(telemetry: Pick<RoomEffectDatabase, "addDiagnostic" | "addXrTelemetry">,
   guard: VirtualRoomEffectGuard, check: () => void, effect: (scoped: VirtualRoomEffectStorage) => Promise<T>): Promise<T> {
   let released = false;
@@ -76,6 +81,7 @@ export async function runVirtualRoomEffect<T>(telemetry: Pick<RoomEffectDatabase
     if (leaked) await Promise.allSettled([...pending]);
   }
   if (leaked) throw new Error("room_effect_write_pending");
+  if (guard.pinAbsence && !released) throw new Error("virtual_room_release_required");
   if (!released) check();
   return result;
 }

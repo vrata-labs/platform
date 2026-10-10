@@ -11,9 +11,10 @@ import { uncertainRoomCommit } from "./identity/fence-transaction.js";
 const NOW = Date.parse("2026-10-01T00:00:00.000Z");
 const EXPIRES = NOW / 1000 + 60;
 const KNOWN = new Set(["callback_failed", "room_effect_room_mismatch", "room_effect_scope_closed", "room_effect_response_released",
-  "room_write_fence_required", "virtual_room_release_requires_read_fence"]);
+  "room_write_fence_required", "virtual_room_release_requires_read_fence", "virtual_room_release_required", "invalid_virtual_room_effect"]);
 const write = (): VirtualRoomEffectOptions => ({ roomWrite: true, expiresAtSeconds: EXPIRES, lockTimeoutMs: 20_000 });
 const read = (): VirtualRoomEffectOptions => ({ expiresAtSeconds: EXPIRES, lockTimeoutMs: 20_000 });
+const pin = (): VirtualRoomEffectOptions => ({ pinAbsence: true, expiresAtSeconds: EXPIRES, lockTimeoutMs: 20_000 });
 const diagnostic = (value: string) => ({ participantId: value }) as unknown as RuntimeDiagnosticRecord;
 
 // Assertion output carries only allow-listed reasons and SQLSTATEs, never raw driver errors.
@@ -89,6 +90,10 @@ test("PostgreSQL virtual room effects fence actual rooms, the floor and telemetr
     [`${schema}_${name}`])).rows[0].pid as number;
   const waitingOn = async (blocker: number, name: string) => (await pool.query(`select count(*)::integer as n from pg_stat_activity
     where application_name=$2 and $1=any(pg_blocking_pids(pid))`, [blocker, `${schema}_${name}`])).rows[0].n as number;
+  const onRooms = async (pid: number) => (await pool.query(`select
+    bool_or(mode='ShareLock' and granted) is true as share, bool_or(mode='ShareLock' and not granted) is true as share_wait,
+    bool_or(mode='AccessShareLock' and granted) is true as access_share from pg_locks where pid=$1 and relation='rooms'::regclass`,
+  [pid])).rows[0] as { share: boolean; share_wait: boolean; access_share: boolean };
   async function holdWriter(roomId: string, value: string) {
     const reached = deferred(), gate = deferred();
     const done = outcome(run(roomId, write(), async scoped => { await both(scoped, roomId, value); reached.resolve(); await gate.promise; }, other));
@@ -101,6 +106,8 @@ test("PostgreSQL virtual room effects fence actual rooms, the floor and telemetr
     assert.equal(await outcome(run(randomUUID(), options, async () => undefined)), "401:identity_session_expired");
   }
   assert.deepEqual([entered, virtualPool.totalCount], [0, 0], "malformed or elapsed deadlines fail closed before borrowing a client");
+  assert.equal(await outcome(run(randomUUID(), { ...pin(), roomWrite: true }, async () => undefined)), "invalid_virtual_room_effect");
+  assert.deepEqual([entered, virtualPool.totalCount], [0, 0], "a pinned write is an internal error before borrowing a client");
 
   const room = randomUUID();
   assert.equal(await outcome(run(room, write(), scoped => both(scoped, room, "once"))), "ok");
@@ -125,8 +132,16 @@ test("PostgreSQL virtual room effects fence actual rooms, the floor and telemetr
   await storage.createTenant({ tenantId: "other-tenant", name: "Other" });
   await storage.createRoom({ roomId: taken, tenantId: "other-tenant", templateId: "meeting-room-basic", name: "Other tenant room" });
   const beforeTaken = entered;
-  for (const options of [write(), read()]) assert.equal(await outcome(run(taken, options, async () => undefined)), "409:room_state_changed");
+  for (const options of [write(), read(), pin()]) assert.equal(await outcome(run(taken, options, async () => undefined)), "409:room_state_changed");
   assert.equal(entered, beforeTaken);
+
+  const issuance = randomUUID();
+  assert.deepEqual(await run(issuance, pin(), async scoped => [attempt(() => scoped.addDiagnostic(issuance, diagnostic("pinned"))),
+    attempt(() => scoped.addXrTelemetry(issuance, "virtual-participant", { label: "pinned" })),
+    attempt(() => scoped.releaseResponse(() => undefined)), attempt(() => scoped.releaseResponse(() => undefined))]).catch(label),
+  ["room_write_fence_required", "room_write_fence_required", "ok", "room_effect_response_released"]);
+  assert.equal(await outcome(run(issuance, pin(), async () => undefined)), "virtual_room_release_required");
+  assert.deepEqual(await counts(issuance), { diagnostics: 0, xr: 0 }, "pin mode reaches no telemetry SQL through its read-only client");
 
   const facade = randomUUID();
   let escaped!: VirtualRoomEffectStorage;
@@ -193,27 +208,65 @@ test("PostgreSQL virtual room effects fence actual rooms, the floor and telemetr
   assert.equal((await storage.getRoom(fenced))?.roomId, fenced);
   assert.deepEqual(await counts(fenced), { diagnostics: 1, xr: 1 });
 
-  const reverse = randomUUID();
-  const templateHolder = await pool.connect();
-  let creation: Promise<string> | undefined, queuedVirtual: Promise<string> | undefined;
+  // An issuance pin holds rooms SHARE through its release until COMMIT, excluding an actual INSERT of the same id.
+  for (const create of [
+    async (roomId: string) => { await creating.createAdministrativeRoom({ roomId, tenantId: "demo-tenant", templateId: "meeting-room-basic", name: "Admin" }); },
+    async (roomId: string) => { await creating.createLegacyPersonalRoom({ roomId, tenantId: "demo-tenant", ownerParticipantId: randomUUID(),
+      templateId: "personal-workspace-basic", name: "Personal", roomType: "personal" }); }
+  ]) {
+    const issued = randomUUID(), reached = deferred(), gate = deferred();
+    let sent = 0, actual: Promise<string> | undefined;
+    const pinning = outcome(run(issued, pin(), async scoped => { scoped.releaseResponse(() => { sent += 1; }); reached.resolve(); await gate.promise; }));
+    await Promise.race([reached.promise, pinning]);
+    try {
+      const pinPid = await pidOf("v");
+      assert.deepEqual(await onRooms(pinPid), { share: true, share_wait: false, access_share: true }, "the pin holds a granted rooms ShareLock");
+      actual = create(issued).then(() => "ok", label);
+      await until("actual_create_waits_on_released_pin", async () => await waitingOn(pinPid, "c") === 1);
+      assert.deepEqual([sent, await storage.getRoom(issued)], [1, null], "after release the pin still excludes the INSERT until COMMIT");
+    } finally { gate.resolve(); }
+    assert.deepEqual([await pinning, await actual], ["ok", "ok"]);
+    assert.equal((await storage.getRoom(issued))?.roomId, issued);
+  }
+
+  // Ordinary read keeps ACCESS SHARE: the same-id INSERT commits before its release of separate virtual state.
+  const admitted = randomUUID(), readReached = deferred(), readGate = deferred();
+  let readSent = 0;
+  const reading = outcome(run(admitted, read(), async scoped => {
+    readReached.resolve(); await readGate.promise; scoped.releaseResponse(() => { readSent += 1; });
+  }));
+  await Promise.race([readReached.promise, reading]);
   try {
-    const holderPid = await backend(templateHolder);
-    await templateHolder.query("begin");
-    await templateHolder.query("select 1 from templates where template_id='meeting-room-basic' for no key update");
-    creation = creating.createAdministrativeRoom({ roomId: reverse, tenantId: "demo-tenant", templateId: "meeting-room-basic", name: "Reverse" })
-      .then(item => item.roomId, label);
-    await until("actual_create_inside_insert", async () => await waitingOn(holderPid, "c") === 1);
-    const creatorPid = (await pool.query("select pid from pg_stat_activity where application_name=$1 and $2=any(pg_blocking_pids(pid))",
-      [`${schema}_c`, holderPid])).rows[0].pid as number;
-    const before = entered;
-    queuedVirtual = outcome(run(reverse, write(), async () => undefined));
-    await until("virtual_waits_on_actual_create", async () => await waitingOn(creatorPid, "v") === 1);
-    await templateHolder.query("commit");
-    assert.deepEqual([await creation, await queuedVirtual], [reverse, "409:room_state_changed"]);
-    assert.equal(entered, before);
-  } finally {
-    await templateHolder.query("rollback").catch(() => undefined); templateHolder.release();
-    await Promise.allSettled([creation, queuedVirtual]);
+    assert.deepEqual(await onRooms(await pidOf("v")), { share: false, share_wait: false, access_share: true });
+    await creating.createAdministrativeRoom({ roomId: admitted, tenantId: "demo-tenant", templateId: "meeting-room-basic", name: "Admitted" });
+    assert.equal((await storage.getRoom(admitted))?.roomId, admitted, "an unreleased read does not exclude the actual INSERT");
+  } finally { readGate.resolve(); }
+  assert.deepEqual([await reading, readSent], ["ok", 1], "read releases only separate virtual state, never an absence-pinned credential");
+
+  // A write or pin queued behind an in-flight actual INSERT observes the new room and never reaches its callback.
+  for (const options of [write(), pin()]) {
+    const reverse = randomUUID();
+    const templateHolder = await pool.connect();
+    let creation: Promise<string> | undefined, queuedVirtual: Promise<string> | undefined;
+    try {
+      const holderPid = await backend(templateHolder);
+      await templateHolder.query("begin");
+      await templateHolder.query("select 1 from templates where template_id='meeting-room-basic' for no key update");
+      creation = creating.createAdministrativeRoom({ roomId: reverse, tenantId: "demo-tenant", templateId: "meeting-room-basic", name: "Reverse" })
+        .then(item => item.roomId, label);
+      await until("actual_create_inside_insert", async () => await waitingOn(holderPid, "c") === 1);
+      const creatorPid = (await pool.query("select pid from pg_stat_activity where application_name=$1 and $2=any(pg_blocking_pids(pid))",
+        [`${schema}_c`, holderPid])).rows[0].pid as number;
+      const before = entered;
+      queuedVirtual = outcome(run(reverse, options, async () => undefined));
+      await until("virtual_waits_on_actual_create", async () => await waitingOn(creatorPid, "v") === 1);
+      await templateHolder.query("commit");
+      assert.deepEqual([await creation, await queuedVirtual], [reverse, "409:room_state_changed"]);
+      assert.equal(entered, before);
+    } finally {
+      await templateHolder.query("rollback").catch(() => undefined); templateHolder.release();
+      await Promise.allSettled([creation, queuedVirtual]);
+    }
   }
 
   const exclusive = await pool.connect();
@@ -226,6 +279,29 @@ test("PostgreSQL virtual room effects fence actual rooms, the floor and telemetr
     assert.equal(await outcome(run(randomUUID(), { ...write(), lockTimeoutMs: 50 }, async () => undefined)), "db:55P03",
       "write mode really requests table SHARE");
   } finally { await exclusive.query("rollback").catch(() => undefined); exclusive.release(); }
+
+  // The original pin flag, mutated while the pool is exhausted, cannot downgrade the queued fence to the ACCESS SHARE EXCLUSIVE admits.
+  let exhausted: PoolClient | undefined = await virtualPool.connect();
+  const blocker = await pool.connect();
+  const mutable = pin();
+  let pinnedSent = 0, queuedPin: Promise<string> | undefined;
+  try {
+    const blockerPid = await backend(blocker);
+    await blocker.query("begin"); await blocker.query("lock table rooms in exclusive mode");
+    queuedPin = outcome(run(randomUUID(), mutable, async scoped => { scoped.releaseResponse(() => { pinnedSent += 1; }); }));
+    await until("pin_waits_for_exhausted_pool", async () => virtualPool.waitingCount === 1);
+    mutable.pinAbsence = false;
+    exhausted.release(); exhausted = undefined;
+    await until("pin_waits_on_exclusive_rooms", async () => await waitingOn(blockerPid, "v") === 1);
+    assert.deepEqual([await onRooms(await pidOf("v")), pinnedSent], [{ share: false, share_wait: true, access_share: false }, 0],
+      "the captured pin still requests rooms SHARE");
+    await blocker.query("commit");
+    assert.deepEqual([await queuedPin, pinnedSent], ["ok", 1]);
+  } finally {
+    exhausted?.release();
+    await blocker.query("rollback").catch(() => undefined); blocker.release();
+    await Promise.allSettled([queuedPin]);
+  }
 
   const busy = randomUUID();
   await pool.query(`insert into runtime_diagnostics (room_id,payload)
@@ -273,7 +349,7 @@ test("PostgreSQL virtual room effects fence actual rooms, the floor and telemetr
   assert.equal(await outcome(run(ledger, write(), scoped => both(scoped, ledger, "after"))), "ok");
   assert.deepEqual(await counts(ledger), { diagnostics: 2, xr: 2 }, "the borrowed client and room stay usable");
 
-  // A real init holds rooms ACCESS EXCLUSIVE before policy ALTER. Neither mode may
+  // A real init holds rooms ACCESS EXCLUSIVE before policy ALTER. No mode may
   // hold a policy lock while waiting for rooms, which would deadlock the initializer.
   const initPool = open("i", 1);
   const initClient = await initPool.connect();
@@ -288,7 +364,7 @@ test("PostgreSQL virtual room effects fence actual rooms, the floor and telemetr
   const initial = await signature();
   assert.deepEqual([initial.minimum_protocol, initial.media_namespace], [1, null]);
   assert.match(initial.guard_hash, /^[a-f0-9]{32}$/);
-  for (const [mode, options, roomLock] of [["read", read(), "AccessShareLock"], ["write", write(), "ShareLock"]] as const) {
+  for (const [mode, options, roomLock] of [["read", read(), "AccessShareLock"], ["write", write(), "ShareLock"], ["pin", pin(), "ShareLock"]] as const) {
     const target = randomUUID(), reachedPolicyAlter = deferred(), continueInit = deferred();
     let paused = false, released = 0;
     initClient.query = function (this: PoolClient, ...args: unknown[]) {
@@ -307,9 +383,9 @@ test("PostgreSQL virtual room effects fence actual rooms, the floor and telemetr
       assert.equal((await pool.query(`select exists(select 1 from pg_locks where pid=$1 and relation='rooms'::regclass
         and mode='AccessExclusiveLock' and granted) as held`, [initPid])).rows[0].held, true,
       "the real init transaction holds rooms AccessExclusive before policy ALTER");
-      request = outcome(run(target, options, mode === "read"
-        ? async scoped => { scoped.releaseResponse(() => { released += 1; }); }
-        : scoped => both(scoped, target, "after-init")));
+      request = outcome(run(target, options, mode === "write"
+        ? scoped => both(scoped, target, "after-init")
+        : async scoped => { scoped.releaseResponse(() => { released += 1; }); }));
       await until(`${mode}_virtual_waits_on_init_rooms`, async () => await waitingOn(initPid, "v") === 1);
       const waiting = (await pool.query(`select
         exists(select 1 from pg_locks where pid=$1 and relation='rooms'::regclass and mode=$2 and not granted) as room_wait,
@@ -325,8 +401,8 @@ test("PostgreSQL virtual room effects fence actual rooms, the floor and telemetr
       initClient.query = initQuery;
     }
     assert.deepEqual(await signature(), initial, "floor 1, null namespace and guard hash survive reinit unchanged");
-    if (mode === "read") assert.equal(released, 1);
-    else assert.deepEqual(await counts(target), { diagnostics: 1, xr: 1 });
+    if (mode === "write") assert.deepEqual(await counts(target), { diagnostics: 1, xr: 1 });
+    else assert.equal(released, 1);
   }
 
   const activating = new PostgresStorage(open("p", 1));
@@ -347,6 +423,6 @@ test("PostgreSQL virtual room effects fence actual rooms, the floor and telemetr
   } finally { pinnedGate.resolve(); }
   assert.deepEqual([await current, await raising, await denied], ["ok", "2", "409:identity_upgrade_required"]);
   assert.deepEqual(await counts(pinned), { diagnostics: 1, xr: 1 }, "the pinned floor-1 write commits before activation");
-  for (const options of [write(), read()]) assert.equal(await outcome(run(randomUUID(), options, async () => undefined)), "409:identity_upgrade_required");
+  for (const options of [write(), read(), pin()]) assert.equal(await outcome(run(randomUUID(), options, async () => undefined)), "409:identity_upgrade_required");
   assert.equal(entered, beforeLate, "neither the late call nor floor-2 calls reach the callback");
 });
