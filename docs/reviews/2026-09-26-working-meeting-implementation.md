@@ -779,6 +779,19 @@ Pure reducer **11/11** и первый общий API прогон до новы
 
 Финальные workspace lint/typecheck/build/test прошли: API **1493 passed / 1 optional live-MinIO skipped**, runtime **1094/1094**, control-plane **13/13**, templates **20/20**, tools **256 passed / 2 optional skipped**; остальные packages без fail. Full local E2E — **187/187**, без retry/skip (**35,6 минуты**). Исполняемый код после этого не менялся. Предсуществующая remove-reason UTF-16 slicing/непарная-surrogate normalization остаётся input-parity obligation: текущий срез не менял этот parser. CI/Docker acceptance добавляется после публикации; staging deploy/verification исключён по поручению пользователя.
 
+#### Публикация atomic legacy-control commands
+
+| Этап | Результат |
+|---|---|
+| Code SHA | `9cd23a5b004db4173e098f826497ef7fce5b9796`, опубликован в рабочей ветке |
+| [CI 38083269226](https://github.com/vrata-labs/platform/actions/runs/38083269226) | Success: обычный PostgreSQL, workspace checks, pinned rollback fixtures, full E2E, M0.5 и locked assets |
+| [Docker Publish 38083272421](https://github.com/vrata-labs/platform/actions/runs/38083272421) | Success: immutable images exact SHA |
+| Staging | Deploy/verification не запускались по прямому поручению пользователя |
+
+CI/Docker завершились с первой попытки на опубликованном SHA. Локальный full прошёл без retry/skip, assertions и таймауты не ослаблялись. Remote rollout/rollback не выполнялись; общий floor2 не активирован. Автоматические семь legacy-control writers больше не стирают committed admission Host; explicit admin RAW PATCH contract сохранён отдельно. Frame/media source grants, bootstrap reconciliation, durable retirement и legacy input parity остаются дальнейшими gates.
+
+Собственный temporary PostgreSQL fixture удалён после подтверждения ID/labels; локальные E2E services завершены. Соседние процессы/контейнеры и staging-инфраструктура не изменялись.
+
 ## Публикация первого среза T01/T12
 
 Локально прошли workspace lint/typecheck/build/tests с PostgreSQL, затем runtime build и 905 runtime tests после финальных правок. Полный `pnpm test:e2e` на финальном исполняемом дереве: **148 passed**, без skip (41.6 min).
