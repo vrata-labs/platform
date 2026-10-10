@@ -754,6 +754,19 @@ Shared floor2 не активирован. Frame/media source grants, bootstrap 
 
 Финальные workspace lint/typecheck/build/test прошли: API **1457 passed / 1 optional live-MinIO skipped**, runtime **1094/1094**, control-plane **13/13**, templates **20/20**, tools **256 passed / 2 optional skipped**; остальные packages без fail. Full local E2E — **187/187**, без retry/skip (**33,0 минуты**), включая новый controlled hydration regression и прежний Update-test. После full исполняемый код не менялся; комментарий о reconciliation уточнён для обоих stable-subject вариантов (explicit ID или valid scoped bearer), runtime-contract не изменён. CI/Docker acceptance добавляется после публикации; staging deploy/verification исключён по поручению пользователя.
 
+#### Публикация guarded legacy admission mutations
+
+| Этап | Результат |
+|---|---|
+| Code SHA | `daf2ece8aefd7ac84be2213c66c126e621717b5a`, опубликован в рабочей ветке |
+| [CI 38069544430](https://github.com/vrata-labs/platform/actions/runs/38069544430) | Success: обычный PostgreSQL, workspace checks, pinned rollback fixtures, full E2E, M0.5 и locked assets |
+| [Docker Publish 38069546922](https://github.com/vrata-labs/platform/actions/runs/38069546922) | Success: immutable images exact SHA |
+| Staging | Deploy/verification не запускались по прямому поручению пользователя |
+
+CI/Docker завершились с первой попытки на опубликованном SHA. Remote rollout/rollback не выполнялись. Первоначальный local full failed Update получил controlled reproduction и main-path readiness fix; положительный результат final187 не является простым retry старого кода. Atomic legacy control writers остаются явным следующим gate, поскольку прежний whole-control admin writer может стереть committed claim. Общий floor2 не активирован; frame/media/bootstrap/retirement также остаются открыты.
+
+Собственный временный PostgreSQL fixture удалён после подтверждения ID/labels; локальные E2E services завершены. Соседние процессы/контейнеры и staging-инфраструктура не изменялись.
+
 ## Публикация первого среза T01/T12
 
 Локально прошли workspace lint/typecheck/build/tests с PostgreSQL, затем runtime build и 905 runtime tests после финальных правок. Полный `pnpm test:e2e` на финальном исполняемом дереве: **148 passed**, без skip (41.6 min).
