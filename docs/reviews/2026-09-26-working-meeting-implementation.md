@@ -767,6 +767,18 @@ CI/Docker завершились с первой попытки на опубл�
 
 Собственный временный PostgreSQL fixture удалён после подтверждения ID/labels; локальные E2E services завершены. Соседние процессы/контейнеры и staging-инфраструктура не изменялись.
 
+### T01a-S2b-AC: atomic legacy session-control commands
+
+Пользователь поручил продолжение плана без staging; HEAD495ba3f опубликован, дерево чистое. Закрыта ранее подтверждённая соседняя гонка: все семь legacy commands (lock/unlock/end/remove/presenter grant/revoke/Host transfer) больше не используют stale whole-sessionControl helper и generic updateRoom. Они решают fresh raw control под parent NO KEY UPDATE → policy SHARE в одном client и меняют только control column/свои keys; все остальные room fields и spare raw keys сохранены.
+
+Capture перед waits фиксирует MAC actor/scope/provenance/originalexpiry/command/flag/presence provider. V1 DTO теперь сохраняет exp. Fresh текущий Host и status проверены; removed/ended/disabled Host не сохраняет control через оставшийся raw slot. Admin bypass сохранён, target presence grant/transfer берётся синхронно после DB locks, non-boolean provider отказан. Lease проверяется до/после SQL и непосредственно передCOMMIT; нет afterACK false-denial. Реальные success counters/End/Remove local presence projections только после известногоACK; early authorization audit остаётся entry decision, не подтверждением action commit. V2 ветки не менялись.
+
+Pure reducer **11/11** и первый общий API прогон до новых store/native suites **1468 passed / 1 optional live-MinIO skipped**. Новые Memory/PG/native regression suites добавлены, их фактические результаты и final workspace/full E2E/CI фиксируются после проверки. General admin PATCH с явно переданным sessionControl остаётся raw whole-state override с прежней normalization; без этогоfield control column сохраняется иcommand effects не вызываются. Full v2 activation не объявляется завершённой; frame/media/bootstrap/retirement остаются gates.
+
+Новые pure/Memory/PG/native focused suites — **36/36**. Реальные parent locks, claim/control race в обеих очередностях, текущие scope/Host/status/presence, все command patches и byte-equal остальные колонки, SQL/COMMIT expiry иactual rejected/committed lost ACK проверены на owned schemas. В test-only ACK-loss выполняется настоящий COMMIT с подменённым клиентским ответом; это не physical network/disk recovery evidence.
+
+Финальные workspace lint/typecheck/build/test прошли: API **1493 passed / 1 optional live-MinIO skipped**, runtime **1094/1094**, control-plane **13/13**, templates **20/20**, tools **256 passed / 2 optional skipped**; остальные packages без fail. Full local E2E — **187/187**, без retry/skip (**35,6 минуты**). Исполняемый код после этого не менялся. Предсуществующая remove-reason UTF-16 slicing/непарная-surrogate normalization остаётся input-parity obligation: текущий срез не менял этот parser. CI/Docker acceptance добавляется после публикации; staging deploy/verification исключён по поручению пользователя.
+
 ## Публикация первого среза T01/T12
 
 Локально прошли workspace lint/typecheck/build/tests с PostgreSQL, затем runtime build и 905 runtime tests после финальных правок. Полный `pnpm test:e2e` на финальном исполняемом дереве: **148 passed**, без skip (41.6 min).

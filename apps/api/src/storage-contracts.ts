@@ -292,6 +292,11 @@ export interface Storage {
    * host seat or one pending insert, both leases rechecked before decide, before and after SQL, and before COMMIT. */
   writeLegacyAdmission(input: LegacyAdmissionWriteInput, options: Pick<LegacyRoomEffectOptions, "lockTimeoutMs" | "idleTimeoutMs">):
     Promise<LegacyAdmissionWriteReceipt>;
+  /** Floor-1 legacy session control, floor 1 and unbound: parent NO KEY UPDATE then policy SHARE; the pure reducer decides on the
+   * fresh raw row at the store's instant; at most one CAS merge of its patch into the raw column. Original lease rechecked before
+   * decide, before and after SQL, and before COMMIT. No send or projection inside; the receipt follows a known COMMIT. */
+  applyLegacyRoomControl(input: import("./identity/legacy-room-control.js").LegacyRoomControlInput,
+    options: import("./identity/legacy-room-control.js").LegacyRoomControlOptions): Promise<LegacyRoomControlReceipt>;
   withRoomIdentityEffect<T>(guard: import("./identity/effect-write-guard.js").RoomEffectGuard,
     effect: (scoped: RoomIdentityEffectStorage, current: import("./identity/effect-write-guard.js").RoomEffectActor) => Promise<T>): Promise<T>;
   withLegacyRoomEffect<T>(scope: { tenantId: string; roomId: string }, options: LegacyRoomEffectOptions,
@@ -405,6 +410,11 @@ export type LegacyAdmissionWriteReceipt =
   | { readonly kind: "host_ready" }
   | { readonly kind: "pending"; readonly accessRequestId: string; readonly created: boolean }
   | { readonly kind: "refused"; readonly status: 403; readonly reason: string; readonly accessRequestId?: string; readonly fresh: LegacyRoomCredentialSnapshot }
+  | { readonly kind: "changed" };
+/** Returned only after a known COMMIT. `state` is the stored column as written, sanitized; refused and changed wrote nothing. */
+export type LegacyRoomControlReceipt =
+  | { readonly kind: "applied"; readonly state: Required<RoomSessionControlState> }
+  | { readonly kind: "refused"; readonly status: 400 | 403 | 404; readonly error: string; readonly reason?: string }
   | { readonly kind: "changed" };
 /** Read mode admits at most one release; write mode admits telemetry only;
  * pinAbsence requires exactly one release and excludes writes. */

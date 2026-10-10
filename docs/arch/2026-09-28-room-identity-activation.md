@@ -753,13 +753,38 @@ release. Successful receipts, audits and pending counters follow their own ACK,
 not the initial permission check. No v2 identity or authority binding is introduced
 by this floor-1 path; downstream source grants, bootstrap and retirement remain gates.
 
-An adjacent pre-existing writer remains a separate obligation: legacy administrative
-lock/unlock/end and other control actions can still replace the whole `sessionControl`
-from a stale read. A lock that read an empty Host before this transaction can wait
-for its COMMIT and erase that newly assigned Host afterwards. Admission's minimal
-CAS prevents its own overwrite, not every later control writer. Those legacy control
-mutations require atomic field updates or fresh recomputation under a parent lock
-before full activation; this gate does not claim they were changed.
+### Atomic legacy session-control commands
+
+`applyLegacyRoomControl` closes the adjacent stale whole-control writer: lock,
+unlock, end, remove, presenter grant/revoke and Host transfer all decide from the
+fresh raw row under FOR NO KEY UPDATE, then policy FOR SHARE at floor 1 with no v2
+binding. They merge only their command's patch into `session_control`, guarded by
+an exact raw-value CAS; no name, status, theme, avatar or other room column is written.
+Unknown raw control keys survive, and removal merges the current removal map instead
+of replacing another participant's entry. Malformed raw control returns a conflict,
+not a fabricated default state. Memory performs the equivalent staged merge in one
+synchronous turn.
+
+The original MAC expiry, actor scope/provenance, current Host and actor status are
+checked after pool/row waits. A removed, ended or disabled legacy Host cannot use a
+still-present raw Host slot to retain control. A verified admin keeps its explicit
+bypass for room administration. Grant/transfer target presence is sampled once,
+synchronously after the locks and stored facts; target removal/current Presenter
+checks are fresh. The v2 command branches and token/admission boundaries are unchanged.
+
+Lease checks before/after SQL and the before-COMMIT hook prevent late writes. Only
+a known ACK yields a success receipt and triggers action counters or local presence
+deletion. Unknown/rejected COMMIT returns fixed503 without successful projection;
+the database may have committed after a lost ACK. Same-command retry revalidates
+fresh authority and retains legacy re-stamping semantics: revoke after committed
+revoke is 404, former Host after transfer is 403, admin can re-apply an end. No
+new nonce or idempotency ledger is claimed. Entry permission audit remains the
+initial permission decision, distinct from command-success counters.
+
+General admin PATCH with an explicit `sessionControl` remains an intentional raw
+whole-state override, with its existing normalization. A PATCH without that field
+keeps the column unchanged and does not run command effects. This separate explicit
+override does not represent one of the automatic partial command writers.
 
 ## Runtime adoption
 

@@ -27,7 +27,6 @@ import {
   type RoomNoteScope,
   type RoomInviteRecord,
   type RoomRecord,
-  type RoomSessionControlState,
   type RuntimeDiagnosticRecord,
   type TenantRecord,
   type WaitingRoomRequestRecord
@@ -59,7 +58,7 @@ import { IdentityStorageError } from "./identity/contracts.js";
 import { PersonalOwnerRoomBlocked } from "./identity/personal-owner-response.js";
 import type { RoomEffectGuard, RoomEffectActor } from "./identity/effect-write-guard.js";
 import type { Storage, RoomIdentityEffectStorage, VirtualRoomEffectStorage, LegacyRoomCredentialSelector, LegacyRoomCredentialSnapshot,
-  LegacyAdmissionWriteInput, LegacyAdmissionWriteReceipt } from "./storage-contracts.js";
+  LegacyAdmissionWriteInput, LegacyAdmissionWriteReceipt, LegacyRoomControlReceipt } from "./storage-contracts.js";
 import { createRoomEffectFacade } from "./identity/effect-facade.js";
 import { identityFenceUnavailable, uncertainRoomCommit } from "./identity/fence-transaction.js";
 import { releaseFencedResponse } from "./identity/response-release.js";
@@ -74,6 +73,10 @@ import {
   decideLegacyAdmissionWrite, LegacyAdmissionDeadlineExpired, LegacyAdmissionWriteInvariant, planLegacyAdmissionWrite,
   type LegacyAdmissionWritePlan
 } from "./identity/legacy-admission-write.js";
+import {
+  LEGACY_CONTROL_ADMIN_ID, LegacyRoomControlInvariant,
+  type LegacyControlActor, type LegacyRoomControlCommand, type LegacyRoomControlInput, type LegacyRoomPresence
+} from "./identity/legacy-room-control.js";
 
 import { getLivekitCredentials, getMediaTokenConfigError, getLivekitDeploymentDiagnostics } from "./livekit-config.js";
 
@@ -132,7 +135,6 @@ import {
   isRoomDisabled,
   defaultSessionControlState,
   sanitizeSessionControlState,
-  getRemovedParticipant,
   resolveEffectiveRoomRole,
   getSessionControlBlockReason
 } from "./room-session-control.js";
@@ -699,7 +701,8 @@ function resolveControlPlaneActor(request: IncomingMessage):
         roomId: session.payload.roomId,
         participantId: session.payload.participantId,
         sessionId: session.payload.sessionId,
-        permissions: session.payload.permissions
+        permissions: session.payload.permissions,
+        expiresAtSeconds: session.payload.exp
       }
     };
   }
@@ -1371,15 +1374,87 @@ function sanitizeWaitingRoomRequest(request: WaitingRoomRequestRecord): WaitingR
   return { ...request };
 }
 
-async function updateRoomSessionControl(
-  storage: Awaited<typeof storagePromise>,
-  room: RoomRecord,
-  nextControl: RoomSessionControlState
-): Promise<RoomRecord> {
-  const updated = await storage.updateRoom(room.roomId, {
-    sessionControl: sanitizeSessionControlState(nextControl)
-  });
-  return updated ?? { ...room, sessionControl: sanitizeSessionControlState(nextControl) };
+/** The store's exact actor, never the DTO: the administrator token, or a floor-1 MAC's verified claims under its own
+ * signed expiry. Null when a claim or that expiry is absent or not a positive safe instant. */
+function legacyControlActor(actor: ControlPlaneActor): LegacyControlActor | null {
+  if (actor.actorType === "admin-token") return { kind: "admin", actorId: LEGACY_CONTROL_ADMIN_ID };
+  // A v2 Bearer is refused at entry below floor 2; reaching here is a wiring fault.
+  if (actor.identityProtocolVersion === 2) throw new LegacyRoomControlInvariant();
+  const { tenantId, roomId, participantId, role, roleSource, expiresAtSeconds } = actor;
+  const expiresAtMs = typeof expiresAtSeconds === "number" ? expiresAtSeconds * 1000 : Number.NaN;
+  if (!Number.isSafeInteger(expiresAtSeconds) || !Number.isSafeInteger(expiresAtMs) || expiresAtMs <= 0
+    || typeof tenantId !== "string" || !validId(roomId) || !validId(participantId) || roleSource === undefined) return null;
+  return { kind: "session", tenantId, roomId, participantId, role, roleSource, lease: { kind: "bearer", expiresAtMs } };
+}
+
+/** Live persisted-room presence, sampled by the store after its locks; never a precomputed boolean. */
+const legacyRoomPresence: LegacyRoomPresence = (roomId, participantId) =>
+  getPresence(roomId).some(item => item.participantId === participantId);
+
+/** One guarded floor-1 session-control command. A receipt exists only after a known COMMIT ACK. A bearer lapse, a wiring
+ * fault, a missing room and a floor/binding refusal keep their meaning. Anything else, an unknown ACK or a rejected COMMIT
+ * included, is one fixed 503 with no cause, never retried and never answered from a fabricated state. */
+async function applyLegacyRoomControlReceipt(storage: Storage, input: LegacyRoomControlInput): Promise<LegacyRoomControlReceipt> {
+  try {
+    return await storage.applyLegacyRoomControl(input, {});
+  } catch (error) {
+    if (error instanceof LegacyAdmissionDeadlineExpired || error instanceof LegacyRoomControlInvariant
+      || error instanceof LegacyAdmissionWriteInvariant) throw error;
+    if (error instanceof IdentityStorageError && error.code === "room_not_found") throw new RoomEffectNotFound("room_not_found");
+    if (error instanceof IdentityBoundaryError && error.status === 409) throw error;
+    throw new IdentityBoundaryError(503, "identity_authority_unavailable");
+  }
+}
+
+/** Captured once per floor-1 session-control request: the entry check's audit target and the route's denied counter. */
+interface LegacyControlReply {
+  readonly request: IncomingMessage;
+  readonly response: ServerResponse;
+  readonly requestId: string;
+  readonly audit: ControlPlaneAuthorizationOptions;
+  readonly actor: ControlPlaneActor;
+  readonly denied: () => void;
+}
+
+/** Floor-1 session control through the guarded store command: scope from the initial persisted room, the exact actor,
+ * the route's captured flag and, for grant/transfer only, live presence. Answers every confirmed refusal, lapse and
+ * drift itself (null); only an applied receipt returns, and its sinks and effects belong to the caller. An unknown
+ * outcome throws with no sink at all. */
+async function runLegacyRoomControl(storage: Storage, reply: LegacyControlReply, room: RoomRecord,
+  command: LegacyRoomControlCommand, hostControlsEnabled: boolean): Promise<Extract<LegacyRoomControlReceipt, { kind: "applied" }> | null> {
+  const { response, requestId, audit, denied } = reply;
+  const actor = legacyControlActor(reply.actor);
+  if (!actor) {
+    denied();
+    json(response, 401, { error: "unauthorized", reason: "invalid_payload", requestId });
+    return null;
+  }
+  const sampled = command.type === "grant-presenter" || command.type === "transfer-host";
+  const input: LegacyRoomControlInput = { scope: { tenantId: room.tenantId, roomId: room.roomId }, actor, command, hostControlsEnabled,
+    ...(sampled ? { presence: legacyRoomPresence } : {}) };
+  let receipt: LegacyRoomControlReceipt;
+  try {
+    receipt = await applyLegacyRoomControlReceipt(storage, input);
+  } catch (error) {
+    if ((error instanceof IdentityBoundaryError && error.status === 503) || error instanceof LegacyRoomControlInvariant
+      || error instanceof LegacyAdmissionWriteInvariant) throw error;
+    denied();
+    if (!(error instanceof LegacyAdmissionDeadlineExpired)) throw error;
+    json(response, 401, { error: "unauthorized", reason: "expired_token", requestId });
+    return null;
+  }
+  if (receipt.kind === "applied") return receipt;
+  denied();
+  if (receipt.kind === "changed") {
+    writeRoomStateChanged(response);
+  } else if (receipt.error === "forbidden") {
+    writeControlPlaneAudit({ timestamp: new Date().toISOString(), requestId, action: audit.action, permission: audit.permission,
+      object: { type: audit.objectType, id: audit.objectId }, result: "denied", reason: "permission_denied", actor: reply.actor });
+    json(response, 403, { error: "forbidden", reason: "permission_denied", permission: audit.permission, requestId });
+  } else if (receipt.reason !== undefined) {
+    json(response, receipt.status, { error: receipt.error, reason: receipt.reason, requestId });
+  } else json(response, receipt.status, { error: receipt.error });
+  return null;
 }
 
 function incrementHostActionMetric(action: string, result: "allowed" | "denied"): void {
@@ -3436,10 +3511,11 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   if (method === "POST" && sessionControlActionMatch) {
     const roomId = decodeURIComponent(sessionControlActionMatch[1]);
     const action = sessionControlActionMatch[2] as "lock" | "unlock" | "end";
-    if (!isHostControlsEnabled()) return json(response, 404, { error: "host_controls_disabled" });
+    const hostControlsEnabled = isHostControlsEnabled();
+    if (!hostControlsEnabled) return json(response, 404, { error: "host_controls_disabled" });
     const room = await storage.getRoom(roomId);
     if (!room) return json(response, 404, { error: "room_not_found" });
-    const actor = await requireControlPlanePermission(request, response, {
+    const control: ControlPlaneAuthorizationOptions = {
       permission: "room.session-control",
       action: `room.session-control.${action}`,
       objectType: "room",
@@ -3447,7 +3523,8 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       targetRoomId: roomId,
       allowHostOwnRoom: true,
       currentHostParticipantId: defaultSessionControlState(room.sessionControl).hostParticipantId
-    });
+    };
+    const actor = await requireControlPlanePermission(request, response, control);
     if (!actor) {
       incrementHostActionMetric(action, "denied");
       return;
@@ -3470,21 +3547,9 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
         throw error;
       }
     }
-    const now = new Date().toISOString();
-    const current = defaultSessionControlState(room.sessionControl);
-    const next = action === "lock"
-      ? { ...current, lockedAt: now, lockedBy: actor.actorId }
-      : action === "unlock"
-        ? { ...current, lockedAt: null, lockedBy: null }
-        : {
-          ...current,
-          endedAt: now,
-          endedBy: actor.actorId,
-          presenterParticipantId: null,
-          presenterRevokedAt: now,
-          presenterRevokedBy: actor.actorId
-        };
-    const updated = await updateRoomSessionControl(storage, room, next);
+    const applied = await runLegacyRoomControl(storage, { request, response, requestId, audit: control, actor,
+      denied: () => incrementHostActionMetric(action, "denied") }, room, { type: action }, hostControlsEnabled);
+    if (!applied) return;
     if (action === "lock") metrics.roomLockedTotal += 1;
     if (action === "end") {
       metrics.sessionsEndedTotal += 1;
@@ -3493,7 +3558,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       }
     }
     incrementHostActionMetric(action, "allowed");
-    json(response, 200, { state: sanitizeSessionControlState(updated.sessionControl) });
+    json(response, 200, { state: sanitizeSessionControlState(applied.state) });
     return;
   }
 
@@ -3501,10 +3566,11 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   if (method === "POST" && participantRemoveMatch) {
     const roomId = decodeURIComponent(participantRemoveMatch[1]);
     const targetParticipantId = decodeURIComponent(participantRemoveMatch[2]);
-    if (!isHostControlsEnabled()) return json(response, 404, { error: "host_controls_disabled" });
+    const hostControlsEnabled = isHostControlsEnabled();
+    if (!hostControlsEnabled) return json(response, 404, { error: "host_controls_disabled" });
     const room = await storage.getRoom(roomId);
     if (!room) return json(response, 404, { error: "room_not_found" });
-    const actor = await requireControlPlanePermission(request, response, {
+    const control: ControlPlaneAuthorizationOptions = {
       permission: "room.session-control",
       action: "room.session-control.participant.remove",
       objectType: "participant",
@@ -3512,7 +3578,8 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       targetRoomId: roomId,
       allowHostOwnRoom: true,
       currentHostParticipantId: defaultSessionControlState(room.sessionControl).hostParticipantId
-    });
+    };
+    const actor = await requireControlPlanePermission(request, response, control);
     if (!actor) {
       incrementHostActionMetric("remove", "denied");
       return;
@@ -3538,31 +3605,19 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       incrementHostActionMetric("remove", "denied");
       return json(response, 400, { error: "cannot_remove_self" });
     }
-    const current = defaultSessionControlState(room.sessionControl);
-    if (current.hostParticipantId === targetParticipantId && actor.actorType !== "admin-token") {
+    if (!validId(targetParticipantId)) {
       incrementHostActionMetric("remove", "denied");
-      return json(response, 403, { error: "cannot_remove_current_host" });
+      return json(response, 404, { error: "participant_not_found" });
     }
     const payload = (await parseBody<{ reason?: string }>(request)) ?? {};
-    const now = new Date().toISOString();
-    const updated = await updateRoomSessionControl(storage, room, {
-      ...current,
-      presenterParticipantId: current.presenterParticipantId === targetParticipantId ? null : current.presenterParticipantId,
-      presenterRevokedAt: current.presenterParticipantId === targetParticipantId ? now : current.presenterRevokedAt,
-      presenterRevokedBy: current.presenterParticipantId === targetParticipantId ? actor.actorId : current.presenterRevokedBy,
-      removedParticipants: {
-        ...current.removedParticipants,
-        [targetParticipantId]: {
-          removedAt: now,
-          removedBy: actor.actorId,
-          reason: typeof payload.reason === "string" && payload.reason.trim() ? payload.reason.trim().slice(0, 120) : null
-        }
-      }
-    });
+    const reason = typeof payload.reason === "string" && payload.reason.trim() ? payload.reason.trim().slice(0, 120) : null;
+    const applied = await runLegacyRoomControl(storage, { request, response, requestId, audit: control, actor,
+      denied: () => incrementHostActionMetric("remove", "denied") }, room, { type: "remove", targetParticipantId, reason }, hostControlsEnabled);
+    if (!applied) return;
     deletePresence(roomId, targetParticipantId);
     metrics.participantsRemovedTotal += 1;
     incrementHostActionMetric("remove", "allowed");
-    json(response, 200, { state: sanitizeSessionControlState(updated.sessionControl), removedParticipantId: targetParticipantId });
+    json(response, 200, { state: sanitizeSessionControlState(applied.state), removedParticipantId: targetParticipantId });
     return;
   }
 
@@ -3571,10 +3626,11 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     const roomId = decodeURIComponent(presenterActionMatch[1]);
     const targetParticipantId = decodeURIComponent(presenterActionMatch[2]);
     const action = presenterActionMatch[3] as "grant" | "revoke";
-    if (!isHostControlsEnabled()) return json(response, 404, { error: "host_controls_disabled" });
+    const hostControlsEnabled = isHostControlsEnabled();
+    if (!hostControlsEnabled) return json(response, 404, { error: "host_controls_disabled" });
     const room = await storage.getRoom(roomId);
     if (!room) return json(response, 404, { error: "room_not_found" });
-    const actor = await requireControlPlanePermission(request, response, {
+    const control: ControlPlaneAuthorizationOptions = {
       permission: "room.session-control",
       action: `room.session-control.presenter.${action}`,
       objectType: "participant",
@@ -3582,7 +3638,8 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       targetRoomId: roomId,
       allowHostOwnRoom: true,
       currentHostParticipantId: defaultSessionControlState(room.sessionControl).hostParticipantId
-    });
+    };
+    const actor = await requireControlPlanePermission(request, response, control);
     if (!actor) {
       incrementPresenterChangeMetric(action, "denied");
       return;
@@ -3605,38 +3662,16 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
         throw error;
       }
     }
-    const current = defaultSessionControlState(room.sessionControl);
-    if (getRemovedParticipant(room, targetParticipantId)) {
+    if (!validId(targetParticipantId)) {
       incrementPresenterChangeMetric(action, "denied");
       return json(response, 404, { error: "participant_not_found" });
     }
-    const participant = getPresence(roomId).find((item) => item.participantId === targetParticipantId);
-    if (action === "grant" && !participant) {
-      incrementPresenterChangeMetric(action, "denied");
-      return json(response, 404, { error: "participant_not_found" });
-    }
-    if (action === "revoke" && current.presenterParticipantId !== targetParticipantId) {
-      incrementPresenterChangeMetric(action, "denied");
-      return json(response, 404, { error: "presenter_not_found" });
-    }
-    const now = new Date().toISOString();
-    const updated = await updateRoomSessionControl(storage, room, action === "grant"
-      ? {
-        ...current,
-        presenterParticipantId: targetParticipantId,
-        presenterGrantedAt: now,
-        presenterGrantedBy: actor.actorId,
-        presenterRevokedAt: null,
-        presenterRevokedBy: null
-      }
-      : {
-        ...current,
-        presenterParticipantId: null,
-        presenterRevokedAt: now,
-        presenterRevokedBy: actor.actorId
-      });
+    const applied = await runLegacyRoomControl(storage, { request, response, requestId, audit: control, actor,
+      denied: () => incrementPresenterChangeMetric(action, "denied") }, room,
+      { type: action === "grant" ? "grant-presenter" : "revoke-presenter", targetParticipantId }, hostControlsEnabled);
+    if (!applied) return;
     incrementPresenterChangeMetric(action, "allowed");
-    json(response, 200, { state: sanitizeSessionControlState(updated.sessionControl), presenterParticipantId: action === "grant" ? targetParticipantId : null });
+    json(response, 200, { state: sanitizeSessionControlState(applied.state), presenterParticipantId: action === "grant" ? targetParticipantId : null });
     return;
   }
 
@@ -3675,10 +3710,11 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   const hostTransferMatch = url.pathname.match(/^\/api\/rooms\/([^/]+)\/host\/transfer$/);
   if (method === "POST" && hostTransferMatch) {
     const roomId = decodeURIComponent(hostTransferMatch[1]);
-    if (!isHostControlsEnabled()) return json(response, 404, { error: "host_controls_disabled" });
+    const hostControlsEnabled = isHostControlsEnabled();
+    if (!hostControlsEnabled) return json(response, 404, { error: "host_controls_disabled" });
     const room = await storage.getRoom(roomId);
     if (!room) return json(response, 404, { error: "room_not_found" });
-    const actor = await requireControlPlanePermission(request, response, {
+    const control: ControlPlaneAuthorizationOptions = {
       permission: "room.session-control",
       action: "room.session-control.host.transfer",
       objectType: "room",
@@ -3686,7 +3722,8 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       targetRoomId: roomId,
       allowHostOwnRoom: true,
       currentHostParticipantId: defaultSessionControlState(room.sessionControl).hostParticipantId
-    });
+    };
+    const actor = await requireControlPlanePermission(request, response, control);
     if (!actor) {
       incrementHostActionMetric("transfer_host", "denied");
       return;
@@ -3714,21 +3751,15 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
         throw error;
       }
     }
-    const participant = getPresence(roomId).find((item) => item.participantId === targetParticipantId);
-    if (!participant || getRemovedParticipant(room, targetParticipantId)) {
+    if (!validId(targetParticipantId)) {
       incrementHostActionMetric("transfer_host", "denied");
       return json(response, 404, { error: "participant_not_found" });
     }
-    const current = defaultSessionControlState(room.sessionControl);
-    const updated = await updateRoomSessionControl(storage, room, {
-      ...current,
-      presenterParticipantId: current.presenterParticipantId === targetParticipantId ? null : current.presenterParticipantId,
-      presenterRevokedAt: current.presenterParticipantId === targetParticipantId ? new Date().toISOString() : current.presenterRevokedAt,
-      presenterRevokedBy: current.presenterParticipantId === targetParticipantId ? actor.actorId : current.presenterRevokedBy,
-      hostParticipantId: targetParticipantId
-    });
+    const applied = await runLegacyRoomControl(storage, { request, response, requestId, audit: control, actor,
+      denied: () => incrementHostActionMetric("transfer_host", "denied") }, room, { type: "transfer-host", targetParticipantId }, hostControlsEnabled);
+    if (!applied) return;
     incrementHostActionMetric("transfer_host", "allowed");
-    json(response, 200, { state: sanitizeSessionControlState(updated.sessionControl), hostParticipantId: targetParticipantId });
+    json(response, 200, { state: sanitizeSessionControlState(applied.state), hostParticipantId: targetParticipantId });
     return;
   }
 

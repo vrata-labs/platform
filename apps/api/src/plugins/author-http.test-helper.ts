@@ -43,9 +43,9 @@ export interface AuthorHttpPackage {
 type Phase = "body-admitted" | "body-end" | "put-written" | "upload-settled" | "private-read" | "plugin-room" | "settlement-timeout"
   | "telemetry-effect" | "telemetry-written" | "telemetry-read" | "telemetry-ack-loss" | "room-read" | "room-loaded"
   | "administrative-insert" | "administrative-receipt" | "administrative-ack-loss" | "state-token-ack-loss" | "legacy-state-token-ack-loss"
-  | "admission-write" | "admission-written" | "admission-ack-loss";
+  | "admission-write" | "admission-written" | "admission-ack-loss" | "legacy-control-entry" | "control-written" | "control-ack-loss";
 type Message = { event?: string; phase?: Phase; id?: string; command?: string; kind?: Phase; roomId?: string; offset?: number; operation?: string;
-  skip?: number; sqlState?: "55P03"; lockTimeoutMs?: number };
+  skip?: number; sqlState?: "55P03"; lockTimeoutMs?: number; phaseId?: string };
 
 export function authorHttpArtifact(id = "http-status", version = "1.0.0", entry = AUTHOR_HTTP_SOURCE,
   capabilities: RoomPluginManifest["requestedCapabilities"] = ["status.set"]) {
@@ -95,8 +95,12 @@ export function assertAuthorHttpPublicDto(value: unknown, forbidden: string[] = 
  * admission-write holds the guarded floor-1 admission write at entry, after its plan and before its transaction.
  * admission-written holds it after its actual seat UPDATE or pending INSERT returned, its locks still held.
  * admission-ack-loss lets that write's real COMMIT run on the same client, then drops only its acknowledgement.
+ * legacy-control-entry holds the guarded floor-1 session-control command at entry, after the route's initial room read.
+ * control-written holds it after its actual session_control merge UPDATE returned, its row lock still held.
+ * control-ack-loss lets that UPDATE's real COMMIT run on the same client, then drops only its acknowledgement.
+ * The seven legacy control POST routes are body checkpoints too; only remove and host transfer read a body.
  * x-author-hold-state-reply queues only a state-token or session-control reply's end() until flush-state-replies.
- * Held phases resume in FIFO order, so one case may hold several requests.
+ * Held phases resume in FIFO order unless resumePhase names one, so one case may hold several requests.
  * The local reader currently uses FileHandle; readFile is also wrapped for the equivalent buffered path.
  */
 function childInstrumentation(indexUrl: string, telemetryCheckpoints: boolean, administrativeCheckpoints: boolean): string {
@@ -111,15 +115,20 @@ function childInstrumentation(indexUrl: string, telemetryCheckpoints: boolean, a
     const originalNow=Date.now;
     Date.now=()=>originalNow()+offset;
     const notify=value=>process.send?.(value);
+    const legacyControlPath=/^[/]api[/]rooms[/][^/?]+[/](?:session-control[/](?:lock|unlock|end)|participants[/][^/?]+[/]remove|presenters[/][^/?]+[/](?:grant|revoke)|host[/]transfer)$/;
     const pause=async(kind,roomId,details={})=>{
       if(!armed || armed.kind!==kind || armed.roomId!==roomId) return;
       if(armed.skip>0){--armed.skip;return;}
       const id=armed.id;armed=undefined;
-      await new Promise(resolve=>{resumes.push(resolve);notify({event:'phase',phase:kind,id,...details});});
+      await new Promise(resolve=>{resumes.push({id,resolve});notify({event:'phase',phase:kind,id,...details});});
     };
     process.on('message',message=>{
       if(message.command==='arm'){armed=message;notify({event:'ack',id:message.id});}
-      if(message.command==='resume'){resumes.shift()?.();notify({event:'ack',id:message.id});}
+      if(message.command==='resume'){
+        // No phaseId keeps FIFO; a named phase resumes only that hold, and an unknown one is a no-op.
+        const index=message.phaseId===undefined?0:resumes.findIndex(held=>held.id===message.phaseId);
+        const [held]=index<0?[]:resumes.splice(index,1);held?.resolve();notify({event:'ack',id:message.id});
+      }
       if(message.command==='clock'){offset=message.offset;notify({event:'ack',id:message.id});}
       if(message.command==='sync'){notify({event:'ack',id:message.id});}
       if(message.command==='flush-state-replies'){
@@ -131,7 +140,8 @@ function childInstrumentation(indexUrl: string, telemetryCheckpoints: boolean, a
     const on=IncomingMessage.prototype.on;
     IncomingMessage.prototype.on=function(event,...args){
       const result=on.call(this,event,...args), id=this.headers?.['x-author-http-phase'];
-        if(id && event==='end' && (this.url?.includes('/plugins/') || (${telemetryCheckpoints} && (this.url?.includes('/diagnostics') || this.url?.includes('/xr-telemetry') || this.url==='/api/tokens/state')) || (${administrativeCheckpoints} && this.url==='/api/rooms'))){
+        if(id && event==='end' && (this.url?.includes('/plugins/') || (${telemetryCheckpoints} && (this.url?.includes('/diagnostics') || this.url?.includes('/xr-telemetry') || this.url==='/api/tokens/state'
+          || (this.method==='POST' && legacyControlPath.test(this.url??'')))) || (${administrativeCheckpoints} && this.url==='/api/rooms'))){
         notify({event:'phase',phase:'body-admitted',id});
         on.call(this,'end',()=>notify({event:'phase',phase:'body-end',id}));
       }
@@ -145,6 +155,7 @@ function childInstrumentation(indexUrl: string, telemetryCheckpoints: boolean, a
     const pinAckLosses=new WeakMap();
     const admissionScopes=new WeakMap();
     const admissionAckLosses=new WeakMap();
+    const controlAckLosses=new WeakMap();
     pg.Client.prototype.query=async function(sql,...args){
       const text=typeof sql==='string'?sql:sql?.text;
       const values=Array.isArray(args[0])?args[0]:sql?.values;
@@ -177,6 +188,11 @@ function childInstrumentation(indexUrl: string, telemetryCheckpoints: boolean, a
         if(armed?.kind==='admission-ack-loss' && armed.roomId===scope){admissionAckLosses.set(this,armed.id);armed=undefined;}
         await pause('admission-written',scope);
       }
+      // The guarded control reads the same authority row, then runs its one merge UPDATE on that same client.
+      if(scope!==undefined && scope===values?.[1] && /^\\s*update\\s+rooms\\s+set\\s+session_control\\s*=\\s*session_control\\s*[|][|]\\s*[$]3::jsonb\\s+where/i.test(text??'')){
+        if(armed?.kind==='control-ack-loss' && armed.roomId===scope){controlAckLosses.set(this,armed.id);armed=undefined;}
+        await pause('control-written',scope);
+      }
       if(${administrativeCheckpoints} && text?.trimStart().startsWith('insert into rooms (')){
         creations.set(this,values?.[0]);await pause('administrative-insert',values?.[0]);
       }
@@ -197,8 +213,12 @@ function childInstrumentation(indexUrl: string, telemetryCheckpoints: boolean, a
         const id=admissionAckLosses.get(this);admissionAckLosses.delete(this);admissionScopes.delete(this);
         notify({event:'phase',phase:'admission-ack-loss',id});throw new Error('fixture_admission_commit_ack_lost');
       }
+      if(/^commit$/i.test(text??'') && controlAckLosses.has(this)){
+        const id=controlAckLosses.get(this);controlAckLosses.delete(this);admissionScopes.delete(this);
+        notify({event:'phase',phase:'control-ack-loss',id});throw new Error('fixture_control_commit_ack_lost');
+      }
       if(/^(commit|rollback)$/i.test(text??'')) admissionScopes.delete(this);
-      if(/^rollback$/i.test(text??'')){settlements.delete(this);creations.delete(this);ackLosses.delete(this);pinAckLosses.delete(this);admissionAckLosses.delete(this);}
+      if(/^rollback$/i.test(text??'')){settlements.delete(this);creations.delete(this);ackLosses.delete(this);pinAckLosses.delete(this);admissionAckLosses.delete(this);controlAckLosses.delete(this);}
       return result;
     };
     const root=process.env.ROOM_PLUGIN_LOCAL_UPLOAD_ROOT;
@@ -272,6 +292,11 @@ function childInstrumentation(indexUrl: string, telemetryCheckpoints: boolean, a
       const admit=PostgresStorage.prototype.writeLegacyAdmission;
       PostgresStorage.prototype.writeLegacyAdmission=async function(input,...args){
         await pause('admission-write',input?.selector?.roomId);return admit.call(this,input,...args);
+      };
+      // A separate entry hold for the guarded control, matched on its own scope; admission and effect holds are unchanged.
+      const applyControl=PostgresStorage.prototype.applyLegacyRoomControl;
+      PostgresStorage.prototype.applyLegacyRoomControl=async function(input,...args){
+        await pause('legacy-control-entry',input?.scope?.roomId);return applyControl.call(this,input,...args);
       };
       const loadRoom=PostgresStorage.prototype.getRoom;
       PostgresStorage.prototype.getRoom=async function(roomId,...args){
@@ -512,7 +537,8 @@ export async function startAuthorHttpFixture(t: TestContext, floor: 1 | 2 = 2, t
   }
   return { schema, pool, storage, localRoot, base, io, adminHeaders, request, invite, admit, session, room, present, transition,
     upload, bind, files, snapshot, stalled, held, arm, restartApi, phase: (id: string, kind: Phase) => waitMessage("phase", id, kind),
-    resume: () => control("resume"), clock: (offset: number) => control("clock", { offset }), diagnosticPublishedCount,
+    resume: () => control("resume"), resumePhase: (id: string) => control("resume", { phaseId: id }),
+    clock: (offset: number) => control("clock", { offset }), diagnosticPublishedCount,
     stateReplyBuffered: (id: string) => waitMessage("state-reply-buffered", id), flushStateReplies: () => control("flush-state-replies") };
 }
 

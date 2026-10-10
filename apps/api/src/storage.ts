@@ -39,6 +39,7 @@ import type {
   RoomNoteVersionRecord,
   RoomPersonalState,
   RoomRecord,
+  RoomSessionControlState,
   RuntimeDiagnosticRecord,
   SceneBundleUpdateInput,
   Storage,
@@ -58,13 +59,17 @@ import type { RoomIdentityCredential } from "@vrata/shared-types/identity-creden
 import { createMemoryAdmissionBudget, createPostgresAdmissionBudget } from "./identity/admission-budget.js";
 import { assertCurrentEffect, type RoomEffectGuard, type RoomEffectActor } from "./identity/effect-write-guard.js";
 import type { RoomIdentityEffectStorage } from "./storage-contracts.js";
-import type { LegacyAdmissionWriteInput, LegacyAdmissionWriteReceipt, LegacyRoomCredentialSelector, LegacyRoomCredentialSnapshot,
-  LegacyRoomEffectOptions, VirtualRoomEffectOptions, VirtualRoomEffectStorage } from "./storage-contracts.js";
+import type { LegacyAdmissionWriteInput, LegacyAdmissionWriteReceipt, LegacyRoomControlReceipt, LegacyRoomCredentialSelector,
+  LegacyRoomCredentialSnapshot, LegacyRoomEffectOptions, VirtualRoomEffectOptions, VirtualRoomEffectStorage } from "./storage-contracts.js";
 import { captureLegacyCredentialRelease, legacyCredentialSnapshot } from "./identity/legacy-credential-release.js";
 import {
   assertLegacyWriteLeases, captureLegacyAdmissionWrite, decideLegacyWrite, effectiveLegacyLeases, LEGACY_HOST_READY, LEGACY_WRITE_CHANGED,
   legacyHostSeat, legacyPendingReceipt, legacyWritePins, rawLegacyHostSeat, unwrittenLegacyReceipt
 } from "./identity/legacy-admission-mutation.js";
+import {
+  assertLegacyControlLease, captureLegacyRoomControl, reduceLegacyRoomControl, type LegacyRoomControlInput, type LegacyRoomControlOptions
+} from "./identity/legacy-room-control.js";
+import { sanitizeSessionControlState } from "./room-session-control.js";
 import { createRoomEffectFacade } from "./identity/effect-facade.js";
 import { createMemoryTelemetryStage, type MemoryTelemetrySink } from "./identity/memory-telemetry-stage.js";
 import { assertVirtualRoomDeadline, captureVirtualRoomGuard, runVirtualRoomEffect } from "./identity/virtual-effect-facade.js";
@@ -130,6 +135,10 @@ function assertAdministrativeRoomSeed(minimumProtocol: unknown, input: Partial<R
 }
 
 const XR_TELEMETRY_EVENT_LIMIT = 1000;
+const LEGACY_CONTROL_CHANGED: LegacyRoomControlReceipt = Object.freeze({ kind: "changed" } as const);
+/** Sanitized from the column as written; spare raw keys stay in the row, never in the receipt. */
+const appliedLegacyControl = (stored: RoomSessionControlState): LegacyRoomControlReceipt =>
+  Object.freeze({ kind: "applied" as const, state: sanitizeSessionControlState(stored) });
 
 const seedTemplateDefinitions = listTemplateDefinitions();
 const defaultTemplates: TemplateRecord[] = seedTemplateDefinitions.map((definition) => ({
@@ -303,6 +312,29 @@ export class MemoryStorage implements Storage {
       receipt = taken ? LEGACY_WRITE_CHANGED : legacyPendingReceipt(request.requestId, true);
     } else receipt = unwrittenLegacyReceipt(intent, fresh);
     assertLegacyWriteLeases(leases, this.identityNow());
+    publish();
+    return receipt;
+  }
+  async applyLegacyRoomControl(input: LegacyRoomControlInput, options: LegacyRoomControlOptions): Promise<LegacyRoomControlReceipt> {
+    const guard = captureLegacyRoomControl(input, options);
+    // One synchronous turn: scope, floor, the decision on the raw row, the staged merge and the last lease check precede the publish.
+    const room = this.rooms.get(guard.roomId);
+    if (!room || room.tenantId !== guard.tenantId) throw new IdentityStorageError("room_not_found");
+    const floor = this.identityPolicy.current();
+    if (!Number.isSafeInteger(floor) || floor < 1) throw new IdentityBoundaryError(503, "identity_authority_unavailable");
+    if (floor !== 1 || this.identityAdapter.hasRoomBindings(guard.roomId)) throw new IdentityBoundaryError(409, "identity_upgrade_required");
+    const decision = reduceLegacyRoomControl(guard, { tenantId: room.tenantId, roomId: room.roomId, status: room.status ?? null,
+      disabledAt: room.disabledAt, rawControl: structuredClone(room.sessionControl) }, this.identityNow());
+    let publish = () => {};
+    let receipt: LegacyRoomControlReceipt = decision.kind === "apply" ? LEGACY_CONTROL_CHANGED : decision;
+    // The row read is the CAS: a row swapped during the presence sample writes nothing.
+    if (decision.kind === "apply" && this.rooms.get(guard.roomId) === room) {
+      // Only the patch keys over the current raw control; spare keys and every other room field are kept.
+      const sessionControl = structuredClone({ ...room.sessionControl, ...decision.patch });
+      publish = () => { this.rooms.set(guard.roomId, { ...room, sessionControl }); };
+      receipt = appliedLegacyControl(structuredClone(sessionControl));
+    }
+    assertLegacyControlLease(guard, this.identityNow());
     publish();
     return receipt;
   }
@@ -1059,6 +1091,37 @@ export class PostgresStorage implements Storage {
       waiting = await readWaiting();
       return unwrittenLegacyReceipt(decideNow(true).intent, fresh);
     }, () => { assertLegacyWriteLeases(leases, this.identityNow()); return undefined; });
+  }
+  async applyLegacyRoomControl(input: LegacyRoomControlInput, options: LegacyRoomControlOptions): Promise<LegacyRoomControlReceipt> {
+    const guard = captureLegacyRoomControl(input, options);
+    return roomFenceTransaction(this.pool, guard, async (client, checkAlive) => {
+      // Parent before policy, matching schema init. NO KEY UPDATE holds the raw control column until COMMIT.
+      const row = (await client.query(`select tenant_id, room_id, status, disabled_at, session_control
+        from rooms where tenant_id=$1 and room_id=$2 for no key update`, [guard.tenantId, guard.roomId])).rows[0];
+      if (!row) throw new IdentityStorageError("room_not_found");
+      const policy = (await client.query("select minimum_protocol from room_identity_protocol_policy where singleton=true for share")).rows[0];
+      if (!policy || !Number.isSafeInteger(policy.minimum_protocol) || policy.minimum_protocol < 1) {
+        throw new IdentityBoundaryError(503, "identity_authority_unavailable");
+      }
+      const bound = (await client.query("select 1 from room_identity_authority_v2 where tenant_id=$1 and room_id=$2",
+        [guard.tenantId, guard.roomId])).rowCount;
+      if (policy.minimum_protocol !== 1 || bound) throw new IdentityBoundaryError(409, "identity_upgrade_required");
+      const recheck = () => { checkAlive(); assertLegacyControlLease(guard, this.identityNow()); };
+      checkAlive();
+      const at = this.identityNow();
+      assertLegacyControlLease(guard, at);
+      // Raw row as stored: a null or non-object column is drift (changed), never defaults; presence is sampled only in here.
+      const decision = reduceLegacyRoomControl(guard, { tenantId: row.tenant_id, roomId: row.room_id, status: row.status,
+        disabledAt: row.disabled_at, rawControl: row.session_control }, at);
+      if (decision.kind !== "apply") return decision;
+      recheck();
+      // Only the control column, only while it is still the exact object read: drift writes nothing.
+      const updated = await client.query(`update rooms set session_control = session_control || $3::jsonb
+        where tenant_id=$1 and room_id=$2 and jsonb_typeof(session_control)='object' and session_control = $4::jsonb
+        returning session_control`, [guard.tenantId, guard.roomId, JSON.stringify(decision.patch), JSON.stringify(row.session_control)]);
+      recheck();
+      return updated.rowCount === 1 ? appliedLegacyControl(updated.rows[0].session_control) : LEGACY_CONTROL_CHANGED;
+    }, () => { assertLegacyControlLease(guard, this.identityNow()); return undefined; });
   }
   async withRoomIdentityEffect<T>(guard: RoomEffectGuard, effect: (scoped: RoomIdentityEffectStorage, current: RoomEffectActor) => Promise<T>): Promise<T> {
     return roomFenceTransaction(this.pool, {}, async (client, checkAlive) => {
