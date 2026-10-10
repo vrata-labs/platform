@@ -42,7 +42,8 @@ export interface AuthorHttpPackage {
 }
 type Phase = "body-admitted" | "body-end" | "put-written" | "upload-settled" | "private-read" | "plugin-room" | "settlement-timeout"
   | "telemetry-effect" | "telemetry-written" | "telemetry-read" | "telemetry-ack-loss" | "room-read" | "room-loaded"
-  | "administrative-insert" | "administrative-receipt" | "administrative-ack-loss" | "state-token-ack-loss" | "legacy-state-token-ack-loss";
+  | "administrative-insert" | "administrative-receipt" | "administrative-ack-loss" | "state-token-ack-loss" | "legacy-state-token-ack-loss"
+  | "admission-write" | "admission-written" | "admission-ack-loss";
 type Message = { event?: string; phase?: Phase; id?: string; command?: string; kind?: Phase; roomId?: string; offset?: number; operation?: string;
   skip?: number; sqlState?: "55P03"; lockTimeoutMs?: number };
 
@@ -91,6 +92,9 @@ export function assertAuthorHttpPublicDto(value: unknown, forbidden: string[] = 
  * telemetry-ack-loss lets the mapped transaction's real COMMIT run, then drops only its acknowledgement.
  * state-token-ack-loss does the same for the virtual scope that read the armed room's authority row.
  * legacy-state-token-ack-loss does the same for the persisted fence that read it by (tenant, room).
+ * admission-write holds the guarded floor-1 admission write at entry, after its plan and before its transaction.
+ * admission-written holds it after its actual seat UPDATE or pending INSERT returned, its locks still held.
+ * admission-ack-loss lets that write's real COMMIT run on the same client, then drops only its acknowledgement.
  * x-author-hold-state-reply queues only a state-token or session-control reply's end() until flush-state-replies.
  * Held phases resume in FIFO order, so one case may hold several requests.
  * The local reader currently uses FileHandle; readFile is also wrapped for the equivalent buffered path.
@@ -139,6 +143,8 @@ function childInstrumentation(indexUrl: string, telemetryCheckpoints: boolean, a
     const lockTimeouts=new WeakMap();
     const ackLosses=new WeakSet();
     const pinAckLosses=new WeakMap();
+    const admissionScopes=new WeakMap();
+    const admissionAckLosses=new WeakMap();
     pg.Client.prototype.query=async function(sql,...args){
       const text=typeof sql==='string'?sql:sql?.text;
       const values=Array.isArray(args[0])?args[0]:sql?.values;
@@ -163,6 +169,14 @@ function childInstrumentation(indexUrl: string, telemetryCheckpoints: boolean, a
       if(pinned && armed?.kind===pinned[0] && armed.roomId===pinned[1]){
         pinAckLosses.set(this,{phase:pinned[0],id:armed.id});armed=undefined;
       }
+      // The guarded admission write reads the authority row by (tenant, room), then runs its one write on that same client.
+      if(pinned?.[0]==='legacy-state-token-ack-loss') admissionScopes.set(this,values?.[1]);
+      const scope=admissionScopes.get(this);
+      if(scope!==undefined && scope===values?.[1] && (/^\\s*update\\s+rooms\\s+set\\s+session_control\\s*=\\s*session_control\\s*[|][|]\\s*jsonb_build_object[(]\\s*'hostParticipantId'/i.test(text??'')
+        || /^\\s*insert\\s+into\\s+room_waiting_requests\\s*[(][^)]*[)]\\s*values\\s*[(][^)]*[)]\\s*on\\s+conflict\\s*[(]\\s*invite_id\\s*,\\s*participant_id\\s*[)]\\s*do\\s+nothing/i.test(text??''))){
+        if(armed?.kind==='admission-ack-loss' && armed.roomId===scope){admissionAckLosses.set(this,armed.id);armed=undefined;}
+        await pause('admission-written',scope);
+      }
       if(${administrativeCheckpoints} && text?.trimStart().startsWith('insert into rooms (')){
         creations.set(this,values?.[0]);await pause('administrative-insert',values?.[0]);
       }
@@ -179,7 +193,12 @@ function childInstrumentation(indexUrl: string, telemetryCheckpoints: boolean, a
         const {phase,id}=pinAckLosses.get(this);pinAckLosses.delete(this);
         notify({event:'phase',phase,id});throw new Error('fixture_state_token_commit_ack_lost');
       }
-      if(/^rollback$/i.test(text??'')){settlements.delete(this);creations.delete(this);ackLosses.delete(this);pinAckLosses.delete(this);}
+      if(/^commit$/i.test(text??'') && admissionAckLosses.has(this)){
+        const id=admissionAckLosses.get(this);admissionAckLosses.delete(this);admissionScopes.delete(this);
+        notify({event:'phase',phase:'admission-ack-loss',id});throw new Error('fixture_admission_commit_ack_lost');
+      }
+      if(/^(commit|rollback)$/i.test(text??'')) admissionScopes.delete(this);
+      if(/^rollback$/i.test(text??'')){settlements.delete(this);creations.delete(this);ackLosses.delete(this);pinAckLosses.delete(this);admissionAckLosses.delete(this);}
       return result;
     };
     const root=process.env.ROOM_PLUGIN_LOCAL_UPLOAD_ROOT;
@@ -249,6 +268,11 @@ function childInstrumentation(indexUrl: string, telemetryCheckpoints: boolean, a
           await pause('telemetry-effect',typeof scope==='string'?scope:scope?.roomId);return original.call(this,scope,...args);
         };
       }
+      // A separate entry hold: telemetry-effect still pauses only the read-only release after a known admission COMMIT.
+      const admit=PostgresStorage.prototype.writeLegacyAdmission;
+      PostgresStorage.prototype.writeLegacyAdmission=async function(input,...args){
+        await pause('admission-write',input?.selector?.roomId);return admit.call(this,input,...args);
+      };
       const loadRoom=PostgresStorage.prototype.getRoom;
       PostgresStorage.prototype.getRoom=async function(roomId,...args){
         await pause('room-read',roomId);const room=await loadRoom.call(this,roomId,...args);await pause('room-loaded',roomId);return room;

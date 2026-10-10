@@ -58,8 +58,13 @@ import type { RoomIdentityCredential } from "@vrata/shared-types/identity-creden
 import { createMemoryAdmissionBudget, createPostgresAdmissionBudget } from "./identity/admission-budget.js";
 import { assertCurrentEffect, type RoomEffectGuard, type RoomEffectActor } from "./identity/effect-write-guard.js";
 import type { RoomIdentityEffectStorage } from "./storage-contracts.js";
-import type { LegacyRoomCredentialSelector, LegacyRoomCredentialSnapshot, LegacyRoomEffectOptions, VirtualRoomEffectOptions, VirtualRoomEffectStorage } from "./storage-contracts.js";
+import type { LegacyAdmissionWriteInput, LegacyAdmissionWriteReceipt, LegacyRoomCredentialSelector, LegacyRoomCredentialSnapshot,
+  LegacyRoomEffectOptions, VirtualRoomEffectOptions, VirtualRoomEffectStorage } from "./storage-contracts.js";
 import { captureLegacyCredentialRelease, legacyCredentialSnapshot } from "./identity/legacy-credential-release.js";
+import {
+  assertLegacyWriteLeases, captureLegacyAdmissionWrite, decideLegacyWrite, effectiveLegacyLeases, LEGACY_HOST_READY, LEGACY_WRITE_CHANGED,
+  legacyHostSeat, legacyPendingReceipt, legacyWritePins, rawLegacyHostSeat, unwrittenLegacyReceipt
+} from "./identity/legacy-admission-mutation.js";
 import { createRoomEffectFacade } from "./identity/effect-facade.js";
 import { createMemoryTelemetryStage, type MemoryTelemetrySink } from "./identity/memory-telemetry-stage.js";
 import { assertVirtualRoomDeadline, captureVirtualRoomGuard, runVirtualRoomEffect } from "./identity/virtual-effect-facade.js";
@@ -261,6 +266,45 @@ export class MemoryStorage implements Storage {
     const waiting = invite && [...this.waitingRoomRequests.values()]
       .find(item => item.roomId === guard.roomId && item.inviteId === invite.inviteId && item.participantId === guard.participantId);
     send(legacyCredentialSnapshot(structuredClone(room), invite ? structuredClone(invite) : null, waiting ? structuredClone(waiting) : null));
+  }
+  async writeLegacyAdmission(input: LegacyAdmissionWriteInput, options: Pick<LegacyRoomEffectOptions, "lockTimeoutMs" | "idleTimeoutMs">):
+    Promise<LegacyAdmissionWriteReceipt> {
+    const guard = captureLegacyAdmissionWrite(input, options);
+    // One synchronous turn: checks, the decision, the single staged mutation and the last lease check precede the receipt.
+    const room = this.rooms.get(guard.roomId);
+    if (!room || room.tenantId !== guard.tenantId) throw new IdentityStorageError("room_not_found");
+    const floor = this.identityPolicy.current();
+    if (!Number.isSafeInteger(floor) || floor < 1) throw new IdentityBoundaryError(503, "identity_authority_unavailable");
+    if (floor !== 1 || this.identityAdapter.hasRoomBindings(guard.roomId)) throw new IdentityBoundaryError(409, "identity_upgrade_required");
+    const invite = guard.inviteTokenHash === null ? undefined : [...this.roomInvites.values()]
+      .find(item => item.roomId === guard.roomId && item.tokenHash === guard.inviteTokenHash);
+    const waiting = invite && [...this.waitingRoomRequests.values()]
+      .find(item => item.roomId === guard.roomId && item.inviteId === invite.inviteId && item.participantId === guard.participantId);
+    const fresh = () => legacyCredentialSnapshot(structuredClone(room), invite ? structuredClone(invite) : null, waiting ? structuredClone(waiting) : null);
+    const pins = legacyWritePins(rawLegacyHostSeat(room.sessionControl, guard.participantId), invite ?? null, waiting ?? null);
+    const at = this.identityNow();
+    assertLegacyWriteLeases(guard.leases, at);
+    const intent = decideLegacyWrite(guard, fresh(), at, pins, false);
+    const leases = effectiveLegacyLeases(guard, intent, pins);
+    let publish = () => {};
+    let receipt: LegacyAdmissionWriteReceipt;
+    if (intent.kind === "set_host") {
+      // Only the host key; every other raw control key and room field is kept.
+      const next: RoomRecord = { ...room, sessionControl: { ...room.sessionControl, hostParticipantId: guard.participantId } };
+      publish = () => { this.rooms.set(guard.roomId, next); };
+      receipt = LEGACY_HOST_READY;
+    } else if (intent.kind === "insert_pending") {
+      // The natural key spans every room, as SQL unique (invite_id, participant_id) does; an alias is drift.
+      const taken = [...this.waitingRoomRequests.values()].some(item => item.inviteId === intent.inviteId && item.participantId === guard.participantId);
+      const request: WaitingRoomRequestRecord = { requestId: crypto.randomUUID(), roomId: guard.roomId, inviteId: intent.inviteId,
+        participantId: guard.participantId, displayName: guard.displayName!, status: "pending", createdAt: new Date(at).toISOString(),
+        decidedAt: null, decidedBy: null };
+      if (!taken) publish = () => { this.waitingRoomRequests.set(request.requestId, request); };
+      receipt = taken ? LEGACY_WRITE_CHANGED : legacyPendingReceipt(request.requestId, true);
+    } else receipt = unwrittenLegacyReceipt(intent, fresh);
+    assertLegacyWriteLeases(leases, this.identityNow());
+    publish();
+    return receipt;
   }
   async withRoomIdentityEffect<T>(guard: RoomEffectGuard, effect: (scoped: RoomIdentityEffectStorage, current: RoomEffectActor) => Promise<T>): Promise<T> {
     let active = true;
@@ -947,6 +991,74 @@ export class PostgresStorage implements Storage {
       // The release is the final authorized operation: read-only COMMIT follows with no recheck.
       send(legacyCredentialSnapshot(room, invite ? mapRoomInviteRow(invite) : null, waiting ? mapWaitingRoomRequestRow(waiting) : null));
     });
+  }
+  async writeLegacyAdmission(input: LegacyAdmissionWriteInput, options: Pick<LegacyRoomEffectOptions, "lockTimeoutMs" | "idleTimeoutMs">):
+    Promise<LegacyAdmissionWriteReceipt> {
+    const guard = captureLegacyAdmissionWrite(input, options);
+    // The last effective pair, frozen store copies, rechecked on a fresh store instant just before COMMIT.
+    let leases = guard.leases;
+    return roomFenceTransaction(this.pool, guard, async (client, checkAlive) => {
+      // Parent before policy, matching schema init. A host claim holds NO KEY UPDATE so the seat cannot move; a pending
+      // insert never touches the parent, so SHARE suffices. Child FOR SHARE holds revoke/decision autocommit writes until COMMIT.
+      const held = (await client.query(`select jsonb_typeof(session_control) as control_type, session_control->>'hostParticipantId' as host
+        from rooms where tenant_id=$1 and room_id=$2 ${guard.mode === "claim_host" ? "for no key update" : "for share"}`,
+        [guard.tenantId, guard.roomId])).rows[0];
+      if (!held) throw new IdentityStorageError("room_not_found");
+      const policy = (await client.query("select minimum_protocol from room_identity_protocol_policy where singleton=true for share")).rows[0];
+      if (!policy || !Number.isSafeInteger(policy.minimum_protocol) || policy.minimum_protocol < 1) {
+        throw new IdentityBoundaryError(503, "identity_authority_unavailable");
+      }
+      const bound = (await client.query("select 1 from room_identity_authority_v2 where tenant_id=$1 and room_id=$2",
+        [guard.tenantId, guard.roomId])).rowCount;
+      if (policy.minimum_protocol !== 1 || bound) throw new IdentityBoundaryError(409, "identity_upgrade_required");
+      // Every read stays on the borrowed client; this.pool methods would borrow a second connection.
+      const room = await new PostgresStorage(this.pool, this.identityNow, client, false, "legacy").getRoom(guard.roomId);
+      if (!room || room.tenantId !== guard.tenantId) throw new IdentityStorageError("room_not_found");
+      const inviteRow = guard.inviteTokenHash === null ? undefined : (await client.query(`select invite_id, room_id, token_hash, role, protocol_version,
+        waiting_room_enabled, created_at, expires_at, revoked_at, created_by, revoked_by from room_invites
+        where room_id=$1 and token_hash=$2 for share`, [guard.roomId, guard.inviteTokenHash])).rows[0];
+      const invite = inviteRow ? mapRoomInviteRow(inviteRow) : null;
+      const readWaiting = async () => {
+        const row = invite && (await client.query(`select request_id, room_id, invite_id, participant_id,
+          display_name, status, created_at, decided_at, decided_by from room_waiting_requests
+          where room_id=$1 and invite_id=$2 and participant_id=$3 for share`, [guard.roomId, invite.inviteId, guard.participantId])).rows[0];
+        return row ? mapWaitingRoomRequestRow(row) : null;
+      };
+      let waiting = await readWaiting();
+      const seat = legacyHostSeat(held.control_type === "object", held.host, guard.participantId);
+      const fresh = () => legacyCredentialSnapshot(structuredClone(room), invite && structuredClone(invite), waiting && structuredClone(waiting));
+      const recheck = () => { checkAlive(); assertLegacyWriteLeases(leases, this.identityNow()); };
+      const decideNow = (redecided: boolean) => {
+        checkAlive();
+        const at = this.identityNow();
+        assertLegacyWriteLeases(guard.leases, at);
+        const pins = legacyWritePins(seat, invite, waiting);
+        const intent = decideLegacyWrite(guard, fresh(), at, pins, redecided);
+        leases = effectiveLegacyLeases(guard, intent, pins);
+        recheck();
+        return { at, intent };
+      };
+      const first = decideNow(false);
+      if (first.intent.kind === "set_host") {
+        // Only the host key, only while the raw control is an object with no host: drift writes nothing.
+        const seated = await client.query(`update rooms set session_control = session_control || jsonb_build_object('hostParticipantId', $3::text)
+          where tenant_id=$1 and room_id=$2 and jsonb_typeof(session_control)='object' and coalesce(session_control->>'hostParticipantId','')=''`,
+          [guard.tenantId, guard.roomId, guard.participantId]);
+        recheck();
+        return seated.rowCount === 1 ? LEGACY_HOST_READY : LEGACY_WRITE_CHANGED;
+      }
+      if (first.intent.kind !== "insert_pending") return unwrittenLegacyReceipt(first.intent, fresh);
+      // status is fixed pending, never inherited from a DB default
+      const requestId = crypto.randomUUID();
+      const inserted = await client.query(`insert into room_waiting_requests (request_id, room_id, invite_id, participant_id, display_name, status, created_at)
+        values ($1,$2,$3,$4,$5,'pending',$6) on conflict (invite_id, participant_id) do nothing returning request_id`,
+        [requestId, guard.roomId, first.intent.inviteId, guard.participantId, guard.displayName, new Date(first.at).toISOString()]);
+      recheck();
+      if (inserted.rows[0]?.request_id === requestId) return legacyPendingReceipt(requestId, true);
+      // A concurrent request took the natural key: re-read it under SHARE and decide once more, never inserting again.
+      waiting = await readWaiting();
+      return unwrittenLegacyReceipt(decideNow(true).intent, fresh);
+    }, () => { assertLegacyWriteLeases(leases, this.identityNow()); return undefined; });
   }
   async withRoomIdentityEffect<T>(guard: RoomEffectGuard, effect: (scoped: RoomIdentityEffectStorage, current: RoomEffectActor) => Promise<T>): Promise<T> {
     return roomFenceTransaction(this.pool, {}, async (client, checkAlive) => {

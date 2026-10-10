@@ -183,6 +183,9 @@ function syncTemplateForm(): void {
   const personal = state.selectedRoom ? state.selectedRoom.roomType === "personal" : state.selectedTemplate?.defaults?.roomType === "personal";
   const v2PersonalDraft = Boolean(personal && !state.selectedRoom && identityFloor() === 2);
   const unownedPersonal = v2PersonalDraft || Boolean(personal && state.selectedRoom && displayOwnerParticipantId(state.selectedRoom) == null);
+  // Normal selection hydrates saved fields asynchronously; keep edits out of that
+  // window. preserveDraft polls never reset an already initialized generation.
+  const hydrating = Boolean(state.selectedRoom) && !selectedRoomFormReady();
   templateGallery.hidden = Boolean(state.selectedRoom) || !state.templates.some(template => template.defaults);
   templateGallery.disabled = Boolean(state.selectedRoom);
   templateSelect.disabled = Boolean(state.selectedRoom);
@@ -193,11 +196,13 @@ function syncTemplateForm(): void {
   roomOwnerInput.required = Boolean(personal && !state.selectedRoom && !v2PersonalDraft);
   roomOwnerInput.readOnly = Boolean(state.selectedRoom) || v2PersonalDraft;
   roomOwnerInput.placeholder = unownedPersonal ? personalOwnerHandoffHint : "Required for a personal workspace";
-  roomVisibilitySelect.disabled = Boolean(personal);
-  guestAccessInput.disabled = Boolean(personal);
-  sceneBundleSelect.disabled = reference;
-  sceneBundleVersionSelect.disabled = reference;
-  bindSceneBundleButton.disabled = reference || !state.selectedRoom;
+  for (const control of [roomNameInput, assetSelect, primaryColorInput, accentColorInput, featureVoiceInput, featureSpatialInput,
+    featureShareInput, avatarEnabledInput, avatarCatalogUrlInput, avatarQualitySelect, avatarFallbackInput, avatarSeatsInput]) control.disabled = hydrating;
+  roomVisibilitySelect.disabled = Boolean(personal) || hydrating;
+  guestAccessInput.disabled = Boolean(personal) || hydrating;
+  sceneBundleSelect.disabled = reference || hydrating;
+  sceneBundleVersionSelect.disabled = reference || hydrating;
+  bindSceneBundleButton.disabled = reference || !state.selectedRoom || hydrating;
   templateSummary.textContent = state.selectedTemplate ? `${templateDefaultsSummary(state.selectedTemplate)}${state.selectedRoom ? " · saved template binding" : ""}${reference ? " · scene locked to this version" : ""}${v2PersonalDraft ? ` · ${personalOwnerHandoffHint}` : ""}` : "";
   for (const radio of Array.from(templateCards.querySelectorAll<HTMLInputElement>("input[type=radio]"))) radio.checked = radio.value === state.selectedTemplate?.templateId;
 }

@@ -58,7 +58,8 @@ import { finalizeProofBoundToken } from "./identity/effect-fence.js";
 import { IdentityStorageError } from "./identity/contracts.js";
 import { PersonalOwnerRoomBlocked } from "./identity/personal-owner-response.js";
 import type { RoomEffectGuard, RoomEffectActor } from "./identity/effect-write-guard.js";
-import type { Storage, RoomIdentityEffectStorage, VirtualRoomEffectStorage, LegacyRoomCredentialSelector, LegacyRoomCredentialSnapshot } from "./storage-contracts.js";
+import type { Storage, RoomIdentityEffectStorage, VirtualRoomEffectStorage, LegacyRoomCredentialSelector, LegacyRoomCredentialSnapshot,
+  LegacyAdmissionWriteInput, LegacyAdmissionWriteReceipt } from "./storage-contracts.js";
 import { createRoomEffectFacade } from "./identity/effect-facade.js";
 import { identityFenceUnavailable, uncertainRoomCommit } from "./identity/fence-transaction.js";
 import { releaseFencedResponse } from "./identity/response-release.js";
@@ -67,8 +68,12 @@ import { adminCurrentOwnerParticipantId, currentRoomOwner } from "./identity/adm
 import {
   classifyLegacyBearer, confirmLegacyAdmission, evaluateLegacyAdmission, normalizeLegacyParticipant,
   type LegacyAdmissionConfirmation, type LegacyAdmissionContext, type LegacyAdmissionDecision,
-  type LegacyAdmissionRequest, type LegacyAdmissionSnapshot, type LegacyBearerClass
+  type LegacyAdmissionOutcome, type LegacyAdmissionRequest, type LegacyAdmissionSnapshot, type LegacyBearerClass
 } from "./identity/legacy-state-admission.js";
+import {
+  decideLegacyAdmissionWrite, LegacyAdmissionDeadlineExpired, LegacyAdmissionWriteInvariant, planLegacyAdmissionWrite,
+  type LegacyAdmissionWritePlan
+} from "./identity/legacy-admission-write.js";
 
 import { getLivekitCredentials, getMediaTokenConfigError, getLivekitDeploymentDiagnostics } from "./livekit-config.js";
 
@@ -1547,9 +1552,81 @@ function legacySessionControlBody(room: RoomRecord, participantId: string, role:
   };
 }
 
-/** Floor-1 persisted-room state token. Flags, secret and bearer are captured once; the pure
- * evaluator admits on a pool snapshot and the read-only release re-admits on a fresh one.
- * The host claim and a new pending request stay unfenced writes ahead of that release. */
+/** The invite the initial admission selected, if any: the only one a lapse or a refused write is audited under. */
+function legacySelectedInviteId(initial: LegacyAdmissionOutcome): string | undefined {
+  if (initial.kind === "waiting") return initial.inviteId;
+  if (initial.kind !== "admit") return undefined;
+  const { source } = initial.decision;
+  return source.kind === "invite" || source.kind === "waiting_approved" ? source.inviteId : undefined;
+}
+
+/** Captured once per admission for every write-path reply; the invite ID is audit-internal, never echoed. */
+interface LegacyAdmissionReply {
+  readonly request: IncomingMessage;
+  readonly response: ServerResponse;
+  readonly requestId: string;
+  readonly participantId: string;
+  readonly inviteId: string | undefined;
+  readonly proofSubject: boolean;
+}
+
+/** The guarded write input: the exact selector, the plan's two frozen leases and a pure decide that re-runs the plan
+ * decision at the store's own instant under the captured bearer, secret and flags. No role, proof or lease widens. */
+function legacyAdmissionWriteInput(plan: LegacyAdmissionWritePlan, admission: LegacyAdmissionRequest, ctx: LegacyAdmissionContext,
+  selector: LegacyRoomCredentialSelector): LegacyAdmissionWriteInput {
+  return Object.freeze({ selector, mode: plan.mode, deadline: plan.deadline, presentedBearerDeadline: plan.presentedBearerDeadline,
+    displayName: plan.mode === "pending" ? plan.displayName : null,
+    decide: (fresh: LegacyRoomCredentialSnapshot, storeNow: number) =>
+      decideLegacyAdmissionWrite(plan, admission, fresh, Object.freeze({ ...ctx, nowMs: storeNow })) });
+}
+
+/** One guarded floor-1 admission write. A receipt exists only after a known COMMIT ACK; nothing is sent or signed
+ * inside. A lapse, a wiring fault, a missing room and a floor/binding refusal keep their meaning. Anything else, an
+ * unknown ACK or a rejected COMMIT included, is one fixed 503 with no cause and is never retried: a committed claim
+ * or row may remain without a receipt. A fresh request for the same normalized subject reconciles with it, from an
+ * explicit ID or a valid scoped bearer. Only omitting both creates a new subject per request with no reconciliation. */
+async function writeLegacyAdmissionReceipt(storage: Storage, input: LegacyAdmissionWriteInput): Promise<LegacyAdmissionWriteReceipt> {
+  try {
+    return await storage.writeLegacyAdmission(input, {});
+  } catch (error) {
+    if (error instanceof LegacyAdmissionDeadlineExpired || error instanceof LegacyAdmissionWriteInvariant) throw error;
+    if (error instanceof IdentityStorageError && error.code === "room_not_found") throw new RoomEffectNotFound("room_not_found");
+    if (error instanceof IdentityBoundaryError && error.status === 409) throw error;
+    throw new IdentityBoundaryError(503, "identity_authority_unavailable");
+  }
+}
+
+/** A lapsed original lease at planning or at any write moment; nothing was written. A bearer lapse is the codec's
+ * expired_token, an invite lapse the evaluator's invite_expired denial on the initial snapshot. */
+function writeLegacyAdmissionLapse(reply: LegacyAdmissionReply, snapshot: LegacyAdmissionSnapshot, lapse: LegacyAdmissionDeadlineExpired): void {
+  if (lapse.kind === "bearer") return writeSessionTokenError(reply.response, { ok: false, code: "expired_token" });
+  json(reply.response, 403, { error: "room_access_denied", reason: "invite_expired", requestId: reply.requestId });
+  recordLegacyStateDenial(reply.request, snapshot.room, snapshot.invite, reply.participantId, "invite_expired", reply.inviteId, reply.proofSubject);
+}
+
+/** Answers a known-COMMIT receipt; false only for a ready host seat, whose token still comes from the fresh read-only
+ * release. Sinks follow the reply: the pending count only for a pending receipt, a denial only for a refusal. */
+function finishLegacyAdmissionWrite(reply: LegacyAdmissionReply, mode: LegacyAdmissionWritePlan["mode"], receipt: LegacyAdmissionWriteReceipt): boolean {
+  const { request, response, requestId, participantId } = reply;
+  if (receipt.kind === "host_ready") {
+    if (mode !== "claim_host") throw new LegacyAdmissionWriteInvariant("invalid_legacy_admission_plan");
+    return false;
+  }
+  if (receipt.kind === "pending") {
+    if (mode !== "pending") throw new LegacyAdmissionWriteInvariant("invalid_legacy_admission_plan");
+    json(response, 202, { error: "room_access_denied", reason: "waiting_room_pending", accessRequestId: receipt.accessRequestId, requestId });
+    incrementCounter(metrics.roomAccessDeniedTotal, "waiting_room_pending");
+  } else if (receipt.kind === "refused") {
+    json(response, 403, { error: "room_access_denied", reason: receipt.reason, accessRequestId: receipt.accessRequestId, requestId });
+    recordLegacyStateDenial(request, receipt.fresh.room, receipt.fresh.invite, participantId, receipt.reason, reply.inviteId, reply.proofSubject);
+  } else writeRoomStateChanged(response);
+  return true;
+}
+
+/** Floor-1 persisted-room state token. Flags, secret and bearer are captured once; the pure evaluator admits on a pool
+ * snapshot. The deferred host claim and pending request, formerly unfenced writes, are planned from that snapshot before
+ * any wait and written only through the guarded store write; every token still comes from the read-only release after
+ * its COMMIT, which re-admits on a fresh snapshot. Frame, media, bootstrap and retirement are unchanged here. */
 async function admitLegacyStateToken(request: IncomingMessage, response: ServerResponse, storage: Storage, room: RoomRecord,
   claims: LegacyStateTokenClaims, requested: { role: RoomRole; roleSource: RoomSessionRoleSource }, ttlSeconds: number,
   requestId: string): Promise<void> {
@@ -1571,19 +1648,25 @@ async function admitLegacyStateToken(request: IncomingMessage, response: ServerR
     recordLegacyStateDenial(request, room, snapshot.invite, participantId, initial.reason, initial.inviteId, proofSubject);
     return json(response, 403, { error: "room_access_denied", reason: initial.reason, accessRequestId: initial.accessRequestId, requestId });
   }
-  if (initial.kind === "waiting") {
-    // Deferred unfenced write; a pending request carries no credential.
-    const accessRequestId = initial.requestId ?? (await storage.createWaitingRoomRequest({
-      roomId: room.roomId, inviteId: initial.inviteId, participantId, displayName })).requestId;
-    incrementCounter(metrics.roomAccessDeniedTotal, "waiting_room_pending");
-    return json(response, 202, { error: "room_access_denied", reason: "waiting_room_pending", accessRequestId, requestId });
+  const selector: LegacyRoomCredentialSelector = Object.freeze({ tenantId: room.tenantId, roomId: room.roomId, participantId,
+    inviteTokenHash: admission.inviteTokenHash });
+  const reply: LegacyAdmissionReply = Object.freeze({ request, response, requestId, participantId,
+    inviteId: legacySelectedInviteId(initial), proofSubject });
+  let plan: LegacyAdmissionWritePlan | null = null;
+  let receipt: LegacyAdmissionWriteReceipt | null = null;
+  try {
+    // Copied and frozen from the pool snapshot before any wait. Null writes nothing: a non-host or already seated
+    // admission, including this subject's own seat after a lost ACK, which the release below re-admits.
+    plan = planLegacyAdmissionWrite(initial, admission, snapshot, ctx);
+    if (plan) receipt = await writeLegacyAdmissionReceipt(storage, legacyAdmissionWriteInput(plan, admission, ctx, selector));
+  } catch (error) {
+    if (!(error instanceof LegacyAdmissionDeadlineExpired)) throw error;
+    return writeLegacyAdmissionLapse(reply, snapshot, error);
   }
+  if (plan && receipt && finishLegacyAdmissionWrite(reply, plan.mode, receipt)) return;
+  // A pending plan always finishes above; only an admission reaches the release.
+  if (initial.kind !== "admit") throw new LegacyAdmissionWriteInvariant("invalid_legacy_admission_plan");
   const { decision } = initial;
-  const control = defaultSessionControlState(room.sessionControl);
-  if (decision.role === "host" && decision.roleSource === "trusted" && !control.hostParticipantId) {
-    // Deferred unfenced claim; the release below still re-admits on a fresh snapshot.
-    await updateRoomSessionControl(storage, room, { ...control, hostParticipantId: participantId });
-  }
   // Prepared from the frozen binding through the shared cache outside the fence; confirmation rejects any binding drift.
   const prepared = decision.binding.contentHash === null ? await legacySceneMediaSurfaces.resolve(decision.binding.sceneBundleUrl,
     `http://127.0.0.1:${request.socket.localPort ?? process.env.API_PORT ?? "4000"}`) : undefined;
@@ -1591,8 +1674,7 @@ async function admitLegacyStateToken(request: IncomingMessage, response: ServerR
   // A cold admission keeps the no-surface fallback; a bearer renewal never signs over an unproven manifest.
   const unavailable = prepared?.kind === "failed" && decision.source.kind === "bearer";
   let verdict = undefined as { confirmation: LegacyAdmissionConfirmation; fresh: LegacyRoomCredentialSnapshot } | undefined;
-  await releaseLegacyStateToken(storage, { tenantId: room.tenantId, roomId: room.roomId, participantId,
-    inviteTokenHash: admission.inviteTokenHash }, fresh => {
+  await releaseLegacyStateToken(storage, selector, fresh => {
     const finalCtx: LegacyAdmissionContext = Object.freeze({ ...ctx, nowMs: Date.now() });
     const confirmation = confirmLegacyAdmission(decision, admission, fresh, finalCtx);
     // Only after a confirmed admission: no token and no sinks; the caller keeps its credential and retries.

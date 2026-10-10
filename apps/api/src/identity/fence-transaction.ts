@@ -46,7 +46,7 @@ function duration(value: number | undefined, fallback: number): string {
 }
 
 export async function roomFenceTransaction<T>(pool: Pool, options: LegacyRoomEffectOptions,
-  effect: (client: PoolClient, checkAlive: () => void) => Promise<T>): Promise<T> {
+  effect: (client: PoolClient, checkAlive: () => void) => Promise<T>, beforeCommit?: () => undefined): Promise<T> {
   const lock = duration(options.lockTimeoutMs, 5000);
   const idle = duration(options.idleTimeoutMs, 10_000);
   let client: PoolClient;
@@ -66,6 +66,8 @@ export async function roomFenceTransaction<T>(pool: Pool, options: LegacyRoomEff
     });
     active = false;
     if (failedConnection) throw failedConnection;
+    // Synchronous last guard after the effect settled: a throw is a definite rollback, never an uncertain commit.
+    if (beforeCommit?.() !== undefined) throw new Error("room_fence_hook_not_synchronous");
     committing = true;
     await client.query("commit");
     return result;

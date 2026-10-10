@@ -94,8 +94,8 @@ function persisted(h: Fixture) {
       return Number(found[0].slice(name.length + 1));
     });
   }
-  /** Holds each request at the release entry (after its initial snapshot and surface load, before the parent
-   * fence) in FIFO order. Cleanup always resets the clock and resumes every hold. */
+  /** Holds each request at the release entry (after its initial snapshot, any known-commit admission write and its
+   * surface load, before the parent fence) in FIFO order. Cleanup always resets the clock and resumes every hold. */
   async function held(roomId: string, requests: Send[], change: () => Promise<unknown>): Promise<AuthorHttpResponse[]> {
     const pending: Promise<AuthorHttpResponse>[] = [];
     try {
@@ -406,7 +406,7 @@ test("persisted floor-1 state tokens are admitted, fenced and freshly signed ove
       } finally { release(); await h.clock(0); manifest.closeAllConnections(); manifest.close(); }
     });
 
-    await c.test("an early host claim stays an open write, but its release still meets the final fence", async () => {
+    await c.test("known-commit Host claim remains authorized while fresh final token release can deny", async () => {
       const roomId = await p.createRoom("public");
       const inviteToken = await hostInvite(roomId);
       const [response] = await p.held(roomId, [() => p.post({ roomId, inviteToken })], () => p.admin(`${p.stem(roomId)}/session-control/end`));

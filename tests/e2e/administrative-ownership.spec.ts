@@ -36,6 +36,22 @@ async function refreshApplied(page: Page): Promise<string | null> {
     return await page.locator("#invite-link").getAttribute("href");
   } finally { await page.unroute("**/api/rooms/*/manifest", handler); }
 }
+
+/** Holds only the next GET of one room item; later reads and polls pass through. */
+async function holdNextRoomRead(page: Page, url: string) {
+  let held!: () => void, release!: () => void, stopped = false;
+  const entered = new Promise<void>(resolve => { held = resolve; }), gate = new Promise<void>(resolve => { release = resolve; });
+  await page.route(url, async route => {
+    if (route.request().method() !== "GET" || stopped) return route.continue();
+    stopped = true; const response = await route.fetch(); held(); await gate; await route.fulfill({ response });
+  });
+  return { entered, release };
+}
+
+async function expectRoomDraftLocked(page: Page) {
+  for (const selector of ["#room-name-input", "#primary-color-input", "#accent-color-input", "#feature-voice-input", "#asset-select",
+    "#scene-bundle-select", "#avatar-enabled-input", "#avatar-quality-select", "#update-room", "#bind-scene-bundle"]) await expect(page.locator(selector)).toBeDisabled();
+}
 for (const floor of [1, 2] as const) test(`administrative personal-room form obeys protocol floor ${floor} without granting identity by ID`, async ({ page }) => {
   let fixture: Fixture | undefined;
   try {
@@ -428,13 +444,16 @@ test("a poll overtaking normal room selection cannot leave the previous room's e
     });
     await page.locator("#rooms-list button").filter({ hasText: "Second room form data" }).click(); await entered;
     await expect(page.locator("#update-room")).toBeDisabled();
+    await expect(page.locator("#room-name-input")).toBeDisabled();
     await expect.poll(() => page.locator("#room-detail").evaluate((el, expected) => {
       try { const value = JSON.parse(el.textContent ?? "{}"); return value.room?.roomId === expected.slug && value.manifest?.refreshAppliedMarker === expected.marker; } catch { return false; }
     }, { slug: slugB, marker }), { timeout: 15000 }).toBe(true);
     await expect(page.locator("#update-room")).toBeDisabled();
+    await expect(page.locator("#room-name-input")).toBeDisabled();
     release(); await expect(page.locator("#room-slug-input")).toHaveValue(slugB);
     await expect(page.locator("#room-name-input")).toHaveValue("Second room form data");
     await expect(page.locator("#update-room")).toBeEnabled();
+    await expect(page.locator("#room-name-input")).toBeEnabled();
     const patched = page.waitForResponse(response => response.request().method() === "PATCH" && response.url() === `${h.base}/api/rooms/${slugB}`);
     await page.locator("#update-room").click();
     const update = await patched; expect(update.status()).toBe(200);
@@ -442,4 +461,45 @@ test("a poll overtaking normal room selection cannot leave the previous room's e
     expect((await h.storage.getRoom(slugB))?.name).toBe("Second room form data");
     expect((await h.storage.getRoom(slugA))?.name).toBe("Owned administrative workspace");
   } finally { release?.(); await closeFixture(page, fixture); }
+});
+
+test("an edit started before created or reselected room fields hydrate is applied after them and persisted by Update", async ({ page }) => {
+  let fixture: Fixture | undefined; const releases: Array<() => void> = [];
+  try {
+    const h = await startIsolatedAuthorApi(2); fixture = h; await h.storage.transitionReferenceTemplateCatalog("active");
+    const slug = await openDraft(page, h), roomUrl = `${h.base}/api/rooms/${slug}`, name = page.locator("#room-name-input");
+    // No room is selected in the draft, so polls cannot claim the held read before creation selects the room.
+    const created = await holdNextRoomRead(page, roomUrl); releases.push(created.release);
+    const posted = page.waitForResponse(response => response.request().method() === "POST" && new URL(response.url()).pathname === "/api/rooms");
+    await page.locator("#create-room").click(); expect((await posted).status()).toBe(201); await created.entered;
+    await expect(page.locator("#publish-status")).toHaveText("published"); await expectRoomDraftLocked(page);
+    let renamed = false; const rename = name.fill("Updated owned workspace").then(() => { renamed = true; });
+    await expect(name).toBeDisabled(); expect(renamed).toBe(false);
+    created.release(); await rename;
+    await expect(page.locator("#publish-status")).toContainText("published-member-invite-created");
+    await expect(name).toHaveValue("Updated owned workspace");
+    await page.locator("#primary-color-input").fill("#22aa88");
+    const patched = page.waitForResponse(response => response.request().method() === "PATCH" && response.url() === roomUrl);
+    await page.locator("#update-room").click();
+    const update = await patched; expect(update.status()).toBe(200);
+    const updated = await update.json(); expect(updated.name).toBe("Updated owned workspace"); expect(updated.theme.primaryColor).toBe("#22aa88");
+    const stored = await h.storage.getRoom(slug); expect(stored?.name).toBe("Updated owned workspace"); expect(stored?.theme?.primaryColor).toBe("#22aa88");
+    await expect(page.locator("#publish-status")).toContainText("updated"); await expect(page.locator("#update-room")).toBeEnabled();
+    await page.locator("#new-room").click();
+    await expect(name).toBeEnabled(); await expect(page.locator("#primary-color-input")).toBeEnabled();
+    const reselected = await holdNextRoomRead(page, roomUrl); releases.push(reselected.release);
+    await page.locator("#rooms-list button").filter({ hasText: "Updated owned workspace" }).click(); await reselected.entered;
+    await expectRoomDraftLocked(page);
+    let edited = false; const edit = name.fill("Reselected workspace name").then(() => { edited = true; });
+    await expect(name).toBeDisabled(); expect(edited).toBe(false);
+    reselected.release(); await edit;
+    await expect(page.locator("#room-slug-input")).toHaveValue(slug); await expect(name).toHaveValue("Reselected workspace name");
+    await page.locator("#accent-color-input").fill("#132a46");
+    const repatched = page.waitForResponse(response => response.request().method() === "PATCH" && response.url() === roomUrl);
+    await page.locator("#update-room").click();
+    const reupdate = await repatched; expect(reupdate.status()).toBe(200);
+    const body = await reupdate.json(); expect(body.name).toBe("Reselected workspace name");
+    expect(body.theme.accentColor).toBe("#132a46"); expect(body.theme.primaryColor).toBe("#22aa88");
+    expect((await h.storage.getRoom(slug))?.name).toBe("Reselected workspace name");
+  } finally { releases.forEach(release => release()); await closeFixture(page, fixture); }
 });

@@ -288,6 +288,10 @@ export interface Storage {
    * through COMMIT. `send` runs exactly once, synchronously, after all checks; no DB/network callback. */
   releaseLegacyRoomCredential(selector: LegacyRoomCredentialSelector, options: Pick<LegacyRoomEffectOptions, "lockTimeoutMs" | "idleTimeoutMs">,
     send: (fresh: LegacyRoomCredentialSnapshot) => undefined): Promise<void>;
+  /** Floor-1 deferred admission write, floor 1 and unbound: parent, policy, then child rows held through COMMIT; one CAS
+   * host seat or one pending insert, both leases rechecked before decide, before and after SQL, and before COMMIT. */
+  writeLegacyAdmission(input: LegacyAdmissionWriteInput, options: Pick<LegacyRoomEffectOptions, "lockTimeoutMs" | "idleTimeoutMs">):
+    Promise<LegacyAdmissionWriteReceipt>;
   withRoomIdentityEffect<T>(guard: import("./identity/effect-write-guard.js").RoomEffectGuard,
     effect: (scoped: RoomIdentityEffectStorage, current: import("./identity/effect-write-guard.js").RoomEffectActor) => Promise<T>): Promise<T>;
   withLegacyRoomEffect<T>(scope: { tenantId: string; roomId: string }, options: LegacyRoomEffectOptions,
@@ -384,6 +388,24 @@ export interface LegacyRoomCredentialSnapshot {
   readonly invite: Readonly<RoomInviteRecord> | null;
   readonly waiting: Readonly<WaitingRoomRequestRecord> | null;
 }
+/** `decide` is the trusted pure, synchronous re-evaluation over fresh clones at the store's instant. The store derives
+ * every identifier itself (selector subject, pinned invite and row, its own UUID) and validates the answer. */
+export interface LegacyAdmissionWriteInput {
+  readonly selector: LegacyRoomCredentialSelector;
+  readonly mode: "claim_host" | "pending";
+  readonly deadline: import("./identity/legacy-admission-write.js").LegacyAdmissionDeadline | null;
+  /** The presented MAC's own signed expiry; kind bearer only. */
+  readonly presentedBearerDeadline: import("./identity/legacy-admission-write.js").LegacyAdmissionDeadline | null;
+  /** Required for a pending write; never read for a host claim. */
+  readonly displayName: string | null;
+  readonly decide: (fresh: LegacyRoomCredentialSnapshot, atMs: number) => import("./identity/legacy-admission-write.js").LegacyAdmissionWriteDecision;
+}
+/** Returned only after a known COMMIT; nothing is sent or signed inside the transaction. */
+export type LegacyAdmissionWriteReceipt =
+  | { readonly kind: "host_ready" }
+  | { readonly kind: "pending"; readonly accessRequestId: string; readonly created: boolean }
+  | { readonly kind: "refused"; readonly status: 403; readonly reason: string; readonly accessRequestId?: string; readonly fresh: LegacyRoomCredentialSnapshot }
+  | { readonly kind: "changed" };
 /** Read mode admits at most one release; write mode admits telemetry only;
  * pinAbsence requires exactly one release and excludes writes. */
 export type VirtualRoomEffectStorage = Pick<RoomEffectDatabase, "addDiagnostic" | "addXrTelemetry"> & { releaseResponse(send: () => void): void };

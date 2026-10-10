@@ -734,6 +734,26 @@ CI/Docker завершились с первой попытки на опубл�
 
 Собственный temporary PostgreSQL fixture удалён после подтверждения ID/labels; локальные E2E services завершены. Соседние процессы/контейнеры и staging инфраструктура не изменялись.
 
+### T01a-S2b-AB: guarded legacy admission writes
+
+Пользователь поручил продолжить план без staging; HEAD56bfb2c был опубликован, дерево чистым. Закрываются оставшиеся writes на пути legacy state-token: условный Host claim и canonical pending waiting request, включая fresh проверку существующего pending202. Никаких новых staging/floor2 действий.
+
+Initial plan копирует request/subject/source/binding и два original lease до pool wait: source MAC/invite expiry плюс expiry предъявленного genuine MAC, который может отвечать только за subject continuity рядом с независимым invite. Fresh expiry может сузить, не расширить original lease. Pure intent возвращается синхронно на fresh snapshot и store clock; identifiers/новыйHost/store UUID выводит storage, не callback. Memory стадирует одну запись и проверяет clock до publish; PG parent (Host NO KEY UPDATE / pending SHARE) → policy SHARE → invite/waiting SHARE, всё на одном client.
+
+Host UPDATE меняет только hostParticipantId при vacancy, не заменяет sessionControl и другие room поля. Same-subject seat и pending natural key idempotent; different Hostwinner, approved race и source/binding drift конфликтны. Pending INSERT fixed status=pending, ON CONFLICT DO NOTHING + один reselect/redecide; decided rows/display name не сбрасываются. Optional synchronous beforeCommit hook проверяет lease после await effect и перед COMMIT dispatch; остальные transaction callers сохраняют defaults. Expiry за SQL или в microtask-gap откатывает write без receipt.
+
+Pending202/Hostready receipt/counters приходят только после known ACK, token всегда после отдельного fresh read-only release. Unknown ACK/actual rejected COMMIT дают fixed503 без token/accessRequestId/driver detail. Same-subject fresh retry сверяет authority/expiry/revoke и находит свой canonical результат без повторной записи; blind retry/публикации по предположению нет. Anonymous запрос без ID/proof генерирует новуюidentity perrequest, поэтому такие неизвестные операции не коррелируются.
+
+Focused pure/store/transaction — **83/83**, native HTTP + persisted/virtual issuer regressions — **53/53**. Реальные PG блокировки, concurrent claims/natural-key race, late SQL expiry и hook-only gap, actual rejected COMMIT/committed lost ACK/reconciliation проверены на owned schemas. HTTP подтвердил no success sinks доACK и отсутствие write послеcutover/revoke/lifecycle drift; previous known-commit claim остаётся authorized, когда later read-only token release отказывает. Финальные workspace/full E2E и GitHub CI/Docker результаты добавляются после проверки и публикации.
+
+Shared floor2 не активирован. Frame/media source grants, bootstrap reconciliation и durable retirement остаются следующими gates; v1 same-ID legacy-token compatibility не объявляется полностью закрытой.
+
+Первый full local E2E — **174 passed / 1 failed / 11 not run**: снова Update control-plane отправил старые editable значения. Причина подтверждена отдельным controlled regression до source fix: room-name был enabled при held GET hydration. Исправлены все редактируемые room fields на главном пути: пока выбранная room generation не инициализирована, поля иUpdate/Bind неактивны; draft доступен, preserveDraft polls не блокируют готовую форму. Этот regression, overtaking selection и старый runtime Update-test после fix — **3/3**. Исходные assertions/таймауты runtime.spec не менялись. Source изменён после первого full, final workspace/full E2E выполняются заново.
+
+У adjacent legacy control writers подтверждена предсуществующая гонка: admin lock/unlock/end и другие full-sessionControl writers могут после ожидания вернуть stale snapshot и стереть committed Hostclaim. New admission CAS не вводит эту гонку и не обещает защищать каждый будущий writer. Atomic legacy control mutation — явный следующий gate до full activation; текущий diff не меняет эти соседние endpoints.
+
+Финальные workspace lint/typecheck/build/test прошли: API **1457 passed / 1 optional live-MinIO skipped**, runtime **1094/1094**, control-plane **13/13**, templates **20/20**, tools **256 passed / 2 optional skipped**; остальные packages без fail. Full local E2E — **187/187**, без retry/skip (**33,0 минуты**), включая новый controlled hydration regression и прежний Update-test. После full исполняемый код не менялся; комментарий о reconciliation уточнён для обоих stable-subject вариантов (explicit ID или valid scoped bearer), runtime-contract не изменён. CI/Docker acceptance добавляется после публикации; staging deploy/verification исключён по поручению пользователя.
+
 ## Публикация первого среза T01/T12
 
 Локально прошли workspace lint/typecheck/build/tests с PostgreSQL, затем runtime build и 905 runtime tests после финальных правок. Полный `pnpm test:e2e` на финальном исполняемом дереве: **148 passed**, без skip (41.6 min).

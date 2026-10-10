@@ -79,3 +79,17 @@ test("all pool acquisition failures are typed unavailable before any mutation st
   assert.equal(mutated, false);
   assert.equal(identityFenceUnavailable(new Error("room_template_binding_changed")), false);
 });
+
+test("a beforeCommit throw runs after the effect and is a definite rollback, never an uncertain COMMIT", async () => {
+  const f = fakePool(new Error("unused"), false);
+  const order: string[] = [];
+  const lapsed = new Error("lapsed");
+  await assert.rejects(roomFenceTransaction(f.pool, {}, async () => { order.push("effect"); }, () => { order.push("hook"); throw lapsed; }),
+    error => error === lapsed && !uncertainRoomCommit(error));
+  assert.deepEqual(order, ["effect", "hook"]);
+  assert.equal(f.commands.includes("commit"), false);
+  assert.ok(f.commands.includes("rollback"));
+  const ok = fakePool(new Error("unused"), false);
+  assert.equal(await roomFenceTransaction(ok.pool, {}, async () => "value", () => undefined), "value");
+  assert.equal(ok.commands.at(-1), "commit");
+});

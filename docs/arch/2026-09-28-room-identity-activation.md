@@ -359,7 +359,7 @@ upload metric. A possibly committed row must never point at a compensatingly
 deleted file. An unreferenced retained object needs later reconciliation; this
 does not add a background orphan collector or automatic retry/idempotency.
 
-Before activation, remaining gates are legacy admission-side-effect mutations,
+Before activation, remaining gates are downstream credential/source grants,
 frame credentials/TTL, bootstrap reconciliation/retirement and the other media obligations
 above. Administrative legacy owner evidence is fenced by the creation contract
 below; the whole cutover is still not ready.
@@ -592,7 +592,7 @@ retains DB/virtual diagnostics. A cached v2 session whose room disappears receiv
 the existing fail-closed refusal rather than a v1 fallback.
 
 This data-effect boundary is complemented by the virtual state-token release below.
-Legacy admission-side-effect mutations, downstream frame/media credentials, bootstrap reconciliation
+Downstream frame/media credentials, bootstrap reconciliation
 and retirement remain gates. Diagnostic/XR rows written before a room is created,
 or retained after deletion, still use the same database room ID; later authorized
 admin/Host readers can observe them. Durable row cleanup/namespace retirement is
@@ -633,10 +633,10 @@ destroys the queued reply nor increments request failures. Pre-send/sign/send er
 still propagate normally. No arbitrary driver message, cause or credential is logged
 by this completion path, and database resource cleanup still finishes normally.
 
-This closes in-flight virtual mint/release races. Persisted issuance/renewal now uses
-the read-only snapshot boundary below; Host-claim and new pending-waiting writes
-remain a separate gate, along with frame/media, bootstrap reconciliation and durable
-retirement. The shared floor 2 is not activated.
+This closes in-flight virtual mint/release races. Persisted issuance/renewal uses
+the read-only snapshot boundary below, and its admission writes use the guarded
+commit boundary that follows. Frame/media, bootstrap reconciliation and durable
+retirement remain gates. The shared floor 2 is not activated.
 
 ### Persisted legacy state-token sign and renewal
 
@@ -699,13 +699,67 @@ failure without destroying the queued reply or counting a failed request. Errors
 before/during send still propagate. Allowed invite audit and personal opens are
 counted after the actual release; no raw bearer, invite or driver cause is emitted.
 
-The Host claim and creation of a new pending waiting request are still earlier
-legacy mutations outside this read-only boundary. They require a conditional,
-policy-guarded commit and uncertain-ACK reconciliation in the next gate; a rejected
-token can leave its earlier Host claim persisted. Existing trusted proofs across
-same-ID room recreation, invite revocation of already-issued tokens and a virtual
-token's public-room lock bypass remain legacy-compatibility gaps. This release does
-not activate shared floor 2 or complete frame/media/bootstrap/retirement work.
+The Host claim and pending waiting request now commit through the guarded write
+below before any receipt or read-only credential release. A token denied after a
+successful claim COMMIT may still leave the earlier authorized claim persisted.
+Existing trusted proofs across same-ID room recreation, invite revocation of
+already-issued tokens and a virtual token's public-room lock bypass remain
+legacy-compatibility gaps. Shared floor 2 and frame/media/bootstrap/retirement work
+are not completed by these floor-1 compatibility boundaries.
+
+### Guarded legacy admission mutations
+
+`writeLegacyAdmission` handles only a conditional first Host claim or a canonical
+pending waiting row. The initial pure plan freezes request/subject, source/binding,
+mode and the source's original expiry before pool waits. A separately MAC-verified
+presented bearer contributes only its own expiry, even if its scope/role does not
+authorize the selected invite. No unchecked bearer field supplies identity or role.
+Fresh invite expiry may shorten that pair, never extend it.
+
+PostgreSQL takes the parent first: FOR NO KEY UPDATE for a Host claim, FOR SHARE
+for pending; then policy FOR SHARE, invite FOR SHARE and waiting FOR SHARE on one
+client. Memory checks, decides and publishes one staged map mutation synchronously.
+The callback receives fresh clones and the store's instant, returns a closed pure
+intent, and cannot supply a new Host or waiting ID. Promise/unknown/wrong-mode
+answers reject before a write. Source, role, lifecycle, binding or approval drift
+gets the existing refusal, never a hidden grant or reset of a decided request.
+
+Host SQL updates only `hostParticipantId` if missing, null or empty; it never copies
+a stale full `sessionControl`. Every other control key and room column is preserved.
+The same subject's already-held seat is idempotent; another winner is a conflict.
+Pending INSERT fixes status to `pending`, uses the natural `(inviteId, participantId)`
+key and `ON CONFLICT DO NOTHING`, then reselects/re-decides once if necessary.
+Existing display name, status and decision metadata are never overwritten. Existing
+pending202 replies also take the fresh guard instead of returning a cached request ID.
+
+Both immutable leases are checked before decision/SQL and after SQL. An optional
+synchronous `roomFenceTransaction` before-COMMIT hook checks them once more after
+the effect's await boundary and immediately before dispatching COMMIT. Its default
+is absent for all older callers. A lapse throws before COMMIT and rolls back the
+write; the COMMIT round trip may finish after its already-authorized dispatch.
+There is no new check after an acknowledged COMMIT that retroactively denies a receipt.
+
+Only a known COMMIT ACK yields pending202 or a ready-Host receipt. Every credential
+still requires the independent fresh read-only release afterwards. Unknown ACK,
+connection/fence failure or actual rejected COMMIT gives a fixed503 without token,
+pending ID, successful receipt or raw driver cause. No blind write retry or guessed
+successful publication occurs. A fresh authenticated retry with the same normalized
+subject reconciles to its own existing Host seat or canonical pending row; expiry,
+revoke or new authority still refuses it. A wholly anonymous retry omitting both
+subject and bearer generates a new subject and cannot reconcile the earlier write.
+
+Known authorized writes can remain when a subsequent floor increase refuses token
+release. Successful receipts, audits and pending counters follow their own ACK,
+not the initial permission check. No v2 identity or authority binding is introduced
+by this floor-1 path; downstream source grants, bootstrap and retirement remain gates.
+
+An adjacent pre-existing writer remains a separate obligation: legacy administrative
+lock/unlock/end and other control actions can still replace the whole `sessionControl`
+from a stale read. A lock that read an empty Host before this transaction can wait
+for its COMMIT and erase that newly assigned Host afterwards. Admission's minimal
+CAS prevents its own overwrite, not every later control writer. Those legacy control
+mutations require atomic field updates or fresh recomputation under a parent lock
+before full activation; this gate does not claim they were changed.
 
 ## Runtime adoption
 
