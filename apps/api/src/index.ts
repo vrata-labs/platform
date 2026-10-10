@@ -58,12 +58,17 @@ import { finalizeProofBoundToken } from "./identity/effect-fence.js";
 import { IdentityStorageError } from "./identity/contracts.js";
 import { PersonalOwnerRoomBlocked } from "./identity/personal-owner-response.js";
 import type { RoomEffectGuard, RoomEffectActor } from "./identity/effect-write-guard.js";
-import type { Storage, RoomIdentityEffectStorage, VirtualRoomEffectStorage } from "./storage-contracts.js";
+import type { Storage, RoomIdentityEffectStorage, VirtualRoomEffectStorage, LegacyRoomCredentialSelector, LegacyRoomCredentialSnapshot } from "./storage-contracts.js";
 import { createRoomEffectFacade } from "./identity/effect-facade.js";
 import { identityFenceUnavailable, uncertainRoomCommit } from "./identity/fence-transaction.js";
 import { releaseFencedResponse } from "./identity/response-release.js";
 import { identityAdmissionOriginHash as hashAdmissionOrigin } from "./identity/admission-origin.js";
 import { adminCurrentOwnerParticipantId, currentRoomOwner } from "./identity/admin-room-projection.js";
+import {
+  classifyLegacyBearer, confirmLegacyAdmission, evaluateLegacyAdmission, normalizeLegacyParticipant,
+  type LegacyAdmissionConfirmation, type LegacyAdmissionContext, type LegacyAdmissionDecision,
+  type LegacyAdmissionRequest, type LegacyAdmissionSnapshot, type LegacyBearerClass
+} from "./identity/legacy-state-admission.js";
 
 import { getLivekitCredentials, getMediaTokenConfigError, getLivekitDeploymentDiagnostics } from "./livekit-config.js";
 
@@ -114,6 +119,7 @@ import {
 import { defaultManifest } from "./default-room-manifest.js";
 import { createRoomManifestBuilder } from "./room-manifest.js";
 import { loadSceneMediaSurfaces } from "./scene-media-surfaces.js";
+import { legacySceneMediaSurfaces } from "./legacy-scene-media-surfaces.js";
 import { normalizeRoomAvatarOverrides } from "./room-input.js";
 import { assertRoomTemplatePatch, listRoomTemplateMetadata, resolveRoomTemplateCreate, roomTemplateSessionContext, templateInputError } from "./room-template-policy.js";
 
@@ -128,7 +134,6 @@ import {
 
 import {
   isPersonalRoom,
-  isPersonalRoomOwner,
   normalizeDisplayName,
   personalRoomName,
   normalizePersonalState
@@ -325,7 +330,11 @@ function createInviteToken(): string {
 }
 
 function hashInviteToken(token: string, env: NodeJS.ProcessEnv = process.env): string {
-  return createHmac("sha256", getStateTokenSecret(env)).update(token).digest("base64url");
+  return hashInviteTokenWithSecret(token, getStateTokenSecret(env));
+}
+
+function hashInviteTokenWithSecret(token: string, secret: string): string {
+  return createHmac("sha256", secret).update(token).digest("base64url");
 }
 
 const controlPlanePermissions: ControlPlanePermission[] = [
@@ -966,6 +975,25 @@ async function releaseVirtualStateToken(storage: Storage, roomId: string, send: 
   }
 }
 
+/** Every persisted-room floor-1 credential reply: one read-only fenced snapshot, one synchronous
+ * send. As with virtual issuance, a COMMIT or connection failure after a successful send cannot
+ * revoke the released reply: count it and let the queued reply finish. Anything before or during
+ * send keeps its mapped error. */
+async function releaseLegacyStateToken(storage: Storage, selector: LegacyRoomCredentialSelector,
+  send: (fresh: LegacyRoomCredentialSnapshot) => undefined): Promise<void> {
+  const captured: LegacyRoomCredentialSelector = Object.freeze({ tenantId: selector.tenantId, roomId: selector.roomId,
+    participantId: selector.participantId, inviteTokenHash: selector.inviteTokenHash });
+  let released = false;
+  try {
+    await storage.releaseLegacyRoomCredential(captured, {}, fresh => { send(fresh); released = true; return undefined; });
+  } catch (error) {
+    if (released) { metrics.legacyStateReleaseCompletionFailuresTotal += 1; return; }
+    if (identityFenceUnavailable(error)) throw new IdentityBoundaryError(503, "identity_authority_unavailable", error);
+    if (error instanceof IdentityStorageError && error.code === "room_not_found") throw new RoomEffectNotFound("room_not_found");
+    throw error;
+  }
+}
+
 async function releaseLegacyPersonalRoom(request: IncomingMessage, response: ServerResponse, storage: Storage,
   room: RoomRecord, participantId: string, created: boolean): Promise<void> {
   const prepared = { created, room: roomResponseRecord(request, room), roomLink: createRoomLink(room.roomId, request),
@@ -1368,6 +1396,8 @@ function createRoomAccessTokenResponse(input: {
   ttlSeconds: number;
   nowSeconds?: number;
   sceneMediaSurfaces?: RoomSessionTokenPayload["sceneMediaSurfaces"];
+  /** The request's captured signing secret; when omitted the current one is read. */
+  secret?: string;
 }): {
   token: string;
   expiresInSeconds: number;
@@ -1395,7 +1425,7 @@ function createRoomAccessTokenResponse(input: {
     jti: randomUUID()
   };
   return {
-    token: encodeAccessToken(payload),
+    token: input.secret === undefined ? encodeAccessToken(payload) : signRoomSessionToken(payload, input.secret),
     expiresInSeconds: input.ttlSeconds,
     sessionId: payload.sessionId,
     access: createRoomAccessDebugState(input.role),
@@ -1440,136 +1470,208 @@ function writeInviteUseAudit(input: {
   });
 }
 
-interface LegacyStateTokenClaims { roomId: string; participantId: string; displayName: string; requestedRole: unknown }
+interface LegacyStateTokenClaims {
+  roomId: string;
+  explicitParticipantId: string | null;
+  displayName: string | null;
+  inviteToken: string | null;
+  requestedRole: unknown;
+}
 
-/** Validate floor-1 input before room/binding lookups while retaining nullish defaults. */
+/** Validate floor-1 input before room/binding lookups. Identity stays null until the virtual
+ * path mints it or the persisted path normalizes it against the captured bearer. */
 function parseLegacyStateTokenRequest(payload: unknown): LegacyStateTokenClaims | null {
   const body = payload ?? {};
   if (typeof body !== "object" || Array.isArray(body)) return null;
   const input = body as StateTokenRequest;
   const roomId = input.roomId ?? "demo-room";
   assertVirtualRoomId(roomId);
-  const participantId = input.participantId ?? randomUUID();
-  if (!validId(participantId)) return null;
-  const displayName = input.displayName ?? participantId;
-  if (typeof displayName !== "string") return null;
-  return { roomId, participantId, displayName, requestedRole: input.requestedRole ?? input.role };
+  const explicitParticipantId = input.participantId ?? null;
+  if (explicitParticipantId !== null && !validId(explicitParticipantId)) return null;
+  const displayName = input.displayName ?? null;
+  if (displayName !== null && typeof displayName !== "string") return null;
+  return { roomId, explicitParticipantId, displayName, inviteToken: parseInviteToken(input.inviteToken),
+    requestedRole: input.requestedRole ?? input.role };
 }
 
-type StateTokenAccessResult =
-  | { ok: true; role: RoomRole; roleSource: RoomSessionRoleSource; invite?: RoomInviteRecord }
-  | { ok: false; statusCode: 202 | 403; reason: string; accessRequestId?: string };
+/** Initial pool snapshot outside any fence: the stored room, this room's exact-hash invite
+ * only, and that invite's waiting record for this participant. */
+async function loadLegacyAdmissionSnapshot(storage: Storage, room: RoomRecord, participantId: string,
+  inviteTokenHash: string | null): Promise<LegacyAdmissionSnapshot> {
+  const found = inviteTokenHash === null ? null : await storage.getRoomInviteByTokenHash(inviteTokenHash);
+  const invite = found && found.roomId === room.roomId && found.tokenHash === inviteTokenHash ? found : null;
+  const waiting = invite ? await storage.getWaitingRoomRequestForInviteParticipant(invite.inviteId, participantId) : null;
+  return { room, invite, waiting: waiting && waiting.roomId === room.roomId ? waiting : null };
+}
 
-async function resolveStateTokenAccess(
-  storage: Awaited<typeof storagePromise>,
-  request: IncomingMessage,
-  room: RoomRecord | null,
-  requestPayload: StateTokenRequest | null,
-  requested: { role: RoomRole; roleSource: RoomSessionRoleSource }
-): Promise<StateTokenAccessResult> {
-  const participantId = requestPayload?.participantId ?? randomUUID();
-  if (!room) {
-    return { ok: true, ...requested };
+/** The original bounded denial sinks, keyed by stable reason; never a bearer, invite token or hash. */
+function recordLegacyStateDenial(request: IncomingMessage, room: RoomRecord, invite: RoomInviteRecord | null,
+  participantId: string, reason: string, inviteId: string | undefined, proofSubject: boolean): void {
+  incrementCounter(metrics.roomAccessDeniedTotal, reason);
+  if (reason === "room_disabled" || reason === "waiting_room_pending") return;
+  const personal = isPersonalRoom(room);
+  if (inviteId !== undefined || reason === "invite_required") {
+    const audited = inviteId !== undefined && invite && invite.inviteId === inviteId ? invite : undefined;
+    writeInviteUseAudit({ request, roomId: room.roomId, invite: audited, result: "denied", reason, participantId });
+    if (personal) incrementCounter(metrics.personalRoomAccessDeniedTotal, reason);
+  } else if (personal && !proofSubject) {
+    // A lifecycle block outside the invite path: only the personal-owner path counted it.
+    incrementCounter(metrics.personalRoomAccessDeniedTotal, reason);
   }
-  if (isRoomDisabled(room)) {
-    return { ok: false, statusCode: 403, reason: "room_disabled" };
-  }
+}
 
-  const existingSession = await verifyRoomSessionRequest(request, { roomId: room.roomId, participantId: requestPayload?.participantId });
-  if (existingSession.ok) {
-    const role = resolveEffectiveRoomRole(room, existingSession.payload.participantId, existingSession.payload.role);
-    const blockReason = getSessionControlBlockReason(room, existingSession.payload.participantId, role, true);
-    if (blockReason) {
-      return { ok: false, statusCode: 403, reason: blockReason };
+function recordLegacyStateAdmission(request: IncomingMessage, room: RoomRecord, invite: RoomInviteRecord | null,
+  decision: LegacyAdmissionDecision): void {
+  const { source } = decision;
+  if (source.kind === "invite" || source.kind === "waiting_approved") {
+    writeInviteUseAudit({ request, roomId: room.roomId, invite: invite && invite.inviteId === source.inviteId ? invite : undefined,
+      result: "allowed", participantId: decision.participantId });
+    if (isPersonalRoom(room)) incrementCounter(metrics.personalRoomOpensTotal, "invite");
+  } else if (source.kind === "personal_owner") incrementCounter(metrics.personalRoomOpensTotal, "owner");
+}
+
+/** Same body the request handler writes for IdentityBoundaryError(409, "room_state_changed"). */
+function writeRoomStateChanged(response: ServerResponse): void {
+  json(response, 409, { error: "room_state_changed", reason: "room_state_changed" });
+}
+
+function writeLegacyBearerError(response: ServerResponse, bearer: Exclude<LegacyBearerClass, { kind: "valid" }>): void {
+  if (bearer.kind === "rotated_dev") return json(response, 409, { error: "identity_required", reason: "identity_upgrade_required" });
+  writeSessionTokenError(response, bearer.kind === "absent" ? { ok: false, code: "missing_token" } : bearer.result);
+}
+
+function legacySessionControlBody(room: RoomRecord, participantId: string, role: RoomRole, reason: string | null) {
+  return {
+    state: sanitizeSessionControlState(room.sessionControl),
+    participant: { participantId, role, permissions: getRoomPermissions(role), status: reason ? "blocked" : "active", reason }
+  };
+}
+
+/** Floor-1 persisted-room state token. Flags, secret and bearer are captured once; the pure
+ * evaluator admits on a pool snapshot and the read-only release re-admits on a fresh one.
+ * The host claim and a new pending request stay unfenced writes ahead of that release. */
+async function admitLegacyStateToken(request: IncomingMessage, response: ServerResponse, storage: Storage, room: RoomRecord,
+  claims: LegacyStateTokenClaims, requested: { role: RoomRole; roleSource: RoomSessionRoleSource }, ttlSeconds: number,
+  requestId: string): Promise<void> {
+  const ctx: LegacyAdmissionContext = Object.freeze({ rawBearer: getBearerToken(request), secret: getStateTokenSecret(),
+    nowMs: Date.now(), accessPolicyEnabled: isRoomAccessPolicyEnabled(), hostControlsEnabled: isHostControlsEnabled() });
+  const bearer = classifyLegacyBearer(ctx, room, claims.explicitParticipantId);
+  const participantId = normalizeLegacyParticipant(claims.explicitParticipantId, bearer, randomUUID);
+  const displayName = claims.displayName ?? participantId;
+  const admission: LegacyAdmissionRequest = Object.freeze({ mode: "admit", requestId,
+    explicitParticipantId: claims.explicitParticipantId, participantId, displayName, requested: Object.freeze({ ...requested }),
+    inviteTokenHash: claims.inviteToken === null ? null : hashInviteTokenWithSecret(claims.inviteToken, ctx.secret) });
+  // A valid scoped proof is always the subject's own; only it skips the owner-path counter.
+  const proofSubject = bearer.kind === "valid";
+  const snapshot = await loadLegacyAdmissionSnapshot(storage, room, participantId, admission.inviteTokenHash);
+  const initial = evaluateLegacyAdmission(admission, snapshot, ctx);
+  if (initial.kind === "session") return writeSessionTokenError(response, initial.result);
+  if (initial.kind === "upgrade_required") throw new IdentityBoundaryError(409, "identity_upgrade_required");
+  if (initial.kind === "deny") {
+    recordLegacyStateDenial(request, room, snapshot.invite, participantId, initial.reason, initial.inviteId, proofSubject);
+    return json(response, 403, { error: "room_access_denied", reason: initial.reason, accessRequestId: initial.accessRequestId, requestId });
+  }
+  if (initial.kind === "waiting") {
+    // Deferred unfenced write; a pending request carries no credential.
+    const accessRequestId = initial.requestId ?? (await storage.createWaitingRoomRequest({
+      roomId: room.roomId, inviteId: initial.inviteId, participantId, displayName })).requestId;
+    incrementCounter(metrics.roomAccessDeniedTotal, "waiting_room_pending");
+    return json(response, 202, { error: "room_access_denied", reason: "waiting_room_pending", accessRequestId, requestId });
+  }
+  const { decision } = initial;
+  const control = defaultSessionControlState(room.sessionControl);
+  if (decision.role === "host" && decision.roleSource === "trusted" && !control.hostParticipantId) {
+    // Deferred unfenced claim; the release below still re-admits on a fresh snapshot.
+    await updateRoomSessionControl(storage, room, { ...control, hostParticipantId: participantId });
+  }
+  // Prepared from the frozen binding through the shared cache outside the fence; confirmation rejects any binding drift.
+  const prepared = decision.binding.contentHash === null ? await legacySceneMediaSurfaces.resolve(decision.binding.sceneBundleUrl,
+    `http://127.0.0.1:${request.socket.localPort ?? process.env.API_PORT ?? "4000"}`) : undefined;
+  const preparedSurfaces = prepared?.kind === "loaded" ? prepared.surfaces : undefined;
+  // A cold admission keeps the no-surface fallback; a bearer renewal never signs over an unproven manifest.
+  const unavailable = prepared?.kind === "failed" && decision.source.kind === "bearer";
+  let verdict = undefined as { confirmation: LegacyAdmissionConfirmation; fresh: LegacyRoomCredentialSnapshot } | undefined;
+  await releaseLegacyStateToken(storage, { tenantId: room.tenantId, roomId: room.roomId, participantId,
+    inviteTokenHash: admission.inviteTokenHash }, fresh => {
+    const finalCtx: LegacyAdmissionContext = Object.freeze({ ...ctx, nowMs: Date.now() });
+    const confirmation = confirmLegacyAdmission(decision, admission, fresh, finalCtx);
+    // Only after a confirmed admission: no token and no sinks; the caller keeps its credential and retries.
+    if (confirmation.ok && unavailable) { json(response, 503, { error: "scene_media_surfaces_unavailable" }); return undefined; }
+    if (confirmation.ok) {
+      json(response, 200, createRoomAccessTokenResponse({ room: confirmation.room, roomId: room.roomId, participantId, displayName,
+        role: confirmation.role, roleSource: confirmation.roleSource, sceneMediaSurfaces: confirmation.templateContext?.surfaces ?? preparedSurfaces,
+        ttlSeconds, nowSeconds: Math.floor(finalCtx.nowMs / 1000), secret: ctx.secret }));
+    } else if (confirmation.kind === "deny") {
+      json(response, confirmation.status, { error: "room_access_denied", reason: confirmation.reason,
+        accessRequestId: confirmation.accessRequestId, requestId });
+    } else if (confirmation.kind === "session") writeSessionTokenError(response, confirmation.result);
+    else writeRoomStateChanged(response);
+    verdict = { confirmation, fresh };
+    return undefined;
+  });
+  // Sinks follow the settled release and reflect only what was actually sent.
+  if (!verdict) return;
+  const { confirmation, fresh } = verdict;
+  if (confirmation.ok) recordLegacyStateAdmission(request, fresh.room, fresh.invite, decision);
+  else if (confirmation.kind === "deny") {
+    recordLegacyStateDenial(request, fresh.room, fresh.invite, participantId, confirmation.reason, confirmation.inviteId, proofSubject);
+  }
+}
+
+/** Floor-1 room-session read. Every reply for a valid scoped proof, with or without a renewed token, is
+ * released from a read-only fenced snapshot; only a positive initial admission prepares surfaces, outside it.
+ * Claims come from the captured MAC-verified bearer, never the request; any other bearer is its codec
+ * refusal before any snapshot or fence. */
+async function releaseLegacySessionControl(request: IncomingMessage, response: ServerResponse, storage: Storage,
+  room: RoomRecord, requestId: string): Promise<void> {
+  const ctx: LegacyAdmissionContext = Object.freeze({ rawBearer: getBearerToken(request), secret: getStateTokenSecret(),
+    nowMs: Date.now(), accessPolicyEnabled: isRoomAccessPolicyEnabled(), hostControlsEnabled: isHostControlsEnabled() });
+  const bearer = classifyLegacyBearer(ctx, room, null);
+  if (bearer.kind !== "valid") return writeLegacyBearerError(response, bearer);
+  const subject = bearer.payload;
+  const { participantId } = subject;
+  const admission: LegacyAdmissionRequest = Object.freeze({ mode: "renew", requestId, explicitParticipantId: null, participantId,
+    displayName: subject.displayName,
+    requested: Object.freeze({ role: subject.role, roleSource: subject.roleSource ?? "trusted" }), inviteTokenHash: null });
+  const initial = evaluateLegacyAdmission(admission, { room, invite: null, waiting: null }, ctx);
+  const ttlSeconds = Number.parseInt(process.env.STATE_TOKEN_TTL_SECONDS ?? "900", 10);
+  const prepared = initial.kind === "admit" && initial.decision.binding.contentHash === null
+    ? await legacySceneMediaSurfaces.resolve(initial.decision.binding.sceneBundleUrl,
+      `http://127.0.0.1:${request.socket.localPort ?? process.env.API_PORT ?? "4000"}`) : undefined;
+  const preparedSurfaces = prepared?.kind === "loaded" ? prepared.surfaces : undefined;
+  await releaseLegacyStateToken(storage, { tenantId: room.tenantId, roomId: room.roomId, participantId, inviteTokenHash: null }, fresh => {
+    const finalCtx: LegacyAdmissionContext = Object.freeze({ ...ctx, nowMs: Date.now() });
+    // Expiry, MAC and scope first: a stale proof never observes fresh state.
+    const current = classifyLegacyBearer(finalCtx, fresh.room, null);
+    if (current.kind !== "valid") { writeLegacyBearerError(response, current); return undefined; }
+    const blocked = (reason: string) => json(response, 200, legacySessionControlBody(fresh.room, participantId,
+      resolveEffectiveRoomRole(fresh.room, participantId, current.payload.role), reason));
+    if (initial.kind === "admit") {
+      const confirmation = confirmLegacyAdmission(initial.decision, admission, fresh, finalCtx);
+      // Renew admits only the bearer source, so a failed load is strict: no token, the old credential stays.
+      if (confirmation.ok && prepared?.kind === "failed") json(response, 503, { error: "scene_media_surfaces_unavailable" });
+      else if (confirmation.ok) {
+        const { source } = initial.decision;
+        const renewed = createRoomAccessTokenResponse({ room: confirmation.room, roomId: room.roomId, participantId,
+          displayName: initial.decision.displayName, role: confirmation.role, roleSource: confirmation.roleSource,
+          sessionId: source.kind === "bearer" ? source.sessionId : undefined,
+          sceneMediaSurfaces: confirmation.templateContext?.surfaces ?? preparedSurfaces, ttlSeconds,
+          nowSeconds: Math.floor(finalCtx.nowMs / 1000), secret: ctx.secret });
+        json(response, 200, { ...legacySessionControlBody(confirmation.room, participantId, confirmation.role, null),
+          token: renewed.token, expiresInSeconds: renewed.expiresInSeconds, access: renewed.access,
+          role: renewed.role, permissions: renewed.permissions });
+      } else if (confirmation.kind === "deny") blocked(confirmation.reason);
+      else if (confirmation.kind === "session") writeSessionTokenError(response, confirmation.result);
+      else writeRoomStateChanged(response);
+      return undefined;
     }
-    return { ok: true, role, roleSource: existingSession.payload.roleSource ?? "trusted" };
-  }
-
-  const inviteToken = parseInviteToken(requestPayload?.inviteToken);
-  if (!inviteToken) {
-    if (isPersonalRoom(room)) {
-      if (isPersonalRoomOwner(room, participantId)) {
-        const role = resolveEffectiveRoomRole(room, participantId, "host");
-        const blockReason = getSessionControlBlockReason(room, participantId, role, false);
-        if (blockReason) {
-          incrementCounter(metrics.personalRoomAccessDeniedTotal, blockReason);
-          return { ok: false, statusCode: 403, reason: blockReason };
-        }
-        incrementCounter(metrics.personalRoomOpensTotal, "owner");
-        return { ok: true, role, roleSource: "trusted" };
-      }
-      incrementCounter(metrics.personalRoomAccessDeniedTotal, "invite_required");
-      writeInviteUseAudit({ request, roomId: room.roomId, result: "denied", reason: "invite_required", participantId });
-      return { ok: false, statusCode: 403, reason: "invite_required" };
-    }
-    const visibility = isRoomAccessPolicyEnabled() ? sanitizeRoomVisibility(room.visibility) : "public";
-    if (visibility !== "private") {
-      const role = resolveEffectiveRoomRole(room, participantId, requested.role);
-      const blockReason = getSessionControlBlockReason(room, participantId, role, false);
-      if (blockReason) {
-        return { ok: false, statusCode: 403, reason: blockReason };
-      }
-      return { ok: true, role, roleSource: requested.roleSource };
-    }
-    writeInviteUseAudit({ request, roomId: room.roomId, result: "denied", reason: "invite_required", participantId });
-    return { ok: false, statusCode: 403, reason: "invite_required" };
-  }
-
-  const invite = await storage.getRoomInviteByTokenHash(hashInviteToken(inviteToken));
-  if (!invite || invite.roomId !== room.roomId) {
-    writeInviteUseAudit({ request, roomId: room.roomId, result: "denied", reason: "invite_required", participantId });
-    if (isPersonalRoom(room)) incrementCounter(metrics.personalRoomAccessDeniedTotal, "invite_required");
-    return { ok: false, statusCode: 403, reason: "invite_required" };
-  }
-  if (invite.revokedAt) {
-    writeInviteUseAudit({ request, roomId: room.roomId, invite, result: "denied", reason: "invite_revoked", participantId });
-    if (isPersonalRoom(room)) incrementCounter(metrics.personalRoomAccessDeniedTotal, "invite_revoked");
-    return { ok: false, statusCode: 403, reason: "invite_revoked" };
-  }
-  if (Date.parse(invite.expiresAt) <= Date.now()) {
-    writeInviteUseAudit({ request, roomId: room.roomId, invite, result: "denied", reason: "invite_expired", participantId });
-    if (isPersonalRoom(room)) incrementCounter(metrics.personalRoomAccessDeniedTotal, "invite_expired");
-    return { ok: false, statusCode: 403, reason: "invite_expired" };
-  }
-
-  if (invite.waitingRoomEnabled) {
-    const existingRequest = await storage.getWaitingRoomRequestForInviteParticipant(invite.inviteId, participantId);
-    if (existingRequest?.status === "approved") {
-      const role = resolveEffectiveRoomRole(room, participantId, invite.role);
-      const blockReason = getSessionControlBlockReason(room, participantId, role, false);
-      if (blockReason) {
-        writeInviteUseAudit({ request, roomId: room.roomId, invite, result: "denied", reason: blockReason, participantId });
-        if (isPersonalRoom(room)) incrementCounter(metrics.personalRoomAccessDeniedTotal, blockReason);
-        return { ok: false, statusCode: 403, reason: blockReason };
-      }
-      writeInviteUseAudit({ request, roomId: room.roomId, invite, result: "allowed", participantId });
-      if (isPersonalRoom(room)) incrementCounter(metrics.personalRoomOpensTotal, "invite");
-      return { ok: true, role, roleSource: "trusted", invite };
-    }
-    if (existingRequest?.status === "rejected") {
-      writeInviteUseAudit({ request, roomId: room.roomId, invite, result: "denied", reason: "waiting_room_rejected", participantId });
-      if (isPersonalRoom(room)) incrementCounter(metrics.personalRoomAccessDeniedTotal, "waiting_room_rejected");
-      return { ok: false, statusCode: 403, reason: "waiting_room_rejected", accessRequestId: existingRequest.requestId };
-    }
-    const waitingRequest = existingRequest ?? await storage.createWaitingRoomRequest({
-      roomId: room.roomId,
-      inviteId: invite.inviteId,
-      participantId,
-      displayName: requestPayload?.displayName ?? participantId
-    });
-    return { ok: false, statusCode: 202, reason: "waiting_room_pending", accessRequestId: waitingRequest.requestId };
-  }
-
-  const role = resolveEffectiveRoomRole(room, participantId, invite.role);
-  const blockReason = getSessionControlBlockReason(room, participantId, role, false);
-  if (blockReason) {
-    writeInviteUseAudit({ request, roomId: room.roomId, invite, result: "denied", reason: blockReason, participantId });
-    if (isPersonalRoom(room)) incrementCounter(metrics.personalRoomAccessDeniedTotal, blockReason);
-    return { ok: false, statusCode: 403, reason: blockReason };
-  }
-  writeInviteUseAudit({ request, roomId: room.roomId, invite, result: "allowed", participantId });
-  if (isPersonalRoom(room)) incrementCounter(metrics.personalRoomOpensTotal, "invite");
-  return { ok: true, role, roleSource: "trusted", invite };
+    const next = evaluateLegacyAdmission(admission, fresh, finalCtx);
+    if (next.kind === "deny") blocked(next.reason);
+    else if (next.kind === "session") writeSessionTokenError(response, next.result);
+    // A fresh admission after an initial denial is never widened to a token: the client retries.
+    else writeRoomStateChanged(response);
+    return undefined;
+  });
 }
 
 function sanitizeSceneBundleId(value: string | undefined, fallback: string): string | null {
@@ -3198,6 +3300,11 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     if (actorResult.actor.actorType !== "admin-token" && actorResult.actor.roomId !== roomId) {
       return json(response, 403, { error: "forbidden", reason: "room_mismatch", requestId });
     }
+    // Floor-1 room sessions: every reply is released from a read-only fenced snapshot.
+    if (actorResult.actor.actorType === "room-session" && actorResult.actor.identityProtocolVersion !== 2) {
+      await releaseLegacySessionControl(request, response, storage, room, requestId);
+      return;
+    }
 
     const session = actorResult.actor.actorType === "room-session"
       ? await verifyRoomSessionRequest(request, { roomId, participantId: actorResult.actor.participantId })
@@ -3820,49 +3927,23 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       return json(response, result.status, result.body);
     }
     const ttlSeconds = Number.parseInt(process.env.STATE_TOKEN_TTL_SECONDS ?? "900", 10);
-    const nowSeconds = Math.floor(Date.now() / 1000);
     const legacyRequest = parseLegacyStateTokenRequest(requestPayload);
     if (!legacyRequest) return json(response, 400, { error: "invalid_state_token_request" });
-    const { roomId, participantId, displayName } = legacyRequest;
+    const { roomId } = legacyRequest;
     await legacyIdentityBoundary.assertCompatible(roomId);
     const room = await storage.getRoom(roomId);
     const requested = resolveAccessRole(legacyRequest.requestedRole);
     if (!room) {
       const { role, roleSource } = requested;
+      const participantId = legacyRequest.explicitParticipantId ?? randomUUID();
+      const displayName = legacyRequest.displayName ?? participantId;
       await releaseVirtualStateToken(storage, roomId, () => {
         json(response, 200, createRoomAccessTokenResponse({ room: null, roomId, participantId, displayName, role, roleSource,
           ttlSeconds, nowSeconds: Math.floor(Date.now() / 1000) }));
       });
       return;
     }
-    const accessResult = await resolveStateTokenAccess(storage, request, room, requestPayload, requested);
-    if (!accessResult.ok) {
-      incrementCounter(metrics.roomAccessDeniedTotal, accessResult.reason);
-      return json(response, accessResult.statusCode, {
-        error: "room_access_denied",
-        reason: accessResult.reason,
-        accessRequestId: accessResult.accessRequestId,
-        requestId
-      });
-    }
-    let tokenRoom = room;
-    if (room && accessResult.role === "host" && accessResult.roleSource === "trusted" && !defaultSessionControlState(room.sessionControl).hostParticipantId) {
-      tokenRoom = await updateRoomSessionControl(storage, room, {
-        ...defaultSessionControlState(room.sessionControl),
-        hostParticipantId: participantId
-      });
-    }
-    json(response, 200, createRoomAccessTokenResponse({
-      sceneMediaSurfaces: roomTemplateSessionContext(tokenRoom)?.surfaces ?? await loadSceneMediaSurfaces(tokenRoom?.sceneBundleUrl, `http://127.0.0.1:${request.socket.localPort ?? process.env.API_PORT ?? "4000"}`),
-      room: tokenRoom,
-      roomId,
-      participantId,
-      displayName,
-      role: accessResult.role,
-      roleSource: accessResult.roleSource,
-      ttlSeconds,
-      nowSeconds
-    }));
+    await admitLegacyStateToken(request, response, storage, room, legacyRequest, requested, ttlSeconds, requestId);
     return;
   }
 

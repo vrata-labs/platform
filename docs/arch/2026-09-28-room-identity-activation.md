@@ -359,7 +359,7 @@ upload metric. A possibly committed row must never point at a compensatingly
 deleted file. An unreferenced retained object needs later reconciliation; this
 does not add a background orphan collector or automatic retry/idempotency.
 
-Before activation, remaining gates are persisted legacy state-token issuance/renewal,
+Before activation, remaining gates are legacy admission-side-effect mutations,
 frame credentials/TTL, bootstrap reconciliation/retirement and the other media obligations
 above. Administrative legacy owner evidence is fenced by the creation contract
 below; the whole cutover is still not ready.
@@ -592,7 +592,7 @@ retains DB/virtual diagnostics. A cached v2 session whose room disappears receiv
 the existing fail-closed refusal rather than a v1 fallback.
 
 This data-effect boundary is complemented by the virtual state-token release below.
-Persisted legacy issuance/renewal, downstream frame/media credentials, bootstrap reconciliation
+Legacy admission-side-effect mutations, downstream frame/media credentials, bootstrap reconciliation
 and retirement remain gates. Diagnostic/XR rows written before a room is created,
 or retained after deletion, still use the same database room ID; later authorized
 admin/Host readers can observe them. Durable row cleanup/namespace retirement is
@@ -633,11 +633,79 @@ destroys the queued reply nor increments request failures. Pre-send/sign/send er
 still propagate normally. No arbitrary driver message, cause or credential is logged
 by this completion path, and database resource cleanup still finishes normally.
 
-This closes in-flight virtual mint/release races, not persisted legacy renewal.
-A virtual token issued before private-room creation can still encounter the older
-persisted-room legacy admission path. Its bearer/invite/Host/waiting-room final
-authority and publication boundaries remain a separate gate, along with frame/media,
-bootstrap reconciliation and durable retirement. The shared floor 2 is not activated.
+This closes in-flight virtual mint/release races. Persisted issuance/renewal now uses
+the read-only snapshot boundary below; Host-claim and new pending-waiting writes
+remain a separate gate, along with frame/media, bootstrap reconciliation and durable
+retirement. The shared floor 2 is not activated.
+
+### Persisted legacy state-token sign and renewal
+
+Both persisted-room `POST /api/tokens/state` and legacy room-session
+`GET /api/rooms/:id/session-control` release credentials through
+`releaseLegacyRoomCredential`. PostgreSQL holds the parent row FOR SHARE, then
+policy FOR SHARE, then the exact invite and waiting rows FOR SHARE, on one borrowed
+client. Child locks also order against admin autocommit revoke/decision updates.
+The method exposes one fresh snapshot to one synchronous callback, no DB/network
+callback or write. Memory reads and clones all three maps and invokes the callback
+in the same synchronous turn, without an await between fresh authorization and send.
+
+The pure validator covers existing bearer, public/default admission, the raw legacy
+personal-owner compatibility path, an invite and an approved waiting request. One
+participant ID is chosen for every check, waiting row and token: explicit body ID,
+otherwise the valid scoped bearer's ID, otherwise one UUID. An explicit different
+subject, invalid MAC or unsupported legacy subject never inherits a bearer's role.
+An authentic expired MAC is refused with the existing v1 401
+`session_token_invalid` / `expired_token` on POST and at the late GET check,
+including foreign-scope expired proofs; the codec checks expiry before scope.
+GET retains `unauthorized` / `expired_token` when its entry actor check refuses an
+already-expired proof. No silently renewed default Guest is created from it.
+
+A private/personal room requires trusted legacy provenance for bearer renewal;
+default/dev-query virtual or public tokens need independent fresh admission. A
+legitimate private Guest admitted by invite remains trusted and can renew. This is
+floor-1 compatibility, not v2 identity/Owner proof. Raw personal Owner admission
+keeps its existing floor-1 semantics and remains independent of Host assignment.
+
+The initial decision freezes its source, role, provenance, subject and scene/template
+binding. Network surface preparation is outside locks. The final callback rechecks
+the original MAC, deadline, current room/lifecycle, invite revocation/expiry and
+waiting decision. It refuses any role/source/binding drift with a scalar conflict.
+Every allowed token is signed from fresh data at the callback's current clock,
+including the old no-Host/Host-claim branch. GET preserves its session ID and obtains
+current surfaces instead of copying them indefinitely from the old token. Blocked
+GET replies preserve the existing 200 blocked/no-token shape; expiry or wrong scope
+never receives room state from the final callback. Admin and v2 GET flows retain
+their existing responses.
+
+Successful legacy URL-manifest loads are shared between POST and GET for five
+seconds, with one in-flight load per normalized URL. The resolver is bounded to
+128 successful entries and 128 distinct pending fetches; caller surface arrays are
+separate copies. A valid manifest without surfaces is an intentional empty success,
+distinct from timeout/HTTP/parse/capacity failure. Failed or expired successes are
+not used as stale grants. A confirmed bearer renewal returns retryable 503
+`scene_media_surfaces_unavailable` without a token on load failure; it does not
+erase a formerly issued surface claim or count a successful admission. Cold fresh
+legacy admissions retain the prior no-surface fallback. Existing reference contexts
+require no manifest fetch, and rebound URLs use a new cache key.
+
+The release selector preserves any string tenant key already accepted by the saved
+legacy catalog. It imposes no new tenant-length limit; exact saved tenant equality
+still bounds the room and child-row reads. Room and subject IDs retain their existing
+supported namespaces.
+
+Successful sends are terminal even when the subsequent read-only COMMIT fails:
+`vrata_api_legacy_state_release_completion_failures_total` records the operational
+failure without destroying the queued reply or counting a failed request. Errors
+before/during send still propagate. Allowed invite audit and personal opens are
+counted after the actual release; no raw bearer, invite or driver cause is emitted.
+
+The Host claim and creation of a new pending waiting request are still earlier
+legacy mutations outside this read-only boundary. They require a conditional,
+policy-guarded commit and uncertain-ACK reconciliation in the next gate; a rejected
+token can leave its earlier Host claim persisted. Existing trusted proofs across
+same-ID room recreation, invite revocation of already-issued tokens and a virtual
+token's public-room lock bypass remain legacy-compatibility gaps. This release does
+not activate shared floor 2 or complete frame/media/bootstrap/retirement work.
 
 ## Runtime adoption
 

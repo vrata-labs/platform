@@ -699,6 +699,28 @@ CI/Docker завершились с первой попытки на опубл�
 
 Собственный временный PostgreSQL fixture удалён после подтверждения ID/labels. Локальные E2E services завершены; соседние процессы/контейнеры не останавливались.
 
+### T01a-S2b-AA: persisted legacy state-token sign/renewal
+
+По прямому поручению пользователя разработка продолжается по плану **без staging deploy**; HEADd98c043 уже был опубликован. Срез охватывает все пять admission sources в POST state-token и legacy GET session-control. Host-claim и новая pending waiting row остаются отдельным admission-side-effect gate внутри T01a; успешные token paths, включая no-Host claim, всегда проходят новую final read-only проверку.
+
+Storage release получает один fresh snapshot: PG parent FOR SHARE → policy FOR SHARE → exact invite/waiting FOR SHARE, всё на одном client; child locks удерживают и текущие admin autocommit revoke/decision. Memory читает/clones room/invite/waiting и вызывает sync send в одном turn. Pure validator фиксирует источник admission/role/provenance/subject/binding и подтверждает его на свежих facts и original MAC deadline. Перед ожиданиями выбран один participant ID; body без ID больше не переносит роль bearer на другой UUID, один subject используется и в waiting row, и в token.
+
+Default/dev-query proof из virtual/public комнаты не продлевается в private/personal без independent admission. Trusted private Guest продолжаетrenewal. Provided expired authentic MAC даёт401 через старый session-token helper даже дляforeignscope, безpublicGuest fallback. Unsupported old signed subject даёт invalid_payload, не500/fenceborrow. GET renews fresh surfaces/sessionId, возвращает fresh blocked200 безtoken при lifecycle/provenance denial; admin/v2 ветки сохранены. Network surfaces готовятся доfence, role/source/binding drift отклоняется безстарых grants.
+
+Successful synchronous send терминален: lost read-only COMMIT ACK считается фиксированным unlabelled legacy-state-release completion counter без response.destroy/requestFailures; ошибки доsend не поглощаются. Allowed audit/opens отражают actual release. Старые metric golden hashes сохранены для прежнего report, additive counter проверяется отдельно.
+
+Focused validator/storage/metrics — **120/120**, native HTTP + virtual-issuer regressions — **118/118**. Actual PG проверяет max1client, parent/child waits, admin revoke/wait decisions, current row snapshots, concurrent init, selector mutation, cutover и настоящий successful COMMIT с подменённым ACK. Native HTTP проверяет все sources, subject continuity, private provenance, original expiry в body/scene/parent waits, role/lifecycle/scene drift и полный queued JSON200 после lost ACK дляPOST/GET. Это локальное source/HTTP доказательство, не реальная потеря сети/remote stage acceptance. Окончательные workspace/full E2E/CI результаты добавляются после завершения.
+
+Legacy admission writes (включая stale Host-control overwrite и pending202 creation), frame/media grants, bootstrap reconciliation и durable retirement остаются gates. Общий floor2 не активирован, стадия выкладки на staging исключена по поручению пользователя.
+
+Первый full local E2E дал **173 passed / 2 failed / 11 not run**: former-owner browser не успел обновить isOwner за5s после successful transfer200; control-plane Update показал старые editable значения. Оба focused повтора прошли без изменения UI/runtime/assertions/таймаутов (**1/1**, **57,9s** и **7,3s**). Причина первых отказов не установлена, повторы не объявляются исправлением.
+
+До публикации закрыты несовместимости final release: selector больше не накладывает новый tenantId≤200 на сохранённый catalog key; actual201-char tenant → room → POST/GET renewal работает наMemory/PG/nativeAPI. Native positive +120s wait сохраняет fullTTL/fresh iat дляобоихendpoint. GET expiry contract уточнён: unauthorized наentry, session_token_invalid наlatecheck.
+
+Повторная manifest загрузка при каждомGET устранена shared success cache5s иcoalescing. Валидный manifest безsurfaces отличен отHTTP/timeout/parse/capacity error: confirmedGET/BearerPOST получаетretryable503безtoken приошибке, не теряет claims инеучитываетallowedadmission. Cold freshLegacyPOST fallbackсохранён. Cache bounded128successful/128pending, definitionscloned, старыйbearer не используетсякакproofbinding. Focused cache/loader/tenant/nativeHTTP — **38/38**, включая fail/recover/coalescing/cacheexpiry иограничениеinflight. Послеsourcefix окончательный workspace/fullE2E выполняетсязаново.
+
+Финальные workspace lint/typecheck/build/test прошли: API **1362 passed / 1 optional live-MinIO skipped**, runtime **1094/1094**, control-plane **13/13**, templates **20/20**, tools **256 passed / 2 optional skipped**; остальные packages без fail. Full local E2E — **186/186**, без retry/skip (**33,4 минуты**), включая обе прежние failed UI проверки. Source после этого не менялся. GitHub CI/Docker acceptance добавляется после публикации; staging deploy/verification по текущему поручению не выполняется.
+
 ## Публикация первого среза T01/T12
 
 Локально прошли workspace lint/typecheck/build/tests с PostgreSQL, затем runtime build и 905 runtime tests после финальных правок. Полный `pnpm test:e2e` на финальном исполняемом дереве: **148 passed**, без skip (41.6 min).

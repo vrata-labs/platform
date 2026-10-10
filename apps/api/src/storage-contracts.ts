@@ -284,6 +284,10 @@ export interface Storage {
   /** Synchronous response release only: no arbitrary DB/network callback or retained facade. */
   releasePersonalRoomOwnerResponse(proof: import("@vrata/shared-types/identity-credential").RoomIdentityCredential,
     send: (room: RoomRecord, identity: import("./identity/contracts.js").RoomIdentityRecord) => undefined): Promise<void>;
+  /** Read-only release for every persisted legacy token: floor 1, unbound, parent then child rows held
+   * through COMMIT. `send` runs exactly once, synchronously, after all checks; no DB/network callback. */
+  releaseLegacyRoomCredential(selector: LegacyRoomCredentialSelector, options: Pick<LegacyRoomEffectOptions, "lockTimeoutMs" | "idleTimeoutMs">,
+    send: (fresh: LegacyRoomCredentialSnapshot) => undefined): Promise<void>;
   withRoomIdentityEffect<T>(guard: import("./identity/effect-write-guard.js").RoomEffectGuard,
     effect: (scoped: RoomIdentityEffectStorage, current: import("./identity/effect-write-guard.js").RoomEffectActor) => Promise<T>): Promise<T>;
   withLegacyRoomEffect<T>(scope: { tenantId: string; roomId: string }, options: LegacyRoomEffectOptions,
@@ -368,6 +372,18 @@ export type RoomEffectDatabase = Pick<Storage, "upsertRoomNote" | "deleteRoomNot
 
 export type RoomIdentityEffectStorage = RoomEffectDatabase & { releaseResponse(send: () => void): void };
 export interface LegacyRoomEffectOptions { roomWrite?: boolean; lockTimeoutMs?: number; idleTimeoutMs?: number }
+export interface LegacyRoomCredentialSelector {
+  readonly tenantId: string;
+  readonly roomId: string;
+  readonly participantId: string;
+  readonly inviteTokenHash: string | null;
+}
+/** Invite matches (roomId, tokenHash); waiting matches (roomId, fresh inviteId, participantId); else null. */
+export interface LegacyRoomCredentialSnapshot {
+  readonly room: Readonly<RoomRecord>;
+  readonly invite: Readonly<RoomInviteRecord> | null;
+  readonly waiting: Readonly<WaitingRoomRequestRecord> | null;
+}
 /** Read mode admits at most one release; write mode admits telemetry only;
  * pinAbsence requires exactly one release and excludes writes. */
 export type VirtualRoomEffectStorage = Pick<RoomEffectDatabase, "addDiagnostic" | "addXrTelemetry"> & { releaseResponse(send: () => void): void };

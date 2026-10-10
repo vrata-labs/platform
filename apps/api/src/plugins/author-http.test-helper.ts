@@ -42,7 +42,7 @@ export interface AuthorHttpPackage {
 }
 type Phase = "body-admitted" | "body-end" | "put-written" | "upload-settled" | "private-read" | "plugin-room" | "settlement-timeout"
   | "telemetry-effect" | "telemetry-written" | "telemetry-read" | "telemetry-ack-loss" | "room-read" | "room-loaded"
-  | "administrative-insert" | "administrative-receipt" | "administrative-ack-loss" | "state-token-ack-loss";
+  | "administrative-insert" | "administrative-receipt" | "administrative-ack-loss" | "state-token-ack-loss" | "legacy-state-token-ack-loss";
 type Message = { event?: string; phase?: Phase; id?: string; command?: string; kind?: Phase; roomId?: string; offset?: number; operation?: string;
   skip?: number; sqlState?: "55P03"; lockTimeoutMs?: number };
 
@@ -87,10 +87,11 @@ export function assertAuthorHttpPublicDto(value: unknown, forbidden: string[] = 
 /** All instrumentation is confined to this child. IPC messages contain phase IDs only, never HTTP values.
  * Plugin SQL pauses occur after acknowledged COMMIT or before the parent lock.
  * telemetry-written deliberately pauses before COMMIT while holding the room fence.
- * telemetry-effect also pauses legacy and virtual effects at entry; room-read/room-loaded bracket a room lookup.
+ * telemetry-effect also pauses legacy and virtual effects and the legacy credential release at entry; room-read/room-loaded bracket a room lookup.
  * telemetry-ack-loss lets the mapped transaction's real COMMIT run, then drops only its acknowledgement.
  * state-token-ack-loss does the same for the virtual scope that read the armed room's authority row.
- * x-author-hold-state-reply queues only that state-token reply's end() until flush-state-replies.
+ * legacy-state-token-ack-loss does the same for the persisted fence that read it by (tenant, room).
+ * x-author-hold-state-reply queues only a state-token or session-control reply's end() until flush-state-replies.
  * Held phases resume in FIFO order, so one case may hold several requests.
  * The local reader currently uses FileHandle; readFile is also wrapped for the equivalent buffered path.
  */
@@ -126,7 +127,7 @@ function childInstrumentation(indexUrl: string, telemetryCheckpoints: boolean, a
     const on=IncomingMessage.prototype.on;
     IncomingMessage.prototype.on=function(event,...args){
       const result=on.call(this,event,...args), id=this.headers?.['x-author-http-phase'];
-        if(id && event==='end' && (this.url?.includes('/plugins/') || (${telemetryCheckpoints} && (this.url?.includes('/diagnostics') || this.url?.includes('/xr-telemetry'))) || (${administrativeCheckpoints} && this.url==='/api/rooms'))){
+        if(id && event==='end' && (this.url?.includes('/plugins/') || (${telemetryCheckpoints} && (this.url?.includes('/diagnostics') || this.url?.includes('/xr-telemetry') || this.url==='/api/tokens/state')) || (${administrativeCheckpoints} && this.url==='/api/rooms'))){
         notify({event:'phase',phase:'body-admitted',id});
         on.call(this,'end',()=>notify({event:'phase',phase:'body-end',id}));
       }
@@ -156,8 +157,11 @@ function childInstrumentation(indexUrl: string, telemetryCheckpoints: boolean, a
       }
       if(text?.startsWith("select set_config('lock_timeout',")) lockTimeouts.set(this,Number.parseInt(values?.[0],10));
       if(/update room_plugin_packages set upload_settled=true/.test(text??'')) settlements.set(this,values?.[1]);
-      if(text==='select 1 from room_identity_authority_v2 where room_id=$1' && armed?.kind==='state-token-ack-loss' && armed.roomId===values?.[0]){
-        pinAckLosses.set(this,armed.id);armed=undefined;
+      // The virtual pin reads the authority row by room; the persisted fence reads it by (tenant, room).
+      const pinned=text==='select 1 from room_identity_authority_v2 where room_id=$1'?['state-token-ack-loss',values?.[0]]
+        :text==='select 1 from room_identity_authority_v2 where tenant_id=$1 and room_id=$2'?['legacy-state-token-ack-loss',values?.[1]]:undefined;
+      if(pinned && armed?.kind===pinned[0] && armed.roomId===pinned[1]){
+        pinAckLosses.set(this,{phase:pinned[0],id:armed.id});armed=undefined;
       }
       if(${administrativeCheckpoints} && text?.trimStart().startsWith('insert into rooms (')){
         creations.set(this,values?.[0]);await pause('administrative-insert',values?.[0]);
@@ -172,8 +176,8 @@ function childInstrumentation(indexUrl: string, telemetryCheckpoints: boolean, a
       }
       if(/^commit$/i.test(text??'') && ackLosses.has(this)){ackLosses.delete(this);throw new Error('fixture_telemetry_commit_ack_lost');}
       if(/^commit$/i.test(text??'') && pinAckLosses.has(this)){
-        const id=pinAckLosses.get(this);pinAckLosses.delete(this);
-        notify({event:'phase',phase:'state-token-ack-loss',id});throw new Error('fixture_state_token_commit_ack_lost');
+        const {phase,id}=pinAckLosses.get(this);pinAckLosses.delete(this);
+        notify({event:'phase',phase,id});throw new Error('fixture_state_token_commit_ack_lost');
       }
       if(/^rollback$/i.test(text??'')){settlements.delete(this);creations.delete(this);ackLosses.delete(this);pinAckLosses.delete(this);}
       return result;
@@ -214,12 +218,14 @@ function childInstrumentation(indexUrl: string, telemetryCheckpoints: boolean, a
       };
     }
     if(${telemetryCheckpoints}){
-      // Emulate a backpressured reply: queue only the marked state-token end() after writeHead.
+      // Emulate a backpressured reply: queue only the marked state-token or session-control end() after writeHead.
+      const holdable=req=>(req.method==='POST' && req.url==='/api/tokens/state')
+        || (req.method==='GET' && /^[/]api[/]rooms[/][^/?]+[/]session-control$/.test(req.url??''));
       const end=ServerResponse.prototype.end;
       ServerResponse.prototype.end=function(...args){
         const id=this.req?.headers?.['x-author-hold-state-reply'];
         if(typeof id!=='string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)
-          || this.req.method!=='POST' || this.req.url!=='/api/tokens/state') return end.apply(this,args);
+          || !holdable(this.req)) return end.apply(this,args);
         heldReplies.push(()=>end.apply(this,args));notify({event:'state-reply-buffered',id});return this;
       };
       // Relay only a validated correlation UUID; raw diagnostic logs stay unrecorded.
@@ -237,7 +243,7 @@ function childInstrumentation(indexUrl: string, telemetryCheckpoints: boolean, a
       PostgresStorage.prototype.withRoomIdentityEffect=async function(guard,...args){
         await pause('telemetry-effect',guard.roomId);return effect.call(this,guard,...args);
       };
-      for(const method of ['withLegacyRoomEffect','withLegacyVirtualRoomEffect']){
+      for(const method of ['withLegacyRoomEffect','withLegacyVirtualRoomEffect','releaseLegacyRoomCredential']){
         const original=PostgresStorage.prototype[method];
         PostgresStorage.prototype[method]=async function(scope,...args){
           await pause('telemetry-effect',typeof scope==='string'?scope:scope?.roomId);return original.call(this,scope,...args);

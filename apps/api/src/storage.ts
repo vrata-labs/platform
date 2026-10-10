@@ -58,7 +58,8 @@ import type { RoomIdentityCredential } from "@vrata/shared-types/identity-creden
 import { createMemoryAdmissionBudget, createPostgresAdmissionBudget } from "./identity/admission-budget.js";
 import { assertCurrentEffect, type RoomEffectGuard, type RoomEffectActor } from "./identity/effect-write-guard.js";
 import type { RoomIdentityEffectStorage } from "./storage-contracts.js";
-import type { LegacyRoomEffectOptions, VirtualRoomEffectOptions, VirtualRoomEffectStorage } from "./storage-contracts.js";
+import type { LegacyRoomCredentialSelector, LegacyRoomCredentialSnapshot, LegacyRoomEffectOptions, VirtualRoomEffectOptions, VirtualRoomEffectStorage } from "./storage-contracts.js";
+import { captureLegacyCredentialRelease, legacyCredentialSnapshot } from "./identity/legacy-credential-release.js";
 import { createRoomEffectFacade } from "./identity/effect-facade.js";
 import { createMemoryTelemetryStage, type MemoryTelemetrySink } from "./identity/memory-telemetry-stage.js";
 import { assertVirtualRoomDeadline, captureVirtualRoomGuard, runVirtualRoomEffect } from "./identity/virtual-effect-facade.js";
@@ -245,6 +246,21 @@ export class MemoryStorage implements Storage {
   async releasePersonalRoomOwnerResponse(proof: RoomIdentityCredential, send: (room: RoomRecord, identity: RoomIdentityRecord) => undefined): Promise<void> {
     const identity = this.identityAdapter.assertPersonalOwnerResponse(proof);
     send({ ...structuredClone(this.rooms.get(proof.roomId)!), ownerParticipantId: identity.participantId }, identity);
+  }
+  async releaseLegacyRoomCredential(selector: LegacyRoomCredentialSelector, options: Pick<LegacyRoomEffectOptions, "lockTimeoutMs" | "idleTimeoutMs">,
+    send: (fresh: LegacyRoomCredentialSnapshot) => undefined): Promise<void> {
+    const guard = captureLegacyCredentialRelease(selector, options, send);
+    // One synchronous turn: every check and map read precedes the only release.
+    const room = this.rooms.get(guard.roomId);
+    if (!room || room.tenantId !== guard.tenantId) throw new IdentityStorageError("room_not_found");
+    const floor = this.identityPolicy.current();
+    if (!Number.isSafeInteger(floor) || floor < 1) throw new IdentityBoundaryError(503, "identity_authority_unavailable");
+    if (floor !== 1 || this.identityAdapter.hasRoomBindings(guard.roomId)) throw new IdentityBoundaryError(409, "identity_upgrade_required");
+    const invite = guard.inviteTokenHash === null ? undefined : [...this.roomInvites.values()]
+      .find(item => item.roomId === guard.roomId && item.tokenHash === guard.inviteTokenHash);
+    const waiting = invite && [...this.waitingRoomRequests.values()]
+      .find(item => item.roomId === guard.roomId && item.inviteId === invite.inviteId && item.participantId === guard.participantId);
+    send(legacyCredentialSnapshot(structuredClone(room), invite ? structuredClone(invite) : null, waiting ? structuredClone(waiting) : null));
   }
   async withRoomIdentityEffect<T>(guard: RoomEffectGuard, effect: (scoped: RoomIdentityEffectStorage, current: RoomEffectActor) => Promise<T>): Promise<T> {
     let active = true;
@@ -901,6 +917,35 @@ export class PostgresStorage implements Storage {
       const identity = assertPersonalOwnerResponse(state, proof, this.identityNow());
       if (!room) throw new IdentityStorageError("room_not_found");
       send({ ...room, ownerParticipantId: identity.participantId }, identity);
+    });
+  }
+  async releaseLegacyRoomCredential(selector: LegacyRoomCredentialSelector, options: Pick<LegacyRoomEffectOptions, "lockTimeoutMs" | "idleTimeoutMs">,
+    send: (fresh: LegacyRoomCredentialSnapshot) => undefined): Promise<void> {
+    const guard = captureLegacyCredentialRelease(selector, options, send);
+    await roomFenceTransaction(this.pool, guard, async (client, checkAlive) => {
+      // Parent before policy, matching schema init. Room FOR SHARE admits concurrent
+      // releases; child FOR SHARE holds revoke/decision autocommit writes until COMMIT.
+      const held = await client.query("select 1 from rooms where tenant_id=$1 and room_id=$2 for share", [guard.tenantId, guard.roomId]);
+      if (!held.rowCount) throw new IdentityStorageError("room_not_found");
+      const policy = (await client.query("select minimum_protocol from room_identity_protocol_policy where singleton=true for share")).rows[0];
+      if (!policy || !Number.isSafeInteger(policy.minimum_protocol) || policy.minimum_protocol < 1) {
+        throw new IdentityBoundaryError(503, "identity_authority_unavailable");
+      }
+      const bound = (await client.query("select 1 from room_identity_authority_v2 where tenant_id=$1 and room_id=$2",
+        [guard.tenantId, guard.roomId])).rowCount;
+      if (policy.minimum_protocol !== 1 || bound) throw new IdentityBoundaryError(409, "identity_upgrade_required");
+      // Every read stays on the borrowed client; this.pool methods would borrow a second connection.
+      const room = await new PostgresStorage(this.pool, this.identityNow, client, false, "legacy").getRoom(guard.roomId);
+      if (!room || room.tenantId !== guard.tenantId) throw new IdentityStorageError("room_not_found");
+      const invite = guard.inviteTokenHash === null ? undefined : (await client.query(`select invite_id, room_id, token_hash, role, protocol_version,
+        waiting_room_enabled, created_at, expires_at, revoked_at, created_by, revoked_by from room_invites
+        where room_id=$1 and token_hash=$2 for share`, [guard.roomId, guard.inviteTokenHash])).rows[0];
+      const waiting = invite === undefined ? undefined : (await client.query(`select request_id, room_id, invite_id, participant_id,
+        display_name, status, created_at, decided_at, decided_by from room_waiting_requests
+        where room_id=$1 and invite_id=$2 and participant_id=$3 for share`, [guard.roomId, invite.invite_id, guard.participantId])).rows[0];
+      checkAlive();
+      // The release is the final authorized operation: read-only COMMIT follows with no recheck.
+      send(legacyCredentialSnapshot(room, invite ? mapRoomInviteRow(invite) : null, waiting ? mapWaitingRoomRequestRow(waiting) : null));
     });
   }
   async withRoomIdentityEffect<T>(guard: RoomEffectGuard, effect: (scoped: RoomIdentityEffectStorage, current: RoomEffectActor) => Promise<T>): Promise<T> {

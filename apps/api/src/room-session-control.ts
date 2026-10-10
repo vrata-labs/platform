@@ -62,14 +62,15 @@ function canJoinLockedRoom(role: RoomRole): boolean {
   return role === "host" || role === "admin";
 }
 
-export function getSessionControlBlockReason(room: RoomRecord | null, participantId: string, role: RoomRole, hasExistingSession: boolean): string | null {
+export function getSessionControlBlockReason(room: RoomRecord | null, participantId: string, role: RoomRole, hasExistingSession: boolean,
+  hostControlsEnabled: boolean = isHostControlsEnabled()): string | null {
   if (!room) {
     return null;
   }
   if (isRoomDisabled(room)) {
     return "room_disabled";
   }
-  if (!isHostControlsEnabled()) {
+  if (!hostControlsEnabled) {
     return null;
   }
   const control = defaultSessionControlState(room.sessionControl);
