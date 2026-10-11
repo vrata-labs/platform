@@ -202,7 +202,15 @@ connected participants' tokens. Current source grants, server-side participant
 eviction/rejoin enforcement and expiry in the remaining lifecycle mutations
 still require an explicit activation gate.
 
-### Frame credentials and negotiated peer lease (pending CI publication)
+### Frame credentials and negotiated peer lease (published; staging excluded)
+
+Published code: `1e55cd12ac5604d50c179ad43b25de75c357ac29`. Exact-SHA
+[CI](https://github.com/vrata-labs/platform/actions/runs/38170650843/attempts/2)
+and [Docker publication](https://github.com/vrata-labs/platform/actions/runs/38170650682/attempts/2)
+passed. Local and CI full E2E both passed 199 cases. Staging deployment and
+verification were excluded by the user's instruction; this is not shared
+floor-2 or full media activation. Attempt failures and remaining obligations
+are recorded in the [implementation journal](../reviews/2026-09-26-working-meeting-implementation.md#t01a-s2b-ad-original-proof-frame-credentials-and-executor-peer-lease).
 
 The frame transport uses a Node-only shared v2 codec with exactly
 `v`, `roomId`, `objectId`, `executorSessionId`, `executorInstanceId`,

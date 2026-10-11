@@ -898,6 +898,42 @@ runtime **1094/1094**, remote-browser **71/71**, room-state **78/78**, shared-ty
 remote-browser build/tests **71/71** и focused frame E2E **12/12**. Финальный full199
 проверяет именно это исполняемое дерево; после него менялась только документация.
 
+#### Публикация frame credentials и executor peer lease
+
+| Этап | Результат |
+|---|---|
+| Code SHA | `1e55cd12ac5604d50c179ad43b25de75c357ac29`, опубликован в рабочей ветке |
+| [CI 38170650843, attempt 2](https://github.com/vrata-labs/platform/actions/runs/38170650843/attempts/2) | Success: workspace checks, настоящий PostgreSQL, обязательные pinned rollback fixtures, full E2E **199/199** (**31,3 минуты**), M0.5 **16/16** (**2,7 минуты**) и locked assets |
+| [Docker Publish 38170650682, attempt 2](https://github.com/vrata-labs/platform/actions/runs/38170650682/attempts/2) | Success: API/room-state/remote-browser images с immutable exact-SHA tags, registry manifests проверены |
+| Staging | Deploy/verification исключены по прямому поручению пользователя |
+
+Первый Docker attempt отказан на push API image: Yandex Registry вернул **503
+Service Unavailable**. Повтор failed job на том же SHA прошёл без изменения
+Dockerfiles или publish workflow.
+
+Первый CI attempt остановился в прежнем native legacy-admission ACK-loss test:
+после успешного reconciliation HTTP reply audit count был 0 вместо 1. Admission
+sinks записываются после завершения read-only release, а ответ ставится в очередь
+внутри fence: немедленный GET audit может прийти раньше sink. Конкретный порядок
+в отказавшем run отдельно не зафиксирован, поэтому причина не объявляется
+доказанной или исправленной frame-срезом. Неизменённый адресный native suite
+прошёл **16/16**; один повтор failed CI job на том же SHA прошёл весь gate.
+Assertions, таймауты и admission runtime не менялись. CI не содержит неожиданных
+skips: API пропустил только optional MinIO, tools — два optional cases.
+
+[Артефакт CI](https://github.com/vrata-labs/platform/actions/runs/38170650843/artifacts/11714349743)
+содержит окончательные browser results. Remote rollout/rollback не выполнялись;
+registry publication не заменяет успешный staging gate совместимой пары перед
+будущей активацией. Общий floor2 и full v2/media activation остаются выключены.
+Следующий media gate включает source-specific grants, runtime connection upgrade,
+executor media admission/revocation и callback routing по фактической поверхности.
+Bootstrap reconciliation, durable retirement и legacy compatibility/input parity
+также остаются дальнейшими obligations.
+
+Собственный temporary PostgreSQL fixture удалён после подтверждения ID/label;
+локальные E2E service ports и fixture port освобождены. Соседние процессы,
+контейнеры и staging-инфраструктура не изменялись.
+
 ## Публикация первого среза T01/T12
 
 Локально прошли workspace lint/typecheck/build/tests с PostgreSQL, затем runtime build и 905 runtime tests после финальных правок. Полный `pnpm test:e2e` на финальном исполняемом дереве: **148 passed**, без skip (41.6 min).
