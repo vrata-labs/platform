@@ -837,6 +837,11 @@ function getRemoteBrowserObjectState(server: RoomStateServer, roomId: string, ob
   return object.state as RemoteBrowserObjectState;
 }
 
+// Open-url leaves frameStreamId unset, so the executor and frame credentials bind the one stream derived from the session.
+function remoteBrowserFrameStreamId(state: RemoteBrowserObjectState): string | undefined {
+  return state.frameStreamId ?? (state.executorSessionId ? `${state.executorSessionId}:frames` : undefined);
+}
+
 export function verifyRemoteBrowserBinding(server: RoomStateServer, input: Required<Pick<RemoteBrowserBindingRequest, "roomId" | "objectId" | "executorSessionId" | "executorInstanceId">> & Pick<RemoteBrowserBindingRequest, "mediaParticipantId" | "frameStreamId">): boolean {
   const room = server.rooms.get(input.roomId);
   const object = room?.mediaObjects.objects[input.objectId];
@@ -849,7 +854,7 @@ export function verifyRemoteBrowserBinding(server: RoomStateServer, input: Requi
     && state.executorSessionId === input.executorSessionId
     && state.executorInstanceId === input.executorInstanceId
     && (input.mediaParticipantId === undefined || state.mediaParticipantId === input.mediaParticipantId)
-    && (input.frameStreamId === undefined || state.frameStreamId === input.frameStreamId));
+    && (input.frameStreamId === undefined || remoteBrowserFrameStreamId(state) === input.frameStreamId));
 }
 
 function forwardRemoteBrowserPatch(server: RoomStateServer, roomId: string, objectId: string | null | undefined, patch: unknown): void {
@@ -869,7 +874,7 @@ function forwardRemoteBrowserPatch(server: RoomStateServer, roomId: string, obje
       body: JSON.stringify({
         sessionId: state.executorSessionId,
         executorInstanceId: state.executorInstanceId,
-        frameStreamId: state.frameStreamId,
+        frameStreamId: remoteBrowserFrameStreamId(state),
         mediaParticipantId: state.mediaParticipantId,
         roomId,
         objectId,

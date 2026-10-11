@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { PDFDocument } from "pdf-lib";
 
 import { getRoomPermissions, type RoomRole } from "@vrata/shared-types";
+import { decodeRemoteBrowserFrameToken } from "@vrata/shared-types/remote-browser-frame-token";
 import { signRoomSessionToken, verifyRoomSessionToken } from "@vrata/shared-types/session-token";
 
 function createStoredZip(files: Record<string, string | Buffer>): Buffer {
@@ -1387,6 +1388,7 @@ test("remote browser frame token endpoint returns websocket URL and short-lived 
     assert.equal(stateResponse.ok, true);
     const statePayload = (await stateResponse.json()) as { token?: string };
 
+    const signedFrom = Math.floor(Date.now() / 1000);
     const response = await fetch("http://127.0.0.1:4026/api/tokens/remote-browser-frame", {
       method: "POST",
       headers: {
@@ -1401,19 +1403,27 @@ test("remote browser frame token endpoint returns websocket URL and short-lived 
         frameStreamId: "remote-browser:object-1:frames"
       })
     });
+    const signedTo = Math.floor(Date.now() / 1000);
     assert.equal(response.ok, true);
     const payload = (await response.json()) as { token?: string; expiresInSeconds?: number; frameStreamUrl?: string };
     assert.equal(typeof payload.token, "string");
     assert.equal(payload.expiresInSeconds, 120);
     assert.equal(payload.frameStreamUrl?.startsWith("wss://browser.89.169.161.91.sslip.io/frames?token="), true);
 
-    const tokenBody = payload.token?.split(".")[0] ?? "";
-    const tokenPayload = JSON.parse(Buffer.from(tokenBody, "base64url").toString("utf8")) as { roomId?: string; objectId?: string; executorSessionId?: string; frameStreamId?: string; exp?: number };
-    assert.equal(tokenPayload.roomId, "room-1");
-    assert.equal(tokenPayload.objectId, "object-1");
-    assert.equal(tokenPayload.executorSessionId, "remote-browser:object-1");
-    assert.equal(tokenPayload.frameStreamId, "remote-browser:object-1:frames");
-    assert.equal(typeof tokenPayload.exp, "number");
+    // The shared v2 decoder under the dedicated frame secret, not an unsigned body read.
+    const token = payload.token ?? "";
+    assert.equal(new URL(payload.frameStreamUrl ?? "wss://invalid.test/").searchParams.get("token") === token, true,
+      "the stream URL carries exactly the released token");
+    const claims = decodeRemoteBrowserFrameToken(token, "remote-browser-test-secret", { nowSeconds: signedFrom });
+    assert.ok(claims, "the dedicated frame secret verifies the v2 MAC");
+    assert.deepEqual({ ...claims, exp: 0 }, { v: 2, roomId: "room-1", objectId: "object-1", executorSessionId: "remote-browser:object-1",
+      executorInstanceId: "remote-browser:object-1:instance:generation-1", frameStreamId: "remote-browser:object-1:frames", exp: 0 });
+    assert.equal(claims.exp >= signedFrom + 120 && claims.exp <= signedTo + 120, true, "exp is the signing clock plus the configured TTL");
+    const stateExp = Number(JSON.parse(Buffer.from((statePayload.token ?? "").split(".")[0], "base64url").toString("utf8")).exp);
+    assert.equal(claims.exp <= stateExp, true, "the frame never outlives its state proof");
+    for (const key of ["remote-browser-frame-state-secret", "dev-remote-browser-secret"]) {
+      assert.equal(decodeRemoteBrowserFrameToken(token, key, { nowSeconds: signedFrom }), null, "no other secret verifies the frame MAC");
+    }
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     delete process.env.VRATA_DISABLE_AUTOSTART;

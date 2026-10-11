@@ -192,16 +192,94 @@ A cleanup failure returns 503 but no longer exposes document content; an
 authorized Host or administrator can retry DELETE on the retained tombstone.
 This does not implement a background orphan collector.
 
-Media/frame tokens are signed privately, then re-resolved against fresh
+LiveKit media tokens are signed privately, then re-resolved against fresh
 authority immediately before release. A revoked epoch or changed role/owner
 discards the prepared token. Executor media also rechecks room lifecycle and
-live executor binding. Open frame sockets close when their token expires,
-including early-timer rescheduling, and must obtain a newly authorized token.
+live executor binding. Frame credentials have the separate contract below.
 An already-issued self-hosted LiveKit JWT is **not** revoked by these checks:
 participant removal does not invalidate it, and LiveKit proactively refreshes
 connected participants' tokens. Current source grants, server-side participant
 eviction/rejoin enforcement and expiry in the remaining lifecycle mutations
 still require an explicit activation gate.
+
+### Frame credentials and negotiated peer lease (pending CI publication)
+
+The frame transport uses a Node-only shared v2 codec with exactly
+`v`, `roomId`, `objectId`, `executorSessionId`, `executorInstanceId`,
+`frameStreamId` and `exp`. The dedicated frame key signs
+`"vrata.frame.v2\n" + body`; an old consumer cannot accept this MAC and the new
+consumer rejects legacy frame credentials. This fails closed while services
+are replaced one at a time. The codec requires two canonical base64url parts,
+bounded scope IDs and safe integer expiry, refuses expiry equality, and limits
+future expiry to 600 seconds plus a fixed 30-second clock-skew allowance.
+
+The issuer captures the original verified proof deadline, scope, role and
+ownership, the requested executor binding and signing configuration. It
+classifies a room as persisted or virtual before the external binding RPC.
+The RPC completes outside the database fence. A virtual room that becomes
+persisted is refused; a deleted persisted room never falls back to virtual
+admission. Signing and response queuing are synchronous inside the final
+read-only fence:
+
+- Persisted v1 uses the fresh legacy credential snapshot and renew policy,
+  including current role, lifecycle and private-room trusted provenance.
+- Virtual v1 pins room absence and the protocol floor and checks the original
+  MAC deadline before release.
+- V2 checks the original participant, identity, epoch, role and ownership
+  against current authority. An explicitly expected non-owner remains an
+  enforced predicate rather than a falsy-value omission.
+
+The new expiry is the smaller of the captured configured TTL from the final
+release clock and the original proof expiry. A proof with seven seconds left
+cannot become a thirty-second frame lease. `expiresInSeconds` describes the
+whole-second remaining lease. A signer exception is still a pre-release error. Only
+a read-only transaction completion failure after successful response queuing
+increments the fixed frame completion counter; it cannot destroy the queued
+credential or convert it into an authorization refusal.
+
+The consumer requires the actual current executor instance and bounds the
+socket lease by the token deadline, its own 600-second limit and executor
+session expiry. It checks the lease again before outgoing frames, media answers
+and errors, including after asynchronous preparation. The deadline therefore
+does not rely solely on timely timer dispatch. A stale binding RPC can yield
+an obsolete-instance credential, but that credential is refused by the
+consumer; this is not a global transaction spanning room-state and executor.
+Every accepted open uses the committed object's next server revision as its
+generation, not the caller's input-event ID. A reopen A → B → A or a retry after
+an executor callback therefore cannot recreate A's old instance. Immediate
+duplicates are still refused. This uniqueness depends on monotonically advancing
+revision within a server-created UUID object; object IDs must not be reused.
+
+A socket owns each peer negotiation through a private nonce. The browser
+claims its per-frame peer slot before asynchronous negotiation, closes its own
+peer if ownership is lost, and has a nonce-matched expiry timer. Socket expiry
+requests peer release immediately, without waiting for the close handshake;
+late negotiations cannot install a peer or emit an answer. Cleanup of an old
+socket must not close a newer viewer's peer. A deadline is checked again before
+replacing the page's peer slot, including when execution was delayed in the page.
+Socket protocol errors have a listener before early admission returns and retire
+only the offending socket and its nonce-owned peers. The production lifetime
+module composes expiry, error and close cleanup and is tested directly.
+The existing one-peer-per-frame
+displacement policy and STUN-only configuration remain separate limitations.
+Page cleanup uses ordered evaluations in the same frame, with the page deadline
+as a fallback. Captured URL/MSE tracks are stopped with their peer; tracks backed
+by the page's own MediaStream are detached rather than stopped. The socket and
+page checks use the shared host wall clock and do not promise hard real-time
+timer dispatch under a stalled browser event loop.
+
+This is direct REST/WebSocket frame-transport enforcement. The runtime's
+inactive legacy frame fallback is not enabled by this change. LiveKit source
+grants, connected-session eviction/rejoin enforcement, executor-media tickets
+and full v2 activation still need their own product-path gates. Deployments
+use an API/remote-browser codec-2 pair from the same immutable SHA; separately
+managed services replace the consumer first and accept a temporary fail-closed
+window. An older room-record reader baseline is not automatically a compatible
+frame-transport rollback target.
+An API without `ROOM_STATE_INTERNAL_URL` retains its existing development-only
+binding-check bypass; production requires the binding authority. Room-state
+derives the canonical frame stream for internal verification and executor
+forwarding without adding that field to its room-object broadcast.
 
 ### Prepared personal-state and private response release
 
@@ -863,6 +941,11 @@ node tools/identity-rollback-guard.mjs --env-file infra/docker/.env.production -
 ```
 
 Both API and room-state images must carry `io.vrata.identity-protocol-floor-guard=1`.
+The API image, and the remote-browser image whenever the candidate compose model
+renders that service, must also carry `io.vrata.frame-token-codec=2` at the same
+tag; staging requires `"frameTokenCodec": 2` in the target commit's
+`infra/docker/template-rollout.json`. Unbound floor-one rollbacks keep ordinary
+paired-tag compatibility; that is not frame-token acceptance.
 Raw Docker commands that bypass the supplied preflight are not a supported v2
 rollback procedure. A database restore is a separate destructive operation: the
 T15 restore procedure must retain the protocol floor and compatible images and
@@ -873,7 +956,7 @@ address restored credential epochs; image rollback does not lower the floor.
 Personal reference provisioning stores a null legacy owner permanently, including
 after v2 ownership handoff. The older boundary image can authenticate safely but
 cannot map this record: getRoom/listRooms fail and administrative access is lost.
-The independent compatible-reader baseline is
+The historical independent storage-reader compatibility baseline is
 `9b1d43f0eb7efe2fc2f8684669eda7379635c01c`. It permits read/map and metadata-only
 PATCH of that shape while preserving private visibility, guest denial and immutable
 assets; its public creation path still requires the prior owner input.
@@ -899,11 +982,15 @@ its init/getRoom/listRooms/metadata PATCH before and after genuine invited-membe
 Owner handoff. The old pinned boundary is also tested to demonstrate its refusal;
 the older-shape boundary rollback test is retained.
 
-When staging access returns, deploy the compatible-reader baseline and complete its
+When staging access returns, deploy a compatible paired baseline and complete its
 gate **before** the provisioning release or any floor-2 activation, so the automatic
-previous-successful-SHA rollback has a compatible target. GitHub/registry publication
-alone does not establish a successful staging rollback target. The current outage
-waiver covers development and CI/image publication, not v2 activation.
+previous-successful-SHA rollback has a compatible target. That baseline must satisfy
+all current capabilities: the room-record reader, the API/room-state identity guard
+and the API/remote-browser frame codec when the consumer is present. The historical
+reader-only SHA above remains a storage fixture, not a floor-2 image rollback target
+under the newer frame contract. GitHub/registry publication alone does not establish
+a successful staging rollback target. The current outage waiver covers development
+and CI/image publication, not v2 activation.
 
 ### Activation prerequisites for V
 

@@ -1,12 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { IdentityStorageError } from "./contracts.js";
+import { IdentityStorageError, type RoomIdentityProof } from "./contracts.js";
 import { assertCurrentEffect, type RoomEffectGuard } from "./effect-write-guard.js";
 import { MemoryStorage } from "../storage.js";
 import { createRoomIdentityService } from "./service.js";
 
 const guard: RoomEffectGuard = { tenantId: "tenant", roomId: "room", identityId: "identity", participantId: "participant",
   authEpoch: 1, expiresAtSeconds: 100, permission: "notes.edit" };
+const roleChanged = (error: unknown) => error instanceof IdentityStorageError && error.code === "identity_role_changed";
+const invalidInput = (error: unknown) => error instanceof IdentityStorageError && error.code === "invalid_identity_input";
 
 function current(input: { epoch?: number; permission?: boolean; owner?: boolean; role?: "host" | "member" | "presenter" } = {}): NonNullable<Parameters<typeof assertCurrentEffect>[1]> {
   return { identity: { ...guard, authEpoch: input.epoch ?? 1 },
@@ -43,6 +45,34 @@ test("Host-or-Owner fence accepts a Member owner while rejecting an ordinary Mem
   }
 });
 
+test("optional role and ownership pins refuse exact drift, validate at runtime and leave unpinned guards unchanged", () => {
+  for (const role of ["host", "member", "presenter"] as const) for (const owner of [true, false]) {
+    assert.equal(assertCurrentEffect(guard, current({ role, owner }), 99_000).role, role);
+  }
+  const pinned: RoomEffectGuard = { ...guard, expectedRole: "presenter", expectedIsOwner: false };
+  assert.doesNotThrow(() => assertCurrentEffect(pinned, current(), 99_000));
+  for (const candidate of [current({ role: "member" }), current({ owner: true }), current({ role: "host", owner: true }),
+    current({ role: "member", permission: false })]) {
+    assert.throws(() => assertCurrentEffect(pinned, candidate, 99_000), roleChanged);
+  }
+  // false is a pin, not an unset value.
+  assert.throws(() => assertCurrentEffect({ ...guard, expectedIsOwner: false }, current({ owner: true }), 99_000), roleChanged);
+  assert.doesNotThrow(() => assertCurrentEffect({ ...guard, expectedIsOwner: true }, current({ owner: true }), 99_000));
+  assert.doesNotThrow(() => assertCurrentEffect({ ...guard, expectedRole: "member" }, current({ role: "member", owner: true }), 99_000));
+  for (const malformed of [{ expectedRole: "owner" }, { expectedRole: null }, { expectedIsOwner: 0 }, { expectedIsOwner: "false" },
+    { expectedIsOwner: null }]) {
+    for (const candidate of [current(), null]) {
+      assert.throws(() => assertCurrentEffect({ ...guard, ...malformed } as unknown as RoomEffectGuard, candidate, 99_000),
+        invalidInput);
+    }
+  }
+  // Epoch and deadline refusals keep precedence over pin drift.
+  assert.throws(() => assertCurrentEffect(pinned, current({ epoch: 2, role: "member" }), 99_000), (error: unknown) =>
+    error instanceof IdentityStorageError && error.code === "identity_not_active");
+  assert.throws(() => assertCurrentEffect(pinned, current({ role: "member" }), 100_000), (error: unknown) =>
+    error instanceof IdentityStorageError && error.code === "identity_session_expired");
+});
+
 test("in-memory guarded note writes never execute after a committed revocation", async () => {
   const storage = new MemoryStorage();
   const room = await storage.createRoom({ tenantId: "demo-tenant", templateId: "meeting-room-basic", name: "Guarded notes",
@@ -65,6 +95,103 @@ test("in-memory guarded note writes never execute after a committed revocation",
     roomId: scope.roomId, scope: "shared", content: "after revoke"
   })), (error: unknown) => error instanceof IdentityStorageError && error.code === "identity_not_active");
   assert.equal((await storage.getRoomNote(scope.roomId, "shared"))?.content, "before revoke");
+});
+
+test("in-memory role and ownership pins refuse drift before the callback or release", async () => {
+  const storage = new MemoryStorage();
+  const room = await storage.createRoom({ tenantId: "demo-tenant", templateId: "meeting-room-basic", name: "Pinned effect",
+    sessionControl: { hostParticipantId: "legacy-host" } });
+  const scope = { tenantId: room.tenantId, roomId: room.roomId };
+  await storage.identityProtocol.raise(2);
+  const service = createRoomIdentityService(storage.roomIdentities, "identity-pinned-memory-test-secret-32-bytes");
+  const recovery = await service.issueRecovery({ ...scope, targetParticipantId: "legacy-host", targetRole: "host",
+    expiresAt: new Date(Date.now() + 120_000).toISOString(),
+    issuer: { actorType: "admin-token", actorId: "test-admin", role: "admin" } });
+  const host = await service.redeemRecovery(recovery.credential, scope);
+  const base = { ...host.identity, expiresAtSeconds: Math.floor(Date.now() / 1000) + 120, permission: "room.join" as const };
+  const observed = await storage.withRoomIdentityEffect(base, async (_scoped, current) => current);
+  assert.equal(observed.role, "host");
+  let sent = 0;
+  const release = (pins: Partial<RoomEffectGuard>) => storage.withRoomIdentityEffect({ ...base, ...pins },
+    async scoped => { scoped.releaseResponse(() => { sent += 1; }); });
+  await release({ expectedRole: "host", expectedIsOwner: observed.isOwner });
+  assert.equal(sent, 1);
+  for (const pins of [{ expectedRole: "member" as const }, { expectedIsOwner: !observed.isOwner }]) {
+    await assert.rejects(release(pins), roleChanged);
+  }
+  assert.equal(sent, 1);
+  await assert.rejects(release({ expectedRole: "owner" } as unknown as Partial<RoomEffectGuard>), invalidInput);
+  assert.equal(sent, 1);
+});
+
+/** A personal room with its recovered Owner (initially Host) and one admitted Member, built through the real authority APIs. */
+async function heldRoom(secret: string) {
+  const storage = new MemoryStorage();
+  const room = await storage.createRoom({ tenantId: "demo-tenant", templateId: "meeting-room-basic", name: "Held pinned release",
+    roomType: "personal", ownerParticipantId: "owner", visibility: "private", sessionControl: { hostParticipantId: "owner" } });
+  const scope = { tenantId: room.tenantId, roomId: room.roomId };
+  await storage.identityProtocol.raise(2);
+  const admin = { actorType: "admin-token" as const, actorId: "test-admin", role: "admin" as const };
+  const service = createRoomIdentityService(storage.roomIdentities, secret);
+  const recovery = await service.issueRecovery({ ...scope, targetParticipantId: "owner", targetRole: "owner",
+    expiresAt: new Date(Date.now() + 120_000).toISOString(), issuer: admin });
+  const owner = (await service.redeemRecovery(recovery.credential, scope)).identity;
+  const invite = await storage.createRoomInviteV2({ roomId: room.roomId, tokenHash: "p".repeat(43), role: "member",
+    waitingRoomEnabled: false, expiresAt: new Date(Date.now() + 120_000).toISOString(), actor: admin });
+  const member = (await service.admit({ ...scope, displayName: "Admitted Member", inviteTokenHash: invite.tokenHash })).identity;
+  const transfer = async (type: "transfer-host" | "transfer-owner", target: RoomIdentityProof) => storage.roomIdentities.transition(scope, admin,
+    (await storage.roomIdentities.authority(scope))!.revision, { type, targetParticipantId: target.participantId });
+  const expiresAtSeconds = Math.floor(Date.now() / 1000) + 120;
+  const pinned = (identity: RoomIdentityProof, pins: Pick<RoomEffectGuard, "expectedRole" | "expectedIsOwner"> = {}): RoomEffectGuard =>
+    ({ ...identity, expiresAtSeconds, permission: "surface.view", ...pins });
+  /** The fresh actor under an unpinned surface.view guard. */
+  const actor = (identity: RoomIdentityProof) => storage.withRoomIdentityEffect(pinned(identity), async (_scoped, current) =>
+    [current.role, current.isOwner]);
+  let sent = 0;
+  /** Every guard passes its entry check and parks in its callback; change commits; each then releases under its original pins. */
+  async function held(guards: RoomEffectGuard[], change: () => Promise<unknown>) {
+    let open!: () => void;
+    const gate = new Promise<void>(resolve => { open = resolve; });
+    const entered: Array<Promise<void>> = [];
+    const outcomes = guards.map(value => {
+      let reach!: () => void;
+      entered.push(new Promise<void>(resolve => { reach = resolve; }));
+      return storage.withRoomIdentityEffect(value, async scoped => { reach(); await gate; scoped.releaseResponse(() => { sent += 1; }); })
+        .then(() => "released", (error: unknown) => error instanceof IdentityStorageError ? error.code : "untyped");
+    });
+    try {
+      const first = await Promise.race([Promise.all(entered).then(() => null), Promise.race(outcomes).then(early => ({ early }))]);
+      assert.equal(first, null, "every pinned entry check passed before the change");
+      await change();
+    } finally {
+      // Parked callbacks are released even if the entry check or the change fails, so the test cannot hang.
+      open();
+    }
+    return Promise.all(outcomes);
+  }
+  return { owner, member, transfer, pinned, actor, held, sent: () => sent };
+}
+
+test("in-memory pins observe an admin Host transfer committed during the held callback and refuse the release", async () => {
+  const f = await heldRoom("identity-held-host-memory-secret-32-bytes");
+  const asHost = f.pinned(f.owner, { expectedRole: "host", expectedIsOwner: true });
+  assert.deepEqual(await f.actor(f.owner), ["host", true], "the recovered Owner starts as Host");
+  assert.deepEqual(await f.held([asHost], async () => undefined), ["released"], "an unchanged pin releases across the await");
+  assert.equal(f.sent(), 1);
+  assert.deepEqual(await f.held([asHost], () => f.transfer("transfer-host", f.member)), ["identity_role_changed"]);
+  assert.equal(f.sent(), 1, "the refused release sent nothing");
+  // Drift, not a lost permission: the demoted Owner still holds surface.view.
+  assert.deepEqual(await f.actor(f.owner), ["member", true]);
+});
+
+test("in-memory ownership pins observe an admin Owner handoff during the held callback with both roles unchanged", async () => {
+  const f = await heldRoom("identity-held-owner-memory-secret-32-bytes");
+  assert.deepEqual([await f.actor(f.owner), await f.actor(f.member)], [["host", true], ["member", false]]);
+  assert.deepEqual(await f.held([f.pinned(f.member, { expectedRole: "member", expectedIsOwner: false }),
+    f.pinned(f.owner, { expectedRole: "host", expectedIsOwner: true })], () => f.transfer("transfer-owner", f.member)),
+  ["identity_role_changed", "identity_role_changed"], "false is enforced for the heir and true for the former Owner");
+  assert.equal(f.sent(), 0);
+  assert.deepEqual([await f.actor(f.owner), await f.actor(f.member)], [["host", false], ["member", true]], "only ownership moved");
 });
 
 test("in-memory Member owner binds a scene narrowly and invitation revoke preserves the first actor", async () => {

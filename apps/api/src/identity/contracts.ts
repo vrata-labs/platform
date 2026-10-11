@@ -68,7 +68,7 @@ export interface RoomIdentityPending extends RoomIdentityScope {
 }
 
 export type IdentityRoomBinding = Pick<RoomRecord, "tenantId" | "roomId" | "roomType" | "ownerParticipantId" | "visibility" | "guestAllowed" | "status" | "disabledAt" | "sessionControl">;
-export type IdentityStorageErrorCode = "room_not_found" | "room_blocked" | "invalid_identity_input" | "identity_conflict" | "identity_not_active" | "identity_session_expired" | "authority_conflict" | "identity_forbidden" | "identity_capacity_reached" | "waiting_room_pending" | "waiting_room_capacity_reached" | "waiting_room_rejected" | "waiting_proof_invalid" | "recovery_invalid";
+export type IdentityStorageErrorCode = "room_not_found" | "room_blocked" | "invalid_identity_input" | "identity_conflict" | "identity_not_active" | "identity_session_expired" | "authority_conflict" | "identity_forbidden" | "identity_role_changed" | "identity_capacity_reached" | "waiting_room_pending" | "waiting_room_capacity_reached" | "waiting_room_rejected" | "waiting_proof_invalid" | "recovery_invalid";
 export class IdentityStorageError extends Error {
   constructor(readonly code: IdentityStorageErrorCode) { super(code); this.name = "IdentityStorageError"; }
 }

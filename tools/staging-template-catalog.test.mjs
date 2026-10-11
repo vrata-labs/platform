@@ -27,10 +27,11 @@ m.assert_target_allowed(baseline, {"state":"active", "referenceRoomCount":3}, co
 rejects(lambda: m.assert_target_allowed(baseline, None, contract, current, 2), "identity_rollback_below_boundary")
 boundary = dict(contract, identityProtocolFloorGuard=1)
 reader = dict(boundary, roomRecordReader=2)
-m.assert_target_allowed(baseline, {"state":"active", "referenceRoomCount":3}, reader, current, 2)
+frame = dict(reader, frameTokenCodec=2)
+m.assert_target_allowed(baseline, {"state":"active", "referenceRoomCount":3}, frame, current, 2)
 rejects(lambda: m.assert_target_allowed(baseline, None, boundary, current, 2), "room_record_rollback_requires_reader2")
 rejects(lambda: m.assert_target_allowed(baseline, None, contract, current, 1, True), "identity_rollback_below_boundary")
-m.assert_target_allowed(baseline, None, boundary, current, 1, True)
+m.assert_target_allowed(baseline, None, dict(boundary, frameTokenCodec=2), current, 1, True)
 for invalid in (None, True, "1", 0):
     rejects(lambda: m.assert_target_allowed(None, None, dict(contract, identityProtocolFloorGuard=invalid), current, 2), "identity_rollback_below_boundary")
 for invalid in (0, True, None):
@@ -133,14 +134,16 @@ def rejects(fn, code):
 current = "a"*40
 boundary = {"schemaVersion":1, "templateSchema":2, "referenceTemplateVersions":["1.0.0", "2.0.0"], "identityProtocolFloorGuard":1}
 reader = dict(boundary, roomRecordReader=2)
+codec = dict(boundary, frameTokenCodec=2)
+frame = dict(reader, frameTokenCodec=2)
 rejects(lambda: m.assert_target_allowed(None, None, boundary, current, 2), "room_record_rollback_requires_reader2")
 rejects(lambda: m.assert_target_allowed(None, None, boundary, current, 1, False, True), "room_record_rollback_requires_reader2")
 rejects(lambda: m.assert_target_allowed(None, None, None, current, 1, False, True), "room_record_rollback_requires_reader2")
 m.assert_target_allowed(None, None, None, current, 1, False, False)
-m.assert_target_allowed(None, None, boundary, current, 1, True, False)
+m.assert_target_allowed(None, None, codec, current, 1, True, False)
 m.assert_target_allowed(None, None, {"schemaVersion":1, "roomRecordReader":2}, current, 1, False, True)
-m.assert_target_allowed(None, None, reader, current, 2, True, True)
-m.assert_target_allowed(None, None, dict(reader, roomRecordReader=3), current, 2)
+m.assert_target_allowed(None, None, frame, current, 2, True, True)
+m.assert_target_allowed(None, None, dict(frame, roomRecordReader=3), current, 2)
 for invalid in (None, True, "2", 1, 0, -2, 2.0):
     rejects(lambda: m.assert_target_allowed(None, None, dict(reader, roomRecordReader=invalid), current, 2), "room_record_rollback_requires_reader2")
 for invalid in (None, "t", 0, 1):
@@ -184,6 +187,52 @@ with tempfile.TemporaryDirectory() as root:
     host.ownerless_reference_personal = lambda: True
     assert host.prepare(current)["ownerlessReferencePersonal"] is True
     assert passed == [True, False, True]
+`], { encoding: "utf8" });
+});
+
+test("frame-token codec two is required for activated or bound identity targets", () => {
+  execFileSync("python3", ["-B", "-c", `
+import importlib.util, tempfile
+spec = importlib.util.spec_from_file_location("catalog", ${JSON.stringify(fileURLToPath(new URL("./staging-template-catalog.py", import.meta.url)))})
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+def rejects(fn, code):
+    try: fn()
+    except (ValueError, RuntimeError) as e: assert str(e) == code, str(e)
+    else: raise AssertionError("expected " + code)
+current = "a"*40
+codec = {"schemaVersion":1, "templateSchema":2, "referenceTemplateVersions":["1.0.0", "2.0.0"], "identityProtocolFloorGuard":1,
+         "roomRecordReader":2, "frameTokenCodec":2}
+legacy = {key: value for key, value in codec.items() if key != "frameTokenCodec"}
+for floor, bound in ((2, False), (1, True), (2, True)):
+    m.assert_target_allowed(None, None, codec, current, floor, bound)
+    rejects(lambda: m.assert_target_allowed(None, None, legacy, current, floor, bound), "frame_rollback_requires_codec2")
+    for invalid in (None, True, False, 0, 1, 3, -2, "2", 2.0, [2]):
+        rejects(lambda: m.assert_target_allowed(None, None, dict(codec, frameTokenCodec=invalid), current, floor, bound), "frame_rollback_requires_codec2")
+# Boundary and reader failures keep their own codes.
+rejects(lambda: m.assert_target_allowed(None, None, dict(legacy, identityProtocolFloorGuard=None), current, 1, True), "identity_rollback_below_boundary_forbidden")
+rejects(lambda: m.assert_target_allowed(None, None, dict(legacy, roomRecordReader=1), current, 2), "room_record_rollback_requires_reader2")
+rejects(lambda: m.assert_target_allowed(None, None, dict(legacy, roomRecordReader=1), current, 1, True, True), "room_record_rollback_requires_reader2")
+# Unbound floor one keeps ordinary paired-tag compatibility; that is not frame-token acceptance.
+m.assert_target_allowed(None, None, None, current, 1, False, False)
+m.assert_target_allowed(None, None, legacy, current, 1, False, True)
+m.assert_target_allowed(None, None, dict(codec, frameTokenCodec=1), current, 1, False, True)
+with tempfile.TemporaryDirectory() as root:
+    host = m.CatalogHost(root)
+    def api_down(*args, **kwargs): raise AssertionError("prepare must not require a running API")
+    host.cli = api_down
+    host.run = lambda args: '{"state":"wave2","referenceRoomCount":0}'
+    host.validate_identity_database = lambda: None
+    host.validate_identity_configuration = lambda: None
+    host.minimum_identity_protocol = lambda: 1
+    host.ownerless_reference_personal = lambda: False
+    host.identity_bound = lambda: True
+    host.contract = lambda target: legacy
+    rejects(lambda: host.prepare(current), "frame_rollback_requires_codec2")
+    host.contract = lambda target: codec
+    assert host.prepare(current)["identityAuthorityBound"] is True
+    host.identity_bound = lambda: False
+    host.contract = lambda target: legacy
+    assert host.prepare(current)["identityAuthorityBound"] is False
 `], { encoding: "utf8" });
 });
 

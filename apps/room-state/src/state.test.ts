@@ -1091,7 +1091,7 @@ test("remote-browser object opens URL, streams input, and enforces controller lo
   assert.equal(openedState?.status, "loading");
   assert.equal(openedState?.controllerParticipantId, "host");
   assert.equal(openedState?.executorSessionId, "remote-browser:browser-1");
-  assert.equal(openedState?.executorInstanceId, "remote-browser:browser-1:instance:host:open:1");
+  assert.equal(openedState?.executorInstanceId, "remote-browser:browser-1:instance:1");
   assert.equal(openedState?.frameStreamId, undefined);
   assert.equal(openedState?.mediaParticipantId, "remote-browser:browser-1");
   assert.equal(openedState?.mediaTrackSid, undefined);
@@ -1115,7 +1115,7 @@ test("remote-browser object opens URL, streams input, and enforces controller lo
     surfaceId: "debug-main",
     objectId: "browser-1",
     executorSessionId: "remote-browser:browser-1",
-    executorInstanceId: "remote-browser:browser-1:instance:host:open:1",
+    executorInstanceId: "remote-browser:browser-1:instance:1",
     patch: {
       type: "mark-publishing",
       mediaParticipantId: "remote-browser:browser-1",
@@ -1132,7 +1132,7 @@ test("remote-browser object opens URL, streams input, and enforces controller lo
     surfaceId: "debug-main",
     objectId: "browser-1",
     executorSessionId: "remote-browser:browser-1",
-    executorInstanceId: "remote-browser:browser-1:instance:host:open:1",
+    executorInstanceId: "remote-browser:browser-1:instance:1",
     patch: {
       type: "mark-active",
       mediaParticipantId: "remote-browser:browser-1",
@@ -1192,7 +1192,7 @@ test("remote-browser object opens URL, streams input, and enforces controller lo
     surfaceId: "debug-main",
     objectId: "browser-1",
     executorSessionId: "remote-browser:browser-1",
-    executorInstanceId: "remote-browser:browser-1:instance:host:open:1",
+    executorInstanceId: "remote-browser:browser-1:instance:1",
     patch: {
       type: "mark-input-applied",
       input: {
@@ -1287,7 +1287,7 @@ test("remote-browser executor failure stores sanitized diagnostic detail", () =>
     surfaceId: "debug-main",
     objectId: "browser-failed",
     executorSessionId: "remote-browser:browser-failed",
-    executorInstanceId: "remote-browser:browser-failed:instance:host:open-failed:1",
+    executorInstanceId: "remote-browser:browser-failed:instance:1",
     patch: {
       type: "mark-failed",
       errorCode: "viewport_capture_failed",
@@ -1302,6 +1302,91 @@ test("remote-browser executor failure stores sanitized diagnostic detail", () =>
   assert.equal(failedState?.status, "failed");
   assert.equal(failedState?.errorCode, "viewport_capture_failed");
   assert.equal(failedState?.errorDetail, "NotReadableError: Could not start video source");
+});
+
+test("remote-browser open-url binds the committed revision as a fresh executor instance, never the client event id", () => {
+  type Room = ReturnType<typeof createRoomState>;
+  const objectId = "browser-generation";
+  const sessionId = `remote-browser:${objectId}`;
+  const create = (): Room => createMediaObject(joinRoom(createRoomState("demo"), "host", { role: "host" }), "host", {
+    commandId: "cmd-create-browser-generation",
+    surfaceId: "debug-main",
+    objectType: "remote-browser",
+    objectId,
+    nowMs: 1
+  }).room;
+  const revisionOf = (room: Room) => room.mediaObjects.objects[objectId]?.revision;
+  const instanceOf = (room: Room) => (room.mediaObjects.objects[objectId]?.state as { executorInstanceId?: string } | undefined)?.executorInstanceId;
+  const open = (room: Room, inputEventId: string, nowMs: number) => patchMediaObjectState(room, "host", {
+    commandId: `cmd-open-generation-${nowMs}`,
+    surfaceId: "debug-main",
+    objectId,
+    expectedRevision: revisionOf(room) ?? -1,
+    patch: { type: "open-url", url: "https://example.com/remote-browser-demo.html", inputEventId },
+    nowMs
+  });
+  const callback = (room: Room, executorInstanceId: string | undefined, inputEventId: string, nowMs: number) => patchRemoteBrowserExecutorState(room, {
+    commandId: `cmd-callback-generation-${nowMs}`,
+    surfaceId: "debug-main",
+    objectId,
+    executorSessionId: sessionId,
+    executorInstanceId: executorInstanceId ?? "",
+    patch: { type: "mark-publishing", mediaParticipantId: sessionId, inputEventId },
+    nowMs
+  });
+
+  // A -> B -> A: the reused client id still opens a third generation, and both earlier ones go stale.
+  const openedA = open(create(), "host:open:A", 2);
+  const openedB = open(openedA.room, "host:open:B", 3);
+  const reopenedA = open(openedB.room, "host:open:A", 4);
+  const opens = [openedA, openedB, reopenedA];
+  assert.deepEqual(opens.map(({ result }) => result.accepted), [true, true, true]);
+  const generations = opens.map(({ room }) => instanceOf(room));
+  assert.equal(generations[0], `${sessionId}:instance:1`);
+  assert.deepEqual(generations, opens.map(({ result }) => `${sessionId}:instance:${result.revision}`));
+  assert.equal(new Set(generations).size, 3);
+  for (const stale of [generations[0], generations[1]]) {
+    const refused = callback(reopenedA.room, stale, "executor:stale:1", 5);
+    assert.equal(refused.result.accepted, false);
+    assert.equal(refused.result.blockedReason, "invalid-patch");
+    assert.equal(revisionOf(refused.room), revisionOf(reopenedA.room));
+  }
+  assert.equal(callback(reopenedA.room, generations[2], "executor:current:1", 5).result.accepted, true);
+
+  // A -> executor callback -> A with the same client id is accepted as a new open with its own generation.
+  const firstOpen = open(create(), "host:open:same", 2);
+  const published = callback(firstOpen.room, instanceOf(firstOpen.room), "executor:publishing:1", 3);
+  assert.equal(published.result.accepted, true);
+  const reopened = open(published.room, "host:open:same", 4);
+  assert.equal(reopened.result.accepted, true);
+  assert.equal(instanceOf(reopened.room), `${sessionId}:instance:${reopened.result.revision}`);
+  assert.notEqual(instanceOf(reopened.room), instanceOf(firstOpen.room));
+  assert.equal(callback(reopened.room, instanceOf(firstOpen.room), "executor:publishing:2", 5).result.accepted, false);
+
+  // An immediate A -> A stays a duplicate: no revision, no new instance.
+  const duplicate = open(firstOpen.room, "host:open:same", 3);
+  assert.equal(duplicate.result.accepted, false);
+  assert.equal(duplicate.result.blockedReason, "duplicate-input-event");
+  assert.equal(duplicate.room, firstOpen.room);
+
+  // The instance no longer grows with the client id.
+  const longId = open(create(), "x".repeat(4096), 2);
+  assert.equal(longId.result.accepted, true);
+  assert.equal(instanceOf(longId.room), `${sessionId}:instance:1`);
+
+  // A revision past the safe-integer range fails closed instead of repeating a generation.
+  const fresh = create();
+  const saturated: Room = {
+    ...fresh,
+    mediaObjects: {
+      ...fresh.mediaObjects,
+      objects: { ...fresh.mediaObjects.objects, [objectId]: { ...fresh.mediaObjects.objects[objectId]!, revision: Number.MAX_SAFE_INTEGER } }
+    }
+  };
+  const overflowed = open(saturated, "host:open:overflow", 2);
+  assert.equal(overflowed.result.accepted, false);
+  assert.equal(overflowed.result.blockedReason, "invalid-patch");
+  assert.equal(instanceOf(overflowed.room), undefined);
 });
 
 test("leaveRoom clears owned active screen-share object", () => {

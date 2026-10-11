@@ -792,6 +792,112 @@ CI/Docker завершились с первой попытки на опубл�
 
 Собственный temporary PostgreSQL fixture удалён после подтверждения ID/labels; локальные E2E services завершены. Соседние процессы/контейнеры и staging-инфраструктура не изменялись.
 
+### T01a-S2b-AD: original-proof frame credentials and executor peer lease
+
+Frame REST/WS transport переведён на общий Node-only codec v2: отдельный MAC domain,
+точный набор claims, обязательный executorInstanceId, canonical base64url,
+безопасные целочисленные сроки и ограниченные Unicode IDs. Старый и новый MAC
+взаимно отказаны; Node crypto не попадает в browser root export. Исправлена
+асимметрия размера для непарных суррогатов: issuer не создаёт credential, который
+consumer обязан отказать из-за byte limit, корректные кириллица и emoji сохранены.
+
+Issuer фиксирует исходный proof deadline, scope/role/ownership, binding и signing
+configuration. Внешний binding RPC выполняется до короткого read-only fence.
+Persisted v1 использует fresh renew policy, virtual v1 — absence pin, v2 — original
+identity/epoch и точные role/Owner predicates, включая expectedIsOwner:false.
+Подпись и очередь ответа синхронны внутри fence; expiry не выходит за исходный MAC
+deadline, короткий остаток не расширяется минимальным TTL. Virtual→persisted,
+удаление/другой tenant, изменение роли/Owner/status/floor и expiry во время waits
+не сохраняют старую авторизацию. Ошибка signer до send остаётся ошибкой запроса;
+потеря ACK после настоящего read-only COMMIT не уничтожает уже отправленный ответ
+и увеличивает только фиксированный frame completion counter.
+
+Consumer проверяет текущий executor instance и ограничивает socket/peer сроком
+credential, собственными 600 s и executor deadline. Outbound frame/answer/error
+повторно проверяются после asynchronous preparation. Pending peer привязан к
+private nonce и Frame до await; source search, negotiation, displacement и cleanup
+не оставляют позднему ответу право установить peer. In-page deadline — fallback
+при недоступной server cleanup; старая очистка не закрывает новый nonce. URL/MSE
+capture tracks освобождаются с peer, MediaStream source самой страницы не
+останавливается. Канонический stream выводится внутри room-state verification и
+executor forwarding, без изменения room-object broadcast и включения неактивного
+runtime frame fallback.
+
+Runtime Docker images API/remote-browser объявляют frame-token-codec=2, target
+contract — frameTokenCodec:2. При floor2 или bound authority rollback требует
+совместимую пару одного immutable SHA; отсутствующий optional consumer допускается.
+Unbound floor1 сохраняет прежнюю функциональную совместимость отката. Исторический
+reader-only baseline остаётся отдельным storage fixture: перед будущей активацией
+нужен successful staging gate пары со всеми текущими capabilities.
+
+Первый полный workspace прошёл: API **1530 passed / 1 optional skipped**, runtime
+**1094/1094**, remote-browser **66/66**, room-state **77/77**, shared-types **39/39**,
+tools **262 passed / 2 optional skipped**. Native frame HTTP/PG suite — **29/29**;
+Memory tests проверили реальные Host/Owner transitions после await. Genuine frame
+transport и actual Chromium peer cases — **8/8**. Первый full local E2E —
+**195/195**, без retry/skip, **27,9 минуты**.
+
+После этого закрыты дополнительные границы consumer: expired queued negotiation
+проверяет deadline до замены действующего peer; protocol error WebSocket завершает
+только свой socket, а не процесс. Production lifetime wiring выделен в используемый
+сервисом модуль; непосредственная cleanup до close event проверяет этот модуль,
+а не копию обработчиков. Новые E2E отправляют настоящий unmasked frame и проверяют
+readiness, продолжающийся поток другого viewer и выдачу следующего credential.
+Actual Chromium case подтверждает сохранение peer/tracks/timer при уже истёкшей
+попытке. Focused — **10/10**, remote-browser — **71/71**. Последующий полный workspace
+также прошёл; API **1530 passed / 1 optional skipped**, runtime **1094/1094**,
+room-state **77/77**, tools **262 passed / 2 optional skipped**.
+
+Полный full E2E на этом промежуточном дереве — **197/197**, без retry/skip,
+**30,9 минуты**. Один предыдущий запуск был прерван до итогового результата и не
+считается принятым прогоном. После этого отдельно воспроизведён A → B → A reopen:
+клиентский inputEventId повторял executor instance, и старый credential снова
+подходил новому context. Generation теперь выводится из возрастающей серверной
+revision объекта. Immediate duplicate остаётся отказом без forwarding; callback
+не позволяет повторить старый instance, переполнение safe integer отказано.
+
+Настоящий browser regression сначала воспроизвёл thirdNotFirst=false, затем на
+исправлении прошёл с исходными assertions. Focused frame E2E — **11/11**, room-state
+— **78/78**. In-memory A → B → A с настоящим MAC также сменил результат с двух
+instance/принятого старого token на три instance/отказ. Source media/JWT shape и
+runtime frame fallback не менялись. Full E2E после generation fix — **198/198**,
+без retry/skip, **33,7 минуты**; workspace без fail.
+
+Дополнительная same-origin iframe проверка не подтвердила предположение об
+остановке оригинального source. Chromium после captureStream адаптирует wrapper
+к realm исполнителя: измерены отказ instanceof до capture и его успех после,
+capture не записан как owned. Неверное ожидание ended у неосвобождаемого capture
+заменено проверкой фактического контракта: peer закрыт, original tracks live,
+requestVideoFrameCallback фиксирует продолжающийся поток после matched close,
+displacement и expiry. Negative control с остановкой оригинального source
+обнаруживает отсутствие новых frames. Неподтверждённая смена production ownership
+logic не применялась, комментарии уточнены; focused теперь **12/12**.
+
+Предсуществующая callback surface=debug-main ограничивает publisher на других
+поверхностях; работа сохранена в
+[backlog](../backlog/2026-10-11-remote-browser-callback-surface.md) для следующего
+media-среза. Первый full199: **198 passed / 1 failed**, synthetic XR surface input
+вернул sent=false сразу после waitForAccess. XR runtime не менялся; room-state diff
+не затрагивает join, first snapshot или serialization. Focused прежний spec на
+неизменённом дереве прошёл **4/4**. В коде есть возможная ранняя граница socket-open
+до room snapshot/input readiness, но blockedReason не был зафиксирован, поэтому
+причина этого отказа не установлена. Полный повтор на том же исполняемом дереве
+прошёл **199/199**, без retry/skip, **37,3 минуты**. Assertions, таймауты и XR runtime
+не менялись; положительный повтор не считается исправлением XR. Публикация
+фиксируется ниже после завершения.
+Промежуточные full195/full197/full198 не используются как проверка последующих
+executable changes. Staging исключён по поручению пользователя; общий floor2 и
+full v2/media activation не включались.
+
+Финальные workspace lint/typecheck/build/test прошли с настоящим PostgreSQL и
+обязательными pinned rollback fixtures: API **1530 passed / 1 optional MinIO skipped**,
+runtime **1094/1094**, remote-browser **71/71**, room-state **78/78**, shared-types
+**39/39**, SDK **64/64**, control-plane **13/13**, templates **20/20**, asset-pipeline
+**37/37**, runtime-core **2/2**, tools **262 passed / 2 optional skipped**. После
+уточнения комментариев и browser probe отдельно повторены lint/typecheck,
+remote-browser build/tests **71/71** и focused frame E2E **12/12**. Финальный full199
+проверяет именно это исполняемое дерево; после него менялась только документация.
+
 ## Публикация первого среза T01/T12
 
 Локально прошли workspace lint/typecheck/build/tests с PostgreSQL, затем runtime build и 905 runtime tests после финальных правок. Полный `pnpm test:e2e` на финальном исполняемом дереве: **148 passed**, без skip (41.6 min).

@@ -4,9 +4,10 @@ import { assertIdentityRollbackTarget, OWNERLESS_REFERENCE_PERSONAL_SQL, ROOM_RE
 
 const imageTag = "a".repeat(40);
 const options = { envFile: "test.env", composeFile: "compose.test.yml", imageTag };
-function host({ floor = "2", bound = "f", policyExists = "t", authorityExists = "t", roomsExists = "t", schema = "t", ownerless = "f", apiLabel = "1", stateLabel = "1", readerLabel = "2", malformed = false, database = "postgres://vrata:test-only@postgres:5432/vrata" } = {}) {
-  const mutations = [];
-  return { mutations, run(args, env) {
+function host({ floor = "2", bound = "f", policyExists = "t", authorityExists = "t", roomsExists = "t", schema = "t", ownerless = "f", apiLabel = "1", stateLabel = "1", readerLabel = "2",
+  apiCodec = "2", browserCodec = "2", browser = true, browserTag = imageTag, malformed = false, database = "postgres://vrata:test-only@postgres:5432/vrata" } = {}) {
+  const mutations = [], inspections = [];
+  return { mutations, inspections, run(args, env) {
     const query = args.at(-1);
     if (query === "select to_regclass('room_identity_protocol_policy') is not null") return policyExists;
     if (query === "select to_regclass('room_identity_authority_v2') is not null") return authorityExists;
@@ -23,11 +24,14 @@ function host({ floor = "2", bound = "f", policyExists = "t", authorityExists = 
       return malformed ? "secret-containing-malformed-model" : JSON.stringify({ services: {
         api: { image: `registry/api:${imageTag}`, environment: { POSTGRES_URL: database } },
         "room-state": { image: `registry/room-state:${imageTag}` },
+        ...(browser ? { "remote-browser": { image: `registry/remote-browser:${browserTag}` } } : {}),
         postgres: { environment: { POSTGRES_USER: "vrata", POSTGRES_DB: "vrata" } }
       } });
     }
     if (args[0] === "pull") { mutations.push([...args]); return ""; }
     if (args[0] === "image" && args[1] === "inspect") {
+      inspections.push([args[3], query]);
+      if (args[3].includes("io.vrata.frame-token-codec")) return query.includes("/remote-browser:") ? browserCodec : query.includes("/api:") ? apiCodec : "";
       if (args[3].includes("io.vrata.room-record-reader")) return query.includes("/api:") ? readerLabel : "";
       return query.includes("room-state:") ? stateLabel : apiLabel;
     }
@@ -52,7 +56,7 @@ test("both application images must implement the boundary after activation or bi
     }
     const adapter = host(config);
     assertIdentityRollbackTarget(options, adapter.run);
-    assert.equal(adapter.mutations.length, 2);
+    assert.deepEqual(adapter.mutations, ["api", "room-state", "remote-browser"].map(service => ["pull", `registry/${service}:${imageTag}`]));
   }
 });
 
@@ -114,4 +118,67 @@ test("missing, partial, or corrupt room-record probes fail closed without leakin
   const adapter = host({ floor: "1", ownerless: null });
   assert.throws(() => assertIdentityRollbackTarget(options, adapter.run), error => error.message === "identity_rollout_probe_failed");
   assert.deepEqual(adapter.mutations, []);
+});
+
+test("frame-token codec two is required on the API and a present remote-browser after activation or binding", () => {
+  const codecFormat = '{{ index .Config.Labels "io.vrata.frame-token-codec" }}';
+  for (const config of [{}, { floor: "1", bound: "t" }]) {
+    for (const value of ["", "<no value>", "0", "1", "3", "02", "+2", " 2", "2.0", "2\n2", "true"]) {
+      for (const [broken, service] of [[{ apiCodec: value }, "api"], [{ browserCodec: value }, "remote-browser"]]) {
+        const adapter = host({ ...config, ...broken });
+        assert.throws(() => assertIdentityRollbackTarget(options, adapter.run), error => error.message === `frame_rollback_requires_codec2:${service}`);
+        assert(adapter.mutations.every(command => command[0] === "pull"), "guard never updates an env file or runs services");
+      }
+    }
+    for (const browserTag of ["b".repeat(40), "latest", `${imageTag}-old`]) {
+      const adapter = host({ ...config, browserTag });
+      assert.throws(() => assertIdentityRollbackTarget(options, adapter.run), error => error.message === "frame_rollback_requires_codec2:remote-browser");
+      assert.deepEqual(adapter.mutations, [["pull", `registry/api:${imageTag}`], ["pull", `registry/room-state:${imageTag}`]], "a mismatched browser image is never pulled");
+    }
+    const adapter = host(config);
+    assertIdentityRollbackTarget(options, adapter.run);
+    assert.deepEqual(adapter.mutations, ["api", "room-state", "remote-browser"].map(service => ["pull", `registry/${service}:${imageTag}`]));
+    assert.deepEqual(adapter.inspections.filter(([, image]) => image.includes("/remote-browser:")).map(([format]) => format), [codecFormat],
+      "the browser carries no identity-floor or reader requirement");
+  }
+});
+
+test("an absent remote-browser consumer is skipped while the API producer still requires codec two", () => {
+  for (const config of [{}, { floor: "1", bound: "t" }]) {
+    let adapter = host({ ...config, browser: false });
+    assertIdentityRollbackTarget(options, adapter.run);
+    assert.deepEqual(adapter.mutations, [["pull", `registry/api:${imageTag}`], ["pull", `registry/room-state:${imageTag}`]]);
+    for (const apiCodec of ["", "<no value>", "1"]) {
+      adapter = host({ ...config, browser: false, apiCodec });
+      assert.throws(() => assertIdentityRollbackTarget(options, adapter.run), error => error.message === "frame_rollback_requires_codec2:api");
+      assert(adapter.mutations.every(command => command[0] === "pull"));
+    }
+  }
+});
+
+test("identity boundary and reader failures keep priority over the frame-token gate", () => {
+  for (const [config, code] of [
+    [{ apiLabel: "", apiCodec: "1", browserCodec: "" }, "identity_rollback_below_boundary_forbidden:api"],
+    [{ stateLabel: "<no value>", apiCodec: "1", browserTag: "latest" }, "identity_rollback_below_boundary_forbidden:room-state"],
+    [{ readerLabel: "1", apiCodec: "1", browserCodec: "1" }, "room_record_rollback_requires_reader2:api"],
+    [{ floor: "1", bound: "t", ownerless: "t", readerLabel: "", apiCodec: "" }, "room_record_rollback_requires_reader2:api"]
+  ]) {
+    const adapter = host(config);
+    assert.throws(() => assertIdentityRollbackTarget(options, adapter.run), error => error.message === code);
+    assert(adapter.inspections.every(([format]) => !format.includes("frame-token-codec")));
+    assert(!adapter.mutations.some(([, image]) => image.includes("/remote-browser:")));
+  }
+});
+
+test("unbound legacy databases are not subject to the frame-token gate", () => {
+  const codecless = { apiCodec: "", browserCodec: "1", browserTag: "0.0.1" };
+  for (const config of [{ floor: "1" }, { policyExists: "f", authorityExists: "f" }]) {
+    let adapter = host({ ...config, ...codecless });
+    assertIdentityRollbackTarget({ ...options, imageTag: "0.1.0" }, adapter.run);
+    assert.deepEqual(adapter.mutations, []);
+    adapter = host({ ...config, ...codecless, ownerless: "t" });
+    assertIdentityRollbackTarget(options, adapter.run);
+    assert.deepEqual(adapter.mutations, [["pull", `registry/api:${imageTag}`]]);
+    assert(adapter.inspections.every(([format]) => !format.includes("frame-token-codec")));
+  }
 });

@@ -14,11 +14,11 @@ export function loadPostgresPersonalOwner(client: PoolClient, proof: RoomIdentit
   return load(client, proof, { identityIds: [proof.identityId] }, false, new Date().toISOString());
 }
 
-/** Caller already holds the room fence on this same connection. */
-export async function assertPostgresEffect(client: PoolClient, guard: RoomEffectGuard): Promise<RoomEffectActor> {
+/** Caller already holds the room fence on this same connection. The clock is read after the awaited load. */
+export async function assertPostgresEffect(client: PoolClient, guard: RoomEffectGuard, now: () => number = Date.now): Promise<RoomEffectActor> {
   const state = await load(client, guard, { identityIds: [guard.identityId] }, false, new Date().toISOString());
   if (!state || state.minimumProtocol < 2) throw new IdentityStorageError("room_not_found");
-  return assertMemoryEffect(state, guard);
+  return assertMemoryEffect(state, guard, now());
 }
 
 async function load(client: PoolClient, scope: RoomIdentityScope, selection: IdentitySelection, lock: boolean, currentAt: string): Promise<IdentityTransaction | null> {

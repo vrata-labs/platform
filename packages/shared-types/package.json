@@ -23,6 +23,11 @@
       "types": "./src/room-session-v2.ts",
       "import": "./dist/room-session-v2.js",
       "default": "./dist/room-session-v2.js"
+    },
+    "./remote-browser-frame-token": {
+      "types": "./src/remote-browser-frame-token.ts",
+      "import": "./dist/remote-browser-frame-token.js",
+      "default": "./dist/remote-browser-frame-token.js"
     }
   },
   "types": "./src/index.ts",

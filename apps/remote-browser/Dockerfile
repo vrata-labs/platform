@@ -12,6 +12,7 @@ RUN pnpm --filter @vrata/shared-types build && pnpm --filter @vrata/remote-brows
 RUN pnpm prune --prod --config.confirmModulesPurge=false --config.node-linker=hoisted
 
 FROM mcr.microsoft.com/playwright:v1.58.2-noble AS runtime
+LABEL io.vrata.frame-token-codec="2"
 
 ENV NODE_ENV=production \
     PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \

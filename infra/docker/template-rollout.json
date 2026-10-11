@@ -3,5 +3,6 @@
   "templateSchema": 2,
   "referenceTemplateVersions": ["1.0.0", "2.0.0"],
   "identityProtocolFloorGuard": 1,
-  "roomRecordReader": 2
+  "roomRecordReader": 2,
+  "frameTokenCodec": 2
 }

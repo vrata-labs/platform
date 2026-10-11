@@ -69,7 +69,8 @@ export function createApiMetrics(
     screenShareActiveSessions: new Set<string>(),
     virtualStateReleaseCompletionFailuresTotal: 0,
     // Appended last: report fixtures index counters by declaration order.
-    legacyStateReleaseCompletionFailuresTotal: 0
+    legacyStateReleaseCompletionFailuresTotal: 0,
+    frameCredentialReleaseCompletionFailuresTotal: 0
   };
 
   async function apiMetricsText(storage: Pick<Storage, "listRooms">): Promise<string> {
@@ -88,6 +89,9 @@ export function createApiMetrics(
       "# HELP vrata_api_legacy_state_release_completion_failures_total Persisted-room legacy state-token replies already released whose read-only fence then failed to complete.",
       "# TYPE vrata_api_legacy_state_release_completion_failures_total counter",
       formatMetricLine("vrata_api_legacy_state_release_completion_failures_total", metrics.legacyStateReleaseCompletionFailuresTotal),
+      "# HELP vrata_api_frame_credential_release_completion_failures_total Remote-browser frame credential replies already released whose read-only fence then failed to complete.",
+      "# TYPE vrata_api_frame_credential_release_completion_failures_total counter",
+      formatMetricLine("vrata_api_frame_credential_release_completion_failures_total", metrics.frameCredentialReleaseCompletionFailuresTotal),
       "# HELP vrata_rooms_total Rooms known to the API storage backend.",
       "# TYPE vrata_rooms_total gauge",
       formatMetricLine("vrata_rooms_total", rooms.length),

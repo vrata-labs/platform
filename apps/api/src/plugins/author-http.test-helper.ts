@@ -20,6 +20,9 @@ import type { RoomRecord } from "../storage-contracts.js";
 export const AUTHOR_HTTP_SECRET = "author-http-isolated-fixture-secret-32-bytes";
 export const AUTHOR_HTTP_SOURCE = "export function init() { /* PRIVATE-AUTHOR-HTTP-SOURCE */ }";
 export const AUTHOR_HTTP_CONFIG = "PRIVATE-AUTHOR-HTTP-CONFIG";
+// Frame fixtures reach the child only when a caller passes frame options. Never deployment credentials.
+export const AUTHOR_HTTP_FRAME_SECRET = "author-http-isolated-frame-fixture-secret-32-bytes";
+export const AUTHOR_HTTP_INTERNAL_TOKEN = "author-http-isolated-internal-fixture-token";
 const administrator = "author-http-isolated-administrator";
 
 export interface AuthorHttpResponse {
@@ -40,10 +43,13 @@ export interface AuthorHttpPackage {
   packageId: string; pluginId: string; version: string; artifactSha256: string;
   byteLength: number; manifest: RoomPluginManifest; state: string; uploadSettled: boolean;
 }
+/** authorityUrl must be an owned 127.0.0.1 HTTP mock; ttlSeconds defaults to 120. */
+export interface AuthorHttpFrameOptions { authorityUrl?: string; ttlSeconds?: number }
 type Phase = "body-admitted" | "body-end" | "put-written" | "upload-settled" | "private-read" | "plugin-room" | "settlement-timeout"
   | "telemetry-effect" | "telemetry-written" | "telemetry-read" | "telemetry-ack-loss" | "room-read" | "room-loaded"
   | "administrative-insert" | "administrative-receipt" | "administrative-ack-loss" | "state-token-ack-loss" | "legacy-state-token-ack-loss"
-  | "admission-write" | "admission-written" | "admission-ack-loss" | "legacy-control-entry" | "control-written" | "control-ack-loss";
+  | "admission-write" | "admission-written" | "admission-ack-loss" | "legacy-control-entry" | "control-written" | "control-ack-loss"
+  | "frame-sign-fault" | "frame-credential-ack-loss";
 type Message = { event?: string; phase?: Phase; id?: string; command?: string; kind?: Phase; roomId?: string; offset?: number; operation?: string;
   skip?: number; sqlState?: "55P03"; lockTimeoutMs?: number; phaseId?: string };
 
@@ -99,14 +105,19 @@ export function assertAuthorHttpPublicDto(value: unknown, forbidden: string[] = 
  * control-written holds it after its actual session_control merge UPDATE returned, its row lock still held.
  * control-ack-loss lets that UPDATE's real COMMIT run on the same client, then drops only its acknowledgement.
  * The seven legacy control POST routes are body checkpoints too; only remove and host transfer read a body.
- * x-author-hold-state-reply queues only a state-token or session-control reply's end() until flush-state-replies.
+ * The frame-credential POST is a body checkpoint too; its releases reuse telemetry-effect, floor-1 releases both state-token ack-loss phases.
+ * x-author-hold-state-reply queues only a state-token, frame-credential or session-control reply's end() until flush-state-replies.
+ * frame-sign-fault (frame fixtures only) makes the next HMAC keyed by the fixture frame secret throw once, before any send.
+ * frame-credential-ack-loss (frame fixtures only) lets the RS2 frame release's real COMMIT run on the client that took its read-only
+ * parent fence for the armed room (the route's initial room read selects the full row), then drops only its acknowledgement.
  * Held phases resume in FIFO order unless resumePhase names one, so one case may hold several requests.
  * The local reader currently uses FileHandle; readFile is also wrapped for the equivalent buffered path.
  */
-function childInstrumentation(indexUrl: string, telemetryCheckpoints: boolean, administrativeCheckpoints: boolean): string {
+function childInstrumentation(indexUrl: string, telemetryCheckpoints: boolean, administrativeCheckpoints: boolean, frameCheckpoints: boolean): string {
   return `
     import {IncomingMessage,ServerResponse} from 'node:http';
     import {syncBuiltinESMExports} from 'node:module';
+    import crypto from 'node:crypto';
     import fs from 'node:fs/promises';
     import pg from 'pg';
     let offset=0, armed;
@@ -141,6 +152,7 @@ function childInstrumentation(indexUrl: string, telemetryCheckpoints: boolean, a
     IncomingMessage.prototype.on=function(event,...args){
       const result=on.call(this,event,...args), id=this.headers?.['x-author-http-phase'];
         if(id && event==='end' && (this.url?.includes('/plugins/') || (${telemetryCheckpoints} && (this.url?.includes('/diagnostics') || this.url?.includes('/xr-telemetry') || this.url==='/api/tokens/state'
+          || (this.method==='POST' && this.url==='/api/tokens/remote-browser-frame')
           || (this.method==='POST' && legacyControlPath.test(this.url??'')))) || (${administrativeCheckpoints} && this.url==='/api/rooms'))){
         notify({event:'phase',phase:'body-admitted',id});
         on.call(this,'end',()=>notify({event:'phase',phase:'body-end',id}));
@@ -156,6 +168,7 @@ function childInstrumentation(indexUrl: string, telemetryCheckpoints: boolean, a
     const admissionScopes=new WeakMap();
     const admissionAckLosses=new WeakMap();
     const controlAckLosses=new WeakMap();
+    const frameAckLosses=new WeakMap();
     pg.Client.prototype.query=async function(sql,...args){
       const text=typeof sql==='string'?sql:sql?.text;
       const values=Array.isArray(args[0])?args[0]:sql?.values;
@@ -193,6 +206,9 @@ function childInstrumentation(indexUrl: string, telemetryCheckpoints: boolean, a
         if(armed?.kind==='control-ack-loss' && armed.roomId===scope){controlAckLosses.set(this,armed.id);armed=undefined;}
         await pause('control-written',scope);
       }
+      // Frame fixtures only: the RS2 release's read-only parent fence, recorded on the client that will COMMIT it.
+      if(${frameCheckpoints} && armed?.kind==='frame-credential-ack-loss' && armed.roomId===values?.[1]
+        && text==='select 1 from rooms where tenant_id=$1 and room_id=$2 for share'){frameAckLosses.set(this,armed.id);armed=undefined;}
       if(${administrativeCheckpoints} && text?.trimStart().startsWith('insert into rooms (')){
         creations.set(this,values?.[0]);await pause('administrative-insert',values?.[0]);
       }
@@ -217,8 +233,12 @@ function childInstrumentation(indexUrl: string, telemetryCheckpoints: boolean, a
         const id=controlAckLosses.get(this);controlAckLosses.delete(this);admissionScopes.delete(this);
         notify({event:'phase',phase:'control-ack-loss',id});throw new Error('fixture_control_commit_ack_lost');
       }
+      if(/^commit$/i.test(text??'') && frameAckLosses.has(this)){
+        const id=frameAckLosses.get(this);frameAckLosses.delete(this);
+        notify({event:'phase',phase:'frame-credential-ack-loss',id});throw new Error('fixture_frame_credential_commit_ack_lost');
+      }
       if(/^(commit|rollback)$/i.test(text??'')) admissionScopes.delete(this);
-      if(/^rollback$/i.test(text??'')){settlements.delete(this);creations.delete(this);ackLosses.delete(this);pinAckLosses.delete(this);admissionAckLosses.delete(this);controlAckLosses.delete(this);}
+      if(/^rollback$/i.test(text??'')){settlements.delete(this);creations.delete(this);ackLosses.delete(this);pinAckLosses.delete(this);admissionAckLosses.delete(this);controlAckLosses.delete(this);frameAckLosses.delete(this);}
       return result;
     };
     const root=process.env.ROOM_PLUGIN_LOCAL_UPLOAD_ROOT;
@@ -248,6 +268,17 @@ function childInstrumentation(indexUrl: string, telemetryCheckpoints: boolean, a
       if(privatePath(path))io(path.endsWith('.upload')?'temp-delete':'delete');
       return remove.call(this,path,...args);
     };
+    if(${frameCheckpoints}){
+      // One-shot and test-local: only an armed fault, only for the fixture frame key, throws before any send.
+      const frameKey=process.env.REMOTE_BROWSER_TOKEN_SECRET, createHmac=crypto.createHmac;
+      crypto.createHmac=function(algorithm,key,...args){
+        const text=typeof key==='string'?key:Buffer.isBuffer(key)?key.toString('utf8'):undefined;
+        if(armed?.kind==='frame-sign-fault' && frameKey && text===frameKey){
+          const id=armed.id;armed=undefined;notify({event:'phase',phase:'frame-sign-fault',id});throw new Error('fixture_frame_sign_fault');
+        }
+        return createHmac.call(this,algorithm,key,...args);
+      };
+    }
     syncBuiltinESMExports();
     if(${administrativeCheckpoints}){
       const {PostgresStorage}=await import(${JSON.stringify(new URL("storage.js", indexUrl).href)});
@@ -257,8 +288,8 @@ function childInstrumentation(indexUrl: string, telemetryCheckpoints: boolean, a
       };
     }
     if(${telemetryCheckpoints}){
-      // Emulate a backpressured reply: queue only the marked state-token or session-control end() after writeHead.
-      const holdable=req=>(req.method==='POST' && req.url==='/api/tokens/state')
+      // Emulate a backpressured reply: queue only the marked state-token, frame-credential or session-control end() after writeHead.
+      const holdable=req=>(req.method==='POST' && (req.url==='/api/tokens/state' || req.url==='/api/tokens/remote-browser-frame'))
         || (req.method==='GET' && /^[/]api[/]rooms[/][^/?]+[/]session-control$/.test(req.url??''));
       const end=ServerResponse.prototype.end;
       ServerResponse.prototype.end=function(...args){
@@ -316,8 +347,15 @@ function childInstrumentation(indexUrl: string, telemetryCheckpoints: boolean, a
   `;
 }
 
-export async function startAuthorHttpFixture(t: TestContext, floor: 1 | 2 = 2, telemetryCheckpoints = false, administrativeCheckpoints = false) {
+export async function startAuthorHttpFixture(t: TestContext, floor: 1 | 2 = 2, telemetryCheckpoints = false, administrativeCheckpoints = false,
+  frameOptions?: AuthorHttpFrameOptions) {
   assert.ok(process.env.VRATA_TEST_POSTGRES_URL, "VRATA_TEST_POSTGRES_URL is required (including CI)");
+  if (frameOptions?.authorityUrl !== undefined) {
+    const authority = new URL(frameOptions.authorityUrl);
+    assert.equal(authority.protocol === "http:" && authority.hostname === "127.0.0.1", true, "the frame binding authority must be an owned loopback mock");
+  }
+  const frameTtl = frameOptions?.ttlSeconds ?? 120;
+  assert.equal(Number.isSafeInteger(frameTtl) && frameTtl >= 30 && frameTtl <= 600, true, "the frame fixture TTL must be within the API clamp");
   const schema = `plugin_author_http_${randomUUID().replaceAll("-", "")}`;
   const rootPool = new Pool({ connectionString: process.env.VRATA_TEST_POSTGRES_URL });
   const localRoot = await mkdtemp(join(tmpdir(), "vrata-author-http-private-"));
@@ -375,10 +413,16 @@ export async function startAuthorHttpFixture(t: TestContext, floor: 1 | 2 = 2, t
     ROOM_ACCESS_POLICY_ENABLED: "true", FEATURE_HOST_CONTROLS: "true", FEATURE_PERSONAL_ROOMS: "true",
     FEATURE_ROOM_STATE_REALTIME: "false", FEATURE_REMOTE_BROWSER: "false",
     VRATA_DISABLE_AUTOSTART: "0", NOAH_DISABLE_AUTOSTART: "0", API_CORS_ORIGIN: "https://author-http.invalid" });
+  // Fixed frame fixtures only; callers without frame options keep the environment above unchanged.
+  if (frameOptions) Object.assign(env, { FEATURE_REMOTE_BROWSER: "true", REMOTE_BROWSER_ENABLED: "true",
+    REMOTE_BROWSER_TOKEN_SECRET: AUTHOR_HTTP_FRAME_SECRET, REMOTE_BROWSER_TOKEN_TTL_SECONDS: String(frameTtl),
+    VRATA_INTERNAL_SERVICE_TOKEN: AUTHOR_HTTP_INTERNAL_TOKEN,
+    ...(frameOptions.authorityUrl === undefined ? {} : { ROOM_STATE_INTERNAL_URL: frameOptions.authorityUrl }) });
   const messages: Message[] = [];
   const io: string[] = [];
   function spawnOwnedApiChild() {
-    const owned = spawn(process.execPath, ["--input-type=module", "-e", childInstrumentation(new URL("../index.js", import.meta.url).href, telemetryCheckpoints, administrativeCheckpoints)], {
+    const owned = spawn(process.execPath, ["--input-type=module", "-e", childInstrumentation(new URL("../index.js", import.meta.url).href, telemetryCheckpoints,
+      administrativeCheckpoints, frameOptions !== undefined)], {
       cwd: fileURLToPath(new URL("../../", import.meta.url)), env, stdio: ["ignore", "pipe", "pipe", "ipc"]
     });
     child = owned;

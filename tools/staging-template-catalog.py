@@ -53,6 +53,12 @@ def supports_room_record_reader(contract):
             and contract["roomRecordReader"] >= 2)
 
 
+def supports_frame_token_codec(contract):
+    return (isinstance(contract, dict) and contract.get("schemaVersion") == 1
+            and type(contract.get("frameTokenCodec")) is int
+            and contract["frameTokenCodec"] == 2)
+
+
 def assert_target_allowed(marker, status, target_contract, target_sha, minimum_identity_protocol=1, identity_bound=False,
                           ownerless_reference_personal=False):
     sha(target_sha)
@@ -69,6 +75,10 @@ def assert_target_allowed(marker, status, target_contract, target_sha, minimum_i
     if minimum_identity_protocol >= 2 or ownerless_reference_personal:
         if not supports_room_record_reader(target_contract):
             raise ValueError("room_record_rollback_requires_reader2")
+    # The target commit's API and remote-browser Dockerfiles label this codec (contract test).
+    if minimum_identity_protocol >= 2 or identity_bound:
+        if not supports_frame_token_codec(target_contract):
+            raise ValueError("frame_rollback_requires_codec2")
     if marker:
         sha(marker)
         if not supports_references(target_contract):

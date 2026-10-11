@@ -161,6 +161,9 @@ import {
   getConfiguredPublicLivekitUrl,
   getDefaultRemoteBrowserFrameStreamUrl
 } from "./public-endpoints.js";
+import {
+  captureFrameCredentialPlan, captureRemoteBrowserFrameBinding, issueRemoteBrowserFrameCredential, type FrameCredentialPlan
+} from "./remote-browser-frame-credential.js";
 
 export {
   isSpatialAudioFeatureEnabled,
@@ -377,14 +380,6 @@ export function resolveRemoteBrowserTokenTtlSeconds(env: NodeJS.ProcessEnv = pro
   const raw = env.REMOTE_BROWSER_TOKEN_TTL_SECONDS?.trim() ?? "300";
   const parsed = /^\d+$/.test(raw) ? Number.parseInt(raw, 10) : 300;
   return Math.max(30, Math.min(600, Number.isFinite(parsed) ? parsed : 300));
-}
-
-function encodeRemoteBrowserFrameToken(payload: { roomId: string; objectId: string; executorSessionId: string; frameStreamId: string; exp: number }, env: NodeJS.ProcessEnv = process.env): string {
-  const body = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
-  const secret = getRemoteBrowserFrameTokenSecret(env);
-  if (!secret) throw new Error("remote_browser_token_config_invalid");
-  const signature = createHmac("sha256", secret).update(body).digest("base64url");
-  return `${body}.${signature}`;
 }
 
 export function isRemoteBrowserIdentityBinding(input: { objectId: string; executorSessionId: string; executorInstanceId: string; mediaParticipantId?: string; frameStreamId?: string }): boolean {
@@ -816,10 +811,13 @@ function writeSessionTokenError(response: ServerResponse, result: RoomSessionTok
   });
 }
 
+/** Floor-1 tenant scope of an unpersisted (virtual) room id. */
+const LEGACY_VIRTUAL_TENANT_ID = "demo-tenant";
+
 async function resolveRoomTenantId(roomId: string): Promise<string> {
   const storage = await storagePromise;
   const room = await storage.getRoom(roomId);
-  return room?.tenantId ?? "demo-tenant";
+  return room?.tenantId ?? LEGACY_VIRTUAL_TENANT_ID;
 }
 
 class InvalidSessionTokenInput extends Error {}
@@ -905,14 +903,20 @@ async function runGuardedRoomEffect<T>(storage: Storage, actor: ControlPlaneActo
   try {
     return await storage.withRoomIdentityEffect(guard, effect);
   } catch (error) {
-    if (identityFenceUnavailable(error)) throw new IdentityBoundaryError(503, "identity_authority_unavailable", error);
-    if (error instanceof IdentityStorageError) {
-      if (error.code === "identity_session_expired") throw new IdentityBoundaryError(401, "identity_session_expired");
-      if (error.code === "identity_forbidden") throw new RoomEffectPermissionDenied("permission_denied");
-      throw new IdentityBoundaryError(409, "identity_recovery_required");
-    }
-    throw error;
+    throw guardedEffectError(error);
   }
+}
+
+/** Public mapping of the guarded identity fence; any other IdentityStorageError, a pinned role or ownership drift
+ * included, is recovery. */
+function guardedEffectError(error: unknown): unknown {
+  if (identityFenceUnavailable(error)) return new IdentityBoundaryError(503, "identity_authority_unavailable", error);
+  if (error instanceof IdentityStorageError) {
+    if (error.code === "identity_session_expired") return new IdentityBoundaryError(401, "identity_session_expired");
+    if (error.code === "identity_forbidden") return new RoomEffectPermissionDenied("permission_denied");
+    return new IdentityBoundaryError(409, "identity_recovery_required");
+  }
+  return error;
 }
 
 async function runLegacyRoomEffect<T>(storage: Storage, room: RoomRecord, options: { roomWrite?: boolean },
@@ -1000,6 +1004,131 @@ async function releaseLegacyStateToken(storage: Storage, selector: LegacyRoomCre
     if (error instanceof IdentityStorageError && error.code === "room_not_found") throw new RoomEffectNotFound("room_not_found");
     throw error;
   }
+}
+
+type FrameCredentialRelease = () => Promise<void>;
+
+function writeFrameNotAllowed(response: ServerResponse): void {
+  json(response, 403, { error: "forbidden", reason: "remote_browser_frame_not_allowed" });
+}
+
+/** Frame credentials are signed and sent synchronously inside the final read-only room fence. A COMMIT or connection
+ * failure after the reply was queued cannot revoke it: count it and let the reply finish. A failure before or during
+ * send, the signer's included, keeps its mapped error. */
+async function releaseFrameCredential(fence: (send: (write: () => void) => void) => Promise<void>): Promise<void> {
+  let released = false;
+  try {
+    await fence(write => { write(); released = true; });
+  } catch (error) {
+    if (!released) throw error;
+    metrics.frameCredentialReleaseCompletionFailuresTotal += 1;
+  }
+}
+
+/** One clock reading signs and reports; a lapsed original deadline signs nothing. */
+function writeFrameCredential(response: ServerResponse, plan: FrameCredentialPlan, nowMs: number, lapsed: () => void): void {
+  const issued = issueRemoteBrowserFrameCredential(plan, nowMs);
+  if (!issued) return lapsed();
+  json(response, 200, issued);
+}
+
+/** RS2: the original proof's scope, epoch, deadline, role and ownership pin one read-only identity fence; no token is
+ * prepared outside it. Drift is recovery, a lost permission keeps the frame denial, a lapse is session expiry. */
+function captureV2FrameRelease(response: ServerResponse, storage: Storage, proof: RoomSessionTokenPayload,
+  plan: FrameCredentialPlan): FrameCredentialRelease {
+  if (!proof.identityId || typeof proof.authEpoch !== "number" || !Number.isSafeInteger(proof.authEpoch) || proof.authEpoch < 1
+    || typeof proof.isOwner !== "boolean") throw new IdentityBoundaryError(409, "identity_recovery_required");
+  const guard: RoomEffectGuard = Object.freeze({ tenantId: proof.tenantId, roomId: proof.roomId, identityId: proof.identityId,
+    participantId: proof.participantId, authEpoch: proof.authEpoch, expiresAtSeconds: proof.exp, permission: "surface.view" as const,
+    expectedRole: proof.role, expectedIsOwner: proof.isOwner });
+  const lapsed = () => { throw new IdentityBoundaryError(401, "identity_session_expired"); };
+  return async () => {
+    try {
+      await releaseFrameCredential(async send => {
+        try {
+          await storage.withRoomIdentityEffect(guard, async scoped => {
+            scoped.releaseResponse(() => send(() => writeFrameCredential(response, plan, Date.now(), lapsed)));
+          });
+        } catch (error) { throw guardedEffectError(error); }
+      });
+    } catch (error) {
+      if (!(error instanceof RoomEffectPermissionDenied)) throw error;
+      writeFrameNotAllowed(response);
+    }
+  };
+}
+
+/** Floor 1: the captured MAC-verified bearer and the one initial room read decide the release. A persisted room is
+ * re-admitted in renew mode on the locked snapshot; a virtual room pins absence. Neither refreshes a token, writes
+ * admission state or falls back to the other namespace. */
+function captureLegacyFrameRelease(response: ServerResponse, storage: Storage, initialRoom: RoomRecord | null,
+  proof: RoomSessionTokenPayload, plan: FrameCredentialPlan,
+  bearer: Pick<LegacyAdmissionContext, "rawBearer" | "secret"> & { requestId: string }): FrameCredentialRelease | null {
+  const scope = Object.freeze({ tenantId: initialRoom?.tenantId ?? LEGACY_VIRTUAL_TENANT_ID, roomId: plan.binding.roomId });
+  // The proof was scoped by its own room read: a room created, deleted or moved between the two is refused.
+  if (proof.tenantId !== scope.tenantId || proof.roomId !== scope.roomId) { writeRoomStateChanged(response); return null; }
+  const ctx: LegacyAdmissionContext = Object.freeze({ rawBearer: bearer.rawBearer, secret: bearer.secret, nowMs: Date.now(),
+    accessPolicyEnabled: isRoomAccessPolicyEnabled(), hostControlsEnabled: isHostControlsEnabled() });
+  const { participantId } = proof;
+  // MAC, original expiry, original scope and subject first, on the release's one clock reading.
+  const reverify = (nowMs: number): RoomSessionTokenPayload | null => {
+    const current = classifyLegacyBearer({ ...ctx, nowMs }, scope, participantId);
+    if (current.kind === "valid") return current.payload;
+    writeLegacyBearerError(response, current);
+    return null;
+  };
+  const expired = () => writeSessionTokenError(response, { ok: false, code: "expired_token" });
+  if (!initialRoom) return async () => {
+    try {
+      await releaseFrameCredential(send => runLegacyVirtualRoomEffect(storage, scope.roomId, { pinAbsence: true, expiresAtSeconds: proof.exp },
+        async scoped => {
+          scoped.releaseResponse(() => send(() => {
+            const nowMs = Date.now();
+            const current = reverify(nowMs);
+            if (!current) return;
+            if (!hasRoomPermission(current.permissions, "surface.view")) return writeFrameNotAllowed(response);
+            writeFrameCredential(response, plan, nowMs, expired);
+          }));
+        }));
+    } catch (error) {
+      // The original deadline lapsing at the fence is the legacy codec's expiry, as at verification.
+      if (!(error instanceof IdentityBoundaryError && error.status === 401 && error.reason === "identity_session_expired")) throw error;
+      expired();
+    }
+  };
+  const admission: LegacyAdmissionRequest = Object.freeze({ mode: "renew", requestId: bearer.requestId, explicitParticipantId: null,
+    participantId, displayName: proof.displayName,
+    requested: Object.freeze({ role: proof.role, roleSource: proof.roleSource ?? "trusted" }), inviteTokenHash: null });
+  const initial = evaluateLegacyAdmission(admission, { room: initialRoom, invite: null, waiting: null }, ctx);
+  if (initial.kind === "session") { writeSessionTokenError(response, initial.result); return null; }
+  if (initial.kind === "upgrade_required") throw new IdentityBoundaryError(409, "identity_upgrade_required");
+  if (initial.kind === "deny") { json(response, 403, { error: "room_access_denied", reason: initial.reason }); return null; }
+  if (initial.kind !== "admit") { writeRoomStateChanged(response); return null; }
+  const { role, roleSource } = initial.decision;
+  if (!hasRoomPermission(getRoomPermissions(role), "surface.view")) { writeFrameNotAllowed(response); return null; }
+  const selector: LegacyRoomCredentialSelector = Object.freeze({ tenantId: scope.tenantId, roomId: scope.roomId,
+    participantId, inviteTokenHash: null });
+  return async () => {
+    try {
+      await releaseFrameCredential(send => storage.releaseLegacyRoomCredential(selector, {}, fresh => {
+        send(() => {
+          const nowMs = Date.now();
+          if (!reverify(nowMs)) return;
+          // Current role, lifecycle and private-room provenance on the locked snapshot; any role drift is a retry.
+          const next = evaluateLegacyAdmission(admission, fresh, Object.freeze({ ...ctx, nowMs }));
+          if (next.kind === "session") writeSessionTokenError(response, next.result);
+          else if (next.kind === "deny") json(response, 403, { error: "room_access_denied", reason: next.reason });
+          else if (next.kind !== "admit" || next.decision.role !== role || next.decision.roleSource !== roleSource) writeRoomStateChanged(response);
+          else writeFrameCredential(response, plan, nowMs, expired);
+        });
+        return undefined;
+      }));
+    } catch (error) {
+      if (identityFenceUnavailable(error)) throw new IdentityBoundaryError(503, "identity_authority_unavailable", error);
+      if (error instanceof IdentityStorageError && error.code === "room_not_found") throw new RoomEffectNotFound("room_not_found");
+      throw error;
+    }
+  };
 }
 
 async function releaseLegacyPersonalRoom(request: IncomingMessage, response: ServerResponse, storage: Storage,
@@ -4189,35 +4318,31 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       json(response, 400, { error: "remote_browser_frame_token_payload_required" });
       return;
     }
-    if (!isRemoteBrowserIdentityBinding({ objectId: payload.objectId, executorSessionId: payload.executorSessionId, executorInstanceId: payload.executorInstanceId, frameStreamId: payload.frameStreamId })) {
-      return json(response, 400, { error: "invalid_session_binding" });
-    }
-    const session = await verifyRoomSessionRequest(request, {
-      roomId: payload.roomId,
-      sessionToken: payload.sessionToken
-    });
+    // A frozen copy of exactly the shared-codec binding; the body is never read for it again.
+    const binding = captureRemoteBrowserFrameBinding(payload);
+    if (!binding) return json(response, 400, { error: "invalid_session_binding" });
+    const bodyToken = payload.sessionToken;
+    const stateSecret = getStateTokenSecret();
+    // Persisted or virtual is decided by this one read, before the proof and binding waits, and never re-decided.
+    const initialRoom = await storage.getRoom(binding.roomId);
+    const session = await verifyRoomSessionRequest(request, { roomId: binding.roomId, sessionToken: bodyToken });
     if (!session.ok) return writeSessionTokenError(response, session);
-    if (!hasRoomPermission(session.payload.permissions, "surface.view")) {
-      return json(response, 403, { error: "forbidden", reason: "remote_browser_frame_not_allowed" });
-    }
-    if (!await verifyRemoteBrowserAuthority({ roomId: payload.roomId, objectId: payload.objectId, executorSessionId: payload.executorSessionId, executorInstanceId: payload.executorInstanceId, frameStreamId: payload.frameStreamId })) {
+    if (!hasRoomPermission(session.payload.permissions, "surface.view")) return writeFrameNotAllowed(response);
+    const frameSecret = getRemoteBrowserFrameTokenSecret();
+    if (!frameSecret) return json(response, 503, { error: "remote_browser_token_config_invalid" });
+    const proof = session.payload;
+    const plan = captureFrameCredentialPlan({ binding, secret: frameSecret, ttlSeconds: resolveRemoteBrowserTokenTtlSeconds(),
+      proofExpiresAtSeconds: proof.exp, frameStreamUrl: getDefaultRemoteBrowserFrameStreamUrl(request) });
+    const rawBearer = bodyToken ?? getBearerToken(request);
+    const release = proof.identityProtocolVersion === 2 ? captureV2FrameRelease(response, storage, proof, plan)
+      : captureLegacyFrameRelease(response, storage, initialRoom, proof, plan,
+        { rawBearer: typeof rawBearer === "string" ? rawBearer : null, secret: stateSecret, requestId });
+    if (!release) return;
+    // No fence is held across this RPC. It may still confirm a since-superseded instance; the consumer pins the exact one.
+    if (!await verifyRemoteBrowserAuthority({ ...binding })) {
       return json(response, 409, { error: "remote_browser_session_not_authoritative" });
     }
-    if (!getRemoteBrowserFrameTokenSecret()) {
-      return json(response, 503, { error: "remote_browser_token_config_invalid" });
-    }
-    const ttlSeconds = resolveRemoteBrowserTokenTtlSeconds();
-    const token = await finalizeRoomToken(request, session, payload.sessionToken, async () => encodeRemoteBrowserFrameToken({
-      roomId: payload.roomId!, objectId: payload.objectId!, executorSessionId: payload.executorSessionId!,
-      frameStreamId: payload.frameStreamId!, exp: Math.floor(Date.now() / 1000) + ttlSeconds
-    }));
-    const frameStreamUrl = new URL(getDefaultRemoteBrowserFrameStreamUrl(request));
-    frameStreamUrl.searchParams.set("token", token);
-    json(response, 200, {
-      token,
-      expiresInSeconds: ttlSeconds,
-      frameStreamUrl: frameStreamUrl.toString()
-    });
+    await release();
     return;
   }
 

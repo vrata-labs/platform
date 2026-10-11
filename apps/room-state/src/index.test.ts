@@ -596,11 +596,13 @@ test("remote browser executor callback activates LiveKit media tracks", () => {
     patch: { type: "open-url", url: "https://example.com", inputEventId: "host:open:1" }
   });
   assert.equal(opened.accepted, true);
+  // Open-url commits revision 1; that server-owned revision, not the client event id, is the executor instance.
+  const executorInstanceId = `remote-browser:${objectId}:instance:1`;
   assert.equal(verifyRemoteBrowserBinding(server, {
     roomId: "demo-room",
     objectId,
     executorSessionId: `remote-browser:${objectId}`,
-    executorInstanceId: `remote-browser:${objectId}:instance:host:open:1`,
+    executorInstanceId,
     mediaParticipantId: `remote-browser:${objectId}`
   }), true);
   assert.equal(verifyRemoteBrowserBinding(server, {
@@ -609,13 +611,30 @@ test("remote browser executor callback activates LiveKit media tracks", () => {
     executorSessionId: `remote-browser:${objectId}`,
     executorInstanceId: `remote-browser:${objectId}:instance:stale`
   }), false);
+  const binding = {
+    roomId: "demo-room",
+    objectId,
+    executorSessionId: `remote-browser:${objectId}`,
+    executorInstanceId
+  };
+  const frameStreamId = `remote-browser:${objectId}:frames`;
+  const storedFrameStreamId = () => (server.rooms.get("demo-room")?.mediaObjects.objects[objectId]?.state as { frameStreamId?: string } | undefined)?.frameStreamId;
+  // Open-url never stores a frame stream; the credential binds the one derived from the executor session.
+  assert.equal(storedFrameStreamId(), undefined);
+  assert.equal(verifyRemoteBrowserBinding(server, { ...binding, frameStreamId }), true);
+  for (const wrong of [`remote-browser:${objectId}:frame`, "remote-browser:other:frames", `${objectId}:frames`, ""]) {
+    assert.equal(verifyRemoteBrowserBinding(server, { ...binding, frameStreamId: wrong }), false);
+  }
+  assert.equal(verifyRemoteBrowserBinding(server, { ...binding, executorSessionId: "remote-browser:other", frameStreamId: "remote-browser:other:frames" }), false);
+  assert.equal(verifyRemoteBrowserBinding(server, { ...binding, executorInstanceId: `remote-browser:${objectId}:instance:stale`, frameStreamId }), false);
+  assert.equal(storedFrameStreamId(), undefined);
 
   const active = applyRemoteBrowserExecutorPatchCommand(server, {
     roomId: "demo-room",
     surfaceId: "debug-main",
     objectId,
     executorSessionId: `remote-browser:${objectId}`,
-    executorInstanceId: `remote-browser:${objectId}:instance:host:open:1`,
+    executorInstanceId,
     patch: {
       type: "mark-active",
       mediaParticipantId: `remote-browser:${objectId}`,
@@ -633,6 +652,59 @@ test("remote browser executor callback activates LiveKit media tracks", () => {
   const payload = JSON.parse(hostSocket.sent[hostSocket.sent.length - 1]!);
   assert.equal(payload.type, "room_state");
   assert.equal(payload.room.mediaObjects.objects[objectId].state.mediaTrackSid, "TR_VP");
+  assert.equal("frameStreamId" in payload.room.mediaObjects.objects[objectId].state, false);
+});
+
+test("remote browser open-url forwards the derived frame stream without storing it", () => {
+  const previousUrl = process.env.REMOTE_BROWSER_INTERNAL_URL;
+  const originalFetch = globalThis.fetch;
+  const forwarded: Array<{ url: string; body: Record<string, unknown> }> = [];
+  process.env.REMOTE_BROWSER_INTERNAL_URL = "http://remote-browser.test";
+  globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+    forwarded.push({ url: String(url), body: JSON.parse(String(init?.body)) as Record<string, unknown> });
+    return new Response(null, { status: 200 });
+  }) as typeof fetch;
+  try {
+    const server = createRoomStateServer();
+    const hostSocket = createSocket();
+    connectParticipant(server, "demo-room", "host", hostSocket as never, { role: "host" });
+    const created = applyMediaObjectCreateCommand(server, "demo-room", "host", {
+      commandId: "cmd-create-browser",
+      surfaceId: "debug-main",
+      objectType: "remote-browser"
+    });
+    const objectId = created.objectId ?? "";
+    const opened = applyMediaObjectPatchCommand(server, "demo-room", "host", {
+      commandId: "cmd-open-browser",
+      surfaceId: "debug-main",
+      objectId,
+      expectedRevision: 0,
+      patch: { type: "open-url", url: "https://example.com", inputEventId: "host:open:1" }
+    });
+    assert.equal(opened.accepted, true);
+    assert.deepEqual(forwarded.map(({ url, body }) => [url, body.sessionId, body.executorInstanceId, body.frameStreamId]), [
+      ["http://remote-browser.test/api/sessions", `remote-browser:${objectId}`, `remote-browser:${objectId}:instance:1`, `remote-browser:${objectId}:frames`]
+    ]);
+    // An immediate replay of the same open is a duplicate: no revision, no new instance, no second executor request.
+    const replayed = applyMediaObjectPatchCommand(server, "demo-room", "host", {
+      commandId: "cmd-open-browser-replay",
+      surfaceId: "debug-main",
+      objectId,
+      expectedRevision: 1,
+      patch: { type: "open-url", url: "https://example.com", inputEventId: "host:open:1" }
+    });
+    assert.equal(replayed.accepted, false);
+    assert.equal(replayed.blockedReason, "duplicate-input-event");
+    assert.equal(forwarded.length, 1);
+    assert.equal(server.rooms.get("demo-room")?.mediaObjects.objects[objectId]?.revision, 1);
+    assert.equal((server.rooms.get("demo-room")?.mediaObjects.objects[objectId]?.state as { frameStreamId?: string } | undefined)?.frameStreamId, undefined);
+    const payload = JSON.parse(hostSocket.sent[hostSocket.sent.length - 1]!);
+    assert.equal("frameStreamId" in payload.room.mediaObjects.objects[objectId].state, false);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (previousUrl === undefined) delete process.env.REMOTE_BROWSER_INTERNAL_URL;
+    else process.env.REMOTE_BROWSER_INTERNAL_URL = previousUrl;
+  }
 });
 
 test("applySeatClaim switches seats for same participant atomically", () => {

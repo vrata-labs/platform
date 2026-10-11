@@ -1132,7 +1132,7 @@ export class PostgresStorage implements Storage {
         : "select 1 from rooms where tenant_id=$1 and room_id=$2 for share",
         [guard.tenantId, guard.roomId]);
       if (!room.rowCount) throw new IdentityStorageError("room_not_found");
-      const current = await assertPostgresEffect(client, guard);
+      const current = await assertPostgresEffect(client, guard, this.identityNow);
       // The parent lock pins role/epoch, but awaited SQL can outlive the original
       // session deadline: recheck it before each operation and before COMMIT.
       const check = () => { checkAlive(); assertCurrentEffect(guard, current, this.identityNow()); };

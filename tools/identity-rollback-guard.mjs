@@ -86,6 +86,19 @@ export function assertIdentityRollbackTarget({ envFile, composeFile, imageTag },
       if (!/^[1-9][0-9]*$/.test(value) || !Number.isSafeInteger(Number(value)) || Number(value) < 2) throw new Error("room_record_rollback_requires_reader2:api");
     }
   }
+  // Frame-token v2 follows the identity boundary; checked last so boundary/reader failures keep their codes.
+  if (!boundary) return;
+  const frameCodec = (service, image) => {
+    const value = run(["image", "inspect", "--format", '{{ index .Config.Labels "io.vrata.frame-token-codec" }}', image]);
+    if (value !== "2") throw new Error(`frame_rollback_requires_codec2:${service}`);
+  };
+  frameCodec("api", model.services.api.image);
+  // compose.demo-local.yml resets the optional browser; an absent consumer verifies no frame tokens.
+  const browser = model.services?.["remote-browser"];
+  if (browser == null) return;
+  if (typeof browser.image !== "string" || !browser.image.endsWith(`:${imageTag}`)) throw new Error("frame_rollback_requires_codec2:remote-browser");
+  run(["pull", browser.image]);
+  frameCodec("remote-browser", browser.image);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
