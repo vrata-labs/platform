@@ -1,4 +1,4 @@
-import { expect, test, request as playwrightRequest, type APIRequestContext, type Page } from "@playwright/test";
+import { expect, test, request as playwrightRequest, type APIRequestContext, type Browser, type Page, type TestInfo } from "@playwright/test";
 import { randomUUID } from "node:crypto";
 import { PDFDocument, rgb } from "pdf-lib";
 import { startReferenceTemplateFixture } from "./reference-template-fixture.js";
@@ -101,6 +101,31 @@ async function captureReferenceView(page: Page, name: string) {
   }
 }
 
+async function createFunctionalClient(browser: Browser) {
+  // Match the bounded two-client media check below. Keep CSS layout, scene bytes,
+  // materials and quality profiles; these 320x200 captures are functional evidence.
+  const context = await browser.newContext({ viewport: { width: 640, height: 400 }, deviceScaleFactor: 0.5 });
+  try { return { context, page: await context.newPage() }; }
+  catch (error) { await context.close(); throw error; }
+}
+
+async function assertFunctionalRenderBuffer(page: Page) {
+  expect(await page.evaluate(() => {
+    const canvas = document.querySelector<HTMLCanvasElement>("#scene canvas");
+    return [innerWidth, innerHeight, devicePixelRatio, canvas?.width, canvas?.height];
+  })).toEqual([640, 400, 0.5, 320, 200]);
+}
+
+async function attachFunctionalRenderDiagnostics(testInfo: TestInfo, pages: Page[]) {
+  const samples = await Promise.all(pages.map(page => page.evaluate(() => {
+    const canvas = document.querySelector<HTMLCanvasElement>("#scene canvas");
+    return { viewport: [innerWidth, innerHeight], deviceScaleFactor: devicePixelRatio,
+      drawingBuffer: [canvas?.width, canvas?.height],
+      frameBudgetMs: (window as any).__VRATA_DEBUG__?.avatarPoseTransport?.frameBudgetMs ?? null };
+  }).catch(() => ({ unavailable: true }))));
+  await testInfo.attach("functional-render-diagnostics", { body: JSON.stringify(samples), contentType: "application/json" });
+}
+
 test("reference UI shows three real previews and creates an owner-bound private workspace", async ({ page, request }) => {
   await page.goto(`${fixture.origin}/control-plane`);
   await page.locator("#admin-token-input").fill(token);
@@ -155,7 +180,10 @@ test("template selection confirms edited-default resets and API rejects mutable 
   expect(stale.status()).toBe(409);
 });
 
-test("reference presentation applies join-muted defaults and restores rendered PDF pages for late join", async ({ page, request, browser }, testInfo) => {
+test("reference presentation applies join-muted defaults and restores rendered PDF pages for late join", async ({ request, browser }, testInfo) => {
+  const publisher = await createFunctionalClient(browser);
+  const page = publisher.page;
+  try {
   const room = await create(request, "presentation-room-basic");
   await openRoom(page, await hostLink(request, room.roomId));
   await expect(page.locator("#guest-onboarding")).toBeVisible();
@@ -173,9 +201,10 @@ test("reference presentation applies join-muted defaults and restores rendered P
   await page.locator("#document-surface-button").click();
   await expect(page.locator("#presentation-page-label")).toHaveText("Page 1 / 2", { timeout: 30000 });
   await page.locator("#presentation-next").click();
-  const context = await browser.newContext({ viewport: { width: 640, height: 400 } });
+  const viewer = await createFunctionalClient(browser);
+  const context = viewer.context;
   try {
-    const late = await context.newPage();
+    const late = viewer.page;
     try { await join(late, `${room.roomLink}?debug=1&scenefit=0&onboard=0`); } catch (error) {
       const diagnostic = await late.evaluate(() => {
         const d = (window as any).__VRATA_DEBUG__;
@@ -186,20 +215,29 @@ test("reference presentation applies join-muted defaults and restores rendered P
     }
     await expect.poll(() => late.evaluate(() => `${(window as any).__VRATA_DEBUG__?.pdfPresentation?.renderState}:${(window as any).__VRATA_DEBUG__?.pdfPresentation?.page}`), { timeout: 30000 }).toBe("ready:2");
     await expect(late.locator("#presentation-prev")).toBeDisabled();
+    await assertFunctionalRenderBuffer(page);
+    await assertFunctionalRenderBuffer(late);
     await verifySeat(page, "seat-01", late, () => captureReferenceView(late, "presentation-page-two"));
-  } finally { await context.close(); }
+  } finally { await attachFunctionalRenderDiagnostics(testInfo, [page, viewer.page]); await context.close(); }
+  } finally { await publisher.context.close(); }
 });
 
-test("reference meeting synchronizes only declared surfaces across two participants", async ({ page, request, browser }) => {
+test("reference meeting synchronizes only declared surfaces across two participants", async ({ request, browser }, testInfo) => {
+  const publisher = await createFunctionalClient(browser);
+  const page = publisher.page;
+  try {
   const room = await create(request, "meeting-room-basic");
   const hostUrl = new URL(await hostLink(request, room.roomId));
   if (staging) hostUrl.searchParams.set("audiomock", "1");
   await join(page, hostUrl.href);
   await captureReferenceView(page, "meeting-spawn");
-  const context = await browser.newContext({ viewport: { width: 640, height: 400 } });
+  const viewer = await createFunctionalClient(browser);
+  const context = viewer.context;
   try {
-    const observer = await context.newPage();
+    const observer = viewer.page;
     await join(observer, `${room.roomLink}?debug=1&scenefit=0&onboard=0${staging ? "&audiomock=1" : ""}`);
+    await assertFunctionalRenderBuffer(page);
+    await assertFunctionalRenderBuffer(observer);
     expect(await page.evaluate(() => (window as any).__VRATA_TEST__.createWhiteboardObject("whiteboard-wall"))).toBe(true);
     await expect.poll(() => observer.evaluate(() => (window as any).__VRATA_DEBUG__?.mediaObjects?.surfaces.find((s: any) => s.surfaceId === "whiteboard-wall")?.activeObjectType), { timeout: 15000 }).toBe("whiteboard");
     const surfaces = await page.evaluate(() => (window as any).__VRATA_DEBUG__.mediaObjects.surfaces.map((s: any) => s.surfaceId).sort());
@@ -214,8 +252,12 @@ test("reference meeting synchronizes only declared surfaces across two participa
         return { subscribed: d?.media?.subscribedAudioCount, spatial: d?.spatialAudio?.remoteSources?.some((source: any) => source.hasAudioNode && source.pannerActive) };
       }), { timeout: 45000 }).toEqual({ subscribed: 1, spatial: true });
     }
-    for (let seat = 1; seat <= 8; seat++) await verifySeat(page, `seat-${String(seat).padStart(2, "0")}`, observer);
-  } finally { await context.close(); }
+    for (let seat = 1; seat <= 8; seat++) {
+      const seatId = `seat-${String(seat).padStart(2, "0")}`;
+      await test.step(seatId, () => verifySeat(page, seatId, observer));
+    }
+  } finally { await attachFunctionalRenderDiagnostics(testInfo, [page, viewer.page]); await context.close(); }
+  } finally { await publisher.context.close(); }
 });
 
 if (staging) test("reference presentation receives moving screen-share frames through the real media transport", async ({ request, playwright }) => {
@@ -243,10 +285,7 @@ if (staging) test("reference presentation receives moving screen-share frames th
     await join(page, await hostLink(request, room.roomId));
     await join(observer, `${room.roomLink}?debug=1&scenefit=0&onboard=0`);
     for (const client of [page, observer]) {
-      expect(await client.evaluate(() => {
-        const canvas = document.querySelector<HTMLCanvasElement>("#scene canvas");
-        return [innerWidth, innerHeight, devicePixelRatio, canvas?.width, canvas?.height];
-      })).toEqual([640, 400, 0.5, 320, 200]);
+      await assertFunctionalRenderBuffer(client);
     }
     // Replace only the OS capture source. Publishing, subscription, decoding and
     // surface presentation use the ordinary product transport, without sharemock.
