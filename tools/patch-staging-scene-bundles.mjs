@@ -17,8 +17,6 @@ export const defaultRooms = [
   }
 ];
 
-const defaultBaseUrl = "https://158.160.10.234.sslip.io";
-const defaultAdminToken = "vrata-stage-admin";
 const defaultBranch = "main";
 
 function trimTrailingSlash(value) {
@@ -255,8 +253,10 @@ function parseRestoreReportArg(argv) {
 }
 
 async function main() {
-  const baseUrl = process.env.BASE_URL ?? defaultBaseUrl;
-  const adminToken = process.env.STAGING_ADMIN_TOKEN ?? process.env.VRATA_ADMIN_TOKEN ?? defaultAdminToken;
+  const baseUrl = process.env.BASE_URL;
+  const adminToken = process.env.STAGING_ADMIN_TOKEN ?? process.env.VRATA_ADMIN_TOKEN;
+  if (!baseUrl) throw new Error("missing_scene_bundle_base_url");
+  if (!adminToken) throw new Error("missing_scene_bundle_admin_token");
   const restoreReportPath = parseRestoreReportArg(process.argv.slice(2));
 
   if (restoreReportPath) {

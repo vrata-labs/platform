@@ -4,8 +4,9 @@ import { expectSceneRoomReady, type ExpectedBundleUrl } from "./scene-room-accep
 import { createLegacyStagingRoom, releaseLegacyStagingRoom, disableRetainedStagingRooms } from "./staging-legacy-room";
 
 const stagingRoomId = process.env.STAGING_ROOM_ID ?? "demo-room";
-const stagingAdminToken = process.env.STAGING_ADMIN_TOKEN ?? "vrata-stage-admin";
-const stagingBaseUrl = process.env.BASE_URL ?? "https://158.160.10.234.sslip.io";
+const stagingAdminToken = process.env.STAGING_ADMIN_TOKEN ?? "";
+// Keep local test discovery side-effect free; the staging CLI requires BASE_URL.
+const stagingBaseUrl = process.env.BASE_URL ?? "http://127.0.0.1:4000";
 const stagingAssetBaseUrl = process.env.STAGING_ASSET_BASE_URL ?? `${new URL(stagingBaseUrl).protocol}//state.${new URL(stagingBaseUrl).host}`;
 const stagingSceneBundleVersion = process.env.STAGING_SCENE_BUNDLE_VERSION;
 test.afterEach(async ({ request }) => disableRetainedStagingRooms(request, stagingAdminToken));
