@@ -252,7 +252,15 @@ Local real-media evidence observed successful validation at exp+2 s, refusal at
 exp+65 s, and continuing media from an already-connected publisher. This is not
 new staging, device or instant-revocation acceptance.
 
-### Source-scoped user media and live promotion (pending CI publication)
+### Source-scoped user media and live promotion (published; staging excluded)
+
+Published code: `509537f6faee9c817eff3b1081a9afaeba60e396`. Exact-SHA
+[CI](https://github.com/vrata-labs/platform/actions/runs/38435682765) and
+[Docker publication](https://github.com/vrata-labs/platform/actions/runs/38435682817)
+passed on attempt 1. Local and CI full E2E passed 208 cases, including six
+mandatory self-hosted RTC scenarios using the built main runtime; CI also passed
+16 M0.5 cases. Staging deployment/verification and shared floor-2 activation are
+excluded by the user's instruction.
 
 Fresh user media JWTs carry a nonempty canonical `canPublishSources` list:
 microphone for requested audio, `screen_share` and `screen_share_audio` for

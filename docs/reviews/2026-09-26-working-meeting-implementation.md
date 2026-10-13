@@ -1215,11 +1215,38 @@ API **1576 passed / 1 optional MinIO skipped**, runtime **1125/1125**, room-stat
 Обязательные PG/rollback fixtures включены. После этого полный local E2E на
 неизменённом исполняемом дереве — **208/208**, **40,8 минуты**, exit0, без skip,
 retry или flaky, включая все шесть real-LiveKit scenarios. Отчёт:
-t01a-source-final208.json. CI/Docker для нового code SHA ещё не приняты.
+t01a-source-final208.json. CI/Docker приёмка приведена ниже.
 Старые clients
 требуют обновлённый runtime для нового scoped share path; прежние unrestricted
 JWT/connected sessions, T13a revoke/rejoin и executor media остаются gates.
 Staging и общий floor2 не включались.
+
+#### Публикация AF
+
+| Этап | Результат |
+|---|---|
+| Code SHA рабочей ветки | `509537f6faee9c817eff3b1081a9afaeba60e396` |
+| [CI 38435682765](https://github.com/vrata-labs/platform/actions/runs/38435682765) | Success, attempt1: lint/typecheck/build, package/PG/rollback checks, **208/208 E2E за 22,1 минуты**, **16/16 M0.5**, pinned scene assets |
+| [Docker Publish 38435682817](https://github.com/vrata-labs/platform/actions/runs/38435682817) | Success, attempt1: immutable API/room-state/remote-browser images и проверенные YCR manifests exact SHA |
+| [Playwright artifact 11834980442](https://github.com/vrata-labs/platform/actions/runs/38435682765/artifacts/11834980442) | Local E2E/M0.5 evidence, включая mandatory owned LiveKit scenarios |
+| Staging | Deploy и проверка исключены по прямому поручению пользователя; общий floor1 сохранён |
+
+CI подтвердил **1576 API / 1125 runtime tests**, с теми же тремя необязательными
+MinIO/tools skips; обязательные PG/rollback checks включены. Все шесть новых
+real-RTC cases прошли в составе208, без skips/retries/flaky. Откат кода и повтор
+CI/Docker run не потребовались.
+
+Опубликованные image digests:
+- API: `sha256:4fae609c2d6048a929ad2cfc0621f39fa6b3d9f377ab8ad8d379b71e60b2e97e`.
+- room-state: `sha256:849aed73b6bb37d420501924236b9eda75d3ca28f2c6ce0c0fec630e3d590f85`.
+- remote-browser: `sha256:6aa4e797c42db3a61e7506802e7d6c738ac760c6ab236d3e40d0a137fc89d095`.
+
+Собственный PostgreSQL fixture удалён после проверки ID/label, local service и
+fixture ports освобождены. Extractor containers и native LiveKit processes
+проверок закрыты; соседние процессы и staging-инфраструктура не изменялись.
+AF принят в границах fresh source grants и main-path live promotion upgrade;
+T13a connected-session/rejoin enforcement, executor media, bootstrap reconciliation
+и durable retirement остаются отдельными gates.
 
 ## Публикация первого среза T01/T12
 
