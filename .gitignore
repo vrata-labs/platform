@@ -16,3 +16,6 @@ coverage/
 test-results/
 playwright-report/
 backups/
+infra/docker/.env.staging
+__pycache__/
+*.py[cod]

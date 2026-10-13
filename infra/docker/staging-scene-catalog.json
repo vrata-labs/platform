@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "tenantId": "demo-tenant",
+  "templateId": "meeting-room-basic",
+  "templateVersion": "0.1.0",
+  "rooms": [
+    { "name": "Hall", "roomId": "42db8225-f671-4e46-9c28-9381d66a948c", "sceneId": "sense-hall2-v1", "versioned": true },
+    { "name": "BlueOffice", "roomId": "0b537d34-7b92-4b51-854a-8c64cfb4c114", "sceneId": "sense-blueoffice-glb-v4", "versioned": true },
+    { "name": "LectureHall", "roomId": "c79f7f2c-2680-493b-9f8e-b6cd69802fdb", "sceneId": "sense-lecturehall-glb-v2" },
+    { "name": "Showroom", "roomId": "003f5e72-90fe-4901-9dca-8be83f74e01a", "sceneId": "sense-showroom-glb-v3" },
+    { "name": "MeetingSmall", "roomId": "1a90118c-635c-478b-9448-33eb76a45f50", "sceneId": "sense-meeting-small-glb-v2" },
+    { "name": "Cinema", "roomId": "b51f3193-1af8-4b0b-935f-b89f16e0016a", "sceneId": "sense-cinema-glb-v1" },
+    { "name": "Anastasia", "roomId": "85be9531-03d3-495b-9a4a-69c4b833acc7", "sceneId": "sense-anastasia-glb-v1" },
+    { "name": "NewGallery", "roomId": "d53bde42-7952-4cd6-9c3f-2b06a7254c04", "sceneId": "sense-newgallery-glb-v2" },
+    { "name": "ArtGallery", "roomId": "c17bcb81-fcd2-4432-94be-688f16a61037", "sceneId": "sense-artgallery-glb-v2" },
+    { "name": "Standup", "roomId": "af85fed9-8b17-4f06-ae15-5355057d7200", "sceneId": "sense-standup-glb-v1" },
+    { "name": "OporaRussia", "roomId": "d686c23e-78b5-4f55-a47f-b380114d5d1a", "sceneId": "sense-opora-russia-glb-v1" },
+    { "name": "SergOffice", "roomId": "ba67301b-14f4-4c88-ba7f-2b63e0c1c332", "sceneId": "sense-serg-office-glb-v1" },
+    { "name": "CinemaModeler", "roomId": "c28e17b5-7b26-408b-926e-aa93fef9915e", "sceneId": "sense-cinema-modeler-glb-v1" }
+  ]
+}

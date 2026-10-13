@@ -6,11 +6,23 @@ catalog activation nor subsequent successful deployments may replace that marker
 No room or volume is deleted by this tool.
 """
 import argparse
+import importlib.util
 import json
 import os
 from pathlib import Path
 import re
+import stat
 import subprocess
+import sys
+import tempfile
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from staging_gate_proof import load_gate_proof
+
+_state_spec = importlib.util.spec_from_file_location("staging_release_state", Path(__file__).with_name("staging-accepted-release.py"))
+_state_module = importlib.util.module_from_spec(_state_spec)
+_state_spec.loader.exec_module(_state_module)
+AcceptedState = _state_module.AcceptedState
 
 
 def sha(value):
@@ -37,10 +49,11 @@ def assert_target_allowed(marker, status, target_contract, target_sha):
 
 
 class CatalogHost:
-    def __init__(self, root):
+    def __init__(self, root, state_dir=None):
         self.root = Path(root).resolve()
         self.marker_path = self.root / "infra/docker/.template-wave2-rollback-sha"
         self.success_path = self.root / "infra/docker/.staging-successful-image-tag"
+        self.state_dir = state_dir
         self.compose = ["docker", "compose", "--env-file", str(self.root / "infra/docker/.env.staging"),
                         "-f", str(self.root / "infra/docker/compose.staging.yml")]
 
@@ -54,7 +67,13 @@ class CatalogHost:
         return result.stdout.strip()
 
     def marker(self):
-        return sha(self.marker_path.read_text().strip()) if self.marker_path.exists() else None
+        try:
+            metadata = self.marker_path.lstat()
+        except FileNotFoundError:
+            return None
+        if not stat.S_ISREG(metadata.st_mode):
+            raise ValueError("template_rollout_invalid_marker_file")
+        return sha(self.marker_path.read_text().strip())
 
     def contract(self, target):
         result = self.run(["git", "-c", f"safe.directory={self.root}", "show",
@@ -85,25 +104,104 @@ class CatalogHost:
             raise RuntimeError("template_rollout_running_image_mismatch")
         return payload
 
-    def record_wave2(self, expected):
-        status = self.cli(["status"], required=False)
-        if status is None:
-            return {"wave2Marker": None}
+    def verify_status(self, expected, status):
         if status["imageSha"] != sha(expected):
             raise ValueError("template_rollout_image_mismatch")
         if not supports_references(self.contract(expected)):
             raise ValueError("template_rollout_contract_missing")
-        if not self.marker():
-            if status["state"] != "wave2":
-                raise ValueError("template_rollout_wave2_gate_required")
-            if not self.success_path.exists() or self.success_path.read_text().strip() != expected:
-                raise ValueError("template_rollout_successful_gate_required")
-            # Exclusive creation: concurrent/repeated calls cannot overwrite it.
-            with self.marker_path.open("x") as output:
-                output.write(expected + "\n")
+        if not self.marker() and status["state"] != "wave2":
+            raise ValueError("template_rollout_wave2_gate_required")
+        return {"wave2Marker": self.marker(), "state": status["state"]}
+
+    def verify_wave2(self, expected, gate_proof):
+        if gate_proof is None:
+            raise ValueError("template_rollout_successful_gate_required")
+        load_gate_proof(gate_proof, self.root, sha(expected))
+        return self.verify_status(expected, self.cli(["status"]))
+
+    def record_wave2(self, expected, gate_proof=None):
+        expected = sha(expected)
+        proof = load_gate_proof(gate_proof, self.root, expected) if gate_proof else None
+        state = AcceptedState(self.root, self.state_dir)
+        with state.locked(create=False):
+            try:
+                release = state.preflight()["release"]
+            except ValueError as error:
+                if str(error) == "accepted_release_missing":
+                    raise ValueError("template_rollout_successful_gate_required") from None
+                raise
+            if release["imageSha"] != expected:
+                raise ValueError("template_rollout_accepted_image_mismatch")
+            if proof and (proof["runId"], proof["runAttempt"]) != (release["runId"], release["runAttempt"]):
+                raise ValueError("template_rollout_accepted_run_mismatch")
+            status = self.cli(["status"])
+            self.verify_status(expected, status)
+            if not self.marker():
+                self.create_marker(expected)
+        return {"wave2Marker": self.marker(), "state": status["state"]}
+
+    def create_marker(self, expected):
+        fd, temporary = tempfile.mkstemp(prefix=".wave2-marker-", dir=self.marker_path.parent)
+        try:
+            with os.fdopen(fd, "w") as output:
+                os.fchmod(output.fileno(), 0o600)
+                output.write(sha(expected) + "\n")
                 output.flush()
                 os.fsync(output.fileno())
-        return {"wave2Marker": self.marker(), "state": status["state"]}
+            try:
+                os.link(temporary, self.marker_path)
+            except FileExistsError:
+                self.marker()
+            directory = os.open(self.marker_path.parent, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+        finally:
+            os.unlink(temporary)
+
+    def guard_accepted(self, expected):
+        state = AcceptedState(self.root, self.state_dir)
+        with state.locked(create=False):
+            release = state.preflight()["release"]
+            if release["imageSha"] != sha(expected):
+                raise ValueError("template_rollout_accepted_image_mismatch")
+            status = self.verify_status(expected, self.cli(["status"]))
+            if status["wave2Marker"] is None:
+                raise ValueError("template_rollout_finalization_pending")
+            return status
+
+    def schema_state(self):
+        configuration = json.loads(self.run(self.compose + ["config", "--format", "json"]))
+        volume = configuration.get("volumes", {}).get("postgres-data", {}).get("name")
+        if not isinstance(volume, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", volume):
+            raise ValueError("template_rollout_postgres_volume_unknown")
+        volumes = self.run(["docker", "volume", "ls", "--format", "{{.Name}}"])
+        containers = self.run(self.compose + ["ps", "-a", "-q", "postgres"])
+        if volume not in volumes.splitlines():
+            if containers:
+                raise ValueError("template_rollout_postgres_volume_missing")
+            return {"schema": "absent"}
+        running = self.run(self.compose + ["ps", "-q", "postgres"])
+        if not running or len(running.splitlines()) != 1:
+            raise RuntimeError("template_rollout_postgres_not_running")
+        result = self.run(self.compose + ["exec", "-T", "postgres", "sh", "-c",
+                         'psql -XAt -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "$1"', "sh",
+                         "select json_build_object('relations', (select count(*) from pg_catalog.pg_class c join pg_catalog.pg_namespace n on n.oid=c.relnamespace where n.nspname not in ('pg_catalog','information_schema') and n.nspname !~ '^pg_(toast|temp)' and c.relkind in ('r','p','v','m','S','f')), 'templates', exists(select 1 from pg_catalog.pg_class where oid=to_regclass('public.templates') and relkind in ('r','p')), 'rooms', exists(select 1 from pg_catalog.pg_class where oid=to_regclass('public.rooms') and relkind in ('r','p')))"])
+        try:
+            status = json.loads(result)
+        except json.JSONDecodeError:
+            raise ValueError("template_rollout_schema_invalid") from None
+        if (not isinstance(status, dict) or set(status) != {"relations", "templates", "rooms"}
+                or type(status["relations"]) is not int or status["relations"] < 0
+                or type(status["templates"]) is not bool or type(status["rooms"]) is not bool):
+            raise ValueError("template_rollout_schema_invalid")
+        if status == {"relations": 0, "templates": False, "rooms": False}:
+            return {"schema": "empty"}
+        # Core presence enables prepare; API initialization still validates the full schema.
+        if status["relations"] >= 2 and status["templates"] and status["rooms"]:
+            return {"schema": "initialized"}
+        raise ValueError("template_rollout_schema_partial")
 
     def prepare(self, target):
         marker = self.marker()
@@ -123,15 +221,18 @@ class CatalogHost:
         marker = self.marker()
         if not marker or not supports_references(self.contract(marker)):
             raise ValueError("template_rollout_verified_wave2_required")
-        status = self.cli(["status"])
-        if status["imageSha"] != sha(expected):
-            raise ValueError("template_rollout_image_mismatch")
-        args = [command, "--expected-image-sha", expected]
-        if command == "activate":
-            if not self.success_path.exists() or self.success_path.read_text().strip() != expected:
-                raise ValueError("template_rollout_successful_gate_required")
-            args += ["--rollback-sha", marker]
-        result = self.cli(args)
+        state = AcceptedState(self.root, self.state_dir)
+        with state.locked(create=False):
+            release = state.preflight()["release"]
+            if release["imageSha"] != sha(expected):
+                raise ValueError("template_rollout_accepted_image_mismatch")
+            status = self.cli(["status"])
+            if status["imageSha"] != sha(expected):
+                raise ValueError("template_rollout_image_mismatch")
+            args = [command, "--expected-image-sha", expected]
+            if command == "activate":
+                args += ["--rollback-sha", marker]
+            result = self.cli(args)
         if result["state"] != ("active" if command == "activate" else "wave2"):
             raise RuntimeError("template_rollout_catalog_state_mismatch")
         return result
@@ -139,17 +240,25 @@ class CatalogHost:
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=["status", "preflight", "record-wave2", "prepare", "activate", "rollback"])
+    parser.add_argument("command", choices=["status", "preflight", "schema-state", "verify-wave2", "record-wave2", "guard-accepted", "prepare", "activate", "rollback"])
     parser.add_argument("--root", required=True)
     parser.add_argument("--sha")
+    parser.add_argument("--gate-proof")
+    parser.add_argument("--state-dir")
     args = parser.parse_args()
-    host = CatalogHost(args.root)
+    host = CatalogHost(args.root, args.state_dir)
     if args.command in ("status", "preflight"):
         result = host.cli([args.command])
         if args.command == "status":
             result["wave2Marker"] = host.marker()
     elif args.command == "record-wave2":
-        result = host.record_wave2(sha(args.sha))
+        result = host.record_wave2(sha(args.sha), args.gate_proof)
+    elif args.command == "verify-wave2":
+        result = host.verify_wave2(sha(args.sha), args.gate_proof)
+    elif args.command == "guard-accepted":
+        result = host.guard_accepted(sha(args.sha))
+    elif args.command == "schema-state":
+        result = host.schema_state()
     elif args.command == "prepare":
         result = host.prepare(sha(args.sha))
     else:

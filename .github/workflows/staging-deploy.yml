@@ -7,12 +7,15 @@ on:
   workflow_dispatch:
     inputs:
       deploy_sha:
-        description: "Immutable image SHA tag to deploy or rollback to"
+        description: Immutable full image SHA
         required: true
         type: string
+      bootstrap:
+        description: First verified deployment on a designated new host
+        default: false
+        type: boolean
       force_fail_gate:
-        description: "Force the verification gate to fail after rollout"
-        required: false
+        description: Force the verification gate to fail after rollout
         default: false
         type: boolean
 
@@ -20,14 +23,14 @@ permissions:
   actions: read
   contents: read
 
-concurrency:
-  group: staging-deploy
-  cancel-in-progress: false
-
 jobs:
   deploy:
-    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main')
+    if: github.event_name == 'workflow_dispatch' || (vars.STAGING_AUTO_DEPLOY_ENABLED != 'false' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main')
     runs-on: ubuntu-latest
+    timeout-minutes: 150
+    concurrency:
+      group: staging-deploy
+      cancel-in-progress: false
     outputs:
       deploy_sha: ${{ steps.deploy.outputs.deploy_sha }}
       rutube_blocking: ${{ steps.remote_browser_impact.outputs.rutube_blocking }}
@@ -41,23 +44,30 @@ jobs:
       STAGING_ADMIN_TOKEN: ${{ secrets.STAGING_ADMIN_TOKEN }}
       YCR_USERNAME: ${{ secrets.YCR_USERNAME }}
       YCR_PASSWORD: ${{ secrets.YCR_PASSWORD }}
+      BASE_URL: ${{ secrets.STAGING_BASE_URL }}
+      STAGING_ASSET_BASE_URL: ${{ secrets.STAGING_BASE_URL }}
+      PLAYWRIGHT_NO_WEB_SERVER: "1"
+      BOOTSTRAP: ${{ inputs.bootstrap || false }}
+      STAGING_HALL_ROOM_ID: 42db8225-f671-4e46-9c28-9381d66a948c
+      STAGING_BLUEOFFICE_ROOM_ID: 0b537d34-7b92-4b51-854a-8c64cfb4c114
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: pnpm
-
-      - name: Setup SSH agent
-        uses: webfactory/ssh-agent@v0.9.0
+      - uses: webfactory/ssh-agent@v0.9.0
         with:
           ssh-private-key: ${{ secrets.STAGING_SSH_KEY }}
+      - name: Configure SSH host identity
+        env:
+          STAGING_SSH_KNOWN_HOSTS: ${{ secrets.STAGING_SSH_KNOWN_HOSTS }}
+        run: |
+          test -n "$STAGING_SSH_KNOWN_HOSTS"
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$STAGING_SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
 
       - name: Determine deploy SHA
         id: deploy
@@ -65,304 +75,211 @@ jobs:
           MANUAL_DEPLOY_SHA: ${{ inputs.deploy_sha || '' }}
           WORKFLOW_DEPLOY_SHA: ${{ github.event.workflow_run.head_sha || '' }}
         run: |
-          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
-            DEPLOY_SHA="$MANUAL_DEPLOY_SHA"
-          else
-            DEPLOY_SHA="$WORKFLOW_DEPLOY_SHA"
-          fi
-          if [[ ! "$DEPLOY_SHA" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "invalid_deploy_sha:$DEPLOY_SHA" >&2
-            exit 1
-          fi
-          echo "deploy_sha=$DEPLOY_SHA" >> "$GITHUB_OUTPUT"
-
-      # Keep the rollback helper available when manually deploying an older SHA.
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then SHA="$MANUAL_DEPLOY_SHA"; else SHA="$WORKFLOW_DEPLOY_SHA"; fi
+          [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          echo "deploy_sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "STAGING_SCENE_BUNDLE_VERSION=$SHA" >> "$GITHUB_ENV"
       - name: Prepare scene rollback helper
         run: |
           mkdir -p "$RUNNER_TEMP/vrata-scene-rollback"
           cp tools/staging-scene-snapshot.mjs tools/patch-staging-scene-bundles.mjs "$RUNNER_TEMP/vrata-scene-rollback/"
           cp tools/staging-minio-rollout.py "$RUNNER_TEMP/vrata-scene-rollback/"
           cp tools/staging-template-catalog.py "$RUNNER_TEMP/vrata-scene-rollback/"
+          cp tools/staging-accepted-release.py tools/staging-remote-release.py tools/staging_gate_proof.py tools/staging_scene_files.py "$RUNNER_TEMP/vrata-scene-rollback/"
+          cp infra/docker/rollout-staging-images.sh "$RUNNER_TEMP/vrata-scene-rollback/"
+          echo "REMOTE_HELPERS=${STAGING_APP_DIR}-stage-state/helpers/$GITHUB_SHA" >> "$GITHUB_ENV"
 
-      - name: Sync workspace to deploy SHA
+      - name: Wait for CI on exact SHA
+        timeout-minutes: 32
         env:
-          DEPLOY_SHA: ${{ steps.deploy.outputs.deploy_sha }}
-        run: |
-          git fetch --no-tags --depth=1 origin "$DEPLOY_SHA"
-          git checkout --detach FETCH_HEAD
-
-      - name: Wait for CI on deploy SHA
-        if: github.event_name != 'workflow_dispatch'
-        env:
-          DEPLOY_SHA: ${{ steps.deploy.outputs.deploy_sha }}
+          SHA: ${{ steps.deploy.outputs.deploy_sha }}
           GH_TOKEN: ${{ github.token }}
         run: |
           for attempt in $(seq 1 60); do
-            CONCLUSION="$(gh run list --workflow CI --commit "$DEPLOY_SHA" --limit 10 --json status,conclusion --jq 'map(select(.status == "completed")) | .[0].conclusion // ""')"
-            if [ "$CONCLUSION" = "success" ]; then
-              exit 0
-            fi
-            if [ -n "$CONCLUSION" ]; then
-              echo "ci_failed_for_deploy_sha:$DEPLOY_SHA:$CONCLUSION" >&2
-              exit 1
-            fi
-            STATUS="$(gh run list --workflow CI --commit "$DEPLOY_SHA" --limit 1 --json status --jq '.[0].status // "not_found"')"
-            echo "waiting_for_ci:$DEPLOY_SHA:attempt=$attempt:status=$STATUS"
+            CONCLUSION="$(gh run list --workflow CI --commit "$SHA" --limit 10 --json status,conclusion --jq 'map(select(.status == "completed")) | .[0].conclusion // ""')"
+            if [ "$CONCLUSION" = success ]; then exit 0; fi
+            if [ -n "$CONCLUSION" ]; then echo "ci_failed_for_deploy_sha:$SHA:$CONCLUSION" >&2; exit 1; fi
+            echo "waiting_for_ci:$SHA:$attempt"
             sleep 30
           done
-          echo "ci_wait_timeout:$DEPLOY_SHA" >&2
           exit 1
 
-      - name: Checkout private scene assets
+      - name: Prepare host protocol and read accepted state
+        id: previous
+        env:
+          SHA: ${{ steps.deploy.outputs.deploy_sha }}
+        run: |
+          # shellcheck disable=SC2029
+          ssh "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo test -f '$STAGING_APP_DIR/infra/docker/.env.staging'"
+          BOOTSTRAP_ARG=; if [ "$BOOTSTRAP" = true ]; then BOOTSTRAP_ARG=--bootstrap; fi
+          # shellcheck disable=SC2029
+          ssh "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo python3 -B '${STAGING_APP_DIR}-stage-state/bootstrap-tools/staging-remote-release.py' preflight --root '$STAGING_APP_DIR' --image-sha '$SHA' $BOOTSTRAP_ARG" > "$RUNNER_TEMP/accepted-before.json"
+          # Only a valid designated/accepted host can receive the new protocol.
+          # shellcheck disable=SC2029
+          tar -C "$RUNNER_TEMP/vrata-scene-rollback" -czf - . | ssh "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo mkdir -p '$REMOTE_HELPERS' && sudo tar -xzf - -C '$REMOTE_HELPERS'"
+          # shellcheck disable=SC2029
+          ssh "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo python3 -B '$REMOTE_HELPERS/staging-remote-release.py' preflight --root '$STAGING_APP_DIR' --image-sha '$SHA' $BOOTSTRAP_ARG" > "$RUNNER_TEMP/accepted-before.json"
+          node - "$RUNNER_TEMP/accepted-before.json" <<'NODE'
+          const fs = require('node:fs');
+          const data = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `previous_sha=${data.release?.imageSha ?? ''}\nasset_sha=${data.binding?.assetSha ?? ''}\n`);
+          NODE
+
+      - name: Sync workspace to deploy SHA
+        env:
+          SHA: ${{ steps.deploy.outputs.deploy_sha }}
+        run: git fetch --no-tags --depth=1 origin "$SHA" && git checkout --detach FETCH_HEAD
+      - name: Checkout pinned private assets
         uses: actions/checkout@v4
         with:
           repository: ${{ env.PRIVATE_SCENE_ASSETS_REPOSITORY }}
-          ref: main
+          ref: ${{ steps.previous.outputs.asset_sha || 'main' }}
           ssh-key: ${{ secrets.PRIVATE_SCENE_ASSETS_DEPLOY_KEY }}
           path: private-scene-assets
           persist-credentials: false
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Determine previous successful SHA
-        id: previous
-        run: |
-          SUCCESSFUL_SHA_FILE="$STAGING_APP_DIR/infra/docker/.staging-successful-image-tag"
-          PREVIOUS_SHA="$(ssh -o StrictHostKeyChecking=no "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo bash -lc 'if [ -f \"$SUCCESSFUL_SHA_FILE\" ]; then cat \"$SUCCESSFUL_SHA_FILE\"; else grep -E \"^IMAGE_TAG=\" \"$STAGING_APP_DIR/infra/docker/.env.staging\" | cut -d= -f2; fi'")"
-          if [ -z "$PREVIOUS_SHA" ]; then
-            echo "rollback_precondition_failed: missing previous successful sha" >&2
-            exit 1
-          fi
-          if [[ ! "$PREVIOUS_SHA" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "rollback_precondition_failed: invalid previous successful sha: $PREVIOUS_SHA" >&2
-            exit 1
-          fi
-          echo "previous_sha=$PREVIOUS_SHA" >> "$GITHUB_OUTPUT"
-          {
-            echo "### Staging deploy"
-            echo "- deploy sha: \`${{ steps.deploy.outputs.deploy_sha }}\`"
-            echo "- previous successful sha: \`$PREVIOUS_SHA\`"
-          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Freeze asset SHA
+        run: echo "ASSET_SHA=$(git -C private-scene-assets rev-parse HEAD)" >> "$GITHUB_ENV"
+      - run: pnpm install --frozen-lockfile
 
       - name: Detect remote browser changes
         id: remote_browser_impact
         env:
-          DEPLOY_SHA: ${{ steps.deploy.outputs.deploy_sha }}
+          SHA: ${{ steps.deploy.outputs.deploy_sha }}
           PREVIOUS_SHA: ${{ steps.previous.outputs.previous_sha }}
         run: |
-          git fetch --no-tags --depth=1 origin "$PREVIOUS_SHA"
-          RUTUBE_PATHS=(
-            .github/workflows/staging-deploy.yml
-            .github/workflows/rutube-canary.yml
-            apps/api/src/index.ts
-            apps/remote-browser
-            apps/room-state/src/index.ts
-            apps/room-state/src/state.ts
-            apps/runtime-web/public/remote-browser-demo.html
-            apps/runtime-web/public/remote-browser-media-demo.html
-            apps/runtime-web/src/main.ts
-            apps/runtime-web/src/media
-            apps/shared-types
-            infra/docker
-            package.json
-            playwright.config.ts
-            pnpm-lock.yaml
-            tests/e2e/m1-media/remote-browser-object.spec.ts
-            tests/e2e/m1-media/remote-browser-rutube.spec.ts
-            tools/run-staging-e2e.mjs
-          )
-          if git diff --quiet "$PREVIOUS_SHA" "$DEPLOY_SHA" -- "${RUTUBE_PATHS[@]}"; then
-            RUTUBE_BLOCKING=false
-          else
-            RUTUBE_BLOCKING=true
+          if [ -z "$PREVIOUS_SHA" ]; then BLOCKING=true; else
+            git fetch --no-tags --depth=1 origin "$PREVIOUS_SHA"
+            if git diff --quiet "$PREVIOUS_SHA" "$SHA" -- .github/workflows/staging-deploy.yml .github/workflows/rutube-canary.yml apps/api apps/remote-browser apps/room-state apps/runtime-web/src/main.ts apps/runtime-web/src/media apps/runtime-web/public/remote-browser-demo.html apps/runtime-web/public/remote-browser-media-demo.html apps/shared-types infra/docker package.json pnpm-lock.yaml playwright.config.ts tests/e2e/m1-media tools/run-staging-e2e.mjs; then BLOCKING=false; else BLOCKING=true; fi
           fi
-          echo "rutube_blocking=$RUTUBE_BLOCKING" >> "$GITHUB_OUTPUT"
-          {
-            echo "- blocking Rutube verification: $RUTUBE_BLOCKING"
-            if [ "$RUTUBE_BLOCKING" = "true" ]; then
-              echo "- remote browser paths changed:"
-              git diff --name-only "$PREVIOUS_SHA" "$DEPLOY_SHA" -- "${RUTUBE_PATHS[@]}" | sed 's/^/  - /'
-            fi
-          } >> "$GITHUB_STEP_SUMMARY"
+          echo "rutube_blocking=$BLOCKING" >> "$GITHUB_OUTPUT"
 
-      - name: Upload private scene assets to staging host
+      - name: Upload candidate source without replacing accepted files
+        env:
+          SHA: ${{ steps.deploy.outputs.deploy_sha }}
         run: |
           test -f private-scene-assets/assets/manifest.json
-          tar -C private-scene-assets/assets -czf - . | ssh -o StrictHostKeyChecking=no "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo bash -lc 'rm -rf \"$PRIVATE_SCENE_ASSETS_HOST_DIR\" && mkdir -p \"$PRIVATE_SCENE_ASSETS_HOST_DIR/assets\" && tar -xzf - -C \"$PRIVATE_SCENE_ASSETS_HOST_DIR/assets\"'"
-
-      # rollout-staging-images.sh changes room URLs too: capture BEFORE invoking it.
+          echo "REMOTE_SOURCE=${STAGING_APP_DIR}-stage-state/source/$SHA/$ASSET_SHA" >> "$GITHUB_ENV"
+          # shellcheck disable=SC2029
+          tar -C private-scene-assets/assets -czf - . | ssh "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo mkdir -p '${STAGING_APP_DIR}-stage-state/source/$SHA/$ASSET_SHA' && sudo tar -xzf - -C '${STAGING_APP_DIR}-stage-state/source/$SHA/$ASSET_SHA'"
       - name: Capture pre-rollout scene URLs
-        env:
-          BASE_URL: ${{ env.STAGING_BASE_URL }}
-          STAGING_HALL_ROOM_ID: 42db8225-f671-4e46-9c28-9381d66a948c
-          STAGING_BLUEOFFICE_ROOM_ID: 0b537d34-7b92-4b51-854a-8c64cfb4c114
-        run: node "$RUNNER_TEMP/vrata-scene-rollback/staging-scene-snapshot.mjs" capture "$RUNNER_TEMP/vrata-scene-bundle-snapshot.json"
+        if: steps.previous.outputs.previous_sha != ''
+        timeout-minutes: 5
+        run: |
+          node "$RUNNER_TEMP/vrata-scene-rollback/staging-scene-snapshot.mjs" capture "$RUNNER_TEMP/vrata-scene-bundle-snapshot.json"
+          # Keep the private pointer snapshot available for recovery after runner cancellation.
+          # shellcheck disable=SC2029
+          cat "$RUNNER_TEMP/vrata-scene-bundle-snapshot.json" | ssh "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo install -d -m 700 '${STAGING_APP_DIR}-stage-state/attempts/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT' && sudo sh -c 'umask 077; cat > \"${STAGING_APP_DIR}-stage-state/attempts/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT/scene-urls.json\"'"
 
       - name: Roll out staging images
         id: rollout
+        timeout-minutes: 25
         continue-on-error: true
         env:
-          DEPLOY_SHA: ${{ steps.deploy.outputs.deploy_sha }}
+          SHA: ${{ steps.deploy.outputs.deploy_sha }}
         run: |
-          YCR_PASSWORD_B64="$(printf '%s' "$YCR_PASSWORD" | base64 -w0)"
-          ROLLOUT_HELPER_B64="$(base64 -w0 "$RUNNER_TEMP/vrata-scene-rollback/staging-minio-rollout.py")"
-          TEMPLATE_HELPER_B64="$(base64 -w0 "$RUNNER_TEMP/vrata-scene-rollback/staging-template-catalog.py")"
-          # shellcheck disable=SC2087
-          ssh -o StrictHostKeyChecking=no "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo bash -s" <<EOF
-          set -euo pipefail
-          cd "$STAGING_APP_DIR"
-          git -c safe.directory="$STAGING_APP_DIR" fetch origin
-          TEMPLATE_HELPER="\$(mktemp)"
-          printf '%s' '$TEMPLATE_HELPER_B64' | base64 -d > "\$TEMPLATE_HELPER"
-          python3 "\$TEMPLATE_HELPER" prepare --root "$STAGING_APP_DIR" --sha "$DEPLOY_SHA"
-          rm -f "\$TEMPLATE_HELPER"
-          git -c safe.directory="$STAGING_APP_DIR" checkout "$DEPLOY_SHA"
-          printf '%s' '${YCR_PASSWORD_B64}' | base64 -d | docker login cr.yandex --username '${YCR_USERNAME}' --password-stdin
-          ROLLOUT_HELPER="\$(mktemp)"
-          trap 'rm -f "\$ROLLOUT_HELPER"' EXIT
-          printf '%s' '$ROLLOUT_HELPER_B64' | base64 -d > "\$ROLLOUT_HELPER"
-          VRATA_PRIVATE_SCENE_ASSETS_ROOT="$PRIVATE_SCENE_ASSETS_HOST_DIR/assets" python3 "\$ROLLOUT_HELPER" ./infra/docker/rollout-staging-images.sh "$DEPLOY_SHA"
-          EOF
+          # shellcheck disable=SC2029
+          printf '%s' "$YCR_PASSWORD" | ssh "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo docker login cr.yandex --username '$YCR_USERNAME' --password-stdin"
+          BOOTSTRAP_ARG=; if [ "$BOOTSTRAP" = true ]; then BOOTSTRAP_ARG=--bootstrap; fi
+          # shellcheck disable=SC2029
+          ssh "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo python3 -B '$REMOTE_HELPERS/staging-remote-release.py' rollout --root '$STAGING_APP_DIR' --image-sha '$SHA' --asset-sha '$ASSET_SHA' --source '$REMOTE_SOURCE' --run-id '$GITHUB_RUN_ID' --run-attempt '$GITHUB_RUN_ATTEMPT' $BOOTSTRAP_ARG"
 
-      - name: Install Playwright browser
+      - name: Public health and authenticated seed
         if: steps.rollout.outcome == 'success'
-        run: pnpm exec playwright install --with-deps chromium
-
-      - name: Patch canonical staging scene bundles
-        if: steps.rollout.outcome == 'success'
-        env:
-          BASE_URL: ${{ env.STAGING_BASE_URL }}
-          STAGING_ADMIN_TOKEN: ${{ env.STAGING_ADMIN_TOKEN }}
-          STAGING_HALL_ROOM_ID: 42db8225-f671-4e46-9c28-9381d66a948c
-          STAGING_BLUEOFFICE_ROOM_ID: 0b537d34-7b92-4b51-854a-8c64cfb4c114
-          STAGING_SCENE_BUNDLE_BRANCH: main
-          STAGING_SCENE_BUNDLE_VERSION: ${{ steps.deploy.outputs.deploy_sha }}
-          STAGING_SCENE_BUNDLE_PATCH_REPORT: /tmp/vrata-scene-bundle-patch-report.json
-        run: node tools/patch-staging-scene-bundles.mjs
-
-      - name: Verification gate
-        if: steps.rollout.outcome == 'success'
-        id: gate
-        continue-on-error: true
-        env:
-          BASE_URL: ${{ env.STAGING_BASE_URL }}
-          PLAYWRIGHT_NO_WEB_SERVER: "1"
-          STAGING_ROOM_ID: demo-room
-          STAGING_HALL_ROOM_ID: 42db8225-f671-4e46-9c28-9381d66a948c
-          STAGING_BLUEOFFICE_ROOM_ID: 0b537d34-7b92-4b51-854a-8c64cfb4c114
-          STAGING_LECTUREHALL_ROOM_ID: c79f7f2c-2680-493b-9f8e-b6cd69802fdb
-          STAGING_SHOWROOM_ROOM_ID: 003f5e72-90fe-4901-9dca-8be83f74e01a
-          STAGING_MEETINGSMALL_ROOM_ID: 1a90118c-635c-478b-9448-33eb76a45f50
-          STAGING_CINEMA_ROOM_ID: b51f3193-1af8-4b0b-935f-b89f16e0016a
-          STAGING_ANASTASIA_ROOM_ID: 85be9531-03d3-495b-9a4a-69c4b833acc7
-          STAGING_NEWGALLERY_ROOM_ID: d53bde42-7952-4cd6-9c3f-2b06a7254c04
-          STAGING_ARTGALLERY_ROOM_ID: c17bcb81-fcd2-4432-94be-688f16a61037
-          STAGING_STANDUP_ROOM_ID: af85fed9-8b17-4f06-ae15-5355057d7200
-          STAGING_OPORARUSSIA_ROOM_ID: d686c23e-78b5-4f55-a47f-b380114d5d1a
-          STAGING_SERGOFFICE_ROOM_ID: ba67301b-14f4-4c88-ba7f-2b63e0c1c332
-          STAGING_CINEMAMODELER_ROOM_ID: c28e17b5-7b26-408b-926e-aa93fef9915e
-          STAGING_ADMIN_TOKEN: ${{ env.STAGING_ADMIN_TOKEN }}
-          STAGING_SCENE_BUNDLE_VERSION: ${{ steps.deploy.outputs.deploy_sha }}
-          RUTUBE_BLOCKING: ${{ steps.remote_browser_impact.outputs.rutube_blocking }}
-          PLAYWRIGHT_REPORT_NAME: staging-gate
+        timeout-minutes: 8
         run: |
-          for _ in $(seq 1 30); do
-            if curl --fail --silent "$STAGING_BASE_URL/health" >/tmp/vrata-staging-health.json; then
-              break
-            fi
-            sleep 10
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent --max-time 10 "$BASE_URL/health" >/dev/null; then break; fi
+            sleep 5
+            echo "waiting_for_public_health:$attempt"
           done
-          curl --fail --silent "$STAGING_BASE_URL/health" >/dev/null
-          curl --fail --silent "$STAGING_BASE_URL/rooms/demo-room" >/dev/null
-          curl --fail --silent "$STAGING_BASE_URL/control-plane" >/dev/null
-          curl --fail --silent -H "x-vrata-admin-token: $STAGING_ADMIN_TOKEN" "$STAGING_BASE_URL/api/control-plane/session" >/tmp/vrata-control-plane-session.json
-          node - /tmp/vrata-control-plane-session.json <<'NODE'
-          const fs = require('node:fs');
-          const payload = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
-          if (!Array.isArray(payload.permissions) || !payload.permissions.includes('dashboard.read')) {
-            console.error('control_plane_session_missing_dashboard_read');
-            process.exit(1);
+          curl --fail --silent --max-time 30 "$BASE_URL/health" >/dev/null
+          node tools/bootstrap-staging-rooms.mjs
+          node --input-type=module - <<'NODE'
+          const data = await (await fetch(`${process.env.BASE_URL}/api/templates`, {headers:{'x-vrata-admin-token':process.env.STAGING_ADMIN_TOKEN}})).json();
+          if (data.items.some(row => row.templateId === 'meeting-room-basic' && row.currentVersion === '0.1.0')) {
+            const {seedStagingTemplateFixtures} = await import('./tools/seed-staging-template-fixtures.mjs');
+            await seedStagingTemplateFixtures(process.env.BASE_URL, process.env.STAGING_ADMIN_TOKEN);
           }
           NODE
-          if [ "${{ inputs.force_fail_gate || 'false' }}" = "true" ]; then
-            echo "forced_gate_failure" >&2
-            exit 1
-          fi
+      - name: Patch canonical staging scene bundles
+        if: steps.rollout.outcome == 'success'
+        timeout-minutes: 5
+        env:
+          STAGING_SCENE_BUNDLE_PATCH_REPORT: /tmp/vrata-scene-bundle-patch-report.json
+        run: node tools/patch-staging-scene-bundles.mjs
+      - name: Install Playwright browser
+        if: steps.rollout.outcome == 'success'
+        timeout-minutes: 5
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Verification gate
+        id: gate
+        timeout-minutes: 35
+        if: steps.rollout.outcome == 'success'
+        continue-on-error: true
+        env:
+          RUTUBE_BLOCKING: ${{ steps.remote_browser_impact.outputs.rutube_blocking }}
+          FORCE_FAIL: ${{ inputs.force_fail_gate || false }}
+          PLAYWRIGHT_REPORT_NAME: staging-gate
+        run: |
+          curl --fail --silent "$BASE_URL/rooms/demo-room" >/dev/null
+          curl --fail --silent "$BASE_URL/control-plane" >/dev/null
+          if [ "$FORCE_FAIL" = true ]; then echo forced_gate_failure >&2; exit 1; fi
           pnpm test:e2e:staging
-          if [ "$RUTUBE_BLOCKING" = "true" ]; then
-            PLAYWRIGHT_REPORT_NAME=staging-rutube-blocking pnpm test:e2e:rutube
-          fi
+          if [ "$RUTUBE_BLOCKING" = true ]; then PLAYWRIGHT_REPORT_NAME=staging-rutube-blocking pnpm test:e2e:rutube; fi
 
-      - name: Upload staging Playwright artifacts
-        if: always() && steps.rollout.outcome == 'success'
+      - name: Publish accepted release and finalize catalog
+        id: publish
+        timeout-minutes: 5
+        if: steps.gate.outcome == 'success'
+        env:
+          SHA: ${{ steps.deploy.outputs.deploy_sha }}
+        run: |
+          node - <<'NODE' > "$RUNNER_TEMP/gate-proof.json"
+          console.log(JSON.stringify({schemaVersion:1,imageSha:process.env.SHA,runId:process.env.GITHUB_RUN_ID,runAttempt:Number(process.env.GITHUB_RUN_ATTEMPT),gate:'passed'}));
+          NODE
+          # shellcheck disable=SC2029
+          cat "$RUNNER_TEMP/gate-proof.json" | ssh "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo tee '$REMOTE_HELPERS/gate-proof-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.json' >/dev/null"
+          BOOTSTRAP_ARG=; if [ "$BOOTSTRAP" = true ]; then BOOTSTRAP_ARG=--bootstrap; fi
+          # shellcheck disable=SC2029
+          ssh "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo python3 -B '$REMOTE_HELPERS/staging-remote-release.py' publish --root '$STAGING_APP_DIR' --image-sha '$SHA' --asset-sha '$ASSET_SHA' --gate-proof '$REMOTE_HELPERS/gate-proof-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.json' --run-id '$GITHUB_RUN_ID' --run-attempt '$GITHUB_RUN_ATTEMPT' $BOOTSTRAP_ARG"
+
+      - name: Remove obsolete scene copies after acceptance
+        if: steps.publish.outcome == 'success'
+        timeout-minutes: 5
+        continue-on-error: true
+        env:
+          SHA: ${{ steps.deploy.outputs.deploy_sha }}
+        run: |
+          # shellcheck disable=SC2029
+          ssh "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo python3 -B '$REMOTE_HELPERS/staging-remote-release.py' prune --root '$STAGING_APP_DIR' --image-sha '$SHA'"
+
+      - name: Roll back failed deploy
+        id: rollback
+        timeout-minutes: 20
+        if: ${{ !cancelled() && (steps.rollout.outcome == 'success' || steps.rollout.outcome == 'failure') && (failure() || steps.rollout.outcome == 'failure' || steps.gate.outcome == 'failure') }}
+        env:
+          SHA: ${{ steps.deploy.outputs.deploy_sha }}
+        run: |
+          # shellcheck disable=SC2029
+          printf '%s' "$YCR_PASSWORD" | ssh "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo docker login cr.yandex --username '$YCR_USERNAME' --password-stdin"
+          # shellcheck disable=SC2029
+          ssh "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo python3 -B '$REMOTE_HELPERS/staging-remote-release.py' rollback --root '$STAGING_APP_DIR' --image-sha '$SHA' --run-id '$GITHUB_RUN_ID' --run-attempt '$GITHUB_RUN_ATTEMPT'" > "$RUNNER_TEMP/rollback-result.json"
+          if [ -n '${{ steps.previous.outputs.previous_sha }}' ]; then
+            node "$RUNNER_TEMP/vrata-scene-rollback/staging-scene-snapshot.mjs" restore "$RUNNER_TEMP/vrata-scene-bundle-snapshot.json"
+            curl --fail --silent "$BASE_URL/health" >/dev/null
+            curl --fail --silent "$BASE_URL/rooms/demo-room" >/dev/null
+            curl --fail --silent "$BASE_URL/control-plane" >/dev/null
+          fi
+      - name: Upload verification artifacts
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: playwright-staging-gate-${{ github.run_id }}-${{ github.run_attempt }}
+          name: staging-verification-${{ github.run_id }}-${{ github.run_attempt }}
           retention-days: 14
           if-no-files-found: ignore
           path: |
             playwright-report/
             test-results/
-
-      - name: Persist successful deploy SHA
-        if: steps.rollout.outcome == 'success' && steps.gate.outcome == 'success'
-        env:
-          DEPLOY_SHA: ${{ steps.deploy.outputs.deploy_sha }}
-        run: |
-          SUCCESSFUL_SHA_FILE="$STAGING_APP_DIR/infra/docker/.staging-successful-image-tag"
-          ssh -o StrictHostKeyChecking=no "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo bash -lc 'printf %s \"$DEPLOY_SHA\" > \"$SUCCESSFUL_SHA_FILE\"'"
-          TEMPLATE_HELPER_B64="$(base64 -w0 "$RUNNER_TEMP/vrata-scene-rollback/staging-template-catalog.py")"
-          # shellcheck disable=SC2087
-          ssh -o StrictHostKeyChecking=no "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo bash -s" <<EOF
-          set -euo pipefail
-          TEMPLATE_HELPER="\$(mktemp)"
-          trap 'rm -f "\$TEMPLATE_HELPER"' EXIT
-          printf '%s' '$TEMPLATE_HELPER_B64' | base64 -d > "\$TEMPLATE_HELPER"
-          python3 "\$TEMPLATE_HELPER" record-wave2 --root "$STAGING_APP_DIR" --sha "$DEPLOY_SHA"
-          EOF
-          {
-            echo "- verification gate: success"
-            echo "- persisted successful sha: \`$DEPLOY_SHA\`"
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Roll back failed deploy
-        id: rollback
-        if: ${{ !cancelled() && (steps.rollout.outcome == 'failure' || (steps.rollout.outcome == 'success' && (failure() || steps.gate.outcome == 'failure'))) }}
-        env:
-          BASE_URL: ${{ env.STAGING_BASE_URL }}
-          ROLLBACK_SHA: ${{ steps.previous.outputs.previous_sha }}
-        run: |
-          YCR_PASSWORD_B64="$(printf '%s' "$YCR_PASSWORD" | base64 -w0)"
-          ROLLOUT_HELPER_B64="$(base64 -w0 "$RUNNER_TEMP/vrata-scene-rollback/staging-minio-rollout.py")"
-          TEMPLATE_HELPER_B64="$(base64 -w0 "$RUNNER_TEMP/vrata-scene-rollback/staging-template-catalog.py")"
-          # shellcheck disable=SC2087
-          ssh -o StrictHostKeyChecking=no "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo bash -s" <<EOF
-          set -euo pipefail
-          cd "$STAGING_APP_DIR"
-          TEMPLATE_HELPER="\$(mktemp)"
-          printf '%s' '$TEMPLATE_HELPER_B64' | base64 -d > "\$TEMPLATE_HELPER"
-          python3 "\$TEMPLATE_HELPER" prepare --root "$STAGING_APP_DIR" --sha "$ROLLBACK_SHA"
-          rm -f "\$TEMPLATE_HELPER"
-          git -c safe.directory="$STAGING_APP_DIR" checkout "$ROLLBACK_SHA"
-          printf '%s' '${YCR_PASSWORD_B64}' | base64 -d | docker login cr.yandex --username '${YCR_USERNAME}' --password-stdin
-          ROLLOUT_HELPER="\$(mktemp)"
-          trap 'rm -f "\$ROLLOUT_HELPER"' EXIT
-          printf '%s' '$ROLLOUT_HELPER_B64' | base64 -d > "\$ROLLOUT_HELPER"
-          VRATA_PRIVATE_SCENE_ASSETS_ROOT="$PRIVATE_SCENE_ASSETS_HOST_DIR/assets" python3 "\$ROLLOUT_HELPER" ./infra/docker/rollout-staging-images.sh "$ROLLBACK_SHA"
-          EOF
-          node "$RUNNER_TEMP/vrata-scene-rollback/staging-scene-snapshot.mjs" restore "$RUNNER_TEMP/vrata-scene-bundle-snapshot.json"
-          curl --fail --silent "$STAGING_BASE_URL/health" >/dev/null
-          curl --fail --silent "$STAGING_BASE_URL/rooms/demo-room" >/dev/null
-          curl --fail --silent "$STAGING_BASE_URL/control-plane" >/dev/null
-          SUCCESSFUL_SHA_FILE="$STAGING_APP_DIR/infra/docker/.staging-successful-image-tag"
-          ssh -o StrictHostKeyChecking=no "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo bash -lc 'printf %s \"$ROLLBACK_SHA\" > \"$SUCCESSFUL_SHA_FILE\"'"
-          {
-            echo "- rollback scene URLs: restored and verified"
-            echo "- verification gate: failed"
-            echo "- rollback target: \`$ROLLBACK_SHA\`"
-          } >> "$GITHUB_STEP_SUMMARY"
-
       - name: Fail after rollback
         if: ${{ !cancelled() && (steps.rollback.outcome == 'success' || steps.rollback.outcome == 'failure') }}
         run: exit 1
@@ -373,6 +290,9 @@ jobs:
     if: needs.deploy.result == 'success' && needs.deploy.outputs.rutube_blocking != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 12
+    concurrency:
+      group: rutube-canary
+      cancel-in-progress: false
     env:
       BASE_URL: ${{ secrets.STAGING_BASE_URL }}
       PLAYWRIGHT_NO_WEB_SERVER: "1"
@@ -380,43 +300,18 @@ jobs:
       STAGING_ADMIN_TOKEN: ${{ secrets.STAGING_ADMIN_TOKEN }}
       STAGING_BLUEOFFICE_ROOM_ID: 0b537d34-7b92-4b51-854a-8c64cfb4c114
     steps:
-      - name: Checkout deployed SHA
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           ref: ${{ needs.deploy.outputs.deploy_sha }}
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: pnpm
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Wait for staging health
-        run: |
-          test -n "$BASE_URL"
-          test -n "$STAGING_ADMIN_TOKEN"
-          for _ in $(seq 1 30); do
-            if curl --fail --silent "$BASE_URL/health" >/dev/null; then
-              exit 0
-            fi
-            sleep 10
-          done
-          echo "staging_health_timeout" >&2
-          exit 1
-
-      - name: Install Playwright browser
-        run: pnpm exec playwright install --with-deps chromium
-
-      - name: Run Rutube canary
-        run: pnpm test:e2e:rutube:canary
-
-      - name: Upload Rutube canary artifacts
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm test:e2e:rutube:canary
+      - name: Upload canary artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:

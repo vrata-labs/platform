@@ -18,7 +18,7 @@ test("staging CLI uses one worker in CI while retaining explicit worker override
   });
   server.listen(0, "127.0.0.1"); await once(server, "listening");
   t.after(() => new Promise(resolve => server.close(resolve)));
-  for (const override of [[], ["--workers=2"]]) {
+  for (const override of [[], ["--workers=2"], ["--suite", "rutube-full"], ["--suite", "rutube-canary"]]) {
     const child = spawn(process.execPath, [fileURLToPath(new URL("./run-staging-e2e.mjs", import.meta.url)), ...override], {
       cwd: directory, timeout: 10000, stdio: ["ignore", "pipe", "pipe"],
       env: { ...process.env, BASE_URL: `http://127.0.0.1:${server.address().port}`, STAGING_ADMIN_TOKEN: "fixture-admin", STAGING_E2E_ENV_FILE: "", VRATA_REFERENCE_CATALOG_ACTIVE: "0", GITHUB_ACTIONS: "true", PATH: `${directory}${delimiter}${process.env.PATH}` }
@@ -29,7 +29,12 @@ test("staging CLI uses one worker in CI while retaining explicit worker override
     const [code] = await once(child, "exit");
     assert.equal(code, 0, output);
     const args = JSON.parse(output.split("\n").find(line => line.startsWith("received_args:")).slice("received_args:".length));
-    assert.deepEqual(args.filter(arg => arg.startsWith("--workers=")), override.length ? override : ["--workers=1"]);
-    assert(args.includes("@staging")); assert(args.includes("@rutube"));
+    assert.deepEqual(args.filter(arg => arg.startsWith("--workers=")), override[0] === "--workers=2" ? override : ["--workers=1"]);
+    if (override[0] === "--suite") {
+      assert(args.includes(`@${override[1]}`));
+      assert(!args.includes("--grep-invert"));
+    } else {
+      assert(args.includes("@staging")); assert(args.includes("@rutube"));
+    }
   }
 });

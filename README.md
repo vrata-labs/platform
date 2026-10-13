@@ -53,6 +53,7 @@ docker compose --env-file infra/docker/.env.selfhost.example -f infra/docker/com
 - `docs/releases.md` - SemVer and release process.
 - `docs/testing-checklist.md` - where tests live, run, and store artifacts.
 - `docs/ci-cd.md` - GitHub Actions and staging/release operations.
+- `docs/deployment-staging.md` - staging host preparation, accepted releases, rollback and backup.
 - `docs/product-scope.md` - product hypothesis and MVP scope.
 - `docs/architecture.md` - layer map.
 - `docs/scene-bundle-contract.md` - scene bundle runtime contract.

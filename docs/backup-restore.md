@@ -8,6 +8,7 @@ Vrata self-host and production compose profiles use named Docker volumes for per
 - MinIO/S3-compatible compose storage: mirrored bucket objects, an object inventory file, and bucket download policy metadata when available.
 - Platform metadata: manifest schema version, created timestamp, Vrata package version, `IMAGE_TAG`, git commit, compose profile, compose/env file names, artifact sizes, and SHA-256 checksums.
 - Compose image snapshot: `docker compose images` output for operator diagnostics.
+- Staging exports can include the checksum-bound accepted release record and all Compose override filenames. See `docs/deployment-staging.md` for the staging-specific wrapper.
 
 Backups are written under `backups/` by default. That directory is ignored by git because backup artifacts can contain private room metadata and scene assets.
 
@@ -95,6 +96,7 @@ pnpm backup:prune -- --output-dir backups --retention-days 14 --confirm-prune
 ```
 
 `VRATA_BACKUP_RETENTION_DAYS` can provide the default retention window. The prune command only considers directories whose names start with `vrata-`.
+It validates checksums before deleting a copy and preserves at least two newer verified backups. Incomplete or corrupt copies are kept for diagnosis and do not count as recovery points.
 
 ## Disaster Path
 

@@ -134,8 +134,12 @@ test("workflow snapshots compatibility helper before old checkout and uses it fo
   const workflow = readFileSync(new URL("../.github/workflows/staging-deploy.yml", import.meta.url), "utf8");
   const copy = workflow.indexOf('cp tools/staging-minio-rollout.py "$RUNNER_TEMP/vrata-scene-rollback/"');
   assert.ok(copy > 0 && copy < workflow.indexOf("name: Sync workspace to deploy SHA"));
-  assert.equal(workflow.match(/python3 "\\\$ROLLOUT_HELPER" \.\/infra\/docker\/rollout-staging-images.sh/g)?.length, 2);
-  assert.match(workflow, /rollout-staging-images.sh "\$ROLLBACK_SHA"/);
+  assert.match(workflow, /staging-remote-release\.py' rollout/);
+  assert.match(workflow, /staging-remote-release\.py' rollback/);
+  const remote = readFileSync(new URL("./staging-remote-release.py", import.meta.url), "utf8");
+  assert.match(remote, /staging-minio-rollout\.py/);
+  assert.match(remote, /self\.raw_rollout\(image_sha\)/);
+  assert.match(remote, /self\.raw_rollout\(target\)/);
   assert.match(workflow, /pnpm test:e2e:staging/);
   assert.match(workflow, /PLAYWRIGHT_REPORT_NAME=staging-rutube-blocking pnpm test:e2e:rutube/);
 });

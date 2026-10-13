@@ -208,3 +208,14 @@ Frame locomotion maintenance rules:
 - The room HUD in `apps/runtime-web/index.html` now includes main-path audio controls: microphone selector, speaker selector, `Mic level`, and `Speaker level`.
 - `Speaker level` is more reliable when derived from remote `participant.audioLevel` than from output analyser nodes.
 - Staging-facing tests should avoid brittle assumptions about room names or transient loading text; prefer stable selectors and polling for the concrete control that the feature adds.
+
+## Provider-neutral staging rollout
+
+- The prepared Selectel target is `vrata-stage-selectel-v1`, `135.106.137.18`, `/opt/vrata`. Host preparation alone is not an accepted application deployment; verify the exact CI/CD run and authoritative record before reporting staging success.
+- The current portable operating contract is `docs/deployment-staging.md`. Yandex host addresses and provisioning notes above are historical context for this migration.
+- Authoritative release metadata lives outside checkout in `/opt/vrata-stage-state/accepted-release.json`; the legacy successful-SHA file is derived metadata. Candidate `IMAGE_TAG` is never proof of acceptance.
+- New hosts require designation and explicit manual `bootstrap`. Ordinary rollout requires accepted state and finalized template baseline. Perform read-only preflight with bootstrap-installed helpers before uploading a new protocol or scene source.
+- Before accepted publication, failure restores previous images, scene bytes and room pointers. After atomic JSON publication, metadata errors require explicit repair; do not roll back containers while leaving the new accepted record.
+- Preserve host operation locking, exact image/asset SHA bindings, immutable scene snapshots, the active pointer, previous/Wave 2 retention and private recovery artifacts. Keep private scenes outside public platform images and git.
+- `STAGING_AUTO_DEPLOY_ENABLED=false` pauses automatic deploy/scheduled canary only; manual verification remains available. Deploy and Rutube canary have separate concurrency groups.
+- Staging backup uses `tools/backup-staging.py` and the common pinned MinIO override, checks the working accepted image and includes accepted metadata in the checksum manifest. An export spanning a release change is incomplete, not a verified recovery point.

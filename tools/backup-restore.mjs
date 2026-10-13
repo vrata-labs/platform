@@ -64,7 +64,10 @@ export function parseBackupRestoreArgs(argv) {
     if (!value || value.startsWith("--")) {
       throw new Error(`missing_option_value:${name}`);
     }
-    options[name] = value;
+    if (name === "compose-file") {
+      (options["compose-files"] ??= []).push(value);
+      options[name] ??= value;
+    } else options[name] = value;
     index += 1;
   }
 
@@ -110,9 +113,10 @@ function envFromFile(envFile) {
 
 function resolveComposeOptions(options) {
   const envFile = resolve(options["env-file"] || DEFAULT_ENV_FILE);
-  const composeFile = resolve(options["compose-file"] || DEFAULT_COMPOSE_FILE);
+  const composeFiles = (options["compose-files"] || [options["compose-file"] || DEFAULT_COMPOSE_FILE]).map(file => resolve(file));
+  const composeFile = composeFiles[0];
   const env = envFromFile(envFile);
-  return { envFile, composeFile, env };
+  return { envFile, composeFile, composeFiles, env };
 }
 
 function runProcess(command, args, options = {}) {
@@ -169,19 +173,20 @@ function captureProcess(command, args, options = {}) {
   return result.stdout;
 }
 
-function dockerComposeArgs(envFile, composeFile, args) {
-  return ["compose", "--env-file", envFile, "-f", composeFile, ...args];
+function dockerComposeArgs(envFile, composeFiles, args) {
+  const files = Array.isArray(composeFiles) ? composeFiles : [composeFiles];
+  return ["compose", "--env-file", envFile, ...files.flatMap(file => ["-f", file]), ...args];
 }
 
 function runDockerCompose(compose, args, options = {}) {
-  runProcess("docker", dockerComposeArgs(compose.envFile, compose.composeFile, args), {
+  runProcess("docker", dockerComposeArgs(compose.envFile, compose.composeFiles, args), {
     ...options,
     envRedactions: compose.env
   });
 }
 
 function captureDockerCompose(compose, args) {
-  return captureProcess("docker", dockerComposeArgs(compose.envFile, compose.composeFile, args), {
+  return captureProcess("docker", dockerComposeArgs(compose.envFile, compose.composeFiles, args), {
     envRedactions: compose.env
   });
 }
@@ -293,6 +298,10 @@ export async function createBackupManifest({ backupDir, source, smoke, createdAt
   if (existsSync(composeImages)) {
     artifacts.push(await artifactFromFile(backupDir, composeImages, "compose-images"));
   }
+  const acceptedRelease = join(backupDir, "accepted-release.json");
+  if (existsSync(acceptedRelease)) {
+    artifacts.push(await artifactFromFile(backupDir, acceptedRelease, "accepted-release"));
+  }
 
   return {
     schemaVersion: BACKUP_SCHEMA_VERSION,
@@ -303,6 +312,7 @@ export async function createBackupManifest({ backupDir, source, smoke, createdAt
       gitCommit: source?.gitCommit || "unknown",
       profile: source?.profile || "compose",
       composeFile: source?.composeFile || "unknown",
+      ...(source?.composeFiles ? { composeFiles: source.composeFiles } : {}),
       envFile: source?.envFile || "unknown"
     },
     smoke: {
@@ -338,6 +348,12 @@ export async function validateBackupManifest(manifest, options = {}) {
       if (typeof manifest.source[name] !== "string" || !manifest.source[name].trim()) {
         addIssue(issues, "missing_source_field", `source.${name}`);
       }
+    }
+    if (manifest.source.composeFiles !== undefined && (!Array.isArray(manifest.source.composeFiles)
+      || manifest.source.composeFiles.length === 0
+      || manifest.source.composeFiles.some(file => typeof file !== "string" || !file.trim())
+      || manifest.source.composeFiles[0] !== manifest.source.composeFile)) {
+      addIssue(issues, "invalid_compose_files", "source.composeFiles");
     }
   }
   if (!Array.isArray(manifest.artifacts)) {
@@ -452,6 +468,12 @@ async function runBackup(options) {
     throw new Error(`backup_dir_exists:${backupDir}`);
   }
   mkdirSync(join(backupDir, "minio", "objects"), { recursive: true, mode: 0o700 });
+  if (options["accepted-release-file"]) {
+    const acceptedPath = resolve(options["accepted-release-file"]);
+    const accepted = JSON.parse(readFileSync(acceptedPath, "utf8"));
+    if (accepted?.imageSha !== imageTag) throw new Error("backup_accepted_image_mismatch");
+    writeFileSync(join(backupDir, "accepted-release.json"), readFileSync(acceptedPath), { mode: 0o600 });
+  }
 
   process.stdout.write(`[backup] start backupDir=${backupDir}\n`);
   runDockerCompose(compose, [
@@ -486,6 +508,7 @@ async function runBackup(options) {
       gitCommit: gitCommit(),
       profile: profileFromComposeFile(compose.composeFile),
       composeFile: basename(compose.composeFile),
+      composeFiles: compose.composeFiles.map(file => basename(file)),
       envFile: basename(compose.envFile)
     },
     smoke: {
@@ -713,10 +736,30 @@ function parsePositiveInteger(value, name) {
   return parsed;
 }
 
-function runPrune(options) {
+export async function findVerifiedPruneCandidates(outputDir, retentionDays, now = Date.now()) {
+  // Invalid or incomplete copies do not justify deleting a recoverable backup.
+  const candidates = new Set(findPruneCandidates(outputDir, retentionDays, now));
+  if (!existsSync(outputDir)) return [];
+  const verified = [];
+  for (const entry of readdirSync(outputDir, { withFileTypes: true })) {
+    if (!entry.isDirectory() || !entry.name.startsWith("vrata-")) continue;
+    const backupDir = join(outputDir, entry.name);
+    try {
+      const { manifest, result } = await validateBackupDir(backupDir);
+      if (result.ok) verified.push({ path: backupDir, createdAt: Date.parse(manifest.createdAt) });
+    } catch {
+      // Leave interrupted backups available for diagnosis.
+    }
+  }
+  verified.sort((a, b) => b.createdAt - a.createdAt || a.path.localeCompare(b.path));
+  return verified.slice(2).filter(copy => candidates.has(copy.path)
+    && verified.filter(other => other.createdAt > copy.createdAt).length >= 2).map(copy => copy.path).sort();
+}
+
+async function runPrune(options) {
   const outputDir = resolve(options["output-dir"] || DEFAULT_OUTPUT_DIR);
   const retentionDays = parsePositiveInteger(options["retention-days"] || process.env.VRATA_BACKUP_RETENTION_DAYS || "14", "retention_days");
-  const candidates = findPruneCandidates(outputDir, retentionDays);
+  const candidates = await findVerifiedPruneCandidates(outputDir, retentionDays);
   for (const candidate of candidates) {
     process.stdout.write(`[backup] prune_candidate path=${candidate}\n`);
   }
@@ -749,7 +792,7 @@ export async function main(argv) {
       await runSmoke(options);
       return;
     case "prune":
-      runPrune(options);
+      await runPrune(options);
       return;
     default:
       process.stderr.write(usage());
