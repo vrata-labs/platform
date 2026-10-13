@@ -2,12 +2,14 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { getMediaTokenConfigError } from "../apps/api/dist/livekit-config.js";
+import { createRemoteBrowserUrlPolicy, isRemoteBrowserOriginAllowed } from "../apps/remote-browser/dist/url-policy.js";
 
 test("first host configuration has unique secrets and a safe repeat preserves them", () => {
   const source = fileURLToPath(new URL("./bootstrap-staging-host-env.py", import.meta.url));
   const example = fileURLToPath(new URL("../infra/docker/.env.staging.example", import.meta.url));
   const output = execFileSync("python3", ["-B", "-c", `
-import importlib.util,tempfile,shutil
+import importlib.util,tempfile,shutil,json
 from pathlib import Path
 spec=importlib.util.spec_from_file_location("env",${JSON.stringify(source)})
 m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
@@ -32,7 +34,14 @@ with tempfile.TemporaryDirectory() as directory:
     try:m.bootstrap_env(root,"203.0.113.11","a"*40)
     except ValueError as e:assert str(e)=="staging_bootstrap_existing_host_mismatch"
     else:raise AssertionError("different host must fail")
-print("host configuration assertions passed")
+print(json.dumps(env))
 `], { encoding: "utf8" });
-  assert.match(output, /host configuration assertions passed/);
+  const generated = JSON.parse(output);
+  assert.equal(getMediaTokenConfigError({ ...generated, NODE_ENV: "production" }), null,
+    "the generated endpoint must pass the real production API startup gate");
+  const policy = createRemoteBrowserUrlPolicy({ ...generated, NODE_ENV: "production" });
+  assert.equal(isRemoteBrowserOriginAllowed(generated.VRATA_APP_BASE_URL, policy.allowedOrigins), true,
+    "the main-path remote browser demo must be allowed by the real origin policy");
+  assert.equal(isRemoteBrowserOriginAllowed("http://127.0.0.1:4000", policy.allowedOrigins), false);
+  assert.equal(policy.allowPrivateAllowedOrigins, false);
 });

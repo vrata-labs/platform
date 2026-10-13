@@ -53,10 +53,30 @@ jobs:
         with:
           ssh-private-key: ${{ secrets.STAGING_SSH_KEY }}
 
+      - name: Configure SSH host identity
+        env:
+          STAGING_SSH_KNOWN_HOSTS: ${{ secrets.STAGING_SSH_KNOWN_HOSTS }}
+        run: |
+          test -n "$STAGING_SSH_KNOWN_HOSTS"
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$STAGING_SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
       - name: Install dependencies and browser
         run: |
           pnpm install --frozen-lockfile
           pnpm exec playwright install --with-deps chromium
+
+      - name: Prepare accepted catalog protocol
+        run: |
+          set -o pipefail
+          # shellcheck disable=SC2029
+          ssh "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo python3 -B '${STAGING_APP_DIR}-stage-state/bootstrap-tools/staging-remote-release.py' preflight --root '$STAGING_APP_DIR' --image-sha '$EXPECTED_SHA'"
+          CATALOG_HELPERS="${STAGING_APP_DIR}-stage-state/catalog-helpers/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          echo "CATALOG_HELPERS=$CATALOG_HELPERS" >> "$GITHUB_ENV"
+          # Keep every sibling module required by the retained catalog helper.
+          # shellcheck disable=SC2029
+          tar -C tools -czf - staging-template-catalog.py staging-accepted-release.py staging_gate_proof.py staging_scene_files.py | ssh "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo install -d -m 700 '$CATALOG_HELPERS' && sudo tar -xzf - -C '$CATALOG_HELPERS'"
 
       - name: Retain pre-activation legacy regression fixtures
         if: inputs.operation == 'activate'
@@ -65,15 +85,8 @@ jobs:
       - name: Guarded catalog transition
         id: transition
         run: |
-          HELPER_B64="$(base64 -w0 tools/staging-template-catalog.py)"
-          # shellcheck disable=SC2087
-          ssh -o StrictHostKeyChecking=no "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo bash -s" <<EOF
-          set -euo pipefail
-          HELPER="\$(mktemp)"
-          trap 'rm -f "\$HELPER"' EXIT
-          printf '%s' '$HELPER_B64' | base64 -d > "\$HELPER"
-          python3 "\$HELPER" "$OPERATION" --root "$STAGING_APP_DIR" --sha "$EXPECTED_SHA"
-          EOF
+          # shellcheck disable=SC2029
+          ssh "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo python3 -B '$CATALOG_HELPERS/staging-template-catalog.py' '$OPERATION' --root '$STAGING_APP_DIR' --sha '$EXPECTED_SHA'"
 
       - name: Active catalog and full public staging gate
         if: inputs.operation == 'activate'
@@ -87,17 +100,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          HELPER_B64="$(base64 -w0 tools/staging-template-catalog.py)"
-          # shellcheck disable=SC2087
-          ssh -o StrictHostKeyChecking=no "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo bash -s" <<EOF
-          set -euo pipefail
-          HELPER="\$(mktemp)"
-          trap 'rm -f "\$HELPER"' EXIT
-          printf '%s' '$HELPER_B64' | base64 -d > "\$HELPER"
-          python3 "\$HELPER" rollback --root "$STAGING_APP_DIR" --sha "$EXPECTED_SHA"
-          EOF
+          # shellcheck disable=SC2029
+          ssh "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo python3 -B '$CATALOG_HELPERS/staging-template-catalog.py' rollback --root '$STAGING_APP_DIR' --sha '$EXPECTED_SHA'"
           # Read only the immutable, non-secret marker from the host.
-          ROLLBACK_SHA="$(ssh -o StrictHostKeyChecking=no "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo cat '$STAGING_APP_DIR/infra/docker/.template-wave2-rollback-sha'")"
+          # shellcheck disable=SC2029
+          ROLLBACK_SHA="$(ssh "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo cat '$STAGING_APP_DIR/infra/docker/.template-wave2-rollback-sha'")"
           [[ "$ROLLBACK_SHA" =~ ^[a-f0-9]{40}$ ]]
           curl --fail --silent "$BASE_URL/health" >/dev/null
           echo "Catalog restored to Wave 2; image target: $ROLLBACK_SHA" >> "$GITHUB_STEP_SUMMARY"
