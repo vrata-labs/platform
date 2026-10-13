@@ -203,7 +203,15 @@ connected participants' tokens. Current source grants, server-side participant
 eviction/rejoin enforcement and expiry in the remaining lifecycle mutations
 still require an explicit activation gate.
 
-### User media credentials and original-proof release (pending CI publication)
+### User media credentials and original-proof release (published; staging excluded)
+
+Published code: `4e3691e0e3f31d9de00bb7bd58ddb4ca8d50a212`. Exact-SHA
+[CI](https://github.com/vrata-labs/platform/actions/runs/38390028704) and
+[Docker publication](https://github.com/vrata-labs/platform/actions/runs/38389973365)
+passed on their first run attempt. Local and CI full E2E both passed 202 cases;
+CI also passed 16 M0.5 cases. This publication includes independent ownership
+polling during startup. Staging deployment and verification were excluded by
+the user's instruction; shared floor 2 and full media activation are not enabled.
 
 `POST /api/tokens/media` classifies the room once before proof verification:
 persisted credentials never fall back to virtual admission after deletion, and
@@ -252,6 +260,8 @@ read, before avatar/scene loading, without changing admission or revision checks
 Only one read is pending at a time. A runtime block or page hide stops polling;
 a persisted page restore restarts it only if the session is still admitted.
 Stopping during a read prevents its late completion from scheduling another tick.
+If the page is explicitly restored while that read is still pending, its
+completion schedules exactly one next tick, without starting a second read.
 
 The old frame-driven refresh waited for `runtimeBootReady`: delaying a scene
 delayed ownership UI despite a committed server transfer. A regression now holds

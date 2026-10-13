@@ -1108,8 +1108,35 @@ barrier требует commit новой main-frame navigation. Полный л�
 В общей серии прошли оба ownership handoff variants, оба media proof-deadline
 transport cases, public-demo четырёх участников и reference room scenarios.
 Отчёт: t01a-media-final202-serial.json. Исторические отказы не удалены и не
-приписаны cloud outage; текущие package/full gates зелёные. Code SHA и точные
-CI/Docker результаты будут добавлены после публикации рабочей ветки.
+приписаны cloud outage; текущие package/full gates зелёные.
+
+#### Публикация AE и ownership polling
+
+| Этап | Результат |
+|---|---|
+| Code SHA рабочей ветки | `4e3691e0e3f31d9de00bb7bd58ddb4ca8d50a212` |
+| [CI 38390028704](https://github.com/vrata-labs/platform/actions/runs/38390028704) | Success, attempt1: lint/typecheck/build, package/PG/rollback checks, **202/202 E2E за 25,0 минуты**, **16/16 M0.5**, pinned scene assets |
+| [Docker Publish 38389973365](https://github.com/vrata-labs/platform/actions/runs/38389973365) | Success, attempt1: immutable API/room-state/remote-browser images и проверенные YCR manifests exact SHA |
+| [Playwright artifact 11809683771](https://github.com/vrata-labs/platform/actions/runs/38390028704/artifacts/11809683771) | local E2E и M0.5 evidence для опубликованного code SHA |
+| Staging | Deploy и проверка исключены по прямому поручению пользователя; общий floor1 сохранён |
+
+CI повторил итоговые package counts: API **1572 passed / 1 optional MinIO skipped**,
+runtime **1099/1099**, tools **262 passed / 2 optional skipped**; обязательные PG и
+rollback checks включены. Full browser suites прошли без skip/retry/flaky.
+Первый запрос workflow dispatch CI получил GitHub HTTP500 и не создал прогон;
+после проверки списка runs повтор создал указанный run. Это повтор запуска, а
+не повтор неуспешной проверки. Откат кода или повтор workflow run не потребовался.
+
+Опубликованные image digests:
+- API: `sha256:e27bb4d512a1e334be25c2dba6a9adad8b9b325ac1e592aa6f80bb6d9c8f49cb`.
+- room-state: `sha256:e4f59efa9521980045ec24b67aed08c8b9cc836dc3b04332b31bf8b4648e5862`.
+- remote-browser: `sha256:f3d700913ea39c89c40444777e7c29fbe2e75ab6c00182223e25637fe968ab8b`.
+
+Собственный PostgreSQL fixture удалён после проверки ID/label; fixture port и
+локальные E2E service ports освобождены. Соседние процессы, контейнеры и staging
+инфраструктура не изменялись. Срез AE принят в границах user media issuance и
+ownership polling; source grants/runtime connection upgrade, executor media,
+bootstrap reconciliation и durable retirement остаются отдельными gates.
 
 ## Публикация первого среза T01/T12
 
