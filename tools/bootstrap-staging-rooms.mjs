@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { preflightSceneBundle } from "./patch-staging-scene-bundles.mjs";
+import { deriveAssetBaseUrl, preflightSceneBundle } from "./patch-staging-scene-bundles.mjs";
 
 export async function loadStagingCatalog() {
   return JSON.parse(await readFile(new URL("../infra/docker/staging-scene-catalog.json", import.meta.url), "utf8"));
@@ -48,7 +48,7 @@ export async function bootstrapStagingRooms(input) {
     const suffix = room.versioned ? `${input.version}/scene.json` : "scene.json";
     const url = new URL(`/assets/scenes/${room.sceneId}/${suffix}`, assets).toString();
     await preflightSceneBundle(url, { fetchImpl: fetcher, attempts: input.preflightAttempts ?? 1, delayMs: 0 });
-    prepared.push({ ...room, sceneBundleUrl: url });
+    prepared.push({ ...room, sceneBundleUrl: room.versioned ? url : `/assets/scenes/${room.sceneId}/scene.json` });
   }
   const templateResponse = await call("/api/templates");
   if (!templateResponse.ok) throw new Error("staging_room_template_catalog_unavailable");
@@ -82,7 +82,8 @@ export async function bootstrapStagingRooms(input) {
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  bootstrapStagingRooms({ baseUrl: process.env.BASE_URL, assetBaseUrl: process.env.STAGING_ASSET_BASE_URL,
+  const baseUrl = process.env.BASE_URL;
+  bootstrapStagingRooms({ baseUrl, assetBaseUrl: process.env.STAGING_ASSET_BASE_URL ?? (baseUrl ? deriveAssetBaseUrl(baseUrl) : undefined),
     adminToken: process.env.STAGING_ADMIN_TOKEN, version: process.env.STAGING_SCENE_BUNDLE_VERSION })
     .then(result => console.log(JSON.stringify(result)))
     .catch(error => { console.error(/^staging_/.test(error.message) ? error.message : "staging_room_bootstrap_failed"); process.exitCode = 1; });

@@ -45,7 +45,6 @@ jobs:
       YCR_USERNAME: ${{ secrets.YCR_USERNAME }}
       YCR_PASSWORD: ${{ secrets.YCR_PASSWORD }}
       BASE_URL: ${{ secrets.STAGING_BASE_URL }}
-      STAGING_ASSET_BASE_URL: ${{ secrets.STAGING_BASE_URL }}
       PLAYWRIGHT_NO_WEB_SERVER: "1"
       BOOTSTRAP: ${{ inputs.bootstrap || false }}
       STAGING_HALL_ROOM_ID: 42db8225-f671-4e46-9c28-9381d66a948c

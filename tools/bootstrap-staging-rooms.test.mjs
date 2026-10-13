@@ -116,6 +116,14 @@ test("fresh API accepts all canonical rooms and Wave 2 QA fixtures idempotently"
   assert.equal(room.features.voice, true);
   const manifest = await (await fetch(`${baseUrl}/api/rooms/${hall.roomId}/manifest`)).json();
   assert.equal(manifest.sceneBundle.url, `${input.assetBaseUrl}/assets/scenes/${hall.sceneId}/${sha}/scene.json`);
+  for (const expected of (await loadStagingCatalog()).rooms) {
+    const stored = await (await fetch(`${baseUrl}/api/rooms/${expected.roomId}`)).json();
+    assert.equal(stored.sceneBundleUrl, expected.versioned
+      ? `${input.assetBaseUrl}/assets/scenes/${expected.sceneId}/${sha}/scene.json`
+      : `/assets/scenes/${expected.sceneId}/scene.json`);
+    assert.equal(stored.avatarConfig.avatarsEnabled, true);
+    assert.equal(stored.avatarConfig.avatarSeatsEnabled, true);
+  }
 });
 
 test("a concurrent creator is validated after conflict rather than overwritten", async () => {
