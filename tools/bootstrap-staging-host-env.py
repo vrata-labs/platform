@@ -51,7 +51,7 @@ def bootstrap_env(root, public_ip, image_sha, registry_id="crp9cm29k6p76hqo8lti"
         "VRATA_STATE_DOMAIN": f"state.{domain}", "VRATA_LIVEKIT_DOMAIN": f"livekit.{domain}",
         "VRATA_BROWSER_DOMAIN": f"browser.{domain}", "VRATA_STORAGE_DOMAIN": f"storage.{domain}",
         "LIVEKIT_NODE_IP": public_ip, "ROOM_STATE_PUBLIC_URL": f"wss://state.{domain}",
-        "LIVEKIT_URL": "ws://livekit:7880", "REMOTE_BROWSER_PUBLIC_URL": f"wss://browser.{domain}",
+        "LIVEKIT_URL": f"wss://livekit.{domain}", "REMOTE_BROWSER_PUBLIC_URL": f"wss://browser.{domain}",
         "VRATA_ALLOW_INSECURE_PRODUCTION_URLS": "false",
         "REMOTE_BROWSER_ALLOWED_ORIGINS": "https://rutube.ru,https://*.rutube.ru,https://*.rtbcdn.ru",
         "REMOTE_BROWSER_ALLOW_PRIVATE_ALLOWED_ORIGINS": "false",
