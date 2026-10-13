@@ -192,15 +192,73 @@ A cleanup failure returns 503 but no longer exposes document content; an
 authorized Host or administrator can retry DELETE on the retained tombstone.
 This does not implement a background orphan collector.
 
-LiveKit media tokens are signed privately, then re-resolved against fresh
-authority immediately before release. A revoked epoch or changed role/owner
-discards the prepared token. Executor media also rechecks room lifecycle and
-live executor binding. Frame credentials have the separate contract below.
+User LiveKit media tokens are signed privately outside the database fence, then
+released synchronously from a fresh fenced authority snapshot. Their encoded
+expiry is capped by the original verified session deadline. Executor media
+still has its separate room-lifecycle/live-binding pool rechecks and needs a
+dedicated lease/admission gate. Frame credentials have the separate contract below.
 An already-issued self-hosted LiveKit JWT is **not** revoked by these checks:
 participant removal does not invalidate it, and LiveKit proactively refreshes
 connected participants' tokens. Current source grants, server-side participant
 eviction/rejoin enforcement and expiry in the remaining lifecycle mutations
 still require an explicit activation gate.
+
+### User media credentials and original-proof release (pending CI publication)
+
+`POST /api/tokens/media` classifies the room once before proof verification:
+persisted credentials never fall back to virtual admission after deletion, and
+virtual admission pins absence against room creation. Request intent, proof,
+signing configuration and endpoint are privately captured before preparation.
+Persisted v1 uses the fresh legacy renew evaluator, including private-room
+trusted provenance and the captured effective role/source. V2 pins the original
+tenant, room, identity, participant, epoch, deadline, role and ownership; an
+expected non-owner is an explicit predicate. Signing never holds the room or
+policy lock. The final synchronous response is queued inside the corresponding
+persisted-v1, virtual-v1 or v2 read-only fence.
+
+The installed server SDK's numeric constructor `ttl` is a relative span; its
+public numeric `ttl` field assigned after construction is an absolute NumericDate.
+The signer fixes `exp = min(signingClock + configuredTTL, originalProofExpiry)`
+from one clock reading, then checks the exact SDK claims against the frozen plan.
+The final release rechecks both deadlines and reports `expiresInSeconds` as the
+actual whole-second remainder. A lapsed proof keeps its existing session-expiry
+mapping; a lapsed prepared JWT with a still-live proof returns retryable HTTP 503
+`media_credential_preparation_expired`. It does not renew, re-sign or widen a lease.
+A queued reply survives read-only COMMIT completion failure, with only the fixed
+unlabelled media completion counter incremented. Pre-send failures remain errors.
+
+`MEDIA_TOKEN_TTL_SECONDS` defaults to 900 only when unset. A configured value must
+be a canonical integer in 1..86400; empty, fractional, suffixed or larger values
+return HTTP 503 `livekit_config_invalid` / `media_token_ttl_invalid`. Operators
+must retain the explicit valid value from the example configurations. This also
+closes the old invalid-TTL fallback to an unintended SDK lifetime.
+
+The video grant and runtime request shape remain unchanged. Source-specific
+grants require the separate main-path connection-upgrade gate so that ordinary
+Host screen share remains usable. Existing self-hosted connections and refreshed
+tokens are not revoked by this issuance boundary. The locally checked server
+1.13.7 uses a 60-second token verification leeway: encoded `exp` is not a strict
+initial-connect cutoff. Its protocol dependency's verifier is
+[`auth/verifier.go` at a4f4b5c0c23f](https://github.com/livekit/protocol/blob/a4f4b5c0c23f/auth/verifier.go).
+Local real-media evidence observed successful validation at exp+2 s, refusal at
+exp+65 s, and continuing media from an already-connected publisher. This is not
+new staging, device or instant-revocation acceptance.
+
+### Ownership refresh during startup
+
+`session-control-poller.ts` owns authority refresh independently of rendered
+frames and optional boot awaits. It starts after initial authenticated control
+read, before avatar/scene loading, without changing admission or revision checks.
+Only one read is pending at a time. A runtime block or page hide stops polling;
+a persisted page restore restarts it only if the session is still admitted.
+Stopping during a read prevents its late completion from scheduling another tick.
+
+The old frame-driven refresh waited for `runtimeBootReady`: delaying a scene
+delayed ownership UI despite a committed server transfer. A regression now holds
+an owned scene GLB until the recipient has observed ownership and live controls.
+Reload checks wait for the new document's authenticated control response;
+DOMContentLoaded alone is not that readiness boundary. An indefinitely pending
+control HTTP read remains a separate transport-deadline obligation.
 
 ### Frame credentials and negotiated peer lease (published; staging excluded)
 
@@ -358,7 +416,7 @@ RI2 proof can issue a new session. Error precedence keeps a blocked room blocked
 and expiry precedes authority-revision conflict in a transition. The HTTP tests
 use otherwise-valid commands/live revisions and also send a forged future body
 deadline, proving that stalled body and lock waits cannot extend the session.
-Entry, lifecycle/invite and effect-fence 401 responses now use
+Entry, lifecycle/invite and fenced-effect 401 responses use
 `error=identity_session_expired`; entry/effect responses also include
 `reason=identity_session_expired`, while lifecycle/invite responses may omit it.
 A MAC-verified,

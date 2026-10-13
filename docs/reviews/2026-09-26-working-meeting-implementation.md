@@ -934,6 +934,183 @@ Bootstrap reconciliation, durable retirement и legacy compatibility/input parit
 локальные E2E service ports и fixture port освобождены. Соседние процессы,
 контейнеры и staging-инфраструктура не изменялись.
 
+### T01a-S2b-AE: original-proof user media credential release
+
+Воспроизведено расширение срока: genuine floor-1 room proof с остатком 7 s давал
+более долгий LiveKit JWT через Bearer и body transport. Оба browser regressions
+сначала отказаны на сравнении signed exp, затем прошли **2/2** с теми же assertions.
+
+User media issuance теперь использует исходные MAC scope/deadline и privately
+captured request intent, роль, ownership и signing configuration. Async SDK
+подпись выполняется до короткого read-only fence. SDK получает абсолютный exp
+через публичное поле после constructor; relative constructor TTL не используется.
+Декодированные SDK claims сверяются с точным планом. Exp ограничен исходным proof;
+reported expiresInSeconds — фактический остаток на final release clock.
+
+Persisted v1 повторно проходит fresh renew policy под parent/policy locks;
+virtual v1 pins absence, исходный MAC deadline и floor. V2 pins original
+identity/epoch/role/Owner, включая expectedIsOwner:false. Роль или namespace не
+пересчитывают grant молча после подписи. Старый pool-only finalizer удалён вместе
+с его ставшим неиспользуемым helper; реальные fenced regression suites заменяют
+прежнюю имитацию final read. Private/personal v1 bearer без trusted provenance
+теперь отказан с invite_required, как в state renew и frame; это явное изменение
+совместимости. Video grant и основной runtime request A=true/V=false сохранены.
+
+MEDIA_TOKEN_TTL_SECONDS строго разбирается как canonical integer 1..86400;
+default900 применяется только при unset. Некорректное, в том числе пустое значение
+даёт fixed503 livekit_config_invalid/media_token_ttl_invalid. Истёкший prepared
+JWT при ещё живом proof даёт retryable503 media_credential_preparation_expired,
+без ложной session expiry или нового signing. После queued reply lost read-only
+COMMIT ACK учитывается только отдельным fixed unlabelled media completion counter;
+pre-send/signing error остаётся обычным request failure.
+
+Первые focused media/metrics/SDK suites — **70/70**, без skips; прежний frame
+HTTP/PG suite — **29/29**, без изменения assertions. После этого добавлены exact
+v2 lifecycle mappings, video-only grants, v2 prepared-expiry, actual namespace
+wait → no-sign HTTP branch и invalid-config HTTP cases. Native parent lock берётся
+только после реальной SDK подписи; pg_blocking_pids подтверждает ожидание final
+release, а не лишь ранней verification. Body/sign/fence expiry, role/Owner/epoch,
+lifecycle/private provenance, delete/tenant/classification/room appearance,
+floor cutover, реальный COMMIT с потерянным ACK и signer failure проверяются
+только на собственных disposable schemas; общий floor1 не изменяется.
+
+Расширенный focused media/metrics/SDK suite — **76/76**, без skips. Первый общий
+workspace обнаружил неверно удерживаемый test checkpoint namespace: Pool.query
+использует callback Client.query и не ждёт Promise такой обёртки. Checkpoint
+перенесён на реальный awaited policy method, без изменения API или assertions;
+HTTP regression теперь подтверждает и 401, и отсутствие SDK signing.
+
+Прежняя native admission проверка снова прочитала audit до завершения read-only
+release. Добавлен управляемый completion checkpoint после настоящего COMMIT:
+проверка детерминированно видит уже доставленный 200 при audit=0, затем resume и
+ровно один audit. Та же ready-граница используется для первого Host admission;
+исходные значения/assertions и timeout не ослаблены. Legacy admission + media
+native suites после исправления — **51/51**, без skips.
+
+Первый full201 запущен одновременно с package checks и не принят: owner handoff,
+resource probe и sandbox DURING отказаны; после отказов own run остановлен.
+Повторные focused resource/sandbox прошли. Owner probes показали незавершённый
+startup до live controls; в этих отказах media-запросов и media409 не было. На
+отдельном неизменённом baseline **0e07b7c** прежний Owner scenario прошёл; runtime
+bundle у baseline и текущего source совпадает. В live-control test добавлено
+ожидание обычных UI-controls до handoff, без изменения его assertions или сроков
+обновления ownership. Current focused handoff прошёл. Ограниченный failure
+attachment содержит только allowlisted стадии, статусы и boolean/integer поля,
+без credentials, URLs, IDs или raw errors. Дополнительный SDK role/Owner denial
+mapping по неподтверждённой гипотезе не вводился. Финальные package/full проверки
+выполняются последовательно; успешный focused результат не заменяет full gate.
+
+Локальный self-hosted LiveKit **1.13.7** из установленного checksum-pinned image
+проверен двумя изолированными Chromium clients с client SDK **2.18.0** и server
+SDK **2.15.0**. Реальный API выпустил Host JWT из 7-second proof. Другой клиент
+получил microphone и screen-share audio с ненулевым сигналом и движущееся screen
+video. Существующий A=true/V=false Host grant остался пригодным для screen share.
+После exp+2 s server validation ещё возвращает 200; после exp+65 s — 401.
+Уже подключённый publisher продолжает передавать media: это подтверждает границу
+обещаний, а не отзыв соединения. 60-second leeway подтверждён в точной protocol
+dependency сервера. Это synthetic local media evidence, не слышимость людей или
+приёмка Android/Quest.
+
+Первые собственные Docker-host/bridge media fixtures были недоступны для RTC из
+WSL. Для проверки использован тот же установленный server binary непосредственно
+в WSL с loopback signaling; итоговый local media scenario — **1/1**. Менялись только
+собственные fixtures. Shared network/VPN/WSL services и staging не перезапускались.
+Первый foreground workspace run прерван timeout до полного результата и не
+считается принятым. Финальные workspace/full E2E/CI результаты записываются после
+фактического завершения.
+
+Staging исключён по прямому поручению пользователя. Общий floor2 и full v2/media
+activation не включаются. Следующие gates: source grants + runtime connection
+upgrade/retry, executor media lease/admission и callbacks по фактической surface,
+bootstrap reconciliation, durable retirement и legacy compatibility/input parity.
+Повторное создание floor-1 room в том же tenant и отзыв уже выданного self-hosted
+JWT этим срезом не закрыты.
+
+#### Промежуточный отказ локальной приёмки AE
+
+Ниже сохранён результат до продолжения расследования и исправления ownership
+polling. Он не является итоговой приёмкой последующего дерева.
+
+Новый срез ещё не закоммичен и не опубликован. Последовательный полный workspace
+прошёл lint/typecheck/build и остальные packages, но API suite завершился с
+**1568 passed / 4 failed / 1 optional skipped**: три существующих plugin HTTP
+cases получили 15-second request timeout, четвёртый fail — их enclosing suite.
+Адресный повтор прежнего plugin suite тоже получил таймаут, при этом неизменённый
+baseline **0e07b7c** прошёл **33/33**. Причина этих отказов пока не установлена;
+ни отсутствие media-route calls в этих cases, ни успешный baseline не закрывают
+необходимость зелёного общего прогона текущего дерева. Проверенная гипотеза о
+pooled HTTP connections не подтвердилась; пробная замена клиентского транспорта
+откачена. Таймауты/assertions не ослаблялись.
+
+Окончательного зелёного full201 нет. Первый прерванный full с отказами не
+принимается; focused Owner/resource/sandbox результаты его не заменяют. CI/Docker
+AE не запускались. Для продолжения нужна зелёная финальная локальная приёмка либо
+явное согласование переноса этого gate на отдельный runner рабочей ветки.
+Staging по-прежнему исключён. Собственные PostgreSQL и LiveKit fixtures остановлены
+после проверки принадлежности; соседние процессы и сервисы не изменялись.
+
+#### Продолжение расследования: cloud dependency и ownership scheduling
+
+Local plugin HTTP использует собственный loopback PostgreSQL и local filesystem;
+fixture удаляет remote S3/MinIO configuration. При запрещённом external HTTP
+suite прошёл **33/33 четыре последовательных раза**, API-child не делал внешних
+или Yandex HTTP/fetch calls. Без probe тот же suite прошёл **33/33**. Reference
+scene cache miss обращается к pinned jsDelivr/GitHub, затем проверенные bytes
+раздаются local asset server. Registry 503 относится к отдельному publish plane.
+Гипотеза прямой cloud-зависимости native отказов не подтвердилась. Их точный
+прежний wait-state не сохранён; successful retry не объявляется исправлением
+причины. Необоснованные timeout/HTTP-pool changes откачены.
+
+Полный API с redacted probes прошёл **1572 passed / 0 failed / 1 optional skip**.
+Затем NORMAL sequential workspace без probe прошёл lint/typecheck/build/test:
+API **1572 passed / 1 optional MinIO skipped**, tools **262 passed / 2 optional
+skipped**, обязательные PostgreSQL/rollback fixtures не пропускались.
+
+NORMAL full201 после этого дал **200/201**, sole Owner UI refusal. Server reply
+recipientOwner=true/revision2 и media200 были корректны, recovery gate отсутствовал.
+Periodical authority refresh был привязан к render loop и runtimeBootReady:
+optional avatar/scene/boot waits задерживали обновление UI, хотя сервер уже
+передал ownership. Это дефект зависимости control plane от rendering.
+
+Причинная проверка: удерживается только scene GLB на своём local asset server,
+подтверждается настоящий RS2-authenticated transfer ACK и target equality.
+На baseline **0e07b7c** recipientOwner остаётся false за исходные 20 s; повтор
+отказан в той же точке. Пробы с неверным secret/session-storage key или ещё
+неготовой initiating UI не принимались. Controlled baseline передаёт Owner
+через настоящий HTTP, current regression — через actual live UI. С независимым
+self-scheduling poller held-scene scenario прошёл **1/1**, ordinary live handoff
+и reload — **2/2**. Не менялись grants, server denial mappings, RS2 или deadlines.
+
+Poller запускается после first authenticated read до 3D boot, не перекрывает
+requests, сохраняет stale/admission guards, останавливается на block/pagehide и
+возобновляется после bfcache. После forced blocked read timer не запускается
+обратно. Main содержит только orchestration. Runtime build/tests до последнего
+lifecycle test — **1098/1098**. Reload ready-barrier относится к newly navigated
+document. Diagnostic debug setters/rAF probes удалены; failure attachments
+содержат только bounded allowlisted scalar/enum observations. Финальные checks
+после этих executable changes, full202 и CI ещё ожидаются. Staging исключён.
+
+#### Финальные локальные проверки AE и ownership polling
+
+На итоговом исполняемом дереве последовательный workspace без diagnostic probes
+прошёл lint/typecheck/build/test с exit0: API **1572 passed / 1 optional MinIO
+skipped**, runtime **1099 passed / 0 skipped**, remote-browser **71/71**, room-state
+**78/78**, tools **262 passed / 2 optional skipped**. Обязательные PostgreSQL и
+точные rollback fixtures включены. Lifecycle coverage закрепляет stop во время
+pending read и persisted restore без второго запроса или дублирования timer.
+
+Focused browser verification — **3/3**: сохранение personal Owner после reload и
+отказ копии public ID, обычная передача Owner с live controls и reload, передача
+Owner до завершения удерживаемой scene GLB с последующим reload. Reload control
+barrier требует commit новой main-frame navigation. Полный локальный E2E на том же
+исполняемом дереве — **202/202**, exit0, **45,3 минуты**, без skip/retry/flaky.
+Он выполнен отдельно после workspace, без overlap или изменения deadlines.
+В общей серии прошли оба ownership handoff variants, оба media proof-deadline
+transport cases, public-demo четырёх участников и reference room scenarios.
+Отчёт: t01a-media-final202-serial.json. Исторические отказы не удалены и не
+приписаны cloud outage; текущие package/full gates зелёные. Code SHA и точные
+CI/Docker результаты будут добавлены после публикации рабочей ветки.
+
 ## Публикация первого среза T01/T12
 
 Локально прошли workspace lint/typecheck/build/tests с PostgreSQL, затем runtime build и 905 runtime tests после финальных правок. Полный `pnpm test:e2e` на финальном исполняемом дереве: **148 passed**, без skip (41.6 min).

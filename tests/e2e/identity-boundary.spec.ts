@@ -223,7 +223,9 @@ test("v2 personal owner persists across reload and a copied public ID cannot reo
   }
 });
 
-test("personal owner hands off to an invited Member with proof and live controls", async ({ page, browser, request }) => {
+for (const holdSceneAsset of [false, true]) test(holdSceneAsset
+  ? "personal owner handoff is observed while recipient scene asset is held"
+  : "personal owner hands off to an invited Member with proof and live controls", async ({ page, browser, request }) => {
   test.skip(!process.env.VRATA_TEST_POSTGRES_URL, "Requires an isolated PostgreSQL fixture");
   test.setTimeout(120_000);
   const fixture = await startReferenceTemplateFixture(process.env.VRATA_TEST_POSTGRES_URL!, {
@@ -235,6 +237,62 @@ test("personal owner hands off to an invited Member with proof and live controls
     options: `-c search_path=${fixture.schema},public` });
   const { PostgresStorage } = await import(pathToFileURL(resolve("apps/api/dist/storage.js")).href);
   const recipientPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  let releaseSceneAsset: (() => void) | undefined;
+  let bootAssetHeld = false;
+  if (holdSceneAsset) {
+    const held = new Promise<void>(resolve => { releaseSceneAsset = resolve; });
+    await recipientPage.route("**/*.glb", async route => {
+      const url = new URL(route.request().url());
+      // Hold only the scene GLB on this fixture's asset server, not avatars or a remote resource.
+      if (url.origin === fixture.assetsOrigin && !url.pathname.includes("/avatars/")) { bootAssetHeld = true; await held; }
+      await route.continue().catch(() => undefined);
+    });
+  }
+  const recipientPolls: Array<{ status: number; ownerMatches: boolean; isOwner: boolean; revision: number | null }> = [];
+  const recipientMedia: Array<{ status: number; recovery: boolean; changed: boolean }> = [];
+  const recipientStartup: Array<{ stage: string; status: number; denied: boolean; recovery: boolean }> = [];
+  const ownerMedia: Array<{ status: number; recovery: boolean }> = [];
+  let transferTargetMatches = false, transferRevision: number | null = null;
+  const observeOriginalOwner = async (response: import("@playwright/test").Response) => {
+    try {
+      const url = new URL(response.url());
+      if (url.origin !== fixture.origin || url.pathname !== "/api/tokens/media") return;
+      const body = response.status() >= 400 ? await response.json().catch(() => null) : null;
+      ownerMedia.push({ status: response.status(), recovery: body?.reason === "identity_recovery_required" });
+      if (ownerMedia.length > 16) ownerMedia.shift();
+    } catch { /* never retain credentials or error text */ }
+  };
+  page.on("response", observeOriginalOwner);
+  let observedRoom = "", observedRecipient = "";
+  const observeOwnerPoll = async (response: import("@playwright/test").Response) => {
+    try {
+      const url = new URL(response.url());
+      if (url.origin !== fixture.origin && url.origin !== fixture.assetsOrigin) return;
+      const stage = url.pathname === "/api/tokens/state" ? "state" : url.pathname === "/health" ? "health"
+        : url.pathname === `/api/rooms/${observedRoom}/manifest` ? "manifest"
+        : url.pathname.startsWith(`/api/rooms/${observedRoom}/presence/`) ? "presence"
+        : url.pathname === `/api/rooms/${observedRoom}/spaces` ? "spaces"
+        : url.pathname.includes("/avatars/") ? "avatar" : url.pathname.endsWith("scene.json") ? "scene" : null;
+      if (stage && recipientStartup.length < 64) {
+        const body = response.status() >= 400 ? await response.json().catch(() => null) : null;
+        recipientStartup.push({ stage, status: response.status(), denied: response.status() >= 400,
+          recovery: body?.reason === "identity_recovery_required" });
+      }
+      if (url.origin !== fixture.origin) return;
+      if (url.pathname === "/api/tokens/media") {
+        const body = await response.json();
+        recipientMedia.push({ status: response.status(), recovery: body.reason === "identity_recovery_required", changed: body.reason === "room_state_changed" });
+        if (recipientMedia.length > 16) recipientMedia.shift();
+        return;
+      }
+      if (url.pathname !== `/api/rooms/${observedRoom}/session-control`) return;
+      const body = await response.json();
+      recipientPolls.push({ status: response.status(), ownerMatches: typeof body.ownerParticipantId === "string" && body.ownerParticipantId === observedRecipient,
+        isOwner: body.participant?.isOwner === true, revision: Number.isSafeInteger(body.authorityRevision) ? body.authorityRevision : null });
+      if (recipientPolls.length > 32) recipientPolls.shift();
+    } catch { /* keep only allowlisted scalar observations */ }
+  };
+  recipientPage.on("response", observeOwnerPoll);
   try {
     await new PostgresStorage(pool).identityProtocol.raise(2);
     const opened = await request.post(`${fixture.origin}/api/personal-room`, {
@@ -242,10 +300,14 @@ test("personal owner hands off to an invited Member with proof and live controls
     });
     expect(opened.status()).toBe(201);
     const owner = await opened.json() as { room: { roomId: string }; identityCredential: string; participantId: string };
+    observedRoom = owner.room.roomId;
     await page.addInitScript(input => sessionStorage.setItem(`vrata.identity.v2.${encodeURIComponent(input.roomId)}`, input.credential),
       { roomId: owner.room.roomId, credential: owner.identityCredential });
     const personalUrl = `${fixture.origin}/rooms/${owner.room.roomId}?onboard=0`;
     await page.goto(personalUrl, { waitUntil: "domcontentloaded" });
+    // The early ownership DTO and socket-open flag precede avatar/scene boot. Exercise live handoff only after the
+    // ordinary controls are ready; keep the handoff assertions and their deadlines independent of asset loading.
+    await expect(page.locator("#join-audio")).toBeEnabled({ timeout: 20_000 });
     await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__?.personalRoom?.isOwner)).toBe(true);
     const invitation = await request.post(`${fixture.origin}/api/rooms/${owner.room.roomId}/invites`, {
       headers: { "x-vrata-admin-token": fixture.adminToken }, data: { role: "member", expiresInSeconds: 120 }
@@ -253,25 +315,66 @@ test("personal owner hands off to an invited Member with proof and live controls
     expect(invitation.status()).toBe(201);
     const inviteLink = (await invitation.json() as { inviteLink: string }).inviteLink;
     await recipientPage.goto(`${inviteLink}&onboard=0`, { waitUntil: "domcontentloaded" });
+    if (holdSceneAsset) await expect.poll(() => bootAssetHeld, { timeout: 20_000 }).toBe(true);
+    else await expect(recipientPage.locator("#join-audio")).toBeEnabled({ timeout: 20_000 });
     await expect.poll(() => recipientPage.evaluate(() => (window as any).__VRATA_DEBUG__?.roomStateConnected)).toBe(true);
     const recipientId = await recipientPage.evaluate(() => (window as any).__VRATA_DEBUG__?.participantId) as string;
+    observedRecipient = recipientId;
+    await page.bringToFront();
     await expect.poll(() => page.locator("#host-participant-select option").evaluateAll((options, target) =>
       options.some(option => (option as HTMLOptionElement).value === target), recipientId), { timeout: 20_000 }).toBe(true);
     await page.locator("#host-participant-select").selectOption(recipientId);
     await expect(page.locator("#transfer-owner")).toBeEnabled({ timeout: 20_000 });
     const transferred = page.waitForResponse(response => new URL(response.url()).pathname === `/api/rooms/${owner.room.roomId}/owner/transfer`);
     await page.locator("#transfer-owner").click();
-    expect((await transferred).status()).toBe(200);
+    const transferResponse = await transferred;
+    expect(transferResponse.status()).toBe(200);
+    const transferBody = await transferResponse.json();
+    transferTargetMatches = transferBody.ownerParticipantId === recipientId;
+    transferRevision = Number.isSafeInteger(transferBody.revision) ? transferBody.revision : null;
+    expect(transferTargetMatches).toBe(true);
     await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__?.personalRoom?.isOwner)).toBe(false);
+    await recipientPage.bringToFront();
     await expect.poll(() => recipientPage.evaluate(() => (window as any).__VRATA_DEBUG__?.personalRoom?.isOwner),
       { timeout: 20_000 }).toBe(true);
     await expect(recipientPage.locator("#host-controls")).toBeVisible();
     expect(await recipientPage.evaluate(() => (window as any).__VRATA_DEBUG__?.access?.role)).toBe("member");
+    releaseSceneAsset?.();
     const recipientAdmission = recipientPage.waitForResponse(response => new URL(response.url()).pathname === "/api/tokens/state");
+    let recipientReloadCommitted = false;
+    const observeReloadCommit = (frame: import("@playwright/test").Frame) => {
+      if (frame === recipientPage.mainFrame()) recipientReloadCommitted = true;
+    };
+    recipientPage.on("framenavigated", observeReloadCommit);
+    const recipientReloadControl = recipientPage.waitForResponse(response => recipientReloadCommitted && response.request().method() === "GET"
+      && new URL(response.url()).pathname === `/api/rooms/${owner.room.roomId}/session-control`);
     await recipientPage.reload({ waitUntil: "domcontentloaded" });
     expect((await recipientAdmission).status()).toBe(200);
+    expect((await recipientReloadControl).status()).toBe(200);
+    recipientPage.off("framenavigated", observeReloadCommit);
+    await expect(recipientPage.locator("#join-audio")).toBeEnabled({ timeout: 20_000 });
     await expect.poll(() => recipientPage.evaluate(() => (window as any).__VRATA_DEBUG__?.personalRoom?.isOwner).catch(() => null)).toBe(true);
+  } catch (error) {
+    const recipient = await recipientPage.evaluate(() => {
+      const debug = (window as any).__VRATA_DEBUG__;
+      const gate = document.getElementById("session-upgrade-dialog")?.getBoundingClientRect();
+      return { visible: document.visibilityState === "visible",
+        connected: debug?.roomStateConnected === true, isOwner: debug?.personalRoom?.isOwner === true,
+        personal: debug?.personalRoom?.roomType === "personal",
+        sceneLoaded: debug?.sceneDebug?.state === "loaded", hostControlsEnabled: debug?.featureFlags?.hostControlsEnabled === true,
+        gateVisible: !!gate && gate.width > 0 && gate.height > 0 };
+    }).catch(() => null);
+    const originalOwner = await page.evaluate(() => {
+      const gate = document.getElementById("session-upgrade-dialog")?.getBoundingClientRect();
+      return { isOwner: (window as any).__VRATA_DEBUG__?.personalRoom?.isOwner === true,
+        connected: (window as any).__VRATA_DEBUG__?.roomStateConnected === true, gateVisible: !!gate && gate.width > 0 && gate.height > 0 };
+    }).catch(() => null);
+    await test.info().attach("owner-handoff-readiness", { body: JSON.stringify({ transferTargetMatches, transferRevision, originalOwner, ownerMedia, recipient, polls: recipientPolls, media: recipientMedia, startup: recipientStartup }), contentType: "application/json" });
+    throw error;
   } finally {
+    releaseSceneAsset?.();
+    recipientPage.off("response", observeOwnerPoll);
+    page.off("response", observeOriginalOwner);
     await Promise.allSettled([page.goto("about:blank"), recipientPage.close()]);
     await pool.end();
     await fixture.close();

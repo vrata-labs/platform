@@ -23,6 +23,8 @@ export const AUTHOR_HTTP_CONFIG = "PRIVATE-AUTHOR-HTTP-CONFIG";
 // Frame fixtures reach the child only when a caller passes frame options. Never deployment credentials.
 export const AUTHOR_HTTP_FRAME_SECRET = "author-http-isolated-frame-fixture-secret-32-bytes";
 export const AUTHOR_HTTP_INTERNAL_TOKEN = "author-http-isolated-internal-fixture-token";
+export const AUTHOR_HTTP_MEDIA_KEY = "author-http-isolated-media-key";
+export const AUTHOR_HTTP_MEDIA_SECRET = "author-http-isolated-media-fixture-secret-32-bytes";
 const administrator = "author-http-isolated-administrator";
 
 export interface AuthorHttpResponse {
@@ -45,13 +47,15 @@ export interface AuthorHttpPackage {
 }
 /** authorityUrl must be an owned 127.0.0.1 HTTP mock; ttlSeconds defaults to 120. */
 export interface AuthorHttpFrameOptions { authorityUrl?: string; ttlSeconds?: number }
+export interface AuthorHttpMediaOptions { ttlSeconds?: number }
 type Phase = "body-admitted" | "body-end" | "put-written" | "upload-settled" | "private-read" | "plugin-room" | "settlement-timeout"
   | "telemetry-effect" | "telemetry-written" | "telemetry-read" | "telemetry-ack-loss" | "room-read" | "room-loaded"
   | "administrative-insert" | "administrative-receipt" | "administrative-ack-loss" | "state-token-ack-loss" | "legacy-state-token-ack-loss"
   | "admission-write" | "admission-written" | "admission-ack-loss" | "legacy-control-entry" | "control-written" | "control-ack-loss"
-  | "frame-sign-fault" | "frame-credential-ack-loss";
+  | "frame-sign-fault" | "frame-credential-ack-loss" | "media-sign" | "media-prepared" | "media-sign-fault" | "media-credential-ack-loss" | "media-namespace"
+  | "legacy-state-release-complete";
 type Message = { event?: string; phase?: Phase; id?: string; command?: string; kind?: Phase; roomId?: string; offset?: number; operation?: string;
-  skip?: number; sqlState?: "55P03"; lockTimeoutMs?: number; phaseId?: string };
+  skip?: number; sqlState?: "55P03"; lockTimeoutMs?: number; phaseId?: string; signCalls?: number };
 
 export function authorHttpArtifact(id = "http-status", version = "1.0.0", entry = AUTHOR_HTTP_SOURCE,
   capabilities: RoomPluginManifest["requestedCapabilities"] = ["status.set"]) {
@@ -113,14 +117,15 @@ export function assertAuthorHttpPublicDto(value: unknown, forbidden: string[] = 
  * Held phases resume in FIFO order unless resumePhase names one, so one case may hold several requests.
  * The local reader currently uses FileHandle; readFile is also wrapped for the equivalent buffered path.
  */
-function childInstrumentation(indexUrl: string, telemetryCheckpoints: boolean, administrativeCheckpoints: boolean, frameCheckpoints: boolean): string {
+function childInstrumentation(indexUrl: string, telemetryCheckpoints: boolean, administrativeCheckpoints: boolean, frameCheckpoints: boolean,
+  mediaCheckpoints: boolean): string {
   return `
     import {IncomingMessage,ServerResponse} from 'node:http';
     import {syncBuiltinESMExports} from 'node:module';
     import crypto from 'node:crypto';
     import fs from 'node:fs/promises';
     import pg from 'pg';
-    let offset=0, armed;
+    let offset=0, armed, mediaSignCalls=0;
     const resumes=[];
     const heldReplies=[];
     const originalNow=Date.now;
@@ -142,6 +147,7 @@ function childInstrumentation(indexUrl: string, telemetryCheckpoints: boolean, a
       }
       if(message.command==='clock'){offset=message.offset;notify({event:'ack',id:message.id});}
       if(message.command==='sync'){notify({event:'ack',id:message.id});}
+      if(message.command==='media-sign-count'){notify({event:'ack',id:message.id,signCalls:mediaSignCalls});}
       if(message.command==='flush-state-replies'){
         // A destroyed socket rejects the late end; the parent observes that through its own request.
         for(const flush of heldReplies.splice(0)){try{flush();}catch{}}
@@ -152,7 +158,7 @@ function childInstrumentation(indexUrl: string, telemetryCheckpoints: boolean, a
     IncomingMessage.prototype.on=function(event,...args){
       const result=on.call(this,event,...args), id=this.headers?.['x-author-http-phase'];
         if(id && event==='end' && (this.url?.includes('/plugins/') || (${telemetryCheckpoints} && (this.url?.includes('/diagnostics') || this.url?.includes('/xr-telemetry') || this.url==='/api/tokens/state'
-          || (this.method==='POST' && this.url==='/api/tokens/remote-browser-frame')
+          || (this.method==='POST' && (this.url==='/api/tokens/remote-browser-frame' || this.url==='/api/tokens/media'))
           || (this.method==='POST' && legacyControlPath.test(this.url??'')))) || (${administrativeCheckpoints} && this.url==='/api/rooms'))){
         notify({event:'phase',phase:'body-admitted',id});
         on.call(this,'end',()=>notify({event:'phase',phase:'body-end',id}));
@@ -169,6 +175,7 @@ function childInstrumentation(indexUrl: string, telemetryCheckpoints: boolean, a
     const admissionAckLosses=new WeakMap();
     const controlAckLosses=new WeakMap();
     const frameAckLosses=new WeakMap();
+    const mediaAckLosses=new WeakMap();
     pg.Client.prototype.query=async function(sql,...args){
       const text=typeof sql==='string'?sql:sql?.text;
       const values=Array.isArray(args[0])?args[0]:sql?.values;
@@ -209,6 +216,8 @@ function childInstrumentation(indexUrl: string, telemetryCheckpoints: boolean, a
       // Frame fixtures only: the RS2 release's read-only parent fence, recorded on the client that will COMMIT it.
       if(${frameCheckpoints} && armed?.kind==='frame-credential-ack-loss' && armed.roomId===values?.[1]
         && text==='select 1 from rooms where tenant_id=$1 and room_id=$2 for share'){frameAckLosses.set(this,armed.id);armed=undefined;}
+      if(${mediaCheckpoints} && armed?.kind==='media-credential-ack-loss' && armed.roomId===values?.[1]
+        && text==='select 1 from rooms where tenant_id=$1 and room_id=$2 for share'){mediaAckLosses.set(this,armed.id);armed=undefined;}
       if(${administrativeCheckpoints} && text?.trimStart().startsWith('insert into rooms (')){
         creations.set(this,values?.[0]);await pause('administrative-insert',values?.[0]);
       }
@@ -237,8 +246,12 @@ function childInstrumentation(indexUrl: string, telemetryCheckpoints: boolean, a
         const id=frameAckLosses.get(this);frameAckLosses.delete(this);
         notify({event:'phase',phase:'frame-credential-ack-loss',id});throw new Error('fixture_frame_credential_commit_ack_lost');
       }
+      if(/^commit$/i.test(text??'') && mediaAckLosses.has(this)){
+        const id=mediaAckLosses.get(this);mediaAckLosses.delete(this);
+        notify({event:'phase',phase:'media-credential-ack-loss',id});throw new Error('fixture_media_credential_commit_ack_lost');
+      }
       if(/^(commit|rollback)$/i.test(text??'')) admissionScopes.delete(this);
-      if(/^rollback$/i.test(text??'')){settlements.delete(this);creations.delete(this);ackLosses.delete(this);pinAckLosses.delete(this);admissionAckLosses.delete(this);controlAckLosses.delete(this);frameAckLosses.delete(this);}
+      if(/^rollback$/i.test(text??'')){settlements.delete(this);creations.delete(this);ackLosses.delete(this);pinAckLosses.delete(this);admissionAckLosses.delete(this);controlAckLosses.delete(this);frameAckLosses.delete(this);mediaAckLosses.delete(this);}
       return result;
     };
     const root=process.env.ROOM_PLUGIN_LOCAL_UPLOAD_ROOT;
@@ -279,6 +292,44 @@ function childInstrumentation(indexUrl: string, telemetryCheckpoints: boolean, a
         return createHmac.call(this,algorithm,key,...args);
       };
     }
+    if(${mediaCheckpoints}){
+      // Test-local SDK checkpoints. Hold the real signer before/after signing, without exposing its JWT or key over IPC.
+      const {AccessToken}=await import('livekit-server-sdk');
+      const sign=AccessToken.prototype.toJwt;
+      AccessToken.prototype.toJwt=async function(...args){
+        mediaSignCalls+=1;
+        const scope=()=>{
+          const room=armed?.roomId, grant=this.grants?.video?.room, prefix=process.env.LIVEKIT_ROOM_PREFIX??'vrata-';
+          if(typeof room!=='string' || typeof grant!=='string')return undefined;
+          return grant===prefix+room || (grant.startsWith(prefix+'v2:') && grant.endsWith(':'+room)) ? room : undefined;
+        };
+        const room=scope();
+        if(room!==undefined && armed?.kind==='media-sign-fault'){
+          const id=armed.id;armed=undefined;notify({event:'phase',phase:'media-sign-fault',id});throw new Error('fixture_media_sign_fault');
+        }
+        if(room!==undefined)await pause('media-sign',room);
+        const token=await sign.apply(this,args);
+        const preparedRoom=scope();
+        if(preparedRoom!==undefined)await pause('media-prepared',preparedRoom);
+        return token;
+      };
+      // Pool.query uses a callback on Client.query, so a Client wrapper's returned promise cannot hold that result.
+      // Hold the actual policy method promise consumed by the route instead.
+      const {PostgresStorage}=await import(${JSON.stringify(new URL("storage.js", indexUrl).href)});
+      const init=PostgresStorage.prototype.init, wrapped=new WeakSet();
+      PostgresStorage.prototype.init=async function(...args){
+        if(!wrapped.has(this)){
+          wrapped.add(this);
+          const namespace=this.identityProtocol.mediaNamespace;
+          this.identityProtocol.mediaNamespace=async()=>{
+            const value=await namespace.call(this.identityProtocol);
+            if(armed?.kind==='media-namespace')await pause('media-namespace',armed.roomId);
+            return value;
+          };
+        }
+        return init.apply(this,args);
+      };
+    }
     syncBuiltinESMExports();
     if(${administrativeCheckpoints}){
       const {PostgresStorage}=await import(${JSON.stringify(new URL("storage.js", indexUrl).href)});
@@ -289,7 +340,7 @@ function childInstrumentation(indexUrl: string, telemetryCheckpoints: boolean, a
     }
     if(${telemetryCheckpoints}){
       // Emulate a backpressured reply: queue only the marked state-token, frame-credential or session-control end() after writeHead.
-      const holdable=req=>(req.method==='POST' && (req.url==='/api/tokens/state' || req.url==='/api/tokens/remote-browser-frame'))
+      const holdable=req=>(req.method==='POST' && (req.url==='/api/tokens/state' || req.url==='/api/tokens/remote-browser-frame' || req.url==='/api/tokens/media'))
         || (req.method==='GET' && /^[/]api[/]rooms[/][^/?]+[/]session-control$/.test(req.url??''));
       const end=ServerResponse.prototype.end;
       ServerResponse.prototype.end=function(...args){
@@ -316,7 +367,11 @@ function childInstrumentation(indexUrl: string, telemetryCheckpoints: boolean, a
       for(const method of ['withLegacyRoomEffect','withLegacyVirtualRoomEffect','releaseLegacyRoomCredential']){
         const original=PostgresStorage.prototype[method];
         PostgresStorage.prototype[method]=async function(scope,...args){
-          await pause('telemetry-effect',typeof scope==='string'?scope:scope?.roomId);return original.call(this,scope,...args);
+          const roomId=typeof scope==='string'?scope:scope?.roomId;
+          await pause('telemetry-effect',roomId);
+          const result=await original.call(this,scope,...args);
+          if(method==='releaseLegacyRoomCredential')await pause('legacy-state-release-complete',roomId);
+          return result;
         };
       }
       // A separate entry hold: telemetry-effect still pauses only the read-only release after a known admission COMMIT.
@@ -348,7 +403,7 @@ function childInstrumentation(indexUrl: string, telemetryCheckpoints: boolean, a
 }
 
 export async function startAuthorHttpFixture(t: TestContext, floor: 1 | 2 = 2, telemetryCheckpoints = false, administrativeCheckpoints = false,
-  frameOptions?: AuthorHttpFrameOptions) {
+  frameOptions?: AuthorHttpFrameOptions, mediaOptions?: AuthorHttpMediaOptions) {
   assert.ok(process.env.VRATA_TEST_POSTGRES_URL, "VRATA_TEST_POSTGRES_URL is required (including CI)");
   if (frameOptions?.authorityUrl !== undefined) {
     const authority = new URL(frameOptions.authorityUrl);
@@ -418,11 +473,13 @@ export async function startAuthorHttpFixture(t: TestContext, floor: 1 | 2 = 2, t
     REMOTE_BROWSER_TOKEN_SECRET: AUTHOR_HTTP_FRAME_SECRET, REMOTE_BROWSER_TOKEN_TTL_SECONDS: String(frameTtl),
     VRATA_INTERNAL_SERVICE_TOKEN: AUTHOR_HTTP_INTERNAL_TOKEN,
     ...(frameOptions.authorityUrl === undefined ? {} : { ROOM_STATE_INTERNAL_URL: frameOptions.authorityUrl }) });
+  if (mediaOptions) Object.assign(env, { LIVEKIT_API_KEY: AUTHOR_HTTP_MEDIA_KEY, LIVEKIT_API_SECRET: AUTHOR_HTTP_MEDIA_SECRET,
+    MEDIA_TOKEN_TTL_SECONDS: String(mediaOptions.ttlSeconds ?? 120) });
   const messages: Message[] = [];
   const io: string[] = [];
   function spawnOwnedApiChild() {
     const owned = spawn(process.execPath, ["--input-type=module", "-e", childInstrumentation(new URL("../index.js", import.meta.url).href, telemetryCheckpoints,
-      administrativeCheckpoints, frameOptions !== undefined)], {
+      administrativeCheckpoints, frameOptions !== undefined, mediaOptions !== undefined)], {
       cwd: fileURLToPath(new URL("../../", import.meta.url)), env, stdio: ["ignore", "pipe", "pipe", "ipc"]
     });
     child = owned;
@@ -541,6 +598,12 @@ export async function startAuthorHttpFixture(t: TestContext, floor: 1 | 2 = 2, t
     return { state, packages, bindings, files: await files(), io: [...io] };
   }
   async function arm(kind: Phase, roomId: string, skip = 0) { return control("arm", { kind, roomId, skip }); }
+  async function mediaSignCount(): Promise<number> {
+    const id = randomUUID(); child!.send({ command: "media-sign-count", id });
+    const reply = await waitMessage("ack", id);
+    assert.equal(Number.isSafeInteger(reply.signCalls), true, "only a scalar signing count crosses IPC");
+    return reply.signCalls!;
+  }
   async function diagnosticPublishedCount(requestId: string): Promise<number> {
     assert.equal(typeof requestId === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(requestId), true, "fixture correlation UUID required");
     await control("sync");
@@ -580,7 +643,7 @@ export async function startAuthorHttpFixture(t: TestContext, floor: 1 | 2 = 2, t
     } finally { await holder.query("rollback").catch(() => undefined); holder.release(); if (response) await response.catch(() => undefined); }
   }
   return { schema, pool, storage, localRoot, base, io, adminHeaders, request, invite, admit, session, room, present, transition,
-    upload, bind, files, snapshot, stalled, held, arm, restartApi, phase: (id: string, kind: Phase) => waitMessage("phase", id, kind),
+    upload, bind, files, snapshot, stalled, held, arm, restartApi, mediaSignCount, phase: (id: string, kind: Phase) => waitMessage("phase", id, kind),
     resume: () => control("resume"), resumePhase: (id: string) => control("resume", { phaseId: id }),
     clock: (offset: number) => control("clock", { offset }), diagnosticPublishedCount,
     stateReplyBuffered: (id: string) => waitMessage("state-reply-buffered", id), flushStateReplies: () => control("flush-state-replies") };

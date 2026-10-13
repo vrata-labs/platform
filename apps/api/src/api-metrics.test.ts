@@ -12,7 +12,8 @@ const digest = (text: string) => createHash("sha256").update(text).digest("hex")
 const additiveBlocks = [
   /^# HELP vrata_api_virtual_state_release_completion_failures_total[^\n]*\n# TYPE vrata_api_virtual_state_release_completion_failures_total counter\nvrata_api_virtual_state_release_completion_failures_total [0-9]+\n/gm,
   /^# HELP vrata_api_legacy_state_release_completion_failures_total[^\n]*\n# TYPE vrata_api_legacy_state_release_completion_failures_total counter\nvrata_api_legacy_state_release_completion_failures_total [0-9]+\n/gm,
-  /^# HELP vrata_api_frame_credential_release_completion_failures_total[^\n]*\n# TYPE vrata_api_frame_credential_release_completion_failures_total counter\nvrata_api_frame_credential_release_completion_failures_total [0-9]+\n/gm
+  /^# HELP vrata_api_frame_credential_release_completion_failures_total[^\n]*\n# TYPE vrata_api_frame_credential_release_completion_failures_total counter\nvrata_api_frame_credential_release_completion_failures_total [0-9]+\n/gm,
+  /^# HELP vrata_api_media_credential_release_completion_failures_total[^\n]*\n# TYPE vrata_api_media_credential_release_completion_failures_total counter\nvrata_api_media_credential_release_completion_failures_total [0-9]+\n/gm
 ];
 function legacyReport(text: string): string {
   // The additive release counters are pinned separately; retain the original golden
@@ -133,10 +134,22 @@ test("frame credential release completion failures render as one unlabelled coun
   assert.ok(output.includes("vrata_api_legacy_state_release_completion_failures_total 0\n"
     + "# HELP vrata_api_frame_credential_release_completion_failures_total Remote-browser frame credential replies already released whose read-only fence then failed to complete.\n"
     + "# TYPE vrata_api_frame_credential_release_completion_failures_total counter\n"
-    + "vrata_api_frame_credential_release_completion_failures_total 4\n# HELP vrata_rooms_total "));
+    + "vrata_api_frame_credential_release_completion_failures_total 4\n# HELP vrata_api_media_credential_release_completion_failures_total "));
   assert.ok(!output.includes("vrata_api_frame_credential_release_completion_failures_total{"));
   assert.equal(reporter.metrics.legacyStateReleaseCompletionFailuresTotal, 0);
-  assert.equal(Object.keys(reporter.metrics).at(-1), "frameCredentialReleaseCompletionFailuresTotal");
+});
+
+test("media credential release completion failures render as one unlabelled counter after the frame counter", async () => {
+  const reporter = create();
+  reporter.metrics.mediaCredentialReleaseCompletionFailuresTotal = 5;
+  const output = await reporter.apiMetricsText(emptyStorage);
+  assert.ok(output.includes("vrata_api_frame_credential_release_completion_failures_total 0\n"
+    + "# HELP vrata_api_media_credential_release_completion_failures_total User media credential replies already released whose read-only fence then failed to complete.\n"
+    + "# TYPE vrata_api_media_credential_release_completion_failures_total counter\n"
+    + "vrata_api_media_credential_release_completion_failures_total 5\n# HELP vrata_rooms_total "));
+  assert.ok(!output.includes("vrata_api_media_credential_release_completion_failures_total{"));
+  assert.equal(reporter.metrics.frameCredentialReleaseCompletionFailuresTotal, 0);
+  assert.equal(Object.keys(reporter.metrics).at(-1), "mediaCredentialReleaseCompletionFailuresTotal");
 });
 
 test("populated report preserves every metric, HELP text, TYPE, label and line order", async () => {

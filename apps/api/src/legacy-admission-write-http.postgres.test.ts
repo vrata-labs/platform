@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
 import { verifyRoomSessionToken } from "@vrata/shared-types/session-token";
-import { AUTHOR_HTTP_SECRET, authorHttpBearer, startAuthorHttpFixture, type AuthorHttpResponse } from "./plugins/author-http.test-helper.js";
+import { AUTHOR_HTTP_SECRET, authorHttpBearer, startAuthorHttpFixture, until, type AuthorHttpResponse } from "./plugins/author-http.test-helper.js";
 
 const postgres = { skip: !process.env.VRATA_TEST_POSTGRES_URL && !process.env.CI, timeout: 300_000 };
 const LONG_TENANT = `admission-write-${"t".repeat(185)}`;
@@ -143,6 +143,7 @@ test("floor-1 admission writes are guarded, acknowledged and reconciled over nat
     await c.test("trusted host sources seat a vacant host before release; default and dev roles never claim", async () => {
       const invited = await a.createRoom("public"), host = randomUUID();
       const viaInvite = a.minted(await a.post({ roomId: invited, participantId: host, inviteToken: (await h.invite(invited, "host")).inviteToken }), invited, host);
+      await until(async () => await a.allowedUses(host) === 1, "the admitted Host's audit follows its settled read-only release");
       assert.deepEqual([await a.seat(invited), await a.allowedUses(host)], [host, 1], "seated, then audited once after the ACK");
       await a.vacate(invited);
       const viaBearer = a.minted(await a.post({ roomId: invited }, viaInvite.token), invited, host);
@@ -314,7 +315,16 @@ test("floor-1 admission writes are guarded, acknowledged and reconciled over nat
       const claim = () => a.post({ roomId, participantId: host, inviteToken: invite.inviteToken });
       await a.ackLost(roomId, claim);
       assert.deepEqual([await a.seat(roomId), await a.allowedUses(host)], [host, 0], "the actual COMMIT seated the subject; nothing was audited");
-      const reconciled = a.minted(await claim(), roomId, host);
+      // The HTTP body is queued inside the read-only fence; its audit sink follows the settled release.
+      // Hold that actual completion boundary so the pre-audit response ordering is deterministic, then await the sink.
+      const completion = await h.arm("legacy-state-release-complete", roomId);
+      let reconciled!: Issued;
+      try {
+        reconciled = a.minted(await claim(), roomId, host);
+        await h.phase(completion, "legacy-state-release-complete");
+        assert.equal(await a.allowedUses(host), 0, "the queued HTTP success is observable before the completion audit");
+      } finally { await h.resumePhase(completion); }
+      await until(async () => await a.allowedUses(host) === 1, "the first success audit follows the settled release");
       assert.deepEqual([reconciled.claims.role, reconciled.claims.roleSource, await a.allowedUses(host)], ["host", "trusted", 1],
         "the seated subject's fresh read-only release is its first success");
       await a.admin(`${a.stem(roomId)}/invites/${invite.inviteId}/revoke`);

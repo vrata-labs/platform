@@ -42,6 +42,7 @@ import {
 import { appendBrandingSuffix, applyRoomShellBootState, renderSceneAttributions } from "./boot-session.js";
 import { RuntimeAccessError, bootRuntime, deleteRoomDocument, downloadRoomDocument, exportRoomNote, exportRoomNotesArchive, fetchRoomDocumentMediaContent, fetchRoomDocumentPresentation, fetchRoomNote, fetchRoomSessionControl, fetchRuntimeSpaces, fetchStateToken, grantRoomPresenter, listPresence, listRoomDocuments, listRoomNoteVersions, openPersonalRoom, planVoiceSession, removePresence, removeRoomParticipant, resolveCurrentSpace, resolveJoinMode, restoreRoomNoteVersion, revokeRoomPresenter, runRoomSessionControlAction, savePersonalRoomState, saveRoomNote, selectRoomDocumentSurface, transferRoomHost, transferRoomOwner, uploadRoomDocument, upsertPresence, type PresenceState, type RuntimeDocumentRecord, type RuntimePersonalState, type RuntimeSessionControlResponse, type RuntimeSpaceOption } from "./index.js";
 import { canManageRoomControls, canTransferRoomOwnership, staleAuthorityResponse } from "./room-owner-controls.js";
+import { createSessionControlPoller } from "./session-control-poller.js";
 import { createRoomIdentityTab } from "./identity-session-tab.js";
 import { redeemRoomRecovery } from "./identity-recovery.js";
 import { probeDocumentMedia } from "./document-media-probe.js";
@@ -1745,6 +1746,7 @@ function applyAccessDebug(access: NonNullable<RuntimeSessionControlResponse["acc
 }
 
 function disableRuntimeForSessionBlock(reason: string): void {
+  sessionControlPoller.stop();
   const message = describeSessionControlReason(reason);
   sessionControlBlocked = true;
   clearRoomStateReconnect();
@@ -1810,6 +1812,13 @@ function applySessionControlResponse(payload: RuntimeSessionControlResponse, sta
   }
   renderHostControls(statusMessage);
 }
+
+const sessionControlPoller = createSessionControlPoller({ intervalMs: SESSION_CONTROL_REFRESH_INTERVAL_MS,
+  refresh: () => refreshSessionControl() });
+window.addEventListener("pagehide", () => sessionControlPoller.stop());
+window.addEventListener("pageshow", event => {
+  if (event.persisted && !sessionControlBlocked && !runtimeSessionGate.reason) sessionControlPoller.start();
+});
 
 async function refreshSessionControl(force = false): Promise<void> {
   const nowMs = Date.now();
@@ -8230,7 +8239,6 @@ renderer.setAnimationLoop(() => {
     }
 
     syncAvatarPoseRealtime(nowMs);
-    void refreshSessionControl().catch(() => undefined);
 
     if (presenceAccumulator >= 0.12) {
       presenceAccumulator = 0;
@@ -8346,6 +8354,7 @@ async function main(): Promise<void> {
   await syncPresence(boot.joinMode, false);
   await refreshSessionControl(true);
   if (sessionControlBlocked) return;
+  if (!runtimeSessionGate.reason) sessionControlPoller.start();
   await loadAvailableSpaces(boot.roomId);
   syncNotesAccessUi();
   void loadActiveNote();

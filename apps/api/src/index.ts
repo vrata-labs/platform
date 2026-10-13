@@ -53,7 +53,6 @@ import { admitV2RoomSession, type V2AdmissionRequest } from "./identity/http-adm
 import { currentSessionControlV2, resolveRoomRequestV2, untrustedSessionRoom, type VerifiedRoomRequestV2 } from "./identity/http-authority.js";
 import { roomMediaGrantName } from "./identity/media-room.js";
 import { applyRoomLifecycleV2, lifecycleV2Error, roomIdentityActorFromHttp } from "./identity/http-lifecycle.js";
-import { finalizeProofBoundToken } from "./identity/effect-fence.js";
 import { IdentityStorageError } from "./identity/contracts.js";
 import { PersonalOwnerRoomBlocked } from "./identity/personal-owner-response.js";
 import type { RoomEffectGuard, RoomEffectActor } from "./identity/effect-write-guard.js";
@@ -164,6 +163,10 @@ import {
 import {
   captureFrameCredentialPlan, captureRemoteBrowserFrameBinding, issueRemoteBrowserFrameCredential, type FrameCredentialPlan
 } from "./remote-browser-frame-credential.js";
+import {
+  captureMediaCredentialPlan, releaseMediaCredential, resolveMediaTokenTtlSeconds, signMediaCredential,
+  type MediaCredentialPlan, type PreparedMediaCredential
+} from "./media-credential.js";
 
 export {
   isSpatialAudioFeatureEnabled,
@@ -861,27 +864,6 @@ async function verifyRoomSessionRequest(
   return result;
 }
 
-/** Local token signing can be slow or delayed by the client-controlled body.
- * Ignore the entry-time cache and never release a prepared v2 token after its
- * holder has lost its epoch, role, ownership or room admission. */
-async function finalizeRoomToken(request: IncomingMessage,
-  session: Extract<RoomSessionTokenVerificationResult, { ok: true }>,
-  sessionToken: string | null | undefined, prepare: () => Promise<string>): Promise<string> {
-  const proof = session.payload;
-  if (proof.identityProtocolVersion !== 2) return prepare();
-  if (!proof.identityId || typeof proof.authEpoch !== "number" || !Number.isSafeInteger(proof.authEpoch)
-    || proof.authEpoch < 1 || typeof proof.isOwner !== "boolean") {
-    throw new IdentityBoundaryError(409, "identity_recovery_required");
-  }
-  const prepared = await finalizeProofBoundToken({ before: {
-    tenantId: proof.tenantId, roomId: proof.roomId, identityId: proof.identityId,
-    participantId: proof.participantId, authEpoch: proof.authEpoch, role: proof.role, isOwner: proof.isOwner
-  }, prepare, readCurrent: async () => resolveRoomRequestV2({ storage: await storagePromise, secret: getStateTokenSecret(),
-    token: sessionToken ?? getBearerToken(request), expectedRoomId: proof.roomId, participantId: proof.participantId }) });
-  if (prepared === null) throw new IdentityBoundaryError(409, "identity_recovery_required");
-  return prepared;
-}
-
 async function runGuardedRoomEffect<T>(storage: Storage, actor: ControlPlaneActor, room: RoomRecord,
   permission: RoomPermission, effect: (scoped: RoomIdentityEffectStorage, current: RoomEffectActor | null) => Promise<T>,
   options: { ownerOnly?: boolean; hostOrOwner?: boolean; roomWrite?: boolean } = {}): Promise<T> {
@@ -1014,14 +996,15 @@ function writeFrameNotAllowed(response: ServerResponse): void {
 
 /** Frame credentials are signed and sent synchronously inside the final read-only room fence. A COMMIT or connection
  * failure after the reply was queued cannot revoke it: count it and let the reply finish. A failure before or during
- * send, the signer's included, keeps its mapped error. */
-async function releaseFrameCredential(fence: (send: (write: () => void) => void) => Promise<void>): Promise<void> {
+ * send, the signer's included, keeps its mapped error. A user media release counts on its own counter. */
+async function releaseFrameCredential(fence: (send: (write: () => void) => void) => Promise<void>,
+  countCompletionFailure: () => void = () => { metrics.frameCredentialReleaseCompletionFailuresTotal += 1; }): Promise<void> {
   let released = false;
   try {
     await fence(write => { write(); released = true; });
   } catch (error) {
     if (!released) throw error;
-    metrics.frameCredentialReleaseCompletionFailuresTotal += 1;
+    countCompletionFailure();
   }
 }
 
@@ -1129,6 +1112,152 @@ function captureLegacyFrameRelease(response: ServerResponse, storage: Storage, i
       throw error;
     }
   };
+}
+
+/** User media: the initial role decides the exact grant. The JWT is signed outside every fence; `release` sends it
+ * synchronously inside the final read-only one, which may only refuse, never change the grant or re-sign. */
+interface MediaCredentialCapture {
+  readonly role: RoomRole;
+  /** The original proof had lapsed at signing: nothing was signed. */
+  readonly lapsed: () => void;
+  readonly release: (plan: MediaCredentialPlan, prepared: PreparedMediaCredential, permission: RoomPermission) => Promise<void>;
+}
+
+function countMediaCredentialCompletionFailure(): void {
+  metrics.mediaCredentialReleaseCompletionFailuresTotal += 1;
+}
+
+// Written session, access and publish refusals keep their media join failure labels; thrown boundary errors add none.
+function writeMediaSessionError(response: ServerResponse, result: Extract<RoomSessionTokenVerificationResult, { ok: false }>): void {
+  incrementCounter(metrics.mediaJoinFailuresTotal, result.code);
+  writeSessionTokenError(response, result);
+}
+
+function writeLegacyMediaBearerError(response: ServerResponse, bearer: Exclude<LegacyBearerClass, { kind: "valid" }>): void {
+  if (bearer.kind === "rotated_dev") return writeLegacyBearerError(response, bearer);
+  writeMediaSessionError(response, bearer.kind === "absent" ? { ok: false, code: "missing_token" } : bearer.result);
+}
+
+function writeMediaAccessDenied(response: ServerResponse, reason: string): void {
+  incrementCounter(metrics.mediaJoinFailuresTotal, reason);
+  json(response, 403, { error: "room_access_denied", reason });
+}
+
+function writeMediaPublishNotAllowed(response: ServerResponse): void {
+  incrementCounter(metrics.mediaJoinFailuresTotal, "media_publish_not_allowed");
+  json(response, 403, { error: "forbidden", reason: "media_publish_not_allowed" });
+}
+
+/** One final clock reading. A lapsed original proof keeps its session expiry; a live proof whose prepared JWT has lapsed (a short
+ * configured lifetime, a slow signer or a fence wait) is a fixed retryable 503, never a session expiry and never re-signed. */
+function writeMediaCredential(response: ServerResponse, plan: MediaCredentialPlan, prepared: PreparedMediaCredential,
+  nowMs: number, lapsed: () => void): void {
+  const outcome = releaseMediaCredential(plan, prepared, nowMs);
+  if (outcome.kind === "proof_expired") return lapsed();
+  if (outcome.kind === "preparation_expired") {
+    return json(response, 503, { error: "media_credential_preparation_expired", reason: "media_credential_preparation_expired" });
+  }
+  json(response, 200, outcome.reply);
+}
+
+/** RS2, as for frames: the original proof's scope, epoch, deadline, role and ownership (false included) pin one read-only identity
+ * fence entered only after signing. Drift is recovery, a lost permission is the publish denial, a lapse is session expiry. */
+function captureV2MediaRelease(response: ServerResponse, storage: Storage, initialRoom: RoomRecord | null,
+  proof: RoomSessionTokenPayload): MediaCredentialCapture | null {
+  if (!proof.identityId || typeof proof.authEpoch !== "number" || !Number.isSafeInteger(proof.authEpoch) || proof.authEpoch < 1
+    || typeof proof.isOwner !== "boolean") throw new IdentityBoundaryError(409, "identity_recovery_required");
+  // The proof was scoped by its own room read: a room created, deleted or moved between the two is refused.
+  if (!initialRoom || initialRoom.tenantId !== proof.tenantId || initialRoom.roomId !== proof.roomId) { writeRoomStateChanged(response); return null; }
+  const blockReason = getSessionControlBlockReason(initialRoom, proof.participantId, proof.role, true);
+  if (blockReason) { writeMediaAccessDenied(response, blockReason); return null; }
+  const pinned = Object.freeze({ tenantId: proof.tenantId, roomId: proof.roomId, identityId: proof.identityId,
+    participantId: proof.participantId, authEpoch: proof.authEpoch, expiresAtSeconds: proof.exp,
+    expectedRole: proof.role, expectedIsOwner: proof.isOwner });
+  const lapsed = () => { throw new IdentityBoundaryError(401, "identity_session_expired"); };
+  return { role: proof.role, lapsed, release: async (plan, prepared, permission) => {
+    const guard: RoomEffectGuard = Object.freeze({ ...pinned, permission });
+    try {
+      await releaseFrameCredential(async send => {
+        try {
+          await storage.withRoomIdentityEffect(guard, async scoped => {
+            scoped.releaseResponse(() => send(() => writeMediaCredential(response, plan, prepared, Date.now(), lapsed)));
+          });
+        } catch (error) { throw guardedEffectError(error); }
+      }, countMediaCredentialCompletionFailure);
+    } catch (error) {
+      if (!(error instanceof RoomEffectPermissionDenied)) throw error;
+      writeMediaPublishNotAllowed(response);
+    }
+  } };
+}
+
+/** Floor 1, as for frames: the captured MAC-verified bearer and the one initial room read decide the release. A persisted room is
+ * re-admitted in renew mode on the locked snapshot with the captured role and source; a virtual room pins absence through the
+ * original deadline. Neither refreshes a token, writes admission state or falls back to the other namespace. */
+function captureLegacyMediaRelease(response: ServerResponse, storage: Storage, roomId: string, initialRoom: RoomRecord | null,
+  proof: RoomSessionTokenPayload, bearer: Pick<LegacyAdmissionContext, "rawBearer" | "secret"> & { requestId: string }): MediaCredentialCapture | null {
+  const scope = Object.freeze({ tenantId: initialRoom?.tenantId ?? LEGACY_VIRTUAL_TENANT_ID, roomId });
+  if (proof.tenantId !== scope.tenantId || proof.roomId !== scope.roomId) { writeRoomStateChanged(response); return null; }
+  const ctx: LegacyAdmissionContext = Object.freeze({ rawBearer: bearer.rawBearer, secret: bearer.secret, nowMs: Date.now(),
+    accessPolicyEnabled: isRoomAccessPolicyEnabled(), hostControlsEnabled: isHostControlsEnabled() });
+  const { participantId, exp: originalExpiry } = proof;
+  const reverify = (nowMs: number): RoomSessionTokenPayload | null => {
+    const current = classifyLegacyBearer({ ...ctx, nowMs }, scope, participantId);
+    if (current.kind === "valid") return current.payload;
+    writeLegacyMediaBearerError(response, current);
+    return null;
+  };
+  const expired = () => writeMediaSessionError(response, { ok: false, code: "expired_token" });
+  if (!initialRoom) return { role: resolveEffectiveRoomRole(null, participantId, proof.role), lapsed: expired,
+    release: async (plan, prepared, permission) => {
+      try {
+        await releaseFrameCredential(send => runLegacyVirtualRoomEffect(storage, scope.roomId, { pinAbsence: true, expiresAtSeconds: originalExpiry },
+          async scoped => {
+            scoped.releaseResponse(() => send(() => {
+              const nowMs = Date.now();
+              const current = reverify(nowMs);
+              if (!current) return;
+              const role = resolveEffectiveRoomRole(null, current.participantId, current.role);
+              if (!hasRoomPermission(getRoomPermissions(role), permission)) return writeMediaPublishNotAllowed(response);
+              writeMediaCredential(response, plan, prepared, nowMs, expired);
+            }));
+          }), countMediaCredentialCompletionFailure);
+      } catch (error) {
+        if (!(error instanceof IdentityBoundaryError && error.status === 401 && error.reason === "identity_session_expired")) throw error;
+        expired();
+      }
+    } };
+  const admission: LegacyAdmissionRequest = Object.freeze({ mode: "renew", requestId: bearer.requestId, explicitParticipantId: null,
+    participantId, displayName: proof.displayName,
+    requested: Object.freeze({ role: proof.role, roleSource: proof.roleSource ?? "trusted" }), inviteTokenHash: null });
+  const initial = evaluateLegacyAdmission(admission, { room: initialRoom, invite: null, waiting: null }, ctx);
+  if (initial.kind === "session") { writeMediaSessionError(response, initial.result); return null; }
+  if (initial.kind === "upgrade_required") throw new IdentityBoundaryError(409, "identity_upgrade_required");
+  if (initial.kind === "deny") { writeMediaAccessDenied(response, initial.reason); return null; }
+  if (initial.kind !== "admit") { writeRoomStateChanged(response); return null; }
+  const { role, roleSource } = initial.decision;
+  const selector: LegacyRoomCredentialSelector = Object.freeze({ tenantId: scope.tenantId, roomId: scope.roomId,
+    participantId, inviteTokenHash: null });
+  return { role, lapsed: expired, release: async (plan, prepared) => {
+    try {
+      await releaseFrameCredential(send => storage.releaseLegacyRoomCredential(selector, {}, fresh => {
+        send(() => {
+          const nowMs = Date.now();
+          if (!reverify(nowMs)) return;
+          const next = evaluateLegacyAdmission(admission, fresh, Object.freeze({ ...ctx, nowMs }));
+          if (next.kind === "session") writeMediaSessionError(response, next.result);
+          else if (next.kind === "deny") writeMediaAccessDenied(response, next.reason);
+          else if (next.kind !== "admit" || next.decision.role !== role || next.decision.roleSource !== roleSource) writeRoomStateChanged(response);
+          else writeMediaCredential(response, plan, prepared, nowMs, expired);
+        });
+        return undefined;
+      }), countMediaCredentialCompletionFailure);
+    } catch (error) {
+      if (identityFenceUnavailable(error)) throw new IdentityBoundaryError(503, "identity_authority_unavailable", error);
+      if (error instanceof IdentityStorageError && error.code === "room_not_found") throw new RoomEffectNotFound("room_not_found");
+      throw error;
+    }
+  } };
 }
 
 async function releaseLegacyPersonalRoom(request: IncomingMessage, response: ServerResponse, storage: Storage,
@@ -4191,58 +4320,52 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
 
   if (method === "POST" && url.pathname === "/api/tokens/media") {
     const payload = (await parseBody<MediaTokenPayload>(request)) ?? { roomId: "demo-room", participantId: randomUUID(), canPublishAudio: true, canPublishVideo: false };
+    const { roomId, participantId, sessionToken: bodyToken } = payload;
+    const requestedAudio = payload.canPublishAudio !== false, requestedVideo = Boolean(payload.canPublishVideo);
+    const stateSecret = getStateTokenSecret();
+    // Persisted or virtual is decided by this one read, before the proof wait, and never re-decided.
+    const initialRoom = await storage.getRoom(roomId);
     const session = await verifyRoomSessionRequest(request, {
-      roomId: payload.roomId,
-      participantId: payload.participantId,
-      sessionToken: payload.sessionToken
+      roomId, participantId, sessionToken: bodyToken
     });
     if (!session.ok) {
       incrementCounter(metrics.mediaJoinFailuresTotal, session.code);
       return writeSessionTokenError(response, session);
     }
-    const room = await storage.getRoom(payload.roomId);
-    const effectiveRole = session.payload.identityProtocolVersion === 2 ? session.payload.role
-      : resolveEffectiveRoomRole(room, session.payload.participantId, session.payload.role);
-    const blockReason = getSessionControlBlockReason(room, session.payload.participantId, effectiveRole, true);
-    if (blockReason) {
-      incrementCounter(metrics.mediaJoinFailuresTotal, blockReason);
-      return json(response, 403, { error: "room_access_denied", reason: blockReason });
-    }
-    const effectivePermissions = getRoomPermissions(effectiveRole);
-    const canPublishAudio = hasRoomPermission(effectivePermissions, "audio.join") && payload.canPublishAudio !== false;
-    const canPublishVideo = Boolean(payload.canPublishVideo) && hasRoomPermission(effectivePermissions, "screen-share.start");
-    if (!canPublishAudio && !canPublishVideo) {
-      incrementCounter(metrics.mediaJoinFailuresTotal, "media_publish_not_allowed");
-      return json(response, 403, { error: "forbidden", reason: "media_publish_not_allowed" });
-    }
+    const proof = Object.freeze({ ...session.payload });
+    const rawBearer = bodyToken ?? getBearerToken(request);
+    const capture = proof.identityProtocolVersion === 2 ? captureV2MediaRelease(response, storage, initialRoom, proof)
+      : captureLegacyMediaRelease(response, storage, roomId, initialRoom, proof,
+        { rawBearer: typeof rawBearer === "string" ? rawBearer : null, secret: stateSecret, requestId });
+    if (!capture) return;
+    const effectivePermissions = getRoomPermissions(capture.role);
+    const canPublishAudio = hasRoomPermission(effectivePermissions, "audio.join") && requestedAudio;
+    const canPublishVideo = requestedVideo && hasRoomPermission(effectivePermissions, "screen-share.start");
+    if (!canPublishAudio && !canPublishVideo) return writeMediaPublishNotAllowed(response);
     const configError = getMediaTokenConfigError();
     if (configError) {
       incrementCounter(metrics.mediaJoinFailuresTotal, "livekit_config_invalid");
       return json(response, 503, { error: "livekit_config_invalid", reason: configError });
     }
     const { apiKey, apiSecret } = getLivekitCredentials();
-    const accessToken = new AccessToken(apiKey, apiSecret, {
-      identity: session.payload.participantId,
-      name: session.payload.displayName,
-      ttl: `${Number.parseInt(process.env.MEDIA_TOKEN_TTL_SECONDS ?? "900", 10)}s`
-    });
-    const mediaNamespace = session.payload.identityProtocolVersion === 2
+    const ttlSeconds = resolveMediaTokenTtlSeconds(process.env.MEDIA_TOKEN_TTL_SECONDS);
+    if (ttlSeconds === null) {
+      incrementCounter(metrics.mediaJoinFailuresTotal, "livekit_config_invalid");
+      return json(response, 503, { error: "livekit_config_invalid", reason: "media_token_ttl_invalid" });
+    }
+    const livekitUrl = getDefaultLivekitUrl(request), roomPrefix = process.env.LIVEKIT_ROOM_PREFIX ?? "vrata-";
+    const mediaNamespace = proof.identityProtocolVersion === 2
       ? await storage.identityProtocol.mediaNamespace() : null;
-    if (session.payload.identityProtocolVersion === 2 && !mediaNamespace) {
+    if (proof.identityProtocolVersion === 2 && !mediaNamespace) {
       return json(response, 503, { error: "identity_authority_unavailable" });
     }
-    accessToken.addGrant({
-      room: roomMediaGrantName(session.payload.roomId, process.env.LIVEKIT_ROOM_PREFIX ?? "vrata-", mediaNamespace),
-      roomJoin: true,
-      canPublish: canPublishAudio || canPublishVideo,
-      canSubscribe: true
-    });
-    const mediaToken = await finalizeRoomToken(request, session, payload.sessionToken, () => accessToken.toJwt());
-    json(response, 200, {
-      token: mediaToken,
-      expiresInSeconds: Number.parseInt(process.env.MEDIA_TOKEN_TTL_SECONDS ?? "900", 10),
-      livekitUrl: getDefaultLivekitUrl(request)
-    });
+    const plan = captureMediaCredentialPlan({ apiKey, apiSecret, identity: proof.participantId, name: proof.displayName,
+      grant: { room: roomMediaGrantName(proof.roomId, roomPrefix, mediaNamespace), roomJoin: true,
+        canPublish: canPublishAudio || canPublishVideo, canSubscribe: true },
+      ttlSeconds, proofExpiresAtSeconds: proof.exp, livekitUrl });
+    const prepared = await signMediaCredential(plan, Date.now());
+    if (!prepared) return capture.lapsed();
+    await capture.release(plan, prepared, canPublishAudio ? "audio.join" : "screen-share.start");
     return;
   }
 
