@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { getMediaTokenConfigError } from "../apps/api/dist/livekit-config.js";
+import { createRemoteBrowserUrlPolicy, isRemoteBrowserOriginAllowed } from "../apps/remote-browser/dist/url-policy.js";
 
 test("first host configuration has unique secrets and a safe repeat preserves them", () => {
   const source = fileURLToPath(new URL("./bootstrap-staging-host-env.py", import.meta.url));
@@ -38,4 +39,9 @@ print(json.dumps(env))
   const generated = JSON.parse(output);
   assert.equal(getMediaTokenConfigError({ ...generated, NODE_ENV: "production" }), null,
     "the generated endpoint must pass the real production API startup gate");
+  const policy = createRemoteBrowserUrlPolicy({ ...generated, NODE_ENV: "production" });
+  assert.equal(isRemoteBrowserOriginAllowed(generated.VRATA_APP_BASE_URL, policy.allowedOrigins), true,
+    "the main-path remote browser demo must be allowed by the real origin policy");
+  assert.equal(isRemoteBrowserOriginAllowed("http://127.0.0.1:4000", policy.allowedOrigins), false);
+  assert.equal(policy.allowPrivateAllowedOrigins, false);
 });
