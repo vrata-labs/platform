@@ -31,14 +31,35 @@ export function createMockShareStream(): MediaStream {
 export async function captureAndPublishScreenShareStream(room: Room, input: {
   objectId: string;
   mediaAudioEnabled: boolean;
+  stream?: MediaStream;
 }): Promise<{ stream: MediaStream; publishedTracks: MediaStreamTrack[]; mediaTrackSid: string }> {
+  const stream = input.stream ?? await captureScreenShareStream(input.mediaAudioEnabled);
+  return publishScreenShareStream(room, stream, input);
+}
+
+/** Called during the user's activation, before a promotion's network reconnect. No media is published yet. */
+export async function captureScreenShareStream(mediaAudioEnabled: boolean): Promise<MediaStream> {
   if (!navigator.mediaDevices?.getDisplayMedia) {
     throw createFaultError("NotSupportedError", "screen_share_unsupported:getDisplayMedia missing");
   }
   const stream = await navigator.mediaDevices.getDisplayMedia({
     video: true,
-    audio: input.mediaAudioEnabled
+    audio: mediaAudioEnabled
   });
+  return stream;
+}
+
+export async function withScreenCaptureBeforeUpgrade<T>(mediaAudioEnabled: boolean,
+  start: (stream: MediaStream) => Promise<T>): Promise<T> {
+  const stream = await captureScreenShareStream(mediaAudioEnabled);
+  try { return await start(stream); }
+  catch (error) { stream.getTracks().forEach(track => track.stop()); throw error; }
+}
+
+export async function publishScreenShareStream(room: Room, stream: MediaStream, input: {
+  objectId: string;
+  mediaAudioEnabled: boolean;
+}): Promise<{ stream: MediaStream; publishedTracks: MediaStreamTrack[]; mediaTrackSid: string }> {
   const videoTrack = stream.getVideoTracks().find((track) => track.readyState === "live");
   if (!videoTrack) {
     stream.getTracks().forEach((track) => track.stop());

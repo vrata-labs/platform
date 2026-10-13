@@ -1,6 +1,7 @@
 import { createRoomAccessDebugState, type RoomAccessDebugState, type RoomPermission, type RoomRole, type RoomTemplateSettings, type RoomTemplateSnapshotV1, type RoomTemplateSurface, type SceneBundleIntegrity } from "@vrata/shared-types";
 import { DocumentUploadError } from "./document-feedback.js";
 import { runtimeFetch as fetch } from "./session-upgrade.js";
+import { MediaTokenRequestError, retryableMediaTokenError } from "./media/media-token-error.js";
 
 interface RoomManifest {
   roomId: string;
@@ -892,11 +893,14 @@ export async function revokeRoomPresenter(apiBaseUrl: string, roomId: string, se
   return (await response.json()) as RuntimeSessionControlResponse;
 }
 
+export interface MediaPublishIntent { canPublishAudio: boolean; canPublishVideo: boolean }
+
 export async function fetchMediaToken(
   apiBaseUrl: string,
   roomId: string,
   participantId: string,
-  sessionToken: string
+  sessionToken: string,
+  publish: MediaPublishIntent = { canPublishAudio: true, canPublishVideo: false }
 ): Promise<MediaTokenResponse> {
   const response = await fetch(new URL("/api/tokens/media", apiBaseUrl), {
     method: "POST",
@@ -907,13 +911,14 @@ export async function fetchMediaToken(
     body: JSON.stringify({
       roomId,
       participantId,
-      canPublishAudio: true,
-      canPublishVideo: false
+      canPublishAudio: publish.canPublishAudio,
+      canPublishVideo: publish.canPublishVideo
     })
   });
 
   if (!response.ok) {
-    throw new Error(`failed_to_load_media_token:${response.status}`);
+    const payload = await response.json().catch(() => null) as { reason?: unknown } | null;
+    throw new MediaTokenRequestError(response.status, payload?.reason);
   }
 
   return (await response.json()) as MediaTokenResponse;
@@ -923,12 +928,18 @@ export async function planVoiceSession(
   apiBaseUrl: string,
   roomId: string,
   participantId: string,
-  sessionToken: string
+  sessionToken: string,
+  publish: MediaPublishIntent = { canPublishAudio: true, canPublishVideo: false }
 ): Promise<VoiceSessionPlan> {
   const manifest = await fetchRoomManifest(apiBaseUrl, roomId, sessionToken);
   const health = await fetchRuntimeHealth(apiBaseUrl);
   const healthFeatures = health.features ?? {};
-  const media = await fetchMediaToken(apiBaseUrl, roomId, participantId, sessionToken);
+  let media: MediaTokenResponse;
+  try { media = await fetchMediaToken(apiBaseUrl, roomId, participantId, sessionToken, publish); }
+  catch (error) {
+    if (!retryableMediaTokenError(error)) throw error;
+    media = await fetchMediaToken(apiBaseUrl, roomId, participantId, sessionToken, publish);
+  }
 
   return {
     roomId,

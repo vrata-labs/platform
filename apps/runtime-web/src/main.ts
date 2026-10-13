@@ -43,6 +43,9 @@ import { appendBrandingSuffix, applyRoomShellBootState, renderSceneAttributions 
 import { RuntimeAccessError, bootRuntime, deleteRoomDocument, downloadRoomDocument, exportRoomNote, exportRoomNotesArchive, fetchRoomDocumentMediaContent, fetchRoomDocumentPresentation, fetchRoomNote, fetchRoomSessionControl, fetchRuntimeSpaces, fetchStateToken, grantRoomPresenter, listPresence, listRoomDocuments, listRoomNoteVersions, openPersonalRoom, planVoiceSession, removePresence, removeRoomParticipant, resolveCurrentSpace, resolveJoinMode, restoreRoomNoteVersion, revokeRoomPresenter, runRoomSessionControlAction, savePersonalRoomState, saveRoomNote, selectRoomDocumentSurface, transferRoomHost, transferRoomOwner, uploadRoomDocument, upsertPresence, type PresenceState, type RuntimeDocumentRecord, type RuntimePersonalState, type RuntimeSessionControlResponse, type RuntimeSpaceOption } from "./index.js";
 import { canManageRoomControls, canTransferRoomOwnership, staleAuthorityResponse } from "./room-owner-controls.js";
 import { createSessionControlPoller } from "./session-control-poller.js";
+import { createMediaSourceUpgrade, permitsScreenShare } from "./media/media-source-upgrade.js";
+import { createMediaActionBarrier } from "./media/media-action-barrier.js";
+import { planBaseMedia } from "./media/media-token-error.js";
 import { createRoomIdentityTab } from "./identity-session-tab.js";
 import { redeemRoomRecovery } from "./identity-recovery.js";
 import { probeDocumentMedia } from "./document-media-probe.js";
@@ -112,7 +115,7 @@ import {
 } from "./media/remote-browser-vr-keyboard.js";
 import { planRemoteBrowserXrPointer } from "./media/remote-browser-xr-input.js";
 import { getScreenShareErrorCode } from "./media/screen-share-object.js";
-import { captureAndPublishScreenShareStream, createMockShareStream } from "./media/screen-share-capture.js";
+import { captureAndPublishScreenShareStream, createMockShareStream, withScreenCaptureBeforeUpgrade } from "./media/screen-share-capture.js";
 import { createInactiveWhiteboardDebugSnapshot, createWhiteboardObjectRuntime } from "./media/whiteboard-object.js";
 import { applySpatialSettings, createSpatialAudioSettings, resolveSpatialAudioMode } from "./spatial-audio.js";
 import { captureCanvasDiagnostics, inspectSceneObject } from "./scene-debug.js";
@@ -624,6 +627,8 @@ let pointerDownAtMs = 0;
 let pointerDownClientX = 0;
 let pointerDownClientY = 0;
 let livekitRoom: Room | null = null;
+let mediaRoomTransitionInFlight = false;
+const mediaAudioAction = createMediaActionBarrier();
 let audioSessionJoined = false;
 let passiveMediaRequired = false;
 let microphoneEnabled = false;
@@ -1759,6 +1764,7 @@ function disableRuntimeForSessionBlock(reason: string): void {
   roomStateClient?.close();
   roomStateClient = null;
   mediaRoomConnection.invalidate();
+  mediaSourceUpgrade.invalidate();
   deferredScreenShareStops.clear();
   passiveMediaRequired = false;
   audioSessionJoined = false;
@@ -3342,17 +3348,17 @@ function syncAudioControls(): void {
     joinMutedCheckbox.disabled = true;
     return;
   }
-  joinAudioButton.disabled = audioActionInFlight;
+  joinAudioButton.disabled = audioActionInFlight || mediaRoomTransitionInFlight;
   joinAudioButton.textContent = audioSessionJoined ? "Leave Audio" : joinMutedPreference ? "Join Audio Muted" : "Join Audio";
   joinAudioButton.title = audioSessionJoined
     ? "Leave the audio session"
     : joinMutedPreference
       ? "Connect without publishing your microphone; press Unmute to speak"
       : "Connect and publish your microphone";
-  muteButton.disabled = audioActionInFlight || !audioSessionJoined || !livekitRoom;
+  muteButton.disabled = audioActionInFlight || mediaRoomTransitionInFlight || !audioSessionJoined || !livekitRoom;
   muteButton.textContent = microphoneEnabled ? "Mute" : "Unmute";
   muteButton.title = microphoneEnabled ? "Mute your microphone" : "Unmute your microphone";
-  joinMutedCheckbox.disabled = audioActionInFlight || audioSessionJoined;
+  joinMutedCheckbox.disabled = audioActionInFlight || mediaRoomTransitionInFlight || audioSessionJoined;
 }
 
 function syncRemoteMicStatus(): void {
@@ -3562,7 +3568,7 @@ function bindLocalAudioTrackEnded(track: MediaStreamTrack): void {
   }
   localAudioTrackEndHandlers.add(track);
   track.addEventListener("ended", () => {
-    if (!audioSessionJoined || !microphoneEnabled) {
+    if (!audioSessionJoined || !microphoneEnabled || mediaRoomTransitionInFlight) {
       return;
     }
     microphoneEnabled = false;
@@ -4075,6 +4081,7 @@ function clearMediaRoomIdleDisconnect(): void {
 }
 
 function reconcileMediaRoomIdleDisconnect(room: Room | null, diagnosticsReason: string): void {
+  if (mediaRoomTransitionInFlight) { clearMediaRoomIdleDisconnect(); return; }
   if (!room) {
     return;
   }
@@ -6033,7 +6040,11 @@ const mediaRoomConnection = createCoalescedConnection<Room>({
       throw createFaultError("ConnectionError", "media_network_blocked");
     }
 
-    const voicePlan = await planVoiceSession(apiBaseUrl, roomId, participantId, roomStateAccessToken);
+    const proof = roomStateAccessToken;
+    const voicePlan = await planBaseMedia({ optionalShare: debugState.access.canStartScreenShare,
+      proofStillCurrent: () => proof === roomStateAccessToken && !sessionControlBlocked && !runtimeSessionGate.reason,
+      plan: screenShare => planVoiceSession(apiBaseUrl, roomId, participantId, proof,
+        { canPublishAudio: true, canPublishVideo: screenShare }) });
     runtimeSessionGate.assertActive();
     setupAudio(room);
     setupMediaTransportDiagnostics(room);
@@ -6059,7 +6070,7 @@ const mediaRoomConnection = createCoalescedConnection<Room>({
   createInvalidatedError: () => createFaultError("NotAllowedError", "media_room_session_blocked")
 });
 
-async function ensureMediaRoom(): Promise<Room> {
+async function ensureBaseMediaRoom(): Promise<Room> {
   if (sessionControlBlocked) {
     throw createFaultError("NotAllowedError", "media_room_session_blocked");
   }
@@ -6075,6 +6086,11 @@ async function ensureMediaRoom(): Promise<Room> {
     await room.disconnect();
     return livekitRoom;
   }
+  installMediaRoom(room);
+  return room;
+}
+
+function installMediaRoom(room: Room): void {
   livekitRoom = room;
   mediaRoomReady = true;
   setupMediaTransportDiagnostics(room);
@@ -6083,8 +6099,68 @@ async function ensureMediaRoom(): Promise<Room> {
   syncScreenShareLiveKitTracks();
   reconcileRemoteAudioTracksWithPresence();
   startShareButton.disabled = !canUseScreenShareControl();
-  return room;
 }
+
+function roomPermitsScreenShare(room: Room): boolean {
+  const permission = room.localParticipant.permissions;
+  return permitsScreenShare(permission && { canPublish: permission.canPublish,
+    canPublishSources: permission.canPublishSources.map(source => Track.sourceFromProto(source)) });
+}
+
+const mediaSourceUpgrade = createMediaSourceUpgrade<Room, Awaited<ReturnType<typeof planVoiceSession>>>({
+  current: () => livekitRoom,
+  ensureBase: ensureBaseMediaRoom,
+  permitsShare: roomPermitsScreenShare,
+  assertActive: () => {
+    runtimeSessionGate.assertActive();
+    if (sessionControlBlocked) throw createFaultError("NotAllowedError", "media_room_session_blocked");
+  },
+  prepare: screenShare => planVoiceSession(apiBaseUrl, roomId, participantId, roomStateAccessToken,
+    { canPublishAudio: true, canPublishVideo: screenShare }),
+  create: () => new Room(),
+  retire: async room => {
+    await mediaAudioAction.settled();
+    runtimeSessionGate.assertActive();
+    if (livekitRoom !== room || sessionControlBlocked) throw createFaultError("NotAllowedError", "media_room_session_blocked");
+    if (Array.from(screenShareRuntimeByObjectId.values()).some(entry => !entry.remote && entry.publishedTracks.length > 0)) {
+      throw createFaultError("NotAllowedError", "media_upgrade_has_local_screen_share");
+    }
+    disconnectLocalAudioTrack();
+    if (audioMockEnabled) stopMockAudioSource();
+    await disconnectMediaRoom(room, "media_room_source_upgrade");
+  },
+  connect: async (room, plan) => {
+    setupAudio(room);
+    setupMediaTransportDiagnostics(room);
+    await room.connect(plan.livekitUrl, plan.token);
+    await applyPreferredAudioDevices(room);
+  },
+  install: installMediaRoom,
+  dispose: room => disconnectMediaRoom(room, "media_room_source_upgrade_failed"),
+  restoreMicrophone: async room => {
+    if (!audioSessionJoined || sessionControlBlocked || runtimeSessionGate.reason) return;
+    try { await setLocalMicrophoneEnabled(room, microphoneEnabled); }
+    catch (error) { microphoneEnabled = false; handleAudioActionError(error, "microphone_restore_failed"); }
+    syncLocalAudioPresence();
+    syncAudioControls();
+  },
+  transition: active => {
+    mediaRoomTransitionInFlight = active;
+    if (active) clearMediaRoomIdleDisconnect();
+    else reconcileMediaRoomIdleDisconnect(livekitRoom, "media_room_source_upgrade_idle");
+    syncAudioControls();
+  },
+  recoveryFailed: () => {
+    audioSessionJoined = false;
+    microphoneEnabled = false;
+    disconnectLocalAudioTrack();
+    syncAudioControls();
+    syncLocalAudioPresence();
+  },
+  invalidatedError: () => createFaultError("NotAllowedError", "media_room_session_blocked")
+});
+
+function ensureMediaRoom(screenShare = false): Promise<Room> { return mediaSourceUpgrade.ensure(screenShare); }
 
 function applyBotPose(timeSeconds: number): void {
   if (botMode === "off") {
@@ -6837,7 +6913,7 @@ function setupAudio(room: Room): void {
   });
 }
 
-async function startScreenShare(): Promise<void> {
+async function startScreenShare(preCaptured?: MediaStream, capturedSurfaceId?: string): Promise<void> {
   if (!debugState.access.canStartScreenShare) {
     debugState.access.lastDeniedPermission = "screen-share.start";
     throw createFaultError("NotAllowedError", "screen_share_forbidden");
@@ -6850,9 +6926,14 @@ async function startScreenShare(): Promise<void> {
     throw createFaultError("NotSupportedError", `screen_share_unsupported:${browserMediaCapabilities.screenShare.reason}`);
   }
   if (startShareButton.disabled) {
+    if (preCaptured) throw createFaultError("NotAllowedError", "screen_share_control_unavailable");
     return;
   }
   const targetSurfaceId = selectedMediaSurfaceId;
+  if (preCaptured && capturedSurfaceId !== targetSurfaceId) throw createFaultError("NotAllowedError", "screen_share_control_unavailable");
+  if (!shareMockEnabled && !preCaptured && livekitRoom && !roomPermitsScreenShare(livekitRoom)) {
+    return withScreenCaptureBeforeUpgrade(shouldPublishMediaSurfaceAudio(roomMediaObjects, targetSurfaceId), stream => startScreenShare(stream, targetSurfaceId));
+  }
   const createResult = await mediaSurfaceCommands.createScreenShareObjectOnSurface(targetSurfaceId);
   if (!createResult.accepted || !createResult.objectId) {
     throw new Error(`screen_share_create_rejected:${createResult.blockedReason ?? "unknown"}`);
@@ -6895,7 +6976,7 @@ async function startScreenShare(): Promise<void> {
       return;
     }
 
-    const room = await ensureMediaRoom();
+    const room = await ensureMediaRoom(true);
     debugState.screenShareState = "starting";
     const publishing = await mediaSurfaceCommands.patchScreenShareObject(objectId, surfaceId, revision, { type: "mark-publishing" });
     if (!publishing.accepted) {
@@ -6904,7 +6985,7 @@ async function startScreenShare(): Promise<void> {
     revision = publishing.revision ?? revision;
     const mediaAudioEnabled = shouldPublishMediaSurfaceAudio(roomMediaObjects, surfaceId);
     debugState.screenShare.mediaAudioEnabled = mediaAudioEnabled;
-    const published = await captureAndPublishScreenShareStream(room, { objectId, mediaAudioEnabled });
+    const published = await captureAndPublishScreenShareStream(room, { objectId, mediaAudioEnabled, stream: preCaptured });
     attachScreenShareStream(published.stream, {
       objectId,
       surfaceId,
@@ -7256,13 +7337,13 @@ function syncLocalAudioPresence(): void {
 }
 
 async function performAudioAction(action: () => Promise<void>): Promise<void> {
-  if (audioActionInFlight) {
+  if (audioActionInFlight || mediaRoomTransitionInFlight) {
     return;
   }
   audioActionInFlight = true;
   syncAudioControls();
   try {
-    await action();
+    await mediaAudioAction.run(action);
   } finally {
     audioActionInFlight = false;
     syncAudioControls();
@@ -7316,8 +7397,8 @@ async function joinAudio(): Promise<void> {
   const startMuted = joinMutedPreference;
   setStatus("Joining audio...");
   debugState.audioState = "joining";
-
-  const room = await ensureMediaRoom();
+  // An audio action already admitted before a promotion must settle on the base room before it is retired.
+  const room = await ensureBaseMediaRoom();
   audioSessionJoined = true;
   await setLocalMicrophoneEnabled(room, !startMuted);
   await refreshAudioDevices(!audioMockEnabled && !startMuted);
@@ -7392,7 +7473,7 @@ micSelect.addEventListener("change", () => {
   preferredMicDeviceId = micSelect.value || "default";
   localStorage.setItem("vrata.audioinput", preferredMicDeviceId);
   updateAudioDeviceStatus(`Selected microphone: ${micSelect.selectedOptions[0]?.textContent ?? "default"}`);
-  if (!livekitRoom) {
+  if (!livekitRoom || mediaRoomTransitionInFlight) {
     return;
   }
   const room = livekitRoom;
@@ -7411,7 +7492,7 @@ speakerSelect.addEventListener("change", () => {
   preferredSpeakerDeviceId = speakerSelect.value || "default";
   localStorage.setItem("vrata.audiooutput", preferredSpeakerDeviceId);
   updateAudioDeviceStatus(`Selected speaker: ${speakerSelect.selectedOptions[0]?.textContent ?? "default"}`);
-  if (!livekitRoom || !supportsAudioOutputSelection()) {
+  if (!livekitRoom || mediaRoomTransitionInFlight || !supportsAudioOutputSelection()) {
     return;
   }
   void applyPreferredAudioDevices(livekitRoom).catch((error: unknown) => {

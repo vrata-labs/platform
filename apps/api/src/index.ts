@@ -165,7 +165,7 @@ import {
 } from "./remote-browser-frame-credential.js";
 import {
   captureMediaCredentialPlan, releaseMediaCredential, resolveMediaTokenTtlSeconds, signMediaCredential,
-  type MediaCredentialPlan, type PreparedMediaCredential
+  type MediaCredentialPlan, type PreparedMediaCredential, type MediaPublishSource
 } from "./media-credential.js";
 
 export {
@@ -1120,7 +1120,7 @@ interface MediaCredentialCapture {
   readonly role: RoomRole;
   /** The original proof had lapsed at signing: nothing was signed. */
   readonly lapsed: () => void;
-  readonly release: (plan: MediaCredentialPlan, prepared: PreparedMediaCredential, permission: RoomPermission) => Promise<void>;
+  readonly release: (plan: MediaCredentialPlan, prepared: PreparedMediaCredential, permissions: readonly RoomPermission[]) => Promise<void>;
 }
 
 function countMediaCredentialCompletionFailure(): void {
@@ -1174,8 +1174,8 @@ function captureV2MediaRelease(response: ServerResponse, storage: Storage, initi
     participantId: proof.participantId, authEpoch: proof.authEpoch, expiresAtSeconds: proof.exp,
     expectedRole: proof.role, expectedIsOwner: proof.isOwner });
   const lapsed = () => { throw new IdentityBoundaryError(401, "identity_session_expired"); };
-  return { role: proof.role, lapsed, release: async (plan, prepared, permission) => {
-    const guard: RoomEffectGuard = Object.freeze({ ...pinned, permission });
+  return { role: proof.role, lapsed, release: async (plan, prepared, permissions) => {
+    const guard: RoomEffectGuard = Object.freeze({ ...pinned, permission: permissions[0], alsoRequired: Object.freeze(permissions.slice(1)) });
     try {
       await releaseFrameCredential(async send => {
         try {
@@ -1209,7 +1209,7 @@ function captureLegacyMediaRelease(response: ServerResponse, storage: Storage, r
   };
   const expired = () => writeMediaSessionError(response, { ok: false, code: "expired_token" });
   if (!initialRoom) return { role: resolveEffectiveRoomRole(null, participantId, proof.role), lapsed: expired,
-    release: async (plan, prepared, permission) => {
+    release: async (plan, prepared, permissions) => {
       try {
         await releaseFrameCredential(send => runLegacyVirtualRoomEffect(storage, scope.roomId, { pinAbsence: true, expiresAtSeconds: originalExpiry },
           async scoped => {
@@ -1218,7 +1218,7 @@ function captureLegacyMediaRelease(response: ServerResponse, storage: Storage, r
               const current = reverify(nowMs);
               if (!current) return;
               const role = resolveEffectiveRoomRole(null, current.participantId, current.role);
-              if (!hasRoomPermission(getRoomPermissions(role), permission)) return writeMediaPublishNotAllowed(response);
+              if (permissions.some(permission => !hasRoomPermission(getRoomPermissions(role), permission))) return writeMediaPublishNotAllowed(response);
               writeMediaCredential(response, plan, prepared, nowMs, expired);
             }));
           }), countMediaCredentialCompletionFailure);
@@ -1238,7 +1238,7 @@ function captureLegacyMediaRelease(response: ServerResponse, storage: Storage, r
   const { role, roleSource } = initial.decision;
   const selector: LegacyRoomCredentialSelector = Object.freeze({ tenantId: scope.tenantId, roomId: scope.roomId,
     participantId, inviteTokenHash: null });
-  return { role, lapsed: expired, release: async (plan, prepared) => {
+  return { role, lapsed: expired, release: async (plan, prepared, permissions) => {
     try {
       await releaseFrameCredential(send => storage.releaseLegacyRoomCredential(selector, {}, fresh => {
         send(() => {
@@ -1248,6 +1248,7 @@ function captureLegacyMediaRelease(response: ServerResponse, storage: Storage, r
           if (next.kind === "session") writeMediaSessionError(response, next.result);
           else if (next.kind === "deny") writeMediaAccessDenied(response, next.reason);
           else if (next.kind !== "admit" || next.decision.role !== role || next.decision.roleSource !== roleSource) writeRoomStateChanged(response);
+          else if (permissions.some(permission => !hasRoomPermission(getRoomPermissions(next.decision.role), permission))) writeMediaPublishNotAllowed(response);
           else writeMediaCredential(response, plan, prepared, nowMs, expired);
         });
         return undefined;
@@ -4321,7 +4322,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   if (method === "POST" && url.pathname === "/api/tokens/media") {
     const payload = (await parseBody<MediaTokenPayload>(request)) ?? { roomId: "demo-room", participantId: randomUUID(), canPublishAudio: true, canPublishVideo: false };
     const { roomId, participantId, sessionToken: bodyToken } = payload;
-    const requestedAudio = payload.canPublishAudio !== false, requestedVideo = Boolean(payload.canPublishVideo);
+    const requestedAudio = payload.canPublishAudio !== false, requestedVideo = payload.canPublishVideo === true;
     const stateSecret = getStateTokenSecret();
     // Persisted or virtual is decided by this one read, before the proof wait, and never re-decided.
     const initialRoom = await storage.getRoom(roomId);
@@ -4341,7 +4342,11 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     const effectivePermissions = getRoomPermissions(capture.role);
     const canPublishAudio = hasRoomPermission(effectivePermissions, "audio.join") && requestedAudio;
     const canPublishVideo = requestedVideo && hasRoomPermission(effectivePermissions, "screen-share.start");
-    if (!canPublishAudio && !canPublishVideo) return writeMediaPublishNotAllowed(response);
+    if (requestedAudio && !canPublishAudio || requestedVideo && !canPublishVideo || !canPublishAudio && !canPublishVideo) return writeMediaPublishNotAllowed(response);
+    const publishSources: MediaPublishSource[] = [];
+    const publishPermissions: RoomPermission[] = [];
+    if (canPublishAudio) { publishSources.push("microphone"); publishPermissions.push("audio.join"); }
+    if (canPublishVideo) { publishSources.push("screen_share", "screen_share_audio"); publishPermissions.push("screen-share.start"); }
     const configError = getMediaTokenConfigError();
     if (configError) {
       incrementCounter(metrics.mediaJoinFailuresTotal, "livekit_config_invalid");
@@ -4361,11 +4366,11 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     }
     const plan = captureMediaCredentialPlan({ apiKey, apiSecret, identity: proof.participantId, name: proof.displayName,
       grant: { room: roomMediaGrantName(proof.roomId, roomPrefix, mediaNamespace), roomJoin: true,
-        canPublish: canPublishAudio || canPublishVideo, canSubscribe: true },
+        canPublish: true, canSubscribe: true, canPublishSources: publishSources },
       ttlSeconds, proofExpiresAtSeconds: proof.exp, livekitUrl });
     const prepared = await signMediaCredential(plan, Date.now());
     if (!prepared) return capture.lapsed();
-    await capture.release(plan, prepared, canPublishAudio ? "audio.join" : "screen-share.start");
+    await capture.release(plan, prepared, Object.freeze(publishPermissions));
     return;
   }
 

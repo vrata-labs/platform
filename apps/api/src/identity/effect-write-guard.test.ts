@@ -10,6 +10,19 @@ const guard: RoomEffectGuard = { tenantId: "tenant", roomId: "room", identityId:
 const roleChanged = (error: unknown) => error instanceof IdentityStorageError && error.code === "identity_role_changed";
 const invalidInput = (error: unknown) => error instanceof IdentityStorageError && error.code === "invalid_identity_input";
 
+test("one authority snapshot must satisfy every requested publication permission", () => {
+  const combined: RoomEffectGuard = { ...guard, permission: "audio.join", alsoRequired: ["screen-share.start"] };
+  const actor = { ...current(), permissions: ["audio.join", "screen-share.start"] as const };
+  assert.doesNotThrow(() => assertCurrentEffect(combined, { ...actor, permissions: [...actor.permissions] }, 99_000));
+  for (const permissions of [["audio.join"], ["screen-share.start"]]) {
+    assert.throws(() => assertCurrentEffect(combined, { ...current(), permissions } as ReturnType<typeof current>, 99_000),
+      (error: unknown) => error instanceof IdentityStorageError && error.code === "identity_forbidden");
+  }
+  for (const alsoRequired of [null, "screen-share.start", ["unknown"], Array(17).fill("audio.join")]) {
+    assert.throws(() => assertCurrentEffect({ ...guard, alsoRequired } as RoomEffectGuard, current(), 99_000), invalidInput);
+  }
+});
+
 function current(input: { epoch?: number; permission?: boolean; owner?: boolean; role?: "host" | "member" | "presenter" } = {}): NonNullable<Parameters<typeof assertCurrentEffect>[1]> {
   return { identity: { ...guard, authEpoch: input.epoch ?? 1 },
     permissions: input.permission === false ? ["notes.view"] : ["notes.view", "notes.edit"],

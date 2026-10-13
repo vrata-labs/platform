@@ -1,9 +1,11 @@
-import { getRoomPermissions, hasRoomPermission, isRoomRole, type RoomPermission, type RoomRole } from "@vrata/shared-types";
+import { getRoomPermissions, hasRoomPermission, isRoomPermission, isRoomRole, type RoomPermission, type RoomRole } from "@vrata/shared-types";
 import { activeIdentity, assertActorSession, assertRoomActive } from "./authority.js";
 import { IdentityStorageError, type IdentityTransaction, type RoomIdentityProof } from "./contracts.js";
 
 export interface RoomEffectGuard extends RoomIdentityProof {
   permission: RoomPermission;
+  /** Effects with multiple granted capabilities must hold each permission on the same authority snapshot. */
+  alsoRequired?: readonly RoomPermission[];
   expiresAtSeconds: number;
   ownerOnly?: boolean;
   hostOrOwner?: boolean;
@@ -20,7 +22,9 @@ export function assertCurrentEffect(guard: RoomEffectGuard, current: RoomEffectA
   nowMs = Date.now()): RoomEffectActor {
   // Malformed pins are typed invalid input before any comparison; an unset pin compares nothing.
   if (guard.expectedRole !== undefined && !isRoomRole(guard.expectedRole)
-    || guard.expectedIsOwner !== undefined && typeof guard.expectedIsOwner !== "boolean") {
+    || guard.expectedIsOwner !== undefined && typeof guard.expectedIsOwner !== "boolean"
+    || guard.alsoRequired !== undefined && (!Array.isArray(guard.alsoRequired) || guard.alsoRequired.length > 16
+      || guard.alsoRequired.some(permission => !isRoomPermission(permission)))) {
     throw new IdentityStorageError("invalid_identity_input");
   }
   if (!current || current.identity.tenantId !== guard.tenantId || current.identity.roomId !== guard.roomId
@@ -35,6 +39,7 @@ export function assertCurrentEffect(guard: RoomEffectGuard, current: RoomEffectA
     throw new IdentityStorageError("identity_role_changed");
   }
   if (!hasRoomPermission(current.permissions, guard.permission) || guard.ownerOnly && !current.isOwner
+    || guard.alsoRequired?.some(permission => !hasRoomPermission(current.permissions, permission))
     || guard.hostOrOwner && current.role !== "host" && !current.isOwner) {
     throw new IdentityStorageError("identity_forbidden");
   }

@@ -1,14 +1,19 @@
-import { AccessToken } from "livekit-server-sdk";
+import { AccessToken, TrackSource } from "livekit-server-sdk";
 
 export const MEDIA_TOKEN_DEFAULT_TTL_SECONDS = 900;
 export const MEDIA_TOKEN_MAX_TTL_SECONDS = 86_400;
 
-/** Exactly the user media video grant; publish sources are not narrowed here. */
+export type MediaPublishSource = "microphone" | "screen_share" | "screen_share_audio";
+const SOURCES: readonly MediaPublishSource[] = ["microphone", "screen_share", "screen_share_audio"];
+const SDK_SOURCES = { microphone: TrackSource.MICROPHONE, screen_share: TrackSource.SCREEN_SHARE, screen_share_audio: TrackSource.SCREEN_SHARE_AUDIO };
+
+/** User media never grants camera or unspecified sources. An empty list would mean all sources to LiveKit. */
 export interface MediaCredentialGrant {
   readonly room: string;
   readonly roomJoin: true;
   readonly canPublish: boolean;
   readonly canSubscribe: true;
+  readonly canPublishSources: readonly MediaPublishSource[];
 }
 
 /** Request-independent primitives captured before signing; nothing retains the request, its body, env or context. */
@@ -43,7 +48,7 @@ export type MediaCredentialOutcome =
 
 const CLAIMS = ["exp", "iss", "nbf", "sub", "video"];
 const NAMED_CLAIMS = ["exp", "iss", "name", "nbf", "sub", "video"];
-const GRANT = ["canPublish", "canSubscribe", "room", "roomJoin"];
+const GRANT = ["canPublish", "canPublishSources", "canSubscribe", "room", "roomJoin"];
 const PROOF_EXPIRED: MediaCredentialOutcome = Object.freeze({ kind: "proof_expired" });
 const PREPARATION_EXPIRED: MediaCredentialOutcome = Object.freeze({ kind: "preparation_expired" });
 
@@ -59,15 +64,19 @@ function nonEmpty(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
 }
 
-/** A frozen copy of exactly the plan primitives and the four grant fields; throws on anything malformed. */
+/** A frozen copy of the plan primitives and its nonempty canonical source list. */
 export function captureMediaCredentialPlan(input: MediaCredentialPlan): MediaCredentialPlan {
   const { apiKey, apiSecret, identity, name, grant, ttlSeconds, proofExpiresAtSeconds, livekitUrl } = input;
-  const { room, roomJoin, canPublish, canSubscribe } = grant;
+  const { room, roomJoin, canPublish, canSubscribe, canPublishSources } = grant;
   if (!nonEmpty(apiKey) || !nonEmpty(apiSecret) || !nonEmpty(identity) || typeof name !== "string" || typeof livekitUrl !== "string"
-    || !nonEmpty(room) || roomJoin !== true || typeof canPublish !== "boolean" || canSubscribe !== true
+    || !nonEmpty(room) || roomJoin !== true || canPublish !== true || canSubscribe !== true
+    || !Array.isArray(canPublishSources) || canPublishSources.length === 0
+    || canPublishSources.some(source => !SOURCES.includes(source))
+    || canPublishSources.join() !== SOURCES.filter(source => canPublishSources.includes(source)).join()
     || !Number.isSafeInteger(ttlSeconds) || ttlSeconds < 1 || ttlSeconds > MEDIA_TOKEN_MAX_TTL_SECONDS
     || !Number.isSafeInteger(proofExpiresAtSeconds) || proofExpiresAtSeconds < 1) throw new Error("invalid_media_credential_plan");
-  return Object.freeze({ apiKey, apiSecret, identity, name, grant: Object.freeze({ room, roomJoin, canPublish, canSubscribe }),
+  return Object.freeze({ apiKey, apiSecret, identity, name, grant: Object.freeze({ room, roomJoin, canPublish, canSubscribe,
+    canPublishSources: Object.freeze([...canPublishSources]) }),
     ttlSeconds, proofExpiresAtSeconds, livekitUrl });
 }
 
@@ -102,7 +111,9 @@ function assertSignedClaims(token: string, plan: MediaCredentialPlan, expiresAtS
   }
   const signed = video as Record<string, unknown>;
   if (signed.room !== plan.grant.room || signed.roomJoin !== true || signed.canPublish !== plan.grant.canPublish
-    || signed.canSubscribe !== true) throw new Error("media_credential_claims_mismatch");
+    || signed.canSubscribe !== true || !Array.isArray(signed.canPublishSources)
+    || signed.canPublishSources.length !== plan.grant.canPublishSources.length
+    || signed.canPublishSources.some((source, index) => source !== plan.grant.canPublishSources[index])) throw new Error("media_credential_claims_mismatch");
 }
 
 /** One clock reading fixes the absolute expiry: the configured lifetime, capped by the original proof; nothing is signed once
@@ -114,7 +125,7 @@ export async function signMediaCredential(plan: MediaCredentialPlan, nowMs: numb
   if (expiresAtSeconds <= nowSeconds) return null;
   const accessToken = new AccessToken(plan.apiKey, plan.apiSecret, { identity: plan.identity, name: plan.name });
   accessToken.ttl = expiresAtSeconds;
-  accessToken.addGrant({ ...plan.grant });
+  accessToken.addGrant({ ...plan.grant, canPublishSources: plan.grant.canPublishSources.map(source => SDK_SOURCES[source]) });
   const token = await accessToken.toJwt();
   assertSignedClaims(token, plan, expiresAtSeconds);
   return Object.freeze({ token, expiresAtSeconds });

@@ -62,7 +62,7 @@ function media(h: Fixture) {
       assert.equal(found.length, 1, `one unlabelled ${name}`); return Number(found[0].slice(name.length + 1));
     });
   }
-  async function issued(request: Send, roomId: string, participantId: string, proof: string, v2 = false) {
+  async function issued(request: Send, roomId: string, participantId: string, proof: string, v2 = false, sources = ["microphone"]) {
     const before = now(), response = await request(), after = now();
     assert.equal(response.status, 200, `a fresh media credential is released (HTTP ${response.status})`);
     const body = response.json<Claims>();
@@ -75,7 +75,8 @@ function media(h: Fixture) {
     assert.equal(jwt.sub === participantId && jwt.iss === AUTHOR_HTTP_MEDIA_KEY && jwt.nbf === 0 && typeof jwt.name === "string", true,
       "the signed subject, issuer, not-before and display name are the intended values");
     assert.equal(Object.keys(jwt).sort().join(), "exp,iss,name,nbf,sub,video", "no extra identity, metadata or grant claims");
-    assert.equal(Object.keys(grant).sort().join(), "canPublish,canSubscribe,room,roomJoin", "source grants remain a separate gate");
+    assert.equal(Object.keys(grant).sort().join(), "canPublish,canPublishSources,canSubscribe,room,roomJoin", "only explicit allowed sources are granted");
+    assert.equal(JSON.stringify(grant.canPublishSources) === JSON.stringify(sources), true, "signed sources match the requested authorised scope");
     assert.equal(grant.roomJoin === true && grant.canPublish === true && grant.canSubscribe === true, true, "the existing voice grant remains enabled");
     const namespace = v2 ? await h.storage.identityProtocol.mediaNamespace() : null;
     assert.equal(grant.room === (v2 ? `vrata-v2:${namespace}:${roomId}` : `vrata-${roomId}`), true, "the actual activation namespace is preserved");
@@ -175,6 +176,24 @@ test("user media credentials retain the original proof and fresh authority over 
         const roomId = persisted ? await f.createRoom("public") : randomUUID();
         await f.clipped(roomId, await f.state({ roomId }));
       }
+    });
+    await c.test("explicit requested sources require their own current permission and cannot grant camera", async () => {
+      const roomId = await f.createRoom("public"), host = await f.state({ roomId, inviteToken: (await h.invite(roomId, "host")).inviteToken });
+      const guest = await f.state({ roomId });
+      for (const transport of TRANSPORTS) {
+        await f.issued(() => f.send(roomId, host.participantId, host.token, transport, { canPublishVideo: true, canPublishSources: ["camera"] }),
+          roomId, host.participantId, host.token, false, ["microphone", "screen_share", "screen_share_audio"]);
+        await f.issued(() => f.send(roomId, host.participantId, host.token, transport, { canPublishAudio: false, canPublishVideo: true }),
+          roomId, host.participantId, host.token, false, ["screen_share", "screen_share_audio"]);
+        await f.issued(() => f.send(roomId, host.participantId, host.token, transport, { canPublishVideo: "false" }),
+          roomId, host.participantId, host.token);
+        f.refused(await f.send(roomId, guest.participantId, guest.token, transport, { canPublishVideo: true }), 403, "forbidden", "media_publish_not_allowed");
+      }
+      f.refused(await f.held("media-prepared", roomId, () => f.send(roomId, host.participantId, host.token, "body", { canPublishVideo: true }),
+        async () => { await f.present(roomId, guest); await f.admin(`${f.stem(roomId)}/host/transfer`, { participantId: guest.participantId }); }),
+        409, "room_state_changed", "room_state_changed");
+      f.refused(await f.send(roomId, host.participantId, host.token, "body", { canPublishVideo: true }), 403, "forbidden", "media_publish_not_allowed");
+      await f.both(roomId, host);
     });
     await c.test("a proof lapsing in body, before/after actual signing or in the final entry is expired_token", async () => {
       for (const persisted of [true, false]) {
@@ -301,9 +320,22 @@ test("user media credentials retain the original proof and fresh authority over 
     await c.test("video-only Host is supported while video-only Member is refused", async () => {
       const bound = await h.room(), member = await h.session(bound.room.roomId), roomId = bound.room.roomId;
       await f.issued(() => f.send(roomId, bound.host.participantId, bound.host.token, "body", { canPublishAudio: false, canPublishVideo: true }),
-        roomId, bound.host.participantId, bound.host.token, true);
+        roomId, bound.host.participantId, bound.host.token, true, ["screen_share", "screen_share_audio"]);
       f.refused(await f.send(roomId, member.participantId, member.token, "bearer", { canPublishAudio: false, canPublishVideo: true }),
         403, "forbidden", "media_publish_not_allowed");
+    });
+    await c.test("live Member promotion changes the next credential's sources; a raced demotion never releases them", async () => {
+      const bound = await h.room(), member = await h.session(bound.room.roomId), roomId = bound.room.roomId;
+      await f.both(roomId, member, true);
+      f.refused(await f.send(roomId, member.participantId, member.token, "body", { canPublishVideo: true }), 403, "forbidden", "media_publish_not_allowed");
+      await h.transition(bound, `presenters/${member.participantId}/grant`, member);
+      for (const transport of TRANSPORTS) await f.issued(() => f.send(roomId, member.participantId, member.token, transport, { canPublishVideo: true }),
+        roomId, member.participantId, member.token, true, ["microphone", "screen_share", "screen_share_audio"]);
+      f.refused(await f.held("media-prepared", roomId, () => f.send(roomId, member.participantId, member.token, "body", { canPublishVideo: true }),
+        () => h.transition(bound, `presenters/${member.participantId}/revoke`, member)), ...RECOVERY);
+      // The RS2 MAC does not encode role: a fresh request with this unchanged proof resolves the demoted authority.
+      f.refused(await f.send(roomId, member.participantId, member.token, "body", { canPublishVideo: true }), 403, "forbidden", "media_publish_not_allowed");
+      await f.both(roomId, member, true);
     });
     await c.test("RS2 expiry in body, actual signing and the final parent lock is identity_session_expired", async () => {
       const bound = await h.room(), member = await h.session(bound.room.roomId), roomId = bound.room.roomId;

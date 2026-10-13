@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { AccessToken, TokenVerifier } from "livekit-server-sdk";
+import { AccessToken, TokenVerifier, TrackSource } from "livekit-server-sdk";
 import {
   captureMediaCredentialPlan, releaseMediaCredential, resolveMediaTokenTtlSeconds, signMediaCredential, type MediaCredentialPlan
 } from "./media-credential.js";
 
 const apiKey = "media-credential-test-key";
 const apiSecret = "media-credential-test-secret";
-const grant = { room: "vrata-room-1", roomJoin: true, canPublish: true, canSubscribe: true } as const;
+const grant = { room: "vrata-room-1", roomJoin: true, canPublish: true, canSubscribe: true, canPublishSources: ["microphone"] } as const;
 const base = { apiKey, apiSecret, identity: "participant-1", name: "Listener", grant, ttlSeconds: 120, livekitUrl: "wss://media.example.test" };
 const plan = (proofExpiresAtSeconds: number, overrides: Record<string, unknown> = {}) =>
   captureMediaCredentialPlan({ ...base, proofExpiresAtSeconds, ...overrides } as MediaCredentialPlan);
@@ -82,6 +82,8 @@ test("signed claims that drift from the plan are refused with a fixed message", 
     (token, sign) => { token.addGrant({ canPublishData: true }); return sign(); },
     (token, sign) => { token.addGrant({ canSubscribe: false }); return sign(); },
     (token, sign) => { token.addGrant({ room: "vrata-room-2" }); return sign(); },
+    (token, sign) => { token.addGrant({ canPublishSources: [] }); return sign(); },
+    (token, sign) => { token.addGrant({ canPublishSources: [TrackSource.CAMERA] }); return sign(); },
     async () => "not-a-jwt"
   ];
   for (const drift of drifts) {
@@ -103,16 +105,30 @@ test("release rechecks both deadlines on one clock reading and reports the exact
   assert.throws(() => releaseMediaCredential(plan(nowSeconds + 60), prepared, Number.NaN), /invalid_media_credential_clock/);
 });
 
-test("plan capture is a frozen copy of exactly the four grant fields and refuses malformed primitives", () => {
-  const input = { room: "vrata-room-1", roomJoin: true, canPublish: true, canSubscribe: true, canPublishSources: ["camera"] };
+test("plan capture freezes source ownership and refuses all-source, camera and malformed grants", () => {
+  const input = { room: "vrata-room-1", roomJoin: true, canPublish: true, canSubscribe: true, canPublishSources: ["microphone"], extra: "discarded" };
   const captured = plan(1_800_000_900, { grant: input });
   input.room = "vrata-room-2";
   input.canPublish = false;
+  input.canPublishSources.push("camera");
   assert.deepEqual(captured.grant, grant);
-  assert.ok(Object.isFrozen(captured) && Object.isFrozen(captured.grant));
+  assert.ok(Object.isFrozen(captured) && Object.isFrozen(captured.grant) && Object.isFrozen(captured.grant.canPublishSources));
   for (const overrides of [{ ttlSeconds: 0 }, { ttlSeconds: 86_401 }, { ttlSeconds: 1.5 }, { proofExpiresAtSeconds: 0 }, { apiKey: "" },
     { apiSecret: "" }, { identity: "" }, { name: 7 }, { livekitUrl: null }, { grant: { ...grant, room: "" } },
     { grant: { ...grant, roomJoin: false } }, { grant: { ...grant, canPublish: "yes" } }, { grant: { ...grant, canSubscribe: false } }]) {
     assert.throws(() => plan(1_800_000_900, overrides), /invalid_media_credential_plan/);
+  }
+  for (const sources of [[], [""], ["camera"], ["unknown"], ["microphone", "microphone"], ["screen_share", "microphone"]]) {
+    assert.throws(() => plan(1_800_000_900, { grant: { ...grant, canPublishSources: sources } }), /invalid_media_credential_plan/);
+  }
+});
+
+test("screen-share-only and combined grants use actual SDK source enum conversion with no camera", async () => {
+  const nowMs = Date.now(), exp = Math.floor(nowMs / 1000) + 60;
+  for (const sources of [["screen_share", "screen_share_audio"], ["microphone", "screen_share", "screen_share_audio"]]) {
+    const signed = await signMediaCredential(plan(exp, { grant: { ...grant, canPublishSources: sources } }), nowMs);
+    assert.ok(signed);
+    const verified = await new TokenVerifier(apiKey, apiSecret).verify(signed.token, 0);
+    assert.deepEqual(verified.video?.canPublishSources, sources);
   }
 });

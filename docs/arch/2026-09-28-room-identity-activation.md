@@ -241,9 +241,9 @@ return HTTP 503 `livekit_config_invalid` / `media_token_ttl_invalid`. Operators
 must retain the explicit valid value from the example configurations. This also
 closes the old invalid-TTL fallback to an unintended SDK lifetime.
 
-The video grant and runtime request shape remain unchanged. Source-specific
-grants require the separate main-path connection-upgrade gate so that ordinary
-Host screen share remains usable. Existing self-hosted connections and refreshed
+AE initially preserved the video grant and runtime request shape. The following
+source-scoped slice changes them together on the main product path, as described
+below. Existing self-hosted connections and refreshed
 tokens are not revoked by this issuance boundary. The locally checked server
 1.13.7 uses a 60-second token verification leeway: encoded `exp` is not a strict
 initial-connect cutoff. Its protocol dependency's verifier is
@@ -251,6 +251,60 @@ initial-connect cutoff. Its protocol dependency's verifier is
 Local real-media evidence observed successful validation at exp+2 s, refusal at
 exp+65 s, and continuing media from an already-connected publisher. This is not
 new staging, device or instant-revocation acceptance.
+
+### Source-scoped user media and live promotion (pending CI publication)
+
+Fresh user media JWTs carry a nonempty canonical `canPublishSources` list:
+microphone for requested audio, `screen_share` and `screen_share_audio` for
+requested screen publication. Camera and unknown source labels are never granted.
+An empty list would mean unrestricted sources to LiveKit and is rejected by plan
+validation. The installed SDK's numeric source enums are converted into the exact
+string claims; signing checks the list and its order against the private frozen
+plan. Client-provided source arrays cannot replace this plan. Video intent is
+enabled only by literal boolean `true`.
+
+Every requested capability needs current permission; a denied explicit screen
+request returns fixed HTTP 403 `media_publish_not_allowed`, not a silently reduced
+grant. The final v2 guard's additive `alsoRequired` predicates check all requested
+permissions on the same authority snapshot. Persisted and virtual legacy releases
+also check each permission. Original proof deadlines, role/Owner pins and completion
+failure semantics remain in force.
+
+Base runtime connections request microphone and, when current UI access permits,
+screen sources. A normal Host/Presenter therefore shares on the existing connection.
+Confirmed capabilities come from LiveKit participant permissions, not a decoded
+unsigned browser JWT. A Member promoted while connected with microphone-only
+permission prepares a new scoped token before retiring the old room, awaits its
+disconnect, then connects the replacement. Concurrent passive callers wait for the
+upgrade. Invalidation blocks late delivery; cleanup of an old room cannot clear a
+newer one. An already-admitted microphone action settles before retirement.
+
+The upgrade re-acquires microphone only for an already-joined, unmuted user; muted
+and listening-only intent are preserved. A preparation refusal leaves the existing
+microphone connection intact. A failed replacement makes at most one microphone-only
+recovery after confirmed candidate cleanup, while the requested share still fails.
+Unconfirmed cleanup suppresses that recovery attempt. This does not promise seamless
+audio or preservation of the old captured microphone track.
+
+The promotion picker starts under the original user activation before reconnect
+work. Its destination is pinned; a changed selection or unavailable control stops
+the pre-captured tracks. Successful capture is reused without a second prompt.
+Optional screen capability on base connect may narrow once to microphone-only after
+the exact publication-permission 403, only with the same still-current admitted
+proof. Explicit sharing never uses this fallback. A media request retries once on
+`room_state_changed` or prepared-credential expiry; identity/recovery/lifecycle/config
+failures never renew or downgrade the session. These distinctions apply to both
+protocols: RS2 carries identity continuity, not a role, and fresh requests resolve
+the current authority even with unchanged MAC bytes.
+
+Publish the matching API and runtime together. An older runtime requesting only
+microphone does not implement promotion upgrade or declare its future screen
+intent; open older tabs need the updated runtime before starting a new scoped
+screen-sharing session. An older API's unrestricted source grant retains ordinary
+compatibility but cannot provide this new enforcement. Already-issued unrestricted
+JWTs, refreshed self-hosted tokens, connected-session revocation and source
+mislabelling/content attestation remain outside this issuance/upgrade boundary.
+Staging and shared floor-2 activation are excluded by the user's instruction.
 
 ### Ownership refresh during startup
 

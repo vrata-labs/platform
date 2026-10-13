@@ -1138,6 +1138,89 @@ rollback checks включены. Full browser suites прошли без skip/r
 ownership polling; source grants/runtime connection upgrade, executor media,
 bootstrap reconciliation и durable retirement остаются отдельными gates.
 
+### T01a-S2b-AF: scoped media sources и live promotion
+
+На основном API/runtime пути свежие user media JWT содержат только явно
+разрешённые источники: microphone и, при текущем праве показа, screen_share /
+screen_share_audio. Camera/unknown не выдаются, пустой список запрещён: LiveKit
+трактует его как unrestricted. SDK numeric enums преобразуются в точные string
+claims; список фиксируется и проверяется вместе с original-proof expiry. Полный
+набор запрошенных permissions проверяется одним final authority snapshot, в том
+числе через additive alsoRequired для v2.
+
+Обычный Host/Presenter подключается сразу с разрешёнными screen sources и не
+переподключается при каждом показе. Live promotion Member→Presenter использует
+отдельный domain controller: подготовка credentials до disconnect, завершение
+уже начатого microphone action, retirement старой room, replacement connect,
+проверка confirmed capabilities и восстановление текущего joined/muted intent.
+Ошибка подготовки сохраняет прежний mic; после failed replacement допускается
+одна mic-only recovery, только после подтверждённого cleanup. Seamless audio и
+retained tracks не обещаются. Terminal block инвалидирует pending connections.
+
+Picker при promotion вызывается до сетевых ожиданий. Pre-captured stream не
+теряется при unavailable/изменённой поверхности: tracks останавливаются. Base
+connect может единожды убрать optional screen request после точного403
+media_publish_not_allowed с тем же proof; explicit share никогда не понижается.
+Identity expiry/recovery и lifecycle/config ошибки не повторяются. Отдельный
+bounded media retry разрешён только для room_state_changed и prepared expiry.
+
+Проверка RS2 уточнена фактическим codec: role не входит в MAC. После revoke fresh
+запрос с теми же RS2 bytes и V=true даёт403; V=false даёт mic-only200. Изменение
+роли между capture и final fence сохраняет recovery409. Это проверено реальным
+native HTTP/PG, а не предположением о роли в старом токене.
+
+Focused API/guard/SDK/native suites после последних правок — **54/54**; runtime
+request/upgrade/barrier/capture suites — **65/65**. Прежний совместный native
+frame/legacy-admission/media прогон — **82/82**, без skips. Frame assertions и
+исходные expiry/role/Owner refusal mappings сохранены.
+
+Mandatory browser coverage использует actual built runtime и owned self-hosted
+LiveKit1.13.7 из checksum-pinned image, без внешнего staging. Binary извлекается
+в собственный temporary test directory: native loopback RTC одинаково доступен
+Linux CI и WSL. Первый negative case сначала калибрует broad legacy grant —
+camera действительно публикуется, затем fresh Member camera/screen requests
+отказаны сервером даже при обойдённом SDK permission preflight. Node/SDK/UI
+проверяют фактические frames, ненулевой audio signal и participant generation.
+
+Промежуточные harness отказы сохранены: missing tenantId400; отсутствующий
+enable_loopback_candidate в local YAML; Join Audio до authenticated room-state
+readiness дал media401; screen audio был выключен штатной surface policy; прямое
+смешение source/dist импортов в Playwright вызвало export error. Fixture исправлен
+без ослабления assertions/deadlines: readiness ждёт настоящую admission, surface
+audio включает scoped fixture administrator через реальный room-state socket,
+Node-side helpers используют compiled modules. Trace/video/screenshots отключены;
+failure attachment содержит только bounded allowlisted enums/booleans/counters.
+
+На предпоследнем дереве actual Host mic/video/screen-audio без reconnect — **1/1**;
+live/muted promotion, token403 до retirement и unavailable control после picker —
+**4/4**. Последующая серия выявила ещё одну ошибку readiness: активная DOM-кнопка
+не подтверждала завершение initial SDK connect во время boot. Bounded измерение
+сохранило failed20s assertion, затем показало завершение ensure на **23,0 s**,
+microphone/device стадий к **27,0 s** и освобождение action barrier. Refusal по
+grant/роли и застрявший barrier не наблюдались. Видимость страницы и fake device
+permissions сами по себе этот отказ не устранили; ожидание loaded-сцены как
+несвязанная предпосылка отменено. Сценарии теперь начинают с подтверждённого
+connected-passive media состояния, затем проверяют Join Audio с прежним20s
+deadline. Functional viewport ограничен640×400, как в существующих reference
+проверках. Temporary DOM/await/timeline instrumentation удалён из итогового кода.
+
+На окончательном дереве полный focused real-browser suite — **6/6**, без skips
+или retries (**3,5 минуты**). После pin destination подтверждены настоящий
+server source refusal, Host reuse, live/muted promotion, presend403 и завершение
+pre-captured tracks при недоступном контроле.
+
+Финальный последовательный workspace прошёл lint/typecheck/build/test с exit0:
+API **1576 passed / 1 optional MinIO skipped**, runtime **1125/1125**, room-state
+**78/78**, remote-browser **71/71**, tools **262 passed / 2 optional skipped**.
+Обязательные PG/rollback fixtures включены. После этого полный local E2E на
+неизменённом исполняемом дереве — **208/208**, **40,8 минуты**, exit0, без skip,
+retry или flaky, включая все шесть real-LiveKit scenarios. Отчёт:
+t01a-source-final208.json. CI/Docker для нового code SHA ещё не приняты.
+Старые clients
+требуют обновлённый runtime для нового scoped share path; прежние unrestricted
+JWT/connected sessions, T13a revoke/rejoin и executor media остаются gates.
+Staging и общий floor2 не включались.
+
 ## Публикация первого среза T01/T12
 
 Локально прошли workspace lint/typecheck/build/tests с PostgreSQL, затем runtime build и 905 runtime tests после финальных правок. Полный `pnpm test:e2e` на финальном исполняемом дереве: **148 passed**, без skip (41.6 min).

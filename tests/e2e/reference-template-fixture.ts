@@ -29,6 +29,7 @@ async function stop(child: ChildProcess): Promise<void> {
 type ReferenceTemplateFixtureOptions = {
   devRoleQuery?: boolean;
   stateTokenSecret?: string;
+  livekitUrl?: string;
 };
 
 export async function startReferenceTemplateFixture(postgresUrl: string, options: ReferenceTemplateFixtureOptions = {}) {
@@ -66,7 +67,8 @@ export async function startReferenceTemplateFixture(postgresUrl: string, options
     VRATA_INTERNAL_SERVICE_TOKEN: "test-internal-token", ROOM_TEMPLATE_ASSET_BASE_URL: assetsOrigin,
     FEATURE_AVATAR_POSE_BINARY: "true", VRATA_DEV_ROLE_QUERY: String(options.devRoleQuery ?? true),
     ...(options.stateTokenSecret ? { STATE_TOKEN_SECRET: options.stateTokenSecret } : {}),
-    LIVEKIT_URL: "ws://127.0.0.1:7880", LIVEKIT_API_KEY: "devkey", LIVEKIT_API_SECRET: "secret",
+    LIVEKIT_URL: options.livekitUrl ?? "ws://127.0.0.1:7880", LIVEKIT_API_KEY: "devkey", LIVEKIT_API_SECRET: "secret",
+    ...(options.livekitUrl ? { LIVEKIT_ROOM_PREFIX: "vrata-", MEDIA_TOKEN_TTL_SECONDS: "120" } : {}),
     DOCUMENT_LOCAL_UPLOAD_ROOT: documentStorageRoot, MINIO_DOCUMENT_PREFIX: "documents"
   };
   for (const key of [
