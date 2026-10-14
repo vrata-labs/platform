@@ -1545,6 +1545,66 @@ generation/mutation barrier для document download/delete и уничтоже�
 контрактов требует отдельных переходов и тестов T12/T17. Общий identity floor
 сохраняется 1; floor2 проверяется только на собственных disposable schemas.
 
+## T13a-S2a — адресация по неизменному набору источников
+
+Проверки настоящего self-hosted LiveKit 1.13.7 и 1.13.9 воспроизвели проблему
+предполагаемого server-side отзыва: UpdateParticipant адресует identity, не SID.
+После замены широкого соединения новым screen-only соединением запоздалая запись
+mic-only действительно выдаёт новому соединению микрофон; публикация проходит
+на сервере. Проверка SID перед RPC этого не предотвращает. SFU refresh сохраняет
+sub и продлевает срок исходного120-секундного JWT как минимум до9 минут;
+исходный широкий JWT снова подключается с показом. Эти факты запрещают считать
+обычное пересечение прежних permissions с текущей ролью безопасным понижением.
+
+Вместо identity на каждую выдачу выбран стабильный адрес участника и класса
+источников m/s/ms, связанный с media room. У класса остаётся прежнее вытеснение
+повторного соединения; одновременно возможно не более трёх классов, без
+размножения identities при renewal, новой эпохе или ревизии роли. Короткий адрес
+содержит SHA256 канонического кортежа. Защищённый attribute vrataMediaBinding
+передаёт canonical JSON с исходным participant ID. Большой recovered ID не
+помещается в sub: прямой863-байтный вариант не подключился, компактный вариант
+с полным ID в attribute подключился на обеих версиях сервера.
+
+Первый эксперимент с attributes дал ложные отрицательные результаты из-за
+deep camelCase преобразования ключей в server SDK: vrata.participant становится
+vrataParticipant только в RPC response parser. Браузер и JWT сохраняют исходный
+ключ. Повтор с проверкой исходного JWT, браузера, нормализованного RPC и positive
+control подтвердил доставку полного значения и отказ на raw client mutation без
+canUpdateOwnMetadata. В итоговом кодеке используется camelCase-ключ, который не
+изменяется этим преобразованием; runtime дополнительно сверяет хеш привязки.
+
+API выпускает новый формат только в v2, сохраняет исходный proof/final fence,
+screen-only контракт и exact claims. Runtime использует типизированную привязку
+для экрана, аудио, spatial/lipsync; executor-looking recovered ID остаётся USER.
+Выбирается один микрофон участника с приоритетом ms, собственные другие классы
+не воспроизводятся. Очистка привязана к media identity, publication SID и SDK
+Track object. Устранён обнаруженный при проверке случай замены Track при прежнем
+SID/native ID: unsubscribe приходит до очистки publication.track, поэтому
+уходящий Track явно исключается; новый получает собственный audio element.
+Это также исключает повторное использование элемента с уже созданным Web Audio
+source. API image/runtime и rollout manifest публикуют mediaIdentityCodec=2;
+при floor2 старый несовместимый rollback запрещён, floor1 остаётся совместимым.
+
+Промежуточные проверки: native HTTP **37/37**, исходные RTC-сценарии с добавленным
+main-runtime viewer **7/7 за3,4 минуты**. Финальная focused группа **3/3 за1,9 минуты**:
+оба server versions с подавленным SDK permission handling и runtime overlap/
+self-echo/late-disconnect/mute/unmute/повтором настоящего ontrack при том же SID.
+Проверяются реальные screen frames, mic samples и сохранённый mic track SID;
+после запрещённой SDK-bypassed публикации отдельно проверяется отсутствие
+соответствующего трека на сервере. Отдельно сохраняется ожидаемый self-hosted
+old-JWT rejoin как незакрытая граница, а не доказательство отзыва токена.
+
+Workspace lint/typecheck/build/tests прошли: API1692 passed/1 optional MinIO skip,
+runtime1242/1242, shared42/42, room-state88/88, remote-browser71/71,
+tools308 passed/2 optional skips; обязательные PG/rollback fixtures включены.
+Focused unit/rollout проверки и TypeScript проверка e2e modules прошли.
+Полный локальный e2e на окончательном исполняемом дереве: **214/214 за 38,7 минуты**,
+exit0, expected214/skipped0/unexpected0/flaky0. Все обязательные PG/rollback
+fixtures включены; fsync/full_page_writes/synchronous_commit оставались on.
+Новая exact-SHA CI/CD/staging-приёмка выполняется отдельно.
+Общий floor остаётся1. Производственный RoomService reconciler ещё не подключён:
+этот срез закрывает адресацию, но не полный T13a, epoch/end/remove/restart/rejoin.
+
 ## Публикация первого среза T01/T12
 
 Локально прошли workspace lint/typecheck/build/tests с PostgreSQL, затем runtime build и 905 runtime tests после финальных правок. Полный `pnpm test:e2e` на финальном исполняемом дереве: **148 passed**, без skip (41.6 min).

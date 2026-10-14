@@ -45,6 +45,7 @@ import { createSessionControlPoller } from "./session-control-poller.js";
 import { createMediaSourceUpgrade, permitsScreenShare } from "./media/media-source-upgrade.js";
 import { createMediaActionBarrier } from "./media/media-action-barrier.js";
 import { planBaseMedia } from "./media/media-token-error.js";
+import { createMediaParticipantResolver, planRemoteMicrophones, sameMicrophoneOwner } from "./media/media-participant.js";
 import { createRoomIdentityTab } from "./identity-session-tab.js";
 import { redeemRoomRecovery } from "./identity-recovery.js";
 import { probeDocumentMedia } from "./document-media-probe.js";
@@ -1296,6 +1297,9 @@ const botInitialPosition = { x: initialLocalPosition.x, z: initialLocalPosition.
 
 interface RemoteAudioNode {
   participantId: string;
+  mediaIdentity: string;
+  trackKey: string;
+  track: Track;
   element: HTMLMediaElement;
   source: MediaElementAudioSourceNode | null;
   gain: GainNode | null;
@@ -1323,6 +1327,11 @@ interface MockAudioSource {
 }
 
 const remoteAudioNodes = new Map<string, RemoteAudioNode>();
+let selectedRemoteMicrophones: ReturnType<typeof planRemoteMicrophones> = new Map();
+const resolveMediaPeer = createMediaParticipantResolver(() => {
+  reconcileRemoteAudioTracksWithPresence();
+  syncScreenShareLiveKitTracks();
+});
 const mediaSurfaceAudioNodes = new Map<string, MediaSurfaceAudioNode>();
 const {
   connectMediaSurfaceAudioTrack,
@@ -3541,16 +3550,17 @@ function connectLocalAudioTrack(room: Room): void {
   };
 }
 
-function connectRemoteAudioTrack(track: Track, participantId: string): void {
+function connectRemoteAudioTrack(track: Track, participantId: string, owner: { mediaIdentity: string; trackKey: string }): void {
   const mediaStreamTrack = (track as { mediaStreamTrack?: MediaStreamTrack }).mediaStreamTrack;
   const existing = remoteAudioNodes.get(participantId);
-  if (existing?.trackId === mediaStreamTrack?.id) {
+  if (existing && sameMicrophoneOwner(existing, { ...owner, track })) {
     return;
   }
   if (existing) {
     disconnectRemoteAudioElement(participantId);
   }
-  const element = track.attach() as HTMLMediaElement & { playsInline?: boolean };
+  // Web Audio source ownership survives detach; never reuse an SDK-recycled element.
+  const element = track.attach(document.createElement("audio")) as HTMLMediaElement & { playsInline?: boolean };
   element.autoplay = true;
   element.playsInline = true;
   element.style.display = "none";
@@ -3615,6 +3625,9 @@ function connectRemoteAudioTrack(track: Track, participantId: string): void {
   }
   remoteAudioNodes.set(participantId, {
     participantId,
+    mediaIdentity: owner.mediaIdentity,
+    trackKey: owner.trackKey,
+    track,
     element,
     source,
     gain,
@@ -3705,6 +3718,7 @@ function startHiddenVideoPlayback(element: HTMLVideoElement, onError?: (error: s
 }
 
 function resolveRemoteBrowserObjectForTrack(participantIdentity: string | null | undefined, publication: unknown, track: Track, kind: "audio" | "video"): MediaObjectInstance<RemoteBrowserObjectState> | null {
+  if (activeIdentityProtocolVersion === 2 && (!participantIdentity || !participantIdentity.startsWith("remote-browser:"))) return null;
   const trackSid = getPublicationTrackSid(publication, track, "");
   return physicalRemoteBrowserObjectForMediaTrack(roomMediaObjects, mediaSurfaceViews, participantIdentity, trackSid || null, kind);
 }
@@ -3716,6 +3730,12 @@ function getPublicationName(publication: unknown): string | null {
 }
 
 function resolveScreenShareObjectForTrack(participantIdentity: string | null | undefined, publication: unknown, track: Track, kind: "audio" | "video"): MediaObjectInstance<ScreenShareObjectState> | null {
+  if (activeIdentityProtocolVersion === 2) {
+    const peer = participantIdentity ? livekitRoom?.remoteParticipants.get(participantIdentity) : null;
+    const binding = resolveMediaPeer(peer, livekitRoom?.name ?? "", activeIdentityProtocolVersion);
+    if (binding?.kind !== "user" || binding.scope === "m") return null;
+    participantIdentity = binding.participantId;
+  }
   const trackSid = getPublicationTrackSid(publication, track, "");
   return physicalScreenShareObjectForMediaTrack(
     roomMediaObjects,
@@ -3823,6 +3843,7 @@ function disconnectRemoteAudioElement(participantId: string): void {
   if (!node) {
     return;
   }
+  node.track.detach(node.element);
   node.element.remove();
   node.source?.disconnect();
   node.gain?.disconnect();
@@ -3840,26 +3861,13 @@ function disconnectRemoteAudioElement(participantId: string): void {
   }
 }
 
-function getRemoteParticipantMicrophoneTrack(participantId: string, publication: unknown): Track | null {
-  const track = (publication as { track?: Track | null }).track;
-  if (track?.kind !== Track.Kind.Audio) {
-    return null;
-  }
-  if (resolveRemoteBrowserObjectForTrack(participantId, publication, track, "audio")) {
-    return null;
-  }
-  if (isScreenShareAudioSource((publication as { source?: unknown }).source)) {
-    return null;
-  }
-  return track;
-}
-
 function isMicrophonePublication(publication: unknown): boolean {
   return (publication as { source?: unknown }).source === Track.Source.Microphone;
 }
 
-function reconcileRemoteAudioTracksWithPresence(): void {
+function reconcileRemoteAudioTracksWithPresence(excludedTrack?: Track): void {
   if (!livekitRoom) {
+    selectedRemoteMicrophones.clear();
     return;
   }
   const activeAudioParticipantIds = new Set(
@@ -3867,22 +3875,14 @@ function reconcileRemoteAudioTracksWithPresence(): void {
       .filter((participant) => participant.activeAudio)
       .map((participant) => participant.participantId)
   );
-  for (const participantId of Array.from(remoteAudioNodes.keys())) {
-    if (!activeAudioParticipantIds.has(participantId)) {
-      disconnectRemoteAudioElement(participantId);
-    }
+  selectedRemoteMicrophones = planRemoteMicrophones(livekitRoom.remoteParticipants.values(),
+    peer => resolveMediaPeer(peer, livekitRoom!.name, activeIdentityProtocolVersion), participantId, activeAudioParticipantIds, excludedTrack);
+  for (const [id, node] of remoteAudioNodes) {
+    const desired = selectedRemoteMicrophones.get(id);
+    if (!desired || !sameMicrophoneOwner(node, { ...desired, track: desired.value.track })) disconnectRemoteAudioElement(id);
   }
-  for (const [participantId, participant] of livekitRoom.remoteParticipants.entries()) {
-    if (!activeAudioParticipantIds.has(participantId) || remoteAudioNodes.has(participantId)) {
-      continue;
-    }
-    for (const publication of participant.trackPublications.values()) {
-      const track = getRemoteParticipantMicrophoneTrack(participantId, publication);
-      if (track) {
-        connectRemoteAudioTrack(track, participantId);
-        break;
-      }
-    }
+  for (const [id, desired] of selectedRemoteMicrophones) {
+    if (!remoteAudioNodes.has(id)) connectRemoteAudioTrack(desired.value.track, id, desired);
   }
 }
 
@@ -4025,7 +4025,7 @@ function updateSpatialAudio(): void {
     remoteSources: debugState.remoteParticipants.map((participant) => {
       const target = remoteAvatarRuntime.getAudioTarget(participant.participantId);
       const audioNode = remoteAudioNodes.get(participant.participantId);
-      const remoteParticipant = livekitRoom?.remoteParticipants.get(participant.participantId);
+      const remoteParticipant = livekitRoom ? selectedRemoteMicrophones.get(participant.participantId)?.value.participant : null;
       return {
         participantId: participant.participantId,
         x: roundDebugNumber(target?.x ?? participant.head.x),
@@ -4098,8 +4098,8 @@ function updateAvatarLipsync(deltaSeconds: number): void {
   }
 
   let maxSpeakerLevel = 0;
-  for (const participant of livekitRoom.remoteParticipants.values()) {
-    maxSpeakerLevel = Math.max(maxSpeakerLevel, participant.audioLevel ?? 0);
+  for (const selected of selectedRemoteMicrophones.values()) {
+    maxSpeakerLevel = Math.max(maxSpeakerLevel, selected.value.participant.audioLevel ?? 0);
   }
   for (const node of mediaSurfaceAudioNodes.values()) {
     if (node.analyser && node.sampleBuffer) {
@@ -4109,7 +4109,8 @@ function updateAvatarLipsync(deltaSeconds: number): void {
   speakerOutputLevel = maxSpeakerLevel;
   debugState.speakerOutputLevel = Number(speakerOutputLevel.toFixed(3));
 
-  for (const [remoteParticipantId, participant] of livekitRoom.remoteParticipants.entries()) {
+  for (const [remoteParticipantId, selected] of selectedRemoteMicrophones) {
+    const participant = selected.value.participant;
     const node = remoteAudioNodes.get(remoteParticipantId);
     const sourceState: AvatarLipsyncSourceState = node
       ? participant.isMicrophoneEnabled
@@ -6243,9 +6244,7 @@ function setupAudio(room: Room): void {
       }
       return;
     }
-    if (participant?.identity) {
-      connectRemoteAudioTrack(track, participant.identity);
-    }
+    reconcileRemoteAudioTracksWithPresence();
     debugState.audioState = "remote-track";
   });
 
@@ -6273,9 +6272,8 @@ function setupAudio(room: Room): void {
       track.detach().forEach((element) => element.remove());
       return;
     }
-    if (participant?.identity) {
-      disconnectRemoteAudioElement(participant.identity);
-    }
+    // LiveKit emits unsubscribe before clearing publication.track.
+    reconcileRemoteAudioTracksWithPresence(track);
     track.detach().forEach((element) => element.remove());
   });
 
@@ -6286,17 +6284,14 @@ function setupAudio(room: Room): void {
     if (!isMicrophonePublication(publication)) {
       return;
     }
-    if (participant?.identity === participantId) {
+    if (participant === room.localParticipant) {
       microphoneEnabled = false;
       disconnectLocalAudioTrack();
       syncAudioControls();
       syncLocalAudioPresence();
       return;
     }
-    if (participant?.identity) {
-      disconnectRemoteAudioElement(participant.identity);
-      syncRemoteAudioDiagnostics();
-    }
+    syncRemoteAudioDiagnostics();
   });
 
   room.on(RoomEvent.TrackUnmuted, (publication, participant) => {
@@ -6306,7 +6301,7 @@ function setupAudio(room: Room): void {
     if (!isMicrophonePublication(publication)) {
       return;
     }
-    if (participant?.identity === participantId) {
+    if (participant === room.localParticipant) {
       microphoneEnabled = audioSessionJoined;
       if (microphoneEnabled) {
         connectLocalAudioTrack(room);
@@ -6315,13 +6310,7 @@ function setupAudio(room: Room): void {
       syncLocalAudioPresence();
       return;
     }
-    if (participant?.identity) {
-      const track = getRemoteParticipantMicrophoneTrack(participant.identity, publication);
-      if (track) {
-        connectRemoteAudioTrack(track, participant.identity);
-        syncRemoteAudioDiagnostics();
-      }
-    }
+    syncRemoteAudioDiagnostics();
   });
 }
 

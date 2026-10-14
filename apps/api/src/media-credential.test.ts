@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { AccessToken, TokenVerifier, TrackSource } from "livekit-server-sdk";
+import { createUserMediaIdentity } from "@vrata/shared-types";
 import {
   captureMediaCredentialPlan, releaseMediaCredential, resolveMediaTokenTtlSeconds, signMediaCredential, type MediaCredentialPlan
 } from "./media-credential.js";
@@ -131,4 +132,26 @@ test("screen-share-only and combined grants use actual SDK source enum conversio
     const verified = await new TokenVerifier(apiKey, apiSecret).verify(signed.token, 0);
     assert.deepEqual(verified.video?.canPublishSources, sources);
   }
+});
+
+test("v2 binds the immutable source class and protected mapping to the exact signed credential", async () => {
+  const nowMs = Date.now(), exp = Math.floor(nowMs / 1000) + 60;
+  const binding = await createUserMediaIdentity(grant.room, { participantId: "remote-browser:recovered", scope: "s" });
+  const input = { ...binding, attributes: { ...binding.attributes }, grant: { ...grant, canPublishSources: ["screen_share", "screen_share_audio"] } };
+  const captured = plan(exp, input);
+  input.attributes.vrataMediaBinding = "changed";
+  const signed = await signMediaCredential(captured, nowMs); assert.ok(signed);
+  const verified = await new TokenVerifier(apiKey, apiSecret).verify(signed.token, 0);
+  assert.deepEqual(verified.attributes, binding.attributes);
+  assert.equal(verified.sub, binding.identity);
+  assert.equal(verified.video?.canUpdateOwnMetadata, false);
+  assert.equal(verified.video?.canPublishData, true);
+  for (const change of [
+    (token: AccessToken) => { token.attributes = { vrataMediaBinding: "forged" }; },
+    (token: AccessToken) => { token.addGrant({ canUpdateOwnMetadata: true }); },
+    (token: AccessToken) => { token.addGrant({ canPublishData: false }); }
+  ]) await withSigner((token, sign) => { change(token); return sign(); }, () =>
+    assert.rejects(signMediaCredential(captured, nowMs), /media_credential_claims_mismatch/));
+  assert.throws(() => plan(exp, { ...binding }), /invalid_media_credential_plan/);
+  await assert.rejects(signMediaCredential(plan(exp, { ...binding, grant: { ...captured.grant, room: "other" } }), nowMs), /invalid_media_credential_plan/);
 });

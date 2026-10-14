@@ -126,7 +126,7 @@ async function roomFixture(request: any) {
 }
 
 test("v2 Presenter revoke retires the screen independently of UI polling, denies old sockets and preserves microphone", async ({ page, browser, request }) => {
-  test.setTimeout(180_000); const h = await roomFixture(request), receiver = await browser.newPage();
+  test.setTimeout(180_000); const h = await roomFixture(request), receiver = await browser.newPage(), runtimeViewer = await browser.newPage({ viewport: { width: 640, height: 400 } });
   const { WebSocket } = createRequire(resolve("apps/room-state/package.json"))("ws");
   const sockets: any[] = [];
   try {
@@ -140,6 +140,9 @@ test("v2 Presenter revoke retires the screen independently of UI polling, denies
     await page.goto(`${actor.inviteLink}&debug=1&audiomock=1&onboard=0`);
     const proof = await (await admission).json();
     expect(String(proof.token).startsWith("rs2.")).toBe(true);
+    const viewerInvite = await h.invite("member");
+    await runtimeViewer.goto(`${viewerInvite.inviteLink}&debug=1&audiomock=1&onboard=0`);
+    await expect.poll(() => runtimeViewer.evaluate(() => (window as any).__VRATA_DEBUG__?.audioState), { timeout: 30_000 }).toBe("connected-passive");
     await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__?.roomStateConnected), { timeout: 20_000 }).toBe(true);
     await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__?.audioState), { timeout: 30_000 }).toBe("connected-passive");
     await page.locator("#join-audio").click(); await expect(page.locator("#toggle-mute")).toBeEnabled({ timeout: 20_000 });
@@ -156,7 +159,18 @@ test("v2 Presenter revoke retires the screen independently of UI polling, denies
     await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__?.screenShare?.localPublishing), { timeout: 30_000 }).toBe(true);
     await expect.poll(() => receiver.evaluate(() => (window as any).__sourceObserver.frames), { timeout: 20_000 }).toBeGreaterThan(2);
     await expect.poll(() => signal(receiver, "screen_share_audio"), { timeout: 20_000 }).toBe(true);
-    const before = await h.service.getParticipant(mediaRoom, proof.participantId);
+    await expect.poll(() => runtimeViewer.evaluate(() => (window as any).__VRATA_DEBUG__?.screenShare?.remoteSubscribedTrackCount), { timeout: 20_000 }).toBe(1);
+    await expect.poll(() => runtimeViewer.evaluate(target => {
+      const debug = (window as any).__VRATA_DEBUG__;
+      const source = debug?.spatialAudio?.remoteSources?.find((source: any) => source.participantId === target);
+      return source?.hasAudioNode === true && source.audioLevel > 0;
+    }, proof.participantId), { timeout: 20_000 }).toBe(true);
+    const participants = await h.service.listParticipants(mediaRoom);
+    const mediaIdentity = participants.find((participant: any) => {
+      try { const binding = JSON.parse(participant.attributes.vrataMediaBinding); return binding.participantId === proof.participantId && binding.scope === "ms"; } catch { return false; }
+    })?.identity;
+    expect(typeof mediaIdentity).toBe("string");
+    const before = await h.service.getParticipant(mediaRoom, mediaIdentity);
     // A raw socket has no role UI or media cleanup. Keep the original RS2 across revoke and reconnect.
     async function rawSocket() {
       const url = new URL(h.fixture.stateOrigin.replace("http:", "ws:"));
@@ -179,10 +193,11 @@ test("v2 Presenter revoke retires the screen independently of UI polling, denies
     await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__?.screenShareState), { timeout: 10_000 }).toBe("stopped");
     await expect.poll(() => page.evaluate(() => (window as any).__sourceCapture.streams.length > 0
       && (window as any).__sourceCapture.streams.every((stream: MediaStream) => stream.getTracks().every(track => track.readyState === "ended"))), { timeout: 10_000 }).toBe(true);
-    await expect.poll(async () => (await h.service.getParticipant(mediaRoom, proof.participantId)).tracks.some((track: any) => track.source === 3 || track.source === 4), { timeout: 10_000 }).toBe(false);
-    const after = await h.service.getParticipant(mediaRoom, proof.participantId);
+    await expect.poll(async () => (await h.service.getParticipant(mediaRoom, mediaIdentity)).tracks.some((track: any) => track.source === 3 || track.source === 4), { timeout: 10_000 }).toBe(false);
+    const after = await h.service.getParticipant(mediaRoom, mediaIdentity);
     expect(after.sid === before.sid).toBe(true); expect(after.tracks.some((track: any) => track.source === 2 && !track.muted)).toBe(true);
     await expect.poll(() => signal(receiver, "microphone"), { timeout: 10_000 }).toBe(true);
+    await expect.poll(() => runtimeViewer.evaluate(() => (window as any).__VRATA_DEBUG__?.screenShare?.remoteSubscribedTrackCount), { timeout: 10_000 }).toBe(0);
     for (const connection of [stale, await rawSocket()]) {
       const commandId = randomUUID();
       connection.socket.send(JSON.stringify({ type: "surface_create_object", commandId, surfaceId: "debug-main", objectType: "screen-share", probeOnly: false }));
@@ -194,7 +209,7 @@ test("v2 Presenter revoke retires the screen independently of UI polling, denies
     }
   } finally {
     for (const socket of sockets) socket.terminate();
-    await Promise.allSettled([page.goto("about:blank"), receiver.close()]); await h.fixture.close();
+    await Promise.allSettled([page.goto("about:blank"), receiver.close(), runtimeViewer.close()]); await h.fixture.close();
   }
 });
 
@@ -230,6 +245,103 @@ test("fresh Member sources are enforced by self-hosted LiveKit even when SDK per
     const participants = await h.service.listParticipants(`vrata-${h.roomId}`);
     expect(participants.some((participant: any) => participant.tracks.some((track: any) => track.type === 1))).toBe(false);
   } finally { await page.goto("about:blank"); await h.fixture.close(); }
+});
+
+test("v2 overlapping source classes play one remote microphone without self echo or late-source cleanup", async ({ page, browser, request }) => {
+  test.setTimeout(180_000);
+  const h = await roomFixture(request), viewer = await browser.newPage({ viewport: { width: 640, height: 400 } }), oldClass = await browser.newPage();
+  try {
+    await viewer.addInitScript(() => {
+      const Native = window.RTCPeerConnection, events: Array<{ pc: RTCPeerConnection; event: RTCTrackEvent }> = [];
+      (window as any).__mappedTrackEvents = events;
+      window.RTCPeerConnection = new Proxy(Native, { construct(target, args, newTarget) {
+        const pc = Reflect.construct(target, args, newTarget) as RTCPeerConnection;
+        pc.addEventListener("track", event => { if (event.track.kind === "audio") events.push({ pc, event }); });
+        return pc;
+      } });
+    });
+    await h.activateV2();
+    const invitation = await h.invite("host");
+    const admission = page.waitForResponse(response => new URL(response.url()).pathname === "/api/tokens/state" && response.status() === 200);
+    await page.setViewportSize({ width: 640, height: 400 });
+    await page.goto(`${invitation.inviteLink}&debug=1&audiomock=1&onboard=0`);
+    const proof = await (await admission).json();
+    await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__?.audioState), { timeout: 30_000 }).toBe("connected-passive");
+    await page.locator("#join-audio").click();
+    await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__?.media?.publishedAudio), { timeout: 20_000 }).toBe(true);
+    const viewerInvite = await h.invite("member");
+    await viewer.goto(`${viewerInvite.inviteLink}&debug=1&audiomock=1&onboard=0`);
+    await expect.poll(() => viewer.evaluate(() => (window as any).__VRATA_DEBUG__?.media?.subscribedAudioCount), { timeout: 30_000 }).toBe(1);
+    const response = await request.post(`${h.fixture.origin}/api/tokens/media`, {
+      headers: { authorization: `Bearer ${proof.token}` }, data: { roomId: h.roomId, participantId: proof.participantId, canPublishAudio: true, canPublishVideo: false }
+    });
+    expect(response.status()).toBe(200);
+    const token = (await response.json()).token;
+    await observer(oldClass, h.fixture.origin, token);
+    await oldClass.evaluate(async () => {
+      const context = new AudioContext(), oscillator = context.createOscillator(), gain = context.createGain(), sink = context.createMediaStreamDestination();
+      oscillator.frequency.value = 880; gain.gain.value = 0.05; oscillator.connect(gain).connect(sink); oscillator.start(); await context.resume();
+      await (window as any).__sourceObserver.room.localParticipant.publishTrack(sink.stream.getAudioTracks()[0], { source: "microphone" });
+    });
+    const mediaRoom = JSON.parse(Buffer.from(token.split(".")[1], "base64url").toString("utf8")).video.room;
+    const ownScopes = (await h.service.listParticipants(mediaRoom)).filter((peer: any) => {
+      try { return JSON.parse(peer.attributes.vrataMediaBinding).participantId === proof.participantId; } catch { return false; }
+    });
+    expect(ownScopes.length).toBe(2);
+    const combinedSid = ownScopes.find((peer: any) => JSON.parse(peer.attributes.vrataMediaBinding).scope === "ms")?.sid;
+    expect(typeof combinedSid).toBe("string");
+    await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__?.media?.subscribedAudioCount), { timeout: 10_000 }).toBe(0);
+    expect(await viewer.evaluate(() => (window as any).__VRATA_DEBUG__?.media?.subscribedAudioCount)).toBe(1);
+    const receive = () => viewer.evaluate(async () => {
+      const element = Array.from(document.querySelectorAll("audio")).find(element => element.srcObject instanceof MediaStream);
+      if (!element || !(element.srcObject instanceof MediaStream)) return null;
+      const root = window as any;
+      let probe = root.__mappedAudioProbe;
+      const track = element.srcObject.getAudioTracks()[0];
+      if (!track) return null;
+      if (probe?.track !== track) {
+        await probe?.context.close();
+        const context = new AudioContext(), analyser = context.createAnalyser(); analyser.fftSize = 1024;
+        context.createMediaStreamSource(new MediaStream([track])).connect(analyser); await context.resume();
+        probe = root.__mappedAudioProbe = { context, analyser, track };
+      }
+      const samples = new Uint8Array(probe.analyser.fftSize); probe.analyser.getByteTimeDomainData(samples);
+      return samples.some(sample => Math.abs(sample - 128) > 2);
+    });
+    await expect.poll(receive, { timeout: 15_000 }).toBe(true);
+    // Replay the genuine ontrack through the SDK: same publication SID/native ID, new SDK Track object.
+    expect(await viewer.evaluate(expectedParticipantSid => {
+      const root = window as any;
+      const element = Array.from(document.querySelectorAll("audio")).find(element => element.srcObject instanceof MediaStream);
+      const track = (element?.srcObject as MediaStream | undefined)?.getAudioTracks()[0];
+      const sample = root.__mappedTrackEvents.find((sample: { event: RTCTrackEvent }) => sample.event.track === track);
+      if (!sample || !element || !sample.event.streams.some((stream: MediaStream) => stream.id.split("|")[0] === expectedParticipantSid)) return false;
+      root.__mappedPreviousAudioElement = element;
+      const event = sample.event as RTCTrackEvent;
+      sample.pc.dispatchEvent(new RTCTrackEvent("track", { receiver: event.receiver, track: event.track,
+        streams: [...event.streams], transceiver: event.transceiver }));
+      return true;
+    }, combinedSid)).toBe(true);
+    await expect.poll(() => viewer.evaluate(() => {
+      const previous = (window as any).__mappedPreviousAudioElement as HTMLAudioElement;
+      return !previous.isConnected && Array.from(document.querySelectorAll("audio")).some(element =>
+        element !== previous && element.srcObject instanceof MediaStream);
+    }), { timeout: 10_000 }).toBe(true);
+    await expect.poll(receive, { timeout: 10_000 }).toBe(true);
+    await oldClass.evaluate(() => (window as any).__sourceObserver.room.disconnect());
+    await expect.poll(async () => (await h.service.listParticipants(mediaRoom)).filter((peer: any) => {
+      try { return JSON.parse(peer.attributes.vrataMediaBinding).participantId === proof.participantId; } catch { return false; }
+    }).length, { timeout: 10_000 }).toBe(1);
+    expect(await viewer.evaluate(() => (window as any).__VRATA_DEBUG__?.media?.subscribedAudioCount)).toBe(1);
+    await expect.poll(receive, { timeout: 10_000 }).toBe(true);
+    await page.locator("#toggle-mute").click();
+    await expect.poll(() => viewer.evaluate(() => (window as any).__VRATA_DEBUG__?.media?.subscribedAudioCount), { timeout: 10_000 }).toBe(0);
+    await page.locator("#toggle-mute").click();
+    await expect.poll(() => viewer.evaluate(() => (window as any).__VRATA_DEBUG__?.media?.subscribedAudioCount), { timeout: 10_000 }).toBe(1);
+    await expect.poll(receive, { timeout: 10_000 }).toBe(true);
+  } finally {
+    await Promise.allSettled([page.goto("about:blank"), viewer.close(), oldClass.close()]); await h.fixture.close();
+  }
 });
 
 for (const mode of ["host", "promotion-live", "promotion-muted", "promotion-denied", "promotion-unavailable"] as const) {

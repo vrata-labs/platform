@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 import { AccessToken } from "livekit-server-sdk";
 import { PDFDocument } from "pdf-lib";
 import { extractSceneBundleZipToTemp, normalizeSceneBundleRelativePath, validateSceneBundlePath, validateSceneBundleReference } from "@vrata/asset-pipeline";
-import { createRoomAccessDebugState, getRoomPermissions, hasRoomPermission, parseRoomRole, type RoomPermission, type RoomRole } from "@vrata/shared-types";
+import { createRoomAccessDebugState, createUserMediaIdentity, userMediaScope, getRoomPermissions, hasRoomPermission, parseRoomRole, type RoomPermission, type RoomRole } from "@vrata/shared-types";
 import { getRoomSessionTokenSecret, isRotatedDevelopmentSession, signRoomSessionToken, verifyRoomSessionToken, type RoomSessionRoleSource, type RoomSessionTokenPayload, type RoomSessionTokenVerificationResult } from "@vrata/shared-types/session-token";
 
 import {
@@ -4026,8 +4026,12 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     if (proof.identityProtocolVersion === 2 && !mediaNamespace) {
       return json(response, 503, { error: "identity_authority_unavailable" });
     }
-    const plan = captureMediaCredentialPlan({ apiKey, apiSecret, identity: proof.participantId, name: proof.displayName,
-      grant: { room: roomMediaGrantName(proof.roomId, roomPrefix, mediaNamespace), roomJoin: true,
+    const mediaRoom = roomMediaGrantName(proof.roomId, roomPrefix, mediaNamespace);
+    const mediaIdentity = proof.identityProtocolVersion === 2
+      ? await createUserMediaIdentity(mediaRoom, { participantId: proof.participantId, scope: userMediaScope(publishSources)! })
+      : { identity: proof.participantId };
+    const plan = captureMediaCredentialPlan({ apiKey, apiSecret, ...mediaIdentity, name: proof.displayName,
+      grant: { room: mediaRoom, roomJoin: true,
         canPublish: true, canSubscribe: true, canPublishSources: publishSources },
       ttlSeconds, proofExpiresAtSeconds: proof.exp, livekitUrl });
     const prepared = await signMediaCredential(plan, Date.now());

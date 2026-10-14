@@ -366,6 +366,63 @@ bypass the server's fresh create authorization. This checkpoint does not fix tha
 The original S1 publication did not change shared floor1 or deploy staging.
 Later integration delivery below still does not activate full identity/media.
 
+### Source-class media addresses: T13a-S2a (prepared)
+
+`UpdateParticipant` on self-hosted LiveKit addresses a room and identity, not a
+connection SID, and replaces the entire permission object. Reading an old SID
+before an RPC cannot fence a replacement connection. A native reproduction on
+1.13.7 and 1.13.9 showed a stale microphone-only update intended for a broad
+credential granting microphone to a newer screen-only credential at the same
+identity. Therefore current-role intersection with a previously read permission
+is not a safe source-lowering algorithm.
+
+New v2 user credentials use a stable address per participant and immutable source
+class: `m` (microphone), `s` (screen video/audio), or `ms` (both). The address is
+`vmi2.<class>.<sha256>`, where the digest covers the canonical JSON tuple of the
+domain-separation tag, actual media room name and canonical binding. The sole
+reserved attribute `vrataMediaBinding` carries canonical JSON with version,
+participant ID and class. This keeps the address short for recovered IDs up to
+200 UTF-16 code units, including IDs resembling executor names. JSON escapes
+preserve those IDs across the Go/JavaScript boundary. Attribute keys are canonical
+camelCase because the installed server SDK deep-converts keys in RPC replies.
+
+The runtime verifies the digest against the authenticated LiveKit room before
+using the binding. Unknown/missing/noncanonical bindings fail closed. A recovered
+domain ID beginning `remote-browser:` remains a user after mapping; only a raw
+executor identity enters executor routing. Screen-only audio never becomes voice.
+Signed v2 grants explicitly preserve publish-data and disable own-metadata updates;
+all exact source, attribute, subject and expiry assertions remain part of signing.
+Floor-1 credentials retain their existing claims. Original-proof authorization
+and the final synchronous release fence remain unchanged.
+
+Epochs, authority revisions and issuance nonces are deliberately absent from the
+address: repeated issuance of one class retains same-identity eviction across
+epochs, instead of accumulating connections on every renewal. Different classes
+may coexist, up to three per participant in a media room. Runtime chooses one
+eligible microphone per domain participant, preferring `ms`, and excludes its own
+domain participant. Cleanup owns the exact media identity, publication SID and SDK
+Track object; an old unsubscribe cannot remove a replacement. The outgoing track
+is excluded even while the SDK still exposes it in the publication. A fresh audio
+element avoids reusing an element already bound to a Web Audio source graph.
+
+This is an addressing prerequisite, **not production server-side revocation**.
+The future source-only operation can use a fixed update for each class (`ms` to
+microphone, `s` to publish-disabled, no write for `m`) without copying stale flags
+between different signed scopes. Native transport tests prove this on both pinned
+server versions with client permission handling suppressed. They also retain the
+counterexample: the original broad JWT can reconnect with its original sources.
+SFU refresh can extend the original credential lifetime. Delayed same-class
+lowering may over-restrict a newly promoted connection; remove/end, epoch
+retirement, retry/restart reconciliation and replay enforcement remain S2/S3.
+
+API and runtime must ship together. The API image includes the runtime and declares
+`io.vrata.media-identity-codec=2`; the rollout manifest declares
+`mediaIdentityCodec: 2`. Floor-2 rollout/rollback rejects targets without this
+codec. Floor 1 remains compatible with the prior accepted image. This does not
+automatically migrate a self-host already running an older floor-2 media lineage:
+that needs an explicit cutover. Shared floor 2 remains disabled; disposable test
+schemas use a fresh activation namespace.
+
 ### Shared staging delivery (floor 1)
 
 The paired integration of current main and these prerequisites is deployed as

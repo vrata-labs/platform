@@ -1,4 +1,5 @@
 export type { RoomAccessDebugState, RoomPermission, RoomRole as UserRole, RoomRole } from "./access.js";
+export * from "./media-identity.js";
 
 export type ClientMode = "desktop" | "mobile" | "vr";
 

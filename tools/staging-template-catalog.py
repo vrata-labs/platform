@@ -92,6 +92,11 @@ def assert_target_allowed(marker, status, target_contract, target_sha, minimum_i
     if minimum_identity_protocol >= 2 or identity_bound:
         if not supports_frame_token_codec(target_contract):
             raise ValueError("frame_rollback_requires_codec2")
+    if minimum_identity_protocol >= 2:
+        if (not isinstance(target_contract, dict)
+                or type(target_contract.get("mediaIdentityCodec")) is not int
+                or target_contract["mediaIdentityCodec"] != 2):
+            raise ValueError("media_rollback_requires_identity_codec2")
     if marker:
         sha(marker)
         if not supports_references(target_contract):

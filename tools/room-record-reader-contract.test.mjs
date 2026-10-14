@@ -4,6 +4,17 @@ import test from "node:test";
 
 const read = path => readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
 
+test("the paired API/runtime image declares the exact scoped-media identity codec", () => {
+  const contract = JSON.parse(read("infra/docker/template-rollout.json"));
+  assert.equal(contract.mediaIdentityCodec, 2);
+  const dockerfile = read("apps/api/Dockerfile");
+  const labels = [...dockerfile.matchAll(/^LABEL io\.vrata\.media-identity-codec="([^"]*)"$/gm)];
+  assert.equal(labels.length, 1);
+  assert.equal(labels[0][1], String(contract.mediaIdentityCodec));
+  assert(labels[0].index > dockerfile.indexOf(" AS runtime"));
+  assert.match(dockerfile, /COPY --from=build \/app\/apps\/runtime-web\/dist \.\/apps\/runtime-web\/dist/);
+});
+
 test("API runtime image label publishes the rollout contract's integer room-record reader", () => {
   const contract = JSON.parse(read("infra/docker/template-rollout.json"));
   assert.equal(typeof contract.roomRecordReader, "number");

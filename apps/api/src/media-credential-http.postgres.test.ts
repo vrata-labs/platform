@@ -4,6 +4,7 @@ import test from "node:test";
 import type { PoolClient } from "pg";
 import { TokenVerifier } from "livekit-server-sdk";
 import { createRoomSessionV2Codec } from "@vrata/shared-types/room-session-v2";
+import { createUserMediaIdentity, userMediaScope } from "@vrata/shared-types";
 import { AUTHOR_HTTP_MEDIA_KEY, AUTHOR_HTTP_MEDIA_SECRET, AUTHOR_HTTP_SECRET, authorHttpBearer, startAuthorHttpFixture, until,
   type AuthorHttpResponse, type AuthorHttpRoom, type AuthorHttpSession } from "./plugins/author-http.test-helper.js";
 
@@ -72,13 +73,21 @@ function media(h: Fixture) {
     const verified = await new TokenVerifier(AUTHOR_HTTP_MEDIA_KEY, AUTHOR_HTTP_MEDIA_SECRET).verify(String(body.token), 0).catch(() => null);
     assert.ok(verified, "the actual SDK verifies the JWT signature under only the fixture media key");
     const jwt = part(String(body.token), 1), grant = jwt.video as Claims;
-    assert.equal(jwt.sub === participantId && jwt.iss === AUTHOR_HTTP_MEDIA_KEY && jwt.nbf === 0 && typeof jwt.name === "string", true,
+    const namespace = v2 ? await h.storage.identityProtocol.mediaNamespace() : null;
+    const expectedMediaRoom = v2 ? `vrata-v2:${namespace}:${roomId}` : `vrata-${roomId}`;
+    const expectedIdentity = v2 ? await createUserMediaIdentity(expectedMediaRoom, { participantId, scope: userMediaScope(sources)! }) : null;
+    assert.equal(jwt.sub === (expectedIdentity?.identity ?? participantId) && jwt.iss === AUTHOR_HTTP_MEDIA_KEY && jwt.nbf === 0 && typeof jwt.name === "string", true,
       "the signed subject, issuer, not-before and display name are the intended values");
-    assert.equal(Object.keys(jwt).sort().join(), "exp,iss,name,nbf,sub,video", "no extra identity, metadata or grant claims");
-    assert.equal(Object.keys(grant).sort().join(), "canPublish,canPublishSources,canSubscribe,room,roomJoin", "only explicit allowed sources are granted");
+    assert.equal(Object.keys(jwt).sort().join(), v2 ? "attributes,exp,iss,name,nbf,sub,video" : "exp,iss,name,nbf,sub,video", "only the exact scoped identity claims");
+    assert.equal(Object.keys(grant).sort().join(), v2 ? "canPublish,canPublishData,canPublishSources,canSubscribe,canUpdateOwnMetadata,room,roomJoin"
+      : "canPublish,canPublishSources,canSubscribe,room,roomJoin", "only explicit allowed sources are granted");
+    if (v2) {
+      assert.deepEqual(jwt.attributes, expectedIdentity!.attributes);
+      assert.equal(grant.canUpdateOwnMetadata, false);
+      assert.equal(grant.canPublishData, true);
+    }
     assert.equal(JSON.stringify(grant.canPublishSources) === JSON.stringify(sources), true, "signed sources match the requested authorised scope");
     assert.equal(grant.roomJoin === true && grant.canPublish === true && grant.canSubscribe === true, true, "the existing voice grant remains enabled");
-    const namespace = v2 ? await h.storage.identityProtocol.mediaNamespace() : null;
     assert.equal(grant.room === (v2 ? `vrata-v2:${namespace}:${roomId}` : `vrata-${roomId}`), true, "the actual activation namespace is preserved");
     const exp = Number(jwt.exp), lifetime = Number(body.expiresInSeconds), releaseClock = exp - lifetime;
     assert.equal(Number.isSafeInteger(exp) && exp <= deadline(proof) && Number.isSafeInteger(lifetime) && lifetime >= 1 && lifetime <= TTL, true,

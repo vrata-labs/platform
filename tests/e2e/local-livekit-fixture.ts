@@ -7,7 +7,10 @@ import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 
 const execute = promisify(execFile);
-const IMAGE = "livekit/livekit-server@sha256:6fd3b7088874c4d119160dd688798dfec852bc014786d392caad15f6f63912a3";
+const IMAGES = {
+  "1.13.7": "livekit/livekit-server@sha256:6fd3b7088874c4d119160dd688798dfec852bc014786d392caad15f6f63912a3",
+  "1.13.9": "livekit/livekit-server@sha256:d0c04791bf63ca8dcea123571827d56ba9504bd57c8d5de60ee03b5408cc3154"
+};
 async function tcpPort() {
   const server = createServer(); await new Promise<void>(done => server.listen(0, "127.0.0.1", done));
   const port = (server.address() as { port: number }).port;
@@ -27,7 +30,9 @@ async function stop(child: ChildProcess) {
 
 /** Extract the checksum-pinned installed server into an owned test directory. Native loopback RTC works on both Linux CI
  * and WSL without depending on Docker Desktop's host/bridge routing. No deployment credentials or shared services. */
-export async function startLocalLiveKitFixture() {
+export async function startLocalLiveKitFixture(version: keyof typeof IMAGES = "1.13.7") {
+  const IMAGE = IMAGES[version];
+  if (!IMAGE) throw new Error("local_livekit_fixture_version_invalid");
   await mkdir(resolve("test-results"), { recursive: true });
   const root = await mkdtemp(join(resolve("test-results"), "livekit-source-"));
   let container: string | undefined, child: ChildProcess | undefined;

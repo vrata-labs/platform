@@ -93,6 +93,11 @@ export function assertIdentityRollbackTarget({ envFile, composeFile, imageTag },
     if (value !== "2") throw new Error(`frame_rollback_requires_codec2:${service}`);
   };
   frameCodec("api", model.services.api.image);
+  // The API image also contains the paired runtime that resolves scoped media identities.
+  if (minimum >= 2) {
+    const value = run(["image", "inspect", "--format", '{{ index .Config.Labels "io.vrata.media-identity-codec" }}', model.services.api.image]);
+    if (value !== "2") throw new Error("media_rollback_requires_identity_codec2:api");
+  }
   // compose.demo-local.yml resets the optional browser; an absent consumer verifies no frame tokens.
   const browser = model.services?.["remote-browser"];
   if (browser == null) return;

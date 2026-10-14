@@ -1,4 +1,5 @@
 import { AccessToken, TrackSource } from "livekit-server-sdk";
+import { parseUserMediaBinding, userMediaScope, verifyUserMediaIdentity, type UserMediaIdentity } from "@vrata/shared-types";
 
 export const MEDIA_TOKEN_DEFAULT_TTL_SECONDS = 900;
 export const MEDIA_TOKEN_MAX_TTL_SECONDS = 86_400;
@@ -21,6 +22,7 @@ export interface MediaCredentialPlan {
   readonly apiKey: string;
   readonly apiSecret: string;
   readonly identity: string;
+  readonly attributes?: UserMediaIdentity["attributes"];
   readonly name: string;
   readonly grant: MediaCredentialGrant;
   readonly ttlSeconds: number;
@@ -66,7 +68,7 @@ function nonEmpty(value: unknown): value is string {
 
 /** A frozen copy of the plan primitives and its nonempty canonical source list. */
 export function captureMediaCredentialPlan(input: MediaCredentialPlan): MediaCredentialPlan {
-  const { apiKey, apiSecret, identity, name, grant, ttlSeconds, proofExpiresAtSeconds, livekitUrl } = input;
+  const { apiKey, apiSecret, identity, attributes, name, grant, ttlSeconds, proofExpiresAtSeconds, livekitUrl } = input;
   const { room, roomJoin, canPublish, canSubscribe, canPublishSources } = grant;
   if (!nonEmpty(apiKey) || !nonEmpty(apiSecret) || !nonEmpty(identity) || typeof name !== "string" || typeof livekitUrl !== "string"
     || !nonEmpty(room) || roomJoin !== true || canPublish !== true || canSubscribe !== true
@@ -75,7 +77,10 @@ export function captureMediaCredentialPlan(input: MediaCredentialPlan): MediaCre
     || canPublishSources.join() !== SOURCES.filter(source => canPublishSources.includes(source)).join()
     || !Number.isSafeInteger(ttlSeconds) || ttlSeconds < 1 || ttlSeconds > MEDIA_TOKEN_MAX_TTL_SECONDS
     || !Number.isSafeInteger(proofExpiresAtSeconds) || proofExpiresAtSeconds < 1) throw new Error("invalid_media_credential_plan");
-  return Object.freeze({ apiKey, apiSecret, identity, name, grant: Object.freeze({ room, roomJoin, canPublish, canSubscribe,
+  if (attributes && (Object.keys(attributes).join() !== "vrataMediaBinding"
+    || parseUserMediaBinding(identity, attributes)?.scope !== userMediaScope(canPublishSources))) throw new Error("invalid_media_credential_plan");
+  return Object.freeze({ apiKey, apiSecret, identity, ...(attributes ? { attributes: Object.freeze({ vrataMediaBinding: attributes.vrataMediaBinding }) } : {}),
+    name, grant: Object.freeze({ room, roomJoin, canPublish, canSubscribe,
     canPublishSources: Object.freeze([...canPublishSources]) }),
     ttlSeconds, proofExpiresAtSeconds, livekitUrl });
 }
@@ -104,12 +109,18 @@ function assertSignedClaims(token: string, plan: MediaCredentialPlan, expiresAtS
   const claims = signedClaims(token);
   const video = claims?.video;
   const named = plan.name.length > 0;
-  if (!claims || !exactKeys(claims, named ? NAMED_CLAIMS : CLAIMS) || claims.sub !== plan.identity || named && claims.name !== plan.name
+  const claimKeys = [...(named ? NAMED_CLAIMS : CLAIMS), ...(plan.attributes ? ["attributes"] : [])].sort();
+  const grantKeys = [...GRANT, ...(plan.attributes ? ["canPublishData", "canUpdateOwnMetadata"] : [])].sort();
+  if (!claims || !exactKeys(claims, claimKeys) || claims.sub !== plan.identity || named && claims.name !== plan.name
     || claims.iss !== plan.apiKey || claims.nbf !== 0 || claims.exp !== expiresAtSeconds
-    || typeof video !== "object" || video === null || Array.isArray(video) || !exactKeys(video, GRANT)) {
+    || typeof video !== "object" || video === null || Array.isArray(video) || !exactKeys(video, grantKeys)) {
     throw new Error("media_credential_claims_mismatch");
   }
   const signed = video as Record<string, unknown>;
+  if (plan.attributes && (typeof claims.attributes !== "object" || claims.attributes === null || Array.isArray(claims.attributes)
+    || !exactKeys(claims.attributes, ["vrataMediaBinding"])
+    || (claims.attributes as Record<string, unknown>).vrataMediaBinding !== plan.attributes.vrataMediaBinding
+    || signed.canPublishData !== true || signed.canUpdateOwnMetadata !== false)) throw new Error("media_credential_claims_mismatch");
   if (signed.room !== plan.grant.room || signed.roomJoin !== true || signed.canPublish !== plan.grant.canPublish
     || signed.canSubscribe !== true || !Array.isArray(signed.canPublishSources)
     || signed.canPublishSources.length !== plan.grant.canPublishSources.length
@@ -123,9 +134,12 @@ export async function signMediaCredential(plan: MediaCredentialPlan, nowMs: numb
   const nowSeconds = clockSeconds(nowMs);
   const expiresAtSeconds = Math.min(nowSeconds + plan.ttlSeconds, plan.proofExpiresAtSeconds);
   if (expiresAtSeconds <= nowSeconds) return null;
-  const accessToken = new AccessToken(plan.apiKey, plan.apiSecret, { identity: plan.identity, name: plan.name });
+  if (plan.attributes && !await verifyUserMediaIdentity(plan.grant.room, plan.identity, plan.attributes)) throw new Error("invalid_media_credential_plan");
+  const accessToken = new AccessToken(plan.apiKey, plan.apiSecret, { identity: plan.identity, name: plan.name,
+    ...(plan.attributes ? { attributes: { ...plan.attributes } } : {}) });
   accessToken.ttl = expiresAtSeconds;
-  accessToken.addGrant({ ...plan.grant, canPublishSources: plan.grant.canPublishSources.map(source => SDK_SOURCES[source]) });
+  accessToken.addGrant({ ...plan.grant, canPublishSources: plan.grant.canPublishSources.map(source => SDK_SOURCES[source]),
+    ...(plan.attributes ? { canPublishData: true, canUpdateOwnMetadata: false } : {}) });
   const token = await accessToken.toJwt();
   assertSignedClaims(token, plan, expiresAtSeconds);
   return Object.freeze({ token, expiresAtSeconds });
