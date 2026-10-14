@@ -1501,6 +1501,44 @@ full_page_writes и synchronous_commit оставались on. После эт�
 e2e modules прошёл. Следующая поставка обязана пройти exact-SHA CI/Docker и полный
 staging gate; локальный успех не означает staging acceptance.
 
+#### Принятая поставка интеграции на Selectel
+
+Код и проверки опубликованы коммитом `746d6421d11d7f2124ee2898ee865d12c3c3440a`,
+поверх merge-коммита `814632b`. [CI 38632664568](https://github.com/vrata-labs/platform/actions/runs/38632664568)
+прошёл с первой попытки: **211/211 за 22,2 минуты**, **16/16 M0.5 за 1,7 минуты**,
+все пакетные, PG/rollback-проверки и проверки закреплённых ресурсов сцен. Артефакт
+[11928347081](https://github.com/vrata-labs/platform/actions/runs/38632664568/artifacts/11928347081),
+playwright-local-38632664568-1.
+
+[Docker Publish 38632664586](https://github.com/vrata-labs/platform/actions/runs/38632664586)
+прошёл с первой попытки, манифесты для точного SHA проверены:
+
+- API: `sha256:a91929bce14ee33272d32646d4e6c55dcf8fb6332df1e11ac2ba436a9d9ca2d4`.
+- room-state: `sha256:999ba20b496d3243834f576ac20c8ee14d5d901cae3613f4c8e0064e17d4dc8f`.
+- remote-browser: `sha256:fbbdcbf824e2e9ca93b5a965eff35c8cacb0030d748de9836fb3450898b28e30`.
+
+[Staging Deploy 38636738583](https://github.com/vrata-labs/platform/actions/runs/38636738583)
+прошёл с первой попытки для этого SHA через штатный workflow_dispatch, bootstrap=false:
+**66/66 за 28,5 минуты**, затем **1/1 обязательная проверка Rutube за 3,4 минуты**. В обоих
+JSON reports skipped0/unexpected0/flaky0. Private plugin storage verifier,
+public smoke и exact running image tag прошли. Gate включал current-page loaded
+для Hall/BlueOffice/ArtGallery, selector/navigation, real four-party private-room
+audio/PDF/notes/reload/rejoin/Host controls и moving screen-share frames.
+
+Publish accepted release and finalize catalog завершён успешно: authoritative
+publication вернула `746d6421d11d7f2124ee2898ee865d12c3c3440a`, asset binding
+`0a3b492e788bad82bf20a92476a628bf30c6dfbe`. Штатный prune после принятия сохранил
+current, previous `380b2e7` и Wave2 snapshots. Rollback не запускался; отдельный
+Rutube canary пропущен, поскольку обязательный полный Rutube уже был частью gate.
+Artifact [11930835730](https://github.com/vrata-labs/platform/actions/runs/38636738583/artifacts/11930835730),
+staging-verification-38636738583-1. После принятия повторный public smoke подтвердил
+200 для health, demo-room и control-plane. Собственные local fixtures удалены,
+порты освобождены; shared floor остаётся1.
+
+Оба прежних rollback runs и неизвестные причины их отказов сохранены выше;
+успешная поставка не объявляется исправлением этих причин. Это приёмка интеграции
+на floor1, не полная T13a/v2 media activation и не ручная встреча на реальных устройствах.
+
 Остаются прежние обязательства: аудит v2 notes writes до результата fresh effect,
 generation/mutation barrier для document download/delete и уничтожение pool client
 после неудачного rollback/unlock. Они не появились от интеграции; изменение этих

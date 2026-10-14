@@ -203,15 +203,16 @@ connected participants' tokens. Current source grants, server-side participant
 eviction/rejoin enforcement and expiry in the remaining lifecycle mutations
 still require an explicit activation gate.
 
-### User media credentials and original-proof release (published; staging excluded)
+### User media credentials and original-proof release (published)
 
 Published code: `4e3691e0e3f31d9de00bb7bd58ddb4ca8d50a212`. Exact-SHA
 [CI](https://github.com/vrata-labs/platform/actions/runs/38390028704) and
 [Docker publication](https://github.com/vrata-labs/platform/actions/runs/38389973365)
 passed on their first run attempt. Local and CI full E2E both passed 202 cases;
 CI also passed 16 M0.5 cases. This publication includes independent ownership
-polling during startup. Staging deployment and verification were excluded by
-the user's instruction; shared floor 2 and full media activation are not enabled.
+polling during startup. Staging was excluded at this original publication;
+the later paired delivery is recorded under shared staging delivery below.
+Shared floor 2 and full media activation are not enabled.
 
 `POST /api/tokens/media` classifies the room once before proof verification:
 persisted credentials never fall back to virtual admission after deletion, and
@@ -252,15 +253,15 @@ Local real-media evidence observed successful validation at exp+2 s, refusal at
 exp+65 s, and continuing media from an already-connected publisher. This is not
 new staging, device or instant-revocation acceptance.
 
-### Source-scoped user media and live promotion (published; staging excluded)
+### Source-scoped user media and live promotion (published)
 
 Published code: `509537f6faee9c817eff3b1081a9afaeba60e396`. Exact-SHA
 [CI](https://github.com/vrata-labs/platform/actions/runs/38435682765) and
 [Docker publication](https://github.com/vrata-labs/platform/actions/runs/38435682817)
 passed on attempt 1. Local and CI full E2E passed 208 cases, including six
 mandatory self-hosted RTC scenarios using the built main runtime; CI also passed
-16 M0.5 cases. Staging deployment/verification and shared floor-2 activation are
-excluded by the user's instruction.
+16 M0.5 cases. Staging was excluded at this original publication; the later
+paired delivery is recorded below. Shared floor-2 activation remains excluded.
 
 Fresh user media JWTs carry a nonempty canonical `canPublishSources` list:
 microphone for requested audio, `screen_share` and `screen_share_audio` for
@@ -312,9 +313,10 @@ screen-sharing session. An older API's unrestricted source grant retains ordinar
 compatibility but cannot provide this new enforcement. Already-issued unrestricted
 JWTs, refreshed self-hosted tokens, connected-session revocation and source
 mislabelling/content attestation remain outside this issuance/upgrade boundary.
-Staging and shared floor-2 activation are excluded by the user's instruction.
+Shared floor-2 activation remains excluded; later floor-1 staging delivery does
+not change the activation boundary.
 
-### Presenter screen retirement: T13a-S1 (published; staging excluded)
+### Presenter screen retirement: T13a-S1 (published)
 
 Current authority is already read by the v2 room-state verifier before effects
 and by its independent idle poll. Role loss now removes that participant's
@@ -361,7 +363,36 @@ v2 control response supplies participant access without a replacement token, whi
 the runtime role UI currently requires token/access together. Live v2 promotion
 and demotion UI refresh remain a T13 obligation; a stale visible control cannot
 bypass the server's fresh create authorization. This checkpoint does not fix that UI.
-Shared floor1, full identity/media activation and staging remain unchanged.
+The original S1 publication did not change shared floor1 or deploy staging.
+Later integration delivery below still does not activate full identity/media.
+
+### Shared staging delivery (floor 1)
+
+The paired integration of current main and these prerequisites is deployed as
+`746d6421d11d7f2124ee2898ee865d12c3c3440a` on the current Selectel staging host,
+`https://135.106.137.18.sslip.io`. Shared protocol minimum stays 1; the floor-2
+authority scenarios above remain evidence from owned disposable schemas.
+
+Exact-SHA [CI 38632664568](https://github.com/vrata-labs/platform/actions/runs/38632664568)
+passed 211 full E2E cases and 16 M0.5 cases; local full E2E passed 211 cases.
+[Docker publication 38632664586](https://github.com/vrata-labs/platform/actions/runs/38632664586)
+verified matching API, room-state and remote-browser manifests.
+[Staging Deploy 38636738583](https://github.com/vrata-labs/platform/actions/runs/38636738583)
+passed all 66 staging cases and the mandatory Rutube case, then published the
+authoritative accepted record. Hall, BlueOffice and ArtGallery loaded in the
+current browser pages. The four-party private-room scenario exercised real
+LiveKit audio, PDF/notes, reload/rejoin and Host controls. The accepted asset
+binding is `0a3b492e788bad82bf20a92476a628bf30c6dfbe`.
+
+Two earlier integration attempts on `814632b` failed different gate checks and
+rolled back to `380b2e7`: a pinned personal GLB fetch and subsequent audio progress.
+Their exact causes remain unknown; later green delivery does not establish a
+root-cause fix. Fresh numeric RTC diagnostics now accompany the failed audio
+progress poll without changing its predicates or deadlines. A separate local
+test-setup race is fixed by awaiting logical surface readiness, with a real
+WebSocket hold/release regression. The implementation journal preserves all
+attempts and remaining obligations. This delivery does not close T13a-S2/S3,
+old self-hosted JWT rejoin, full v2 activation or real-device meeting acceptance.
 
 ### Ownership refresh during startup
 
@@ -381,14 +412,15 @@ Reload checks wait for the new document's authenticated control response;
 DOMContentLoaded alone is not that readiness boundary. An indefinitely pending
 control HTTP read remains a separate transport-deadline obligation.
 
-### Frame credentials and negotiated peer lease (published; staging excluded)
+### Frame credentials and negotiated peer lease (published)
 
 Published code: `1e55cd12ac5604d50c179ad43b25de75c357ac29`. Exact-SHA
 [CI](https://github.com/vrata-labs/platform/actions/runs/38170650843/attempts/2)
 and [Docker publication](https://github.com/vrata-labs/platform/actions/runs/38170650682/attempts/2)
-passed. Local and CI full E2E both passed 199 cases. Staging deployment and
-verification were excluded by the user's instruction; this is not shared
-floor-2 or full media activation. Attempt failures and remaining obligations
+passed. Local and CI full E2E both passed 199 cases. Staging was excluded at
+that original publication; the later paired delivery is recorded above.
+This is not shared floor-2 or full media activation. Attempt failures and remaining
+obligations
 are recorded in the [implementation journal](../reviews/2026-09-26-working-meeting-implementation.md#t01a-s2b-ad-original-proof-frame-credentials-and-executor-peer-lease).
 
 The frame transport uses a Node-only shared v2 codec with exactly
