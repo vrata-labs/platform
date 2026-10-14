@@ -252,3 +252,14 @@ jobs:
           VRATA_SCENE_REPOSITORY: ${{ matrix.repository }}
           VRATA_SCENE_COMMIT_SHA: ${{ matrix.commitSha }}
         run: pnpm validate:reference-template-assets
+
+  asset-validation-gate:
+    name: asset-validation
+    needs: asset-validation
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every scene validation to succeed
+        env:
+          ASSET_VALIDATION_RESULT: ${{ needs.asset-validation.result }}
+        run: test "$ASSET_VALIDATION_RESULT" = success

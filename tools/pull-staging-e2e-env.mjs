@@ -3,10 +3,8 @@
 import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { spawnSync } from "node:child_process";
+import { pathToFileURL } from "node:url";
 
-const defaultHost = "158.160.10.234";
-const defaultBaseUrl = `https://${defaultHost}.sslip.io`;
-const defaultStateBaseUrl = `https://state.${defaultHost}.sslip.io`;
 const managedKeys = [
   "BASE_URL",
   "STAGING_ASSET_BASE_URL",
@@ -14,13 +12,13 @@ const managedKeys = [
   "STAGING_SCENE_BUNDLE_VERSION"
 ];
 
-function parseArgs(argv) {
+export function parseArgs(argv) {
   const options = {
     output: ".env.staging.local",
     ssh: process.env.STAGING_SSH_TARGET ?? null,
-    host: process.env.STAGING_SSH_HOST ?? defaultHost,
+    host: process.env.STAGING_SSH_HOST ?? null,
     user: process.env.STAGING_SSH_USER ?? process.env.USER ?? null,
-    baseUrl: process.env.BASE_URL ?? defaultBaseUrl,
+    baseUrl: process.env.BASE_URL ?? null,
     appDirs: process.env.STAGING_APP_DIR ? [process.env.STAGING_APP_DIR] : ["/opt/noah", "/opt/vrata"]
   };
 
@@ -50,6 +48,7 @@ function parseArgs(argv) {
   }
 
   if (!options.ssh) {
+    if (!options.host) throw new Error("Missing SSH host. Pass --ssh <user>@<host> or --host <host>.");
     if (!options.user) throw new Error("Missing SSH user. Pass --ssh <user>@<host> or --user <user>.");
     options.ssh = `${options.user}@${options.host}`;
   }
@@ -134,7 +133,7 @@ fi
   return parseDotenv(result.stdout);
 }
 
-function buildLocalEnv(remoteEnv, options) {
+export function buildLocalEnv(remoteEnv, options) {
   const adminToken = remoteEnv.get("STAGING_ADMIN_TOKEN") ?? remoteEnv.get("CONTROL_PLANE_ADMIN_TOKEN");
   if (!adminToken) {
     throw new Error("Remote staging env does not contain CONTROL_PLANE_ADMIN_TOKEN/STAGING_ADMIN_TOKEN");
@@ -142,8 +141,9 @@ function buildLocalEnv(remoteEnv, options) {
 
   const appDomain = remoteEnv.get("VRATA_APP_DOMAIN");
   const stateDomain = remoteEnv.get("VRATA_STATE_DOMAIN");
-  const baseUrl = options.baseUrl ?? (appDomain ? `https://${appDomain}` : defaultBaseUrl);
-  const assetBaseUrl = stateDomain ? `https://${stateDomain}` : defaultStateBaseUrl;
+  const baseUrl = options.baseUrl ?? (appDomain ? `https://${appDomain}` : null);
+  const assetBaseUrl = stateDomain ? `https://${stateDomain}` : baseUrl;
+  if (!baseUrl || !assetBaseUrl) throw new Error("Remote staging public URL is required");
 
   const env = new Map([
     ["BASE_URL", baseUrl],
@@ -199,7 +199,7 @@ function upsertEnvFile(outputPath, values) {
   return absolutePath;
 }
 
-try {
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) try {
   const options = parseArgs(process.argv.slice(2));
   const remoteEnv = readRemoteEnv(options);
   const localEnv = buildLocalEnv(remoteEnv, options);

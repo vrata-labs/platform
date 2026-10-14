@@ -77,6 +77,8 @@ test("seat marker component renders volume, forward chevron and state transition
 
 for (const staging of [false, true]) test.describe(`${staging ? "@staging " : ""}seat markers in actual reference rooms`, () => {
   test.describe.configure({ mode: "serial" });
+  test.skip(staging && process.env.VRATA_REFERENCE_CATALOG_ACTIVE !== "1",
+    "Wave 2 compatibility deployment precedes reference activation");
   let fixture: Pick<Awaited<ReturnType<typeof startReferenceTemplateFixture>>, "origin" | "close" | "fixtureFingerprint"> | undefined;
   const token = staging ? process.env.STAGING_ADMIN_TOKEN : "test-admin-token";
   test.beforeAll(async () => {

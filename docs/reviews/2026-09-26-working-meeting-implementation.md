@@ -1359,6 +1359,92 @@ retirement и unpublish сотрудничающим runtime. Proactive LiveKit 
 partial-apply/restart reconciliation, remove/end/old-JWT rejoin и live v2 role UI
 остаются следующими срезами T13a/T13.
 
+### T13a-S1 / T17: интеграция текущей платформы и нового staging-флоу
+
+После разрешения staging ветка объединена с main `380b2e7ff1dd67f19821ca324c575c7b0935c451`:
+portable deploy/accepted-release, snapshots и backup, выделенные API notes/schema и
+runtime host controls/documents/diagnostics. Цель этого прохода — первая staging-
+приёмка накопленного кода с сохранением ранее принятых identity/media гарантий.
+Принудительное LiveKit enforcement T13a-S2/S3 здесь не заявляется.
+
+В выделенные owning modules перенесены original-proof effects и fenced notes
+release, независимые Owner/Host права, monotonic authority revision, terminal session
+gate, generation/abort/safe feedback документов и session-aware diagnostic transport.
+Identity/plugin DDL устанавливаются обязательным хуком на прежней позиции внутри
+того же init transaction/advisory lock. Исходные base SQL/trace сохранены отдельно
+от нового ordered/awaited extension contract.
+
+Новый staging-контракт — `docs/deployment-staging.md`, Selectel
+`https://135.106.137.18.sslip.io`. Предыдущая приёмка main подтверждена
+[Staging Deploy 38469444551](https://github.com/vrata-labs/platform/actions/runs/38469444551).
+Наличие public health до поставки нового коммита используется только как baseline.
+Локальный SSH не имел записи host key; проверка не ослаблялась, поставка использует
+штатные GitHub Actions и настроенный known_hosts.
+
+При объединении сохранены guard floor/binding/room-record reader/frame codec,
+private plugin storage verifier и обе части backup: private plugin namespace и
+accepted-release metadata. Публичные internal routes требуют явного непубличного
+service token; неподходящая host-конфигурация отклоняется до rollout, без ротации
+существующего signing key. Proxy/frame keys независимы и идемпотентны. Recovery
+использует сохранённый proxy helper, а не старую копию из checkout цели; совместимость
+предыдущего принятого image с текущими данными проверяется read-only до поставки.
+Поведение accepted JSON, operation lock, asset bindings и post-commit repair сохранено.
+
+Адресные проверки после первоначального переноса: **114/114 API notes/schema unit**,
+**1233/1233 runtime unit**; после следующих исправлений terminal UI/diagnostic gate и
+credential/recovery checks результаты фиксируются отдельно. Проверяемые режимы
+включают revoke во время notes body, отказ без приватных байт, audit released bytes
+при поздней ошибке завершения fence, stale Owner revision, захват revision при клике
+и отбрасывание pending document list после потери доступа. Штатные исторические
+assertions, которым противоречила принятая HEAD-семантика (двойной export audit,
+сырой upload error, сбрасываемый errorCode), заменены точными проверками текущего
+контракта с сохранением проверок содержимого/прав.
+
+После исправлений прошли **14/14 native API/PG** (session expiry, legacy effect,
+current v2 verifier и init rollback), **1234/1234 runtime unit** и **17/17** focused
+credential/recovery/bootstrap checks. Первый native запуск был непринят из-за
+унаследованного VRATA_DISABLE_AUTOSTART=1, препятствовавшего старту дочерних API;
+повтор использует обычное package-test окружение. Проверяемые значения и deadlines
+не менялись. Новая staging-конфигурация отклоняет отсутствующий/development internal
+credential и до raw rollout, и при catalog preflight; отдельный regression доказывает
+выбор сохранённого helper при старом helper-файле в rollback checkout.
+
+Первый полный workspace интеграции прошёл: API **1691 passed / 1 optional skip**,
+runtime **1234/1234**, room-state **88/88**, remote-browser **71/71**, tools
+**306 passed / 2 optional skips**. Браузерный прогон не принят и прерван после
+пяти отказов v2: **67 passed / 5 failed / 1 interrupted / 136 not run**. Прерванный
+media-surface case не считается отдельной продуктовой регрессией.
+
+Причина подтверждена отдельным браузером с настоящим own-schema admission: сервер
+выдал RS2/participantId с200, но выделенные контроллеры захватили предварительный
+ID до boot. Диагностика отправила старый subject и получила409
+identity_recovery_required, закрыв сессию; Owner-проекция также сравнивала с прежним
+ID. Это устранено live participantId getters в композиции и чтением текущего ID
+в host controls, diagnostics, XR telemetry и document event IDs. Диагностика читает
+subject после refresh await, XR использует один ID для body и endpoint. Новые
+unit regressions меняют ID после создания controller и во время pending refresh.
+
+После исправления runtime build и **1238/1238 unit** зелёные; тот же browser probe
+сопоставляет admitted/debug/diagnostic subject, получает diagnostics201 и сохраняет
+room-state connection. Assertions и исходные polling deadlines сохранены.
+Окончательные whole-workspace/full E2E gates выполняются заново на исправленном дереве.
+Адресный browser набор после исправления — **15/15 за 5,4 минуты**, включая все
+прежние v2 отказы, удерживаемую сцену при Owner handoff и семь real-RTC source/revoke
+проверок. Общая активация floor2 из этого результата не следует и не выполняется.
+
+Окончательное исправленное дерево прошло workspace lint/typecheck/build/test:
+API **1691 passed / 1 optional skip**, runtime **1238/1238**, room-state **88/88**,
+remote-browser **71/71**, tools **306 passed / 2 optional skips**. Все обязательные
+PG/rollback fixtures включены. Полный локальный E2E: **209/209 за 35,7 минуты**,
+expected209/skipped0/unexpected0/flaky0, exit0. Отчёт —
+t13a-staging-integration-adoption-final.json; прежний прерванный прогон не принят.
+
+Остаются прежние обязательства: аудит v2 notes writes до результата fresh effect,
+generation/mutation barrier для document download/delete и уничтожение pool client
+после неудачного rollback/unlock. Они не появились от интеграции; изменение этих
+контрактов требует отдельных переходов и тестов T12/T17. Общий identity floor
+сохраняется 1; floor2 проверяется только на собственных disposable schemas.
+
 ## Публикация первого среза T01/T12
 
 Локально прошли workspace lint/typecheck/build/tests с PostgreSQL, затем runtime build и 905 runtime tests после финальных правок. Полный `pnpm test:e2e` на финальном исполняемом дереве: **148 passed**, без skip (41.6 min).

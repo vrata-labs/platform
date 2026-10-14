@@ -4,7 +4,6 @@ import { spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { relative, resolve } from "node:path";
 
-const defaultBaseUrl = "https://158.160.10.234.sslip.io";
 
 function parseDotenv(content) {
   const values = new Map();
@@ -34,10 +33,16 @@ function parseDotenv(content) {
 function parseArgs(argv) {
   const envFiles = [];
   const playwrightArgs = [];
+  let suite = "staging";
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--") continue;
+    if (arg === "--suite") {
+      suite = argv[++index];
+      if (!["staging", "rutube-full", "rutube-canary"].includes(suite)) throw new Error("invalid_staging_suite");
+      continue;
+    }
     if (arg === "--env-file") {
       const value = argv[index + 1];
       if (!value) throw new Error("--env-file requires a path");
@@ -52,7 +57,7 @@ function parseArgs(argv) {
     playwrightArgs.push(arg);
   }
 
-  return { envFiles, playwrightArgs };
+  return { envFiles, playwrightArgs, suite };
 }
 
 function envFileCandidates(extraEnvFiles) {
@@ -89,7 +94,7 @@ function loadEnvFiles(paths) {
 }
 
 function ensureStagingEnv() {
-  process.env.BASE_URL ||= defaultBaseUrl;
+  if (!process.env.BASE_URL) throw new Error("BASE_URL is required. Configure .env.staging.local for the current host.");
   process.env.PLAYWRIGHT_NO_WEB_SERVER ||= "1";
   process.env.PLAYWRIGHT_REPORT_NAME ||= "staging-local";
 
@@ -101,15 +106,16 @@ function ensureStagingEnv() {
     throw new Error([
       "Missing STAGING_ADMIN_TOKEN for the full staging e2e suite.",
       "Create .env.staging.local with STAGING_ADMIN_TOKEN=... or run:",
-      "  pnpm staging:e2e:pull-env -- --ssh <user>@158.160.10.234",
+      "  pnpm staging:e2e:pull-env -- --ssh <user>@<current-staging-host>",
       "The file is gitignored and must not be committed."
     ].join("\n"));
   }
 }
 
-function runPlaywright(playwrightArgs) {
+function runPlaywright(playwrightArgs, suite) {
   const command = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
-  const args = ["exec", "playwright", "test", "--grep", "@staging", "--grep-invert", "@rutube", ...playwrightArgs];
+  const selection = suite === "staging" ? ["--grep", "@staging", "--grep-invert", "@rutube"] : ["--grep", `@${suite}`];
+  const args = ["exec", "playwright", "test", ...selection, ...playwrightArgs];
   const hasWorkerOverride = playwrightArgs.some((arg) => arg === "--workers" || arg.startsWith("--workers="));
   if (!hasWorkerOverride) {
     args.push("--workers=1");
@@ -129,7 +135,7 @@ function runPlaywright(playwrightArgs) {
 }
 
 try {
-  const { envFiles, playwrightArgs } = parseArgs(process.argv.slice(2));
+  const { envFiles, playwrightArgs, suite } = parseArgs(process.argv.slice(2));
   const loaded = loadEnvFiles(envFileCandidates(envFiles));
   ensureStagingEnv();
   const catalogResponse = await fetch(new URL("/api/templates", process.env.BASE_URL), { signal: AbortSignal.timeout(15000) });
@@ -143,9 +149,9 @@ try {
   if (loaded.length > 0) {
     console.log(`Loaded staging e2e env from: ${loaded.join(", ")}`);
   }
-  console.log(`Running full staging e2e against ${process.env.BASE_URL}`);
+  console.log(`Running ${suite} e2e against ${process.env.BASE_URL}`);
 
-  runPlaywright(playwrightArgs);
+  runPlaywright(playwrightArgs, suite);
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error));
   process.exit(1);

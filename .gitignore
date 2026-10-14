@@ -21,3 +21,6 @@ test-results/
 playwright-report/
 backups/
 .local/public-demo/
+infra/docker/.env.staging
+__pycache__/
+*.py[cod]

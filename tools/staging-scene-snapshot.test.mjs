@@ -235,9 +235,9 @@ test("workflow captures before rollout, preserves helper before checkout, and ha
   assert.doesNotMatch(workflow, /--restore-report/);
   assert.equal((workflow.match(/staging-scene-snapshot\.mjs" restore/g) ?? []).length, 1);
   const rollback = stepScript("Roll back failed deploy");
-  assert.ok(rollback.indexOf('rollout-staging-images.sh "$ROLLBACK_SHA"') < rollback.indexOf('.mjs" restore'));
+  assert.ok(rollback.indexOf("staging-remote-release.py' rollback") < rollback.indexOf('.mjs" restore'));
   assert.ok(rollback.indexOf('.mjs" restore') < rollback.indexOf('curl --fail --silent'));
-  assert.ok(rollback.lastIndexOf('curl --fail --silent') < rollback.indexOf('SUCCESSFUL_SHA_FILE='));
+  assert.doesNotMatch(rollback, /SUCCESSFUL_SHA_FILE|staging-successful-image-tag/);
   assert.match(step("Capture pre-rollout scene URLs"), /vrata-scene-bundle-snapshot\.json/);
   assert.match(step("Patch canonical staging scene bundles"), /vrata-scene-bundle-patch-report\.json/);
 });
@@ -302,16 +302,21 @@ async function workflowFixture(t) {
 (async () => {
 let text = "";
 const command = process.argv.at(-1);
-if (command === "sudo bash -s") {
+if (command.includes("docker login")) {
   for await (const chunk of process.stdin) text += chunk;
-  const sha = text.match(/rollout-staging-images\\.sh "([a-f0-9]{40})"/)?.[1];
+  process.exit(0);
+} else if (command.includes("scene-urls.json")) {
+  for await (const chunk of process.stdin) text += chunk;
+  await import("node:fs/promises").then(fs => fs.writeFile(process.env.REMOTE_POINTER_SNAPSHOT, text, { mode: 0o600 }));
+  process.exit(0);
+} else if (command.includes("staging-remote-release.py")) {
+  const sha = command.includes(" rollback ") ? process.env.ROLLBACK_SHA : command.match(/--image-sha '([a-f0-9]{40})'/)?.[1];
   if (!sha) process.exit(2);
   const response = await fetch(process.env.BASE_URL + "/__rollout", { method: "POST", body: JSON.stringify({ sha }) });
   if (!response.ok) process.exit(3);
+  console.log(JSON.stringify({ rollback: "restored", imageSha: sha }));
 } else {
-  if (!command.includes(".staging-successful-image-tag")) process.exit(4);
-  const response = await fetch(process.env.BASE_URL + "/__persist", { method: "POST" });
-  if (!response.ok) process.exit(5);
+  process.exit(4);
 }
 })().catch(() => process.exit(6));
 `, { mode: 0o755 });
@@ -321,7 +326,10 @@ if (command === "sudo bash -s") {
     STAGING_HALL_ROOM_ID: "hall", STAGING_BLUEOFFICE_ROOM_ID: "blue",
     STAGING_APP_DIR: dir, STAGING_SSH_HOST: "mock", STAGING_SSH_USER: "mock",
     YCR_PASSWORD: "test-only-password", YCR_USERNAME: "mock", PRIVATE_SCENE_ASSETS_HOST_DIR: dir,
-    DEPLOY_SHA: B, ROLLBACK_SHA: A, GITHUB_STEP_SUMMARY: join(dir, "summary.md"),
+    DEPLOY_SHA: B, SHA: B, ROLLBACK_SHA: A, GITHUB_STEP_SUMMARY: join(dir, "summary.md"),
+    GITHUB_ENV: join(dir, "github-env"), GITHUB_SHA: B, GITHUB_RUN_ID: "123", GITHUB_RUN_ATTEMPT: "1",
+    REMOTE_HELPERS: join(dir, "vrata-scene-rollback"), REMOTE_SOURCE: dir,
+    REMOTE_POINTER_SNAPSHOT: join(dir, "remote-scene-urls.json"),
     STAGING_SCENE_BUNDLE_VERSION: B, STAGING_ASSET_BASE_URL: `${baseUrl}/bundles`,
     STAGING_SCENE_BUNDLE_PATCH_REPORT: join(dir, "post-rollout.json")
   };
@@ -338,13 +346,15 @@ test("actual workflow commands restore the pre-rollout URLs after A -> B -> fail
   const lateReport = JSON.parse(await readFile(f.env.STAGING_SCENE_BUNDLE_PATCH_REPORT, "utf8"));
   assert.ok(lateReport.rooms.every((room) => room.previousSceneBundleUrl.includes(B)));
   const before = await readFile(join(f.dir, "vrata-scene-bundle-snapshot.json"), "utf8");
+  assert.equal(await readFile(f.env.REMOTE_POINTER_SNAPSHOT, "utf8"), before);
   f.events.length = 0;
   const result = await f.run("Roll back failed deploy");
   assert.match(result.stdout, /scene_snapshot_restore_verified:2/);
   assert.deepEqual([...f.state.values()], f.originals);
   assert.equal(await readFile(join(f.dir, "vrata-scene-bundle-snapshot.json"), "utf8"), before);
   assert.equal(f.events[0], "POST:/__rollout");
-  assert.deepEqual(f.events.slice(-4), ["GET:/health", "GET:/rooms/demo-room", "GET:/control-plane", "POST:/__persist"]);
+  assert.deepEqual(f.events.slice(-3), ["GET:/health", "GET:/rooms/demo-room", "GET:/control-plane"]);
+  assert.equal(f.events.includes("POST:/__persist"), false, "rollback must preserve the accepted manifest");
   assert.ok(f.events.findIndex((event) => event === "GET:/health") > f.events.findLastIndex((event) => event.startsWith("PATCH:")));
   await assert.rejects(f.run("Fail after rollback"), { code: 1 });
 });

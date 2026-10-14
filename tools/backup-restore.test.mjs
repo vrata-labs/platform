@@ -10,6 +10,7 @@ import {
   createBackupManifest,
   createTempBackupDir,
   findPruneCandidates,
+  findVerifiedPruneCandidates,
   main,
   parseBackupRestoreArgs,
   formatBackupManifestIssues,
@@ -27,6 +28,14 @@ function writeSampleBackupFiles(backupDir) {
   writeFileSync(join(backupDir, "minio", "objects.jsonl"), "{\"key\":\"scenes/demo/scene.json\"}\n");
   writeFileSync(join(backupDir, "minio", "objects", "scenes", "demo", "scene.json"), "{\"glbPath\":\"scene.glb\"}\n");
 }
+
+test("backup accepts a pinned foundation override without losing the primary compose file", () => {
+  const parsed = parseBackupRestoreArgs(["backup", "--compose-file", "infra/docker/compose.staging.yml",
+    "--compose-file", "private/minio.override.json", "--image-tag", "a".repeat(40)]);
+  assert.equal(parsed.options["compose-file"], "infra/docker/compose.staging.yml");
+  assert.deepEqual(parsed.options["compose-files"], ["infra/docker/compose.staging.yml", "private/minio.override.json"]);
+  assert.equal(parsed.options["image-tag"], "a".repeat(40));
+});
 
 test("backup manifest validation accepts complete artifacts", async () => {
   const backupDir = createTempBackupDir();
@@ -226,6 +235,35 @@ test("backup CLI parser ignores pnpm argument separator", () => {
   const parsed = parseBackupRestoreArgs(["backup", "--", "--env-file", "infra/docker/.env.selfhost"]);
   assert.equal(parsed.command, "backup");
   assert.equal(parsed.options["env-file"], "infra/docker/.env.selfhost");
+});
+
+test("backup retention needs two newer checksum-verified copies and preserves damaged backups", async () => {
+  const outputDir = createTempBackupDir();
+  try {
+    const paths = [];
+    for (let day = 1; day <= 4; day += 1) {
+      const backupDir = join(outputDir, `vrata-copy-${day}`);
+      mkdirSync(backupDir);
+      writeSampleBackupFiles(backupDir);
+      const manifest = await createBackupManifest({ backupDir,
+        source: { imageTag: "a".repeat(40), composeFile: "compose.staging.yml",
+          composeFiles: ["compose.staging.yml", "minio.override.json"] },
+        createdAt: `2026-01-0${day}T00:00:00.000Z` });
+      writeFileSync(join(backupDir, "manifest.json"), JSON.stringify(manifest));
+      assert.equal((await validateBackupManifest(manifest, { backupDir })).ok, true);
+      const date = new Date(manifest.createdAt);
+      utimesSync(backupDir, date, date);
+      paths.push(backupDir);
+    }
+    const now = Date.parse("2026-06-19T00:00:00.000Z");
+    assert.deepEqual(await findVerifiedPruneCandidates(outputDir, 14, now), paths.slice(0, 2));
+    writeFileSync(join(paths[3], "postgres.sql"), "corrupted");
+    assert.deepEqual(await findVerifiedPruneCandidates(outputDir, 14, now), paths.slice(0, 1));
+    writeFileSync(join(paths[2], "postgres.sql"), "corrupted");
+    assert.deepEqual(await findVerifiedPruneCandidates(outputDir, 14, now), []);
+  } finally {
+    rmSync(outputDir, { recursive: true, force: true });
+  }
 });
 
 test("rollback preflight requires smoke URL before editing env file", async () => {

@@ -1,6 +1,7 @@
 services:
   postgres:
-    image: postgres:16
+    image: postgres:16@sha256:ca0bd484cb98bf4b24eb1010e73fb3fcbd6714d240fbc1a10eea5b7dbecb641d
+    restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
@@ -14,7 +15,8 @@ services:
       retries: 10
 
   livekit:
-    image: livekit/livekit-server:latest
+    image: livekit/livekit-server:v1.13.9@sha256:d0c04791bf63ca8dcea123571827d56ba9504bd57c8d5de60ee03b5408cc3154
+    restart: unless-stopped
     networks: [default, remote-browser-internal]
     command:
       - --bind
@@ -33,20 +35,20 @@ services:
         turn:
           enabled: ${LIVEKIT_TURN_ENABLED:-false}
           domain: ${LIVEKIT_TURN_DOMAIN:-turn.invalid}
-          tls_port: ${LIVEKIT_TURN_TLS_PORT:-5349}
+          tls_port: 0
           udp_port: ${LIVEKIT_TURN_UDP_PORT:-3478}
           relay_range_start: ${LIVEKIT_TURN_RELAY_RANGE_START:-50000}
           relay_range_end: ${LIVEKIT_TURN_RELAY_RANGE_END:-50100}
-          external_tls: ${LIVEKIT_TURN_EXTERNAL_TLS:-true}
+          external_tls: false
     ports:
-      - "${VRATA_LIVEKIT_PORT}:7880"
+      - "127.0.0.1:${VRATA_LIVEKIT_PORT}:7880"
       - "${VRATA_LIVEKIT_TCP_PORT:-7881}:${VRATA_LIVEKIT_TCP_PORT:-7881}/tcp"
       - "${VRATA_LIVEKIT_UDP_PORT}:${VRATA_LIVEKIT_UDP_PORT}/udp"
-      - "${LIVEKIT_TURN_TLS_PORT:-5349}:${LIVEKIT_TURN_TLS_PORT:-5349}/tcp"
       - "${LIVEKIT_TURN_UDP_PORT:-3478}:${LIVEKIT_TURN_UDP_PORT:-3478}/udp"
       - "${LIVEKIT_TURN_RELAY_RANGE_START:-50000}-${LIVEKIT_TURN_RELAY_RANGE_END:-50100}:${LIVEKIT_TURN_RELAY_RANGE_START:-50000}-${LIVEKIT_TURN_RELAY_RANGE_END:-50100}/udp"
 
   room-state:
+    restart: unless-stopped
     image: ${ROOM_STATE_IMAGE_REPO}:${IMAGE_TAG}
     networks: [default, remote-browser-internal]
     build:
@@ -57,15 +59,16 @@ services:
       ROOM_STATE_PORT: 2567
       API_INTERNAL_URL: http://api:4000
       STATE_TOKEN_SECRET: ${STATE_TOKEN_SECRET:?STATE_TOKEN_SECRET is required}
-      VRATA_INTERNAL_SERVICE_TOKEN: ${VRATA_INTERNAL_SERVICE_TOKEN:-dev-internal-service-token}
+      VRATA_INTERNAL_SERVICE_TOKEN: ${VRATA_INTERNAL_SERVICE_TOKEN:?VRATA_INTERNAL_SERVICE_TOKEN is required}
       REMOTE_BROWSER_INTERNAL_TOKEN: ${REMOTE_BROWSER_INTERNAL_TOKEN:-dev-remote-browser-internal-token}
       VRATA_DEV_ROLE_QUERY: ${VRATA_DEV_ROLE_QUERY:-true}
       REMOTE_BROWSER_ENABLED: ${REMOTE_BROWSER_ENABLED:-true}
       REMOTE_BROWSER_INTERNAL_URL: http://remote-browser:4010
     ports:
-      - "${VRATA_ROOM_STATE_PORT}:2567"
+      - "127.0.0.1:${VRATA_ROOM_STATE_PORT}:2567"
 
   remote-browser:
+    restart: unless-stopped
     image: ${REMOTE_BROWSER_IMAGE_REPO}:${IMAGE_TAG}
     networks: [remote-browser-internal]
     build:
@@ -79,7 +82,7 @@ services:
       REMOTE_BROWSER_ENABLED: ${REMOTE_BROWSER_ENABLED:-true}
       REMOTE_BROWSER_PORT: 4010
       REMOTE_BROWSER_TOKEN_SECRET: ${REMOTE_BROWSER_TOKEN_SECRET:-dev-remote-browser-secret}
-      VRATA_INTERNAL_SERVICE_TOKEN: ${VRATA_INTERNAL_SERVICE_TOKEN:-dev-internal-service-token}
+      VRATA_INTERNAL_SERVICE_TOKEN: ${VRATA_INTERNAL_SERVICE_TOKEN:?VRATA_INTERNAL_SERVICE_TOKEN is required}
       REMOTE_BROWSER_INTERNAL_TOKEN: ${REMOTE_BROWSER_INTERNAL_TOKEN:-dev-remote-browser-internal-token}
       API_INTERNAL_URL: http://api:4000
       ROOM_STATE_INTERNAL_URL: http://room-state:2567
@@ -95,14 +98,15 @@ services:
       retries: 10
 
   minio:
+    restart: unless-stopped
     image: quay.io/minio/minio:RELEASE.2025-02-28T09-55-16Z@sha256:a929054ae025fa7997857cd0e2a2e3029238e31ad89877326dc032f4c1a14259
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
     ports:
-      - "${MINIO_API_PORT}:9000"
-      - "${MINIO_CONSOLE_PORT}:9001"
+      - "127.0.0.1:${MINIO_API_PORT}:9000"
+      - "127.0.0.1:${MINIO_CONSOLE_PORT}:9001"
     volumes:
       - minio-data:/data
 
@@ -125,6 +129,7 @@ services:
     restart: "no"
 
   api:
+    restart: unless-stopped
     image: ${API_IMAGE_REPO}:${IMAGE_TAG}
     networks: [default, remote-browser-internal]
     build:
@@ -158,7 +163,7 @@ services:
       LIVEKIT_ROOM_PREFIX: ${LIVEKIT_ROOM_PREFIX}
       LIVEKIT_TURN_ENABLED: ${LIVEKIT_TURN_ENABLED:-false}
       LIVEKIT_TURN_DOMAIN: ${LIVEKIT_TURN_DOMAIN:-}
-      LIVEKIT_TURN_TLS_PORT: ${LIVEKIT_TURN_TLS_PORT:-}
+      LIVEKIT_TURN_TLS_PORT: ""
       LIVEKIT_TURN_UDP_PORT: ${LIVEKIT_TURN_UDP_PORT:-}
       LIVEKIT_TURN_RELAY_RANGE_START: ${LIVEKIT_TURN_RELAY_RANGE_START:-}
       LIVEKIT_TURN_RELAY_RANGE_END: ${LIVEKIT_TURN_RELAY_RANGE_END:-}
@@ -168,7 +173,7 @@ services:
       STATE_TOKEN_SECRET: ${STATE_TOKEN_SECRET:?STATE_TOKEN_SECRET is required}
       VRATA_IDENTITY_PROXY_TOKEN: ${VRATA_IDENTITY_PROXY_TOKEN:?VRATA_IDENTITY_PROXY_TOKEN is required}
       REMOTE_BROWSER_TOKEN_SECRET: ${REMOTE_BROWSER_TOKEN_SECRET:-dev-remote-browser-secret}
-      VRATA_INTERNAL_SERVICE_TOKEN: ${VRATA_INTERNAL_SERVICE_TOKEN:-dev-internal-service-token}
+      VRATA_INTERNAL_SERVICE_TOKEN: ${VRATA_INTERNAL_SERVICE_TOKEN:?VRATA_INTERNAL_SERVICE_TOKEN is required}
       REMOTE_BROWSER_INTERNAL_TOKEN: ${REMOTE_BROWSER_INTERNAL_TOKEN:-dev-remote-browser-internal-token}
       REMOTE_BROWSER_TOKEN_TTL_SECONDS: ${REMOTE_BROWSER_TOKEN_TTL_SECONDS:-300}
       REMOTE_BROWSER_PUBLIC_URL: ${REMOTE_BROWSER_PUBLIC_URL}
@@ -198,10 +203,11 @@ services:
       SCENE_BUNDLE_S3_SECRET_ACCESS_KEY: ${SCENE_BUNDLE_S3_SECRET_ACCESS_KEY:-}
       FEATURE_AVATAR_POSE_BINARY: ${FEATURE_AVATAR_POSE_BINARY:-true}
     ports:
-      - "${VRATA_API_DIRECT_PORT}:4000"
+      - "127.0.0.1:${VRATA_API_DIRECT_PORT}:4000"
 
   caddy:
-    image: caddy:2-alpine
+    image: caddy:2-alpine@sha256:d8542f48d34a9cf4e4c11a478865229840e87e4c96ea3f439101f31a5d35f75f
+    restart: unless-stopped
     networks: [default, remote-browser-internal]
     depends_on:
       api:
@@ -218,9 +224,11 @@ services:
       VRATA_BROWSER_DOMAIN: ${VRATA_BROWSER_DOMAIN}
       VRATA_STORAGE_DOMAIN: ${VRATA_STORAGE_DOMAIN}
       VRATA_IDENTITY_PROXY_TOKEN: ${VRATA_IDENTITY_PROXY_TOKEN:?VRATA_IDENTITY_PROXY_TOKEN is required}
+      VRATA_STAGING_SCENE_ROOT: ${VRATA_STAGING_SCENE_ROOT:-/srv/runtime-public}
     volumes:
       - ${CADDY_CONFIG_FILE}:/etc/caddy/Caddyfile:ro
       - ../../apps/runtime-web/public:/srv/runtime-public:ro
+      - ${VRATA_STAGING_STATE_DIR:-../../.cache/staging-state}:/srv/staging-state:ro
       - caddy-data:/data
       - caddy-config:/config
 

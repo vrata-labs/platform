@@ -7,6 +7,7 @@ The original Compose file is restored even if rollout fails or receives SIGTERM/
 """
 
 import os
+import json
 from pathlib import Path
 import re
 import signal
@@ -50,12 +51,19 @@ def replace_file(path: Path, content: bytes, mode: int) -> None:
 
 
 def main() -> int:
+    if len(sys.argv) == 3 and sys.argv[1] == "write-override":
+        override = {"services": {"minio": {"image": PINNED_MINIO}, "minio-bootstrap": {"image": PINNED_MC}}}
+        path = Path(sys.argv[2])
+        path.write_text(json.dumps(override, sort_keys=True, indent=2) + "\n")
+        path.chmod(0o600)
+        return 0
     if len(sys.argv) != 3 or not re.fullmatch(r"[0-9a-f]{40}", sys.argv[2]):
         raise SystemExit("usage: staging-minio-rollout.py <rollout-staging-images.sh> <full-image-sha>")
     script = Path(sys.argv[1]).resolve(strict=True)
     if script.name != "rollout-staging-images.sh":
         raise SystemExit("unexpected_staging_rollout_script")
-    compose = script.with_name("compose.staging.yml")
+    compose = (Path(os.environ["VRATA_STAGING_APP_DIR"]) / "infra/docker/compose.staging.yml"
+               if os.environ.get("VRATA_STAGING_APP_DIR") else script.with_name("compose.staging.yml"))
     original = compose.read_bytes()
     mode = stat.S_IMODE(compose.stat().st_mode)
     translated = compatible_compose(original)

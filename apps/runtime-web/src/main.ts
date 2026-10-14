@@ -41,7 +41,6 @@ import {
 
 import { appendBrandingSuffix, applyRoomShellBootState, renderSceneAttributions } from "./boot-session.js";
 import { RuntimeAccessError, bootRuntime, deleteRoomDocument, downloadRoomDocument, exportRoomNote, exportRoomNotesArchive, fetchRoomDocumentMediaContent, fetchRoomDocumentPresentation, fetchRoomNote, fetchRoomSessionControl, fetchRuntimeSpaces, fetchStateToken, grantRoomPresenter, listPresence, listRoomDocuments, listRoomNoteVersions, openPersonalRoom, planVoiceSession, removePresence, removeRoomParticipant, resolveCurrentSpace, resolveJoinMode, restoreRoomNoteVersion, revokeRoomPresenter, runRoomSessionControlAction, savePersonalRoomState, saveRoomNote, selectRoomDocumentSurface, transferRoomHost, transferRoomOwner, uploadRoomDocument, upsertPresence, type PresenceState, type RuntimeDocumentRecord, type RuntimePersonalState, type RuntimeSessionControlResponse, type RuntimeSpaceOption } from "./index.js";
-import { canManageRoomControls, canTransferRoomOwnership, staleAuthorityResponse } from "./room-owner-controls.js";
 import { createSessionControlPoller } from "./session-control-poller.js";
 import { createMediaSourceUpgrade, permitsScreenShare } from "./media/media-source-upgrade.js";
 import { createMediaActionBarrier } from "./media/media-action-barrier.js";
@@ -198,10 +197,17 @@ import { createRemoteBrowserVideoRuntime, type RemoteBrowserVideoEntry } from ".
 import { createScreenShareRuntime, resolveScreenShareSubscriptionCount, type ScreenShareRuntimeEntry } from "./media/screen-share-runtime.js";
 import { createMediaSurfaceAudioRuntime, type MediaSurfaceAudioNode } from "./media/media-surface-audio-runtime.js";
 import { createDocumentSurfaceActions } from "./document-surface-actions.js";
-import { createDocumentFeedback } from "./document-feedback.js";
-import { createDocumentLibraryActions } from "./document-library-actions.js";
 import { runtimeFetch as fetch, runtimeSessionGate, SessionUpgradeError, describeIdentityRequirement } from "./session-upgrade.js";
 import { mountSessionUpgradeUi } from "./session-upgrade-ui.js";
+import { createHostControlsRuntime, SESSION_CONTROL_REFRESH_INTERVAL_MS } from "./host-controls-runtime.js";
+import { bindHostControls } from "./host-control-bindings.js";
+import { describeRoomAccessError, describeSessionControlReason } from "./room-access-messages.js";
+import { createDocumentLibraryRuntime } from "./document-library-runtime.js";
+import { createDocumentSurfaceView } from "./document-surface-view.js";
+import { bindDocumentControls } from "./document-control-bindings.js";
+
+import { createRuntimeDiagnostics } from "./runtime-diagnostics.js";
+import { createXrTelemetryReporter } from "./xr-telemetry-reporter.js";
 
 function fallbackUuid(): string {
   return `guest-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
@@ -600,7 +606,6 @@ const bodyGeometry = new THREE.CapsuleGeometry(0.24, 0.8, 6, 12);
 const headGeometry = new THREE.SphereGeometry(0.18, 20, 20);
 const API_PRESENCE_SYNC_INTERVAL_MS = 1000;
 const API_PRESENCE_REFRESH_INTERVAL_MS = 1000;
-const SESSION_CONTROL_REFRESH_INTERVAL_MS = 1000;
 const XR_REMOTE_BROWSER_SCROLL_AXIS_THRESHOLD = 0.22;
 const XR_REMOTE_BROWSER_SCROLL_INTERVAL_MS = 80;
 const XR_REMOTE_BROWSER_SCROLL_DELTA_PX = 360;
@@ -680,8 +685,15 @@ let xrSelectPressedLastFrame = false;
 let xrSelectEventPending = false;
 let xrSelectEventCount = 0;
 let xrRayVisibleLatched = false;
-let lastXrTelemetryReportAt = 0;
-let lastXrTelemetryKinds: string[] = [];
+const { markXrTelemetry, reportXrTelemetry } = createXrTelemetryReporter({
+  fetch, sessionGate: runtimeSessionGate,
+  apiBaseUrl, roomId, renderer, avatarVrMockEnabled, localPoseController,
+  get participantId() { return participantId; },
+  get roomStateAccessToken() { return roomStateAccessToken; },
+  get syntheticXrState() { return syntheticXrState; },
+  get xrSelectEventCount() { return xrSelectEventCount; },
+  get debugState() { return debugState; }
+});
 let audioContext: AudioContext | null = null;
 let spatialAudioServerEnabled = true;
 let spatialAudioRoomEnabled = true;
@@ -1240,10 +1252,7 @@ let joinMutedPreference = templatePreferences.joinMuted();
 const notesState = createNotesRuntimeState(templatePreferences.notesScope());
 let roomDocuments: RuntimeDocumentRecord[] = [];
 let selectedDocumentId = getStoredValue(localStorage, `vrata.documents.selected.${roomId}`, `noah.documents.selected.${roomId}`) ?? "";
-let documentsLoading = false;
-let documentUploadInFlight = false;
 let presentationActionInFlight = false;
-let presentationThumbnailSignature = "";
 joinMutedCheckbox.checked = joinMutedPreference;
 guestJoinMutedCheckbox.checked = templatePreferences.joinMuted(true);
 notesScopeSelect.value = notesState.activeNotesScope;
@@ -1383,11 +1392,21 @@ let effectiveCleanSceneMode = requestedCleanSceneMode;
 let activeSceneRenderProfile: SceneBundleRenderProfile | undefined;
 let pbrRoomEnvironment: PbrRoomEnvironment | null = null;
 let availableSpaces: RuntimeSpaceOption[] = [];
-let latestSessionControl: RuntimeSessionControlResponse["state"] | null = null;
-let latestIdentityAuthorityRevision: number | null = null;
-let hostControlActionInFlight = false;
-let sessionControlRefreshInFlight = false;
-let lastSessionControlRefreshAtMs = 0;
+const { renderHostControls, refreshSessionControl, runHostControlAction, canManageHostControls, authorityRevision } = createHostControlsRuntime({
+  apiBaseUrl, roomId,
+  get participantId() { return participantId; },
+  get debugState() { return debugState; },
+  get roomStateAccessToken() { return roomStateAccessToken; },
+  get runtimeFlags() { return runtimeFlags; },
+  get latestRealtimeParticipants() { return latestRealtimeParticipants; },
+  get latestFallbackParticipants() { return latestFallbackParticipants; },
+  get sessionControlBlocked() { return sessionControlBlocked; },
+  get activeIdentityProtocolVersion() { return activeIdentityProtocolVersion; },
+  hostControlsEl, hostControlsStatusEl, presenterLineEl, hostParticipantSelect,
+  lockRoomButton, unlockRoomButton, endSessionButton, removeParticipantButton,
+  transferHostButton, transferOwnerButton, grantPresenterButton, revokePresenterButton,
+  fetchRoomSessionControl, applyAccessDebug, disableRuntimeForSessionBlock
+});
 let sessionControlBlocked = false;
 const remoteAvatarRuntime = createRemoteAvatarRuntime({
   scene,
@@ -1629,86 +1648,6 @@ function applyMergedPresenceParticipants(): void {
   renderHostControls();
 }
 
-function canManageHostControls(): boolean {
-  return canManageRoomControls({ enabled: runtimeFlags.hostControlsEnabled,
-    canManageSession: debugState.access.canManageRoomSession === true,
-    identityProtocolVersion: activeIdentityProtocolVersion,
-    roomType: debugState.personalRoom.roomType, isOwner: debugState.personalRoom.isOwner });
-}
-
-function currentVisibleParticipants(): PresenceState[] {
-  return mergePresenceSources(latestRealtimeParticipants, latestFallbackParticipants)
-    .sort((left, right) => (left.displayName || left.participantId).localeCompare(right.displayName || right.participantId));
-}
-
-function renderHostControls(statusMessage?: string): void {
-  const visible = canManageHostControls() && latestSessionControl?.endedAt == null;
-  hostControlsEl.hidden = !visible;
-  debugState.hostControls.enabled = runtimeFlags.hostControlsEnabled;
-  debugState.hostControls.visible = visible;
-  debugState.hostControls.locked = Boolean(latestSessionControl?.lockedAt);
-  debugState.hostControls.ended = Boolean(latestSessionControl?.endedAt);
-  debugState.hostControls.hostParticipantId = latestSessionControl?.hostParticipantId ?? null;
-  debugState.hostControls.presenterParticipantId = latestSessionControl?.presenterParticipantId ?? null;
-  const presenterParticipantId = latestSessionControl?.presenterParticipantId ?? null;
-  const presenterParticipant = presenterParticipantId ? currentVisibleParticipants().find((item) => item.participantId === presenterParticipantId) : null;
-  presenterLineEl.textContent = presenterParticipantId
-    ? `Presenter: ${presenterParticipant?.displayName || presenterParticipantId}`
-    : "Presenter: none";
-  if (statusMessage) {
-    hostControlsStatusEl.textContent = statusMessage;
-    debugState.hostControls.status = statusMessage;
-  } else if (visible) {
-    const state = latestSessionControl?.lockedAt ? "locked" : "open";
-    hostControlsStatusEl.textContent = `Room ${state}${latestSessionControl?.hostParticipantId ? `; host ${latestSessionControl.hostParticipantId}` : ""}${presenterParticipantId ? `; presenter ${presenterParticipantId}` : ""}`;
-    debugState.hostControls.status = hostControlsStatusEl.textContent;
-  }
-
-  const previousSelection = hostParticipantSelect.value;
-  hostParticipantSelect.replaceChildren();
-  const participants = currentVisibleParticipants();
-  for (const participant of participants) {
-    const option = document.createElement("option");
-    option.value = participant.participantId;
-    option.textContent = `${participant.displayName || participant.participantId} (${participant.role ?? "guest"})`;
-    option.selected = participant.participantId === previousSelection;
-    hostParticipantSelect.appendChild(option);
-  }
-  if (presenterParticipantId && !participants.some((participant) => participant.participantId === presenterParticipantId)) {
-    const option = document.createElement("option");
-    option.value = presenterParticipantId;
-    option.textContent = `${presenterParticipantId} (presenter offline)`;
-    option.selected = presenterParticipantId === previousSelection;
-    hostParticipantSelect.appendChild(option);
-  }
-  if (participants.length === 0 && !presenterParticipantId) {
-    const option = document.createElement("option");
-    option.value = "";
-    option.textContent = "No participants";
-    hostParticipantSelect.appendChild(option);
-  }
-  const selected = hostParticipantSelect.value || participants[0]?.participantId || "";
-  if (selected) {
-    hostParticipantSelect.value = selected;
-  }
-  debugState.hostControls.selectedParticipantId = selected || null;
-  const selectedIsPresent = participants.some((participant) => participant.participantId === selected);
-
-  hostParticipantSelect.disabled = !visible || (!participants.length && !presenterParticipantId) || hostControlActionInFlight;
-  lockRoomButton.disabled = !visible || Boolean(latestSessionControl?.lockedAt) || hostControlActionInFlight;
-  unlockRoomButton.disabled = !visible || !latestSessionControl?.lockedAt || hostControlActionInFlight;
-  endSessionButton.disabled = !visible || hostControlActionInFlight;
-  removeParticipantButton.disabled = !visible || !selected || !selectedIsPresent || selected === participantId || hostControlActionInFlight;
-  transferHostButton.disabled = !visible || !selected || !selectedIsPresent || selected === latestSessionControl?.hostParticipantId || hostControlActionInFlight;
-  transferOwnerButton.hidden = !(activeIdentityProtocolVersion === 2 && debugState.personalRoom.roomType === "personal" && debugState.personalRoom.isOwner);
-  transferOwnerButton.disabled = !canTransferRoomOwnership({ controlsVisible: visible,
-    identityProtocolVersion: activeIdentityProtocolVersion, roomType: debugState.personalRoom.roomType,
-    isOwner: debugState.personalRoom.isOwner, selectedParticipantId: selected, localParticipantId: participantId,
-    selectedIsPresent, authorityRevision: latestIdentityAuthorityRevision, actionInFlight: hostControlActionInFlight });
-  grantPresenterButton.disabled = !visible || !selected || !selectedIsPresent || selected === presenterParticipantId || hostControlActionInFlight;
-  revokePresenterButton.disabled = !visible || !selected || selected !== presenterParticipantId || hostControlActionInFlight;
-}
-
 function applyAccessDebug(access: NonNullable<RuntimeSessionControlResponse["access"]>, token: string, expiresInSeconds?: number): void {
   if (sessionControlBlocked) return;
   const previousRole = debugState.access.role;
@@ -1734,8 +1673,8 @@ function applyAccessDebug(access: NonNullable<RuntimeSessionControlResponse["acc
     connectRoomStateWithRetry(debugState.roomStateUrl);
   }
   if ((previouslyCouldUploadDocuments && !canUploadDocuments()) || (previouslyCouldViewDocuments && !canViewDocuments())) {
-    documentLibraryActions.invalidate();
-    documentFeedback.clear();
+    invalidateDocumentLibrary();
+    clearDocumentFeedback();
     if (canViewDocuments()) void loadRoomDocuments();
   }
   syncMediaCapabilityControls();
@@ -1772,8 +1711,8 @@ function disableRuntimeForSessionBlock(reason: string): void {
   mediaSurfaceCommands.rejectAll("room_session_blocked");
   cancelPendingNotes();
   syncNotesAccessUi();
-  documentLibraryActions.invalidate();
-  documentFeedback.clear();
+  invalidateDocumentLibrary();
+  clearDocumentFeedback();
   renderDocumentsUi();
   setStatus(message);
   guestAccessLineEl.textContent = message;
@@ -1793,54 +1732,12 @@ function disableRuntimeForSessionBlock(reason: string): void {
   renderHostControls(message);
 }
 
-function applySessionControlResponse(payload: RuntimeSessionControlResponse, statusMessage?: string): void {
-  if (sessionControlBlocked) return;
-  if (payload.participant?.status === "blocked" && payload.participant.reason) {
-    disableRuntimeForSessionBlock(payload.participant.reason);
-    return;
-  }
-  const responseRevision = payload.authorityRevision ?? payload.revision;
-  if (staleAuthorityResponse(latestIdentityAuthorityRevision, responseRevision)) return;
-  if (responseRevision !== undefined && Number.isSafeInteger(responseRevision) && responseRevision >= 0) {
-    latestIdentityAuthorityRevision = responseRevision;
-  }
-  latestSessionControl = payload.state;
-  if (activeIdentityProtocolVersion === 2 && debugState.personalRoom.roomType === "personal") {
-    if ("ownerParticipantId" in payload) {
-      debugState.personalRoom.ownerParticipantId = payload.ownerParticipantId ?? null;
-      debugState.personalRoom.isOwner = payload.ownerParticipantId === participantId;
-    } else if (payload.participant?.isOwner !== undefined) {
-      debugState.personalRoom.isOwner = payload.participant.isOwner;
-    }
-  }
-  if (payload.access && payload.token) {
-    applyAccessDebug(payload.access, payload.token, payload.expiresInSeconds);
-  }
-  renderHostControls(statusMessage);
-}
-
 const sessionControlPoller = createSessionControlPoller({ intervalMs: SESSION_CONTROL_REFRESH_INTERVAL_MS,
   refresh: () => refreshSessionControl() });
 window.addEventListener("pagehide", () => sessionControlPoller.stop());
 window.addEventListener("pageshow", event => {
   if (event.persisted && !sessionControlBlocked && !runtimeSessionGate.reason) sessionControlPoller.start();
 });
-
-async function refreshSessionControl(force = false): Promise<void> {
-  const nowMs = Date.now();
-  if (sessionControlBlocked || !runtimeFlags.hostControlsEnabled || !roomStateAccessToken || sessionControlRefreshInFlight || (!force && nowMs - lastSessionControlRefreshAtMs < SESSION_CONTROL_REFRESH_INTERVAL_MS)) {
-    return;
-  }
-  sessionControlRefreshInFlight = true;
-  lastSessionControlRefreshAtMs = nowMs;
-  try {
-    applySessionControlResponse(await fetchRoomSessionControl(apiBaseUrl, roomId, roomStateAccessToken));
-  } catch (error) {
-    console.warn("session_control_refresh_failed", error);
-  } finally {
-    sessionControlRefreshInFlight = false;
-  }
-}
 
 function startIdentitySessionRenewal(expiresInSeconds: number): void {
   if (activeIdentityProtocolVersion !== 2) return;
@@ -1892,23 +1789,6 @@ function startIdentitySessionRenewal(expiresInSeconds: number): void {
       }
     })();
   }, 60_000);
-}
-
-async function runHostControlAction(action: () => Promise<RuntimeSessionControlResponse>, statusMessage: string): Promise<void> {
-  if (hostControlActionInFlight) {
-    return;
-  }
-  hostControlActionInFlight = true;
-  renderHostControls("Applying host action...");
-  try {
-    applySessionControlResponse(await action(), statusMessage);
-  } catch (error) {
-    console.error(error);
-    renderHostControls("Host action failed");
-  } finally {
-    hostControlActionInFlight = false;
-    renderHostControls();
-  }
 }
 
 function clearInteractionVisuals(): void {
@@ -4354,293 +4234,51 @@ function downloadBlob(blob: Blob, filename: string): void {
   window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
 }
 
-function canViewDocuments(): boolean {
-  return !sessionControlBlocked && runtimeFlags.documentsEnabled && hasRoomPermission(debugState.access.permissions, "document.view");
-}
-
-function canUploadDocuments(): boolean {
-  return canViewDocuments() && hasRoomPermission(debugState.access.permissions, "document.upload");
-}
-
-function canDownloadDocuments(): boolean {
-  return canViewDocuments() && hasRoomPermission(debugState.access.permissions, "document.download");
-}
-
-function canDeleteDocuments(): boolean {
-  return canViewDocuments() && hasRoomPermission(debugState.access.permissions, "document.delete");
-}
-
-function canPresentDocuments(): boolean {
-  return canViewDocuments() && roomStateConnected && hasRoomPermission(debugState.access.permissions, "document.present");
-}
-
-function selectedDocument(): RuntimeDocumentRecord | null {
-  return roomDocuments.find((document) => document.documentId === selectedDocumentId) ?? roomDocuments[0] ?? null;
-}
-
-function documentErrorCode(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
-  return message.split(":").slice(0, 3).join(":") || "document_error";
-}
-
-const documentFeedback = createDocumentFeedback();
-
-function setDocumentStatus(message: string, errorCode: string | null = null): void {
-  documentFeedback.set(message, errorCode);
-  renderDocumentStatus();
-}
-
-function renderDocumentStatus(): void {
-  const { message, errorCode } = documentFeedback.read({
-    visible: canViewDocuments(), enabled: runtimeFlags.documentsEnabled,
-    uploading: documentUploadInFlight, loading: documentsLoading, count: roomDocuments.length
-  });
-  documentStatusEl.textContent = message;
-  const selected = selectedDocument();
-  debugState.documents = {
-    enabled: runtimeFlags.documentsEnabled,
-    count: roomDocuments.length,
-    selectedDocumentId: selected?.documentId ?? "",
-    selectedFilename: selected?.filename ?? null,
-    selectedSurfaceId: selected?.linkedSurfaceId ?? null,
-    lastStatus: message,
-    errorCode
-  };
-}
-
-function presentationInputEventId(kind: string): string {
-  return `${participantId}:pdf-presentation:${kind}:${Date.now()}:${Math.random().toString(16).slice(2)}`;
-}
-
-function documentMediaInputEventId(kind: string): string {
-  return `${participantId}:document-media:${kind}:${Date.now()}:${Math.random().toString(16).slice(2)}`;
-}
-
-function formatMediaTime(milliseconds: number): string {
-  const seconds = Math.max(0, Math.round(milliseconds / 1000));
-  return `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
-}
-
-function currentVideoPositionMs(state: VideoPlayerState): number {
-  const elapsed = state.playbackState === "playing" && state.anchorServerTimeMs !== null
-    ? Math.max(0, Date.now() + roomStateServerOffsetMs - state.anchorServerTimeMs)
-    : 0;
-  const position = state.positionMs + elapsed;
-  return state.loop && state.durationMs > 0 ? position % state.durationMs : Math.min(position, state.durationMs);
-}
-
-function renderDocumentMediaControls(): void {
-  const image = currentImageViewerObject();
-  const video = currentVideoPlayerObject();
-  const object = video ?? image;
-  const active = Boolean(object?.state.status === "active" && object.state.documentId);
-  documentMediaControlsEl.hidden = !active;
-  if (!object || !active) {
-    documentMediaStatusEl.textContent = "Media idle";
-    return;
-  }
-  const canPresent = canPresentDocuments() && !presentationActionInFlight;
-  const state = object.state;
-  documentMediaTitleEl.textContent = `${video ? "Video" : "Image"}: ${state.filename ?? "media"}`;
-  documentMediaFitButton.disabled = !canPresent;
-  documentMediaFitButton.textContent = state.fitMode === "contain" ? "Cover" : "Contain";
-  documentMediaStopButton.disabled = !canPresent;
-  documentMediaPlayButton.hidden = !video;
-  documentMediaLoopLabel.hidden = !video;
-  documentMediaSeekInput.hidden = !video;
-  documentMediaTimeEl.hidden = !video;
-  documentMediaPlayButton.disabled = !canPresent || !video;
-  documentMediaLoopInput.disabled = !canPresent || !video;
-  documentMediaSeekInput.disabled = !canPresent || !video;
-  if (video) {
-    const positionMs = currentVideoPositionMs(video.state);
-    documentMediaPlayButton.textContent = video.state.playbackState === "playing" ? "Pause" : "Play";
-    documentMediaLoopInput.checked = video.state.loop;
-    documentMediaSeekInput.max = String(video.state.durationMs);
-    documentMediaSeekInput.value = String(Math.round(positionMs));
-    documentMediaTimeEl.textContent = `${formatMediaTime(positionMs)} / ${formatMediaTime(video.state.durationMs)}`;
-  }
-}
-
-function renderPresentationThumbnails(object: MediaObjectInstance<PdfPresentationState>): void {
-  const signature = `${object.objectId}:${object.state.documentId}:${object.state.pageCount}`;
-  if (signature !== presentationThumbnailSignature) {
-    presentationThumbnailSignature = signature;
-    presentationThumbnailsEl.replaceChildren();
-    const thumbnailCount = Math.min(object.state.pageCount, 50);
-    const runtime = getPdfPresentationRuntime(object.surfaceId);
-    for (let page = 1; page <= thumbnailCount; page += 1) {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "presentation-thumbnail";
-      button.dataset.page = String(page);
-      button.disabled = !canPresentDocuments();
-      button.setAttribute("aria-label", `Show page ${page}`);
-      const canvas = document.createElement("canvas");
-      canvas.width = 64;
-      canvas.height = 48;
-      const label = document.createElement("span");
-      label.textContent = String(page);
-      button.append(canvas, label);
-      button.addEventListener("click", () => void goToPresentationPage(page));
-      presentationThumbnailsEl.append(button);
-      void runtime.renderThumbnail(page, canvas);
-    }
-  }
-  for (const button of Array.from(presentationThumbnailsEl.querySelectorAll<HTMLButtonElement>(".presentation-thumbnail"))) {
-    button.disabled = !canPresentDocuments() || presentationActionInFlight;
-    if (Number(button.dataset.page) === object.state.currentPage) button.setAttribute("aria-current", "page");
-    else button.removeAttribute("aria-current");
-  }
-}
-
-function renderPresentationControls(): void {
-  const object = currentPdfPresentationObject();
-  const active = Boolean(object?.state.status === "active" && object.state.documentId);
-  presentationControlsEl.hidden = !active;
-  if (!object || !active) {
-    presentationThumbnailSignature = "";
-    presentationThumbnailsEl.replaceChildren();
-    presentationStatusEl.textContent = "Presentation idle";
-    debugState.pdfPresentation = {
-      surfaceId: selectedMediaSurfaceId,
-      objectId: null,
-      documentId: null,
-      page: 1,
-      pageCount: 0,
-      displayMode: "normal",
-      loadState: "idle",
-      renderState: "idle",
-      lastRenderMs: null,
-      renderedThumbnailCount: 0,
-      errorCode: null,
-      errorDetail: null
-    };
-    return;
-  }
-  const canPresent = canPresentDocuments() && !presentationActionInFlight;
-  presentationPageLabel.textContent = `Page ${object.state.currentPage} / ${object.state.pageCount}`;
-  presentationPrevButton.disabled = !canPresent || object.state.currentPage <= 1;
-  presentationNextButton.disabled = !canPresent || object.state.currentPage >= object.state.pageCount;
-  presentationLargeButton.disabled = !canPresent;
-  presentationLargeButton.setAttribute("aria-pressed", String(object.state.displayMode === "large"));
-  presentationLargeButton.textContent = object.state.displayMode === "large" ? "Normal mode" : "Large mode";
-  presentationStopButton.disabled = !canPresent;
-  renderPresentationThumbnails(object);
-  const runtimeDebug = getPdfPresentationRuntime(object.surfaceId).createDebugSnapshot();
-  debugState.pdfPresentation = runtimeDebug;
-  if (runtimeDebug.renderState === "ready") {
-    presentationStatusEl.textContent = `Presenting ${object.state.filename ?? "PDF"}, page ${object.state.currentPage} of ${object.state.pageCount}`;
-  }
-}
-
-function renderDocumentsUi(message?: string): void {
-  if (message !== undefined) documentFeedback.keepOrSet(message);
-  const visible = canViewDocuments();
-  documentsPanelEl.hidden = !visible;
-  if (!visible) {
-    documentUploadInput.disabled = true;
-    documentUploadButton.disabled = true;
-    documentSelect.disabled = true;
-    documentDownloadButton.disabled = true;
-    documentSurfaceButton.disabled = true;
-    documentDeleteButton.disabled = true;
-    renderDocumentStatus();
-    return;
-  }
-
-  const selected = selectedDocument();
-  if (selected && selected.documentId !== selectedDocumentId) {
-    selectedDocumentId = selected.documentId;
-    localStorage.setItem(`vrata.documents.selected.${roomId}`, selectedDocumentId);
-  }
-  documentSelect.replaceChildren(
-    ...(roomDocuments.length > 0
-      ? roomDocuments.map((doc) => {
-        const option = document.createElement("option");
-        option.value = doc.documentId;
-        const detail = doc.metadata?.pageCount
-          ? ` · ${doc.metadata.pageCount} pages`
-          : doc.metadata?.widthPx && doc.metadata?.heightPx ? ` · ${doc.metadata.widthPx}×${doc.metadata.heightPx}` : "";
-        option.textContent = `${doc.filename}${detail} (${Math.ceil(doc.sizeBytes / 1024)} KB)`;
-        option.selected = doc.documentId === selectedDocumentId;
-        return option;
-      })
-      : [new Option("No documents", "")])
-  );
-  documentUploadInput.disabled = !canUploadDocuments() || documentsLoading || documentUploadInFlight;
-  documentUploadButton.disabled = !canUploadDocuments() || documentsLoading || documentUploadInFlight;
-  documentSelect.disabled = documentsLoading || roomDocuments.length === 0;
-  documentDownloadButton.disabled = !selected || !canDownloadDocuments() || documentsLoading;
-  documentSurfaceButton.disabled = !selected || !["pdf", "image", "video"].includes(selected.metadata?.kind ?? "") || !canPresentDocuments() || documentsLoading || presentationActionInFlight;
-  documentDeleteButton.disabled = !selected || !canDeleteDocuments() || documentsLoading;
-  renderDocumentStatus();
-  renderPresentationControls();
-  renderDocumentMediaControls();
-}
-
-const documentLibraryActions = createDocumentLibraryActions({
-  apiBaseUrl, roomId, canViewDocuments, canUploadDocuments,
-  selectedFile: () => documentUploadInput.files?.[0],
-  clearFile: () => { documentUploadInput.value = ""; },
-  setDocumentStatus, renderDocumentsUi, listRoomDocuments, uploadRoomDocument, probeDocumentMedia,
+const {
+  canViewDocuments, canUploadDocuments, canPresentDocuments, selectedDocument, documentErrorCode, setDocumentStatus,
+  renderDocumentsUi, loadRoomDocuments, uploadSelectedDocument,
+  downloadSelectedDocument, deleteSelectedDocument, invalidate: invalidateDocumentLibrary, clearFeedback: clearDocumentFeedback
+} = createDocumentLibraryRuntime({
+  apiBaseUrl, roomId, debugState, documentsPanelEl, documentUploadInput,
+  documentUploadButton, documentSelect, documentDownloadButton,
+  documentSurfaceButton, documentDeleteButton, documentStatusEl,
+  // Surface views are composed next; resolve them only when rendering.
+  renderPresentationControls: () => renderPresentationControls(),
+  renderDocumentMediaControls: () => renderDocumentMediaControls(),
+  listRoomDocuments, uploadRoomDocument, downloadRoomDocument,
+  deleteRoomDocument, probeDocumentMedia,
+  get runtimeFlags() { return runtimeFlags; },
+  get roomStateConnected() { return roomStateConnected; },
   get roomStateAccessToken() { return roomStateAccessToken; },
+  get sessionControlBlocked() { return sessionControlBlocked; },
+  get presentationActionInFlight() { return presentationActionInFlight; },
   get roomDocuments() { return roomDocuments; },
   set roomDocuments(value) { roomDocuments = value; },
   get selectedDocumentId() { return selectedDocumentId; },
-  set selectedDocumentId(value) {
-    selectedDocumentId = value;
-    if (value) localStorage.setItem(`vrata.documents.selected.${roomId}`, value);
-    else localStorage.removeItem(`vrata.documents.selected.${roomId}`);
-  },
-  get documentsLoading() { return documentsLoading; },
-  set documentsLoading(value) { documentsLoading = value; },
-  get documentUploadInFlight() { return documentUploadInFlight; },
-  set documentUploadInFlight(value) { documentUploadInFlight = value; }
+  set selectedDocumentId(value) { selectedDocumentId = value; }
 });
-const { loadRoomDocuments, uploadSelectedDocument } = documentLibraryActions;
-window.addEventListener("pagehide", () => documentLibraryActions.invalidate());
+window.addEventListener("pagehide", invalidateDocumentLibrary);
 
-async function downloadSelectedDocument(): Promise<void> {
-  const selected = selectedDocument();
-  if (!selected) return;
-  try {
-    setDocumentStatus("Downloading document...");
-    const download = await downloadRoomDocument(apiBaseUrl, selected, roomStateAccessToken);
-    const objectUrl = URL.createObjectURL(download.blob);
-    const link = document.createElement("a");
-    link.href = objectUrl;
-    link.download = download.filename;
-    document.body.append(link);
-    link.click();
-    link.remove();
-    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
-    setDocumentStatus(`Document downloaded: ${download.filename}`);
-  } catch (error) {
-    console.warn("document_download_failed", error);
-    setDocumentStatus(`Document download failed: ${documentErrorCode(error)}`, documentErrorCode(error));
-  }
-}
-
-async function deleteSelectedDocument(): Promise<void> {
-  const selected = selectedDocument();
-  if (!selected) return;
-  try {
-    setDocumentStatus("Deleting document...");
-    await deleteRoomDocument(apiBaseUrl, roomId, selected.documentId, roomStateAccessToken);
-    roomDocuments = roomDocuments.filter((item) => item.documentId !== selected.documentId);
-    selectedDocumentId = roomDocuments[0]?.documentId ?? "";
-    if (selectedDocumentId) {
-      localStorage.setItem(`vrata.documents.selected.${roomId}`, selectedDocumentId);
-    } else {
-      localStorage.removeItem(`vrata.documents.selected.${roomId}`);
-    }
-    renderDocumentsUi(`Document deleted: ${selected.filename}`);
-  } catch (error) {
-    console.warn("document_delete_failed", error);
-    setDocumentStatus(`Document delete failed: ${documentErrorCode(error)}`, documentErrorCode(error));
-  }
-}
+const {
+  presentationInputEventId, documentMediaInputEventId,
+  renderDocumentMediaControls, renderPresentationControls
+} = createDocumentSurfaceView({
+  get participantId() { return participantId; },
+  currentPdfPresentationObject, currentImageViewerObject,
+  currentVideoPlayerObject, canPresentDocuments, getPdfPresentationRuntime,
+  // Surface actions are composed after the views, without eager callbacks.
+  goToPresentationPage: (page) => goToPresentationPage(page),
+  debugState, presentationControlsEl, presentationPrevButton,
+  presentationNextButton, presentationPageLabel, presentationLargeButton,
+  presentationStopButton, presentationThumbnailsEl, presentationStatusEl,
+  documentMediaControlsEl, documentMediaTitleEl, documentMediaPlayButton,
+  documentMediaFitButton, documentMediaLoopLabel, documentMediaLoopInput,
+  documentMediaStopButton, documentMediaSeekInput, documentMediaTimeEl,
+  documentMediaStatusEl,
+  get roomStateServerOffsetMs() { return roomStateServerOffsetMs; },
+  get selectedMediaSurfaceId() { return selectedMediaSurfaceId; },
+  get presentationActionInFlight() { return presentationActionInFlight; }
+});
 
 const {
   selectDocumentForSurface,
@@ -5162,19 +4800,18 @@ function setStatus(message: string): void {
   debugState.statusLine = message;
 }
 
-function createClientReportId(): string {
-  return `rpt_${crypto.randomUUID()}`;
-}
-
-function showReportId(reportId: string | null): void {
-  debugState.lastReportId = reportId;
-  reportLineEl.hidden = !reportId;
-  reportLineEl.textContent = reportId ? `Report ID: ${reportId}` : "";
-}
-
-function setReportRequestId(requestId: string | null): void {
-  debugState.lastReportRequestId = requestId;
-}
+const { renderDebugPanel, reportDiagnostics, reportUnhandledRuntimeError } = createRuntimeDiagnostics({
+  fetch, sessionGate: runtimeSessionGate,
+  apiBaseUrl, roomId, debugEnabled, camera, renderer,
+  get participantId() { return participantId; },
+  reportLineEl, debugPanel, xrDebugPanelEl, refreshWebRtcDiagnostics,
+  captureCanvasDiagnostics, inspectSceneObject, setStatus,
+  get displayName() { return displayName; },
+  get roomStateAccessToken() { return roomStateAccessToken; },
+  get runtimeFlags() { return runtimeFlags; },
+  get activeSceneBundleRoot() { return activeSceneBundleRoot; },
+  get debugState() { return debugState; }
+});
 
 function setRoomStateStatus(message: string): void {
   roomStateLineEl.textContent = message;
@@ -5556,38 +5193,6 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
   }, roomStateAccessToken);
 }
 
-function renderDebugPanel(): void {
-  if (!debugEnabled) {
-    return;
-  }
-
-  debugPanel.textContent = JSON.stringify(debugState, null, 2);
-  const xrAvatarDebug = debugState.xrAvatarDebug;
-  const ray = debugState.interactionRay;
-  const axes = debugState.xrAxes;
-  xrDebugPanelEl.textContent = [
-    `XR session: ${debugState.xrSession.sessionState} visible=${debugState.xrSession.enterVrVisible}`,
-    `XR profile: ${xrAvatarDebug?.profile ?? "none"}`,
-    `XR axes: turn=(${axes.turnX?.toFixed?.(2) ?? axes.turnX ?? 0}, ${axes.turnY?.toFixed?.(2) ?? axes.turnY ?? 0}) move=(${axes.moveX?.toFixed?.(2) ?? axes.moveX ?? 0}, ${axes.moveY?.toFixed?.(2) ?? axes.moveY ?? 0})`,
-    `Ray active: ${ray.active} mode=${ray.mode} target=${ray.targetKind} seat=${ray.seatId ?? "-"}`,
-    `Ray source: ${ray.source ? `${ray.source.handedness ?? "?"}#${ray.source.index}` : "-"}`,
-    `Ray origin: ${ray.origin ? `${ray.origin.x}, ${ray.origin.y}, ${ray.origin.z}` : "-"}`,
-    `Ray direction: ${ray.direction ? `${ray.direction.x}, ${ray.direction.y}, ${ray.direction.z}` : "-"}`,
-    `Right grip: ${xrAvatarDebug?.rightGrip ? `${xrAvatarDebug.rightGrip.x}, ${xrAvatarDebug.rightGrip.y}, ${xrAvatarDebug.rightGrip.z}` : "-"}`,
-    `Right controller: ${xrAvatarDebug?.rightController ? `${xrAvatarDebug.rightController.x}, ${xrAvatarDebug.rightController.y}, ${xrAvatarDebug.rightController.z}` : "-"}`,
-    `Right resolved: ${xrAvatarDebug?.rightResolved ? `${xrAvatarDebug.rightResolved.x}, ${xrAvatarDebug.rightResolved.y}, ${xrAvatarDebug.rightResolved.z}` : "-"}`,
-    `Right hand world: ${xrAvatarDebug?.rightHandWorld ? `${xrAvatarDebug.rightHandWorld.x}, ${xrAvatarDebug.rightHandWorld.y}, ${xrAvatarDebug.rightHandWorld.z}` : "-"}`,
-    `Status: ${debugState.statusLine ?? "-"}`
-  ].join("\n");
-}
-
-function markXrTelemetry(kind: string): void {
-  if (!lastXrTelemetryKinds.includes(kind)) {
-    lastXrTelemetryKinds.push(kind);
-  }
-  lastXrTelemetryReportAt = 0;
-}
-
 function deriveBodyTransform(root: { x: number; z: number }, head: { x: number; z: number }): { x: number; z: number } {
   const deltaX = head.x - root.x;
   const deltaZ = head.z - root.z;
@@ -5608,113 +5213,6 @@ function deriveBodyTransform(root: { x: number; z: number }, head: { x: number; 
   };
 }
 
-async function reportDiagnostics(note?: string, options: { reportId?: string } = {}): Promise<void> {
-  if (runtimeSessionGate.reason || !runtimeFlags.remoteDiagnostics) {
-    return;
-  }
-  await refreshWebRtcDiagnostics();
-  if (activeSceneBundleRoot) {
-    debugState.sceneDebug = inspectSceneObject({
-      root: activeSceneBundleRoot,
-      camera,
-      previous: debugState.sceneDebug
-    });
-  }
-  const includeImage = false;
-  const screenshot = captureCanvasDiagnostics({
-    canvas: renderer.domElement,
-    includeImage
-  });
-  debugState.sceneDebug.screenshot = screenshot;
-  const response = await fetch(new URL(`/api/rooms/${roomId}/diagnostics`, apiBaseUrl), {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "authorization": `Bearer ${roomStateAccessToken}`
-    },
-    body: JSON.stringify({
-      reportId: options.reportId,
-      participantId,
-      displayName,
-      mode: debugState.mode,
-      userAgent: navigator.userAgent,
-      statusLine: debugState.statusLine,
-      locomotionMode: debugState.locomotionMode,
-      roomStateConnected: debugState.roomStateConnected,
-      roomStateUrl: debugState.roomStateUrl,
-      roomStateMode: debugState.roomStateMode,
-      audioState: debugState.audioState,
-      localMicLevel: debugState.localMicLevel,
-      speakerOutputLevel: debugState.speakerOutputLevel,
-      media: debugState.media,
-      access: debugState.access,
-      surfaceInput: debugState.surfaceInput,
-      screenShareState: debugState.screenShareState,
-      mediaCapabilities: debugState.mediaCapabilities,
-      clientCompatibility: debugState.clientCompatibility,
-      localPose: debugState.localPose,
-      localPosition: debugState.localPosition,
-      spatialAudioState: debugState.spatialAudioState,
-      spatialAudio: debugState.spatialAudio,
-      xrSession: debugState.xrSession,
-      xrAxes: debugState.xrAxes,
-      remoteAvatarCount: debugState.remoteAvatarCount,
-      remoteTargets: debugState.remoteTargets,
-      remoteParticipants: debugState.remoteParticipants,
-      remoteAvatarReliableStates: debugState.remoteAvatarReliableStates,
-      remoteAvatarPoseFrames: debugState.remoteAvatarPoseFrames,
-      remoteAvatarParticipants: debugState.remoteAvatarParticipants,
-      issueCode: debugState.issueCode,
-      issueSeverity: debugState.issueSeverity,
-      degradedMode: debugState.degradedMode,
-      retryCount: debugState.retryCount,
-      lastRecoveryAction: debugState.lastRecoveryAction,
-      lastPresenceSyncAt: debugState.lastPresenceSyncAt,
-      lastPresenceRefreshAt: debugState.lastPresenceRefreshAt,
-      featureFlags: debugState.featureFlags,
-      faultInjection: debugState.faultInjection,
-      avatarDebug: debugState.avatarDebug,
-      avatarSnapshot: debugState.avatarSnapshot,
-      avatarTransportPreview: debugState.avatarTransportPreview,
-      avatarPoseTransport: debugState.avatarPoseTransport,
-      xrAvatarDebug: debugState.xrAvatarDebug,
-      sceneDebug: {
-        ...debugState.sceneDebug,
-        template: debugState.template,
-        missingAssetCount: debugState.sceneDebug.missingAssets.length,
-        screenshot
-      },
-      note,
-      createdAt: new Date().toISOString()
-    })
-  });
-  const responseRequestId = response.headers.get("x-request-id");
-  if (responseRequestId) {
-    setReportRequestId(responseRequestId);
-  }
-  if (response.ok) {
-    const payload = await response.json().catch(() => null) as { reportId?: string; requestId?: string } | null;
-    if (payload?.requestId) {
-      setReportRequestId(payload.requestId);
-    }
-    if (payload?.reportId) {
-      showReportId(payload.reportId);
-    }
-  }
-}
-
-function reportUnhandledRuntimeError(error: unknown, note: string): void {
-  if (error instanceof SessionUpgradeError || runtimeSessionGate.reason) return;
-  const reportId = createClientReportId();
-  const message = error instanceof Error ? error.message : String(error ?? "unknown");
-  showReportId(reportId);
-  setStatus(`Runtime error. Report ID: ${reportId}`);
-  debugState.issueCode = "runtime_unhandled_error";
-  debugState.issueSeverity = "error";
-  debugState.lastRecoveryAction = "report_runtime_error";
-  void reportDiagnostics(`${note}:${message.slice(0, 160)}`, { reportId }).catch(() => undefined);
-}
-
 window.addEventListener("error", (event) => {
   reportUnhandledRuntimeError(event.error ?? event.message, "runtime_error");
 });
@@ -5722,92 +5220,6 @@ window.addEventListener("error", (event) => {
 window.addEventListener("unhandledrejection", (event) => {
   reportUnhandledRuntimeError(event.reason, "runtime_unhandled_rejection");
 });
-
-function reportXrTelemetry(frameContext: RuntimeFrameContext): void {
-  if (runtimeSessionGate.reason) return;
-  if (!renderer.xr.isPresenting && !(avatarVrMockEnabled && syntheticXrState)) {
-    return;
-  }
-  const now = performance.now();
-  const inputSources = frameContext.xr?.inputSources ?? [];
-  const xrRawInputs = syntheticXrState
-    ? [{
-        index: 0,
-        handedness: "right",
-        targetRayMode: "tracked-pointer",
-        profiles: ["synthetic-right"],
-        button0Pressed: syntheticXrState.triggerPressed,
-        button1Pressed: false,
-        axes: [
-          syntheticXrState.axes.turnX,
-          syntheticXrState.axes.turnY,
-          syntheticXrState.axes.turnX,
-          syntheticXrState.axes.turnY
-        ]
-      }]
-    : inputSources.map((source, index) => ({
-        index,
-        handedness: source.handedness ?? null,
-        targetRayMode: source.targetRayMode ?? null,
-        profiles: Array.isArray(source.profiles) ? [...source.profiles] : [],
-        button0Pressed: Boolean(source.gamepad?.buttons?.[0]?.pressed),
-        button1Pressed: Boolean(source.gamepad?.buttons?.[1]?.pressed),
-        axes: Array.isArray(source.gamepad?.axes) ? source.gamepad.axes.map((value) => Number(value.toFixed(3))) : []
-      }));
-  const rawInputActive = xrRawInputs.some((input) => input.button0Pressed || input.button1Pressed || input.axes.some((value) => Math.abs(value) > 0.01));
-  const rayActive = Boolean(debugState.interactionRay.active);
-  const reportIntervalMs = rawInputActive || rayActive ? 16 : 300;
-  if (now - lastXrTelemetryReportAt < reportIntervalMs) {
-    return;
-  }
-  lastXrTelemetryReportAt = now;
-  const rightInputSource = inputSources.find((source) => source.handedness === "right")
-    ?? inputSources[0]
-    ?? null;
-  const rightAxes = syntheticXrState
-    ? [syntheticXrState.axes.turnX, syntheticXrState.axes.turnY, syntheticXrState.axes.turnX, syntheticXrState.axes.turnY]
-    : rightInputSource?.gamepad?.axes ?? [];
-  const payload = {
-    participantId,
-    roomId,
-    updatedAt: new Date().toISOString(),
-    kind: lastXrTelemetryKinds.at(-1) ?? null,
-    kinds: [...lastXrTelemetryKinds],
-    statusLine: debugState.statusLine ?? null,
-    currentSeatId: debugState.currentSeatId ?? null,
-    xrAxes: debugState.xrAxes,
-    interactionRay: debugState.interactionRay,
-    xrAvatarDebug: debugState.xrAvatarDebug ? {
-      profile: debugState.xrAvatarDebug.profile ?? null,
-      rightGrip: debugState.xrAvatarDebug.rightGrip ?? null,
-      rightController: debugState.xrAvatarDebug.rightController ?? null,
-      rightResolved: debugState.xrAvatarDebug.rightResolved ?? null,
-      rightHandWorld: debugState.xrAvatarDebug.rightHandWorld ?? null,
-      rightControllerWorld: debugState.xrAvatarDebug.rightControllerWorld ?? null
-    } : null,
-    xrRawInputs,
-    xrTurnCandidates: {
-      rightPrimaryX: typeof rightAxes[0] === "number" ? Number(rightAxes[0].toFixed(3)) : 0,
-      rightPrimaryY: typeof rightAxes[1] === "number" ? Number(rightAxes[1].toFixed(3)) : 0,
-      rightSecondaryX: typeof rightAxes[2] === "number" ? Number(rightAxes[2].toFixed(3)) : 0,
-      rightSecondaryY: typeof rightAxes[3] === "number" ? Number(rightAxes[3].toFixed(3)) : 0,
-      mappedTurnX: typeof debugState.xrAxes.turnX === "number" ? Number(debugState.xrAxes.turnX.toFixed(3)) : 0,
-      mappedTurnY: typeof debugState.xrAxes.turnY === "number" ? Number(debugState.xrAxes.turnY.toFixed(3)) : 0,
-      snapTurnFired: lastXrTelemetryKinds.includes("snap_turn"),
-      playerYaw: Number(localPoseController.getYaw().toFixed(3)),
-      selectEventCount: xrSelectEventCount
-    }
-  };
-  void fetch(new URL(`/api/rooms/${roomId}/xr-telemetry/${participantId}`, apiBaseUrl), {
-    method: "PUT",
-    headers: {
-      "content-type": "application/json",
-      "authorization": `Bearer ${roomStateAccessToken}`
-    },
-    body: JSON.stringify(payload)
-  }).catch(() => undefined);
-  lastXrTelemetryKinds = [];
-}
 
 function attachVideoTrack(track: Track, options: {
   remote: boolean;
@@ -7604,68 +7016,19 @@ notesExportRoomJsonButton.addEventListener("click", () => {
   void exportRoomNotesJson();
 });
 
-documentSelect.addEventListener("change", () => {
-  selectedDocumentId = documentSelect.value;
-  if (selectedDocumentId) {
-    localStorage.setItem(`vrata.documents.selected.${roomId}`, selectedDocumentId);
-  } else {
-    localStorage.removeItem(`vrata.documents.selected.${roomId}`);
-  }
-  renderDocumentsUi();
-});
-
-documentUploadButton.addEventListener("click", () => {
-  void uploadSelectedDocument();
-});
-
-documentDownloadButton.addEventListener("click", () => {
-  void downloadSelectedDocument();
-});
-
-documentSurfaceButton.addEventListener("click", () => {
-  void selectDocumentForSurface();
-});
-
-documentDeleteButton.addEventListener("click", () => {
-  void deleteSelectedDocument();
-});
-
-presentationPrevButton.addEventListener("click", () => {
-  const object = currentPdfPresentationObject();
-  if (object) void goToPresentationPage(object.state.currentPage - 1);
-});
-
-presentationNextButton.addEventListener("click", () => {
-  const object = currentPdfPresentationObject();
-  if (object) void goToPresentationPage(object.state.currentPage + 1);
-});
-
-presentationLargeButton.addEventListener("click", () => {
-  void togglePresentationDisplayMode();
-});
-
-presentationStopButton.addEventListener("click", () => {
-  void stopCurrentPresentation();
-});
-
-documentMediaPlayButton.addEventListener("click", () => {
-  void toggleDocumentMediaPlayback();
-});
-
-documentMediaFitButton.addEventListener("click", () => {
-  void toggleDocumentMediaFit();
-});
-
-documentMediaLoopInput.addEventListener("change", () => {
-  void patchCurrentDocumentMedia({ type: "set-loop", loop: documentMediaLoopInput.checked, inputEventId: documentMediaInputEventId("loop") });
-});
-
-documentMediaSeekInput.addEventListener("change", () => {
-  void patchCurrentDocumentMedia({ type: "seek", positionMs: Number(documentMediaSeekInput.value), inputEventId: documentMediaInputEventId("seek") });
-});
-
-documentMediaStopButton.addEventListener("click", () => {
-  void stopCurrentDocumentMedia();
+bindDocumentControls({
+  roomId, documentSelect, documentUploadButton, documentDownloadButton,
+  documentSurfaceButton, documentDeleteButton, presentationPrevButton,
+  presentationNextButton, presentationLargeButton, presentationStopButton,
+  documentMediaPlayButton, documentMediaFitButton, documentMediaLoopInput,
+  documentMediaSeekInput, documentMediaStopButton, renderDocumentsUi,
+  uploadSelectedDocument, downloadSelectedDocument, selectDocumentForSurface,
+  deleteSelectedDocument, currentPdfPresentationObject, goToPresentationPage,
+  togglePresentationDisplayMode, stopCurrentPresentation,
+  toggleDocumentMediaPlayback, toggleDocumentMediaFit,
+  patchCurrentDocumentMedia, documentMediaInputEventId, stopCurrentDocumentMedia,
+  get selectedDocumentId() { return selectedDocumentId; },
+  set selectedDocumentId(value) { selectedDocumentId = value; }
 });
 
 mediaSurfaceSelect.addEventListener("change", () => {
@@ -7693,84 +7056,13 @@ surfaceAudioCheckbox.addEventListener("change", () => {
   });
 });
 
-lockRoomButton.addEventListener("click", () => {
-  void runHostControlAction(
-    () => runRoomSessionControlAction(apiBaseUrl, roomId, roomStateAccessToken, "lock"),
-    "Room locked"
-  );
-});
-
-unlockRoomButton.addEventListener("click", () => {
-  void runHostControlAction(
-    () => runRoomSessionControlAction(apiBaseUrl, roomId, roomStateAccessToken, "unlock"),
-    "Room unlocked"
-  );
-});
-
-endSessionButton.addEventListener("click", () => {
-  void runHostControlAction(
-    () => runRoomSessionControlAction(apiBaseUrl, roomId, roomStateAccessToken, "end"),
-    "Session ended"
-  );
-});
-
-hostParticipantSelect.addEventListener("change", () => {
-  debugState.hostControls.selectedParticipantId = hostParticipantSelect.value || null;
-  renderHostControls();
-});
-
-removeParticipantButton.addEventListener("click", () => {
-  const targetParticipantId = hostParticipantSelect.value;
-  if (!targetParticipantId) {
-    return;
-  }
-  void runHostControlAction(
-    () => removeRoomParticipant(apiBaseUrl, roomId, roomStateAccessToken, targetParticipantId),
-    `Removed ${targetParticipantId}`
-  );
-});
-
-transferHostButton.addEventListener("click", () => {
-  const targetParticipantId = hostParticipantSelect.value;
-  if (!targetParticipantId) {
-    return;
-  }
-  void runHostControlAction(
-    () => transferRoomHost(apiBaseUrl, roomId, roomStateAccessToken, targetParticipantId),
-    `Transferred host to ${targetParticipantId}`
-  );
-});
-
-transferOwnerButton.addEventListener("click", () => {
-  const targetParticipantId = hostParticipantSelect.value;
-  const revision = latestIdentityAuthorityRevision;
-  if (!targetParticipantId || revision === null || !canManageHostControls() || !debugState.personalRoom.isOwner) return;
-  void runHostControlAction(
-    () => transferRoomOwner(apiBaseUrl, roomId, roomStateAccessToken, targetParticipantId, revision),
-    `Transferred ownership to ${targetParticipantId}`
-  );
-});
-
-grantPresenterButton.addEventListener("click", () => {
-  const targetParticipantId = hostParticipantSelect.value;
-  if (!targetParticipantId) {
-    return;
-  }
-  void runHostControlAction(
-    () => grantRoomPresenter(apiBaseUrl, roomId, roomStateAccessToken, targetParticipantId),
-    `Granted presenter to ${targetParticipantId}`
-  );
-});
-
-revokePresenterButton.addEventListener("click", () => {
-  const targetParticipantId = hostParticipantSelect.value;
-  if (!targetParticipantId) {
-    return;
-  }
-  void runHostControlAction(
-    () => revokeRoomPresenter(apiBaseUrl, roomId, roomStateAccessToken, targetParticipantId),
-    `Revoked presenter from ${targetParticipantId}`
-  );
+bindHostControls({
+  apiBaseUrl, roomId, debugState,
+  get roomStateAccessToken() { return roomStateAccessToken; },
+  hostParticipantSelect, lockRoomButton, unlockRoomButton, endSessionButton,
+  removeParticipantButton, transferHostButton, transferOwnerButton, grantPresenterButton, revokePresenterButton,
+  renderHostControls, runHostControlAction, canManageHostControls, authorityRevision, runRoomSessionControlAction,
+  removeRoomParticipant, transferRoomHost, transferRoomOwner, grantRoomPresenter, revokeRoomPresenter
 });
 
 joinAudioButton.addEventListener("click", () => {
@@ -8710,51 +8002,6 @@ async function main(): Promise<void> {
   presenceAccumulator = 0;
   diagnosticsAccumulator = 0;
   runtimeBootReady = !sessionControlBlocked;
-}
-
-function describeRoomAccessError(error: RuntimeAccessError): string {
-  switch (error.reason) {
-    case "invite_expired":
-      return "Access denied: invite link expired";
-    case "invite_revoked":
-      return "Access denied: invite link revoked";
-    case "room_disabled":
-      return "Access denied: room disabled";
-    case "waiting_room_pending":
-      return "Waiting for host approval";
-    case "waiting_room_rejected":
-      return "Access denied: host rejected the request";
-    case "invite_required":
-      return "Access denied: private invite required";
-    case "room_locked":
-      return "Access denied: room is locked";
-    case "participant_removed":
-      return "Access denied: removed by host";
-    case "session_ended":
-      return "Session ended by host";
-    case "identity_rate_limited":
-      return "Too many new room entries. Please try again later";
-    case "room_identity_full":
-      return "This room has reached its identity limit. Contact the administrator";
-    default:
-      return "Access denied";
-  }
-}
-
-function describeSessionControlReason(reason: string): string {
-  switch (reason) {
-    case "identity_upgrade_required":
-    case "identity_recovery_required":
-      return describeIdentityRequirement(reason);
-    case "room_locked":
-      return "Access denied: room is locked";
-    case "participant_removed":
-      return "Access denied: removed by host";
-    case "session_ended":
-      return "Session ended by host";
-    default:
-      return "Access denied";
-  }
 }
 
 const sessionUpgradeUi = mountSessionUpgradeUi({

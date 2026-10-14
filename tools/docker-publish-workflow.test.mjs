@@ -8,6 +8,7 @@ const root = resolve(import.meta.dirname, "..");
 test("YCR publish emits readable single-image manifests without attestations", async () => {
   const workflow = await readFile(resolve(root, ".github/workflows/docker-publish.yml"), "utf8");
 
+  // Three application images plus the checksum-pinned MinIO and mc images.
   assert.equal(workflow.match(/^\s+uses: docker\/build-push-action@v6$/gm)?.length, 5);
   assert.equal(workflow.match(/^\s+provenance: false$/gm)?.length, 5);
   assert.equal(workflow.match(/^\s+sbom: false$/gm)?.length, 5);

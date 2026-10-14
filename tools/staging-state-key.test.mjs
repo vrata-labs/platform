@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -99,6 +99,7 @@ print('proxy_key_checks_passed')
 
 test("staging provisions its proxy proof before rollout without rotating the state key", () => {
   const workflow = readFileSync(new URL("../.github/workflows/staging-deploy.yml", import.meta.url), "utf8");
+  assert(workflow.indexOf("- name: Provision identity proxy key") >= 0);
   assert(workflow.indexOf("- name: Provision identity proxy key") < workflow.indexOf("- name: Roll out staging images"));
   assert.match(workflow, /--ensure-proxy-key/);
   assert.match(workflow, /cp tools\/staging-state-key\.py "\$RUNNER_TEMP\/vrata-scene-rollback\/"/);
@@ -114,7 +115,8 @@ test("staging rollout generates an independent frame key and preserves an existi
   const run = () => execFileSync("python3", ["-", path, "a".repeat(40)], { input: code, encoding: "utf8", env: { ...process.env, VRATA_STAGING_PUBLIC_IP: "127.0.0.1" } });
   const value = name => readFileSync(path, "utf8").split("\n").find(line => line.startsWith(`${name}=`))?.slice(name.length + 1);
   try {
-    writeFileSync(path, `STATE_TOKEN_SECRET=${rootKey}\n`);
+    const configuredHost = "LIVEKIT_NODE_IP=127.0.0.1\nVRATA_APP_DOMAIN=app.localhost\nVRATA_STATE_DOMAIN=state.localhost\nVRATA_LIVEKIT_DOMAIN=livekit.localhost\nVRATA_BROWSER_DOMAIN=browser.localhost\nVRATA_STORAGE_DOMAIN=storage.localhost\nVRATA_STAGING_STATE_DIR=/tmp/owned-stage-state\nVRATA_STAGING_SCENE_ROOT=/srv/staging-state/active/public\nVRATA_INTERNAL_SERVICE_TOKEN=" + "x".repeat(48) + "\n";
+    writeFileSync(path, configuredHost + `STATE_TOKEN_SECRET=${rootKey}\n`);
     run();
     const frameKey = value("REMOTE_BROWSER_TOKEN_SECRET");
     assert.equal(value("STATE_TOKEN_SECRET"), rootKey);
@@ -122,8 +124,31 @@ test("staging rollout generates an independent frame key and preserves an existi
     assert.match(frameKey, /^[A-Za-z0-9_-]{64}$/);
     run();
     assert.equal(value("REMOTE_BROWSER_TOKEN_SECRET"), frameKey);
-    writeFileSync(path, `STATE_TOKEN_SECRET=${rootKey}\nREMOTE_BROWSER_TOKEN_SECRET=test-only-existing-frame-key\n`);
+    writeFileSync(path, configuredHost + `STATE_TOKEN_SECRET=${rootKey}\nREMOTE_BROWSER_TOKEN_SECRET=test-only-existing-frame-key\n`);
     run();
     assert.equal(value("REMOTE_BROWSER_TOKEN_SECRET"), "test-only-existing-frame-key");
+    for (const invalid of ["", "dev-internal-service-token", "REPLACE_WITH_" + "x".repeat(48)]) {
+      const original = configuredHost.replace("x".repeat(48), invalid) + `STATE_TOKEN_SECRET=${rootKey}\n`;
+      writeFileSync(path, original);
+      assert.throws(run, error => String(error.stderr).trim() === "staging_internal_service_token_required");
+      assert.equal(readFileSync(path, "utf8"), original, "refused config cannot change the candidate tag or keys");
+    }
   } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("portable rollback uses the preserved proxy helper instead of an older target helper", () => {
+  const source = readFileSync(new URL("../infra/docker/rollout-staging-images.sh", import.meta.url), "utf8");
+  const root = mkdtempSync(join(tmpdir(), "vrata-preserved-proxy-")), checkout = join(root, "checkout"), helpers = join(root, "helpers");
+  try {
+    mkdirSync(join(checkout, "infra/docker"), { recursive: true }); mkdirSync(join(checkout, "tools")); mkdirSync(helpers);
+    const envFile = join(checkout, "infra/docker/.env.staging"); writeFileSync(envFile, "STATE_TOKEN_SECRET=existing-session-root\n");
+    writeFileSync(join(checkout, "tools/staging-state-key.py"), 'raise RuntimeError("old_target_helper_must_not_run")\n');
+    copyFileSync(new URL("./staging-state-key.py", import.meta.url), join(helpers, "staging-state-key.py"));
+    const script = join(helpers, "rollout-staging-images.sh");
+    writeFileSync(script, source.slice(0, source.indexOf("# Environment normalization")) + "exit 0\n");
+    execFileSync("bash", [script, "a".repeat(40)], { env: { ...process.env, VRATA_STAGING_APP_DIR: checkout }, stdio: "pipe" });
+    const content = readFileSync(envFile, "utf8");
+    assert.match(content, /STATE_TOKEN_SECRET=existing-session-root/);
+    assert.match(content, /VRATA_IDENTITY_PROXY_TOKEN=[A-Za-z0-9_-]{43,128}/);
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
