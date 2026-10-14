@@ -1,8 +1,9 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page, type WebSocketRoute } from "@playwright/test";
 
 type SurfaceDebug = {
   roomStateConnected?: boolean;
   access?: { role?: string; permissions?: string[] };
+  mediaObjects?: { surfaces?: Array<{ surfaceId?: string; inputEnabled?: boolean }> };
   surfaceInput?: {
     enabled?: boolean;
     debugSurfaceId?: string;
@@ -38,7 +39,8 @@ async function waitForAccess(page: Page, role: "guest" | "member" | "host") {
     return {
       connected: debug?.roomStateConnected ?? false,
       role: debug?.access?.role ?? null,
-      surfaceId: debug?.surfaceInput?.debugSurfaceId ?? null
+      surfaceId: debug?.surfaceInput?.debugSurfaceId ?? null,
+      inputReady: debug?.mediaObjects?.surfaces?.some(surface => surface.surfaceId === "debug-main" && surface.inputEnabled === true) ?? false
     };
   }, {
     timeout: 15000,
@@ -46,7 +48,8 @@ async function waitForAccess(page: Page, role: "guest" | "member" | "host") {
   }).toEqual({
     connected: true,
     role,
-    surfaceId: "debug-main"
+    surfaceId: "debug-main",
+    inputReady: true
   });
 }
 
@@ -160,6 +163,42 @@ test("M1.2 synthetic XR input uses the same surface input protocol", async ({ pa
     kind: "pointer-down",
     surfaceId: "debug-main"
   });
+});
+
+test("M1.2 synthetic input waits for the initial logical surface snapshot", async ({ page }) => {
+  let hold = true;
+  const queued: Array<{ route: WebSocketRoute; message: string | Buffer }> = [];
+  await page.routeWebSocket(/.*[?&]roomId=/, route => {
+    const upstream = route.connectToServer();
+    upstream.onMessage(message => {
+      let snapshot = false;
+      if (typeof message === "string") {
+        try { snapshot = JSON.parse(message).type === "room_state"; } catch { /* Pass non-JSON frames through unchanged. */ }
+      }
+      if (hold && snapshot) queued.push({ route, message });
+      else route.send(message);
+    });
+  });
+  await page.goto("/rooms/demo-room?role=member&debug=1&avatarvrmock=1");
+  await expect.poll(() => queued.length, { timeout: 15000 }).toBeGreaterThan(0);
+  expect(await page.evaluate(() => {
+    const debug = (window as any).__VRATA_DEBUG__;
+    return { connected: debug?.roomStateConnected, role: debug?.access?.role,
+      inputReady: debug?.mediaObjects?.surfaces?.some((surface: any) => surface.surfaceId === "debug-main" && surface.inputEnabled === true) ?? false };
+  })).toEqual({ connected: true, role: "member", inputReady: false });
+  const send = () => page.evaluate(() => (window as any).__VRATA_TEST__.sendDebugSurfaceInput({
+    source: "xr-controller", kind: "pointer-down", surfaceId: "debug-main", u: 0.5, v: 0.5
+  }));
+  expect(await send()).toBe(false);
+  expect((await readDebug(page))?.surfaceInput?.blockedReason).toBe("surface-disabled");
+  hold = false;
+  for (const { route, message } of queued.splice(0)) route.send(message);
+  await waitForAccess(page, "member");
+  expect(await send()).toBe(true);
+  await expect.poll(async () => {
+    const event = (await readDebug(page))?.surfaceInput?.lastEvent;
+    return { source: event?.source, kind: event?.kind, surfaceId: event?.surfaceId };
+  }, { timeout: 10000 }).toEqual({ source: "xr-controller", kind: "pointer-down", surfaceId: "debug-main" });
 });
 
 test("M1.2 disabled debug surface rejects input", async ({ page }) => {

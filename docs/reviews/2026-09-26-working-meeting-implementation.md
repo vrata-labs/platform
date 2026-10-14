@@ -1439,6 +1439,68 @@ PG/rollback fixtures включены. Полный локальный E2E: **20
 expected209/skipped0/unexpected0/flaky0, exit0. Отчёт —
 t13a-staging-integration-adoption-final.json; прежний прерванный прогон не принят.
 
+Код интеграции опубликован merge-коммитом `814632b9b7e338e2600ae1e1787c5e85c66cd5fd`.
+[CI 38599743847](https://github.com/vrata-labs/platform/actions/runs/38599743847)
+прошёл с первого раза: **209/209 за22,2 минуты**, **16/16 M0.5 за1,7 минуты**,
+package/PG/rollback и pinned asset checks. [Docker Publish 38599744572](https://github.com/vrata-labs/platform/actions/runs/38599744572)
+опубликовал exact-SHA API/room-state/remote-browser images с проверенными manifests.
+
+Первый [Staging Deploy 38604657416](https://github.com/vrata-labs/platform/actions/runs/38604657416)
+не принят: **65/66 за25,3 минуты**. В owner-bound personal workspace room-state и
+Owner-проекция были корректны, manifest прошёл integrity, но GET GLB с jsDelivr
+завершился TypeError Failed to fetch на asset_response_requested. Причина отказа
+получения GLB не установлена. Сработал штатный rollback на `380b2e7ff1dd67f19821ca324c575c7b0935c451`:
+running image tag, scene snapshot/две изменённые room pointers и health подтверждены;
+candidate accepted JSON не публиковался.
+
+Отдельный browser fetch с того же staging origin и независимый Node fetch pinned
+personal GLB вернули200, **12071664 bytes**, ожидаемый SHA256 и wildcard CORS.
+Повтор [Staging Deploy 38614509637](https://github.com/vrata-labs/platform/actions/runs/38614509637)
+для того же SHA без изменения кода, assertions, deadlines или skips также не принят:
+**65/66 за20,8 минуты**. Personal reference прошёл; strict LiveKit audio прошёл
+первый audioReady, но не подтвердил последующий рост receive counters вместе с
+ненулевыми speaker levels за45 секунд. Сохранённые diagnostics показывают две
+загруженные сцены, room-state connected и media joined, но не содержат значения
+провалившихся предикатов. Причина этого отказа также не установлена. Штатный
+rollback подтвердил прежний image SHA, восстановил обе room pointers и health;
+accepted publication снова пропущена.
+
+Гипотеза о постоянно застывшей RTC-диагностике опровергнута: runtime обновляет её
+из двухсекундного render-loop reporting, на staging remoteDiagnosticsEnabled=true.
+Изолированный локальный прогон с настоящим self-hosted LiveKit подтвердил рост
+cached counters, native inbound audio RTP и decoded audio energy; исходный strict
+audio flow прошёл. Для следующей проверки добавлено только недостающее наблюдение:
+свежие allowlisted audio RTP samples по непрозрачным peer/stream scopes, возраст
+cached sample, visibility/focus и baseline/current при отказе45-секундного poll.
+Исходные pass predicates, deadlines, retries и skips сохранены. Это устранение
+пробела диагностики, не заявленное исправление неизвестной media-причины. Успешная
+дальнейшая проверка сама по себе не докажет исправление причины любого из двух отказов.
+
+Первый локальный полный прогон уточнённой диагностики не принят и остановлен после
+выявления отдельной гонки подготовки M1.2 synthetic XR test: **156 passed, 1 failed,
+1 interrupted, 52 not run за24,6 минуты**, exit130. Тест отправлял input сразу
+после WebSocket open/HTTP role admission, до первого logical room snapshot;
+runtime правильно отвечал surface-disabled. В момент последующего снимка
+debug-main уже inputEnabled=true. Подготовка теста теперь в прежние15 секунд ждёт
+готовую logical/physical поверхность. Отдельный real WebSocket hold/release
+сценарий задерживает все room_state snapshots, доказывает отказ до их получения
+и успешный единичный ввод после получения. Guest permission и explicit disabled
+surface assertions сохранены; последние теперь не могут пройти из-за отсутствия
+начального снимка. Focused audio/readiness checks: **6/6 за43,5 секунды**;
+fresh RTC observer также проверяет decode samples/energy, тишину, closed peers,
+точный набор выходных полей и bounded error/timeout без raw RTC records.
+
+Финальное локальное дерево после readiness correction: **211/211 за42,5 минуты**,
+exit0, expected211/skipped0/unexpected0/flaky0. Сохраняются зелёные
+lint/typecheck/build/package checks: API1691 passed/1 optional MinIO skip,
+runtime1238/1238, room-state88/88, remote-browser71/71, tools306 passed/2 optional
+skips. Все обязательные PostgreSQL/rollback fixtures включены, fsync,
+full_page_writes и synchronous_commit оставались on. После этих package checks
+менялись только e2e tests и журнал; platform/deployment executable tree совпадает
+с интеграцией `814632b`. Дополнительный прямой TypeScript check всех изменённых
+e2e modules прошёл. Следующая поставка обязана пройти exact-SHA CI/Docker и полный
+staging gate; локальный успех не означает staging acceptance.
+
 Остаются прежние обязательства: аудит v2 notes writes до результата fresh effect,
 generation/mutation barrier для document download/delete и уничтожение pool client
 после неудачного rollback/unlock. Они не появились от интеграции; изменение этих

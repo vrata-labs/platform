@@ -5,6 +5,7 @@ import { access, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { installFreshAudioObservation, readFreshAudioObservation } from "./fresh-audio-observation";
 
 type DemoRole = "host" | "member" | "guest";
 type JsonRecord = Record<string, any>;
@@ -673,6 +674,7 @@ async function reloadClientThroughInvite(client: DemoClient): Promise<void> {
 
 async function createTrackedContext(browser: Browser): Promise<BrowserContext> {
   const context = await browser.newContext({ viewport, deviceScaleFactor });
+  await installFreshAudioObservation(context);
   context.setDefaultTimeout(120_000);
   return context;
 }
@@ -859,6 +861,10 @@ async function denyGuestPresentationControl(guest: DemoClient, roomId: string, d
 }
 
 type AudioSnapshot = {
+  visibility: string;
+  focused: boolean;
+  statsAgeMs: number | null;
+  freshAudio: Awaited<ReturnType<typeof readFreshAudioObservation>> | null;
   frameBudgetMs: number | null;
   pixelRatio: number;
   issueCode: string | null;
@@ -883,8 +889,8 @@ type AudioSnapshot = {
   bytesReceived: number;
 };
 
-async function readAudioSnapshot(listener: DemoClient, sourceParticipantId: string): Promise<AudioSnapshot> {
-  return listener.page.evaluate((targetParticipantId) => {
+async function readAudioSnapshot(listener: DemoClient, sourceParticipantId: string, fresh = false): Promise<AudioSnapshot> {
+  const [state, freshAudio] = await Promise.all([listener.page.evaluate((targetParticipantId) => {
     const debug = (window as any).__VRATA_DEBUG__;
     const remote = debug?.remoteParticipants?.find((participant: any) => participant.participantId === targetParticipantId);
     const spatial = debug?.spatialAudio?.remoteSources?.find((source: any) => source.participantId === targetParticipantId);
@@ -895,6 +901,9 @@ async function readAudioSnapshot(listener: DemoClient, sourceParticipantId: stri
       || transport?.iceConnectionState === "connected"
       || transport?.iceConnectionState === "completed";
     return {
+      visibility: document.visibilityState,
+      focused: document.hasFocus(),
+      statsAgeMs: typeof debug?.media?.webrtc?.capturedAtMs === "number" ? Math.max(0, Date.now() - debug.media.webrtc.capturedAtMs) : null,
       frameBudgetMs: debug?.avatarPoseTransport?.frameBudgetMs ?? null,
       pixelRatio: devicePixelRatio,
       issueCode: debug?.issueCode ?? null,
@@ -918,7 +927,8 @@ async function readAudioSnapshot(listener: DemoClient, sourceParticipantId: stri
       bytesSent: Math.max(0, ...transports.map((transport: any) => transport.selectedCandidatePair?.bytesSent ?? 0)),
       bytesReceived: Math.max(0, ...transports.map((transport: any) => transport.selectedCandidatePair?.bytesReceived ?? 0))
     };
-  }, sourceParticipantId);
+  }, sourceParticipantId), fresh ? readFreshAudioObservation(listener.page) : Promise.resolve(null)]);
+  return { ...state, freshAudio };
 }
 
 function audioReady(snapshot: AudioSnapshot): boolean {
@@ -980,19 +990,26 @@ async function runStrictStagingAudio(host: DemoClient, member: DemoClient): Prom
   }
 
   const [hostBaseline, memberBaseline] = await Promise.all([
-    readAudioSnapshot(host, member.participantId),
-    readAudioSnapshot(member, host.participantId)
+    readAudioSnapshot(host, member.participantId, true),
+    readAudioSnapshot(member, host.participantId, true)
   ]);
-  await expect.poll(async () => {
+  try {
+    await expect.poll(async () => {
+      const [hostState, memberState] = await Promise.all([
+        readAudioSnapshot(host, member.participantId),
+        readAudioSnapshot(member, host.participantId)
+      ]);
+      return hostState.bytesReceived > hostBaseline.bytesReceived
+        && memberState.bytesReceived > memberBaseline.bytesReceived
+        && hostState.speakerLevel > 0
+        && memberState.speakerLevel > 0;
+    }, { timeout: 45_000, intervals: [500, 1_000, 2_000] }).toBe(true);
+  } catch {
     const [hostState, memberState] = await Promise.all([
-      readAudioSnapshot(host, member.participantId),
-      readAudioSnapshot(member, host.participantId)
+      readAudioSnapshot(host, member.participantId, true), readAudioSnapshot(member, host.participantId, true)
     ]);
-    return hostState.bytesReceived > hostBaseline.bytesReceived
-      && memberState.bytesReceived > memberBaseline.bytesReceived
-      && hostState.speakerLevel > 0
-      && memberState.speakerLevel > 0;
-  }, { timeout: 45_000, intervals: [500, 1_000, 2_000] }).toBe(true);
+    throw new Error(`public_demo_audio_progress_timeout:${JSON.stringify({ hostBaseline, memberBaseline, hostState, memberState })}`);
+  }
 
   await activateButton(member.page, "#toggle-mute");
   await expect.poll(async () => {
