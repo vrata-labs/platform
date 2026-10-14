@@ -1402,3 +1402,42 @@ test("leaveRoom clears owned active screen-share object", () => {
   assert.equal(left.mediaObjects.surfaces["debug-main"]?.activeObjectId, null);
   assert.equal(left.mediaObjects.objects["share-1"], undefined);
 });
+
+test("authority demotion retires only owned screen shares, frees surfaces and never resurrects them", () => {
+  let room = joinRoom(joinRoom(createRoomState("demo"), "speaker", { role: "presenter" }), "other", { role: "host" });
+  room = createMediaObject(room, "speaker", { commandId: "own", surfaceId: "debug-main", objectType: "screen-share", objectId: "own", nowMs: 1 }).room;
+  room = createMediaObject(room, "other", { commandId: "foreign", surfaceId: "laptop-screen", objectType: "screen-share", objectId: "foreign", nowMs: 2 }).room;
+  room = createMediaObject(room, "speaker", { commandId: "board", surfaceId: "whiteboard-wall", objectType: MARKDOWN_BOARD_OBJECT_TYPE, objectId: "board", nowMs: 3 }).room;
+  assert.equal(Object.keys(room.mediaObjects.objects).length, 3);
+  const next = joinRoom(room, "speaker", { role: "member" });
+  assert.equal(next.mediaObjects.objects.own, undefined);
+  assert.equal(next.mediaObjects.surfaces["debug-main"]!.activeObjectId, null);
+  assert.deepEqual(next.mediaObjects.objects.foreign, room.mediaObjects.objects.foreign);
+  assert.deepEqual(next.mediaObjects.objects.board, room.mediaObjects.objects.board);
+  assert.equal(room.mediaObjects.surfaces["debug-main"]!.activeObjectId, "own", "original snapshot is immutable");
+  assert.deepEqual(joinRoom(next, "speaker", { role: "member" }), next, "repeat reconciliation is idempotent");
+  assert.equal(joinRoom(next, "speaker", { role: "presenter" }).mediaObjects.objects.own, undefined);
+  assert.equal(createMediaObject(next, "speaker", { commandId: "denied", objectId: "denied", surfaceId: "debug-main", objectType: "screen-share", nowMs: 4 }).result.accepted, false);
+});
+
+for (const type of [PDF_PRESENTATION_OBJECT_TYPE, IMAGE_VIEWER_OBJECT_TYPE, VIDEO_PLAYER_OBJECT_TYPE, "remote-browser"]) {
+  test(`permission loss retains the participant's ${type} room content`, () => {
+    let room = joinRoom(createRoomState("demo"), "speaker", { role: "presenter" });
+    room.mediaObjects.surfaces["debug-main"]!.allowedObjectTypes.push(type);
+    const created = createMediaObject(room, "speaker", { commandId: "content", surfaceId: "debug-main", objectType: type, objectId: "content", nowMs: 1 });
+    assert.equal(created.result.accepted, true);
+    room = joinRoom(created.room, "speaker", { role: "member" });
+    assert.deepEqual(room.mediaObjects.objects.content, created.room.mediaObjects.objects.content);
+    assert.equal(room.mediaObjects.surfaces["debug-main"]!.activeObjectId, "content");
+  });
+}
+
+test("host access retains a live share while a downgraded reconnect removes a grace-period share", () => {
+  const room = createMediaObject(joinRoom(createRoomState("demo"), "speaker", { role: "host" }), "speaker",
+    { commandId: "own", surfaceId: "debug-main", objectType: "screen-share", objectId: "own", nowMs: 1 }).room;
+  assert.ok(joinRoom(room, "speaker", { role: "host" }).mediaObjects.objects.own);
+  const absent = { ...room, participants: [] };
+  const reconnected = joinRoom(absent, "speaker", { role: "member" });
+  assert.equal(reconnected.mediaObjects.objects.own, undefined);
+  assert.equal(reconnected.mediaObjects.surfaces["debug-main"]!.activeObjectId, null);
+});

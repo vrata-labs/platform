@@ -158,6 +158,8 @@ test("floor-1 admission writes are guarded, acknowledged and reconciled over nat
       const opens = await a.metric("vrata_personal_room_opens_total", "result", "owner");
       assert.equal(await a.seat(personal), null, "the personal room starts vacant");
       const viaOwner = a.minted(await a.post({ roomId: personal, participantId: owner }), personal, owner);
+      await until(async () => await a.metric("vrata_personal_room_opens_total", "result", "owner") === opens + 1,
+        "the personal open audit follows its settled read-only release");
       assert.deepEqual([viaInvite, viaBearer, viaApproval, viaOwner].map(value => `${value.claims.role}/${value.claims.roleSource}`),
         Array(4).fill("host/trusted"), "every trusted host source is one MAC-verified legacy host token");
       assert.deepEqual([await a.seat(invited), await a.seat(waitingRoom), await a.seat(personal),

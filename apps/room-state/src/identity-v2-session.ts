@@ -18,6 +18,28 @@ export interface VerifiedRoomSessionV2 {
   roomTemplate?: ParticipantAccessState["roomTemplate"];
 }
 
+export type VerifiedParticipantAuthority = Pick<VerifiedRoomSessionV2,
+  "tenantId" | "identityId" | "authEpoch" | "authorityRevision" | "role" | "permissions">;
+
+/** Session continuity is checked per socket; effective access is ordered across all of its participant's sockets. */
+export function latestVerifiedParticipantAuthority(previous: VerifiedParticipantAuthority | undefined,
+  incoming: VerifiedRoomSessionV2): VerifiedParticipantAuthority {
+  if (previous) {
+    if (incoming.tenantId !== previous.tenantId || incoming.identityId !== previous.identityId || incoming.authEpoch < previous.authEpoch) {
+      throw new SocketAuthorityError(1008, "invalid_session_token");
+    }
+    if (incoming.authEpoch === previous.authEpoch) {
+      if (incoming.authorityRevision < previous.authorityRevision) return previous;
+      if (incoming.authorityRevision === previous.authorityRevision
+        && (incoming.role !== previous.role || JSON.stringify(incoming.permissions) !== JSON.stringify(previous.permissions))) {
+        throw new SocketAuthorityError(1013, "identity_authority_unavailable");
+      }
+    }
+  }
+  return { tenantId: incoming.tenantId, identityId: incoming.identityId, authEpoch: incoming.authEpoch,
+    authorityRevision: incoming.authorityRevision, role: incoming.role, permissions: [...incoming.permissions] };
+}
+
 /** Concurrent poll and command checks must never restore an older grant. */
 export function latestVerifiedRoomSession(previous: VerifiedRoomSessionV2 | null, incoming: VerifiedRoomSessionV2): VerifiedRoomSessionV2 {
   if (!previous) return incoming;

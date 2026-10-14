@@ -186,6 +186,13 @@ export function createScreenShareRuntime(context: ScreenShareRuntimeContext) {
         ? currentObject
         : physicalScreenShareObjectForMediaTrack(context.roomMediaObjects, mediaSurfaceViews, entry.ownerParticipantId, entry.mediaTrackSid, "video");
       if (!isCurrentScreenShareObject(matchedObject)) {
+        if (!entry.remote && !entry.stopping) {
+          entry.stopping = true;
+          // Start all unpublish calls while their tracks and room still belong to
+          // this entry, then stop capture immediately; no late cleanup may detach a replacement.
+          void unpublishScreenShareEntry(entry).catch(() => undefined);
+          debugState.screenShareState = "stopped";
+        }
         detachScreenShareEntry(entry);
         continue;
       }

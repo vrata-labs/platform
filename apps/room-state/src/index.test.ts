@@ -14,6 +14,7 @@ import {
   applyDocumentMediaObjectsCleanup,
   applyPdfPresentationDocumentCleanup,
   applyPrivilegedRoomCommand,
+  applyVerifiedParticipantAccess,
   applySeatClaim,
   applySeatRelease,
   applySurfaceMediaAudioCommand,
@@ -22,9 +23,12 @@ import {
   disconnectParticipant,
   isRemoteBrowserFeatureEnabled,
   relayAvatarPoseFrame,
+  releaseVerifiedParticipantSocket,
   startRoomStateService,
   verifyRemoteBrowserBinding
 } from "./index.js";
+import { SocketAuthorityError } from "./identity-boundary.js";
+import type { VerifiedRoomSessionV2 } from "./identity-v2-session.js";
 
 function createSocket() {
   const sent: string[] = [];
@@ -37,6 +41,59 @@ function createSocket() {
     }
   };
 }
+
+test("participant-wide authority retires a share once and a delayed overlapping socket cannot restore its grant", () => {
+  const server = createRoomStateServer(), a = createSocket(), b = createSocket();
+  const presenter: VerifiedRoomSessionV2 = { tenantId: "tenant", roomId: "room", participantId: "speaker", identityId: "identity",
+    displayName: "Speaker", authEpoch: 1, sessionId: "first-session", expiresAtSeconds: Math.floor(Date.now() / 1000) + 600,
+    authorityRevision: 5, role: "presenter", permissions: getRoomPermissions("presenter") };
+  connectParticipant(server, "room", "speaker", a as never, applyVerifiedParticipantAccess(server, presenter));
+  connectParticipant(server, "room", "speaker", b as never, applyVerifiedParticipantAccess(server, { ...presenter, sessionId: "other-session" }));
+  const created = applyMediaObjectCreateCommand(server, "room", "speaker", { surfaceId: "debug-main", objectType: "screen-share" });
+  assert.equal(created.accepted, true);
+  a.sent.length = 0; b.sent.length = 0;
+  const member: VerifiedRoomSessionV2 = { ...presenter, authorityRevision: 6, role: "member", permissions: getRoomPermissions("member") };
+  applyVerifiedParticipantAccess(server, member);
+  assert.equal(a.sent.length, 1); assert.equal(b.sent.length, 1);
+  assert.equal(server.rooms.get("room")!.mediaObjects.objects[created.objectId!], undefined);
+  assert.equal(server.rooms.get("room")!.mediaObjects.surfaces["debug-main"]!.activeObjectId, null);
+  assert.equal(server.socketParticipants.get(a as never)!.access.role, "member");
+  assert.equal(server.socketParticipants.get(b as never)!.access.role, "member");
+  const stale = applyVerifiedParticipantAccess(server, { ...presenter, sessionId: "late-initial-verification" });
+  connectParticipant(server, "room", "speaker", createSocket() as never, stale);
+  connectParticipant(server, "room", "speaker", createSocket() as never, { role: presenter.role, permissions: presenter.permissions });
+  assert.equal(stale.role, "member");
+  assert.equal(applyMediaObjectCreateCommand(server, "room", "speaker", { surfaceId: "debug-main", objectType: "screen-share" }).accepted, false);
+  const broadcasts = a.sent.length;
+  applyVerifiedParticipantAccess(server, member);
+  assert.equal(a.sent.length, broadcasts, "unchanged authority is not rebroadcast");
+  assert.throws(() => applyVerifiedParticipantAccess(server, { ...presenter, authorityRevision: 6 }),
+    error => error instanceof SocketAuthorityError && error.closeCode === 1013);
+  assert.equal(server.rooms.get("room")!.participants[0]!.role, "member");
+  applyVerifiedParticipantAccess(server, { ...presenter, authorityRevision: 7 });
+  assert.equal(server.rooms.get("room")!.mediaObjects.objects[created.objectId!], undefined, "a fresh grant cannot resurrect the retired object");
+  assert.equal(applyMediaObjectCreateCommand(server, "room", "speaker", { surfaceId: "debug-main", objectType: "screen-share" }).accepted, true);
+});
+
+test("authority watermarks survive pending sockets but are released after the last connection", () => {
+  const server = createRoomStateServer(), admitted = createSocket() as never, pending = createSocket() as never, other = createSocket() as never;
+  const session: VerifiedRoomSessionV2 = { tenantId: "tenant", roomId: "room", participantId: "speaker", identityId: "identity",
+    displayName: "Speaker", authEpoch: 1, sessionId: "session", expiresAtSeconds: Math.floor(Date.now() / 1000) + 600,
+    authorityRevision: 6, role: "member", permissions: getRoomPermissions("member") };
+  server.v2Connections.set(admitted, { roomId: "room", participantId: "speaker" });
+  server.v2Connections.set(pending, { roomId: "room", participantId: "speaker" });
+  server.v2Connections.set(other, { roomId: "room", participantId: "other" });
+  connectParticipant(server, "room", "speaker", admitted, applyVerifiedParticipantAccess(server, session));
+  applyVerifiedParticipantAccess(server, { ...session, participantId: "other", identityId: "other" });
+  releaseVerifiedParticipantSocket(server, admitted);
+  assert.equal(server.participantAuthorities.get("room")!.get("speaker")!.authorityRevision, 6, "pending initial verification retains the watermark");
+  releaseVerifiedParticipantSocket(server, pending);
+  assert.equal(server.participantAuthorities.get("room")!.has("speaker"), false);
+  assert.equal(server.participantAuthorities.get("room")!.has("other"), true);
+  assert.equal(server.rooms.get("room")!.participants.length, 1, "cache release does not bypass disconnect grace cleanup");
+  releaseVerifiedParticipantSocket(server, other); releaseVerifiedParticipantSocket(server, other);
+  assert.equal(server.participantAuthorities.size, 0); assert.equal(server.v2Connections.size, 0);
+});
 
 test("room-state readiness endpoint reports ready", async () => {
   process.env.VRATA_DISABLE_AUTOSTART = "1";
@@ -63,6 +120,7 @@ test("room-state readiness endpoint reports ready", async () => {
     const metricsText = await metricsResponse.text();
     assert.match(metricsText, /vrata_room_state_active_rooms \d+/);
     assert.match(metricsText, /vrata_room_state_active_participants \d+/);
+    assert.match(metricsText, /vrata_room_state_screen_share_retired_total\{reason="permission_lost"\} \d+/);
     assert.match(metricsText, /vrata_image_viewers_started_total \d+/);
     assert.match(metricsText, /vrata_video_playback_commands_total\{command="play"\} \d+/);
 

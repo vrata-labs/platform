@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { createRequire } from "node:module";
 import { randomUUID } from "node:crypto";
+import { once } from "node:events";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { startLocalLiveKitFixture } from "./local-livekit-fixture.js";
@@ -76,11 +77,11 @@ async function roomFixture(request: any) {
     const response = await request.post(`${fixture.origin}/api/rooms/${roomId}/invites`, { headers: { "x-vrata-admin-token": fixture.adminToken }, data: { role, expiresInSeconds: 600 } });
     expect(response.status()).toBe(201); return await response.json();
   }
-  async function admit(role: "host" | "member") {
+  async function admit(role: "host" | "member", protocol: 1 | 2 = 1) {
     const invitation = await invite(role);
     const participantId = randomUUID();
-    const response = await request.post(`${fixture.origin}/api/tokens/state`, { data: { roomId, participantId, inviteToken: invitation.inviteToken, displayName: "Media test" } });
-    expect(response.status()).toBe(200); const state = { ...await response.json(), participantId };
+    const response = await request.post(`${fixture.origin}/api/tokens/state`, { data: { roomId, participantId, identityProtocolVersion: protocol, inviteToken: invitation.inviteToken, displayName: "Media test" } });
+    expect(response.status()).toBe(200); const issued = await response.json(), state = { ...issued, participantId: issued.participantId ?? participantId };
     const media = await request.post(`${fixture.origin}/api/tokens/media`, { headers: { authorization: `Bearer ${state.token}` },
       data: { roomId, participantId: state.participantId, canPublishAudio: true, canPublishVideo: role === "host" } });
     expect(media.status()).toBe(200); return { state, token: (await media.json()).token as string };
@@ -108,8 +109,94 @@ async function roomFixture(request: any) {
       });
     } finally { clearTimeout(timer!); client?.close(); }
   }
-  return { fixture, roomId, invite, admit, service, enableAudio };
+  async function activateV2() {
+    expect(fixture.schema).toMatch(/^template_e2e_[0-9a-f]{32}$/);
+    const { Pool } = createRequire(resolve("apps/api/package.json"))("pg");
+    const pool = new Pool({ connectionString: process.env.VRATA_TEST_POSTGRES_URL, options: `-c search_path=${fixture.schema},public` });
+    try {
+      const namespace = await pool.query("select current_schema() as name, 'room_identity_protocol_policy'::regclass::oid as policy");
+      expect(namespace.rows[0].name).toBe(fixture.schema);
+      const owner = await pool.query("select n.nspname from pg_class c join pg_namespace n on n.oid=c.relnamespace where c.oid=$1", [namespace.rows[0].policy]);
+      expect(owner.rows[0].nspname).toBe(fixture.schema);
+      const { PostgresStorage } = await import(pathToFileURL(resolve("apps/api/dist/storage.js")).href);
+      await new PostgresStorage(pool).identityProtocol.raise(2);
+    } finally { await pool.end(); }
+  }
+  return { fixture, roomId, invite, admit, service, enableAudio, activateV2 };
 }
+
+test("v2 Presenter revoke retires the screen independently of UI polling, denies old sockets and preserves microphone", async ({ page, browser, request }) => {
+  test.setTimeout(180_000); const h = await roomFixture(request), receiver = await browser.newPage();
+  const { WebSocket } = createRequire(resolve("apps/room-state/package.json"))("ws");
+  const sockets: any[] = [];
+  try {
+    const legacy = await h.admit("member"); await h.enableAudio(legacy.state.token); await h.activateV2();
+    const listening = await h.admit("member", 2);
+    const mediaRoom = JSON.parse(Buffer.from(listening.token.split(".")[1], "base64url").toString("utf8")).video.room as string;
+    await observer(receiver, h.fixture.origin, listening.token);
+    await captureSetup(page); await page.setViewportSize({ width: 640, height: 400 });
+    const actor = await h.invite("member");
+    const admission = page.waitForResponse(response => new URL(response.url()).pathname === "/api/tokens/state" && response.status() === 200);
+    await page.goto(`${actor.inviteLink}&debug=1&audiomock=1&onboard=0`);
+    const proof = await (await admission).json();
+    expect(String(proof.token).startsWith("rs2.")).toBe(true);
+    await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__?.roomStateConnected), { timeout: 20_000 }).toBe(true);
+    await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__?.audioState), { timeout: 30_000 }).toBe("connected-passive");
+    await page.locator("#join-audio").click(); await expect(page.locator("#toggle-mute")).toBeEnabled({ timeout: 20_000 });
+    await expect.poll(() => signal(receiver, "microphone"), { timeout: 20_000 }).toBe(true);
+    expect((await request.post(`${h.fixture.origin}/api/rooms/${h.roomId}/presenters/${proof.participantId}/grant`,
+      { headers: { "x-vrata-admin-token": h.fixture.adminToken } })).status()).toBe(200);
+    // Establish a Presenter at admission. Live v2 role UI refresh belongs to T13;
+    // this case tests revoke of an already publishing Presenter without UI assistance.
+    await page.reload();
+    await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__?.roomStateConnected), { timeout: 20_000 }).toBe(true);
+    await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__?.audioState), { timeout: 30_000 }).toBe("connected-passive");
+    await page.locator("#join-audio").click(); await expect(page.locator("#toggle-mute")).toBeEnabled({ timeout: 20_000 });
+    await expect(page.locator("#start-share")).toBeEnabled({ timeout: 20_000 }); await page.locator("#start-share").click();
+    await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__?.screenShare?.localPublishing), { timeout: 30_000 }).toBe(true);
+    await expect.poll(() => receiver.evaluate(() => (window as any).__sourceObserver.frames), { timeout: 20_000 }).toBeGreaterThan(2);
+    await expect.poll(() => signal(receiver, "screen_share_audio"), { timeout: 20_000 }).toBe(true);
+    const before = await h.service.getParticipant(mediaRoom, proof.participantId);
+    // A raw socket has no role UI or media cleanup. Keep the original RS2 across revoke and reconnect.
+    async function rawSocket() {
+      const url = new URL(h.fixture.stateOrigin.replace("http:", "ws:"));
+      url.searchParams.set("roomId", h.roomId); url.searchParams.set("participantId", proof.participantId); url.searchParams.set("accessToken", proof.token);
+      const socket = new WebSocket(url), messages: any[] = []; sockets.push(socket);
+      socket.on("message", (raw: Buffer) => { messages.push(JSON.parse(String(raw))); });
+      await once(socket, "open");
+      await expect.poll(() => messages.some(message => message.type === "room_state"), { timeout: 10_000 }).toBe(true);
+      return { socket, messages };
+    }
+    const stale = await rawSocket();
+    const active = stale.messages.find(message => message.type === "room_state").room.mediaObjects.surfaces["debug-main"].activeObjectId;
+    expect(!!active).toBe(true);
+    await page.route("**/api/rooms/*/session-control", route => route.abort());
+    expect((await request.post(`${h.fixture.origin}/api/rooms/${h.roomId}/presenters/${proof.participantId}/revoke`,
+      { headers: { "x-vrata-admin-token": h.fixture.adminToken } })).status()).toBe(200);
+    await expect.poll(() => stale.messages.some(message => message.type === "room_state"
+      && message.room.participants.some((participant: any) => participant.participantId === proof.participantId && participant.role === "member")
+      && message.room.mediaObjects.surfaces["debug-main"].activeObjectId === null), { timeout: 10_000 }).toBe(true);
+    await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__?.screenShareState), { timeout: 10_000 }).toBe("stopped");
+    await expect.poll(() => page.evaluate(() => (window as any).__sourceCapture.streams.length > 0
+      && (window as any).__sourceCapture.streams.every((stream: MediaStream) => stream.getTracks().every(track => track.readyState === "ended"))), { timeout: 10_000 }).toBe(true);
+    await expect.poll(async () => (await h.service.getParticipant(mediaRoom, proof.participantId)).tracks.some((track: any) => track.source === 3 || track.source === 4), { timeout: 10_000 }).toBe(false);
+    const after = await h.service.getParticipant(mediaRoom, proof.participantId);
+    expect(after.sid === before.sid).toBe(true); expect(after.tracks.some((track: any) => track.source === 2 && !track.muted)).toBe(true);
+    await expect.poll(() => signal(receiver, "microphone"), { timeout: 10_000 }).toBe(true);
+    for (const connection of [stale, await rawSocket()]) {
+      const commandId = randomUUID();
+      connection.socket.send(JSON.stringify({ type: "surface_create_object", commandId, surfaceId: "debug-main", objectType: "screen-share", probeOnly: false }));
+      await expect.poll(() => connection.messages.some(message => message.type === "access_denied" && message.result.commandId === commandId
+        && !message.result.accepted && message.result.blockedReason === "missing-permission"), { timeout: 10_000 }).toBe(true);
+      const patchId = randomUUID();
+      connection.socket.send(JSON.stringify({ type: "surface_patch_object_state", commandId: patchId, surfaceId: "debug-main", objectId: active, expectedRevision: 1, patch: { type: "mark-active", mediaTrackSid: "stale" } }));
+      await expect.poll(() => connection.messages.some(message => message.type === "access_denied" && message.result.commandId === patchId && !message.result.accepted), { timeout: 10_000 }).toBe(true);
+    }
+  } finally {
+    for (const socket of sockets) socket.terminate();
+    await Promise.allSettled([page.goto("about:blank"), receiver.close()]); await h.fixture.close();
+  }
+});
 
 test("fresh Member sources are enforced by self-hosted LiveKit even when SDK permission checks are bypassed", async ({ page, request }) => {
   test.setTimeout(180_000); const h = await roomFixture(request);

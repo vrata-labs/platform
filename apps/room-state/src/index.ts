@@ -8,6 +8,7 @@ import {
   REMOTE_BROWSER_OBJECT_TYPE,
   PDF_PRESENTATION_OBJECT_TYPE,
   VIDEO_PLAYER_OBJECT_TYPE,
+  SCREEN_SHARE_OBJECT_TYPE,
   IDENTITY_UPGRADE_CLOSE_CODE,
   getRoomPermissions,
   hasRoomPermission,
@@ -20,8 +21,9 @@ import {
   type RoomRole
 } from "@vrata/shared-types";
 import { getRoomSessionTokenSecret, isRotatedDevelopmentSession, verifyRoomSessionToken } from "@vrata/shared-types/session-token";
-import { createIdentityProtocolReader, guardLegacySocket, type ReadIdentityProtocolPolicy } from "./identity-boundary.js";
-import { createRoomSessionV2Verifier, latestVerifiedRoomSession, type VerifiedRoomSessionV2 } from "./identity-v2-session.js";
+import { createIdentityProtocolReader, guardLegacySocket, SocketAuthorityError, type ReadIdentityProtocolPolicy } from "./identity-boundary.js";
+import { createRoomSessionV2Verifier, latestVerifiedRoomSession, latestVerifiedParticipantAuthority,
+  type VerifiedParticipantAuthority, type VerifiedRoomSessionV2 } from "./identity-v2-session.js";
 
 import type { PresenceState } from "./schema.js";
 import {
@@ -71,6 +73,8 @@ export interface RoomStateServer {
   avatarReliableStates: Map<string, Map<string, AvatarReliableStatePayload>>;
   socketParticipants: Map<WebSocket, { roomId: string; participantId: string; access: ParticipantAccessState }>;
   pendingDisconnects: Map<string, Map<string, ReturnType<typeof setTimeout>>>;
+  participantAuthorities: Map<string, Map<string, VerifiedParticipantAuthority>>;
+  v2Connections: Map<WebSocket, { roomId: string; participantId: string }>;
 }
 
 const DISCONNECT_GRACE_MS = 1500;
@@ -86,7 +90,8 @@ const metrics = {
   videoPlayersStartedTotal: 0,
   documentMediaPermissionDeniedTotal: new Map<string, number>(),
   videoPlaybackCommandsTotal: new Map<string, number>(),
-  remoteBrowserDeniedTotal: new Map<string, number>()
+  remoteBrowserDeniedTotal: new Map<string, number>(),
+  screenShareRetiredTotal: 0
 };
 
 export interface SeatClaimResultPayload {
@@ -203,6 +208,9 @@ function roomStateMetricsText(authority: RoomStateServer): string {
     "# HELP vrata_room_state_disconnects_total Websocket disconnects observed by room-state.",
     "# TYPE vrata_room_state_disconnects_total counter",
     formatMetricLine("vrata_room_state_disconnects_total", metrics.socketDisconnectsTotal),
+    "# HELP vrata_room_state_screen_share_retired_total Screen-share objects retired after permission loss.",
+    "# TYPE vrata_room_state_screen_share_retired_total counter",
+    formatMetricLine("vrata_room_state_screen_share_retired_total", metrics.screenShareRetiredTotal, { reason: "permission_lost" }),
     "# HELP vrata_presentations_started_total Accepted PDF presentation object creations.",
     "# TYPE vrata_presentations_started_total counter",
     formatMetricLine("vrata_presentations_started_total", metrics.presentationsStartedTotal),
@@ -366,7 +374,10 @@ export function createRoomStateServer(): RoomStateServer {
     clients: new Map<string, Set<WebSocket>>(),
     avatarReliableStates: new Map<string, Map<string, AvatarReliableStatePayload>>(),
     socketParticipants: new Map<WebSocket, { roomId: string; participantId: string; access: ParticipantAccessState }>(),
-    pendingDisconnects: new Map<string, Map<string, ReturnType<typeof setTimeout>>>()
+    pendingDisconnects: new Map<string, Map<string, ReturnType<typeof setTimeout>>>(),
+    participantAuthorities: new Map<string, Map<string, VerifiedParticipantAuthority>>(),
+    // Includes initial verifications, before the socket becomes an admitted participant.
+    v2Connections: new Map<WebSocket, { roomId: string; participantId: string }>()
   };
 }
 
@@ -519,14 +530,58 @@ function broadcastToRoom(server: RoomStateServer, roomId: string, payload: unkno
   }
 }
 
+function joinWithAccess(room: RoomState, participantId: string, access: ParticipantAccessState): RoomState {
+  const next = joinRoom(room, participantId, access);
+  metrics.screenShareRetiredTotal += Object.values(room.mediaObjects.objects).filter(object =>
+    object.type === SCREEN_SHARE_OBJECT_TYPE && object.ownerParticipantId === participantId && !next.mediaObjects.objects[object.objectId]).length;
+  return next;
+}
+
+export function releaseVerifiedParticipantSocket(server: RoomStateServer, socket: WebSocket): void {
+  const closing = server.v2Connections.get(socket);
+  if (!closing) return;
+  server.v2Connections.delete(socket);
+  for (const connection of server.v2Connections.values()) {
+    if (connection.roomId === closing.roomId && connection.participantId === closing.participantId) return;
+  }
+  // No still-open initial verification can deliver an older grant. A fresh
+  // reconnect must read API authority again; a closed socket cannot repopulate this cache.
+  const records = server.participantAuthorities.get(closing.roomId);
+  records?.delete(closing.participantId);
+  if (records?.size === 0) server.participantAuthorities.delete(closing.roomId);
+}
+
+export function applyVerifiedParticipantAccess(server: RoomStateServer, current: VerifiedRoomSessionV2): ParticipantAccessState {
+  const records = server.participantAuthorities.get(current.roomId) ?? new Map<string, VerifiedParticipantAuthority>();
+  const effective = latestVerifiedParticipantAuthority(records.get(current.participantId), current);
+  records.set(current.participantId, effective);
+  server.participantAuthorities.set(current.roomId, records);
+  const access: ParticipantAccessState = { role: effective.role, permissions: [...effective.permissions],
+    sceneMediaSurfaces: current.sceneMediaSurfaces, roomTemplate: current.roomTemplate };
+  for (const metadata of server.socketParticipants.values()) {
+    if (metadata.roomId === current.roomId && metadata.participantId === current.participantId) {
+      metadata.access = { ...metadata.access, role: access.role, permissions: [...effective.permissions] };
+    }
+  }
+  const room = server.rooms.get(current.roomId);
+  const previous = room?.participants.find(participant => participant.participantId === current.participantId);
+  if (room && previous && (previous.role !== access.role || JSON.stringify(previous.permissions) !== JSON.stringify(access.permissions))) {
+    server.rooms.set(current.roomId, joinWithAccess(room, current.participantId, access));
+    broadcastRoom(server, current.roomId);
+  }
+  return access;
+}
+
 export function connectParticipant(server: RoomStateServer, roomId: string, participantId: string, socket: WebSocket, access: ParticipantAccessState = defaultAccess()): void {
+  const latest = server.participantAuthorities.get(roomId)?.get(participantId);
+  if (latest) access = { ...access, role: latest.role, permissions: [...latest.permissions] };
   const room = ensureRoom(server, roomId);
   const bound = applyRoomTemplateContext(room, access.roomTemplate);
   const configured = !access.roomTemplate && access.sceneMediaSurfaces
     ? { ...bound, mediaObjects: registerSceneMediaSurfaces(bound.mediaObjects, roomId, access.sceneMediaSurfaces) }
     : bound;
   cancelPendingDisconnect(server, roomId, participantId);
-  server.rooms.set(roomId, joinRoom(configured, participantId, access));
+  server.rooms.set(roomId, joinWithAccess(configured, participantId, access));
   const set = server.clients.get(roomId) ?? new Set<WebSocket>();
   set.add(socket);
   server.clients.set(roomId, set);
@@ -1202,6 +1257,7 @@ export function startRoomStateService(port = Number.parseInt(process.env.ROOM_ST
     const onDenied = (event: { code: number; reason: string; queuedMessages: number; queuedBytes: number; errorKind?: string }) =>
       logEvent({ service: "room-state", event: "identity_boundary_denied", roomId, participantId, ...event });
     if (v2) {
+      authority.v2Connections.set(socket, { roomId, participantId });
       let verifiedAccess: ParticipantAccessState | null = null;
       let lastVerified: VerifiedRoomSessionV2 | null = null;
       guardLegacySocket({ socket, roomId, onDenied, dispatch,
@@ -1210,22 +1266,11 @@ export function startRoomStateService(port = Number.parseInt(process.env.ROOM_ST
         readPolicy: async () => {
           const current = latestVerifiedRoomSession(lastVerified, await verifyV2Session(roomId, participantId, token!,
             !authority.socketParticipants.has(socket)));
+          if (socket.readyState !== socket.OPEN) throw new SocketAuthorityError(1008, "invalid_session_token");
           lastVerified = current;
-          verifiedAccess = { role: current.role, permissions: current.permissions,
+          verifiedAccess = applyVerifiedParticipantAccess(authority, { ...current,
             sceneMediaSurfaces: current.sceneMediaSurfaces ?? verifiedAccess?.sceneMediaSurfaces,
-            roomTemplate: current.roomTemplate ?? verifiedAccess?.roomTemplate };
-          const metadata = authority.socketParticipants.get(socket);
-          if (metadata) {
-            const previous = metadata.access;
-            metadata.access = verifiedAccess;
-            if (previous.role !== verifiedAccess.role || JSON.stringify(previous.permissions) !== JSON.stringify(verifiedAccess.permissions)) {
-              const room = authority.rooms.get(roomId);
-              if (room) {
-                authority.rooms.set(roomId, joinRoom(room, participantId, verifiedAccess));
-                broadcastRoom(authority, roomId);
-              }
-            }
-          }
+            roomTemplate: current.roomTemplate ?? verifiedAccess?.roomTemplate });
           return { minimumProtocolVersion: 1, roomRequiresV2: false };
         },
         admit: () => {
@@ -1238,6 +1283,7 @@ export function startRoomStateService(port = Number.parseInt(process.env.ROOM_ST
 
     socket.on("close", () => {
       metrics.socketDisconnectsTotal += 1;
+      releaseVerifiedParticipantSocket(authority, socket);
       if (authority.socketParticipants.has(socket)) disconnectParticipant(authority, roomId, participantId, socket);
     });
 

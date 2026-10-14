@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { getRoomPermissions } from "@vrata/shared-types";
-import { createRoomSessionV2Verifier, latestVerifiedRoomSession } from "./identity-v2-session.js";
+import { createRoomSessionV2Verifier, latestVerifiedRoomSession, latestVerifiedParticipantAuthority } from "./identity-v2-session.js";
 import { SocketAuthorityError } from "./identity-boundary.js";
 
 const session = {
@@ -60,4 +60,18 @@ test("a delayed old role cannot overwrite a newer authority revision or another 
     error => error instanceof SocketAuthorityError && error.closeCode === 1008);
   assert.throws(() => latestVerifiedRoomSession(host, { ...host, role: "member", permissions: getRoomPermissions("member") }),
     error => error instanceof SocketAuthorityError && error.closeCode === 1013);
+});
+
+test("participant authority is shared across sessions but never across principals or older epochs", () => {
+  const prior = latestVerifiedParticipantAuthority(undefined, { ...session, role: "member", authorityRevision: 6 });
+  const oldHost = { ...session, sessionId: "other", authorityRevision: 5, role: "host" as const, permissions: getRoomPermissions("host") };
+  assert.equal(latestVerifiedParticipantAuthority(prior, oldHost), prior);
+  for (const invalid of [{ ...oldHost, tenantId: "other" }, { ...oldHost, identityId: "other" }, { ...oldHost, authEpoch: 0 }]) {
+    assert.throws(() => latestVerifiedParticipantAuthority(prior, invalid), error => error instanceof SocketAuthorityError && error.closeCode === 1008);
+  }
+  const newerEpoch = latestVerifiedParticipantAuthority(prior, { ...session, role: "member", authEpoch: 2, authorityRevision: 1 });
+  assert.equal(newerEpoch.authEpoch, 2);
+  assert.throws(() => latestVerifiedParticipantAuthority(newerEpoch, { ...oldHost, authorityRevision: 99 }),
+    error => error instanceof SocketAuthorityError && error.closeCode === 1008);
+  assert.equal("sessionId" in newerEpoch, false, "shared authority must not retain another socket's continuity proof");
 });

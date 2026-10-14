@@ -314,6 +314,55 @@ JWTs, refreshed self-hosted tokens, connected-session revocation and source
 mislabelling/content attestation remain outside this issuance/upgrade boundary.
 Staging and shared floor-2 activation are excluded by the user's instruction.
 
+### Presenter screen retirement: T13a-S1 (staging excluded)
+
+Current authority is already read by the v2 room-state verifier before effects
+and by its independent idle poll. Role loss now removes that participant's
+screen-share objects and clears their surface bindings in the common admission/
+access-update reducer. Other participants' captures, PDF/image/video content,
+whiteboards, notes and remote-browser objects remain. A later grant does not
+resurrect the old object; creating another requires fresh authorization.
+
+The effective access watermark belongs to a room participant, not to one socket.
+It contains principal, epoch, revision and access, never another socket's session
+proof. A delayed lower revision cannot restore a role during overlapping reconnects.
+Conflicting access at the same revision fails closed with 1013; another principal
+or older epoch fails with 1008. Per-socket continuity verification remains separate.
+Watermarks cover all open v2 sockets, including pending initial verifications.
+Admission re-reads the shared watermark synchronously. Closing the last matching
+socket releases its watermark, without changing disconnect-grace room cleanup;
+historical identities do not accumulate in the cache. A response for an
+already-closed socket cannot change or recreate that cache.
+On service restart every new v2 socket still requires current API verification.
+
+The runtime starts explicit unpublish of the local screen tracks before detaching
+an object that is no longer authoritative, and stops capture immediately. Late
+unpublish completion cannot detach a replacement. An explicit stop retains its own
+cleanup and is not duplicated; remote tracks are only detached. Microphone tracks
+are not part of screen cleanup. The bounded counter
+`vrata_room_state_screen_share_retired_total{reason="permission_lost"}` records
+server object retirement.
+
+API role-command200 continues to mean committed desired authority, not synchronous
+LiveKit revocation. Normal v2 convergence uses the existing one-second room-state
+poll and bounded authority reads. Outages deny effect-bearing commands and close
+the socket; this does not claim removal of every live media publication from an
+uncooperative client. Proactive LiveKit lowering, partial-apply/restart reconciliation,
+removed/end-session enforcement and old self-hosted JWT rejoin remain T13a-S2/S3.
+A genuine LiveKit1.13.7 probe confirmed source lowering removes existing screen
+video/audio while keeping microphone and SID, even with SDK permission handling
+suppressed; production integration and replay enforcement are still pending.
+
+The genuine browser revoke case owns a disposable floor-2 PostgreSQL schema and
+uses the built runtime, live API/WS, real video frames and audio samples. It
+disables UI session-control polling before revoke and checks old raw sockets and
+reconnect with the same RS2. It establishes Presenter at admission: the existing
+v2 control response supplies participant access without a replacement token, while
+the runtime role UI currently requires token/access together. Live v2 promotion
+and demotion UI refresh remain a T13 obligation; a stale visible control cannot
+bypass the server's fresh create authorization. This checkpoint does not fix that UI.
+Shared floor1, full identity/media activation and staging remain unchanged.
+
 ### Ownership refresh during startup
 
 `session-control-poller.ts` owns authority refresh independently of rendered

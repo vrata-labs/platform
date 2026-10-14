@@ -1248,6 +1248,89 @@ AF принят в границах fresh source grants и main-path live promot
 T13a connected-session/rejoin enforcement, executor media, bootstrap reconciliation
 и durable retirement остаются отдельными gates.
 
+### T13a-S1: снятие screen-share при утрате прав
+
+Первый срез отзыва Presenter реализован в общем admission/access reducer room-state:
+утрата screen-share.start удаляет только принадлежащие участнику screen-share
+объекты и освобождает поверхности. Документы, доски, remote-browser и чужие показы
+сохраняются. Повторное применение идемпотентно, новый grant не возвращает старый объект.
+
+Общая монотонная authority теперь хранится на участника комнаты, отдельно от
+session continuity каждого сокета. Запоздавшая initial verification/reconnect не
+отменяет более новую demotion; одинаковая revision с несовместимой ролью закрывает
+сокет 1013. Pending initial sockets удерживают watermark до последнего close;
+после него запись удаляется, чтобы не копить историю identity в памяти. Проверка
+завершённого сокета не меняет и не создаёт watermark. Runtime при
+исчезновении своего объекта явно начинает unpublish обоих screen sources и сразу
+останавливает capture, не трогая микрофон или новый entry из позднего callback.
+
+Адресные проверки после package build: room-state **86/86**, runtime screen-share
+**56/56**; дополнительно настоящий HTTP/WS controlled-order test прошёл. Новый
+genuine PG/API/WS/main-runtime/LiveKit сценарий отзыва прошёл **1/1**: отключён
+UI session-control poll, удалён media object, остановлены screen video/audio,
+сохранены microphone signal и SID. Старый raw WS и reconnect с прежним RS2 не могут
+создать объект или применить patch. Финальные workspace/full E2E/CI результаты
+фиксируются после завершения проверок.
+
+Промежуточные результаты сохранены: первый browser setup не стал Presenter в UI,
+хотя API grant закоммичен. Это предсуществующий v2 UI gap — control response отдаёт
+participant.role/permissions без token/access, а runtime применяет роль только вместе
+с token. Сценарий S1 устанавливает Presenter при повторном admission до показа;
+сам revoke проверяется на активном показе без reload или UI-помощи. Live v2 role UI
+refresh для promotion и demotion остаётся T13; видимая старая кнопка не обходит
+серверную проверку create. Один прямой Node test без VRATA_DISABLE_AUTOSTART оставил
+autostart service и был прерван timeout; его результат не принят. Повтор с правильной
+переменной завершился1/1, собственный service port освобождён. В этом checkout
+focused pnpm arguments передаются без дополнительного разделителя --.
+
+API200 здесь означает только COMMIT роли. S1 не закрывает proactive lowering
+прав недобросовестного LiveKit publisher, partial ACK/restart reconciliation,
+remove/end/rejoin и старые self-hosted JWT. Отдельный disposable LiveKit1.13.7 probe
+подтвердил mic-only UpdateParticipant: существующие screen video/audio сняты,
+микрофон реально принимается и SID прежний при подавленном SDK permission handler.
+Это подготовка T13a-S2, а не его production приёмка. Общий floor1 и staging
+не менялись; проверка floor2 ограничена собственным disposable schema.
+
+Первый окончательный workspace-прогон не принят: прежний admission test прочитал
+personal-open counter до завершения post-release учёта, а media/persisted-state
+fixtures получили startup/parent timeouts. Во время отказов собственный PostgreSQL
+ожидал DataFileImmediateSync **46 секунд**, наблюдался host I/O wait **32–39%**.
+Это наблюдение объясняет задержки хранения, но само по себе не доказывает причину
+каждого исторического timeout. Уже провалившийся прогон остановлен; E2E в нём
+не запускался. Только собственный disposable PostgreSQL заменён fixture на tmpfs;
+fsync, full_page_writes и synchronous_commit остались on. Соседние сервисы и
+Docker/WSL infrastructure не перезапускались.
+
+В admission regression добавлено ожидание именно уже ожидаемого personal-open
+counter после settled read-only release, по аналогии с ожиданием host audit.
+Проверяемое значение, assertions и deadlines не менялись. Новые окончательные
+package/full E2E gates выполняются после этой executable правки.
+
+Окончательный повтор workspace с tmpfs PostgreSQL завершён успешно:
+lint/typecheck/build/test **exit0**, API **1576 passed / 1 optional MinIO skip**,
+runtime **1128/1128**, room-state **88/88**, remote-browser **71/71**,
+tools **262 passed / 2 optional skips**. Обязательные PostgreSQL и pinned rollback
+fixtures включены. Адресные RTC-сценарии прошли **7/7**, три затронутых native API
+набора после исправления accounting barrier — **76/76**. Полный E2E окончательного
+дерева содержит **209 сценариев**; его результат фиксируется отдельно.
+
+Первый полный E2E на этом дереве: **208/209 за 53,2 минуты**, skipped0/flaky0.
+Все семь genuine RTC cases прошли. Единственный отказ M0.5 spatial-audio возник
+в browser.newPage на строке7, до page.goto и до загрузки приложения: общий
+45-секундный test timeout. Этот результат не принят. Адресный запуск того же
+неизменённого сценария завершился **1/1 за 8,9 секунды**; первопричина задержки
+создания Chromium page не установлена. Полный suite повторяется на том же
+исполняемом дереве без retries, skips, изменения assertions или deadlines.
+Успешный повтор сам по себе не считается исправлением этого browser-start отказа.
+
+Окончательный полный локальный E2E на том же исполняемом дереве:
+**209/209 за 58,2 минуты**, expected209/skipped0/unexpected0/flaky0,
+exit0. M0.5 spatial-audio прошёл за10,3 секунды; все семь genuine source/revoke
+сценариев прошли повторно. Публичная четырёхсторонняя встреча, собственный PDF,
+notes/controls, reference room flows и seat-marker checks также зелёные.
+Итоговый отчёт: t13a-s1-final209-browser-recheck.json. Нативная и browser-приёмка
+S1 завершены; CI/Docker публикация фиксируется отдельно.
+
 ## Публикация первого среза T01/T12
 
 Локально прошли workspace lint/typecheck/build/tests с PostgreSQL, затем runtime build и 905 runtime tests после финальных правок. Полный `pnpm test:e2e` на финальном исполняемом дереве: **148 passed**, без skip (41.6 min).

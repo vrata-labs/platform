@@ -1889,17 +1889,22 @@ export function setSurfaceMediaAudioEnabled(state: RoomState, participantId: str
 
 export function joinRoom(state: RoomState, participantId: string, access?: ParticipantAccessState): RoomState {
   const mediaObjects = ensureMediaObjectsState(state);
-  if (state.participants.some((item) => item.participantId === participantId)) {
-    return {
-      ...state,
-      mediaObjects,
-      participants: state.participants.map((item) => item.participantId === participantId ? applyParticipantAccess(item, access) : item)
-    };
+  const previous = state.participants.find((item) => item.participantId === participantId);
+  const participant = previous ? applyParticipantAccess(previous, access) : createParticipantState(participantId, access);
+  // Authority changes and reconnects share this invariant. Room content remains,
+  // but a participant without capture permission cannot retain a live screen.
+  if (!hasRoomPermission(participant.permissions, "screen-share.start")) {
+    for (const [objectId, object] of Object.entries(mediaObjects.objects)) {
+      if (object.type !== SCREEN_SHARE_OBJECT_TYPE || object.ownerParticipantId !== participantId) continue;
+      delete mediaObjects.objects[objectId];
+      const surface = mediaObjects.surfaces[object.surfaceId];
+      if (surface?.activeObjectId === objectId) surface.activeObjectId = null;
+    }
   }
   return {
     ...state,
     mediaObjects,
-    participants: [...state.participants, createParticipantState(participantId, access)]
+    participants: previous ? state.participants.map((item) => item === previous ? participant : item) : [...state.participants, participant]
   };
 }
 
