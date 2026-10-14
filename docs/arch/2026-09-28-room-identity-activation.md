@@ -314,7 +314,7 @@ JWTs, refreshed self-hosted tokens, connected-session revocation and source
 mislabelling/content attestation remain outside this issuance/upgrade boundary.
 Staging and shared floor-2 activation are excluded by the user's instruction.
 
-### Presenter screen retirement: T13a-S1 (staging excluded)
+### Presenter screen retirement: T13a-S1 (published; staging excluded)
 
 Current authority is already read by the v2 room-state verifier before effects
 and by its independent idle poll. Role loss now removes that participant's

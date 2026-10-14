@@ -1331,6 +1331,34 @@ notes/controls, reference room flows и seat-marker checks также зелён
 Итоговый отчёт: t13a-s1-final209-browser-recheck.json. Нативная и browser-приёмка
 S1 завершены; CI/Docker публикация фиксируется отдельно.
 
+#### Публикация T13a-S1
+
+| Этап | Результат |
+|---|---|
+| Code SHA рабочей ветки | `584ec77c466a50b98c687e6a9a6d4d3a5fb33ab7` |
+| [CI 38548877731](https://github.com/vrata-labs/platform/actions/runs/38548877731) | Success, attempt1: lint/typecheck/build, package/PG/rollback checks, **209/209 E2E за 33,8 минуты**, **16/16 M0.5 за 2,4 минуты**, pinned scene assets |
+| [Docker Publish 38548877657](https://github.com/vrata-labs/platform/actions/runs/38548877657) | Success, attempt1: immutable exact-SHA API/room-state/remote-browser images, YCR manifests проверены |
+| [Playwright artifact 11887149889](https://github.com/vrata-labs/platform/actions/runs/38548877731/artifacts/11887149889) | CI E2E/M0.5 evidence, включая genuine scoped-source и Presenter-revoke cases |
+| Staging | Deploy и проверка исключены по прямому поручению пользователя; общий floor1 сохранён |
+
+CI подтвердил API **1576 passed / 1 optional skip**, runtime **1128/1128**,
+room-state **88/88**, remote-browser **71/71**, tools **262 passed / 2 optional
+skips**. Все обязательные PG/rollback fixtures включены; семь real-RTC cases
+прошли в составе209. Повтор CI/Docker run и откат кода не понадобились;
+непринятые локальные прогоны и их причины/границы приведены выше.
+
+Опубликованные manifests exact SHA:
+- API: `sha256:70f9353b0a7e4550693f8a4d5fce6d67b3d8afe172a99786609e63ee63fc6ba7`.
+- room-state: `sha256:3611d846e3ea88904f8a66a03d86b90efa8a95981bb3321c5e6057b97a5508a8`.
+- remote-browser: `sha256:9a8692c1734fb2a786f4a0080ed12f4e01e3fb79ab71686ba46a07946baea58d`.
+
+Оба собственных PostgreSQL fixtures удалены с проверкой ID/label; их service и
+fixture ports освобождены, extractor containers закрыты. Соседние процессы и
+staging-инфраструктура не менялись. T13a-S1 принят в границах server room-state
+retirement и unpublish сотрудничающим runtime. Proactive LiveKit enforcement,
+partial-apply/restart reconciliation, remove/end/old-JWT rejoin и live v2 role UI
+остаются следующими срезами T13a/T13.
+
 ## Публикация первого среза T01/T12
 
 Локально прошли workspace lint/typecheck/build/tests с PostgreSQL, затем runtime build и 905 runtime tests после финальных правок. Полный `pnpm test:e2e` на финальном исполняемом дереве: **148 passed**, без skip (41.6 min).
