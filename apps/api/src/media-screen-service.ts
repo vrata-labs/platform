@@ -1,7 +1,7 @@
 import { RoomServiceClient } from "livekit-server-sdk";
 import type { RoomRecord, RoomSessionControlState, Storage } from "./storage-contracts.js";
 import { getLivekitCredentials, getMediaTokenConfigError } from "./livekit-config.js";
-import { createMediaScreenReconciler, type MediaScreenAuthority, type MediaScreenReconciliationStatus } from "./media-screen-reconciler.js";
+import { createMediaScreenReconciler, MEDIA_RECONCILIATION_VERSION, type MediaScreenAuthority, type MediaScreenReconciliationStatus } from "./media-screen-reconciler.js";
 
 /** Both room lifecycle and its publisher identities come from one read-only storage snapshot. */
 export async function readMediaScreenAuthority(storage: Storage, roomId: string): Promise<MediaScreenAuthority> {
@@ -48,13 +48,15 @@ export function createMediaScreenService(storagePromise: Promise<Storage>, optio
         return status.desiredVersion.authorityRevision === expectedRevision ? status
           : { ...status, state: status.state === "unavailable" ? "unavailable" : "pending", observedAtMs: null, nativeRoom: "unknown" };
       } catch {
-        return { state: "unavailable", desiredVersion: { authorityRevision: expectedRevision, roomActive: null },
+        return { enforcementVersion: MEDIA_RECONCILIATION_VERSION,
+          state: "unavailable", desiredVersion: { authorityRevision: expectedRevision, roomActive: null },
           observedAtMs: null, nativeRoom: "unknown" };
       }
     },
     committed(room: RoomRecord, revision: number, state: RoomSessionControlState): MediaScreenReconciliationStatus {
       reconciler.invalidate(room.roomId);
-      return { state: "pending", desiredVersion: { authorityRevision: revision,
+      return { enforcementVersion: MEDIA_RECONCILIATION_VERSION,
+        state: "pending", desiredVersion: { authorityRevision: revision,
         roomActive: room.status !== "disabled" && !room.disabledAt && !state.endedAt }, observedAtMs: null, nativeRoom: "unknown" };
     }
   };

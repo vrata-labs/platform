@@ -2,7 +2,16 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { ParticipantInfo, ParticipantPermission, TrackInfo, TrackSource } from "livekit-server-sdk";
 import { createUserMediaIdentity } from "@vrata/shared-types";
-import { screenSourceLowering, screenSourcesRetired, verifiedSourcePeer } from "./media-source-permissions.js";
+import { mustEvictUserMedia, screenSourceLowering, screenSourcesRetired, verifiedSourcePeer } from "./media-source-permissions.js";
+
+test("terminal removal is independent of source class or current screen role", () => {
+  const active = { revision: 2, roomActive: true, publisherParticipantIds: ["host"], removedParticipantIds: ["removed"] };
+  assert.equal(mustEvictUserMedia(active, "removed"), true);
+  assert.equal(mustEvictUserMedia(active, "member"), false);
+  assert.equal(mustEvictUserMedia(active, "host"), false);
+  assert.equal(mustEvictUserMedia({ ...active, roomActive: false }, "host"), true);
+  assert.equal(mustEvictUserMedia(null, "member"), true);
+});
 
 test("screen lowering has one fixed permission tuple per immutable source class", () => {
   assert.equal(screenSourceLowering("m"), null);

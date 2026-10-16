@@ -14,7 +14,7 @@ LABEL io.vrata.identity-protocol-floor-guard="1"
 LABEL io.vrata.room-record-reader="2"
 LABEL io.vrata.frame-token-codec="2"
 LABEL io.vrata.media-identity-codec="2"
-LABEL io.vrata.media-screen-reconciler="1"
+LABEL io.vrata.media-screen-reconciler="2"
 
 ENV NODE_ENV=production
 WORKDIR /app

@@ -20,8 +20,10 @@ function harness(options: Partial<Parameters<typeof createMediaScreenReconciler>
   let time = 1000, contextEnabled = true;
   let desired: MediaScreenAuthority = { tenantId: "tenant", authority: { revision: 3, roomActive: true, publisherParticipantIds: ["current"] } };
   const rooms = new Map<string, ParticipantInfo[]>(), updates: Array<{ room: string; identity: string; permission: object }> = [], events: string[] = [];
-  let beforeUpdate: (() => void | Promise<void>) | undefined, afterList: (() => void) | undefined;
+  const removals: Array<{ room: string; identity: string }> = [];
+  let beforeUpdate: (() => void | Promise<void>) | undefined, beforeRemove: (() => void | Promise<void>) | undefined, afterList: (() => void) | undefined;
   let listingFailed = false, writeFailed = false, preserveTracks = false, lists = 0;
+  let removalFailed = false, keepRemovedPeer = false, loseRemovalAck = false;
   const native = {
     async listRooms(names?: string[]) { lists++; if (listingFailed) throw new Error("secret-url-must-not-escape");
       return [...rooms.keys()].filter(name => !names?.length || names.includes(name)).map(name => new Room({ name })); },
@@ -34,20 +36,112 @@ function harness(options: Partial<Parameters<typeof createMediaScreenReconciler>
       current.permission = new ParticipantPermission(input.permission);
       if (!preserveTracks) current.tracks = current.tracks.filter(track => current.permission!.canPublish && current.permission!.canPublishSources.includes(track.source));
       return current.clone();
+    },
+    async removeParticipant(room: string, identity: string) {
+      await beforeRemove?.();
+      if (removalFailed) throw new Error("private-removal-failure");
+      removals.push({ room, identity });
+      if (!keepRemovedPeer) rooms.set(room, (rooms.get(room) ?? []).filter(peer => peer.identity !== identity));
+      if (loseRemovalAck) { loseRemovalAck = false; throw new Error("private-removal-ack-loss"); }
     }
   };
   const reconciler = createMediaScreenReconciler({
     now: () => time, context: async () => contextEnabled ? { namespace, prefix, native } : null,
     authority: async () => desired, event: event => events.push(event), ...options
   });
-  return { reconciler, rooms, updates, events, native, status: (currentNamespace: string | null = namespace) => reconciler.status(roomId, desired, currentNamespace),
+  return { reconciler, rooms, updates, removals, events, native, status: (currentNamespace: string | null = namespace) => reconciler.status(roomId, desired, currentNamespace),
     setDesired: (value: MediaScreenAuthority) => { desired = value; },
     disable: () => { contextEnabled = false; }, advance: (ms: number) => { time += ms; },
     beforeUpdate: (callback: typeof beforeUpdate) => { beforeUpdate = callback; },
+    beforeRemove: (callback: typeof beforeRemove) => { beforeRemove = callback; },
     afterList: (callback: typeof afterList) => { afterList = callback; },
     failListing: (value: boolean) => { listingFailed = value; }, failWrite: (value: boolean) => { writeFailed = value; },
+    failRemoval: (value: boolean) => { removalFailed = value; }, keepRemovedPeer: (value: boolean) => { keepRemovedPeer = value; },
+    loseRemovalAck: () => { loseRemovalAck = true; },
     preserveTracks: (value: boolean) => { preserveTracks = value; }, listCount: () => lists };
 }
+
+test("terminal user removal disconnects every source class instead of merely lowering screen permissions", async () => {
+  const h = harness();
+  h.rooms.set(mediaRoom, [await peer("target", "m"), await peer("target", "s"), await peer("target", "ms")]);
+  h.setDesired({ tenantId: "tenant", authority: { revision: 4, roomActive: false, publisherParticipantIds: [] } });
+  await h.reconciler.runOnce();
+  assert.equal(h.removals.length, 3);
+  assert.equal(h.updates.length, 0);
+  assert.equal(h.rooms.get(mediaRoom)!.length, 0);
+  assert.equal(h.status().state, "observed");
+});
+
+test("public removal evicts only its participant and never sends a competing source update", async () => {
+  const h = harness(), others = await peer("current", "m");
+  h.rooms.set(mediaRoom, [await peer("removed", "m"), await peer("removed", "s"), await peer("removed", "ms"), others]);
+  h.setDesired({ tenantId: "tenant", authority: { revision: 4, roomActive: true, publisherParticipantIds: ["current"], removedParticipantIds: ["removed"] } });
+  await h.reconciler.runOnce();
+  assert.equal(h.removals.length, 3); assert.equal(h.updates.length, 0);
+  assert.deepEqual(h.rooms.get(mediaRoom)!.map(peer => peer.identity), [others.identity]);
+  assert.equal(h.status().enforcementVersion, 2); assert.equal(h.status().state, "observed");
+});
+
+test("failed removal, new-SID presence and lost successful removal ACK cannot falsely acknowledge eviction", async () => {
+  const h = harness(), target = await peer("removed", "m"); h.rooms.set(mediaRoom, [target]);
+  h.setDesired({ tenantId: "tenant", authority: { revision: 4, roomActive: true, publisherParticipantIds: [], removedParticipantIds: ["removed"] } });
+  h.failRemoval(true); await h.reconciler.runOnce(); assert.equal(h.status().state, "pending");
+  h.failRemoval(false); h.keepRemovedPeer(true); h.beforeRemove(() => { target.sid = "new-rejoin-sid"; });
+  await h.reconciler.runOnce(); assert.equal(h.status().state, "pending", "any still-present removed identity blocks observation, including microphone-only replacements");
+  h.beforeRemove(undefined); h.keepRemovedPeer(false); h.loseRemovalAck();
+  await h.reconciler.runOnce(); assert.equal(h.rooms.get(mediaRoom)!.length, 0); assert.equal(h.status().state, "pending");
+  const writes = h.removals.length; await h.reconciler.runOnce(); assert.equal(h.removals.length, writes); assert.equal(h.status().state, "observed");
+});
+
+test("room re-enable racing an already sent removal is an availability event, not a success for the new desired state", async () => {
+  const h = harness(), target = await peer("current", "m"); h.rooms.set(mediaRoom, [target]);
+  h.setDesired({ tenantId: "tenant", authority: { revision: 3, roomActive: false, publisherParticipantIds: [], observationVersion: "disabled-row" } });
+  h.beforeRemove(() => h.setDesired({ tenantId: "tenant", authority: { revision: 3, roomActive: true, publisherParticipantIds: ["current"], observationVersion: "enabled-row" } }));
+  await h.reconciler.runOnce(); assert.equal(h.removals.length, 1); assert.equal(h.status().state, "pending");
+  h.beforeRemove(undefined); h.rooms.set(mediaRoom, [await peer("current", "m")]);
+  await h.reconciler.runOnce(); assert.equal(h.removals.length, 1); assert.equal(h.status().state, "observed");
+});
+
+test("room observation tokens and removal digests prevent cache success carrying across different room records", async () => {
+  const h = harness(); h.rooms.set(mediaRoom, [await peer("current", "m")]);
+  const authority = { revision: 3, roomActive: true, publisherParticipantIds: ["current"], removedParticipantIds: [], observationVersion: "old-row" };
+  h.setDesired({ tenantId: "tenant", authority }); await h.reconciler.runOnce(); assert.equal(h.status().state, "observed");
+  h.setDesired({ tenantId: "tenant", authority: { ...authority, observationVersion: "new-row" } });
+  assert.equal(h.status().state, "pending"); await h.reconciler.runOnce(); assert.equal(h.status().state, "observed");
+  h.setDesired({ tenantId: "tenant", authority: { ...authority, observationVersion: "new-row", removedParticipantIds: ["current"] } });
+  assert.equal(h.status().state, "pending");
+});
+
+for (const removing of [true, false]) test(`unrelated room autosave cannot prevent ${removing ? "terminal eviction" : "screen lowering"}, but invalidates its observation`, async () => {
+  const h = harness(); h.rooms.set(mediaRoom, [await peer("target", removing ? "m" : "ms")]);
+  const authority = { revision: 4, roomActive: true, publisherParticipantIds: ["current"],
+    removedParticipantIds: removing ? ["target"] : [], observationVersion: "before-pose-autosave" };
+  h.setDesired({ tenantId: "tenant", authority });
+  h.afterList(() => h.setDesired({ tenantId: "tenant", authority: { ...authority, observationVersion: "after-pose-autosave" } }));
+  await h.reconciler.runOnce();
+  assert.equal(h.removals.length, removing ? 1 : 0); assert.equal(h.updates.length, removing ? 0 : 1);
+  assert.equal(h.status().state, "pending", "a cache-only token change cannot be acknowledged across a native observation");
+  h.afterList(undefined); await h.reconciler.runOnce(); assert.equal(h.status().state, "observed");
+});
+
+for (const removing of [true, false]) test(`fresh semantic authority skips an obsolete ${removing ? "removal" : "lowering"} before its native RPC`, async () => {
+  const h = harness(); h.rooms.set(mediaRoom, [await peer("target", removing ? "m" : "ms")]);
+  h.setDesired({ tenantId: "tenant", authority: { revision: 4, roomActive: !removing, publisherParticipantIds: ["current"], observationVersion: "old-row" } });
+  h.afterList(() => h.setDesired({ tenantId: "tenant", authority: { revision: 5, roomActive: true, publisherParticipantIds: ["target"], observationVersion: "current-row" } }));
+  await h.reconciler.runOnce();
+  assert.equal(h.removals.length, 0); assert.equal(h.updates.length, 0); assert.equal(h.status().state, "pending");
+  h.afterList(undefined); await h.reconciler.runOnce();
+  assert.equal(h.removals.length, 0); assert.equal(h.updates.length, 0); assert.equal(h.status().state, "observed");
+});
+
+test("terminal eviction uses the existing fair per-peer budget", async () => {
+  const h = harness({ maxPeers: 1 }); h.rooms.set(mediaRoom, [await peer("removed", "m"), await peer("removed", "s"), await peer("removed", "ms")]);
+  h.setDesired({ tenantId: "tenant", authority: { revision: 4, roomActive: true, publisherParticipantIds: [], removedParticipantIds: ["removed"] } });
+  for (let count = 1; count <= 3; count++) {
+    await h.reconciler.runOnce(); assert.equal(h.removals.length, count);
+    assert.equal(h.status().state, count === 3 ? "observed" : "pending");
+  }
+});
 
 test("screen reconciliation lowers only unauthorized verified source classes and observes native post-state", async () => {
   const h = harness(), ms = await peer("former", "ms"), s = await peer("former", "s"), mic = await peer("former", "m"), current = await peer("current", "ms");
@@ -66,7 +160,7 @@ test("screen reconciliation lowers only unauthorized verified source classes and
 
 test("missing native room is observed only after an independent scan and a stable authority read", async () => {
   const h = harness(); assert.equal(h.status().state, "pending");
-  await h.reconciler.runOnce(); assert.deepEqual(h.status(), { state: "observed", desiredVersion: { authorityRevision: 3, roomActive: true }, observedAtMs: 1000, nativeRoom: "absent" });
+  await h.reconciler.runOnce(); assert.deepEqual(h.status(), { enforcementVersion: 2, state: "observed", desiredVersion: { authorityRevision: 3, roomActive: true }, observedAtMs: 1000, nativeRoom: "absent" });
   h.setDesired({ tenantId: "tenant", authority: { revision: 4, roomActive: true, publisherParticipantIds: [] } });
   assert.equal(h.status().state, "pending");
 });
@@ -98,16 +192,16 @@ test("floor-one, foreign namespaces and invalid bindings never cause native perm
   h.rooms.set(`vrata-${roomId}`, [await peer("legacy", "ms")]);
   const forged = await peer("former", "ms"); forged.attributes = {};
   h.rooms.set(mediaRoom, [forged]); await h.reconciler.runOnce();
-  assert.equal(h.updates.length, 0); assert.equal(h.status().state, "pending");
+  assert.equal(h.updates.length, 0); assert.equal(h.removals.length, 0); assert.equal(h.status().state, "pending");
 });
 
-for (const state of ["deleted", "disabled", "ended"] as const) test(`${state} explicitly denies screens without granting another class's microphone`, async () => {
+for (const state of ["deleted", "disabled", "ended"] as const) test(`${state} disconnects verified user media while it is absent or inactive`, async () => {
   const h = harness(), ms = await peer("current", "ms"), s = await peer("current", "s");
   h.rooms.set(mediaRoom, [ms, s]);
   h.setDesired(state === "deleted" ? { tenantId: null, authority: null }
     : { tenantId: "tenant", authority: { revision: state === "ended" ? 4 : 3, roomActive: false, publisherParticipantIds: [] } });
   await h.reconciler.runOnce();
-  assert.equal(h.updates.length, 2); assert.equal(ms.tracks.length, 1); assert.equal(s.tracks.length, 0);
+  assert.equal(h.removals.length, 2); assert.equal(h.updates.length, 0); assert.equal(h.rooms.get(mediaRoom)!.length, 0);
   assert.equal(h.status().state, "observed");
 });
 

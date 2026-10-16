@@ -76,7 +76,9 @@ for (const backend of ["memory", "postgres"] as const) {
     await f.ids.transition(scope, admin, 0, { type: "transfer-host", targetParticipantId: host.participantId });
     await f.ids.transition(scope, admin, 1, { type: "grant-presenter", targetParticipantId: presenter.participantId });
     const initial = await f.ids.screenSourceAuthority(scope);
-    assert.deepEqual(initial, { revision: 2, roomActive: true, publisherParticipantIds: [host.participantId, presenter.participantId].sort() });
+    assert.match(initial!.observationVersion!, backend === "postgres" ? /^pg:\d+$/ : /^mem:[a-f0-9-]{36}$/);
+    assert.deepEqual(initial, { revision: 2, roomActive: true, publisherParticipantIds: [host.participantId, presenter.participantId].sort(),
+      removedParticipantIds: [], observationVersion: initial!.observationVersion });
     assert.equal(Object.isFrozen(initial), true);
     for (let index = 0; index < 4; index++) {
       const revision = 2 + index;
@@ -94,12 +96,53 @@ for (const backend of ["memory", "postgres"] as const) {
     assert.deepEqual((await f.ids.screenSourceAuthority(scope))?.publisherParticipantIds, [presenter.participantId]);
     const current = (await f.ids.authority(scope))!;
     await f.ids.transition(scope, admin, current.revision, { type: "end" });
-    assert.deepEqual(await f.ids.screenSourceAuthority(scope), { revision: current.revision + 1, roomActive: false, publisherParticipantIds: [] });
+    const ended = await f.ids.screenSourceAuthority(scope);
+    assert.deepEqual(ended, { revision: current.revision + 1, roomActive: false, publisherParticipantIds: [],
+      removedParticipantIds: [], observationVersion: ended!.observationVersion });
     const { scope: disabledScope } = await f.makeRoom(false, undefined, false);
     await f.storage.updateRoom(disabledScope.roomId, { status: "disabled" });
-    assert.deepEqual(await f.ids.screenSourceAuthority(disabledScope), { revision: 0, roomActive: false, publisherParticipantIds: [] });
+    const disabled = await f.ids.screenSourceAuthority(disabledScope);
+    assert.deepEqual(disabled, { revision: 0, roomActive: false, publisherParticipantIds: [],
+      removedParticipantIds: [], observationVersion: disabled!.observationVersion });
     await f.storage.deleteRoom(scope.roomId);
     assert.equal(await f.ids.screenSourceAuthority(scope), null);
+  });
+
+  test(`${backend}: removed media participants and observation tokens survive cloning without crossing room recreation`, {
+    skip: backend === "postgres" && !process.env.VRATA_TEST_POSTGRES_URL && !process.env.CI, timeout: 120_000
+  }, async t => {
+    const f = await fixture(t, backend), { scope } = await f.makeRoom(false, undefined, false);
+    await f.storage.identityProtocol.raise(2);
+    const member = (await f.create(scope)).identity;
+    const revokedOnly = (await f.create(scope)).identity;
+    await f.ids.revoke(scope, revokedOnly.identityId, revokedOnly.authEpoch);
+    const first = (await f.ids.screenSourceAuthority(scope))!;
+    assert.equal(first.revision, 0);
+    assert.deepEqual(first.removedParticipantIds, [], "non-slot identity revoke is not a public terminal-removal marker; media lineage remains a separate boundary");
+    assert.equal((await f.ids.screenSourceAuthority(scope))!.observationVersion, first.observationVersion, "a read-only clone retains the row/object token");
+    await f.storage.updateRoom(scope.roomId, { name: "Metadata replacement" });
+    const replaced = (await f.ids.screenSourceAuthority(scope))!;
+    assert.notEqual(replaced.observationVersion, first.observationVersion);
+    assert.equal(replaced.revision, first.revision);
+    if (f.pool) {
+      const client = await f.pool.connect();
+      try {
+        await client.query("begin"); await client.query("select room_id from rooms where room_id=$1 for update", [scope.roomId]);
+        assert.equal((await f.ids.screenSourceAuthority(scope))!.observationVersion, replaced.observationVersion, "row locks do not change xmin");
+      } finally { await client.query("rollback"); client.release(); }
+      await assert.rejects(f.pool.query("delete from room_identity_authority_v2 where room_id=$1", [scope.roomId]),
+        (error: unknown) => (error as { code?: string }).code === "23514", "authority cannot be recreated independently of its parent room");
+    }
+    await f.ids.transition(scope, admin, 0, { type: "remove", targetParticipantId: member.participantId });
+    const removed = (await f.ids.screenSourceAuthority(scope))!;
+    assert.equal(removed.revision, 1); assert.deepEqual(removed.removedParticipantIds, [member.participantId]);
+    assert.equal(Object.isFrozen(removed.removedParticipantIds), true);
+    await f.storage.deleteRoom(scope.roomId);
+    await f.storage.createRoom({ roomId: scope.roomId, tenantId: scope.tenantId, templateId: "meeting-room-basic", name: "Recreated",
+      sessionControl: { hostParticipantId: null } });
+    const recreated = (await f.ids.screenSourceAuthority(scope))!;
+    assert.equal(recreated.revision, 0); assert.deepEqual(recreated.removedParticipantIds, []);
+    assert.notEqual(recreated.observationVersion, first.observationVersion, "an old five-second observation cannot carry across a new room record");
   });
 
   test(`${backend}: identity admission budgets serialize concurrent peers and expire without touching credentials`, {

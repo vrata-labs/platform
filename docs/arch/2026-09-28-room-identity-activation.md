@@ -510,9 +510,10 @@ Executor media is excluded, so observed/room-inactive is not a claim that the ro
 has no executor video. Publication-source labels are not content
 attestation. Shared floor2 is not activated by this checkpoint.
 
-The API image and rollout manifest declare `mediaScreenReconciler=1`.
-Floor-2 rollout/rollback rejects an API image that would silently remove native
-screen enforcement. Floor1 retains compatibility with the prior accepted image.
+The S2b image and rollout manifest declared `mediaScreenReconciler=1`.
+At that checkpoint floor-2 rollout/rollback required native screen enforcement;
+the S3a requirement below supersedes it for terminal user-media eviction.
+Floor1 retains compatibility with the prior accepted image.
 
 Published image: `342f8e95e2d98fcb57533df94e6f673420ef1e6f`. Local full E2E
 passed217/217. Exact-SHA CI38918055620 passed217/217 plus16/16 M0.5, Docker
@@ -524,6 +525,73 @@ Native floor-2 enforcement evidence is from owned disposable PostgreSQL schemas
 with real LiveKit1.13.7/1.13.9 in local/CI tests. Shared staging remained floor1;
 its successful gate verifies the paired delivery and existing public flows, not
 public activation of the still-incomplete v2 media lifecycle.
+
+### User-media removal and closed rooms: T13a-S3a (prepared)
+
+The same API-owned reconciler now disconnects verified codec-2 user connections
+when their participant ID is in the public removal map, when the room is ended
+or disabled, or while room metadata is confirmed absent. This branch runs before
+the microphone-only skip and before screen lowering. It uses the installed
+`RemoveParticipant(room, identity)` API, not another permission tuple. Ordinary
+Presenter revoke remains source-only and preserves the microphone. Executor,
+legacy and foreign-namespace connections remain excluded.
+
+The removal IDs are copied and sorted from the same coherent authority snapshot.
+Public remove writes the identity revocation/epoch and the monotonic removal map
+under one lock and increments authority revision. End is also terminal within
+one room incarnation. A removed ID cannot be recovered or transferred back into
+an active role. A permission update is never sent to a peer selected for removal
+in that pass. A full native post-read must find every such identity absent;
+microphone-only and replacement-SID peers cannot bypass that check. Lost removal
+ACKs, native errors, presence after removal or a newer desired state remain
+pending and are retried, including after API restart and repeated cached-token joins.
+
+Disable is reversible, not terminal. Enable racing an already sent identity-keyed
+removal may disconnect a valid replacement; the fresh state is not acknowledged
+by that old pass. A later valid reconnect works. Deletion is enforced while the
+metadata is absent. Recreating the same room ID resets its logical authority:
+this slice does not reject an old JWT after such recreation.
+
+Observation fingerprints include a removal-set digest and a private volatile
+room-record token. PostgreSQL reads `rooms.xmin::text` in the existing read-only
+repeatable-read snapshot; Memory captures a WeakMap tag from the actual stored
+room object before cloning. A replacement/recreated room record therefore cannot
+inherit an old five-second observation just because roles and revision coincide.
+Unrelated updates invalidate conservatively; row locks alone do not change the
+PostgreSQL token. Authority cannot be deleted/recreated separately while its
+parent room exists. These tokens are only cache freshness keys: not a durable
+room incarnation, JWT field, epoch or admission proof. They are not exposed in
+HTTP status or metrics. No database migration or media credential codec change
+is introduced here.
+Unrelated personal-state autosaves may conservatively invalidate an observation.
+They do not postpone an applicable native write: pre-write checks compare only
+semantic authority, while post-read/cache acknowledgement also requires the stable
+room-record token. With continuous metadata writes the status may remain pending
+even after the native eviction; no migration-free incarnation proof is inferred.
+
+The existing status field gains `enforcementVersion: 2`. Version1 or an absent
+marker describes only the older screen-lowering observation and must not be
+interpreted as user-connection eviction. Even version2 plus observed is only a
+fresh native snapshot, not a permanent rejoin ban. The fixed `evicted` metric
+outcome records an acknowledged native removal; only the subsequent post-read
+can produce observed. Image/manifest `mediaScreenReconciler: 2` is required for
+floor-2 rollout/rollback. The prior accepted image remains compatible at floor1.
+
+The native regressions on self-hosted LiveKit1.13.7 and1.13.9 deliberately prove
+the limitation in both directions. With removal RPCs unavailable, both the original
+JWT and an actual SFU-refreshed microphone JWT rejoin and deliver decoded audio.
+The refresh preserves subject/binding and extends expiry beyond the original
+JWT, with more than nine minutes remaining in the test. New API media credentials
+are refused with the existing identity-recovery response. Restoring native RPCs
+evicts the replay without another role command. This is removal/reconciliation,
+not cryptographic token revocation or a signaling admission gateway.
+
+Recovery that changes authEpoch while retaining participant ID, non-slot internal
+identity revoke, media admission after delete/recreate, executor leases and any
+future owned-namespace retirement remain separate S3b boundaries. The binding has
+no epoch or identity-record proof, and the observation token does not add one.
+Full v2 activation and real-device meeting acceptance are not closed here.
+Shared floor1 remains unchanged.
 
 ### Shared staging delivery (floor 1)
 

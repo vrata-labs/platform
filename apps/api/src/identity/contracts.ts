@@ -35,6 +35,9 @@ export interface RoomScreenSourceAuthority {
   readonly revision: number;
   readonly roomActive: boolean;
   readonly publisherParticipantIds: readonly string[];
+  readonly removedParticipantIds?: readonly string[];
+  /** Volatile row/object token for observation-cache freshness only, never admission or identity. */
+  readonly observationVersion?: string;
 }
 
 export type RoomIdentityLifecycle = Required<Omit<RoomSessionControlState, "hostParticipantId" | "presenterParticipantId">>;
@@ -105,6 +108,8 @@ export interface RoomIdentityStorage {
 export interface IdentitySelection { identityIds?: string[]; participantId?: string; recoveryId?: string; inviteTokenHash?: string; pendingId?: string; admissionCount?: boolean; screenPublishers?: boolean }
 export interface IdentityTransaction {
   room: IdentityRoomBinding;
+  /** Volatile row/object observation token, not a credential or durable room incarnation. */
+  roomObservationVersion?: string;
   minimumProtocol: number;
   authority: RoomIdentityAuthority;
   identities: Map<string, RoomIdentityRecord>;

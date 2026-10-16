@@ -98,7 +98,7 @@ export function assertIdentityRollbackTarget({ envFile, composeFile, imageTag },
     const value = run(["image", "inspect", "--format", '{{ index .Config.Labels "io.vrata.media-identity-codec" }}', model.services.api.image]);
     if (value !== "2") throw new Error("media_rollback_requires_identity_codec2:api");
     const reconciler = run(["image", "inspect", "--format", '{{ index .Config.Labels "io.vrata.media-screen-reconciler" }}', model.services.api.image]);
-    if (reconciler !== "1") throw new Error("media_rollback_requires_screen_reconciler1:api");
+    if (reconciler !== "2") throw new Error("media_rollback_requires_screen_reconciler2:api");
   }
   // compose.demo-local.yml resets the optional browser; an absent consumer verifies no frame tokens.
   const browser = model.services?.["remote-browser"];

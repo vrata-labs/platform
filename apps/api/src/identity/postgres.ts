@@ -22,7 +22,8 @@ export async function assertPostgresEffect(client: PoolClient, guard: RoomEffect
 }
 
 async function load(client: PoolClient, scope: RoomIdentityScope, selection: IdentitySelection, lock: boolean, currentAt: string): Promise<IdentityTransaction | null> {
-  const binding = await client.query(`select tenant_id, room_id, room_type, owner_participant_id, visibility, guest_allowed, status, disabled_at, session_control
+  const binding = await client.query(`select tenant_id, room_id, room_type, owner_participant_id, visibility, guest_allowed, status, disabled_at, session_control,
+    xmin::text as media_observation_version
     from rooms where tenant_id = $1 and room_id = $2 ${lock ? "for update" : ""}`, [scope.tenantId, scope.roomId]);
   const room = binding.rows[0];
   if (!room) return null;
@@ -68,6 +69,7 @@ async function load(client: PoolClient, scope: RoomIdentityScope, selection: Ide
   const identityCount = selection.admissionCount ? (await client.query(`select count(*)::integer as total from room_identities_v2
     where tenant_id=$1 and room_id=$2`, [scope.tenantId, scope.roomId])).rows[0]?.total as number : null;
   return {
+    roomObservationVersion: `pg:${room.media_observation_version}`,
     minimumProtocol: protocol.minimum_protocol,
     room: { tenantId: room.tenant_id, roomId: room.room_id, roomType: room.room_type, ownerParticipantId: room.owner_participant_id,
       visibility: room.visibility, guestAllowed: room.guest_allowed,

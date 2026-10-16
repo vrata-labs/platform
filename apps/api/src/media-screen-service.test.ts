@@ -23,7 +23,7 @@ test("a process without an SFU URL never polls storage or consumes a media-names
 test("a failed reconciliation status read cannot turn authenticated session control into an error or invent room activity", async () => {
   const storage = { async getRoom() { throw new Error("private-storage-message"); } } as unknown as Storage;
   const service = createMediaScreenService(Promise.resolve(storage), { env: { NODE_ENV: "test" } });
-  assert.deepEqual(await service.status("room", 7), { state: "unavailable", desiredVersion: { authorityRevision: 7, roomActive: null },
+  assert.deepEqual(await service.status("room", 7), { enforcementVersion: 2, state: "unavailable", desiredVersion: { authorityRevision: 7, roomActive: null },
     observedAtMs: null, nativeRoom: "unknown" });
 });
 
@@ -34,7 +34,8 @@ test("an observation cannot acknowledge a different outer session-control revisi
   const storage = {
     async getRoom() { return { tenantId: "tenant", roomId: "room" }; },
     identityProtocol: { async minimum() { return 2; }, async mediaNamespace() { return namespace; } },
-    roomIdentities: { async screenSourceAuthority() { return { revision: 4, roomActive: true, publisherParticipantIds: [] }; } }
+    roomIdentities: { async screenSourceAuthority() { return { revision: 4, roomActive: true, publisherParticipantIds: [],
+      removedParticipantIds: ["private-removed-participant"], observationVersion: "private-observation-token" }; } }
   } as unknown as Storage;
   let observed!: () => void;
   const ready = new Promise<void>(done => { observed = done; });
@@ -42,7 +43,9 @@ test("an observation cannot acknowledge a different outer session-control revisi
     event: event => { if (event === "observed") observed(); } });
   try {
     service.start(); await ready;
-    assert.equal((await service.status("room", 4)).state, "observed");
+    const current = await service.status("room", 4);
+    assert.equal(current.state, "observed"); assert.equal(current.enforcementVersion, 2);
+    assert.equal(JSON.stringify(current).includes("private-"), false, "cache tokens and participant sets are not status DTO fields");
     const mismatched = await service.status("room", 3);
     assert.equal(mismatched.state, "pending"); assert.equal(mismatched.observedAtMs, null);
   } finally { service.stop(); }

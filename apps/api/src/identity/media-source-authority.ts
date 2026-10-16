@@ -26,5 +26,7 @@ export function projectScreenSourceAuthority(state: IdentityTransaction): RoomSc
     }
   }
   return Object.freeze({ revision: state.authority.revision, roomActive,
-    publisherParticipantIds: Object.freeze([...publishers].sort()) });
+    publisherParticipantIds: Object.freeze([...publishers].sort()),
+    removedParticipantIds: Object.freeze(Object.keys(state.authority.lifecycle.removedParticipants).sort()),
+    ...(state.roomObservationVersion ? { observationVersion: state.roomObservationVersion } : {}) });
 }

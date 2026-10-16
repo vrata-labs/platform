@@ -1,20 +1,24 @@
 import type { ParticipantInfo, ParticipantPermission, RoomServiceClient } from "livekit-server-sdk";
+import { createHash } from "node:crypto";
 import type { RoomScreenSourceAuthority } from "./identity/contracts.js";
 import { roomMediaGrantName } from "./identity/media-room.js";
 import { validId } from "./identity/authority.js";
-import { screenSourceLowering, screenSourcesRetired, verifiedSourcePeer } from "./media-source-permissions.js";
+import { mustEvictUserMedia, screenSourceLowering, screenSourcesRetired, verifiedSourcePeer } from "./media-source-permissions.js";
+
+export const MEDIA_RECONCILIATION_VERSION = 2;
 
 export interface MediaScreenAuthority {
   readonly tenantId: string | null;
   readonly authority: RoomScreenSourceAuthority | null;
 }
 export interface MediaScreenReconciliationStatus {
+  enforcementVersion: typeof MEDIA_RECONCILIATION_VERSION;
   state: "pending" | "observed" | "unavailable";
   desiredVersion: { authorityRevision: number | null; roomActive: boolean | null };
   observedAtMs: number | null;
   nativeRoom: "unknown" | "present" | "absent";
 }
-type NativeRooms = Pick<RoomServiceClient, "listRooms" | "listParticipants"> & {
+type NativeRooms = Pick<RoomServiceClient, "listRooms" | "listParticipants" | "removeParticipant"> & {
   updateParticipant(room: string, identity: string, input: { permission: Partial<ParticipantPermission> }): Promise<ParticipantInfo>;
 };
 type Context = { namespace: string; prefix: string; native: NativeRooms };
@@ -22,16 +26,21 @@ type Observation = { fingerprint: string; atMs: number; nativeRoom: "present" | 
 
 const version = (value: MediaScreenAuthority) => ({ authorityRevision: value.authority?.revision ?? null,
   roomActive: value.authority?.roomActive ?? false });
-const fingerprint = (namespace: string, value: MediaScreenAuthority) => JSON.stringify([namespace, value.tenantId,
-  version(value), value.authority?.publisherParticipantIds ?? []]);
+const authorityFingerprint = (namespace: string, value: MediaScreenAuthority) => JSON.stringify([namespace, value.tenantId,
+  version(value), value.authority?.publisherParticipantIds ?? [],
+  createHash("sha256").update(JSON.stringify(value.authority?.removedParticipantIds ?? [])).digest("hex")]);
+const fingerprint = (namespace: string, value: MediaScreenAuthority) => JSON.stringify([
+  authorityFingerprint(namespace, value), value.authority?.observationVersion ?? null
+]);
 
 /** Reconstruct desired state from durable authority, not a process-local transition queue.
- * Every write is the same fixed lowering for its immutable class. Delayed writes may
- * over-restrict a renewed connection; they can never cross its signed source ceiling. */
+ * Permission writes use the fixed class lowering; public removal and inactive rooms
+ * disconnect verified user connections instead. Delayed operations may over-restrict
+ * a renewed/re-enabled connection, never expand its signed source ceiling. */
 export function createMediaScreenReconciler(input: {
   context: () => Promise<Context | null>;
   authority: (roomId: string) => Promise<MediaScreenAuthority>;
-  event?: (event: "observed" | "pending" | "unavailable" | "lowered") => void;
+  event?: (event: "observed" | "pending" | "unavailable" | "lowered" | "evicted") => void;
   now?: () => number;
   intervalMs?: number;
   maxRooms?: number;
@@ -76,6 +85,7 @@ export function createMediaScreenReconciler(input: {
       const desired = await input.authority(roomId);
       if (!alive(captured)) return;
       const key = fingerprint(context.namespace, desired);
+      const authorityKey = authorityFingerprint(context.namespace, desired);
       const peers = await context.native.listParticipants(nativeRoom);
       if (!alive(captured)) return;
       peers.sort((a, b) => a.identity.localeCompare(b.identity));
@@ -92,11 +102,19 @@ export function createMediaScreenReconciler(input: {
         if (peer.identity.startsWith("remote-browser:")) continue;
         const binding = await verifiedSourcePeer(nativeRoom, peer);
         if (!binding) { complete = false; continue; }
+        if (mustEvictUserMedia(desired.authority, binding.participantId)) {
+          if (authorityFingerprint(context.namespace, await input.authority(roomId)) !== authorityKey) { complete = false; break; }
+          if (!alive(captured)) return;
+          await context.native.removeParticipant(nativeRoom, peer.identity);
+          if (!alive(captured)) return;
+          emit("evicted");
+          continue;
+        }
         if (binding.scope === "m") continue;
         if (desired.authority?.roomActive && desired.authority.publisherParticipantIds.includes(binding.participantId)) continue;
         // Check immediately before writing as an availability optimization, not a SID/revision CAS.
         if (!screenSourcesRetired(peer, binding.scope)) {
-          if (fingerprint(context.namespace, await input.authority(roomId)) !== key) { complete = false; break; }
+          if (authorityFingerprint(context.namespace, await input.authority(roomId)) !== authorityKey) { complete = false; break; }
           if (!alive(captured)) return;
           await context.native.updateParticipant(nativeRoom, peer.identity, { permission: screenSourceLowering(binding.scope)! });
           if (!alive(captured)) return;
@@ -116,6 +134,7 @@ export function createMediaScreenReconciler(input: {
         if (current.identity.startsWith("remote-browser:")) continue;
         const binding = await verifiedSourcePeer(nativeRoom, current);
         if (!binding) { complete = false; continue; }
+        if (mustEvictUserMedia(desired.authority, binding.participantId)) { complete = false; continue; }
         if (binding.scope === "m" || desired.authority?.roomActive && desired.authority.publisherParticipantIds.includes(binding.participantId)) continue;
         if (current.sid !== originalSids.get(current.identity) || !screenSourcesRetired(current, binding.scope)) complete = false;
       }
@@ -208,7 +227,8 @@ export function createMediaScreenReconciler(input: {
       const fresh = observed && namespace && currentNamespace === namespace && observed.fingerprint === fingerprint(namespace, desired)
         && now() >= observed.atMs && now() - observed.atMs <= Math.max(intervalMs * 3, 5000);
       if (!fresh && validId(roomId)) trackInterest(roomId);
-      return { state: unavailable ? "unavailable" : fresh ? "observed" : "pending", desiredVersion: version(desired),
+      return { enforcementVersion: MEDIA_RECONCILIATION_VERSION,
+        state: unavailable ? "unavailable" : fresh ? "observed" : "pending", desiredVersion: version(desired),
         observedAtMs: fresh ? observed.atMs : null, nativeRoom: fresh ? observed.nativeRoom : "unknown" };
     },
     start() {

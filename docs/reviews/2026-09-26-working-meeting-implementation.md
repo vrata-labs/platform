@@ -1792,6 +1792,85 @@ health/demo-room/control-plane вернул200. Собственная PG fixtur
 следующим остаётся S3 lifecycle/replay. Ранее неизвестные непостоянные отказы из
 предыдущих срезов новым зелёным run не объявляются исправленными.
 
+## T13a-S3a — отключение пользовательского медиа при remove/end, 2026-10-16
+
+Существующая серверная сверка теперь вызывает native RemoveParticipant для всех
+проверенных пользовательских m/s/ms connections, если PID находится в публичной
+монотонной карте removedParticipants, комната завершена/отключена либо её метаданных
+подтверждённо нет. Ветка стоит до m-skip и screen lowering: одному peer не
+отправляются U и Remove в одном проходе. Обычный Presenter revoke продолжает
+сохранять microphone. Чужие namespace, legacy и raw executor media не затрагиваются.
+Карта взята из прежнего согласованного RR snapshot; lifecycle writer не менялся.
+
+Первый regression был красным: для закрытой комнаты ожидались3 удаления m/s/ms,
+фактически было0 — прежний код только понижал screen permissions и оставлял m.
+После исправления любой остающийся удалённый identity, включая новый SID или m,
+не позволяет подтвердить observed. Сбой native RPC, потерянный успешный ACK,
+повторный вход и перезапуск API сверяются повторно из сохранённой authority.
+
+Disable обратим: enable после последней проверки может совпасть с уже отправленным
+Remove и стоить доступности. Перед новой записью свежая семантика проверяется,
+но SID/часы/атрибуты не выдаются за CAS. После стабилизации enable новый разрешённый
+вход работает. Удалённая комната закрывает медиа только пока метаданных нет;
+admission старого JWT после delete→recreate того же roomId этим срезом не решается.
+
+Отпечаток наблюдения включает digest карты удалений и private volatile token
+записи комнаты: rooms.xmin::text в том же PG RR snapshot, WeakMap-тег сохранённого
+room object до structuredClone в Memory. Новая/заменённая запись не наследует
+старый5-секундный observed при совпадающих role/revision. Это только cache token,
+не durable incarnation/admission proof и не новый JWT claim; SQL migration нет.
+PG/Memory проверки подтверждают стабильность при чтении/клоне, смену при UPDATE
+и пересоздании, неизменность xmin от FOR UPDATE и отказ на отдельный DELETE
+authority с существующей комнатой(23514). Token и наборы PID не попадают в HTTP
+status/metrics. Вызовы перед RPC сравнивают семантический ключ без cache token,
+чтобы autosave personal_state не откладывал применимое удаление. Полный ключ
+остаётся обязательным для post-read/cache ACK, поэтому при постоянных метаданных
+возможен консервативный pending после уже выполненного удаления.
+
+Старое поле статуса получает enforcementVersion=2. Отсутствующий marker или
+version1 означает только прежнюю screen-only сверку, не полное вытеснение user
+connections. Метрика ограничена5 исходами, включая evicted; ACK-счётчик не заменяет
+native post-read. API image/manifest mediaScreenReconciler=2 обязателен при floor2;
+floor1 допускает предыдущий принятый342f8e9. Формат codec2 media credentials и
+клиентские runtime modules не менялись.
+
+Настоящие API+PG+SFU1.13.7/1.13.9: **6/6 за2,3 минуты**. Сначала проверены реальные
+screen frames и microphone samples, затем независимые от WS/UI revoke/remove/end.
+Ошибки Remove RPC сохраняют pending; передача и декодирование тестового
+микрофонного сигнала продолжаются. Restart API и потеря успешного ACK завершаются
+удалением всех3 target connections, остальные
+не затронуты. Свежий API media grant удалённому actor получает прежний строгий
+409 identity_required/identity_recovery_required. Первоначальное ожидание403 в
+новом тесте исправлено, production error contract не менялся. Replay-публикация
+ожидает реальную track metadata после publish ACK, а не разыменовывает ещё
+не появившийся SID; publish/connect не повторяются как обход проверки.
+
+Оба cached варианта проверены отдельно: исходный JWT и настоящий SFU refresh с
+тем же subject/binding, source microphone и exp дальше original exp/>9минут
+остатка. При блокировке native удаления оба реально снова подключаются и дают
+decoded audio, несмотря на отказ нового API credential. После восстановления RPC
+сверка снова удаляет их без нового role command. Затем end удаляет и Host mic,
+и слушателя. Четыре дополнительные native-кейса проверяют disable/delete на обеих
+версиях и восстановление валидного подключения после enable. Это доказательство
+eviction/reconciliation и измеренной self-hosted JWT limitation, не криптографического
+отзыва или запрета до подключения.
+
+Workspace lint/typecheck/build/tests зелёные; после уточнения pre-write ключа API
+повторно проверен на окончательном дереве: **1732 passed/1 optional MinIO skip**.
+Runtime1242/1242, shared42/42, room-state88/88, remote-browser71/71,
+tools311 passed/2 optional skips. Обязательные PG/rollback fixtures включены,
+fsync/full_page_writes/synchronous_commit оставались on. Full local e2e на
+окончательном исполняемом дереве: **221/221 за31,1 минуты**, exit0,
+expected221/skipped0/unexpected0/flaky0. Публикация exact SHA и staging-приёмка
+выполняются отдельно.
+
+Общий floor1 сохраняется. S3b остаётся: authEpoch/recovery при том же PID,
+внутренний non-slot ids.revoke без публичного removal marker, admission после
+пересоздания комнаты, executor leases и возможный owned-namespace cutover.
+Безусловный мгновенный native prejoin ban — отдельная согласуемая media-admission
+задача согласно§5.1 плана, не скрытая готовность этого среза. Старые неизвестные
+непостоянные отказы предыдущих поставок не объявляются исправленными.
+
 ## Публикация первого среза T01/T12
 
 Локально прошли workspace lint/typecheck/build/tests с PostgreSQL, затем runtime build и 905 runtime tests после финальных правок. Полный `pnpm test:e2e` на финальном исполняемом дереве: **148 passed**, без skip (41.6 min).

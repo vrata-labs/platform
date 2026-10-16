@@ -17,9 +17,12 @@ export function createMemoryRoomIdentities(getRoom: (roomId: string) => Identity
   const authorities = new Map<string, RoomIdentityAuthority>();
   const recoveries = new Map<string, Map<string, RoomIdentityRecovery>>();
   const pendingByRoom = new Map<string, Map<string, RoomIdentityPending>>();
+  const observationVersions = new WeakMap<IdentityRoomBinding, string>();
   const snapshot = (scope: RoomIdentityScope, selection: IdentitySelection): IdentityTransaction | null => {
     const room = getRoom(scope.roomId);
     if (!room || room.tenantId !== scope.tenantId) return null;
+    if (!observationVersions.has(room)) observationVersions.set(room, `mem:${randomUUID()}`);
+    const roomObservationVersion = observationVersions.get(room)!;
     if (authorities.has(scope.roomId) && authorities.get(scope.roomId)!.tenantId !== scope.tenantId) return null;
     const recovery = selection.recoveryId ? recoveries.get(scope.roomId)?.get(selection.recoveryId) ?? null : null;
     const pending = selection.pendingId ? pendingByRoom.get(scope.roomId)?.get(selection.pendingId) ?? null : null;
@@ -37,7 +40,7 @@ export function createMemoryRoomIdentities(getRoom: (roomId: string) => Identity
       ? [...(pendingByRoom.get(scope.roomId)?.values() ?? [])].filter(value => !value.activatedAt && Date.parse(value.expiresAt) > now()) : null;
     const pendingCapacity = open ? { room: open.length, invite: open.filter(value => value.inviteId === invite!.inviteId).length,
       lifetimeRoom: pendingByRoom.get(scope.roomId)?.size ?? 0 } : null;
-    return structuredClone({ room, minimumProtocol: getMinimumProtocol(), authority: authorities.get(scope.roomId) ?? emptyIdentityAuthority(scope, room.sessionControl), recovery, invite, pending, waitingRequest, waitingRequestNew: false, pendingCapacity,
+    return structuredClone({ room, roomObservationVersion, minimumProtocol: getMinimumProtocol(), authority: authorities.get(scope.roomId) ?? emptyIdentityAuthority(scope, room.sessionControl), recovery, invite, pending, waitingRequest, waitingRequestNew: false, pendingCapacity,
       identityCount: selection.admissionCount ? identities.get(scope.roomId)?.size ?? 0 : null,
       identities: new Map([...(identities.get(scope.roomId) ?? new Map<string, RoomIdentityRecord>())].filter(([id, identity]) =>
         selected.has(id) || (participantId !== undefined && identity.participantId === participantId))) });

@@ -1,5 +1,11 @@
 import { TrackSource, type ParticipantInfo, type ParticipantPermission } from "livekit-server-sdk";
 import { verifyUserMediaIdentity, type UserMediaBinding, type UserMediaScope } from "@vrata/shared-types";
+import type { RoomScreenSourceAuthority } from "./identity/contracts.js";
+
+/** Null is confirmed missing metadata, not an authority-read error. Disable is reversible. */
+export function mustEvictUserMedia(authority: RoomScreenSourceAuthority | null, participantId: string): boolean {
+  return !authority?.roomActive || authority.removedParticipantIds?.includes(participantId) === true;
+}
 
 /** Codec-2 user grants have a fixed non-source tuple. Never copy a preceding connection's permissions. */
 export function screenSourceLowering(scope: UserMediaScope): Partial<ParticipantPermission> | null {

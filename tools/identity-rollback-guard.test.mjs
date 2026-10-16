@@ -5,7 +5,7 @@ import { assertIdentityRollbackTarget, OWNERLESS_REFERENCE_PERSONAL_SQL, ROOM_RE
 const imageTag = "a".repeat(40);
 const options = { envFile: "test.env", composeFile: "compose.test.yml", imageTag };
 function host({ floor = "2", bound = "f", policyExists = "t", authorityExists = "t", roomsExists = "t", schema = "t", ownerless = "f", apiLabel = "1", stateLabel = "1", readerLabel = "2",
-  apiCodec = "2", browserCodec = "2", mediaCodec = "2", screenReconciler = "1", browser = true, browserTag = imageTag, malformed = false, database = "postgres://vrata:test-only@postgres:5432/vrata" } = {}) {
+  apiCodec = "2", browserCodec = "2", mediaCodec = "2", screenReconciler = "2", browser = true, browserTag = imageTag, malformed = false, database = "postgres://vrata:test-only@postgres:5432/vrata" } = {}) {
   const mutations = [], inspections = [];
   return { mutations, inspections, run(args, env) {
     const query = args.at(-1);
@@ -56,9 +56,9 @@ test("scoped media requires the paired API/runtime codec only after floor-two ac
   }
 });
 
-test("floor-two rollback cannot silently remove native screen-source reconciliation", () => {
-  for (const screenReconciler of ["", "<no value>", "0", "2", "01", "1.0", "true"]) {
-    assert.throws(() => assertIdentityRollbackTarget(options, host({ screenReconciler }).run), /media_rollback_requires_screen_reconciler1:api/);
+test("floor-two rollback cannot silently remove terminal user-media eviction", () => {
+  for (const screenReconciler of ["", "<no value>", "0", "1", "3", "02", "2.0", "true"]) {
+    assert.throws(() => assertIdentityRollbackTarget(options, host({ screenReconciler }).run), /media_rollback_requires_screen_reconciler2:api/);
     assertIdentityRollbackTarget(options, host({ floor: "1", bound: "t", screenReconciler }).run);
   }
 });

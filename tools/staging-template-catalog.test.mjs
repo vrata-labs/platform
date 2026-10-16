@@ -28,7 +28,7 @@ m.assert_target_allowed(baseline, {"state":"active", "referenceRoomCount":3}, co
 rejects(lambda: m.assert_target_allowed(baseline, None, contract, current, 2), "identity_rollback_below_boundary")
 boundary = dict(contract, identityProtocolFloorGuard=1)
 reader = dict(boundary, roomRecordReader=2)
-frame = dict(reader, frameTokenCodec=2, mediaIdentityCodec=2, mediaScreenReconciler=1)
+frame = dict(reader, frameTokenCodec=2, mediaIdentityCodec=2, mediaScreenReconciler=2)
 m.assert_target_allowed(baseline, {"state":"active", "referenceRoomCount":3}, frame, current, 2)
 rejects(lambda: m.assert_target_allowed(baseline, None, boundary, current, 2), "room_record_rollback_requires_reader2")
 rejects(lambda: m.assert_target_allowed(baseline, None, contract, current, 1, True), "identity_rollback_below_boundary")
@@ -203,7 +203,7 @@ current = "a"*40
 boundary = {"schemaVersion":1, "templateSchema":2, "referenceTemplateVersions":["1.0.0", "2.0.0"], "identityProtocolFloorGuard":1}
 reader = dict(boundary, roomRecordReader=2)
 codec = dict(boundary, frameTokenCodec=2)
-frame = dict(reader, frameTokenCodec=2, mediaIdentityCodec=2, mediaScreenReconciler=1)
+frame = dict(reader, frameTokenCodec=2, mediaIdentityCodec=2, mediaScreenReconciler=2)
 rejects(lambda: m.assert_target_allowed(None, None, boundary, current, 2), "room_record_rollback_requires_reader2")
 rejects(lambda: m.assert_target_allowed(None, None, boundary, current, 1, False, True), "room_record_rollback_requires_reader2")
 rejects(lambda: m.assert_target_allowed(None, None, None, current, 1, False, True), "room_record_rollback_requires_reader2")
@@ -269,7 +269,7 @@ def rejects(fn, code):
     else: raise AssertionError("expected " + code)
 current = "a"*40
 codec = {"schemaVersion":1, "templateSchema":2, "referenceTemplateVersions":["1.0.0", "2.0.0"], "identityProtocolFloorGuard":1,
-         "roomRecordReader":2, "frameTokenCodec":2, "mediaIdentityCodec":2, "mediaScreenReconciler":1}
+         "roomRecordReader":2, "frameTokenCodec":2, "mediaIdentityCodec":2, "mediaScreenReconciler":2}
 legacy = {key: value for key, value in codec.items() if key != "frameTokenCodec"}
 for floor, bound in ((2, False), (1, True), (2, True)):
     m.assert_target_allowed(None, None, codec, current, floor, bound)
@@ -279,8 +279,8 @@ for floor, bound in ((2, False), (1, True), (2, True)):
 for invalid in (None, True, False, 0, 1, 3, "2", 2.0):
     rejects(lambda: m.assert_target_allowed(None, None, dict(codec, mediaIdentityCodec=invalid), current, 2), "media_rollback_requires_identity_codec2")
     m.assert_target_allowed(None, None, dict(codec, mediaIdentityCodec=invalid), current, 1, True)
-for invalid in (None, True, False, 0, 2, "1", 1.0):
-    rejects(lambda: m.assert_target_allowed(None, None, dict(codec, mediaScreenReconciler=invalid), current, 2), "media_rollback_requires_screen_reconciler1")
+for invalid in (None, True, False, 0, 1, 3, "2", 2.0):
+    rejects(lambda: m.assert_target_allowed(None, None, dict(codec, mediaScreenReconciler=invalid), current, 2), "media_rollback_requires_screen_reconciler2")
     m.assert_target_allowed(None, None, dict(codec, mediaScreenReconciler=invalid), current, 1, True)
 # Boundary and reader failures keep their own codes.
 rejects(lambda: m.assert_target_allowed(None, None, dict(legacy, identityProtocolFloorGuard=None), current, 1, True), "identity_rollback_below_boundary_forbidden")
