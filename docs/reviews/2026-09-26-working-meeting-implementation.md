@@ -1862,7 +1862,7 @@ tools311 passed/2 optional skips. Обязательные PG/rollback fixtures 
 fsync/full_page_writes/synchronous_commit оставались on. Full local e2e на
 окончательном исполняемом дереве: **221/221 за31,1 минуты**, exit0,
 expected221/skipped0/unexpected0/flaky0. Публикация exact SHA и staging-приёмка
-выполняются отдельно.
+выполнены ниже.
 
 Общий floor1 сохраняется. S3b остаётся: authEpoch/recovery при том же PID,
 внутренний non-slot ids.revoke без публичного removal marker, admission после
@@ -1870,6 +1870,26 @@ expected221/skipped0/unexpected0/flaky0. Публикация exact SHA и stagi
 Безусловный мгновенный native prejoin ban — отдельная согласуемая media-admission
 задача согласно§5.1 плана, не скрытая готовность этого среза. Старые неизвестные
 непостоянные отказы предыдущих поставок не объявляются исправленными.
+
+Опубликован `a64ea0cfc38e414525ed024ef1a73d1bd31c9af3`.
+Exact-SHA [CI38947151422](https://github.com/vrata-labs/platform/actions/runs/38947151422)
+успешен с первой попытки:221/221 e2e за36,4 минуты и16/16 M0.5 за2,5 минуты,
+skipped0/unexpected0/flaky0; artifact12068674454.
+[Docker38947151807](https://github.com/vrata-labs/platform/actions/runs/38947151807)
+успешен с первой попытки.
+[Staging38952933415](https://github.com/vrata-labs/platform/actions/runs/38952933415)
+принят с первой попытки: **66/66 за27,7 минуты** и **1/1 mandatory Rutube за3,4 минуты**,
+skipped0/unexpected0/flaky0; artifact12070574945. Public four-party audio/PDF/notes/
+reload/rejoin/Host controls, reference rooms, moving screen-share и private plugin
+storage прошли; Hall/BlueOffice/ArtGallery loaded в текущих страницах.
+Accepted publication вернула точныйa64ea0cfc38e414525ed024ef1a73d1bd31c9af3,
+asset binding0a3b492e788bad82bf20a92476a628bf30c6dfbe. Rollback не запускался;
+сохранены current/previous342f8e9/Wave2 snapshots. Post-acceptance smoke
+health/demo-room/control-plane вернул200. Собственная PG fixture удалена после
+проверки полного ID/label; local API/WS/browser/native fixtures закрыты.
+Общий floor1 не повышался: новая поставка проверена на совместимость публичных
+путей; floor2 enforcement и cached-token replay остаются изолированной local/CI
+проверкой. Это S3a, не весь S3 и не полная v2 activation.
 
 ## Публикация первого среза T01/T12
 

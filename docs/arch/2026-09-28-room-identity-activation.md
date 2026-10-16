@@ -526,7 +526,7 @@ with real LiveKit1.13.7/1.13.9 in local/CI tests. Shared staging remained floor1
 its successful gate verifies the paired delivery and existing public flows, not
 public activation of the still-incomplete v2 media lifecycle.
 
-### User-media removal and closed rooms: T13a-S3a (prepared)
+### User-media removal and closed rooms: T13a-S3a (published, shared floor 1)
 
 The same API-owned reconciler now disconnects verified codec-2 user connections
 when their participant ID is in the public removal map, when the room is ended
@@ -592,6 +592,16 @@ future owned-namespace retirement remain separate S3b boundaries. The binding ha
 no epoch or identity-record proof, and the observation token does not add one.
 Full v2 activation and real-device meeting acceptance are not closed here.
 Shared floor1 remains unchanged.
+
+Published image: `a64ea0cfc38e414525ed024ef1a73d1bd31c9af3`. Local full E2E
+passed221/221. Exact-SHA [CI38947151422](https://github.com/vrata-labs/platform/actions/runs/38947151422)
+passed221/221 plus16/16 M0.5; [Docker38947151807](https://github.com/vrata-labs/platform/actions/runs/38947151807)
+published matching images. [Staging38952933415](https://github.com/vrata-labs/platform/actions/runs/38952933415)
+accepted66/66 plus1/1 mandatory Rutube on attempt1 without rollback. The accepted
+asset binding remains `0a3b492e788bad82bf20a92476a628bf30c6dfbe`.
+Shared staging remained floor1. Floor-2 terminal eviction and original/refreshed
+JWT rejoin behavior are evidence from owned disposable PostgreSQL schemas with
+real LiveKit1.13.7/1.13.9 in local/CI tests, not public v2 activation.
 
 ### Shared staging delivery (floor 1)
 
