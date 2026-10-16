@@ -2,6 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { readFile } from "node:fs/promises";
 import { startLocalLiveKitFixture } from "./local-livekit-fixture";
 
 test.use({ trace: "off", screenshot: "off", video: "off", launchOptions: { args: ["--autoplay-policy=no-user-gesture-required"] } });
@@ -38,6 +39,7 @@ for (const version of ["1.13.7", "1.13.9"] as const) {
             } else if (track.source === "microphone") {
               const analyser = audio.createAnalyser(); analyser.fftSize = 256;
               audio.createMediaStreamSource(new MediaStream([track.mediaStreamTrack])).connect(analyser); root.__scopeProbe.receivedMic = analyser;
+              root.__scopeProbe.receivedMicTrack = track;
             }
           });
           try { await room.connect(input.url, input.token); return true; } catch { return false; }
@@ -112,8 +114,55 @@ for (const version of ["1.13.7", "1.13.9"] as const) {
       expect((await service.getParticipant(room, screen.identity)).tracks.length).toBe(0);
       // This remains a documented self-hosted limitation, not token revocation acceptance.
       await publisher.evaluate(() => (window as any).__scopeProbe.room.disconnect());
-      await connect(combined.token);
+      const rejoined = await connect(combined.token);
       expect((await service.getParticipant(room, combined.identity)).permission.canPublishSources).toEqual([2, 3, 4]);
+      // A muted microphone must not poison the SDK recycle pool for subsequent surface audio.
+      expect(await publish(rejoined, ["microphone"])).toBe(true);
+      const replacementMicSid = (await service.getParticipant(room, combined.identity)).tracks.find((track: any) => track.source === 2)?.sid;
+      await expect.poll(() => receiver.evaluate(sid => (window as any).__scopeProbe.receivedMicTrack?.sid === sid, replacementMicSid), { timeout: 10_000 }).toBe(true);
+      const surfaceModule = await readFile(resolve("apps/runtime-web/dist/media/media-surface-audio-runtime.js"), "utf8");
+      await receiver.addScriptTag({ type: "module", content: `${surfaceModule}\nglobalThis.__ownedSurfaceAudioFactory = createMediaSurfaceAudioRuntime;` });
+      await receiver.evaluate(() => {
+        const root = window as any, probe = root.__scopeProbe, track = probe.receivedMicTrack;
+        const element = track.attachedElements[0] as HTMLAudioElement;
+        const source = probe.audio.createMediaElementSource(element); source.connect(probe.audio.destination);
+        probe.previousMicElement = element; probe.previousMicSource = source;
+        const nodes = new Map(); probe.surfaceNodes = nodes;
+        const surface = root.__ownedSurfaceAudioFactory({
+          roomMediaObjects: { surfaces: { screen: {} } }, livekitRoom: probe.room,
+          mediaSurfaceViews: new Map([["screen", {}]]), mediaSurfaceAudioNodes: nodes,
+          getTrackNodeId: (track: any) => track.sid, ensureAudioContext: () => probe.audio,
+          createAudioAnalyser: () => { const analyser = probe.audio.createAnalyser(); analyser.fftSize = 256; return { analyser, sampleBuffer: new Uint8Array(256) }; },
+          resumeAudioContext: () => probe.audio.resume(), reconcileMediaRoomIdleDisconnect() {}, syncSurfaceAudioControl() {}
+        });
+        probe.room.removeAllListeners(root.LivekitClient.RoomEvent.TrackSubscribed);
+        probe.room.on(root.LivekitClient.RoomEvent.TrackSubscribed, (track: any) => {
+          if (track.source === "screen_share_audio") surface.connectMediaSurfaceAudioTrack(track, "screen");
+        });
+      });
+      await rejoined.evaluate(() => (window as any).__scopeProbe.room.localParticipant.setMicrophoneEnabled(false));
+      await receiver.evaluate(() => {
+        const probe = (window as any).__scopeProbe;
+        probe.receivedMicTrack.detach(probe.previousMicElement);
+        probe.previousMicElement.remove(); probe.previousMicSource.disconnect();
+      });
+      expect(await publish(rejoined, ["screen_share_audio"])).toBe(true);
+      await expect.poll(() => receiver.evaluate(() => (window as any).__scopeProbe.surfaceNodes.has("screen")), { timeout: 10_000 }).toBe(true);
+      await expect.poll(() => receiver.evaluate(() => {
+        const node = (window as any).__scopeProbe.surfaceNodes.get("screen"), analyser = node.analyser as AnalyserNode;
+        const samples = new Uint8Array(analyser.fftSize); analyser.getByteTimeDomainData(samples);
+        return !node.element.paused && !node.element.muted && node.element.volume > 0
+          && samples.some(sample => Math.abs(sample - 128) > 2);
+      }), { timeout: 15_000 }).toBe(true);
+      // Test graph ownership separately from decoded signal. Chromium's MediaElementSource
+      // analyser is silent for a srcObject even in an oscillator-only positive control.
+      expect(await receiver.evaluate(async () => {
+        const probe = (window as any).__scopeProbe, element = probe.surfaceNodes.get("screen").element;
+        if (element === probe.previousMicElement) return false;
+        await element.play();
+        const source = probe.audio.createMediaElementSource(element); source.disconnect();
+        return true;
+      })).toBe(true);
     } finally { await Promise.allSettled(pages.map(page => page.close())); await livekit.close(); }
   });
 }

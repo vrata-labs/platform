@@ -29,6 +29,17 @@ test("unrelated resources and unsupported schemes are ignored", () => {
   assert.equal(sceneAssetIdentity("https://x/assets/scenes/x/scene.json").kind, "manifest");
 });
 
+test("pinned reference CDN assets are recorded without exposing repository URLs or query credentials", () => {
+  const path = `/gh/vrata-labs/warm-modern-meeting-room-candidate-01@${"a".repeat(40)}/assets/scenes/warm-modern-meeting-room-candidate-01/0.3.4/`;
+  const input = `https://cdn.jsdelivr.net${path}scene.glb?token=secret`;
+  assert.equal(sceneAssetIdentity(input).scene, "meeting");
+  assert.equal(sceneAssetIdentity(input).kind, "glb");
+  assert.equal(sceneAssetIdentity(input.replace("scene.glb", "scene.json")).kind, "manifest");
+  assert.equal(JSON.stringify(sceneAssetIdentity(input)).includes("secret"), false);
+  assert.equal(sceneAssetIdentity(input.replace("cdn.jsdelivr.net", "untrusted.test")), null);
+  assert.equal(sceneAssetIdentity(input.replace("a".repeat(40), "main")), null);
+});
+
 test("partial transfer remains pending with exact bytes and relative times", () => {
   const { emit, row, advance } = setup();
   emit("responseReceived", { timestamp: 10.2, response: { status: 200, protocol: "h2", headers: { "Content-Length": "100" } } });

@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { installFreshAudioObservation, readFreshAudioObservation } from "./fresh-audio-observation";
+import { createAudioProgressTracker, hasLiveAudio } from "./audio-progress";
 
 type DemoRole = "host" | "member" | "guest";
 type JsonRecord = Record<string, any>;
@@ -889,7 +890,7 @@ type AudioSnapshot = {
   bytesReceived: number;
 };
 
-async function readAudioSnapshot(listener: DemoClient, sourceParticipantId: string, fresh = false): Promise<AudioSnapshot> {
+async function readAudioSnapshot(listener: DemoClient, sourceParticipantId: string): Promise<AudioSnapshot> {
   const [state, freshAudio] = await Promise.all([listener.page.evaluate((targetParticipantId) => {
     const debug = (window as any).__VRATA_DEBUG__;
     const remote = debug?.remoteParticipants?.find((participant: any) => participant.participantId === targetParticipantId);
@@ -927,7 +928,7 @@ async function readAudioSnapshot(listener: DemoClient, sourceParticipantId: stri
       bytesSent: Math.max(0, ...transports.map((transport: any) => transport.selectedCandidatePair?.bytesSent ?? 0)),
       bytesReceived: Math.max(0, ...transports.map((transport: any) => transport.selectedCandidatePair?.bytesReceived ?? 0))
     };
-  }, sourceParticipantId), fresh ? readFreshAudioObservation(listener.page) : Promise.resolve(null)]);
+  }, sourceParticipantId), readFreshAudioObservation(listener.page)]);
   return { ...state, freshAudio };
 }
 
@@ -942,11 +943,7 @@ function audioReady(snapshot: AudioSnapshot): boolean {
     && snapshot.spatialLevel > 0
     && snapshot.spatialHasAudioNode
     && snapshot.spatialPannerActive
-    && snapshot.webrtcAvailable
-    && snapshot.transportCount >= 1
-    && (snapshot.publisherConnected || snapshot.subscriberConnected)
-    && snapshot.bytesSent > 0
-    && snapshot.bytesReceived > 0;
+    && hasLiveAudio(snapshot.freshAudio);
 }
 
 async function runStrictStagingAudio(host: DemoClient, member: DemoClient): Promise<void> {
@@ -990,23 +987,24 @@ async function runStrictStagingAudio(host: DemoClient, member: DemoClient): Prom
   }
 
   const [hostBaseline, memberBaseline] = await Promise.all([
-    readAudioSnapshot(host, member.participantId, true),
-    readAudioSnapshot(member, host.participantId, true)
+    readAudioSnapshot(host, member.participantId),
+    readAudioSnapshot(member, host.participantId)
   ]);
+  const hostProgress = createAudioProgressTracker(hostBaseline.freshAudio), memberProgress = createAudioProgressTracker(memberBaseline.freshAudio);
   try {
     await expect.poll(async () => {
       const [hostState, memberState] = await Promise.all([
         readAudioSnapshot(host, member.participantId),
         readAudioSnapshot(member, host.participantId)
       ]);
-      return hostState.bytesReceived > hostBaseline.bytesReceived
-        && memberState.bytesReceived > memberBaseline.bytesReceived
+      return hostProgress(hostState.freshAudio)
+        && memberProgress(memberState.freshAudio)
         && hostState.speakerLevel > 0
         && memberState.speakerLevel > 0;
     }, { timeout: 45_000, intervals: [500, 1_000, 2_000] }).toBe(true);
   } catch {
     const [hostState, memberState] = await Promise.all([
-      readAudioSnapshot(host, member.participantId, true), readAudioSnapshot(member, host.participantId, true)
+      readAudioSnapshot(host, member.participantId), readAudioSnapshot(member, host.participantId)
     ]);
     throw new Error(`public_demo_audio_progress_timeout:${JSON.stringify({ hostBaseline, memberBaseline, hostState, memberState })}`);
   }
@@ -1026,6 +1024,7 @@ async function runStrictStagingAudio(host: DemoClient, member: DemoClient): Prom
   }, { timeout: 45_000, intervals: [500, 1_000, 2_000] }).toBe(true);
 
   const mutedBaseline = await readAudioSnapshot(host, member.participantId);
+  const unmutedProgress = createAudioProgressTracker(mutedBaseline.freshAudio);
   await activateButton(member.page, "#toggle-mute");
   await expect.poll(async () => {
     const hostState = await readAudioSnapshot(host, member.participantId);
@@ -1033,7 +1032,7 @@ async function runStrictStagingAudio(host: DemoClient, member: DemoClient): Prom
     return audioReady(hostState)
       && memberState.audioState === "joined"
       && memberState.publishedAudio
-      && hostState.bytesReceived > mutedBaseline.bytesReceived
+      && unmutedProgress(hostState.freshAudio)
       && hostState.speakerLevel > 0;
   }, { timeout: 60_000, intervals: [500, 1_000, 2_000, 3_000] }).toBe(true);
 }

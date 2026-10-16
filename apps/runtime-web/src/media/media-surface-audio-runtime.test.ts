@@ -34,7 +34,21 @@ function harness(t: TestContext) {
   const body = {
     appendChild(element: unknown) { assert.equal(this, body); step("append"); return element; }
   };
-  replaceGlobal(t, "document", { body });
+  function makeElement() {
+    const element = {
+      autoplay: false, playsInline: false, style: { display: "initial" },
+      play() {
+        assert.equal(this, element); step("play");
+        return failures.has("play.reject") ? Promise.reject(failures.get("play.reject")) : Promise.resolve();
+      },
+      remove() { assert.equal(this, element); step("remove"); }
+    } as unknown as HTMLMediaElement;
+    return element;
+  }
+  const freshElements = new Set<HTMLMediaElement>();
+  replaceGlobal(t, "document", { body, createElement(tag: string) {
+    assert.equal(tag, "audio"); const element = makeElement(); freshElements.add(element); return element;
+  } });
   class Stream {
     constructor(public tracks: MediaStreamTrack[]) { step("stream"); }
   }
@@ -78,20 +92,17 @@ function harness(t: TestContext) {
   const runtime = createMediaSurfaceAudioRuntime(context);
   function track(id: string | undefined = "track-1", withStream = true) {
     const mediaStreamTrack = withStream ? { id: "raw-track" } as MediaStreamTrack : undefined;
-    const element = {
-      autoplay: false, playsInline: false, style: { display: "initial" },
-      play() {
-        assert.equal(this, element); step("play");
-        return failures.has("play.reject") ? Promise.reject(failures.get("play.reject")) : Promise.resolve();
-      },
-      remove() { assert.equal(this, element); step("remove"); }
-    } as unknown as HTMLMediaElement;
+    let element = makeElement();
     const result = {
       sid: id, mediaStreamTrack,
-      attach() { assert.equal(this, result); step("attach"); return element; },
+      attach(supplied: HTMLMediaElement) {
+        assert.equal(this, result); step("attach");
+        assert.equal(freshElements.delete(supplied), true, "attach owns a fresh element, never the SDK recycle pool");
+        element = supplied; return element;
+      },
       detach() { step("track.detach"); return [element]; }
     } as unknown as Track;
-    return { value: result, element, mediaStreamTrack };
+    return { value: result, get element() { return element; }, mediaStreamTrack };
   }
   return { runtime, context, state, events, failures, nodes, views, reads, reconciled, analyser, source, sampleBuffer,
     track, get streamTracks() { return streamTracks; }, set onSync(value: () => void) { onSync = value; } };

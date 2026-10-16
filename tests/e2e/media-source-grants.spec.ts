@@ -250,6 +250,10 @@ test("fresh Member sources are enforced by self-hosted LiveKit even when SDK per
 test("v2 overlapping source classes play one remote microphone without self echo or late-source cleanup", async ({ page, browser, request }) => {
   test.setTimeout(180_000);
   const h = await roomFixture(request), viewer = await browser.newPage({ viewport: { width: 640, height: 400 } }), oldClass = await browser.newPage();
+  const pageErrors: string[] = [];
+  viewer.on("pageerror", error => {
+    if (pageErrors.length < 16) pageErrors.push(["Error", "TypeError", "RangeError", "ReferenceError", "DOMException"].includes(error.name) ? error.name : "OtherError");
+  });
   try {
     await viewer.addInitScript(() => {
       const Native = window.RTCPeerConnection, events: Array<{ pc: RTCPeerConnection; event: RTCTrackEvent }> = [];
@@ -271,7 +275,28 @@ test("v2 overlapping source classes play one remote microphone without self echo
     await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__?.media?.publishedAudio), { timeout: 20_000 }).toBe(true);
     const viewerInvite = await h.invite("member");
     await viewer.goto(`${viewerInvite.inviteLink}&debug=1&audiomock=1&onboard=0`);
-    await expect.poll(() => viewer.evaluate(() => (window as any).__VRATA_DEBUG__?.media?.subscribedAudioCount), { timeout: 30_000 }).toBe(1);
+    try {
+      await expect.poll(() => viewer.evaluate(() => (window as any).__VRATA_DEBUG__?.media?.subscribedAudioCount), { timeout: 30_000 }).toBe(1);
+    } catch {
+      const states = await Promise.all([page, viewer].map(client => client.evaluate(target => {
+        const d = (window as any).__VRATA_DEBUG__, peer = d?.remoteParticipants?.find((p: any) => p.participantId === target);
+        return { scene: d?.sceneBundleState, connected: d?.roomStateConnected, audio: d?.audioState,
+          issue: d?.issueCode, joined: d?.media?.audioJoined, published: d?.media?.publishedAudio,
+          subscriptions: d?.media?.subscribedAudioCount, peerSeen: !!peer, peerActive: peer?.activeAudio,
+          peerMuted: peer?.muted, peerHasNode: peer?.hasAudioNode,
+          visibility: document.visibilityState,
+          presenceAgeMs: typeof d?.lastPresenceSyncAt === "number" ? Date.now() - d.lastPresenceSyncAt : null,
+          receivedTrackEvents: (window as any).__mappedTrackEvents?.length ?? null };
+      }, proof.participantId)));
+      const mediaRoom = (await h.service.listRooms()).find((room: any) => room.name.endsWith(`:${h.roomId}`))?.name;
+      const { verifyUserMediaIdentity } = await import(pathToFileURL(resolve("packages/shared-types/dist/media-identity.js")).href);
+      const peers = await Promise.all((mediaRoom ? await h.service.listParticipants(mediaRoom) : []).map(async (peer: any) => ({
+        tracks: peer.tracks.map((track: any) => ({ source: track.source, muted: track.muted })),
+        bindingPresent: typeof peer.attributes.vrataMediaBinding === "string",
+        bindingVerifies: !!await verifyUserMediaIdentity(mediaRoom, peer.identity, peer.attributes)
+      })));
+      throw new Error(`overlap_microphone_not_ready:${JSON.stringify({ states, peers, pageErrors })}`);
+    }
     const response = await request.post(`${h.fixture.origin}/api/tokens/media`, {
       headers: { authorization: `Bearer ${proof.token}` }, data: { roomId: h.roomId, participantId: proof.participantId, canPublishAudio: true, canPublishVideo: false }
     });

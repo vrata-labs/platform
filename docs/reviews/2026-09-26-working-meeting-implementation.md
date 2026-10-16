@@ -1605,6 +1605,71 @@ fixtures включены; fsync/full_page_writes/synchronous_commit остав�
 Общий floor остаётся1. Производственный RoomService reconciler ещё не подключён:
 этот срез закрывает адресацию, но не полный T13a, epoch/end/remove/restart/rejoin.
 
+### S2a: первая публикация и обязательный откат
+
+Адресация опубликована коммитом `00125a779a70b511501bc4de93538df10a7c56be`.
+Exact-SHA [CI 38654561358](https://github.com/vrata-labs/platform/actions/runs/38654561358)
+прошёл с первой попытки: 214/214 e2e за27,8 минуты и16/16 M0.5 за1,8 минуты,
+skipped0/unexpected0/flaky0, artifact11937473760.
+[Docker 38654561073](https://github.com/vrata-labs/platform/actions/runs/38654561073)
+прошёл с первой попытки. Опубликованные digests: API
+`sha256:3ebf774df22e44f0380c4e8a2347781d9cf26f52ab169a1b3a8db32296ef978e`,
+room-state `sha256:b79ca5234e7447ee86f985939622b3606a526fd2c0796c92e786452371387b26`,
+remote-browser `sha256:1b2f059c0bc8053a59487a301b785f95bd5c234e78c231d06dd13d2a880d25f7`.
+
+[Staging 38705360877](https://github.com/vrata-labs/platform/actions/runs/38705360877)
+не принят:64/66 за19,8 минуты, artifact11959271903. Public-demo audio progress
+и загрузка reference meeting дали отказ. Accepted publication пропущена;
+автоматический rollback успешно вернул `746d6421d11d7f2124ee2898ee865d12c3c3440a`,
+room pointers и scene snapshot подтверждены. Повторный public smoke health,
+demo-room и control-plane вернул200. Общий floor1 не менялся.
+
+Свежий RTP observer установил причину ложного audio-progress отказа именно этого
+run: за~44 секунды оба клиента приняли >540КБ аудио,2198 новых пакетов и2110080
+samples с ростом decoded energy; последний пакет был получен~10мс назад.
+Проверка читала неизменные cached candidate-pair counters с возрастом~47секунд.
+Причина остановки обновления этого диагностического кэша пока не установлена;
+старые отказы без свежего RTP observer этим доказательством не закрываются.
+Новый критерий использует свежие audio RTP/decoded counters, а не общий транспорт:
+timestamp, bytes, packets, samples и energy должны вырасти на том же peer/stream,
+последний пакет должен быть свежим. При замене peer/stream или сбросе counters
+устанавливается новая baseline, без немедленного успеха. Нет данных/нет энергии/
+тишина/застывшие counters дают отказ. Mute/unmute и пространственные признаки,
+оба направления, прежние сроки ожидания, retries и skips сохранены.
+
+Отдельно воспроизведён дефект при переходе mic→screen audio: после mute SDK
+возвращает прежний audio element в recycle pool, хотя он остаётся владельцем
+уже отключённого MediaElementAudioSourceNode. Последующий attach экрана к этому
+элементу не восстанавливает нормальный element playback. Модуль поверхностей
+теперь явно передаёт свежий audio element, сохраняя основной attach-путь.
+Регрессия на обеих версиях LiveKit проверяет новый DOM element, отсутствие старой
+graph ownership, реальный decoded signal и playback state. MediaElementSource
+analyser не используется как доказательство слышимости: в отдельном локальном
+oscillator positive control Chromium давал на нём нули даже при свежем элементе
+и ненулевом MediaStreamSource. Это ограничение измерения, не скрытый pass.
+
+Для reference meeting причина fallback после90секунд остаётся неизвестной.
+Добавлено пассивное CDP-наблюдение вручную создаваемых страниц reference tests,
+включая только точные pinned CDN asset paths. Отчёт хранит хеш, размер, статус,
+время, stage и fixed error code; URL, credentials, произвольные headers/body не
+сохраняются. Таймаут и loaded predicate не менялись. Это диагностика, не заявленное
+исправление загрузки сцены.
+
+Workspace после follow-up прошёл: runtime1242/1242, API1692 passed/1 optional skip,
+tools309 passed/2 optional skips; lint/typecheck/build и остальные пакеты зелёные.
+Focused audio/transport4/4, unit/scene observer50/50; все PG/rollback fixtures
+включены. Первый full local run follow-up:209 passed/1 failed/5 serial notrun
+за35,8 минуты. Отказ — первоначальная подписка пассивного viewer в overlap-тесте
+до подключения второго класса. На момент отказа достаточных диагностик не было;
+причина не установлена и не объявляется исправленной. Узкий повтор3/3 и полный
+порядок трёх медиа-сценариев9/9 прошли. Добавлена только безопасная диагностика
+отказа: состояние клиента, presence age, число native track events, классы ошибок
+страницы и серверная проверка hash binding, без дополнительных credential requests.
+Критерии и таймауты overlap-сценария сохранены. Финальный полный прогон на этом
+исполняемом дереве: **215/215 за30,9 минуты**, expected215/skipped0/unexpected0/flaky0,
+exit0. Все PG/rollback fixtures включены. Отдельный успех не закрывает причину
+прежнего отказа. Новая публикация и exact-SHA staging-приёмка выполняются отдельно.
+
 ## Публикация первого среза T01/T12
 
 Локально прошли workspace lint/typecheck/build/tests с PostgreSQL, затем runtime build и 905 runtime tests после финальных правок. Полный `pnpm test:e2e` на финальном исполняемом дереве: **148 passed**, без skip (41.6 min).

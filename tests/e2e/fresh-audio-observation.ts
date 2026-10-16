@@ -1,6 +1,6 @@
 import type { BrowserContext, Page } from "@playwright/test";
 
-type FreshAudioObservation = {
+export type FreshAudioObservation = {
   sampledAtMs: number;
   peers: Array<{
     peer: number;

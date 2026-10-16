@@ -1,4 +1,5 @@
-import { expect, test, request as playwrightRequest, type APIRequestContext, type Browser, type Page, type TestInfo } from "@playwright/test";
+import { request as playwrightRequest } from "@playwright/test";
+import { expect, test, observeScenePage, type APIRequestContext, type Browser, type Page, type TestInfo } from "./scene-network-fixture";
 import { randomUUID } from "node:crypto";
 import { PDFDocument, rgb } from "pdf-lib";
 import { startReferenceTemplateFixture } from "./reference-template-fixture.js";
@@ -105,7 +106,7 @@ async function createFunctionalClient(browser: Browser) {
   // Match the bounded two-client media check below. Keep CSS layout, scene bytes,
   // materials and quality profiles; these 320x200 captures are functional evidence.
   const context = await browser.newContext({ viewport: { width: 640, height: 400 }, deviceScaleFactor: 0.5 });
-  try { return { context, page: await context.newPage() }; }
+  try { return { context, page: await observeScenePage(context.newPage()) }; }
   catch (error) { await context.close(); throw error; }
 }
 

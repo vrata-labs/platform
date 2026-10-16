@@ -1,7 +1,7 @@
 import { test as base, type Page, type TestInfo } from "@playwright/test";
 import { captureSceneNetwork } from "../../tools/scene-network-diagnostics.mjs";
 
-export { expect, type APIRequestContext, type Page } from "@playwright/test";
+export { expect, type APIRequestContext, type Browser, type Page, type TestInfo } from "@playwright/test";
 
 type Capture = Awaited<ReturnType<typeof captureSceneNetwork>>;
 type Report = ReturnType<Capture["snapshot"]> & { pageIndex: number };

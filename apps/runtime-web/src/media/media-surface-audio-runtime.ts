@@ -47,7 +47,8 @@ export function createMediaSurfaceAudioRuntime(bindings: MediaSurfaceAudioRuntim
     if (existing) {
       disconnectMediaSurfaceAudioTrack(surfaceId);
     }
-    const element = track.attach() as HTMLMediaElement & { playsInline?: boolean };
+    // A recycled microphone element can still belong to its disconnected Web Audio graph.
+    const element = track.attach(document.createElement("audio")) as HTMLMediaElement & { playsInline?: boolean };
     element.autoplay = true;
     element.playsInline = true;
     element.style.display = "none";
