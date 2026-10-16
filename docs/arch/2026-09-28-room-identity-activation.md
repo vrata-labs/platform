@@ -366,7 +366,7 @@ bypass the server's fresh create authorization. This checkpoint does not fix tha
 The original S1 publication did not change shared floor1 or deploy staging.
 Later integration delivery below still does not activate full identity/media.
 
-### Source-class media addresses: T13a-S2a (prepared)
+### Source-class media addresses: T13a-S2a (accepted on floor 1)
 
 `UpdateParticipant` on self-hosted LiveKit addresses a room and identity, not a
 connection SID, and replaces the entire permission object. Reading an old SID
@@ -422,6 +422,16 @@ codec. Floor 1 remains compatible with the prior accepted image. This does not
 automatically migrate a self-host already running an older floor-2 media lineage:
 that needs an explicit cutover. Shared floor 2 remains disabled; disposable test
 schemas use a fresh activation namespace.
+
+Floor-1 staging accepted `6d6830bb9892d879b8bbec064956b06bf7ea1f6e` through
+[run 38889554590](https://github.com/vrata-labs/platform/actions/runs/38889554590):
+66/66 main checks and 1/1 mandatory Rutube, without skips or retries. Exact-SHA
+CI passed 215/215 local e2e and 16/16 M0.5. The first address candidate `00125a7`
+was rejected and rolled back; the implementation journal retains both failures
+and the follow-up evidence. This acceptance includes fresh surface audio elements
+and audio-progress checks based on fresh RTP/decoded signal rather than frozen
+diagnostic transport counters. It does not activate shared floor 2, deploy a source
+revocation reconciler, or close the remaining self-hosted replay/epoch boundaries.
 
 ### Shared staging delivery (floor 1)
 

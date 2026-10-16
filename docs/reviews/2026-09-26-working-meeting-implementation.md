@@ -1668,7 +1668,33 @@ Focused audio/transport4/4, unit/scene observer50/50; все PG/rollback fixture
 Критерии и таймауты overlap-сценария сохранены. Финальный полный прогон на этом
 исполняемом дереве: **215/215 за30,9 минуты**, expected215/skipped0/unexpected0/flaky0,
 exit0. Все PG/rollback fixtures включены. Отдельный успех не закрывает причину
-прежнего отказа. Новая публикация и exact-SHA staging-приёмка выполняются отдельно.
+прежнего отказа.
+
+Follow-up опубликован коммитом `6d6830bb9892d879b8bbec064956b06bf7ea1f6e`.
+Exact-SHA [CI 38884745994](https://github.com/vrata-labs/platform/actions/runs/38884745994)
+успешен с первой попытки:215/215 e2e за36,4 минуты и16/16 M0.5 за2,5 минуты,
+skipped0/unexpected0/flaky0; artifact12040584531.
+[Docker 38884745589](https://github.com/vrata-labs/platform/actions/runs/38884745589)
+успешен с первой попытки.
+
+[Staging 38889554590](https://github.com/vrata-labs/platform/actions/runs/38889554590)
+принят с первой попытки: **66/66 за26,9 минуты** и **1/1 mandatory Rutube за3,5 минуты**,
+skipped0/unexpected0/flaky0; artifact12043285389. Проверены public four-party
+audio/notes/PDF/reload/rejoin/Host controls, reference meeting, moving screen-share
+frames, private plugin storage и current-page loaded Hall/BlueOffice/ArtGallery.
+Accepted publication вернула точный `6d6830bb9892d879b8bbec064956b06bf7ea1f6e`,
+asset binding `0a3b492e788bad82bf20a92476a628bf30c6dfbe`. Rollback не запускался;
+cleanup сохранил current/previous/Wave2 snapshots. После публикации повторный
+health/demo-room/control-plane smoke вернул200. Собственная PG fixture удалена
+после проверки полного ID/label; локальные API/WS/browser/LiveKit fixtures закрыты.
+
+Это приёмка source-class prerequisite и audio follow-up на общем floor1, не
+производственный серверный отзыв и не вся T13a. Floor2 остаётся только в disposable
+schemas. Неизвестная причина прежнего reference CDN/fallback отказа, прежний
+локальный viewer readiness отказ и остановка debug RTC cache этим успехом не
+объявляются исправленными; диагностические свидетельства и отрицательные runs
+сохранены выше. S2 reconciliation и S3 replay/epoch/end/remove/restart остаются
+следующими срезами; повторная ручная T03-приёмка не требуется.
 
 ## Публикация первого среза T01/T12
 
