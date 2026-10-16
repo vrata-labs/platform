@@ -433,7 +433,7 @@ and audio-progress checks based on fresh RTP/decoded signal rather than frozen
 diagnostic transport counters. It does not activate shared floor 2, deploy a source
 revocation reconciler, or close the remaining self-hosted replay/epoch boundaries.
 
-### Native screen reconciliation: T13a-S2b (prepared)
+### Native screen reconciliation: T13a-S2b (published, shared floor 1)
 
 The API now owns an independent periodic screen-source reconciler. It derives
 desired state from durable identity authority, not from a browser, room-state
@@ -514,9 +514,20 @@ The API image and rollout manifest declare `mediaScreenReconciler=1`.
 Floor-2 rollout/rollback rejects an API image that would silently remove native
 screen enforcement. Floor1 retains compatibility with the prior accepted image.
 
+Published image: `342f8e95e2d98fcb57533df94e6f673420ef1e6f`. Local full E2E
+passed217/217. Exact-SHA CI38918055620 passed217/217 plus16/16 M0.5, Docker
+38918055029 published the matching images, and
+[staging38922663771](https://github.com/vrata-labs/platform/actions/runs/38922663771)
+accepted66/66 plus1/1 mandatory Rutube on attempt1 without rollback. The accepted
+asset binding remains `0a3b492e788bad82bf20a92476a628bf30c6dfbe`.
+Native floor-2 enforcement evidence is from owned disposable PostgreSQL schemas
+with real LiveKit1.13.7/1.13.9 in local/CI tests. Shared staging remained floor1;
+its successful gate verifies the paired delivery and existing public flows, not
+public activation of the still-incomplete v2 media lifecycle.
+
 ### Shared staging delivery (floor 1)
 
-The paired integration of current main and these prerequisites is deployed as
+The initial paired integration of main and these prerequisites was accepted as
 `746d6421d11d7f2124ee2898ee865d12c3c3440a` on the current Selectel staging host,
 `https://135.106.137.18.sslip.io`. Shared protocol minimum stays 1; the floor-2
 authority scenarios above remain evidence from owned disposable schemas.

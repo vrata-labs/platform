@@ -1759,7 +1759,7 @@ room-state88/88, remote-browser71/71, tools311 passed/2 optional skips;
 исполняемом дереве: **217/217 за30,8 минуты**, exit0,
 expected217/skipped0/unexpected0/flaky0. Все PG/rollback fixtures включены,
 fsync/full_page_writes/synchronous_commit оставались on. Новая exact-SHA
-CI/Docker/staging-поставка выполняется отдельно.
+CI/Docker/staging-поставка выполнена ниже.
 
 API image/manifest объявляют mediaScreenReconciler=1. При floor2 rollback без
 сверки запрещён; floor1 совместим с предыдущим принятым6d6830b. Общий floor1 не
@@ -1768,6 +1768,29 @@ API image/manifest объявляют mediaScreenReconciler=1. При floor2 rol
 эпохи с тем же participant ID, microphone eviction для remove/end, prejoin replay,
 executor media и owned-namespace cutover остаются S3. Наблюдение не является
 постоянным token-revocation ACK или утверждением, что в комнате вообще нет видео.
+
+Опубликован `342f8e95e2d98fcb57533df94e6f673420ef1e6f`.
+Exact-SHA [CI38918055620](https://github.com/vrata-labs/platform/actions/runs/38918055620)
+успешен с первой попытки:217/217 e2e за26,2 минуты и16/16 M0.5 за1,7 минуты,
+skipped0/unexpected0/flaky0; artifact12054563033.
+[Docker38918055029](https://github.com/vrata-labs/platform/actions/runs/38918055029)
+успешен с первой попытки.
+[Staging38922663771](https://github.com/vrata-labs/platform/actions/runs/38922663771)
+принят с первой попытки: **66/66 за26,5 минуты** и **1/1 mandatory Rutube за3,4 минуты**,
+skipped0/unexpected0/flaky0; artifact12056373923. Public four-party audio/PDF/notes/
+reload/rejoin/Host controls, reference scenes, moving screen-share и private plugin
+storage прошли; Hall/BlueOffice/ArtGallery loaded в текущих страницах.
+Accepted publication вернула точный342f8e95e2d98fcb57533df94e6f673420ef1e6f,
+asset binding0a3b492e788bad82bf20a92476a628bf30c6dfbe. Rollback не запускался;
+сохранены current/previous6d6830b/Wave2 snapshots. Post-acceptance smoke
+health/demo-room/control-plane вернул200. Собственная PG fixture удалена после
+проверки полного ID/label; local API/WS/browser/native fixtures закрыты.
+
+Общий floor1 не повышался. Настоящий floor2 server enforcement подтверждён только
+изолированными local/CI PostgreSQL+SFU tests, а staging gate подтверждает доставку
+и совместимость действующего floor1. Это не вся T13a и не публичная v2 activation;
+следующим остаётся S3 lifecycle/replay. Ранее неизвестные непостоянные отказы из
+предыдущих срезов новым зелёным run не объявляются исправленными.
 
 ## Публикация первого среза T01/T12
 
