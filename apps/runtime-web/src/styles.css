@@ -178,8 +178,107 @@ canvas {
 }
 
 #room-name {
+  margin: 0;
   font-size: 1.1rem;
   font-weight: 700;
+}
+
+.meeting-nav {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  gap: 4px;
+  overflow-x: auto;
+  padding: 4px 0 8px;
+  background: #08111f;
+  border-bottom: 1px solid var(--line);
+}
+
+.meeting-nav button {
+  flex: 1 0 48px;
+  min-width: 48px;
+  min-height: 48px;
+  padding: 4px;
+  font: inherit;
+  font-size: 0.8rem;
+  border-radius: 10px;
+}
+
+.meeting-nav button[aria-current="location"] {
+  border-color: #a7e3ff;
+  background: #17334a;
+}
+
+.meeting-panel {
+  margin-top: 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 0 8px 8px;
+}
+
+.meeting-panel > summary {
+  min-height: 48px;
+  display: list-item;
+  align-content: center;
+  cursor: pointer;
+  scroll-margin-top: 68px;
+}
+
+.meeting-panel > summary h2 {
+  display: inline;
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.meeting-tool-status,
+.meeting-target-status {
+  color: var(--text);
+  font-size: 0.85rem;
+  line-height: 1.45;
+  margin: 8px 0;
+}
+
+.meeting-tool-status:empty,
+.meeting-target-status:empty {
+  display: none;
+}
+
+.meeting-panel button,
+.meeting-panel select,
+.meeting-panel input:not([type="checkbox"]):not([type="range"]) {
+  min-height: 48px;
+}
+
+.meeting-panel :is(.notes-panel, .documents-panel, .host-controls-panel, .markdown-board-panel, .remote-browser-panel) {
+  padding: 8px 0;
+  border: 0;
+  background: transparent;
+}
+
+.meeting-people-list {
+  margin: 8px 0;
+  padding-left: 20px;
+  color: var(--text);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.hud :focus-visible {
+  outline: 3px solid #ecf6ff;
+  outline-offset: 2px;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
 }
 
 #status-line,

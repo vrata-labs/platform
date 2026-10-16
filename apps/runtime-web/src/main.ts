@@ -1,4 +1,6 @@
 import * as THREE from "three";
+import { createMeetingNavigationRuntime } from "./meeting/meeting-navigation-runtime.js";
+import { clearRuntimeKeyboardState, collectRuntimeKeyboardSample, isRuntimeUiKeyboardTarget } from "./input/keyboard-target.js";
 import { createRoomTemplatePreferences, fetchPublicTemplateSettings } from "./template-preferences.js";
 import { Room, RoomEvent, Track } from "livekit-client";
 import {
@@ -593,6 +595,7 @@ whiteboardPreviewLine.visible = false;
 displaySurface.add(whiteboardPreviewLine);
 
 const mediaSurfaceViews = new Map<string, RuntimeMediaSurfaceView>();
+let meetingNavigation: ReturnType<typeof createMeetingNavigationRuntime> | null = null;
 for (const definition of DEFAULT_RUNTIME_MEDIA_SURFACES) {
   const view = createMediaSurfaceView(definition, definition.surfaceId === DEBUG_SURFACE_ID ? displaySurface : undefined);
   mediaSurfaceViews.set(definition.surfaceId, view);
@@ -1653,7 +1656,9 @@ function applySnapshotParticipants(people: PresenceState[]): void {
 }
 
 function applyMergedPresenceParticipants(): void {
-  applySnapshotParticipants(mergePresenceSources(latestRealtimeParticipants, latestFallbackParticipants));
+  const people = mergePresenceSources(latestRealtimeParticipants, latestFallbackParticipants);
+  applySnapshotParticipants(people);
+  meetingNavigation?.updatePeople(people);
   renderHostControls();
 }
 
@@ -2175,6 +2180,7 @@ function syncMediaObjectsDebugState(): void {
   syncRemoteBrowserControls();
   syncSurfaceAudioControl();
   syncMediaSurfaceObjectIds();
+  meetingNavigation?.requestSync();
 }
 
 function routeSurfaceInputToMediaObject(event: SurfaceInputEvent): boolean {
@@ -7267,18 +7273,21 @@ stopShareButton.addEventListener("click", () => {
 });
 
 window.addEventListener("keydown", (event) => {
-  keyState[event.code] = true;
-  if (!(event.target instanceof HTMLInputElement) && !(event.target instanceof HTMLTextAreaElement) && !(event.target instanceof HTMLSelectElement)) {
+  if (collectRuntimeKeyboardSample(keyState, event, true)) {
     commitDebugSurfaceInputFromFocusedKeyboard("key-down", event);
   }
 });
 
 window.addEventListener("keyup", (event) => {
-  keyState[event.code] = false;
-  if (!(event.target instanceof HTMLInputElement) && !(event.target instanceof HTMLTextAreaElement) && !(event.target instanceof HTMLSelectElement)) {
+  if (collectRuntimeKeyboardSample(keyState, event, false)) {
     commitDebugSurfaceInputFromFocusedKeyboard("key-up", event);
   }
 });
+
+window.addEventListener("focusin", event => {
+  if (isRuntimeUiKeyboardTarget(event.target)) clearRuntimeKeyboardState(keyState);
+});
+window.addEventListener("blur", () => clearRuntimeKeyboardState(keyState));
 
 renderer.domElement.addEventListener("pointerdown", (event) => {
   whiteboardPointerActive = whiteboardDrawToolActive && canUseWhiteboardDrawTool()
@@ -7696,6 +7705,7 @@ async function main(): Promise<void> {
     lastDeniedPermission: null,
     lastSurfaceCommandAccepted: null
   };
+  meetingNavigation?.configureTemplate(boot.templateSurfaces ?? [], boot.templateSettings?.presentation.surfaceId);
   debugState.avatarPresenceMode = runtimeFlags.avatarLegIkEnabled ? "experimental-leg-ik" : "baseline";
   debugState.roomStateUrl = boot.roomStateUrl;
   debugState.sceneBundleUrl = boot.sceneBundleUrl ?? null;
@@ -7957,7 +7967,7 @@ async function main(): Promise<void> {
   });
   updateVrButtonState();
   if (runtimeFlags.enterVr) {
-    document.querySelector(".controls")?.appendChild(vrButton);
+    document.getElementById("primary-controls")?.appendChild(vrButton);
   }
   if (runtimeFlags.enterVr && !getEnterVrVisibility(xrSupport, runtimeFlags.enterVr)) {
     const issue = getRuntimeIssue("xr_unavailable");
@@ -8005,6 +8015,24 @@ const sessionUpgradeUi = mountSessionUpgradeUi({
     }
   },
   confirmDiscard: () => window.confirm("The browser could not retain your note draft. Copy or download it first. Update anyway?")
+});
+
+meetingNavigation = createMeetingNavigationRuntime({
+  document, selectSurface: selectMediaSurface,
+  context: () => ({
+    admitted: Boolean(roomStateAccessToken), blocked: sessionControlBlocked || Boolean(runtimeSessionGate.reason),
+    connected: roomStateConnected, permissions: debugState.access.permissions,
+    features: { audio: runtimeFlags.audioJoin, screenShare: runtimeFlags.screenShare || shareMockEnabled,
+      documents: runtimeFlags.documentsEnabled, notes: runtimeFlags.notesEnabled, hostControls: runtimeFlags.hostControlsEnabled },
+    capabilities: { microphone: audioMockEnabled || browserMediaCapabilities.audioInput.supported,
+      screenCapture: shareMockEnabled || browserMediaCapabilities.screenShare.supported, speakerSelection: supportsAudioOutputSelection() },
+    audioJoined: audioSessionJoined, audioBusy: audioActionInFlight || mediaRoomTransitionInFlight,
+    documentSelected: Boolean(selectedDocument()), documentDisplayable: ["pdf", "image", "video"].includes(selectedDocument()?.metadata?.kind ?? ""),
+    canManagePeople: canManageHostControls(), participantSelected: Boolean(hostParticipantSelect.value),
+    selectedSurfaceId: selectedMediaSurfaceId, localParticipantId: participantId,
+    physicalSurfaceIds: new Set([...mediaSurfaceViews].filter(([, surface]) => surface.object.visible).map(([id]) => id)),
+    surfaces: roomMediaObjects?.surfaces ?? null, objects: roomMediaObjects?.objects ?? {}
+  })
 });
 
 void main().catch((error: unknown) => {
