@@ -53,6 +53,7 @@ import { admitV2RoomSession, type V2AdmissionRequest } from "./identity/http-adm
 import { currentSessionControlV2, resolveRoomRequestV2, untrustedSessionRoom, type VerifiedRoomRequestV2 } from "./identity/http-authority.js";
 import { roomMediaGrantName } from "./identity/media-room.js";
 import { applyRoomLifecycleV2, lifecycleV2Error, roomIdentityActorFromHttp } from "./identity/http-lifecycle.js";
+import { createMediaScreenService } from "./media-screen-service.js";
 import { IdentityStorageError } from "./identity/contracts.js";
 import { PersonalOwnerRoomBlocked } from "./identity/personal-owner-response.js";
 import type { RoomEffectGuard, RoomEffectActor } from "./identity/effect-write-guard.js";
@@ -300,6 +301,9 @@ const activePresenceRooms = { get size() { return new Set([...presenceByRoom.key
 const { metrics, apiMetricsText } = createApiMetrics(activePresenceRooms,
   () => { cleanupAllPresence(); virtualPresence.cleanupAllPresence(); },
   () => activeParticipantCount() + virtualPresence.activeParticipantCount());
+const mediaScreenService = createMediaScreenService(storagePromise, {
+  event: outcome => incrementCounter(metrics.mediaScreenReconciliationTotal, outcome)
+});
 const routeRoomNotesRequest = createRoomNotesRoutes({ metrics, resolveControlPlaneActor, getRequestId, logEvent, runGuardedRoomEffect,
   deniedEffectReason: error => error instanceof RoomEffectPermissionDenied ? "permission_denied"
     : error instanceof IdentityBoundaryError ? error.reason : null });
@@ -309,6 +313,11 @@ function resolveAccessRole(requestedRole: unknown, env: NodeJS.ProcessEnv = proc
     return { role: "guest", roleSource: "default" };
   }
   return { role: parseRoomRole(requestedRole, "guest"), roleSource: requestedRole === undefined || requestedRole === null ? "default" : "dev-query" };
+}
+
+async function applyRoomLifecycleWithMedia(input: Parameters<typeof applyRoomLifecycleV2>[0]) {
+  const updated = await applyRoomLifecycleV2(input);
+  return { ...updated, mediaScreenReconciliation: mediaScreenService.committed(input.room, updated.revision, updated.state) };
 }
 
 function getStateTokenSecret(env: NodeJS.ProcessEnv = process.env): string {
@@ -3410,7 +3419,8 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     json(response, 200, {
       state: sanitizeSessionControlState(atFloor2
         ? await currentSessionControlV2(storage, room) : room.sessionControl),
-      ...(current ? { authorityRevision: current.authority.revision, ownerParticipantId: current.ownerParticipantId } : {}),
+      ...(current ? { authorityRevision: current.authority.revision, ownerParticipantId: current.ownerParticipantId,
+        mediaScreenReconciliation: await mediaScreenService.status(roomId, current.authority.revision) } : {}),
       participant: participantIdForStatus ? {
         participantId: participantIdForStatus,
         role: effectiveRole,
@@ -3453,7 +3463,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     if (await legacyIdentityBoundary.minimum() >= 2) {
       const payload = (await parseBody<{ expectedRevision?: number }>(request)) ?? {};
       try {
-        const updated = await applyRoomLifecycleV2({ storage, room, actor, command: { type: action }, expectedRevision: payload.expectedRevision });
+        const updated = await applyRoomLifecycleWithMedia({ storage, room, actor, command: { type: action }, expectedRevision: payload.expectedRevision });
         if (action === "lock") metrics.roomLockedTotal += 1;
         if (action === "end") {
           metrics.sessionsEndedTotal += 1;
@@ -3508,7 +3518,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     if (await legacyIdentityBoundary.minimum() >= 2) {
       const payload = (await parseBody<{ reason?: string; expectedRevision?: number }>(request)) ?? {};
       try {
-        const updated = await applyRoomLifecycleV2({ storage, room, actor,
+        const updated = await applyRoomLifecycleWithMedia({ storage, room, actor,
           command: { type: "remove", targetParticipantId,
             ...(typeof payload.reason === "string" ? { reason: payload.reason } : {}) }, expectedRevision: payload.expectedRevision });
         deletePresence(roomId, targetParticipantId);
@@ -3572,7 +3582,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       }
       const payload = (await parseBody<{ expectedRevision?: number }>(request)) ?? {};
       try {
-        const updated = await applyRoomLifecycleV2({ storage, room, actor,
+        const updated = await applyRoomLifecycleWithMedia({ storage, room, actor,
           command: { type: action === "grant" ? "grant-presenter" : "revoke-presenter", targetParticipantId }, expectedRevision: payload.expectedRevision });
         incrementPresenterChangeMetric(action, "allowed");
         return json(response, 200, { ...updated, presenterParticipantId: action === "grant" ? targetParticipantId : null });
@@ -3618,7 +3628,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       return json(response, 400, { error: "invalid_owner_transfer" });
     }
     try {
-      const updated = await applyRoomLifecycleV2({ storage, room, actor,
+      const updated = await applyRoomLifecycleWithMedia({ storage, room, actor,
         command: { type: "transfer-owner", targetParticipantId }, expectedRevision: payload.expectedRevision as number });
       return json(response, 200, { ...updated, ownerParticipantId: targetParticipantId });
     } catch (error) {
@@ -3661,7 +3671,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
         return json(response, 404, { error: "participant_not_found" });
       }
       try {
-        const updated = await applyRoomLifecycleV2({ storage, room, actor,
+        const updated = await applyRoomLifecycleWithMedia({ storage, room, actor,
           command: { type: "transfer-host", targetParticipantId }, expectedRevision: payload.expectedRevision });
         incrementHostActionMetric("transfer_host", "allowed");
         return json(response, 200, { ...updated, hostParticipantId: targetParticipantId });
@@ -4197,7 +4207,9 @@ export function startApiServer(port = apiPort) {
       json(response, 500, roomDeletionFailure ? { error: "internal_error" } : { error: "internal_error", message: error instanceof Error ? error.message : "unknown" });
     });
   });
+  server.once("close", () => mediaScreenService.stop());
   return server.listen(port, () => {
+    mediaScreenService.start();
     logEvent({ service: "api", event: "listening", env: process.env.NODE_ENV ?? "development", port, timestamp: new Date().toISOString() });
   });
 }

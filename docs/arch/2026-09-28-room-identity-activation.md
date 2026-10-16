@@ -433,6 +433,87 @@ and audio-progress checks based on fresh RTP/decoded signal rather than frozen
 diagnostic transport counters. It does not activate shared floor 2, deploy a source
 revocation reconciler, or close the remaining self-hosted replay/epoch boundaries.
 
+### Native screen reconciliation: T13a-S2b (prepared)
+
+The API now owns an independent periodic screen-source reconciler. It derives
+desired state from durable identity authority, not from a browser, room-state
+presence, webhook or an in-memory transition queue. Only rooms in the exact
+current persisted media namespace are eligible. A second deployment can share
+the SFU and room prefix; foreign namespaces are never assumed to be retired
+namespaces owned by this database. Cloning/restoring a database onto the same
+SFU still requires an explicit namespace/isolation procedure.
+
+`roomIdentities.screenSourceAuthority` reads room lifecycle, authority and the
+Host/Presenter identity records in one existing read-only repeatable-read
+transaction; Memory uses one synchronous snapshot. Active, nonremoved Host and
+Presenter identities are the screen publishers. Ownership alone is not a role.
+End, disabled rooms and confirmed room deletion have no screen publishers;
+storage errors or incomplete authority remain pending, not a fabricated grant.
+
+Each verified unauthorized `ms` connection receives the fixed microphone-only
+permission tuple, and each `s` connection receives publish-disabled permission.
+Microphone-only identities are not written. The source ceiling comes from the
+verified codec-2 identity and protected binding, never the preceding connection's
+permission list. Every update preserves subscribe/data and disables metadata
+updates and auxiliary user privileges. An empty source list is used only with
+`canPublish=false`. Executor and unknown identities are never rewritten; an
+unknown participant prevents a complete user-source observation for that room.
+
+An authority read immediately before the update reduces unnecessary work but is
+not a CAS. A replacement SID or authority change can race the RPC. Fixed updates
+cannot widen the replacement's signed source class, but may over-restrict a new
+same-class promotion; fresh credential reconnect remains the recovery. Neither
+SID reads, participant attributes nor joined-at timestamps are advertised as
+write preconditions. No LiveKit I/O holds a database transaction or authority fence.
+
+After updates a full native participant post-read checks the remaining tracks,
+exact lowered permission tuple and replacement connections. A second authority
+snapshot must match namespace, tenant, revision, room-active state and publisher
+IDs before the room is recorded as observed. Lost replies, partial work, remaining
+tracks, new broad connections, superseded authority or budget exhaustion stay
+pending and are retried. Restart begins with no observations and rediscovers live
+SFU connections from durable authority, even without any browser or WS client.
+
+Role command200 still acknowledges committed authority only. Its additive
+`mediaScreenReconciliation` starts pending; authenticated session-control GET
+reports pending/observed/unavailable, desired revision plus room-active state,
+native-room presence and the native observation request's start time. An outer revision mismatch, different
+current namespace or expired observation cannot reuse a prior success. An idle
+native room is confirmed by an independent scoped native read, not presumed
+absent after restart. Observations expire after five seconds with the default
+one-second scheduling interval and are local to one API replica.
+If the additional status read fails, the main authenticated control response is
+preserved and the observation becomes unavailable with unknown room activity.
+Pending idle-room interests retain FIFO order under frequent polling and are
+removed after a confirmed observation unless another request arrived meanwhile.
+
+The worker has one in-flight pass and fair room/peer cursors. Default admission
+budgets are32 rooms,128 peers per room,4096 observations/interests and10 seconds
+of work admission per pass; native RPC timeout is two seconds. Budget exhaustion
+does not acknowledge an incomplete room. The next pass starts after the prior one
+settles. Database reads retain the storage adapter's existing timeout policy.
+Shutdown invalidates late callbacks and clears timers/caches; already sent RPCs
+cannot be retroactively cancelled. Outcome metrics use only fixed labels, without
+room/participant IDs, tokens, attributes or native error strings.
+At a scale exceeding those budgets the status may remain pending between visits;
+the worker does not extend the freshness window to make an old observation look
+current. Every replica performs its own scan and has its own observation cache.
+
+This remains screen-only reconciliation. Old or SFU-refreshed JWTs can rejoin and
+publish until another pass, possibly beyond the original encoded TTL. A confirmed
+observation is not a durable token-revocation ACK. Microphone eviction for
+removed/ended sessions, prejoin replay enforcement, legacy rooms and any future
+owned-namespace retirement remain S3. In particular, administrator recovery can
+rotate authEpoch while retaining the domain participant ID; this screen snapshot
+does not identify or retire an older media lineage of that same participant.
+Executor media is excluded, so observed/room-inactive is not a claim that the room
+has no executor video. Publication-source labels are not content
+attestation. Shared floor2 is not activated by this checkpoint.
+
+The API image and rollout manifest declare `mediaScreenReconciler=1`.
+Floor-2 rollout/rollback rejects an API image that would silently remove native
+screen enforcement. Floor1 retains compatibility with the prior accepted image.
+
 ### Shared staging delivery (floor 1)
 
 The paired integration of current main and these prerequisites is deployed as

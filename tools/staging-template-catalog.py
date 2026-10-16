@@ -97,6 +97,9 @@ def assert_target_allowed(marker, status, target_contract, target_sha, minimum_i
                 or type(target_contract.get("mediaIdentityCodec")) is not int
                 or target_contract["mediaIdentityCodec"] != 2):
             raise ValueError("media_rollback_requires_identity_codec2")
+        if (type(target_contract.get("mediaScreenReconciler")) is not int
+                or target_contract["mediaScreenReconciler"] != 1):
+            raise ValueError("media_rollback_requires_screen_reconciler1")
     if marker:
         sha(marker)
         if not supports_references(target_contract):

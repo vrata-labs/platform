@@ -55,7 +55,8 @@ async function load(client: PoolClient, scope: RoomIdentityScope, selection: Ide
     expectedAuthEpoch: raw.expected_auth_epoch, expectedAuthorityRevision: raw.expected_authority_revision,
     secretHash: raw.secret_hash, issuedBy: raw.issued_by, createdAt: iso(raw.created_at), expiresAt: iso(raw.expires_at), consumedAt: nullableIso(raw.consumed_at)
   } : null;
-  const ids = [...(selection.identityIds ?? []), ...(recovery?.targetIdentityId ? [recovery.targetIdentityId] : [])];
+  const ids = [...(selection.identityIds ?? []), ...(recovery?.targetIdentityId ? [recovery.targetIdentityId] : []),
+    ...(selection.screenPublishers ? [authority?.host_identity_id, authority?.presenter_identity_id].filter((id): id is string => typeof id === "string") : [])];
   const participantId = selection.participantId ?? recovery?.targetParticipantId ?? null;
   const rows = ids.length || participantId !== null ? (await client.query(`select * from room_identities_v2
     where tenant_id=$1 and room_id=$2 and (identity_id=any($3::text[]) or participant_id=$4)`, [scope.tenantId, scope.roomId, ids, participantId])).rows : [];

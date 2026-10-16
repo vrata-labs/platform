@@ -66,6 +66,42 @@ async function fixture(t: TestContext, backend: "memory" | "postgres") {
 }
 
 for (const backend of ["memory", "postgres"] as const) {
+  test(`${backend}: media screen authority is one coherent lifecycle and publisher snapshot`, {
+    skip: backend === "postgres" && !process.env.VRATA_TEST_POSTGRES_URL && !process.env.CI, timeout: 120_000
+  }, async t => {
+    const f = await fixture(t, backend), { scope } = await f.makeRoom(false, undefined, false);
+    assert.equal(await f.ids.screenSourceAuthority(scope), null);
+    await f.storage.identityProtocol.raise(2);
+    const host = (await f.create(scope)).identity, presenter = (await f.create(scope)).identity;
+    await f.ids.transition(scope, admin, 0, { type: "transfer-host", targetParticipantId: host.participantId });
+    await f.ids.transition(scope, admin, 1, { type: "grant-presenter", targetParticipantId: presenter.participantId });
+    const initial = await f.ids.screenSourceAuthority(scope);
+    assert.deepEqual(initial, { revision: 2, roomActive: true, publisherParticipantIds: [host.participantId, presenter.participantId].sort() });
+    assert.equal(Object.isFrozen(initial), true);
+    for (let index = 0; index < 4; index++) {
+      const revision = 2 + index;
+      const granting = index % 2 === 1;
+      const [snapshot] = await Promise.all([
+        f.ids.screenSourceAuthority(scope),
+        f.ids.transition(scope, admin, revision, { type: granting ? "grant-presenter" : "revoke-presenter", targetParticipantId: presenter.participantId })
+      ]);
+      assert.ok(snapshot);
+      assert.ok(snapshot.revision === revision || snapshot.revision === revision + 1);
+      assert.deepEqual(snapshot.publisherParticipantIds, snapshot.revision % 2 === 0
+        ? [host.participantId, presenter.participantId].sort() : [host.participantId]);
+    }
+    await f.ids.revoke(scope, host.identityId, host.authEpoch);
+    assert.deepEqual((await f.ids.screenSourceAuthority(scope))?.publisherParticipantIds, [presenter.participantId]);
+    const current = (await f.ids.authority(scope))!;
+    await f.ids.transition(scope, admin, current.revision, { type: "end" });
+    assert.deepEqual(await f.ids.screenSourceAuthority(scope), { revision: current.revision + 1, roomActive: false, publisherParticipantIds: [] });
+    const { scope: disabledScope } = await f.makeRoom(false, undefined, false);
+    await f.storage.updateRoom(disabledScope.roomId, { status: "disabled" });
+    assert.deepEqual(await f.ids.screenSourceAuthority(disabledScope), { revision: 0, roomActive: false, publisherParticipantIds: [] });
+    await f.storage.deleteRoom(scope.roomId);
+    assert.equal(await f.ids.screenSourceAuthority(scope), null);
+  });
+
   test(`${backend}: identity admission budgets serialize concurrent peers and expire without touching credentials`, {
     skip: backend === "postgres" && !process.env.VRATA_TEST_POSTGRES_URL && !process.env.CI, timeout: 120_000
   }, async t => {

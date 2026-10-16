@@ -71,7 +71,8 @@ export function createApiMetrics(
     // Appended last: report fixtures index counters by declaration order.
     legacyStateReleaseCompletionFailuresTotal: 0,
     frameCredentialReleaseCompletionFailuresTotal: 0,
-    mediaCredentialReleaseCompletionFailuresTotal: 0
+    mediaCredentialReleaseCompletionFailuresTotal: 0,
+    mediaScreenReconciliationTotal: new Map<string, number>()
   };
 
   async function apiMetricsText(storage: Pick<Storage, "listRooms">): Promise<string> {
@@ -96,6 +97,10 @@ export function createApiMetrics(
       "# HELP vrata_api_media_credential_release_completion_failures_total User media credential replies already released whose read-only fence then failed to complete.",
       "# TYPE vrata_api_media_credential_release_completion_failures_total counter",
       formatMetricLine("vrata_api_media_credential_release_completion_failures_total", metrics.mediaCredentialReleaseCompletionFailuresTotal),
+      "# HELP vrata_api_media_screen_reconciliation_total Native screen-source reconciliation outcomes; observations are not token revocation.",
+      "# TYPE vrata_api_media_screen_reconciliation_total counter",
+      ...["observed", "pending", "unavailable", "lowered"].map(outcome =>
+        formatMetricLine("vrata_api_media_screen_reconciliation_total", metrics.mediaScreenReconciliationTotal.get(outcome) ?? 0, { outcome })),
       "# HELP vrata_rooms_total Rooms known to the API storage backend.",
       "# TYPE vrata_rooms_total gauge",
       formatMetricLine("vrata_rooms_total", rooms.length),

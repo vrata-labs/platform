@@ -5,7 +5,7 @@ import { assertIdentityRollbackTarget, OWNERLESS_REFERENCE_PERSONAL_SQL, ROOM_RE
 const imageTag = "a".repeat(40);
 const options = { envFile: "test.env", composeFile: "compose.test.yml", imageTag };
 function host({ floor = "2", bound = "f", policyExists = "t", authorityExists = "t", roomsExists = "t", schema = "t", ownerless = "f", apiLabel = "1", stateLabel = "1", readerLabel = "2",
-  apiCodec = "2", browserCodec = "2", mediaCodec = "2", browser = true, browserTag = imageTag, malformed = false, database = "postgres://vrata:test-only@postgres:5432/vrata" } = {}) {
+  apiCodec = "2", browserCodec = "2", mediaCodec = "2", screenReconciler = "1", browser = true, browserTag = imageTag, malformed = false, database = "postgres://vrata:test-only@postgres:5432/vrata" } = {}) {
   const mutations = [], inspections = [];
   return { mutations, inspections, run(args, env) {
     const query = args.at(-1);
@@ -32,6 +32,7 @@ function host({ floor = "2", bound = "f", policyExists = "t", authorityExists = 
     if (args[0] === "image" && args[1] === "inspect") {
       inspections.push([args[3], query]);
       if (args[3].includes("io.vrata.media-identity-codec")) return mediaCodec;
+      if (args[3].includes("io.vrata.media-screen-reconciler")) return screenReconciler;
       if (args[3].includes("io.vrata.frame-token-codec")) return query.includes("/remote-browser:") ? browserCodec : query.includes("/api:") ? apiCodec : "";
       if (args[3].includes("io.vrata.room-record-reader")) return query.includes("/api:") ? readerLabel : "";
       return query.includes("room-state:") ? stateLabel : apiLabel;
@@ -52,6 +53,13 @@ test("scoped media requires the paired API/runtime codec only after floor-two ac
   for (const mediaCodec of ["", "<no value>", "1", "3", "02", "2.0", "true"]) {
     assert.throws(() => assertIdentityRollbackTarget(options, host({ mediaCodec }).run), /media_rollback_requires_identity_codec2:api/);
     assertIdentityRollbackTarget(options, host({ floor: "1", bound: "t", mediaCodec }).run);
+  }
+});
+
+test("floor-two rollback cannot silently remove native screen-source reconciliation", () => {
+  for (const screenReconciler of ["", "<no value>", "0", "2", "01", "1.0", "true"]) {
+    assert.throws(() => assertIdentityRollbackTarget(options, host({ screenReconciler }).run), /media_rollback_requires_screen_reconciler1:api/);
+    assertIdentityRollbackTarget(options, host({ floor: "1", bound: "t", screenReconciler }).run);
   }
 });
 

@@ -30,6 +30,13 @@ export interface RoomIdentityAuthority extends RoomIdentityScope {
   lifecycle: RoomIdentityLifecycle;
 }
 
+/** One consistent read of room lifecycle and the identities that can publish a screen. */
+export interface RoomScreenSourceAuthority {
+  readonly revision: number;
+  readonly roomActive: boolean;
+  readonly publisherParticipantIds: readonly string[];
+}
+
 export type RoomIdentityLifecycle = Required<Omit<RoomSessionControlState, "hostParticipantId" | "presenterParticipantId">>;
 
 export type RoomIdentityActor =
@@ -82,6 +89,7 @@ export interface RoomIdentityStorage {
   redeemWaiting(scope: RoomIdentityScope, pendingId: string, secretHash: string): Promise<RoomIdentityRecord>;
   get(scope: RoomIdentityScope, identityId: string): Promise<RoomIdentityRecord | null>;
   authority(scope: RoomIdentityScope): Promise<RoomIdentityAuthority | null>;
+  screenSourceAuthority(scope: RoomIdentityScope): Promise<RoomScreenSourceAuthority | null>;
   resolve(proof: RoomIdentityProof): Promise<{ identity: RoomIdentityRecord; authority: RoomIdentityAuthority; role: RoomRole; permissions: RoomPermission[]; isOwner: boolean } | null>;
   claimHost(proof: RoomIdentityMutationProof, expectedRevision: number): Promise<RoomIdentityAuthority>;
   transferHost(proof: RoomIdentityMutationProof, toIdentityId: string, expectedRevision: number): Promise<RoomIdentityAuthority>;
@@ -94,7 +102,7 @@ export interface RoomIdentityStorage {
   redeemRecovery(scope: RoomIdentityScope, recoveryId: string, secretHash: string): Promise<RoomIdentityRecord>;
 }
 
-export interface IdentitySelection { identityIds?: string[]; participantId?: string; recoveryId?: string; inviteTokenHash?: string; pendingId?: string; admissionCount?: boolean }
+export interface IdentitySelection { identityIds?: string[]; participantId?: string; recoveryId?: string; inviteTokenHash?: string; pendingId?: string; admissionCount?: boolean; screenPublishers?: boolean }
 export interface IdentityTransaction {
   room: IdentityRoomBinding;
   minimumProtocol: number;

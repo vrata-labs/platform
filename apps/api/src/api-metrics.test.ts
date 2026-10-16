@@ -13,13 +13,14 @@ const additiveBlocks = [
   /^# HELP vrata_api_virtual_state_release_completion_failures_total[^\n]*\n# TYPE vrata_api_virtual_state_release_completion_failures_total counter\nvrata_api_virtual_state_release_completion_failures_total [0-9]+\n/gm,
   /^# HELP vrata_api_legacy_state_release_completion_failures_total[^\n]*\n# TYPE vrata_api_legacy_state_release_completion_failures_total counter\nvrata_api_legacy_state_release_completion_failures_total [0-9]+\n/gm,
   /^# HELP vrata_api_frame_credential_release_completion_failures_total[^\n]*\n# TYPE vrata_api_frame_credential_release_completion_failures_total counter\nvrata_api_frame_credential_release_completion_failures_total [0-9]+\n/gm,
-  /^# HELP vrata_api_media_credential_release_completion_failures_total[^\n]*\n# TYPE vrata_api_media_credential_release_completion_failures_total counter\nvrata_api_media_credential_release_completion_failures_total [0-9]+\n/gm
+  /^# HELP vrata_api_media_credential_release_completion_failures_total[^\n]*\n# TYPE vrata_api_media_credential_release_completion_failures_total counter\nvrata_api_media_credential_release_completion_failures_total [0-9]+\n/gm,
+  /^# HELP vrata_api_media_screen_reconciliation_total[^\n]*\n# TYPE vrata_api_media_screen_reconciliation_total counter\n(?:vrata_api_media_screen_reconciliation_total\{outcome="(?:observed|pending|unavailable|lowered)"\} [0-9]+\n){4}/gm
 ];
 function legacyReport(text: string): string {
-  // The additive release counters are pinned separately; retain the original golden
+  // Additive counters are pinned separately; retain the original golden
   // checks for every pre-existing HELP/TYPE/value/label and their line ordering.
   return additiveBlocks.reduce((report, block) => {
-    assert.equal([...report.matchAll(block)].length, 1, "exactly one block per additive completion counter");
+    assert.equal([...report.matchAll(block)].length, 1, "exactly one block per additive counter");
     return report.replace(block, "");
   }, text);
 }
@@ -146,10 +147,23 @@ test("media credential release completion failures render as one unlabelled coun
   assert.ok(output.includes("vrata_api_frame_credential_release_completion_failures_total 0\n"
     + "# HELP vrata_api_media_credential_release_completion_failures_total User media credential replies already released whose read-only fence then failed to complete.\n"
     + "# TYPE vrata_api_media_credential_release_completion_failures_total counter\n"
-    + "vrata_api_media_credential_release_completion_failures_total 5\n# HELP vrata_rooms_total "));
+    + "vrata_api_media_credential_release_completion_failures_total 5\n# HELP vrata_api_media_screen_reconciliation_total "));
   assert.ok(!output.includes("vrata_api_media_credential_release_completion_failures_total{"));
   assert.equal(reporter.metrics.frameCredentialReleaseCompletionFailuresTotal, 0);
-  assert.equal(Object.keys(reporter.metrics).at(-1), "mediaCredentialReleaseCompletionFailuresTotal");
+  assert.equal(Object.keys(reporter.metrics).at(-2), "mediaCredentialReleaseCompletionFailuresTotal");
+  assert.equal(Object.keys(reporter.metrics).at(-1), "mediaScreenReconciliationTotal");
+});
+
+test("media screen outcomes render only four fixed labels without exposing unknown values", async () => {
+  const reporter = create();
+  for (const [index, outcome] of ["observed", "pending", "unavailable", "lowered"].entries()) reporter.metrics.mediaScreenReconciliationTotal.set(outcome, index + 1);
+  reporter.metrics.mediaScreenReconciliationTotal.set("private-room:secret", 99);
+  const output = await reporter.apiMetricsText(emptyStorage);
+  for (const [index, outcome] of ["observed", "pending", "unavailable", "lowered"].entries()) {
+    assert.ok(output.includes(`vrata_api_media_screen_reconciliation_total{outcome="${outcome}"} ${index + 1}\n`));
+  }
+  assert.equal(output.includes("private-room:secret"), false);
+  assert.equal(digest(legacyReport(output)), "b43d647abb30388f21e7a23b50747c9fd0b1ff9540fd9d1f24d7cc6c7c687a38");
 });
 
 test("populated report preserves every metric, HELP text, TYPE, label and line order", async () => {

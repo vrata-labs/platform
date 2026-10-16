@@ -4,6 +4,15 @@ import test from "node:test";
 
 const read = path => readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
 
+test("the API image declares the native screen reconciliation required by floor-two rollback", () => {
+  const contract = JSON.parse(read("infra/docker/template-rollout.json"));
+  assert.equal(contract.mediaScreenReconciler, 1);
+  const dockerfile = read("apps/api/Dockerfile");
+  const labels = [...dockerfile.matchAll(/^LABEL io\.vrata\.media-screen-reconciler="([^"]*)"$/gm)];
+  assert.equal(labels.length, 1); assert.equal(labels[0][1], "1");
+  assert(labels[0].index > dockerfile.indexOf(" AS runtime"));
+});
+
 test("the paired API/runtime image declares the exact scoped-media identity codec", () => {
   const contract = JSON.parse(read("infra/docker/template-rollout.json"));
   assert.equal(contract.mediaIdentityCodec, 2);

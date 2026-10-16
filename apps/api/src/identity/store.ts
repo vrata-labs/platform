@@ -4,6 +4,7 @@ import type { RoomSessionControlState } from "../storage-contracts.js";
 import { activeIdentity, assertIdentityProofDeadline, assertRoomActive, bumpAuthority, checkRevision, fail, identityLifecycle, identityWasRemoved, validCounter, validId } from "./authority.js";
 import { transitionIdentityAuthority } from "./transition.js";
 import { roomIdentityCapacityAvailable, waitingRequestCapacityAvailable } from "./admission-limits.js";
+import { projectScreenSourceAuthority } from "./media-source-authority.js";
 import {
   IdentityStorageError, type IdentityPersistence, type IdentityProvenance, type IdentityTransaction,
   type RoomIdentityAuthority, type RoomIdentityMutationProof, type RoomIdentityProof, type RoomIdentityRecord, type RoomIdentityScope, type RoomIdentityStorage
@@ -198,6 +199,11 @@ export function createRoomIdentityStorage(persistence: IdentityPersistence, now 
     async authority(scope) {
       assertIdentityScope(scope);
       return (await persistence.read(scope, {}))?.authority ?? null;
+    },
+    async screenSourceAuthority(scope) {
+      assertIdentityScope(scope);
+      const state = await persistence.read(scope, { screenPublishers: true });
+      return state ? projectScreenSourceAuthority(state) : null;
     },
     async resolve(proof) {
       assertIdentityScope(proof);

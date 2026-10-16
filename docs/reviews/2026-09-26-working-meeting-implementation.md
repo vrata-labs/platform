@@ -1696,6 +1696,79 @@ schemas. Неизвестная причина прежнего reference CDN/fa
 сохранены выше. S2 reconciliation и S3 replay/epoch/end/remove/restart остаются
 следующими срезами; повторная ручная T03-приёмка не требуется.
 
+## T13a-S2b — серверная сверка screen sources, 2026-10-16
+
+API получил независимый периодический reconciler для текущего собственного v2
+media namespace. Desired state выводится из сохранённой authority; отдельная
+памятная очередь переходов или outbox для восстановления не нужны. Сверка видит
+живые SFU connections без UI, presence и room-state sockets и возобновляется после
+перезапуска API. Чужие namespace и legacy-комнаты не обрабатываются: один SFU
+может обслуживать несколько независимых инсталляций с одинаковым room prefix.
+
+Новый screenSourceAuthority читает room lifecycle, authority и Host/Presenter
+identities одним read-only RR snapshot; Memory даёт синхронный снимок. Owner без
+Host/Presenter не получает screen grant. End/disable/подтверждённое удаление
+комнаты снимают screen authority, но ошибка чтения не превращается в выдуманный
+grant или подтверждение. Снимок сверяется повторно после native post-read.
+
+На каждую проверенную неавторизованную identity отправляется только фиксированный
+U её класса: ms→microphone, s→publish-disabled, m не меняется. Старые permissions
+не копируются. Полный пользовательский tuple сохраняет subscribe/data и запрещает
+metadata/auxiliary privileges. Все SFU await находятся вне DB transaction/fence.
+Нет SID/revision CAS: устаревшая запись может излишне понизить новую same-class
+сессию, но не расширяет исходный signed source ceiling. Joined-at/часы не
+используются как ложное предусловие записи.
+
+HTTP200 role command означает commit desired authority и возвращает additive
+mediaScreenReconciliation=pending, не синхронный native ACK. Session-control GET
+показывает pending/observed/unavailable. Успех требует полного native post-list,
+точного lowered tuple, отсутствия недопустимых треков и неизменной authority
+версии; другая ревизия ответа, lifecycle, namespace или publisher IDs не могут
+использовать старое observed. При ошибке дополнительной диагностики основной
+авторизованный control response сохраняется, roomActive остаётся unknown.
+Время наблюдения берётся до native read, чтобы не завышать свежесть на его RTT.
+
+Один проход в процессе, fair cursors и ограничения32 rooms/128 peers/4096
+наблюдений/интересов;10секунд допуска новой работы и native RPC timeout2секунды.
+DB reads сохраняют прежний timeout policy storage adapter. Partial work остаётся
+pending. Активный опрос не переставляет interest в конец бесконечно; подтверждённый
+idle interest удаляется, если во время await не пришёл новый запрос. Наблюдение
+истекает через5секунд вместо искусственного увеличения TTL при перегрузке.
+Stop/start защищён generation, поздний callback не воссоздаёт scheduler/cache.
+Метрики содержат только четыре fixed outcome labels, без IDs/attributes/errors.
+
+Настоящие API+PostgreSQL+LiveKit1.13.7 и1.13.9: **2/2 за1,7 минуты**. Клиенты не
+имеют WS/UI cleanup и игнорируют SDK permission handling. До отзыва проверены
+screen frames и mic samples. Ошибки RPC сохраняют pending и прежний screen;
+после рестарта API и потери успешного RPC ACK следующий scan снимает screen
+video/audio, сохраняя microphone track SID, соединение и decoded signal.
+Screen-only клиент не может публиковать microphone даже с обходом SDK, другой
+Host не затронут. Последующий end снимает Host screen при сохранённом Host slot.
+Объединённые новые и прежние media-сценарии: **10/10 за4,6 минуты**.
+
+Исправлены ошибки подготовки новой fixture: явный длинный test state secret и
+получение Host через подтверждённую authority, а не предположение о legacy invite.
+Первый workspace run выявил3 golden metric failures; additive block теперь
+закреплён отдельно, прежние golden digests сохранены. Фоновый процесс проверяет
+полную SFU config до чтения storage, поэтому без SFU не забирает тестовую точку
+media-namespace; исходные HTTP media cases37/37 прошли. Focused unit59/59 и
+Memory/PG coherent snapshot checks прошли. Финальные lint/typecheck/build/tests:
+API1719 passed/1 optional MinIO skip, runtime1242/1242, shared42/42,
+room-state88/88, remote-browser71/71, tools311 passed/2 optional skips;
+обязательные PG/rollback fixtures включены. Full local e2e на окончательном
+исполняемом дереве: **217/217 за30,8 минуты**, exit0,
+expected217/skipped0/unexpected0/flaky0. Все PG/rollback fixtures включены,
+fsync/full_page_writes/synchronous_commit оставались on. Новая exact-SHA
+CI/Docker/staging-поставка выполняется отдельно.
+
+API image/manifest объявляют mediaScreenReconciler=1. При floor2 rollback без
+сверки запрещён; floor1 совместим с предыдущим принятым6d6830b. Общий floor1 не
+менялся. Это screen-only S2b, не весь T13a: исходные/refreshed JWT могут вернуться
+и публиковать до следующего scan, в том числе дольше original exp. Recovery старой
+эпохи с тем же participant ID, microphone eviction для remove/end, prejoin replay,
+executor media и owned-namespace cutover остаются S3. Наблюдение не является
+постоянным token-revocation ACK или утверждением, что в комнате вообще нет видео.
+
 ## Публикация первого среза T01/T12
 
 Локально прошли workspace lint/typecheck/build/tests с PostgreSQL, затем runtime build и 905 runtime tests после финальных правок. Полный `pnpm test:e2e` на финальном исполняемом дереве: **148 passed**, без skip (41.6 min).
