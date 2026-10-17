@@ -38,6 +38,8 @@ export async function createDocumentMeeting(input: Input) {
     });
     const admission = page.waitForResponse(response => new URL(response.url()).pathname === "/api/tokens/state" && response.status() === 200);
     void admission.catch(() => undefined);
+    const initialLibrary = role === "guest" ? null : page.waitForResponse(response => response.request().method() === "GET" && new URL(response.url()).pathname === path);
+    void initialLibrary?.catch(() => undefined);
     try { await page.goto(issuedInvite.inviteLink); } catch { throw new Error("document_meeting_navigation_failed"); }
     await expect(page.locator("#guest-onboarding")).toBeVisible();
     await page.locator("#guest-name-input").fill(`Document ${role}`);
@@ -46,7 +48,7 @@ export async function createDocumentMeeting(input: Input) {
     expect(issued.access.role).toBe(role);
     await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__?.roomStateConnected), { timeout: 30_000 }).toBe(true);
     const participantId = await page.evaluate(() => (window as any).__VRATA_DEBUG__.participantId) as string;
-    return { page, context, issued, participantId, invitation: issuedInvite };
+    return { page, context, issued, participantId, invitation: issuedInvite, initialLibrary };
   }
   async function close() {
     await Promise.all(contexts.map(context => context.close()));
@@ -170,13 +172,49 @@ export async function documentMobilePresentationScenario(meeting: Meeting) {
 }
 
 export async function documentDelayedResponseScenario(meeting: Meeting) {
+  const diagnostic: { phase: string; page?: Page } = { phase: "admission" };
+  try { await runDelayedResponseScenario(meeting, diagnostic); }
+  catch (error) {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let state: unknown = { observationUnavailable: true };
+    try {
+      if (diagnostic.page && !diagnostic.page.isClosed()) state = await Promise.race([
+        diagnostic.page.evaluate(() => {
+          const debug = (window as any).__VRATA_DEBUG__, permissions = debug?.access?.permissions;
+          return { role: ["guest", "member", "presenter", "host", "admin"].includes(debug?.access?.role) ? debug.access.role : "unknown",
+            canUpload: Array.isArray(permissions) && permissions.includes("document.upload"), canDelete: Array.isArray(permissions) && permissions.includes("document.delete"),
+            libraryCount: document.querySelector("#document-select")?.children.length,
+            selectHasDocument: Boolean(document.querySelector<HTMLSelectElement>("#document-select")?.value),
+            busy: document.querySelector("#documents-panel")?.getAttribute("aria-busy") === "true",
+            progressHidden: document.querySelector<HTMLProgressElement>("#document-operation-progress")?.hidden,
+            textObjectUrls: (window as any).__documentTextObjectUrls };
+        }).catch(() => ({ observationUnavailable: true })),
+        new Promise(resolve => { timer = setTimeout(() => resolve({ observationUnavailable: true }), 2000); })
+      ]);
+    } finally { clearTimeout(timer); }
+    // Fixed phase names and bounded state only: no tokens, URLs or request bodies.
+    console.warn("document_authority_scenario_failed", JSON.stringify({ phase: diagnostic.phase, state }));
+    throw error;
+  }
+}
+
+async function runDelayedResponseScenario(meeting: Meeting, diagnostic: { phase: string; page?: Page }) {
   const host = await meeting.enter("host"), page = host.page;
+  diagnostic.page = page; diagnostic.phase = "initial-library";
+  const initialLibrary = await host.initialLibrary!; expect(initialLibrary.status()).toBe(200); await initialLibrary.finished();
   await chooseMeetingPanel(page, "present", false);
+  await expect(page.locator("#documents-panel")).toHaveAttribute("aria-busy", "false");
+  diagnostic.phase = "own-uploads";
   const documents: DocumentRecord[] = [];
   for (const name of ["first.txt", "second.txt"]) {
     const response = await upload(page, meeting.path, { name, mimeType: "text/plain", buffer: Buffer.from(name) });
-    expect(response.status()).toBe(201); documents.push((await response.json()).document);
+    expect(response.status()).toBe(201); const uploaded = (await response.json()).document as DocumentRecord;
+    documents.push(uploaded);
+    await expect(page.locator("#document-select")).toHaveValue(uploaded.documentId);
   }
+  await expect(page.locator("#document-select")).toHaveValue(documents[1].documentId);
+  await expect(page.locator("#document-operation-progress")).toBeHidden();
+  diagnostic.phase = "peer-admission";
   const peerInvite = await meeting.invite("member"), peerId = randomUUID();
   const admitPeer = async () => {
     const response = await meeting.request.post(`${meeting.origin}/api/tokens/state`, { data: { roomId: meeting.roomId, participantId: peerId,
@@ -206,23 +244,32 @@ export async function documentDelayedResponseScenario(meeting: Meeting) {
   const deleteUrl = `${meeting.path}/${documents[0].documentId}`;
   await page.route(`**${deleteUrl}`, handler);
   try {
+    diagnostic.phase = "hold-successful-delete";
     await page.locator("#document-delete-button").click(); await received; expect(heldStatus).toBe(200);
     await page.locator("#document-select").selectOption(documents[1].documentId);
+    const libraryRefresh = page.waitForResponse(response => response.request().method() === "GET" && new URL(response.url()).pathname === meeting.path);
+    void libraryRefresh.catch(() => undefined);
+    diagnostic.phase = "transfer-host-retain-presenter";
     expect((await meeting.request.post(`${meeting.origin}/api/rooms/${meeting.roomId}/presenters/${host.participantId}/grant`, { headers: actor })).status()).toBe(200);
     expect((await meeting.request.post(`${meeting.origin}/api/rooms/${meeting.roomId}/host/transfer`, { headers: actor, data: { participantId: peerId } })).status()).toBe(200);
     await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__?.access?.role), { timeout: 20_000 }).toBe("presenter");
-    await expect(page.locator("#document-delete-button")).toBeDisabled(); await expect(page.locator("#document-upload-button")).toBeEnabled();
+    diagnostic.phase = "authoritative-library-refresh";
+    const refreshed = await libraryRefresh; expect(refreshed.status()).toBe(200);
+    expect((await refreshed.json()).items).toHaveLength(1); await refreshed.finished();
     await expect(page.locator("#document-select option")).toHaveCount(1);
+    await expect(page.locator("#document-delete-button")).toBeDisabled(); await expect(page.locator("#document-upload-button")).toBeEnabled();
     await expect(page.locator("#document-select")).toHaveValue(documents[1].documentId);
     release(); await settled;
     await page.evaluate(() => new Promise<void>(resolve => setTimeout(resolve, 0)));
     await expect(page.locator("#document-status")).not.toContainText("Document deleted:");
   } finally { release(); await page.unroute(`**${deleteUrl}`, handler); }
+  diagnostic.phase = "restore-host";
   const peer = await admitPeer(); expect(peer.access.role).toBe("host");
   expect((await meeting.request.post(`${meeting.origin}/api/rooms/${meeting.roomId}/host/transfer`, {
     headers: { authorization: `Bearer ${peer.token}` }, data: { participantId: host.participantId }
   })).status()).toBe(200);
   await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__?.access?.role), { timeout: 20_000 }).toBe("host");
+  diagnostic.phase = "positive-text-download";
   const positiveDownload = page.waitForEvent("download");
   await page.locator("#document-download-button").click();
   const positiveStream = await (await positiveDownload).createReadStream();
@@ -237,12 +284,15 @@ export async function documentDelayedResponseScenario(meeting: Meeting) {
   const downloadUrl = `${meeting.path}/${documents[1].documentId}/download`;
   await page.route(`**${downloadUrl}`, handler);
   try {
+    diagnostic.phase = "hold-successful-download";
     await page.locator("#document-download-button").click(); await received; expect(heldStatus).toBe(200);
     await expect(page.locator("#document-operation-progress")).toBeVisible();
+    diagnostic.phase = "end-session";
     await chooseMeetingPanel(page, "people", false); await page.locator("#end-session").click();
     await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__?.issueCode), { timeout: 20_000 }).toBe("room_access_denied");
     release(); await settled;
     await page.evaluate(() => new Promise<void>(resolve => setTimeout(resolve, 0)));
+    diagnostic.phase = "retired-response-effects";
     await expect(page.locator("#documents-panel")).toBeHidden(); expect(downloads).toBe(0);
     expect(await page.evaluate(() => (window as any).__documentTextObjectUrls)).toBe(objectUrlsBefore);
   } finally { release(); await page.unroute(`**${downloadUrl}`, handler); }

@@ -32,7 +32,7 @@ jobs:
   deploy:
     if: github.event_name == 'workflow_dispatch' || (vars.STAGING_AUTO_DEPLOY_ENABLED != 'false' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main')
     runs-on: ubuntu-latest
-    timeout-minutes: 150
+    timeout-minutes: 180
     concurrency:
       group: staging-deploy
       cancel-in-progress: false
@@ -245,7 +245,9 @@ jobs:
         run: pnpm exec playwright install --with-deps chromium
       - name: Verification gate
         id: gate
-        timeout-minutes: 35
+        # The full reference/RTC catalog and mandatory Rutube share this budget.
+        # Stop on the first failure so its report survives instead of timing out.
+        timeout-minutes: 50
         if: steps.rollout.outcome == 'success'
         continue-on-error: true
         env:
@@ -260,7 +262,7 @@ jobs:
           if [ -f apps/api/src/plugins/verify-private-storage.ts ]; then
             ssh "$STAGING_SSH_USER@$STAGING_SSH_HOST" "sudo docker compose --env-file '$STAGING_APP_DIR/infra/docker/.env.staging' -f '$STAGING_APP_DIR/infra/docker/compose.staging.yml' exec -T -w /app api node apps/api/dist/plugins/verify-private-storage.js"
           fi
-          pnpm test:e2e:staging
+          pnpm test:e2e:staging -- --max-failures=1
           if [ "$RUTUBE_BLOCKING" = true ]; then PLAYWRIGHT_REPORT_NAME=staging-rutube-blocking pnpm test:e2e:rutube; fi
 
       - name: Publish accepted release and finalize catalog
