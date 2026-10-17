@@ -129,6 +129,10 @@ export function createHostControlsHarness(t: TestContext) {
       const access = hooks.access;
       if (access) access(...args);
     },
+    applyAuthorityAccess(this: unknown, access) {
+      assert.equal(this, undefined); accessCalls.push([access, state.roomStateAccessToken, undefined]);
+      const hook = hooks.access; if (hook) hook(access, state.roomStateAccessToken, undefined);
+    },
     disableRuntimeForSessionBlock(this: unknown, reason) {
       assert.equal(this, undefined); blockCalls.push(reason);
       const block = hooks.block;

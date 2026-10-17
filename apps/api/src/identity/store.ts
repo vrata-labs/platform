@@ -5,6 +5,7 @@ import { activeIdentity, assertIdentityProofDeadline, assertRoomActive, bumpAuth
 import { transitionIdentityAuthority } from "./transition.js";
 import { roomIdentityCapacityAvailable, waitingRequestCapacityAvailable } from "./admission-limits.js";
 import { projectScreenSourceAuthority } from "./media-source-authority.js";
+import { projectParticipantView } from "./participant-view.js";
 import {
   IdentityStorageError, type IdentityPersistence, type IdentityProvenance, type IdentityTransaction,
   type RoomIdentityAuthority, type RoomIdentityMutationProof, type RoomIdentityProof, type RoomIdentityRecord, type RoomIdentityScope, type RoomIdentityStorage
@@ -220,6 +221,14 @@ export function createRoomIdentityStorage(persistence: IdentityPersistence, now 
         if (error instanceof IdentityStorageError) return null;
         throw error;
       }
+    },
+    async resolveView(input) {
+      const { tenantId, roomId, identityId, participantId, authEpoch } = input;
+      const proof = { tenantId, roomId, identityId, participantId, authEpoch };
+      assertIdentityScope(proof);
+      if (!validId(identityId) || !validId(participantId) || !validCounter(authEpoch) || authEpoch < 1) return null;
+      const state = await persistence.read(proof, { identityIds: [identityId], authoritySlots: true });
+      return state ? projectParticipantView(state, proof) : null;
     },
     async claimHost(input, expectedRevision) {
       const { proof, expiresAtSeconds } = snapshotMutationProof(input);

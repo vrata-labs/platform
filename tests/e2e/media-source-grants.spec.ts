@@ -6,6 +6,8 @@ import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { startLocalLiveKitFixture } from "./local-livekit-fixture.js";
 import { startReferenceTemplateFixture } from "./reference-template-fixture.js";
+import { presenterMeetingScenario } from "./presenter-meeting-scenarios.js";
+import { chooseMeetingPanel } from "./meeting-tools-acceptance.js";
 
 // Genuine self-hosted RTC and the built main runtime. Credentials/SDP/candidates remain in memory, never in artifacts.
 test.use({ trace: "off", screenshot: "off", video: "off", launchOptions: { args: ["--autoplay-policy=no-user-gesture-required", "--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"] } });
@@ -44,7 +46,7 @@ async function observer(page: Page, origin: string, token: string) {
   await page.addScriptTag({ path: resolve("apps/runtime-web/node_modules/livekit-client/dist/livekit-client.umd.js") });
   expect(await page.evaluate(async input => {
     const L = (window as any).LivekitClient, room = new L.Room(), audio = new AudioContext(); await audio.resume();
-    const state = { room, frames: 0, samples: new Map<string, AnalyserNode>() }; (window as any).__sourceObserver = state;
+    const state = { room, frames: 0, samples: new Map<string, AnalyserNode>(), audioTracks: new Map<string, any>() }; (window as any).__sourceObserver = state;
     room.on(L.RoomEvent.TrackSubscribed, (track: any) => {
       const element = track.attach(); element.autoplay = true; document.body.append(element); void element.play().catch(() => undefined);
       if (track.kind === "video") {
@@ -52,8 +54,10 @@ async function observer(page: Page, origin: string, token: string) {
       } else {
         const analyser = audio.createAnalyser(); analyser.fftSize = 256;
         audio.createMediaStreamSource(new MediaStream([track.mediaStreamTrack])).connect(analyser); state.samples.set(track.source, analyser);
+        state.audioTracks.set(track.sid, track);
       }
     });
+    room.on(L.RoomEvent.TrackUnsubscribed, (track: any) => state.audioTracks.delete(track.sid));
     try { await room.connect(input.url, input.token); return true; } catch { return false; }
   }, { url: livekit.url, token })).toBe(true);
 }
@@ -67,21 +71,66 @@ async function signal(page: Page, source: string) {
   }, source);
 }
 
+type MicrophoneSample = { sid: string; streamId: string; at: number; bytes: number; duration: number; energy: number };
+async function microphoneSnapshot(page: Page, sids: string[]): Promise<MicrophoneSample[] | null> {
+  return page.evaluate(async sids => {
+    const tracks = (window as any).__sourceObserver?.audioTracks as Map<string, any> | undefined;
+    if (!tracks || !sids.length) return null;
+    const samples = await Promise.all(sids.map(async sid => {
+      const stats = await tracks.get(sid)?.getReceiverStats();
+      if (!stats || typeof stats.streamId !== "string" || ![stats.timestamp, stats.bytesReceived, stats.totalSamplesDuration, stats.totalAudioEnergy]
+        .every(value => typeof value === "number" && Number.isFinite(value) && value >= 0)) return null;
+      return { sid, streamId: stats.streamId, at: stats.timestamp, bytes: stats.bytesReceived, duration: stats.totalSamplesDuration, energy: stats.totalAudioEnergy };
+    }));
+    return samples.every(sample => sample !== null) ? samples : null;
+  }, sids);
+}
+
+async function expectMicrophoneProgress(page: Page, sids: string[], phase: string) {
+  // Reject DTX comfort noise, not just nonzero counters. The fixed -50 dBFS
+  // mean-square floor is below the fake device's beeps, not calibrated to them.
+  const minimumMeanSquare = 1e-5;
+  let baseline: MicrophoneSample[] | null = null;
+  let current: MicrophoneSample[] | null = null;
+  let levels: number[] = [];
+  try {
+    await expect.poll(async () => { baseline = await microphoneSnapshot(page, sids); return baseline !== null; }, { timeout: 20_000 }).toBe(true);
+    const before = baseline!;
+    await expect.poll(async () => {
+      current = await microphoneSnapshot(page, sids);
+      if (!current) return false;
+      levels = current.map((sample, index) => (sample.energy - before[index].energy) / (sample.duration - before[index].duration));
+      return current.every((sample, index) => sample.sid === before[index].sid && sample.streamId === before[index].streamId
+        && sample.at > before[index].at && sample.bytes > before[index].bytes && sample.duration - before[index].duration >= .5
+        && Number.isFinite(levels[index]) && levels[index] >= minimumMeanSquare);
+    }, { timeout: 20_000 }).toBe(true);
+  } catch (error) {
+    const counters = (samples: MicrophoneSample[] | null) => samples?.map(sample => ({ bytes: sample.bytes, duration: sample.duration, energy: sample.energy })) ?? null;
+    console.warn("presenter_microphone_progress_failed", JSON.stringify({ phase, expectedCount: sids.length,
+      baseline: counters(baseline), current: counters(current), meanSquare: levels.map(value => Number.isFinite(value) ? value : null) }));
+    throw error;
+  }
+  console.info("presenter_microphone_signal", JSON.stringify({ phase, meanSquare: levels }));
+}
+
 async function roomFixture(request: any) {
   const fixture = await startReferenceTemplateFixture(process.env.VRATA_TEST_POSTGRES_URL!, { livekitUrl: livekit.url, devRoleQuery: false, stateTokenSecret: STATE_SECRET });
   const response = await request.post(`${fixture.origin}/api/rooms`, { headers: { "x-vrata-admin-token": fixture.adminToken },
     data: { tenantId: "demo-tenant", templateId: "meeting-room-basic", name: "Scoped media" } });
   if (response.status() !== 201) { await fixture.close(); throw new Error(`media_fixture_room_creation:${response.status()}`); }
   const roomId = (await response.json()).roomId as string;
-  async function invite(role: "host" | "member") {
+  async function invite(role: "host" | "member" | "guest") {
     const response = await request.post(`${fixture.origin}/api/rooms/${roomId}/invites`, { headers: { "x-vrata-admin-token": fixture.adminToken }, data: { role, expiresInSeconds: 600 } });
-    expect(response.status()).toBe(201); return await response.json();
+    expect(response.status()).toBe(201);
+    const invitation = await response.json(), inviteToken = new URL(invitation.inviteLink).searchParams.get("invite");
+    expect(!!inviteToken).toBe(true); return { ...invitation, inviteToken };
   }
-  async function admit(role: "host" | "member", protocol: 1 | 2 = 1) {
+  async function admit(role: "host" | "member" | "guest", protocol: 1 | 2 = 1) {
     const invitation = await invite(role);
     const participantId = randomUUID();
     const response = await request.post(`${fixture.origin}/api/tokens/state`, { data: { roomId, participantId, identityProtocolVersion: protocol, inviteToken: invitation.inviteToken, displayName: "Media test" } });
     expect(response.status()).toBe(200); const issued = await response.json(), state = { ...issued, participantId: issued.participantId ?? participantId };
+    expect(issued.access.role).toBe(role);
     const media = await request.post(`${fixture.origin}/api/tokens/media`, { headers: { authorization: `Bearer ${state.token}` },
       data: { roomId, participantId: state.participantId, canPublishAudio: true, canPublishVideo: role === "host" } });
     expect(media.status()).toBe(200); return { state, token: (await media.json()).token as string };
@@ -210,6 +259,140 @@ test("v2 Presenter revoke retires the screen independently of UI polling, denies
   } finally {
     for (const socket of sockets) socket.terminate();
     await Promise.allSettled([page.goto("about:blank"), receiver.close(), runtimeViewer.close()]); await h.fixture.close();
+  }
+});
+
+test("v2 normal UI hands off two Presenters: own PDFs, native RTC and microphone continuity", async ({ browser, request }) => {
+  // The first measured run reached the second publisher at 478 s. Leave room
+  // for its revocation, reconnection and removal instead of truncating reports.
+  test.setTimeout(720_000);
+  // This case renders four actual scenes in software. Measured SDK connection,
+  // publication and device enumeration take about 35 s, not the one-client 20 s.
+  const microphoneReadyTimeoutMs = 60_000;
+  const screenPublishReadyTimeoutMs = 60_000;
+  const browserDiagnostic = await browser.newBrowserCDPSession();
+  try {
+    const command = await browserDiagnostic.send("Browser.getBrowserCommandLine");
+    expect(command.arguments.includes("--use-fake-device-for-media-stream")).toBe(true);
+  } finally { await browserDiagnostic.detach(); }
+  const h = await roomFixture(request), receiver = await browser.newPage();
+  const { WebSocket } = createRequire(resolve("apps/room-state/package.json"))("ws");
+  const sockets: any[] = [], stale = new Map<number, { socket: any; messages: any[] }>();
+  const microphones = new Map<number, string[]>(), knownMicrophoneParticipants = new Set<string>(); let mediaRoom = "";
+  try {
+    await h.activateV2();
+    await presenterMeetingScenario({ browser, request, origin: h.fixture.origin, adminToken: h.fixture.adminToken }, {
+      async prepareActor(page, origin) {
+        // Capture uses Chromium's fake device through the original native API,
+        // not the application audiomock path or a getUserMedia replacement.
+        await page.context().grantPermissions(["microphone"], { origin });
+        await captureSetup(page);
+        await page.addInitScript(() => {
+          const calls: string[] = []; (window as any).__handoffMicrophoneCalls = calls;
+          const original = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+          navigator.mediaDevices.getUserMedia = async constraints => {
+            if (calls.length < 16) calls.push("requested");
+            const stream = await original(constraints); if (calls.length < 16) calls.push("resolved"); return stream;
+          };
+        });
+      },
+      async presenting(actor, index, roomId, guest) {
+        knownMicrophoneParticipants.add(actor.participantId);
+        if (!index) {
+          // A separate admitted listener must not evict the normal Guest's
+          // stable media identity from its existing passive connection.
+          const invited = await request.post(`${h.fixture.origin}/api/rooms/${roomId}/invites`, { headers: { "x-vrata-admin-token": h.fixture.adminToken }, data: { role: "guest", expiresInSeconds: 600 } });
+          expect(invited.status()).toBe(201);
+          const inviteToken = new URL((await invited.json()).inviteLink).searchParams.get("invite"); expect(!!inviteToken).toBe(true);
+          const admitted = await request.post(`${h.fixture.origin}/api/tokens/state`, { data: { roomId, identityProtocolVersion: 2, inviteToken, displayName: "Native observer" } });
+          expect(admitted.status()).toBe(200); const listener = await admitted.json(); expect(listener.access.role).toBe("guest");
+          const media = await request.post(`${h.fixture.origin}/api/tokens/media`, { headers: { authorization: `Bearer ${listener.token}` },
+            data: { roomId, participantId: listener.participantId, canPublishAudio: true, canPublishVideo: false } });
+          expect(media.status()).toBe(200); const token = (await media.json()).token;
+          mediaRoom = JSON.parse(Buffer.from(token.split(".")[1], "base64url").toString("utf8")).video.room;
+          await observer(receiver, h.fixture.origin, token);
+        }
+        await actor.page.bringToFront();
+        await expect.poll(() => actor.page.evaluate(() => document.visibilityState)).toBe("visible");
+        await chooseMeetingPanel(actor.page, "audio", false);
+        await expect.poll(() => actor.page.evaluate(async () => (await navigator.permissions.query({ name: "microphone" as PermissionName })).state)).toBe("granted");
+        expect(await actor.page.evaluate(() => (window as any).__handoffMicrophoneCalls.length)).toBe(0);
+        const joinStartedAt = Date.now();
+        await actor.page.locator("#join-muted").uncheck(); await actor.page.locator("#join-audio").click();
+        try { await expect(actor.page.locator("#toggle-mute")).toBeEnabled({ timeout: microphoneReadyTimeoutMs }); }
+        catch (error) {
+          console.warn("presenter_microphone_join_failed", JSON.stringify(await actor.page.evaluate(() => {
+            const debug = (window as any).__VRATA_DEBUG__;
+            return { audioState: debug?.audioState, joined: debug?.media?.audioJoined, published: debug?.media?.publishedAudio,
+              source: debug?.media?.audioSource, calls: (window as any).__handoffMicrophoneCalls,
+              clicks: (window as any).__sourceJoinClicks, visibility: document.visibilityState };
+          }).catch(() => ({ unavailable: true }))));
+          throw error;
+        }
+        console.info("presenter_microphone_ready", JSON.stringify({ presenter: index + 1, elapsedMs: Date.now() - joinStartedAt }));
+        await expect.poll(() => actor.page.evaluate(() => ({ source: (window as any).__VRATA_DEBUG__?.media?.audioSource,
+          captured: (window as any).__handoffMicrophoneCalls.includes("resolved") }))).toEqual({ source: "microphone", captured: true });
+        await chooseMeetingPanel(actor.page, "present", false);
+        await expect(actor.page.locator("#start-share")).toBeEnabled();
+        const framesBefore = await receiver.evaluate(() => (window as any).__sourceObserver.frames);
+        const screenStartedAt = Date.now();
+        await actor.page.locator("#start-share").click();
+        try { await expect.poll(() => actor.page.evaluate(() => (window as any).__VRATA_DEBUG__?.screenShare?.localPublishing), { timeout: screenPublishReadyTimeoutMs }).toBe(true); }
+        catch (error) {
+          console.warn("presenter_screen_publish_failed", JSON.stringify(await actor.page.evaluate(() => {
+            const debug = (window as any).__VRATA_DEBUG__;
+            return { captures: (window as any).__sourceCapture?.starts, publishing: debug?.screenShare?.localPublishing,
+              connected: debug?.roomStateConnected, state: debug?.screenShareState, elapsedSourceTracks: (window as any).__sourceCapture?.streams?.map((stream: MediaStream) => stream.getTracks().map(track => track.readyState)) };
+          }).catch(() => ({ unavailable: true }))));
+          throw error;
+        }
+        console.info("presenter_screen_ready", JSON.stringify({ presenter: index + 1, elapsedMs: Date.now() - screenStartedAt }));
+        await expect.poll(() => receiver.evaluate(() => (window as any).__sourceObserver.frames), { timeout: 20_000 }).toBeGreaterThan(framesBefore + 2);
+        await expect.poll(() => guest.page.evaluate(() => (window as any).__VRATA_DEBUG__?.screenShare?.remoteSubscribedTrackCount), { timeout: 20_000 }).toBe(1);
+        await expect.poll(async () => (await h.service.listParticipants(mediaRoom)).flatMap((person: any) => person.tracks.filter((track: any) => track.source === 2)).length, { timeout: 20_000 }).toBe(index + 1);
+        const participants = await h.service.listParticipants(mediaRoom);
+        const microphoneTracks = participants.flatMap((person: any) => person.tracks.filter((track: any) => track.source === 2));
+        expect(microphoneTracks.every((track: any) => !track.muted)).toBe(true);
+        const activeMics = microphoneTracks.map((track: any) => track.sid).sort();
+        expect(activeMics.length).toBe(index + 1); microphones.set(index, activeMics);
+        for (const person of participants) {
+          let known = false;
+          try { known = knownMicrophoneParticipants.has(JSON.parse(person.attributes.vrataMediaBinding).participantId); } catch { /* Unknown peers do not prove a microphone binding. */ }
+          for (const track of person.tracks.filter((track: any) => track.source === 2)) {
+            expect(known).toBe(true);
+          }
+        }
+        await expectMicrophoneProgress(receiver, activeMics, `presenting-${index + 1}`);
+        const url = new URL(h.fixture.stateOrigin.replace("http:", "ws:"));
+        url.searchParams.set("roomId", roomId); url.searchParams.set("participantId", actor.participantId); url.searchParams.set("accessToken", actor.issued.token);
+        const socket = new WebSocket(url), messages: any[] = []; sockets.push(socket); stale.set(index, { socket, messages });
+        socket.on("message", (raw: Buffer) => { messages.push(JSON.parse(String(raw))); });
+        await once(socket, "open");
+        await expect.poll(() => messages.some(message => message.type === "room_state"), { timeout: 10_000 }).toBe(true);
+      },
+      async revoked(actor, index, roomId) {
+        await expect.poll(() => actor.page.evaluate(() => (window as any).__sourceCapture.streams.length > 0
+          && (window as any).__sourceCapture.streams.every((stream: MediaStream) => stream.getTracks().every(track => track.readyState === "ended"))), { timeout: 10_000 }).toBe(true);
+        await expect.poll(async () => (await h.service.listParticipants(mediaRoom)).some((person: any) => person.tracks.some((track: any) => track.source === 3 || track.source === 4)), { timeout: 15_000 }).toBe(false);
+        const microphoneTracks = (await h.service.listParticipants(mediaRoom)).flatMap((person: any) => person.tracks.filter((track: any) => track.source === 2));
+        expect(microphoneTracks.every((track: any) => !track.muted)).toBe(true);
+        const currentMics = microphoneTracks.map((track: any) => track.sid).sort();
+        expect(currentMics).toEqual(microphones.get(index));
+        if (index) expect(currentMics.includes(microphones.get(0)![0])).toBe(true);
+        await expectMicrophoneProgress(receiver, currentMics, `revoked-${index + 1}`);
+        const connection = stale.get(index)!, commandId = randomUUID();
+        connection.socket.send(JSON.stringify({ type: "surface_create_object", commandId, surfaceId: "debug-main", objectType: "screen-share", probeOnly: false }));
+        await expect.poll(() => connection.messages.some(message => message.type === "access_denied" && message.result.commandId === commandId
+          && !message.result.accepted && message.result.blockedReason === "missing-permission"), { timeout: 10_000 }).toBe(true);
+        const denied = await request.post(`${h.fixture.origin}/api/tokens/media`, { headers: { authorization: `Bearer ${actor.issued.token}` },
+          data: { roomId, participantId: actor.participantId, canPublishAudio: true, canPublishVideo: true } });
+        expect(denied.status()).toBe(403);
+        expect((await denied.json()).reason).toBe("media_publish_not_allowed");
+      }
+    });
+  } finally {
+    for (const socket of sockets) socket.terminate();
+    await receiver.close(); await h.fixture.close();
   }
 });
 

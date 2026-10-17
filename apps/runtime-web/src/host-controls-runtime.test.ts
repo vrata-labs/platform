@@ -48,7 +48,7 @@ test("flags and replaced access state immediately hide and re-enable host contro
   h.runtime.renderHostControls();
   assert.equal(h.elements.hostControlsEl.hidden, false);
   assert.equal(h.elements.removeParticipantButton.disabled, false);
-  assert.equal(h.elements.hostControlsStatusEl.textContent, "Room open");
+  assert.equal(h.elements.hostControlsStatusEl.textContent, "keep this status");
 });
 
 test("presence merge prefers realtime records and sorts without mutating either source", (t) => {
@@ -58,7 +58,7 @@ test("presence merge prefers realtime records and sorts without mutating either 
   h.state.latestFallbackParticipants = fallback; h.state.latestRealtimeParticipants = realtime;
   h.runtime.renderHostControls();
   assert.deepEqual(h.elements.hostParticipantSelect.options.map((option) => [option.value, option.textContent]), [
-    ["a", "Alice (member)"], ["b", "Bob (guest)"], ["c", "Charlie (guest)"]
+    ["a", "Member — Alice"], ["b", "Updating role — Bob"], ["c", "Updating role — Charlie"]
   ]);
   assert.deepEqual(fallback.map((item) => item.participantId), ["c", "b"]);
   assert.deepEqual(realtime.map((item) => item.participantId), ["b", "a"]);
@@ -74,7 +74,7 @@ test("participant selection survives rerender and falls back when the selected p
   h.state.latestRealtimeParticipants = [makeHostParticipant("a", "")];
   h.runtime.renderHostControls();
   assert.equal(h.elements.hostParticipantSelect.value, "a");
-  assert.equal(h.elements.hostParticipantSelect.options[0]?.textContent, "a (guest)");
+  assert.equal(h.elements.hostParticipantSelect.options[0]?.textContent, "Updating role — Participant");
 });
 
 test("lock state and self/host/presenter restrictions are rendered independently", async (t) => {
@@ -90,14 +90,14 @@ test("lock state and self/host/presenter restrictions are rendered independently
   assert.equal(e.removeParticipantButton.disabled, false); assert.equal(e.transferHostButton.disabled, false);
   assert.equal(e.grantPresenterButton.disabled, true); assert.equal(e.revokePresenterButton.disabled, false);
   assert.equal(e.presenterLineEl.textContent, "Presenter: peer");
-  assert.equal(e.hostControlsStatusEl.textContent, "Room locked; host self; presenter peer");
+  assert.equal(e.hostControlsStatusEl.textContent, "Room locked; presenting access assigned");
 });
 
 test("an offline presenter remains selectable solely for presenter revocation", async (t) => {
   const h = createHostControlsHarness(t); const e = h.elements;
   await h.respond({ state: { presenterParticipantId: "offline" } });
-  assert.equal(e.presenterLineEl.textContent, "Presenter: offline");
-  assert.deepEqual(e.hostParticipantSelect.options.map((option) => option.textContent), ["offline (presenter offline)"]);
+  assert.equal(e.presenterLineEl.textContent, "Presenter: Participant (offline)");
+  assert.deepEqual(e.hostParticipantSelect.options.map((option) => option.textContent), ["Presenter, offline — Participant"]);
   assert.equal(e.hostParticipantSelect.value, "offline");
   assert.equal(e.hostParticipantSelect.disabled, false); assert.equal(e.revokePresenterButton.disabled, false);
   assert.equal(e.removeParticipantButton.disabled, true); assert.equal(e.transferHostButton.disabled, true);
@@ -119,4 +119,16 @@ test("an ended session hides all actions but still renders the presenter and exp
   for (const [name, element] of Object.entries(h.elements)) {
     if (name.endsWith("Button") || name === "hostParticipantSelect") assert.equal(element.disabled, true, name);
   }
+});
+
+test("routing IDs never become visible fallback names and an offline presenter retains its known name", async t => {
+  const h = createHostControlsHarness(t), hostId = "opaque-host-routing-id", presenterId = "opaque-presenter-routing-id";
+  h.state.latestRealtimeParticipants = [makeHostParticipant(hostId, ""), makeHostParticipant(presenterId, "Alice")];
+  await h.respond({ state: { hostParticipantId: hostId, presenterParticipantId: presenterId } });
+  assert.equal(h.elements.presenterLineEl.textContent, "Presenter: Alice");
+  assert.ok(!h.elements.hostControlsStatusEl.textContent.includes(hostId));
+  h.state.latestRealtimeParticipants = []; h.runtime.renderHostControls();
+  assert.equal(h.elements.presenterLineEl.textContent, "Presenter: Alice (offline)");
+  assert.deepEqual(h.elements.hostParticipantSelect.options.map(option => [option.value, option.textContent]), [[presenterId, "Presenter, offline — Alice"]]);
+  assert.equal(h.elements.revokePresenterButton.disabled, false);
 });

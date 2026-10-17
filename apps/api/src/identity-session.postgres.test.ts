@@ -270,13 +270,14 @@ test("internal room-state verifier trusts v2 possession and current authority, n
     });
     assert.equal(ownerProjection.status, 200);
     const view = await ownerProjection.json() as { authorityRevision: number; ownerParticipantId: string;
-      participant: { role: string; isOwner: boolean; permissions: string[] } };
+      slots: { owner: { participantId: string } }; participant: { role: string; isOwner: boolean; permissions: string[]; access: { canManageRoomSession: boolean } } };
     assert.equal(view.authorityRevision, 1);
     assert.equal(view.ownerParticipantId, recipient.participantId);
     assert.equal(view.participant.role, "member");
     assert.equal(view.participant.isOwner, true);
     assert.equal(view.participant.permissions.includes("room.session-control"), false,
       "proof-bound ownership is independent from Host permissions");
+    assert.equal(view.participant.access.canManageRoomSession, false); assert.equal(view.slots.owner.participantId, recipient.participantId);
     assert.equal((await fetch(`${baseUrl}/api/rooms/${behalf.roomId}/personal-state`, {
       headers: { authorization: `Bearer ${recipient.token}` }
     })).status, 200);
@@ -315,10 +316,13 @@ test("internal room-state verifier trusts v2 possession and current authority, n
     assert.equal(before.permissions.includes("room.session-control"), false);
     const controlBefore = await fetch(`${baseUrl}/api/rooms/${room.roomId}/session-control`, { headers: { authorization: `Bearer ${sessionToken}` } });
     assert.equal(controlBefore.status, 200);
-    const initialControl = await controlBefore.json() as { state: { hostParticipantId: string | null }; participant: { role: string }; token?: string };
+    const initialControl = await controlBefore.json() as { authorityRevision: number; state: { hostParticipantId: string | null };
+      slots: { host: { participantId: string; displayName: string } | null }; participant: { role: string; access: { canManageRoomSession: boolean } }; token?: string };
     assert.equal(initialControl.state.hostParticipantId, null);
     assert.equal(initialControl.participant.role, "member");
     assert.equal(initialControl.token, undefined, "v2 refresh must not silently mint a legacy JWT");
+    assert.equal(initialControl.authorityRevision, 0); assert.equal(initialControl.slots.host, null);
+    assert.equal(initialControl.participant.access.canManageRoomSession, false);
     assert.equal((await verify(sessionToken, "spoofed-public-id")).status, 401);
     const now = Math.floor(Date.now() / 1000);
     const legacy = signRoomSessionToken({ ...scope, participantId: identity.participantId, displayName: "Legacy Host", role: "host",
@@ -337,6 +341,8 @@ test("internal room-state verifier trusts v2 possession and current authority, n
     assert.equal(hostControl.state.hostParticipantId, identity.participantId);
     assert.equal(hostControl.participant.role, "host");
     assert.equal(hostControl.token, undefined);
+    assert.equal(hostControl.authorityRevision, 1); assert.equal(hostControl.slots.host?.participantId, identity.participantId);
+    assert.equal(hostControl.slots.host?.displayName, "Host"); assert.equal(hostControl.participant.access.canManageRoomSession, true);
     const action = (type: "lock" | "unlock", expectedRevision: number) => fetch(`${baseUrl}/api/rooms/${room.roomId}/session-control/${type}`, {
       method: "POST", headers: { authorization: `Bearer ${sessionToken}`, "content-type": "application/json" },
       body: JSON.stringify({ expectedRevision })

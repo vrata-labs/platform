@@ -28,10 +28,11 @@ export function createMemoryRoomIdentities(getRoom: (roomId: string) => Identity
     const pending = selection.pendingId ? pendingByRoom.get(scope.roomId)?.get(selection.pendingId) ?? null : null;
     const participantId = selection.participantId ?? recovery?.targetParticipantId;
     const selected = new Set([...(selection.identityIds ?? []), ...(recovery?.targetIdentityId ? [recovery.targetIdentityId] : [])]);
-    if (selection.screenPublishers) {
+    if (selection.screenPublishers || selection.authoritySlots) {
       const authority = authorities.get(scope.roomId);
       if (authority?.hostIdentityId) selected.add(authority.hostIdentityId);
       if (authority?.presenterIdentityId) selected.add(authority.presenterIdentityId);
+      if (selection.authoritySlots && authority?.ownerIdentityId) selected.add(authority.ownerIdentityId);
     }
     const invite = selection.inviteTokenHash ? getInviteByHash(selection.inviteTokenHash) ?? null
       : pending ? getInviteById(pending.inviteId) ?? null : null;

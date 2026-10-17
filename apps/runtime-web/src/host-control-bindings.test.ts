@@ -17,7 +17,7 @@ function createBindingsHarness(t: TestContext) {
   const context: HostControlBindingsContext = {
     ...h.elements, apiBaseUrl: "https://example.invalid", roomId: "room", debugState: h.state.debugState,
     get roomStateAccessToken() { return h.state.roomStateAccessToken; },
-    canManageHostControls: h.runtime.canManageHostControls, authorityRevision: h.runtime.authorityRevision,
+    canManageHostControls: h.runtime.canManageHostControls, authorityRevision: h.runtime.authorityRevision, participantLabel: h.runtime.participantLabel,
     transferRoomOwner: service("owner"),
     renderHostControls(this: unknown) { assert.equal(this, undefined); renders += 1; },
     async runHostControlAction(this: unknown, action, status) {
@@ -71,10 +71,10 @@ for (const [button, action, status] of [
 }
 
 for (const [button, serviceName, status] of [
-  ["removeParticipantButton", "remove", "Removed a"],
-  ["transferHostButton", "transfer", "Transferred host to a"],
-  ["grantPresenterButton", "grant", "Granted presenter to a"],
-  ["revokePresenterButton", "revoke", "Revoked presenter from a"]] as const) {
+  ["removeParticipantButton", "remove", "Removed “a”"],
+  ["transferHostButton", "transfer", "Transferred host to “a”"],
+  ["grantPresenterButton", "grant", "Granted presenter to “a”"],
+  ["revokePresenterButton", "revoke", "Revoked presenter from “a”"]] as const) {
   test(`${serviceName} ignores empty selection, captures the clicked participant and reads the current token`, async (t) => {
     const h = createBindingsHarness(t); bindHostControls(h.context);
     h.elements[button].dispatchEvent(new Event("click")); assert.equal(h.queued.length, 0);
@@ -101,4 +101,13 @@ test("selection change updates diagnostics before rendering, including an empty 
   h.elements.hostParticipantSelect.value = "missing";
   h.elements.hostParticipantSelect.dispatchEvent(new Event("change"));
   assert.deepEqual(observed, ["b", null]); assert.deepEqual(h.queued, []);
+});
+
+test("visible action messages use names while the API still receives opaque routing IDs", async t => {
+  const h = createBindingsHarness(t), id = "opaque-routing-id-not-a-display-name";
+  h.state.latestRealtimeParticipants = [makeHostParticipant(id, "")]; h.runtime.renderHostControls();
+  bindHostControls(h.context); h.elements.hostParticipantSelect.value = id;
+  h.elements.grantPresenterButton.dispatchEvent(new Event("click"));
+  assert.equal(h.queued[0]!.status, "Granted presenter to “Participant”");
+  await h.queued[0]!.action(); assert.equal(h.calls[0]!.args[3], id);
 });

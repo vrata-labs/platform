@@ -66,6 +66,65 @@ async function fixture(t: TestContext, backend: "memory" | "postgres") {
 }
 
 for (const backend of ["memory", "postgres"] as const) {
+  test(`${backend}: participant view keeps role, permissions and authority slots on one revision`, {
+    skip: backend === "postgres" && !process.env.VRATA_TEST_POSTGRES_URL && !process.env.CI, timeout: 120_000
+  }, async t => {
+    const f = await fixture(t, backend), { scope } = await f.makeRoom(false, undefined, false);
+    if (f.pool) {
+      const row = (await f.pool.query(`select current_schema() as selected, (select n.nspname from pg_class c join pg_namespace n on n.oid=c.relnamespace
+        where c.oid='room_identity_protocol_policy'::regclass) as policy_schema`)).rows[0];
+      assert.match(row.selected, /^identity_[a-f0-9]{32}$/); assert.equal(row.policy_schema, row.selected);
+    }
+    await f.storage.identityProtocol.raise(2);
+    const host = (await f.create(scope)).identity, member = await f.create(scope);
+    await f.ids.transition(scope, admin, 0, { type: "transfer-host", targetParticipantId: host.participantId });
+    await f.ids.transition(scope, admin, 1, { type: "grant-presenter", targetParticipantId: member.identity.participantId });
+    for (let index = 0; index < 4; index++) {
+      const revision = index + 2, granting = index % 2 === 1;
+      const [view] = await Promise.all([f.ids.resolveView(member.identity), f.ids.transition(scope, admin, revision,
+        { type: granting ? "grant-presenter" : "revoke-presenter", targetParticipantId: member.identity.participantId })]);
+      assert.ok(view); assert.ok(view.authority.revision === revision || view.authority.revision === revision + 1);
+      const presenting = view.authority.revision % 2 === 0;
+      assert.equal(view.role, presenting ? "presenter" : "member");
+      assert.equal(view.permissions.includes("document.upload"), presenting);
+      assert.equal(view.slots.presenter?.participantId ?? null, presenting ? member.identity.participantId : null);
+      assert.equal(view.slots.host?.participantId, host.participantId); assert.equal(view.slots.owner, null);
+    }
+    const before = (await f.ids.resolveView(member.identity))!;
+    const firstSession = await f.service.issueSession(member.credential, scope);
+    const renewed = await f.service.renewCredential(member.credential, scope);
+    const secondSession = await f.service.issueSession(renewed.credential, scope);
+    assert.equal(firstSession.authority.revision, before.authority.revision);
+    assert.equal(secondSession.authority.revision, before.authority.revision, "renewal is not an authority transition");
+    before.slots.host!.displayName = "local mutation";
+    assert.equal((await f.ids.resolveView(member.identity))!.slots.host!.displayName, "Identity fixture");
+    assert.equal(await f.ids.resolveView({ ...member.identity, roomId: randomUUID() }), null);
+    assert.equal(await f.ids.resolveView({ ...member.identity, tenantId: "other-tenant" }), null);
+    await f.ids.revoke(scope, member.identity.identityId, member.identity.authEpoch);
+    assert.equal(await f.ids.resolveView(member.identity), null);
+    assert.equal((await f.ids.resolveView(host))?.slots.presenter, null);
+  });
+
+  test(`${backend}: participant view preserves personal ownership independently of the Host slot`, {
+    skip: backend === "postgres" && !process.env.VRATA_TEST_POSTGRES_URL && !process.env.CI, timeout: 120_000
+  }, async t => {
+    const f = await fixture(t, backend);
+    if (f.pool) {
+      const row = (await f.pool.query(`select current_schema() as selected, (select n.nspname from pg_class c join pg_namespace n on n.oid=c.relnamespace
+        where c.oid='room_identity_protocol_policy'::regclass) as policy_schema`)).rows[0];
+      assert.match(row.selected, /^identity_[a-f0-9]{32}$/); assert.equal(row.policy_schema, row.selected);
+    }
+    await f.storage.identityProtocol.raise(2);
+    const { room, identity } = await f.storage.createPersonalOwnedRoom({ tenantId: "demo-tenant", templateId: "meeting-room-basic", name: "Participant view owner", displayName: "Personal Owner" });
+    const scope = { tenantId: room.tenantId, roomId: room.roomId }, host = (await f.create(scope)).identity;
+    await f.ids.transition(scope, admin, 1, { type: "transfer-host", targetParticipantId: host.participantId });
+    const view = (await f.ids.resolveView(identity))!;
+    assert.equal(view.role, "member"); assert.equal(view.isOwner, true);
+    assert.equal(view.permissions.includes("room.session-control"), false);
+    assert.deepEqual(view.slots.owner, { participantId: identity.participantId, displayName: "Personal Owner" });
+    assert.equal(view.slots.host?.participantId, host.participantId); assert.equal(view.authority.revision, 2);
+  });
+
   test(`${backend}: media screen authority is one coherent lifecycle and publisher snapshot`, {
     skip: backend === "postgres" && !process.env.VRATA_TEST_POSTGRES_URL && !process.env.CI, timeout: 120_000
   }, async t => {

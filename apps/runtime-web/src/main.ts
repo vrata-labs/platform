@@ -1407,7 +1407,8 @@ let effectiveCleanSceneMode = requestedCleanSceneMode;
 let activeSceneRenderProfile: SceneBundleRenderProfile | undefined;
 let pbrRoomEnvironment: PbrRoomEnvironment | null = null;
 let availableSpaces: RuntimeSpaceOption[] = [];
-const { renderHostControls, refreshSessionControl, runHostControlAction, canManageHostControls, authorityRevision } = createHostControlsRuntime({
+const { renderHostControls, refreshSessionControl, runHostControlAction, canManageHostControls, authorityRevision,
+  observeAdmissionRevision, acceptRenewedAuthority, peopleAuthority, participantLabel, refreshDiagnostics } = createHostControlsRuntime({
   apiBaseUrl, roomId,
   get participantId() { return participantId; },
   get debugState() { return debugState; },
@@ -1420,7 +1421,9 @@ const { renderHostControls, refreshSessionControl, runHostControlAction, canMana
   hostControlsEl, hostControlsStatusEl, presenterLineEl, hostParticipantSelect,
   lockRoomButton, unlockRoomButton, endSessionButton, removeParticipantButton,
   transferHostButton, transferOwnerButton, grantPresenterButton, revokePresenterButton,
-  fetchRoomSessionControl, applyAccessDebug, disableRuntimeForSessionBlock
+  fetchRoomSessionControl, applyAccessDebug, disableRuntimeForSessionBlock,
+  applyAuthorityAccess: access => applyAccessDebug(access, roomStateAccessToken),
+  onAuthorityChanged: () => meetingNavigation?.requestSync()
 });
 let sessionControlBlocked = false;
 const remoteAvatarRuntime = createRemoteAvatarRuntime({
@@ -1780,10 +1783,11 @@ function startIdentitySessionRenewal(expiresInSeconds: number): void {
         if (sessionControlBlocked || runtimeSessionGate.reason) return;
         roomIdentityTab.rememberIdentity(renewed.identityCredential);
         const previousRole = debugState.access.role;
-        applyAccessDebug(renewed.access, renewed.token, renewed.expiresInSeconds);
+        const access = acceptRenewedAuthority(renewed);
+        applyAccessDebug(access ?? debugState.access, renewed.token, renewed.expiresInSeconds);
         nextAttemptAtMs = Date.now() + Math.max(30_000, Math.min(420_000, (renewed.expiresInSeconds - 120) * 1000));
         // Existing sockets still carry the old exp; reconnect with the new rs2.
-        if (previousRole === renewed.role && roomStateClient && debugState.roomStateUrl) {
+        if (previousRole === debugState.access.role && roomStateClient && debugState.roomStateUrl) {
           roomStateConnected = false;
           debugState.roomStateConnected = false;
           mediaSurfaceCommands.rejectAll("room_state_reconnecting");
@@ -4149,6 +4153,8 @@ const debugState = createRuntimeDebugState({
   runtimeFlags,
   faultConfig
 });
+Object.defineProperty(debugState.hostControls, "polling", { enumerable: true,
+  get: () => ({ timer: sessionControlPoller.diagnostics(), request: refreshDiagnostics() }) });
 
 const {
   screenShareEntries,
@@ -7056,7 +7062,7 @@ bindHostControls({
   get roomStateAccessToken() { return roomStateAccessToken; },
   hostParticipantSelect, lockRoomButton, unlockRoomButton, endSessionButton,
   removeParticipantButton, transferHostButton, transferOwnerButton, grantPresenterButton, revokePresenterButton,
-  renderHostControls, runHostControlAction, canManageHostControls, authorityRevision, runRoomSessionControlAction,
+  renderHostControls, runHostControlAction, canManageHostControls, authorityRevision, participantLabel, runRoomSessionControlAction,
   removeRoomParticipant, transferRoomHost, transferRoomOwner, grantRoomPresenter, revokeRoomPresenter
 });
 
@@ -7705,6 +7711,7 @@ async function main(): Promise<void> {
     lastDeniedPermission: null,
     lastSurfaceCommandAccepted: null
   };
+  observeAdmissionRevision(boot.authorityRevision, { participantId: boot.participantId, access: boot.access, isOwner: boot.isOwner });
   meetingNavigation?.configureTemplate(boot.templateSurfaces ?? [], boot.templateSettings?.presentation.surfaceId);
   debugState.avatarPresenceMode = runtimeFlags.avatarLegIkEnabled ? "experimental-leg-ik" : "baseline";
   debugState.roomStateUrl = boot.roomStateUrl;
@@ -8018,7 +8025,7 @@ const sessionUpgradeUi = mountSessionUpgradeUi({
 });
 
 meetingNavigation = createMeetingNavigationRuntime({
-  document, selectSurface: selectMediaSurface,
+  document, selectSurface: selectMediaSurface, authority: peopleAuthority,
   context: () => ({
     admitted: Boolean(roomStateAccessToken), blocked: sessionControlBlocked || Boolean(runtimeSessionGate.reason),
     connected: roomStateConnected, permissions: debugState.access.permissions,

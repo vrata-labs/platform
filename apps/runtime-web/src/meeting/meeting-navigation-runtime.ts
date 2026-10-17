@@ -1,6 +1,6 @@
 import { IMAGE_VIEWER_OBJECT_TYPE, PDF_PRESENTATION_OBJECT_TYPE, SCREEN_SHARE_OBJECT_TYPE, VIDEO_PLAYER_OBJECT_TYPE, WHITEBOARD_OBJECT_TYPE, type RoomTemplateSurface } from "@vrata/shared-types";
 import { MEETING_ACTIONS, meetingActionReason, type MeetingAction, type MeetingAvailabilityContext } from "./meeting-availability.js";
-import { buildMeetingPeople, type MeetingPersonInput } from "./meeting-people.js";
+import { buildMeetingPeople, meetingRoleLabel, type MeetingPersonInput, type MeetingPeopleAuthority } from "./meeting-people.js";
 import { resolveMeetingSurfaceTarget } from "./meeting-surface-target.js";
 
 const sections = ["audio", "present", "board", "notes", "people"] as const;
@@ -24,6 +24,7 @@ export function createMeetingNavigationRuntime(input: {
   document: Document;
   context: () => MeetingAvailabilityContext;
   selectSurface: (surfaceId: string) => boolean;
+  authority?: () => MeetingPeopleAuthority;
 }) {
   const document = input.document;
   const view = document.defaultView;
@@ -82,16 +83,20 @@ export function createMeetingNavigationRuntime(input: {
       control.button.disabled = context.blocked || !context.admitted || !context.connected;
       if (resolved) text(control.button, `Use ${label(resolved.label)} for ${section === "board" ? "board" : "presenting"}`);
     }
-    const normalized = buildMeetingPeople(people, context.localParticipantId);
-    const signature = JSON.stringify(normalized);
+    const normalized = buildMeetingPeople(context.blocked ? [] : people, context.localParticipantId, 64, input.authority?.());
+    const signature = JSON.stringify({ ...normalized, blocked: context.blocked });
     if (signature !== lastPeople) {
       lastPeople = signature;
       const list = requireElement<HTMLUListElement>(document, "meeting-people-list");
       const items = normalized.people.map(person => {
         const item = document.createElement("li"), name = document.createElement("bdi");
+        if (person.role !== undefined) {
+          const role = document.createElement("span"); role.className = "meeting-person-role"; role.textContent = `${meetingRoleLabel(person.role, person.owner)} — `;
+          item.append(role);
+        }
         name.textContent = person.name; item.append(name, document.createTextNode(`${person.self ? " (you)" : ""} — ${person.audio}`)); return item;
       });
-      if (!items.length) { const item = document.createElement("li"); item.textContent = "Participants appear after joining the room."; items.push(item); }
+      if (!items.length) { const item = document.createElement("li"); item.textContent = context.blocked ? "Room access is unavailable." : "Participants appear after joining the room."; items.push(item); }
       list.replaceChildren(...items);
       text(requireElement(document, "meeting-people-count"), normalized.truncated ? `Showing ${normalized.people.length} participants.` : `${normalized.people.length} participant${normalized.people.length === 1 ? "" : "s"}.`);
     }
@@ -168,7 +173,7 @@ export function createMeetingNavigationRuntime(input: {
     },
     updatePeople(value: readonly MeetingPersonInput[]) {
       people = value.slice(0, 256).filter(Boolean).map(person => ({ participantId: person.participantId, displayName: person.displayName,
-        audioJoined: person.audioJoined, muted: person.muted, activeMedia: { audio: person.activeMedia?.audio } }));
+        audioJoined: person.audioJoined, muted: person.muted, role: person.role, activeMedia: { audio: person.activeMedia?.audio } }));
       requestSync();
     },
     dispose

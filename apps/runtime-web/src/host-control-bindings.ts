@@ -9,7 +9,7 @@ type HostControlsRuntime = ReturnType<typeof createHostControlsRuntime>;
 export interface HostControlBindingsContext extends Pick<HostControlElements,
   "hostParticipantSelect" | "lockRoomButton" | "unlockRoomButton" | "endSessionButton" |
   "removeParticipantButton" | "transferHostButton" | "transferOwnerButton" | "grantPresenterButton" | "revokePresenterButton"
->, Pick<HostControlsRuntime, "renderHostControls" | "runHostControlAction" | "canManageHostControls" | "authorityRevision"> {
+>, Pick<HostControlsRuntime, "renderHostControls" | "runHostControlAction" | "canManageHostControls" | "authorityRevision" | "participantLabel"> {
   apiBaseUrl: string;
   roomId: string;
   readonly roomStateAccessToken: string;
@@ -28,7 +28,7 @@ export function bindHostControls(context: HostControlBindingsContext): void {
     lockRoomButton, unlockRoomButton, endSessionButton, removeParticipantButton,
     transferHostButton, grantPresenterButton, revokePresenterButton,
     renderHostControls, runHostControlAction, runRoomSessionControlAction,
-    removeRoomParticipant, transferRoomHost, transferRoomOwner, canManageHostControls, authorityRevision, grantRoomPresenter, revokeRoomPresenter
+    removeRoomParticipant, transferRoomHost, transferRoomOwner, canManageHostControls, authorityRevision, participantLabel, grantRoomPresenter, revokeRoomPresenter
   } = context;
 
   lockRoomButton.addEventListener("click", () => {
@@ -64,7 +64,7 @@ export function bindHostControls(context: HostControlBindingsContext): void {
     }
     void runHostControlAction(
       () => removeRoomParticipant(apiBaseUrl, roomId, context.roomStateAccessToken, targetParticipantId),
-      `Removed ${targetParticipantId}`
+      `Removed ${participantLabel(targetParticipantId)}`
     );
   });
 
@@ -75,7 +75,7 @@ export function bindHostControls(context: HostControlBindingsContext): void {
     }
     void runHostControlAction(
       () => transferRoomHost(apiBaseUrl, roomId, context.roomStateAccessToken, targetParticipantId),
-      `Transferred host to ${targetParticipantId}`
+      `Transferred host to ${participantLabel(targetParticipantId)}`
     );
   });
 
@@ -83,7 +83,7 @@ export function bindHostControls(context: HostControlBindingsContext): void {
     const target = hostParticipantSelect.value, revision = authorityRevision();
     if (!target || revision === null || !canManageHostControls() || !context.debugState.personalRoom.isOwner) return;
     void runHostControlAction(() => transferRoomOwner(apiBaseUrl, roomId, context.roomStateAccessToken, target, revision),
-      `Transferred ownership to ${target}`);
+      `Transferred ownership to ${participantLabel(target)}`);
   });
 
   grantPresenterButton.addEventListener("click", () => {
@@ -93,7 +93,7 @@ export function bindHostControls(context: HostControlBindingsContext): void {
     }
     void runHostControlAction(
       () => grantRoomPresenter(apiBaseUrl, roomId, context.roomStateAccessToken, targetParticipantId),
-      `Granted presenter to ${targetParticipantId}`
+      `Granted presenter to ${participantLabel(targetParticipantId)}`
     );
   });
 
@@ -104,7 +104,7 @@ export function bindHostControls(context: HostControlBindingsContext): void {
     }
     void runHostControlAction(
       () => revokeRoomPresenter(apiBaseUrl, roomId, context.roomStateAccessToken, targetParticipantId),
-      `Revoked presenter from ${targetParticipantId}`
+      `Revoked presenter from ${participantLabel(targetParticipantId)}`
     );
   });
 }

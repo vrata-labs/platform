@@ -264,6 +264,8 @@ canvas {
   overflow-wrap: anywhere;
 }
 
+.meeting-person-role { font-weight: 700; }
+
 .hud :focus-visible {
   outline: 3px solid #ecf6ff;
   outline-offset: 2px;
@@ -571,6 +573,7 @@ canvas {
 }
 
 .host-controls-panel {
+  overflow-wrap: anywhere;
   margin-top: 14px;
   display: grid;
   gap: 8px;

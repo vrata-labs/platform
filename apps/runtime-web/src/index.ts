@@ -1,6 +1,7 @@
 import { createRoomAccessDebugState, type RoomAccessDebugState, type RoomPermission, type RoomRole, type RoomTemplateSettings, type RoomTemplateSnapshotV1, type RoomTemplateSurface, type SceneBundleIntegrity } from "@vrata/shared-types";
 import { DocumentActionError, DocumentUploadError } from "./document-feedback.js";
 import { parseDocumentUploadPolicy, type DocumentUploadPolicy } from "@vrata/shared-types";
+import type { AuthoritySlots } from "./participant-authority.js";
 import { runtimeFetch as fetch } from "./session-upgrade.js";
 import { MediaTokenRequestError, retryableMediaTokenError } from "./media/media-token-error.js";
 
@@ -64,6 +65,7 @@ interface StateTokenResponse {
   identityCredential?: string;
   waitingCredential?: string;
   isOwner?: boolean;
+  authorityRevision?: number;
 }
 
 interface MediaTokenResponse {
@@ -374,6 +376,7 @@ export interface RuntimeBootResult {
   participantId?: string;
   identityCredential?: string;
   isOwner?: boolean;
+  authorityRevision?: number;
   roomType: "standard" | "personal";
   ownerParticipantId?: string | null;
   template: string;
@@ -479,11 +482,17 @@ export interface RuntimeSessionControlResponse {
   authorityRevision?: number;
   revision?: number;
   ownerParticipantId?: string | null;
+  slots?: AuthoritySlots;
+  mediaScreenReconciliation?: {
+    state: "pending" | "observed" | "unavailable";
+    desiredVersion: { authorityRevision: number | null; roomActive: boolean | null };
+  };
   participant?: {
     participantId: string;
     role: RoomRole;
     permissions: RoomPermission[];
     isOwner?: boolean;
+    access?: RoomAccessDebugState;
     status: "active" | "blocked";
     reason?: string | null;
   } | null;
@@ -543,7 +552,8 @@ export async function bootRuntime(
       identityProtocolVersion: 2 as const,
       participantId: accessResponse.participantId,
       identityCredential: accessResponse.identityCredential,
-      isOwner: accessResponse.isOwner === true
+      isOwner: accessResponse.isOwner === true,
+      authorityRevision: accessResponse.authorityRevision
     } : {}),
     roomType: manifest.roomType ?? "standard",
     ownerParticipantId: manifest.ownerParticipantId ?? null,

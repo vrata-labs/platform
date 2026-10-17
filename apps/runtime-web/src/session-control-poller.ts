@@ -28,6 +28,7 @@ export function createSessionControlPoller(input: {
     }, input.intervalMs);
   };
   return {
+    diagnostics: () => ({ active, pending, scheduled: handle !== undefined }),
     start() { active = true; schedule(); },
     stop() {
       active = false;

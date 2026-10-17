@@ -30,6 +30,25 @@ export interface RoomIdentityAuthority extends RoomIdentityScope {
   lifecycle: RoomIdentityLifecycle;
 }
 
+export interface RoomAuthorityParticipant {
+  participantId: string;
+  displayName: string;
+}
+
+/** Actor and authority slots read from one immutable authority snapshot. */
+export interface RoomIdentityView {
+  identity: RoomIdentityRecord;
+  authority: RoomIdentityAuthority;
+  role: RoomRole;
+  permissions: RoomPermission[];
+  isOwner: boolean;
+  slots: { host: RoomAuthorityParticipant | null; presenter: RoomAuthorityParticipant | null; owner: RoomAuthorityParticipant | null };
+}
+
+export class IdentityAuthorityViewUnavailable extends Error {
+  constructor() { super("room_identity_authority_unavailable"); this.name = "IdentityAuthorityViewUnavailable"; }
+}
+
 /** One consistent read of room lifecycle and the identities that can publish a screen. */
 export interface RoomScreenSourceAuthority {
   readonly revision: number;
@@ -94,6 +113,7 @@ export interface RoomIdentityStorage {
   authority(scope: RoomIdentityScope): Promise<RoomIdentityAuthority | null>;
   screenSourceAuthority(scope: RoomIdentityScope): Promise<RoomScreenSourceAuthority | null>;
   resolve(proof: RoomIdentityProof): Promise<{ identity: RoomIdentityRecord; authority: RoomIdentityAuthority; role: RoomRole; permissions: RoomPermission[]; isOwner: boolean } | null>;
+  resolveView(proof: RoomIdentityProof): Promise<RoomIdentityView | null>;
   claimHost(proof: RoomIdentityMutationProof, expectedRevision: number): Promise<RoomIdentityAuthority>;
   transferHost(proof: RoomIdentityMutationProof, toIdentityId: string, expectedRevision: number): Promise<RoomIdentityAuthority>;
   revoke(scope: RoomIdentityScope, identityId: string, expectedAuthEpoch: number): Promise<RoomIdentityRecord>;
@@ -105,7 +125,7 @@ export interface RoomIdentityStorage {
   redeemRecovery(scope: RoomIdentityScope, recoveryId: string, secretHash: string): Promise<RoomIdentityRecord>;
 }
 
-export interface IdentitySelection { identityIds?: string[]; participantId?: string; recoveryId?: string; inviteTokenHash?: string; pendingId?: string; admissionCount?: boolean; screenPublishers?: boolean }
+export interface IdentitySelection { identityIds?: string[]; participantId?: string; recoveryId?: string; inviteTokenHash?: string; pendingId?: string; admissionCount?: boolean; screenPublishers?: boolean; authoritySlots?: boolean }
 export interface IdentityTransaction {
   room: IdentityRoomBinding;
   /** Volatile row/object observation token, not a credential or durable room incarnation. */

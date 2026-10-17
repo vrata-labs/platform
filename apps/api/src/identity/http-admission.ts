@@ -1,4 +1,4 @@
-import { createRoomAccessDebugState } from "@vrata/shared-types";
+import { createRoomAccessFromPermissions } from "@vrata/shared-types";
 import type { RoomRecord, Storage } from "../storage-contracts.js";
 import { IdentityStorageError } from "./contracts.js";
 import { createRoomIdentityService } from "./service.js";
@@ -68,7 +68,8 @@ export async function admitV2RoomSession(input: {
       identityProtocolVersion: 2, participantId: issued.identity.participantId,
       identityCredential: issued.credential, token: session.sessionToken, sessionId: session.sessionId,
       expiresInSeconds: 900, role: session.role, isOwner: session.isOwner,
-      permissions: session.permissions, access: createRoomAccessDebugState(session.role)
+      authorityRevision: session.authority.revision,
+      permissions: session.permissions, access: createRoomAccessFromPermissions(session.role, session.permissions)
     } };
   } catch (error) {
     if (!(error instanceof IdentityStorageError)) throw error;

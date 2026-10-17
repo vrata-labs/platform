@@ -60,6 +60,7 @@ import type { RoomEffectGuard, RoomEffectActor } from "./identity/effect-write-g
 import type { Storage, RoomIdentityEffectStorage, VirtualRoomEffectStorage, LegacyRoomCredentialSelector, LegacyRoomCredentialSnapshot,
   LegacyAdmissionWriteInput, LegacyAdmissionWriteReceipt, LegacyRoomControlReceipt } from "./storage-contracts.js";
 import { createRoomEffectFacade } from "./identity/effect-facade.js";
+import { assertParticipantViewDeadline, readParticipantSessionViewV2 } from "./identity/participant-view-v2.js";
 import { identityFenceUnavailable, uncertainRoomCommit } from "./identity/fence-transaction.js";
 import { identityAdmissionOriginHash as hashAdmissionOrigin } from "./identity/admission-origin.js";
 import { adminCurrentOwnerParticipantId, currentRoomOwner } from "./identity/admin-room-projection.js";
@@ -3399,48 +3400,26 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       await releaseLegacySessionControl(request, response, storage, room, requestId);
       return;
     }
+    if (actorResult.actor.actorType === "room-session") {
+      const verified = v2SessionsByRequest.get(request);
+      if (!verified || verified.room.roomId !== roomId) throw new IdentityBoundaryError(409, "identity_recovery_required");
+      const expiresAtSeconds = verified.expiresAtSeconds;
+      const view = await readParticipantSessionViewV2(storage, verified);
+      const mediaScreenReconciliation = await mediaScreenService.status(roomId, view.authorityRevision);
+      assertParticipantViewDeadline(expiresAtSeconds);
+      return json(response, 200, { ...view, mediaScreenReconciliation });
+    }
 
-    const session = actorResult.actor.actorType === "room-session"
-      ? await verifyRoomSessionRequest(request, { roomId, participantId: actorResult.actor.participantId })
-      : null;
+    // Platform administrators have no participant identity. Keep their existing
+    // read projection separate from the self-bound runtime access snapshot.
     const atFloor2 = await legacyIdentityBoundary.minimum() >= 2;
-    const v2 = session?.ok && session.payload.identityProtocolVersion === 2;
     const current = atFloor2 ? await currentRoomOwner(storage, { tenantId: room.tenantId, roomId }) : null;
-    const participantIdForStatus = session?.ok ? session.payload.participantId : actorResult.actor.participantId;
-    const currentRole = session?.ok ? session.payload.role : actorResult.actor.role;
-    const effectiveRole = v2 ? currentRole
-      : participantIdForStatus ? resolveEffectiveRoomRole(room, participantIdForStatus, currentRole) : currentRole;
-    const statusReason = v2 ? null : participantIdForStatus ? getSessionControlBlockReason(room, participantIdForStatus, effectiveRole, true) : null;
-    const ttlSeconds = Number.parseInt(process.env.STATE_TOKEN_TTL_SECONDS ?? "900", 10);
-    const tokenResponse = session?.ok && !statusReason && !v2 ? createRoomAccessTokenResponse({
-      room,
-      roomId,
-      participantId: session.payload.participantId,
-      displayName: session.payload.displayName,
-      role: effectiveRole,
-      roleSource: session.payload.roleSource ?? "trusted",
-      sessionId: session.payload.sessionId,
-      sceneMediaSurfaces: session.payload.sceneMediaSurfaces,
-      ttlSeconds
-    }) : null;
     json(response, 200, {
       state: sanitizeSessionControlState(atFloor2
         ? await currentSessionControlV2(storage, room) : room.sessionControl),
       ...(current ? { authorityRevision: current.authority.revision, ownerParticipantId: current.ownerParticipantId,
         mediaScreenReconciliation: await mediaScreenService.status(roomId, current.authority.revision) } : {}),
-      participant: participantIdForStatus ? {
-        participantId: participantIdForStatus,
-        role: effectiveRole,
-        permissions: getRoomPermissions(effectiveRole),
-        ...(v2 ? { isOwner: session.payload.isOwner === true } : {}),
-        status: statusReason ? "blocked" : "active",
-        reason: statusReason
-      } : null,
-      token: tokenResponse?.token,
-      expiresInSeconds: tokenResponse?.expiresInSeconds,
-      access: tokenResponse?.access,
-      role: tokenResponse?.role,
-      permissions: tokenResponse?.permissions
+      participant: null
     });
     return;
   }
