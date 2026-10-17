@@ -1,3 +1,5 @@
+import { resolveDocumentContentType } from "@vrata/shared-types";
+
 export interface DocumentMediaProbe {
   kind: "image" | "video";
   widthPx: number;
@@ -25,21 +27,22 @@ function waitForMediaEvent(target: HTMLElement, successEvent: string, failureEve
 }
 
 export async function probeDocumentMedia(file: File): Promise<DocumentMediaProbe | null> {
-  if (!imageTypes.has(file.type) && !videoTypes.has(file.type)) return null;
+  const contentType = resolveDocumentContentType(file.type, file.name.trim()) ?? "";
+  if (!imageTypes.has(contentType) && !videoTypes.has(contentType)) return null;
   const url = URL.createObjectURL(file);
   try {
-    if (imageTypes.has(file.type)) {
+    if (imageTypes.has(contentType)) {
       const image = new Image();
       image.src = url;
       await waitForMediaEvent(image, "load", "error");
       return { kind: "image", widthPx: image.naturalWidth, heightPx: image.naturalHeight };
     }
     const video = document.createElement("video");
-    if (!video.canPlayType(file.type)) throw new Error("unsupported_video_codec");
+    if (!video.canPlayType(contentType)) throw new Error("unsupported_video_codec");
     video.preload = "metadata";
     video.src = url;
     await waitForMediaEvent(video, "loadedmetadata", "error");
-    if (!Number.isFinite(video.duration) && file.type === "video/webm") {
+    if (!Number.isFinite(video.duration) && contentType === "video/webm") {
       video.currentTime = Number.MAX_SAFE_INTEGER;
       await waitForMediaEvent(video, "durationchange", "error");
       video.currentTime = 0;

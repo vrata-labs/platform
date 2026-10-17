@@ -139,14 +139,14 @@ test("selection continues observing surface/token/documents after each await", a
   assert.equal(h.context.roomDocuments[1]!.linkedSurfaceId, null);
 });
 
-test("rollback suppresses asynchronous cleanup failures but retains the original error", async (t) => {
+test("rollback suppresses asynchronous cleanup failures but retains the mapped original error", async (t) => {
   const warnings: unknown[][] = []; t.mock.method(console, "warn", (...args: unknown[]) => warnings.push(args));
   const h = createHarness(); const original = new Error("original:failure:detail:extra");
   h.hooks.commands.patchPdfPresentationObject = async () => { throw original; };
   h.hooks.commands.stopPdfPresentationObject = async () => { throw new Error("stop_failed"); };
   h.hooks.link = async (id, surface) => { if (surface === null) throw new Error("unlink_failed"); return makeDocument("pdf", id); };
   await h.actions.selectDocumentForSurface();
-  assert.equal(warnings[0]![1], original);
+  assert.equal(warnings[0]![1], h.context.documentErrorCode(original));
   assert.equal(h.context.documentStatusEl.textContent, "Document surface selection failed: original:failure:detail");
   assert.equal(h.context.presentationActionInFlight, false);
 });

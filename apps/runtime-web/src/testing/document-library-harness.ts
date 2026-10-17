@@ -28,11 +28,13 @@ export function createDocumentLibraryHarness(t: TestContext) {
     documentUploadButton: new DocumentTestElement("button"), documentSelect: new DocumentTestElement("select"),
     documentDownloadButton: new DocumentTestElement("button"), documentSurfaceButton: new DocumentTestElement("button"),
     documentDeleteButton: new DocumentTestElement("button"), documentStatusEl: new DocumentTestElement(),
+    documentUploadPolicyEl: new DocumentTestElement(), documentOperationProgressEl: new DocumentTestElement("progress"),
+    documentRefreshButton: new DocumentTestElement("button"),
     renderPresentationControls() { log("presentation", context.presentationActionInFlight); },
     renderDocumentMediaControls() { log("media", context.presentationActionInFlight); },
     listRoomDocuments: async function (this: unknown, ...args: Parameters<Services["listRoomDocuments"]>) {
       assert.equal(this, undefined); log("list", ...args);
-      return hooks.listRoomDocuments ? hooks.listRoomDocuments(...args) : [];
+      return hooks.listRoomDocuments ? hooks.listRoomDocuments(...args) : { items: [], uploadPolicy: null };
     },
     uploadRoomDocument: async function (this: unknown, ...args: Parameters<Services["uploadRoomDocument"]>) {
       assert.equal(this, undefined); log("upload", ...args);

@@ -719,7 +719,21 @@ async function uploadHostDocument(host: DemoClient, roomId: string, testInfo: Te
     return response;
   };
   await expect(page.locator("#document-upload-button")).toBeEnabled({ timeout: 30_000 });
-  const unsupported = await upload({ name: "unsupported.docx", mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", buffer: Buffer.from("unsupported office document") });
+  const unsupportedFile = { name: "unsupported.docx", mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", buffer: Buffer.from("unsupported office document") };
+  let preflightRequests = 0;
+  const countPreflightRequest = (request: import("@playwright/test").Request) => { if (request.method() === "POST" && new URL(request.url()).pathname === path) preflightRequests++; };
+  page.on("request", countPreflightRequest);
+  try {
+    await page.setInputFiles("#document-upload-input", unsupportedFile);
+    await page.locator("#document-upload-button").click();
+    await expect(page.locator("#document-status")).toContainText("Unsupported file format");
+    expect(preflightRequests).toBe(0);
+  } finally { page.off("request", countPreflightRequest); }
+  // Client preflight is not an authority boundary: an ordinary Host's direct
+  // request must independently receive the same server-side format denial.
+  const unsupported = await page.request.post(new URL(path, host.inviteLink).href, {
+    headers: { authorization: `Bearer ${host.sessionToken}` }, multipart: { document: unsupportedFile }
+  });
   requireStatus(unsupported.status(), 400, "public_demo_host_unsupported_upload");
   expect((await unsupported.json()).error).toBe("unsupported_document_mime");
   await expect(page.locator("#document-status")).toContainText("Unsupported file format");
@@ -757,7 +771,7 @@ async function uploadHostDocument(host: DemoClient, roomId: string, testInfo: Te
     body: JSON.stringify({ role: host.role, provenance: "trusted-invite", contentType: document.contentType,
       sizeBytes: document.sizeBytes, uploadStatus: response.status(), downloadStatus: download.status,
       downloadMatchesUpload: true, pageCount: 3, unsupportedFormatStatus: unsupported.status(),
-      unsupportedFormatError: "unsupported_document_mime", surfaceId: "debug-main" }),
+      unsupportedFormatError: "unsupported_document_mime", unsupportedPreflightRequests: preflightRequests, surfaceId: "debug-main" }),
     contentType: "application/json"
   });
   return document.documentId;

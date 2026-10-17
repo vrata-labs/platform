@@ -1,39 +1,10 @@
-import { basename, extname } from "node:path";
+import { basename } from "node:path";
+import { resolveDocumentContentType } from "@vrata/shared-types";
 
 import type { MultipartPart } from "./multipart-form-data.js";
 
-const allowedDocumentContentTypes = new Set([
-  "application/pdf",
-  "image/png",
-  "image/jpeg",
-  "image/webp",
-  "video/mp4",
-  "video/webm",
-  "text/plain"
-]);
-
-function inferDocumentContentType(filename: string): string | null {
-  switch (extname(filename).toLowerCase()) {
-    case ".pdf": return "application/pdf";
-    case ".png": return "image/png";
-    case ".jpg":
-    case ".jpeg": return "image/jpeg";
-    case ".webp": return "image/webp";
-    case ".mp4": return "video/mp4";
-    case ".webm": return "video/webm";
-    case ".txt": return "text/plain";
-    default: return null;
-  }
-}
-
 export function normalizeDocumentContentType(part: MultipartPart, filename: string): string | null {
-  const raw = part.contentType?.split(";")[0]?.trim().toLowerCase() || "";
-  const inferred = inferDocumentContentType(filename);
-  if (raw && raw !== "application/octet-stream" && inferred && raw !== inferred) {
-    return null;
-  }
-  const contentType = raw && raw !== "application/octet-stream" ? raw : inferred;
-  return contentType && allowedDocumentContentTypes.has(contentType) ? contentType : null;
+  return resolveDocumentContentType(part.contentType, filename);
 }
 
 export function normalizeDocumentFilename(input: string | undefined): string | null {

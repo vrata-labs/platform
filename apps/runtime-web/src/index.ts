@@ -1,5 +1,6 @@
 import { createRoomAccessDebugState, type RoomAccessDebugState, type RoomPermission, type RoomRole, type RoomTemplateSettings, type RoomTemplateSnapshotV1, type RoomTemplateSurface, type SceneBundleIntegrity } from "@vrata/shared-types";
-import { DocumentUploadError } from "./document-feedback.js";
+import { DocumentActionError, DocumentUploadError } from "./document-feedback.js";
+import { parseDocumentUploadPolicy, type DocumentUploadPolicy } from "@vrata/shared-types";
 import { runtimeFetch as fetch } from "./session-upgrade.js";
 import { MediaTokenRequestError, retryableMediaTokenError } from "./media/media-token-error.js";
 
@@ -597,7 +598,9 @@ export async function bootRuntime(
   };
 }
 
-export async function listRoomDocuments(apiBaseUrl: string, roomId: string, sessionToken: string): Promise<RuntimeDocumentRecord[]> {
+export interface RuntimeDocumentLibrary { items: RuntimeDocumentRecord[]; uploadPolicy: DocumentUploadPolicy | null }
+
+export async function listRoomDocuments(apiBaseUrl: string, roomId: string, sessionToken: string): Promise<RuntimeDocumentLibrary> {
   const response = await fetch(new URL(`/api/rooms/${roomId}/documents`, apiBaseUrl), {
     headers: {
       "authorization": `Bearer ${sessionToken}`
@@ -608,7 +611,8 @@ export async function listRoomDocuments(apiBaseUrl: string, roomId: string, sess
     const payload = await response.json().catch(() => ({})) as { reason?: string; error?: string };
     throw new Error(`failed_to_list_documents:${response.status}:${payload.reason ?? payload.error ?? "unknown"}`);
   }
-  return ((await response.json()) as { items: RuntimeDocumentRecord[] }).items;
+  const library = await response.json() as { items: RuntimeDocumentRecord[]; uploadPolicy?: unknown };
+  return { items: library.items, uploadPolicy: parseDocumentUploadPolicy(library.uploadPolicy) };
 }
 
 export async function uploadRoomDocument(apiBaseUrl: string, roomId: string, sessionToken: string, file: File, mediaMetadata?: { widthPx: number; heightPx: number; durationMs?: number }, signal?: AbortSignal): Promise<RuntimeDocumentRecord> {
@@ -634,15 +638,14 @@ export async function uploadRoomDocument(apiBaseUrl: string, roomId: string, ses
   return ((await response.json()) as { document: RuntimeDocumentRecord }).document;
 }
 
-export async function downloadRoomDocument(apiBaseUrl: string, document: RuntimeDocumentRecord, sessionToken: string): Promise<{ blob: Blob; filename: string }> {
+export async function downloadRoomDocument(apiBaseUrl: string, document: RuntimeDocumentRecord, sessionToken: string, signal?: AbortSignal): Promise<{ blob: Blob; filename: string }> {
   const response = await fetch(new URL(document.downloadUrl, apiBaseUrl), {
     headers: {
       "authorization": `Bearer ${sessionToken}`
-    }
+    }, signal, cache: "no-store"
   });
   if (!response.ok) {
-    const payload = await response.json().catch(() => ({})) as { reason?: string; error?: string };
-    throw new Error(`failed_to_download_document:${response.status}:${payload.reason ?? payload.error ?? "unknown"}`);
+    throw new DocumentActionError("download", response.status);
   }
   const disposition = response.headers.get("content-disposition") ?? "";
   const filename = disposition.match(/filename="([^"]+)"/)?.[1] ?? document.filename;
@@ -675,16 +678,15 @@ export async function fetchRoomDocumentMediaContent(apiBaseUrl: string, roomId: 
   return response.blob();
 }
 
-export async function deleteRoomDocument(apiBaseUrl: string, roomId: string, documentId: string, sessionToken: string): Promise<RuntimeDocumentRecord> {
+export async function deleteRoomDocument(apiBaseUrl: string, roomId: string, documentId: string, sessionToken: string, signal?: AbortSignal): Promise<RuntimeDocumentRecord> {
   const response = await fetch(new URL(`/api/rooms/${roomId}/documents/${documentId}`, apiBaseUrl), {
     method: "DELETE",
     headers: {
       "authorization": `Bearer ${sessionToken}`
-    }
+    }, signal
   });
   if (!response.ok) {
-    const payload = await response.json().catch(() => ({})) as { reason?: string; error?: string };
-    throw new Error(`failed_to_delete_document:${response.status}:${payload.reason ?? payload.error ?? "unknown"}`);
+    throw new DocumentActionError("delete", response.status);
   }
   return ((await response.json()) as { document: RuntimeDocumentRecord }).document;
 }

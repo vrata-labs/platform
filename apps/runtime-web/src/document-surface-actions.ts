@@ -197,7 +197,7 @@ export function createDocumentSurfaceActions(context: DocumentSurfaceActionsCont
           }
         }
       }
-      console.warn("document_surface_select_failed", error);
+      console.warn("document_surface_select_failed", documentErrorCode(error));
       setDocumentStatus(`Document surface selection failed: ${documentErrorCode(error)}`, documentErrorCode(error));
     } finally {
       context.presentationActionInFlight = false;

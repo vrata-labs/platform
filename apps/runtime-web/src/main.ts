@@ -368,6 +368,9 @@ const documentDownloadButton = mustElement<HTMLButtonElement>("#document-downloa
 const documentSurfaceButton = mustElement<HTMLButtonElement>("#document-surface-button");
 const documentDeleteButton = mustElement<HTMLButtonElement>("#document-delete-button");
 const documentStatusEl = mustElement<HTMLDivElement>("#document-status");
+const documentUploadPolicyEl = mustElement<HTMLElement>("#document-upload-policy");
+const documentOperationProgressEl = mustElement<HTMLProgressElement>("#document-operation-progress");
+const documentRefreshButton = mustElement<HTMLButtonElement>("#document-refresh-button");
 const presentationControlsEl = mustElement<HTMLDivElement>("#presentation-controls");
 const presentationPrevButton = mustElement<HTMLButtonElement>("#presentation-prev");
 const presentationNextButton = mustElement<HTMLButtonElement>("#presentation-next");
@@ -1665,7 +1668,6 @@ function applyMergedPresenceParticipants(): void {
 function applyAccessDebug(access: NonNullable<RuntimeSessionControlResponse["access"]>, token: string, expiresInSeconds?: number): void {
   if (sessionControlBlocked) return;
   const previousRole = debugState.access.role;
-  const previouslyCouldUploadDocuments = canUploadDocuments();
   const previouslyCouldViewDocuments = canViewDocuments();
   const previousLastDeniedPermission = debugState.access.lastDeniedPermission;
   const previousLastSurfaceCommandAccepted = debugState.access.lastSurfaceCommandAccepted;
@@ -1685,11 +1687,6 @@ function applyAccessDebug(access: NonNullable<RuntimeSessionControlResponse["acc
     roomStateClient?.close();
     roomStateClient = null;
     connectRoomStateWithRetry(debugState.roomStateUrl);
-  }
-  if ((previouslyCouldUploadDocuments && !canUploadDocuments()) || (previouslyCouldViewDocuments && !canViewDocuments())) {
-    invalidateDocumentLibrary();
-    clearDocumentFeedback();
-    if (canViewDocuments()) void loadRoomDocuments();
   }
   syncMediaCapabilityControls();
   syncNotesAccessUi();
@@ -4244,11 +4241,12 @@ function downloadBlob(blob: Blob, filename: string): void {
 const {
   canViewDocuments, canUploadDocuments, canPresentDocuments, selectedDocument, documentErrorCode, setDocumentStatus,
   renderDocumentsUi, loadRoomDocuments, uploadSelectedDocument,
-  downloadSelectedDocument, deleteSelectedDocument, invalidate: invalidateDocumentLibrary, clearFeedback: clearDocumentFeedback
+  downloadSelectedDocument, deleteSelectedDocument, invalidate: invalidateDocumentLibrary, clearFeedback: clearDocumentFeedback,
+  onPageHide: documentLibraryPageHide, onPageShow: documentLibraryPageShow
 } = createDocumentLibraryRuntime({
   apiBaseUrl, roomId, debugState, documentsPanelEl, documentUploadInput,
   documentUploadButton, documentSelect, documentDownloadButton,
-  documentSurfaceButton, documentDeleteButton, documentStatusEl,
+  documentSurfaceButton, documentDeleteButton, documentStatusEl, documentUploadPolicyEl, documentOperationProgressEl, documentRefreshButton,
   // Surface views are composed next; resolve them only when rendering.
   renderPresentationControls: () => renderPresentationControls(),
   renderDocumentMediaControls: () => renderDocumentMediaControls(),
@@ -4264,7 +4262,8 @@ const {
   get selectedDocumentId() { return selectedDocumentId; },
   set selectedDocumentId(value) { selectedDocumentId = value; }
 });
-window.addEventListener("pagehide", invalidateDocumentLibrary);
+window.addEventListener("pagehide", documentLibraryPageHide);
+window.addEventListener("pageshow", documentLibraryPageShow);
 
 const {
   presentationInputEventId, documentMediaInputEventId,
@@ -7013,6 +7012,7 @@ notesExportRoomJsonButton.addEventListener("click", () => {
 
 bindDocumentControls({
   roomId, documentSelect, documentUploadButton, documentDownloadButton,
+  documentRefreshButton, loadRoomDocuments,
   documentSurfaceButton, documentDeleteButton, presentationPrevButton,
   presentationNextButton, presentationLargeButton, presentationStopButton,
   documentMediaPlayButton, documentMediaFitButton, documentMediaLoopInput,

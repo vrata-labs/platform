@@ -88,6 +88,7 @@ import { normalizeDocumentContentType, normalizeDocumentFilename, safeHeaderFile
 import { parseMultipartBoundary, parseMultipartFormData, textPart, filePart } from "./multipart-form-data.js";
 
 import { parseBody, readRequestBuffer } from "./request-body.js";
+import { DOCUMENT_MULTIPART_OVERHEAD_BYTES, getDocumentUploadPolicy } from "./document-upload-policy.js";
 
 import { serveStatic, json, text } from "./http-responses.js";
 
@@ -1394,7 +1395,7 @@ function resolveRoomDocumentsActor(
   return actor;
 }
 
-async function inspectPdfDocument(data: Buffer): Promise<RoomDocumentMetadata> {
+async function inspectPdfDocument(data: Buffer, maxPages: number): Promise<RoomDocumentMetadata> {
   if (!data.subarray(0, 1024).includes(Buffer.from("%PDF-"))) {
     throw new Error("corrupt_pdf");
   }
@@ -1404,7 +1405,6 @@ async function inspectPdfDocument(data: Buffer): Promise<RoomDocumentMetadata> {
       throw new Error("encrypted_pdf_unsupported");
     }
     const pageCount = pdf.getPageCount();
-    const maxPages = Number.parseInt(process.env.PDF_PRESENTATION_MAX_PAGES ?? "250", 10);
     if (pageCount < 1) {
       throw new Error("corrupt_pdf");
     }
@@ -2919,20 +2919,29 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     const actor = resolveRoomDocumentsActor(request, response, { room, permission, action: method === "GET" ? "documents.list" : "documents.upload" });
     if (!actor) return;
 
+    let uploadPolicy: ReturnType<typeof getDocumentUploadPolicy> | undefined;
+    try { uploadPolicy = getDocumentUploadPolicy(); }
+    catch { if (method === "POST") return json(response, 503, { error: "document_upload_limits_unavailable" }); }
     if (method === "GET") {
       const documents = await storage.listRoomDocuments(roomId);
       const items = documents.map((document) => serializeRoomDocument(request, document));
-      await runGuardedRoomEffect(storage, actor, room, permission, async scoped => { scoped.releaseResponse(() => { json(response, 200, { items }); }); });
+      await runGuardedRoomEffect(storage, actor, room, permission, async scoped => { scoped.releaseResponse(() => { json(response, 200, { items, uploadPolicy }); }); });
       return;
     }
 
-    const maxBytes = Number.parseInt(process.env.DOCUMENT_UPLOAD_MAX_BYTES ?? `${10 * 1024 * 1024}`, 10);
+    if (!uploadPolicy) return json(response, 503, { error: "document_upload_limits_unavailable" });
+    const maxBytes = uploadPolicy.maxFileBytes;
     const boundary = parseMultipartBoundary(request.headers["content-type"]);
     if (!boundary) {
       incrementCounter(metrics.documentsUploadedTotal, "unknown:rejected");
       return json(response, 415, { error: "expected_multipart_document_upload" });
     }
-    const body = await readRequestBuffer(request, maxBytes);
+    const contentLength = request.headers["content-length"];
+    if (contentLength !== undefined && Number(contentLength) > maxBytes + DOCUMENT_MULTIPART_OVERHEAD_BYTES) {
+      response.setHeader("connection", "close");
+      return json(response, 413, { error: "document_too_large" });
+    }
+    const body = await readRequestBuffer(request, maxBytes + DOCUMENT_MULTIPART_OVERHEAD_BYTES);
     const parts = parseMultipartFormData(body, boundary);
     const documentFile = filePart(parts, "document") ?? filePart(parts, "file");
     const filename = normalizeDocumentFilename(documentFile?.filename);
@@ -2953,7 +2962,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     let documentMetadata: RoomDocumentMetadata = {};
     if (contentType === "application/pdf") {
       try {
-        documentMetadata = await inspectPdfDocument(documentFile.data);
+        documentMetadata = await inspectPdfDocument(documentFile.data, uploadPolicy.maxPdfPages);
       } catch (error) {
         const reason = error instanceof Error ? error.message : "corrupt_pdf";
         incrementCounter(metrics.pdfValidationFailuresTotal, reason);
@@ -3013,9 +3022,9 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
         throw new IdentityBoundaryError(503, "identity_authority_unavailable", error);
       }
       if (error instanceof RoomEffectPermissionDenied || error instanceof IdentityBoundaryError) throw error;
-      const message = error instanceof Error ? error.message : "document_upload_failed";
       incrementCounter(metrics.documentsUploadedTotal, `${contentType}:failed`);
-      json(response, message.startsWith("misconfigured_document_upload_storage") ? 503 : 400, { error: message, requestId });
+      const storageFailure = uploadedKey === null;
+      json(response, storageFailure ? 503 : 500, { error: storageFailure ? "document_storage_unavailable" : "document_upload_failed", requestId });
     }
     return;
   }
@@ -3041,8 +3050,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       try {
         bytes = await readDocumentObject(getDocumentUploadStorage(request), document.storageKey);
       } catch (error) {
-        const message = error instanceof Error ? error.message : "document_download_failed";
-        json(response, 503, { error: message, requestId });
+        json(response, 503, { error: "document_storage_unavailable", requestId });
         return;
       }
       const released = await releaseDocumentBytes(storage, actor, room, document, permission, false, () => {
@@ -3070,8 +3078,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
         bytes = await readDocumentObject(getDocumentUploadStorage(request), document.storageKey);
       } catch (error) {
         incrementCounter(metrics.documentPresentationContentTotal, "failed");
-        const message = error instanceof Error ? error.message : "presentation_content_failed";
-        json(response, 503, { error: message, requestId });
+        json(response, 503, { error: "document_storage_unavailable", requestId });
         return;
       }
       const released = await releaseDocumentBytes(storage, actor, room, document, permission, true, () => {
@@ -3100,7 +3107,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
         bytes = await readDocumentObject(getDocumentUploadStorage(request), document.storageKey);
       } catch (error) {
         incrementCounter(metrics.documentMediaContentTotal, `${kind}:failed`);
-        json(response, 503, { error: error instanceof Error ? error.message : "media_content_failed", requestId });
+        json(response, 503, { error: "document_storage_unavailable", requestId });
         return;
       }
       const released = await releaseDocumentBytes(storage, actor, room, document, permission, true, () => {
@@ -3133,14 +3140,14 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       try {
         await cleanupDocumentMediaObjects(roomId, documentId);
       } catch (error) {
-        return json(response, 503, { error: error instanceof Error ? error.message : "presentation_cleanup_failed", requestId });
+        return json(response, 503, { error: "document_cleanup_unavailable", requestId });
       }
       try {
         await deleteDocumentObject(getDocumentUploadStorage(request), result.document.storageKey);
         incrementCounter(metrics.documentBlobDeletesTotal, "success");
       } catch (error) {
         incrementCounter(metrics.documentBlobDeletesTotal, "failed");
-        return json(response, 503, { error: error instanceof Error ? error.message : "document_object_delete_failed", requestId });
+        return json(response, 503, { error: "document_cleanup_unavailable", requestId });
       }
       json(response, 200, { document: serializeRoomDocument(request, result.document) });
       return;
