@@ -1,6 +1,7 @@
 import { test, expect, type BrowserContext, type Page } from "@playwright/test";
 import { randomUUID } from "node:crypto";
 import { startReferenceTemplateFixture } from "./reference-template-fixture";
+import { chooseMeetingPanel as choosePanel } from "./meeting-tools-acceptance";
 
 test.use({ trace: "off", screenshot: "off", video: "off" });
 type Fixture = Awaited<ReturnType<typeof startReferenceTemplateFixture>>;
@@ -58,16 +59,6 @@ async function enter(page: Page, invitation: string, displayName: string) {
   return issued;
 }
 
-async function choosePanel(page: Page, section: typeof sections[number], touch: boolean) {
-  const button = page.locator(`#meeting-nav-${section}`);
-  if (touch) await button.tap();
-  else { await button.focus(); await page.keyboard.press("Enter"); }
-  await expect(page.locator(`#meeting-${section}`)).toHaveAttribute("open", "");
-  expect(await page.evaluate(id => document.activeElement === document.querySelector(`#meeting-${id} > summary`), section)).toBe(true);
-  const nav = await page.locator("#meeting-nav").boundingBox(), summary = await page.locator(`#meeting-${section} > summary`).boundingBox();
-  expect(!!nav && !!summary && summary.y >= nav.y + nav.height - 1).toBe(true);
-}
-
 for (const mobile of [false, true]) {
   for (const role of ["host", "member", "guest"] as const) test(`meeting tools ${mobile ? "Android viewport" : "desktop"}: ${role} finds tools without capture or implicit surface changes`, async ({ browser, request }) => {
     test.setTimeout(180_000);
@@ -87,8 +78,6 @@ for (const mobile of [false, true]) {
       for (const section of sections) {
         await choosePanel(page, section, mobile);
         await expect(page.locator("#media-surface-select")).toHaveValue("debug-main");
-        const box = await page.locator(`#meeting-nav-${section}`).boundingBox();
-        expect(!!box && box.height >= 48 && box.width >= 48).toBe(true);
       }
       if (!mobile) {
         await page.keyboard.press("Escape"); await expect(page.locator("#meeting-nav-people")).toBeFocused();

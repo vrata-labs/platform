@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { chooseMeetingPanel } from "./meeting-tools-acceptance";
 
 test.use({ trace: "off", screenshot: "off", video: "off" });
 
@@ -42,14 +43,9 @@ for (const mobile of [false, true]) {
           await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__?.roomStateConnected), { timeout: 30_000 }).toBe(true);
           await expect(page.getByRole("navigation", { name: "Meeting tools" })).toBeVisible();
           const selected = await page.locator("#media-surface-select").inputValue();
-          for (const section of ["audio", "present", "board", "notes", "people"]) {
-            const button = page.locator(`#meeting-nav-${section}`);
-            if (mobile) await button.tap();
-            else { await button.focus(); await page.keyboard.press("Enter"); }
-            await expect(page.locator(`#meeting-${section} > summary`)).toBeFocused();
-            await expect(page.locator(`#meeting-${section}`)).toHaveAttribute("open", "");
+          for (const section of ["audio", "present", "board", "notes", "people"] as const) {
+            await chooseMeetingPanel(page, section, mobile);
             await expect(page.locator("#media-surface-select")).toHaveValue(selected);
-            const box = await button.boundingBox(); expect(!!box && box.width >= 48 && box.height >= 48).toBe(true);
           }
           await expect(page.locator("#meeting-people-list")).toContainText(`Tools ${role}`, { timeout: 15_000 });
           if (!mobile) {
