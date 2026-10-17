@@ -342,6 +342,7 @@ test("v2 normal UI hands off two Presenters: own PDFs, native RTC and microphone
           console.warn("presenter_screen_publish_failed", JSON.stringify(await actor.page.evaluate(() => {
             const debug = (window as any).__VRATA_DEBUG__;
             return { captures: (window as any).__sourceCapture?.starts, publishing: debug?.screenShare?.localPublishing,
+              error: debug?.screenShare?.errorCode, blocked: debug?.mediaObjects?.lastCommand?.blockedReason,
               connected: debug?.roomStateConnected, state: debug?.screenShareState, elapsedSourceTracks: (window as any).__sourceCapture?.streams?.map((stream: MediaStream) => stream.getTracks().map(track => track.readyState)) };
           }).catch(() => ({ unavailable: true }))));
           throw error;

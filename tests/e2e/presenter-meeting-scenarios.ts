@@ -1,6 +1,7 @@
 import { expect, type APIRequestContext, type Browser, type BrowserContext, type Page } from "@playwright/test";
 import { PDFDocument, rgb } from "pdf-lib";
 import { chooseMeetingPanel } from "./meeting-tools-acceptance";
+import { installFunctionalFrameBudget } from "./functional-frame-budget";
 
 export interface MeetingPresenter {
   page: Page;
@@ -35,6 +36,7 @@ export async function presenterMeetingScenario(input: Input, hooks: Hooks = {}) 
     const context = await input.browser.newContext({ viewport: role === "guest" ? { width: 390, height: 844 } : { width: 800, height: 500 },
       deviceScaleFactor: 0.4, hasTouch: role === "guest", isMobile: role === "guest" });
     contexts.push(context); const page = await context.newPage();
+    await installFunctionalFrameBudget(page);
     await hooks.prepareActor?.(page, input.origin);
     let renewalAt = 0, prematureAdmissions = 0;
     page.on("request", request => { if (new URL(request.url()).pathname === "/api/tokens/state" && renewalAt > 0 && Date.now() < renewalAt) prematureAdmissions++; });
@@ -81,6 +83,7 @@ export async function presenterMeetingScenario(input: Input, hooks: Hooks = {}) 
     await expect(host.page.locator("#meeting-people-list")).toContainText("Host — Meeting Host");
     await expect(host.page.locator("#meeting-people-list")).toContainText("Member — Alpha <b>literal</b>");
     await expect(host.page.locator("#meeting-people-list b")).toHaveCount(0);
+    await expect(host.page.locator("#remote-mic-status")).toContainText(names[1]);
     for (const actor of [first, second, guest]) {
       await chooseMeetingPanel(actor.page, "present", actor === guest);
       await expect(actor.page.locator("#document-upload-button")).toBeDisabled();
@@ -156,8 +159,8 @@ export async function presenterMeetingScenario(input: Input, hooks: Hooks = {}) 
       if (actor.issued.identityProtocolVersion === 2) expect(actor.prematureAdmissions()).toBe(0);
     }
     await expect(host.page.locator("#presenter-line")).toHaveText("Presenter: none");
-    const visible = await host.page.locator("#meeting-people-list, #host-controls-status, #presenter-line").allTextContents();
-    expect(visible.some(text => [host, first, second, guest].some(actor => text.includes(actor.participantId)))).toBe(false);
+    const visible = await host.page.locator("#meeting-people-list, #host-controls-status, #presenter-line, #remote-mic-status").allTextContents();
+    expect(visible.some(text => [host, first, second, guest].some(actor => text.includes(actor.participantId) || text.includes(actor.participantId.slice(0, 8))))).toBe(false);
     mark("reconnect-member");
     rejoinedActor = first;
     first.page.on("response", async response => {

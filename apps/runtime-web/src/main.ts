@@ -3263,7 +3263,7 @@ function syncRemoteMicStatus(): void {
     return;
   }
   const status = debugState.remoteParticipants.map((participant) => {
-    const label = participant.participantId.slice(0, 8);
+    const label = participantLabel(participant.participantId);
     const state = !participant.audioJoined
       ? "not joined"
       : participant.muted

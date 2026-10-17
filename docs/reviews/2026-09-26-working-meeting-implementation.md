@@ -130,6 +130,22 @@ Native-матрица завершена узкими прогонами: вос
 
 Полный финальный local gate завершён на неизменных33 файлах кода/тестов: lint/typecheck/build/test — успешно; E2E235/235 за55,3 min, runtime1305/1305, API1743 passed /1 optional skip, shared-types47/47, tools312 passed /2 optional skips. В полном прогоне повторно прошли и новый native handoff, и общий local PDF/reconnect/remove. Хеши исходников совпали до и после проверки. Это локальная готовность новой поставки, не автоматическая приёмка CI/Docker/staging; исходные пункты T13 ещё не закрыты.
 
+### Публикация89f29fb и дополнительная визуальная правка
+
+Кандидат89f29fb прошёл [CI39057317816](https://github.com/vrata-labs/platform/actions/runs/39057317816) (235/235 +M0.5 16/16), [Docker39057318313](https://github.com/vrata-labs/platform/actions/runs/39057318313) и [Staging39061036352](https://github.com/vrata-labs/platform/actions/runs/39061036352), все attempt1. Staging73/73 + обязательный Rutube1/1; новый общий Presenter/PDF/reconnect/remove кейс прошёл за5,3 min, Hall/BlueOffice/ArtGallery loaded. Accepted record и фактические API/room-state images подтвердили89f29fb и asset0a3b492e788bad82bf20a92476a628bf30c6dfbe; health/demo-room/control-plane200, без rollback.
+
+Normal-DPR снимки desktop1024×768×1 и mobile390×844×1 показали правильные имена/роли и доступную загрузку собственного Presenter PDF. Однако дополнительная строка Remote microphones всё ещё показывала сокращённый PID. Автоматические gate не закрывают этот дефект понятности; пункты T13 не отмечены завершёнными.
+
+Правка использует существующий безопасный participantLabel также для Remote microphones. Общая local/staging регрессия теперь проверяет эту строку, запрещает полный ID и его восьмизначный префикс и требует настоящее имя. Узкий общий browser case прошёл за6 min. Изменены только владелец этой подписи и тест; перед следующим SHA повторяется полный final-tree gate, прежние235/235 не переносятся на новое дерево автоматически.
+
+Повторный local gate этой правки не принят: lint/typecheck/build/unit успешны, E2E227 passed /1 failed /7 not run. Второй screen-share в новом native-кейсе завершился ошибкой до вызова capture. Код media_network_blocked сам по себе не устанавливает точную причину: диагностические поля errorCode и blockedReason добавлены без commandId/токенов; сбой не назван доказанным сетевым отказом или конкретным timeout.
+
+Для четырёхсценового функционального local/staging helper введён тестовый кадровый бюджет10 FPS при прежних CSS viewport/DPR0.4 и настоящих GLB/materials/renderer. Меняется частота всех RAF-потребителей, в том числе кадрозависимой отправки presence/позы и продолжений pdf.js, а не только draw. Сами сетевые и аудио API, часы, таймеры, scene source и production deadlines не подменяются. JSON RTC-приёмник, capture на setInterval и его decoded-video callbacks не ограничены. Этот профиль проверяет функциональные права/данные/RTC, но не частоты движения, производительность, физические устройства или scene-quality; соответствующие проверки и normal-DPR снимки профиль не используют. Все прежние утверждения и проверки отказов сохранены. Даже зелёный профиль не будет сам по себе доказательством первопричины прежнего сбоя.
+
+Узкая матрица кадрового бюджета: native normal-UI handoff прошёл за5,2 min, общий Presenter/PDF/reconnect/remove — за4,4 min. Оба микрофона подключились за16,8/18,3 s, оба экрана — за8,6/8,4 s, свежая мощность после revoke выше фиксированного порога. Четыре отдельные контрактные проверки RAF batch/cancel/restart/error isolation прошли; обнаруженное несовпадение времени dispatch и native timestamp исправлено проверкой интервала по самому RAF timestamp, без снижения порога теста. Итоговая новая ветка снова проходит полный final-tree local gate перед публикацией.
+
+Финальный local gate follow-up завершён: lint/typecheck/build/test успешны; E2E239/239 за47,9 min, runtime1305/1305, API1743 passed /1 optional skip. Пять изменённых файлов кода/тестов оставались неизменными во время проверки. Все четыре новые RAF-contract cases и общий local/native сценарии вошли в полный прогон. Следующая exact-SHA публикация должна отдельно пройти CI/Docker/staging и повторный normal-DPR осмотр Remote microphones; приёмка89f29fb не заменяет этот gate.
+
 ## T01 — объединённый baseline
 
 - Ветка реализации: `feat/working-meeting-room-plugins`, отдельный worktree.
