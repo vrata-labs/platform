@@ -12,6 +12,7 @@ export interface RoomStateSnapshot {
   participants: PresenceState[];
   seatOccupancy: Record<string, string>;
   mediaObjects: RoomMediaObjectsState;
+  capabilities?: { surfaceStopRevision: boolean };
 }
 
 export interface RoomStateClient {
@@ -78,6 +79,7 @@ export function connectRoomState(
       const payload = JSON.parse(String(event.data)) as {
         type?: string;
         serverTimeMs?: unknown;
+        capabilities?: { surfaceStopRevision?: unknown };
         room?: Omit<RoomStateSnapshot, "serverTimeMs">;
         reliableState?: unknown;
         poseFrame?: unknown;
@@ -106,7 +108,8 @@ export function connectRoomState(
           roomId: payload.room.roomId,
           participants: payload.room.participants,
           seatOccupancy: payload.room.seatOccupancy ?? {},
-          mediaObjects: payload.room.mediaObjects ?? createDefaultRoomMediaObjectsState(payload.room.roomId)
+          mediaObjects: payload.room.mediaObjects ?? createDefaultRoomMediaObjectsState(payload.room.roomId),
+          ...(payload.capabilities?.surfaceStopRevision === 1 ? { capabilities: { surfaceStopRevision: true } } : {})
         });
         return;
       }
@@ -234,6 +237,7 @@ export function sendSurfaceStopObjectCommand(client: RoomStateClient, input: {
   commandId?: string;
   surfaceId: string;
   objectId: string;
+  expectedRevision?: number;
 }): void {
   if (!canSend(client.socket)) {
     return;
@@ -242,7 +246,8 @@ export function sendSurfaceStopObjectCommand(client: RoomStateClient, input: {
     type: "surface_stop_object",
     commandId: input.commandId,
     surfaceId: input.surfaceId,
-    objectId: input.objectId
+    objectId: input.objectId,
+    ...(input.expectedRevision !== undefined ? { expectedRevision: input.expectedRevision } : {})
   }));
 }
 

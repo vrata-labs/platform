@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { Object3D } from "three";
-import { createRuntimeDiagnostics } from "./runtime-diagnostics.js";
+import { createRuntimeDiagnostics, reportRuntimeBootDiagnostics } from "./runtime-diagnostics.js";
 import { SessionUpgradeError } from "./session-upgrade.js";
 import { createDiagnosticState, createDiagnosticsHarness, deferred } from "./testing/runtime-diagnostics-harness.js";
 
@@ -34,6 +34,23 @@ test("disabled remote diagnostics return before refresh, scene capture or transp
   await h.runtime.reportDiagnostics(); assert.deepEqual(h.events, []);
   h.inputs.runtimeFlags = { remoteDiagnostics: true };
   await h.runtime.reportDiagnostics(); assert.equal(h.requests.length, 1);
+});
+
+test("boot diagnostics return immediately while stats collection is held", async t => {
+  const h = createDiagnosticsHarness(t), stats = deferred<void>(); h.hooks.refresh = () => stats.promise;
+  assert.equal(reportRuntimeBootDiagnostics(h.runtime.reportDiagnostics), undefined);
+  await new Promise(resolve => setImmediate(resolve)); assert.deepEqual(h.events, ["refresh"]);
+  stats.resolve(); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(h.requests.length, 1); assert.equal(h.requests[0].body.note, "runtime_booted");
+});
+
+test("boot diagnostics do not propagate a pending HTTP response or a reporting failure", async t => {
+  const h = createDiagnosticsHarness(t), response = deferred<Response>(); h.hooks.fetch = () => response.promise;
+  assert.equal(reportRuntimeBootDiagnostics(h.runtime.reportDiagnostics), undefined);
+  await new Promise(resolve => setImmediate(resolve)); assert.equal(h.requests.length, 1);
+  const status = h.inputs.debugState.statusLine, issue = h.inputs.debugState.issueCode;
+  response.reject(new Error("diagnostics_unavailable")); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(h.inputs.debugState.statusLine, status); assert.equal(h.inputs.debugState.issueCode, issue);
 });
 
 test("report preserves the complete payload, URL, method and optional-field omission", async (t) => {

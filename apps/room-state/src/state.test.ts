@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { DISABLED_EXTENSION_CARD_TYPE, EXTENSION_TEST_CARD_TYPE, IMAGE_VIEWER_OBJECT_TYPE, MARKDOWN_BOARD_OBJECT_TYPE, MISSING_CAPABILITY_EXTENSION_CARD_TYPE, PDF_PRESENTATION_OBJECT_TYPE, VIDEO_PLAYER_OBJECT_TYPE, type VideoPlayerState } from "@vrata/shared-types";
+import { DISABLED_EXTENSION_CARD_TYPE, EXTENSION_TEST_CARD_TYPE, IMAGE_VIEWER_OBJECT_TYPE, MARKDOWN_BOARD_OBJECT_TYPE, MISSING_CAPABILITY_EXTENSION_CARD_TYPE, PDF_PRESENTATION_OBJECT_TYPE, VIDEO_PLAYER_OBJECT_TYPE, WHITEBOARD_OBJECT_TYPE, type VideoPlayerState } from "@vrata/shared-types";
 
 import {
   claimSeat,
@@ -888,6 +888,35 @@ test("whiteboard object appends strokes and enforces draw and clear permissions"
   assert.equal(cleared.result.accepted, true);
   assert.equal(cleared.result.permission, "whiteboard.clear");
   assert.deepEqual((cleared.room.mediaObjects.objects["board-1"]?.state as { strokes?: unknown[] } | undefined)?.strokes, []);
+});
+
+test("revisioned stop preserves a sticky board edited after replacement consent", () => {
+  const host = joinRoom(createRoomState("revisioned-stop"), "host", { role: "host" });
+  const created = createMediaObject(host, "host", { commandId: "create", surfaceId: "debug-main",
+    objectType: MARKDOWN_BOARD_OBJECT_TYPE, objectId: "board", nowMs: 1 });
+  const member = joinRoom(created.room, "member", { role: "member" });
+  const edited = patchMediaObjectState(member, "member", { commandId: "edit", surfaceId: "debug-main", objectId: "board",
+    expectedRevision: 0, nowMs: 2, patch: { type: "create-note", inputEventId: "new-note", noteId: "decision",
+      text: "New decision after the dialog opened", x: .2, y: .3, width: .3, height: .22, color: "#bfdbfe" } });
+  assert.equal(edited.result.accepted, true);
+  for (const expectedRevision of [0, -1, 1.5, NaN, Infinity, "1", null, false, {}]) {
+    const stopped = stopMediaObject(edited.room, "host", { commandId: "stale-stop", surfaceId: "debug-main", objectId: "board", expectedRevision });
+    assert.equal(stopped.result.accepted, false); assert.equal(stopped.result.blockedReason, "revision-mismatch");
+    assert.equal(stopped.result.revision, 1); assert.equal(stopped.room, edited.room);
+    assert.deepEqual(stopped.room.mediaObjects.objects.board?.state, edited.room.mediaObjects.objects.board?.state);
+  }
+  const denied = stopMediaObject(edited.room, "member", { commandId: "member-stop", surfaceId: "debug-main", objectId: "board", expectedRevision: 1 });
+  assert.equal(denied.result.blockedReason, "missing-permission");
+  const stopped = stopMediaObject(edited.room, "host", { commandId: "confirmed-stop", surfaceId: "debug-main", objectId: "board", expectedRevision: 1 });
+  assert.equal(stopped.result.accepted, true); assert.equal(stopped.room.mediaObjects.surfaces["debug-main"]?.activeObjectId, null);
+  assert.equal(stopped.room.mediaObjects.objects.board, undefined);
+});
+
+test("legacy stop without a revision retains its original behavior", () => {
+  const room = joinRoom(createRoomState("legacy-stop"), "host", { role: "host" });
+  const created = createMediaObject(room, "host", { commandId: "create", surfaceId: "debug-main", objectType: WHITEBOARD_OBJECT_TYPE, objectId: "board", nowMs: 1 });
+  const stopped = stopMediaObject(created.room, "host", { commandId: "stop", surfaceId: "debug-main", objectId: "board" });
+  assert.equal(stopped.result.accepted, true);
 });
 
 test("markdown board object persists sticky notes and enforces edit permissions", () => {

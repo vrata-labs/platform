@@ -79,6 +79,13 @@ test("each media consumer class independently owns the room", () => {
   }
 });
 
+test("a prepared publication keeps its room alive before the surface object exists", () => {
+  const state = { roomIsCurrent: true, audioSessionJoined: false, hasPhysicalConsumer: false, passiveMediaRequired: false };
+  assert.equal(planMediaRoomIdleAction({ ...state, pendingPublication: true }), "keep-room");
+  assert.equal(planMediaRoomIdleAction({ ...state, pendingPublication: false }), "schedule-disconnect");
+  assert.equal(planMediaRoomIdleAction({ ...state, pendingPublication: true, roomIsCurrent: false }), "ignore-stale-room");
+});
+
 test("removing the final media consumer allows idle disconnect", () => {
   const hasPhysicalConsumer = hasMediaRoomSurfaceConsumer({
     screenShare: false,

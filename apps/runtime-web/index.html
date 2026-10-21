@@ -7,6 +7,14 @@
     <link rel="stylesheet" href="/src/styles.css" />
   </head>
   <body>
+    <dialog id="meeting-replace-dialog" class="meeting-replace-dialog" aria-labelledby="meeting-replace-title" aria-describedby="meeting-replace-explanation">
+      <h2 id="meeting-replace-title">Replace surface content?</h2>
+      <p id="meeting-replace-explanation"></p>
+      <div class="controls">
+        <button id="meeting-replace-cancel" type="button" autofocus>Keep current content</button>
+        <button id="meeting-replace-confirm" type="button">Stop and replace</button>
+      </div>
+    </dialog>
     <dialog id="session-upgrade-dialog" aria-labelledby="session-upgrade-title" aria-describedby="session-upgrade-message">
       <h1 id="session-upgrade-title" tabindex="-1">Update required to rejoin this room</h1>
       <p id="session-upgrade-message"></p>
@@ -46,6 +54,7 @@
             <button id="meeting-nav-notes" type="button" aria-controls="meeting-notes">Notes</button>
             <button id="meeting-nav-people" type="button" aria-controls="meeting-people">People</button>
           </nav>
+          <p id="meeting-transition-status" class="meeting-tool-status" role="status" aria-live="polite" aria-busy="false"></p>
           <div class="room-meta">
             <h1 id="room-name">Loading room...</h1>
             <div id="status-line">Connecting...</div>

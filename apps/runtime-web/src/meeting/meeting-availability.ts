@@ -18,6 +18,7 @@ export interface MeetingAvailabilityContext {
   physicalSurfaceIds: ReadonlySet<string>;
   surfaces: Readonly<Record<string, MediaSurface>> | null;
   objects: Readonly<Record<string, MediaObjectInstance>>;
+  toolReasons?: Partial<Record<"start-share" | "start-whiteboard", string>>;
 }
 
 const actions = {
@@ -75,6 +76,7 @@ export function meetingActionReason(action: MeetingAction, producer: { disabled:
   if (definition.joined && !context.audioJoined) return "Join Audio before using Mute or Unmute.";
   if (definition.document && !context.documentSelected) return "Upload or select a room document first.";
   if (definition.document === "display" && !context.documentDisplayable) return "Select a PDF, image or video to present.";
+  if ((action === "start-share" || action === "start-whiteboard") && context.toolReasons?.[action]) return context.toolReasons[action]!;
   if (definition.empty || definition.active) {
     const surface = context.surfaces?.[context.selectedSurfaceId];
     if (!surface || !context.physicalSurfaceIds.has(context.selectedSurfaceId)) return "Room surfaces are still loading or unavailable.";

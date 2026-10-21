@@ -923,3 +923,15 @@ button.tool-active {
     padding: 18px;
   }
 }
+.meeting-replace-dialog {
+  max-width: min(460px, calc(100vw - 48px));
+  max-height: calc(100dvh - 48px);
+  color: #f8fafc;
+  background: #1e293b;
+  border: 1px solid #94a3b8;
+  border-radius: 14px;
+  padding: 20px;
+  overflow-wrap: anywhere;
+}
+.meeting-replace-dialog button { min-height: 48px; }
+.meeting-replace-dialog::backdrop { background: rgba(0, 0, 0, .65); }

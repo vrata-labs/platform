@@ -282,6 +282,20 @@ test("v2 normal UI hands off two Presenters: own PDFs, native RTC and microphone
   try {
     await h.activateV2();
     await presenterMeetingScenario({ browser, request, origin: h.fixture.origin, adminToken: h.fixture.adminToken }, {
+      async failed(phase) {
+        const { Pool } = createRequire(resolve("apps/api/package.json"))("pg");
+        const pool = new Pool({ connectionString: process.env.VRATA_TEST_POSTGRES_URL, connectionTimeoutMillis: 5000,
+          options: `-c search_path=${h.fixture.schema},public -c statement_timeout=5000` });
+        try {
+          const result = await pool.query(`select a.pid, a.state, a.wait_event_type, a.wait_event,
+            round(extract(epoch from (clock_timestamp()-a.xact_start))*1000) as transaction_age_ms,
+            pg_blocking_pids(a.pid) as blockers,
+            array(select distinct c.relname from pg_locks l join pg_class c on c.oid=l.relation
+              join pg_namespace n on n.oid=c.relnamespace where l.pid=a.pid and n.nspname=$1) as relations
+            from pg_stat_activity a where a.datname=current_database() and a.backend_type='client backend' and a.pid<>pg_backend_pid()`, [h.fixture.schema]);
+          console.warn("presenter_native_failure_locks", JSON.stringify({ phase, connections: result.rows }));
+        } finally { await pool.end(); }
+      },
       async prepareActor(page, origin) {
         // Capture uses Chromium's fake device through the original native API,
         // not the application audiomock path or a getUserMedia replacement.
@@ -553,7 +567,7 @@ test("v2 overlapping source classes play one remote microphone without self echo
   }
 });
 
-for (const mode of ["host", "promotion-live", "promotion-muted", "promotion-denied", "promotion-unavailable"] as const) {
+for (const mode of ["host", "promotion-live", "promotion-muted", "promotion-denied", "promotion-revoked", "promotion-pinned-selection"] as const) {
   test(`main runtime scoped media: ${mode}`, async ({ page, browser, request }) => {
     test.setTimeout(180_000); const h = await roomFixture(request), receiver = await browser.newPage();
     let requests = 0, captureBeforeUpgrade = false;
@@ -612,15 +626,20 @@ for (const mode of ["host", "promotion-live", "promotion-muted", "promotion-deni
           else await route.continue();
         });
       }
-      if (mode === "promotion-unavailable") await page.evaluate(() => { (window as any).__sourceCapture.hold = true; });
+      if (mode === "promotion-revoked" || mode === "promotion-pinned-selection") await page.evaluate(() => { (window as any).__sourceCapture.hold = true; });
       await page.locator("#start-share").click();
-      if (mode === "promotion-unavailable") {
+      if (mode === "promotion-revoked" || mode === "promotion-pinned-selection") {
         await expect.poll(() => page.evaluate(() => (window as any).__sourceCapture.starts), { timeout: 10_000 }).toBe(1);
-        await page.locator("#media-surface-select").selectOption("whiteboard-wall");
+        if (mode === "promotion-pinned-selection") await page.locator("#media-surface-select").selectOption("whiteboard-wall");
+        else {
+          expect((await request.post(`${h.fixture.origin}/api/rooms/${h.roomId}/presenters/${participantId}/revoke`,
+            { headers: { "x-vrata-admin-token": h.fixture.adminToken } })).status()).toBe(200);
+          await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__?.access?.role), { timeout: 20_000 }).toBe("member");
+        }
         await expect(page.locator("#start-share")).toBeDisabled();
         await page.evaluate(() => { (window as any).__sourceCapture.release(); });
       }
-      if (mode === "promotion-denied" || mode === "promotion-unavailable") {
+      if (mode === "promotion-denied" || mode === "promotion-revoked") {
         await expect.poll(() => page.evaluate(() => (window as any).__sourceCapture.streams.length > 0
           && (window as any).__sourceCapture.streams.every((stream: MediaStream) => stream.getTracks().every(track => track.readyState === "ended"))), { timeout: 20_000 }).toBe(true);
         expect((await h.service.getParticipant(`vrata-${h.roomId}`, participantId)).sid === before.sid).toBe(true);
@@ -629,6 +648,14 @@ for (const mode of ["host", "promotion-live", "promotion-muted", "promotion-deni
         await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__.screenShare.localPublishing), { timeout: 30_000 }).toBe(true);
         await expect.poll(() => receiver.evaluate(() => (window as any).__sourceObserver.frames), { timeout: 20_000 }).toBeGreaterThan(2);
         await expect.poll(() => signal(receiver, "screen_share_audio"), { timeout: 20_000 }).toBe(true);
+        if (mode === "promotion-pinned-selection") {
+          await expect(page.locator("#media-surface-select")).toHaveValue("whiteboard-wall");
+          expect(await page.evaluate(() => {
+            const debug = (window as any).__VRATA_DEBUG__;
+            const object = debug.mediaObjects.objects.find((object: any) => object.type === "screen-share");
+            return { surface: object?.surfaceId, selected: debug.mediaObjects.selectedSurfaceId, audio: debug.screenShare.mediaAudioEnabled };
+          })).toEqual({ surface: "debug-main", selected: "whiteboard-wall", audio: true });
+        }
         const after = await h.service.getParticipant(`vrata-${h.roomId}`, participantId);
         expect(after.sid === before.sid).toBe(mode === "host");
         expect(after.tracks.some((track: any) => track.source === 2 && !track.muted)).toBe(mode !== "promotion-muted");
@@ -639,8 +666,8 @@ for (const mode of ["host", "promotion-live", "promotion-muted", "promotion-deni
         }
         await expect.poll(() => signal(receiver, "microphone"), { timeout: 20_000 }).toBe(true);
       }
-      expect(requests - initialRequests).toBe(mode === "host" || mode === "promotion-unavailable" ? 0 : 1);
-      if (mode !== "host" && mode !== "promotion-unavailable") expect(captureBeforeUpgrade).toBe(true);
+      expect(requests - initialRequests).toBe(mode === "host" || mode === "promotion-revoked" ? 0 : 1);
+      if (mode !== "host" && mode !== "promotion-revoked") expect(captureBeforeUpgrade).toBe(true);
     } catch (error) {
       const state = await page.evaluate(() => {
         const debug = (window as any).__VRATA_DEBUG__, query = new URL(location.href).searchParams;

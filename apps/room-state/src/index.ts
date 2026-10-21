@@ -500,7 +500,7 @@ function ensureRoom(server: RoomStateServer, roomId: string): RoomState {
 
 function broadcastRoom(server: RoomStateServer, roomId: string): void {
   const room = server.rooms.get(roomId);
-  const payload = JSON.stringify({ type: "room_state", serverTimeMs: Date.now(), room: room ? serializeRoomState(room) : null });
+  const payload = JSON.stringify({ type: "room_state", serverTimeMs: Date.now(), capabilities: { surfaceStopRevision: 1 }, room: room ? serializeRoomState(room) : null });
   for (const client of server.clients.get(roomId) ?? []) {
     if (client.readyState === client.OPEN) {
       client.send(payload);
@@ -680,6 +680,7 @@ export function applyMediaObjectStopCommand(server: RoomStateServer, roomId: str
   commandId?: string;
   surfaceId?: string;
   objectId?: string;
+  expectedRevision?: unknown;
 }): MediaObjectCommandResultPayload {
   const room = ensureRoom(server, roomId);
   const objectId = input.objectId?.trim() || "";
@@ -687,7 +688,8 @@ export function applyMediaObjectStopCommand(server: RoomStateServer, roomId: str
   const result = stopMediaObject(room, participantId, {
     commandId: input.commandId?.trim() || randomUUID(),
     surfaceId: input.surfaceId?.trim() || "debug-main",
-    objectId
+    objectId,
+    expectedRevision: input.expectedRevision
   });
   server.rooms.set(roomId, result.room);
   if (result.result.accepted) {
@@ -1208,7 +1210,8 @@ export function startRoomStateService(port = Number.parseInt(process.env.ROOM_ST
           const result = applyMediaObjectStopCommand(authority, roomId, participantId, {
             commandId: typeof payload.commandId === "string" ? payload.commandId : undefined,
             surfaceId: typeof payload.surfaceId === "string" ? payload.surfaceId : undefined,
-            objectId: typeof payload.objectId === "string" ? payload.objectId : undefined
+            objectId: typeof payload.objectId === "string" ? payload.objectId : undefined,
+            expectedRevision: payload.expectedRevision
           });
           sendToSocket(socket, {
             type: result.accepted ? "surface_command_result" : "access_denied",

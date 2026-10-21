@@ -1,22 +1,24 @@
 import { expect, type APIRequestContext, type Browser, type BrowserContext, type Page, type Route } from "@playwright/test";
 import { PDFDocument, rgb } from "pdf-lib";
 import { createHash, randomUUID } from "node:crypto";
-import { chooseMeetingPanel } from "./meeting-tools-acceptance";
+import { chooseMeetingPanel, meetingRequest } from "./meeting-tools-acceptance";
 
 type Admission = { token: string; participantId?: string; access: { role: string } };
 type DocumentRecord = { documentId: string; filename: string; downloadUrl: string; uploadedBy: string; checksum: string; metadata: { pageCount: number } };
-type Input = { browser: Browser; request: APIRequestContext; origin: string; adminToken: string; mobile: boolean; storageFault?: (action: () => Promise<void>) => Promise<void> };
+type Input = { browser: Browser; request: APIRequestContext; origin: string; adminToken: string; mobile: boolean;
+  preparePage?: (page: Page, room: { roomId: string; documentsPath: string }) => Promise<void>;
+  storageFault?: (action: () => Promise<void>) => Promise<void> };
 
 export async function createDocumentMeeting(input: Input) {
   const contexts: BrowserContext[] = [];
   const headers = { "x-vrata-admin-token": input.adminToken };
-  const response = await input.request.post(`${input.origin}/api/rooms`, { headers, data: {
+  const response = await meetingRequest(() => input.request.post(`${input.origin}/api/rooms`, { headers, data: {
     tenantId: "demo-tenant", templateId: "meeting-room-basic", name: "Owned document acceptance", visibility: "private"
-  } });
+  } }));
   expect(response.status()).toBe(201); const room = await response.json();
   const path = `/api/rooms/${room.roomId}/documents`;
   async function invite(role: "host" | "guest" | "member") {
-    const response = await input.request.post(`${input.origin}/api/rooms/${room.roomId}/invites`, { headers, data: { role, expiresInSeconds: 1200 } });
+    const response = await meetingRequest(() => input.request.post(`${input.origin}/api/rooms/${room.roomId}/invites`, { headers, data: { role, expiresInSeconds: 1200 } }));
     expect(response.status()).toBe(201);
     const result = await response.json() as { inviteLink: string };
     const inviteToken = new URL(result.inviteLink).searchParams.get("invite"); expect(!!inviteToken).toBe(true);
@@ -36,6 +38,7 @@ export async function createDocumentMeeting(input: Input) {
         return original(value);
       };
     });
+    await input.preparePage?.(page, { roomId: room.roomId, documentsPath: path });
     const admission = page.waitForResponse(response => new URL(response.url()).pathname === "/api/tokens/state" && response.status() === 200);
     void admission.catch(() => undefined);
     const initialLibrary = role === "guest" ? null : page.waitForResponse(response => response.request().method() === "GET" && new URL(response.url()).pathname === path);
@@ -52,7 +55,7 @@ export async function createDocumentMeeting(input: Input) {
   }
   async function close() {
     await Promise.all(contexts.map(context => context.close()));
-    expect((await input.request.delete(`${input.origin}/api/rooms/${room.roomId}`, { headers })).ok()).toBe(true);
+    expect((await meetingRequest(() => input.request.delete(`${input.origin}/api/rooms/${room.roomId}`, { headers }))).ok()).toBe(true);
   }
   return { ...input, roomId: room.roomId as string, path, headers, invite, enter, close };
 }
@@ -74,6 +77,10 @@ async function upload(page: Page, path: string, file: { name: string; mimeType: 
 
 export async function documentPolicyScenario(meeting: Meeting) {
   const host = await meeting.enter("host"), page = host.page;
+  // This scenario checks document policy, not interaction during GPU/scene boot.
+  // Use a mounted scene and two real frames as its deterministic starting point.
+  await page.waitForFunction(() => (window as any).__VRATA_DEBUG__?.sceneBundleState === "loaded", null, { timeout: 90_000, polling: 100 });
+  await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
   await chooseMeetingPanel(page, "present", meeting.mobile);
   await expect(page.locator("#document-upload-button")).toBeEnabled();
   const library = await meeting.request.get(`${meeting.origin}${meeting.path}`, { headers: { authorization: `Bearer ${host.issued.token}` } });
@@ -90,7 +97,31 @@ export async function documentPolicyScenario(meeting: Meeting) {
     [{ name: "too-large.txt", mimeType: "text/plain", buffer: Buffer.alloc(policy.maxFileBytes + 1, 120) }, "document_too_large"]
   ] as const) {
     const before = postRequests; await page.locator("#document-upload-input").setInputFiles(file); await page.locator("#document-upload-button").click();
-    await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__?.documents?.errorCode)).toBe(code);
+    let sample: Promise<{ code: unknown; scene: unknown; connected: boolean; inputBytes: number | null; busy: boolean }> | undefined;
+    let sampleStartedAt = 0, sampleMs: number | null = null;
+    try {
+      await expect.poll(() => {
+        sampleStartedAt = Date.now();
+        sample = page.evaluate(() => {
+          const debug = (window as any).__VRATA_DEBUG__;
+          return { code: debug?.documents?.errorCode, scene: debug?.sceneBundleState, connected: debug?.roomStateConnected === true,
+            inputBytes: window.document.querySelector<HTMLInputElement>("#document-upload-input")?.files?.[0]?.size ?? null,
+            busy: window.document.getElementById("documents-panel")?.getAttribute("aria-busy") === "true" };
+        });
+        return sample.then(value => { sampleMs = Date.now()-sampleStartedAt; return value.code; });
+      }).toBe(code);
+    } catch (error) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const observed = await Promise.race([sample?.then(value => ({ ...value, sampleMs: Date.now()-sampleStartedAt })),
+          new Promise<undefined>(resolve => { timer = setTimeout(() => resolve(undefined), 5000); })]).catch(() => undefined);
+        console.warn("document_preflight_failure", JSON.stringify({ expected: code, postRequests: postRequests-before,
+          sampleMs: observed?.sampleMs ?? sampleMs, codeMatches: observed?.code === code,
+          code: ["unsupported_document_mime","document_too_large"].includes(String(observed?.code)) ? observed?.code : "other",
+          scene: observed?.scene, connected: observed?.connected, inputBytes: observed?.inputBytes, busy: observed?.busy }));
+      } finally { if (timer) clearTimeout(timer); }
+      throw error;
+    }
     expect(postRequests).toBe(before); await expect(page.locator("#document-operation-progress")).toBeHidden();
   }
   const corrupt = await upload(page, meeting.path, { name: "corrupt.pdf", mimeType: "application/pdf", buffer: Buffer.from("%PDF-1.7\nbroken") });

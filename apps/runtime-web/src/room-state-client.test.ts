@@ -166,6 +166,27 @@ test("media object commands send object lifecycle envelopes", () => {
   assert.equal(JSON.parse(sent[4]!).type, "surface_stop_object");
 });
 
+test("revisioned stop is additive and preserves the legacy wire envelope", () => {
+  const sent: string[] = [], client = createClient(sent);
+  sendSurfaceStopObjectCommand(client, { commandId: "legacy", surfaceId: "wall", objectId: "board" });
+  sendSurfaceStopObjectCommand(client, { commandId: "confirmed", surfaceId: "wall", objectId: "board", expectedRevision: 3 });
+  assert.deepEqual(JSON.parse(sent[0]!), { type: "surface_stop_object", commandId: "legacy", surfaceId: "wall", objectId: "board" });
+  assert.equal(JSON.parse(sent[1]!).expectedRevision, 3);
+});
+
+test("safe replacement capability requires the explicit versioned server advertisement", t => {
+  let receive!: (event: { data: string }) => void;
+  class FakeSocket { addEventListener(type: string, listener: typeof receive) { if (type === "message") receive = listener; } }
+  const previous = globalThis.WebSocket; globalThis.WebSocket = FakeSocket as unknown as typeof WebSocket;
+  t.after(() => { globalThis.WebSocket = previous; });
+  const advertised: Array<boolean | undefined> = [];
+  connectRoomState("ws://room.test", "room", "self", { onRoomState: snapshot => advertised.push(snapshot.capabilities?.surfaceStopRevision), onError: error => { throw error; } });
+  for (const capabilities of [undefined, { surfaceStopRevision: true }, { surfaceStopRevision: "1" }, { surfaceStopRevision: 1 }]) {
+    receive({ data: JSON.stringify({ type: "room_state", room: { roomId: "room", participants: [], seatOccupancy: {} }, capabilities }) });
+  }
+  assert.deepEqual(advertised, [undefined, undefined, undefined, true]);
+});
+
 test("connectRoomState routes inbound avatar reliable state, pose frame and seat claim result", async () => {
   const listeners = new Map<string, Array<(event: { data?: string }) => void>>();
   class FakeWebSocket {

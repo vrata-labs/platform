@@ -29,6 +29,7 @@ import {
   type RemoteBrowserObjectState,
   type RemoteBrowserPatch,
   type RoomMediaObjectsState,
+  type RoomTemplateSurface,
   type ScreenShareErrorCode,
   type ScreenShareObjectState,
   type SurfaceInputEvent,
@@ -65,12 +66,12 @@ import {
   type RoomStateSnapshot,
   type SurfaceCommandResult
 } from "./room-state-client.js";
-import { classifyMediaError, classifyRoomStateError, classifyScreenShareError, createFaultError, getRuntimeIssue, shouldRetryConnection, type RuntimeIssue } from "./runtime-errors.js";
+import { classifyMediaError, classifyRoomStateError, classifyScreenShareActionError, createFaultError, getRuntimeIssue, shouldRetryConnection, type RuntimeIssue } from "./runtime-errors.js";
 import { canRetry, createReconnectPolicy, getReconnectDelayMs } from "./reconnect.js";
 import { applyRuntimeIssueState, clearRuntimeIssueState, createRuntimeUiState } from "./runtime-state.js";
 import { createNotesRuntime, createNotesRuntimeState } from "./notes-runtime.js";
 import { applyPassiveMediaRecovery, applyPostBootControls, shouldStartPassiveMedia } from "./runtime-startup.js";
-import { describeMediaCapabilityReason, detectBrowserMediaCapabilities, formatUnsupportedMediaCapabilities } from "./media-capabilities.js";
+import { describeMediaCapabilityReason, detectBrowserMediaCapabilities, formatUnsupportedMediaCapabilities, recordDisplayCaptureUnsupported } from "./media-capabilities.js";
 import { collectWebRtcDiagnostics, createUnavailableWebRtcDiagnostics, type WebRtcStatsTransport, type WebRtcTransportRole } from "./webrtc-diagnostics.js";
 import { isScreenShareAudioSource, shouldPublishMediaSurfaceAudio } from "./media-surface-audio.js";
 import { createMediaSurfaceCommandClient } from "./media/media-surface-commands.js";
@@ -117,7 +118,10 @@ import {
 } from "./media/remote-browser-vr-keyboard.js";
 import { planRemoteBrowserXrPointer } from "./media/remote-browser-xr-input.js";
 import { getScreenShareErrorCode } from "./media/screen-share-object.js";
-import { captureAndPublishScreenShareStream, createMockShareStream, withScreenCaptureBeforeUpgrade } from "./media/screen-share-capture.js";
+import { captureScreenShareStream, createMockShareStream } from "./media/screen-share-capture.js";
+import { createScreenShareActions } from "./media/screen-share-actions.js";
+import { createMeetingToolTransition, MeetingToolTransitionError, planMeetingTool, type MeetingToolContext } from "./meeting/meeting-tool-transition.js";
+import { createMeetingToolUi, meetingToolMessage } from "./meeting/meeting-tool-ui.js";
 import { createInactiveWhiteboardDebugSnapshot, createWhiteboardObjectRuntime } from "./media/whiteboard-object.js";
 import { applySpatialSettings, createSpatialAudioSettings, resolveSpatialAudioMode } from "./spatial-audio.js";
 import { captureCanvasDiagnostics, inspectSceneObject } from "./scene-debug.js";
@@ -209,7 +213,7 @@ import { createDocumentLibraryRuntime } from "./document-library-runtime.js";
 import { createDocumentSurfaceView } from "./document-surface-view.js";
 import { bindDocumentControls } from "./document-control-bindings.js";
 
-import { createRuntimeDiagnostics } from "./runtime-diagnostics.js";
+import { createRuntimeDiagnostics, reportRuntimeBootDiagnostics } from "./runtime-diagnostics.js";
 import { createXrTelemetryReporter } from "./xr-telemetry-reporter.js";
 
 function fallbackUuid(): string {
@@ -1426,6 +1430,9 @@ const { renderHostControls, refreshSessionControl, runHostControlAction, canMana
   onAuthorityChanged: () => meetingNavigation?.requestSync()
 });
 let sessionControlBlocked = false;
+let meetingTools: ReturnType<typeof createMeetingToolTransition> | null = null;
+let meetingToolsCurrent: (() => MeetingToolContext) | null = null;
+let surfaceStopRevisionSupported = false;
 const remoteAvatarRuntime = createRemoteAvatarRuntime({
   scene,
   bodyGeometry,
@@ -1707,6 +1714,7 @@ function disableRuntimeForSessionBlock(reason: string): void {
   sessionControlPoller.stop();
   const message = describeSessionControlReason(reason);
   sessionControlBlocked = true;
+  meetingTools?.invalidate();
   clearRoomStateReconnect();
   clearSeatReclaimRetry();
   roomStateConnectionGeneration++;
@@ -2210,6 +2218,8 @@ function handleRoomSnapshot(snapshot: RoomStateSnapshot): void {
   roomStateServerOffsetMs = snapshot.serverTimeMs - Date.now();
   roomSeatOccupancy = { ...(snapshot.seatOccupancy ?? {}) };
   roomMediaObjects = snapshot.mediaObjects;
+  surfaceStopRevisionSupported = snapshot.capabilities?.surfaceStopRevision === true;
+  meetingTools?.sync();
   syncSeatStateFromOccupancy();
   syncMediaObjectsDebugState();
   ensureSurfaceLiveKitRoom();
@@ -2536,6 +2546,7 @@ function supportsAudioOutputSelection(): boolean {
 }
 
 function canUseScreenShareControl(): boolean {
+  if (meetingToolsCurrent) return !meetingTools?.busy() && planMeetingTool(meetingToolsCurrent(), { kind: "screen" }).kind !== "blocked";
   const activeObject = activeMediaObjectForSurface(selectedMediaSurfaceId);
   return debugState.access.canStartScreenShare
     && roomStateConnected
@@ -2545,6 +2556,11 @@ function canUseScreenShareControl(): boolean {
 }
 
 function canUseWhiteboardControl(): boolean {
+  if (meetingToolsCurrent) {
+    const decision = planMeetingTool(meetingToolsCurrent(), { kind: "board" });
+    return !meetingTools?.busy() && decision.kind !== "blocked"
+      && !(decision.plan.previous?.type === WHITEBOARD_OBJECT_TYPE && decision.plan.surfaceId === selectedMediaSurfaceId);
+  }
   const activeObject = activeMediaObjectForSurface(selectedMediaSurfaceId);
   return debugState.access.canCreateWhiteboard
     && roomStateConnected
@@ -3333,6 +3349,7 @@ async function refreshAudioDevices(requestPermissions = false): Promise<void> {
 }
 
 function syncMediaCapabilityControls(): void {
+  meetingTools?.sync();
   const unsupportedStatus = formatUnsupportedMediaCapabilities(browserMediaCapabilities);
   if (unsupportedStatus) {
     updateAudioDeviceStatus(unsupportedStatus);
@@ -3976,14 +3993,14 @@ function reconcileMediaRoomIdleDisconnect(room: Room | null, diagnosticsReason: 
     roomIsCurrent: livekitRoom === room,
     audioSessionJoined,
     hasPhysicalConsumer: hasActiveMediaRoomSurfaceConsumer(),
-    passiveMediaRequired
+    passiveMediaRequired, pendingPublication: Boolean(meetingTools?.busy())
   });
   mediaRoomIdleDisconnectScheduler.reconcile(room, action, () => {
     if (planMediaRoomIdleAction({
       roomIsCurrent: livekitRoom === room,
       audioSessionJoined,
       hasPhysicalConsumer: hasActiveMediaRoomSurfaceConsumer(),
-      passiveMediaRequired
+      passiveMediaRequired, pendingPublication: Boolean(meetingTools?.busy())
     }) !== "schedule-disconnect") {
       return;
     }
@@ -4262,7 +4279,7 @@ const {
   get roomStateConnected() { return roomStateConnected; },
   get roomStateAccessToken() { return roomStateAccessToken; },
   get sessionControlBlocked() { return sessionControlBlocked; },
-  get presentationActionInFlight() { return presentationActionInFlight; },
+  get presentationActionInFlight() { return presentationActionInFlight || Boolean(meetingTools?.busy()); },
   get roomDocuments() { return roomDocuments; },
   set roomDocuments(value) { roomDocuments = value; },
   get selectedDocumentId() { return selectedDocumentId; },
@@ -4289,11 +4306,12 @@ const {
   documentMediaStatusEl,
   get roomStateServerOffsetMs() { return roomStateServerOffsetMs; },
   get selectedMediaSurfaceId() { return selectedMediaSurfaceId; },
-  get presentationActionInFlight() { return presentationActionInFlight; }
+  get presentationActionInFlight() { return presentationActionInFlight || Boolean(meetingTools?.busy()); }
 });
 
 const {
-  selectDocumentForSurface,
+  selectDocumentForSurfaceAt,
+  unlinkStoppedDocument,
   patchCurrentPresentation,
   goToPresentationPage,
   togglePresentationDisplayMode,
@@ -4335,6 +4353,89 @@ const {
   get roomDocuments() { return roomDocuments; },
   set roomDocuments(value) { roomDocuments = value; }
 });
+
+const screenShareActions = createScreenShareActions({
+  participantId: () => participantId,
+  debugState, connected: () => Boolean(roomStateClient && roomStateConnected), mock: () => shareMockEnabled,
+  canStart: surfaceId => debugState.access.canStartScreenShare && roomStateConnected && !activeMediaObjectForSurface(surfaceId)
+    && surfaceAllowsObject(surfaceId, SCREEN_SHARE_OBJECT_TYPE),
+  commands: mediaSurfaceCommands, ensureMediaRoom: () => ensureMediaRoom(true),
+  mediaAudioEnabled: surfaceId => shouldPublishMediaSurfaceAudio(roomMediaObjects, surfaceId),
+  attach: (stream, input) => attachScreenShareStream(stream, { ...input, ownerParticipantId: participantId }),
+  attachMock: attachMockVideoStream, bindEnded: bindLocalScreenShareTrackEnd,
+  cleanup: async (room, objectId, tracks) => {
+    const entry = screenShareRuntimeByObjectId.get(objectId);
+    if (entry) { entry.stopping = true; await unpublishScreenShareEntry(entry); detachScreenShareEntry(entry); }
+    else if (room) for (const track of tracks) await room.localParticipant.unpublishTrack(track).catch(() => undefined);
+  },
+  errorCode: getScreenShareErrorCode, setStatus, started: () => { lastScreenShareStoppedAtMs = 0; },
+  syncControls: () => { startShareButton.disabled = !canUseScreenShareControl(); stopShareButton.disabled = !canStopLocalScreenShare(); },
+  report: note => { void reportDiagnostics(note); }
+});
+const meetingToolUi = createMeetingToolUi({ document, confirm: () => meetingTools?.confirm() ?? Promise.resolve(), cancel: () => meetingTools?.cancel() });
+
+function initializeMeetingTools(boot: { templateSurfaces?: RoomTemplateSurface[]; templateSettings?: { presentation?: { surfaceId?: string } } }): void {
+  meetingToolsCurrent = () => ({ leaseKey: JSON.stringify([roomId, participantId, roomStateConnectionGeneration,
+    sessionControlBlocked, roomStateConnected, authorityRevision(), [...debugState.access.permissions].sort()]),
+    blocked: sessionControlBlocked || Boolean(runtimeSessionGate.reason), connected: roomStateConnected,
+    participantId, permissions: debugState.access.permissions, screenSupported: shareMockEnabled || browserMediaCapabilities.screenShare.supported,
+    screenEnabled: shareMockEnabled || runtimeFlags.screenShare, documentsEnabled: runtimeFlags.documentsEnabled,
+    stopRevisionSupported: surfaceStopRevisionSupported, xrActive: renderer.xr.isPresenting,
+    selectedSurfaceId: selectedMediaSurfaceId, selectedDocumentId: selectedDocument()?.documentId ?? null,
+    selectedDocumentChecksum: selectedDocument()?.checksum ?? null, documents: roomDocuments,
+    physicalSurfaceIds: new Set([...mediaSurfaceViews].filter(([, surface]) => surface.object.visible).map(([id]) => id)),
+    surfaces: roomMediaObjects?.surfaces ?? null, objects: roomMediaObjects?.objects ?? {},
+    templateSurfaces: boot.templateSurfaces ?? [], preferredPresentationSurfaceId: boot.templateSettings?.presentation?.surfaceId });
+  meetingTools = createMeetingToolTransition({ current: meetingToolsCurrent,
+    capture: plan => shareMockEnabled ? Promise.resolve(createMockShareStream())
+      : captureScreenShareStream(shouldPublishMediaSurfaceAudio(roomMediaObjects, plan.surfaceId)),
+    prepareScreen: async () => { if (!shareMockEnabled) await ensureMediaRoom(true); },
+    stop: async plan => {
+      const previous = plan.previous!;
+      const stoppedObject = roomMediaObjects?.objects[previous.objectId];
+      const result = await mediaSurfaceCommands.stopObject(previous.objectId, plan.surfaceId, "meeting-replace", previous.revision);
+      if (result.accepted) {
+        if (stoppedObject) await unlinkStoppedDocument(stoppedObject);
+        const entry = screenShareRuntimeByObjectId.get(previous.objectId);
+        if (entry && !entry.remote) { entry.stopping = true; await unpublishScreenShareEntry(entry); detachScreenShareEntry(entry); }
+      }
+      return result;
+    },
+    start: async (plan, stream, check) => {
+      check(); let started = false;
+      if (plan.intent.kind === "document") started = await selectDocumentForSurfaceAt({ surfaceId: plan.surfaceId, documentId: plan.intent.documentId, checksum: plan.intent.checksum, assertActive: check });
+      else if (plan.intent.kind === "screen") started = await screenShareActions.start({ surfaceId: plan.surfaceId, stream: stream!, assertActive: check });
+      else { if (!activeWhiteboardObjectForSurface(plan.surfaceId)) await startWhiteboardOnSurface(plan.surfaceId); started = true; }
+      if (started && selectedMediaSurfaceId === plan.requestedSelection) selectMediaSurface(plan.surfaceId);
+      return started;
+    },
+    changed: state => {
+      meetingToolUi.render(state); renderDocumentsUi(); syncMediaCapabilityControls(); syncWhiteboardControls();
+      startShareButton.disabled = !canUseScreenShareControl(); stopShareButton.disabled = !canStopLocalScreenShare();
+      reconcileMediaRoomIdleDisconnect(livekitRoom, "meeting_tool_transition_idle");
+    },
+    failed: (error, plan) => {
+      if (plan.intent.kind === "screen" && meetingTools?.snapshot().phase !== "stopping"
+        && !(error instanceof MeetingToolTransitionError)) handleScreenShareActionError(error);
+    }
+  });
+}
+
+async function startScreenShare(): Promise<void> { await meetingTools?.request({ kind: "screen" }); }
+async function startWhiteboard(): Promise<void> { await meetingTools?.request({ kind: "board" }); }
+function meetingToolReasons(): Partial<Record<"start-share" | "start-whiteboard", string>> {
+  if (!meetingToolsCurrent) return {};
+  const context = meetingToolsCurrent(), screen = planMeetingTool(context, { kind: "screen" }), board = planMeetingTool(context, { kind: "board" });
+  return { ...(screen.kind === "blocked" ? { "start-share": meetingToolMessage(screen.reason) } : {}),
+    ...(board.kind === "blocked" ? { "start-whiteboard": meetingToolMessage(board.reason) } : {}) };
+}
+async function requestMeetingDocument(): Promise<void> {
+  const selected = selectedDocument(), kind = selected?.metadata?.kind;
+  if (!selected || !kind || !["pdf", "image", "video"].includes(kind)) { setDocumentStatus("Select a PDF, image or video to present", "document_not_presentable"); return; }
+  const objectType = kind === "pdf" ? "pdf-presentation" : kind === "image" ? "image-viewer" : "video-player";
+  await meetingTools?.request({ kind: "document", documentId: selected.documentId, checksum: selected.checksum, objectType });
+}
+window.addEventListener("pagehide", () => meetingTools?.invalidate());
 
 function refreshClientCompatibility(): void {
   clientCompatibility = buildClientCompatibility();
@@ -5045,6 +5146,8 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
   }
 
   const connectionGeneration = ++roomStateConnectionGeneration;
+  surfaceStopRevisionSupported = false;
+  meetingTools?.sync();
   const isCurrentConnection = () => connectionGeneration === roomStateConnectionGeneration;
   roomStateClient = connectRoomState(roomStateUrl, roomId, participantId, {
     onIdentityRequired: (reason) => {
@@ -5134,13 +5237,16 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
     },
     onAccessDenied: (result) => {
       if (!isCurrentConnection()) return;
-      debugState.access.lastDeniedPermission = result.permission;
+      const command = result as SurfaceCommandResult;
+      const replacementConflict = result.permission === "surface.stop-object" && command.commandId?.includes(":meeting-replace:")
+        && ["revision-mismatch", "missing-object", "object-surface-mismatch"].includes(command.blockedReason ?? "");
+      debugState.access.lastDeniedPermission = replacementConflict ? null : result.permission;
       debugState.access.lastSurfaceCommandAccepted = false;
       debugState.mediaObjects.lastCommand = result as SurfaceCommandResult;
       debugState.mediaObjects.blockedReason = (result as SurfaceCommandResult).blockedReason ?? null;
       mediaSurfaceCommands.settle(result as SurfaceCommandResult);
       if (!debugState.issueCode) {
-        setStatus(`Access denied: ${result.permission}`);
+        setStatus(replacementConflict ? "Surface content changed. Review it and try again." : `Access denied: ${result.permission}`);
       }
     },
     onSurfaceCommandResult: (result) => {
@@ -5179,6 +5285,7 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
       roomStateConnected = false;
       debugState.roomStateConnected = false;
       mediaSurfaceCommands.rejectAll("room_state_closed");
+      surfaceStopRevisionSupported = false; meetingTools?.sync();
       applyIssue(issue, {
         degradedMode: "api_fallback",
         roomStateMode: "disconnected",
@@ -6325,126 +6432,13 @@ function setupAudio(room: Room): void {
   });
 }
 
-async function startScreenShare(preCaptured?: MediaStream, capturedSurfaceId?: string): Promise<void> {
-  if (!debugState.access.canStartScreenShare) {
-    debugState.access.lastDeniedPermission = "screen-share.start";
-    throw createFaultError("NotAllowedError", "screen_share_forbidden");
-  }
-  if (!roomStateClient || !roomStateConnected) {
-    throw createFaultError("ConnectionError", "room_state_failed");
-  }
-  if (!shareMockEnabled && !browserMediaCapabilities.screenShare.supported) {
-    debugState.screenShare.errorCode = "display_capture_unsupported";
-    throw createFaultError("NotSupportedError", `screen_share_unsupported:${browserMediaCapabilities.screenShare.reason}`);
-  }
-  if (startShareButton.disabled) {
-    if (preCaptured) throw createFaultError("NotAllowedError", "screen_share_control_unavailable");
-    return;
-  }
-  const targetSurfaceId = selectedMediaSurfaceId;
-  if (preCaptured && capturedSurfaceId !== targetSurfaceId) throw createFaultError("NotAllowedError", "screen_share_control_unavailable");
-  if (!shareMockEnabled && !preCaptured && livekitRoom && !roomPermitsScreenShare(livekitRoom)) {
-    return withScreenCaptureBeforeUpgrade(shouldPublishMediaSurfaceAudio(roomMediaObjects, targetSurfaceId), stream => startScreenShare(stream, targetSurfaceId));
-  }
-  const createResult = await mediaSurfaceCommands.createScreenShareObjectOnSurface(targetSurfaceId);
-  if (!createResult.accepted || !createResult.objectId) {
-    throw new Error(`screen_share_create_rejected:${createResult.blockedReason ?? "unknown"}`);
-  }
-
-  const objectId = createResult.objectId;
-  const surfaceId = createResult.surfaceId ?? targetSurfaceId;
-  lastScreenShareStoppedAtMs = 0;
-  let revision = createResult.revision ?? 0;
-  debugState.screenShare.selectedSurfaceId = surfaceId;
-  debugState.screenShare.errorCode = null;
-
-  try {
-    const selecting = await mediaSurfaceCommands.patchScreenShareObject(objectId, surfaceId, revision, { type: "mark-selecting" });
-    if (!selecting.accepted) {
-      throw new Error(`screen_share_selecting_rejected:${selecting.blockedReason ?? "unknown"}`);
-    }
-    revision = selecting.revision ?? revision;
-
-    if (shareMockEnabled) {
-      const publishing = await mediaSurfaceCommands.patchScreenShareObject(objectId, surfaceId, revision, { type: "mark-publishing" });
-      if (!publishing.accepted) {
-        throw new Error(`screen_share_publishing_rejected:${publishing.blockedReason ?? "unknown"}`);
-      }
-      revision = publishing.revision ?? revision;
-      const mediaTrackSid = `mock-screen-share:${participantId}:${objectId}:${Date.now()}`;
-      attachMockVideoStream(createMockShareStream(), objectId, surfaceId, mediaTrackSid);
-      const active = await mediaSurfaceCommands.patchScreenShareObject(objectId, surfaceId, revision, { type: "mark-active", mediaTrackSid });
-      if (!active.accepted) {
-        throw new Error(`screen_share_active_rejected:${active.blockedReason ?? "unknown"}`);
-      }
-      debugState.screenShareState = "sharing";
-      debugState.screenShare.active = true;
-      debugState.screenShare.localPublishing = true;
-      debugState.screenShare.publishedTrackSid = mediaTrackSid;
-      startShareButton.disabled = !canUseScreenShareControl();
-      stopShareButton.disabled = !canStopLocalScreenShare();
-      setStatus("Sharing screen");
-      void reportDiagnostics("screenshare_mock_started");
-      return;
-    }
-
-    const room = await ensureMediaRoom(true);
-    debugState.screenShareState = "starting";
-    const publishing = await mediaSurfaceCommands.patchScreenShareObject(objectId, surfaceId, revision, { type: "mark-publishing" });
-    if (!publishing.accepted) {
-      throw new Error(`screen_share_publishing_rejected:${publishing.blockedReason ?? "unknown"}`);
-    }
-    revision = publishing.revision ?? revision;
-    const mediaAudioEnabled = shouldPublishMediaSurfaceAudio(roomMediaObjects, surfaceId);
-    debugState.screenShare.mediaAudioEnabled = mediaAudioEnabled;
-    const published = await captureAndPublishScreenShareStream(room, { objectId, mediaAudioEnabled, stream: preCaptured });
-    attachScreenShareStream(published.stream, {
-      objectId,
-      surfaceId,
-      ownerParticipantId: participantId,
-      mediaTrackSid: published.mediaTrackSid,
-      publishedTracks: published.publishedTracks
-    });
-    bindLocalScreenShareTrackEnd(objectId, surfaceId, published.publishedTracks);
-    const active = await mediaSurfaceCommands.patchScreenShareObject(objectId, surfaceId, revision, { type: "mark-active", mediaTrackSid: published.mediaTrackSid });
-    if (!active.accepted) {
-      throw new Error(`screen_share_active_rejected:${active.blockedReason ?? "unknown"}`);
-    }
-    debugState.screenShareState = "sharing";
-    debugState.screenShare.active = true;
-    debugState.screenShare.localPublishing = true;
-    debugState.screenShare.publishedTrackSid = published.mediaTrackSid;
-    startShareButton.disabled = !canUseScreenShareControl();
-    stopShareButton.disabled = !canStopLocalScreenShare();
-    setStatus("Sharing screen");
-    void reportDiagnostics("screenshare_started");
-  } catch (error) {
-    const errorCode = getScreenShareErrorCode(error);
-    debugState.screenShare.errorCode = errorCode;
-    void mediaSurfaceCommands.patchScreenShareObject(objectId, surfaceId, revision, { type: "mark-failed", errorCode })
-      .then(() => mediaSurfaceCommands.stopScreenShareObject(objectId, surfaceId))
-      .catch(() => undefined);
-    const entry = screenShareRuntimeByObjectId.get(objectId);
-    if (entry) {
-      entry.stopping = true;
-      await unpublishScreenShareEntry(entry);
-      detachScreenShareEntry(entry);
-    }
-    startShareButton.disabled = !canUseScreenShareControl();
-    stopShareButton.disabled = true;
-    throw error;
-  }
-}
-
-async function startWhiteboard(): Promise<void> {
+async function startWhiteboardOnSurface(surfaceId: string): Promise<void> {
   if (!debugState.access.canCreateWhiteboard) {
     debugState.access.lastDeniedPermission = "surface.create-object";
     throw createFaultError("NotAllowedError", "whiteboard_forbidden");
   }
-  if (startWhiteboardButton.disabled) {
-    return;
-  }
-  const result = await mediaSurfaceCommands.createWhiteboardObjectOnSurface(selectedMediaSurfaceId);
+  if (!roomStateConnected || activeMediaObjectForSurface(surfaceId) || !surfaceAllowsObject(surfaceId, WHITEBOARD_OBJECT_TYPE)) throw createFaultError("NotAllowedError", "whiteboard_control_unavailable");
+  const result = await mediaSurfaceCommands.createWhiteboardObjectOnSurface(surfaceId);
   if (!result.accepted) {
     debugState.mediaObjects.blockedReason = result.blockedReason ?? null;
     throw new Error(`whiteboard_create_rejected:${result.blockedReason ?? "unknown"}`);
@@ -7023,7 +7017,7 @@ bindDocumentControls({
   presentationNextButton, presentationLargeButton, presentationStopButton,
   documentMediaPlayButton, documentMediaFitButton, documentMediaLoopInput,
   documentMediaSeekInput, documentMediaStopButton, renderDocumentsUi,
-  uploadSelectedDocument, downloadSelectedDocument, selectDocumentForSurface,
+  uploadSelectedDocument, downloadSelectedDocument, selectDocumentForSurface: requestMeetingDocument,
   deleteSelectedDocument, currentPdfPresentationObject, goToPresentationPage,
   togglePresentationDisplayMode, stopCurrentPresentation,
   toggleDocumentMediaPlayback, toggleDocumentMediaFit,
@@ -7079,12 +7073,13 @@ joinMutedCheckbox.addEventListener("change", () => {
   syncAudioControls();
 });
 
-startShareButton.addEventListener("click", () => {
-  void startScreenShare().catch((error: unknown) => {
+function handleScreenShareActionError(error: unknown): void {
     console.error(error);
-    const issue = classifyScreenShareError(error);
+    const issue = classifyScreenShareActionError(error, meetingTools?.snapshot().phase === "capturing");
     if (issue.code === "screen_share_denied" || issue.code === "screen_share_unsupported" || issue.code === "media_network_blocked") {
       if (issue.code === "screen_share_unsupported") {
+        recordDisplayCaptureUnsupported(browserMediaCapabilities);
+        refreshClientCompatibility();
         startShareButton.disabled = true;
         startShareButton.textContent = "Share Unsupported";
         startShareButton.title = `Screen share unsupported: ${describeMediaCapabilityReason(browserMediaCapabilities.screenShare.reason)}`;
@@ -7107,8 +7102,8 @@ startShareButton.addEventListener("click", () => {
     setStatus("Screen share failed");
     debugState.screenShareState = error instanceof Error ? error.name : "failed";
     void reportDiagnostics("screenshare_failed");
-  });
-});
+}
+startShareButton.addEventListener("click", () => { void startScreenShare().catch(handleScreenShareActionError); });
 
 startWhiteboardButton.addEventListener("click", () => {
   void startWhiteboard().catch((error: unknown) => {
@@ -7712,6 +7707,7 @@ async function main(): Promise<void> {
     lastSurfaceCommandAccepted: null
   };
   observeAdmissionRevision(boot.authorityRevision, { participantId: boot.participantId, access: boot.access, isOwner: boot.isOwner });
+  initializeMeetingTools(boot);
   meetingNavigation?.configureTemplate(boot.templateSurfaces ?? [], boot.templateSettings?.presentation.surfaceId);
   debugState.avatarPresenceMode = runtimeFlags.avatarLegIkEnabled ? "experimental-leg-ik" : "baseline";
   debugState.roomStateUrl = boot.roomStateUrl;
@@ -8003,11 +7999,11 @@ async function main(): Promise<void> {
   player.add(localHeadMesh);
 
   await refreshPresence();
-  await reportDiagnostics("runtime_booted");
   syncAccumulator = 0;
   presenceAccumulator = 0;
   diagnosticsAccumulator = 0;
   runtimeBootReady = !sessionControlBlocked;
+  reportRuntimeBootDiagnostics(reportDiagnostics);
 }
 
 const sessionUpgradeUi = mountSessionUpgradeUi({
@@ -8037,6 +8033,7 @@ meetingNavigation = createMeetingNavigationRuntime({
     documentSelected: Boolean(selectedDocument()), documentDisplayable: ["pdf", "image", "video"].includes(selectedDocument()?.metadata?.kind ?? ""),
     canManagePeople: canManageHostControls(), participantSelected: Boolean(hostParticipantSelect.value),
     selectedSurfaceId: selectedMediaSurfaceId, localParticipantId: participantId,
+    toolReasons: meetingToolReasons(),
     physicalSurfaceIds: new Set([...mediaSurfaceViews].filter(([, surface]) => surface.object.visible).map(([id]) => id)),
     surfaces: roomMediaObjects?.surfaces ?? null, objects: roomMediaObjects?.objects ?? {}
   })

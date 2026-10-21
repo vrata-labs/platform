@@ -99,6 +99,7 @@ export interface StopMediaObjectInput {
   commandId: string;
   surfaceId: string;
   objectId: string;
+  expectedRevision?: unknown;
 }
 
 export interface PatchMediaObjectInput {
@@ -1425,6 +1426,12 @@ export function stopMediaObject(state: RoomState, participantId: string, input: 
   }
   if (object.surfaceId !== input.surfaceId || surface.activeObjectId !== input.objectId) {
     return rejectMediaObjectCommand(state, { commandId: input.commandId, role: access.role, permission, blockedReason: "object-surface-mismatch", surfaceId: input.surfaceId, objectId: input.objectId, objectType: object.type, revision: object.revision });
+  }
+
+  if (input.expectedRevision !== undefined && (!Number.isSafeInteger(input.expectedRevision)
+    || input.expectedRevision !== object.revision)) {
+    return rejectMediaObjectCommand(state, { commandId: input.commandId, role: access.role, permission, blockedReason: "revision-mismatch",
+      surfaceId: input.surfaceId, objectId: input.objectId, objectType: object.type, revision: object.revision });
   }
 
   const nextObjects = { ...mediaObjects.objects };

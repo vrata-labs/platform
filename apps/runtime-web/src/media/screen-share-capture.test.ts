@@ -43,6 +43,7 @@ function captureHarness(t: TestContext) {
   };
   replaceProperty(t, globalThis, "navigator", { mediaDevices });
   const publications: Array<{ track: MediaStreamTrack; options: PublishOptions | undefined }> = [];
+  const unpublished: MediaStreamTrack[] = [];
   const behavior = {
     publish: async (value: MediaStreamTrack): Promise<Publication> => ({ trackSid: `published-${value.id}` })
   };
@@ -52,12 +53,13 @@ function captureHarness(t: TestContext) {
       events.push(`publish:${value.id}`);
       publications.push({ track: value, options });
       return behavior.publish(value);
-    }
+    },
+    async unpublishTrack(track: MediaStreamTrack) { unpublished.push(track); }
   };
   const room = { localParticipant } as unknown as Room;
   return {
     events, stopped, track, video, audio, videoTracks, audioTracks, stream,
-    captures, mediaDevices, publications, behavior, room,
+    captures, mediaDevices, publications, unpublished, behavior, room,
     capture: (mediaAudioEnabled = false, objectId = "screen-1") =>
       captureAndPublishScreenShareStream(room, { mediaAudioEnabled, objectId })
   };
@@ -198,6 +200,7 @@ for (const kind of ["video", "audio"] as const) {
     assert.deepEqual(h.stopped, [...h.videoTracks, ...h.audioTracks].map((track) => track.id));
     assert.equal(h.publications.length, kind === "video" ? 1 : 2);
     assert.equal(h.events.includes("audio-tracks"), kind === "audio");
+    assert.deepEqual(h.unpublished, kind === "audio" ? [h.video, h.audio] : [h.video]);
   });
 }
 

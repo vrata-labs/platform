@@ -4,6 +4,7 @@ import { getRoomPermissions, type MediaSurface, type RoomTemplateSurface } from 
 import { MEETING_ACTIONS, meetingActionReason, type MeetingAvailabilityContext } from "./meeting-availability.js";
 import { buildMeetingPeople } from "./meeting-people.js";
 import { resolveMeetingSurfaceTarget } from "./meeting-surface-target.js";
+import { meetingToolMessage } from "./meeting-tool-ui.js";
 
 const surface = (surfaceId: string, allowedObjectTypes = ["whiteboard", "screen-share", "pdf-presentation"]): MediaSurface => ({
   surfaceId, roomId: "room", label: `Label ${surfaceId}`, widthPx: 1920, heightPx: 1080, inputEnabled: true,
@@ -53,6 +54,15 @@ test("surface explanations use real readiness, allowed types, locks and occupanc
   assert.match(meetingActionReason("start-whiteboard", disabled, state)!, /surface is in use/);
   assert.equal(state.surfaces.screen.activeObjectId, "existing");
   state.surfaces.screen.activeObjectId = null; assert.match(meetingActionReason("draw-whiteboard", disabled, state)!, /No whiteboard is open/);
+});
+
+test("tool planner explains replacement blocks for its own target without overriding access or enabled controls", () => {
+  const state = context(); state.toolReasons = { "start-share": meetingToolMessage("replacement-unavailable-xr"),
+    "start-whiteboard": meetingToolMessage("replacement-unsupported") };
+  assert.match(meetingActionReason("start-share", disabled, state)!, /Leave VR/);
+  assert.match(meetingActionReason("start-whiteboard", disabled, state)!, /newer room server/);
+  assert.equal(meetingActionReason("start-share", { disabled: false, hidden: false }, state), null);
+  state.permissions = getRoomPermissions("guest"); assert.match(meetingActionReason("start-share", disabled, state)!, /Host or Presenter/);
 });
 
 test("documents and participant controls explain missing selection and do not mistake personal Owner for an ordinary Member", () => {

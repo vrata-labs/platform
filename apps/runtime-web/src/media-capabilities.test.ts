@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { detectBrowserMediaCapabilities, formatUnsupportedMediaCapabilities } from "./media-capabilities.js";
+import { detectBrowserMediaCapabilities, formatUnsupportedMediaCapabilities, recordDisplayCaptureUnsupported } from "./media-capabilities.js";
 
 test("detectBrowserMediaCapabilities accepts full WebRTC capture support", () => {
   const capabilities = detectBrowserMediaCapabilities({
@@ -49,4 +49,17 @@ test("detectBrowserMediaCapabilities reports insecure contexts before capture AP
 
   assert.equal(capabilities.audioInput.reason, "insecure_context");
   assert.equal(capabilities.screenShare.reason, "insecure_context");
+});
+
+test("an observed unsupported capture stays unavailable without disabling audio or inventing a missing API", () => {
+  const capabilities = detectBrowserMediaCapabilities({ isSecureContext: true,
+    mediaDevices: { getDisplayMedia() {}, getUserMedia() {}, enumerateDevices() {} }, rtcPeerConnection() {} });
+  const audio = capabilities.audioInput;
+  recordDisplayCaptureUnsupported(capabilities);
+  assert.deepEqual(capabilities.screenShare, { supported: false, reason: "display_capture_unsupported" });
+  assert.equal(capabilities.getDisplayMedia, true); assert.equal(capabilities.audioInput, audio); assert.equal(audio.supported, true);
+  recordDisplayCaptureUnsupported(capabilities);
+  assert.match(formatUnsupportedMediaCapabilities(capabilities), /screen capture unavailable in this browser environment/);
+  const insecure = detectBrowserMediaCapabilities({ isSecureContext: false });
+  recordDisplayCaptureUnsupported(insecure); assert.equal(insecure.screenShare.reason, "insecure_context");
 });

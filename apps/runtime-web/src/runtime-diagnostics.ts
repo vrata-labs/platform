@@ -28,6 +28,12 @@ export interface RuntimeDiagnosticsContext {
   setStatus(message: string): void;
 }
 
+/** Startup telemetry is observational: neither stats collection nor its HTTP
+ * response may gate room readiness, presence heartbeats or avatar publishing. */
+export function reportRuntimeBootDiagnostics(report: (note: string) => Promise<void>): void {
+  void Promise.resolve().then(() => report("runtime_booted")).catch(() => undefined);
+}
+
 export function createRuntimeDiagnostics(context: RuntimeDiagnosticsContext) {
   const {
     apiBaseUrl, roomId, debugEnabled, camera, renderer,

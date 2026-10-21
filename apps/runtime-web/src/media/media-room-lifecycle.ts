@@ -160,11 +160,12 @@ export function planMediaRoomIdleAction(input: {
   audioSessionJoined: boolean;
   hasPhysicalConsumer: boolean;
   passiveMediaRequired: boolean;
+  pendingPublication?: boolean;
 }): MediaRoomIdleAction {
   if (!input.roomIsCurrent) {
     return "ignore-stale-room";
   }
-  return input.passiveMediaRequired || input.audioSessionJoined || input.hasPhysicalConsumer
+  return input.passiveMediaRequired || input.audioSessionJoined || input.hasPhysicalConsumer || input.pendingPublication
     ? "keep-room"
     : "schedule-disconnect";
 }

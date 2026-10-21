@@ -1,6 +1,6 @@
-import { expect, type APIRequestContext, type Browser, type BrowserContext, type Page } from "@playwright/test";
+import { expect, type APIRequestContext, type Browser, type BrowserContext, type Page, type Request as BrowserRequest, type Response as BrowserResponse } from "@playwright/test";
 import { PDFDocument, rgb } from "pdf-lib";
-import { chooseMeetingPanel } from "./meeting-tools-acceptance";
+import { chooseMeetingPanel, meetingRequest, installMeetingPerformanceObservation, readMeetingPerformance } from "./meeting-tools-acceptance";
 import { installFunctionalFrameBudget } from "./functional-frame-budget";
 
 export interface MeetingPresenter {
@@ -15,6 +15,7 @@ type Hooks = {
   prepareActor?: (page: Page, origin: string) => Promise<void>;
   presenting?: (actor: MeetingPresenter, index: number, roomId: string, guest: MeetingPresenter) => Promise<void>;
   revoked?: (actor: MeetingPresenter, index: number, roomId: string, guest: MeetingPresenter) => Promise<void>;
+  failed?: (phase: string, roomId: string) => Promise<void>;
 };
 
 /** Shared local/published check: real invitations, onboarding, host controls and
@@ -37,6 +38,7 @@ export async function presenterMeetingScenario(input: Input, hooks: Hooks = {}) 
       deviceScaleFactor: 0.4, hasTouch: role === "guest", isMobile: role === "guest" });
     contexts.push(context); const page = await context.newPage();
     await installFunctionalFrameBudget(page);
+    await installMeetingPerformanceObservation(page);
     await hooks.prepareActor?.(page, input.origin);
     let renewalAt = 0, prematureAdmissions = 0;
     page.on("request", request => { if (new URL(request.url()).pathname === "/api/tokens/state" && renewalAt > 0 && Date.now() < renewalAt) prematureAdmissions++; });
@@ -65,13 +67,39 @@ export async function presenterMeetingScenario(input: Input, hooks: Hooks = {}) 
     void observed.catch(() => undefined); return observed;
   };
   async function showPage(guest: MeetingPresenter, documentId: string, page: number) {
-    await expect.poll(() => guest.page.evaluate(({ documentId, page }) => {
-      const debug = (window as any).__VRATA_DEBUG__;
-      return debug?.pdfPresentation?.documentId === documentId && debug.pdfPresentation.page === page && debug.pdfPresentation.renderState === "ready";
-    }, { documentId, page }), { timeout: 45_000 }).toBe(true);
+    try {
+      await expect.poll(() => guest.page.evaluate(({ documentId, page }) => {
+        const debug = (window as any).__VRATA_DEBUG__;
+        return debug?.pdfPresentation?.documentId === documentId && debug.pdfPresentation.page === page && debug.pdfPresentation.renderState === "ready";
+      }, { documentId, page }), { timeout: 45_000 }).toBe(true);
+    } catch (error) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const client = guest.page.evaluate(expected => {
+        const debug = (window as any).__VRATA_DEBUG__, pdf = debug?.pdfPresentation;
+        const surface = debug?.mediaObjects?.surfaces?.find((surface: any) => surface.surfaceId === "debug-main");
+        const object = debug?.mediaObjects?.objects?.find((object: any) => object.objectId === surface?.activeObjectId);
+        const code = String(pdf?.errorCode ?? "");
+        return { scene: debug?.sceneBundleState, connected: debug?.roomStateConnected, pdfActive: pdf?.active,
+          documentMatches: pdf?.documentId === expected, page: pdf?.page, pageCount: pdf?.pageCount,
+          renderState: ["idle","loading","ready","failed","error"].includes(pdf?.renderState) ? pdf.renderState : "other",
+          hasError: Boolean(code), forbidden: /403|forbidden|denied/.test(code), notActive: /404|not_active|not_found/.test(code),
+          surfaceExists: Boolean(surface), objectIsPdf: object?.type === "pdf-presentation", objectDocumentMatches: object?.state?.documentId === expected };
+      }, documentId).catch(() => ({ unavailable: true }));
+      const server = meetingRequest(() => input.request.get(`${input.origin}${path}/documents/${documentId}/presentation`, {
+        headers: { authorization: `Bearer ${guest.issued.token}` }, timeout: 5000
+      })).then(async response => {
+        const result = { status: response.status(), bytes: Number(response.headers()["content-length"] ?? 0) }; await response.dispose(); return result;
+      }, () => ({ unavailable: true }));
+      try {
+        const facts = await Promise.all([Promise.race([client, new Promise(resolve => { timer = setTimeout(() => resolve({ unavailable: true }), 5000); })]), server, readMeetingPerformance(guest.page)]);
+        console.warn("presenter_pdf_not_ready", JSON.stringify({ requestedPage: page, client: facts[0], serverWithInitialProof: facts[1], performance: facts[2],
+          initialProofExpired: Date.now() >= guest.admittedAt+guest.issued.expiresInSeconds*1000 }));
+      } finally { if (timer) clearTimeout(timer); }
+      throw error;
+    }
   }
   let phase = "onboarding", failed = false;
-  const rejoinedViews: Array<{ status: number; role?: string; access?: string; presenterSelf: boolean; reason?: string; ttl?: number }> = [];
+  const rejoinedViews: Array<{ seconds: number; status: number; role?: string; access?: string; presenterSelf: boolean; reason?: string; ttl?: number }> = [];
   let rejoinedActor: MeetingPresenter | undefined, rejoinedToken: string | undefined;
   const startedAt = Date.now();
   const phases: Array<{ phase: string; seconds: number }> = [];
@@ -167,7 +195,7 @@ export async function presenterMeetingScenario(input: Input, hooks: Hooks = {}) 
       if (new URL(response.url()).pathname !== `${path}/session-control`) return;
       const view = await response.json().catch(() => ({}));
       const role = (value: unknown) => ["guest", "member", "presenter", "host", "admin"].includes(String(value)) ? String(value) : undefined;
-      rejoinedViews.push({ status: response.status(), role: role(view.participant?.role), access: role(view.access?.role), presenterSelf: view.state?.presenterParticipantId === first.participantId,
+      rejoinedViews.push({ seconds: Math.round((Date.now() - startedAt) / 1000), status: response.status(), role: role(view.participant?.role), access: role(view.access?.role), presenterSelf: view.state?.presenterParticipantId === first.participantId,
         reason: ["expired_token", "participant_removed", "identity_recovery_required"].includes(view.reason ?? view.participant?.reason) ? view.reason ?? view.participant.reason : undefined,
         ttl: Number.isSafeInteger(view.expiresInSeconds) ? view.expiresInSeconds : undefined });
       if (rejoinedViews.length > 12) rejoinedViews.shift();
@@ -185,18 +213,60 @@ export async function presenterMeetingScenario(input: Input, hooks: Hooks = {}) 
     mark("reloaded-scene-ready");
     await first.page.waitForFunction(() => (window as any).__VRATA_DEBUG__?.sceneBundleState === "loaded", null, { timeout: 90_000, polling: 100 });
     await first.page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+    mark("reloaded-api-presence-ready");
+    await expect.poll(async () => {
+      const response = await meetingRequest(() => input.request.get(`${input.origin}${path}/presence`, { headers, timeout: 5000 }));
+      expect(response.status()).toBe(200);
+      return (await response.json()).items.some((person: { participantId: string }) => person.participantId === first.participantId);
+    }, { timeout: 45_000 }).toBe(true);
     mark("regrant-after-reconnect");
     await host.page.locator("#host-participant-select").selectOption(first.participantId);
     await expect(host.page.locator("#grant-presenter")).toBeEnabled({ timeout: 10_000 });
-    const regranted = host.page.waitForResponse(response => response.request().method() === "POST" && new URL(response.url()).pathname === `${path}/presenters/${encodeURIComponent(first.participantId)}/grant`);
+    const regrantPath = `${path}/presenters/${encodeURIComponent(first.participantId)}/grant`;
+    const regrantEvents: Array<{ event: string; seconds: number; status?: number }> = [];
+    const observeRegrant = (event: string, status?: number) => regrantEvents.push({ event, seconds: Math.round((Date.now() - startedAt) / 1000), ...(status === undefined ? {} : { status }) });
+    const onRegrantRequest = (request: BrowserRequest) => {
+      const requestedPath = new URL(request.url()).pathname;
+      if (request.method() === "POST" && requestedPath.startsWith(`${path}/presenters/`) && requestedPath.endsWith("/grant")) {
+        observeRegrant(requestedPath === regrantPath ? "request-target" : "request-other-target");
+      }
+    };
+    host.page.on("request", onRegrantRequest);
+    const regranted = host.page.waitForResponse(response => response.request().method() === "POST" && new URL(response.url()).pathname === regrantPath, { timeout: 30_000 });
     void regranted.catch(() => undefined);
     const promotedView = nextSelfView(first, "presenter");
-    await host.page.locator("#grant-presenter").click();
-    const regrantResponse = await regranted;
+    let regrantResponse: BrowserResponse;
+    try {
+      observeRegrant("click-start"); await host.page.locator("#grant-presenter").click({ timeout: 15_000 }); observeRegrant("click-finished");
+      regrantResponse = await regranted; observeRegrant("response", regrantResponse.status());
+      console.info("presenter_regrant_transport", JSON.stringify({ events: regrantEvents }));
+    } catch (error) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const facts = host.page.evaluate(expectedParticipant => {
+        const debug = (window as any).__VRATA_DEBUG__, button = document.querySelector<HTMLButtonElement>("#grant-presenter");
+        return { visibility: document.visibilityState, focused: document.hasFocus(), role: debug?.access?.role, connected: debug?.roomStateConnected,
+          scene: debug?.sceneBundleState, issue: debug?.issueCode,
+          grantDisabled: button?.disabled, grantVisible: Boolean(button?.getClientRects().length),
+          selectedMatches: (document.querySelector<HTMLSelectElement>("#host-participant-select")?.value ?? "") === expectedParticipant,
+          hostVisible: debug?.hostControls?.visible, ended: debug?.hostControls?.ended,
+          dialogs: [...document.querySelectorAll<HTMLDialogElement>("dialog[open]")].map(dialog => dialog.id) };
+      }, first.participantId).catch(() => ({ unavailable: true }));
+      try {
+        const hostFacts = await Promise.race([facts, new Promise(resolve => { timer = setTimeout(() => resolve({ unavailable: true }), 5000); })]);
+        console.warn("presenter_regrant_transport_failed", JSON.stringify({ events: regrantEvents, host: hostFacts }));
+      } finally { if (timer) clearTimeout(timer); }
+      throw error;
+    } finally { host.page.off("request", onRegrantRequest); }
     if (regrantResponse.status() !== 200) {
-      const reply = await regrantResponse.json().catch(() => ({}));
-      console.warn("presenter_regrant_denied", JSON.stringify({ status: regrantResponse.status(),
-        reason: ["participant_not_found", "permission_denied", "authority_conflict", "room_state_changed"].includes(reply.reason ?? reply.error) ? reply.reason ?? reply.error : "other" }));
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const body = await Promise.race([regrantResponse.json().then(reply => ({ state: "ok", reply }), () => ({ state: "failed", reply: {} })),
+          new Promise<{ state: string; reply: Record<string, unknown> }>(resolve => { timer = setTimeout(() => resolve({ state: "timeout", reply: {} }), 5000); })]);
+        const reason = body.reply.reason ?? body.reply.error;
+        console.warn("presenter_regrant_denied", JSON.stringify({ seconds: Math.round((Date.now() - startedAt) / 1000),
+          status: regrantResponse.status(), bodyRead: body.state,
+          reason: ["participant_not_found", "room_not_found", "host_controls_disabled", "permission_denied", "authority_conflict", "room_state_changed", "identity_required", "identity_session_expired", "identity_recovery_required"].includes(reason) ? reason : "other" }));
+      } finally { if (timer) clearTimeout(timer); }
     }
     expect(regrantResponse.status()).toBe(200);
     try { await promotedView; await expectRole(first, "presenter"); }
@@ -237,6 +307,7 @@ export async function presenterMeetingScenario(input: Input, hooks: Hooks = {}) 
     expect((await deniedAfterRemove.json()).reason).toBe(removedReason);
   } catch (error) {
     failed = true;
+    await hooks.failed?.(phase, roomId).catch(() => undefined);
     let rejoinedState: unknown;
     if (rejoinedActor && rejoinedToken) {
       try {

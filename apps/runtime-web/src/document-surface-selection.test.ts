@@ -11,7 +11,7 @@ test("document actions construction does not read live bindings or perform opera
     Object.defineProperty(h.context, name, { get() { throw new Error(`early read: ${name}`); } });
   }
   const actions = createDocumentSurfaceActions(h.context);
-  assert.equal(Object.keys(actions).length, 9);
+  assert.equal(Object.keys(actions).length, 11);
   assert.deepEqual(h.events, []);
 });
 
@@ -203,4 +203,51 @@ test("selection deliberately retains the pre-existing absence of a busy guard", 
   await h.actions.selectDocumentForSurface();
   assert.equal(h.calls("createPdfPresentationObjectOnSurface").length, 1);
   assert.equal(h.context.presentationActionInFlight, false);
+});
+
+test("pinned selection keeps the target across creation, linking and UI selection changes", async () => {
+  const h = createHarness(); const create = deferred<SurfaceCommandResult>(); const link = deferred<RuntimeDocumentRecord>();
+  h.hooks.commands.createPdfPresentationObjectOnSurface = () => create.promise; h.hooks.link = () => link.promise;
+  const pending = h.actions.selectDocumentForSurfaceAt({ surfaceId: "pinned-main", documentId: "selected", assertActive() {} });
+  h.context.selectedMediaSurfaceId = "changed-wall"; create.resolve(accepted({ objectId: "owned", revision: 2 }));
+  await Promise.resolve(); assert.equal(h.calls("link")[0]![3], "pinned-main");
+  h.context.selectedMediaSurfaceId = "another-surface"; link.resolve({ ...makeDocument("pdf"), linkedSurfaceId: "pinned-main" });
+  assert.equal(await pending, true);
+  assert.deepEqual(h.calls("patchPdfPresentationObject")[0]!.slice(0, 3), ["owned", "pinned-main", 2]);
+  assert.equal(h.context.selectedMediaSurfaceId, "another-surface");
+});
+
+for (const boundary of ["create", "link"] as const) {
+  test(`pinned selection compensates a late ${boundary} ACK after generation invalidation`, async t => {
+    t.mock.method(console, "warn", () => undefined);
+    const h = createHarness(); let active = true;
+    if (boundary === "create") h.hooks.commands.createPdfPresentationObjectOnSurface = async () => { active = false; return accepted({ objectId: "owned" }); };
+    if (boundary === "link") h.hooks.link = async () => { active = false; return { ...makeDocument("pdf"), linkedSurfaceId: "pinned-main" }; };
+    assert.equal(await h.actions.selectDocumentForSurfaceAt({ surfaceId: "pinned-main", documentId: "selected", assertActive() { if (!active) throw new Error("stale-generation"); } }), false);
+    assert.deepEqual(h.calls("stopPdfPresentationObject"), [[boundary === "create" ? "owned" : "created", "pinned-main"]]);
+    assert.equal(h.calls("patchPdfPresentationObject").length, 0);
+    assert.equal(h.context.presentationActionInFlight, false);
+    if (boundary !== "create") assert.equal(h.calls("link").at(-1)![3], null);
+  });
+}
+
+test("pinned document is read from the catalog, not a changed UI selection", async () => {
+  const h = createHarness(); h.state.selected = makeDocument("pdf", "different");
+  assert.equal(await h.actions.selectDocumentForSurfaceAt({ surfaceId: "pinned-main", documentId: "selected", checksum: "checksum-selected", assertActive() {} }), true);
+  assert.equal(h.calls("link")[0]![2], "selected");
+});
+
+for (const reused of [false, true]) test(`accepted document patch commits metadata despite a late context change: reused=${reused}`, async () => {
+  const h = createHarness(); if (reused) { h.setObject("pdf"); h.state.occupied = h.state.pdf; }
+  let active = true; h.hooks.commands.patchPdfPresentationObject = async () => { active = false; h.state.selected = makeDocument("pdf", "different"); return accepted(); };
+  assert.equal(await h.actions.selectDocumentForSurfaceAt({ surfaceId: "pinned-main", documentId: "selected", assertActive() { if (!active) throw new Error("stale"); } }), true);
+  assert.equal(h.calls("link").length, 1); assert.equal(h.calls("stopPdfPresentationObject").length, 0);
+  assert.equal(h.context.roomDocuments[0].linkedSurfaceId, "pinned-main");
+});
+
+for (const kind of kinds) test(`replacement unlinks the stopped ${kind} document through its existing metadata owner`, async () => {
+  const h = createHarness(kind); const object = makeObject(kind, "selected");
+  await h.actions.unlinkStoppedDocument(object);
+  assert.deepEqual(h.calls("link").map(args => args.slice(2, 4)), [["selected", null]]);
+  assert.equal(h.context.roomDocuments[0].linkedSurfaceId, null);
 });

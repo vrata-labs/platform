@@ -3513,6 +3513,18 @@ test("fault-injected mic denied keeps room usable without audio", async ({ page,
 });
 
 test("fault-injected media network block explains WebRTC can fail while scene loads", async ({ page, request }) => {
+  await page.addInitScript(() => {
+    const capture = { calls: 0, activated: false, stream: null as MediaStream | null };
+    (window as any).__faultNetworkCapture = capture;
+    // Control only OS selection: the real action must capture before reaching
+    // the intentionally broken media connection, even on headless Chromium.
+    Object.defineProperty(navigator.mediaDevices, "getDisplayMedia", { configurable: true, value: async () => {
+      capture.calls++; capture.activated = navigator.userActivation.isActive;
+      const canvas = document.createElement("canvas"); canvas.width = 160; canvas.height = 90;
+      canvas.getContext("2d")!.fillRect(0, 0, 160, 90);
+      capture.stream = canvas.captureStream(1); return capture.stream;
+    } });
+  });
   await page.goto("/rooms/demo-room?role=host&failaudio=connection_failed&debug=1");
   await page.waitForTimeout(2500);
   await page.click("#start-share");
@@ -3526,6 +3538,11 @@ test("fault-injected media network block explains WebRTC can fail while scene lo
   expect(debug?.degradedMode).toBe("media_transport_unavailable");
   expect(debug?.screenShareState).toBe("media_network_blocked");
   expect(debug?.statusLine).toContain("scene can load");
+  expect(await page.evaluate(() => {
+    const capture = (window as any).__faultNetworkCapture;
+    return { calls: capture.calls, activated: capture.activated,
+      stopped: capture.stream.getTracks().every((track: MediaStreamTrack) => track.readyState === "ended") };
+  })).toEqual({ calls: 1, activated: true, stopped: true });
 
   const diagnostics = await readDiagnostics<{ items: Array<{ note?: string; issueCode?: string }> }>(request, "demo-room");
   expect(diagnostics.items.some((item) => item.note === "media_network_blocked" && item.issueCode === "media_network_blocked")).toBeTruthy();
