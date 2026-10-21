@@ -232,6 +232,17 @@ Native-хелпер после reload теперь проверяет факти
 - После suite все зафиксированные хеши и набор executable-source файлов совпали. Lint/typecheck/build/e2e types и все package-проверки подтверждены; ранее успешные production/package проверки переиспользованы только при совпадении production-хешей (runtime1367, room-state91, SDK64, API1743 passed/1 optional skip, tools312 passed/2 optional skips).
 - Локальная готовность не является staging-приёмкой: T14 checkboxes открыты до exact-SHA CI/Docker/обычного Staging Deploy и публичной проверки принятого release record. Все предыдущие отказы и ограничения оставлены в хронологии; физические устройства/четыре человека и оставшиеся этапы не закрываются.
 
+### Кандидат b82351c: отказ CI, без поставки на staging
+
+- Коммит b82351ca38514d60d407c16bd26acab293341aa7 отправлен. Docker Publish39636522615 успешно опубликовал и проверил образы; CI39636522565 прошёл lint/typecheck/build/package/rollback/asset gates, но полный E2E завершился247 passed/1 failed, skipped0/flaky0. M0.5 после отказа не запускался.
+- Единственный отказ — повторный desktop pointer click Start Board после Escape в normal-DPR dialog:15s, phase reconnect-request. До него прошли первый pointer click, warning/layout/48px/DPR1, цикл фокуса и проверка закрытия/возврата фокуса. Call log дошёл до performing click action; noWaitAfter уже включён. Global300s не исчерпан. Наблюдались RAF/long tasks1,8–1,9s, RTC statsStarted0/pending0. Точная внутренняя причина CDP/action timeout без trace не установлена.
+- Mobile dialog, оба v1/v2 orchestration, native getDisplayMedia, pinned UI/revoke и свежие микрофонные сигналы в этом CI прошли. Исходный desktop-тест отдельно повторён локально без изменения поведения и прошёл118,8s; этап повторного открытия занял14,0s вместе с соседними assertions, то есть запас относительно15s оказался мал. Это не считается устранением отказа CI или доказательством отсутствия дефекта.
+- Исходные CI log/report и normal-DPR изображения сохранены; изображения диалога просмотрены. Failed candidate не развёрнут. Authoritative accepted record по read-only preflight остаётся a75761fd73b3503c189ebd69197edf611b6ecba8; T14 не принят.
+
+Дополнительное чтение исходного failure-JSON: dialogs содержит meeting-replace-dialog, boardDisabled=false, scene=loaded, connected=true, role=host, stopCapabilityMissing=false. Повторный запрос уже открыл диалог; timeout операции ввода не означает, что приложение его проигнорировало. Первый pointer-этап в CI занял23,9s против18,4s в зелёном полном local на том же SHA; цикл клавиш25,7s против17,2s. Хосты различаются, поэтому сравнение не устанавливает продуктовую performance-регрессию и не отменяет открытый performance/device gate.
+
+Узкая правка теста сохраняет первый pointer path и повторный mobile pointer; только второе desktop-открытие выполняется реальным Enter на проверенном восстановленном фокусе, внутри прежнего15s предела. Далее отдельно проверяются открытый диалог, фокус Cancel и reconnect cancellation. Runtime/viewport/DPR/renderer/RAF и остальные лимиты не изменены; новый pointer request по-прежнему покрыт общими v1/v2 сценариями. Это сокращает последовательные обращения к renderer до ввода, а не объявляет исправленной первопричину задержки. Первая пара focused после этой правки прошла113,4/68,0s; повтор на окончательном тесте с дополнительной проверкой фокуса Cancel —112,1/69,0s, e2e types и diff-check прошли. Итоговый полный local/CI/staging предстоят. Политика CI в этой правке не меняется.
+
 ## T01 — объединённый baseline
 
 - Ветка реализации: `feat/working-meeting-room-plugins`, отдельный worktree.
@@ -2146,3 +2157,5 @@ Attempt 1: **47/48**; второй audio client остался в `joining` по
 Attempt 2 — один повтор **того же SHA**, без изменения кода, таймаутов и assertions: весь gate прошёл; rollback не запускался. Причина первого media join зависания не установлена. Успешный повтор не считается исправлением этой нестабильности: при её повторении нужны отдельные данные о стадиях token/connect/audio-device setup и bounded failure/recovery. Этот вопрос остаётся в проверках устойчивости встречи T17.
 
 Реальные Android/Quest и четыре человека с микрофонами в этом срезе не проверялись. Synthetic audio source с настоящим LiveKit transport не закрывает WM-11/WM-12 manual acceptance.
+
+Повторный финальный local после узкой правки теста:248/248 за73.0min, skipped0/unexpected0/flaky0, без retries. После suite совпали все source-хеши и набор файлов. Неизменность production-кода подтверждена перед переиспользованием package/build/lint/typecheck; e2e types повторены. Это не staging acceptance; exact-SHA CI/Docker/deploy ещё обязательны.

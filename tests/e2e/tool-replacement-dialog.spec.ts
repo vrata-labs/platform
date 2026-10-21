@@ -60,8 +60,17 @@ for (const staging of [false, true]) for (const mobile of [false, true]) test(`$
     await expect.poll(() => page!.evaluate(() => ({ closed: !document.querySelector<HTMLDialogElement>("#meeting-replace-dialog")!.open,
       focusRestored: document.activeElement?.id === "start-whiteboard" }))).toEqual({ closed: true, focusRestored: true });
     mark("reconnect-request"); await expect(page.locator("#start-whiteboard")).toBeEnabled();
-    await page.locator("#start-whiteboard").click({ timeout: 15_000, noWaitAfter: true });
+    if (mobile) await page.locator("#start-whiteboard").click({ timeout: 15_000, noWaitAfter: true });
+    else {
+      // The first opening covers the pointer path; reopen from the restored
+      // focus with real keyboard input before exercising reconnect cancellation.
+      await test.step("reopen from restored keyboard focus", async () => {
+        await expect(page.locator("#start-whiteboard")).toBeFocused();
+        await page.keyboard.press("Enter");
+      }, { timeout: 15_000 });
+    }
     await expect(dialog).toBeVisible();
+    await expect(page.locator("#meeting-replace-cancel")).toBeFocused();
     expect(new URL(page.url()).pathname === `/rooms/${roomId}`).toBe(true);
     mark("force-reconnect"); await test.step("close the owned room-state socket", () => page!.evaluate(() => (window as any).__VRATA_TEST__.forceRoomStateReconnect()), { timeout: 10_000 });
     mark("reconnect-assertions");
