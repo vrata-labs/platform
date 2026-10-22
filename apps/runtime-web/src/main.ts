@@ -53,6 +53,7 @@ import { RoomPluginAuthorSession } from "./plugins/author-session.js";
 import { createRoomPluginAuthorPanel } from "./plugins/author-panel.js";
 import { RoomPluginSeatAdapter } from "./plugins/seat-adapter.js";
 import { createRoomPluginSeatOptOut } from "./plugins/seat-opt-out.js";
+import { planStandUp } from "./seating/stand-up.js";
 import { createMediaSourceUpgrade, permitsScreenShare } from "./media/media-source-upgrade.js";
 import { createMediaActionBarrier } from "./media/media-action-barrier.js";
 import { planBaseMedia } from "./media/media-token-error.js";
@@ -742,6 +743,9 @@ let forcedTestSeatId: string | null = null;
 let sceneTeleportFloorY = 0;
 let sceneSeatAnchors: SceneBundleSeatAnchor[] = [];
 let sceneSeatAnchorMap = createSeatAnchorReadModel([]).anchorMap;
+// The scene's entry point is the safe place to stand after leaving a seat.
+let sceneEntryPoint: { x: number; y: number; z: number } | null = null;
+const standUpButton = document.querySelector<HTMLButtonElement>("#stand-up")!;
 let sceneAnchorsReady = true;
 let roomSeatOccupancy: Record<string, string> = {};
 let roomMediaObjects: RoomMediaObjectsState | null = null;
@@ -1635,6 +1639,7 @@ function syncSeatDebugState(): void {
   const snapshot = seatingController.getSnapshot();
   debugState.currentSeatId = snapshot.currentSeatId;
   debugState.pendingSeatId = snapshot.pendingSeatId;
+  standUpButton.hidden = !snapshot.currentSeatId;
 }
 
 function applySceneDebugFit(bounds: NonNullable<typeof debugState.sceneDebug.boundingBox>): void {
@@ -2307,6 +2312,14 @@ function setPlayerPositionForFloorTeleport(floorPoint: Vector3Like): void {
   });
 }
 
+standUpButton.addEventListener("click", () => {
+  const commands = planStandUp({ seatId: getCurrentSeatId(), exit: sceneEntryPoint });
+  if (!commands.length) return;
+  // An explicit stand is also this tab's refusal of automatic seating after a reload.
+  roomPluginSeatOptOut.set(true);
+  forcedTestSeatId = null;
+  executeRuntimeCommandList(commands);
+});
 const roomPluginSeatOptOut = createRoomPluginSeatOptOut((() => { try { return sessionStorage; } catch { return null; } })(), roomId);
 // Single arrival grant of this page session. Plugins only ask; the server decides and the frame pipeline seats.
 const roomPluginSeats = new RoomPluginSeatAdapter({
@@ -4234,6 +4247,7 @@ const roomPluginRuntime = new RoomPluginController({ apiBaseUrl, roomId,
   seating: {
     supported: () => seatCommandCorrelationSupported,
     ready: () => runtimeBootReady && sceneAnchorsReady && roomStateOccupancySeen,
+    activate: () => roomPluginSeats.activate(),
     snapshot: (owner, seating) => roomPluginSeats.snapshot(owner, seating),
     port: owner => ({ claim: seatId => roomPluginSeats.claim(seatId, owner), cancel: () => roomPluginSeats.cancelOwn(owner) }),
     retire: owner => roomPluginSeats.retire(owner)
@@ -7942,6 +7956,7 @@ async function main(): Promise<void> {
       applyCleanSceneMode,
       applySceneDebugFit,
       applySpawnPoint(spawnPoint) {
+        sceneEntryPoint = { ...spawnPoint.position };
         applySceneSpawnPoint(localPoseController, spawnPoint);
         updateLocalPositionDebug();
       },

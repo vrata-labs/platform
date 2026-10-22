@@ -1,6 +1,8 @@
 import type { RoomPluginBrokerErrorCode, RoomPluginRoomSnapshot, RoomPluginSeatClaimResult } from "@vrata/room-plugin-sdk";
 
-export const ROOM_PLUGIN_ARRIVAL = Object.freeze({ windowMs: 5000, candidates: 8, claimResponseMs: 3000, maxSeats: 64 });
+/** windowMs runs from the first room.ready delivered to a seating-capable instance; that delivery
+ * must happen within entryMs of platform readiness, so a later-enabled behavior never seats people already present. */
+export const ROOM_PLUGIN_ARRIVAL = Object.freeze({ windowMs: 5000, entryMs: 20_000, candidates: 8, claimResponseMs: 3000, maxSeats: 64 });
 
 /** Platform-owned seating facts, already authoritative or verified by the core. */
 export interface RoomPluginSeatWorld {
@@ -28,7 +30,7 @@ export interface RoomPluginSeatPorts {
   random?(): string;
 }
 export type RoomPluginSeatOutcome = { result: RoomPluginSeatClaimResult } | { error: RoomPluginBrokerErrorCode };
-type Grant = "waiting" | "open" | "used" | "closed";
+type Grant = "waiting" | "armed" | "open" | "used" | "closed";
 
 function randomAlias(): string {
   const bytes = new Uint8Array(9); globalThis.crypto.getRandomValues(bytes);
@@ -39,6 +41,7 @@ function randomAlias(): string {
  * Plugins only ask; the server decides occupancy and the frame pipeline applies pose. */
 export class RoomPluginSeatAdapter {
   private grant: Grant = "waiting";
+  private readyAtMs = 0;
   private openedAtMs = 0;
   private candidates = 0;
   private sequence = 0;
@@ -57,20 +60,26 @@ export class RoomPluginSeatAdapter {
   diagnostics() {
     this.observe();
     const world = this.ports.world();
-    return { grant: this.grant, openedAtMs: this.grant === "waiting" ? null : this.openedAtMs, candidates: this.candidates, inFlight: Boolean(this.inFlight),
+    return { grant: this.grant, openedAtMs: this.grant === "open" || this.grant === "used" ? this.openedAtMs : null, candidates: this.candidates, inFlight: Boolean(this.inFlight),
       ready: world.ready, correlation: world.correlation, online: world.online };
   }
 
-  /** Re-evaluates the grant from platform facts. It opens at most once per page session. */
+  /** Re-evaluates the grant from platform facts. It is armed and opened at most once per page session. */
   observe(): void {
     const world = this.ports.world(), now = this.clock();
+    const blocked = () => !world.correlation || !world.online || world.xr || this.ports.optedOut() || Boolean(world.currentSeatId);
     if (this.grant === "waiting" && world.ready) {
-      const blocked = !world.correlation || !world.online || world.xr || this.ports.optedOut() || world.currentSeatId || world.pendingSeatId;
-      if (blocked) this.grant = "closed";
-      else { this.grant = "open"; this.openedAtMs = now; }
+      if (blocked() || world.pendingSeatId) this.grant = "closed";
+      else { this.grant = "armed"; this.readyAtMs = now; }
     }
-    if (this.grant === "open" && !this.inFlight && (now - this.openedAtMs >= ROOM_PLUGIN_ARRIVAL.windowMs || world.xr || !world.online
-      || this.ports.optedOut() || world.currentSeatId || this.candidates >= ROOM_PLUGIN_ARRIVAL.candidates)) this.grant = "closed";
+    if (this.grant === "armed" && (now - this.readyAtMs > ROOM_PLUGIN_ARRIVAL.entryMs || blocked() || world.pendingSeatId)) this.grant = "closed";
+    if (this.grant === "open" && !this.inFlight && (now - this.openedAtMs >= ROOM_PLUGIN_ARRIVAL.windowMs || blocked()
+      || this.candidates >= ROOM_PLUGIN_ARRIVAL.candidates)) this.grant = "closed";
+  }
+  /** A seating-capable instance is about to receive room.ready: its window starts now, if the entry is still fresh. */
+  activate(): void {
+    this.observe();
+    if (this.grant === "armed") { this.grant = "open"; this.openedAtMs = this.clock(); }
   }
   arrivalAllowed(): boolean { this.observe(); return this.grant === "open"; }
 
@@ -129,13 +138,13 @@ export class RoomPluginSeatAdapter {
   }
   /** Any manual seat, stand, teleport or movement intent vetoes the arrival grant for good. */
   manualIntent(): void {
-    if (this.grant === "waiting" || this.grant === "open") this.grant = "closed";
+    if (this.grant === "waiting" || this.grant === "armed" || this.grant === "open") this.grant = "closed";
     if (this.inFlight) this.finish(this.inFlight.commandId, { result: "cancelled" }, true);
   }
   /** Connection loss closes an open grant (no retries) but not one still waiting for readiness;
    * session end closes both. A pending claim is cancelled through the barrier. */
   stop(reason: "offline" | "closed" = "closed"): void {
-    if (this.grant === "open" || reason === "closed" && this.grant === "waiting") this.grant = "closed";
+    if (this.grant === "open" || this.grant === "armed" || reason === "closed" && this.grant === "waiting") this.grant = "closed";
     if (this.inFlight) this.finish(this.inFlight.commandId, { result: reason === "offline" ? "offline" : "cancelled" }, true);
   }
 

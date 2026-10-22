@@ -15,22 +15,27 @@ function harness(overrides: Partial<RoomPluginSeatWorld> = {}) {
   return { adapter, world, claims, cancels, advance(ms: number) { now += ms; }, optOut() { optedOut = true; } };
 }
 
-test("the arrival grant opens once after platform readiness and only for a standing, online, non-XR participant", async () => {
+test("the arrival grant arms at platform readiness, opens at the first seating room.ready and only for a standing, online, non-XR participant", async () => {
   const h = harness();
-  assert.equal(h.adapter.arrivalAllowed(), false);
+  h.adapter.activate(); assert.equal(h.adapter.arrivalAllowed(), false);
   assert.deepEqual(await h.adapter.claim("seat-a"), { error: "arrival-not-allowed" }, "no claim before readiness");
-  h.world.ready = true; assert.equal(h.adapter.arrivalAllowed(), true);
+  h.world.ready = true; assert.equal(h.adapter.arrivalAllowed(), false, "armed, not yet delivered to a plugin");
+  h.advance(ROOM_PLUGIN_ARRIVAL.entryMs - 1); h.adapter.activate(); assert.equal(h.adapter.arrivalAllowed(), true);
   h.advance(ROOM_PLUGIN_ARRIVAL.windowMs); assert.equal(h.adapter.arrivalAllowed(), false, "the window is bounded");
-  h.world.ready = false; h.world.ready = true; assert.equal(h.adapter.arrivalAllowed(), false, "it never reopens in this page session");
+  h.adapter.activate(); assert.equal(h.adapter.arrivalAllowed(), false, "it never reopens in this page session");
   for (const blocked of [{ correlation: false }, { xr: true }, { online: false }, { currentSeatId: "seat-a" }, { pendingSeatId: "seat-b" }]) {
-    const other = harness({ ready: true, ...blocked }); assert.equal(other.adapter.arrivalAllowed(), false, JSON.stringify(blocked));
+    const other = harness({ ready: true, ...blocked }); other.adapter.activate(); assert.equal(other.adapter.arrivalAllowed(), false, JSON.stringify(blocked));
   }
-  const opted = harness(); opted.optOut(); opted.world.ready = true; assert.equal(opted.adapter.arrivalAllowed(), false);
+  const opted = harness(); opted.optOut(); opted.world.ready = true; opted.adapter.activate(); assert.equal(opted.adapter.arrivalAllowed(), false);
+  const stale = harness({ ready: true }); stale.adapter.observe(); stale.advance(ROOM_PLUGIN_ARRIVAL.entryMs + 1); stale.adapter.activate();
+  assert.equal(stale.adapter.arrivalAllowed(), false, "a behavior enabled long after entry never seats people already present");
+  const vetoed = harness({ ready: true }); vetoed.adapter.observe(); vetoed.adapter.manualIntent(); vetoed.adapter.activate();
+  assert.equal(vetoed.adapter.arrivalAllowed(), false, "a manual action before the plugin is ready vetoes too");
   assert.deepEqual(h.claims, []);
 });
 
 test("an accepted correlated claim uses the grant; seat ownership then belongs to the participant", async () => {
-  const h = harness({ ready: true });
+  const h = harness({ ready: true }); h.adapter.activate();
   const pending = h.adapter.claim("seat-a");
   assert.equal(h.claims.length, 1); const [, commandId] = h.claims[0];
   assert.match(commandId, /^plugin-seat:[\w-]+:\d+$/);
@@ -46,7 +51,7 @@ test("an accepted correlated claim uses the grant; seat ownership then belongs t
 });
 
 test("busy, unknown and occupied seats count as bounded candidates; one claim at a time", async () => {
-  const h = harness({ ready: true, occupancy: { "seat-b": "someone-else" } });
+  const h = harness({ ready: true, occupancy: { "seat-b": "someone-else" } }); h.adapter.activate();
   assert.deepEqual(await h.adapter.claim("seat-b"), { result: "busy" });
   assert.deepEqual(await h.adapter.claim("invented-seat"), { result: "busy" });
   assert.deepEqual(h.claims, [], "neither reached the server");
@@ -60,7 +65,7 @@ test("busy, unknown and occupied seats count as bounded candidates; one claim at
 });
 
 test("a manual intent cancels the pending plugin claim through the release barrier and vetoes later claims", async () => {
-  const h = harness({ ready: true });
+  const h = harness({ ready: true }); h.adapter.activate();
   const pending = h.adapter.claim("seat-a"); const claimId = h.claims[0][1];
   h.adapter.manualIntent();
   assert.deepEqual(await pending, { result: "cancelled" });
@@ -71,7 +76,7 @@ test("a manual intent cancels the pending plugin claim through the release barri
 });
 
 test("a plugin may cancel only its own pending claim; a lost answer times out into a cancelled barrier", async () => {
-  const h = harness({ ready: true });
+  const h = harness({ ready: true }); h.adapter.activate();
   h.adapter.cancelOwn(); assert.deepEqual(h.cancels, [], "nothing pending");
   const pending = h.adapter.claim("seat-a");
   h.adapter.cancelOwn();
@@ -83,7 +88,7 @@ test("a plugin may cancel only its own pending claim; a lost answer times out in
 });
 
 test("snapshots use binding-scoped pseudonyms and minimize data for plugins without seating", () => {
-  const h = harness({ ready: true, occupancy: { "seat-b": "someone-else" } });
+  const h = harness({ ready: true, occupancy: { "seat-b": "someone-else" } }); h.adapter.activate();
   const first = h.adapter.snapshot("binding-1", true), again = h.adapter.snapshot("binding-1", true), other = h.adapter.snapshot("binding-2", true);
   assert.equal(first.ownParticipantAlias, again.ownParticipantAlias); assert.notEqual(first.ownParticipantAlias, other.ownParticipantAlias);
   assert.equal(JSON.stringify([first, other]).includes("self-private-id") || JSON.stringify([first, other]).includes("someone-else"), false);

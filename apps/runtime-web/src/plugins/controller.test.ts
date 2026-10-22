@@ -211,7 +211,7 @@ function seatingHost(capabilities: string[] = ["status.set", "seating.claimSelfO
   const calls: string[] = [];
   let ready = false, supported = true;
   const host: RoomPluginSeatingHost = {
-    supported: () => supported, ready: () => ready,
+    supported: () => supported, ready: () => ready, activate: () => { calls.push("activate"); },
     snapshot: (owner, seating) => { calls.push(`snapshot:${seating}`); return { ownParticipantAlias: "alias", arrivalAllowed: seating, seats: [] }; },
     port: owner => { calls.push("port"); return { claim: async () => ({ result: "busy" }), cancel: () => undefined }; },
     retire: owner => { calls.push("retire"); }
@@ -263,6 +263,7 @@ test("a seating-capable instance gets the seat port, real snapshots and coalesce
   h.controller.start(2); await until(() => h.instances.length === 1 && h.instances[0].events.length === 2);
   assert.deepEqual(h.instances[0].events.map(event => event.type), ["room.connection", "room.ready"]);
   assert.ok(s.calls.includes("port")); assert.equal(h.renderings.at(-1)![0].seatingUnavailable, false);
+  assert.ok(s.calls.indexOf("activate") >= 0 && s.calls.indexOf("activate") < s.calls.indexOf("snapshot:true"), "the window opens before the first snapshot");
   for (let i = 0; i < 5; i++) h.controller.seatingChanged();
   await h.advance(100); await until(() => h.instances[0].events.length === 3);
   assert.equal(h.instances[0].events[2].type, "seating.snapshot");

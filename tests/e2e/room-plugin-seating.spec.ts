@@ -20,7 +20,7 @@ test("isolated v2 auto-seat seats only a newly entering participant through corr
     await useOwnedActor(host, async () => {
       // The Host is ready and its one arrival window has passed before the behavior exists.
       await expect.poll(async () => (await seatState(host.page)).seating?.grant, { timeout: 30_000 }).not.toBe("waiting");
-      await expect.poll(async () => (await seatState(host.page)).seating?.grant, { timeout: 15_000 }).toBe("closed");
+      await expect.poll(async () => (await seatState(host.page)).seating?.grant, { timeout: 40_000 }).toBe("closed");
       // The externally built SDK example, uploaded through the ordinary author API.
       const bytes = await readFile("packages/room-plugin-sdk/examples/auto-seat/auto-seat.vrata-plugin.json");
       const pkg = await installPluginArtifact(value, host, { bytes } as ExternalArtifact);

@@ -890,3 +890,27 @@ test("legacy and malformed seat command IDs keep the exact previous replies", ()
   assert.equal(server.rooms.get("demo-room")?.seatOccupancy["seat-b"], undefined);
   assert.equal(handleSeatCommand(server, "demo-room", "p1", { type: "participant_update" }, () => assert.fail("not a seat command")), false);
 });
+
+test("eight correlated claims take eight seats and a ninth participant stays at the entry", () => {
+  const server = createRoomStateServer();
+  const seats = Array.from({ length: 8 }, (_, index) => `seat-${index + 1}`);
+  const results = new Map<string, string[]>();
+  for (let index = 1; index <= 9; index++) {
+    const participantId = `p${index}`; connectParticipant(server, "demo-room", participantId, createSocket() as never);
+    const accepted: string[] = [];
+    // Each arrival tries candidates from a different offset, like the external auto-seat plugin.
+    for (let attempt = 0; attempt < seats.length && !accepted.length; attempt++) {
+      const seatId = seats[(index + attempt) % seats.length];
+      handleSeatCommand(server, "demo-room", participantId, { type: "seat_claim", seatId, commandId: `plugin-seat:${index}:${attempt}` }, message => {
+        const result = (message as { seatClaimResult: { accepted: boolean; seatId: string } }).seatClaimResult;
+        if (result.accepted) accepted.push(result.seatId);
+      });
+    }
+    results.set(participantId, accepted);
+  }
+  const occupancy = server.rooms.get("demo-room")!.seatOccupancy;
+  assert.equal(Object.keys(occupancy).length, 8);
+  assert.equal(new Set(Object.values(occupancy)).size, 8);
+  assert.deepEqual(results.get("p9"), [], "the ninth arrival gets no seat and keeps its spawn");
+  for (let index = 1; index <= 8; index++) assert.equal(results.get(`p${index}`)!.length, 1);
+});

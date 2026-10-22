@@ -23,6 +23,8 @@ export interface RoomPluginSeatingHost {
   supported(): boolean;
   /** Authenticated room, scene anchors, spawn and the first authoritative occupancy are all in place. */
   ready(): boolean;
+  /** Called right before room.ready reaches a seating-capable instance: the arrival window may start. */
+  activate(): void;
   snapshot(owner: string, seating: boolean): RoomPluginRoomSnapshot;
   port(owner: string): RoomPluginSeatingPort;
   retire(owner: string): void;
@@ -301,6 +303,7 @@ export class RoomPluginController {
     if (!entry.readySent) {
       if (!seating.ready()) return;
       entry.readySent = true;
+      if (seatingCapable(entry.binding) && seating.supported()) seating.activate();
       event = { sdkApiVersion: 1, type: "room.ready", snapshot: seating.snapshot(ownerOf(entry), seatingCapable(entry.binding)) };
     } else if (changed && seatingCapable(entry.binding)) {
       event = { sdkApiVersion: 1, type: "seating.snapshot", snapshot: seating.snapshot(ownerOf(entry), true) };
