@@ -5,6 +5,10 @@
 }
 
 {$VRATA_APP_DOMAIN} {
+  # The integration API is reached only from the target's internal network.
+  @platform_integration path /integration /integration/*
+  respond @platform_integration "not found" 404
+
   @versioned_app_scene_assets path_regexp versionedAppSceneAssets ^/assets/scenes/[^/]+/[0-9a-fA-F]{40}/.+$
   handle @versioned_app_scene_assets {
     root * {$VRATA_STAGING_SCENE_ROOT:/srv/runtime-public}

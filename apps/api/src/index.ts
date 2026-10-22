@@ -1,5 +1,7 @@
 import type { ControlPlaneActor } from "./control-plane-actor.js";
 import { createRoomNotesRoutes } from "./room-notes-routes.js";
+import { createIntegrationRoutes } from "./integration-routes.js";
+import { loadIntegrationKeyring } from "./integration-auth.js";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -43,7 +45,9 @@ import {
   isPersonalRoomsFeatureEnabled,
   isRemoteBrowserFeatureEnabled,
   isSceneBundleUploadEnabled,
-  isHostControlsEnabled
+  isHostControlsEnabled,
+  isPortalManagedDeployment,
+  isAdhocRoomsAllowed
 } from "./feature-flags.js";
 
 import { getLivekitCredentials, getMediaTokenConfigError, getLivekitDeploymentDiagnostics } from "./livekit-config.js";
@@ -96,7 +100,10 @@ import {
   sanitizeSessionControlState,
   getRemovedParticipant,
   resolveEffectiveRoomRole,
-  getSessionControlBlockReason
+  getSessionControlBlockReason,
+  getManagedAccessBlockReason,
+  capTokenTtlSeconds,
+  sessionBlockStatusCode
 } from "./room-session-control.js";
 
 import {
@@ -245,6 +252,7 @@ const CONTROL_PLANE_AUDIT_LIMIT = 1000;
 const requestIds = new WeakMap<IncomingMessage, string>();
 const { metrics, apiMetricsText } = createApiMetrics(presenceByRoom, cleanupAllPresence, activeParticipantCount);
 const routeRoomNotesRequest = createRoomNotesRoutes({ metrics, resolveControlPlaneActor, getRequestId, logEvent });
+const routeIntegrationRequest = createIntegrationRoutes({ getRequestId, logEvent });
 
 function resolveAccessRole(requestedRole: unknown, env: NodeJS.ProcessEnv = process.env): { role: RoomRole; roleSource: RoomSessionRoleSource } {
   if (!isDevRoleQueryAllowed(env)) {
@@ -344,6 +352,10 @@ export function validateProductionApiEnv(env: NodeJS.ProcessEnv = process.env): 
   const livekitConfigError = getMediaTokenConfigError(env);
   if (livekitConfigError) {
     throw new Error(`invalid_livekit_config:${livekitConfigError}`);
+  }
+  // Ad-hoc rooms on a managed deployment are rejected by the deploy preflight (tools/validate-production-config.mjs).
+  if (isPortalManagedDeployment(env) && loadIntegrationKeyring(env).size === 0) {
+    throw new Error("invalid_portal_managed_config:integration_keys_required");
   }
 }
 
@@ -679,6 +691,15 @@ function writeSessionTokenError(response: ServerResponse, result: RoomSessionTok
   });
 }
 
+function writeManagedResourceDenied(request: IncomingMessage, response: ServerResponse, objectType: "tenant" | "room", objectId: string): void {
+  logEvent({ service: "api", event: "managed_resource_denied", requestId: getRequestId(request), method: request.method, objectType, objectId });
+  json(response, 403, { error: "forbidden", reason: "managed_resource", requestId: getRequestId(request) });
+}
+
+async function isManagedTenant(storage: Awaited<typeof storagePromise>, tenantId: unknown): Promise<boolean> {
+  return typeof tenantId === "string" && (await storage.getIntegrationTenant(tenantId)) !== null;
+}
+
 async function resolveRoomTenantId(roomId: string): Promise<string> {
   const storage = await storagePromise;
   const room = await storage.getRoom(roomId);
@@ -918,6 +939,7 @@ function createRoomAccessTokenResponse(input: {
   permissions: RoomPermission[];
 } {
   const nowSeconds = input.nowSeconds ?? Math.floor(Date.now() / 1000);
+  const ttlSeconds = capTokenTtlSeconds(input.room, input.ttlSeconds, nowSeconds);
   const permissions = getRoomPermissions(input.role);
   const roomTemplate = roomTemplateSessionContext(input.room);
   const payload: RoomAccessTokenPayload = {
@@ -932,12 +954,12 @@ function createRoomAccessTokenResponse(input: {
     permissions,
     sessionId: input.sessionId ?? randomUUID(),
     iat: nowSeconds,
-    exp: nowSeconds + input.ttlSeconds,
+    exp: nowSeconds + ttlSeconds,
     jti: randomUUID()
   };
   return {
     token: encodeAccessToken(payload),
-    expiresInSeconds: input.ttlSeconds,
+    expiresInSeconds: ttlSeconds,
     sessionId: payload.sessionId,
     access: createRoomAccessDebugState(input.role),
     role: input.role,
@@ -1379,7 +1401,9 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
         remoteBrowserEnabled: isRemoteBrowserFeatureEnabled(),
         remoteBrowserExperimental: true,
         postgresEnabled: Boolean(process.env.POSTGRES_URL),
-        controlPlaneAuthEnabled: Boolean(getControlPlaneAdminToken())
+        controlPlaneAuthEnabled: Boolean(getControlPlaneAdminToken()),
+        portalManaged: isPortalManagedDeployment(),
+        adhocRoomsEnabled: isAdhocRoomsAllowed()
       },
       dependencies: {
         postgres: Boolean(process.env.POSTGRES_URL),
@@ -1390,6 +1414,9 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     });
     return;
   }
+
+  const integrationResponse = routeIntegrationRequest(request, response, method, url, storage);
+  if (integrationResponse) return integrationResponse;
 
   if (method === "GET" && (url.pathname === "/" || /^\/rooms\/[^/]+$/.test(url.pathname))) {
     const served = await serveStatic(response, join(runtimeStaticRoot, "index.html"));
@@ -1436,6 +1463,12 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     const served = await serveStatic(response, join(controlPlaneStaticRoot, url.pathname.replace(/^\/control-plane\//, "")));
     if (!served) json(response, 404, { error: "control_plane_asset_not_found" });
     return;
+  }
+
+  // A portal-managed deployment answers room-scoped routes only for rooms that exist.
+  const roomScopedMatch = url.pathname.match(/^\/api\/rooms\/([^/]+)(?:\/|$)/);
+  if (roomScopedMatch && !isAdhocRoomsAllowed() && !(await storage.getRoom(decodeURIComponent(roomScopedMatch[1])))) {
+    return json(response, 404, { error: "room_not_found", requestId });
   }
 
   if (method === "GET" && url.pathname === "/api/templates") {
@@ -1517,7 +1550,13 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   if (method === "POST" && url.pathname === "/api/tenants") {
     const actor = await requireControlPlanePermission(request, response, { permission: "tenant.write", action: "tenant.create", objectType: "tenant" });
     if (!actor) return;
-    const tenant = await storage.createTenant((await parseBody<Partial<TenantRecord>>(request)) ?? {});
+    const tenantPayload = (await parseBody<Partial<TenantRecord>>(request)) ?? {};
+    // Portal tenant ids are reserved for the integration API.
+    if (isPortalManagedDeployment() && typeof tenantPayload.tenantId === "string" && tenantPayload.tenantId.startsWith("pt_")) {
+      return writeManagedResourceDenied(request, response, "tenant", tenantPayload.tenantId);
+    }
+    if (await isManagedTenant(storage, tenantPayload.tenantId)) return writeManagedResourceDenied(request, response, "tenant", String(tenantPayload.tenantId));
+    const tenant = await storage.createTenant(tenantPayload);
     json(response, 201, tenant);
     return;
   }
@@ -1527,6 +1566,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     const tenantId = decodeURIComponent(tenantItemMatch[1]);
     const actor = await requireControlPlanePermission(request, response, { permission: "tenant.write", action: "tenant.update", objectType: "tenant", objectId: tenantId });
     if (!actor) return;
+    if (await isManagedTenant(storage, tenantId)) return writeManagedResourceDenied(request, response, "tenant", tenantId);
     const tenant = await storage.updateTenant(tenantId, (await parseBody<Partial<TenantRecord>>(request)) ?? {});
     if (!tenant) return json(response, 404, { error: "tenant_not_found" });
     json(response, 200, tenant);
@@ -1537,6 +1577,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     const tenantId = decodeURIComponent(tenantItemMatch[1]);
     const actor = await requireControlPlanePermission(request, response, { permission: "tenant.write", action: "tenant.delete", objectType: "tenant", objectId: tenantId });
     if (!actor) return;
+    if (await isManagedTenant(storage, tenantId)) return writeManagedResourceDenied(request, response, "tenant", tenantId);
     const deleted = await storage.deleteTenant(tenantId);
     if (!deleted) return json(response, 409, { error: "tenant_has_dependencies_or_missing" });
     json(response, 200, { ok: true });
@@ -1688,6 +1729,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     const actor = await requireControlPlanePermission(request, response, { permission: "room.create", action: "room.create", objectType: "room" });
     if (!actor) return;
     const rawPayload = normalizeRoomAvatarOverrides((await parseBody<RoomPayloadInput>(request)) ?? {});
+    if (await isManagedTenant(storage, rawPayload.tenantId)) return writeManagedResourceDenied(request, response, "tenant", String(rawPayload.tenantId));
     let payload: Partial<RoomRecord>;
     try {
       const resolved = await resolveRoomTemplateCreate(storage, rawPayload);
@@ -1750,6 +1792,10 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     if (!tenantIds.has(tenantId)) {
       incrementCounter(metrics.personalRoomOpensTotal, "invalid_tenant");
       return json(response, 400, { error: "invalid_tenant" });
+    }
+    if (await isManagedTenant(storage, tenantId)) {
+      incrementCounter(metrics.personalRoomOpensTotal, "managed_tenant");
+      return writeManagedResourceDenied(request, response, "tenant", tenantId);
     }
 
     const existing = (await storage.listRooms()).find((room) => room.roomType === "personal" && room.ownerParticipantId === participantId && room.tenantId === tenantId) ?? null;
@@ -2071,6 +2117,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     const rawPayload = (await parseBody<RoomPayloadInput>(request)) ?? {};
     const existingRoom = await storage.getRoom(roomId);
     if (!existingRoom) return json(response, 404, { error: "room_not_found" });
+    if (existingRoom.managed) return writeManagedResourceDenied(request, response, "room", roomId);
     try { assertRoomTemplatePatch(existingRoom, rawPayload); } catch (error) {
       const failure = templateInputError(error);
       if (!failure) throw error;
@@ -2128,6 +2175,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     if (!actor) return;
     const existingRoom = await storage.getRoom(roomId);
     if (!existingRoom) return json(response, 404, { error: "room_not_found" });
+    if (existingRoom.managed) return writeManagedResourceDenied(request, response, "room", roomId);
     const updated = await storage.updateRoom(roomId, lifecycleAction === "disable"
       ? { status: "disabled", disabledAt: new Date().toISOString(), disabledBy: actor.actorId }
       : { status: "active", disabledAt: null, disabledBy: null });
@@ -2158,6 +2206,8 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       json(response, 200, { items: (await storage.listRoomInvites(roomId)).map((invite) => sanitizeRoomInvite(invite)) });
       return;
     }
+    // Managed rooms admit people through platform grants (T08), not baseline invite links.
+    if (room.managed) return writeManagedResourceDenied(request, response, "room", roomId);
 
     const payload = (await parseBody<{ expiresInSeconds?: number; expiresAt?: string; role?: string; waitingRoomEnabled?: boolean }>(request)) ?? {};
     const nowMs = Date.now();
@@ -2498,6 +2548,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       allowHostOwnRoom: true
     });
     if (!actor) return;
+    if ((await storage.getRoom(roomId))?.managed) return writeManagedResourceDenied(request, response, "room", roomId);
     const payload = (await parseBody<{ bundleId?: string; version?: string }>(request)) ?? {};
     if (!payload.bundleId) return json(response, 400, { error: "missing_scene_bundle_id" });
     const bundle = payload.version
@@ -2519,6 +2570,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     const roomId = decodeURIComponent(roomItemMatch[1]);
     const actor = await requireControlPlanePermission(request, response, { permission: "room.delete", action: "room.delete", objectType: "room", objectId: roomId });
     if (!actor) return;
+    if ((await storage.getRoom(roomId))?.managed) return writeManagedResourceDenied(request, response, "room", roomId);
     const deleted = await storage.deleteRoom(roomId);
     if (!deleted) return json(response, 404, { error: "room_not_found" });
     json(response, 200, { ok: true, roomId });
@@ -2553,7 +2605,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     const effectiveRole = resolveEffectiveRoomRole(room, session.payload.participantId, session.payload.role);
     const blockReason = getSessionControlBlockReason(room, session.payload.participantId, effectiveRole, true);
     if (blockReason) {
-      return json(response, 403, { error: "room_access_denied", reason: blockReason });
+      return json(response, sessionBlockStatusCode(blockReason), { error: "room_access_denied", reason: blockReason });
     }
     upsertPresence(roomId, participantId, {
       ...payload,
@@ -2650,11 +2702,15 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     const nowSeconds = Math.floor(Date.now() / 1000);
     const roomId = requestPayload?.roomId ?? "demo-room";
     const room = await storage.getRoom(roomId);
+    if (!room && !isAdhocRoomsAllowed()) {
+      incrementCounter(metrics.roomAccessDeniedTotal, "room_not_found");
+      return json(response, 404, { error: "room_not_found", requestId });
+    }
     const requested = resolveAccessRole(requestPayload?.requestedRole ?? requestPayload?.role);
     const accessResult = await resolveStateTokenAccess(storage, request, room, requestPayload, requested);
     if (!accessResult.ok) {
       incrementCounter(metrics.roomAccessDeniedTotal, accessResult.reason);
-      return json(response, accessResult.statusCode, {
+      return json(response, accessResult.statusCode === 403 ? sessionBlockStatusCode(accessResult.reason) : accessResult.statusCode, {
         error: "room_access_denied",
         reason: accessResult.reason,
         accessRequestId: accessResult.accessRequestId,
@@ -2695,11 +2751,15 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       return writeSessionTokenError(response, session);
     }
     const room = await storage.getRoom(payload.roomId);
+    if (!room && !isAdhocRoomsAllowed()) {
+      incrementCounter(metrics.mediaJoinFailuresTotal, "room_not_found");
+      return json(response, 404, { error: "room_not_found", requestId });
+    }
     const effectiveRole = resolveEffectiveRoomRole(room, session.payload.participantId, session.payload.role);
     const blockReason = getSessionControlBlockReason(room, session.payload.participantId, effectiveRole, true);
     if (blockReason) {
       incrementCounter(metrics.mediaJoinFailuresTotal, blockReason);
-      return json(response, 403, { error: "room_access_denied", reason: blockReason });
+      return json(response, sessionBlockStatusCode(blockReason), { error: "room_access_denied", reason: blockReason });
     }
     const effectivePermissions = getRoomPermissions(effectiveRole);
     const canPublishAudio = hasRoomPermission(effectivePermissions, "audio.join") && payload.canPublishAudio !== false;
@@ -2713,11 +2773,12 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       incrementCounter(metrics.mediaJoinFailuresTotal, "livekit_config_invalid");
       return json(response, 503, { error: "livekit_config_invalid", reason: configError });
     }
+    const mediaTtlSeconds = capTokenTtlSeconds(room, Number.parseInt(process.env.MEDIA_TOKEN_TTL_SECONDS ?? "900", 10), Math.floor(Date.now() / 1000));
     const { apiKey, apiSecret } = getLivekitCredentials();
     const accessToken = new AccessToken(apiKey, apiSecret, {
       identity: session.payload.participantId,
       name: session.payload.displayName,
-      ttl: `${Number.parseInt(process.env.MEDIA_TOKEN_TTL_SECONDS ?? "900", 10)}s`
+      ttl: `${mediaTtlSeconds}s`
     });
     accessToken.addGrant({
       room: `${process.env.LIVEKIT_ROOM_PREFIX ?? "vrata-"}${session.payload.roomId}`,
@@ -2727,7 +2788,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     });
     json(response, 200, {
       token: await accessToken.toJwt(),
-      expiresInSeconds: Number.parseInt(process.env.MEDIA_TOKEN_TTL_SECONDS ?? "900", 10),
+      expiresInSeconds: mediaTtlSeconds,
       livekitUrl: getDefaultLivekitUrl(request)
     });
     return;
@@ -2749,6 +2810,10 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     if (!isRemoteBrowserIdentityBinding({ objectId: payload.objectId, executorSessionId: payload.executorSessionId, executorInstanceId: payload.executorInstanceId, mediaParticipantId: payload.mediaParticipantId })) {
       return json(response, 400, { error: "invalid_session_binding" });
     }
+    const remoteBrowserRoom = await storage.getRoom(payload.roomId);
+    if (!remoteBrowserRoom && !isAdhocRoomsAllowed()) return json(response, 404, { error: "room_not_found", requestId });
+    const remoteBrowserBlock = getManagedAccessBlockReason(remoteBrowserRoom);
+    if (remoteBrowserBlock) return json(response, sessionBlockStatusCode(remoteBrowserBlock), { error: "room_access_denied", reason: remoteBrowserBlock });
     if (!await verifyRemoteBrowserAuthority({ roomId: payload.roomId, objectId: payload.objectId, executorSessionId: payload.executorSessionId, executorInstanceId: payload.executorInstanceId, mediaParticipantId: payload.mediaParticipantId })) {
       return json(response, 409, { error: "remote_browser_session_not_authoritative" });
     }
@@ -2757,7 +2822,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       incrementCounter(metrics.mediaJoinFailuresTotal, "livekit_config_invalid");
       return json(response, 503, { error: "livekit_config_invalid", reason: configError });
     }
-    const ttlSeconds = Number.parseInt(process.env.MEDIA_TOKEN_TTL_SECONDS ?? "900", 10);
+    const ttlSeconds = capTokenTtlSeconds(remoteBrowserRoom, Number.parseInt(process.env.MEDIA_TOKEN_TTL_SECONDS ?? "900", 10), Math.floor(Date.now() / 1000));
     const { apiKey, apiSecret } = getLivekitCredentials();
     const accessToken = new AccessToken(apiKey, apiSecret, {
       identity: payload.mediaParticipantId,
@@ -2799,13 +2864,17 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     if (!hasRoomPermission(session.payload.permissions, "surface.view")) {
       return json(response, 403, { error: "forbidden", reason: "remote_browser_frame_not_allowed" });
     }
+    const frameRoom = await storage.getRoom(payload.roomId);
+    if (!frameRoom && !isAdhocRoomsAllowed()) return json(response, 404, { error: "room_not_found", requestId });
+    const frameBlock = getManagedAccessBlockReason(frameRoom);
+    if (frameBlock) return json(response, sessionBlockStatusCode(frameBlock), { error: "room_access_denied", reason: frameBlock });
     if (!await verifyRemoteBrowserAuthority({ roomId: payload.roomId, objectId: payload.objectId, executorSessionId: payload.executorSessionId, executorInstanceId: payload.executorInstanceId, frameStreamId: payload.frameStreamId })) {
       return json(response, 409, { error: "remote_browser_session_not_authoritative" });
     }
     if (!getRemoteBrowserFrameTokenSecret()) {
       return json(response, 503, { error: "remote_browser_token_config_invalid" });
     }
-    const ttlSeconds = resolveRemoteBrowserTokenTtlSeconds();
+    const ttlSeconds = capTokenTtlSeconds(frameRoom, resolveRemoteBrowserTokenTtlSeconds(), Math.floor(Date.now() / 1000));
     const token = encodeRemoteBrowserFrameToken({
       roomId: payload.roomId,
       objectId: payload.objectId,

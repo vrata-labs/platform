@@ -110,3 +110,26 @@ test("Wave 2 schema supports the exact Wave 1 rollback build with create/PATCH/m
     assert.equal(referenceCatalogState(await current.transitionReferenceTemplateCatalog("wave2")), "wave2");
   });
 });
+
+test("the pre-integration rollback build runs on a schema with managed rooms and cannot delete them", { skip: url && rollbackModule ? false : "Postgres and the pinned rollback build are required" }, async () => {
+  const old = await import(pathToFileURL(rollbackModule!).href) as { PostgresStorage: typeof PostgresStorage };
+  await database(async pools => {
+    const current = new PostgresStorage(pools[0]!);
+    await current.init();
+    await current.transitionReferenceTemplateCatalog("active");
+    const tenantId = "pt_01JABCDEFGHJKMNPQRSTVWXYZ0";
+    assert.notEqual(await current.upsertIntegrationTenant({ tenantId, managedBy: "portal:stage", displayName: "Acme" }), "tenant_mismatch");
+    const managed = await current.createManagedRoom({ roomId: randomUUID(), tenantId, templateId: "meeting-room-basic", templateVersion: "2.0.0", name: "Managed", visibility: "unlisted", guestAllowed: true },
+      { managedBy: "portal:stage", kind: "reference", accessUntil: new Date(Date.now() + 3_600_000).toISOString(), graceSeconds: 0, operationId: randomUUID() });
+    assert.equal(managed.managed?.revision, 0);
+    await current.transitionReferenceTemplateCatalog("wave2");
+    const previous = new old.PostgresStorage(pools[1]!);
+    await previous.init();
+    assert.equal((await previous.getRoom(managed.roomId))?.tenantId, tenantId);
+    assert((await previous.listRooms()).some(room => room.roomId === managed.roomId));
+    await assert.rejects(previous.deleteRoom(managed.roomId), /foreign key/);
+    await assert.rejects(previous.deleteTenant(tenantId).then(deleted => { if (!deleted) throw new Error("foreign key: tenant kept"); }), /foreign key/);
+    await current.init();
+    assert.deepEqual((await current.getRoom(managed.roomId))?.managed, managed.managed);
+  });
+});

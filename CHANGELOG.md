@@ -8,6 +8,7 @@ Vrata uses SemVer: `MAJOR.MINOR.PATCH`. Until `1.0.0`, breaking changes can happ
 
 ### Added
 
+- Opt-in portal-managed mode (`VRATA_PORTAL_MANAGED=true`) with the server-to-server integration API `platform-integration-v1`: EdDSA service assertions with scopes and replay protection, managed tenants, reference rooms, access CAS and idempotent operations that survive retries and crashes. Unknown room ids answer `404` instead of becoming rooms, managed rooms stop issuing state/media/presence tokens after `accessUntil + graceSeconds` or while paused, and admin/anonymous paths cannot change managed resources. See `docs/integration-api.md`.
 - Public open source readiness plan.
 - Initial public repository hygiene docs and self-hosting contract.
 - Apache-2.0 source code license.

@@ -69,6 +69,10 @@ export function getSessionControlBlockReason(room: RoomRecord | null, participan
   if (isRoomDisabled(room)) {
     return "room_disabled";
   }
+  const managedReason = getManagedAccessBlockReason(room);
+  if (managedReason) {
+    return managedReason;
+  }
   if (!isHostControlsEnabled()) {
     return null;
   }
@@ -83,4 +87,28 @@ export function getSessionControlBlockReason(room: RoomRecord | null, participan
     return "room_locked";
   }
   return null;
+}
+
+// effectiveCutoff = accessUntil + graceSeconds of a portal-managed room; null for other rooms.
+export function managedRoomCutoffMs(room: RoomRecord | null | undefined): number | null {
+  if (!room?.managed) return null;
+  return Date.parse(room.managed.accessUntil) + room.managed.graceSeconds * 1000;
+}
+
+export function getManagedAccessBlockReason(room: RoomRecord | null | undefined, nowMs = Date.now()): "access_expired" | "room_paused" | null {
+  const cutoffMs = managedRoomCutoffMs(room);
+  if (cutoffMs === null) return null;
+  if (nowMs >= cutoffMs) return "access_expired";
+  return room?.managed?.status === "paused" ? "room_paused" : null;
+}
+
+// A token issued for a managed room never outlives its effective cutoff.
+export function capTokenTtlSeconds(room: RoomRecord | null | undefined, ttlSeconds: number, nowSeconds: number): number {
+  const cutoffMs = managedRoomCutoffMs(room);
+  if (cutoffMs === null) return ttlSeconds;
+  return Math.max(0, Math.min(ttlSeconds, Math.floor(cutoffMs / 1000) - nowSeconds));
+}
+
+export function sessionBlockStatusCode(reason: string): 403 | 410 | 423 {
+  return reason === "access_expired" ? 410 : reason === "room_paused" ? 423 : 403;
 }

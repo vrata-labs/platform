@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test from "node:test";
 import { initializePostgresStorage } from "./storage-postgres-init.js";
+import { ensureIntegrationStorageSchema } from "./storage-postgres-integration-schema.js";
 import { createStorageInitHarness, deferred, type InitPhase } from "./testing/storage-postgres-init-harness.js";
 
 function transactionTrace(h: ReturnType<typeof createStorageInitHarness>): string[] {
@@ -14,9 +15,29 @@ const unlockSql = "select pg_advisory_unlock(hashtextextended('vrata:postgres-st
 test("Postgres initialization preserves the full original query/phase/client lifecycle trace", async () => {
   const h = createStorageInitHarness();
   await initializePostgresStorage(h.pool, h.hooks);
+  const integration = createStorageInitHarness();
+  await ensureIntegrationStorageSchema(integration.client);
+  const integrationSql = integration.queries.map(query => query.sql);
+  const start = h.trace.findIndex(entry => entry.kind === "query" && entry.sql === integrationSql[0]);
+  const commit = h.trace.findIndex(entry => entry.kind === "query" && entry.sql === "commit");
+  // The integration tables are an additive tail of the same transaction, right before commit.
+  assert(start > 0);
+  assert.deepEqual(h.trace.slice(start, commit), integration.trace);
+  assert.equal(commit, start + integrationSql.length);
+  const original = [...h.trace.slice(0, start), ...h.trace.slice(commit)];
   // Original implementation, with the same three catalog phases supplied by this harness.
-  assert.equal(createHash("sha256").update(JSON.stringify(h.trace)).digest("hex"), "3058f515129030d1f7822bc000352c9a63340a893e01192402d9223349e6bdaf");
+  assert.equal(createHash("sha256").update(JSON.stringify(original)).digest("hex"), "3058f515129030d1f7822bc000352c9a63340a893e01192402d9223349e6bdaf");
   assert.deepEqual(transactionTrace(h), ["connect", lockSql, "begin", "seed", "validateStoredTemplateVersions", "synchronizeTemplateCatalog", "commit", unlockSql, "release"]);
+});
+
+test("Postgres integration schema is additive and keeps managed rows from being deleted", async () => {
+  const h = createStorageInitHarness();
+  await ensureIntegrationStorageSchema(h.client);
+  const sql = h.queries.map(query => query.sql.replace(/\s+/g, " ").trim());
+  assert(sql.every(statement => /^create (table|index) if not exists integration_/.test(statement)), sql.join("\n"));
+  assert(!sql.some(statement => /on delete cascade|drop |alter table (rooms|tenants)/.test(statement)));
+  assert(sql.some(statement => statement.includes("room_id text primary key references rooms(room_id),")));
+  assert(sql.some(statement => statement.includes("constraint integration_operations_principal_key_unique unique (principal, idempotency_key)")));
 });
 
 test("Postgres initialization propagates connection acquisition failure without cleanup", async () => {

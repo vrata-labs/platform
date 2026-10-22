@@ -96,6 +96,8 @@ The minimal `0.1` flow is API-driven:
 
 See `docs/scene-bundle-contract.md` for the bundle layout.
 
+A deployment managed by a portal additionally sets `VRATA_PORTAL_MANAGED=true` and `VRATA_INTEGRATION_KEYS`; see [integration API](./integration-api.md). Without them the platform keeps self-hosted behavior, including rooms for unknown ids.
+
 ## Production Notes
 
 Do not expose a self-hosted deployment with example secrets. The `compose.selfhost.yml` path is for local evaluation and keeps LiveKit in `--dev` mode.
@@ -142,7 +144,7 @@ curl -fsS "$VRATA_APP_BASE_URL/diagnostics"
 curl -fsS "$CONTROL_PLANE_PUBLIC_URL"
 ```
 
-Production preflight blocks startup when it detects missing required variables, public `http://` / `ws://` URLs, wildcard CORS, dev-role query mode, placeholder secrets, weak secrets, duplicate secret values, invalid LiveKit public IP/ports, or a `LIVEKIT_URL` host that does not match `VRATA_LIVEKIT_DOMAIN`. Diagnostics include variable names and reason codes only; secret values must not be printed.
+Production preflight blocks startup when it detects missing required variables, public `http://` / `ws://` URLs, wildcard CORS, dev-role query mode, placeholder secrets, weak secrets, duplicate secret values, invalid LiveKit public IP/ports, a `LIVEKIT_URL` host that does not match `VRATA_LIVEKIT_DOMAIN`, or a portal-managed deployment with ad-hoc rooms or without valid integration public keys. Diagnostics include variable names and reason codes only; secret values must not be printed.
 
 ## LiveKit / TURN Network Profile
 

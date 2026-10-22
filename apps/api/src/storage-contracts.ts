@@ -177,6 +177,111 @@ export interface RoomRecord {
   avatarConfig?: RoomAvatarConfig;
   sessionControl?: RoomSessionControlState;
   personalState?: RoomPersonalState;
+  managed?: ManagedRoomState;
+}
+
+export type ManagedRoomKind = "reference";
+
+export type ManagedRoomStatus = "active" | "paused";
+
+// Access terms of a room created through the integration API; only integration storage methods write them.
+export interface ManagedRoomState {
+  managedBy: string;
+  kind: ManagedRoomKind;
+  status: ManagedRoomStatus;
+  accessUntil: string;
+  graceSeconds: number;
+  revision: number;
+  ownerSubject?: string | null;
+  lastOperationId?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ManagedRoomCreateInput {
+  managedBy: string;
+  kind: ManagedRoomKind;
+  accessUntil: string;
+  graceSeconds: number;
+  ownerSubject?: string | null;
+  operationId: string;
+}
+
+export interface ManagedRoomAccessPatch {
+  accessUntil?: string;
+  graceSeconds?: number;
+  status?: ManagedRoomStatus;
+}
+
+export interface IntegrationTenantRecord {
+  tenantId: string;
+  managedBy: string;
+  displayName: string;
+  revision: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type IntegrationOperationState = "running" | "succeeded" | "failed";
+
+export interface IntegrationErrorObject {
+  code: string;
+  message: string;
+  requestId: string;
+  retryable: boolean;
+  retryAfterSeconds?: number;
+  details?: Record<string, unknown>;
+}
+
+export interface IntegrationOperationRecord {
+  operationId: string;
+  principal: string;
+  idempotencyKey: string;
+  kind: string;
+  requestHash: string;
+  state: IntegrationOperationState;
+  resourceType: string | null;
+  resourceId: string | null;
+  resultRevision: number | null;
+  error: IntegrationErrorObject | null;
+  responseStatus: number | null;
+  responseBody: unknown;
+  leaseUntil: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface IntegrationOperationStart {
+  operationId: string;
+  principal: string;
+  idempotencyKey: string;
+  kind: string;
+  requestHash: string;
+  resourceType: string;
+  resourceId: string;
+  leaseSeconds: number;
+}
+
+export interface IntegrationOperationOutcome {
+  state: "succeeded" | "failed";
+  resultRevision?: number | null;
+  error?: IntegrationErrorObject | null;
+  responseStatus: number;
+  responseBody: unknown;
+}
+
+export interface IntegrationStore {
+  getIntegrationTenant(tenantId: string): Promise<IntegrationTenantRecord | null>;
+  upsertIntegrationTenant(input: { tenantId: string; managedBy: string; displayName: string }): Promise<IntegrationTenantRecord | "tenant_mismatch">;
+  createManagedRoom(input: Partial<RoomRecord>, managed: ManagedRoomCreateInput): Promise<RoomRecord>;
+  updateManagedRoomAccess(roomId: string, expectedRevision: number, patch: ManagedRoomAccessPatch, operationId: string): Promise<RoomRecord | "revision_mismatch" | null>;
+  beginIntegrationOperation(input: IntegrationOperationStart): Promise<{ created: boolean; operation: IntegrationOperationRecord }>;
+  claimIntegrationOperation(operationId: string, leaseSeconds: number): Promise<IntegrationOperationRecord | null>;
+  completeIntegrationOperation(operationId: string, outcome: IntegrationOperationOutcome): Promise<IntegrationOperationRecord | null>;
+  releaseIntegrationOperation(operationId: string): Promise<void>;
+  getIntegrationOperation(principal: string, operationId: string): Promise<IntegrationOperationRecord | null>;
+  findIntegrationOperation(principal: string, idempotencyKey: string): Promise<IntegrationOperationRecord | null>;
+  recordIntegrationAssertion(principal: string, jti: string, expiresAt: string): Promise<boolean>;
 }
 
 export interface RuntimeDiagnosticRecord {
@@ -275,7 +380,7 @@ export interface XrTelemetryEventRecord {
   createdAt: string;
 }
 
-export interface Storage {
+export interface Storage extends IntegrationStore {
   listTenants(): Promise<TenantRecord[]>;
   createTenant(input: Partial<TenantRecord>): Promise<TenantRecord>;
   updateTenant(tenantId: string, input: Partial<TenantRecord>): Promise<TenantRecord | null>;
