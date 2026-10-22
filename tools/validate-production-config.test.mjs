@@ -248,3 +248,17 @@ test("parseEnvFile parses simple dotenv files", () => {
     C: "three"
   });
 });
+
+test("portal-managed production needs Ed25519 public integration keys and no ad-hoc rooms", () => {
+  const publicKey = { kty: "OKP", crv: "Ed25519", x: "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo" };
+  const key = { kid: "portal-prod-2026-10", issuer: "portal:prod", scopes: ["createRoom", "getRoom"], publicKey };
+  const managed = (overrides = {}) => validProductionEnv({ VRATA_PORTAL_MANAGED: "true", VRATA_INTEGRATION_KEYS: JSON.stringify([key]), ...overrides });
+  assert.equal(validateProductionConfig(managed()).ok, true);
+  assert.equal(validateProductionConfig(validProductionEnv({ VRATA_ADHOC_ROOMS: "true" })).ok, true);
+  assert.deepEqual(issueCodes(validateProductionConfig(managed({ VRATA_ADHOC_ROOMS: "true" }))), ["adhoc_rooms_enabled"]);
+  for (const value of [undefined, "", "{", "[]", JSON.stringify([{ ...key, issuer: "portal:qa" }]), JSON.stringify([{ ...key, publicKey: { ...publicKey, d: "private" } }]), JSON.stringify([{ ...key, scopes: [] }])]) {
+    const result = validateProductionConfig(managed({ VRATA_INTEGRATION_KEYS: value }));
+    assert.deepEqual(issueCodes(result), ["invalid_integration_keys"], String(value));
+    assert(!formatProductionConfigIssues(result.issues).includes("private"));
+  }
+});

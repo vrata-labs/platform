@@ -1,6 +1,7 @@
 import type { Pool, PoolClient } from "pg";
 
 import { ensureNamedForeignKey, installTemplateVersionImmutabilityTrigger } from "./storage-postgres-guards.js";
+import { ensureIntegrationStorageSchema } from "./storage-postgres-integration-schema.js";
 import { ensurePostgresStorageSchema } from "./storage-postgres-schema.js";
 
 const POSTGRES_INIT_ADVISORY_LOCK_SQL = "select pg_advisory_lock(hashtextextended('vrata:postgres-storage-init:v1', 0))";
@@ -57,6 +58,7 @@ async function initWithClient(client: PoolClient, hooks: PostgresStorageInitHook
   if (incomplete.rows.length > 0) throw new Error("incomplete_room_template_backfill");
   await client.query("alter table rooms alter column template_version set not null, alter column template_snapshot set not null");
   await installTemplateVersionImmutabilityTrigger(client);
+  await ensureIntegrationStorageSchema(client);
 }
 
 async function repairRoomTemplateMetadata(client: PoolClient): Promise<void> {

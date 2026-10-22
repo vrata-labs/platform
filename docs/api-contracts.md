@@ -135,6 +135,10 @@ The current permission matrix is documented in [`docs/security/permissions.md`](
 
 Every protected authorization decision writes a control-plane audit entry with `requestId`, `actor`, `action`, `object`, `permission`, and `result`. Operators can inspect the bounded in-memory log with `GET /api/audit/control-plane` using an admin identity.
 
+### Portal integration API
+
+`/integration/v1/*` is the server-to-server API for a portal-managed deployment. It is disabled unless `VRATA_PORTAL_MANAGED=true`, is not routed by the public ingress, and is described in [`docs/integration-api.md`](./integration-api.md). On such a deployment the state, media and presence endpoints above answer `404 room_not_found` for unknown rooms and `410 access_expired` / `423 room_paused` for managed rooms outside their access window; tokens of managed rooms never outlive the room's effective cutoff.
+
 ### Room documents and presentation media
 
 - `GET /api/rooms/:roomId/documents` requires `document.view`.

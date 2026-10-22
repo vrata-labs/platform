@@ -383,6 +383,31 @@ function validateLiveKitConfig(issues, env) {
   }
 }
 
+// A portal-managed API needs its integration public keys and never turns unknown room ids into rooms.
+function validatePortalManagedConfig(issues, env) {
+  if (parseBool(env.VRATA_PORTAL_MANAGED) !== true) {
+    return;
+  }
+  if (parseBool(env.VRATA_ADHOC_ROOMS) === true) {
+    addIssue(issues, "adhoc_rooms_enabled", "VRATA_ADHOC_ROOMS", "must_be_false_when_portal_managed");
+  }
+  let keys;
+  try {
+    keys = JSON.parse(trimmed(env.VRATA_INTEGRATION_KEYS) || "null");
+  } catch {
+    keys = null;
+  }
+  const valid = Array.isArray(keys) && keys.length > 0 && keys.every((key) => key
+    && typeof key.kid === "string" && /^[A-Za-z0-9._-]{1,64}$/.test(key.kid)
+    && typeof key.issuer === "string" && /^portal:(stage|prod)$/.test(key.issuer)
+    && Array.isArray(key.scopes) && key.scopes.length > 0
+    && key.publicKey?.kty === "OKP" && key.publicKey?.crv === "Ed25519" && typeof key.publicKey?.x === "string"
+    && !("d" in key.publicKey));
+  if (!valid) {
+    addIssue(issues, "invalid_integration_keys", "VRATA_INTEGRATION_KEYS", "expected_ed25519_public_keys");
+  }
+}
+
 export function validateProductionConfig(env = process.env) {
   const issues = [];
 
@@ -424,6 +449,7 @@ export function validateProductionConfig(env = process.env) {
   }
 
   validateRemoteBrowserConfig(issues, env);
+  validatePortalManagedConfig(issues, env);
 
   return { ok: issues.length === 0, issues };
 }

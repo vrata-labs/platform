@@ -5,6 +5,10 @@
 }
 
 {$VRATA_APP_DOMAIN} {
+  # The integration API is reached only from the target's internal network.
+  @platform_integration path /integration /integration/*
+  respond @platform_integration "not found" 404
+
   handle /frames {
     reverse_proxy remote-browser:4010
   }

@@ -4,6 +4,9 @@ import type { RoomTemplateSnapshotV1, RoomTemplateVersionSnapshotV1 } from "@vra
 import { referenceTemplateContract } from "@vrata/templates";
 
 import type {
+  ManagedRoomKind,
+  ManagedRoomState,
+  ManagedRoomStatus,
   RoomAvatarConfig,
   RoomFeatures,
   RoomPersonalState,
@@ -204,7 +207,7 @@ export function mapRoomRow(row: {
   avatar_config: Partial<RoomAvatarConfig>;
   session_control: Partial<RoomSessionControlState> | null;
   personal_state?: Partial<RoomPersonalState> | null;
-}): RoomRecord {
+} & ManagedRoomRow): RoomRecord {
   const roomType = defaultRoomType(row.room_type);
   const room: RoomRecordWithoutTemplateMetadata = {
     roomId: row.room_id,
@@ -224,7 +227,8 @@ export function mapRoomRow(row: {
     guestAllowed: defaultGuestAllowed(row.guest_allowed, roomType),
     avatarConfig: defaultAvatarConfig(row.avatar_config),
     sessionControl: defaultSessionControl(row.session_control),
-    personalState: defaultPersonalState(row.personal_state)
+    personalState: defaultPersonalState(row.personal_state),
+    ...(row.managed_by ? { managed: mapManagedRoomState(row) } : {})
   };
   if (
     !row.template_version_template_id
@@ -242,4 +246,33 @@ export function mapRoomRow(row: {
     content_hash: row.template_version_content_hash
   });
   return bindRoomTemplateMetadata(room, versionSnapshot);
+}
+
+// Columns of the left-joined integration_rooms row (see MANAGED_ROOM_COLUMNS_SQL in storage.ts).
+export interface ManagedRoomRow {
+  managed_by?: string | null;
+  managed_kind?: ManagedRoomKind | null;
+  managed_status?: ManagedRoomStatus | null;
+  managed_access_until?: string | Date | null;
+  managed_grace_seconds?: number | null;
+  managed_revision?: number | null;
+  managed_owner_subject?: string | null;
+  managed_last_operation_id?: string | null;
+  managed_created_at?: string | Date | null;
+  managed_updated_at?: string | Date | null;
+}
+
+export function mapManagedRoomState(row: ManagedRoomRow): ManagedRoomState {
+  return {
+    managedBy: row.managed_by!,
+    kind: row.managed_kind ?? "reference",
+    status: row.managed_status === "paused" ? "paused" : "active",
+    accessUntil: isoString(row.managed_access_until)!,
+    graceSeconds: row.managed_grace_seconds ?? 0,
+    revision: row.managed_revision ?? 0,
+    ownerSubject: row.managed_owner_subject ?? null,
+    lastOperationId: row.managed_last_operation_id ?? null,
+    createdAt: isoString(row.managed_created_at)!,
+    updatedAt: isoString(row.managed_updated_at)!
+  };
 }
