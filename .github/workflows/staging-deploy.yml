@@ -32,7 +32,7 @@ jobs:
   deploy:
     if: github.event_name == 'workflow_dispatch' || (vars.STAGING_AUTO_DEPLOY_ENABLED != 'false' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main')
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 200
     concurrency:
       group: staging-deploy
       cancel-in-progress: false
@@ -246,8 +246,10 @@ jobs:
       - name: Verification gate
         id: gate
         # The full reference/RTC catalog and mandatory Rutube share this budget.
+        # The 79-case catalog reached 77 passes at 50 minutes; retain time for
+        # its final capture cases, the bounded Rutube test and report flushing.
         # Stop on the first failure so its report survives instead of timing out.
-        timeout-minutes: 50
+        timeout-minutes: 70
         if: steps.rollout.outcome == 'success'
         continue-on-error: true
         env:
