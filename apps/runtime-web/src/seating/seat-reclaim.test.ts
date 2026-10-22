@@ -111,3 +111,14 @@ test("new seat intent, acknowledgement by another occupant, and reset clear pend
     assert.deepEqual(controller.getPendingReleaseSeatIds(), []);
   }
 });
+
+test("reconnect resends correlated cancel releases before ordinary releases and any reclaim", () => {
+  const plan = planSeatReclaimOnReconnect({ currentSeatId: "seat-b", seatingEnabled: true, roomStateClientAvailable: true,
+    pendingReleaseSeatIds: ["seat-c"], pendingCorrelatedReleases: [{ seatId: "seat-a", commandId: "release:1" }] });
+  assert.deepEqual(plan.commands, [
+    { type: "send_seat_release", seatId: "seat-a", commandId: "release:1" },
+    { type: "send_seat_release", seatId: "seat-c" },
+    { type: "request_seat_claim", seatId: "seat-b" },
+    { type: "send_seat_claim", seatId: "seat-b" }
+  ]);
+});

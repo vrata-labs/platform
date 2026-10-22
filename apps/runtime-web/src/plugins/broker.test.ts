@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createRoomPluginBroker } from "./broker.js";
+import type { RoomPluginResponse } from "@vrata/room-plugin-sdk";
+import { createRoomPluginBroker, type RoomPluginSeatingPort } from "./broker.js";
 import { RoomPluginBindingLease } from "./lease.js";
 import { parseRoomPluginRuntimeSnapshot, roomPluginContentPath, type RoomPluginRuntimeBinding } from "./runtime-dto.js";
 
@@ -9,14 +10,19 @@ const makeBinding = (): RoomPluginRuntimeBinding => parseRoomPluginRuntimeSnapsh
     artifactSha256: "a".repeat(64), enabled: true, generation: 1, bindingRevision: 1, config: {}, approvedCapabilities: ["status.set", "seating.claimSelfOnEntry"],
     contentUrl: roomPluginContentPath("room", "22222222-2222-4222-8222-222222222222") }] }), "room").bindings[0];
 const request = (id = "1", text = "<b>literal</b>") => ({ sdkApiVersion: 1, requestId: id, operation: "status.set", payload: { text } } as const);
-function fixture() {
+function fixture(seating?: RoomPluginSeatingPort) {
   let now = 0, available = true, tokenDeadline = 900_000;
   const binding = makeBinding(); let current: RoomPluginRuntimeBinding | null = binding;
   const lease = new RoomPluginBindingLease(() => now), effects: string[] = [], abort = new AbortController();
   const proof = () => now < tokenDeadline ? { token: "native-private-proof", deadlineMs: tokenDeadline } : null;
   assert.ok(lease.accept(lease.beginRequest(proof()!)!, { schemaVersion: 1, sdkApiVersion: 1, revision: 1, leaseExpiresAtMs: 1, bindings: [binding] }));
-  const broker = createRoomPluginBroker({ binding, currentBinding: () => current, available: () => available, proof, lease, clock: () => now, status: text => effects.push(text) });
-  return { broker, lease, effects, abort, binding, setTime(value: number) { now = value; }, setCurrent(value: RoomPluginRuntimeBinding | null) { current = value; },
+  const dispatch = createRoomPluginBroker({ binding, currentBinding: () => current, available: () => available, proof, lease, clock: () => now,
+    status: text => effects.push(text), seating });
+  // Status and denials are synchronous; only correlated seat claims wait for the server.
+  const broker = (...args: Parameters<typeof dispatch>) => {
+    const value = dispatch(...args); assert.equal(value instanceof Promise, false); return value as RoomPluginResponse;
+  };
+  return { broker, dispatch, lease, effects, abort, binding, setTime(value: number) { now = value; }, setCurrent(value: RoomPluginRuntimeBinding | null) { current = value; },
     offline() { available = false; }, expireToken() { tokenDeadline = now; } };
 }
 test("status commit is synchronous, plain data and native-authorized before the SDK receipt", () => {
@@ -61,4 +67,22 @@ test("a reappearing tuple cannot authorize an old instance with a different conf
 test("an expired action cannot commit under a freshly renewed binding lease", () => {
   const h = fixture(); assert.equal(h.broker(request(), h.abort.signal, () => false).ok, false);
   assert.deepEqual(h.effects, []);
+});
+
+test("seating requests reach only the host seat port, after every native check, and never carry guest identity", async () => {
+  const calls: string[] = [];
+  const port: RoomPluginSeatingPort = { claim: async seatId => { calls.push(`claim:${seatId}`); return { result: "accepted" }; }, cancel: () => calls.push("cancel") };
+  const h = fixture(port);
+  const claimed = await h.dispatch({ sdkApiVersion: 1, requestId: "7", operation: "seating.claimSelfOnEntry", payload: { seatId: "seat-a" } }, h.abort.signal);
+  assert.deepEqual(claimed, { sdkApiVersion: 1, requestId: "7", ok: true, result: "accepted" });
+  assert.deepEqual(h.broker({ sdkApiVersion: 1, requestId: "8", operation: "seating.cancelPendingOwnClaim", payload: {} }, h.abort.signal),
+    { sdkApiVersion: 1, requestId: "8", ok: false, error: "capability-denied" }, "cancel was not approved for this binding");
+  const denied = fixture({ claim: async () => ({ error: "arrival-not-allowed" }), cancel: () => undefined });
+  assert.deepEqual(await denied.dispatch({ sdkApiVersion: 1, requestId: "9", operation: "seating.claimSelfOnEntry", payload: { seatId: "seat-a" } }, denied.abort.signal),
+    { sdkApiVersion: 1, requestId: "9", ok: false, error: "arrival-not-allowed" });
+  for (const change of [(f: ReturnType<typeof fixture>) => f.lease.invalidate(), (f: ReturnType<typeof fixture>) => f.offline(), (f: ReturnType<typeof fixture>) => f.abort.abort()]) {
+    const f = fixture(port); change(f);
+    assert.equal(f.broker({ sdkApiVersion: 1, requestId: "10", operation: "seating.claimSelfOnEntry", payload: { seatId: "seat-b" } }, f.abort.signal).ok, false);
+  }
+  assert.deepEqual(calls, ["claim:seat-a"]);
 });

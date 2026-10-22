@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { setTimeout as delay } from "node:timers/promises";
 import { createRoomPluginArtifact } from "@vrata/room-plugin-sdk/artifact";
 import type { RoomPluginEvent, RoomPluginRequest } from "@vrata/room-plugin-sdk";
-import { RoomPluginController, type RoomPluginCoreContext, type RoomPluginInstance } from "./controller.js";
+import { RoomPluginController, type RoomPluginCoreContext, type RoomPluginInstance, type RoomPluginSeatingHost } from "./controller.js";
 import { parseRoomPluginRuntimeSnapshot, roomPluginContentPath, type RoomPluginRuntimeSnapshot } from "./runtime-dto.js";
 import type { RoomPluginStatusRow } from "./status-view.js";
 import { SandboxError } from "./limits.js";
@@ -29,7 +29,7 @@ async function until(check: () => boolean) {
   const deadline = Date.now() + 5000;
   while (!check()) { if (Date.now() >= deadline) assert.fail("controller_condition_not_reached"); await delay(1); }
 }
-function harness() {
+function harness(seating?: RoomPluginSeatingHost) {
   let now = 0, id = 0, current = snapshot(0, "", false), content = artifact.bytes, startsError: Error | null = null;
   const context: RoomPluginCoreContext = { active: true, ready: true, online: true, visible: true, connection: "connected" };
   const timers = new Map<number, { at: number; callback(): void }>();
@@ -39,7 +39,7 @@ function harness() {
   let pendingSnapshot: (() => Promise<RoomPluginRuntimeSnapshot>) | null = null;
   let pendingContent: (() => Promise<Uint8Array>) | null = null;
   let pendingStart: (() => Promise<Instance>) | null = null;
-  const controller = new RoomPluginController({ apiBaseUrl: "https://app.invalid", roomId: "room", context: () => context,
+  const controller = new RoomPluginController({ apiBaseUrl: "https://app.invalid", roomId: "room", context: () => context, seating,
     proof: () => ({ token: "native-private-token", deadlineMs: 900_000 }), clock: () => now,
     timers: { schedule(callback, ms) { const handle = ++id; timers.set(handle, { at: now + ms, callback }); return handle; }, cancel(handle) { timers.delete(handle as number); } },
     http: { async snapshot() { counters.snapshots++; return pendingSnapshot ? pendingSnapshot() : current; },
@@ -49,7 +49,7 @@ function harness() {
       assert.equal(source, artifact.artifact.entry); assert.equal(signal.aborted, false);
       if (startsError) throw startsError;
       if (pendingStart) return pendingStart();
-      assert.equal(dispatch({ sdkApiVersion: 1, requestId: "1", operation: "status.set", payload: { text: String(config.greeting) } }, new AbortController().signal).ok, true);
+      assert.equal((dispatch({ sdkApiVersion: 1, requestId: "1", operation: "status.set", payload: { text: String(config.greeting) } }, new AbortController().signal) as { ok: boolean }).ok, true);
       const instance = new Instance(); instances.push(instance); return instance;
     },
     render(rows) { renderings.push(rows.map(row => ({ ...row }))); }
@@ -205,4 +205,68 @@ test("an instance that fails while idle is not replaced by the discovery timer",
   await h.advance(2000); await until(() => !h.controller.diagnostics().fetchPending);
   assert.equal(h.controller.diagnostics().failed, 1); assert.equal(h.counters.starts, 1);
   await h.advance(6000); assert.equal(h.counters.starts, 1); h.controller.stop();
+});
+
+function seatingHost(capabilities: string[] = ["status.set", "seating.claimSelfOnEntry"]) {
+  const calls: string[] = [];
+  let ready = false, supported = true;
+  const host: RoomPluginSeatingHost = {
+    supported: () => supported, ready: () => ready,
+    snapshot: (owner, seating) => { calls.push(`snapshot:${seating}`); return { ownParticipantAlias: "alias", arrivalAllowed: seating, seats: [] }; },
+    port: owner => { calls.push("port"); return { claim: async () => ({ result: "busy" }), cancel: () => undefined }; },
+    retire: owner => { calls.push("retire"); }
+  };
+  return { host, calls, capabilities, setReady(value: boolean) { ready = value; }, setSupported(value: boolean) { supported = value; } };
+}
+function seatingSnapshot(revision = 1, enabled = true) {
+  return parseRoomPluginRuntimeSnapshot(JSON.stringify({ schemaVersion: 1, sdkApiVersion: 1, revision, leaseExpiresAtMs: 1, bindings: enabled ? [{
+    bindingId, packageId, pluginId: artifact.artifact.manifest.id, version: "1.0.0", artifactSha256: artifact.artifactSha256,
+    enabled: true, generation: revision, bindingRevision: revision, approvedCapabilities: ["status.set"], config: { greeting: "seat" }, contentUrl: roomPluginContentPath("room", packageId)
+  }] : [] }), "room");
+}
+
+test("room.ready waits for platform readiness, is sent once per instance and snapshots stay coalesced", async () => {
+  const s = seatingHost(); const h = harness(s.host); h.config(seatingSnapshot()); h.controller.start(2);
+  await until(() => h.controller.diagnostics().running === 1);
+  assert.deepEqual(h.instances[0].events.map(event => event.type), ["room.connection"], "no room.ready before readiness");
+  s.setReady(true); h.controller.seatingChanged(); h.controller.seatingChanged();
+  await h.advance(100); await until(() => h.instances[0].events.length === 2);
+  assert.deepEqual(h.instances[0].events.map(event => event.type), ["room.connection", "room.ready"]);
+  assert.deepEqual(s.calls, ["snapshot:false"], "a status-only plugin gets no seat data");
+  h.controller.seatingChanged(); await h.advance(200); await delay(5);
+  assert.equal(h.instances[0].events.length, 2, "status-only plugins receive no seating snapshots");
+  h.config(seatingSnapshot(2, false)); h.controller.kick(); await until(() => h.controller.diagnostics().instances === 0);
+  assert.ok(s.calls.includes("retire"), "disable retires the instance's pending seating");
+  h.controller.stop();
+});
+
+test("seating status is labelled unavailable only when the server cannot correlate claims", async () => {
+  const s = seatingHost(); s.setSupported(false); const h = harness(s.host);
+  h.config(parseRoomPluginRuntimeSnapshot(JSON.stringify({ schemaVersion: 1, sdkApiVersion: 1, revision: 1, leaseExpiresAtMs: 1, bindings: [{
+    bindingId, packageId, pluginId: artifact.artifact.manifest.id, version: "1.0.0", artifactSha256: artifact.artifactSha256, enabled: true,
+    generation: 1, bindingRevision: 1, approvedCapabilities: ["status.set"], config: { greeting: "x" }, contentUrl: roomPluginContentPath("room", packageId) }] }), "room"));
+  h.controller.start(2); await until(() => h.controller.diagnostics().running === 1);
+  assert.equal(h.renderings.at(-1)![0].seatingUnavailable, false, "status-only bindings never show the seating notice");
+  assert.equal(s.calls.includes("port"), false, "no seat port without a seating capability");
+  h.controller.stop();
+});
+
+test("a seating-capable instance gets the seat port, real snapshots and coalesced updates", async () => {
+  const { entrySha256: _computed, ...manifest } = artifact.artifact.manifest;
+  const seatArtifact = createRoomPluginArtifact({ ...manifest, id: "external.seat", requestedCapabilities: ["status.set", "seating.claimSelfOnEntry"] },
+    artifact.artifact.entry);
+  const s = seatingHost(); s.setReady(true); const h = harness(s.host); h.bytes(seatArtifact.bytes);
+  h.config(parseRoomPluginRuntimeSnapshot(JSON.stringify({ schemaVersion: 1, sdkApiVersion: 1, revision: 1, leaseExpiresAtMs: 1, bindings: [{
+    bindingId, packageId, pluginId: "external.seat", version: "1.0.0", artifactSha256: seatArtifact.artifactSha256, enabled: true,
+    generation: 1, bindingRevision: 1, approvedCapabilities: ["status.set", "seating.claimSelfOnEntry"], config: { greeting: "x" },
+    contentUrl: roomPluginContentPath("room", packageId) }] }), "room"));
+  h.controller.start(2); await until(() => h.instances.length === 1 && h.instances[0].events.length === 2);
+  assert.deepEqual(h.instances[0].events.map(event => event.type), ["room.connection", "room.ready"]);
+  assert.ok(s.calls.includes("port")); assert.equal(h.renderings.at(-1)![0].seatingUnavailable, false);
+  for (let i = 0; i < 5; i++) h.controller.seatingChanged();
+  await h.advance(100); await until(() => h.instances[0].events.length === 3);
+  assert.equal(h.instances[0].events[2].type, "seating.snapshot");
+  await h.advance(300); await delay(5); assert.equal(h.instances[0].events.length, 3, "five changes produced one snapshot");
+  h.controller.stop();
+  assert.ok(s.calls.includes("retire"));
 });

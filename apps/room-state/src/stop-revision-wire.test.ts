@@ -26,7 +26,7 @@ test("WS advertises versioned Stop CAS, rejects malformed/stale revision and kee
     throw new Error("stop_wire_reply_timeout");
   }
   const snapshot = await wait(message => message.type === "room_state");
-  assert.deepEqual(snapshot.capabilities, { surfaceStopRevision: 1 });
+  assert.deepEqual(snapshot.capabilities, { surfaceStopRevision: 1, seatCommandCorrelation: 1 });
   async function command(commandId: string, payload: Record<string, unknown>) {
     socket.send(JSON.stringify({ ...payload, commandId })); return (await wait(message => message.result?.commandId === commandId)).result;
   }

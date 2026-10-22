@@ -99,6 +99,15 @@ export interface SeatClaimResultPayload {
   accepted: boolean;
   occupantId: string | null;
   previousSeatId: string | null;
+  /** Echoed only when the claim carried a valid commandId. */
+  commandId?: string;
+}
+
+/** Targeted acknowledgement of a correlated release; sent after any resulting room broadcast. */
+export interface SeatReleaseResultPayload {
+  commandId: string;
+  seatId: string | null;
+  releasedSeatId: string | null;
 }
 
 export interface PrivilegedRoomCommandResultPayload {
@@ -500,7 +509,7 @@ function ensureRoom(server: RoomStateServer, roomId: string): RoomState {
 
 function broadcastRoom(server: RoomStateServer, roomId: string): void {
   const room = server.rooms.get(roomId);
-  const payload = JSON.stringify({ type: "room_state", serverTimeMs: Date.now(), capabilities: { surfaceStopRevision: 1 }, room: room ? serializeRoomState(room) : null });
+  const payload = JSON.stringify({ type: "room_state", serverTimeMs: Date.now(), capabilities: { surfaceStopRevision: 1, seatCommandCorrelation: 1 }, room: room ? serializeRoomState(room) : null });
   for (const client of server.clients.get(roomId) ?? []) {
     if (client.readyState === client.OPEN) {
       client.send(payload);
@@ -854,6 +863,30 @@ export function applySeatClaim(server: RoomStateServer, roomId: string, particip
   };
 }
 
+const SEAT_COMMAND_ID = /^[A-Za-z0-9:_-]{1,64}$/;
+
+/** Seat claim/release from the participant's own socket. A valid commandId is an additive correlation:
+ * commands without it keep exactly the legacy replies, and it never carries authority. */
+export function handleSeatCommand(server: RoomStateServer, roomId: string, participantId: string,
+  payload: { type?: string; seatId?: unknown; commandId?: unknown }, reply: (message: unknown) => void): boolean {
+  const commandId = typeof payload.commandId === "string" && SEAT_COMMAND_ID.test(payload.commandId) ? payload.commandId : undefined;
+  if (payload.type === "seat_claim") {
+    const result = applySeatClaim(server, roomId, participantId, typeof payload.seatId === "string" ? payload.seatId : "");
+    reply({ type: "seat_claim_result", seatClaimResult: commandId ? { ...result, commandId } : result });
+    return true;
+  }
+  if (payload.type === "seat_release") {
+    const seatId = typeof payload.seatId === "string" ? payload.seatId : undefined;
+    const releasedSeatId = applySeatRelease(server, roomId, participantId, seatId);
+    if (commandId) {
+      const result: SeatReleaseResultPayload = { commandId, seatId: seatId?.trim() || null, releasedSeatId };
+      reply({ type: "seat_release_result", seatReleaseResult: result });
+    }
+    return true;
+  }
+  return false;
+}
+
 export function applySeatRelease(server: RoomStateServer, roomId: string, participantId: string, seatId?: string): string | null {
   if (seatId !== undefined && (typeof seatId !== "string" || seatId.trim().length === 0)) {
     throw new Error("invalid_seat_release");
@@ -1180,16 +1213,7 @@ export function startRoomStateService(port = Number.parseInt(process.env.ROOM_ST
           relayAvatarPoseFrame(authority, roomId, participantId, payload.poseFrame);
           return;
         }
-        if (payload.type === "seat_claim") {
-          const result = applySeatClaim(authority, roomId, participantId, typeof payload.seatId === "string" ? payload.seatId : "");
-          sendToSocket(socket, {
-            type: "seat_claim_result",
-            seatClaimResult: result
-          });
-          return;
-        }
-        if (payload.type === "seat_release") {
-          applySeatRelease(authority, roomId, participantId, typeof payload.seatId === "string" ? payload.seatId : undefined);
+        if (handleSeatCommand(authority, roomId, participantId, payload, message => sendToSocket(socket, message))) {
           return;
         }
         if (payload.type === "surface_create_object") {

@@ -47,10 +47,12 @@ import { RuntimeAccessError, bootRuntime, deleteRoomDocument, downloadRoomDocume
 import { createSessionControlPoller } from "./session-control-poller.js";
 import { RoomPluginController } from "./plugins/controller.js";
 import { RoomPluginTokenBound } from "./plugins/token-bound.js";
-import { createRoomPluginStatusView } from "./plugins/status-view.js";
+import { createRoomPluginSeatChoiceView, createRoomPluginStatusView } from "./plugins/status-view.js";
 import { createRoomPluginAuthorHttp } from "./plugins/author-http.js";
 import { RoomPluginAuthorSession } from "./plugins/author-session.js";
 import { createRoomPluginAuthorPanel } from "./plugins/author-panel.js";
+import { RoomPluginSeatAdapter } from "./plugins/seat-adapter.js";
+import { createRoomPluginSeatOptOut } from "./plugins/seat-opt-out.js";
 import { createMediaSourceUpgrade, permitsScreenShare } from "./media/media-source-upgrade.js";
 import { createMediaActionBarrier } from "./media/media-action-barrier.js";
 import { planBaseMedia } from "./media/media-token-error.js";
@@ -1443,6 +1445,9 @@ let sessionControlBlocked = false;
 let meetingTools: ReturnType<typeof createMeetingToolTransition> | null = null;
 let meetingToolsCurrent: (() => MeetingToolContext) | null = null;
 let surfaceStopRevisionSupported = false;
+// Seat claim/release correlation announced by room-state, and whether this connection delivered occupancy yet.
+let seatCommandCorrelationSupported = false;
+let roomStateOccupancySeen = false;
 const remoteAvatarRuntime = createRemoteAvatarRuntime({
   scene,
   bodyGeometry,
@@ -1895,6 +1900,8 @@ function syncSeatStateFromOccupancy(): void {
   seatingController.applyOccupancy({ seatOccupancy: roomSeatOccupancy, forcedSeatId: forcedTestSeatId });
   syncSeatDebugState();
   updateSeatMarkerVisuals(performance.now() / 1000);
+  roomPluginSeats.observe();
+  roomPluginRuntime.seatingChanged();
   const currentSeatId = getCurrentSeatId();
   if (!currentSeatId) {
     lastAppliedSeatLockId = null;
@@ -2240,6 +2247,8 @@ function handleRoomSnapshot(snapshot: RoomStateSnapshot): void {
   roomSeatOccupancy = { ...(snapshot.seatOccupancy ?? {}) };
   roomMediaObjects = snapshot.mediaObjects;
   surfaceStopRevisionSupported = snapshot.capabilities?.surfaceStopRevision === true;
+  seatCommandCorrelationSupported = snapshot.capabilities?.seatCommandCorrelation === true;
+  roomStateOccupancySeen = true;
   meetingTools?.sync();
   syncSeatStateFromOccupancy();
   syncMediaObjectsDebugState();
@@ -2298,7 +2307,25 @@ function setPlayerPositionForFloorTeleport(floorPoint: Vector3Like): void {
   });
 }
 
+const roomPluginSeatOptOut = createRoomPluginSeatOptOut((() => { try { return sessionStorage; } catch { return null; } })(), roomId);
+// Single arrival grant of this page session. Plugins only ask; the server decides and the frame pipeline seats.
+const roomPluginSeats = new RoomPluginSeatAdapter({
+  world: () => ({ ready: runtimeBootReady && sceneAnchorsReady && roomStateOccupancySeen, correlation: seatCommandCorrelationSupported,
+    online: navigator.onLine && roomStateConnected, xr: renderer.xr.isPresenting, selfId: participantId,
+    seats: sceneSeatAnchors.map(anchor => ({ id: anchor.id, yaw: anchor.yaw })), occupancy: roomSeatOccupancy,
+    currentSeatId: getCurrentSeatId(), pendingSeatId: getPendingSeatId() }),
+  optedOut: () => roomPluginSeatOptOut.get(),
+  claim: (seatId, commandId) => executeRuntimeCommandList([{ type: "request_seat_claim", seatId, commandId }, { type: "send_seat_claim", seatId, commandId }]),
+  cancel: (releaseCommandId, claimCommandId) => {
+    if (seatingController.getPendingCommandId() !== claimCommandId) return false;
+    const cancelled = seatingController.cancelPending(releaseCommandId);
+    syncSeatDebugState();
+    executeRuntimeCommandList(cancelled.commands);
+    return cancelled.commands.length > 0;
+  }
+});
 const executeRuntimeCommandList = createRuntimeCommandExecutor({
+  onManualLocomotionIntent: () => roomPluginSeats.manualIntent(),
   seatingController,
   getRoomStateClient: () => roomStateClient,
   isRoomStateConnected: () => roomStateConnected,
@@ -4195,18 +4222,28 @@ Object.defineProperty(debugState.hostControls, "polling", { enumerable: true,
   get: () => ({ timer: sessionControlPoller.diagnostics(), request: refreshDiagnostics() }) });
 const roomPluginStatusView = createRoomPluginStatusView({ document,
   root: document.querySelector<HTMLElement>("#room-plugin-statuses")!, list: document.querySelector<HTMLElement>("#room-plugin-status-list")! });
+const roomPluginSeatChoice = createRoomPluginSeatChoiceView({ root: document.querySelector<HTMLElement>("#room-plugin-seat-choice")!,
+  checkbox: document.querySelector<HTMLInputElement>("#room-plugin-seat-choice-input")!, optOut: roomPluginSeatOptOut,
+  veto: () => roomPluginSeats.manualIntent() });
 const roomPluginRuntime = new RoomPluginController({ apiBaseUrl, roomId,
   context: () => ({ active: activeIdentityProtocolVersion === 2 && !sessionControlBlocked && !runtimeSessionGate.reason,
     ready: runtimeBootReady, online: navigator.onLine, visible: document.visibilityState !== "hidden",
     connection: roomStateConnected ? "connected" : "reconnecting" }),
-  proof: () => roomPluginTokenBound.capture(), render: rows => roomPluginStatusView.render(rows),
+  proof: () => roomPluginTokenBound.capture(), render: rows => { roomPluginStatusView.render(rows); roomPluginSeatChoice.render(rows); },
   identityRequired: reason => runtimeSessionGate.require(reason),
+  seating: {
+    supported: () => seatCommandCorrelationSupported,
+    ready: () => runtimeBootReady && sceneAnchorsReady && roomStateOccupancySeen,
+    snapshot: (owner, seating) => roomPluginSeats.snapshot(owner, seating),
+    port: owner => ({ claim: seatId => roomPluginSeats.claim(seatId, owner), cancel: () => roomPluginSeats.cancelOwn(owner) }),
+    retire: owner => roomPluginSeats.retire(owner)
+  },
   start: async (source, config, approved, dispatch, signal) => {
     const { startPluginSandbox } = await import("./plugins/host.js");
     return startPluginSandbox(source, config, approved, undefined, { dispatch, signal });
   }
 });
-Object.defineProperty(debugState, "plugins", { enumerable: true, get: () => roomPluginRuntime.diagnostics() });
+Object.defineProperty(debugState, "plugins", { enumerable: true, get: () => ({ ...roomPluginRuntime.diagnostics(), seating: roomPluginSeats.diagnostics() }) });
 const roomPluginAuthorPanel = createRoomPluginAuthorPanel({ document,
   root: document.querySelector<HTMLElement>("#room-plugin-author")!, list: document.querySelector<HTMLElement>("#room-plugin-author-list")!,
   message: document.querySelector<HTMLElement>("#room-plugin-author-message")!,
@@ -5196,6 +5233,7 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
 
   const connectionGeneration = ++roomStateConnectionGeneration;
   surfaceStopRevisionSupported = false;
+  seatCommandCorrelationSupported = false; roomStateOccupancySeen = false;
   meetingTools?.sync();
   const isCurrentConnection = () => connectionGeneration === roomStateConnectionGeneration;
   roomStateClient = connectRoomState(roomStateUrl, roomId, participantId, {
@@ -5224,6 +5262,7 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
       const seatReclaim = planSeatReclaimOnReconnect({
         currentSeatId: getCurrentSeatId(),
         pendingReleaseSeatIds: seatingController.getPendingReleaseSeatIds(),
+        pendingCorrelatedReleases: seatingController.getPendingCorrelatedReleases(),
         seatingEnabled: runtimeFlags.avatarSeatingEnabled,
         roomStateClientAvailable: Boolean(activeClient)
       });
@@ -5273,6 +5312,9 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
     },
     onSeatClaimResult: (result) => {
       if (!isCurrentConnection()) return;
+      roomPluginSeats.settleClaim(result);
+      // A late answer to a cancelled automatic claim never seats or clears anything.
+      if (seatingController.isCancelledClaim(result.commandId)) { syncSeatDebugState(); return; }
       if (result.accepted) {
         roomSeatOccupancy = applyAcceptedSeatClaimToOccupancy(roomSeatOccupancy, { result, participantId });
         clearSeatReclaimRetry();
@@ -5280,10 +5322,16 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
         setStatus(`Seated at ${result.seatId}`);
         return;
       }
-      seatingController.clearPending();
+      seatingController.settleRejectedClaim(result);
       clearSeatReclaimRetry();
       syncSeatDebugState();
       setStatus(result.occupantId ? `Seat occupied by ${result.occupantId}` : "Seat unavailable");
+      roomPluginRuntime.seatingChanged();
+    },
+    onSeatReleaseResult: (result) => {
+      if (!isCurrentConnection()) return;
+      seatingController.acknowledgeRelease(result.commandId);
+      syncSeatStateFromOccupancy();
     },
     onAccessDenied: (result) => {
       if (!isCurrentConnection()) return;
@@ -5317,6 +5365,7 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
       roomStateConnected = false;
       debugState.roomStateConnected = false;
       roomPluginRuntime.connectionChanged();
+      roomPluginSeats.stop("offline");
       mediaSurfaceCommands.rejectAll("room_state_error");
       clearSeatReclaimRetry();
       applyIssue(issue, {
@@ -5336,6 +5385,7 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
       roomStateConnected = false;
       debugState.roomStateConnected = false;
       roomPluginRuntime.connectionChanged();
+      roomPluginSeats.stop("offline");
       mediaSurfaceCommands.rejectAll("room_state_closed");
       surfaceStopRevisionSupported = false; meetingTools?.sync();
       applyIssue(issue, {
@@ -8060,6 +8110,8 @@ async function main(): Promise<void> {
   diagnosticsAccumulator = 0;
   runtimeBootReady = !sessionControlBlocked;
   roomPluginRuntime.kick();
+  roomPluginSeats.observe();
+  roomPluginRuntime.seatingChanged();
   roomPluginAuthor.sync();
   reportRuntimeBootDiagnostics(reportDiagnostics);
 }

@@ -1,9 +1,10 @@
-import { validateRoomPluginConfig, type RoomPluginArtifact, type RoomPluginCapability, type RoomPluginConfig, type RoomPluginEvent } from "@vrata/room-plugin-sdk";
+import { validateRoomPluginConfig, type RoomPluginArtifact, type RoomPluginCapability, type RoomPluginConfig, type RoomPluginEvent,
+  type RoomPluginRoomSnapshot } from "@vrata/room-plugin-sdk";
 import type { IdentityRequirementReason } from "@vrata/shared-types";
 import { createRoomPluginHttp, RoomPluginHttpError } from "./http.js";
 import { verifyRoomPluginArtifact } from "./artifact-verify.js";
 import { RoomPluginBindingLease } from "./lease.js";
-import { createRoomPluginBroker } from "./broker.js";
+import { createRoomPluginBroker, type RoomPluginSeatingPort } from "./broker.js";
 import { RoomPluginRuntimeError, type RoomPluginRuntimeFailure } from "./runtime-errors.js";
 import { SandboxError, type SandboxFailure, type SandboxHostPhase, type SandboxStartupTiming } from "./limits.js";
 import type { RoomPluginRuntimeBinding } from "./runtime-dto.js";
@@ -16,6 +17,16 @@ export interface RoomPluginInstance {
   readonly startupTiming?: SandboxStartupTiming;
   event(event: RoomPluginEvent): Promise<unknown>; dispose(): Promise<unknown>; terminate(): void;
 }
+/** Platform seating facts for plugins; absent in runtimes without the adapter. */
+export interface RoomPluginSeatingHost {
+  /** The room-state server correlates claims; otherwise seating capabilities stay denied. */
+  supported(): boolean;
+  /** Authenticated room, scene anchors, spawn and the first authoritative occupancy are all in place. */
+  ready(): boolean;
+  snapshot(owner: string, seating: boolean): RoomPluginRoomSnapshot;
+  port(owner: string): RoomPluginSeatingPort;
+  retire(owner: string): void;
+}
 export interface RoomPluginCoreContext {
   active: boolean; ready: boolean; online: boolean; visible: boolean;
   connection: "connected" | "reconnecting" | "disconnected";
@@ -25,7 +36,10 @@ interface Entry {
   state: RoomPluginStatusRow["state"]; name: string | null; text: string;
   abort: AbortController; instance?: RoomPluginInstance; starting: boolean; starts: number[];
   connection?: RoomPluginCoreContext["connection"];
+  readySent?: boolean;
 }
+const seatingCapable = (binding: RoomPluginRuntimeBinding) => binding.approvedCapabilities.some(capability => capability.startsWith("seating."));
+const ownerOf = (entry: Entry) => `${entry.binding.bindingId}:${entry.generation}`;
 const key = (binding: RoomPluginRuntimeBinding) => JSON.stringify([binding.bindingId, binding.generation, binding.bindingRevision, binding.artifactSha256]);
 type Failure = RoomPluginRuntimeFailure | SandboxFailure;
 
@@ -55,6 +69,7 @@ export class RoomPluginController {
   private renderFailed = false;
   private frameworkFailed = false;
   private failedEntries = new Map<string, { key: string; code: Failure }>();
+  private seatingTimer: unknown;
 
   constructor(private readonly input: {
     apiBaseUrl: string; roomId: string;
@@ -64,6 +79,7 @@ export class RoomPluginController {
       dispatch: ReturnType<typeof createRoomPluginBroker>, signal: AbortSignal): Promise<RoomPluginInstance>;
     render(rows: readonly RoomPluginStatusRow[]): void;
     identityRequired?(reason: IdentityRequirementReason): void;
+    seating?: RoomPluginSeatingHost;
     clock?: () => number; timers?: SessionControlPollerTimers;
     http?: ReturnType<typeof createRoomPluginHttp>;
   }) {
@@ -83,7 +99,8 @@ export class RoomPluginController {
     this.active = false; this.epoch++; this.request?.abort.abort(); this.request = undefined;
     if (this.timer !== undefined) this.timers.cancel(this.timer);
     if (this.expiryTimer !== undefined) this.timers.cancel(this.expiryTimer);
-    this.timer = this.expiryTimer = undefined; this.lease.resetSession();
+    if (this.seatingTimer !== undefined) this.timers.cancel(this.seatingTimer);
+    this.timer = this.expiryTimer = this.seatingTimer = undefined; this.lease.resetSession();
     for (const entry of this.entries.values()) this.retire(entry);
     this.entries.clear(); this.cache.clear(); this.deniedToken = null; this.state = "off"; this.render();
   }
@@ -104,6 +121,16 @@ export class RoomPluginController {
   kick(): void {
     if (this.timer !== undefined) this.timers.cancel(this.timer); this.timer = undefined;
     if (this.active) void this.refresh().catch(() => this.failFramework("host-unavailable"));
+  }
+  /** Occupancy, anchors or readiness changed. room.ready is sent once per instance; later
+   * changes reach seating-capable instances as coalesced snapshots. */
+  seatingChanged(): void {
+    if (!this.active || this.seatingTimer !== undefined) return;
+    this.seatingTimer = this.timers.schedule(() => {
+      this.seatingTimer = undefined;
+      try { for (const entry of this.entries.values()) this.notifySeating(entry, true); }
+      catch { this.failFramework("host-unavailable"); }
+    }, 100);
   }
   /** Session-control change hint. It only brings the bounded refresh forward;
    * authority still comes from the runtime snapshot and its lease. */
@@ -214,6 +241,7 @@ export class RoomPluginController {
     if (entry.starts.length >= 3) { this.failEntry(entry, "host-unavailable"); return; }
     entry.starts.push(now); entry.starting = true; entry.state = "loading"; entry.abort = new AbortController();
     const generation = ++entry.generation, signal = entry.abort.signal;
+    entry.readySent = false;
     const current = () => this.active && this.entries.get(entry.binding.bindingId) === entry && entry.generation === generation && !signal.aborted;
     try {
       let artifact = this.cache.get(entry.binding.artifactSha256), config: RoomPluginConfig;
@@ -235,11 +263,12 @@ export class RoomPluginController {
       const dispatch = createRoomPluginBroker({ binding: entry.binding, lease: this.lease, clock: this.clock,
         currentBinding: () => current() && (entry.state === "loading" || entry.state === "running") ? entry.binding : null,
         available: () => current() && this.available(), proof: this.input.proof,
+        seating: seatingCapable(entry.binding) && this.input.seating?.supported() ? this.input.seating.port(ownerOf(entry)) : null,
         status: text => { entry.text = text; if (!this.render()) throw new RoomPluginRuntimeError("host-unavailable"); } });
       const instance = await this.input.start(artifact.entry, config, entry.binding.approvedCapabilities, dispatch, signal);
       if (!current() || !this.available() || !this.lease.permit(entry.binding)) { instance.terminate(); return; }
       this.startupTiming = instance.startupTiming ? { ...instance.startupTiming } : null;
-      entry.instance = instance; entry.state = "running"; this.notifyConnection(entry); this.render();
+      entry.instance = instance; entry.state = "running"; this.notifyConnection(entry); this.notifySeating(entry, false); this.render();
     } catch (error) {
       if (!current()) return;
       if (error instanceof RoomPluginHttpError || error instanceof RoomPluginRuntimeError && error.code === "lease-expired") {
@@ -265,16 +294,35 @@ export class RoomPluginController {
       this.failEntry(entry, error instanceof SandboxError ? error.code : "host-unavailable");
     });
   }
+  private notifySeating(entry: Entry, changed: boolean): void {
+    const seating = this.input.seating;
+    if (!seating || !this.available() || entry.state !== "running" || !entry.instance) return;
+    let event: RoomPluginEvent;
+    if (!entry.readySent) {
+      if (!seating.ready()) return;
+      entry.readySent = true;
+      event = { sdkApiVersion: 1, type: "room.ready", snapshot: seating.snapshot(ownerOf(entry), seatingCapable(entry.binding)) };
+    } else if (changed && seatingCapable(entry.binding)) {
+      event = { sdkApiVersion: 1, type: "seating.snapshot", snapshot: seating.snapshot(ownerOf(entry), true) };
+    } else return;
+    const generation = entry.generation;
+    void entry.instance.event(event).catch(error => {
+      if (this.entries.get(entry.binding.bindingId) !== entry || generation !== entry.generation || entry.state === "suspended") return;
+      this.failEntry(entry, error instanceof SandboxError ? error.code : "host-unavailable");
+    });
+  }
   private pauseEntries(): void {
     for (const entry of this.entries.values()) {
       if (entry.state === "failed") continue;
       if (!entry.instance || entry.instance.busy || entry.instance.state !== "ready") {
+        this.retireSeating(entry);
         entry.generation++; entry.abort.abort(); entry.instance?.terminate(); entry.instance = undefined; entry.starting = false;
       }
       entry.state = "suspended";
     }
   }
   private retire(entry: Entry): void {
+    this.retireSeating(entry);
     entry.generation++; entry.abort.abort(); const instance = entry.instance; entry.instance = undefined;
     if (!instance) return;
     // Native effects are fenced before guest disposal; busy lifecycles cannot
@@ -282,10 +330,18 @@ export class RoomPluginController {
     if (instance.state === "ready" && !instance.busy) void instance.dispose().catch(() => instance.terminate());
     else instance.terminate();
   }
+  /** A pending automatic claim of a retired instance is cancelled; a confirmed seat stays the user's. */
+  private retireSeating(entry: Entry): void {
+    try { this.input.seating?.retire(ownerOf(entry)); } catch { /* The core seat barrier owns recovery. */ }
+  }
   private failEntry(entry: Entry, code: Failure): void {
+    this.retireSeating(entry);
     entry.state = "failed"; entry.abort.abort(); entry.instance?.terminate(); entry.instance = undefined; entry.starting = false;
     if (this.entries.get(entry.binding.bindingId) === entry) this.failedEntries.set(entry.binding.bindingId, { key: entry.key, code });
     this.lastFailure = code; this.lastInstanceFailure = code; this.render();
+  }
+  private seatingSupported(): boolean {
+    try { return this.input.seating?.supported() === true; } catch { return false; }
   }
   private failFramework(code: Failure): void {
     this.frameworkFailed = true; this.stop(); this.state = "failed"; this.lastFailure = code;
@@ -296,8 +352,9 @@ export class RoomPluginController {
     try {
       const rows = [...this.entries.values()].map(entry => ({ name: entry.name,
         state: entry.state === "loading" && entry.text ? "running" as const : entry.state, text: entry.text,
-        seatingUnavailable: entry.binding.approvedCapabilities.some(capability => capability.startsWith("seating.")) }));
-      if (this.state === "failed" && !rows.length) rows.push({ name: null, state: "failed", text: "", seatingUnavailable: false });
+        seatingUnavailable: seatingCapable(entry.binding) && !this.seatingSupported(),
+        seatingOffered: seatingCapable(entry.binding) && this.seatingSupported() && (entry.state === "running" || entry.state === "loading") }));
+      if (this.state === "failed" && !rows.length) rows.push({ name: null, state: "failed", text: "", seatingUnavailable: false, seatingOffered: false });
       this.input.render(rows); return true;
     } catch {
       this.renderFailed = true; this.failFramework("host-unavailable"); return false;

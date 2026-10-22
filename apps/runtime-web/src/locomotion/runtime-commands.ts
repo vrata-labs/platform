@@ -15,9 +15,9 @@ export interface FlatVectorLike {
 export type RuntimeDebugLocomotionMode = "vr" | "vr-seated" | "desktop" | "mobile-touch";
 
 export type RuntimeCommand =
-  | { type: "request_seat_claim"; seatId: string }
-  | { type: "send_seat_claim"; seatId: string }
-  | { type: "send_seat_release"; seatId: string }
+  | { type: "request_seat_claim"; seatId: string; commandId?: string }
+  | { type: "send_seat_claim"; seatId: string; commandId?: string }
+  | { type: "send_seat_release"; seatId: string; commandId?: string }
   | { type: "release_local_seat" }
   | {
     type: "lock_to_seat";
@@ -67,10 +67,19 @@ export interface PlanInteractionCommandResult {
   lastInteractionConfirmAtMs: number;
 }
 
+/** User-driven movement or seating. System reclaim/reconcile releases and plugin-correlated claims are not. */
+export function isManualLocomotionCommand(command: RuntimeCommand): boolean {
+  switch (command.type) {
+    case "move_flat_to": case "teleport_to_floor": case "release_local_seat": return true;
+    case "request_seat_claim": return command.commandId === undefined;
+    default: return false;
+  }
+}
+
 export interface RuntimeCommandHandlers {
-  requestSeatClaim(seatId: string): void;
-  sendSeatClaim(seatId: string): void;
-  sendSeatRelease(seatId: string): void;
+  requestSeatClaim(seatId: string, commandId?: string): void;
+  sendSeatClaim(seatId: string, commandId?: string): void;
+  sendSeatRelease(seatId: string, commandId?: string): void;
   releaseLocalSeat(): void;
   lockToSeat(
     position: Vector3Like,
@@ -147,13 +156,16 @@ export function executeRuntimeCommands(commands: RuntimeCommand[], handlers: Run
   for (const command of commands) {
     switch (command.type) {
       case "request_seat_claim":
-        handlers.requestSeatClaim(command.seatId);
+        if (command.commandId === undefined) handlers.requestSeatClaim(command.seatId);
+        else handlers.requestSeatClaim(command.seatId, command.commandId);
         break;
       case "send_seat_claim":
-        handlers.sendSeatClaim(command.seatId);
+        if (command.commandId === undefined) handlers.sendSeatClaim(command.seatId);
+        else handlers.sendSeatClaim(command.seatId, command.commandId);
         break;
       case "send_seat_release":
-        handlers.sendSeatRelease(command.seatId);
+        if (command.commandId === undefined) handlers.sendSeatRelease(command.seatId);
+        else handlers.sendSeatRelease(command.seatId, command.commandId);
         break;
       case "release_local_seat":
         handlers.releaseLocalSeat();

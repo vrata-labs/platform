@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createRoomPluginStatusView, type RoomPluginStatusRow } from "./status-view.js";
+import { createRoomPluginSeatChoiceView, createRoomPluginStatusView, type RoomPluginStatusRow } from "./status-view.js";
 
 function fixture() {
   const root = { hidden: true }, nodes: Array<{ textContent: string }> = []; let writes = 0;
@@ -25,4 +25,14 @@ test("platform failure/suspension does not echo exception text, and unsupported 
   assert.equal(h.nodes[0].textContent.includes("private exception"), false);
   assert.match(h.nodes[1].textContent, /Automatic seating is not available/);
   h.view.render([row({ state: "suspended", text: "private config" })]); assert.equal(h.nodes[0].textContent.includes("private config"), false);
+});
+
+test("the seat choice shows only for an offered behavior and a refusal vetoes immediately", () => {
+  let optedOut = false, vetoes = 0, listener: (() => void) | undefined;
+  const root = { hidden: true }, checkbox = { checked: true, addEventListener: (_type: string, callback: () => void) => { listener = callback; } };
+  const view = createRoomPluginSeatChoiceView({ root, checkbox: checkbox as unknown as HTMLInputElement, optOut: { get: () => optedOut, set: value => { optedOut = value; } }, veto: () => { vetoes++; } });
+  view.render([{ name: "Seats", state: "running", text: "", seatingOffered: false }]); assert.equal(root.hidden, true);
+  view.render([{ name: "Seats", state: "running", text: "", seatingOffered: true }]); assert.equal(root.hidden, false); assert.equal(checkbox.checked, true);
+  checkbox.checked = false; listener!(); assert.equal(optedOut, true); assert.equal(vetoes, 1);
+  checkbox.checked = true; listener!(); assert.equal(optedOut, false); assert.equal(vetoes, 1, "accepting again never reopens the grant");
 });

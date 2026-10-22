@@ -4,6 +4,7 @@ import { sendSeatClaim, sendSeatRelease, type RoomStateClient } from "../room-st
 import type { SeatingController } from "../seating/seating-controller.js";
 import {
   executeRuntimeCommands,
+  isManualLocomotionCommand,
   type FlatPositionLike,
   type FlatVectorLike,
   type RuntimeCommand,
@@ -37,8 +38,10 @@ export interface RuntimeCommandBridgeInput {
   teleportToFloor(point: Vector3Like): void;
   setStatus(message: string): void;
   markTelemetry(kind: string): void;
-  sendSeatClaim?: (client: RoomStateClient, seatId: string) => void;
-  sendSeatRelease?: (client: RoomStateClient, seatId: string) => void;
+  /** Runs before a command list with a manual move/teleport/seat/stand, so a pending automatic claim is cancelled first. */
+  onManualLocomotionIntent?: () => void;
+  sendSeatClaim?: (client: RoomStateClient, seatId: string, commandId?: string) => void;
+  sendSeatRelease?: (client: RoomStateClient, seatId: string, commandId?: string) => void;
 }
 
 export type RuntimeCommandExecutor = (commands: RuntimeCommand[]) => void;
@@ -53,21 +56,27 @@ export function createRuntimeCommandExecutor(input: RuntimeCommandBridgeInput): 
   }
 
   return (commands) => {
+    if (input.onManualLocomotionIntent && commands.some(isManualLocomotionCommand)) {
+      try { input.onManualLocomotionIntent(); } catch { /* A veto observer never blocks the user's own movement. */ }
+    }
     executeRuntimeCommands(commands, {
-      requestSeatClaim(seatId) {
-        input.seatingController.requestSeatClaim(seatId);
+      requestSeatClaim(seatId, commandId) {
+        if (commandId === undefined) input.seatingController.requestSeatClaim(seatId);
+        else input.seatingController.requestSeatClaim(seatId, commandId);
         input.syncSeatDebugState();
       },
-      sendSeatClaim(seatId) {
+      sendSeatClaim(seatId, commandId) {
         const client = getConnectedRoomStateClient();
         if (client) {
-          sendClaim(client, seatId);
+          if (commandId === undefined) sendClaim(client, seatId);
+          else sendClaim(client, seatId, commandId);
         }
       },
-      sendSeatRelease(seatId) {
+      sendSeatRelease(seatId, commandId) {
         const client = getConnectedRoomStateClient();
         if (client) {
-          sendRelease(client, seatId);
+          if (commandId === undefined) sendRelease(client, seatId);
+          else sendRelease(client, seatId, commandId);
         }
       },
       releaseLocalSeat() {

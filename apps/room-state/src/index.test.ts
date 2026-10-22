@@ -17,6 +17,7 @@ import {
   applyVerifiedParticipantAccess,
   applySeatClaim,
   applySeatRelease,
+  handleSeatCommand,
   applySurfaceMediaAudioCommand,
   connectParticipant,
   createRoomStateServer,
@@ -852,4 +853,40 @@ test("reconnect during disconnect grace keeps occupied seat", async () => {
   const room = server.rooms.get("demo-room");
   assert.equal(room?.participants.length, 1);
   assert.equal(room?.seatOccupancy["seat-a"], "p1");
+});
+
+test("correlated seat commands echo claim IDs and acknowledge releases after their broadcast", () => {
+  const server = createRoomStateServer();
+  const own = createSocket(), other = createSocket();
+  connectParticipant(server, "demo-room", "p1", own as never);
+  connectParticipant(server, "demo-room", "p2", other as never);
+  const replies: unknown[] = [];
+  const reply = (message: unknown) => { replies.push(message); own.sent.push(JSON.stringify(message)); };
+  own.sent.length = 0;
+  assert.equal(handleSeatCommand(server, "demo-room", "p1", { type: "seat_claim", seatId: "seat-a", commandId: "plugin:1" }, reply), true);
+  assert.deepEqual(replies.at(-1), { type: "seat_claim_result", seatClaimResult: { seatId: "seat-a", accepted: true, occupantId: "p1", previousSeatId: null, commandId: "plugin:1" } });
+  own.sent.length = 0;
+  handleSeatCommand(server, "demo-room", "p1", { type: "seat_release", seatId: "seat-a", commandId: "release:1" }, reply);
+  const types = own.sent.map(raw => JSON.parse(raw).type);
+  assert.deepEqual(types, ["room_state", "seat_release_result"], "the occupancy broadcast precedes the targeted acknowledgement");
+  assert.deepEqual(replies.at(-1), { type: "seat_release_result", seatReleaseResult: { commandId: "release:1", seatId: "seat-a", releasedSeatId: "seat-a" } });
+  handleSeatCommand(server, "demo-room", "p1", { type: "seat_release", seatId: "seat-a", commandId: "release:2" }, reply);
+  assert.deepEqual(replies.at(-1), { type: "seat_release_result", seatReleaseResult: { commandId: "release:2", seatId: "seat-a", releasedSeatId: null } });
+  assert.equal(other.sent.some(raw => JSON.parse(raw).type === "seat_release_result"), false, "acknowledgements are never broadcast");
+  assert.equal(JSON.parse(other.sent.at(-1)!).capabilities.seatCommandCorrelation, 1);
+});
+
+test("legacy and malformed seat command IDs keep the exact previous replies", () => {
+  const server = createRoomStateServer();
+  connectParticipant(server, "demo-room", "p1", createSocket() as never);
+  const replies: unknown[] = [];
+  handleSeatCommand(server, "demo-room", "p1", { type: "seat_claim", seatId: "seat-a" }, message => replies.push(message));
+  handleSeatCommand(server, "demo-room", "p1", { type: "seat_claim", seatId: "seat-b", commandId: "x".repeat(65) }, message => replies.push(message));
+  handleSeatCommand(server, "demo-room", "p1", { type: "seat_claim", seatId: "seat-b", commandId: "bad id" }, message => replies.push(message));
+  for (const message of replies) assert.equal(Object.hasOwn((message as { seatClaimResult: object }).seatClaimResult, "commandId"), false);
+  handleSeatCommand(server, "demo-room", "p1", { type: "seat_release" }, message => replies.push(message));
+  handleSeatCommand(server, "demo-room", "p1", { type: "seat_release", commandId: { forged: true } }, message => replies.push(message));
+  assert.equal(replies.length, 3, "uncorrelated releases stay unacknowledged");
+  assert.equal(server.rooms.get("demo-room")?.seatOccupancy["seat-b"], undefined);
+  assert.equal(handleSeatCommand(server, "demo-room", "p1", { type: "participant_update" }, () => assert.fail("not a seat command")), false);
 });

@@ -12,8 +12,13 @@ export interface RoomStateSnapshot {
   participants: PresenceState[];
   seatOccupancy: Record<string, string>;
   mediaObjects: RoomMediaObjectsState;
-  capabilities?: { surfaceStopRevision: boolean };
+  capabilities?: { surfaceStopRevision?: boolean; seatCommandCorrelation?: boolean };
 }
+
+export interface SeatClaimResult { seatId: string; accepted: boolean; occupantId: string | null; previousSeatId: string | null; commandId?: string }
+export interface SeatReleaseResult { commandId: string; seatId: string | null; releasedSeatId: string | null }
+const SEAT_COMMAND_ID = /^[A-Za-z0-9:_-]{1,64}$/;
+const seatCommandId = (value: unknown) => typeof value === "string" && SEAT_COMMAND_ID.test(value) ? value : undefined;
 
 export interface RoomStateClient {
   socket: WebSocket;
@@ -30,7 +35,9 @@ export interface RoomStateClientHandlers {
   onRoomState: (snapshot: RoomStateSnapshot) => void;
   onAvatarReliableState?: (state: AvatarReliableState) => void;
   onAvatarPoseFrame?: (participantId: string, frame: CompactPoseFrame) => void;
-  onSeatClaimResult?: (result: { seatId: string; accepted: boolean; occupantId: string | null; previousSeatId: string | null }) => void;
+  onSeatClaimResult?: (result: SeatClaimResult) => void;
+  /** Only correlated releases are acknowledged; a server without correlation never sends this. */
+  onSeatReleaseResult?: (result: SeatReleaseResult) => void;
   onAccessDenied?: (result: { accepted: boolean; permission: RoomPermission; role: RoomRole }) => void;
   onSurfaceCommandResult?: (result: SurfaceCommandResult) => void;
   onError: (error: unknown) => void;
@@ -79,7 +86,7 @@ export function connectRoomState(
       const payload = JSON.parse(String(event.data)) as {
         type?: string;
         serverTimeMs?: unknown;
-        capabilities?: { surfaceStopRevision?: unknown };
+        capabilities?: { surfaceStopRevision?: unknown; seatCommandCorrelation?: unknown };
         room?: Omit<RoomStateSnapshot, "serverTimeMs">;
         reliableState?: unknown;
         poseFrame?: unknown;
@@ -89,7 +96,9 @@ export function connectRoomState(
           accepted?: unknown;
           occupantId?: unknown;
           previousSeatId?: unknown;
+          commandId?: unknown;
         };
+        seatReleaseResult?: { commandId?: unknown; seatId?: unknown; releasedSeatId?: unknown };
         result?: {
           accepted?: unknown;
           permission?: unknown;
@@ -109,7 +118,9 @@ export function connectRoomState(
           participants: payload.room.participants,
           seatOccupancy: payload.room.seatOccupancy ?? {},
           mediaObjects: payload.room.mediaObjects ?? createDefaultRoomMediaObjectsState(payload.room.roomId),
-          ...(payload.capabilities?.surfaceStopRevision === 1 ? { capabilities: { surfaceStopRevision: true } } : {})
+          ...(payload.capabilities?.surfaceStopRevision === 1 || payload.capabilities?.seatCommandCorrelation === 1 ? { capabilities: {
+            ...(payload.capabilities.surfaceStopRevision === 1 ? { surfaceStopRevision: true } : {}),
+            ...(payload.capabilities.seatCommandCorrelation === 1 ? { seatCommandCorrelation: true } : {}) } } : {})
         });
         return;
       }
@@ -135,8 +146,17 @@ export function connectRoomState(
           seatId,
           accepted,
           occupantId: typeof payload.seatClaimResult.occupantId === "string" ? payload.seatClaimResult.occupantId : null,
-          previousSeatId: typeof payload.seatClaimResult.previousSeatId === "string" ? payload.seatClaimResult.previousSeatId : null
+          previousSeatId: typeof payload.seatClaimResult.previousSeatId === "string" ? payload.seatClaimResult.previousSeatId : null,
+          ...(seatCommandId(payload.seatClaimResult.commandId) ? { commandId: seatCommandId(payload.seatClaimResult.commandId) } : {})
         });
+        return;
+      }
+      if (payload.type === "seat_release_result" && payload.seatReleaseResult) {
+        const commandId = seatCommandId(payload.seatReleaseResult.commandId);
+        if (!commandId) throw new Error("invalid_seat_release_result");
+        const text = (value: unknown) => typeof value === "string" && value.length > 0 ? value : null;
+        handlers.onSeatReleaseResult?.({ commandId, seatId: text(payload.seatReleaseResult.seatId),
+          releasedSeatId: text(payload.seatReleaseResult.releasedSeatId) });
         return;
       }
       if ((payload.type === "access_denied" || payload.type === "surface_command_result") && payload.result) {
@@ -201,18 +221,18 @@ export function sendAvatarPoseFrame(client: RoomStateClient, participantId: stri
   client.socket.send(JSON.stringify({ type: "avatar_pose_preview", participantId, poseFrame }));
 }
 
-export function sendSeatClaim(client: RoomStateClient, seatId: string): void {
+export function sendSeatClaim(client: RoomStateClient, seatId: string, commandId?: string): void {
   if (!canSend(client.socket)) {
     return;
   }
-  client.socket.send(JSON.stringify({ type: "seat_claim", seatId }));
+  client.socket.send(JSON.stringify({ type: "seat_claim", seatId, ...(seatCommandId(commandId) ? { commandId } : {}) }));
 }
 
-export function sendSeatRelease(client: RoomStateClient, seatId?: string): void {
+export function sendSeatRelease(client: RoomStateClient, seatId?: string, commandId?: string): void {
   if (!canSend(client.socket)) {
     return;
   }
-  client.socket.send(JSON.stringify({ type: "seat_release", seatId }));
+  client.socket.send(JSON.stringify({ type: "seat_release", seatId, ...(seatCommandId(commandId) ? { commandId } : {}) }));
 }
 
 export function sendSurfaceCreateObjectCommand(client: RoomStateClient, input: {

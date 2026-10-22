@@ -144,3 +144,33 @@ test("runtime command bridge does not send seat commands without a connected roo
 
   assert.deepEqual(calls, ["send-claim:seat-b", "send-release:seat-b"]);
 });
+
+test("manual movement and seating notify the arrival veto before execution; correlated and system commands do not", () => {
+  const calls: string[] = [];
+  const noop = () => undefined;
+  const executeRuntimeCommandList = createRuntimeCommandExecutor({
+    seatingController: { requestSeatClaim: (seatId, commandId) => {
+      calls.push(`request:${seatId}:${commandId ?? "manual"}`);
+      return { state: { kind: "claiming", pendingSeatId: seatId }, currentSeatId: null, pendingSeatId: seatId };
+    } },
+    getRoomStateClient: () => ({}) as RoomStateClient, isRoomStateConnected: () => true,
+    syncSeatDebugState: noop, releaseLocalSeat: () => calls.push("release-local"), lockToSeat: noop,
+    moveFlatTo: () => calls.push("move"), applySnapTurnYaw: noop, setXrInputProfile: noop, setDebugXrAxes: noop,
+    setXrRayVisibleLatched: noop, setXrTurnCooldown: noop, setXrTurnArmed: noop, setXrSelectPressedLastFrame: noop,
+    clearXrAvatarDebug: noop, setDebugLocomotionMode: noop, setLastAppliedSeatLockId: noop, setAvatarMovement: noop,
+    updateLocalPositionDebug: noop, teleportToFloor: () => calls.push("teleport"), setStatus: noop, markTelemetry: noop,
+    onManualLocomotionIntent: () => calls.push("veto"),
+    sendSeatClaim: (_client, seatId, commandId) => calls.push(`send-claim:${seatId}:${commandId ?? "manual"}`),
+    sendSeatRelease: (_client, seatId, commandId) => calls.push(`send-release:${seatId}:${commandId ?? "manual"}`)
+  });
+  executeRuntimeCommandList([{ type: "request_seat_claim", seatId: "seat-a", commandId: "plugin-seat:n:1" },
+    { type: "send_seat_claim", seatId: "seat-a", commandId: "plugin-seat:n:1" }]);
+  executeRuntimeCommandList([{ type: "send_seat_release", seatId: "seat-a", commandId: "plugin-release:n:2" }]);
+  executeRuntimeCommandList([{ type: "apply_snap_turn_yaw", yaw: 1 }, { type: "status", message: "x" }]);
+  assert.equal(calls.includes("veto"), false);
+  executeRuntimeCommandList([{ type: "request_seat_claim", seatId: "seat-b" }, { type: "send_seat_claim", seatId: "seat-b" }]);
+  executeRuntimeCommandList([{ type: "move_flat_to", position: { x: 1, z: 1 }, reason: "desktop_move" }]);
+  executeRuntimeCommandList([{ type: "release_local_seat" }, { type: "teleport_to_floor", point: { x: 0, y: 0, z: 0 } }]);
+  assert.deepEqual(calls, ["request:seat-a:plugin-seat:n:1", "send-claim:seat-a:plugin-seat:n:1", "send-release:seat-a:plugin-release:n:2",
+    "veto", "request:seat-b:manual", "send-claim:seat-b:manual", "veto", "move", "veto", "release-local", "teleport"]);
+});

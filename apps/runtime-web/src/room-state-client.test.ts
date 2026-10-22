@@ -107,6 +107,10 @@ test("seat claim and release send envelopes", () => {
   assert.equal(JSON.parse(sent[0]!).type, "seat_claim");
   assert.equal(JSON.parse(sent[0]!).seatId, "seat-a");
   assert.equal(JSON.parse(sent[1]!).type, "seat_release");
+  assert.equal(Object.hasOwn(JSON.parse(sent[0]!), "commandId"), false, "manual legacy envelopes are unchanged");
+  sendSeatClaim(client, "seat-b", "plugin:1"); sendSeatRelease(client, "seat-b", "release:1"); sendSeatClaim(client, "seat-c", "bad id");
+  assert.deepEqual(sent.slice(2).map(raw => JSON.parse(raw)), [{ type: "seat_claim", seatId: "seat-b", commandId: "plugin:1" },
+    { type: "seat_release", seatId: "seat-b", commandId: "release:1" }, { type: "seat_claim", seatId: "seat-c" }]);
 });
 
 test("room-state url includes access token when provided", () => {
@@ -179,12 +183,17 @@ test("safe replacement capability requires the explicit versioned server adverti
   class FakeSocket { addEventListener(type: string, listener: typeof receive) { if (type === "message") receive = listener; } }
   const previous = globalThis.WebSocket; globalThis.WebSocket = FakeSocket as unknown as typeof WebSocket;
   t.after(() => { globalThis.WebSocket = previous; });
-  const advertised: Array<boolean | undefined> = [];
-  connectRoomState("ws://room.test", "room", "self", { onRoomState: snapshot => advertised.push(snapshot.capabilities?.surfaceStopRevision), onError: error => { throw error; } });
-  for (const capabilities of [undefined, { surfaceStopRevision: true }, { surfaceStopRevision: "1" }, { surfaceStopRevision: 1 }]) {
+  const advertised: Array<boolean | undefined> = [], seats: Array<boolean | undefined> = [], releases: unknown[] = [];
+  connectRoomState("ws://room.test", "room", "self", { onRoomState: snapshot => { advertised.push(snapshot.capabilities?.surfaceStopRevision); seats.push(snapshot.capabilities?.seatCommandCorrelation); },
+    onSeatReleaseResult: result => releases.push(result), onError: error => { throw error; } });
+  for (const capabilities of [undefined, { surfaceStopRevision: true }, { surfaceStopRevision: "1" }, { surfaceStopRevision: 1 },
+    { seatCommandCorrelation: true }, { surfaceStopRevision: 1, seatCommandCorrelation: 1 }]) {
     receive({ data: JSON.stringify({ type: "room_state", room: { roomId: "room", participants: [], seatOccupancy: {} }, capabilities }) });
   }
-  assert.deepEqual(advertised, [undefined, undefined, undefined, true]);
+  assert.deepEqual(advertised, [undefined, undefined, undefined, true, undefined, true]);
+  assert.deepEqual(seats, [undefined, undefined, undefined, undefined, undefined, true]);
+  receive({ data: JSON.stringify({ type: "seat_release_result", seatReleaseResult: { commandId: "release:1", seatId: "seat-a", releasedSeatId: null } }) });
+  assert.deepEqual(releases, [{ commandId: "release:1", seatId: "seat-a", releasedSeatId: null }]);
 });
 
 test("connectRoomState routes inbound avatar reliable state, pose frame and seat claim result", async () => {

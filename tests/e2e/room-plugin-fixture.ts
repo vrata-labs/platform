@@ -1,4 +1,4 @@
-import { expect, type Browser, type Page } from "@playwright/test";
+import { expect, type Browser, type BrowserContext, type Page } from "@playwright/test";
 import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -46,10 +46,11 @@ export async function deleteOwnedPluginRoom(value: RoomPluginOrigin, roomId: str
 
 /** One browser participant through the normal private invitation and onboarding. */
 export async function enterPluginRoom(browser: Browser, value: RoomPluginOrigin, roomId: string, role: "host" | "member" = "host",
-  name = "Owned plugin runtime Host") {
+  name = "Owned plugin runtime Host", prepare?: (context: BrowserContext) => Promise<void>) {
   const invite = await privateHttp(value.origin, `/api/rooms/${roomId}/invites`, "POST", { "x-vrata-admin-token": value.adminToken }, { role, expiresInSeconds: 1200 });
   expect(invite.status).toBe(201);
   const context = await browser.newContext({ viewport: { width: 800, height: 500 }, deviceScaleFactor: .4 });
+  await prepare?.(context);
   const page = await context.newPage(); await installFunctionalFrameBudget(page); await installMeetingPerformanceObservation(page);
   const requests = { plugin: 0, workers: 0, wasm: 0 };
   page.on("request", request => {
