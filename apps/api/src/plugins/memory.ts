@@ -17,6 +17,7 @@ export function createMemoryRoomPlugins(getRoom: (roomId: string) => { tenantId:
   const locks = new Map<string, MemoryRoomLock>();
   const key = (scope: RoomPluginScope) => JSON.stringify([scope.tenantId, scope.roomId]);
   const repository: RoomPluginRepository = {
+    async readRevision(scope) { return rooms.get(key(scope))?.revision ?? 0; },
     async transaction(scope, operation, options) {
       const id = key(scope);
       const lock = locks.get(id) ?? { tail: Promise.resolve(), readers: new Set<Promise<void>>(), writers: 0 };

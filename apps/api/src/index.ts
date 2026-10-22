@@ -821,6 +821,13 @@ function writeSessionTokenError(response: ServerResponse, result: RoomSessionTok
 /** Floor-1 tenant scope of an unpersisted (virtual) room id. */
 const LEGACY_VIRTUAL_TENANT_ID = "demo-tenant";
 
+async function readPluginBindingsRevisionHint(storage: Storage, scope: { tenantId: string; roomId: string }): Promise<number | undefined> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const read = Promise.resolve().then(() => storage.roomPlugins.readRevision(scope)).catch(() => undefined);
+  const late = new Promise<undefined>(resolve => { timer = setTimeout(() => resolve(undefined), 150); });
+  try { return await Promise.race([read, late]); } finally { clearTimeout(timer); }
+}
+
 function writeManagedResourceDenied(request: IncomingMessage, response: ServerResponse, objectType: "tenant" | "room", objectId: string): void {
   logEvent({ service: "api", event: "managed_resource_denied", requestId: getRequestId(request), method: request.method, objectType, objectId });
   json(response, 403, { error: "forbidden", reason: "managed_resource", requestId: getRequestId(request) });
@@ -3456,8 +3463,10 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       const expiresAtSeconds = verified.expiresAtSeconds;
       const view = await readParticipantSessionViewV2(storage, verified);
       const mediaScreenReconciliation = await mediaScreenService.status(roomId, view.authorityRevision);
+      // A change hint for the plugin runtime refresh, not plugin authority: omitted on a plugin storage failure or a slow read.
+      const pluginBindingsRevision = await readPluginBindingsRevisionHint(storage, { tenantId: room.tenantId, roomId });
       assertParticipantViewDeadline(expiresAtSeconds);
-      return json(response, 200, { ...view, mediaScreenReconciliation });
+      return json(response, 200, { ...view, mediaScreenReconciliation, ...(pluginBindingsRevision === undefined ? {} : { pluginBindingsRevision }) });
     }
 
     // Platform administrators have no participant identity. Keep their existing

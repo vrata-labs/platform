@@ -587,6 +587,46 @@ canvas {
   display: none;
 }
 
+.room-plugin-author-entry {
+  display: grid;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.room-plugin-author-entry h3 {
+  margin: 0;
+  font-size: 0.95rem;
+  overflow-wrap: anywhere;
+}
+
+.room-plugin-author fieldset {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.room-plugin-author-field {
+  display: grid;
+  gap: 4px;
+  overflow-wrap: anywhere;
+}
+
+.room-plugin-author-capability {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: flex-start;
+  overflow-wrap: anywhere;
+}
+
+#room-plugin-author-message[data-kind="error"] {
+  color: #fecaca;
+}
+
 .host-controls-title {
   color: #fde68a;
   font-size: 0.72rem;

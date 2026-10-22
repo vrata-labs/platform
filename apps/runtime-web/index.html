@@ -276,6 +276,15 @@
           </details>
           <details id="meeting-advanced" class="meeting-panel" open>
             <summary><h2>More tools and details</h2></summary>
+          <section id="room-plugin-author" class="host-controls-panel room-plugin-author" aria-labelledby="room-plugin-author-title" hidden>
+            <div id="room-plugin-author-title" class="host-controls-title">Room behaviors</div>
+            <p class="audio-device-status">Packages run in an isolated sandbox without network or page access. Enable only a version whose permissions you accept for this room.</p>
+            <label for="room-plugin-upload-input">Plugin package (.vrata-plugin.json, up to 1 MiB)</label>
+            <input id="room-plugin-upload-input" type="file" accept=".json,application/json,application/octet-stream" />
+            <button id="room-plugin-upload-button" type="button" disabled>Upload package</button>
+            <p id="room-plugin-author-message" class="meeting-tool-status" role="status" aria-live="polite"></p>
+            <div id="room-plugin-author-list"></div>
+          </section>
           <div id="remote-browser-control" class="remote-browser-panel" hidden>
             <label for="remote-browser-url">Remote Browser URL <span id="remote-browser-experimental-badge" class="experimental-badge">Experimental</span></label>
             <div class="remote-browser-row">

@@ -44,6 +44,7 @@ export class RoomPluginController {
   private expiryTimer: unknown;
   private request?: { epoch: number; abort: AbortController };
   private nextRefreshAtMs = 0;
+  private hintNotBeforeMs = -Infinity;
   private deniedToken: string | null = null;
   private state: "off" | "unsupported" | "empty" | "running" | "suspended" | "failed" = "off";
   private lastFailure: Failure | null = null;
@@ -103,6 +104,14 @@ export class RoomPluginController {
   kick(): void {
     if (this.timer !== undefined) this.timers.cancel(this.timer); this.timer = undefined;
     if (this.active) void this.refresh().catch(() => this.failFramework("host-unavailable"));
+  }
+  /** Session-control change hint. It only brings the bounded refresh forward;
+   * authority still comes from the runtime snapshot and its lease. */
+  observeRevisionHint(value: unknown): void {
+    if (!this.active || this.request || typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) return;
+    const now = this.clock();
+    if (value === this.lease.diagnostics().revision || now < this.hintNotBeforeMs) return;
+    this.hintNotBeforeMs = now + 500; this.kick();
   }
   diagnostics() {
     return { state: this.state, revision: this.lease.diagnostics().revision, fetchPending: Boolean(this.request),

@@ -11,7 +11,7 @@ export class RoomPluginHttpError extends RoomPluginRuntimeError {
   }
 }
 
-async function boundedBody(response: Response, maximum: number): Promise<Uint8Array> {
+export async function boundedRoomPluginBody(response: Response, maximum: number): Promise<Uint8Array> {
   const length = response.headers.get("content-length"), encoding = response.headers.get("content-encoding");
   if (length !== null && (!encoding || encoding === "identity") && (!/^\d+$/.test(length) || !Number.isSafeInteger(Number(length)) || Number(length) > maximum)) {
     void response.body?.cancel().catch(() => undefined); throw new RoomPluginRuntimeError("network-unavailable");
@@ -46,13 +46,13 @@ export function createRoomPluginHttp(input: { apiBaseUrl: string; roomId: string
       const response = await Reflect.apply(fetcher, globalThis, [new URL(path, input.apiBaseUrl).href, {
         headers: { authorization: `Bearer ${proof.token}` }, credentials: "omit", redirect: "error", cache: "no-store", signal: abort.signal
       }]) as Response;
-      if (response.ok) return boundedBody(response, maximum);
+      if (response.ok) return boundedRoomPluginBody(response, maximum);
       if (response.status === 404) {
         void response.body?.cancel().catch(() => undefined); throw new RoomPluginHttpError(content ? "changed" : "unsupported");
       }
       if ([401, 403, 409, 426].includes(response.status)) {
         let body: unknown;
-        try { body = parseRoomPluginJson(await boundedBody(response, 2048)); } catch { throw new RoomPluginHttpError("unavailable"); }
+        try { body = parseRoomPluginJson(await boundedRoomPluginBody(response, 2048)); } catch { throw new RoomPluginHttpError("unavailable"); }
         const code = body && typeof body === "object" && !Array.isArray(body) ? (body as Record<string, unknown>).error : undefined;
         const identity = identityRequirementFromResponse(response.status, body);
         if (code === "plugin_identity_not_active") throw new RoomPluginHttpError("unsupported");

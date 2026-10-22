@@ -501,6 +501,8 @@ export interface RuntimeSessionControlResponse {
   access?: RoomAccessDebugState;
   role?: RoomRole;
   permissions?: RoomPermission[];
+  /** v2 plugin runtime change hint; absent from older APIs and floor-1 sessions. */
+  pluginBindingsRevision?: number;
 }
 
 export interface VoiceSessionPlan {

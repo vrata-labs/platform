@@ -1,108 +1,13 @@
-import { test, expect, type Browser, type Page } from "@playwright/test";
+import { test, expect } from "@playwright/test";
 import { randomUUID } from "node:crypto";
-import { createRequire } from "node:module";
-import { resolve } from "node:path";
-import { pathToFileURL } from "node:url";
-import { startReferenceTemplateFixture } from "./reference-template-fixture";
-import { installFunctionalFrameBudget } from "./functional-frame-budget";
-import { chooseMeetingPanel, installMeetingPerformanceObservation, readMeetingPerformance } from "./meeting-tools-acceptance";
+import { chooseMeetingPanel } from "./meeting-tools-acceptance";
 import { PDFDocument } from "pdf-lib";
-import { privateHttp, bearer, pluginPath, createExternalAuthorProject, downloadPublicSdk, nativeMarker, type ExternalArtifact } from "./plugin-author-scenarios";
-import type { AuthorHttpSession, AuthorHttpPackage } from "../../apps/api/src/plugins/author-http.test-helper";
+import { createExternalAuthorProject, downloadPublicSdk, nativeMarker } from "./plugin-author-scenarios";
+import { bindPluginArtifact as bind, enterOwnedPluginRoom as enter, expectPluginStatus as expectStatus, installPluginArtifact as install,
+  startRoomPluginFixture as fixture, useOwnedActor as useActor } from "./room-plugin-fixture";
 
 // Room invitations, RS2 and private config must never enter trace/video/snapshots.
 test.use({ trace: "off", screenshot: "off", video: "off" });
-const secret = "owned-t07-room-runtime-state-secret-32-bytes";
-
-async function fixture(protocol: 1 | 2) {
-  expect(Boolean(process.env.VRATA_TEST_POSTGRES_URL)).toBe(true);
-  const value = await startReferenceTemplateFixture(process.env.VRATA_TEST_POSTGRES_URL!, { devRoleQuery: false, stateTokenSecret: secret });
-  if (protocol === 2) {
-    expect(value.schema).toMatch(/^template_e2e_[0-9a-f]{32}$/);
-    const { Pool } = createRequire(resolve("apps/api/package.json"))("pg");
-    const pool = new Pool({ connectionString: process.env.VRATA_TEST_POSTGRES_URL, options: `-c search_path=${value.schema},public` });
-    try {
-      const policy = await pool.query("select current_schema() as schema,n.nspname as owner from pg_class c join pg_namespace n on n.oid=c.relnamespace where c.oid='room_identity_protocol_policy'::regclass");
-      expect(policy.rows).toEqual([{ schema: value.schema, owner: value.schema }]);
-      const { PostgresStorage } = await import(pathToFileURL(resolve("apps/api/dist/storage.js")).href);
-      await new PostgresStorage(pool).identityProtocol.raise(2);
-    } finally { await pool.end(); }
-  }
-  return value;
-}
-
-async function enter(browser: Browser, value: { origin: string; adminToken: string }) {
-  const admin = { "x-vrata-admin-token": value.adminToken };
-  const created = await privateHttp(value.origin, "/api/rooms", "POST", admin,
-    { tenantId: "demo-tenant", templateId: "meeting-room-basic", name: "Owned T07 runtime room", visibility: "private" });
-  expect(created.status).toBe(201); const roomId = created.json<{ roomId: string }>().roomId;
-  const invite = await privateHttp(value.origin, `/api/rooms/${roomId}/invites`, "POST", admin, { role: "host", expiresInSeconds: 1200 });
-  expect(invite.status).toBe(201);
-  const context = await browser.newContext({ viewport: { width: 800, height: 500 }, deviceScaleFactor: .4 });
-  const page = await context.newPage(); await installFunctionalFrameBudget(page); await installMeetingPerformanceObservation(page);
-  const requests = { plugin: 0, workers: 0, wasm: 0 };
-  page.on("request", request => {
-    const url = new URL(request.url());
-    if (url.pathname.includes("/plugins/")) requests.plugin++;
-    if (/room-plugin-(?:worker|kernel)-/.test(url.pathname)) requests.workers++;
-    if (/emscripten.*\.wasm$/.test(url.pathname)) requests.wasm++;
-  });
-  const admission = page.waitForResponse(response => new URL(response.url()).pathname === "/api/tokens/state" && response.status() === 200);
-  void admission.catch(() => undefined);
-  try { await page.goto(invite.json<{ inviteLink: string }>().inviteLink); } catch { throw new Error("owned_plugin_runtime_navigation_failed"); }
-  await page.locator("#guest-name-input").fill("Owned plugin runtime Host"); await page.locator("#guest-enter-without-audio").click({ noWaitAfter: true });
-  const session = await (await admission).json() as AuthorHttpSession;
-  await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__?.sceneBundleState), { timeout: 90_000 }).toBe("loaded");
-  await expect.poll(() => page.evaluate(() => (window as any).__VRATA_DEBUG__?.roomStateConnected), { timeout: 30_000 }).toBe(true);
-  return { page, context, requests, session, roomId, admin,
-    async close() {
-      await context.close();
-      const deleted = await privateHttp(value.origin, `/api/rooms/${roomId}`, "DELETE", admin);
-      if (deleted.status !== 200) {
-        const raw = deleted.json<{ error?: string }>().error;
-        const code = ["plugin_upload_pending", "identity_fence_unavailable", "identity_fence_conflict", "room_not_found"].includes(raw ?? "") ? raw : "other";
-        throw new Error(`owned_plugin_runtime_cleanup_${deleted.status}_${code}`);
-      }
-    } };
-}
-
-async function useActor(actor: Awaited<ReturnType<typeof enter>>, run: () => Promise<void>) {
-  let failed = false;
-  try { await run(); }
-  catch (error) { failed = true; throw error; }
-  finally {
-    try { await actor.close(); }
-    catch (error) {
-      if (!failed) throw error;
-      console.warn("owned_plugin_runtime_cleanup_also_failed");
-    }
-  }
-}
-
-async function install(value: Awaited<ReturnType<typeof fixture>>, actor: Awaited<ReturnType<typeof enter>>, artifact: ExternalArtifact) {
-  const response = await privateHttp(value.origin, pluginPath(actor.roomId, "packages"), "POST", bearer(actor.session.token), artifact.bytes);
-  expect(response.status).toBe(201); return response.json<{ package: AuthorHttpPackage }>().package;
-}
-async function bind(value: Awaited<ReturnType<typeof fixture>>, actor: Awaited<ReturnType<typeof enter>>, pkg: AuthorHttpPackage,
-  expectedRevision: number, greeting: string, enabled = true) {
-  const response = await privateHttp(value.origin, pluginPath(actor.roomId, `bindings/${pkg.pluginId}`), "PUT", bearer(actor.session.token), {
-    expectedRevision, packageId: pkg.packageId, version: pkg.version, artifactSha256: pkg.artifactSha256, enabled,
-    config: { greeting }, approvedCapabilities: ["status.set"]
-  });
-  expect(response.status).toBe(200); return response.json<{ revision: number }>().revision;
-}
-
-async function expectStatus(page: Page, stage: string, expected: string, timeout = 30_000) {
-  try { await expect(page.locator("#room-plugin-status-list")).toContainText(expected, { timeout }); }
-  catch (error) {
-    const facts = await page.evaluate(() => {
-      const debug = (window as any).__VRATA_DEBUG__;
-      return { plugins: debug?.plugins, scene: debug?.sceneBundleState, connected: debug?.roomStateConnected };
-    }).catch(() => ({ unavailable: true }));
-    console.warn("owned_plugin_runtime_failed", JSON.stringify({ stage, facts, performance: await readMeetingPerformance(page) }));
-    throw error;
-  }
-}
 
 for (const staging of [false, true]) test(`${staging ? "@staging " : ""}legacy room loads without plugin discovery, Worker or VM download`, async ({ browser, request }) => {
   test.setTimeout(180_000);
@@ -118,6 +23,7 @@ for (const staging of [false, true]) test(`${staging ? "@staging " : ""}legacy r
       await actor.page.waitForTimeout(2200);
       expect(actor.requests).toEqual({ plugin: 0, workers: 0, wasm: 0 });
       await expect(actor.page.locator("#room-plugin-statuses")).toBeHidden();
+      await expect(actor.page.locator("#room-plugin-author")).toBeHidden();
     });
   } finally { await value.close(); }
 });

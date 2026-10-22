@@ -44,6 +44,8 @@ export interface HostControlsContext extends HostControlElements {
   applyAuthorityAccess(access: RoomAccessDebugState): void;
   disableRuntimeForSessionBlock(reason: string): void;
   onAuthorityChanged?(): void;
+  /** Unverified change hint for the plugin runtime refresh; never plugin authority. */
+  onPluginBindingsRevision?(revision: unknown): void;
 }
 
 export const SESSION_CONTROL_REFRESH_INTERVAL_MS = 1000;
@@ -232,6 +234,9 @@ export function createHostControlsRuntime(context: HostControlsContext) {
       if (changed) applyAuthorityAccess(projection.access);
     } else if (!v2 && payload.access && payload.token) {
       applyAccessDebug(payload.access, payload.token, payload.expiresInSeconds);
+    }
+    if (v2 && context.onPluginBindingsRevision) {
+      try { context.onPluginBindingsRevision(payload.pluginBindingsRevision); } catch { /* A plugin hint never blocks session control. */ }
     }
     renderHostControls(statusMessage);
     return true;

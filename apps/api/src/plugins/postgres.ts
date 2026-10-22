@@ -34,6 +34,11 @@ export function createPostgresRoomPlugins(pool: Pool, now = Date.now) {
 
 export function createPostgresRoomPluginAdapter(pool: Pool, now = Date.now) {
   const repository: RoomPluginRepository = {
+    // No BEGIN or parent FOR SHARE: session-control polls this at 1 Hz per participant.
+    async readRevision(scope) {
+      const row = (await pool.query("select revision from room_plugin_state where tenant_id=$1 and room_id=$2", [scope.tenantId, scope.roomId])).rows[0];
+      return row ? number(row.revision) : 0;
+    },
     transaction: (scope, operation, options) => roomFenceTransaction(pool, {}, async (client, checkAlive) => {
       // Admission, quotas, CAS, room deletion and authority transitions share the authoritative parent lock.
       const parent = await client.query(options?.readOnly

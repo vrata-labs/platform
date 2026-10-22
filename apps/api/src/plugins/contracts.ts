@@ -51,6 +51,8 @@ export interface RoomPluginStorage {
   listPackages(scope: RoomPluginScope): Promise<RoomPluginPackage[]>;
   getPackage(scope: RoomPluginScope, packageId: string): Promise<RoomPluginPackage | null>;
   readBindings(scope: RoomPluginScope): Promise<RoomPluginBindings>;
+  /** Change hint only: never authority for runtime config, content or effects. */
+  readRevision(scope: RoomPluginScope): Promise<number>;
   putBinding(scope: RoomPluginScope, pluginId: string, input: RoomPluginBindingInput, expectedRevision: number): Promise<RoomPluginBindings>;
   removeBinding(scope: RoomPluginScope, pluginId: string, expectedRevision: number): Promise<RoomPluginBindings>;
   beginPackageDeletion(scope: RoomPluginScope, packageId: string): Promise<RoomPluginPackage>;
@@ -84,6 +86,8 @@ export interface RoomPluginTransaction {
 }
 export interface RoomPluginRepository {
   transaction<T>(scope: RoomPluginScope, operation: (transaction: RoomPluginTransaction) => Promise<T>, options?: RoomPluginTransactionOptions): Promise<T>;
+  /** Plain committed read without the parent lock; a change hint only. */
+  readRevision?(scope: RoomPluginScope): Promise<number>;
 }
 export interface RoomPluginTransactionOptions {
   readOnly?: boolean;

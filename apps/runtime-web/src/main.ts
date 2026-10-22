@@ -48,6 +48,9 @@ import { createSessionControlPoller } from "./session-control-poller.js";
 import { RoomPluginController } from "./plugins/controller.js";
 import { RoomPluginTokenBound } from "./plugins/token-bound.js";
 import { createRoomPluginStatusView } from "./plugins/status-view.js";
+import { createRoomPluginAuthorHttp } from "./plugins/author-http.js";
+import { RoomPluginAuthorSession } from "./plugins/author-session.js";
+import { createRoomPluginAuthorPanel } from "./plugins/author-panel.js";
 import { createMediaSourceUpgrade, permitsScreenShare } from "./media/media-source-upgrade.js";
 import { createMediaActionBarrier } from "./media/media-action-barrier.js";
 import { planBaseMedia } from "./media/media-token-error.js";
@@ -1415,6 +1418,8 @@ let effectiveCleanSceneMode = requestedCleanSceneMode;
 let activeSceneRenderProfile: SceneBundleRenderProfile | undefined;
 let pbrRoomEnvironment: PbrRoomEnvironment | null = null;
 let availableSpaces: RuntimeSpaceOption[] = [];
+// Host controls can render before the plugin author session below is constructed.
+let roomPluginAuthorReady = false;
 const { renderHostControls, refreshSessionControl, runHostControlAction, canManageHostControls, authorityRevision,
   observeAdmissionRevision, acceptRenewedAuthority, peopleAuthority, participantLabel, refreshDiagnostics } = createHostControlsRuntime({
   apiBaseUrl, roomId,
@@ -1431,7 +1436,8 @@ const { renderHostControls, refreshSessionControl, runHostControlAction, canMana
   transferHostButton, transferOwnerButton, grantPresenterButton, revokePresenterButton,
   fetchRoomSessionControl, applyAccessDebug, disableRuntimeForSessionBlock,
   applyAuthorityAccess: access => applyAccessDebug(access, roomStateAccessToken),
-  onAuthorityChanged: () => meetingNavigation?.requestSync()
+  onAuthorityChanged: () => { meetingNavigation?.requestSync(); if (roomPluginAuthorReady) roomPluginAuthor.sync(); },
+  onPluginBindingsRevision: revision => { roomPluginRuntime.observeRevisionHint(revision); if (roomPluginAuthorReady) roomPluginAuthor.observeRevision(revision); }
 });
 let sessionControlBlocked = false;
 let meetingTools: ReturnType<typeof createMeetingToolTransition> | null = null;
@@ -1717,7 +1723,7 @@ function applyAccessDebug(access: NonNullable<RuntimeSessionControlResponse["acc
 
 function disableRuntimeForSessionBlock(reason: string): void {
   roomPluginTokenBound.clear();
-  try { roomPluginRuntime.stop(); } catch { /* Plugin cleanup must not prevent the core session block. */ }
+  try { roomPluginRuntime.stop(); if (roomPluginAuthorReady) roomPluginAuthor.stop(); } catch { /* Plugin cleanup must not prevent the core session block. */ }
   sessionControlPoller.stop();
   const message = describeSessionControlReason(reason);
   sessionControlBlocked = true;
@@ -1770,8 +1776,8 @@ window.addEventListener("pageshow", event => {
   }
 });
 document.addEventListener("visibilitychange", () => roomPluginRuntime.availabilityChanged());
-window.addEventListener("online", () => roomPluginRuntime.availabilityChanged());
-window.addEventListener("offline", () => roomPluginRuntime.availabilityChanged());
+window.addEventListener("online", () => { roomPluginRuntime.availabilityChanged(); roomPluginAuthor.sync(); });
+window.addEventListener("offline", () => { roomPluginRuntime.availabilityChanged(); roomPluginAuthor.sync(); });
 
 function startIdentitySessionRenewal(expiresInSeconds: number): void {
   if (activeIdentityProtocolVersion !== 2) return;
@@ -4201,6 +4207,20 @@ const roomPluginRuntime = new RoomPluginController({ apiBaseUrl, roomId,
   }
 });
 Object.defineProperty(debugState, "plugins", { enumerable: true, get: () => roomPluginRuntime.diagnostics() });
+const roomPluginAuthorPanel = createRoomPluginAuthorPanel({ document,
+  root: document.querySelector<HTMLElement>("#room-plugin-author")!, list: document.querySelector<HTMLElement>("#room-plugin-author-list")!,
+  message: document.querySelector<HTMLElement>("#room-plugin-author-message")!,
+  fileInput: document.querySelector<HTMLInputElement>("#room-plugin-upload-input")!, uploadButton: document.querySelector<HTMLButtonElement>("#room-plugin-upload-button")!,
+  upload: bytes => roomPluginAuthor.upload(bytes), apply: intent => roomPluginAuthor.apply(intent) });
+// Host-facing author library. The API re-checks the proven room identity and current role on every request.
+const roomPluginAuthor = new RoomPluginAuthorSession({
+  http: createRoomPluginAuthorHttp({ apiBaseUrl, roomId, token: () => roomStateAccessToken || null }),
+  context: () => ({ eligible: activeIdentityProtocolVersion === 2 && runtimeBootReady && !sessionControlBlocked && !runtimeSessionGate.reason
+    && (debugState.access.role === "host" || debugState.personalRoom.isOwner === true), online: navigator.onLine }),
+  render: state => roomPluginAuthorPanel.render(state),
+  changed: () => roomPluginRuntime.kick()
+});
+roomPluginAuthorReady = true;
 
 const {
   screenShareEntries,
@@ -8040,6 +8060,7 @@ async function main(): Promise<void> {
   diagnosticsAccumulator = 0;
   runtimeBootReady = !sessionControlBlocked;
   roomPluginRuntime.kick();
+  roomPluginAuthor.sync();
   reportRuntimeBootDiagnostics(reportDiagnostics);
 }
 

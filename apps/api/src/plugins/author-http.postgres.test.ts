@@ -119,6 +119,20 @@ test("real HTTP plugin authority and immutable publication boundaries on an isol
     assert.equal(validateRoomPluginArtifact((await content(f, next)).bytes).artifactSha256, next.artifactSha256);
   });
 
+  await t.test("v2 session-control carries only the numeric plugin revision hint for each room session", async () => {
+    const f = await installed(); const member = await h.session(f.room.roomId);
+    const control = async (token: string) => {
+      const value = await h.request(`/api/rooms/${encodeURIComponent(f.room.roomId)}/session-control`, "GET", authorHttpBearer(token));
+      assert.equal(value.status, 200);
+      const body = value.json<Record<string, unknown>>();
+      assert.equal(JSON.stringify(body).includes(AUTHOR_HTTP_CONFIG), false); assert.equal(Object.hasOwn(body, "bindings"), false);
+      return body.pluginBindingsRevision;
+    };
+    assert.equal(await control(f.host.token), 1); assert.equal(await control(member.token), 1);
+    assert.equal((await h.bind(f, f.value, 1, { enabled: false })).status, 200);
+    assert.equal(await control(member.token), 2);
+  });
+
   await t.test("CAS serializes competing writes; disabled bindings still prohibit deletion until explicit unbind", async () => {
     const f = await installed();
     const outcomes = await Promise.all([h.bind(f, f.value, 1, { config: { label: "first" } }),

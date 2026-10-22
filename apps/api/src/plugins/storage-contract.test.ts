@@ -189,7 +189,10 @@ for (const engine of ["Memory", "Postgres"] as const) {
     await t.test("config NUL denial leaves revision and package quota intact and issues no SQL writes", async st => {
       const scope = await room(f), objects = blobs(f);
       const saved = await createRoomPluginPackageService(f.storage.roomPlugins, objects.adapter).savePackage(scope, artifact("nul-config"));
+      assert.equal(await f.storage.roomPlugins.readRevision(scope), 0);
       const initial = await f.storage.roomPlugins.putBinding(scope, saved.pluginId, binding(saved), 0);
+      // The lock-free change hint follows committed CAS writes.
+      assert.equal(await f.storage.roomPlugins.readRevision(scope), initial.revision);
       const packages = await f.storage.roomPlugins.listPackages(scope), writes: string[] = [];
       const client = await f.pool?.connect(), query = client?.query.bind(client);
       client?.release();

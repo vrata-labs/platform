@@ -77,6 +77,19 @@ test("legacy identity creates no plugin traffic and zero bindings keep discovery
   assert.equal(h.controller.diagnostics().state, "empty"); h.controller.stop();
 });
 
+test("session-control revision hint only brings refresh forward; equal, invalid, rapid and stopped hints are ignored", async () => {
+  const h = harness(); h.controller.start(2); await until(() => h.counters.snapshots === 1 && !h.controller.diagnostics().fetchPending);
+  for (const value of [0, -1, "1", 1.5, null]) h.controller.observeRevisionHint(value);
+  await delay(1); assert.equal(h.counters.snapshots, 1);
+  h.config(snapshot()); h.controller.observeRevisionHint(1);
+  await until(() => h.controller.diagnostics().running === 1); assert.equal(h.counters.snapshots, 2);
+  h.config(snapshot(2, "second")); h.controller.observeRevisionHint(2); await delay(1);
+  assert.equal(h.counters.snapshots, 2, "hints are spaced by at least 500 ms");
+  await h.advance(500); h.controller.observeRevisionHint(2);
+  await until(() => h.renderings.at(-1)?.[0]?.text === "second"); assert.equal(h.counters.snapshots, 3);
+  h.controller.stop(); await h.advance(1000); h.controller.observeRevisionHint(9); await delay(1); assert.equal(h.counters.snapshots, 3);
+});
+
 test("external exact content starts only after readiness and commits a labelled status without room-ready fiction", async () => {
   const h = harness(); h.context.ready = false; h.config(snapshot()); h.controller.start(2);
   await until(() => h.counters.snapshots === 1 && !h.controller.diagnostics().fetchPending);

@@ -116,6 +116,11 @@ export function createRoomPluginStorage(repository: RoomPluginRepository, option
     listPackages: scope => transact(scope, tx => tx.listPackages(), true),
     getPackage: (scope, id) => transact(scope, tx => tx.getPackage(id), true),
     readBindings: scope => transact(scope, snapshot, true),
+    async readRevision(scope) {
+      const owned = { tenantId: scope.tenantId, roomId: scope.roomId };
+      roomPluginPrefix(owned);
+      return repository.readRevision ? repository.readRevision(owned) : transact(owned, async tx => tx.state.revision, true);
+    },
     async putBinding(scope, pluginId, raw, expected) {
       const data = validateRoomPluginData(raw, { maxBytes: ROOM_PLUGIN_STORAGE_LIMITS.bindingEnvelopeBytes });
       if (!data || typeof data !== "object" || Array.isArray(data)) throw new RoomPluginStorageError("plugin_invalid_binding");
