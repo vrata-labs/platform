@@ -1,10 +1,10 @@
 import { createHash } from "node:crypto";
 import { parse } from "acorn";
-import { ROOM_PLUGIN_LIMITS, ROOM_PLUGIN_SCHEMA_VERSION, ROOM_PLUGIN_SDK_API_VERSION, type RoomPluginArtifact, type RoomPluginManifest } from "./contracts.js";
-import { validateRoomPluginCapabilities, validateRoomPluginConfigSchema } from "./config.js";
-import { parseRoomPluginJson, roomPluginFields, roomPluginRecord, roomPluginUtf8ByteLength, validateRoomPluginData } from "./data.js";
+import { ROOM_PLUGIN_LIMITS, type RoomPluginArtifact, type RoomPluginManifest } from "./contracts.js";
+import { roomPluginFields, roomPluginRecord, roomPluginUtf8ByteLength, validateRoomPluginData } from "./data.js";
 import { fail } from "./errors.js";
-import { isRoomPluginPlainText } from "./text.js";
+import { parseRoomPluginArtifactEnvelope, validateRoomPluginManifest, validateRoomPluginSha256 } from "./manifest.js";
+export { validateRoomPluginManifest, validateRoomPluginSha256 } from "./manifest.js";
 
 export interface ValidatedRoomPluginArtifact {
   artifact: RoomPluginArtifact;
@@ -19,25 +19,6 @@ export interface ValidatedRoomPluginArtifact {
 
 export function roomPluginSha256(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
-}
-
-export function validateRoomPluginSha256(value: unknown, path = "$"): string {
-  if (typeof value !== "string" || !/^[a-f0-9]{64}$/.test(value)) fail("invalid_hash", path);
-  return value;
-}
-
-export function validateRoomPluginManifest(value: unknown): RoomPluginManifest {
-  const manifest = roomPluginRecord(validateRoomPluginData(value, { maxBytes: ROOM_PLUGIN_LIMITS.artifactBytes, sizeError: "artifact_too_large" }), "$.manifest", "invalid_manifest");
-  roomPluginFields(manifest, ["schemaVersion", "sdkApiVersion", "id", "version", "displayName", "requestedCapabilities", "configSchema", "entrySha256"], [], "$.manifest");
-  if (manifest.schemaVersion !== ROOM_PLUGIN_SCHEMA_VERSION) fail("unsupported_schema_version", "$.manifest.schemaVersion");
-  if (manifest.sdkApiVersion !== ROOM_PLUGIN_SDK_API_VERSION) fail("unsupported_sdk_api_version", "$.manifest.sdkApiVersion");
-  if (typeof manifest.id !== "string" || !/^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$/.test(manifest.id) || manifest.id.length > 64) fail("invalid_manifest", "$.manifest.id");
-  if (typeof manifest.version !== "string" || manifest.version.length > 32 || !/^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/.test(manifest.version)) fail("invalid_manifest", "$.manifest.version");
-  if (!isRoomPluginPlainText(manifest.displayName) || !manifest.displayName.trim() || roomPluginUtf8ByteLength(manifest.displayName) > 128) fail("invalid_manifest", "$.manifest.displayName");
-  validateRoomPluginCapabilities(manifest.requestedCapabilities);
-  validateRoomPluginConfigSchema(manifest.configSchema);
-  validateRoomPluginSha256(manifest.entrySha256, "$.manifest.entrySha256");
-  return manifest as unknown as RoomPluginManifest;
 }
 
 /** Parse syntax only. Never loads, evaluates or executes a plugin module. */
@@ -71,23 +52,15 @@ export function validateRoomPluginModule(entry: unknown): asserts entry is strin
 
 /** Shared by external packaging tools and the author API. Requires original upload bytes. */
 export function validateRoomPluginArtifact(input: string | Uint8Array, expectedArtifactSha256?: string): ValidatedRoomPluginArtifact {
-  // Bound before copying, decoding, JSON.parse, hashing or parsing JavaScript.
-  if (typeof input === "string") roomPluginUtf8ByteLength(input, ROOM_PLUGIN_LIMITS.artifactBytes, "artifact_too_large");
-  else if (!(input instanceof Uint8Array)) fail("invalid_data");
-  else if (input.byteLength > ROOM_PLUGIN_LIMITS.artifactBytes) fail("artifact_too_large");
-  const bytes = typeof input === "string" ? new TextEncoder().encode(input) : new Uint8Array(input);
-  const envelope = roomPluginRecord(parseRoomPluginJson(bytes, { maxBytes: ROOM_PLUGIN_LIMITS.artifactBytes, sizeError: "artifact_too_large" }), "$", "invalid_manifest");
-  roomPluginFields(envelope, ["manifest", "entry"], [], "$");
-  const manifest = validateRoomPluginManifest(envelope.manifest);
-  if (typeof envelope.entry !== "string") fail("invalid_module", "$.entry");
-  const entryBytes = new TextEncoder().encode(envelope.entry);
+  const { artifact, bytes, entryBytes } = parseRoomPluginArtifactEnvelope(input);
+  const manifest = artifact.manifest;
   const entrySha256 = roomPluginSha256(entryBytes);
   if (manifest.entrySha256 !== entrySha256) fail("entry_checksum_mismatch", "$.manifest.entrySha256");
   const artifactSha256 = roomPluginSha256(bytes);
   if (expectedArtifactSha256 !== undefined && validateRoomPluginSha256(expectedArtifactSha256) !== artifactSha256) fail("artifact_checksum_mismatch");
-  validateRoomPluginModule(envelope.entry);
+  validateRoomPluginModule(artifact.entry);
   return Object.freeze({
-    artifact: envelope as unknown as RoomPluginArtifact,
+    artifact,
     artifactSha256,
     entrySha256,
     byteLength: bytes.byteLength,

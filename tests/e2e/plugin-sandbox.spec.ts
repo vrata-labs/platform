@@ -4,8 +4,9 @@ import type { ProbeResult } from "../../apps/runtime-web/src/plugins/probe.js";
 import type { ProbeFixture } from "../../apps/runtime-web/src/plugins/probe-fixtures.js";
 
 const workerPath = /\/assets\/room-plugin-worker-[\w-]+\.js(?:\?|$)/;
+const kernelPath = /\/assets\/room-plugin-kernel-[\w-]+\.js(?:\?|$)/;
 const canary = "T03_FAKE_ROOM_ADMIN_MEDIA_TOKEN_CANARY";
-// A full run creates 37 bounded Worker instances; it is not a single handler.
+// A full run creates 40 bounded Worker instances; it is not a single handler.
 // Keep this wait within each full-suite test's existing 60-second deadline.
 const fullSuiteCompletionWaitMs = 45_000;
 
@@ -38,6 +39,7 @@ function watchNetwork(context: BrowserContext) {
   const wasmCookies: string[] = [];
   const wasmRequests: string[] = [];
   const workers: { url: string; csp: string; source: Promise<string> }[] = [];
+  const kernels: { url: string; csp: string; source: Promise<string> }[] = [];
   context.on("request", (request) => {
     if (request.url().includes("plugin-exfil.invalid")) exfil.push(request.url());
     if (request.url().includes(canary) || request.postData()?.includes(canary)) canaryRequests.push(request.url());
@@ -48,8 +50,9 @@ function watchNetwork(context: BrowserContext) {
   });
   context.on("response", (response) => {
     if (workerPath.test(response.url())) workers.push({ url: response.url(), csp: response.headers()["content-security-policy"] ?? "", source: response.text() });
+    if (kernelPath.test(response.url())) kernels.push({ url: response.url(), csp: response.headers()["content-security-policy"] ?? "", source: response.text() });
   });
-  return { exfil, canaryRequests, wasmCookies, wasmRequests, workers };
+  return { exfil, canaryRequests, wasmCookies, wasmRequests, workers, kernels };
 }
 
 for (const mode of ["local", "@staging"]) {
@@ -73,7 +76,23 @@ test("real Worker boots transferred WASM under restricted production CSP; VM can
   const healthy = await run(page, "healthy");
   expect(healthy.failure, JSON.stringify(healthy)).toBeNull();
   expect(healthy.statuses).toEqual(["Welcome plugin initialized", "Probe greeting"]);
+  for (const [fixture, failures, hint] of [
+    ["responseLoop", ["execution_timeout", "interrupt_limit"], null],
+    ["responseHeap", ["guest_exception"], "memory_exhausted"],
+    ["responsePending", ["pending_promise"], null]
+  ] as const) {
+    const resumed = await run(page, fixture);
+    expect(resumed.phase).toBe("init"); expect(resumed.state).toBe("failed");
+    expect(failures as readonly (string | null)[]).toContain(resumed.failure);
+    expect(resumed.exceptionHint).toBe(hint);
+    expect(resumed.statuses).toEqual(["Acknowledged turn"]);
+  }
   expect(network.workers.length).toBeGreaterThanOrEqual(2);
+  expect(network.kernels.length).toBeGreaterThanOrEqual(2);
+  for (const kernel of network.kernels) {
+    expect(kernel.csp).toBe("default-src 'none'; script-src 'none'; connect-src 'none'; worker-src 'self'; base-uri 'none'");
+    expect(await kernel.source).not.toMatch(/\bimport\s*(?:\(|[\s{])/);
+  }
   for (const worker of network.workers) {
     expect(worker.csp).toMatch(/default-src\s+'none'/);
     expect(worker.csp).toMatch(/script-src\s+'wasm-unsafe-eval'(?:\s*;|\s*$)/);
@@ -217,10 +236,10 @@ test("full suite requires a trusted visible DURING click and records concurrent 
   await expect(page.locator("html")).toHaveAttribute("data-suite-ready", "1", { timeout: fullSuiteCompletionWaitMs });
   await expect(page.locator("#verdict")).toHaveText("PASS — ПОЛНЫЙ ПРОГОН");
   const report = await page.evaluate(() => window.pluginSandboxProbe.getReport());
-  expect(report?.expectedScenarios).toBe(37); expect(report?.scenarios).toHaveLength(37);
+  expect(report?.expectedScenarios).toBe(40); expect(report?.scenarios).toHaveLength(40);
   expect(report?.failed, JSON.stringify(report)).toBe(0);
   expect(report?.continuity.verdict, JSON.stringify(report)).toBe("PASS");
-  expect(report?.companionOperations).toHaveLength(33);
+  expect(report?.companionOperations).toHaveLength(36);
   expect(report?.continuity.measurements.maxLatencyMs).toBeLessThanOrEqual(500);
   expect(report?.complete).toBe(true); expect(report?.ui.verdict).toBe("PASS");
   expect(report?.ui.measurements.clickPhase).toBe("during-suite");

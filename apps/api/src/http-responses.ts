@@ -30,6 +30,11 @@ export async function serveStatic(response: ServerResponse, filePath: string): P
       "cross-origin-resource-policy": "same-origin",
       "x-content-type-options": "nosniff"
     } : {}),
+    ...(/^room-plugin-kernel-[A-Za-z0-9_-]{8,}\.js$/.test(basename(normalized)) ? {
+      "content-security-policy": "default-src 'none'; script-src 'none'; connect-src 'none'; worker-src 'self'; base-uri 'none'",
+      "cross-origin-resource-policy": "same-origin",
+      "x-content-type-options": "nosniff"
+    } : {}),
     ...(extname(normalized).toLowerCase() === ".html" ? { "cache-control": "no-cache" } : {})
   });
   response.end(data);

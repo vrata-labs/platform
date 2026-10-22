@@ -13,7 +13,8 @@ source, license and the welcome-status example.
   `parseRoomPluginJson`, `validateRoomPluginRequest`, `parseRoomPluginRequest`,
   `validateRoomPluginEvent`, `parseRoomPluginEvent`, `validateRoomPluginResponse`,
   `parseRoomPluginResponse`, `validateRoomPluginInstanceIdentity` and
-  `roomPluginUtf8ByteLength`.
+  `roomPluginUtf8ByteLength`, `parseRoomPluginArtifactEnvelope`,
+  `validateRoomPluginManifest` and `validateRoomPluginSha256`.
 - `@vrata/room-plugin-sdk/artifact`: Node >=22 packaging and validation:
   `createRoomPluginArtifact`, `validateRoomPluginArtifact`,
   `validateRoomPluginManifest`, `validateRoomPluginModule`,
@@ -33,6 +34,14 @@ The future CLI and author API must both use `validateRoomPluginArtifact` with
 original bytes, rather than independently validating or reserializing an upload.
 All validation failures throw `RoomPluginValidationError` with stable `code` and
 a bounded `path`. Never render an exception from plugin code as trusted HTML.
+
+The browser-safe envelope parser shares the Node validator's manifest and bounded
+JSON rules but does **not** establish either checksum or parse JavaScript syntax.
+Runtime hosts must verify exact artifact bytes and decoded entry bytes with
+WebCrypto before passing the source only to the isolated VM. Node packaging/API
+validation additionally rejects unsupported module syntax and imports with Acorn.
+Neither parser executes an author's module. Browser entry exports do not import
+Node crypto, Acorn or the packaging tools.
 
 ## Artifact v1
 
@@ -126,6 +135,13 @@ The VM facade exposes `context.sdk.seating.claimSelfOnEntry(seatId)`,
 `RoomPluginResponse` describes success/denial; results contain no server IDs.
 There is no claim on behalf of another participant or arbitrary movement API.
 
+SDK operation promises settle only after the trusted broker has accepted or
+rejected the request; enqueuing a VM DTO is not a successful host effect. Denials
+reject with a stable broker code, never a raw host exception. The host validates
+the current native session, binding generation, approvals and lease synchronously
+at commit. Responses cannot revive a fenced or disposed instance. Unsupported
+seating stays `capability-denied` until the platform adapter is available.
+
 Events are `room.ready`, `room.connection`, `seating.snapshot` and
 `lifecycle.dispose`. Ready/seat snapshots contain only own binding-scoped alias,
 arrival permission and seat IDs/yaw/occupancy aliases. The broker creates these
@@ -185,11 +201,19 @@ does not retrospectively bound network allocation.
 - VM heap 16 MiB, VM stack 32 KiB, WASM linear memory capped at 48 MiB
   (not whole browser/process memory); the initial 256 KiB stack candidate was
   reduced after compiled Chromium recursion probes exhausted native stack first;
-- 50 ms init/handler/job budget; 500 ms independent Worker response deadline;
+- 50 ms per bounded init/handler/continuation execution turn, including job drain;
+  500 ms independent Worker command response deadline, including response delivery;
 - rolling VM execution <=100 ms/second and <=2 s/minute; init separately bounded;
 - timer interval >=250 ms, at most 4 timers;
 - <=10 SDK requests/second, queue <=32, one seat claim in-flight;
 - messages/config <=16 KiB, depth <=8; binding lease <=5 seconds.
+
+Waiting for a trusted host response does not execute the VM and cannot occupy a
+Worker command indefinitely: the host wait is bounded separately to at most the
+binding lease. Every resumed turn is charged to the same rolling execution
+budgets. A pending lifecycle promise with no outstanding SDK request is an error,
+not an unbounded wait. Only the first module/init computation has the separately
+bounded init allowance; continuation work does not inherit that exemption.
 
 These are shared definitions, not a completed sandbox guarantee. The spike must
 enforce VM interrupt/job/allocation limits and independent Worker termination,
@@ -222,7 +246,7 @@ credentials. Public registry dependencies are pinned: Acorn 8.18.0 and esbuild
 0.25.12, including esbuild's platform-specific executable.
 
 ```sh
-npm install --ignore-scripts /absolute/path/to/vrata-room-plugin-sdk-0.1.0.tgz
+npm install --ignore-scripts /absolute/path/to/vrata-room-plugin-sdk-0.2.0.tgz
 ./node_modules/.bin/vrata-room-plugin bundle --entry src/entry.ts --out entry.bundle.mjs
 ./node_modules/.bin/vrata-room-plugin pack --manifest manifest.json --entry entry.bundle.mjs --out example.vrata-plugin.json
 ./node_modules/.bin/vrata-room-plugin validate example.vrata-plugin.json
@@ -310,8 +334,8 @@ the real pnpm tarball's manifest and exported files to enforce this contract.
 
 Copy either `examples/welcome-status` or `examples/auto-seat` to a fresh directory
 outside the monorepo. Download/copy the verified SDK tarball into that project as
-`vrata-room-plugin-sdk-0.1.0.tgz` **before install**. Both manifests depend on
-`file:./vrata-room-plugin-sdk-0.1.0.tgz`, so a missing tarball fails locally instead
+`vrata-room-plugin-sdk-0.2.0.tgz` **before install**. Both manifests depend on
+`file:./vrata-room-plugin-sdk-0.2.0.tgz`, so a missing tarball fails locally instead
 of querying the registry for an unrelated SDK package. Then run from that project:
 
 ```sh

@@ -3,7 +3,7 @@ import { before, test } from "node:test";
 import { readFile } from "node:fs/promises";
 import { TestQuickJSWASMModule, type QuickJSContext } from "quickjs-emscripten-core";
 import { createPluginQuickJS } from "./quickjs-module.js";
-import { PluginVm } from "./vm.js";
+import { StatusAcknowledgingPluginVm as PluginVm } from "./vm-test-helper.js";
 import { PROBE_FIXTURES } from "./probe-fixtures.js";
 import { SANDBOX_LIMITS, SandboxError } from "./limits.js";
 

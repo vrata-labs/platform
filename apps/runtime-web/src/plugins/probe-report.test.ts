@@ -13,7 +13,7 @@ function input(): ReportInput {
       return { fixture, phase: expectation.phase, state: expectation.mode === "normal" ? "disposed" : "failed", failure: expectation.allowedFailures[0] ?? null,
         exceptionHint: expectation.hint ?? null, statuses: [...expectation.statuses], elapsedMs: 10, executionMs: null, jobs: null, wasmMemoryBytes: 16 * 1024 * 1024, hostFramesDuring: 1 };
     }),
-    continuity: { failure: null, completedChecks: 37, allReady: true, finalStatusSeen: true, activeAfterCleanup: 0, elapsedMs: 3000,
+    continuity: { failure: null, completedChecks: 40, allReady: true, finalStatusSeen: true, activeAfterCleanup: 0, elapsedMs: 3000,
       operations: HOSTILE_FIXTURES.map((fixture) => ({ fixture, phase: PROBE_EXPECTATIONS[fixture].phase, durationMs: 2, pings: [{ sentOffsetMs: 0, ackOffsetMs: 1, latencyMs: 1, failure: null }] })) },
     ui: goodUi()
   };
@@ -26,7 +26,7 @@ function goodUi(): UiObservation {
 test("completed full diagnostic report may PASS but always leaves full device gate NOT_EVALUATED", () => {
   const report = buildProbeReport(input());
   assert.equal(report.verdict, "PASS"); assert.equal(report.complete, true);
-  assert.equal(report.passed, 37); assert.equal(report.failed, 0);
+  assert.equal(report.passed, 40); assert.equal(report.failed, 0);
   assert.equal(report.deviceGate, "NOT_EVALUATED");
   assert.match(report.limitations.join(" "), /не вся память/);
   assert.deepEqual(JSON.parse(serializeProbeReport(report)), report);

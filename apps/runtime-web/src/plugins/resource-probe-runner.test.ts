@@ -3,8 +3,7 @@ import { test } from "node:test";
 import { ExecutionBudget, SandboxError, SANDBOX_LIMITS, type SandboxFailure } from "./limits.js";
 import { RESOURCE_PROBE_LIMITS as LIMITS, type ResourceObservation, type ResourcePhase } from "./resource-probe-contract.js";
 import { runResourceProbe, type ResourceProbeDependencies } from "./resource-probe-runner.js";
-import type { InstanceState } from "./supervisor.js";
-import type { VmTurn } from "./vm.js";
+import type { InstanceState, PluginActionResult } from "./supervisor.js";
 
 const wasm = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
 const metadata = { runId: "unit-run", startedAt: "2026-10-06T10:00:00.000Z", device: {
@@ -65,20 +64,20 @@ class SupervisorDouble {
   private stop = new AbortController();
   private budget = new ExecutionBudget();
   constructor(readonly id: number, readonly timeline: Timeline, readonly options: Options) {}
-  async init(module: WebAssembly.Module, source: string): Promise<VmTurn> {
+  async init(module: WebAssembly.Module, source: string): Promise<PluginActionResult> {
     this.module = module; this.source = source;
     this.kind = source.includes("< 30") ? "second" : source.includes("< 12") ? "minute" : "healthy";
     const result = await this.execute("init");
     this.state = "ready";
     return result;
   }
-  event(event: unknown): Promise<VmTurn> {
+  event(event: unknown): Promise<PluginActionResult> {
     assert.deepEqual(event, { sdkApiVersion: 1, type: "room.connection", state: "connected" });
     assert.equal(this.state, "ready");
     this.events++; this.eventStarts.push(this.timeline.now);
     return this.execute("event");
   }
-  async dispose(): Promise<VmTurn> {
+  async dispose(): Promise<PluginActionResult> {
     assert.equal(this.inFlight, 0, "runner must join outstanding companion ACK before dispose");
     this.state = "disposing";
     const result = await this.execute("dispose");
@@ -92,7 +91,7 @@ class SupervisorDouble {
     this.terminated++; this.stop.abort();
   }
   fail(code: SandboxFailure) { this.failure = code; this.terminate(); }
-  private async execute(kind: TurnKind): Promise<VmTurn> {
+  private async execute(kind: TurnKind): Promise<PluginActionResult> {
     this.calls.push(kind); this.inFlight++;
     try {
       this.options.before?.(this, kind);
@@ -107,7 +106,8 @@ class SupervisorDouble {
         if (code) throw new SandboxError(code);
       }
       this.wasmMemoryBytes = SANDBOX_LIMITS.wasmInitialMemoryBytes + (this.id % 3) * 65536;
-      return { requests: [], executionMs, jobs: 0, wasmMemoryBytes: this.wasmMemoryBytes };
+      return { requests: [], executionMs, maxTurnExecutionMs: executionMs, turnCount: 1, requestCount: 0,
+        jobs: 0, wasmMemoryBytes: this.wasmMemoryBytes, lifecycle: "fulfilled" };
     } catch (error) {
       this.failure = error instanceof SandboxError ? error.code : "native_failure";
       this.terminate();

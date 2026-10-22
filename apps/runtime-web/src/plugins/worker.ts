@@ -12,6 +12,7 @@ const scope = globalThis as unknown as {
 let instance: PluginVm | undefined;
 let prepared = false;
 let initialized = false;
+let disposing = false;
 let busy = false;
 let failed = false;
 
@@ -23,6 +24,7 @@ async function command(message: WorkerCommand): Promise<void> {
     busy = true;
     let turn;
     if (message.type === "prepare") {
+      const preparationStarted = performance.now();
       if (prepared || !(message.wasm instanceof WebAssembly.Module)) throw new SandboxError("invalid_input");
       const approvedCapabilities = validateRoomPluginCapabilities(message.approvedCapabilities);
       prepared = true;
@@ -30,7 +32,8 @@ async function command(message: WorkerCommand): Promise<void> {
       PluginVm.warmup(module);
       instance = new PluginVm(module, { approvedCapabilities });
       instance.prepare();
-      scope.postMessage({ version: 1, type: "prepared", id, wasmMemoryBytes: module.getWasmMemory().buffer.byteLength });
+      scope.postMessage({ version: 1, type: "prepared", id, wasmMemoryBytes: module.getWasmMemory().buffer.byteLength,
+        prepareMs: performance.now() - preparationStarted });
       return;
     }
     if (message.type === "init") {
@@ -43,13 +46,14 @@ async function command(message: WorkerCommand): Promise<void> {
     } else {
       if (!instance || !initialized) throw new SandboxError("invalid_lifecycle");
       if (message.type === "event") turn = instance.event(message.eventJson);
-      else if (message.type === "dispose") turn = instance.dispose();
+      else if (message.type === "respond") turn = instance.respond(message.responsesJson);
+      else if (message.type === "dispose") { disposing = true; turn = instance.dispose(); }
       else throw new SandboxError("worker_protocol");
     }
     const turnJson = JSON.stringify(turn);
     if (roomPluginUtf8ByteLength(turnJson) > SANDBOX_LIMITS.messageBytes) throw new SandboxError("message_too_large");
     scope.postMessage({ version: 1, type: "result", id, ok: true, turnJson });
-    if (message.type === "dispose") { failed = true; scope.close(); }
+    if (disposing && turn.lifecycle === "fulfilled") { failed = true; scope.close(); }
   } catch (error) {
     failed = true;
     // Never echo an exception, stack, source, arbitrary message or getter.
@@ -62,4 +66,4 @@ async function command(message: WorkerCommand): Promise<void> {
 }
 
 scope.onmessage = (event) => { void command(event.data); };
-scope.postMessage({ version: 1, type: "hello" });
+scope.postMessage({ version: 1, type: "hello", moduleAgeMs: performance.now() });

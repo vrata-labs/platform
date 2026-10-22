@@ -1,6 +1,6 @@
 {
   "name": "@vrata/room-plugin-sdk",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Versioned data-only contracts and artifact validation for Vrata room plugins",
   "license": "Apache-2.0",
   "type": "module",

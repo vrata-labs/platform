@@ -1,11 +1,11 @@
-import { createPluginSupervisor, loadTrustedPluginWasm } from "./host.js";
+import { createPluginSupervisor, loadTrustedPluginWasm, type PluginSandbox as PluginSupervisor } from "./host.js";
 import { PROBE_FIXTURES, type ProbeFixture } from "./probe-fixtures.js";
 import { SandboxError, SANDBOX_LIMITS, type SandboxFailure, type GuestExceptionHint } from "./limits.js";
 import { PROBE_EXPECTATIONS, PROBE_FIXTURE_ORDER, assessProbeResult, isProbeFixture } from "./probe-expectations.js";
 import { buildProbeReport, portableProbeResult, serializeProbeReport, COMPANION_STATUS,
   COMPANION_PING_INTERVAL_MS, inputDelayMs,
   type ProbeReport, type ProbeDevice, type ReportInput, type ContinuityObservation, type UiObservation, type CompanionOperation } from "./probe-report.js";
-import type { PluginSupervisor, InstanceState } from "./supervisor.js";
+import type { InstanceState } from "./supervisor.js";
 import type { RoomPluginEvent } from "@vrata/room-plugin-sdk";
 import { runResourceProbe } from "./resource-probe-runner.js";
 import { buildResourceProbeReport, serializeResourceProbeReport, resourceProbeSummary, type ResourceProbeReport } from "./resource-probe-report.js";

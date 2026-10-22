@@ -8,7 +8,7 @@ if (version !== "0.25.12") throw new Error("bundler_version_mismatch");
 const source = new URL("../src/", import.meta.url);
 const output = new URL("./commonjs/", import.meta.url);
 await build({
-  entryPoints: ["index", "artifact", "contracts", "config", "data", "errors", "messages", "text"].map(name => fileURLToPath(new URL(`${name}.ts`, source))),
+  entryPoints: ["index", "artifact", "contracts", "config", "data", "errors", "manifest", "messages", "text"].map(name => fileURLToPath(new URL(`${name}.ts`, source))),
   outdir: fileURLToPath(output),
   format: "cjs",
   platform: "neutral",

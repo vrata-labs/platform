@@ -49,6 +49,21 @@ function commonHeaders(contentType: string, origin = "*") {
   };
 }
 
+test("trusted kernel can create only same-origin child workers; guest worker retains the stricter CSP", async () => {
+  await fixture(async root => {
+    for (const [name, policy] of [
+      ["room-plugin-kernel-abcdefgh.js", "default-src 'none'; script-src 'none'; connect-src 'none'; worker-src 'self'; base-uri 'none'"],
+      ["room-plugin-worker-abcdefgh.js", "default-src 'none'; script-src 'wasm-unsafe-eval'; connect-src 'none'; worker-src 'none'; base-uri 'none'"]
+    ]) {
+      const path = join(root, name); await writeFile(path, "// fixed trusted asset");
+      const captured = capture(); assert.equal(await serveStatic(captured.response, path), true);
+      const headers = captured.calls[0][2] as Record<string, string>;
+      assert.equal(headers["content-security-policy"], policy); assert.equal(headers["x-content-type-options"], "nosniff");
+      assert.equal(headers["cross-origin-resource-policy"], "same-origin");
+    }
+  });
+});
+
 async function fixture(run: (root: string) => Promise<void>): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), "vrata-http-responses-"));
   try { await run(root); } finally { await rm(root, { recursive: true, force: true }); }

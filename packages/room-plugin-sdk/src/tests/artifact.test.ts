@@ -104,6 +104,17 @@ test("hash formats, entry byte changes and full envelope changes are rejected", 
   error(() => validateRoomPluginArtifact(checked.bytes, "not-a-hash"), "invalid_hash");
 });
 
+test("multi-fault artifacts preserve manifest, entry hash, artifact hash then syntax precedence", () => {
+  const value = raw("export const broken = ;");
+  value.manifest.schemaVersion = 2; value.manifest.entrySha256 = "0".repeat(64);
+  error(() => validateRoomPluginArtifact(JSON.stringify(value), "1".repeat(64)), "unsupported_schema_version");
+  value.manifest.schemaVersion = 1;
+  error(() => validateRoomPluginArtifact(JSON.stringify(value), "1".repeat(64)), "entry_checksum_mismatch");
+  value.manifest.entrySha256 = sha(value.entry);
+  error(() => validateRoomPluginArtifact(JSON.stringify(value), "1".repeat(64)), "artifact_checksum_mismatch");
+  error(() => validateRoomPluginArtifact(JSON.stringify(value)), "invalid_module");
+});
+
 test("byte limit is enforced before JSON.parse for both bytes and UTF-8 strings", () => {
   const parse = JSON.parse;
   let calls = 0;

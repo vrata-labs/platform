@@ -38,6 +38,7 @@ export async function startReferenceTemplateFixture(postgresUrl: string, options
   const schema = `template_e2e_${randomUUID().replaceAll("-", "")}`;
   const adminToken = "test-admin-token";
   const documentStorageRoot = resolve("test-results/reference-documents", schema);
+  const pluginStorageRoot = resolve("test-results/reference-plugins", schema);
   const admin = new Pool({ connectionString: postgresUrl });
   const pool = new Pool({ connectionString: postgresUrl, options: `-c search_path=${schema},public` });
   const { PostgresStorage } = await import(pathToFileURL(resolve("apps/api/dist/storage.js")).href);
@@ -71,10 +72,11 @@ export async function startReferenceTemplateFixture(postgresUrl: string, options
     LIVEKIT_URL: options.livekitUrl ?? "ws://127.0.0.1:7880", LIVEKIT_API_KEY: "devkey", LIVEKIT_API_SECRET: "secret",
     ...(options.livekitUrl ? { LIVEKIT_ROOM_PREFIX: "vrata-", MEDIA_TOKEN_TTL_SECONDS: "120" } : {}),
     DOCUMENT_LOCAL_UPLOAD_ROOT: documentStorageRoot, MINIO_DOCUMENT_PREFIX: "documents",
+    ROOM_PLUGIN_LOCAL_UPLOAD_ROOT: pluginStorageRoot,
     ...(options.documentUploadMaxBytes !== undefined ? { DOCUMENT_UPLOAD_MAX_BYTES: String(options.documentUploadMaxBytes) } : {})
   };
   for (const key of [
-    "DOCUMENT_PROVIDER", "SCENE_BUNDLE_PROVIDER",
+    "DOCUMENT_PROVIDER", "SCENE_BUNDLE_PROVIDER", "ROOM_PLUGIN_BUCKET",
     "MINIO_ENDPOINT", "MINIO_ROOT_USER", "MINIO_ROOT_PASSWORD", "MINIO_BUCKET", "MINIO_PUBLIC_BASE_URL",
     "SCENE_BUNDLE_S3_ENDPOINT", "SCENE_BUNDLE_S3_REGION", "SCENE_BUNDLE_S3_BUCKET",
     "SCENE_BUNDLE_S3_PUBLIC_BASE_URL", "SCENE_BUNDLE_S3_ACCESS_KEY_ID", "SCENE_BUNDLE_S3_SECRET_ACCESS_KEY",
@@ -146,7 +148,7 @@ export async function startReferenceTemplateFixture(postgresUrl: string, options
     await new Promise<void>(resolve => assetServer.close(() => resolve())); throw error;
   }
   return {
-    origin, stateOrigin, assetsOrigin, schema, adminToken, documentStorageRoot, restartApi,
+    origin, stateOrigin, assetsOrigin, schema, adminToken, documentStorageRoot, pluginStorageRoot, restartApi,
     identityBoundaryDenials: () => structuredClone(identityBoundaryDenials),
     async close() {
       if (closePromise) return closePromise;
@@ -162,6 +164,7 @@ export async function startReferenceTemplateFixture(postgresUrl: string, options
           await pool.end(); await admin.query(`drop schema "${schema}" cascade`); await admin.end();
           await new Promise<void>(resolve => assetServer.close(() => resolve()));
           await rm(documentStorageRoot, { recursive: true, force: true });
+          await rm(pluginStorageRoot, { recursive: true, force: true });
         }
       })();
       return closePromise;

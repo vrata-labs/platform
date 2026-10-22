@@ -15,15 +15,17 @@ export const VM_BOOTSTRAP = `(() => {
   const stringify = JSON.stringify, parse = JSON.parse;
   const charCodeAt = String.prototype.charCodeAt, StringValue = String;
   const forbiddenText = /[\\p{Cf}\\p{Cc}\\p{Zl}\\p{Zp}]/u, regexExec = RegExp.prototype.exec;
-  const PromiseValue = Promise, promiseResolve = Promise.resolve, promiseReject = Promise.reject;
+  const PromiseValue = Promise, promiseReject = Promise.reject;
   const internalErrorProto = typeof InternalError === "function" ? InternalError.prototype : null;
   const syntaxErrorProto = SyntaxError.prototype;
   let failure = "", callbacks = create(null), context;
   let queue = [], requestTimes = [], statusTimes = [], now = 0, nextId = 0;
+  const pending = create(null);
+  let pendingCount = 0, requesting = false;
 
   function fail(code) { if (!failure) failure = code; throw null; }
   function data(d) { return d && apply(hasOwn, d, ["value"]); }
-  function append(array, value) { define(array, StringValue(array.length), { value, writable: true, enumerable: true, configurable: true }); }
+  function append(array, value) { define(array, StringValue(array.length), { __proto__: null, value, writable: true, enumerable: true, configurable: true }); }
   function utf8(s) {
     if (s.length > ${SANDBOX_LIMITS.messageBytes}) fail("message_too_large");
     let n = 0;
@@ -99,36 +101,51 @@ export const VM_BOOTSTRAP = `(() => {
   }
   function request(operation, payload) {
     if (failure) throw null;
-    requestTimes = trim(requestTimes);
-    if (requestTimes.length >= ${SANDBOX_LIMITS.requestsPerSecond}) fail("bridge_rate_limit");
-    append(requestTimes, now);
-    if (queue.length >= ${SANDBOX_LIMITS.requestQueueSize}) fail("bridge_queue_limit");
-    const json = serialize({ sdkApiVersion: 1, requestId: StringValue(++nextId), operation, payload });
-    if (operation !== "status.set") {
-      // T03 has no seating authority. Never simulate a successful claim/cancel.
-      return apply(promiseReject, PromiseValue, ["capability-denied"]);
+    if (requesting) { failure = failure || "invalid_data"; throw null; }
+    requesting = true;
+    let registered = false, queued = false;
+    try {
+      requestTimes = trim(requestTimes);
+      if (requestTimes.length >= ${SANDBOX_LIMITS.requestsPerSecond}) fail("bridge_rate_limit");
+      append(requestTimes, now);
+      if (queue.length >= ${SANDBOX_LIMITS.requestQueueSize} || pendingCount >= ${SANDBOX_LIMITS.requestQueueSize}) fail("bridge_queue_limit");
+      const requestId = StringValue(++nextId);
+      const json = serialize({ sdkApiVersion: 1, requestId, operation, payload });
+      if (failure) throw null;
+      if (!context.allowed[operation]) return apply(promiseReject, PromiseValue, ["capability-denied"]);
+      if (operation === "status.set") {
+        if (typeof payload.text !== "string" || utf8(payload.text) > ${SANDBOX_LIMITS.statusTextBytes}) fail("invalid_data");
+        if (apply(regexExec, forbiddenText, [payload.text]) !== null) fail("invalid_data");
+        statusTimes = trim(statusTimes);
+        if (statusTimes.length >= ${SANDBOX_LIMITS.statusUpdatesPerSecond}) fail("status_rate_limit");
+        append(statusTimes, now);
+      }
+      let resolve, reject;
+      // The executor only captures native resolvers. Bookkeeping cannot throw
+      // inside it and be silently converted into an already-rejected SDK promise.
+      const result = new PromiseValue((yes, no) => { resolve = yes; reject = no; });
+      if (typeof resolve !== "function" || typeof reject !== "function") fail("invalid_lifecycle");
+      define(pending, requestId, { __proto__: null, value: { resolve, reject }, configurable: true });
+      registered = true; pendingCount++;
+      append(queue, json); queued = true;
+      return result;
+    } finally {
+      if (registered && !queued) failure = failure || "invalid_data";
+      requesting = false;
     }
-    if (!context.statusAllowed) return apply(promiseReject, PromiseValue, ["capability-denied"]);
-    if (typeof payload.text !== "string" || utf8(payload.text) > ${SANDBOX_LIMITS.statusTextBytes}) fail("invalid_data");
-    if (apply(regexExec, forbiddenText, [payload.text]) !== null) fail("invalid_data");
-    statusTimes = trim(statusTimes);
-    if (statusTimes.length >= ${SANDBOX_LIMITS.statusUpdatesPerSecond}) fail("status_rate_limit");
-    append(statusTimes, now);
-    append(queue, json);
-    // Local diagnostic status sink: effects are committed by host only after the
-    // WHOLE turn succeeds. Authenticated async responses belong to T07.
-    return apply(promiseResolve, PromiseValue, [undefined]);
   }
   function record(fields) {
     const r = create(null);
-    for (let i = 0; i < fields.length; i += 2) define(r, fields[i], { value: fields[i + 1], enumerable: true });
+    for (let i = 0; i < fields.length; i += 2) define(r, fields[i], { __proto__: null, value: fields[i + 1], enumerable: true });
     return freeze(r);
   }
   let facade;
   return freeze({
-    configure(json, statusAllowed) {
+    configure(json, capabilitiesJson) {
       const config = freeze(parse(json));
-      context = { statusAllowed };
+      const capabilities = parse(capabilitiesJson), allowed = create(null);
+      for (let i = 0; i < capabilities.length; i++) define(allowed, capabilities[i], { __proto__: null, value: true });
+      context = { allowed: freeze(allowed) };
       const seating = record(["claimSelfOnEntry", seatId => request("seating.claimSelfOnEntry", { seatId }),
         "cancelPendingOwnClaim", () => request("seating.cancelPendingOwnClaim", {})]);
       const status = record(["set", text => request("status.set", { text })]);
@@ -141,7 +158,7 @@ export const VM_BOOTSTRAP = `(() => {
         const key = names[i];
         const d = descriptor(namespace, key);
         if (d && (!data(d) || typeof d.value !== "function")) fail("invalid_lifecycle");
-        define(callbacks, key, { value: d ? d.value : null });
+        define(callbacks, key, { __proto__: null, value: d ? d.value : null });
       }
     },
     begin(timestamp) { now = timestamp; queue = []; },
@@ -154,6 +171,24 @@ export const VM_BOOTSTRAP = `(() => {
       if (value !== undefined) { serialize(value); fail("invalid_lifecycle_result"); }
     },
     collect() { if (failure) throw null; const out = serialize(queue); queue = []; return out; },
+    pending() { return pendingCount; },
+    deliver(json) {
+      const responses = parse(json), seen = create(null);
+      if (!isArray(responses) || !responses.length || responses.length > ${SANDBOX_LIMITS.requestQueueSize}) fail("worker_protocol");
+      // Resolve nothing until the entire host batch references distinct live
+      // requests. No stale/unknown response can resume a different lifecycle.
+      for (let i = 0; i < responses.length; i++) {
+        const response = responses[i], id = response.requestId;
+        if (typeof id !== "string" || !apply(hasOwn, pending, [id]) || apply(hasOwn, seen, [id])) fail("worker_protocol");
+        define(seen, id, { __proto__: null, value: true });
+      }
+      for (let i = 0; i < responses.length; i++) {
+        const response = responses[i], id = response.requestId, deferred = pending[id];
+        delete pending[id]; pendingCount--;
+        if (response.ok) deferred.resolve(response.result === null ? undefined : response.result);
+        else deferred.reject(response.error);
+      }
+    },
     code() { return failure; },
     exceptionCode(value) {
       // No message/stack/name property reads, String(error), or guest toString.

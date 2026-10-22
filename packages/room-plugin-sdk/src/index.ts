@@ -6,3 +6,5 @@ export type { RoomPluginDataLimits, RoomPluginJson } from "./data.js";
 export * from "./config.js";
 export * from "./messages.js";
 export { isRoomPluginPlainText } from "./text.js";
+export { parseRoomPluginArtifactEnvelope, validateRoomPluginManifest, validateRoomPluginSha256 } from "./manifest.js";
+export type { RoomPluginArtifactEnvelope } from "./manifest.js";

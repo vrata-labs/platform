@@ -1,6 +1,6 @@
 import {
   ROOM_PLUGIN_LIMITS, parseRoomPluginEvent, parseRoomPluginRequest,
-  validateRoomPluginData, validateRoomPluginCapabilities, RoomPluginValidationError,
+  validateRoomPluginData, validateRoomPluginCapabilities, validateRoomPluginResponse, parseRoomPluginJson, RoomPluginValidationError,
   roomPluginUtf8ByteLength, type RoomPluginConfig, type RoomPluginRequest, type RoomPluginCapability
 } from "@vrata/room-plugin-sdk";
 import type { QuickJSContext, QuickJSHandle, QuickJSRuntime, QuickJSWASMModule, VmCallResult } from "quickjs-emscripten-core";
@@ -9,6 +9,7 @@ import { VM_BOOTSTRAP } from "./vm-bootstrap.js";
 
 export interface VmTurn {
   requests: RoomPluginRequest[]; executionMs: number; jobs: number;
+  lifecycle: "fulfilled" | "pending";
   /** Actual WASM buffer size, NOT VM heap usage or total Worker/browser memory. */
   wasmMemoryBytes: number;
 }
@@ -36,7 +37,9 @@ export class PluginVm {
   private readonly helpers = new Map<string, QuickJSHandle>();
   private started = 0;
   private active = false;
-  private initializing = true;
+  private firstComputation = true;
+  private phase: "new" | "initializing" | "ready" | "event" | "disposing" | "disposed" = "new";
+  private lifecycleHandle?: QuickJSHandle;
   private closed = false;
   private interrupts = 0;
   private jobs = 0;
@@ -57,14 +60,24 @@ export class PluginVm {
     this.active = this.bootstrapping = true;
     try {
       this.guard();
-      this.withStrings(["{}"], ([json]) => this.call("configure", [json, this.vm.true]).dispose());
+      this.withStrings(["{}", JSON.stringify(this.approvedCapabilities)], (args) => this.call("configure", args).dispose());
       this.begin();
       const namespace = this.result(this.vm.evalCode(TRUSTED_PREPARE_MODULE, "trusted-prepare.mjs", { type: "module" }));
       try { this.settled(namespace, (exports) => this.call("bind", [exports]).dispose()); }
       finally { namespace.dispose(); }
       for (const name of ["init", "onEvent", "dispose"]) {
         const result = this.invoke(name);
-        try { this.settled(result, (value) => this.call("validateReturn", [value]).dispose()); }
+        try {
+          this.drain();
+          const collected = this.call("collect");
+          let requests: RoomPluginRequest[];
+          try { requests = (JSON.parse(this.vm.getString(collected)) as string[]).map(parseRoomPluginRequest); }
+          finally { collected.dispose(); }
+          if (requests.some(request => request.operation !== "status.set")) throw new SandboxError("capability_denied");
+          if (requests.length) this.withStrings([JSON.stringify(requests.map(request => ({ sdkApiVersion: 1, requestId: request.requestId, ok: true, result: null })))],
+            args => this.call("deliver", args).dispose());
+          this.settled(result, (value) => this.call("validateReturn", [value]).dispose());
+        }
         finally { result.dispose(); }
         this.drain();
         this.checkStickyFailure();
@@ -108,7 +121,7 @@ export class PluginVm {
     try {
       const root = this.result(this.vm.evalCode(VM_BOOTSTRAP, "platform-bootstrap.js", { type: "global" }));
       try {
-        for (const name of ["configure", "bind", "begin", "invoke", "validateReturn", "collect", "code", "exceptionCode"]) this.helpers.set(name, this.vm.getProp(root, name));
+        for (const name of ["configure", "bind", "begin", "invoke", "validateReturn", "collect", "pending", "deliver", "code", "exceptionCode"]) this.helpers.set(name, this.vm.getProp(root, name));
       } finally { root.dispose(); }
       this.guard();
     } catch (error) {
@@ -120,51 +133,56 @@ export class PluginVm {
   init(source: string, config: RoomPluginConfig = {}): VmTurn {
     if (!this.closed && !this.helpers.size) this.prepare();
     return this.turn(() => {
-      if (!this.initializing) throw new SandboxError("invalid_lifecycle");
+      if (this.phase !== "new") throw new SandboxError("invalid_lifecycle");
       if (typeof source !== "string" || source.length > ROOM_PLUGIN_LIMITS.artifactBytes || roomPluginUtf8ByteLength(source) > ROOM_PLUGIN_LIMITS.artifactBytes) throw new SandboxError("invalid_input");
       const safeConfig = validateRoomPluginData(config);
       if (safeConfig === null || Array.isArray(safeConfig) || typeof safeConfig !== "object" ||
           Object.values(safeConfig).some((value) => !["string", "number", "boolean"].includes(typeof value))) throw new SandboxError("invalid_input");
-      this.withStrings([JSON.stringify(safeConfig)], ([json]) => {
-        this.call("configure", [json, this.approvedCapabilities.includes("status.set") ? this.vm.true : this.vm.false]).dispose();
+      this.withStrings([JSON.stringify(safeConfig), JSON.stringify(this.approvedCapabilities)], (args) => {
+        this.call("configure", args).dispose();
       });
       this.begin();
       const namespace = this.result(this.vm.evalCode(source, "room-plugin.mjs", { type: "module" }));
       try {
         this.settled(namespace, (exports) => { this.call("bind", [exports]).dispose(); });
       } finally { namespace.dispose(); }
-      const returned = this.invoke("init");
-      try { this.settled(returned, (value) => { this.call("validateReturn", [value]).dispose(); }); }
-      finally { returned.dispose(); }
+      this.phase = "initializing";
+      this.lifecycleHandle = this.invoke("init");
     });
   }
 
   event(eventJson: string): VmTurn {
     return this.turn(() => {
-      if (this.initializing) throw new SandboxError("invalid_lifecycle");
+      if (this.phase !== "ready") throw new SandboxError("invalid_lifecycle");
       parseRoomPluginEvent(eventJson);
       this.begin();
-      const returned = this.invoke("onEvent", eventJson);
-      try { this.settled(returned, (value) => { this.call("validateReturn", [value]).dispose(); }); }
-      finally { returned.dispose(); }
+      this.phase = "event";
+      this.lifecycleHandle = this.invoke("onEvent", eventJson);
     });
   }
 
   dispose(): VmTurn {
-    try {
-      return this.turn(() => {
-        this.begin();
-        const returned = this.invoke("dispose");
-        try { this.settled(returned, (value) => { this.call("validateReturn", [value]).dispose(); }); }
-        finally { returned.dispose(); }
-      });
-    } finally { this.close(); }
+    return this.turn(() => {
+      if (this.phase !== "ready") throw new SandboxError("invalid_lifecycle");
+      this.begin(); this.phase = "disposing"; this.lifecycleHandle = this.invoke("dispose");
+    });
+  }
+
+  respond(responsesJson: string): VmTurn {
+    return this.turn(() => {
+      if (!this.lifecycleHandle || !["initializing", "event", "disposing"].includes(this.phase)) throw new SandboxError("invalid_lifecycle");
+      const responses = parseRoomPluginJson(responsesJson);
+      if (!Array.isArray(responses) || !responses.length || responses.length > SANDBOX_LIMITS.requestQueueSize) throw new SandboxError("invalid_input");
+      const validated = responses.map(validateRoomPluginResponse);
+      this.begin(); this.withStrings([JSON.stringify(validated)], args => this.call("deliver", args).dispose());
+    });
   }
 
   /** Fatal shutdown skips guest dispose entirely. Idempotent; no restart loop. */
   close(): void {
     if (this.closed) return;
     this.closed = true;
+    this.lifecycleHandle?.dispose(); this.lifecycleHandle = undefined;
     for (const handle of this.helpers.values()) handle.dispose();
     this.helpers.clear();
     try { this.vm.dispose(); } finally { if (this.runtime.alive) this.runtime.dispose(); }
@@ -174,7 +192,7 @@ export class PluginVm {
     const now = this.clock();
     const elapsed = Math.max(0, now - this.started);
     if (elapsed > (this.bootstrapping ? SANDBOX_LIMITS.workerModuleLoadDeadlineMs : SANDBOX_LIMITS.handlerBudgetMs)) return "execution_timeout";
-    if (!this.initializing) return this.budget.check(now, elapsed);
+    if (!this.firstComputation) return this.budget.check(now, elapsed);
     return undefined;
   }
 
@@ -195,6 +213,7 @@ export class PluginVm {
       this.drain();
       this.guard();
       this.checkStickyFailure();
+      const lifecycle = this.lifecycleState();
       // collect() is the VM serializer, not JSON dump of arbitrary guest values.
       const collected = this.call("collect");
       let json: string;
@@ -207,12 +226,14 @@ export class PluginVm {
       const ended = this.clock();
       const executionMs = Math.max(0, ended - this.started);
       if (executionMs > SANDBOX_LIMITS.handlerBudgetMs) throw new SandboxError("execution_timeout");
-      if (!this.initializing) {
+      if (!this.firstComputation) {
         const failure = this.budget.charge(ended, executionMs);
         if (failure) throw new SandboxError(failure);
       }
-      this.initializing = false;
-      return { requests: parsed, executionMs, jobs: this.jobs, wasmMemoryBytes };
+      this.firstComputation = false;
+      const turn = { requests: parsed, executionMs, jobs: this.jobs, wasmMemoryBytes, lifecycle };
+      if (this.phase === "disposed") this.close();
+      return turn;
     } catch (error) {
       // Do not stringify unknown native errors or inspect live guest exceptions.
       const failure = error instanceof SandboxError ? error : new SandboxError(error instanceof RoomPluginValidationError ? "invalid_input" : "native_failure");
@@ -224,6 +245,25 @@ export class PluginVm {
   private begin(): void {
     const now = this.vm.newNumber(this.started);
     try { this.call("begin", [now]).dispose(); } finally { now.dispose(); }
+  }
+
+  private lifecycleState(): "fulfilled" | "pending" {
+    if (!this.lifecycleHandle) throw new SandboxError("invalid_lifecycle");
+    const state = this.vm.getPromiseState(this.lifecycleHandle);
+    if (state.type === "rejected") { this.result({ error: state.error } as VmCallResult<QuickJSHandle>); throw new SandboxError("guest_exception"); }
+    if (state.type === "fulfilled") {
+      try { this.call("validateReturn", [state.value]).dispose(); }
+      finally { if (!state.notAPromise) state.value.dispose(); }
+    }
+    const pending = this.call("pending");
+    let count: number;
+    try { count = this.vm.getNumber(pending); } finally { pending.dispose(); }
+    if (!Number.isInteger(count) || count < 0 || count > SANDBOX_LIMITS.requestQueueSize) throw new SandboxError("worker_protocol");
+    if (count) return "pending";
+    if (state.type === "pending") throw new SandboxError("pending_promise");
+    this.lifecycleHandle.dispose(); this.lifecycleHandle = undefined;
+    this.phase = this.phase === "disposing" ? "disposed" : "ready";
+    return "fulfilled";
   }
 
   private invoke(name: string, json = "null"): QuickJSHandle {

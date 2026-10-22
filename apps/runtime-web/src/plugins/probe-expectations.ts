@@ -25,6 +25,10 @@ function importObservation(label: string): ProbeExpectation {
   return { ...contained(label, "Наблюдает незавершение фиксированной import-программы. Причину ошибки не устанавливает; сеть и CSP проверяются отдельным автоматическим тестом.", ["guest_exception"]), observationOnly: true,
     expected: "Фиксированная программа не завершается на init, экземпляр остановлен без status effects. guest_exception не доказывает import_denied; требуется отдельная автоматическая проверка сети/CSP." };
 }
+function continuation(label: string, purpose: string, failures: SandboxFailure[], hint?: GuestExceptionHint): ProbeExpectation {
+  return { ...contained(label, purpose, failures, hint), statuses: ["Acknowledged turn"],
+    expected: "Первый отдельный тур подтверждён host. Опасное продолжение после ответа должно быть остановлено с ожидаемым кодом, без новых status effects." };
+}
 
 /** Exhaustive, fixed expectations. A new fixture cannot silently inherit PASS. */
 export const PROBE_EXPECTATIONS: Readonly<Record<ProbeFixture, ProbeExpectation>> = Object.freeze({
@@ -64,6 +68,9 @@ export const PROBE_EXPECTATIONS: Readonly<Record<ProbeFixture, ProbeExpectation>
   dynamicImport: importObservation("Динамическая import-программа"),
   generatedImport: importObservation("Import-программа из eval"),
   pending: contained("Promise, который не завершится", "Lifecycle не должен бесконечно ждать незавершённый Promise.", ["pending_promise"]),
+  responseLoop: continuation("Цикл после ответа broker", "Проверяет тот же предел исполнения в продолжении после одного подтверждённого SDK-запроса.", ["execution_timeout", "interrupt_limit"]),
+  responseHeap: continuation("Память после ответа broker", "Проверяет неизменный предел16MiB heap в продолжении после подтверждённого SDK-запроса.", ["guest_exception"], "memory_exhausted"),
+  responsePending: continuation("Незавершимый Promise после ответа", "После подтверждения первого запроса lifecycle не вправе зависнуть без outstanding SDK request.", ["pending_promise"]),
   regex: contained("Зависающее регулярное выражение", "Для native-вызова допустимо прерывание VM или уничтожение Worker watchdog. Другой плагин и интерфейс должны продолжить работать.", ["execution_timeout", "worker_timeout"], undefined, "event")
 });
 

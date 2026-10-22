@@ -24,13 +24,19 @@ export const SANDBOX_FAILURES = [
   "message_too_large", "nesting_too_deep", "node_limit", "bridge_rate_limit",
   "bridge_queue_limit", "status_rate_limit", "capability_denied",
   "worker_timeout", "worker_error", "worker_protocol", "host_queue_limit",
-  "wasm_load_failed", "worker_boot_timeout", "invalid_input", "instance_closed"
+  "wasm_load_failed", "worker_boot_timeout", "invalid_input", "instance_closed", "host_error", "lifecycle_timeout"
 ] as const;
 export type SandboxFailure = (typeof SANDBOX_FAILURES)[number];
 export type GuestExceptionHint = "memory_exhausted" | "stack_exhausted";
+export interface SandboxStartupTiming {
+  moduleAgeMs: number | null; prepareMs: number | null;
+  prepareRoundTripMs: number | null; wasmLoadMs: number | null;
+}
+export type SandboxHostPhase = "worker-hello" | "worker-prepare" | "init" | "event" | "respond" | "dispose";
 
 export class SandboxError extends Error {
-  constructor(readonly code: SandboxFailure, readonly exceptionHint?: GuestExceptionHint) { super(code); this.name = "SandboxError"; }
+  constructor(readonly code: SandboxFailure, readonly exceptionHint?: GuestExceptionHint, readonly hostPhase?: SandboxHostPhase,
+    readonly startupTiming?: SandboxStartupTiming) { super(code); this.name = "SandboxError"; }
 }
 
 /** Monotonic wall-clock execution charges, including serialization and job draining. */

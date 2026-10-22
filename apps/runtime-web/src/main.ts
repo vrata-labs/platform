@@ -45,6 +45,9 @@ import {
 import { appendBrandingSuffix, applyRoomShellBootState, renderSceneAttributions } from "./boot-session.js";
 import { RuntimeAccessError, bootRuntime, deleteRoomDocument, downloadRoomDocument, exportRoomNote, exportRoomNotesArchive, fetchRoomDocumentMediaContent, fetchRoomDocumentPresentation, fetchRoomNote, fetchRoomSessionControl, fetchRuntimeSpaces, fetchStateToken, grantRoomPresenter, listPresence, listRoomDocuments, listRoomNoteVersions, openPersonalRoom, planVoiceSession, removePresence, removeRoomParticipant, resolveCurrentSpace, resolveJoinMode, restoreRoomNoteVersion, revokeRoomPresenter, runRoomSessionControlAction, savePersonalRoomState, saveRoomNote, selectRoomDocumentSurface, transferRoomHost, transferRoomOwner, uploadRoomDocument, upsertPresence, type PresenceState, type RuntimeDocumentRecord, type RuntimePersonalState, type RuntimeSessionControlResponse, type RuntimeSpaceOption } from "./index.js";
 import { createSessionControlPoller } from "./session-control-poller.js";
+import { RoomPluginController } from "./plugins/controller.js";
+import { RoomPluginTokenBound } from "./plugins/token-bound.js";
+import { createRoomPluginStatusView } from "./plugins/status-view.js";
 import { createMediaSourceUpgrade, permitsScreenShare } from "./media/media-source-upgrade.js";
 import { createMediaActionBarrier } from "./media/media-action-barrier.js";
 import { planBaseMedia } from "./media/media-token-error.js";
@@ -676,6 +679,7 @@ const mediaRoomIdleDisconnectScheduler = createMediaRoomIdleScheduler<Room, numb
 });
 let roomStateClient: RoomStateClient | null = null;
 let roomStateAccessToken = "";
+const roomPluginTokenBound = new RoomPluginTokenBound();
 let roomStateConnected = false;
 let roomStateConnectionGeneration = 0;
 let latestRealtimeParticipants: PresenceState[] = [];
@@ -1681,6 +1685,7 @@ function applyAccessDebug(access: NonNullable<RuntimeSessionControlResponse["acc
   const previouslyCouldViewDocuments = canViewDocuments();
   const previousLastDeniedPermission = debugState.access.lastDeniedPermission;
   const previousLastSurfaceCommandAccepted = debugState.access.lastSurfaceCommandAccepted;
+  roomPluginTokenBound.observeToken(token);
   roomStateAccessToken = token;
   debugState.access = {
     ...access,
@@ -1711,6 +1716,8 @@ function applyAccessDebug(access: NonNullable<RuntimeSessionControlResponse["acc
 }
 
 function disableRuntimeForSessionBlock(reason: string): void {
+  roomPluginTokenBound.clear();
+  try { roomPluginRuntime.stop(); } catch { /* Plugin cleanup must not prevent the core session block. */ }
   sessionControlPoller.stop();
   const message = describeSessionControlReason(reason);
   sessionControlBlocked = true;
@@ -1756,10 +1763,15 @@ function disableRuntimeForSessionBlock(reason: string): void {
 
 const sessionControlPoller = createSessionControlPoller({ intervalMs: SESSION_CONTROL_REFRESH_INTERVAL_MS,
   refresh: () => refreshSessionControl() });
-window.addEventListener("pagehide", () => sessionControlPoller.stop());
+window.addEventListener("pagehide", () => { sessionControlPoller.stop(); roomPluginRuntime.stop(); });
 window.addEventListener("pageshow", event => {
-  if (event.persisted && !sessionControlBlocked && !runtimeSessionGate.reason) sessionControlPoller.start();
+  if (event.persisted && !sessionControlBlocked && !runtimeSessionGate.reason) {
+    sessionControlPoller.start(); roomPluginRuntime.start(activeIdentityProtocolVersion);
+  }
 });
+document.addEventListener("visibilitychange", () => roomPluginRuntime.availabilityChanged());
+window.addEventListener("online", () => roomPluginRuntime.availabilityChanged());
+window.addEventListener("offline", () => roomPluginRuntime.availabilityChanged());
 
 function startIdentitySessionRenewal(expiresInSeconds: number): void {
   if (activeIdentityProtocolVersion !== 2) return;
@@ -1780,6 +1792,7 @@ function startIdentitySessionRenewal(expiresInSeconds: number): void {
           runtimeSessionGate.require("identity_recovery_required");
           return;
         }
+        const pluginTokenRequest = roomPluginTokenBound.begin();
         const renewed = await fetchStateToken(apiBaseUrl, roomId, {
           identityProtocolVersion: 2, identityCredential, participantId, displayName
         });
@@ -1792,7 +1805,9 @@ function startIdentitySessionRenewal(expiresInSeconds: number): void {
         roomIdentityTab.rememberIdentity(renewed.identityCredential);
         const previousRole = debugState.access.role;
         const access = acceptRenewedAuthority(renewed);
+        roomPluginTokenBound.admit(pluginTokenRequest, renewed.token, renewed.expiresInSeconds);
         applyAccessDebug(access ?? debugState.access, renewed.token, renewed.expiresInSeconds);
+        roomPluginRuntime.kick();
         nextAttemptAtMs = Date.now() + Math.max(30_000, Math.min(420_000, (renewed.expiresInSeconds - 120) * 1000));
         // Existing sockets still carry the old exp; reconnect with the new rs2.
         if (previousRole === debugState.access.role && roomStateClient && debugState.roomStateUrl) {
@@ -4172,6 +4187,20 @@ const debugState = createRuntimeDebugState({
 });
 Object.defineProperty(debugState.hostControls, "polling", { enumerable: true,
   get: () => ({ timer: sessionControlPoller.diagnostics(), request: refreshDiagnostics() }) });
+const roomPluginStatusView = createRoomPluginStatusView({ document,
+  root: document.querySelector<HTMLElement>("#room-plugin-statuses")!, list: document.querySelector<HTMLElement>("#room-plugin-status-list")! });
+const roomPluginRuntime = new RoomPluginController({ apiBaseUrl, roomId,
+  context: () => ({ active: activeIdentityProtocolVersion === 2 && !sessionControlBlocked && !runtimeSessionGate.reason,
+    ready: runtimeBootReady, online: navigator.onLine, visible: document.visibilityState !== "hidden",
+    connection: roomStateConnected ? "connected" : "reconnecting" }),
+  proof: () => roomPluginTokenBound.capture(), render: rows => roomPluginStatusView.render(rows),
+  identityRequired: reason => runtimeSessionGate.require(reason),
+  start: async (source, config, approved, dispatch, signal) => {
+    const { startPluginSandbox } = await import("./plugins/host.js");
+    return startPluginSandbox(source, config, approved, undefined, { dispatch, signal });
+  }
+});
+Object.defineProperty(debugState, "plugins", { enumerable: true, get: () => roomPluginRuntime.diagnostics() });
 
 const {
   screenShareEntries,
@@ -5158,6 +5187,7 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
       const reopened = debugState.avatarPoseTransport.lastPoseSentAtMs > 0;
       roomStateConnected = true;
       debugState.roomStateConnected = true;
+      roomPluginRuntime.connectionChanged();
       debugState.roomStateMode = "colyseus";
       startShareButton.disabled = !canUseScreenShareControl();
       stopShareButton.disabled = !canStopLocalScreenShare();
@@ -5266,6 +5296,7 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
       const issue = classifyRoomStateError(error);
       roomStateConnected = false;
       debugState.roomStateConnected = false;
+      roomPluginRuntime.connectionChanged();
       mediaSurfaceCommands.rejectAll("room_state_error");
       clearSeatReclaimRetry();
       applyIssue(issue, {
@@ -5284,6 +5315,7 @@ function connectRoomStateWithRetry(roomStateUrl: string): void {
       const issue = getRuntimeIssue("room_state_failed");
       roomStateConnected = false;
       debugState.roomStateConnected = false;
+      roomPluginRuntime.connectionChanged();
       mediaSurfaceCommands.rejectAll("room_state_closed");
       surfaceStopRevisionSupported = false; meetingTools?.sync();
       applyIssue(issue, {
@@ -7645,6 +7677,7 @@ async function main(): Promise<void> {
   joinMutedCheckbox.checked = joinMutedPreference;
   guestJoinMutedCheckbox.checked = templatePreferences.joinMuted(true);
   await waitForGuestOnboardingIfNeeded();
+  const pluginTokenRequest = roomPluginTokenBound.begin();
   const boot = await bootRuntime(apiBaseUrl, roomId, navigator.userAgent, {
     participantId,
     displayName,
@@ -7699,6 +7732,8 @@ async function main(): Promise<void> {
     ? boot.isOwner === true : boot.ownerParticipantId === participantId);
   openPersonalRoomButton.hidden = !runtimeFlags.personalRoomsEnabled;
   openPersonalRoomButton.disabled = !runtimeFlags.personalRoomsEnabled;
+  if (boot.identityProtocolVersion === 2) roomPluginTokenBound.admit(pluginTokenRequest, boot.access.token, boot.access.expiresInSeconds);
+  else roomPluginTokenBound.clear();
   roomStateAccessToken = boot.access.token;
   debugState.access = {
     ...boot.access,
@@ -7730,6 +7765,7 @@ async function main(): Promise<void> {
   await refreshSessionControl(true);
   if (sessionControlBlocked) return;
   if (!runtimeSessionGate.reason) sessionControlPoller.start();
+  roomPluginRuntime.start(activeIdentityProtocolVersion);
   await loadAvailableSpaces(boot.roomId);
   syncNotesAccessUi();
   void loadActiveNote();
@@ -8003,6 +8039,7 @@ async function main(): Promise<void> {
   presenceAccumulator = 0;
   diagnosticsAccumulator = 0;
   runtimeBootReady = !sessionControlBlocked;
+  roomPluginRuntime.kick();
   reportRuntimeBootDiagnostics(reportDiagnostics);
 }
 

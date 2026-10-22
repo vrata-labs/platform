@@ -13,6 +13,7 @@ export default defineConfig({
   },
   worker: {
     format: "es",
-    rollupOptions: { output: { entryFileNames: "assets/room-plugin-worker-[hash].js", inlineDynamicImports: true } }
+    rollupOptions: { output: { entryFileNames: chunk => chunk.name === "supervisor-worker"
+      ? "assets/room-plugin-kernel-[hash].js" : "assets/room-plugin-worker-[hash].js", inlineDynamicImports: true } }
   }
 });

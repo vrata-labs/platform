@@ -30,6 +30,7 @@ test("real pnpm tarball separates published declarations from pre-build workspac
     };
 
     assert.equal(published.name, "@vrata/room-plugin-sdk");
+    assert.equal(published.version, workspace.version);
     assert.equal(published.types, "./dist/index.d.ts", "external consumers must not compile SDK source");
     assert.deepEqual(published.exports, expectedExports);
     assert.deepEqual(published.bin, { "vrata-room-plugin": "dist/cli.js" });
@@ -55,7 +56,7 @@ test("real pnpm tarball separates published declarations from pre-build workspac
     assert.ok(files.has("package/examples/auto-seat/manifest.json"));
     for (const example of ["welcome-status", "auto-seat"]) {
       const exampleManifest = JSON.parse(execFileSync("tar", ["-xOf", archive, `package/examples/${example}/package.json`], { encoding: "utf8", timeout: 10_000 }));
-      assert.equal(exampleManifest.dependencies["@vrata/room-plugin-sdk"], "file:./vrata-room-plugin-sdk-0.1.0.tgz", "standalone examples must never resolve a registry SDK name");
+      assert.equal(exampleManifest.dependencies["@vrata/room-plugin-sdk"], `file:./vrata-room-plugin-sdk-${published.version}.tgz`, "standalone examples must never resolve a registry SDK name");
     }
     assert.equal(readFileSync(manifestPath, "utf8"), original, "pack must not rewrite workspace source exports");
   } finally {

@@ -8,8 +8,8 @@ const healthy = (): ProbeResult => ({ fixture: "healthy", phase: "complete", sta
   statuses: ["Welcome plugin initialized", "Probe greeting"], elapsedMs: 30, executionMs: 3, jobs: 0, wasmMemoryBytes: 16 * 1024 * 1024, hostFramesDuring: 2 });
 const hostile = (): ProbeResult => ({ ...healthy(), fixture: "loop", phase: "init", state: "failed", failure: "execution_timeout", statuses: [], executionMs: null, jobs: null });
 
-test("all 37 fixed fixtures have explicit Russian expectations and concrete failure lists", () => {
-  assert.equal(PROBE_FIXTURE_ORDER.length, 37);
+test("all 40 fixed fixtures have explicit Russian expectations and concrete failure lists", () => {
+  assert.equal(PROBE_FIXTURE_ORDER.length, 40);
   assert.deepEqual([...PROBE_FIXTURE_ORDER].sort(), Object.keys(PROBE_EXPECTATIONS).sort());
   assert.deepEqual(Object.keys(PROBE_FIXTURES).sort(), Object.keys(PROBE_EXPECTATIONS).sort());
   for (const expectation of Object.values(PROBE_EXPECTATIONS)) {
@@ -90,5 +90,15 @@ test("heap/stack hints alone never replace failed-instance containment, code che
 test("invalid telemetry and unknown scenario fail rather than inheriting a generic expectation", () => {
   for (const change of [{ elapsedMs: NaN }, { executionMs: 51 }, { hostFramesDuring: -1 }, { fixture: "unknown" }]) {
     assert.equal(assessProbeResult({ ...healthy(), ...change } as ProbeResult).verdict, "FAIL");
+  }
+});
+test("continuation probes permit only the already acknowledged turn, not an additional failing-turn effect", () => {
+  for (const [fixture, failure, exceptionHint] of [["responseLoop", "execution_timeout", null],
+    ["responseHeap", "guest_exception", "memory_exhausted"], ["responsePending", "pending_promise", null]] as const) {
+    const result: ProbeResult = { ...hostile(), fixture, failure, exceptionHint, statuses: ["Acknowledged turn"] };
+    assert.equal(assessProbeResult(result).verdict, "PASS");
+    for (const statuses of [[], ["Acknowledged turn", "MUST NOT COMMIT"]]) {
+      assert.equal(assessProbeResult({ ...result, statuses }).verdict, "FAIL");
+    }
   }
 });

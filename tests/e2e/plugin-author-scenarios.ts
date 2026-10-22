@@ -247,17 +247,17 @@ export async function createExternalAuthorProject(sdk: Buffer) {
     expect(JSON.stringify(installed.dependencies) === JSON.stringify({ acorn: "8.18.0", esbuild: "0.25.12" })).toBe(true);
     const cli = join(root, "node_modules/.bin/vrata-room-plugin");
 
-    async function build(pluginId: string, version = "1.0.0", capabilities = ["status.set"]): Promise<ExternalArtifact> {
+    async function build(pluginId: string, version = "1.0.0", capabilities = ["status.set"], body?: string): Promise<ExternalArtifact> {
       // A native API evaluation would write an owned marker; a browser evaluation
       // would set the global marker. Building/parsing/downloading must do neither.
       const source = `import type { RoomPluginContext, RoomPluginEvent } from "@vrata/room-plugin-sdk";
 globalThis.${nativeMarker} = true;
 if (typeof process !== "undefined") process.getBuiltinModule("node:fs").writeFileSync(${JSON.stringify(markerPath)}, "executed");
-export function init(context: RoomPluginContext) { return context.sdk.status.set("Author example initialized"); }
+${body ?? `export function init(context: RoomPluginContext) { return context.sdk.status.set("Author example initialized"); }
 export function onEvent(event: RoomPluginEvent, context: RoomPluginContext) {
   if (event.type === "room.ready") return context.sdk.status.set(String(context.config.greeting));
 }
-export function dispose() {}
+export function dispose() {}`}
 `;
       await writeFile(join(root, "entry.ts"), source);
       await writeFile(join(root, "manifest.json"), JSON.stringify({ schemaVersion: 1, sdkApiVersion: 1, id: pluginId, version,

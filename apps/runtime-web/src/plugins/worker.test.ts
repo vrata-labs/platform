@@ -16,7 +16,8 @@ test("real worker entry maps SDK validation errors to invalid_input and closes b
   scope.close = () => { closed = true; };
   try {
     await import("./worker.js");
-    assert.deepEqual(replies.shift(), { version: 1, type: "hello" });
+    const hello = replies.shift(); assert.equal(hello?.version, 1); assert.equal(hello?.type, "hello");
+    assert.ok(hello?.type === "hello" && typeof hello.moduleAgeMs === "number" && Number.isFinite(hello.moduleAgeMs) && hello.moduleAgeMs >= 0);
     scope.onmessage!({ data: {
       version: 1, id: 1, type: "prepare",
       wasm: new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0])),

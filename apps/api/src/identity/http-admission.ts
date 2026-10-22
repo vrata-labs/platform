@@ -18,6 +18,7 @@ export interface V2AdmissionRequest {
 
 export type V2AdmissionResult = { status: 200 | 202 | 400 | 401 | 403 | 404 | 409 | 426 | 429; body: Record<string, unknown> };
 const deny = (status: V2AdmissionResult["status"], reason: string): V2AdmissionResult => ({ status, body: { error: "identity_required", reason } });
+const V2_ROOM_SESSION_LIFETIME_SECONDS = 900;
 
 /** At floor 2 every credential here is a possession proof, never a public participant ID. */
 export async function admitV2RoomSession(input: {
@@ -38,7 +39,7 @@ export async function admitV2RoomSession(input: {
   const displayName = rawDisplayName.trim().replace(/\s+/g, " ").slice(0, 80);
   if (rawDisplayName && !displayName) return { status: 400, body: { error: "invalid_display_name" } };
   const service = createRoomIdentityService(input.storage.roomIdentities, input.secret, input.now ?? Date.now,
-    { identityLifetimeSeconds: 86_400, sessionLifetimeSeconds: 900 });
+    { identityLifetimeSeconds: 86_400, sessionLifetimeSeconds: V2_ROOM_SESSION_LIFETIME_SECONDS });
   try {
     let issued: Awaited<ReturnType<typeof service.admit>>;
     if (payload.identityCredential !== undefined) {
@@ -67,7 +68,7 @@ export async function admitV2RoomSession(input: {
     return { status: 200, body: {
       identityProtocolVersion: 2, participantId: issued.identity.participantId,
       identityCredential: issued.credential, token: session.sessionToken, sessionId: session.sessionId,
-      expiresInSeconds: 900, role: session.role, isOwner: session.isOwner,
+      expiresInSeconds: V2_ROOM_SESSION_LIFETIME_SECONDS, role: session.role, isOwner: session.isOwner,
       authorityRevision: session.authority.revision,
       permissions: session.permissions, access: createRoomAccessFromPermissions(session.role, session.permissions)
     } };
