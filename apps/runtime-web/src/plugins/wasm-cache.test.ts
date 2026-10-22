@@ -46,15 +46,23 @@ test("fetch and compilation failures reset the cache for explicit retry", async 
   }
 });
 
-test("cache bounds stalled compilation and oversized input before compile", async (t) => {
+test("cache bounds stalled downloads and compilation and oversized input before compile", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
   let signal: AbortSignal | undefined;
-  const stalled = new TrustedWasmModuleCache("https://trusted.invalid/quickjs.wasm", async (_url, options) => {
-    signal = options?.signal as AbortSignal; return new Response(minimal);
-  }, () => new Promise(() => {}));
+  const stalledDownload = new TrustedWasmModuleCache("https://trusted.invalid/quickjs.wasm", async (_url, options) => {
+    signal = options?.signal as AbortSignal; return new Promise<Response>(() => {});
+  });
+  const download = assert.rejects(stalledDownload.get(), { code: "wasm_load_failed" });
+  t.mock.timers.tick(SANDBOX_LIMITS.wasmLoadDeadlineMs); await download;
+  assert.equal(signal?.aborted, true, "a stalled download is abandoned at the deadline");
+  let compileCount = 0;
+  const stalled = new TrustedWasmModuleCache("https://trusted.invalid/quickjs.wasm", async () => new Response(minimal), () => { compileCount++; return new Promise(() => {}); });
   const rejected = assert.rejects(stalled.get(), { code: "wasm_load_failed" });
+  await new Promise(resolve => setImmediate(resolve));
   t.mock.timers.tick(SANDBOX_LIMITS.wasmLoadDeadlineMs); await rejected;
-  assert.equal(signal?.aborted, true);
+  const again = assert.rejects(stalled.get(), { code: "wasm_load_failed" });
+  t.mock.timers.tick(SANDBOX_LIMITS.wasmLoadDeadlineMs); await again;
+  assert.equal(compileCount, 1, "every attempt stays bounded by the deadline and never compiles twice");
   const compileCalls: ArrayBuffer[] = [];
   const excessive = new TrustedWasmModuleCache("https://trusted.invalid/quickjs.wasm", async () => new Response(new Uint8Array(SANDBOX_LIMITS.wasmBytes + 1)), async (bytes) => {
     compileCalls.push(bytes); return WebAssembly.compile(minimal);
@@ -75,4 +83,17 @@ test("real pinned newVariant wasmMemory hook enforces 48MiB, for bytes and compi
     assert.throws(() => memory.grow(1), RangeError);
     assert.equal(memory.buffer.byteLength, 48 * 1024 * 1024);
   }
+});
+
+test("a slow compile that misses one deadline is reused by the next attempt instead of recompiling", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let fetches = 0, compilations = 0, finish!: () => void;
+  const cache = new TrustedWasmModuleCache("https://trusted.invalid/quickjs.wasm", async () => { fetches++; return new Response(minimal); },
+    async (bytes) => { compilations++; await new Promise<void>(resolve => { finish = resolve; }); return WebAssembly.compile(bytes); });
+  const first = assert.rejects(cache.get(), { code: "wasm_load_failed" });
+  await new Promise(resolve => setImmediate(resolve));
+  t.mock.timers.tick(SANDBOX_LIMITS.wasmLoadDeadlineMs); await first;
+  const retry = cache.get(); finish();
+  assert.ok(await retry instanceof WebAssembly.Module);
+  assert.deepEqual([fetches, compilations], [1, 1]);
 });

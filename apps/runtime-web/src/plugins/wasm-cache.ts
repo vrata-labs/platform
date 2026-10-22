@@ -5,20 +5,36 @@ import { SANDBOX_LIMITS, SandboxError } from "./limits.js";
  */
 export class TrustedWasmModuleCache {
   private current?: Promise<WebAssembly.Module>;
+  // A compile of fully received trusted bytes that missed one deadline keeps running;
+  // the next attempt waits on it again instead of downloading and compiling twice.
+  private inFlight?: { loading: Promise<WebAssembly.Module>; abort: AbortController; downloaded: boolean };
   constructor(private readonly url: string, private readonly fetcher: typeof fetch = fetch,
     private readonly compile: (bytes: ArrayBuffer) => Promise<WebAssembly.Module> = (bytes) => WebAssembly.compile(bytes)) {}
 
   get(): Promise<WebAssembly.Module> {
     if (this.current) return this.current;
-    const abort = new AbortController();
+    const flight = this.inFlight ?? this.start();
     let timer: ReturnType<typeof setTimeout>;
     const deadline = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => { abort.abort(); reject(new SandboxError("wasm_load_failed")); }, SANDBOX_LIMITS.wasmLoadDeadlineMs);
+      timer = setTimeout(() => {
+        // A stalled download is abandoned; a running compile is kept for the retry.
+        if (this.inFlight === flight && !flight.downloaded) { flight.abort.abort(); this.inFlight = undefined; }
+        reject(new SandboxError("wasm_load_failed"));
+      }, SANDBOX_LIMITS.wasmLoadDeadlineMs);
     });
-    const loading = (async () => {
+    const pending = Promise.race([flight.loading, deadline]).catch(() => { throw new SandboxError("wasm_load_failed"); })
+      .finally(() => clearTimeout(timer));
+    this.current = pending;
+    void pending.catch(() => { if (this.current === pending) this.current = undefined; });
+    return pending;
+  }
+
+  private start(): NonNullable<TrustedWasmModuleCache["inFlight"]> {
+    const flight = { loading: undefined as unknown as Promise<WebAssembly.Module>, abort: new AbortController(), downloaded: false };
+    flight.loading = (async () => {
       // Window.fetch is receiver-sensitive in Chromium. Do not call it as a
       // method of the cache object (Node's fetch would silently permit that).
-      const response = await Reflect.apply(this.fetcher, globalThis, [this.url, { signal: abort.signal, credentials: "omit", redirect: "error" }]);
+      const response = await Reflect.apply(this.fetcher, globalThis, [this.url, { signal: flight.abort.signal, credentials: "omit", redirect: "error" }]);
       if (!response.ok || !response.body) throw new SandboxError("wasm_load_failed");
       const reader = response.body.getReader();
       const chunks: Uint8Array[] = [];
@@ -35,12 +51,11 @@ export class TrustedWasmModuleCache {
       const bytes = new Uint8Array(length);
       let offset = 0;
       for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
+      flight.downloaded = true;
       return this.compile(bytes.buffer);
     })();
-    const pending = Promise.race([loading, deadline]).catch(() => { throw new SandboxError("wasm_load_failed"); })
-      .finally(() => clearTimeout(timer));
-    this.current = pending;
-    void pending.catch(() => { if (this.current === pending) this.current = undefined; });
-    return pending;
+    this.inFlight = flight;
+    void flight.loading.catch(() => { if (this.inFlight === flight) this.inFlight = undefined; });
+    return flight;
   }
 }

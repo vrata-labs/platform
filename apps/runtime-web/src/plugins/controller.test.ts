@@ -271,3 +271,20 @@ test("a seating-capable instance gets the seat port, real snapshots and coalesce
   h.controller.stop();
   assert.ok(s.calls.includes("retire"));
 });
+
+test("a trusted WASM load miss gets one bounded retry; a second miss stops plugins without a restart loop", async () => {
+  const h = harness(); h.config(snapshot()); h.failStart(new SandboxError("wasm_load_failed")); h.controller.start(2);
+  await until(() => h.counters.starts === 1 && !h.controller.diagnostics().fetchPending);
+  assert.equal(h.controller.diagnostics().hostFailed, false); assert.equal(h.controller.diagnostics().failed, 0);
+  await h.advance(2000); await until(() => h.counters.starts === 2);
+  await until(() => h.controller.diagnostics().failed === 1);
+  assert.equal(h.controller.diagnostics().hostFailed, true);
+  for (let i = 0; i < 3; i++) { await h.advance(2000 * (i + 2)); }
+  assert.equal(h.counters.starts, 2, "no further restarts after the bounded retry");
+  h.controller.stop();
+  const ok = harness(); ok.config(snapshot()); ok.failStart(new SandboxError("wasm_load_failed")); ok.controller.start(2);
+  await until(() => ok.counters.starts === 1 && !ok.controller.diagnostics().fetchPending);
+  ok.failStart(null as never); await ok.advance(2000); await until(() => ok.controller.diagnostics().running === 1);
+  assert.equal(ok.controller.diagnostics().hostFailed, false);
+  ok.controller.stop();
+});

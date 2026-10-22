@@ -39,6 +39,8 @@ test("isolated v2 auto-seat gives four simultaneous entries four confirmed seats
         bearer(host.session.token), { expectedRevision, packageId: pkg.packageId, version: pkg.version, artifactSha256: pkg.artifactSha256,
           enabled, config: {}, approvedCapabilities: capabilities, capabilityApproval: { artifactSha256: pkg.artifactSha256, capabilities } });
       const bound = await put(0, true); expect(bound.status).toBe(200);
+      // Only the four arriving participants render from here on; the Host keeps authoring through its session token.
+      await host.context.close();
 
       const members = await Promise.all([1, 2, 3, 4].map(index => enterPluginRoom(browser, value, host.roomId, "member", `Auto-seat member ${index}`)));
       let late: Awaited<ReturnType<typeof enterPluginRoom>> | undefined;
@@ -47,8 +49,9 @@ test("isolated v2 auto-seat gives four simultaneous entries four confirmed seats
         const seated = await Promise.all(members.map(member => seatState(member.page)));
         const seats = seated.map(state => state.currentSeatId!);
         expect(new Set(seats).size).toBe(4);
-        await expect.poll(async () => {
-          const occupancy = (await seatState(host.page)).occupancy;
+        // Every participant sees the same four authoritative seats.
+        for (const member of members) await expect.poll(async () => {
+          const occupancy = (await seatState(member.page)).occupancy;
           return seated.every(state => occupancy[state.currentSeatId!] === state.participantId);
         }, { timeout: 15_000 }).toBe(true);
 
@@ -59,7 +62,7 @@ test("isolated v2 auto-seat gives four simultaneous entries four confirmed seats
         await expect.poll(async () => (await seatState(first.page)).currentSeatId, { timeout: 15_000 }).toBeNull();
         await expect(first.page.locator("#stand-up")).toBeHidden();
         await expect(first.page.locator("#room-plugin-seat-choice-input")).not.toBeChecked();
-        await expect.poll(async () => (await seatState(host.page)).occupancy[seats[0]] ?? null, { timeout: 15_000 }).toBeNull();
+        await expect.poll(async () => (await seatState(members[1].page)).occupancy[seats[0]] ?? null, { timeout: 15_000 }).toBeNull();
         const readmission = first.page.waitForResponse(response => new URL(response.url()).pathname === "/api/tokens/state" && response.status() === 200);
         void readmission.catch(() => undefined);
         await first.page.reload();
@@ -77,6 +80,7 @@ test("isolated v2 auto-seat gives four simultaneous entries four confirmed seats
         expect((await put(library.revision, false)).status).toBe(200);
         await expect(members[1].page.locator("#room-plugin-statuses")).toBeHidden({ timeout: 15_000 });
         for (const [index, member] of members.slice(1).entries()) expect((await seatState(member.page)).currentSeatId).toBe(seats[index + 1]);
+        for (const member of members) await member.context.close();
         late = await enterPluginRoom(browser, value, host.roomId, "member", "Auto-seat late member");
         await expect.poll(async () => (await seatState(late!.page)).ready, { timeout: 60_000 }).toBe(true);
         await late.page.waitForTimeout(6000);

@@ -72,6 +72,9 @@ export class RoomPluginController {
   private frameworkFailed = false;
   private failedEntries = new Map<string, { key: string; code: Failure }>();
   private seatingTimer: unknown;
+  // The trusted QuickJS module can miss its load deadline on a busy device; it gets one more
+  // attempt (reusing the running compile) before plugins are stopped for this page.
+  private wasmLoadRetries = 0;
 
   constructor(private readonly input: {
     apiBaseUrl: string; roomId: string;
@@ -279,6 +282,11 @@ export class RoomPluginController {
         const code: Failure = error instanceof SandboxError ? error.code : error instanceof RoomPluginRuntimeError ? error.code : "host-unavailable";
         if (error instanceof SandboxError) this.lastHostPhase = error.hostPhase ?? null;
         if (error instanceof SandboxError || error instanceof RoomPluginRuntimeError) this.startupTiming = error.startupTiming ? { ...error.startupTiming } : null;
+        if (code === "wasm_load_failed" && this.wasmLoadRetries < 1) {
+          this.wasmLoadRetries++; this.lastInstanceFailure = code;
+          // No guest code ran. The next bounded refresh starts this entry again.
+          entry.state = "loading"; entry.abort.abort(); this.render(); return;
+        }
         if (["wasm_load_failed", "worker_boot_timeout", "host-unavailable", "kernel-transport-timeout", "kernel-unsupported", "kernel-protocol"].includes(code)) this.hostFailed = true;
         this.failEntry(entry, code);
       }
