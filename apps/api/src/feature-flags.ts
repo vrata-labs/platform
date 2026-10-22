@@ -73,3 +73,12 @@ export function isHostControlsEnabled(env: NodeJS.ProcessEnv = process.env): boo
   }
   return isEnabledEnvValue(env.FEATURE_HOST_CONTROLS) ?? true;
 }
+
+export function isPortalManagedDeployment(env: NodeJS.ProcessEnv = process.env): boolean {
+  return isEnabledEnvValue(env.VRATA_PORTAL_MANAGED) ?? false;
+}
+
+// A portal-managed deployment never turns an unknown room id into a room unless explicitly allowed.
+export function isAdhocRoomsAllowed(env: NodeJS.ProcessEnv = process.env): boolean {
+  return isEnabledEnvValue(env.VRATA_ADHOC_ROOMS) ?? !isPortalManagedDeployment(env);
+}

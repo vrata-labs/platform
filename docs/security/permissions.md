@@ -29,6 +29,12 @@ Signed room-session roles are not operator identities. A signed room-session tok
 
 Invite-link lifecycle endpoints are not part of the current API surface. `VRATA-FEAT-014` owns private room access and invite create/revoke/use behavior; when those endpoints are added, they must declare explicit permissions and write control-plane audit entries.
 
+## Portal-Managed Resources
+
+On a deployment with `VRATA_PORTAL_MANAGED=true`, tenants and rooms created through the [integration API](../integration-api.md) belong to the portal service principal. The admin token, room sessions and anonymous endpoints cannot create, change or delete them: tenant writes for a managed tenant or a new `pt_` tenant id, room create or personal-room in a managed tenant, and room update/delete/disable/enable/bind-scene-bundle/invite-create for a managed room answer `403` with `reason: "managed_resource"`. Operators change access terms through the portal, not through the admin token.
+
+The integration API uses its own identity: a short-lived EdDSA service assertion whose scopes name the allowed operations. It is not accepted by control-plane endpoints, and neither the admin token nor a room-session token is accepted by the integration API.
+
 ## Public Runtime Endpoints
 
 Runtime boot/read endpoints stay public by design and must not mutate tenant or room state:

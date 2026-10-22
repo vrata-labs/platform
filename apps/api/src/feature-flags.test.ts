@@ -12,7 +12,9 @@ import {
   isPersonalRoomsFeatureEnabled,
   isRemoteBrowserFeatureEnabled,
   isSceneBundleUploadEnabled,
-  isHostControlsEnabled
+  isHostControlsEnabled,
+  isPortalManagedDeployment,
+  isAdhocRoomsAllowed
 } from "./feature-flags.js";
 
 const booleanCases: Array<[string | undefined, boolean | null]> = [
@@ -142,4 +144,15 @@ test("omitted environment is read at each call rather than captured at import", 
       else process.env[key] = value;
     }
   }
+});
+
+test("portal-managed mode is opt-in and turns off ad-hoc rooms unless they are explicitly allowed", () => {
+  assert.equal(isPortalManagedDeployment({}), false);
+  assert.equal(isAdhocRoomsAllowed({}), true);
+  assert.equal(isAdhocRoomsAllowed({ NODE_ENV: "production" }), true);
+  assert.equal(isPortalManagedDeployment({ VRATA_PORTAL_MANAGED: "true" }), true);
+  assert.equal(isAdhocRoomsAllowed({ VRATA_PORTAL_MANAGED: "true" }), false);
+  assert.equal(isAdhocRoomsAllowed({ VRATA_PORTAL_MANAGED: "true", VRATA_ADHOC_ROOMS: "true" }), true);
+  assert.equal(isAdhocRoomsAllowed({ VRATA_ADHOC_ROOMS: "false" }), false);
+  assert.equal(isAdhocRoomsAllowed({ VRATA_PORTAL_MANAGED: "invalid" }), true);
 });

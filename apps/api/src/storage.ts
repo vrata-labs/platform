@@ -21,6 +21,7 @@ import {
   type StoredTemplateVersionRow
 } from "./storage-room-records.js";
 import {
+  isoString,
   mapRoomDocumentRow,
   mapRoomInviteRow,
   mapRoomNoteRow,
@@ -31,6 +32,12 @@ import {
 import type {
   AssetRecord,
   ExpectedRoomTemplateBinding,
+  IntegrationOperationOutcome,
+  IntegrationOperationRecord,
+  IntegrationOperationStart,
+  IntegrationTenantRecord,
+  ManagedRoomAccessPatch,
+  ManagedRoomCreateInput,
   RoomDocumentRecord,
   RoomInviteRecord,
   RoomNoteRecord,
@@ -51,12 +58,19 @@ import { initializePostgresStorage } from "./storage-postgres-init.js";
 import { DEFAULT_SESSION_CONTROL_JSON, DEFAULT_PERSONAL_STATE_JSON } from "./storage-postgres-schema.js";
 import { assertRoomTemplatePatch, materializeStoredRoomInput } from "./room-template-policy.js";
 import { transitionPostgresReferenceCatalog } from "./storage-template-catalog.js";
+import { MemoryIntegrationOperations, PostgresIntegrationOperations } from "./storage-integration-operations.js";
 
 export { initPostgresStorageWithRetry } from "./storage-init-retry.js";
 
 export type {
   AssetRecord,
   ExpectedRoomTemplateBinding,
+  IntegrationErrorObject,
+  IntegrationOperationRecord,
+  IntegrationTenantRecord,
+  ManagedRoomAccessPatch,
+  ManagedRoomState,
+  ManagedRoomStatus,
   RoomAvatarConfig,
   RoomDocumentMetadata,
   RoomDocumentRecord,
@@ -169,6 +183,8 @@ export class MemoryStorage implements Storage {
   private waitingRoomRequests = new Map<string, WaitingRoomRequestRecord>();
   private roomNotes = new Map<string, RoomNoteRecord>();
   private roomNoteVersions = new Map<string, RoomNoteVersionRecord[]>();
+  private integrationTenants = new Map<string, IntegrationTenantRecord>();
+  private integrationOperations = new MemoryIntegrationOperations();
 
   private sceneBundleKey(bundleId: string, version: string): string {
     return `${bundleId}::${version}`;
@@ -294,7 +310,7 @@ export class MemoryStorage implements Storage {
     if (input.templateId !== undefined && input.templateId !== existing.templateId) {
       throw new Error("room_template_binding_changed");
     }
-    const { templateId: _inputTemplateId, templateVersion: _inputTemplateVersion, templateSnapshot: _inputTemplateSnapshot, ...safeInput } = input;
+    const { templateId: _inputTemplateId, templateVersion: _inputTemplateVersion, templateSnapshot: _inputTemplateSnapshot, managed: _inputManaged, ...safeInput } = input;
     const { templateVersion: _existingTemplateVersion, templateSnapshot: _existingTemplateSnapshot, ...existingWithoutTemplateMetadata } = existing;
     const updatedWithoutTemplateMetadata: RoomRecordWithoutTemplateMetadata = {
       ...existingWithoutTemplateMetadata,
@@ -656,10 +672,83 @@ export class MemoryStorage implements Storage {
     }
     return target ?? null;
   }
+  async getIntegrationTenant(tenantId: string): Promise<IntegrationTenantRecord | null> {
+    const tenant = this.integrationTenants.get(tenantId);
+    return tenant ? structuredClone(tenant) : null;
+  }
+  async upsertIntegrationTenant(input: { tenantId: string; managedBy: string; displayName: string }): Promise<IntegrationTenantRecord | "tenant_mismatch"> {
+    const existing = this.integrationTenants.get(input.tenantId);
+    if (this.tenants.has(input.tenantId) && existing?.managedBy !== input.managedBy) return "tenant_mismatch";
+    const timestamp = new Date().toISOString();
+    if (!existing) {
+      const tenant = { tenantId: input.tenantId, managedBy: input.managedBy, displayName: input.displayName, revision: 0, createdAt: timestamp, updatedAt: timestamp };
+      this.tenants.set(input.tenantId, { tenantId: input.tenantId, name: input.displayName });
+      this.integrationTenants.set(input.tenantId, tenant);
+      return structuredClone(tenant);
+    }
+    if (existing.displayName !== input.displayName) {
+      Object.assign(existing, { displayName: input.displayName, revision: existing.revision + 1, updatedAt: timestamp });
+      this.tenants.set(input.tenantId, { tenantId: input.tenantId, name: input.displayName });
+    }
+    return structuredClone(existing);
+  }
+  async createManagedRoom(input: Partial<RoomRecord>, managed: ManagedRoomCreateInput): Promise<RoomRecord> {
+    if (input.roomId && this.rooms.has(input.roomId)) throw new Error("managed_room_exists");
+    const room = await this.createRoom(input);
+    const timestamp = new Date().toISOString();
+    const stored = this.rooms.get(room.roomId)!;
+    stored.managed = {
+      managedBy: managed.managedBy,
+      kind: managed.kind,
+      status: "active",
+      accessUntil: managed.accessUntil,
+      graceSeconds: managed.graceSeconds,
+      revision: 0,
+      ownerSubject: managed.ownerSubject ?? null,
+      lastOperationId: managed.operationId,
+      createdAt: timestamp,
+      updatedAt: timestamp
+    };
+    return structuredClone(stored);
+  }
+  async updateManagedRoomAccess(roomId: string, expectedRevision: number, patch: ManagedRoomAccessPatch, operationId: string): Promise<RoomRecord | "revision_mismatch" | null> {
+    const room = this.rooms.get(roomId);
+    if (!room?.managed) return null;
+    if (room.managed.revision !== expectedRevision) return "revision_mismatch";
+    room.managed = {
+      ...room.managed,
+      accessUntil: patch.accessUntil ?? room.managed.accessUntil,
+      graceSeconds: patch.graceSeconds ?? room.managed.graceSeconds,
+      status: patch.status ?? room.managed.status,
+      revision: room.managed.revision + 1,
+      lastOperationId: operationId,
+      updatedAt: new Date().toISOString()
+    };
+    return structuredClone(room);
+  }
+  beginIntegrationOperation(input: IntegrationOperationStart): Promise<{ created: boolean; operation: IntegrationOperationRecord }> { return this.integrationOperations.begin(input); }
+  claimIntegrationOperation(operationId: string, leaseSeconds: number): Promise<IntegrationOperationRecord | null> { return this.integrationOperations.claim(operationId, leaseSeconds); }
+  completeIntegrationOperation(operationId: string, outcome: IntegrationOperationOutcome): Promise<IntegrationOperationRecord | null> { return this.integrationOperations.complete(operationId, outcome); }
+  releaseIntegrationOperation(operationId: string): Promise<void> { return this.integrationOperations.release(operationId); }
+  getIntegrationOperation(principal: string, operationId: string): Promise<IntegrationOperationRecord | null> { return this.integrationOperations.get(principal, operationId); }
+  findIntegrationOperation(principal: string, idempotencyKey: string): Promise<IntegrationOperationRecord | null> { return this.integrationOperations.find(principal, idempotencyKey); }
+  recordIntegrationAssertion(principal: string, jti: string, expiresAt: string): Promise<boolean> { return this.integrationOperations.recordAssertion(principal, jti, expiresAt); }
+}
+
+const MANAGED_ROOM_COLUMNS_SQL = `ir.managed_by, ir.kind as managed_kind, ir.status as managed_status, ir.access_until as managed_access_until,
+             ir.grace_seconds as managed_grace_seconds, ir.revision as managed_revision, ir.owner_subject as managed_owner_subject,
+             ir.last_operation_id as managed_last_operation_id, ir.created_at as managed_created_at, ir.updated_at as managed_updated_at`;
+
+function isUniqueViolation(error: unknown): boolean {
+  return typeof error === "object" && error !== null && (error as { code?: unknown }).code === "23505";
 }
 
 export class PostgresStorage implements Storage {
-  constructor(private readonly pool: Pool) {}
+  private readonly integrationOperations: PostgresIntegrationOperations;
+
+  constructor(private readonly pool: Pool) {
+    this.integrationOperations = new PostgresIntegrationOperations(pool);
+  }
 
   async init(): Promise<void> {
     await initializePostgresStorage(this.pool, {
@@ -865,8 +954,9 @@ export class PostgresStorage implements Storage {
     const row = result.rows[0] as StoredTemplateVersionRow | undefined;
     return row ? parseStoredTemplateVersion(row) : null;
   }
-  private async requireActiveTemplateVersion(templateId: string): Promise<RoomTemplateVersionSnapshotV1> {
-    const result = await this.pool.query(
+  // Inside a transaction the caller passes its client: asking the pool for a second connection there can deadlock.
+  private async requireActiveTemplateVersion(templateId: string, executor: Pick<PoolClient, "query"> = this.pool): Promise<RoomTemplateVersionSnapshotV1> {
+    const result = await executor.query(
       `select t.status, t.current_version, tv.template_id, tv.version, tv.snapshot, tv.content_hash
        from templates t
        left join template_versions tv on tv.template_id = t.template_id and tv.version = t.current_version
@@ -904,9 +994,11 @@ export class PostgresStorage implements Storage {
              tv.snapshot as template_version_snapshot, tv.content_hash as template_version_content_hash,
              r.name, r.room_type, r.owner_participant_id,
              r.status, r.disabled_at, r.disabled_by, r.visibility, r.scene_bundle_url, r.features,
-             r.asset_ids, r.theme, r.guest_allowed, r.avatar_config, r.session_control, r.personal_state
+             r.asset_ids, r.theme, r.guest_allowed, r.avatar_config, r.session_control, r.personal_state,
+             ${MANAGED_ROOM_COLUMNS_SQL}
       from rooms r
       left join templates t on t.template_id = r.template_id
+      left join integration_rooms ir on ir.room_id = r.room_id
       left join template_versions tv on tv.template_id = r.template_id and tv.version = coalesce(r.template_version, t.current_version)
       order by r.room_id
     `);
@@ -919,9 +1011,11 @@ export class PostgresStorage implements Storage {
              tv.snapshot as template_version_snapshot, tv.content_hash as template_version_content_hash,
              r.name, r.room_type, r.owner_participant_id,
              r.status, r.disabled_at, r.disabled_by, r.visibility, r.scene_bundle_url, r.features,
-             r.asset_ids, r.theme, r.guest_allowed, r.avatar_config, r.session_control, r.personal_state
+             r.asset_ids, r.theme, r.guest_allowed, r.avatar_config, r.session_control, r.personal_state,
+             ${MANAGED_ROOM_COLUMNS_SQL}
       from rooms r
       left join templates t on t.template_id = r.template_id
+      left join integration_rooms ir on ir.room_id = r.room_id
       left join template_versions tv on tv.template_id = r.template_id and tv.version = coalesce(r.template_version, t.current_version)
       where r.room_id = $1
     `, [roomId]);
@@ -929,8 +1023,11 @@ export class PostgresStorage implements Storage {
     return row ? mapRoomRow(row) : null;
   }
   async createRoom(input: Partial<RoomRecord>): Promise<RoomRecord> {
+    return this.insertRoom(this.pool, input);
+  }
+  private async insertRoom(executor: Pick<PoolClient, "query">, input: Partial<RoomRecord>): Promise<RoomRecord> {
     const templateId = input.templateId ?? (input.roomType === "personal" ? "personal-workspace-basic" : "meeting-room-basic");
-    const versionSnapshot = await this.requireActiveTemplateVersion(templateId);
+    const versionSnapshot = await this.requireActiveTemplateVersion(templateId, executor);
     input = materializeStoredRoomInput(versionSnapshot, input);
     const roomType = defaultRoomType(input.roomType);
     const roomWithoutTemplateMetadata: RoomRecordWithoutTemplateMetadata = {
@@ -961,7 +1058,7 @@ export class PostgresStorage implements Storage {
       personalState: defaultPersonalState(input.personalState)
     };
     const room = bindRoomTemplateMetadata(roomWithoutTemplateMetadata, versionSnapshot);
-    const result = await this.pool.query(
+    const result = await executor.query(
       `insert into rooms (room_id, tenant_id, template_id, name, room_type, owner_participant_id, status, disabled_at, disabled_by, visibility, scene_bundle_url, features, asset_ids, theme, guest_allowed, avatar_config, session_control, personal_state, template_version, template_snapshot)
        select $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13::jsonb,$14::jsonb,$15,$16::jsonb,$17::jsonb,$18::jsonb,$19,$20::jsonb
        where exists (
@@ -989,7 +1086,7 @@ export class PostgresStorage implements Storage {
     if (input.templateId !== undefined && input.templateId !== existing.templateId) {
       throw new Error("room_template_binding_changed");
     }
-    const { templateId: _inputTemplateId, templateVersion: _inputTemplateVersion, templateSnapshot: _inputTemplateSnapshot, ...safeInput } = input;
+    const { templateId: _inputTemplateId, templateVersion: _inputTemplateVersion, templateSnapshot: _inputTemplateSnapshot, managed: _inputManaged, ...safeInput } = input;
     const { templateVersion: _existingTemplateVersion, templateSnapshot: _existingTemplateSnapshot, ...existingWithoutTemplateMetadata } = existing;
     const updatedWithoutTemplateMetadata: RoomRecordWithoutTemplateMetadata = {
       ...existingWithoutTemplateMetadata,
@@ -1457,6 +1554,86 @@ export class PostgresStorage implements Storage {
     await this.pool.query(`update scene_bundles set is_current = (version = $2) where bundle_id = $1`, [bundleId, version]);
     return this.getSceneBundle(bundleId);
   }
+  async getIntegrationTenant(tenantId: string): Promise<IntegrationTenantRecord | null> {
+    const result = await this.pool.query(`select tenant_id, managed_by, display_name, revision, created_at, updated_at from integration_tenants where tenant_id = $1`, [tenantId]);
+    const row = result.rows[0];
+    return row ? { tenantId: row.tenant_id, managedBy: row.managed_by, displayName: row.display_name, revision: row.revision, createdAt: isoString(row.created_at)!, updatedAt: isoString(row.updated_at)! } : null;
+  }
+  async upsertIntegrationTenant(input: { tenantId: string; managedBy: string; displayName: string }): Promise<IntegrationTenantRecord | "tenant_mismatch"> {
+    for (let attempt = 0; ; attempt += 1) {
+      const client = await this.pool.connect();
+      try {
+        await client.query("begin");
+        const tenant = await client.query(`select 1 from tenants where tenant_id = $1 for update`, [input.tenantId]);
+        const managed = await client.query(`select managed_by, display_name from integration_tenants where tenant_id = $1 for update`, [input.tenantId]);
+        if (tenant.rows[0] && managed.rows[0]?.managed_by !== input.managedBy) {
+          await client.query("rollback");
+          return "tenant_mismatch";
+        }
+        if (!tenant.rows[0]) {
+          await client.query(`insert into tenants (tenant_id, name) values ($1,$2)`, [input.tenantId, input.displayName]);
+          await client.query(`insert into integration_tenants (tenant_id, managed_by, display_name) values ($1,$2,$3)`, [input.tenantId, input.managedBy, input.displayName]);
+        } else if (managed.rows[0].display_name !== input.displayName) {
+          await client.query(`update tenants set name = $2 where tenant_id = $1`, [input.tenantId, input.displayName]);
+          await client.query(`update integration_tenants set display_name = $2, revision = revision + 1, updated_at = now() where tenant_id = $1`, [input.tenantId, input.displayName]);
+        }
+        await client.query("commit");
+      } catch (error) {
+        await client.query("rollback").catch(() => undefined);
+        // A concurrent first upsert inserted the tenant; the retry sees it under the row lock.
+        if (isUniqueViolation(error) && attempt === 0) continue;
+        throw error;
+      } finally {
+        client.release();
+      }
+      return (await this.getIntegrationTenant(input.tenantId))!;
+    }
+  }
+  async createManagedRoom(input: Partial<RoomRecord>, managed: ManagedRoomCreateInput): Promise<RoomRecord> {
+    const client = await this.pool.connect();
+    let roomId: string;
+    try {
+      await client.query("begin");
+      const room = await this.insertRoom(client, input);
+      roomId = room.roomId;
+      await client.query(
+        `insert into integration_rooms (room_id, tenant_id, managed_by, kind, status, access_until, grace_seconds, revision, owner_subject, last_operation_id)
+         values ($1,$2,$3,$4,'active',$5,$6,0,$7,$8)`,
+        [room.roomId, room.tenantId, managed.managedBy, managed.kind, managed.accessUntil, managed.graceSeconds, managed.ownerSubject ?? null, managed.operationId]
+      );
+      await client.query("commit");
+    } catch (error) {
+      await client.query("rollback").catch(() => undefined);
+      if (isUniqueViolation(error)) throw new Error("managed_room_exists");
+      throw error;
+    } finally {
+      client.release();
+    }
+    const created = await this.getRoom(roomId);
+    if (!created) throw new Error("managed_room_not_found_after_commit");
+    return created;
+  }
+  async updateManagedRoomAccess(roomId: string, expectedRevision: number, patch: ManagedRoomAccessPatch, operationId: string): Promise<RoomRecord | "revision_mismatch" | null> {
+    const result = await this.pool.query(
+      `update integration_rooms
+          set access_until = coalesce($3::timestamptz, access_until), grace_seconds = coalesce($4::integer, grace_seconds),
+              status = coalesce($5::text, status), revision = revision + 1, last_operation_id = $6, updated_at = now()
+        where room_id = $1 and revision = $2`,
+      [roomId, expectedRevision, patch.accessUntil ?? null, patch.graceSeconds ?? null, patch.status ?? null, operationId]
+    );
+    if ((result.rowCount ?? 0) === 0) {
+      const existing = await this.pool.query(`select 1 from integration_rooms where room_id = $1`, [roomId]);
+      return existing.rows[0] ? "revision_mismatch" : null;
+    }
+    return this.getRoom(roomId);
+  }
+  beginIntegrationOperation(input: IntegrationOperationStart): Promise<{ created: boolean; operation: IntegrationOperationRecord }> { return this.integrationOperations.begin(input); }
+  claimIntegrationOperation(operationId: string, leaseSeconds: number): Promise<IntegrationOperationRecord | null> { return this.integrationOperations.claim(operationId, leaseSeconds); }
+  completeIntegrationOperation(operationId: string, outcome: IntegrationOperationOutcome): Promise<IntegrationOperationRecord | null> { return this.integrationOperations.complete(operationId, outcome); }
+  releaseIntegrationOperation(operationId: string): Promise<void> { return this.integrationOperations.release(operationId); }
+  getIntegrationOperation(principal: string, operationId: string): Promise<IntegrationOperationRecord | null> { return this.integrationOperations.get(principal, operationId); }
+  findIntegrationOperation(principal: string, idempotencyKey: string): Promise<IntegrationOperationRecord | null> { return this.integrationOperations.find(principal, idempotencyKey); }
+  recordIntegrationAssertion(principal: string, jti: string, expiresAt: string): Promise<boolean> { return this.integrationOperations.recordAssertion(principal, jti, expiresAt); }
 }
 
 export async function createStorage(): Promise<Storage> {

@@ -9,7 +9,11 @@ import {
   sanitizeSessionControlState,
   getRemovedParticipant,
   resolveEffectiveRoomRole,
-  getSessionControlBlockReason
+  getSessionControlBlockReason,
+  getManagedAccessBlockReason,
+  managedRoomCutoffMs,
+  capTokenTtlSeconds,
+  sessionBlockStatusCode
 } from "./room-session-control.js";
 
 const roles: RoomRole[] = ["guest", "member", "presenter", "host", "admin"];
@@ -219,3 +223,63 @@ test("host control environment is read per call rather than captured on import",
   process.env.HOST_CONTROLS_ENABLED = "true";
   assert.equal(getSessionControlBlockReason(record, "p", "guest", false), "session_ended");
 }));
+
+function managedRoom(accessUntil: string, graceSeconds = 0, status: "active" | "paused" = "active", overrides: Partial<RoomRecord> = {}): RoomRecord {
+  return room(undefined, {
+    managed: {
+      managedBy: "portal:stage", kind: "reference", status, accessUntil, graceSeconds, revision: 0,
+      ownerSubject: null, lastOperationId: null, createdAt: "2026-10-22T00:00:00.000Z", updatedAt: "2026-10-22T00:00:00.000Z"
+    },
+    ...overrides
+  });
+}
+
+test("managed access ends at accessUntil plus grace, and a paused room is blocked before it", () => {
+  const accessUntil = "2026-10-22T12:00:00.000Z";
+  const cutoff = Date.parse(accessUntil) + 300_000;
+  const target = managedRoom(accessUntil, 300);
+  assert.equal(managedRoomCutoffMs(target), cutoff);
+  assert.equal(managedRoomCutoffMs(room()), null);
+  assert.equal(getManagedAccessBlockReason(target, cutoff - 1), null);
+  assert.equal(getManagedAccessBlockReason(target, cutoff), "access_expired");
+  assert.equal(getManagedAccessBlockReason(managedRoom(accessUntil, 300, "paused"), cutoff - 1), "room_paused");
+  assert.equal(getManagedAccessBlockReason(managedRoom(accessUntil, 300, "paused"), cutoff), "access_expired");
+  assert.equal(getManagedAccessBlockReason(room(), cutoff), null);
+  assert.equal(getManagedAccessBlockReason(null), null);
+});
+
+test("every session check rejects an expired or paused managed room, even with host controls off", () => {
+  const past = new Date(Date.now() - 1000).toISOString();
+  const future = new Date(Date.now() + 3_600_000).toISOString();
+  for (const hostControls of ["true", "false"]) {
+    withFlags(hostControls, undefined, () => {
+      for (const role of roles) {
+        for (const existing of [true, false]) {
+          assert.equal(getSessionControlBlockReason(managedRoom(past), "p1", role, existing), "access_expired");
+          assert.equal(getSessionControlBlockReason(managedRoom(future, 0, "paused"), "p1", role, existing), "room_paused");
+          assert.equal(getSessionControlBlockReason(managedRoom(future), "p1", role, existing), null);
+        }
+      }
+    });
+  }
+  assert.equal(getSessionControlBlockReason(managedRoom(past, 0, "active", { status: "disabled" }), "p1", "guest", false), "room_disabled");
+});
+
+test("tokens of a managed room never outlive its cutoff; other rooms keep their TTL", () => {
+  const now = Math.floor(Date.parse("2026-10-22T11:59:00.000Z") / 1000);
+  const target = managedRoom("2026-10-22T12:00:00.000Z", 30);
+  assert.equal(capTokenTtlSeconds(target, 900, now), 90);
+  assert.equal(capTokenTtlSeconds(target, 60, now), 60);
+  assert.equal(capTokenTtlSeconds(target, 900, now + 90), 0);
+  assert.equal(capTokenTtlSeconds(target, 900, now + 1000), 0);
+  assert.equal(capTokenTtlSeconds(room(), 900, now), 900);
+  assert.equal(capTokenTtlSeconds(null, 900, now), 900);
+});
+
+test("managed access block reasons map to the contract HTTP statuses", () => {
+  assert.equal(sessionBlockStatusCode("access_expired"), 410);
+  assert.equal(sessionBlockStatusCode("room_paused"), 423);
+  for (const reason of ["room_disabled", "session_ended", "participant_removed", "room_locked", "invite_required"]) {
+    assert.equal(sessionBlockStatusCode(reason), 403);
+  }
+});
