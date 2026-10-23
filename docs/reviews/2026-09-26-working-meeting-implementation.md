@@ -2397,3 +2397,16 @@ Authoritative accepted-release.json до и после публичного read
 ### D-025 — 2026-10-23 — Разовое исключение полного local для кандидата T08–T10
 - Основание: пользователь выбрал публикацию через exact-SHA CI/Docker и обычный gated staging после отчёта о полном local 251/3 с временны́ми отказами под перегрузкой и повтором отказавших тестов 4/4.
 - Границы: только для кандидата 5bbfaf4 (T08–T10 поверх b440abc). Красный полный local не переименован в зелёный; CI, Docker и staging обязательны, при их отказе исправляется дефект. Это не изменение testing policy и не распространяется на следующие runtime-изменения.
+
+## T08–T10 — принятая поставка, 2026-10-23
+
+| Gate | Точный результат |
+|---|---|
+| Исполняемый SHA | 7359f47db0b610e01154e35af1d4e8a7e4d1e620 (ed63f67, e98a29a, f142011, f2ffbb7 и docs поверх b440abc), ветка feat/working-meeting-plugin-runtime |
+| [CI39864878882](https://github.com/vrata-labs/platform/actions/runs/39864878882) | Success, attempt1: 254/254 и M0.5 16/16; skipped0/unexpected0/flaky0 по исходным JSON; room-plugin-author-ui, room-plugin-seating, room-plugin-auto-seat и room-plugin-runtime прошли |
+| [Docker39864896317](https://github.com/vrata-labs/platform/actions/runs/39864896317) | Success, attempt1 |
+| [Staging39876016118](https://github.com/vrata-labs/platform/actions/runs/39876016118) | Success, attempt1: 80/80 и обязательный Rutube 1/1; skipped0/unexpected0/flaky0 |
+
+- Readback: accepted-release.json — image 7359f47, asset 0a3b492e788bad82bf20a92476a628bf30c6dfbe, run 39876016118; api, room-state и remote-browser на 7359f47 и healthy; health, demo-room, control-plane и manifests Hall/BlueOffice — 200; отдаваемая страница комнаты содержит room-plugin-author, room-plugin-seat-choice и stand-up; общий floor1 сохранён, portalManaged=false.
+- На staging прошли сценарии, затронутые изменениями посадки: canonical Hall seat и teleport exit, isolated Hall mock VR claim через XR-путь, synthetic XR ray/turn/trigger-seat в BlueOffice, seat release после reconnect, normal product seats; Hall/BlueOffice/ArtGallery loaded, legacy-комната без plugin-трафика, все plugin routes закрыты на floor1. Normal-DPR снимки desktop и mobile просмотрены.
+- Положительные author/auto-seat сценарии работают только в собственных isolated-v2 комнатах: публичная активация floor2 остаётся T01a. Реальные устройства, Quest и встреча четырёх людей остаются T17. Полный local для этого кандидата красный по временны́м отказам и принят по разовому исключению D-025.
