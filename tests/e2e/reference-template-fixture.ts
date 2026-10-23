@@ -34,6 +34,8 @@ type ReferenceTemplateFixtureOptions = {
   /** Raised after seeding, as on an activated deployment. VRATA_E2E_IDENTITY_FLOOR=2 reruns unpinned
    * scenarios on floor 2 before a shared activation; callers that depend on a floor pass it explicitly. */
   identityProtocol?: 1 | 2;
+  /** More API and room-state environment, built from the API origin (for example a portal-managed deployment). */
+  extraEnv?: (origin: string) => Record<string, string>;
 };
 
 export async function startReferenceTemplateFixture(postgresUrl: string, options: ReferenceTemplateFixtureOptions = {}) {
@@ -79,7 +81,8 @@ export async function startReferenceTemplateFixture(postgresUrl: string, options
     ...(options.livekitUrl ? { LIVEKIT_ROOM_PREFIX: "vrata-", MEDIA_TOKEN_TTL_SECONDS: "120" } : {}),
     DOCUMENT_LOCAL_UPLOAD_ROOT: documentStorageRoot, MINIO_DOCUMENT_PREFIX: "documents",
     ROOM_PLUGIN_LOCAL_UPLOAD_ROOT: pluginStorageRoot,
-    ...(options.documentUploadMaxBytes !== undefined ? { DOCUMENT_UPLOAD_MAX_BYTES: String(options.documentUploadMaxBytes) } : {})
+    ...(options.documentUploadMaxBytes !== undefined ? { DOCUMENT_UPLOAD_MAX_BYTES: String(options.documentUploadMaxBytes) } : {}),
+    ...options.extraEnv?.(origin)
   };
   for (const key of [
     "DOCUMENT_PROVIDER", "SCENE_BUNDLE_PROVIDER", "ROOM_PLUGIN_BUCKET",

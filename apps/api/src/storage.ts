@@ -37,7 +37,13 @@ import type {
   IntegrationOperationStart,
   IntegrationTenantRecord,
   ManagedRoomAccessPatch,
+  ManagedRoomActivity,
+  ManagedRoomBlockReason,
   ManagedRoomCreateInput,
+  ManagedRoomEnforcementRecord,
+  ManagedRoomGrantConsumeResult,
+  ManagedRoomGrantInput,
+  ManagedRoomGrantRecord,
   RoomDocumentRecord,
   RoomInviteRecord,
   RoomNoteRecord,
@@ -95,6 +101,7 @@ import { createPostgresRoomPluginAdapter, preparePostgresRoomPluginRemoval } fro
 import { installRoomPluginSchema } from "./plugins/postgres-schema.js";
 import { assertPluginAuthor, pluginSessionGuard } from "./plugins/access-policy.js";
 import { MemoryIntegrationOperations, PostgresIntegrationOperations } from "./storage-integration-operations.js";
+import { MemoryManagedRooms, PostgresManagedRooms } from "./storage-managed-rooms.js";
 
 export { initPostgresStorageWithRetry } from "./storage-init-retry.js";
 
@@ -105,6 +112,11 @@ export type {
   IntegrationOperationRecord,
   IntegrationTenantRecord,
   ManagedRoomAccessPatch,
+  ManagedRoomBlockReason,
+  ManagedRoomEnforcementRecord,
+  ManagedRoomFeatures,
+  ManagedRoomGrantRecord,
+  ManagedRoomKind,
   ManagedRoomState,
   ManagedRoomStatus,
   RoomAvatarConfig,
@@ -423,6 +435,7 @@ export class MemoryStorage implements Storage {
   }
   private integrationTenants = new Map<string, IntegrationTenantRecord>();
   private integrationOperations = new MemoryIntegrationOperations();
+  private managedRooms = new MemoryManagedRooms(this.rooms);
 
   private sceneBundleKey(bundleId: string, version: string): string {
     return `${bundleId}::${version}`;
@@ -1012,13 +1025,21 @@ export class MemoryStorage implements Storage {
       ownerSubject: managed.ownerSubject ?? null,
       lastOperationId: managed.operationId,
       createdAt: timestamp,
-      updatedAt: timestamp
+      updatedAt: timestamp,
+      accessEpoch: crypto.randomUUID(),
+      closedAt: null,
+      closeReason: null,
+      demoPolicyId: managed.demoPolicyId ?? null,
+      maxParticipants: managed.maxParticipants ?? null,
+      idleTimeoutSeconds: managed.idleTimeoutSeconds ?? null,
+      features: managed.features ?? null
     };
     return structuredClone(stored);
   }
-  async updateManagedRoomAccess(roomId: string, expectedRevision: number, patch: ManagedRoomAccessPatch, operationId: string): Promise<RoomRecord | "revision_mismatch" | null> {
+  async updateManagedRoomAccess(roomId: string, expectedRevision: number, patch: ManagedRoomAccessPatch, operationId: string): Promise<RoomRecord | "revision_mismatch" | "room_closed" | null> {
     const room = this.rooms.get(roomId);
     if (!room?.managed) return null;
+    if (room.managed.status === "closed") return "room_closed";
     if (room.managed.revision !== expectedRevision) return "revision_mismatch";
     room.managed = {
       ...room.managed,
@@ -1038,11 +1059,29 @@ export class MemoryStorage implements Storage {
   getIntegrationOperation(principal: string, operationId: string): Promise<IntegrationOperationRecord | null> { return this.integrationOperations.get(principal, operationId); }
   findIntegrationOperation(principal: string, idempotencyKey: string): Promise<IntegrationOperationRecord | null> { return this.integrationOperations.find(principal, idempotencyKey); }
   recordIntegrationAssertion(principal: string, jti: string, expiresAt: string): Promise<boolean> { return this.integrationOperations.recordAssertion(principal, jti, expiresAt); }
+  closeManagedRoom(roomId: string, expectedRevision: number, reason: string | null, operationId: string | null): Promise<RoomRecord | "revision_mismatch" | null> { return this.managedRooms.closeManagedRoom(roomId, expectedRevision, reason, operationId); }
+  issueManagedRoomGrant(input: ManagedRoomGrantInput): Promise<ManagedRoomGrantRecord | ManagedRoomBlockReason | null> { return this.managedRooms.issueManagedRoomGrant(input); }
+  getManagedRoomGrant(grantId: string): Promise<ManagedRoomGrantRecord | null> { return this.managedRooms.getManagedRoomGrant(grantId); }
+  revokeManagedRoomGrant(grantId: string, reason: string | null, operationId: string): Promise<ManagedRoomGrantRecord | null> { return this.managedRooms.revokeManagedRoomGrant(grantId, reason, operationId); }
+  consumeManagedRoomGrant(roomId: string, codeHash: string): Promise<ManagedRoomGrantConsumeResult> { return this.managedRooms.consumeManagedRoomGrant(roomId, codeHash); }
+  releaseManagedRoomGrantUse(grantId: string): Promise<void> { return this.managedRooms.releaseManagedRoomGrantUse(grantId); }
+  recordManagedRoomGrantIdentity(grantId: string, identityId: string): Promise<void> { return this.managedRooms.recordManagedRoomGrantIdentity(grantId, identityId); }
+  listManagedRoomGrantIdentities(grantId: string): Promise<string[]> { return this.managedRooms.listManagedRoomGrantIdentities(grantId); }
+  listManagedRoomsForEnforcement(): Promise<ManagedRoomEnforcementRecord[]> { return this.managedRooms.listManagedRoomsForEnforcement(); }
+  rotateManagedRoomEpoch(roomId: string, expectedEpoch: string, enforcedBlock: ManagedRoomBlockReason | null): Promise<string | null> { return this.managedRooms.rotateManagedRoomEpoch(roomId, expectedEpoch, enforcedBlock); }
+  setManagedRoomEnforcedBlock(roomId: string, enforcedBlock: ManagedRoomBlockReason | null): Promise<void> { return this.managedRooms.setManagedRoomEnforcedBlock(roomId, enforcedBlock); }
+  completeRetiredManagedRoomEpoch(roomId: string, epoch: string): Promise<void> { return this.managedRooms.completeRetiredManagedRoomEpoch(roomId, epoch); }
+  recordManagedRoomActivity(activity: ManagedRoomActivity[]): Promise<void> { return this.managedRooms.recordManagedRoomActivity(activity); }
+  getIntegrationUsage(tenantId: string, day: string): Promise<{ participantSeconds: number; updatedAt: string | null }> { return this.managedRooms.getIntegrationUsage(tenantId, day); }
+  withManagedRoomEnforcerLock(fn: () => Promise<void>): Promise<boolean> { return this.managedRooms.withManagedRoomEnforcerLock(fn); }
 }
 
 const MANAGED_ROOM_COLUMNS_SQL = `ir.managed_by, ir.kind as managed_kind, ir.status as managed_status, ir.access_until as managed_access_until,
              ir.grace_seconds as managed_grace_seconds, ir.revision as managed_revision, ir.owner_subject as managed_owner_subject,
-             ir.last_operation_id as managed_last_operation_id, ir.created_at as managed_created_at, ir.updated_at as managed_updated_at`;
+             ir.last_operation_id as managed_last_operation_id, ir.created_at as managed_created_at, ir.updated_at as managed_updated_at,
+             ir.access_epoch::text as managed_access_epoch, ir.closed_at as managed_closed_at, ir.close_reason as managed_close_reason,
+             ir.demo_policy_id as managed_demo_policy_id, ir.max_participants as managed_max_participants,
+             ir.idle_timeout_seconds as managed_idle_timeout_seconds, ir.features as managed_features`;
 
 function isUniqueViolation(error: unknown): boolean {
   return typeof error === "object" && error !== null && (error as { code?: unknown }).code === "23505";
@@ -1055,10 +1094,12 @@ export class PostgresStorage implements Storage {
   readonly identityProtocol: Storage["identityProtocol"];
   readonly reserveIdentityAdmission: Storage["reserveIdentityAdmission"];
   private readonly integrationOperations: PostgresIntegrationOperations;
+  private readonly managedRooms: PostgresManagedRooms;
   constructor(private readonly pool: Pool, private readonly identityNow = Date.now, private readonly effectClient?: PoolClient,
     private readonly effectRoomWrite = false, private readonly effectMode: "v2" | "legacy" = "v2") {
     this.reserveIdentityAdmission = createPostgresAdmissionBudget(pool, identityNow);
     this.integrationOperations = new PostgresIntegrationOperations(pool);
+    this.managedRooms = new PostgresManagedRooms(pool, roomId => this.getRoom(roomId));
     this.roomIdentities = createPostgresRoomIdentities(pool, identityNow);
     this.identityProtocol = createPostgresIdentityProtocol(pool);
     const plugins = createPostgresRoomPluginAdapter(pool, identityNow);
@@ -2292,9 +2333,11 @@ export class PostgresStorage implements Storage {
       const room = await this.insertRoom(input, client);
       roomId = room.roomId;
       await client.query(
-        `insert into integration_rooms (room_id, tenant_id, managed_by, kind, status, access_until, grace_seconds, revision, owner_subject, last_operation_id)
-         values ($1,$2,$3,$4,'active',$5,$6,0,$7,$8)`,
-        [room.roomId, room.tenantId, managed.managedBy, managed.kind, managed.accessUntil, managed.graceSeconds, managed.ownerSubject ?? null, managed.operationId]
+        `insert into integration_rooms (room_id, tenant_id, managed_by, kind, status, access_until, grace_seconds, revision, owner_subject, last_operation_id,
+                                        demo_policy_id, max_participants, idle_timeout_seconds, features)
+         values ($1,$2,$3,$4,'active',$5,$6,0,$7,$8,$9,$10,$11,$12::jsonb)`,
+        [room.roomId, room.tenantId, managed.managedBy, managed.kind, managed.accessUntil, managed.graceSeconds, managed.ownerSubject ?? null, managed.operationId,
+          managed.demoPolicyId ?? null, managed.maxParticipants ?? null, managed.idleTimeoutSeconds ?? null, managed.features ? JSON.stringify(managed.features) : null]
       );
       await client.query("commit");
     } catch (error) {
@@ -2308,17 +2351,18 @@ export class PostgresStorage implements Storage {
     if (!created) throw new Error("managed_room_not_found_after_commit");
     return created;
   }
-  async updateManagedRoomAccess(roomId: string, expectedRevision: number, patch: ManagedRoomAccessPatch, operationId: string): Promise<RoomRecord | "revision_mismatch" | null> {
+  async updateManagedRoomAccess(roomId: string, expectedRevision: number, patch: ManagedRoomAccessPatch, operationId: string): Promise<RoomRecord | "revision_mismatch" | "room_closed" | null> {
     const result = await this.pool.query(
       `update integration_rooms
           set access_until = coalesce($3::timestamptz, access_until), grace_seconds = coalesce($4::integer, grace_seconds),
               status = coalesce($5::text, status), revision = revision + 1, last_operation_id = $6, updated_at = now()
-        where room_id = $1 and revision = $2`,
+        where room_id = $1 and revision = $2 and status <> 'closed'`,
       [roomId, expectedRevision, patch.accessUntil ?? null, patch.graceSeconds ?? null, patch.status ?? null, operationId]
     );
     if ((result.rowCount ?? 0) === 0) {
-      const existing = await this.pool.query(`select 1 from integration_rooms where room_id = $1`, [roomId]);
-      return existing.rows[0] ? "revision_mismatch" : null;
+      const existing = await this.pool.query<{ status: string }>(`select status from integration_rooms where room_id = $1`, [roomId]);
+      if (!existing.rows[0]) return null;
+      return existing.rows[0].status === "closed" ? "room_closed" : "revision_mismatch";
     }
     return this.getRoom(roomId);
   }
@@ -2329,6 +2373,21 @@ export class PostgresStorage implements Storage {
   getIntegrationOperation(principal: string, operationId: string): Promise<IntegrationOperationRecord | null> { return this.integrationOperations.get(principal, operationId); }
   findIntegrationOperation(principal: string, idempotencyKey: string): Promise<IntegrationOperationRecord | null> { return this.integrationOperations.find(principal, idempotencyKey); }
   recordIntegrationAssertion(principal: string, jti: string, expiresAt: string): Promise<boolean> { return this.integrationOperations.recordAssertion(principal, jti, expiresAt); }
+  closeManagedRoom(roomId: string, expectedRevision: number, reason: string | null, operationId: string | null): Promise<RoomRecord | "revision_mismatch" | null> { return this.managedRooms.closeManagedRoom(roomId, expectedRevision, reason, operationId); }
+  issueManagedRoomGrant(input: ManagedRoomGrantInput): Promise<ManagedRoomGrantRecord | ManagedRoomBlockReason | null> { return this.managedRooms.issueManagedRoomGrant(input); }
+  getManagedRoomGrant(grantId: string): Promise<ManagedRoomGrantRecord | null> { return this.managedRooms.getManagedRoomGrant(grantId); }
+  revokeManagedRoomGrant(grantId: string, reason: string | null, operationId: string): Promise<ManagedRoomGrantRecord | null> { return this.managedRooms.revokeManagedRoomGrant(grantId, reason, operationId); }
+  consumeManagedRoomGrant(roomId: string, codeHash: string): Promise<ManagedRoomGrantConsumeResult> { return this.managedRooms.consumeManagedRoomGrant(roomId, codeHash); }
+  releaseManagedRoomGrantUse(grantId: string): Promise<void> { return this.managedRooms.releaseManagedRoomGrantUse(grantId); }
+  recordManagedRoomGrantIdentity(grantId: string, identityId: string): Promise<void> { return this.managedRooms.recordManagedRoomGrantIdentity(grantId, identityId); }
+  listManagedRoomGrantIdentities(grantId: string): Promise<string[]> { return this.managedRooms.listManagedRoomGrantIdentities(grantId); }
+  listManagedRoomsForEnforcement(): Promise<ManagedRoomEnforcementRecord[]> { return this.managedRooms.listManagedRoomsForEnforcement(); }
+  rotateManagedRoomEpoch(roomId: string, expectedEpoch: string, enforcedBlock: ManagedRoomBlockReason | null): Promise<string | null> { return this.managedRooms.rotateManagedRoomEpoch(roomId, expectedEpoch, enforcedBlock); }
+  setManagedRoomEnforcedBlock(roomId: string, enforcedBlock: ManagedRoomBlockReason | null): Promise<void> { return this.managedRooms.setManagedRoomEnforcedBlock(roomId, enforcedBlock); }
+  completeRetiredManagedRoomEpoch(roomId: string, epoch: string): Promise<void> { return this.managedRooms.completeRetiredManagedRoomEpoch(roomId, epoch); }
+  recordManagedRoomActivity(activity: ManagedRoomActivity[]): Promise<void> { return this.managedRooms.recordManagedRoomActivity(activity); }
+  getIntegrationUsage(tenantId: string, day: string): Promise<{ participantSeconds: number; updatedAt: string | null }> { return this.managedRooms.getIntegrationUsage(tenantId, day); }
+  withManagedRoomEnforcerLock(fn: () => Promise<void>): Promise<boolean> { return this.managedRooms.withManagedRoomEnforcerLock(fn); }
 }
 
 export async function createStorage(): Promise<Storage> {

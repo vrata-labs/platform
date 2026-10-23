@@ -25,6 +25,21 @@ export function describeRoomAccessError(error: Pick<RuntimeAccessError, "reason"
       return "Too many new room entries. Please try again later";
     case "room_identity_full":
       return "This room has reached its identity limit. Contact the administrator";
+    case "grant_required":
+      return "Access denied: open the room from your invitation link";
+    case "grant_invalid":
+      return "Access denied: the invitation is used up or not valid for this room";
+    case "grant_revoked":
+      return "Access denied: the invitation was withdrawn";
+    case "capacity_full":
+      return "The room is full";
+    case "rate_limited":
+      return "Too many new room entries. Please try again later";
+    case "room_closed":
+    case "access_expired":
+      return "This room has ended";
+    case "room_paused":
+      return "The room is paused";
     default:
       return "Access denied";
   }
@@ -41,6 +56,11 @@ export function describeSessionControlReason(reason: string): string {
       return "Access denied: removed by host";
     case "session_ended":
       return "Session ended by host";
+    case "room_closed":
+    case "access_expired":
+      return "This room has ended";
+    case "room_paused":
+      return "The room is paused";
     default:
       return "Access denied";
   }

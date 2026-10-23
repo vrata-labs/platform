@@ -224,6 +224,8 @@ import { bindDocumentControls } from "./document-control-bindings.js";
 
 import { createRuntimeDiagnostics, reportRuntimeBootDiagnostics } from "./runtime-diagnostics.js";
 import { createXrTelemetryReporter } from "./xr-telemetry-reporter.js";
+import { exchangeRoomGrant, takeRoomGrant } from "./room-grant-entry.js";
+import { showRoomAccessEnded } from "./room-access-ended.js";
 
 function fallbackUuid(): string {
   return `guest-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
@@ -319,6 +321,8 @@ const XR_SESSION_OPTIONS: XRSessionInit = {
 };
 let participantId = getParticipantId();
 const roomIdentityTab = createRoomIdentityTab(sessionStorage, roomId);
+// Read before anything else touches the address: the one-time portal grant code leaves the URL here.
+const pendingRoomGrant = takeRoomGrant(window.location, window.history, sessionStorage, roomId);
 let activeIdentityProtocolVersion: 2 | null = null;
 const personalOwnerId = getPersonalOwnerId();
 const displayNameFromQuery = query.get("name")?.trim() || null;
@@ -346,6 +350,7 @@ const guestAccessLineEl = mustElement<HTMLDivElement>("#guest-access-line");
 const presenterLineEl = mustElement<HTMLDivElement>("#presenter-line");
 const compatibilityStatusEl = mustElement<HTMLDivElement>("#compatibility-status");
 const guestOnboardingEl = mustElement<HTMLElement>("#guest-onboarding");
+const roomAccessEndedEl = mustElement<HTMLElement>("#room-access-ended");
 const guestNameInput = mustElement<HTMLInputElement>("#guest-name-input");
 const guestJoinMutedCheckbox = mustElement<HTMLInputElement>("#guest-join-muted");
 const guestCheckMicrophoneButton = mustElement<HTMLButtonElement>("#guest-check-microphone");
@@ -1736,6 +1741,7 @@ function disableRuntimeForSessionBlock(reason: string): void {
   try { roomPluginRuntime.stop(); if (roomPluginAuthorReady) roomPluginAuthor.stop(); } catch { /* Plugin cleanup must not prevent the core session block. */ }
   sessionControlPoller.stop();
   const message = describeSessionControlReason(reason);
+  showRoomAccessEnded(roomAccessEndedEl, reason);
   sessionControlBlocked = true;
   meetingTools?.invalidate();
   clearRoomStateReconnect();
@@ -1836,7 +1842,7 @@ function startIdentitySessionRenewal(expiresInSeconds: number): void {
         }
       } catch (error) {
         if (runtimeSessionGate.reason) return;
-        if (error instanceof RuntimeAccessError && error.status === 403) disableRuntimeForSessionBlock(error.reason);
+        if (error instanceof RuntimeAccessError && [403, 410, 423].includes(error.status)) disableRuntimeForSessionBlock(error.reason);
         else console.warn("identity_session_renewal_failed", error);
       } finally {
         inFlight = false;
@@ -4620,7 +4626,7 @@ function completeGuestOnboarding(options: { withoutAudio: boolean; resolve: () =
 
 async function waitForGuestOnboardingIfNeeded(): Promise<void> {
   const required = shouldShowGuestOnboarding({
-    hasInviteToken: Boolean(query.get("invite")),
+    hasInviteToken: Boolean(query.get("invite")) || pendingRoomGrant.code() !== null,
     hasExplicitDisplayName: Boolean(displayNameFromQuery),
     forced: query.get("onboard") === "1",
     disabled: query.get("onboard") === "0" || query.get("prejoin") === "0",
@@ -7761,6 +7767,16 @@ async function main(): Promise<void> {
   joinMutedCheckbox.checked = joinMutedPreference;
   guestJoinMutedCheckbox.checked = templatePreferences.joinMuted(true);
   await waitForGuestOnboardingIfNeeded();
+  const grantCode = pendingRoomGrant.code();
+  if (grantCode && !roomIdentityTab.identityCredential()) {
+    try {
+      roomIdentityTab.rememberIdentity((await exchangeRoomGrant(apiBaseUrl, roomId, grantCode, displayName)).identityCredential);
+      pendingRoomGrant.clear();
+    } catch (error) {
+      if (!(error instanceof RuntimeAccessError) || !pendingRoomGrant.retryable(error.reason)) pendingRoomGrant.clear();
+      throw error;
+    }
+  } else if (grantCode) pendingRoomGrant.clear();
   const pluginTokenRequest = roomPluginTokenBound.begin();
   const boot = await bootRuntime(apiBaseUrl, roomId, navigator.userAgent, {
     participantId,
@@ -8172,6 +8188,7 @@ void main().catch((error: unknown) => {
       try { roomIdentityTab.rememberWaiting(error.waitingCredential); } catch { /* invalid proof is never stored */ }
     }
     const message = describeRoomAccessError(error);
+    showRoomAccessEnded(roomAccessEndedEl, error.reason);
     setStatus(message);
     guestAccessLineEl.textContent = error.accessRequestId
       ? `${message}. Request: ${error.accessRequestId}`

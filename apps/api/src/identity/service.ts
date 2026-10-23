@@ -44,6 +44,10 @@ export function createRoomIdentityService(storage: RoomIdentityStorage, secret: 
     async admit(input: Parameters<RoomIdentityStorage["admit"]>[0]) {
       return issue(await storage.admit(input));
     },
+    async admitGrant(input: RoomIdentityScope & { displayName: string; grantId: string }) {
+      return issue(await storage.create({ tenantId: input.tenantId, roomId: input.roomId, displayName: input.displayName,
+        baseRole: "guest", provenance: { kind: "grant", grantId: input.grantId, role: "guest" } }));
+    },
     async beginWaiting(input: RoomIdentityScope & { inviteTokenHash: string; displayName: string; expiresAt: string }) {
       const waiting = codec.createWaiting(input);
       const pending = await storage.beginWaiting({ ...input, pendingId: waiting.pendingId, secretHash: waiting.secretHash });

@@ -4,6 +4,7 @@ import type { RoomTemplateSnapshotV1, RoomTemplateVersionSnapshotV1 } from "@vra
 import { referenceTemplateContract } from "@vrata/templates";
 
 import type {
+  ManagedRoomFeatures,
   ManagedRoomKind,
   ManagedRoomState,
   ManagedRoomStatus,
@@ -260,19 +261,33 @@ export interface ManagedRoomRow {
   managed_last_operation_id?: string | null;
   managed_created_at?: string | Date | null;
   managed_updated_at?: string | Date | null;
+  managed_access_epoch?: string | null;
+  managed_closed_at?: string | Date | null;
+  managed_close_reason?: string | null;
+  managed_demo_policy_id?: string | null;
+  managed_max_participants?: number | null;
+  managed_idle_timeout_seconds?: number | null;
+  managed_features?: ManagedRoomFeatures | null;
 }
 
 export function mapManagedRoomState(row: ManagedRoomRow): ManagedRoomState {
   return {
     managedBy: row.managed_by!,
     kind: row.managed_kind ?? "reference",
-    status: row.managed_status === "paused" ? "paused" : "active",
+    status: row.managed_status === "paused" || row.managed_status === "closed" ? row.managed_status : "active",
     accessUntil: isoString(row.managed_access_until)!,
     graceSeconds: row.managed_grace_seconds ?? 0,
     revision: row.managed_revision ?? 0,
     ownerSubject: row.managed_owner_subject ?? null,
     lastOperationId: row.managed_last_operation_id ?? null,
     createdAt: isoString(row.managed_created_at)!,
-    updatedAt: isoString(row.managed_updated_at)!
+    updatedAt: isoString(row.managed_updated_at)!,
+    accessEpoch: row.managed_access_epoch!,
+    closedAt: isoString(row.managed_closed_at),
+    closeReason: row.managed_close_reason ?? null,
+    demoPolicyId: row.managed_demo_policy_id ?? null,
+    maxParticipants: row.managed_max_participants ?? null,
+    idleTimeoutSeconds: row.managed_idle_timeout_seconds ?? null,
+    features: row.managed_features ?? null
   };
 }

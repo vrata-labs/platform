@@ -261,4 +261,13 @@ test("portal-managed production needs Ed25519 public integration keys and no ad-
     assert.deepEqual(issueCodes(result), ["invalid_integration_keys"], String(value));
     assert(!formatProductionConfigIssues(result.issues).includes("private"));
   }
+  assert.equal(validateProductionConfig(managed({ VRATA_DEMO_POLICIES: JSON.stringify([{ policyId: "qa-demo-v1" }]), LIVEKIT_API_URL: "http://livekit:7880" })).ok, true);
+  for (const value of ["{", "{}", JSON.stringify([{ templates: [] }])]) {
+    assert.deepEqual(issueCodes(validateProductionConfig(managed({ VRATA_DEMO_POLICIES: value }))), ["invalid_demo_policies"], value);
+  }
+  for (const value of ["livekit:7880", "ftp://livekit", "http://user:secret@livekit:7880"]) {
+    const result = validateProductionConfig(managed({ LIVEKIT_API_URL: value }));
+    assert.deepEqual(issueCodes(result), ["invalid_url"], value);
+    assert(!formatProductionConfigIssues(result.issues).includes("secret"));
+  }
 });

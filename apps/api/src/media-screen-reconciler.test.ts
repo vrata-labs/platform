@@ -300,3 +300,16 @@ test("stop/start during an in-flight pass leaves exactly one scheduler chain", a
   assert.equal(timers.size, 1);
   h.reconciler.stop(); assert.equal(timers.size, 0);
 });
+
+test("a portal-managed epoch room is reconciled against its platform room, not an unknown room id", async () => {
+  const epochRoom = `${mediaRoom}:6f1c2d3e-4b5a-4c6d-8e7f-9a0b1c2d3e4f`;
+  const asked: string[] = [];
+  const desired: MediaScreenAuthority = { tenantId: "tenant", authority: { revision: 4, roomActive: true, publisherParticipantIds: ["current"], removedParticipantIds: ["removed"] } };
+  const h = harness({ authority: async (id: string) => { asked.push(id); return desired; } });
+  const kept = await peer("current", "m", epochRoom);
+  h.rooms.set(epochRoom, [await peer("removed", "m", epochRoom), kept]);
+  await h.reconciler.runOnce();
+  assert(asked.length > 0 && asked.every(id => id === roomId), JSON.stringify(asked));
+  assert.deepEqual(h.removals.map(removal => removal.room), [epochRoom]);
+  assert.deepEqual(h.rooms.get(epochRoom)!.map(value => value.identity), [kept.identity]);
+});
