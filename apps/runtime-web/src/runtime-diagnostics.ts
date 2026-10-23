@@ -86,7 +86,9 @@ export function createRuntimeDiagnostics(context: RuntimeDiagnosticsContext) {
       return;
     }
     await refreshWebRtcDiagnostics();
-    if (context.sessionGate.reason) return;
+    // The endpoint is room-scoped: with no admitted session (before entry or after a failed boot) there is no subject.
+    // An empty Bearer would hit the identity boundary and replace the actual failure with an upgrade prompt.
+    if (context.sessionGate.reason || !context.roomStateAccessToken) return;
     const participantId = context.participantId;
     if (context.activeSceneBundleRoot) {
       context.debugState.sceneDebug = inspectSceneObject({

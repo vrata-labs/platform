@@ -169,6 +169,17 @@ test("identity loss during a pending diagnostic refresh prevents capture and tra
   assert.deepEqual(h.events, ["refresh"]); assert.deepEqual(h.requests, []);
 });
 
+test("a report without an admitted session sends nothing, so a failed boot keeps its own status", async (t) => {
+  const h = createDiagnosticsHarness(t); h.inputs.roomStateAccessToken = "";
+  const status = h.inputs.debugState.statusLine;
+  await h.runtime.reportDiagnostics("runtime_boot_failed");
+  assert.deepEqual(h.events, ["refresh"]); assert.equal(h.requests.length, 0);
+  assert.equal(h.inputs.debugState.statusLine, status);
+  h.inputs.roomStateAccessToken = "admitted-session"; await h.runtime.reportDiagnostics("runtime_booted");
+  assert.equal(h.requests.length, 1);
+  assert.equal((h.requests[0]!.init.headers as Record<string, string>).authorization, "Bearer admitted-session");
+});
+
 test("diagnostic subject follows identity adoption during refresh and matches the refreshed session token", async (t) => {
   const h = createDiagnosticsHarness(t), ready = deferred<void>(), resume = deferred<void>();
   h.hooks.refresh = async () => { ready.resolve(); await resume.promise; };
