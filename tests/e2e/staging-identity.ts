@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { expect } from "@playwright/test";
+import { expect, type APIRequestContext } from "@playwright/test";
 import { privateHttp } from "./plugin-author-scenarios";
 
 /** The deployed floor is read from the API, never assumed: activation is irreversible, and
@@ -7,6 +7,13 @@ import { privateHttp } from "./plugin-author-scenarios";
 export async function identityProtocolAt(origin: string): Promise<1 | 2> {
   const health = await fetch(new URL("/health", origin), { signal: AbortSignal.timeout(15_000) });
   expect(health.ok).toBe(true);
+  return (await health.json()).features?.identityProtocolVersion === 2 ? 2 : 1;
+}
+
+/** The same, through a request context's own base URL: the local server in CI, the deployment on staging. */
+export async function identityProtocolOf(request: APIRequestContext): Promise<1 | 2> {
+  const health = await request.get("/health");
+  expect(health.ok()).toBe(true);
   return (await health.json()).features?.identityProtocolVersion === 2 ? 2 : 1;
 }
 

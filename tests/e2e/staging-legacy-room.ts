@@ -1,7 +1,7 @@
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 import fixtures from "./staging-legacy-fixtures.json";
 import { completeGuestEntry } from "./guest-entry";
-import { identityProtocolAt } from "./staging-identity";
+import { identityProtocolOf } from "./staging-identity";
 
 type FixtureKey = keyof typeof fixtures;
 type RequestOptions = NonNullable<Parameters<APIRequestContext["post"]>[1]>;
@@ -29,7 +29,7 @@ export async function createLegacyStagingRoom(request: APIRequestContext, key: F
   const { templateId: _templateId, tenantId: _tenantId, ...overrides } = input;
   // Floor 2 freezes the persisted legacy session lifecycle: v2 authority replaces it, so only
   // floor 1 resets it. Retained rooms therefore keep their v2 Host slot between runs.
-  const lifecycle = await identityProtocolAt(process.env.BASE_URL!) === 2 ? {} : { sessionControl: {} };
+  const lifecycle = await identityProtocolOf(request) === 2 ? {} : { sessionControl: {} };
   return request.patch(`/api/rooms/${roomId}`, { ...options, data: {
     roomType: "standard", visibility: "public", guestAllowed: true, sceneBundleUrl: null,
     features: { voice: true, spatialAudio: true, screenShare: true },
@@ -59,7 +59,7 @@ export async function enterStagingRoomAsHost(page: Page, request: APIRequestCont
   try {
     await page.goto(invitation.link);
     await completeGuestEntry(page, displayName);
-    if (await identityProtocolAt(process.env.BASE_URL!) === 2) {
+    if (await identityProtocolOf(request) === 2) {
       const role = () => page.evaluate(() => (window as any).__VRATA_DEBUG__?.access?.role as string | undefined);
       await expect.poll(role, { timeout: 15_000 }).toMatch(/^(host|member)$/);
       if (await role() !== "host") {
